@@ -38,6 +38,7 @@ import { nativeHookLocations } from '../../engines/kit/nativeLocations.js'
 import { hooksHeldDetail } from '../../engines/kit/hooksHeldDetail.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 import { OPENCLAW_LOCAL } from '../../engines/openclaw/contract.js'
+import { codeOrLength } from '../../lib/log.js'
 
 type ForkAgent = NonNullable<BackendSocket['onForkAgent']>
 
@@ -173,7 +174,7 @@ export function createAgentForker({
     const forkRefusal = await refusePermissionFlagIfUnsupported(engine, launchOptions, undefined, built.overrides.native)
     if (!dispatchCurrent()) return changed
     if (forkRefusal) {
-      console.warn(`[agent] fork refused · ${engine} · ${forkRefusal.detail}`)
+      console.warn(`[agent] fork refused · ${engine} · ${codeOrLength(forkRefusal.error)}`)
       return { ok: false, ...forkRefusal }
     }
     await prepareInstructionWrites(source.cwd)

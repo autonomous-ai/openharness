@@ -84,13 +84,14 @@ export function tcpOpener(address: CableTcpAddress, options: TcpOpenerOptions): 
     if (waitMs > 0 && now() < notBefore) return null
     try {
       const port = await connect(address, onData, onClosed)
-      if (waitMs > 0) options.log(`cable: ${path} is reachable again`)
+      // A fixed word, never the address: the daemon's log leaves the machine (lib/log.ts); the fleet's [usb id] says which.
+      if (waitMs > 0) options.log('cable: the device over TCP is reachable again')
       waitMs = 0
       return port
     } catch (error) {
       if (waitMs === 0) {
         // Its kind and code alone (ECONNREFUSED), never its words: the daemon's log leaves the machine (lib/log.ts).
-        options.log(`cable: ${path} not reachable (${errorKind(error)}) — trying again, waiting up to ${maxMs / 1000} s`)
+        options.log(`cable: the device over TCP is not reachable (${errorKind(error)}) — trying again, waiting up to ${maxMs / 1000} s`)
       }
       waitMs = waitMs === 0 ? minMs : Math.min(waitMs * 2, maxMs)
       notBefore = now() + waitMs

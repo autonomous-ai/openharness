@@ -205,19 +205,19 @@ it.each(['claude', 'codex'] as const)('confirms the final %s home before acknowl
   expect(result.launch.environment[variable]).toBe(selected)
 })
 
-it('a held hook preparation logs what holds it; a missing hook script, whose reason names a path, its kind', async () => {
+it('a held hook preparation logs what holds it, a missing hook script too, and any other failure its kind', async () => {
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
   const result = await inspectNativeLaunch('codex')
   if (!result.ok) throw Error('fixture held')
   vi.mocked(engineHooks.codex.installIn).mockRejectedValueOnce(new HookPreparationHeld('a hook file changed while it was written'))
   expect(await result.launch.prepareHooks(19473, () => true)).toBe(false)
-  vi.mocked(engineHooks.codex.installIn).mockRejectedValueOnce(new HookScriptMissing('/Users/dee/.harness/notify.mjs'))
+  vi.mocked(engineHooks.codex.installIn).mockRejectedValueOnce(new HookScriptMissing())
   expect(await result.launch.prepareHooks(19473, () => true)).toBe(false)
   vi.mocked(engineHooks.codex.installIn).mockRejectedValueOnce(new TypeError('no such file /Users/dee/x'))
   expect(await result.launch.prepareHooks(19473, () => true)).toBe(false)
   expect(warn.mock.calls).toEqual([
     ['[launch] native hook preparation held · a hook file changed while it was written'],
-    ['[launch] native hook preparation held · HookScriptMissing'],
+    ["[launch] native hook preparation held · notify.mjs is missing, so no hook of Harness's could run"],
     ['[launch] native hook preparation held · TypeError'],
   ])
 })

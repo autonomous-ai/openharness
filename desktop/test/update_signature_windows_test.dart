@@ -43,7 +43,7 @@ Future<List<String>> _logged(Future<void> Function() body) async {
 }
 
 Future<String> _powershell(String script) async {
-  final result = await runHidden(windowsPowerShellPath(Platform.environment), [
+  final result = await runHidden(windowsPowerShellPath(), [
     '-NoProfile',
     '-NonInteractive',
     '-EncodedCommand',

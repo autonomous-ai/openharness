@@ -37,5 +37,6 @@ export async function followWindowsGridPin(deps: WindowsGridPinDeps): Promise<vo
   if (await deps.installedVersion() === version) return
   deps.log(`▸ installing grid ${version}, the version Harness pins (grid's Windows installer)…`)
   const result = await deps.install(version)
-  deps.log(result.status === 'installed' ? `  ✓ grid ${version} installed` : result.message)
+  // The installer's sentence can quote its output, which names the person's home: the status is a fixed word.
+  deps.log(result.status === 'installed' ? `  ✓ grid ${version} installed` : `  ✗ grid ${version} not installed · ${result.status}`)
 }

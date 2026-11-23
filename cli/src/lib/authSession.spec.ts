@@ -2,7 +2,8 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi, type MockIns
 import type { AuthSession } from './authSession.js'
 import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
-import { tmpdir } from 'os'
+import { homedir, tmpdir } from 'os'
+import { join } from 'path'
 import { StateFileUnreadable, probeState } from './secureState.js'
 
 // Pass-through unless a test sets a hook: a disk that fails mid-write, and the order of the writer's steps.
@@ -564,6 +565,18 @@ describe('a token between processes', () => {
     expect(() => tokenOf({ code: 'REVOKED_BY_MARS', message: 'odd' }, 'unused')).toThrow(expect.objectContaining({ code: 'UNAVAILABLE', message: 'odd' }))
     expect(() => tokenOf({ error: 'SERVICE_UNAVAILABLE' }, 'the gateway is not running')).toThrow(expect.objectContaining({ code: 'UNAVAILABLE', message: 'the gateway is not running' }))
     expect(() => tokenOf({ token: 7, message: '' }, 'no token')).toThrow(expect.objectContaining({ code: 'UNAVAILABLE', message: 'no token' }))
+  })
+})
+
+describe('the auth folder', () => {
+  it('a relative HARNESS_AUTH_DIR is under the home, as config/env.ts reads every Harness folder', async () => {
+    vi.resetModules()
+    vi.stubEnv('HARNESS_AUTH_DIR', 'auth')
+    try {
+      expect((await import('./authSession.js')).AUTH_DIR).toBe(join(homedir(), 'auth'))
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 })
 

@@ -1,4 +1,4 @@
-.PHONY: release upload-desktop upload-desktop-linux upload-node-runtime upload-tmux-runtime upload-grid-runtime terminal-local-manual terminal-local-e2e terminal-prod-e2e
+.PHONY: release upload-desktop upload-node-runtime upload-tmux-runtime upload-grid-runtime terminal-local-manual terminal-local-e2e terminal-prod-e2e
 
 ## release: tag this commit vX.Y.Z_desktop and push the tag — CI builds macOS + Linux, publishes to
 ## GCS, and cuts the GitHub Release. The version is bumped from max(last git tag, live metadata.json),
@@ -20,11 +20,6 @@ upload-desktop:
 	@test -n "$(VERSION)" || { echo 'error: VERSION=X.Y.Z is required — `make release ARGS=--dry-run` prints the next one' >&2; exit 1; }
 	bash scripts/publish-macos-variant.sh intel $(VERSION) $(ARGS)
 	bash scripts/publish-macos-variant.sh apple-silicon $(VERSION) $(ARGS)
-
-## upload-desktop-linux: same escape hatch for Linux ARM64 or x64 (amd64 is an x64 alias).
-## Defaults to the current host. Examples: ARCH=arm64, ARCH=x64, ARCH=amd64.
-upload-desktop-linux:
-	TARGET_ARCH="$(ARCH)" bash scripts/upload-desktop-linux.sh $(ARGS)
 
 ## upload-node-runtime: publish checksum-verified managed Node runtimes to the staging manifest (production: explicit METADATA_PATH, after the staging E2E).
 upload-node-runtime:

@@ -1,6 +1,7 @@
 import { readInlineScreen } from '../testing/inlineScreen.js'
 import { inlineSubmission } from '../testing/inlineSubmission.js'
-import { readdirSync, readFileSync } from 'node:fs'
+import { sourceFiles } from '../testing/sourceFiles.js'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AutonomousDeviceInput } from './deviceInput.js'
@@ -14,6 +15,7 @@ import { createShortTurnGuard } from './turns/shortTurnGuard.js'
 import { createScreens } from './engines/screens.js'
 import { screenFor } from '../engines/screens.js'
 import { readerEngine } from '../engines/worker/protocol.js'
+import { agentStarting } from '../lib/agentFrame.js'
 
 const ok: TerminalActionResult = { state: 'succeeded', dispatch: 'executed' }
 const fixture = (name: string) => readFileSync(new URL(`../lib/__fixtures__/${name}`, import.meta.url), 'utf8')
@@ -117,6 +119,41 @@ describe('the session input controller\'s dependencies', () => {
     sessionInputDeps(deps().deps, () => lock([])).onWaitChanged!('a1')
     wired.onWaiting!('s1', 'engine_starting')
     expect(given.clients.send).toHaveBeenCalledWith({ type: 'message_waiting', agentId: 'a1', dbSessionId: 's1', payload: { reason: 'engine_starting' } })
+  })
+
+  it('moves a first task back to wait on its row and back to typed, and lets it go once a turn took it, through what it was given', async () => {
+    const untype = vi.fn(async () => true)
+    const retype = vi.fn(async (agentId: string) => agentId === 'oc' ? 'Say hello' : null)
+    const taken = vi.fn(async () => true)
+    const sync = vi.fn()
+    const wired = sessionInputDeps(deps({ firstTask: { untype, retype, taken }, sync }).deps, () => lock([]))
+    expect(await wired.untypeFirstTask!('oc', 'Say hello')).toBe(true)
+    // Typed again only as the controller asked for it: another task, or none, is not its own.
+    expect(await wired.retypeFirstTask!('oc', 'Say hello')).toBe(true)
+    expect(await wired.retypeFirstTask!('oc', 'Say goodbye')).toBe(false)
+    expect(await wired.retypeFirstTask!('a1', 'Say hello')).toBe(false)
+    wired.onFirstTaskTaken!('oc')
+    await vi.waitFor(() => expect(sync).toHaveBeenCalledWith('oc'))
+    expect(untype.mock.calls).toEqual([['oc', 'Say hello']])
+    expect(taken.mock.calls).toEqual([['oc']])
+    const none = sessionInputDeps(deps().deps, () => lock([]))
+    expect('untypeFirstTask' in none || 'retypeFirstTask' in none || 'onFirstTaskTaken' in none).toBe(false)
+  })
+
+  it('pushes the agent only once its row let a taken first task go, and says why it kept one', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const sync = vi.fn()
+    const taken = vi.fn<(agentId: string) => Promise<boolean>>()
+    taken.mockResolvedValueOnce(false).mockRejectedValueOnce(new TypeError('disk full'))
+    const wired = sessionInputDeps(deps({ firstTask: { untype: vi.fn(), retype: vi.fn(), taken }, sync }).deps, () => lock([]))
+    wired.onFirstTaskTaken!('oc')
+    wired.onFirstTaskTaken!('oc')
+    await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[agent] oc first task typed kept · TypeError'))
+    expect(sync).not.toHaveBeenCalled()
+    // With no windows to push to, nothing is pushed.
+    taken.mockResolvedValueOnce(true)
+    sessionInputDeps(deps({ firstTask: { untype: vi.fn(), retype: vi.fn(), taken } }).deps, () => lock([])).onFirstTaskTaken!('oc')
+    await vi.waitFor(() => expect(taken).toHaveBeenCalledTimes(3))
   })
 
   it('hands the controller the move gate when it was given one, and none otherwise', () => {
@@ -575,6 +612,47 @@ describe('createInput', () => {
     expect(released).toEqual(['input', 'terminal', 'input'])
   })
 
+  // Found in review: the row let a taken first task go after the turn's frame was pushed from the row still holding it,
+  // and nothing pushed the agent again: it read starting through its whole first turn.
+  it('ends a turn that takes a first task with the agent pushed, no longer starting', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const row = { ...agents.get('oc')!, firstTaskTyped: { text: 'Say hello', at: 1 } } as RegisteredSession
+    const starting: boolean[] = []
+    const taken = vi.fn(async () => {
+      await Promise.resolve()
+      delete row.firstTaskTyped
+      return true
+    })
+    const run = deps({
+      resolve: (id) => id === 'oc' ? row : agents.get(id),
+      firstTask: { untype: vi.fn(async () => true), retype: vi.fn(async () => null), taken },
+      sync: (id) => { starting.push(agentStarting(row, inputs.input.firstTaskWaiting(id), Date.now())) },
+    })
+    run.setPane(readFileSync(new URL('../engines/openclaw/__fixtures__/screen-plain.txt', import.meta.url), 'utf8'))
+    const inputs = createInput(run.deps)
+    inputs.input.expectFirstTask('oc')
+    inputs.input.submitFirstTask('oc', 'Say hello')
+    await vi.waitFor(() => expect(inputs.input.awaitingConfirmation('oc')).toBe(true))
+    inputs.input.onTurnStarted('oc', 'Say hello')
+    await vi.waitFor(() => expect(taken).toHaveBeenCalled())
+    await vi.waitFor(() => expect(starting.at(-1)).toBe(false))
+    inputs.input.forget('oc')
+  })
+
+  it('lets an agent\'s typed first task go from its row once a turn takes it', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const taken = vi.fn(async () => true)
+    const run = deps({ firstTask: { untype: vi.fn(async () => true), retype: vi.fn(async () => null), taken } })
+    run.setPane(readFileSync(new URL('../engines/openclaw/__fixtures__/screen-plain.txt', import.meta.url), 'utf8'))
+    const { input } = createInput(run.deps)
+    input.expectFirstTask('oc')
+    input.submitFirstTask('oc', 'Say hello')
+    await vi.waitFor(() => expect(input.awaitingConfirmation('oc')).toBe(true))
+    input.onTurnStarted('oc', 'Say hello')
+    expect(taken.mock.calls).toEqual([['oc']])
+    input.forget('oc')
+  })
+
   it('submits a message under the agent\'s id, adapting a slash command its engine lacks', () => {
     const inputs = createInput(deps().deps)
     const submit = vi.spyOn(inputs.input, 'submit').mockImplementation(() => {})
@@ -715,10 +793,8 @@ describe('every route a message takes to a pane', () => {
   it('has one writer: nothing in the daemon submits text to a pane but it', () => {
     // A route added later that called the terminal directly would type into a permission prompt.
     const root = new URL('../', import.meta.url).pathname
-    const sources = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => entry.isDirectory()
-      ? sources(join(dir, entry.name))
-      : entry.name.endsWith('.ts') && !entry.name.endsWith('.spec.ts') ? [join(dir, entry.name)] : [])
-    const using = sources(root).filter((file) => readFileSync(file, 'utf8').includes('submitTerminalAction')).map((file) => file.slice(root.length))
+    const using = sourceFiles(root)
+      .filter((file) => file.endsWith('.ts') && !file.endsWith('.spec.ts') && readFileSync(join(root, file), 'utf8').includes('submitTerminalAction'))
     expect(using.sort()).toEqual(['core/input.ts', 'core/terminals/control.ts'])
     expect(readFileSync(join(root, 'core/input.ts'), 'utf8').match(/submitTerminalAction\(/g)).toHaveLength(1)
     expect(messageWriter).toBeTypeOf('function')

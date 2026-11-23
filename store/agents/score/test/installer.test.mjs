@@ -57,5 +57,6 @@ test('runtimeRoot follows the rule',()=>{
   assert.equal(root({...env,XDG_DATA_HOME:'/x/data/',XDG_STATE_HOME:'/x/state'},'linux',legacy,'/x/data/harness/.harness-root'),'/x/state/harness/runtime/score');
   assert.equal(root({...env,XDG_STATE_HOME:'relative'},'linux'),state);
   assert.equal(root({...env,ADAPTER_RUNTIME_DIR:'/r'},'linux'),'/r/score');
+  assert.equal(root({...env,ADAPTER_RUNTIME_DIR:'r'},'linux'),join(home,'r','score'),'a relative one is under the home');
   assert.equal(root({...env,ADAPTER_RUNTIME_DIR:'/r',SCORE_RUNTIME_DIR:'/s'},'linux'),'/s');
 });

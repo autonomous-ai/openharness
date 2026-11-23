@@ -11,6 +11,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Frame, LocalClient } from './client.js'
+import type { EngineConfig } from './daemon.js'
 
 export type QuestionEngine = 'claude' | 'codex'
 export type QuestionKind = 'select' | 'multi' | 'text' | 'permit'
@@ -141,8 +142,8 @@ function transcripts(directory: string, sessionId: string): string[] {
 }
 
 /** What an agent's engine recorded as the end of each question turn, in order, from its transcript. */
-export function engineAnswers(root: string, engine: QuestionEngine, sessionId: string): string[] {
-  const files = transcripts(engine === 'claude' ? join(root, 'claude', 'projects') : join(root, 'codex', 'sessions'), sessionId)
+export function engineAnswers(config: EngineConfig, engine: QuestionEngine, sessionId: string): string[] {
+  const files = transcripts(engine === 'claude' ? config.claudeProjectsDir : join(config.codexHome, 'sessions'), sessionId)
   const found: string[] = []
   for (const file of files) {
     for (const line of readFileSync(file, 'utf8').split('\n')) {

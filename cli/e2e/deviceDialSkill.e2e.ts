@@ -9,6 +9,8 @@
  *   wrote and leaves a person's own, and `enable` brings it back with no restart;
  * - Claude Code's `disable` stays through an attach, and its `enable` brings the plugin and the skill back;
  * - the plugin uninstalled with Claude Code's own `claude plugin` is never installed again, and its skill goes;
+ * - with the plugin not on, a Claude agent Harness runs brings Claude Code's skill
+ *   (docs/plans/2026-11-22-needs-you-notify-design.md);
  * - with a real Codex binary (E2E_REAL_CODEX), the app-server that holds its rollout gives its home.
  *
  * The daemon's open scan sees only files under the test's root (harness/daemon.ts `create`): it reads every `codex` on
@@ -17,14 +19,13 @@
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { DIAL_PLUGIN_ID, DIAL_SKILL } from '../src/devices/dialSkill.js'
-import { placeNode } from '../src/testing/placeNode.js'
+import { copyNode } from '../src/testing/placeNode.js'
 import { VERSION } from '../src/version.js'
-import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
+import { LocalClient } from './harness/client.js'
+import { IsolatedDaemon, SOURCES_CLI, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import type { FakeDial } from './harness/fakeDial.js'
 
@@ -32,7 +33,7 @@ import type { FakeDial } from './harness/fakeDial.js'
 // `--import tsx` would not resolve: tsx and the sources by their paths.
 const CLI_ENTRY = process.env.E2E_BUNDLE_PATH
   ? [process.env.E2E_BUNDLE_PATH]
-  : ['--import', pathToFileURL(createRequire(join(CLI_ROOT, 'package.json')).resolve('tsx')).href, join(CLI_ROOT, 'src', 'cli.ts')]
+  : SOURCES_CLI
 
 /**
  * Codex 0.167.1's app-server as the scan sees it: a process named `codex`, with no terminal, holding one rollout open.
@@ -103,9 +104,10 @@ describe('the dial set up from its first attach', () => {
     desk = undefined
   })
 
-  /** A daemon with a fake dial's port, started. */
-  const fresh = async (): Promise<{ d: IsolatedDaemon; desk: Desk }> => {
-    const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false' }, claudeVersion: '2.1.287' })
+  /** A daemon with a fake dial's port, started, whose fake Claude Code is [claudeVersion]: by default recent enough for
+   *  its plugin. */
+  const fresh = async (claudeVersion = '2.1.287'): Promise<{ d: IsolatedDaemon; desk: Desk }> => {
+    const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false' }, claudeVersion })
     daemon = d
     const file = join(d.root, 'dials.json')
     d.env.HARNESSD_TEST_DIAL_PORT = file
@@ -139,7 +141,7 @@ describe('the dial set up from its first attach', () => {
     const codex = join(d.root, 'holder', 'codex')
     if (!existsSync(codex)) {
       mkdirSync(dirname(codex), { recursive: true })
-      placeNode(codex)
+      copyNode(codex)
     }
     // A session of its own: no terminal, as the app-server's.
     const child = spawn(codex, ['-e', HOLDER, file], { env: d.env, stdio: ['pipe', 'pipe', 'ignore'], detached: true })
@@ -173,7 +175,7 @@ describe('the dial set up from its first attach', () => {
   it('a Codex in another home is set up once the scan sees it, and what the person removes stays removed', async () => {
     const { d, desk } = await fresh()
     const codexHome = d.env.CODEX_HOME!
-    const other = join(d.root, 'codex-other'), mine = join(d.root, 'codex-mine'), old = join(d.root, 'codex-old')
+    const other = join(d.env.HOME!, 'codex-other'), mine = join(d.env.HOME!, 'codex-mine'), old = join(d.env.HOME!, 'codex-old')
     const theirs = '---\nname: dial\ndescription: my own\n---\n\nMine.\n'
     mkdirSync(dirname(skillOf(mine)), { recursive: true })
     writeFileSync(skillOf(mine), theirs)
@@ -274,15 +276,40 @@ describe('the dial set up from its first attach', () => {
       { env: { ...d.env, CLAUDE_CONFIG_DIR: claudeHome }, stdio: 'ignore' })
     await desk.unplug('E2E-A')
     await plugged(desk)
-    await until('Claude Code\'s skill gone', () => !existsSync(skillOf(claudeHome)), 45_000, 100)
+    // The first pass that reads none once none has held a scan's minute (dialHomeSetup.ts NONE_HELD_MS), on a monotonic
+    // clock no test moves: with scans a minute apart, 1-3 minutes after the attach.
+    await until('Claude Code\'s skill gone', () => !existsSync(skillOf(claudeHome)), 150_000, 100)
     expect(pluginCalls(d).filter((call) => call === INSTALL)).toEqual([INSTALL])
     noPathLogged(d)
+  }, 300_000)
+
+  it('with the plugin not on, a Harness Claude agent brings Claude Code\'s skill', async () => {
+    // Below MIN_CLAUDE (devices/claudePlugin.ts): the plugin's pass refuses this Claude Code, so its settings never read on.
+    const { d, desk } = await fresh('2.1.200')
+    const claudeHome = dirname(d.env.CLAUDE_PROJECTS_DIR!)
+    const client = await LocalClient.connect(d)
+    try {
+      // As the desktop creates one.
+      const cwd = join(d.projectsDir, 'in-harness')
+      mkdirSync(cwd, { recursive: true })
+      const created = await client.request('agent_create', { engine: 'claude', cwd, bypassPermission: true }, 90_000)
+      expect(created.error, JSON.stringify(created)).toBeUndefined()
+
+      await plugged(desk)
+      // The attach's pass, or the first scan a minute later when the devices' view of the agents landed after it.
+      await until('Claude Code\'s skill', () => read(skillOf(claudeHome)) === DIAL_SKILL, 90_000, 100)
+      expect(pluginCalls(d)).not.toContain(INSTALL)
+      expect(pluginOn(claudeHome)).toBe(false)
+      noPathLogged(d)
+    } finally {
+      client.close()
+    }
   })
 
   it.runIf(!!process.env.E2E_REAL_CODEX)('a real Codex app-server\'s rollout gives its home', async () => {
     const codex = process.env.E2E_REAL_CODEX!
     const { d, desk } = await fresh()
-    const home = join(d.root, 'codex-real'), work = join(d.root, 'work'), sessions = join(home, 'sessions')
+    const home = join(d.env.HOME!, 'codex-real'), work = join(d.root, 'work'), sessions = join(home, 'sessions')
     mkdirSync(home, { recursive: true })
     mkdirSync(work, { recursive: true })
     // No login and no model: the provider is a port where nothing listens.
@@ -297,7 +324,7 @@ env_key = "PROBE_KEY"
 trust_level = "trusted"
 `)
     // A tmux server of the test's own, its socket under the root, and nothing of the developer's in the pane.
-    const tmuxEnv = { HOME: join(d.root, 'home'), CODEX_HOME: home, PATH: d.tmux.env.PATH!, PROBE_KEY: 'none', TMUX_TMPDIR: d.root }
+    const tmuxEnv = { HOME: d.env.HOME!, CODEX_HOME: home, PATH: d.tmux.env.PATH!, PROBE_KEY: 'none', TMUX_TMPDIR: d.root }
     const tmux = (...args: string[]): string => execFileSync('tmux', ['-L', 'dialskill', '-f', '/dev/null', ...args], { env: tmuxEnv }).toString()
     // Read before its server goes, and printed when the case fails.
     let screen = ''

@@ -103,7 +103,8 @@ describe('the cmux adapter', () => {
     for (const platform of ['linux', 'win32'] as const) {
       const { runs, asked, adapter } = recorder({ platform })
       expect(adapter.paneOf(detected(cmuxTerminal())), platform).toBeUndefined()
-      expect(adapter.canFocus(pane(PANE)), platform).toBe(false)
+      // On Linux the first look answers yes while xdg-mime is read: a tap's focus waits for that read (appLink.ts).
+      expect(adapter.canFocus(pane(PANE)), platform).toBe(platform === 'linux')
       expect(adapter.canShow(pane(PANE)), platform).toBe(false)
       expect(adapter.canType(pane(PANE)), platform).toBe(false)
       expect(await adapter.focus(pane(PANE)), platform).toBe(false)

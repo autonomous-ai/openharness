@@ -28,6 +28,9 @@ const services = createRequire(join(resolve(servicesDir), 'package.json'))
 const { MongoMemoryReplSet } = services('mongodb-memory-server')
 const { RedisMemoryServer } = services('redis-memory-server')
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
+// tsx by its path: the daemon passes its flags on to the processes it starts from its own folder, where a bare
+// `--import tsx` would not resolve.
+const loader = fileURLToPath(import.meta.resolve('tsx'))
 const { chromium } = createRequire(join(repo, 'store/agents/godogen/package.json'))('playwright')
 const exec = promisify(execFile)
 const root = await mkdtemp(join(tmpdir(), 'harness-viewer-stack-'))
@@ -199,7 +202,7 @@ setInterval(() => {}, 1000);
       HARNESS_VSCODE_BIN: join(dir, 'no-vscode', 'code'), HARNESS_CURSOR_BIN: join(dir, 'no-cursor', 'cursor') }
     let port = 0
     async function boot() {
-      const child = run(`cli-${name}`, join(repo, 'cli'), ['--import', 'tsx', 'src/cli.ts', '__run'], env)
+      const child = run(`cli-${name}`, join(repo, 'cli'), ['--import', loader, 'src/cli.ts', '__run'], env)
       // A first start has no record yet, and a daemon started again may record another port.
       await until(`${name} CLI connected`, () => {
         const bound = readDaemonRecord(data, configuredPort)?.port

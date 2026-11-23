@@ -5,9 +5,14 @@ const siteRedirects = async () => (await nextConfig.redirects()).filter((r) => !
 const beforeFiles = async () => (await nextConfig.rewrites()).beforeFiles;
 
 const viewer = [{ type: "query", key: "viewer" }];
+const meetHarness = "https://www.autonomous.ai/meet-harness";
 
-it("sends the home page to the device guide, temporarily", async () => {
-  expect(await siteRedirects()).toContainEqual({ source: "/", missing: viewer, destination: "/device", permanent: false });
+it("sends the home page to autonomous.ai's Meet Harness page, temporarily", async () => {
+  expect(await siteRedirects()).toContainEqual({ source: "/", missing: viewer, destination: meetHarness, permanent: false });
+});
+
+it("sends the /device page to autonomous.ai's Meet Harness page, temporarily", async () => {
+  expect(await siteRedirects()).toContainEqual({ source: "/device", destination: meetHarness, permanent: false });
 });
 
 it("keeps hn view's viewer links at /?viewer=1 on the web app", async () => {
@@ -24,9 +29,9 @@ it("keeps the web app's other entry points on the web app", async () => {
   }
 });
 
-it("redirects none of the pages the home page change must not reach", async () => {
-  // Next matches a source exactly, so the new '/' source catches only the home page.
-  const kept = ["/app", "/pair", "/signin", "/machine-checkout", "/hub", "/download", "/device", "/s/:id", "/auth/callback", "/callback"];
+it("redirects none of the pages the home page and /device change must not reach", async () => {
+  // Next matches a source exactly, so the '/' and '/device' sources catch only those two pages.
+  const kept = ["/app", "/pair", "/signin", "/machine-checkout", "/hub", "/download", "/s/:id", "/auth/callback", "/callback"];
   const sources = (await siteRedirects()).map((r) => r.source);
   expect(sources.filter((s) => kept.includes(s) || s.startsWith("/desktop/download") || s.startsWith("/device/"))).toEqual([]);
 });

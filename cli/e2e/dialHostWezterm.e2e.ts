@@ -73,6 +73,8 @@ describe.skipIf(!weztermBinary)("an agent in a WezTerm pane takes the dial's wor
       console.log(`---- hooks the engines ran\n${d.hookLog().split('\n').slice(-40).join('\n')}`)
     })
     await d.start()
+    // Claude Code started by hand reads its hooks once, as it starts: they must be in by then.
+    await d.hooksInstalled(['claude'])
     const mux = await PrivateWezterm.start(d)
     wezterm = mux
     const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')

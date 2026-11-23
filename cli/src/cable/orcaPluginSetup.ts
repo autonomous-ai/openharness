@@ -11,7 +11,6 @@ import type { DialRemoved, Read, SetupCount } from '../devices/dialSkillFiles.js
 import { carriedVersion, orcaRemove, orcaSetUp, type OrcaPluginDeps, type OrcaRemove, type OrcaSetUp } from '../devices/orcaPlugin.js'
 
 export interface OrcaPluginSetupDeps {
-  platform: NodeJS.Platform
   /** The carried orca-plugin.json's version; null in a run from the sources. */
   version(): string | null
   /** orcaSetUp(plugin, { force: false }). */
@@ -83,8 +82,7 @@ export function createOrcaPluginSetup(deps: OrcaPluginSetupDeps): OrcaPluginSetu
 
   const setup: OrcaPluginSetup = {
     async pass() {
-      // The devices' listener, which the plugin talks to, does not exist on Windows.
-      if (deps.platform === 'win32' || waiting) return
+      if (waiting) return
       if (running) {
         again = true
         return
@@ -152,11 +150,10 @@ export function createOrcaPluginSetup(deps: OrcaPluginSetupDeps): OrcaPluginSetu
 }
 
 /** The Orca half of the deps, on the real orcaSetUp, orcaRemove and carriedVersion. */
-export function orcaPluginParts(plugin: OrcaPluginDeps): Pick<OrcaPluginSetupDeps, 'platform' | 'version' | 'setUp' | 'remove'> {
+export function orcaPluginParts(plugin: OrcaPluginDeps): Pick<OrcaPluginSetupDeps, 'version' | 'setUp' | 'remove'> {
   // The files the build inlined stay as they are while the process runs: parsed at the first pass, not at each settle.
   let version: string | null | undefined
   return {
-    platform: plugin.platform,
     version: () => version === undefined ? version = carriedVersion(plugin) : version,
     setUp: () => orcaSetUp(plugin, { force: false }),
     remove: () => orcaRemove(plugin),

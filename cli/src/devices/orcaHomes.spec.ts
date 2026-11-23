@@ -44,6 +44,25 @@ function home(): string {
   return dir
 }
 
+/** An empty file at [path] in a throwaway folder. On Windows each `\` in [path] is a folder; elsewhere it is part of the
+ *  file's name, so the real path ends as a Windows one does on both. */
+function file(path: string): string {
+  const made = join(home(), path)
+  mkdirSync(dirname(made), { recursive: true })
+  writeFileSync(made, '')
+  return made
+}
+
+/** PATH holding [found], in order: the first that `accept` takes, as resolveBinaryOnPath answers. */
+const onPathOf = (found: string[], names: string[] = []) => (name: string, accept: (path: string) => boolean) => {
+  names.push(name)
+  return name === 'orca' ? found.find(accept) ?? null : null
+}
+
+const LOCAL_APP_DATA = 'C:\\Users\\a\\AppData\\Local'
+const DEFAULT_ORCA = 'C:\\Users\\a\\AppData\\Local\\Programs\\orca\\resources\\bin\\orca.exe'
+const ORCA_CMD = join(import.meta.dirname, '../lib/windows/fixtures/orca.cmd')
+
 /** One account of `orca account list --json`, made up: Orca's id and email beside its home. */
 const account = (n: number, home: unknown) => ({
   id: `acct-${n}-5d1e9b`,
@@ -87,6 +106,61 @@ describe('orcaBinary', () => {
     // The app's folder is a macOS path.
     expect(orcaBinary({ onPath: () => null, exists: () => true, platform: 'linux' })).toBeNull()
   })
+
+  // Orca's CLI on Windows is the native `<Orca>\resources\bin\orca.exe`. The `orca.cmd` beside it only forwards to it,
+  // through cmd.exe, which reparses every argument (fixtures/orca.cmd).
+  describe('on Windows', () => {
+    it("is Orca's orca.exe on PATH, by its real path, in any case", () => {
+      const names: string[] = []
+      const exe = file('Orca\\resources\\bin\\orca.exe')
+      expect(orcaBinary({ onPath: onPathOf([exe], names), exists: () => false, platform: 'win32', localAppData: LOCAL_APP_DATA })).toBe(exe)
+      expect(names).toEqual(['orca'])
+      const upper = file('ORCA\\Resources\\Bin\\Orca.EXE')
+      expect(orcaBinary({ onPath: onPathOf([upper]), exists: () => false, platform: 'win32' })).toBe(upper)
+    })
+
+    it("an orca.cmd, even in resources\\bin, another orca.exe and the other platforms' launchers are not taken", () => {
+      const others = [
+        file('Orca\\resources\\bin\\orca.cmd'), file('other\\orca.exe'), file('Orca\\resources\\orca.exe'),
+        file('Orca/resources/bin/orca'), file('Orca/resources/bin/orca-ide'), file('Orca.app/Contents/Resources/bin/orca'),
+      ]
+      expect(orcaBinary({ onPath: onPathOf(others), exists: () => false, platform: 'win32' })).toBeNull()
+      const exe = file('Orca\\resources\\bin\\orca.exe')
+      expect(orcaBinary({ onPath: onPathOf([...others, exe]), exists: () => false, platform: 'win32' })).toBe(exe)
+    })
+
+    // Orca's installer does not put resources\bin on PATH (docs/plans/2026-11-19-dial-windows-vm-notes.md, Task 1 §2).
+    it('else the orca.exe of the per-user install, when it is there', () => {
+      const looked: string[] = []
+      const exists = (path: string) => { looked.push(path); return path === DEFAULT_ORCA }
+      expect(orcaBinary({ onPath: () => null, exists, platform: 'win32', localAppData: LOCAL_APP_DATA })).toBe(DEFAULT_ORCA)
+      expect(looked).toEqual([DEFAULT_ORCA])
+      // An orca.cmd alone there, or nothing, is none.
+      const cmd = DEFAULT_ORCA.replace(/\.exe$/, '.cmd')
+      expect(orcaBinary({ onPath: () => null, exists: (path) => path === cmd, platform: 'win32', localAppData: LOCAL_APP_DATA })).toBeNull()
+      expect(orcaBinary({ onPath: () => null, exists: () => false, platform: 'win32', localAppData: LOCAL_APP_DATA })).toBeNull()
+      // The one on PATH comes first.
+      const exe = file('Orca\\resources\\bin\\orca.exe')
+      expect(orcaBinary({ onPath: onPathOf([exe]), exists: () => true, platform: 'win32', localAppData: LOCAL_APP_DATA })).toBe(exe)
+    })
+
+    it('a LOCALAPPDATA that is not absolute, or none, gives no default, and the macOS app is never looked at', () => {
+      for (const localAppData of ['AppData\\Local', '.', '', undefined]) {
+        const looked: string[] = []
+        const exists = (path: string) => { looked.push(path); return true }
+        expect(orcaBinary({ onPath: () => null, exists, platform: 'win32', localAppData }), localAppData).toBeNull()
+        expect(looked).toEqual([])
+      }
+    })
+
+    it('elsewhere the per-user install is never looked at', () => {
+      for (const platform of ['darwin', 'linux'] as const) {
+        const looked: string[] = []
+        orcaBinary({ onPath: () => null, exists: (path) => { looked.push(path); return false }, platform, localAppData: LOCAL_APP_DATA })
+        expect(looked).not.toContain(DEFAULT_ORCA)
+      }
+    })
+  })
 })
 
 describe('readOrcaHomes', () => {
@@ -128,6 +202,15 @@ describe('readOrcaHomes', () => {
     expect(await readOrcaHomes(deps)).toEqual({ homes: { claude: [kept], codex: [kept] } })
     // Another user's: the same folder, owned by a uid that is not this one.
     expect(await readOrcaHomes({ ...deps, uid: uid + 1 })).toEqual({ homes: NONE })
+  })
+
+  it('on Windows it runs orca.exe and keeps a home that is a folder of this account', async () => {
+    const a = home()
+    const exe = file('Orca\\resources\\bin\\orca.exe')
+    // Windows has no uid (-1): there the profile decides (dialSkill.ts ownDirectory).
+    const { calls, deps } = fakeDeps({ stdout: answer(engine(account(1, a))) }, { platform: 'win32', onPath: onPathOf([exe]), uid: process.getuid?.() ?? -1 })
+    expect(await readOrcaHomes(deps)).toEqual({ homes: { claude: [a], codex: [] } })
+    expect(calls.map((call) => call.file)).toEqual([exe])
   })
 
   it('keeps each home once', async () => {
@@ -250,6 +333,32 @@ describe('orcaHomesDeps', () => {
     expect(await run(echo, ['a\0b'], { timeoutMs: 600_000, maxBytes: 1024 })).toEqual({ code: null, stdout: '', timedOut: false })
   })
 
+  it('the real deps name the per-user install folder Windows gives', () => {
+    vi.stubEnv('LOCALAPPDATA', LOCAL_APP_DATA)
+    expect(orcaHomesDeps().localAppData).toBe(LOCAL_APP_DATA)
+    expect(orcaHomesDeps('win32').platform).toBe('win32')
+  })
+
+  // Spawned for real off Windows too, where the .exe is not there: only how it was started is read.
+  it('the real run on Windows starts orca.exe itself, hidden, with its arguments unchanged and no shell', async () => {
+    const args = ['orchestration', 'send', '--text=a & b\r\nc %PATH% "d" ^|e']
+    expect(await orcaHomesDeps('win32').run(DEFAULT_ORCA, args, { timeoutMs: 600_000, maxBytes: 1024 })).toEqual({ code: null, stdout: '', timedOut: false })
+    const [started, given, options] = vi.mocked(spawn).mock.calls.at(-1)!
+    expect(started).toBe(DEFAULT_ORCA)
+    expect(given).toEqual(args)
+    // No env of its own: the child's is this process's, with no ELECTRON_RUN_AS_NODE.
+    expect(options).toEqual({ stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true })
+    expect(options?.env).toBeUndefined()
+  })
+
+  it('the real run on Windows refuses orca.cmd and starts nothing', async () => {
+    const before = vi.mocked(spawn).mock.calls.length
+    for (const args of [['account', 'list', '--json'], ['orchestration', 'send', '--text=hi']]) {
+      expect(await orcaHomesDeps('win32').run(ORCA_CMD, args, { timeoutMs: 600_000, maxBytes: 1024 })).toEqual({ code: null, stdout: '', timedOut: false })
+    }
+    expect(vi.mocked(spawn).mock.calls.length).toBe(before)
+  })
+
   it("the real deps read Orca's own launcher on PATH, through a link and past another orca", async () => {
     const a = home()
     // Where Orca installs it: in the app on macOS, beside its binary on Linux.
@@ -336,7 +445,7 @@ describe('createOrcaHomesCache', () => {
   const failed = (failure: OrcaHomesFailure) => () => Promise.resolve<OrcaHomesRead>({ homes: NONE, failure })
 
   /** A cache whose reads answer [reads] in turn, on a clock the test moves. */
-  function cacheOf(reads: Array<() => Promise<OrcaHomesRead>>, platform: NodeJS.Platform = 'darwin') {
+  function cacheOf(reads: Array<() => Promise<OrcaHomesRead>>) {
     let clock = 1_000_000
     let count = 0
     const lines: string[] = []
@@ -346,7 +455,6 @@ describe('createOrcaHomesCache', () => {
         return reads.shift()!()
       },
       now: () => clock,
-      platform,
       log: (line) => { lines.push(line) },
     })
     return { cache, lines, reads: () => count, advance: (ms: number) => { clock += ms } }
@@ -440,15 +548,5 @@ describe('createOrcaHomesCache', () => {
     expect(await t.cache.refresh()).toBe(false)
     // The error's text is never said: it can name paths and emails.
     expect(t.lines.slice(1)).toEqual(['[observed] orca homes · not read · failed', '[observed] orca homes · not read · failed'])
-  })
-
-  it('on Windows it never reads', async () => {
-    const t = cacheOf([ok(A)], 'win32')
-    expect(await t.cache.refresh()).toBe(false)
-    t.advance(5 * 60_000)
-    expect(await t.cache.refresh()).toBe(false)
-    expect(t.reads()).toBe(0)
-    expect(t.lines).toEqual([])
-    expect(t.cache.get()).toEqual(NONE)
   })
 })

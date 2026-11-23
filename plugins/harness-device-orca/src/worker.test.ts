@@ -121,7 +121,7 @@ function feed() {
   let wake = () => {}
   const encoder = new TextEncoder()
   return {
-    connect(_socket: string, _body: string, signal: AbortSignal) {
+    connect(_target: unknown, _body: string, signal: AbortSignal) {
       signal.addEventListener('abort', () => {
         ended = true
         wake()
@@ -164,7 +164,7 @@ async function mounted(over: Partial<DialInputs>, answer = ACCEPT, results: Reco
 async function streaming(answer = ACCEPT, over: Partial<DialInputs> = {}, results: Record<string, unknown> = {}) {
   const stream = feed()
   const bodies: string[] = []
-  const post = (_socket: string, body: string) => {
+  const post = (_target: unknown, body: string) => {
     bodies.push(body)
     updated()
     return Promise.resolve(204)

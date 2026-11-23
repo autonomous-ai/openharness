@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { harnessPath } from '../config/harnessHome.js'
 import { inheritedAccountDataFolder } from './homeDataFolder.js'
@@ -13,6 +13,11 @@ describe('an ADAPTER_DATA_DIR inherited from the account under another HOME', ()
   it('is recognised: the account\'s own folder while HOME is a throwaway', () => {
     expect(inheritedAccountDataFolder({ HOME: '/tmp/throwaway', ADAPTER_DATA_DIR: REAL_DATA }, ACCOUNT, 'darwin')).toBe(true)
     expect(inheritedAccountDataFolder({ HOME: '/tmp/throwaway', ADAPTER_DATA_DIR: `${REAL_DATA}/` }, ACCOUNT, 'linux')).toBe(true)
+  })
+
+  // config/env.ts reads a relative one against the home, whatever folder the process runs in.
+  it('is recognised when relative: the HOME\'s, never the current folder\'s', () => {
+    expect(inheritedAccountDataFolder({ HOME: '/tmp/throwaway', ADAPTER_DATA_DIR: relative('/tmp/throwaway', REAL_DATA) }, ACCOUNT, 'darwin')).toBe(true)
   })
 
   it('is left alone under the account\'s own HOME', () => {

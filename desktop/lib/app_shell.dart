@@ -20,6 +20,7 @@ import 'core/linux_app_image.dart';
 import 'core/runtime_platform.dart';
 import 'core/test_run.dart';
 import 'core/windows_status_tray.dart';
+import 'devices/device_app_launcher.dart';
 import 'settings/settings_screen.dart';
 import 'settings/settings_section.dart';
 import 'screens/login_screen.dart';
@@ -123,6 +124,7 @@ Future<void> startHarness({
   // After the first frame is on its way: a launcher entry is not worth
   // holding the window up for, nor is clearing what the Swarm left.
   unawaited(registerAppImageLauncher());
+  unawaited(forgetGoneDeviceAppLauncher());
   if (!kUnderTest) unawaited(clearSwarmLeftovers());
 }
 

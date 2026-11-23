@@ -180,6 +180,21 @@ void main() {
       );
     });
 
+    test('a relative long folder is hashed as the folder in the home', () {
+      String? socketFor(String dataDir) => defaultDaemonSocketPath(
+        1,
+        environment: {'HOME': '/h', 'ADAPTER_DATA_DIR': dataDir},
+        isWindows: false,
+        look: offLinux,
+      );
+      final relative = socketFor('x' * 100);
+      expect(
+        relative,
+        matches(RegExp(r'^/h/\.harness/s/[0-9a-f]{16}/daemon-1\.sock$')),
+      );
+      expect(relative, socketFor('/h/${'x' * 100}'));
+    });
+
     test('the short socket folder is under the state root', () {
       expect(
         defaultDaemonSocketPath(

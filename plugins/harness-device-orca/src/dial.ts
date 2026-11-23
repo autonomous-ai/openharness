@@ -1,9 +1,10 @@
-// The loop behind the panel and the status bar: it asks `harness device orca link` where the devices' socket is,
-// holds the `dial` stream open on it, and makes each of its lines the state. While that stream is open it tells the
-// devices the terminals of the worktree on Orca's screen, by their ids alone. Nothing of `orca` is loaded here: the end
-// to end test runs this file outside Orca.
-import { basename, dirname } from 'node:path'
-import { MISSING, type DialInputs, type Ran } from './inputs'
+// The loop behind the panel and the status bar: it asks `harness device orca link` where the devices listen (their
+// socket, or on Windows their pipe), holds the `dial` stream open there, and makes each of its lines the state. While
+// that stream is open it tells the devices the terminals of the worktree on Orca's screen, by their ids alone. Nothing
+// of `orca` is loaded here: the end to end test runs this file outside Orca.
+import { posix, win32 } from 'node:path'
+import { MISSING, type DialInputs, type Ran, type Target } from './inputs'
+import { PIPE, TOKEN } from './pipeAuth'
 import type { DialState } from './protocol'
 
 const LINK_ARGS = ['device', 'orca', 'link'] as const
@@ -27,7 +28,7 @@ const NEWLINE = 0x0a
 const REPLACED = '{"replaced":true}'
 const FIRST_WAIT_MS = 1_000
 const LAST_WAIT_MS = 30_000
-// Unplugged with the watch on: the watch asks as the socket appears, so link is looked at again only in case the
+// Unplugged with the watch on: the watch asks as the devices appear, so link is looked at again only in case the
 // daemon stops.
 const WATCHED_WAIT_MS = 300_000
 // The folder watch asks link at most this often.
@@ -37,11 +38,12 @@ const HANDLE = /^term_[0-9a-f-]{36}$/
 const FRONT_MAX_TERMINALS = 50
 const FRONT_RETRY_MS = 1_000
 
-type Link = { ready: false; socket?: string } | { ready: true; socket: string }
+// `marker` is the file that appears as the devices listen: their socket, or on Windows their record, devices.json.
+type Link = { ready: false; marker?: string } | { ready: true; target: Target }
 
 // The `dial` stream while it is open.
 interface Stream {
-  socket: string
+  target: Target
   /** The body the devices last took. */
   sent?: string
   /** Stops the send in flight. */
@@ -55,6 +57,9 @@ interface Stream {
 const decoder = new TextDecoder()
 
 export function startDial(inputs: DialInputs, tell: { changed(state: DialState): void; log(line: string): void }): Dial {
+  const windows = inputs.platform === 'win32'
+  // By the platform the inputs name, so a test on macOS reads Windows' paths as Windows does.
+  const paths = windows ? win32 : posix
   let current: DialState = { state: 'checking' }
   let stopped = false
   let passing: AbortController | null = null
@@ -65,7 +70,7 @@ export function startDial(inputs: DialInputs, tell: { changed(state: DialState):
   let wait = FIRST_WAIT_MS
   let nextAt = Infinity
   let cancelNext = () => {}
-  let watching: { socket: string; close(): void } | null = null
+  let watching: { marker: string; close(): void } | null = null
   let watchFailed = false
   // The body of the last front(), kept for the next stream while none is open.
   let latest: string | undefined
@@ -99,7 +104,7 @@ export function startDial(inputs: DialInputs, tell: { changed(state: DialState):
     passing = null
     if (stopped) return
     const now = inputs.now()
-    // Unplugged with the watch on is no failure: the watch asks as the socket appears, link is looked at again only in
+    // Unplugged with the watch on is no failure: the watch asks as the devices appear, link is looked at again only in
     // case the daemon stops, and a stream that ends soon after waits from 1 s, not from a wait grown meanwhile.
     const at = again ? Math.max(now, lastStart + WATCH_MS) : now + (quiet ? WATCHED_WAIT_MS : wait)
     wait = quiet ? FIRST_WAIT_MS : Math.min(wait * 2, LAST_WAIT_MS)
@@ -122,16 +127,16 @@ export function startDial(inputs: DialInputs, tell: { changed(state: DialState):
     else schedule(Math.max(inputs.now(), lastStart + WATCH_MS))
   }
 
-  // The devices' socket appears in its folder once a dial is plugged in: its entry asks link again.
-  function watch(socket: string | undefined): void {
-    if (stopped || watching?.socket === socket) return
+  // The devices' marker appears in its folder once a dial is plugged in: its entry asks link again.
+  function watch(marker: string | undefined): void {
+    if (stopped || watching?.marker === marker) return
     unwatch()
-    if (socket === undefined) return
-    const entry = basename(socket)
-    const held = { socket, close: () => {} }
+    if (marker === undefined) return
+    const entry = paths.basename(marker)
+    const held = { marker, close: () => {} }
     watching = held
     held.close = inputs.watch(
-      dirname(socket),
+      paths.dirname(marker),
       (name) => {
         if (name === null || name === entry) ask()
       },
@@ -156,34 +161,41 @@ export function startDial(inputs: DialInputs, tell: { changed(state: DialState):
   // True when it ends unplugged with the watch on.
   async function pass(abort: AbortController): Promise<boolean> {
     const ran = await launch(abort.signal)
-    const link = ran === MISSING ? null : readLink(ran)
+    const link = ran === MISSING ? null : windows ? readWindowsLink(ran) : readLink(ran)
     if (!link) set({ state: ran === MISSING ? 'noHarness' : 'notRunning' })
-    else if (link.ready) await follow(link.socket, abort)
+    else if (link.ready) await follow(link.target, abort)
     else {
       set({ state: 'unplugged' })
-      watch(link.socket)
+      watch(link.marker)
       return watching !== null
     }
     return false
   }
 
-  // The launcher in the home first, then one on PATH, as plugins/harness-device/hooks/device.js looks.
+  // The launcher in the home first, where Harness installs it, then one on PATH, as
+  // plugins/harness-device/hooks/device.js looks. Only absolute folders: a relative or empty one is Orca's working
+  // folder, which can be a worktree Orca opened. Each runs in the home, as Windows looks for a bare name in the working
+  // folder before PATH. With no absolute home nothing runs: there is no folder of the account's own to run in, and no
+  // Harness, which keeps its state there.
+  const path = inputs.path.split(paths.delimiter).filter((folder) => paths.isAbsolute(folder)).join(paths.delimiter)
+  const launcher = windows ? ['.harness', 'bin', 'harness.exe'] : ['.local', 'bin', 'harness']
   async function launch(signal: AbortSignal): Promise<Ran> {
-    const files = inputs.home ? [`${inputs.home}/.local/bin/harness`, 'harness'] : ['harness']
-    for (const file of files) {
-      const ran = await inputs.run(file, LINK_ARGS, { path: inputs.path, timeoutMs: LINK_TIMEOUT_MS, maxBytes: LINK_MAX_BYTES, signal })
+    const home = inputs.home
+    if (!paths.isAbsolute(home)) return MISSING
+    for (const file of [paths.join(home, ...launcher), 'harness']) {
+      const ran = await inputs.run(file, LINK_ARGS, { path, cwd: home, timeoutMs: LINK_TIMEOUT_MS, maxBytes: LINK_MAX_BYTES, signal })
       if (ran !== MISSING) return ran
     }
     return MISSING
   }
 
-  async function follow(socket: string, abort: AbortController): Promise<void> {
+  async function follow(target: Target, abort: AbortController): Promise<void> {
     // On the loop's clock, so a test moves it.
     const cancelHead = inputs.after(HEAD_MS, () => abort.abort())
-    const answer = await inputs.connect(socket, DIAL_OPEN, abort.signal)
+    const answer = await inputs.connect(target, DIAL_OPEN, abort.signal)
     cancelHead()
     if (answer?.status !== 200) return set({ state: answer?.status === 409 ? 'elsewhere' : 'notRunning' })
-    stream = { socket }
+    stream = { target }
     // A devices process that started again holds no worktree: each open tells it the latest.
     push()
     const opened = inputs.now()
@@ -230,7 +242,7 @@ export function startDial(inputs: DialInputs, tell: { changed(state: DialState):
       cancelHead()
       abort.abort()
     }
-    const status = await inputs.post(open.socket, body, abort.signal)
+    const status = await inputs.post(open.target, body, abort.signal)
     cancelHead()
     open.sending = undefined
     if (open !== stream) return
@@ -255,8 +267,7 @@ export function startDial(inputs: DialInputs, tell: { changed(state: DialState):
     }
   }
 
-  if (inputs.platform === 'win32') set({ state: 'windows' })
-  else start()
+  start()
 
   return {
     state: () => current,
@@ -281,20 +292,38 @@ export function startDial(inputs: DialInputs, tell: { changed(state: DialState):
 
 // link's answer: null for anything but a daemon that is up and a devices' socket that is absent or an absolute path.
 function readLink(ran: string | null): Link | null {
-  let value: unknown
-  try {
-    value = JSON.parse(ran ?? '')
-  } catch {
-    return null
-  }
-  if (!isRecord(value) || value.daemon !== true) return null
+  const value = daemonUp(ran)
+  if (!value) return null
   const socket = value.devicesSocket
   if (socket === undefined) return value.devicesReady === false ? { ready: false } : null
   // Node 22's connect (the end to end test's Node) throws past its own error handler on a NUL in the path; Orca
   // 1.4.256's Node 24 fails it with EINVAL instead.
   if (typeof socket !== 'string' || !socket.startsWith('/') || socket.includes('\0')) return null
   if (typeof value.devicesReady !== 'boolean') return null
-  return value.devicesReady ? { ready: true, socket } : { ready: false, socket }
+  return value.devicesReady ? { ready: true, target: { socket } } : { ready: false, marker: socket }
+}
+
+// link's answer on Windows: null for anything but a daemon that is up, an absolute devicesRecord, and while the devices
+// are ready their pipe on this computer and its token. The token is the pipe's credential: it is never logged.
+function readWindowsLink(ran: string | null): Link | null {
+  const value = daemonUp(ran)
+  if (!value) return null
+  const { devicesPipe: pipe, devicesToken: token, devicesReady: ready, devicesRecord: record } = value
+  if (typeof record !== 'string' || !win32.isAbsolute(record) || typeof ready !== 'boolean') return null
+  if (!ready) return { ready: false, marker: record }
+  if (typeof pipe !== 'string' || !PIPE.test(pipe) || typeof token !== 'string' || !TOKEN.test(token)) return null
+  return { ready: true, target: { pipe, token } }
+}
+
+// link's answer as an object that says the daemon is up, or null.
+function daemonUp(ran: string | null): Record<string, unknown> | null {
+  let value: unknown
+  try {
+    value = JSON.parse(ran ?? '')
+  } catch {
+    return null
+  }
+  return isRecord(value) && value.daemon === true ? value : null
 }
 
 // Hands `take` each line until the chunks end or it says stop. A line that would hold more than LINE_BYTES with its

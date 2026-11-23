@@ -18,9 +18,8 @@ import { parse as parseToml } from 'smol-toml'
 import { createHash } from 'node:crypto'
 import { basename, join } from 'node:path'
 import type { HookReviewRecord } from '../facets/hooks.js'
-import { errorKind } from '../../lib/log.js'
+import { errorKind, outsideHome } from '../../lib/log.js'
 import { HookPreparationHeld, inspectHookFile, runHookPreparation, type HookPreparationAttempt } from './nativeHookFiles.js'
-import { HookScriptMissing } from './hookHeld.js'
 import { isMessagesBlock } from './messagesHook.js'
 import { isOurs, type HookBlock, type Settings } from './notifyHooks.js'
 
@@ -221,7 +220,7 @@ export function withoutReviewRecords(text: string, record: HookReviewRecord, own
  * Harness's blocks were taken out of them, whose records of those blocks go in the same write. */
 export function prepareReviewed(record: HookReviewRecord, home: string, settingsFile: string, settings: Settings,
   platform: NodeJS.Platform = process.platform, pruned?: Settings) {
-  const config = join(home, record.file), observed = inspectHookFile(config, 0o600)
+  const config = join(home, record.fileName), observed = inspectHookFile(config, 0o600)
   // Codex uses the real home plus the literal hooks filename, even when that
   // leaf is an alias. The config's own leaf alias does not change that home.
   const keyed = join(observed.directory, basename(settingsFile))
@@ -243,7 +242,7 @@ export function prepareReviewed(record: HookReviewRecord, home: string, settings
     commit: async (attempt: HookPreparationAttempt) => {
       const published = await observed.replace(output, attempt)
       // The file by its name, never its path, which names the person's home.
-      if (output !== text) console.log(record.messages.recorded.replace('{config}', record.file))
+      if (output !== text) console.log(record.messages.recorded.replace('{config}', () => record.fileName + outsideHome(config)))
       return published
     },
   }
@@ -252,7 +251,7 @@ export function prepareReviewed(record: HookReviewRecord, home: string, settings
 /** Record the exact settings already on disk. Failure is explicit so launch
  * remains held until both the hook and its approval are confirmed durable. */
 export async function recordReviewed(record: HookReviewRecord, home: string, settingsFile: string): Promise<boolean> {
-  const config = join(home, record.file)
+  const config = join(home, record.fileName)
   try { return await runHookPreparation([settingsFile, config], async attempt => {
     const source = inspectHookFile(settingsFile)
     const settings = JSON.parse(source.content ?? 'null') as Settings
@@ -262,8 +261,7 @@ export async function recordReviewed(record: HookReviewRecord, home: string, set
     source.verify(); published.verify()
     return true
   }) } catch (err) {
-    // A hold's reason is fixed words (hookHeld.ts); HookScriptMissing's names a path, so that one is said by its kind.
-    console.error(record.messages.skipped.replace('{config}', record.file), err instanceof HookPreparationHeld && !(err instanceof HookScriptMissing) ? err.reason : errorKind(err))
+    console.error(record.messages.skipped.replace('{config}', () => record.fileName + outsideHome(config)), err instanceof HookPreparationHeld ? err.hold : errorKind(err))
     return false
   }
 }

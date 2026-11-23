@@ -1,18 +1,27 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { randomBytes } from 'node:crypto'
 import { chmodSync, mkdtempSync, rmSync } from 'node:fs'
-import type { IncomingMessage, ServerResponse } from 'node:http'
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { join } from 'node:path'
 import { listenLocalSocket, type LocalSocketServer } from '../lib/localSocket.js'
+import { ensureDaemonToken, PIPE_AUTH_HEADER, PIPE_PROOF_HEADER, pipeProofValue } from '../lib/windows/pipeAuth.js'
 import { LISTENER_MAX_CONNECTIONS } from '../services/devicesListener.js'
 import { devicesListenerPath } from './listenerPath.js'
+import { createDevicesProof, DEVICES_TOKEN_FILE, devicesRecordPath, writeDevicesRecord } from './listenerPipe.js'
 import { ASK_ANSWER_MAX, askDevices, streamDevices, tellDevices } from './listenerClient.js'
 
 const FRONT = { type: 'front', app: 'ghostty' }
 const dirs: string[] = []
 const servers: LocalSocketServer[] = []
+const squatters: Server[] = []
 
 afterEach(async () => {
   vi.restoreAllMocks()
   for (const server of servers.splice(0)) await server.close()
+  for (const server of squatters.splice(0)) {
+    server.closeAllConnections()
+    await new Promise(resolve => server.close(resolve))
+  }
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
@@ -24,19 +33,25 @@ function dataDir(): string {
 }
 
 interface Heard { method?: string; url?: string; body: string }
-/** A real private socket where the devices listener would be, answering as [answer] says; it hears every request. */
-async function listener(dir: string, answer: (res: ServerResponse) => void = res => { res.writeHead(204).end() }) {
+/** A real listener at [path], answering as [answer] says; it hears every request. With [token] it serves the pipe of
+ *  that name, proving the token, as the devices do on Windows. */
+async function listenAt(path: string, answer: (res: ServerResponse, body: string) => void, token?: Buffer) {
   const heard: Heard[] = []
   const server = await listenLocalSocket((req: IncomingMessage, res) => {
     let body = ''
     req.on('data', chunk => { body += chunk })
     req.on('end', () => {
       heard.push({ method: req.method, url: req.url, body })
-      answer(res)
+      answer(res, body)
     })
-  }, devicesListenerPath(dir)!)
+  }, path, { token })
   servers.push(server)
   return { heard, server }
+}
+
+/** A real private socket where the devices listener would be, answering as [answer] says; it hears every request. */
+function listener(dir: string, answer: (res: ServerResponse) => void = res => { res.writeHead(204).end() }) {
+  return listenAt(devicesListenerPath(dir)!, answer)
 }
 
 describe.skipIf(process.platform === 'win32')('tellDevices, on a socket', () => {
@@ -109,12 +124,6 @@ describe.skipIf(process.platform === 'win32')('tellDevices, on a socket', () => 
 })
 
 describe('tellDevices, anywhere', () => {
-  it('false on Windows without a call', async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>()
-    expect(await tellDevices('C:\\Users\\me\\.harness', FRONT, { platform: 'win32', fetch })).toBe(false)
-    expect(fetch).not.toHaveBeenCalled()
-  })
-
   it('never throws', async () => {
     const rejects = vi.fn<typeof globalThis.fetch>(async () => { throw new TypeError('fetch failed') })
     expect(await tellDevices('/tmp/hdc-none', FRONT, { platform: 'linux', fetch: rejects })).toBe(false)
@@ -221,12 +230,6 @@ describe.skipIf(process.platform === 'win32')('streamDevices, on a socket', () =
 })
 
 describe('streamDevices, anywhere', () => {
-  it('false on Windows without a call', async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>()
-    expect(await streamDevices('C:\\Users\\me\\.harness', TABS, vi.fn(), { signal: open(), platform: 'win32', fetch })).toBe(false)
-    expect(fetch).not.toHaveBeenCalled()
-  })
-
   it('never throws', async () => {
     const rejects = vi.fn<typeof globalThis.fetch>(async () => { throw new TypeError('fetch failed') })
     expect(await streamDevices('/tmp/hdc-none', TABS, vi.fn(), { signal: open(), platform: 'linux', fetch: rejects })).toBe(false)
@@ -311,12 +314,6 @@ describe.skipIf(process.platform === 'win32')('askDevices, on a socket', () => {
 })
 
 describe('askDevices, anywhere', () => {
-  it('null on Windows without a call', async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>()
-    expect(await askDevices('C:\\Users\\me\\.harness', NOTICE, { platform: 'win32', fetch })).toBeNull()
-    expect(fetch).not.toHaveBeenCalled()
-  })
-
   it('never throws', async () => {
     const rejects = vi.fn<typeof globalThis.fetch>(async () => { throw new TypeError('fetch failed') })
     expect(await askDevices('/tmp/hdc-none', NOTICE, { platform: 'linux', fetch: rejects })).toBeNull()
@@ -324,5 +321,167 @@ describe('askDevices, anywhere', () => {
       pull(body) { body.error(new Error('reset')) },
     }), { status: 200 }))
     expect(await askDevices('/tmp/hdc-none', NOTICE, { platform: 'linux', fetch: breaks })).toBeNull()
+  })
+})
+
+// On Windows the devices listen on the pipe their record names, and each request and answer proves devices-token
+// (listenerPipe.ts). Here the pipe is a socket named harness-<id> in the data folder, which isPipePath takes off Windows.
+describe('over a pipe', () => {
+  const filetime = (ms: number) => `w:${(BigInt(Math.floor(ms)) + 11_644_473_600_000n) * 10_000n}`
+
+  /** A data folder with the devices' token and a record of a pipe in it, and a proof whose table, counted, has this
+   *  process running for an hour; [log] says when the table is read. */
+  function piped(over: { alive?: () => boolean; log?: string[] } = {}) {
+    const dir = dataDir()
+    const pipe = join(dir, `harness-${randomBytes(16).toString('hex')}`)
+    const token = ensureDaemonToken(dir, DEVICES_TOKEN_FILE)
+    writeDevicesRecord(dir, { pipe, pid: process.pid })
+    const counts = { rows: 0 }
+    const started = filetime(Date.now() - 3_600_000)
+    const proof = createDevicesProof({ liveness: {
+      alive: over.alive ?? (() => true),
+      rows: async () => {
+        counts.rows++
+        over.log?.push('table')
+        return [{ pid: process.pid, executable: 'node.exe', startMarker: started }]
+      },
+    } })
+    return { dir, pipe, token, counts, options: { platform: 'win32' as const, proof } }
+  }
+
+  /** The devices' listener on [pipe], proving [token]; [log] says when a connection comes. */
+  async function onPipe(
+    pipe: string, token: Buffer, answer: (res: ServerResponse, body: string) => void = res => { res.writeHead(204).end() },
+    log: string[] = [],
+  ) {
+    const served = await listenAt(pipe, answer, token)
+    served.server.server.on('connection', () => { log.push('connection') })
+    return { ...served, log }
+  }
+
+  /** Something other than the devices on [pipe]: a plain HTTP server answering every request as [answer] says. Its
+   *  log says when a connection comes. */
+  async function squat(pipe: string, answer: (req: IncomingMessage, res: ServerResponse) => void) {
+    const log: string[] = []
+    const server = createServer((req, res) => { req.resume(); req.on('end', () => answer(req, res)) })
+    server.on('connection', () => { log.push('connection') })
+    await new Promise<void>(resolve => { server.listen(pipe, resolve) })
+    squatters.push(server)
+    return log
+  }
+
+  it("tells, asks and streams the listener the record names, proving the devices' token", async () => {
+    const { dir, pipe, token, options } = piped()
+    const { heard } = await onPipe(pipe, token, (res, body) => {
+      const { type } = JSON.parse(body) as { type: string }
+      if (type === 'front') res.writeHead(204).end()
+      else if (type === 'notice') json('{"result":"shown"}')(res)
+      else res.writeHead(200, { 'content-type': 'application/x-ndjson' }).end(`${LINE}${RAISE_LINE}`)
+    })
+    expect(await tellDevices(dir, FRONT, options)).toBe(true)
+    expect(await askDevices(dir, NOTICE, options)).toEqual({ result: 'shown' })
+    const chunks: Buffer[] = []
+    expect(await streamDevices(dir, TABS, data => { chunks.push(data) }, { ...options, signal: open() })).toBe(true)
+    expect(Buffer.concat(chunks).toString()).toBe(`${LINE}${RAISE_LINE}`)
+    expect(heard).toEqual([FRONT, NOTICE, TABS].map(message => ({ method: 'POST', url: '/', body: JSON.stringify(message) })))
+  })
+
+  it('twenty tells read the table once', async () => {
+    const { dir, pipe, token, counts, options } = piped()
+    const { heard } = await onPipe(pipe, token)
+    for (let tell = 0; tell < 20; tell++) expect(await tellDevices(dir, FRONT, options)).toBe(true)
+    expect(heard).toHaveLength(20)
+    expect(counts.rows).toBe(1)
+  })
+
+  // Review Focus 1: inside the minute a proof is held, a pid given to another process passes the cheap check.
+  it('a failed connection proves again', async () => {
+    const log: string[] = []
+    const { dir, pipe, token, options } = piped({ log })
+    const first = await onPipe(pipe, token, undefined, log)
+    expect(await tellDevices(dir, FRONT, options)).toBe(true)
+    await first.server.close()
+    // Sent on the proof the first tell left, without the table: nothing listens.
+    expect(await tellDevices(dir, FRONT, options)).toBe(false)
+    expect(log).toEqual(['table', 'connection'])
+    await onPipe(pipe, token, undefined, log)
+    expect(await tellDevices(dir, FRONT, options)).toBe(true)
+    expect(log).toEqual(['table', 'connection', 'table', 'connection'])
+  })
+
+  // A refusal that proves the token is the devices' own answer: the proof stands.
+  it('a proven 429 or 400 keeps the proof: the calls after it read no table', async () => {
+    const { dir, pipe, token, counts, options } = piped()
+    let status = 429
+    const { heard } = await onPipe(pipe, token, res => { res.writeHead(status).end() })
+    expect(await tellDevices(dir, FRONT, options)).toBe(false)
+    status = 400
+    expect(await askDevices(dir, NOTICE, options)).toBe(400)
+    expect(await streamDevices(dir, TABS, vi.fn(), { ...options, signal: open() })).toBe(false)
+    expect(heard).toHaveLength(3)
+    expect(counts.rows).toBe(1)
+  })
+
+  // No answer in time proves nothing: the pid may have gone to another process inside the minute.
+  it('a listener that takes a message and never answers drops the proof: the next call reads the table', async () => {
+    const { dir, pipe, token, counts, options } = piped()
+    let answers = false
+    const { heard } = await onPipe(pipe, token, res => { if (answers) res.writeHead(204).end() })
+    expect(await tellDevices(dir, FRONT, { ...options, timeoutMs: 50 })).toBe(false)
+    expect(counts.rows).toBe(1)
+    answers = true
+    expect(await tellDevices(dir, FRONT, options)).toBe(true)
+    expect(counts.rows).toBe(2)
+    expect(heard).toHaveLength(2)
+  })
+
+  it('no record: false, null, false, and nothing connects', async () => {
+    const { dir, pipe, token, options } = piped()
+    rmSync(devicesRecordPath(dir))
+    const { log } = await onPipe(pipe, token)
+    expect(await tellDevices(dir, FRONT, options)).toBe(false)
+    expect(await askDevices(dir, NOTICE, options)).toBeNull()
+    expect(await streamDevices(dir, TABS, vi.fn(), { ...options, signal: open() })).toBe(false)
+    expect(log).toEqual([])
+  })
+
+  it('the recorded process gone: false, null, false, and nothing connects', async () => {
+    const { dir, pipe, token, counts, options } = piped({ alive: () => false })
+    const { log } = await onPipe(pipe, token)
+    expect(await tellDevices(dir, FRONT, options)).toBe(false)
+    expect(await askDevices(dir, NOTICE, options)).toBeNull()
+    expect(await streamDevices(dir, TABS, vi.fn(), { ...options, signal: open() })).toBe(false)
+    expect(log).toEqual([])
+    expect(counts.rows).toBe(0)
+  })
+
+  // Review Focus 2: something else answers on the recorded name.
+  it('an answer with no proof or a wrong one is dropped: false, null, false, and each next call reads the table again', async () => {
+    const proofs: Array<(nonce: string) => string | undefined> = [() => undefined, nonce => pipeProofValue(randomBytes(32), nonce)]
+    for (const proofFor of proofs) {
+      const { dir, pipe, counts, options } = piped()
+      const log = await squat(pipe, (req, res) => {
+        const proof = proofFor(String(req.headers[PIPE_AUTH_HEADER]).split('.')[0]!)
+        res.writeHead(200, { 'content-type': 'application/json', ...(proof ? { [PIPE_PROOF_HEADER]: proof } : {}) }).end('{"result":"shown"}')
+      })
+      expect(await tellDevices(dir, FRONT, options)).toBe(false)
+      expect(counts.rows).toBe(1)
+      expect(await askDevices(dir, NOTICE, options)).toBeNull()
+      expect(counts.rows).toBe(2)
+      const chunk = vi.fn()
+      expect(await streamDevices(dir, TABS, chunk, { ...options, signal: open() })).toBe(false)
+      expect(counts.rows).toBe(3)
+      expect(chunk).not.toHaveBeenCalled()
+      expect(log).toHaveLength(3)
+    }
+  })
+
+  it("a devices-token other than the listener's: false, null, false, and the listener takes nothing", async () => {
+    const { dir, pipe, options } = piped()
+    const { heard } = await onPipe(pipe, randomBytes(32))
+    expect(await tellDevices(dir, FRONT, options)).toBe(false)
+    expect(await askDevices(dir, NOTICE, options)).toBeNull()
+    expect(await streamDevices(dir, TABS, vi.fn(), { ...options, signal: open() })).toBe(false)
+    expect(heard).toEqual([])
   })
 })

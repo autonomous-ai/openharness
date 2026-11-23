@@ -1,9 +1,9 @@
-// The welcome's features as Harness Max reads them: the Pro's (cable_features_parse, compiled as it is) and the Max's
-// own (cable/max_cable.h), from the same list by the same rule.
+// The welcome's features as Harness Max reads them: the Pro's (cable_features_parse, compiled as it is; question.tier
+// among them) and the Max's own (cable/max_cable.h), from the same list by the same rule.
 // pro_fork relies on: devices/harness-pro/firmware/main/cable/cable_features.c
-// pro_fork blob: cf66638a6226b0da27d4874fa924d4e9463d8bc8 (main 91f60b6a7b)
+// pro_fork blob: f41b727ff4736546162f5aa45345a78adeec944b (main fc16e78f94)
 // pro_fork relies on: devices/harness-pro/firmware/main/cable/cable_features.h
-// pro_fork blob: 56d2a47237b75d9f5a38578b6878242b2218e34d (main 91f60b6a7b)
+// pro_fork blob: 686d3f8507add485197e7d528c5d21ea5627edd4 (main fc16e78f94)
 // scripts/check_pro_forks.py fails once either is no longer that blob: check that the rule below is still the Pro's and
 // that the Pro's bits stay below the Max's, then record its new blob on these lines and in main/pro_fork/upstream.txt.
 #include "cable/max_cable.h"
@@ -12,7 +12,9 @@
 
 #include "cJSON.h"
 
-_Static_assert((CABLE_FEATURE_PLAYER_LIBRARY | CABLE_FEATURE_RESYNC) < CABLE_FEATURE_FORM, "the Max's bits are the Pro's");
+_Static_assert((CABLE_FEATURE_PLAYER_LIBRARY | CABLE_FEATURE_RESYNC | CABLE_FEATURE_APPS_SWITCH | CABLE_FEATURE_QUESTION_TIER) <
+                   CABLE_FEATURE_FORM,
+               "the Max's bits are the Pro's");
 
 uint32_t max_cable_features_parse(const cJSON *welcome)
 {
@@ -26,7 +28,6 @@ uint32_t max_cable_features_parse(const cJSON *welcome)
         if (++count > 16 || !cJSON_IsString(item)) return 0;   // as the Pro's: then the list names none of them
         if (!strcmp(item->valuestring, "form")) result |= CABLE_FEATURE_FORM;
         if (!strcmp(item->valuestring, "question.review")) result |= CABLE_FEATURE_QUESTION_REVIEW;
-        if (!strcmp(item->valuestring, "question.tier")) result |= CABLE_FEATURE_QUESTION_TIER;
     }
     return pro | result;
 }

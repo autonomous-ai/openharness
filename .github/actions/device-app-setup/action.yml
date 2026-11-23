@@ -1,0 +1,29 @@
+name: Set up Harness Device's build
+description: Node, Rust, the Tauri CLI from its cache, and the release's own setup (release-setup.sh)
+inputs:
+  node-version:
+    description: The managed runtime the CLI ships on
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v7
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: npm
+        cache-dependency-path: device-app/ui/package-lock.json
+    # release-setup.sh needs rustup, which the windows-11-arm image may lack; this installs it where missing.
+    - uses: dtolnay/rust-toolchain@stable
+    # A cold `cargo install tauri-cli` takes minutes on every job; release-setup.sh keeps the pinned CLI it finds here,
+    # and its pin lives in that file, so the key follows it.
+    - uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin/cargo-tauri
+          ~/.cargo/bin/cargo-tauri.exe
+        key: tauri-cli-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('device-app/scripts/release-setup.sh') }}
+    # This OS's Rust targets and packages, the Tauri CLI, the window's packages and minisign, as a release installs
+    # them.
+    - name: Release tools
+      shell: bash
+      run: bash device-app/scripts/release-setup.sh

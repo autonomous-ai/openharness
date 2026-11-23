@@ -36,7 +36,6 @@ async function turn(client: LocalClient, agentId: string, content: string): Prom
   expect((await started).payload?.userMessage).toBe(content)
   await ended
 }
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 const paneOf = (agent: Row): string => String(agent.terminal?.runtimes?.[0]?.paneId ?? agent.tmuxPane)
 /** How tmux paints [pane]: its window's `window-style`, and the pane's style as `select-pane -g` reports
  *  it (the pane's own before tmux 3.0; from 3.0 its pane option, or its window's when it has none). */
@@ -102,8 +101,11 @@ describe('the person reaching into the agents\' tmux', () => {
           (await styleOf(d, paneOf(agent))).pane.includes('bg=#181818') ? true : null, 10_000, 250)
       }
     }
-    // Several reconcile passes (5 s each here).
-    await sleep(15_000)
+    // A move the reconciler did not follow retires the agent after two misses (MISS_LIMIT), each a probe begun after the
+    // move: the pass running then may have probed before, so three more passes than now. A fixed time ended before any
+    // pass looked once one was slow or overdue under load, and the check passed falsely.
+    const passes = await d.discoveryPasses()
+    await until('three discovery passes after the move', async () => await d.discoveryPasses() >= passes + 3, 60_000, 250)
     for (const agent of agents) {
       const now = await row(client, agent.id)
       expect(now?.status, `${agent.engine} after the move`).toBe('active')

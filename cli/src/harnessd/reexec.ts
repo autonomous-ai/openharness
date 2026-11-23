@@ -266,7 +266,9 @@ export function recoverFailedReexec(deps: {
 
 export interface ProbeResult {
   ok: boolean
-  detail: string
+  /** How the probe ended (`exit 1 · stderr 40 B`, `signal SIGKILL`, the spawn error's kind), never what it printed:
+   *  a bundle's output can name the person's paths, and only the log reads this. */
+  ended: string
   /** The bundle's master says it takes a handover (`PROBE_HANDOVER`); left out, it does not. */
   handover?: true
 }
@@ -279,26 +281,26 @@ export function runProbe(
   const child = start(nodePath, args, env)
   // Apart: a bundle from before probes answers with its usage on stdout and the reason on stderr.
   let out = ''
-  let err = ''
+  let errBytes = 0
   child.stdout?.on('data', (chunk: Buffer) => { out += chunk.toString('utf8') })
-  child.stderr?.on('data', (chunk: Buffer) => { err += chunk.toString('utf8') })
-  const lastLine = (text: string): string => { const lines = text.trim().split('\n'); return lines[lines.length - 1].trim() }
+  child.stderr?.on('data', (chunk: Buffer) => { errBytes += chunk.length })
   const result = new Promise<ProbeResult>((resolve) => {
     let settled = false
-    const done = (ok: boolean, detail: string, handover = false) => {
+    const done = (ok: boolean, ended: string, handover = false) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      resolve({ ok, detail, ...(handover ? { handover: true } : {}) })
+      resolve({ ok, ended, ...(handover ? { handover: true } : {}) })
     }
     const timer = setTimeout(() => {
       try { child.kill('SIGKILL') } catch { /* gone */ }
       done(false, `no answer within ${timeoutMs} ms`)
     }, timeoutMs)
-    child.on('error', (error) => done(false, error.message))
+    child.on('error', (error) => done(false, errorKind(error)))
     child.on('close', (code, signal) => {
       const ok = code === 0 && out.includes(PROBE_ANSWER)
-      done(ok, lastLine(err) || lastLine(out) || (signal ? `signal ${signal}` : `exit ${signedExitCode(code)}`), ok && out.includes(PROBE_HANDOVER))
+      const how = signal ? `signal ${signal}` : `exit ${signedExitCode(code)}`
+      done(ok, errBytes > 0 ? `${how} · stderr ${errBytes} B` : how, ok && out.includes(PROBE_HANDOVER))
     })
   })
   return { result, cancel: () => { try { child.kill('SIGKILL') } catch { /* gone */ } } }
@@ -424,7 +426,7 @@ export function createReexec(deps: ReexecDeps): {
       deps.log(`[harnessd] ${why} — keeping this master`)
       carryOn('kept')
     }
-    if (!deps.exists(deps.scriptPath)) { stay(`${deps.scriptPath} is not there to hand over to`); return }
+    if (!deps.exists(deps.scriptPath)) { stay('the bundle is not there to hand over to'); return }
     const token = h.token()
     // A name for the handover's decision file (`takeBackHandover`): with any other, every handover would only time out.
     if (!HANDOVER_TOKEN.test(token)) { stay(`the handover token ${JSON.stringify(token)} is not one a file can be named by`); return }
@@ -610,11 +612,11 @@ export function createReexec(deps: ReexecDeps): {
         const running = deps.probe([...args, PROBE_COMMAND], env)
         probe = running
         void running.result.then((result) => {
-          const { ok, detail } = result
+          const { ok, ended } = result
           probe = null
           if (deps.stopping()) return
           if (!ok) {
-            deps.log(`[harnessd] the new bundle's master did not answer its probe (${detail}) — keeping this master`)
+            deps.log(`[harnessd] the new bundle's master did not answer its probe (${ended}) — keeping this master`)
             carryOn('refused')
             return
           }

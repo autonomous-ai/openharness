@@ -1,21 +1,53 @@
 /**
  * One message from a tool on this computer to the devices' own listener (services/devicesListener.ts): `POST /` on its
- * socket, the message as JSON; for an ask's message the JSON object it answers, and for a stream's message the stream it
- * answers. Sent only to a socket that is this
- * account's own, checked before a byte goes (fetchOverSocket): what is sent can say which app is in front, or which tab.
+ * socket, or on Windows its pipe, the message as JSON; for an ask's message the JSON object it answers, and for a
+ * stream's message the stream it answers. What is sent can say which app is in front, or which tab, so it goes only
+ * where this account's devices alone can answer: a socket that is this account's own, checked before a byte goes
+ * (fetchOverSocket), or the pipe `devices.json` names while its process runs, each request proving `devices-token` and
+ * each answer taken only when it proves it back (fetchOverPipe, listenerPipe.ts).
  */
-import { fetchOverSocket } from '../lib/localTransport.js'
-import { devicesListenerPath } from './listenerPath.js'
+import { fetchOverPipe, fetchOverSocket } from '../lib/localTransport.js'
+import { devicesTarget } from './listenerPath.js'
+import { devicesProof, type DevicesProof } from './listenerPipe.js'
+
+interface SendOptions {
+  platform?: NodeJS.Platform
+  fetch?: typeof fetch
+  /** Where the recorded devices process stands proven: this process's `devicesProof` by default. */
+  proof?: DevicesProof
+}
+
+/**
+ * `fetch` to the devices of [dataDir], or null with nothing to reach. Over the pipe, a send that fails (nothing listens,
+ * an answer without the token's proof, none in time) drops the proof held for the recorded process, so the next one
+ * proves it by the process table before it sends: its pid may have gone to another process inside the minute a proof
+ * holds (listenerPipe.ts PROOF_MAX_AGE_MS).
+ */
+async function devicesFetch(dataDir: string, options: SendOptions): Promise<typeof fetch | null> {
+  const proof = options.proof ?? devicesProof
+  const target = await devicesTarget(dataDir, { platform: options.platform, proof })
+  if (!target) return null
+  if ('socket' in target) return options.fetch ?? fetchOverSocket(target.socket)
+  const send = options.fetch ?? fetchOverPipe(() => target)
+  return async (input, init) => {
+    try {
+      return await send(input, init)
+    } catch (error) {
+      proof.forget(dataDir)
+      throw error
+    }
+  }
+}
 
 /** True when the listener took [message] (a 2xx). False, never a throw, for no listener, one not this account's own, any other answer or none in time. */
 export async function tellDevices(
   dataDir: string, message: { type: string } & Record<string, unknown>,
-  options: { platform?: NodeJS.Platform; fetch?: typeof fetch; timeoutMs?: number } = {},
+  options: SendOptions & { timeoutMs?: number } = {},
 ): Promise<boolean> {
-  const path = devicesListenerPath(dataDir, options.platform)
-  if (!path) return false
+  const send = await devicesFetch(dataDir, options)
+  if (!send) return false
   try {
-    const answer = await (options.fetch ?? fetchOverSocket(path))('http://devices.invalid/', {
+    const answer = await send('http://devices.invalid/', {
       method: 'POST', body: JSON.stringify(message), signal: AbortSignal.timeout(options.timeoutMs ?? 2000),
     })
     // Unread, an answer would hold its connection, and the listener takes only 16.
@@ -31,13 +63,13 @@ export const ASK_ANSWER_MAX = 1024
  *  this account's own, a 200 whose body is not a JSON object of at most ASK_ANSWER_MAX bytes, or no answer in time. */
 export async function askDevices(
   dataDir: string, message: { type: string } & Record<string, unknown>,
-  options: { platform?: NodeJS.Platform; fetch?: typeof fetch; timeoutMs?: number } = {},
+  options: SendOptions & { timeoutMs?: number } = {},
 ): Promise<Record<string, unknown> | number | null> {
-  const path = devicesListenerPath(dataDir, options.platform)
-  if (!path) return null
+  const send = await devicesFetch(dataDir, options)
+  if (!send) return null
   try {
     // The bound covers the body as well as the headers: the signal aborts a read still under way.
-    const answer = await (options.fetch ?? fetchOverSocket(path))('http://devices.invalid/', {
+    const answer = await send('http://devices.invalid/', {
       method: 'POST', body: JSON.stringify(message), signal: AbortSignal.timeout(options.timeoutMs ?? 2000),
     })
     // Read or cancelled, never left: an unread answer would hold its connection, and the listener takes only 16.
@@ -65,16 +97,16 @@ export async function askDevices(
  */
 export async function streamDevices(
   dataDir: string, message: { type: string }, chunk: (data: Buffer) => void,
-  options: { signal: AbortSignal; platform?: NodeJS.Platform; fetch?: typeof fetch },
+  options: SendOptions & { signal: AbortSignal },
 ): Promise<boolean> {
-  const path = devicesListenerPath(dataDir, options.platform)
-  if (!path) return false
+  const send = await devicesFetch(dataDir, options)
+  if (!send) return false
   // Only the answer's headers are bounded: the body is the stream, open for as long as the listener holds it.
   const unanswered = new AbortController()
   const bound = setTimeout(() => unanswered.abort(), 2000)
   let answer: Response
   try {
-    answer = await (options.fetch ?? fetchOverSocket(path))('http://devices.invalid/', {
+    answer = await send('http://devices.invalid/', {
       method: 'POST', body: JSON.stringify(message), signal: AbortSignal.any([options.signal, unanswered.signal]),
     })
     if (answer.status !== 200) {

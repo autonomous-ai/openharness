@@ -8,7 +8,7 @@
  */
 import { OPENCLAW_LOCAL, OPENCLAW_STATES, openclawFolderInUse, readOpenclawScreen } from '../../engines/openclaw/contract.js'
 import type { AgentEngine } from '../../engines/types.js'
-import { describeAgentCreateFailure, summarizePaneOutput } from '../../lib/agentCreateDiagnosis.js'
+import { describeAgentCreateFailure } from '../../lib/agentCreateDiagnosis.js'
 import type { engineInstallRecipe } from '../../lib/engineInstall.js'
 import { commandAvailableInInteractiveShell } from '../../lib/engineLaunch.js'
 import { errorKind, sid } from '../../lib/log.js'
@@ -39,6 +39,9 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => {
   timer.unref?.()
 })
 
+/** The process the watcher found is no longer what its pane runs when the readiness is published. */
+class PaneChanged extends IdentityReadUnavailable {}
+
 export function createPaneWatcher({ registry, announceSession, triggerHint, captureTerminal, retainExitedSession, terminals, holdRoute, revision, cancelled }: PaneWatcherDeps) {
   /**
    * Watch a pane this daemon just opened until its engine process shows up (ready), dies (failed), or
@@ -48,6 +51,10 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
     const startedAt = Date.now()
     pending = structuredClone(pending)
     let delayMs = 50
+    const pause = async () => {
+      await sleep(delayMs)
+      delayMs = Math.min(delayMs * 2, 750)
+    }
     const nativeToken = pending.launch?.state === 'starting' ? pending.launch.nativeToken : undefined
     const local = !!pending.openclawLocal
     // A delayed probe belongs to this launch, including its original route and
@@ -99,19 +106,30 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
             const observed = await resolvePaneEngineProcess(backend, spawned.runtime, engine)
             if (!sameProcessIdentity(processIdentity, observed) || observed?.executable !== processIdentity.executable
               || (local && readOpenclawScreen(await captureTerminal(pending.agentId, 40) ?? '').footer === null)) {
-              throw new IdentityReadUnavailable('the new pane changed before readiness publication')
+              throw new PaneChanged('the new pane changed before readiness publication')
             }
           }
           if (!exact()) return
+          const publish = async (): Promise<LaunchPublication> => {
+            try { return await registry.confirmLaunch(pending.agentId, { processIdentity }, { current: exact, refresh, expires }) }
+            catch (error) {
+              // One first native hook may bind this same process while preparation waits. Its old image
+              // was revoked before publication; uncertainty is never retried by reselecting an owner.
+              const hooked = registry.byAgent(pending.agentId)
+              if (!(error instanceof RegistryOwnershipChanged) || selected.sessionId || !hooked?.sessionId || origin(hooked) !== origin(selected) || !exact()) throw error
+              await refresh()
+              return await registry.confirmLaunch(pending.agentId, { processIdentity }, { current: exact, refresh, expires })
+            }
+          }
           let publication: LaunchPublication
-          try { publication = await registry.confirmLaunch(pending.agentId, { processIdentity }, { current: exact, refresh, expires }) }
+          try { publication = await publish() }
           catch (error) {
-            // One first native hook may bind this same process while preparation waits. Its old image
-            // was revoked before publication; uncertainty is never retried by reselecting an owner.
-            const hooked = registry.byAgent(pending.agentId)
-            if (!(error instanceof RegistryOwnershipChanged) || selected.sessionId || !hooked?.sessionId || origin(hooked) !== origin(selected) || !exact()) throw error
-            await refresh()
-            publication = await registry.confirmLaunch(pending.agentId, { processIdentity }, { current: exact, refresh, expires })
+            // Not a failed launch: OpenClaw's TUI starts as `node` and names itself `openclaw` a moment later (its
+            // dist/entry.js), so a look before that is out of date by the refresh, and ending here left the launch to
+            // discovery, 10-28 s on. The pane is read again, as one tmux could not read is.
+            if (!(error instanceof PaneChanged)) throw error
+            await pause()
+            continue
           }
           const ready = publication.state === 'confirmed' ? publication.entry : null
           const committed = () => lifecycle() && !!ready && terminals.backendFor(spawned.runtime) === backend
@@ -138,8 +156,7 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
         // A pane tmux could not read is asked again, as one still starting is: a call that timed out
         // says nothing about it, and giving up here left a working agent's launch unconfirmed.
         if (paneState === 'unknown') {
-          await sleep(delayMs)
-          delayMs = Math.min(delayMs * 2, 750)
+          await pause()
           continue
         }
         // A pane holds a launch by token on a backend that can say so (`TerminalBackend.isHeld`): tmux and the
@@ -157,13 +174,13 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
         if (paneState.dead) {
           const installed = await commandAvailableInInteractiveShell(command[0], undefined, installIfMissing)
           if (!current()) return
-          const error = installed ? 'ENGINE_DID_NOT_START' : 'ENGINE_NOT_INSTALLED'
+          const code = installed ? 'ENGINE_DID_NOT_START' : 'ENGINE_NOT_INSTALLED'
           const detail = installed
             ? `${engine} exited before its engine process became ready. See the terminal output for details.`
             : `${engine} is not installed, or its automatic install failed. See the terminal output for details.`
-          const failed = registry.setLaunch(pending.agentId, { state: 'failed', error, detail })
+          const failed = registry.setLaunch(pending.agentId, { state: 'failed', error: code, detail })
           if (failed) announceSession(failed)
-          console.warn(`[agent] create failed · ${engine} · ${detail}`)
+          console.warn(`[agent] create failed · ${engine} · ${code}`)
           return
         }
         // The engine started and was gone again before it was ever seen (a flag it refused, a
@@ -177,10 +194,6 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
           // anywhere — frame, registry, archive — records that an engine was ever meant to be here
           // or why it left. openharness#285 was exactly this: opencode printed its help over a flag
           // it did not know, and the only trace was one line saying the pane had become a terminal.
-          // `describeAgentCreateFailure` was written for this and had no caller.
-          // `dead: true` describes the ENGINE, which is what the diagnosis is about, not the pane —
-          // the pane is alive and about to become a terminal. That is the sentence this state
-          // selects ("started and exited with status N"), and it is the true one here.
           const captured = await captureTerminal(pending.agentId, 40)
           if (!current()) return
           // An OpenClaw the person fixes outside the pane: a local run another OpenClaw's lock turned away (it needs
@@ -192,18 +205,14 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
           if (refused) {
             const failed = registry.setLaunch(pending.agentId, { state: 'failed', ...refused })
             if (failed) announceSession(failed)
-            console.warn(`[agent] create failed · ${engine} · ${refused.detail}`)
+            console.warn(`[agent] create failed · ${engine} · ${refused.error}`)
             return
           }
+          // The pane's words and the binary's path can name the person's files, and Export logs sends this line
+          // off the machine: it says how much the pane printed, and the engine by its name.
+          const printed = (captured ?? '').split('\n').filter((line) => line.trim()).length
           console.warn(`[agent] create · ${engine} · agent ${sid(pending.agentId)} · `
-            + describeAgentCreateFailure({
-              state: { dead: true, exitStatus: paneState.engineExit, command: engine },
-              output: summarizePaneOutput(captured ?? ''),
-              engineBin: command[0],
-              shellName: null,
-              processes: [],
-              elapsedMs: Date.now() - startedAt,
-            }))
+            + describeAgentCreateFailure(engine, paneState.engineExit, Date.now() - startedAt) + ` · pane output ${printed} lines`)
           // A hook may have bound a conversation while this watcher was awaiting its probe.
           // Archive the current row, not the pre-hook pending snapshot.
           const row = registry.byAgent(pending.agentId)
@@ -226,8 +235,7 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
           console.warn(`[agent] create · ${engine} exited (${paneState.engineExit}) before ready · agent ${pending.agentId} kept as a terminal`)
           return
         }
-        await sleep(delayMs)
-        delayMs = Math.min(delayMs * 2, 750)
+        await pause()
       }
       if (!current()) return
       const detail = `${engine} did not expose an engine process within ${Math.round(budgetMs / 60_000)} minutes. The terminal remains available.`

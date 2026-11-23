@@ -11,3 +11,6 @@
 # batch file's labels reliably. Without these, core.autocrlf (GitHub's Windows images set it) decides.
 *.ps1 text eol=lf
 *.cmd text eol=crlf
+
+# Signed test fixtures: a signature holds for these exact bytes, so core.autocrlf must never rewrite a line end.
+desktop/test/fixtures/tauri_signature/** -text

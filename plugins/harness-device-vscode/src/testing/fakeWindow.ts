@@ -1,5 +1,5 @@
 // A window the loop's tests drive: its state is what the test sets, and each terminal the loop asks for, each raise,
-// each scroll and each page key, is recorded.
+// each scroll, each page key, each words typed and each Enter, is recorded.
 import type { WindowFacade, WindowState } from '../window'
 
 export function fakeWindow(initial: Partial<WindowState> & { remote?: boolean } = {}): {
@@ -18,6 +18,10 @@ export function fakeWindow(initial: Partial<WindowState> & { remote?: boolean } 
   release(): void
   /** Each page key asked, in order. */
   pageKeys: Array<{ pid: number; up: boolean }>
+  /** Each words asked to be typed, in order. */
+  typed: Array<{ pid: number; words: string }>
+  /** Each pid asked to press Enter, in order. */
+  entered: number[]
 } {
   const { remote = false, ...first } = initial
   let state: WindowState = { terminals: [], active: null, focused: false, ...first }
@@ -27,6 +31,8 @@ export function fakeWindow(initial: Partial<WindowState> & { remote?: boolean } 
   const scrolls: boolean[] = []
   const scrollReplies: ('held' | 'rejected')[] = []
   const pageKeys: Array<{ pid: number; up: boolean }> = []
+  const typed: Array<{ pid: number; words: string }> = []
+  const entered: number[] = []
   let held: (() => void)[] = []
   return {
     window: {
@@ -56,6 +62,14 @@ export function fakeWindow(initial: Partial<WindowState> & { remote?: boolean } 
         pageKeys.push({ pid, up })
         return state.terminals.includes(pid)
       },
+      type(pid, words) {
+        typed.push({ pid, words })
+        return state.terminals.includes(pid)
+      },
+      enter(pid) {
+        entered.push(pid)
+        return state.terminals.includes(pid)
+      },
     },
     set(next) {
       state = { ...state, ...next }
@@ -71,5 +85,7 @@ export function fakeWindow(initial: Partial<WindowState> & { remote?: boolean } 
       for (const resolve of done) resolve()
     },
     pageKeys,
+    typed,
+    entered,
   }
 }

@@ -55,22 +55,45 @@ function leftIgnore(): void {
   fs.writeFileSync(join(cwd, '.harness', 'handoff', '.gitignore'), '*\n', { mode: 0o600 })
 }
 
+it('a flush runs off the loop: a setImmediate callback runs while it is pending, and fsyncSync is never called', async () => {
+  const ctx = await setup(), flush = fs.fsync, blocking = vi.spyOn(fs, 'fsyncSync')
+  let release!: () => void, pending = false, pendingWhenRan: boolean | undefined
+  const held = new Promise<void>(resolve => { release = resolve })
+  vi.spyOn(fs, 'fsync').mockImplementation((fd, done) => { pending = true; void held.then(() => flush(fd, done)) })
+  setImmediate(() => { pendingWhenRan = pending; release() })
+  await expect(ctx.publish(ctx.prepared, ctx.permit)).resolves.toEqual(ctx.prepared.result)
+  expect(pendingWhenRan).toBe(true)
+  expect(blocking).not.toHaveBeenCalled()
+})
+
+it('a second publication of the same key while a flush is pending is BUSY', async () => {
+  const ctx = await setup(), flush = fs.fsync
+  let release!: () => void, flushing = false
+  const held = new Promise<void>(resolve => { release = resolve })
+  vi.spyOn(fs, 'fsync').mockImplementation((fd, done) => { flushing = true; void held.then(() => flush(fd, done)) })
+  const first = ctx.publish(ctx.prepared, ctx.permit)
+  expect(flushing).toBe(true)
+  await expect(ctx.publish(ctx.prepared, ctx.permit)).rejects.toMatchObject({ code: 'BUSY' })
+  release()
+  expect(await first).toEqual(ctx.prepared.result)
+})
+
 it.each(['directory', 'receipt', 'stage', 'guard'])('rechecks the original facts after a slow %s flush', async kind => {
-  const ctx = await setup(), open = fs.openSync, flush = fs.fsyncSync
+  const ctx = await setup(), open = fs.openSync, flush = fs.fsync
   if (kind === 'guard') leftIgnore()
   const paths = new Map<number, string>()
   let clock = 0, fired = false
   vi.spyOn(performance, 'now').mockImplementation(() => clock)
   ctx.permit.current = () => clock < 5_000
   vi.spyOn(fs, 'openSync').mockImplementation((...args) => { const fd = open(...args); paths.set(fd, String(args[0])); return fd })
-  vi.spyOn(fs, 'fsyncSync').mockImplementation(fd => {
-    flush(fd)
+  vi.spyOn(fs, 'fsync').mockImplementation((fd, done) => flush(fd, error => {
     const path = paths.get(fd)!
     if (!fired && (kind === 'directory' && path === data || kind === 'receipt' && path.endsWith('.tmp')
       || kind === 'stage' && path.endsWith('.stage') || kind === 'guard' && path.endsWith('/.gitignore'))) {
       fired = true; clock += 300
     }
-  })
+    done(error)
+  }))
   await expect(ctx.publish(ctx.prepared, ctx.permit)).resolves.toEqual(ctx.prepared.result)
   expect(fired).toBe(true)
   expect(fs.readFileSync(join(cwd, ctx.prepared.result.file!), 'utf8')).toBe(ctx.prepared.documents!.markdown)
@@ -78,7 +101,7 @@ it.each(['directory', 'receipt', 'stage', 'guard'])('rechecks the original facts
 })
 
 it.each(['directory', 'receipt', 'stage', 'guard'])('holds a replaced %s after a slow flush without further publication', async kind => {
-  const ctx = await setup(), open = fs.openSync, flush = fs.fsyncSync, link = fs.linkSync, rename = fs.renameSync
+  const ctx = await setup(), open = fs.openSync, flush = fs.fsync, link = fs.linkSync, rename = fs.renameSync
   if (kind === 'guard') leftIgnore()
   const paths = new Map<number, string>()
   let clock = 0, fired = false, laterEffects = 0
@@ -87,8 +110,7 @@ it.each(['directory', 'receipt', 'stage', 'guard'])('holds a replaced %s after a
   vi.spyOn(fs, 'openSync').mockImplementation((...args) => { const fd = open(...args); paths.set(fd, String(args[0])); return fd })
   vi.spyOn(fs, 'linkSync').mockImplementation((from, to) => { if (fired) laterEffects++; link(from, to) })
   vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => { if (fired) laterEffects++; rename(from, to) })
-  vi.spyOn(fs, 'fsyncSync').mockImplementation(fd => {
-    flush(fd)
+  vi.spyOn(fs, 'fsync').mockImplementation((fd, done) => flush(fd, error => {
     const path = paths.get(fd)!
     if (!fired && (kind === 'directory' && path === data || kind === 'receipt' && path.endsWith('.tmp')
       || kind === 'stage' && path.endsWith('.stage') || kind === 'guard' && path.endsWith('/.gitignore'))) {
@@ -100,7 +122,8 @@ it.each(['directory', 'receipt', 'stage', 'guard'])('holds a replaced %s after a
       else fs.writeFileSync(target, content!, { mode: 0o600 })
       fired = true; clock += 300
     }
-  })
+    done(error)
+  }))
   await expect(ctx.publish(ctx.prepared, ctx.permit)).rejects.toThrow()
   expect(fired).toBe(true); expect(laterEffects).toBe(0)
   expect(fs.existsSync(join(cwd, ctx.prepared.result.file!))).toBe(false)
@@ -109,10 +132,11 @@ it.each(['directory', 'receipt', 'stage', 'guard'])('holds a replaced %s after a
 it.each(['reservation write', 'reservation sync', 'project directory sync', 'partial stage', 'exclude rename', 'transcript link', 'committed receipt sync'])
 ('recovers the same intent after %s fails, including a fresh core instance', async fault => {
   const ctx = await setup(true), original = structuredClone(ctx.prepared)
-  const open = fs.openSync, write = fs.writeFileSync, rename = fs.renameSync, link = fs.linkSync, flush = fs.fsyncSync
+  const open = fs.openSync, write = fs.writeFileSync, rename = fs.renameSync, link = fs.linkSync, flush = fs.fsync
   const paths = new Map<number, string>()
   let fired = false, reserved = false, committed = false, recoverySyncs = 0
-  const fail = () => { fired = true; throw Object.assign(new Error('injected publication interruption'), { code: 'EIO' }) }
+  const interruption = () => { fired = true; return Object.assign(new Error('injected publication interruption'), { code: 'EIO' }) }
+  const fail = () => { throw interruption() }
   vi.spyOn(fs, 'openSync').mockImplementation((...args: Parameters<typeof fs.openSync>) => {
     const fd = open(...args); paths.set(fd, String(args[0])); return fd
   })
@@ -136,13 +160,13 @@ it.each(['reservation write', 'reservation sync', 'project directory sync', 'par
     rename(from, to)
     if (!fired && fault === 'exclude rename' && to === ctx.exclusion) fail()
   })
-  vi.spyOn(fs, 'fsyncSync').mockImplementation(fd => {
+  vi.spyOn(fs, 'fsync').mockImplementation((fd, done) => {
     const path = paths.get(fd)
     if (fired) recoverySyncs++
     if (!fired && (fault === 'reservation sync' && reserved && path === join(data, 'handoff-receipts')
       || fault === 'project directory sync' && path === cwd && fs.existsSync(join(cwd, '.harness'))
-      || fault === 'committed receipt sync' && committed && path === join(data, 'handoff-receipts'))) fail()
-    flush(fd)
+      || fault === 'committed receipt sync' && committed && path === join(data, 'handoff-receipts'))) return done(interruption())
+    flush(fd, done)
   })
   await expect(ctx.publish(ctx.prepared, ctx.permit)).rejects.toThrow()
   expect(fired).toBe(true)
@@ -274,7 +298,7 @@ it.each(['request', 'source', 'receipt', 'project'].flatMap(fault => Array.from(
   }
 })
 
-it.each(['ignore guard', 'exclusion guard', 'final confirmation'])('holds a request that expires during a synchronous %s', async fault => {
+it.each(['ignore guard', 'exclusion guard', 'final confirmation'])('holds a request that expires during the %s', async fault => {
   const ctx = await setup(true), open = fs.openSync, link = fs.linkSync, rename = fs.renameSync
   const yieldLoop = timers.setImmediate, document = join(cwd, ctx.prepared.result.file!)
   let clock = 0, fired = false, checkpoint = 0, lateWrites = 0, guarded = 0
@@ -302,6 +326,25 @@ it.each(['ignore guard', 'exclusion guard', 'final confirmation'])('holds a requ
   vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => { if (clock && visible(to)) lateWrites++; rename(from, to) })
   await expect(ctx.publish(ctx.prepared, ctx.permit)).rejects.toMatchObject({ code: 'HANDOFF_UNAVAILABLE' })
   expect(fired).toBe(true); expect(lateWrites).toBe(0)
+  clock = 0
+  expect(await ctx.create()(ctx.prepared, ctx.permit)).toEqual(ctx.prepared.result)
+})
+
+it('holds a request that expires while its receipt flushes, before the receipt goes in', async () => {
+  const ctx = await setup(), open = fs.openSync, flush = fs.fsync
+  const paths = new Map<number, string>()
+  let clock = 0, fired = false
+  vi.spyOn(performance, 'now').mockImplementation(() => clock)
+  ctx.permit.current = () => clock < 1_000
+  vi.spyOn(fs, 'openSync').mockImplementation((...args) => { const fd = open(...args); paths.set(fd, String(args[0])); return fd })
+  vi.spyOn(fs, 'fsync').mockImplementation((fd, done) => flush(fd, error => {
+    if (!fired && paths.get(fd)!.endsWith('.tmp')) { fired = true; clock = 1_001 }
+    done(error)
+  }))
+  await expect(ctx.publish(ctx.prepared, ctx.permit)).rejects.toMatchObject({ code: 'HANDOFF_UNAVAILABLE' })
+  expect(fired).toBe(true)
+  expect(fs.readdirSync(join(data, 'handoff-receipts')).filter(name => name.endsWith('.json'))).toEqual([])
+  expect(fs.existsSync(join(cwd, '.harness'))).toBe(false)
   clock = 0
   expect(await ctx.create()(ctx.prepared, ctx.permit)).toEqual(ctx.prepared.result)
 })

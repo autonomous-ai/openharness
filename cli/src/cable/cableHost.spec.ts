@@ -1,5 +1,5 @@
 // How the wheel's rows are composed: the local row, and the fleet's rows around it.
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 
 import { DaemonCableHost, HARNESS_OPEN_WAIT_MS, cableEventFor, cableQuestionFor, cableStepFor, type CableHostWiring, type RingScope } from './cableHost.js'
 import { FleetError, type FleetMachine, type MachineFleet } from './machineFleet.js'
@@ -75,6 +75,18 @@ it('reads the current window selection for each recording instead of caching it 
   focused = { machineId: 'mine', agentId: 'a1' }
   expect(host.appFocus()).toEqual(focused)
   expect(new DaemonCableHost(wiring()).appFocus()).toBeUndefined()
+})
+
+it('transcribes with the wiring\'s transcriber when given, and posts nothing', async () => {
+  // Refused, so no run of this spec ever reaches the backend.
+  const posted = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('no backend in this spec'))
+  onTestFinished(() => { posted.mockRestore() })
+  const heard: unknown[][] = []
+  const host = new DaemonCableHost(wiring({ transcribe: async (...args) => { heard.push(args); return 'Eval words' } }))
+  const pcm = Buffer.alloc(2)
+  expect(await host.transcribe(pcm, 16000, 'en')).toBe('Eval words')
+  expect(heard).toEqual([[pcm, 16000, 'en', undefined]])
+  expect(posted).not.toHaveBeenCalled()
 })
 
 describe('notification read receipts', () => {
@@ -350,8 +362,9 @@ describe('DaemonCableHost.listAgentsFlat across machines, and the tab the dial g
 
     machines[0].state = 'offline'
     expect((await settled(host)).map((a) => a.id)).toEqual([])
-    // An agent leaving the carousel is the one event that cannot be diagnosed from its absence.
-    expect(log.mock.calls.flat().join('\n')).toContain('left the carousel')
+    // An agent leaving the carousel is the one event that cannot be diagnosed from its absence. The machine is said by
+    // its id: its name is a person's, or the computer's.
+    expect(log).toHaveBeenCalledWith('cable: other is offline — its 1 agents left the carousel')
   })
 
   it('holds a tile the window has open even when its machine goes offline', async () => {
@@ -859,6 +872,18 @@ describe('the dial with no window: this computer\'s agents', () => {
     expect([host.capsOf('h1'), host.hostOf('h1')]).toEqual([undefined, undefined])
   })
 
+  it('voice refusal comes from the agent\'s source with no window, and is undefined on a window\'s tab or for an agent no source lists', async () => {
+    const host = new DaemonCableHost(wiring({ sessions }), fleetOf([]))
+    expect(host.voiceRefusal('o1')).toBeUndefined()
+    const voiceRefusal = vi.fn((agent: HostAgent) => (agent.id === 'o1' ? 'Its own sentence.' : undefined))
+    host.setRegistry(new HostRegistry([host.harness, { ...observed([observedAgent({ id: 'o1' })]), voiceRefusal }]))
+    await host.listAgentSnapshot()
+    expect([host.voiceRefusal('o1'), host.voiceRefusal('h1'), host.voiceRefusal('nobody')]).toEqual(['Its own sentence.', undefined, undefined])
+    expect(voiceRefusal.mock.calls.map(([agent]) => agent.id)).toEqual(['o1'])
+    onTab(host, ['h1'])
+    expect(host.voiceRefusal('o1')).toBeUndefined()
+  })
+
   it('describes an agent the fleet never listed from the registry, so its summary and question carry a name', () => {
     const host = new DaemonCableHost(wiring({ sessions }), fleetOf([]))
     host.setRegistry(new HostRegistry([host.harness, observed([observedAgent({ id: 'o1', engine: 'codex' })])]))
@@ -1097,27 +1122,27 @@ describe('the dial that shows one app at a time', () => {
     expect(all).not.toHaveProperty('apps')
   })
 
-  it('the app list: fixed order, display names, count and waiting', async () => {
-    const agents = [agent('g1', 'ghostty'), agent('v1', 'vscode', { state: 'needs-you' }), agent('g2', 'ghostty'), agent('v2', 'vscode'), agent('g3', 'ghostty')]
+  it('the app list: fixed order, display names, count, waiting and working', async () => {
+    const agents = [agent('g1', 'ghostty', { state: 'working' }), agent('v1', 'vscode', { state: 'needs-you' }), agent('g2', 'ghostty'), agent('v2', 'vscode'), agent('g3', 'ghostty')]
     const host = setup(agents)
     expect((await host.listAgentSnapshot({ apps: true })).apps?.apps).toEqual([
-      { id: 'ghostty', name: 'Ghostty', count: 3, waiting: 0 },
-      { id: 'vscode', name: 'VS Code', count: 2, waiting: 1 },
+      { id: 'ghostty', name: 'Ghostty', count: 3, waiting: 0, working: 1 },
+      { id: 'vscode', name: 'VS Code', count: 2, waiting: 1, working: 0 },
     ])
     // Listed first now, and still after the apps the dial already holds: the picker never reorders under the finger.
     agents.unshift(agent('c1', 'cursor'), agent('v3', 'vscode', { state: 'needs-you' }))
     expect((await host.listAgentSnapshot({ apps: true })).apps?.apps).toEqual([
-      { id: 'ghostty', name: 'Ghostty', count: 3, waiting: 0 },
-      { id: 'vscode', name: 'VS Code', count: 3, waiting: 2 },
-      { id: 'cursor', name: 'Cursor', count: 1, waiting: 0 },
+      { id: 'ghostty', name: 'Ghostty', count: 3, waiting: 0, working: 1 },
+      { id: 'vscode', name: 'VS Code', count: 3, waiting: 2, working: 0 },
+      { id: 'cursor', name: 'Cursor', count: 1, waiting: 0, working: 0 },
     ])
   })
 
   it('the unknown app is named Other and Apple\'s Terminal is named Terminal', async () => {
     const host = setup([agent('t1', 'terminal'), agent('a1', 'terminal-app'), agent('a2', 'terminal-app')])
     expect((await host.listAgentSnapshot({ apps: true })).apps).toEqual({ shown: 'terminal-app', apps: [
-      { id: 'terminal', name: 'Other', count: 1, waiting: 0 },
-      { id: 'terminal-app', name: 'Terminal', count: 2, waiting: 0 },
+      { id: 'terminal', name: 'Other', count: 1, waiting: 0, working: 0 },
+      { id: 'terminal-app', name: 'Terminal', count: 2, waiting: 0, working: 0 },
     ] })
   })
 
@@ -1135,7 +1160,7 @@ describe('the dial that shows one app at a time', () => {
     // The 16th row gave the shown app its place, and the first 15 did not move.
     expect(appIds(next)).toEqual([...APP_IDS.slice(0, 15), last])
     expect(next.apps?.shown).toBe(last)
-    expect(next.apps?.apps.at(-1)).toEqual({ id: 'terminal', name: 'Other', count: 1, waiting: 0 })
+    expect(next.apps?.apps.at(-1)).toEqual({ id: 'terminal', name: 'Other', count: 1, waiting: 0, working: 0 })
     // The bound is the frame's, not the ring's.
     expect(ids(next)).toEqual(['a-terminal'])
     expect(next.total).toBe(1)
@@ -1209,7 +1234,7 @@ describe('the dial that shows one app at a time', () => {
       settle('orca')
       host.setRank('orca', new Map([['o3', 0], ['o1', 1], ['o2', 2]]))
       const before = (await host.listAgentSnapshot({ apps: true })).apps?.apps
-      expect(before).toContainEqual({ id: 'orca', name: 'Orca', count: 3, waiting: 0 })
+      expect(before).toContainEqual({ id: 'orca', name: 'Orca', count: 3, waiting: 0, working: 0 })
       host.setScope('orca', without('o2'))
       const scoped = await host.listAgentSnapshot({ apps: true })
       expect(ids(scoped)).toEqual(['o3', 'o1'])
@@ -1539,8 +1564,8 @@ describe('the dial that shows one app at a time', () => {
     onTab(host, ['h2'])
     const h2 = { id: 'h2', name: 'h2', engine: 'codex', machineId: 'mine', machine: 'MacbookPro.local' }
     expect(await host.listAgentSnapshot({ apps: true })).toStrictEqual({ tab: 't1', total: 2, agents: [h2], apps: { shown: 'harness', apps: [
-      { id: 'ghostty', name: 'Ghostty', count: 3, waiting: 0 },
-      { id: 'vscode', name: 'VS Code', count: 2, waiting: 0 },
+      { id: 'ghostty', name: 'Ghostty', count: 3, waiting: 0, working: 0 },
+      { id: 'vscode', name: 'VS Code', count: 2, waiting: 0, working: 0 },
     ] } })
     expect(await host.listAgentSnapshot()).toStrictEqual({ tab: 't1', total: 2, agents: [h2] })
     expect(host.pickApp('harness')).toBe('ignored')
@@ -1559,18 +1584,21 @@ describe('the dial that shows one app at a time', () => {
     // The agents of the app the filter shows end: asking the filter would switch it.
     agents.splice(0, agents.length, ...agents.filter((a) => a.app !== 'ghostty'))
     expect((await host.listAgentSnapshot({ apps: true })).apps).toStrictEqual({ shown: 'harness', apps: [
-      { id: 'vscode', name: 'VS Code', count: 2, waiting: 0 },
+      { id: 'vscode', name: 'VS Code', count: 2, waiting: 0, working: 0 },
     ] })
     expect(appSwitched).not.toHaveBeenCalled()
     expect(host.holdsTab()).toBe(true)
   })
 
-  it('the tab\'s apps count the agents that need the person', async () => {
+  it('the tab\'s apps count the agents that need the person and those mid-turn', async () => {
     const agents = five()
+    agents[1] = agent('g2', 'ghostty', { state: 'working' })
     agents[4] = agent('v2', 'vscode', { state: 'needs-you' })
     const host = setup(agents, { sessions })
     onTab(host, ['h1'])
-    expect((await host.listAgentSnapshot({ apps: true })).apps?.apps).toContainEqual({ id: 'vscode', name: 'VS Code', count: 2, waiting: 1 })
+    const rows = (await host.listAgentSnapshot({ apps: true })).apps?.apps
+    expect(rows).toContainEqual({ id: 'ghostty', name: 'Ghostty', count: 3, waiting: 0, working: 1 })
+    expect(rows).toContainEqual({ id: 'vscode', name: 'VS Code', count: 2, waiting: 1, working: 0 })
   })
 
   it('no other app, or no registry: an empty list, shown harness', async () => {
@@ -1600,6 +1628,21 @@ describe('the dial that shows one app at a time', () => {
     expect(['h1', 'g1'].map((id) => host.appOf(id))).toEqual([undefined, undefined])
   })
 
+  // Windows: the scan learns no agent's app (scannedApp.ts) and nothing reports the app in front, so an agent it found is
+  // not known yet until its first hook, which can be hours away. Counting for nothing, the one agent that hooked decided
+  // the dial's default over the agents the person runs in WezTerm or herdr.
+  it('where the scan learns no app (Windows), the agents it found count in the default; where it learns them they do not', async () => {
+    const found = (id: string) => agent(id, 'terminal', { appPending: true })
+    const agents = () => [agent('v1', 'vscode'), found('f1'), found('f2'), found('f3'), agent('c1', 'claude', { resting: true }),
+      agent('c2', 'claude', { resting: true }), agent('c3', 'claude', { resting: true }), agent('c4', 'claude', { resting: true })]
+    expect(await shown(setup(agents(), { scanLearnsApps: false }))).toBe('terminal')
+    // On a Mac or Linux the scan places most, and one it could not wait for its first hook, or the front.
+    expect(await shown(setup(agents()))).toBe('vscode')
+    // Only agents not known yet, or only herdr's: that app, never none.
+    expect(await shown(setup([found('f1'), found('f2')], { scanLearnsApps: false }))).toBe('terminal')
+    expect(await shown(setup([agent('h1', 'herdr'), agent('h2', 'herdr')], { scanLearnsApps: false }))).toBe('herdr')
+  })
+
   it('no agents: shown is empty and nothing is listed', async () => {
     const agents = [agent('g1', 'ghostty')]
     const host = setup(agents)
@@ -1617,6 +1660,22 @@ describe('the dial that shows one app at a time', () => {
     expect(host.pickApp('ghostty', 'notice')).toBe('switched')
     expect(appPicked).toHaveBeenCalledTimes(3)
     expect(appSwitched.mock.calls).toEqual([['pick'], ['notice']])
+  })
+
+  it('appPickKept is told same or ignored for a pick that switches nothing, and nothing for a switch, tabs or a notice', async () => {
+    const told: string[] = []
+    const over: Partial<CableHostWiring> = { appPicked: () => { told.push('picker') }, appPickKept: (answer) => { told.push(answer) } }
+    const host = setup(five(), over)
+    expect(await shown(host)).toBe('ghostty')
+    expect([host.pickApp('vscode'), host.pickApp('vscode'), host.pickApp('cursor')]).toEqual(['switched', 'same', 'ignored'])
+    expect(host.pickApp('ghostty', 'notice')).toBe('switched')
+    expect(told).toEqual(['picker', 'picker', 'same', 'picker', 'ignored'])
+    // With a window: Harness picked on the tab switches nothing; picked on an app's ring it turns the view to the tab.
+    told.length = 0
+    const windowed = setup(five(), { sessions, ...over })
+    onTab(windowed, ['h1'])
+    expect([windowed.pickApp('harness'), windowed.pickApp('ghostty'), windowed.pickApp('harness')]).toEqual(['ignored', 'switched', 'tabs'])
+    expect(told).toEqual(['picker', 'ignored', 'picker', 'picker'])
   })
 
   /** The switches, views and brings a host is told, in the order told. */
@@ -1656,8 +1715,8 @@ describe('the dial that shows one app at a time', () => {
     expect(snapshot).toMatchObject({ total: 2, apps: { shown: 'ghostty' } })
     expect(ids(snapshot)).toEqual(['g1', 'g2'])
     expect(snapshot.apps?.apps).toEqual([
-      { id: 'terminal', name: 'Other', count: 5, waiting: 0 },
-      { id: 'ghostty', name: 'Ghostty', count: 2, waiting: 0 },
+      { id: 'terminal', name: 'Other', count: 5, waiting: 0, working: 0 },
+      { id: 'ghostty', name: 'Ghostty', count: 2, waiting: 0, working: 0 },
     ])
   })
 
@@ -2404,11 +2463,17 @@ describe('the dial reaches the fleet through the core\'s port', () => {
     expect(await host.selectMachine('mine')).toEqual({ ok: true })
     expect(fleet.release).toHaveBeenCalledWith()
     await new Promise((r) => setTimeout(r, 0))
-    expect(log).toHaveBeenCalledWith('cable: could not announce mine (Link office-imac to this computer first)')
-    fleet.online = vi.fn(async () => ({ ok: false as const, message: 'backend unreachable' }))
+    expect(log).toHaveBeenCalledWith('cable: could not announce mine (NEEDS_LINK)')
+    // The router carries a failure by its kind, and a code the lane gave; a code that is not one is said by its length.
+    fleet.online = vi.fn(async () => ({ ok: false as const, kind: 'TypeError' }))
     host.onDialAttached()
     await new Promise((r) => setTimeout(r, 0))
-    expect(log).toHaveBeenCalledWith('cable: could not open the lane (backend unreachable)')
+    expect(log).toHaveBeenCalledWith('cable: could not open the lane (TypeError)')
+    fleet.online = vi.fn(async () => ({ ok: false as const, kind: 'Error', code: '/Users/sentinel' }))
+    host.onDialAttached()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(log).toHaveBeenCalledWith('cable: could not open the lane (text(15))')
+    expect(log.mock.calls.flat().join('\n')).not.toContain('sentinel')
     host.onDialGone()
     expect(fleet.release).toHaveBeenLastCalledWith(true)
     // No lane to hold: nothing is opened, and a remote machine cannot be chosen.
@@ -2476,7 +2541,7 @@ describe('the dial reaches the fleet through the core\'s port', () => {
     expect(w.log).not.toHaveBeenCalled()
     fleet.forkAgent = vi.fn(async () => ({ result: { ok: false as const, error: 'FORK_FAILED', detail: 'busy' }, machineId: 'other', asked: true }))
     expect(await host.forkAgent('r1')).toEqual({ ok: false, error: 'FORK_FAILED', detail: 'busy' })
-    expect(w.log).toHaveBeenCalledWith('cable: fork other/r1 refused (FORK_FAILED: busy)')
+    expect(w.log).toHaveBeenCalledWith('cable: fork other/r1 refused (FORK_FAILED)')
     expect(w.opened).not.toHaveBeenCalled()
   })
 
@@ -3125,7 +3190,7 @@ describe('a plug-in whose first lane open fails', () => {
     host.onDialAttached()
     await turns()
     expect(fleet.online).toHaveBeenCalledTimes(1)
-    expect(log).toHaveBeenCalledWith('cable: could not open the lane (UNAVAILABLE: the sign-in could not be refreshed)')
+    expect(log).toHaveBeenCalledWith('cable: could not open the lane (TOKEN_UNAVAILABLE)')
     expect(fleet.select).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(1_000)
     await turns()
@@ -3202,7 +3267,7 @@ describe('a plug-in whose first lane open fails', () => {
     await turns()
     await vi.advanceTimersByTimeAsync(120_000)
     expect(fleet.online).toHaveBeenCalledTimes(1)
-    expect(log).toHaveBeenCalledWith('cable: could not open the lane (sign in again) — other machines are unavailable until the next sign-in')
+    expect(log).toHaveBeenCalledWith('cable: could not open the lane (SESSION_OVER) — other machines are unavailable until the next sign-in')
     expect(log).not.toHaveBeenCalledWith('cable: trying the cloud lane again')
   })
 
@@ -3216,7 +3281,7 @@ describe('a plug-in whose first lane open fails', () => {
     await turns()
     await vi.advanceTimersByTimeAsync(120_000)
     expect(fleet.online).toHaveBeenCalledTimes(1)
-    expect(log).toHaveBeenCalledWith('cable: could not open the lane (connect ECONNREFUSED 127.0.0.1:1)')
+    expect(log).toHaveBeenCalledWith('cable: could not open the lane (ECONNREFUSED)')
   })
 
   it('runs one backoff over the real lane when the backend is down at the first plug-in', async () => {
@@ -3268,7 +3333,7 @@ describe('a plug-in whose first lane open fails', () => {
       if (Date.now() > deadline) throw new Error(`the lane never opened: ${lines.join(' | ')}`)
       await new Promise((resolve) => setTimeout(resolve, 20))
     }
-    expect(lines).toContain('cable: could not open the lane (UNAVAILABLE)')
+    expect(lines).toContain('cable: could not open the lane (TOKEN_UNAVAILABLE)')
     expect(frames.filter((frame) => frame.type === 'machines_watch')).toHaveLength(1)
     expect(frames.find((frame) => frame.type === 'machine_select')?.payload?.machineId).toBe('mine')
     expect(link.status()).toBe('ready')

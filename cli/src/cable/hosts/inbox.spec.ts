@@ -199,6 +199,56 @@ describe('Inbox', () => {
     expect(t.inbox.ready('s256')).toBe(false)
   })
 
+  it('onPoll hears each held poll once, with its session id, before poll() returns; its stop ends it', () => {
+    const t = setup()
+    const heard: string[] = []
+    const stop = t.inbox.onPoll((id) => heard.push(id))
+    void t.inbox.poll('p1', 's1')
+    expect(heard).toEqual(['s1'])
+    void t.inbox.poll('p2', 's1')
+    expect(heard).toEqual(['s1', 's1'])
+    stop()
+    void t.inbox.poll('p3', 's2')
+    expect(heard).toEqual(['s1', 's1'])
+  })
+
+  it('a deliver inside the listener is taken by that very poll', async () => {
+    const t = setup()
+    const taken: string[] = []
+    t.inbox.onPoll((id) => { void t.inbox.deliver(id, 'hello').then((d) => taken.push(d)) })
+    const poll = track(t.inbox.poll('p1', 's1'))
+    await settle()
+    expect(poll.value).toEqual({ text: 'hello' })
+    expect(taken).toEqual(['taken'])
+    expect(t.pending()).toBe(0)
+  })
+
+  it('a listener that throws harms neither the poll nor the next listener', async () => {
+    const t = setup()
+    const heard: string[] = []
+    t.inbox.onPoll(() => { throw new Error('boom') })
+    t.inbox.onPoll((id) => heard.push(id))
+    const poll = track(t.inbox.poll('p1', 's1'))
+    expect(heard).toEqual(['s1'])
+    expect(t.inbox.ready('s1')).toBe(true)
+    t.advance(25_000)
+    await settle()
+    expect(poll.value).toEqual({})
+  })
+
+  it('a poll answered at once is not heard: an early gone, a waiting transcript', () => {
+    const t = setup()
+    const heard: string[] = []
+    t.inbox.onPoll((id) => heard.push(id))
+    t.inbox.gone('p1')
+    void t.inbox.poll('p1', 's1')
+    polledOnce(t, 's2')
+    heard.length = 0
+    void t.inbox.deliver('s2', 'waiting')
+    void t.inbox.poll('p2', 's2')
+    expect(heard).toEqual([])
+  })
+
   it('closeAll answers every poll {} and every waiting transcript missed, and leaves no timer', async () => {
     const t = setup()
     polledOnce(t, 's3')

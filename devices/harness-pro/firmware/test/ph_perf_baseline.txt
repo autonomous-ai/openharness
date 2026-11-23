@@ -28,3 +28,7 @@ talk:be:send 450
 # 2026-10-19 baked frames copy only their own pixels (no box on the gradient) and Claude draws at 2x on the card: measured 138 and 140.
 tabs:working 173
 tabs:working:codex 175
+# 2026-11-21 Apps screens: apps is Home on the ChatGPT card (its colours, the 72 px icon, two marks) with the Tabs | Apps pill, tabs:switch tab 0
+# with the pill. Measured 169 and 169 host us (tabs measured 152 in the same run: the pill adds ~17 us); each number is 1.25 x that, as above.
+apps 211
+tabs:switch 211

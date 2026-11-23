@@ -82,7 +82,7 @@ export const launch: EngineLaunch = {
     items: [{ type: 'response_item', at: ['payload'] }, { type: 'compacted', at: ['payload', 'replacement_history'], list: true }],
     repair: 'portable-reasoning',
     backup: '.reasoning-backup-', temporary: '.reasoning-tmp-',
-    names: { file: 'Codex rollout', history: 'Codex history', items: 'Codex reasoning items' },
+    names: { record: 'Codex rollout', history: 'Codex history', items: 'Codex reasoning items' },
   },
   startup: {
     /**

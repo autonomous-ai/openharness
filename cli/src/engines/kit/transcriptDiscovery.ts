@@ -7,7 +7,7 @@ import { errorKind } from '../../lib/log.js'
  * Every lookup carries its own candidate identity: remove, replacement and stop revoke it immediately.
  */
 export class TranscriptDiscovery {
-  private readonly pending = new Map<string, { looking: boolean; detail?: string }>()
+  private readonly pending = new Map<string, { looking: boolean; kind?: string }>()
   private timer: NodeJS.Timeout | null = null
   private started = false
   private sweeping = false
@@ -39,12 +39,12 @@ export class TranscriptDiscovery {
     }
   }
 
-  private hold(id: string, candidate: { looking: boolean; detail?: string }, error: unknown): void {
+  private hold(id: string, candidate: { looking: boolean; kind?: string }, error: unknown): void {
     if (this.pending.get(id) !== candidate) return
-    const detail = errorKind(error)
-    if (candidate.detail === detail) return
-    candidate.detail = detail
-    console.error(`[discovery] transcript ${id} held · ${detail}`)
+    const kind = errorKind(error)
+    if (candidate.kind === kind) return
+    candidate.kind = kind
+    console.error(`[discovery] transcript ${id} held · ${kind}`)
   }
 
   private publish(id: string, candidate: { looking: boolean }, found: string): void {

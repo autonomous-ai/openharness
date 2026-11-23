@@ -107,7 +107,7 @@ export class MoveGate {
   }
 }
 
-/** Longer than a move holds an agent (at most 75 s, moveAgent.ts), so a wait outlasts any hold that ends. */
+/** Longer than a move holds an agent (at most 85 s, moveAgent.ts), so a wait outlasts any hold that ends. */
 export const HOLD_WAIT_MS = 90_000
 const HOLD_POLL_MS = 100
 

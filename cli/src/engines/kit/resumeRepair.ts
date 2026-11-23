@@ -59,7 +59,7 @@ function valueAt(record: JsonObject, path: readonly string[]): unknown {
 /** Shared by the string helper and the file reader, which retains only one record at a time. */
 function historyRepair(contract: ResumeRepairContract, sessionId: string) {
   const repair = REPAIRS[contract.repair]
-  const { file } = contract.names
+  const { record: named } = contract.names
   let sawFirst = false
   let repairedItems = 0
   let lineNumber = 0
@@ -74,13 +74,13 @@ function historyRepair(contract: ResumeRepairContract, sessionId: string) {
       // conversation (Oct 26 report). It is kept byte for byte: the engine reads its own file as it left it.
       if (last) { partialTail = true; return line }
       // JSON.parse's own error can quote conversation text; keep it out of daemon logs.
-      throw new ResumePreparationError('invalid_json', `invalid JSON in ${file} at line ${lineNumber}`)
+      throw new ResumePreparationError('invalid_json', `invalid JSON in ${named} at line ${lineNumber}`)
     }
-    if (!object(record)) throw new ResumePreparationError('invalid_json', `invalid ${file} record`)
+    if (!object(record)) throw new ResumePreparationError('invalid_json', `invalid ${named} record`)
     if (!sawFirst) {
       // The id is never empty (the caller returns before), so a record with no such field never matches.
       if (record.type !== contract.first.type || valueAt(record, contract.first.id) !== sessionId) {
-        throw new ResumePreparationError('foreign_session', `${file} does not belong to the session being resumed`)
+        throw new ResumePreparationError('foreign_session', `${named} does not belong to the session being resumed`)
       }
       sawFirst = true
     }
@@ -94,7 +94,7 @@ function historyRepair(contract: ResumeRepairContract, sessionId: string) {
     return changed ? JSON.stringify(record) + (line.endsWith('\r') ? '\r' : '') : line
   }
   return { line, partialTail: () => partialTail, finish: () => {
-    if (!sawFirst) throw new ResumePreparationError('foreign_session', `${file} has no session metadata`)
+    if (!sawFirst) throw new ResumePreparationError('foreign_session', `${named} has no session metadata`)
     return repairedItems
   } }
 }
@@ -116,7 +116,7 @@ class Abandoned extends Error {
 /** One chunk or one bounded record is retained, never a whole history. */
 const READ_BYTES = 1024 * 1024
 const changedDuring = (contract: ResumeRepairContract) =>
-  new ResumePreparationError('changed_during', `${contract.names.file} changed during resume preparation; retry after its writer stops`)
+  new ResumePreparationError('changed_during', `${contract.names.record} changed during resume preparation; retry after its writer stops`)
 
 function sameFile(a: Stats, b: Stats): boolean {
   return b.isFile() && a.ino === b.ino && a.dev === b.dev && a.size === b.size
@@ -247,7 +247,7 @@ export function locateRepairHistory(contract: ResumeRepairContract, sessionId: s
   })
   if (!before.isFile() || before.isSymbolicLink() || !inside
     || (typeof process.getuid === 'function' && before.uid !== process.getuid())) {
-    throw new ResumePreparationError('not_owned_file', `${contract.names.file} is outside the session profile or is not an owned regular file`)
+    throw new ResumePreparationError('not_owned_file', `${contract.names.record} is outside the session profile or is not an owned regular file`)
   }
   return { file, before }
 }
@@ -273,7 +273,7 @@ export async function repairHistory(contract: ResumeRepairContract, sessionId: s
     unchanged()
     const inspected = await scanHistory(contract, input, before.size, sessionId, limits, step)
     unchanged()
-    if (inspected.partialTail) console.log(`[resume] ${contract.names.file} ended in a partial line; kept as is`)
+    if (inspected.partialTail) console.log(`[resume] ${contract.names.record} ended in a partial line; kept as is`)
     if (!inspected.repairedItems) return { repairedItems: 0 }
 
     const suffix = randomUUID()

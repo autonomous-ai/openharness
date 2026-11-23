@@ -1,13 +1,16 @@
+import { randomBytes } from 'node:crypto'
 import { Agent, request } from 'node:http'
 import { connect, type Socket } from 'node:net'
-import { chmodSync, existsSync, lstatSync, mkdtempSync, rmSync, statSync, symlinkSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { APP_IDS } from '../cable/hosts/hostDetect.js'
 import { FRONT_NONE } from '../cable/hosts/frontApp.js'
 import { TAB_APPS, type Tab } from '../cable/hosts/tabs.js'
 import { THREAD_TITLE_MAX } from '../cable/hosts/threadTitle.js'
+import { DEVICES_TOKEN_FILE, devicesRecordPath, readDevicesRecord, writeDevicesRecord } from '../devices/listenerPipe.js'
 import { listenLocalSocket } from '../lib/localSocket.js'
+import { newPipeNonce, PIPE_AUTH_HEADER, PIPE_PROOF_HEADER, pipeAuthValue, pipeProofValue, readDaemonToken } from '../lib/windows/pipeAuth.js'
 import {
   ATTACH_MAX_BYTES, ATTACH_PER_SECOND, attachHandler, DIAL_MAX_BYTES, DIAL_NAME_MAX, DIAL_PER_SECOND, dialStream, FRONT_MAX_BYTES, FRONT_PER_SECOND,
   frontHandler, LISTENER_DROPPED_PER_SECOND, LISTENER_MAX_CONNECTIONS, NOTICE_MAX_BYTES, NOTICE_PER_SECOND, noticeHandler, NOTIFY_MAX_BYTES,
@@ -171,9 +174,9 @@ interface Asked {
 }
 
 /** A message on a connection of its own, as a watch asks for a stream: the answer's head, and its body line by line. */
-function asked(path: string, body = TABS): Promise<Asked> {
+function asked(path: string, body = TABS, headers: Record<string, string> = {}): Promise<Asked> {
   return new Promise((resolve, reject) => {
-    const sent = request({ socketPath: path, agent: false, method: 'POST', path: '/' }, (res) => {
+    const sent = request({ socketPath: path, agent: false, method: 'POST', path: '/', headers }, (res) => {
       let text = ''
       const arrivals: (() => void)[] = []
       const lines = (): string[] => text.split('\n').slice(0, -1)
@@ -1262,26 +1265,137 @@ describe.skipIf(process.platform === 'win32')('the devices listener', () => {
       expect(reported).toHaveLength(TAB_PER_SECOND)
     })
   })
+
+  // Windows: the pipe stood in for by a socket named harness-<32 hex>, as pipeAuth.spec.ts does.
+  describe('over a pipe', () => {
+    /** A listener on a pipe of the test's own, with its token and record in [dataDir], and every line it logged. */
+    async function openPipe(
+      handlers: Record<string, ListenerHandler | ListenerStreamHandler>,
+      options: { dataDir?: string; path?: string; now?: () => number } = {},
+    ) {
+      const dataDir = options.dataDir ?? shortDir()
+      const path = options.path ?? join(dataDir, `harness-${randomBytes(16).toString('hex')}`)
+      const lines: string[] = []
+      const listener = await openDevicesListener({ path: null, pipe: { path, dataDir }, handlers, log: (line) => lines.push(line), now: options.now })
+      if (listener) listeners.push(listener)
+      return { dataDir, path, lines, listener }
+    }
+
+    const tokenOf = (dataDir: string): Buffer => readDaemonToken(dataDir, DEVICES_TOKEN_FILE)!
+    const signedBy = (token: Buffer, path: string): string => pipeAuthValue(token, newPipeNonce(path))
+    const NO_AUTH = { status: 401, body: '{"error":"PIPE_AUTH_REQUIRED"}' }
+
+    /** One message on the pipe with [auth] in x-harness-auth, or none: on [agent]'s connection, or one of its own. */
+    function onPipe(path: string, body: string, auth: string | null, agent: Agent | false = false): Promise<{ status: number; proof: unknown; body: string }> {
+      return new Promise((resolve, reject) => {
+        const headers = auth === null ? {} : { [PIPE_AUTH_HEADER]: auth }
+        const sent = request({ socketPath: path, agent, method: 'POST', path: '/', headers }, (res) => {
+          let text = ''
+          res.setEncoding('utf8')
+          res.on('data', (chunk: string) => { text += chunk })
+          res.on('end', () => resolve({ status: res.statusCode ?? 0, proof: res.headers[PIPE_PROOF_HEADER], body: text }))
+        })
+        sent.on('error', reject)
+        sent.end(body)
+      })
+    }
+
+    it('opening makes the devices\' token and a record naming the pipe and this process, and logs "[devices] listener open"', async () => {
+      const { dataDir, path, lines, listener } = await openPipe({ front: frontHandler(() => {}) })
+      expect(listener).not.toBeNull()
+      expect(readFileSync(join(dataDir, DEVICES_TOKEN_FILE), 'utf8')).toMatch(/^[0-9a-f]{64}\n$/)
+      expect(readDevicesRecord(dataDir)).toEqual({ pipe: path, pid: process.pid })
+      expect(lines).toEqual(['[devices] listener open'])
+    })
+
+    it('a message with no auth, another token\'s, or a nonce used before is 401, and its handler never runs', async () => {
+      const fronts: string[] = []
+      const { dataDir, path } = await openPipe({ front: frontHandler((app) => fronts.push(app)) })
+      expect(await onPipe(path, frontBody('ghostty'), null)).toMatchObject(NO_AUTH)
+      expect(await onPipe(path, frontBody('ghostty'), signedBy(randomBytes(32), path))).toMatchObject(NO_AUTH)
+      const auth = signedBy(tokenOf(dataDir), path)
+      expect((await onPipe(path, frontBody('vscode'), auth)).status).toBe(204)
+      expect(await onPipe(path, frontBody('cursor'), auth)).toMatchObject(NO_AUTH)
+      expect(fronts).toEqual(['vscode'])
+    })
+
+    it('a message signed with the devices\' token is handled, and its answer proves the token for its nonce', async () => {
+      const ping: ListenerHandler = { maxBytes: 64, perSecond: 10, handle: () => ({ pong: true }) }
+      const { dataDir, path } = await openPipe({ ping })
+      const token = tokenOf(dataDir)
+      const nonce = newPipeNonce(path)
+      expect(await onPipe(path, '{"type":"ping"}', pipeAuthValue(token, nonce)))
+        .toEqual({ status: 200, proof: pipeProofValue(token, nonce), body: '{"pong":true}' })
+    })
+
+    it('a tabs stream writes its lines, and a type sent past its rate is 429, as on the socket', async () => {
+      const tabs = tabsStream()
+      const { dataDir, path } = await openPipe({ tabs: tabs.handler, front: frontHandler(() => {}) }, { now: () => 0 })
+      const token = tokenOf(dataDir)
+      const watch = await asked(path, TABS, { [PIPE_AUTH_HEADER]: signedBy(token, path) })
+      expect(watch).toMatchObject({ status: 200, type: 'application/x-ndjson' })
+      expect(tabs.select(TAB, true)).toBe(true)
+      await watch.got(1)
+      expect(tabs.select(TAB, false)).toBe(true)
+      expect(await watch.got(2)).toEqual(['{"app":"terminal-app","tty":"/dev/ttys023","raise":true}', '{"app":"terminal-app","tty":"/dev/ttys023"}'])
+
+      const agent = new Agent({ keepAlive: true, maxSockets: 1 })
+      agents.push(agent)
+      for (let i = 0; i < FRONT_PER_SECOND; i++) expect((await onPipe(path, frontBody('ghostty'), signedBy(token, path), agent)).status).toBe(204)
+      expect((await onPipe(path, frontBody('ghostty'), signedBy(token, path), agent)).status).toBe(429)
+    })
+
+    it('close removes the record once the pipe is closed and keeps the token; a record naming another pipe is left', async () => {
+      const { dataDir, path, listener } = await openPipe({ front: frontHandler(() => {}) })
+      const token = tokenOf(dataDir)
+      await listener!.close()
+      expect(existsSync(path)).toBe(false)
+      expect(existsSync(devicesRecordPath(dataDir))).toBe(false)
+      expect(tokenOf(dataDir)).toEqual(token)
+
+      // A second devices process's record outlives the first's close.
+      const first = await openPipe({ front: frontHandler(() => {}) }, { dataDir })
+      const second = join(dataDir, `harness-${randomBytes(16).toString('hex')}`)
+      writeDevicesRecord(dataDir, { pipe: second, pid: 4242 })
+      await first.listener!.close()
+      expect(readDevicesRecord(dataDir)).toEqual({ pipe: second, pid: 4242 })
+      expect(tokenOf(dataDir)).toEqual(token)
+    })
+
+    it('a devices\' token that is a link: nothing is opened, "token", and no record', async () => {
+      const dataDir = shortDir()
+      const elsewhere = join(shortDir(), 'token')
+      writeFileSync(elsewhere, `${'a'.repeat(64)}\n`, { mode: 0o600 })
+      symlinkSync(elsewhere, join(dataDir, DEVICES_TOKEN_FILE))
+      const { path, lines, listener } = await openPipe({ front: frontHandler(() => {}) }, { dataDir })
+      expect(listener).toBeNull()
+      expect(lines).toEqual(['[devices] listener not opened · token · Error'])
+      expect(existsSync(path)).toBe(false)
+      expect(existsSync(devicesRecordPath(dataDir))).toBe(false)
+    })
+
+    it('a record that cannot be written: nothing is opened, "record", and the pipe is closed, so the next open takes it', async () => {
+      const dataDir = shortDir()
+      mkdirSync(devicesRecordPath(dataDir))
+      const first = await openPipe({ front: frontHandler(() => {}) }, { dataDir })
+      expect(first.listener).toBeNull()
+      expect(first.lines).toEqual(['[devices] listener not opened · record · EISDIR'])
+
+      rmSync(devicesRecordPath(dataDir), { recursive: true })
+      const fronts: string[] = []
+      const again = await openPipe({ front: frontHandler((app) => fronts.push(app)) }, { dataDir, path: first.path })
+      expect(again.lines).toEqual(['[devices] listener open'])
+      expect((await onPipe(first.path, frontBody('ghostty'), signedBy(tokenOf(dataDir), first.path))).status).toBe(204)
+      expect(fronts).toEqual(['ghostty'])
+    })
+  })
 })
 
 describe('the devices listener on every computer', () => {
-  const noPath = (platform: NodeJS.Platform, log: (line: string) => void) => {
-    const options = { path: null, handlers: { front: frontHandler(() => {}) }, log, platform }
-    return openDevicesListener(options)
-  }
-
-  it('with no path on Windows, where there is no listener yet, nothing is opened and nothing is logged', async () => {
-    const log = vi.fn()
-    expect(await noPath('win32', log)).toBeNull()
-    expect(log).not.toHaveBeenCalled()
-  })
-
-  it('with no path elsewhere (a data folder and a home both too long) nothing is opened, and it says so', async () => {
-    for (const platform of ['darwin', 'linux'] as const) {
-      const lines: string[] = []
-      expect(await noPath(platform, (line) => lines.push(line))).toBeNull()
-      expect(lines, platform).toEqual(['[devices] listener not opened · no path'])
-    }
+  it('with no path and no pipe (a data folder and a home both too long) nothing is opened, and it says so', async () => {
+    const lines: string[] = []
+    expect(await openDevicesListener({ path: null, handlers: { front: frontHandler(() => {}) }, log: (line) => lines.push(line) })).toBeNull()
+    expect(lines).toEqual(['[devices] listener not opened · no path'])
   })
 })
 

@@ -1,7 +1,7 @@
 // The loop, against inputs and a window of this file's own: a launcher's answers, a connect whose chunks the test sends,
 // posts it answers, and a clock it moves. Never the developer's own harness, daemon or VS Code.
 import { afterEach, describe, expect, it } from 'vitest'
-import { MISSING, type LoopInputs, type Ran } from './inputs'
+import { MISSING, type LoopInputs, type Ran, type Target } from './inputs'
 import { startLoop, type Loop, type LoopState } from './loop'
 import { fakeWindow } from './testing/fakeWindow'
 import type { WindowFacade } from './window'
@@ -12,6 +12,13 @@ const OPEN = `{"type":"vscode","window":"${ID}"}`
 const READY = JSON.stringify({ daemon: true, devicesSocket: SOCKET, devicesReady: true })
 const UNPLUGGED = JSON.stringify({ daemon: true, devicesSocket: SOCKET, devicesReady: false })
 const LINK = { args: ['device', 'vscode', 'link'], path: '/usr/bin:/bin', timeoutMs: 5_000, maxBytes: 4_096 }
+// On Windows, a profile whose name has a space, Vietnamese letters, ', & and %.
+const WINDOWS = { platform: 'win32', home: "C:\\Users\\Nguyễn Văn A' & 100%", path: 'C:\\Windows\\System32;C:\\Program Files\\nodejs' }
+const PIPE = '\\\\.\\pipe\\harness-0123456789abcdef0123456789abcdef'
+const TOKEN = '0123456789abcdef'.repeat(4)
+const RECORD = "C:\\Users\\Nguyễn Văn A' & 100%\\.harness\\devices.json"
+const WINDOWS_READY = { daemon: true, devicesPipe: PIPE, devicesToken: TOKEN, devicesReady: true, devicesRecord: RECORD }
+const WINDOWS_UNPLUGGED = JSON.stringify({ daemon: true, devicesReady: false, devicesRecord: RECORD })
 
 let loops: Loop[] = []
 
@@ -23,7 +30,7 @@ afterEach(async () => {
 type Timer = { at: number; run: () => void }
 type Watch = { folder: string; changed: (name: string | null) => void; failed: () => void; closed: boolean }
 interface Stream {
-  socket: string
+  target: Target
   body: string
   /** Aborted once the loop has let the stream go. */
   signal: AbortSignal
@@ -33,7 +40,7 @@ interface Stream {
   /** The devices' end of the stream. */
   end(): void
 }
-interface Post { socket: string; body: string; signal: AbortSignal; at: number; answer(status: number | null): void }
+interface Post { target: Target; body: string; signal: AbortSignal; at: number; answer(status: number | null): void }
 
 const bytes = (text: string) => new TextEncoder().encode(text)
 // Every input here answers in a promise, so once the queue of them is drained the loop has done all it can.
@@ -43,7 +50,7 @@ const flush = () => new Promise<void>((done) => setImmediate(done))
 function world(answers: (Ran | Promise<Ran>)[], win = fakeWindow(), over: Partial<LoopInputs> = {}) {
   let time = 0
   const timers = new Set<Timer>()
-  const runs: { file: string; args: readonly string[]; path: string; timeoutMs: number; maxBytes: number; signal: AbortSignal; at: number }[] = []
+  const runs: { file: string; args: readonly string[]; path: string; cwd: string; timeoutMs: number; maxBytes: number; signal: AbortSignal; at: number }[] = []
   const watches: Watch[] = []
   const streams: Stream[] = []
   const posts: Post[] = []
@@ -67,7 +74,7 @@ function world(answers: (Ran | Promise<Ran>)[], win = fakeWindow(), over: Partia
       if (answers.length > 0) return Promise.resolve(answers.shift()!)
       return new Promise((settle) => bounds.signal.addEventListener('abort', () => settle(null)))
     },
-    connect(socket, body, signal) {
+    connect(target, body, signal) {
       return new Promise((settle) => {
         const queue: Uint8Array[] = []
         let ended = false
@@ -92,7 +99,7 @@ function world(answers: (Ran | Promise<Ran>)[], win = fakeWindow(), over: Partia
           called()
         })
         streams.push({
-          socket,
+          target,
           body,
           signal,
           answer: (status) => settle({ status, chunks: chunks() }),
@@ -105,10 +112,10 @@ function world(answers: (Ran | Promise<Ran>)[], win = fakeWindow(), over: Partia
         called()
       })
     },
-    post(socket, body, signal) {
+    post(target, body, signal) {
       return new Promise((settle) => {
         const reply = replies.length > 0 ? replies.shift()! : 204
-        posts.push({ socket, body, signal, at: time, answer: settle })
+        posts.push({ target, body, signal, at: time, answer: settle })
         signal.addEventListener('abort', () => settle(null))
         if (reply !== 'held') settle(reply)
         called()
@@ -161,6 +168,16 @@ function world(answers: (Ran | Promise<Ran>)[], win = fakeWindow(), over: Partia
     },
     pageKey(pid, up) {
       const sent = win.window.pageKey(pid, up)
+      called()
+      return sent
+    },
+    type(pid, words) {
+      const sent = win.window.type(pid, words)
+      called()
+      return sent
+    },
+    enter(pid) {
+      const sent = win.window.enter(pid)
       called()
       return sent
     },
@@ -230,40 +247,43 @@ async function connected(win = fakeWindow(), more: (Ran | Promise<Ran>)[] = []) 
 const sent = (post: Post) => JSON.parse(post.body)
 
 describe('startLoop', () => {
-  it('on Windows, or in a remote window, nothing starts: no run, no connect, null', async () => {
-    for (const [platform, remote] of [['win32', false], ['darwin', true], ['linux', true]] as const) {
-      const w = world([], fakeWindow({ remote }), { platform })
+  it('in a remote window nothing starts, on any platform: no run, no connect, null', async () => {
+    for (const platform of ['darwin', 'linux', 'win32']) {
+      const w = world([], fakeWindow({ remote: true }), { platform })
       await flush()
       expect(w.loop).toBeNull()
       expect([w.runs, w.streams, w.posts, w.watches, w.timers.size, w.states, w.logs]).toEqual([[], [], [], [], 0, [], []])
     }
   })
 
-  it("the home's launcher is tried before PATH's, with device vscode link, 5 s and 4 KiB", async () => {
+  it("the home's launcher is tried before PATH's, in the home, with device vscode link, 5 s and 4 KiB", async () => {
     const w = world([MISSING, MISSING])
     await w.until(() => w.states.length > 0)
-    expect(w.runs.map(({ file, args, path, timeoutMs, maxBytes }) => ({ file, args, path, timeoutMs, maxBytes }))).toEqual([
-      { file: '/h/.local/bin/harness', ...LINK },
-      { file: 'harness', ...LINK },
+    expect(w.runs.map(({ file, args, path, cwd, timeoutMs, maxBytes }) => ({ file, args, path, cwd, timeoutMs, maxBytes }))).toEqual([
+      { file: '/h/.local/bin/harness', ...LINK, cwd: '/h' },
+      { file: 'harness', ...LINK, cwd: '/h' },
     ])
     // The first answer that is not missing is the launcher's.
     const second = world([MISSING, UNPLUGGED])
     await second.until(() => second.states.length > 0)
     expect(second.states).toEqual(['unplugged'])
-    // With no home, PATH's alone.
-    const homeless = world([MISSING], fakeWindow(), { home: '' })
-    await homeless.until(() => homeless.states.length > 0)
-    expect(homeless.runs.map((run) => run.file)).toEqual(['harness'])
   })
 
   // A relative folder, or an empty one, is the extension host's working folder, which can be the folder VS Code opened:
-  // in Restricted Mode an untrusted one, whose own `harness` must never run.
-  it("only PATH's absolute folders, and only a home that is absolute, are looked in", async () => {
-    const w = world([MISSING, MISSING], fakeWindow(), { path: 'node_modules/.bin::/usr/bin:.:/bin:', home: 'h' })
+  // in Restricted Mode an untrusted one, whose own `harness` must never run. With no absolute home there is no folder of
+  // the account's own to run in, and no Harness either: it keeps its state there.
+  it("only PATH's absolute folders are looked in, and with no absolute home nothing runs", async () => {
+    const w = world([MISSING, MISSING], fakeWindow(), { path: 'node_modules/.bin::/usr/bin:.:/bin:' })
     await w.until(() => w.states.length > 0)
-    expect(w.runs.map(({ file, args, path, timeoutMs, maxBytes }) => ({ file, args, path, timeoutMs, maxBytes }))).toEqual([
-      { file: 'harness', ...LINK },
+    expect(w.runs.map(({ file, path }) => ({ file, path }))).toEqual([
+      { file: '/h/.local/bin/harness', path: LINK.path },
+      { file: 'harness', path: LINK.path },
     ])
+    for (const home of ['', 'h']) {
+      const homeless = world([], fakeWindow(), { home })
+      await homeless.until(() => homeless.states.length > 0)
+      expect([homeless.runs, homeless.states]).toEqual([[], ['noHarness']])
+    }
   })
 
   it.each([
@@ -364,7 +384,7 @@ describe('startLoop', () => {
   it('opens the stream with its window id and is connected at the head', async () => {
     const w = world([READY])
     await w.until(() => w.streams.length === 1)
-    expect([w.streams[0].socket, w.streams[0].body, w.states]).toEqual([SOCKET, OPEN, []])
+    expect([w.streams[0].target, w.streams[0].body, w.states]).toEqual([{ socket: SOCKET }, OPEN, []])
     w.streams[0].answer(200)
     await w.until(() => w.states.length === 1)
     expect(w.states).toEqual(['connected'])
@@ -421,7 +441,7 @@ describe('startLoop', () => {
     await w.until(() => w.posts.length === 1)
     expect([w.posts[0].at, sent(w.posts[0])]).toEqual([
       100,
-      { type: 'vscode-state', window: ID, terminals: [101], active: 101, focused: false },
+      { type: 'vscode-state', window: ID, terminals: [101], active: 101, focused: false, types: true },
     ])
     // A burst inside the 250 ms is one post, of the latest state, at the slot.
     await w.to(150)
@@ -434,7 +454,7 @@ describe('startLoop', () => {
     expect([w.posts.length, w.posts[1].at, sent(w.posts[1])]).toEqual([
       2,
       350,
-      { type: 'vscode-state', window: ID, terminals: [101, 202], active: 202, focused: true },
+      { type: 'vscode-state', window: ID, terminals: [101, 202], active: 202, focused: true, types: true },
     ])
     // A change every 50 ms for a second: four posts in it, the last one the latest state.
     for (let at = 400; at <= 1_350; at += 50) {
@@ -449,6 +469,8 @@ describe('startLoop', () => {
     win.set({ focused: false })
     await w.until(() => w.posts.length === 8)
     expect(w.posts[7].at).toBe(5_000)
+    // Last, so the devices read it as a window whose extension types.
+    expect(w.posts.filter((post) => !/"focused":(true|false),"types":true\}$/.test(post.body))).toEqual([])
   })
 
   it('a state equal to the last one taken is not sent', async () => {
@@ -471,7 +493,7 @@ describe('startLoop', () => {
     await w.to(1_000)
     win.set({ focused: true })
     await w.until(() => w.posts.length === 2)
-    expect(w.posts.map((post) => [post.socket, sent(post).focused])).toEqual([[SOCKET, false], [SOCKET, true]])
+    expect(w.posts.map((post) => [post.target, sent(post).focused])).toEqual([[{ socket: SOCKET }, false], [{ socket: SOCKET }, true]])
     expect(w.streams.map((stream) => stream.body)).toEqual([OPEN])
   })
 
@@ -515,7 +537,7 @@ describe('startLoop', () => {
     await w.until(() => win.shows.length === 2)
     expect(win.shows).toEqual([202, 303])
     await w.to(60_000)
-    expect(w.logs).toEqual(['state: connected', 'in the last minute: 1 shows, 1 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 page keys, 0 scroll lines, 0 dropped'])
+    expect(w.logs).toEqual(['state: connected', 'in the last minute: 1 shows, 1 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 typed, 0 entered, 0 type not found, 0 page keys, 0 scroll lines, 0 dropped'])
   })
 
   it('a show that asks for the window raises it after the terminal is shown; one that does not, does not', async () => {
@@ -527,7 +549,7 @@ describe('startLoop', () => {
     // The first only: "yes" is not true, and a show that found no terminal raises nothing.
     expect(win.raised).toEqual([1])
     await w.to(60_000)
-    expect(w.logs.at(-1)).toBe('in the last minute: 3 shows, 1 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 page keys, 0 scroll lines, 0 dropped')
+    expect(w.logs.at(-1)).toBe('in the last minute: 3 shows, 1 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 typed, 0 entered, 0 type not found, 0 page keys, 0 scroll lines, 0 dropped')
   })
 
   it('a line it does not know is skipped and counted', async () => {
@@ -538,8 +560,62 @@ describe('startLoop', () => {
     await w.until(() => win.shows.length === 1)
     expect(win.shows).toEqual([101])
     await w.to(60_000)
-    expect(w.logs.at(-1)).toBe('in the last minute: 1 shows, 0 not found, 8 lines skipped, 1 states sent, 0 not sent, 0 page keys, 0 scroll lines, 0 dropped')
+    expect(w.logs.at(-1)).toBe('in the last minute: 1 shows, 0 not found, 8 lines skipped, 1 states sent, 0 not sent, 0 typed, 0 entered, 0 type not found, 0 page keys, 0 scroll lines, 0 dropped')
     expect(stream.signal.aborted).toBe(false)
+  })
+
+  it('a words line types into that shell\'s terminal and an Enter line presses Enter there; one for no terminal is counted', async () => {
+    const win = fakeWindow({ terminals: [101] })
+    const { w, stream } = await connected(win)
+    stream.send('{"type":"Eval words for bravo.","pid":101}\n{"enter":101}\n{"type":"x","pid":303}\n{"enter":303}\n')
+    await w.until(() => win.entered.length === 2)
+    // The fake records each ask; only those for 101 found a terminal.
+    expect([win.typed, win.entered]).toEqual([
+      [
+        { pid: 101, words: 'Eval words for bravo.' },
+        { pid: 303, words: 'x' },
+      ],
+      [101, 303],
+    ])
+    await w.to(60_000)
+    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 1 typed, 1 entered, 2 type not found, 0 page keys, 0 scroll lines, 0 dropped')
+  })
+
+  it('a words or Enter line out of form is skipped and counted', async () => {
+    const win = fakeWindow({ terminals: [101] })
+    const { w, stream } = await connected(win)
+    const lines = ['{"type":"","pid":101}', '{"type":5,"pid":101}', '{"type":"x","pid":"101"}', '{"type":"x"}', '{"enter":"101"}', '{"enter":101.5}']
+    stream.send(`${lines.join('\n')}\n{"show":101}\n`)
+    await w.until(() => win.shows.length === 1)
+    expect([win.typed, win.entered]).toEqual([[], []])
+    await w.to(60_000)
+    expect(w.logs.at(-1)).toBe('in the last minute: 1 shows, 0 not found, 6 lines skipped, 1 states sent, 0 not sent, 0 typed, 0 entered, 0 type not found, 0 page keys, 0 scroll lines, 0 dropped')
+  })
+
+  // The devices type every control character as a space: one here would submit part of the words (a newline, a CR) or
+  // steer the screen (an escape), so the line is out of form and nothing of it reaches the terminal.
+  it('a words line holding a control character is skipped and counted, and nothing of it is typed', async () => {
+    const win = fakeWindow({ terminals: [101] })
+    const { w, stream } = await connected(win)
+    const lines = ['done\n', 'a\rb', '\x1b[2J', 'tab\there', 'x\u0085', 'x\x7f'].map((words) => JSON.stringify({ type: words, pid: 101 }))
+    stream.send(`${lines.join('\n')}\n{"show":101}\n`)
+    await w.until(() => win.shows.length === 1)
+    expect(win.typed).toEqual([])
+    await w.to(60_000)
+    expect(w.logs.at(-1)).toBe('in the last minute: 1 shows, 0 not found, 6 lines skipped, 1 states sent, 0 not sent, 0 typed, 0 entered, 0 type not found, 0 page keys, 0 scroll lines, 0 dropped')
+  })
+
+  it('a words line VS Code refuses is counted not found, and the stream goes on', async () => {
+    const win = fakeWindow({ terminals: [101] })
+    win.window.type = () => {
+      throw new Error('the terminal refused')
+    }
+    const { w, stream } = await connected(win)
+    stream.send('{"type":"Eval words for bravo.","pid":101}\n{"show":101}\n')
+    await w.until(() => win.shows.length === 1)
+    expect(stream.signal.aborted).toBe(false)
+    await w.to(60_000)
+    expect(w.logs.at(-1)).toBe('in the last minute: 1 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 typed, 0 entered, 1 type not found, 0 page keys, 0 scroll lines, 0 dropped')
   })
 
   it('n below zero scrolls up that many lines, above zero down', async () => {
@@ -576,7 +652,7 @@ describe('startLoop', () => {
     stream.send('{"scroll":-1,"pid":101}\n')
     await w.to(60_000)
     expect(win.scrolls).toEqual([])
-    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 2 states sent, 0 not sent, 0 page keys, 0 scroll lines, 3 dropped')
+    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 2 states sent, 0 not sent, 0 typed, 0 entered, 0 type not found, 0 page keys, 0 scroll lines, 3 dropped')
   })
 
   it('a run ends once its terminal is no longer the active one', async () => {
@@ -620,7 +696,7 @@ describe('startLoop', () => {
     win.release()
     await w.to(60_000)
     expect(win.scrolls).toHaveLength(102)
-    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 page keys, 102 scroll lines, 2 dropped')
+    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 typed, 0 entered, 0 type not found, 0 page keys, 102 scroll lines, 2 dropped')
   })
 
   it.each(['{"scroll":0,"pid":7}', '{"scroll":-0,"pid":7}', '{"scroll":1.5,"pid":7}', '{"scroll":2}', '{"scroll":"2","pid":7}', '{"scroll":2,"pid":7.5}'])(
@@ -631,7 +707,7 @@ describe('startLoop', () => {
       stream.send(`${line}\n`)
       await w.to(60_000)
       expect(win.scrolls).toEqual([])
-      expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 1 lines skipped, 1 states sent, 0 not sent, 0 page keys, 0 scroll lines, 0 dropped')
+      expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 1 lines skipped, 1 states sent, 0 not sent, 0 typed, 0 entered, 0 type not found, 0 page keys, 0 scroll lines, 0 dropped')
     }
   )
 
@@ -647,7 +723,7 @@ describe('startLoop', () => {
     stream.send('{"scroll":1,"pid":101}\n')
     await w.until(() => win.scrolls.length === 2)
     await w.to(60_000)
-    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 page keys, 1 scroll lines, 1 dropped')
+    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 typed, 0 entered, 0 type not found, 0 page keys, 1 scroll lines, 1 dropped')
   })
 
   it("the minute's line counts each scrollLine that resolved as a scroll line, and each line that ran nothing as dropped", async () => {
@@ -657,7 +733,7 @@ describe('startLoop', () => {
     await w.until(() => win.scrolls.length === 3)
     stream.send('{"scroll":-3,"pid":202}\n')
     await w.to(60_000)
-    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 page keys, 3 scroll lines, 1 dropped')
+    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 typed, 0 entered, 0 type not found, 0 page keys, 3 scroll lines, 1 dropped')
   })
 
   it('stop ends a scroll run: no scroll follows, and what waited never runs', async () => {
@@ -788,7 +864,7 @@ describe('startLoop', () => {
     stream.send('{"scroll":-45,"pid":101,"page":true}\n')
     await w.to(60_000)
     expect([win.pageKeys, win.scrolls]).toEqual([[], []])
-    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 page keys, 0 scroll lines, 1 dropped')
+    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 typed, 0 entered, 0 type not found, 0 page keys, 0 scroll lines, 1 dropped')
   })
 
   it("a key no terminal takes is not counted and ends that line's keys; its lines still run", async () => {
@@ -799,7 +875,7 @@ describe('startLoop', () => {
     await w.until(() => win.scrolls.length === 45)
     await w.to(60_000)
     expect(win.pageKeys).toEqual([{ pid: 101, up: true }])
-    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 page keys, 45 scroll lines, 0 dropped')
+    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 typed, 0 entered, 0 type not found, 0 page keys, 45 scroll lines, 0 dropped')
   })
 
   it('a page line whose keys ran is not dropped, though VS Code refuses its first scroll', async () => {
@@ -809,7 +885,7 @@ describe('startLoop', () => {
     stream.send('{"scroll":-16,"pid":101,"page":true}\n')
     await w.until(() => win.scrolls.length === 1)
     await w.to(60_000)
-    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 2 page keys, 0 scroll lines, 0 dropped')
+    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 typed, 0 entered, 0 type not found, 2 page keys, 0 scroll lines, 0 dropped')
   })
 
   it.each(['1', '"true"', 'false', 'null'])('a page of %s is no page: its lines run and no key is sent', async (page) => {
@@ -819,7 +895,7 @@ describe('startLoop', () => {
     await w.until(() => win.scrolls.length === 45)
     await w.to(60_000)
     expect(win.pageKeys).toEqual([])
-    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 page keys, 45 scroll lines, 0 dropped')
+    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 typed, 0 entered, 0 type not found, 0 page keys, 45 scroll lines, 0 dropped')
   })
 
   it('at most 5 keys from one line, and what it leaves for the next is under one key', async () => {
@@ -844,7 +920,7 @@ describe('startLoop', () => {
     await w.until(() => win.scrolls.length === 205)
     await w.to(60_000)
     expect([win.pageKeys.length, win.scrolls.length]).toEqual([16, 205])
-    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 16 page keys, 205 scroll lines, 0 dropped')
+    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 typed, 0 entered, 0 type not found, 16 page keys, 205 scroll lines, 0 dropped')
   })
 
   it("the minute's line counts the page keys sent", async () => {
@@ -853,7 +929,7 @@ describe('startLoop', () => {
     stream.send('{"scroll":-16,"pid":101,"page":true}\n')
     await w.until(() => win.scrolls.length === 16)
     await w.to(60_000)
-    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 2 page keys, 16 scroll lines, 0 dropped')
+    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 typed, 0 entered, 0 type not found, 2 page keys, 16 scroll lines, 0 dropped')
   })
 
   it('stop ends a run: a page line that came during it sent its keys at once, and none of its lines run', async () => {
@@ -884,12 +960,12 @@ describe('startLoop', () => {
   })
 
   it.each([
-    ['over 1 KiB', `${'x'.repeat(1_024)}\n`],
-    ['1 KiB with no newline', 'x'.repeat(1_024)],
-  ])('a line %s ends the stream, and is counted; one of 1 KiB with its newline is taken', async (_case, tooLong) => {
+    ['over 64 KiB', `${'x'.repeat(65_536)}\n`],
+    ['64 KiB with no newline', 'x'.repeat(65_536)],
+  ])('a line %s ends the stream, and is counted; one of 64 KiB with its newline is taken', async (_case, tooLong) => {
     const win = fakeWindow({ terminals: [101] })
     const { w, stream } = await connected(win)
-    const padded = `{"show":101${' '.repeat(1_023 - '{"show":101}'.length)}}`
+    const padded = `{"show":101${' '.repeat(65_535 - '{"show":101}'.length)}}`
     stream.send(`${padded}\n`)
     await w.until(() => win.shows.length === 1)
     stream.send(tooLong)
@@ -897,7 +973,7 @@ describe('startLoop', () => {
     await flush()
     expect(w.due()[0]).toBe(1_000)
     await w.to(60_000)
-    expect(w.logs.at(-1)).toBe('in the last minute: 1 shows, 0 not found, 1 lines skipped, 1 states sent, 0 not sent, 0 page keys, 0 scroll lines, 0 dropped')
+    expect(w.logs.at(-1)).toBe('in the last minute: 1 shows, 0 not found, 1 lines skipped, 1 states sent, 0 not sent, 0 typed, 0 entered, 0 type not found, 0 page keys, 0 scroll lines, 0 dropped')
   })
 
   it('replaced stops the loop: no pass follows, and nothing is logged', async () => {
@@ -929,7 +1005,7 @@ describe('startLoop', () => {
     expect(w.logs).toEqual([
       'state: notRunning',
       'state: connected',
-      'in the last minute: 1 shows, 1 not found, 1 lines skipped, 2 states sent, 1 not sent, 0 page keys, 0 scroll lines, 0 dropped',
+      'in the last minute: 1 shows, 1 not found, 1 lines skipped, 2 states sent, 1 not sent, 0 typed, 0 entered, 0 type not found, 0 page keys, 0 scroll lines, 0 dropped',
     ])
     // A minute with nothing in it logs nothing; the next event starts the next minute.
     await w.to(200_000)
@@ -939,7 +1015,7 @@ describe('startLoop', () => {
     await w.to(259_999)
     expect(w.logs).toHaveLength(3)
     await w.to(260_000)
-    expect(w.logs[3]).toBe('in the last minute: 1 shows, 0 not found, 0 lines skipped, 0 states sent, 0 not sent, 0 page keys, 0 scroll lines, 0 dropped')
+    expect(w.logs[3]).toBe('in the last minute: 1 shows, 0 not found, 0 lines skipped, 0 states sent, 0 not sent, 0 typed, 0 entered, 0 type not found, 0 page keys, 0 scroll lines, 0 dropped')
     expect(w.states).toEqual(['notRunning', 'connected'])
     expect(w.logs.filter((line) => /101|202|303/.test(line) || line.includes(ID))).toEqual([])
   })
@@ -981,5 +1057,74 @@ describe('startLoop', () => {
     stream.send('{"show":101}\n')
     await w.to(600_000)
     expect([w.posts.length, win.shows, w.states, w.logs]).toEqual([2, [], ['connected'], ['state: connected']])
+  })
+})
+
+describe('startLoop on Windows', () => {
+  // In the profile: Windows looks for a bare name in the working folder before PATH, and the extension host's can be the
+  // folder VS Code opened.
+  it("runs the profile's harness.exe first, then harness in PATH's absolute folders, in the profile, each name one argument", async () => {
+    const w = world([MISSING, MISSING], fakeWindow(), { ...WINDOWS, path: 'C:\\Windows\\System32;.;node_modules\\.bin;;C:\\Program Files\\nodejs' })
+    await w.until(() => w.states.length > 0)
+    const path = 'C:\\Windows\\System32;C:\\Program Files\\nodejs'
+    expect(w.runs.map(({ file, args, path, cwd }) => ({ file, args, path, cwd }))).toEqual([
+      { file: "C:\\Users\\Nguyễn Văn A' & 100%\\.harness\\bin\\harness.exe", args: LINK.args, path, cwd: WINDOWS.home },
+      { file: 'harness', args: LINK.args, path, cwd: WINDOWS.home },
+    ])
+    expect(w.states).toEqual(['noHarness'])
+  })
+
+  it('a ready line opens the stream on the pipe with its token, posts the state there, and a show line shows the terminal', async () => {
+    const win = fakeWindow({ terminals: [101, 202] })
+    const w = world([JSON.stringify(WINDOWS_READY)], win, WINDOWS)
+    await w.until(() => w.streams.length === 1)
+    w.streams[0].answer(200)
+    await w.until(() => w.posts.length === 1)
+    w.streams[0].send('{"show":202}\n')
+    await w.until(() => win.shows.length === 1)
+    const target = { pipe: '\\\\.\\pipe\\harness-0123456789abcdef0123456789abcdef', token: '0123456789abcdef'.repeat(4) }
+    expect([w.streams[0].target, w.streams[0].body, w.posts[0].target, w.states, win.shows]).toEqual([target, OPEN, target, ['connected'], [202]])
+  })
+
+  it('a line with a pipe on another computer, a bad token or a relative record is notRunning, and nothing is connected', async () => {
+    const lines = [
+      { ...WINDOWS_READY, devicesPipe: '\\\\srv\\pipe\\harness-0123456789abcdef0123456789abcdef' },
+      { ...WINDOWS_READY, devicesToken: TOKEN.slice(1) },
+      { ...WINDOWS_READY, devicesToken: `A${TOKEN.slice(1)}` },
+      { ...WINDOWS_READY, devicesToken: undefined },
+      { ...WINDOWS_READY, devicesRecord: '.harness\\devices.json' },
+      { daemon: true, devicesReady: false, devicesRecord: '.harness\\devices.json' },
+    ]
+    for (const line of lines) {
+      const out = JSON.stringify(line)
+      const w = world([out], fakeWindow(), WINDOWS)
+      await w.until(() => w.states.length > 0)
+      expect([out, w.states, w.streams, w.watches]).toEqual([out, ['notRunning'], [], []])
+    }
+  })
+
+  it("unplugged watches the record's folder, and only a devices.json entry there asks link again", async () => {
+    const w = world([WINDOWS_UNPLUGGED, WINDOWS_UNPLUGGED, WINDOWS_UNPLUGGED], fakeWindow(), WINDOWS)
+    await w.until(() => w.states.length === 1 && w.timers.size > 0)
+    expect([w.states, w.watches.map((watch) => watch.folder)]).toEqual([['unplugged'], ["C:\\Users\\Nguyễn Văn A' & 100%\\.harness"]])
+    await w.to(1_000)
+    expect(w.due()).toEqual([301_000])
+    await w.to(1_500)
+    w.watches[0].changed('devices-token')
+    expect(w.due()).toEqual([301_000])
+    w.watches[0].changed('devices.json')
+    expect(w.due()).toEqual([2_000])
+    await w.to(2_000)
+    expect([w.runs.length, w.watches.length]).toEqual([3, 1])
+  })
+
+  it('no line it logs holds the token', async () => {
+    const win = fakeWindow({ terminals: [101] })
+    const w = world([JSON.stringify(WINDOWS_READY)], win, WINDOWS)
+    await w.until(() => w.streams.length === 1)
+    w.streams[0].answer(200)
+    w.streams[0].send('{"show":101}\n')
+    await w.to(60_000)
+    expect([w.logs.length, w.logs.filter((line) => line.includes(TOKEN))]).toEqual([2, []])
   })
 })

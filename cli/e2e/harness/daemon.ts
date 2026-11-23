@@ -8,7 +8,8 @@
  * and CODEX_HOME, and the fake engines run them (fakeEngine.mjs): the real `hook/notify.mjs` carries
  * every hook event to the daemon, with its deadline and its offline registry writes. Before a daemon
  * starts, every folder it could install hooks into is checked to be inside the test's root
- * (`assertHooksContained`), and every file it says it wrote is checked again once it is up.
+ * (`assertHooksContained`), and once it is up no hook line of its log may say its file is outside the daemon's home,
+ * under which the harness keeps every engine's (`hooksOutside`).
  *
  * It runs on a copy of the worker's Node alone in its folder (e2e/harness/testNode.ts), so it finds no engine beside
  * its Node.
@@ -16,6 +17,7 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, symlink, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -25,7 +27,10 @@ import { artifactLog, artifactsEnabled } from './artifacts.js'
 import { daemonEnvironment } from '../../src/testing/daemonEnvironment.js'
 import { writeExecutable } from '../../src/testing/executableFixture.js'
 import { GH_FORBIDDEN_STUB } from '../../src/testing/ghStub.js'
+import { hooks as claudeHooks } from '../../src/engines/claude/hookContract.js'
+import { hooks as codexHooks } from '../../src/engines/codex/hookContract.js'
 import { readAdoptedHomes } from '../../src/engines/kit/homeAdoption.js'
+import { OUTSIDE_HOME } from '../../src/lib/log.js'
 import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
 import { endRootProcesses } from '../../src/testing/rootProcesses.js'
 import { assertSocketPathFits } from '../../src/testing/socketPathRoom.js'
@@ -37,6 +42,10 @@ import { forgetGroup, forgetTmux, leaderGone, watchGroup, watchTmux } from './re
 const exec = promisify(execFile)
 const here = dirname(fileURLToPath(import.meta.url))
 export const CLI_ROOT = resolve(here, '../..')
+/** tsx by its path: a bare `--import tsx` resolves from the working folder, and a daemon's is not always this checkout. */
+export const TSX_LOADER = pathToFileURL(createRequire(join(CLI_ROOT, 'package.json')).resolve('tsx')).href
+/** The sources' CLI, runnable from any folder. */
+export const SOURCES_CLI: readonly string[] = ['--import', TSX_LOADER, join(CLI_ROOT, 'src', 'cli.ts')]
 
 /** What a fake engine's wrapper hands `fakeEngine.mjs` `run()`: where it writes, and which release it is. */
 export interface EngineConfig {
@@ -120,6 +129,9 @@ export interface DaemonOptions {
   beside?: IsolatedDaemon
   /** Ask for this port instead of a free one: a daemon started on another daemon's port. */
   port?: number
+  /** The folder the daemon's process is started in, as the folder of the shell that ran `harness start`. It must exist
+   *  at each start. `CLI_ROOT` when unset. */
+  startFolder?: string
   /** The fake engines ask whether to trust a folder their config has no answer for (fakeEngine.mjs). */
   trustPrompt?: boolean
   /** The fake engines send Claude Code's kitty graphics query on start, then set a title (fakeEngine.mjs). */
@@ -178,6 +190,20 @@ const NATIVE_HOOK_PATHS: Record<string, readonly string[]> = {
   grok: ['GROK_HOME'], agy: ['AGY_CONFIG_DIR'], copilot: ['COPILOT_HOME'],
 }
 const HOOK_ENGINES = new Set(['claude', 'codex', ...Object.keys(NATIVE_HOOK_PATHS)])
+
+/** The lines each engine's install may end on, from its own contract. */
+const HOOK_INSTALL_MESSAGES = { claude: claudeHooks.settings.messages, codex: codexHooks.settings.messages }
+type HookInstallEngine = keyof typeof HOOK_INSTALL_MESSAGES
+/**
+ * A line saying how [engine]'s hook install went: the first line of each message its contract declares but `after`,
+ * `{…}` standing for anything. Any outcome counts, a failed write or a malformed file too: the install is over, and
+ * what came of it is the test's to judge. A message's later lines, like `after`, only follow a first one, and may be
+ * another engine's too: Codex's "fix the file, then restart harness login" is also Grok's and Agy's.
+ */
+export const installOutcome = (engine: HookInstallEngine): RegExp => new RegExp(Object.entries(HOOK_INSTALL_MESSAGES[engine])
+  .filter(([key]) => key !== 'after').flatMap(([, said]) => [said ?? []].flat().slice(0, 1))
+  .map((template) => template.split(/\{\w+\}/).map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*'))
+  .join('|'))
 /** The shell profiles a login shell in a pane reads, where a person moves an engine's home. */
 const PROFILES = { ZDOTDIR: ['.zshenv', '.zprofile', '.zshrc', '.zlogin'], HOME: ['.bash_profile', '.bash_login', '.profile', '.bashrc'] }
 
@@ -250,18 +276,16 @@ export function assertHookScriptBeside(scriptPath: string): void {
   throw new Error(`${scriptPath} has no notify.mjs beside it: its daemon refuses every hook install (lay it out with buildWithLean)`)
 }
 
+/** A hook line naming a file by its path, not by its tag: a path names the person's home. */
+const HOOK_LINE_PATH = /\[hooks\] .*(?:→|unchanged:) (?:\/|[A-Za-z]:\\)/
 /**
- * The files a daemon's log says it installed hooks or plugins into, found them already in, or left alone.
- * The update line names the hook script first and the file it rewrote after ` in `.
+ * The lines of [log] that show a daemon put hooks outside its home, for its error: each hook line naming a raw path, a
+ * regression in itself, and each that says its file is outside the home. Every line naming a hook file the daemon wrote,
+ * installed, updated or kept says so after the file's tag (lib/log.ts `fileTag`): a tag is made with a key of the
+ * daemon's own, which no test can make, and these fixed words need none.
  */
-export function hookFilesNamed(log: string): string[] {
-  const files: string[] = []
-  for (const line of log.split('\n')) {
-    if (!line.includes('[hooks]')) continue
-    const named = line.includes('updated (path/port changed)') ? / in (\/\S+)\s*$/.exec(line) : /(?:→|unchanged:) (\/\S+)/.exec(line)
-    if (named) files.push(named[1])
-  }
-  return files
+export function hooksOutside(log: string): string[] {
+  return log.split('\n').filter((line) => HOOK_LINE_PATH.test(line) || (line.includes('[hooks] ') && line.includes(OUTSIDE_HOME)))
 }
 
 export const until = async <T>(what: string, probe: () => Promise<T | null | undefined | false> | T | null | undefined | false, ms = 30_000, every = 100): Promise<T> => {
@@ -294,6 +318,8 @@ export const fakeEngineShim = (name: 'claude' | 'codex', config: EngineConfig & 
 export class IsolatedDaemon {
   child: ChildProcess | null = null
   private output = ''
+  /** Where the last start's lines begin in `output`. */
+  private startedAt = 0
   /** Every start not yet closed: each master leads a process group, numbered by its pid (`start`). */
   private readonly groups = new Set<ChildProcess>()
 
@@ -310,6 +336,8 @@ export class IsolatedDaemon {
     private readonly opensLog: string,
     /** The names of the settings the harness gives every daemon, before a test's own (`shellEnv`). */
     private readonly settingNames: readonly string[],
+    /** Its own fakes and stubs, first on its PATH: a test writes a fake of a command there (harness/schemeApps.ts). */
+    readonly binDir: string,
   ) {}
 
   static async create(options: DaemonOptions = {}): Promise<IsolatedDaemon> {
@@ -322,9 +350,12 @@ export class IsolatedDaemon {
     // What a daemon beside another keeps for itself; everything else is the computer's, and shared. Short
     // names: the socket lives in the data folder, and a Unix socket's path has room for 96 bytes.
     const own = beside ? join(root, `b${++besideCount}`) : root
+    // The engines' homes are under the home: a hook line says when its file is outside the daemon's home (lib/log.ts
+    // fileTag), and the test fails on it (`hooksOutside`).
+    const home = tmux.env.HOME!
     const dirs = {
-      home: tmux.env.HOME!, data: options.dataDir ?? join(own, beside ? 'd' : 'data'), runtime: join(own, 'runtime'), auth: join(own, 'auth'),
-      bin: join(own, 'bin'), dsh: join(own, 'dsh'), claudeProjects: join(root, 'claude', 'projects'), codexHome: join(root, 'codex'),
+      home, data: options.dataDir ?? join(own, beside ? 'd' : 'data'), runtime: join(own, 'runtime'), auth: join(own, 'auth'),
+      bin: join(own, 'bin'), dsh: join(own, 'dsh'), claudeProjects: join(home, 'claude', 'projects'), codexHome: join(home, 'codex'),
       projects: join(root, 'projects'), tmp: join(own, 't'),
     }
     try {
@@ -378,7 +409,8 @@ export class IsolatedDaemon {
     // never turned guest access on.
     await writeFile(join(dirs.bin, 'sudo'), '#!/bin/sh\necho "sudo: a password is required" >&2\nexit 1\n', { mode: 0o755 })
     // Nor does it ask this computer's scheme handlers: on Linux a link opens only once xdg-mime names the scheme's app
-    // (cable/hosts/appLink.ts), and one that prints nothing names none, so no link reaches the developer's own apps.
+    // (cable/hosts/appLink.ts), and one that prints nothing names none, so no link reaches the developer's own apps,
+    // until a test names the apps of its own (harness/schemeApps.ts).
     await writeFile(join(dirs.bin, 'xdg-mime'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
     // Nor does a tap raise a window on the developer's own X display. A daemon with no DISPLAY finds the lowest X server
     // socket of root's or this account's in /tmp/.X11-unix (cable/hosts/linuxDesktop.ts), whatever its home, and
@@ -409,12 +441,15 @@ esac
     // Nor does it ever reach the real Orca app on the Mac the tests run on, which every session here may be running
     // inside: a listed Orca agent asks Orca for a list. A launcher is an `orca` whose real path is in Orca's install
     // (devices/orcaHomes.ts), so the stub sits in one, linked from bin, and it is the Orca app's own too
-    // (HARNESS_ORCA_APP_BIN), which a daemon on a Mac runs with no launcher on its PATH: never /Applications'. Refused,
-    // until a test writes its own through the link (harness/fakeOrca.ts).
+    // (HARNESS_ORCA_APP_BIN), which a daemon on a Mac runs with no launcher on its PATH: never /Applications'. Linked as
+    // `orca-ide` too: Orca's Linux .deb links /usr/bin/orca-ide, which a daemon on Linux takes before any `orca`. One file
+    // for both names, so a fake written through the link answers to both. Refused, out loud, until a test writes its own
+    // through the link (harness/fakeOrca.ts).
     const orcaLauncher = join(own, 'orca-app', 'resources', 'bin', 'orca')
     await mkdir(dirname(orcaLauncher), { recursive: true })
-    await writeFile(orcaLauncher, '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+    await writeFile(orcaLauncher, '#!/bin/sh\necho "orca: the real Orca is refused in e2e" >&2\nexit 1\n', { mode: 0o755 })
     await symlink(orcaLauncher, join(dirs.bin, 'orca'))
+    await symlink(orcaLauncher, join(dirs.bin, 'orca-ide'))
     // A pick on the dial brings that app forward with `open -b` (services/devices), and dialAppFilter.e2e.ts taps and
     // picks VS Code and Ghostty: with the real open, a dial test on a Mac would bring the developer's own apps forward.
     // Out of bin: the devices run open by its path, never by name. One line of arguments per run, for `opens()`.
@@ -520,7 +555,7 @@ esac
       TERMINAL_RECONCILE_INTERVAL_MS: '5000',
     }
     const env = daemonEnvironment(tmux.env, { ...settings, ...options.env })
-    return new IsolatedDaemon(root, tmux, port, env, options, config, opensLog, Object.keys(settings))
+    return new IsolatedDaemon(root, tmux, port, env, options, config, opensLog, Object.keys(settings), dirs.bin)
   }
 
   /** What the fake engines noted of every hook they ran (fakeEngine.mjs `hookLog`); kept once the root is gone. */
@@ -534,10 +569,10 @@ esac
     try { return readFileSync(this.opensLog, 'utf8').split('\n').filter(Boolean).map((line) => line.split(' ')) } catch { return [] }
   }
 
-  /** Throws when the daemon said it put hooks outside the root, or an engine refused hooks found there. */
+  /** Throws when the last start's log says it put hooks outside its home, or an engine refused hooks found there. */
   private assertHooksStayedInside(): void {
-    const outside = hookFilesNamed(this.output).filter((file) => !inside(this.root, file))
-    if (outside.length) throw new Error(`the daemon under test wrote hooks outside ${this.root}: ${[...new Set(outside)].join(', ')}`)
+    const outside = hooksOutside(this.output.slice(this.startedAt))
+    if (outside.length) throw new Error(`the daemon under test wrote hooks outside ${this.env.HOME}; its lines:\n${outside.join('\n')}`)
     const refused = this.hookLog().split('\n').filter((line) => line.includes('REFUSED'))
     if (refused.length) throw new Error(`a fake engine refused to run hooks (test root ${this.root}):\n${refused.join('\n')}`)
   }
@@ -594,18 +629,18 @@ esac
     const heap = this.options.heapMiB ? [`--max-old-space-size=${this.options.heapMiB}`] : []
     const entry = this.options.noMaster ? ['__run'] : this.options.foreground ? ['start', '-f'] : ['__harnessd']
     // Readiness is judged from what this start prints, never from an earlier boot's lines.
-    const from = this.output.length
+    const from = this.startedAt = this.output.length
     // A test's own bundle (an old release), the run's bundle (`E2E_BUNDLE`, see bundle.ts), or the sources.
     const bundle = this.options.withoutProcessImages ? undefined : this.options.scriptPath ?? process.env.E2E_BUNDLE_PATH
     // From the sources on macOS, the helper a release embeds comes in by a preload (processImages.ts): without it the
     // daemon held every Codex read for good. The master passes its flags on to the core and the services.
     const preload = this.options.withoutProcessImages ? undefined : process.env.E2E_PROCESS_IMAGES_PRELOAD
-    const script = bundle ? [bundle] : [...(preload ? ['--import', preload] : []), '--import', 'tsx', 'src/cli.ts']
+    const script = bundle ? [bundle] : [...(preload ? ['--import', preload] : []), ...SOURCES_CLI]
     // A process group of its own, which the core and the services join: one signal reaches all of them, whether or
     // not the master is still there, and the worker's reaper (reaper.ts) ends it should the worker go without closing it.
     const env = this.options.foreground ? await this.shellEnv() : this.env
     const child = spawn(node, this.options.launch ?? [...heap, ...script, ...entry], {
-      cwd: CLI_ROOT, env, stdio: ['ignore', 'pipe', 'pipe'], ...ownProcessGroup(),
+      cwd: this.options.startFolder ?? CLI_ROOT, env, stdio: ['ignore', 'pipe', 'pipe'], ...ownProcessGroup(),
     })
     this.child = child
     if (child.pid) {
@@ -644,10 +679,25 @@ esac
       // test); this line is printed once they are.
       if (options.ready !== 'port') {
         await until('the daemon to finish starting', () => /\[cli\] ready/.test(this.output.slice(from)), 60_000, 100)
-        // Its hooks are installed before it says it is ready.
+        // The hooks it has installed so far: the rest come after it says it is ready (`hooksInstalled`).
         this.assertHooksStayedInside()
       }
     })()])
+  }
+
+  /**
+   * Resolves once the last start's log says how the install of each of [engines]' hooks went, then checks they stayed
+   * inside the root. A daemon installs them after it says it is ready, by design (src/startupOrder.spec.ts), and a
+   * launch of its own waits for its engine's; an engine a test runs by hand, or a daemon it stops, right after start
+   * does not.
+   */
+  async hooksInstalled(engines: readonly HookInstallEngine[]): Promise<void> {
+    const outcomes = engines.map(installOutcome)
+    await until(`the daemon to install the hooks of ${engines.join(', ')}`, () => {
+      const lines = this.output.slice(this.startedAt).split('\n')
+      return outcomes.every((outcome) => lines.some((line) => outcome.test(line)))
+    }, 60_000, 100)
+    this.assertHooksStayedInside()
   }
 
   /**
@@ -680,7 +730,10 @@ esac
     return env
   }
 
-  /** SIGTERM, then SIGKILL to its whole process group after `ms`. Resolves when the process is gone. */
+  /**
+   * SIGTERM, then SIGKILL to its whole process group after `ms`. Resolves when the process is gone, and its hooks are
+   * checked to have stayed inside the root.
+   */
   async stop(ms = 15_000): Promise<void> {
     const child = this.child
     if (!child) return
@@ -689,6 +742,7 @@ esac
     const timer = setTimeout(() => IsolatedDaemon.killGroup(child), ms)
     await exited
     clearTimeout(timer)
+    this.assertHooksStayedInside()
   }
 
   /**
@@ -742,6 +796,24 @@ esac
   /** Credentials for this daemon's loopback TCP API; its Unix socket needs none. */
   localHeaders(extra: Record<string, string> = {}): Record<string, string> {
     return { ...extra, 'X-Harness-Local': this.hookCredential() }
+  }
+
+  /** Discovery passes the running core has completed since it started (`/api/status`). */
+  async discoveryPasses(): Promise<number> {
+    const response = await fetch(`http://127.0.0.1:${this.port}/api/status`, { headers: this.localHeaders(), signal: AbortSignal.timeout(10_000) })
+    const passes = ((await response.json()) as { discoveryPasses?: unknown }).discoveryPasses
+    if (typeof passes !== 'number') throw new Error(`/api/status answered ${response.status} with no discoveryPasses`)
+    return passes
+  }
+
+  /**
+   * Resolves once two more discovery passes than now have completed, so at least one whole pass began after now and
+   * looked: what a check that something did not happen waits on. A fixed time ends before any pass looked once a pass
+   * is slow or overdue under load, and the check passes falsely.
+   */
+  async twoMorePasses(what: string): Promise<void> {
+    const from = await this.discoveryPasses()
+    await until(`two discovery passes ${what}`, async () => await this.discoveryPasses() >= from + 2, 60_000, 250)
   }
 
   /**

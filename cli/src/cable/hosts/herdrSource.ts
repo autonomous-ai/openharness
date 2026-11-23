@@ -57,6 +57,9 @@ export interface HerdrSourceDeps {
   watch(changed: () => void): () => void
   /** The dial's words: the herdr adapter's prompt, which keeps the pane's turn with a tap (herdr.ts). */
   prompt(paneId: string, kind: string, text: string): Promise<HerdrPrompt>
+  /** Whether a hooked agent only holds the pane herdr keys [paneKey] and the asker's row folds into it (observed.ts
+   *  holds): a terminal or an editor started in that pane keeps its id, and herdr's row takes no words there either. */
+  held(paneKey: string, asker: { engine: string; sessionId?: string }): boolean
   /** A tap: the herdr adapter's focus, as the devices hold it. */
   focus(paneId: string): Promise<boolean>
   /** A timer, as the devices' parts take theirs: its cancel is returned. */
@@ -65,7 +68,6 @@ export interface HerdrSourceDeps {
   now(): number
   monotonic(): number
   uuid(): string
-  platform: NodeJS.Platform
   log(line: string): void
   count(what: 'herdr' | 'busy' | 'waiting' | 'too-long' | 'no-answer'): void
 }
@@ -125,8 +127,7 @@ export class HerdrSource implements HostSource {
   constructor(private readonly deps: HerdrSourceDeps) {}
 
   start(): void {
-    // herdr's socket there is a named pipe, which the client does not speak.
-    if (this.deps.platform === 'win32' || this.running) return
+    if (this.running) return
     this.running = true
     this.attempts.start()
   }
@@ -175,8 +176,11 @@ export class HerdrSource implements HostSource {
     if (row.agent.state === 'needs-you') return refuse('waiting', `${name} is waiting for your answer in herdr.`)
     // herdr's own status, not the dial's: a turn that ended idle shows done, and is at its prompt.
     if (row.status === 'working' || row.status === 'unknown') return refuse('busy', busy)
+    const { engine, sessionId } = row.agent
     // Words already under way to the pane are the adapter's busy (herdr.ts), which holds the pane's turn with a tap.
-    const answer = await this.deps.prompt(row.pane, row.agent.engine, text)
+    const answer: HerdrPrompt = this.deps.held(herdrPaneKey(row.pane), { engine, sessionId })
+      ? { outcome: 'failed', fault: 'not_that_agent' }
+      : await this.deps.prompt(row.pane, engine, text)
     if (answer.outcome === 'sent') {
       this.deps.count('herdr')
       return { ok: true }
@@ -187,6 +191,11 @@ export class HerdrSource implements HostSource {
   async focus(agent: HostAgent): Promise<boolean> {
     const row = this.find(agent.id)
     return row ? this.deps.focus(row.pane) : false
+  }
+
+  /** The herdr pane of a row it lists, by the row's id: the devices place a scan-found agent at it (as cmux's). */
+  paneAt(agentId: string): string | undefined {
+    return this.find(agentId)?.pane
   }
 
   private find(agentId: string): Row | undefined {

@@ -22,11 +22,12 @@
  */
 import { spawn } from 'node:child_process'
 import { homedir } from 'node:os'
-import { delimiter, join, win32 } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { env } from '../config/env.js'
 import { binaryOnPath } from './binaryOnPath.js'
 import { withGridCallsPaused } from './gridCalls.js'
 import { gridAvailable, isReleaseNumber } from './gridExec.js'
+import { powershellPath } from './windows/powershell.js'
 
 export const GRID_INSTALL_URL = 'https://grid.autonomous.ai/install.sh'
 
@@ -36,17 +37,12 @@ export const GRID_INSTALL_PS1_URL = 'https://raw.githubusercontent.com/autonomou
 /**
  * The program that runs the installer script. Windows has no bash; its installer is PowerShell, which
  * has `irm` built in (so no `curl` either). Windows PowerShell 5.1 ships with every supported Windows,
- * and is named by absolute path: `CreateProcess` searches the current folder first for a bare name.
+ * and is named by absolute path ([powershellPath]): `CreateProcess` searches the current folder first for a bare name.
  */
-export function installerCommand(
-  platform: NodeJS.Platform,
-  script: string,
-  environment: NodeJS.ProcessEnv = process.env,
-): { file: string; args: string[] } {
+export function installerCommand(platform: NodeJS.Platform, script: string): { file: string; args: string[] } {
   if (platform !== 'win32') return { file: 'bash', args: ['-c', script] }
-  const root = environment.SystemRoot || 'C:\\Windows'
   return {
-    file: win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+    file: powershellPath(),
     args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
   }
 }

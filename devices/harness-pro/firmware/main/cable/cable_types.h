@@ -43,6 +43,11 @@ typedef struct {
     cable_swarm_member_meta_t meta[SWARMS_MAX][SWARM_MEMBERS_MAX];
 } cable_swarm_members_t;
 
+// The apps the daemon lists in an `apps` frame: where agents live (ChatGPT, VS Code, a terminal), with their counts.
+#define CABLE_APPS_MAX   16   // the daemon's APP_LIMIT (cli/src/cable/hosts/select.ts)
+#define CABLE_APP_ID_MAX 16   // an id goes back in app.pick, so one that does not fit is dropped, never cut
+typedef struct { char id[CABLE_APP_ID_MAX]; char name[24]; uint8_t count, waiting, working; } cable_app_t;
+
 /*
  * How loud a finished turn is (the summary frame's `tier`): alert = beep, wake, toast and an entry in Notices; list = the
  * entry only; silent = nothing new (the pet and the card still update). A question and a failed turn are always alerts.

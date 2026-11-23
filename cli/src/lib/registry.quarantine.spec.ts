@@ -2,6 +2,7 @@ import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 
 // The one way a corrupt registry is still refused: it cannot even be moved aside.
 const rename = vi.hoisted(() => ({ fails: false as false | 'error' | 'string' }))
@@ -16,6 +17,10 @@ vi.mock('fs', async (real) => {
     },
   }
 })
+
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
+const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
+vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original))
 
 let dataDir = ''
 const processIdentity = (pid: number) => ({ pid, executable: 'claude', startMarker: `Mon Aug 10 10:00:${String(pid % 60).padStart(2, '0')} 2026` })
@@ -32,6 +37,8 @@ async function loadRegistry() {
 describe('a registry no version can load', () => {
   let error: ReturnType<typeof vi.spyOn>
   beforeEach(() => {
+    // No test here means the write deadline to pass: how fast this machine writes the registry never fails them.
+    deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS)
     dataDir = mkdtempSync(join(tmpdir(), 'adapter-registry-quarantine-'))
     rename.fails = false
     error = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -77,8 +84,21 @@ describe('a registry no version can load', () => {
     const registry = await loadRegistry()
     registry.load()
     expect(registry.list()).toEqual([])
-    expect(error).toHaveBeenCalledWith(expect.stringMatching(/^\[registry\] registry is not JSON; moved it aside to .*registry\.json\.corrupt-\S+ and started empty$/))
+    expect(error).toHaveBeenCalledWith(expect.stringMatching(/^\[registry\] registry is not JSON; moved it aside to registry\.json\.corrupt-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z and started empty$/))
     expect(error.mock.calls.flat().join('\n')).not.toContain('SECRET')
+  })
+
+  it('a corrupt registry is moved aside and named by its own file name, never the folder it is in', async () => {
+    // The data folder is under the person's home, whose name is theirs.
+    dataDir = mkdtempSync(join(tmpdir(), 'sentinel-registry-'))
+    writeFileSync(join(dataDir, 'registry.json'), '{"schemaVersion":2}', { mode: 0o600 })
+    const registry = await loadRegistry()
+    registry.load()
+    const aside = readdirSync(dataDir).filter((name) => name.startsWith('registry.json.corrupt-'))
+    expect(aside).toHaveLength(1)
+    const lines = error.mock.calls.map((call: unknown[]) => call.map(String).join(' ')).join('\n')
+    expect(lines).not.toContain('sentinel')
+    expect(lines).toContain(`[registry] registry root is not an array; moved it aside to ${aside[0]} and started empty`)
   })
 
   it('names the kind of failure it could not be moved by, whatever was thrown', async () => {

@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parse } from 'yaml'
-import { DIAL_SKILL, DIAL_SKILL_DESCRIPTION, claudePluginState, ownDirectory, refreshSkill, removeSkill, skillWanted, skillsFolderOf, writeSkill } from './dialSkill.js'
+import { DIAL_SKILL, DIAL_SKILL_DESCRIPTION, claudePluginState, ownDirectory, ownWindowsPath, readClaudePlugin, refreshSkill, removeSkill, skillsFolderOf, writeSkill } from './dialSkill.js'
 
 const MARKER = '# Written by Harness. Remove it with harness device claude disable or harness device codex disable.'
 /** The line 0.6.58 wrote: files in people's homes still hold it. */
@@ -70,8 +70,57 @@ describe('the dial skill', () => {
     expect(file).not.toBeNull()
     expect(parse(file![1])).toEqual({ name: 'dial', description: DIAL_SKILL_DESCRIPTION })
     expect(DIAL_SKILL.split('\n')[3]).toBe(MARKER)
-    expect(file![2]).toContain('\n    harness device notify "<what you need, in one line>"\n')
+    expect(file![2]).toContain('\n    harness device notify "<the question, in one line>" --suggest "<your recommendation, a few words>" --proceeding\n')
     expect(Buffer.byteLength(DIAL_SKILL)).toBeLessThanOrEqual(4096)
+  })
+
+  it('the skill is the needs-you text, byte for byte', () => {
+    expect(DIAL_SKILL).toBe(`---
+name: dial
+description: ${JSON.stringify(DIAL_SKILL_DESCRIPTION)}
+${MARKER}
+---
+
+When the task needs a decision or an action only the person can take, ring their dial once and keep working:
+
+    harness device notify "<the question, in one line>" --suggest "<your recommendation, a few words>" --proceeding
+
+- Never block on the person: no question form or tool (AskUserQuestion, request_user_input) for this. Ask in text.
+- \`--proceeding\`: go on with your recommendation meanwhile. Use it unless the next rule says wait.
+- \`--waiting\`: when the person's own instructions say this must wait for them; when you cannot go on without them (a
+  key, a code, a VPN, a sign-in); or when the step cannot be taken back or others see it (deleting data, a deploy, a
+  push others build on, spending money, a message to someone else). Work on the other parts meanwhile.
+- Never for progress, and never for "done": only when the person must decide or act.
+- One notice per ask, never twice. Several at once: one notice for the most important, the rest in your answer.
+- Never put a secret, a token or a file's content in the line: anyone near the desk can read it.
+- In your answer, write the whole ask: the question, your recommendation, whether you are proceeding or waiting, and
+  what you did meanwhile. The person answers there. The command prints \`shown\`, \`no dial\` or \`limited\`: whichever it
+  prints, your answer carries the ask.
+`)
+  })
+
+  it('the text the previous release wrote is ours, and is written over', () => {
+    const PREVIOUS = `---
+name: dial
+description: ${JSON.stringify(DIAL_SKILL_DESCRIPTION)}
+${MARKER}
+---
+
+When the task stops on a step only the person can take, ring their dial before you hand it to them:
+
+    harness device notify "<what you need, in one line>"
+
+- Never for progress, and never for "done": only when the person must act.
+- At most once for the same need.
+- Never put a secret, a token or a file's content in the line: anyone near the desk can read it.
+- Still write the full ask in your answer. The command prints \`shown\`, \`no dial\` or \`limited\`: whichever it prints, your answer carries the ask.
+`
+    for (const [act, result] of [[writeSkill, 'written'], [refreshSkill, 'updated']] as const) {
+      const skills = skillsAt()
+      const path = skillOf(skills, PREVIOUS)
+      expect(act(skills)).toBe(result)
+      expect(readFileSync(path, 'utf8')).toBe(DIAL_SKILL)
+    }
   })
 
   it('the skill\'s marker line names the disable commands', () => {
@@ -148,22 +197,6 @@ describe('the dial skill', () => {
     const home = folder()
     expect(refreshSkill(join(home, 'skills'))).toBe('gone')
     expect(readdirSync(home)).toEqual([])
-  })
-
-  it('skillWanted: Codex unless removed; Claude Code with its plugin on and not removed', () => {
-    const dir = folder()
-    const on = join(dir, 'on.json')
-    writeFileSync(on, '{"enabledPlugins":{"harness-device@openharness":true}}')
-    const off = join(dir, 'off.json')
-    writeFileSync(off, '{"enabledPlugins":{"harness-device@openharness":false}}')
-    const missing = join(dir, 'missing.json')
-
-    expect(skillWanted('codex', false, missing)).toBe(true)
-    expect(skillWanted('codex', true, on)).toBe(false)
-    expect(skillWanted('claude', false, on)).toBe(true)
-    expect(skillWanted('claude', true, on)).toBe(false)
-    expect(skillWanted('claude', false, off)).toBe(false)
-    expect(skillWanted('claude', false, missing)).toBe(false)
   })
 
   it('leaves the person\'s file', () => {
@@ -310,6 +343,85 @@ describe('the dial skill', () => {
     // No search permission on the home: stat of its skills folder fails with EACCES.
     chmodSync(home, 0o600)
     expect(ownDirectory(skills)).toBe('unreadable')
+    expect(ownDirectory(skills, -1, [realpathSync(folder())])).toBe('unreadable')
+  })
+
+  it('on Windows a folder through its links, or a real file, is this account\'s own when its real path is in the profile, whatever its uid', () => {
+    const root = realpathSync(folder())
+    const roots = [root]
+    const inside = join(root, 'skills')
+    mkdirSync(inside)
+    const outside = realpathSync(folder())
+    // Its name only starts with the profile's.
+    const beside = `${root}x`
+    mkdirSync(beside)
+    cleanup.push(beside)
+    const linked = join(root, 'linked')
+    symlinkSync(inside, linked)
+    const away = join(root, 'away')
+    symlinkSync(outside, away)
+    mkdirSync(join(outside, 'real'))
+    const file = join(root, 'SKILL.md')
+    writeFileSync(file, 'mine')
+    const fileLink = join(root, 'linked.md')
+    symlinkSync(file, fileLink)
+
+    // -1 is the uid Windows gives: none is read.
+    expect(ownDirectory(inside, -1, roots)).toBe('ok')
+    expect(ownWindowsPath(inside, 'directory', roots)).toBe('ok')
+    expect(ownDirectory(root, -1, roots)).toBe('ok')
+    expect(ownDirectory(outside, -1, roots)).toBe('owner')
+    expect(ownDirectory(beside, -1, roots)).toBe('owner')
+    // A folder's link or junction is followed, as a Mac's stat follows it: its real folder decides.
+    expect(ownDirectory(linked, -1, roots)).toBe('ok')
+    expect(ownWindowsPath(linked, 'directory', roots)).toBe('ok')
+    expect(ownDirectory(away, -1, roots)).toBe('owner')
+    const dangling = join(root, 'dangling')
+    symlinkSync(join(root, 'gone'), dangling)
+    expect(ownDirectory(dangling, -1, roots)).toBe('missing')
+    // A real folder reached through a link to outside.
+    expect(ownDirectory(join(away, 'real'), -1, roots)).toBe('owner')
+    expect(ownDirectory(join(root, 'nothing'), -1, roots)).toBe('missing')
+    expect(ownDirectory(file, -1, roots)).toBe('missing')
+    expect(ownWindowsPath(file, 'file', roots)).toBe('ok')
+    // A file's link is the person's, wherever it points.
+    expect(ownWindowsPath(fileLink, 'file', roots)).toBe('owner')
+    expect(ownWindowsPath(inside, 'file', roots)).toBe('missing')
+
+    const home = join(root, 'home')
+    expect(skillsFolderOf(home, true, -1, roots)).toBe(join(home, 'skills'))
+    expect(skillsFolderOf(join(root, 'linkedHome'), false, -1, roots)).toBeNull()
+    symlinkSync(home, join(root, 'linkedHome'))
+    // Through a linked home its skills folder is the real one inside.
+    expect(skillsFolderOf(join(root, 'linkedHome'), false, -1, roots)).toBe(join(home, 'skills'))
+    const elsewhere = folder()
+    skillsAt(elsewhere)
+    expect(skillsFolderOf(elsewhere, false, -1, roots)).toBeNull()
+  })
+
+  it('on Windows the profile, resolved, is the one root; elsewhere the uid decides', () => {
+    // A run's folders are under /tmp on macOS, a link to /private/tmp: the profile is compared by its real path.
+    const profile = folder()
+    const skills = skillsAt(profile)
+    const elsewhere = skillsAt()
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    // os.homedir() reads HOME first.
+    vi.stubEnv('HOME', profile)
+    try {
+      expect(ownWindowsPath(join(profile, 'skills'), 'directory')).toBe('ok')
+      expect(ownWindowsPath(elsewhere, 'directory')).toBe('owner')
+      // Not Windows: a folder of this uid is this account's, wherever it is.
+      expect(ownDirectory(elsewhere)).toBe('ok')
+      expect(skillsFolderOf(join(elsewhere, '..'), false)).toBe(elsewhere)
+      Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+      expect(ownDirectory(skills)).toBe('ok')
+      expect(ownDirectory(elsewhere)).toBe('owner')
+      expect(skillsFolderOf(profile, false)).toBe(skills)
+      expect(skillsFolderOf(join(elsewhere, '..'), false)).toBeNull()
+    } finally {
+      Object.defineProperty(process, 'platform', platform)
+      vi.unstubAllEnvs()
+    }
   })
 
   it('a missing home', () => {
@@ -398,10 +510,36 @@ describe('the dial skill', () => {
     for (const [what, path] of unknown) expect(claudePluginState(path), what).toBe('unknown')
   })
 
-  it('it imports only node modules', () => {
-    const source = readFileSync(new URL('./dialSkill.ts', import.meta.url), 'utf8')
-    const imports = [...source.matchAll(/(?:\bfrom\s+|\bimport\s*\(?\s*)['"]([^'"]+)['"]/g)].map((match) => match[1])
-    expect(imports.length).toBeGreaterThan(0)
-    for (const specifier of imports) expect(specifier.startsWith('node:'), specifier).toBe(true)
+  it('readClaudePlugin: the person\'s off told from an entry gone, in one read', () => {
+    const dir = folder()
+    const at = (name: string, text: string): string => {
+      writeFileSync(join(dir, name), text)
+      return join(dir, name)
+    }
+    expect(readClaudePlugin(at('on.json', '{"enabledPlugins":{"harness-device@openharness":true}}'))).toBe('on')
+    expect(readClaudePlugin(at('false.json', '{"enabledPlugins":{"harness-device@openharness":false}}'))).toBe('turned-off')
+    expect(readClaudePlugin(at('absent.json', '{"enabledPlugins":{"other@x":false}}'))).toBe('off')
+    expect(readClaudePlugin(at('string.json', '{"enabledPlugins":{"harness-device@openharness":"false"}}'))).toBe('off')
+    expect(readClaudePlugin(at('bad.json', '{"enabledPlugins":{"harness-device@openharness":fa'))).toBe('unknown')
+  })
+
+  it('it loads only node modules', () => {
+    // Followed through the files it imports: lib/secureState.ts, whose profile check it shares, loads only Node's own too.
+    const seen = new Set<string>()
+    const nodeModules: string[] = []
+    const visit = (file: URL): void => {
+      if (seen.has(file.href)) return
+      seen.add(file.href)
+      const source = readFileSync(file, 'utf8')
+      for (const [, specifier] of source.matchAll(/(?:\bfrom\s+|\bimport\s*\(?\s*)['"]([^'"]+)['"]/g)) {
+        if (specifier.startsWith('.')) visit(new URL(specifier.replace(/\.js$/, '.ts'), file))
+        else {
+          expect(specifier.startsWith('node:'), `${specifier} in ${file.pathname}`).toBe(true)
+          nodeModules.push(specifier)
+        }
+      }
+    }
+    visit(new URL('./dialSkill.ts', import.meta.url))
+    expect(nodeModules.length).toBeGreaterThan(0)
   })
 })

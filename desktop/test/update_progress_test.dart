@@ -1,5 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/auth_session.dart';
@@ -8,9 +11,12 @@ import 'package:harness/settings/sections/about_section.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/update/desktop_updater.dart';
 import 'package:harness/update/manual_update_check.dart';
+import 'package:harness/update/tauri_signature.dart';
 import 'package:harness/update/update_signature.dart';
 import 'package:harness/widgets/update_notice.dart';
 import 'package:harness/measurement/product_runtime_health.dart';
+
+import 'support/tauri_test_signer.dart';
 
 class _UpdateHealth extends ProductRuntimeHealth {
   _UpdateHealth(super.measurement);
@@ -38,6 +44,23 @@ class _Installer extends DesktopUpdater {
     progress = onProgress;
     return staged.future;
   }
+}
+
+/// Serves [bytes] for every request: a bucket holding a build someone else
+/// put there.
+class _Bucket implements HttpClientAdapter {
+  _Bucket(this.bytes);
+  final List<int> bytes;
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async => ResponseBody.fromBytes(bytes, 200);
+
+  @override
+  void close({bool force = false}) {}
 }
 
 const _update = UpdateInfo(
@@ -94,6 +117,75 @@ void main() {
       'Could not install Harness 1.2.3: it is not signed by Autonomous Inc., '
       'who made the Harness you are using, so it may not be genuine. You are '
       'still on your current version.',
+    );
+  });
+
+  // The manifest names the tampered build's sha256, so only the signature can
+  // tell, and the person reads why nothing was installed.
+  testWidgets('a Linux update Harness did not sign says so in the banner', (
+    tester,
+  ) async {
+    final tampered = utf8.encode('an AppImage someone else built\n');
+    final linux = (await tester.runAsync(() async {
+      final signer = await TauriTestSigner.generate();
+      final genuine = utf8.encode('the AppImage Harness built\n');
+      final notifier = AppNotifier(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: null,
+        desktopUpdater: DesktopUpdater(
+          isLinux: true,
+          isWindows: false,
+          enabled: true,
+          releaseMode: true,
+          architecture: 'x64',
+          tauriPublicKey: signer.publicKey,
+          dio: Dio()..httpClientAdapter = _Bucket(tampered),
+        ),
+      );
+      notifier.availableUpdate = UpdateInfo(
+        version: '1.2.3',
+        url: 'https://updates.example.test/Harness-linux-x64.AppImage',
+        sha256: await sha256HexOffUiIsolate(tampered),
+        size: tampered.length,
+        signature: await signer.sign(
+          await blake2b512OfBytes(genuine),
+          'timestamp:1\tfile:Harness-linux-x64.AppImage\tdesktop-version:1.2.3',
+        ),
+      );
+      return notifier;
+    }))!;
+    addTearDown(linux.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ListenableBuilder(
+          listenable: linux,
+          builder: (_, _) => UpdateNotice(notifier: linux),
+        ),
+      ),
+    );
+
+    // The download and its checks run on real I/O and isolates, which the
+    // test clock does not drive.
+    await tester.runAsync(() async {
+      final failed = Completer<void>();
+      void settle() {
+        if (linux.updateError != null && !failed.isCompleted) failed.complete();
+      }
+
+      linux.addListener(settle);
+      await tester.tap(find.byKey(const Key('install-update-button')));
+      await failed.future.timeout(const Duration(seconds: 30));
+      linux.removeListener(settle);
+    });
+    await tester.pump();
+
+    expect(
+      find.text(
+        'Could not install Harness 1.2.3: it is not signed by Harness, so it '
+        'may not be genuine. You are still on your current version.',
+      ),
+      findsOneWidget,
     );
   });
 

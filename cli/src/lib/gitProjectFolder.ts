@@ -13,6 +13,7 @@ import { cloneAttempts, isGitHubHost, parseGitHubRepository, resolvedRepositoryI
 import { ProjectFolderError, projectsRoot, type GitProjectFolder } from './projectFolder.js'
 import { githubAliases, resolveHost } from './sshHosts.js'
 import { ownProcessGroup } from './windows/noWindow.js'
+import { gitPath } from './gitOnPath.js'
 import { scmByKind } from '../scm/scmProjects.js'
 import type { ScmLaunchRecord } from '../scm/types.js'
 
@@ -36,8 +37,10 @@ async function holdsRepository(folder: string, repositoryUrl: string, resolveAli
   const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never', GIT_OPTIONAL_LOCKS: '0',
     GIT_CEILING_DIRECTORIES: dirname(folder) }
   for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_NAMESPACE', 'GIT_PREFIX']) delete env[key]
+  const git = await gitPath().catch(() => null)
+  if (git === null) return false
   const origin = await new Promise<string | null>((resolve) => {
-    execFile('git', ['-c', 'core.fsmonitor=false', '-C', folder, 'remote', 'get-url', 'origin'],
+    execFile(git, ['-c', 'core.fsmonitor=false', '-C', folder, 'remote', 'get-url', 'origin'],
       { env, timeout: 4000, killSignal: 'SIGKILL', maxBuffer: 64 * 1024 },
       (error, stdout) => resolve(error ? null : stdout.trim()))
   })
@@ -223,11 +226,11 @@ async function packBytes(destination: string): Promise<number> {
  * took 48 s in full on MACs-Mac-Studio and longer than the 5 minutes once allowed on a slower Mac; blob-less, 6 s. The
  * fetch rule is then widened to every branch, so `git fetch origin X && git checkout X` works as in a full clone.
  * [options] are for tests: `git` the command, `stallMs` the no-progress window, `lookMs` how often its pack is looked at. */
-export function cloneRepository(url: string, destination: string, gitEnv?: NodeJS.ProcessEnv,
+export async function cloneRepository(url: string, destination: string, gitEnv?: NodeJS.ProcessEnv,
   options: { git?: string; stallMs?: number; lookMs?: number } = {}): Promise<void> {
+  const git = options.git ?? await gitPath().catch(() => { throw gitUnavailable() })
   return new Promise((resolve, reject) => {
     const base = gitEnv ?? process.env
-    const git = options.git ?? 'git'
     const env = { ...base, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never',
       GIT_SSH_COMMAND: base.GIT_SSH_COMMAND ?? 'ssh -oBatchMode=yes -oConnectTimeout=20' }
     // Its own process group, so a stalled clone's remote helper and index-pack stop with it.
@@ -255,7 +258,7 @@ export function cloneRepository(url: string, destination: string, gitEnv?: NodeJ
     child.on('error', () => {
       clearTimeout(stall)
       clearInterval(look)
-      reject(new ProjectFolderError('GIT_UNAVAILABLE', 'Git could not start. Install Git on the selected machine, then retry.'))
+      reject(gitUnavailable())
     })
     child.on('close', (code) => {
       clearTimeout(stall)
@@ -271,6 +274,10 @@ export function cloneRepository(url: string, destination: string, gitEnv?: NodeJ
       }
     })
   })
+}
+
+function gitUnavailable(): ProjectFolderError {
+  return new ProjectFolderError('GIT_UNAVAILABLE', 'Git could not start. Install Git on the selected machine, then retry.')
 }
 
 /** CLONE_FAILED because the host refused this machine's credentials, not because of the network or the URL. The code

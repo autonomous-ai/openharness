@@ -99,7 +99,7 @@ only for `# > _ ?`, and font 32 only for `> _` (`test_fonts.py` fails on any oth
 ## Daemon contract
 
 The device follows [docs/cable.md](docs/cable.md). A capability in the hello turns on extra daemon output; a daemon
-that predates one ignores it. The six capabilities:
+that predates one ignores it. The nine capabilities:
 
 - `swarms: "members-v1"`: agent ids and members on each swarm tab.
 - `recap: "long-v1"`: the full answer text on a summary.
@@ -107,6 +107,12 @@ that predates one ignores it. The six capabilities:
 - `stats: "turn-v1"`: the counts on a finished turn (tests, commits, tokens).
 - `player: "library-v1"`: the paged player library request and reply.
 - `ota: "v1"`: the daemon may offer firmware over the cable.
+- `appFilter: "v1"`: every app's agents (`host` and `caps` on `agent`, `view` and `tab` on `agents.end`), the
+  `apps` list, and `app.pick`.
+- `questionTier: "v1"`: a question told again comes back with `tier: "list"`, a silent row.
+- `appCards: "v1"`: `working` on each `apps` row.
+
+The welcome features the Pro reads: `player.library`, `resync`, `apps.switch`, `question.tier`.
 
 ## Further reading
 

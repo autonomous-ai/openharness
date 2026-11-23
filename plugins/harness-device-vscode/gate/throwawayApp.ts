@@ -4,13 +4,16 @@
  * developer's `~/Library/Preferences/com.microsoft.VSCode.plist`, and LaunchServices kept the deleted copy under that id.
  * So before any launch the copy gets ids of its own and claims no links or files, after the run LaunchServices forgets
  * it, and the gate checks the developer's preferences were left as they were.
+ *
+ * And on every platform, what the throwaway runs, found and ended through the process table: `ps` on a Mac or Linux,
+ * Win32_Process on Windows.
  */
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFile, execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs'
-import { userInfo } from 'node:os'
-import { basename, dirname, join, relative } from 'node:path'
-import { isDeepStrictEqual } from 'node:util'
+import { tmpdir, userInfo } from 'node:os'
+import { basename, dirname, join, relative, win32 } from 'node:path'
+import { isDeepStrictEqual, promisify } from 'node:util'
 
 export const GATE_ID = 'ai.autonomous.harness.vscode-gate'
 const MICROSOFT = 'com.microsoft.VSCode'
@@ -120,8 +123,26 @@ export function unregister(app: string): void {
   }
 }
 
-/** A gate run's root in /tmp, before mkdtemp's suffix. It carries the run's pid, so a later run's sweep tells the root of
- *  a run that ended without its clean-up (Ctrl+C) from that of a run still going beside it. */
+const WINDOWS = process.platform === 'win32'
+
+/** On Windows @vscode/test-electron starts Code.exe through cmd.exe with its arguments unquoted (CVE-2024-27980): a
+ *  space, &, % or quote in a path it passes splits it or runs as a command. Throws, naming each of `paths` that holds
+ *  any character but these by what it is, never by its path, which holds the account's name. */
+export function assertCmdSafe(paths: Readonly<Record<string, string>>): void {
+  const unsafe = Object.entries(paths).filter(([, path]) => !/^[A-Za-z0-9\\:._-]+$/.test(path)).map(([what]) => what)
+  if (unsafe.length) {
+    throw new Error(`refusing to launch the throwaway VS Code: ${unsafe.join(' and ')}'s path holds a character cmd.exe would `
+      + 'split or run; move it to a folder whose path holds only A-Z, a-z, 0-9, \\, :, ., _ and -')
+  }
+}
+
+/** Where a gate run's root goes. On a Mac /tmp, short: the devices' socket goes in it, and a Unix socket's path has 96
+ *  bytes. On Windows the account's temp folder, inside its profile, where the devices' pipe token may be kept; by its
+ *  long name, which the throwaway's command lines carry, not an 8.3 short one TEMP may hold. */
+export const GATE_TMP = WINDOWS ? realpathSync.native(tmpdir()) : '/tmp'
+
+/** A gate run's root in GATE_TMP, before mkdtemp's suffix. It carries the run's pid, so a later run's sweep tells the
+ *  root of a run that ended without its clean-up (Ctrl+C) from that of a run still going beside it. */
 export const rootName = (pid: number): string => `harness-vscode-gate-${pid}-`
 const ROOT = /^harness-vscode-gate-(\d+)-/
 
@@ -143,47 +164,105 @@ function carrying(table: readonly Process[], root: string): number[] {
   return table.filter(({ args }) => args.includes(name)).map(({ pid }) => pid)
 }
 
+/** A row of Windows' process table. `started` is its creation time as a FILETIME, in decimal: with its pid, it tells it
+ *  from a later process given the same pid. `command` is its program's path and its command line. */
+export type WindowsProcess = { pid: number; ppid: number; name: string; command: string; started: string }
+
+const POWERSHELL = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+
+/** Windows PowerShell's arguments for `script`, its output in UTF-8: encoded, so no quoting of a command line touches it. */
+function powershellArgs(script: string): string[] {
+  const encoded = Buffer.from(`[Console]::OutputEncoding = [Text.Encoding]::UTF8; ${script}`, 'utf16le').toString('base64')
+  return ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded]
+}
+/** A PowerShell that hangs is ended at a clean-up step's bound (CLEAN_UP_MS), not left beside the gate. */
+const POWERSHELL_OPTIONS = { encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024, timeout: 30_000 } as const
+/** Never synchronous: the gate's devices listener runs in its process, and a PowerShell takes over a second to start on
+ *  the VM, past the extension's 2 s for a stream's head (4 streams for 1, 2026-11-20). */
+const powershell = async (script: string): Promise<string> =>
+  (await promisify(execFile)(POWERSHELL, powershellArgs(script), POWERSHELL_OPTIONS)).stdout
+
+/** Win32_Process, read in one go: another account's processes come with no path or command line. */
+async function windowsProcesses(): Promise<WindowsProcess[]> {
+  return JSON.parse(await powershell(`ConvertTo-Json -Compress -InputObject @(Get-CimInstance Win32_Process | ForEach-Object {
+    @{ pid = $_.ProcessId; ppid = $_.ParentProcessId; name = $_.Name; command = "$($_.ExecutablePath) $($_.CommandLine)";
+       started = if ($_.CreationDate) { $_.CreationDate.ToFileTimeUtc().ToString() } else { '0' } } })`)) as WindowsProcess[]
+}
+
+/** Of a Windows process table, the throwaway's: each process whose program or command line names the root's folder (as
+ *  a whole folder name, in any case), each shell the driver reported that is still the process it reported (by its
+ *  start), and every descendant of either. Windows keeps an ended parent's pid in its children and gives that pid to a
+ *  later process: a child is one only when it started after its parent. */
+export function windowsThrowaway(table: readonly WindowsProcess[], root: string, shells: ReadonlyMap<number, string> = new Map()): WindowsProcess[] {
+  const name = win32.basename(root).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const names = new RegExp(`[\\\\/]${name}(?=[\\\\/"\\s]|$)`, 'i')
+  const doomed = new Set(table.filter(({ pid, command, started }) => names.test(command) || shells.get(pid) === started))
+  for (const parent of doomed) {
+    for (const row of table) if (row.ppid === parent.pid && row.pid !== parent.pid && BigInt(row.started) >= BigInt(parent.started)) doomed.add(row)
+  }
+  return [...doomed]
+}
+
 /** The throwaway's processes still running. */
-export function throwawayProcesses(root: string): number[] {
-  return carrying(processes(), root)
+export async function throwawayProcesses(root: string): Promise<number[]> {
+  return WINDOWS ? windowsThrowaway(await windowsProcesses(), root).map(({ pid }) => pid) : carrying(processes(), root)
 }
 
 /** Whether a VS Code other than the throwaway runs, by its process's name alone: the developer's own writes its
  *  preferences too, so a change seen while it runs may be its own. */
-export function vscodeOutside(root: string): string {
-  const own = new Set(throwawayProcesses(root))
+export async function vscodeOutside(root: string): Promise<string> {
+  const own = new Set(await throwawayProcesses(root))
   const found = spawnSync('/usr/bin/pgrep', ['-x', 'Code'], { encoding: 'utf8' }).stdout.split('\n').filter(Boolean)
   return found.some((pid) => !own.has(Number(pid)))
     ? 'a VS Code (Code) outside the gate\'s root is running'
     : 'no VS Code (Code) outside the gate\'s root is running'
 }
 
-/** When the process started, as `ps` says: with its pid, it tells it from a later process given the same pid. */
-export function startedAt(pid: number): string | undefined {
-  const read = spawnSync('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8' })
-  return read.status === 0 ? read.stdout.trim() : undefined
+/** When the process started, as `ps` says, or on Windows its FILETIME: with its pid, it tells it from a later process
+ *  given the same pid. */
+export async function startedAt(pid: number): Promise<string | undefined> {
+  if (WINDOWS) {
+    const script = `$p = Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}'; if ($p) { $p.CreationDate.ToFileTimeUtc() }`
+    return (await powershell(script)).trim() || undefined
+  }
+  try {
+    return (await promisify(execFile)('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8' })).stdout.trim()
+  } catch {
+    // No such process.
+    return undefined
+  }
 }
 
 /** SIGKILLs what the throwaway still runs, SIGKILL as a VS Code that will not quit may pass over SIGTERM: each process
  *  that carries the root's name, each shell the driver reported that is still the process it reported (by its start),
  *  and every descendant of either, which may carry no name. Returns the processes' names, never their arguments, which
  *  hold paths. */
-export function killThrowaway(root: string, shells: ReadonlyMap<number, string> = new Map()): string[] {
+export async function killThrowaway(root: string, shells: ReadonlyMap<number, string> = new Map()): Promise<string[]> {
+  if (WINDOWS) {
+    const doomed = windowsThrowaway(await windowsProcesses(), root, shells)
+    kill(doomed.map(({ pid }) => pid))
+    return [...new Set(doomed.map(({ name }) => name))].sort()
+  }
   const table = processes()
   const doomed = new Set(carrying(table, root))
-  for (const [pid, started] of shells) if (startedAt(pid) === started) doomed.add(pid)
+  for (const [pid, started] of shells) if (await startedAt(pid) === started) doomed.add(pid)
   // Every descendant before any kill: a killed parent's children go to launchd, and out of reach.
   for (const parent of doomed) for (const { pid, ppid } of table) if (ppid === parent) doomed.add(pid)
   if (doomed.size === 0) return []
   const names = spawnSync('/bin/ps', ['-o', 'comm=', '-p', [...doomed].join(',')], { encoding: 'utf8' }).stdout
-  for (const pid of doomed) {
+  kill(doomed)
+  return [...new Set(names.split('\n').filter(Boolean).map((name) => basename(name.trim())))].sort()
+}
+
+/** On Windows, TerminateProcess. */
+function kill(pids: Iterable<number>): void {
+  for (const pid of pids) {
     try {
       process.kill(pid, 'SIGKILL')
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
     }
   }
-  return [...new Set(names.split('\n').filter(Boolean).map((name) => basename(name.trim())))].sort()
 }
 
 function running(pid: number): boolean {
@@ -197,15 +276,16 @@ function running(pid: number): boolean {
 
 /** Clears, of this account's roots in `tmp`, each whose run has ended: kills what still runs from it, has LaunchServices
  *  forget its apps and removes it. Returns the roots it cleared. */
-export function sweepLeftovers(tmp = '/tmp'): string[] {
+export async function sweepLeftovers(tmp = GATE_TMP): Promise<string[]> {
   const cleared: string[] = []
   for (const entry of readdirSync(tmp, { withFileTypes: true })) {
     const pid = ROOT.exec(entry.name)?.[1]
     if (!entry.isDirectory() || pid === undefined || running(Number(pid))) continue
     const root = join(tmp, entry.name)
-    if (statSync(root).uid !== userInfo().uid) continue
-    killThrowaway(root)
-    unregister(root)
+    // Windows' temp folder is the account's own, and gives no owner's uid.
+    if (!WINDOWS && statSync(root).uid !== userInfo().uid) continue
+    await killThrowaway(root)
+    if (process.platform === 'darwin') unregister(root)
     // What was killed may still be letting go of its files.
     rmSync(root, { recursive: true, force: true, maxRetries: 5 })
     cleared.push(entry.name)

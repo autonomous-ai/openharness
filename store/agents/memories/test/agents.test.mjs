@@ -26,6 +26,7 @@ test('the session index is read from the daemon\'s data folder', () => {
   writeFileSync(join(moved, '.local', 'share', 'harness', '.harness-root'), '1\n', { mode: 0o600 })
   assert.equal(homes({}, moved, 'linux').harnessData, join(moved, '.local', 'share', 'harness', 'cli', 'data'))
   assert.equal(homes({ ADAPTER_DATA_DIR: '/elsewhere/data' }, moved, 'linux').harnessData, '/elsewhere/data')
+  assert.equal(homes({ ADAPTER_DATA_DIR: 'own/data' }, moved, 'linux').harnessData, join(moved, 'own', 'data'), 'a relative one is under the home')
 })
 
 test('on macOS and on a Linux home not moved yet, both stay under ~/.harness', () => {

@@ -28,9 +28,9 @@ import { VoiceSegments, realTimer } from './voiceSegments.js'
 import { FirmwareTransfer, isP4Board, otaKeyFor } from './fwPush.js'
 import { PACK_VERSION } from './pets/pack.js'
 import { planPetSync } from './pets/sync.js'
-import type { PetStore } from './pets/store.js'
+import { MAX_PACKS, type PetStore } from './pets/store.js'
 import type { PetDialState } from './pets/sync.js'
-import { SerialLink, findDialPort } from './serial.js'
+import { SerialLink, findDialPort, serialPortName } from './serial.js'
 import { PortAccessError } from './portAccess.js'
 import { PLAYER_PAGE_SIZE, playerPage, type PlayerSession } from './playerLibrary.js'
 import { PassageCarry, withCarriedPassage, type CarryRead } from './passageCarry.js'
@@ -38,8 +38,9 @@ import { VoiceDraft, type DraftPin } from './voiceDraft.js'
 import { dialText, noticeSummary } from './dialText.js'
 import { QuestionInbox, type ReviewedAnswer, type AnswerReceipt, type QuestionSpeech } from './questionInbox.js'
 import { notificationReadToken, type UnreadNotification } from '../lib/notificationRead.js'
+import { semverGt } from '../lib/selfUpdate.js'
 import { partitionTexts } from '../lib/questionController.js'
-import { errorKind } from '../lib/log.js'
+import { codeOrLength, errorKind } from '../lib/log.js'
 
 /** Bumped when the VOCABULARY changes. Separate from the frame version, which is the envelope. */
 export const CABLE_PROTO_VERSION = 3   // 3: + question.close (a question answered on another client)
@@ -139,9 +140,27 @@ const AGENTS_PUSH_GAP_MS = 1_000
  * different agents with nothing to correct them, which is exactly the report that followed.
  *
  * So it stays only as long as a stale echo from an OLDER firmware could take, and every report it drops
- * now says so in the log.
+ * now says so in the log. It opens only for a dial that echoes (`echoesCodeMoves`): for every other a turn inside it is
+ * a hand's, and the window swallowed it, the turn made just after the second ring push on Linux, whose voice caps
+ * arrive a tick after the first.
  */
 const APP_FOCUS_SETTLE_MS = 750
+/** The first round firmware in which a move made by code is not reported. */
+const FIRST_QUIET_FW = '0.0.59'
+
+/**
+ * Whether a dial reports a move the daemon made as though a hand made it: the echo `APP_FOCUS_SETTLE_MS` waits out.
+ *
+ * Round firmware stopped it at the source (carousel_goto, muted) in a fix that `7348a91187` names (2026-09-08, in the
+ * retired firmware repo); 0.0.59, the first firmware in this repo (`80f4bc84c4`, 2026-09-14, ui_screens.c "muted: code
+ * moved it, not a hand"), has it. Which version before it got the fix is in the retired repo, so every one counts as
+ * echoing. The Harness Pro's own firmware (`d93bf11386`, 2026-10-11, pro_cable.c) has never sent `focus` at all, whatever
+ * its `fw`. A greeting with no `fw` (`'?'`) comes from no shipped firmware, and none yet (null) sends no `focus`.
+ */
+export function echoesCodeMoves(fw: string | null, board: string | undefined): boolean {
+  if (board === 'pro' || fw === null) return false
+  return semverGt(FIRST_QUIET_FW, fw)
+}
 /** How long the dial stays on an agent before its pane is switched to: a swipe through five tiles switches one pane, the
  *  last, rather than flicking the app through all five. */
 export const SWIPE_REST_MS = 400
@@ -161,10 +180,12 @@ const APP_SWITCH_REPAINT_MS = 1_000
 /** What a `voice.begin` without an `sr` is assumed to be — firmware old enough not to say. */
 const DEFAULT_VOICE_RATE = 16_000
 
-/** A voice turn longer than this is a stuck dial, not a person talking. 16 kHz mono 16-bit ≈ 32 KB/s. Both dials
- *  stop at 600 s on a tick after the 600 s have passed, so a recording run to that stop passes 600 s by up to a
- *  tick; 15 s leaves room for it and still bounds a stuck dial. */
-const VOICE_MAX_BYTES = (10 * 60 + 15) * 32_000
+/** A voice turn longer than this is a stuck dial, not a person talking. Both dials stop at 600 s on a tick after the
+ *  600 s have passed, so a recording run to that stop passes 600 s by up to a tick; 15 s leaves room for it and still
+ *  bounds a stuck dial. */
+const VOICE_MAX_MS = (10 * 60 + 15) * 1_000
+/** The same turn in audio: 16 kHz mono 16-bit ≈ 32 KB/s. */
+const VOICE_MAX_BYTES = VOICE_MAX_MS * 32
 
 /** What a `swarms` item's `members` says about one member id (see CableSession.memberMeta). */
 export interface SwarmMemberMeta { id: string; name: string; engine: string; machine: string; online: boolean }
@@ -374,9 +395,9 @@ export type CableMachineSource = 'backend' | 'local' | 'signed-out'
 export type OpenReason = 'question'
 
 /** What turned the dial to an agent from this computer: a person's prompt, a terminal tab they selected, a Claude app
- *  they attached to, an Orca pane they focused, or a thread they opened in the ChatGPT app. The outcome's log line is
- *  the cause's own. */
-export type FollowCause = 'prompt' | 'tab' | 'attach' | 'focus' | 'thread'
+ *  they attached to, an Orca pane they focused, a thread they opened in the ChatGPT app, or a VS Code or Cursor terminal
+ *  they focused. The outcome's log line is the cause's own. */
+export type FollowCause = 'prompt' | 'tab' | 'attach' | 'focus' | 'thread' | 'vscode'
 /** What a send answers. `message` is a sentence for the dial, shown in place of the generic one. */
 export type SendOutcome = { ok: true } | { ok: false; machine?: string; reason?: string; message?: string }
 
@@ -389,6 +410,7 @@ import { deriveLongRecap, extendShortRecap } from '../lib/deviceRecap.js'
 import type { TurnStatsFields } from './turnStats.js'
 import type { Tier } from '../lib/notifyTier.js'
 import { APP_IDS, appDisplayName, hostDisplayName } from './hosts/hostDetect.js'
+import { RING_PLACES } from './hosts/select.js'
 import type { AppList, AppPick } from './hosts/types.js'
 
 export interface RouteDecision {
@@ -464,6 +486,9 @@ export interface CableHost {
   /** What the dial may do with an agent of the machine list, as letters of s v f a; undefined (an older host, a
    *  window's tab, an agent it does not list) means everything, as before. */
   capsOf?(agentId: string, opts?: { apps?: boolean }): string | undefined
+  /** A sentence of the agent's own app for words no route reaches, said in place of the generic one; undefined keeps
+   *  that. */
+  voiceRefusal?(agentId: string, opts?: { apps?: boolean }): string | undefined
   /** The app or terminal that agent runs in (`orca`, `ghostty`, …), for the words of a refusal. */
   hostOf?(agentId: string, opts?: { apps?: boolean }): string | undefined
   /** The dial is on that agent: its finished answer counts as seen. */
@@ -724,6 +749,16 @@ const PET_RETRY_MS = 1500
 /** Refusals that say nothing about the pack itself, so a later hello or a changed mapping may try again. */
 const PET_TRANSIENT = new Set(['timeout', 'unreadable', 'memory', 'busy'])
 
+/** Voice capture in flight: how many PCM bytes arrived, plus what `voice.begin` said about them. The audio itself goes to
+ *  `voiceSegments`. */
+type VoiceTurn = { agentId?: string; cmd?: string; lang: string; rate: number; bytes: number;
+  selectionId?: string; selection?: Promise<SelectionResult>;
+  carry?: CarryRead;
+  question?: { pin?: QuestionSpeech };
+  draft?: { pin?: DraftPin };
+  search?: { command?: SelectionCommand; pin: Promise<SelectionResult> };
+  form?: { command?: FormCommand; pin: Promise<FormResult> } }
+
 export class CableSession {
   private link: CablePort | null = null
   private decoder = new CableDecoder()
@@ -752,6 +787,9 @@ export class CableSession {
   /** Each agent of the last `agents.begin`..`agents.end` push: the ring the dial holds, which restores follow and the
    *  shown agent is read from. */
   private lastRing: Array<Pick<CableAgent, 'id' | 'name' | 'host'>> = []
+  /** When a split's step 1 went down the cable, by performance.now(): its step 2 is held from then (holdsStep2). Null
+   *  when no list can wait on it: the dial is known to hold no tile, or a voice opened after the hold ended. */
+  private splitAt: number | null = null
   /** What the dial was last told the app list is: the shown app and each app's counts. Empty = none. */
   private lastAppsKey = ''
   /** When the agent list last went down the cable, by performance.now(): the machine list's pacing, which a wall clock set
@@ -759,7 +797,8 @@ export class CableSession {
   private agentsPushedAt = -Infinity
   // What the hello NAMED. Each switches on only its own fields; a hello that names none gets the frames it
   // always got. A positive string match, per session (see hello).
-  /** `swarms: 'members-v1'`: `agentIds` and `members` on the swarms items. */
+  /** `swarms: 'members-v1'`: `agentIds` and `members` on the swarms items, and the window's swarms while the view is an
+   *  app's ring (syncSwarmsNow). */
   private swarmMembers = false
   /** `recap: 'long-v1'`: `full` on a summary. */
   private longRecap = false
@@ -776,6 +815,9 @@ export class CableSession {
    *  was told and no longer holds goes back on it that way, since a ring at every change of the window's list was a beep
    *  for nothing new (2026-11-18); a round dial that does not say it would beep, so it is sent nothing (giveQuestion). */
   private questionTier = false
+  /** `appCards: 'v1'` (the Harness Pro, docs/plans/2026-11-20-pro-app-data-daemon-design.md): `working` on each `apps`
+   *  row, and a change of it alone pushes `apps`. Any other device gets today's `apps` frame byte for byte. */
+  private appCards = false
   private playerOffset = 0
   private playerRequest = 0
   private playerLibraryKey = ''
@@ -799,14 +841,14 @@ export class CableSession {
 
   /** For the greeting's log line: which capabilities this hello named, or nothing. */
   private capabilitiesNamed(): string {
-    const named = [this.swarmMembers && 'swarms', this.longRecap && 'recap', this.stepsActivity && 'activity', this.statsTurn && 'stats', this.playerCapable && 'player', this.appFilter && 'appFilter', this.questionTier && 'questionTier']
+    const named = [this.swarmMembers && 'swarms', this.longRecap && 'recap', this.stepsActivity && 'activity', this.statsTurn && 'stats', this.playerCapable && 'player', this.appFilter && 'appFilter', this.questionTier && 'questionTier', this.appCards && 'appCards']
       .filter(Boolean)
     return named.length ? ` caps ${named.join(',')}` : ''
   }
 
   private resetCapabilities(): void {
     this.swarmMembers = this.longRecap = this.stepsActivity = this.statsTurn = this.playerCapable = this.appFilter = false
-    this.questionTier = false
+    this.questionTier = this.appCards = false
     this.seqOn = false
     this.markPermissions = false
     this.wholeRings = false
@@ -844,6 +886,13 @@ export class CableSession {
     this.reportShown()
   }
   private focusRecord = ''
+  /** The record, for the fleet to hand to this dial's next session: a replug is a new session (cableFleet.ts keepFocus). */
+  focusRecorded(): string { return this.focusRecord }
+  /**
+   * This dial's record from its last session, before start(). The record only: the first push re-asserts it when the ring
+   * names its agent, and lands the first agent as before when it does not. With no ring yet the host hears nothing.
+   */
+  recordFocus(agentId: string): void { this.desiredFocus = agentId }
   /** What this session last told the host its dial shows. */
   private shown: DialAgent | null = null
   private shownId: string | null = null
@@ -925,9 +974,17 @@ export class CableSession {
   /** A pet.drop went out on this link: the dial's memory may still be settling, so a memory refusal is retried once. */
   private petDropSent = false
   private petRetried = new Set<string>()
+  /** The pack whose latest offer had a spare pack dropped just before it: a memory refusal of it only needs time, not a second drop. */
+  private petRoomMadeFor: string | null = null
   private petRetryTimers = new Set<ReturnType<typeof setTimeout>>()
   /** Pack ids the dial holds: its hello's petIds, plus each pet.done, minus each pet.drop we sent. */
   private petHeld = new Set<string>()
+  /**
+   * Own packs: those this link sent (pet.done, or a hello that lists the pack in flight) and every held pack the mapping
+   * named at a sync. Only these are dropped once unmapped; any other held pack is another computer's (spare), kept
+   * until the dial needs its slot. In memory per link: PetStore.sweep deletes a replaced pet's files, so disk cannot tell.
+   */
+  private petOwn = new Set<string>()
   /**
    * When each pack's pet.done arrived. A greeting the dial assembled while a pack was still arriving can land after its
    * pet.done and list it as missing — seen 2026-10-08, when both packs went over twice. A pack confirmed this recently
@@ -952,15 +1009,21 @@ export class CableSession {
   /** Devices already logged as having no image channel this session (the hello repeats every ~15 s). */
   private noChannelLogged = new Set<string>()
 
-  /** Voice capture in flight: how many PCM bytes arrived, plus what `voice.begin` said about them. The audio itself goes
-   *  to `voiceSegments`. */
-  private voice: { agentId?: string; cmd?: string; lang: string; rate: number; bytes: number;
-    selectionId?: string; selection?: Promise<SelectionResult>;
-    carry?: CarryRead;
-    question?: { pin?: QuestionSpeech };
-    draft?: { pin?: DraftPin };
-    search?: { command?: SelectionCommand; pin: Promise<SelectionResult> };
-    form?: { command?: FormCommand; pin: Promise<FormResult> } } | null = null
+  /** The voice turn in flight. Every open and close comes through here: the dial applies no list while it records, and a
+   *  split's step 2 waits that out (holdsStep2). */
+  private get voice(): VoiceTurn | null { return this.voiceTurn }
+  private set voice(turn: VoiceTurn | null) {
+    const now = performance.now()
+    if (!turn && this.voiceTurn) this.voiceClosedAt = now
+    // A hold already over is not brought back by a voice that opens after it.
+    else if (turn && !this.holdsStep2(now)) this.splitAt = null
+    if (turn) this.voiceOpenedAt = now
+    this.voiceTurn = turn
+  }
+  private voiceTurn: VoiceTurn | null = null
+  /** When the dial's voice last opened and last closed, by performance.now(). Never, at first. */
+  private voiceOpenedAt = -Infinity
+  private voiceClosedAt = -Infinity
   private voiceSearch?: SelectionCommand
   private voiceForm?: FormCommand
   private voiceCarryId?: string
@@ -1010,6 +1073,14 @@ export class CableSession {
   private log(line: string): void {
     this.host.log(line)
     this.dialLog.daemon(line.replace(/^cable: /, ''))
+  }
+
+  /** Waits out the echo of a focus the daemon commands, read from the latest greeting: a dial updated in place greets
+   *  again on its new firmware. */
+  private armFocusEcho(agentId: string): void {
+    if (!echoesCodeMoves(this.greetedFw, this.greetedBoard)) return
+    this.expectedAppFocusEcho = agentId
+    this.expectedAppFocusEchoUntil = Date.now() + APP_FOCUS_SETTLE_MS
   }
 
   get isConnected(): boolean {
@@ -1074,7 +1145,7 @@ export class CableSession {
       // fail to open rather than steal it back — this interval only decides how soon we would find OUR
       // dial if the user unplugged theirs and plugged ours into the same socket.
       this.foreignRetryAt = Date.now() + 60_000
-      this.log(`cable: ${this.link.path} is not a Harness dial (${this.bytesSinceOpen} B, no frames) — releasing it`)
+      this.log(`cable: ${serialPortName(this.link.path)} is not a Harness dial (${this.bytesSinceOpen} B, no frames) — releasing it`)
       this.reportForeign(this.link.path, `${this.bytesSinceOpen} B, no frames`)
       await this.link.close('not ours')
       this.link = null
@@ -1234,6 +1305,7 @@ export class CableSession {
     // A new port is a new dial until proven otherwise; tell it everything.
     this.lastAgentsKey = ''
     this.lastRing = []
+    this.splitAt = null
     this.lastAppsKey = ''
     this.lastMachinesKey = ''
     this.resetCapabilities()
@@ -1247,7 +1319,7 @@ export class CableSession {
     // keyed by MAC and outlives the port precisely so this one does not have to.
     this.offered.clear()
     this.lastRx = Date.now()
-    this.log(`cable: open on ${opened.path}`)
+    this.log(`cable: open on ${serialPortName(opened.path)}`)
   }
 
   private clearOpenProblem(): void {
@@ -1290,6 +1362,7 @@ export class CableSession {
     this.endRest()
     this.lastAgentsKey = ''
     this.lastRing = []
+    this.splitAt = null
     this.lastAppsKey = ''
     this.lastMachinesKey = ''
     this.resetCapabilities()
@@ -1305,12 +1378,14 @@ export class CableSession {
     this.clearPetStall()
     this.petsSupported = false
     this.petHeld.clear()
+    this.petOwn.clear()
     this.petDoneAt.clear()
     this.petErrors.clear()
     this.petMapSent = ''
     this.petDialMax = 0
     this.petDropSent = false
     this.petRetried.clear()
+    this.petRoomMadeFor = null
     for (const timer of this.petRetryTimers) clearTimeout(timer)
     this.petRetryTimers.clear()
     // Last, with the ring emptied above: a host that hears it reads a session already closed.
@@ -1429,6 +1504,11 @@ export class CableSession {
   private async onMessage(msg: Message): Promise<void> {
     const str = (key: string): string | undefined =>
       typeof msg[key] === 'string' ? (msg[key] as string) : undefined
+    // A refusal's words are the firmware's own text: the log says a code, or only how long it is.
+    const refusal = (key: string): string => {
+      const said = str(key)
+      return said === undefined ? 'no reason given' : codeOrLength(said)
+    }
 
     switch (msg.t) {
       case 'hello': {
@@ -1460,6 +1540,7 @@ export class CableSession {
         this.playerCapable = str('player') === 'library-v1'
         this.appFilter = str('appFilter') === 'v1'
         this.questionTier = str('questionTier') === 'v1'
+        this.appCards = str('appCards') === 'v1'
         this.seqOn = isP4Board(str('board'))
         this.markPermissions = str('board') === 'max'
         this.wholeRings = str('board') === 'max'
@@ -1526,6 +1607,11 @@ export class CableSession {
           this.greetedMac = mac
           this.everGreeted = true
           this.greetedFw = fw
+          // A dial greeting anew has redrawn from nothing, so no echo of a focus commanded before it is coming. A window
+          // opened for its old firmware would outlive an update in place (0.0.58 to 0.0.94 on the same port) and drop the
+          // first turns on the new one; the push below opens one again only for a dial that echoes.
+          this.expectedAppFocusEcho = ''
+          this.expectedAppFocusEchoUntil = 0
           this.log(`cable: dial ${mac} ${returning ? 'back ' : ''}on fw ${fw} proto ${msg.proto}${hw ? ` hw ${hw}` : ''}${board ? ` board ${board}` : ''}${this.capabilitiesNamed()}`)
           this.dialLog.greeted()
           this.report({ fw })
@@ -1562,8 +1648,10 @@ export class CableSession {
         return
       case 'agents.list':
         // A dial asks for the list only when it holds none (its 15 s silence rule empties it while the port stays
-        // open), so the answer is a push after an empty list. The record stays: one in the ring is re-asserted.
+        // open), so the answer is a push after an empty list, which no split's hold waits on. The record stays: one in the
+        // ring is re-asserted.
         this.lastRing = []
+        this.splitAt = null
         await this.pushAgents()
         return
       case 'agents.refresh':
@@ -1958,7 +2046,8 @@ export class CableSession {
         if (agentId && !formVoice && !searchVoice && !draftVoice && !questionVoice && this.lacks(agentId, 'v')) {
           this.voice = null
           this.voiceRefusal = { generation: this.voiceGeneration,
-            message: `This agent is in ${this.hostName(agentId)}. Talking to it from the device comes in an update.` }
+            message: this.host.voiceRefusal?.(agentId, this.asItself)
+              ?? `This agent is in ${this.hostName(agentId)}. Talking to it from the device comes in an update.` }
           return
         }
         this.voice = {
@@ -2026,7 +2115,7 @@ export class CableSession {
         const settings = readSettings(msg.settings)
         if (settings) this.greetedSettings = settings
         if (hasUiSkin(msg.settings)) this.skinReported = true
-        if (msg.ok === false) this.log(`cable: device refused a settings change: ${str('error') ?? 'no reason given'}`)
+        if (msg.ok === false) this.log(`cable: device refused a settings change: ${refusal('error')}`)
         this.report()
         return
       }
@@ -2066,9 +2155,8 @@ export class CableSession {
         this.report()
         return
       case 'fw.error':
-        // The outcome is `refused`, not the dial's message: that string is the
-        // firmware's own text and this stream carries short codes.
-        this.endFirmware(`refused: ${str('message') ?? 'no reason given'}`)
+        // The outcome is `refused`, and the dial's message only by its code or length.
+        this.endFirmware(`refused: ${refusal('message')}`)
         this.report()
         // Pets that waited behind the image go now.
         await this.syncPets()
@@ -2097,6 +2185,7 @@ export class CableSession {
           this.clearPetStall()
         }
         this.petHeld.add(id)
+        this.petOwn.add(id)
         this.petDoneAt.set(id, Date.now())
         // The next pack, one at a time.
         await this.syncPets()
@@ -2109,14 +2198,18 @@ export class CableSession {
         // memory and busy will not change within this link; crc, version and shape would fail identically on a
         // resend of the same bytes. All are recorded and none retried until the link comes back.
         this.petErrors.set(id, reason)
-        this.log(`cable: dial refused pet ${id}: ${reason}`)
+        this.log(`cable: dial refused pet ${id}: ${codeOrLength(reason)}`)
         if (this.petTransfer?.id === id) {
-          this.petTransfer.xfer.finish(`refused: ${reason}`)
+          this.petTransfer.xfer.finish(`refused: ${codeOrLength(reason)}`)
           this.petTransfer = null
           this.clearPetStall()
         }
-        // A swap near full memory: the pack we dropped may not be freed yet. Once per pack and link, offer again.
-        if ((reason === 'memory' || reason === 'busy') && this.petDropSent && !this.petRetried.has(id)) {
+        // A swap near full memory: the pack we dropped may not be freed yet. Once per pack and link, free another
+        // computer's pack if one is held, and offer again; a later refusal of the same pack drops nothing more. A pack
+        // a spare was just dropped for gets no second drop: the dial frees that memory at its next frame.
+        const tight = reason === 'memory' || reason === 'busy'
+        if (tight && !this.petRetried.has(id) && this.petRoomMadeFor !== id) await this.dropSpare()
+        if (tight && this.petDropSent && !this.petRetried.has(id)) {
           this.petRetried.add(id)
           const timer = setTimeout(() => {
             this.petRetryTimers.delete(timer)
@@ -2268,6 +2361,7 @@ export class CableSession {
     // hello that lists the pack in flight means it was stored and its pet.done went missing.
     const t = this.petTransfer
     if (t && (shrank || this.petHeld.has(t.id))) {
+      if (this.petHeld.has(t.id)) this.petOwn.add(t.id)
       t.xfer.finish(this.petHeld.has(t.id) ? 'stored' : 'dial restarted')
       this.petTransfer = null
       this.clearPetStall()
@@ -2306,7 +2400,9 @@ export class CableSession {
   private async runPetSync(): Promise<void> {
     const store = this.host.pets?.()
     if (!store || !this.petsSupported || !this.link?.isOpen || this.greetedMac === null) return
-    const plan = planPetSync(store.mapping(), [...this.petHeld])
+    const plan = planPetSync(store.mapping(), [...this.petHeld], this.petOwn)
+    // A held pack the mapping names is ours from now on, so it is dropped at once if the pet changes on this link.
+    for (const id of this.petHeld) if (!plan.drop.includes(id) && !plan.spare.includes(id)) this.petOwn.add(id)
     const mapKey = JSON.stringify(plan.map)
     if (mapKey !== this.petMapSent) {
       this.petMapSent = mapKey
@@ -2350,11 +2446,27 @@ export class CableSession {
           (line) => this.log(line.replace('firmware', 'pet')),
         ),
       }
+      // A full dial has no slot for it: free another computer's pack now, never ahead of an offer that may not come.
+      // Set or cleared at every offer, so an earlier offer of the same pack never spares a later one its drop.
+      this.petRoomMadeFor = this.petHeld.size >= MAX_PACKS && (await this.dropSpare()) ? id : null
       // The CRC-32 is the pack's own header field (offset 18), so the dial checks what it received against it.
       this.armPetStall()
       await this.send({ t: 'pet.offer', id, size: pack.length, crc: pack.readUInt32LE(18) })
       return
     }
+  }
+
+  /** Frees one slot on the dial: the first spare pack (another computer's) in the order the dial listed them. True when one went. */
+  private async dropSpare(): Promise<boolean> {
+    const store = this.host.pets?.()
+    if (!store) return false
+    const id = planPetSync(store.mapping(), [...this.petHeld], this.petOwn).spare[0]
+    if (!id) return false
+    this.petHeld.delete(id)
+    this.petDropSent = true
+    this.log(`cable: pet ${id} dropped for room`)
+    await this.send({ t: 'pet.drop', id })
+    return true
   }
 
   private clearPetStall(): void {
@@ -2811,41 +2923,79 @@ export class CableSession {
     }
   }
 
+  /**
+   * Whether a list naming an agent the dial does not hold waits: for AGENTS_PUSH_GAP_MS after a split's step 1, and
+   * while the dial's voice is open and as long after it closes. The firmware applies a list on its refresh task, woken by
+   * the list's agents.end, and none while its voice upload runs (app_main.c refresh_task, audio_client_active()), and an
+   * agents.begin before then empties the buffer step 1 waits in (cable_client.c handle_agents_begin): the ring would
+   * meet the old tiles there and lose its new agents again. A voice holds at most VOICE_MAX_MS from its begin, as long
+   * as a dial records: a turn whose voice.end was lost on the cable stays open here, and would hold the ring, on step
+   * 1's tiles or none, until the next voice.
+   */
+  private holdsStep2(now: number): boolean {
+    return this.splitAt !== null && (now - this.splitAt < AGENTS_PUSH_GAP_MS ||
+      (this.voice !== null && now - this.voiceOpenedAt < VOICE_MAX_MS) || now - this.voiceClosedAt < AGENTS_PUSH_GAP_MS)
+  }
+
   /** `ring` false: only the app list, which a pick the host ignored is answered with. */
   private async syncAgentsNow(force: boolean, ring = true): Promise<void> {
-    const { agents, tab, total, view, apps } = await this.agentSnapshot()
+    const { agents: full, tab, total, view, apps } = await this.agentSnapshot()
+    // A ring that, with the tiles the dial holds, is more than RING_PLACES goes in two steps. The firmware adds a list's
+    // agents before it removes the tiles the list no longer names, and refuses one past RING_PLACES (app_main.c
+    // refresh_projects, ui_habitat.c ensure): such a list lost every agent the dial did not hold. Diego, 2026-11-20
+    // 17:32:40: Orca's one agent refused, the 16 stale tiles removed, the dial on "Choose a pane". Step 1 is the ring's
+    // agents the dial holds, in the ring's order, which adds nothing and removes the rest; step 2, the ring, then fits,
+    // and the hold below sends it. Only the first RING_PLACES rows of a list count, the dial's and the ring's: the
+    // firmware keeps no more (cable_client.c handle_agent). A dial that holds none never splits.
+    const held = new Set(this.lastRing.slice(0, RING_PLACES).map((a) => a.id))
+    const front = full.slice(0, RING_PLACES)
+    const split = held.size > 0 && new Set([...held, ...front.map((a) => a.id)]).size > RING_PLACES
+    const agents = split ? front.filter((a) => held.has(a.id)) : full
     // WHETHER there is a window is in the key, not WHICH tab: an empty tab after the window shut sends the
     // same zero rows and draws a different screen, so that flip has to push. The tab's id does not — the
     // dial names the tab from the `swarms` frame — and keying on it made every tab switch push twice,
     // once when `app_swarms` named the new tab over the old panes and again when `app_panes` arrived.
     const key = `${tab ? 'window' : view ?? ''}|${CableSession.agentsKey(agents)}`
-    // The name is the id's, so the counts and the shown app are all that can change what the dial draws.
-    const appsKey = apps ? `${apps.shown}|${apps.apps.map((a) => `${a.id}:${a.count}:${a.waiting}`).join('|')}` : ''
+    // The name is the id's, so the counts and the shown app are all that can change what the dial draws. Only a dial
+    // that says appCards is sent `working` and pushed on its change: any other dial's frames and their cadence stay byte
+    // for byte as they were (PM 2026-11-20).
+    const cards = this.appCards
+    const appsKey = apps ? `${apps.shown}|${apps.apps.map((a) => `${a.id}:${a.count}:${a.waiting}${cards ? `:${a.working}` : ''}`).join('|')}` : ''
     const sendRing = ring && (force || key !== this.lastAgentsKey)
     const sendApps = apps !== undefined && (force || appsKey !== this.lastAppsKey)
     if (!sendRing && !sendApps) return
+    // The hold (holdsStep2): a list naming an agent the dial does not hold waits as the gap below does, its apps too, and
+    // the tick sends it. One naming only held agents (a shrink, another split's step 1) goes at once.
+    if (sendRing && agents.some((a) => !held.has(a.id)) && this.holdsStep2(performance.now())) return
     // The machine list goes at most once a second after the last push: a window opening and closing quickly would
     // otherwise swap whole lists down the cable on every flip. The tick sends what was held. Forced pushes (an attach, a
     // refresh) and a window's lists go at once, as before, its opening too: a new ring must beat its focus.
     if (!force && view === 'machine' && performance.now() - this.agentsPushedAt < AGENTS_PUSH_GAP_MS) return
     this.lastAppsKey = appsKey
     this.agentsPushedAt = performance.now()
-    // Before the ring, which the dial draws under the app it names.
-    if (sendApps) await this.send({ t: 'apps', shown: apps.shown, apps: apps.apps })
+    // Before the ring, which the dial draws under the app it names. Each row is picked by name, in the contract's order,
+    // and only when it goes: the wire is the session's whatever else a host's entry carries, and a tick that sends
+    // nothing builds nothing.
+    if (sendApps) {
+      const rows = apps.apps.map(({ id, name, count, waiting, working }) => cards ? { id, name, count, waiting, working } : { id, name, count, waiting })
+      await this.send({ t: 'apps', shown: apps.shown, apps: rows })
+    }
     if (!sendRing) return
     // A dial that says `appFilter` back on the window's tab from an app's ring (its last list a machine list, by the key):
     // the record still names the agent it left the tab on, and the window's agent is where it lands (viewChanged follows
     // it). Re-asserting the record stepped the dial onto it on the way. The read that turns the view is often this push's
     // own (the shown ring left empty), before viewChanged runs, so the record is moved here, for whichever push brings
-    // the tab back.
+    // the tab back. Against the whole tab, not a split's step 1: step 2's key no longer starts with machine|.
     if (this.appFilter && tab && this.lastAgentsKey.startsWith('machine|')) {
       const landing = this.host.appFocus?.(this.asItself)?.agentId
-      if (landing && landing !== this.desiredFocus && agents.some((a) => a.id === landing)) {
+      if (landing && landing !== this.desiredFocus && full.some((a) => a.id === landing)) {
         this.desiredFocus = landing
         this.appFocusUnsent = true
       }
     }
     this.lastAgentsKey = key
+    // Counts only: an id or a name would put what is on the person's screen in the log.
+    if (split) this.log(`cable: agents split · ${agents.length} kept · ${full.length} in ring`)
     // Every push, and only pushes. The dial showing a different number from the daemon is a question this
     // line answers in one look: either the daemon never said it, or it said it and the dial disagreed.
     this.log(`cable: agents → ${agents.length} of ${total}${force ? ' (requested)' : ''}`)
@@ -2876,6 +3026,7 @@ export class CableSession {
     // A port that closed under the push holds no ring: kept, it would show the host an agent after the close said none,
     // and the re-assert and the restores below would read it.
     if (!await this.send({ t: 'agents.end', total, tab, ...(view ? { view } : {}) })) return
+    if (split) this.splitAt = performance.now()
     // Read before the ring takes this push's agents: whether the dial held none until this list.
     const heldNone = this.lastRing.length === 0
     this.lastRing = agents.map(({ id, name, host }) => ({ id, name, host }))
@@ -2893,20 +3044,18 @@ export class CableSession {
     // it there, then switched — and a focus the dial cannot land is a frame it holds for five seconds and
     // a warning per push; the tab switch is what un-focused it, and the next click sets a new record.
     if (this.desiredFocus && agents.some((a) => a.id === this.desiredFocus)) {
-      this.expectedAppFocusEcho = this.desiredFocus
-      this.expectedAppFocusEchoUntil = Date.now() + APP_FOCUS_SETTLE_MS
+      this.armFocusEcho(this.desiredFocus)
       await this.focusAgent(this.desiredFocus)
     } else if (view === 'machine' && heldNone && agents.length > 0 && !this.appFocusUnsent) {
-      // A machine list that follows none (an attach, an emptied list, the dial's own agents.list) leaves the dial
-      // on no agent: the firmware adds a list's agents before it removes the old ones, so only a ring that replaces
-      // none leaves its face empty, and it lands a face only on a pick of another app, a focus or a swipe. Seen as
-      // "Choose a pane" on a ChatGPT dial after a reattach, with its app picked and nothing to land it
-      // (docs/plans/2026-11-18-dial-chatgpt-pick-and-voice-design.md). Its first agent goes on the face, as a picked
-      // app's does. Not while a follow is in flight: it wrote its record before this push and sends its own focus
-      // after it, and a landing first would step the dial through the first agent. A window's tab never lands: the
-      // window says where the dial goes.
-      this.expectedAppFocusEcho = agents[0].id
-      this.expectedAppFocusEchoUntil = Date.now() + APP_FOCUS_SETTLE_MS
+      // A machine list that follows none (an attach, an emptied list, the dial's own agents.list, a split's empty
+      // step 1) leaves the dial on no agent. Any other keeps one on its face: the firmware adds a list's agents before
+      // it removes the old ones, and the split sees that the two fit. The firmware lands a face only on a pick of
+      // another app, a focus or a swipe. Seen as "Choose a pane" on a ChatGPT dial after a reattach, with its app
+      // picked and nothing to land it (docs/plans/2026-11-18-dial-chatgpt-pick-and-voice-design.md). Its first agent
+      // goes on the face, as a picked app's does. Not while a follow is in flight: it wrote its record before this push
+      // and sends its own focus after it, and a landing first would step the dial through the first agent. A window's
+      // tab never lands: the window says where the dial goes.
+      this.armFocusEcho(agents[0].id)
       await this.focusAgent(agents[0].id)
     }
 
@@ -3104,7 +3253,10 @@ export class CableSession {
   }
 
   private async syncSwarmsNow(force: boolean): Promise<void> {
-    const { selected, swarms, tiles } = this.host.listSwarms(this.asItself)
+    // A Pro (members-v1) that says appFilter draws its Tabs cards from `swarms`: asked as itself, they would vanish
+    // whenever an app's ring is shown. It asks as a dial on the window; the ring and focus still ask as itself
+    // (PM, 2026-11-20).
+    const { selected, swarms, tiles } = this.host.listSwarms(this.swarmMembers ? {} : this.asItself)
     const meta = await this.memberMeta(swarms)
     // `panes` belongs in the key as much as `agents` does. Opening a terminal on a tab that holds no
     // agent moves only the tile count, and a key blind to it would swallow that push and leave the
@@ -3690,8 +3842,7 @@ export class CableSession {
         // Said before the frame goes out, not after: the frame itself succeeds either way.
         const unknown = this.host.knows?.(agentId) === false
         this.log(`cable: following the app to agent ${agentId}${unknown ? ' — NOT in this daemon\'s list, the dial has no tile for it' : ''}`)
-        this.expectedAppFocusEcho = agentId
-        this.expectedAppFocusEchoUntil = Date.now() + APP_FOCUS_SETTLE_MS
+        this.armFocusEcho(agentId)
         // THE LIST FIRST, THEN THE FOCUS — the fix for "clicking a rail agent that has no tile does not
         // move the dial".
         //

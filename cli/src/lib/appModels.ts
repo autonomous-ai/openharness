@@ -7,6 +7,7 @@ import { closeSync, openSync } from 'node:fs'
 import { mkdir, open, rm } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { processExists } from './processLiveness.js'
+import { processRows } from './processTable.js'
 import { atomicWriteFileAsync, jsonArray, requireState } from './secureState.js'
 import { execFileTied, type TiedExecError } from './tied.js'
 
@@ -246,11 +247,12 @@ export function appEngineOps(env: NodeJS.ProcessEnv, request: typeof fetch = fet
     const result = await run(binary, args, { env, timeout })
     try { return obj(JSON.parse(result.stdout)) } catch { return {} }
   }
-  /** The command a pid runs now, so a pid the system reused is never stopped as ours. */
+  /** The command a pid runs now, from the one process table every OS reads (harness-pty's on Windows, which has no
+   *  `ps`), so a pid the system reused is never stopped as ours. No table, or no row for it, is not ours. */
   const ours = async (record: AppEngineRecord): Promise<boolean> => {
     if (!record.pid || !processExists(record.pid)) return false
-    const command = await run('ps', ['-o', 'command=', '-p', String(record.pid)], { timeout: 5_000 })
-    return command.ok && command.stdout.includes(basename(record.binary))
+    const row = (await processRows())?.find(candidate => candidate.pid === record.pid)
+    return !!row && row.args.includes(basename(record.binary))
   }
 
   return {

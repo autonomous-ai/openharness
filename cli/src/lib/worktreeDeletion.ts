@@ -10,6 +10,7 @@ import { basename, dirname, join, resolve, sep } from 'node:path'
 import { createHash } from 'node:crypto'
 import { env } from '../config/env.js'
 import { inRepositoryTurn, insideGitCheckout } from './gitProject.js'
+import { gitPath } from './gitOnPath.js'
 import type { WorkspacesPort } from '../core/api.js'
 
 const exec = promisify(execFile)
@@ -17,7 +18,7 @@ const within = (parent: string, path: string) => parent === path || path.startsW
 async function git(cwd: string, args: string[]): Promise<string> {
   const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0', LC_ALL: 'C' }
   for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_NAMESPACE', 'GIT_PREFIX']) delete env[key]
-  return (await exec('git', ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-C', cwd, ...args],
+  return (await exec(await gitPath(), ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-C', cwd, ...args],
     { env, timeout: 30_000, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024 })).stdout.replace(/\r?\n$/, '')
 }
 export type WorktreeReview = {

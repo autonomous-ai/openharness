@@ -21,8 +21,9 @@ import * as fs from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
-import { basename, dirname, win32 } from 'node:path'
+import { basename, dirname, win32, type PlatformPath } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { homePath } from '../config/envFields.js'
 import { errorKind } from './log.js'
 
 const PRIVATE_DIRECTORY_MODE = 0o700
@@ -45,10 +46,10 @@ function isMissing(error: unknown): boolean {
  * administrators can write; new folders and files in it inherit that. So state must be in the profile, or in the
  * data folder the person configured themselves (`ADAPTER_DATA_DIR`), whose ACL is then theirs to choose. Node
  * cannot set an ACL: state is created with the same modes as on Unix, which Windows ignores but for read-only.
+ * Read by [p], the host's path module unless given.
  */
-export function windowsStateRoots(environment: NodeJS.ProcessEnv = process.env, home: string = homedir()): string[] {
-  const configured = environment.ADAPTER_DATA_DIR?.trim()
-  return [home, ...(configured ? [configured] : [])].filter(Boolean)
+export function windowsStateRoots(environment: NodeJS.ProcessEnv = process.env, home: string = homedir(), p?: PlatformPath): string[] {
+  return [home, homePath(environment.ADAPTER_DATA_DIR?.trim() ?? '', home, p)].filter(Boolean)
 }
 
 /** Whether the real path [target] is one of [roots] or below one, compared as Windows does (case-insensitively). */
@@ -452,12 +453,17 @@ const REMEMBERED_FILES = 64
  */
 export type StateRead<T> = { state: 'ok'; value: T } | { state: 'missing' } | { state: 'unreadable'; failure: string; readFailed?: true }
 
+/** What a person is told of a file a write would replace that cannot be read: its base name, why, and what to do. */
+export function unreadableSentence(base: string, failure: string, readFailed: boolean): string {
+  return readFailed ? `${base} could not be read (${failure}), so it was not changed.`
+    : `${base} cannot be read (${failure}). Move it aside to start over.`
+}
+
 /** A file a write would replace that cannot be read. The message holds the file's base name only. */
 export class StateFileUnreadable extends Error {
   override readonly name = 'StateFileUnreadable'
-  constructor(readonly base: string, readonly failure: string, readFailed = false) {
-    super(readFailed ? `${base} could not be read (${failure}), so it was not changed.`
-      : `${base} cannot be read (${failure}). Move it aside to start over.`)
+  constructor(readonly base: string, readonly failure: string, readonly readFailed = false) {
+    super(unreadableSentence(base, failure, readFailed))
   }
 }
 
@@ -567,7 +573,7 @@ export function readState<T>(file: string, kind: StateKind, parse: (text: string
       if (memory && round < READ_TRIES) continue
       return read
     }
-    if (setAsideUnreadable(file)) {
+    if (setAsideUnreadable(file, base)) {
       console.warn(`[state] ${base} could not be read (${read.failure}); kept as ${base}.unreadable, starting empty.`)
     }
     return { state: 'missing' }
@@ -585,14 +591,15 @@ export function requireState<T>(file: string, parse: (text: string) => T, kind: 
   return read.state === 'ok' ? read.value : null
 }
 
-/** Rename to `<file>.unreadable`, over an older one. Never throws: a failure is one log line. True when set aside. */
-function setAsideUnreadable(file: string): boolean {
+/** Rename to `<file>.unreadable`, over an older one. Never throws: a failure is one log line, naming the file by [base], as
+ *  readState does. True when set aside. */
+function setAsideUnreadable(file: string, base: string): boolean {
   try {
     runSync(renameOverSteps(file, `${file}.unreadable`))
     unreadableFiles.delete(file)
     return true
   } catch (error) {
-    console.warn(`[state] ${basename(file)} could not be set aside (${errorKind(error)})`)
+    console.warn(`[state] ${base} could not be set aside (${errorKind(error)})`)
     const memory = unreadableFiles.get(file)
     if (memory) memory.stuck = true
     return false

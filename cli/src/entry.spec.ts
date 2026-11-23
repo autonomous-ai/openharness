@@ -31,6 +31,31 @@ it.each([
   expect(readdirSync(home)).toEqual([])
 }, 60_000)
 
+// The master on a Mac or Linux runs its team guard and, on Linux, the home move before startMaster installs its fatal
+// handler (masterProcess.ts). Node's own report of an error either throws is its message and stack, on the stderr launchd
+// and systemd make the daemon's log, which Export logs sends. Windows' master installs its own once its log is open.
+it.skipIf(process.platform === 'win32')('a master whose home move throws ends with one line, the error by its kind', () => {
+  const home = mkdtempSync(join(tmpdir(), 'master-fatal-')); homes.push(home)
+  // As on Linux, with a home move whose error names the person's folder. The modules are swapped by the file they resolve
+  // to, whatever specifier tsx hands on (from Node 24.11.1 its own hooks run first and pass ./homeMove/start.ts), and on
+  // the main thread, ahead of tsx's. A real master is never reached: one is replaced by a module that says so and ends.
+  const stubs = {
+    '/src/homeMove/start.ts': "export async function moveHomeAtStart() { throw new Error('the home at /Users/sentinel/x could not move') }",
+    '/src/masterProcess.ts': "process.stderr.write('the real master was reached\\n'); process.exit(3)",
+  }
+  const preload = `import { registerHooks } from 'node:module'; const stubs = ${JSON.stringify(stubs)}; `
+    + "Object.defineProperty(process, 'platform', { value: 'linux' }); registerHooks({ resolve(specifier, context, next) { "
+    + 'const resolved = next(specifier, context); const stub = Object.keys(stubs).find(path => resolved.url.endsWith(path)); '
+    + "return stub ? { url: 'data:text/javascript,' + encodeURIComponent(stubs[stub]), shortCircuit: true } : resolved } })"
+  const run = spawnSync(process.execPath, ['--import', LOADER, '--import', `data:text/javascript,${encodeURIComponent(preload)}`, ENTRY, '__harnessd'], {
+    encoding: 'utf8', timeout: 30_000,
+    env: { PATH: process.env.PATH, HOME: home, ADAPTER_DATA_DIR: join(home, 'data') },
+  })
+  expect(run.stderr).not.toContain('sentinel')
+  expect({ status: run.status, stderr: run.stderr })
+    .toEqual({ status: 1, stderr: expect.stringMatching(/^[\d-]+ [\d:.]+ \[harnessd\] the master stopped on an uncaught error: Error\n$/) })
+}, 60_000)
+
 it('allows a call it cannot read, and one with no input at all', () => {
   for (const input of ['not json', '']) {
     const home = mkdtempSync(join(tmpdir(), 'retired-guard-')); homes.push(home)

@@ -6,10 +6,11 @@ import { basename, dirname, isAbsolute, join, normalize } from 'node:path'
 import { promisify } from 'node:util'
 import { plausibleBranchName } from './agentNames.js'
 import { placeholderBranch, worktreeFolderName } from './branchNames.js'
-import { redactSecretsInText } from './redactSecrets.js'
 import { withinRoots } from './pathContainment.js'
 import { ownProcessGroup } from './windows/noWindow.js'
+import { systemProgram } from './windows/powershell.js'
 import { errorKind } from './log.js'
+import { gitPath } from './gitOnPath.js'
 
 const exec = promisify(execFile)
 
@@ -25,7 +26,7 @@ function diskFull(error: unknown): boolean {
 }
 
 async function git(path: string, args: string[], timeout = 4000): Promise<string> {
-  return (await exec('git', gitArgs(path, args), {
+  return (await exec(await gitPath(), gitArgs(path, args), {
     timeout, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024,
     env: gitEnv(process.env),
   })).stdout.replace(/\r?\n$/, '')
@@ -376,13 +377,14 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
     const added: WorktreeAdd = upstream
       ? await worktreeAdd(source, ['worktree', 'add', '--', destination, branch], options.worktreeTimeout ?? WORKTREE_ADD_TIMEOUT)
       : { ok: false, reason: 'could not track its remote branch', stderr: '', timedOut: false, diskFull: false, running: false }
+    // git's stderr can quote the person's folders, remote URLs and credentials: its lines say only how much it printed.
     if (!added.ok && added.running) {
       // Deleting the folder under a process still writing it would only race it; the next start takes another folder.
-      console.error(`[worktree] git worktree add failed (${added.reason}) at ${destination}; something git started is still running, so the folder and branch are left as it is: ${gitReason(added.stderr)}`)
+      console.error(`[worktree] git worktree add failed (${added.reason}) at the worktree; something git started is still running, so the folder and branch are left as it is${added.stderr.length ? ` · stderr ${Buffer.byteLength(added.stderr)} B` : ''}`)
       throw new GitProjectError('WORKTREE_FAILED', `Could not create the worktree at ${destination}. Check Git and folder permissions, then retry.`)
     }
     if (!added.ok && !(added.timedOut && await finishedCheckout(source, destination, branch))) {
-      console.error(`[worktree] git worktree add failed (${added.reason}) at ${destination}: ${gitReason(added.stderr)}`)
+      console.error(`[worktree] git worktree add failed (${added.reason}) at the worktree${added.stderr.length ? ` · stderr ${Buffer.byteLength(added.stderr)} B` : ''}`)
       // A retry starts clean. The folder is this start's own (reserved above), and so is the branch it made.
       await removePartialWorktree(source, destination, made, admin, registered)
       if (added.diskFull) throw new GitProjectError('WORKTREE_FAILED', worktreeDiskFull)
@@ -391,7 +393,8 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
     // Harness made this branch: its cleanup may remove it, and a made-up name gives way to the session's.
     if (!existing) {
       await git(source, ['config', `branch.${branch}.${HARNESS_BRANCH_KEY}`, placeholder ? 'placeholder' : 'created']).catch((error: unknown) => {
-        console.error(`[worktree] could not mark ${branch} as Harness's, so it is not renamed after its session: ${errorKind(error)}`)
+        // Not the branch: a person can name it.
+        console.error(`[worktree] could not mark its branch as Harness's, so it is not renamed after its session: ${errorKind(error)}`)
       })
     }
     return destination
@@ -450,19 +453,23 @@ type WorktreeAdd = { ok: true } | WorktreeAddFailure
  *  the timeout the whole group is killed (on Windows, git's process tree), and the result waits until no process
  *  holds git's stderr any more: until then something git started may still be writing the folder. If that takes
  *  as long again as the timeout (at most a minute), the result says it is `running`. */
-function worktreeAdd(source: string, args: string[], timeout: number): Promise<WorktreeAdd> {
+async function worktreeAdd(source: string, args: string[], timeout: number): Promise<WorktreeAdd> {
+  let file: string
+  try { file = await gitPath() } catch (error) {
+    return { ok: false, reason: (error as NodeJS.ErrnoException).code ?? 'could not run git', stderr: '', timedOut: false, diskFull: false, running: false }
+  }
   return new Promise(resolve => {
     let stderr = '', timedOut = false, settled = false, waited: NodeJS.Timeout | undefined
     const done = (result: WorktreeAdd) => { if (!settled) { settled = true; clearTimeout(timer); clearTimeout(waited); resolve(result) } }
     const failed = (reason: string, running = false): WorktreeAddFailure => ({ ok: false, reason, stderr, timedOut, diskFull: diskFull({ stderr }), running })
     const late = () => `timed out after ${Math.round(timeout / 1000)} s`
-    const child = spawn('git', gitArgs(source, args), {
+    const child = spawn(file, gitArgs(source, args), {
       env: gitEnv(process.env), stdio: ['ignore', 'ignore', 'pipe'], ...ownProcessGroup(),
     })
     child.stderr.on('data', (chunk: Buffer) => { if (stderr.length < 64 * 1024) stderr += chunk.toString() })
     const timer = setTimeout(() => {
       timedOut = true
-      void stopTree(child.pid).then(problem => { if (problem) console.error(`[worktree] could not stop git and what it started: ${gitReason(problem)}`) })
+      void stopTree(child.pid).then(problem => { if (problem) console.error(`[worktree] could not stop git and what it started: ${problem}`) })
       waited = setTimeout(() => done(failed(late(), true)), Math.min(timeout, 60_000))
     }, timeout)
     child.once('error', error => done({ ...failed((error as NodeJS.ErrnoException).code ?? 'could not run git'), diskFull: diskFull(error) }))
@@ -471,23 +478,24 @@ function worktreeAdd(source: string, args: string[], timeout: number): Promise<W
   })
 }
 
-/** Kills [pid] and everything it started: its process group, or on Windows its tree. Null when that was done, else why
- *  not. On Windows `taskkill /T` finds only what still descends from a live git, so a failure here is reported and
+/** Kills [pid] and everything it started: its process group, or on Windows its tree. Null when that was done, else how it
+ *  failed: the kill's kind, or taskkill's exit and how much it printed, never its words, which can name the person's
+ *  folders and are logged. On Windows `taskkill /T` finds only what still descends from a live git, so a failure here is reported and
  *  `worktreeAdd` still waits for git's stderr to close before anything is read or removed. */
 export function stopTree(pid: number | undefined): Promise<string | null> {
   if (pid === undefined) return Promise.resolve(null)
   if (process.platform !== 'win32') {
     try { process.kill(-pid, 'SIGKILL'); return Promise.resolve(null) } catch (error) {
-      return Promise.resolve((error as NodeJS.ErrnoException).code === 'ESRCH' ? null : String((error as Error).message))
+      return Promise.resolve((error as NodeJS.ErrnoException).code === 'ESRCH' ? null : errorKind(error))
     }
   }
   return new Promise(resolve => {
-    let output = ''
-    const taskkill = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
-    taskkill.stdout.on('data', (chunk: Buffer) => { output += chunk.toString() })
-    taskkill.stderr.on('data', (chunk: Buffer) => { output += chunk.toString() })
-    taskkill.once('error', error => resolve(`taskkill: ${error.message}`))
-    taskkill.once('close', code => resolve(code === 0 ? null : `taskkill exit ${code}: ${output.trim() || 'no output'}`))
+    let printed = 0
+    const taskkill = spawn(systemProgram('taskkill.exe'), ['/pid', String(pid), '/T', '/F'], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+    taskkill.stdout.on('data', (chunk: Buffer) => { printed += chunk.length })
+    taskkill.stderr.on('data', (chunk: Buffer) => { printed += chunk.length })
+    taskkill.once('error', error => resolve(`taskkill ${errorKind(error)}`))
+    taskkill.once('close', code => resolve(code === 0 ? null : `taskkill exit ${code} · ${printed} B`))
   })
 }
 
@@ -524,19 +532,6 @@ async function removePartialWorktree(source: string, destination: string, made: 
   } catch (error) {
     console.error(`[worktree] could not remove the partial worktree: ${errorKind(error)}`)
   }
-}
-
-/** git's last words, short and without credentials: a remote URL's user and password, GitHub tokens (the stateless
- *  `ghs_APPID_` and a JWT before the older forms, which would stop at its first dot), JWTs, and the shared denylist. */
-function gitReason(stderr: string): string {
-  const lines = stderr.split(/\r?\n/).map(line => line.trim()).filter(Boolean).slice(-3).join(' / ')
-  return redactSecretsInText((lines || 'no output')
-    // A bounded scheme: an unbounded one made a run of `ab-ab-…` quadratic (lib/agentHandoff.ts).
-    .replace(/([a-z][a-z0-9+.-]{0,31}:\/\/)[^\s/@]+@/gi, '$1<redacted>@')
-    .replace(/\bghs_\d+_[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]{8,}){2}/g, '<redacted>')
-    .replace(/\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+/g, '<redacted>')
-    .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, '<redacted>'))
-    .slice(0, 500)
 }
 
 /** `.worktreeinclude` (gitignore syntax) in the repository names ignored files a new worktree needs

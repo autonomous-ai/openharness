@@ -24,9 +24,35 @@ ORIGIN_MANIFEST = "https://storage.googleapis.com/s3-autonomous-upgrade-3/harnes
 # The CDN's bot rules answer 403 to Python's default User-Agent ("Python-urllib/3.x").
 USER_AGENT = "harness-device-release"
 FILES = ("Harness-Device.dmg", "Harness-Device.app.tar.gz", "Harness-Device.app.tar.gz.sig")
-DMG, ARCHIVE, SIGNATURE = FILES
+DMG, ARCHIVE = FILES[:2]
+# Each build job's files, every update beside its .sig: each job hashes its own, and publish checks each artifact.
+PARTS = {
+    "macos": FILES,
+    "windows": ("Harness-Device-windows-x64-setup.exe", "Harness-Device-windows-x64-setup.exe.sig",
+                "Harness-Device-windows-arm64-setup.exe", "Harness-Device-windows-arm64-setup.exe.sig"),
+    "linux-x64": ("Harness-Device-linux-x64.AppImage", "Harness-Device-linux-x64.AppImage.sig"),
+    "linux-arm64": ("Harness-Device-linux-arm64.AppImage", "Harness-Device-linux-arm64.AppImage.sig"),
+}
+# The parts a release carries. Temporary: the first Windows and Linux release makes "all" the only choice.
+PLATFORMS = {"macos": ("macos",), "all": tuple(PARTS)}
+# Tauri's key, the installer key and the file of each Windows and Linux update: unlike the universal Mac archive, each
+# arch has a file of its own, which is also the installer a person downloads. Desktop and the website both read the
+# installer key, device-<os>-<arch>-<package>, as the website reads device-macos-dmg.
+UPDATES = (
+    ("windows-x86_64", "device-windows-x64-exe", "Harness-Device-windows-x64-setup.exe"),
+    ("windows-aarch64", "device-windows-arm64-exe", "Harness-Device-windows-arm64-setup.exe"),
+    ("linux-x86_64", "device-linux-x64-appimage", "Harness-Device-linux-x64.AppImage"),
+    ("linux-aarch64", "device-linux-arm64-appimage", "Harness-Device-linux-arm64.AppImage"),
+)
 # A release's files never change, so caches may keep them; the manifest must be read fresh every time.
 ASSET_CACHE = "public, max-age=31536000, immutable"
+# The one-line Linux installer, which /device shows once the manifest names a Linux AppImage. Every release of all
+# platforms uploads it, after the version checks, so an older run never rolls it back, and before the manifest, so the
+# line never names a missing script. Read fresh every time: the CDN keeps a positive max-age for a month otherwise
+# (website/scripts/upload-desktop-install-sh.sh).
+INSTALLER = Path(__file__).resolve().parents[2] / "website" / "scripts" / "device-install.sh"
+INSTALLER_URI = f"{BUCKET}/install.sh"
+INSTALLER_CACHE = "no-cache, no-store, must-revalidate"
 VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 TAG = re.compile(rf"v({VERSION.pattern})_device")
 PUB_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
@@ -101,48 +127,75 @@ def check_on_main(commit, repo="."):
         raise ValueError(f"{commit} could not be checked against origin/main: {result.stderr.strip() or 'git failed'}")
 
 
-def file_sums(folder):
-    """sha256 and size of each of the three files."""
+def release_files(platforms):
+    """The files of a release of platforms, "macos" or "all", part by part."""
+    return [name for part in PLATFORMS[platforms] for name in PARTS[part]]
+
+
+def file_sums(folder, names):
+    """sha256 and size of each of the files named."""
     sums = {}
-    for name in FILES:
+    for name in names:
         data = (Path(folder) / name).read_bytes()
         sums[name] = {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
     return sums
 
 
-def check_sums(folder, path):
-    expected, actual = json.loads(Path(path).read_text()), file_sums(folder)
+def check_sums(folder, path, part):
+    names = PARTS[part]
+    expected, actual = json.loads(Path(path).read_text()), file_sums(folder, names)
     if expected != actual:
-        differ = [name for name in FILES if not isinstance(expected, dict) or expected.get(name) != actual[name]]
+        differ = [name for name in names if not isinstance(expected, dict) or expected.get(name) != actual[name]]
         raise ValueError(f"{', '.join(differ) or 'the file list'} in {folder} differs from {path}")
 
 
-def file_entries(version, folder, base_url):
+def file_entries(version, folder, base_url, platforms="macos"):
     """What the manifest says of this build: its version, the update archive for both Macs, and an entry in Desktop's
-    shape for the archive and the dmg, once per Mac."""
+    shape for the archive and the dmg, once per Mac; with all, each Windows and Linux file as its arch's update and in
+    Desktop's shape, under the installer key Desktop and the website read."""
     parse(version)
     folder = Path(folder)
-    sums = file_sums(folder)
-    update = {"url": f"{base_url}/{version}/{ARCHIVE}", "signature": (folder / SIGNATURE).read_text().strip()}
+    sums = file_sums(folder, release_files(platforms))
+
+    def update(name):
+        return {"url": f"{base_url}/{version}/{name}", "signature": (folder / f"{name}.sig").read_text().strip()}
 
     def entry(name):
         return {"version": version, "url": f"{base_url}/{version}/{name}", **sums[name]}
 
+    mac = update(ARCHIVE)
     # The app is universal, so the arm64 pair names the same files as the other pair.
-    return {"version": version, "platforms": {"darwin-aarch64": update, "darwin-x86_64": dict(update)},
-            "device-macos": entry(ARCHIVE), "device-macos-dmg": entry(DMG),
-            "device-macos-arm64": entry(ARCHIVE), "device-macos-arm64-dmg": entry(DMG)}
+    entries = {"version": version, "platforms": {"darwin-aarch64": mac, "darwin-x86_64": dict(mac)},
+               "device-macos": entry(ARCHIVE), "device-macos-dmg": entry(DMG),
+               "device-macos-arm64": entry(ARCHIVE), "device-macos-arm64-dmg": entry(DMG)}
+    if platforms == "all":
+        for key, installer_key, name in UPDATES:
+            entries["platforms"][key] = update(name)
+            entries[installer_key] = entry(name)
+    return entries
 
 
-def build_manifest(version, folder, notes, pub_date, base_url):
-    """Tauri's static update manifest, which installed apps read, plus the archive's and the dmg's entries in
-    Desktop's shape."""
+def updates(manifest):
+    """The manifest's platforms object, or an empty one when it holds none."""
+    platforms = manifest.get("platforms")
+    return platforms if isinstance(platforms, dict) else {}
+
+
+def differing(manifest, entries):
+    """The keys of entries that manifest holds otherwise, each update on its own."""
+    live = updates(manifest)
+    return ([f"platforms.{key}" for key, value in entries["platforms"].items() if live.get(key) != value] +
+            [key for key, value in entries.items() if key != "platforms" and manifest.get(key) != value])
+
+
+def build_manifest(version, folder, notes, pub_date, base_url, platforms="macos"):
+    """Tauri's static update manifest, which installed apps read, plus each file's entry in Desktop's shape."""
     if not PUB_DATE.fullmatch(pub_date):
         raise ValueError(f"pub_date {pub_date!r} must be YYYY-MM-DDTHH:MM:SSZ")
     datetime.strptime(pub_date, "%Y-%m-%dT%H:%M:%SZ")  # and a real date: the updater reads it as RFC 3339
     # file_entries repeats version, which keeps its first place, ahead of notes and pub_date.
     return {"version": version, "notes": notes.rstrip("\n"), "pub_date": pub_date,
-            **file_entries(version, folder, base_url)}
+            **file_entries(version, folder, base_url, platforms)}
 
 
 def gcloud(*args):
@@ -152,9 +205,18 @@ def gcloud(*args):
     return result.stdout
 
 
-def publish(version, folder, notes, pub_date):
+def check_installer():
+    """The one-line installer parses as sh, before anything is uploaded: a broken one must never replace the live one."""
+    result = subprocess.run(["sh", "-n", str(INSTALLER)], capture_output=True, text=True, timeout=30)
+    if result.returncode:
+        raise ValueError(f"{INSTALLER.name} does not parse as sh: {result.stderr.strip() or 'sh -n failed'}")
+
+
+def publish(version, folder, notes, pub_date, platforms="macos"):
     """Upload this build and point the live manifest at it; on any failure the live manifest stays as it was."""
-    manifest = build_manifest(version, folder, notes, pub_date, CDN_BASE)
+    manifest = build_manifest(version, folder, notes, pub_date, CDN_BASE, platforms)
+    if platforms == "all":
+        check_installer()
     live_uri = f"{BUCKET}/metadata.json"
     try:
         description = json.loads(gcloud("storage", "objects", "describe", live_uri, "--format=json"))
@@ -172,18 +234,23 @@ def publish(version, folder, notes, pub_date):
         live = live_version(text)
         if live is None:
             raise ValueError(f"{live_uri}#{generation} has no plain X.Y.Z version")
+        current = json.loads(text)
+        # Tauri's manifest has one version: Windows' and Linux's apps would take this one's with their last files,
+        # signed for another version, and fail every check until a release of every platform.
+        if platforms == "macos" and any(key.startswith(("windows-", "linux-")) for key in updates(current)):
+            raise ValueError("Windows and Linux are live: release with --platforms all")
         if version == live:
             # A rerun after the manifest was written (verify failed, or gcloud gave up on a write that landed): this
             # build is live, so the run goes on to verify it. Another build must never go out under its version.
-            current = json.loads(text)
-            if any(current.get(key) != value for key, value in file_entries(version, folder, CDN_BASE).items()):
+            if differing(current, file_entries(version, folder, CDN_BASE, platforms)):
                 raise ValueError(f"{version} is already published with other files; release a new version")
             return current
     if parse(version) <= parse(live):
         raise ValueError(f"{version} is not greater than {live}, the live version")
-    sums = file_sums(folder)
+    files = release_files(platforms)
+    sums = file_sums(folder, files)
     with tempfile.TemporaryDirectory(prefix="device-release-") as temp:
-        for name in FILES:
+        for name in files:
             target = f"{BUCKET}/{version}/{name}"
             gcloud("storage", "cp", "--no-clobber", f"--cache-control={ASSET_CACHE}", str(Path(folder) / name), target)
             # No-clobber keeps what an earlier run of this version left: the manifest may name it only if it is
@@ -192,6 +259,9 @@ def publish(version, folder, notes, pub_date):
             gcloud("storage", "cp", target, str(back))
             if hashlib.sha256(back.read_bytes()).hexdigest() != sums[name]["sha256"]:
                 raise ValueError(f"{target} differs from this build's {name}; the manifest was not written")
+        if platforms == "all":
+            gcloud("storage", "cp", str(INSTALLER), INSTALLER_URI, "--content-type=text/x-shellscript; charset=utf-8",
+                   f"--cache-control={INSTALLER_CACHE}")
         path = Path(temp) / "metadata.json"
         path.write_text(json.dumps(manifest, indent=2) + "\n")
         # Only over the generation read above (0: only where none exists), so a concurrent release fails, never
@@ -235,9 +305,9 @@ def download_matches(url, expected, tries, pause):
     raise ValueError(f"{url} {problem}, after {tries} tries")
 
 
-def verify(version, folder, manifest_url=ORIGIN_MANIFEST, base_url=CDN_BASE, tries=3, pause=5.0):
-    """The public manifest names this build, and the archive and the dmg it names download as this build's."""
-    expected = file_entries(version, folder, base_url)
+def verify(version, folder, manifest_url=ORIGIN_MANIFEST, base_url=CDN_BASE, tries=3, pause=5.0, platforms="macos"):
+    """The public manifest names this build, and each update file and the dmg it names download as this build's."""
+    expected = file_entries(version, folder, base_url, platforms)
     data = fetch(manifest_url, MANIFEST_LIMIT + 1, 20)
     if len(data) > MANIFEST_LIMIT:
         raise ValueError(f"{manifest_url} is larger than {MANIFEST_LIMIT} bytes")
@@ -245,13 +315,16 @@ def verify(version, folder, manifest_url=ORIGIN_MANIFEST, base_url=CDN_BASE, tri
     if not isinstance(manifest, dict):
         raise ValueError(f"{manifest_url} is not a manifest")
     # Nothing of the manifest's text goes into a message: whoever can write the bucket chose it.
-    for key, value in expected.items():
-        if manifest.get(key) != value:
-            raise ValueError(f"the {key} in {manifest_url} differs from this build's")
+    differ = differing(manifest, expected)
+    if differ:
+        raise ValueError(f"the {differ[0]} in {manifest_url} differs from this build's")
     # Equal entries put every URL it names under base_url/<version>/, so nothing else is fetched.
-    sums = file_sums(folder)
-    download_matches(manifest["platforms"]["darwin-aarch64"]["url"], sums[ARCHIVE], tries, pause)
-    download_matches(manifest["device-macos-dmg"]["url"], sums[DMG], tries, pause)
+    sums = file_sums(folder, release_files(platforms))
+    named = [(manifest["platforms"]["darwin-aarch64"]["url"], ARCHIVE), (manifest["device-macos-dmg"]["url"], DMG)]
+    if platforms == "all":
+        named += [(manifest["platforms"][key]["url"], name) for key, *_, name in UPDATES]
+    for url, name in named:
+        download_matches(url, sums[name], tries, pause)
 
 
 class Parser(argparse.ArgumentParser):
@@ -276,25 +349,26 @@ def parser():
     step.add_argument("publish", metavar="PUBLISH", help="true or false")
     step.add_argument("commit", metavar="COMMIT", help="40 lowercase hex characters")
 
-    step = commands.add_parser("sums", help="sha256 and size of the three files, written or compared")
+    step = commands.add_parser("sums", help="sha256 and size of one part's files, written or compared")
     step.add_argument("--dir", type=Path, required=True)
+    step.add_argument("--part", choices=tuple(PARTS), default="macos")
     output = step.add_mutually_exclusive_group(required=True)
     output.add_argument("--out", type=Path)
     output.add_argument("--check", type=Path)
 
-    build_step = commands.add_parser("build", help="the manifest, from the three files")
-    publish_step = commands.add_parser("publish", help="upload the three files, then write the live manifest")
-    for step in (build_step, publish_step):
+    build_step = commands.add_parser("build", help="the manifest, from the release's files")
+    publish_step = commands.add_parser("publish", help="upload the release's files and, with all, the one-line "
+                                                       "installer, then write the live manifest")
+    verify_step = commands.add_parser("verify", help="the public manifest and downloads against the release's files")
+    for step in (build_step, publish_step, verify_step):
         step.add_argument("--version", required=True)
         step.add_argument("--dir", type=Path, required=True)
+        step.add_argument("--platforms", choices=tuple(PLATFORMS), default="macos")
+    for step in (build_step, publish_step):
         step.add_argument("--notes-file", type=Path, required=True)
         step.add_argument("--pub-date", required=True, help="YYYY-MM-DDTHH:MM:SSZ")
     build_step.add_argument("--base-url", required=True)
     build_step.add_argument("--out", type=Path, required=True)
-
-    step = commands.add_parser("verify", help="the public manifest and downloads against the three files")
-    step.add_argument("--version", required=True)
-    step.add_argument("--dir", type=Path, required=True)
     return parser
 
 
@@ -314,17 +388,18 @@ def main(argv=None):
             check_on_main(args.commit)
         elif args.command == "sums":
             if args.out:
-                args.out.write_text(json.dumps(file_sums(args.dir), indent=2) + "\n")
+                args.out.write_text(json.dumps(file_sums(args.dir, PARTS[args.part]), indent=2) + "\n")
             else:
-                check_sums(args.dir, args.check)
+                check_sums(args.dir, args.check, args.part)
         elif args.command == "build":
-            manifest = build_manifest(args.version, args.dir, args.notes_file.read_text(), args.pub_date, args.base_url)
+            manifest = build_manifest(args.version, args.dir, args.notes_file.read_text(), args.pub_date, args.base_url,
+                                      args.platforms)
             args.out.write_text(json.dumps(manifest, indent=2) + "\n")
         elif args.command == "publish":
-            manifest = publish(args.version, args.dir, args.notes_file.read_text(), args.pub_date)
+            manifest = publish(args.version, args.dir, args.notes_file.read_text(), args.pub_date, args.platforms)
             print(json.dumps(manifest, indent=2))
         else:
-            verify(args.version, args.dir)
+            verify(args.version, args.dir, platforms=args.platforms)
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired, http.client.HTTPException) as error:
         # One line, whatever gcloud or Git printed.
         print("ERROR " + " ".join(str(error).split()), file=sys.stderr)

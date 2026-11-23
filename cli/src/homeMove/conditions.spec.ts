@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { harnessPaneOwner } from '../lib/harnessSessionLabel.js'
-import { checkMove, OVERRIDE_NAMES, type ConditionDeps } from './conditions.js'
+import { checkMove, OVERRIDE_NAMES, withEnvFile, type ConditionDeps } from './conditions.js'
 import { planMove } from './plan.js'
 
 const FS: ConditionDeps['fs'] = { lstatSync, readdirSync, readFileSync, existsSync, realpathSync }
@@ -194,6 +194,14 @@ describe('whether the move runs: the first condition that holds decides', () => 
     expect(await checkMove(deps(home, { ...laterHolds(harnessPaneOwner(dataDir)), env: { [name]: file } }))).toEqual(skipped(name))
   })
 
+  // config/loadEnv.ts reads the file trimmed (envFilePath): the padded name is the same file.
+  it.each(['HARNESS_ENV_FILE', 'DOTENV_CONFIG_PATH'])('an env file inside ~/.harness, named by %s with spaces around it, → skipped-override', async (name) => {
+    const { home, legacy, dataDir } = legacyHome()
+    const file = join(legacy, 'harness.env')
+    writeFileSync(file, 'HARNESS_LOG_LEVEL=debug\n')
+    expect(await checkMove(deps(home, { ...laterHolds(harnessPaneOwner(dataDir)), env: { [name]: ` ${file} ` } }))).toEqual(skipped(name))
+  })
+
   it('tmux before 3.0 with a pane that carries the tag → waiting old-tmux', async () => {
     const { home, dataDir } = legacyHome()
     const asked: boolean[] = []
@@ -232,6 +240,43 @@ describe('what the conditions read', () => {
     const fields = [...source.matchAll(underHome)].map((match) => match[1])
     expect(fields).toContain('ADAPTER_DATA_DIR')
     expect(OVERRIDE_NAMES).toEqual(expect.arrayContaining([...fields, 'HARNESS_AUTH_DIR', 'HARNESS_CONNECTIONS_DIR', 'HARNESS_FLASHER_CACHE']))
+  })
+
+  // The file config/loadEnv.ts reads, whatever folder the start runs in.
+  it('a relative env file is the one in the home', () => {
+    const home = folder()
+    writeFileSync(join(home, 'harness.env'), 'HARNESS_LOGS_DIR=/from/the/home\n')
+    expect(withEnvFile({ fs: FS, env: { HARNESS_ENV_FILE: 'harness.env' }, home })).toEqual({ HARNESS_ENV_FILE: 'harness.env', HARNESS_LOGS_DIR: '/from/the/home' })
+  })
+
+  // config/env.ts reads a relative override against the home in every process: the daemon the move waits for or leaves
+  // alone uses the folder in the home, never the one in the folder the start runs in.
+  describe('a relative override is the home\'s', () => {
+    it('one inside ~/.harness → skipped-override with its name', async () => {
+      const { home, dataDir } = legacyHome()
+      expect(await checkMove(deps(home, { ...laterHolds(harnessPaneOwner(dataDir)), env: { DSH_DIR: join('.harness', 'dsh') } }))).toEqual(skipped('DSH_DIR'))
+    })
+
+    it('the CLI folder\'s update-pending.json → waiting update-pending', async () => {
+      const { home } = legacyHome()
+      mkdirSync(join(home, 'own-cli'))
+      pending(join(home, 'own-cli'))
+      expect(await checkMove(deps(home, { env: { ADAPTER_CLI_DIR: 'own-cli' } }))).toEqual(waiting('update-pending'))
+    })
+
+    it('the PTY host\'s folder is the one asked', async () => {
+      const { home } = legacyHome()
+      const looked: string[] = []
+      expect(await checkMove(deps(home, { env: { HARNESS_PTY_DIR: 'own-pty' }, ptyHostRuns: (dir) => { looked.push(dir); return true } }))).toEqual(waiting('pty-host'))
+      expect(looked).toEqual([join(home, 'own-pty')])
+    })
+
+    it('the data folder\'s tag, before the move and after', async () => {
+      const { home } = legacyHome()
+      const own = join(home, 'own-data')
+      mkdirSync(own)
+      expect(await checkMove(deps(home, { env: { ADAPTER_DATA_DIR: 'own-data' } }))).toMatchObject({ move: true, oldTag: harnessPaneOwner(own), newTag: harnessPaneOwner(own) })
+    })
   })
 
   it('the new tag is the data folder\'s after the move', async () => {

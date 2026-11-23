@@ -108,9 +108,9 @@ describe('two daemons on one computer', () => {
     let atDev = await LocalClient.connect(dev)
     const theirs = await create(dev, atDev, 'codex', 'dev-codex')
     const oursPid = await panePid(release, ours.tmuxPane)
-    // Two reconcile passes on each (TERMINAL_RECONCILE_INTERVAL_MS is 5 s here): time enough for either to
-    // open an agent for the other's pane, as both did on 2026-10-03.
-    await sleep(12_000)
+    // A whole reconcile pass on each, begun once both panes ran: time enough for either to open an agent
+    // for the other's pane, as both did on 2026-10-03.
+    await Promise.all([release.twoMorePasses('at release after the dev agent'), dev.twoMorePasses('at dev after its agent')])
     expect(await running(atRelease)).toEqual([[ours.id, ours.tmuxPane, ours.sessionId]])
     expect(await running(atDev)).toEqual([[theirs.id, theirs.tmuxPane, theirs.sessionId]])
 
@@ -124,13 +124,13 @@ describe('two daemons on one computer', () => {
     await dev.restart()
     atDev = await LocalClient.connect(dev)
     await until('the dev agent to be back', async () => (await row(atDev, theirs.id))?.status === 'active' || null, 60_000, 500)
-    await sleep(6_000)
+    await dev.twoMorePasses('at dev after its restart')
     expect(await running(atDev)).toEqual([[theirs.id, theirs.tmuxPane, theirs.sessionId]])
 
     // The dev agent stopped: its pane goes; the release agent's pane is the same process it was.
     expect((await atDev.request('agent_delete', { agentId: theirs.id }, 60_000)).error).toBeUndefined()
     await until('the dev agent\'s pane to go', async () => (await panePid(dev, theirs.tmuxPane)) === null || null, 30_000, 250)
-    await sleep(6_000)
+    await Promise.all([release.twoMorePasses('at release after the dev agent stopped'), dev.twoMorePasses('at dev after its agent stopped')])
     expect(await panePid(release, ours.tmuxPane)).toBe(oursPid)
     expect(await running(atRelease)).toEqual([[ours.id, ours.tmuxPane, ours.sessionId]])
     await turn(atRelease, ours.id, 'still the release daemon\'s')
@@ -227,7 +227,11 @@ describe('two daemons on one computer', () => {
 
     const foreground = await cli(daemon, ['start', '--foreground'])
     expect(foreground.code, foreground.output).not.toBe(0)
-    expect(foreground.output).toMatch(/already serving .*daemon-\d+\.sock/)
+    // Under launchd and systemd this output is the daemon's log, which Export logs sends: the reason in fixed words,
+    // never the error's own, which name the socket's path.
+    expect(foreground.output).toContain('Failed to start adapter: EADDRINUSE · another Harness daemon serves this data folder')
+    expect(foreground.output).not.toContain(daemon.socketPath)
+    expect(foreground.output).not.toMatch(/already serving|^\s+at /m)
     // It left before it did anything: no restore, no services, no reaped viewers.
     expect(foreground.output).not.toMatch(/\[discovery\]|\[restore\]|\[dsh\] reaped|\[services\]/)
     expect(IsolatedDaemon.alive(viewer.pid!), 'the running daemon\'s viewer').toBe(true)
@@ -280,17 +284,26 @@ describe('two daemons on one computer', () => {
     // and neither platform starts a clean exit again: the daemon stayed down until the next login.
     const gone = 2_000_000_000
     const restarted = await make('restarted', { env: { HARNESSD_INITIAL_BACKOFF_MS: '200' } })
-    const orphan = createServer((_req, res) => res.end(JSON.stringify({ pid: gone, corePid: process.pid })))
+    // The old core leaves once it has answered twice: the new start asked, waited a round and asked again. A timer
+    // could fire before a slow start asked at all, and the start would never have waited.
+    let answered = 0
+    const orphan = createServer((req, res) => {
+      res.end(JSON.stringify({ pid: gone, corePid: process.pid }))
+      if (req.url === '/api/status' && ++answered === 2) orphan.close()
+    })
     await new Promise<void>((resolve) => orphan.listen(restarted.socketPath, resolve))
-    setTimeout(() => orphan.close(), 3_000)
-    await restarted.start({ ready: 'none' })
-    await until('the new core to finish starting', () => /\[cli\] ready/.test(restarted.log()) || null, 90_000, 200)
-    expect(restarted.log()).toContain(`of a master that is gone (pid ${gone}) — waiting for it to leave`)
-    expect(restarted.log()).not.toMatch(/core stopped for good/)
-    const client = await LocalClient.connect(restarted)
-    const agent = await create(restarted, client, 'claude', 'after-the-orphan')
-    await turn(client, agent.id, 'served once the old core left')
-    client.close()
+    try {
+      await restarted.start({ ready: 'none' })
+      await until('the new core to finish starting', () => /\[cli\] ready/.test(restarted.log()) || null, 90_000, 200)
+      expect(restarted.log()).toContain(`of a master that is gone (pid ${gone}) — waiting for it to leave`)
+      expect(restarted.log()).not.toMatch(/core stopped for good/)
+      const client = await LocalClient.connect(restarted)
+      const agent = await create(restarted, client, 'claude', 'after-the-orphan')
+      await turn(client, agent.id, 'served once the old core left')
+      client.close()
+    } finally {
+      orphan.close()
+    }
 
     // A daemon that answers for itself, with no master that is gone, is another daemon: refused at once.
     const refused = await make('refused', { env: { HARNESSD_INITIAL_BACKOFF_MS: '200' } })
@@ -327,7 +340,7 @@ describe('two daemons on one computer', () => {
     // Each runs its own agents, and only its own.
     const atDev = await LocalClient.connect(dev)
     const theirs = await create(dev, atDev, 'codex', 'dev-codex')
-    await sleep(12_000)
+    await Promise.all([release.twoMorePasses('at release after the dev agent'), dev.twoMorePasses('at dev after its agent')])
     expect(await running(atRelease)).toEqual([[ours.id, ours.tmuxPane, ours.sessionId]])
     expect(await running(atDev)).toEqual([[theirs.id, theirs.tmuxPane, theirs.sessionId]])
     await Promise.all([turn(atRelease, ours.id, 'release'), turn(atDev, theirs.id, 'dev')])

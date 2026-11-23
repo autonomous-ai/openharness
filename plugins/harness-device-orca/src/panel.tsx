@@ -5,7 +5,6 @@ import type { DialState } from './protocol'
 const GET_HARNESS = 'https://harness.autonomous.ai/desktop'
 
 const LINES: Record<Exclude<DialState['state'], 'checking'>, string> = {
-  windows: 'Not on Windows yet.',
   noHarness: "Harness isn't installed.",
   notRunning: "Harness isn't running.",
   elsewhere: 'Open in another Orca.',

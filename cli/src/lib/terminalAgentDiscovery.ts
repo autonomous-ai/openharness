@@ -8,6 +8,7 @@ import {
 } from './engineBin.js'
 import { gatewayFromArgv } from './gatewayRuntime.js'
 import { gridAssignmentEvidence, type GridAssignment, type GridAssignmentProcess } from './gridAssignmentWire.js'
+import { errorKind } from './log.js'
 import { probeProfileHome } from '../engines/discoveries.js'
 import { probeHermesHome, probeHermesSandbox } from '../engines/identities.js'
 import type { TerminalBackend } from './terminalBackend.js'
@@ -107,6 +108,11 @@ export interface TerminalAgentProbe {
   targets: TerminalTargetProbe[]
   agents: DiscoveredTerminalAgent[]
   ambiguousPlacements: Set<string>
+  /**
+   * The error's kind when the table was read but the engines' executables could not be resolved, so the pass could
+   * not look: `processTableAvailable` stays false and every agent is kept. Its kind alone, as its words can quote a path.
+   */
+  ownershipFailure?: string
   /** Every process in each pane's tree in this snapshot, by `terminalPlacementKey`; none when no table was read. */
   paneProcesses?: ReadonlyMap<string, readonly ProcessIdentity[]>
 }
@@ -319,7 +325,9 @@ export async function probeTerminalAgents(
   // and each snapshot walks PATH (#3880).
   let ownership: AgentCommandOwnershipSnapshot | undefined
   try { ownership = roots.length ? await agentCommandOwnershipSnapshotAsync() : undefined }
-  catch { return { processTableAvailable: false, targets, agents: [], ambiguousPlacements: new Set() } }
+  catch (error) {
+    return { processTableAvailable: false, ownershipFailure: errorKind(error), targets, agents: [], ambiguousPlacements: new Set() }
+  }
   const discovered = discoverTerminalAgentsFromSnapshot(
     roots,
     enrichedRows,

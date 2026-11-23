@@ -29,6 +29,19 @@ describe('connected services in their own process, as the core reaches them', ()
     expect(String(log.mock.calls[0][0])).not.toContain('/profiles/')
   })
 
+  // An answer's error is the services' code; anything else it holds (a peer's words, a path) is logged by its length.
+  it('a refusal is logged by its code', async () => {
+    const log = vi.fn()
+    await createConnectorsLink(async () => ({ error: 'peer /Users/sentinel' }), log).syncProfileHome('codex', '/profiles/codex-work')
+    await createConnectorsLink(async () => ({ error: 'SERVICE_UNAVAILABLE' }), log).syncProfileHome('codex', '/profiles/codex-work')
+    const lines = log.mock.calls.map((call) => call.map(String).join(' ')).join('\n')
+    expect(lines).not.toContain('sentinel')
+    expect(lines).toBe([
+      '[connections] profile home not updated (codex): text(20); launching with its current config',
+      '[connections] profile home not updated (codex): SERVICE_UNAVAILABLE; launching with its current config',
+    ].join('\n'))
+  })
+
   it('logs to the core\'s own log by default', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {

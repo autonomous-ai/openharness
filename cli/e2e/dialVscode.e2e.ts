@@ -25,14 +25,13 @@ import { mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, sep } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { MANAGED_SETTINGS, readSettings } from '../src/cable/hosts/claudeRenderer.js'
-import { devicesListenerPath } from '../src/devices/listenerPath.js'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
+import { type EditorWindow, startEditorWindow } from './harness/editorWindow.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 import { InOrca } from './harness/inOrca.js'
 import { Outside } from './harness/outsideAgent.js'
-import type { WindowState } from '../../plugins/harness-device-vscode/src/window.ts'
 
 // How the real CLI is started: the run's bundle when there is one (E2E_BUNDLE), as the daemon runs.
 const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : ['--import', 'tsx', 'src/cli.ts']
@@ -51,31 +50,7 @@ const CURSOR = 'com.todesktop.230313mzl4w4u92'
 const IN_CURSOR: Record<string, string> = { TERM_PROGRAM: 'vscode', __CFBundleIdentifier: CURSOR }
 /** A Cursor session's folder's name: the person's own path, which no line of the devices may hold (#4458). */
 const FOLDER_MARKER = 'SECRET-FOLDER-MARKER'
-/** The everyday daemon's port: a `link` under test that reached it would hand the loop this computer's devices' socket. */
-const EVERYDAY_PORT = '18473'
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/
-
-/** The extension's loop over a fake window, running. */
-interface Window {
-  /** Each state it told, in order. */
-  states: string[]
-  /** Each shell's pid it was asked to show, in order. */
-  shows: number[]
-  /** For each raise of the window, how many shows came before it. */
-  raised: number[]
-  /** Each line it scrolled its active terminal, in order. */
-  scrolls: ('up' | 'down')[]
-  /** Each page key it pressed, and the shell whose terminal it was for, in order. */
-  keys: { key: 'up' | 'down'; pid: number }[]
-  /** Each state it took from set(), as it then said it was, in order. */
-  took: WindowState[]
-  /** Its channel's lines, then anything it wrote on stderr. */
-  logs: string[]
-  /** The window's terminals change, as VS Code tells it. */
-  set(state: Partial<WindowState>): void
-  /** Ends its stdin, which stops it; its exit code, once it exits within 10 s. */
-  stop(): Promise<number | null>
-}
 
 describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach an agent in VS Code's or Cursor's terminal", () => {
   let daemon: IsolatedDaemon | undefined
@@ -103,17 +78,11 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
     desk = new Desk(file)
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-200).join('\n')}`) })
     await d.start()
+    // Claude Code started by hand reads its hooks once, as it starts: they must be in by then.
+    await d.hooksInstalled(['claude'])
     const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a', FILTER)
     await dial.next((m) => m.t === 'agents.end', 45_000, 'the first list')
     return { d, dial }
-  }
-
-  /** The daemon's environment names its own data folder, port and devices' socket, never this computer's. */
-  const isolated = (d: IsolatedDaemon): void => {
-    expect(d.env.ADAPTER_DATA_DIR).toBe(d.dataDir)
-    expect(d.dataDir.startsWith(d.root + sep)).toBe(true)
-    expect(d.env.PORT).not.toBe(EVERYDAY_PORT)
-    expect(devicesListenerPath(d.dataDir, process.platform, d.env.HOME)).toBe(join(d.dataDir, 'devices.sock'))
   }
 
   /** Claude Code in a VS Code terminal: its shell in the terminal under the fake VS Code, and the engine the shell's
@@ -131,69 +100,6 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
     })
     children.push(child)
     return (bundle) => { child.stdin!.write(`${JSON.stringify({ front: bundle })}\n`) }
-  }
-
-  /** A word the shell takes as it is. */
-  const quoted = (word: string): string => `'${word.replaceAll("'", `'\\''`)}'`
-
-  /**
-   * The extension's loop, started as VS Code would start it for someone whose launcher is `~/.local/bin/harness`: the
-   * home is the throwaway one, and the launcher there starts this checkout's CLI under the daemon's environment and
-   * nothing else. `/usr/bin:/bin` holds no `harness`: with no launcher the loop would say `noHarness`, never find this
-   * computer's.
-   */
-  const vscodeWindow = (d: IsolatedDaemon): Window => {
-    isolated(d)
-    const bin = join(d.env.HOME!, '.local', 'bin')
-    const shim = join(bin, 'harness')
-    expect(shim.startsWith(d.root + sep)).toBe(true)
-    const env = Object.entries(d.env).flatMap(([name, value]) => (value === undefined ? [] : [quoted(`${name}=${value}`)]))
-    mkdirSync(bin, { recursive: true })
-    writeFileSync(shim, `#!/bin/sh\ncd ${quoted(CLI_ROOT)} && exec /usr/bin/env -i ${env.join(' ')} ${[process.execPath, ...CLI_ENTRY].map(quoted).join(' ')} "$@"\n`, { mode: 0o700 })
-    const child = spawn(process.execPath, ['--import', 'tsx', 'e2e/harness/vscodeWindow.ts'], {
-      cwd: CLI_ROOT, env: { HOME: d.env.HOME, PATH: '/usr/bin:/bin' }, stdio: ['pipe', 'pipe', 'pipe'],
-    })
-    children.push(child)
-    const states: string[] = []
-    const shows: number[] = []
-    const raised: number[] = []
-    const scrolls: ('up' | 'down')[] = []
-    const keys: { key: 'up' | 'down'; pid: number }[] = []
-    const took: WindowState[] = []
-    const logs: string[] = []
-    const lines = (from: NodeJS.ReadableStream, take: (line: string) => void): void => {
-      let rest = ''
-      from.setEncoding('utf8')
-      from.on('data', (chunk: string) => {
-        const parts = (rest + chunk).split('\n')
-        rest = parts.pop()!
-        for (const part of parts) take(part)
-      })
-    }
-    lines(child.stdout, (line) => {
-      const said = JSON.parse(line) as {
-        state?: string; show?: number; raise?: true; scroll?: 'up' | 'down'; key?: 'up' | 'down'; pid?: number; took?: WindowState; log?: string
-      }
-      if (said.state !== undefined) states.push(said.state)
-      if (said.show !== undefined) shows.push(said.show)
-      if (said.raise) raised.push(shows.length)
-      if (said.scroll !== undefined) scrolls.push(said.scroll)
-      if (said.key !== undefined) keys.push({ key: said.key, pid: said.pid! })
-      if (said.took !== undefined) took.push(said.took)
-      if (said.log !== undefined) logs.push(said.log)
-    })
-    lines(child.stderr, (line) => logs.push(line))
-    let exited: { code: number | null } | undefined
-    child.once('close', (code) => { exited = { code } })
-    onTestFailed(() => { console.log(`---- the window's states\n${states.join('\n')}\n---- its shows\n${shows.join('\n')}\n---- its raises, after so many shows\n${raised.join(' ')}\n---- its scrolls\n${scrolls.join(' ')}\n---- its page keys\n${keys.map(({ key, pid }) => `${key} ${pid}`).join(' ')}\n---- its log\n${logs.join('\n')}`) })
-    return {
-      states, shows, raised, scrolls, keys, took, logs,
-      set: (state) => { child.stdin.write(`${JSON.stringify(state)}\n`) },
-      stop: async () => {
-        child.stdin.end()
-        return (await until('the window to exit', () => exited, 10_000, 50)).code
-      },
-    }
   }
 
   /** The daemon's lines that hold any of [words], each from its tag on. */
@@ -232,7 +138,7 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
    * A and B in VS Code's terminals, and W in Ghostty, so that Ghostty's ring tells Ghostty is in front: VS Code's ring is
    * shown, with both. Then the window's loop connects and reports both shells, A's active.
    */
-  const twoTerminals = async (d: IsolatedDaemon, dial: FakeDial): Promise<{ a: Outside; b: Outside; window: Window }> => {
+  const twoTerminals = async (d: IsolatedDaemon, dial: FakeDial): Promise<{ a: Outside; b: Outside; window: EditorWindow }> => {
     const a = await inVscode(d, 'a')
     const b = await inVscode(d, 'b')
     const w = new InOrca(d, 'w', children, { TERM_PROGRAM: 'ghostty' })
@@ -242,7 +148,7 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
       && (m.apps as Array<{ id: string; count: number }>).some((app) => app.id === 'ghostty' && app.count === 1), 45_000, 'VS Code 2 and Ghostty 1')
     for (const agent of [a, b]) expect(agent.shellPid).not.toBe(agent.pid)
 
-    const window = vscodeWindow(d)
+    const window = startEditorWindow(d, children)
     window.set({ terminals: [a.shellPid!, b.shellPid!], active: a.shellPid!, focused: true })
     await until('the window connected', () => window.states.at(-1) === 'connected', 60_000)
     await said(d, '[devices] vscode stream · open · windows 1')
@@ -325,7 +231,7 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
   })
 
   /** The window's minute lines' counts of scroll lines and of lines dropped, summed: a stroke may fall either side of a minute. */
-  const scrollCounts = (window: Window): { scrollLines: number; dropped: number } => {
+  const scrollCounts = (window: EditorWindow): { scrollLines: number; dropped: number } => {
     let scrollLines = 0
     let dropped = 0
     for (const line of window.logs) {
@@ -485,7 +391,7 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
     await ring(dial, 'cursor', 0)
 
     // 2. The window holds A's terminal, active.
-    const window = vscodeWindow(d)
+    const window = startEditorWindow(d, children)
     window.set({ terminals: [a.shellPid!], active: a.shellPid!, focused: true })
     await until('the window connected', () => window.states.at(-1) === 'connected', 60_000)
     await said(d, '[devices] vscode stream · open · windows 1')

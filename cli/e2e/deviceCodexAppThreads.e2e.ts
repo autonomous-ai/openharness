@@ -4,24 +4,35 @@
  * written in the daemon's home (src/testing/codexAppFixture.ts) is what the ChatGPT app keeps, and a fake dial on the desk
  * lists its threads, idle, in the app's sidebar's order, and taps one open by the app's link.
  *
- * The real ChatGPT app, `~/.codex`, /Applications and `/usr/bin/open` are never touched: the Codex home is a fixture in
- * the daemon's throwaway home and the app a fake Info.plist in its `~/Applications`, both checked to be inside its root
- * before it starts; /Applications is a folder of the root (HARNESS_APPLICATIONS_DIR, harness/daemon.ts) that holds no
- * app; and `open` is the harness's fake (HARNESS_OPEN_BIN), which only records its arguments. No backend.
+ * macOS and Linux. The real ChatGPT app, `~/.codex`, /Applications, /usr/lib, `/usr/bin/open` and `xdg-open` are never
+ * touched: the Codex home is a fixture in the daemon's throwaway home; the app is a fake Info.plist in its
+ * `~/Applications` on macOS, and on Linux a file in a folder of the root that stands in for /usr/lib, as one stands in
+ * for /Applications on macOS and holds no app there (HARNESS_APPLICATIONS_DIR, harness/daemon.ts); all are checked to be
+ * inside its root before it starts. `open`, and on Linux `xdg-open`, is the harness's fake (HARNESS_OPEN_BIN), which
+ * only records its arguments, and on Linux the `codex` scheme's app is named by a fake `xdg-mime` (harness/schemeApps.ts).
+ * No backend.
  */
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
-import { isAbsolute, join, relative } from 'node:path'
+import { dirname, isAbsolute, join, relative } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
+import { chatGptPlaces } from '../src/cable/hosts/appPlaces.js'
 import { observedAgentId } from '../src/cable/hosts/observed.js'
 import { NEVER_READ, codexAppFixture } from '../src/testing/codexAppFixture.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
+import { writeSchemeApps } from './harness/schemeApps.js'
 
 /** What the round dial's firmware says in its greeting: it holds one app's ring (docs/specs/2026-11-14-dial-app-filter.md). */
 const FILTER = { appFilter: 'v1' }
 const CODEX_APP = 'com.openai.codex'
+const LINUX = process.platform === 'linux'
+/** A tap's open: by the app's bundle on macOS; on Linux the link alone, as `xdg-open` takes it. */
+const opened = (thread: string): string[] => {
+  const url = `codex://threads/${thread}`
+  return LINUX ? [url] : ['-b', CODEX_APP, url]
+}
 /** Every line the source says: fixed words, counts and a failure's kind, never a name, folder, path or id. */
 const LINE = /^\[codex-app\] (watch · (on|none)|listed · \d+ threads · \d+ in projects|read · \d+ ms · \d+ rows · \d+ skipped|read · failed · [A-Za-z][A-Za-z0-9_$]*( [A-Z][A-Z0-9_]+)?)$/
 /** The app's bundle as the devices read it (`plutil`): its id and nothing else of the app. */
@@ -59,7 +70,7 @@ const sourceLines = (d: IsolatedDaemon): string[] =>
   d.log().split('\n').filter((line) => line.includes('[codex-app]')).map((line) => line.slice(line.indexOf('[codex-app]')))
 const inside = (root: string, path: string): boolean => isAbsolute(path) && !relative(root, path).startsWith('..')
 
-describe.skipIf(process.platform !== 'darwin')("the ChatGPT app's threads on the dial, from a fixture ~/.codex", () => {
+describe.skipIf(process.platform === 'win32')("the ChatGPT app's threads on the dial, from a fixture ~/.codex", () => {
   let daemon: IsolatedDaemon | undefined
   let desk: Desk | undefined
   afterEach(async () => {
@@ -72,14 +83,21 @@ describe.skipIf(process.platform !== 'darwin')("the ChatGPT app's threads on the
   it("lists them idle in the sidebar's order, a tap opens one in the app, and an archive or a newer time is followed", async () => {
     const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false' } })
     daemon = d
-    // Before anything runs: its open, its /Applications and its home, and so the app and the Codex home it reads, are
-    // the root's; and its /Applications holds no ChatGPT app, so only the home's fake is found.
+    // Before anything runs: its open, its /Applications (or /usr/lib) and its home, and so the app and the Codex home it
+    // reads, are the root's; and on macOS its /Applications holds no ChatGPT app, so only the home's fake is found.
     const apps = d.env.HARNESS_APPLICATIONS_DIR ?? ''
     for (const path of [d.env.HARNESS_OPEN_BIN ?? '', apps, d.env.HOME ?? '']) expect(inside(d.root, path), path).toBe(true)
-    expect(existsSync(join(apps, 'ChatGPT.app')), apps).toBe(false)
-    const contents = join(d.env.HOME!, 'Applications', 'ChatGPT.app', 'Contents')
-    mkdirSync(contents, { recursive: true })
-    writeFileSync(join(contents, 'Info.plist'), INFO_PLIST)
+    if (LINUX) {
+      const [program] = chatGptPlaces('linux', apps, d.env.HOME!)
+      expect(inside(d.root, program), program).toBe(true)
+      mkdirSync(dirname(program), { recursive: true })
+      writeFileSync(program, '')
+    } else {
+      expect(existsSync(join(apps, 'ChatGPT.app')), apps).toBe(false)
+      const contents = join(d.env.HOME!, 'Applications', 'ChatGPT.app', 'Contents')
+      mkdirSync(contents, { recursive: true })
+      writeFileSync(join(contents, 'Info.plist'), INFO_PLIST)
+    }
     // The app's Codex home, not the CODEX_HOME Harness runs Codex under (`<root>/codex`).
     const home = join(d.env.HOME!, '.codex')
     expect(inside(d.root, home), home).toBe(true)
@@ -106,6 +124,8 @@ describe.skipIf(process.platform !== 'darwin')("the ChatGPT app's threads on the
     const file = join(d.root, 'dials.json')
     d.env.HARNESSD_TEST_DIAL_PORT = file
     writeFileSync(file, '[]')
+    // Both apps' links have their app, as on a desktop with both installed.
+    if (LINUX) writeSchemeApps(d, { claude: 'com.anthropic.Claude.desktop', codex: 'chatgpt.desktop' })
     desk = new Desk(file)
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-200).join('\n')}`) })
     await d.start()
@@ -125,7 +145,7 @@ describe.skipIf(process.platform !== 'darwin')("the ChatGPT app's threads on the
     for (const id of [p1, p2, r1, r2, r3]) dial.send({ t: 'focus', agentId: agent(id) })
     dial.send({ t: 'agent.open', agentId: agent(r1) })
     await until("the tap's open", () => d.opens().length > 0, 30_000, 50)
-    expect(d.opens()).toEqual([['-b', CODEX_APP, `codex://threads/${r1}`]])
+    expect(d.opens()).toEqual([opened(r1)])
 
     // 4. Archived in the app: its row goes.
     let since = dial.messages.length
@@ -153,6 +173,6 @@ describe.skipIf(process.platform !== 'darwin')("the ChatGPT app's threads on the
     // A thread Codex gave no name is named by its folder's last part: the log holds that name no more than the folder.
     const names = threads.map((id) => folder(id).slice('/work/'.length))
     for (const secret of [NEVER_READ, 'Fixture Named', ...threads, ...threads.map(folder), ...names]) expect(log).not.toContain(secret)
-    expect(d.opens()).toEqual([['-b', CODEX_APP, `codex://threads/${r1}`]])
+    expect(d.opens()).toEqual([opened(r1)])
   })
 })

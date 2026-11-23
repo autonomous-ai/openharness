@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { INSTALL_COMMAND, INSTALL_URL } from "./installCommand";
+import nextConfig from "../../next.config.js";
+import { DEVICE_INSTALL_COMMAND, DEVICE_INSTALL_URL, INSTALL_COMMAND, INSTALL_URL } from "./installCommand";
 
 /**
  * Nothing pinned this before: ConnectComputer.spec only checked the copy button and connect/page.spec
@@ -14,5 +15,21 @@ describe("install command", () => {
 
   it("is the documented one-liner, verbatim", () => {
     expect(INSTALL_COMMAND).toBe("curl -fsSL https://harness.autonomous.ai/install.sh | bash");
+  });
+});
+
+describe("Harness Device install command", () => {
+  it("the Harness Device line is the documented one, verbatim", () => {
+    expect(DEVICE_INSTALL_COMMAND).toBe("curl -fsSL https://harness.autonomous.ai/device/install.sh | bash");
+  });
+
+  // Served in place, never redirected: the home page's guard (scripts/home-redirect.spec.ts) allows no /device/... redirect.
+  it("its URL is the one next.config serves from the CDN, before any page", async () => {
+    const path = new URL(DEVICE_INSTALL_URL).pathname;
+    expect((await nextConfig.rewrites()).beforeFiles).toContainEqual({
+      source: path,
+      destination: "https://cdn.autonomous.ai/harness/device/install.sh",
+    });
+    expect((await nextConfig.redirects()).map((r) => r.source)).not.toContain(path);
   });
 });

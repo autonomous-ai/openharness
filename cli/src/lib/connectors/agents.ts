@@ -15,6 +15,7 @@ import { delimiter, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { defaultCodexHome, listCodexProfiles } from '../codexProfiles.js'
 import { errorKind } from '../log.js'
 import { managedNodePath } from '../nodeRuntime.js'
+import { ownProcessRuns } from '../ownProcess.js'
 import { atomicWriteFile } from '../secureState.js'
 import { MCP_SHIM_SOURCE } from './mcpShimSource.js'
 import { CODE, locked, writePrivate, type Store } from './store.js'
@@ -118,14 +119,6 @@ export function bridgeSocketPath(vault: Store, platform: NodeJS.Platform = proce
 /** Where the bridge records its pipe on Windows (bridge.ts `serveBridgePipe`): the shim and Harness's own route read it. */
 export function bridgePipeRecord(vault: Store): string {
   return join(vault.root, BRIDGE_PIPE_FILE)
-}
-
-/**
- * Whether this account's process [pid] runs. The bridge is this account's, so a pid that answers EPERM is another account's
- * process, one that took the pid since the bridge exited and could have made a pipe of its name: no bridge.
- */
-function ownProcessRuns(pid: number): boolean {
-  try { process.kill(pid, 0); return true } catch { return false }
 }
 
 /**

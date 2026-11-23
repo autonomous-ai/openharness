@@ -12,7 +12,6 @@ import {
 import { env } from '../config/env.js'
 import { managedNodePath } from './nodeRuntime.js'
 import { placeNode } from '../testing/placeNode.js'
-import { firstStart } from '../testing/testNode.js'
 import { SpawnLockBusyError } from './daemonSpawnLock.js'
 import { PTY_PROTOCOL } from './ptyHost/protocol.js'
 import { versionsOnDisk } from './windows/cliVersions.js'
@@ -616,6 +615,29 @@ describe('the updater when things go wrong', () => {
     expect(readdirSync(dir)).toEqual([])
   })
 
+  it('a refused update names why in words and a kind', async () => {
+    // A canary that never ran: the spawn's message names the interpreter's path, which is under the person's home.
+    vi.resetModules()
+    vi.doMock('./nodeRuntime.js', async (original) => ({ ...await original<typeof import('./nodeRuntime.js')>(), managedNodePath: () => '/Users/sentinel/node' }))
+    try {
+      const { startSelfUpdater: startWithoutNode } = await import('./selfUpdate.js')
+      serve(Buffer.from('console.log("9.9.9")\n'))
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const errors: string[] = []
+      let poller: { stop(): void } | undefined
+      vi.spyOn(console, 'error').mockImplementation((...parts: unknown[]) => { errors.push(parts.map(String).join(' ')); poller?.stop() })
+      poller = startWithoutNode({
+        currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir: tempDir(), intervalMs: 10, onStaged: () => {},
+      })
+      await vi.waitFor(() => expect(errors).toHaveLength(1), { timeout: 5_000 })
+      expect(errors.join('\n')).not.toContain('sentinel')
+      expect(errors[0]).toBe('[update] 9.9.9 failed its canary (ENOENT) — not trying it again for 20 ms')
+    } finally {
+      vi.doUnmock('./nodeRuntime.js')
+      vi.resetModules()
+    }
+  })
+
   it('waits out a busy spawn lock with the build it already verified, and reports any other failure', async () => {
     let downloads = 0
     serve(Buffer.from('#!/usr/bin/env node\nconsole.log("9.9.9")\n'), () => { downloads++ })
@@ -772,10 +794,15 @@ describe('the canary\'s verdicts', () => {
     const dir = tempDir()
     expect(await runCanary(Buffer.from('console.log("9.9.9")\n'), dir, '9.9.9')).toEqual({ ok: true, ptyProtocol: 2 })
     expect(await runCanary(Buffer.from('console.log("loading…"); console.log("9.9.9")\n'), dir, '9.9.9')).toEqual({ ok: true, ptyProtocol: 2 })
-    expect(await runCanary(Buffer.from('console.log("9.9.8")\n'), dir, '9.9.9')).toEqual({ ok: false, problem: 'wrong-version', detail: 'it says it is 9.9.8' })
-    expect(await runCanary(Buffer.from(''), dir, '9.9.9')).toEqual({ ok: false, problem: 'wrong-version', detail: 'it says it is nothing' })
-    expect(await runCanary(Buffer.from('process.exit(3)\n'), dir, '9.9.9')).toEqual({ ok: false, problem: 'failed', detail: 'exit 3' })
-    expect(await runCanary(Buffer.from('process.kill(process.pid, "SIGKILL")\n'), dir)).toEqual({ ok: false, problem: 'failed', detail: 'signal SIGKILL' })
+    expect(await runCanary(Buffer.from('console.log("9.9.8")\n'), dir, '9.9.9')).toEqual({ ok: false, problem: 'wrong-version', ended: 'it says it is 9.9.8' })
+    expect(await runCanary(Buffer.from(''), dir, '9.9.9')).toEqual({ ok: false, problem: 'wrong-version', ended: 'it says it is nothing' })
+    expect(await runCanary(Buffer.from('console.log("1.2.3-beta.1+b7")\n'), dir, '9.9.9')).toEqual({ ok: false, problem: 'wrong-version', ended: 'it says it is 1.2.3-beta.1+b7' })
+    // A last line that is not a version is a line of the build's own output, which can name the person's folders.
+    expect(await runCanary(Buffer.from('console.log("loaded /Users/sentinel/x")\n'), dir, '9.9.9')).toEqual({ ok: false, problem: 'wrong-version', ended: 'it says it is text(24)' })
+    expect(await runCanary(Buffer.from('console.log(JSON.stringify({ version: "9.9.8 at /Users/sentinel", ptyProtocol: 2 }))\n'), dir, '9.9.9'))
+      .toEqual({ ok: false, problem: 'wrong-version', ended: 'it says it is text(24)' })
+    expect(await runCanary(Buffer.from('process.exit(3)\n'), dir, '9.9.9')).toEqual({ ok: false, problem: 'failed', ended: 'exit 3' })
+    expect(await runCanary(Buffer.from('process.kill(process.pid, "SIGKILL")\n'), dir)).toEqual({ ok: false, problem: 'failed', ended: 'signal SIGKILL' })
     expect(await canary(Buffer.from('console.log("anything")\n'), dir)).toBe(true)
     expect(await canary(Buffer.from('console.log("9.9.8")\n'), dir, '9.9.9')).toBe(false)
     const file = join(dir, 'not-a-folder')
@@ -797,15 +824,15 @@ describe('the canary\'s verdicts', () => {
 
   it('gives up on a build that does not answer in time, in seconds as in milliseconds', async () => {
     expect(await runCanary(Buffer.from('setInterval(() => {}, 1000)\n'), tempDir(), '9.9.9', 300))
-      .toEqual({ ok: false, problem: 'failed', detail: 'no answer within 300 ms' })
+      .toEqual({ ok: false, problem: 'failed', ended: 'no answer within 300 ms' })
     expect(await runCanary(Buffer.from('setInterval(() => {}, 1000)\n'), tempDir(), '9.9.9', 1_000))
-      .toEqual({ ok: false, problem: 'failed', detail: 'no answer within 1 s' })
+      .toEqual({ ok: false, problem: 'failed', ended: 'no answer within 1 s' })
   })
 
   it('kills a build that ignores the SIGTERM at its deadline, so the next check can run', async () => {
     const started = performance.now()
     const stubborn = Buffer.from("process.on('SIGTERM', () => {})\nsetInterval(() => {}, 1000)\n")
-    expect(await runCanary(stubborn, tempDir(), '9.9.9', 300)).toEqual({ ok: false, problem: 'failed', detail: 'no answer within 300 ms' })
+    expect(await runCanary(stubborn, tempDir(), '9.9.9', 300)).toEqual({ ok: false, problem: 'failed', ended: 'no answer within 300 ms' })
     // SIGTERM at 300 ms, ignored; SIGKILL two seconds on.
     expect(performance.now() - started).toBeLessThan(10_000)
   }, 20_000)
@@ -815,7 +842,7 @@ describe('the canary\'s verdicts', () => {
     vi.doMock('./nodeRuntime.js', () => ({ managedNodePath: () => '/nonexistent/node' }))
     try {
       const { runCanary: runWithoutNode } = await import('./selfUpdate.js')
-      expect(await runWithoutNode(Buffer.from('console.log(1)\n'), tempDir(), '1')).toMatchObject({ ok: false, problem: 'failed', detail: expect.stringContaining('ENOENT') })
+      expect(await runWithoutNode(Buffer.from('console.log(1)\n'), tempDir(), '1')).toMatchObject({ ok: false, problem: 'failed', ended: 'ENOENT' })
     } finally {
       vi.doUnmock('./nodeRuntime.js')
       vi.resetModules()
@@ -847,7 +874,7 @@ describe('the terminal host protocol a build needs (spec §5, the protocol rule)
     expect(await runCanary(Buffer.from('console.log(JSON.stringify({ version: "9.9.9" }))\n'), dir)).toEqual({ ok: true, ptyProtocol: 2 })
     // A G build says its protocol; its JSON version is the one checked.
     expect(await runCanary(build('9.9.9', 3), dir, '9.9.9')).toEqual({ ok: true, ptyProtocol: 3 })
-    expect(await runCanary(build('9.9.8', 3), dir, '9.9.9')).toEqual({ ok: false, problem: 'wrong-version', detail: 'it says it is 9.9.8' })
+    expect(await runCanary(build('9.9.8', 3), dir, '9.9.9')).toEqual({ ok: false, problem: 'wrong-version', ended: 'it says it is 9.9.8' })
     expect(readdirSync(dir), 'the canary cleans up after itself').toEqual([])
   })
 
@@ -1622,13 +1649,14 @@ describe('an update that moves the daemon to Node 24', { timeout: 20_000 }, () =
   const v24 = join(runtime, 'node-v24.22.2-test', 'bin', 'node')
   const newer = join(runtime, 'node-v24.23.0-test', 'bin', 'node')
   const note = (dir: string): Record<string, unknown> => JSON.parse(readFileSync(join(dir, 'update-pending.json'), 'utf8'))
-  // The managed Nodes the suite's own runtime folder holds (vitest.setup.ts): copies of this test's Node, made once for
-  // the describe and started once here. A fresh copy's first start is the slow one: 2 to 4 s on a loaded Mac against
+  // The managed Nodes the suite's own runtime folder holds (vitest.setup.ts), each started before any test runs it
+  // (testing/placeNode.ts): links of the run's Node, or, on a Node with libnode beside it, copies of their own, each
+  // started as it is placed. A fresh copy's first start is the slow one: 2 to 4 s on a loaded Mac against
   // 0.04 s after (2026-11-19). Copied before each test, it ran inside the tests' 10 s waits for a canary on it, and 1 to
   // 7 of them failed a run under load. The copies also timed out the hook at the default 10 s on a loaded CI runner
   // (2026-11-14, run 43603619102).
   beforeAll(() => {
-    for (const node of [v22, v24, newer]) { mkdirSync(dirname(node), { recursive: true }); placeNode(node); firstStart(node) }
+    for (const node of [v22, v24, newer]) placeNode(node)
   }, 60_000)
   afterAll(() => {
     for (const node of [v22, v24, newer]) rmSync(dirname(dirname(node)), { recursive: true, force: true })
@@ -1694,7 +1722,8 @@ console.log(process.execPath.includes('node-v24.') ? (named.includes('node-v24.'
     try {
       await vi.waitFor(() => expect(refused.mock.calls.flat().join('\n')).toContain('failed its canary'), { timeout: 10_000 })
     } finally { poller.stop() }
-    expect(refused.mock.calls.flat().join('\n')).toContain('failed its canary (it says it is on 24, current-node untouched)')
+    // The log says a canary's line that is not a version by its length alone: the three answers' lengths differ.
+    expect(refused.mock.calls.flat().join('\n')).toContain(`failed its canary (it says it is text(${'on 24, current-node untouched'.length}))`)
     // A refused build is tried again 40 ms on, so another check may have begun before the stop: none staged.
     expect([...new Set(events)]).toEqual([`ensure on ${v22}`])
     expect(managedNodePath()).toBe(v22)

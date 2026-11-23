@@ -71,7 +71,7 @@ export function forbiddenDirs(env: NodeJS.ProcessEnv, homes: (string | undefined
   const os = windows ? 'win32' : platform
   const harness = (home: string): string[] => [...harnessRoots(home, os), legacyHarnessHome(home, os)]
   const appData = windows ? [env.APPDATA, env.LOCALAPPDATA].filter((dir): dir is string => !!dir) : []
-  return [...new Set([connectorsDir(env), ...all.flatMap(home => [...names.map(dir => p.join(home, dir)), ...harness(home)]), ...appData, '/etc', '/proc', '/sys'])]
+  return [...new Set([connectorsDir(env, p, os), ...all.flatMap(home => [...names.map(dir => p.join(home, dir)), ...harness(home)]), ...appData, '/etc', '/proc', '/sys'])]
 }
 
 /**

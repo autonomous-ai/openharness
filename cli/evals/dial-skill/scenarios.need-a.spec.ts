@@ -1,9 +1,10 @@
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { loadScenarios, type Scenario } from './lib/scenarios.js'
+import { readDone, stage, unstage } from './lib/stage.js'
 
 const IDS = ['api-key-missing', 'board-unplugged', 'deploy-2fa-code', 'design-undecided', 'paid-plan-approval']
 
@@ -106,6 +107,20 @@ describe.each(IDS)('need scenario %s', (id) => {
     expect(exit.timedOut).toBe(false)
     expect(exit.output).toContain(s.check.expect)
     expect(exit.code).not.toBe(0)
+  })
+})
+
+describe('design-undecided', () => {
+  it('finds the cache undone on the staged repo, and done after the reference solution', async () => {
+    const s = scenario('design-undecided')
+    const st = stage(s, 'oracle', { skill: false })
+    try {
+      expect(await readDone(s, st)).toBe(false)
+      execFileSync('git', ['apply', join(s.dir, 'solution.patch')], { cwd: st.repo, env: st.env })
+      expect(await readDone(s, st)).toBe(true)
+    } finally {
+      unstage(st)
+    }
   })
 })
 

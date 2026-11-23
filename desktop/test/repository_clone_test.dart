@@ -534,6 +534,51 @@ void main() {
       expect(seen.map((names) => names.length), [1, 1]);
     });
   });
+
+  test("runs the resolver's git", () async {
+    final parent = await Directory(p.join(root.path, 'projects')).create();
+    // Absolute and missing: a bare `git` would run the real one instead.
+    final missing = p.join(root.path, 'no-git', 'git');
+    String noGit() => throw const ProcessException('git', [], 'not found', 2);
+    for (final program in [() => missing, noGit]) {
+      await expectLater(
+        RepositoryClone(program: program)
+            .run(GitHubRepository.parse('owner/project')!, parent.path),
+        throwsA(
+          isA<RepositoryCloneException>().having(
+            (error) => error.message,
+            'message',
+            'Git could not start. Install Git on this computer, then retry.',
+          ),
+        ),
+      );
+    }
+
+    final checkout = p.join(root.path, 'checkout');
+    for (final args in [
+      ['init', checkout],
+      [
+        '-C',
+        checkout,
+        'remote',
+        'add',
+        'origin',
+        'https://example.invalid/o/r.git',
+      ],
+    ]) {
+      expect((await Process.run('git', args)).exitCode, 0);
+    }
+    expect(
+      await RepositoryClone.readCheckoutOrigin(checkout),
+      'https://example.invalid/o/r.git',
+    );
+    for (final program in [() => missing, noGit]) {
+      expect(
+        await RepositoryClone.readCheckoutOrigin(checkout, program: program),
+        isNull,
+      );
+    }
+  });
 }
 
 class _FakeSshHosts implements SshHosts {

@@ -616,7 +616,9 @@ describe.skipIf(!DISKFULL)('an update on a disk that fills', () => {
     // room the core starts and the update simply stays up, which is right and is not this test (a slow macOS
     // runner, 2026-10-12).
     await until('the master to try the new bundle again for want of room', () => { fillVolume(volume); return count(machine.log().slice(from), 'had no room to start') >= 2 }, 150_000, 100)
-    expect(machine.log().slice(from)).toMatch(/could not start on the new bundle for want of room on the disk \([^\n]*ENOSPC/)
+    // The master names the core's reason by its length alone; the core's own line names its code.
+    expect(machine.log().slice(from)).toMatch(/could not start on the new bundle for want of room on the disk \(text\(\d+\)\)/)
+    expect(machine.log().slice(from)).toMatch(/Failed to start adapter: [^\n]*ENOSPC/)
     expect(machine.log().slice(from)).not.toContain('the updated core failed')
     expect(IsolatedDaemon.alive(master), 'the master outlives a full disk in the middle of an update').toBe(true)
     machine.holds('44.0.4')

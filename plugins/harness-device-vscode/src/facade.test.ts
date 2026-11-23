@@ -147,7 +147,28 @@ describe('windowFacade', () => {
     expect(other.sent).toEqual([])
   })
 
-  it('nothing but pageKey writes to a terminal', async () => {
+  it('type sends the words with no newline to the terminal with that shell; false for a pid no terminal has', async () => {
+    const w = watched()
+    const shell = w.vscode.open()
+    shell.resolve(101)
+    const other = w.vscode.open()
+    other.resolve(202)
+    await flush()
+    expect([w.facade.type(101, 'Eval words for bravo.'), w.facade.type(303, 'x')]).toEqual([true, false])
+    expect(shell.sent).toEqual([['Eval words for bravo.', false]])
+    expect(other.sent).toEqual([])
+  })
+
+  it('enter sends a lone CR with no newline to the terminal with that shell; false for a pid no terminal has', async () => {
+    const w = watched()
+    const shell = w.vscode.open()
+    shell.resolve(101)
+    await flush()
+    expect([w.facade.enter(101), w.facade.enter(303)]).toEqual([true, false])
+    expect(shell.sent).toEqual([['\r', false]])
+  })
+
+  it('nothing but pageKey, type and enter writes to a terminal', async () => {
     const w = watched()
     const shell = w.vscode.open()
     shell.resolve(101)

@@ -735,6 +735,25 @@ void main() {
       throwsA(isA<RepositoryCloneException>()),
     );
   });
+
+  test("runs the resolver's git", () async {
+    expect((await runLocalGit(repo, ['rev-parse', '--git-dir'])).code, 0);
+    // Absolute and missing: a bare `git` would run the real one instead.
+    final missing = p.join(root.path, 'no-git', 'git');
+    String noGit() => throw const ProcessException('git', [], 'not found', 2);
+    for (final program in [() => missing, noGit]) {
+      await expectLater(
+        runLocalGit(repo, ['rev-parse', '--git-dir'], program: program),
+        throwsA(
+          isA<RepositoryCloneException>().having(
+            (error) => error.message,
+            'message',
+            'Git could not start. Install Git, then retry.',
+          ),
+        ),
+      );
+    }
+  });
 }
 
 /// Always the first word of each list.

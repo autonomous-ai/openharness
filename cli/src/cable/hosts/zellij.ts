@@ -8,7 +8,7 @@
  * holds it (createZellijOuter), as tmux's does. zellij is found as the core finds tmux (zellijFinder): the master's PATH
  * may hold none.
  */
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { binaryOnPath } from '../../lib/binaryOnPath.js'
 import { binaryFinder } from '../../lib/binaryFinder.js'
 import { resolveViaLoginShell, tmuxInstallDirectories, type TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
@@ -16,7 +16,7 @@ import type { HostAdapter, Pane, Place } from './adapter.js'
 import { CONTROL, MAX_TEXT, RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 import type { OuterLookup } from './outer.js'
 import { parentChain, readPtyOwner, scannedApps, type ProcessName } from './scannedApp.js'
-import { OUTER_EVERY_MS, PID } from './tmux.js'
+import { heldAnswers, PID } from './tmux.js'
 
 // Zellij takes spaces and `:` in a session name too; this form keeps a name no argument parser reads as a flag, and
 // lets `:` end the session in a pane id.
@@ -48,8 +48,10 @@ const installed = (env: NodeJS.ProcessEnv): string | undefined =>
 export function zellijFinder(env: NodeJS.ProcessEnv = process.env): () => Promise<TmuxPathOutcome> {
   return binaryFinder(async () => {
     if (binaryOnPath('zellij', env)) return { state: 'present' }
-    const path = (await resolveViaLoginShell('zellij')) ?? installed(env)
-    return path ? { state: 'adopted', path, from: dirname(path) } : { state: 'absent', reason: 'zellij was not found' }
+    const viaShell = await resolveViaLoginShell('zellij')
+    if (viaShell) return { state: 'adopted', path: viaShell, from: 'login shell' }
+    const atInstall = installed(env)
+    return atInstall ? { state: 'adopted', path: atInstall, from: 'standard install location' } : { state: 'absent', reason: 'zellij was not found' }
   }, () => binaryOnPath('zellij', env) || installed(env) !== undefined)
 }
 
@@ -96,7 +98,8 @@ export function createZellijAdapter(deps: ZellijDeps): HostAdapter & Required<Pi
       // herdr, Rex, tmux, a terminal or an editor started in a Zellij pane keeps its variables, and that pane shows
       // whichever of their panes is in front, or a shell that runs what is typed: only a pane Zellij's server made the
       // agent's terminal for takes words. Any other only focuses.
-      return { adapter: 'zellij', id: `${place.ptyOwner === 'zellij' ? '' : HELD}${at.session}:${at.id}` }
+      const paneId = `${at.session}:${at.id}`
+      return place.ptyOwner === 'zellij' ? { adapter: 'zellij', id: paneId } : { adapter: 'zellij', id: `${HELD}${paneId}`, held: true }
     },
     // An agent in a Zellij pane has a zellij on this machine: whether it is found is asked at the verb, and a tap that
     // finds none brings its app forward, as tmux's does.
@@ -157,7 +160,7 @@ type NotRead = 'zellij' | 'processes' | 'clients' | 'app'
 export function createZellijOuter(deps: ZellijOuterDeps): OuterLookup {
   // By session and caller, as tmux's: a lookup in flight is shared past its 5 s, so a zellij that hangs to its timeout
   // runs no second one.
-  const asked = new Map<string, { at: number; answer: Promise<ClientPlace>; settled: boolean }>()
+  const asked = heldAnswers<ClientPlace>(deps.now)
 
   /** `{}` when the caller is on no terminal a Zellij server made, or the session's one client is not the machine's one
    *  or in no listed app; the step that could not be read, when one could not. */
@@ -200,15 +203,6 @@ export function createZellijOuter(deps: ZellijOuterDeps): OuterLookup {
   return (hints, pid) => {
     const session = hinted(deps.platform, hints)?.session
     if (!session || !PID.test(String(pid))) return undefined
-    const now = deps.now()
-    // Only sessions asked in the last 5 s, or still in flight, are kept.
-    for (const [key, ask] of asked) if (ask.settled && now - ask.at >= OUTER_EVERY_MS) asked.delete(key)
-    const key = `${session}:${pid}`
-    const last = asked.get(key)
-    if (last) return last.answer
-    const ask = { at: now, answer: lookUp(session, pid), settled: false }
-    void ask.answer.then(() => { ask.settled = true })
-    asked.set(key, ask)
-    return ask.answer
+    return asked(`${session}:${pid}`, () => lookUp(session, pid))
   }
 }

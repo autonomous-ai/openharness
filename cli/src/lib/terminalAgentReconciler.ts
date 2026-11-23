@@ -15,6 +15,9 @@ import { errorKind } from './log.js'
 
 const MISS_LIMIT = 2
 
+/** Why the reconciler retires an agent: fixed words, so the core's discovery lines may print it as it is. */
+export type AbsenceReason = `${'engine process' | 'terminal runtime'} absent after ${number} confirmed scans`
+
 /**
  * How long one reconcile pass may take before the core stops waiting on it.
  *
@@ -48,8 +51,8 @@ export interface TerminalAgentReconcilerDeps {
   backendOrder: readonly string[]
   onDiscovered: (agent: DiscoveredTerminalAgent) => void | Promise<void>
   onObserved: (agent: DiscoveredTerminalAgent, current: RegisteredSession) => void | Promise<void>
-  onDormant: (current: RegisteredSession, reason: string) => void | Promise<void>
-  onRemoved: (current: RegisteredSession, reason: string) => void | Promise<void>
+  onDormant: (current: RegisteredSession, reason: AbsenceReason) => void | Promise<void>
+  onRemoved: (current: RegisteredSession, reason: AbsenceReason) => void | Promise<void>
   onTerminalAvailability?: (current: RegisteredSession, available: boolean) => void | Promise<void>
   onReconciled?: (agents: readonly DiscoveredTerminalAgent[]) => void
   onProbeStatus?: (status: { ready: true; error: string | null }) => void
@@ -277,6 +280,13 @@ export class TerminalAgentReconciler {
   private probeGivenUp = false
   private get passDeadlineMs(): number { return this.deps.passDeadlineMs ?? RECONCILE_PASS_DEADLINE_MS }
 
+  /** Passes that looked at the agents: their probe answered with the process table, and what it saw was applied and
+   *  saved. A given-up probe or one with no process table looked at none, and one whose batch storage refused kept
+   *  nothing of its look. A check that something did not happen waits for two more than it read after its change: at
+   *  least one whole pass then began after the change and looked. */
+  get passes(): number { return this.completedPasses }
+  private completedPasses = 0
+
   private async drain(): Promise<void> {
     while (this.pending) {
       this.pending = false
@@ -348,11 +358,14 @@ export class TerminalAgentReconciler {
       target.result.state === 'available'
         ? target.result.roots.map((root) => terminalPlacementKey(root.runtime))
         : []))
-    const probeError = !probe.processTableAvailable
-      ? 'process table unavailable'
-      : probe.targets.length > 0 && availableTargets.length === 0
-        ? probe.targets.map((target) => `${target.instanceId}: ${target.result.state === 'available' ? 'available' : target.result.reason}`).join('; ')
-        : null
+    // Why the probe confirmed nothing, in kinds only (`ownershipFailure` is an `errorKind`): it reaches the log.
+    const probeReason = probe.ownershipFailure
+      ? `engine executables could not be resolved (${probe.ownershipFailure})`
+      : !probe.processTableAvailable
+        ? 'process table unavailable'
+        : probe.targets.length > 0 && availableTargets.length === 0
+          ? probe.targets.map((target) => `${target.instanceId}: ${target.result.state === 'available' ? 'available' : target.result.reason}`).join('; ')
+          : null
     // Terminal placement liveness does not depend on finding an engine process. This is what keeps a
     // retained trust/setup/shell pane visible after restart, including when `ps` itself is unavailable.
     const markVerifiedPlacements = async (): Promise<void> => {
@@ -365,8 +378,8 @@ export class TerminalAgentReconciler {
     if (this.deps.transaction) await this.batch(this.deps.transaction(markVerifiedPlacements))
     else await markVerifiedPlacements()
     if (!probe.processTableAvailable) {
-      console.warn('[discovery] process table unavailable; keeping existing terminal agents')
-      this.deps.onProbeStatus?.({ ready: true, error: probeError })
+      console.warn(`[discovery] ${probeReason}; keeping existing terminal agents`)
+      this.deps.onProbeStatus?.({ ready: true, error: probeReason })
       return
     }
     this.hints.clear()
@@ -540,7 +553,8 @@ export class TerminalAgentReconciler {
     else await apply()
     // Readiness is published last: clients must never observe ready=true between the inventory read and
     // the authoritative availability/registry update.
-    this.deps.onProbeStatus?.({ ready: true, error: probeError })
+    this.deps.onProbeStatus?.({ ready: true, error: probeReason })
     this.deps.onReconciled?.(probe.agents.filter(agent => !this.routeHeld(agent.runtimes, probeSeq)))
+    if (!this.refused) this.completedPasses++
   }
 }

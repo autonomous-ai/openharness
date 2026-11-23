@@ -1,8 +1,8 @@
 /**
  * An X11 desktop of the test's own (docs/plans/2026-11-19-dial-linux-design.md § 2.3), never the developer's: an Xvfb on
  * the lowest display no other server holds, its cookie in the daemon's throwaway home, openbox as its EWMH window
- * manager, and xterms running the suite's hooked fake Claude Code. Each program leads a process group of its own, ended
- * by the worker's reaper should the worker go before `stop`.
+ * manager, and xterms running the suite's hooked fake Claude Code or a command of the test's. Each program leads a
+ * process group of its own, ended by the worker's reaper should the worker go before `stop`.
  */
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
@@ -83,13 +83,15 @@ export class X11Desk {
     }
   }
 
-  /** The suite's fake Claude Code in an xterm of its own, in <projectsDir>/<folder>: the engine's pid and the window's id. */
-  async terminal(folder: string): Promise<{ pid: number; window: number }> {
+  /** [argv] (the suite's fake Claude Code by default) under [env] (the daemon's), in an xterm of its own, in
+   *  <projectsDir>/<folder>: its process's pid and the window's id. */
+  async terminal(folder: string, argv: string[] = [this.d.env.CLAUDE_PATH!], env: NodeJS.ProcessEnv = this.d.env):
+    Promise<{ pid: number; window: number }> {
     const cwd = join(this.d.projectsDir, folder)
     await mkdir(cwd, { recursive: true })
-    const xterm = this.own(spawn(BIN.xterm!, ['-e', this.d.env.CLAUDE_PATH!], { cwd, env: this.env, stdio: 'ignore', ...ownProcessGroup() }))
-    // xterm runs the engine as its own child.
-    const pid = await until('the fake Claude Code in its xterm', async () => {
+    const xterm = this.own(spawn(BIN.xterm!, ['-e', ...argv], { cwd, env: { ...env, DISPLAY: this.display }, stdio: 'ignore', ...ownProcessGroup() }))
+    // xterm runs the command as its own child.
+    const pid = await until(`${argv[0]} in its xterm`, async () => {
       const { stdout } = await run('pgrep', ['-P', String(xterm.pid)]).catch(() => ({ stdout: '' }))
       return Number(stdout.trim().split('\n')[0]) || null
     }, 20_000, 100)

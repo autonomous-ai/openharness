@@ -2,6 +2,7 @@
 
 import type { VisitorPlatform } from "@/lib/desktopPlatform";
 import { DEVICE_FALLBACK_URL, OS_NAME, pickBuild, type DeviceBuild, type DeviceOs } from "@/lib/deviceRelease";
+import { DEVICE_INSTALL_COMMAND } from "@/lib/installCommand";
 import { useVisitorPlatform } from "@/lib/useVisitorPlatform";
 import styles from "./page.module.css";
 
@@ -33,6 +34,14 @@ function Offer({ build, version }: { build: DeviceBuild; version: string | null 
       For <b>{build.label}</b> · version {version}
       {build.os === "macos" && " · macOS 13 or later"}
     </DownloadButton>
+  );
+}
+
+function InstallLine() {
+  return (
+    <span className={styles.meta}>
+      Or in a terminal: <code className={styles.kbd}>{DEVICE_INSTALL_COMMAND}</code>
+    </span>
   );
 }
 
@@ -70,21 +79,26 @@ export function DeviceDownload({ builds, version }: { builds: readonly DeviceBui
     );
   }
 
+  const os = visitorOs(platform);
+  // The script installs the AppImage, so the line shows only once the live release has one.
+  const installLine = os === "linux" && builds.some((build) => build.os === "linux" && build.pkg === "appimage");
+
   const pick = pickBuild(builds, platform);
   if (pick) {
     return (
       <div className={styles.dl}>
         <Offer build={pick} version={version} />
+        {installLine && <InstallLine />}
         <Others builds={builds.filter((build) => build !== pick)} />
       </div>
     );
   }
 
-  const os = visitorOs(platform);
   if (os === null || builds.some((build) => build.os === os)) {
     // This OS has builds, but which one runs here depends on a CPU the browser did not give: no guess.
     return (
       <div className={styles.dl}>
+        {installLine && <InstallLine />}
         <Others builds={builds} />
       </div>
     );

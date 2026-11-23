@@ -1,9 +1,32 @@
-import { chmodSync } from 'fs'
-import { appendFile, mkdtemp, open, rm, writeFile } from 'fs/promises'
+import { chmodSync, realpathSync } from 'fs'
+import { appendFile, mkdir, mkdtemp, open, rm, symlink, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { PathToWatchDeps } from '../lib/pathToWatch.js'
 import { Watcher, type HistoryEvent, type LineEvent, type RewrittenEvent } from './watcher.js'
+
+/** Each path chokidar is given to watch, its own walk up to a missing file's folder too. */
+const added = vi.hoisted(() => [] as string[])
+vi.mock('chokidar', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('chokidar')>()
+  const watch = ((...args: Parameters<typeof actual.watch>) => {
+    const watcher = actual.watch(...args)
+    const add = watcher.add.bind(watcher)
+    watcher.add = (paths, ...rest) => {
+      added.push(...[paths].flat())
+      return add(paths, ...rest)
+    }
+    return watcher
+  }) as typeof actual.watch
+  return { ...actual, watch, default: { ...actual.default, watch } }
+})
+/** This computer, unless a case says Windows. */
+const toWatch = vi.hoisted(() => ({ deps: undefined as PathToWatchDeps | undefined }))
+vi.mock('../lib/pathToWatch.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/pathToWatch.js')>()
+  return { pathToWatch: (path: string) => actual.pathToWatch(path, toWatch.deps) }
+})
 
 const cleanup: string[] = []
 
@@ -17,6 +40,8 @@ const until = async (what: string, test: () => boolean, ms = 10_000): Promise<vo
 }
 
 afterEach(async () => {
+  toWatch.deps = undefined
+  added.length = 0
   await Promise.all(cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true })))
 })
 
@@ -727,3 +752,42 @@ describe('Watcher, reading a backlog', () => {
   })
 })
 
+describe('Watcher, on Windows', () => {
+  // libuv aborts the core at the first change in a folder watched by an 8.3 short name (lib/pathToWatch.ts), and
+  // chokidar watches the folder of a transcript not there yet. A short name is another name of the same folder, as a
+  // link is here.
+  it('watches a transcript by its long name, and tails it as the path it was given', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'machine-watcher-'))
+    cleanup.push(dir)
+    const long = join(dir, 'hxdialtest')
+    const short = join(dir, 'HXDIAL~1')
+    await mkdir(long)
+    await symlink(long, short)
+    toWatch.deps = { platform: 'win32', realpath: (path) => realpathSync.native(path), log: () => {} }
+    const watcher = new Watcher()
+    const lines: LineEvent[] = []
+    watcher.on('line', (event: LineEvent) => lines.push(event))
+    watcher.start()
+    await watcher.addSession({ sessionId: 's1', engine: 'codex', transcriptPath: join(short, 'session.jsonl') })
+
+    // Written until heard, not at once: chokidar watches the folder of a file not there yet a moment after the add, with
+    // no read of it first, so a file made before that is told only at the folder's next change. The tail starts at the
+    // file's first byte, so every line written is told once, whichever change is heard first.
+    const written: string[] = []
+    const write = async (): Promise<void> => {
+      written.push(`{"n":${written.length + 1}}`)
+      await appendFile(join(long, 'session.jsonl'), `${written.at(-1)}\n`)
+    }
+    await vi.waitFor(async () => {
+      await write()
+      expect(lines.length).toBeGreaterThan(0)
+    }, { timeout: 10_000, interval: 200 })
+    await write()
+    await until('the changed file\'s line', () => lines.at(-1)?.text === written.at(-1))
+
+    expect(added.filter((path) => path.includes('HXDIAL~1'))).toEqual([])
+    expect(added).toContain(join(realpathSync.native(long), 'session.jsonl'))
+    expect(lines.map((line) => [line.sessionId, line.text])).toEqual(written.map((text) => ['s1', text]))
+    await watcher.stop()
+  })
+})

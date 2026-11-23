@@ -3,12 +3,11 @@
 // It is this computer's, so it lives in the daemon's data folder beside dial-notify.json. One writer: the devices'
 // process.
 import { closeSync, openSync, readSync } from 'node:fs'
+import { NOTICE_LINE_MAX_BYTES } from '../lib/dialNotice.js'
 import { errorKind } from '../lib/log.js'
 import { atomicWriteFile, jsonObject, readState } from '../lib/secureState.js'
 import { SHOWN_ONLY_PREFIX } from './cableSession.js'
-import {
-  NOTICE_KEY_MAX_CHARS, NOTICE_KEYS_MAX, NOTICE_LINE_MAX_BYTES, NOTICES_PENDING_MAX, type StoredNotice,
-} from './notices.js'
+import { NOTICE_KEY_MAX_CHARS, NOTICE_KEYS_MAX, NOTICES_PENDING_MAX, type StoredNotice } from './notices.js'
 
 export const NOTICES_FILE = 'dial-notices.json'
 /** Twenty cards are about 10 KB; anything much larger is not ours, and reading it whole would cost the start. */

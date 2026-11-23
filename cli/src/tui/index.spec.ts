@@ -136,6 +136,13 @@ describe('harness tui launcher', () => {
     expect(hn[2]?.env?.ADAPTER_DATA_DIR).toBe(mine)
   })
 
+  it('a relative data folder the person set is the home\'s, as config/env.ts reads it', async () => {
+    vi.stubEnv('ADAPTER_DATA_DIR', 'my-data')
+    vi.mocked(spawnSync).mockReturnValueOnce({ ...ok, status: 1 })
+    await expect(tuiCommand(['-L', 'hnr19fix-launcher', '--port', '19419'], { port: 19418 })).resolves.toBe(0)
+    expect(localDaemonStatus).toHaveBeenCalledWith(join(home, 'my-data'), 19419)
+  })
+
   it('hn still finds the daemon in the default folder', async () => {
     vi.stubEnv('ADAPTER_DATA_DIR', undefined)
     await expect(tuiCommand(['-L', 'hnr19fix-launcher', '--port', '19419'], { port: 19418 })).resolves.toBe(0)

@@ -30,12 +30,13 @@ vi.mock('node:fs', async (original) => {
     if (disk.on) disk.names.push({ seq: disk.seq++, directory: fs.lstatSync(dirname(String(path)), { bigint: true }).ino, path: String(path) })
   }
   return { ...fs,
-    fsyncSync: (fd: number) => {
-      fs.fsyncSync(fd)
-      if (!disk.on) return
-      const info = fs.fstatSync(fd, { bigint: true })
-      disk.flushes.push({ seq: disk.seq++, ino: info.ino, directory: info.isDirectory(), state: info.isDirectory() ? `${info.ino}` : `${info.ino}:${info.size}:${info.mtimeNs}` })
-    },
+    fsync: (fd: number, callback: (error: NodeJS.ErrnoException | null) => void) => fs.fsync(fd, error => {
+      if (!error && disk.on) {
+        const info = fs.fstatSync(fd, { bigint: true })
+        disk.flushes.push({ seq: disk.seq++, ino: info.ino, directory: info.isDirectory(), state: info.isDirectory() ? `${info.ino}` : `${info.ino}:${info.size}:${info.mtimeNs}` })
+      }
+      callback(error)
+    }),
     openSync: (...args: Parameters<typeof fs.openSync>) => {
       const fd = fs.openSync(...args)
       if (typeof args[1] === 'number' && (args[1] & fs.constants.O_CREAT) !== 0) named(args[0])

@@ -134,7 +134,9 @@ export async function reconcileGridAttach(
   }
   if (email && names.includes(name)) {
     deps.onName(name)
-    deps.log(`already signed in with grid '${name}' — nothing to do`)
+    // The log says "the account's grid", never its name: the name starts as the email does, and is short enough
+    // that a hash of it is guessed.
+    deps.log("already signed in with the account's grid — nothing to do")
     return { status: 'converged', name, detail: '', ...(ownGrid ? { ownGrid: 'existed' as const } : {}) }
   }
   // Signed in as this account earlier in this daemon's life, and nothing here needs the account's own
@@ -163,18 +165,18 @@ export async function reconcileGridAttach(
     }
     const handoff = await deps.handoff(token)
     if (handoff.code !== 'OK') {
-      deps.log(`grid sign-in did not happen: ${handoff.message}`)
+      deps.log(`grid sign-in did not happen: ${handoff.code}`)
       return { status: 'handoff-failed', name, detail: handoff.message }
     }
   }
   if (!ownGrid) {
     deps.onName(name)
-    deps.log(`signed grid in as this account ('${name}' not needed yet)`)
+    deps.log("signed grid in as this account (the account's grid not needed yet)")
     return { status: 'signed-in', name, detail: '' }
   }
   const ensured = await deps.ensure(name)
   deps.onName(name)
-  deps.log(`signed grid in and ensured '${name}': ${ensured.status}${ensured.message ? ` — ${ensured.message}` : ''}`)
+  deps.log(`signed grid in and ensured the account's grid: ${ensured.status}`)
   return { status: 'signed-in', name, detail: ensured.message, ownGrid: ensured.status }
 }
 

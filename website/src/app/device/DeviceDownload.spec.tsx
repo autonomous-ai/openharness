@@ -34,6 +34,10 @@ function builds(extra: Record<string, unknown> = {}): DeviceBuild[] {
 const WINDOWS = { "device-windows-x64-msi": { url: `${CDN}Harness-Device.msi`, size: 1 } };
 const LINUX_DEB = `${CDN}Harness-Device.deb`;
 const LINUX = { "device-linux-x64-deb": { url: LINUX_DEB, size: 1 } };
+const LINUX_APPIMAGE_URL = `${CDN}Harness-Device-linux-x64.AppImage`;
+const LINUX_APPIMAGE = { "device-linux-x64-appimage": { url: LINUX_APPIMAGE_URL, size: 1 } };
+const INSTALL_LINE = "Or in a terminal: curl -fsSL https://harness.autonomous.ai/device/install.sh | bash";
+const INSTALL_COMMAND = "curl -fsSL https://harness.autonomous.ai/device/install.sh | bash";
 
 describe("the /device download offer", () => {
   beforeEach(() => {
@@ -114,5 +118,52 @@ describe("the /device download offer", () => {
     expect(container).toHaveTextContent("For Mac · macOS 13 or later");
     expect(container).not.toHaveTextContent("version");
     expect(screen.getAllByRole("link")).toHaveLength(1);
+  });
+
+  it("gives a Linux visitor the one line beside its AppImage", () => {
+    platform = "linux-x64";
+    const { container } = render(<DeviceDownload builds={builds(LINUX_APPIMAGE)} version="0.1.10" />);
+
+    expect(screen.getByRole("link", { name: "Download" })).toHaveAttribute("href", LINUX_APPIMAGE_URL);
+    expect(container).toHaveTextContent(INSTALL_LINE);
+    expect(screen.getByText(INSTALL_COMMAND).tagName).toBe("CODE");
+  });
+
+  it("gives a Linux visitor of unknown CPU the line too", () => {
+    platform = "linux";
+    const { container } = render(<DeviceDownload builds={builds(LINUX_APPIMAGE)} version="0.1.10" />);
+
+    expect(screen.queryByRole("link", { name: "Download" })).not.toBeInTheDocument();
+    expect(container).toHaveTextContent(INSTALL_LINE);
+    expect(screen.getByRole("link", { name: "Mac · Apple silicon and Intel" })).toHaveAttribute("href", DMG);
+    expect(screen.getByRole("link", { name: "Linux · x64" })).toHaveAttribute("href", LINUX_APPIMAGE_URL);
+  });
+
+  it.each([
+    ["linux-x64", {}],
+    ["linux-x64", LINUX],
+    ["linux", {}],
+    ["linux", LINUX],
+  ] as const)("shows no line while the release has no Linux AppImage (%s)", (p, extra) => {
+    platform = p;
+    const { container } = render(<DeviceDownload builds={builds(extra)} version="0.1.10" />);
+
+    expect(container).not.toHaveTextContent("Or in a terminal");
+  });
+
+  it.each(["macos", "macos-arm64", "windows", "mobile"] as const)("shows no line to a Mac, a Windows PC or a phone (%s)", (p) => {
+    platform = p;
+    const { container } = render(<DeviceDownload builds={builds({ ...WINDOWS, ...LINUX_APPIMAGE })} version="0.1.10" />);
+
+    expect(container).not.toHaveTextContent("Or in a terminal");
+  });
+
+  it("the line names no plan and no package", () => {
+    platform = "linux-x64";
+    render(<DeviceDownload builds={builds(LINUX_APPIMAGE)} version="0.1.10" />);
+
+    const line = screen.getByText(INSTALL_COMMAND).parentElement!.textContent!;
+    expect(line).toBe(INSTALL_LINE);
+    for (const word of ["AppImage", "libfuse", ".deb", "plan", "Pro"]) expect(line).not.toContain(word);
   });
 });

@@ -2,10 +2,21 @@
 import { errorKind } from '../../lib/log.js'
 import { compareAdmissionOrder, createAdmissionOrder, type AdmissionOrder } from './admissionOrder.js'
 
+/** Why an admission waits, as the log says it: one fixed code a hold. Several holds' sentences are the same length, so a
+ *  length could not tell them apart, and a sentence can carry a store's or an error's words. */
+export type AdmissionHoldCode =
+  | 'HERMES_SOURCE_MISSING' | 'HERMES_SOURCE_AMBIGUOUS' | 'HERMES_SOURCE_ELSEWHERE' | 'HERMES_CREATOR_MISSING'
+  | 'HERMES_SOURCE_UNAVAILABLE' | 'STOP_SETTLING' | 'HOOK_PANE_UNOWNED' | 'HOOK_EVIDENCE_INCOMPLETE' | 'BINDING_CHANGED'
+  | 'UNMATCHED_STOP' | 'SOURCE_UNREADABLE' | 'HOOK_ORDER_AMBIGUOUS' | 'HOOK_ORDER_UNTIMED' | 'DURABLE_ADMISSION_WAIT'
+
+/** A held admission: its code and, for a hold a failure made, that failure's kind (`errorKind`) for the log; its reason
+ *  is the sentence a window shows. */
+export interface AdmissionHold { kind: 'hold'; code: AdmissionHoldCode; reason: string; failure?: string }
+
 export type AdmissionDecision<T> =
   | { kind: 'accept'; value: T }
   | { kind: 'reject'; reason: string }
-  | { kind: 'hold'; reason: string }
+  | AdmissionHold
 
 export interface PendingAdmission<T> {
   order: AdmissionOrder
@@ -19,7 +30,7 @@ export interface PendingAdmission<T> {
   /** Optional notification after durable acceptance; never the publication itself. */
   accept: (value: T) => void | Promise<void>
   reject: (reason: string) => void | Promise<void>
-  held: (reason: string) => void | Promise<void>
+  held: (hold: AdmissionHold) => void | Promise<void>
 }
 
 export function createPendingAdmissions({ retryMs = 1_000, capacity = 64, isProcessCurrent }: {
@@ -92,7 +103,8 @@ export function createPendingAdmissions({ retryMs = 1_000, capacity = 64, isProc
     order.observe(key, job.request.order.scope, typeof job.request.binding === 'function' ? job.request.binding() : job.request.binding)
     let decision: AdmissionDecision<unknown>
     try { decision = await job.request.inspect() } catch (error) {
-      decision = { kind: 'hold', reason: `The session source could not be read. ${error instanceof Error ? error.message : 'Native evidence unavailable.'}`.slice(0, 1024) }
+      decision = { kind: 'hold', code: 'SOURCE_UNREADABLE', failure: errorKind(error),
+        reason: `The session source could not be read. ${error instanceof Error ? error.message : 'Native evidence unavailable.'}`.slice(0, 1024) }
     }
     if (!current(key, job)) { discard(key, job); notified(job.request.reject('stale_hook')); return }
     // A newer unverified hook pauses this candidate; it does not erase it. Hermes
@@ -102,16 +114,20 @@ export function createPendingAdmissions({ retryMs = 1_000, capacity = 64, isProc
     if (status === 'older') decision = { kind: 'reject', reason: 'stale_hook' }
     else if (decision.kind === 'accept') {
       const unresolved = leaders(key, job).some(other => other !== job && conversation(other) !== conversation(job))
-      if (status === 'ambiguous' || unresolved) decision = { kind: 'hold', reason:
+      const untimed = job.request.order.firedAt === undefined
+      if (status === 'ambiguous' || unresolved) decision = { kind: 'hold', code: untimed ? 'HOOK_ORDER_UNTIMED' : 'HOOK_ORDER_AMBIGUOUS', reason:
         'Waiting for unambiguous native hook order; keeping the current conversation.'
-        + (job.request.order.firedAt === undefined ? ' This hook has no native timestamp; reload or restart the engine with updated hooks.' : '') }
+        + (untimed ? ' This hook has no native timestamp; reload or restart the engine with updated hooks.' : '') }
     }
     if (decision.kind === 'accept' && job.request.commit) {
       const mayCommit = () => current(key, job) && selected(key) === job
         && order.status(key, conversation(job), job.request.order) !== 'older'
         && !leaders(key, job).some(other => other !== job && conversation(other) !== conversation(job))
       try { decision = await job.request.commit(decision.value, mayCommit) }
-      catch (error) { decision = { kind: 'hold', reason: `Waiting for durable hook admission: ${error instanceof Error ? error.message : 'commit unavailable'}`.slice(0, 1024) } }
+      catch (error) {
+        decision = { kind: 'hold', code: 'DURABLE_ADMISSION_WAIT', failure: errorKind(error),
+          reason: `Waiting for durable hook admission: ${error instanceof Error ? error.message : 'commit unavailable'}`.slice(0, 1024) }
+      }
     }
     if (!current(key, job)) { discard(key, job); notified(job.request.reject('stale_hook')); return }
     if (decision.kind !== 'reject' && selected(key) !== job) return
@@ -120,7 +136,7 @@ export function createPendingAdmissions({ retryMs = 1_000, capacity = 64, isProc
       job.timer.unref()
       if (job.reason !== decision.reason) {
         job.reason = decision.reason
-        notified(job.request.held(decision.reason))
+        notified(job.request.held(decision))
       }
       return
     }

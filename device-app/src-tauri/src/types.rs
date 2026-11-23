@@ -54,8 +54,8 @@ pub enum CliState {
     Removed,
 }
 
-/// state.json: `{ "version": 1, "cliSeen", "askedSignIn", "loginItem", "askedFollow", "askedAx" }`. Default: version
-/// 1, all false. The keys of the Claude Code and Codex offers an older app wrote are ignored.
+/// state.json: `{ "version": 1, "cliSeen", "askedSignIn", "loginItem", "askedFollow", "askedAx", "followOff" }`.
+/// Default: version 1, all false. The keys of the Claude Code and Codex offers an older app wrote are ignored.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Saved {
@@ -69,6 +69,9 @@ pub struct Saved {
     /// macOS's Accessibility prompt was called: it shows its dialog only the first time.
     #[serde(default)]
     pub asked_ax: bool,
+    /// The person turned Follow ChatGPT off, off macOS, where it is Harness's own switch: following is on until then.
+    #[serde(default)]
+    pub follow_off: bool,
 }
 
 impl Default for Saved {
@@ -80,6 +83,7 @@ impl Default for Saved {
             login_item: false,
             asked_follow: false,
             asked_ax: false,
+            follow_off: false,
         }
     }
 }
@@ -137,6 +141,8 @@ pub enum MenuAction {
     FollowChatgpt,
     /// The checked one: System Settings' Accessibility list.
     FollowSettings,
+    /// Off macOS, the item is Harness's own switch: a click turns following off or on.
+    FollowSwitch,
 }
 
 /// Text is a disabled line. Check: the action a click does, the label, whether it is checked. Submenu: its label and
@@ -186,12 +192,14 @@ pub struct AppState {
 }
 
 /// Following the ChatGPT window, as the menu and the window show it. Waiting: the screen opened by itself waits behind
-/// Install or Sign in.
+/// Install or Sign in. Switch: off macOS no permission gates the title, so the item is Harness's own switch, which
+/// `trusted` then mirrors, and there is no screen.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FollowState {
     pub trusted: bool,
     pub installed: bool,
     pub waiting: bool,
+    pub switch: bool,
 }
 
 /// AuthorizeUrl holds an `https:` URL only (account.rs lets no other through).
@@ -202,7 +210,8 @@ pub enum LoginEvent {
     Done(Result<(), String>),
 }
 
-/// What happened. WatchExit(None): ended by a signal. UpdateChecked(Some): a strictly newer release. InstallStep:
+/// What happened. WatchExit(None): it was killed. UpdateChecked(Some): a strictly newer release.
+/// UpdateDownloaded: that release is downloaded and its signature checked; nothing is replaced yet. InstallStep:
 /// `'static`, so only the step table's fixed copy can be one, never a line of the script's.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
@@ -230,6 +239,7 @@ pub enum Event {
     Act(Action),
     WindowClosed,
     UpdateChecked(Option<String>),
+    UpdateDownloaded,
     UpdateInstalled,
     UpdateFailed(UpdateFailure),
     LogsExported(Result<Exported, ExportFailure>),
@@ -243,8 +253,9 @@ pub enum Event {
     FollowOffer,
 }
 
-/// What to do about it. Show(None) hides the window. ShowAbout: the About panel, with its credits line. Menu, Show,
-/// ShowAbout, Quit and Relaunch are the binary's.
+/// What to do about it. Show(None) hides the window. ShowAbout: the About panel, with its credits line. AboutCredits:
+/// the credits line now, for an About drawn into the menu. Menu, Show, ShowAbout, AboutCredits, Quit and Relaunch are
+/// the binary's.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
     FindCli,
@@ -265,10 +276,12 @@ pub enum Effect {
     Save(Saved),
     Log(String),
     CheckUpdate,
+    DownloadUpdate,
     InstallUpdate,
     Menu(Vec<MenuItem>),
     Show(Option<View>),
     ShowAbout(Option<String>),
+    AboutCredits(Option<String>),
     Quit,
     Relaunch,
     ExportLogs,
@@ -278,6 +291,8 @@ pub enum Effect {
     AskAx,
     /// System Settings' Accessibility list.
     OpenAxSettings,
+    /// Off macOS: `true` turns following on.
+    FollowSwitch(bool),
 }
 
 /// A finished run.
@@ -334,19 +349,33 @@ pub trait Log: Send + Sync {
 /// A log that keeps its lines, for every task's tests.
 #[cfg(test)]
 #[derive(Default)]
-pub struct MemoryLog(std::sync::Mutex<Vec<String>>);
+pub struct MemoryLog {
+    lines: std::sync::Mutex<Vec<String>>,
+    /// A line was written: another thread may write the one a test waits on.
+    wrote: std::sync::Condvar,
+}
 
 #[cfg(test)]
 impl MemoryLog {
     pub fn lines(&self) -> Vec<String> {
-        self.0.lock().unwrap().clone()
+        self.lines.lock().unwrap().clone()
+    }
+
+    /// Waits until the lines pass `done`, 5 s at most, and gives them.
+    pub fn until(&self, done: impl Fn(&[String]) -> bool) -> Vec<String> {
+        let lines = self.lines.lock().unwrap();
+        let wait = std::time::Duration::from_secs(5);
+        let (lines, _) = self.wrote.wait_timeout_while(lines, wait, |lines| !done(lines)).unwrap();
+        assert!(done(&lines), "{lines:?}");
+        lines.clone()
     }
 }
 
 #[cfg(test)]
 impl Log for MemoryLog {
     fn line(&self, text: &str) {
-        self.0.lock().unwrap().push(text.to_string());
+        self.lines.lock().unwrap().push(text.to_string());
+        self.wrote.notify_all();
     }
 }
 
@@ -465,7 +494,8 @@ mod tests {
             "askedSignIn": false,
             "loginItem": false,
             "askedFollow": false,
-            "askedAx": false
+            "askedAx": false,
+            "followOff": false
         });
         assert_eq!(serde_json::to_value(Saved::default()).unwrap(), keys);
         assert_eq!(serde_json::from_value::<Saved>(keys).unwrap(), Saved::default());
@@ -510,6 +540,8 @@ mod tests {
         assert!(!plist.contains("CFBundleDisplayName"), "{plist}");
         let source = macos["files"]["Resources/en.lproj/InfoPlist.strings"].as_str().expect("InfoPlist.strings mapped");
         let strings = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(source)).unwrap();
+        // A Windows checkout ends its lines with \r\n; the file ships from a macOS build only.
+        let strings = strings.replace("\r\n", "\n");
         assert_eq!(strings, "CFBundleName = \"Harness\";\nCFBundleDisplayName = \"Harness\";\n");
     }
 

@@ -14,13 +14,13 @@
  * would otherwise see a Codex the developer runs and write into their real home.
  */
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
+import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { DIAL_PLUGIN_ID, DIAL_SKILL } from '../src/devices/dialSkill.js'
-import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
+import { orcaBinary } from '../src/devices/orcaHomes.js'
+import { resolveBinaryOnPath } from '../src/lib/binaryOnPath.js'
+import { IsolatedDaemon, SOURCES_CLI, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 import { FakeOrca } from './harness/fakeOrca.js'
@@ -32,7 +32,7 @@ const FOUND_ONE = /\[observed\] scan · 1 found · \d+ app known · \d+ named ·
 // The run's bundle when there is one (E2E_BUNDLE), as the daemon runs, as in deviceDialSkill.e2e.ts.
 const CLI_ENTRY = process.env.E2E_BUNDLE_PATH
   ? [process.env.E2E_BUNDLE_PATH]
-  : ['--import', pathToFileURL(createRequire(join(CLI_ROOT, 'package.json')).resolve('tsx')).href, join(CLI_ROOT, 'src', 'cli.ts')]
+  : SOURCES_CLI
 const INSTALL = `plugin install ${DIAL_PLUGIN_ID} --scope user`
 const ENABLE = `plugin enable ${DIAL_PLUGIN_ID} --scope user`
 
@@ -41,7 +41,7 @@ const ENABLE = `plugin enable ${DIAL_PLUGIN_ID} --scope user`
  * settings and sessions its own.
  */
 function orcaClaudeHome(d: IsolatedDaemon, name = 'orca-claude'): string {
-  const home = join(d.root, name)
+  const home = join(d.env.HOME!, name)
   const plugins = join(dirname(d.env.CLAUDE_PROJECTS_DIR!), 'plugins')
   mkdirSync(home, { recursive: true })
   mkdirSync(plugins, { recursive: true })
@@ -63,6 +63,9 @@ const pluginOn = (claudeHome: string): boolean =>
 /** Whether the plugin is installed in [claudeHome]'s `plugins`, as the fake Claude Code keeps it. */
 const pluginInstalled = (claudeHome: string): boolean =>
   JSON.parse(read(join(claudeHome, 'plugins', 'fake-plugin-state.json')) ?? '{"installed":[]}').installed.includes(DIAL_PLUGIN_ID)
+/** The Orca launcher a daemon on Linux finds on [d]'s PATH, `orca-ide` before `orca`, by the devices' own lookup. */
+const linuxOrcaOn = (d: IsolatedDaemon): string | null =>
+  orcaBinary({ platform: 'linux', onPath: (name, accept) => resolveBinaryOnPath(name, d.env, accept), exists: existsSync })
 
 /**
  * A turn, so its conversation is on disk: the scan lists only a session with one. No hook of Harness's runs in an Orca
@@ -102,6 +105,8 @@ describe('Orca\'s account homes on the dial', () => {
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-200).join('\n')}`) })
     before(d)
     await d.start()
+    // Claude Code started by hand reads its hooks once, as it starts: they must be in by then.
+    await d.hooksInstalled(['claude'])
     return { d, desk: theDesk }
   }
   const plugged = async (theDesk: Desk): Promise<FakeDial> => {
@@ -178,7 +183,7 @@ describe('Orca\'s account homes on the dial', () => {
   it('with a dial attached, an Orca Codex home gets the dial skill', async () => {
     let home = ''
     const { d, desk } = await fresh((d) => {
-      home = join(d.root, 'orca-codex')
+      home = join(d.env.HOME!, 'orca-codex')
       mkdirSync(home, { recursive: true })
       FakeOrca.install(d).accounts({ codex: [home] })
     })
@@ -204,20 +209,34 @@ describe('Orca\'s account homes on the dial', () => {
     expect(log).toMatch(FOUND_ONE)
   })
 
+  // Orca's Linux .deb links /usr/bin/orca-ide, which a daemon on Linux takes before any `orca`, and /usr/bin is on the
+  // daemon's PATH: the harness's refusing stub must answer to that name too.
+  it('on Linux the daemon\'s PATH answers `orca-ide` with the harness\'s stub, never the computer\'s Orca', async () => {
+    const d = await IsolatedDaemon.create()
+    daemon = d
+    const found = linuxOrcaOn(d)
+    expect(found).toBe(join(dirname(d.env.CLAUDE_PATH!), 'orca-ide'))
+    expect(realpathSync(found!)).toBe(realpathSync(d.env.HARNESS_ORCA_APP_BIN!))
+  })
+
   // Every session here may run inside the real Orca: with no launcher on its PATH, a daemon on a Mac runs the Orca app's
   // own, and the harness names its fake as that app's (harness/daemon.ts). Linux has no app to fall back on.
-  it('with no Orca launcher on its PATH the daemon asks the harness\'s Orca app, never the computer\'s', async () => {
+  it('with no Orca launcher on its PATH the daemon asks the harness\'s Orca app, never the computer\'s', async (context) => {
     let home = ''
     let orca: FakeOrca | undefined
     const { d, desk } = await fresh((d) => {
       const link = join(dirname(d.env.CLAUDE_PATH!), 'orca')
       // Checked before anything starts: a daemon with no app of the harness's would run the computer's.
       expect(d.env.HARNESS_ORCA_APP_BIN).toBe(readlinkSync(link))
-      home = join(d.root, 'orca-codex')
+      home = join(d.env.HOME!, 'orca-codex')
       mkdirSync(home, { recursive: true })
       orca = FakeOrca.install(d)
       orca.accounts({ codex: [home] })
       rmSync(link)
+      rmSync(join(dirname(link), 'orca-ide'))
+      // With the harness's links gone, the rest of its PATH is the system's folders: on a Linux computer with Orca's
+      // .deb, /usr/bin/orca-ide is a launcher there, and the daemon would ask the computer's Orca. Not this case.
+      if (linuxOrcaOn(d) !== null) context.skip('an Orca launcher is in this computer\'s system folders')
     })
     await plugged(desk)
     if (process.platform === 'darwin') {

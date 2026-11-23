@@ -327,7 +327,7 @@ export async function setPaneStyle(pane: string, style: string): Promise<boolean
   })
 }
 
-/** What tmux knows about a pane right now. See `agentCreateDiagnosis.ts` for why this is read. */
+/** What tmux knows about a pane right now. See `core/agents/newPane.ts` for why this is read. */
 export { ENGINE_EXIT_PANE_OPTION }
 
 export type TmuxPaneState = TerminalPaneState

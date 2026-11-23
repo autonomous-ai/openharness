@@ -14,7 +14,7 @@ export function createEngineTally<E extends string, K extends string>(
     if (today !== day) { day = today; counts = new Map() }
     const key = `${engine} ${kind}`
     counts.set(key, (counts.get(key) ?? 0) + 1)
-    const engineCounts = engines.map((e) => [e, ...kinds.map((k) => `${k} ${counts.get(`${e} ${k}`) ?? 0}`)].join(' '))
+    const engineCounts = engines.map((name) => [name, ...kinds.map((k) => `${k} ${counts.get(`${name} ${k}`) ?? 0}`)].join(' '))
     log(`${label} · day ${day} · ${engineCounts.join(' · ')}`)
   }
 }

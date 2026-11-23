@@ -40,6 +40,13 @@ void main() {
 
   tearDown(() => session.dispose());
 
+  /// Moves the input clock and fakeAsync's timers together, so the 4 ms coalesce window
+  /// (`_inputCoalesceWindow`) runs on the test's clock, never the host's.
+  void elapse(FakeAsync async, Duration by) {
+    controlledNow = controlledNow!.add(by);
+    async.elapse(by);
+  }
+
   Future<void> ready() async {
     await session.open(initialCols: 100, initialRows: 30);
     final requestId = sent.single.payload['requestId'];
@@ -372,112 +379,136 @@ void main() {
     expect(emitted.first, '\x1b[0;0R');
   });
 
-  test(
-    'remote cursor queries do not inject replies before the first key',
-    () async {
-      await ready();
-      await session.handleBinary(
+  test('remote cursor queries do not inject replies before the first key', () {
+    fakeAsync((async) {
+      controlledNow = DateTime(2026, 9, 18);
+      ready();
+      async.flushMicrotasks();
+      session.handleBinary(
         output(0, utf8.encode('PS> '), keyframe: true, cols: 80, rows: 24),
       );
+      async.flushMicrotasks();
       // The host emulator has already answered these. A second cursor reply
       // makes Windows PowerShell/PSReadLine swallow the first printable key.
-      await session.handleBinary(output(1, utf8.encode('\x1b[6n')));
-      await Future<void>.delayed(const Duration(milliseconds: 12));
+      session.handleBinary(output(1, utf8.encode('\x1b[6n')));
+      async.flushMicrotasks();
+      elapse(async, const Duration(milliseconds: 4));
       expect(binarySent, isEmpty);
 
       session.terminal.textInput('a');
-      await Future<void>.delayed(const Duration(milliseconds: 12));
+      elapse(async, const Duration(milliseconds: 4));
       expect(binarySent, hasLength(1));
       expect(utf8.decode(binarySent.single.bytes), 'a');
       expect(binarySent.single.seq, 0);
-    },
-  );
+    });
+  });
 
-  test('remote terminals preserve other query responses', () async {
-    await ready();
-    await session.handleBinary(
-      output(0, utf8.encode('PS> '), keyframe: true, cols: 80, rows: 24),
-    );
-    // DA3 is not answered by every host emulator; keep its existing behavior.
-    await session.handleBinary(output(1, utf8.encode('\x1b[=c')));
-    await Future<void>.delayed(const Duration(milliseconds: 12));
-    expect(binarySent, hasLength(1));
-    expect(utf8.decode(binarySent.single.bytes), '\x1bP!|00000000\x1b\\');
+  test('remote terminals preserve other query responses', () {
+    fakeAsync((async) {
+      controlledNow = DateTime(2026, 9, 18);
+      ready();
+      async.flushMicrotasks();
+      session.handleBinary(
+        output(0, utf8.encode('PS> '), keyframe: true, cols: 80, rows: 24),
+      );
+      async.flushMicrotasks();
+      // DA3 is not answered by every host emulator; keep its existing behavior.
+      session.handleBinary(output(1, utf8.encode('\x1b[=c')));
+      async.flushMicrotasks();
+      elapse(async, const Duration(milliseconds: 4));
+      expect(binarySent, hasLength(1));
+      expect(utf8.decode(binarySent.single.bytes), '\x1bP!|00000000\x1b\\');
+    });
   });
 
   test(
     'terminal input batches, preserves Enter boundary and is never retried',
-    () async {
-      // Keep all typed characters inside the 4 ms logical batching window,
-      // even when a loaded CI host takes longer to schedule the test itself.
-      controlledNow = DateTime(2026, 9, 18);
-      await ready();
-      await session.handleBinary(
-        output(0, utf8.encode(r'prompt> '), keyframe: true, cols: 80, rows: 24),
-      );
+    () {
+      fakeAsync((async) {
+        controlledNow = DateTime(2026, 9, 18);
+        ready();
+        async.flushMicrotasks();
+        session.handleBinary(
+          output(
+            0,
+            utf8.encode(r'prompt> '),
+            keyframe: true,
+            cols: 80,
+            rows: 24,
+          ),
+        );
+        async.flushMicrotasks();
 
-      // Leading edge: the first keystroke after a pause is not held for the batching window.
-      session.terminal.onOutput?.call('abc');
-      await Future<void>.delayed(const Duration(milliseconds: 1));
-      expect(binarySent, hasLength(1));
-      expect(utf8.decode(binarySent.single.bytes), 'abc');
+        // Leading edge: the first keystroke after a pause is not held for the batching window.
+        session.terminal.onOutput?.call('abc');
+        async.flushMicrotasks();
+        expect(binarySent, hasLength(1));
+        expect(utf8.decode(binarySent.single.bytes), 'abc');
 
-      // Anything arriving inside the window is batched behind the trailing timer instead.
-      session.terminal.onOutput?.call('d');
-      session.terminal.onOutput?.call('ef');
-      expect(binarySent, hasLength(1));
-      await Future<void>.delayed(const Duration(milliseconds: 12));
-      session.terminal.onOutput?.call('\r');
-      await Future<void>.delayed(const Duration(milliseconds: 12));
+        // Anything arriving inside the window is batched behind the trailing timer instead.
+        session.terminal.onOutput?.call('d');
+        session.terminal.onOutput?.call('ef');
+        expect(binarySent, hasLength(1));
+        elapse(async, const Duration(milliseconds: 4));
+        session.terminal.onOutput?.call('\r');
+        elapse(async, const Duration(milliseconds: 4));
 
-      final inputs = binarySent;
-      expect(inputs, hasLength(3));
-      expect(utf8.decode(inputs[0].bytes), 'abc');
-      expect(utf8.decode(inputs[1].bytes), 'def');
-      expect(utf8.decode(inputs[2].bytes), '\r');
-      expect(inputs.map((frame) => frame.seq), [0, 1, 2]);
-      expect(
-        inputs.every((frame) => frame.kind == TerminalBinaryKind.input),
-        isTrue,
-      );
+        final inputs = binarySent;
+        expect(inputs, hasLength(3));
+        expect(utf8.decode(inputs[0].bytes), 'abc');
+        expect(utf8.decode(inputs[1].bytes), 'def');
+        expect(utf8.decode(inputs[2].bytes), '\r');
+        expect(inputs.map((frame) => frame.seq), [0, 1, 2]);
+        expect(
+          inputs.every((frame) => frame.kind == TerminalBinaryKind.input),
+          isTrue,
+        );
 
-      final paste = '\x1b[200~${'x' * 20000}\x1b[201~';
-      session.terminal.onOutput?.call(paste);
-      await Future<void>.delayed(const Duration(milliseconds: 12));
-      final pasteFrames = binarySent.skip(3).toList();
-      expect(pasteFrames, hasLength(3));
-      final pasteBytes = <int>[for (final frame in pasteFrames) ...frame.bytes];
-      expect(
-        pasteFrames.every((frame) => frame.bytes.length <= 8 * 1024),
-        isTrue,
-      );
-      expect(utf8.decode(pasteBytes), paste);
+        final paste = '\x1b[200~${'x' * 20000}\x1b[201~';
+        session.terminal.onOutput?.call(paste);
+        elapse(async, const Duration(milliseconds: 4));
+        final pasteFrames = binarySent.skip(3).toList();
+        expect(pasteFrames, hasLength(3));
+        final pasteBytes = <int>[
+          for (final frame in pasteFrames) ...frame.bytes,
+        ];
+        expect(
+          pasteFrames.every(
+            (frame) =>
+                frame.bytes.length <= TerminalSession.kInputFrameMaxBytes,
+          ),
+          isTrue,
+        );
+        expect(utf8.decode(pasteBytes), paste);
 
-      session.transportLost();
-      session.terminal.onOutput?.call('must-not-send');
-      await Future<void>.delayed(const Duration(milliseconds: 8));
-      expect(binarySent, hasLength(6));
-      expect(session.status, TerminalSessionStatus.error);
+        session.transportLost();
+        session.terminal.onOutput?.call('must-not-send');
+        elapse(async, const Duration(milliseconds: 4));
+        expect(binarySent, hasLength(6));
+        expect(session.status, TerminalSessionStatus.error);
+      });
     },
   );
 
-  test(
-    'terminal input preserves committed IME Unicode as UTF-8 bytes',
-    () async {
-      await ready();
-      await session.handleBinary(
+  test('terminal input preserves committed IME Unicode as UTF-8 bytes', () {
+    fakeAsync((async) {
+      controlledNow = DateTime(2026, 9, 18);
+      ready();
+      async.flushMicrotasks();
+      session.handleBinary(
         output(0, utf8.encode('prompt> '), keyframe: true, cols: 80, rows: 24),
       );
+      async.flushMicrotasks();
       const committed = 'Tiếng Việt 日本語 中文';
 
       session.terminal.onOutput?.call(committed);
-      await Future<void>.delayed(const Duration(milliseconds: 12));
+      elapse(async, const Duration(milliseconds: 4));
 
       expect(binarySent, hasLength(1));
       expect(binarySent.single.bytes, orderedEquals(utf8.encode(committed)));
       expect(utf8.decode(binarySent.single.bytes), committed);
-    },
-  );
+    });
+  });
 
   test('malformed PTY UTF-8 renders replacement text without resync', () async {
     await ready();
@@ -787,21 +818,26 @@ void main() {
     );
   });
 
-  test('Ctrl+C (0x03) is forwarded like any other keystroke', () async {
-    await ready();
-    await session.handleBinary(
-      output(0, utf8.encode(r'prompt> '), keyframe: true, cols: 80, rows: 24),
-    );
+  test('Ctrl+C (0x03) is forwarded like any other keystroke', () {
+    fakeAsync((async) {
+      controlledNow = DateTime(2026, 9, 18);
+      ready();
+      async.flushMicrotasks();
+      session.handleBinary(
+        output(0, utf8.encode(r'prompt> '), keyframe: true, cols: 80, rows: 24),
+      );
+      async.flushMicrotasks();
 
-    session.terminal.onOutput?.call('\x03');
-    await Future<void>.delayed(const Duration(milliseconds: 12));
-    expect(binarySent, hasLength(1));
-    expect(utf8.decode(binarySent.single.bytes), '\x03');
+      session.terminal.onOutput?.call('\x03');
+      elapse(async, const Duration(milliseconds: 4));
+      expect(binarySent, hasLength(1));
+      expect(utf8.decode(binarySent.single.bytes), '\x03');
 
-    session.terminal.onOutput?.call('a\x03b');
-    await Future<void>.delayed(const Duration(milliseconds: 12));
-    expect(binarySent, hasLength(2));
-    expect(utf8.decode(binarySent[1].bytes), 'a\x03b');
+      session.terminal.onOutput?.call('a\x03b');
+      elapse(async, const Duration(milliseconds: 4));
+      expect(binarySent, hasLength(2));
+      expect(utf8.decode(binarySent[1].bytes), 'a\x03b');
+    });
   });
 
   test(
@@ -845,196 +881,242 @@ void main() {
     },
   );
 
-  test('a keystroke dropped while resyncing does not leave a hole in the input seq', () async {
+  test('a keystroke dropped while resyncing does not leave a hole in the input seq', () {
     // The daemon counts input frames and never re-syncs that counter. A frame this side drops
     // — the session went `resyncing` while an earlier send was still in flight — used to take
     // its number with it, so the first keystroke after recovery arrived one ahead and was
     // refused: TERMINAL_INPUT_INVALID, and a frozen pane over a perfectly good tmux.
-    final gate = Completer<void>();
-    final frames = <TerminalBinaryFrame>[];
-    final blocking = TerminalSession(
-      machineId: 'machine-1',
-      agentId: 'agent-1',
-      agentName: 'backend-api',
-      engineId: 'codex',
-      send: (type, payload) async {
-        sent.add((type: type, payload: Map<String, dynamic>.from(payload)));
-        return true;
-      },
-      sendBinary: (frame) async {
-        frames.add(frame);
-        if (frames.length == 1) await gate.future; // the first send stalls
-        return true;
-      },
-    );
-    addTearDown(blocking.dispose);
-    await blocking.open(initialCols: 100, initialRows: 30);
-    await blocking.handleFrame('terminal_ready', {
-      'requestId': sent.single.payload['requestId'],
-      'protocolVersion': 3,
-      'streamId': streamId,
-      'agentId': 'agent-1',
+    fakeAsync((async) {
+      controlledNow = DateTime(2026, 9, 18);
+      final gate = Completer<void>();
+      final frames = <TerminalBinaryFrame>[];
+      final blocking = TerminalSession(
+        machineId: 'machine-1',
+        agentId: 'agent-1',
+        agentName: 'backend-api',
+        engineId: 'codex',
+        now: () => controlledNow!,
+        send: (type, payload) async {
+          sent.add((type: type, payload: Map<String, dynamic>.from(payload)));
+          return true;
+        },
+        sendBinary: (frame) async {
+          frames.add(frame);
+          if (frames.length == 1) await gate.future; // the first send stalls
+          return true;
+        },
+      );
+      addTearDown(blocking.dispose);
+      blocking.open(initialCols: 100, initialRows: 30);
+      async.flushMicrotasks();
+      blocking.handleFrame('terminal_ready', {
+        'requestId': sent.single.payload['requestId'],
+        'protocolVersion': 3,
+        'streamId': streamId,
+        'agentId': 'agent-1',
+      });
+      async.flushMicrotasks();
+      blocking.handleBinary(
+        output(0, utf8.encode('prompt> '), keyframe: true, cols: 80, rows: 24),
+      );
+      async.flushMicrotasks();
+
+      blocking.terminal.onOutput?.call('a'); // seq 0, send stalls on the gate
+      async.flushMicrotasks();
+      blocking.terminal.onOutput?.call('b'); // queued behind it
+      elapse(async, const Duration(milliseconds: 4));
+      expect(frames, hasLength(1));
+
+      // The output stream skips a number: resync, same stream.
+      blocking.handleBinary(output(5, utf8.encode('gap')));
+      async.flushMicrotasks();
+      expect(blocking.status, TerminalSessionStatus.resyncing);
+      gate.complete(); // 'a' goes out; 'b' reaches the tail while resyncing and is dropped
+      async.flushMicrotasks();
+
+      blocking.handleBinary(
+        output(9, utf8.encode('fresh'), keyframe: true, cols: 80, rows: 24),
+      );
+      async.flushMicrotasks();
+      expect(blocking.status, TerminalSessionStatus.controlling);
+      blocking.terminal.onOutput?.call('c');
+      elapse(async, const Duration(milliseconds: 4));
+
+      final inputs = frames.where((f) => f.kind == TerminalBinaryKind.input);
+      expect(inputs.map((f) => utf8.decode(f.bytes)), ['a', 'c']);
+      // Contiguous: the dropped 'b' did not spend a number.
+      expect(inputs.map((f) => f.seq), [0, 1]);
     });
-    await blocking.handleBinary(
-      output(0, utf8.encode('prompt> '), keyframe: true, cols: 80, rows: 24),
-    );
-
-    blocking.terminal.onOutput?.call('a'); // seq 0, send stalls on the gate
-    await Future<void>.delayed(const Duration(milliseconds: 1));
-    blocking.terminal.onOutput?.call('b'); // queued behind it
-    await Future<void>.delayed(const Duration(milliseconds: 12));
-    expect(frames, hasLength(1));
-
-    // The output stream skips a number: resync, same stream.
-    await blocking.handleBinary(output(5, utf8.encode('gap')));
-    expect(blocking.status, TerminalSessionStatus.resyncing);
-    gate.complete(); // 'a' goes out; 'b' reaches the tail while resyncing and is dropped
-    await Future<void>.delayed(const Duration(milliseconds: 1));
-
-    await blocking.handleBinary(
-      output(9, utf8.encode('fresh'), keyframe: true, cols: 80, rows: 24),
-    );
-    expect(blocking.status, TerminalSessionStatus.controlling);
-    blocking.terminal.onOutput?.call('c');
-    await Future<void>.delayed(const Duration(milliseconds: 12));
-
-    final inputs = frames.where((f) => f.kind == TerminalBinaryKind.input);
-    expect(inputs.map((f) => utf8.decode(f.bytes)), ['a', 'c']);
-    // Contiguous: the dropped 'b' did not spend a number.
-    expect(inputs.map((f) => f.seq), [0, 1]);
   });
 
   test(
     'TERMINAL_INPUT_INVALID with expectedSeq realigns in place, nothing frozen',
-    () async {
-      await ready();
-      await session.handleBinary(
-        output(0, utf8.encode('prompt> '), keyframe: true, cols: 80, rows: 24),
-      );
-      session.terminal.onOutput?.call('a');
-      await Future<void>.delayed(const Duration(milliseconds: 12));
-      session.terminal.onOutput?.call('b');
-      await Future<void>.delayed(const Duration(milliseconds: 12));
-      expect(binarySent.map((f) => f.seq), [0, 1]);
+    () {
+      fakeAsync((async) {
+        controlledNow = DateTime(2026, 9, 18);
+        ready();
+        async.flushMicrotasks();
+        session.handleBinary(
+          output(
+            0,
+            utf8.encode('prompt> '),
+            keyframe: true,
+            cols: 80,
+            rows: 24,
+          ),
+        );
+        async.flushMicrotasks();
+        session.terminal.onOutput?.call('a');
+        elapse(async, const Duration(milliseconds: 4));
+        session.terminal.onOutput?.call('b');
+        elapse(async, const Duration(milliseconds: 4));
+        expect(binarySent.map((f) => f.seq), [0, 1]);
 
-      // The daemon only ever saw seq 0 — say it is still waiting for 1.
-      await session.handleFrame('terminal_error', {
-        'streamId': streamId,
-        'code': 'TERMINAL_INPUT_INVALID',
-        'reason': 'seq',
-        'expectedSeq': 1,
+        // The daemon only ever saw seq 0 — say it is still waiting for 1.
+        session.handleFrame('terminal_error', {
+          'streamId': streamId,
+          'code': 'TERMINAL_INPUT_INVALID',
+          'reason': 'seq',
+          'expectedSeq': 1,
+        });
+        async.flushMicrotasks();
+        expect(session.status, TerminalSessionStatus.controlling);
+        expect(session.errorCode, isNull);
+        expect(sent.where((f) => f.type == 'terminal_close'), isEmpty);
+        expect(sent.where((f) => f.type == 'terminal_open'), hasLength(1));
+
+        session.terminal.onOutput?.call('c');
+        elapse(async, const Duration(milliseconds: 4));
+        expect(binarySent.last.seq, 1);
+        expect(utf8.decode(binarySent.last.bytes), 'c');
       });
-      expect(session.status, TerminalSessionStatus.controlling);
-      expect(session.errorCode, isNull);
-      expect(sent.where((f) => f.type == 'terminal_close'), isEmpty);
-      expect(sent.where((f) => f.type == 'terminal_open'), hasLength(1));
-
-      session.terminal.onOutput?.call('c');
-      await Future<void>.delayed(const Duration(milliseconds: 12));
-      expect(binarySent.last.seq, 1);
-      expect(utf8.decode(binarySent.last.bytes), 'c');
     },
   );
 
-  test('a stale duplicate TERMINAL_INPUT_INVALID does not rewind a counter that moved on', () async {
+  test('a stale duplicate TERMINAL_INPUT_INVALID does not rewind a counter that moved on', () {
     // The daemon refuses every in-flight frame it cannot take, each naming
     // the same expected seq. By the time the second refusal lands, the
     // first has already realigned us and frames under the new numbers have
     // been accepted — rewinding again would reuse them.
-    await ready();
-    await session.handleBinary(
-      output(0, utf8.encode('prompt> '), keyframe: true, cols: 80, rows: 24),
-    );
-    session.terminal.onOutput?.call('a');
-    await Future<void>.delayed(const Duration(milliseconds: 12));
-    session.terminal.onOutput?.call('b');
-    await Future<void>.delayed(const Duration(milliseconds: 12));
-    session.terminal.onOutput?.call('c');
-    await Future<void>.delayed(const Duration(milliseconds: 12));
-    expect(binarySent.map((f) => f.seq), [0, 1, 2]);
+    fakeAsync((async) {
+      controlledNow = DateTime(2026, 9, 18);
+      ready();
+      async.flushMicrotasks();
+      session.handleBinary(
+        output(0, utf8.encode('prompt> '), keyframe: true, cols: 80, rows: 24),
+      );
+      async.flushMicrotasks();
+      session.terminal.onOutput?.call('a');
+      elapse(async, const Duration(milliseconds: 4));
+      session.terminal.onOutput?.call('b');
+      elapse(async, const Duration(milliseconds: 4));
+      session.terminal.onOutput?.call('c');
+      elapse(async, const Duration(milliseconds: 4));
+      expect(binarySent.map((f) => f.seq), [0, 1, 2]);
 
-    // Both 'b' (1) and 'c' (2) were refused: the daemon still wants 1.
-    final refusal = {
-      'streamId': streamId,
-      'code': 'TERMINAL_INPUT_INVALID',
-      'reason': 'seq',
-      'expectedSeq': 1,
-    };
-    await session.handleFrame('terminal_error', refusal);
-    session.terminal.onOutput?.call('d'); // goes out as 1, accepted
-    await Future<void>.delayed(const Duration(milliseconds: 12));
-    await session.handleFrame('terminal_error', refusal); // the stale one
-    session.terminal.onOutput?.call('e');
-    await Future<void>.delayed(const Duration(milliseconds: 12));
+      // Both 'b' (1) and 'c' (2) were refused: the daemon still wants 1.
+      final refusal = {
+        'streamId': streamId,
+        'code': 'TERMINAL_INPUT_INVALID',
+        'reason': 'seq',
+        'expectedSeq': 1,
+      };
+      session.handleFrame('terminal_error', refusal);
+      async.flushMicrotasks();
+      session.terminal.onOutput?.call('d'); // goes out as 1, accepted
+      elapse(async, const Duration(milliseconds: 4));
+      session.handleFrame('terminal_error', refusal); // the stale one
+      async.flushMicrotasks();
+      session.terminal.onOutput?.call('e');
+      elapse(async, const Duration(milliseconds: 4));
 
-    final after = binarySent.skip(3).toList();
-    expect(after.map((f) => utf8.decode(f.bytes)), ['d', 'e']);
-    expect(after.map((f) => f.seq), [1, 2]);
-    expect(session.status, TerminalSessionStatus.controlling);
+      final after = binarySent.skip(3).toList();
+      expect(after.map((f) => utf8.decode(f.bytes)), ['d', 'e']);
+      expect(after.map((f) => f.seq), [1, 2]);
+      expect(session.status, TerminalSessionStatus.controlling);
 
-    // A genuinely new gap names a larger seq and is honoured.
-    await session.handleFrame('terminal_error', {...refusal, 'expectedSeq': 2});
-    session.terminal.onOutput?.call('f');
-    await Future<void>.delayed(const Duration(milliseconds: 12));
-    expect(binarySent.last.seq, 2);
+      // A genuinely new gap names a larger seq and is honoured.
+      session.handleFrame('terminal_error', {...refusal, 'expectedSeq': 2});
+      async.flushMicrotasks();
+      session.terminal.onOutput?.call('f');
+      elapse(async, const Duration(milliseconds: 4));
+      expect(binarySent.last.seq, 2);
+    });
   });
 
   test(
     'TERMINAL_INPUT_INVALID from an older daemon reopens instead of freezing',
-    () async {
-      await ready();
-      await session.handleBinary(
-        output(0, utf8.encode('prompt> '), keyframe: true, cols: 80, rows: 24),
-      );
-      session.terminal.onOutput?.call('a');
-      await Future<void>.delayed(const Duration(milliseconds: 12));
+    () {
+      fakeAsync((async) {
+        controlledNow = DateTime(2026, 9, 18);
+        ready();
+        async.flushMicrotasks();
+        session.handleBinary(
+          output(
+            0,
+            utf8.encode('prompt> '),
+            keyframe: true,
+            cols: 80,
+            rows: 24,
+          ),
+        );
+        async.flushMicrotasks();
+        session.terminal.onOutput?.call('a');
+        elapse(async, const Duration(milliseconds: 4));
 
-      // No expectedSeq: a daemon from before it said. The only way back in step is a new stream.
-      await session.handleFrame('terminal_error', {
-        'streamId': streamId,
-        'code': 'TERMINAL_INPUT_INVALID',
-      });
-      expect(session.status, isNot(TerminalSessionStatus.error));
-      expect(sent.where((f) => f.type == 'terminal_close'), hasLength(1));
-      final opens = sent.where((f) => f.type == 'terminal_open').toList();
-      expect(opens, hasLength(2));
+        // No expectedSeq: a daemon from before it said. The only way back in step is a new stream.
+        session.handleFrame('terminal_error', {
+          'streamId': streamId,
+          'code': 'TERMINAL_INPUT_INVALID',
+        });
+        async.flushMicrotasks();
+        expect(session.status, isNot(TerminalSessionStatus.error));
+        expect(sent.where((f) => f.type == 'terminal_close'), hasLength(1));
+        final opens = sent.where((f) => f.type == 'terminal_open').toList();
+        expect(opens, hasLength(2));
 
-      const newStream = 'ffeeddcc-bbaa-9988-7766-554433221100';
-      await session.handleFrame('terminal_ready', {
-        'requestId': opens.last.payload['requestId'],
-        'protocolVersion': 3,
-        'streamId': newStream,
-        'agentId': 'agent-1',
+        const newStream = 'ffeeddcc-bbaa-9988-7766-554433221100';
+        session.handleFrame('terminal_ready', {
+          'requestId': opens.last.payload['requestId'],
+          'protocolVersion': 3,
+          'streamId': newStream,
+          'agentId': 'agent-1',
+        });
+        async.flushMicrotasks();
+        session.handleBinary(
+          TerminalBinaryFrame(
+            kind: TerminalBinaryKind.keyframe,
+            streamId: newStream,
+            seq: 0,
+            bytes: Uint8List.fromList(utf8.encode('prompt> ')),
+            compressed: false,
+            cols: 80,
+            rows: 24,
+          ),
+        );
+        async.flushMicrotasks();
+        expect(session.status, TerminalSessionStatus.controlling);
+        session.terminal.onOutput?.call('b');
+        elapse(async, const Duration(milliseconds: 4));
+        expect(binarySent.last.streamId, newStream);
+        expect(binarySent.last.seq, 0);
       });
-      await session.handleBinary(
-        TerminalBinaryFrame(
-          kind: TerminalBinaryKind.keyframe,
-          streamId: newStream,
-          seq: 0,
-          bytes: Uint8List.fromList(utf8.encode('prompt> ')),
-          compressed: false,
-          cols: 80,
-          rows: 24,
-        ),
-      );
-      expect(session.status, TerminalSessionStatus.controlling);
-      session.terminal.onOutput?.call('b');
-      await Future<void>.delayed(const Duration(milliseconds: 12));
-      expect(binarySent.last.streamId, newStream);
-      expect(binarySent.last.seq, 0);
     },
   );
 
-  test(
-    'input larger than the daemon accepts is split, never refused',
-    () async {
-      await ready();
-      await session.handleBinary(
+  test('input larger than one frame goes out as several, in order, every byte once', () {
+    fakeAsync((async) {
+      controlledNow = DateTime(2026, 9, 18);
+      ready();
+      async.flushMicrotasks();
+      session.handleBinary(
         output(0, utf8.encode('prompt> '), keyframe: true, cols: 80, rows: 24),
       );
-      // Bypass the 8 KiB chunker's boundaries: one contiguous burst of 70,000 bytes.
+      async.flushMicrotasks();
+      // One contiguous 70,000-byte burst: frames of at most one frame's bytes, seq in order,
+      // the 4,464-byte tail on the coalesce timer, nothing lost or sent twice.
       session.terminal.onOutput?.call('x' * 70000);
-      await Future<void>.delayed(const Duration(milliseconds: 12));
+      elapse(async, const Duration(milliseconds: 4));
       final inputs = binarySent
           .where((f) => f.kind == TerminalBinaryKind.input)
           .toList();
@@ -1046,8 +1128,8 @@ void main() {
       );
       expect(inputs.map((f) => f.seq), List.generate(inputs.length, (i) => i));
       expect(inputs.fold<int>(0, (n, f) => n + f.bytes.length), 70000);
-    },
-  );
+    });
+  });
 
   test(
     'idle sync advances sequence and is acknowledged after render',
@@ -1898,6 +1980,13 @@ void main() {
         if (frame.kind == TerminalBinaryKind.pasteFile) frame,
     ];
 
+    /// The upload's own frames. The stream's ACK (16 ms after the keyframe in [live]) and its
+    /// heartbeat run on real timers, so under load they land in [sent] at any `pump()`.
+    List<({String type, Map<String, dynamic> payload})> uploadSent() => [
+      for (final frame in sent)
+        if (frame.type.startsWith('terminal_chunked_upload_')) frame,
+    ];
+
     Future<void> live() async {
       await ready();
       await session.handleBinary(
@@ -2097,11 +2186,19 @@ void main() {
         'reason': 'an upload is already in progress on this pane',
       });
       await pump();
-      expect(sent.map((frame) => frame.type), [
+      expect(uploadSent().map((frame) => frame.type), [
         'terminal_chunked_upload_begin',
         'terminal_chunked_upload_cancel',
         'terminal_chunked_upload_begin',
       ]);
+      // uploadSent() hides every other frame, so the stream staying open is checked on its own.
+      expect(
+        sent.where(
+          (frame) =>
+              frame.type == 'terminal_open' || frame.type == 'terminal_close',
+        ),
+        isEmpty,
+      );
       expect(imagePastes(), isEmpty);
 
       await session.handleFrame('terminal_chunked_upload_begin_result', {
@@ -2254,14 +2351,14 @@ void main() {
           session.lastStalledUpload!.bytesWritten,
           terminalUploadChunkBytes,
         );
-        expect(sent.last.type, 'terminal_chunked_upload_cancel');
-        expect(sent.last.payload['streamId'], streamId);
+        expect(uploadSent().last.type, 'terminal_chunked_upload_cancel');
+        expect(uploadSent().last.payload['streamId'], streamId);
         // The stream itself is fine: nothing reopens, and the next upload starts at once.
         expect(session.status, TerminalSessionStatus.controlling);
         expect(sent.where((frame) => frame.type == 'terminal_open'), isEmpty);
         unawaited(session.pasteImage(Uint8List.fromList(const [1])));
         await pump();
-        expect(sent.last.type, 'terminal_chunked_upload_begin');
+        expect(uploadSent().last.type, 'terminal_chunked_upload_begin');
         expect(session.lastStalledUpload, isNull);
         await session.cancelUpload();
       });
@@ -2385,9 +2482,9 @@ void main() {
       await session.cancelUpload();
       expect(await future, isFalse);
       expect(session.uploadProgress, isNull);
-      expect(sent.last, isA<Object>());
-      expect(sent.last.type, 'terminal_chunked_upload_cancel');
-      expect(sent.last.payload['streamId'], streamId);
+      expect(uploadSent().last, isA<Object>());
+      expect(uploadSent().last.type, 'terminal_chunked_upload_cancel');
+      expect(uploadSent().last.payload['streamId'], streamId);
     });
 
     test(

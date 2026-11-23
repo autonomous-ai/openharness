@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { TurnActivity, WORK_EVIDENCE_MS, type ActivityRuntime, type ActivityState } from './turnActivity.js'
 
 function setup() {
@@ -7,9 +7,10 @@ function setup() {
   let answer: ActivityState = 'unknown'
   let probe = async () => answer
   let drain = async () => {}
+  const claimed = vi.fn()
   const activity = new TurnActivity({ now: () => now, runtime: () => runtime,
-    probe: () => probe(), drain: () => drain() })
-  return { activity, frame: () => activity.snapshot('s'),
+    probe: () => probe(), drain: () => drain(), claimed })
+  return { activity, claimed, frame: () => activity.snapshot('s'),
     advance: (ms = WORK_EVIDENCE_MS) => { now += ms },
     answer: (value: ActivityState) => { answer = value },
     runtime: (value?: ActivityRuntime) => { runtime = value },
@@ -142,6 +143,34 @@ describe('verified turn activity', () => {
     t.activity.observe('s', 'text_delta'); t.activity.observe('s', 'turn_ended')
     await t.activity.check('s', async () => 'working', before)
     expect(t.frame()?.state).toBe('idle')
+  })
+  // A claim with no turn open has no heartbeat to tell its end: the heartbeats watch it from its start (core/turns/heartbeats.ts).
+  it('tells of a session turning working with no turn open, once a claim: not its renewals, a replay or an open turn', () => {
+    const t = setup(); t.runtime({ key: 'agent:session:pid:start', turnOpen: false })
+    t.activity.observe('s', 'turn_started', true)
+    t.activity.observe('s', 'turn_started')
+    expect(t.claimed).toHaveBeenCalledExactlyOnceWith('s')
+    t.advance(20_000); t.activity.observe('s', 'text_delta')
+    t.advance(20_000); t.activity.observe('s', 'tool_end')
+    expect(t.claimed).toHaveBeenCalledOnce()
+    // The claim ran out: the next is a claim of its own.
+    t.advance(); t.activity.observe('s', 'text_delta')
+    expect(t.claimed).toHaveBeenCalledTimes(2)
+    t.activity.observe('s', 'turn_ended')
+    t.runtime({ key: 'agent:session:pid:start', turnOpen: true })
+    t.activity.observe('s', 'turn_started')
+    expect(t.claimed).toHaveBeenCalledTimes(2)
+  })
+  it('tells of a check that reads working with no turn open, and not of one with a turn open or a renewal', async () => {
+    const t = setup(); t.runtime({ key: 'agent:session:pid:start', turnOpen: false })
+    await t.activity.check('s', async () => 'working')
+    expect(t.claimed).toHaveBeenCalledExactlyOnceWith('s')
+    t.advance(5000); await t.activity.check('s', async () => 'working')
+    expect(t.claimed).toHaveBeenCalledOnce()
+    t.runtime({ key: 'agent:session:pid:start', turnOpen: true })
+    t.advance(); t.answer('working'); await t.activity.check('s')
+    expect(t.frame()?.state).toBe('working')
+    expect(t.claimed).toHaveBeenCalledOnce()
   })
   it('coalesces overlapping checks', async () => {
     const t = setup(); let calls = 0; let resolve!: (s: ActivityState) => void

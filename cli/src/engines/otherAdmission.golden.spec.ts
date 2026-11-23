@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { hashOf } from '../lib/log.js'
 
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/other-admission.golden.json', import.meta.url))
 const RECORD = process.env.RECORD_OTHER_ENGINES_GOLDEN === '1'
@@ -43,13 +44,16 @@ function check(key: string, value: unknown): void {
       expect(before.filter(row => row[0] === label)).toEqual([[label, 200, { pending: true },
         [{ sessionId: '20261008_100002_dddddd', engine: 'hermes', hermesHome: null }],
         ['[hooks] 20261008 SessionStart · engine=hermes · isNew=true · after a source check']]])
-      expect(after.filter(row => row[0] === label)).toEqual([[label, 200, { pending: true }, [],
-        ['[hooks] 20261008 SessionStart held · Hermes session source is ambiguous across homes; keeping the current conversation.']]])
+      // A hold is logged by its code, and a failure's by its kind (the sentence itself reaches the core, not the log). The
+      // former artifact logged one by its sentence's length.
+      const held = (code: string) => `[hooks] 20261008 SessionStart held · ${code}`
+      expect(after.filter(row => row[0] === label)).toEqual([[label, 200, { pending: true }, [], [held('HERMES_SOURCE_AMBIGUOUS')]]])
       const unreadable = 'one whose candidate store cannot be read'
-      const held = '[hooks] 20261008 SessionStart held · Hermes session source is unavailable; keeping the current conversation.'
-      expect(before.filter(row => row[0] === unreadable)).toEqual([[unreadable, 200, { pending: true }, [], [held]]])
+      const unavailable = 'Hermes session source is unavailable; keeping the current conversation.'
+      expect(before.filter(row => row[0] === unreadable)).toEqual([[unreadable, 200, { pending: true }, [],
+        [`[hooks] 20261008 SessionStart held · text(${unavailable.length})`]]])
       expect(after.filter(row => row[0] === unreadable)).toEqual([[unreadable, 200, { pending: true }, [],
-        [held + ' Conversation identity is held: a native store query is unavailable.']]])
+        [held('HERMES_SOURCE_UNAVAILABLE · IdentityReadUnavailable IDENTITY_UNAVAILABLE')]]])
       const healthy = (row: unknown[]) => row[0] !== label && row[0] !== unreadable
       expect(after.filter(healthy)).toEqual(before.filter(healthy))
     } else expect({ key, result }).toEqual({ key, result: golden[key] })
@@ -159,7 +163,10 @@ describe('how the core admits a Hermes session and learns its home', () => {
         // Settled off the HTTP path: verified, rejected, or explicitly held without a registry write.
         const deadline = Date.now() + 10_000
         while (!registered.length && !logs.some((line) => line.includes('ignored') || line.includes(' held ·')) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20))
-        results.push([label, response.status, answer, [...registered], logs.filter((line) => line.startsWith('[hooks]'))])
+        // A home is logged by its hash, which differs with each throwaway root: named here by the home it hashes.
+        const homes = (registered as Array<{ hermesHome: string | null }>).flatMap(entry => entry.hermesHome ? [entry.hermesHome] : [])
+        results.push([label, response.status, answer, [...registered], logs.filter((line) => line.startsWith('[hooks]'))
+          .map(line => homes.reduce((named, known) => named.replace(`home=${hashOf(known)}`, `home=hashOf(${known})`), line))])
       }
       check('admission', results)
     } finally {

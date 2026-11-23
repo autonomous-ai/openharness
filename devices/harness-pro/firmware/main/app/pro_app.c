@@ -150,6 +150,7 @@ static void perform(const pod_out_t *o)
     case POD_FX_VOICE_BEGIN: voice_begin_effect(o->agent); break;
     case POD_FX_VOICE_END: voice_end_effect(); break;
     case POD_FX_VOICE_ABORT: pro_voice_end(false); break;
+    case POD_FX_APP_PICK: pro_cable_send_app_pick(o->agent); break;
     case POD_FX_NONE: break;
     }
 }
@@ -309,6 +310,10 @@ void pro_app_link(bool up, const char *machine)
         s_linked = true;
         s_lib_pending = false;
         s_sweep_offset = 0;
+        // Another computer on a live link: the last one's apps are not its, and an older daemon there sends none to replace
+        // them. Its welcome said apps.switch just before this; the agents.end it is asked for says the view. Through the glue,
+        // so a pick waiting for the last computer's ring ends here.
+        if (was) settle(pod_ui_apps(&s_pod, NULL, 0, "", ms()));
         const pod_out_t fx = pod_ui_link(&s_pod, true);
         if (was) s_pod.sweep.restart = true;   // another computer: look the library up again
         settle(fx);
@@ -320,9 +325,10 @@ void pro_app_link(bool up, const char *machine)
 
 // ---- roster, tabs, library ------------------------------------------------------------------------------
 
-void pro_app_agents(const pro_agent_row_t *rows, int n)
+void pro_app_agents(const pro_agent_row_t *rows, int n, bool machine_view, bool tab_open)
 {
     pro_app_lock();
+    pod_model_clock(&s_pod.model, ms());   // a pick's wait is timed on this clock, which otherwise stands still while the glass sleeps
     int m = 0;
     memset(s_info, 0, sizeof s_info);
     for (int i = 0; i < n && m < POD_AGENTS_MAX; i++) {
@@ -333,12 +339,14 @@ void pro_app_agents(const pro_agent_row_t *rows, int n)
             if (!strcmp(s_rows[k].id, r->id)) dup = true;
         if (dup) continue;
         s_rows[m] = (pod_roster_row_t){r->id, r->name && r->name[0] ? r->name : r->id, r->engine ? r->engine : "",
-                                       r->machine ? r->machine : ""};
+                                       r->machine ? r->machine : "", r->host, r->caps_off};
         copy_cut(s_info[m].id, ID_MAX, r->id);
         // An oversize machine id is no id (UH 5579-5740): the agent then has no machine to gate on.
         if (r->machine_id && strnlen(r->machine_id, ID_MAX) < ID_MAX) copy_cut(s_info[m].machine_id, ID_MAX, r->machine_id);
         m++;
     }
+    // The view before the roster's nav sync: whether Home lists tabs or app cards is settled on this frame, not the next.
+    pod_model_view(&s_pod.model, machine_view, tab_open);
     settle(pod_ui_roster(&s_pod, s_rows, m));
     leave();
 }
@@ -349,6 +357,22 @@ void pro_app_swarms(const cable_swarm_t *items, int n, const cable_swarm_members
     pro_app_lock();
     pod_model_clock(&s_pod.model, ms());   // the focus echo window is measured on this clock, which otherwise stands still while the glass sleeps
     settle(pod_ui_swarms(&s_pod, items, n, members, selected, tiles, tile_n));   // every frame, changed or not (P12)
+    leave();
+}
+
+// Through the glue, which syncs the nav: a picked app's room opens on the frame that shows its ring. The model bumps its
+// revision only on a change, so settle redraws only then: the same list again costs nothing.
+void pro_app_apps(const cable_app_t *rows, int n, const char *shown)
+{
+    pro_app_lock();
+    settle(pod_ui_apps(&s_pod, rows, n, shown, ms()));
+    leave();
+}
+
+void pro_app_apps_switch(bool on)
+{
+    pro_app_lock();
+    settle(pod_ui_apps_switch(&s_pod, on));
     leave();
 }
 
@@ -535,7 +559,7 @@ void pro_app_notif_seen(const char *id, const char *token)
     leave();
 }
 
-void pro_app_question(const char *id, const char *request, const char *text)
+void pro_app_question(const char *id, const char *request, const char *text, bool list)
 {
     if (!id_ok(id)) return;
     pro_app_lock();
@@ -549,8 +573,10 @@ void pro_app_question(const char *id, const char *request, const char *text)
         int a = set_find(s_alerted, id);
         const bool again = a >= 0 && s_alerted_h[a] == h;   // filed already, re-sent after a relink: no second beep
         if (!again && set_add(s_alerted, id)) { a = set_find(s_alerted, id); s_alerted_h[a] = h; }
-        // A question is an alert; filed again after a relink it is the same one, and only the row returns.
-        if (pod_ui_notify_text(&s_pod, id, POD_TIER_ALERT, q, true, !pro_app_asleep(), ms()) && !again) alert_locked();
+        // A question is an alert unless the daemon tells it again; filed again after a relink it is the same one, and only
+        // the row returns.
+        const pod_tier_t tier = list ? POD_TIER_LIST : POD_TIER_ALERT;
+        if (pod_ui_notify_text(&s_pod, id, tier, q, true, !pro_app_asleep(), ms()) && !again) alert_locked();
         change();
     }
     leave();
@@ -601,16 +627,22 @@ void pro_app_talk_over(void)
     pro_app_unlock();
 }
 
-// UH pod_voice_block_reason (R8), with the open-question set standing in for the notice list.
-const char *pro_app_voice_block_reason(const char *agent_id)
+// UH pod_voice_block_reason (R8), with the open-question set standing in for the notice list. *see_it (when given) says
+// the reason is "See it in <App>", which shows for 2 s as the round dial's hint.
+static const char *block_reason(const char *agent_id, bool *see_it)
 {
     const char *why = NULL;
+    if (see_it) *see_it = false;
     pro_app_lock();
     const pod_agent_t *pa = id_ok(agent_id) ? pod_model_find(&s_pod.model, agent_id) : NULL;
     if (pod_ui_updating(&s_pod) || atomic_load(&s_updating)) {   // the flag alone: an offer's gate holds voice off before its screen
         why = "Updating";   // a recording over a firmware write would starve it (owner, 2026-10-11)
     } else if (!s_linked) {
         why = "Not connected";
+    } else if (pa && !(pa->caps & POD_CAP_V)) {
+        // Its app takes no voice: where to go comes before every other reason, since nothing here can make it talk.
+        why = pod_host_see_it(pa->host);
+        if (see_it) *see_it = true;
     } else if (pa) {
         const cable_machine_t *mach = NULL;
         for (int i = 0; i < POD_AGENTS_MAX && !mach; i++) {
@@ -629,6 +661,8 @@ const char *pro_app_voice_block_reason(const char *agent_id)
     return why;   // a literal, valid after the unlock
 }
 
+const char *pro_app_voice_block_reason(const char *agent_id) { return block_reason(agent_id, NULL); }
+
 void pro_app_voice_result(int kind, const char *text)
 {
     if (!pro_voice_open()) return;   // a reply nobody waits for
@@ -646,7 +680,8 @@ void pro_app_voice_result(int kind, const char *text)
 // Pod asked to record (R8, P3). The gate and the recorder run without the lock; the refusal path takes it.
 static void voice_begin_effect(const char *agent)
 {
-    const char *why = pro_app_voice_block_reason(agent);
+    bool see_it;
+    const char *why = block_reason(agent, &see_it);
     const bool was_open = pro_voice_open();
     if (!why) {
         pro_voice_begin(agent);
@@ -658,7 +693,9 @@ static void voice_begin_effect(const char *agent)
         // A start that was refused must not leave Talk up, and says why for a moment.
         pro_app_lock();
         pod_ui_talk_over(&s_pod);
-        pod_ui_notice(&s_pod, why ? why : !s_linked ? "Not connected" : was_open ? "Still sending the last message" : "Can't talk right now", ms());
+        const uint32_t now = ms();
+        pod_ui_notice(&s_pod, why ? why : !s_linked ? "Not connected" : was_open ? "Still sending the last message" : "Can't talk right now", now);
+        if (see_it) s_pod.notice_until = now + POD_SEE_IT_MS;
         change();
         pro_app_unlock();
     }

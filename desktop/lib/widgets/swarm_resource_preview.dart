@@ -6,6 +6,10 @@ import 'package:flutter/services.dart';
 
 import '../core/models.dart';
 import '../core/test_run.dart';
+import '../harness_os/harness_os.dart';
+import '../harness_os/intern_manage_dialog.dart';
+import '../harness_os/intern_setup_dialog.dart';
+import '../harness_os/intern_unlock_dialog.dart';
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../models/api_connections_controller.dart'
@@ -249,6 +253,58 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview>
       machine.nodeOnline != false &&
       !machine.needsLink &&
       machine.connectionStatus == ConnectionStatus.connected;
+
+  /// Only its owner manages an Intern 3 (CLI osDevice.ts refuses anyone else), and a browser
+  /// cannot reach its hotspot.
+  bool _ownsIntern(MachineState machine) =>
+      app.viewer == null &&
+      !machine.isLocalMachine &&
+      !machine.machine.isShared &&
+      !machine.machine.isSharedMachine;
+
+  Future<void> _manageIntern(String machineId) => _modal(
+    () => showInternManage(
+      context,
+      app,
+      machineId,
+      onUnlock: () => unawaited(_unlockIntern(machineId)),
+    ),
+  );
+
+  Future<void> _unlockIntern(String machineId) =>
+      _modal(() => showInternUnlock(context, app, machineId));
+
+  /// What the machine's Intern 3 status says, asked when it is shown, at most every few minutes
+  /// ([HarnessOs.refresh]).
+  List<Object> _internFacts(MachineState machine) {
+    final id = machine.machine.machineId;
+    final os = app.harnessOs;
+    if (_ownsIntern(machine)) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        unawaited(os.load());
+        if (_isOnline(machine)) unawaited(os.refresh(id));
+      });
+    }
+    // Offline, its last status is no longer what it is: switched off, or waiting at its password.
+    if (machine.nodeOnline == false) {
+      return [
+        if (os.encrypted(id))
+          'If it restarted, it waits for its password. Unlock it over its Wi-Fi “${os.hotspot(id)}”.',
+      ];
+    }
+    if (!os.runsHarnessOs(id)) return const [];
+    final release = os.parts(id)['os']?['running'];
+    return [
+      '',
+      (
+        'Intern 3',
+        release is String ? 'Harness OS ${HarnessOs.releaseOf(release)}' : '',
+      ),
+      if (os.wifi(id) case final ssid?) ('Wi-Fi', ssid),
+      if (os.updateAvailable(id)) ('Update', 'New version'),
+    ];
+  }
 
   /// Scope the picker to this machine's harnesses — the same list Enter on
   /// a project/machine group opens, so Rename/Delete are not the only doors.
@@ -907,6 +963,13 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview>
             () => _editMachine(MachinePickerFormKind.cli),
             command: 'picker.machine_cli',
           ),
+          // A browser cannot reach the box's hotspot page: Set up Intern 3 is the apps' own.
+          if (app.viewer == null)
+            _ResourceAction(
+              'Intern 3',
+              () => unawaited(_modal(() => showInternSetup(context, app))),
+              command: 'picker.machine_intern',
+            ),
           // Machines shared with this account's domain: one click adds each.
           for (final shared in app.machinesToAdd)
             _ResourceAction(
@@ -1083,6 +1146,11 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview>
           ),
         ...secondary.where((a) => a.command == 'picker.resource_connect'),
         ...secondary.where((a) => a.command == 'picker.resource_settings'),
+        ...secondary.where(
+          (a) =>
+              a.command == 'picker.resource_intern' ||
+              a.command == 'picker.resource_unlock',
+        ),
         if (!machine.machine.isShared && !machine.machine.isSharedMachine)
           _ResourceAction(
             'Rename',
@@ -1227,6 +1295,24 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview>
             'Password',
             () => _editMachine(MachinePickerFormKind.password),
             command: 'picker.resource_settings',
+          ),
+        // An Intern 3 of this account: managed while it is online, unlocked over its hotspot while
+        // it waits at its disk's password after a restart.
+        if (_ownsIntern(machine) &&
+            _isOnline(machine) &&
+            app.harnessOs.runsHarnessOs(machine.machine.machineId))
+          _ResourceAction(
+            'Manage',
+            () => unawaited(_manageIntern(machine.machine.machineId)),
+            command: 'picker.resource_intern',
+          ),
+        if (_ownsIntern(machine) &&
+            machine.nodeOnline == false &&
+            app.harnessOs.encrypted(machine.machine.machineId))
+          _ResourceAction(
+            'Unlock',
+            () => unawaited(_unlockIntern(machine.machine.machineId)),
+            command: 'picker.resource_unlock',
           ),
         if (!machine.isLocalMachine &&
             !machine.machine.isShared &&
@@ -1722,6 +1808,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview>
           resources?.memoryTotalBytes != null)
         'RAM ${(resources!.memoryUsedBytes! / (1024 * 1024 * 1024)).toStringAsFixed(1)} / ${(resources.memoryTotalBytes! / (1024 * 1024 * 1024)).toStringAsFixed(0)} GB',
       '${machine.agents.length} ${machine.agents.length == 1 ? 'harness' : 'harnesses'}',
+      ..._internFacts(machine),
       ..._deviceFacts(_device),
       ?app.machineListError,
       ?_messages[row!.id],

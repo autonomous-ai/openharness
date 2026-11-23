@@ -339,7 +339,7 @@
  "repair · a drifted claude row": {"folder":"<root>/my work/repo.v2","logged":[]},
  "repair · a claude row at home": {"folder":null,"logged":[]},
  "repair · a claude row through a link": {"folder":null,"logged":[]},
- "repair · a claude row whose transcript names none": {"folder":null,"logged":["[repair] abcdef01 cwd <root>/my work/repo.v2/sub dir is not its transcript's project folder, and the transcript names no matching folder — left as is"]},
+ "repair · a claude row whose transcript names none": {"folder":null,"logged":["[repair] abcdef01 cwd is not its transcript's project folder, and the transcript names no matching folder — left as is"]},
  "repair · a claude row whose transcript is elsewhere": {"folder":null,"logged":[]},
  "repair · a claude row with no transcript": {"folder":null,"logged":[]},
  "repair · a claude row with no cwd": {"folder":null,"logged":[]},

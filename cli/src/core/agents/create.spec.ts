@@ -525,6 +525,7 @@ describe('creating an agent', () => {
     it('for a permission flag the engine does not take', async () => {
       vi.mocked(refusePermissionFlagIfUnsupported).mockResolvedValueOnce({ error: 'PERMISSION_MODE_UNSUPPORTED', detail: 'opencode has no --auto' } as never)
       expect(await setup().create(request({ engine: 'opencode', permissionMode: 'auto' }))).toEqual({ ok: false, error: 'PERMISSION_MODE_UNSUPPORTED', detail: 'opencode has no --auto' })
+      expect(console.warn).toHaveBeenCalledWith('[agent] create refused · opencode · PERMISSION_MODE_UNSUPPORTED')
     })
 
     it('for a DSH that is missing, a viewer, the wrong engine, or on a tmux too old to pass it on', async () => {
@@ -537,6 +538,7 @@ describe('creating an agent', () => {
       expect(await create(request({ dsh: 'blender' }))).toMatchObject({ error: 'INVALID_DSH', detail: 'Blender runs on codex' })
       capabilities.mockResolvedValueOnce({ sessionEnv: false })
       expect(await create(request({ dsh: 'blender' }))).toMatchObject({ error: 'TMUX_TOO_OLD_FOR_DSH' })
+      expect(console.warn).toHaveBeenCalledWith('[agent] create blender refused · TMUX_TOO_OLD_FOR_DSH')
       vi.mocked(installedDsh).mockReset().mockReturnValue(undefined)
     })
 
@@ -576,8 +578,10 @@ describe('creating an agent', () => {
       const { create } = setup()
       buildGridLaunch.mockResolvedValueOnce({ ok: false, error: 'GRID_ENGINE_UNSUPPORTED', detail: 'no grid for amp' })
       expect(await create(request({ grid }))).toEqual({ ok: false, error: 'GRID_ENGINE_UNSUPPORTED', detail: 'no grid for amp' })
+      expect(console.warn).toHaveBeenCalledWith('[agent] create claude refused · GRID_ENGINE_UNSUPPORTED')
       capabilities.mockResolvedValueOnce({ sessionEnv: false })
       expect(await create(request({ grid }))).toMatchObject({ error: 'TMUX_TOO_OLD_FOR_GRID' })
+      expect(console.warn).toHaveBeenCalledWith('[agent] create claude refused · TMUX_TOO_OLD_FOR_GRID')
       const configured = { ok: true, launch: { env: {}, args: [], webSearch: 'off', configDir: { envVar: 'PI_CONFIG', files: {}, links: [] } } }
       buildGridLaunch.mockResolvedValueOnce(configured as never).mockResolvedValueOnce(configured as never).mockResolvedValueOnce(configured as never)
       vi.mocked(writeGridConfigDir).mockRejectedValueOnce(new Error('read-only')).mockRejectedValueOnce('worse')
@@ -747,6 +751,21 @@ describe('creating an agent', () => {
       vi.mocked(materializeWorkspace).mockReset().mockResolvedValue({ warnings: [], created: [], kept: [] } as never)
     })
 
+    // A warning names the template's folder (dsh/materialize.ts), and so does the workspace: the log counts the one and
+    // names neither.
+    it('the materializer\'s warnings are counted', async () => {
+      vi.mocked(installedDsh).mockReturnValue(installed() as never)
+      vi.mocked(materializeWorkspace).mockResolvedValueOnce({ warnings: ['template /Users/sentinel/t is missing'], created: ['AGENTS.md'], kept: [] } as never)
+      const cwd = folder()
+      expect(await setup().create(request({ dsh: 'blender', cwd }))).toMatchObject({ ok: true })
+      const lines = [...vi.mocked(console.warn).mock.calls, ...vi.mocked(console.log).mock.calls].map((call) => call.map(String).join(' ')).join('\n')
+      expect(lines).not.toContain('sentinel')
+      expect(lines).not.toContain(cwd)
+      expect(lines).toContain('[dsh] blender materialize · 1 warnings')
+      expect(lines).toContain('[dsh] blender materialized · created 1 · kept 0')
+      vi.mocked(installedDsh).mockReset().mockReturnValue(undefined)
+    })
+
     it('as the Model Manager: grid is set up first, waiting a while for it', async () => {
       const log = vi.mocked(console.log)
       vi.mocked(installedDsh).mockReturnValue(installed({ id: 'autonomous/autonomous-grid' }) as never)
@@ -822,7 +841,7 @@ describe('creating an agent', () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       const t = setup({ installOpencodePlugin: vi.fn(async () => false) })
       expect(await t.create(request({ engine: 'opencode' }))).toEqual({ ok: false, error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s plugin installer could not be loaded' })
-      expect(warn).toHaveBeenCalledWith('[agent] create opencode refused · OpenCode\'s plugin installer could not be loaded')
+      expect(warn).toHaveBeenCalledWith('[agent] create opencode refused · ENGINE_UNAVAILABLE')
       expect(createAndRegisterPane).not.toHaveBeenCalled()
       warn.mockRestore()
     })

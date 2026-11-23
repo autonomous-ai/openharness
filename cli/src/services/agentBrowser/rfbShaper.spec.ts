@@ -19,7 +19,7 @@ function rig(profile = relay) {
   const closes: [string, string][] = []
   const shaper = new RfbShaper(profile, () => t, (ms, fn) => { timers.push({ at: t + ms, fn }) })
   shaper.onOutput((bytes) => { out.push([...bytes]) })
-  shaper.onClose((reason, detail) => { closes.push([reason, detail]) })
+  shaper.onClose((reason, violation) => { closes.push([reason, violation]) })
   const push = (...messages: number[][]) => { shaper.push(Uint8Array.from(messages.flat())) }
   const advance = (ms: number) => {
     t += ms

@@ -5,10 +5,13 @@ import { join } from 'node:path'
 import { namesTheDisk } from '../harnessd/supervisor.js'
 import { errorKind } from './log.js'
 import type { registry as Registry } from './registry.js'
+import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 
 const refuse = vi.hoisted(() => ({ code: undefined as string | undefined, directorySync: undefined as string | undefined }))
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
+const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
 vi.mock('node:fs/promises', async original => {
-  const actual = await original<typeof import('node:fs/promises')>()
+  const actual = await deadline.slowSyncFsPromises(original)
   return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
     if (refuse.code && /\/(registry|agent-names)\.json\..*\.tmp$/.test(String(args[0]))) {
       throw Object.assign(new Error(`${refuse.code}: fixture, open '${String(args[0])}'`), { code: refuse.code })
@@ -25,6 +28,9 @@ vi.mock('./secureState.js', async original => {
     return actual.syncStateDirectory(...args)
   } }
 })
+// Loads the module graph once, before any hook's time limit: cold, it takes seconds on a loaded machine. Each test
+// still imports fresh modules (vi.resetModules), now from the warm transform cache.
+await import('./registry.js')
 
 let directory: string
 let registry: typeof Registry
@@ -32,6 +38,8 @@ let AtomicWriteUnconfirmed: typeof import('./secureState.js').AtomicWriteUnconfi
 const input = { agentId: 'persisted-agent', engine: 'claude' as const, tmuxPane: '%1',
   processIdentity: { pid: 101, executable: '/fixture/claude', startMarker: 'fixture-101' } }
 beforeEach(async () => {
+  // No test here means the write deadline to pass: how fast this machine writes the registry never fails them.
+  deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS)
   vi.resetModules()
   directory = mkdtempSync(join(tmpdir(), 'registry-disk-'))
   for (const key of ['ADAPTER_DATA_DIR', 'CLAUDE_PROJECTS_DIR', 'CODEX_HOME', 'CURSOR_HOME']) vi.stubEnv(key, directory)

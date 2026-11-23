@@ -32,7 +32,8 @@ import { runCoreInForeground } from './core/main.js'
 import { startCoreProcess } from './coreProcess.js'
 import { backendHttpBase } from './lib/backendHttpBase.js'
 import { GRID_MINT_TIMEOUT_MS, requestJson, postJson, controlPlaneAuth } from './lib/controlPlane.js'
-import { LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabel, DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, daemonPort, isAlive, onError, readPid } from './lib/daemonState.js'
+import { LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabel, DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, daemonPort, failForegroundStart, isAlive, readPid } from './lib/daemonState.js'
+import { onError } from './lib/commandFailure.js'
 import { daemonUnreachableText, sandboxed, startRefusalText } from './lib/unreachable.js'
 import { BIND_WAIT_MS, connectFailure, daemonSpawnOptions, defaultLaunchDeps, waitForBind } from './lib/daemonLaunch.js'
 import { ensureUtf8Locale } from './lib/childLocale.js'
@@ -92,7 +93,7 @@ import { startServiceProcess } from './serviceProcess.js'
 import { askDataFolderServer, isLocalSocketName, localSocketPath, refuseServedDataFolder, shortSocketFolder, servedFolderDeps } from './lib/localSocket.js'
 import { nodeRow, readNodeStatus, type NodeStatus } from './lib/nodeStatus.js'
 import { legacyDaemonStatus, localDaemonCall, localDaemonStatus } from './lib/daemonEndpoint.js'
-import { ownProcessGroup } from './lib/windows/noWindow.js'
+import { openInBrowser } from './lib/openInBrowser.js'
 import { PipeUnproven } from './lib/windows/pipeClient.js'
 import { ptyManifestUrl, ptyPlatformKey, type PtyEntry } from './lib/windows/ptyPayload.js'
 import { newerPtyForUpdate } from './lib/windows/ptyUpdateCommand.js'
@@ -200,6 +201,7 @@ Machine:
   harness service uninstall    undo that: the daemon goes back to \`harness start\`
   harness service status       what launchd, systemd or Task Scheduler has registered, and whether it runs (--json)
   harness logs export          zip the last 7 days of logs (app, CLI, dial, daemon) to the Desktop
+  harness hooks hermes         the hook entries to add by hand to a Hermes config.yaml that has its own \`hooks:\`
   harness tui                  all of Harness in this terminal: tabs, panes, every machine (⌥O ⌥P ⌥N)
   harness new [agent] [--machine <name>] [folder|name] [-- task]
                                make a harness from a shell: \`harness new\` is claude here; see \`harness new -h\`
@@ -1102,16 +1104,6 @@ function promptForCallbackUrl(redirectUri: string): {
     promise,
     cancel: () => { settled = true; rl.close(); process.stdin.pause(); process.stdin.unref() },
   }
-}
-
-/** Best-effort: a failed open is not a failed connect, the URL is printed above either way. */
-function openInBrowser(url: string): void {
-  const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open'
-  try {
-    const child = spawn(cmd, [url], { stdio: 'ignore', ...ownProcessGroup(), shell: process.platform === 'win32' })
-    child.on('error', () => { /* no browser here (headless/ssh) — the printed URL is the fallback */ })
-    child.unref()
-  } catch { /* ignore */ }
 }
 
 /** This process is the scheduled task's `harness start --if-down` (Windows), which never forgets a `harness stop`. */
@@ -2923,7 +2915,8 @@ switch (cmd) {
     // the environment) records every frame to/from a paired Autonomous device — see lib/autonomous-device/dump.ts.
     const dump = flags.find((f) => f === '--device-dump' || f.startsWith('--device-dump='))
     if (dump) process.env.HARNESS_DEVICE_DUMP = dump === '--device-dump' ? '1' : resolve(dump.slice('--device-dump='.length))
-    startCommand(foreground, repair, flags.includes('--if-down'), flags.includes(AT_LOGON_FLAG), flags.includes('--restart')).catch(onError)
+    startCommand(foreground, repair, flags.includes('--if-down'), flags.includes(AT_LOGON_FLAG), flags.includes('--restart'))
+      .catch(foreground ? failForegroundStart : onError)
     break
   }
   case 'join':
@@ -3130,6 +3123,16 @@ switch (cmd) {
       orca: orcaPluginRun,
       env: process.env,
       cwd: process.cwd(),
+      write: (line) => new Promise((resolve) => {
+        // A failed write's 'error' follows its callback, and unheard it would end the process with a trace on stderr:
+        // the listener stays for it, and goes once a write succeeds.
+        const failed = (): void => resolve(false)
+        process.stdout.once('error', failed)
+        process.stdout.write(`${line}\n`, (error) => {
+          if (!error) process.stdout.off('error', failed)
+          resolve(!error)
+        })
+      }),
       out: (line) => console.log(line),
       err: (line) => console.error(line),
     }).then((code) => { process.exitCode = code }).catch(onError)
@@ -3191,6 +3194,9 @@ switch (cmd) {
     break
   case 'status':
     status().catch(onError)
+    break
+  case 'hooks': // loaded only here: the engines' hook declarations are not every command's
+    import('./engines/hooksCommand.js').then(({ hooksCommand }) => { process.exitCode = hooksCommand(args[0], daemonPort()) }).catch(onError)
     break
   case 'logs':
     if (args[0] === 'export') {

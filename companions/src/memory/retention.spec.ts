@@ -31,6 +31,8 @@ function claim() {
   return result.lease
 }
 function bytesContain(value: string): boolean { return readFileSync(join(directory, 'memory.sqlite')).includes(Buffer.from(value)) }
+// Each store write is a durable commit; per-row commits made fixture setup take seconds on a busy CI disk.
+function seedInOneCommit(seed: () => void): void { store['transaction'](seed) }
 beforeEach(() => {
   directory = mkdtempSync(join(tmpdir(), 'memory-retention-'))
   now = 1_000
@@ -84,7 +86,7 @@ it('preserves full input until every pending episode that shares it has finished
 })
 
 it('applies backpressure without acknowledging or saving a new episode when the backlog is full', () => {
-  for (let i = 0; i < MAX_PENDING_EPISODES; i++) capture(event(`source_${i}`))
+  seedInOneCommit(() => { for (let i = 0; i < MAX_PENDING_EPISODES; i++) capture(event(`source_${i}`)) })
   const cursor = store.learning.cursor('stream')
   const next = event('blocked')
   expect(() => capture(next)).toThrow('memory_backlog_full')
@@ -99,7 +101,7 @@ it('applies backpressure without acknowledging or saving a new episode when the 
   const fullCursor = store.learning.cursor('stream')
   expect(() => capture(event('still_blocked'))).toThrow('memory_backlog_full')
   expect(store.learning.cursor('stream')).toBe(fullCursor)
-}, 30_000) // Hundreds of durable writes; this is a backpressure check, not a five-second benchmark.
+})
 
 it('expires unreviewed input as an explicit gap, rejects late results and eventually prunes job metadata', () => {
   const source = event('expired')

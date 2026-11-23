@@ -1,0 +1,50 @@
+│
+◇
+
+🦞 OpenClaw 2026.11.2 (b556fdf) — When my context fills up, I summarize you. Don't worry—you come across great.
+
+ openclaw tui - ws://127.0.0.1:47311 - agent main - session main
+ connecting | idle
+ agent main | session main | unknown | deliver:off | tokens ?
+
+ Run `openclaw devices approve --latest` to preview the pending request, then rerun the printed `openclaw devices
+ approve <requestId>` command and reconnect (pass the same --url and --token/--password flags if you connected with
+ explicit credentials).
+ gateway disconnected: device pairing required (requestId: c8e997d6-d567-4cde-887e-b3ce4970be38) | device approval
+ needed: preview latest request
+ agent main | session main | unknown | deliver:off | tokens ?
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+gateway connect failed: GatewayClientRequestError: device pairing required (requestId: c8e997d6-d567-4cde-887e-b3ce4970b
+e38)────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+gateway connect failed: GatewayClientRequestError: device pairing required (requestId: c8e997d6-d567-4cde-887e-b3ce4970b
+e38)
+gateway connect failed: GatewayClientRequestError: device pairing required (requestId: c8e997d6-d567-4cde-887e-b3ce4970b
+e38)
+gateway connect failed: GatewayClientRequestError: device pairing required (requestId: c8e997d6-d567-4cde-887e-b3ce4970b
+e38)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

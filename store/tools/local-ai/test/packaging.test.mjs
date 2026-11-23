@@ -76,6 +76,9 @@ test('node.sh finds current-node by the rule', async t => {
       make: ['.local/share/harness'], runtime: '.local/state/harness/runtime' },
     { name: 'ADAPTER_RUNTIME_DIR', system: 'Linux', env: home => ({ ADAPTER_RUNTIME_DIR: join(home, 'own') }),
       make: ['.local/share/harness'], runtime: 'own' },
+    // As the CLI reads it (cli/src/config/envFields.ts homePath): a setup runs in its package, never the home.
+    { name: 'a relative ADAPTER_RUNTIME_DIR', system: 'Linux', env: () => ({ ADAPTER_RUNTIME_DIR: 'own' }),
+      make: ['.local/share/harness'], runtime: 'own' },
     { name: 'macOS', system: 'Darwin', make: ['.harness'], marker: '.local/share/harness', runtime: '.harness/runtime' },
   ];
   for (const c of cases) {

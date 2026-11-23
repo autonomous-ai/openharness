@@ -13,6 +13,7 @@ import '../core/harness_cli_runner.dart';
 import '../core/harness_home.dart';
 import '../core/hidden_process.dart';
 import '../core/staging_build.dart';
+import '../core/windows_folder.dart';
 import '../core/windows_layout.dart';
 import '../update/desktop_updater.dart' show semverGt;
 
@@ -110,14 +111,8 @@ String windowsManualInstallCommand(String url) =>
 
 /// Windows PowerShell by its full path. A bare `powershell.exe` is looked for
 /// in the working folder before System32.
-String windowsPowerShellPath(Map<String, String> environment) {
-  var root = '';
-  for (final entry in environment.entries) {
-    if (entry.key.toUpperCase() == 'SYSTEMROOT') root = entry.value;
-  }
-  if (root.isEmpty) root = r'C:\Windows';
-  return '$root\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
-}
+String windowsPowerShellPath() =>
+    windowsSystemProgram(r'WindowsPowerShell\v1.0\powershell.exe');
 
 /// What is wrong with the signatures [stdout] reports, one
 /// `name<TAB>status<TAB>signer` line per file (the provisioner's PowerShell
@@ -1567,7 +1562,7 @@ fi''';
     final ProcessResult result;
     try {
       result = await _runProbe(
-        windowsPowerShellPath(_platformEnvironment),
+        windowsPowerShellPath(),
         [
           '-NoProfile',
           '-NonInteractive',
@@ -1665,7 +1660,7 @@ foreach ($name in ($env:HARNESS_SIGNATURE_FILES -split [string][char]10)) {
         ),
       );
     }
-    final executable = windowsPowerShellPath(_platformEnvironment);
+    final executable = windowsPowerShellPath();
     final arguments = windowsInstallArguments(url);
     try {
       final start = _start;

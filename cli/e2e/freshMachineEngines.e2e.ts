@@ -78,8 +78,8 @@ it('starts an OpenCode that prints its help to standard error, with its permissi
   const d = await boot((d) => {
     const binary = join(d.root, 'bin', 'opencode'), launches = join(d.root, 'launches.jsonl')
     d.env.OPENCODE_PATH = binary
-    d.env.OPENCODE_DATA_DIR = join(d.root, 'opencode', 'data')
-    d.env.OPENCODE_PLUGIN_DIR = join(d.root, 'opencode', 'plugin')
+    d.env.OPENCODE_DATA_DIR = join(d.env.HOME!, 'opencode', 'data')
+    d.env.OPENCODE_PLUGIN_DIR = join(d.env.HOME!, 'opencode', 'plugin')
     // OpenCode 1.19.0 as measured: `--help` writes 4,285 bytes to standard error, none to standard output, exits 0.
     writeFileSync(binary, `#!${process.execPath}
 const fs = require('node:fs'), args = process.argv.slice(2);

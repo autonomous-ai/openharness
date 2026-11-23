@@ -153,8 +153,8 @@ describe('discovery', () => {
         await authority?.refresh?.()
         return change === 'not-published' ? { state: 'not-published' } : { state: 'confirmed', entry: null }
       })
-      if (change === 'same' || change === 'not-published') await run.handlers.onDormant(selected, 'exited')
-      else await expect(run.handlers.onDormant(selected, 'exited')).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+      if (change === 'same' || change === 'not-published') await run.handlers.onDormant(selected, 'engine process absent after 2 confirmed scans')
+      else await expect(run.handlers.onDormant(selected, 'engine process absent after 2 confirmed scans')).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
       expect(run.deps.stoppedAgents.finishResume).toHaveBeenCalledTimes(change === 'same' ? 1 : 0)
     })
   beforeEach(() => {
@@ -692,7 +692,7 @@ describe('discovery', () => {
     it('keeps its conversation, letting go of input, questions and the heartbeat', async () => {
       const run = setup()
       const exited = row({ resumeOnly: true } as Partial<RegisteredSession>)
-      await run.handlers.onDormant(exited, 'engine exited')
+      await run.handlers.onDormant(exited, 'engine process absent after 2 confirmed scans')
       expect(run.deps.invalidateTerminalControl).toHaveBeenCalledWith('a1')
       expect(run.deps.input.forget).toHaveBeenCalledWith('a1')
       expect(run.deps.deviceInput.forget).toHaveBeenCalledWith('a1')
@@ -704,7 +704,7 @@ describe('discovery', () => {
 
     it('keeps the conversation of an agent that was not a resume, with nothing to finish', async () => {
       const run = setup()
-      await run.handlers.onDormant(row(), 'engine exited')
+      await run.handlers.onDormant(row(), 'engine process absent after 2 confirmed scans')
       expect(run.deps.retainExitedSession).toHaveBeenCalledWith(row(), true, expect.any(Object))
       expect(run.deps.stoppedAgents.finishResume).not.toHaveBeenCalled()
     })
@@ -728,7 +728,7 @@ describe('discovery', () => {
         expect(running).toMatchObject({ active: true, launch: { state: 'ready' } })
         const failed = { ...running, active: false, launch: noToken } as RegisteredSession
         vi.mocked(run.deps.registry.setLaunch).mockReturnValueOnce(failed)
-        await run.handlers.onDormant(running, 'engine exited')
+        await run.handlers.onDormant(running, 'engine process absent after 2 confirmed scans')
         expect(capture).toHaveBeenCalledWith({ backend: 'tmux', paneId: '%0' })
         expect(run.deps.registry.setLaunch).toHaveBeenCalledExactlyOnceWith('a1', noToken)
         expect(run.deps.announceSession).toHaveBeenLastCalledWith(failed)
@@ -736,7 +736,7 @@ describe('discovery', () => {
         expect(run.deps.input.forget).toHaveBeenCalledWith('a1')
         // Failed into a row the registry no longer has: nothing to announce.
         vi.mocked(run.deps.announceSession).mockClear()
-        await run.handlers.onDormant(running, 'engine exited')
+        await run.handlers.onDormant(running, 'engine process absent after 2 confirmed scans')
         expect(run.deps.announceSession).not.toHaveBeenCalled()
         expect(run.deps.retainExitedSession).not.toHaveBeenCalled()
       })
@@ -748,14 +748,14 @@ describe('discovery', () => {
         for (const terminals of screens) {
           const run = setup({ terminals })
           run.rows.set('a1', agent)
-          await run.handlers.onDormant(agent, 'engine exited')
+          await run.handlers.onDormant(agent, 'engine process absent after 2 confirmed scans')
           expect(run.deps.registry.setLaunch).not.toHaveBeenCalled()
           expect(run.deps.retainExitedSession).toHaveBeenCalledOnce()
         }
         // A bound session is kept as every engine's: its pane is not read.
         const { capture, terminals } = paneShowing({ state: 'succeeded', value: tokenless })
         const run = setup({ terminals })
-        await run.handlers.onDormant(row({ engine: 'openclaw', sessionId: 'agent:main:harness-a1' }), 'engine exited')
+        await run.handlers.onDormant(row({ engine: 'openclaw', sessionId: 'agent:main:harness-a1' }), 'engine process absent after 2 confirmed scans')
         expect(capture).not.toHaveBeenCalled()
         expect(run.deps.retainExitedSession).toHaveBeenCalledOnce()
       })
@@ -769,7 +769,7 @@ describe('discovery', () => {
           run.rows.set('a1', { ...agent, launch: { state: 'starting' } })
           return { state: 'succeeded', value: tokenless }
         })
-        await run.handlers.onDormant(agent, 'engine exited')
+        await run.handlers.onDormant(agent, 'engine process absent after 2 confirmed scans')
         expect(run.deps.registry.setLaunch).not.toHaveBeenCalled()
         expect(run.deps.retainExitedSession).not.toHaveBeenCalled()
         expect(run.deps.announceSession).not.toHaveBeenCalled()
@@ -778,10 +778,10 @@ describe('discovery', () => {
 
     it('leaves a dormant row alone, and puts a launch that is still starting to sleep instead', async () => {
       const run = setup()
-      await run.handlers.onDormant(row({ active: false }), 'x')
+      await run.handlers.onDormant(row({ active: false }), 'engine process absent after 2 confirmed scans')
       expect(run.deps.invalidateTerminalControl).not.toHaveBeenCalled()
       const starting = row({ sessionId: '', launch: { state: 'starting' } } as Partial<RegisteredSession>)
-      await run.handlers.onDormant(starting, 'no process yet')
+      await run.handlers.onDormant(starting, 'engine process absent after 2 confirmed scans')
       expect(run.deps.questionWatcher.stop).not.toHaveBeenCalled()
       expect(run.deps.registry.setActive).toHaveBeenCalledWith('a1', false)
       expect(run.deps.announceSession).toHaveBeenCalledWith(starting)
@@ -791,17 +791,17 @@ describe('discovery', () => {
     it('holds a failed resume while its pane may still be about to launch the engine', async () => {
       const run = setup()
       const failed = row({ resumeOnly: true, tmuxPane: '%0', runtimes: [{ backend: 'tmux', paneId: '%0' }], launch: { state: 'failed' } } as Partial<RegisteredSession>)
-      await run.handlers.onDormant(failed, 'x') // the pane is gone: the reconciler's to remove
+      await run.handlers.onDormant(failed, 'engine process absent after 2 confirmed scans') // the pane is gone: the reconciler's to remove
       // tmux could not be asked, as when the daemon's event loop was held: no news either way.
       paneState.mockResolvedValueOnce('unknown')
-      await run.handlers.onDormant(failed, 'x')
+      await run.handlers.onDormant(failed, 'engine process absent after 2 confirmed scans')
       paneState.mockResolvedValueOnce({ dead: false, engineExit: null } as never)
-      await run.handlers.onDormant(failed, 'x') // a live shell, no engine exit
+      await run.handlers.onDormant(failed, 'engine process absent after 2 confirmed scans') // a live shell, no engine exit
       expect(run.deps.retainExitedSession).not.toHaveBeenCalled()
       paneState.mockResolvedValueOnce({ dead: true, engineExit: null } as never)
-      await run.handlers.onDormant(failed, 'pane died')
+      await run.handlers.onDormant(failed, 'engine process absent after 2 confirmed scans')
       paneState.mockResolvedValueOnce({ dead: false, engineExit: 1 } as never)
-      await run.handlers.onDormant(failed, 'engine exited 1')
+      await run.handlers.onDormant(failed, 'engine process absent after 2 confirmed scans')
       expect(run.deps.retainExitedSession).toHaveBeenCalledTimes(2)
       expect(run.deps.terminals.backendFor).toHaveBeenCalledWith({ backend: 'tmux', paneId: '%0' })
       expect(paneState).toHaveBeenCalledWith({ backend: 'tmux', paneId: '%0' })
@@ -810,7 +810,7 @@ describe('discovery', () => {
     it('asks a failed resume\'s own backend about its pane, never tmux about a ptyhost pane\'s id', async () => {
       const run = setup({ terminals: { backendFor: vi.fn(() => undefined) } })
       const pty = { backend: 'ptyhost' as const, instance: 'p1', paneId: '%0' }
-      await run.handlers.onDormant(row({ resumeOnly: true, tmuxPane: '%0', runtimes: [pty], launch: { state: 'failed' } } as Partial<RegisteredSession>), 'x')
+      await run.handlers.onDormant(row({ resumeOnly: true, tmuxPane: '%0', runtimes: [pty], launch: { state: 'failed' } } as Partial<RegisteredSession>), 'engine process absent after 2 confirmed scans')
       expect(run.deps.terminals.backendFor).toHaveBeenCalledExactlyOnceWith(pty)
       expect(paneState).not.toHaveBeenCalled()
       expect(run.deps.retainExitedSession).not.toHaveBeenCalled()
@@ -818,7 +818,7 @@ describe('discovery', () => {
 
     it('holds a failed resume whose pane no configured backend can read', async () => {
       const run = setup({ terminals: { backendFor: vi.fn(() => undefined) } })
-      await run.handlers.onDormant(row({ resumeOnly: true, tmuxPane: '%0', runtimes: [{ backend: 'tmux', paneId: '%0' }], launch: { state: 'failed' } } as Partial<RegisteredSession>), 'x')
+      await run.handlers.onDormant(row({ resumeOnly: true, tmuxPane: '%0', runtimes: [{ backend: 'tmux', paneId: '%0' }], launch: { state: 'failed' } } as Partial<RegisteredSession>), 'engine process absent after 2 confirmed scans')
       expect(run.deps.retainExitedSession).not.toHaveBeenCalled()
       expect(paneState).not.toHaveBeenCalled()
     })
@@ -826,10 +826,10 @@ describe('discovery', () => {
 
   it('removes a row whose pane is gone, unless restore never ran this boot', () => {
     const run = setup()
-    run.handlers.onRemoved(row(), 'pane gone')
+    run.handlers.onRemoved(row(), 'terminal runtime absent after 2 confirmed scans')
     expect(run.deps.forgetSession).toHaveBeenCalledWith('a1', { force: true, captured: row() })
     run.degrade()
-    run.handlers.onRemoved(row(), 'pane gone')
+    run.handlers.onRemoved(row(), 'terminal runtime absent after 2 confirmed scans')
     expect(run.deps.forgetSession).toHaveBeenCalledTimes(1)
     expect(run.deps.registry.setActive).toHaveBeenCalledWith('a1', false)
     expect(run.deps.announceSession).toHaveBeenCalled()
@@ -840,9 +840,9 @@ describe('discovery', () => {
     // outside the app from being retired, for as long as the core ran.
     const run = setup()
     run.degrade('a2')
-    run.handlers.onRemoved(row(), 'pane gone')
+    run.handlers.onRemoved(row(), 'terminal runtime absent after 2 confirmed scans')
     expect(run.deps.forgetSession).toHaveBeenCalledWith('a1', { force: true, captured: row() })
-    run.handlers.onRemoved({ ...row(), agentId: 'a2' }, 'pane gone')
+    run.handlers.onRemoved({ ...row(), agentId: 'a2' }, 'terminal runtime absent after 2 confirmed scans')
     expect(run.deps.forgetSession).toHaveBeenCalledTimes(1)
     expect(run.deps.registry.setActive).toHaveBeenCalledWith('a2', false)
   })
@@ -850,8 +850,8 @@ describe('discovery', () => {
   it('never archives a held conversation when its waiting shell or engine is absent', async () => {
     const run = setup()
     const held = row({ launch: { state: 'held', service: 'store', detail: 'Waiting for preparation.' } })
-    await run.handlers.onDormant(held, 'two engine misses')
-    run.handlers.onRemoved(held, 'two missing-pane scans')
+    await run.handlers.onDormant(held, 'engine process absent after 2 confirmed scans')
+    run.handlers.onRemoved(held, 'terminal runtime absent after 2 confirmed scans')
     expect(run.deps.retainExitedSession).not.toHaveBeenCalled()
     expect(run.deps.forgetSession).not.toHaveBeenCalled()
     expect(run.deps.registry.setActive).toHaveBeenCalledWith('a1', false)

@@ -57,8 +57,8 @@ describe('the file a service, or the core, starts from', () => {
     world.fingerprint = 'changed'
     expect(lean.scriptFor('search')).toBe(CLI)
     expect(logs).toEqual([
-      `[harnessd] the lean bundle ${LEAN} cannot be used (it is gone): the core and the services start from ${CLI}`,
-      `[harnessd] the lean bundle ${LEAN} cannot be used (its files changed): the core and the services start from ${CLI}`,
+      '[harnessd] the lean bundle cannot be used (it is gone): the core and the services start from cli.js',
+      '[harnessd] the lean bundle cannot be used (its files changed): the core and the services start from cli.js',
     ])
     world.fingerprint = 'f'
     expect(lean.scriptFor('search')).toBe(LEAN)
@@ -73,7 +73,7 @@ describe('the file a service, or the core, starts from', () => {
     const { lean, logs, world } = make()
     world.same = false
     expect(lean.scriptFor('search')).toBe(CLI)
-    expect(logs).toEqual([`[harnessd] the lean bundle ${LEAN} cannot be used (${CLI} is no longer the bundle it came from): the core and the services start from ${CLI}`])
+    expect(logs).toEqual(['[harnessd] the lean bundle cannot be used (cli.js is no longer the bundle it came from): the core and the services start from cli.js'])
   })
 
   it('checks only that the entry is there when it has no fingerprint to check against', () => {
@@ -92,7 +92,7 @@ describe('the file a service, or the core, starts from', () => {
       child.say({ type: 'not a beat' })
       child.exit(1)
     }
-    expect(logs).toEqual([`[harnessd] service search died ${LEAN_EARLY_DEATHS} times from the lean bundle before it beat: it starts from ${CLI} from now on`])
+    expect(logs).toEqual([`[harnessd] service search died ${LEAN_EARLY_DEATHS} times from the lean bundle before it beat: it starts from cli.js from now on`])
     expect(lean.scriptFor('search')).toBe(CLI)
     // Only that service: the others still start from the lean bundle.
     expect(lean.scriptFor('viewers')).toBe(LEAN)
@@ -107,7 +107,7 @@ describe('the file a service, or the core, starts from', () => {
       lean.started(CORE, LEAN_CORE, child.handle)
       child.exit(1)
     }
-    expect(logs).toEqual([`[harnessd] the core died ${LEAN_EARLY_DEATHS} times from the lean bundle before it beat: it starts from ${CLI} from now on`])
+    expect(logs).toEqual([`[harnessd] the core died ${LEAN_EARLY_DEATHS} times from the lean bundle before it beat: it starts from cli.js from now on`])
     expect(lean.scriptFor(CORE)).toBe(CLI)
     expect(lean.scriptFor('search')).toBe(LEAN)
   })

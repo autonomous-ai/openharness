@@ -1,16 +1,18 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { browserFolder, BrowserFilesError, capOutput, KEPT_FILES, OUTPUT_CAP_CHARS, saveScreenshot } from './browserOutput.js'
 
-const dirs: string[] = []
+const dirs: string[] = [], startFolder = process.cwd()
 const fresh = (): string => {
   const dir = mkdtempSync(join(tmpdir(), 'browser-output-'))
   dirs.push(dir)
   return dir
 }
 afterEach(() => {
+  vi.unstubAllEnvs()
+  process.chdir(startFolder)
   for (const dir of dirs.splice(0)) {
     chmodSync(dir, 0o700)
     rmSync(dir, { recursive: true, force: true })
@@ -48,6 +50,14 @@ describe('browserFolder', () => {
     const shot = saveScreenshot({ ADAPTER_DATA_DIR: data }, JPEG.toString('base64'), AT)
     expect(shot).toBe(join(data, 'agent-tmp', 'browser', 'shot-20261111-090507-042.jpg'))
     expect(readFileSync(shot).equals(JPEG)).toBe(true)
+  })
+
+  it('with no TMPDIR and a relative ADAPTER_DATA_DIR, is in the home\'s data folder, whatever folder the agent runs in', () => {
+    const home = fresh()
+    vi.stubEnv('HOME', home)
+    vi.stubEnv('USERPROFILE', home)
+    process.chdir(fresh())
+    expect(browserFolder({ ADAPTER_DATA_DIR: 'data' })).toBe(join(home, 'data', 'agent-tmp', 'browser'))
   })
 
   it('closes a folder that was left open', () => {

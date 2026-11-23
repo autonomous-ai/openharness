@@ -3,7 +3,7 @@
 // "pro_app_api.h" of the Max's build reads, the Pro's sources compiled there included. What the Max adds: each agent's
 // host and caps, the apps, answering on the device, New Harness's form, toasts, and a notification row's question flag.
 // pro_fork upstream: devices/harness-pro/firmware/main/pro_app_api.h
-// pro_fork blob: 38563cc33d1f3070c8e8916b65c5f747dd2277e3 (main 91f60b6a7b)
+// pro_fork blob: 7d4f860e59e93b920d979a1409c18e9068fc6a20 (main fc16e78f94)
 // scripts/check_pro_forks.py fails once the upstream file is no longer that blob: re-port its change here, then
 // record its new blob on these lines and in main/pro_fork/upstream.txt.
 // What pro_cable tells the app. pro_cable parses the daemon's messages and calls these; pro_app (Task 6) implements

@@ -4,7 +4,7 @@ import { afterEach, assert, beforeEach, test } from 'orca/testing'
 import { mkdtempSync, renameSync, rmSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { startDial, type Dial } from './dial'
-import { MISSING, nodeInputs, type DialInputs, type Ran } from './inputs'
+import { MISSING, nodeInputs, type DialInputs, type Ran, type Target } from './inputs'
 import type { DialState } from './protocol'
 
 const UNPLUGGED = '{"daemon":true,"devicesSocket":"/run/h/devices.sock","devicesReady":false}'
@@ -44,8 +44,8 @@ function world(answers: (Ran | Promise<Ran>)[], over: Partial<DialInputs> = {}) 
   let time = 0
   const timers = new Set<Timer>()
   const scheduled: number[] = []
-  const runs: { file: string; args: readonly string[]; path: string; timeoutMs: number; maxBytes: number; signal: AbortSignal; at: number }[] = []
-  const posts: { socket: string; body: string; signal: AbortSignal }[] = []
+  const runs: { file: string; args: readonly string[]; path: string; cwd: string; timeoutMs: number; maxBytes: number; signal: AbortSignal; at: number }[] = []
+  const posts: { target: Target; body: string; signal: AbortSignal }[] = []
   const replies: (number | null | Promise<number | null>)[] = []
   const watches: Watch[] = []
   const states: DialState[] = []
@@ -66,8 +66,8 @@ function world(answers: (Ran | Promise<Ran>)[], over: Partial<DialInputs> = {}) 
       return new Promise((settle) => bounds.signal.addEventListener('abort', () => settle(null)))
     },
     connect: nodeInputs().connect,
-    post(socket, body, signal) {
-      posts.push({ socket, body, signal })
+    post(target, body, signal) {
+      posts.push({ target, body, signal })
       called()
       const reply = replies.length > 0 ? replies.shift()! : 204
       return new Promise((settle) => {
@@ -179,8 +179,8 @@ async function streaming(more: (Ran | Promise<Ran>)[] = []) {
 }
 
 /** Unplugged with its watch on, its look again done, and a second gone since the last pass: a change asks at once. */
-async function watching(more: (Ran | Promise<Ran>)[]) {
-  const w = world([UNPLUGGED, UNPLUGGED, ...more])
+async function watching(more: (Ran | Promise<Ran>)[], unplugged = UNPLUGGED, over: Partial<DialInputs> = {}) {
+  const w = world([unplugged, unplugged, ...more], over)
   await w.until(() => w.timers.size > 0)
   w.to(1_000)
   await w.until(() => w.runs.length === 2 && w.timers.size > 0)
@@ -188,13 +188,17 @@ async function watching(more: (Ran | Promise<Ran>)[]) {
   return w
 }
 
-/** A connect that answers 200 with the chunks the test sends, each as sent; an abort ends them. */
+/** A connect that answers 200 with the chunks the test sends, each as sent; an abort or end() ends them. `targets`
+ *  holds each target it was given. */
 function feed() {
   const queue: Uint8Array[] = []
+  const targets: Target[] = []
   let ended = false
   let wake = () => {}
   return {
-    connect(_socket: string, _body: string, signal: AbortSignal) {
+    targets,
+    connect(target: Target, _body: string, signal: AbortSignal) {
+      targets.push(target)
       signal.addEventListener('abort', () => {
         queue.length = 0
         ended = true
@@ -214,27 +218,24 @@ function feed() {
       queue.push(...chunks)
       wake()
     },
+    end() {
+      ended = true
+      wake()
+    },
   }
 }
 
 const bytes = (text: string) => new TextEncoder().encode(text)
 
-test('on Windows the state is windows, and nothing is run or scheduled', async () => {
-  const w = world([], { platform: 'win32' })
-  await w.until(() => w.states.length > 0)
-  await w.dial.stop()
-  assert.deepEqual([w.states, w.runs, w.scheduled, w.watches], [[{ state: 'windows' }], [], [], []])
-})
-
-test('with no launcher the state is noHarness; ~/.local/bin/harness is asked first, then harness', async () => {
+test('with no launcher the state is noHarness; ~/.local/bin/harness is asked first, then harness, each in the home', async () => {
   const w = world([MISSING, MISSING])
   await w.until(() => w.states.length > 0)
   assert.deepEqual(w.states, [{ state: 'noHarness' }])
   assert.deepEqual(
-    w.runs.map(({ file, args, path, timeoutMs, maxBytes }) => ({ file, args, path, timeoutMs, maxBytes })),
+    w.runs.map(({ file, args, path, cwd, timeoutMs, maxBytes }) => ({ file, args, path, cwd, timeoutMs, maxBytes })),
     [
-      { file: '/h/.local/bin/harness', ...LINK },
-      { file: 'harness', ...LINK },
+      { file: '/h/.local/bin/harness', ...LINK, cwd: '/h' },
+      { file: 'harness', ...LINK, cwd: '/h' },
     ]
   )
   // The first answer that is not missing is the launcher's.
@@ -243,10 +244,21 @@ test('with no launcher the state is noHarness; ~/.local/bin/harness is asked fir
   assert.deepEqual(second.states, [{ state: 'unplugged' }])
 })
 
-test('with no home only harness is asked', async () => {
-  const w = world([MISSING], { home: '' })
+// A relative folder, or an empty one, is Orca's working folder, which can be a worktree Orca opened, whose own
+// `harness` must never run. With no absolute home there is no folder of the account's own to run in, and no Harness
+// either: it keeps its state there.
+test("only PATH's absolute folders are looked in, and with no absolute home nothing is asked", async () => {
+  const w = world([MISSING, MISSING], { path: 'node_modules/.bin::/usr/bin:.:/bin:' })
   await w.until(() => w.states.length > 0)
-  assert.deepEqual(w.runs.map((run) => run.file), ['harness'])
+  assert.deepEqual(w.runs.map(({ file, path }) => ({ file, path })), [
+    { file: '/h/.local/bin/harness', path: LINK.path },
+    { file: 'harness', path: LINK.path },
+  ])
+  for (const home of ['', 'h']) {
+    const homeless = world([MISSING, MISSING], { home })
+    await homeless.until(() => homeless.states.length > 0)
+    assert.deepEqual([homeless.runs, homeless.states], [[], [{ state: 'noHarness' }]])
+  }
 })
 
 test('a launcher that prints missing is notRunning, and the next is not asked', async () => {
@@ -643,8 +655,8 @@ test("front() with a stream open posts the ids to the stream's socket", async ()
   w.dial.front([H(1), H(2)])
   await w.until(() => w.posts.length === 1)
   assert.deepEqual(
-    w.posts.map(({ socket, body }) => ({ socket, body })),
-    [{ socket, body: '{"type":"orcaFront","terminals":["term_00000000-0000-4000-8000-000000000001","term_00000000-0000-4000-8000-000000000002"]}' }]
+    w.posts.map(({ target, body }) => ({ target, body })),
+    [{ target: { socket }, body: '{"type":"orcaFront","terminals":["term_00000000-0000-4000-8000-000000000001","term_00000000-0000-4000-8000-000000000002"]}' }]
   )
 })
 
@@ -692,9 +704,9 @@ test('each open posts the latest ids again', async () => {
   await w.until(() => w.due().includes(1_000))
   w.to(1_000)
   await w.until(() => w.posts.length === 2)
-  assert.deepEqual(w.posts.map(({ socket, body }) => ({ socket, body })), [
-    { socket, body: fronted(H(1)) },
-    { socket, body: fronted(H(1)) },
+  assert.deepEqual(w.posts.map(({ target, body }) => ({ target, body })), [
+    { target: { socket }, body: fronted(H(1)) },
+    { target: { socket }, body: fronted(H(1)) },
   ])
 })
 
@@ -876,14 +888,7 @@ test('a daemon from before orcaFront answers 404: one retry, one line, and the s
   assert.deepEqual(w.dial.state(), { state: 'attached', agent: { name: 'api', app: 'Orca' } })
 })
 
-test('on Windows, and after stop(), front() posts nothing and throws nothing; stop() aborts a send in flight and leaves no timer', async () => {
-  const windows = world([], { platform: 'win32' })
-  await windows.until(() => windows.states.length > 0)
-  windows.dial.front([H(1)])
-  windows.dial.front(null)
-  await answered()
-  assert.deepEqual([windows.posts, windows.timers.size], [[], 0])
-
+test('after stop(), front() posts nothing and throws nothing; stop() aborts a send in flight and leaves no timer', async () => {
   const { w } = await streaming()
   w.replies.push(new Promise(() => {}))
   w.dial.front([H(1)])
@@ -918,4 +923,102 @@ test('an answer that comes as stop() is called sends nothing more, though the st
   await stopping
   await answered()
   assert.deepEqual(bodies(w), [fronted(H(1))])
+})
+
+// Windows: link names the devices' pipe, its token and the record whose folder is watched, as `harness device orca
+// link` prints them there. A profile with a space, Vietnamese letters, ', & and %.
+const HOME = "C:\\Users\\Nguyễn Văn A' & 100%"
+const PIPE = '\\\\.\\pipe\\harness-0123456789abcdef0123456789abcdef'
+const TOKEN = '5f'.repeat(32)
+const RECORD = `${HOME}\\.harness\\devices.json`
+const ON_WINDOWS = { platform: 'win32', home: HOME }
+const windowsLine = (fields: Record<string, unknown>) => JSON.stringify({ daemon: true, ...fields })
+const WINDOWS_READY = windowsLine({ devicesPipe: PIPE, devicesToken: TOKEN, devicesReady: true, devicesRecord: RECORD })
+const WINDOWS_UNPLUGGED = windowsLine({ devicesReady: false, devicesRecord: RECORD })
+
+// In the profile: Windows looks for a bare name in the working folder before PATH.
+test("on Windows <home>\\.harness\\bin\\harness.exe is asked first, then harness in PATH's absolute folders, each in the profile", async () => {
+  const w = world([MISSING, MISSING], { ...ON_WINDOWS, path: 'C:\\Windows\\System32;.;node_modules\\.bin;;C:\\Program Files\\nodejs' })
+  await w.until(() => w.states.length > 0)
+  assert.deepEqual(w.states, [{ state: 'noHarness' }])
+  const path = 'C:\\Windows\\System32;C:\\Program Files\\nodejs'
+  assert.deepEqual(
+    w.runs.map(({ file, args, path, cwd, timeoutMs, maxBytes }) => ({ file, args, path, cwd, timeoutMs, maxBytes })),
+    [
+      { file: `${HOME}\\.harness\\bin\\harness.exe`, ...LINK, path, cwd: HOME },
+      { file: 'harness', ...LINK, path, cwd: HOME },
+    ]
+  )
+})
+
+test("on Windows a ready line opens the stream on the devices' pipe with its token, and front() posts there too", async () => {
+  const stream = feed()
+  const w = world([WINDOWS_READY], { ...ON_WINDOWS, connect: stream.connect })
+  stream.send(bytes(`${AGENT}\n`))
+  await w.until(() => w.states.length === 1)
+  assert.deepEqual([w.states, stream.targets], [[{ state: 'attached', agent: { name: 'api', app: 'Orca' } }], [{ pipe: PIPE, token: TOKEN }]])
+  w.dial.front([H(1)])
+  await w.until(() => w.posts.length === 1)
+  assert.deepEqual(w.posts.map(({ target, body }) => ({ target, body })), [{ target: { pipe: PIPE, token: TOKEN }, body: fronted(H(1)) }])
+})
+
+test('on Windows a line the devices could not have printed is notRunning, and nothing is connected or watched', async () => {
+  const printed = [
+    // A pipe on another computer: an SMB connection, which can carry the person's credentials.
+    windowsLine({ devicesPipe: '\\\\srv\\pipe\\harness-0123456789abcdef0123456789abcdef', devicesToken: TOKEN, devicesReady: true, devicesRecord: RECORD }),
+    windowsLine({ devicesPipe: '\\\\.\\pipe\\other-0123456789abcdef0123456789abcdef', devicesToken: TOKEN, devicesReady: true, devicesRecord: RECORD }),
+    windowsLine({ devicesPipe: PIPE, devicesToken: TOKEN.slice(1), devicesReady: true, devicesRecord: RECORD }),
+    windowsLine({ devicesPipe: PIPE, devicesToken: `A${TOKEN.slice(1)}`, devicesReady: true, devicesRecord: RECORD }),
+    windowsLine({ devicesPipe: PIPE, devicesReady: true, devicesRecord: RECORD }),
+    windowsLine({ devicesToken: TOKEN, devicesReady: true, devicesRecord: RECORD }),
+    windowsLine({ devicesPipe: PIPE, devicesToken: TOKEN, devicesReady: true, devicesRecord: '.harness\\devices.json' }),
+    windowsLine({ devicesPipe: PIPE, devicesToken: TOKEN, devicesReady: true }),
+    windowsLine({ devicesReady: false, devicesRecord: 'devices.json' }),
+    windowsLine({ devicesReady: false }),
+    windowsLine({ devicesPipe: PIPE, devicesToken: TOKEN, devicesReady: 'yes', devicesRecord: RECORD }),
+    // macOS and Linux's line names a socket, which the devices on Windows never print.
+    ready('/run/h/devices.sock'),
+  ]
+  for (const out of printed) {
+    let connected = 0
+    const connect = () => {
+      connected += 1
+      return Promise.resolve(null)
+    }
+    const w = world([out], { ...ON_WINDOWS, connect })
+    await w.until(() => w.states.length > 0)
+    assert.deepEqual([out, w.states, connected, w.watches], [out, [{ state: 'notRunning' }], 0, []])
+  }
+})
+
+test("on Windows unplugged watches the record's folder, and a devices.json entry asks link again at once", async () => {
+  const first = world([WINDOWS_UNPLUGGED], ON_WINDOWS)
+  await first.until(() => first.states.length > 0)
+  assert.deepEqual([first.states, first.watches.map((watch) => watch.folder)], [[{ state: 'unplugged' }], [`${HOME}\\.harness`]])
+
+  const w = await watching([WINDOWS_UNPLUGGED], WINDOWS_UNPLUGGED, ON_WINDOWS)
+  w.watches[0].changed('devices-token')
+  assert.equal(w.runs.length, 2)
+  w.watches[0].changed('devices.json')
+  assert.deepEqual(w.runs.map((run) => run.at), [0, 1_000, 2_000])
+})
+
+test('on Windows no line logged holds the token', async () => {
+  const stream = feed()
+  const w = world([WINDOWS_READY, WINDOWS_UNPLUGGED], { ...ON_WINDOWS, connect: stream.connect })
+  stream.send(bytes(`{"attached":false}\nnot json\n${AGENT}\n`))
+  await w.until(() => w.states.length > 0)
+  assert.deepEqual(w.states[0], { state: 'unplugged' })
+  await w.until(() => w.states.length === 2)
+  w.replies.push(500, null)
+  w.dial.front([H(1)])
+  await w.until(() => w.due().includes(1_000))
+  w.to(1_000)
+  await w.until(() => w.logs.includes('dial: front not sent'))
+  stream.end()
+  await w.until(() => w.due().includes(2_000))
+  w.to(2_000)
+  await w.until(() => w.states.length === 3)
+  assert.deepEqual(w.logs, ['dial: unplugged', 'dial: attached', 'dial: front not sent', 'dial: 1 lines skipped', 'dial: unplugged'])
+  assert.equal(w.logs.some((line) => line.includes(TOKEN)), false)
 })

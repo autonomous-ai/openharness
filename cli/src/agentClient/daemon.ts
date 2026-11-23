@@ -51,7 +51,7 @@ export interface Daemon {
 }
 
 /** What the daemon pushes a watch (core/toolWatches.ts), and another machine a harness watch (gateway/harnessWatch.ts). */
-const PUSHED = new Set(['agent_activity', 'turn_ended', 'commander_question', 'commander_question_close', 'agent_deleted', 'harness_event'])
+const PUSHED = new Set(['agent_activity', 'turn_ended', 'commander_question', 'commander_question_close', 'agent_synced', 'agent_deleted', 'harness_event'])
 
 /** A pushed event as a listener hears it: its type and payload. */
 export interface PushedEvent { type: string; payload: Record<string, unknown> }

@@ -9,18 +9,21 @@
 import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it, vi, type Mock } from 'vitest'
+import { describe, expect, it, onTestFinished, vi, type Mock } from 'vitest'
 
 import { CABLE_MAX_FRAME, CABLE_MAX_PAYLOAD, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DaemonCableHost } from './cableHost.js'
 import type { MachineFleet } from './machineFleet.js'
-import { CableSession, fitDrawer, SHOWN_ONLY_PREFIX, SWIPE_REST_MS, type CableAgent, type CableHost, type CableMachine, type CablePort, type DialAgent, type DialStatus, type SendOutcome } from './cableSession.js'
+import { CableSession, echoesCodeMoves, fitDrawer, SHOWN_ONLY_PREFIX, SWIPE_REST_MS, type CableAgent, type CableHost, type CableMachine, type CablePort, type CableSwarm, type DialAgent, type DialStatus, type SendOutcome } from './cableSession.js'
 import { DialLog } from './dialLog.js'
 import { noticeSummary } from './dialText.js'
 import { NO_ACCESS, NO_ACCESS_YET, PortAccessError } from './portAccess.js'
 import type { PetStore } from './pets/store.js'
+import { AppWake } from './hosts/appWake.js'
+import { ClaudeAppSource } from './hosts/claudeAppSource.js'
+import { observedAgentId } from './hosts/observed.js'
 import { HostRegistry } from './hosts/registry.js'
-import type { AppList, AppPick, HostAgent, HostSource } from './hosts/types.js'
+import type { AppEntry, AppList, AppPick, HostAgent, HostSource } from './hosts/types.js'
 import type { RegisteredSession } from '../lib/registry.js'
 
 // The voice router as it runs, watched: what it weighs, and the ranking it asks of the backend, leave this computer.
@@ -112,6 +115,17 @@ const AGENTS: CableAgent[] = [
   { id: 'a1', name: 'Fix login screen', engine: 'claude' },
   { id: 'a2', name: 'Device firmware voice', engine: 'codex' },
 ]
+
+/** The last round firmware that reports a move code made (0.0.59 is the first that does not): the old dial the 750 ms
+ *  echo guard is kept for. */
+const ECHOING = { fw: '0.0.58' }
+
+/** Date moves only when the test moves it. On the real clock a loaded machine let the 750 ms echo window (and the 1 s
+ *  switch repaint) close between the command and the report, and a test of that window failed for the machine's speed. */
+function stillClock() {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  onTestFinished(() => { vi.useRealTimers() })
+}
 
 function makeHost(over: Partial<CableHost> = {}) {
   const host: CableHost = {
@@ -860,7 +874,8 @@ describe('cable session', () => {
 
     port.say({ t: 'settings.state', ok: false, error: 'This device has no such character.', settings })
     await vi.waitFor(() => expect(seen.at(-1)).toMatchObject({ settings }))
-    expect(lines.some((l) => l.includes('refused a settings change: This device has no such character.'))).toBe(true)
+    // The dial's own words stay out of the log: a refusal is said by its length.
+    expect(lines).toContain('cable: device refused a settings change: text(34)')
 
     // A change made on the glass arrives unprompted and moves the pane.
     const quieter = { ...settings, quiet: true, brightness: 20 }
@@ -1133,6 +1148,33 @@ describe('cable session', () => {
       port.say(hi)
       await settle()
       expect(offers(port)).toBe(2)
+      await session.stop()
+    })
+
+    it('a dial\'s refusal of an image, or of a settings change, is logged by its code or length', async () => {
+      const lines: string[] = []
+      const { session, port } = await connect(makeHost({
+        firmwareFor: async () => ({ version: '9.9.9', image, sha256: 'x'.repeat(64) }), log: (line) => lines.push(line),
+      }))
+      for (const refusal of [{ message: 'no room at /Users/sentinel/fw' }, { message: 'BUSY' }, {}]) {
+        port.say(hi)
+        await settle()
+        port.say({ t: 'fw.error', ...refusal })
+        await settle()
+      }
+      for (const refusal of [{ error: 'no such face in /Users/sentinel' }, { error: 'UNKNOWN_SKIN' }, {}]) {
+        port.say({ t: 'settings.state', ok: false, ...refusal })
+        await settle()
+      }
+      expect(lines).toEqual(expect.arrayContaining([
+        'cable: firmware 9.9.9 refused: text(29) (0/2048 B)',
+        'cable: firmware 9.9.9 refused: BUSY (0/2048 B)',
+        'cable: firmware 9.9.9 refused: no reason given (0/2048 B)',
+        'cable: device refused a settings change: text(31)',
+        'cable: device refused a settings change: UNKNOWN_SKIN',
+        'cable: device refused a settings change: no reason given',
+      ]))
+      expect(lines.join('\n')).not.toContain('sentinel')
       await session.stop()
     })
 
@@ -1543,13 +1585,14 @@ describe('cable session', () => {
   })
 
   it('says again where the window is looking after the list is re-sorted', async () => {
+    stillClock()
     // The gap left by making re-anchors silent: the dial rebuilds when a re-sorted list lands, and if it
     // lands on the wrong tile nobody notices. Measured — a swipe pulled `a2` into a pane, the window
     // showed `a2`, the dial sat on the first agent. The daemon is the only side that knows both, so it
     // repeats itself after every push.
     let agents: CableAgent[] = [{ id: 'a1', name: 'one' }, { id: 'a2', name: 'two' }]
     const { session, port } = await connect(makeHost({ listAgents: async () => agents }))
-    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', ...ECHOING })
     await settle()
 
     await session.followApp('', 'a2')          // the window is on a2
@@ -1597,6 +1640,7 @@ describe('cable session', () => {
   })
 
   it('a swipe made DURING a slow machine switch still reaches the window', async () => {
+    stillClock()
     // Measured on the real desk: selecting a remote machine took ten seconds, and for all ten every dial
     // report was discarded as "the window is mid-switch". The dial walked on, the window stayed put, and
     // the two screens named different agents with nothing left to correct them.
@@ -1610,7 +1654,7 @@ describe('cable session', () => {
       selectMachine: vi.fn(async () => { await gate; return { ok: true as const } }),
     })
     const { session, port } = await connect(host)
-    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', ...ECHOING })
     await settle()
 
     const following = session.followApp('remote-machine', 'r1')
@@ -1626,7 +1670,6 @@ describe('cable session', () => {
 
     finishSelection()
     await following
-    vi.useRealTimers()
     await session.stop()
   })
 
@@ -1657,6 +1700,7 @@ describe('cable session', () => {
   })
 
   it('ignores stale dial focus while the app switches to a remote machine', async () => {
+    stillClock()
     let selected = 'mac-local'
     let finishSelection!: () => void
     const selectionGate = new Promise<void>((resolve) => { finishSelection = resolve })
@@ -1669,7 +1713,7 @@ describe('cable session', () => {
       }),
     })
     const { session, port } = await connect(host)
-    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', ...ECHOING })
     await settle()
 
     const following = session.followApp('remote-machine', 'r1')
@@ -1725,6 +1769,7 @@ describe('cable session', () => {
   })
 
   it('does not bounce a local app selection back to the previous remote agent', async () => {
+    stillClock()
     let selected = 'remote-machine'
     let finishSelection!: () => void
     const selectionGate = new Promise<void>((resolve) => { finishSelection = resolve })
@@ -1737,7 +1782,7 @@ describe('cable session', () => {
       }),
     })
     const { session, port } = await connect(host)
-    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', ...ECHOING })
     await settle()
 
     const following = session.followApp('mac-local', 'a2')
@@ -3440,6 +3485,8 @@ describe('spoken output search purpose', () => {
     const A = 'a'.repeat(16)
     const B = 'b'.repeat(16)
     const NEW = 'c'.repeat(16)
+    /** Packs another computer put on the dial: this one never maps them. */
+    const F = ['1', '2', '3', '4'].map((d) => d.repeat(16))
     /** A pack the size of two slices; the crc field is the u32 at offset 18, as in the real header. */
     const pack = (fill: number, size = 20_000) => { const b = Buffer.alloc(size, fill); b[4] = 1; b.writeUInt32LE(0xdeadbeef, 18); return b }
     const packs: Record<string, Buffer> = { [A]: pack(1), [B]: pack(2, 100), [NEW]: pack(3, 100) }
@@ -3568,6 +3615,23 @@ describe('spoken output search purpose', () => {
       await session.stop()
     })
 
+    it('a dial\'s refusal of a pet is logged by its code or length', async () => {
+      const lines: string[] = []
+      const store = fakeStore({ all: A, engines: { claude: B } })
+      const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore, log: (line) => lines.push(line) }))
+      port.say({ ...hello, pets: 1, petIds: [] })
+      await settle()
+      port.say({ t: 'pet.error', id: A, reason: 'memory' })
+      await settle()
+      port.say({ t: 'pet.error', id: B, reason: 'no room for /Users/sentinel/pets' })
+      await settle()
+      // The dial's own word stays where the person reads it.
+      expect(session.petDial().errors).toEqual({ [A]: 'memory', [B]: 'no room for /Users/sentinel/pets' })
+      expect(lines).toContain(`cable: dial refused pet ${A}: text(6)`)
+      expect(lines.join('\n')).not.toContain('sentinel')
+      await session.stop()
+    })
+
     it('a hello that lost a held pack abandons the transfer in flight and offers again', async () => {
       const store = fakeStore({ all: A, engines: { claude: B } })
       const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore }))
@@ -3587,27 +3651,250 @@ describe('spoken output search purpose', () => {
       await session.stop()
     })
 
-    it('a memory refusal after a pet.drop is offered once more after 1.5 s', async () => {
+    it('a memory refusal drops a spare pack once and offers again after 1.5 s', async () => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
       try {
         const store = fakeStore({ all: A, engines: {} })
         const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore }))
-        port.say({ ...hello, pets: 1, petIds: [NEW] }) // the old pet goes, the new one comes
+        const drops = () => port.sent.filter((m) => m.t === 'pet.drop').map((m) => m.id)
+        const offers = () => port.sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)
+        port.say({ ...hello, pets: 1, petIds: [F[0], F[1]] }) // another computer's packs, with slots to spare
         await vi.advanceTimersByTimeAsync(5)
-        expect(port.sent.filter((m) => m.t === 'pet.drop')).toEqual([{ t: 'pet.drop', id: NEW }])
+        expect(drops()).toEqual([])
+        expect(offers()).toEqual([A])
         port.say({ t: 'pet.error', id: A, reason: 'memory' })
         await vi.advanceTimersByTimeAsync(1_000)
-        expect(port.sent.filter((m) => m.t === 'pet.offer')).toHaveLength(1)
+        expect(drops()).toEqual([F[0]])
+        expect(offers()).toEqual([A])
         await vi.advanceTimersByTimeAsync(600)
-        expect(port.sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)).toEqual([A, A])
+        expect(offers()).toEqual([A, A])
         // Only once.
         port.say({ t: 'pet.error', id: A, reason: 'memory' })
         await vi.advanceTimersByTimeAsync(5_000)
-        expect(port.sent.filter((m) => m.t === 'pet.offer')).toHaveLength(2)
+        expect(drops()).toEqual([F[0]])
+        expect(offers()).toEqual([A, A])
+        // A keepalive forgives the refusal and offers again; a refusal of it drops nothing more.
+        port.say({ ...hello, pets: 1, petIds: [F[1]] })
+        await vi.advanceTimersByTimeAsync(5)
+        expect(offers()).toEqual([A, A, A])
+        port.say({ t: 'pet.error', id: A, reason: 'memory' })
+        await vi.advanceTimersByTimeAsync(5_000)
+        expect(drops()).toEqual([F[0]])
+        expect(offers()).toEqual([A, A, A])
         await session.stop()
       } finally {
         vi.useRealTimers()
       }
+    })
+
+    it('a memory refusal right after this computer swapped its own pack is offered once more after 1.5 s', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        const store = fakeStore({ all: B, engines: {} })
+        const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore }))
+        const drops = () => port.sent.filter((m) => m.t === 'pet.drop').map((m) => m.id)
+        const offers = () => port.sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)
+        port.say({ ...hello, pets: 1, petIds: [B] })
+        await vi.advanceTimersByTimeAsync(5)
+        store.current = { all: A, engines: {} }
+        await session.petsChanged()
+        expect(drops()).toEqual([B])
+        expect(offers()).toEqual([A])
+        // No spare pack to free: the dropped one's memory is still settling, so the same pack is offered once more.
+        port.say({ t: 'pet.error', id: A, reason: 'memory' })
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(offers()).toEqual([A])
+        await vi.advanceTimersByTimeAsync(600)
+        expect(offers()).toEqual([A, A])
+        expect(drops()).toEqual([B])
+        await session.stop()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('a busy refusal (the dial holds more than its hello said) drops a spare pack and offers again after 1.5 s', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        const store = fakeStore({ all: A, engines: {} })
+        const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore }))
+        const drops = () => port.sent.filter((m) => m.t === 'pet.drop').map((m) => m.id)
+        const offers = () => port.sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)
+        port.say({ ...hello, pets: 1, petIds: [F[0], F[1], F[2]] })
+        await vi.advanceTimersByTimeAsync(5)
+        expect(drops()).toEqual([])
+        expect(offers()).toEqual([A])
+        port.say({ t: 'pet.error', id: A, reason: 'busy' })
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(drops()).toEqual([F[0]])
+        expect(offers()).toEqual([A])
+        await vi.advanceTimersByTimeAsync(600)
+        expect(offers()).toEqual([A, A])
+        await session.stop()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('two computers: a second computer with no pets keeps the first one\'s packs', async () => {
+      const first = fakeStore({ all: A, engines: {} })
+      const one = await connect(makeHost({ pets: () => first as unknown as PetStore }))
+      one.port.say({ ...hello, pets: 1, petIds: [] })
+      await settle()
+      one.port.say({ t: 'pet.accept', id: A })
+      await settle()
+      one.port.say({ t: 'pet.done', id: A })
+      await settle()
+      expect(one.session.petDial().held).toEqual([A])
+      await one.session.stop()
+      const second = fakeStore({ all: null, engines: {} })
+      const log = tmpLog()
+      const { session, port } = await connect(makeHost({ pets: () => second as unknown as PetStore }), log)
+      port.say({ ...hello, pets: 1, petIds: [A] })
+      await settle()
+      port.say({ ...hello, pets: 1, petIds: [A] }) // keepalive
+      await settle()
+      expect(port.sent.filter((m) => m.t === 'pet.map')).toEqual([{ t: 'pet.map', all: null, engines: {} }])
+      expect(petTypes(port)).toEqual(['pet.map'])
+      expect(session.petDial().held).toEqual([A])
+      await log.flush()
+      expect(readFileSync(log.currentPath, 'utf8')).not.toContain('dropped for room')
+      await session.stop()
+    })
+
+    it('a full dial of foreign packs: one spare dropped just before each offer, in the dial\'s order', async () => {
+      const store = fakeStore({ all: A, engines: { claude: B } })
+      const log = tmpLog()
+      const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore }), log)
+      const drops = () => port.sent.filter((m) => m.t === 'pet.drop').map((m) => m.id)
+      port.say({ ...hello, pets: 1, petIds: F })
+      await settle()
+      expect(petTypes(port)).toEqual(['pet.map', 'pet.drop', 'pet.offer'])
+      expect(port.sent.filter((m) => m.t === 'pet.drop')).toEqual([{ t: 'pet.drop', id: F[0] }])
+      expect(port.sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)).toEqual([A])
+      // The stored pack fills the freed slot: the next offer makes room again, with the next pack the dial listed.
+      port.say({ t: 'pet.done', id: A })
+      await settle()
+      expect(petTypes(port).slice(3)).toEqual(['pet.drop', 'pet.offer'])
+      expect(drops()).toEqual([F[0], F[1]])
+      expect(port.sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)).toEqual([A, B])
+      port.say({ t: 'pet.error', id: B, reason: 'crc' })
+      await settle()
+      expect(drops()).toEqual([F[0], F[1]])
+      await log.flush()
+      // The dial's log names the line without its `cable: ` prefix.
+      expect(readFileSync(log.currentPath, 'utf8').split(`pet ${F[0]} dropped for room`)).toHaveLength(2)
+      await session.stop()
+    })
+
+    it('a memory refusal of a pack just made room for drops nothing more and offers again after 1.5 s', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        const store = fakeStore({ all: A, engines: {} })
+        const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore }))
+        const drops = () => port.sent.filter((m) => m.t === 'pet.drop').map((m) => m.id)
+        const offers = () => port.sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)
+        port.say({ ...hello, pets: 1, petIds: F })
+        await vi.advanceTimersByTimeAsync(5)
+        expect(drops()).toEqual([F[0]])
+        expect(offers()).toEqual([A])
+        // The dial freed the slot at once, the memory only at its next frame: waiting is enough.
+        port.say({ t: 'pet.error', id: A, reason: 'memory' })
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(drops()).toEqual([F[0]])
+        expect(offers()).toEqual([A])
+        await vi.advanceTimersByTimeAsync(600)
+        expect(offers()).toEqual([A, A])
+        expect(drops()).toEqual([F[0]])
+        await session.stop()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('a later offer of a pack once made room for, into a dial with a free slot, still drops a spare on a memory refusal', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        const store = fakeStore({ all: A, engines: {} })
+        const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore }))
+        const drops = () => port.sent.filter((m) => m.t === 'pet.drop').map((m) => m.id)
+        const offers = () => port.sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)
+        port.say({ ...hello, pets: 1, petIds: F })
+        await vi.advanceTimersByTimeAsync(5)
+        port.say({ t: 'pet.done', id: A })
+        await vi.advanceTimersByTimeAsync(5)
+        // The pet goes and comes back on this link: the second offer has a free slot, so no spare went for it.
+        store.current = { all: null, engines: {} }
+        await session.petsChanged()
+        store.current = { all: A, engines: {} }
+        await session.petsChanged()
+        expect(drops()).toEqual([F[0], A])
+        expect(offers()).toEqual([A, A])
+        port.say({ t: 'pet.error', id: A, reason: 'memory' })
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(drops()).toEqual([F[0], A, F[1]])
+        await vi.advanceTimersByTimeAsync(600)
+        expect(offers()).toEqual([A, A, A])
+        await session.stop()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('a pack newer than the dial reads is never made room for', async () => {
+      const store = fakeStore({ all: B, engines: {} })
+      packs[B][4] = 2
+      try {
+        const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore }))
+        port.say({ ...hello, pets: 1, petIds: F })
+        await settle()
+        expect(petTypes(port)).toEqual(['pet.map'])
+        await session.stop()
+      } finally {
+        packs[B][4] = 1
+      }
+    })
+
+    it('a pack held at the hello and mapped, then unmapped, is dropped at once', async () => {
+      const store = fakeStore({ all: B, engines: {} })
+      const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore }))
+      port.say({ ...hello, pets: 1, petIds: [B] })
+      await settle()
+      store.current = { all: NEW, engines: {} }
+      await session.petsChanged()
+      await settle()
+      expect(petTypes(port)).toEqual(['pet.map', 'pet.map', 'pet.drop', 'pet.offer'])
+      expect(port.sent.filter((m) => m.t === 'pet.drop')).toEqual([{ t: 'pet.drop', id: B }])
+      expect(port.sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)).toEqual([NEW])
+      await session.stop()
+    })
+
+    it('after a reattach, a pack this computer sent on the last link is spare', async () => {
+      const store = fakeStore({ all: B, engines: {} })
+      const ports: LoopbackPort[] = []
+      const session = new CableSession(makeHost({ pets: () => store as unknown as PetStore }), tmpLog(), async (onData, onClosed) => {
+        const next = new LoopbackPort(onData, onClosed)
+        ports.push(next)
+        return next
+      })
+      session.start()
+      await vi.waitFor(() => expect(ports).toHaveLength(1))
+      ports[0].say({ ...hello, pets: 1, petIds: [] })
+      await settle()
+      ports[0].say({ t: 'pet.accept', id: B })
+      await settle()
+      ports[0].say({ t: 'pet.done', id: B })
+      await settle()
+      await ports[0].close('cable pulled')
+      await settle()
+      // The pet changed while the dial was on another computer.
+      store.current = { all: NEW, engines: {} }
+      await vi.waitFor(() => expect(ports).toHaveLength(2), NEXT_TICKS)
+      ports[1].say({ ...hello, pets: 1, petIds: [B] })
+      await settle()
+      expect(ports[1].sent.filter((m) => m.t === 'pet.drop')).toEqual([])
+      expect(ports[1].sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)).toEqual([NEW])
+      await session.stop()
     })
 
     it('hello.pets is the newest pack version the dial reads', async () => {
@@ -3731,12 +4018,12 @@ describe('spoken output search purpose', () => {
       await session.stop()
     })
 
-    it('a held pack that is no longer mapped is dropped on hello; the next missing pack is offered after pet.done', async () => {
+    it('a foreign pack is kept at the hello; the next missing pack is offered after pet.done', async () => {
       const store = fakeStore({ all: A, engines: { claude: B } })
       const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore }))
       port.say({ ...hello, pets: 1, petIds: [NEW] })
       await settle()
-      expect(port.sent.filter((m) => m.t === 'pet.drop')).toEqual([{ t: 'pet.drop', id: NEW }])
+      expect(port.sent.filter((m) => m.t === 'pet.drop')).toEqual([])
       port.say({ t: 'pet.done', id: A })
       await settle()
       expect(port.sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)).toEqual([A, B])
@@ -5201,7 +5488,9 @@ const NAMES: Record<string, string> = { ghostty: 'Ghostty', vscode: 'VS Code' }
 /** A host with the cable host's app answers: Ghostty (3) shown, VS Code (2, one waiting); v1 can be brought forward.
  *  With a window, a dial that says appFilter holds the shown app's ring while `appView` is set, and the tab t1 (a1, a2)
  *  otherwise; any other dial holds the tab. `focus` is the window's. `tabApps`: the tab's answer to such a dial carries
- *  the other apps, as the cable host's does. */
+ *  the other apps, as the cable host's does. `swarms`: the window's tabs, which the host answers on the tab. `working`:
+ *  each app's agents mid-turn, which the host's rows always carry (`cards`); `list` is the rows without it, the frame a
+ *  dial that does not say appCards gets. */
 function appHost(over: Partial<CableHost> = {}) {
   const state = {
     shown: 'ghostty',
@@ -5211,14 +5500,20 @@ function appHost(over: Partial<CableHost> = {}) {
     focus: undefined as { machineId: string; agentId: string } | undefined,
     rings: { ghostty: [row('g1', 'ghostty'), row('g2', 'ghostty'), row('g3', 'ghostty')], vscode: [row('v1', 'vscode', 'sf'), row('v2', 'vscode')] } as Record<string, CableAgent[]>,
     waiting: { vscode: 1 } as Record<string, number>,
+    working: {} as Record<string, number>,
+    swarms: [{ id: 't1', name: 'Main', agents: 2, panes: 2 }] as CableSwarm[],
   }
   const asked: Array<{ apps?: boolean } | undefined> = []
   const all = () => Object.values(state.rings).flat()
   const onTab = (opts?: { apps?: boolean }) => state.window && !(opts?.apps && state.appView)
-  const list = (): AppList => ({
+  const list = (): { shown: string; apps: Array<Omit<AppEntry, 'working'>> } => ({
     shown: state.shown,
     apps: Object.entries(state.rings).filter(([, r]) => r.length).map(([id, r]) => ({ id, name: NAMES[id], count: r.length, waiting: state.waiting[id] ?? 0 })),
   })
+  const cards = (): AppList => {
+    const { shown, apps } = list()
+    return { shown, apps: apps.map((a) => ({ ...a, working: state.working[a.id] ?? 0 })) }
+  }
   const pickApp = vi.fn((app: string, _cause?: 'pick' | 'notice'): AppPick => {
     if (state.window || !state.rings[app]?.length) return 'ignored'
     if (app === state.shown) return 'same'
@@ -5228,12 +5523,12 @@ function appHost(over: Partial<CableHost> = {}) {
   const host = makeHost({
     listAgentSnapshot: async (opts) => {
       asked.push(opts)
-      if (onTab(opts)) return { agents: AGENTS, tab: 't1', total: 2, ...(opts?.apps && state.tabApps ? { apps: { shown: 'harness', apps: list().apps } } : {}) }
+      if (onTab(opts)) return { agents: AGENTS, tab: 't1', total: 2, ...(opts?.apps && state.tabApps ? { apps: { shown: 'harness', apps: cards().apps } } : {}) }
       if (!opts?.apps) return { agents: all(), tab: '', total: all().length, view: 'machine' as const }
       const rows = state.rings[state.shown] ?? []
-      return { agents: rows, tab: '', total: rows.length, view: 'machine' as const, apps: list() }
+      return { agents: rows, tab: '', total: rows.length, view: 'machine' as const, apps: cards() }
     },
-    listSwarms: (opts) => onTab(opts) ? { selected: 't1', swarms: [{ id: 't1', name: 'Main', agents: 2, panes: 2 }], tiles: [] }
+    listSwarms: (opts) => onTab(opts) ? { selected: 't1', swarms: state.swarms, tiles: [] }
       : { selected: '', swarms: [], tiles: [] },
     activeSwarm: (opts) => onTab(opts) ? 't1' : '',
     appFocus: (opts) => state.window && !onTab(opts) ? undefined : state.focus,
@@ -5245,7 +5540,7 @@ function appHost(over: Partial<CableHost> = {}) {
     openAgent: vi.fn(async () => ({ ok: false as const, error: 'Harness did not open it.' })),
     ...over,
   })
-  return { host, state, asked, pickApp, list }
+  return { host, state, asked, pickApp, list, cards }
 }
 
 describe('a machine list lands a dial that holds no agent (docs/plans/2026-11-18-dial-chatgpt-pick-and-voice-design.md)', () => {
@@ -5262,9 +5557,9 @@ describe('a machine list lands a dial that holds no agent (docs/plans/2026-11-18
     port.say({ ...HELLO, ...hello })
     await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
   }
-  async function landed(snapshot: () => Snapshot, over: Partial<CableHost> = {}) {
+  async function landed(snapshot: () => Snapshot, over: Partial<CableHost> = {}, hello: Record<string, unknown> = {}) {
     const c = await connect(makeHost({ dialShows: vi.fn(), listAgentSnapshot: async () => snapshot(), ...over }))
-    await greet(c.port)
+    await greet(c.port, hello)
     return c
   }
   /** A session that opens a new loopback each time its port is reopened, as a dial unplugged and plugged in again. */
@@ -5502,7 +5797,7 @@ describe('a machine list lands a dial that holds no agent (docs/plans/2026-11-18
   it('in the 750 ms after the landing a swipe is dropped, and the first swipe after them moves the dial', async () => {
     vi.useFakeTimers({ toFake: ['Date', 'performance'] })
     try {
-      const { session, port, host } = await landed(() => machine(RING))
+      const { session, port, host } = await landed(() => machine(RING), {}, ECHOING)
       const shown = () => (host.dialShows as Mock).mock.calls.at(-1)?.[2]
       try {
         expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'o1' }])
@@ -5517,7 +5812,7 @@ describe('a machine list lands a dial that holds no agent (docs/plans/2026-11-18
         expect(shown()).toBe('h1')
       } finally { await session.stop() }
       // A focus on the landed agent within the 750 ms is taken as the landing's echo: no hand moved the dial.
-      const echoed = await landed(() => machine(RING), { turned: vi.fn() })
+      const echoed = await landed(() => machine(RING), { turned: vi.fn() }, ECHOING)
       try {
         echoed.port.say({ t: 'focus', agentId: 'o1' })
         await settle()
@@ -5526,16 +5821,568 @@ describe('a machine list lands a dial that holds no agent (docs/plans/2026-11-18
       } finally { await echoed.session.stop() }
     } finally { vi.useRealTimers() }
   })
+
+  const said = (host: CableHost) => (host.log as Mock).mock.calls.map(([line]) => line as string)
+  // The Linux sequence: the first ring goes out as `sf`, xdg-mime's answer turns it `svf` a tick later, and each push
+  // re-asserts the record. A turn 400 ms after the second push was dropped while the session waited for an echo.
+  const SAME_RING = (caps: string) => [row('a1', 'ghostty', caps), row('b1', 'ghostty', caps)]
+  it.each([
+    ['current firmware', { fw: '0.0.94' }],
+    ['a greeting with no fw', {}],
+    ['a Harness Pro on an old-looking fw', { board: 'pro', fw: '0.0.1' }],
+  ])('a turn 400 ms after the same ring re-pushed with new caps is taken: %s', async (_, hello) => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    let caps = 'sf'
+    const { session, port, host } = await landed(() => machine(SAME_RING(caps)), { turned: vi.fn(), log: vi.fn() }, hello)
+    try {
+      vi.advanceTimersByTime(1_100)
+      caps = 'svf'
+      await session.syncAgents()
+      expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'a1' }, { t: 'focus', agentId: 'a1' }])
+      vi.advanceTimersByTime(400)
+      port.say({ t: 'focus', agentId: 'b1' })
+      await settle()
+      expect(host.focus).toHaveBeenCalledWith('b1')
+      expect(host.turned).toHaveBeenCalledTimes(1)
+      expect(said(host).filter((l) => l.includes('dropped dial focus'))).toEqual([])
+      port.sent.length = 0
+      vi.advanceTimersByTime(1_100)
+      caps = 's'
+      await session.syncAgents()
+      expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'b1' }])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  it('on firmware older than 0.0.59 the same turn is still dropped as an echo', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    let caps = 'sf'
+    const { session, port, host } = await landed(() => machine(SAME_RING(caps)), { turned: vi.fn(), log: vi.fn() }, ECHOING)
+    try {
+      vi.advanceTimersByTime(1_100)
+      caps = 'svf'
+      await session.syncAgents()
+      expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'a1' }, { t: 'focus', agentId: 'a1' }])
+      vi.advanceTimersByTime(400)
+      port.say({ t: 'focus', agentId: 'b1' })
+      await settle()
+      expect(host.focus).not.toHaveBeenCalled()
+      expect(host.turned).not.toHaveBeenCalled()
+      expect(said(host)).toContain('cable: dropped dial focus b1 — waiting for a1')
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  // A dial updated in place greets again on the same port: the rule reads the latest greeting, not the first.
+  it('a dial that greets again on 0.0.94 after 0.0.58 has its turns taken from then on', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    const { session, port, host } = await landed(() => machine(SAME_RING('svf')), { log: vi.fn() }, ECHOING)
+    try {
+      vi.advanceTimersByTime(1_100)
+      port.sent.length = 0
+      const before = said(host).length
+      await greet(port, { fw: '0.0.94' })
+      expect(focuses(port)).toContainEqual({ t: 'focus', agentId: 'a1' })
+      vi.advanceTimersByTime(400)
+      port.say({ t: 'focus', agentId: 'b1' })
+      await settle()
+      expect(host.focus).toHaveBeenCalledWith('b1')
+      expect(said(host).slice(before).filter((l) => l.includes('dropped dial focus'))).toEqual([])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  // The same update, greeting inside a window a push opened for 0.0.58: no echo of it is coming from the new firmware.
+  it('a window opened for 0.0.58 closes when the dial greets again on 0.0.94', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    let caps = 'sf'
+    const { session, port, host } = await landed(() => machine(SAME_RING(caps)), { log: vi.fn() }, ECHOING)
+    try {
+      vi.advanceTimersByTime(1_100)
+      caps = 'svf'
+      await session.syncAgents()
+      port.sent.length = 0
+      await greet(port, { fw: '0.0.94' })
+      expect(focuses(port)).toContainEqual({ t: 'focus', agentId: 'a1' })
+      port.say({ t: 'focus', agentId: 'b1' })
+      await settle()
+      expect(host.focus).toHaveBeenCalledWith('b1')
+      expect(said(host).filter((l) => l.includes('dropped dial focus'))).toEqual([])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  // A greeting on the same firmware is a keepalive: the 0.0.58 dial's echo is still coming, so its window stays.
+  it('a window opened for 0.0.58 stays when the dial greets again on 0.0.58', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    let caps = 'sf'
+    const { session, port, host } = await landed(() => machine(SAME_RING(caps)), { log: vi.fn() }, ECHOING)
+    try {
+      vi.advanceTimersByTime(1_100)
+      caps = 'svf'
+      await session.syncAgents()
+      port.say({ ...HELLO, ...ECHOING })
+      await settle()
+      port.say({ t: 'focus', agentId: 'b1' })
+      await settle()
+      expect(host.focus).not.toHaveBeenCalled()
+      expect(said(host)).toContain('cable: dropped dial focus b1 — waiting for a1')
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+})
+
+describe('which dial echoes a move code made', () => {
+  it.each([
+    ['0.0.58', undefined, true], ['0.0.1', undefined, true], ['0.0.58-dev', undefined, true],
+    ['0.0.59', undefined, false], ['0.0.94', undefined, false], ['0.1.0-dev', undefined, false], ['1.0.0', undefined, false],
+    ['?', undefined, false], [null, undefined, false],
+    ['0.0.1', 'pro', false], ['0.0.99-pod', 'pro', false], ['0.1.16', 'pro', false],
+  ] as const)('fw %s, board %s: %s', (fw, board, echoes) => {
+    expect(echoesCodeMoves(fw, board)).toBe(echoes)
+  })
+})
+
+// The dial's carousel holds 16 tiles and adds a list's agents before it removes the old ones: a ring pushed over a full
+// one lost every agent the dial did not hold, and the dial sat on "Choose a pane" (Diego, 2026-11-20 17:32:40). "The
+// tick" here is an explicit sync after the fake clock moved: the session's own interval reads the clock as it is.
+describe('a ring that would overflow the dial goes in two steps (docs/plans/2026-11-20-dial-orca-pick-choose-pane-design.md)', () => {
+  type Snapshot = Awaited<ReturnType<NonNullable<CableHost['listAgentSnapshot']>>>
+  const SIXTEEN = Array.from({ length: 16 }, (_, i) => row(`f${i}`, 'ghostty'))
+  const ORCA = [row('o1', 'orca'), row('o2', 'orca')]
+  /** Two of SIXTEEN, f5 and f3, among two agents the dial does not hold: 18 with the sixteen. */
+  const MIXED = [row('n1', 'ghostty'), SIXTEEN[5], row('n2', 'ghostty'), SIXTEEN[3]]
+  const machine = (agents: CableAgent[]): Snapshot => ({ agents, tab: '', total: agents.length, view: 'machine' as const })
+  const tabOf = (agents: CableAgent[], tab: string): Snapshot => ({ agents, tab, total: agents.length })
+  const ids = (agents: CableAgent[]) => agents.map((a) => a.id)
+  /** Each agents.begin…agents.end sent from `from` on, as its agents' ids. */
+  const lists = (port: LoopbackPort, from = 0) => {
+    const out: string[][] = []
+    let list: string[] | null = null
+    for (const m of port.sent.slice(from)) {
+      if (m.t === 'agents.begin') list = []
+      else if (m.t === 'agent' && list) list.push(m.id as string)
+      else if (m.t === 'agents.end' && list) { out.push(list); list = null }
+    }
+    return out
+  }
+  const focuses = (port: LoopbackPort, from = 0) => port.sent.slice(from).filter((m) => m.t === 'focus')
+  /** The lists' ends and the focuses from `from` on, in the order they went. */
+  const order = (port: LoopbackPort, from = 0) => port.types().slice(from).filter((t) => t === 'agents.end' || t === 'focus')
+  const said = (host: CableHost) => (host.log as Mock).mock.calls.map(([line]) => line as string)
+  const splitLines = (host: CableHost) => said(host).filter((line) => line.includes('agents split'))
+
+  /** Waited for to the drawer, the attach push's last frame: the list and any focus after it have been sent. */
+  async function greet(port: LoopbackPort, hello: Record<string, unknown> = {}) {
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', ...hello })
+    await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+  }
+  async function landed(snapshot: () => Snapshot) {
+    const c = await connect(makeHost({ dialShows: vi.fn(), log: vi.fn(), listAgentSnapshot: async () => snapshot() }))
+    await greet(c.port)
+    return c
+  }
+  /** Landed on SIXTEEN (its face on f0), then, a push gap later, the ring is `next`: a split's step 1 goes. */
+  async function split(next: CableAgent[]) {
+    let rows = SIXTEEN
+    const c = await landed(() => machine(rows))
+    const mark = c.port.sent.length
+    vi.advanceTimersByTime(1_100)
+    rows = next
+    await c.session.syncAgents()
+    return { ...c, mark }
+  }
+
+  it('a full dial pushed a ring it holds none of gets an empty list, then the ring and a focus on its first agent a second later', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    const { session, port, host, mark } = await split(ORCA)
+    try {
+      expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'f0' }])
+      expect(lists(port, mark)).toEqual([[]])
+      expect(focuses(port, mark)).toEqual([])
+      expect((host.dialShows as Mock).mock.calls.at(-1)).toEqual([session, null, null])
+      await session.syncAgents()
+      expect(lists(port, mark)).toEqual([[]])
+      vi.advanceTimersByTime(1_000)
+      await session.syncAgents()
+      expect(lists(port, mark)).toEqual([[], ['o1', 'o2']])
+      expect(focuses(port, mark)).toEqual([{ t: 'focus', agentId: 'o1' }])
+      expect(order(port, mark)).toEqual(['agents.end', 'agents.end', 'focus'])
+      expect((host.dialShows as Mock).mock.calls.at(-1)).toEqual([session, { name: 'o1', app: 'Orca' }, 'o1'])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  it('a ring that keeps some of a full dial\'s agents sends those first, in the new order, and re-asserts the record after each step', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    let rows = SIXTEEN
+    const { session, port } = await landed(() => machine(rows))
+    try {
+      vi.advanceTimersByTime(751)
+      port.say({ t: 'focus', agentId: 'f3' })
+      await settle()
+      const mark = port.sent.length
+      vi.advanceTimersByTime(1_100)
+      rows = MIXED
+      await session.syncAgents()
+      expect(lists(port, mark)).toEqual([['f5', 'f3']])
+      vi.advanceTimersByTime(1_000)
+      await session.syncAgents()
+      expect(lists(port, mark)).toEqual([['f5', 'f3'], ['n1', 'f5', 'n2', 'f3']])
+      expect(order(port, mark)).toEqual(['agents.end', 'focus', 'agents.end', 'focus'])
+      expect(focuses(port, mark)).toEqual([{ t: 'focus', agentId: 'f3' }, { t: 'focus', agentId: 'f3' }])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  it('a forced push that splits (a pick\'s switched) holds its second step a second, its apps frame going once with the first', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    const { host, state } = appHost()
+    state.rings.ghostty = SIXTEEN
+    const { session, port } = await connect(host)
+    try {
+      await greet(port, { appFilter: 'v1' })
+      const mark = port.sent.length
+      const apps = () => port.sent.slice(mark).filter((m) => m.t === 'apps')
+      port.say({ t: 'app.pick', app: 'vscode' })
+      await vi.waitFor(() => expect(lists(port, mark)).toHaveLength(1))
+      expect(lists(port, mark)).toEqual([[]])
+      expect(apps()).toEqual([expect.objectContaining({ shown: 'vscode' })])
+      expect(port.types().slice(mark).indexOf('apps')).toBeLessThan(port.types().slice(mark).indexOf('agents.begin'))
+      await session.syncAgents(true)
+      expect(lists(port, mark)).toEqual([[]])
+      vi.advanceTimersByTime(1_000)
+      await session.syncAgents()
+      expect(lists(port, mark)).toEqual([[], ['v1', 'v2']])
+      expect(focuses(port, mark)).toEqual([{ t: 'focus', agentId: 'v1' }])
+      expect(apps()).toHaveLength(1)
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  it('a window tab\'s list that splits waits the hold too, and a list naming only held agents goes at once', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    try {
+      let rows = tabOf(SIXTEEN, 't1')
+      const other = await landed(() => rows)
+      try {
+        const mark = other.port.sent.length
+        rows = tabOf(ORCA, 't2')
+        await other.session.syncAgents()
+        expect(lists(other.port, mark)).toEqual([[]])
+        vi.advanceTimersByTime(500)
+        await other.session.syncAgents()
+        expect(lists(other.port, mark)).toEqual([[]])
+        vi.advanceTimersByTime(500)
+        await other.session.syncAgents()
+        expect(lists(other.port, mark)).toEqual([[], ['o1', 'o2']])
+        // A tab never lands: the window says where the dial goes.
+        expect(focuses(other.port)).toEqual([])
+      } finally { await other.session.stop() }
+      rows = tabOf(SIXTEEN, 't1')
+      const shrunk = await landed(() => rows)
+      try {
+        const mark = shrunk.port.sent.length
+        rows = tabOf(MIXED, 't2')
+        await shrunk.session.syncAgents()
+        expect(lists(shrunk.port, mark)).toEqual([['f5', 'f3']])
+        vi.advanceTimersByTime(300)
+        rows = tabOf([SIXTEEN[5]], 't2')
+        await shrunk.session.syncAgents()
+        expect(lists(shrunk.port, mark)).toEqual([['f5', 'f3'], ['f5']])
+      } finally { await shrunk.session.stop() }
+    } finally { vi.useRealTimers() }
+  })
+
+  it('the hold lasts while the dial\'s voice is open and a second after it closes', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    const { session, port, mark } = await split(ORCA)
+    try {
+      expect(lists(port, mark)).toEqual([[]])
+      vi.advanceTimersByTime(100)
+      port.say({ t: 'voice.begin', uploadId: 'u1' })
+      await settle()
+      vi.advanceTimersByTime(2_000)
+      await session.syncAgents()
+      expect(lists(port, mark)).toEqual([[]])
+      port.say({ t: 'voice.abort', uploadId: 'u1' })
+      await settle()
+      vi.advanceTimersByTime(900)
+      await session.syncAgents()
+      expect(lists(port, mark)).toEqual([[]])
+      vi.advanceTimersByTime(200)
+      await session.syncAgents()
+      expect(lists(port, mark)).toEqual([[], ['o1', 'o2']])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  it('a port open and the dial\'s agents.list end the hold', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    try {
+      let rows = SIXTEEN
+      const ports: LoopbackPort[] = []
+      const host = makeHost({ log: vi.fn(), listAgentSnapshot: async () => machine(rows) })
+      const session = new CableSession(host, tmpLog(), async (onData, onClosed) => {
+        const next = new LoopbackPort(onData, onClosed)
+        ports.push(next)
+        return next
+      })
+      session.start()
+      try {
+        await vi.waitFor(() => expect(ports).toHaveLength(1))
+        await greet(ports[0])
+        vi.advanceTimersByTime(1_100)
+        rows = ORCA
+        await session.syncAgents()
+        expect(lists(ports[0])).toEqual([ids(SIXTEEN), []])
+        await ports[0].close('unplugged')
+        // The tick reopens a port 2 s after it last opened one: here 900 ms after the split, inside its hold.
+        vi.advanceTimersByTime(900)
+        await vi.waitFor(() => expect(ports).toHaveLength(2), NEXT_TICKS)
+        await greet(ports[1])
+        expect(lists(ports[1])).toEqual([['o1', 'o2']])
+        expect(focuses(ports[1])).toEqual([{ t: 'focus', agentId: 'o1' }])
+        expect(splitLines(host)).toHaveLength(1)
+      } finally { await session.stop() }
+      const { session: asked, port, mark } = await split(ORCA)
+      try {
+        expect(lists(port, mark)).toEqual([[]])
+        port.say({ t: 'agents.list' })
+        await vi.waitFor(() => expect(port.types().slice(mark)).toContain('notif.replace'))
+        expect(lists(port, mark)).toEqual([[], ['o1', 'o2']])
+        expect(focuses(port, mark)).toEqual([{ t: 'focus', agentId: 'o1' }])
+      } finally { await asked.stop() }
+    } finally { vi.useRealTimers() }
+  })
+
+  it('a ring that fits with the old one in sixteen goes in one step', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    const SIX = Array.from({ length: 6 }, (_, i) => row(`s${i}`, 'ghostty'))
+    let rows = SIXTEEN.slice(0, 10)
+    const { session, port, host } = await landed(() => machine(rows))
+    try {
+      const mark = port.sent.length
+      vi.advanceTimersByTime(1_100)
+      rows = SIX
+      await session.syncAgents()
+      expect(lists(port, mark)).toEqual([ids(SIX)])
+      expect(splitLines(host)).toEqual([])
+      // A ring that replaces agents does not land, as before.
+      expect(focuses(port, mark)).toEqual([])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  it('the split line is said once a split, with counts only', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    try {
+      for (const [next, line, push] of [
+        [ORCA, 'cable: agents split · 0 kept · 2 in ring', 'cable: agents → 0 of 2'],
+        [MIXED, 'cable: agents split · 2 kept · 4 in ring', 'cable: agents → 2 of 4'],
+      ] as const) {
+        const { session, host } = await split(next)
+        try {
+          // A held push, then step 2.
+          await session.syncAgents()
+          vi.advanceTimersByTime(1_000)
+          await session.syncAgents()
+          expect(splitLines(host)).toEqual([line])
+          expect(said(host)[said(host).indexOf(line) + 1]).toBe(push)
+        } finally { await session.stop() }
+      }
+    } finally { vi.useRealTimers() }
+  })
+
+  it('a tab of more than sixteen agents after an empty dial goes in one push, and over a full dial in two, never three', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    const TWENTY = Array.from({ length: 20 }, (_, i) => row(`t${i}`, 'ghostty'))
+    try {
+      let rows = tabOf([], 't1')
+      const empty = await landed(() => rows)
+      try {
+        const mark = empty.port.sent.length
+        rows = tabOf(TWENTY, 't1')
+        await empty.session.syncAgents()
+        expect(lists(empty.port, mark)).toEqual([ids(TWENTY)])
+        expect(splitLines(empty.host)).toEqual([])
+      } finally { await empty.session.stop() }
+      rows = tabOf(SIXTEEN, 't1')
+      const full = await landed(() => rows)
+      try {
+        const mark = full.port.sent.length
+        rows = tabOf(TWENTY, 't1')
+        await full.session.syncAgents()
+        vi.advanceTimersByTime(1_000)
+        await full.session.syncAgents()
+        expect(lists(full.port, mark)).toEqual([[], ids(TWENTY)])
+        for (let i = 0; i < 2; i++) {
+          vi.advanceTimersByTime(1_000)
+          await full.session.syncAgents()
+        }
+        expect(lists(full.port, mark)).toEqual([[], ids(TWENTY)])
+      } finally { await full.session.stop() }
+    } finally { vi.useRealTimers() }
+  })
+
+  it('only the first sixteen rows of a list count, the ring\'s and the dial\'s: a tab that grows in front splits, one that loses a row past them does not', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    try {
+      // The dial keeps n1 and f0…f14 of the grown tab: f15 goes in step 1, so n1 then has a place.
+      const GROWN = [row('n1', 'ghostty'), ...SIXTEEN]
+      let rows = tabOf(SIXTEEN, 't1')
+      const grown = await landed(() => rows)
+      try {
+        const mark = grown.port.sent.length
+        rows = tabOf(GROWN, 't1')
+        await grown.session.syncAgents()
+        expect(lists(grown.port, mark)).toEqual([ids(SIXTEEN.slice(0, 15))])
+        expect(splitLines(grown.host)).toEqual(['cable: agents split · 15 kept · 17 in ring'])
+        vi.advanceTimersByTime(1_000)
+        await grown.session.syncAgents()
+        expect(lists(grown.port, mark)).toEqual([ids(SIXTEEN.slice(0, 15)), ids(GROWN)])
+      } finally { await grown.session.stop() }
+      // The dial holds t0…t15 of twenty; t17 was never a tile.
+      const TWENTY = Array.from({ length: 20 }, (_, i) => row(`t${i}`, 'ghostty'))
+      const SHORTER = TWENTY.filter((a) => a.id !== 't17')
+      rows = tabOf(TWENTY, 't1')
+      const shorter = await landed(() => rows)
+      try {
+        const mark = shorter.port.sent.length
+        rows = tabOf(SHORTER, 't1')
+        await shorter.session.syncAgents()
+        expect(lists(shorter.port, mark)).toEqual([ids(SHORTER)])
+        expect(splitLines(shorter.host)).toEqual([])
+      } finally { await shorter.session.stop() }
+    } finally { vi.useRealTimers() }
+  })
+
+  it('back on the window\'s tab from a full app ring, the record moves to the window\'s agent and no focus names the agent left on the tab', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    const { host, state } = appHost()
+    state.window = true
+    // The app's ring grows to sixteen while shown, so nothing lands the dial on it: the record keeps a1, where a hand
+    // left the dial on the tab.
+    state.rings.ghostty = SIXTEEN.slice(0, 3)
+    const { session, port } = await connect(host)
+    try {
+      await greet(port, { appFilter: 'v1' })
+      port.say({ t: 'focus', agentId: 'a1' })
+      await vi.waitFor(() => expect(host.focus).toHaveBeenCalledWith('a1'))
+      state.appView = true
+      await session.viewChanged()
+      vi.advanceTimersByTime(1_100)
+      state.rings.ghostty = SIXTEEN
+      await session.syncAgents()
+      expect(lists(port).at(-1)).toEqual(ids(SIXTEEN))
+      const mark = port.sent.length
+      state.focus = { machineId: 'mac-local', agentId: 'a2' }
+      state.appView = false
+      await session.viewChanged()
+      vi.advanceTimersByTime(1_000)
+      await session.syncAgents()
+      expect(lists(port, mark)).toEqual([[], ['a1', 'a2']])
+      expect(focuses(port, mark).length).toBeGreaterThan(0)
+      expect(focuses(port, mark).every((m) => m.agentId === 'a2')).toBe(true)
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  it('a follow in flight during the hold lands nothing first: its own focus, then the re-assert after the ring', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    const { session, port, mark } = await split(ORCA)
+    try {
+      await session.followApp('', 'o2')
+      // Its list push is held; its focus goes with no list before it, and the firmware keeps it for the tile to come.
+      expect(lists(port, mark)).toEqual([[]])
+      expect(order(port, mark)).toEqual(['agents.end', 'focus'])
+      vi.advanceTimersByTime(1_000)
+      await session.syncAgents()
+      expect(lists(port, mark)).toEqual([[], ['o1', 'o2']])
+      expect(order(port, mark)).toEqual(['agents.end', 'focus', 'agents.end', 'focus'])
+      expect(focuses(port, mark)).toEqual([{ t: 'focus', agentId: 'o2' }, { t: 'focus', agentId: 'o2' }])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  it('a second split inside the hold sends its first step at once and holds a second from it', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    let rows = SIXTEEN
+    const { session, port, host } = await landed(() => machine(rows))
+    try {
+      vi.advanceTimersByTime(751)
+      port.say({ t: 'focus', agentId: 'f3' })
+      await settle()
+      const mark = port.sent.length
+      vi.advanceTimersByTime(1_100)
+      rows = MIXED
+      await session.syncAgents()
+      expect(lists(port, mark)).toEqual([['f5', 'f3']])
+      vi.advanceTimersByTime(400)
+      // f3 and fifteen others: 17 with f5 and f3.
+      const NEXT = [SIXTEEN[3], ...Array.from({ length: 15 }, (_, i) => row(`m${i + 1}`, 'ghostty'))]
+      rows = NEXT
+      await session.syncAgents(true)
+      expect(lists(port, mark)).toEqual([['f5', 'f3'], ['f3']])
+      expect(splitLines(host).at(-1)).toBe('cable: agents split · 1 kept · 16 in ring')
+      // 1 200 ms after the first split, 800 after the second.
+      vi.advanceTimersByTime(800)
+      await session.syncAgents()
+      expect(lists(port, mark)).toHaveLength(2)
+      vi.advanceTimersByTime(200)
+      await session.syncAgents()
+      expect(lists(port, mark)).toEqual([['f5', 'f3'], ['f3'], ids(NEXT)])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  it('a voice that opens after the hold ended holds nothing', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    let rows = SIXTEEN
+    const { session, port } = await landed(() => machine(rows))
+    try {
+      vi.advanceTimersByTime(1_100)
+      rows = ORCA
+      await session.syncAgents()
+      vi.advanceTimersByTime(5_000)
+      port.say({ t: 'voice.begin', uploadId: 'u2' })
+      await settle()
+      await session.syncAgents()
+      expect(lists(port).at(-1)).toEqual(['o1', 'o2'])
+      vi.advanceTimersByTime(1_100)
+      rows = [...ORCA, row('o3', 'orca')]
+      await session.syncAgents()
+      expect(lists(port).at(-1)).toEqual(['o1', 'o2', 'o3'])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  it('a voice whose end never came holds the second step no longer than a dial records', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    let rows = SIXTEEN
+    const { session, port } = await landed(() => machine(rows))
+    try {
+      // Its voice.end lost on the cable: the turn stays open here, while both dials stop recording at 600 s.
+      port.say({ t: 'voice.begin', uploadId: 'u3' })
+      await settle()
+      const mark = port.sent.length
+      // Each pong is the dial still there, so its silence rule, which ends a hold too, is not what ends this one.
+      vi.advanceTimersByTime(600_000)
+      port.say({ t: 'pong' })
+      rows = ORCA
+      await session.syncAgents()
+      expect(lists(port, mark)).toEqual([[]])
+      vi.advanceTimersByTime(10_000)
+      port.say({ t: 'pong' })
+      await session.syncAgents()
+      expect(lists(port, mark)).toEqual([[]])
+      vi.advanceTimersByTime(6_000)
+      port.say({ t: 'pong' })
+      await session.syncAgents()
+      expect(lists(port, mark)).toEqual([[], ['o1', 'o2']])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
 })
 
 describe('the app filter', () => {
+  /** The Harness Pro's hello, as its firmware says it. */
+  const PRO = {
+    board: 'pro', swarms: 'members-v1', recap: 'long-v1', activity: 'steps-v1', stats: 'turn-v1', player: 'library-v1',
+    ota: 'v1', appFilter: 'v1', questionTier: 'v1', appCards: 'v1',
+  }
   const LIST = new Set(['apps', 'agents.begin', 'agent', 'agents.end'])
   const listFrames = (port: LoopbackPort) => port.sent.filter((m) => LIST.has(m.t as string))
   const listTypes = (port: LoopbackPort) => listFrames(port).map((m) => m.t)
 
-  async function greeted(host: CableHost, appFilter = true) {
+  async function greeted(host: CableHost, appFilter = true, fields: Record<string, unknown> = {}) {
     const c = await connect(host)
-    c.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', ...(appFilter ? { appFilter: 'v1' } : {}) })
+    c.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', ...(appFilter ? { appFilter: 'v1' } : {}), ...fields })
     await vi.waitFor(() => expect(c.port.types()).toContain('notif.replace'))
     return c
   }
@@ -5936,8 +6783,8 @@ describe('the app filter', () => {
   const voiceAnswered = (port: LoopbackPort) => port.types().some((t) => t === 'voice.transcript' || t === 'voice.error')
 
   /** The host's answers that differ by dial, watched from before the greeting. The dial then turns to g1 (no f), taps it
-   *  and stops it, which asks each of them. */
-  async function asking(appFilter: boolean, window: boolean) {
+   *  and stops it, which asks each of them. `fields`: the rest of the hello. */
+  async function asking(appFilter: boolean, window: boolean, fields: Record<string, unknown> = {}) {
     const { host, state } = appHost({ openAgent: vi.fn() })
     state.window = state.appView = window
     const spies = {
@@ -5946,7 +6793,7 @@ describe('the app filter', () => {
     }
     vi.useFakeTimers({ toFake: ['Date', 'performance'] })
     try {
-      const c = await greeted(host, appFilter)
+      const c = await greeted(host, appFilter, fields)
       // Past the 750 ms after a landing on g1, so the turn to g1 is a hand's and not taken as the landing's echo.
       vi.advanceTimersByTime(751)
       c.port.say({ t: 'focus', agentId: 'g1' })
@@ -6270,7 +7117,7 @@ describe('the app filter', () => {
     const swipeEnded = vi.fn()
     const dialShows = vi.fn<NonNullable<CableHost['dialShows']>>()
     const { host, state } = appHost({ swipeSwitches: () => true, swipeEnded, dialShows })
-    const { session, port } = await greeted(host)
+    const { session, port } = await greeted(host, true, ECHOING)
     // Faked after the greeting, as `resting` does: vi.waitFor is not used while a rest is pending.
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
     try {
@@ -6293,6 +7140,267 @@ describe('the app filter', () => {
       expect(dialShows.mock.calls.map(([, agent]) => agent)).toEqual([{ name: 'g1', app: 'Ghostty' }, { name: 'g2', app: 'Ghostty' }])
     } finally { vi.useRealTimers(); await session.stop() }
   })
+
+  describe('a Harness Pro hello (docs/plans/2026-11-20-pro-app-data-daemon-design.md)', () => {
+    async function pro(host: CableHost) {
+      const c = await connect(host)
+      c.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', ...PRO })
+      await vi.waitFor(() => expect(c.port.types()).toContain('notif.replace'))
+      return c
+    }
+
+    // `sent` and `seqs` are parallel: a spec that reads seqs by index clears both.
+    const clear = (port: LoopbackPort) => { port.sent.length = 0; port.seqs.length = 0 }
+    const swarmsFrames = (port: LoopbackPort) => port.sent.filter((m) => m.t === 'swarms')
+
+    it("the window's swarms stay on a Pro on an app's ring: a view flip pushes none, a new tab still does", async () => {
+      vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+      const { host, state, asked } = appHost()
+      state.window = true
+      const { session, port } = await pro(host)
+      try {
+        clear(port)
+        vi.advanceTimersByTime(100)
+        state.appView = true
+        await session.viewChanged()
+        expect(swarmsFrames(port)).toEqual([])
+        const frames = listFrames(port)
+        expect(frames[0]).toMatchObject({ t: 'apps', shown: 'ghostty' })
+        expect(frames.filter((m) => m.t === 'agent').map((m) => m.id)).toEqual(['g1', 'g2', 'g3'])
+        expect(frames.at(-1)).toEqual({ t: 'agents.end', total: 3, tab: '', view: 'machine' })
+        expect(asked.every((opts) => opts?.apps === true)).toBe(true)
+
+        state.swarms = [...state.swarms, { id: 't2', name: 'Two', agents: 0, panes: 1 }]
+        await session.syncSwarms()
+        expect(swarmsFrames(port)).toHaveLength(1)
+        expect(swarmsFrames(port)[0]).toMatchObject({ selected: 't1', items: [{ id: 't1' }, { id: 't2' }] })
+
+        clear(port)
+        state.appView = false
+        await session.viewChanged()
+        expect(swarmsFrames(port)).toEqual([])
+      } finally { await session.stop(); vi.useRealTimers() }
+    })
+
+    it("a Pro asks every other read as itself on an app's ring: only its swarms are the window's", async () => {
+      const { session, spies } = await asking(true, true, PRO)
+      try {
+        const { listSwarms, ...asks } = spies
+        askedAs(asks, true)
+        expect(listSwarms.mock.calls.length).toBeGreaterThan(0)
+        for (const call of listSwarms.mock.calls) expect(call.at(-1)).toEqual({})
+      } finally { await session.stop() }
+    })
+
+    it('the welcome names apps.switch, question.tier and resync, eleven names in all', async () => {
+      const { host } = appHost({
+        form: async () => ({ ok: false, active: false, error: 'test' }),
+        visit: async () => ({ ok: false, active: false, error: 'test' }),
+        selectPassage: async () => ({ ok: false, error: 'test' }),
+        answerReviewed: async () => ({ ok: false, error: 'test' }),
+        playerLibrary: async () => [],
+      })
+      const { session, port } = await pro(host)
+      try {
+        const features = port.sent.find((m) => m.t === 'welcome')?.features as string[]
+        expect(features).toEqual(['voice.draft', 'agents.refresh', 'player.library', 'resync', 'form', 'selection', 'visit', 'question.review', 'apps.switch', 'question.tier', 'settings'])
+        // Past sixteen the firmware reads none of them (cable_features.c returns 0).
+        expect(features.length).toBeLessThanOrEqual(16)
+      } finally { await session.stop() }
+    })
+
+    it('every apps frame to a Pro carries seq, one more than the frame before', async () => {
+      vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+      const { host, state } = appHost()
+      const { session, port } = await pro(host)
+      try {
+        vi.advanceTimersByTime(1_100)
+        state.rings.vscode = [row('v1', 'vscode', 'sf')]
+        await session.syncAgents()
+        const at = port.sent.flatMap((m, i) => (m.t === 'apps' ? [i] : []))
+        expect(at.length).toBeGreaterThanOrEqual(2)
+        for (const i of at) {
+          expect(typeof port.seqs[i]).toBe('number')
+          expect(port.seqs[i]).toBe(port.seqs[i - 1]! + 1)
+        }
+      } finally { await session.stop(); vi.useRealTimers() }
+    })
+
+    it('resync resends apps before the ring', async () => {
+      const { host } = appHost()
+      const { session, port } = await pro(host)
+      try {
+        clear(port)
+        port.say({ t: 'resync' })
+        await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+        const apps = port.sent.findIndex((m) => m.t === 'apps')
+        expect(port.sent[apps]).toMatchObject({ shown: 'ghostty' })
+        expect(apps).toBeLessThan(port.types().indexOf('agents.begin'))
+      } finally { await session.stop() }
+    })
+
+    it("app.pick of another app turns a Pro's ring", async () => {
+      const { host, pickApp } = appHost()
+      const { session, port } = await pro(host)
+      try {
+        clear(port)
+        port.say({ t: 'app.pick', app: 'vscode' })
+        await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+        expect(pickApp).toHaveBeenCalledWith('vscode')
+        const frames = listFrames(port)
+        expect(frames[0]).toMatchObject({ t: 'apps', shown: 'vscode' })
+        expect(frames.filter((m) => m.t === 'agent').map((m) => m.id)).toEqual(['v1', 'v2'])
+        expect(frames.at(-1)).toEqual({ t: 'agents.end', total: 2, tab: '', view: 'machine' })
+      } finally { await session.stop() }
+    })
+
+    it("a tap on a Harness agent on an app's ring asks for the window's tab, then opens it", async () => {
+      const openAgent = vi.fn(async () => {})
+      const { host, state, pickApp } = appHost({ openAgent })
+      state.window = state.appView = true
+      state.rings.harness = [row('h1', 'harness', 'svfa')]
+      const { session, port } = await pro(host)
+      try {
+        port.say({ t: 'agent.open', agentId: 'h1' })
+        await vi.waitFor(() => expect(openAgent).toHaveBeenCalledWith('h1', undefined))
+        expect(pickApp).toHaveBeenCalledWith('harness', 'notice')
+        expect(pickApp.mock.invocationCallOrder[0]).toBeLessThan(openAgent.mock.invocationCallOrder[0]!)
+      } finally { await session.stop() }
+    })
+
+    it("scroll from a Pro reaches the host as the round dial's does", async () => {
+      const { host } = appHost()
+      const { session, port } = await pro(host)
+      try {
+        port.say({ t: 'scroll', phase: 'down', dy: 0 })
+        port.say({ t: 'scroll', phase: 'move', dy: 12 })
+        port.say({ t: 'scroll', phase: 'up', dy: 3, v: -1800 })
+        await vi.waitFor(() => expect(host.scrolled).toHaveBeenCalledTimes(3))
+        expect(host.scrolled).toHaveBeenNthCalledWith(1, 'down', 0, 0)
+        expect(host.scrolled).toHaveBeenNthCalledWith(2, 'move', 12, 0)
+        expect(host.scrolled).toHaveBeenNthCalledWith(3, 'up', 3, -1800)
+      } finally { await session.stop() }
+    })
+  })
+
+  describe('appCards', () => {
+    async function greet(host: CableHost, fields: Record<string, unknown>) {
+      const c = await connect(host)
+      c.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', appFilter: 'v1', ...fields })
+      await vi.waitFor(() => expect(c.port.types()).toContain('notif.replace'))
+      return c
+    }
+    /** The bytes of the first `apps` frame written, as they went down the cable. */
+    const appsBytes = (port: LoopbackPort) => {
+      const frame = port.frames.find((f) => Buffer.from(f).includes('"t":"apps"'))
+      return frame && Buffer.from(frame)
+    }
+    const encoded = (json: string) => Buffer.from(encodeCableFrame(CableType.Json, Buffer.from(json, 'utf8')))
+    // `sent`, `seqs` and `frames` are parallel records of one stream: a spec that clears one clears all.
+    const clear = (port: LoopbackPort) => { port.sent.length = 0; port.seqs.length = 0; port.frames.length = 0 }
+
+    it('a dial that says appCards v1 gets working on each row, after waiting', async () => {
+      const log = vi.fn()
+      const { host, state } = appHost({ log })
+      state.working = { ghostty: 2 }
+      const { session, port } = await greet(host, { appCards: 'v1' })
+      try {
+        expect(JSON.stringify(port.sent.find((m) => m.t === 'apps'))).toBe(
+          '{"t":"apps","shown":"ghostty","apps":[{"id":"ghostty","name":"Ghostty","count":3,"waiting":0,"working":2},{"id":"vscode","name":"VS Code","count":2,"waiting":1,"working":0}]}')
+        expect(log.mock.calls.map(([line]) => line)).toContainEqual(expect.stringMatching(/caps appFilter,appCards$/))
+        expect(port.sent.find((m) => m.t === 'welcome')?.features).toEqual(['voice.draft', 'agents.refresh', 'apps.switch', 'settings'])
+      } finally { await session.stop() }
+    })
+
+    it('an appCards dial is sent five fields a row, in the contract\'s order, whatever else the host\'s entry carries', async () => {
+      const { host } = appHost()
+      const snapshot = host.listAgentSnapshot!.bind(host)
+      // `working` first and a field the wire does not name: the Pro parses fixed fields into fixed buffers.
+      host.listAgentSnapshot = async (opts) => {
+        const s = await snapshot(opts)
+        return s.apps ? { ...s, apps: { ...s.apps, apps: s.apps.apps.map((a) => Object.assign({ working: a.working, rank: 7 }, a)) } } : s
+      }
+      const { session, port } = await greet(host, { appCards: 'v1' })
+      try {
+        expect(JSON.stringify(port.sent.find((m) => m.t === 'apps'))).toBe(
+          '{"t":"apps","shown":"ghostty","apps":[{"id":"ghostty","name":"Ghostty","count":3,"waiting":0,"working":0},{"id":"vscode","name":"VS Code","count":2,"waiting":1,"working":0}]}')
+      } finally { await session.stop() }
+    })
+
+    it('without appCards v1 the apps frame is today\'s, byte for byte, though the host counts working', async () => {
+      const today = encoded('{"t":"apps","shown":"ghostty","apps":[{"id":"ghostty","name":"Ghostty","count":3,"waiting":0},{"id":"vscode","name":"VS Code","count":2,"waiting":1}]}')
+      for (const fields of [{}, { appCards: 'v2' }, { appCards: true }]) {
+        const { host, state } = appHost()
+        state.working = { ghostty: 2 }
+        const { session, port } = await greet(host, fields)
+        try {
+          expect(appsBytes(port)).toEqual(today)
+        } finally { await session.stop() }
+      }
+      const { session, port } = await greet(appHost().host, { appCards: 'v1', appFilter: undefined })
+      try {
+        expect(port.types()).not.toContain('apps')
+      } finally { await session.stop() }
+    })
+
+    it('the tab\'s apps carry working to an appCards dial', async () => {
+      const { host, state, cards } = appHost()
+      state.window = state.tabApps = true
+      state.working = { vscode: 1 }
+      const { session, port } = await greet(host, { appCards: 'v1' })
+      try {
+        const apps = port.sent.find((m) => m.t === 'apps')
+        expect(apps).toEqual({ t: 'apps', shown: 'harness', apps: cards().apps })
+        expect(apps?.apps).toContainEqual(expect.objectContaining({ id: 'vscode', working: 1 }))
+      } finally { await session.stop() }
+    })
+
+    it('a Pro and a round dial on one host: a working change alone pushes apps to the Pro only, held to the 1 s gap', async () => {
+      vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+      const { host, state, cards } = appHost()
+      const pro = await greet(host, PRO)
+      const round = await greet(host, {})
+      try {
+        clear(pro.port)
+        clear(round.port)
+        vi.advanceTimersByTime(1_100)
+        state.working.ghostty = 1
+        await pro.session.syncAgents()
+        await round.session.syncAgents()
+        expect(listFrames(pro.port)).toEqual([{ t: 'apps', ...cards() }])
+        expect(listFrames(round.port)).toEqual([])
+
+        // Ended inside the gap: held, not lost.
+        clear(pro.port)
+        vi.advanceTimersByTime(100)
+        state.working.ghostty = 0
+        await pro.session.syncAgents()
+        expect(listFrames(pro.port)).toEqual([])
+        vi.advanceTimersByTime(1_000)
+        await pro.session.syncAgents()
+        const after = listFrames(pro.port)
+        expect(after).toHaveLength(1)
+        expect(after[0]?.apps).toContainEqual(expect.objectContaining({ id: 'ghostty', working: 0 }))
+
+        await round.session.syncAgents()
+        expect(listFrames(round.port)).toEqual([])
+      } finally { await pro.session.stop(); await round.session.stop(); vi.useRealTimers() }
+    })
+
+    it('appCards is read at each hello and forgotten when the port closes', async () => {
+      const { host } = appHost()
+      const { session, port } = await greet(host, { appCards: 'v1' })
+      try {
+        expect(session['appCards']).toBe(true)
+        port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', appFilter: 'v1', fw: '1.0.1' })
+        await vi.waitFor(() => expect(session['appCards']).toBe(false))
+        port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', appFilter: 'v1', fw: '1.0.1', appCards: 'v1' })
+        await vi.waitFor(() => expect(session['appCards']).toBe(true))
+        await port.close('unplugged')
+        expect(session['appCards']).toBe(false)
+      } finally { await session.stop() }
+    })
+  })
 })
 
 describe('what the dial cannot do for an agent', () => {
@@ -6303,9 +7411,9 @@ describe('what the dial cannot do for an agent', () => {
   const caps = (over: Partial<CableHost> = {}) => makeHost({
     capsOf: (id) => CAPS[id], hostOf: (id) => HOSTS[id], markSeen: vi.fn(), ...over,
   })
-  async function greeted(host: CableHost) {
+  async function greeted(host: CableHost, hello: Record<string, unknown> = {}) {
     const c = await connect(host)
-    c.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    c.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', ...hello })
     await vi.waitFor(() => expect(c.port.types()).toContain('agents.end'))
     return c
   }
@@ -6379,6 +7487,21 @@ describe('what the dial cannot do for an agent', () => {
       expect(transcribe).not.toHaveBeenCalled()
       expect(route).not.toHaveBeenCalled()
       expect(host.sendTurn).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
+
+  // U10: Cursor's own agent takes no words; its host says why in its own sentence instead of "comes in an update".
+  it('voice to an agent whose host has a sentence of its own answers that sentence on voice.end, with no transcription', async () => {
+    const transcribe = vi.fn(async () => 'fix the login screen')
+    const host = caps({ transcribe,
+      voiceRefusal: (id) => (id === 'a1' ? "Voice can't reach Cursor's agent. Type in Cursor." : undefined) })
+    const { session, port } = await greeted(host)
+    try {
+      speak(port, 'a1', 'u1')
+      port.say({ t: 'voice.end', uploadId: 'u1' })
+      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'voice.error', uploadId: 'u1',
+        message: "Voice can't reach Cursor's agent. Type in Cursor." }))
+      expect(transcribe).not.toHaveBeenCalled()
     } finally { await session.stop() }
   })
 
@@ -6753,10 +7876,10 @@ describe('what the dial cannot do for an agent', () => {
 
   /** a1 and a3 have a pane a rest shows; a2 has none. The clock is faked after the greeting, so it holds only what a turn
    *  starts, and vi.waitFor (which moves a fake clock) is not used while a rest is pending. */
-  async function resting(over: Partial<CableHost> = {}) {
+  async function resting(over: Partial<CableHost> = {}, hello: Record<string, unknown> = {}) {
     const swipeSwitches = vi.fn((id: string) => id === 'a1' || id === 'a3')
     const swipeEnded = vi.fn()
-    const c = await greeted(caps({ swipeSwitches, swipeEnded, ...over }))
+    const c = await greeted(caps({ swipeSwitches, swipeEnded, ...over }), hello)
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
     return { ...c, swipeSwitches, swipeEnded }
   }
@@ -6829,7 +7952,7 @@ describe('what the dial cannot do for an agent', () => {
   // in the 400 ms before a rest, or from an agent no rest shows.
   it("a hand's turn tells the host at once, whatever the agent; a follow's echo does not", async () => {
     const turned = vi.fn()
-    const { session, port, swipeEnded } = await resting({ turned })
+    const { session, port, swipeEnded } = await resting({ turned }, ECHOING)
     try {
       port.say({ t: 'focus', agentId: 'a1' })
       expect(turned).toHaveBeenCalledTimes(1)
@@ -6874,7 +7997,7 @@ describe('what the dial cannot do for an agent', () => {
   })
 
   it('a focus the echo guard drops starts nothing', async () => {
-    const { session, port, swipeSwitches } = await resting()
+    const { session, port, swipeSwitches } = await resting({}, ECHOING)
     try {
       await session.followApp('', 'a1')
       port.say({ t: 'focus', agentId: 'a1' })
@@ -6887,7 +8010,7 @@ describe('what the dial cannot do for an agent', () => {
   })
 
   it('the dial moved by the app before 400 ms: superseded', async () => {
-    const { session, port, swipeEnded } = await resting()
+    const { session, port, swipeEnded } = await resting({}, ECHOING)
     try {
       port.say({ t: 'focus', agentId: 'a1' })
       await vi.advanceTimersByTimeAsync(100)
@@ -6949,12 +8072,119 @@ describe('what the dial cannot do for an agent', () => {
   })
 })
 
+describe("a resting Claude app row's words (docs/plans/2026-11-21-dial-claude-app-wake-send-design.md)", () => {
+  const ROOT = '/h/Library/Application Support/Claude/claude-code-sessions'
+  const SESSION = '0b7c2f4e-8a1d-4c3b-9e5f-6a7b8c9d0e1f'
+  const ROW = observedAgentId('claude', SESSION)
+  const BUSY = 'Still opening Fix the build. Try again in a moment.'
+
+  /** The dial greeted on a host whose registry holds the Claude app's real source and wake, on a fake store listing one
+   *  session, links that open, an observed source listing nothing and a mod that never polls: a wake stays opening until
+   *  the test fires its timer. */
+  async function resting() {
+    const timers: Array<{ ms: number; run: () => void }> = []
+    const opens: string[] = []
+    const wake = new AppWake({
+      open: async (localId) => { opens.push(localId); return true },
+      observed: { list: () => [], onChange: () => () => {}, send: async () => ({ ok: true }) },
+      onPoll: () => () => {},
+      after: (ms, run) => { timers.push({ ms, run }); return () => {} },
+      monotonic: () => 0,
+      log: () => {},
+      count: () => {},
+    })
+    const source = new ClaudeAppSource({
+      store: {
+        folders: async () => ({ roots: [ROOT], accounts: [join(ROOT, 'acc')], orgs: [join(ROOT, 'acc', 'org')] }),
+        files: async () => {},
+        touch: async () => {},
+        read: async () => ({ sessions: [{ localId: 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b', sessionId: SESSION,
+          cwd: '/work/api', title: 'Fix the build', lastActivityAt: 1 }], parsed: 1, skipped: 0, over: 0, more: false }),
+        forget: () => {},
+      },
+      roots: [{ root: ROOT, watch: [ROOT] }],
+      watch: () => () => {},
+      after: () => () => {},
+      focus: async () => true,
+      canShow: () => true,
+      show: async () => 'ok',
+      canLink: () => true,
+      wake,
+      monotonic: () => 0,
+      log: () => {},
+    })
+    const host = new DaemonCableHost({
+      sessions: () => [], displayName: (s) => s.agentId, machineName: () => 'this-mac', machineId: () => 'mac-local',
+      computerId: () => 'abc', sendTurn: vi.fn(), stopTurn: vi.fn(), answer: vi.fn(), recent: () => [], recentAsks: () => [],
+      log: () => {},
+    })
+    host.setRegistry(new HostRegistry([host.harness, source]))
+    vi.spyOn(host, 'transcribe').mockResolvedValue('run the build')
+    const listed = new Promise<void>((resolve) => { source.onChange(resolve) })
+    source.start()
+    await listed
+    const c = await connect(host)
+    c.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    await vi.waitFor(() => expect(c.port.types()).toContain('agents.end'))
+    return { ...c, timers, opens }
+  }
+  const speak = (port: LoopbackPort, uploadId: string) => {
+    port.say({ t: 'voice.begin', agentId: ROW, lang: 'en', sr: 16000, uploadId })
+    port.pcm(Buffer.alloc(3200, 7))
+  }
+
+  it('a resting Claude app row takes voice; words while it opens are refused on the dial in plain words', async () => {
+    const { session, port, opens } = await resting()
+    try {
+      speak(port, 'u1')
+      await settle()
+      // Taken at voice.begin, as a Harness agent's words are.
+      expect(port.types()).not.toContain('voice.error')
+      port.say({ t: 'voice.end', uploadId: 'u1' })
+      await vi.waitFor(() => expect(opens).toHaveLength(1))
+      speak(port, 'u2')
+      port.say({ t: 'voice.end', uploadId: 'u2' })
+      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'voice.error', uploadId: 'u2', message: BUSY }))
+      // The first words still wait for their session.
+      expect(port.sent.some((m) => m.t === 'voice.error' && m.uploadId === 'u1')).toBe(false)
+    } finally { vi.restoreAllMocks(); await session.stop() }
+  })
+
+  it("30 s with no process: the dial's voice error says it did not open", async () => {
+    const { session, port, timers } = await resting()
+    try {
+      speak(port, 'u1')
+      port.say({ t: 'voice.end', uploadId: 'u1' })
+      await vi.waitFor(() => expect(timers.map((t) => t.ms)).toContain(30_000))
+      timers.find((t) => t.ms === 30_000)!.run()
+      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'voice.error', uploadId: 'u1',
+        message: 'Fix the build did not open in Claude. Try again.' }))
+    } finally { vi.restoreAllMocks(); await session.stop() }
+  })
+
+  it("a voice draft's send while it opens resolves with the wake's refusal", async () => {
+    const { session, port, opens } = await resting()
+    try {
+      speak(port, 'u1')
+      port.say({ t: 'voice.end', uploadId: 'u1' })
+      await vi.waitFor(() => expect(opens).toHaveLength(1))
+      speak(port, 'u2')
+      port.say({ t: 'voice.end', uploadId: 'u2', review: true })
+      await vi.waitFor(() => expect(port.types()).toContain('voice.draft'))
+      const draft = port.sent.find((m) => m.t === 'voice.draft')!
+      port.say({ t: 'draft.command', draftId: draft.id, revision: draft.revision, requestId: 'r1', op: 'send' })
+      await vi.waitFor(() => expect(port.sent).toContainEqual(expect.objectContaining({ t: 'draft.state', requestId: 'r1',
+        error: BUSY })))
+    } finally { vi.restoreAllMocks(); await session.stop() }
+  })
+})
+
 describe('a prompt in the app in front', () => {
   const focuses = (port: LoopbackPort) => port.sent.filter((m) => m.t === 'focus')
-  async function greeted(over: Partial<CableHost> = {}) {
+  async function greeted(over: Partial<CableHost> = {}, hello: Record<string, unknown> = {}) {
     const localFollowed = vi.fn()
     const c = await connect(makeHost({ localFollowed, ...over }))
-    c.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    c.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', ...hello })
     await vi.waitFor(() => expect(c.port.types()).toContain('agents.end'))
     c.port.sent.length = 0
     return { ...c, localFollowed }
@@ -6981,9 +8211,10 @@ describe('a prompt in the app in front', () => {
   })
 
   it("the move's echo starts no Orca switch", async () => {
+    stillClock()
     const swipeSwitches = vi.fn(() => true)
     const markSeen = vi.fn()
-    const { session, port, host } = await greeted({ swipeSwitches, swipeEnded: vi.fn(), markSeen })
+    const { session, port, host } = await greeted({ swipeSwitches, swipeEnded: vi.fn(), markSeen }, ECHOING)
     try {
       await session.followLocal('a2', 'prompt')
       port.say({ t: 'focus', agentId: 'a2' })   // the dial's echo of the move

@@ -66,10 +66,13 @@ mark_data_root() {
   (umask 077 && mkdir -p "$HARNESS_DATA_ROOT" && printf '1\n' > "$HARNESS_DATA_ROOT/.harness-root")
 }
 
-# Install layout — same defaults as src/config/env.ts, overridable for a sandboxed try-out.
-CLI_DIR="${ADAPTER_CLI_DIR:-$HARNESS_DATA_ROOT/cli}"
-DATA_DIR="${ADAPTER_DATA_DIR:-$CLI_DIR/data}"
-BIN_DIR="${HARNESS_BIN_DIR:-$HOME/.local/bin}"
+# Install layout — same defaults as src/config/env.ts, overridable for a sandboxed try-out. A relative override is
+# under the home, as every Harness program reads it (src/config/envFields.ts homePath), never under the folder this
+# script was run from.
+under_home() { case "$1" in /*) printf '%s' "$1" ;; *) printf '%s/%s' "$HOME" "$1" ;; esac; }
+CLI_DIR="$(under_home "${ADAPTER_CLI_DIR:-$HARNESS_DATA_ROOT/cli}")"
+DATA_DIR="$(under_home "${ADAPTER_DATA_DIR:-$CLI_DIR/data}")"
+BIN_DIR="$(under_home "${HARNESS_BIN_DIR:-$HOME/.local/bin}")"
 LAUNCHER="$BIN_DIR/harness"
 PID_FILE="$DATA_DIR/adapter.pid"
 

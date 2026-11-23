@@ -12,7 +12,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 import { closeSync, existsSync, fstatSync, lstatSync, openSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { request } from 'node:http'
 import { homedir } from 'node:os'
-import { isAbsolute, join, win32 } from 'node:path'
+import { isAbsolute, join, resolve, sep, win32 } from 'node:path'
 
 /** sockaddr_un has 104 bytes on macOS, and the daemon creates the socket under a name 4 bytes longer. */
 const MAX_SOCKET_PATH_BYTES = 96
@@ -39,8 +39,15 @@ export function harnessRoots(env = process.env, platform = process.platform, exi
   return isFile(join(xdg.data, '.harness-root')) || !exists(legacy) ? xdg : { data: legacy, state: legacy }
 }
 
-export function daemonDataDir(env = process.env) {
-  return env.ADAPTER_DATA_DIR || join(harnessRoots(env).data, 'cli', 'data')
+/** A Harness folder override as the CLI reads it (cli/src/config/envFields.ts homePath): an absolute one exactly as written,
+ *  as the daemon hashes its socket folder from that text; any other under [home], never the folder the agent runs in. */
+function homePath(value, home) {
+  return isAbsolute(value) && !(sep === '\\' && /^[\\/](?![\\/])/.test(value)) ? value : resolve(home, value)
+}
+
+export function daemonDataDir(env = process.env, platform = process.platform) {
+  const home = platform === 'win32' ? homedir() : env.HOME || homedir()
+  return env.ADAPTER_DATA_DIR ? homePath(env.ADAPTER_DATA_DIR, home) : join(harnessRoots(env, platform).data, 'cli', 'data')
 }
 
 /** XDG_RUNTIME_DIR when it is this account's alone: an absolute path to a real folder, not a link, of this uid's with mode exactly

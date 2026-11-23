@@ -47,7 +47,7 @@ catch (error) { console.log('refused ' + error.code + ' ' + error.message) }
     await new Promise<void>((resolve) => squatter.listen(name, () => resolve()))
     try {
       // The start logs why, then goes on: the log line first, as the core writes it to its log.
-      expect((await claimElsewhere(c)).split(/\r?\n/)).toEqual([`[cli] something that is not Harness holds ${name}; starting without the data folder claim`, `unheld ${name}`])
+      expect((await claimElsewhere(c)).split(/\r?\n/)).toEqual(["[cli] something that is not Harness holds the data folder's claim; starting without the data folder claim", `unheld ${name}`])
     } finally {
       squatter.close()
     }

@@ -6,6 +6,7 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { isGitHubHost, safeSshAlias } from './githubRepository.js'
 import { insideGitCheckout } from './gitProject.js'
+import { gitPath } from './gitOnPath.js'
 import { resolveHost } from './sshHosts.js'
 
 const exec = promisify(execFile)
@@ -82,7 +83,7 @@ async function runGit(cwd: string, args: string[]): Promise<string | null> {
   if (!(await insideGitCheckout(cwd))) throw Object.assign(new Error('not a Git checkout'), { code: 128 })
   const environment = { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' }
   for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_NAMESPACE', 'GIT_PREFIX']) delete (environment as NodeJS.ProcessEnv)[key]
-  const { stdout } = await exec('git', ['-C', cwd, ...args], {
+  const { stdout } = await exec(await gitPath(), ['-C', cwd, ...args], {
     timeout: 1500, maxBuffer: 16 * 1024, encoding: 'utf8',
     env: environment,
   })

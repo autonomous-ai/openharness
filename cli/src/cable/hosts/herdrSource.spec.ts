@@ -35,7 +35,10 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     await server.stop()
   })
 
-  const herdrClient = () => createHerdrClient({ socketPath: server.path, home: dirname(server.path), uid: process.getuid!(), platform: process.platform })
+  const herdrClient = () => createHerdrClient({
+    socketPath: server.path, endpoint: server.path, home: dirname(server.path), uid: process.getuid!(), platform: process.platform,
+    rows: async () => null,
+  })
 
   /** A source on the real client and the fake server, its words through the real adapter as the devices wire it, with a
    *  timer queue, a watch and two clocks the test runs by hand. */
@@ -43,7 +46,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     const client = herdrClient()
     const adapter = createHerdrAdapter({
       run: async () => ({ code: 0, stdout: '' }), onPath: () => null, exists: () => false, platform: process.platform, client,
-      front: () => undefined,
+      front: () => undefined, log: () => {},
     })
     let mono = 0
     let wall = WALL
@@ -66,6 +69,8 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
         return () => { watchers.delete(changed) }
       },
       prompt,
+      // No hooked agent holds a herdr pane.
+      held: () => false,
       focus,
       after: (ms, run) => {
         const timer = { at: mono + ms, ms, run }
@@ -79,7 +84,6 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
       now: () => wall,
       monotonic: () => mono,
       uuid: () => `u${++ids}`,
-      platform: process.platform,
       log: (line) => {
         log.push(line)
         settle()
@@ -1000,17 +1004,6 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     expect(subscribe).toHaveBeenCalledTimes(1)
   })
 
-  it('on Windows start does nothing', () => {
-    const s = setup({ platform: 'win32' })
-    const subscribe = vi.spyOn(s.client, 'subscribe')
-    const stamp = vi.spyOn(s.client, 'socketStamp')
-    s.source.start()
-    expect(subscribe).not.toHaveBeenCalled()
-    expect(stamp).not.toHaveBeenCalled()
-    expect(s.watchers.size).toBe(0)
-    expect(s.timers).toEqual([])
-  })
-
   it('voice', async () => {
     server.agents = [agent('w1:p1')]
     const s = setup()
@@ -1078,6 +1071,30 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     expect(s.counts).toEqual(['too-long', 'no-answer', 'no-answer'])
   })
 
+  // A terminal or an editor started in a herdr pane keeps HERDR_PANE_ID: the hooked agent there only holds that pane, and
+  // whatever folds with it takes no words into the pane by herdr's row either (herdr.ts, observed.ts holds).
+  it('a row whose pane the observed agents hold takes no words: not_that_agent, and no prompt runs', async () => {
+    const session = { source: 'herdr:claude', agent: 'claude', kind: 'id', value: 's-1' }
+    server.agents = [agent('w1:p1', 'idle', { agent_session: session })]
+    const held = vi.fn((_paneKey: string, _asker: { engine: string; sessionId?: string }) => true)
+    const s = setup({ held })
+    await live(s)
+    expect(await s.source.send(row(s, 'w1:p1')!, 'run the tests')).toEqual({ ok: false, reason: 'api did not answer.' })
+    expect(held.mock.calls).toEqual([['herdr:w1:p1', { engine: 'claude', sessionId: 's-1' }]])
+    expect(s.prompt).not.toHaveBeenCalled()
+    expect(s.counts).toEqual(['no-answer'])
+  })
+
+  it('a row whose pane is not held is prompted as today', async () => {
+    server.agents = [agent('w1:p1')]
+    const held = vi.fn((_paneKey: string, _asker: { engine: string; sessionId?: string }) => false)
+    const s = setup({ held })
+    await live(s)
+    expect(await s.source.send(row(s, 'w1:p1')!, 'run the tests')).toEqual({ ok: true })
+    expect(held.mock.calls).toEqual([['herdr:w1:p1', { engine: 'claude' }]])
+    expect(s.prompt.mock.calls).toEqual([['w1:p1', 'claude', 'run the tests']])
+  })
+
   it('a tap focuses the agent\'s pane through deps.focus; one no longer listed is false', async () => {
     server.agents = [agent('w1:p1')]
     const s = setup()
@@ -1090,6 +1107,21 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     expect(await s.source.focus(api)).toBe(false)
     expect(await s.source.focus({ ...api, id: 'gone' })).toBe(false)
     expect(s.focus).toHaveBeenCalledTimes(2)
+  })
+
+  it('paneAt tells the pane of a row it lists, and none for an id it does not, or once the row left', async () => {
+    server.agents = [agent('w1:p1'), agent('w1:p2')]
+    const s = setup()
+    await live(s)
+    const first = row(s, 'w1:p1')!.id
+    const second = row(s, 'w1:p2')!.id
+    expect(s.source.paneAt(first)).toBe('w1:p1')
+    expect(s.source.paneAt(second)).toBe('w1:p2')
+    expect(s.source.paneAt('gone')).toBeUndefined()
+    server.event('pane_closed', { pane_id: 'w1:p2', type: 'pane_closed', workspace_id: 'w1' })
+    await s.until(() => row(s, 'w1:p2') === undefined)
+    expect(s.source.paneAt(second)).toBeUndefined()
+    expect(s.source.paneAt(first)).toBe('w1:p1')
   })
 
   it('no log line holds a pane id, a name, a folder or the words', async () => {

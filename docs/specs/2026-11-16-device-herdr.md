@@ -288,6 +288,10 @@ The herdr source joins the registry after observed, behind the same kill switch 
 - **macOS and Linux:** herdr runs on a Unix socket there, and that is where the observed agents run today.
 - **Windows:** herdr uses a named pipe, which the client does not speak. The source does not run there, and no words
   go through herdr. A hooked agent's tap runs `herdr agent focus`, as today.
+- *Windows, since [the dial on Windows](../plans/2026-11-19-dial-windows-design.md) (2026-11-20): the client speaks
+  herdr's named pipe, dialled only while the marker's own `herdr.exe` runs. herdr's zip puts it on no PATH, so the
+  source starts when herdr's folder (the marker's) exists, as well as with `herdr` on PATH. A tap's `herdr agent focus`
+  runs the `herdr` on PATH, else the image of the server that wrote the marker (`herdrClient.ts` `binary`).*
 
 ## Data
 

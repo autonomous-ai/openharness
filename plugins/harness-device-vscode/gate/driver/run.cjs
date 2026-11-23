@@ -1,7 +1,7 @@
 // The gate's hands inside the throwaway VS Code (../realVscode.gate.ts), run as its extension tests: it connects to the
-// gate's control socket and answers one NDJSON line per asked line (`{ ask, ...arguments }`), `{ error }` when the ask
-// failed. It touches nothing the extension under test does; the extension is the installed one. Its run ending, on
-// `exit` or the gate gone, ends VS Code with code 0.
+// gate's control socket (on Windows its pipe) and answers one NDJSON line per asked line (`{ ask, ...arguments }`),
+// `{ error }` when the ask failed. It touches nothing the extension under test does; the extension is the installed
+// one. Its run ending, on `exit` or the gate gone, ends VS Code with code 0.
 const { connect } = require('node:net')
 const vscode = require('vscode')
 

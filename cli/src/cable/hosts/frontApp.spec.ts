@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { FRONT_NONE, frontAppId, windowClasses } from './frontApp.js'
 import { APP_IDS, detectApp } from './hostDetect.js'
 import { RECORDED_LINUX_APPS } from '../../testing/recordedLinuxApps.js'
+import { RECORDED_ORCA } from '../../testing/recordedOrca.js'
+import { RECORDED_WEZTERM } from '../../testing/recordedWezterm.js'
 
 const BUNDLES: [string, string][] = [
   ['com.stablyai.orca', 'orca'],
@@ -27,17 +29,28 @@ const EXES: [string, string][] = [
   ['Cursor.exe', 'cursor'],
   ['cursor', 'cursor'],
   ['WindowsTerminal.exe', 'terminal'],
+  // The Store's ChatGPT on Windows is the Codex app (package OpenAI.Codex), its window ChatGPT.exe's.
+  ['ChatGPT.exe', 'codex'],
+  ['chatgpt.exe', 'codex'],
   ['wezterm-gui', 'wezterm'],
   ['kitty', 'kitty'],
   ['ghostty', 'ghostty'],
   ['harness', 'harness'],
   ['Harness', 'harness'],
+  // The Claude app's window on Windows is its claude.exe's (dial-windows VM notes, Task 37 §1).
+  ['Claude.exe', 'claude'],
+  ['claude.exe', 'claude'],
+  // Orca's window on Windows is its Orca.exe's (dial-windows VM notes, "### 1. Window owners").
+  ['Orca.exe', 'orca'],
+  ['orca.exe', 'orca'],
 ]
 
-// The Claude and ChatGPT apps' Linux processes, by the comm their recording shows (ChatGPT's as recorded, capitalised).
+// The Claude, ChatGPT and Orca apps' Linux processes, by the comm their recording shows (ChatGPT's as recorded,
+// capitalised; Orca's is its main process, the maker when no daemon runs).
 const LINUX_APPS: [string, string][] = [
   [RECORDED_LINUX_APPS.claude.comm, 'claude'],
   [RECORDED_LINUX_APPS.chatgpt.comm, 'codex'],
+  [RECORDED_ORCA.linux.inProcess.makerComm, 'orca'],
 ]
 
 describe('frontAppId', () => {
@@ -46,19 +59,26 @@ describe('frontAppId', () => {
     expect(detectApp({ __CFBundleIdentifier: bundle })).toBe(id)
   })
 
-  it.each(EXES)('Code.exe, Cursor.exe, WindowsTerminal.exe, wezterm-gui, kitty, ghostty and harness map: %s', (exe, id) => {
+  it.each(EXES)('Code.exe, Cursor.exe, WindowsTerminal.exe, ChatGPT.exe, Claude.exe, Orca.exe, wezterm-gui, kitty, ghostty and harness map: %s', (exe, id) => {
     expect(frontAppId(exe)).toBe(id)
   })
 
-  it.each(LINUX_APPS)('the Claude and ChatGPT apps on Linux map by their recorded comm: %s', (comm, id) => {
+  it.each(LINUX_APPS)('the Claude, ChatGPT and Orca apps on Linux map by their recorded comm: %s', (comm, id) => {
     expect(frontAppId(comm)).toBe(id)
   })
+
+  it.each(['wezterm-mux-server', RECORDED_WEZTERM.muxServerComm])(
+    'frontAppId names WezTerm for its mux server, whole and as Linux cuts it: %s', (comm) => {
+      expect(frontAppId(comm)).toBe('wezterm')
+    })
 
   it.each(['com.apple.Safari', 'org.alacritty', 'net.kovidgoyal.kitty-quick-access', 'alacritty', '', 'x'.repeat(128),
     'constructor', '__proto__', 'toString', 'COM.MITCHELLH.GHOSTTY', 'com.openai.chat', 'codex', 'Codex.exe',
     'com.cmuxterm.app.nightly', 'cmux',
-    // OpenAI's chat app on Windows is not the Codex app, and the Linux processes' names are Linux's alone.
-    'ChatGPT.exe', 'chatgpt.exe', 'claude-desktop.exe'])(
+    // The Linux processes' names are Linux's alone, and the Claude app's claude.exe is Windows' alone.
+    'claude-desktop.exe', 'claude', 'orca-ide.exe',
+    // A bare orca on Linux is GNOME's screen reader (/usr/bin/orca), not the Orca app.
+    'orca', 'Orca'])(
     'an unknown app, the empty string and a 128-character string are none: %j', (value) => {
       expect(frontAppId(value)).toBe(FRONT_NONE)
     })
@@ -79,11 +99,12 @@ describe('frontAppId', () => {
   })
 })
 
-// Each app's window class spellings on Linux. ChatGPT's .desktop has no StartupWMClass, so codex has none recorded.
+// Each app's window class spellings on Linux. ChatGPT's .desktop has no StartupWMClass: its class is read from its code.
 const CLASSES: [string, string[]][] = [
   ['vscode', [RECORDED_LINUX_APPS.vscode.startupWmClass, RECORDED_LINUX_APPS.vscode.startupWmClass.toLowerCase()]],
   ['cursor', [RECORDED_LINUX_APPS.cursor.startupWmClass, RECORDED_LINUX_APPS.cursor.startupWmClass.toLowerCase()]],
   ['claude', [RECORDED_LINUX_APPS.claude.startupWmClass, RECORDED_LINUX_APPS.claude.startupWmClass.toLowerCase()]],
+  ['codex', [RECORDED_LINUX_APPS.chatgpt.windowClasses.x11, RECORDED_LINUX_APPS.chatgpt.windowClasses.wayland]],
   ['wezterm', ['org.wezfurlong.wezterm']],
   ['kitty', ['kitty']],
   ['ghostty', ['com.mitchellh.ghostty']],
@@ -101,7 +122,7 @@ describe('windowClasses', () => {
     for (const app of APP_IDS.filter((id) => !rows.has(id))) expect(windowClasses(app)).toEqual([])
   })
 
-  it.each(['codex', 'unknown', '', 'constructor', '__proto__', 'toString', 'Code', 'VSCODE'])(
+  it.each(['unknown', '', 'constructor', '__proto__', 'toString', 'Code', 'VSCODE'])(
     'an app with no row and an inherited key give none: %j', (app) => {
       expect(windowClasses(app)).toEqual([])
     })

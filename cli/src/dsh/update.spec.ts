@@ -1,6 +1,6 @@
 import { prepareHarnessLaunch } from './runtime.js'
 import { updateDsh } from './update.js'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -65,10 +65,19 @@ describe('package updates', { timeout: 60_000 }, () => {
   })
   const update = (entry?: DshRegistryEntry, progress?: DshInstallProgress[]) => updateDsh({ id,
     registry: candidate => candidate === id ? entry : undefined, onProgress: p => progress?.push(p) })
+  // The login shell (dsh/shell.ts) is a plain sh, written and started once per file: a new script's first exec pays
+  // the system's check of it, which a loaded Mac made slow when every test paid it.
+  let shellDir: string
+  let shell: string
+  beforeAll(() => {
+    shellDir = mkdtempSync(join(tmpdir(), 'dsh-update-shell-'))
+    shell = join(shellDir, 'test-shell')
+    writeFileSync(shell, '#!/bin/sh\nexec /bin/sh -c "$2"\n', { mode: 0o755 })
+    execFileSync(shell, ['-c', 'true'])
+  })
+  afterAll(() => { rmSync(shellDir, { recursive: true, force: true }) })
   beforeEach(() => {
     root = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-update-')))
-    const shell = join(root, 'test-shell')
-    writeFileSync(shell, '#!/bin/sh\nexec /bin/sh -c "$2"\n', { mode: 0o755 })
     vi.stubEnv('SHELL', shell)
     savedRoot = env.DSH_DIR
     env.DSH_DIR = join(root, 'installed')

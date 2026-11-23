@@ -89,15 +89,35 @@ describe('Enter resumes stopped work', () => {
 
 
 describe('resume runtime verification', () => {
-  // Another client stopped or deleted the live harness while this one checked its runtime: the row this
-  // request was about is gone, and nothing it learned about it may be acted on.
-  it('reports the harness changed when its live row is gone after the runtime check, and acts on nothing', async () => {
+  // Another client stopped or deleted the live harness while this one checked its runtime: Stop cancels this
+  // request, and nothing it learned about the row may be acted on.
+  it('reports the harness changed when Stop takes its live row during the runtime check, and acts on nothing', async () => {
     const deps = fixture()
     deps.live.mockReturnValue(saved)
-    deps.checkLive.mockImplementation(async () => { deps.live.mockReturnValue(undefined); return { state: 'gone', reason: 'fixture' } })
+    deps.checkLive.mockImplementation(async () => {
+      deps.live.mockReturnValue(undefined)
+      deps.current.mockReturnValue(false)
+      return { state: 'gone', reason: 'fixture' }
+    })
     await expect(resumeStoppedAgent(deps)).resolves.toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
     expect(deps.retain).not.toHaveBeenCalled()
     expect(deps.launch).not.toHaveBeenCalled()
+  })
+
+  // The reconciler lists the row of a pane that died as stopped before its removal is saved (core/agents/forget.ts):
+  // a resume asked then finds the row live, and sees it go while it checks it (e2e/machine.e2e.ts, nightly 2026-11-20).
+  it('a resume asked the moment the row reads stopped after its pane died opens the conversation', async () => {
+    const deps = fixture()
+    deps.live.mockReturnValue(saved)
+    let removed!: () => void
+    const removal = new Promise<void>(resolve => { removed = resolve })
+    deps.checkLive.mockImplementation(async () => { await removal; return { state: 'gone', reason: 'its pane died' } })
+    const resumed = resumeStoppedAgent(deps)
+    deps.live.mockReturnValue(undefined)
+    removed()
+    await expect(resumed).resolves.toMatchObject({ ok: true, resumed: true })
+    expect(deps.launch).toHaveBeenCalledExactlyOnceWith(saved, 'original-conversation')
+    expect(deps.retain).not.toHaveBeenCalled()
   })
 
   it.each(['unknown', 'gone'] as const)('never calls a %s registry row a successful attachment', async state => {

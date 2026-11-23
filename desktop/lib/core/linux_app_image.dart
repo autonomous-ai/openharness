@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import '../logging/app_log.dart';
@@ -30,23 +31,20 @@ Future<void> registerAppImageLauncher({
   if (!RuntimePlatform.isLinux && environment == null) return;
   final env = environment ?? RuntimePlatform.environment;
   final appImage = env['APPIMAGE'];
-  final home = env['HOME'];
-  if (appImage == null || appImage.isEmpty || home == null || home.isEmpty) {
-    return;
-  }
+  final dataHome = launcherDataHome(env);
+  if (appImage == null || appImage.isEmpty || dataHome == null) return;
   try {
-    final dataHome = (env['XDG_DATA_HOME']?.isNotEmpty ?? false)
-        ? env['XDG_DATA_HOME']!
-        : '$home/.local/share';
     final entry = File('$dataHome/applications/harness.desktop');
     if (await entry.exists()) {
-      final target = _execTarget(await entry.readAsString());
+      final existing = await readLauncherEntry(entry);
+      final target = launcherExecTarget(existing);
       if (target != null && await File(target).exists()) {
         // Upgrade this executable's own entry, without taking over another copy.
         if (target != appImage) return;
-        final existing = await entry.readAsString();
+        // The line written now: one an earlier Desktop wrote with a single %
+        // is written again.
         if (existing.contains('MimeType=x-scheme-handler/harness;') &&
-            existing.contains(' %u\n')) {
+            existing.contains('Exec=${quoteLauncherExec(appImage)} %u\n')) {
           return;
         }
       }
@@ -59,20 +57,23 @@ Future<void> registerAppImageLauncher({
     final icon = File('$dataHome/icons/harness.png');
     if (await bundleIcon.exists()) {
       await icon.parent.create(recursive: true);
-      await bundleIcon.copy(icon.path);
+      await replaceLauncherFile(icon, await bundleIcon.readAsBytes());
     }
     await entry.parent.create(recursive: true);
-    await entry.writeAsString(
-      '[Desktop Entry]\n'
-      'Type=Application\n'
-      'Name=Harness\n'
-      'Comment=Attach terminals to the agents running on your Harness machines\n'
-      'Exec=${_quoteExec(appImage)} %u\n'
-      'MimeType=x-scheme-handler/harness;\n'
-      'Icon=${icon.path}\n'
-      'Terminal=false\n'
-      'Categories=Development;\n'
-      'StartupWMClass=$kLinuxAppId\n',
+    await replaceLauncherFile(
+      entry,
+      utf8.encode(
+        '[Desktop Entry]\n'
+        'Type=Application\n'
+        'Name=Harness\n'
+        'Comment=Attach terminals to the agents running on your Harness machines\n'
+        'Exec=${quoteLauncherExec(appImage)} %u\n'
+        'MimeType=x-scheme-handler/harness;\n'
+        'Icon=${icon.path}\n'
+        'Terminal=false\n'
+        'Categories=Development;\n'
+        'StartupWMClass=$kLinuxAppId\n',
+      ),
     );
     if (environment == null) {
       try {
@@ -81,37 +82,121 @@ Future<void> registerAppImageLauncher({
         /* Optional desktop utility. */
       }
     }
-    appLog.info('app', 'registered launcher entry for $appImage');
+    // No path: it holds the person's name.
+    appLog.info('app', 'registered launcher entry');
   } on FileSystemException catch (error) {
     appLog.warn('app', 'could not register a launcher entry: ${error.message}');
   }
 }
 
-/// The program an entry's `Exec=` line starts, unquoted; null when it has none.
-String? _execTarget(String entry) {
+/// Where launcher entries and their icons live: `XDG_DATA_HOME`, else
+/// `$HOME/.local/share`; null when neither names a folder. The XDG spec has a
+/// relative path ignored, and an entry under one would land wherever Desktop
+/// was started. Each without the `/`s that end it: a name goes after one `/`,
+/// as the Device app's entry names its icon.
+String? launcherDataHome(Map<String, String> environment) {
+  final xdg = _folder(environment['XDG_DATA_HOME']);
+  if (xdg != null && xdg.startsWith('/')) return xdg;
+  final home = _folder(environment['HOME']);
+  return home != null && home.startsWith('/') ? '$home/.local/share' : null;
+}
+
+/// [path] without the `/`s that end it, so `/` alone is no folder.
+String? _folder(String? path) => path?.replaceFirst(RegExp(r'/+$'), '');
+
+/// The program an entry's `Exec=` line starts, as GLib reads it and the Device
+/// app too: the string's escapes, then `%%` as `%`, then the quotes, in which a
+/// backslash keeps a `"`, a backtick, `$` or `\` and is kept before any other.
+/// Null when it has no `Exec=`, or an unclosed quote. A single `%` is kept, so
+/// an entry an earlier Desktop wrote without doubling one still names its path.
+String? launcherExecTarget(String entry) {
+  final exec = launcherEntryValue(entry, 'Exec');
+  if (exec == null) return null;
+  final value = _unescaped(exec).replaceAll('%%', '%');
+  if (value.startsWith('"')) {
+    // The closing quote is the first one no backslash escapes.
+    final quoted = RegExp(
+      r'^"((?:[^"\\]|\\.)*)"',
+      dotAll: true,
+    ).firstMatch(value);
+    if (quoted == null) return null;
+    return quoted[1]!.replaceAllMapped(
+      RegExp(r'\\(.)', dotAll: true),
+      (match) => '"`\$\\'.contains(match[1]!) ? match[1]! : match[0]!,
+    );
+  }
+  final space = value.indexOf(' ');
+  return space < 0 ? value : value.substring(0, space);
+}
+
+/// [value] with the Desktop Entry spec's string escapes (`\s`, `\n`, `\t`,
+/// `\r`, `\\`) read. Any other keeps its backslash, as GLib read it before it
+/// refused such a value, so an entry an earlier writer wrote with `\"` still
+/// names its path, and is written again.
+String _unescaped(String value) => value.replaceAllMapped(
+  RegExp(r'\\(.?)', dotAll: true),
+  (match) => switch (match[1]) {
+    's' => ' ',
+    'n' => '\n',
+    't' => '\t',
+    'r' => '\r',
+    r'\' => r'\',
+    _ => match[0]!,
+  },
+);
+
+/// The value of [entry]'s first `<key>=` line, without the spaces, tabs and
+/// carriage return around it: the ones GLib drops, which the Device app drops
+/// too. Null when it has none.
+String? launcherEntryValue(String entry, String key) {
   for (final line in entry.split('\n')) {
-    if (!line.startsWith('Exec=')) continue;
-    final value = line.substring(5).trim();
-    if (value.startsWith('"')) {
-      final end = value.indexOf('"', 1);
-      if (end < 0) return null;
-      return value
-          .substring(1, end)
-          .replaceAllMapped(RegExp(r'\\(.)'), (match) => match[1]!);
+    if (line.startsWith('$key=')) {
+      return line.substring(key.length + 1).replaceAll(_padding, '');
     }
-    final space = value.indexOf(' ');
-    return space < 0 ? value : value.substring(0, space);
   }
   return null;
 }
 
+final _padding = RegExp(r'^[ \t\r]+|[ \t\r]+$');
+
+/// Writes a launcher entry or its icon beside [file], flushed, and renames it
+/// over it, as the Device app writes its own: a dock never reads half of one.
+/// The temp file's name is one per file, so the next write takes over one a
+/// killed write left.
+Future<void> replaceLauncherFile(File file, List<int> bytes) async {
+  final temp = File('${file.path}.tmp');
+  try {
+    await temp.writeAsBytes(bytes, flush: true);
+    await temp.rename(file.path);
+  } finally {
+    if (await temp.exists()) await temp.delete();
+  }
+}
+
+/// A launcher entry's text, as the Device app reads one: a byte that is not
+/// UTF-8 reads as U+FFFD, and the rule still reads its lines.
+Future<String> readLauncherEntry(File entry) async =>
+    utf8.decode(await entry.readAsBytes(), allowMalformed: true);
+
 /// A path as the Desktop Entry spec wants it in `Exec=`: quoted when it holds
-/// a character the launcher would otherwise split or expand on.
-String _quoteExec(String path) {
-  if (!RegExp(r'''[\s"'\\$`<>~|&;*?#()]''').hasMatch(path)) return path;
-  final escaped = path.replaceAllMapped(
+/// a character the launcher would otherwise split or expand on, with `"`, a
+/// backtick, `$` and `\` backslashed, and every `%` doubled, as the spec keeps
+/// a single one for field codes; then the string's escape over it, every
+/// backslash doubled again, as the spec reads a value before its quotes (GLib
+/// finds no `Exec=` in `\"`).
+String quoteLauncherExec(String path) {
+  final doubled = path.replaceAll('%', '%%');
+  if (!_quoted.hasMatch(path)) return doubled;
+  final escaped = doubled.replaceAllMapped(
     RegExp(r'["`$\\]'),
     (match) => '\\${match[0]}',
   );
-  return '"$escaped"';
+  return '"${escaped.replaceAll(r'\', r'\\')}"';
 }
+
+/// What `Exec=` quotes, the list the Device app's exec_value holds: Unicode's
+/// White_Space, which a launcher may split an argument on (KDE's does), and
+/// what the Desktop Entry spec reserves.
+final _quoted = RegExp(
+  r'''[\x09-\x0d \x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000"'\\$`<>~|&;*?#()]''',
+);

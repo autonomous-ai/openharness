@@ -8,14 +8,18 @@
  */
 import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import type { TestProject } from 'vitest/node'
+import { libnode, underRosetta, type Machine } from '../testing/placeNode.js'
 import { alive } from '../testing/spawnedRuns.js'
 
 declare module 'vitest' {
   export interface ProvidedContext {
     /** The run's own folder, which the run's workers' folders go in (vitest.tmpdir.ts). */
     runFolder: string
+    /** The run's Node, which testing/placeNode.ts makes at the run's first place and links into each test that places
+     *  one: '' where the run makes none. */
+    startedNode: string
   }
 }
 
@@ -90,7 +94,17 @@ export function beginRun(runs: string, shared: string): string {
   return root
 }
 
+/** Where the run's Node goes in [root]: one copy of this Node, which the run's first placeNode makes and starts once, so
+ *  no other test that places a Node pays a first start of its own, and a run that places none pays nothing
+ *  (testing/placeNode.ts). None, '', for Homebrew's Node, with [libraries] beside it (#4395), and for a Node that Rosetta
+ *  runs, which placeNode refuses by name. [machine] and [libraries] are this Node's; a spec names others. */
+export function runNode(root: string, machine?: Machine, libraries: string[] = libnode()): string {
+  return underRosetta(machine) || libraries.length > 0 ? '' : join(root, 'node', 'bin', basename(process.execPath))
+}
+
 /** The run's globalSetup. */
 export default function startRun(project: TestProject): void {
-  project.provide('runFolder', beginRun(runsBase(), tmpdir()))
+  const root = beginRun(runsBase(), tmpdir())
+  project.provide('runFolder', root)
+  project.provide('startedNode', runNode(root))
 }

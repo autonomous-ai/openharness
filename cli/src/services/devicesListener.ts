@@ -9,6 +9,11 @@
  * alone, so the kernel refuses another account's connect. Node reads no peer's uid. A client checks the socket's owner
  * and mode before it sends (lib/localTransport.ts `socketIsPrivate`).
  *
+ * On Windows Node cannot set a pipe's DACL, so any account can reach the devices' pipe: who may send is whoever proves
+ * `devices-token`, a file in this account's profile, on each request, as the daemon's pipe proves its own token
+ * (lib/windows/pipeAuth.ts). A new pipe each start, named in `devices.json` beside the token for clients to find
+ * (devices/listenerPipe.ts).
+ *
  * One message is one `POST /` whose body is a JSON object with a string `type`. A dropped one is answered with a status
  * and an empty body, and counted: what a sender wrote is never echoed or logged, since a front names the app a person
  * has in front of them.
@@ -22,7 +27,11 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Socket } from 'node:net'
 import { lstatSync, type Stats } from 'node:fs'
 import { dirname } from 'node:path'
+import { devicesListenerPath } from '../devices/listenerPath.js'
+import { CLAUDE_SESSION_ID, DEVICES_TOKEN_FILE, removeDevicesRecord, writeDevicesRecord } from '../devices/listenerPipe.js'
 import { listenLocalSocket, type LocalSocketServer } from '../lib/localSocket.js'
+import { errorKind } from '../lib/log.js'
+import { ensureDaemonToken, newPipePath } from '../lib/windows/pipeAuth.js'
 import type { DialAgent } from '../cable/cableSession.js'
 import { APP_IDS } from '../cable/hosts/hostDetect.js'
 import { FRONT_NONE } from '../cable/hosts/frontApp.js'
@@ -83,13 +92,15 @@ export interface ListenerStreamHandler {
 }
 
 export interface DevicesListenerOptions {
-  /** devices/listenerPath.ts; null where there is no listener: Windows, or a data folder and a home both too long. */
+  /** devices/listenerPath.ts; null where there is no socket: Windows, or a data folder and a home both too long. */
   path: string | null
+  /** Windows: the pipe served instead of `path` (lib/windows/pipeAuth.ts `newPipePath`), and the data folder that holds
+   *  its token and record. */
+  pipe?: { path: string; dataDir: string }
   handlers: Readonly<Record<string, ListenerHandler | ListenerStreamHandler>>
   log(line: string): void
   /** Monotonic milliseconds. */
   now?: () => number
-  platform?: NodeJS.Platform
 }
 
 export interface DevicesListener {
@@ -124,24 +135,53 @@ class PerSecond {
 }
 
 /**
- * Serve `handlers` on the devices' socket, or nothing: no path, a folder that is not this account's own, a name a live
- * listener holds, or a socket that cannot be made. Each is one log line, and the devices run on without it. Windows has
- * no listener yet, so no path there says nothing.
+ * How the devices open their listener on [dataDir]'s socket, or on Windows a pipe with a new name each start, as the
+ * daemon's: the same in their own process (services/devicesProcess.ts) and in the core's (services/inline.ts).
+ */
+export function listenForDevices(
+  dataDir: string,
+  platform: NodeJS.Platform,
+  open: typeof openDevicesListener = openDevicesListener,
+): (handlers: DevicesListenerOptions['handlers'], log: (line: string) => void) => Promise<DevicesListener | null> {
+  return (handlers, log) => open({
+    path: devicesListenerPath(dataDir, platform),
+    pipe: platform === 'win32' ? { path: newPipePath(), dataDir } : undefined,
+    handlers,
+    log,
+  })
+}
+
+/**
+ * Serve `handlers` on the devices' socket or pipe, or nothing: no path, a folder that is not this account's own, a token
+ * that cannot be trusted, a name a live listener holds, a socket that cannot be made, or a record that cannot be
+ * written. Each is one log line, and the devices run on without it.
  */
 export async function openDevicesListener(
-  { path, handlers, log, now = () => performance.now(), platform = process.platform }: DevicesListenerOptions,
+  { path, pipe, handlers, log, now = () => performance.now() }: DevicesListenerOptions,
 ): Promise<DevicesListener | null> {
-  if (path === null) {
-    if (platform !== 'win32') log('[devices] listener not opened · no path')
+  const where = pipe?.path ?? path
+  if (where === null) {
+    log('[devices] listener not opened · no path')
     return null
   }
-  let folder: Stats | undefined
-  try { folder = lstatSync(dirname(path)) } catch { /* a short folder not made yet: listenLocalSocket makes it owner only */ }
-  // What a client asks of the socket's folder before it sends (socketIsPrivate): a real folder of this account that no
-  // one else can write to, where no other account can put a socket of its own in this one's place.
-  if (folder && (!folder.isDirectory() || folder.uid !== process.getuid?.() || (folder.mode & 0o022) !== 0)) {
-    log('[devices] listener not opened · folder not private')
-    return null
+  let token: Buffer | undefined
+  if (pipe) {
+    // The folder check on Windows is the daemon token's own: inside the profile, and no link (lib/secureState.ts).
+    try {
+      token = ensureDaemonToken(pipe.dataDir, DEVICES_TOKEN_FILE)
+    } catch (error) {
+      log(`[devices] listener not opened · token · ${errorKind(error)}`)
+      return null
+    }
+  } else {
+    let folder: Stats | undefined
+    try { folder = lstatSync(dirname(where)) } catch { /* a short folder not made yet: listenLocalSocket makes it owner only */ }
+    // What a client asks of the socket's folder before it sends (socketIsPrivate): a real folder of this account that no
+    // one else can write to, where no other account can put a socket of its own in this one's place.
+    if (folder && (!folder.isDirectory() || folder.uid !== process.getuid?.() || (folder.mode & 0o022) !== 0)) {
+      log('[devices] listener not opened · folder not private')
+      return null
+    }
   }
 
   const largest = Math.max(...Object.values(handlers).map(({ maxBytes }) => maxBytes))
@@ -337,7 +377,7 @@ export async function openDevicesListener(
 
   let listening: LocalSocketServer
   try {
-    listening = await listenLocalSocket(onRequest, path)
+    listening = await listenLocalSocket(onRequest, where, { token })
   } catch (error) {
     log(`[devices] listener not opened · ${(error as NodeJS.ErrnoException).code === 'EADDRINUSE' ? 'in use' : 'failed'}`)
     return null
@@ -356,6 +396,16 @@ export async function openDevicesListener(
   listening.server.keepAliveTimeout = LISTENER_TIMEOUT_MS
   // A listener never keeps its process up.
   listening.server.unref()
+  if (pipe) {
+    // Clients find the pipe only by its record: a pipe nobody can find is not open.
+    try {
+      writeDevicesRecord(pipe.dataDir, { pipe: pipe.path, pid: process.pid })
+    } catch (error) {
+      await listening.close()
+      log(`[devices] listener not opened · record · ${errorKind(error)}`)
+      return null
+    }
+  }
   // No path: a path holds the account's name.
   log('[devices] listener open')
 
@@ -367,6 +417,7 @@ export async function openDevicesListener(
       const gone = listening.close()
       for (const each of waiting) each.abort()
       await gone
+      if (pipe) removeDevicesRecord(pipe.dataDir, pipe.path)
     })(),
   }
 }
@@ -405,10 +456,6 @@ export const ATTACH_PER_SECOND = 10
 /** The message, `{"type":"attach","sessionId":"<uuid>"}`, is 68 bytes. */
 export const ATTACH_MAX_BYTES = 96
 
-/** Claude Code's session id: a UUID in lower case, as it makes them; the agent's id is hashed from the string as given,
- *  so an upper-case one would name no session. */
-const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
-
 /** The session the Claude app shows, from the harness-device mod: its own session id, handed on. It keeps nothing and
  *  logs nothing, as the id names a person's session. */
 export function attachHandler(attach: (sessionId: string) => void): ListenerHandler {
@@ -416,7 +463,7 @@ export function attachHandler(attach: (sessionId: string) => void): ListenerHand
     maxBytes: ATTACH_MAX_BYTES,
     perSecond: ATTACH_PER_SECOND,
     handle: ({ sessionId }) => {
-      if (typeof sessionId !== 'string' || !SESSION_ID.test(sessionId)) return REFUSED
+      if (typeof sessionId !== 'string' || !CLAUDE_SESSION_ID.test(sessionId)) return REFUSED
       attach(sessionId)
     },
   }

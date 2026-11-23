@@ -35,8 +35,8 @@ it.each([['missing', 1], ['stalled', 1], ['missing', 2], ['stalled', 2]] as cons
     const apiCalls = join(d.root, 'api.jsonl'), nativeModel = join(d.root, 'model.json')
     const fault = join(d.root, 'api-fault'), readEntered = join(d.root, 'read-entered'), readRelease = join(d.root, 'read-release')
     d.env.OPENCODE_PATH = binary
-    d.env.OPENCODE_DATA_DIR = join(d.root, 'opencode', 'data')
-    d.env.OPENCODE_PLUGIN_DIR = join(d.root, 'opencode', 'plugin')
+    d.env.OPENCODE_DATA_DIR = join(d.env.HOME!, 'opencode', 'data')
+    d.env.OPENCODE_PLUGIN_DIR = join(d.env.HOME!, 'opencode', 'plugin')
     writeFileSync(binary, `#!${process.execPath}
 const fs = require('node:fs');
 const args = process.argv.slice(2);

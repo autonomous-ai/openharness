@@ -18,6 +18,7 @@ works the same on a headless Linux server; the app is not required on a machine,
 | `harness stop` · `harness logout` · `harness reset` | Stop the daemon · stop and clear the SSO session · stop and clear all local state. |
 | `harness status` · `harness version` · `harness update [--force]` | Running, pid, machine id, session count · version · update now. |
 | `harness dsh list` · `harness dsh update <owner/name>` | Installed harness package versions and available updates · update one package while preserving its workspaces. |
+| `harness hooks hermes` | For a Hermes `config.yaml` that has its own `hooks:`, which Harness leaves alone and its log names this command for: the entries to add by hand under that mapping and `terminal.client_env_passthrough`, under each config's path. The port is the running daemon's; the rest is built from this shell's environment (`HERMES_HOME`, the data folder, the other engines' homes, the managed Node), so a daemon started with another environment installs other entries. Prints nothing when no Hermes home has a config; another engine, or none, exits 1. |
 | `harness machines [list] [--json]` · `harness machines delete <id>` | This account's machines · remove another machine (never this one). |
 | `harness machines engines <machine> [--engine E]… [--json]` | Asks that machine now, over the machine link, which engines it has (`engines_probe`, answered there): one JSON line per engine with `machineId`, `engine`, `installed` (`true` or `null`), `signedIn` (claude and codex only, else `null`), `installable` and `firstPrompt` (whether its Harness can start that engine with a first prompt; `null` from an older Harness). `null` means unknown, never "not there": the probe reads a missing command, a timed-out login shell and a failed spawn alike, so only a failed start says an engine is missing. `--engine` narrows the probe to the engines named, so the answer comes sooner. For a device that hands work to its person's machines (#1788). |
 | `harness pair <code>` · `harness pairings` · `harness unpair <#\|fp\|--all>` | Pair a browser with the code the web client shows; list; unpair. |
@@ -29,7 +30,7 @@ works the same on a headless Linux server; the app is not required on a machine,
 | `harness grid login [--force] [--json]` · `harness grid logout` | Sign the `grid` CLI in with this computer's account, no second browser. |
 | `harness grid env <grid>` | `<grid>`'s relay address and key as shell exports, through the harness's own `grid`: `eval "$(harness grid env <grid>)"` before pointing an OpenAI-compatible client at `$OPENAI_BASE_URL`. |
 | `harness flash [flags]` | Re-flash a plugged-in Harness device over USB. Flags pass straight to the flasher. |
-| `harness device notify "<one line>" [--json]` | For an agent: ring this computer's dial when it needs the person to act. One line, 120 characters at most. The dial shows it whole under the agent's name, pinned, with one option, "In <app>", until that agent's next turn starts or the person taps "In <app>". A notice still pending when the daemon restarts comes back in the dial's list without ringing again, for up to 24 hours. Prints `shown`, `no dial` or `limited`, exit 0 for each. On Windows, and where the devices run inside the core (Harness OS), it prints `no dial`. Claude Code and Codex run it without a permission question. |
+| `harness device notify "<question>" [--suggest "<recommendation>"] [--waiting\|--proceeding] [--json]` | For an agent in any app (Harness, Orca, a terminal, VS Code, Cursor, the Claude app, the ChatGPT app): ring this computer's dial when the person must decide or act, and keep working. It sends one line: `Waiting · <question> · Suggest: <suggestion>`, `Waiting · <question>`, `Proceeding · <question> · Doing: <suggestion>`, `Proceeding · <question>`, `<question> · Suggest: <suggestion>` or `<question>`. `--suggest` takes the next word and the last one wins; both state flags read as `--waiting`; every other word, also one that starts with `-`, is the question. The line is at most 120 characters and 239 bytes: the suggestion keeps 40 at most, and the question is cut first. The dial shows it whole under the agent's name, pinned, with one option, "In <app>", until that agent's next turn starts or the person taps "In <app>"; the person answers in that app. A notice still pending when the daemon restarts comes back in the dial's list without ringing again, for up to 24 hours. Any question text prints `shown`, `no dial` or `limited` and exits 0; no question (flags alone, or only `--help` or `-h`) prints the usage and exits 1, sending nothing. Where the devices run inside the core with no listener of their own (Harness OS), it prints `no dial`. Claude Code and Codex run it without a permission question on macOS, Linux and Windows, typed as `harness`, which is how agents type it. On Windows Codex may ask for it typed another way: `codex execpolicy check` matches the launcher's full path (`C:\Users\<u>\.harness\bin\harness.exe`) only with `--resolve-host-executables`, and an upper-case `HARNESS.EXE` never. A deny or an ask of yours for it in Claude Code's `settings.json`, by name or by path, wins even when you add it after Harness's allow: the next daemon start or launch takes Harness's rules for it out. |
 | `harness device claude status [--json]` · `enable` · `disable` | From the first dial plugged in on this computer, the devices service sets Claude Code up by itself, once, and keeps it current as Harness updates: its `harness-device` plugin and the `dial` skill in each home it knows. These take that away or bring it back. Whether the dial is on for Claude Code: its plugin is on and `disable` has not removed it · clear the removal, install the plugin, or turn it on, and write the skill to `$CLAUDE_CONFIG_DIR/skills/dial/SKILL.md` (`~/.claude` by default) and back into each home the devices service set up · uninstall the plugin and remove the skill from the homes Harness wrote it into, but for a skills folder Codex holds it in; Harness leaves them removed until `enable`. With no `claude` found while the plugin is on, it says so and exits 1. `enable` and `disable` also turn the plugin on or off in each Orca account's Claude Code home; a home that fails says so in one line. A `dial` skill the person wrote is never changed. |
 | `harness device codex status [--json]` · `enable` · `disable` | From the first dial plugged in on this computer, the devices service writes the `dial` skill, which tells Codex of the dial, into each Codex home it knows, once, and keeps it current as Harness updates. These take that away or bring it back. Whether the dial is on for Codex: a dial was plugged in here or `enable` ran, and `disable` has not removed it · clear the removal and write the skill to `$CODEX_HOME/skills/dial/SKILL.md` (`~/.codex` by default) and back into each home the devices service set up · remove the skill from the homes Harness wrote it into, but for a skills folder Claude Code holds it in; Harness leaves it removed until `enable`. A `dial` skill the person wrote is never changed. |
 | `harness device vscode enable` · `disable` · `harness device cursor enable` · `disable` | From the first dial plugged in on this computer, the devices service installs Harness's extension into VS Code and into Cursor by itself, once, through each editor's own CLI, and keeps it current as Harness updates. These take that away or bring it back, one editor at a time: `disable` uninstalls it, and Harness leaves it removed · `enable` clears that and installs it. Each prints one JSON line, `{"vscode":"on","version":"…"}` or `{"cursor":"off"}`. |
@@ -115,8 +116,8 @@ What you export in your shell's startup files still reaches your agents: every p
 login shell.
 
 Anything else the daemon or its agents need, `HC_SESSION`, `TYPESAFE_CREDENTIALS`, `GIT_SSH_COMMAND` and
-`CLAUDE_CODE_OAUTH_TOKEN` among them, goes in the file `HARNESS_ENV_FILE` names, which every daemon process reads as
-it starts.
+`CLAUDE_CODE_OAUTH_TOKEN` among them, goes in the file `HARNESS_ENV_FILE` names (absolute, or relative to your home),
+which every daemon process reads as it starts.
 
 Provider keys will move to `HARNESS_ENV_FILE` next.
 
@@ -512,6 +513,24 @@ kitty and Zellij are found on the daemon's `PATH`, else where your login shell f
 folders.
 
 **WezTerm.** The dial's words are typed into the agent's pane.
+
+**Orca and herdr.** The dial's words are typed into an Orca terminal or a herdr pane only when Orca or herdr made the
+agent's terminal. An agent started from one, in VS Code or another terminal, gets no words there, and a tap there only
+after its other panes: VS Code started from an Orca terminal is tapped in VS Code. The daemon's log says
+`[device] orca · held` or `[device] herdr · held` once.
+
+**herdr inside a terminal.** An agent in a herdr pane is on the page of the app holding herdr's client, as on macOS:
+WezTerm, kitty or Ghostty. herdr's client inside your tmux or Zellij is not placed: herdr (0.9.5) removes tmux's and
+Zellij's variables from its panes, so the agent is on the Other page and a tap focuses its herdr pane, on macOS and
+Linux. In WezTerm and kitty (kitty with remote control on) a swipe or a rest while that app is in front selects the tab
+holding herdr's client, then the agent's herdr pane; a tap does the same and brings the window forward. Ghostty on
+Linux, GNOME Terminal, Ptyxis, Konsole, Alacritty, foot and xterm offer no tab API: there the agent is on Ghostty's
+page, else on the Other page, as on macOS; a swipe and a tap focus the herdr pane, a tap brings the client's window
+forward where the desktop raises by process (X11, sway, KDE, Hyprland; not GNOME), and the tab holding the client is
+not selected. The same holds for tmux's client in those terminals.
+
+An idle agent in herdr or tmux is on that app's page as soon as the dial attaches. Run
+`herdr integration install claude` so the dial focuses the right herdr pane.
 
 ## The daemon's control interface
 

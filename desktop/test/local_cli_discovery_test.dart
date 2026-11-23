@@ -728,6 +728,59 @@ void main() {
     });
   });
 
+  // The app's boot, sign-in and machine retry call ensureRunning every few seconds: a spawn while
+  // the daemon is down on purpose undoes the uninstall, or takes the dial's port mid-flash.
+  for (final (held, flashing, uninstalling) in [
+    ('harness uninstall holds its marker', false, true),
+    ('a dial is being flashed', true, false),
+  ]) {
+    test('ensureRunning spawns nothing while $held', () {
+      fakeAsync((async) {
+        var spawnCount = 0;
+        final discovery = _SupervisionProbe(
+          readProbe: () async =>
+              const LocalCliProbe.down('fixture daemon is down'),
+          spawnCommand: () async => spawnCount++,
+          flashing: () => flashing,
+          uninstalling: () => uninstalling,
+          monotonicClock: () => async.elapsed,
+        );
+        LocalCliProbe? result;
+        discovery.ensureRunning().then((probe) => result = probe);
+
+        async.flushMicrotasks();
+        expect(spawnCount, 0);
+        expect(result?.state, LocalCliProbeState.down);
+      });
+    });
+
+    test(
+      'ensureRunning does not fall back to a spawn when the daemon goes down mid-wait while $held',
+      () {
+        fakeAsync((async) {
+          var spawnCount = 0;
+          var asked = 0;
+          final discovery = _SupervisionProbe(
+            // Answers once, not ready yet, then goes quiet.
+            readProbe: () async => asked++ == 0
+                ? const LocalCliProbe.notReady('startup scan')
+                : const LocalCliProbe.down('fixture daemon went away'),
+            spawnCommand: () async => spawnCount++,
+            flashing: () => flashing,
+            uninstalling: () => uninstalling,
+            monotonicClock: () => async.elapsed,
+          );
+          LocalCliProbe? result;
+          discovery.ensureRunning().then((probe) => result = probe);
+
+          async.elapse(const Duration(seconds: 1));
+          expect(spawnCount, 0);
+          expect(result?.state, LocalCliProbeState.down);
+        });
+      },
+    );
+  }
+
   test('restart stops waiting for the old daemon to let go once stopTimeout has run out on its clock', () {
     fakeAsync((async) {
       var stopCount = 0;
@@ -858,6 +911,34 @@ void main() {
         uninstalling = false;
         async.elapse(const Duration(milliseconds: 150));
         expect(spawnCount, greaterThan(0));
+      } finally {
+        timer.cancel();
+      }
+    });
+  });
+
+  // A probe takes time: `harness uninstall` can stop the daemon and take its marker while the probe
+  // that finds it down is still being answered.
+  test('startSupervising starts no daemon when harness uninstall begins during the probe', () {
+    fakeAsync((async) {
+      var uninstalling = false;
+      var spawnCount = 0;
+      final discovery = _SupervisionProbe(
+        readProbe: () async {
+          uninstalling = true;
+          return const LocalCliProbe.down('fixture daemon is down');
+        },
+        spawnCommand: () async => spawnCount++,
+        uninstalling: () => uninstalling,
+        monotonicClock: () => async.elapsed,
+      );
+      final timer = discovery.startSupervising(
+        checkInterval: const Duration(milliseconds: 20),
+        spawnAfter: 1,
+      );
+      try {
+        async.elapse(const Duration(milliseconds: 100));
+        expect(spawnCount, 0);
       } finally {
         timer.cancel();
       }

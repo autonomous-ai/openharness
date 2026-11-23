@@ -1,12 +1,19 @@
 name: Release Harness Device
-run-name: Harness Device ${{ inputs.publish && 'release' || 'candidate' }} ${{ inputs.version }}
+run-name: Harness Device ${{ inputs.publish && 'release' || 'candidate' }} ${{ inputs.version }} (${{ inputs.platforms }})
 
 # Started by `make release-device` only (device-app/RELEASE.md): on the tag v<version>_device it just pushed, with
 # publish, or on main without it (--prepare). Neither a commit nor a tag starts it.
 #
-# Only `build` holds the Apple and updater secrets, and only in the steps after `Compile`, which runs the build's code
-# without them (on the same runner: code that means harm could leave something for a later step); only `publish` may mint the OIDC token a GCS credential needs, so the job that runs the build's code
-# can never write to the bucket.
+# The build's code (crates' build scripts, npm packages) runs before any secret exists. `build` holds the Apple and
+# updater secrets, and `build-linux` the updater key, only in the steps after `Compile`, on the same runner (code that
+# means harm could leave something for a later step). Windows compiles in `build-windows`, with no secret and no
+# identity, and is signed in `sign-windows`, which compiles and installs nothing: the Tauri CLI it runs comes from
+# `tauri-cli-windows`, where no app code runs, and the Windows sums publish checks are taken there too. A job that runs
+# the build's code can still replace another job's artifact, so the CLI's sha256 and the sums' reach the jobs that take
+# them as job outputs, which only the job that made them can set. Only `sign-windows` and `publish` may mint an OIDC
+# token, and neither runs the build's code. Which credential each token gets is the identity providers' to decide:
+# Azure's federated credential trusts the `release` environment, which only `sign-windows` is in; GCP's workload
+# identity provider must refuse that environment's subject.
 
 on:
   workflow_dispatch:
@@ -18,6 +25,13 @@ on:
         description: 'Publish (run on the tag v<version>_device)'
         type: boolean
         default: false
+      # Temporary: the first Windows and Linux release makes `all` the only behavior and removes this input, here and in
+      # release-device.sh.
+      platforms:
+        description: 'Platforms: macos, or all for Windows and Linux too'
+        type: choice
+        options: [macos, all]
+        default: macos
 
 permissions:
   contents: read
@@ -27,7 +41,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # A wrong ref, a commit not on main or a version not X.Y.Z fails here in seconds, before the macOS build.
+  # A wrong ref, a commit not on main or a version not X.Y.Z fails here in seconds, before any build.
   version:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -189,9 +203,348 @@ jobs:
         if: always()
         run: security delete-keychain "$KEYCHAIN_PATH" || true
 
+  # The Tauri CLI sign-windows runs, made where no app code runs: the app's code is not checked out, and a crate's build
+  # script or an npm package that could replace a CLI on a runner never runs here. No secret and no identity.
+  tauri-cli-windows:
+    needs: version
+    if: inputs.platforms == 'all'
+    runs-on: windows-latest
+    # The Tauri CLI's install takes about 10 minutes on Windows.
+    timeout-minutes: 30
+    outputs:
+      sha256: ${{ steps.take.outputs.sha256 }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            /device-app/scripts/
+          sparse-checkout-cone-mode: false
+
+      - name: Install the Tauri CLI
+        run: bash device-app/scripts/release-setup.sh tauri-cli
+
+      # Its sha256 goes on as this job's output: sign-windows runs the CLI only if the artifact still holds this one.
+      - id: take
+        name: Take the Tauri CLI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path tauri | Out-Null
+          Copy-Item -LiteralPath (Get-Command cargo-tauri).Source -Destination tauri
+          $sum = (Get-FileHash -Algorithm SHA256 -LiteralPath tauri/cargo-tauri.exe).Hash.ToLowerInvariant()
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "sha256=$sum"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tauri-cli-windows
+          path: tauri
+          retention-days: 1
+          if-no-files-found: error
+
+  # Windows compiles here, with no secret and no identity: no environment, no id-token. Both arches build on x64, as
+  # the signing action does not run on Windows Arm.
+  build-windows:
+    needs: version
+    if: inputs.platforms == 'all'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x64, target: x86_64-pc-windows-msvc }
+          - { arch: arm64, target: aarch64-pc-windows-msvc }
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      DEVICE_TARGET: ${{ matrix.target }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # GitHub's Windows images set core.autocrlf: the exe embeds the UI built from these files, so it builds from the
+      # committed bytes, as on macOS and Linux.
+      - run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v7
+        with:
+          # Nothing in the job needs the token, and the build runs third-party code.
+          persist-credentials: false
+          # Cargo lists the package's files through git, which reads every .gitignore up to the root.
+          sparse-checkout: |
+            /device-app/
+            /.gitignore
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.22.2
+
+      - name: Install the build tools
+        run: bash device-app/scripts/release-setup.sh
+
+      - name: Compile
+        run: bash device-app/scripts/release-build.sh compile "$VERSION"
+
+      # In a folder of its own, so the artifact holds the exe and none of the folders above it.
+      - name: Take the exe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path unsigned | Out-Null
+          Copy-Item -LiteralPath "device-app/src-tauri/target/$env:DEVICE_TARGET/release/harness-device.exe" -Destination unsigned
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: device-windows-${{ matrix.arch }}-unsigned
+          path: unsigned
+          retention-days: 1
+          if-no-files-found: error
+
+  # Authenticode through Azure Artifact Signing (docs/windows-code-signing.md), always: Smart App Control blocks an
+  # unsigned program. This job's OIDC identity is the signing credential, and an identity is the whole job's, so no
+  # build script or package runs here. The app's exe is signed before NSIS packs it, the installer after, and the
+  # update signature last, so it covers the bytes that ship.
+  sign-windows:
+    needs: [version, tauri-cli-windows, build-windows]
+    runs-on: windows-latest
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      sums: ${{ steps.sums.outputs.sha256 }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            /device-app/
+            /.gitignore
+            /.github/actions/windows-signing/
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: device-windows-*-unsigned
+          path: unsigned
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tauri-cli-windows
+          path: tauri
+
+      # The CLI's folder goes on PATH only when it holds tauri-cli-windows's CLI alone: any other program there would
+      # run in place of one the steps below name. Each exe goes in a folder of its own: they share a name, and the
+      # signing action signs every unsigned program under the folder it is given.
+      - name: Take the Tauri CLI and the exes
+        env:
+          TAURI_CLI_SHA256: ${{ needs.tauri-cli-windows.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          # Only the hash: Git Bash's sha256sum marks its input binary, "<hash> *-".
+          sum="$(sha256sum <tauri/cargo-tauri.exe)"
+          if [[ "$(ls -A tauri)" != cargo-tauri.exe || -z "$TAURI_CLI_SHA256" ||
+            "${sum%% *}" != "$TAURI_CLI_SHA256" ]]; then
+            echo "::error::The tauri-cli-windows artifact is not the Tauri CLI that job made"
+            exit 1
+          fi
+          mkdir sign
+          cygpath -w "$PWD/tauri" >>"$GITHUB_PATH"
+          for arch in x64 arm64; do
+            mkdir "sign/$arch"
+            mv "unsigned/device-windows-$arch-unsigned/harness-device.exe" "sign/$arch/"
+          done
+
+      - name: Sign the exes
+        uses: ./.github/actions/windows-signing
+        with:
+          path: sign
+          publisher: ${{ vars.WINDOWS_SIGNING_PUBLISHER || 'AUTONOMOUS INC.' }}
+          azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          endpoint: ${{ vars.SIGNING_ENDPOINT }}
+          account: ${{ vars.SIGNING_ACCOUNT }}
+          profile: ${{ vars.SIGNING_PROFILE }}
+
+      # Only the Tauri CLI runs here, with no secret: each signed exe goes back where the build left it, and NSIS packs
+      # it.
+      - name: Bundle
+        run: |
+          set -euo pipefail
+          for pair in x64:x86_64-pc-windows-msvc arm64:aarch64-pc-windows-msvc; do
+            arch="${pair%%:*}" target="${pair#*:}"
+            release="device-app/src-tauri/target/$target/release"
+            mkdir -p "$release"
+            mv "sign/$arch/harness-device.exe" "$release/"
+            DEVICE_TARGET="$target" bash device-app/scripts/release-build.sh bundle "$VERSION" "bundle/$arch"
+          done
+          mkdir out
+          mv bundle/x64/* bundle/arm64/* out/
+
+      - name: Sign the installers
+        uses: ./.github/actions/windows-signing
+        with:
+          path: out
+          publisher: ${{ vars.WINDOWS_SIGNING_PUBLISHER || 'AUTONOMOUS INC.' }}
+          azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          endpoint: ${{ vars.SIGNING_ENDPOINT }}
+          account: ${{ vars.SIGNING_ACCOUNT }}
+          profile: ${{ vars.SIGNING_PROFILE }}
+
+      # The only step that holds the updater key, after Authenticode wrote the installers' last bytes.
+      - name: Sign the updates
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: bash device-app/scripts/release-build.sh sign-update "$VERSION" out
+
+      # Here, as the files are made: `publish` refuses files that differ from these, and sums whose sha256 is not this
+      # job's output. Windows runners have python, not python3.
+      - id: sums
+        name: Record the checksums
+        run: |
+          set -euo pipefail
+          python device-app/scripts/device-manifest.py sums --dir out --part windows --out out/sums.json
+          sum="$(sha256sum <out/sums.json)"
+          echo "sha256=${sum%% *}" >>"$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: harness-device-${{ needs.version.outputs.version }}-windows
+          path: out
+          retention-days: 7
+          if-no-files-found: error
+
+  # Checks what sign-windows made, with no identity and no secret, and hands nothing on: publish takes sign-windows's
+  # artifact and its sums.
+  check-windows:
+    needs: [version, sign-windows]
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # GitHub's Windows images set core.autocrlf, and the sed below reads tauri.conf.json's pubkey line up to its end:
+      # a CR there would match nothing.
+      - run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            /device-app/
+            /.gitignore
+          sparse-checkout-cone-mode: false
+
+      # The checks need minisign alone: nothing is built here.
+      - name: Install minisign
+        run: bash device-app/scripts/release-setup.sh minisign
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: harness-device-${{ needs.version.outputs.version }}-windows
+          path: out
+
+      # Against the committed key, as on macOS. sed, not Python, reads it: Python's print ends its line with CRLF
+      # here, and bash keeps the CR.
+      - name: Check the build
+        run: |
+          set -euo pipefail
+          PUBKEY="$(sed -n 's/^ *"pubkey": *"\([^"]*\)",*$/\1/p' device-app/src-tauri/tauri.conf.json)"
+          bash device-app/scripts/release-check.sh out "$VERSION" "$PUBKEY" --signed
+
+  build-linux:
+    needs: version
+    if: inputs.platforms == 'all'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Desktop's runners (release-desktop.yml): an AppImage carries the libraries of the machine that bundled it,
+          # so each arch builds on its own host, on the oldest Ubuntu Desktop supports.
+          - { runner: ubuntu-22.04, arch: x64 }
+          - { runner: ubuntu-22.04-arm, arch: arm64 }
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Nothing in the job needs the token, and the build runs third-party code.
+          persist-credentials: false
+          # Cargo lists the package's files through git, which reads every .gitignore up to the root. release-setup.sh
+          # installs Tauri's packages with apt-install.sh.
+          sparse-checkout: |
+            /device-app/
+            /.gitignore
+            /scripts/apt-install.sh
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.22.2
+
+      - name: Install the build tools
+        run: bash device-app/scripts/release-setup.sh
+
+      # Before any secret exists: this step runs the crates' build scripts and the UI's npm packages.
+      - name: Compile
+        run: bash device-app/scripts/release-build.sh compile "$VERSION"
+
+      # With no secret: Tauri's AppImage bundler downloads and runs linuxdeploy and its plugins, unpinned.
+      - name: Bundle
+        run: bash device-app/scripts/release-build.sh bundle "$VERSION" "$RUNNER_TEMP/out"
+
+      # The only step that holds the updater key: only the Tauri CLI's signer runs here, on the runner Compile and
+      # Bundle ran on (see the top).
+      - name: Sign the update
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: bash device-app/scripts/release-build.sh sign-update "$VERSION" "$RUNNER_TEMP/out"
+
+      # Against the committed key, as on macOS.
+      - name: Check the build
+        run: |
+          set -euo pipefail
+          PUBKEY="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["plugins"]["updater"]["pubkey"])' device-app/src-tauri/tauri.conf.json)"
+          bash device-app/scripts/release-check.sh "$RUNNER_TEMP/out" "$VERSION" "$PUBKEY"
+
+      - name: Record the checksums
+        run: python3 device-app/scripts/device-manifest.py sums --dir "$RUNNER_TEMP/out" --part "linux-$ARCH" --out "$RUNNER_TEMP/out/sums.json"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: harness-device-${{ needs.version.outputs.version }}-linux-${{ matrix.arch }}
+          path: ${{ runner.temp }}/out
+          retention-days: 7
+          if-no-files-found: error
+
   publish:
-    needs: [version, build]
-    if: ${{ inputs.publish }}
+    needs: [version, build, sign-windows, check-windows, build-linux]
+    # With macos only the macOS build is waited for; with all every build must pass, so the manifest never names a
+    # platform whose build failed. !cancelled(), because the Windows and Linux jobs are skipped for macos.
+    if: >-
+      ${{ !cancelled() && inputs.publish && needs.build.result == 'success' && (inputs.platforms == 'macos' ||
+      (needs.check-windows.result == 'success' && needs.build-linux.result == 'success')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -199,21 +552,47 @@ jobs:
       id-token: write
     env:
       VERSION: ${{ needs.version.outputs.version }}
+      PLATFORMS: ${{ inputs.platforms }}
+      WINDOWS_SUMS: ${{ needs.sign-windows.outputs.sums }}
     steps:
       - uses: actions/checkout@v7
         with:
           sparse-checkout: |
             /device-app/scripts/
             /.github/actions/setup-gcloud/
+            /website/scripts/device-install.sh
           sparse-checkout-cone-mode: false
 
+      # Each build's artifact in a folder of its own: each job recorded the sums of its own part.
       - uses: actions/download-artifact@v4
         with:
-          name: harness-device-${{ needs.version.outputs.version }}
-          path: out
+          pattern: harness-device-${{ needs.version.outputs.version }}*
+          path: parts
 
-      - name: Check the files are the ones the build checked
-        run: python3 device-app/scripts/device-manifest.py sums --dir out --check out/sums.json
+      - name: Check the files are the ones each build checked
+        run: |
+          set -euo pipefail
+          parts=(macos)
+          if [[ "$PLATFORMS" == all ]]; then
+            parts+=(windows linux-x64 linux-arm64)
+          fi
+          mkdir out
+          for part in "${parts[@]}"; do
+            # The macOS artifact keeps the name it had before Windows and Linux.
+            folder="parts/harness-device-$VERSION"
+            if [[ "$part" != macos ]]; then
+              folder+="-$part"
+            fi
+            # A job that ran the build's code could have replaced sign-windows's artifact: its sums must be the ones
+            # that job's output names.
+            if [[ "$part" == windows && "$(sha256sum <"$folder/sums.json")" != "$WINDOWS_SUMS  -" ]]; then
+              echo "::error::The Windows artifact's sums are not the ones sign-windows recorded"
+              exit 1
+            fi
+            python3 device-app/scripts/device-manifest.py sums --dir "$folder" --part "$part" --check "$folder/sums.json"
+            rm "$folder/sums.json"
+            mv "$folder"/* out/
+          done
 
       - name: Take the release notes from the tag
         env:
@@ -230,15 +609,16 @@ jobs:
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       - uses: ./.github/actions/setup-gcloud
 
-      # The three files first, then the manifest, written only if no one else wrote it since it was read.
+      # The release's files first, then with all the one-line Linux installer (checked out above), then the manifest,
+      # written only if no one else wrote it since it was read. All of it only after the version checks.
       - name: Publish
         run: |
           set -euo pipefail
           python3 device-app/scripts/device-manifest.py publish --version "$VERSION" --dir out --notes-file notes.txt \
-            --pub-date "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            --pub-date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --platforms "$PLATFORMS"
 
       - name: Verify the public manifest and downloads
-        run: python3 device-app/scripts/device-manifest.py verify --version "$VERSION" --dir out
+        run: python3 device-app/scripts/device-manifest.py verify --version "$VERSION" --dir out --platforms "$PLATFORMS"
 
       - name: Summary
         run: echo "Harness Device **$VERSION** is live." >> "$GITHUB_STEP_SUMMARY"

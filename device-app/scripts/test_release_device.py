@@ -120,7 +120,7 @@ class ReleaseDeviceTests(unittest.TestCase):
         self.assertIn("- newer change", message)
         self.assertNotIn("first change", message)
         self.assertEqual(self.gh_calls(), [[*DISPATCH, "--ref", "v0.1.1_device", "-f", "version=0.1.1",
-                                            "-f", "publish=true"]])
+                                            "-f", "publish=true", "-f", "platforms=macos"]])
 
     def test_a_signing_setting_puts_no_signature_in_the_notes(self):
         # Signs anything: a signature block on stdout, gpg's status line on the status fd Git passes (2).
@@ -160,7 +160,8 @@ class ReleaseDeviceTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("0.1.1", result.stdout)
         self.assertIn("- newer change", result.stdout)
-        self.assertIn("gh workflow run release-device.yml --ref v0.1.1_device -f version=0.1.1 -f publish=true",
+        self.assertIn("gh workflow run release-device.yml --ref v0.1.1_device -f version=0.1.1 -f publish=true "
+                      "-f platforms=macos",
                       result.stdout)
         self.assertEqual(self.tags(self.repo), ["v0.1.0_device"])
         self.assertEqual(self.tags(self.origin), ["v0.1.0_device"])
@@ -169,7 +170,8 @@ class ReleaseDeviceTests(unittest.TestCase):
     def test_prepare_starts_main_without_a_tag(self):
         result = self.run_script("--prepare")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.gh_calls(), [[*DISPATCH, "--ref", "main", "-f", "version=0.1.1", "-f", "publish=false"]])
+        self.assertEqual(self.gh_calls(), [[*DISPATCH, "--ref", "main", "-f", "version=0.1.1", "-f", "publish=false",
+                                            "-f", "platforms=macos"]])
         self.assertEqual(self.tags(self.repo), ["v0.1.0_device"])
         self.assertEqual(self.tags(self.origin), ["v0.1.0_device"])
 
@@ -237,13 +239,14 @@ class ReleaseDeviceTests(unittest.TestCase):
         self.git("push", "-q", "origin", ":refs/tags/v0.1.0_device")
         result = self.run_script("--prepare", "0.1.0", "--allow-no-manifest")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.gh_calls(), [[*DISPATCH, "--ref", "main", "-f", "version=0.1.0", "-f", "publish=false"]])
+        self.assertEqual(self.gh_calls(), [[*DISPATCH, "--ref", "main", "-f", "version=0.1.0", "-f", "publish=false",
+                                            "-f", "platforms=macos"]])
         self.assertEqual(self.tags(self.repo) + self.tags(self.origin), [])
         result = self.run_script("0.1.0", "--allow-no-manifest")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.tags(self.origin), ["v0.1.0_device"])
         self.assertEqual(self.gh_calls()[-1], [*DISPATCH, "--ref", "v0.1.0_device", "-f", "version=0.1.0",
-                                               "-f", "publish=true"])
+                                               "-f", "publish=true", "-f", "platforms=macos"])
         result = self.run_script("0.1.1", "--allow-no-manifest")
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("v0.1.0_device", result.stderr)
@@ -266,7 +269,8 @@ class ReleaseDeviceTests(unittest.TestCase):
     def test_a_dispatch_that_fails_after_the_push_says_what_to_run(self):
         result = self.run_script(fail_gh=True)
         self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn("gh workflow run release-device.yml --ref v0.1.1_device -f version=0.1.1 -f publish=true",
+        self.assertIn("gh workflow run release-device.yml --ref v0.1.1_device -f version=0.1.1 -f publish=true "
+                      "-f platforms=macos",
                       result.stderr)
         self.assertIn("v0.1.1_device", self.tags(self.origin))
         self.assertIn("v0.1.1_device", self.tags(self.repo))
@@ -275,14 +279,16 @@ class ReleaseDeviceTests(unittest.TestCase):
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.gh_calls()[-1], [*DISPATCH, "--ref", "v0.1.2_device", "-f", "version=0.1.2",
-                                               "-f", "publish=true"])
+                                               "-f", "publish=true", "-f", "platforms=macos"])
 
     def test_wait_follows_the_run_it_started(self):
         head = self.git("rev-parse", "HEAD")
         for args, dispatch, run_filter in (
-                (["--wait"], ["--ref", "v0.1.1_device", "-f", "version=0.1.1", "-f", "publish=true"],
+                (["--wait"],
+                 ["--ref", "v0.1.1_device", "-f", "version=0.1.1", "-f", "publish=true", "-f", "platforms=macos"],
                  ["--commit", head]),
-                (["--prepare", "--wait"], ["--ref", "main", "-f", "version=0.1.2", "-f", "publish=false"],
+                (["--prepare", "--wait"],
+                 ["--ref", "main", "-f", "version=0.1.2", "-f", "publish=false", "-f", "platforms=macos"],
                  ["--branch", "main"])):
             with self.subTest(args=args):
                 self.gh_log.unlink(missing_ok=True)
@@ -306,6 +312,35 @@ class ReleaseDeviceTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("notes", result.stderr)
         self.assertNotIn("v0.1.2_device", self.tags(self.origin))
+
+    def test_a_release_is_macos_only_unless_asked(self):
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("  platforms  macos\n", result.stdout)
+        self.assertEqual(self.gh_calls(), [[*DISPATCH, "--ref", "v0.1.1_device", "-f", "version=0.1.1",
+                                            "-f", "publish=true", "-f", "platforms=macos"]])
+
+    def test_platforms_all_reaches_the_run(self):
+        result = self.run_script("--platforms", "all")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("  platforms  all\n", result.stdout)
+        self.assertEqual(self.gh_calls(), [[*DISPATCH, "--ref", "v0.1.1_device", "-f", "version=0.1.1",
+                                            "-f", "publish=true", "-f", "platforms=all"]])
+        result = self.run_script("--prepare", "--platforms", "all")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.gh_calls()[-1], [*DISPATCH, "--ref", "main", "-f", "version=0.1.2",
+                                               "-f", "publish=false", "-f", "platforms=all"])
+
+    def test_another_platforms_value_stops_before_the_tag(self):
+        for args in (["--platforms", "windows"], ["--platforms"]):
+            with self.subTest(args=args):
+                result = self.run_script(*args)
+                self.assertEqual(result.returncode, 1, result.stdout)
+                # Not the unknown-flag refusal: it names what --platforms takes.
+                self.assertIn("--platforms takes macos or all", result.stderr)
+                self.assertEqual(self.tags(self.repo), ["v0.1.0_device"])
+                self.assertEqual(self.tags(self.origin), ["v0.1.0_device"])
+                self.assertFalse(self.gh_log.exists())
 
     def test_an_unknown_flag_stops(self):
         result = self.run_script("--publish")

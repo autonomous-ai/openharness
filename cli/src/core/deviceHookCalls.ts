@@ -73,8 +73,10 @@ export function createDeviceHookCalls(deps: DeviceHookCallsDeps) {
 
   const port = (): DeviceHookPort | undefined => (deps.ready() ? deps.devices() : undefined)
   // No dial is not counted: it is every call while none is plugged in, and says nothing about a hook.
-  const tally = minuteCounts(['refused', 'over'] as const,
-    (lost) => `[devices] dial hook calls in the last minute: ${lost.refused} refused, ${lost.over} over the bound`, deps.log ?? console.warn)
+  const tally = minuteCounts(['refused', 'over'] as const, {
+    now: (kind) => `[devices] a dial hook call was ${kind === 'refused' ? 'refused' : 'over the bound'}; more are counted once a minute`,
+    minute: (lost) => `[devices] dial hook calls in the last minute: ${lost.refused} refused, ${lost.over} over the bound`,
+  }, deps.log ?? console.warn)
 
   return {
     async onInbox(body: unknown, gone: AbortSignal): Promise<'invalid' | 'off' | { text?: string }> {

@@ -14,6 +14,7 @@ import { TerminalBinaryKind, TERMINAL_LOCAL_IMAGE_PASTE_MAX_PAYLOAD_BYTES, type 
 import { writeImageToOsClipboard, type OsClipboardImageResult } from './osClipboard.js'
 import { writePasteDropFile, writePasteImageFile } from './pasteDropFiles.js'
 import { MoveGate } from './hostMove/gate.js'
+import { hashOf } from './log.js'
 
 vi.mock('./osClipboard.js', () => ({ writeImageToOsClipboard: vi.fn() }))
 vi.mock('./pasteDropFiles.js', () => ({ writePasteImageFile: vi.fn(), writePasteDropFile: vi.fn() }))
@@ -1337,6 +1338,37 @@ describe('TerminalStreamManager', () => {
     expect(closed?.payload.code).toBe('TERMINAL_TAKEN_OVER')
     expect(closed?.payload).not.toHaveProperty('takenBy')
     expect(sent.findLast((frame) => frame.type === 'terminal_ready')?.connId).toBe('web-3')
+  })
+
+  // The close reason and the taker's name are what the person sees in their app; the daemon's log is not
+  // (AGENTS.md rule 7): it keeps a reason's length and a name's hash.
+  it("a stream's diagnostics carry no reason's words and no client's name", async () => {
+    const lines: { event: string; fields: Record<string, unknown> }[] = []
+    manager = newManager({
+      diagnostic: (event, fields) => lines.push({ event, fields }),
+      onInput: () => { throw new Error('typed into /Users/sentinel') },
+    })
+    const hostReason = 'pty host stream failed: /Users/sentinel'
+    await manager.handleFrame('web-1', 'terminal_open', { requestId: 'open-1', protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30 })
+    const first = sent.findLast((frame) => frame.type === 'terminal_ready')!.payload.streamId as string
+    await manager.handleBinary('web-1', { kind: TerminalBinaryKind.input, streamId: first, seq: 0, compressed: false, bytes: Buffer.from('x') })
+    sink!.onClose(hostReason)
+    await vi.waitFor(() => expect(sent.some((frame) => frame.connId === 'web-1' && frame.type === 'terminal_closed')).toBe(true))
+    await manager.handleFrame('web-2', 'terminal_open', { requestId: 'open-2', protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30 })
+    await manager.handleFrame('phone-1', 'terminal_open', {
+      requestId: 'open-3', protocolVersion: 3, agentId: 'agent-1', cols: 40, rows: 20,
+      client: { kind: 'phone', name: "Sentinel's iPhone" },
+    })
+
+    expect(JSON.stringify(lines)).not.toMatch(/sentinel/i)
+    expect(lines.find((line) => line.event === 'input_listener_failed')?.fields).toMatchObject({ kind: 'Error' })
+    const closed = lines.filter((line) => line.event === 'closed').map((line) => line.fields)
+    expect(closed[0]).toMatchObject({ reason: `text(${hostReason.length})` })
+    expect(closed[1]).toMatchObject({ reason: 'text(24)', takenBy: hashOf("Sentinel's iPhone") })
+    // The clients still get both whole.
+    expect(sent.find((frame) => frame.connId === 'web-1' && frame.type === 'terminal_closed')?.payload.reason).toBe(hostReason)
+    expect(sent.find((frame) => frame.connId === 'web-2' && frame.type === 'terminal_closed')?.payload)
+      .toMatchObject({ reason: 'another client connected', takenBy: { kind: 'phone', name: "Sentinel's iPhone" } })
   })
 
   it('reads a client descriptor strictly', () => {

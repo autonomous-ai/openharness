@@ -85,6 +85,12 @@ const STATUS = {
    * `resolveGatewayDisconnectState`): over a minute on a slow machine, between bare `disconnected` lines.
    */
   gatewayStarting: / \| gateway starting$/,
+  /**
+   * The activity a refused connect leaves after the `|`, kept through the bare `disconnected` line after it (OpenClaw's
+   * tui `resolveGatewayDisconnectState`): a device the Gateway has not approved, or a sign-in it refused (a token or
+   * scope mismatch, a lockout after failed sign-ins, an identity-aware proxy), each with a fix only the person can make.
+   */
+  signIn: / \| (?:(device approval needed\b.*)|gateway authentication (?:needs attention|temporarily rate-limited)|identity-aware proxy rejected connection)$/,
 }
 
 /** The status lines the TUI draws, a local runtime's stop aside. */
@@ -102,6 +108,17 @@ const LOCAL_RUNTIME_STOPPED = /^local runtime stopped(?:: (.*?))?(?: \| idle)?$/
 const STATUS_LINES = 4
 const REASON_MAX = 200
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/g
+
+/**
+ * What OpenClaw's Gateway client prints straight to the terminal at each retry of a refused connect, `gateway connect
+ * failed: <error>` (`client-*.mjs` `logError`; a probe, a rate limit and a token mismatch, which stops the retries, print
+ * none). It starts where the TUI left the cursor, in its empty input box, and runs over the box and the start of its
+ * bottom rule, then on below the frame, wrapped at the pane's width; the TUI does not draw over it
+ * (`screen-pairing-retries*.txt`).
+ */
+const GATEWAY_CLIENT_LOG = 'gateway connect failed: '
+const RULE_LINE = /^─+$/
+const RULE_REST = /^─*$/
 
 /** What `openclaw tui` prints as it exits when the config has no Gateway token (`screen-no-token.txt`). */
 const NO_TOKEN = /^Missing gateway auth token\./
@@ -138,6 +155,11 @@ export interface OpenclawScreen {
   running: boolean
   /** The status line says the Gateway is starting: it answered, so it is running. */
   gatewayStarting: boolean
+  /**
+   * Why the Gateway turned the TUI away, from a status line that reads it gone: `approval` while it waits for this
+   * device to be approved, `refused` when it refused the sign-in. Null on any other line.
+   */
+  signIn: OpenclawSignIn | null
   /** The `history failed:` lines in the running TUI's chat: one for each history load that failed since one worked. */
   historyFailures: number
   /**
@@ -158,11 +180,13 @@ export interface OpenclawScreen {
 
 export interface OpenclawBoxHidden { above: number; below: number }
 
+export type OpenclawSignIn = 'approval' | 'refused'
+
 const NOT_SCROLLED: OpenclawBoxHidden = { above: 0, below: 0 }
 
 const NOTHING: OpenclawScreen = {
-  key: null, url: null, state: null, footer: null, gatewayLost: false, running: false, gatewayStarting: false, historyFailures: 0,
-  stopped: null, status: null, box: null, boxHidden: NOT_SCROLLED,
+  key: null, url: null, state: null, footer: null, gatewayLost: false, running: false, gatewayStarting: false, signIn: null,
+  historyFailures: 0, stopped: null, status: null, box: null, boxHidden: NOT_SCROLLED,
 }
 
 /** Lines as drawn: escapes removed, trailing blanks dropped. */
@@ -173,6 +197,38 @@ function openclawScreenLines(capture: string): string[] {
 function lastIndex(lines: readonly string[], test: (line: string) => boolean): number {
   for (let i = lines.length - 1; i >= 0; i--) if (test(lines[i])) return i
   return -1
+}
+
+/**
+ * [lines] with the Gateway client's lines blanked from [from] on, when from one of them to the last line there is
+ * nothing else: each starts a line, runs on over the next while it fills the width (one less when a space at the last
+ * column was trimmed off), and leaves at most the rest of the rule it was written over. Text the person typed in the box
+ * has the bottom rule whole under it, so is never taken for one.
+ */
+function withoutGatewayClientLines(lines: readonly string[], from: number): readonly string[] {
+  const width = Math.max(0, ...lines.filter((line) => RULE_LINE.test(line)).map((line) => line.length))
+  if (!width) return lines
+  const last = lastIndex(lines, (line) => !!line.trim())
+  for (let at = from; at <= last; at++) {
+    const blanked = lines[at].startsWith(GATEWAY_CLIENT_LOG) ? blankGatewayClientLines(lines, at, last, width) : null
+    if (blanked) return blanked
+  }
+  return lines
+}
+
+/** [lines] with the Gateway client's lines from [at] to [last] blanked, or null when anything else is among them. */
+function blankGatewayClientLines(lines: readonly string[], at: number, last: number, width: number): string[] | null {
+  const blanked = [...lines]
+  let continued = false
+  for (let i = at; i <= last; i++) {
+    const rule = lines[i].indexOf('─')
+    const text = rule < 0 ? lines[i] : lines[i].slice(0, rule)
+    const rest = lines[i].slice(text.length)
+    if (!text || !RULE_REST.test(rest) || (!continued && !text.startsWith(GATEWAY_CLIENT_LOG))) return null
+    blanked[i] = rest && ' '.repeat(text.length) + rest
+    continued = text.length >= width - 1 && !lines[i + 1]?.startsWith(GATEWAY_CLIENT_LOG)
+  }
+  return blanked
 }
 
 /** A footer the running TUI drew: under it the composer between two rules, and nothing below that. */
@@ -250,8 +306,9 @@ function readStopped(above: readonly string[], said: string): string | null {
  * the TUI at all (every `openclaw` command renames its process `openclaw`, `onboard` and `logs` too).
  */
 export function readOpenclawScreen(capture: string): OpenclawScreen {
-  const lines = openclawScreenLines(capture)
-  const start = lastIndex(lines, (line) => FOOTER_START.test(line))
+  const drawn = openclawScreenLines(capture)
+  const start = lastIndex(drawn, (line) => FOOTER_START.test(line))
+  const lines = start >= 0 ? withoutGatewayClientLines(drawn, start + 1) : drawn
   const tokenless = lastIndex(lines, (line) => NO_TOKEN.test(line))
   if (tokenless > start) return { ...NOTHING, state: 'no-token' }
   const titled = lastIndex(lines, (line) => TITLE_START.test(line))
@@ -274,14 +331,18 @@ export function readOpenclawScreen(capture: string): OpenclawScreen {
           : STATUS.busy.test(said) ? 'busy'
             : !STATUS.ready.test(said) ? null
               : chat.some((line) => NO_HISTORY.test(line)) ? 'no-history' : 'ready'
+  const gatewayLost = STATUS.gatewayLost.test(said)
+  // Only while the Gateway is gone: a connection leaves the last activity in place, though the Gateway answered.
+  const signIn = state === 'no-gateway' || (gatewayLost && state === null) ? STATUS.signIn.exec(said) : null
   return {
     key: shown && agrees ? `agent:${shown[1]}:${shown[2]}` : null,
     url,
     state,
     footer,
-    gatewayLost: STATUS.gatewayLost.test(said),
+    gatewayLost,
     running: STATUS.running.test(said),
     gatewayStarting: STATUS.gatewayStarting.test(said),
+    signIn: signIn ? (signIn[1] ? 'approval' : 'refused') : null,
     historyFailures: chat.filter((line) => HISTORY_FAILED.test(line)).length,
     stopped,
     status: said,
@@ -338,6 +399,29 @@ export function openclawBoxHolds(box: string | null, message: string, hidden: Op
     : hidden.below ? whole.startsWith(shown) : whole === shown
 }
 
+/**
+ * A box Harness may clear: it shows the whole message and nothing else. A scrolled box hides text that may be the
+ * person's, and a paste marker counts the text without showing it, so neither is ever read as exactly the message.
+ */
+export function openclawBoxExactly(box: string | null, hidden: OpenclawBoxHidden, message: string): boolean {
+  return !hidden.above && !hidden.below && !PASTE_MARKER.test(box ?? '') && openclawBoxHolds(box, message)
+}
+
+/**
+ * Past this many lines a box is never cleared: it shows at most 30% of the pane's rows, so a whole one this tall does
+ * not occur on a pane under 213 rows.
+ */
+const CLEAR_LINES_MAX = 64
+
+/**
+ * The Ctrl+U presses that clear a message OpenClaw put back, its cursor at the end (pi-tui's editor `setText`): each
+ * deletes to the line's start, and at column 0 joins the line above (`deleteToStartOfLine`), so 2n−1 for n lines.
+ */
+export function openclawClearKeys(message: string): number | null {
+  const lines = message.replace(/\r\n?/g, '\n').split('\n').length
+  return lines > CLEAR_LINES_MAX ? null : 2 * lines - 1
+}
+
 /** A first task OpenClaw never took: the launch fails with it, and every verb says it. */
 export const OPENCLAW_FIRST_TASK = {
   error: 'FIRST_TASK_NOT_TAKEN',
@@ -347,6 +431,11 @@ export const OPENCLAW_FIRST_TASK = {
 /** What a person reads when OpenClaw cannot work for Harness, each with what to do about it. */
 export const OPENCLAW_STATES = {
   noGateway: 'OpenClaw Gateway is not running. Start it with openclaw gateway.',
+  approval: 'OpenClaw is waiting for this device to be approved. Run openclaw devices approve --latest.',
+  /** Its terminal holds the remedy OpenClaw printed for this refusal: a token, a scope, a lockout or a proxy. */
+  signInRefused: "OpenClaw's Gateway refused its sign-in. Its terminal says how to fix it.",
+  /** A person's draft is never cleared: they clear it, and the message then goes the usual way. */
+  boxHeld: "OpenClaw's input box holds text Harness did not type. Clear it so Harness can send the message.",
   noToken: 'OpenClaw has no Gateway token. Run openclaw onboard.',
   oldNode: 'OpenClaw needs Node 24.',
   /** Harness's own Node lacks what reads OpenClaw's store (`node:sqlite`, zstd). */

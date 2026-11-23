@@ -4,13 +4,16 @@
  * Code or in Cursor, which runs VS Code's extensions. Harness never writes the editor's files itself: it reads the
  * editor's record of its extensions, and hands the editor a `.vsix` packed here from the extension cli.js carries. It
  * runs in the `harness` command's own process (`harness device vscode|cursor …`) and in the devices' process, which sets
- * the extension up once a computer (cable/vscodeExtensionSetup.ts); never in the core's.
+ * the extension up once a computer (cable/vscodeExtensionSetup.ts). On Windows that is the core's process, where the
+ * devices run through the inline door (services/inline.ts `startDevices`) until Windows services run in their own
+ * process; elsewhere never the core's.
  */
 import { spawn } from 'node:child_process'
 import { accessSync, closeSync, constants, existsSync, fstatSync, mkdtempSync, openSync, readSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { delimiter, dirname, isAbsolute, join } from 'node:path'
+import { delimiter, dirname, isAbsolute, join, win32 } from 'node:path'
 import { ownProcessGroup } from '../lib/windows/noWindow.js'
+import { windowsProgram, type Program } from '../lib/windows/program.js'
 import { writeZip } from '../lib/zipWriter.js'
 
 declare const __VSCODE_EXTENSION__: string | undefined
@@ -21,8 +24,10 @@ export const VSCODE_RUN_MS = 60_000
 export const VSCODE_RECORD_MAX_BYTES = 8 * 1024 * 1024
 export type VscodeEditor = 'vscode' | 'cursor'
 export type VscodeStatus = { state: 'absent' } | { state: 'off' } | { state: 'on'; version: string }
-export type VscodeFailure = 'no-code' | 'timeout' | 'failed'
+/** `launcher`: on Windows a batch file that is not the editor's own launcher, never run (lib/windows/program.ts). */
+export type VscodeFailure = 'no-code' | 'launcher' | 'timeout' | 'failed'
 export type VscodeChange = VscodeStatus | (VscodeStatus & { error: VscodeFailure })
+export interface VscodeRan { code: number | null; timedOut: boolean; refused?: true }
 /** The extension as cli.js carries it: its package.json's text and its one bundled file. */
 export interface VscodeExtensionFiles { manifest: string; main: string }
 export interface VscodeExtensionDeps {
@@ -32,15 +37,18 @@ export interface VscodeExtensionDeps {
   real(path: string): string
   platform: NodeJS.Platform
   home: string
-  /** PATH, where Linux has `code` or `cursor`. */
+  /** PATH, where Linux has `code` or `cursor`, and Windows their `.cmd` launchers. */
   pathVar: string
+  /** Windows' `%LOCALAPPDATA%` and `%ProgramFiles%`, where the editors' installers put them. */
+  folders?: { localAppData?: string; programFiles?: string }
   exists(path: string): boolean
   /** A regular file this account may run. */
   executable(path: string): boolean
   /** A file's text; null when it is missing, larger than `maxBytes` or cannot be read. */
   read(path: string, maxBytes: number): string | null
-  /** The editor's own CLI, with no shell. `code` is null when it was killed or could not start. */
-  run(file: string, args: readonly string[], timeoutMs: number): Promise<{ code: number | null; timedOut: boolean }>
+  /** The editor's own CLI, with no shell. `code` is null when it was killed or could not start; on Windows, also when
+   *  its launcher is not one Harness starts (lib/windows/program.ts), which is `refused`: nothing ran. */
+  run(file: string, args: readonly string[], timeoutMs: number): Promise<VscodeRan>
   /** Null in a run from the sources, which carries no built extension. */
   files(): VscodeExtensionFiles | null
   /** A new folder only this account can read. */
@@ -56,22 +64,37 @@ export interface VscodeExtensionDeps {
 }
 
 /** Each editor's app on a Mac, its CLI (inside the app there, on PATH on Linux) and the folder in the home that holds its
- *  record. Cursor's `shim`, under the home, is cursor-agent's own `cursor` command, which is no editor. */
-const EDITORS: Record<VscodeEditor, { app: string; cli: string; folder: string; shim?: string }> = {
-  vscode: { app: 'Visual Studio Code.app', cli: 'code', folder: '.vscode' },
-  cursor: { app: 'Cursor.app', cli: 'cursor', folder: '.cursor', shim: join('.local', 'bin', 'cursor') },
+ *  record. Cursor's `shim`, under the home, is cursor-agent's own `cursor` command, which is no editor. On Windows, the
+ *  folder of its launcher in `%LOCALAPPDATA%\Programs` (`user`), and in `%ProgramFiles%` (`machine`) for VS Code alone:
+ *  no machine-wide Cursor has been seen, so none is guessed (docs/plans/2026-11-19-dial-windows-vm-notes.md, Task 1). */
+const EDITORS: Record<VscodeEditor, { app: string; cli: string; folder: string; shim?: string; user: string; machine?: string }> = {
+  vscode: { app: 'Visual Studio Code.app', cli: 'code', folder: '.vscode', user: 'Microsoft VS Code\\bin', machine: 'Microsoft VS Code\\bin' },
+  cursor: { app: 'Cursor.app', cli: 'cursor', folder: '.cursor', shim: join('.local', 'bin', 'cursor'), user: 'cursor\\resources\\app\\bin' },
 }
 const VSIX = 'harness-device.vsix'
 /** What a version in the editor's record may be before it is printed or compared: no path, no markup, no line. */
 const VERSION = /^[0-9A-Za-z.+-]{1,64}$/
 const FAILED = { state: 'off', error: 'failed' } as const
 
-/** Where the editor is: its app on a Mac, its CLI on Linux; null when it is not there and on any other platform. A
- *  relative PATH folder is wherever Harness happens to run, so only absolute ones are looked in. */
+/** Where the editor is: its app on a Mac, its CLI on Linux, its `.cmd` launcher on Windows; null when it is not there
+ *  and on any other platform. A relative PATH folder is wherever Harness happens to run, so only absolute ones are looked
+ *  in. */
 function installed(deps: VscodeExtensionDeps): string | null {
   // /Applications is the computer's whatever the home, so a daemon under test is given a CLI of its own instead.
-  if (deps.bin && isAbsolute(deps.bin)) return deps.executable(deps.bin) ? deps.bin : null
-  const { app, cli, shim } = EDITORS[deps.editor]
+  if (deps.bin && (deps.platform === 'win32' ? win32.isAbsolute : isAbsolute)(deps.bin)) return deps.executable(deps.bin) ? deps.bin : null
+  const { app, cli, shim, user, machine } = EDITORS[deps.editor]
+  if (deps.platform === 'win32') {
+    // The launcher, never the `.exe` or the script it names: the script moves with each update, and each run reads the
+    // launcher anew.
+    const { localAppData, programFiles } = deps.folders ?? {}
+    const folders = [
+      ...deps.pathVar.split(win32.delimiter),
+      localAppData && win32.join(localAppData, 'Programs', user),
+      machine && programFiles && win32.join(programFiles, machine),
+    ]
+    return folders.filter((dir): dir is string => !!dir && win32.isAbsolute(dir)).map((dir) => win32.join(dir, `${cli}.cmd`))
+      .find((path) => deps.executable(path)) ?? null
+  }
   if (deps.platform === 'darwin') return [join('/Applications', app), join(deps.home, 'Applications', app)].find((path) => deps.exists(path)) ?? null
   if (deps.platform === 'linux') {
     // Told by its real path: a link on PATH that ends at the shim is the shim too.
@@ -82,8 +105,9 @@ function installed(deps: VscodeExtensionDeps): string | null {
   return null
 }
 
-/** The editor's own CLI: the one inside the app on a Mac, which a person may never have put on PATH. */
-function vscodeCli(deps: VscodeExtensionDeps): string | null {
+/** The editor's own CLI: the one inside the app on a Mac, which a person may never have put on PATH; its `.cmd` launcher
+ *  on Windows. */
+export function editorCli(deps: VscodeExtensionDeps): string | null {
   const found = installed(deps)
   if (found === null || found === deps.bin || deps.platform !== 'darwin') return found
   const cli = join(found, 'Contents', 'Resources', 'app', 'bin', EDITORS[deps.editor].cli)
@@ -138,7 +162,8 @@ export function recordVersion(text: string): string | undefined {
 /** The editor rewrites its record whenever an extension changes: a read cut short, too large or not an array is `off`. */
 export function vscodeStatus(deps: VscodeExtensionDeps): VscodeStatus {
   if (installed(deps) === null) return { state: 'absent' }
-  const text = deps.read(join(deps.home, EDITORS[deps.editor].folder, 'extensions', 'extensions.json'), VSCODE_RECORD_MAX_BYTES)
+  const at = deps.platform === 'win32' ? win32.join : join
+  const text = deps.read(at(deps.home, EDITORS[deps.editor].folder, 'extensions', 'extensions.json'), VSCODE_RECORD_MAX_BYTES)
   const version = text === null ? undefined : recordVersion(text)
   return version === undefined ? { state: 'off' } : { state: 'on', version }
 }
@@ -148,7 +173,7 @@ export async function vscodeEnable(deps: VscodeExtensionDeps): Promise<VscodeCha
   // On at this build's version already: an enable that arrives twice installs once.
   const before = vscodeStatus(deps)
   if (before.state === 'on' && before.version === buildVersion(deps)) return before
-  const cli = vscodeCli(deps)
+  const cli = editorCli(deps)
   if (cli === null) return { state: 'off', error: 'no-code' }
   const files = deps.files()
   if (files === null) return FAILED
@@ -159,6 +184,7 @@ export async function vscodeEnable(deps: VscodeExtensionDeps): Promise<VscodeCha
     deps.write(vsix, packVsix(files))
     // --force: the same version again, or an older one, is installed as asked rather than refused.
     const ran = await deps.run(cli, ['--install-extension', vsix, '--force'], VSCODE_RUN_MS)
+    if (ran.refused) return { state: 'off', error: 'launcher' }
     if (ran.timedOut) return { state: 'off', error: 'timeout' }
     if (ran.code !== 0) return FAILED
   } catch {
@@ -173,11 +199,11 @@ export async function vscodeEnable(deps: VscodeExtensionDeps): Promise<VscodeCha
 export async function vscodeDisable(deps: VscodeExtensionDeps): Promise<VscodeChange> {
   const before = vscodeStatus(deps)
   if (before.state !== 'on') return before
-  const cli = vscodeCli(deps)
+  const cli = editorCli(deps)
   let failure: VscodeFailure = 'no-code'
   if (cli !== null) {
     const ran = await deps.run(cli, ['--uninstall-extension', VSCODE_EXTENSION_ID], VSCODE_RUN_MS)
-    failure = ran.timedOut ? 'timeout' : 'failed'
+    failure = ran.refused ? 'launcher' : ran.timedOut ? 'timeout' : 'failed'
   }
   const after = vscodeStatus(deps)
   return after.state === 'on' ? { ...after, error: failure } : after
@@ -250,16 +276,23 @@ function readBounded(path: string, maxBytes: number): string | null {
 }
 
 /** [file] run with no shell, reading and writing nothing: no output of its is used. Its time ends it with SIGKILL: a
- *  `code` that does not end on TERM would hold the command or the devices' setup. */
-function runFile(file: string, args: readonly string[], timeoutMs: number): Promise<{ code: number | null; timedOut: boolean }> {
+ *  `code` that does not end on TERM would hold the command or the devices' setup. On Windows the launcher is read at
+ *  every run for the editor's `.exe` and CLI script, as an update renames the script's folder. */
+function runFile(file: string, args: readonly string[], timeoutMs: number, platform: NodeJS.Platform): Promise<VscodeRan> {
+  let program: Program
+  try { program = windowsProgram(file, args, { platform }) } catch { return Promise.resolve({ code: null, timedOut: false, refused: true }) }
   return new Promise((resolve) => {
     // A process group of its own, and the time kills the group: VS Code's `code` on macOS and Linux is a script that
     // starts Electron as a child and waits for it, so a kill of the script alone would leave the install running.
-    const child = spawn(file, args, { ...ownProcessGroup(), stdio: 'ignore' })
+    const child = spawn(program.file, program.args, { ...ownProcessGroup(platform), stdio: 'ignore', env: program.env })
     let timedOut = false
     const timer = setTimeout(() => {
       timedOut = true
-      try { process.kill(-child.pid!, 'SIGKILL') } catch { /* the group ended as its time did */ }
+      // Windows has no process groups, and none is needed: there the editor's `.exe` runs the CLI script itself.
+      try {
+        if (platform === 'win32') child.kill('SIGKILL')
+        else process.kill(-child.pid!, 'SIGKILL')
+      } catch { /* the group ended as its time did */ }
     }, timeoutMs)
     // A file that could not start emits `error` and no `exit`.
     child.on('error', () => {
@@ -275,6 +308,7 @@ function runFile(file: string, args: readonly string[], timeoutMs: number): Prom
 
 /** The real ones. `files` reads what the build inlined. */
 export function vscodeExtensionDeps(editor: VscodeEditor, bin?: string): VscodeExtensionDeps {
+  const platform = process.platform
   return {
     editor,
     bin,
@@ -285,9 +319,10 @@ export function vscodeExtensionDeps(editor: VscodeEditor, bin?: string): VscodeE
         return path
       }
     },
-    platform: process.platform,
+    platform,
     home: homedir(),
     pathVar: process.env.PATH ?? '',
+    folders: { localAppData: process.env.LOCALAPPDATA, programFiles: process.env.ProgramFiles },
     exists: existsSync,
     executable: (path) => {
       try {
@@ -298,7 +333,7 @@ export function vscodeExtensionDeps(editor: VscodeEditor, bin?: string): VscodeE
       }
     },
     read: readBounded,
-    run: runFile,
+    run: (file, args, timeoutMs) => runFile(file, args, timeoutMs, platform),
     files: () => typeof __VSCODE_EXTENSION__ === 'string' ? JSON.parse(__VSCODE_EXTENSION__) as VscodeExtensionFiles : null,
     // mkdtemp makes the folder 0700.
     tempDir: () => mkdtempSync(join(tmpdir(), 'harness-vscode-')),

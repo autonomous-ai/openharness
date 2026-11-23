@@ -413,6 +413,7 @@ lib/pasteDropFiles.ts
 lib/pasteOnScreen.ts
 lib/pasteText.ts
 lib/pathContainment.ts
+lib/pathToWatch.ts
 lib/patientExec.ts
 lib/peerAccount.ts
 lib/piSessionHome.ts
@@ -532,6 +533,7 @@ lib/windows/processTable.ts
 lib/windows/shell.ts
 lib/windows/storeAppAlias.ts
 lib/windows/treeKill.ts
+lib/workingFolder.ts
 lib/workspaceCheck.ts
 lib/wsLiveness.ts
 localWsServer.ts

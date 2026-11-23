@@ -174,7 +174,7 @@ describe('the models service', () => {
       vi.mocked(gridAvailable).mockReturnValueOnce(false)
       vi.mocked(ensureGridInstalled).mockResolvedValueOnce({ status: 'failed', message: 'no network' } as never)
       await deps.installCli()
-      expect(console.log).toHaveBeenCalledWith('[grid-attach] no network')
+      expect(console.log).toHaveBeenCalledWith('[grid-attach] grid install: failed · its message 10 B')
     })
 
     it('asks the core for the grid name and the token, and grid for the rest', async () => {

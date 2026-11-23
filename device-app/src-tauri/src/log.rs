@@ -119,15 +119,32 @@ static REDACTIONS: LazyLock<[(Regex, &str); 6]> = LazyLock::new(|| {
     ]
 });
 
-/// The home folder holds the person's name (`/Users/<name>`), and the install script prints paths under it.
-static HOME: LazyLock<Option<Regex>> = LazyLock::new(|| home_rule(&std::env::var("HOME").unwrap_or_default()));
+/// The home folder holds the person's name (`/Users/<name>`, `C:\Users\<name>`), and the install script prints paths
+/// under it.
+static HOME: LazyLock<Option<Regex>> = LazyLock::new(|| {
+    let var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    home_rule(&std::env::var(var).unwrap_or_default(), cfg!(windows))
+});
 
 /// `home` as a whole path segment, so `/Users/a` leaves `/Users/ab` and `/Users/a.b` alone: it ends at a character
 /// no user name holds, at the end of the text, or at dots before either (a sentence's end). None for a home of `/` or
-/// nothing.
-fn home_rule(home: &str) -> Option<Regex> {
-    let home = home.trim_end_matches('/');
-    (!home.is_empty()).then(|| Regex::new(&format!(r"{}(\.*(?:[^A-Za-z0-9_.\-]|$))", regex::escape(home))).unwrap())
+/// nothing. A Windows path's letters match in either case, and any run of `\` and `/` is one separator there (JSON
+/// doubles each `\`). It ends at a character Windows refuses in a user name, and also at a space, a quote or a
+/// parenthesis, which a user name may hold but which end a path far more often: another person's name that goes on
+/// after one is cut there, which hides more, never less.
+fn home_rule(home: &str, windows: bool) -> Option<Regex> {
+    let separators: &[char] = if windows { &['\\', '/'] } else { &['/'] };
+    let home = home.trim_end_matches(separators);
+    if home.is_empty() {
+        return None;
+    }
+    let (path, end) = if windows {
+        let segments: Vec<String> = home.split(separators).map(regex::escape).collect();
+        (format!("(?i:{})", segments.join(r"[\\/]+")), r#"[\\/"\[\]:;|=,+*?<>'()`\s]"#)
+    } else {
+        (regex::escape(home), r"[^A-Za-z0-9_.\-]")
+    };
+    Some(Regex::new(&format!(r"{path}(\.*(?:{end}|$))")).unwrap())
 }
 
 /// `text` with anything that could be a secret or a person's address blanked.
@@ -219,7 +236,7 @@ mod tests {
 
     #[test]
     fn the_home_folder_is_written_as_a_tilde() {
-        let home = home_rule("/Users/person");
+        let home = home_rule("/Users/person", false);
         let cases = [
             ("Installed to /Users/person/.local/bin/harness", "Installed to ~/.local/bin/harness"),
             ("cd /Users/person && ls /Users/person/a", "cd ~ && ls ~/a"),
@@ -237,7 +254,31 @@ mod tests {
         for (text, expected) in cases {
             assert_eq!(redact_with(text, home.as_ref()), expected, "{text}");
         }
-        assert!(home_rule("/").is_none() && home_rule("").is_none());
+        assert!(home_rule("/", false).is_none() && home_rule("", false).is_none());
+    }
+
+    #[test]
+    fn the_windows_profile_folder_is_written_as_a_tilde() {
+        let home = home_rule(r"C:\Users\Kim", true);
+        let cases = [
+            (r"Installing into C:\Users\Kim\.harness", r"Installing into ~\.harness"),
+            ("c:/users/kim/x", "~/x"),
+            (r#"set "C:\Users\Kim" C:\Users\Kim"#, r#"set "~" ~"#),
+            // PowerShell's errors quote it, and a sentence or brackets go on after it.
+            (r"Access to the path 'C:\Users\Kim' is denied.", r"Access to the path '~' is denied."),
+            (r"(C:\Users\Kim) `C:\Users\Kim` C:\Users\Kim and", r"(~) `~` ~ and"),
+            // In a JSON string every `\` is doubled.
+            (r#"{"path":"C:\\Users\\Kim\\.harness"}"#, r#"{"path":"~\\.harness"}"#),
+            // Another person's folder: a Windows user name also holds a space.
+            (r"C:\Users\Kimberly\x C:\Users\Kim.b", r"C:\Users\Kimberly\x C:\Users\Kim.b"),
+            // Unless the name goes on after a space: then it is cut there, which hides more, never less.
+            (r"C:\Users\Kim Lee\x", r"~ Lee\x"),
+        ];
+        for (text, expected) in cases {
+            assert_eq!(redact_with(text, home.as_ref()), expected, "{text}");
+        }
+        let home = home_rule(r"C:\Users\Nguyễn Văn A", true);
+        assert_eq!(redact_with(r"C:\Users\Nguyễn Văn A\Desktop", home.as_ref()), r"~\Desktop");
     }
 
     #[test]

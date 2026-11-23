@@ -75,6 +75,24 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
   a person's computer. Test from the app.
 - `-EncodedCommand` makes PowerShell write CLIXML to stderr. Use `-Command` when anyone reads the error.
   Inside `-Command`, `-ErrorAction Stop` needs `try`/`catch` for the script to end.
+- **Windows' own programs run by their full paths.** Node on Windows looks for a bare name in the folder it runs in
+  before PATH. `powershellPath()` and `systemProgram()` (`cli/src/lib/windows/powershell.ts`) name System32's, and
+  `windowsFolder()` and `windowsSystemProgram()` in Desktop (`desktop/lib/core/windows_folder.dart`). Windows' folder
+  is asked of the file system (`systemRoot()`, `windowsFolder()`), never read from `SystemRoot`, `windir` or `ComSpec`:
+  whoever starts the process sets those, and they can name another folder. Tests:
+  `cli/src/lib/windows/systemProgram.spec.ts`, `desktop/test/windows_folder_test.dart`.
+- **git, gh and any program run in a project's folder run by an absolute path, found once.** Node and Dart on Windows
+  run a `git.exe` in the child's working folder before PATH, so a `git.exe` committed to a repository would run as
+  `git` there, and adding a folder to PATH cannot stop it. Take PATH's drive or share folders only, the `.exe` alone
+  (a `.cmd` needs `cmd.exe`), then the installers' folders: `gitPath()` and `ghPath()` (`cli/src/lib/gitOnPath.ts`),
+  `ProgramPath` in Desktop, for git, ssh and winget (`desktop/lib/core/program_path.dart`). Never Scoop's machine-wide
+  root (`SCOOP_GLOBAL`, `%ProgramData%\scoop`): any user can write there. Tests: `cli/src/lib/gitOnPath.spec.ts`,
+  `desktop/test/program_path_test.dart`.
+- **A link opens with no shell.** `cmd.exe /c start` ends the command at a URL's `&` and runs the rest, splits it at a
+  space and expands its `%`, and a sign-in URL is full of `&`. Open it through System32's
+  `rundll32.exe url.dll,FileProtocolHandler <url>` (`browserCommand` in `cli/src/lib/openInBrowser.ts`), and refuse a
+  URL holding whitespace or a quote: Node quotes an argument holding a space, a tab or a double quote. Test:
+  `cli/src/lib/openInBrowser.spec.ts`.
 
 - **A paste can arrive as keys.** The Mac gets one paste event, so Enter after it is safe. Codex on Windows gets a stream of key
   presses, and an Enter within 120 ms of the last becomes a newline in the paste (codex-rs `paste_burst.rs`): the message stays in
@@ -109,6 +127,70 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
   desktop app's own `Claude.exe` answers `--help` by opening its window and never exiting, so a `claude` on Windows is
   asked `--version` first and refused unless it says Claude Code (`notClaudeCode` in `cli/src/engines/nativeLaunch.ts`).
   A customer's launches held at "permission flags" for good (2026-11-10).
+- **An app's own `.cmd` may forward to an `.exe`, not start Electron.** VS Code's `code.cmd` and Cursor's `cursor.cmd`
+  set `ELECTRON_RUN_AS_NODE=1` and run the app's `.exe` on a CLI script. Orca's `orca.cmd` (1.4.263) checks its first
+  arguments and runs `orca.exe` beside it, and Orca's own comment there says `cmd.exe` reparses a message body (read on
+  a Windows 11 ARM64 VM, 2026-11-20). Read what a launcher does before you run it: Orca's is run as its `orca.exe`, and
+  a `.cmd` of any other shape is refused, never run through `cmd.exe` (`cli/src/lib/windows/program.ts`). Test:
+  `cli/src/lib/windows/program.spec.ts`, against the launchers as installed (`cli/src/lib/windows/fixtures/`).
+- **A launcher's paths change with each update.** VS Code's script sits in a folder named by its build's commit
+  (`8a14f0cc1b\resources\app\out\cli.js` in 1.147.0), so a path read once is wrong after the next update. Read the
+  launcher at every start. Test: `program.spec.ts`, "reads the launcher at every start".
+- **Windows PowerShell takes seconds to start.** 3-6 s inside Claude Code, 1.3-1.8 s for one `Get-AppxPackage` ask
+  (VM, 2026-11-20). Run synchronously in the VS Code gate's process, it held the devices' listener there past the
+  extension's 2 s for a stream's head, and the extension opened its stream again. Never run PowerShell synchronously in
+  a process that serves anything: ask in the background, bounded in time, and answer with what is known meanwhile (the
+  `codex` on PATH until the ChatGPT app's folder is known, `cli/src/cable/hosts/codexQueue.ts`). Tests:
+  `cli/src/lib/windows/storePackage.spec.ts` (the 10 s bound), `cli/src/cable/hosts/codexQueue.spec.ts`.
+- **A PowerShell script imports each module it calls by path, with autoload off.** Autoload finds a command by
+  searching every module on `PSModulePath`: the first command it had to find cost a Windows PowerShell 5.1 process
+  22-29 s on windows-11-arm and 0.25-0.8 s on windows-latest (runs 43581413308, 43582091190), and the peer query
+  (`cli/src/lib/peerAccount.ts`) timed out at 93.7 s against its 45 s bound. `ptySignatures.ts`, importing by path, took
+  1.8 s on the same runner. A script starts with `modulesByPath(...)` (`cli/src/lib/windows/powershell.ts`):
+  `$PSModuleAutoLoadingPreference = 'None'`, then each module by its folder in `$PSHOME\Modules`, as a string, since
+  `Join-Path` is itself a module's command and LocalAccounts keeps its manifest in a version folder (`1.0.0.0`). With
+  autoload off, a command of a module not imported is "not recognized", Management's `Join-Path` and Utility's
+  `Select-Object` too. Utility is always imported first: importing CimCmdlets runs Utility's `Set-Alias`, NetTCPIP
+  its `New-Alias` (from its `.psm1` files) and Appx its `Set-Alias`, and without Utility the peer, listener and
+  uninstall scripts stopped on both runners (run 44827687986). A script that runs a vendor's installer keeps autoload
+  on: that script may call any module.
+  Test: `cli/src/lib/windows/powershellModules.spec.ts`.
+- **A console process that listens for SIGHUP holds its console's close until it is killed.** The host closes a
+  pane's console (`ClosePseudoConsole`) to end its process, and Node hears that `CTRL_CLOSE_EVENT` as SIGHUP. With a
+  listener, libuv's handler sleeps so the loop can act (`src/win/signal.c`), and the process lives until Windows' own
+  timeout or the host's kill; with none, it ends at once. The held pane listened for SIGHUP beside Ctrl-C and
+  Ctrl-Break, so every respawn over it waited the host's 2 s grace (`RESPAWN_GRACE`, `pty/src/panes.rs`): six panes
+  reopened after a reboot, two past the daemon's 5 s deadline (#4517's VM run). A process a respawn replaces listens
+  for SIGINT and SIGBREAK only: the held pane (`windowsHeldPaneArgv`, `cli/src/lib/windows/engineStart.ts`) and a
+  move's waiting pane (`moveWaitingArgv`, `cli/src/core/agents/hostMove.ts`). Tests:
+  `cli/src/lib/windows/engineStart.spec.ts` ("ends on a hangup"), `cli/src/core/agents/hostMove.spec.ts` ("the new
+  pane ends on a hangup"), `cli/src/lib/ptyHostBackend.restart.spec.ts` (a respawn over the held pane under 2 s).
+- **A Store app's install folder is asked, never built.** The Store's ChatGPT app is package `OpenAI.Codex`, in
+  `%ProgramFiles%\WindowsApps\OpenAI.Codex_<version>_<arch>__<publisher id>`: a folder named for each version, which
+  a standard user cannot list. Its window is `ChatGPT.exe`'s, and it holds a Codex of its own,
+  `app\resources\codex.exe`, newer than the `codex` on PATH, which no alias puts on PATH (VM, 2026-11-20). Ask
+  `Get-AppxPackage` for the package's `InstallLocation` (`cli/src/lib/windows/storePackage.ts`). Tests:
+  `storePackage.spec.ts`; `cli/src/cable/hosts/frontApp.spec.ts` (`ChatGPT.exe` in front is the Codex app).
+- **A hook reads only its own parent chain.** One `harness-pty ps --json` read of the whole table took 49-51 ms on the
+  VM (156 processes) and added 58 ms to every Codex hook at the median (2026-11-20). A hook runs on every turn: it
+  reads `harness-pty ps --json --ancestors <pid>`, at most 9 rows, which opens only the processes on the chain
+  (`cli/hook/notify.mjs`). Tests: `pty/src/ps.rs` (`chain`), `cli/src/hookNotify.spec.ts`.
+
+Claude Code's plugins on Windows (Claude Code 2.1.328 and 2.1.329, VM, 2026-11-20):
+
+- **A mod reaches no named pipe and has no HMAC.** `$.http.fetch` refuses every `\\.\pipe\` `socketPath` as "a
+  network location" before it connects; `crypto.subtle` holds `digest` alone, and `node:crypto` cannot be imported. A
+  mod reaches Harness through `harness.exe` (`harness device claude inbox` and `attach`), which proves the daemon's
+  token itself, and holds no token. Tests: `plugins/harness-device/test/device.test.ts` ("on Windows the follower is
+  the install's harness.exe"), `cli/src/deviceClaude/inbox.windows.real.spec.ts`.
+- **`$.process.run` of a missing absolute path does not reject.** It resolves with exit 1 and "The system cannot find
+  the path specified." on stderr, so a `catch` never reaches a fallback. Look with `$.fs.exists` first. Test:
+  `device.test.ts`, "no harness.exe in the profile: harness on PATH".
+- **A plugin's command hook runs under Git Bash, else Windows PowerShell, and its failure can block.** With no Git
+  Bash, a quoted path as the command is printed by PowerShell and runs nothing; Claude Code reads exit 127, and a
+  `PermissionRequest` hook that fails or passes its timeout denies the tool call: every Write in that run was denied.
+  A hook for both is one command both shells read, ending `exit 0`, with `"onFailure": "continue"`. Test:
+  `cli/src/harnessDevicePlugin.spec.ts`.
 
 ## 3. Files
 
@@ -131,6 +213,20 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
 - **`Get-AuthenticodeSignature` needs its module imported by path** (`$PSHOME\Modules\Microsoft.PowerShell.Security`): a
   PowerShell 7 `PSModulePath` makes 5.1 autoload 7's module, as with `Get-FileHash`. A file that is no program at all
   reads `UnknownError`, not `NotSigned`.
+- **A watch hears no write to a file another process holds open.** A probe wrote 5 lines into a file a second process
+  held open: `fs.watch` saw none of them, and one event once the file was closed; `fs.watchFile` saw all 5 (VM,
+  2026-11-20). VS Code holds its output channel's file open, so the gate's scroll cases timed out. To follow such a
+  file, read its size (`watchFile`). Test: the real-VS Code gate's scroll and page cases
+  (`plugins/harness-device-vscode/gate/realVscode.gate.ts`).
+- **A folder watched by an 8.3 short name aborts the process at its first change.** libuv asserts that each change's
+  long path starts with the folder it watches (`Assertion failed: !_wcsnicmp(filename, dir, dirlen)`,
+  `src\win\fs-event.c`). A console session's TEMP was `C:\Users\HXDIAL~1\AppData\Local\Temp`, and the core, which runs
+  every service on Windows, crashed at its first change; with TEMP in its long form the same run passed (VM,
+  2026-11-20). A watch of a file is never checked so, but chokidar watches the nearest folder of a file not there yet.
+  Every folder watch (`fs.watch`, chokidar) is given its path through `pathToWatch` (`cli/src/lib/pathToWatch.ts`): a
+  path with a `~`, as every short name Windows makes has, is watched by its long name; any other as given. Tests:
+  `cli/src/lib/pathToWatch.spec.ts` and the "on Windows" cases of `watcher/watcher.spec.ts`,
+  `core/engines/liveWatcher.spec.ts`, `cable/hosts/folderWatch.spec.ts`, `dsh/verdict.spec.ts` and `dsh/viewer.spec.ts`.
 
 ## 4. Screens a person sees
 
@@ -138,6 +234,15 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
   deleted (`scrollsTabsByMouse` in `desktop/lib/widgets/workspace_tab_scroller.dart`).
 - **A window that nobody asked for is rule 1.** A prompt nobody can answer in a hidden pane is its sibling: answer the exact screen
   safely or fail the start with a reason.
+- **A link may have no handler, and opening it anyway shows a window.** After a silent install, VS Code's and Cursor's
+  `vscode` and `cursor` had no handler until each editor had started once. `ShellExecuteExW` with
+  `SEE_MASK_FLAG_NO_UI` on a scheme with none returns TRUE and opens "Pick an app" (`OpenWith.exe`), and a second call
+  while it was open did not return within 120 s (VM, in the person's session, 2026-11-20). Ask `AssocQueryStringW` for
+  the scheme's `PROGID` first and refuse the link when there is none: `COMMAND` and `EXECUTABLE` find nothing for a
+  packaged handler (the ChatGPT app's `codex`), `PROGID` answers for both kinds (`harness-pty open-link`,
+  `pty/src/raise.rs`). Only the person's session shows the picker: over SSH the old build answered `refused` too.
+  Tests: `pty/src/raise.rs` (`the_link_code_asks_for_no_ui`, `the_link_code_asks_for_a_handler_before_opening`),
+  `pty/tests/raise.rs` (`a_link_with_no_handler_is_refused`).
 - **Windows scales by 125%, 150% and 175%; a Mac by 200%.** A line drawn in logical pixels can then end inside a device
   pixel, and two neighbours that each cover part of it let what is behind show through. In the terminal this put a
   dark stripe between OpenCode's panel rows every 20 device pixels, and a gap in its `┃` bar at every row (measured
@@ -152,8 +257,20 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
   the Unix Node 22 readiness fixture then checked for a Windows terminal host and failed on both Windows architectures.
   `desktop/test/environment_provisioner_test.dart` sets all three; the Windows fixture does the same in
   `environment_provisioner_windows_test.dart`.
+- A function given another platform's path module passes it to every path helper it calls. `homePath` read with the
+  host's own, so on both Windows architectures `forbiddenDirs`' posix cases fenced `/tmp/c` as `C:\tmp\c` (run
+  44827687986). Test: the posix case of `cli/src/config/envFields.win32.spec.ts`, under Windows' `node:path` on any
+  host.
 - Test in the person's session (session 1) and in the signed build. Windows behaves differently in session 0 and for an
   unsigned file.
+- **Over SSH a standard user is denied CIM.** SSH is a network logon, and CIM refuses it: `Get-CimInstance` and the
+  `ScheduledTasks` cmdlets, which go through CIM, fail, and so does `taskkill` (it lists processes through WMI: `Access
+  denied`, nothing ended), while `Stop-Process` on one pid works. A test tool starts its task through the Task
+  Scheduler's own COM object (`Schedule.Service`), an interactive logon with no password stored, and knows the account
+  is signed in when the task starts: one that stays "has not yet run" (`0x41303`) has no session to run in. Not
+  `quser.exe`: Windows Home has none. A tree is ended by `taskkill /t` in a task of its own in the session
+  (`cli/scripts/windows-dial-e2e/console.ps1`). Test: the VM run of `console.ps1`, as the VM's standard test user and as
+  the user at its console.
 - Smart App Control blocks a local `flutter build windows` (Bad Image on `flutter_windows.dll`). To show a Dart-only
   change before a release, copy the installed signed version folder and replace only `data\app.so` and
   `data\flutter_assets` with a release build made by the same Flutter version (`FLUTTER_VERSION` in
@@ -162,6 +279,13 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
 - `SendKeys` Ctrl+Shift chords do not reach the app. That is the test's fault. Send real key events (`keybd_event`).
 - Claude Code on Windows takes a pasted image on Alt+V, not Ctrl+V.
 - Check the machine chip says This Computer before you start anything: a new Harness can default to another machine.
+- **The daemon's ready lines are in `harness.log`, not on stdout.** Under the Windows launcher a master whose output is
+  not a terminal writes its lines and its children's to the data folder's `harness.log`: `start -f` printed its first
+  line only, and a harness waiting on stdout for the port waited 90 s. Follow `harness.log` from where it ended at the
+  start (`cli/e2e/harness/windowsDaemon.ts`). Test: `cli/e2e/dialWindows.e2e.ts`.
+- **The terminal host outlives `harness stop`, by design**, as tmux does, and holds its lock in the pty home, so a
+  test's root cannot be removed while it runs. End it as `harness uninstall` does
+  (`cli/src/lib/uninstall/ptyHosts.ts`). Test: `cli/e2e/dialWindows.e2e.ts`, which leaves no root behind.
 - Files and secrets: read a config file by key name. Never print `config.toml` or similar: it can hold a plain API key.
 
 ## 6. Words

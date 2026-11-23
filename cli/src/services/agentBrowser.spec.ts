@@ -23,6 +23,7 @@ import { runAgentBrowserService } from './agentBrowserProcess.js'
 import type { ServiceProcessOptions } from './process.js'
 import { defaultSettings, settingsHash, type BrowserSettings } from './agentBrowser/settings.js'
 import { StateFile } from './agentBrowser/stateFile.js'
+import { ToolServers } from './agentBrowser/toolServers.js'
 import { resetAgentTmpSweep } from '../lib/agentTmp.js'
 import { Browsers } from './agentBrowser/browsers.js'
 import { Containers } from './agentBrowser/containers.js'
@@ -41,6 +42,10 @@ vi.mock('node:fs', async (importOriginal) => {
     },
   }
 })
+// A case's time is real child processes (each fake podman call is a fresh sh + Node) and scales with load: on a 10-core Mac
+// (2026-11-21) the slowest took 2.9 s alone and 20.8 s beside 9 copies under coverage; #4520's test:core timed out 1-3 a run.
+// Every deadline a case checks runs on fake timers, so this wall-clock bound only cuts off a hung case.
+vi.setConfig({ testTimeout: 120_000 })
 
 const GiB = 1024 ** 3
 const NOW = new Date('2026-11-10T12:00:00Z')
@@ -118,8 +123,9 @@ function start(core: CoreApi = fakeCore({ dataDir }), options: AgentBrowserOptio
 /** What podman was asked, as argv lines, without the event stream's reconnects. */
 const asked = () => fake.calls().map(call => call.args.join(' ')).filter(line => !line.startsWith('events '))
 
-/** Each fake podman call starts a Node process: a few of them in a row take longer than waitFor's default second. */
-const eventually = (check: () => void) => vi.waitFor(check, { timeout: 15_000 })
+/** Each fake podman call starts a Node process: a few of them in a row take longer than waitFor's default second, and with
+ * every call 400 ms slower (a loaded machine) the slowest case took 13.9 s. 60 s checks nothing tighter: no case times a wait. */
+const eventually = (check: () => void) => vi.waitFor(check, { timeout: 60_000 })
 
 async function ready(port: Port, agentId: string) {
   await eventually(() => expect(port!.published(agentId)).toEqual({ state: 'ready' }))
@@ -1670,6 +1676,16 @@ describe('the agent\'s commands', () => {
     const lines = log.mock.calls.map(([line]) => String(line)).filter(line => line.startsWith('agent browser a1: ') && !line.includes('tool server'))
     expect(lines).toEqual(['agent browser a1: navigate ok', 'agent browser a1: type failed', 'agent browser a1: snapshot tool_timeout'])
     expect(log.mock.calls.flat().join('\n')).not.toMatch(/secret|hunter2|Kim/)
+  })
+
+  it('a command\'s failure in words of its own is logged by their length, never the words', async () => {
+    const c = await commands()
+    const log = vi.spyOn(console, 'log')
+    vi.spyOn(ToolServers.prototype, 'call').mockResolvedValueOnce({ error: 'tool said /Users/sentinel/x' } as never)
+    expect(await c.run('snapshot')).toEqual({ error: 'tool said /Users/sentinel/x' })
+    const lines = log.mock.calls.map((call) => call.map(String).join(' ')).join('\n')
+    expect(lines).not.toContain('sentinel')
+    expect(lines).toContain('agent browser a1: snapshot text(27)')
   })
 })
 

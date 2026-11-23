@@ -43,7 +43,12 @@ _harness_state_root() {
   echo "$state/harness"
 }
 
-HARNESS_RUNTIME="${ADAPTER_RUNTIME_DIR:-$(_harness_state_root)/runtime}"
+# A relative ADAPTER_RUNTIME_DIR is under the home, as the CLI reads it: a setup runs in its project, never the home.
+case "${ADAPTER_RUNTIME_DIR:-}" in
+  '') HARNESS_RUNTIME="$(_harness_state_root)/runtime" ;;
+  /*) HARNESS_RUNTIME="$ADAPTER_RUNTIME_DIR" ;;
+  *) HARNESS_RUNTIME="${HOME:-}/$ADAPTER_RUNTIME_DIR" ;;
+esac
 # The Pythons uv downloads live with Harness's other runtimes, not in uv's own ~/.local/share/uv:
 # a package's venv points at its interpreter, and `uv python uninstall` there must not break it.
 UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR:-$HARNESS_RUNTIME/python}"

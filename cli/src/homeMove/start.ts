@@ -8,7 +8,8 @@ import { spawnSync } from 'node:child_process'
 import * as fs from 'node:fs'
 import { createConnection } from 'node:net'
 import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
+import { homePath } from '../config/envFields.js'
 import { HARNESS_ROOT_MARKER, harnessRoot, holdsMarker, legacyHarnessHome, thisComputer, xdgRoots } from '../config/harnessHome.js'
 import { isBridge, procNow } from './bridge.js'
 import { checkMove, withEnvFile, type ConditionDeps, type Hold } from './conditions.js'
@@ -60,7 +61,7 @@ export async function moveHomeAtStart(argv: readonly string[], env: NodeJS.Proce
   if ((command !== 'start' && command !== '__harnessd') || flags.includes('--help') || flags.includes('-h') || deps.platform !== 'linux') return
   let environment: NodeJS.ProcessEnv
   try {
-    environment = withEnvFile({ fs: deps.io, env })
+    environment = withEnvFile({ fs: deps.io, env, home: deps.home })
   } catch {
     // config/loadEnv.ts refuses this start right after, naming the file.
     return
@@ -121,7 +122,7 @@ export function reexecTarget(plan: Roots, execPath: string, argv: readonly strin
  * holds the lock for and has committed (this start then goes on from the new roots while that one finishes).
  */
 async function moveOrHold(explicit: boolean, env: NodeJS.ProcessEnv, environment: NodeJS.ProcessEnv, roots: Roots, deps: StartDeps, moveDeps: MoveDeps, lines: string[]): Promise<MoveOutcome | null> {
-  const wait = { committed: () => marked(roots), long: () => say([UNDER_WAY], environment, deps) }
+  const wait = { committed: () => marked(roots), long: () => say([UNDER_WAY], environment, deps), log: (line: string) => say([line], environment, deps) }
   const locked = await withMoveLock(roots.legacy, async () => {
     const recovered = await recoverMove(deps.home, environment, moveDeps)
     if (recovered) return recovered
@@ -191,7 +192,7 @@ function say(lines: readonly string[], environment: NodeJS.ProcessEnv, deps: Sta
   for (const line of lines) deps.print?.(line)
   try {
     const folder = environment.ADAPTER_DATA_DIR
-      ? resolve(environment.ADAPTER_DATA_DIR)
+      ? homePath(environment.ADAPTER_DATA_DIR, deps.home)
       : join(harnessRoot('data', deps.home, 'linux', thisComputer(environment)), 'cli', 'data')
     fs.mkdirSync(folder, { recursive: true, mode: 0o700 })
     fs.appendFileSync(join(folder, 'harness.log'), lines.map((line) => `${line}\n`).join(''), { mode: 0o600 })

@@ -31,7 +31,7 @@ it.each(['missing', 'stalled'] as const)('keeps Hermes admission pending and cor
   const scriptPath = buildWithLean(join(scratch, mode), bundle, files)
   const d = daemon = await IsolatedDaemon.create({ scriptPath })
   onTestFailed(() => console.log(d.log()))
-  d.env.HERMES_HOME = join(d.root, 'hermes')
+  d.env.HERMES_HOME = join(d.env.HOME!, 'hermes')
   d.env.HERMES_PATH = join(d.root, 'bin', 'hermes')
   mkdirSync(d.env.HERMES_HOME)
   const database = join(d.env.HERMES_HOME, 'state.db')
@@ -63,7 +63,9 @@ setInterval(() => {}, 1000)
   const row = async () => (await c.request('agents_list', {})).agents.find((agent: { id: string }) => agent.id === agentId)
   const child = '20261009_120000_aaaaaa', own = '20261009_120001_bbbbbb'
   await hook(own)
-  await until('an explicit source hold', () => d.log().includes('held · Hermes session source is unavailable') || null, 10_000, 100)
+  // The log names a hold by its code, and the row shows the core's own hold on the unreadable store first: this is the
+  // source hold, with the store's failure by its kind.
+  await until('an explicit source hold', () => d.log().includes('SessionStart held · HERMES_SOURCE_UNAVAILABLE · IdentityReadUnavailable IDENTITY_UNAVAILABLE') || null, 10_000, 100)
   // A delegated hook on the same pane must not erase its parent's held intent.
   await hook(child)
   expect((await row()).sessionId).toBeFalsy()
@@ -94,7 +96,7 @@ setInterval(() => {}, 1000)
   competing.prepare('INSERT INTO sessions VALUES (?, ?, ?, 0)').run(own, 'cli', cwd)
   competing.close()
   await until('automatic source recheck to reject the child', () => d.log().includes('ignored · hermes_subagent') || null, 10_000, 100)
-  await until('complete but ambiguous parent pool', () => d.log().includes('ambiguous across homes') || null, 10_000, 100)
+  await until('complete but ambiguous parent pool', async () => (await row())?.identityHold?.includes('ambiguous across homes') || null, 10_000, 100)
   expect((await row()).sessionId).toBeFalsy()
   const resolved = new DatabaseSync(otherStore)
   resolved.exec('DELETE FROM sessions'); resolved.close()

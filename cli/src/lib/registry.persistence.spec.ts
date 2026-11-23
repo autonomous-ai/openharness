@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ownProcessGroup } from './windows/noWindow.js'
 import type { registry as Registry } from './registry.js'
+import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 
 const cleanup = vi.hoisted(() => ({ file: '', published: false, wait: undefined as undefined | (() => Promise<void>) }))
 vi.mock('node:fs', async original => {
@@ -17,8 +18,10 @@ vi.mock('node:fs', async original => {
     if (String(args[1]) === cleanup.file) cleanup.published = true
   } }
 })
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
+const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
 vi.mock('node:fs/promises', async original => {
-  const actual = await original<typeof import('node:fs/promises')>()
+  const actual = await deadline.slowSyncFsPromises(original)
   return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
     const handle = await actual.open(...args), read = handle.read.bind(handle)
     handle.read = (async (...options: Parameters<typeof handle.read>) => {
@@ -29,11 +32,15 @@ vi.mock('node:fs/promises', async original => {
     return handle
   } }
 })
+// Loads the module graph once, before any hook's time limit: cold, it takes seconds on a loaded machine. Each test
+// still imports fresh modules (vi.resetModules), now from the warm transform cache.
+await import('./registry.js')
 
 let directory: string
 let registry: typeof Registry
 let holder: ChildProcess | undefined
 let exitFlush: Promise<void> | undefined
+let timers: ReturnType<typeof deadline.holdRegistryDeadline>
 const input = { agentId: 'persisted-agent', engine: 'claude' as const, tmuxPane: '%1',
   processIdentity: { pid: 101, executable: '/fixture/claude', startMarker: 'fixture-101' } }
 const plan = { id: '12345678-1234-1234-1234-123456789012', identity: 'fixture-conversation',
@@ -41,6 +48,8 @@ const plan = { id: '12345678-1234-1234-1234-123456789012', identity: 'fixture-co
 const rows = () => JSON.parse(readFileSync(join(directory, 'registry.json'), 'utf8'))
 
 beforeEach(async () => {
+  // The write deadline passes only where a test expires it: how fast this machine writes the registry never fails them.
+  timers = deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS)
   vi.resetModules()
   exitFlush = undefined
   directory = mkdtempSync(join(tmpdir(), 'registry-persistence-'))
@@ -101,9 +110,9 @@ async function holderMessage(label: string): Promise<unknown> {
   } finally { controller.abort() }
 }
 
-async function locked(mode?: 'ignore-term') {
+async function locked(mode?: 'ignore-term', execArgv: string[] = []) {
   holder = fork(fileURLToPath(new URL('./__fixtures__/registryLockOwner.cjs', import.meta.url)), [directory, ...(mode ? [mode] : [])], {
-    ...ownProcessGroup(), execArgv: [], stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+    ...ownProcessGroup(), execArgv, stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
   })
   holder.stderr?.resume()
   expect(await holderMessage('legacy lock holder')).toBe('locked')
@@ -234,6 +243,15 @@ it('starts a legacy lock holder while an earlier write is still releasing the lo
   try { await ready } finally { release() }
 })
 
+it('takes the legacy lock while the file system watch service stalls', async () => {
+  // A loaded Mac stalls FSEvents for seconds, and closing a watch waits for it: a holder that watched hung there,
+  // its lock made and its owner never written. This holder's every watch closes only after its 20 s lifetime.
+  const stalled = `import fs from 'node:fs'
+    const watch = fs.watch
+    fs.watch = (...args) => Object.assign(watch(...args), { close: () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20_000) })`
+  await locked(undefined, ['--import', 'data:text/javascript,' + encodeURIComponent(stalled)])
+})
+
 it('owns its candidate values while preserving later edits through a live row alias', async () => {
   await locked()
   const candidate: NonNullable<ReturnType<typeof registry.byAgent>>['closePlan'] = { ...plan }
@@ -313,7 +331,6 @@ it('does not transfer a queued registration to a replacement route owner', async
 })
 
 it('retains a durably published result past reply expiry while cleanup keeps the writer occupied', async () => {
-  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
   let entered!: () => void, release!: () => void
   const arrived = new Promise<void>(resolve => { entered = resolve })
   const held = new Promise<void>(resolve => { release = resolve })
@@ -326,7 +343,9 @@ it('retains a durably published result past reply expiry while cleanup keeps the
   let nextRan = false
   let second: Promise<unknown> | undefined
   try {
-    await vi.advanceTimersByTimeAsync(5_000)
+    // Its deadline went with its result, which no expiry can take back now.
+    expect(() => timers.expire()).toThrow('no held write deadline')
+    await new Promise(resolve => setImmediate(resolve))
     second = registry.setClosePlan(input.agentId, null).then(row => { nextRan = true; return row })
     expect(nextRan).toBe(false)
     expect(failure).toBeUndefined()
@@ -387,7 +406,6 @@ it('waits for final exit publication cleanup before releasing its caller', async
 })
 
 it('retains exit ownership after its write deadline until an active cleanup settles', async () => {
-  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
   let entered!: () => void, release!: () => void
   const arrived = new Promise<void>(resolve => { entered = resolve })
   const held = new Promise<void>(resolve => { release = resolve })
@@ -398,7 +416,9 @@ it('retains exit ownership after its write deadline until an active cleanup sett
   let settled = false
   exitFlush = registry.flush({ exiting: true }).catch(() => {}).then(() => { settled = true })
   try {
-    await vi.advanceTimersByTimeAsync(5_000)
+    // The exit's write is not even queued while the cleanup holds the writer: no deadline of its own to run out.
+    expect(() => timers.expire()).toThrow('no held write deadline')
+    await new Promise(resolve => setImmediate(resolve))
     expect(settled).toBe(false)
   } finally { release(); await accepted; await exitFlush }
 })

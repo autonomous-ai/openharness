@@ -180,7 +180,7 @@ describe('the launchers, written whole', () => {
   const quote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
 
   beforeEach(async () => {
-    home = mkdtempSync(join(tmpdir(), 'launchers-'))
+    home = mkdtempSync(join(tmpdir(), 'sentinel-launchers-'))
     bin = join(home, 'bin')
     cli = join(home, 'cli', 'cli.js')
     launcher = join(bin, 'harness')
@@ -214,6 +214,12 @@ describe('the launchers, written whole', () => {
     expect(disk.events[at - 1]).toMatch(/^fsync .*\.tmp$/)
     expect(disk.events[at - 1]!.startsWith(`fsync ${launcher}.`)).toBe(true)
     if (directorySyncSupported()) expect(disk.events[at + 1]).toBe(`fsync ${bin}`)
+  })
+
+  it('says it repointed the launcher, naming neither its folder nor the Node: both are under the person\'s home', () => {
+    const lines: string[] = []
+    expect(api.ensureLauncher('/sentinel/node', (line) => lines.push(line))).toBe(true)
+    expect(lines).toEqual(['  ✓ repointed bin/harness at the new Node'])
   })
 
   it('a file at the harness launcher\'s old temporary name is left alone', () => {

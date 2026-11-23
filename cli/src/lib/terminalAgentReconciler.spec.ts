@@ -216,6 +216,7 @@ describe('composite terminal reconciliation', () => {
   })
 
   it('still verifies retained panes when the process table is unavailable', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const current = { ...session([tmux]), active: false }
     const onTerminalAvailability = vi.fn()
     const onProbeStatus = vi.fn()
@@ -230,10 +231,46 @@ describe('composite terminal reconciliation', () => {
       }),
     })
 
-    await reconciler.trigger()
+    try {
+      await reconciler.trigger()
 
-    expect(onTerminalAvailability).toHaveBeenCalledWith(current, true)
-    expect(onProbeStatus).toHaveBeenCalledWith({ ready: true, error: 'process table unavailable' })
+      expect(onTerminalAvailability).toHaveBeenCalledWith(current, true)
+      expect(onProbeStatus).toHaveBeenCalledWith({ ready: true, error: 'process table unavailable' })
+      expect(warn).toHaveBeenCalledWith('[discovery] process table unavailable; keeping existing terminal agents')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('names the executables, not the table, when only they could not be resolved, and keeps every agent', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const current = session([tmux])
+    const onProbeStatus = vi.fn()
+    const onRemoved = vi.fn()
+    const onDormant = vi.fn()
+    const reconciler = new TerminalAgentReconciler({
+      current: () => [current], backends: [], backendOrder: ['tmux'],
+      onDiscovered: vi.fn(), onObserved: vi.fn(), onDormant, onRemoved, onProbeStatus,
+      probe: async () => ({
+        processTableAvailable: false,
+        ownershipFailure: 'ENGINE_LOOKUP_TIMEOUT',
+        targets: [{ instanceId: 'tmux:default', result: { state: 'available', roots: [{ runtime: tmux, rootPid: 1, cwd: '/work' }] } }],
+        agents: [], ambiguousPlacements: new Set(),
+      }),
+    })
+
+    try {
+      // Twice: a miss is confirmed on the second pass, so one pass alone would not show an agent kept.
+      await reconciler.trigger()
+      await reconciler.trigger()
+
+      expect(onProbeStatus).toHaveBeenCalledWith({ ready: true, error: 'engine executables could not be resolved (ENGINE_LOOKUP_TIMEOUT)' })
+      expect(warn).toHaveBeenCalledWith('[discovery] engine executables could not be resolved (ENGINE_LOOKUP_TIMEOUT); keeping existing terminal agents')
+      expect(onRemoved).not.toHaveBeenCalled()
+      expect(onDormant).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('awaits the initial discovery pass before start resolves', async () => {
@@ -805,6 +842,57 @@ describe('a pass with a deadline', () => {
   })
 })
 
+describe('the passes count', () => {
+  const reconciler = (probed: () => Promise<TerminalAgentProbe>, passDeadlineMs?: number) => new TerminalAgentReconciler({
+    current: () => [], backends: [], backendOrder: ['tmux'],
+    onDiscovered: vi.fn(), onObserved: vi.fn(), onDormant: vi.fn(), onRemoved: vi.fn(), probe: probed, passDeadlineMs,
+  })
+
+  it('counts each completed pass once', async () => {
+    const probed = vi.fn(async () => probe([]))
+    const run = reconciler(probed)
+    // The second and third ask while the first runs: they share the one pass that follows it.
+    await Promise.all([run.trigger(), run.trigger(), run.trigger()])
+    expect(probed).toHaveBeenCalledTimes(2)
+    expect(run.passes).toBe(2)
+    await run.trigger()
+    expect(run.passes).toBe(3)
+  })
+
+  it('does not count a pass that gave up on its probe', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.useFakeTimers()
+    try {
+      const run = reconciler(() => new Promise<TerminalAgentProbe>(() => {}), 10)
+      const asked = run.trigger()
+      await vi.advanceTimersByTimeAsync(10)
+      await expect(asked).resolves.toBe(false)
+      expect(run.passes).toBe(0)
+    } finally {
+      vi.useRealTimers()
+      warn.mockRestore()
+    }
+  })
+
+  // It looked at no agent: a check that something did not happen would read it as a look.
+  it('does not count a pass that saw no process table', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const run = reconciler(async () => ({ ...probe([]), processTableAvailable: false }))
+      await expect(run.trigger()).resolves.toBe(true)
+      expect(run.passes).toBe(0)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('does not count a pass that throws', async () => {
+    const run = reconciler(async () => { throw new Error('ps timed out') })
+    await expect(run.trigger()).rejects.toThrow('ps timed out')
+    expect(run.passes).toBe(0)
+  })
+})
+
 describe('a pass whose observations cannot be saved', () => {
   afterEach(() => { vi.restoreAllMocks() })
   const live = (): TerminalAgentProbe => probe([{ instanceId: 'tmux:default', result: { state: 'available', roots: [{ runtime: tmux, rootPid: 1, cwd: '/work' }] } }])
@@ -851,6 +939,18 @@ describe('a pass whose observations cannot be saved', () => {
     await run.reconciler.trigger()
     await run.reconciler.trigger()
     expect(said(warn)).toHaveLength(2)
+  })
+
+  // What it saw was not kept: a check that something did not happen would read it as a look (the passes count).
+  it('is not counted as a pass that looked', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // Two batches a pass: the first pass's second is refused, the next pass saves both.
+    const run = outage([null, full(), null, null])
+    await run.reconciler.trigger()
+    expect(run.reconciler.passes).toBe(0)
+    await run.reconciler.trigger()
+    expect(run.reconciler.passes).toBe(1)
+    expect(said(warn)).toHaveLength(1)
   })
 
   it.each([

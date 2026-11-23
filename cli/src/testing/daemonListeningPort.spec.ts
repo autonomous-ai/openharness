@@ -11,7 +11,7 @@ it('follows the last line: a core started again on another port', () => {
 })
 it('has no port before the daemon said one: the socket\'s line and the core\'s summary are other lines', () => {
   expect(listeningPort('')).toBeNull()
-  expect(listeningPort('[hooks] listening on /tmp/h/data/daemon-34881.sock\n[cli] daemon pid 7 · v0.6.12 · listening on 127.0.0.1:34881\n')).toBeNull()
+  expect(listeningPort('[hooks] listening on the private socket\n[cli] daemon pid 7 · v0.6.12 · listening on 127.0.0.1:34881\n')).toBeNull()
 })
 it('does not read a line caught in the middle of its port', () => {
   expect(listeningPort('[hooks] listening on 127.0.0.1:424')).toBeNull()

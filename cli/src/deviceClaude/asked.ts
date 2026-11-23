@@ -10,7 +10,7 @@
  * command's own process.
  */
 import { request } from 'node:http'
-import { localSocketRoute } from '../lib/localTransport.js'
+import { daemonFetch, localSocketRoute } from '../lib/localTransport.js'
 
 export interface AskedBody {
   engine: 'claude'
@@ -120,9 +120,13 @@ export async function runAsked(deps: AskedDeps): Promise<0> {
 
 /**
  * The post to the daemon's `/api/hook/observed` (core/observedHook.ts), as the hook outside a pane posts its events
- * (hook/notify.mjs `postObserved`): written, never waited on, and its answer never read.
+ * (hook/notify.mjs `postObserved`): written, never waited on, and its answer never read. On Windows it goes through
+ * [send], the daemon's pipe by default.
  */
-export function daemonPost(dataDir: string, port: number): (body: AskedBody) => Promise<void> {
+export function daemonPost(
+  dataDir: string, port: number, platform: NodeJS.Platform = process.platform, send: typeof fetch = daemonFetch(dataDir, port),
+): (body: AskedBody) => Promise<void> {
+  if (platform === 'win32') return (body) => pipePost(send, port, body)
   return (body) => new Promise((resolve) => {
     // Only over the socket does the filesystem say the listener is this account's daemon. Over the port, an account holding
     // it while the daemon restarts would hear the prompt (audit H1), so a folder too long for a socket sends nothing.
@@ -144,4 +148,20 @@ export function daemonPost(dataDir: string, port: number): (body: AskedBody) => 
     req.on('error', done)
     req.end(payload)
   })
+}
+
+/**
+ * On Windows the pipe's answer proves the daemon's token (lib/localTransport.ts `daemonFetch`), so only this account's
+ * daemon hears the prompt. A pipe request is done when answered, not when written: the wait is bounded and the answer
+ * cancelled unread.
+ */
+async function pipePost(send: typeof fetch, port: number, body: AskedBody): Promise<void> {
+  const abort = new AbortController()
+  let timer: NodeJS.Timeout | undefined
+  const late = new Promise<void>((resolve) => { timer = setTimeout(() => { abort.abort(); resolve() }, WRITE_MS) })
+  const sent = send(`http://127.0.0.1:${port}/api/hook/observed`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: abort.signal,
+  }).then((answer) => answer.body?.cancel(), () => {}).catch(() => {})
+  await Promise.race([sent, late])
+  clearTimeout(timer)
 }

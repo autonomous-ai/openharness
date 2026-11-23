@@ -1,4 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
+
+const mocks = vi.hoisted(() => ({ execFile: vi.fn() }))
+vi.mock('node:child_process', async importOriginal => ({
+  ...await importOriginal<typeof import('node:child_process')>(), execFile: mocks.execFile,
+}))
+
 import { createHarnessResourcesReader, parseResourceProcesses, type ResourceProcess } from './harnessResources.js'
 import type { ProcessTelemetry } from './harnessTelemetry.js'
 
@@ -156,4 +162,15 @@ it('attributes macOS GPU intervals to harness children and shared servers once, 
   expect((await read()).agents[0].gpuPercent).toBeNull()
   now += 5000; sampleAt += 10000
   expect((await read()).agents[0].gpuPercent).toBeNull()
+})
+
+it('has no process readings on Windows and runs no ps', async () => {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+  Object.defineProperty(process, 'platform', { value: 'win32' })
+  // Git's `ps` is on the Windows runners' PATH and answers (run 44758521149).
+  mocks.execFile.mockImplementation((_file, _args, _options, done) => done(null, { stdout: `10 1 100 0:01.20 ${start}\n`, stderr: '' }))
+  try {
+    await expect(createHarnessResourcesReader(() => [agent('a', 10)])()).rejects.toThrow('Process readings unavailable')
+    expect(mocks.execFile).not.toHaveBeenCalled()
+  } finally { Object.defineProperty(process, 'platform', platform) }
 })

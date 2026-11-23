@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { RegisteredSession, registry as Registry } from './registry.js'
+import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 
 type Row = Record<string, unknown>
 const io = vi.hoisted(() => ({ file: '', published: false, failDirectorySync: false,
@@ -29,20 +30,15 @@ vi.mock('node:fs', async original => {
     },
   }
 })
-vi.mock('node:fs/promises', async original => {
-  const actual = await original<typeof import('node:fs/promises')>()
-  return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
-    const handle = await actual.open(...args), sync = handle.sync.bind(handle)
-    handle.sync = async () => {
-      await sync()
-      if (String(args[0]).startsWith(io.file + '.') && String(args[0]).endsWith('.tmp')) await io.prepare?.()
-    }
-    return handle
-  } }
-})
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
+const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
+vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original, { afterSync: async () => { await io.prepare?.() } }))
 vi.mock('./bootId.js', async original => ({ ...await original<object>(),
   currentBootId: () => 'fixture-boot', bootChanged: () => false,
 }))
+// Loads the module graph once, before any hook's time limit: cold, it takes seconds on a loaded machine. Each test
+// still imports fresh modules (vi.resetModules), now from the warm transform cache.
+await import('./registry.js')
 
 const A = 'cost-agent-a', B = 'cost-agent-b'
 const plan = { id: '12345678-1234-1234-1234-123456789012', identity: 'fixture-owner',
@@ -81,6 +77,8 @@ function holdPreparation() {
 }
 
 beforeEach(async () => {
+  // No test here means the write deadline to pass: how fast this machine writes the registry never fails them.
+  deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS)
   vi.resetModules()
   registry = undefined; release = undefined; accepted.length = 0
   io.published = false; io.failDirectorySync = false; io.durable = []; io.prepare = undefined

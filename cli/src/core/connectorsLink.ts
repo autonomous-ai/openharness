@@ -9,6 +9,7 @@
  * the entries its profile's config already holds.
  */
 import type { ConnectorsPort } from './api.js'
+import { codeOrLength } from '../lib/log.js'
 
 /** Ask the connectors' process (core/serviceLinks.ts `call`, for `connectors`): never rejects. */
 export type CallConnectors = (type: string, payload: Record<string, unknown>, waitMs: number) => Promise<Record<string, unknown>>
@@ -23,8 +24,9 @@ export function createConnectorsLink(call: CallConnectors, log: (line: string) =
     syncProfileHome: async (engine, folder) => {
       const answer = await call('syncProfileHome', { engine, folder }, SYNC_WAIT_MS)
       // SERVICE_UNAVAILABLE or SERVICE_FAILED (down, failed or past the wait): nothing was written, and the agent starts
-      // without the connections it would have had. Said by the engine and the code alone: the folder names the profile.
-      if (typeof answer.error === 'string') log(`[connections] profile home not updated (${engine}): ${answer.error}; launching with its current config`)
+      // without the connections it would have had. Said by the engine and the code alone: the folder names the profile, and
+      // an error that is not a code is only its length.
+      if (typeof answer.error === 'string') log(`[connections] profile home not updated (${engine}): ${codeOrLength(answer.error)}; launching with its current config`)
       return Array.isArray(answer.names) ? answer.names.filter((name): name is string => typeof name === 'string') : []
     },
   }

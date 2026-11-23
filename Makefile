@@ -50,14 +50,16 @@ release-backend:
 ## from max(last git tag, live harness/desktop/metadata.json). ARGS="--dry-run" to preview,
 ## ARGS="--prepare" to package a pushed PR head during final checks, without publishing,
 ## ARGS="--minor" for a forced-update minor bump, ARGS="X.Y.Z" for an explicit version. The by-hand
-## escape hatches (upload-desktop, upload-desktop-linux, upload-node-runtime, upload-tmux-runtime) live in desktop/Makefile.
+## escape hatches (upload-desktop, upload-node-runtime, upload-tmux-runtime) live in desktop/Makefile.
+## Linux has none: only release-desktop.yml holds the key its AppImages are signed with.
 release-desktop:
 	bash desktop/scripts/release-desktop.sh $(ARGS)
 
 ## release-device: tag this commit vX.Y.Z_device, push the tag and start release-device.yml on it — CI builds one
 ## universal macOS app, signs and notarizes it, publishes it to GCS and verifies the downloads. The version is bumped
 ## from max(last git tag, live harness/device/metadata.json). ARGS="--dry-run" to preview, ARGS="--prepare" to build,
-## sign and check main's tip without publishing, ARGS="--minor" or ARGS="X.Y.Z". See device-app/RELEASE.md.
+## sign and check main's tip without publishing, ARGS="--minor" or ARGS="X.Y.Z". macOS only unless
+## ARGS="--platforms all" (Windows and Linux too; temporary, until they ship). See device-app/RELEASE.md.
 release-device:
 	bash device-app/scripts/release-device.sh $(ARGS)
 

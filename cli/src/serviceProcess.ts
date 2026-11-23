@@ -13,7 +13,7 @@ import { ensureUtf8Locale } from './lib/childLocale.js'
 import { harnessdEnv, holdHarnessdEnv } from './lib/harnessdEnv.js'
 import { readOrMintComputerId } from './lib/computerIdentity.js'
 import { unixSocketPath } from './lib/localSocket.js'
-import { errorKind, ignoreLogWriteErrors, installTimestampedConsole } from './lib/log.js'
+import { errorKind, exitOnFatal, ignoreLogWriteErrors, installTimestampedConsole } from './lib/log.js'
 import { hostServices, type ServiceHost, type ServiceHostOptions, type ServiceProcess } from './services/process.js'
 
 export interface ServiceProcessOptions {
@@ -73,6 +73,8 @@ export interface ServiceProcessDeps {
   /** The process the services run in; swapped in tests for one that touches no channel, signal or exit. */
   host?: (options: ServiceHostOptions) => ServiceHost
   exit?: (code: number) => never
+  /** What ends the process on an error nothing caught, under its tag (lib/log.ts `exitOnFatal`). */
+  fatal?: (tag: string) => void
 }
 
 /**
@@ -87,6 +89,7 @@ export async function startServiceProcess(named: string | undefined, deps: Servi
   holdHarnessdEnv()
   const runners = deps.runners ?? SERVICE_RUNNERS
   const exit = deps.exit ?? ((code: number) => process.exit(code))
+  const fatal = deps.fatal ?? ((tag: string) => exitOnFatal(tag, 2))
   const names = [...new Set((named ?? '').split(',').map((name) => name.trim()).filter(Boolean))]
   const socketPath = unixSocketPath(env.ADAPTER_DATA_DIR, env.PORT)
   const unknown = names.length ? names.find((name) => !runners.has(name)) : '(none)'
@@ -107,6 +110,9 @@ export async function startServiceProcess(named: string | undefined, deps: Servi
   const processName = harnessdEnv().HARNESSD_SERVICE || names.join(',')
   // Its lines share the daemon's log with the master's: a write a full disk refuses is dropped, not fatal.
   ignoreLogWriteErrors()
+  // And an error nothing caught is one line of its kind there, then exit 1 for the master to restart it: Node's own
+  // report is its message and stack. Before any service loads, the gateway's among them.
+  fatal(`[service ${processName}]`)
   // As every daemon process did at load: a service that runs `ps` or `git` must not get mangled output.
   ensureUtf8Locale()
   // Its lines go to the daemon's log between the core's and the master's, which are stamped: unstamped,

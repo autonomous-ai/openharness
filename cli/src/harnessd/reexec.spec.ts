@@ -176,31 +176,33 @@ describe('the probe', () => {
     return file
   }
 
-  it('passes a bundle whose master answers, and says why one that does not fails', async () => {
+  it('passes a bundle whose master answers, and says how one that does not ended, never what it printed', async () => {
     const ok = await runProbe(process.execPath, [script(`console.log('loading'); console.log(${JSON.stringify(PROBE_ANSWER)} + ' · protocol 2')`), PROBE_COMMAND], process.env).result
-    expect(ok).toEqual({ ok: true, detail: `${PROBE_ANSWER} · protocol 2` })
+    expect(ok).toEqual({ ok: true, ended: 'exit 0' })
     // One that takes a handover (Windows) says so.
     expect(await runProbe(process.execPath, [script(`console.log(${JSON.stringify(`${PROBE_ANSWER} · protocol 6 · ${PROBE_HANDOVER}`)})`), PROBE_COMMAND], process.env).result)
-      .toEqual({ ok: true, detail: `${PROBE_ANSWER} · protocol 6 · ${PROBE_HANDOVER}`, handover: true })
-    // A bundle from before probes: its usage on stdout, the reason on stderr, which is what is said.
-    expect(await runProbe(process.execPath, [script(`console.error('Unknown command: ' + process.argv[2]); console.log('Usage: harness …\\n  harness --help'); process.exit(1)`), PROBE_COMMAND], process.env).result)
-      .toEqual({ ok: false, detail: `Unknown command: ${PROBE_COMMAND}` })
+      .toEqual({ ok: true, ended: 'exit 0', handover: true })
+    // A bundle from before probes: its usage on stdout, the reason on stderr, which can name a path: only its size is said.
+    const unknown = `Unknown command: ${PROBE_COMMAND} /Users/sentinel/x\n`
+    expect(await runProbe(process.execPath, [script(`process.stderr.write(${JSON.stringify(unknown)}); console.log('Usage: harness …\\n  harness --help'); process.exit(1)`), PROBE_COMMAND], process.env).result)
+      .toEqual({ ok: false, ended: `exit 1 · stderr ${Buffer.byteLength(unknown)} B` })
     // An answer on stderr is no answer.
     expect(await runProbe(process.execPath, [script(`console.error(${JSON.stringify(PROBE_ANSWER)})`), PROBE_COMMAND], process.env).result)
-      .toEqual({ ok: false, detail: PROBE_ANSWER })
-    expect(await runProbe(process.execPath, [script('console.log("something else")'), PROBE_COMMAND], process.env).result)
-      .toEqual({ ok: false, detail: 'something else' })
-    expect(await runProbe(process.execPath, [script('process.exit(4)')], process.env).result).toEqual({ ok: false, detail: 'exit 4' })
-    expect(await runProbe(process.execPath, [script('process.kill(process.pid, "SIGKILL")')], process.env).result).toEqual({ ok: false, detail: 'signal SIGKILL' })
-    expect(await runProbe(join(dir, 'no-node'), [], process.env).result).toEqual({ ok: false, detail: expect.stringContaining('ENOENT') })
+      .toEqual({ ok: false, ended: `exit 0 · stderr ${Buffer.byteLength(`${PROBE_ANSWER}\n`)} B` })
+    expect(await runProbe(process.execPath, [script('console.log("something else /Users/sentinel/x")'), PROBE_COMMAND], process.env).result)
+      .toEqual({ ok: false, ended: 'exit 0' })
+    expect(await runProbe(process.execPath, [script('process.exit(4)')], process.env).result).toEqual({ ok: false, ended: 'exit 4' })
+    expect(await runProbe(process.execPath, [script('process.kill(process.pid, "SIGKILL")')], process.env).result).toEqual({ ok: false, ended: 'signal SIGKILL' })
+    // The spawn error's kind, never its message, which names the Node's path.
+    expect(await runProbe(join(dir, 'no-node'), [], process.env).result).toEqual({ ok: false, ended: 'ENOENT' })
   })
 
   it('gives up on one that does not answer in time, and can be abandoned', async () => {
     const hung = script('setInterval(() => {}, 1000)')
-    expect(await runProbe(process.execPath, [hung], process.env, 300).result).toEqual({ ok: false, detail: 'no answer within 300 ms' })
+    expect(await runProbe(process.execPath, [hung], process.env, 300).result).toEqual({ ok: false, ended: 'no answer within 300 ms' })
     const running = runProbe(process.execPath, [hung], process.env)
     running.cancel()
-    expect(await running.result).toEqual({ ok: false, detail: 'signal SIGKILL' })
+    expect(await running.result).toEqual({ ok: false, ended: 'signal SIGKILL' })
     expect(PROBE_TIMEOUT_MS).toBeGreaterThanOrEqual(10_000)
   })
 
@@ -211,7 +213,7 @@ describe('the probe', () => {
       const running = runProbe('node', [], {}, 100, () => child)
       running.cancel()
       vi.advanceTimersByTime(100)
-      expect(await running.result).toEqual({ ok: false, detail: 'no answer within 100 ms' })
+      expect(await running.result).toEqual({ ok: false, ended: 'no answer within 100 ms' })
       child.emit('close', 0, null)
     } finally { vi.useRealTimers() }
   })
@@ -292,7 +294,7 @@ describe('re-executing', () => {
     expect(probes[0].args).toEqual(['--flag', '/opt/cli.js', PROBE_COMMAND])
     expect(decodeResume(probes[0].env[RESUME_ENV])).toEqual(state({ reexecs: 3, unproven: 2 }))
     expect(probes[0].env.KEEP).toBe('1')
-    await settle({ ok: true, detail: PROBE_ANSWER })
+    await settle({ ok: true, ended: 'exit 0' })
     expect(calls.at(-1)).toBe(`marker ${JSON.stringify({ pid: 4242, from: 'old', to: 'new', at: 1_000 })}`)
     expect(execs).toEqual([{ file: '/opt/node', args: ['/opt/node', '--flag', '/opt/cli.js', '__harnessd'], env: probes[0].env }])
     expect(outcomes).toEqual([])
@@ -308,7 +310,7 @@ describe('re-executing', () => {
     expect(replacing()).toBe(true)
     stopped[0]()
     expect(replacing()).toBe(true)
-    await settle({ ok: false, detail: 'no' })
+    await settle({ ok: false, ended: 'exit 1' })
     expect(replacing()).toBe(false)
     expect(outcomes).toEqual(['same', 'refused'])
   })
@@ -317,23 +319,23 @@ describe('re-executing', () => {
     const refused = make()
     refused.reexec(state(), (outcome) => outcomes.push(outcome))
     stopped[0]()
-    await settle({ ok: false, detail: 'Unknown command: __harnessd-probe' })
+    await settle({ ok: false, ended: 'exit 1 · stderr 33 B' })
     expect(outcomes).toEqual(['refused'])
-    expect(calls.slice(-2)).toEqual(['[harnessd] the new bundle\'s master did not answer its probe (Unknown command: __harnessd-probe) — keeping this master', 'start children'])
+    expect(calls.slice(-2)).toEqual(['[harnessd] the new bundle\'s master did not answer its probe (exit 1 · stderr 33 B) — keeping this master', 'start children'])
     expect(execs).toEqual([])
 
     calls = []
     const failing = make({ execve: () => { throw new Error('E2BIG') } })
     failing.reexec(state(), (outcome) => outcomes.push(outcome))
     stopped[1]()
-    await settle({ ok: true, detail: PROBE_ANSWER })
+    await settle({ ok: true, ended: 'exit 0' })
     expect(outcomes).toEqual(['refused', 'kept'])
     expect(calls.slice(-3)).toEqual(['remove marker', '[harnessd] could not re-execute this master (Error) — keeping it', 'start children'])
 
     const odd = make({ execve: () => { throw 'odd' } })
     odd.reexec(state(), (outcome) => outcomes.push(outcome))
     stopped[2]()
-    await settle({ ok: true, detail: PROBE_ANSWER })
+    await settle({ ok: true, ended: 'exit 0' })
     expect(calls).toContain('[harnessd] could not re-execute this master (string) — keeping it')
   })
 
@@ -345,7 +347,7 @@ describe('re-executing', () => {
       const missing = make({ exists: (path) => path !== gone })
       missing.reexec(state(), (outcome) => outcomes.push(outcome))
       stopped.at(-1)!()
-      await settle({ ok: true, detail: PROBE_ANSWER })
+      await settle({ ok: true, ended: 'exit 0' })
       expect(execs).toEqual([])
       expect(calls.slice(-3)).toEqual(['remove marker', `[harnessd] ${said} is not there to re-execute on — keeping this master`, 'start children'])
     }
@@ -356,7 +358,7 @@ describe('re-executing', () => {
     const full = make({ writeMarker: () => { throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' }) } })
     full.reexec(state(), (outcome) => outcomes.push(outcome))
     stopped[0]()
-    await settle({ ok: true, detail: PROBE_ANSWER })
+    await settle({ ok: true, ended: 'exit 0' })
     expect(execs).toEqual([])
     expect(outcomes).toEqual(['kept'])
     expect(calls.slice(-2)).toEqual(['[harnessd] could not leave the re-execution marker (ENOSPC) — keeping this master', 'start children'])
@@ -364,7 +366,7 @@ describe('re-executing', () => {
     const odd = make({ writeMarker: () => { throw 'read-only' } })
     odd.reexec(state(), (outcome) => outcomes.push(outcome))
     stopped[1]()
-    await settle({ ok: true, detail: PROBE_ANSWER })
+    await settle({ ok: true, ended: 'exit 0' })
     expect(outcomes).toEqual(['kept', 'kept'])
     expect(calls).toContain('[harnessd] could not leave the re-execution marker (string) — keeping this master')
   })
@@ -383,7 +385,7 @@ describe('re-executing', () => {
     stopping = true
     second.cancel()
     expect(probes[0].cancelled).toBe(true)
-    await settle({ ok: true, detail: PROBE_ANSWER })
+    await settle({ ok: true, ended: 'exit 0' })
     expect(execs).toEqual([])
 
     stopping = false
@@ -391,7 +393,7 @@ describe('re-executing', () => {
     third.reexec(state(), (outcome) => outcomes.push(outcome))
     stopped[2]()
     stopping = true
-    await settle({ ok: false, detail: 'no' })
+    await settle({ ok: false, ended: 'exit 1' })
     expect(outcomes).toEqual([])
     expect(calls).not.toContain('start children')
     third.cancel()
@@ -527,7 +529,7 @@ describe('handing over, where there is no exec (Windows)', () => {
   const make = (over: Partial<HandOverDeps> = {}, more: Partial<ReexecDeps> = {}) => createReexec({
     own: 'old', current: () => 'new', nodePath: '/opt/node', execArgv: [], scriptPath: 'C:\\h\\cli\\0.5.1\\cli.js', env: { KEEP: '1' }, pid: 4242,
     execve: null, exists: () => true,
-    probe: () => ({ result: Promise.resolve({ ok: true, detail: PROBE_ANSWER, handover: true }), cancel: () => {} }),
+    probe: () => ({ result: Promise.resolve({ ok: true, ended: 'exit 0', handover: true }), cancel: () => {} }),
     stopChildren: (done) => { calls.push('stop children'); done() },
     startChildren: () => calls.push('start children'),
     writeMarker: (marker) => calls.push(`marker ${JSON.stringify(marker)}`),
@@ -686,7 +688,7 @@ describe('handing over, where there is no exec (Windows)', () => {
     expect(calls.slice(-2)).toEqual(['[harnessd] could not take the daemon spawn lock (Error) — keeping this master', 'start children'])
     calls = []
     await run(make({}, { exists: () => false }).reexec)
-    expect(calls.slice(-3)).toEqual(['unlock', '[harnessd] C:\\h\\cli\\0.5.1\\cli.js is not there to hand over to — keeping this master', 'start children'])
+    expect(calls.slice(-3)).toEqual(['unlock', '[harnessd] the bundle is not there to hand over to — keeping this master', 'start children'])
     calls = []
     await run(make({ token: () => '../tok' }).reexec)
     expect(calls.slice(-3)).toEqual(['unlock', '[harnessd] the handover token "../tok" is not one a file can be named by — keeping this master', 'start children'])
@@ -812,7 +814,7 @@ describe('handing over, where there is no exec (Windows)', () => {
 
   it('keeps this master, handing over to nothing, when the new bundle\'s master does not say it takes a handover', async () => {
     // A bundle from before handovers would be handed the state, never take the handover, and run beside this master.
-    await run(make({}, { probe: () => ({ result: Promise.resolve({ ok: true, detail: PROBE_ANSWER }), cancel: () => {} }) }).reexec)
+    await run(make({}, { probe: () => ({ result: Promise.resolve({ ok: true, ended: 'exit 0' }), cancel: () => {} }) }).reexec)
     expect(calls).toEqual([REEXECUTING, 'stop children', '[harnessd] the new bundle\'s master cannot take a handover — keeping this master', 'start children'])
     expect(launched).toEqual([])
     expect(outcomes).toEqual(['kept'])

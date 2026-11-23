@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 import '../core/harness_home.dart';
 import '../core/hidden_process.dart';
 import '../core/home_dir.dart';
+import '../core/program_path.dart';
 import '../core/runtime_platform.dart';
 import '../core/test_run.dart';
 
@@ -20,7 +21,13 @@ class WindowsGitSetup {
     bool? isWindows,
     void Function(String line)? log,
   }) : _environment = environment ?? Platform.environment,
-       _isFile = isFile ?? ((path) => File(path).existsSync()),
+       // Unfollowed: winget.exe in WindowsApps is an App Execution Alias, a
+       // link the file system cannot follow, which Windows runs.
+       _isFile =
+           isFile ??
+           ((path) =>
+               FileSystemEntity.typeSync(path, followLinks: false) !=
+               FileSystemEntityType.notFound),
        _run = run ?? _runWinget,
        _isWindows = isWindows ?? (RuntimePlatform.isWindows && !kUnderTest),
        _log = log ?? ((_) {});
@@ -52,27 +59,22 @@ class WindowsGitSetup {
     return result.exitCode;
   }
 
-  /// Where the CLI looks (cli lib/windows/gitBash.ts): a `git` on PATH, then
-  /// where its installer puts it, for everyone or for this user.
+  /// Where the CLI looks (cli lib/windows/gitBash.ts): the git Desktop runs
+  /// ([ProgramPath.git], which never takes one by a relative PATH entry), then
+  /// Git for Windows' bash where its installer puts it.
   bool get gitIsThere {
-    final path = _environment['PATH'] ?? _environment['Path'] ?? '';
-    if (path
-        .split(';')
-        .any(
-          (dir) => dir.isNotEmpty && _isFile(p.windows.join(dir, 'git.exe')),
-        )) {
+    try {
+      ProgramPath.git(
+        environment: _environment,
+        isWindows: true,
+        isProgram: _isFile,
+      ).resolve();
       return true;
+    } on ProcessException {
+      return gitForWindowsRoots(_environment).any(
+        (root) => _isFile(p.windows.join(root, 'bin', 'bash.exe')),
+      );
     }
-    final roots = [
-      _environment['ProgramFiles'],
-      _environment['ProgramW6432'],
-      _environment['ProgramFiles(x86)'],
-      if (_environment['LOCALAPPDATA'] case final local?)
-        p.windows.join(local, 'Programs'),
-    ];
-    return roots.whereType<String>().any(
-      (root) => _isFile(p.windows.join(root, 'Git', 'bin', 'bash.exe')),
-    );
   }
 
   String? get _marker {
@@ -93,7 +95,12 @@ class WindowsGitSetup {
     if (marker == null || _isFile(marker)) return;
     try {
       await File(marker).create(recursive: true);
-      final code = await _run('winget', arguments);
+      final winget = ProgramPath.winget(
+        environment: _environment,
+        isWindows: true,
+        isProgram: _isFile,
+      ).resolve();
+      final code = await _run(winget, arguments);
       _log(
         code == 0
             ? 'Git for Windows installed'

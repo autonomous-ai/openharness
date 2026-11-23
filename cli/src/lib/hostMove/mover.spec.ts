@@ -185,33 +185,35 @@ describe('HostMover', () => {
 
   it('a failed agent is not retried until restart', async () => {
     const h = harness([row('a1')])
-    h.setOutcome(async () => ({ moved: false, reason: 'the new engine was not proven', fellBack: true }))
+    h.setOutcome(async () => ({ moved: false, reason: 'not proven in /Users/sentinel', fellBack: true }))
     await h.settle()
     await h.mover.step()
     await h.mover.step()
     await h.mover.step()
     expect(h.moves).toEqual(['a1'])
-    expect(h.lines()).toContain('[terminal] move a1: failed (the new engine was not proven)')
+    expect(h.lines()).toContain('[terminal] move a1: failed (text(29))')
     expect(h.lines()).toContain('[terminal] move a1: skipped (a move failed this start)')
     // A move that throws counts as failed too.
     const t = harness([row('a2')])
-    t.setOutcome(async () => { throw new Error('boom') })
+    t.setOutcome(async () => { throw new Error('boom /Users/sentinel') })
     await t.settle()
     await t.mover.step()
     await t.mover.step()
     expect(t.moves).toEqual(['a2'])
-    expect(t.lines()).toContain('[terminal] move a2: failed (boom)')
+    expect(t.lines()).toContain('[terminal] move a2: failed (text(20))')
+    expect([...h.lines(), ...t.lines()].join('\n')).not.toContain('sentinel')
   })
 
   it('a cancelled move is not a failure: the agent may move later', async () => {
     const h = harness([row('a1')])
-    h.setOutcome(async () => ({ moved: false, reason: 'the move was cancelled', fellBack: false, cancelled: true }))
+    h.setOutcome(async () => ({ moved: false, reason: 'cancelled in /Users/sentinel', fellBack: false, cancelled: true }))
     await h.settle()
     await h.mover.step()
     h.setOutcome(async () => ({ moved: true, resumed: true }))
     await h.mover.step()
     expect(h.moves).toEqual(['a1', 'a1'])
-    expect(h.lines()).toContain('[terminal] move a1: skipped (the move was cancelled)')
+    expect(h.lines()).toContain('[terminal] move a1: skipped (text(28))')
+    expect(h.lines().join('\n')).not.toContain('sentinel')
   })
 
   it('an agent on the target host is never a candidate', async () => {

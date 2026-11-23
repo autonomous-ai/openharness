@@ -2,7 +2,7 @@
 // process holds it; the core knows nothing of notices.
 
 import { truncateUtf8 } from '../lib/deviceRecentTrim.js'
-import { NoticeLimits, type NoticeAsk, type NoticeResult } from '../lib/dialNotice.js'
+import { NOTICE_LINE_MAX_BYTES, NoticeLimits, noticeKind, type NoticeAsk, type NoticeKind, type NoticeResult } from '../lib/dialNotice.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
 import { SHOWN_ONLY_PREFIX } from './cableSession.js'
 import { hostDisplayName } from './hosts/hostDetect.js'
@@ -33,8 +33,9 @@ export interface NoticesDeps {
   clock(): number
   /** The pending set changed: its file is written again (noticeFile.ts). */
   changed(): void
-  /** Each answer, by the caller's engine (`agent` when it names none), for the day's tally. */
-  count(engine: 'claude' | 'codex' | 'agent', result: NoticeResult): void
+  /** Each answer, by the caller's engine (`agent` when it names none), for the day's tally. Its kind is read from the
+   *  fixed opening the CLI writes (noticeKind), never from what the line says. */
+  count(engine: 'claude' | 'codex' | 'agent', result: NoticeResult, kind: NoticeKind): void
   /** The file's cards at the start (noticeFile.ts). */
   restored: readonly StoredNotice[]
   log(line: string): void
@@ -46,9 +47,6 @@ export interface NoticesDeps {
 }
 
 export const NOTICES_PENDING_MAX = 20
-/** The bytes of a line the dial keeps whole: its drawer row cuts at 239, and a question of 256 or more reads "This
- *  question needs the desktop" (firmware ui_habitat.c). 120 letters can be 360 bytes. */
-export const NOTICE_LINE_MAX_BYTES = 239
 /** A card's keys find its agent again after a restart (its session, then its panes): a few short ones, so the file
  *  stays small. */
 export const NOTICE_KEYS_MAX = 4
@@ -121,9 +119,9 @@ export class Notices {
   }
 
   notify(ask: NoticeAsk): NoticeResult {
-    // Counted by the engine and the outcome only: the text, session and folder are the person's own.
+    // Counted by the engine, the outcome and the line's kind only: the text, session and folder are the person's own.
     const answer = (result: NoticeResult): NoticeResult => {
-      this.deps.count(ask.engine ?? 'agent', result)
+      this.deps.count(ask.engine ?? 'agent', result, noticeKind(ask.text))
       return result
     }
     // With no dial a notice is nobody's: it must not use up the agent's minute for when one attaches.

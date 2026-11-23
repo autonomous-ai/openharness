@@ -13,7 +13,7 @@ import type { AgentEngine } from '../engines/types.js'
 import type { RegisteredSession, ProcessIdentity } from './registry.js'
 import type { TerminateOutcome } from './deleteAgentFallback.js'
 import { permissionModeApproves } from './engineLaunch.js'
-import { errorKind } from './log.js'
+import { codeOrLength, errorKind } from './log.js'
 
 /**
  * Whether the relaunch approves on its own — from the ROW first, and the live process only for a row
@@ -194,7 +194,7 @@ export async function restartAgent(
     const spawned = await deps.respawn(argv)
     if (!current()) return null
     if (!spawned.ok) {
-      deps.log(`[restart] ${session.engine} respawn-pane failed: ${spawned.reason ?? 'unknown reason'}`)
+      deps.log(`[restart] ${session.engine} respawn-pane failed: ${codeOrLength(spawned.reason ?? 'UNKNOWN')}`)
       return null
     }
     return deps.waitForProcess()

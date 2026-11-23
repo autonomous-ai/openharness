@@ -22,7 +22,7 @@ import type { RegisteredSession } from '../lib/registry.js'
 import { fetchRelease, loadImage, shouldOffer, type FirmwareRelease } from './fwPush.js'
 import { routeVoiceTask, type RouterAgent, type RouterContinuity } from '../lib/voiceRouter.js'
 import { env } from '../config/env.js'
-import { errorKind } from '../lib/log.js'
+import { codeOrLength, errorKind } from '../lib/log.js'
 import { FleetRouter } from '../services/fleetRouter.js'
 import type { ForkResult } from '../core/api.js'
 import type { FleetRouting } from '../services/fleet.js'
@@ -88,6 +88,8 @@ export interface CableHostWiring {
   accessToken?: (opts?: { force?: boolean; failedToken?: string }) => Promise<string>
   /** The account's environment, which the transcriber checks the upload against. */
   environment?: () => string
+  /** For the devices' tests: the transcriber in place of the backend's, so a capture is turned to text with nothing posted. */
+  transcribe?: (pcm: Buffer, sampleRate: number, lang: string, signal?: AbortSignal) => Promise<string>
   /** A dial is on the wire on this computer, or none is any more: the core streams the turn cards and
    *  makes the recaps for it, as for a device watching through the backend. */
   watching?: (on: boolean) => void
@@ -168,6 +170,9 @@ export interface CableHostWiring {
   appSettled?: (app: string) => void
   /** A dial sent a pick from its list of apps, whatever came of it: the picker's measure. A notice's pick is none. */
   appPicked?: () => void
+  /** A pick on the dial that switched nothing, and why: the shown app was picked again, or the pick was ignored. Never
+   *  for a notice. */
+  appPickKept?: (answer: 'same' | 'ignored') => void
   /** A pick on the dial switched the shown app, or with a window turned the view to Harness's tab: the devices bring
    *  that app to the front. Never for a notice, nor for Harness with no window. */
   appBrought?: (app: string) => void
@@ -179,6 +184,9 @@ export interface CableHostWiring {
   appTimer?: (ms: number, run: () => void) => () => void
   /** In [0, 1): the draw between apps tied for the most agents. Absent, Math.random. */
   appRandom?: () => number
+  /** Whether the open scan learns the app of an agent it found (scannedApp.ts `scanLearnsApps`); where it does not, such an
+   *  agent counts in the default app (select.ts `AppRings.counts`). Absent, true. */
+  scanLearnsApps?: boolean
 }
 
 /** The settle of the app in front when no timer is wired (a test's host): never what keeps the process up. */
@@ -263,6 +271,7 @@ export class DaemonCableHost implements CableHost {
    */
   constructor(private readonly wiring: CableHostWiring, fleet?: MachineFleet) {
     this.harness = new HarnessSource(Date.now, wiring.launchDesktop !== undefined)
+    this.rings = new AppRings(wiring.scanLearnsApps)
     this.local = new FleetRouter({
       ...wiring,
       // The same set `agents_list` answers the apps with — see the router's localAgents.
@@ -418,21 +427,19 @@ export class DaemonCableHost implements CableHost {
     this.wiring.log(line)
     void (async () => {
       // The socket first, and unconditionally: it is what makes the machine wheel's dots live, and it is
-      // held for as long as the dial is plugged in whether or not anything is selected.
-      let online: { ok: true } | { ok: false; message: string; code?: string }
-      try {
-        online = await this.viaFleet((r) => r.online())
-      } catch (err) {
-        online = { ok: false, message: (err as Error).message }
-      }
+      // held for as long as the dial is plugged in whether or not anything is selected. A router that throws is logged
+      // by the catch below, by its kind.
+      const online = await this.viaFleet((r) => r.online())
       if (!online.ok) {
+        // The lane's code, or the failure's kind: a code that is not one is said by its length.
+        const why = online.code === undefined ? online.kind : codeOrLength(online.code)
         // A session that is over is not tried again: each try would be a refused refresh and two log lines every 30 s
         // until someone signs in (security review 2 on #2483). The next sign-in and plug-in open it.
         if (online.code === LANE_SESSION_OVER) {
-          this.wiring.log(`cable: could not open the lane (${online.message}) — other machines are unavailable until the next sign-in`)
+          this.wiring.log(`cable: could not open the lane (${why}) — other machines are unavailable until the next sign-in`)
           return
         }
-        this.wiring.log(`cable: could not open the lane (${online.message})`)
+        this.wiring.log(`cable: could not open the lane (${why})`)
         // Only a token that could not be read is tried again from here: it left the lane no socket, so nothing else
         // would (deviceLink.ts readToken). A socket that failed is the lane's own reconnect's, and trying it here too
         // ran two backoffs against a backend that is down (security review 2 on #2483).
@@ -478,7 +485,7 @@ export class DaemonCableHost implements CableHost {
     // Never fatal. The local machine in particular must stay usable with no backend at all — it is the
     // one machine the cable can vouch for on its own. Replaced by a newer select is not a failure: that
     // one tells the backend where the dial is.
-    if (!selected.ok && selected.code !== 'SUPERSEDED') this.wiring.log(`cable: could not announce ${machineId} (${selected.message})`)
+    if (!selected.ok && selected.code !== 'SUPERSEDED') this.wiring.log(`cable: could not announce ${machineId} (${selected.code})`)
   }
 
   /**
@@ -679,7 +686,7 @@ export class DaemonCableHost implements CableHost {
   private readonly ring = new DialRing()
   /** For a dial that says `appFilter`: one ring per app, and which app is shown. One of each for this host, so every such
    *  dial here shows the same app and a pick on one turns them all. In memory only, as the ring. */
-  private readonly rings = new AppRings()
+  private readonly rings: AppRings
   /** Each app's own order, by app id, for its ring alone; the single ring takes none. In memory only, as the rings. */
   private readonly ranks = new Map<string, RingRank>()
   /** Each app's scope and the ring of its own it lists in, apart from the app's ring so dropping the scope gives that
@@ -740,6 +747,12 @@ export class DaemonCableHost implements CableHost {
     return on && capsLetters(on.source.capabilities(on.agent))
   }
 
+  /** The sentence the agent's source gives for words no route reaches, read as its caps are. */
+  voiceRefusal(agentId: string, opts: { apps?: boolean } = {}): string | undefined {
+    const on = this.onMachine(agentId, opts)
+    return on?.source.voiceRefusal?.(on.agent)
+  }
+
   hostOf(agentId: string, opts: { apps?: boolean } = {}): string | undefined {
     return this.onMachine(agentId, opts)?.agent.host
   }
@@ -753,6 +766,7 @@ export class DaemonCableHost implements CableHost {
   pickApp(app: string, cause: 'pick' | 'notice' = 'pick'): AppPick {
     if (cause === 'pick') this.wiring.appPicked?.()
     const answer = this.answerPick(app, cause)
+    if (cause === 'pick' && (answer === 'same' || answer === 'ignored')) this.wiring.appPickKept?.(answer)
     // A notice brings its own app with its open. Harness with no window is only its ring: no Desktop to bring.
     if (cause === 'pick' && (answer === 'tabs' || (answer === 'switched' && app !== 'harness'))) this.wiring.appBrought?.(app)
     return answer
@@ -979,7 +993,7 @@ export class DaemonCableHost implements CableHost {
     const rows = at < APP_LIMIT ? all.slice(0, APP_LIMIT) : [...all.slice(0, APP_LIMIT - 1), all[at]]
     return {
       shown,
-      apps: rows.map((a) => ({ id: a.id, name: appDisplayName(a.id), count: a.count, waiting: a.waiting })),
+      apps: rows.map((a) => ({ id: a.id, name: appDisplayName(a.id), count: a.count, waiting: a.waiting, working: a.working })),
     }
   }
 
@@ -989,7 +1003,7 @@ export class DaemonCableHost implements CableHost {
   private tabApps(agents: HostAgent[]): AppList {
     this.rings.update(agents, this.ranks)
     const rows = this.rings.apps().filter((a) => a.id !== 'harness').slice(0, APP_LIMIT)
-    return { shown: 'harness', apps: rows.map((a) => ({ id: a.id, name: appDisplayName(a.id), count: a.count, waiting: a.waiting })) }
+    return { shown: 'harness', apps: rows.map((a) => ({ id: a.id, name: appDisplayName(a.id), count: a.count, waiting: a.waiting, working: a.working })) }
   }
 
   /** How many agents the account has across every machine — the overview's number, sent beside the
@@ -1132,7 +1146,7 @@ export class DaemonCableHost implements CableHost {
         if (this.wiring.forked) this.wiring.forked(machineId, result.agentId, agentId)
         else this.wiring.opened?.(machineId, result.agentId)
       } else {
-        this.wiring.log(`cable: fork ${machineId}/${agentId} refused (${result.error}${result.detail ? `: ${result.detail}` : ''})`)
+        this.wiring.log(`cable: fork ${machineId}/${agentId} refused (${codeOrLength(result.error)})`)
       }
       return result
     })
@@ -1394,6 +1408,7 @@ export class DaemonCableHost implements CableHost {
    * their voice quota on words nobody will read.
    */
   async transcribe(pcm: Buffer, sampleRate: number, lang: string, signal?: AbortSignal): Promise<string> {
+    if (this.wiring.transcribe) return this.wiring.transcribe(pcm, sampleRate, lang, signal)
     // The text reaches the dial's glass as a toast, so it is addressed to the person holding it, not to
     // a terminal: signing in happens on the computer, and that is the one thing they need to know.
     const accessToken = this.wiring.accessToken

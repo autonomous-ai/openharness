@@ -684,7 +684,7 @@ describe('the home bridge service', () => {
     const pane = Number(await tmux.run('display-message', '-p', '-t', 'agent', '#{pane_pid}'))
     const { bridge, log } = start(h, {
       rows: () => [row({ pid: pane, name: 'sleep', exe: '/bin/sleep' })], tmux: undefined,
-      tmuxAt: async () => ({ state: 'adopted', path: binary, from: dirname(binary) }),
+      tmuxAt: async () => ({ state: 'adopted', path: binary, from: 'login shell' }),
     })
     await settle()
     expect(record(h).oldProcesses).toBe(1)

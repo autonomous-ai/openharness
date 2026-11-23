@@ -22,6 +22,45 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "required command is unavailable: $1"
 }
 
+# download <bytes> <url> <file>: https only, through any redirect too; a transfer under 1 KiB/s
+# for a minute ends instead of hanging the line. At most <bytes>, so a server that never stops
+# sending cannot fill the disk: curl's --max-filesize stops a transfer whose size the server
+# names, and before curl 8.4 (Ubuntu 22.04's 7.81) no other; head stops the rest, one byte past
+# <bytes> to show the body was larger. head writes the file, so the cap binds that write alone,
+# where a file size limit on curl binds all it writes and counts blocks of a size each shell
+# picks. A transport failure starts again from an empty file, 3 tries in all, as curl's --retry
+# cannot rewind a pipe; a body past its size is no such failure. curl's status comes out past
+# the pipe on fd 3.
+download() {
+  DOWNLOAD_TRY=1
+  while :; do
+    DOWNLOAD_STATUS="$({ if curl -fL --connect-timeout 15 --proto '=https' --proto-redir '=https' --speed-limit 1024 \
+      --speed-time 60 --max-filesize "$1" "$2" 3>&-; then echo 0 >&3; else echo "$?" >&3; fi \
+      | head -c "$(($1 + 1))" > "$3" 3>&-; } 3>&1)"
+    case "$DOWNLOAD_STATUS" in
+      0)
+        [ "$(wc -c < "$3" | tr -d '[:space:]')" -le "$1" ]
+        return
+        ;;
+      # No host, no connection, a cut or stalled transfer, an HTTP error (curl -f names a 5xx or 429 so, and a 404
+      # alike, which costs a few seconds retried), a failed TLS handshake, an empty reply, a failed send or receive.
+      6 | 7 | 18 | 22 | 28 | 35 | 52 | 55 | 56) [ "$DOWNLOAD_TRY" -lt 3 ] || return 1 ;;
+      *) return 1 ;;
+    esac
+    DOWNLOAD_TRY=$((DOWNLOAD_TRY + 1))
+    sleep 2
+  done
+}
+
+# A manifest is a few kilobytes: 1 MiB is far above any.
+MANIFEST_LIMIT=1048576
+
+# pgrep -f reads an extended regex over each command line: the path's own characters escaped, and
+# the path the command itself, not a word an editor or a tail names.
+command_pattern() {
+  printf '^%s( |$)\n' "$(printf '%s\n' "$1" | sed 's/[][\\.*^$+?(){}|]/\\&/g')"
+}
+
 PLATFORM="$(uname -s)"
 case "$PLATFORM" in
   Darwin) ;;
@@ -40,6 +79,10 @@ if [ "$PLATFORM" = "Darwin" ]; then
   DESTINATION="$APP_DIR/$APP_NAME"
 
   cleanup() {
+    # Stopped between the two moves below, whatever stopped it: the previous app goes back.
+    if [ -n "${BACKUP:-}" ] && [ -e "$BACKUP" ] && [ ! -e "$DESTINATION" ]; then
+      mv "$BACKUP" "$DESTINATION"
+    fi
     if [ -n "${STAGING_DIR:-}" ] && [ -d "$STAGING_DIR" ]; then
       rm -rf "$STAGING_DIR"
     fi
@@ -51,14 +94,18 @@ if [ "$PLATFORM" = "Darwin" ]; then
 
   mkdir -p "$APP_DIR"
   STAGING_DIR="$(mktemp -d "$APP_DIR/.harness-install.XXXXXX")" || fail "could not create an install staging directory in $APP_DIR"
-  trap cleanup EXIT HUP INT TERM
+  trap cleanup EXIT
+  # A trap that does not exit lets the script run on: Ctrl-C, a closed terminal or a kill stops it here.
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
 
   METADATA_FILE="$STAGING_DIR/metadata.json"
   ARCHIVE_FILE="$STAGING_DIR/Harness-macos.zip"
   UNPACKED_DIR="$STAGING_DIR/unpacked"
 
   printf '%s\n' "Fetching the latest Harness desktop release…"
-  curl -fL --retry 3 --connect-timeout 15 "$METADATA_URL" -o "$METADATA_FILE" \
+  download "$MANIFEST_LIMIT" "$METADATA_URL" "$METADATA_FILE" \
     || fail "could not download desktop metadata"
 
   metadata_value() {
@@ -89,12 +136,12 @@ if [ "$PLATFORM" = "Darwin" ]; then
     *[!0-9]* | '') fail "desktop metadata has an invalid archive size" ;;
   esac
 
-  if pgrep -f "$DESTINATION/Contents/MacOS/Harness" >/dev/null 2>&1; then
+  if pgrep -f "$(command_pattern "$DESTINATION/Contents/MacOS/Harness")" >/dev/null 2>&1; then
     fail "Harness is running from $DESTINATION. Quit it, then run this installer again."
   fi
 
   printf '%s\n' "Downloading Harness ${VERSION}…"
-  curl -fL --retry 3 --connect-timeout 15 "$ASSET_URL" -o "$ARCHIVE_FILE" \
+  download "$EXPECTED_SIZE" "$ASSET_URL" "$ARCHIVE_FILE" \
     || fail "could not download Harness $VERSION"
 
   ACTUAL_SIZE="$(wc -c < "$ARCHIVE_FILE" | tr -d '[:space:]')"
@@ -122,18 +169,14 @@ if [ "$PLATFORM" = "Darwin" ]; then
   lipo -archs "$EXECUTABLE" | tr ' ' '\n' | grep -Fx "$MACHINE_ARCH" >/dev/null \
     || fail "Harness $VERSION does not support this Mac architecture ($MACHINE_ARCH)"
 
-  # The staging directory lives in APP_DIR, so both moves remain on the same filesystem. If the
-  # second move fails, restore the previous app before reporting the failure.
+  # The staging directory lives in APP_DIR, so both moves remain on the same filesystem. A folder
+  # cannot replace another in one move: if the second move fails, or the script stops between the
+  # two, cleanup restores the previous app.
   BACKUP="$STAGING_DIR/previous-$APP_NAME"
   if [ -e "$DESTINATION" ]; then
     mv "$DESTINATION" "$BACKUP" || fail "could not prepare the existing Harness app for replacement"
   fi
-  if ! mv "$CANDIDATE" "$DESTINATION"; then
-    if [ -e "$BACKUP" ]; then
-      mv "$BACKUP" "$DESTINATION" || true
-    fi
-    fail "could not install Harness $VERSION"
-  fi
+  mv "$CANDIDATE" "$DESTINATION" || fail "could not install Harness $VERSION"
 
   printf '%s\n' "Harness $VERSION installed at $DESTINATION"
   open "$DESTINATION"
@@ -171,14 +214,22 @@ for command_name in curl sha256sum mktemp pgrep grep sed; do
 done
 
 mkdir -p "$APP_DIR"
-STAGING_DIR="$(mktemp -d "$APP_DIR/.harness-install.XXXXXX")" || fail "could not create an install staging directory in $APP_DIR"
-trap cleanup EXIT HUP INT TERM
+# A name made inside APP_DIR, not a path: a Linux folder name is any bytes, and Ubuntu 26.04's mktemp (uutils) refuses
+# a template that is not UTF-8.
+STAGING_NAME="$(cd "$APP_DIR" >/dev/null && mktemp -d .harness-install.XXXXXX)" \
+  || fail "could not create an install staging directory in $APP_DIR"
+STAGING_DIR="$APP_DIR/$STAGING_NAME"
+trap cleanup EXIT
+# A trap that does not exit lets the script run on: Ctrl-C, a closed terminal or a kill stops it here.
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 METADATA_FILE="$STAGING_DIR/metadata.json"
 CANDIDATE="$STAGING_DIR/Harness-linux-$RELEASE_ARCH.AppImage"
 
 printf '%s\n' "Fetching the latest Harness desktop release…"
-curl -fL --retry 3 --connect-timeout 15 "$METADATA_URL" -o "$METADATA_FILE" \
+download "$MANIFEST_LIMIT" "$METADATA_URL" "$METADATA_FILE" \
   || fail "could not download desktop metadata"
 
 # No `jq`/`plutil` dependency: the manifest is written by our own release script
@@ -217,12 +268,16 @@ case "$EXPECTED_SIZE" in
   *[!0-9]* | '') fail "desktop metadata has an invalid archive size" ;;
 esac
 
-if pgrep -f "$DESTINATION" >/dev/null 2>&1; then
+# Only this user's processes: the place, ~/.local/opt unless HARNESS_DESKTOP_APP_DIR says otherwise,
+# is this user's own.
+if pgrep -u "$(id -u)" -f "$(command_pattern "$DESTINATION")" >/dev/null 2>&1; then
   fail "Harness is running from $DESTINATION. Quit it, then run this installer again."
 fi
+# One move puts the file over a file; over a folder it would put it inside.
+[ ! -d "$DESTINATION" ] || fail "$DESTINATION is a folder. Move it away, then run this installer again."
 
 printf '%s\n' "Downloading Harness ${VERSION}…"
-curl -fL --retry 3 --connect-timeout 15 "$ASSET_URL" -o "$CANDIDATE" \
+download "$EXPECTED_SIZE" "$ASSET_URL" "$CANDIDATE" \
   || fail "could not download Harness $VERSION"
 
 ACTUAL_SIZE="$(wc -c < "$CANDIDATE" | tr -d '[:space:]')"
@@ -237,18 +292,9 @@ ACTUAL_SHA256="$(sha256sum "$CANDIDATE" | awk '{print $1}')"
 
 chmod +x "$CANDIDATE"
 
-# The staging directory lives in APP_DIR, so both moves remain on the same filesystem. If the
-# second move fails, restore the previous install before reporting the failure.
-BACKUP="$STAGING_DIR/previous-Harness.AppImage"
-if [ -e "$DESTINATION" ]; then
-  mv "$DESTINATION" "$BACKUP" || fail "could not prepare the existing Harness install for replacement"
-fi
-if ! mv "$CANDIDATE" "$DESTINATION"; then
-  if [ -e "$BACKUP" ]; then
-    mv "$BACKUP" "$DESTINATION" || true
-  fi
-  fail "could not install Harness $VERSION"
-fi
+# The staging directory lives in APP_DIR, on the same filesystem: one rename replaces the previous
+# install, so the place always holds one AppImage, the old or the new, whenever the script stops.
+mv -f "$CANDIDATE" "$DESTINATION" || fail "could not install Harness $VERSION"
 
 # Best-effort desktop integration — a missing icon/launcher entry is not worth failing the install
 # over, so none of this calls fail(). The AppImage carries its own icon and .desktop entry inside it,

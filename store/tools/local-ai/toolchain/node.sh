@@ -1,8 +1,13 @@
 # Harness's runtime folder, as the daemon resolves it: on Linux it is in the XDG state root unless the XDG
 # data root lacks the marker (.harness-root) and ~/.harness exists; a base that is not an absolute path is
-# ignored, and a trailing slash dropped.
+# ignored, and a trailing slash dropped. A relative ADAPTER_RUNTIME_DIR is under the home, as the CLI reads it: a setup
+# runs in its package.
 local_ai_runtime_dir() {
-  if [ -n "${ADAPTER_RUNTIME_DIR:-}" ]; then printf '%s\n' "$ADAPTER_RUNTIME_DIR"; return; fi
+  case "${ADAPTER_RUNTIME_DIR:-}" in
+    '') ;;
+    /*) printf '%s\n' "$ADAPTER_RUNTIME_DIR"; return ;;
+    *) printf '%s\n' "$HOME/$ADAPTER_RUNTIME_DIR"; return ;;
+  esac
   if [ "$(uname -s)" = Linux ]; then
     case "${XDG_DATA_HOME:-}" in /*) local_ai_data="${XDG_DATA_HOME%/}/harness" ;; *) local_ai_data="$HOME/.local/share/harness" ;; esac
     case "${XDG_STATE_HOME:-}" in /*) local_ai_state="${XDG_STATE_HOME%/}/harness" ;; *) local_ai_state="$HOME/.local/state/harness" ;; esac

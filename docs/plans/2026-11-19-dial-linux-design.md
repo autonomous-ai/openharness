@@ -187,7 +187,7 @@ run at its shell. So no variable decides whose pane it is: the process that made
 the hook's caller up its parents (`parentChain`'s walk and bound) while they run on the caller's tty, the first process
 on another tty or on none made it: the walk from the one table the open scan reads, `ps -axo pid=,ppid=,comm=`, and
 each process's tty from `ps -o tty= -p <pid>`, one at a time and only up to that first one (`scannedApp.ts`
-`readPtyOwner`, `ptyOwner`), as a tty column made every read of the table three times as slow on macOS and a `ps -p`
+`readPtyOwner`, `ptyMaker`), as a tty column made every read of the table three times as slow on macOS and a `ps -p`
 of two pids or more takes 53 ms there, of one 2.4 ms. Only a caller whose hints name a WezTerm, kitty or Zellij pane is
 read. WezTerm's pane is the agent's own when that is `wezterm-gui` or `wezterm-mux-server`
 (Linux cuts it to `wezterm-mux-ser`); kitty's when `kitty`; Zellij's when its server, `zellij`; macOS names each by its
@@ -216,8 +216,11 @@ All four are the vendors' own `.deb` packages, recorded in `cli/src/testing/reco
 are `code`, `cursor`, `claude-desktop` and `ChatGPT` (the ChatGPT package's `chatgpt` launcher execs `ChatGPT`), which
 the exe table maps to `vscode`, `cursor`, `claude` and `codex`. The window classes are each `.desktop` file's
 `StartupWMClass`: `com.microsoft.VSCode`, `Cursor` and `com.anthropic.Claude`. The ChatGPT app's `.desktop` file has
-none, so the raise has no class for `codex` and finds its window by pid only; that file also claims `http` and `https`,
-which makes it a browser candidate but changes nothing for `codex://`.
+none; its class is read from the app's own code (26.1117.41037: `desktopName` `chatgpt.desktop` and
+`app.setName("ChatGPT")`), so X11's WM_CLASS is `chatgpt.ChatGPT` and Wayland's app id `chatgpt`, and the raise finds
+`codex` by `ChatGPT` or `chatgpt`. A tap whose `codex://` link failed raises the app by that class, as macOS brings it by
+its bundle (§ 2.2). That file also claims `http` and `https`, which makes it a browser candidate but changes nothing for
+`codex://`.
 
 Each adapter's `paneOf` today needs a macOS bundle hint to know its app. On Linux it reads the same facts Linux
 gives: the app from the process scan (`place.app`, from `frontApp.ts`'s exe names) or the hook's own hints. Cursor's
@@ -268,6 +271,9 @@ fails or finds nothing answers false and the tap's own outcome stays the pane's.
 2. None found by pid: the app's window by its class, from the place's app (`windowClasses` in `frontApp.ts`, one fixed
    table beside its exe names: `vscode` → `com.microsoft.VSCode`, `wezterm` → `org.wezfurlong.wezterm`, …, with the
    lower-cased spelling some desktops use), as macOS raises an app by bundle. An app with no confirmed class has no row.
+   A row no process holds (a Claude app session or a ChatGPT app thread its app's own store lists) has no window the
+   observed source knows: its app is the one its tap's bundle names, so a failed link still raises that app by class
+   (the dial eval's X5).
 
 ### 2.3 How, per desktop
 
@@ -396,7 +402,9 @@ and reads as on a Mac. Where Linux forces a difference, this table names it and 
 | Fast user switching | as macOS (§ 1.3) | Asks logind (`loginctl`), read every 8 s, so the dial goes within about 10 s of a switch (2 s on macOS: two processes every 2 s on an idle daemon would cost more); without a seat the daemon keeps the dial, as a computer with no screen to switch. |
 | List (agents, states, rings, drawer, notices, `harness device notify`) | as macOS | None: hooks, the listener socket and the fleet are the same code. Herdr.app (Herdr Core) and cmux are macOS apps and have no Linux build. |
 | Speak (voice to Claude Code, Codex) | as macOS | Codex in the ChatGPT app takes `codex` from `PATH` (the app's own CLI is found only in macOS's bundle, `codexQueue.ts:154`). |
-| Type (answer, voice) into a pane | herdr, Orca, WezTerm (§ 1.5), Zellij, kitty (§ 3) | kitty only with remote control on (§ 3.3), as kitty requires. tmux types on neither. |
+| Type (answer, voice) into a pane | herdr, Orca, WezTerm (§ 1.5), Zellij, kitty (§ 3), each only in a terminal it made | kitty only with remote control on (§ 3.3), as kitty requires. tmux types on neither. An agent started from an Orca terminal or a herdr pane (VS Code, another terminal) has that pane held: a tap alone, logged `[device] orca · held` / `[device] herdr · held`; macOS the same. |
+| herdr inside a terminal | as macOS: the page of the app holding herdr's client (WezTerm, kitty, Ghostty), else the Other page | Linux reads herdr's clients from `ss -xn src '*/herdr-client.sock'` and `/proc/<pid>/fd`, macOS from `lsof`: `lsof` is not installed by default on several distributions, and Linux's prints no unix-socket peer without `+E`. herdr's client inside the person's tmux or Zellij is not placed, on macOS and Linux: herdr 0.9.5 strips `TMUX`, `TMUX_PANE`, `ZELLIJ`, `ZELLIJ_SESSION_NAME`, `ZELLIJ_PANE_ID` (and `KITTY_WINDOW_ID`, `WEZTERM_PANE`) from its panes, so the agent is on the Other page and a tap focuses its herdr pane. In a terminal with no page, a tap raises the client's window where the desktop raises by process (X11, sway, KDE, Hyprland), not GNOME. Ghostty on Linux, GNOME Terminal, Ptyxis, Konsole, Alacritty, foot and xterm offer no tab API: the tab holding the client is not selected. |
+| Swipe/rest selects the WezTerm or kitty tab of a herdr or tmux client | as macOS | `wezterm cli list` and `activate-pane`; kitty's `kitten @ focus-window --match pid:`, only with remote control on. |
 | Tap: the pane inside its host | as macOS | None. |
 | Tap: the window comes forward | X11, sway, Hyprland, KDE; GNOME Wayland with the extension (§ 2) | GNOME on Wayland lets no other program raise a window without a Shell extension; with it, by app class not window. Elsewhere the pane is chosen and the window stays where it is. |
 | Tap: app links (Claude app, ChatGPT app, VS Code, Cursor tab) | where the app is installed and registers its link (§ 1.6) | The Claude and ChatGPT apps are beta/preview on Linux; a link with no app does nothing, as a Mac without the app. |

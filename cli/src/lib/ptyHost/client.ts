@@ -47,6 +47,14 @@ export type PtyHostCallResult<T> =
 export type PtyHostStreamConnection = Duplex
 
 const DEFAULT_TIMEOUT_MS = 5_000
+/** What the host itself may wait before a respawn replies (pty/src/panes.rs): RESPAWN_GRACE 2 s for the old child,
+ *  EXIT_REPORT 1 s for its exit, and pane.rs `finish`'s 1 s more on Windows. */
+const HOST_PANE_WAITS_MS = 4_000
+/** A cold console and engine start beside them: #4517's VM run reopened six panes after a reboot and confirmed every
+ *  agent within 23 s, while two respawns missed 5 s. Defender's first-run scan and boot load are outside causes. */
+const COLD_START_MS = 11_000
+/** `create` and `respawn`, from the request's send. A move's own bounds on both are this (hostMove/moveAgent.ts). */
+export const PANE_START_TIMEOUT_MS = HOST_PANE_WAITS_MS + COLD_START_MS
 /** The host gives a hello 10 s (server.rs HELLO_TIMEOUT); its reply is one short line. */
 const MAX_HELLO_REPLY = 64 * 1024
 
@@ -252,7 +260,10 @@ export class PtyHostClient {
    * Send one request and wait for its reply, at most `timeoutMs`. The reply type follows the op:
    * `call({ op: 'inventory' })` gives `{ panes }`.
    */
-  call<O extends PtyOp>(op: O, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<PtyHostCallResult<PtyOpReplies[O['op']]>> {
+  call<O extends PtyOp>(
+    op: O,
+    timeoutMs = op.op === 'create' || op.op === 'respawn' ? PANE_START_TIMEOUT_MS : DEFAULT_TIMEOUT_MS,
+  ): Promise<PtyHostCallResult<PtyOpReplies[O['op']]>> {
     if (this.ended || !this.socket.writable) {
       return Promise.resolve({ state: 'failed', dispatch: 'not_started', code: 'not_connected', reason: 'the pty host connection is closed' })
     }

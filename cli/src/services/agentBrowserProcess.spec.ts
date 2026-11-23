@@ -132,6 +132,19 @@ describe('the agent browser in its own process', () => {
     log.mockRestore()
   })
 
+  it('names a legacy move the core refused in its own words by their length, never the words', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { options } = setup()
+    const query = vi.fn(async (name: string) => name === 'move_browser' ? { error: 'peer said /Users/sentinel/x' } : { agents: [] })
+    options.onConnected!({ query })
+    options.onEvent!({ kind: 'moved', from: 'a1', session: { agentId: 'b1' }, on: true })
+    await vi.waitFor(() => expect(log).toHaveBeenCalledWith(expect.stringContaining('browser_move_failed')))
+    const lines = log.mock.calls.map((call) => call.map(String).join(' ')).join('\n')
+    expect(lines).not.toContain('sentinel')
+    expect(lines).toContain('agent browser b1: browser_move_failed (text(27))')
+    log.mockRestore()
+  })
+
   it.each(['before connection', 'before move completes', 'before answer'] as const)('a legacy move disconnected %s never restores a stale destination', async when => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const { options, move, heard } = setup()

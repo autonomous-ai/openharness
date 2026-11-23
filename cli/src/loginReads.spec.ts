@@ -8,10 +8,11 @@
  * added anywhere, in any spelling these markers catch, fails here. When this fails, ask the CLI that owns the login
  * (`claude auth status`, `codex login status`, the status line, `codex app-server`); do not widen the rule.
  */
-import { readdirSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
+import { sourceFiles } from './testing/sourceFiles.js'
 
 const CLI = resolve(__dirname, '..')
 
@@ -33,21 +34,10 @@ const NAME_MARKERS = new Set(['claudeAiOauth', 'oauthAccount'])
 const isGrok = (text: string, at: number) => /GROK/.test(text.slice(Math.max(0, at - 400), at + 400))
 
 function sources(): string[] {
-  const found: string[] = []
-  const walk = (dir: string): void => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const path = join(dir, entry.name)
-      if (entry.isDirectory()) {
-        if (!['node_modules', '__fixtures__', 'fixtures', '__snapshots__', 'testing'].includes(entry.name)) walk(path)
-        continue
-      }
-      if (!/\.(ts|mjs)$/.test(entry.name) || /\.(spec|test)\.ts$/.test(entry.name) || entry.name.endsWith('.d.ts')) continue
-      found.push(path)
-    }
-  }
-  walk(join(CLI, 'src'))
-  walk(join(CLI, 'hook'))
-  return found
+  return ['src', 'hook'].flatMap((folder) => sourceFiles(join(CLI, folder))
+    .filter((file) => !file.split('/').slice(0, -1).some((name) => ['node_modules', '__fixtures__', 'fixtures', '__snapshots__', 'testing'].includes(name))
+      && /\.(ts|mjs)$/.test(file) && !/\.(spec|test)\.ts$/.test(file) && !file.endsWith('.d.ts'))
+    .map((file) => join(CLI, folder, file)))
 }
 
 function loginReadsIn(path: string): string[] {

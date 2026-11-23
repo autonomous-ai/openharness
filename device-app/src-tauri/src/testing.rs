@@ -4,7 +4,7 @@ use crate::cli::{HarnessCli, find_cli};
 use crate::types::MemoryLog;
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -68,9 +68,7 @@ impl Fake {
 
     /// The script as the override, with the test's own PATH, where the script's tools are.
     pub fn cli(&self) -> HarnessCli {
-        let path_var = env::var_os("PATH");
-        let invocation = find_cli(self.folder.path(), path_var.as_deref(), Some(&self.program())).unwrap();
-        HarnessCli::new(invocation, self.log.clone())
+        cli_at(&self.program(), self.log.clone())
     }
 
     fn file(&self, name: &str) -> PathBuf {
@@ -80,6 +78,14 @@ impl Fake {
     fn lines(&self, name: &str) -> Vec<String> {
         fs::read_to_string(self.file(name)).unwrap_or_default().lines().map(String::from).collect()
     }
+}
+
+/// The fake at `program` as the override, its folder as home, with the test's own PATH, where the script's tools are.
+fn cli_at(program: &Path, log: Arc<MemoryLog>) -> HarnessCli {
+    let path_var = env::var_os("PATH");
+    let home = program.parent().expect("the fake is in a folder");
+    let invocation = find_cli(home, path_var.as_deref(), Some(program)).unwrap();
+    HarnessCli::new(invocation, log)
 }
 
 /// Whether the process is there (a zombie still is).
@@ -98,4 +104,80 @@ pub fn wait_gone(pid: i32) -> bool {
         thread::sleep(Duration::from_millis(10));
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::{Cli, spawn_lock};
+    use std::io;
+    use std::process::{Command, Stdio};
+
+    /// The fake program a runner starts; unset, the test is no runner.
+    const RUNNER: &str = "FAKE_HARNESS_RUNNER";
+
+    /// What the app does with the fake, in a process the test can kill: it starts the watch as the app does, in a
+    /// process group of its own, and stays until its stdin ends. The test holds that pipe, so a runner goes with the
+    /// test however the test ends, and never outlives a killed run itself.
+    #[test]
+    #[ignore = "run only by a_fake_ends_with_its_parent"]
+    fn a_runner_of_the_fake() {
+        let Some(program) = env::var_os(RUNNER) else { return };
+        // The fake's own folder as home: a kill runs no destructor, so a temp folder of the runner's would stay.
+        let _watch = cli_at(Path::new(&program), Arc::default()).spawn(&["hardware", "watch", "--json"]).unwrap();
+        io::copy(&mut io::stdin(), &mut io::sink()).unwrap();
+    }
+
+    /// A killed `cargo test` never reaches the fake, in a group of its own: the fake must see for itself that the
+    /// process that started it has gone, or it waits for ever.
+    #[test]
+    fn a_fake_ends_with_its_parent() {
+        let fake = Fake::new();
+        fake.script("hardware watch --json", &[r#"{"attached":false}"#, "@wait never"]);
+        let mut runner = {
+            // As around every spawn (cli::spawn_lock): on a Mac the runner would otherwise keep the pipes of a child
+            // another test starts at that moment, and hold that child's stdin and output open while it runs.
+            let _spawning = spawn_lock();
+            Command::new(env::current_exe().unwrap())
+                .args(["--exact", "testing::tests::a_runner_of_the_fake", "--ignored"])
+                .env(RUNNER, fake.program())
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap()
+        };
+        let end = Instant::now() + Duration::from_secs(5);
+        let pid = loop {
+            if let Some(&pid) = fake.pids().first() {
+                break pid;
+            }
+            assert!(Instant::now() < end, "the runner never started the fake");
+            thread::sleep(Duration::from_millis(10));
+        };
+        runner.kill().unwrap();
+        // Reaped, or the fake still sees its parent, as a zombie.
+        runner.wait().unwrap();
+        let gone = wait_gone(pid);
+        if !gone {
+            // SAFETY: the fake is still there, so its group, whose id is its pid, is still its own.
+            unsafe { libc::kill(-pid, libc::SIGKILL) };
+        }
+        assert!(gone, "the fake outlived its parent");
+    }
+
+    /// A test's folder goes when the test ends, however it ends: a fake whose folder has gone has nothing left to wait
+    /// for.
+    #[test]
+    fn a_fake_ends_with_its_folder() {
+        let fake = Fake::new();
+        fake.script("hardware watch --json", &[r#"{"attached":false}"#, "@wait never"]);
+        let mut watch = fake.cli().spawn(&["hardware", "watch", "--json"]).unwrap();
+        assert_eq!(watch.line(Duration::from_secs(5)), Ok(Some(r#"{"attached":false}"#.to_string())));
+        let pid = fake.pids()[0];
+        drop(fake);
+        let gone = wait_gone(pid);
+        watch.killer().kill();
+        assert!(gone, "the fake outlived its folder");
+    }
 }

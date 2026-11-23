@@ -141,6 +141,37 @@ describe('PtyHostBackend prepare', () => {
     expect(await backend.prepare({ ownedPanes: new Map() }))
       .toEqual({ state: 'unavailable', code: 'PTY_HOST_UNAVAILABLE', reason: 'incompatible: wrong token' })
   })
+  // Why a host was not reached goes back whole to whoever asks; the log keeps its code (AGENTS.md rule 7).
+  it('names an unreached host by its code, never by its words', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const reason = 'could not start /Users/sentinel/harness-pty: EACCES'
+      const unreached = new PtyHostBackend({ home: '/tmp/h', launch: async () => ({ unavailable: reason, code: 'PTY_HOST_UNAVAILABLE' }) })
+      expect(await unreached.prepare({ ownedPanes: new Map() })).toEqual({ state: 'unavailable', code: 'PTY_HOST_UNAVAILABLE', reason })
+      const refused = new PtyHostBackend({ home: '/tmp/h', launch: async () => ({ incompatible: 'refused: /Users/sentinel' }) })
+      expect(await refused.prepare({ ownedPanes: new Map() })).toMatchObject({ reason: 'refused: /Users/sentinel' })
+      expect(error.mock.calls).toEqual([['[terminal] ptyhost: unavailable (PTY_HOST_UNAVAILABLE)'], ['[terminal] ptyhost: unavailable (incompatible)']])
+    } finally { error.mockRestore() }
+  })
+
+  it('names a drain host that has gone, or does not answer, without its reason\'s words', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const reason = 'there is no /Users/sentinel/run/p1.json'
+      const gone = new PtyHostBackend({ home: '/tmp/h', instance: 'p1', launch: async () => ({ unavailable: reason, code: 'PTY_HOST_UNAVAILABLE', pid: null, missing: true }) })
+      expect(await gone.prepare({ ownedPanes: new Map() })).toEqual({ state: 'ready' })
+      expect(gone.hostGone).toBe(reason)
+      const silent = new PtyHostBackend({
+        home: '/tmp/h', instance: 'p1', hostProcess: { alive: () => true, rows: async () => null },
+        launch: async () => ({ unavailable: 'nothing answers at /Users/sentinel', code: 'PTY_HOST_UNAVAILABLE', pid: 5, missing: false }),
+      })
+      expect(await silent.prepare({ ownedPanes: new Map() })).toEqual({ state: 'ready' })
+      silent.dispose()
+      expect(log.mock.calls).toEqual([[`[terminal] ptyhost: draining p1 has gone (text(${reason.length}))`]])
+      expect(error.mock.calls).toEqual([['[terminal] ptyhost: draining p1 unavailable (PTY_HOST_UNAVAILABLE); reconnecting']])
+    } finally { log.mockRestore(); error.mockRestore() }
+  })
 })
 
 describe('PtyHostBackend create', () => {
@@ -998,6 +1029,22 @@ describe('PtyHostBackend host connection', () => {
     expect(launch).toHaveBeenCalledTimes(10)
     await vi.advanceTimersByTimeAsync(1)
     expect(launch).toHaveBeenCalledTimes(11)
+  })
+
+  it('names a failed reconnect by its code, never by the error\'s words', async () => {
+    vi.useFakeTimers()
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const first = hostClient(10)
+    const { backend } = reconnecting([first, new Error('spawn /Users/sentinel/harness-pty EACCES')])
+    await backend.prepare({ ownedPanes: new Map() })
+    first.lose()
+    await vi.advanceTimersByTimeAsync(1_000)
+    backend.dispose()
+    expect(error.mock.calls).toEqual([
+      ['[terminal] ptyhost: lost the connection to the host; reconnecting'],
+      ['[terminal] ptyhost: reconnect failed (PTY_HOST_UNAVAILABLE)'],
+    ])
   })
 
   it('a host that dies within 30 s of the connection keeps the growing delay', async () => {

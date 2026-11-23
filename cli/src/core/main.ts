@@ -48,7 +48,7 @@ import { join } from 'path'
 import { execFile, spawn } from 'child_process'
 import { createServer, type Server } from 'http'
 import { homedir, hostname } from 'os'
-import { env } from '../config/env.js'
+import { backendName, env } from '../config/env.js'
 import { VERSION } from '../version.js'
 import { isLocalOnly, withoutUpdate } from '../lib/cardUpdate.js'
 import { elapsedSecondsOf } from '../lib/footerTimer.js'
@@ -64,7 +64,7 @@ import { engineSessionTitle } from '../lib/sessionTitle.js'
 import { machineNames } from '../lib/machineNames.js'
 import { engineHooks as engineHookFacets } from '../engines/hooks.js'
 import type { LiveFor } from '../engines/facets/live.js'
-import { DAEMON_LOG_FILE, PID_FILE, daemonPort, isAlive, readPid, removePidFileIf, LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabel, writePidFile } from '../lib/daemonState.js'
+import { DAEMON_LOG_FILE, PID_FILE, daemonPort, isAlive, readPid, removePidFileIf, LEGACY_LOG_FILE, MACHINE_NAME_FILE, failForegroundStart, tildify, computerId, thisDeviceLabel, writePidFile } from '../lib/daemonState.js'
 import { atomicWriteFile } from '../lib/secureState.js'
 import { clearSafeModeMarker, safeModeDisposition, safeModeStatusBody, SafeModeRequest, writeSafeModeMarker } from '../lib/daemonSafeMode.js'
 import { awakeTimeout } from '../lib/sleepAware.js'
@@ -84,7 +84,7 @@ import { HERMES_SYSTEM_MANAGED_DIR, type GridLaunchMachine } from '../lib/gridLa
 import { writeGridConfigDir } from '../lib/gridConfigDir.js'
 import { clearDeleted, isRecentlyDeleted, markDeleted } from '../lib/deletedSessions.js'
 import { findLiveSession, findResumedTranscript } from '../lib/sessionRepair.js'
-import { openclawStateDir } from '../lib/openclawStore.js'
+import { openclawStateDir, openclawUserRowSince } from '../lib/openclawStore.js'
 import { processSessionOf } from '../engines/sessionStores.js'
 import { createHandoffDependencies } from './handoffDependencies.js'
 import { TmuxBackend } from '../lib/tmuxBackend.js'
@@ -278,7 +278,8 @@ import { RuntimeProfileState, type RuntimeModelOption } from '../lib/runtimeProf
 import { createRuntimeProfiles } from './engines/runtimeProfiles.js'
 import { createRuntimeTransport } from './engines/runtimeTransport.js'
 import { RuntimeProfileController } from '../lib/runtimeControl.js'
-import { installTimestampedConsole, sid, errorKind, prepareLogFile, trimLogFile, LOG_CHECK_INTERVAL_MS } from '../lib/log.js'
+import { installTimestampedConsole, sid, errorKind, prepareLogFile, trimLogFile, LOG_CHECK_INTERVAL_MS, ts } from '../lib/log.js'
+import { enterHome } from '../lib/workingFolder.js'
 
 // Daemon stdout/stderr. Capped at LOG_MAX_BYTES — see prepareLogFile/trimLogFile in lib/log.ts.
 const LOG_FILE = DAEMON_LOG_FILE
@@ -1351,6 +1352,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     nativeActivity: (session) => nativeControls.activity(session),
     withheld: (sessionId) => turnHooksRef?.withheld(sessionId) ?? false,
     atWork: (sessionId) => turnHooksRef?.atWork(sessionId) ?? false,
+    // Declared further down: read when a claim starts, never now.
+    claimed: (sessionId) => turnBeats.watchClaim(sessionId),
   })
   const runtimeActivity = activity.runtimeActivity
   const turnActivity = activity.turnActivity
@@ -1481,6 +1484,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     moveGate,
     // Its waitingFor changed: every window gets the agent's frame again.
     sync: (id) => { const session = registry.resolve(id); if (session) syncSession(session) },
+    // A first task typed stays on its row until a turn takes it (core/input.ts). Typed again as the binding pass types it,
+    // once the pass's registry transaction commits (core/agents/bind.ts `takeFirstTask`).
+    firstTask: {
+      untype: (agentId, text) => registry.untypeFirstTask(agentId, text),
+      retype: (agentId) => registry.afterTransaction(() => registry.takeFirstTask(agentId)),
+      taken: (agentId) => registry.firstTaskTaken(agentId),
+    },
     // Claude Code's and Codex's readers start on demand in a process of their own: a message waits for its engine's (26 s at load 40).
     engineStarting: (engine) => isolatedScreen(engine) ? serviceLinksRef?.whenStarting(READER_SERVICES[engine as ReaderEngine]) ?? null : null,
   })
@@ -2047,7 +2057,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     syncRecapPool,
     input,
     // A first task is the person's own message, which the controller keeps from its hand-over until a turn takes it.
-    submitFirstTask: (agentId, task) => inputs.submitAgent(agentId, task),
+    submitFirstTask: (agentId, task) => input.submitFirstTask(agentId, task),
     deviceInput,
     homes: { copilot: env.COPILOT_HOME, grok: env.GROK_HOME, agy: env.AGY_HOME },
     // OpenClaw's session key is on its TUI's footer and nowhere else. The scrollback above the screen keeps its title,
@@ -2064,6 +2074,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     openclawPaneDue: (sessionId) => otherStreams.paneDue(sessionId),
     openclawStateDir: (pid) => openclawStateDir(pid),
+    // A first task typed before a restart is settled by OpenClaw's own store: a user row since it was typed.
+    openclawUserRowSince,
     followsLive: (sessionId) => otherStreams.follows(sessionId),
     hermesTerminal: createHermesTerminal({
       platform: process.platform,
@@ -2204,6 +2216,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // handoff. Informational: nothing should build readiness on a field the server stops serving.
       restarting: updateHandoff.restarting(),
       discoveryReady,
+      // Discovery passes completed since start: what a test waits on to know a pass looked after its change.
+      discoveryPasses: agentReconciler.passes,
       discoveryError: discoveryError ?? (terminalUnavailable ? `${terminalUnavailable.backend} unavailable: ${terminalUnavailable.reason}` : null),
       // Present only when start-up failed and this daemon is holding the machine open until a fix
       // arrives. Clients key on `discoveryReady`; this says WHY, in one word, for a person reading it.
@@ -3184,7 +3198,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // would let a long-lived, chatty daemon run unbounded between restarts.
   // A core run by harnessd leaves this to its master, which outlives it (harnessd/master.ts).
   const logTrimTimer = coreLink.supervised ? undefined : setInterval(() => {
-    if (trimLogFile(LOG_FILE)) console.log(`[log] ${tildify(LOG_FILE)} hit its size cap — dropped the oldest half`)
+    if (trimLogFile(LOG_FILE)) console.log('[log] the daemon\'s log hit its size cap — dropped the oldest half')
   }, LOG_CHECK_INTERVAL_MS)
   logTrimTimer?.unref?.() // never hold the event loop open for log upkeep
 
@@ -3193,7 +3207,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // (`restartDaemonForIdentity`), so nothing here has to watch for one arriving.
   if (session) {
     backend.connect()
-    console.log(`[cli] dialing ${env.BACKEND_WS_URL}/api/adapter-ws · watching registered sessions for ${ENGINES.length} engines`)
+    console.log(`[cli] dialing ${backendName(env.BACKEND_WS_URL)} · watching registered sessions for ${ENGINES.length} engines`)
   } else {
     backend.serveThisComputerOnly()
     console.log(`[cli] not signed in — serving this computer only · watching registered sessions for ${ENGINES.length} engines`)
@@ -3416,20 +3430,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 }
 
 /**
- * A start-up that threw, and does not stay up: only its kind goes to the log, which Export logs sends, never its words
- * or its stack. The pid file goes if it is this core's: one left naming a process that is gone, the next
- * `harness start` would refuse on.
- */
-const failStart = (err: unknown, code: number): never => {
-  // The one a person meets starting by hand (`harness start -f`, `harness login`) says why, in fixed words: its own
-  // words name the socket's path.
-  const why = (err as { code?: unknown } | null | undefined)?.code === 'EADDRINUSE' ? ' · another Harness daemon serves this data folder' : ''
-  console.error(`Failed to start adapter: ${errorKind(err)}${why}`)
-  removePidFileIf(process.pid)
-  process.exit(code)
-}
-
-/**
  * The daemon's start-up threw. STAY UP anyway, waiting for a fix.
  *
  * Exiting here is what made one bad build unrecoverable: the desktop app answers a dead port by running
@@ -3452,7 +3452,7 @@ const enterSafeMode = (err: unknown): void => {
     // Under harnessd, said for good: any other exit, the master restarts, and a core that another daemon
     // keeps from running was restarted for as long as its master lived (e2e/twodaemons.e2e.ts). Except
     // what stands in the way is leaving too: then the master starts this core again.
-    failStart(err, coreLink.supervised && !disposition.retry ? CORE_EXIT_STOP : 1)
+    failForegroundStart(err, coreLink.supervised && !disposition.retry ? CORE_EXIT_STOP : 1)
   }
   // The marker keeps the stack, for `harness status`; the log, which Export logs sends, gets only the kind.
   const detail = err instanceof Error ? (err.stack ?? err.message) : String(err)
@@ -3533,9 +3533,13 @@ export function runCore(scriptPath: string): void {
 
 /** `harness start -f` with `HARNESS_NO_MASTER=1`, and a start under tsx: the core alone, in the process of the command that asked for it. */
 export function runCoreInForeground(session: AuthSession | null, scriptPath: string): Promise<void> {
+  // The core with no master (HARNESS_NO_MASTER=1, a start from the sources) works in the home too: started in a folder
+  // deleted since (the firmware flash's worktree), it failed every read of its folder (lib/workingFolder.ts).
+  const homeLine = enterHome()
+  if (homeLine) console.log(`${ts()} ${homeLine}`)
   holdHarnessdEnv()
   dropAgentSessionEnv()
   SCRIPT_PATH = scriptPath
-  // Never the command's `onError`, which prints the error whole: this process is the daemon, and that is its log.
-  return runForeground(session).catch((err: unknown) => failStart(err, 1))
+  // How a daemon's start fails, not the command's `onError`: this process is the daemon, and what it prints is its log.
+  return runForeground(session).catch((err: unknown) => failForegroundStart(err))
 }

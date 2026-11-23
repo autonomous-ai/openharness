@@ -48,7 +48,7 @@ function store() {
     writeFileSync(path, JSON.stringify({ sessionId: local(n), cliSessionId: cli(n), cwd: '/work/away', lastActivityAt: T }))
     return path
   }
-  return { dir, fixture, put, text, elsewhere, reader: new ClaudeAppStore(root) }
+  return { dir, fixture, put, text, elsewhere, reader: new ClaudeAppStore([root]) }
 }
 type Store = ReturnType<typeof store>
 
@@ -66,7 +66,10 @@ function tree(folder: string): Array<[string, number, number]> {
   })
 }
 
-describe.skipIf(process.platform === 'win32')('the Claude app\'s store', () => {
+/** FIFOs, links any user can make and a mode that refuses the owner's read are POSIX's: the cases of them skip on Windows. */
+const POSIX = process.platform !== 'win32'
+
+describe('the Claude app\'s store', () => {
   describe('fields', () => {
     it('a session gives its five fields and nothing else', async () => {
       const s = store()
@@ -131,8 +134,10 @@ describe.skipIf(process.platform === 'win32')('the Claude app\'s store', () => {
     it.each<[string, (s: Store) => void]>([
       ['half a JSON text (the app mid-write)', (s) => s.text(2, `{"sessionId":"${local(2)}","cliSessionId":"${cli(2)}","cwd":"/wo`)],
       ['a file of 1 MiB + 1 byte', (s) => s.put(2, {}, { bytes: MAX_FILE_BYTES + 1 })],
-      ['a link named local_….json to a good file elsewhere', (s) => symlinkSync(s.elsewhere(2), join(s.fixture.org(), `${local(2)}.json`))],
-      ['a FIFO named local_….json', (s) => execFileSync('mkfifo', [join(s.fixture.org(), `${local(2)}.json`)])],
+      ...(POSIX ? [
+        ['a link named local_….json to a good file elsewhere', (s) => symlinkSync(s.elsewhere(2), join(s.fixture.org(), `${local(2)}.json`))],
+        ['a FIFO named local_….json', (s) => execFileSync('mkfifo', [join(s.fixture.org(), `${local(2)}.json`)])],
+      ] as Array<[string, (s: Store) => void]> : []),
       ['a folder named local_….json', (s) => mkdirSync(join(s.fixture.org(), `${local(2)}.json`))],
       ['a sessionId of another local id', (s) => s.put(2, { more: { sessionId: local(9) } })],
       ['a cliSessionId of x', (s) => s.put(2, { cliSessionId: 'x' })],
@@ -174,7 +179,7 @@ describe.skipIf(process.platform === 'win32')('the Claude app\'s store', () => {
     })
 
     // Root reads a file of mode 000.
-    it.skipIf(process.getuid?.() === 0)('a file that could not be read is read again at the next read', async () => {
+    it.skipIf(!POSIX || process.getuid?.() === 0)('a file that could not be read is read again at the next read', async () => {
       const s = store()
       s.put(1)
       const path = s.put(2)
@@ -190,7 +195,7 @@ describe.skipIf(process.platform === 'win32')('the Claude app\'s store', () => {
 
     // A failed read is not held, so were it counted in the 256 parses, 256 of them first in the walk would cut every read
     // before the same files, each asking for one more read: the source's again, every 250 ms, for good.
-    it.skipIf(process.getuid?.() === 0)('files that could not be read do not use up the 256 parses', async () => {
+    it.skipIf(!POSIX || process.getuid?.() === 0)('files that could not be read do not use up the 256 parses', async () => {
       const s = store()
       for (const n of range(1, MAX_PARSES)) chmodSync(s.put(n), 0o000)
       s.put(MAX_PARSES + 1)
@@ -209,7 +214,7 @@ describe.skipIf(process.platform === 'win32')('the Claude app\'s store', () => {
       expect(read.skipped).toBe(4)
     })
 
-    it('a file swapped for a link between its stat and its read is not followed', async () => {
+    it.skipIf(!POSIX)('a file swapped for a link between its stat and its read is not followed', async () => {
       const s = store()
       const path = s.put(1)
       await s.reader.folders()
@@ -221,7 +226,7 @@ describe.skipIf(process.platform === 'win32')('the Claude app\'s store', () => {
       expect(read.skipped).toBe(1)
     })
 
-    it('a file swapped for a FIFO between its stat and its read is not waited on', async () => {
+    it.skipIf(!POSIX)('a file swapped for a FIFO between its stat and its read is not waited on', async () => {
       const s = store()
       const path = s.put(1)
       await s.reader.folders()
@@ -406,7 +411,7 @@ describe.skipIf(process.platform === 'win32')('the Claude app\'s store', () => {
       expect(read.over).toBe(6)
     })
 
-    it('an account or an org folder that is a link is not read', async () => {
+    it.skipIf(!POSIX)('an account or an org folder that is a link is not read', async () => {
       const s = store()
       s.put(1)
       const away = claudeAppFixture(join(s.dir, 'away'))
@@ -414,13 +419,13 @@ describe.skipIf(process.platform === 'win32')('the Claude app\'s store', () => {
       symlinkSync(join(away.root, ACCOUNT), join(s.fixture.root, 'linked-account'))
       symlinkSync(join(away.root, ACCOUNT, ORG), join(s.fixture.root, ACCOUNT, 'linked-org'))
       expect(await s.reader.folders()).toEqual({
-        accounts: [join(s.fixture.root, ACCOUNT)], orgs: [join(s.fixture.root, ACCOUNT, ORG)],
+        roots: [s.fixture.root], accounts: [join(s.fixture.root, ACCOUNT)], orgs: [join(s.fixture.root, ACCOUNT, ORG)],
       })
       await s.reader.files()
       expect(localIds(await s.reader.read())).toEqual([local(1)])
     })
 
-    it('a root that is a link, a file or not there gives no folders, and a read of nothing', async () => {
+    it.skipIf(!POSIX)('a root that is a link, a file or not there gives no folders, and a read of nothing', async () => {
       const s = store()
       s.put(1)
       const linked = join(s.dir, 'linked')
@@ -428,7 +433,7 @@ describe.skipIf(process.platform === 'win32')('the Claude app\'s store', () => {
       const file = join(s.dir, 'file')
       writeFileSync(file, '')
       for (const root of [linked, file, join(s.dir, 'none')]) {
-        const reader = new ClaudeAppStore(root)
+        const reader = new ClaudeAppStore([root])
         expect(await reader.folders()).toBeUndefined()
         await reader.files()
         expect(await reader.read()).toEqual(NOTHING)
@@ -436,6 +441,106 @@ describe.skipIf(process.platform === 'win32')('the Claude app\'s store', () => {
       // A root that left takes every file it held with it.
       expect(localIds(await loaded(s.reader))).toEqual([local(1)])
       rmSync(s.fixture.root, { recursive: true })
+      expect(await s.reader.folders()).toBeUndefined()
+      expect(await s.reader.read()).toEqual(NOTHING)
+    })
+  })
+
+  describe('two roots, as Windows has', () => {
+    /** Two roots in a temp folder of their own, neither made until a session is written to it, and a reader of both,
+     *  the first root first. */
+    function two() {
+      const dir = mkdtempSync(join(tmpdir(), 'claude-app-store-'))
+      made.push(dir)
+      const rootIn = (name: string) => {
+        const fixture = claudeAppFixture(join(dir, name, 'claude-code-sessions'))
+        /** Writes the n-th session at `T - n * 1000`, its lastActivityAt the same, unless told otherwise. */
+        const put = (n: number, over: Partial<FixtureSession> = {}, place: FixturePlace = {}) => fixture.write(
+          { localId: local(n), cliSessionId: cli(n), cwd: `/work/p${n}`, lastActivityAt: T - n * 1000, ...over },
+          { mtime: T - n * 1000, ...place },
+        )
+        return { fixture, put }
+      }
+      const first = rootIn('first')
+      const second = rootIn('second')
+      return { first, second, reader: new ClaudeAppStore([first.fixture.root, second.fixture.root]) }
+    }
+
+    it('the sessions of both are listed, newest first, at most 16 in all', async () => {
+      const s = two()
+      for (const n of range(1, 20)) (n % 2 ? s.first : s.second).put(n)
+      const read = await loaded(s.reader)
+      expect(localIds(read)).toEqual(range(1, MAX_LISTED).map(local))
+    })
+
+    it('a name in both roots is one row, the first root\'s, and the second\'s copy is neither parsed nor skipped', async () => {
+      const s = two()
+      s.first.put(1, { title: 'First' })
+      // Newer than the first root's copy: the first root's is kept all the same.
+      s.second.put(1, { title: 'Second', lastActivityAt: T }, { mtime: T })
+      s.second.put(2)
+      const read = await loaded(s.reader)
+      expect(read.sessions.map((session) => [session.localId, session.title])).toEqual([[local(1), 'First'], [local(2), undefined]])
+      expect(read).toMatchObject({ parsed: 2, skipped: 0, over: 0 })
+    })
+
+    it('8 account folders in all, the first root\'s first: 6 and 6 read 8, and over counts four', async () => {
+      const s = two()
+      for (const k of range(1, 6)) {
+        s.first.put(k, {}, { account: `account-${k}` })
+        s.second.put(6 + k, {}, { account: `account-${k}` })
+      }
+      const folders = await s.reader.folders()
+      expect(folders?.accounts).toEqual([
+        ...range(1, 6).map((k) => join(s.first.fixture.root, `account-${k}`)),
+        ...range(1, 2).map((k) => join(s.second.fixture.root, `account-${k}`)),
+      ])
+      await s.reader.files()
+      const read = await s.reader.read()
+      expect(localIds(read)).toEqual(range(1, MAX_ACCOUNTS).map(local))
+      expect(read.over).toBe(4)
+    })
+
+    it('256 parses a read across both roots', async () => {
+      const s = two()
+      for (const n of range(1, 200)) s.first.put(n, { isArchived: true })
+      for (const n of range(201, 300)) s.second.put(n, { isArchived: true })
+      for (const n of range(301, 300 + MAX_LISTED)) s.second.put(n)
+      const left = 300 + MAX_LISTED - MAX_PARSES
+      expect(await loaded(s.reader)).toEqual({ ...NOTHING, parsed: MAX_PARSES, more: true, over: left })
+      const second = await s.reader.read()
+      expect(second).toMatchObject({ parsed: left, skipped: 0, more: false, over: 0 })
+      expect(localIds(second)).toEqual(range(301, 300 + MAX_LISTED).map(local))
+    })
+
+    it('8 orgs an account and 1,024 names an org folder are bounds of each folder', async () => {
+      const s = two()
+      for (const k of range(1, MAX_ORGS)) {
+        s.first.put(k, {}, { org: `org-${k}` })
+        s.second.put(MAX_ORGS + k, {}, { org: `org-${k}` })
+      }
+      expect((await s.reader.folders())?.orgs).toHaveLength(2 * MAX_ORGS)
+      // The first root's org-1 full, at 1,024 names with its session's.
+      for (const n of range(100, 98 + MAX_FILES)) s.first.put(n, { isArchived: true }, { org: 'org-1' })
+      // The newest: a bound of 1,024 names across the roots would leave it out.
+      s.second.put(2000, { lastActivityAt: T + 1000 }, { mtime: T + 1000, org: 'org-1' })
+      const read = await loaded(s.reader)
+      expect(localIds(read)[0]).toBe(local(2000))
+      expect(read.over).toBe(0)
+    })
+
+    it('only the roots that are real folders are read; none gives no folders, and a root that left takes its files', async () => {
+      const s = two()
+      s.second.put(1)
+      expect((await s.reader.folders())?.roots).toEqual([s.second.fixture.root])
+      s.first.put(2)
+      await s.reader.folders()
+      await s.reader.files()
+      expect(localIds(await s.reader.read())).toEqual([local(1), local(2)])
+      rmSync(s.first.fixture.root, { recursive: true })
+      expect((await s.reader.folders())?.roots).toEqual([s.second.fixture.root])
+      expect(localIds(await s.reader.read())).toEqual([local(1)])
+      rmSync(s.second.fixture.root, { recursive: true })
       expect(await s.reader.folders()).toBeUndefined()
       expect(await s.reader.read()).toEqual(NOTHING)
     })

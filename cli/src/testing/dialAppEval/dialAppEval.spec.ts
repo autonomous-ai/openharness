@@ -1,0 +1,319 @@
+/**
+ * Tier A of the dial eval (docs/plans/2026-11-21-dial-app-eval-design.md, "Tier A: replay, in process"): the real devices
+ * (services/devices.ts) in this process on virtual time, with the real cable to a loopback dial and the real store readers
+ * on fixtures in a temp folder. Only this computer is stood in for: every reader of it is mocked below and answers from
+ * the scenario's model of the machine (tierA/machine.ts), so the devices see the scenario's processes and none of the
+ * host's.
+ *
+ * Nothing real is reached. The network guard (netGuard.ts) is the one way this spec refuses the network: installed
+ * before any import, a connection to anything but this machine fails, and fails the case it happened in, named by host
+ * and port. A child process fails the case too: the devices must start no `claude`, `codex`, `orca`, `open`, `xdg-open`
+ * or `ps`. The homes, the stores and the transcripts are throwaway folders.
+ */
+import { homedir, tmpdir } from 'node:os'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { claudeGhost, claudeSessions, editorGhost, editorSession, listed, MAIN, scenario, scenariosFor, started } from './catalog.js'
+import { loadBaseline, SKIP_RATCHET_ENV, tierAVerdict } from './grade.js'
+import { describeAttempt } from './netGuard.js'
+import { collect, runScenario, uncaughtProbes, writeResults, type ScenarioRun } from './runner.js'
+import { TierADriver } from './tierA/driver.js'
+import type { Platform, Step } from './types.js'
+
+// First of all, so no import below opens a connection unguarded.
+const guard = await vi.hoisted(async () => (await import('./netGuard.js')).guardThisProcess())
+const { machine } = await vi.hoisted(async () => await import('./tierA/machine.js'))
+
+/** The processes started past the stand-ins. Each fails the case it happened in. */
+const reached = vi.hoisted(() => [] as string[])
+/** Every way to start a process, refused and noted. */
+const refused = vi.hoisted(() => async (real: () => Promise<Record<string, unknown>>) => {
+  const actual = await real()
+  const refuse = (name: string) => () => {
+    reached.push(name)
+    throw new Error(`tier A starts no process (${name})`)
+  }
+  const starts = Object.fromEntries(['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork']
+    .map((name) => [name, refuse(name)]))
+  return { ...actual, ...starts, default: { ...(actual.default as object), ...starts } }
+})
+vi.mock('node:child_process', refused)
+vi.mock('child_process', refused)
+// Each read is counted from its call to its end, so the clock moves on only once it lands (tierA/clock.ts).
+const counted = vi.hoisted(() => async (real: () => Promise<object>) => (await import('./tierA/clock.js')).countFsCalls(await real()))
+vi.mock('node:fs/promises', counted)
+vi.mock('fs/promises', counted)
+// The machine's processes, and whether one still runs, from the model. A session's transcript has no stamp there: one
+// waiting on the person stays so until its next hook.
+vi.mock('../../lib/sessionSearch/externals/support.js', async (real) => ({
+  ...await real<typeof import('../../lib/sessionSearch/externals/support.js')>(),
+  listProcesses: async () => [...machine.processes.values()].map(({ pid, ppid, executable }) => ({ pid, ppid, executable, args: '' })),
+  processAlive: (pid: number) => machine.processes.has(pid),
+  fileStamp: async () => null,
+}))
+// The sessions the machine's processes have open, and their folders and transcripts. Their record is not modelled, and
+// a session whose record cannot be read counts as busy, as OpenSessions.busy answers: a turn ends by its own Stop hook.
+vi.mock('../../lib/sessionSearch/external.js', async (real) => ({
+  ...await real<typeof import('../../lib/sessionSearch/external.js')>(),
+  OpenSessions: class {
+    async owners() {
+      return new Map([...machine.owners].filter(([, owner]) => machine.processes.has(owner.pid))
+        .map(([sessionId, { engine, pid }]) => [sessionId, { pid, engine, tty: machine.processes.get(pid)?.tty ?? null, record: sessionId }]))
+    }
+    async busy() { return true }
+  },
+  SessionRows: class {
+    async find(wanted: ReadonlyMap<string, string>) {
+      return new Map([...wanted.keys()].flatMap((sessionId) => {
+        const owner = machine.owners.get(sessionId)
+        return owner ? [[sessionId, { cwd: owner.cwd, transcriptPath: owner.transcriptPath }] as const] : []
+      }))
+    }
+  },
+}))
+// Which app each process runs in, the process table and terminals a session's place is read from, and the apps' bundle
+// ids: the model's, never this machine's `ps` or `plutil`.
+vi.mock('../../cable/hosts/scannedApp.js', async (real) => ({
+  ...await real<typeof import('../../cable/hosts/scannedApp.js')>(),
+  learnApps: async (pids: readonly number[]) => new Map(pids.flatMap((pid) => {
+    const app = machine.appOf(pid)
+    return app ? [[pid, app] as const] : []
+  })),
+  readProcessNames: async () => [...machine.processes.values()].map(({ pid, ppid, executable, tty }) => ({ pid, ppid, executable, ...(tty ? { tty } : {}) })),
+  readTtyName: async (pid: number) => machine.processes.get(pid)?.tty,
+  readBundleId: async (bundle: string) => machine.bundleIds.get(bundle),
+}))
+// The folders there are the model's: Cursor's folder row opens a session's own, never one of this machine's.
+vi.mock('../../cable/hosts/cursorFolder.js', async (real) => ({
+  ...await real<typeof import('../../cable/hosts/cursorFolder.js')>(),
+  isFolder: (path: string) => machine.folders.has(path),
+}))
+// No folder or socket of this machine is watched: the stores' watch is the world's (tierA/storeWatch.ts), and nothing
+// else of the machine changes.
+vi.mock('../../cable/hosts/folderWatch.js', () => ({ watchNearest: () => () => {} }))
+vi.mock('../../cable/hosts/unixSocket.js', async (real) => ({
+  ...await real<typeof import('../../cable/hosts/unixSocket.js')>(),
+  watchSocket: () => () => {},
+}))
+// The model's machine has no tmux, Zellij or kitty: no login shell is asked where they are.
+vi.mock('../../lib/tmuxOnPath.js', async (real) => ({
+  ...await real<typeof import('../../lib/tmuxOnPath.js')>(),
+  ensureTmuxOnPath: async () => ({ state: 'absent', reason: 'not on the eval machine' }),
+}))
+vi.mock('../../cable/hosts/zellij.js', async (real) => ({
+  ...await real<typeof import('../../cable/hosts/zellij.js')>(),
+  zellijFinder: () => async () => ({ state: 'absent', reason: 'not on the eval machine' }),
+}))
+vi.mock('../../cable/hosts/kitty.js', async (real) => ({
+  ...await real<typeof import('../../cable/hosts/kitty.js')>(),
+  kittyFinder: () => async () => ({ state: 'absent', reason: 'not on the eval machine' }),
+}))
+// The voice router warms an engine's process: here it warms none, and routes no words.
+vi.mock('../../lib/voiceRouter.js', () => ({
+  setVoiceRouterSessions: () => {},
+  setVoiceRouterDeviceConnected: () => {},
+  shutdownVoiceRouter: () => {},
+  routeVoiceTask: async () => ({ agentId: '', confidence: 0, reason: 'no router in tier A', needNewAgent: false }),
+}))
+// Orca's account homes: an Orca that is not there, should anything build its own read of them.
+vi.mock('../../devices/orcaHomes.js', async (real) => ({
+  ...await real<typeof import('../../devices/orcaHomes.js')>(),
+  orcaHomesDeps: () => ({ run: async () => ({ code: null, stdout: '', timedOut: false }), onPath: () => null, exists: () => false, platform: 'linux', uid: 1 }),
+}))
+
+const { startDevices } = await import('../../services/devices.js')
+
+const PLATFORMS: readonly Platform[] = ['darwin', 'win32', 'linux']
+/**
+ * Tier A runs on a Mac or a Linux host. On a Windows one a platform's store paths flip (a posix path is no path of that
+ * host, tierA/storeWatch.ts onHost), a temp folder a reader still holds is EBUSY to remove, and secureState's retries
+ * wait in real time (lib/secureState.ts pauseSync): its virtual times would not be the baseline's.
+ */
+const WINDOWS_HOST = process.platform === 'win32'
+/** Every scenario run, in the order run: what the results file holds. */
+const runs: ScenarioRun[] = []
+
+beforeEach(() => { reached.length = 0 })
+afterEach(() => {
+  expect(guard.taken().map(describeAttempt)).toEqual([])
+  expect(reached).toEqual([])
+})
+afterAll(() => {
+  const out = process.env.DIAL_EVAL_OUT
+  if (out) writeResults(out, 'spec', collect(runs))
+  // What was refused after the last case, in the hooks, fails the file.
+  try {
+    expect(guard.taken().map(describeAttempt)).toEqual([])
+  } finally {
+    guard.uninstall()
+  }
+})
+
+describe.skipIf(WINDOWS_HOST).each(PLATFORMS)('tier A on %s', (platform) => {
+  it.for(scenariosFor('a', platform))('$id', async (scenario) => {
+    const run = await runScenario(new TierADriver({ startDevices }), scenario, platform)
+    runs.push(run)
+    expect(run.error).toBeUndefined()
+    expect(run.wrongSends).toEqual([])
+    expect(uncaughtProbes(run)).toEqual([])
+  })
+})
+
+describe.skipIf(WINDOWS_HOST)('tier A', () => {
+  it('reaches no network: a fetch to example.invalid fails and the guard names it', async () => {
+    await expect(fetch('http://example.invalid/')).rejects.toThrow()
+    expect(guard.taken().map(describeAttempt)).toEqual(['node net example.invalid:80'])
+  })
+
+  it('a voice step whose target the face never shows leaves its scenario ungraded, and says so', async () => {
+    // The person turns the dial to b and the step speaks to a: the glass never showed a.
+    const voice = scenario({
+      id: 'V1', app: 'claude', title: 'Eval voice to a session not on the face', dims: ['D5'], tiers: ['a'],
+      sessions: [...claudeSessions(['a', 'b']), claudeGhost],
+      steps: [
+        { kind: 'claude.write', sessions: ['a', 'b'] },
+        ...listed('claude', ['a', 'b']),
+        { kind: 'swipe', session: 'b' },
+        { label: 'voice', kind: 'voice', transcript: 'Eval words for alpha.', target: 'a' },
+      ],
+      checks: [], probes: [],
+    })
+    const run = await runScenario(new TierADriver({ startDevices }), voice, 'darwin')
+    expect(run.gaps.map((g) => g.reason)).toEqual(['voice step 4: the face never showed a'])
+  })
+
+  it('C1 twice gives the same frames, faces, commands and deliveries at the same virtual times', async () => {
+    const c1 = MAIN.find((s) => s.id === 'C1')!
+    const seen = async () => {
+      const driver = new TierADriver({ startDevices })
+      await runScenario(driver, c1, 'darwin')
+      const { frames, faces, commands, deliveries } = driver.seen()
+      return { frames, faces, commands, deliveries }
+    }
+    const first = await seen()
+    const second = await seen()
+    expect(first.frames.length).toBeGreaterThan(0)
+    expect(second).toEqual(first)
+  })
+
+  /** VS Code's V5: a in w1, b in w2, b's window focused. */
+  const v5 = MAIN.find((s) => s.id === 'V5')!
+
+  it("V5 on darwin: a tap on b, in the second window, writes show with raise for b's shell on that window's stream alone, and runs open -b com.microsoft.VSCode", async () => {
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, v5, 'darwin')
+    expect(run.error).toBeUndefined()
+    const { streams = [], commands, steps } = driver.seen()
+    const tap = steps.find((s) => s.label === 'tap')!
+    const shows = streams.filter((l) => l.line.show !== undefined)
+    expect(shows.map(({ window, line }) => ({ window, line }))).toEqual([{ window: 'eval-w2-1', line: { show: 'b', raise: true } }])
+    expect(shows[0]!.at).toBeGreaterThanOrEqual(tap.at)
+    expect(commands.filter((c) => c.at >= tap.at).map((c) => c.argv)).toEqual([['/usr/bin/open', '-b', 'com.microsoft.VSCode']])
+  })
+
+  it('V5 twice gives the same streams, frames and commands at the same virtual times', async () => {
+    const seen = async () => {
+      const driver = new TierADriver({ startDevices })
+      await runScenario(driver, v5, 'darwin')
+      const { streams, frames, commands } = driver.seen()
+      return { streams, frames, commands }
+    }
+    const first = await seen()
+    const second = await seen()
+    expect(first.streams?.length).toBeGreaterThan(0)
+    expect(second).toEqual(first)
+  })
+
+  it("the devices' log lines are seen at their virtual times: each of V5's windows opens its stream at its step", async () => {
+    const driver = new TierADriver({ startDevices })
+    await runScenario(driver, v5, 'darwin')
+    const { logs = [], steps } = driver.seen()
+    const windows = steps.filter((s) => s.kind === 'editor.window').map((s) => s.at)
+    expect(logs.filter((l) => l.line.startsWith('[devices] vscode stream · open')).map((l) => l.at)).toEqual(windows)
+  })
+
+  /** Two terminals in one VS Code window, a the active one: what a stroke and a quit are tried on. */
+  const twoTerminals = (id: string, title: string, more: Step[]) => scenario({
+    id, app: 'vscode', title, dims: ['D3'], tiers: ['a'],
+    sessions: [editorSession('a', 'vscode'), editorSession('b', 'vscode'), editorGhost('vscode')],
+    steps: [
+      ...started(['a', 'b']),
+      { kind: 'editor.window', window: 'w1', active: 'a', focused: true },
+      ...listed('vscode', ['a', 'b']),
+      ...more,
+    ],
+    checks: [], probes: [],
+  })
+
+  it("a stroke on a, in front in VS Code, writes a scroll line for a's shell on its window's stream, while it is the active terminal", async () => {
+    const stroked = twoTerminals('S1', 'Eval a stroke on the active terminal', [
+      { kind: 'swipe', session: 'a' },
+      { kind: 'wait', ms: 2_000 },
+      { label: 'stroke', kind: 'stroke' },
+    ])
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, stroked, 'darwin')
+    expect(run.error).toBeUndefined()
+    const { streams = [], steps } = driver.seen()
+    const at = steps.find((s) => s.label === 'stroke')!.at
+    const scrolls = streams.filter((l) => l.line.scroll !== undefined)
+    expect(scrolls.length).toBeGreaterThan(0)
+    expect(scrolls.every((l) => l.at >= at && l.window === 'eval-w1-1' && l.line.pid === 'a' && l.line.page === undefined)).toBe(true)
+    // Three moves of 8 are 60 px: three lines of 16 toward older ones (scrollLines.ts).
+    expect(scrolls.reduce((sum, l) => sum + (l.line.scroll as number), 0)).toBe(-3)
+    const states = streams.filter((l) => l.line.type === 'vscode-state' && l.at <= scrolls[0]!.at)
+    expect(states.at(-1)!.line).toMatchObject({ active: 'a', focused: true })
+  })
+
+  it("VS Code's quit ends its window's stream gone, and its relaunch opens eval-w1-2 on the sessions' new shells", async () => {
+    const quit = twoTerminals('S2', 'Eval a quit and a relaunch', [{ kind: 'quit', app: 'vscode' }, { kind: 'relaunch', app: 'vscode' }])
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, quit, 'darwin')
+    expect(run.error).toBeUndefined()
+    const lines = (driver.seen().streams ?? []).map(({ window, line }) => ({ window, line }))
+    expect(lines).toEqual([
+      { window: 'eval-w1-1', line: { type: 'vscode', window: 'eval-w1-1' } },
+      { window: 'eval-w1-1', line: { type: 'vscode-state', terminals: ['a', 'b'], active: 'a', focused: true } },
+      { window: 'eval-w1-1', line: { ended: 'gone' } },
+      { window: 'eval-w1-2', line: { type: 'vscode', window: 'eval-w1-2' } },
+      { window: 'eval-w1-2', line: { type: 'vscode-state', terminals: ['a', 'b'], active: 'a', focused: true } },
+    ])
+  })
+
+  /** Cursor's U6: its own agent c, in its folder: what a tap on its folder row runs. */
+  const cursorAgent = MAIN.find((s) => s.id === 'U6')!
+  const folderCommands: Readonly<Record<Platform, string[]>> = {
+    darwin: ['/usr/bin/open', '-b', 'com.todesktop.230313mzl4w4u92', '/work/eval-c'],
+    linux: ['/opt/eval/bin/cursor', '/work/eval-c'],
+    win32: ['harness-pty', 'cursor-folder', '/work/eval-c'],
+  }
+
+  it.for(PLATFORMS)("a tap on Cursor's own agent opens Cursor's window for its folder on %s: open -b com.todesktop.230313mzl4w4u92 on darwin, Cursor's CLI on linux, harness-pty cursor-folder on win32", async (platform) => {
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, cursorAgent, platform)
+    expect(run.error).toBeUndefined()
+    const { commands, steps } = driver.seen()
+    const tap = steps.find((s) => s.label === 'tap')!
+    expect(commands.filter((c) => c.at >= tap.at).map((c) => c.argv)).toEqual([folderCommands[platform]])
+  })
+
+  it.for(PLATFORMS)("the editor extension's setup runs nothing: no gap on %s", async (platform) => {
+    const run = await runScenario(new TierADriver({ startDevices }), cursorAgent, platform)
+    expect(run.error).toBeUndefined()
+    expect(run.gaps).toEqual([])
+  })
+
+  // The baseline is written on a Mac and checked on Linux: a result naming this host's folders would differ there.
+  it('no result carries an absolute path', () => {
+    expect(runs.length).toBeGreaterThan(0)
+    const written = JSON.stringify(collect(runs))
+    for (const part of [tmpdir(), homedir(), '/work/eval-']) expect(written).not.toContain(part)
+  })
+
+  // The eval command judges the ratchet itself, over both tiers, and says so for its children (run.ts).
+  it.skipIf(process.env[SKIP_RATCHET_ENV] === '1')('matches the baseline', () => {
+    const baseline = loadBaseline()
+    expect(baseline).not.toBeNull()
+    const verdict = tierAVerdict(collect(runs), baseline!)
+    expect(verdict.ok, verdict.message).toBe(true)
+  })
+})

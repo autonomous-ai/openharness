@@ -27,7 +27,7 @@ import { isWindowsHeldPane, windowsPaneLaunch } from './windows/engineStart.js'
 import { sameProcessIdentity, sameTerminalPlacement } from './terminalRuntime.js'
 import type { TerminalRuntimeRef } from './terminalTypes.js'
 import { harnessPermissionEnvironment } from './harnessDefaults.js'
-import { errorKind } from './log.js'
+import { codeOrLength, errorKind } from './log.js'
 
 export interface ResumeAgentServiceDeps {
   registry: Pick<typeof liveRegistry, 'byAgent' | 'bySession' | 'resumePendingAgent' | 'setLaunch' | 'confirmLaunch'>
@@ -200,7 +200,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       // Logged like the confirmation above, and for the same reason: this verdict clears `active`,
       // makes the desk refuse to open the harness, and is the one a person comes asking about —
       // openharness#189 was hard to place precisely because the resume path said nothing either way.
-      console.log(`[resume] ${sid(saved.agentId)} ${result.error} · engine=${saved.engine}${result.detail ? ` · ${result.detail}` : ''}`)
+      console.log(`[resume] ${sid(saved.agentId)} ${codeOrLength(result.error)} · engine=${saved.engine}`)
       announceSession(failed!)
       // A verified exit releases the reservation and keeps the shell/output. Unknown startup
       // keeps both runtime and reservation; another Enter cannot launch a duplicate process.
@@ -258,7 +258,9 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         current: owns,
         refresh: async () => { if (!isTerminalEngine(selected.engine) && (await checkPidRuntime(selected)).state !== 'gone') throw new IdentityReadUnavailable('the previous engine is not confirmed stopped') },
       })
-      if (retained.state !== 'confirmed') throw new IdentityReadUnavailable('the previous engine exit is not durably confirmed')
+      // Refused because the row was retired ahead of this one (the reconciler removing the row of a pane that died): nothing
+      // is left to retain, and the resume checks the harness again, as when the row changed before this began (above).
+      if (retained.state !== 'confirmed' && owns()) throw new IdentityReadUnavailable('the previous engine exit is not durably confirmed')
     },
     // A launch already made: its record is the row's, written when its pane was registered (`refreshGridWebSearch`).
     waitForReady: saved => waitForResume(saved, current, launchedGrid(saved.gridLaunch), launchArgs),

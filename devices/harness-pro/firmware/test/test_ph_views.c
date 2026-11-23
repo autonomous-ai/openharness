@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "pod/app_icons.h"
 #include "pod/home/ph.h"
 #include "pod/pod_draw.h"
 #include "pod/pod_nav.h"
@@ -25,6 +26,13 @@ static const ht_run_t *text_run(const char *t) {
 static const ht_run_t *text_prefix(const char *p) { for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == K_TEXT && !strncmp(S.runs[i].text, p, strlen(p))) return &S.runs[i]; return NULL; }
 static const pod_hit_t *nth_hit(pod_action_t a, int n) { for (int i = 0; i < F.hit_count; i++) if (F.hits[i].action == a && n-- == 0) return &F.hits[i]; return NULL; }
 static int hits_of(pod_action_t a) { int n = 0; for (int i = 0; i < F.hit_count; i++) n += F.hits[i].action == a; return n; }
+static bool has_page(const pod_nav_t *nav, const pod_model_t *m, int page)
+{
+    int16_t p[POD_HOME_PAGES_MAX];
+    const int n = pod_home_pages(nav, m, p, POD_HOME_PAGES_MAX);
+    for (int i = 0; i < n; i++) if (p[i] == page) return true;
+    return false;
+}
 
 // The scene in S, rastered from empty: every below-1x frame marked for baking (a Codex face or recap pet) got its arena entry (none dropped for want of
 // room: a dropped one is resampled every frame), and the arena use is exactly those entries' pixels, within BAKE_ARENA_PX (360 K, pod_draw.c).
@@ -51,6 +59,76 @@ static void check_baked(void)
 // Page dots (a small anti-aliased pill in the bottom band, y >= 660): Pets has none on any page.
 static int dot_runs(void) { int n = 0; for (int i = 0; i < S.count; i++) n += S.runs[i].pro_kind == K_RECT_AA && (S.runs[i].w == 12 || S.runs[i].w == 11 || S.runs[i].w == 32) && S.runs[i].pro_height <= 12 && S.runs[i].y >= 660; return n; }
 static bool centred_run(const ht_run_t *r) { return r && r->x + r->w / 2 >= 360 - 2 && r->x + r->w / 2 <= 360 + 2; }
+
+// Home's Tabs | Apps pill: how many runs sit at (x, y, w, h) with this radius and colour.
+static int aa_at(int x, int y, int w, int h, int r, unsigned rgb)
+{
+    int n = 0;
+    for (int i = 0; i < S.count; i++) {
+        const ht_run_t *u = &S.runs[i];
+        n += u->pro_kind == K_RECT_AA && u->x == x && u->y == y && u->w == w && u->pro_height == h && u->radius == r && u->fg == ht_rgb(rgb);
+    }
+    return n;
+}
+// The pill's label `t` in ph_sb_22 and `rgb`, centred on x cx within 2 px.
+static bool pill_label(const char *t, int cx, unsigned rgb)
+{
+    const ht_run_t *r = text_run(t);
+    if (!r || r->pro_font != &ph_sb_22 || r->fg != ht_rgb(rgb)) return false;
+    const int mid = r->x + ht_pro_width(&ph_sb_22, t) / 2;
+    return mid >= cx - 2 && mid <= cx + 2;
+}
+static bool pill_hit(pod_action_t a, int x)
+{
+    const pod_hit_t *h = nth_hit(a, 0);
+    return hits_of(a) == 1 && h->x == x && h->y == 624 && h->w == 180 && h->h == 96 && h->arg == 0 && !h->id[0];
+}
+// The pill's five runs and two hits, the filled cell on Apps when `apps`, else on Tabs.
+static void check_pill(bool apps)
+{
+    CHECK(aa_at(234, 640, 252, 46, 23, PH_BORDER) == 1 && aa_at(236, 642, 248, 42, 21, PH_GROUND) == 1);
+    CHECK(aa_at(apps ? 360 : 238, 644, 122, 38, 19, PH_TRACK) == 1 && aa_at(apps ? 238 : 360, 644, 122, 38, 19, PH_TRACK) == 0);
+    CHECK(pill_label("Tabs", 299, apps ? PH_MUTED : PH_INK) && pill_label("Apps", 421, apps ? PH_INK : PH_MUTED));
+    CHECK(pill_hit(POD_A_HOME_TABS, 180) && pill_hit(POD_A_HOME_APPS, 360));
+    CHECK(ph_runs(&F) <= HT_RUNS);
+}
+static void check_no_pill(void)
+{
+    CHECK(aa_at(234, 640, 252, 46, 23, PH_BORDER) == 0 && !text_run("Tabs") && !text_run("Apps"));
+    CHECK(hits_of(POD_A_HOME_TABS) == 0 && hits_of(POD_A_HOME_APPS) == 0 && ph_runs(&F) <= HT_RUNS);
+}
+
+// App cards: the main card's gradient carries exactly top -> bottom (RGB565).
+static bool card_grad(uint16_t top, uint16_t bottom)
+{
+    for (int i = 0; i < S.count; i++) {
+        const ht_run_t *r = &S.runs[i];
+        if (r->pro_kind != POD_GRAD || r->x != 90 || r->y != 56 || r->w != 540 || r->pro_height != 560) continue;
+        uint16_t g[2];
+        memcpy(g, r->text, sizeof g);
+        return g[0] == top && g[1] == bottom;
+    }
+    return false;
+}
+// Image runs whose top sits in y0..y1 (the marks band) and the 12 px state dots there.
+static int images_in(int y0, int y1) { int n = 0; for (int i = 0; i < S.count; i++) n += S.runs[i].pro_kind == K_IMAGE && S.runs[i].y >= y0 && S.runs[i].y <= y1; return n; }
+static int dots_in(int y0, int y1) { int n = 0; for (int i = 0; i < S.count; i++) n += S.runs[i].pro_kind == K_RECT_AA && S.runs[i].w == 12 && S.runs[i].pro_height == 12 && S.runs[i].y >= y0 && S.runs[i].y <= y1; return n; }
+static bool no_text_has(const char *part) { for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == K_TEXT && strstr(S.runs[i].text, part)) return false; return true; }
+// The one POD_A_PICK_APP hit, over the whole card.
+static bool pick_hit(int arg, const char *id)
+{
+    const pod_hit_t *h = nth_hit(POD_A_PICK_APP, 0);
+    return hits_of(POD_A_PICK_APP) == 1 && h->x == 90 && h->y == 56 && h->w == 540 && h->h == 560 && h->arg == arg && !strcmp(h->id, id);
+}
+// The app card's name run: the largest-face text at x 134 on the card's top line.
+static const ht_run_t *app_name(void)
+{
+    for (int i = 0; i < S.count; i++) {
+        const ht_run_t *r = &S.runs[i];
+        if (r->pro_kind == K_TEXT && r->x == 134 && r->y < 56 + 80 && (r->pro_font == &ph_sb_48 || r->pro_font == &ph_sb_34)) return r;
+    }
+    return NULL;
+}
 
 int main(void) {
     {   // Home's equaliser: four 8 px bars 5 px apart, anchored at the bottom of a 36 px box, 40..100 % tall, moving with the clock
@@ -1279,9 +1357,254 @@ int main(void) {
         CHECK(!text_run("w2") && hits_of(POD_A_FOLLOW) == 0 && ph_home_moves(&N, &M));
         for (int i = 0; i < 5; i++) pod_model_turn(&M, id[i], "done", NULL, 0, 200000);   // nobody works: no Working page, scroll -1 is tab 0
         N.stack[0].scroll = POD_HOME_WORKING;
-        CHECK(pod_home_working(&M) == 0 && !pod_home_has(&M, POD_HOME_WORKING) && pod_tabs_pages_of(&N, &M) == 1);
+        CHECK(pod_home_working(&M) == 0 && !has_page(&N, &M, POD_HOME_WORKING) && pod_tabs_pages_of(&N, &M) == 1);
         fresh(); ph_view_home(&F, &N, &M, now);
         CHECK(!text_run("Working") && text_run("Solo") && hits_of(POD_A_FOLLOW) == 0);
+    }
+
+    // ---- Home's Tabs | Apps pill: drawn under every Home page while another app has agents, its filled cell on the list Home shows ----
+    {
+        static pod_model_t M;
+        static pod_nav_t N;
+        const uint32_t now = 100000u;
+        pod_model_reset(&M);
+        pod_model_agents_begin(&M);
+        static const char *const aid[3] = {"p1", "p2", "p3"};
+        for (int i = 0; i < 3; i++) pod_model_agent(&M, aid[i], aid[i], "claude", "Mac");
+        pod_model_agents_end(&M);
+        cable_swarm_t sw[2];
+        memset(sw, 0, sizeof sw);
+        static const char *const l0[] = {"p1", "p2"}, *const l1[] = {"p3"};
+        const char *const *ls[2] = {l0, l1};
+        uint8_t cn[2] = {2, 1};
+        for (int i = 0; i < 2; i++) { snprintf(sw[i].id, SWARM_ID_MAX, "s%d", i); snprintf(sw[i].name, CABLE_NAME_MAX, "Tab%d", i); sw[i].panes = sw[i].agents = cn[i]; }
+        pod_model_swarms(&M, sw, ls, cn, 2, "s0", NULL, 0);
+        pod_model_link(&M, true);
+        pod_model_clock(&M, now);
+        pod_model_apps_switch(&M, true);
+        static const pod_app_t harness_only[1] = {{"harness", "Harness", 4, 1, 1}};
+        static const pod_app_t apps[3] = {{"harness", "Harness", 4, 1, 1}, {"codex", "ChatGPT", 2, 0, 1}, {"vscode", "VS Code", 3, 1, 0}};
+        pod_nav_init(&N);
+        // The same model with apps.switch off: what Home draws without the pill.
+        int base, base_hits;
+#define BASE() do { pod_model_apps_switch(&M, false); fresh(); ph_view_home(&F, &N, &M, now); base = S.count; base_hits = F.hit_count; pod_model_apps_switch(&M, true); } while (0)
+
+        // only Harness has agents: no other app, no pill
+        pod_model_apps(&M, harness_only, 1, "harness");
+        BASE();
+        fresh(); ph_view_home(&F, &N, &M, now);
+        CHECK(S.count == base && F.hit_count == base_hits);
+        check_no_pill();
+
+        // another app, on tab 0: the pill, Tabs filled
+        pod_model_apps(&M, apps, 3, "harness");
+        BASE();
+        fresh(); ph_view_home(&F, &N, &M, now);
+        CHECK(S.count == base + 5 && F.hit_count == base_hits + 2 && text_run("Tab0"));
+        check_pill(false);
+
+        // Apps chosen: the filled cell moves under "Apps"
+        pod_nav_act(&N, &M, POD_A_HOME_APPS, 0, now);
+        CHECK(N.home_apps);
+        fresh(); ph_view_home(&F, &N, &M, now);
+        check_pill(true);
+        pod_nav_act(&N, &M, POD_A_HOME_TABS, 0, now);
+        CHECK(!N.home_apps);
+
+        // the Notices card (p3 asks) and the Working card (p1 works) carry it too
+        pod_model_turn(&M, "p1", "started", NULL, 0, now);
+        pod_model_question(&M, "p3", "ok?");
+        const int pages[2] = {POD_HOME_NOTICES, POD_HOME_WORKING};
+        for (int k = 0; k < 2; k++) {
+            N.stack[0].scroll = pages[k];
+            BASE();
+            fresh(); ph_view_home(&F, &N, &M, now);
+            CHECK(S.count == base + 5 && F.hit_count == base_hits + 2);
+            CHECK(text_run(k ? "Working" : "Notices"));
+            check_pill(false);
+        }
+        pod_model_question_close(&M, "p3");
+        pod_model_turn(&M, "p3", "done", NULL, 0, now);
+        pod_model_turn(&M, "p1", "done", NULL, 0, now);
+
+        // over the wordmark: nobody works or asks and the window's one tab holds no agent (no tab kept, still a window)
+        cable_swarm_t empty[1];
+        memset(empty, 0, sizeof empty);
+        snprintf(empty[0].id, SWARM_ID_MAX, "e");
+        uint8_t zero[1] = {0};
+        pod_model_swarms(&M, empty, NULL, zero, 1, "e", NULL, 0);
+        pod_model_apps(&M, apps + 1, 1, "harness");   // codex alone
+        CHECK(M.tab_count == 0 && M.has_window && pod_home_switch(&M));
+        N.stack[0].scroll = 0;
+        BASE();
+        fresh(); ph_view_home(&F, &N, &M, now);
+        CHECK(S.background == ht_rgb(0x0E1B2C) && S.count == base + 5 && F.hit_count == base_hits + 2);
+        check_pill(false);
+
+        // no window: Home lists the apps itself, no pill
+        pod_model_apps(&M, apps, 3, "harness");
+        pod_model_swarms(&M, NULL, NULL, NULL, 0, "", NULL, 0);
+        pod_model_view(&M, true, false);
+        CHECK(!M.has_window);
+        pod_nav_sync(&N, &M);
+        fresh(); ph_view_home(&F, &N, &M, now);
+        check_no_pill();
+#undef BASE
+    }
+    // ---- App cards: the tab card's body from an apps row, in the app's own colours with its icon; marks only for the app shown ----
+    {
+        static pod_model_t M;
+        static pod_nav_t N;
+        const uint32_t now = 100000u;
+        pod_model_reset(&M);
+        pod_model_agents_begin(&M);
+        static const char *const aid[11] = {"a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9", "a10", "a11"};
+        for (int i = 0; i < 11; i++) pod_model_agent(&M, aid[i], aid[i], i < 4 ? "claude" : "codex", "Mac");
+        pod_model_agents_end(&M);
+        cable_swarm_t sw[2];
+        memset(sw, 0, sizeof sw);
+        static const char *const l0[] = {"a1", "a2"}, *const l1[] = {"a3", "a4"};
+        const char *const *ls[2] = {l0, l1};
+        uint8_t cn[2] = {2, 2};
+        for (int i = 0; i < 2; i++) { snprintf(sw[i].id, SWARM_ID_MAX, "s%d", i); snprintf(sw[i].name, CABLE_NAME_MAX, "Tab%d", i); sw[i].panes = sw[i].agents = cn[i]; }
+        pod_model_swarms(&M, sw, ls, cn, 2, "s0", NULL, 0);
+        pod_model_link(&M, true);
+        pod_model_clock(&M, now);
+        pod_model_apps_switch(&M, true);
+        pod_model_agent_app(&M, "a5", "codex", POD_CAPS_ALL);
+        pod_model_agent_app(&M, "a6", "codex", POD_CAPS_ALL);
+        pod_model_turn(&M, "a5", "started", NULL, 0, now);   // a5 works, a6 is idle
+        static const pod_app_t apps[3] = {{"harness", "Harness", 4, 1, 1}, {"codex", "ChatGPT", 2, 0, 1}, {"vscode", "VS Code", 3, 1, 1}};
+        pod_model_apps(&M, apps, 3, "codex");
+        pod_nav_init(&N);
+        pod_nav_act(&N, &M, POD_A_HOME_APPS, 0, now);
+        CHECK(N.home_apps && N.stack[0].scroll == POD_HOME_APP0);
+        const pod_app_style_t *cx = pod_app_style("codex");
+        CHECK(cx && cx->icon72);
+
+        // the codex card: its colours, its icon at the top right, the name left of it, the row's numbers, a5 and a6 as marks, one pick
+        fresh(); ph_view_home(&F, &N, &M, now);
+        CHECK(card_grad(cx->card_top, cx->card_bottom));
+        {
+            int at = 0;
+            for (int i = 0; i < S.count; i++) {
+                const ht_run_t *r = &S.runs[i];
+                if (r->pro_kind == K_IMAGE && r->x == 514 && r->y == 96) {
+                    at++;
+                    CHECK(r->w == 72 && r->pro_height == 72 && r->bitmap.pixels == cx->icon72->rgb565);
+                }
+            }
+            CHECK(at == 1);
+        }
+        const ht_run_t *nm = app_name();
+        CHECK(nm && !strcmp(nm->text, "ChatGPT") && nm->x + nm->w <= 498);
+        CHECK(text_run("2") && text_run("agents") && text_run("1 working") && no_text_has("asking") && !text_prefix("\xe2\x9c\x93"));
+        CHECK(images_in(480, 600) == 2 && dots_in(480, 600) == 2);   // a5 (working) and a6 (done)
+        CHECK(pick_hit(1, "codex") && F.hit_count == 3);   // the pick and the pill's two
+        CHECK(ph_home_moves(&N, &M));
+        // its neighbours: the Working card left, vscode's gradient and name right (ph_sb_34), no icon outside the main card
+        CHECK(text_run("VS Code") && text_run("VS Code")->pro_font == &ph_sb_34 && text_run("VS Code")->x >= 628);
+        for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == K_IMAGE) CHECK(S.runs[i].x >= 90 && S.runs[i].x < 630);
+        CHECK(!text_run("Harness"));   // the pill shows: Harness is the Tabs list, not a card
+        CHECK(ph_runs(&F) <= HT_RUNS);
+
+        // the vscode card (not the app shown): its numbers, no "All done", no marks
+        N.stack[0].scroll = POD_HOME_APP0 + 1;
+        fresh(); ph_view_home(&F, &N, &M, now);
+        const pod_app_style_t *vs = pod_app_style("vscode");
+        CHECK(vs && card_grad(vs->card_top, vs->card_bottom));
+        CHECK(text_run("1 working") && text_run("1 asking") && no_text_has("All done") && text_run("3"));
+        CHECK(images_in(480, 600) == 0 && dots_in(480, 600) == 0);
+        CHECK(pick_hit(2, "vscode") && !text_run("Harness"));
+
+        // an app with no style: the Pro's own dark, no icon, the name at the full width
+        static const pod_app_t plain[3] = {{"harness", "Harness", 4, 1, 1}, {"rex", "Rex mmmmmmmmmmmmmmmmmmm", 1, 0, 0}, {"vscode", "VS Code", 3, 1, 0}};
+        CHECK(!pod_app_style("rex"));
+        pod_model_apps(&M, plain, 3, "codex");
+        N.stack[0].scroll = POD_HOME_APP0;
+        fresh(); ph_view_home(&F, &N, &M, now);
+        CHECK(card_grad(ht_rgb(PH_RAISED), ht_rgb(PH_GROUND)) && images_in(0, 720) == 0);
+        nm = app_name();
+        CHECK(nm && !strncmp(nm->text, "Rex m", 5) && ht_pro_width(nm->pro_font, nm->text) > 364 && nm->w <= 452 && pick_hit(1, "rex"));   // past where an icon would start
+        CHECK(!text_prefix("\xe2\x9c\x93"));   // 0 working, 0 asking, and still no "All done" on an app card
+        CHECK(!ph_home_moves(&N, &M));   // 0 working, 0 asking: still
+        N.stack[0].scroll = POD_HOME_APP0 + 1;
+        CHECK(ph_home_moves(&N, &M));    // vscode: only asking
+        N.stack[0].scroll = POD_HOME_APP0;
+
+        // an older daemon sends no `working`: the row says 0/0 while a5, a ring agent of the app shown, works, so its mark moves
+        static const pod_app_t stale[2] = {{"harness", "Harness", 4, 1, 1}, {"codex", "ChatGPT", 2, 0, 0}};
+        pod_model_apps(&M, stale, 2, "codex");
+        CHECK(ph_home_moves(&N, &M));
+
+        // a long name and a Vietnamese one beside the icon: cut between letters with an ellipsis, never under the icon; 34 px for letters 48 lacks
+        static pod_app_t named[2] = {{"harness", "Harness", 4, 1, 1}, {"codex", "", 2, 0, 1}};
+        memset(named[1].name, 'm', sizeof named[1].name - 1);   // the row's longest: 23 letters
+        pod_model_apps(&M, named, 2, "codex");
+        fresh(); ph_view_home(&F, &N, &M, now);
+        nm = app_name();
+        CHECK(nm && !strcmp(nm->text + strlen(nm->text) - 3, "\xe2\x80\xa6") && nm->x + nm->w <= 498 && ht_pro_width(nm->pro_font, nm->text) <= 364);
+        snprintf(named[1].name, sizeof named[1].name, "\xe1\xbb\xa8ng d\xe1\xbb\xa5ng");
+        pod_model_apps(&M, named, 2, "codex");
+        fresh(); ph_view_home(&F, &N, &M, now);
+        nm = app_name();
+        CHECK(nm && !strcmp(nm->text, "\xe1\xbb\xa8ng d\xe1\xbb\xa5ng") && nm->pro_font == &ph_sb_34 && nm->x + nm->w <= 498);
+
+        // budget, worst case: the codex card with its icon and seven agents (4 marks and "+3"), the Notices card left, vscode right,
+        // the pill, and the glue's 2-run notice pill on top
+        for (int i = 6; i < 11; i++) pod_model_agent_app(&M, aid[i], "codex", POD_CAPS_ALL);
+        pod_model_turn(&M, "a5", "done", NULL, 0, now);
+        pod_model_question(&M, "a7", "ok?");   // a notice: the Notices card, and nobody works (no Working card)
+        static const pod_app_t worst[3] = {{"harness", "Harness", 4, 1, 1}, {"codex", "ChatGPT", 7, 1, 1}, {"vscode", "VS Code", 3, 1, 1}};
+        pod_model_apps(&M, worst, 3, "codex");
+        pod_nav_sync(&N, &M);
+        N.stack[0].scroll = POD_HOME_APP0;
+        fresh(); ph_view_home(&F, &N, &M, now);
+        CHECK(text_run("+3") && text_run("7") && text_run("1 working") && text_run("1 asking") && text_run("VS Code"));
+        CHECK(aa_at(-372, 96, 464, 481, 41, ph_mix(PH_LETTER, PH_HOME_BG, 45)) == 1);   // the Notices letter peeks left (its name is off the glass)
+        CHECK(images_in(480, 600) == 4 && dots_in(480, 600) == 4 && pick_hit(1, "codex"));
+        CHECK(ph_runs(&F) + 2 <= HT_RUNS && F.hit_count <= 32);
+        printf("runs home-app-worst %d\n", ph_runs(&F));
+
+        // the 16th card of sixteen apps, the same worst case
+        {
+            static const char *const ids[16] = {"orca", "herdr", "zellij", "tmux", "kitty", "wezterm", "iterm", "terminal-app", "ghostty", "cmux",
+                                                "vscode", "cursor", "warp", "claude", "opencode", "codex"};
+            static pod_app_t many[16];
+            for (int i = 0; i < 16; i++) {
+                memset(&many[i], 0, sizeof many[i]);
+                snprintf(many[i].id, sizeof many[i].id, "%s", ids[i]);
+                snprintf(many[i].name, sizeof many[i].name, "App %d", i);
+                many[i].count = 1;
+            }
+            many[15].count = 7; many[15].waiting = 1; many[15].working = 1;
+            pod_model_apps(&M, many, 16, "codex");
+            pod_nav_sync(&N, &M);
+            N.stack[0].scroll = POD_HOME_APP0 + 15;
+            CHECK(pod_tabs_pages_of(&N, &M) == 17);
+            fresh(); ph_view_home(&F, &N, &M, now);
+            CHECK(text_run("App 15") && text_run("+3") && pick_hit(15, "codex"));
+            CHECK(ph_runs(&F) + 2 <= HT_RUNS && F.hit_count <= 32);
+            printf("runs home-app-16th %d\n", ph_runs(&F));
+        }
+
+        // no window: no pill, Harness is a card too, on the Pro's own dark
+        pod_model_question_close(&M, "a7");
+        pod_model_turn(&M, "a7", "done", NULL, 0, now);
+        pod_model_apps(&M, apps, 3, "codex");
+        pod_model_swarms(&M, NULL, NULL, NULL, 0, "", NULL, 0);
+        pod_model_view(&M, true, false);
+        CHECK(!M.has_window);
+        pod_nav_sync(&N, &M);
+        N.stack[0].scroll = POD_HOME_APP0;
+        CHECK(pod_tabs_pages_of(&N, &M) == 3);   // harness, codex, vscode
+        fresh(); ph_view_home(&F, &N, &M, now);
+        check_no_pill();
+        CHECK(card_grad(ht_rgb(PH_RAISED), ht_rgb(PH_GROUND)) && app_name() && !strcmp(app_name()->text, "Harness") && pick_hit(0, "harness"));
+        CHECK(text_run("ChatGPT") && text_run("ChatGPT")->pro_font == &ph_sb_34 && text_run("ChatGPT")->x >= 628);   // codex peeks right
+        N.stack[0].scroll = POD_HOME_APP0 + 2;
+        fresh(); ph_view_home(&F, &N, &M, now);
+        CHECK(pick_hit(2, "vscode") && text_run("VS Code"));
     }
     printf("test_ph_views: %d checks ok\n", checks);
     return 0;

@@ -38,6 +38,9 @@ const fsyncs = () => vi.mocked(fsyncSync).mock.calls.length + asyncSync.mock.cal
 let directory: string
 let file: string
 let registry: typeof Registry
+// Loads the module graph once, before any hook's time limit: cold, it takes seconds on a loaded machine. Each test
+// still imports fresh modules (vi.resetModules), now from the warm transform cache.
+await import('./registry.js')
 const input = {
   agentId: 'observed-agent', engine: 'claude' as const, tmuxPane: '%31', cwd: '/fixture/project',
   processIdentity: { pid: 1031, executable: '/fixture/claude', startMarker: 'fixture-1031' },
@@ -410,5 +413,22 @@ describe('unchanged discovery observations', () => {
       .rejects.toThrow('uncommitted registry transaction')
     expect(registry.byAgent(input.agentId)?.closePlan).toBeUndefined()
     expect(readRows()[0].closePlan).toBeUndefined()
+  })
+})
+
+// A Stop's removal is written while its row is still observed: an attach that finishes late learns the engine's version and
+// sets it on the live row (core/engines/runtimeSessions.ts `accept`), a hook touches it. Taken as a newer live change, that
+// row came back once the removal was written, and the Stop failed "could not be durably retired" (e2e/enginehomes.e2e.ts).
+describe('a removal written while its row is observed', () => {
+  it.each(['remove', 'successor'] as const)('%s: the removed row stays gone', async disposition => {
+    const result = await registry.confirmEngineExit(input.agentId, disposition, { refresh: async () => {
+      registry.byAgent(input.agentId)!.cliVersion = '0.160.0'
+    } })
+    expect(result.state).toBe('confirmed')
+    expect(registry.byAgent(input.agentId)).toBeUndefined()
+    const shell = disposition === 'successor' && result.state === 'confirmed' ? result.entry : null
+    if (disposition === 'successor') expect(shell && registry.byAgent(shell.agentId)?.engine).toBe('terminal')
+    await registry.flush()
+    expect(readRows().map((row: { agentId: string }) => row.agentId)).toEqual(shell ? [shell.agentId] : [])
   })
 })

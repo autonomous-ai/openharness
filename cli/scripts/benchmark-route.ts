@@ -208,7 +208,7 @@ export async function createBenchmarkRoute(machineId: string, route: BenchmarkRo
     return {
       port: address.port,
       snapshot,
-      negotiation: () => inspected.entries.get(machineId)?.p2p?.negotiationDetail ?? 'no data channel',
+      negotiation: () => inspected.entries.get(machineId)?.p2p?.negotiationFacts ?? 'no data channel',
       turnHosts: () => (inspected.entries.get(machineId)?.p2pPolicy?.turn?.urls ?? [])
         .map((url) => url.match(/^turns?:([^:/?]+)/i)?.[1] ?? 'unrecognized'),
       close: async () => {

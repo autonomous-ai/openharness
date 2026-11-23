@@ -79,11 +79,12 @@ describe('repairProjectCwds (Claude Code rows)', () => {
     expect(store.get(archivedRow.agentId)).toEqual({ ...archivedBefore, cwd: project })
     expect(store.get(forkSaved.agentId)?.cwd).toBe(project)
     expect(logs.filter((l) => l.includes("left as is")), logs.join("\n")).toHaveLength(1)
-    expect(logs.filter((l) => l.includes('→'))).toHaveLength(4)
+    expect(logs.filter((l) => l.includes('cwd repaired'))).toHaveLength(4)
+    expect(logs.join('\n')).not.toContain(project)
 
     logs.length = 0
     expect(await repairClaudeCwd({ registry, stoppedAgents: store, log })).toEqual({ registry: 0, archived: 0 })
-    expect(logs.filter((l) => l.includes('→'))).toHaveLength(0)
+    expect(logs.filter((l) => l.includes('cwd repaired'))).toHaveLength(0)
     // Persisted, not just in memory.
     vi.resetModules()
     const { registry: reloaded } = await import('./registry.js')

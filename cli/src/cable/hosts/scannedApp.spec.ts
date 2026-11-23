@@ -7,9 +7,12 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RunningProcess } from '../../lib/sessionSearch/externals/types.js'
+import { RECORDED_HERDR } from '../../testing/recordedHerdr.js'
+import { RECORDED_ORCA } from '../../testing/recordedOrca.js'
 import { ObservedSource, type ObservedDeps } from './observed.js'
 import {
-  appRoots, learnApps, parseProcessNames, ptyOwner, readBundleId, readProcessNames, readPtyOwner, readTtyName, scannedApps,
+  appRoots, learnApps, parseProcessNames, ptyMaker, readBundleId, readMadeBy, readProcessNames, readPtyMaker,
+  readPtyOwner, readTtyName, scannedApps,
   WALK_PARENTS, type ProcessName, type PtyProcess, type ScannedAppDeps,
 } from './scannedApp.js'
 
@@ -239,10 +242,13 @@ describe('scannedApps on macOS', () => {
       pid, ppid, executable, get args(): string { throw new Error('a command line was read') },
     })
     const d = deps([])
-    d.processes.mockResolvedValue([row(100, 90, `${MARK} deploy to prod with this key`), row(90, 1, GHOSTTY), row(200, 1, `${MARK}`)])
+    d.processes.mockResolvedValue([
+      row(100, 90, `${MARK} deploy to prod with this key`), row(90, 1, GHOSTTY), row(200, 1, `${MARK}`),
+      row(300, 290, `${MARK} and more`), row(290, 1, 'iTermServer-3.5.4'), row(400, 1, `iTermServer-3.5.4 ${MARK}`),
+    ])
     d.bundleId.mockResolvedValue('com.mitchellh.ghostty')
-    const answer = await scannedApps([100, 200], d)
-    expect(JSON.stringify([...answer])).toBe('[[100,"ghostty"]]')
+    const answer = await scannedApps([100, 200, 300, 400], d)
+    expect(JSON.stringify([...answer])).toBe('[[100,"ghostty"],[300,"iterm"]]')
   })
 })
 
@@ -259,6 +265,17 @@ describe('scannedApps elsewhere', () => {
   it('on Linux a session under a process named harness is in Harness', async () => {
     const d = deps([[10, 9, 'claude'], [9, 8, 'bash'], [8, 1, 'harness']], {}, 'linux')
     expect(await scannedApps([10], d)).toEqual(new Map([[10, 'harness']]))
+  })
+
+  // Orca's daemon renames itself `orca-agents`, which names no app; Orca's main process, its parent in the .deb's record,
+  // names Orca, as it does in front (frontApp.ts), and makes the terminal itself when no daemon runs.
+  it('on Linux a session in an Orca terminal is in Orca, with the daemon and without it', async () => {
+    const { deb, inProcess } = RECORDED_ORCA.linux
+    const rows = [...deb.chain, ...inProcess.chain].map(({ pid, ppid, comm }): [number, number, string] => [pid, ppid, comm])
+    rows.push([deb.chain[deb.chain.length - 1].ppid, 1, inProcess.makerComm])
+    const d = deps(rows, {}, 'linux')
+    const [daemon, alone] = [deb.chain[0].pid, inProcess.chain[0].pid]
+    expect(await scannedApps([daemon, alone], d)).toEqual(new Map([[daemon, 'orca'], [alone, 'orca']]))
   })
 
   it('a process named codex names no app', async () => {
@@ -280,6 +297,76 @@ describe('scannedApps elsewhere', () => {
   })
 })
 
+// iTerm2 forks every shell from a copy of its server outside its bundle, which outlives iTerm2 when it relaunches
+// (docs/plans/2026-11-22-dial-iterm2-tmux-herdr-design.md, Gap 2).
+describe('iTerm2\'s server', () => {
+  const ITERM2 = '/Applications/iTerm.app/Contents/MacOS/iTerm2'
+  const ITERM_BUNDLE = { '/Applications/iTerm.app': 'com.googlecode.iterm2' }
+  const atHome = (rows: Array<[number, number, string]>, bundles: Record<string, string> = {}, platform: NodeJS.Platform = 'darwin') =>
+    ({ ...deps(rows, bundles, platform), home: HOME })
+  /** A plain tab's session under [server], whose parent is [parent]. */
+  const tab = (server: string, parent: number): Array<[number, number, string]> => [
+    [500, 499, 'claude'], [499, 498, '-zsh'], [498, 497, 'login'], [497, parent, server], [400, 1, ITERM2],
+  ]
+
+  it.each([
+    ['the Application Support copy', `${HOME}/Library/Application Support/iTerm2/iTermServer-3.5.4`],
+    ['the .iterm2 copy', `${HOME}/.iterm2/iTermServer-3.6.6`],
+    ['the bare name', 'iTermServer-3.5.4'],
+    ['a nightly', `${HOME}/Library/Application Support/iTerm2/iTermServer-3.6.0-nightly-20261120`],
+    ['the longest version', `iTermServer-3${'1'.repeat(31)}`],
+  ])('a plain tab under iTermServer is in iTerm2, in each form, with iTerm2 or launchd as its parent: %s', async (_, server) => {
+    const under = atHome(tab(server, 400), ITERM_BUNDLE)
+    expect(await scannedApps([500], under)).toEqual(new Map([[500, 'iterm']]))
+    // The row answers: iTerm2's own bundle past it is not read.
+    expect(under.bundleId).not.toHaveBeenCalled()
+    const adopted = atHome(tab(server, 1), ITERM_BUNDLE)
+    expect(await scannedApps([500], adopted)).toEqual(new Map([[500, 'iterm']]))
+    expect(adopted.bundleId).not.toHaveBeenCalled()
+  })
+
+  it('a tmux client and a herdr client in an iTerm2 tab name iTerm2 under a server launchd adopted', async () => {
+    const server = `${HOME}/Library/Application Support/iTerm2/iTermServer-3.5.4`
+    const d = atHome([
+      [600, 599, 'tmux'], [599, 598, '-zsh'], [598, 597, 'login'], [597, 1, server],
+      [700, 699, '/opt/homebrew/bin/herdr'], [699, 698, '-zsh'], [698, 697, 'login'], [697, 1, server],
+    ])
+    expect(await scannedApps([600, 700], d)).toEqual(new Map([[600, 'iterm'], [700, 'iterm']]))
+    expect(d.bundleId).not.toHaveBeenCalled()
+  })
+
+  it('near misses name nothing', async () => {
+    const names = [
+      'iTermServer', 'iTermServer-', 'iTermServer-x1', `iTermServer-3${'1'.repeat(32)}`, 'iTermServer-3.5.4 ',
+      '/tmp/iTermServer-3.5.4', '/Users/other/Library/Application Support/iTerm2/iTermServer-3.5.4',
+      `${HOME}/.iterm2/sub/iTermServer-3.5.4`, `${HOME}/Library/Application Support/iTerm2/../iTermServer-3.5.4`,
+    ]
+    const d = atHome(names.map((name, i) => [6000 + i, 1, name] as [number, number, string]))
+    expect(await scannedApps(names.map((_, i) => 6000 + i), d)).toEqual(new Map())
+    const linux = atHome([[10, 9, 'claude'], [9, 1, 'iTermServer-3.5.4']], {}, 'linux')
+    expect(await scannedApps([10], linux)).toEqual(new Map())
+  })
+
+  it('a nearer .app still wins', async () => {
+    const d = atHome([
+      [500, 499, 'claude'], [499, 498, '-zsh'], [498, 497, GHOSTTY], [497, 496, '-zsh'], [496, 495, 'login'],
+      [495, 1, 'iTermServer-3.5.4'],
+    ], { '/Applications/Ghostty.app': 'com.mitchellh.ghostty' })
+    expect(await scannedApps([500], d)).toEqual(new Map([[500, 'ghostty']]))
+  })
+
+  // The iTermServer session comes first: a slot it spent would leave the last app's bundle unread.
+  it('the row takes none of the 16 bundles a pass', async () => {
+    const pids = Array.from({ length: 16 }, (_, i) => 9000 + i)
+    const d = atHome([
+      [9500, 9499, 'claude'], [9499, 1, 'iTermServer-3.5.4'],
+      ...pids.flatMap((pid, i) => [[pid, pid + 100, 'claude'], [pid + 100, 1, `/Applications/App ${i}.app/Contents/MacOS/app`]] as Array<[number, number, string]>),
+    ], Object.fromEntries(pids.map((_, i) => [`/Applications/App ${i}.app`, 'com.mitchellh.ghostty'])))
+    expect(await scannedApps([9500, ...pids], d)).toEqual(new Map([[9500, 'iterm'], ...pids.map((pid) => [pid, 'ghostty'] as const)]))
+    expect(d.bundleId).toHaveBeenCalledTimes(16)
+  })
+})
+
 // A terminal or an editor started from another host's pane keeps that pane's variables: only the process that made the
 // agent's terminal says whose pane it is (docs/plans/2026-11-19-dial-linux-plan.md, Review Focus 1).
 describe('the host that owns a process\'s terminal', () => {
@@ -287,19 +374,19 @@ describe('the host that owns a process\'s terminal', () => {
     // An agent in Zellij's pane, whose server has no terminal; Zellij's client runs in kitty's window.
     const zellij = table([[100, 50, 'claude', 'pts/2'], [50, 29, 'bash', 'pts/2'], [29, 1, 'zellij'],
       [103, 21, 'zellij', 'pts/1'], [21, 20, 'bash', 'pts/1'], [20, 1, 'kitty']])
-    expect(ptyOwner(100, zellij)).toBe('zellij')
+    expect(ptyMaker(100, zellij)?.host).toBe('zellij')
     // kitty started from a Zellij pane: its window's terminal is kitty's, kitty itself on the pane's.
     const kitty = table([[400, 399, 'claude', 'pts/7'], [399, 398, 'zsh', 'pts/7'], [398, 50, 'kitty', 'pts/2'],
       [50, 29, 'bash', 'pts/2'], [29, 1, 'zellij']])
-    expect(ptyOwner(400, kitty)).toBe('kitty')
+    expect(ptyMaker(400, kitty)?.host).toBe('kitty')
     // tmux inside a Zellij pane: tmux's server, which has no terminal, made the agent's.
     const tmux = table([[500, 499, 'claude', 'pts/4'], [499, 498, 'bash', 'pts/4'], [498, 1, 'tmux: server'],
       [497, 50, 'tmux: client', 'pts/2'], [50, 29, 'bash', 'pts/2'], [29, 1, 'zellij']])
-    expect(ptyOwner(500, tmux)).toBe('tmux')
+    expect(ptyMaker(500, tmux)?.host).toBe('tmux')
   })
 
   it('names WezTerm\'s GUI and mux server, kitty, Zellij and tmux, by Linux\'s names and by macOS\'s paths', () => {
-    const owned = (owner: string) => ptyOwner(10, table([[10, 9, 'claude', 'pts/3'], [9, 8, '-zsh', 'pts/3'], [8, 1, owner]]))
+    const owned = (owner: string) => ptyMaker(10, table([[10, 9, 'claude', 'pts/3'], [9, 8, '-zsh', 'pts/3'], [8, 1, owner]]))?.host
     expect(['wezterm-gui', 'wezterm-mux-ser', 'wezterm-mux-server', '/Applications/WezTerm.app/Contents/MacOS/wezterm-gui',
       'kitty', '/Applications/kitty.app/Contents/MacOS/kitty', 'zellij', '/opt/homebrew/bin/zellij',
       'tmux: server', '/opt/homebrew/bin/tmux'].map(owned))
@@ -310,27 +397,46 @@ describe('the host that owns a process\'s terminal', () => {
     }
   })
 
+  // Every Orca mode recorded, the record walked so that a mode added to it is tested too.
+  it('ptyMaker over each recorded Orca chain is orca\'s', () => {
+    // macOS's chain has no pids: each step's parent is the next, the terminal host's launchd.
+    const macos = RECORDED_ORCA.macos.chain.map(({ comm, tty }, i, all): PtyProcess =>
+      ({ pid: 10 + i, ppid: i + 1 < all.length ? 11 + i : 1, executable: comm, ...(tty === null ? {} : { tty }) }))
+    expect(ptyMaker(10, macos)?.host).toBe('orca')
+    for (const [mode, { chain }] of Object.entries(RECORDED_ORCA.linux)) {
+      const rows = chain.map(({ pid, ppid, tty, comm }): PtyProcess => ({ pid, ppid, executable: comm, ...(tty === null ? {} : { tty }) }))
+      expect(ptyMaker(chain[0].pid, rows)?.host, mode).toBe('orca')
+    }
+  })
+
+  it('a renamed terminal host (a made-up name) is no host', () => {
+    // Orca's Linux daemon whose rename failed keeps its binary's name (RECORDED_ORCA.notCovered): never a host.
+    for (const name of ['node', 'orca-agents-x', 'Orca Agent', '/opt/Orca/orca-helper']) {
+      expect(ptyMaker(10, table([[10, 9, 'claude', 'pts/3'], [9, 8, 'bash', 'pts/3'], [8, 1, name]]))?.host, name).toBeUndefined()
+    }
+  })
+
   // VS Code started from WezTerm's pane 7 keeps WEZTERM_PANE=7 in its terminals: its own pty host made the agent's.
   it('a terminal started from a host\'s pane is not that host\'s', () => {
     const rows = table([[900, 899, 'codex', 'pts/9'], [899, 800, 'bash', 'pts/9'], [800, 700, 'code'],
       [700, 600, 'code', 'pts/5'], [600, 590, 'zsh', 'pts/5'], [590, 1, 'wezterm-gui']])
-    expect(ptyOwner(900, rows)).toBeUndefined()
+    expect(ptyMaker(900, rows)?.host).toBeUndefined()
   })
 
   it('none for a process on no terminal, one the table does not hold, or a walk that ends on its terminal', () => {
-    expect(ptyOwner(29, table([[29, 1, 'zellij']]))).toBeUndefined()
-    expect(ptyOwner(100, table([[29, 1, 'zellij']]))).toBeUndefined()
+    expect(ptyMaker(29, table([[29, 1, 'zellij']]))?.host).toBeUndefined()
+    expect(ptyMaker(100, table([[29, 1, 'zellij']]))?.host).toBeUndefined()
     // Its terminal's maker is not in the table, or is init: the walk ends with no owner.
-    expect(ptyOwner(100, table([[100, 50, 'claude', 'pts/2'], [50, 29, 'bash', 'pts/2']]))).toBeUndefined()
-    expect(ptyOwner(100, table([[100, 1, 'claude', 'pts/2']]))).toBeUndefined()
+    expect(ptyMaker(100, table([[100, 50, 'claude', 'pts/2'], [50, 29, 'bash', 'pts/2']]))?.host).toBeUndefined()
+    expect(ptyMaker(100, table([[100, 1, 'claude', 'pts/2']]))?.host).toBeUndefined()
   })
 
   it('walks no further than the scan does', () => {
     // The agent under WALK_PARENTS shells on its own terminal: kitty is one past the walk's end.
     const shells = Array.from({ length: WALK_PARENTS }, (_, i): [number, number, string, string] => [101 + i, 102 + i, 'sh', 'pts/1'])
     const rows = table([[100, 101, 'claude', 'pts/1'], ...shells, [101 + WALK_PARENTS, 1, 'kitty']])
-    expect(ptyOwner(100, rows)).toBeUndefined()
-    expect(ptyOwner(101, rows)).toBe('kitty')
+    expect(ptyMaker(100, rows)?.host).toBeUndefined()
+    expect(ptyMaker(101, rows)?.host).toBe('kitty')
   })
 })
 
@@ -345,7 +451,7 @@ describe('the host that owns a process\'s terminal, read', () => {
     })
     return { exec, tty: (pid: number) => readTtyName(pid, exec), read: () => exec.mock.calls.map(([, args]) => Number(args[3])) }
   }
-  // An agent in Zellij's pane, and Zellij's client in kitty's window: as `ptyOwner` was given them with their terminals.
+  // An agent in Zellij's pane, and Zellij's client in kitty's window: as `ptyMaker` was given them with their terminals.
   const ROWS = table([[100, 50, 'claude'], [50, 29, 'bash'], [29, 1, 'zellij'], [103, 21, 'zellij'], [21, 20, 'bash'], [20, 1, 'kitty']])
   const LINUX = { 100: 'pts/2', 50: 'pts/2', 29: '?', 103: 'pts/1', 21: 'pts/1', 20: '?' }
 
@@ -356,7 +462,7 @@ describe('the host that owns a process\'s terminal, read', () => {
     expect(at.exec.mock.calls[0]).toEqual(['ps', ['-o', 'tty=', '-p', '100'], { timeout: 1_000, maxBuffer: 256 }])
   })
 
-  it('answers as ptyOwner does over the same terminals, macOS\'s names too', async () => {
+  it('answers as ptyMaker does over the same terminals, macOS\'s names too', async () => {
     const mac = { 400: 'ttys007', 399: 'ttys007', 398: 'ttys002', 50: 'ttys002', 29: '??' }
     const rows = table([[400, 399, 'claude'], [399, 398, 'zsh'], [398, 50, '/Applications/kitty.app/Contents/MacOS/kitty'],
       [50, 29, 'bash'], [29, 1, '/opt/homebrew/bin/zellij']])
@@ -395,6 +501,129 @@ describe('the host that owns a process\'s terminal, read', () => {
   it('none for `?` and `??`', async () => {
     expect(await readTtyName(1, async () => '?\n')).toBeUndefined()
     expect(await readTtyName(1, async () => '??      \n')).toBeUndefined()
+  })
+})
+
+// herdr's own-pane check and its client lookup need the process itself, not only its host: herdr's server is where its
+// sockets are (docs/plans/2026-11-21-dial-linux-followups-design.md § 1).
+describe('the process that made a pseudo-terminal', () => {
+  const HERDR = RECORDED_HERDR.pids
+  /** Each recorded process with the terminal `ps -o tty=` gave it. */
+  const recorded = (): PtyProcess[] => parseProcessNames(RECORDED_HERDR.table).map((p) => {
+    const tty = RECORDED_HERDR.ttyOf[p.pid]?.trim()
+    return tty && tty !== '?' ? { ...p, tty } : p
+  })
+
+  it('ptyMaker over herdr\'s recorded scene: an agent in a pane is made by the server', () => {
+    expect(ptyMaker(HERDR.agent, recorded())).toEqual({ pid: HERDR.serverA, host: 'herdr' })
+    expect(ptyMaker(HERDR.otherShell, recorded())).toEqual({ pid: HERDR.otherServer, host: 'herdr' })
+    // herdr before 0.9.0 (#4500's macOS tests ran 0.8.0): `--no-session` ran the panes under the client, on its
+    // terminal's pty. 0.9.0 removed it (RECORDED_HERDR.noSession), so this table is made up.
+    const noSession = table([[300, 299, 'claude', 'pts/6'], [299, 298, 'sh', 'pts/6'], [298, 297, 'herdr', 'pts/5'],
+      [297, 296, '-bash', 'pts/5'], [296, 1, 'wezterm-gui']])
+    expect(ptyMaker(300, noSession)).toEqual({ pid: 298, host: 'herdr' })
+  })
+
+  it('a maker no table lists: its pid and no host', () => {
+    // herdr's client A, on the pty the stand-in terminal made.
+    expect(ptyMaker(HERDR.clientA, recorded())).toEqual({ pid: HERDR.terminalA })
+  })
+
+  it('a process on no terminal, or a walk that ends first: undefined', () => {
+    expect(ptyMaker(HERDR.serverA, recorded())).toBeUndefined()
+    expect(ptyMaker(100, table([[100, 50, 'claude', 'pts/2'], [50, 1, 'bash', 'pts/2']]))).toBeUndefined()
+  })
+
+  it('readPtyMaker reads ttys one at a time up to the maker, and rejects as readTtyName does', async () => {
+    const exec = vi.fn(async (_command: string, args: readonly string[]): Promise<string | null> =>
+      RECORDED_HERDR.ttyOf[Number(args[3])] ?? null)
+    const rows = parseProcessNames(RECORDED_HERDR.table)
+    expect(await readPtyMaker(HERDR.agent, rows, (pid) => readTtyName(pid, exec))).toEqual({ pid: HERDR.serverA, host: 'herdr' })
+    expect(exec.mock.calls.map(([, args]) => Number(args[3]))).toEqual([HERDR.agent, HERDR.agentShell, HERDR.serverA])
+    const gone = (pid: number) => readTtyName(pid, async (_command, args) => (Number(args[3]) === HERDR.agent ? 'pts/3\n' : null))
+    expect(await readPtyMaker(HERDR.agent, rows, gone).catch((e: unknown) => e)).toEqual(new Error('tty not read'))
+  })
+
+  it('macOS: herdr by its path\'s last part', () => {
+    const rows = table([[400, 399, 'claude', 'ttys007'], [399, 398, '-zsh', 'ttys007'], [398, 1, '/Users/u/.local/bin/herdr']])
+    expect(ptyMaker(400, rows)).toEqual({ pid: 398, host: 'herdr' })
+  })
+})
+
+// Diego's report of 2026-11-22: an idle agent in tmux or herdr inside iTerm2, found by the open scan, sat on Other's
+// page. The scan reads the look's table once, and the terminal's maker only of a session under one of them.
+describe('the makers of the sessions a look lists', () => {
+  /** The look's table, which holds no terminal, and a reader of each row's terminal that rejects for [gone]; each read kept. */
+  function look(rows: Array<[number, number, string, string?]>, gone: readonly number[] = []) {
+    const read: number[] = []
+    const ttys = new Map(rows.map(([pid, , , tty]) => [pid, tty]))
+    return {
+      rows: rows.map(([pid, ppid, executable]): ProcessName => ({ pid, ppid, executable })),
+      tty: async (pid: number): Promise<string | undefined> => {
+        read.push(pid)
+        if (gone.includes(pid)) throw new Error('tty not read')
+        return ttys.get(pid)
+      },
+      read,
+    }
+  }
+  const HOSTS = ['tmux', 'herdr']
+
+  it('a session in a tmux pane and one in a herdr pane: each one\'s host, its maker and its own tty', async () => {
+    const mac = look([[100, 90, 'claude', 'ttys010'], [90, 80, 'zsh', 'ttys010'], [80, 1, 'tmux'],
+      [200, 190, 'claude', 'ttys020'], [190, 180, 'zsh', 'ttys020'], [180, 1, '/opt/homebrew/bin/herdr']])
+    expect(await readMadeBy([100, 200], mac.rows, mac.tty, HOSTS)).toEqual(new Map([
+      [100, { host: 'tmux', maker: 80, tty: 'ttys010' }], [200, { host: 'herdr', maker: 180, tty: 'ttys020' }]]))
+    const linux = look([[100, 90, 'claude', 'pts/3'], [90, 80, 'bash', 'pts/3'], [80, 1, 'tmux: server'],
+      [200, 190, 'claude', 'pts/4'], [190, 180, 'bash', 'pts/4'], [180, 1, 'herdr']])
+    expect(await readMadeBy([100, 200], linux.rows, linux.tty, HOSTS)).toEqual(new Map([
+      [100, { host: 'tmux', maker: 80, tty: 'pts/3' }], [200, { host: 'herdr', maker: 180, tty: 'pts/4' }]]))
+  })
+
+  it('no tty is read for a session with no tmux or herdr among its parents', async () => {
+    const at = look([[300, 290, 'claude', 'ttys005'], [290, 280, '-zsh', 'ttys005'], [280, 270, '/usr/bin/login', 'ttys005'],
+      [270, 1, '/Applications/iTerm.app/Contents/MacOS/iTerm2'],
+      [400, 390, 'claude', 'pts/2'], [390, 29, 'bash', 'pts/2'], [29, 1, 'zellij']])
+    expect(await readMadeBy([300, 400], at.rows, at.tty, HOSTS)).toEqual(new Map())
+    expect(at.read).toEqual([])
+  })
+
+  it('a terminal started from a tmux pane is not tmux\'s', async () => {
+    const at = look([[500, 499, 'claude', 'ttys030'], [499, 498, '-zsh', 'ttys030'],
+      [498, 497, GHOSTTY, 'ttys010'], [497, 80, '-zsh', 'ttys010'], [80, 1, 'tmux']])
+    expect(await readMadeBy([500], at.rows, at.tty, HOSTS)).toEqual(new Map())
+    expect(at.read).toEqual([500, 499, 498])
+  })
+
+  it('a pid whose tty read rejects is left out, and the next is still read', async () => {
+    // Its shell gone between the table's read and its terminal's.
+    const at = look([[100, 90, 'claude', 'ttys010'], [90, 80, 'zsh', 'ttys010'], [80, 1, 'tmux'],
+      [200, 190, 'claude', 'ttys011'], [190, 80, 'zsh', 'ttys011']], [90])
+    expect(await readMadeBy([100, 200], at.rows, at.tty, HOSTS)).toEqual(new Map([[200, { host: 'tmux', maker: 80, tty: 'ttys011' }]]))
+    expect(at.read).toEqual([100, 90, 200, 190, 80])
+  })
+
+  it('one pid at a time', async () => {
+    const at = look([[100, 90, 'claude', 'ttys010'], [90, 80, 'zsh', 'ttys010'], [80, 1, 'tmux'],
+      [200, 190, 'claude', 'ttys011'], [190, 80, 'zsh', 'ttys011']])
+    let reading = 0
+    let most = 0
+    const tty = async (pid: number): Promise<string | undefined> => {
+      most = Math.max(most, ++reading)
+      await Promise.resolve()
+      reading--
+      return at.tty(pid)
+    }
+    expect([...(await readMadeBy([100, 200], at.rows, tty, HOSTS)).keys()]).toEqual([100, 200])
+    expect(most).toBe(1)
+    expect(at.read).toEqual([100, 90, 80, 200, 190, 80])
+  })
+
+  it.skipIf(process.platform === 'win32')('learnApps over the look\'s rows runs no ps', async () => {
+    patient.answers = { plutil: 'com.mitchellh.ghostty\n' }
+    const top = process.platform === 'darwin' ? GHOSTTY : 'ghostty'
+    expect(await learnApps([100], table([[100, 90, 'claude'], [90, 1, top]]))).toEqual(new Map([[100, 'ghostty']]))
+    expect(patient.calls.map(([, file]) => file)).not.toContain('ps')
   })
 })
 
@@ -445,7 +674,7 @@ describe('the process table the scan reads', () => {
 
   it.skipIf(process.platform === 'win32')('runs one ps with comm last: no command line, no environment, under 3 s and 1 MiB', async () => {
     const exec = vi.fn(async (): Promise<string | null> => '  100     1 claude\n')
-    await learnApps([100], exec)
+    await learnApps([100], undefined, exec)
     expect(exec.mock.calls).toEqual([['ps', ['-axo', 'pid=,ppid=,comm='], { timeout: 3_000, maxBuffer: 1024 * 1024 }]])
   })
 
@@ -470,6 +699,7 @@ describe.skipIf(process.platform === 'win32')('the scan\'s process read', () => 
     const exec = vi.fn(async (): Promise<string | null> => [...owners.values()].map(({ pid }) => `  ${pid}     1 claude`).join('\n'))
     const src = new ObservedSource({
       now: () => 0,
+      platform: 'darwin',
       processes: async () => [...owners.values()].map(({ pid }) => ({ pid, generation: `g${pid}` })),
       alive: () => true,
       openSessions: { owners: async () => new Map(owners), busy: async () => false } as unknown as ObservedDeps['openSessions'],
@@ -480,7 +710,7 @@ describe.skipIf(process.platform === 'win32')('the scan\'s process read', () => 
       fileStamp: async () => null,
       excluded: [],
       log: () => {},
-      apps: (pids) => learnApps(pids, exec),
+      apps: (pids) => learnApps(pids, undefined, exec),
     })
     const open = (...ids: string[]): void => { for (const id of ids) owners.set(id, { pid: 100 + owners.size, engine: 'claude', record: id }) }
     await src.tick()
@@ -562,6 +792,7 @@ describe('the scan and a process name', () => {
     ])
     const src = new ObservedSource({
       now: () => 0,
+      platform: 'darwin',
       processes: async () => [],
       alive: () => true,
       openSessions: {

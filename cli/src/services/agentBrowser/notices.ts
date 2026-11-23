@@ -9,7 +9,7 @@
  * owed, and its next ready tries again.
  */
 import { randomUUID } from 'node:crypto'
-import { errorKind } from '../../lib/log.js'
+import { codeOrLength, errorKind } from '../../lib/log.js'
 import type { StateFile } from './stateFile.js'
 
 export const READY_LINE = 'Your browser is ready: run `harness browser --help`'
@@ -172,7 +172,7 @@ export class Notices {
     if (line.tries >= NOTICE_TRIES) {
       this.lines.delete(`${line.agentId}:${line.kind}`)
       this.deps.measure('agent_browser_notice_failed')
-      this.deps.log(`agent browser ${line.agentId}: notice_failed: the ${line.kind} line was not typed after ${NOTICE_TRIES} tries (${event.reason ?? 'rejected'})`)
+      this.deps.log(`agent browser ${line.agentId}: notice_failed: the ${line.kind} line was not typed after ${NOTICE_TRIES} tries (${codeOrLength(event.reason ?? 'REJECTED')})`)
       return
     }
     line.timer = setTimeout(() => {

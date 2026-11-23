@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { NoticeAsk } from '../lib/dialNotice.js'
+import { composeNotice, type NoticeAsk } from '../lib/dialNotice.js'
 import { type ListedAgent, listedAgent, type NoticeCaller, noticeKeys, Notices, type StoredNotice } from './notices.js'
 
 type Call = ['ask', string, string, unknown] | ['close', string, string] | ['hold', string, string, unknown]
@@ -12,7 +12,7 @@ function desk(opts: {
     connected: opts.connected ?? true, at: 0, clock: opts.clock ?? 0, ids: 0, resolved: 0, changes: 0, redraws: [] as string[][], held: new Set<string>(),
   }
   const calls: Call[] = []
-  const counted: Array<[string, string]> = []
+  const counted: Array<[string, string, string]> = []
   const logs: string[] = []
   const notices = new Notices({
     connected: () => state.connected,
@@ -28,7 +28,7 @@ function desk(opts: {
     now: () => state.at,
     clock: () => state.clock,
     changed: () => { state.changes += 1 },
-    count: (engine, result) => counted.push([engine, result]),
+    count: (engine, result, kind) => counted.push([engine, result, kind]),
     restored: opts.restored ?? [],
     log: (line) => logs.push(line),
     redraw: (agentIds) => { state.redraws.push([...agentIds]) },
@@ -47,7 +47,7 @@ describe('Notices', () => {
     expect(notices.notify(notice(VPN))).toBe('shown')
     expect(calls).toEqual([['ask', 'a1', expect.stringMatching(/^shown:/),
       [{ key: 'notice', q: VPN, options: ['In Orca'] }]]])
-    expect(counted).toEqual([['claude', 'shown']])
+    expect(counted).toEqual([['claude', 'shown', 'plain']])
   })
 
   it('letters the round dial cannot draw become ?', () => {
@@ -69,6 +69,14 @@ describe('Notices', () => {
     expect((asks()[1][3] as Array<{ q: string }>)[0].q).toBe(fits)
   })
 
+  // The CLI composes a waiting line to the byte limit: the card must carry its suggestion whole, not cut off the end.
+  it('a composed line of exactly 239 bytes is asked whole', () => {
+    const { notices, asks } = desk()
+    const line = composeNotice('ữ'.repeat(100), 'Dùng Redis', 'waiting')
+    notices.notify(notice(line))
+    expect((asks()[0][3] as Array<{ q: string }>)[0].q).toBe(line)
+  })
+
   // What is counted is the engine and the outcome only: the text, session and folder are the person's own.
   it('each answer is counted by its engine, agent for a caller that names none', () => {
     const { notices, state, counted } = desk()
@@ -76,7 +84,23 @@ describe('Notices', () => {
     notices.notify(notice(VPN, 'sess-7f3a'))
     state.connected = false
     notices.notify({ text: VPN })
-    expect(counted).toEqual([['claude', 'shown'], ['claude', 'limited'], ['agent', 'no dial']])
+    expect(counted).toEqual([['claude', 'shown', 'plain'], ['claude', 'limited', 'plain'], ['agent', 'no dial', 'plain']])
+  })
+
+  // The kind is read from the opening the CLI writes; a plain line that only starts like one is a limit the spec names.
+  it('each answer is counted with the kind its line opens with', () => {
+    const { notices, state, counted } = desk()
+    notices.notify(notice('Waiting · Q', 'a1'))
+    notices.notify(notice('Proceeding · Q · Doing: S', 'a2'))
+    notices.notify(notice('Connect the VPN', 'a3'))
+    notices.notify(notice('Waiting for CI', 'a4'))
+    notices.notify(notice('Waiting · Q2', 'a1'))
+    state.connected = false
+    notices.notify(notice('Proceeding · Q · Doing: S', 'a5'))
+    expect(counted).toEqual([
+      ['claude', 'shown', 'waiting'], ['claude', 'shown', 'proceeding'], ['claude', 'shown', 'plain'], ['claude', 'shown', 'plain'],
+      ['claude', 'limited', 'waiting'], ['claude', 'no dial', 'proceeding'],
+    ])
   })
 
   it('with no dial nothing is asked, resolved or counted', () => {

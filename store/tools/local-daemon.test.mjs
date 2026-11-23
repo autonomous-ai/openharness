@@ -295,4 +295,8 @@ test('the data folder is <data>/cli/data, and ADAPTER_DATA_DIR still wins', (t) 
   writeFileSync(join(data, '.harness-root'), '1\n', { mode: 0o600 })
   assert.equal(daemonDataDir({ HOME: home }), join(data, 'cli', 'data'))
   assert.equal(daemonDataDir({ HOME: home, ADAPTER_DATA_DIR: '/d' }), '/d')
+  // As the CLI reads it (cli/src/config/envFields.ts homePath): an agent runs in its project, never the home. An absolute
+  // one is kept as written, as the daemon hashes its socket folder from that text.
+  assert.equal(daemonDataDir({ HOME: home, ADAPTER_DATA_DIR: 'own/data/' }), join(home, 'own', 'data'))
+  assert.equal(daemonDataDir({ HOME: home, ADAPTER_DATA_DIR: '/d//data/' }), '/d//data/')
 })

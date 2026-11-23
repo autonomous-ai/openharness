@@ -143,3 +143,91 @@ describe('a tool\'s watch on the harnesses it named', () => {
     expect(sent).toEqual([])
   })
 })
+
+/** An `agent_synced` as the daemon sends it (lib/sessionSync.ts): the agent's whole frame, which a tool never gets. */
+const synced = (id: string, agent: Record<string, unknown> = {}) => ({ type: 'agent_synced', payload: { agent: {
+  id, name: 'PRIVATE name', title: 'PRIVATE title', starting: false, launch: { state: 'ready' }, tokenUsage: null, ...agent } } })
+/** All a watch is told of a sync: which harness, so its `wait` or `watch` looks now rather than at its backstop. */
+const toldSync = (agentId: string) => ({ connId: 'local:t', frame: { type: 'agent_synced', agentId, payload: { agentId } } })
+const GATEWAY = 'OpenClaw Gateway is not running. Start it with openclaw gateway.'
+const APPROVAL = 'OpenClaw is waiting for this device to be approved. Run openclaw devices approve --latest.'
+
+describe('a tool\'s watch told a harness\'s start, failed launch or hold changing', () => {
+  it('is told a hold\'s end once: the first sync it sees of the harness, then the end', () => {
+    const { watches, sent } = setup()
+    watches.watch('local:t', true, ['a'])
+    watches.tell(synced('a', { identityHold: GATEWAY, namedState: GATEWAY }))
+    watches.tell(synced('a', { identityHold: GATEWAY, namedState: GATEWAY }))
+    watches.tell(synced('a'))
+    expect(sent).toEqual([toldSync('a'), toldSync('a')])
+  })
+
+  it('is told a new hold reason once', () => {
+    const { watches, sent } = setup()
+    watches.watch('local:t', true, ['a'])
+    watches.tell(synced('a', { identityHold: GATEWAY }))
+    watches.tell(synced('a', { identityHold: APPROVAL }))
+    watches.tell(synced('a', { identityHold: APPROVAL }))
+    expect(sent).toEqual([toldSync('a'), toldSync('a')])
+  })
+
+  it('is told a start\'s end once', () => {
+    const { watches, sent } = setup()
+    watches.watch('local:t', true, ['a'])
+    watches.tell(synced('a', { starting: true }))
+    watches.tell(synced('a', { starting: true }))
+    watches.tell(synced('a', { starting: false }))
+    watches.tell(synced('a'))
+    expect(sent).toEqual([toldSync('a'), toldSync('a')])
+  })
+
+  it('is told a launch failing once, and a failure for another reason', () => {
+    const { watches, sent } = setup()
+    watches.watch('local:t', true, ['a'])
+    watches.tell(synced('a', { launch: { state: 'starting' } }))
+    // A launch that turned ready changes nothing `wait` or `watch` acts on.
+    watches.tell(synced('a', { launch: { state: 'ready' } }))
+    watches.tell(synced('a', { launch: { state: 'failed', error: 'FIRST_TASK_NOT_TAKEN' } }))
+    watches.tell(synced('a', { launch: { state: 'failed', error: 'FIRST_TASK_NOT_TAKEN' } }))
+    watches.tell(synced('a', { launch: { state: 'failed', error: 'ENGINE_DID_NOT_START' } }))
+    expect(sent).toEqual([toldSync('a'), toldSync('a'), toldSync('a')])
+  })
+
+  it('is told nothing of a sync that changes only the name, the title or the token usage', () => {
+    const { watches, sent } = setup()
+    watches.watch('local:t', true, ['a'])
+    watches.tell(synced('a'))
+    watches.tell(synced('a', { name: 'Renamed', title: 'Another', tokenUsage: { input: 10, output: 2 } }))
+    watches.tell(synced('a', { launch: undefined }))
+    expect(sent).toEqual([toldSync('a')])
+  })
+
+  it('is told a sync sent down both paths once', () => {
+    const { watches, sent } = setup()
+    watches.watch('local:t', true, ['a'])
+    // backendSocket.ts hands what `send` and `sendCommander` send to `tell` alike: lib/sessionSync.ts sends a sync down both.
+    const frame = synced('a', { starting: true })
+    watches.tell(frame)
+    watches.tell(frame)
+    expect(sent).toEqual([toldSync('a')])
+  })
+
+  it('is told nothing of another harness\'s sync, nor of one that names none', () => {
+    const { watches, sent } = setup()
+    watches.watch('local:t', true, ['a'])
+    watches.tell(synced('b', { identityHold: GATEWAY }))
+    watches.tell({ type: 'agent_synced', payload: { agent: { name: 'PRIVATE name' } } })
+    watches.tell(synced('a'))
+    expect(sent).toEqual([toldSync('a')])
+  })
+
+  it('never gets anything of the agent\'s frame: its name, its title or its hold\'s sentence', () => {
+    const { watches, sent } = setup()
+    watches.watch('local:t', true, ['a'])
+    watches.tell(synced('a', { starting: true, identityHold: GATEWAY, namedState: GATEWAY }))
+    watches.tell(synced('a', { launch: { state: 'failed', error: 'FIRST_TASK_NOT_TAKEN', detail: 'PRIVATE detail' } }))
+    expect(sent).toHaveLength(2)
+    const told = JSON.stringify(sent)
+    for (const word of ['PRIVATE', GATEWAY, 'FIRST_TASK_NOT_TAKEN', 'launch', 'starting']) expect(told).not.toContain(word)
+  })
+})

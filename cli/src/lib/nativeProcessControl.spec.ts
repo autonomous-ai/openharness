@@ -251,7 +251,7 @@ describe('joined Linux control proof', () => {
       if (operation !== 'opendirSync' || path !== '/proc/42/fd' || ++calls !== 2) return
       if (mode === 'descriptor') symlinkSync('pipe:[3]', join(host.root, 'proc/42/fd/3'))
       if (mode === 'generation') file(join(host.root, 'proc/42/stat'), `42 (codex) S 1 ${Array(17).fill(0).join(' ')} 101\n`)
-      if (mode === 'image') { rmSync(join(host.root, 'proc/42/exe')); symlinkSync('/different', join(host.root, 'proc/42/exe')) }
+      if (mode === 'image') { unlinkSync(join(host.root, 'proc/42/exe')); symlinkSync('/different', join(host.root, 'proc/42/exe')) }
       if (mode === 'child') { processRow(43, 42); file(join(host.root, 'proc/42/task/42/children'), '43 ') }
       if (mode === 'task') file(join(host.root, 'proc/42/task/99/children'), 'bogus')
     }

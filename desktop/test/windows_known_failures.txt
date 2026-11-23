@@ -150,13 +150,3 @@ test/environment_setup_screen_test.dart::setup details and recovery text have re
 test/harness_cli_runner_test.dart::remote-password status invokes cli.js as direct argv and reads its JSON result
 test/harness_cli_runner_test.dart::uses the explicit legacy launcher before PATH
 test/harness_cli_runner_test.dart::uses the managed Node runtime and CLI bundle without a shell
-
-# POSIX-updater-or-appimage (7)
-# These tests exercise macOS updater keys/staging, or Linux AppImage Exec/chmod/install behavior; Windows updater is added later in C4.
-test/desktop_updater_test.dart::Linux architecture packaging downloadAndStage stages the AppImage as-is and makes it executable
-test/desktop_updater_test.dart::Linux architecture packaging downloadAndStage verifies a large download off the UI isolate
-test/linux_app_image_test.dart::a path with spaces is quoted for the launcher
-test/linux_app_image_test.dart::an AppImage started from Downloads lands in the app list
-test/linux_app_image_test.dart::an entry for a copy still on disk is not taken over
-test/linux_app_image_test.dart::an entry whose AppImage is gone follows the one running
-test/linux_app_image_test.dart::an existing launcher for this copy gains the fork protocol

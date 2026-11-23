@@ -12,25 +12,16 @@
 import type { ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
-import { request } from 'node:http'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { IsolatedDaemon } from './harness/daemon.js'
 import { Desk, devicesPids } from './harness/desk.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 import { IN_ORCA, InOrca } from './harness/inOrca.js'
+import { inboxPoll } from './harness/modInbox.js'
 
 /** At once, not a held hook's seconds: room for the CLI's own start on a loaded machine. */
 const AT_ONCE_MS = 30_000
-
-/** A POST of the mod's poll over the daemon's socket, as the mod sends it: its status once answered. */
-const inboxPoll = (d: IsolatedDaemon, sessionId: string, signal?: AbortSignal): Promise<number> =>
-  new Promise((resolve, reject) => {
-    const req = request({ socketPath: d.socketPath, path: '/api/hook/inbox', method: 'POST', headers: { 'Content-Type': 'application/json' }, signal },
-      (res) => { res.resume(); resolve(res.statusCode ?? 0) })
-    req.on('error', reject)
-    req.end(JSON.stringify({ sessionId }))
-  })
 
 describe('the dial shows Claude Code waiting outside Harness', () => {
   let daemon: IsolatedDaemon | undefined
@@ -145,7 +136,7 @@ describe('the dial shows Claude Code waiting outside Harness', () => {
   it('the inbox route answers 503 with no dial, and holds a poll with one', async () => {
     const { d, desk } = await fresh()
     const sessionId = randomUUID()
-    expect(await inboxPoll(d, sessionId)).toBe(503)
+    expect((await inboxPoll(d, sessionId)).status).toBe(503)
     await plugged(desk)
     // Held: no answer within a second; the devices would end it only after 25 s.
     await expect(inboxPoll(d, sessionId, AbortSignal.timeout(1_000))).rejects.toThrow(/abort/i)

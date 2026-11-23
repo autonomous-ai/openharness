@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { APP_BUNDLES, APP_IDS, appDisplayName, detectApp, detectHost, hostDisplayName, inCmux, inHerdr, UNKNOWN_APP } from './hostDetect.js'
+import { APP_BUNDLES, APP_IDS, appDisplayName, detectApp, detectHost, hostDisplayName, inCmux, inHerdr, ownHints, UNKNOWN_APP } from './hostDetect.js'
 
 describe('detectHost', () => {
   it.each([
@@ -303,5 +303,45 @@ describe('inCmux', () => {
     const hints = { TERM_PROGRAM: 'ghostty', __CFBundleIdentifier: 'com.cmuxterm.app' }
     expect(detectHost(hints)).toBe('ghostty')
     expect(detectApp(hints)).toBe('cmux')
+  })
+})
+
+// `code .` from Terminal: the editor inherits Terminal's bundle id, while its own terminals say TERM_PROGRAM=vscode (V11).
+describe('ownHints', () => {
+  it('drops a bundle id an editor inherited from the app it was started from', () => {
+    const hints = ownHints({ TERM_PROGRAM: 'vscode', __CFBundleIdentifier: APP_BUNDLES['terminal-app'] })
+    expect(hints).toEqual({ TERM_PROGRAM: 'vscode' })
+    expect(detectApp(hints)).toBe('vscode')
+    expect(detectHost(hints)).toBe('vscode')
+  })
+
+  it('keeps an editor\'s own bundle id: Cursor stays Cursor, VS Code stays VS Code', () => {
+    const cursor = { TERM_PROGRAM: 'vscode', __CFBundleIdentifier: APP_BUNDLES.cursor }
+    const vscode = { TERM_PROGRAM: 'vscode', __CFBundleIdentifier: APP_BUNDLES.vscode }
+    expect(ownHints(cursor)).toEqual(cursor)
+    expect(ownHints(vscode)).toEqual(vscode)
+    expect([detectApp(ownHints(cursor)), detectHost(ownHints(cursor))]).toEqual(['cursor', 'cursor'])
+    expect([detectApp(ownHints(vscode)), detectHost(ownHints(vscode))]).toEqual(['vscode', 'vscode'])
+  })
+
+  it('keeps the bundle id of any other terminal', () => {
+    const iterm = { TERM_PROGRAM: 'iTerm.app', __CFBundleIdentifier: APP_BUNDLES['terminal-app'] }
+    expect(ownHints(iterm)).toEqual(iterm)
+  })
+
+  // The extension's tab runs with the editor's own environment: Terminal's bundle id, and no TERM_PROGRAM.
+  // Its word names no app, VS Code's forks say it too: the caller's parents name the editor (observed.ts walked).
+  it('drops a bundle id the extension\'s tab inherited, and names no app', () => {
+    const hints = ownHints({ __CFBundleIdentifier: APP_BUNDLES['terminal-app'], CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' })
+    expect(hints).toEqual({ CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' })
+    expect(detectApp(hints)).toBe(UNKNOWN_APP)
+  })
+
+  it('keeps an editor\'s own bundle id beside the extension\'s word', () => {
+    for (const editor of ['vscode', 'cursor']) {
+      const hints = { __CFBundleIdentifier: APP_BUNDLES[editor], CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' }
+      expect(ownHints(hints)).toEqual(hints)
+      expect(detectApp(hints)).toBe(editor)
+    }
   })
 })

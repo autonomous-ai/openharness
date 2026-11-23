@@ -96,6 +96,8 @@ export interface TerminalP2pSignal {
   protocolVersion: number
   sdp?: string
   candidate?: RTCIceCandidateInit | null
+  /** Our own abort's reason, for the peer's log. A peer's is never read: it is the peer's text, and its abort reads
+   *  `peer_aborted` in our log lines and in the backend's p2p metric. */
   reason?: string
   stunUrls?: string[]
   /**
@@ -322,12 +324,13 @@ export class TerminalP2pInitiator {
    * the peer never replied to our offer, so no candidate of ours — STUN or TURN — was ever going to be
    * tried. That is a peer problem, not a connectivity one, and no amount of relay fixes it.
    */
-  get negotiationDetail(): string {
+  get negotiationFacts(): string {
     // Both sides gather before signalling (nothing subscribes to onIceCandidate), so the candidate
     // types live in the descriptions, NOT in the trickle frames — counting those would always read 0
     // and hide exactly the asymmetry that matters: whether the PEER managed a relay candidate too.
+    // The peer writes its own description, so a type is one of ICE's four words or `other`: this reaches the log.
     const types = (sdp: string): string =>
-      [...new Set([...sdp.matchAll(/typ (\w+)/g)].map((m) => m[1]))].join('/') || 'none'
+      [...new Set([...sdp.matchAll(/typ (\w+)/g)].map((m) => /^(host|srflx|prflx|relay)$/.test(m[1]) ? m[1] : 'other'))].join('/') || 'none'
     return `answer=${this.sawAnswer ? 'yes' : 'no'}`
       + ` ours=${types(this.pc?.localDescription?.sdp ?? '')}`
       + ` peer=${types(this.pc?.remoteDescription?.sdp ?? '')}`
@@ -424,7 +427,7 @@ export class TerminalP2pInitiator {
       } else if (type === 'p2p_ice_candidate') {
         await pc.addIceCandidate(payload.candidate ?? null)
       } else if (type === 'p2p_abort') {
-        this.fail(payload.reason || 'peer_aborted')
+        this.fail('peer_aborted')
       }
     } catch {
       this.fail('signal_invalid')
@@ -616,7 +619,7 @@ export class TerminalP2pResponderPool {
     if (entry && entry.sessionId === payload.sessionId) {
       try {
         if (type === 'p2p_ice_candidate') await entry.pc.addIceCandidate(payload.candidate ?? null)
-        else if (type === 'p2p_abort') await this.closeConnection(connId, payload.reason || 'peer_aborted', false)
+        else if (type === 'p2p_abort') await this.closeConnection(connId, 'peer_aborted', false)
       } catch {
         await this.closeConnection(connId, 'signal_invalid')
       }
@@ -627,7 +630,7 @@ export class TerminalP2pResponderPool {
     if (shadow && shadow.sessionId === payload.sessionId) {
       try {
         if (type === 'p2p_ice_candidate') await shadow.pc.addIceCandidate(payload.candidate ?? null)
-        else if (type === 'p2p_abort') await this.closeShadow(connId, payload.reason || 'peer_aborted')
+        else if (type === 'p2p_abort') await this.closeShadow(connId, 'peer_aborted')
       } catch {
         await this.closeShadow(connId, 'signal_invalid')
       }

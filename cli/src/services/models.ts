@@ -90,7 +90,7 @@ export function startModels(core: CoreApi, ports: CorePorts): ServiceRequests {
         await ensureManagedGrid((m) => console.log(`[grid-runtime] ${m}`))
         if (gridAvailable()) return
         const installed = await ensureGridInstalled()
-        if (installed.status !== 'present') gridLog(installed.message)
+        if (installed.status !== 'present') gridLog(`grid install: ${installed.status} · its message ${Buffer.byteLength(installed.message)} B`)
       },
       gridAvailable: () => gridAvailable(),
       // The backend mints and remembers the name, through the core, which holds the sign-in.

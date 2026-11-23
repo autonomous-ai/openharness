@@ -17,6 +17,14 @@ export const INSTALL_URL = "https://harness.autonomous.ai/install.sh";
 export const INSTALL_COMMAND = `curl -fsSL ${INSTALL_URL} | bash`;
 
 /**
+ * Harness Device's one line on Linux. The short URL redirects (`next.config.js`) to the CDN copy of
+ * `website/scripts/device-install.sh`, which `release-device.yml` uploads with every release that carries Linux.
+ */
+export const DEVICE_INSTALL_URL = "https://harness.autonomous.ai/device/install.sh";
+
+export const DEVICE_INSTALL_COMMAND = `curl -fsSL ${DEVICE_INSTALL_URL} | bash`;
+
+/**
  * The stable, versionless link behind the macOS "Download" button — `src/app/desktop/download-macos/`.
  *
  * A redirect rather than a direct GCS link on purpose: published artifacts live under a versioned

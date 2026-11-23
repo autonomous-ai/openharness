@@ -16,6 +16,7 @@ import { baseNode } from '../harnessd/baseNode.js'
 import { PlatformService, defaultPlatformDeps, platformFor } from '../harnessd/platform.js'
 import { DAEMON_LOG_FILE } from './daemonState.js'
 import { ensureLauncher } from './launchers.js'
+import { codeOrLength } from './log.js'
 
 /** Which reference was rewritten. */
 export interface NodeReferences { launcher: boolean; service: boolean }
@@ -41,7 +42,8 @@ export function refreshNodeReferences(log: (line: string) => void, reference: Se
   const launcher = ensureLauncher(node, log)
   const { service } = reference
   const repointed = service?.repointNode(node, reference.logFile) ?? null
-  if (repointed?.ok) log(`  ✓ repointed ${service!.file} at ${node}`)
-  else if (repointed) log(`  ✗ ${service!.file} was left on its Node: ${repointed.detail}`)
+  // The master logs these: the definition, the Node and the platform's reason each name a path under the person's home.
+  if (repointed?.ok) log('  ✓ repointed the service definition at the new Node')
+  else if (repointed) log(`  ✗ the service definition was left on its Node: ${codeOrLength(repointed.detail)}`)
   return { launcher, service: repointed?.ok === true }
 }

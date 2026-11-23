@@ -1,5 +1,7 @@
 /** The Claude app's store read (`ClaudeAppStore`): a first read of 16 and of 200 session files, and the read after one
- * changed file. Only on a fixture store in a throwaway folder: never the Claude app's own, never a real home.
+ * changed file. Only on a fixture store in a throwaway folder: never the Claude app's own, never a real home. Each
+ * store is this OS's first root under a throwaway home of its own, read with every root of that home, so a Windows run
+ * measures the walk of both.
  * Run from cli/: node --import tsx scripts/benchmark-claude-app-store.ts [output.json]
  */
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -31,17 +33,19 @@ interface Case { name: string; files: number; rounds: number; medianMs: number; 
 try {
   const { ClaudeAppStore } = await import('../src/cable/hosts/claudeAppStore.js')
   const { claudeAppFixture } = await import('../src/testing/claudeAppFixture.js')
+  const { claudeStoreRoots } = await import('../src/cable/hosts/appPlaces.js')
 
   const uuid = (i: number): string => `00000000-0000-4000-8000-${i.toString(16).padStart(12, '0')}`
-  /** A store of `count` files, none archived, mtimes one second apart: its root, and `write`, which rewrites its newest
-   *  file at an mtime and gives that file's path. */
-  function store(root: string, count: number): { write: (mtime: number) => string; root: string } {
-    const fixture = claudeAppFixture(root)
+  /** A store of `count` files, none archived, mtimes one second apart, in the first root under `caseHome`: every root
+   *  of that home, and `write`, which rewrites its newest file at an mtime and gives that file's path. */
+  function store(caseHome: string, count: number): { write: (mtime: number) => string; roots: string[] } {
+    const roots = claudeStoreRoots(platform(), {}, caseHome).map(({ root }) => root)
+    const fixture = claudeAppFixture(roots[0]!)
     const write = (i: number, mtime: number): string => fixture.write(
       { localId: `local_${uuid(i)}`, cliSessionId: uuid(i), cwd: `/work/project-${i}`, title: `Session ${i}`, lastActivityAt: mtime },
       { mtime, bytes: FILE_BYTES })
     for (let i = 0; i < count; i++) write(i, START + i * 1000)
-    return { root, write: (mtime) => write(count - 1, mtime) }
+    return { roots, write: (mtime) => write(count - 1, mtime) }
   }
 
   const round2 = (n: number): number => Math.round(n * 100) / 100
@@ -59,18 +63,18 @@ try {
     return { name, files, rounds: ROUNDS, medianMs: round2(times[Math.floor(ROUNDS / 2)]!), maxMs: round2(times[ROUNDS - 1]!), parsed }
   }
 
-  const first = (root: string) => async (): Promise<number> => {
-    const reader = new ClaudeAppStore(root)
+  const first = (roots: string[]) => async (): Promise<number> => {
+    const reader = new ClaudeAppStore(roots)
     await reader.folders()
     await reader.files()
     return (await reader.read()).parsed
   }
 
-  const small = store(join(home, 'store-16'), 16)
-  const large = store(join(home, 'store-200'), 200)
-  const cases = [await measure('first-16', 16, first(small.root)), await measure('first-200', 200, first(large.root))]
+  const small = store(join(home, 'home-16'), 16)
+  const large = store(join(home, 'home-200'), 200)
+  const cases = [await measure('first-16', 16, first(small.roots)), await measure('first-200', 200, first(large.roots))]
 
-  const reader = new ClaudeAppStore(large.root)
+  const reader = new ClaudeAppStore(large.roots)
   await reader.folders()
   await reader.files()
   await reader.read()

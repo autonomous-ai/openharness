@@ -6,8 +6,10 @@
  * `[backend] connected` token scanned by the self-update readiness check) stay intact.
  */
 
-import { createHash } from 'node:crypto'
-import { closeSync, existsSync, openSync, readSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { createHmac, randomBytes } from 'node:crypto'
+import { closeSync, existsSync, openSync, readSync, renameSync, statSync, writeFileSync, writeSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { isAbsolute, relative, sep } from 'node:path'
 
 function pad(n: number, width = 2): string {
   return String(n).padStart(width, '0')
@@ -105,7 +107,7 @@ export function prepareLogFile(file: string, legacy: string, maxBytes = LOG_MAX_
  * channel's key can carry the peer's id: it is logged as a short hash of itself instead.
  */
 export function sid(id: string): string {
-  return id.startsWith('agent:') ? `oc-${createHash('sha256').update(id).digest('hex').slice(0, 8)}` : id.slice(0, 8)
+  return id.startsWith('agent:') ? `oc-${hashOf(id)}` : id.slice(0, 8)
 }
 
 // A class name starts upper case: one lower-case word can be a file's or a person's name ("notes", "someone").
@@ -136,6 +138,70 @@ export function errorKind(error: unknown): string {
   } catch {
     return 'Error'
   }
+}
+
+/**
+ * A stored or peer string for a log line: a code (`SERVICE_UNAVAILABLE`) as itself, any other string as its length.
+ * Such a string can hold the person's words or a path naming their home, and Export logs sends the log off the
+ * machine. A lower-case word is never trusted: it can be a file's or a person's name. A non-string is its `typeof`.
+ */
+export function codeOrLength(value: unknown): string {
+  if (typeof value !== 'string') return typeof value
+  return CODE.test(value) ? value : `text(${value.length})`
+}
+
+/**
+ * Made once per process and kept in memory alone: with a plain hash, whoever holds an exported log could confirm a
+ * guessed path (`/Users/<name>/…`) or a short name by hashing the guess. Another process, or this one started again,
+ * tags the same text differently. Held on the process's global object, not this module, so a second load of the module
+ * in the same process (a spec that resets its modules) tags alike.
+ */
+const TAG_KEY: Buffer = (globalThis as { [key: symbol]: Buffer })[Symbol.for('harness.logTagKey')] ??= randomBytes(32)
+
+/** A path, URL or label for a log line: the same text reads the same within this process, and none of it shows. */
+export function hashOf(text: string): string {
+  return createHmac('sha256', TAG_KEY).update(text).digest('hex').slice(0, 8)
+}
+
+/** What a line says after a file it names that is not under this process's home. */
+export const OUTSIDE_HOME = '(outside the home)'
+
+/**
+ * ` (outside the home)` when [path] is not under the home as this process sees it (os.homedir(): HOME, or USERPROFILE
+ * on Windows), else nothing. A tag is made with a key of this process's own, so only these fixed words tell a reader of
+ * the log where a file is: the end-to-end harness fails a daemon whose hook line says them (e2e/harness/daemon.ts
+ * `hooksOutside`).
+ */
+export function outsideHome(path: string): string {
+  const rel = relative(homedir(), path)
+  return rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel) ? ` ${OUTSIDE_HOME}` : ''
+}
+
+/** A file for a log line: its tag, then whether it is outside the home (`outsideHome`). Every hook line names its file so. */
+export function fileTag(file: string): string {
+  return hashOf(file) + outsideHome(file)
+}
+
+/**
+ * An error nothing caught ends this process with one line, [tag] and the error's kind, written to [fd] at once (the
+ * process is about to end), then exit 1, as Node does, so whatever supervises the process restarts it as before. Node's
+ * own report is the error's message and stack, which can quote the person's files, and Export logs sends the log off
+ * the machine. Every master and service process of the daemon installs it; the core keeps its own, which stays up.
+ */
+export function exitOnFatal(
+  tag: string, fd: number,
+  on: (event: 'uncaughtException' | 'unhandledRejection', listener: (error: unknown) => void) => void = (event, listener) => { process.on(event, listener) },
+  exit: (code: number) => void = (code) => process.exit(code),
+): void {
+  const fatal = (what: string) => (error: unknown): void => {
+    try {
+      // not a state file: the process's last line, appended to its log
+      writeSync(fd, `${ts()} ${tag} stopped on ${what}: ${errorKind(error)}\n`)
+    } catch { /* the log cannot be written: the line is lost, never the exit */ }
+    exit(1)
+  }
+  on('uncaughtException', fatal('an uncaught error'))
+  on('unhandledRejection', fatal('an unhandled rejection'))
 }
 
 /** One-line, whitespace-flattened preview of user/assistant text, capped with an ellipsis. */

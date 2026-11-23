@@ -9,6 +9,7 @@
  * never meets them stays on its old host until it ends.
  */
 import { isTerminalEngine, type AgentEngine } from '../../engines/types.js'
+import { codeOrLength } from '../log.js'
 import type { RegisteredSession } from '../registry.js'
 import type { ActivityState } from '../turnActivity.js'
 import type { MoveGate } from './gate.js'
@@ -115,10 +116,10 @@ export class HostMover {
       } else if (outcome.cancelled) {
         // Someone reached for the agent, or a Stop or delete took it: nothing failed, and once it is quiet again it
         // may move.
-        this.skip(row.agentId, outcome.reason)
+        this.skip(row.agentId, codeOrLength(outcome.reason))
       } else {
         this.failed.add(row.agentId)
-        this.deps.log(`[terminal] move ${row.agentId}: failed (${outcome.reason})`)
+        this.deps.log(`[terminal] move ${row.agentId}: failed (${codeOrLength(outcome.reason)})`)
       }
     } finally {
       this.moving = false
@@ -147,6 +148,7 @@ export class HostMover {
     return null
   }
 
+  /** [reason] is logged as it is: a refusal's fixed words, or a move's reason already through `codeOrLength`. */
   private skip(agentId: string, reason: string): void {
     if (this.skipped.get(agentId) === reason) return
     this.skipped.set(agentId, reason)

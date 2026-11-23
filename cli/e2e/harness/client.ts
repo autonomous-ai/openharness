@@ -55,12 +55,18 @@ export class LocalClient {
       ? `ws://127.0.0.1:${daemon.port}/api/local-ws`
       : `ws+unix://${daemon.socketPath}:/api/local-ws`
     const ws = new WebSocket(url, options.tcp ? { headers: daemon.localHeaders() } : undefined)
+    return LocalClient.over(ws, options.machineId ?? daemon.computerId, options)
+  }
+
+  /** A client on [ws], a socket to a daemon however it was reached: a Windows daemon's pipe
+   *  (lib/localTransport.ts `openLocalWs`), which `connect` cannot name. `watch`: what a tool is sent as it changes. */
+  static async over(ws: WebSocket, machineId: string, options: { tool?: boolean; watch?: readonly 'dial'[]; shareId?: string } = {}): Promise<LocalClient> {
     await new Promise<void>((resolve, reject) => {
       ws.once('open', () => resolve())
       ws.once('error', reject)
     })
     const client = new LocalClient(ws)
-    client.send('machine_select', { machineId: options.machineId ?? daemon.computerId, localProtocolVersion: 1, ...(options.shareId ? { shareId: options.shareId } : {}), ...(options.tool ? { tool: true } : {}) })
+    client.send('machine_select', { machineId, localProtocolVersion: 1, ...(options.shareId ? { shareId: options.shareId } : {}), ...(options.tool ? { tool: true } : {}), ...(options.watch ? { watch: options.watch } : {}) })
     await client.waitFor((frame) => frame.type === 'connected', 10_000, 'connected')
     return client
   }

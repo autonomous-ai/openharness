@@ -13,7 +13,8 @@ import { env } from '../config/env.js'
 import { hasAuthSession } from './authSession.js'
 import { readOrMintComputerId } from './computerIdentity.js'
 import { savedDaemonPort } from './daemonRecord.js'
-import { atomicWriteFile, probeState, StateFileUnreadable } from './secureState.js'
+import { errorKind } from './log.js'
+import { atomicWriteFile, probeState, StateFileUnreadable, unreadableSentence } from './secureState.js'
 
 export const PID_FILE = join(env.ADAPTER_DATA_DIR, 'adapter.pid')
 /** The daemon's console: the master's and its core's stdout and stderr. Capped (lib/log.ts). */
@@ -121,17 +122,31 @@ export function removePidFileIf(pid: number | undefined, deps: { readPid: () => 
   return true
 }
 
-/** How a command fails: say why, let go of the pid file if it is this process's, and exit. Commands alone fail
- *  this way, on the terminal of the person who ran one; a core logs a failed start's kind itself, also one a command
- *  runs in its own process (core/main.ts `runCoreInForeground`). */
-export const onError = (err: unknown, code = 1): never => {
+/** What a failed start says when another daemon serves its data folder, in fixed words: the error's own words name
+ *  the socket's path. */
+const SERVED_ELSEWHERE = ' · another Harness daemon serves this data folder'
+
+/** How a daemon's start fails: `harness start --foreground`, which launchd and systemd run, and the core's, which does
+ *  not stay up (core/main.ts), also one a command runs in its own process (`runCoreInForeground`). What either prints
+ *  is the daemon's log, which Export logs sends. So an error says its kind, never its words, its stack or a path; the
+ *  one a person meets starting by hand (`harness start -f`, `harness login`) says why, in fixed words. */
+export const failForegroundStart = (err: unknown, code = 1): never =>
+  exitSaying(err, code, () => {
+    const why = (err as { code?: unknown } | null | undefined)?.code === 'EADDRINUSE' ? SERVED_ELSEWHERE : ''
+    console.error(`Failed to start adapter: ${errorKind(err)}${why}`)
+  })
+
+/** How a start or a command fails: say why ([sayFault], or which trust file cannot be read and why), let go of the pid
+ *  file if it is this process's, and exit. A command's own way is lib/commandFailure.ts `onError`. */
+export function exitSaying(err: unknown, code: number, sayFault: () => void): never {
   // A trust file that cannot be read is the person's to move aside, not a fault in Harness: no stack, and the
-  // file's full path is in `harness status`, kept out of the error itself.
+  // file's full path is in `harness status`, kept out of the error itself. Said from its fields, its own file's name,
+  // why and what to do, not its message: a daemon's start says it in the daemon's log too.
   if (err instanceof StateFileUnreadable) {
-    console.error(`✗ ${err.message}`)
+    console.error(`✗ ${unreadableSentence(err.base, err.failure, err.readFailed)}`)
     console.error('  harness status shows where it is')
   } else {
-    console.error('Failed to start adapter:', err)
+    sayFault()
   }
   // A pid file left naming a process that is gone, the next `harness start` would refuse on. Only ours, though.
   removePidFileIf(process.pid)

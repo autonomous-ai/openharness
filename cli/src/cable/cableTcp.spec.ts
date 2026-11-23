@@ -56,7 +56,7 @@ describe('the TCP opener', () => {
     // Refused: no port, and no throw, so the session does not log "cannot open the dial" on every reopen.
     expect(await open(noop, noop)).toBeNull()
     expect(connect).toHaveBeenCalledTimes(1)
-    expect(log.mock.calls).toEqual([['cable: tcp:board.local:7000 not reachable (ECONNREFUSED) — trying again, waiting up to 0.35 s']])
+    expect(log.mock.calls).toEqual([['cable: the device over TCP is not reachable (ECONNREFUSED) — trying again, waiting up to 0.35 s']])
     // Inside the wait: not even tried.
     now = 99
     expect(await open(noop, noop)).toBeNull()
@@ -74,7 +74,7 @@ describe('the TCP opener', () => {
     connect.mockResolvedValueOnce(port)
     now = 1000
     expect(await open(noop, noop)).toBe(port)
-    expect(log).toHaveBeenLastCalledWith('cable: tcp:board.local:7000 is reachable again')
+    expect(log).toHaveBeenLastCalledWith('cable: the device over TCP is reachable again')
     now = 1001
     expect(await open(noop, noop)).toBeNull()
     now = 1101
@@ -89,7 +89,7 @@ describe('the TCP opener', () => {
     const connect = vi.fn(async (): Promise<CablePort> => { throw new Error('/Users/someone/secret-project refused') })
     const open = tcpOpener(address, { connect, log, now: () => 0, minMs: 100, maxMs: 350 })
     expect(await open(() => {}, () => {})).toBeNull()
-    expect(log.mock.calls).toEqual([['cable: tcp:board.local:7000 not reachable (Error) — trying again, waiting up to 0.35 s']])
+    expect(log.mock.calls).toEqual([['cable: the device over TCP is not reachable (Error) — trying again, waiting up to 0.35 s']])
   })
 })
 

@@ -84,7 +84,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Cursor lifecycle/task hooks → <root>/home/.config/cursor/hooks.json"
+      "log [hooks] installed Cursor lifecycle/task hooks → <hash <root>/home/.config/cursor/hooks.json>"
      ],
      "threw": null
     },
@@ -115,7 +115,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Cursor lifecycle/task hooks → <root>/home/.config/cursor/hooks.json"
+      "log [hooks] installed Cursor lifecycle/task hooks → <hash <root>/home/.config/cursor/hooks.json>"
      ],
      "threw": null
     },
@@ -301,13 +301,13 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Cursor lifecycle/task hooks → <root>/home/.config/cursor/hooks.json"
+      "log [hooks] installed Cursor lifecycle/task hooks → <hash <root>/home/.config/cursor/hooks.json>"
      ],
      "threw": null
     },
     {
      "logs": [
-      "log [hooks] installed Cursor lifecycle/task hooks → <root>/home/.config/cursor/hooks.json"
+      "log [hooks] installed Cursor lifecycle/task hooks → <hash <root>/home/.config/cursor/hooks.json>"
      ],
      "threw": null
     }
@@ -394,7 +394,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Cursor lifecycle/task hooks → <root>/home/.config/cursor/hooks.json"
+      "log [hooks] installed Cursor lifecycle/task hooks → <hash <root>/home/.config/cursor/hooks.json>"
      ],
      "threw": null
     },
@@ -425,13 +425,13 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Cursor lifecycle/task hooks → <root>/home/.config/cursor/hooks.json"
+      "log [hooks] installed Cursor lifecycle/task hooks → <hash <root>/home/.config/cursor/hooks.json>"
      ],
      "threw": null
     },
     {
      "logs": [
-      "log [hooks] installed Cursor lifecycle/task hooks → <root>/home/.config/cursor/hooks.json"
+      "log [hooks] installed Cursor lifecycle/task hooks → <hash <root>/home/.config/cursor/hooks.json>"
      ],
      "threw": null
     }
@@ -456,7 +456,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Cursor lifecycle/task hooks → <root>/home/.config/cursor/hooks.json"
+      "log [hooks] installed Cursor lifecycle/task hooks → <hash <root>/home/.config/cursor/hooks.json>"
      ],
      "threw": null
     },
@@ -487,7 +487,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Cursor lifecycle/task hooks → <root>/home/.config/cursor/hooks.json"
+      "log [hooks] installed Cursor lifecycle/task hooks → <hash <root>/home/.config/cursor/hooks.json>"
      ],
      "threw": null
     },
@@ -518,7 +518,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Cursor lifecycle/task hooks → <root>/home/.config/cursor/hooks.json"
+      "log [hooks] installed Cursor lifecycle/task hooks → <hash <root>/home/.config/cursor/hooks.json>"
      ],
      "threw": null
     },
@@ -611,7 +611,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Cursor lifecycle/task hooks → <root>/home/.config/cursor/hooks.json"
+      "log [hooks] installed Cursor lifecycle/task hooks → <hash <root>/home/.config/cursor/hooks.json>"
      ],
      "threw": null
     },
@@ -642,7 +642,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Cursor lifecycle/task hooks → <root>/home/.config/cursor/hooks.json"
+      "log [hooks] installed Cursor lifecycle/task hooks → <hash <root>/home/.config/cursor/hooks.json>"
      ],
      "threw": null
     },
@@ -713,7 +713,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Cursor lifecycle/task hooks → <root>/home/.config/cursor/hooks.json"
+      "log [hooks] installed Cursor lifecycle/task hooks → <hash <root>/home/.config/cursor/hooks.json>"
      ],
      "threw": null
     },
@@ -744,7 +744,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Cursor lifecycle/task hooks → <root>/home/.config/cursor/hooks.json"
+      "log [hooks] installed Cursor lifecycle/task hooks → <hash <root>/home/.config/cursor/hooks.json>"
      ],
      "threw": null
     },
@@ -775,7 +775,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Cursor lifecycle/task hooks → <root>/home/.config/cursor/hooks.json"
+      "log [hooks] installed Cursor lifecycle/task hooks → <hash <root>/home/.config/cursor/hooks.json>"
      ],
      "threw": null
     },
@@ -925,7 +925,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Cursor lifecycle/task hooks → <root>/home/.config/cursor/hooks.json"
+      "log [hooks] installed Cursor lifecycle/task hooks → <hash <root>/home/.config/cursor/hooks.json>"
      ],
      "threw": null
     },
@@ -986,7 +986,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Cursor lifecycle/task hooks → <root>/home/.config/cursor/hooks.json"
+      "log [hooks] installed Cursor lifecycle/task hooks → <hash <root>/home/.config/cursor/hooks.json>"
      ],
      "threw": null
     },
@@ -1017,7 +1017,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed OpenCode 2 TUI discovery plugin → <root>/home/.config/opencode/plugins/launcher-register/tui.js",
+      "log [hooks] installed OpenCode 2 TUI discovery plugin → <hash <root>/home/.config/opencode/plugins/launcher-register/tui.js>",
       "log [hooks] (takes effect on the next opencode session start)"
      ],
      "threw": null
@@ -1057,7 +1057,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed OpenCode 2 TUI discovery plugin → <root>/home/.config/opencode/plugins/launcher-register/tui.js",
+      "log [hooks] installed OpenCode 2 TUI discovery plugin → <hash <root>/home/.config/opencode/plugins/launcher-register/tui.js>",
       "log [hooks] (takes effect on the next opencode session start)"
      ],
      "threw": null
@@ -1097,7 +1097,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed OpenCode 2 TUI discovery plugin → <root>/home/.config/opencode/plugins/launcher-register/tui.js",
+      "log [hooks] installed OpenCode 2 TUI discovery plugin → <hash <root>/home/.config/opencode/plugins/launcher-register/tui.js>",
       "log [hooks] (takes effect on the next opencode session start)"
      ],
      "threw": null
@@ -1137,7 +1137,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed OpenCode 2 TUI discovery plugin → <root>/home/.config/opencode/plugins/launcher-register/tui.js",
+      "log [hooks] installed OpenCode 2 TUI discovery plugin → <hash <root>/home/.config/opencode/plugins/launcher-register/tui.js>",
       "log [hooks] (takes effect on the next opencode session start)"
      ],
      "threw": null
@@ -1177,7 +1177,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed OpenCode 2 TUI discovery plugin → <root>/home/.config/opencode/plugins/launcher-register/tui.js",
+      "log [hooks] installed OpenCode 2 TUI discovery plugin → <hash <root>/home/.config/opencode/plugins/launcher-register/tui.js>",
       "log [hooks] (takes effect on the next opencode session start)"
      ],
      "threw": null
@@ -1217,7 +1217,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed OpenCode 2 TUI discovery plugin → <root>/home/.config/opencode/plugins/launcher-register/tui.js",
+      "log [hooks] installed OpenCode 2 TUI discovery plugin → <hash <root>/home/.config/opencode/plugins/launcher-register/tui.js>",
       "log [hooks] (takes effect on the next opencode session start)"
      ],
      "threw": null
@@ -1257,7 +1257,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed OpenCode 2 TUI discovery plugin → <root>/home/.config/opencode/plugins/launcher-register/tui.js",
+      "log [hooks] installed OpenCode 2 TUI discovery plugin → <hash <root>/home/.config/opencode/plugins/launcher-register/tui.js>",
       "log [hooks] (takes effect on the next opencode session start)"
      ],
      "threw": null
@@ -1297,7 +1297,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed OpenCode 2 TUI discovery plugin → <root>/home/.config/opencode/plugins/launcher-register/tui.js",
+      "log [hooks] installed OpenCode 2 TUI discovery plugin → <hash <root>/home/.config/opencode/plugins/launcher-register/tui.js>",
       "log [hooks] (takes effect on the next opencode session start)"
      ],
      "threw": null
@@ -1337,7 +1337,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed OpenCode 2 TUI discovery plugin → <root>/home/.config/opencode/plugins/launcher-register/tui.js",
+      "log [hooks] installed OpenCode 2 TUI discovery plugin → <hash <root>/home/.config/opencode/plugins/launcher-register/tui.js>",
       "log [hooks] (takes effect on the next opencode session start)"
      ],
      "threw": null
@@ -1377,7 +1377,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed OpenCode 2 TUI discovery plugin → <root>/home/.config/opencode/plugins/launcher-register/tui.js",
+      "log [hooks] installed OpenCode 2 TUI discovery plugin → <hash <root>/home/.config/opencode/plugins/launcher-register/tui.js>",
       "log [hooks] (takes effect on the next opencode session start)"
      ],
      "threw": null
@@ -1417,7 +1417,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed OpenCode 2 TUI discovery plugin → <root>/home/.config/opencode/plugins/launcher-register/tui.js",
+      "log [hooks] installed OpenCode 2 TUI discovery plugin → <hash <root>/home/.config/opencode/plugins/launcher-register/tui.js>",
       "log [hooks] (takes effect on the next opencode session start)"
      ],
      "threw": null
@@ -1457,7 +1457,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed OpenCode 2 TUI discovery plugin → <root>/home/.config/opencode/plugins/launcher-register/tui.js",
+      "log [hooks] installed OpenCode 2 TUI discovery plugin → <hash <root>/home/.config/opencode/plugins/launcher-register/tui.js>",
       "log [hooks] (takes effect on the next opencode session start)"
      ],
      "threw": null
@@ -1497,7 +1497,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed OpenCode 2 TUI discovery plugin → <root>/home/.config/opencode/plugins/launcher-register/tui.js",
+      "log [hooks] installed OpenCode 2 TUI discovery plugin → <hash <root>/home/.config/opencode/plugins/launcher-register/tui.js>",
       "log [hooks] (takes effect on the next opencode session start)"
      ],
      "threw": null
@@ -1537,7 +1537,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed OpenCode 2 TUI discovery plugin → <root>/home/.config/opencode/plugins/launcher-register/tui.js",
+      "log [hooks] installed OpenCode 2 TUI discovery plugin → <hash <root>/home/.config/opencode/plugins/launcher-register/tui.js>",
       "log [hooks] (takes effect on the next opencode session start)"
      ],
      "threw": null
@@ -1577,7 +1577,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed OpenCode 2 TUI discovery plugin → <root>/home/.config/opencode/plugins/launcher-register/tui.js",
+      "log [hooks] installed OpenCode 2 TUI discovery plugin → <hash <root>/home/.config/opencode/plugins/launcher-register/tui.js>",
       "log [hooks] (takes effect on the next opencode session start)"
      ],
      "threw": null
@@ -1656,7 +1656,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed OpenCode 2 TUI discovery plugin → <root>/home/.config/opencode/plugins/launcher-register/tui.js",
+      "log [hooks] installed OpenCode 2 TUI discovery plugin → <hash <root>/home/.config/opencode/plugins/launcher-register/tui.js>",
       "log [hooks] (takes effect on the next opencode session start)"
      ],
      "threw": null
@@ -1696,7 +1696,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed OpenCode 2 TUI discovery plugin → <root>/home/.config/opencode/plugins/launcher-register/tui.js",
+      "log [hooks] installed OpenCode 2 TUI discovery plugin → <hash <root>/home/.config/opencode/plugins/launcher-register/tui.js>",
       "log [hooks] (takes effect on the next opencode session start)"
      ],
      "threw": null
@@ -1736,7 +1736,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed OpenCode 2 TUI discovery plugin → <root>/home/.config/opencode/plugins/launcher-register/tui.js",
+      "log [hooks] installed OpenCode 2 TUI discovery plugin → <hash <root>/home/.config/opencode/plugins/launcher-register/tui.js>",
       "log [hooks] (takes effect on the next opencode session start)"
      ],
      "threw": null
@@ -1824,7 +1824,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed OpenCode 2 TUI discovery plugin → <root>/home/.config/opencode/plugins/launcher-register/tui.js",
+      "log [hooks] installed OpenCode 2 TUI discovery plugin → <hash <root>/home/.config/opencode/plugins/launcher-register/tui.js>",
       "log [hooks] (takes effect on the next opencode session start)"
      ],
      "threw": null
@@ -1864,7 +1864,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed OpenCode 2 TUI discovery plugin → <root>/home/.config/opencode/plugins/launcher-register/tui.js",
+      "log [hooks] installed OpenCode 2 TUI discovery plugin → <hash <root>/home/.config/opencode/plugins/launcher-register/tui.js>",
       "log [hooks] (takes effect on the next opencode session start)"
      ],
      "threw": null
@@ -1904,7 +1904,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed OpenCode 2 TUI discovery plugin → <root>/home/.config/opencode/plugins/launcher-register/tui.js",
+      "log [hooks] installed OpenCode 2 TUI discovery plugin → <hash <root>/home/.config/opencode/plugins/launcher-register/tui.js>",
       "log [hooks] (takes effect on the next opencode session start)"
      ],
      "threw": null
@@ -1983,7 +1983,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed OpenCode 2 TUI discovery plugin → <root>/home/.config/opencode/plugins/launcher-register/tui.js",
+      "log [hooks] installed OpenCode 2 TUI discovery plugin → <hash <root>/home/.config/opencode/plugins/launcher-register/tui.js>",
       "log [hooks] (takes effect on the next opencode session start)"
      ],
      "threw": null
@@ -2096,7 +2096,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed OpenCode 2 TUI discovery plugin → <root>/home/.config/opencode/plugins/launcher-register/tui.js",
+      "log [hooks] installed OpenCode 2 TUI discovery plugin → <hash <root>/home/.config/opencode/plugins/launcher-register/tui.js>",
       "log [hooks] (takes effect on the next opencode session start)"
      ],
      "threw": null
@@ -2179,7 +2179,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed OpenCode 2 TUI discovery plugin → <root>/home/.config/opencode/plugins/launcher-register/tui.js",
+      "log [hooks] installed OpenCode 2 TUI discovery plugin → <hash <root>/home/.config/opencode/plugins/launcher-register/tui.js>",
       "log [hooks] (takes effect on the next opencode session start)"
      ],
      "threw": null
@@ -2219,9 +2219,9 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed OpenCode discovery plugin → <root>/home/.config/opencode/plugin/launcher-register.js",
+      "log [hooks] installed OpenCode discovery plugin → <hash <root>/home/.config/opencode/plugin/launcher-register.js>",
       "log [hooks] (takes effect on the next opencode session start)",
-      "log [hooks] installed OpenCode 2 TUI discovery plugin → <root>/home/.config/opencode/plugins/launcher-register/tui.js",
+      "log [hooks] installed OpenCode 2 TUI discovery plugin → <hash <root>/home/.config/opencode/plugins/launcher-register/tui.js>",
       "log [hooks] (takes effect on the next opencode session start)"
      ],
      "threw": null
@@ -2271,7 +2271,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed OpenCode discovery plugin → <root>/home/.config/opencode/plugin/launcher-register.js",
+      "log [hooks] installed OpenCode discovery plugin → <hash <root>/home/.config/opencode/plugin/launcher-register.js>",
       "log [hooks] (takes effect on the next opencode session start)",
       "log [hooks] OpenCode 2 TUI discovery plugin already installed"
      ],
@@ -2322,7 +2322,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed OpenCode 2 TUI discovery plugin → <root>/home/.config/opencode/plugins/launcher-register/tui.js",
+      "log [hooks] installed OpenCode 2 TUI discovery plugin → <hash <root>/home/.config/opencode/plugins/launcher-register/tui.js>",
       "log [hooks] (takes effect on the next opencode session start)"
      ],
      "threw": null
@@ -2363,7 +2363,7 @@
     {
      "logs": [
       "log [hooks] removed incompatible OpenCode 1 discovery plugin",
-      "log [hooks] installed OpenCode 2 TUI discovery plugin → <root>/home/.config/opencode/plugins/launcher-register/tui.js",
+      "log [hooks] installed OpenCode 2 TUI discovery plugin → <hash <root>/home/.config/opencode/plugins/launcher-register/tui.js>",
       "log [hooks] (takes effect on the next opencode session start)"
      ],
      "threw": null
@@ -2407,7 +2407,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed OpenCode 2 TUI discovery plugin → <root>/home/.config/opencode/plugins/launcher-register/tui.js",
+      "log [hooks] installed OpenCode 2 TUI discovery plugin → <hash <root>/home/.config/opencode/plugins/launcher-register/tui.js>",
       "log [hooks] (takes effect on the next opencode session start)"
      ],
      "threw": null
@@ -2457,7 +2457,7 @@
     {
      "logs": [
       "error [hooks] failed to remove OpenCode 1 plugin: Error EISDIR read",
-      "log [hooks] installed OpenCode 2 TUI discovery plugin → <root>/home/.config/opencode/plugins/launcher-register/tui.js",
+      "log [hooks] installed OpenCode 2 TUI discovery plugin → <hash <root>/home/.config/opencode/plugins/launcher-register/tui.js>",
       "log [hooks] (takes effect on the next opencode session start)"
      ],
      "threw": null
@@ -2506,7 +2506,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Kilo discovery plugin → <root>/home/.config/kilo/plugin/launcher-register.js",
+      "log [hooks] installed Kilo discovery plugin → <hash <root>/home/.config/kilo/plugin/launcher-register.js>",
       "log [hooks] (takes effect on the next kilo session start)"
      ],
      "threw": null
@@ -2542,7 +2542,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Kilo discovery plugin → <root>/home/.config/kilo/plugin/launcher-register.js",
+      "log [hooks] installed Kilo discovery plugin → <hash <root>/home/.config/kilo/plugin/launcher-register.js>",
       "log [hooks] (takes effect on the next kilo session start)"
      ],
      "threw": null
@@ -2578,7 +2578,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Kilo discovery plugin → <root>/home/.config/kilo/plugin/launcher-register.js",
+      "log [hooks] installed Kilo discovery plugin → <hash <root>/home/.config/kilo/plugin/launcher-register.js>",
       "log [hooks] (takes effect on the next kilo session start)"
      ],
      "threw": null
@@ -2614,7 +2614,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Kilo discovery plugin → <root>/home/.config/kilo/plugin/launcher-register.js",
+      "log [hooks] installed Kilo discovery plugin → <hash <root>/home/.config/kilo/plugin/launcher-register.js>",
       "log [hooks] (takes effect on the next kilo session start)"
      ],
      "threw": null
@@ -2650,7 +2650,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Kilo discovery plugin → <root>/home/.config/kilo/plugin/launcher-register.js",
+      "log [hooks] installed Kilo discovery plugin → <hash <root>/home/.config/kilo/plugin/launcher-register.js>",
       "log [hooks] (takes effect on the next kilo session start)"
      ],
      "threw": null
@@ -2686,7 +2686,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Kilo discovery plugin → <root>/home/.config/kilo/plugin/launcher-register.js",
+      "log [hooks] installed Kilo discovery plugin → <hash <root>/home/.config/kilo/plugin/launcher-register.js>",
       "log [hooks] (takes effect on the next kilo session start)"
      ],
      "threw": null
@@ -2722,7 +2722,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Kilo discovery plugin → <root>/home/.config/kilo/plugin/launcher-register.js",
+      "log [hooks] installed Kilo discovery plugin → <hash <root>/home/.config/kilo/plugin/launcher-register.js>",
       "log [hooks] (takes effect on the next kilo session start)"
      ],
      "threw": null
@@ -2758,7 +2758,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Kilo discovery plugin → <root>/home/.config/kilo/plugin/launcher-register.js",
+      "log [hooks] installed Kilo discovery plugin → <hash <root>/home/.config/kilo/plugin/launcher-register.js>",
       "log [hooks] (takes effect on the next kilo session start)"
      ],
      "threw": null
@@ -2794,7 +2794,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Kilo discovery plugin → <root>/home/.config/kilo/plugin/launcher-register.js",
+      "log [hooks] installed Kilo discovery plugin → <hash <root>/home/.config/kilo/plugin/launcher-register.js>",
       "log [hooks] (takes effect on the next kilo session start)"
      ],
      "threw": null
@@ -2830,7 +2830,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Kilo discovery plugin → <root>/home/.config/kilo/plugin/launcher-register.js",
+      "log [hooks] installed Kilo discovery plugin → <hash <root>/home/.config/kilo/plugin/launcher-register.js>",
       "log [hooks] (takes effect on the next kilo session start)"
      ],
      "threw": null
@@ -2866,7 +2866,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Kilo discovery plugin → <root>/home/.config/kilo/plugin/launcher-register.js",
+      "log [hooks] installed Kilo discovery plugin → <hash <root>/home/.config/kilo/plugin/launcher-register.js>",
       "log [hooks] (takes effect on the next kilo session start)"
      ],
      "threw": null
@@ -2902,7 +2902,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Kilo discovery plugin → <root>/home/.config/kilo/plugin/launcher-register.js",
+      "log [hooks] installed Kilo discovery plugin → <hash <root>/home/.config/kilo/plugin/launcher-register.js>",
       "log [hooks] (takes effect on the next kilo session start)"
      ],
      "threw": null
@@ -2938,7 +2938,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Kilo discovery plugin → <root>/home/.config/kilo/plugin/launcher-register.js",
+      "log [hooks] installed Kilo discovery plugin → <hash <root>/home/.config/kilo/plugin/launcher-register.js>",
       "log [hooks] (takes effect on the next kilo session start)"
      ],
      "threw": null
@@ -2974,7 +2974,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Kilo discovery plugin → <root>/home/.config/kilo/plugin/launcher-register.js",
+      "log [hooks] installed Kilo discovery plugin → <hash <root>/home/.config/kilo/plugin/launcher-register.js>",
       "log [hooks] (takes effect on the next kilo session start)"
      ],
      "threw": null
@@ -3010,7 +3010,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Kilo discovery plugin → <root>/home/.config/kilo/plugin/launcher-register.js",
+      "log [hooks] installed Kilo discovery plugin → <hash <root>/home/.config/kilo/plugin/launcher-register.js>",
       "log [hooks] (takes effect on the next kilo session start)"
      ],
      "threw": null
@@ -3081,7 +3081,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Kilo discovery plugin → <root>/home/.config/kilo/plugin/launcher-register.js",
+      "log [hooks] installed Kilo discovery plugin → <hash <root>/home/.config/kilo/plugin/launcher-register.js>",
       "log [hooks] (takes effect on the next kilo session start)"
      ],
      "threw": null
@@ -3117,7 +3117,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Kilo discovery plugin → <root>/home/.config/kilo/plugin/launcher-register.js",
+      "log [hooks] installed Kilo discovery plugin → <hash <root>/home/.config/kilo/plugin/launcher-register.js>",
       "log [hooks] (takes effect on the next kilo session start)"
      ],
      "threw": null
@@ -3153,7 +3153,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Kilo discovery plugin → <root>/home/.config/kilo/plugin/launcher-register.js",
+      "log [hooks] installed Kilo discovery plugin → <hash <root>/home/.config/kilo/plugin/launcher-register.js>",
       "log [hooks] (takes effect on the next kilo session start)"
      ],
      "threw": null
@@ -3233,7 +3233,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Kilo discovery plugin → <root>/home/.config/kilo/plugin/launcher-register.js",
+      "log [hooks] installed Kilo discovery plugin → <hash <root>/home/.config/kilo/plugin/launcher-register.js>",
       "log [hooks] (takes effect on the next kilo session start)"
      ],
      "threw": null
@@ -3269,7 +3269,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Kilo discovery plugin → <root>/home/.config/kilo/plugin/launcher-register.js",
+      "log [hooks] installed Kilo discovery plugin → <hash <root>/home/.config/kilo/plugin/launcher-register.js>",
       "log [hooks] (takes effect on the next kilo session start)"
      ],
      "threw": null
@@ -3305,7 +3305,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Kilo discovery plugin → <root>/home/.config/kilo/plugin/launcher-register.js",
+      "log [hooks] installed Kilo discovery plugin → <hash <root>/home/.config/kilo/plugin/launcher-register.js>",
       "log [hooks] (takes effect on the next kilo session start)"
      ],
      "threw": null
@@ -3376,7 +3376,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Kilo discovery plugin → <root>/home/.config/kilo/plugin/launcher-register.js",
+      "log [hooks] installed Kilo discovery plugin → <hash <root>/home/.config/kilo/plugin/launcher-register.js>",
       "log [hooks] (takes effect on the next kilo session start)"
      ],
      "threw": null
@@ -3477,7 +3477,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Kilo discovery plugin → <root>/home/.config/kilo/plugin/launcher-register.js",
+      "log [hooks] installed Kilo discovery plugin → <hash <root>/home/.config/kilo/plugin/launcher-register.js>",
       "log [hooks] (takes effect on the next kilo session start)"
      ],
      "threw": null
@@ -3552,7 +3552,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Kilo discovery plugin → <root>/home/.config/kilo/plugin/launcher-register.js",
+      "log [hooks] installed Kilo discovery plugin → <hash <root>/home/.config/kilo/plugin/launcher-register.js>",
       "log [hooks] (takes effect on the next kilo session start)"
      ],
      "threw": null
@@ -3588,7 +3588,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Pi discovery extension → <root>/home/.pi/agent/extensions/launcher-register.ts",
+      "log [hooks] installed Pi discovery extension → <hash <root>/home/.pi/agent/extensions/launcher-register.ts>",
       "log [hooks] (takes effect on the next pi session start)"
      ],
      "threw": null
@@ -3624,7 +3624,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Pi discovery extension → <root>/home/.pi/agent/extensions/launcher-register.ts",
+      "log [hooks] installed Pi discovery extension → <hash <root>/home/.pi/agent/extensions/launcher-register.ts>",
       "log [hooks] (takes effect on the next pi session start)"
      ],
      "threw": null
@@ -3660,7 +3660,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Pi discovery extension → <root>/home/.pi/agent/extensions/launcher-register.ts",
+      "log [hooks] installed Pi discovery extension → <hash <root>/home/.pi/agent/extensions/launcher-register.ts>",
       "log [hooks] (takes effect on the next pi session start)"
      ],
      "threw": null
@@ -3696,7 +3696,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Pi discovery extension → <root>/home/.pi/agent/extensions/launcher-register.ts",
+      "log [hooks] installed Pi discovery extension → <hash <root>/home/.pi/agent/extensions/launcher-register.ts>",
       "log [hooks] (takes effect on the next pi session start)"
      ],
      "threw": null
@@ -3732,7 +3732,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Pi discovery extension → <root>/home/.pi/agent/extensions/launcher-register.ts",
+      "log [hooks] installed Pi discovery extension → <hash <root>/home/.pi/agent/extensions/launcher-register.ts>",
       "log [hooks] (takes effect on the next pi session start)"
      ],
      "threw": null
@@ -3768,7 +3768,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Pi discovery extension → <root>/home/.pi/agent/extensions/launcher-register.ts",
+      "log [hooks] installed Pi discovery extension → <hash <root>/home/.pi/agent/extensions/launcher-register.ts>",
       "log [hooks] (takes effect on the next pi session start)"
      ],
      "threw": null
@@ -3804,7 +3804,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Pi discovery extension → <root>/home/.pi/agent/extensions/launcher-register.ts",
+      "log [hooks] installed Pi discovery extension → <hash <root>/home/.pi/agent/extensions/launcher-register.ts>",
       "log [hooks] (takes effect on the next pi session start)"
      ],
      "threw": null
@@ -3840,7 +3840,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Pi discovery extension → <root>/home/.pi/agent/extensions/launcher-register.ts",
+      "log [hooks] installed Pi discovery extension → <hash <root>/home/.pi/agent/extensions/launcher-register.ts>",
       "log [hooks] (takes effect on the next pi session start)"
      ],
      "threw": null
@@ -3876,7 +3876,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Pi discovery extension → <root>/home/.pi/agent/extensions/launcher-register.ts",
+      "log [hooks] installed Pi discovery extension → <hash <root>/home/.pi/agent/extensions/launcher-register.ts>",
       "log [hooks] (takes effect on the next pi session start)"
      ],
      "threw": null
@@ -3912,7 +3912,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Pi discovery extension → <root>/home/.pi/agent/extensions/launcher-register.ts",
+      "log [hooks] installed Pi discovery extension → <hash <root>/home/.pi/agent/extensions/launcher-register.ts>",
       "log [hooks] (takes effect on the next pi session start)"
      ],
      "threw": null
@@ -3948,7 +3948,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Pi discovery extension → <root>/home/.pi/agent/extensions/launcher-register.ts",
+      "log [hooks] installed Pi discovery extension → <hash <root>/home/.pi/agent/extensions/launcher-register.ts>",
       "log [hooks] (takes effect on the next pi session start)"
      ],
      "threw": null
@@ -3984,7 +3984,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Pi discovery extension → <root>/home/.pi/agent/extensions/launcher-register.ts",
+      "log [hooks] installed Pi discovery extension → <hash <root>/home/.pi/agent/extensions/launcher-register.ts>",
       "log [hooks] (takes effect on the next pi session start)"
      ],
      "threw": null
@@ -4020,7 +4020,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Pi discovery extension → <root>/home/.pi/agent/extensions/launcher-register.ts",
+      "log [hooks] installed Pi discovery extension → <hash <root>/home/.pi/agent/extensions/launcher-register.ts>",
       "log [hooks] (takes effect on the next pi session start)"
      ],
      "threw": null
@@ -4056,7 +4056,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Pi discovery extension → <root>/home/.pi/agent/extensions/launcher-register.ts",
+      "log [hooks] installed Pi discovery extension → <hash <root>/home/.pi/agent/extensions/launcher-register.ts>",
       "log [hooks] (takes effect on the next pi session start)"
      ],
      "threw": null
@@ -4092,7 +4092,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Pi discovery extension → <root>/home/.pi/agent/extensions/launcher-register.ts",
+      "log [hooks] installed Pi discovery extension → <hash <root>/home/.pi/agent/extensions/launcher-register.ts>",
       "log [hooks] (takes effect on the next pi session start)"
      ],
      "threw": null
@@ -4163,7 +4163,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Pi discovery extension → <root>/home/.pi/agent/extensions/launcher-register.ts",
+      "log [hooks] installed Pi discovery extension → <hash <root>/home/.pi/agent/extensions/launcher-register.ts>",
       "log [hooks] (takes effect on the next pi session start)"
      ],
      "threw": null
@@ -4199,7 +4199,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Pi discovery extension → <root>/home/.pi/agent/extensions/launcher-register.ts",
+      "log [hooks] installed Pi discovery extension → <hash <root>/home/.pi/agent/extensions/launcher-register.ts>",
       "log [hooks] (takes effect on the next pi session start)"
      ],
      "threw": null
@@ -4235,7 +4235,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Pi discovery extension → <root>/home/.pi/agent/extensions/launcher-register.ts",
+      "log [hooks] installed Pi discovery extension → <hash <root>/home/.pi/agent/extensions/launcher-register.ts>",
       "log [hooks] (takes effect on the next pi session start)"
      ],
      "threw": null
@@ -4315,7 +4315,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Pi discovery extension → <root>/home/.pi/agent/extensions/launcher-register.ts",
+      "log [hooks] installed Pi discovery extension → <hash <root>/home/.pi/agent/extensions/launcher-register.ts>",
       "log [hooks] (takes effect on the next pi session start)"
      ],
      "threw": null
@@ -4351,7 +4351,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Pi discovery extension → <root>/home/.pi/agent/extensions/launcher-register.ts",
+      "log [hooks] installed Pi discovery extension → <hash <root>/home/.pi/agent/extensions/launcher-register.ts>",
       "log [hooks] (takes effect on the next pi session start)"
      ],
      "threw": null
@@ -4387,7 +4387,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Pi discovery extension → <root>/home/.pi/agent/extensions/launcher-register.ts",
+      "log [hooks] installed Pi discovery extension → <hash <root>/home/.pi/agent/extensions/launcher-register.ts>",
       "log [hooks] (takes effect on the next pi session start)"
      ],
      "threw": null
@@ -4458,7 +4458,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Pi discovery extension → <root>/home/.pi/agent/extensions/launcher-register.ts",
+      "log [hooks] installed Pi discovery extension → <hash <root>/home/.pi/agent/extensions/launcher-register.ts>",
       "log [hooks] (takes effect on the next pi session start)"
      ],
      "threw": null
@@ -4559,7 +4559,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Pi discovery extension → <root>/home/.pi/agent/extensions/launcher-register.ts",
+      "log [hooks] installed Pi discovery extension → <hash <root>/home/.pi/agent/extensions/launcher-register.ts>",
       "log [hooks] (takes effect on the next pi session start)"
      ],
      "threw": null
@@ -4634,7 +4634,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Pi discovery extension → <root>/home/.pi/agent/extensions/launcher-register.ts",
+      "log [hooks] installed Pi discovery extension → <hash <root>/home/.pi/agent/extensions/launcher-register.ts>",
       "log [hooks] (takes effect on the next pi session start)"
      ],
      "threw": null
@@ -4670,7 +4670,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Amp plugin → <root>/home/.config/amp/plugins/launcher-register.ts",
+      "log [hooks] installed Amp plugin → <hash <root>/home/.config/amp/plugins/launcher-register.ts>",
       "log [hooks] a NEW amp session picks this up automatically; for one already open, run",
       "log [hooks]   ctrl+o → 'plugins: reload'   (or restart that pane)"
      ],
@@ -4723,7 +4723,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Amp plugin → <root>/home/.config/amp/plugins/launcher-register.ts",
+      "log [hooks] installed Amp plugin → <hash <root>/home/.config/amp/plugins/launcher-register.ts>",
       "log [hooks] a NEW amp session picks this up automatically; for one already open, run",
       "log [hooks]   ctrl+o → 'plugins: reload'   (or restart that pane)"
      ],
@@ -4776,7 +4776,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Amp plugin → <root>/home/.config/amp/plugins/launcher-register.ts",
+      "log [hooks] installed Amp plugin → <hash <root>/home/.config/amp/plugins/launcher-register.ts>",
       "log [hooks] a NEW amp session picks this up automatically; for one already open, run",
       "log [hooks]   ctrl+o → 'plugins: reload'   (or restart that pane)"
      ],
@@ -4829,7 +4829,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Amp plugin → <root>/home/.config/amp/plugins/launcher-register.ts",
+      "log [hooks] installed Amp plugin → <hash <root>/home/.config/amp/plugins/launcher-register.ts>",
       "log [hooks] a NEW amp session picks this up automatically; for one already open, run",
       "log [hooks]   ctrl+o → 'plugins: reload'   (or restart that pane)"
      ],
@@ -4882,7 +4882,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Amp plugin → <root>/home/.config/amp/plugins/launcher-register.ts",
+      "log [hooks] installed Amp plugin → <hash <root>/home/.config/amp/plugins/launcher-register.ts>",
       "log [hooks] a NEW amp session picks this up automatically; for one already open, run",
       "log [hooks]   ctrl+o → 'plugins: reload'   (or restart that pane)"
      ],
@@ -4935,7 +4935,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Amp plugin → <root>/home/.config/amp/plugins/launcher-register.ts",
+      "log [hooks] installed Amp plugin → <hash <root>/home/.config/amp/plugins/launcher-register.ts>",
       "log [hooks] a NEW amp session picks this up automatically; for one already open, run",
       "log [hooks]   ctrl+o → 'plugins: reload'   (or restart that pane)"
      ],
@@ -4988,7 +4988,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Amp plugin → <root>/home/.config/amp/plugins/launcher-register.ts",
+      "log [hooks] installed Amp plugin → <hash <root>/home/.config/amp/plugins/launcher-register.ts>",
       "log [hooks] a NEW amp session picks this up automatically; for one already open, run",
       "log [hooks]   ctrl+o → 'plugins: reload'   (or restart that pane)"
      ],
@@ -5041,7 +5041,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Amp plugin → <root>/home/.config/amp/plugins/launcher-register.ts",
+      "log [hooks] installed Amp plugin → <hash <root>/home/.config/amp/plugins/launcher-register.ts>",
       "log [hooks] a NEW amp session picks this up automatically; for one already open, run",
       "log [hooks]   ctrl+o → 'plugins: reload'   (or restart that pane)"
      ],
@@ -5094,7 +5094,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Amp plugin → <root>/home/.config/amp/plugins/launcher-register.ts",
+      "log [hooks] installed Amp plugin → <hash <root>/home/.config/amp/plugins/launcher-register.ts>",
       "log [hooks] a NEW amp session picks this up automatically; for one already open, run",
       "log [hooks]   ctrl+o → 'plugins: reload'   (or restart that pane)"
      ],
@@ -5147,7 +5147,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Amp plugin → <root>/home/.config/amp/plugins/launcher-register.ts",
+      "log [hooks] installed Amp plugin → <hash <root>/home/.config/amp/plugins/launcher-register.ts>",
       "log [hooks] a NEW amp session picks this up automatically; for one already open, run",
       "log [hooks]   ctrl+o → 'plugins: reload'   (or restart that pane)"
      ],
@@ -5200,7 +5200,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Amp plugin → <root>/home/.config/amp/plugins/launcher-register.ts",
+      "log [hooks] installed Amp plugin → <hash <root>/home/.config/amp/plugins/launcher-register.ts>",
       "log [hooks] a NEW amp session picks this up automatically; for one already open, run",
       "log [hooks]   ctrl+o → 'plugins: reload'   (or restart that pane)"
      ],
@@ -5253,7 +5253,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Amp plugin → <root>/home/.config/amp/plugins/launcher-register.ts",
+      "log [hooks] installed Amp plugin → <hash <root>/home/.config/amp/plugins/launcher-register.ts>",
       "log [hooks] a NEW amp session picks this up automatically; for one already open, run",
       "log [hooks]   ctrl+o → 'plugins: reload'   (or restart that pane)"
      ],
@@ -5306,7 +5306,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Amp plugin → <root>/home/.config/amp/plugins/launcher-register.ts",
+      "log [hooks] installed Amp plugin → <hash <root>/home/.config/amp/plugins/launcher-register.ts>",
       "log [hooks] a NEW amp session picks this up automatically; for one already open, run",
       "log [hooks]   ctrl+o → 'plugins: reload'   (or restart that pane)"
      ],
@@ -5359,7 +5359,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Amp plugin → <root>/home/.config/amp/plugins/launcher-register.ts",
+      "log [hooks] installed Amp plugin → <hash <root>/home/.config/amp/plugins/launcher-register.ts>",
       "log [hooks] a NEW amp session picks this up automatically; for one already open, run",
       "log [hooks]   ctrl+o → 'plugins: reload'   (or restart that pane)"
      ],
@@ -5412,7 +5412,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Amp plugin → <root>/home/.config/amp/plugins/launcher-register.ts",
+      "log [hooks] installed Amp plugin → <hash <root>/home/.config/amp/plugins/launcher-register.ts>",
       "log [hooks] a NEW amp session picks this up automatically; for one already open, run",
       "log [hooks]   ctrl+o → 'plugins: reload'   (or restart that pane)"
      ],
@@ -5500,7 +5500,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Amp plugin → <root>/home/.config/amp/plugins/launcher-register.ts",
+      "log [hooks] installed Amp plugin → <hash <root>/home/.config/amp/plugins/launcher-register.ts>",
       "log [hooks] a NEW amp session picks this up automatically; for one already open, run",
       "log [hooks]   ctrl+o → 'plugins: reload'   (or restart that pane)"
      ],
@@ -5553,7 +5553,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Amp plugin → <root>/home/.config/amp/plugins/launcher-register.ts",
+      "log [hooks] installed Amp plugin → <hash <root>/home/.config/amp/plugins/launcher-register.ts>",
       "log [hooks] a NEW amp session picks this up automatically; for one already open, run",
       "log [hooks]   ctrl+o → 'plugins: reload'   (or restart that pane)"
      ],
@@ -5606,7 +5606,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Amp plugin → <root>/home/.config/amp/plugins/launcher-register.ts",
+      "log [hooks] installed Amp plugin → <hash <root>/home/.config/amp/plugins/launcher-register.ts>",
       "log [hooks] a NEW amp session picks this up automatically; for one already open, run",
       "log [hooks]   ctrl+o → 'plugins: reload'   (or restart that pane)"
      ],
@@ -5703,7 +5703,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Amp plugin → <root>/home/.config/amp/plugins/launcher-register.ts",
+      "log [hooks] installed Amp plugin → <hash <root>/home/.config/amp/plugins/launcher-register.ts>",
       "log [hooks] a NEW amp session picks this up automatically; for one already open, run",
       "log [hooks]   ctrl+o → 'plugins: reload'   (or restart that pane)"
      ],
@@ -5756,7 +5756,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Amp plugin → <root>/home/.config/amp/plugins/launcher-register.ts",
+      "log [hooks] installed Amp plugin → <hash <root>/home/.config/amp/plugins/launcher-register.ts>",
       "log [hooks] a NEW amp session picks this up automatically; for one already open, run",
       "log [hooks]   ctrl+o → 'plugins: reload'   (or restart that pane)"
      ],
@@ -5809,7 +5809,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Amp plugin → <root>/home/.config/amp/plugins/launcher-register.ts",
+      "log [hooks] installed Amp plugin → <hash <root>/home/.config/amp/plugins/launcher-register.ts>",
       "log [hooks] a NEW amp session picks this up automatically; for one already open, run",
       "log [hooks]   ctrl+o → 'plugins: reload'   (or restart that pane)"
      ],
@@ -5897,7 +5897,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Amp plugin → <root>/home/.config/amp/plugins/launcher-register.ts",
+      "log [hooks] installed Amp plugin → <hash <root>/home/.config/amp/plugins/launcher-register.ts>",
       "log [hooks] a NEW amp session picks this up automatically; for one already open, run",
       "log [hooks]   ctrl+o → 'plugins: reload'   (or restart that pane)"
      ],
@@ -6047,7 +6047,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Amp plugin → <root>/home/.config/amp/plugins/launcher-register.ts",
+      "log [hooks] installed Amp plugin → <hash <root>/home/.config/amp/plugins/launcher-register.ts>",
       "log [hooks] a NEW amp session picks this up automatically; for one already open, run",
       "log [hooks]   ctrl+o → 'plugins: reload'   (or restart that pane)"
      ],
@@ -6155,7 +6155,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Amp plugin → <root>/home/.config/amp/plugins/launcher-register.ts",
+      "log [hooks] installed Amp plugin → <hash <root>/home/.config/amp/plugins/launcher-register.ts>",
       "log [hooks] a NEW amp session picks this up automatically; for one already open, run",
       "log [hooks]   ctrl+o → 'plugins: reload'   (or restart that pane)"
      ],
@@ -6208,13 +6208,13 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] no Hermes config at <root>/home/.hermes/config.yaml — skipping (run hermes once first)"
+      "log [hooks] no Hermes config at <hash <root>/home/.hermes/config.yaml> — skipping (run hermes once first)"
      ],
      "threw": null
     },
     {
      "logs": [
-      "log [hooks] no Hermes config at <root>/home/.hermes/config.yaml — skipping (run hermes once first)"
+      "log [hooks] no Hermes config at <hash <root>/home/.hermes/config.yaml> — skipping (run hermes once first)"
      ],
      "threw": null
     }
@@ -6230,13 +6230,13 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] no Hermes config at <root>/home/.hermes/config.yaml — skipping (run hermes once first)"
+      "log [hooks] no Hermes config at <hash <root>/home/.hermes/config.yaml> — skipping (run hermes once first)"
      ],
      "threw": null
     },
     {
      "logs": [
-      "log [hooks] no Hermes config at <root>/home/.hermes/config.yaml — skipping (run hermes once first)"
+      "log [hooks] no Hermes config at <hash <root>/home/.hermes/config.yaml> — skipping (run hermes once first)"
      ],
      "threw": null
     }
@@ -6247,15 +6247,15 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] <root>/home/.hermes/config.yaml has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
-      "log [hooks] installed Hermes session hooks → <root>/home/.hermes/config.yaml",
+      "log [hooks] <hash <root>/home/.hermes/config.yaml> has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
+      "log [hooks] installed Hermes session hooks → <hash <root>/home/.hermes/config.yaml>",
       "log [hooks] (takes effect on the next hermes session start)"
      ],
      "threw": null
     },
     {
      "logs": [
-      "log [hooks] <root>/home/.hermes/config.yaml has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
+      "log [hooks] <hash <root>/home/.hermes/config.yaml> has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
       "log [hooks] Hermes session hooks already installed"
      ],
      "threw": null
@@ -6282,15 +6282,15 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] <root>/home/.hermes/config.yaml has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
-      "log [hooks] installed Hermes session hooks → <root>/home/.hermes/config.yaml",
+      "log [hooks] <hash <root>/home/.hermes/config.yaml> has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
+      "log [hooks] installed Hermes session hooks → <hash <root>/home/.hermes/config.yaml>",
       "log [hooks] (takes effect on the next hermes session start)"
      ],
      "threw": null
     },
     {
      "logs": [
-      "log [hooks] <root>/home/.hermes/config.yaml has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
+      "log [hooks] <hash <root>/home/.hermes/config.yaml> has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
       "log [hooks] Hermes session hooks already installed"
      ],
      "threw": null
@@ -6317,7 +6317,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Hermes session hooks → <root>/home/.hermes/config.yaml",
+      "log [hooks] installed Hermes session hooks → <hash <root>/home/.hermes/config.yaml>",
       "log [hooks] (takes effect on the next hermes session start)"
      ],
      "threw": null
@@ -6350,7 +6350,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Hermes session hooks → <root>/home/.hermes/config.yaml",
+      "log [hooks] installed Hermes session hooks → <hash <root>/home/.hermes/config.yaml>",
       "log [hooks] (takes effect on the next hermes session start)"
      ],
      "threw": null
@@ -6383,7 +6383,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Hermes session hooks → <root>/home/.hermes/config.yaml",
+      "log [hooks] installed Hermes session hooks → <hash <root>/home/.hermes/config.yaml>",
       "log [hooks] (takes effect on the next hermes session start)"
      ],
      "threw": null
@@ -6416,7 +6416,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Hermes session hooks → <root>/home/.hermes/config.yaml",
+      "log [hooks] installed Hermes session hooks → <hash <root>/home/.hermes/config.yaml>",
       "log [hooks] (takes effect on the next hermes session start)"
      ],
      "threw": null
@@ -6449,7 +6449,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Hermes session hooks → <root>/home/.hermes/config.yaml",
+      "log [hooks] installed Hermes session hooks → <hash <root>/home/.hermes/config.yaml>",
       "log [hooks] (takes effect on the next hermes session start)"
      ],
      "threw": null
@@ -6482,7 +6482,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Hermes session hooks → <root>/home/.hermes/config.yaml",
+      "log [hooks] installed Hermes session hooks → <hash <root>/home/.hermes/config.yaml>",
       "log [hooks] (takes effect on the next hermes session start)"
      ],
      "threw": null
@@ -6515,7 +6515,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Hermes session hooks → <root>/home/.hermes/config.yaml",
+      "log [hooks] installed Hermes session hooks → <hash <root>/home/.hermes/config.yaml>",
       "log [hooks] (takes effect on the next hermes session start)"
      ],
      "threw": null
@@ -6548,7 +6548,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Hermes session hooks → <root>/home/.hermes/config.yaml",
+      "log [hooks] installed Hermes session hooks → <hash <root>/home/.hermes/config.yaml>",
       "log [hooks] (takes effect on the next hermes session start)"
      ],
      "threw": null
@@ -6581,7 +6581,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Hermes session hooks → <root>/home/.hermes/config.yaml",
+      "log [hooks] installed Hermes session hooks → <hash <root>/home/.hermes/config.yaml>",
       "log [hooks] (takes effect on the next hermes session start)"
      ],
      "threw": null
@@ -6614,15 +6614,15 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] <root>/home/.hermes/config.yaml has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
-      "log [hooks] installed Hermes session hooks → <root>/home/.hermes/config.yaml",
+      "log [hooks] <hash <root>/home/.hermes/config.yaml> has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
+      "log [hooks] installed Hermes session hooks → <hash <root>/home/.hermes/config.yaml>",
       "log [hooks] (takes effect on the next hermes session start)"
      ],
      "threw": null
     },
     {
      "logs": [
-      "log [hooks] <root>/home/.hermes/config.yaml has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
+      "log [hooks] <hash <root>/home/.hermes/config.yaml> has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
       "log [hooks] Hermes session hooks already installed"
      ],
      "threw": null
@@ -6649,15 +6649,15 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] <root>/home/.hermes/config.yaml has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
-      "log [hooks] installed Hermes session hooks → <root>/home/.hermes/config.yaml",
+      "log [hooks] <hash <root>/home/.hermes/config.yaml> has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
+      "log [hooks] installed Hermes session hooks → <hash <root>/home/.hermes/config.yaml>",
       "log [hooks] (takes effect on the next hermes session start)"
      ],
      "threw": null
     },
     {
      "logs": [
-      "log [hooks] <root>/home/.hermes/config.yaml has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
+      "log [hooks] <hash <root>/home/.hermes/config.yaml> has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
       "log [hooks] Hermes session hooks already installed"
      ],
      "threw": null
@@ -6684,14 +6684,14 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] <root>/home/.hermes/config.yaml has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
+      "log [hooks] <hash <root>/home/.hermes/config.yaml> has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
       "log [hooks] Hermes session hooks already installed"
      ],
      "threw": null
     },
     {
      "logs": [
-      "log [hooks] <root>/home/.hermes/config.yaml has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
+      "log [hooks] <hash <root>/home/.hermes/config.yaml> has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
       "log [hooks] Hermes session hooks already installed"
      ],
      "threw": null
@@ -6718,15 +6718,15 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] <root>/home/.hermes/config.yaml has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
-      "log [hooks] installed Hermes session hooks → <root>/home/.hermes/config.yaml",
+      "log [hooks] <hash <root>/home/.hermes/config.yaml> has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
+      "log [hooks] installed Hermes session hooks → <hash <root>/home/.hermes/config.yaml>",
       "log [hooks] (takes effect on the next hermes session start)"
      ],
      "threw": null
     },
     {
      "logs": [
-      "log [hooks] <root>/home/.hermes/config.yaml has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
+      "log [hooks] <hash <root>/home/.hermes/config.yaml> has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
       "log [hooks] Hermes session hooks already installed"
      ],
      "threw": null
@@ -6753,15 +6753,15 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] <root>/home/.hermes/config.yaml has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
-      "log [hooks] installed Hermes session hooks → <root>/home/.hermes/config.yaml",
+      "log [hooks] <hash <root>/home/.hermes/config.yaml> has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
+      "log [hooks] installed Hermes session hooks → <hash <root>/home/.hermes/config.yaml>",
       "log [hooks] (takes effect on the next hermes session start)"
      ],
      "threw": null
     },
     {
      "logs": [
-      "log [hooks] <root>/home/.hermes/config.yaml has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
+      "log [hooks] <hash <root>/home/.hermes/config.yaml> has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
       "log [hooks] Hermes session hooks already installed"
      ],
      "threw": null
@@ -6788,15 +6788,15 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] <root>/home/.hermes/config.yaml has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
-      "log [hooks] installed Hermes session hooks → <root>/home/.hermes/config.yaml",
+      "log [hooks] <hash <root>/home/.hermes/config.yaml> has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
+      "log [hooks] installed Hermes session hooks → <hash <root>/home/.hermes/config.yaml>",
       "log [hooks] (takes effect on the next hermes session start)"
      ],
      "threw": null
     },
     {
      "logs": [
-      "log [hooks] <root>/home/.hermes/config.yaml has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
+      "log [hooks] <hash <root>/home/.hermes/config.yaml> has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
       "log [hooks] Hermes session hooks already installed"
      ],
      "threw": null
@@ -6827,14 +6827,14 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] <root>/home/.hermes/config.yaml has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
+      "log [hooks] <hash <root>/home/.hermes/config.yaml> has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
       "log [hooks] Hermes session hooks already installed"
      ],
      "threw": null
     },
     {
      "logs": [
-      "log [hooks] <root>/home/.hermes/config.yaml has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
+      "log [hooks] <hash <root>/home/.hermes/config.yaml> has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
       "log [hooks] Hermes session hooks already installed"
      ],
      "threw": null
@@ -6865,13 +6865,13 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] no Hermes config at <root>/home/.hermes/config.yaml — skipping (run hermes once first)"
+      "log [hooks] no Hermes config at <hash <root>/home/.hermes/config.yaml> — skipping (run hermes once first)"
      ],
      "threw": null
     },
     {
      "logs": [
-      "log [hooks] no Hermes config at <root>/home/.hermes/config.yaml — skipping (run hermes once first)"
+      "log [hooks] no Hermes config at <hash <root>/home/.hermes/config.yaml> — skipping (run hermes once first)"
      ],
      "threw": null
     }
@@ -6891,13 +6891,13 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] no Hermes config at <root>/home/.hermes/config.yaml — skipping (run hermes once first)"
+      "log [hooks] no Hermes config at <hash <root>/home/.hermes/config.yaml> — skipping (run hermes once first)"
      ],
      "threw": null
     },
     {
      "logs": [
-      "log [hooks] no Hermes config at <root>/home/.hermes/config.yaml — skipping (run hermes once first)"
+      "log [hooks] no Hermes config at <hash <root>/home/.hermes/config.yaml> — skipping (run hermes once first)"
      ],
      "threw": null
     }
@@ -6944,14 +6944,14 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] <root>/home/.hermes/config.yaml has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
+      "log [hooks] <hash <root>/home/.hermes/config.yaml> has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
       "log [hooks] Hermes session hooks already installed"
      ],
      "threw": null
     },
     {
      "logs": [
-      "log [hooks] <root>/home/.hermes/config.yaml has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
+      "log [hooks] <hash <root>/home/.hermes/config.yaml> has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
       "log [hooks] Hermes session hooks already installed"
      ],
      "threw": null
@@ -6978,13 +6978,13 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] no Hermes config at <root>/home/.hermes/config.yaml — skipping (run hermes once first)"
+      "log [hooks] no Hermes config at <hash <root>/home/.hermes/config.yaml> — skipping (run hermes once first)"
      ],
      "threw": null
     },
     {
      "logs": [
-      "log [hooks] no Hermes config at <root>/home/.hermes/config.yaml — skipping (run hermes once first)"
+      "log [hooks] no Hermes config at <hash <root>/home/.hermes/config.yaml> — skipping (run hermes once first)"
      ],
      "threw": null
     }
@@ -7005,13 +7005,13 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] no Hermes config at <root>/home/.hermes/config.yaml — skipping (run hermes once first)"
+      "log [hooks] no Hermes config at <hash <root>/home/.hermes/config.yaml> — skipping (run hermes once first)"
      ],
      "threw": null
     },
     {
      "logs": [
-      "log [hooks] no Hermes config at <root>/home/.hermes/config.yaml — skipping (run hermes once first)"
+      "log [hooks] no Hermes config at <hash <root>/home/.hermes/config.yaml> — skipping (run hermes once first)"
      ],
      "threw": null
     }
@@ -7054,15 +7054,15 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] <root>/home/.hermes/config.yaml has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
-      "log [hooks] installed Hermes session hooks → <root>/home/.hermes/config.yaml",
+      "log [hooks] <hash <root>/home/.hermes/config.yaml> has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
+      "log [hooks] installed Hermes session hooks → <hash <root>/home/.hermes/config.yaml>",
       "log [hooks] (takes effect on the next hermes session start)"
      ],
      "threw": null
     },
     {
      "logs": [
-      "log [hooks] <root>/home/.hermes/config.yaml has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
+      "log [hooks] <hash <root>/home/.hermes/config.yaml> has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
       "log [hooks] Hermes session hooks already installed"
      ],
      "threw": null
@@ -7089,13 +7089,13 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] no Hermes config at <root>/home/.hermes/config.yaml — skipping (run hermes once first)"
+      "log [hooks] no Hermes config at <hash <root>/home/.hermes/config.yaml> — skipping (run hermes once first)"
      ],
      "threw": null
     },
     {
      "logs": [
-      "log [hooks] no Hermes config at <root>/home/.hermes/config.yaml — skipping (run hermes once first)"
+      "log [hooks] no Hermes config at <hash <root>/home/.hermes/config.yaml> — skipping (run hermes once first)"
      ],
      "threw": null
     }
@@ -7115,15 +7115,15 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] <root>/home/.hermes/config.yaml has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
-      "log [hooks] installed Hermes session hooks → <root>/home/.hermes/config.yaml",
+      "log [hooks] <hash <root>/home/.hermes/config.yaml> has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
+      "log [hooks] installed Hermes session hooks → <hash <root>/home/.hermes/config.yaml>",
       "log [hooks] (takes effect on the next hermes session start)"
      ],
      "threw": null
     },
     {
      "logs": [
-      "log [hooks] <root>/home/.hermes/config.yaml has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
+      "log [hooks] <hash <root>/home/.hermes/config.yaml> has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
       "log [hooks] Hermes session hooks already installed"
      ],
      "threw": null
@@ -7155,19 +7155,17 @@
    "runs": [
     {
      "logs": [
-      "error [hooks] <root>/home/.hermes/config.yaml has its own `hooks:` block — leaving it untouched.",
-      "error [hooks] add these entries under it manually to mirror Hermes sessions:",
-      "error [hooks]   on_session_start: [{ command: \"'<node>' '<script>' --port 19473 --data-dir '<root>/data' --claude-projects-dir '<root>/home/.claude/projects' --codex-home '<root>/home/.codex' --grok-home '<root>/home/.grok' --cursor-home '<root>/home/.cursor' --hermes-home '<root>/home/.hermes' --commandcode-home '<root>/home/.commandcode' --devin-home '<root>/home/.local/share/devin/cli' --agy-home '<root>/home/.gemini/antigravity-cli' --copilot-home '<root>/home/.copilot' --engine hermes\", timeout: 10 }]",
-      "error [hooks]   pre_llm_call: [{ command: \"'<node>' '<script>' --port 19473 --data-dir '<root>/data' --claude-projects-dir '<root>/home/.claude/projects' --codex-home '<root>/home/.codex' --grok-home '<root>/home/.grok' --cursor-home '<root>/home/.cursor' --hermes-home '<root>/home/.hermes' --commandcode-home '<root>/home/.commandcode' --devin-home '<root>/home/.local/share/devin/cli' --agy-home '<root>/home/.gemini/antigravity-cli' --copilot-home '<root>/home/.copilot' --engine hermes\", timeout: 10 }]"
+      "error [hooks] <hash <root>/home/.hermes/config.yaml> has its own `hooks:` block — leaving it untouched.",
+      "error [hooks] run `harness hooks hermes` for the entries to add under it to mirror Hermes sessions",
+      "warn [hooks] hermes install skipped · native hook preparation is unavailable"
      ],
      "threw": null
     },
     {
      "logs": [
-      "error [hooks] <root>/home/.hermes/config.yaml has its own `hooks:` block — leaving it untouched.",
-      "error [hooks] add these entries under it manually to mirror Hermes sessions:",
-      "error [hooks]   on_session_start: [{ command: \"'<node>' '<script>' --port 19473 --data-dir '<root>/data' --claude-projects-dir '<root>/home/.claude/projects' --codex-home '<root>/home/.codex' --grok-home '<root>/home/.grok' --cursor-home '<root>/home/.cursor' --hermes-home '<root>/home/.hermes' --commandcode-home '<root>/home/.commandcode' --devin-home '<root>/home/.local/share/devin/cli' --agy-home '<root>/home/.gemini/antigravity-cli' --copilot-home '<root>/home/.copilot' --engine hermes\", timeout: 10 }]",
-      "error [hooks]   pre_llm_call: [{ command: \"'<node>' '<script>' --port 19473 --data-dir '<root>/data' --claude-projects-dir '<root>/home/.claude/projects' --codex-home '<root>/home/.codex' --grok-home '<root>/home/.grok' --cursor-home '<root>/home/.cursor' --hermes-home '<root>/home/.hermes' --commandcode-home '<root>/home/.commandcode' --devin-home '<root>/home/.local/share/devin/cli' --agy-home '<root>/home/.gemini/antigravity-cli' --copilot-home '<root>/home/.copilot' --engine hermes\", timeout: 10 }]"
+      "error [hooks] <hash <root>/home/.hermes/config.yaml> has its own `hooks:` block — leaving it untouched.",
+      "error [hooks] run `harness hooks hermes` for the entries to add under it to mirror Hermes sessions",
+      "warn [hooks] hermes install skipped · native hook preparation is unavailable"
      ],
      "threw": null
     }
@@ -7188,15 +7186,15 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] <root>/home/.hermes/config.yaml has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
-      "log [hooks] installed Hermes session hooks (collapsed 2 stale blocks) → <root>/home/.hermes/config.yaml",
+      "log [hooks] <hash <root>/home/.hermes/config.yaml> has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
+      "log [hooks] installed Hermes session hooks (collapsed 2 stale blocks) → <hash <root>/home/.hermes/config.yaml>",
       "log [hooks] (takes effect on the next hermes session start)"
      ],
      "threw": null
     },
     {
      "logs": [
-      "log [hooks] <root>/home/.hermes/config.yaml has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
+      "log [hooks] <hash <root>/home/.hermes/config.yaml> has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
       "log [hooks] Hermes session hooks already installed"
      ],
      "threw": null
@@ -7223,21 +7221,21 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] <root>/home/.hermes/config.yaml has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
-      "log [hooks] installed Hermes session hooks → <root>/home/.hermes/config.yaml",
+      "log [hooks] <hash <root>/home/.hermes/config.yaml> has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
+      "log [hooks] installed Hermes session hooks → <hash <root>/home/.hermes/config.yaml>",
       "log [hooks] (takes effect on the next hermes session start)",
-      "log [hooks] <root>/home/.hermes/profiles/work/config.yaml has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
-      "log [hooks] installed Hermes session hooks → <root>/home/.hermes/profiles/work/config.yaml",
+      "log [hooks] <hash <root>/home/.hermes/profiles/work/config.yaml> has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
+      "log [hooks] installed Hermes session hooks → <hash <root>/home/.hermes/profiles/work/config.yaml>",
       "log [hooks] (takes effect on the next hermes session start)"
      ],
      "threw": null
     },
     {
      "logs": [
-      "log [hooks] <root>/home/.hermes/config.yaml has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
+      "log [hooks] <hash <root>/home/.hermes/config.yaml> has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
       "log [hooks] Hermes session hooks already installed",
-      "log [hooks] <root>/home/.hermes/profiles/work/config.yaml has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
-      "log [hooks] Hermes session hooks already installed (work)"
+      "log [hooks] <hash <root>/home/.hermes/profiles/work/config.yaml> has no terminal.client_env_passthrough list to add Harness's pane names to: sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness",
+      "log [hooks] Hermes session hooks already installed (<hash <root>/home/.hermes/profiles/work>)"
      ],
      "threw": null
     }
@@ -7285,7 +7283,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <root>/home/.config/devin/config.json",
+      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <hash <root>/home/.config/devin/config.json>",
       "log [hooks] (takes effect on the next devin session start)"
      ],
      "threw": null
@@ -7317,7 +7315,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <root>/home/.config/devin/config.json",
+      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <hash <root>/home/.config/devin/config.json>",
       "log [hooks] (takes effect on the next devin session start)"
      ],
      "threw": null
@@ -7504,14 +7502,14 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <root>/home/.config/devin/config.json",
+      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <hash <root>/home/.config/devin/config.json>",
       "log [hooks] (takes effect on the next devin session start)"
      ],
      "threw": null
     },
     {
      "logs": [
-      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <root>/home/.config/devin/config.json",
+      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <hash <root>/home/.config/devin/config.json>",
       "log [hooks] (takes effect on the next devin session start)"
      ],
      "threw": null
@@ -7599,7 +7597,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <root>/home/.config/devin/config.json",
+      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <hash <root>/home/.config/devin/config.json>",
       "log [hooks] (takes effect on the next devin session start)"
      ],
      "threw": null
@@ -7631,14 +7629,14 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <root>/home/.config/devin/config.json",
+      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <hash <root>/home/.config/devin/config.json>",
       "log [hooks] (takes effect on the next devin session start)"
      ],
      "threw": null
     },
     {
      "logs": [
-      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <root>/home/.config/devin/config.json",
+      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <hash <root>/home/.config/devin/config.json>",
       "log [hooks] (takes effect on the next devin session start)"
      ],
      "threw": null
@@ -7664,7 +7662,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <root>/home/.config/devin/config.json",
+      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <hash <root>/home/.config/devin/config.json>",
       "log [hooks] (takes effect on the next devin session start)"
      ],
      "threw": null
@@ -7696,7 +7694,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <root>/home/.config/devin/config.json",
+      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <hash <root>/home/.config/devin/config.json>",
       "log [hooks] (takes effect on the next devin session start)"
      ],
      "threw": null
@@ -7728,7 +7726,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <root>/home/.config/devin/config.json",
+      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <hash <root>/home/.config/devin/config.json>",
       "log [hooks] (takes effect on the next devin session start)"
      ],
      "threw": null
@@ -7822,7 +7820,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <root>/home/.config/devin/config.json",
+      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <hash <root>/home/.config/devin/config.json>",
       "log [hooks] (takes effect on the next devin session start)"
      ],
      "threw": null
@@ -7854,7 +7852,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <root>/home/.config/devin/config.json",
+      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <hash <root>/home/.config/devin/config.json>",
       "log [hooks] (takes effect on the next devin session start)"
      ],
      "threw": null
@@ -7926,7 +7924,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <root>/home/.config/devin/config.json",
+      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <hash <root>/home/.config/devin/config.json>",
       "log [hooks] (takes effect on the next devin session start)"
      ],
      "threw": null
@@ -7958,7 +7956,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <root>/home/.config/devin/config.json",
+      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <hash <root>/home/.config/devin/config.json>",
       "log [hooks] (takes effect on the next devin session start)"
      ],
      "threw": null
@@ -7990,7 +7988,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <root>/home/.config/devin/config.json",
+      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <hash <root>/home/.config/devin/config.json>",
       "log [hooks] (takes effect on the next devin session start)"
      ],
      "threw": null
@@ -8141,7 +8139,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <root>/home/.config/devin/config.json",
+      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <hash <root>/home/.config/devin/config.json>",
       "log [hooks] (takes effect on the next devin session start)"
      ],
      "threw": null
@@ -8203,7 +8201,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <root>/home/.config/devin/config.json",
+      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <hash <root>/home/.config/devin/config.json>",
       "log [hooks] (takes effect on the next devin session start)"
      ],
      "threw": null
@@ -8235,7 +8233,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Command Code SessionStart/Stop hooks → <root>/home/.commandcode/settings.json",
+      "log [hooks] installed Command Code SessionStart/Stop hooks → <hash <root>/home/.commandcode/settings.json>",
       "log [hooks] (takes effect on the next commandcode session start)"
      ],
      "threw": null
@@ -8263,7 +8261,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Command Code SessionStart/Stop hooks → <root>/home/.commandcode/settings.json",
+      "log [hooks] installed Command Code SessionStart/Stop hooks → <hash <root>/home/.commandcode/settings.json>",
       "log [hooks] (takes effect on the next commandcode session start)"
      ],
      "threw": null
@@ -8426,14 +8424,14 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Command Code SessionStart/Stop hooks → <root>/home/.commandcode/settings.json",
+      "log [hooks] installed Command Code SessionStart/Stop hooks → <hash <root>/home/.commandcode/settings.json>",
       "log [hooks] (takes effect on the next commandcode session start)"
      ],
      "threw": null
     },
     {
      "logs": [
-      "log [hooks] installed Command Code SessionStart/Stop hooks → <root>/home/.commandcode/settings.json",
+      "log [hooks] installed Command Code SessionStart/Stop hooks → <hash <root>/home/.commandcode/settings.json>",
       "log [hooks] (takes effect on the next commandcode session start)"
      ],
      "threw": null
@@ -8509,7 +8507,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Command Code SessionStart/Stop hooks → <root>/home/.commandcode/settings.json",
+      "log [hooks] installed Command Code SessionStart/Stop hooks → <hash <root>/home/.commandcode/settings.json>",
       "log [hooks] (takes effect on the next commandcode session start)"
      ],
      "threw": null
@@ -8537,14 +8535,14 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Command Code SessionStart/Stop hooks → <root>/home/.commandcode/settings.json",
+      "log [hooks] installed Command Code SessionStart/Stop hooks → <hash <root>/home/.commandcode/settings.json>",
       "log [hooks] (takes effect on the next commandcode session start)"
      ],
      "threw": null
     },
     {
      "logs": [
-      "log [hooks] installed Command Code SessionStart/Stop hooks → <root>/home/.commandcode/settings.json",
+      "log [hooks] installed Command Code SessionStart/Stop hooks → <hash <root>/home/.commandcode/settings.json>",
       "log [hooks] (takes effect on the next commandcode session start)"
      ],
      "threw": null
@@ -8566,7 +8564,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Command Code SessionStart/Stop hooks → <root>/home/.commandcode/settings.json",
+      "log [hooks] installed Command Code SessionStart/Stop hooks → <hash <root>/home/.commandcode/settings.json>",
       "log [hooks] (takes effect on the next commandcode session start)"
      ],
      "threw": null
@@ -8594,7 +8592,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Command Code SessionStart/Stop hooks → <root>/home/.commandcode/settings.json",
+      "log [hooks] installed Command Code SessionStart/Stop hooks → <hash <root>/home/.commandcode/settings.json>",
       "log [hooks] (takes effect on the next commandcode session start)"
      ],
      "threw": null
@@ -8622,7 +8620,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Command Code SessionStart/Stop hooks → <root>/home/.commandcode/settings.json",
+      "log [hooks] installed Command Code SessionStart/Stop hooks → <hash <root>/home/.commandcode/settings.json>",
       "log [hooks] (takes effect on the next commandcode session start)"
      ],
      "threw": null
@@ -8704,7 +8702,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Command Code SessionStart/Stop hooks → <root>/home/.commandcode/settings.json",
+      "log [hooks] installed Command Code SessionStart/Stop hooks → <hash <root>/home/.commandcode/settings.json>",
       "log [hooks] (takes effect on the next commandcode session start)"
      ],
      "threw": null
@@ -8732,7 +8730,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Command Code SessionStart/Stop hooks → <root>/home/.commandcode/settings.json",
+      "log [hooks] installed Command Code SessionStart/Stop hooks → <hash <root>/home/.commandcode/settings.json>",
       "log [hooks] (takes effect on the next commandcode session start)"
      ],
      "threw": null
@@ -8796,7 +8794,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Command Code SessionStart/Stop hooks → <root>/home/.commandcode/settings.json",
+      "log [hooks] installed Command Code SessionStart/Stop hooks → <hash <root>/home/.commandcode/settings.json>",
       "log [hooks] (takes effect on the next commandcode session start)"
      ],
      "threw": null
@@ -8824,7 +8822,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Command Code SessionStart/Stop hooks → <root>/home/.commandcode/settings.json",
+      "log [hooks] installed Command Code SessionStart/Stop hooks → <hash <root>/home/.commandcode/settings.json>",
       "log [hooks] (takes effect on the next commandcode session start)"
      ],
      "threw": null
@@ -8852,7 +8850,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Command Code SessionStart/Stop hooks → <root>/home/.commandcode/settings.json",
+      "log [hooks] installed Command Code SessionStart/Stop hooks → <hash <root>/home/.commandcode/settings.json>",
       "log [hooks] (takes effect on the next commandcode session start)"
      ],
      "threw": null
@@ -8983,7 +8981,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Command Code SessionStart/Stop hooks → <root>/home/.commandcode/settings.json",
+      "log [hooks] installed Command Code SessionStart/Stop hooks → <hash <root>/home/.commandcode/settings.json>",
       "log [hooks] (takes effect on the next commandcode session start)"
      ],
      "threw": null
@@ -9037,7 +9035,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Command Code SessionStart/Stop hooks → <root>/home/.commandcode/settings.json",
+      "log [hooks] installed Command Code SessionStart/Stop hooks → <hash <root>/home/.commandcode/settings.json>",
       "log [hooks] (takes effect on the next commandcode session start)"
      ],
      "threw": null
@@ -9065,7 +9063,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Grok lifecycle/StopFailure hooks → <root>/home/.grok/hooks/harness.json",
+      "log [hooks] installed Grok lifecycle/StopFailure hooks → <hash <root>/home/.grok/hooks/harness.json>",
       "log [hooks] (takes effect on the next Grok session start)"
      ],
      "threw": null
@@ -9097,7 +9095,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Grok lifecycle/StopFailure hooks → <root>/home/.grok/hooks/harness.json",
+      "log [hooks] installed Grok lifecycle/StopFailure hooks → <hash <root>/home/.grok/hooks/harness.json>",
       "log [hooks] (takes effect on the next Grok session start)"
      ],
      "threw": null
@@ -9292,14 +9290,14 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Grok lifecycle/StopFailure hooks → <root>/home/.grok/hooks/harness.json",
+      "log [hooks] installed Grok lifecycle/StopFailure hooks → <hash <root>/home/.grok/hooks/harness.json>",
       "log [hooks] (takes effect on the next Grok session start)"
      ],
      "threw": null
     },
     {
      "logs": [
-      "log [hooks] installed Grok lifecycle/StopFailure hooks → <root>/home/.grok/hooks/harness.json",
+      "log [hooks] installed Grok lifecycle/StopFailure hooks → <hash <root>/home/.grok/hooks/harness.json>",
       "log [hooks] (takes effect on the next Grok session start)"
      ],
      "threw": null
@@ -9387,7 +9385,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Grok lifecycle/StopFailure hooks → <root>/home/.grok/hooks/harness.json",
+      "log [hooks] installed Grok lifecycle/StopFailure hooks → <hash <root>/home/.grok/hooks/harness.json>",
       "log [hooks] (takes effect on the next Grok session start)"
      ],
      "threw": null
@@ -9419,14 +9417,14 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Grok lifecycle/StopFailure hooks → <root>/home/.grok/hooks/harness.json",
+      "log [hooks] installed Grok lifecycle/StopFailure hooks → <hash <root>/home/.grok/hooks/harness.json>",
       "log [hooks] (takes effect on the next Grok session start)"
      ],
      "threw": null
     },
     {
      "logs": [
-      "log [hooks] installed Grok lifecycle/StopFailure hooks → <root>/home/.grok/hooks/harness.json",
+      "log [hooks] installed Grok lifecycle/StopFailure hooks → <hash <root>/home/.grok/hooks/harness.json>",
       "log [hooks] (takes effect on the next Grok session start)"
      ],
      "threw": null
@@ -9452,7 +9450,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Grok lifecycle/StopFailure hooks → <root>/home/.grok/hooks/harness.json",
+      "log [hooks] installed Grok lifecycle/StopFailure hooks → <hash <root>/home/.grok/hooks/harness.json>",
       "log [hooks] (takes effect on the next Grok session start)"
      ],
      "threw": null
@@ -9484,7 +9482,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Grok lifecycle/StopFailure hooks → <root>/home/.grok/hooks/harness.json",
+      "log [hooks] installed Grok lifecycle/StopFailure hooks → <hash <root>/home/.grok/hooks/harness.json>",
       "log [hooks] (takes effect on the next Grok session start)"
      ],
      "threw": null
@@ -9516,7 +9514,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Grok lifecycle/StopFailure hooks → <root>/home/.grok/hooks/harness.json",
+      "log [hooks] installed Grok lifecycle/StopFailure hooks → <hash <root>/home/.grok/hooks/harness.json>",
       "log [hooks] (takes effect on the next Grok session start)"
      ],
      "threw": null
@@ -9610,7 +9608,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Grok lifecycle/StopFailure hooks → <root>/home/.grok/hooks/harness.json",
+      "log [hooks] installed Grok lifecycle/StopFailure hooks → <hash <root>/home/.grok/hooks/harness.json>",
       "log [hooks] (takes effect on the next Grok session start)"
      ],
      "threw": null
@@ -9642,7 +9640,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Grok lifecycle/StopFailure hooks → <root>/home/.grok/hooks/harness.json",
+      "log [hooks] installed Grok lifecycle/StopFailure hooks → <hash <root>/home/.grok/hooks/harness.json>",
       "log [hooks] (takes effect on the next Grok session start)"
      ],
      "threw": null
@@ -9714,7 +9712,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Grok lifecycle/StopFailure hooks → <root>/home/.grok/hooks/harness.json",
+      "log [hooks] installed Grok lifecycle/StopFailure hooks → <hash <root>/home/.grok/hooks/harness.json>",
       "log [hooks] (takes effect on the next Grok session start)"
      ],
      "threw": null
@@ -9746,7 +9744,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Grok lifecycle/StopFailure hooks → <root>/home/.grok/hooks/harness.json",
+      "log [hooks] installed Grok lifecycle/StopFailure hooks → <hash <root>/home/.grok/hooks/harness.json>",
       "log [hooks] (takes effect on the next Grok session start)"
      ],
      "threw": null
@@ -9778,7 +9776,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Grok lifecycle/StopFailure hooks → <root>/home/.grok/hooks/harness.json",
+      "log [hooks] installed Grok lifecycle/StopFailure hooks → <hash <root>/home/.grok/hooks/harness.json>",
       "log [hooks] (takes effect on the next Grok session start)"
      ],
      "threw": null
@@ -9931,7 +9929,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Grok lifecycle/StopFailure hooks → <root>/home/.grok/hooks/harness.json",
+      "log [hooks] installed Grok lifecycle/StopFailure hooks → <hash <root>/home/.grok/hooks/harness.json>",
       "log [hooks] (takes effect on the next Grok session start)"
      ],
      "threw": null
@@ -9995,7 +9993,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Grok lifecycle/StopFailure hooks → <root>/home/.grok/hooks/harness.json",
+      "log [hooks] installed Grok lifecycle/StopFailure hooks → <hash <root>/home/.grok/hooks/harness.json>",
       "log [hooks] (takes effect on the next Grok session start)"
      ],
      "threw": null
@@ -10027,7 +10025,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed agy lifecycle hooks → <root>/home/.gemini/config/hooks.json",
+      "log [hooks] installed agy lifecycle hooks → <hash <root>/home/.gemini/config/hooks.json>",
       "log [hooks] (takes effect on the next agy session start)"
      ],
      "threw": null
@@ -10059,7 +10057,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed agy lifecycle hooks → <root>/home/.gemini/config/hooks.json",
+      "log [hooks] installed agy lifecycle hooks → <hash <root>/home/.gemini/config/hooks.json>",
       "log [hooks] (takes effect on the next agy session start)"
      ],
      "threw": null
@@ -10223,7 +10221,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed agy lifecycle hooks → <root>/home/.gemini/config/hooks.json",
+      "log [hooks] installed agy lifecycle hooks → <hash <root>/home/.gemini/config/hooks.json>",
       "log [hooks] (takes effect on the next agy session start)"
      ],
      "threw": null
@@ -10255,7 +10253,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed agy lifecycle hooks → <root>/home/.gemini/config/hooks.json",
+      "log [hooks] installed agy lifecycle hooks → <hash <root>/home/.gemini/config/hooks.json>",
       "log [hooks] (takes effect on the next agy session start)"
      ],
      "threw": null
@@ -10287,7 +10285,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed agy lifecycle hooks → <root>/home/.gemini/config/hooks.json",
+      "log [hooks] installed agy lifecycle hooks → <hash <root>/home/.gemini/config/hooks.json>",
       "log [hooks] (takes effect on the next agy session start)"
      ],
      "threw": null
@@ -10319,7 +10317,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed agy lifecycle hooks → <root>/home/.gemini/config/hooks.json",
+      "log [hooks] installed agy lifecycle hooks → <hash <root>/home/.gemini/config/hooks.json>",
       "log [hooks] (takes effect on the next agy session start)"
      ],
      "threw": null
@@ -10351,7 +10349,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed agy lifecycle hooks → <root>/home/.gemini/config/hooks.json",
+      "log [hooks] installed agy lifecycle hooks → <hash <root>/home/.gemini/config/hooks.json>",
       "log [hooks] (takes effect on the next agy session start)"
      ],
      "threw": null
@@ -10383,7 +10381,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed agy lifecycle hooks → <root>/home/.gemini/config/hooks.json",
+      "log [hooks] installed agy lifecycle hooks → <hash <root>/home/.gemini/config/hooks.json>",
       "log [hooks] (takes effect on the next agy session start)"
      ],
      "threw": null
@@ -10415,7 +10413,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed agy lifecycle hooks → <root>/home/.gemini/config/hooks.json",
+      "log [hooks] installed agy lifecycle hooks → <hash <root>/home/.gemini/config/hooks.json>",
       "log [hooks] (takes effect on the next agy session start)"
      ],
      "threw": null
@@ -10447,7 +10445,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed agy lifecycle hooks → <root>/home/.gemini/config/hooks.json",
+      "log [hooks] installed agy lifecycle hooks → <hash <root>/home/.gemini/config/hooks.json>",
       "log [hooks] (takes effect on the next agy session start)"
      ],
      "threw": null
@@ -10479,7 +10477,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed agy lifecycle hooks → <root>/home/.gemini/config/hooks.json",
+      "log [hooks] installed agy lifecycle hooks → <hash <root>/home/.gemini/config/hooks.json>",
       "log [hooks] (takes effect on the next agy session start)"
      ],
      "threw": null
@@ -10573,7 +10571,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed agy lifecycle hooks → <root>/home/.gemini/config/hooks.json",
+      "log [hooks] installed agy lifecycle hooks → <hash <root>/home/.gemini/config/hooks.json>",
       "log [hooks] (takes effect on the next agy session start)"
      ],
      "threw": null
@@ -10605,7 +10603,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed agy lifecycle hooks → <root>/home/.gemini/config/hooks.json",
+      "log [hooks] installed agy lifecycle hooks → <hash <root>/home/.gemini/config/hooks.json>",
       "log [hooks] (takes effect on the next agy session start)"
      ],
      "threw": null
@@ -10677,7 +10675,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed agy lifecycle hooks → <root>/home/.gemini/config/hooks.json",
+      "log [hooks] installed agy lifecycle hooks → <hash <root>/home/.gemini/config/hooks.json>",
       "log [hooks] (takes effect on the next agy session start)"
      ],
      "threw": null
@@ -10709,7 +10707,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed agy lifecycle hooks → <root>/home/.gemini/config/hooks.json",
+      "log [hooks] installed agy lifecycle hooks → <hash <root>/home/.gemini/config/hooks.json>",
       "log [hooks] (takes effect on the next agy session start)"
      ],
      "threw": null
@@ -10741,7 +10739,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed agy lifecycle hooks → <root>/home/.gemini/config/hooks.json",
+      "log [hooks] installed agy lifecycle hooks → <hash <root>/home/.gemini/config/hooks.json>",
       "log [hooks] (takes effect on the next agy session start)"
      ],
      "threw": null
@@ -10894,7 +10892,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed agy lifecycle hooks → <root>/home/.gemini/config/hooks.json",
+      "log [hooks] installed agy lifecycle hooks → <hash <root>/home/.gemini/config/hooks.json>",
       "log [hooks] (takes effect on the next agy session start)"
      ],
      "threw": null
@@ -10958,7 +10956,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed agy lifecycle hooks → <root>/home/.gemini/config/hooks.json",
+      "log [hooks] installed agy lifecycle hooks → <hash <root>/home/.gemini/config/hooks.json>",
       "log [hooks] (takes effect on the next agy session start)"
      ],
      "threw": null
@@ -10990,7 +10988,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Copilot lifecycle hooks → <root>/home/.copilot/hooks/harness.json",
+      "log [hooks] installed Copilot lifecycle hooks → <hash <root>/home/.copilot/hooks/harness.json>",
       "log [hooks] (takes effect on the next copilot session start)"
      ],
      "threw": null
@@ -11022,7 +11020,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Copilot lifecycle hooks → <root>/home/.copilot/hooks/harness.json",
+      "log [hooks] installed Copilot lifecycle hooks → <hash <root>/home/.copilot/hooks/harness.json>",
       "log [hooks] (takes effect on the next copilot session start)"
      ],
      "threw": null
@@ -11054,7 +11052,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Copilot lifecycle hooks → <root>/home/.copilot/hooks/harness.json",
+      "log [hooks] installed Copilot lifecycle hooks → <hash <root>/home/.copilot/hooks/harness.json>",
       "log [hooks] (takes effect on the next copilot session start)"
      ],
      "threw": null
@@ -11086,7 +11084,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Copilot lifecycle hooks → <root>/home/.copilot/hooks/harness.json",
+      "log [hooks] installed Copilot lifecycle hooks → <hash <root>/home/.copilot/hooks/harness.json>",
       "log [hooks] (takes effect on the next copilot session start)"
      ],
      "threw": null
@@ -11118,7 +11116,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Copilot lifecycle hooks → <root>/home/.copilot/hooks/harness.json",
+      "log [hooks] installed Copilot lifecycle hooks → <hash <root>/home/.copilot/hooks/harness.json>",
       "log [hooks] (takes effect on the next copilot session start)"
      ],
      "threw": null
@@ -11150,7 +11148,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Copilot lifecycle hooks → <root>/home/.copilot/hooks/harness.json",
+      "log [hooks] installed Copilot lifecycle hooks → <hash <root>/home/.copilot/hooks/harness.json>",
       "log [hooks] (takes effect on the next copilot session start)"
      ],
      "threw": null
@@ -11182,7 +11180,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Copilot lifecycle hooks → <root>/home/.copilot/hooks/harness.json",
+      "log [hooks] installed Copilot lifecycle hooks → <hash <root>/home/.copilot/hooks/harness.json>",
       "log [hooks] (takes effect on the next copilot session start)"
      ],
      "threw": null
@@ -11214,7 +11212,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Copilot lifecycle hooks → <root>/home/.copilot/hooks/harness.json",
+      "log [hooks] installed Copilot lifecycle hooks → <hash <root>/home/.copilot/hooks/harness.json>",
       "log [hooks] (takes effect on the next copilot session start)"
      ],
      "threw": null
@@ -11246,7 +11244,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Copilot lifecycle hooks → <root>/home/.copilot/hooks/harness.json",
+      "log [hooks] installed Copilot lifecycle hooks → <hash <root>/home/.copilot/hooks/harness.json>",
       "log [hooks] (takes effect on the next copilot session start)"
      ],
      "threw": null
@@ -11278,7 +11276,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Copilot lifecycle hooks → <root>/home/.copilot/hooks/harness.json",
+      "log [hooks] installed Copilot lifecycle hooks → <hash <root>/home/.copilot/hooks/harness.json>",
       "log [hooks] (takes effect on the next copilot session start)"
      ],
      "threw": null
@@ -11310,7 +11308,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Copilot lifecycle hooks → <root>/home/.copilot/hooks/harness.json",
+      "log [hooks] installed Copilot lifecycle hooks → <hash <root>/home/.copilot/hooks/harness.json>",
       "log [hooks] (takes effect on the next copilot session start)"
      ],
      "threw": null
@@ -11342,7 +11340,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Copilot lifecycle hooks → <root>/home/.copilot/hooks/harness.json",
+      "log [hooks] installed Copilot lifecycle hooks → <hash <root>/home/.copilot/hooks/harness.json>",
       "log [hooks] (takes effect on the next copilot session start)"
      ],
      "threw": null
@@ -11374,7 +11372,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Copilot lifecycle hooks → <root>/home/.copilot/hooks/harness.json",
+      "log [hooks] installed Copilot lifecycle hooks → <hash <root>/home/.copilot/hooks/harness.json>",
       "log [hooks] (takes effect on the next copilot session start)"
      ],
      "threw": null
@@ -11406,7 +11404,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Copilot lifecycle hooks → <root>/home/.copilot/hooks/harness.json",
+      "log [hooks] installed Copilot lifecycle hooks → <hash <root>/home/.copilot/hooks/harness.json>",
       "log [hooks] (takes effect on the next copilot session start)"
      ],
      "threw": null
@@ -11438,7 +11436,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Copilot lifecycle hooks → <root>/home/.copilot/hooks/harness.json",
+      "log [hooks] installed Copilot lifecycle hooks → <hash <root>/home/.copilot/hooks/harness.json>",
       "log [hooks] (takes effect on the next copilot session start)"
      ],
      "threw": null
@@ -11532,7 +11530,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Copilot lifecycle hooks → <root>/home/.copilot/hooks/harness.json",
+      "log [hooks] installed Copilot lifecycle hooks → <hash <root>/home/.copilot/hooks/harness.json>",
       "log [hooks] (takes effect on the next copilot session start)"
      ],
      "threw": null
@@ -11564,7 +11562,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Copilot lifecycle hooks → <root>/home/.copilot/hooks/harness.json",
+      "log [hooks] installed Copilot lifecycle hooks → <hash <root>/home/.copilot/hooks/harness.json>",
       "log [hooks] (takes effect on the next copilot session start)"
      ],
      "threw": null
@@ -11636,7 +11634,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Copilot lifecycle hooks → <root>/home/.copilot/hooks/harness.json",
+      "log [hooks] installed Copilot lifecycle hooks → <hash <root>/home/.copilot/hooks/harness.json>",
       "log [hooks] (takes effect on the next copilot session start)"
      ],
      "threw": null
@@ -11668,7 +11666,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Copilot lifecycle hooks → <root>/home/.copilot/hooks/harness.json",
+      "log [hooks] installed Copilot lifecycle hooks → <hash <root>/home/.copilot/hooks/harness.json>",
       "log [hooks] (takes effect on the next copilot session start)"
      ],
      "threw": null
@@ -11700,7 +11698,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Copilot lifecycle hooks → <root>/home/.copilot/hooks/harness.json",
+      "log [hooks] installed Copilot lifecycle hooks → <hash <root>/home/.copilot/hooks/harness.json>",
       "log [hooks] (takes effect on the next copilot session start)"
      ],
      "threw": null
@@ -11763,7 +11761,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Copilot lifecycle hooks → <root>/home/.copilot/hooks/harness.json",
+      "log [hooks] installed Copilot lifecycle hooks → <hash <root>/home/.copilot/hooks/harness.json>",
       "log [hooks] (takes effect on the next copilot session start)"
      ],
      "threw": null
@@ -11852,7 +11850,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Copilot lifecycle hooks → <root>/home/.copilot/hooks/harness.json",
+      "log [hooks] installed Copilot lifecycle hooks → <hash <root>/home/.copilot/hooks/harness.json>",
       "log [hooks] (takes effect on the next copilot session start)"
      ],
      "threw": null
@@ -11919,7 +11917,7 @@
    "runs": [
     {
      "logs": [
-      "log [hooks] installed Copilot lifecycle hooks → <root>/home/.copilot/hooks/harness.json",
+      "log [hooks] installed Copilot lifecycle hooks → <hash <root>/home/.copilot/hooks/harness.json>",
       "log [hooks] (takes effect on the next copilot session start)"
      ],
      "threw": null

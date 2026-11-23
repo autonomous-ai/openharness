@@ -17,6 +17,7 @@ import { createRetainExitedSession } from './retainExitedSession.js'
 import { StoppedAgentStore } from './stoppedAgents.js'
 import { MoveGate } from './hostMove/gate.js'
 import { AtomicWriteUnconfirmed } from './secureState.js'
+import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import { createBinding } from '../core/agents/bind.js'
 import { createStopAgentService } from './stopAgentService.js'
@@ -46,8 +47,10 @@ vi.mock('node:fs', async original => {
     return actual.fsyncSync(fd)
   } }
 })
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
+const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
 vi.mock('node:fs/promises', async original => {
-  const actual = await original<typeof import('node:fs/promises')>()
+  const actual = await deadline.slowSyncFsPromises(original)
   return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
     const handle = await actual.open(...args), write = handle.writeFile.bind(handle), sync = handle.sync.bind(handle)
     let selected = false
@@ -86,6 +89,7 @@ const terminal = { name: 'tmux', holdOpen: async () => ({ state: 'succeeded' }),
   rootProcess: async () => null, inventory: async () => ({ state: 'available', roots: [] }), paneState, releaseHold } as unknown as TerminalBackend
 let row: RegisteredSession
 let directory: string
+let writeDeadline: ReturnType<typeof deadline.holdRegistryDeadline>
 const deferred = () => { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done }); return { promise, resolve } }
 function holdImage(match: (rows: RegisteredSession[]) => boolean) {
   const entered = deferred(), held = deferred()
@@ -96,6 +100,8 @@ function holdImage(match: (rows: RegisteredSession[]) => boolean) {
 const persisted = (): RegisteredSession[] => JSON.parse(readFileSync(join(env.ADAPTER_DATA_DIR, 'registry.json'), 'utf8'))
 
 beforeEach(async () => {
+  // Only queue expiry means the write deadline to pass: how fast this machine writes the registry never fails the rest.
+  writeDeadline = deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS)
   vi.clearAllMocks()
   vi.mocked(resolvePaneEngineProcess).mockResolvedValue(newProcess)
   paneState.mockResolvedValue({ dead: false, engineExit: null })
@@ -112,6 +118,7 @@ afterEach(async () => {
   image.names = false
   for (const entry of registry.list()) (await removeRegistryAgent(registry, entry.agentId))
   await registry.flush()
+  vi.restoreAllMocks()
   rmSync(directory, { recursive: true, force: true })
 })
 
@@ -349,9 +356,9 @@ it('binding revalidation cannot change Stop evidence while its prepared image wa
   const store = new StoppedAgentStore(join(directory, 'revalidation-stop')), jobs = new Map<string, Promise<void>>()
   const binding = createBinding({ registry, mirror: { inheritSummary: vi.fn() }, forgetSession: vi.fn(), clients: { send: vi.fn() },
     attachSession: vi.fn(async () => true), announceSession: announce, stoppedAgents: store, syncRecapPool: vi.fn(),
-    input: { forget: vi.fn(), awaitingConfirmation: () => false, waitsForPane: () => false, firstTaskWaiting: () => false, typeCommand: async () => false, expectFirstTask: vi.fn() }, submitFirstTask: vi.fn(), deviceInput: { forget: vi.fn() },
+    input: { forget: vi.fn(), awaitingConfirmation: () => false, waitsForPane: () => false, firstTaskWaiting: () => false, typeCommand: async () => false, expectFirstTask: vi.fn(), ownsBox: () => false, adoptTypedFirstTask: () => false, firstTaskConfirmed: vi.fn() }, submitFirstTask: vi.fn(), deviceInput: { forget: vi.fn() },
     homes: { copilot: directory, grok: directory, agy: directory }, capturePane: async () => null, activityRevision: () => undefined,
-    openclawPaneRead: vi.fn(), openclawPaneDue: () => false, openclawStateDir: async () => null, followsLive: () => false })
+    openclawPaneRead: vi.fn(), openclawPaneDue: () => false, openclawStateDir: async () => null, openclawUserRowSince: async () => null, followsLive: () => false })
   binding.whileChanging(id => jobs.has(id))
   const nativeEntered = deferred(), nativeDone = deferred(), deleted = vi.fn()
   const stop = createStopAgentService({ registry, stoppedAgents: store, restartJobs: new AgentRestartCoordinator(), stopJobs: jobs,
@@ -534,6 +541,10 @@ it.each((['name', 'model'] as const).flatMap(choice => ['owner', 'uncertain', 'q
     await held.entered
     const pending = update.agentUpdate(request, reply)
     try {
+      // The update queues its write a few turns after the call, behind the blocking flush's: its deadline passes once
+      // both are held.
+      await vi.waitFor(() => expect(writeDeadline.deadlines()).toBe(2))
+      writeDeadline.expire()
       await pending
       expect(reply).toHaveBeenCalledExactlyOnceWith({ error: 'PERSISTENCE_UNCONFIRMED' })
     } finally { held.release(); await blocking }
@@ -592,7 +603,7 @@ it('discovery cannot retire an engine that appeared while its exit image was pre
     terminals: { backendFor: () => terminal } })
   vi.mocked(resolvePaneEngineProcess).mockResolvedValue(null)
   const held = holdImage(rows => rows.some(entry => entry.engine === 'terminal'))
-  const pending = handlers.onDormant(structuredClone(row), 'engine exited')
+  const pending = handlers.onDormant(structuredClone(row), 'engine process absent after 2 confirmed scans')
   await held.entered
   vi.mocked(resolvePaneEngineProcess).mockResolvedValue(newProcess)
   held.release(); await pending

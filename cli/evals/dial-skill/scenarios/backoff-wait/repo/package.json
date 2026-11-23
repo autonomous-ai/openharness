@@ -1,0 +1,12 @@
+{
+  "name": "uptime-check",
+  "version": "0.9.2",
+  "description": "Checks that each URL it is given answers.",
+  "type": "module",
+  "bin": {
+    "uptime-check": "src/cli.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}

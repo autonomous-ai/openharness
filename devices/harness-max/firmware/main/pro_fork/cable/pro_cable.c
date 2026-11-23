@@ -4,9 +4,11 @@
 // answer.reviewed, answer and answer.receipt, New Harness (form, form.state, voice.form), a notification row's question
 // flag, and toast. cable/max_cable.h declares what it adds to the Pro's pro_cable.h; the welcome's features are read with
 // max_cable_features_parse (main/cable/max_cable_features.c). Its includes name the Pro's cable headers from main/, as
-// it is not beside them.
+// it is not beside them. Main fc16e78f94 gave the Pro its own appFilter, questionTier and appCards, host and caps,
+// `apps`, app.pick and a question's tier (#4521): this copy keeps its own of each, as the Max's pro_app_api.h has them,
+// and takes neither appCards (its apps rows stay count and waiting) nor agents.end's view and tab.
 // pro_fork upstream: devices/harness-pro/firmware/main/cable/pro_cable.c
-// pro_fork blob: d867ee456165982623bd3f398bc829000d0a8665 (main 91f60b6a7b)
+// pro_fork blob: ac2bbd34a72d8d1843fde5877c50a9be2fadcdd7 (main fc16e78f94)
 // scripts/check_pro_forks.py fails once the upstream file is no longer that blob: re-port its change here, then
 // record its new blob on these lines and in main/pro_fork/upstream.txt.
 #include "cable/pro_cable.h"

@@ -8,7 +8,8 @@
  * Cursor), sent to that editor alone by its bundle id (appLink.ts), on a tap and on a rest of the dial, a rest only while
  * that editor is in front. The link was read in the extension's code, not in any document, and may change with any
  * release. On Linux, which has no bundle id, the editor is the app the process scan named and the link opens by
- * `xdg-open` once its scheme has an app (docs/plans/2026-11-19-dial-linux-design.md § 1.6); elsewhere nothing runs.
+ * `xdg-open` once its scheme has an app (docs/plans/2026-11-19-dial-linux-design.md § 1.6); on Windows the link goes
+ * with the editor's bundle id to Windows' raise (windowsRaise.ts); elsewhere nothing runs.
  * Every value came from a hook, so each is checked against its form before it reaches the link.
  *
  * The integrated terminal (docs/plans/2026-11-17-dial-vscode-extension-design.md, §3): a Claude Code or Codex agent in a
@@ -17,15 +18,20 @@
  * the editor's others. The terminal is asked for again at each verb, since a window comes and goes between looks. The
  * adapter's one `tap` is `'instead'`, for the tab's link, so a terminal's tap brings the editor itself once its line is
  * queued: by its own `open -b` on macOS, by the devices' raise of the pane's process on Linux (docs/plans/
- * 2026-11-19-dial-linux-design.md §§ 1.6, 2); elsewhere the line alone is the tap. The dial's scroll sends that window
- * the stroke's lines on a `{"scroll":<lines>,"pid":<shell>}` line while the editor is in front (§4): the extension runs
+ * 2026-11-19-dial-linux-design.md §§ 1.6, 2), by Windows' raise of the editor's bundle on Windows (windowsRaise.ts);
+ * elsewhere the line alone is the tap. The dial's scroll sends that window the stroke's lines on a
+ * `{"scroll":<lines>,"pid":<shell>}` line while the editor is in front (§4): the extension runs
  * them only while that terminal is the active one, so the adapter has no `onScreen`. A stroke whose `pageKeys` passed
  * carries `"page":true`, and the extension also presses Claude Code's page keys in that terminal
- * (docs/plans/2026-11-18-dial-vscode-claude-fullscreen-scroll-design.md).
+ * (docs/plans/2026-11-18-dial-vscode-claude-fullscreen-scroll-design.md). The dial's words go to a terminal whose window
+ * says it types: the terminals type them there, then press Enter after a settle, only while the agent is that terminal's
+ * foreground job and the source says it is still at its prompt (vscodeTerminals.ts `type`,
+ * docs/plans/2026-11-22-dial-vscode-cursor-voice-design.md). Cursor's terminals are typed into as VS Code's (U11);
+ * Cursor's own agent takes no words, and its adapter's `voiceRefusal` says so (U10).
  */
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { createAppLink, type AppLinkDeps } from './appLink.js'
-import { APP_BUNDLES } from './hostDetect.js'
+import { APP_BUNDLES, EXTENSION_TAB } from './hostDetect.js'
 import { openPath } from './open.js'
 import { RUN_TIMEOUT_MS } from './orca.js'
 import type { LinuxRaise } from './linuxRaise.js'
@@ -42,11 +48,22 @@ const VSCODE_SESSION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 /** A terminal pane's id: one form for each pid, so a pane's id and its pid read back the same. */
 const TERM_PANE = /^term:([1-9][0-9]{0,9})$/
 
-/** The engines an integrated terminal's pane is for: Claude Code, Codex, and cursor-agent only with TERM_PROGRAM, which
- *  a terminal sets. Cursor's own agent has the same engine but carries none, and its hook's pid may be a short-lived
- *  process: a pane for it would have the window stream's chain read it with `ps` every CHAIN_RETRY_MS, for nothing. */
+/** cursor-agent in a terminal, which sets TERM_PROGRAM. Cursor's own agent has the same engine but carries none, and its
+ *  hook's pid may be a short-lived process: a pane for it would have the window stream's chain read it with `ps` every
+ *  CHAIN_RETRY_MS, for nothing. */
+function cursorInTerminal(place: Place): boolean {
+  return place.engine === 'cursor' && !!place.hints.TERM_PROGRAM
+}
+
+/** Cursor's own agent, the chat inside Cursor (U10): Cursor's cursor engine out of any terminal, which a session the scan
+ *  found is too until its first hook says TERM_PROGRAM. */
+function cursorsOwnAgent(place: Place): boolean {
+  return place.app === 'cursor' && place.engine === 'cursor' && !cursorInTerminal(place)
+}
+
+/** The engines an integrated terminal's pane is for: Claude Code, Codex, and cursor-agent in a terminal. */
 function inTerminal(place: Place): boolean {
-  return place.engine === 'claude' || place.engine === 'codex' || (place.engine === 'cursor' && !!place.hints.TERM_PROGRAM)
+  return place.engine === 'claude' || place.engine === 'codex' || cursorInTerminal(place)
 }
 
 /** The agent's pid a terminal pane names (`term:<pid>`, 2..2^31-1); none for the panel's pane or any other id. */
@@ -58,7 +75,7 @@ export function termPid(paneId: string): number | undefined {
 export function createVscodeAdapter(
   editor: keyof typeof EDITORS,
   deps: AppLinkDeps & {
-    terminals: Pick<VscodeTerminals, 'terminalOf' | 'show' | 'scroll' | 'pageKeys'>
+    terminals: Pick<VscodeTerminals, 'terminalOf' | 'show' | 'scroll' | 'pageKeys' | 'canType' | 'type'>
     /** Brings a window forward on Linux; none elsewhere. */
     raise?: LinuxRaise['raise']
   },
@@ -66,8 +83,9 @@ export function createVscodeAdapter(
   const { bundle: editorBundle, scheme } = EDITORS[editor]
   const mac = deps.platform === 'darwin'
   const openBin = openPath(deps.bin)
-  // No forward of its own: its pane exists only with its hook's own editor's bundle id, so a link that fails leaves
-  // the opener's fallback to bring that editor (open.ts).
+  // No forward of its own: its pane exists only with its hook's own editor's bundle id, or with none in the editor the
+  // caller's parents named, whose bundle the tap then carries (observed.ts placeApp), so a link that fails leaves the
+  // opener's fallback to bring that editor (open.ts).
   const tab = createAppLink(deps, {
     session: VSCODE_SESSION,
     url: (session) => `${scheme}://anthropic.claude-code/open?session=${session}`,
@@ -86,12 +104,14 @@ export function createVscodeAdapter(
       // The extension says the same word in either editor, so each editor's own bundle id is what its adapter takes:
       // an app known by TERM_PROGRAM alone may be another fork. The link names Claude Code's sessions alone: an engine
       // Claude Code's tools ran from the tab (`codex exec`) inherits the word and the bundle id, and a Codex thread id
-      // is a UUID too. Linux has no bundle id: there the editor is the app the process scan named.
-      const inEditor = bundle === editorBundle || (deps.platform === 'linux' && bundle === undefined && place.app === editor)
-      if (place.engine === 'claude' && entrypoint === 'claude-vscode' && inEditor && session
+      // is a UUID too. Linux has no bundle id, and on macOS one an editor started from another app inherited is dropped
+      // (hostDetect.ts ownHints): there the editor is the app the caller's parents named.
+      const inEditor = bundle === editorBundle
+        || ((mac || deps.platform === 'linux') && bundle === undefined && place.app === editor)
+      if (place.engine === 'claude' && entrypoint === EXTENSION_TAB && inEditor && session
         && VSCODE_SESSION.test(session)) return { adapter: editor, id: session }
       // The tab's word, inherited by what its tools run, is never a terminal's: the tab has no shell a window reports.
-      if (inTerminal(place) && place.app === editor && entrypoint !== 'claude-vscode' && isPid(place.pid)) {
+      if (inTerminal(place) && place.app === editor && entrypoint !== EXTENSION_TAB && isPid(place.pid)) {
         return { adapter: editor, id: `term:${place.pid}` }
       }
       return undefined
@@ -108,6 +128,7 @@ export function createVscodeAdapter(
       // The show is queued: the editor still has to come forward, and whether `open` or the raise did is not the
       // terminal's outcome, as the opener's own `open -b` after a pane is not.
       if (mac) await deps.run(openBin, ['-b', editorBundle], RUN_TIMEOUT_MS)
+      else if (deps.windows) await deps.windows.app(editorBundle)
       else if (deps.raise) await deps.raise({ pid, app: editor })
       return true
     },
@@ -139,5 +160,25 @@ export function createVscodeAdapter(
       const terminal = pid === undefined ? undefined : deps.terminals.terminalOf(pid)
       if (terminal) deps.terminals.scroll(terminal, lines, page)
     },
+    canType(pane) {
+      const pid = termPid(pane.id)
+      // The tab has no shell a window reports: its words go to its mod, never here.
+      return pid !== undefined && deps.terminals.canType(pid)
+    },
+    async type(pane, text, _engine, atPrompt) {
+      const pid = termPid(pane.id)
+      // The Enter waits a settle after the words: with no check that the agent is still at its prompt by then, it could
+      // answer a question or start a turn the words were never meant for.
+      if (pid === undefined || !atPrompt) return false
+      const typed = await deps.terminals.type(pid, text, atPrompt)
+      // Not in front (suspended, in the background): nothing was typed, and the person can bring it back (V9).
+      if (typed === 'background') return { refused: 'Bring it to the front of its terminal.' }
+      return typed === 'typed'
+    },
+    // Cursor documents no way to put words into one existing chat: its prompt link opens a new one, and its composer
+    // commands act on whichever chat is focused (docs/plans/2026-11-22-dial-vscode-cursor-voice-design.md, §2).
+    ...(editor === 'cursor' && {
+      voiceRefusal: (place: Place) => (cursorsOwnAgent(place) ? 'Voice can\'t reach Cursor\'s agent. Type in Cursor.' : undefined),
+    }),
   }
 }

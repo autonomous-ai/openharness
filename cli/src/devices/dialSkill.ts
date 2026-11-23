@@ -2,11 +2,13 @@
  * The dial skill in one agent home's `skills/dial/SKILL.md`, the same for Claude Code and Codex (both read
  * `<home>/skills/<name>/SKILL.md`), so a session knows it can ring the dial. Harness writes, refreshes and removes only
  * its own file, known by its marker line: anything else at that path is the person's. The `harness device` command and
- * the devices service both import it, so it loads nothing but Node's own modules.
+ * the devices service both import it, so it loads nothing but Node's own modules (lib/secureState.ts loads only those).
  */
 import { randomUUID } from 'node:crypto'
 import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { insideWindowsRoots } from '../lib/secureState.js'
 
 export const DIAL_SKILL_DESCRIPTION = 'The person has a Harness dial on their desk. Use it when the task stops on a step only they can take: give information, act outside your reach (connect a VPN, sign in, plug in a device, get another person to sign off), or decide.'
 
@@ -25,14 +27,21 @@ description: ${JSON.stringify(DIAL_SKILL_DESCRIPTION)}
 ${DIAL_SKILL_MARKER}
 ---
 
-When the task stops on a step only the person can take, ring their dial before you hand it to them:
+When the task needs a decision or an action only the person can take, ring their dial once and keep working:
 
-    harness device notify "<what you need, in one line>"
+    harness device notify "<the question, in one line>" --suggest "<your recommendation, a few words>" --proceeding
 
-- Never for progress, and never for "done": only when the person must act.
-- At most once for the same need.
+- Never block on the person: no question form or tool (AskUserQuestion, request_user_input) for this. Ask in text.
+- \`--proceeding\`: go on with your recommendation meanwhile. Use it unless the next rule says wait.
+- \`--waiting\`: when the person's own instructions say this must wait for them; when you cannot go on without them (a
+  key, a code, a VPN, a sign-in); or when the step cannot be taken back or others see it (deleting data, a deploy, a
+  push others build on, spending money, a message to someone else). Work on the other parts meanwhile.
+- Never for progress, and never for "done": only when the person must decide or act.
+- One notice per ask, never twice. Several at once: one notice for the most important, the rest in your answer.
 - Never put a secret, a token or a file's content in the line: anyone near the desk can read it.
-- Still write the full ask in your answer. The command prints \`shown\`, \`no dial\` or \`limited\`: whichever it prints, your answer carries the ask.
+- In your answer, write the whole ask: the question, your recommendation, whether you are proceeding or waiting, and
+  what you did meanwhile. The person answers there. The command prints \`shown\`, \`no dial\` or \`limited\`: whichever it
+  prints, your answer carries the ask.
 `
 
 export const DIAL_PLUGIN_ID = 'harness-device@openharness'
@@ -43,20 +52,62 @@ const MAX_SKILL_BYTES = 4096
 /** A settings.json is a few keys; one past this is not read whole. */
 const MAX_SETTINGS_BYTES = 1024 * 1024
 
-/** A platform with no uid owns nothing, so nothing is written there. */
+type Owned = 'ok' | 'missing' | 'owner' | 'unreadable'
+
+/** Windows gives no uid (-1): there the profile decides (ownWindowsPath). */
 function ownUid(): number {
   return process.getuid?.() ?? -1
 }
 
+/** The profile alone, resolved: not the data folder windowsStateRoots() also allows, since a skill home is the person's
+ *  engine home, never Harness's data. None when it cannot be resolved, so nothing is this account's. */
+function profileRoots(): string[] {
+  try {
+    return [realpathSync.native(homedir())]
+  } catch {
+    return []
+  }
+}
+
+/** Windows' roots by default, none elsewhere: there the uid decides. */
+function platformRoots(): readonly string[] | undefined {
+  return process.platform === 'win32' ? profileRoots() : undefined
+}
+
+function missingOr(error: unknown): 'missing' | 'unreadable' {
+  const code = (error as NodeJS.ErrnoException).code
+  return code === 'ENOENT' || code === 'ENOTDIR' ? 'missing' : 'unreadable'
+}
+
+/**
+ * This account's own on Windows: its real path is inside a root (lib/secureState.ts `insideWindowsRoots`). The
+ * profile's ACL is what protects it; a uid means nothing there. A folder is judged through its links and junctions, as a
+ * Mac's stat follows them: its real folder decides. A file must be real, as a state file is: a link to one (lstat
+ * reports junctions as links too) is the person's wherever it points. 'owner' for such a link or a path outside.
+ */
+export function ownWindowsPath(path: string, kind: 'file' | 'directory', roots: readonly string[] = profileRoots()): Owned {
+  let real
+  let info
+  try {
+    if (kind === 'file' && lstatSync(path).isSymbolicLink()) return 'owner'
+    real = realpathSync.native(path)
+    info = statSync(real)
+  } catch (error) {
+    return missingOr(error)
+  }
+  if (kind === 'directory' ? !info.isDirectory() : !info.isFile()) return 'missing'
+  return insideWindowsRoots(real, roots) ? 'ok' : 'owner'
+}
+
 /** 'ok', or why a path is no folder of this user's: 'unreadable' when it cannot be looked at now (a folder above it
- *  shut), which says nothing of it being gone, so a listed folder stays listed. */
-export function ownDirectory(path: string, uid = ownUid()): 'ok' | 'missing' | 'owner' | 'unreadable' {
+ *  shut), which says nothing of it being gone, so a listed folder stays listed. With roots (Windows'), no uid is read. */
+export function ownDirectory(path: string, uid = ownUid(), windowsRoots: readonly string[] | undefined = platformRoots()): Owned {
+  if (windowsRoots) return ownWindowsPath(path, 'directory', windowsRoots)
   let info
   try {
     info = statSync(path)
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code
-    return code === 'ENOENT' || code === 'ENOTDIR' ? 'missing' : 'unreadable'
+    return missingOr(error)
   }
   if (!info.isDirectory()) return 'missing'
   return info.uid === uid ? 'ok' : 'owner'
@@ -66,7 +117,7 @@ export function ownDirectory(path: string, uid = ownUid()): 'ok' | 'missing' | '
  * `<home>/skills` through its link: an Orca profile's `skills/` points at `~/.claude/skills`, and homes that share one
  * folder are one write. null: not a directory this user owns, or missing and not made.
  */
-export function skillsFolderOf(home: string, make: boolean, uid = ownUid()): string | null {
+export function skillsFolderOf(home: string, make: boolean, uid = ownUid(), windowsRoots: readonly string[] | undefined = platformRoots()): string | null {
   const skills = join(home, 'skills')
   let real: string
   try {
@@ -81,7 +132,7 @@ export function skillsFolderOf(home: string, make: boolean, uid = ownUid()): str
       return null
     }
   }
-  return ownDirectory(real, uid) === 'ok' ? real : null
+  return ownDirectory(real, uid, windowsRoots) === 'ok' ? real : null
 }
 
 export function writeSkill(skills: string): 'written' | 'same' | 'theirs' | 'failed' {
@@ -155,18 +206,26 @@ function removeEmpty(folder: string): void {
 }
 
 /**
- * Claude Code's own record of the plugin, in its user settings: 'on' while its entry is true, 'off' once disabled or
- * uninstalled (the entry false or gone), 'unknown' when the file says nothing.
+ * Claude Code's own record of the plugin, in its user settings, from one read: 'on' while its entry is true,
+ * 'turned-off' once the person turned it off (the entry false, as `claude plugin disable` and /plugin leave it), 'off'
+ * while it has no entry (never set there, or uninstalled) or another value, 'unknown' when the file says nothing. One
+ * read, so a file written again between two reads never mixes their answers.
  */
-export function claudePluginState(settingsPath: string): 'on' | 'off' | 'unknown' {
+export function readClaudePlugin(settingsPath: string): 'on' | 'off' | 'turned-off' | 'unknown' {
   const entry = pluginEntry(settingsPath)
-  return entry === UNKNOWN ? 'unknown' : entry === true ? 'on' : 'off'
+  return entry === UNKNOWN ? 'unknown' : entry === true ? 'on' : entry === false ? 'turned-off' : 'off'
 }
 
-/** Whether the person turned the plugin off in these settings: its entry false, as `claude plugin disable` and /plugin
- *  leave it. An entry gone says no such thing: never set there, or uninstalled. */
+/** As readClaudePlugin, turned off or gone alike 'off': disabled or uninstalled. */
+export function claudePluginState(settingsPath: string): 'on' | 'off' | 'unknown' {
+  const state = readClaudePlugin(settingsPath)
+  return state === 'turned-off' ? 'off' : state
+}
+
+/** Whether the person turned the plugin off in these settings. An entry gone says no such thing: never set there, or
+ *  uninstalled. */
 export function claudePluginTurnedOff(settingsPath: string): boolean {
-  return pluginEntry(settingsPath) === false
+  return readClaudePlugin(settingsPath) === 'turned-off'
 }
 
 const UNKNOWN = Symbol('unknown')
@@ -196,14 +255,6 @@ function pluginEntry(settingsPath: string): unknown {
   if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return UNKNOWN
   const plugins = (settings as { enabledPlugins?: unknown }).enabledPlugins
   return !!plugins && typeof plugins === 'object' ? (plugins as Record<string, unknown>)[DIAL_PLUGIN_ID] : undefined
-}
-
-/**
- * Never once `disable` removed it; Codex otherwise; Claude Code while its plugin is on, so a plugin uninstalled through
- * /plugin takes the skill away.
- */
-export function skillWanted(engine: 'claude' | 'codex', removed: boolean, claudeSettings: string): boolean {
-  return !removed && (engine === 'codex' || claudePluginState(claudeSettings) === 'on')
 }
 
 /**

@@ -6,9 +6,14 @@ export GRID_NO_UPDATE_CHECK=1
 if [ -n "${HARNESS_GRID_BIN:-}" ]; then exec "$HARNESS_GRID_BIN" "$@"; fi
 # Harness's runtime folder, as the daemon resolves it: on Linux it is in the XDG state root unless the XDG
 # data root lacks the marker (.harness-root) and ~/.harness exists; a base that is not an absolute path is
-# ignored, and a trailing slash dropped, so the path matches the one the daemon recorded.
+# ignored, and a trailing slash dropped, so the path matches the one the daemon recorded. A relative
+# ADAPTER_RUNTIME_DIR is under the home, as the CLI reads it: the pane runs in its project.
 harness_runtime() {
-  if [ -n "${ADAPTER_RUNTIME_DIR:-}" ]; then printf '%s\n' "$ADAPTER_RUNTIME_DIR"; return; fi
+  case "${ADAPTER_RUNTIME_DIR:-}" in
+    '') ;;
+    /*) printf '%s\n' "$ADAPTER_RUNTIME_DIR"; return ;;
+    *) printf '%s\n' "$HOME/$ADAPTER_RUNTIME_DIR"; return ;;
+  esac
   if [ "$(uname -s)" = Linux ]; then
     local data state
     case "${XDG_DATA_HOME:-}" in /*) data="${XDG_DATA_HOME%/}/harness" ;; *) data="$HOME/.local/share/harness" ;; esac

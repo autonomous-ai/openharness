@@ -20,7 +20,7 @@ import type { TurnRecaps } from './recaps.js'
 import type { QuietTitles } from '../agents/quietTitles.js'
 import type { ShortTurnGuard } from './shortTurnGuard.js'
 import { deviceErrorText } from '../cardText.js'
-import { errorKind, preview, sid } from '../../lib/log.js'
+import { codeOrLength, errorKind, sid } from '../../lib/log.js'
 import type { CursorNormalizer } from '../../engines/cursor/normalizer.js'
 import type { QuestionWatcher } from '../../lib/questionController.js'
 import type { RegisteredSession } from '../../lib/registry.js'
@@ -227,7 +227,7 @@ export function createEventFunnel({ clients, agentIdFor }: { clients: FunnelClie
     message: string,
     deviceMessage = message,
   ): void => {
-    console.log(`[turn] ${sid(sessionId)} aborted by ${engine} error · ${preview(message)}`)
+    console.log(`[turn] ${sid(sessionId)} aborted by ${engine} error · ${codeOrLength(message)}`)
     clients.send({ type: 'error', agentId: agentIdFor(sessionId), dbSessionId: sessionId, payload: { message } })
     clients.sendCommander({
       type: 'commander_event',

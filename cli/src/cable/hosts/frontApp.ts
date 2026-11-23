@@ -12,19 +12,37 @@ const EXE_APPS: Readonly<Record<string, string>> = {
   code: 'vscode',
   cursor: 'cursor',
   windowsterminal: 'terminal',
+  // The Codex app: ChatGPT on Linux (cli/src/testing/recordedLinuxApps.ts, comm) and the Store's ChatGPT on Windows,
+  // package OpenAI.Codex, whose window is ChatGPT.exe's.
+  chatgpt: 'codex',
   // WezTerm's CFBundleExecutable.
   'wezterm-gui': 'wezterm',
+  // WezTerm's mux server, the parent of a mux-domain pane's shell on Linux, where its comm names no app: whole, and as
+  // the kernel cuts it to 15 bytes (cli/src/testing/recordedWezterm.ts, muxServerComm).
+  'wezterm-mux-server': 'wezterm',
+  'wezterm-mux-ser': 'wezterm',
   kitty: 'kitty',
   ghostty: 'ghostty',
   // Harness Desktop's Linux binary (desktop/linux/CMakeLists.txt, BINARY_NAME).
   harness: 'harness',
 }
 
-// The Claude and ChatGPT apps' Linux processes (cli/src/testing/recordedLinuxApps.ts, comm), lower-cased: never with
-// `.exe`, since ChatGPT.exe on Windows is OpenAI's chat app, not the Codex app.
+// The apps' Linux processes, lower-cased: never with `.exe`, since each name is Linux's alone.
 const LINUX_APPS: Readonly<Record<string, string>> = {
+  // The Claude app (cli/src/testing/recordedLinuxApps.ts, comm).
   'claude-desktop': 'claude',
-  chatgpt: 'codex',
+  // Orca's main process, the .deb's /opt/Orca/orca-ide and the AppImage's alike (cli/src/testing/recordedOrca.ts,
+  // `executableName: 'orca-ide'`). A bare `orca` is GNOME's screen reader, so it has no row.
+  'orca-ide': 'orca',
+}
+
+// The apps' Windows processes, each the owner of its app's window (docs/plans/2026-11-19-dial-windows-vm-notes.md),
+// lower-cased: only with `.exe`, since the bare name is no app's, or another program's, elsewhere.
+const WINDOWS_APPS: Readonly<Record<string, string>> = {
+  // The Claude app (Task 37 §1): a bare `claude` is no app's window name elsewhere.
+  'claude.exe': 'claude',
+  // Orca ("### 1. Window owners"): a bare `orca` on Linux is GNOME's screen reader.
+  'orca.exe': 'orca',
 }
 
 /** The app id of the app in front, or FRONT_NONE. A bundle id matches whole, as detectApp reads it. */
@@ -33,16 +51,19 @@ export function frontAppId(value: string): string {
   const name = value.toLowerCase()
   const exe = name.replace(/\.exe$/, '')
   if (Object.hasOwn(EXE_APPS, exe)) return EXE_APPS[exe]
+  if (Object.hasOwn(WINDOWS_APPS, name)) return WINDOWS_APPS[name]
   return exe === name && Object.hasOwn(LINUX_APPS, name) ? LINUX_APPS[name] : FRONT_NONE
 }
 
 // The spellings each app's window is known by on Linux: X11's WM_CLASS class and Wayland's app id, which some desktops
-// lower-case. A class nobody could confirm has no row (the ChatGPT app's .desktop has no StartupWMClass).
+// lower-case. A class nobody could confirm has no row.
 const WINDOW_CLASSES: Readonly<Record<string, readonly string[]>> = {
   // cli/src/testing/recordedLinuxApps.ts, StartupWMClass.
   vscode: ['com.microsoft.VSCode', 'com.microsoft.vscode'],
   cursor: ['Cursor', 'cursor'],
   claude: ['com.anthropic.Claude', 'com.anthropic.claude'],
+  // The ChatGPT app's .desktop has no StartupWMClass: read from its code (recordedLinuxApps.ts, windowClasses).
+  codex: ['ChatGPT', 'chatgpt'],
   // WezTerm's default class (its config option `class`).
   wezterm: ['org.wezfurlong.wezterm'],
   // kitty's default class (its `--class` option).

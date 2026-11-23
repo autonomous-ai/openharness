@@ -79,8 +79,7 @@ export function createVscodeExtensionSetup(deps: VscodeExtensionSetupDeps): Vsco
 
   const setup: VscodeExtensionSetup = {
     async pass() {
-      // The devices' listener, which the extension talks to, does not exist on Windows.
-      if (deps.vscode.platform === 'win32' || running || waiting) return
+      if (running || waiting) return
       running = true
       // Only a run of the editor's CLI is awaited: a pass that runs none ends at once, and does not turn away an attach's
       // pass that follows it in the same moment.

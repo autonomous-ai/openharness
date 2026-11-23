@@ -10,11 +10,11 @@
 
 // ---- the welcome's features ----
 // Those only the Max reads, above every bit of the Pro's (cable_features.h), so a feature the Pro takes later cannot
-// land on one of them.
+// land on one of them. `question.tier` (a `question` with `tier: "list"` is filed silently) is the Pro's own since main
+// fc16e78f94: CABLE_FEATURE_QUESTION_TIER there.
 enum {
     CABLE_FEATURE_FORM = 1u << 16,              // New Harness: `form` reaches the desktop's form
     CABLE_FEATURE_QUESTION_REVIEW = 1u << 17,   // `question.read` and `answer.reviewed`
-    CABLE_FEATURE_QUESTION_TIER = 1u << 18,     // a `question` with `tier: "list"` is filed silently (the Max asks for it)
 };
 // The Pro's features (cable_features_parse) and the Max's, from the same `features` list by the same rule: more than 16
 // entries, or one that is not a string, makes the whole result 0 (main/cable/max_cable_features.c).

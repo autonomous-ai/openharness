@@ -3,6 +3,7 @@ import { installDsh, resolveInstallSource } from './install.js'
 import { updateDsh } from './update.js'
 import { catalogEntry, refreshDshRegistry } from './catalog.js'
 import { DSH_SHELL_UNAVAILABLE, dshShellAvailable } from './shell.js'
+import { codeOrLength, hashOf } from '../lib/log.js'
 
 export const mutateDsh = async ({ id, url, ref, update }: { id?: string; url?: string; ref?: string; update?: boolean }, progress: (p: import('./install.js').DshInstallProgress) => void): Promise<{ ok: true; id: string } | { ok: false; error: string; detail: string }> => {
   const catalog = new Map((await refreshDshRegistry(update || (!!id && !catalogEntry(id)))).map(entry => [entry.id, entry]))
@@ -24,6 +25,10 @@ export const mutateDsh = async ({ id, url, ref, update }: { id?: string; url?: s
   let last: import('./install.js').DshInstallProgress | null = null
   let pendingLine: string | null = null
   let timer: NodeJS.Timeout | null = null
+  // The installer's output reaches the log once, by its size: a line of it can name the person's folders, and npm or
+  // uv print hundreds.
+  let outputLines = 0
+  let outputBytes = 0
   const flushLine = (): void => {
     timer = null
     if (last && pendingLine !== null && last.phase !== 'done' && last.phase !== 'failed') progress({ ...last, line: pendingLine })
@@ -42,7 +47,8 @@ export const mutateDsh = async ({ id, url, ref, update }: { id?: string; url?: s
       progress(p)
     },
     onLine: (raw) => {
-      console.log(`[dsh] ${update ? 'update' : 'install'} · ${raw}`)
+      outputLines++
+      outputBytes += Buffer.byteLength(raw)
       // The last carriage-return segment is the line as a terminal would show it.
       const line = raw.split('\r').filter((s) => s.trim()).pop()?.trim() ?? ''
       if (!line) return
@@ -54,12 +60,13 @@ export const mutateDsh = async ({ id, url, ref, update }: { id?: string; url?: s
   try {
     const result = update ? await updateDsh({ ...options, id: id! }) : await installDsh(options)
     if (!result.ok) {
-      console.warn(`[dsh] ${update ? 'update' : 'install'} of ${id ?? url} failed · ${result.error} · ${result.detail}`)
+      console.warn(`[dsh] ${update ? 'update' : 'install'} of ${id ?? hashOf(url!)} failed · ${codeOrLength(result.error)}`)
       return { ok: false, error: result.error, detail: result.detail }
     }
-    console.log(`[dsh] ${update ? 'updated' : 'installed'} ${result.installed.id} at ${result.installed.dir}`)
+    console.log(`[dsh] ${update ? 'updated' : 'installed'} ${result.installed.id}`)
     return { ok: true, id: result.installed.id }
   } finally {
     if (timer) clearTimeout(timer)
+    if (outputLines) console.log(`[dsh] ${update ? 'update' : 'install'} printed ${outputLines} lines · ${outputBytes} B`)
   }
 }

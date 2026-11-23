@@ -2,9 +2,10 @@ import { spawnSync } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, win32 } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ENGINE_INSTALL, ENGINE_WINDOWS_INSTALL } from '../../lib/engineInstall.js'
+import { systemRoot } from '../../lib/windows/powershell.js'
 import { createWindowsInstallations, INSTALL_RUNNER, powershellInstallScript, windowsInstallCommand, WINDOWS_INSTALL_LIMIT_MS } from './windowsInstall.js'
 
 // How the watched path is changed: opened for writing in place, or a file renamed onto it.
@@ -112,7 +113,7 @@ describe('the Windows installations', () => {
     end = vi.fn(async () => {})
     now = 1_000_000
   })
-  afterEach(() => { rmSync(directory, { recursive: true, force: true }) })
+  afterEach(() => { vi.unstubAllEnvs(); rmSync(directory, { recursive: true, force: true }) })
 
   it('starts one hidden install, however many ask', async () => {
     const install = make()
@@ -127,6 +128,20 @@ describe('the Windows installations', () => {
     expect(JSON.parse(options.env.HARNESS_INSTALL_COMMAND)).toMatchObject({ file: 'C:\\cmd.exe', verbatim: true })
     expect(options.stdio[0]).toBe('ignore')
     expect(options.env.PATH.startsWith('C:\\n;')).toBe(true)
+  })
+
+  // ComSpec and SystemRoot are whoever started the daemon's: Windows' own cmd.exe and PowerShell come from the folder the
+  // file system names.
+  it('runs an installer in Windows\' own cmd.exe or PowerShell, never one ComSpec or SystemRoot names', async () => {
+    vi.stubEnv('ComSpec', 'D:\\Elsewhere\\cmd.exe')
+    vi.stubEnv('SystemRoot', 'D:\\Elsewhere')
+    vi.stubEnv('windir', 'D:\\Elsewhere')
+    const install = createWindowsInstallations({ directory, spawn: spawn as never, alive: alive as never, now: () => now, endTree: end as never })
+    await install.ensure('kilo', recipe, {}, 'r1', current)
+    await install.ensure('amp', ENGINE_INSTALL.amp, {}, 'r1', current)
+    const files = spawn.mock.calls.map((call) => JSON.parse(call[2].env.HARNESS_INSTALL_COMMAND).file as string)
+    expect(files.join(' ')).not.toContain('Elsewhere')
+    expect(files).toEqual([win32.join(systemRoot(), 'System32', 'cmd.exe'), win32.join(systemRoot(), 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')])
   })
 
   it('is done when the installer exits well, and asks nothing more', async () => {

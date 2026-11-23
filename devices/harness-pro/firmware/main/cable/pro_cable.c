@@ -229,6 +229,9 @@ static void send_hello(void)
     msg_string(&root, "stats", "turn-v1");
     msg_string(&root, "player", "library-v1");
     msg_string(&root, "ota", "v1");
+    msg_string(&root, "appFilter", "v1");
+    msg_string(&root, "questionTier", "v1");
+    msg_string(&root, "appCards", "v1");
     char mac[24] = "";
     device_mac_str(mac, sizeof(mac));
     msg_string(&root, "mac", mac);
@@ -268,6 +271,14 @@ bool pro_cable_send_open(const char *agent_id)
     if (!agent_id || !agent_id[0]) return false;
     cJSON *root = msg("agent.open");
     msg_string(&root, "agentId", agent_id);
+    return send_json(root);
+}
+
+bool pro_cable_send_app_pick(const char *app)
+{
+    if (!app || !app[0] || strlen(app) >= CABLE_APP_ID_MAX) return false;
+    cJSON *root = msg("app.pick");
+    msg_string(&root, "app", app);
     return send_json(root);
 }
 
@@ -386,12 +397,23 @@ static void track_seq(const cJSON *root, bool welcome)
 // holds it in static scratch and hands pro_app the whole roster once, at `agents.end`.
 
 typedef struct {
-    char id[ID_MAX], name[CABLE_NAME_MAX], engine[12], machine_id[ID_MAX], machine[CABLE_NAME_MAX];
+    char id[ID_MAX], name[CABLE_NAME_MAX], engine[12], machine_id[ID_MAX], machine[CABLE_NAME_MAX], host[16];
+    uint8_t caps_off;
 } agent_store_t;
 static EXT_RAM_BSS_ATTR agent_store_t s_agent_store[POD_AGENTS_MAX];
 static pro_agent_row_t s_agent_rows[POD_AGENTS_MAX];
 static int  s_agent_count;
 static bool s_agents_building;
+
+// As the round dial's caps_of: no `caps` grants all four; a string grants exactly its letters (s v f a, others nothing).
+static uint8_t caps_of(const char *letters)
+{
+    if (!letters) return POD_CAPS_ALL;
+    uint8_t caps = 0;
+    for (const char *c = letters; *c; c++)
+        caps |= *c == 's' ? POD_CAP_S : *c == 'v' ? POD_CAP_V : *c == 'f' ? POD_CAP_F : *c == 'a' ? POD_CAP_A : 0;
+    return caps;
+}
 
 static void handle_agent(const cJSON *p)
 {
@@ -411,19 +433,26 @@ static void handle_agent(const cJSON *p)
     if (machine_id && strlen(machine_id) < sizeof a->machine_id) snprintf(a->machine_id, sizeof a->machine_id, "%s", machine_id);
     const char *machine = str_of(p, "machine");
     if (machine) copy_cut(a->machine, sizeof a->machine, machine);
+    // A host names an app to look up, so a cut one would name another: kept only whole.
+    const char *host = str_of(p, "host");
+    if (host && strlen(host) < sizeof a->host) snprintf(a->host, sizeof a->host, "%s", host);
+    a->caps_off = POD_CAPS_ALL & ~caps_of(str_of(p, "caps"));
     s_agent_count++;
 }
 
-static void handle_agents_end(void)
+static void handle_agents_end(const cJSON *p)
 {
     if (!s_agents_building) return;
     s_agents_building = false;
     for (int i = 0; i < s_agent_count; i++) {
         const agent_store_t *a = &s_agent_store[i];
-        s_agent_rows[i] = (pro_agent_row_t){ a->id, a->name, a->engine, a->machine_id, a->machine };
+        s_agent_rows[i] = (pro_agent_row_t){ a->id, a->name, a->engine, a->machine_id, a->machine, a->host, a->caps_off };
     }
-    ESP_LOGI(TAG, "agents: %d", s_agent_count);
-    pro_app_agents(s_agent_rows, s_agent_count);
+    // An older daemon sends neither field: no machine view, no window.
+    const char *view = str_of(p, "view"), *tab = str_of(p, "tab");
+    const bool machine_view = view && !strcmp(view, "machine"), tab_open = tab && tab[0];
+    ESP_LOGI(TAG, "agents: %d%s", s_agent_count, machine_view ? " (machine)" : !tab_open ? " (no window)" : "");
+    pro_app_agents(s_agent_rows, s_agent_count, machine_view, tab_open);
 }
 
 // ── tabs ────────────────────────────────────────────────────────────────────────────────────────────
@@ -528,6 +557,49 @@ static void handle_swarms(const cJSON *p)
     const int tn = read_tiles(p);
     ESP_LOGI(TAG, "swarms: %d (%d tiles)%s", n, tn, has_ids ? " with ids" : "");
     pro_app_swarms(s_swarm_rows, n, has_ids ? &s_swarm_members : NULL, selected, s_tiles, tn);
+}
+
+// ── apps ────────────────────────────────────────────────────────────────────────────────────────────
+
+static cable_app_t s_apps[CABLE_APPS_MAX];
+
+// As the round dial's count_of: a whole number 0..255; absent, negative, NaN or not a number is 0.
+static uint8_t count_of(const cJSON *row, const char *key)
+{
+    const cJSON *v = cJSON_GetObjectItemCaseSensitive(row, key);
+    const double d = cJSON_IsNumber(v) ? v->valuedouble : 0;
+    return !(d > 0) ? 0 : d >= 255 ? 255 : (uint8_t)d;
+}
+
+// `apps`: the whole list, as the round dial's handle_apps. A list that is not an array keeps the last one; an empty
+// one is a real list. An id goes back in app.pick, so one that does not fit is dropped, never cut.
+static void handle_apps(const cJSON *p)
+{
+    const cJSON *apps = cJSON_GetObjectItemCaseSensitive(p, "apps");
+    if (!cJSON_IsArray(apps)) return;
+    int n = 0;
+    const cJSON *it = NULL;
+    cJSON_ArrayForEach(it, apps) {
+        if (n >= CABLE_APPS_MAX) break;
+        const char *id = str_of(it, "id");
+        if (!id || !id[0] || strlen(id) >= CABLE_APP_ID_MAX) continue;
+        bool duplicate = false;
+        for (int i = 0; i < n; i++) if (!strcmp(s_apps[i].id, id)) duplicate = true;
+        if (duplicate) continue;
+        cable_app_t *row = &s_apps[n++];
+        memset(row, 0, sizeof *row);
+        memcpy(row->id, id, strlen(id) + 1);
+        const char *name = str_of(it, "name");
+        copy_cut(row->name, sizeof row->name, name ? name : "");
+        row->count = count_of(it, "count");
+        const uint8_t waiting = count_of(it, "waiting"), working = count_of(it, "working");
+        row->waiting = waiting < row->count ? waiting : row->count;
+        row->working = working < row->count ? working : row->count;
+    }
+    const char *shown = str_of(p, "shown");
+    if (!shown || strlen(shown) >= CABLE_APP_ID_MAX) shown = "";
+    ESP_LOGI(TAG, "apps: %d", n);
+    pro_app_apps(s_apps, n, shown);
 }
 
 // ── the machine list ────────────────────────────────────────────────────────────────────────────────
@@ -683,7 +755,10 @@ static void handle_question(const char *id, const cJSON *p)
     const cJSON *questions = cJSON_GetObjectItemCaseSensitive(p, "questions");
     const char *prompt = str_of(cJSON_GetArrayItem(questions, 0), "q");
     copy_cut(s_text, PRO_QUESTION_BYTES, prompt ? prompt : "Needs your answer");
-    pro_app_question(id, request, s_text);
+    // Only a daemon that said question.tier means "told again" by it; anything else stays an alert.
+    const char *tier = str_of(p, "tier");
+    const bool list = (atomic_load(&s_features) & CABLE_FEATURE_QUESTION_TIER) && tier && !strcmp(tier, "list");
+    pro_app_question(id, request, s_text, list);
 }
 
 static void handle_question_close(const char *id, const cJSON *p)
@@ -798,6 +873,8 @@ static void handle_voice_error(const cJSON *p)
 static void session_up(const cJSON *p)
 {
     atomic_store(&s_features, cable_features_parse(p));
+    // On every welcome, the keepalive one too: a daemon that restarted inside the silence window may say otherwise now.
+    pro_app_apps_switch((atomic_load(&s_features) & CABLE_FEATURE_APPS_SWITCH) != 0);
     const cJSON *machine = p ? cJSON_GetObjectItemCaseSensitive(p, "machine") : NULL;
     const char *name = str_of(machine, "name");
     copy_cut(s_machine_name, sizeof s_machine_name, name ? name : "Machine");
@@ -870,13 +947,14 @@ static void handle_message(const cJSON *root)
     if (!atomic_load(&s_session)) { s_unknown++; return; }
     if (!strcmp(t, "agents.begin")) { s_agent_count = 0; s_agents_building = true; return; }
     if (!strcmp(t, "agent")) { handle_agent(p); return; }
-    if (!strcmp(t, "agents.end")) { handle_agents_end(); return; }
+    if (!strcmp(t, "agents.end")) { handle_agents_end(p); return; }
     if (!strcmp(t, "agent.updated")) { send_json(msg("agents.list")); return; }   // cheapest correct answer: re-ask
     if (!strcmp(t, "machines.begin")) { cable_machines_begin(&s_machines); return; }
     if (!strcmp(t, "machine")) { stage_machine(p); return; }
     if (!strcmp(t, "machines.end")) { handle_machines_end(p); return; }
     if (!strcmp(t, "machine.updated")) { handle_machine_updated(p); return; }
     if (!strcmp(t, "swarms")) { handle_swarms(p); return; }
+    if (!strcmp(t, "apps")) { handle_apps(p); return; }
     if (!strcmp(t, "player.library")) { handle_library(p); return; }
     if (!strcmp(t, "player.context")) { handle_context(p); return; }
     if (!strcmp(t, "settings.set")) { handle_settings_set(p); return; }

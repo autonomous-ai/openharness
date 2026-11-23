@@ -35,13 +35,16 @@ import { thisDeviceLabel } from '../lib/daemonState.js'
 import { switchAccountTrust } from '../lib/e2ee/accountTrust.js'
 import { b64d, b64e, fingerprint } from '../lib/e2ee/core.js'
 import { DeviceLogStore } from '../lib/e2ee/deviceLogStore.js'
-import { DeviceLogSyncer, type DeviceKeysSeen, type DeviceLogFetched, type DeviceLogTrustOutcome } from '../lib/e2ee/deviceLogSyncer.js'
+import type { DevLogMember } from '../lib/e2ee/deviceLog.js'
+import {
+  DeviceLogSyncer, type DeviceKeysSeen, type DeviceLogFetched, type DeviceLogTrustOutcome, type DeviceRemovalNotice,
+} from '../lib/e2ee/deviceLogSyncer.js'
 import { GroupSyncer, relayRequester, SELF_STAMP } from '../lib/e2ee/groupSyncer.js'
 import { MachinePeerStore } from '../lib/e2ee/machinePeers.js'
 import { applySharedTrust, isSharedKey } from './sharedTrust.js'
 import { E2eeStore } from '../lib/e2ee/store.js'
 import { TrustGroupStore, type GroupMember } from '../lib/e2ee/trustGroup.js'
-import { errorKind } from '../lib/log.js'
+import { codeOrLength, errorKind } from '../lib/log.js'
 import { RemoteRelayPool } from '../lib/remoteRelay.js'
 import { HarnessShareRelay, type SharedMachineReference } from '../sharing/relay.js'
 import { RelayGateway } from './gateway.js'
@@ -152,6 +155,34 @@ export function unpairedHandler(
       void devlog()?.remove(identityPub)
     }
   }
+}
+
+/**
+ * The device key log's `postAck`: the backend keeps "It's mine". A refusal names the backend's code; anything else
+ * there is the backend's own text, logged by its length.
+ */
+export async function postDeviceAck(http: Pick<ReturnType<typeof createAccountHttp>, 'backend'>, ack: unknown): Promise<boolean> {
+  const r = await http.backend('POST', '/api/device-keys/acks', { ack }, ACK_POST_TIMEOUT_MS)
+  if (r.status !== 200 && r.status !== 404) console.log(`[devlog] the backend did not keep "It's mine" (${r.status}: ${codeOrLength((r.body.error as { code?: unknown } | undefined)?.code)})`)
+  return r.status === 200
+}
+
+/**
+ * The device key log's `announce`. A device's label is what a person named it, and Export logs sends the log off the
+ * machine: the line says its kind and fingerprint, and only the windows get the label.
+ */
+export function announceNewDevice(events: Pick<GatewayEvents, 'toWindows'>, m: DevLogMember): void {
+  const fp = fingerprint(b64d(m.pub))
+  console.log(`[devlog] NEW DEVICE on this account: ${fp} (${m.kind}) — not yours? harness devices remove ${fp}`)
+  events.toWindows({ type: 'device_key_added', payload: { pub: m.pub, label: m.label, kind: m.kind, machineId: m.machineId, at: m.addedAt, fingerprint: fp } })
+}
+
+/** The device key log's `removed`: as `announceNewDevice`, the line names both devices by their fingerprints. */
+export function reportRemovedDevice(events: Pick<GatewayEvents, 'toWindows'>, n: DeviceRemovalNotice): void {
+  if (n.selfRemoved) console.log(`[devlog] ${n.fingerprint} (${n.kind}) signed out of this account`)
+  else if (n.signerPending) console.log(`[devlog] ⚠ ${n.fingerprint} (${n.kind}) was removed by a NEW device you have not looked at: ${n.signerFingerprint} — not yours? harness devices remove ${n.signerFingerprint}`)
+  else console.log(`[devlog] ${n.fingerprint} (${n.kind}) was removed from this account by ${n.signerFingerprint}`)
+  events.toWindows({ type: 'device_key_removed', payload: { ...n } })
 }
 
 /** Pairing errors as `harness pair` maps them to HTTP. */
@@ -336,11 +367,7 @@ export function startGateway(given: GatewayHost): StartedGateway {
       const acks = r.status === 200 ? (r.body.data as { acks?: unknown } | undefined)?.acks : undefined
       return Array.isArray(acks) ? acks : null
     },
-    postAck: async (ack) => {
-      const r = await accountHttp.backend('POST', '/api/device-keys/acks', { ack }, ACK_POST_TIMEOUT_MS)
-      if (r.status !== 200 && r.status !== 404) console.log(`[devlog] the backend did not keep "It's mine" (${r.status}: ${String((r.body.error as { code?: unknown } | undefined)?.code ?? '')})`)
-      return r.status === 200
-    },
+    postAck: (ack) => postDeviceAck(accountHttp, ack),
     append: async (entry) => {
       const p = await gateway.appendDeviceLog(entry as unknown as Record<string, unknown>)
       if (!p) return null
@@ -360,17 +387,8 @@ export function startGateway(given: GatewayHost): StartedGateway {
     tombstoned: (pub) => !!syncer.tombstoned(pub),
     blocked: (pub) => !!syncer.isBlocked(pub),
     isTrusted: (pub) => gateway.pairedPeers().some((p) => p.identityPub === pub),
-    announce: (m) => {
-      const fp = fingerprint(b64d(m.pub))
-      console.log(`[devlog] NEW DEVICE on this account: ${m.label || '(no name)'} (${m.kind}) ${fp} — not yours? harness devices remove ${fp}`)
-      host.events.toWindows({ type: 'device_key_added', payload: { pub: m.pub, label: m.label, kind: m.kind, machineId: m.machineId, at: m.addedAt, fingerprint: fp } })
-    },
-    removed: (n) => {
-      if (n.selfRemoved) console.log(`[devlog] ${n.label || '(no name)'} signed out of this account (${n.fingerprint})`)
-      else if (n.signerPending) console.log(`[devlog] ⚠ ${n.label || '(no name)'} (${n.fingerprint}) was removed by a NEW device you have not looked at: ${n.signerLabel || 'another device'} (${n.signerFingerprint}) — not yours? harness devices remove ${n.signerFingerprint}`)
-      else console.log(`[devlog] ${n.label || '(no name)'} (${n.fingerprint}) was removed from this account by ${n.signerLabel || 'another device'}`)
-      host.events.toWindows({ type: 'device_key_removed', payload: { ...n } })
-    },
+    announce: (m) => announceNewDevice(host.events, m),
+    removed: (n) => reportRemovedDevice(host.events, n),
     conflict: (c) => {
       host.events.toWindows({ type: 'device_conflict', payload: { pub: c.pub, label: c.label, fingerprint: c.fingerprint, addedAt: c.addedAt, afterJoin: c.afterJoin } })
     },

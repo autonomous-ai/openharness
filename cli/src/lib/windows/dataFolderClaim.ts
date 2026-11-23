@@ -161,7 +161,7 @@ export async function claimDataFolder(dataDir: string, token: Buffer, deps: Data
       throw Object.assign(new Error(`${path} is held by something this process may not open, most likely a Harness daemon started as administrator or in another Windows session. Stop it there, then start Harness again.`), { code: 'EADDRINUSE' })
     }
     if (found === null) {
-      log(`[cli] something that is not Harness holds ${path}; starting without the data folder claim`)
+      log("[cli] something that is not Harness holds the data folder's claim; starting without the data folder claim")
       return { path, held: false, release: () => { /* nothing held */ } }
     }
     if (found !== 'gone') {
@@ -172,7 +172,7 @@ export async function claimDataFolder(dataDir: string, token: Buffer, deps: Data
     } else if (performance.now() >= deadline) {
       // Taken at every listen, gone at every ask: nothing that proves the token holds it, so nothing here may keep this
       // daemon down (re-review N2).
-      log(`[cli] ${path} stays taken by something that does not answer; starting without the data folder claim`)
+      log("[cli] the data folder's claim stays taken by something that does not answer; starting without the data folder claim")
       return { path, held: false, release: () => { /* nothing held */ } }
     }
     await new Promise((resolve) => setTimeout(resolve, deps.pollMs ?? POLL_MS))

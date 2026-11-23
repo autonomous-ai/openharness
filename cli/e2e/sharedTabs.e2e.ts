@@ -334,9 +334,9 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('shared tabs across accou
       `search issues harness-tab:${sharedTabId} --match body --limit 100 --json number,title,state,url,repository,body,updatedAt`,
       `search prs harness-tab:${sharedTabId} --match body --limit 100 --json number,state,url,repository,body,isDraft`,
     ])
-    // The second computer's gh is not signed in, as gh's own search says it. Not "no gh at all": the daemon also looks in
-    // Homebrew's folders and the login shell's PATH (lib/github.ts GH_DIRS), where a developer's Mac or a CI runner has a
-    // real one, which would read whatever login that computer has.
+    // The second computer's gh is not signed in, as gh's own search says it. Not "no gh at all": after PATH, the daemon
+    // also looks in Homebrew's folders, ~/.local/bin and the login shell's PATH (ghPath() in lib/gitOnPath.ts), where a
+    // developer's Mac or a CI runner has a real one, which would read whatever login that computer has.
     writeFileSync(join(B2.d.root, 'bin', 'gh'), "#!/bin/sh\necho 'To get started with GitHub CLI, please run:  gh auth login' >&2\nexit 4\n", { mode: 0o755 })
     expect(await am(B2, { action: 'share_tasks', sharedTabId })).toMatchObject({ error: 'GH_SIGNED_OUT' })
 
@@ -603,7 +603,7 @@ const delivered = (s: Side, id: string, ms = 60_000) => until(`${id} to be deliv
 
 /** What was typed into an agent's conversation: the user prompts its (fake) engine wrote to its transcript. */
 function prompts(s: Side, agent: Record<string, any>): string[] {
-  const projects = join(s.d.root, 'claude', 'projects')
+  const projects = s.d.engineConfig.claudeProjectsDir
   for (const dir of readdirSync(projects)) {
     const file = join(projects, dir, `${agent.sessionId}.jsonl`)
     if (!existsSync(file)) continue

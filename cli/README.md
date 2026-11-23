@@ -273,9 +273,10 @@ Harness does **not** load a project's `.env` when started from that folder. To r
 different backend deliberately, export the settings or select a file explicitly:
 
 ```bash
-HARNESS_ENV_FILE=/absolute/path/to/harness.env harness start
+HARNESS_ENV_FILE=/path/to/harness.env harness start
 ```
 
+The path is absolute, or relative to your home.
 Exported variables take precedence. An explicit `DOTENV_CONFIG_PATH` remains supported.
 If you previously relied on automatic `.env` loading, set one of these paths before starting
 Harness. `harness status` reports the running daemon's backend, account environment and state
@@ -289,7 +290,7 @@ report all fields.
 | `ADAPTER_COMPUTER_ID` | *(unset)* | pin the stable local computer id for an ephemeral host; never written to disk |
 | `PORT` | `18473` | localhost port for the hook callbacks (FIXED — if taken, the adapter reports it rather than picking a random port) |
 | `CLAUDE_PROJECTS_DIR` | `~/.claude/projects` | where Claude writes session JSONL |
-| `ADAPTER_DATA_DIR` | `~/.harness/cli/data` | registry and daemon-local state (SSO session is always `~/.harness/auth/session.json`) |
+| `ADAPTER_DATA_DIR` | `~/.harness/cli/data` | registry and daemon-local state (absolute, or relative to your home; SSO session is always `~/.harness/auth/session.json`) |
 | `DISABLE_HOOK_INSTALL` | `false` | skip auto-installing the claude hooks |
 | `TERMINAL_BACKENDS` | *(auto)* | pin the set: `tmux`, `ptyhost`, or both (auto: `ptyhost` on Windows, `tmux` elsewhere); a retired `herdr` is dropped with a warning |
 | `HARNESS_PTY_DIR` | `~/.harness/pty` | the PTY host's home (`run/`, `logs/`) |

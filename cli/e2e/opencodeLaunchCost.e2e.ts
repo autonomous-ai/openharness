@@ -20,7 +20,7 @@ it.runIf(Boolean(process.env.OPENCODE_COST_ROOT))('samples the same cold daemon 
     let client: LocalClient | undefined
     try {
       if (process.env.OPENCODE_COST_NATIVE_HOOKS === '1') {
-        const home = join(d.root, 'native')
+        const home = join(d.env.HOME!, 'native')
         Object.assign(d.env, {
           HOOK_INSTALL_ENGINES: 'claude,codex,cursor,opencode,kilo,pi,amp,hermes,devin,commandcode,grok,agy,copilot',
           CURSOR_CONFIG_DIR: join(home, 'cursor'), CURSOR_DATA_DIR: join(home, 'cursor-data'),
@@ -33,7 +33,7 @@ it.runIf(Boolean(process.env.OPENCODE_COST_ROOT))('samples the same cold daemon 
         mkdirSync(d.env.HERMES_HOME!, { recursive: true }); writeFileSync(join(d.env.HERMES_HOME!, 'config.yaml'), 'model: fixture\n')
       }
       const bin = join(d.root, 'bin', 'opencode'); d.env.OPENCODE_PATH = bin
-      d.env.OPENCODE_PLUGIN_DIR = join(d.root, 'opencode', 'plugin')
+      d.env.OPENCODE_PLUGIN_DIR = join(d.env.HOME!, 'opencode', 'plugin')
       writeFileSync(bin, `#!${process.execPath}
 if (process.argv.includes('--version')) { console.log('opencode v2.0.18'); process.exit(0) }
 if (process.argv.includes('--help')) { console.log('--auto'); process.exit(0) }

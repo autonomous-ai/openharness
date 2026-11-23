@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 
 import 'github_repository.dart';
 import 'home_dir.dart';
+import 'program_path.dart';
 
 /// `ssh -G <alias>`'s output, or null when ssh could not say.
 typedef SshRunner = Future<String?> Function(List<String> arguments);
@@ -26,18 +27,24 @@ const _maxAsked = 20;
 /// clone needs them. Mirrors cli/src/lib/sshHosts.ts, which answers the same
 /// for the daemon's computer.
 class SshHosts {
-  SshHosts({String? home, SshRunner? runSsh})
-    : _home = home ?? maybeHomeDir(),
-      _runSsh = runSsh ?? _sshG;
+  SshHosts({
+    String? home,
+    SshRunner? runSsh,
+    String Function() program = sshProgram,
+  }) : _home = home ?? maybeHomeDir(),
+       _runSsh = runSsh ?? ((arguments) => _sshG(program, arguments));
   final String? _home;
   final SshRunner _runSsh;
 
   /// `ssh -G` prints the configuration an alias resolves to without
   /// connecting, so reading it costs no network and asks for nothing.
-  static Future<String?> _sshG(List<String> arguments) async {
+  static Future<String?> _sshG(
+    String Function() program,
+    List<String> arguments,
+  ) async {
     final Process process;
     try {
-      process = await Process.start('ssh', arguments);
+      process = await Process.start(program(), arguments);
     } on ProcessException {
       return null;
     }

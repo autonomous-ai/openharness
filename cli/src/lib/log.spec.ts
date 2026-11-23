@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from 'fs'
+import { execFileSync } from 'child_process'
+import { createHash } from 'crypto'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
-  ts, sid, preview, installTimestampedConsole, logFrame, errorKind,
+  ts, sid, preview, installTimestampedConsole, logFrame, errorKind, codeOrLength, hashOf, fileTag, outsideHome, exitOnFatal,
   adoptLegacyLog, prepareLogFile, trimLogFile, LOG_MAX_BYTES,
 } from './log.js'
 
@@ -241,4 +243,101 @@ describe('errorKind', () => {
 
   it('the release bundle keeps class names, which a typed error\'s kind is', () =>
     expect(readFileSync(join(__dirname, '..', '..', 'build-bundle.mjs'), 'utf8')).toMatch(/keepNames: true/))
+})
+
+describe('codeOrLength', () => {
+  it.each([
+    ['a code', 'SERVICE_UNAVAILABLE', 'SERVICE_UNAVAILABLE'],
+    ['a lower-case word', 'peer_failed', 'text(11)'],
+    ['a sentence with a path', 'could not read /Users/sentinel/notes', 'text(36)'],
+    ['41 characters', `E${'X'.repeat(40)}`, 'text(41)'],
+    ['one letter', 'E', 'text(1)'],
+    ['empty', '', 'text(0)'],
+    ['a number', 5, 'number'],
+    ['undefined', undefined, 'undefined'],
+    ['null', null, 'object'],
+    ['an object', { code: 'ENOENT' }, 'object'],
+  ])('a value that is %s reads %s', (_, value, shown) => expect(codeOrLength(value)).toBe(shown))
+})
+
+describe('exitOnFatal', () => {
+  let dir: string
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'exit-on-fatal-')) })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  it('exitOnFatal writes one line with the tag and the kind and exits 1', () => {
+    const file = join(dir, 'harness.log')
+    const fd = openSync(file, 'a')
+    const listeners = new Map<string, (error: unknown) => void>()
+    const exits: number[] = []
+    exitOnFatal('[service gateway]', fd, (event, listener) => { listeners.set(event, listener) }, (code) => { exits.push(code) })
+    expect([...listeners.keys()]).toEqual(['uncaughtException', 'unhandledRejection'])
+    listeners.get('uncaughtException')!(new TypeError('/sentinel'))
+    listeners.get('unhandledRejection')!('/sentinel')
+    closeSync(fd)
+    const stamp = String.raw`\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3}`
+    // Its kind, never its words or its stack: Export logs sends the log off the machine.
+    expect(readFileSync(file, 'utf8')).toMatch(new RegExp(`^${stamp} \\[service gateway\\] stopped on an uncaught error: TypeError\n`
+      + `${stamp} \\[service gateway\\] stopped on an unhandled rejection: string\n$`))
+    expect(exits).toEqual([1, 1])
+    // A log it can no longer write costs the line, never the exit.
+    listeners.get('uncaughtException')!(new Error('again'))
+    expect(exits).toEqual([1, 1, 1])
+    // As a process runs it: on this process, through process.exit.
+    const on = vi.spyOn(process, 'on').mockImplementation((() => process) as never)
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
+    try {
+      exitOnFatal('[service gateway]', fd)
+      expect(on.mock.calls.map(([event]) => event)).toEqual(['uncaughtException', 'unhandledRejection'])
+      ;(on.mock.calls[1]![1] as (error: unknown) => void)('real')
+      expect(exit).toHaveBeenCalledWith(1)
+    } finally { on.mockRestore(); exit.mockRestore() }
+  })
+})
+
+describe('hashOf', () => {
+  const path = '/Users/sentinel/.claude/settings.json'
+
+  it('a tag is 8 hex, the same each time in this process, and holds none of the text', () => {
+    expect(hashOf(path)).toMatch(/^[0-9a-f]{8}$/)
+    expect(hashOf(path)).toBe(hashOf(path))
+    expect(hashOf('/Users/sentinel/a')).not.toBe(hashOf('/Users/sentinel/b'))
+  })
+
+  // A plain hash of a guessed path (`/Users/<name>/…`) or a short name would confirm the guess from an exported log.
+  it('a tag is not the text\'s plain SHA-256, and another process tags the same text differently', () => {
+    expect(hashOf(path)).not.toBe(createHash('sha256').update(path).digest('hex').slice(0, 8))
+    const script = `const { hashOf } = await import(${JSON.stringify(new URL('./log.ts', import.meta.url).href)})\n`
+      + `process.stdout.write(hashOf(${JSON.stringify(path)}))`
+    const other = execFileSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], { timeout: 10_000, encoding: 'utf8' })
+    expect(other).toMatch(/^[0-9a-f]{8}$/)
+    expect(other).not.toBe(hashOf(path))
+  })
+
+  // A spec that resets its modules loads this one again beside the code it tests, in the same process.
+  it('a second load in the same process tags alike', async () => {
+    vi.resetModules()
+    expect((await import('./log.js')).hashOf(path)).toBe(hashOf(path))
+  })
+})
+
+// The home as os.homedir() reads it: HOME, and USERPROFILE on Windows.
+describe('fileTag and outsideHome', () => {
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE }
+  const home = join(process.platform === 'win32' ? 'C:\\' : '/', 'people', 'sentinel')
+  beforeEach(() => { process.env.HOME = home; process.env.USERPROFILE = home })
+  afterEach(() => { process.env.HOME = saved.HOME; process.env.USERPROFILE = saved.USERPROFILE })
+
+  it('names a file in the home by its tag alone', () => {
+    const file = join(home, '.claude', 'settings.json')
+    expect(fileTag(file)).toBe(hashOf(file))
+    expect(outsideHome(file)).toBe('')
+  })
+
+  it('says a file is outside the home after its tag, never where', () => {
+    for (const file of [join(home, '..', 'other', 'hooks.json'), join(`${home}-twin`, 'hooks.json'), join(home, '..', '..', 'etc', 'hooks.json')]) {
+      expect(fileTag(file), file).toBe(`${hashOf(file)} (outside the home)`)
+      expect(outsideHome(file), file).toBe(' (outside the home)')
+    }
+  })
 })

@@ -22,6 +22,7 @@ import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative } from 'node:path'
 import { env } from '../config/env.js'
 import { ENGINES } from '../engines/types.js'
+import { codeOrLength } from './log.js'
 import { atomicWriteFile } from './secureState.js'
 
 export const MACHINE_MCP_FILE = 'mcp-servers.json'
@@ -137,17 +138,17 @@ function inProjects(projects: readonly string[], cwd: string | null | undefined,
 
 /** The servers [engine] gets for a launch in [cwd], and the names of those it would get but has no path for here. */
 export function machineMcpFor(servers: MachineMcpServers, engine: string, cwd: string | null | undefined, home: string = homedir()):
-  { servers: MachineMcpServers; noPath: string[] } {
+  { servers: MachineMcpServers; unsupported: string[] } {
   const chosen: MachineMcpServers = {}
-  const noPath: string[] = []
+  const unsupported: string[] = []
   const hasPath = (MACHINE_MCP_ENGINES as readonly string[]).includes(engine)
   for (const [name, server] of Object.entries(servers)) {
     const engines: readonly string[] = server.engines.length ? server.engines : MACHINE_MCP_ENGINES
     if (!engines.includes(engine) || !inProjects(server.projects, cwd, home)) continue
     if (hasPath) chosen[name] = server
-    else noPath.push(name)
+    else unsupported.push(name)
   }
-  return { servers: chosen, noPath }
+  return { servers: chosen, unsupported }
 }
 
 /**
@@ -181,8 +182,8 @@ export function machineMcpArgs(engine: string, servers: MachineMcpServers): stri
  *  engine has no path for, are each said in the daemon's log and add nothing. */
 export function machineMcpLaunchArgs(engine: string, cwd: string | null | undefined, dataDir: string = env.ADAPTER_DATA_DIR): string[] {
   const { servers, why } = readMachineMcp(dataDir)
-  if (why) console.warn(`[agent] machine MCP servers not added · ${why}`)
-  const { servers: chosen, noPath } = machineMcpFor(servers, engine, cwd)
-  if (noPath.length) console.warn(`[agent] machine MCP servers not added · ${engine} has no machine MCP path in this Harness yet (${noPath.join(', ')})`)
+  if (why) console.warn(`[agent] machine MCP servers not added · ${codeOrLength(why)}`)
+  const { servers: chosen, unsupported } = machineMcpFor(servers, engine, cwd)
+  if (unsupported.length) console.warn(`[agent] machine MCP servers not added · ${engine} has no machine MCP path in this Harness yet · servers ${unsupported.length}`)
   return machineMcpArgs(engine, chosen)
 }

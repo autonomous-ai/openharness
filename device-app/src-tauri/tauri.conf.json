@@ -15,7 +15,8 @@
         "height": 320,
         "resizable": false,
         "center": true,
-        "visible": false
+        "visible": false,
+        "skipTaskbar": true
       }
     ],
     "security": {

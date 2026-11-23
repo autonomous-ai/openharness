@@ -10,7 +10,8 @@ import { userInfo } from 'node:os'
 import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { folderValues, KNOWN_FOLDERS_TIMEOUT_MS, readAppDataFolders, RegFailure, regQuery, systemRoot } from './knownFolders.js'
+import { folderValues, KNOWN_FOLDERS_TIMEOUT_MS, readAppDataFolders, RegFailure, regQuery } from './knownFolders.js'
+import { systemRoot } from './powershell.js'
 
 afterEach(() => vi.unstubAllEnvs())
 

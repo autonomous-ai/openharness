@@ -10,6 +10,7 @@
 import { baseNode } from '../../harnessd/baseNode.js'
 import { matchesLaunchReceipt, type RegisteredSession, type registry } from '../../lib/registry.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
+import { codeOrLength } from '../../lib/log.js'
 import type { TerminalRuntimeRef } from '../../lib/terminalTypes.js'
 import type { MoveGate } from '../../lib/hostMove/gate.js'
 import { moveAgent, moveCreateRequest, type MoveAgentDeps, type MoveOutcome } from '../../lib/hostMove/moveAgent.js'
@@ -52,11 +53,14 @@ export interface HostMoveWiring {
 /**
  * What the new pane runs until the engine is started in it: a process that waits and prints nothing, so the pane shows
  * the scrollback it was seeded with and no line of its own (restore's waiting pane, `heldPaneArgv`, says why it waits).
- * It ignores the interrupt keys, as that one does, so nothing typed ends it before the respawn replaces it.
+ * It ignores the interrupt keys, as that one does, so nothing typed ends it before the respawn replaces it. It ends on
+ * the hangup that respawn sends, as that one does: on Windows Node hears the console's close as SIGHUP, and a listener
+ * for it would hold the close until the host kills the pane, the host's whole 2 s grace (lib/windows/engineStart.ts
+ * `windowsHeldPaneArgv`).
  */
 export function moveWaitingArgv(platform: NodeJS.Platform = process.platform): string[] {
   if (platform === 'win32') {
-    return [baseNode(process.execPath), '-e', 'for(const s of ["SIGINT","SIGBREAK","SIGHUP"])process.on(s,()=>{});setInterval(()=>{},3600000)', 'harness-move']
+    return [baseNode(process.execPath), '-e', 'for(const s of ["SIGINT","SIGBREAK"])process.on(s,()=>{});setInterval(()=>{},3600000)', 'harness-move']
   }
   return ['/bin/sh', '-c', 'trap "" INT QUIT TSTP; while :; do sleep 3600; done', 'harness-move']
 }
@@ -110,7 +114,7 @@ export function hostMoveDeps(session: RegisteredSession, current: () => boolean,
       const kept = await swap.holdOpen()
       if (!owns()) return 'failed'
       if (!kept.ok) {
-        w.log(`[terminal] move ${agentId}: could not keep the old pane open (${kept.reason ?? 'unknown reason'})`)
+        w.log(`[terminal] move ${agentId}: could not keep the old pane open (${codeOrLength(kept.reason ?? 'UNKNOWN')})`)
         return 'failed'
       }
       return swap.terminate()
@@ -163,7 +167,7 @@ export function hostMoveDeps(session: RegisteredSession, current: () => boolean,
         { ...swap, isCurrent: owns, prepareResume: prepared ? undefined : () => deferred.prepare() },
       )
       if (!outcome.ok) {
-        w.log(`[terminal] move ${agentId}: the relaunch in the old pane failed: ${outcome.detail}`)
+        w.log(`[terminal] move ${agentId}: the relaunch in the old pane failed: ${codeOrLength(outcome.error ?? outcome.detail)}`)
         return false
       }
       // The row learns it as a restart's does (`commitRelaunchedEngine`, core/agents/restart.ts): shared, not copied.

@@ -27,12 +27,22 @@ describe('safeModeDisposition', () => {
       .toMatchObject({ stay: false, reason: 'another daemon (pid 200) owns this machine' })
     // The data folder's socket already served, before any pid file names the daemon serving it.
     const served = Object.assign(new Error('A Harness daemon is already serving /data/daemon-18473.sock'), { code: 'EADDRINUSE' })
-    expect(safeModeDisposition(served, nobody)).toEqual({ stay: false, reason: 'A Harness daemon is already serving /data/daemon-18473.sock' })
+    expect(safeModeDisposition(served, nobody)).toEqual({ stay: false, reason: 'the data folder\'s socket is another daemon\'s (EADDRINUSE)' })
     expect(safeModeDisposition(Object.assign(new Error('boom'), { code: 'ENOENT' }), nobody).stay).toBe(true)
     // The core of a master that is gone, still leaving: this core leaves to be started again, not for good.
     const leaving = Object.assign(new Error('The core (pid 8) of a master that is gone still serves /data/daemon-18473.sock'), { code: 'ORPHAN_STILL_SERVING' })
-    expect(safeModeDisposition(leaving, nobody)).toEqual({ stay: false, reason: leaving.message, retry: true })
+    expect(safeModeDisposition(leaving, nobody)).toEqual({ stay: false, reason: 'the master that started this core is gone (ORPHAN_STILL_SERVING)', retry: true })
     expect(safeModeDisposition(null, nobody).stay).toBe(true)
+  })
+
+  // The reason goes to the core's log (core/main.ts `enterSafeMode`), which Export logs sends: the error's own words
+  // name the data folder's socket.
+  it('a core that leaves names why in words and a kind, never the error\'s message', () => {
+    const served = Object.assign(new Error('A Harness daemon is already serving /Users/sentinel/daemon.sock'), { code: 'EADDRINUSE' })
+    const leaving = Object.assign(new Error('The core (pid 8) of a master that is gone still serves /Users/sentinel/daemon.sock'), { code: 'ORPHAN_STILL_SERVING' })
+    const reasons = [served, leaving].map((error) => safeModeDisposition(error, nobody).reason)
+    expect(reasons.join('\n')).not.toContain('sentinel')
+    expect(reasons).toEqual(['the data folder\'s socket is another daemon\'s (EADDRINUSE)', 'the master that started this core is gone (ORPHAN_STILL_SERVING)'])
   })
 
   it('stays when the pid file names us, or names a corpse', () => {

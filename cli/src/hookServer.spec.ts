@@ -14,6 +14,9 @@ import { engineHooks } from './engines/hooks.js'
 import { pipeRequest } from './lib/windows/pipeClient.js'
 import type { DoorRequest } from './core/serviceRoutes.js'
 
+// The e2e harness's own reader, so this spec sees the daemon's output as the harness does (testing/daemonListeningPort.spec.ts).
+const { listeningPort } = await import('../e2e/harness/daemon.js' as string) as { listeningPort: (output: string) => number | null }
+
 let server: Server | null = null
 
 /** The fetch a test's calls go through: this OS user's process, so over the loopback port it shows the daemon's
@@ -263,6 +266,57 @@ describe('process-owned hook server', () => {
 
     const legacy = await fetch(`${base}/api/machine-ws`)
     expect(legacy.status).toBe(404)
+  })
+
+  it('a session-end reason is logged as it is when it is one of Claude Code\'s own, else as a code or a length', async () => {
+    const agent = { engine: 'claude', sessionId: 'session-1', agentId: 'agent-1', runtimes: [], processIdentity: null } as unknown as RegisteredSession
+    vi.spyOn(registry, 'bySession').mockReturnValue(agent)
+    vi.spyOn(registry, 'byAgent').mockReturnValue(agent)
+    const { handlers, base, headers } = await start({ resolveHookAgent: async () => agent })
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    for (const reason of ['clear', 'prompt_input_exit', 'SOME_CODE', '/Users/sentinel/x']) {
+      await fetch(`${base}/api/hook/session-end`, { method: 'POST', headers,
+        body: JSON.stringify({ engine: 'claude', sessionId: 'session-1', reason, tmuxPane: '%1', callerPid: 123 }) })
+    }
+    const lines = log.mock.calls.map((call) => call.map(String).join(' ')).filter((line) => line.includes('session-end'))
+    expect(lines).toEqual([
+      '[hooks] session- session-end · reason=clear',
+      '[hooks] session- session-end · reason=prompt_input_exit',
+      '[hooks] session- session-end · reason=SOME_CODE',
+      '[hooks] session- session-end · reason=text(17)',
+    ])
+    // The handler still gets the engine's word as it came.
+    expect(handlers.onSessionEnd).toHaveBeenLastCalledWith('session-1', '/Users/sentinel/x')
+  })
+
+  it('a held hook is logged by its hold\'s code and its failure\'s kind', async () => {
+    vi.spyOn(engineHooks.codex, 'admit').mockReturnValue({ accepted: true })
+    const agent = { engine: 'codex', agentId: 'parent', runtimes: [{ backend: 'tmux', paneId: '%41' }], primaryRuntimeKey: 'tmux\u0000%41', processIdentity: { pid: 4242, startMarker: 'fixture', executable: '<codex>' } } as RegisteredSession
+    vi.spyOn(registry, 'byAgent').mockReturnValue(agent)
+    // The store's failure names its own file: the hold's sentence carries it to the person, never to the log.
+    vi.spyOn(registry, 'register').mockRejectedValue(new Error('the store at /Users/sentinel/x is gone'))
+    const onAdmissionHeld = vi.fn()
+    const { base, headers } = await start({ resolveHookAgent: async () => agent, onAdmissionHeld })
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    await fetch(`${base}/api/hook/session-start`, { method: 'POST', headers,
+      body: JSON.stringify({ engine: 'codex', tmuxPane: '%41', sessionId: 'session-held', hookEvent: 'SessionStart' }) })
+    await vi.waitFor(() => expect(onAdmissionHeld).toHaveBeenCalledWith('parent', 'Waiting for durable hook admission: the store at /Users/sentinel/x is gone'))
+    const lines = log.mock.calls.map((call) => call.map(String).join(' ')).join('\n')
+    expect(lines).not.toContain('sentinel')
+    expect(lines).toContain('[hooks] session- SessionStart held · DURABLE_ADMISSION_WAIT · Error')
+  })
+
+  it('a hook held behind a settling Stop is logged by that hold\'s own code', async () => {
+    vi.spyOn(engineHooks.codex, 'admit').mockReturnValue({ accepted: true })
+    const agent = { engine: 'codex', agentId: 'parent', runtimes: [{ backend: 'tmux', paneId: '%41' }], primaryRuntimeKey: 'tmux\u0000%41', processIdentity: { pid: 4242, startMarker: 'fixture', executable: '<codex>' } } as RegisteredSession
+    vi.spyOn(registry, 'byAgent').mockReturnValue(agent)
+    const onAdmissionHeld = vi.fn()
+    const { base, headers } = await start({ resolveHookAgent: async () => agent, onAdmissionHeld, hookAdmissionBlocked: () => true })
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    await fetch(`${base}/api/hook/session-start`, { method: 'POST', headers,
+      body: JSON.stringify({ engine: 'codex', tmuxPane: '%41', sessionId: 'session-held', hookEvent: 'SessionStart' }) })
+    await vi.waitFor(() => expect(onAdmissionHeld).toHaveBeenCalledWith('parent', 'Waiting for Stop to settle before admitting the hook.'))
+    expect(log.mock.calls.map((call) => call.map(String).join(' '))).toContain('[hooks] session- SessionStart held · STOP_SETTLING')
   })
 
   it('rejects every unauthenticated mutating hook request', async () => {
@@ -1091,7 +1145,7 @@ describe('requests must name this server', () => {
     expect((await unbound()).status).toBe(403)
     expect(said.mock.calls.map(([line]) => String(line).split(' · ')[0]).filter(line => line.includes('refused'))).toEqual([
       '[hooks] gone0001 wait refused',
-      '[hooks] refused GET /api/status',
+      '[hooks] refused GET (11 chars)',
     ])
   })
 
@@ -1300,6 +1354,24 @@ describe('the daemon socket', () => {
       expect((await pipeRequest({ pipe: socketPath, token }, { method: 'POST', path: '/api/auth/handoff', headers: local })).status).toBe(200)
       expect(await viaSocket(socketPath, 'POST', '/api/auth/handoff', local)).toBe(401)
       expect(onServiceRoute).toHaveBeenCalledTimes(1)
+    } finally {
+      await started.localSocket?.close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('the socket\'s line names no path and is not read as the port', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const dir = mkdtempSync('/tmp/sentinel-')
+    const socketPath = join(dir, 'daemon.sock')
+    const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn() }, { socketPath })
+    server = started.server
+    try {
+      expect(started.localSocket?.path).toBe(socketPath)
+      const output = log.mock.calls.map((call) => call.map(String).join(' ') + '\n').join('')
+      expect(output).not.toContain('sentinel')
+      expect(output).toContain('[hooks] listening on the private socket\n')
+      expect(listeningPort(output)).toBe(started.port)
     } finally {
       await started.localSocket?.close()
       rmSync(dir, { recursive: true, force: true })

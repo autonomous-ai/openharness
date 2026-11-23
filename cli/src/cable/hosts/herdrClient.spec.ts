@@ -1,15 +1,17 @@
-import { writeFile } from 'node:fs/promises'
+import { mkdir, rm, utimes, writeFile } from 'node:fs/promises'
 import { once } from 'node:events'
 import { connect } from 'node:net'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ProcessRow } from '../../lib/processTable.js'
 import { fakeHerdr, RECORDED, type FakeHerdr } from '../../testing/fakeHerdr.js'
 import {
-  createHerdrClient, HERDR_PANE, herdrClientDeps, herdrSocketPath, MAX_LINE_BYTES,
+  createHerdrClient, HERDR_PANE, herdrClientDeps, herdrPipeOf, herdrSocketPath, MAX_LINE_BYTES,
   type HerdrClientDeps, type HerdrEntry, type HerdrSubscriber,
 } from './herdrClient.js'
 import { MAX_TEXT } from './orca.js'
+import { markerStampOf } from './unixSocket.js'
 
 const ENTRIES: HerdrEntry[] = [{ type: 'pane.agent_detected' }, { type: 'pane.closed' }, { type: 'pane.exited' }]
 
@@ -51,10 +53,45 @@ describe('herdr\'s pane id', () => {
   })
 })
 
+describe('herdr on Windows: its marker and its pipe (docs/plans/2026-11-19-dial-windows-vm-notes.md, Task 1 §7)', () => {
+  const profile = 'C:\\Users\\me'
+  const roaming = 'C:\\Users\\me\\AppData\\Roaming'
+
+  it('the marker is %XDG_CONFIG_HOME%\\herdr\\herdr.sock, else %APPDATA%\\herdr\\herdr.sock, else the profile\'s; a relative one counts as unset', () => {
+    expect(herdrSocketPath({ APPDATA: roaming }, profile, 'win32')).toBe('C:\\Users\\me\\AppData\\Roaming\\herdr\\herdr.sock')
+    expect(herdrSocketPath({ XDG_CONFIG_HOME: 'D:\\cfg', APPDATA: roaming }, profile, 'win32')).toBe('D:\\cfg\\herdr\\herdr.sock')
+    expect(herdrSocketPath({ XDG_CONFIG_HOME: 'cfg', APPDATA: roaming }, profile, 'win32')).toBe('C:\\Users\\me\\AppData\\Roaming\\herdr\\herdr.sock')
+    expect(herdrSocketPath({ APPDATA: 'Roaming' }, profile, 'win32')).toBe('C:\\Users\\me\\AppData\\Roaming\\herdr\\herdr.sock')
+    expect(herdrSocketPath({}, profile, 'win32')).toBe('C:\\Users\\me\\AppData\\Roaming\\herdr\\herdr.sock')
+  })
+
+  it('the pipe is \\\\.\\pipe\\ and the marker\'s whole path, unchanged', () => {
+    expect(herdrPipeOf('C:\\Users\\me\\AppData\\Roaming\\herdr\\herdr.sock'))
+      .toBe('\\\\.\\pipe\\C:\\Users\\me\\AppData\\Roaming\\herdr\\herdr.sock')
+    expect(herdrPipeOf('D:\\cfg\\herdr\\herdr.sock')).toBe('\\\\.\\pipe\\D:\\cfg\\herdr\\herdr.sock')
+  })
+
+  it('herdrClientDeps dials the marker\'s pipe there', () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    vi.stubEnv('APPDATA', roaming)
+    try {
+      Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+      const deps = herdrClientDeps()
+      expect(deps.socketPath).toBe(herdrSocketPath(process.env, homedir(), 'win32'))
+      expect(deps.endpoint).toBe(herdrPipeOf(deps.socketPath))
+    } finally {
+      Object.defineProperty(process, 'platform', platform)
+      vi.unstubAllEnvs()
+    }
+  })
+})
+
 describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026-11-16-device-herdr.md)', () => {
   let server: FakeHerdr
-  const client = (over: Partial<HerdrClientDeps> = {}) =>
-    createHerdrClient({ socketPath: server.path, home: dirname(server.path), uid: process.getuid!(), platform: process.platform, ...over })
+  const client = (over: Partial<HerdrClientDeps> = {}) => createHerdrClient({
+    socketPath: server.path, endpoint: server.path, home: dirname(server.path), uid: process.getuid!(), platform: process.platform,
+    rows: async () => null, ...over,
+  })
 
   beforeEach(async () => { server = await fakeHerdr() })
   afterEach(async () => {
@@ -69,13 +106,17 @@ describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026
     expect(herdrSocketPath({ XDG_CONFIG_HOME: 'cfg' }, '/home/me')).toBe('/home/me/.config/herdr/herdr.sock')
     // The suite's home is a throwaway one, and its XDG_CONFIG_HOME is unset (vitest.setup.ts).
     expect(herdrClientDeps()).toEqual({
-      socketPath: join(homedir(), '.config', 'herdr', 'herdr.sock'), home: homedir(), uid: process.getuid!(), platform: process.platform,
+      socketPath: join(homedir(), '.config', 'herdr', 'herdr.sock'), endpoint: join(homedir(), '.config', 'herdr', 'herdr.sock'),
+      home: homedir(), uid: process.getuid!(), platform: process.platform, rows: expect.any(Function),
     })
   })
 
   it('request writes one line and answers the result', async () => {
-    expect(await client().request('agent.list', {})).toEqual({ ok: true, result: { type: 'agent_list', agents: [] } })
+    const herdr = client()
+    expect(await herdr.request('agent.list', {})).toEqual({ ok: true, result: { type: 'agent_list', agents: [] } })
     expect(server.requests).toEqual([{ connection: 1, request: { id: expect.any(String), method: 'agent.list', params: {} } }])
+    // Off Windows a tap finds herdr on PATH alone: no process table is read for it.
+    expect(herdr.binary()).toBeUndefined()
   })
 
   it('each request is a connection of its own', async () => {
@@ -130,8 +171,6 @@ describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026
       client({ socketPath: join(dirname(server.path), 'none.sock') }),
       client({ socketPath: file }),
       client({ uid: process.getuid!() + 1 }),
-      // herdr's socket there is a named pipe, which this client does not speak.
-      client({ platform: 'win32' }),
     ]) {
       expect(await herdr.request('agent.list', {})).toEqual({ ok: false, fault: 'no_socket' })
       expect(await herdr.prompt('w1:p1', 'claude', 'go')).toEqual({ outcome: 'failed', fault: 'no_socket' })
@@ -428,7 +467,6 @@ describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026
     expect(stamp).toEqual(expect.any(String))
     expect(client().socketStamp()).toBe(stamp)
     expect(client({ uid: process.getuid!() + 1 }).socketStamp()).toBeUndefined()
-    expect(client({ platform: 'win32' }).socketStamp()).toBeUndefined()
     expect(client({ socketPath: file }).socketStamp()).toBeUndefined()
 
     await server.stop()
@@ -444,5 +482,122 @@ describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026
     expect(left).toEqual(expect.any(String))
     await server.start()
     expect(client().socketStamp()).not.toBe(left)
+  })
+
+  // The fake herdr listens on a Unix socket, which a Windows client is handed as its endpoint: the marker and what is
+  // dialled are apart there.
+  describe('on Windows, over the pipe the marker names', () => {
+    // The suite's home is a throwaway one (vitest.setup.ts): the profile the marker must be inside.
+    const folder = join(homedir(), 'AppData', 'Roaming', 'herdr')
+    const marker = join(folder, 'herdr.sock')
+    /** The herdr that wrote the marker, as the process table lists it: a minute before the marker's time
+     *  (1763600000000000000 ns since 1970, the FILETIME 134080736000000000). */
+    const herdrRow = (over: Partial<ProcessRow> = {}): ProcessRow =>
+      ({ pid: process.pid, parentPid: 1, executable: 'herdr.exe', startMarker: 'w:134080735400000000', args: 'herdr server', ...over })
+    const windows = (over: Partial<HerdrClientDeps> = {}) => client({
+      platform: 'win32', socketPath: marker, endpoint: server.path, home: homedir(), uid: -1, rows: async () => [herdrRow()], ...over,
+    })
+
+    beforeEach(async () => {
+      await mkdir(folder, { recursive: true })
+      await writeFile(marker, `${process.pid}:1763600000000000000`)
+    })
+    afterEach(async () => { await rm(folder, { recursive: true, force: true }) })
+
+    it('agent.list, agent.prompt and events.subscribe go to the endpoint', async () => {
+      server.agents = [agent('w1:p1', 'claude', 'idle')]
+      const herdr = windows()
+      expect(await herdr.request('agent.list', {})).toEqual({ ok: true, result: { type: 'agent_list', agents: server.agents } })
+      expect(await herdr.prompt('w1:p1', 'claude', 'go')).toEqual({ outcome: 'sent' })
+      expect((await server.got('agent.prompt', 1)).request).toMatchObject({ params: { target: 'w1:p1', text: 'go' } })
+      const { calls, to, told } = subscriber()
+      const subscription = herdr.subscribe(ENTRIES, to)
+      await told(2)
+      expect(calls).toEqual([['started'], ['event', 'pane_agent_detected', expect.objectContaining({ pane_id: 'w1:p1' })]])
+      subscription.close()
+    })
+
+    it('the stamp is the marker\'s', () => {
+      expect(windows().socketStamp()).toMatch(/^\d+:\d+$/)
+      expect(windows().socketStamp()).toBe(markerStampOf(marker))
+    })
+
+    it('no marker, or one outside the profile, is no_socket, and nothing connects', async () => {
+      const outside = join(dirname(server.path), 'herdr-marker')
+      await writeFile(outside, `${process.pid}:1763600000000000000`)
+      for (const herdr of [windows({ socketPath: join(folder, 'none.sock') }), windows({ socketPath: outside })]) {
+        expect(herdr.socketStamp()).toBeUndefined()
+        expect(await herdr.request('agent.list', {})).toEqual({ ok: false, fault: 'no_socket' })
+        expect(await herdr.prompt('w1:p1', 'claude', 'go')).toEqual({ outcome: 'failed', fault: 'no_socket' })
+        const { calls, to, told } = subscriber()
+        herdr.subscribe(ENTRIES, to)
+        await told(1)
+        expect(calls).toEqual([['closed', 'no_socket']])
+      }
+      expect(server.connections).toBe(0)
+    })
+
+    // The pipe is a name any account can take once herdr is gone: only the marker's own herdr is dialled.
+    it("a marker whose herdr is gone, another program, another account's or one started after it is no stamp, and nothing connects", async () => {
+      for (const table of [
+        null,
+        // Gone.
+        [],
+        // Another account's: the host lists a process this account may not open with no start marker (pty/src/ps.rs).
+        [herdrRow({ startMarker: '' })],
+        [herdrRow({ executable: 'node.exe' })],
+        // Started after herdr wrote the marker: Windows gave herdr's pid to it.
+        [herdrRow({ startMarker: 'w:134080736600000000' })],
+      ]) {
+        const herdr = windows({ rows: async () => table })
+        expect(await herdr.request('agent.list', {})).toEqual({ ok: false, fault: 'no_socket' })
+        expect(herdr.socketStamp()).toBeUndefined()
+        const { calls, to, told } = subscriber()
+        herdr.subscribe(ENTRIES, to)
+        await told(1)
+        expect(calls).toEqual([['closed', 'no_socket']])
+      }
+      await writeFile(marker, 'not a marker')
+      expect(await windows().request('agent.list', {})).toEqual({ ok: false, fault: 'no_socket' })
+      expect(server.connections).toBe(0)
+    })
+
+    // herdr's zip puts it on no PATH: a tap runs the herdr that wrote the marker (herdr.ts).
+    it('binary is the herdr that wrote the marker once it is seen running, and none for one not seen or gone', async () => {
+      const image = 'C:\\Users\\me\\.herdr\\packages\\standalone\\releases\\0.9.5-x86_64-pc-windows-msvc\\herdr.exe'
+      const herdr = windows({ rows: async () => [herdrRow({ imagePath: image })] })
+      expect(herdr.binary()).toBeUndefined()
+      expect(await herdr.request('agent.list', {})).toMatchObject({ ok: true })
+      expect(herdr.binary()).toBe(image)
+      // Another program under herdr's pid: Windows gave it away.
+      const gone = windows({ rows: async () => [herdrRow({ imagePath: image, executable: 'node.exe' })] })
+      expect(await gone.request('agent.list', {})).toEqual({ ok: false, fault: 'no_socket' })
+      expect(gone.binary()).toBeUndefined()
+    })
+
+    it('herdr is looked for once a marker, and again after a connection that failed: herdr may be gone, and its pipe another account\'s', async () => {
+      let reads = 0
+      const herdr = windows({ rows: async () => { reads++; return [herdrRow()] } })
+      expect(await herdr.request('agent.list', {})).toMatchObject({ ok: true })
+      expect(await herdr.request('agent.list', {})).toMatchObject({ ok: true })
+      expect(reads).toBe(1)
+      // herdr started again, and wrote its marker anew.
+      await utimes(marker, new Date(2030, 0, 1), new Date(2030, 0, 1))
+      expect(await herdr.request('agent.list', {})).toMatchObject({ ok: true })
+      expect(reads).toBe(2)
+
+      server.answer('agent.list', 'close')
+      expect(await herdr.request('agent.list', {})).toEqual({ ok: false, fault: 'ended' })
+      server.answer('agent.list')
+      expect(await herdr.request('agent.list', {})).toMatchObject({ ok: true })
+      expect(reads).toBe(3)
+      const { to, told } = subscriber()
+      herdr.subscribe(ENTRIES, to)
+      await told(1)
+      server.drop()
+      await told(2)
+      expect(await herdr.request('agent.list', {})).toMatchObject({ ok: true })
+      expect(reads).toBe(4)
+    })
   })
 })

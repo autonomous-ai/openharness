@@ -4,6 +4,7 @@
  * crash is undone or finished by the next start. Each step looks at what is there first, so one run twice does it once.
  */
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
+import { homePath } from '../config/envFields.js'
 import { HARNESS_ROOT_MARKER, legacyHarnessHome, type HarnessRootKind } from '../config/harnessHome.js'
 import { BRIDGE_FILE, makeRealFolders, writeBridge } from './bridge.js'
 import type { MoveCheck, Reason } from './conditions.js'
@@ -119,7 +120,9 @@ function complete(journal: Journal, steps: Steps, oldDataDir: string, run: { byt
       makeRealFolders(plan.legacy)
       steps.add({ did: 'bridge' })
     }
-    for (const entry of plan.entries) if (!entry.known) deps.log(`home move: unknown entry ${entry.name} · moved to data`)
+    // Counted, not named: a person or another tool named them, and the line goes to harness.log.
+    const unknown = plan.entries.filter((entry) => !entry.known).length
+    if (unknown > 0) deps.log(`home move: ${unknown} unknown entr${unknown === 1 ? 'y' : 'ies'} · moved to data`)
     // They still name the old tree, which the bridge's links serve while it lasts.
     const { left } = run
     if (left.length > 0) deps.log(`home move: ${left.length} record${left.length === 1 ? '' : 's'} left unchanged · ${[...new Set(left.map(recordKind))].sort().join(', ')}`)
@@ -204,11 +207,11 @@ function reasonOf(error: unknown): Reason {
 /** What a record is, by its name, never its path: a stopped agent's is named for the agent. */
 const recordKind = (path: string): string => basename(dirname(path)) === 'stopped-agents' ? 'stopped-agents' : basename(path)
 
-/** The daemon's data folder before the move: an override's, or the tree's own. */
-const dataDirOf = (plan: MovePlan, env: NodeJS.ProcessEnv): string => resolve(env.ADAPTER_DATA_DIR || join(plan.legacy, 'cli', 'data'))
+/** The daemon's data folder before the move: an override's (a relative one the home's, as config/env.ts reads it), or the tree's own. */
+const dataDirOf = (plan: MovePlan, env: NodeJS.ProcessEnv): string => resolve(homePath(env.ADAPTER_DATA_DIR ?? '', plan.home) || join(plan.legacy, 'cli', 'data'))
 
 /** The Store's folder before the move (config/env.ts DSH_DIR): an override's, or the tree's own. */
-const dshDirOf = (plan: MovePlan, env: NodeJS.ProcessEnv): string => resolve(env.DSH_DIR || join(plan.legacy, 'dsh'))
+const dshDirOf = (plan: MovePlan, env: NodeJS.ProcessEnv): string => resolve(homePath(env.DSH_DIR ?? '', plan.home) || join(plan.legacy, 'dsh'))
 
 /** [path], under the first `from` of [places] it is in, spelled under that place's `to`; a path in none as it is. */
 function rebase(path: string, places: readonly (readonly [from: string, to: string])[]): string {
@@ -222,5 +225,5 @@ function rebase(path: string, places: readonly (readonly [from: string, to: stri
  */
 function outside(home: string, env: NodeJS.ProcessEnv, oldDataDir: string) {
   const config = env.XDG_CONFIG_HOME && isAbsolute(env.XDG_CONFIG_HOME) ? env.XDG_CONFIG_HOME : join(home, '.config')
-  return { binDir: env.HARNESS_BIN_DIR || join(home, '.local', 'bin'), unitFile: join(config, 'systemd', 'user', 'harnessd.service'), oldLogFile: join(oldDataDir, 'harness.log'), env }
+  return { binDir: homePath(env.HARNESS_BIN_DIR ?? '', home) || join(home, '.local', 'bin'), unitFile: join(config, 'systemd', 'user', 'harnessd.service'), oldLogFile: join(oldDataDir, 'harness.log'), env }
 }

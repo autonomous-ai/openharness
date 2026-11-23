@@ -90,7 +90,8 @@ describe('a daemon under test', () => {
     // Models' own lines reach the log the asserts below read.
     expect(daemon.log()).toContain('[grid-attach] ')
     expect(daemon.log()).not.toContain('installing the Harness grid runtime')
-    expect(daemon.log()).not.toMatch(/grid installer (exited|finished)|installed `grid` to/)
+    // Grid's installer neither ran nor installed: its result is said by status alone (services/models.ts).
+    expect(daemon.log()).not.toMatch(/\[grid-attach\] grid install: (failed|installed) /)
     expect(readdirSync(daemon.env.ADAPTER_RUNTIME_DIR!).filter((name) => name.startsWith('grid-'))).toEqual([])
     // Where grid's installer would put it: under the test's home (lib/gridInstall.ts GRID_INSTALL_DIR).
     expect(existsSync(join(daemon.env.HOME!, '.local', 'bin', 'grid'))).toBe(false)
@@ -180,11 +181,9 @@ describe('a daemon under test', () => {
     ['is killed, as a run\'s timeout kills it', 'waits', (child) => { child.kill('SIGKILL') }],
     ['is interrupted with Ctrl-C, which reaches its terminal\'s process group', 'waits', (child) => { process.kill(-child.pid!, 'SIGINT') }],
   ])('is gone, tmux server and all, once the worker that started it %s', async (_, mode, end) => {
-    // Not a Vitest run: it keeps no artifacts, which only a test can file.
-    const { E2E_ARTIFACTS_DIR: _artifacts, ...env } = process.env
     // A process group of its own, as a terminal gives the run it starts.
     const child = worker = spawn(process.execPath, ['--import', 'tsx', 'e2e/harness/abandonedWorker.ts', mode], {
-      cwd: CLI_ROOT, env, stdio: ['pipe', 'pipe', 'inherit'], ...ownProcessGroup(),
+      cwd: CLI_ROOT, stdio: ['pipe', 'pipe', 'inherit'], ...ownProcessGroup(),
     })
     let out = ''
     child.stdout!.on('data', (chunk: Buffer) => { out += chunk.toString() })

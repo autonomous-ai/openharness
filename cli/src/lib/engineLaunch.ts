@@ -1047,8 +1047,8 @@ export function buildTerminalLaunchArgv(
  *
  * The hint names the fix for the platform this daemon generates the script on, which is the one
  * the pane runs on. `$PWD` is left to the shell so the message names the folder as entered. Short
- * lines, the action first: a dialog that relays the pane's last lines keeps about 180 characters
- * (agentCreateDiagnosis.ts), and the folder path alone can take half of that.
+ * lines, the action first: the person reads them in the pane, and the folder path alone can take
+ * half a line.
  */
 export function unreadableCwdGuard(platform: NodeJS.Platform = process.platform): string {
   const hints = platform === 'darwin'

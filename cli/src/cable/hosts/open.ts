@@ -1,8 +1,9 @@
 /**
  * A tap on an agent outside Harness brings it forward (docs/specs/2026-11-13-device-claude-orca.md): its own pane, where
  * its app has a way in that asks for no new permission, and on macOS the app itself, by its bundle id; on Linux its window,
- * through the raise (linuxRaise.ts, docs/plans/2026-11-19-dial-linux-design.md § 2.1). Here is only what every app
- * shares: each pane, and whether it comes before its app, instead of it or after it, is its adapter's (adapter.ts). Every
+ * through the raise (linuxRaise.ts, docs/plans/2026-11-19-dial-linux-design.md § 2.1); on Windows the app by its bundle,
+ * through Windows' raise (windowsRaise.ts, docs/plans/2026-11-19-dial-windows-design.md, part C). Here is only what every
+ * app shares: each pane, and whether it comes before its app, instead of it or after it, is its adapter's (adapter.ts). Every
  * value of a tap came from a hook: a bundle is one of the apps below, a pane is checked by its adapter, and each command
  * runs with no shell, every value one argument. A pick in the dial's list of apps brings that app forward too
  * (docs/plans/2026-11-16-dial-pick-brings-app-design.md): the dial's word is only a key into the bundles below, or into
@@ -13,6 +14,7 @@ import type { HostAdapter, Pane } from './adapter.js'
 import { APP_BUNDLES, BUNDLE_APPS, HARNESS_BUNDLE, inCmux, inHerdr } from './hostDetect.js'
 import type { LinuxRaise } from './linuxRaise.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
+import type { WindowsRaise } from './windowsRaise.js'
 
 /** Every app a tap brings forward. Alacritty is known by its bundle id alone: no other hint names it. Only one of these
  *  ever reaches `open`, never a hint's own value. */
@@ -56,19 +58,24 @@ export interface OpenDeps {
   herdrApp?(): boolean
   /** Linux's way to bring a window forward, where macOS runs `open -b`; none on macOS. */
   raise?: LinuxRaise
+  /** Windows' way to bring an app forward by its bundle, where macOS runs `open -b`; none elsewhere. */
+  windows?: WindowsRaise
   /** An agent's window as the observed source knows it: its process and app (observed.ts windowOf). */
   windowOf?(agentId: string): { pid?: number; app?: string } | undefined
 }
 
 export function createOpenActions(deps: OpenDeps): {
-  can(target: OpenTarget): boolean
+  can(agentId: string, target: OpenTarget): boolean
   open(agentId: string, target: OpenTarget): Promise<boolean>
-  /** Brings Harness Desktop forward, starting it when it is not running; there on macOS only. */
+  /** Brings Harness Desktop forward, starting it when it is not running; there on macOS, and on Windows with a raise. */
   desktop?: () => Promise<boolean>
-  /** Brings a picked app forward by its id; undefined when nothing ran. There on macOS, and on Linux with a raise. */
+  /** Brings a picked app forward by its id; undefined when nothing ran. There on macOS, and on Linux and Windows with a
+   *  raise. */
   bring?: (app: string) => Promise<'ok' | 'failed' | undefined>
 } {
-  const mac = deps.platform === 'darwin'
+  const windows = deps.windows
+  // Windows brings an app forward by its bundle, as macOS does: every path that takes a bundle takes it there too.
+  const byBundle = deps.platform === 'darwin' || !!windows
   const raise = deps.raise
   // One command at a time per agent: a second tap while the first runs would only bring the same app forward twice.
   const running = new Set<string>()
@@ -90,12 +97,24 @@ export function createOpenActions(deps: OpenDeps): {
     const adapter = pane && deps.adapters.find((known) => known.id === pane.adapter)
     return adapter && adapter.tap !== 'after' && adapter.canFocus(pane) ? { adapter, pane } : undefined
   }
-  // On Linux the agent's window, by its process or its app's class: its app as its bundle names it (bundleOf), the only
-  // word of it a target carries.
-  const appOf = (bundle?: string): string | undefined => (bundle !== undefined && Object.hasOwn(BUNDLE_APPS, bundle) ? BUNDLE_APPS[bundle] : undefined)
-  const can = (target: OpenTarget): boolean =>
-    !!paneOn(target) || (mac && !!target.bundle) || !!raise?.ready({ agent: true, app: appOf(target.bundle) })
-  const forward = async (bundle: string): Promise<boolean> => (await deps.run(openBin, ['-b', bundle], RUN_TIMEOUT_MS)).code === 0
+  // On Linux the agent's window as the observed source knows it, not its bundle: a bundle names only the host's app
+  // there, none for an app learnt from the agent's parents. A row no process holds (an app's own store lists it) has no
+  // window the source knows, so its app is the one its bundle names; without it a failed link brought nothing (X5).
+  const windowFor = (agentId: string, target: OpenTarget): { pid?: number; app?: string } | undefined => {
+    const window = deps.windowOf?.(agentId)
+    if (window) return window
+    const bundle = target.bundle
+    return bundle !== undefined && Object.hasOwn(BUNDLE_APPS, bundle) ? { app: BUNDLE_APPS[bundle] } : undefined
+  }
+  // On Linux the agent's window, by its process or its app's class: the app the raise is handed (raiseWindow), as GNOME
+  // raises by class alone.
+  const can = (agentId: string, target: OpenTarget): boolean =>
+    !!paneOn(target) || (byBundle && !!target.bundle) || !!raise?.ready({ agent: true, app: windowFor(agentId, target)?.app })
+  // Harness Desktop is started by its launcher on Windows, never raised: a running one takes the launch over and comes
+  // forward itself (windowsRaise.ts).
+  const forward = async (bundle: string): Promise<boolean> => windows
+    ? bundle === HARNESS_BUNDLE ? windows.desktop() : windows.app(bundle)
+    : (await deps.run(openBin, ['-b', bundle], RUN_TIMEOUT_MS)).code === 0
 
   // herdr 0.8.0's agents, whose terminal nobody knows (#4366), have no window of their own: herdr's ring brings Herdr
   // only while Herdr.app's window is the ring's.
@@ -115,8 +134,8 @@ export function createOpenActions(deps: OpenDeps): {
 
   // Linux's raise brings forward the agent's window, where macOS brings its app: the window of [pid] when the pane's app
   // named the process holding it (a multiplexer's client its focus switched), else of the agent's own process.
-  const raiseWindow = (linux: LinuxRaise, agentId: string, pid?: number): Promise<boolean> => {
-    const window = deps.windowOf?.(agentId)
+  const raiseWindow = (linux: LinuxRaise, agentId: string, target: OpenTarget, pid?: number): Promise<boolean> => {
+    const window = windowFor(agentId, target)
     return linux.raise({ pid: pid ?? window?.pid, app: window?.app })
   }
 
@@ -146,18 +165,18 @@ export function createOpenActions(deps: OpenDeps): {
 
   async function open(agentId: string, target: OpenTarget): Promise<boolean> {
     const own = paneOn(target)
-    const bundle = mac ? target.bundle : undefined
+    const bundle = byBundle ? target.bundle : undefined
     const shown = own ? await own.adapter.focus(own.pane) : false
     if (own && shown === true) {
       // A pane that comes before its app still needs its app at the front; one instead of it (the Claude app's link)
       // brought the app itself. The pane came, whatever the raise did.
       if (own.adapter.tap === 'before') {
         if (bundle) await forward(bundle)
-        else if (raise) await raiseWindow(raise, agentId, own.adapter.windowPid?.(own.pane))
+        else if (raise) await raiseWindow(raise, agentId, target, own.adapter.windowPid?.(own.pane))
       }
       return true
     }
-    const app = bundle ? () => forward(bundle) : raise && (() => raiseWindow(raise, agentId))
+    const app = bundle ? () => forward(bundle) : raise && (() => raiseWindow(raise, agentId, target))
     if (!app) return false
     // The Claude app's link is undocumented and may change with any release: the app still comes forward. Which app
     // only, never its session, pane or handle. A pane refused has said so already.
@@ -170,7 +189,7 @@ export function createOpenActions(deps: OpenDeps): {
     async open(agentId, target) {
       // A tapped notice turns the dial to its own app: a pick waiting would turn it away again.
       dropWaiting()
-      if (!can(target) || running.has(agentId)) return false
+      if (!can(agentId, target) || running.has(agentId)) return false
       running.add(agentId)
       try {
         return await open(agentId, target)
@@ -179,7 +198,7 @@ export function createOpenActions(deps: OpenDeps): {
       }
     },
     // A tap on a Harness agent with no window, which turns the dial to Harness's ring: it drops a pick waiting, as `open`.
-    desktop: mac ? () => { dropWaiting(); return forward(HARNESS_BUNDLE) } : undefined,
-    bring: mac || raise ? bring : undefined,
+    desktop: byBundle ? () => { dropWaiting(); return forward(HARNESS_BUNDLE) } : undefined,
+    bring: byBundle || raise ? bring : undefined,
   }
 }

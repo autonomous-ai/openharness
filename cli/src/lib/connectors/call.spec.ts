@@ -205,6 +205,12 @@ describe('forbiddenDirs', () => {
       ['C:\\h\\AppData', 'C:\\Users\\a\\AppData', 'D:\\roaming', 'D:\\local']))
   })
 
+  // The connections folder by the path module given, as every other fenced folder: on both Windows runners a posix
+  // '/tmp/c' was fenced as 'C:\tmp\c' (windows.yml run 44827687986).
+  it('fences a relative connections folder under the home, by Windows\' paths on Windows', () => {
+    expect(forbiddenDirs({ HOME: 'C:\\Users\\a', HARNESS_CONNECTIONS_DIR: 'conn' }, [], win32, 'win32')[0]).toBe('C:\\Users\\a\\conn')
+  })
+
   it('fences no AppData on posix', () => {
     const env = { HOME: '/tmp/h', HARNESS_CONNECTIONS_DIR: '/tmp/c', APPDATA: '/tmp/roaming', LOCALAPPDATA: '/tmp/local' }
     expect(forbiddenDirs(env, [], posix, 'linux')).toEqual(['/tmp/c', '/tmp/h/.ssh', '/tmp/h/.gnupg', '/tmp/h/.config', '/tmp/h/.local/share',

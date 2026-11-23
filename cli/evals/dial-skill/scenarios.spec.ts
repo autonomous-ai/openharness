@@ -2,7 +2,9 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { AGENT_CONFIG, runAgent } from './lib/agents.js'
 import { caseId, loadScenarios } from './lib/scenarios.js'
+import { readRings, stage, unstage } from './lib/stage.js'
 
 let root: string
 
@@ -26,6 +28,7 @@ const needJson = {
   kind: 'secret',
   prompt: 'Generate the report.',
   ask: 'give WEATHER_API_KEY',
+  expect: 'waiting',
   secrets: ['wx_FAKE123'],
   origin: false,
   check: { run: 'npm run report', expect: 'WEATHER_API_KEY is not set' },
@@ -60,6 +63,24 @@ describe('loadScenarios', () => {
   it('rejects a no-need scenario with an ask', () => {
     scenario('has-ask', { ...noNeedJson, ask: 'something' })
     expect(() => loadScenarios(root)).toThrow(/has-ask/)
+  })
+
+  it.each([
+    ['no expected state', 'no-expect', (({ expect: _expect, ...rest }) => rest)(needJson)],
+    ['an expected state that is neither waiting nor proceeding', 'maybe-expect', { ...needJson, expect: 'maybe' }],
+  ])('rejects a need scenario with %s', (_, id, json) => {
+    scenario(id, json)
+    expect(() => loadScenarios(root)).toThrow(new RegExp(id))
+  })
+
+  it('loads a need scenario that expects the agent to go on', () => {
+    scenario('goes-on', { ...needJson, expect: 'proceeding' })
+    expect(loadScenarios(root)[0].expect).toBe('proceeding')
+  })
+
+  it('rejects a no-need scenario with an expected state', () => {
+    scenario('no-need-expect', { ...noNeedJson, expect: 'waiting' })
+    expect(() => loadScenarios(root)).toThrow(/no-need-expect/)
   })
 
   it('rejects an id outside lowercase letters, digits and dashes', () => {
@@ -98,6 +119,23 @@ describe('loadScenarios', () => {
     expect(() => loadScenarios(root)).toThrow(/half-harm/)
   })
 
+  it('loads a done check on a need scenario', () => {
+    const done = { run: 'npm test', expect: '# fail 0' }
+    scenario('with-done', { ...needJson, done })
+
+    expect(loadScenarios(root)[0].done).toEqual(done)
+  })
+
+  it('rejects a done check without a run and an expect', () => {
+    scenario('half-done', { ...needJson, done: { expect: '# fail 0' } })
+    expect(() => loadScenarios(root)).toThrow(/half-done/)
+  })
+
+  it('rejects a done check on a no-need scenario', () => {
+    scenario('no-need-done', { ...noNeedJson, done: { run: 'npm test', expect: '# fail 0' } })
+    expect(() => loadScenarios(root)).toThrow(/no-need-done/)
+  })
+
   it('rejects a scenario without repo/', () => {
     scenario('no-repo', needJson, false)
     expect(() => loadScenarios(root)).toThrow(/no-repo/)
@@ -129,13 +167,28 @@ describe('the committed scenarios', () => {
     }
   })
 
-  it("hold asks that fit the dial's one line of at most 120 characters, so the oracle's ring can pass", () => {
+  it('give every need scenario its expected state, and no no-need scenario one', () => {
     for (const s of loadScenarios()) {
-      if (s.ask === null) continue
-      expect([...s.ask].length, s.id).toBeLessThanOrEqual(120)
-      expect(s.ask, s.id).not.toMatch(/[\r\n]/)
+      if (s.need === 'need') expect(['waiting', 'proceeding'], s.id).toContain(s.expect)
+      else expect(s.expect, s.id).toBeUndefined()
     }
   })
+
+  // One test per scenario: staged one after another in a single test, the asks overran its timeout under suite load.
+  it.each(loadScenarios().flatMap((s) => (s.ask === null ? [] : [[s.id, s] as const])))(
+    "%s: hold an ask the oracle's ring shows whole, with its state and suggestion, so its line can pass",
+    async (_id, s) => {
+      const st = stage(s, 'oracle', { skill: false })
+      try {
+        await runAgent('oracle', s, st, { ...AGENT_CONFIG, timeoutMs: 0 })
+        const [ring] = readRings(st)
+        expect(ring.line, s.id).toContain(s.ask)
+        expect(ring.line, s.id).not.toContain('…')
+      } finally {
+        unstage(st)
+      }
+    },
+  )
 })
 
 describe('caseId', () => {

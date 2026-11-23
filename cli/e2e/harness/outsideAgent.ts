@@ -5,7 +5,9 @@
  */
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from 'node:fs'
+import { createServer, type Socket } from 'node:net'
 import { dirname, join } from 'node:path'
+import { createInterface } from 'node:readline'
 import { promisify } from 'node:util'
 import { observedAgentId } from '../../src/cable/hosts/observed.js'
 import { until, type IsolatedDaemon } from './daemon.js'
@@ -66,8 +68,17 @@ const FAKE_APPS = {
   vscode: { bundle: 'Visual Studio Code', id: 'com.microsoft.VSCode', exe: 'code' },
   cursor: { bundle: 'Cursor', id: 'com.todesktop.230313mzl4w4u92', exe: 'cursor' },
   'terminal-app': { bundle: 'Terminal', id: 'com.apple.Terminal', exe: 'Terminal' },
+  // The Claude app, whose Code sessions run Claude Code under it.
+  'claude-app': { bundle: 'Claude', id: 'com.anthropic.claudefordesktop', exe: 'claude-desktop' },
 } as const
-export type FakeApp = keyof typeof FAKE_APPS
+/**
+ * iTerm2's server as it runs once iTerm2 relaunched with its sessions kept (Diego's report of 2026-11-22): its copy in
+ * iTerm2's folder of the daemon's home, with no bundle, forking every tab (cable/hosts/scannedApp.ts isItermServer).
+ * macOS only. A tab tabUnder opens under it is launchd's child, as that copy is; Outside's engine runs under it as the
+ * test's child.
+ */
+const ITERM_SERVER = ['Library', 'Application Support', 'iTerm2', 'iTermServer-3.6.6']
+export type FakeApp = keyof typeof FAKE_APPS | 'iterm-server'
 
 /**
  * What the fake app runs: the command it is given (the tab's pseudo-terminal) on its own stdio,
@@ -87,6 +98,14 @@ tab.on('exit', (code) => process.exit(code ?? 1))
  * is never one of the developer's.
  */
 function fakeApp(d: IsolatedDaemon, app: FakeApp): string {
+  if (app === 'iterm-server') {
+    if (process.platform !== 'darwin') throw new Error("iTerm2's server is faked on macOS only")
+    const path = join(d.env.HOME!, ...ITERM_SERVER)
+    if (existsSync(path)) return path
+    mkdirSync(dirname(path), { recursive: true })
+    symlinkSync(process.execPath, path)
+    return path
+  }
   const { bundle, id, exe } = FAKE_APPS[app]
   const contents = join(d.env.HOME!, 'Applications', `${bundle}.app`, 'Contents')
   const path = process.platform === 'darwin' ? join(contents, 'MacOS', exe) : join(d.root, 'apps', exe)
@@ -102,13 +121,100 @@ function fakeApp(d: IsolatedDaemon, app: FakeApp): string {
   return path
 }
 
+/** The shell a person's Terminal runs an app from (`code .`): it waits for the app, which it does not exec. */
+const LAUNCHED = '"$@"; exit $?'
+/** A command an app runs with no terminal: it says its pid, as the pseudo-terminal's helper says its child's, then
+ *  becomes the command, whose parent is the app. */
+const SAYS_PID = 'echo $$ >&2; exec "$@"'
+
+/** A command in a tab of its own (openTab), and the shell it runs in there when it has one. */
+export interface Tab { readonly process: ChildProcess; readonly pid: number; readonly shellPid?: number }
+/** The app a tab is in, whether its command runs in a shell, the app that app was started from, and whether it has a
+ *  terminal (openTab). */
+export interface TabOptions { app?: FakeApp; shell?: boolean; launchedFrom?: FakeApp; terminal?: boolean }
+
+/**
+ * A tab running [command] on a pseudo-terminal of its own (PTY), in [cwd] under [env] alone, under a fake [app] when one
+ * is given. With `shell`, a real `/bin/sh` runs in the pseudo-terminal and the command is its foreground job (SHELL), as
+ * the shell a terminal app starts for its tab. With `launchedFrom`, the app was started from a shell in a fake of that
+ * app, as `code .` in Terminal starts it, so `ps` reads Terminal → shell → app → shell → command. With `terminal: false`,
+ * the command is a process of the app's own with no terminal, as Cursor runs its agent: in a session of its own, so it
+ * holds no terminal of the test's either. Resolves once the tab said the command's pid (and with `shell`, the shell's).
+ */
+export async function openTab(d: IsolatedDaemon, cwd: string, env: NodeJS.ProcessEnv, command: readonly string[],
+  { app, shell = false, launchedFrom, terminal = true }: TabOptions = {}): Promise<Tab> {
+  if (shell && !terminal) throw new Error('a shell runs in a terminal')
+  const shellCommand = shell ? ['--say', '/bin/sh', '-i', '-c', SHELL, 'sh'] : []
+  const inTab = terminal ? ['python3', '-c', PTY, ...shellCommand, ...command] : ['/bin/sh', '-c', SAYS_PID, 'sh', ...command]
+  const underApp = app ? [fakeApp(d, app), '-e', UNDER_APP, ...inTab] : inTab
+  const [file, ...args] = launchedFrom ? [fakeApp(d, launchedFrom), '-e', UNDER_APP, '/bin/sh', '-c', LAUNCHED, 'sh', ...underApp] : underApp
+  const tab = spawn(file, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], detached: !terminal })
+  tab.stdout!.resume()
+  // The tab's child's pid and, with a shell, the engine's line come from two processes, in either order.
+  const { child, engine } = await new Promise<{ child: number; engine?: number }>((resolve, reject) => {
+    let said = ''
+    tab.stderr!.on('data', (chunk: Buffer) => {
+      said += chunk.toString('utf8')
+      const lines = said.split('\n').slice(0, -1)
+      const engine = lines.find((line) => line.startsWith('engine '))
+      const child = lines.find((line) => line !== engine)
+      if (child && (!shell || engine)) resolve({ child: Number(child), engine: engine ? Number(engine.slice('engine '.length)) : undefined })
+    })
+    tab.once('exit', (code) => reject(new Error(`the terminal tab exited (${code}): ${said}`)))
+  })
+  return shell ? { process: tab, pid: engine!, shellPid: child } : { process: tab, pid: child }
+}
+
+/** The process gone at once, with no hook: a crash, a closed terminal. */
+function killNow(pid: number): void {
+  try {
+    // A suspended engine is stopped: continued, as a shell continues a stopped job it kills.
+    process.kill(pid, 'SIGCONT')
+    process.kill(pid, 'SIGKILL')
+  } catch { /* already gone */ }
+}
+
+/** The tab's command killed, then its shell, and the tab: nothing of it outlives the test. [what] names it in a failure. */
+export async function closeTab(tab: Tab, what: string): Promise<void> {
+  killNow(tab.pid)
+  const shell = tab.shellPid
+  try {
+    if (shell !== undefined) {
+      // The shell stays after its engine and holds the terminal open, so the tab's helper reads on while it lives:
+      // killed, and waited for, gone once the helper, its parent, ends with the terminal, so nothing of the test
+      // outlives it.
+      try { process.kill(shell, 'SIGKILL') } catch { /* already gone */ }
+      await until(`${what}'s shell gone`, () => {
+        try { process.kill(shell, 0) } catch { return true }
+        return false
+      }, 10_000, 50)
+    }
+  } finally {
+    // The tab goes too when the wait failed: the failure is reported, and the tab never outlives the test.
+    if (tab.process.exitCode === null && tab.process.signalCode === null) {
+      const exited = new Promise<void>((done) => tab.process.once('exit', () => done()))
+      tab.process.kill('SIGKILL')
+      await exited
+    }
+  }
+}
+
+/** The tab gone at once, with no wait: its command, its shell and the tab killed, as the driver's last resort ends what
+ *  it cannot wait for. The pseudo-terminal's helper ends with its terminal. */
+export function killTab(tab: Tab): void {
+  killNow(tab.pid)
+  if (tab.shellPid !== undefined) killNow(tab.shellPid)
+  tab.process.kill('SIGKILL')
+}
+
 /**
  * A tab of a fake [app] running [argv] on a pseudo-terminal of its own (PTY), under [env] alone: its parents are the
- * pseudo-terminal's helper, the app, the test. [pid] is the command's own process. Closed, the command is killed and the
- * tab waited for, so nothing of it outlives the test.
+ * pseudo-terminal's helper, the app, the test; under iTerm2's server, the helper, the server, launchd. [pid] is the
+ * command's own process. Closed, the command is killed and the tab waited for, so nothing of it outlives the test.
  */
 export async function tabUnder(d: IsolatedDaemon, app: FakeApp, argv: readonly string[], env: NodeJS.ProcessEnv):
   Promise<{ pid: number; close(): Promise<void> }> {
+  if (app === 'iterm-server') return tabUnderItermServer(d, argv, env)
   const tab = spawn(fakeApp(d, app), ['-e', UNDER_APP, 'python3', '-c', PTY, ...argv], { env, stdio: ['pipe', 'pipe', 'pipe'] })
   tab.stdout!.resume()
   const exited = new Promise<void>((done) => tab.once('exit', () => done()))
@@ -133,13 +239,136 @@ export async function tabUnder(d: IsolatedDaemon, app: FakeApp, argv: readonly s
   }
 }
 
+/** tabUnder's tab under iTerm2's server, which a /bin/sh starts, says the pid of, and leaves at once: launchd adopts it
+ *  (ppid 1). Resolved once that /bin/sh is gone. */
+async function tabUnderItermServer(d: IsolatedDaemon, argv: readonly string[], env: NodeJS.ProcessEnv):
+  Promise<{ pid: number; close(): Promise<void> }> {
+  const tab = spawn('/bin/sh', ['-c', '"$@" & echo "server $!" >&2', 'sh', fakeApp(d, 'iterm-server'), '-e', UNDER_APP,
+    'python3', '-c', PTY, ...argv], { env, stdio: ['pipe', 'pipe', 'pipe'] })
+  tab.stdout!.resume()
+  const left = new Promise<void>((done) => tab.once('exit', () => done()))
+  // Held by the server and the helper, so closed once both are gone.
+  let closed = false
+  tab.stderr!.once('close', () => { closed = true })
+  const { pid, server } = await new Promise<{ pid: number; server: number }>((resolve, reject) => {
+    let said = ''
+    tab.stderr!.on('data', (chunk: Buffer) => {
+      said += chunk.toString('utf8')
+      const lines = said.split('\n').slice(0, -1)
+      const server = lines.find((line) => line.startsWith('server '))
+      const child = lines.find((line) => line !== server)
+      if (server && child) resolve({ pid: Number(child), server: Number(server.slice('server '.length)) })
+    })
+    tab.stderr!.once('close', () => reject(new Error(`the terminal tab exited: ${said}`)))
+  })
+  await left
+  return {
+    pid,
+    async close() {
+      try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ }
+      // launchd's child, not the test's: killed by its pid, and gone once no signal reaches it and the helper ended.
+      try { process.kill(server, 'SIGKILL') } catch { /* already gone */ }
+      await until("iTerm2's server and its tab gone", () => {
+        try { process.kill(server, 0) } catch { return closed }
+        return false
+      }, 10_000, 50)
+    },
+  }
+}
+
+/**
+ * An agent's own process that runs its hooks as its CLI runs them (codexOutside.ts, cursorOutside.ts): each line it is
+ * handed, `{command, cwd, env, input}`, run through a shell, and answered with `{code, stderr}` once it ends. Named by its
+ * first argument when there is one: Linux knows a process by that name (its comm), as it knows the ChatGPT app's. Given a
+ * socket's path as its second, for one in a tab (hookTab), its hooks come and go on that socket instead of its stdin and
+ * stdout.
+ */
+export const HOOK_RUNNER = `const { spawn } = require('node:child_process')
+if (process.argv[1]) process.title = process.argv[1]
+const channel = process.argv[2] ? require('node:net').connect(process.argv[2]) : undefined
+const answers = channel ?? process.stdout
+require('node:readline').createInterface({ input: channel ?? process.stdin }).on('line', (line) => {
+  const { command, cwd, env, input } = JSON.parse(line)
+  const hook = spawn('/bin/sh', ['-c', command], { cwd, env, stdio: ['pipe', 'ignore', 'pipe'] })
+  let stderr = ''
+  hook.stderr.on('data', (chunk) => { stderr += chunk })
+  hook.on('close', (code) => answers.write(JSON.stringify({ code, stderr }) + '\\n'))
+  hook.stdin.end(input)
+})`
+/** For a hook runner in a tab to reach its socket. */
+const CONNECT_MS = 30_000
+/** Each tab's socket a name of its own in the daemon's root. */
+let channels = 0
+
+/** One hook run by an agent's own process: its exit code and what it wrote on stderr. */
+export type HookRun = (command: string, env: NodeJS.ProcessEnv, input: string) => Promise<{ code: number | null; stderr: string }>
+
+/**
+ * Each hook handed to a hook runner (HOOK_RUNNER) on [requests], run in [cwd], and its answer read on [answers]. One at a
+ * time: the runner answers in the order its hooks end, so a hook asked while another runs waits for it, and two never
+ * take each other's answers. A hook whose runner ended first fails, naming [what].
+ */
+export function hookRuns(answers: NodeJS.ReadableStream, requests: NodeJS.WritableStream, cwd: string, what: string): HookRun {
+  const lines = createInterface({ input: answers })
+  let ended = false
+  lines.once('close', () => { ended = true })
+  // A line written as the runner ends fails with EPIPE: its end is the failure already.
+  requests.on('error', () => {})
+  const ask: HookRun = (command, env, input) => new Promise((resolve, reject) => {
+    const gone = (): void => {
+      lines.off('line', answered)
+      reject(new Error(`${what} ended before its hook did`))
+    }
+    const answered = (line: string): void => {
+      lines.off('close', gone)
+      resolve(JSON.parse(line) as { code: number | null; stderr: string })
+    }
+    if (ended) return gone()
+    lines.once('line', answered)
+    lines.once('close', gone)
+    requests.write(`${JSON.stringify({ command, cwd, env, input })}\n`)
+  })
+  let last: Promise<unknown> = Promise.resolve()
+  return (command, env, input) => {
+    const run = last.then(() => ask(command, env, input))
+    last = run.catch(() => {})
+    return run
+  }
+}
+
+/**
+ * A hook runner (HOOK_RUNNER) in a tab of its own (openTab) in [cwd], under [env] alone, as [how] says: its stdio are its
+ * terminal, or the app's, so its hooks come and go on a socket in the daemon's root. Resolves once it reached that socket;
+ * [what] names it in a failure. Closed as any tab is (closeTab).
+ */
+export async function hookTab(d: IsolatedDaemon, cwd: string, env: NodeJS.ProcessEnv, how: TabOptions, what: string):
+  Promise<{ tab: Tab; run: HookRun }> {
+  const path = join(d.root, `hooks-${++channels}.sock`)
+  const server = createServer()
+  let socket: Socket | undefined
+  server.once('connection', (connected) => { socket = connected })
+  await new Promise<void>((listening, failed) => server.once('error', failed).listen(path, listening))
+  let tab: Tab | undefined
+  try {
+    tab = await openTab(d, cwd, env, [process.execPath, '-e', HOOK_RUNNER, '', path], how)
+    const connected = await until(`${what} on its socket`, () => socket, CONNECT_MS, 50)
+    return { tab, run: hookRuns(connected, connected, cwd, what) }
+  } catch (error) {
+    if (tab) await closeTab(tab, what)
+    throw error
+  } finally {
+    server.close()
+  }
+}
+
 /** Claude Code in a terminal app outside Harness: no tmux pane, no Harness pane. */
 export class Outside {
   /** [home]: the config folder it was started in, when not the daemon's own. */
-  private constructor(private readonly tab: ChildProcess, readonly pid: number, readonly sessionId: string, readonly folder: string,
-    private readonly home?: string,
-    /** With `shell`, the shell's pid: the one a terminal app reports for its tab. */
-    readonly shellPid?: number) {}
+  private constructor(private readonly tab: Tab, readonly sessionId: string, readonly folder: string, private readonly home?: string) {}
+
+  get pid(): number { return this.tab.pid }
+  /** With `shell`, the shell's pid: the one a terminal app reports for its tab. */
+  get shellPid(): number | undefined { return this.tab.shellPid }
 
   /** The dial's id for it. */
   get id(): string { return observedAgentId('claude', this.sessionId) }
@@ -147,15 +376,16 @@ export class Outside {
   /**
    * With [app], the tab runs under a fake of it: the engine's parents are the pseudo-terminal, the app, the test. With
    * `shell`, a real `/bin/sh` runs in the pseudo-terminal and the engine is its foreground job (SHELL), as the shell a
-   * terminal app starts for its tab.
+   * terminal app starts for its tab. With `resume`, it goes on in that conversation (`--resume <id>`), as the Claude app
+   * starts one of its sessions again. With `launchedFrom`, the app was started from a shell in Terminal (openTab).
    */
   static async start(d: IsolatedDaemon, folder: string, hints: Record<string, string>, app?: FakeApp,
-    { shell = false } = {}): Promise<Outside> {
-    const { tab, pid, shellPid } = await Outside.open(d, folder, hints, app, shell)
+    { shell = false, resume, launchedFrom }: { shell?: boolean; resume?: string; launchedFrom?: 'terminal-app' } = {}): Promise<Outside> {
+    const tab = await Outside.open(d, folder, hints, { app, shell, launchedFrom }, resume === undefined ? [] : ['--resume', resume])
     // Its conversation, as its SessionStart hook named it once that hook had run.
-    const started = new RegExp(`claude pid=${pid} SessionStart\\(startup\\) session=(\\S+) ran`)
+    const started = new RegExp(`claude pid=${tab.pid} SessionStart\\(${resume === undefined ? 'startup' : 'resume'}\\) session=(\\S+) ran`)
     const sessionId = await until(`${folder} to run its SessionStart hook`, () => d.hookLog().match(started)?.[1], 30_000, 100)
-    return new Outside(tab, pid, sessionId, folder, undefined, shellPid)
+    return new Outside(tab, sessionId, folder)
   }
 
   /**
@@ -163,45 +393,27 @@ export class Outside {
    * hooks there, so no hook names its conversation: the process record it writes in that home does.
    */
   static async startIn(d: IsolatedDaemon, folder: string, home: string, hints: Record<string, string>): Promise<Outside> {
-    const { tab, pid } = await Outside.open(d, folder, { ...hints, CLAUDE_CONFIG_DIR: home })
-    const record = join(home, 'sessions', `${pid}.json`)
+    const tab = await Outside.open(d, folder, { ...hints, CLAUDE_CONFIG_DIR: home })
+    const record = join(home, 'sessions', `${tab.pid}.json`)
     const sessionId = await until(`${folder} to write its process record`, () => {
       try { return (JSON.parse(readFileSync(record, 'utf8')) as { sessionId?: string }).sessionId } catch { return undefined }
     }, 30_000, 100)
-    return new Outside(tab, pid, sessionId, folder, home)
+    return new Outside(tab, sessionId, folder, home)
   }
 
-  /** The tab, once it said the engine's pid (and with [shell], the shell's). */
-  private static async open(d: IsolatedDaemon, folder: string, hints: Record<string, string>, app?: FakeApp, shell = false):
-    Promise<{ tab: ChildProcess; pid: number; shellPid?: number }> {
+  /** The engine's tab, in its folder under the projects. [engineArgs] go to the engine. */
+  private static open(d: IsolatedDaemon, folder: string, hints: Record<string, string>, how: TabOptions = {},
+    engineArgs: readonly string[] = []): Promise<Tab> {
     const cwd = join(d.projectsDir, folder)
     mkdirSync(cwd, { recursive: true })
     // d.env carries none of the developer's host hints (testing/daemonEnvironment.ts): only [hints] name the app.
-    const env: NodeJS.ProcessEnv = { ...d.env, TERM: 'xterm-256color' }
-    const shellCommand = shell ? ['--say', '/bin/sh', '-i', '-c', SHELL, 'sh'] : []
-    const command = ['python3', '-c', PTY, ...shellCommand, d.env.CLAUDE_PATH!]
-    const [file, ...args] = app ? [fakeApp(d, app), '-e', UNDER_APP, ...command] : command
-    const tab = spawn(file, args, { cwd, env: { ...env, ...hints }, stdio: ['pipe', 'pipe', 'pipe'] })
-    tab.stdout!.resume()
-    // The tab's child's pid and, with a shell, the engine's line come from two processes, in either order.
-    const { child, engine } = await new Promise<{ child: number; engine?: number }>((resolve, reject) => {
-      let said = ''
-      tab.stderr!.on('data', (chunk: Buffer) => {
-        said += chunk.toString('utf8')
-        const lines = said.split('\n').slice(0, -1)
-        const engine = lines.find((line) => line.startsWith('engine '))
-        const child = lines.find((line) => line !== engine)
-        if (child && (!shell || engine)) resolve({ child: Number(child), engine: engine ? Number(engine.slice('engine '.length)) : undefined })
-      })
-      tab.once('exit', (code) => reject(new Error(`the terminal tab exited (${code}): ${said}`)))
-    })
-    return shell ? { tab, pid: engine!, shellPid: child } : { tab, pid: child }
+    return openTab(d, cwd, { ...d.env, TERM: 'xterm-256color', ...hints }, [d.env.CLAUDE_PATH!, ...engineArgs], how)
   }
 
   /** Typed at its prompt, then Enter, as a person does. */
   type(text: string): void {
-    this.tab.stdin!.write(text)
-    this.tab.stdin!.write('\r')
+    this.tab.process.stdin!.write(text)
+    this.tab.process.stdin!.write('\r')
   }
 
   /** Its process record (fakeEngine.mjs announceProcess), in the config folder it runs in, which nothing rewrites later. */
@@ -230,10 +442,11 @@ export class Outside {
     renameSync(`${record}.tmp`, record)
   }
 
-  /** Whether its hook for [event] has run since the engine started, as the engine noted it. */
-  ran(d: IsolatedDaemon, event: string, times = 1): boolean {
+  /** Whether its hook for [event] has run [times] since the engine started, or since the hook log was [from] long, as the
+   *  engine noted it. */
+  ran(d: IsolatedDaemon, event: string, times = 1, from = 0): boolean {
     const line = new RegExp(`claude pid=${this.pid} ${event}\\S* session=${this.sessionId} ran`, 'g')
-    return (d.hookLog().match(line)?.length ?? 0) >= times
+    return (d.hookLog().slice(from).match(line)?.length ?? 0) >= times
   }
 
   /**
@@ -242,7 +455,7 @@ export class Outside {
    */
   async background(): Promise<void> {
     if (this.shellPid === undefined) throw new Error(`${this.folder} was started without a shell`)
-    this.tab.stdin!.write('\x1a')
+    this.tab.process.stdin!.write('\x1a')
     await until(`${this.folder}'s engine in the background`, async () => {
       const { stdout } = await execFileAsync('ps', ['-o', 'pgid=,tpgid=', '-p', String(this.pid)])
       const [pgid, tpgid] = stdout.trim().split(/\s+/).map(Number)
@@ -252,34 +465,15 @@ export class Outside {
 
   /** The process gone at once, with no hook: a crash, a closed terminal. */
   kill(): void {
-    try {
-      // A suspended engine is stopped: continued, as a shell continues a stopped job it kills.
-      process.kill(this.pid, 'SIGCONT')
-      process.kill(this.pid, 'SIGKILL')
-    } catch { /* already gone */ }
+    killNow(this.pid)
   }
 
-  async close(): Promise<void> {
-    this.kill()
-    const shell = this.shellPid
-    try {
-      if (shell !== undefined) {
-        // The shell stays after its engine and holds the terminal open, so the tab's helper reads on while it lives:
-        // killed, and waited for, gone once the helper, its parent, ends with the terminal, so nothing of the test
-        // outlives it.
-        try { process.kill(shell, 'SIGKILL') } catch { /* already gone */ }
-        await until(`${this.folder}'s shell gone`, () => {
-          try { process.kill(shell, 0) } catch { return true }
-          return false
-        }, 10_000, 50)
-      }
-    } finally {
-      // The tab goes too when the wait failed: the failure is reported, and the tab never outlives the test.
-      if (this.tab.exitCode === null && this.tab.signalCode === null) {
-        const exited = new Promise<void>((done) => this.tab.once('exit', () => done()))
-        this.tab.kill('SIGKILL')
-        await exited
-      }
-    }
+  /** Its whole tab gone at once (killTab): the engine, its shell and the tab, with no hook. */
+  killTab(): void {
+    killTab(this.tab)
+  }
+
+  close(): Promise<void> {
+    return closeTab(this.tab, this.folder)
   }
 }

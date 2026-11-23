@@ -479,10 +479,10 @@ Close and Retry. Cancelled or failed, the next launch asks again.
 
 **Menu-bar app offer** (`widgets/device_app_band.dart`,
 `devices/device_app_row.dart`; gallery `device-app`) — shown on macOS 13 or
-later while a dial is plugged in to this computer and the Harness menu-bar app
-is not installed; Linux, Windows, the web and macOS 12 show nothing. The band
-is a window band, last of the device bands, drawn as the others: a 10% amber
-(`AppPalette.warn`) tint over the window, a 28% bottom rule, a 16-point
+later, Windows and Linux while a dial is plugged in to this computer and
+Harness Device is not installed; the web and macOS 12 show nothing. The
+band is a window band, last of the device bands, drawn as the others: a 10%
+amber (`AppPalette.warn`) tint over the window, a 28% bottom rule, a 16-point
 `AppIcons.arrowDownToLine` (`triangleAlert` on a failure), body text of at most
 two lines, then the quiet `Not now` first and `Install` last. Both are off
 while it reads `Installing…`. A failure replaces the sentence with its line and
@@ -494,7 +494,9 @@ region, and no row once the app is installed and running. `Not now` on the band
 leaves the row. Installed but not opened, `Retry` and `Open` only open it. The
 copy, exact: the band's `Your dial follows apps and terminal tabs with the
 Harness menu-bar app.`; the row's `Menu-bar app` and `Follows the app and
-terminal tab in front.`; the failure lines `Couldn’t download the app.`,
+terminal tab in front.` On Windows and Linux: the band's `Your dial follows
+apps with the Harness tray app.`; the row's `Tray app` and `Follows the app in
+front.` On every OS, the failure lines `Couldn’t download the app.`,
 `Couldn’t verify the download.`, `Couldn’t install the app.` and `Installed.
 Couldn’t open it.`
 
@@ -513,7 +515,45 @@ Couldn’t open it.`
 │ Follows the app and terminal tab in front.                 │   │ Follows the app and terminal tab in front.    │
 └────────────────────────────────────────────────────────────┘   │ Installed. Couldn’t open it.                  │
                                                                  └───────────────────────────────────────────────┘
+
+Windows and Linux:
+
+ ↓  Your dial follows apps with the Harness tray app.                             Not now  [ Install ]
+
+┌────────────────────────────────────────────────────────────┐
+│ Tray app                                       [ Install ] │
+│ Follows the app in front.                                  │
+└────────────────────────────────────────────────────────────┘
 ```
+
+**Intern 3** (`lib/harness_os/`) — a Harness OS box with no screen, set up and
+managed from the Machines picker as the phone does it. Every dialog is one
+task dialog frame (`InternDialogFrame`): a heading, the step's body, a status
+line beside the actions (danger color for a failure), Close always there and a
+click outside ignored, since a setup half done leaves the box waiting.
+- Add machine's row offers `Intern 3` beside `App` and `CLI` (not in a
+  browser, which cannot reach the box). Set up shows its five steps on every
+  step, as the phone does (`InternSteps`): Turn Intern 3 on, Join its Wi-Fi,
+  Its password, Its Wi-Fi, Online; each numbered in a 20-point circle, the
+  current one filled in the accent, a done one a check in the accent, what is
+  to come in the faint color; what each asks under it on the first step only.
+  Set up asks the account for the box's
+  sign-in first, while this computer still has the Internet, then says to pick
+  `Harness-…` in this computer's own Wi-Fi menu: the app never joins a Wi-Fi
+  itself, and cannot see it joined, so a checkbox, `This computer is on
+  “Harness-…”`, holds `Connect` until the person ticks it. Connect asks the
+  box's page at `10.42.0.1` for 30 seconds. Unlock waits the same way. The
+  checkbox is Material's, in the theme's colors, the whole row its target.
+  Then the box's password if
+  its disk is locked, the Wi-Fi it should use and its password, and a wait for
+  it to come online in the account, this computer back on its own Wi-Fi.
+- A machine running Harness OS shows `Intern 3` with its release, its Wi-Fi
+  and `New version` when one waits, and offers `Manage`: a list of Version,
+  Wi-Fi, Password, SSH, GitHub, Computer use and Sign out, as far as its status
+  says it can, each a page of the same dialog with Back.
+- One offline that waits at its disk's password after a restart says so and
+  offers `Unlock`, over its hotspot, with an optional change of Wi-Fi.
+`test/harness_os_*_test.dart` click through each.
 
 **Pickers** — the same frame and header, inset result rows and a quiet footer
 with relevant keyboard hints. Move Pane uses a tab icon, destination name,
@@ -733,11 +773,12 @@ Off (Settings ▸ Experimental ▸ Hachi), none of them is drawn and ⇧⌘H is 
 
 ## Harness Device
 
-Harness Device is the menu-bar app for the dial (`device-app/`), named
-**Harness** wherever a person sees it; only its file stays
-`Harness Device.app`. It sets up
+Harness Device is the menu-bar app for the dial (`device-app/`), on macOS,
+Windows and Linux, named **Harness** wherever a person sees it; only its file
+stays `Harness Device.app`, and its installed name `Harness Device` on Windows.
+It sets up
 Harness, keeps it running and shows the dial's state; it offers sign-in and,
-on a Mac with the ChatGPT app, Follow ChatGPT. Claude Code, Codex and Orca
+with the ChatGPT app, Follow ChatGPT. Claude Code, Codex and Orca
 need no setting: Harness sets them up once a dial is plugged in. The desktop
 app offers and installs it ([Surface families](#surface-families), Menu-bar app offer).
 
@@ -763,8 +804,9 @@ theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
 - Type: dialog heading 17 semibold, 1.3; body 13, 1.45; control 13 medium,
   1.25; metadata 12, 1.35; monospace for the install's last lines.
 - Install, working: the spinner, and under it one muted body line, the step:
-  `Getting ready…`, `Installing tmux…` or `Downloading Harness…`. The step is
-  fixed copy, never the script's text.
+  `Getting ready…`, `Installing tmux…`, `Downloading Harness…`, and on Linux
+  `Finish in the terminal…` while a terminal runs the step that may ask for a
+  password. The step is fixed copy, never the script's text.
 - Geometry: dialog content inset 24; group / control gap 16 / 8; buttons are
   capsules, 32 high at least, trailing: secondary first, primary last, as the
   desktop's dialogs. The spinner stands still under Reduce Motion.
@@ -795,6 +837,25 @@ theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
   line under the row reads `Saved to ~/Desktop/harness-logs-YYYYMMDD-HHMM.zip`,
   or `Export failed:` and `timed out`, `Harness did not answer` or `no file`.
   The line stays until the next export or the app quits.
+
+On Windows and Linux it is the same menu, rows and copy, with these
+differences, each an OS limit:
+
+- The icon sits in the tray. Windows shows the dark glyph on a light taskbar
+  and the light one (`tray-light.png`) on a dark taskbar, and follows a change
+  at once (where Windows does not let it follow, it keeps the dark taskbar's);
+  Linux always shows the light glyph, as no common way reads a panel's colour.
+  A GNOME desktop without the AppIndicator extension has no tray, so the icon
+  shows nowhere (Ubuntu ships the extension).
+- **About** opens Tauri's About dialog, in front, with `Harness`, the version
+  and the same credits line: macOS's standard panel is AppKit's.
+- **Export logs** selects the zip in Explorer on Windows; on Linux it opens the
+  zip's folder, as the file manager cannot select a file.
+- `Follow ChatGPT` is a plain on/off check item, as Sound, with no screen:
+  nothing gates reading a window's title, so the permission rule is macOS's
+  only. GNOME and KDE on Wayland show no item, as they give no other program
+  the window in front.
+- The window has no taskbar button, as it has no Dock icon on macOS.
 
 The menu, top to bottom:
 

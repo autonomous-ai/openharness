@@ -2,11 +2,17 @@
 
 pub trait LoginItem: Send + Sync {
     fn register(&self) -> Result<(), String>;
+
+    /// Called at every launch: Linux takes over the entry the CLI's installer wrote, and Windows writes again a Run
+    /// value an uninstall removed. Ok(true): it changed the item.
+    fn refresh(&self) -> Result<bool, String> {
+        Ok(false)
+    }
 }
 
 pub struct SystemLoginItem;
 
-/// What ServiceManagement says of the app's login item.
+/// What the OS says of the app's login item (ServiceManagement on macOS).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
     NotRegistered,
@@ -42,15 +48,8 @@ impl LoginItem for SystemLoginItem {
         register_from(status, || {
             // The error code only: macOS's description may name the app's path.
             unsafe { service.registerAndReturnError() }
-                .map_err(|error| format!("Login item not added (error {}).", error.code()))
+                .map_err(|error| format!("Login item not set (error {}).", error.code()))
         })
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-impl LoginItem for SystemLoginItem {
-    fn register(&self) -> Result<(), String> {
-        Err("Login items are not supported here.".into())
     }
 }
 
@@ -76,11 +75,5 @@ mod tests {
         assert_eq!(from(Status::RequiresApproval), (Ok(()), 0));
         // What macOS says of a main app's service it has never registered.
         assert_eq!(from(Status::NotFound), (Ok(()), 1));
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    #[test]
-    fn there_is_none_off_a_mac() {
-        assert_eq!(SystemLoginItem.register(), Err("Login items are not supported here.".to_string()));
     }
 }

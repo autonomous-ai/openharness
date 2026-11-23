@@ -145,7 +145,8 @@ export function createWindowsDialWatch(deps: WatchDeps): WindowsDialWatch {
       timer.unref()
       finishFirstRead = () => { clearTimeout(timer); resolve() }
     })
-    let pending = '', stderr = ''
+    // The bridge's stderr can name the person's devices and folders: the watch logs only how much it wrote.
+    let pending = '', stderrBytes = 0
     proc.stdout.setEncoding('utf8')
     proc.stdout.on('data', (chunk: string) => {
       if (child !== proc) return
@@ -157,18 +158,19 @@ export function createWindowsDialWatch(deps: WatchDeps): WindowsDialWatch {
       }
     })
     proc.stderr.setEncoding('utf8')
-    proc.stderr.on('data', (chunk: string) => { stderr = (stderr + chunk).slice(-500) })
+    proc.stderr.on('data', (chunk: string) => { stderrBytes += Buffer.byteLength(chunk) })
     proc.stdin.on('error', () => { /* the child is gone; 'close' says so */ })
     proc.on('error', (error) => {
       if (child !== proc) return
       say(`cable: harness-serial watch could not start: ${errorKind(error)}`)
       if (child === proc && proc.pid === undefined) { child = null; wake() }
     })
-    proc.on('close', (code) => {
+    proc.on('close', (code, signal) => {
       if (child !== proc) return
       child = null
       state = null
-      say(`cable: harness-serial watch ended (${lastLine(stderr) ?? `exit ${code}`}) — it is started again on a later scan`)
+      const ended = code === null ? `signal ${signal}` : `exit ${code}`
+      say(`cable: harness-serial watch ended (${ended}${stderrBytes ? ` · stderr ${stderrBytes} B` : ''}) — it is started again on a later scan`)
       wake()
     })
     // The daemon's exit is what ends the watch, never the other way round: nothing here may keep it alive.

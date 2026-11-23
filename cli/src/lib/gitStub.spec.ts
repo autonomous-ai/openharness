@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, readFile, realpath, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { repoState } from './agentHandoff.js'
 import { agentProject } from './agentProject.js'
 import { nameBranchAfterSession } from './branchNaming.js'
@@ -10,6 +10,14 @@ import { readGitPullRequest } from './gitPullRequest.js'
 import { projectPreview } from './projectPreview.js'
 import { inspectWorkspace, inspectWorktree } from './worktreeDeletion.js'
 import { writeExecutable } from '../testing/executableFixture.js'
+
+// gitPath keeps the git it finds for the process, and asks the login shell when PATH has none; these tests change PATH
+// between runs, so each run looks on PATH alone, again. The git is this computer's, even where a test stubs the platform.
+vi.mock('./gitOnPath.js', async (original) => {
+  const real = await original<typeof import('./gitOnPath.js')>()
+  const platform = process.platform
+  return { ...real, gitPath: () => real.createProgramPath('git', () => real.findGit({ platform, loginShell: async () => null }))() }
+})
 
 // On a Mac without the Command Line Tools, `/usr/bin/git` is Apple's stub: running it opens the
 // "install the command line developer tools" dialog. A fresh Mac's first harness runs in a folder

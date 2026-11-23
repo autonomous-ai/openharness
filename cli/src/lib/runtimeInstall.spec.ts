@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, win32 } from 'node:path'
 import { tmpdir } from 'node:os'
+import { systemRoot } from './windows/powershell.js'
 
 /** A write of exactly `text` reaches the disk half way, then the disk is full. `events`: each flush (of a file or a
  *  folder) and each rename's target, as they happened. */
@@ -361,6 +362,30 @@ describe('ensureNodeMeetsMinimum', () => {
     const started = performance.now()
     expect(await ensureNodeMeetsMinimum(() => {}, { timeoutMs: 50 })).toEqual({ node: old, reason: 'manifest-unreachable' })
     expect(performance.now() - started).toBeLessThan(1_000)
+  })
+
+  it('a runtime ready or kept names no folder', async () => {
+    // Export logs sends the log off the machine, and the runtime folder is under the person's home.
+    rmSync(root, { recursive: true, force: true })
+    root = mkdtempSync(join(tmpdir(), 'sentinel-'))
+    runtimeDir = join(root, '.harness', 'runtime')
+    binDir = join(root, '.local', 'bin')
+    cliDir = join(root, '.harness', 'cli')
+    for (const dir of [runtimeDir, binDir, cliDir]) mkdirSync(dir, { recursive: true })
+    installedNode('v22.23.2', key)
+    const lines: string[] = []
+    const log = (line: string): void => { lines.push(line) }
+    const broken = buildArchive('v24.22.2', key, 'node', '#!/bin/sh\nexit 1\n')
+    stubFetch(manifestFor('node', key, 'v24.22.2', broken.bytes, broken.root), broken.bytes)
+    expect(await (await load()).ensureNodeMeetsMinimum(log)).toMatchObject({ reason: 'does-not-run' })
+    const good = buildArchive('v24.22.3', key)
+    stubFetch(manifestFor('node', key, 'v24.22.3', good.bytes, good.root), good.bytes)
+    expect(await (await load()).ensureNodeMeetsMinimum(log)).toMatchObject({ reason: null })
+
+    const said = lines.join('\n')
+    expect(said).not.toContain('sentinel')
+    expect(said).toContain('  ✗ Node stays on the one installed: does-not-run')
+    expect(said).toContain('  ✓ Node runtime ready (v24.22.3)')
   })
 
   it('touches nothing on a computer with no managed Node, and says so when the Node it runs on is too old', async () => {
@@ -850,6 +875,7 @@ describe('the managed runtimes on Windows', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
     rmSync(root, { recursive: true, force: true })
     for (const key of ['ADAPTER_RUNTIME_DIR', 'HARNESS_BIN_DIR', 'ADAPTER_CLI_DIR', 'ADAPTER_RUNTIME_METADATA_URL', 'ADAPTER_GRID_RUNTIME_METADATA_URL', 'HARNESS_GRID_BIN']) {
       delete process.env[key]
@@ -867,13 +893,16 @@ describe('the managed runtimes on Windows', () => {
   })
 
   it('unpacks with the tar.exe Windows ships, never a tar from PATH, and nodejs.org\'s tarball with /usr/bin/tar elsewhere', async () => {
+    // Windows' own folder, as the file system names it: a SystemRoot variable is whoever runs the command's.
+    vi.stubEnv('SystemRoot', 'D:\\Elsewhere')
+    vi.stubEnv('windir', 'D:\\Elsewhere')
     const { unpackCommand } = await load()
-    expect(unpackCommand('C:\\r\\.node-staging-1\\node.zip', 'C:\\r\\.node-staging-1', 'win32', 'D:\\Windows')).toEqual({
-      file: 'D:\\Windows\\System32\\tar.exe',
+    const unpack = unpackCommand('C:\\r\\.node-staging-1\\node.zip', 'C:\\r\\.node-staging-1', 'win32')
+    expect(unpack.file).not.toContain('Elsewhere')
+    expect(unpack).toEqual({
+      file: win32.join(systemRoot(), 'System32', 'tar.exe'),
       args: ['-xf', 'C:\\r\\.node-staging-1\\node.zip', '-C', 'C:\\r\\.node-staging-1'],
     })
-    // A scrubbed environment with no SystemRoot falls back to Windows' own folder, never to a relative tar.exe.
-    expect(unpackCommand('a.zip', 'b', 'win32', '').file).toBe('C:\\Windows\\System32\\tar.exe')
     expect(unpackCommand('/r/node.tar.gz', '/r', 'darwin')).toEqual({ file: '/usr/bin/tar', args: ['-xzf', '/r/node.tar.gz', '-C', '/r'] })
   })
 

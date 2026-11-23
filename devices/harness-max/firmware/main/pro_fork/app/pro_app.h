@@ -3,7 +3,7 @@
 // line; main/pro_fork is first on every Max build's include path, so they read this header and not the Pro's, which
 // brings in Pod. Only those declarations, as the Pro's pro_app.h has them; main/app/max_app.c implements them.
 // pro_fork upstream: devices/harness-pro/firmware/main/app/pro_app.h
-// pro_fork blob: ccb6c90166f97a12f324fc78bc8c20a0e44b35e0 (main 91f60b6a7b)
+// pro_fork blob: 3eb9c8bcc3d809825d1ba9e0af11a846901222b2 (main fc16e78f94)
 // scripts/check_pro_forks.py fails once the upstream file is no longer that blob: re-port its change here, then
 // record its new blob on these lines and in main/pro_fork/upstream.txt.
 // Every call takes the app's lock itself; any task may call it.

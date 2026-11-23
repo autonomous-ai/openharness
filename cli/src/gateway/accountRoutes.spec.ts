@@ -30,6 +30,15 @@ describe('the account\'s routes, answered by the gateway', () => {
     expect(await routes('GET', '/api/auth/handoff', undefined, true)).toEqual({ status: 404, body: { error: 'not found' } })
   })
 
+  it('mints Set up Intern 3\'s ticket with an empty body, only for the door over the daemon\'s own socket', async () => {
+    const backend = echo()
+    const routes = accountRoutes(backend)
+    expect(await routes('POST', '/api/auth/box/ticket?x=1', 'ignored', true)).toEqual({ status: 200, body: { method: 'POST', path: '/api/auth/box/ticket', body: {} } })
+    for (const socket of [false, undefined]) expect(await routes('POST', '/api/auth/box/ticket', '{}', socket)).toEqual({ status: 403, body: { error: 'FORBIDDEN' } })
+    expect(backend).toHaveBeenCalledTimes(1)
+    expect(await routes('GET', '/api/auth/box/ticket', undefined, true)).toEqual({ status: 404, body: { error: 'not found' } })
+  })
+
   it('forwards the desk\'s ops, a tab\'s switch and the account\'s name with their bodies, and says a body that is no JSON in their words', async () => {
     const routes = accountRoutes(echo())
     expect(await routes('POST', '/api/desk/ops', '{"ops":[]}')).toEqual({ status: 200, body: { method: 'POST', path: '/api/desk/ops', body: { ops: [] } } })

@@ -34,6 +34,8 @@ describe('a data folder too deep for the local socket', () => {
     // A short home would hold the socket instead (a CI runner's /tmp): one as deep as the data folder, inside the test's root.
     d.env.HOME = join(d.root, 'home', 'a-home-folder-whose-path-is-longer-than-a-unix-socket-path-may-be')
     mkdirSync(d.env.HOME, { recursive: true })
+    // And Codex's home under it: a hook line says when its file is outside the daemon's home, and the test fails on it.
+    d.env.CODEX_HOME = join(d.env.HOME, 'codex')
     expect(socketPathIn(dataDir, localSocketName(d.configuredPort), d.env.HOME)).toBeNull()
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
     // No socket to wait for: the port, and start-up done.

@@ -12,7 +12,7 @@
  * The bundles are built from this checkout at made-up versions and served from a local manifest, as in
  * e2e/update.e2e.ts, so nothing here reaches beyond the machine.
  */
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
@@ -260,6 +260,11 @@ describe('the master re-executing itself on an update', () => {
  * re-execute in both directions, with the same pid and the version of the bundle now on disk.
  */
 const RELEASED = process.env.MIGRATION_FROM
+/** How a release from before probes refuses one: exit 1, its stderr ending with this line. Node can say something before
+ *  it (a deprecation warning, which names its pid), so how many bytes the probe counts on stderr is not fixed. */
+const OLD_REFUSAL_LINE = `Unknown command: ${PROBE_COMMAND}\n`
+/** That refusal as the probe tells it (harnessd/reexec.ts `runProbe`): its exit and stderr's size. */
+const OLD_REFUSAL = 'exit 1 · stderr \\d+ B'
 describe.skipIf(!RELEASED)('a released master and this one, each over the other\'s core', () => {
   const NEXT = '0.99.0'
   let scratch = ''
@@ -317,9 +322,14 @@ describe.skipIf(!RELEASED)('a released master and this one, each over the other\
     })
     // Found by QA on a quiet machine: 0.3.60 re-executes, but this fixture assumed every published
     // release predated it. Probe the actual bundle; a timeout or broken probe must not select the old
-    // expectations and hide a regression. Old releases explicitly reject the private command.
+    // expectations and hide a regression. Old releases explicitly reject the private command (OLD_REFUSAL).
     const probe = await runProbe(process.execPath, [join(cliDir(), 'cli.js'), PROBE_COMMAND], daemon.env).result
-    if (!probe.ok) expect(probe.detail).toBe(`Unknown command: ${PROBE_COMMAND}`)
+    if (!probe.ok) {
+      expect(probe.ended).toMatch(new RegExp(`^${OLD_REFUSAL}$`))
+      // Asked again for its words, which the probe does not keep: a release from before refuses the command by name.
+      const refused = spawnSync(process.execPath, [join(cliDir(), 'cli.js'), PROBE_COMMAND], { env: daemon.env, encoding: 'utf8', timeout: 30_000 })
+      expect({ status: refused.status, refusal: refused.stderr.endsWith(OLD_REFUSAL_LINE) }, refused.stderr).toEqual({ status: 1, refusal: true })
+    }
     releasedCanReexec = probe.ok
     await daemon.start()
   })
@@ -378,9 +388,8 @@ describe.skipIf(!RELEASED)('a released master and this one, each over the other\
       masterPid: master,
       reexecs: releasedCanReexec ? 1 : 0,
     })
-    expect(daemon!.log().slice(from)).toContain(releasedCanReexec
-      ? `now v${releasedVersion}`
-      : 'did not answer its probe (Unknown command: __harnessd-probe) — keeping this master')
+    if (releasedCanReexec) expect(daemon!.log().slice(from)).toContain(`now v${releasedVersion}`)
+    else expect(daemon!.log().slice(from)).toMatch(new RegExp(`did not answer its probe \\(${OLD_REFUSAL}\\) — keeping this master`))
     // This master over a core too old to ask for a process on demand starts each as that core binds
     // (harnessd/services.ts `unasked`): models, which a core of protocol 4 asks for only once grid is in use,
     // the gateway, which it asks for only signed in or with something paired, and the viewers, which a core of

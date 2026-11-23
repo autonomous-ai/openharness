@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Copy this tree's pty/, term/ and the TUI's vendored terminal (minus build output), and with --cli also cli/
-# (minus node_modules, dist and coverage), to a Windows machine over SSH, for building and testing there.
+# (minus node_modules, dist and coverage) and the store/ and plugins/ its bundle reads, to a Windows machine over SSH,
+# for building and testing there.
 #
 #   VM_SSH=admin@192.168.65.3 VM_DIR=C:/work/oh cli/scripts/windows-pty-e2e/vm-sync.sh [--cli]
 #   ssh admin@192.168.65.3 "cd /d C:\work\oh\pty && cargo test"
@@ -13,7 +14,7 @@ vm_ssh=${VM_SSH:-admin@192.168.65.3}
 vm_dir=${VM_DIR:-C:/work/oh}
 root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 dirs=(pty term tui/vendor tui/Cargo.toml tui/Cargo.lock tui/src tui/tests tui/scripts tui/THIRD_PARTY_NOTICES.md)
-[ "${1:-}" = "--cli" ] && dirs+=(cli)
+[ "${1:-}" = "--cli" ] && dirs+=(cli store plugins)
 cd "$root"
 win_dir=${vm_dir//\//\\}
 ssh -o BatchMode=yes "$vm_ssh" "if not exist $win_dir mkdir $win_dir" >/dev/null 2>&1 || true

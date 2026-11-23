@@ -3,8 +3,8 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   OPENCLAW_COLUMNS, OPENCLAW_FIRST_TASK, OPENCLAW_KEY, OPENCLAW_LAUNCH, OPENCLAW_LOCAL, OPENCLAW_STATES, OPENCLAW_STORE_KEPT,
-  isOpenclawLocalStopped, openclawAgentDb, openclawBoxHolds, openclawDefaultStateDir, openclawFolderInUse, openclawLocalStopped,
-  readOpenclawScreen,
+  isOpenclawLocalStopped, openclawAgentDb, openclawBoxExactly, openclawBoxHolds, openclawClearKeys, openclawDefaultStateDir,
+  openclawFolderInUse, openclawLocalStopped, readOpenclawScreen,
 } from './contract.js'
 
 const FIXTURES = join(import.meta.dirname, '__fixtures__')
@@ -42,6 +42,10 @@ const SHOWN: Record<string, { key: string | null; url: string | null }> = {
   'screen-no-gateway-reconnected.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
   'screen-no-gateway.txt': { key: 'agent:main:no-gateway', url: 'ws://127.0.0.1:18789' },
   'screen-no-token.txt': { key: null, url: null },
+  'screen-pairing-bare.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
+  'screen-pairing-retries-narrow.txt': { key: 'agent:main:harness-3047d4ea-31b1-4617-b04e-1c38b38bbc5b', url: null },
+  'screen-pairing-retries.txt': { key: 'agent:main:main', url: 'ws://127.0.0.1:47311' },
+  'screen-pairing.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
   'screen-plain-darwin.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
   'screen-plain-start-darwin.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
   'screen-plain-start.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
@@ -57,6 +61,7 @@ const SHOWN: Record<string, { key: string | null; url: string | null }> = {
   'screen-starting-up-disconnected.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
   'screen-starting-up.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
   'screen-startup-failed.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
+  'screen-token-mismatch.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
   'screen-tool.txt': { key: 'agent:main:tool', url: 'ws://127.0.0.1:18789' },
   'screen-two-panes-main-a.txt': { key: 'agent:main:main', url: 'ws://127.0.0.1:18789' },
   'screen-two-panes-main-b.txt': { key: 'agent:main:main', url: null },
@@ -353,6 +358,102 @@ describe('the OpenClaw contract', () => {
     expect(openclawBoxHolds('Read the build log in ci/last-run.txt and find the first', message, { above: 0, below: 2 })).toBe(true)
     expect(openclawBoxHolds('Explain in two sentences why it failed', message, { above: 1, below: 2 })).toBe(true)
     expect(openclawBoxHolds('Explain in two sentences why it failed', message, { above: 0, below: 2 })).toBe(false)
+  })
+
+  // A refused connect: `gateway disconnected: <reason> | <activity>` for 5 s, then `disconnected | <activity>`
+  // (OpenClaw's tui `resolveGatewayDisconnectState`, `setConnectionStatus`).
+  it.each([
+    ['pairing', { state: 'no-gateway', gatewayLost: true, signIn: 'approval' }],
+    ['pairing-bare', { state: null, gatewayLost: true, signIn: 'approval' }],
+    ['token-mismatch', { state: 'no-gateway', gatewayLost: true, signIn: 'refused' }],
+    ['no-gateway', { state: 'no-gateway', gatewayLost: true, signIn: null }],
+    ['disconnected', { state: null, gatewayLost: true, signIn: null }],
+    ['plain', { state: 'ready', gatewayLost: false, signIn: null }],
+  ])('screen-%s says which sign-in its Gateway refused', (name, reading) => {
+    expect(readOpenclawScreen(fixture(`screen-${name}.txt`))).toMatchObject(reading)
+  })
+
+  // Each retry of a pairing refusal, OpenClaw's Gateway client prints `gateway connect failed: <error>` straight to the
+  // terminal, from where the TUI left the cursor, in its box: over the box and the start of its bottom rule, then below
+  // the frame, which scrolls up (recorded at 120 and 80 columns).
+  it.each([
+    ['screen-pairing-retries.txt', 'agent main | session main | unknown | deliver:off | tokens ?', 'c8e997d6-d567-4cde-887e-b3ce4970be38'],
+    ['screen-pairing-retries-narrow.txt', 'agent main | session harness-3047d4ea-31b1-4617-b04e-1c38b38bbc5b | unknown | deliver:off | tokens ?',
+      '3980b428-c7f6-4dba-bb05-11cf07d2c56a'],
+  ])('%s is read through the Gateway client\'s own lines under its frame', (name, footer, requestId) => {
+    expect(readOpenclawScreen(fixture(name))).toMatchObject({
+      state: 'no-gateway', gatewayLost: true, signIn: 'approval', footer, box: '', boxHidden: { above: 0, below: 0 },
+      status: `gateway disconnected: device pairing required (requestId: ${requestId}) | device approval needed: preview latest request`,
+    })
+  })
+
+  it('only the Gateway client\'s own lines, run on from the frame to the end, are passed over under it', () => {
+    const retries = fixture('screen-pairing-retries-narrow.txt')
+    const log = 'gateway connect failed: GatewayClientRequestError: device pairing required (requ\nestId: 3980b428-c7f6-4dba-bb05-11cf07d2c56a)'
+    expect(retries.trimEnd().endsWith(log)).toBe(true)
+    // A shell's prompt after them: the TUI exited.
+    expect(readOpenclawScreen(`${retries.trimEnd()}\n$ `).footer).toBeNull()
+    // A line after one of theirs that did not fill the width, or their words anywhere but a line's start.
+    expect(readOpenclawScreen(`${retries.trimEnd()}\nsomething else`).footer).toBeNull()
+    expect(readOpenclawScreen(`${retries.trimEnd()}\n ${log}`).footer).toBeNull()
+    // The same words the person typed in the box, the frame whole under them, are the box's.
+    const typed = fixture('screen-pairing.txt').replace(/(─{8,}\n)\n(─{8,})/, '$1gateway connect failed: x\n$2')
+    expect(readOpenclawScreen(typed)).toMatchObject({ state: 'no-gateway', box: 'gateway connect failed: x' })
+  })
+
+  it('a rate limit and an identity-aware proxy are refused sign-ins, on the 5 s line and the bare one', () => {
+    const token = fixture('screen-token-mismatch.txt')
+    const bare = fixture('screen-disconnected.txt')
+    for (const activity of ['gateway authentication temporarily rate-limited', 'identity-aware proxy rejected connection']) {
+      expect(readOpenclawScreen(token.replace('gateway authentication needs attention', activity)).signIn, activity).toBe('refused')
+      expect(readOpenclawScreen(bare.replace('disconnected | idle', `disconnected | ${activity}`)).signIn, activity).toBe('refused')
+    }
+  })
+
+  it('a sign-in is read off the status line only, never the chat', () => {
+    const chat = '\n device approval needed: preview latest request\n'
+    expect(readOpenclawScreen(fixture('screen-plain.txt').replace(' connected | idle', `${chat} connected | idle`)))
+      .toMatchObject({ state: 'ready', signIn: null })
+    expect(readOpenclawScreen(fixture('screen-no-gateway.txt').replace(' gateway disconnected:', `${chat} gateway disconnected:`)))
+      .toMatchObject({ state: 'no-gateway', signIn: null })
+    // The activity a refused connect left, once the TUI connects: the Gateway answered.
+    expect(readOpenclawScreen(fixture('screen-plain.txt').replace(' connected | idle', ' connected | device approval needed: preview latest request')))
+      .toMatchObject({ state: 'ready', signIn: null })
+  })
+
+  it('the box holds exactly a message only when it shows all of it and nothing else, read whole', () => {
+    const message = 'Say hello from scenario proxy-histdrop 1795078028664'
+    const { box, boxHidden } = readOpenclawScreen(fixture('screen-history-refused.txt'))
+    expect(openclawBoxExactly(box, boxHidden, message)).toBe(true)
+    expect(openclawBoxExactly(`${box}x`, boxHidden, message)).toBe(false)
+    expect(openclawBoxExactly(box, boxHidden, `${message}x`)).toBe(false)
+    // Scrolled, it shows a part: what is out of view cannot be read.
+    expect(openclawBoxExactly(box, { above: 1, below: 0 }, message)).toBe(false)
+    expect(openclawBoxExactly(box, { above: 0, below: 1 }, message)).toBe(false)
+    // A paste marker counts lines or characters, not the text.
+    const lines = Array.from({ length: 12 }, (_, i) => `line ${i}`).join('\n')
+    expect(openclawBoxExactly('[paste #1 +12 lines]', boxHidden, lines)).toBe(false)
+    expect(openclawBoxExactly('', boxHidden, message)).toBe(false)
+    expect(openclawBoxExactly(null, boxHidden, message)).toBe(false)
+    expect(openclawBoxExactly('', boxHidden, '')).toBe(false)
+    // The TUI wraps a message over lines the box joins by a space.
+    expect(openclawBoxExactly(box, boxHidden, 'Say  hello\nfrom scenario\tproxy-histdrop\r\n1795078028664 ')).toBe(true)
+  })
+
+  it('clears a message with 2n-1 Ctrl+U for its n lines, and none over 64', () => {
+    // OpenClaw's editor deletes to the line's start, and at column 0 joins the line above (`deleteToStartOfLine`).
+    expect(openclawClearKeys('a')).toBe(1)
+    expect(openclawClearKeys('a\nb')).toBe(3)
+    expect(openclawClearKeys('a\r\nb\rc')).toBe(5)
+    expect(openclawClearKeys(Array(64).fill('x').join('\n'))).toBe(127)
+    expect(openclawClearKeys(Array(65).fill('x').join('\n'))).toBeNull()
+  })
+
+  it('says what to do about a sign-in and a box holding text Harness did not type', () => {
+    expect(OPENCLAW_STATES.approval).toBe('OpenClaw is waiting for this device to be approved. Run openclaw devices approve --latest.')
+    expect(OPENCLAW_STATES.signInRefused).toBe("OpenClaw's Gateway refused its sign-in. Its terminal says how to fix it.")
+    expect(OPENCLAW_STATES.boxHeld).toBe("OpenClaw's input box holds text Harness did not type. Clear it so Harness can send the message.")
+    expect(OPENCLAW_STATES.noGateway).toBe('OpenClaw Gateway is not running. Start it with openclaw gateway.')
   })
 
   it('says a first task OpenClaw did not take', () => {

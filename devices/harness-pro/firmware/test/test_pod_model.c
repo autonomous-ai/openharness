@@ -1076,6 +1076,156 @@ static void pod_model_test_step_total_and_fresh(void) {
     CHECK(pod_model_find(&M, "a3")->step_total == 1);
 }
 
+static bool same_app(const pod_app_t *a, const pod_app_t *b) {
+    return !strcmp(a->id, b->id) && !strcmp(a->name, b->name) && a->count == b->count && a->waiting == b->waiting &&
+           a->working == b->working;
+}
+
+// The daemon's app list replaces the model's whole; the same list pushed again costs no redraw.
+static void pod_model_test_apps(void) {
+    fresh();
+    const pod_app_t rows[3] = {{"codex", "ChatGPT", 3, 1, 2}, {"vscode", "VS Code", 1, 0, 0}, {"warp", "Warp", 2, 2, 0}};
+    uint32_t rev = M.revision;
+    pod_model_apps(&M, rows, 3, "codex");
+    CHECK(M.app_count == 3);
+    for (int i = 0; i < 3; i++) CHECK(same_app(&M.apps[i], &rows[i]));
+    CHECK(!strcmp(M.app_shown, "codex"));
+    CHECK(M.revision != rev);
+    rev = M.revision;
+    pod_model_apps(&M, rows, 3, "codex");
+    CHECK(M.revision == rev);
+    pod_model_apps(&M, rows, 3, "vscode");
+    CHECK(M.revision != rev && !strcmp(M.app_shown, "vscode"));
+    // A shorter list leaves no stale row behind it.
+    pod_model_apps(&M, rows, 2, "vscode");
+    CHECK(M.app_count == 2 && M.apps[2].id[0] == 0 && M.apps[2].count == 0);
+    pod_app_t many[17];
+    memset(many, 0, sizeof many);
+    for (int i = 0; i < 17; i++) { snprintf(many[i].id, sizeof many[i].id, "a%d", i); many[i].count = 1; }
+    pod_model_apps(&M, many, 17, "");
+    CHECK(M.app_count == 16 && !strcmp(M.apps[15].id, "a15"));
+    rev = M.revision;
+    pod_model_apps(&M, rows, 0, "");
+    CHECK(M.app_count == 0 && M.revision != rev);
+    pod_model_apps(&M, rows, 1, NULL);
+    CHECK(M.app_count == 1 && M.app_shown[0] == 0);
+    pod_model_apps(&M, NULL, 3, "");
+    CHECK(M.app_count == 0);
+    pod_model_apps(&M, rows, -1, "");
+    CHECK(M.app_count == 0);
+}
+
+static void pod_model_test_apps_switch(void) {
+    fresh();
+    CHECK(!M.apps_switch);
+    uint32_t rev = M.revision;
+    pod_model_apps_switch(&M, true);
+    CHECK(M.apps_switch && M.revision != rev);
+    rev = M.revision;
+    pod_model_apps_switch(&M, true);
+    CHECK(M.apps_switch && M.revision == rev);
+}
+
+// One swarms item with no agent (the model hides it) and n of them listed.
+static void swarms_listed(int n) {
+    cable_swarm_t sw[1];
+    memset(sw, 0, sizeof sw);
+    snprintf(sw[0].id, sizeof sw[0].id, "s0");
+    sw[0].agents = 0; sw[0].panes = 1;
+    pod_model_swarms(&M, sw, NULL, NULL, n, "s0", NULL, 0);
+}
+
+// has_window: the last agents.end's tab, or the last swarms frame listing a tab (tab:"" while the view is an app's ring).
+static void pod_model_test_window(void) {
+    fresh();
+    CHECK(!M.has_window && !M.machine_view);
+    pod_model_view(&M, false, true);
+    CHECK(M.has_window && !M.machine_view);
+    pod_model_view(&M, true, false);
+    CHECK(M.machine_view && !M.has_window);
+    swarms_listed(1);
+    CHECK(M.tab_count == 0 && M.swarm_n == 1);
+    pod_model_view(&M, false, false);
+    CHECK(M.has_window && !M.machine_view);
+    swarms_listed(0);
+    CHECK(!M.has_window && M.swarm_n == 0);
+    pod_model_view(&M, true, true);
+    uint32_t rev = M.revision;
+    pod_model_view(&M, true, true);
+    CHECK(M.revision == rev && M.has_window && M.machine_view);
+}
+
+// Host and caps are set on an agent already in the roster; every agent starts with all four caps.
+static void pod_model_test_agent_app(void) {
+    fresh();
+    const pod_agent_t *a = pod_model_find(&M, "a1");
+    CHECK(a->caps == POD_CAPS_ALL && a->host[0] == 0);
+    uint32_t rev = M.revision;
+    pod_model_agent_app(&M, "a1", "codex", POD_CAP_S | POD_CAP_F);
+    CHECK(!strcmp(a->host, "codex") && a->caps == (POD_CAP_S | POD_CAP_F) && M.revision != rev);
+    rev = M.revision;
+    pod_model_agent_app(&M, "a1", "codex", POD_CAP_S | POD_CAP_F);
+    CHECK(M.revision == rev);
+    pod_model_agent_app(&M, "a1", NULL, 0xFF);
+    CHECK(a->host[0] == 0 && a->caps == POD_CAPS_ALL && M.revision != rev);
+    rev = M.revision;
+    int n = M.agent_count;
+    pod_model_agent_app(&M, "zz", "codex", POD_CAP_S);
+    CHECK(M.agent_count == n && !pod_model_find(&M, "zz") && M.revision == rev);
+    // No `agent` row: a library agent and an offline tab member.
+    pod_model_library_row(&M, "b1", "Delta", "codex", "box", "idle", 1, 10);
+    CHECK(pod_model_find(&M, "b1")->caps == POD_CAPS_ALL);
+    cable_swarm_t sw[1];
+    memset(sw, 0, sizeof sw);
+    snprintf(sw[0].id, sizeof sw[0].id, "s0");
+    sw[0].agents = 1; sw[0].panes = 1;
+    const char *ids[] = {"far"};
+    const char *const *idl[1] = {ids};
+    uint8_t cnt[1] = {1};
+    static pod_member_meta_t meta[1][POD_PANES_MAX];
+    memset(meta, 0, sizeof meta);
+    meta[0][0] = (pod_member_meta_t){"Stylist", "codex", "Studio", true, false};
+    pod_model_swarms_meta(&M, sw, idl, cnt, 1, "s0", NULL, 0, meta);
+    const pod_agent_t *far = pod_model_find(&M, "far");
+    CHECK(far && far->state == POD_OFFLINE && far->caps == POD_CAPS_ALL);
+}
+
+// A dropped link forgets what the next session says again; the tabs (and so swarm_n) stay, as today.
+static void pod_model_test_link_clears_apps(void) {
+    for (int listed = 1; listed >= 0; listed--) {
+        fresh();
+        const pod_app_t rows[1] = {{"codex", "ChatGPT", 3, 1, 2}};
+        pod_model_apps(&M, rows, 1, "codex");
+        pod_model_apps_switch(&M, true);
+        pod_model_view(&M, true, true);
+        swarms_listed(listed);
+        pod_model_link(&M, true);
+        pod_model_link(&M, false);
+        CHECK(M.app_count == 0 && M.app_shown[0] == 0 && !M.apps_switch && !M.machine_view && !M.tab_open);
+        CHECK(M.swarm_n == listed && M.has_window == (listed > 0));
+    }
+}
+
+static void pod_model_test_host_names(void) {
+    const char *pairs[][2] = {{"orca", "Orca"}, {"herdr", "herdr"}, {"rex", "Rex"}, {"zellij", "Zellij"},
+                              {"tmux", "tmux"}, {"kitty", "kitty"}, {"wezterm", "WezTerm"}, {"ghostty", "Ghostty"},
+                              {"cmux", "cmux"}, {"iterm", "iTerm2"}, {"vscode", "VS Code"}, {"cursor", "Cursor"},
+                              {"warp", "Warp"}, {"claude", "Claude"}, {"codex", "ChatGPT"}, {"opencode", "opencode"},
+                              {"harness", "Harness"}};
+    for (unsigned i = 0; i < sizeof pairs / sizeof pairs[0]; i++) {
+        char want[48];
+        snprintf(want, sizeof want, "See it in %s", pairs[i][1]);
+        CHECK(!strcmp(pod_host_name(pairs[i][0]), pairs[i][1]));
+        CHECK(!strcmp(pod_host_see_it(pairs[i][0]), want));
+    }
+    CHECK(!strcmp(pod_host_name("codex"), "ChatGPT") && !strcmp(pod_host_see_it("codex"), "See it in ChatGPT"));
+    CHECK(!strcmp(pod_host_see_it("claude"), "See it in Claude"));
+    const char *other[] = {"nope", "", NULL};
+    for (int i = 0; i < 3; i++)
+        CHECK(!strcmp(pod_host_name(other[i]), "Terminal") && !strcmp(pod_host_see_it(other[i]), "See it in Terminal"));
+    CHECK(pod_host_see_it("codex") == pod_host_see_it("codex"));
+}
+
 // Chef or builder (owner, 2026-10-16): a turn draws once as it starts (pod_model_random) and keeps it to its end, through
 // activity, steps and a question; the room and the Home card play the same scene. No source (host default): always the chef.
 static uint32_t rnd_n;
@@ -1147,6 +1297,12 @@ int main(void) {
     pod_model_test_unread_expiry();
     pod_model_test_console_data();
     pod_model_test_step_total_and_fresh();
+    pod_model_test_apps();
+    pod_model_test_apps_switch();
+    pod_model_test_window();
+    pod_model_test_agent_app();
+    pod_model_test_link_clears_apps();
+    pod_model_test_host_names();
     printf("Pod model: PASS (%d checks)\n", checks);
     return 0;
 }

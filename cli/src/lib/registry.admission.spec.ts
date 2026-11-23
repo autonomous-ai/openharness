@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { noOtherStreams } from '../testing/otherStreams.js'
+import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 
 // These are ownership and injected-I/O outcomes, independent of host scheduling. Actual
 // elapsed-work deadlines are exercised separately in engines/kit/nativeEvidence.spec.ts.
@@ -26,30 +27,9 @@ vi.mock('fs', async original => {
   } }
 })
 // A registry image flush a test holds open, as a slow disk does.
-const preparation = vi.hoisted(() => ({ wait: undefined as undefined | (() => Promise<void>), release: undefined as undefined | (() => void),
-  due: new Map<unknown, () => void>() }))
-vi.mock('node:fs/promises', async original => {
-  const actual = await original<typeof import('node:fs/promises')>()
-  return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
-    const handle = await actual.open(...args), sync = handle.sync.bind(handle)
-    handle.sync = async () => {
-      await sync()
-      if (!(String(args[0]).includes('registry.json.') && String(args[0]).endsWith('.tmp'))) return
-      for (const [timer, fire] of preparation.due) { preparation.due.delete(timer); fire() }
-      await preparation.wait?.()
-    }
-    return handle
-  } }
-})
-// Under load a registry image sync outlives every real wait of 250 ms or more: each one still running fires
-// as that sync returns, if not before.
-const realTimeout = globalThis.setTimeout, realClear = globalThis.clearTimeout
-function slowTimeout(callback: (...args: unknown[]) => void, ms: number | undefined, args: unknown[]) {
-  if (ms === undefined || ms < 250) return realTimeout(callback, ms, ...args)
-  const timer = realTimeout(() => { preparation.due.delete(timer); callback(...args) }, ms)
-  preparation.due.set(timer, () => { realClear(timer); callback(...args) })
-  return timer
-}
+const preparation = vi.hoisted(() => ({ wait: undefined as undefined | (() => Promise<void>), release: undefined as undefined | (() => void) }))
+const deadline = await vi.hoisted(() => import('../testing/registryDeadline.js'))
+vi.mock('node:fs/promises', original => deadline.slowSyncFsPromises(original, { afterSync: async () => { await preparation.wait?.() } }))
 function hold() {
   let entered!: () => void, release!: () => void
   const reached = new Promise<void>(done => { entered = done }), released = new Promise<void>(done => { release = done })
@@ -76,6 +56,7 @@ const A = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', B = 'bbbbbbbb-2222-4222-8222-b
 let server: Server | undefined
 let root: string, home: string, file: string, transcript: string
 let registry: typeof import('./registry.js')['registry'], target: string, source: string
+let timers: ReturnType<typeof deadline.holdRegistryDeadline>
 const header = (id = A, delegated = false) => JSON.stringify({ type: 'session_meta', payload: {
   id, cwd: root, source: delegated ? { subagent: { thread_spawn: { parent_thread_id: B, depth: 1 } } } : 'cli',
 } }) + '\n'
@@ -88,6 +69,9 @@ const unchanged = (before: ReturnType<typeof snapshot>) => {
   expect(readFileSync(file, 'utf8')).toBe(before.disk)
 }
 beforeEach(async () => {
+  // The hook server answers a commit still in flight after 250 ms, and the registry expires a write after 5 s.
+  // Only a test fires either here, so how fast this machine writes the registry never changes the outcomes these tests pin.
+  timers = deadline.holdRegistryDeadline(REGISTRY_WRITE_DEADLINE_MS, { hold: [250] })
   fault.rename = false; fault.directorySync = false; fault.renamed = false; fault.afterProof = undefined; fault.beforeVerify = undefined
   root = realpathSync(mkdtempSync(join(tmpdir(), 'registry-admission-')))
   home = join(root, 'codex'); file = join(root, 'data', 'registry.json'); fault.file = file
@@ -105,7 +89,7 @@ beforeEach(async () => {
   await registry.flush()
 })
 afterEach(async () => {
-  preparation.wait = undefined; preparation.release?.(); preparation.release = undefined; preparation.due.clear()
+  preparation.wait = undefined; preparation.release?.(); preparation.release = undefined
   if (server) await new Promise<void>(resolve => server!.close(() => resolve()))
   server = undefined
   fault.rename = false; fault.directorySync = false; fault.renamed = false; fault.afterProof = undefined; fault.beforeVerify = undefined
@@ -430,17 +414,6 @@ async function httpFixture(blocked: (agentId: string) => boolean = () => false, 
   const { startHookServer } = await import('../hookServer.js')
   const { readHookCredential } = await import('./hookAuth.js')
   const prompts: string[] = [], registered = vi.fn(), reasons: Array<string | undefined> = []
-  // The hook server answers a commit still in flight after 250 ms, and the registry expires a write after 5 s.
-  // Only a test fires either here, so how fast this machine writes the registry never changes the replies these tests pin.
-  let grace: (() => void) | undefined
-  vi.spyOn(globalThis, 'setTimeout').mockImplementation(((callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) => {
-    if (ms !== 250 && ms !== 5_000) return slowTimeout(callback, ms, args)
-    if (ms === 250) grace = () => callback(...args)
-    return realTimeout(() => {}, 0)
-  }) as typeof setTimeout)
-  vi.spyOn(globalThis, 'clearTimeout').mockImplementation(((timer?: Parameters<typeof clearTimeout>[0]) => {
-    preparation.due.delete(timer); realClear(timer)
-  }) as typeof clearTimeout)
   const started = await startHookServer(0, { onRegistered: registered, onSessionEnd: () => {},
     hookAdmissionBlocked: blocked,
     onPromptSubmitted: (_id, text) => prompts.push(text),
@@ -461,7 +434,7 @@ async function httpFixture(blocked: (agentId: string) => boolean = () => false, 
     })
     return { status: response.status, body: await response.json() }
   }
-  return { post, prompts, registered, reasons, replyGrace: () => grace }
+  return { post, prompts, registered, reasons }
 }
 
 it('keeps each prompt through an HTTP registration write failure and credits it only after recovery', async () => {
@@ -759,9 +732,7 @@ it('claims an already-bound linked Stop once when its registration write outlive
   const body = { engine: 'cursor', sessionId: A, transcriptPath: undefined, tmuxPane: '%3', hookEvent: 'stop', prompt: undefined }
   const flush = hold(), registration = f.post(body, delivery)
   await flush.entered
-  const grace = f.replyGrace()
-  expect(grace).toBeTypeOf('function')
-  grace!()
+  timers.fire(250)
   // notify.mjs sends turn-stop once, whatever the registration answered, and leaves on pending.
   expect((await registration).body).toEqual({ pending: true })
   expect((await f.post(body, delivery, 'turn-stop')).body).toEqual({ pending: true })
@@ -787,7 +758,7 @@ it('never claims a parked linked Stop whose registration is rejected', async () 
   const body = { engine: 'cursor', sessionId: A, transcriptPath: undefined, tmuxPane: '%3', hookEvent: 'stop', prompt: undefined }
   const flush = hold(), registration = f.post(body, delivery)
   await flush.entered
-  f.replyGrace()!()
+  timers.fire(250)
   expect((await registration).body).toEqual({ pending: true })
   expect((await f.post(body, delivery, 'turn-stop')).body).toEqual({ pending: true })
   // The agent goes inactive while its write is in flight: the registration is refused as stale.
@@ -812,7 +783,7 @@ it('says when a parked linked Stop closes nothing once its registration is accep
   const body = { engine: 'cursor', sessionId: A, transcriptPath: undefined, tmuxPane: '%3', hookEvent: 'stop', prompt: undefined }
   const flush = hold(), registration = f.post(body, delivery)
   await flush.entered
-  f.replyGrace()!()
+  timers.fire(250)
   expect((await registration).body).toEqual({ pending: true })
   expect((await f.post(body, delivery, 'turn-stop')).body).toEqual({ pending: true })
   flush.release()
@@ -834,7 +805,7 @@ it('counts a parked linked Stop in the hook receipts\' byte budget until its reg
   const body = { engine: 'cursor', sessionId: A, transcriptPath: undefined, tmuxPane: '%3', hookEvent: 'stop', prompt: undefined }
   const flush = hold(), registration = f.post(body, delivery)
   await flush.entered
-  f.replyGrace()!()
+  timers.fire(250)
   expect((await registration).body).toEqual({ pending: true })
   expect((await f.post({ ...body, prompt: 'x'.repeat(100_000) }, delivery, 'turn-stop')).body).toEqual({ pending: true })
   const prompt = { ...body, hookEvent: 'beforeSubmitPrompt', prompt: 'y'.repeat(50_000) }, next = { id: 'fixture-prompt-after-park-01' }
@@ -856,7 +827,7 @@ it('claims a linked Stop once when it queued only behind the slow registry write
   // The turn's prompt hook, whose registry write a slow disk holds open.
   const flush = hold(), prompt = f.post({ ...body, hookEvent: 'beforeSubmitPrompt' }, { id: 'fixture-prompt-slow-write-01', firedAt: firedAt - 1 })
   await flush.entered
-  f.replyGrace()!()
+  timers.fire(250)
   expect((await prompt).body).toEqual({ pending: true })
   const delivery = { id: 'fixture-stop-queued-write-01', firedAt }
   expect((await f.post(body, delivery)).body).toEqual({ pending: true })
@@ -880,7 +851,7 @@ it.each(['before', 'after'] as const)('keeps a linked Stop unmatched when the ea
   const flush = when === 'after' ? hold() : undefined
   if (!flush) fault.rename = true
   const prompt = f.post({ ...body, hookEvent: 'beforeSubmitPrompt' }, { id: 'fixture-prompt-held-01', firedAt: firedAt - 1 })
-  if (flush) { await flush.entered; f.replyGrace()!() }
+  if (flush) { await flush.entered; timers.fire(250) }
   expect((await prompt).body).toEqual({ pending: true })
   const delivery = { id: 'fixture-stop-queued-hold-01', firedAt }
   expect((await f.post(body, delivery)).body).toEqual({ pending: true })

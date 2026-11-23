@@ -273,3 +273,50 @@ describe('daemonPost', () => {
     expect(existsSync(hookTokenPath(dataDir))).toBe(false)
   })
 })
+
+// On Windows the daemon listens on its pipe, whose answers prove its token (lib/localTransport.ts `daemonFetch`).
+describe('daemonPost on Windows', () => {
+  afterEach(() => { vi.useRealTimers() })
+
+  it('posts the body to /api/hook/observed through the daemon fetch', async () => {
+    const send = vi.fn<typeof fetch>(async () => new Response('{"ok":true}'))
+    await daemonPost(folder('as-'), PORT, 'win32', send)(BODY)
+    expect(send).toHaveBeenCalledTimes(1)
+    const [input, init] = send.mock.calls[0]
+    expect(String(input)).toBe(`http://127.0.0.1:${PORT}/api/hook/observed`)
+    expect(init?.method).toBe('POST')
+    expect(new Headers(init?.headers).get('content-type')).toBe('application/json')
+    expect(JSON.parse(String(init?.body))).toEqual(BODY)
+  })
+
+  it('a daemon with no pipe is done, with nothing thrown', async () => {
+    const send = vi.fn<typeof fetch>(async () => { throw new TypeError('fetch failed') })
+    await expect(daemonPost(folder('as-'), PORT, 'win32', send)(BODY)).resolves.toBeUndefined()
+    expect(send).toHaveBeenCalledTimes(1)
+  })
+
+  it('a daemon that never answers is done within a second, and the request is cancelled', async () => {
+    vi.useFakeTimers()
+    let signal: AbortSignal | undefined
+    const send = vi.fn<typeof fetch>((_input, init) => {
+      signal = init?.signal ?? undefined
+      return new Promise<Response>(() => {})
+    })
+    let done = false
+    const posted = daemonPost(folder('as-'), PORT, 'win32', send)(BODY).then(() => { done = true })
+    await vi.advanceTimersByTimeAsync(999)
+    expect(done).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    await posted
+    expect(signal?.aborted).toBe(true)
+  })
+
+  it('on macOS it posts over the socket and the daemon fetch is never called', async () => {
+    const daemon = await socketDaemon(answers(200, '{"ok":true}'))
+    const send = vi.fn<typeof fetch>(async () => new Response('{}'))
+    await daemonPost(daemon.dataDir, PORT, 'darwin', send)(BODY)
+    await daemon.first
+    expect(JSON.parse(daemon.seen[0].body)).toEqual(BODY)
+    expect(send).not.toHaveBeenCalled()
+  })
+})

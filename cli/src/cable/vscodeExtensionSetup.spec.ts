@@ -16,6 +16,12 @@ const RECORDS: Record<VscodeEditor, string> = {
   vscode: '/Users/someone/.vscode/extensions/extensions.json',
   cursor: '/Users/someone/.cursor/extensions/extensions.json',
 }
+/** The same home and records on Windows, where the editor is found in the account's own programs folder. */
+const WINDOWS_HOME = 'C:\\Users\\someone'
+const WINDOWS_RECORDS: Record<VscodeEditor, string> = {
+  vscode: `${WINDOWS_HOME}\\.vscode\\extensions\\extensions.json`,
+  cursor: `${WINDOWS_HOME}\\.cursor\\extensions\\extensions.json`,
+}
 
 /** Lets a timer's pass finish. */
 const settled = () => new Promise((resolve) => setImmediate(resolve))
@@ -48,11 +54,12 @@ function rig({ editor = 'vscode', platform = 'darwin', app = true, dial = true, 
     editor,
     real: (path) => path,
     platform,
-    home: '/Users/someone',
+    home: platform === 'win32' ? WINDOWS_HOME : '/Users/someone',
     pathVar: '',
+    folders: { localAppData: `${WINDOWS_HOME}\\AppData\\Local` },
     exists: () => state.app,
     executable: () => state.app,
-    read: (path) => path === RECORDS[editor] && state.installed !== undefined
+    read: (path) => path === (platform === 'win32' ? WINDOWS_RECORDS : RECORDS)[editor] && state.installed !== undefined
       ? JSON.stringify([{ identifier: { id: VSCODE_EXTENSION_ID }, version: state.installed }]) : null,
     run: async (_file, args) => {
       runs.push(args[0])
@@ -315,15 +322,20 @@ describe('Harness\'s VS Code extension, set up once a computer', () => {
     expect(r.counted).toEqual([['set up']])
   })
 
-  it.each([
-    ['Windows', { platform: 'win32' as const }],
-    ['no built extension', { build: null }],
-  ])('%s: nothing runs and nothing is recorded', async (_, given) => {
-    const r = rig({ installed: '0.6.59', ...given })
+  it('no built extension: nothing runs and nothing is recorded', async () => {
+    const r = rig({ installed: '0.6.59', build: null })
     await r.setup.pass()
     expect(r.runs).toEqual([])
     expect(r.state.record).toEqual({ dial: true })
     expect(r.counted).toEqual([])
+  })
+
+  it('on Windows a pass installs, as on a Mac', async () => {
+    const r = rig({ platform: 'win32' })
+    await r.setup.pass()
+    expect(r.runs).toEqual([INSTALL])
+    expect(r.state.record).toEqual({ dial: true, version: '0.6.60' })
+    expect(r.counted).toEqual([['set up']])
   })
 })
 

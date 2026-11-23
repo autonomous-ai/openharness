@@ -15,6 +15,8 @@ const _detail = 'Follows the app and terminal tab in front.';
 const _action = Key('device-app-row-action');
 const _failure = Key('device-app-row-failure');
 
+final _mac = TargetPlatformVariant.only(TargetPlatform.macOS);
+
 /// The offer brought to [state], its disposal registered.
 Future<DeviceAppFixture> _fixture(
   DeviceAppOfferState state, {
@@ -110,7 +112,7 @@ void main() {
     await tester.pump();
     expect(fixture.install.calls, 1);
     expect(fixture.open.paths, isEmpty);
-  });
+  }, variant: _mac);
 
   testWidgets('installing: Installing…, disabled', (tester) async {
     final fixture = await _fixture(DeviceAppOfferState.installing);
@@ -120,7 +122,7 @@ void main() {
     expect(find.byKey(_failure), findsNothing);
     expect(_button(tester).onPressed, isNull);
     expect(fixture.install.calls, 1);
-  });
+  }, variant: _mac);
 
   testWidgets('a failure shows its line and Retry installs again', (
     tester,
@@ -138,7 +140,7 @@ void main() {
     await tester.pump();
     expect(fixture.install.calls, 2);
     expect(fixture.open.paths, isEmpty);
-  });
+  }, variant: _mac);
 
   testWidgets('installed but not opened: Open opens it', (tester) async {
     final fixture = await _fixture(
@@ -154,7 +156,7 @@ void main() {
     await tester.pump();
     expect(fixture.open.paths, ['/t/Harness Device.app']);
     expect(fixture.install.calls, 1);
-  });
+  }, variant: _mac);
 
   testWidgets('installed and not running: Open', (tester) async {
     final fixture = await _fixture(DeviceAppOfferState.notRunning);
@@ -167,7 +169,7 @@ void main() {
     await tester.pump();
     expect(fixture.open.paths, [null]);
     expect(fixture.install.calls, 0);
-  });
+  }, variant: _mac);
 
   testWidgets('installed and running: nothing', (tester) async {
     final fixture = await _fixture(DeviceAppOfferState.hidden);
@@ -175,7 +177,7 @@ void main() {
 
     expect(tester.getSize(find.byType(DeviceAppRow)).height, 0);
     expect(find.text(_title), findsNothing);
-  });
+  }, variant: _mac);
 
   testWidgets('Not now on the band leaves the row', (tester) async {
     final fixture = await _fixture(DeviceAppOfferState.offer);
@@ -184,7 +186,7 @@ void main() {
     await fixture.offer.dismiss();
     await tester.pump();
     _expectRow(tester, 'Install');
-  });
+  }, variant: _mac);
 
   testWidgets('a press while installing does nothing', (tester) async {
     final fixture = await _fixture(DeviceAppOfferState.offer);
@@ -197,7 +199,7 @@ void main() {
     await tester.pump();
     _expectRow(tester, 'Installing…');
     expect(fixture.install.calls, 1);
-  });
+  }, variant: _mac);
 
   testWidgets('200% text in a 320-point column: the button goes under the '
       'text', (tester) async {
@@ -212,5 +214,33 @@ void main() {
       tester.getRect(find.byKey(_action)).top,
       greaterThan(tester.getRect(find.text(_detail)).bottom),
     );
-  });
+  }, variant: _mac);
+
+  testWidgets(
+    'on Windows and Linux the row is the tray app',
+    (tester) async {
+      final fixture = await _fixture(DeviceAppOfferState.offer);
+      await _mount(tester, fixture.offer);
+
+      expect(find.text('Tray app'), findsOneWidget);
+      expect(find.text('Follows the app in front.'), findsOneWidget);
+      expect(find.text(_title), findsNothing);
+      expect(find.text(_detail), findsNothing);
+      // The button is announced by the row's title.
+      expect(
+        find.ancestor(
+          of: find.byKey(_action),
+          matching: find.byWidgetPredicate(
+            (widget) =>
+                widget is Semantics && widget.properties.label == 'Tray app',
+          ),
+        ),
+        findsOneWidget,
+      );
+    },
+    variant: TargetPlatformVariant({
+      TargetPlatform.windows,
+      TargetPlatform.linux,
+    }),
+  );
 }

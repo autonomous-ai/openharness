@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 
@@ -8,12 +9,20 @@ import '../devices/device_app_offer.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import 'window_chrome.dart';
 
-/// The band across the top of the window offering the Harness menu-bar app while a dial is attached and the app is
+/// The band across the top of the window offering the Harness menu-bar app (the tray app off macOS) while a dial is attached and the app is
 /// not installed: `Not now`, then `Install`, then `Installing…`, then the app opens or the failure line and `Retry`.
 class DeviceAppBand extends StatelessWidget {
-  const DeviceAppBand({super.key, required this.offer, this.leadingClearance});
+  const DeviceAppBand({
+    super.key,
+    required this.offer,
+    this.leadingClearance,
+    this.platform,
+  });
 
   final DeviceAppOffer offer;
+
+  /// Whose words it says; null is [defaultTargetPlatform]. The gallery passes each OS so it draws them on any host.
+  final TargetPlatform? platform;
 
   /// The room left for the traffic lights; null is [trafficLightClearance]. The gallery passes 0 so its image is the
   /// same on every host.
@@ -67,7 +76,8 @@ class DeviceAppBand extends StatelessWidget {
                     container: true,
                     liveRegion: failedStep != null,
                     child: Text(
-                      failedStep?.failureLine ?? 'Your dial follows apps and terminal tabs with the Harness menu-bar app.',
+                      failedStep?.failureLine ??
+                          deviceAppCopy(platform ?? defaultTargetPlatform).band,
                       key: const Key('device-app-band'),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,

@@ -199,6 +199,40 @@ mod tests {
     }
 
     #[test]
+    fn a_file_without_follow_off_follows_and_keeps_the_other_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("state.json"),
+            r#"{"version":1,"cliSeen":true,"askedSignIn":true,"loginItem":true,"askedFollow":true,"askedAx":true}"#,
+        )
+        .unwrap();
+        let log = Arc::new(MemoryLog::default());
+        let file = JsonStateFile::new(dir.path().to_path_buf(), log.clone());
+        let kept = Saved {
+            version: 1,
+            cli_seen: true,
+            asked_sign_in: true,
+            login_item: true,
+            asked_follow: true,
+            asked_ax: true,
+            follow_off: false,
+        };
+        assert_eq!(file.load(), kept);
+        assert!(log.lines().is_empty());
+    }
+
+    #[test]
+    fn follow_off_reads_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = JsonStateFile::new(dir.path().to_path_buf(), Arc::new(MemoryLog::default()));
+        let saved = Saved { cli_seen: true, follow_off: true, ..Saved::default() };
+        file.save(&saved).unwrap();
+        assert_eq!(file.load(), saved);
+        let written = fs::read_to_string(dir.path().join("state.json")).unwrap();
+        assert!(written.contains(r#""followOff":true"#), "{written}");
+    }
+
+    #[test]
     fn a_save_makes_its_folder_and_says_when_it_cannot() {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("Application Support").join("ai.autonomous.harness.device");

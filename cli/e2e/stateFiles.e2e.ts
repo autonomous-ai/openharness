@@ -8,7 +8,7 @@ import { spawn } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
+import { CLI_ROOT, IsolatedDaemon, SOURCES_CLI, until } from './harness/daemon.js'
 
 // What a reader saw mid-write.
 const TORN = '[{"identityPub":"'
@@ -103,7 +103,7 @@ describe('a pid file that cannot be read', () => {
   it('a stray pid file does not stop a start', async () => {
     // `harness start` from the source runs the daemon in its own process, so the start under test is the daemon. It
     // reads its settings from the shell's env file, as a person's start does (`foreground`).
-    d = await IsolatedDaemon.create({ foreground: true, launch: ['--import', 'tsx', 'src/cli.ts', 'start'] })
+    d = await IsolatedDaemon.create({ foreground: true, launch: [...SOURCES_CLI, 'start'] })
     const pidFile = join(d.dataDir, 'adapter.pid')
     tear(pidFile, 'x')
     await d.start()

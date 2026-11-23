@@ -8,6 +8,7 @@ import { createServer, request as httpRequest } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { hashOf } from '../log.js'
 import { managedNodePath } from '../nodeRuntime.js'
 import { FakeGateway, FakeService } from '../../testing/connectorServers.js'
 import { bridgeKey, harnessKey, resetProfileCache, sync, syncProfileHome } from './agents.js'
@@ -198,15 +199,41 @@ describe('the bridge', () => {
     expect(vault.status('linear', 'Linear', vault.token('linear')).state).toBe('reconnect')
   })
 
-  it('logs why a service refused a renewal, in its own words', async () => {
+  it('logs a refused renewal by the service\'s hash and the refusal\'s kind, never the service\'s words', async () => {
     vault.save('linear', { ...vault.token('linear')!, expires_at: Math.floor(Date.now() / 1000) + 60 })
     fake.revoked = true
+    const issuer = vault.token('linear')!.issuer!
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
       await expect(refresh(vault, 'linear')).rejects.toThrow('connected again')
       const said = warn.mock.calls.map(([line]) => String(line)).find(line => line.includes('refused to renew'))
-      expect(said).toMatch(/^\[connections\] linear: .+ refused to renew it \(400 invalid_grant, issued \d{4}-/)
+      expect(said).toMatch(new RegExp(`^\\[connections\\] linear: ${hashOf(issuer)} refused to renew it \\(SignInError HTTP_400, issued \\d{4}-`))
+      expect(said).not.toContain(issuer)
+      expect(said).not.toContain('invalid_grant')
       expect(said).not.toContain('refresh-1')
+    } finally { warn.mockRestore() }
+  })
+
+  it('tells a renewal this computer cannot ask for from the service\'s refusal, by its code', async () => {
+    vault.save('linear', { ...vault.token('linear')!, issuer: 'https://unregistered.example', expires_at: Math.floor(Date.now() / 1000) + 60 })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await expect(refresh(vault, 'linear')).rejects.toThrow('connected again')
+      const said = warn.mock.calls.map(([line]) => String(line)).find(line => line.includes('refused to renew'))
+      expect(said).toMatch(new RegExp(`^\\[connections\\] linear: ${hashOf('https://unregistered.example')} refused to renew it \\(SignInError NO_CLIENT_OR_REFRESH_TOKEN, issued \\d{4}-`))
+    } finally { warn.mockRestore() }
+  })
+
+  it('logs a custom server\'s refused renewal as custom: its code is made from the name the person gave it', async () => {
+    vault.save('sentinel-server', { ...vault.token('linear')!, source: 'custom', label: 'Sentinel server', expires_at: Math.floor(Date.now() / 1000) + 60 })
+    fake.revoked = true
+    const issuer = vault.token('sentinel-server')!.issuer!
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await expect(refresh(vault, 'sentinel-server')).rejects.toThrow('connected again')
+      const said = warn.mock.calls.map(([line]) => String(line)).find(line => line.includes('refused to renew'))
+      expect(said).toMatch(new RegExp(`^\\[connections\\] custom: ${hashOf(issuer)} refused to renew it \\(SignInError HTTP_400, issued \\d{4}-`))
+      expect(said).not.toMatch(/sentinel/i)
     } finally { warn.mockRestore() }
   })
 
@@ -508,6 +535,24 @@ describe('the connector gateway', () => {
     expect(fake.calls.map(([path]) => path)).toEqual(['connectors/start', 'connectors/poll', 'connectors/poll', 'connectors/refresh', 'connectors/disconnect'])
     expect(vault.token('github')).toBeUndefined()
   }, 15_000)
+
+  it('logs a grant the gateway no longer holds by the gateway\'s code', async () => {
+    const fake = await signedIn()
+    const due = { access_token: 'gho-old', refresh: true, source: 'gateway' as const, expires_at: Math.floor(Date.now() / 1000) + 60 }
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      for (const code of ['NOT_CONNECTED', 'INVALID_GRANT']) {
+        vault.save('github', due)
+        fake.fail = { status: 404, code, message: 'The grant of someone@example.com is gone.' }
+        await expect(refresh(vault, 'github')).rejects.toThrow('connected again')
+      }
+      const said = warn.mock.calls.map(([line]) => String(line)).filter(line => line.includes('refused to renew'))
+      expect(said).toHaveLength(2)
+      expect(said[0]).toMatch(/^\[connections\] github: gateway refused to renew it \(GatewayError NOT_CONNECTED\)$/)
+      expect(said[1]).toMatch(/^\[connections\] github: gateway refused to renew it \(GatewayError INVALID_GRANT\)$/)
+      expect(said.join('\n')).not.toContain('someone')
+    } finally { warn.mockRestore() }
+  })
 
   it('takes no caught redirect for a gateway sign-in, which the gateway finishes', async () => {
     await signedIn()

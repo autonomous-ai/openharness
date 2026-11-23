@@ -184,7 +184,9 @@ describe('the daemon\'s watch', () => {
     const command = vi.fn(fake)
     const { watch, log } = watchWith([line({ console: true, ports: [{ path: 'COM3' }] })], { FAKE_SERIAL_EXIT: '2' }, { command, now: () => clock })
     expect((await watch.ports()).map((port) => port.path)).toEqual(['COM3'])
-    await until(() => log.mock.calls.some(([text]) => String(text).includes('error: enumeration failed')))
+    // Why, by how it ended and how much it wrote to stderr: never its words, which can name the person's devices.
+    await until(() => log.mock.calls.some(([text]) => text === 'cable: harness-serial watch ended (exit 2 · stderr 26 B) — it is started again on a later scan'))
+    expect(log.mock.calls.join('\n')).not.toContain('enumeration failed')
     expect(await watch.ports()).toEqual([])
     expect(watch.console()).toBe(false)
     expect(command).toHaveBeenCalledTimes(1)

@@ -20,6 +20,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { hashOf } from '../lib/log.js'
 import { expectForeignHooksPreserved, preservedHookFiles } from '../testing/hookGoldenSafety.js'
 import { writeExecutable } from '../testing/executableFixture.js'
 
@@ -333,8 +334,12 @@ beforeAll(async () => {
   ;({ installEngineHooks } = await import('../core/engines/hooks.js') as unknown as { installEngineHooks: typeof installEngineHooks })
   const notify = await import('./kit/notifyHooks.js')
   const { VERSION } = await import('../version.js')
+  // The log names each file, and a Hermes profile, by its hash (lib/log.ts hashOf): each known one by its path.
+  const profile = join(root, 'home', '.hermes', 'profiles', 'work')
+  const named = [...Object.values(targets()), opencodeLegacy(), profile, join(profile, 'config.yaml')]
   // Longest first: the root is in every other path.
-  tokens = [[notify.HOOK_SCRIPT, '<script>'], [process.execPath, '<node>'], [root, '<root>'], [`.${process.pid}.`, '.<pid>.'], [`"${VERSION}"`, '"<version>"']]
+  tokens = [...named.map((path): [string, string] => [hashOf(path), `<hash ${path}>`]), [notify.HOOK_SCRIPT, '<script>'], [process.execPath, '<node>'], [root, '<root>'],
+    [`.${process.pid}.`, '.<pid>.'], [`"${VERSION}"`, '"<version>"']]
   const previous = process.umask(0o022)
   try {
     for (const vendor of VENDORS) {

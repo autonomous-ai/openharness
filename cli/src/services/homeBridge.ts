@@ -140,7 +140,7 @@ export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = 
   if (!bridge) return IDLE
   // The folder it names is the one the service writes into and empties: only ~/.harness is the move's.
   if (bridge.oldHome !== legacyHarnessHome(deps.home, 'linux')) {
-    deps.log(`home bridge: ${BRIDGE_FILE} names a folder other than ${legacyHarnessHome('~', 'linux')} · nothing is served or removed`)
+    deps.log(`home bridge: bridge.json names a folder other than ${legacyHarnessHome('~', 'linux')} · nothing is served or removed`)
     return IDLE
   }
   const roots = harnessRoots(deps.home, 'linux', look)

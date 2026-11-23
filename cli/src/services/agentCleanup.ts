@@ -32,7 +32,7 @@ import { Ledger, ledgerPath } from '../agentClient/ledger.js'
 import type { AgentCleanupPort, CoreApi, CorePorts } from '../core/api.js'
 import { backgroundSaid } from '../lib/backgroundSaid.js'
 import type { AgentCloseResult } from '../lib/closeAgentService.js'
-import { errorKind } from '../lib/log.js'
+import { codeOrLength, errorKind } from '../lib/log.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { atomicWriteFile, jsonObject, readState } from '../lib/secureState.js'
 import { createMessagesRpc } from '../messages/rpc.js'
@@ -151,7 +151,7 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
     return result
   }
   const failed = (s: RegisteredSession, why: string, result: AgentCloseResult): void =>
-    log(`[agent-cleanup] could not close ${label(s)} (${why}): ${result.detail ?? result.error}`)
+    log(`[agent-cleanup] could not close ${label(s)} (${why}): ${codeOrLength(result.error)}`)
 
   /** The harnesses [parentId] started here, closed now: told after it stopped. Tried again a moment later when one
    *  would not close, and said once the tries are spent. */

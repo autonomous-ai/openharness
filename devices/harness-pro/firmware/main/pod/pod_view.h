@@ -38,12 +38,24 @@ int pod_scroll_max(const pod_nav_t *, const pod_model_t *);
 bool pod_hit_add(pod_out_frame_t *, int x, int y, int w, int h, pod_action_t action, int arg);
 bool pod_hit_add_id(pod_out_frame_t *, int x, int y, int w, int h, pod_action_t action, int arg, const char *id);
 // Home's pages in order: the Notices card (POD_HOME_NOTICES) while there are notices, the Working card (POD_HOME_WORKING) while an agent works,
-// then the tabs 0..n-1. The TABS frame's scroll is one of these values.
-enum { POD_HOME_NOTICES = -2, POD_HOME_WORKING = -1, POD_HOME_PAGES_MAX = POD_TABS_MAX + 2 };
+// then the list: the tabs 0..n-1, or the app cards POD_HOME_APP0 + k (pod_home_apps). The TABS frame's scroll is one of these values.
+enum { POD_HOME_NOTICES = -2, POD_HOME_WORKING = -1, POD_HOME_APP0 = 32, POD_HOME_PAGES_MAX = POD_TABS_MAX + 2 };
+_Static_assert(POD_HOME_APP0 >= POD_TABS_MAX, "an app page is never a tab index");
+_Static_assert(POD_HOME_PAGES_MAX >= POD_APPS_MAX + 2, "Notices, Working and every app card fit the page list");
+#define POD_APP_HARNESS "harness"   // the app id of Harness itself: its agents are the tabs
 int pod_home_working(const pod_model_t *);                           // agents working now (pod_model_eff)
-bool pod_home_has(const pod_model_t *, int page);                    // is `page` in the list
-int pod_home_pages(const pod_model_t *, int16_t *out, int cap);      // the pages in order (out may be NULL); returns how many
-int pod_home_clamp(const pod_model_t *, int scroll);                 // a present page is kept, else the nearest to its right, else the nearest to its left; 0 with none
+// The Tabs | Apps pill: a window, the daemon's apps.switch, and another app (an app row with agents that is not Harness).
+bool pod_home_switch(const pod_model_t *);
+// The app cards: indices into m->apps in the daemon's order, the rows with agents, minus Harness while the pill shows (its tabs are
+// the other list). Returns how many (out may be NULL).
+int pod_home_app_cards(const pod_model_t *, uint8_t *out, int cap);
+// Home lists the app cards: with no window, whenever there is one; with the pill, when the person chose Apps (nav->home_apps).
+bool pod_home_apps(const pod_nav_t *, const pod_model_t *);
+// The agents of an app's ring, in roster order: the agents whose host is app_id, only while it is the app shown (an agent the
+// library also lists can keep a stale host after its ring goes). Returns how many.
+int pod_app_agents(const pod_model_t *, const char *app_id, const pod_agent_t *out[], int max);
+int pod_home_pages(const pod_nav_t *, const pod_model_t *, int16_t *out, int cap);   // the pages in order (out may be NULL); returns how many
+int pod_home_clamp(const pod_nav_t *, const pod_model_t *, int scroll);           // a present page is kept, else the nearest to its right, else the nearest to its left; 0 with none
 int pod_tabs_pages_of(const pod_nav_t *, const pod_model_t *);       // the list's length
 uint32_t pod_agent_secs(const pod_agent_t *, uint32_t now_ms);              // elapsed while working, else the last
 // Milliseconds until the agent's shown elapsed text next changes (pod_elapsed_next_ms, from where it is in its second);

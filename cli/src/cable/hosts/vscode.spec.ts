@@ -3,6 +3,8 @@ import type { PageAgent, Place } from './adapter.js'
 import { detectApp, detectHost } from './hostDetect.js'
 import { bundleOf, createOpenActions, type OpenTarget } from './open.js'
 import { createVscodeAdapter, termPid } from './vscode.js'
+import type { VscodeTyped } from './vscodeTerminals.js'
+import type { WindowsRaise } from './windowsRaise.js'
 
 const OPEN = '/usr/bin/open'
 /** A Claude Code session's id, as its hook names it. */
@@ -18,14 +20,18 @@ interface Terminal { window: string; shell: number }
 /** A recording runner that runs nothing, so no spec opens the developer's own VS Code: each call answers the next of
  *  [codes], then exit 0. VS Code is in front unless told. The opener holds this adapter alone. No window holds a
  *  terminal until a test sets `windows.held`; each show, scroll and page-key ask is recorded, and `asked` keeps the
- *  order of the terminal's looks beside a test's own. The terminals take page keys while the agent does not ask. The
+ *  order of the terminal's looks beside a test's own. The terminals take page keys while the agent does not ask. Each
+ *  window types while `windows.types` says so, and each send of words is recorded and answers `windows.typed`. The
  *  adapter is VS Code's unless [editor] names Cursor. */
 function recorder(over: Partial<Deps> = {}, codes: Array<number | null> = [], editor: 'vscode' | 'cursor' = 'vscode') {
   const calls: Call[] = []
   const logs: string[] = []
   const windows = { held: undefined as Terminal | undefined, writes: true, shows: [] as Array<{ terminal: Terminal; tap: boolean }>,
     scrolls: [] as Array<{ terminal: Terminal; lines: number; page?: boolean }>,
-    guards: [] as Array<{ pid: number; agent: PageAgent }> }
+    guards: [] as Array<{ pid: number; agent: PageAgent }>,
+    types: true, typed: 'typed' as VscodeTyped,
+    sends: [] as Array<{ pid: number; words: string; atPrompt: () => boolean }>,
+    typeAsks: [] as number[] }
   const asked: string[] = []
   const deps: Deps = {
     run: async (file, args, timeoutMs) => {
@@ -40,6 +46,8 @@ function recorder(over: Partial<Deps> = {}, codes: Array<number | null> = [], ed
       show: (terminal, tap) => { windows.shows.push({ terminal, tap }); return windows.writes },
       scroll: (terminal, lines, page) => { windows.scrolls.push({ terminal, lines, page }); return windows.writes },
       pageKeys: (pid, agent) => { windows.guards.push({ pid, agent }); return agent.asking ? false : Promise.resolve(true) },
+      canType: (pid) => { windows.typeAsks.push(pid); return windows.types },
+      type: async (pid, words, atPrompt) => { windows.sends.push({ pid, words, atPrompt }); return windows.typed },
     },
     ...over,
   }
@@ -67,13 +75,14 @@ describe('the VS Code adapter', () => {
     expect(adapter.tap).toBe('instead')
     expect(adapter.show).toBeTypeOf('function')
     expect(adapter.canShow).toBeTypeOf('function')
-    expect(adapter.type).toBeUndefined()
+    expect(adapter.type).toBeTypeOf('function')
     expect(adapter.canFocus(pane)).toBe(true)
     expect(adapter.canShow(pane)).toBe(true)
     expect(recorder({ inFront: () => false }).adapter.canShow(pane)).toBe(false)
     for (const platform of ['linux', 'win32'] as const) {
       const elsewhere = recorder({ platform })
-      expect(elsewhere.adapter.canFocus(pane), platform).toBe(false)
+      // On Linux the first look answers yes while xdg-mime is read: a tap's focus waits for that read (appLink.ts).
+      expect(elsewhere.adapter.canFocus(pane), platform).toBe(platform === 'linux')
       expect(elsewhere.adapter.canShow(pane), platform).toBe(false)
       expect(await elsewhere.adapter.focus(pane), platform).toBe(false)
       expect(await elsewhere.adapter.show(pane, 'a1'), platform).toBe('failed')
@@ -121,8 +130,6 @@ describe('a tap on a session in the VS Code extension\'s tab (docs/specs/2026-11
     const cases: Array<[Record<string, string>, string, string]> = [
       [{ __CFBundleIdentifier: VSCODE, CLAUDE_CODE_ENTRYPOINT: 'cli' }, UUID, VSCODE],
       [{ __CFBundleIdentifier: VSCODE }, UUID, VSCODE],
-      // The app is VS Code by TERM_PROGRAM alone: inferred, so no link.
-      [{ TERM_PROGRAM: 'vscode', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' }, UUID, VSCODE],
       // Cursor runs the same extension, which says the same word: its link is not VS Code's.
       [{ __CFBundleIdentifier: CURSOR, CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' }, UUID, CURSOR],
       [TAB, 'sess-1', VSCODE], [TAB, UUID.toUpperCase(), VSCODE], [TAB, `${UUID}&x=y`, VSCODE], [TAB, `${UUID}/..`, VSCODE],
@@ -156,7 +163,8 @@ describe('a tap on a session in the VS Code extension\'s tab (docs/specs/2026-11
     expect(failed.logs).toEqual(['[device] open · vscode · fallback'])
     expect(failed.logs.join()).not.toContain(UUID)
     const linux = recorder({ platform: 'linux' })
-    expect(linux.opener.can(target(TAB))).toBe(false)
+    // The first look answers yes while xdg-mime is read (appLink.ts): none is on PATH, so the tap opens nothing.
+    expect(linux.opener.can('a1', target(TAB))).toBe(true)
     expect(await linux.opener.open('a1', target(TAB))).toBe(false)
     expect(linux.calls).toEqual([])
   })
@@ -260,7 +268,7 @@ describe('an agent in VS Code\'s integrated terminal (docs/plans/2026-11-17-dial
     windows.held = HELD
     const tap = tapOf(TERM)
     expect(adapter.canFocus(pane())).toBe(true)
-    expect(opener.can(tap)).toBe(true)
+    expect(opener.can('a1', tap)).toBe(true)
     expect(await opener.open('a1', tap)).toBe(true)
     expect(windows.shows).toEqual([{ terminal: HELD, tap: true }])
     expect(calls).toEqual([])
@@ -284,7 +292,7 @@ describe('an agent in VS Code\'s integrated terminal (docs/plans/2026-11-17-dial
     expect(windows.shows).toEqual([])
     expect(logs).toEqual([])
     expect(calls).toEqual([forward(VSCODE)])
-    expect(recorder({ platform: 'linux' }).opener.can(tapOf(TERM))).toBe(false)
+    expect(recorder({ platform: 'linux' }).opener.can('a1', tapOf(TERM))).toBe(false)
   })
 
   it('a rest shows the terminal only while VS Code is in front', async () => {
@@ -320,7 +328,8 @@ describe('an agent in VS Code\'s integrated terminal (docs/plans/2026-11-17-dial
       windows.held = HELD
       for (const id of ids) {
         expect(termPid(id), id).toBeUndefined()
-        expect(adapter.canFocus(pane(id)), id).toBe(platform === 'darwin')
+        // On Linux the first look answers yes while xdg-mime is read, as macOS does: focus still refuses the id.
+        expect(adapter.canFocus(pane(id)), id).toBe(platform === 'darwin' || id === ids[0])
         expect(await adapter.focus(pane(id)), id).toBe(false)
         expect(await adapter.show(pane(id), 'a1'), id).toBe('failed')
       }
@@ -388,6 +397,42 @@ describe('an agent in VS Code\'s integrated terminal (docs/plans/2026-11-17-dial
     expect(windows.scrolls).toEqual([{ terminal: HELD, lines: -3, page: true }, { terminal: HELD, lines: -3, page: false }])
   })
 
+  // The dial's words (docs/plans/2026-11-22-dial-vscode-cursor-voice-design.md): the terminals own the guard, the
+  // settle and the Enter; the adapter names the pane's pid and says why it was refused (V9).
+  it('canType: a terminal\'s pane only while the terminals say its window types; the panel\'s pane and a term id out of form never', () => {
+    const { adapter, windows } = recorder()
+    expect(adapter.canType!(pane())).toBe(true)
+    windows.types = false
+    expect(adapter.canType!(pane())).toBe(false)
+    windows.types = true
+    for (const id of [UUID, 'term:1', 'term:x', 'term:042']) expect(adapter.canType!(pane(id)), id).toBe(false)
+    expect(windows.typeAsks).toEqual([PID, PID])
+  })
+
+  it('type hands the terminals the agent\'s pid, the words and the caller\'s prompt check; typed is true', async () => {
+    const { adapter, windows, calls } = recorder()
+    const atPrompt = () => true
+    expect(await adapter.type!(pane(), 'Eval words for bravo.', 'codex', atPrompt)).toBe(true)
+    expect(windows.sends).toEqual([{ pid: PID, words: 'Eval words for bravo.', atPrompt }])
+    expect(windows.sends[0].atPrompt).toBe(atPrompt)
+    expect(calls).toEqual([])
+  })
+
+  it('not in front of its terminal: refused with "Bring it to the front of its terminal."; failed is false', async () => {
+    const { adapter, windows } = recorder()
+    windows.typed = 'background'
+    expect(await adapter.type!(pane(), 'hi', 'codex', () => true)).toEqual({ refused: 'Bring it to the front of its terminal.' })
+    windows.typed = 'failed'
+    expect(await adapter.type!(pane(), 'hi', 'codex', () => true)).toBe(false)
+  })
+
+  it('with no prompt check, or for the panel\'s pane, nothing is typed: false', async () => {
+    const { adapter, windows } = recorder()
+    expect(await adapter.type!(pane(), 'hi', 'codex')).toBe(false)
+    for (const id of [UUID, 'term:1', 'term:x']) expect(await adapter.type!(pane(id), 'hi', 'claude', () => true), id).toBe(false)
+    expect(windows.sends).toEqual([])
+  })
+
   it('it declares VS Code\'s bundle', () => {
     expect(recorder().adapter.bundle).toBe('com.microsoft.VSCode')
   })
@@ -421,6 +466,42 @@ describe('the adapter made for Cursor', () => {
     expect(cursor.paneOf(at({ __CFBundleIdentifier: VSCODE, CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' }))).toBeUndefined()
     expect(cursor.paneOf(at({ TERM_PROGRAM: 'vscode', __CFBundleIdentifier: VSCODE }))).toBeUndefined()
     expect(cursor.paneOf(at(TERM))).toEqual({ adapter: 'cursor', id: 'term:4242' })
+  })
+
+  it('cursor-agent\'s terminal in Cursor is typed into as VS Code\'s', async () => {
+    const r = recorder({}, [], 'cursor')
+    const pane = r.adapter.paneOf(at(TERM, { engine: 'cursor', sessionId: undefined }))!
+    expect(pane).toEqual({ adapter: 'cursor', id: 'term:4242' })
+    expect(r.adapter.canType!(pane)).toBe(true)
+    const atPrompt = () => true
+    expect(await r.adapter.type!(pane, 'Eval words for bravo.', 'cursor', atPrompt)).toBe(true)
+    expect(r.windows.sends).toEqual([{ pid: 4242, words: 'Eval words for bravo.', atPrompt }])
+  })
+
+  // U10: Cursor documents no way to put words into one existing chat (docs/plans/2026-11-22-dial-vscode-cursor-voice-design.md, §2).
+  it('a sentence for Cursor\'s own agent alone: none for cursor-agent with TERM_PROGRAM, Claude Code, Codex, its panel, or any agent of VS Code\'s adapter', () => {
+    const cursor = recorder({}, [], 'cursor').adapter
+    const vscode = recorder().adapter
+    const own = at({ __CFBundleIdentifier: CURSOR }, { engine: 'cursor', sessionId: undefined })
+    expect(cursor.voiceRefusal!(own)).toBe('Voice can\'t reach Cursor\'s agent. Type in Cursor.')
+    for (const place of [
+      at(TERM, { engine: 'cursor', sessionId: undefined }),
+      at(TERM),
+      at(TERM, { engine: 'codex' }),
+      at(PANEL),
+    ]) expect(cursor.voiceRefusal!(place), JSON.stringify(place)).toBeUndefined()
+    expect(vscode.voiceRefusal).toBeUndefined()
+  })
+
+  // Review Focus 5: the open scan gives no hints until the session's first hook.
+  it('a place with no hints (a session the scan found) is Cursor\'s own agent\'s; the same place with TERM_PROGRAM is not, and has its term pane', () => {
+    const { adapter } = recorder({}, [], 'cursor')
+    const scanned: Place = { host: 'terminal', app: 'cursor', hints: {}, engine: 'cursor', pid: 4242 }
+    expect(adapter.voiceRefusal!(scanned)).toBe('Voice can\'t reach Cursor\'s agent. Type in Cursor.')
+    expect(adapter.paneOf(scanned)).toBeUndefined()
+    const hooked = { ...scanned, hints: { TERM_PROGRAM: 'vscode' } }
+    expect(adapter.voiceRefusal!(hooked)).toBeUndefined()
+    expect(adapter.paneOf(hooked)).toEqual({ adapter: 'cursor', id: 'term:4242' })
   })
 
   it('a tap on a terminal in Cursor queues its show with the raise, then opens Cursor by its bundle', async () => {
@@ -483,6 +564,58 @@ describe('a tap on a terminal on Linux raises its editor', () => {
   })
 })
 
+// Windows has no `open -b`: the devices' raise brings the editor forward by its bundle, and opens the tab's link
+// (windowsRaise.ts).
+describe('a tap on Windows raises its editor', () => {
+  const HELD: Terminal = { window: 'w1', shell: 4000 }
+  const CURSOR = 'com.todesktop.230313mzl4w4u92'
+  /** The recorder on Windows, holding a raise that notes each call with how many shows were written before it, and
+   *  answers [answer]. */
+  const tapped = (editor: 'vscode' | 'cursor', answer = true) => {
+    const raised: Array<{ call: string[]; shows: number }> = []
+    const note = async (call: string[]) => { raised.push({ call, shows: r.windows.shows.length }); return answer }
+    const windows: WindowsRaise = {
+      app: (bundle) => note(['app', bundle]),
+      link: (url, bundle) => note(['link', url, String(bundle)]),
+      cursorFolder: (folder) => note(['cursorFolder', folder]),
+      desktop: () => note(['desktop']),
+    }
+    const r = recorder({ platform: 'win32', windows }, [], editor)
+    r.windows.held = HELD
+    return { ...r, raised, focus: (id = 'term:4242') => r.adapter.focus({ adapter: editor, id }) }
+  }
+
+  it.each([['vscode', VSCODE], ['cursor', CURSOR]] as const)('%s: the terminal is shown, then the editor comes forward by its bundle', async (editor, bundle) => {
+    const t = tapped(editor)
+    expect(t.adapter.canFocus({ adapter: editor, id: 'term:4242' })).toBe(true)
+    expect(await t.focus()).toBe(true)
+    expect(t.windows.shows).toEqual([{ terminal: HELD, tap: true }])
+    expect(t.raised).toEqual([{ call: ['app', bundle], shows: 1 }])
+    expect(t.calls).toEqual([])
+  })
+
+  it('a raise that answers false leaves the tap true: the show was queued', async () => {
+    const t = tapped('vscode', false)
+    expect(await t.focus()).toBe(true)
+    expect(t.raised).toEqual([{ call: ['app', VSCODE], shows: 1 }])
+  })
+
+  it('a show that cannot be written raises nothing', async () => {
+    const t = tapped('vscode')
+    t.windows.writes = false
+    expect(await t.focus()).toBe(false)
+    expect(t.raised).toEqual([])
+  })
+
+  it('the extension\'s tab opens by its link, sent with the editor\'s bundle', async () => {
+    const t = tapped('vscode')
+    expect(t.adapter.canFocus({ adapter: 'vscode', id: UUID })).toBe(true)
+    expect(await t.focus(UUID)).toBe(true)
+    expect(t.raised).toEqual([{ call: ['link', link(UUID), VSCODE], shows: 0 }])
+    expect(t.calls).toEqual([])
+  })
+})
+
 // Linux has no bundle id: the editor is the app the process scan named (docs/plans/2026-11-19-dial-linux-design.md § 1.6).
 describe('the extension\'s tab on Linux', () => {
   const CURSOR = 'com.todesktop.230313mzl4w4u92'
@@ -522,8 +655,13 @@ describe('the extension\'s tab on Linux', () => {
     for (const place of cases) expect(adapter.paneOf(place), JSON.stringify(place)).toBeUndefined()
   })
 
-  it('on macOS the scan\'s app alone names no tab', () => {
-    expect(recorder().adapter.paneOf(at('vscode'))).toBeUndefined()
+  // On macOS the bundle id an editor started from Terminal inherited is dropped (hostDetect.ts ownHints): there too the
+  // app its parents named is the editor.
+  it('on macOS too the app the caller\'s parents named has the tab, on Windows it names none', () => {
+    expect(recorder().adapter.paneOf(at('vscode'))).toEqual({ adapter: 'vscode', id: UUID })
+    expect(recorder({}, [], 'cursor').adapter.paneOf(at('cursor'))).toEqual({ adapter: 'cursor', id: UUID })
+    expect(recorder().adapter.paneOf(at('cursor'))).toBeUndefined()
+    expect(recorder({ platform: 'win32' }).adapter.paneOf(at('vscode'))).toBeUndefined()
   })
 
   it.each([

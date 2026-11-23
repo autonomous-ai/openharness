@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 
 import 'github_repository.dart';
+import 'program_path.dart';
 import 'ssh_hosts.dart';
 
 export 'github_repository.dart';
@@ -34,8 +35,14 @@ class RepositoryClone {
     GitCloneProcess? startProcess,
     GitOriginReader? readOrigin,
     SshHosts? sshHosts,
-  }) : _startProcess = startProcess ?? _startGit,
-       _readOrigin = readOrigin ?? readCheckoutOrigin,
+    String Function() program = gitProgram,
+  }) : _startProcess =
+           startProcess ??
+           ((arguments, environment) =>
+               Process.start(program(), arguments, environment: environment)),
+       _readOrigin =
+           readOrigin ??
+           ((folder) => readCheckoutOrigin(folder, program: program)),
        _sshHosts = sshHosts ?? SshHosts();
   final GitCloneProcess _startProcess;
   final GitOriginReader _readOrigin;
@@ -50,16 +57,14 @@ class RepositoryClone {
   bool _cancelled = false;
   bool _started = false;
 
-  static Future<Process> _startGit(
-    List<String> arguments,
-    Map<String, String> environment,
-  ) => Process.start('git', arguments, environment: environment);
-
   /// `git remote get-url origin` in [folder], bounded: `.git` is looked for
   /// before git runs (on a Mac without the Command Line Tools `git` is Apple's
   /// stub, which opens an install dialog), git may not look above [folder]
   /// (GIT_CEILING_DIRECTORIES), and it gets four seconds, as the CLI's do.
-  static Future<String?> readCheckoutOrigin(String folder) async {
+  static Future<String?> readCheckoutOrigin(
+    String folder, {
+    String Function() program = gitProgram,
+  }) async {
     if (await FileSystemEntity.type(
           p.join(folder, '.git'),
           followLinks: false,
@@ -70,7 +75,7 @@ class RepositoryClone {
     final Process process;
     try {
       process = await Process.start(
-        'git',
+        program(),
         [
           '-c',
           'core.fsmonitor=false',

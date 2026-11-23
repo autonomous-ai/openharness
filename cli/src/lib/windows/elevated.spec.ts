@@ -1,12 +1,20 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { GuestRunner } from '../guestRunner.js'
 import { windowsAdminRunner } from './elevated.js'
 
 const cleanup: string[] = []
 afterEach(() => { for (const dir of cleanup.splice(0)) rmSync(dir, { recursive: true, force: true }) })
+beforeEach(() => { vi.stubEnv('SystemRoot', 'C:\\Windows') })
+afterEach(() => { vi.unstubAllEnvs() })
+
+/** Windows' own, by their full paths: a bare name is looked for in the folder the command runs in first. */
+const ICACLS = 'C:\\Windows\\System32\\icacls.exe'
+const POWERSHELL = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
+const isIcacls = (command: string) => /(^|\\)icacls(\.exe)?$/i.test(command)
+const isPowershell = (command: string) => /(^|\\)powershell(\.exe)?$/i.test(command)
 
 describe('windowsAdminRunner', () => {
   const OWNER_SID = 'S-1-5-21-1111111111-2222222222-3333333333-1001'
@@ -17,7 +25,7 @@ describe('windowsAdminRunner', () => {
     const seen: { script?: string; wrapper?: string } = {}
     // Never powershell or icacls: the fake reads what was staged, as the elevated script would, and writes what it said.
     const runner = vi.fn<GuestRunner>(async (command) => {
-      if (command === 'icacls') return { code: icacls, stdout: '', stderr: icacls ? 'Access is denied.' : '' }
+      if (isIcacls(command)) return { code: icacls, stdout: '', stderr: icacls ? 'Access is denied.' : '' }
       seen.script = readFileSync(join(stage, 'run.ps1'), 'utf8')
       seen.wrapper = readFileSync(join(stage, 'elevated.ps1'), 'utf8')
       if (answer.stdout !== undefined) writeFileSync(join(stage, 'stdout.txt'), answer.stdout)
@@ -29,15 +37,15 @@ describe('windowsAdminRunner', () => {
     return { run, runner, stage, seen }
   }
   const decoded = (args: readonly string[]) => Buffer.from(args[args.indexOf('-EncodedCommand') + 1]!, 'base64').toString('utf16le')
-  const callOf = (f: { runner: { mock: { calls: Parameters<GuestRunner>[] } } }, name: string) => f.runner.mock.calls.find(([command]) => command === name)!
+  const callOf = (f: { runner: { mock: { calls: Parameters<GuestRunner>[] } } }, is: (command: string) => boolean) => f.runner.mock.calls.find(([command]) => is(command))!
 
   it('makes the staging folder the owner\'s alone, by SID, before anything is written in it', async () => {
     const f = windows({ code: 0, stdout: '' })
     await f.run('exit 0')
-    expect(f.runner.mock.calls.map(([command]) => command)).toEqual(['icacls', 'powershell.exe'])
+    expect(f.runner.mock.calls.map(([command]) => command)).toEqual([ICACLS, POWERSHELL])
     // The owner, SYSTEM and Administrators, each by SID: a name could resolve to a same-named domain or local account,
     // and SYSTEM's and Administrators' change with the language of Windows. Nothing inherited.
-    expect(callOf(f, 'icacls')[1]).toEqual([f.stage, '/inheritance:r', '/grant:r', `*${OWNER_SID}:(OI)(CI)F`, '*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F'])
+    expect(callOf(f, isIcacls)[1]).toEqual([f.stage, '/inheritance:r', '/grant:r', `*${OWNER_SID}:(OI)(CI)F`, '*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F'])
   })
 
   it('keeps what the script wrote to its own stdout and stderr: run.ps1 runs as a child whose output goes to the files', async () => {
@@ -56,11 +64,11 @@ describe('windowsAdminRunner', () => {
     const f = windows({ code: 0, stdout: 'harness: team computer abc\r\n' })
     expect(await f.run('Write-Output done'))
       .toEqual({ ok: true, stdout: 'harness: team computer abc\r\n' })
-    const [command, args] = callOf(f, 'powershell.exe')
-    expect(command).toBe('powershell.exe')
+    const [command, args] = callOf(f, isPowershell)
+    expect(command).toBe(POWERSHELL)
     expect(args.slice(0, 3)).toEqual(['-NoProfile', '-NonInteractive', '-EncodedCommand'])
     const outer = decoded(args)
-    expect(outer).toContain('Start-Process -FilePath powershell.exe -Verb RunAs -Wait -PassThru')
+    expect(outer).toContain(`Start-Process -FilePath '${POWERSHELL}' -Verb RunAs -Wait -PassThru`)
     expect(outer).toContain(`'-NoProfile -ExecutionPolicy Bypass -File "${join(f.stage, 'elevated.ps1')}"'`)
     // With a byte order mark, which Windows PowerShell 5.1 needs to read anything but ASCII as UTF-8.
     expect(f.seen.script).toBe('﻿Write-Output done')
@@ -85,14 +93,14 @@ describe('windowsAdminRunner', () => {
     const f = windows({ code: 0 }, 5)
     expect(await f.run('')).toEqual({ ok: false, code: 'FAILED',
       message: 'Could not make the staging folder private: Access is denied.' })
-    expect(f.runner.mock.calls.map(([command]) => command)).toEqual(['icacls'])
+    expect(f.runner.mock.calls.map(([command]) => command)).toEqual([ICACLS])
     expect(existsSync(f.stage)).toBe(false)
   })
 
   it('removes the stage when the prompt cannot be run', async () => {
     const f = windows({ code: 0 })
     f.runner.mockImplementation(async (command) => {
-      if (command === 'icacls') return { code: 0, stdout: '', stderr: '' }
+      if (isIcacls(command)) return { code: 0, stdout: '', stderr: '' }
       throw new Error('powershell.exe is not there')
     })
     await expect(f.run('exit 0')).rejects.toThrow('powershell.exe is not there')

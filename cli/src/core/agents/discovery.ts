@@ -24,6 +24,7 @@ import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
 import type { SessionInputController } from '../../lib/sessionInput.js'
 import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
+import type { AbsenceReason } from '../../lib/terminalAgentReconciler.js'
 import type { TerminalBackendCoordinator } from '../../lib/terminalBackendCoordinator.js'
 import { primaryRuntime, sameProcessIdentity, sameTerminalPlacement, terminalRouteKey } from '../../lib/terminalRuntime.js'
 import { bypassPermissionActive, permissionModeFromArgv } from '../../lib/processTable.js'
@@ -325,7 +326,7 @@ export function createDiscoveryHandlers({
     const refreshed = registry.byAgent(current.agentId)
     if (refreshed) announceSession(refreshed)
   }
-  const onDormant = async (agent: RegisteredSession, reason: string): Promise<void> => {
+  const onDormant = async (agent: RegisteredSession, reason: AbsenceReason): Promise<void> => {
     if (!agent.active || agent.launch?.state === 'held') return
     const selected = structuredClone(agent), runtime = primaryRuntime(selected)
     const backend = terminals.backendFor(runtime)
@@ -375,7 +376,7 @@ export function createDiscoveryHandlers({
     console.log(`[discovery] ${sid(agent.agentId)} dormant · ${reason}`)
     announceSession(agent)
   }
-  const onRemoved = async (agent: RegisteredSession, reason: string): Promise<void> => {
+  const onRemoved = async (agent: RegisteredSession, reason: AbsenceReason): Promise<void> => {
     // A missing waiting shell does not end the conversation held for preparation/recovery.
     if (agent.launch?.state === 'held') {
       registry.setActive(agent.agentId, false)

@@ -21,7 +21,7 @@
  */
 import { existsSync } from 'node:fs'
 import path from 'node:path'
-import { errorKind } from '../log.js'
+import { codeOrLength, errorKind } from '../log.js'
 import type { TerminalBackend } from '../terminalBackend.js'
 import { terminalInstanceId } from '../terminalRuntime.js'
 import type { TerminalRuntimeRef } from '../terminalTypes.js'
@@ -186,7 +186,7 @@ export class PtyHostDrain {
     if (at >= 0) this.deps.backends.splice(at, 1)
     this.deps.coordinator.replaceBackends(this.deps.backends)
     backend.dispose()
-    console.log(`[terminal] ptyhost: ${backend.instanceId} drained and removed (${backend.hostGone ?? 'its host is idle and left running'})`)
+    console.log(`[terminal] ptyhost: ${backend.instanceId} drained and removed (${backend.hostGone === null ? 'its host is idle and left running' : codeOrLength(backend.hostGone)})`)
     try {
       this.deps.cleanup?.()
     } catch (error) {

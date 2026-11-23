@@ -147,6 +147,13 @@ const until = async (what: string, check: () => boolean, ms = 4_000): Promise<vo
 }
 
 describe('the fleet\'s lane, sealed by the gateway', () => {
+  it('says which backend it dials in fixed words, never its URL', async () => {
+    const { link, lines } = await lane()
+    await link.online()
+    expect(lines.filter((line) => line.startsWith('device: connecting'))).toEqual(['device: connecting → another backend'])
+    expect(lines.join('\n')).not.toContain('127.0.0.1')
+  })
+
   it('sends a linked machine nothing in the clear: what the gateway cannot seal goes nowhere, and a session starts again', async () => {
     const { server, seal, link, lines } = await lane()
     await link.online()
@@ -247,6 +254,24 @@ describe('the fleet\'s lane, sealed by the gateway', () => {
     seal.open.mockResolvedValueOnce({ frame: { type: 'agents_list_result', machineId: LINKED, payload: { requestId: asked.payload.requestId, agents: ['on B'] } } })
     server.send({ type: 'agents_list_result', machineId: LINKED, payload: { __e2e: { n: 1 } } })
     expect(await answer).toEqual({ requestId: asked.payload.requestId, agents: ['on B'] })
+  })
+
+  it('a device\'s error is logged by its code or length', async () => {
+    const { server, seal, link, lines } = await lane()
+    await link.online()
+    const words = 'peer said /Users/sentinel/x'
+    for (const [nth, error] of [[0, words], [1, 'NOT_FOUND']] as const) {
+      const answer = link.rpc('agents_list', { scope: 'all' }, LINKED)
+      await until('the request', () => seal.seal.mock.calls.filter(([, frame]) => frame.type === 'agents_list').length > nth)
+      seal.open.mockResolvedValueOnce({ frame: { type: 'agents_list_result', machineId: LINKED, payload: { requestId: askedId(seal, LINKED, 'agents_list', nth), error } } })
+      server.send({ type: 'agents_list_result', machineId: LINKED, payload: { __e2e: { n: nth + 1 } } })
+      // The caller still reads the device's own words; only the log line drops them.
+      await expect(answer).rejects.toThrow(error)
+    }
+    const logged = lines.join('\n')
+    expect(logged).not.toContain('sentinel')
+    expect(logged).toContain(`device: agents_list_result error=text(${words.length})`)
+    expect(logged).toContain('device: agents_list_result error=NOT_FOUND')
   })
 
   it('a machine that refuses this one\'s key fails its session, and it ends at the gateway', async () => {

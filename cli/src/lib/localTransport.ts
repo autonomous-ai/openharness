@@ -20,6 +20,7 @@ import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
 import { configuredPortOf, readDaemonRecord } from './daemonRecord.js'
 import { localCredentialHeaders, PEER_LOOKUP_UNANSWERED } from './localCredential.js'
 import { unixSocketPath } from './localSocket.js'
+import { ownProcessRuns } from './ownProcess.js'
 import { NOT_RUNNING } from './unreachable.js'
 import { daemonPipe } from './windows/daemonPipe.js'
 import { newPipeNonce, PIPE_AUTH_HEADER, pipeAuthValue, pipeProven, readDaemonToken } from './windows/pipeAuth.js'
@@ -171,19 +172,6 @@ async function askedAgainWhenUnanswered(send: () => Promise<Response>): Promise<
     const said = await reply.clone().json().catch(() => null) as { error?: unknown } | null
     if (said?.error !== PEER_LOOKUP_UNANSWERED) return reply
     await new Promise(resolve => setTimeout(resolve, 250 * 2 ** attempt))
-  }
-}
-
-/**
- * Whether this account's process [pid] runs. The daemon is this account's, so EPERM is another account's process, one
- * that took the pid since the daemon exited (processProof.ts `pidAlive` counts it alive): not the daemon.
- */
-function ownProcessRuns(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
   }
 }
 

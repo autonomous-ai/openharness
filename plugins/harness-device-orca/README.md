@@ -33,7 +33,7 @@ Harness updates. Harness approves the plugin in Orca for you: its own worker pro
 workspaces. Remove it in Orca, or run `harness device orca disable`, and Harness will not install it again;
 `harness device orca enable` brings it back. An update that asks for more access is not approved.
 
-It needs Orca 1.4.248 or later, on macOS or Linux. On Windows the panel reads "Not on Windows yet."
+It needs Orca 1.4.248 or later, on macOS, Linux or Windows.
 
 ## The access Orca asks for
 
@@ -41,6 +41,11 @@ Its worker is a Node process with your own access, which Harness approves for yo
 plugin's access. It uses that to run `harness device orca link` (`~/.local/bin/harness`, then `harness` on `PATH`) and
 to talk to one local socket, the one that command names. While no dial is attached, it watches the folder that holds
 that socket (the Harness daemon's data folder) for the socket to appear.
+
+On Windows it runs `%USERPROFILE%\.harness\bin\harness.exe`, then `harness` on `PATH`, and talks to one local pipe,
+the one that command names, with the token it prints: each request proves the token, and an answer that does not prove
+it back is dropped unread. The token is never logged or kept. While no dial is attached, it watches the Harness
+daemon's data folder for `devices.json` to appear.
 
 It declares one capability, `workspace:read`, which Orca words as "Read your projects and workspaces (names, branches,
 paths and agent status) and the terminals in them, and get notified when they change". It uses only the terminal ids

@@ -466,7 +466,7 @@ describe('buildLaunchOverrides — machine MCP servers (#1872)', () => {
   })
 
   // Each launch checks the saved words again (a row edited by hand, or a flag a later release refuses): none is applied.
-  it('applies none of the saved launch flags when one is now refused, and says so once with the agent and why', async () => {
+  it('applies none of the saved launch flags when one is now refused, and says so once with the agent and the refusal by its length', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
     const built = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude',
       { startedBy: null, cwd: null, launchArgs: ['--chrome', '--settings', 'x'] }, 'agent-12345678-rest', () => true)
@@ -474,8 +474,7 @@ describe('buildLaunchOverrides — machine MCP servers (#1872)', () => {
     expect(built.overrides.ownerArgs ?? []).toEqual([])
     expect(built.overrides.extraArgs).not.toContain('--chrome')
     expect(warn).toHaveBeenCalledOnce()
-    expect(warn.mock.calls[0]![0]).toContain('agent-12')
-    expect(warn.mock.calls[0]![0]).toContain('--settings is set by Harness')
+    expect(warn.mock.calls[0]![0]).toBe('[launch] agent-12 saved launch flags not applied · text(53)')
   })
 
 })

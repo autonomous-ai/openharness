@@ -7,11 +7,12 @@
  * Its limits: it sees `process.env` and no other name for it. A variable read through a parameter that defaults to
  * `process.env` is pinned by lib/startEnvironment.spec.ts instead, and a computed name (`process.env[name]`) by review.
  */
-import { readdirSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import ts from 'typescript'
 import { expect, it } from 'vitest'
 import { DROPPED_ON_PURPOSE, startEnvironment } from './lib/startEnvironment.js'
+import { sourceFiles } from './testing/sourceFiles.js'
 
 const SRC = __dirname
 
@@ -55,8 +56,7 @@ it.each([
 // (docs/plans/2026-11-17-daemon-minimal-env-design.md).
 it('every variable the daemon reads is on the allowlist or dropped on purpose', () => {
   const read = new Map<string, string>()
-  const files = readdirSync(SRC, { recursive: true, encoding: 'utf8' })
-    .map((file) => file.split(/[\\/]/).join('/'))
+  const files = sourceFiles(SRC)
     .filter((file) => /\.(tsx?|mjs|js)$/.test(file) && !/\.(spec|test)\./.test(file)
       && !file.split('/').some((folder) => ['testing', 'e2e', '__fixtures__', 'fixtures'].includes(folder)))
   for (const file of files) {

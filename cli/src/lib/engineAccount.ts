@@ -22,6 +22,7 @@ import { existsSync } from 'node:fs'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { homePath } from '../config/envFields.js'
 import { harnessPath } from '../config/harnessHome.js'
 import type { AgentEngine } from '../engines/types.js'
 import { resolveBinaryOnPath } from './binaryOnPath.js'
@@ -138,7 +139,7 @@ export async function engineAccount(engine: AgentEngine, deps: EngineAccountDeps
   // A model API saved on this computer (Models ▸ APIs) serves Claude Code without a
   // subscription, so the machine can run Claude Code on it (headless run, 2026-11-03: a working OpenRouter key saved,
   // and the account read "not signed in").
-  const savedApi = await savedBearerApi(env.ADAPTER_DATA_DIR || join(harnessPath('cli', home), 'data'))
+  const savedApi = await savedBearerApi(homePath(env.ADAPTER_DATA_DIR ?? '', home) || join(harnessPath('cli', home), 'data'))
   if (engine === 'claude') {
     const dir = env.CLAUDE_CONFIG_DIR || join(home, '.claude')
     const lastUsedAt = deps.lastUsed === false ? null : await newestChild(join(dir, 'projects'))

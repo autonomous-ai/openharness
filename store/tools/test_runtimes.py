@@ -349,6 +349,12 @@ class RuntimeFolder(unittest.TestCase):
         box = self.linux()
         self.assertEqual(box.harness_runtime(ADAPTER_RUNTIME_DIR="/opt/rt"), "/opt/rt")
 
+    def test_a_relative_adapter_runtime_dir_is_under_the_home(self):
+        # As the CLI reads it (cli/src/config/envFields.ts homePath): a setup runs in its project, never the home.
+        box = self.linux()
+        self.assertEqual(box.harness_runtime(ADAPTER_RUNTIME_DIR="rt"), f"{box.home}/rt")
+        self.assertEqual(box.harness_runtime(ADAPTER_RUNTIME_DIR=""), f"{box.home}/.local/state/harness/runtime", "empty is unset")
+
 
 class PythonInstallDir(unittest.TestCase):
     def test_uv_pythons_live_in_the_harness_runtime(self):

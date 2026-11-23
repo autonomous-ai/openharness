@@ -4,7 +4,7 @@ import { homedir, tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
-import { finalRemovalDeps, finalRemovalScript, listEntries, removalPlan, removeNow, scheduleFinalRemoval } from './removal.js'
+import { finalRemovalDeps, finalRemovalScript, listEntries, removalPlan, removeNow, scheduleFinalRemoval, type FinalRemoval } from './removal.js'
 import { UNINSTALL_MARKER } from './marker.js'
 
 // The real last step, on Windows only: a cmd.exe that waits for a process (a node.exe standing in for the CLI, holding
@@ -51,6 +51,10 @@ function canLinkFiles(): boolean {
 }
 const fileLinks = process.platform === 'win32' && canLinkFiles()
 
+/** Started; else the failure says why: toMatchObject's diff leaves the detail out, and six cases failed on both Windows
+ *  runners saying only `ok: false` (windows.yml run 44827687986). */
+const expectStarted = (removal: FinalRemoval): void => { expect(removal, JSON.stringify(removal)).toMatchObject({ ok: true }) }
+
 const leftovers = (pid: number) => readdirSync(tmpdir()).filter((name) => name.startsWith(`harness-uninstall-${pid}-`))
 
 // A ceiling, not a timing check: each case starts Windows PowerShell (and Add-Type compiles), ~5 s on windows-latest.
@@ -64,7 +68,7 @@ describe.runIf(process.platform === 'win32')('the last step of harness uninstall
     // windows-latest (CI 39097994576).
     const cli = holder(30_000, join(root, 'cli', 'current'))
     const scheduled = scheduleFinalRemoval(plan(root), { ...finalRemovalDeps(), pid: cli.pid! })
-    expect(scheduled).toMatchObject({ ok: true })
+    expectStarted(scheduled)
     // It waits for that process: while it runs, the tree is all there.
     await new Promise((r) => setTimeout(r, 1500))
     expect(cli.exitCode).toBe(null)
@@ -85,7 +89,7 @@ describe.runIf(process.platform === 'win32')('the last step of harness uninstall
     const p = plan(root)
     expect(p.remove.map((t) => t.path)).not.toContain(join(root, UNINSTALL_MARKER))
     const cli = holder(500)
-    expect(scheduleFinalRemoval(p, { ...finalRemovalDeps(), pid: cli.pid! })).toMatchObject({ ok: true })
+    expectStarted(scheduleFinalRemoval(p, { ...finalRemovalDeps(), pid: cli.pid! }))
     await until(() => !existsSync(root))
     expect(existsSync(root)).toBe(false)
     await new Promise((r) => setTimeout(r, 1000))
@@ -103,7 +107,7 @@ describe.runIf(process.platform === 'win32')('the last step of harness uninstall
     const p = plan(root)
     expect(p.remove).toContainEqual({ path: join(root, 'linked'), dir: false, link: true })
     const cli = holder(500)
-    expect(scheduleFinalRemoval(p, { ...finalRemovalDeps(), pid: cli.pid! })).toMatchObject({ ok: true })
+    expectStarted(scheduleFinalRemoval(p, { ...finalRemovalDeps(), pid: cli.pid! }))
     await until(() => !existsSync(root))
     expect(existsSync(root)).toBe(false)
     expect(readdirSync(outside.dir)).toEqual(['keep.txt'])
@@ -120,7 +124,7 @@ describe.runIf(process.platform === 'win32')('the last step of harness uninstall
     symlinkSync(outside.file, join(root, 'cli', 'current'), 'file')
     symlinkSync(outside.file, join(root, 'current-link'), 'file')
     const cli = holder(500)
-    expect(scheduleFinalRemoval(plan(root), { ...finalRemovalDeps(), pid: cli.pid! })).toMatchObject({ ok: true })
+    expectStarted(scheduleFinalRemoval(plan(root), { ...finalRemovalDeps(), pid: cli.pid! }))
     await until(() => !existsSync(root))
     expect(existsSync(root)).toBe(false)
     expect(readFileSync(outside.file, 'utf8')).toBe('k')
@@ -151,7 +155,7 @@ describe.runIf(process.platform === 'win32')('the last step of harness uninstall
         env: { ...process.env, HARNESS_TEST_ROOT: root, HARNESS_TEST_TEMP: temp },
       })
       expect(ran.status, ran.stderr).toBe(0)
-      expect(JSON.parse(ran.stdout)).toMatchObject({ ok: true })
+      expectStarted(JSON.parse(ran.stdout))
       await until(() => !existsSync(root) && readdirSync(temp).length === 0)
       expect(existsSync(root)).toBe(false)
       expect(readdirSync(temp)).toEqual([])
@@ -171,7 +175,7 @@ describe.runIf(process.platform === 'win32')('the last step of harness uninstall
     writeFileSync(join(root, 'cli', 'current'), '0.5.1\n')
     writeFileSync(join(root, 'bin', 'harness.cmd'), '')
     const cli = holder(500)
-    expect(scheduleFinalRemoval(plan(root, true), { ...finalRemovalDeps(), pid: cli.pid! })).toMatchObject({ ok: true })
+    expectStarted(scheduleFinalRemoval(plan(root, true), { ...finalRemovalDeps(), pid: cli.pid! }))
     await until(() => !existsSync(join(root, 'bin')) && !existsSync(join(root, 'cli', '0.5.1')) && !existsSync(join(root, 'cli', 'current')))
     expect(listEntries(root).map((e) => e.name).sort()).toEqual(['auth', 'cli'])
     expect(listEntries(join(root, 'cli')).map((e) => e.name)).toEqual(['data'])

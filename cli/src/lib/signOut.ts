@@ -16,6 +16,7 @@ import { redactArgv } from './agentCreateDiagnosis.js'
 import { redactSecretsInText } from './redactSecrets.js'
 import { clearAuthSession } from './authSession.js'
 import { atomicWriteFile } from './secureState.js'
+import { encodedCommandArgs, modulesByPath, powershellPath, withPrelude } from './windows/powershell.js'
 
 /** What the desktop app's Sign out button passes to `harness logout`: a person asked, in the app. */
 export const SIGN_OUT_BUTTON_FLAG = '--from-sign-out-button'
@@ -77,13 +78,17 @@ export function ancestors(depth = 3): Asker[] {
   return found
 }
 
+/** Windows: [pid]'s parent and command line, one line of JSON. */
+export function windowsProcessQuery(pid: number): string {
+  return `${modulesByPath('CimCmdlets')}
+Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" | Select-Object ParentProcessId,CommandLine | ConvertTo-Json -Compress`
+}
+
 function readProcess(pid: number): { parent: number; command: string } | null {
   try {
     if (process.platform === 'win32') {
-      const out = execFileSync('powershell.exe', [
-        '-NoProfile', '-NonInteractive', '-Command',
-        `Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" | Select-Object ParentProcessId,CommandLine | ConvertTo-Json -Compress`,
-      ], { encoding: 'utf8', timeout: 5_000, windowsHide: true })
+      const out = execFileSync(powershellPath(), encodedCommandArgs(withPrelude(windowsProcessQuery(pid))),
+        { encoding: 'utf8', timeout: 5_000, windowsHide: true })
       const row = JSON.parse(out) as { ParentProcessId?: number; CommandLine?: string | null }
       return { parent: row.ParentProcessId ?? 0, command: row.CommandLine ?? '' }
     }

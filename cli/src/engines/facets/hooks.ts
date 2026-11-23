@@ -48,8 +48,8 @@ export type FolderSetting = { [K in keyof Env]: Env[K] extends string ? K : neve
 export interface HookSettings {
   /** The engine's home when core names none: a folder in the person's home, or a daemon setting. */
   home: { inHome: string } | { setting: FolderSetting }
-  /** The settings file, in that home. */
-  file: string
+  /** The settings file's name, in that home. */
+  fileName: string
   /** One block of ours per event, in this order, with a matcher only where the engine honours one. */
   events: ReadonlyArray<{ event: string; matcher?: string; /** Seconds, where this event's own differs from `timeout`. */ timeout?: number }>
   /** Seconds the engine gives the hook. */
@@ -76,8 +76,9 @@ export interface HookSettings {
    */
   upToDate: { command: 'first-ours' | 'first'; matcher: boolean }
   /**
-   * The daemon's log lines, with {file}, {script} and {port} filled in. The end-to-end harness checks that
-   * every file a line names is inside its throwaway root (e2e/harness/daemon.ts `hookFilesNamed`).
+   * The daemon's log lines, with {port} filled in, and {file} and {script} by their paths' hashes (lib/log.ts
+   * `hashOf`): a path names the person's home. {file} also says when the file is outside the home (lib/log.ts `fileTag`),
+   * which the end-to-end harness fails (e2e/harness/daemon.ts `hooksOutside`).
    */
   messages: {
     /** Nothing to write. */
@@ -131,22 +132,23 @@ export const HARNESS_AGENT_COMMANDS = [['device', 'notify']] as const
  * check refused the command that would have carried them.
  *
  * Either rules added to a list in the settings file (`list`, the person's other rules kept), or a rules file of the
- * engine's that Harness owns whole (`file`, in the settings' home). In a list, a verb's or a command's rules of one kind (`Bash`, `mcp`)
+ * engine's that Harness owns whole (`fileName`, in the settings' home). In a list, a verb's or a command's rules of one kind (`Bash`, `mcp`)
  * are added together or not at all: not where the person's own lists named in `unless` (deny, ask) hold a rule for the
  * same command in any spelling, or a broader one (`Bash(harness:*)`). A deny for `harness close` was otherwise met by
  * an allow for `~/.local/bin/harness close`, which the engine does not count as the same (the review of #1232). A
  * rule the person deletes from the list comes back at the next start; a deny or ask rule keeps it out.
  *
- * A rule may name `{launcher}` (the `harness` in `~/.local/bin`), `{node}` and `{cli}` (the managed Node and the CLI's
- * bundle), filled in with this computer's paths as it is installed: an agent runs `harness` by its full path too,
- * where a rule for the bare name does not apply. A Codex lead sent that way, so each send asked to leave the sandbox
- * (2026-10-12). `{verb}` and `{tool}` make the rule once for each agent verb, naming it or its MCP tool (a rule naming
- * `{tool}` only for a verb that has one); `{verbs}` names every verb as one list. `{command}` and `{words}` make the
- * rule once for each of HARNESS_AGENT_COMMANDS, naming its words as one command or as the items of a list.
+ * A rule may name `{launcher}` (the `harness` in `~/.local/bin`, on Windows `harness.exe` in
+ * `%USERPROFILE%\.harness\bin`), `{node}` and `{cli}` (the managed Node and the CLI's bundle), filled in with this
+ * computer's paths as it is installed: an agent runs `harness` by its full path too, where a rule for the bare name
+ * does not apply. A Codex lead sent that way, so each send asked to leave the sandbox (2026-10-12). `{verb}` and
+ * `{tool}` make the rule once for each agent verb, naming it or its MCP tool (a rule naming `{tool}` only for a verb
+ * that has one); `{verbs}` names every verb as one list. `{command}` and `{words}` make the rule once for each of
+ * HARNESS_AGENT_COMMANDS, naming its words as one command or as the items of a list.
  */
 export type HarnessAllowance =
   | { list: readonly [string, string]; unless?: readonly string[]; rules: readonly string[] }
-  | { file: string; rules: readonly string[] }
+  | { fileName: string; rules: readonly string[] }
 
 /**
  * An engine's record of hooks a person reviewed: in its config file in the same home, a table per hook keyed
@@ -154,8 +156,8 @@ export type HarnessAllowance =
  * (Codex 0.162 `hooks.state`, `trusted_hash`). A hook whose hash differs from the recorded one is asked about again.
  */
 export interface HookReviewRecord {
-  /** The engine's config file, in the settings' home. */
-  file: string
+  /** The engine's config file's name, in the settings' home. */
+  fileName: string
   /** The TOML table the records are sub-tables of. */
   table: string
   /** The field of a record that holds the hash. */

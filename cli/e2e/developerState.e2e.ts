@@ -23,7 +23,7 @@ import { appQueued, pathQueueRuns, writeAppCodex, writePathCodexWhoseQueueFails 
 import { CodexOutside } from './harness/codexOutside.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { Store } from '../src/lib/connectors/store.js'
-import { placeNode } from '../src/testing/placeNode.js'
+import { copyNode } from '../src/testing/placeNode.js'
 import { SYSTEM_FOLDERS } from '../src/testing/testPath.js'
 
 /** The computer's own lsof, which a daemon's stands in front of. None on Windows. */
@@ -327,7 +327,7 @@ describe('a daemon under test knows nothing of the developer\'s own state', () =
     // never executable, never run. By its real path: the refusal names the folder Node names itself by.
     const decoy = join(realpathSync(scratch), 'decoy')
     mkdirSync(decoy)
-    placeNode(join(decoy, 'node'))
+    copyNode(join(decoy, 'node'))
     writeFileSync(join(decoy, 'codex'), '')
     const d = daemon = await IsolatedDaemon.create({ node: join(decoy, 'node') })
     await expect(d.start()).rejects.toThrow(`${decoy} holds codex: a daemon under test must run on a Node alone in its folder`)
@@ -356,7 +356,7 @@ describe('a daemon under test knows nothing of the developer\'s own state', () =
     writeFileSync(rollout, '')
     const codex = join(scratch, 'holder', 'codex')
     mkdirSync(dirname(codex))
-    placeNode(codex)
+    copyNode(codex)
     const script = `if (process.platform === 'linux') process.title = 'codex'
 require('node:fs').openSync(process.argv[1], 'r')
 process.stdout.write('held\\n')

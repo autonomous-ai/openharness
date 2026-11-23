@@ -109,6 +109,52 @@ void main() {
         isNull,
       );
     });
+
+    // The daemon reads a relative ADAPTER_DATA_DIR as a folder in the home, in
+    // every process; the app's own start folder is no part of it.
+    test('a relative ADAPTER_DATA_DIR is in the home folder', () {
+      expect(
+        defaultDaemonDataDir(
+          environment: {
+            'USERPROFILE': r'C:\Users\me',
+            'ADAPTER_DATA_DIR': r'scratch\data',
+          },
+          isWindows: true,
+        ),
+        r'C:\Users\me\scratch\data',
+      );
+      expect(
+        defaultDaemonDataDir(
+          environment: {'HOME': '/Users/me', 'ADAPTER_DATA_DIR': 'data'},
+          isWindows: false,
+        ),
+        '/Users/me/data',
+      );
+      expect(
+        defaultDaemonDataDir(
+          environment: {'ADAPTER_DATA_DIR': 'data'},
+          isWindows: false,
+        ),
+        isNull,
+      );
+    });
+
+    // As the CLI's homePath (cli/src/config/envFields.ts): the socket folder
+    // is a hash of this text, so it must be the daemon's to the character.
+    test('is the folder the daemon resolves, to the character', () {
+      String? dataDir(String value, {bool windows = false}) =>
+          defaultDaemonDataDir(
+            environment: windows
+                ? {'USERPROFILE': r'C:\Users\me', 'ADAPTER_DATA_DIR': value}
+                : {'HOME': '/Users/me', 'ADAPTER_DATA_DIR': value},
+            isWindows: windows,
+          );
+      expect(dataDir('./data/'), '/Users/me/data');
+      expect(dataDir('/abs//data/'), '/abs//data/');
+      expect(dataDir(r'\data', windows: true), r'C:\data');
+      expect(dataDir('C:data', windows: true), r'C:\Users\me\data');
+      expect(dataDir(r'D:\data\', windows: true), r'D:\data\');
+    });
   });
 
   group('readDaemonPipeRecord', () {

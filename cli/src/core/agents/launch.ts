@@ -17,7 +17,7 @@ import { dropPermissionFlagIfUnsupported } from '../../lib/engineLaunch.js'
 import { gridUnavailable, type GridLaunchAnswer, type GridLaunchRequest } from '../../lib/gridLaunchWire.js'
 import { buildLaunchOverrides, type LaunchOverrides, type LaunchOverridesDeps, type LaunchOverridesResult, type LaunchSource } from '../../lib/launchOverrides.js'
 import type { ModelsPort } from '../api.js'
-import { errorKind, sid } from '../../lib/log.js'
+import { errorKind, hashOf, sid } from '../../lib/log.js'
 import { prepareInstructionWrites } from '../../scm/launch.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 
@@ -140,7 +140,7 @@ export function createLaunchHelpers({ authority, prepareApiTools, launchOverride
       // relaunch. Pi then resumes what it can find, as it did before.
       try {
         const home = bringPiSessionHome(session.transcriptPath, roots, sessions)
-        if (home && home !== session.transcriptPath) console.log(`[resume] ${sid(session.agentId)} · pi's conversation brought home · ${home}`)
+        if (home && home !== session.transcriptPath) console.log(`[resume] ${sid(session.agentId)} · pi's conversation brought home · ${hashOf(home)}`)
       } catch (error) {
         console.warn(`[resume] ${sid(session.agentId)} · could not bring pi's conversation home · ${errorKind(error)}`)
       }

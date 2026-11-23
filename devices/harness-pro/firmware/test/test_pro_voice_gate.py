@@ -113,6 +113,7 @@ static void on_wire(const char *what, const char *id) {
     snprintf(CAB.wire + n, sizeof CAB.wire - n, "%s %s;", what, id);
 }
 bool pro_cable_send_open(const char *id) { CHECK(LOCK_DEPTH == 0); (void)id; CAB.opens++; return true; }
+bool pro_cable_send_app_pick(const char *app) { CHECK(LOCK_DEPTH == 0); (void)app; return true; }
 bool pro_cable_send_scroll(pro_scroll_phase_t p, int dy, int v) { CHECK(LOCK_DEPTH == 0); (void)p; (void)dy; (void)v; return true; }
 bool pro_cable_request_library(int offset, uint32_t request) { CHECK(LOCK_DEPTH == 0); (void)offset; (void)request; return true; }
 bool pro_cable_library_supported(void) { return false; }
@@ -238,7 +239,7 @@ static void situation(void) {
     pro_voice_close(); pro_voice_link_lost();   // the real state machine starts clean, like a fresh boot
     memset(&REC, 0, sizeof REC); REC.init_ok = true;
     LOCK_DEPTH = 0;
-    pod_roster_row_t rows[] = {{"a1", "Alpha", "claude", "Mac"}, {"a2", "Bravo", "codex", "Mac"}, {"a3", "Charlie", "claude", "Box"}};
+    pod_roster_row_t rows[] = {{"a1", "Alpha", "claude", "Mac", NULL, 0}, {"a2", "Bravo", "codex", "Mac", NULL, 0}, {"a3", "Charlie", "claude", "Box", NULL, 0}};
     pod_ui_roster(&U, rows, 3);
     cable_swarm_t sw[1] = {{.agents = 2, .panes = 2}};
     snprintf(sw[0].id, sizeof sw[0].id, "s0"); snprintf(sw[0].name, sizeof sw[0].name, "Backend");
@@ -247,10 +248,10 @@ static void situation(void) {
     members.count[0] = 2; snprintf(members.id[0][0], ID_MAX, "a1"); snprintf(members.id[0][1], ID_MAX, "a2");
     pod_ui_swarms(&U, sw, 1, &members, "s0", NULL, 0);
     pro_app_link(true, "mac");
-    ROWS[0] = (pro_agent_row_t){"a1", "Alpha", "claude", "m-a", "Mac"};
-    ROWS[1] = (pro_agent_row_t){"a2", "Bravo", "codex", "m-a", "Mac"};
-    ROWS[2] = (pro_agent_row_t){"a3", "Charlie", "claude", "m-b", "Box"};
-    pro_app_agents(ROWS, 3);
+    ROWS[0] = (pro_agent_row_t){"a1", "Alpha", "claude", "m-a", "Mac", NULL, 0};
+    ROWS[1] = (pro_agent_row_t){"a2", "Bravo", "codex", "m-a", "Mac", NULL, 0};
+    ROWS[2] = (pro_agent_row_t){"a3", "Charlie", "claude", "m-b", "Box", NULL, 0};
+    pro_app_agents(ROWS, 3, false, true);
     machines("online", "online");
     render();
 }
@@ -307,7 +308,7 @@ static void booting(void) {   // no machines.end yet: the gate does not wait for
 }
 static void question_agent_says_why(void) {
     situation(); to_agent(1);
-    pro_app_question("a2", "r1", "Which one?");
+    pro_app_question("a2", "r1", "Which one?", false);
     render();
     CHECK(!hit(POD_A_TALK, 0));
     press_stale();
@@ -467,7 +468,7 @@ static void voice_link_drop_ends_talk(void) {
     // Reconnect: the next recording starts clean.
     sender_done();
     pro_app_link(true, "mac");
-    pro_app_agents(ROWS, 3);
+    pro_app_agents(ROWS, 3, false, true);
     machines("online", "online");
     render();
     press();

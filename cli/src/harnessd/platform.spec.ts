@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { fakePlatform, type FakePlatform } from '../testing/fakePlatform.js'
 import {
   COMMAND_TIMEOUT_MS, LAUNCHD_LABEL, OS_SYSTEMD_UNIT, OS_UNIT_FILE, PLATFORM_ENV, PLATFORM_LABEL, PlatformService, RESTART_THROTTLE_S, STOP_TIMEOUT_S, SYSTEMD_UNIT,
-  TASK_REPEAT, WHOAMI_ARGS, currentUid, defaultPlatformDeps, launchdPlist, logonTaskName, platformFor, platformFromEnv, stoppedThisBoot, systemdUnit, taskName, taskSchedulerXml, whoamiSid,
+  TASK_REPEAT, WHOAMI_ARGS, currentUid, defaultPlatformDeps, launchdPlist, logonTaskName, platformFor, platformFromEnv, stoppedThisBoot, systemdUnit, systemRoot, taskName, taskSchedulerXml, whoamiSid,
   type CommandResult, type PlatformDeps, type ServiceDefinition,
 } from './platform.js'
 
@@ -188,6 +188,36 @@ describe('the default dependencies', { timeout: FAKE_COMMANDS_TIMEOUT_MS }, () =
     expect(missing.stdout).toBe('')
     expect(missing.error).toMatch(/ENOENT/)
     expect(COMMAND_TIMEOUT_MS).toBeGreaterThan(STOP_TIMEOUT_S * 1000)
+  })
+
+  // Windows looks for a bare name in the folder `harness service install` runs in before PATH.
+  it("run Windows' own schtasks and whoami from System32 on Windows, never from the PATH", () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+    try {
+      // Windows' own folder, as the file system names it: SystemRoot and windir are whoever runs the command's.
+      const deps = defaultPlatformDeps({ env: { PATH: fake.bin, SystemRoot: 'D:\\Elsewhere', windir: 'D:\\Elsewhere' }, uid: 501, home: join(dir, 'home') })
+      const schtasks = deps.run('schtasks', ['/Query']).error
+      expect(schtasks).not.toContain('Elsewhere')
+      expect(schtasks).toContain(`${systemRoot()}\\System32\\schtasks.exe`)
+      expect(deps.run('whoami', ['/user']).error).toContain(`${systemRoot()}\\System32\\whoami.exe`)
+      expect(fake.calls()).toEqual([])
+    } finally {
+      Object.defineProperty(process, 'platform', platform)
+    }
+  })
+
+  it('find Windows\' own folder where \\\\?\\GLOBALROOT\\SystemRoot leads, asked of the file system', () => {
+    const asked: string[] = []
+    expect(systemRoot((path) => { asked.push(path); return 'D:\\Windows' })).toBe('D:\\Windows')
+    expect(asked).toEqual(['\\\\?\\GLOBALROOT\\SystemRoot'])
+  })
+
+  it('take C:\\Windows when that is no drive\'s folder cmd.exe reads as itself', () => {
+    expect(systemRoot(() => { throw new Error('ENOENT') })).toBe('C:\\Windows')
+    for (const name of ['\\\\server\\share\\Windows', '\\\\?\\GLOBALROOT\\Device\\X', 'D:\\Win%OS%', 'D:\\a!b', 'D:\\a&b', 'D:\\a"b']) {
+      expect(systemRoot(() => name), name).toBe('C:\\Windows')
+    }
   })
 
   it('run a command with its output unread when asked, its exit status and what it said on stderr kept', () => {

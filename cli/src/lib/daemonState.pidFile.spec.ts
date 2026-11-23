@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { spawnSync } from 'child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { fileURLToPath } from 'url'
 
 const io = vi.hoisted(() => ({ failWrite: undefined as string | undefined }))
 vi.mock('node:fs', async original => {
@@ -90,5 +92,23 @@ describe('the pid file', () => {
     setAnsweredPid(77)
     expect(readPid()).toBe(77)
     expect(pidFileWrittenMs()).toBeNull()
+  })
+})
+
+describe('the pid file\'s place', () => {
+  // `harness status` reads it in the shell's folder, the core writes it from the home: one data folder for both.
+  it('the pid file is under the home\'s data folder when ADAPTER_DATA_DIR is relative, from any folder', () => {
+    const home = mkdtempSync(join(tmpdir(), 'pid-home-')), elsewhere = mkdtempSync(join(tmpdir(), 'pid-cwd-'))
+    try {
+      const tsx = fileURLToPath(new URL('../../node_modules/tsx/dist/cli.mjs', import.meta.url))
+      const script = `import { PID_FILE } from ${JSON.stringify(fileURLToPath(new URL('./daemonState.ts', import.meta.url)))}; console.log(PID_FILE)`
+      const run = spawnSync(process.execPath, [tsx, '--eval', script], {
+        cwd: elsewhere, env: { PATH: process.env.PATH, HOME: home, USERPROFILE: home, ADAPTER_DATA_DIR: 'data' }, encoding: 'utf8', timeout: 20_000,
+      })
+      expect(run.status, run.stderr).toBe(0)
+      expect(run.stdout.trim()).toBe(join(home, 'data', 'adapter.pid'))
+    } finally {
+      for (const root of [home, elsewhere]) rmSync(root, { recursive: true, force: true })
+    }
   })
 })

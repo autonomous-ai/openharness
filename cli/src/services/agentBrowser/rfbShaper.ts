@@ -78,7 +78,7 @@ export class RfbShaper {
   private readonly now: () => number
   private readonly schedule: (ms: number, fn: () => void) => void
   private output: (bytes: Uint8Array) => void = () => {}
-  private close: (reason: 'closed', detail: string) => void = () => {}
+  private close: (reason: 'closed', violation: string) => void = () => {}
   private pending: Uint8Array = new Uint8Array(0)
   /** Client bytes of the handshake still to pass, once the version tells how many there are. */
   private handshake: number | undefined
@@ -102,8 +102,9 @@ export class RfbShaper {
     this.output = fn
   }
 
-  /** The stream must end: `detail` names the message, never its content, for the caller's log line. */
-  onClose(fn: (reason: 'closed', detail: string) => void): void {
+  /** The stream must end: `violation` is one of this shaper's fixed sentences, naming the message by its type and
+   *  length, never its content, so the caller's log line says it as it is. */
+  onClose(fn: (reason: 'closed', violation: string) => void): void {
     this.close = fn
   }
 
@@ -196,11 +197,11 @@ export class RfbShaper {
     })
   }
 
-  private shut(detail: string): void {
+  private shut(violation: string): void {
     this.closed = true
     this.heldRequest = undefined
     this.encodings = undefined
     this.pending = new Uint8Array(0)
-    this.close('closed', detail)
+    this.close('closed', violation)
   }
 }

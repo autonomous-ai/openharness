@@ -466,11 +466,13 @@ describe('createDialPluginSetup', () => {
     expect(counted).toEqual([['failed', 'error']])
   })
 
-  it('on Windows nothing is looked for', async () => {
-    const { setup, state, counted } = rig(fakeClaude(), { platform: 'win32' })
-    expect(await setup.pass()).toBe(false)
-    expect(state.lookups).toBe(0)
-    expect(counted).toEqual([])
+  it('a pass on Windows installs the plugin, as on a Mac', async () => {
+    const claude = fakeClaude()
+    const { setup, state, counted } = rig(claude, { platform: 'win32' })
+    expect(await setup.pass()).toBe(true)
+    expect(claude.writes()).toEqual([ADD, INSTALL])
+    expect(state.recorded).toBe('0.6.59')
+    expect(counted).toEqual([['set up']])
   })
 })
 
@@ -515,10 +517,12 @@ describe('the plugin in each Orca account\'s home', () => {
     }
   })
 
-  it('nothing on Windows', async () => {
-    const r = orcaRig([folder()], fakeHomes(), { platform: 'win32' })
+  it('on Windows each Orca home is turned on too', async () => {
+    const a = folder()
+    const r = orcaRig([a], fakeHomes(), { platform: 'win32' })
     await r.setup.pass()
-    expect(r.looked).toEqual([])
+    expect(r.fake.writes(real(a))).toEqual([ENABLE])
+    expect(r.state.pluginHomes).toEqual([real(a)])
   })
 
   // The person turned it off or removed it in the default home: that said no for every home, and a removal takes the

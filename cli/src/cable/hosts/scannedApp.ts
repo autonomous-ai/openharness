@@ -1,6 +1,6 @@
 // Which app a session the open scan found runs in, from its parent processes' executables alone
 // (docs/specs/2026-11-14-dial-app-filter.md, "The scan learns the app where that is cheap"), and which host made the
-// pseudo-terminal a hook's caller runs on (ptyOwner). Nothing else of a process is read but the terminal it runs on: its
+// pseudo-terminal a hook's caller runs on (ptyMaker). Nothing else of a process is read but the terminal it runs on: its
 // environment holds secrets, and its name is outside text (a process can write a prompt there), so a name is matched
 // against the tables and dropped, never kept, logged or sent.
 
@@ -9,6 +9,7 @@ import { homedir } from 'node:os'
 import { basename } from 'node:path'
 import { patientExec } from '../../lib/patientExec.js'
 import type { RunningProcess } from '../../lib/sessionSearch/externals/types.js'
+import { windowsStartTime } from '../../lib/windows/treeKill.js'
 import { frontAppId } from './frontApp.js'
 import { APP_IDS, UNKNOWN_APP } from './hostDetect.js'
 
@@ -102,16 +103,37 @@ export interface ScannedAppDeps {
   roots: readonly string[]
   processes(): Promise<readonly ProcessName[]>
   bundleId(bundle: string): Promise<string | undefined>
+  /** The home whose iTerm2 folders hold iTerm2's server; homedir() when absent. */
+  home?: string
 }
+
+const ITERM_SERVER = /^iTermServer-[0-9][0-9A-Za-z.-]{0,31}$/
+
+/** Whether a process is iTerm2's server, by its path or its name alone. iTerm2 copies the server out of its bundle to
+ *  `iTermServer-<version>` in one of these folders and forks every shell from it; the copy outlives iTerm2 when it
+ *  relaunches with its sessions kept, under launchd then (iTerm2's iTermServerDeleter.swift). So a tab may have no
+ *  `.app` among its parents. Unmeasured: the form comes from iTerm2's source. */
+function isItermServer(executable: string, home: string): boolean {
+  const at = executable.lastIndexOf('/')
+  const folder = executable.slice(0, at + 1)
+  return ITERM_SERVER.test(executable.slice(at + 1))
+    && (folder === '' || folder === `${home}/Library/Application Support/iTerm2/` || folder === `${home}/.iterm2/`)
+}
+
+/** A step of a macOS walk: a bundle whose id names its app, or the app a fixed row names. */
+type Step = { bundle: string } | { app: string }
 
 /** A listed app, never the unknown one: the scan does not answer "Other", it leaves the session to its first hook. */
 const listed = (app: string): boolean => app !== UNKNOWN_APP && APP_IDS.includes(app)
 
+/** Whether the scan learns a session's app from its parents here. Windows waits for the first hook: a dead parent's pid
+ *  can be another process's there. */
+export const scanLearnsApps = (platform: NodeJS.Platform): boolean => platform === 'darwin' || platform === 'linux'
+
 /** Each pid's app, from the nearest of it and its parents that names one; a pid nothing named is left out. */
 export async function scannedApps(pids: readonly number[], deps: ScannedAppDeps): Promise<Map<number, string>> {
   const apps = new Map<number, string>()
-  // Windows waits for the first hook: a dead parent's pid can be another process's there.
-  if ((deps.platform !== 'darwin' && deps.platform !== 'linux') || !pids.length) return apps
+  if (!scanLearnsApps(deps.platform) || !pids.length) return apps
   // One picture of the machine: a parent's id is never matched against a process that took it a moment later.
   const table = new Map((await deps.processes()).map((p) => [p.pid, p]))
   const walks = pids.map((pid) => [pid, parentChain(pid, table).map((p) => p.executable)] as const)
@@ -122,23 +144,37 @@ export async function scannedApps(pids: readonly number[], deps: ScannedAppDeps)
     }
     return apps
   }
-  const bundles = walks.map(([pid, names]) => [pid, names.flatMap((name) => bundleOf(name, deps.roots) ?? [])] as const)
+  const home = deps.home ?? homedir()
+  // A walk ends at its first fixed row, which answers it: a bundle past that would spend a read and a slot of the pass.
+  const steps = walks.map(([pid, names]) => {
+    const of: Step[] = []
+    for (const name of names) {
+      if (isItermServer(name, home)) {
+        of.push({ app: 'iterm' })
+        break
+      }
+      const bundle = bundleOf(name, deps.roots)
+      if (bundle) of.push({ bundle })
+    }
+    return [pid, of] as const
+  })
   // Each bundle once a pass, all together, and a bounded number of them: a bundle past that is not read.
-  const read = [...new Set(bundles.flatMap(([, of]) => of))].slice(0, BUNDLES_A_PASS)
+  const read = [...new Set(steps.flatMap(([, of]) => of.flatMap((step) => ('bundle' in step ? [step.bundle] : []))))].slice(0, BUNDLES_A_PASS)
   const ids = new Map(await Promise.all(read.map(async (bundle) => [bundle, await deps.bundleId(bundle).catch(() => undefined)] as const)))
-  for (const [pid, of] of bundles) {
+  for (const [pid, of] of steps) {
     const app = nearestApp(of, ids)
     if (app) apps.set(pid, app)
   }
   return apps
 }
 
-/** The nearest listed app of a walk's bundles. A bundle with no id (not read this pass, or unreadable) ends the walk
+/** The nearest listed app of a walk's steps. A bundle with no id (not read this pass, or unreadable) ends the walk
  *  with none: it may be the session's own app, and an outer one would be a guess. One read but no table lists is
  *  passed over: a helper or an engine of its own. */
-function nearestApp(bundles: readonly string[], ids: ReadonlyMap<string, string | undefined>): string | undefined {
-  for (const bundle of bundles) {
-    const id = ids.get(bundle)
+function nearestApp(steps: readonly Step[], ids: ReadonlyMap<string, string | undefined>): string | undefined {
+  for (const step of steps) {
+    if ('app' in step) return step.app
+    const id = ids.get(step.bundle)
     if (!id) return undefined
     const app = frontAppId(id)
     if (listed(app)) return app
@@ -147,9 +183,10 @@ function nearestApp(bundles: readonly string[], ids: ReadonlyMap<string, string 
 }
 
 /** A process and up to WALK_PARENTS of its parents, nearest first, from one read of the table: a pid the table does not
- *  hold starts none. The open scan reads their names, a tap on a tmux pane their ids (tmux.ts), and ptyOwner their
- *  terminals. */
-export function parentChain<P extends Pick<ProcessName, 'pid' | 'ppid'>>(pid: number, table: ReadonlyMap<number, P>): P[] {
+ *  hold starts none. A parent that started after its child ends it: Windows hands a freed pid to the next process and
+ *  never reparents, so that is another process on the old pid (lib/callerPane.ts). The open scan reads their names, a
+ *  tap on a tmux pane their ids (tmux.ts), ptyMaker their terminals, and the VS Code match their pids. */
+export function parentChain<P extends Pick<ProcessName, 'pid' | 'ppid'> & { startMarker?: string }>(pid: number, table: ReadonlyMap<number, P>): P[] {
   const chain: P[] = []
   const passed = new Set<number>()
   let p = table.get(pid)
@@ -157,14 +194,26 @@ export function parentChain<P extends Pick<ProcessName, 'pid' | 'ppid'>>(pid: nu
     passed.add(p.pid)
     chain.push(p)
     // launchd and init hold every orphan: they are no session's own.
-    p = p.ppid > 1 ? table.get(p.ppid) : undefined
+    const parent = p.ppid > 1 ? table.get(p.ppid) : undefined
+    p = parent && !startedAfter(parent, p) ? parent : undefined
   }
   return chain
 }
 
+/** Whether [parent] started after [child], by their Windows start markers (`w:<FILETIME>`); false when either has none. */
+function startedAfter(parent: { startMarker?: string }, child: { startMarker?: string }): boolean {
+  const theirs = windowsStartTime(parent.startMarker ?? '')
+  const mine = windowsStartTime(child.startMarker ?? '')
+  return theirs !== null && mine !== null && theirs > mine
+}
+
 /** The hosts whose panes the dial reaches, by the name of the process that makes a pane's pseudo-terminal: a terminal's
  *  own (WezTerm's GUI, or its mux server, which Linux cuts to 15 characters) or a multiplexer's server (tmux's names
- *  itself so on Linux). macOS names each by its path. */
+ *  itself so on Linux). macOS names each by its path. herdr's server, a child of its first client on no terminal
+ *  (RECORDED_HERDR), names itself `herdr`, as its client does, which made the panes before herdr 0.9.0 (`--no-session`).
+ *  Orca's terminal host, per RECORDED_ORCA: `Orca Agents` on macOS, the daemon that renames itself `orca-agents` on
+ *  Linux (.deb and AppImage), and the app itself, `orca-ide`, when the daemon could not start. Orca from before its
+ *  terminal host, and a Linux daemon whose rename failed (`node`), are not covered. */
 const PTY_HOSTS: Readonly<Record<string, string>> = {
   'wezterm-gui': 'wezterm',
   'wezterm-mux-server': 'wezterm',
@@ -173,39 +222,92 @@ const PTY_HOSTS: Readonly<Record<string, string>> = {
   zellij: 'zellij',
   tmux: 'tmux',
   'tmux: server': 'tmux',
+  herdr: 'herdr',
+  'Orca Agents': 'orca',
+  'orca-agents': 'orca',
+  'orca-ide': 'orca',
 }
 
+/** The process that made a pseudo-terminal, and its host when PTY_HOSTS lists it. */
+export interface PtyMaker { pid: number; host?: string }
+
 /**
- * The host that made the pseudo-terminal a process runs on: of it and its parents (parentChain), the first on another
+ * The process that made the pseudo-terminal a process runs on: of it and its parents (parentChain), the first on another
  * terminal or on none. Its environment cannot say: a terminal, an editor or a multiplexer started from a host's pane
- * keeps that pane's variables. None when the process runs on no terminal, the walk ends first, or that process is no
- * host the dial types into. Its name is matched and dropped, never kept.
+ * keeps that pane's variables. None when the process runs on no terminal or the walk ends first. Its name is matched
+ * and dropped, never kept.
  */
-export function ptyOwner(pid: number, rows: readonly PtyProcess[]): string | undefined {
+export function ptyMaker(pid: number, rows: readonly PtyProcess[]): PtyMaker | undefined {
   const [own, ...parents] = parentChain(pid, new Map(rows.map((p) => [p.pid, p])))
   if (own?.tty === undefined) return undefined
   const maker = parents.find((p) => p.tty !== own.tty)
-  const name = maker && basename(maker.executable)
-  return name !== undefined && Object.hasOwn(PTY_HOSTS, name) ? PTY_HOSTS[name] : undefined
+  if (!maker) return undefined
+  const host = ptyHostOf(maker.executable)
+  return host ? { pid: maker.pid, host } : { pid: maker.pid }
 }
 
-/** ptyOwner over [rows], which hold no terminal: the caller's and its parents' are read one at a time ([tty],
- *  readTtyName), up to the first on another terminal or none, past which ptyOwner never looks. */
-export async function readPtyOwner(
+/** The host PTY_HOSTS names for a process's name; none for any other. */
+function ptyHostOf(executable: string): string | undefined {
+  const name = basename(executable)
+  return Object.hasOwn(PTY_HOSTS, name) ? PTY_HOSTS[name] : undefined
+}
+
+/** ptyMaker over [rows], which hold no terminal: the caller's and its parents' are read one at a time ([tty],
+ *  readTtyName), up to the first on another terminal or none, past which ptyMaker never looks. */
+export async function readPtyMaker(
   pid: number, rows: readonly ProcessName[], tty: (pid: number) => Promise<string | undefined>,
-): Promise<string | undefined> {
+): Promise<PtyMaker | undefined> {
   const read: PtyProcess[] = []
   for (const p of parentChain(pid, new Map(rows.map((r) => [r.pid, r])))) {
     const on = await tty(p.pid)
     read.push(on === undefined ? p : { ...p, tty: on })
     if (on === undefined || on !== read[0].tty) break
   }
-  return ptyOwner(pid, read)
+  return ptyMaker(pid, read)
 }
 
-/** The app each of these processes runs in, read from this machine. */
-export function learnApps(pids: readonly number[], exec: Exec = execText): Promise<Map<number, string>> {
+/** readPtyMaker's host alone. */
+export async function readPtyOwner(
+  pid: number, rows: readonly ProcessName[], tty: (pid: number) => Promise<string | undefined>,
+): Promise<string | undefined> {
+  return (await readPtyMaker(pid, rows, tty))?.host
+}
+
+/** A session a multiplexer made: its host as PTY_HOSTS names it, the maker's pid, and the session's own terminal
+ *  (readTtyName's `ttys004`, `pts/2`), which is the multiplexer pane's. */
+export interface MadeBy { host: string; maker: number; tty: string }
+
+/**
+ * The sessions of [pids] whose terminal one of [hosts] made, from the look's one table ([rows]). Diego's report of
+ * 2026-11-22: an agent in tmux or herdr inside iTerm2, found by the scan, sat on Other's page. A session with none of
+ * [hosts] among its parents reads no terminal: its maker cannot be one of them, and most sessions are plain tabs. One
+ * pid at a time, so a look of many sessions never runs their `ps` reads at once. A pid whose read fails (the process
+ * gone since the table) is left out; it never rejects.
+ */
+export async function readMadeBy(
+  pids: readonly number[], rows: readonly ProcessName[], tty: (pid: number) => Promise<string | undefined>, hosts: readonly string[],
+): Promise<Map<number, MadeBy>> {
+  const made = new Map<number, MadeBy>()
+  const table = new Map(rows.map((r) => [r.pid, r]))
+  for (const pid of pids) {
+    const [, ...parents] = parentChain(pid, table)
+    if (!parents.some((p) => hosts.includes(ptyHostOf(p.executable) ?? ''))) continue
+    let own: string | undefined
+    const keepOwn = async (at: number): Promise<string | undefined> => {
+      const on = await tty(at)
+      if (at === pid) own = on
+      return on
+    }
+    const maker = await readPtyMaker(pid, rows, keepOwn).catch(() => undefined)
+    if (maker?.host && own && hosts.includes(maker.host)) made.set(pid, { host: maker.host, maker: maker.pid, tty: own })
+  }
+  return made
+}
+
+/** The app each of these processes runs in, read from this machine; from [rows] when the look has read its table. */
+export function learnApps(pids: readonly number[], rows?: readonly ProcessName[], exec: Exec = execText): Promise<Map<number, string>> {
   return scannedApps(pids, {
-    platform: process.platform, roots: appRoots(homedir()), processes: () => readProcessNames(exec), bundleId: readBundleId,
+    platform: process.platform, roots: appRoots(homedir()),
+    processes: () => (rows ? Promise.resolve(rows) : readProcessNames(exec)), bundleId: readBundleId,
   })
 }

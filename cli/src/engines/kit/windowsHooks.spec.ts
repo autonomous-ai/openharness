@@ -11,6 +11,7 @@ import { COPILOT_HOOK_SETTINGS } from '../copilot/contract.js'
 import { CURSOR_HOOK_SETTINGS } from '../cursor/contract.js'
 import { DEVIN_HOOK_SETTINGS } from '../devin/contract.js'
 import { GROK_HOOK_SETTINGS } from '../grok/contract.js'
+import { fileTag } from '../../lib/log.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
 import { installHermesHooks } from '../nativeHooks.js'
 import { installHookSettings, notifyHookEntry } from './hookSettings.js'
@@ -116,7 +117,7 @@ describe('a hook argument the Windows runner refuses', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const claudeHome = join(dir, 'claude'), rule = { ...COMMANDCODE_HOOK_SETTINGS, file: join(dir, 'commandcode', 'settings.json') }
-    for (const file of [join(claudeHome, claude.settings.file), rule.file]) {
+    for (const file of [join(claudeHome, claude.settings.fileName), rule.file]) {
       mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, '{"hooks":[]}\n')
     }
     expect(await installHookSettings('claude', claude.settings, 19473, claudeHome, {}, 'win32')).toBe(false)
@@ -140,7 +141,7 @@ describe('a hook argument the Windows runner refuses', () => {
 describe('Claude Code\'s exec-form hook already in place', () => {
   it('is left alone: a second install writes nothing and says it is current', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
-    const home = join(dir, 'claude'), file = join(home, claude.settings.file)
+    const home = join(dir, 'claude'), file = join(home, claude.settings.fileName)
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     expect(await installHookSettings('claude', claude.settings, 19473, home, {}, 'win32')).toBe(true)
     const written = readFileSync(file, 'utf8'), before = statSync(file, { bigint: true })
@@ -157,7 +158,7 @@ describe('Claude Code\'s exec-form hook already in place', () => {
 
   it('is rewritten when only its arguments changed (another port)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
-    const home = join(dir, 'claude'), file = join(home, claude.settings.file)
+    const home = join(dir, 'claude'), file = join(home, claude.settings.fileName)
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     expect(await installHookSettings('claude', claude.settings, 19473, home, {}, 'win32')).toBe(true)
     log.mockClear()
@@ -208,7 +209,7 @@ describe('an engine with no hooks on Windows', () => {
 describe('Codex\'s PowerShell hook on Windows', () => {
   it('is written as the line PowerShell reads, and a second install writes nothing', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
-    const home = join(dir, 'codex'), file = join(home, codex.settings.file), config = join(home, codex.settings.reviewed!.file)
+    const home = join(dir, 'codex'), file = join(home, codex.settings.fileName), config = join(home, codex.settings.reviewed!.fileName)
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     expect(await installHookSettings('codex', codex.settings, 19473, home, {}, 'win32')).toBe(true)
@@ -222,7 +223,7 @@ describe('Codex\'s PowerShell hook on Windows', () => {
     const before = [stamp(file), stamp(config)]
     log.mockClear()
     expect(await installHookSettings('codex', codex.settings, 19473, home, {}, 'win32')).toBe(true)
-    expect(log.mock.calls[0]![0]).toBe(codex.settings.messages.current.replace('{file}', file))
+    expect(log.mock.calls[0]![0]).toBe(codex.settings.messages.current.replace('{file}', fileTag(file)))
     expect([stamp(file), stamp(config)]).toEqual(before)
   })
 
@@ -233,7 +234,7 @@ describe('Codex\'s PowerShell hook on Windows', () => {
     expect(await installHookSettings('codex', codex.settings, 19473, home, {}, 'win32')).toBe(true)
     const { command } = notifyHookEntry(codex.settings, hookArgv(19473, 'codex', home), 'win32')!
     const block = (timeout: number, matcher?: string) => [{ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command, timeout }] }]
-    expect(JSON.parse(readFileSync(join(home, codex.settings.file), 'utf8')).hooks).toEqual({
+    expect(JSON.parse(readFileSync(join(home, codex.settings.fileName), 'utf8')).hooks).toEqual({
       SessionStart: block(5, 'startup|resume|clear|compact'), UserPromptSubmit: block(5), Stop: block(5),
       PermissionRequest: block(5), PreToolUse: block(5, 'request_user_input'), Interrupt: block(3),
     })
@@ -294,7 +295,7 @@ describe.skipIf(process.platform === 'win32')('a hook of ours with a stray args 
 
   it('is current for Claude Code: no write', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
-    const home = join(dir, 'claude'), file = join(home, claude.settings.file)
+    const home = join(dir, 'claude'), file = join(home, claude.settings.fileName)
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     expect(await installHookSettings('claude', claude.settings, 19473, home, {}, 'linux')).toBe(true)

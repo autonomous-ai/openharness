@@ -36,6 +36,8 @@ const Set<String> encryptedDownTypes = {
   'viewer_surface',
   'api_connections',
   'connectors',
+  // An Intern 3 managed from here (CLI services/osDevice.ts): its passwords and Wi-Fi pass through.
+  'os_device',
   // Sharing a machine across accounts (CLI services/sharedMachines.ts): the addresses it is shared with,
   // and where a guest may start a harness (the owner's folders).
   'shared_machines',

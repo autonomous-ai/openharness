@@ -87,6 +87,7 @@ interface AppRing {
   ring: DialRing
   rows: HostAgent[]
   waiting: number
+  working: number
 }
 
 /** The app whose page an agent is on: an app outside the set is the unknown one, so there are never more than APP_IDS. */
@@ -102,6 +103,9 @@ export class AppRings {
   private rings = new Map<string, AppRing>()
   private sizes = new Map<string, number>()
 
+  /** `scanLearnsApps`: whether the open scan learns the app of an agent it found (scannedApp.ts). */
+  constructor(private readonly scanLearnsApps = true) {}
+
   update(agents: HostAgent[], ranks?: ReadonlyMap<string, RingRank>): void {
     const byApp = new Map<string, HostAgent[]>()
     for (const a of agents) {
@@ -112,16 +116,18 @@ export class AppRings {
     }
     for (const app of this.rings.keys()) if (!byApp.has(app)) this.rings.delete(app)
     for (const [app, list] of byApp) {
-      const entry = this.rings.get(app) ?? { ring: new DialRing(), rows: [], waiting: 0 }
+      const entry = this.rings.get(app) ?? { ring: new DialRing(), rows: [], waiting: 0, working: 0 }
       entry.rows = entry.ring.select(list, ranks?.get(app)).rows
       entry.waiting = list.filter(needsYou).length
+      entry.working = list.filter((a) => a.state === 'working').length
       this.rings.set(app, entry)
     }
     this.sizes = new Map([...this.rings.keys()].map((app) => [app, byApp.get(app)!.length]))
   }
 
-  apps(): Array<{ id: string; count: number; waiting: number }> {
-    return [...this.rings].map(([id, r]) => ({ id, count: this.sizes.get(id)!, waiting: r.waiting }))
+  /** Each app with its count; waiting and working are counted over the same list as count, so neither exceeds it. */
+  apps(): Array<{ id: string; count: number; waiting: number; working: number }> {
+    return [...this.rings].map(([id, r]) => ({ id, count: this.sizes.get(id)!, waiting: r.waiting, working: r.working }))
   }
 
   ring(app: string): { rows: HostAgent[]; total: number } {
@@ -138,7 +144,10 @@ export class AppRings {
     for (const a of agents) {
       const app = pageOf(a)
       all.set(app, (all.get(app) ?? 0) + 1)
-      if (a.appPending) continue
+      // Where the scan learns no app (Windows) and nothing reports the app in front, an agent it found is placed by its
+      // first hook alone, which can be hours away: it counts as known, or the few agents that hooked would decide the
+      // dial's default over the many the person runs.
+      if (a.appPending && this.scanLearnsApps) continue
       inFront.set(app, (inFront.get(app) ?? 0) + 1)
       if (!a.resting) known.set(app, (known.get(app) ?? 0) + 1)
     }

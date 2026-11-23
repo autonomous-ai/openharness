@@ -228,16 +228,17 @@ master too old to run it starts it beside itself, still in its own process (`src
   title of the ChatGPT app's window, the mod's `attach`, the session the Claude app shows, `notice`, an agent's line
   from `harness device notify`, `notify`,
   the Notifications setting, and `orcaFront`, the terminals of the worktree on Orca's screen from Orca's Harness
-  Device plugin, taken only while its `dial` stream is open (src/services/devices.ts). Where the listener does not
-  run (Windows, and devices inside the core, as on Harness OS) `harness device notify` answers `no dial` and the
-  dial's status carries no Notifications setting, which nothing could change: a known gap. A handler of a second kind holds a stream open,
+  Device plugin, taken only while its `dial` stream is open (src/services/devices.ts). The listener runs on every
+  platform, on Windows over its pipe. Only where the devices run inside the core with no listener (Harness OS) does
+  `harness device notify` answer `no dial` and the dial's status carry no Notifications setting, which nothing could
+  change: a known gap. A handler of a second kind holds a stream open,
   one of its type across every connection (a keyed type keeps one per key up to its limit, a new key past it
   answered 409), and is told when the stream can take a line (`onWritable`) and why it
   ended (`StreamEnd`): on `tabs` the devices tell the watch which terminal tab to select; on `dial` (`dialStream`),
   opened with `standby` so it never takes the stream from another Orca, they tell Orca's Harness Device plugin
   (plugins/harness-device-orca) whether a dial is attached and which agent it shows, and its end drops what
   `orcaFront` set; on `vscode`, keyed by its window and at most 8, they tell Harness's VS Code extension
-  (plugins/harness-device-vscode) which terminal to show and scroll, and that window reports its terminals' shells in
+  (plugins/harness-device-vscode) which terminal to show, scroll and type the dial's words into, and that window reports its terminals' shells in
   a `vscode-state` message (src/cable/hosts/vscodeTerminals.ts). Cursor's windows hold the same `vscode` stream: the
   extension is the same and cannot tell the apps apart, and a terminal is found by its shell's pid, whichever app holds
   it.
@@ -355,15 +356,23 @@ from before (`src/harnessd/services.spec.ts`, `e2e/messagesSkew.e2e.ts`).
 - Do not write to tmux, the registry or another service's files. A service never writes to Harness's tmux: no pane or
   session Harness made. One thing is allowed in the person's own tmux (PM, 2026-11-15,
   [the spec](../../../docs/specs/2026-11-15-device-wave1-checks.md)): the devices process may move to the pane a hook
-  named, once it has checked that the pane's process is the agent's or one of its parents (`cable/hosts/tmux.ts`). It
-  runs `select-window` and `select-pane` on the pane's own session, which every client on that session then shows, and
-  `switch-client` only when it found no app holding a client of that session; that names the client it moves. It runs
-  nothing on a session Harness made. It never types, creates or closes anything there. Harness's panes and the
-  person's can share one tmux server, so the rule is held per pane and session, by the owner tag the hook reads
-  (`hook/notify.mjs` `paneFacts`).
+  named, or to the pane the open scan found by the agent's own tty, once it has checked that the pane's process is the
+  agent's or one of its parents (`cable/hosts/tmux.ts`). It runs `select-window` and `select-pane` on the pane's own
+  session, which every client on that session then shows, and `switch-client` only when it found no app holding a
+  client of that session; that names the client it moves. It runs nothing on a session Harness made. It never types,
+  creates or closes anything there. Harness's panes and the person's can share one tmux server, so the rule is held per
+  pane and session, by the owner tag the hook reads (`hook/notify.mjs` `paneFacts`).
 
   In the person's herdr the devices process runs `herdr agent focus <pane>` alone, for the pane a hook named in the
-  default session, at a tap, and at a rest only while the app holding that pane's client is in front
-  (`cable/hosts/herdr.ts`), beside the dial's words over herdr's socket. To find that client it reads only process
-  names, parents and ttys, the unix-socket rows `lsof` gives for herdr's own processes and a tty's access time, never
-  another process's environment or argv (`cable/hosts/herdrOuter.ts`). It never creates or closes anything there.
+  default session or the pane herdr's own list gives the agent's session, at a tap, and at a rest only while the app
+  holding that pane's client is in front (`cable/hosts/herdr.ts`), beside the dial's words over herdr's socket. To find
+  that client it reads only process names, parents and ttys, the unix sockets of herdr's own processes (on macOS the
+  rows `lsof` gives, on Linux the rows of `ss -xn src '*/herdr-client.sock'` and their `/proc/<pid>/fd` socket links)
+  and a tty's access time, never another process's environment or argv (`cable/hosts/herdrOuter.ts`). It never creates
+  or closes anything there.
+
+  The devices process types into an Orca terminal or a herdr pane only when Orca's terminal host or herdr made the
+  agent's terminal (`cable/hosts/scannedApp.ts` `readPtyOwner`); an agent started from one, in VS Code or another
+  terminal, has that pane held: a tap alone, after the agent's other panes (VS Code started from an Orca terminal is
+  tapped in VS Code), logged `[device] orca · held` or `[device] herdr · held` once a caller (`cable/hosts/orca.ts`,
+  `herdr.ts`). On Windows they are as before.

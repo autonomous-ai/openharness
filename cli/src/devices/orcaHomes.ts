@@ -7,8 +7,9 @@
  */
 import { type ChildProcess, spawn } from 'node:child_process'
 import { existsSync, realpathSync } from 'node:fs'
-import { isAbsolute } from 'node:path'
+import { isAbsolute, win32 } from 'node:path'
 import { resolveBinaryOnPath } from '../lib/binaryOnPath.js'
+import { windowsProgram } from '../lib/windows/program.js'
 import { ownDirectory } from './dialSkill.js'
 import { listable, MAX_HOMES } from './dialSkillFiles.js'
 
@@ -20,6 +21,8 @@ export interface OrcaBinaryDeps {
   onPath(name: string, accept: (path: string) => boolean): string | null
   exists(path: string): boolean
   platform: NodeJS.Platform
+  /** Windows' LOCALAPPDATA, under which Orca installs for one account. */
+  localAppData?: string
 }
 export interface OrcaHomesDeps extends OrcaBinaryDeps {
   /** No shell, stdin closed. Resolves within timeoutMs whatever the child does; never rejects. `code` is null for a
@@ -37,6 +40,9 @@ const APP_ORCA = '/Applications/Orca.app/Contents/Resources/bin/orca'
 /** Where Orca installs its launcher: in the app on macOS, in `resources/bin` beside its binary on Linux, where it is
  *  linked as `orca-ide` beside the screen reader's `orca`. */
 const LAUNCHER = /\/(?:Orca\.app\/Contents\/Resources|resources)\/bin\/orca(?:-ide)?$/
+/** On Windows, the native CLI in `resources\bin`, in any case as Windows reads a path. Never the `orca.cmd` beside it:
+ *  it only forwards to this one through cmd.exe, which reparses every argument (lib/windows/fixtures/orca.cmd). */
+const WINDOWS_LAUNCHER = /\\resources\\bin\\orca\.exe$/i
 
 const none = (): OrcaHomes => ({ claude: [], codex: [] })
 
@@ -45,11 +51,14 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 
 /** Whether [path] is Orca's own launcher, by its real path: GNOME's screen reader is /usr/bin/orca, and run with Orca's
  *  arguments it ignores them and starts. */
-function orcaLauncher(path: string): boolean {
-  try {
-    return LAUNCHER.test(realpathSync(path))
-  } catch {
-    return false
+function orcaLauncher(platform: NodeJS.Platform): (path: string) => boolean {
+  const launcher = platform === 'win32' ? WINDOWS_LAUNCHER : LAUNCHER
+  return (path) => {
+    try {
+      return launcher.test(realpathSync(path))
+    } catch {
+      return false
+    }
   }
 }
 
@@ -63,15 +72,25 @@ function orcaApp(): string {
   return app && isAbsolute(app) ? app : APP_ORCA
 }
 
-/** Orca's CLI: its launcher on PATH (on Linux `orca-ide` first), else, on macOS, the app's own. */
+/** The per-user install's `orca.exe`, whose `resources\bin` Orca's installer does not put on PATH. */
+function windowsInstalled(deps: OrcaBinaryDeps): string | null {
+  if (!deps.localAppData || !win32.isAbsolute(deps.localAppData)) return null
+  const installed = win32.join(deps.localAppData, 'Programs', 'orca', 'resources', 'bin', 'orca.exe')
+  return deps.exists(installed) ? installed : null
+}
+
+/** Orca's CLI: its launcher on PATH (on Linux `orca-ide` first), else, on macOS, the app's own, and on Windows the
+ *  per-user install's. */
 export function orcaBinary(deps: OrcaBinaryDeps): string | null {
   const app = orcaApp()
-  const onPath = (deps.platform === 'linux' ? deps.onPath('orca-ide', orcaLauncher) : null) ?? deps.onPath('orca', orcaLauncher)
+  const accept = orcaLauncher(deps.platform)
+  const onPath = (deps.platform === 'linux' ? deps.onPath('orca-ide', accept) : null) ?? deps.onPath('orca', accept)
+  if (deps.platform === 'win32') return onPath ?? windowsInstalled(deps)
   return onPath ?? (deps.platform === 'darwin' && deps.exists(app) ? app : null)
 }
 
 /** This computer's real `orca`. */
-export function orcaHomesDeps(): OrcaHomesDeps {
+export function orcaHomesDeps(platform: NodeJS.Platform = process.platform): OrcaHomesDeps {
   return {
     run: (file, args, { timeoutMs, maxBytes }) => new Promise((resolve) => {
       let child: ChildProcess | undefined
@@ -93,10 +112,13 @@ export function orcaHomesDeps(): OrcaHomesDeps {
       }
       const deadline = setTimeout(() => stop(true), timeoutMs)
       try {
+        // On Windows `orca.exe` is started as it is, so no cmd.exe reads the arguments again.
+        const program = windowsProgram(file, args, { platform })
         // stderr is never kept: it can name paths.
-        child = spawn(file, args, { stdio: ['ignore', 'pipe', 'ignore'] })
+        child = spawn(program.file, program.args, { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, env: program.env })
       } catch {
-        // A file or argument it refuses before starting (a NUL byte) throws rather than emits.
+        // A file or argument it refuses before starting (a NUL byte), or a batch file Harness does not start on
+        // Windows, throws rather than emits.
         end(null, false)
         return
       }
@@ -111,8 +133,9 @@ export function orcaHomesDeps(): OrcaHomesDeps {
     }),
     onPath: (name, accept) => resolveBinaryOnPath(name, process.env, accept),
     exists: existsSync,
-    platform: process.platform,
-    // A platform with no uid owns nothing, so no home is kept there.
+    platform,
+    localAppData: process.env.LOCALAPPDATA,
+    // Windows has no uid: there ownDirectory reads the profile instead.
     uid: process.getuid?.() ?? -1,
   }
 }
@@ -161,7 +184,7 @@ export interface OrcaHomesCache {
 
 const sameList = (a: string[], b: string[]): boolean => a.length === b.length && a.every((home, i) => home === b[i])
 
-export function createOrcaHomesCache(deps: { read(): Promise<OrcaHomesRead>; now(): number; platform: NodeJS.Platform; log(line: string): void }): OrcaHomesCache {
+export function createOrcaHomesCache(deps: { read(): Promise<OrcaHomesRead>; now(): number; log(line: string): void }): OrcaHomesCache {
   let homes = none()
   let answered = false
   let readAt: number | undefined
@@ -180,8 +203,6 @@ export function createOrcaHomesCache(deps: { read(): Promise<OrcaHomesRead>; now
     get: () => homes,
     answered: () => answered,
     refresh() {
-      // Windows gives a folder no owner uid to check (ownDirectory), so no home could be kept: nothing is run for none.
-      if (deps.platform === 'win32') return Promise.resolve(false)
       if (reading) return reading
       if (readAt !== undefined && deps.now() - readAt < ORCA_HOMES_REFRESH_MS) return Promise.resolve(false)
       reading = read().then((next) => {
