@@ -150,11 +150,8 @@ function killAll(world: TierBWorld, state: State): void {
     spawnSync('tmux', ['-S', world.d.tmux.socket, '-f', '/dev/null', 'kill-session', '-t', `=${name}`], { env: world.d.tmux.env, timeout: TMUX_MS })
     for (const client of clients) killTab(client.processes)
   }
-  if (state.herdr) {
-    // Its server leads a process group of its own, with what its panes run.
-    state.herdr.server.kill()
-    killNow(state.herdr.server.tab.pid)
-  }
+  // Its server leads a process group of its own, with what its panes run; its client is in its tab.
+  state.herdr?.server.kill()
 }
 
 /** [pid]'s tty, as macOS names a terminal (`/dev/ttys004`): one of this test's own processes. */

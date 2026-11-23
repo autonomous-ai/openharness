@@ -85,28 +85,49 @@ const clientArgv = (): string[] => ['/bin/sh', '-c', 'stty rows 40 columns 120 &
 const clientEnv = (d: IsolatedDaemon, config: string, env: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv =>
   ({ ...d.env, ...env, XDG_CONFIG_HOME: config, TERM: 'xterm-256color' })
 
+/** For `ps` to read one process: one that hangs blocks no stop. */
+const PS_MS = 5_000
+
 /** What tells [pid]'s process from one given its pid later: when it started and the path it was started from, never its
- *  argv; undefined once no process has it. */
+ *  argv; undefined once no process has it (ps exits 1). A ps that fails otherwise, on its timeout among them, tells
+ *  nothing: it throws. */
 export function identityOf(pid: number): string | undefined {
   try {
-    return execFileSync('/bin/ps', ['-o', 'lstart=,comm=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || undefined
-  } catch {
-    return undefined
+    return execFileSync('/bin/ps', ['-o', 'lstart=,comm=', '-p', String(pid)],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: PS_MS }).trim() || undefined
+  } catch (error) {
+    if ((error as { status?: number | null }).status === 1) return undefined
+    throw error
   }
 }
 
 /** herdr's server as its first client started it (startIn), not this worker's child: ended once no process has its pid,
  *  and that pid another process's once one with another identity than [identity] (identityOf, read as it started) has
- *  it. */
+ *  it, or once its identity cannot be read: nothing is killed on a guess. */
 export function clientStarted(pid: number, identity: string | undefined): ServerProcess {
   return {
     pid,
     ended: () => (gone(pid) ? 'gone' : undefined),
     reused: () => {
-      const now = identityOf(pid)
-      return now !== undefined && now !== identity
+      try {
+        const now = identityOf(pid)
+        return now !== undefined && now !== identity
+      } catch {
+        return true
+      }
     },
   }
+}
+
+/** [pid] killed while it is the process [identity] names (identityOf, read while it was the test's), never one given its
+ *  pid after it ended, nor one whose identity was never read or cannot be read now. */
+export function killOwn(pid: number, identity: string | undefined): void {
+  try {
+    if (identity === undefined || identityOf(pid) !== identity) return
+  } catch {
+    return
+  }
+  try { process.kill(pid, 'SIGKILL') } catch { /* gone */ }
 }
 
 /** [server]'s group killed, unless another process took its pid. One whose leader is gone is still the server's: no
@@ -152,7 +173,7 @@ export class PrivateHerdr {
 
   /** [tab]: the tab whose client started the server (startIn). */
   private constructor(private readonly d: IsolatedDaemon, private readonly server: ServerProcess, private readonly config: string,
-    readonly socket: string, readonly tab?: HerdrTab) {}
+    readonly socket: string, readonly tab?: HerdrTab, private readonly clientIdentity?: string) {}
 
   /** The server's process. */
   get pid(): number { return this.server.pid }
@@ -220,7 +241,15 @@ export class PrivateHerdr {
       })
     // Ended by the worker's reaper should the worker go before `stop`: it leads the session its client started it in.
     watchGroup(pid)
-    const herdr = new PrivateHerdr(d, clientStarted(pid, identityOf(pid)), config, socketIn(config), tab)
+    // Each read now, while both are this test's: the client has run herdr since it started its server.
+    let identities: { server?: string; client?: string }
+    try {
+      identities = { server: identityOf(pid), client: identityOf(tab.pid) }
+    } catch (error) {
+      await tab.close()
+      throw error
+    }
+    const herdr = new PrivateHerdr(d, clientStarted(pid, identities.server), config, socketIn(config), tab, identities.client)
     await herdr.ready(false)
     try {
       await until('the herdr client to attach', async () => await herdr.clientConnections() > 0, 20_000, 100)
@@ -448,9 +477,11 @@ export class PrivateHerdr {
     return (read.read as { text: string }).text
   }
 
-  /** The server's group killed at once, the driver's last resort: unless another process took its pid (killGroup). */
+  /** The server's group killed at once, then the client in its tab, the driver's last resort: each unless another
+   *  process took its pid (killGroup, killOwn). */
   kill(): void {
     killGroup(this.server)
+    if (this.tab) killOwn(this.tab.pid, this.clientIdentity)
   }
 
   /** The server stopped through its API, else killed with its group, then the tab whose client started it closed. */
