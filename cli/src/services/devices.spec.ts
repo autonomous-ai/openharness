@@ -2158,6 +2158,19 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     expect(vi.getTimerCount()).toBe(timers)
   })
 
+  // The look is the observed source's work: five failing in a minute switched the voice inbox off for the process's life.
+  it('a look that fails as a poll\'s client goes is the observed source\'s to say, and the inbox holds on', async () => {
+    const { port } = start({ faults: ['fleet'] })
+    vi.spyOn(ObservedSource.prototype, 'list').mockImplementation(() => { throw new Error('list broken') })
+    for (const pollId of ['p1', 'p2', 'p3', 'p4', 'p5']) {
+      const poll = port.inboxPoll({ pollId, sessionId: 'sess-1' })
+      port.inboxGone(pollId)
+      expect(await poll).toEqual({})
+    }
+    expect(logs.filter((line) => line.startsWith('[devices] inbox'))).toEqual([])
+    expect(logs).toContain('[devices] observed failed · Error')
+  })
+
   it('timers stop when the service stops', async () => {
     vi.useFakeTimers()
     const { port } = start()
