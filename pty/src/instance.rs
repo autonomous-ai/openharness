@@ -106,32 +106,6 @@ mod tests {
     }
 
     #[test]
-    fn current_is_this_builds_instance() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
-        assert_eq!(current(), instance_name(PROTOCOL, VERSION));
-    }
-
-    // The tag is process-global (an environment variable), so the tests that read it take turns.
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    #[test]
-    fn a_tag_names_a_guest_hosts_instance_apart_and_an_unusable_one_is_ignored() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
-        let base = instance_name(PROTOCOL, VERSION);
-        // A guest host runs the same binary in its own account: its tag keeps its instance, and every route keyed by
-        // it, apart from the owner's.
-        unsafe { std::env::set_var(INSTANCE_TAG_VAR, "gu0123456789ab") };
-        assert_eq!(current(), format!("{base}-gu0123456789ab"));
-        // A tag is a file name, a pipe name and a socket path: anything else is no tag at all.
-        for bad in ["bad tag", "gu_0123456789ab", "", "x".repeat(17).as_str()] {
-            unsafe { std::env::set_var(INSTANCE_TAG_VAR, bad) };
-            assert_eq!(current(), base, "{bad:?}");
-        }
-        unsafe { std::env::remove_var(INSTANCE_TAG_VAR) };
-        assert_eq!(current(), base);
-    }
-
-    #[test]
     fn a_long_home_uses_the_hashed_socket_name() {
         let instance = "p2-0.4.20";
         let short = Path::new("/h/run");

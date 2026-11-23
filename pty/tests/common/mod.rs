@@ -73,10 +73,13 @@ pub fn discovery_file(home: &std::path::Path) -> std::path::PathBuf {
 
 /// The discovery file of `home` once it is there.
 pub fn wait_discovery(home: &std::path::Path) -> serde_json::Value {
-    let file = discovery_file(home);
+    wait_discovery_file(&discovery_file(home))
+}
+
+pub fn wait_discovery_file(file: &std::path::Path) -> serde_json::Value {
     let end = Instant::now() + WAIT;
     loop {
-        if let Ok(bytes) = std::fs::read(&file)
+        if let Ok(bytes) = std::fs::read(file)
             && let Ok(disc) = serde_json::from_slice(&bytes)
         {
             return disc;
