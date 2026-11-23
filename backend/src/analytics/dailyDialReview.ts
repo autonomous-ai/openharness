@@ -204,7 +204,7 @@ export function dailyDialReview(rows: Row[], breakdowns: Row[], now: Date) {
       'Signed-in computers only: voice needs a sign-in, so these lean to voice users and are not all dial users.',
       'Agents found covers hooked engines only: an agent with no hook is invisible to the dial and to these counts.',
       'Computer counts are computer-days unless a row says distinct computers; event counts beside them are not people.',
-      'Distinct computers count a computer once a Monday week or fixed 28-day period: a column across two periods can count it twice.',
+      'Distinct computers count a computer once a Monday week or fixed 28-day period, on its first use in it: a column across two periods can count it twice, or miss it when that first use fell before the column.',
       "A clip carries no build, so a testing: build's dial clips count outside the team.",
       'Any cell under 5 computers, and the events beside it, shows "<5"; a 7- or 28-day column of computer-days goes by its largest day.',
       'day is the last complete UTC day; d7 and d28 the 7 and 28 complete days before today.',
