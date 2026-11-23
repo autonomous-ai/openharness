@@ -7524,10 +7524,15 @@ describe('the Notifications setting (docs/plans/2026-11-16-dial-agent-notify-des
     expect(calls('summary').map(([agentId, , , tier]) => [agentId, tier])).toEqual([['far-1', 'silent'], ['far-3', 'silent'], ['far-2', 'silent']])
   })
 
-  it('Needs you: another machine\'s failed card rings', async () => {
-    needsYou()
+  it('Needs you: another machine\'s failed card rings, and its row stays in the drawer', async () => {
+    const { port } = needsYou()
     seen.fleet!.events!({ machineId: 'cloud', kind: 'summary', agentId: 'far-1', text: 'done', recap: 'The build broke.', failed: true })
     await vi.waitFor(() => expect(calls('summary')).toEqual([['far-1', 'The build broke.', 'done', 'alert', undefined, false]]))
+    seen.fleet!.events!({ machineId: 'cloud', kind: 'error', agentId: 'far-2', text: 'boom' })
+    await vi.waitFor(() => expect(calls('turnError')).toEqual([['far-2', 'boom']]))
+    const row = (agentId: string) => ({ agentId, machineId: 'cloud', question: false, text: 'done' })
+    port.unread([row('far-1'), row('far-2'), row('far-3')])
+    expect(calls('replaceNotifications').at(-1)).toEqual([[row('far-1'), row('far-2')]])
   })
 
   it('Needs you: an agent outside a pane ends on its tile alone', async () => {
