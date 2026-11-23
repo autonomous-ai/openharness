@@ -350,6 +350,12 @@ describe('tierBVerdict', () => {
     expect(tierBVerdict(lost, before, 'darwin'))
       .toEqual({ ok: false, message: 'regression: b/darwin/I1/ring.order, b/darwin/I3/ring.recall' })
   })
+
+  it('tier B reports I15\'s ring order, the same race after the devices restart, but does not hold it', () => {
+    const before = baseline({ 'b/darwin/I15/ring.order': 1 })
+    const raced = run([result({ tier: 'b', app: 'iterm', scenario: 'I15', check: 'ring.order', dim: 'D1', score: 1 / 3 })])
+    expect(tierBVerdict(raced, before, 'darwin')).toEqual({ ok: true, message: 'tier B on darwin holds its baseline' })
+  })
 })
 
 describe('updateBaseline', () => {
