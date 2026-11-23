@@ -1157,6 +1157,14 @@ describe('the dial with no window: this computer\'s agents', () => {
       expect(openEnded.mock.calls).toEqual([['h1', { outcome: 'failed', code: 'desktop_no_window' }]])
     })
 
+    it('a tap reports its open: no window, and none to start', async () => {
+      const openEnded = vi.fn()
+      const { host, w } = await setup({ openEnded, launchDesktop: undefined })
+      await host.openAgent('h1')
+      expect(w.opened).toHaveBeenCalledWith('mine', 'h1', undefined)
+      expect(openEnded.mock.calls).toEqual([['h1', { outcome: 'failed', code: 'desktop_no_window' }]])
+    })
+
     it('a question screen reports no open', async () => {
       const openEnded = vi.fn()
       const { host } = await setup({ openEnded })
