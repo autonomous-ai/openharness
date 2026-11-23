@@ -13540,6 +13540,21 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
     })
   })
 
+  it('a window open on its tab leaves a hooked agent in its own app', async () => {
+    const { port } = start({ faults: ['fleet'] })
+    const zed = { sessionId: 'sess-2', hostHints: { __CFBundleIdentifier: 'dev.zed.Zed' } }
+    port.observed(hook('session-start'))
+    port.observed(hook('session-start', zed))
+    await attach(port)
+    port.swarms({ active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: [], panes: 0 }], tiles: [] })
+    seen.host.voiceEnded!({ outcome: 'sent', agentId: ID })
+    port.observed(hook('turn-start'))
+    port.observed(hook('turn-start', zed))
+    expect(await counted(port)).toMatchObject({
+      dial_voice_host_orca_delivered: 1, dial_hooked_claude_placed: 1, dial_hooked_claude_other: 1,
+    })
+  })
+
   it('the stop writes what waits, and nothing after', async () => {
     vi.useFakeTimers()
     const { port } = start({ core: harnessAgent(), faults: ['fleet'] })
