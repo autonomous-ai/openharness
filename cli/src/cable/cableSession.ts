@@ -2497,7 +2497,7 @@ export class CableSession {
 
   /** How a voice turn ended, for the dial's usage counts. A count never changes what the dial does or is told. */
   private voiceEnded(end: DialVoiceEnd): void {
-    try { this.host.voiceEnded?.(end) } catch { this.log('cable: voice end not counted') }
+    try { this.host.voiceEnded?.(end) } catch (error) { this.log(`cable: voice end not counted · ${errorKind(error)}`) }
   }
 
   /** A recording whose voice.end never came ends here, its one end said: a newer recording, an abort, a cancelled

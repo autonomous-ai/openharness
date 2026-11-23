@@ -834,7 +834,7 @@ export class DaemonCableHost implements CableHost {
 
   /** How a person's tap ended, for the dial's usage counts. A count never changes what the tap does. */
   private openEnded(agentId: string, end: DialOpenEnd): void {
-    try { this.wiring.openEnded?.(agentId, end) } catch { this.wiring.log('cable: open end not counted') }
+    try { this.wiring.openEnded?.(agentId, end) } catch (error) { this.wiring.log(`cable: open end not counted (${errorKind(error)})`) }
   }
 
   /** The dial that reported last and what it shows. One report for all dials: a none from another dial is dropped, so
@@ -1243,7 +1243,7 @@ export class DaemonCableHost implements CableHost {
 
   /** An answer on the dial, for the dial's usage counts. A count never changes where the answer goes. */
   private answered(agentId: string, requestId: string): void {
-    try { this.wiring.answered?.(agentId, requestId) } catch { this.wiring.log('cable: answer not counted') }
+    try { this.wiring.answered?.(agentId, requestId) } catch (error) { this.wiring.log(`cable: answer not counted (${errorKind(error)})`) }
   }
 
 
