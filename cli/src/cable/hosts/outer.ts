@@ -6,20 +6,24 @@
  */
 import type { Pane } from './adapter.js'
 import type { ProcessName } from './scannedApp.js'
+import type { Nest } from './types.js'
 
 /**
  * Where the person sees an agent nested in a multiplexer whose own pty is no tab: `undefined` at once when the agent
  * is not nested in it, else a promise that never rejects, `{}` when no app was found. The client's process comes with
  * its app when known: the agent's own is under the multiplexer's server, which owns no window (observed.ts windowOf).
+ * `nest`: this lookup's multiplexer made the caller's terminal, whether or not a client was found, so the agent is on
+ * that multiplexer's page even with no app known.
  */
 export type OuterLookup = (
   hints: Readonly<Record<string, string>>,
   pid: number,
-) => Promise<{ app?: string; tty?: string; pid?: number }> | undefined
+) => Promise<{ app?: string; tty?: string; pid?: number; nest?: Nest }> | undefined
 
 /**
  * The first lookup's answer when it names an app; else the second's when that names one, asked only once the first
- * has settled; else the first's, whose client's process alone still tells which process to raise.
+ * has settled; else the first's, whose client's process alone still tells which process to raise. Its `nest` is the
+ * first answer's that has one: the app may come from the other lookup, the pane is still the confirming one's.
  */
 export function firstOuter(first: OuterLookup, second: OuterLookup): OuterLookup {
   return (hints, pid) => {
@@ -28,7 +32,9 @@ export function firstOuter(first: OuterLookup, second: OuterLookup): OuterLookup
     return found.then(async (place) => {
       if (place.app) return place
       const next = await second(hints, pid)
-      return next?.app ? next : place
+      const answer = next?.app ? next : place
+      const nest = place.nest ?? next?.nest
+      return nest ? { ...answer, nest } : answer
     })
   }
 }

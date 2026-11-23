@@ -1,5 +1,9 @@
 export type HostAgentState = 'idle' | 'working' | 'needs-you' | 'done' | 'error'
 
+/** A multiplexer whose pane can be an agent's own terminal and that has its own page on the dial: tmux and herdr only
+ *  (Diego, 2026-11-23); Zellij and Rex stay on their app's. */
+export type Nest = 'tmux' | 'herdr'
+
 export interface HostAgent {
   /** What the dial sends back; a UUID. */
   id: string
@@ -13,8 +17,14 @@ export interface HostAgent {
   name: string
   /** 'harness' | 'orca' | 'herdr' | 'ghostty' | 'iterm' | 'vscode' | 'terminal' | ... */
   host: string
-  /** The outermost app, one of `APP_IDS`: the dial's page the agent is on. The unknown app's while `appPending`. */
+  /** The outermost app the person sees, one of `APP_IDS`: what a tap brings and the tab it raises, and the app a
+   *  prompt's follow compares with the front. The page is `pageOf`'s (`select.ts`). The unknown app's while
+   *  `appPending`. */
   app: string
+  /** The nearest multiplexer whose pane is the agent's own terminal, as its lookup or the scan's maker read confirmed
+   *  (`observed.ts`); tmux and herdr only (Diego, 2026-11-23). Its page is that multiplexer's unless its app is Orca
+   *  (`select.ts` `pageOf`). */
+  nest?: Nest
   /**
    * Nothing has said where it runs yet: the open scan found it and no hook has told of it. It sits on the unknown app's
    * page, so it can be reached, but is not known to be in that app, so it counts for nothing in the dial's default.
