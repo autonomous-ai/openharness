@@ -1576,6 +1576,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     inOrder(event.agentId, () => dispatch(event, notice))
   }
 
+  /** Another machine's agents whose turn runs, from its first `processing` card to its end: no `turn_started` card comes
+   *  from there, so that first card is the turn's start a voice to it waits for. */
+  const remoteTurns = new Set<string>()
   // A remote machine's cards reach the dial through the same calls. The fleet has already noted which
   // machine the agent is on (services/fleet.ts), so a question from it can be named and, tapped, opened.
   fleet?.onEvent((event) => part.call('dial', () => {
@@ -1586,6 +1589,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (event.kind === 'state') { void cable.syncMachines(); return }
     if (event.kind === 'questionClosed') { inOrder(event.agentId, () => { void cable.questionClose(event.agentId, event.requestId) }); return }
     if (event.kind === 'question') { tally('alert', 'rule:question', 'question', 0); inOrder(event.agentId, () => { void cable.question(event.agentId, event.requestId, event.questions) }); return }
+    if (event.kind === 'processing' && !remoteTurns.has(event.agentId)) {
+      remoteTurns.add(event.agentId)
+      count((usage) => usage.turnStarted(event.agentId))
+    } else if (event.kind === 'done' || event.kind === 'error') remoteTurns.delete(event.agentId)
     toDial({ ...event, subagent: event.subagent === true })
   }))
 
