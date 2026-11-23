@@ -356,6 +356,16 @@ describe('tierBVerdict', () => {
     const raced = run([result({ tier: 'b', app: 'iterm', scenario: 'I15', check: 'ring.order', dim: 'D1', score: 1 / 3 })])
     expect(tierBVerdict(raced, before, 'darwin')).toEqual({ ok: true, message: 'tier B on darwin holds its baseline' })
   })
+
+  it("tier B reports I3's and I15's ringKept, pass/fail over the same list as their ring and so its order, but does not hold it; another scenario's is held", () => {
+    const kept = (scenario: string, score: number): CheckResult =>
+      result({ tier: 'b', app: 'iterm', scenario, check: 'ringKept', dim: 'D7', score })
+    const before = baseline({ 'b/darwin/I3/ringKept': 1, 'b/darwin/I15/ringKept': 1, 'b/darwin/I21/ringKept': 1 })
+    expect(tierBVerdict(run([kept('I3', 0), kept('I15', 0), kept('I21', 1)]), before, 'darwin'))
+      .toEqual({ ok: true, message: 'tier B on darwin holds its baseline' })
+    expect(tierBVerdict(run([kept('I3', 1), kept('I15', 1), kept('I21', 0)]), before, 'darwin'))
+      .toEqual({ ok: false, message: 'regression: b/darwin/I21/ringKept' })
+  })
 })
 
 describe('updateBaseline', () => {
