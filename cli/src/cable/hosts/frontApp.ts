@@ -15,8 +15,8 @@ const FRONT_BUNDLES: Readonly<Record<string, string>> = {
   'dev.warp.Warp-Preview': 'warp',
 }
 
-// Exe names, lower-cased with `.exe` dropped. The Windows rows wait for its source; WindowsTerminal is the one row that
-// gives the unknown app, since an agent there has no host of its own.
+// Exe names, lower-cased with `.exe` dropped. The Windows rows wait for its source; WindowsTerminal and Alacritty give
+// the unknown app, since an agent there has no host of its own.
 const EXE_APPS: Readonly<Record<string, string>> = {
   code: 'vscode',
   cursor: 'cursor',
@@ -36,7 +36,9 @@ const EXE_APPS: Readonly<Record<string, string>> = {
   // Alacritty.desktop Exec). The unknown app, as WindowsTerminal.
   alacritty: 'terminal',
   // Warp: warp.exe on Windows (Scoop Extras warp-terminal.json), and on Linux /opt/warpdotdev/warp-terminal/warp, which
-  // /usr/bin/warp-terminal links to (Warp's rpm filelists).
+  // /usr/bin/warp-terminal links to (Warp's rpm filelists). GNOME's file-sharing Warp (app.drey.Warp) runs as `warp`
+  // too, so with it in front the dial shows Warp's agents. The row stays, unlike a bare `orca`: Warp has no other name
+  // on Linux, and that app runs no shell, so the scan places no agent in it.
   warp: 'warp',
   // Harness Desktop's Linux binary (desktop/linux/CMakeLists.txt, BINARY_NAME).
   harness: 'harness',
