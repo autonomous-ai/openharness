@@ -1712,12 +1712,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     part.call('notices', () => notices.ended(agentId))
     count((usage) => usage.waitEnded(`notice:${agentId}`, end))
   }
-  /** A notice shown is a wait on the person unless its agent says it proceeds (Decision 8); the card it took the place of
-   *  waits no longer. */
+  /** A notice shown is a wait on the person unless its agent says it proceeds (Decision 8). One that takes the place of
+   *  the agent's own: proceeding, the person most likely acted, so that wait is answered; waiting, it is the same wait. */
   const noticeShown = (ask: NoticeAsk): void => count((usage) => {
     const { agentId } = noticeCaller(ask)
-    usage.waitEnded(`notice:${agentId}`, 'gone')
-    if (noticeKind(ask.text) !== 'proceeding') usage.waitOpened(`notice:${agentId}`, agentId)
+    if (noticeKind(ask.text) === 'proceeding') usage.waitEnded(`notice:${agentId}`, 'answered')
+    else usage.waitOpened(`notice:${agentId}`, agentId)
   })
   /** Another question of that agent closed: its notice, covered or held back by it, is asked again. */
   const reaskNotice = (agentId: string): void => part.call('notices', () => notices.reask(agentId))
