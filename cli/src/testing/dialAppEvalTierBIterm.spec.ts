@@ -13,7 +13,10 @@ const iterm = await import('../../e2e/harness/appEvalIterm.js' as string) as {
   itermHints(s: SessionDef): Record<string, string>
   tabOpened(tabs: Map<string, string>, label: string, tty: string): void
   tabClosed(tabs: Map<string, string>, label: string, tty: string): void
+  leftOpen(client: Opened & { pid: number; processes: object }): Opened & { processes: object }
 }
+/** A tab of the fake iTerm2 as iTerm2's steps hold it. */
+interface Opened { window: string; tab: number; label: string; tty: string; app?: number }
 
 /** The parts of a daemon the fake apps read: its root, and its home in it. */
 interface FakeDaemon { root: string; env: NodeJS.ProcessEnv }
@@ -56,6 +59,13 @@ describe("tier B's iTerm2", () => {
     // macOS gives a closed tab's tty to the next tab: the label it held goes with it.
     iterm.tabOpened(tabs, 'w1.3.0', '/dev/ttys004')
     expect(Object.fromEntries(tabs)).toEqual({ 'w1.0.0': '/dev/ttys005', 'w1.3.0': '/dev/ttys004' })
+  })
+
+  it("a detached client's tab stays open on its shell, whose pid its close ends: never the gone client's, another process's by then", () => {
+    const processes = { pid: 4001, shellPid: 4000, appPid: 3990 }
+    const client = { window: 'w1', tab: 1, label: 'w1.1.0', tty: '/dev/ttys004', app: 3990, pid: 4001, processes }
+    expect(iterm.leftOpen(client)).toEqual({ window: 'w1', tab: 1, label: 'w1.1.0', tty: '/dev/ttys004', app: 3990,
+      processes: { pid: 4000, shellPid: 4000, appPid: 3990 } })
   })
 })
 
