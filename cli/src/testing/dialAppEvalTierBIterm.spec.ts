@@ -1,4 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import type { ChildProcess } from 'node:child_process'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
 import { APP_BUNDLES } from '../cable/hosts/hostDetect.js'
 import { itermSession } from './dialAppEval/catalog.js'
 import type { SessionDef } from './dialAppEval/types.js'
@@ -10,6 +14,21 @@ const iterm = await import('../../e2e/harness/appEvalIterm.js' as string) as {
   tabOpened(tabs: Map<string, string>, label: string, tty: string): void
   tabClosed(tabs: Map<string, string>, label: string, tty: string): void
 }
+
+/** The parts of a daemon the fake apps read: its root, and its home in it. */
+interface FakeDaemon { root: string; env: NodeJS.ProcessEnv }
+type Tab = { process: ChildProcess; pid: number; shellPid?: number; appPid?: number }
+const outside = await import('../../e2e/harness/outsideAgent.js' as string) as {
+  tabUnder(d: FakeDaemon, app: 'iterm', argv: readonly string[], env: NodeJS.ProcessEnv):
+    Promise<{ pid: number; appPid?: number; type?(text: string): void; close(): Promise<void> }>
+  openTab(d: FakeDaemon, cwd: string, env: NodeJS.ProcessEnv, command: readonly string[], options: { app: 'iterm'; shell: boolean }): Promise<Tab>
+  closeTab(tab: Tab, what: string): Promise<void>
+  relaunchIterm(tab: { appPid?: number }): Promise<void>
+  typeInto(tab: ChildProcess, text: string): void
+}
+
+let dir = ''
+afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
 describe("tier B's iTerm2", () => {
   it("a tab, a tmux and a herdr session's hints are Decision 8's", () => {
@@ -37,5 +56,23 @@ describe("tier B's iTerm2", () => {
     // macOS gives a closed tab's tty to the next tab: the label it held goes with it.
     iterm.tabOpened(tabs, 'w1.3.0', '/dev/ttys004')
     expect(Object.fromEntries(tabs)).toEqual({ 'w1.0.0': '/dev/ttys005', 'w1.3.0': '/dev/ttys004' })
+  })
+})
+
+describe.skipIf(process.platform !== 'darwin')("tier B's fake iTerm2, relaunched", () => {
+  it("a tab of it takes no keys, and typing into one throws: its keys went in through the app's stdin, which Node closed as it ended", async () => {
+    dir = mkdtempSync(join(tmpdir(), 'tier-b-relaunch-'))
+    const d: FakeDaemon = { root: dir, env: { HOME: join(dir, 'home'), PATH: process.env.PATH } }
+    const client = await outside.tabUnder(d, 'iterm', ['/bin/cat'], d.env)
+    const shell = await outside.openTab(d, dir, d.env, ['/bin/cat'], { app: 'iterm', shell: true })
+    try {
+      await outside.relaunchIterm(client)
+      await outside.relaunchIterm(shell)
+      expect(() => client.type!('lost\r')).toThrow(/takes no keys/)
+      expect(() => outside.typeInto(shell.process, 'lost\r')).toThrow(/takes no keys/)
+    } finally {
+      await client.close()
+      await outside.closeTab(shell, 'the shell tab')
+    }
   })
 })
