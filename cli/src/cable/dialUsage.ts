@@ -126,6 +126,8 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
   }
 
   const used = () => {
+    // A sleep can hold the midnight timer past the day's turn: a day the dial was used is a day it was connected.
+    if (attaches > 0) add('dial_connected_installation_days')
     add('dial_used_installation_days')
     if (sink.firstEver('used')) add('dial_first_use_installations')
   }
