@@ -35,6 +35,7 @@ const herdr = await import('../../e2e/harness/herdrServer.js' as string) as {
   identityOf(pid: number): string | undefined
   clientStarted(pid: number, identity: string | undefined): object
   killGroup(server: object): void
+  launchLost(screen: string, line: string): boolean
 }
 
 let dir = ''
@@ -122,5 +123,19 @@ describe.skipIf(process.platform === 'win32')("tier B's herdr server its client 
     } finally {
       stranger.process.kill('SIGKILL')
     }
+  })
+})
+
+describe("tier B's herdr: a launch line typed into a new pane's shell", () => {
+  const line = `FAKE_CLAUDE_SESSION_TITLE='Eval alpha' "$CLAUDE_PATH" --resume 00000000-0000-4000-8e00-0000000000e1`
+
+  it('is typed again when the shell lost it, all of it or all but its first letter', () => {
+    expect(herdr.launchLost('', line)).toBe(true)
+    expect(herdr.launchLost('sh-3.2$ F', line)).toBe(true)
+  })
+
+  it('is not typed again once the screen shows it whole, wrapped as herdr reads it, each line\'s trailing space cut: the shell was slow, and a line typed again would reach the agent it starts', () => {
+    const wrapped = `sh-3.2$ ${line}`.match(/.{1,40}/g)!.map((row) => row.trimEnd()).join('\n')
+    expect(herdr.launchLost(wrapped, line)).toBe(false)
   })
 })
