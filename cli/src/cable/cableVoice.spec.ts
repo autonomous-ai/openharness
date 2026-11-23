@@ -1,4 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 
 // The core's sign-in, as the host is handed it (`CoreApi.account`): the host holds none of its own.
 const auth = {
@@ -6,11 +9,16 @@ const auth = {
   accessToken: vi.fn(),
 }
 vi.mock('../lib/voiceRouter.js', () => ({ routeVoiceTask: vi.fn() }))
-vi.mock('../config/env.js', () => ({ env: {
+// The rest of the real env: the cable session's imports read their own paths from it as they load.
+vi.mock('../config/env.js', async (original) => ({ env: {
+  ...(await original<typeof import('../config/env.js')>()).env,
   BACKEND_WS_URL: 'wss://api.example.test/', CABLE_STT_PATH: '/api/voice/stt',
 } }))
 
+import { CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DaemonCableHost, type CableHostWiring } from './cableHost.js'
+import { CableSession, type CableAgent, type CableHost, type CablePort } from './cableSession.js'
+import { DialLog } from './dialLog.js'
 
 const pcm = Buffer.alloc(32_000)
 const ok = () => new Response(JSON.stringify({ success: true, data: { transcript: 'a test sentence' } }), {
@@ -134,5 +142,206 @@ describe('cabled voice transcription', () => {
     auth.session = null
     await expect(host.transcribe(pcm, 16000, 'en')).rejects.toThrow('Sign in on your computer')
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+// The dial's usage counts (docs/plans/2026-11-23-dial-usage-counts-design.md): each voice turn reports one end, at the
+// exit that decides it, and a count never changes what the dial is told.
+describe('each voice turn reports one end', () => {
+  /** A port whose two ends are both in this process: the dial speaks with `say`, and `sent` is what it was told. */
+  class LoopbackPort implements CablePort {
+    readonly path = '/dev/loopback'
+    isOpen = true
+    readonly sent: Array<Record<string, unknown>> = []
+    private decoder = new CableDecoder()
+    constructor(private readonly onData: (chunk: Buffer) => void) {}
+    async write(bytes: Uint8Array): Promise<void> {
+      this.decoder.feed(Buffer.from(bytes), (frame) => {
+        if (frame.type === CableType.Json) this.sent.push(JSON.parse(Buffer.from(frame.payload).toString('utf8')))
+      })
+    }
+    async close(): Promise<void> { this.isOpen = false }
+    say(msg: Record<string, unknown>): void {
+      this.onData(Buffer.from(encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify(msg), 'utf8'))))
+    }
+    pcm(bytes: Buffer): void { this.onData(Buffer.from(encodeCableFrame(CableType.Pcm, bytes))) }
+    voice(): Array<Record<string, unknown>> { return this.sent.filter((m) => String(m.t).startsWith('voice.')) }
+  }
+
+  const agents: CableAgent[] = [{ id: 'a1', name: 'Fix login screen', engine: 'claude' },
+    { id: 'a2', name: 'Device firmware voice', engine: 'codex' }]
+
+  async function talk(over: Partial<CableHost> = {}) {
+    const voiceEnded = vi.fn()
+    const host = {
+      localMachine: () => ({ id: 'mac-local', name: 'MacBook Pro' }),
+      listMachines: async () => ({ machines: [], source: 'backend' as const }),
+      selectedMachine: () => 'mac-local', selectMachine: async () => ({ ok: true as const }),
+      listSwarms: () => ({ selected: '', swarms: [], tiles: [] }), selectSwarm: vi.fn(), listUnread: () => [],
+      appName: () => 'harness', voiceLang: () => 'en', listAgents: async () => agents, agentTotal: () => agents.length,
+      activeSwarm: () => '', describe: () => undefined, sendTurn: vi.fn(), stopTurn: vi.fn(), scrolled: vi.fn(),
+      answer: vi.fn(), focus: vi.fn(), openAgent: vi.fn(), updateAgent: vi.fn(), listModels: async () => [],
+      recentSummaries: async () => [], log: () => {},
+      forkAgent: async () => ({ ok: false as const, error: 'no' }),
+      transcribe: async () => 'fix the login screen',
+      route: async () => ({ agentId: 'a1', confidence: 0.9, reason: 'matched' }),
+      voiceEnded,
+      ...over,
+    } as CableHost
+    let port!: LoopbackPort
+    const session = new CableSession(host, new DialLog(mkdtempSync(join(tmpdir(), 'cable-voice-'))), async (onData) => {
+      port = new LoopbackPort(onData)
+      return port
+    })
+    session.start()
+    onTestFinished(() => session.stop())
+    await vi.waitFor(() => expect(port).toBeDefined())
+    /** One recording, from the press to the release. */
+    const speak = (begin: Record<string, unknown> = {}, end: Record<string, unknown> = {}) => {
+      port.say({ t: 'voice.begin', uploadId: 'u1', ...begin })
+      port.pcm(Buffer.alloc(3200, 7))
+      port.say({ t: 'voice.end', ...end })
+    }
+    /** The dial's answer has come: the end is reported by then. */
+    const answered = () => vi.waitFor(() => expect(port.voice()).toHaveLength(1))
+    return { port, host, voiceEnded, speak, answered }
+  }
+
+  it('each voice turn reports one end: sent to the agent named', async () => {
+    const { voiceEnded, speak, answered } = await talk()
+    speak({ agentId: 'a2' }); await answered()
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'sent', agentId: 'a2' }]])
+  })
+
+  it('each voice turn reports one end: sent to the router\'s pick', async () => {
+    const { voiceEnded, speak, answered } = await talk()
+    speak(); await answered()
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'sent', agentId: 'a1' }]])
+  })
+
+  it('each voice turn reports one end: sent by the window', async () => {
+    const { voiceEnded, speak, answered } = await talk({ routeInWindow: async () => ({ t: 'sent', agentId: 'a2' }) })
+    speak(); await answered()
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'sent', agentId: 'a2' }]])
+  })
+
+  it('each voice turn reports one end: cancelled in the window', async () => {
+    const { voiceEnded, speak, answered } = await talk({ routeInWindow: async () => ({ t: 'cancelled' }) })
+    speak(); await answered()
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'cancelled' }]])
+  })
+
+  it('each voice turn reports one end: window_busy', async () => {
+    const { voiceEnded, speak, answered } = await talk({ routeInWindow: async () => ({ t: 'abandoned' }) })
+    speak(); await answered()
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'window_busy' }]])
+  })
+
+  it('each voice turn reports one end: cancelled while recording', async () => {
+    const { port, voiceEnded } = await talk()
+    port.say({ t: 'voice.begin', uploadId: 'u1', agentId: 'a1' })
+    port.say({ t: 'voice.abort', uploadId: 'u1' })
+    await vi.waitFor(() => expect(voiceEnded).toHaveBeenCalled())
+    port.say({ t: 'voice.abort', uploadId: 'u1' })
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'cancelled', agentId: 'a1' }]])
+  })
+
+  it('each voice turn reports one end: cancelled while transcribing', async () => {
+    let heard!: (text: string) => void
+    const transcribe = vi.fn(() => new Promise<string>((resolve) => { heard = resolve }))
+    const { port, host, voiceEnded, speak } = await talk({ transcribe })
+    speak({ agentId: 'a1' })
+    await vi.waitFor(() => expect(transcribe).toHaveBeenCalled())
+    port.say({ t: 'voice.abort', uploadId: 'u1' })
+    heard('fix the login screen')
+    await vi.waitFor(() => expect(voiceEnded).toHaveBeenCalled())
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'cancelled', agentId: 'a1' }]])
+    expect(host.sendTurn).not.toHaveBeenCalled()
+  })
+
+  it('each voice turn reports one end: a recording a newer one replaced is cancelled', async () => {
+    const { port, voiceEnded, answered } = await talk()
+    port.say({ t: 'voice.begin', uploadId: 'old', agentId: 'a1' })
+    port.say({ t: 'voice.begin', uploadId: 'new', agentId: 'a2' })
+    port.pcm(Buffer.alloc(3200, 7)); port.say({ t: 'voice.end' }); await answered()
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'cancelled', agentId: 'a1' }], [{ outcome: 'sent', agentId: 'a2' }]])
+  })
+
+  it('each voice turn reports one end: no_speech, nothing recorded', async () => {
+    const { port, voiceEnded, answered } = await talk()
+    port.say({ t: 'voice.begin', uploadId: 'u1', agentId: 'a1' }); port.say({ t: 'voice.end' }); await answered()
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'no_speech', agentId: 'a1' }]])
+  })
+
+  it('each voice turn reports one end: no_speech, an empty transcript', async () => {
+    const { voiceEnded, speak, answered } = await talk({ transcribe: async () => '' })
+    speak({ agentId: 'a1' }); await answered()
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'no_speech', agentId: 'a1' }]])
+  })
+
+  it('each voice turn reports one end: transcribe_failed', async () => {
+    const { voiceEnded, speak, answered } = await talk({ transcribe: async () => { throw new Error('Voice is busy') } })
+    speak({ agentId: 'a1' }); await answered()
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'transcribe_failed', agentId: 'a1' }]])
+  })
+
+  it('each voice turn reports one end: route_failed', async () => {
+    const { voiceEnded, speak, answered } = await talk({ route: async () => { throw new Error('Routing is down') } })
+    speak(); await answered()
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'route_failed' }]])
+  })
+
+  it('each voice turn reports one end: no_agent', async () => {
+    const { voiceEnded, speak, answered } = await talk({ route: async () => ({ agentId: '', confidence: 0, reason: '' }) })
+    speak(); await answered()
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'no_agent' }]])
+  })
+
+  it('each voice turn reports one end: refused by the agent', async () => {
+    const { voiceEnded, speak, answered } = await talk({ sendTurn: async () => ({ ok: false, message: 'Busy' }) })
+    speak({ agentId: 'a1' }); await answered()
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'refused', agentId: 'a1' }]])
+  })
+
+  it('each voice turn reports one end: refused, an agent that takes no voice', async () => {
+    const transcribe = vi.fn(async () => 'fix the login screen')
+    const { voiceEnded, speak, answered } = await talk({ transcribe, capsOf: () => 's' })
+    speak({ agentId: 'a1' }); await answered()
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'refused', agentId: 'a1' }]])
+    expect(transcribe).not.toHaveBeenCalled()
+  })
+
+  it('each voice turn reports one end: send_failed', async () => {
+    const { voiceEnded, speak, answered } = await talk({ sendTurn: async () => { throw new Error('gone') } })
+    speak({ agentId: 'a1' }); await answered()
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'send_failed', agentId: 'a1' }]])
+  })
+
+  it('each voice turn reports one end: other, a draft to review', async () => {
+    const { host, voiceEnded, speak, answered } = await talk()
+    speak({ agentId: 'a1' }, { review: true }); await answered()
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'other' }]])
+    expect(host.sendTurn).not.toHaveBeenCalled()
+  })
+
+  it('each voice turn reports one end: other, a form field', async () => {
+    const form = vi.fn(async (c: import('./windowForm.js').FormCommand) => ({ ok: true, active: true, canQuery: true,
+      queryId: c.queryId, revision: 2 }))
+    const { voiceEnded, speak, answered } = await talk({ form })
+    speak({ formId: 'form-one', formRevision: 2 }); await answered()
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'other' }]])
+  })
+
+  it('each voice turn reports one end: other, a search', async () => {
+    const { voiceEnded, speak, answered } = await talk({ selectPassage: async () => ({ ok: false, error: 'Gone' }) })
+    speak({ agentId: 'a1', searchId: 'find-one', searchRevision: 1 }); await answered()
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'other' }]])
+  })
+
+  it('a count that throws changes nothing the dial is told', async () => {
+    const { port, host, speak, answered } = await talk({ voiceEnded: () => { throw new Error('count failed') } })
+    speak({ agentId: 'a1' }); await answered()
+    expect(host.sendTurn).toHaveBeenCalledWith('a1', 'fix the login screen')
+    expect(port.voice()).toEqual([expect.objectContaining({ t: 'voice.transcript', agentId: 'a1' })])
   })
 })
