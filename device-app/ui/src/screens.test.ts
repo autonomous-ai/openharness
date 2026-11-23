@@ -235,7 +235,7 @@ describe('screens', () => {
     push(at('sign_in', 'browser', ['Harness is finishing an update']))
     expect(document.activeElement?.textContent).not.toBe('Cancel')
 
-    // The offer opens by itself as the person switches to ChatGPT: a Return typed for ChatGPT must not press Allow.
+    // It opens by itself: a Return typed for another app must not press Allow.
     push(at('follow', 'offer'))
     expect(document.activeElement?.textContent).toBe('Not now')
     expect(page().querySelector('.primary')?.textContent).toBe('Allow')

@@ -190,7 +190,7 @@ fn only_macos_without_the_permission_asks_and_no_menu_has_a_follow_item() {
 /// door_kind test and its off_macos_a_door_is_always_trusted_and_nothing_is_asked hold it.
 #[cfg(windows)]
 #[test]
-fn off_macos_the_door_is_trusted_with_nothing_saved() {
+fn on_windows_the_door_is_always_trusted_and_asks_nothing() {
     let door = crate::follow::system(std::env::temp_dir());
     assert!(door.trusted());
     assert!(!door.gated());

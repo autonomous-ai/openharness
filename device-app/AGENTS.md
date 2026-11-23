@@ -94,7 +94,7 @@ and Tauri 2 in `src-tauri/`; the window's three screens are plain TypeScript in 
   Its sources: AppKit on macOS, a WinEvent hook on Windows, and on Linux X11, sway or Hyprland, whichever the session
   is; GNOME and KDE on Wayland give it to no other program, so there it is not followed.
   The one thing derived from it is the fixed log line `chatgpt: skipped · no permission`, each time ChatGPT comes
-  to the front while macOS has not given Harness Accessibility.
+  to the front, the dial attached, while macOS has not given Harness Accessibility.
 - **The ChatGPT window's title is private as a tty.** It is written to the watch's stdin and nowhere else
   (`follow.rs`), from whichever door the session has: Accessibility on macOS (`follow_macos.rs`), a WinEvent hook on
   Windows (`follow_windows.rs`), and on Linux X11, sway or Hyprland (`follow_x11.rs`, `follow_sway.rs`,
