@@ -77,9 +77,8 @@ describe("iTerm2's scenarios", () => {
   })
 
   it("I3's and I15's sessions have a turn before their restart, so the scan finds each conversation on disk", () => {
-    const restarted = [...ITERM, ...HELD_OUT.filter((s) => s.app === 'iterm')]
-      .filter((s) => s.steps.some((step) => step.kind === 'devices.restart'))
-    expect(restarted.filter((s) => !s.heldOut).map((s) => s.id)).toEqual(['I3', 'I15'])
+    const restarted = ITERM.filter((s) => s.steps.some((step) => step.kind === 'devices.restart'))
+    expect(restarted.map((s) => s.id)).toEqual(['I3', 'I15'])
     for (const s of restarted) {
       const restart = s.steps.findIndex((step) => step.kind === 'devices.restart')
       for (const d of agents(s)) {

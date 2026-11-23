@@ -90,6 +90,18 @@ describe('the catalog', () => {
     expect(apart([{ id: 'iterm', count: 1 }, { id: 'herdr', count: 1 }])).toBe(0)
   })
 
+  it("IH4's session has a turn before its restart, so the scan finds its conversation on disk", () => {
+    const restarted = HELD_OUT.filter((s) => s.app === 'iterm' && s.steps.some((step) => step.kind === 'devices.restart'))
+    expect(restarted.map((s) => s.id)).toEqual(['IH4'])
+    for (const s of restarted) {
+      const restart = s.steps.findIndex((step) => step.kind === 'devices.restart')
+      for (const d of s.sessions.filter((d) => !d.ghost)) {
+        const turned = s.steps.slice(0, restart).some((step) => step.kind === 'hook' && step.event === 'turn-stop' && step.session === d.key)
+        expect(turned, `${s.id} ${d.key}`).toBe(true)
+      }
+    }
+  })
+
   it('IH5\'s Codex runs in tmux under the daemon\'s CODEX_HOME', () => {
     // No home of its own: the daemon's, which its transcript and its recap are read from.
     const agents = byId('IH5').sessions.filter((d) => !d.ghost)
