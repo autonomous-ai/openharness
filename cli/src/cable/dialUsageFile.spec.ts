@@ -367,6 +367,28 @@ describe("the devices' dial-usage.json", () => {
     expect(logs).toEqual([])
   })
 
+  // A clock behind at the start (before the network sets it) would read the file's latest days as not yet come.
+  it('a clock behind the file\'s making writes nothing, and once right keeps the file\'s days', () => {
+    const file = aFile()
+    const text = JSON.stringify(GOOD)
+    writeFileSync(file, text)
+    vi.setSystemTime(NOW - 3 * DAY)
+    const { usage } = open(file)
+    usage.add('dial_open_ok')
+    flush()
+    expect(readFileSync(file, 'utf8')).toBe(text)
+    vi.setSystemTime(NOW)
+    usage.add('dial_open_ok')
+    flush()
+    expect(saved(file)).toEqual({ ...GOOD, days: { [TODAY]: { dial_open_ok: 3 }, [dayOf(NOW - 3 * DAY)]: { dial_open_ok: 1 } } })
+    // Set back while running, the same.
+    const written = readFileSync(file, 'utf8')
+    vi.setSystemTime(NOW - 3 * DAY)
+    usage.add('dial_open_ok')
+    flush()
+    expect(readFileSync(file, 'utf8')).toBe(written)
+  })
+
   it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('never writes over a file this account cannot read', () => {
     const file = aFile()
     writeFileSync(file, JSON.stringify(GOOD), { mode: 0o600 })
