@@ -17,7 +17,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, readdir, readlink, writeFile } from 'node:fs/promises'
 import { createConnection } from 'node:net'
 import { userInfo } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join, relative } from 'node:path'
 import { promisify } from 'node:util'
 import { observedAgentId } from '../../src/cable/hosts/observed.js'
 import { resolveBinaryOnPath } from '../../src/lib/binaryOnPath.js'
@@ -449,26 +449,38 @@ export function othersNow(): number[] {
   return rows.filter((row) => row.herdr && !ours(row.pid)).map((row) => row.pid)
 }
 
+/** The fake iTerm2's server in a daemon's home: outsideAgent.ts's ITERM_SERVER. */
+const ITERM_SERVER = ['Library', 'Application Support', 'iTerm2', 'iTermServer-3.6.6']
+
 /**
  * The daemon's process table holds no herdr but the test's: a herdr of the developer's runs on the Mac that runs the tests,
  * and the daemon's herdr lookup must never read it (PM, 2026-11-19). A `ps` first on the daemon's PATH, admitted before
  * the daemon runs it, as the harness's `lsof` (harness/daemon.ts). Only the table read `readProcessNames` makes
  * (`ps -axo pid=,ppid=,comm=`, cable/hosts/scannedApp.ts) is touched, the herdr lookup's and every other walk's of the
- * devices alike: each row whose name is `herdr` and whose parents do not reach [root] (the worker) goes, and is noted
- * kept or dropped. Every other `ps` is the system's. It exits with ps's status, never awk's. Called after
- * `IsolatedDaemon.create`, before `start`.
+ * devices alike: each row whose name is `herdr` and whose parents reach neither [root] (the worker) nor the fake iTerm2's
+ * server in the daemon's home goes, and is noted kept or dropped. That server is matched by its whole path, which
+ * nothing but the test starts a process as: it is in the daemon's throwaway root, and a daemon whose home is not is
+ * refused. Once the fake iTerm2 relaunched, a herdr started in its tab is launchd's through that server
+ * (outsideAgent.ts relaunchIterm), and still the test's. [ps] is the real one, a fake table in a spec: every other `ps`
+ * runs it as it was. It exits with ps's status, never awk's. Called after `IsolatedDaemon.create`, before `start`.
  */
-export function ownHerdrsOnly(d: IsolatedDaemon, root: number = process.pid): { kept(): number[]; dropped(): number[] } {
+export function ownHerdrsOnly(d: IsolatedDaemon, root: number = process.pid, ps = '/bin/ps'): { kept(): number[]; dropped(): number[] } {
+  const server = join(d.env.HOME!, ...ITERM_SERVER)
+  if (!isAbsolute(server) || relative(d.root, server).startsWith('..')) {
+    throw new Error(`the daemon's home ${d.env.HOME} is outside its root ${d.root}: its herdrs cannot be told from the person's`)
+  }
   const log = join(d.root, 'ps-herdr.log')
   writeExecutable(join(dirname(d.env.CLAUDE_PATH!), 'ps'), `#!/bin/sh
-if [ $# -ne 2 ] || [ "$1" != -axo ] || [ "$2" != pid=,ppid=,comm= ]; then exec /bin/ps "$@"; fi
+if [ $# -ne 2 ] || [ "$1" != -axo ] || [ "$2" != pid=,ppid=,comm= ]; then exec '${ps}' "$@"; fi
 exec 4>&1
-status=$({ { /bin/ps "$@" 3>&- 4>&-; echo $? >&3; } | awk -v root=${root} -v noted='${log}' '
+status=$({ { '${ps}' "$@" 3>&- 4>&-; echo $? >&3; } | awk -v root=${root} -v server='${server}' -v noted='${log}' '
 {
   line[NR] = $0
   if (match($0, /^ *[0-9]+ +[0-9]+ +/)) {
     pid[NR] = $1; parent[$1] = $2
-    name = substr($0, RLENGTH + 1); sub(/ +$/, "", name)
+    # Whole, as the server is matched: a trailing space is not its path.
+    named[$1] = substr($0, RLENGTH + 1)
+    name = named[$1]; sub(/ +$/, "", name)
     n = split(name, part, "/"); herdr[NR] = part[n] == "herdr"
   }
 }
@@ -476,7 +488,7 @@ END {
   for (i = 1; i <= NR; i++) {
     if (herdr[i]) {
       p = pid[i]; ours = 0
-      for (step = 0; step < 64 && p != "" && p != 0; step++) { if (p == root) { ours = 1; break }; p = parent[p] }
+      for (step = 0; step < 64 && p != "" && p != 0; step++) { if (p == root || named[p] == server) { ours = 1; break }; p = parent[p] }
       print (ours ? "kept " : "dropped ") pid[i] >> noted
       if (!ours) continue
     }
