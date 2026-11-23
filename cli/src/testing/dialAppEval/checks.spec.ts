@@ -1206,7 +1206,8 @@ describe('Orca', () => {
       // A terminal switch is no part of a chat's opening.
       expect(scores(run(opened, s, shown(s, [500], { commands: [switchTo(600, handle(OA)), cmd(800, RAISE.darwin)] }))))
         .toEqual({ worktree: 0, raise: 0, latency: 0 })
-      expect(run(opened, s, shown(s, [500])).flatMap((r) => r.evidence)).toEqual(['tap on oc at 500', 'no command'])
+      // Nothing ran at all: a dead input.
+      expect(Object.values(scores(run(opened, s, shown(s, [500]))))).toEqual([0, 0, 0])
     })
 
     it("a rest on a chat passes on its worktree's activate with no raise, fails on a raise, and has no latency part", () => {

@@ -316,9 +316,12 @@ export function placeOf(s: Pick<SessionDef, 'app' | 'place'>): Place | undefined
   return (EDITORS as readonly App[]).includes(owned(s).app) ? s.place ?? 'terminal' : undefined
 }
 
-/** The agent id the daemon's observed sources give this session: its engine's. */
-export function agentIdOf(s: Pick<SessionDef, 'app' | 'id' | 'engine' | 'place'>): string {
-  return observedAgentId(engineOf(s), s.id)
+/** The agent id the daemon's observed sources give this session: its engine's. No hook names a resting Orca chat, so its
+ *  row is Orca's own, by its Orca session (cable/hosts/orcaChatSource.ts rowOf). */
+export function agentIdOf(s: Pick<SessionDef, 'app' | 'id' | 'engine' | 'place' | 'chat'> & { key?: SessionKey }): string {
+  if (s.chat !== 'resting') return observedAgentId(engineOf(s), s.id)
+  if (s.key === undefined) throw new Error('a resting Orca chat is named by its key')
+  return observedAgentId('orca', orcaAgentSessionId(s.key))
 }
 
 /** The handle of the terminal Orca first lays the session out in: a fixed made-up one from the key's bytes. */
@@ -340,9 +343,9 @@ export function orcaPaneHandle(s: Pick<SessionDef, 'key' | 'handle'>, launch: nu
   return first.replace('-8d00-', `-8d0${launch}-`)
 }
 
-/** The handle its hooks name at that launch: none for `handle: 'none'`. */
-export function hookHandle(s: Pick<SessionDef, 'key' | 'handle'>, launch: number): string | undefined {
-  return s.handle === 'none' ? undefined : orcaPaneHandle(s, launch)
+/** The handle its hooks name at that launch: none for `handle: 'none'`, nor for a chat, which no terminal holds. */
+export function hookHandle(s: Pick<SessionDef, 'key' | 'handle' | 'chat'>, launch: number): string | undefined {
+  return s.handle === 'none' || s.chat !== undefined ? undefined : orcaPaneHandle(s, launch)
 }
 
 /** Orca's id of the worktree, as `terminal list` prints it, in both tiers. */

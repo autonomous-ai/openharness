@@ -4,11 +4,14 @@
  * the real parsing, ordering and switching are graded. `terminal list` prints the latest `orca.layout`'s worktrees with
  * the panes open now (sessions.ts orcaHandleOf), as both tiers print it (orcaListing.ts). A focus watch is a child that
  * prints the last focus line Orca told, then each one after it: an `orca.focus` step's, and the echo of each switch.
+ * `agent list` lists the scenario's chats (docs/plans/2026-11-23-dial-orca-chats-design.md), Orca's from its start, and
+ * `worktree list` the layout's worktrees, each with an identity unless the world gives it none.
  *
  * The plugin (the plan's Decision 9) opens the devices' own `dial` stream handler, as the listener hands it, and tells
- * the worktree on screen on their `orcaFront` handler; calling the handlers directly skips the listener's own limits,
- * which have their own specs. It tells that worktree again each time one of its panes opens or closes, as Orca's
- * `workspace.changed` fires for them (panesChanged). Its stream takes every line and records none: the lines hold names.
+ * the worktree on screen on their `orcaFront` handler, by its identity or else its id as Orca names it to the plugin;
+ * calling the handlers directly skips the listener's own limits, which have their own specs. It tells that worktree
+ * again each time one of its panes opens or closes, as Orca's `workspace.changed` fires for them (panesChanged). Its
+ * stream takes every line and records none: the lines hold names.
  * Orca's quit ends each watch and the stream; its relaunch opens the stream again where it was open.
  */
 import type { OrcaChild } from '../../../../cable/hosts/orca.js'
@@ -16,13 +19,58 @@ import type { OrcaHomes } from '../../../../devices/orcaHomes.js'
 import { REFUSED, type ListenerStream, type ListenerStreamHandler, type StreamEnd } from '../../../../services/devicesListener.js'
 import { flagOf, ORCA_PROGRAMS, programOf } from '../../argv.js'
 import { orcaLayout, orcaListing } from '../../orcaListing.js'
-import { engineOf, ORCA_ECHO_MS, type StepOf } from '../../types.js'
+import { engineOf, ORCA_ECHO_MS, orcaAgentSessionId, orcaWorktreeId, type StepOf } from '../../types.js'
 import type { StepHandler, TierAWorld } from '../world.js'
 import { codexHomeOf, dropSession, orcaHandleOf } from './sessions.js'
 import { handlerOf, tell } from './window.js'
 
 /** `orca terminal --help`'s Commands list, the part the devices read (cable/hosts/orca.ts listsWatchFocus). */
 const help = (watches: boolean): string => ['Commands:', '  list', '  switch', '  send', ...(watches ? ['  watch-focus'] : []), ''].join('\n')
+
+/** `orca agent --help`'s Commands list, the part the devices read (cable/hosts/orcaChatSource.ts listsCommand). */
+const AGENT_HELP = ['Commands:', '  list', ''].join('\n')
+/** Every answer's envelope around its result, as Orca 1.4.271 prints `--json` (src/testing/recordedOrca.ts): its chats and
+ *  its worktrees are this computer's alone. */
+const envelope = (result: object): object =>
+  ({ id: 'eval', ok: true, result: { ...result, hostScope: { hostIds: ['local'], omittedHostIds: [] } }, _meta: { runtimeId: 'eval' } })
+
+/** A fixed made-up UUID of Orca's from a key's bytes, `variant` keeping a worktree's identity (8e) from a chat's pane (8f). */
+function orcaUuid(key: string, variant: '8e' | '8f'): string {
+  const bytes = Buffer.from(key).toString('hex')
+  if (bytes.length > 12) throw new Error(`key ${key} is longer than 6 bytes`)
+  return `00000000-0000-4000-${variant}00-${bytes.padStart(12, '0')}`
+}
+/** The identity Orca gives the worktree, `wt2:local:<uuid>` as on Tony's Mac; none where the world says Orca gives it none. */
+function identityOf(world: TierAWorld, worktree: string): string | undefined {
+  return world.scenario.world?.orca?.noIdentity?.includes(worktree) ? undefined : `wt2:local:${orcaUuid(worktree, '8e')}`
+}
+
+/**
+ * What `agent list --json` prints, in Orca 1.4.271's shape (src/testing/recordedOrca.ts RECORDED_ORCA_AGENTS): a row for
+ * each of the scenario's chats in the order declared, resting or live, which Orca lists whether or not a process runs it
+ * and whatever its layout, as they were made before the scenario began. Each is done, with no answer yet, and last
+ * active its age before the read: no scenario grades a chat's state or preview from Orca's list. An agent in a pane is
+ * Orca's terminal list's, not this one's.
+ */
+function agentList(world: TierAWorld): object {
+  const agents = world.scenario.sessions.filter((s) => s.app === 'orca' && s.chat !== undefined).map((s) => {
+    const worktree = s.worktree ?? 'w1'
+    return { orcaSessionId: orcaAgentSessionId(s.key), kind: 'chat', agent: engineOf(s), state: 'done', worktreeId: orcaWorktreeId(worktree),
+      workspace: `eval-${worktree}`, repo: 'eval-repo', hostId: 'local', paneKey: orcaUuid(s.key, '8f'), title: s.title,
+      lastAssistantMessage: '', updatedAt: Date.now() - s.ageMs }
+  })
+  return envelope({ agents, truncated: false })
+}
+
+/** What `worktree list --json` prints, in Orca 1.4.271's shape cut to the two keys the devices read (RECORDED_ORCA_WORKTREES):
+ *  the latest layout's worktrees, in its order. */
+function worktreeList(world: TierAWorld): object {
+  const worktrees = (modelOf(world).layout?.worktrees ?? []).map((worktree) => {
+    const key = identityOf(world, worktree)
+    return { id: orcaWorktreeId(worktree), ...(key === undefined ? {} : { identity: { key } }) }
+  })
+  return envelope({ worktrees, totalCount: worktrees.length, truncated: false })
+}
 
 /** Orca's accounts' homes (devices/orcaHomes.ts): the one each Codex agent in its panes runs in, an account's own. No
  *  Claude Code agent runs in one. */
@@ -104,6 +152,9 @@ export function answerOrca(world: TierAWorld): void {
       case 'terminal send':
         return { code: 0 }
       case 'account list': return { code: 0, stdout: JSON.stringify(accountList(world)) }
+      case 'agent --help': return { code: 0, stdout: AGENT_HELP }
+      case 'agent list': return { code: 0, stdout: JSON.stringify(agentList(world)) }
+      case 'worktree list': return { code: 0, stdout: JSON.stringify(worktreeList(world)) }
       default: return undefined
     }
   })
@@ -166,9 +217,11 @@ function terminalsOf(world: TierAWorld, worktree: string): string[] | undefined 
   return shown?.panes.map((pane) => pane.handle)
 }
 
-/** The plugin tells the devices the worktree on Orca's screen: its open panes' handles. */
+/** The plugin tells the devices the worktree on Orca's screen: its open panes' handles, and the worktree as Orca's
+ *  `workspace.changed` names it, `identity:<key>` or, with no identity, its id. */
 async function tellFront(world: TierAWorld, worktree: string, terminals: string[]): Promise<void> {
-  await tell(world, { type: 'orcaFront', terminals })
+  const identity = identityOf(world, worktree)
+  await tell(world, { type: 'orcaFront', terminals, workspace: identity === undefined ? orcaWorktreeId(worktree) : `identity:${identity}` })
   modelOf(world).front = { worktree, told: JSON.stringify(terminals) }
 }
 
