@@ -345,9 +345,9 @@ describe('the catalog', () => {
     // time unplugged; iTerm2's agents a second apart (started), I3's and I15's turns (turned), I4's pause before and
     // after the split and its rest after the first tap, I6's rest, I7's rest after the first tap, I9's rests on b and on
     // a and its wait after the echo, I10's and I11's rests after the select, I13's rests after the detach and the attach,
-    // I15's time after the relaunch and its rest after the first tap, I16's long turn, I17's turn, I20's rest on c and
-    // I21's rest and its time unplugged; VH1's rest on a, UH3's voice 200 ms after the prompt, OH1's rest on a and OH2's
-    // voice 200 ms after the focus.
+    // I14's time past the devices' next look after herdr starts again, I15's time after the relaunch and its rest after
+    // the first tap, I16's long turn, I17's turn, I20's rest on c and I21's rest and its time unplugged; VH1's rest on a,
+    // UH3's voice 200 ms after the prompt, OH1's rest on a and OH2's voice 200 ms after the focus.
     const starts = (id: string, n: number): string[] => Array<string>(n - 1).fill(`${id} 1000`)
     expect(waits('own')).toEqual(['C6 5000', 'C9 1000', 'C9 3500', 'C10 2000', 'C11 1000', 'C11 3000', 'X3 5000', 'X8 2000',
       'X11 300', 'X11 300', ...starts('V1', 4), ...starts('V2', 20), ...starts('V3', 2), ...starts('V4', 2), ...starts('V5', 2),
@@ -361,7 +361,7 @@ describe('the catalog', () => {
       ...starts('I2', 4), ...starts('I3', 4), 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000', 'I4 1000', 'I4 1000', 'I4 4000',
       ...starts('I5', 2), ...starts('I6', 2), 'I6 2000', ...starts('I7', 3), 'I7 4000', ...starts('I8', 2),
       ...starts('I9', 2), 'I9 1000', 'I9 500', 'I9 3000', ...starts('I10', 2), 'I10 2000', ...starts('I11', 2), 'I11 2000',
-      ...starts('I12', 2), ...starts('I13', 2), 'I13 2000', 'I13 2000', ...starts('I14', 3),
+      ...starts('I12', 2), ...starts('I13', 2), 'I13 2000', 'I13 2000', ...starts('I14', 3), 'I14 35000',
       ...starts('I15', 3), 'I15 2000', 'I15 2000', 'I15 2000', 'I15 2000', 'I15 4000', 'I16 30000', 'I17 2000',
       ...starts('I18', 2), ...starts('I19', 2), ...starts('I20', 2), 'I20 1000', ...starts('I21', 3), 'I21 1000', 'I21 3000',
       'CH3 1000', 'XH3 200',

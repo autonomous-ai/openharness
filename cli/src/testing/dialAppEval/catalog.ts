@@ -4,6 +4,7 @@
  */
 import { cursorScenarios } from './cursorScenarios.js'
 import { heldOut } from './heldOut.js'
+import { itermScenarios } from './itermScenarios.js'
 import { orcaScenarios } from './orcaScenarios.js'
 import { vscodeScenarios } from './vscodeScenarios.js'
 import { orcaTerminalHandle, type App, type Check, type Editor, type Platform, type Scenario, type SessionDef, type SessionKey, type Step,
@@ -100,11 +101,11 @@ export const started = (keys: SessionKey[]): Step[] => keys.flatMap((session, i)
   { kind: 'hook', session, event: 'start' },
 ])
 
-/** Each session's turn in the order given, a second long, so its conversation is on disk for a scan to find
- *  (docs/plans/2026-11-22-dial-eval-iterm2-plan.md, Decision 13). */
+/** Each session's turn in the order given, so its conversation is on disk for a scan to find
+ *  (docs/plans/2026-11-22-dial-eval-iterm2-plan.md, Decision 13); 2 s long, the shortest turn the catalog lets a person take. */
 export const turned = (keys: SessionKey[]): Step[] => keys.flatMap((session): Step[] => [
   { kind: 'hook', session, event: 'turn-start' },
-  { kind: 'wait', ms: S },
+  { kind: 'wait', ms: 2 * S },
   { kind: 'hook', session, event: 'turn-stop' },
 ])
 
@@ -485,6 +486,7 @@ export const MAIN: Scenario[] = [
   ...vscodeScenarios(),
   ...cursorScenarios(),
   ...orcaScenarios(),
+  ...itermScenarios(),
 ]
 
 export const HELD_OUT: Scenario[] = heldOut()
