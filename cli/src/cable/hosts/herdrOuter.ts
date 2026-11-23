@@ -211,10 +211,8 @@ async function clientsOf(deps: ClientDeps, form: RegExp, server: number, rows: r
   const left = candidates.filter((p) => ttyOf.has(p) && (p !== server || form.test(ttyOf.get(p) ?? '')))
   if (!left.length) return {}
   // A client inside tmux, Zellij or Herdr's terminal has parents that end at a detached server or holder: no app.
+  // Every other step answers its own word: the app scan's throw is the one left, which each caller says as `app`.
   const apps = await scannedApps(left, { platform: deps.platform, roots: deps.roots, processes: async () => rows, bundleId: deps.bundleId })
-    .catch(() => undefined)
-  // Every other step answers its own word: the app scan's throw is the one left, so a lookup never rejects.
-  if (!apps) return 'app'
   const shown = left.filter((p) => apps.has(p))
   if (!shown.length) {
     const client = await usedLast(deps, form, left, ttyOf)
@@ -284,8 +282,8 @@ export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
     if (maker === null) return said(deps, 'processes')
     if (maker?.host !== 'herdr') return said(deps, {})
     // The pane is herdr's whatever the client steps read: found, none or not read, the agent is on herdr's page even
-    // with no app known (Diego, 2026-11-23).
-    return { ...said(deps, await clientsOf(deps, form, maker.pid, rows)), nest: 'herdr' }
+    // with no app known (Diego, 2026-11-23). A step that throws is said as the app scan: a lookup never rejects.
+    return { ...said(deps, await clientsOf(deps, form, maker.pid, rows).catch((): NotRead => 'app')), nest: 'herdr' }
   }
 
   return (hints, pid) => {
@@ -313,6 +311,7 @@ export function createHerdrNested(deps: ClientDeps): (found: { pid: number; make
   const held = saidAnswers(deps)
   return ({ pid, maker, rows }) => {
     if (!PID.test(String(pid)) || !PID.test(String(maker))) return undefined
-    return held(String(maker), () => clientsOf(deps, form, maker, rows))
+    // A step that throws is said as the app scan: a lookup never rejects.
+    return held(String(maker), () => clientsOf(deps, form, maker, rows).catch((): NotRead => 'app'))
   }
 }

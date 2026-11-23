@@ -314,7 +314,9 @@ export function createTmuxOuter(deps: TmuxOuterDeps): OuterLookup {
     const id = hints.TMUX_PANE
     if (!id || !TMUX_PANE_ID.test(id) || !PID.test(String(pid))) return undefined
     return asked(`${id}:${pid}`, async () => {
-      const rows = await tmuxMade(id, pid)
+      // Its table and terminal reads answer their own word: what is left to throw is tmux's finder or run, so a lookup
+      // never rejects.
+      const rows = await tmuxMade(id, pid).catch((): NotRead => 'tmux')
       if (!rows || typeof rows === 'string') return said(deps.log, Promise.resolve(rows ?? {}))
       // From here the agent is in a pane tmux made, so on tmux's page (Diego, 2026-11-23), whatever its clients give:
       // one in an app, none, or a step not read.
