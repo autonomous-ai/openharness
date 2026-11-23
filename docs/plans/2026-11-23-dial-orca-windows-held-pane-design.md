@@ -45,10 +45,12 @@ shell, a launcher or a shim of the caller.
 `windowsPtyOwner(pid, rows)`, a pure function of one table:
 - walks `parentChain(pid, table)` (bounded by `WALK_PARENTS`; a parent that started after its child ends the walk, by
   the `w:<FILETIME>` start markers, since Windows reuses pids and never reparents);
-- skips the caller itself, then every parent that is a shell or launcher (`pwsh`, `powershell`, `cmd`, `bash`, `sh`,
-  `node`: an npm shim runs Codex as `cmd` → `node` → `codex.exe`) or bears the caller's own name (a Scoop or Volta
-  shim `claude.exe` that starts the real `claude.exe`) below any shell: one of that name above a shell is another agent
-  that ran the caller from its own tool (Codex run by Codex, `claude -p` from Claude Code's shell tool), not a shim;
+- skips the caller itself, then every `cmd` (how a script is started: an npm shim runs Codex as `cmd` → `node` →
+  `codex.exe`, Volta's shim `codex.exe` runs it as `cmd /C`), every shell (`pwsh`, `powershell`, `bash`, `sh`), and,
+  below any of those shells, every `node` and every parent that bears the caller's own name (a Scoop or Volta shim
+  `claude.exe` that starts the real `claude.exe`). Above such a shell either is another agent that ran the caller from
+  its own tool (Codex run by Codex: its tool runs PowerShell; `claude -p` from Claude Code's bash tool; Claude Code
+  from npm is `node`), not a launcher or shim, so it decides;
 - the first other parent is the maker. Its name is read Windows' way: `win32.basename`, a trailing `.exe` dropped, both
   case-insensitively. It names a host only through a Windows-only table, `WINDOWS_PTY_HOSTS`: `orca` → `orca` (the
   app's image name, which its terminal host runs under: Electron run as Node keeps it), `herdr` → `herdr`,
@@ -113,9 +115,10 @@ past shells and launchers.
 
 Red first, at the layer of each behavior:
 - `scannedApp.spec.ts`: `windowsPtyOwner` names `orca` for agent → `pwsh.exe` → `Orca.exe`, through `cmd.exe` and
-  `node.exe`, and past a shim of the caller's name; `herdr` and `wezterm` for theirs; none for agent → `pwsh.exe` →
-  `Code.exe`; none when a parent started after its child (reused pid); none for a caller not in the table;
-  case-insensitive names (`ORCA.EXE`); macOS's `PTY_HOSTS` reads unchanged (`Orca` names no host there).
+  `node.exe`, and past a shim of the caller's name (Volta's through `cmd.exe`); `herdr` and `wezterm` for theirs; none
+  for agent → `pwsh.exe` → `Code.exe`; none for an agent of the caller's name or `node.exe` above a shell; none when a
+  parent started after its child (reused pid); none for a caller not in the table; case-insensitive names
+  (`ORCA.EXE`); macOS's `PTY_HOSTS` reads unchanged (`Orca` names no host there).
 - `scannedApp.spec.ts`: `readWindowsPtyOwner` throws on an empty table and answers `windowsPtyOwner` otherwise.
 - `support.spec.ts`: `listProcesses` keeps a `w:` start marker and adds none on other rows.
 - `orca.spec.ts`, `herdr.spec.ts`: on win32 a place with another host, or none read yet, is held; one with that host is

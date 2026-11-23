@@ -286,9 +286,10 @@ const WINDOWS_PTY_HOSTS: Readonly<Record<string, string>> = {
   'wezterm-mux-server': 'wezterm',
 }
 
-/** The shells between a pane's maker and its agent. */
-const WINDOWS_SHELLS = new Set(['pwsh', 'powershell', 'cmd', 'bash', 'sh'])
-/** The launcher between them: an npm shim runs Codex as `cmd` → `node` → `codex.exe`, Volta's as `codex.exe` → `node`. */
+/** The shells between a pane's maker and its agent, and an agent's tool's: Codex runs PowerShell, Claude Code bash. */
+const WINDOWS_SHELLS = new Set(['pwsh', 'powershell', 'bash', 'sh'])
+/** How a script is started: an npm shim runs Codex as `cmd` → `node` → `codex.exe`, Volta's `codex.exe` as `cmd /C`. */
+const WINDOWS_SCRIPT_SHELL = 'cmd'
 const WINDOWS_LAUNCHER = 'node'
 
 /** A Windows image name as the tables hold it: Windows matches names with no case, and `.exe` says nothing. */
@@ -297,11 +298,12 @@ const windowsName = (executable: string): string => win32.basename(executable).r
 /**
  * The host that made the pseudo-console a Windows process runs on. Windows names no terminal, but the program that makes
  * a pseudo-console starts its shell as its own child (ConPTY), so the maker is the caller's nearest parent that is no
- * shell, launcher or shim of the caller's own name (a Scoop or Volta `claude.exe` starting the real one). A shim starts
- * it itself or through Node: one of that name above a shell is another agent that ran the caller from its own tool
- * (Codex run by Codex, `claude -p` from Claude Code's shell tool), and the caller is on its terminal or pipes, not the
- * pane's. That parent decides: none when WINDOWS_PTY_HOSTS does not list it, when the caller is not in [rows], or when
- * the walk finds shells alone. Its name is matched and dropped, never kept.
+ * shell, launcher or shim of the caller's own name (a Scoop or Volta `claude.exe` starting the real one). A shim or
+ * launcher starts the caller itself or through `cmd`: Node or one of the caller's name above any other shell is
+ * another agent that ran the caller from its own tool (Codex run by Codex, `claude -p` from Claude Code's shell tool,
+ * Claude Code from npm being Node), and the caller is on its terminal or pipes, not the pane's. That parent decides:
+ * none when WINDOWS_PTY_HOSTS does not list it, when the caller is not in [rows], or when the walk finds shells alone.
+ * Its name is matched and dropped, never kept.
  */
 export function windowsPtyOwner(pid: number, rows: readonly WindowsProcess[]): string | undefined {
   const [own, ...parents] = parentChain(pid, new Map(rows.map((p) => [p.pid, p])))
@@ -310,7 +312,7 @@ export function windowsPtyOwner(pid: number, rows: readonly WindowsProcess[]): s
   let shelled = false
   for (const parent of parents) {
     const name = windowsName(parent.executable)
-    if (name === WINDOWS_LAUNCHER || (name === ownName && !shelled)) continue
+    if (name === WINDOWS_SCRIPT_SHELL || ((name === WINDOWS_LAUNCHER || name === ownName) && !shelled)) continue
     if (WINDOWS_SHELLS.has(name)) {
       shelled = true
       continue

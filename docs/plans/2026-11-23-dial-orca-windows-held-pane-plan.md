@@ -24,8 +24,9 @@ Linux.
 - `PTY_HOSTS`, `ptyHostOf`, `readPtyOwner`, `readMadeBy` and every macOS/Linux path are unchanged.
 - `WINDOWS_PTY_HOSTS`: `orca` → `orca`, `herdr` → `herdr`, `wezterm-gui` → `wezterm`, `wezterm-mux-server` → `wezterm`
   (keys are names after `win32.basename`, a trailing `.exe` dropped, lower-cased).
-- Skipped parents: `pwsh`, `powershell`, `cmd`, `bash`, `sh`, `node`, and any parent whose name equals the caller's own
-  (same normalisation) while no shell has been passed (final review: one above a shell is another agent). Nothing else.
+- Skipped parents: `cmd`, `pwsh`, `powershell`, `bash`, `sh`, and `node` or any parent whose name equals the caller's
+  own (same normalisation) while none of `pwsh`, `powershell`, `bash`, `sh` has been passed (final review: one above
+  such a shell is another agent; `cmd` is how Volta and npm shims start a script). Nothing else.
 - A process name is outside text: matched and dropped, never kept, logged or put in an error.
 - No new process, no Rust change, no new dependency, no polling. One table read per new caller process (the existing
   `learnPtyOwner` path, `TTY_RETRY_MS` retry).
@@ -46,8 +47,9 @@ Linux.
    Task 2 (unit) and Task 4 (`devices.spec.ts`, the held case) test it.
 3. **A table that could not be read** (`listProcesses` answers `[]`): the read rejects, the pane stays held, and
    `[observed] pty · not read · <kind>` is logged with no pid or name. Task 4 tests it.
-4. **A Codex npm shim chain** (`codex.exe` ← `node.exe` ← `cmd.exe` ← `pwsh.exe` ← `Orca.exe`) and a Scoop/Volta shim
-   bearing the caller's name (`claude.exe` ← `claude.exe` ← `pwsh.exe` ← `Orca.exe`): names `orca`. Task 2.
+4. **A Codex npm shim chain** (`codex.exe` ← `node.exe` ← `cmd.exe` ← `pwsh.exe` ← `Orca.exe`) and a Scoop shim
+   bearing the caller's name (`claude.exe` ← `claude.exe` ← `pwsh.exe` ← `Orca.exe`), or Volta's through `cmd.exe`:
+   names `orca`. Task 2.
 5. **No process name in any log line** on the held path (`Code.exe` never appears in the devices' logs). Task 4 asserts
    it.
 
