@@ -7583,6 +7583,9 @@ describe('the Notifications setting (docs/plans/2026-11-16-dial-agent-notify-des
     expect(calls('replaceNotifications')).toEqual([[[done]], [[]]])
     expect(listener.notify('full')).toEqual({ mode: 'full' })
     expect(calls('replaceNotifications')).toEqual([[[done]], [[]], [[done]]])
+    // The mode in force picked again (the menu's checked item clicked) changes nothing: the dial's drawer stays as it is.
+    expect(listener.notify('full')).toEqual({ mode: 'full' })
+    expect(calls('replaceNotifications')).toEqual([[[done]], [[]], [[done]]])
   })
 
   it('Needs you: a failed turn, a question and a waiting prompt ring as in All', async () => {
