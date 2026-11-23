@@ -159,6 +159,29 @@ describe('scores', () => {
     expect(without.apps.orca).toEqual({ score: null, dims: expect.objectContaining({ D1: null }), leftOut: 0 })
   })
 
+  it('iTerm2 is scored from its own results, the other five untouched', () => {
+    const others = [
+      result({ check: 'ring.recall', dim: 'D1', score: 1 }),
+      result({ scenario: 'X1', app: 'chatgpt', check: 'ring.recall', dim: 'D1', score: 0.5 }),
+      result({ scenario: 'V1', app: 'vscode', check: 'ring.recall', dim: 'D1', score: 1 }),
+      result({ scenario: 'U1', app: 'cursor', check: 'voice.reached', dim: 'D5', score: 0.5 }),
+      result({ scenario: 'O1', app: 'orca', check: 'ring.recall', dim: 'D1', score: 1 }),
+    ]
+    const iterm = [
+      result({ scenario: 'I1', app: 'iterm', check: 'ring.recall', dim: 'D1', score: 0 }),
+      result({ scenario: 'I5', app: 'iterm', check: 'voice.reached', dim: 'D5', score: 1 }),
+    ]
+    const without = grade(run(others), null)
+    const report = grade(run([...others, ...iterm]), null)
+    // D1 15 of 40 scores 0, D5 25 of 40 scores 100.
+    expect(report.apps.iterm).toEqual({ score: 62.5, dims: expect.objectContaining({ D1: 0, D5: 100 }), leftOut: 0 })
+    expect(report.byTier.a.iterm.score).toBe(62.5)
+    expect(report.byPlatform['a/darwin']!.iterm.score).toBe(62.5)
+    expect(report.failing.filter((r) => r.app === 'iterm').map((r) => [r.check, r.pointsLost])).toEqual([['ring.recall', 37.5]])
+    for (const app of ['claude', 'chatgpt', 'vscode', 'cursor', 'orca'] as const) expect(report.apps[app], app).toEqual(without.apps[app])
+    expect(without.apps.iterm).toEqual({ score: null, dims: expect.objectContaining({ D1: null }), leftOut: 0 })
+  })
+
   it('a baseline written before Orca joined has no Orca entry and grades its results all the same', () => {
     const before = baseline({ 'a/darwin/C1/ring.recall': 1 }, { a: { claude: 100, chatgpt: null, vscode: null, cursor: null } })
     const results = run([
@@ -196,7 +219,8 @@ describe('delta', () => {
     const report = grade(run(mixed), before)
     // Tier A against tier A's: tier B was not run, so its scores are no change.
     expect(report.delta.apps).toEqual({ a: { claude: { before: 90, after: 18.75 }, chatgpt: { before: 80, after: null },
-      vscode: { before: null, after: null }, cursor: { before: null, after: null }, orca: { before: null, after: null } } })
+      vscode: { before: null, after: null }, cursor: { before: null, after: null }, orca: { before: null, after: null },
+      iterm: { before: null, after: null } } })
     // Tier B was not run here, so its entry is no change.
     expect(report.delta.checks).toEqual([
       { key: 'a/darwin/C1/ring.cap', before: 1, after: null },
@@ -209,14 +233,15 @@ describe('delta', () => {
     const report = grade(run(mixed.slice(0, 1)), null)
     expect(report.delta).toEqual({
       apps: { a: { claude: { before: null, after: 100 }, chatgpt: { before: null, after: null },
-        vscode: { before: null, after: null }, cursor: { before: null, after: null }, orca: { before: null, after: null } } },
+        vscode: { before: null, after: null }, cursor: { before: null, after: null }, orca: { before: null, after: null },
+        iterm: { before: null, after: null } } },
       checks: [{ key: 'a/darwin/C1/ring.recall', before: null, after: 1 }],
       heldOutChanged: 0,
     })
   })
 
-  it('each subset\'s app scores, in the delta and an updated baseline, hold the five apps', () => {
-    // A baseline written before the editors and Orca joined has no entry of theirs.
+  it('each subset\'s app scores, in the delta and an updated baseline, hold the six apps', () => {
+    // A baseline written before the editors, Orca and iTerm2 joined has no entry of theirs.
     const before = baseline({}, { a: { claude: 90, chatgpt: 80 } })
     const results = run([
       result({ check: 'ring.recall', dim: 'D1', score: 1 }),
@@ -225,13 +250,14 @@ describe('delta', () => {
     ])
     expect(grade(results, before).delta.apps).toEqual({
       a: { claude: { before: 90, after: 100 }, chatgpt: { before: 80, after: null }, vscode: { before: null, after: 50 },
-        cursor: { before: null, after: null }, orca: { before: null, after: null } },
+        cursor: { before: null, after: null }, orca: { before: null, after: null }, iterm: { before: null, after: null } },
       'b/darwin': { claude: { before: null, after: null }, chatgpt: { before: null, after: null },
-        vscode: { before: null, after: null }, cursor: { before: null, after: 100 }, orca: { before: null, after: null } },
+        vscode: { before: null, after: null }, cursor: { before: null, after: 100 }, orca: { before: null, after: null },
+        iterm: { before: null, after: null } },
     })
     expect(updateBaseline(before, results, ['a', 'b']).apps).toEqual({
-      a: { claude: 100, chatgpt: null, vscode: 50, cursor: null, orca: null },
-      'b/darwin': { claude: null, chatgpt: null, vscode: null, cursor: 100, orca: null },
+      a: { claude: 100, chatgpt: null, vscode: 50, cursor: null, orca: null, iterm: null },
+      'b/darwin': { claude: null, chatgpt: null, vscode: null, cursor: 100, orca: null, iterm: null },
     })
   })
 })
@@ -323,7 +349,7 @@ describe('updateBaseline', () => {
         'a/darwin/C1/ring.recall': 1, 'a/darwin/C1/ring.order': 0, 'a/darwin/C5/voice.reached': 0,
         'b/darwin/C1/ring.recall': 1,
       },
-      apps: { a: { claude: 18.75, chatgpt: null, vscode: null, cursor: null, orca: null }, 'b/darwin': { claude: 3, chatgpt: 4 } },
+      apps: { a: { claude: 18.75, chatgpt: null, vscode: null, cursor: null, orca: null, iterm: null }, 'b/darwin': { claude: 3, chatgpt: 4 } },
     })
   })
 
@@ -332,7 +358,7 @@ describe('updateBaseline', () => {
       { 'b/darwin': { claude: 100, chatgpt: null }, 'b/linux': { claude: 50, chatgpt: null } })
     const after = updateBaseline(before, run([result({ tier: 'b', check: 'ring.recall', dim: 'D1', score: 0 })]), ['b'])
     expect(after.checks).toEqual({ 'b/darwin/C1/ring.recall': 0, 'b/linux/C1/ring.recall': 0.5 })
-    expect(after.apps).toEqual({ 'b/darwin': { claude: 0, chatgpt: null, vscode: null, cursor: null, orca: null },
+    expect(after.apps).toEqual({ 'b/darwin': { claude: 0, chatgpt: null, vscode: null, cursor: null, orca: null, iterm: null },
       'b/linux': { claude: 50, chatgpt: null } })
   })
 
@@ -340,7 +366,7 @@ describe('updateBaseline', () => {
     const before = baseline({ 'a/darwin/C1/ring.recall': 1 }, { a: { claude: 100, chatgpt: null } })
     const after = updateBaseline(before, run([result({ tier: 'b', check: 'ring.recall', dim: 'D1', score: 1 })]), ['a', 'b'])
     expect(after).toEqual({ schema: 1, checks: { 'a/darwin/C1/ring.recall': 1, 'b/darwin/C1/ring.recall': 1 },
-      apps: { a: { claude: 100, chatgpt: null }, 'b/darwin': { claude: 100, chatgpt: null, vscode: null, cursor: null, orca: null } } })
+      apps: { a: { claude: 100, chatgpt: null }, 'b/darwin': { claude: 100, chatgpt: null, vscode: null, cursor: null, orca: null, iterm: null } } })
   })
 
   it('leaves out a tier it was not given and starts from nothing with no baseline', () => {
