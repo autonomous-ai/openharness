@@ -65,6 +65,14 @@ describe('the catalog', () => {
     }
   })
 
+  it("every iTerm2 ring lists its rows in the order their agents started, as the dial's ring keeps them", () => {
+    // An agent keeps its place from when it entered (cable/hosts/select.ts DialRing): IH3's sixteen newest are s16 to s01.
+    for (const s of ALL.filter((s) => s.app === 'iterm')) {
+      const order = s.steps.flatMap((step) => (step.kind === 'hook' && step.event === 'start' ? [step.session] : []))
+      for (const c of s.checks) if (c.kind === 'ring') expect(c.expect, `${s.id} ${c.id}`).toEqual(order.filter((key) => c.expect.includes(key)))
+    }
+  })
+
   it("IH4's ring fails with its herdr row also on herdr's page: an apps frame of iterm 1, herdr 1", () => {
     const ih4 = byId('IH4')
     const ring = ih4.checks.find((c) => c.id === 'ring')!
