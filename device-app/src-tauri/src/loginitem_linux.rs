@@ -190,6 +190,11 @@ mod tests {
         exec_line(Path::new(APPIMAGE), Path::new(LAUNCHER)).unwrap()
     }
 
+    /// The entry with the installer's `Exec=` line made the app's, and nothing else changed.
+    fn owned(entry: &str) -> String {
+        entry.replace(INSTALLERS, &format!("Exec={}", exec()))
+    }
+
     /// What a session that reads the entry itself (GLib's way) runs for an `Exec=` value: the string's escape (`\\`),
     /// the field codes (`%%` is the only one), then the arguments, quoted as the Desktop Entry spec quotes them.
     fn argv(value: &str) -> Vec<String> {
@@ -380,7 +385,7 @@ mod tests {
     fn a_fresh_entry_is_dial_linuxs_format() {
         assert_eq!(
             fresh("X"),
-            "[Desktop Entry]\nType=Application\nName=Harness\nExec=X\nX-GNOME-Autostart-enabled=true\n"
+            "[Desktop Entry]\nType=Application\nName=Harness Device\nExec=X\nX-GNOME-Autostart-enabled=true\n"
         );
     }
 
@@ -407,7 +412,7 @@ mod tests {
         let installers = format!(
             "[Desktop Entry]\nType=Application\nName=Harness\n{INSTALLERS}\nX-GNOME-Autostart-enabled=true\nHidden=false\n"
         );
-        let taken = installers.replace(INSTALLERS, &format!("Exec={}", exec()));
+        let taken = owned(&installers).replace("Name=Harness\n", "Name=Harness Device\n");
         // An older AppImage's line too: another path is not this app's own.
         let moved = installers.replace(
             INSTALLERS,
@@ -421,10 +426,85 @@ mod tests {
     }
 
     #[test]
-    fn the_apps_own_entry_is_not_rewritten() {
-        let own = fresh(&exec());
+    fn a_taken_over_entry_without_a_name_gets_one() {
+        // After the group's Type= line.
+        let typed = format!("[Desktop Entry]\nType=Application\n{INSTALLERS}\nHidden=false\n");
+        let named = format!("[Desktop Entry]\nType=Application\nName=Harness Device\n{INSTALLERS}\nHidden=false\n");
+        assert_eq!(change(Some(&typed), &exec(), false), Change::Write(owned(&named)));
+        // With none, right after the header.
+        let untyped = format!("[Desktop Entry]\n{INSTALLERS}\nHidden=false\n");
+        let named = format!("[Desktop Entry]\nName=Harness Device\n{INSTALLERS}\nHidden=false\n");
+        assert_eq!(change(Some(&untyped), &exec(), false), Change::Write(owned(&named)));
+        // A Type= line last, with no newline: the name goes on a line of its own.
+        let last = format!("[Desktop Entry]\n{INSTALLERS}\nType=Application");
+        let named = format!("[Desktop Entry]\n{INSTALLERS}\nType=Application\nName=Harness Device\n");
+        assert_eq!(change(Some(&last), &exec(), false), Change::Write(owned(&named)));
+    }
+
+    #[test]
+    fn a_name_the_person_gave_is_kept() {
+        let mine = format!("[Desktop Entry]\nType=Application\nName=My dial\n{INSTALLERS}\nHidden=false\n");
+        assert_eq!(change(Some(&mine), &exec(), false), Change::Write(owned(&mine)));
         for first in [true, false] {
-            assert_eq!(change(Some(&own), &exec(), first), Change::Leave);
+            assert_eq!(change(Some(&owned(&mine)), &exec(), first), Change::Leave);
+        }
+    }
+
+    #[test]
+    fn localized_names_and_other_groups_are_kept() {
+        let localized = format!("[Desktop Entry]\nType=Application\nName[vi]=Harness\nName=Harness\n{INSTALLERS}\n");
+        let renamed = localized.replace("\nName=Harness\n", "\nName=Harness Device\n");
+        assert_eq!(change(Some(&localized), &exec(), false), Change::Write(owned(&renamed)));
+        assert_eq!(change(Some(&owned(&localized)), &exec(), false), Change::Write(owned(&renamed)));
+        // Another group's Name= is that group's: the entry's own goes in [Desktop Entry].
+        let action = "\n[Desktop Action x]\nName=Harness\nExec=x\n";
+        let grouped = format!("[Desktop Entry]\nType=Application\n{INSTALLERS}\n{action}");
+        let named = format!("[Desktop Entry]\nType=Application\nName=Harness Device\n{INSTALLERS}\n{action}");
+        assert_eq!(change(Some(&grouped), &exec(), false), Change::Write(owned(&named)));
+        assert_eq!(change(Some(&owned(&grouped)), &exec(), false), Change::Leave);
+    }
+
+    #[test]
+    fn a_name_with_spaces_around_the_equals_is_the_name_line() {
+        // Read as is_off reads a line: the one name line, never a second Name key.
+        let spaced = format!("[Desktop Entry]\nType=Application\nName = Harness\n{INSTALLERS}\n");
+        let renamed = spaced.replace("Name = Harness", "Name=Harness Device");
+        assert_eq!(change(Some(&spaced), &exec(), false), Change::Write(owned(&renamed)));
+        assert_eq!(change(Some(&owned(&spaced)), &exec(), false), Change::Write(owned(&renamed)));
+        let mine = format!("[Desktop Entry]\nType=Application\nName = My dial\n{INSTALLERS}\n");
+        assert_eq!(change(Some(&mine), &exec(), false), Change::Write(owned(&mine)));
+    }
+
+    #[test]
+    fn an_entry_without_the_header_gets_no_name() {
+        let named = format!("Type=Application\nName=Harness\n{INSTALLERS}\n");
+        for entry in [format!("Type=Application\n{INSTALLERS}\n"), named] {
+            assert_eq!(change(Some(&entry), &exec(), false), Change::Write(owned(&entry)));
+            assert_eq!(change(Some(&owned(&entry)), &exec(), false), Change::Leave);
+        }
+    }
+
+    #[test]
+    fn the_apps_own_entry_named_harness_is_renamed_once() {
+        // As the app wrote it while it was named Harness.
+        let old = format!(
+            "[Desktop Entry]\nType=Application\nName=Harness\nExec={}\nX-GNOME-Autostart-enabled=true\n",
+            exec()
+        );
+        let renamed = old.replace("Name=Harness\n", "Name=Harness Device\n");
+        for first in [true, false] {
+            assert_eq!(change(Some(&old), &exec(), first), Change::Write(renamed.clone()));
+            assert_eq!(change(Some(&renamed), &exec(), first), Change::Leave);
+        }
+    }
+
+    #[test]
+    fn the_apps_own_entry_is_not_rewritten() {
+        let unnamed = format!("[Desktop Entry]\nType=Application\nExec={}\n", exec());
+        for own in [fresh(&exec()), unnamed] {
+            for first in [true, false] {
+                assert_eq!(change(Some(&own), &exec(), first), Change::Leave);
+            }
         }
     }
 
