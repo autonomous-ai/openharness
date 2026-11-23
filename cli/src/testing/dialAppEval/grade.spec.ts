@@ -336,6 +336,20 @@ describe('tierBVerdict', () => {
     const before = baseline({ 'b/darwin/C1/open.link': 1 })
     expect(tierBVerdict(now, before, 'linux').ok).toBe(true)
   })
+
+  it('tier B reports I3\'s ring order, a race in the product after the devices restart, but does not hold it; its other checks and other scenarios\' order are held', () => {
+    const i3 = (check: string, score: number, scenario = 'I3'): CheckResult =>
+      result({ tier: 'b', app: 'iterm', scenario, check, dim: 'D1', score })
+    const before = baseline({ 'b/darwin/I3/ring.order': 1, 'b/darwin/I3/ring.recall': 1, 'b/darwin/I1/ring.order': 1 })
+
+    const raced = run([i3('ring.order', 0.25), i3('ring.recall', 1), i3('ring.order', 1, 'I1')])
+    expect(tierBVerdict(raced, before, 'darwin')).toEqual({ ok: true, message: 'tier B on darwin holds its baseline' })
+    expect(grade(raced, before).delta.checks).toContainEqual({ key: 'b/darwin/I3/ring.order', before: 1, after: 0.25 })
+
+    const lost = run([i3('ring.order', 0.25, 'I1'), i3('ring.order', 0.25), i3('ring.recall', 0)])
+    expect(tierBVerdict(lost, before, 'darwin'))
+      .toEqual({ ok: false, message: 'regression: b/darwin/I1/ring.order, b/darwin/I3/ring.recall' })
+  })
 })
 
 describe('updateBaseline', () => {
