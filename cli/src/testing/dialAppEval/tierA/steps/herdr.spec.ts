@@ -207,22 +207,36 @@ describe("tier A's herdr", () => {
     expect(none.heard).toEqual([])
   })
 
-  it("a prompt to a session's pane is a typed delivery to it, and to none for a pane no session holds", async () => {
+  it("a prompt goes as herdr's client sends it: typed into the pane's idle or done agent of its kind, control characters as "
+    + 'spaces; busy while it works or waits; refused for another kind, a pane with no agent, or a pane or text the client '
+    + 'would not send', async () => {
     const w = fakeWorld()
+    // No server, no socket.
+    expect(await w.client.prompt('w1:p1', 'claude', 'Eval words for H.')).toEqual({ outcome: 'failed', fault: 'no_socket' })
     await w.start('h', 'g')
-    expect(await w.client.prompt('w1:p1', 'claude', 'Eval words for H.')).toEqual({ outcome: 'sent' })
-    expect(await w.client.prompt('w1:p9', 'claude', 'Eval words for no pane.')).toEqual({ outcome: 'sent' })
-    // g's agent ended its session: words typed into its pane reach no session.
-    await w.hook('g', 'end')
+    expect(await w.client.prompt('w1:p1', 'claude', 'Eval words\nfor H.')).toEqual({ outcome: 'sent' })
+    await w.hook('g', 'turn-start')
+    expect(await w.client.prompt('w1:p2', 'claude', 'Eval words for G at work.')).toEqual({ outcome: 'busy' })
+    await w.hook('g', 'needs-input')
+    expect(await w.client.prompt('w1:p2', 'claude', 'Eval words for G waiting.')).toEqual({ outcome: 'busy' })
+    await w.hook('g', 'turn-stop')
     expect(await w.client.prompt('w1:p2', 'claude', 'Eval words for G.')).toEqual({ outcome: 'sent' })
+    expect(await w.client.prompt('w1:p1', 'codex', 'Eval words for a Codex.')).toEqual({ outcome: 'failed', fault: 'not_that_agent' })
+    // herdr answers agent_not_found for a pane with no agent: one it never had, and one whose agent left.
+    const notFound = { outcome: 'failed', fault: 'rejected', code: 'agent_not_found' }
+    expect(await w.client.prompt('w1:p9', 'claude', 'Eval words for no pane.')).toEqual(notFound)
+    await w.hook('g', 'end')
+    expect(await w.client.prompt('w1:p2', 'claude', 'Eval words for G gone.')).toEqual(notFound)
+    // The client sends no pane id of another form, and no text that is blank once its control characters are spaces.
+    expect(await w.client.prompt('%1', 'claude', 'Eval words for H.')).toEqual({ outcome: 'failed', fault: 'bad_request' })
+    expect(await w.client.prompt('w1:p1', 'claude', '\n\n')).toEqual({ outcome: 'failed', fault: 'bad_request' })
     expect(w.deliveries.map(({ path, target, text }) => ({ path, target, text }))).toEqual([
       { path: 'typed', target: 'h', text: 'Eval words for H.' },
-      { path: 'typed', target: null, text: 'Eval words for no pane.' },
-      { path: 'typed', target: null, text: 'Eval words for G.' },
+      { path: 'typed', target: 'g', text: 'Eval words for G.' },
     ])
   })
 
-  it('the gate counts a prompt to the other pane, and one to a pane no session holds, as wrong-session sends', async () => {
+  it('the gate counts a prompt herdr types into the other session\'s pane as a wrong-session send, and none herdr refuses', async () => {
     const w = fakeWorld()
     await w.start('h', 'g')
     const spoken: Scenario = { ...w.of, steps: [{ label: 'voice', kind: 'voice', transcript: 'Eval words for H.', target: 'h' }] }
@@ -230,7 +244,6 @@ describe("tier A's herdr", () => {
     const seen: Seen = { frames: [], faces: [], commands: [], deliveries: w.deliveries, steps: [{ at: T0, index: 0, kind: 'voice' }] }
     expect(wrongSends(spoken, seen).map(({ target, got, path }) => ({ target, got, path }))).toEqual([
       { target: 'h', got: 'g', path: 'typed' },
-      { target: 'h', got: null, path: 'typed' },
     ])
   })
 
