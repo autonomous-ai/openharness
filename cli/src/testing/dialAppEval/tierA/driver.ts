@@ -40,13 +40,10 @@ import { World, type StepHandler, type TierAWorld } from './world.js'
 
 type Run = Exclude<Step, { kind: 'wait' }>
 const isEditor = (app: App): app is Editor => (EDITORS as readonly App[]).includes(app)
-/** The devices' restart step, built by its own task of docs/plans/2026-11-22-dial-eval-iterm2-plan.md (Task 7): until
- *  then a scenario that runs one fails. */
-const notBuilt = (kind: StepKind) => (): Promise<void> => Promise.reject(new Error(`tier A: the ${kind} step is not built yet`))
-const STEPS: { [K in Exclude<StepKind, 'wait'>]: StepHandler<K> } = {
+/** The devices' restart is the driver's own (restartDevices): it waits on the dial. */
+const STEPS: { [K in Exclude<StepKind, 'wait' | 'devices.restart'>]: StepHandler<K> } = {
   ...claudeStoreSteps, ...codexStoreSteps, ...sessionsSteps, ...windowSteps, ...dialSteps, ...voiceSteps, ...editorSteps,
   ...orcaModelSteps, ...itermSteps, ...tmuxSteps, ...herdrSteps,
-  'devices.restart': notBuilt('devices.restart'),
   // An editor's windows go with it, and come back on its relaunch reporting its sessions' new shells. Orca's watches and
   // the plugin's stream go with Orca, and the stream comes back on its relaunch.
   quit: async (world, step) => {
@@ -111,7 +108,8 @@ export class TierADriver implements EvalDriver {
       if (world.dial.faces.at(-1)?.active !== target) world.gap(`voice step ${index}: the face never showed ${step.target}`)
     }
     this.steps.push({ at: Date.now(), index, kind: step.kind, ...(step.label === undefined ? {} : { label: step.label }) })
-    await (STEPS[step.kind] as (world: TierAWorld, step: Run) => Promise<void>)(world, step)
+    if (step.kind === 'devices.restart') await this.restartDevices(world)
+    else await (STEPS[step.kind] as (world: TierAWorld, step: Run) => Promise<void>)(world, step)
     // What the step set going lands before anything else happens: the next step comes at the same virtual moment.
     await world.quiet()
   }
@@ -137,6 +135,23 @@ export class TierADriver implements EvalDriver {
       vi.unstubAllEnvs()
       world?.remove()
     }
+  }
+
+  /**
+   * The devices start again under the dial (the plan's Decision 9): it is theirs once they welcome it on its port opened
+   * again. The watch opens its tabs stream on their listener, as it does a second after its stream ended, and tells them
+   * the app in front again, as it does on the status saying the dial is attached (devices/client.ts runDialWatch): the new
+   * devices know none.
+   */
+  private async restartDevices(world: World): Promise<void> {
+    // The welcome flag still holds from the port that closed: the next welcome frame is the new devices'.
+    const welcomes = (): number => world.dial.frames.filter((f) => f.message.t === 'welcome').length
+    const before = welcomes()
+    await world.restartDevices()
+    await this.settle(START_WITHIN_MS, () => welcomes() > before)
+    if (welcomes() === before) throw new Error(`${world.scenario.id}: the devices never welcomed the dial after they started again`)
+    if (world.scenario.app === 'iterm') openTabs(world)
+    await windowSteps.front(world, { kind: 'front', app: world.front })
   }
 
   private need(): World {

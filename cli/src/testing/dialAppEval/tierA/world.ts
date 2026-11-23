@@ -227,8 +227,10 @@ export class World implements TierAWorld {
   /** The store reads in flight: the clock moves on only once there are none. */
   private reads = 0
   private readonly closing: Array<() => void> = []
+  /** What the devices are started with, each time they start. */
+  private readonly devicesDeps: DevicesDeps
 
-  constructor(readonly scenario: Scenario, readonly platform: Platform, start: typeof startDevices) {
+  constructor(readonly scenario: Scenario, readonly platform: Platform, private readonly start: typeof startDevices) {
     const root = this.root = mkdtempSync(join(tmpdir(), 'dial-eval-'))
     const installed = scenario.world?.chatgptInstalled !== false
     // The homes the devices find the apps' stores from, all in the temp folder: homedir() follows HOME (USERPROFILE on
@@ -284,7 +286,8 @@ export class World implements TierAWorld {
         },
       },
     })
-    start(this.core, this.ports, this.deps(root, installed))
+    this.devicesDeps = this.deps(root, installed)
+    start(this.core, this.ports, this.devicesDeps)
   }
 
   storeChanged(path: string): void {
@@ -339,6 +342,18 @@ export class World implements TierAWorld {
     } finally {
       for (const close of this.closing.splice(0)) close()
     }
+  }
+
+  /**
+   * The devices process starting again while every session runs and the dial stays plugged in (devices.restart): stopped
+   * on virtual time, then started on the same root, deps and dial. Their listener closed with them, so none is open until
+   * the new devices open theirs.
+   */
+  async restartDevices(): Promise<void> {
+    await this.ports.devices?.stop()
+    await this.quiet()
+    this.listener = {}
+    this.start(this.core, this.ports, this.devicesDeps)
   }
 
   remove(): void {
