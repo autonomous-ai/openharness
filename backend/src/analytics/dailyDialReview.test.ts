@@ -36,6 +36,19 @@ describe('dailyDialReview', () => {
       computers: { day: '<5', d7: '<5', d28: 8 }, events: { day: '<5', d7: '<5', d28: 42 } })
   })
 
+  it('hides one computer counted every day in every column: a 7- or 28-day column is tested by its largest day', () => {
+    const daily = (metric: string) => Array.from({ length: 56 }, (_, i) => row(i + 1, metric, 1))
+    const review = dailyDialReview(['dial_host_zellij_installation_days', 'dial_host_zellij_agents', 'dial_used_installation_days',
+      'dial_d1_returning_installations', 'voice_account_days', 'health_cli_collector_days'].flatMap(daily), [], now)
+    const hidden = { day: '<5', d7: '<5', d28: '<5' }
+    expect(rowOf(review.outsideTeam, 'Hosts shown', 'zellij')).toEqual({ name: 'zellij', computers: hidden, events: hidden })
+    expect(rowOf(review.outsideTeam, 'Return', 'Again on N+1')?.computers).toEqual(hidden)
+    expect(rowOf(review.outsideTeam, 'Return', 'Used on day N (N+28 complete)')?.computers).toEqual(hidden)
+    expect(review.voice.outsideTeam.accountDays.all).toEqual(hidden)
+    expect(review.voice.outsideTeam.accountDays.under1m).toEqual(hidden)
+    expect(review.coverage).toEqual(hidden)
+  })
+
   it('adds seven and twenty-eight complete days, today left out', () => {
     const metric = 'dial_connected_installation_days'
     const review = dailyDialReview([row(0, metric, 100), row(1, metric, 5), row(7, metric, 5), row(8, metric, 5),
@@ -56,7 +69,7 @@ describe('dailyDialReview', () => {
     const { voice } = dailyDialReview([row(1, 'dial_voice_installation_days', 6), row(1, 'voice_dial_clips', 30),
       row(1, 'voice_dial_audio_ms', 90_000), row(1, 'voice_dial_transcribe_ms', 30_000), row(1, 'voice_account_days', 3),
       row(1, 'voice_rest_clips', 12), row(1, 'voice_rest_audio_ms', 600_000), row(1, 'voice_rest_transcribe_ms', 60_000),
-      row(10, 'voice_account_days', 4), row(10, 'voice_rest_clips', 1)], [], now)
+      row(10, 'voice_account_days', 5), row(10, 'voice_rest_clips', 1)], [], now)
     expect(voice.outsideTeam.note).toBe('Voice from older CLIs counts as the rest until they update.')
     expect(voice.outsideTeam.dial).toEqual({ clips: { day: 30, d7: 30, d28: 30 }, audioMinutes: { day: 1.5, d7: 1.5, d28: 1.5 },
       transcribeMinutes: { day: 0.5, d7: 0.5, d28: 0.5 } })
