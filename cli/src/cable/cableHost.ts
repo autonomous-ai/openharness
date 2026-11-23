@@ -123,6 +123,9 @@ export interface CableHostWiring {
   opened?: (machineId: string, agentId: string, reason?: OpenReason) => void
   /** Who sent a notice, for an agent no list holds: `describe` asks it last, after the outside agents and the fleet. */
   noticeFrom?: (agentId: string) => { name: string; engine: string; machine: string } | undefined
+  /** A person's tap on an agent no list holds, which nothing here opens: the notice desk ends its card, as the dial has
+   *  no face of that agent to ask on. Never a question screen that came up by itself. */
+  tappedUnlisted?: (agentId: string) => void
   /** The questions only the devices ask (an agent's notice, a prompt it waits on), as drawer rows: the dial keeps a
    *  question as a row of the drawer that what is unread replaces whole. */
   noticeRows?: () => UnreadNotification[]
@@ -1088,6 +1091,7 @@ export class DaemonCableHost implements CableHost {
       // Same rule as focus: an agent id without its machine is not routable, and guessing is how a
       // remote move used to land on a local agent.
       this.wiring.log(`cable: ignored open for unknown agent ${agentId}`)
+      if (!reason) this.wiring.tappedUnlisted?.(agentId)
       return
     }
     // With no window nothing could open a tap on one of this computer's agents: Desktop is started, and its window is

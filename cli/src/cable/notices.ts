@@ -145,7 +145,8 @@ export class Notices {
     return answer('shown')
   }
 
-  /** Its agent's next turn started or its agent left: its card goes. Nothing for an agent with none. */
+  /** Its agent's next turn started, its agent left, or no list holds it and the person tapped it: its card goes. Nothing
+   *  for an agent with none. */
   ended(agentId: string): void {
     const card = this.cards.get(agentId)
     if (!card) return
