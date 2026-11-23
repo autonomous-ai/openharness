@@ -2516,18 +2516,24 @@ export class CableSession {
     const segments = this.voice ? this.voiceSegments : undefined
     // Read before the answer takes them: whether this voice.end ends a turn, and whether its words are for an agent.
     const turn = this.voice
-    const refused = this.voiceRefusal?.generation === this.voiceGeneration
-    let end: DialVoiceEnd | undefined
+    // A voice.end with no turn ends none: its recording's end was said already.
+    let ended = !turn && this.voiceRefusal?.generation !== this.voiceGeneration
+    const other = review || (!!turn && otherVoice(turn))
+    // Said once, as soon as it is decided: the agent's turn the words start may come before the dial is answered.
+    const end = (decided: DialVoiceEnd) => {
+      if (ended) return
+      ended = true
+      this.voiceEnded(other ? { outcome: 'other' } : decided)
+    }
     try {
-      await this.answerVoice(segments, review, (decided) => { end ??= decided })
+      await this.answerVoice(segments, review, end)
     } finally {
       // Every way out that did not use the transcript stops the uploads; once finish() has settled this does nothing.
       segments?.abort()
       if (this.voiceSegments === segments) this.voiceSegments = undefined
       // An exit that decided nothing returned because a newer recording, an abort or the port closing took the turn (or
       // the answer threw): the words reached no agent.
-      if (turn || refused) this.voiceEnded(review || (turn && otherVoice(turn)) ? { outcome: 'other' }
-        : end ?? { outcome: 'cancelled', agentId: turn?.agentId })
+      end({ outcome: 'cancelled', agentId: turn?.agentId })
     }
   }
 
