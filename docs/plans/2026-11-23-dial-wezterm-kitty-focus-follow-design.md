@@ -78,12 +78,14 @@ sliver would time out on a healthy kitty and mark it refused. A read with less l
 - **kitty** (`cable/hosts/kitty.ts`): `focusedWindows(panes: Pane[])` answers, per socket, which of the given agents'
   kitty panes on it is that kitty's focused window. Per socket: `get-colors --match 'id:<last> and state:focused'` for
   the pane found focused last there (the caller's order), then, unless that matched,
-  `get-colors --match 'state:focused and (id:<a> or id:<b> …)'` for the rest; on exit 0 it narrows one id at a time.
+  `get-colors --match 'state:focused and (id:<a> or id:<b> …)'` for the rest (from a third pane); on exit 0 it narrows
+  one id at a time, the last too, so an id is named only when asked alone: focus may have moved since the `or`.
   So a read is one call a socket while focus stays on an agent's window, and two while it stays on another window.
   `get-colors`' output, kitty's colour table, is discarded; only the exit code and, on exit 1, whether stderr is
   kitty's `No matching windows` are read. Any other answer (another exit code, another error, a timeout: a refused
   password, kitty gone) makes the read `undefined`. Only panes in form and on a socket of this account's (`ours`) are
-  asked; at most 16 panes a read and 16 calls.
+  asked; at most 16 calls a read: each pane one call, and each socket's `or` one more from its third pane (so 15
+  panes on one socket); panes past that, in the caller's order, are not asked.
 
 ### The poll, in the devices process
 

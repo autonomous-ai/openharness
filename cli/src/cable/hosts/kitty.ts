@@ -39,8 +39,7 @@ const HELD = 'held:'
 const PANE = /^(held:)?([0-9]{1,9})@(.+)$/
 /** `<client's pid>@<socket>`: a tab of an outer place. */
 const TAB = /^([1-9][0-9]{0,9})@(.+)$/
-/** The kitty windows one focus read asks of, so its calls: a read's calls never pass its panes. Also the refused sockets
- *  kept. */
+/** The calls one focus read makes at most, so the kitty windows it asks of. Also the refused sockets kept. */
 export const FOCUS_PANES_MAX = 16
 /** The least time a focus call is started with: ~20x the recorded call (RECORDED_KITTY.focusedMatch.callMs), so one
  *  that times out is kitty's failure, not the read's sliver, which would mark a healthy kitty refused. */
@@ -155,23 +154,29 @@ export function createKittyAdapter(deps: KittyDeps): HostAdapter & Required<Pick
     refuse(socket.listenOn, socket.path)
     return 'failed'
   }
-  const alone = (id: string) => `id:${id} and state:focused`
+  /** The first of [ids] asked alone that is the socket's kitty's focused window, in order; null when none is. */
+  const firstFocused = async (file: string, socket: { listenOn: string; path?: string }, ids: readonly string[], deadline: number):
+  Promise<string | null | undefined> => {
+    for (const id of ids) {
+      const one = await ask(file, socket, `id:${id} and state:focused`, deadline)
+      if (one !== 'none') return one === 'match' ? id : undefined
+    }
+    return null
+  }
   /** Which of [ids] is the socket's kitty's focused window: the first alone, as focus mostly stays where it was, then
-   *  the rest in one `or` (kitty 0.32.2 takes parentheses, focusedMatch.orFocused), and on a match each alone but the
-   *  last, which the `or` already named. */
+   *  from a third the rest in one `or` (kitty 0.32.2 takes parentheses, focusedMatch.orFocused), and on a match each
+   *  alone, the last too: focus may have moved since. So a socket's n windows take n calls at most, and one more from
+   *  the third. */
   const focusedOn = async (file: string, socket: { listenOn: string; path?: string }, ids: readonly string[], deadline: number):
   Promise<string | null | undefined> => {
     const [first, ...rest] = ids
-    const firstAsked = await ask(file, socket, alone(first), deadline)
-    if (firstAsked !== 'none') return firstAsked === 'match' ? first : undefined
-    if (rest.length === 0) return null
-    const any = await ask(file, socket, rest.length === 1 ? alone(rest[0]) : `state:focused and (${rest.map((id) => `id:${id}`).join(' or ')})`, deadline)
-    if (any !== 'match') return any === 'none' ? null : undefined
-    for (const id of rest.slice(0, -1)) {
-      const one = await ask(file, socket, alone(id), deadline)
-      if (one !== 'none') return one === 'match' ? id : undefined
+    const firstAsked = await firstFocused(file, socket, [first], deadline)
+    if (firstAsked !== null) return firstAsked
+    if (rest.length > 1) {
+      const any = await ask(file, socket, `state:focused and (${rest.map((id) => `id:${id}`).join(' or ')})`, deadline)
+      if (any !== 'match') return any === 'none' ? null : undefined
     }
-    return rest.at(-1)!
+    return firstFocused(file, socket, rest, deadline)
   }
 
   return {
@@ -227,14 +232,16 @@ export function createKittyAdapter(deps: KittyDeps): HostAdapter & Required<Pick
       }
       // Only the agent's own windows: a held one shows whatever is in front of it. Per socket, in the caller's order.
       const sockets = new Map<string, { socket: { listenOn: string; path?: string }; ids: string[] }>()
-      let taken = 0
+      // The calls the panes taken can take (focusedOn): one each, and a socket's third brings its `or`.
+      let calls = 0
       for (const pane of panes) {
-        if (taken === FOCUS_PANES_MAX) break
         const at = windowOf(pane)
         if (!at?.own || refused.has(at.listenOn) || !ours(deps, at.path)) continue
+        const cost = sockets.get(at.listenOn)?.ids.length === 2 ? 2 : 1
+        if (calls + cost > FOCUS_PANES_MAX) break
         const on = sockets.get(at.listenOn) ?? sockets.set(at.listenOn, { socket: at, ids: [] }).get(at.listenOn)!
         on.ids.push(at.id)
-        taken++
+        calls += cost
       }
       const focused = new Map<string, string | null>()
       if (sockets.size === 0) return focused
