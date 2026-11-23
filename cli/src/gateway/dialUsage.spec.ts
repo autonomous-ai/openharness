@@ -65,6 +65,9 @@ describe('the devices\' file, read by the gateway', () => {
     bad('[]')
     bad({ version: 2, series: 1, days: {} })
     bad({ version: 1, series: 1.5, days: {} })
+    // The devices write a series above 0 only; the gateway's own -1 marks a baseline spent on no file.
+    bad({ version: 1, series: 0, days: {} })
+    bad({ version: 1, series: -1, days: {} })
     bad({ version: 1, series: 1, days: [] })
   })
 
