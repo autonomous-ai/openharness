@@ -6,6 +6,7 @@ import { homedir, tmpdir } from 'node:os'
 import { delimiter, dirname, join, parse, posix, sep, win32 } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { CableHostWiring, DaemonCableHost } from '../cable/cableHost.js'
+import { DIAL_USAGE_WRITE_MS } from '../cable/dialUsageFile.js'
 import { AppFilter, FRONT_SETTLE_MS } from '../cable/hosts/appFilter.js'
 import { claudeStoreRoots } from '../cable/hosts/appPlaces.js'
 import type { CodexRunEnd } from '../cable/hosts/codexQueue.js'
@@ -25,6 +26,7 @@ import { AppRings } from '../cable/hosts/select.js'
 import { env } from '../config/env.js'
 import { cursorDataDir } from '../engines/cursor/contract.js'
 import { routeVoiceTask } from '../lib/voiceRouter.js'
+import { DIAL_FILE_METRICS, DIAL_USAGE_FILE } from '../lib/dialUsageContract.js'
 import { DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, ServiceUnavailableError, type CoreApi, type CorePorts, type DevicesPort } from '../core/api.js'
 import type { ObservedAsked, ObservedHookEvent } from '../core/observedHook.js'
 import { createServiceHost } from '../core/serviceHost.js'
@@ -13335,5 +13337,242 @@ describe('the dial follows the pane focused in Orca (docs/plans/2026-11-16-dial-
       const secrets = [1, 2, 9].flatMap((n) => [H(n), agent(n), `sess-${n}`])
       expect(logs.filter((said) => secrets.some((secret) => said.includes(secret)))).toEqual([])
     })
+  })
+})
+
+describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-dial-usage-counts-design.md)', () => {
+  const ID = observedAgentId('claude', 'sess-1')
+  const hook = (event: ObservedHookEvent['event'], over: Partial<ObservedHookEvent> = {}): ObservedHookEvent => ({
+    engine: 'claude', sessionId: 'sess-1', event, cwd: '/work/api', callerPid: 4242, transcriptPath: '/t/sess-1.jsonl',
+    hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1' }, ...over,
+  })
+  const host = () => seen.dial as unknown as DaemonCableHost
+  const usageFile = () => join(dataDir, DIAL_USAGE_FILE)
+  const written = () => (JSON.parse(readFileSync(usageFile(), 'utf8')) as { days: Record<string, Record<string, number>> }).days
+  /** What the devices counted, every day's names together, once their stop wrote what waited. */
+  const counted = async (port: DevicesPort): Promise<Record<string, number>> => {
+    await port.stop()
+    return Object.assign({}, ...Object.values(written())) as Record<string, number>
+  }
+  /** A dial attached with no window, after a read of the list it reads every second. */
+  const attach = async (port: DevicesPort) => {
+    port.swarms(null)
+    await host().listAgentSnapshot()
+    seen.host.watching!(true)
+  }
+
+  it('writes the dial\'s day to dial-usage.json: connected on attach, used on a turn', async () => {
+    vi.useFakeTimers()
+    start({ core: harnessAgent(), faults: ['fleet'] })
+    seen.host.watching!(true)
+    turnTo('h1')
+    // One write for both, DIAL_USAGE_WRITE_MS after the first.
+    await vi.advanceTimersByTimeAsync(DIAL_USAGE_WRITE_MS - 1)
+    expect(existsSync(usageFile())).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(Object.values(written())).toEqual([
+      { dial_connected_installation_days: 1, dial_used_installation_days: 1, dial_first_use_installations: 1 },
+    ])
+  })
+
+  it('a computer that had a dial before this file spends no first use', async () => {
+    writeSetup(dataDir, { dial: true, homes: { claude: [], codex: [] }, pluginHomes: [] })
+    const { port } = start({ core: harnessAgent(), faults: ['fleet'] })
+    seen.host.watching!(true)
+    turnTo('h1')
+    expect(await counted(port)).toEqual({ dial_connected_installation_days: 1, dial_used_installation_days: 1 })
+  })
+
+  it.each([
+    ['a stroke', () => seen.host.scrolled!('down', 0, 0)],
+    ['a tap', () => seen.host.tapped!('h1')],
+    ['an answer', () => seen.host.answer('h1', 'r1', { q: 'yes' })],
+    ['a reviewed answer', () => void seen.host.answerReviewed!({ agentId: 'h1' } as never)],
+    ['an app pick', () => seen.host.appPicked!()],
+  ])('%s is use', async (_, input) => {
+    const { port } = start({ core: harnessAgent(), faults: ['fleet'] })
+    seen.host.watching!(true)
+    input()
+    expect(await counted(port)).toMatchObject({ dial_used_installation_days: 1, dial_first_use_installations: 1 })
+  })
+
+  it('counts nothing signed out', async () => {
+    const { port } = start({ core: fakeCore({ dataDir, account: { signedIn: vi.fn(() => false) } }), faults: ['fleet'] })
+    seen.host.watching!(true)
+    turnTo('h1')
+    await port.stop()
+    expect(existsSync(usageFile())).toBe(false)
+  })
+
+  // Review Focus 4: a dial greets and turns back to the agent it showed with no hand on it. Connected, never used.
+  it('a greet\'s own focus is not use', async () => {
+    const { port } = start({ core: harnessAgent(), faults: ['fleet'] })
+    await attach(port)
+    host().dialShows({}, { name: 'api', app: 'harness' }, 'h1')
+    seen.host.localFollowed!('attach', 'moved')
+    const counts = await counted(port)
+    expect(counts.dial_connected_installation_days).toBe(1)
+    expect(counts).not.toHaveProperty('dial_used_installation_days')
+    expect(counts).not.toHaveProperty('dial_first_use_installations')
+  })
+
+  it('counts the engine and host shown', async () => {
+    const { port } = start({ core: harnessAgent(), faults: ['fleet'] })
+    port.observed(hook('session-start'))
+    await attach(port)
+    host().dialShows({}, { name: 'api', app: 'harness' }, 'h1')
+    host().dialShows({}, { name: 'api', app: 'Orca' }, ID)
+    // An agent once a day.
+    host().dialShows({}, { name: 'api', app: 'harness' }, 'h1')
+    expect(await counted(port)).toMatchObject({
+      dial_engine_claude_installation_days: 1, dial_engine_claude_agents: 2,
+      dial_host_harness_installation_days: 1, dial_host_harness_agents: 1,
+      dial_host_orca_installation_days: 1, dial_host_orca_agents: 1,
+      // Agents ran as the dial came: the first on it came within the minute.
+      dial_first_agent_first_under_1m_installations: 1, dial_first_agent_day_under_1m_installations: 1,
+    })
+  })
+
+  it('the first agent\'s clock starts when an agent outside a pane comes after the attach', async () => {
+    vi.useFakeTimers()
+    const { port } = start({ faults: ['fleet'] })
+    await attach(port)
+    await vi.advanceTimersByTimeAsync(600_000)
+    port.observed(hook('session-start'))
+    await vi.advanceTimersByTimeAsync(120_000)
+    host().dialShows({}, { name: 'api', app: 'Orca' }, ID)
+    expect(await counted(port)).toMatchObject({ dial_first_agent_first_1m_to_3m_installations: 1 })
+  })
+
+  it('the first agent\'s clock starts when a Harness agent comes after the attach, at the list\'s read', async () => {
+    vi.useFakeTimers()
+    const sessions: RegisteredSession[] = []
+    const { port } = start({ core: fakeCore({ dataDir, agents: { advertised: vi.fn(() => sessions) } }), faults: ['fleet'] })
+    await attach(port)
+    await vi.advanceTimersByTimeAsync(600_000)
+    sessions.push({ agentId: 'h1', registeredAt: 1, engine: 'claude' } as RegisteredSession)
+    await host().listAgentSnapshot()
+    await host().listAgentSnapshot()
+    await vi.advanceTimersByTimeAsync(120_000)
+    host().dialShows({}, { name: 'api', app: 'harness' }, 'h1')
+    expect(await counted(port)).toMatchObject({ dial_first_agent_first_1m_to_3m_installations: 1 })
+  })
+
+  it('a voice to a Harness agent is delivered by its turn_started card within 10 s', async () => {
+    vi.useFakeTimers()
+    const { port } = start({ core: harnessAgent(), faults: ['fleet'] })
+    await attach(port)
+    seen.host.voiceEnded!({ outcome: 'sent', agentId: 'h1' })
+    await vi.advanceTimersByTimeAsync(9_999)
+    port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'turn_started' } })
+    // The next one hears no turn.
+    seen.host.voiceEnded!({ outcome: 'sent', agentId: 'h1' })
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(await counted(port)).toMatchObject({
+      dial_voice_installation_days: 1, dial_voice_host_harness_installation_days: 1,
+      dial_voice_delivered: 1, dial_voice_host_harness_delivered: 1,
+      dial_voice_failed: 1, dial_voice_failed_no_turn: 1, dial_voice_host_harness_failed: 1,
+    })
+  })
+
+  it('a voice to an outside agent is delivered by its turn-start hook', async () => {
+    const { port } = start({ faults: ['fleet'] })
+    port.observed(hook('session-start'))
+    await attach(port)
+    seen.host.voiceEnded!({ outcome: 'sent', agentId: ID })
+    port.observed(hook('turn-start'))
+    expect(await counted(port)).toMatchObject({ dial_voice_delivered: 1, dial_voice_host_orca_delivered: 1 })
+  })
+
+  it('a refused voice to a held agent is held', async () => {
+    const { port } = start({ faults: ['fleet'] })
+    // A herdr pane that only holds it: herdr did not make its terminal.
+    port.observed(hook('session-start', { hostHints: { HERDR_PANE_ID: 'w1:p2' } }))
+    port.observed(hook('session-start', { sessionId: 'sess-2' }))
+    await attach(port)
+    seen.host.voiceEnded!({ outcome: 'failed', code: 'refused', agentId: ID })
+    seen.host.voiceEnded!({ outcome: 'failed', code: 'refused', agentId: observedAgentId('claude', 'sess-2') })
+    expect(await counted(port)).toMatchObject({ dial_voice_held: 1, dial_voice_failed: 1, dial_voice_failed_refused: 1 })
+  })
+
+  it('with the outside agents switched off, a refused voice to a Harness agent is refused', async () => {
+    const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
+    switched.HARNESS_DEVICE_OBSERVED = false
+    onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
+    const { port } = start({ core: harnessAgent(), faults: ['fleet'] })
+    await attach(port)
+    seen.host.voiceEnded!({ outcome: 'failed', code: 'refused', agentId: 'h1' })
+    expect(await counted(port)).toMatchObject({ dial_voice_failed_refused: 1, dial_voice_host_harness_failed: 1 })
+  })
+
+  it('a tap\'s open by host', async () => {
+    const { port } = start({ core: harnessAgent(), faults: ['fleet'] })
+    port.observed(hook('session-start'))
+    await attach(port)
+    seen.host.openEnded!(ID, { outcome: 'ok' })
+    seen.host.openEnded!('h1', { outcome: 'failed', code: 'desktop_not_started' })
+    expect(await counted(port)).toMatchObject({
+      dial_used_installation_days: 1, dial_open_installation_days: 1, dial_open_ok: 1, dial_open_failed: 1,
+      dial_open_failed_desktop_not_started: 1, dial_open_host_orca_installation_days: 1, dial_open_host_orca_ok: 1,
+      dial_open_host_harness_installation_days: 1, dial_open_host_harness_failed: 1,
+    })
+  })
+
+  it('a hooked agent\'s first turn-start of the day counts where it is', async () => {
+    // A Harness agent that holds codex's sess-3: its row takes the outside copy's.
+    const holds = [{ agentId: 'h1', registeredAt: 1, engine: 'codex', sessionId: 'sess-3' }] as RegisteredSession[]
+    const { port } = start({ core: fakeCore({ dataDir, agents: { advertised: vi.fn(() => holds) } }), faults: ['fleet'] })
+    const zed = { sessionId: 'sess-2', hostHints: { __CFBundleIdentifier: 'dev.zed.Zed' } }
+    // Before a dial is attached: nothing.
+    port.observed(hook('turn-start', zed))
+    port.observed(hook('session-start'))
+    await attach(port)
+    port.observed(hook('turn-start'))
+    // Once a day.
+    port.observed(hook('turn-start'))
+    port.observed(hook('turn-start', zed))
+    // On no list under its own id.
+    port.observed(hook('turn-start', { sessionId: 'sess-3', engine: 'codex' }))
+    expect(await counted(port)).toMatchObject({
+      dial_hooked_claude_installation_days: 1, dial_hooked_claude_placed: 1, dial_hooked_claude_other: 1,
+      dial_other_app_zed_installation_days: 1, dial_other_app_zed_agents: 1,
+      dial_hooked_codex_installation_days: 1, dial_hooked_codex_not_shown: 1,
+    })
+  })
+
+  it('the stop writes what waits, and nothing after', async () => {
+    vi.useFakeTimers()
+    const { port } = start({ core: harnessAgent(), faults: ['fleet'] })
+    seen.host.watching!(true)
+    await port.stop()
+    const at = readFileSync(usageFile(), 'utf8')
+    expect(Object.values(written())).toEqual([{ dial_connected_installation_days: 1 }])
+    turnTo('h1')
+    await vi.advanceTimersByTimeAsync(DIAL_USAGE_WRITE_MS)
+    expect(readFileSync(usageFile(), 'utf8')).toBe(at)
+  })
+
+  it('dial-usage.json never names the agent, its folder or the dial', async () => {
+    const harness = { agentId: 'canary-agent-id', registeredAt: 1, engine: 'claude' } as RegisteredSession
+    const core = fakeCore({ dataDir, agents: { advertised: vi.fn(() => [harness]), displayName: vi.fn(() => 'canary-name') } })
+    const { port } = start({ core, faults: ['fleet'] })
+    const canary = { sessionId: 'canary-session', cwd: '/work/canary-folder' }
+    const outside = observedAgentId('claude', canary.sessionId)
+    port.observed(hook('session-start', canary))
+    await attach(port)
+    seen.host.dialStatus!({ attached: true, id: 'canary-serial', mac: 'canary-mac' })
+    host().dialShows({}, { name: 'canary-name', app: 'harness' }, harness.agentId)
+    host().dialShows({}, { name: 'canary-folder', app: 'Orca' }, outside)
+    seen.host.voiceEnded!({ outcome: 'sent', agentId: outside })
+    port.observed(hook('turn-start', canary))
+    seen.host.openEnded!(harness.agentId, { outcome: 'ok' })
+    await port.stop()
+    expect(readFileSync(usageFile(), 'utf8')).not.toMatch(/canary|machine-1|computer-1/)
+    const names = Object.values(written()).flatMap((counts) => Object.entries(counts))
+    expect(names.length).toBeGreaterThan(0)
+    for (const [name, n] of names) {
+      expect(DIAL_FILE_METRICS).toContain(name)
+      expect(Number.isSafeInteger(n)).toBe(true)
+    }
   })
 })
