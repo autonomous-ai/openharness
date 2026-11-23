@@ -29,7 +29,7 @@ afterAll(async () => {
   await replica?.stop()
 })
 
-it('counts the dial outside the team and the team apart, a dial clip and a rest clip in their own rows, by the day index', async () => {
+it('counts the dial outside the team and the team apart, a dial clip and a rest clip in their own rows, the N+28 returns 56 days back, by the day index', async () => {
   const outside = (await db.user.create({ data: { email: 'dial-outside@example.invalid', externalId: 'dial-review-outside' } })).id
   const staff = (await db.user.create({ data: { email: 'dial-staff@autonomous.ai', externalId: 'dial-review-staff' } })).id
   const context = (channel: 'production' | 'development') => ({ surface: 'cli', release: '0.6.84', platform: 'macos', channel }) as const
@@ -42,16 +42,24 @@ it('counts the dial outside the team and the team apart, a dial clip and a rest 
   await usage.recordVoiceUsage(outside, yesterday, voiceIncrements('dial', 0, 30_000, 1_000))
   await usage.recordVoiceUsage(outside, yesterday, voiceIncrements('rest', 30_000, 45_000, 2_000))
   await usage.flushRelayUsage()
+  // A cohort 40 days back: its N+28 return is read, a name beside it that is not a return's is not, nor a return 60 days back.
+  const ago = (n: number) => new Date(yesterday.getTime() - (n - 1) * DAY)
+  await db.productUsageTotal.createMany({ data: [{ dayUtc: ago(40), metric: 'dial_d28_returning_installations', value: 7 },
+    { dayUtc: ago(40), metric: 'dial_connected_installation_days', value: 8 }, { dayUtc: ago(60), metric: 'dial_used_installation_days', value: 9 }] })
 
   const entries = await profiled(db, () => review.readDialRows(db, now))
-  // The read is the run's only one of the totals. Its list of names passes the profiler's 50 KB, which keeps no filter of it.
+  // Two reads of the totals: 28 days of every name, then the 28 before them of the return names. The first's list of
+  // names passes the profiler's 50 KB, which keeps no filter of it.
   const read = entries.filter(e => e.ns.endsWith('.product_usage_totals'))
-  expect(read, JSON.stringify(plan(read))).toHaveLength(1)
-  expect(read[0]!.planSummary, JSON.stringify(plan(read))).toMatch(/IXSCAN \{ dayUtc: 1, metric: 1/)
-  expect(read[0]!.docsExamined, JSON.stringify(plan(read))).toBe(read[0]!.nreturned)
+  expect(read, JSON.stringify(plan(read))).toHaveLength(2)
+  for (const entry of read) {
+    expect(entry.planSummary, JSON.stringify(plan(read))).toMatch(/IXSCAN \{ dayUtc: 1, metric: 1/)
+    expect(entry.docsExamined, JSON.stringify(plan(read))).toBe(entry.nreturned)
+  }
 
   const rows = await review.readDialRows(db, now)
   const value = (metric: string) => rows.find(r => r.metric === metric)?.value
+  expect(rows.filter(r => r.dayUtc < ago(28)).map(r => [r.metric, r.value])).toEqual([['dial_d28_returning_installations', 7]])
   expect([value('voice_dial_clips'), value('voice_dial_audio_ms'), value('voice_rest_clips'), value('voice_rest_audio_ms')])
     .toEqual([1, 30_000, 1, 45_000])
   const section = review.dailyDialReview(rows, [], now)

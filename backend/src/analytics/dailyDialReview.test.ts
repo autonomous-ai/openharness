@@ -111,6 +111,18 @@ describe('dailyDialReview', () => {
     expect(rows.find(r => r.name === 'Outside the app, again on N+1')?.computers.day).toBe(5)
   })
 
+  it('shows an N+28 return from a cohort older than 28 days, and only the return names that far back', () => {
+    const review = dailyDialReview([row(40, 'dial_used_installation_days', 6), row(40, 'dial_d28_returning_installations', 5),
+      row(40, 'dial_used_outside_app_installation_days', 5), row(40, 'dial_d28_returning_outside_app_installations', 5),
+      row(40, 'dial_connected_installation_days', 9)], [], now)
+    const section = review.outsideTeam.find(s => s.name.startsWith('Return'))!
+    expect(section.name).not.toMatch(/28 days read/)
+    expect(section.rows.find(r => r.name === 'Used on day N (N+28 complete)')?.computers).toEqual({ day: '<5', d7: '<5', d28: 6 })
+    expect(section.rows.find(r => r.name === 'Again on N+28')?.computers.d28).toBe(5)
+    expect(section.rows.find(r => r.name === 'Outside the app, again on N+28')?.computers.d28).toBe(5)
+    expect(review.outsideTeam.find(s => s.name === 'Who uses a dial')).toBeUndefined()
+  })
+
   it('suppresses a margin under 20 collector observations', () => {
     const b = (bucket: string, metric: string, value: number) => row(1, `breakdown:${bucket}:${metric}`, value)
     const review = dailyDialReview([], [b('platform:cli:macos', 'health_cli_collector_days', 25), b('platform:cli:macos', 'dial_used_installation_days', 8),
