@@ -47,7 +47,8 @@ const DELIVERED_MS = 10_000
 const REDIRECT_MS = 30_000
 const INTERRUPT_MS = 10_000
 const FIRST_AGENT_NONE_MS = 3_600_000
-const FIRST_AGENT_EDGES = [60_000, 180_000, 600_000]
+// The hour is an edge too, not only a timer: a sleep stops the timer but not the clock.
+const FIRST_AGENT_EDGES = [60_000, 180_000, 600_000, FIRST_AGENT_NONE_MS]
 const WAIT_EDGES = [30_000, 120_000, 600_000]
 const VOICES_WAITING_MAX = 16
 const DELIVERED_TURNS_MAX = 16
@@ -66,6 +67,7 @@ export function dialHost(id: string): DialUsageHost {
   return (DIAL_USAGE_HOSTS as readonly string[]).includes(host) ? host as DialUsageHost : 'other'
 }
 
+/** A clock set back gives a time below 0, which lands under the first edge. */
 function bucket<B extends string>(ms: number, edges: readonly number[], buckets: readonly B[]): B {
   const i = edges.findIndex(edge => ms < edge)
   return buckets[i < 0 ? edges.length : i]
