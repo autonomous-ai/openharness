@@ -11,31 +11,23 @@
  * or `ps`. The homes, the stores and the transcripts are throwaway folders.
  */
 import { homedir, tmpdir } from 'node:os'
+import { basename } from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { claudeGhost, claudeSessions, editorGhost, editorSession, listed, MAIN, scenario, scenariosFor, started } from './catalog.js'
+import { claudeGhost, claudeSessions, editorGhost, editorSession, keys, listed, MAIN, orcaGhost, orcaOpening, orcaSession, orcaStarted, scenario,
+  scenariosFor, started } from './catalog.js'
+import { rings } from './checks.js'
 import { loadBaseline, SKIP_RATCHET_ENV, tierAVerdict } from './grade.js'
 import { describeAttempt } from './netGuard.js'
 import { collect, runScenario, uncaughtProbes, writeResults, type ScenarioRun } from './runner.js'
 import { TierADriver } from './tierA/driver.js'
-import type { Platform, Step } from './types.js'
+import { agentIdOf, orcaTerminalHandle, orcaWorktreeId, type Platform, type Scenario, type Seen, type Step } from './types.js'
 
 // First of all, so no import below opens a connection unguarded.
 const guard = await vi.hoisted(async () => (await import('./netGuard.js')).guardThisProcess())
 const { machine } = await vi.hoisted(async () => await import('./tierA/machine.js'))
 
-/** The processes started past the stand-ins. Each fails the case it happened in. */
-const reached = vi.hoisted(() => [] as string[])
-/** Every way to start a process, refused and noted. */
-const refused = vi.hoisted(() => async (real: () => Promise<Record<string, unknown>>) => {
-  const actual = await real()
-  const refuse = (name: string) => () => {
-    reached.push(name)
-    throw new Error(`tier A starts no process (${name})`)
-  }
-  const starts = Object.fromEntries(['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork']
-    .map((name) => [name, refuse(name)]))
-  return { ...actual, ...starts, default: { ...(actual.default as object), ...starts } }
-})
+// Every way to start a process, refused and noted: each one started past the stand-ins fails the case it happened in.
+const { reached, refused } = await vi.hoisted(async () => await import('./tierA/refuseProcesses.js'))
 vi.mock('node:child_process', refused)
 vi.mock('child_process', refused)
 // Each read is counted from its call to its end, so the clock moves on only once it lands (tierA/clock.ts).
@@ -167,7 +159,7 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
   it('a voice step whose target the face never shows leaves its scenario ungraded, and says so', async () => {
     // The person turns the dial to b and the step speaks to a: the glass never showed a.
     const voice = scenario({
-      id: 'V1', app: 'claude', title: 'Eval voice to a session not on the face', dims: ['D5'], tiers: ['a'],
+      id: 'S3', app: 'claude', title: 'Eval voice to a session not on the face', dims: ['D5'], tiers: ['a'],
       sessions: [...claudeSessions(['a', 'b']), claudeGhost],
       steps: [
         { kind: 'claude.write', sessions: ['a', 'b'] },
@@ -300,6 +292,129 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
     const run = await runScenario(new TierADriver({ startDevices }), cursorAgent, platform)
     expect(run.error).toBeUndefined()
     expect(run.gaps).toEqual([])
+  })
+
+  const o1 = MAIN.find((s) => s.id === 'O1')!
+  /** The last whole list the dial was sent, each row by its session's key and its name. */
+  const lastList = (seen: Seen, of: Scenario) => {
+    const last = rings(seen).at(-1)
+    return last && { at: last.at, rows: last.rows.map((r) => ({ key: of.sessions.find((s) => agentIdOf(s) === r.id)?.key ?? 'other', name: r.name })) }
+  }
+  const isList = (argv: string[]): boolean => argv[1] === 'terminal' && argv[2] === 'list'
+
+  it("O1 on darwin: the five are listed in Orca's tab order, by their names, after a terminal list", async () => {
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, o1, 'darwin')
+    expect(run.error).toBeUndefined()
+    const seen = driver.seen()
+    // Codex's hooks carry no title: its row is its tab's. c's own title wins over its tab's, a's; d's tab was renamed.
+    const list = lastList(seen, o1)!
+    expect(list.rows).toEqual([{ key: 'a', name: 'Eval Alpha' }, { key: 'c', name: 'Eval Charlie' }, { key: 'b', name: 'Eval Bravo' },
+      { key: 'd', name: 'Eval Renamed' }, { key: 'e', name: 'Eval Echo' }])
+    const read = seen.commands.find((c) => isList(c.argv))
+    expect(read?.ok).toBe(true)
+    expect(list.at).toBeGreaterThanOrEqual(read!.at)
+  })
+
+  /** O7: a and c in w1, b in w2; its tap on b, then its rest on c. */
+  const o7 = MAIN.find((s) => s.id === 'O7')!
+  /** What brings Orca forward: open's bundle on macOS, the window raise on Linux. */
+  const raisesOrca: Readonly<Record<'darwin' | 'linux', (argv: string[]) => boolean>> = {
+    darwin: (argv) => argv.join(' ') === '/usr/bin/open -b com.stablyai.orca',
+    linux: (argv) => argv[0] === 'raise',
+  }
+
+  // Not on win32: the devices find no orca.exe where Orca's installer puts it (the Orca spec's decision 3), a gap O7
+  // grades.
+  it.for(['darwin', 'linux'] as const)("O7's tap on b in the other worktree runs worktree activate for its worktree, terminal switch for its handle, then the platform's raise, in that order, on %s", async (platform) => {
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, o7, platform)
+    expect(run.error).toBeUndefined()
+    const { commands, steps } = driver.seen()
+    const tap = steps.find((s) => s.label === 'tap')!
+    const rest = steps.find((s) => s.label === 'rest')!
+    const after = commands.filter((c) => c.at >= tap.at && c.at < rest.at).map((c) => c.argv)
+    const orca = after[0]?.[0]
+    expect(after.slice(0, 2)).toEqual([[orca, 'worktree', 'activate', '--worktree', `id:${orcaWorktreeId('w2')}`, '--json'],
+      [orca, 'terminal', 'switch', '--terminal', orcaTerminalHandle('b'), '--json']])
+    expect(after).toHaveLength(3)
+    expect(raisesOrca[platform](after[2]!)).toBe(true)
+  })
+
+  it("a ring of 40 agents in 40 worktrees reads Orca's layout at most once per change in its agents, and not once in a minute with no change", async () => {
+    const agents = keys('k', 1, 40, 2)
+    const worktreeOf = (key: string): string => key.replace('k', 'w')
+    const forty = scenario({
+      id: 'S5', app: 'orca', title: 'Eval forty agents in forty worktrees', dims: ['D1'], tiers: ['a'],
+      sessions: [...agents.map((key) => orcaSession(key, { worktree: worktreeOf(key) })), orcaGhost],
+      steps: [{ kind: 'orca.layout', worktrees: agents.map(worktreeOf) }, ...started(agents), { kind: 'wait', ms: 60_000 }],
+      checks: [], probes: [],
+    })
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, forty, 'darwin')
+    expect(run.error).toBeUndefined()
+    const { commands, steps } = driver.seen()
+    const reads = commands.filter((c) => isList(c.argv))
+    // Each agent changes Orca's ring twice: as it starts, and as its maker read finds its pane Orca's own.
+    expect(reads.length).toBeGreaterThan(0)
+    expect(reads.length).toBeLessThanOrEqual(2 * agents.length)
+    expect(reads.every((c) => c.ok)).toBe(true)
+    // Nothing changed after the last start, for a minute and the end's settle.
+    const last = steps.at(-1)!.at
+    expect(reads.filter((c) => c.at > last)).toEqual([])
+  })
+
+  it('O1 twice gives the same frames, faces, commands and deliveries at the same virtual times', async () => {
+    const seen = async () => {
+      const driver = new TierADriver({ startDevices })
+      await runScenario(driver, o1, 'darwin')
+      const { frames, faces, commands, deliveries } = driver.seen()
+      // Orca's CLI is in each world's own temp folder: a command is its program and its arguments.
+      return { frames, faces, deliveries,
+        commands: commands.map(({ argv: [program, ...args], ...command }) => ({ ...command, argv: [basename(program!), ...args] })) }
+    }
+    const first = await seen()
+    const second = await seen()
+    expect(first.commands.some((c) => isList(c.argv))).toBe(true)
+    expect(second).toEqual(first)
+  })
+
+  /** O4: a and b in w1, the plugin's stream open, Orca in front; its focus line for b, then its tap on a. */
+  const o4 = MAIN.find((s) => s.id === 'O4')!
+
+  it("O4's focus line for b, with Orca settled in front, turns the dial to b", async () => {
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, o4, 'darwin')
+    expect(run.error).toBeUndefined()
+    const { faces, steps, commands } = driver.seen()
+    const focus = steps.find((s) => s.label === 'focus')!
+    const tap = steps.find((s) => s.label === 'tap')!
+    const [a, b] = o4.sessions.slice(0, 2).map(agentIdOf)
+    expect(commands.some((c) => c.argv[2] === 'watch-focus' && c.at <= focus.at)).toBe(true)
+    // a, the newest, is on the face until the focus; the face b comes at the focus's own virtual moment.
+    expect(faces.filter((f) => f.at < focus.at).at(-1)?.active).toBe(a)
+    expect(faces.filter((f) => f.at < tap.at).at(-1)?.active).toBe(b)
+  })
+
+  /** a and b in w1, d in w2, then the plugin says w1 is on Orca's screen. */
+  const frontOnW1 = (): Scenario => scenario({
+    id: 'S4', app: 'orca', title: "Eval the ring keeps to the worktree on Orca's screen", dims: ['D1'], tiers: ['a'],
+    sessions: [orcaSession('a'), orcaSession('b', { tab: 1 }), orcaSession('d', { worktree: 'w2' }), orcaGhost],
+    steps: [...orcaOpening(['w1', 'w2']), ...orcaStarted(['d', 'b', 'a']), ...listed('orca', ['a', 'b', 'd']),
+      { label: 'front', kind: 'orca.front', worktree: 'w1' }, ...listed('orca', ['a', 'b'])],
+    checks: [], probes: [],
+  })
+
+  it("with the plugin's front on w1, only w1's agents are listed", async () => {
+    const of = frontOnW1()
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, of, 'darwin')
+    expect(run.error).toBeUndefined()
+    const seen = driver.seen()
+    const front = seen.steps.find((s) => s.label === 'front')!
+    const before = lastList({ ...seen, frames: seen.frames.filter((f) => f.at < front.at) }, of)!
+    expect(before.rows.map((r) => r.key)).toEqual(['a', 'b', 'd'])
+    expect(lastList(seen, of)!.rows.map((r) => r.key)).toEqual(['a', 'b'])
   })
 
   // The baseline is written on a Mac and checked on Linux: a result naming this host's folders would differ there.

@@ -7,9 +7,10 @@ import { APPS, DIMENSIONS, type App, type AppScores, type Report } from './types
 
 /** Reported beside each app's score; a score below it never fails CI. */
 const TARGET = 95
-const APP_NAMES: Record<App, string> = { claude: 'the Claude app', chatgpt: 'the ChatGPT app', vscode: 'VS Code', cursor: 'Cursor' }
+const APP_NAMES: Record<App, string> = { claude: 'the Claude app', chatgpt: 'the ChatGPT app', vscode: 'VS Code', cursor: 'Cursor',
+  orca: 'Orca' }
 /** What no run of the eval drives, printed under the score table so a score is not read as covering it. */
-const NOT_COVERED = 'Not covered: tier B on Windows'
+const NOT_COVERED = 'Not covered: tier B on Windows; in tier B on Linux, the raise of a tap on an Orca row; O16 in tier B, for its time'
 
 /** The terminal table: scores, the gate and where points were lost. */
 export function summary(report: Report): string {
@@ -19,6 +20,7 @@ export function summary(report: Report): string {
   lines.push(NOT_COVERED)
   lines.push('', 'Held out', columns(['', ...DIMENSIONS, 'score', '']))
   for (const app of APPS) lines.push(columns(scoreRow(app, r.heldOut[app])))
+  lines.push(...heldOutLeftOut(r))
   lines.push('', ...subsetRows(r).map(([run, app, score, leftOut]) =>
     `${run.padEnd(10)} ${app.padEnd(16)} ${score.padStart(5)} ${leftOut}`))
   lines.push('', ...gateLines(r))
@@ -30,6 +32,7 @@ export function markdown(report: Report): string {
   const r = clean(report)
   const table = (head: string[], rows: string[][]): string[] =>
     [head, head.map(() => '---'), ...rows].map((row) => `| ${row.join(' | ')} |`)
+  const leftOut = heldOutLeftOut(r)
   return [
     '# Dial eval', '',
     '## Scores', '', `Target: ${TARGET}`, '',
@@ -37,6 +40,7 @@ export function markdown(report: Report): string {
     NOT_COVERED, '',
     '## Held out', '',
     ...table(['App', ...DIMENSIONS, 'Score', 'Left out'], APPS.map((app) => scoreRow(app, r.heldOut[app]))), '',
+    ...(leftOut.length > 0 ? [...leftOut, ''] : []),
     '## By tier and platform', '',
     ...table(['Run', 'App', 'Score', 'Left out'], subsetRows(r)), '',
     '## Gate', '', ...gateLines(r),
@@ -58,6 +62,12 @@ export function writeReport(dir: string, report: Report): { json: string; md: st
 
 function scoreRow(app: App, s: AppScores): string[] {
   return [APP_NAMES[app], ...DIMENSIONS.map((d) => num(s.dims[d])), num(s.score), `left out: ${s.leftOut}`]
+}
+
+/** Why the held-out table left runs out: each reason with its tiers, platforms and runs, never its scenario. */
+function heldOutLeftOut(r: Report): string[] {
+  return r.heldOutGaps.map((g) => `- ${g.runs} run${g.runs === 1 ? '' : 's'} left out, tier ${g.tiers.join(', ')} on ${
+    g.platforms.join(', ')}: ${g.reason}`)
 }
 
 function subsetRows(r: Report): string[][] {
@@ -119,6 +129,7 @@ function clean(report: Report): Report {
     ...report,
     failing: report.failing.map((f) => ({ ...f, evidence: f.evidence.map(redact) })),
     gaps: report.gaps.map((g) => ({ ...g, reason: redact(g.reason) })),
+    heldOutGaps: report.heldOutGaps.map((g) => ({ ...g, reason: redact(g.reason) })),
   }
 }
 

@@ -4,8 +4,10 @@
  */
 import { cursorScenarios } from './cursorScenarios.js'
 import { heldOut } from './heldOut.js'
+import { orcaScenarios } from './orcaScenarios.js'
 import { vscodeScenarios } from './vscodeScenarios.js'
-import type { App, Check, Editor, Platform, Scenario, SessionDef, SessionKey, Step, Tier } from './types.js'
+import { orcaTerminalHandle, type App, type Check, type Editor, type Platform, type Scenario, type SessionDef, type SessionKey, type Step,
+  type Tier } from './types.js'
 
 const EVERY_PLATFORM: Platform[] = ['darwin', 'win32', 'linux']
 export const S = 1_000
@@ -31,11 +33,12 @@ export const EDITOR_AWAY_MS = 45 * S
 
 const NAMES: Readonly<Record<SessionKey, string>> = { a: 'Alpha', b: 'Bravo', c: 'Charlie', d: 'Delta', e: 'Echo', z: 'Zulu' }
 
-/** A fixed made-up UUID from the key's bytes, so each key has its own; `variant` keeps a session's two ids apart. */
-function uuid(key: SessionKey, variant: '8' | '9' | 'a' | 'b'): string {
+/** A fixed made-up UUID from the key's bytes, so each key has its own; `variant` keeps a session's two ids apart, and an
+ *  Orca session's (8c) from the others'. */
+function uuid(key: SessionKey, variant: '8' | '9' | 'a' | 'b' | '8c'): string {
   const bytes = Buffer.from(key).toString('hex')
   if (bytes.length > 12) throw new Error(`session key ${key} is longer than 6 bytes`)
-  return `00000000-0000-4000-${variant}000-${bytes.padStart(12, '0')}`
+  return `00000000-0000-4000-${variant.padEnd(4, '0')}-${bytes.padStart(12, '0')}`
 }
 /** A session's title, made up from its key: Eval Alpha for a, Eval T1 for t1. */
 export const titleOf = (key: SessionKey): string => `Eval ${NAMES[key] ?? key.toUpperCase()}`
@@ -57,6 +60,16 @@ export const vscode = (key: SessionKey, more: Partial<SessionDef> = {}): Session
 export const cursor = (key: SessionKey, more: Partial<SessionDef> = {}): SessionDef => editorSession(key, 'cursor', more)
 /** A Claude Code panel session in the editor: no window holds a terminal of it. */
 export const panel = (key: SessionKey, app: Editor): SessionDef => editorSession(key, app, { place: 'panel', window: undefined })
+/**
+ * An Orca agent, Claude Code in the first pane of worktree w1's first tab unless `more` says otherwise, in its
+ * worktree's folder (docs/plans/2026-11-22-dial-eval-orca-plan.md, Decisions 1 and 2). A Codex there runs in a home of
+ * its own, an Orca account's, so its words are typed into its pane. Orca has no store: its age is its start's.
+ */
+export function orcaSession(key: SessionKey, more: Partial<SessionDef> = {}): SessionDef {
+  const worktree = more.worktree ?? 'w1'
+  return { key, app: 'orca', id: uuid(key, '8c'), handle: orcaTerminalHandle(key), title: titleOf(key), worktree, tab: 0, split: 0,
+    cwd: `/work/eval-${worktree}`, ageMs: 0, ...(more.engine === 'codex' ? { codexHome: 'own' } : {}), ...more }
+}
 /** A probe of a ring check: the same ring with the ghost in it. */
 export const withGhost = (check: Extract<Check, { kind: 'ring' }>): Check => ({ ...check, expect: [...check.expect, 'z'] })
 /** Newest first, a minute apart, as the catalog's rows are unless they say otherwise. */
@@ -70,12 +83,22 @@ export const keys = (prefix: string, from: number, to: number, width: number): S
 export const claudeGhost: SessionDef = { ...claudeSession('z', 0), ghost: true }
 export const chatgptGhost: SessionDef = { ...thread('z', 0), ghost: true }
 export const editorGhost = (app: Editor): SessionDef => ({ ...editorSession('z', app), ghost: true })
+export const orcaGhost: SessionDef = { ...orcaSession('z'), ghost: true }
 
 /** Each session's start hook in the order given, a second apart, so the last is the newest. */
 export const started = (keys: SessionKey[]): Step[] => keys.flatMap((session, i): Step[] => [
   ...(i === 0 ? [] : [{ kind: 'wait', ms: S } as const]),
   { kind: 'hook', session, event: 'start' },
 ])
+
+/** Orca's worktrees laid out in this order, then the plugin's stream open, as every Orca scenario begins (the plan's
+ *  Decision 9). */
+export const orcaOpening = (worktrees: string[], renamed?: Record<SessionKey, string>): Step[] => [
+  { kind: 'orca.layout', worktrees, ...(renamed === undefined ? {} : { renamed }) },
+  { kind: 'orca.plugin', open: true },
+]
+/** Each session's start hook in the order given, with no wait between: Orca's agents started together. */
+export const orcaStarted = (keys: SessionKey[]): Step[] => keys.map((session) => ({ kind: 'hook', session, event: 'start' }))
 
 const COST: Check = { id: 'cost', kind: 'cost', dim: 'D8' }
 type Def = Omit<Scenario, 'platforms' | 'tiers' | 'heldOut'> & { platforms?: Platform[]; tiers?: Tier[] }
@@ -429,6 +452,7 @@ export const MAIN: Scenario[] = [
   }),
   ...vscodeScenarios(),
   ...cursorScenarios(),
+  ...orcaScenarios(),
 ]
 
 export const HELD_OUT: Scenario[] = heldOut()

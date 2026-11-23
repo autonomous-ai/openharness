@@ -7,8 +7,11 @@ import { APP_BUNDLES } from '../../cable/hosts/hostDetect.js'
 import { observedTitle } from '../../cable/hosts/observedTitle.js'
 import { WINDOWS_APPS } from '../../cable/hosts/windowsRaise.js'
 import { CAROUSEL_TILES } from '../dialCarousel.js'
-import { agentIdOf, EDITORS, engineOf, PAGE, placeOf, SKIPPED_SCROLL, THRESHOLDS, type App, type Check, type CheckResult, type Platform,
-  type Scenario, type Seen, type SessionDef, type SessionKey, type Tier, type Until, type WrongSend } from './types.js'
+import { flagOf, ORCA_PROGRAMS, programOf } from './argv.js'
+import { tabTitle } from './orcaListing.js'
+import { agentIdOf, EDITORS, engineOf, orcaPaneHandle, orcaWorktreeId, PAGE, placeOf, SKIPPED_SCROLL, THRESHOLDS, type App, type Check,
+  type CheckResult, type LinkedApp, type Platform, type Scenario, type Seen, type SessionDef, type SessionKey, type StepOf, type Tier,
+  type Until, type WrongSend } from './types.js'
 
 /** A failing check's evidence stays readable in the report, however long the scenario ran. */
 const MAX_EVIDENCE = 20
@@ -22,7 +25,7 @@ export function graded(value: number | null, threshold: readonly [number, number
 interface Part { part: string; score: number; timed: boolean; ms?: number | null; evidence: string[] }
 /** A check's window: from its `after` step (inclusive, as a step's own reaction lands at its time) to its `at` step. */
 interface Window { from: number; to: number }
-interface Ring { at: number; page: string; rows: Array<{ id: string; name: string }> }
+export interface Ring { at: number; page: string; rows: Array<{ id: string; name: string }> }
 
 type CheckOf<K extends Check['kind']> = Extract<Check, { kind: K }>
 
@@ -67,27 +70,6 @@ class World {
   }
 
   /**
-   * Only whole lists count: a list with no `agents.end`, or one a second `agents.begin` replaced, is never read, as the
-   * firmware does not read it. Its page is the last `apps` frame's, which each push sends before its ring.
-   */
-  rings(): Ring[] {
-    const rings: Ring[] = []
-    let page = ''
-    let building: Ring['rows'] | undefined
-    for (const { at, message } of this.seen.frames) {
-      if (message.t === 'apps') page = typeof message.shown === 'string' ? message.shown : ''
-      else if (message.t === 'agents.begin') building = []
-      else if (message.t === 'agent' && building && typeof message.id === 'string') {
-        building.push({ id: message.id, name: typeof message.name === 'string' ? message.name : '' })
-      } else if (message.t === 'agents.end' && building) {
-        rings.push({ at, page, rows: building })
-        building = undefined
-      }
-    }
-    return rings
-  }
-
-  /**
    * Whether the dial still holds a frame at `to`: one before `to` and after the last unplug before it, as an unplugged
    * dial forgets its tiles and its page (tierA/loopbackDial.ts).
    */
@@ -105,15 +87,39 @@ class World {
 const within = (at: number, w: Window): boolean => at >= w.from && at < w.to
 
 /**
+ * The whole lists the dial was sent. Only whole lists count: a list with no `agents.end`, or one a second `agents.begin`
+ * replaced, is never read, as the firmware does not read it. Its page is the last `apps` frame's, which each push sends
+ * before its ring.
+ */
+export function rings(seen: Pick<Seen, 'frames'>): Ring[] {
+  const all: Ring[] = []
+  let page = ''
+  let building: Ring['rows'] | undefined
+  for (const { at, message } of seen.frames) {
+    if (message.t === 'apps') page = typeof message.shown === 'string' ? message.shown : ''
+    else if (message.t === 'agents.begin') building = []
+    else if (message.t === 'agent' && building && typeof message.id === 'string') {
+      building.push({ id: message.id, name: typeof message.name === 'string' ? message.name : '' })
+    } else if (message.t === 'agents.end' && building) {
+      all.push({ at, page, rows: building })
+      building = undefined
+    }
+  }
+  return all
+}
+
+/**
  * The untimed parts read the ring the dial holds as the window ends, even one that landed before it opened: a step that
- * leaves the ring as it was needs no push, and a stale ring that differs from the one expected still fails. Only the
- * timed `change` needs a list in the window.
+ * leaves the ring as it was needs no push, and a stale ring that differs from the one expected still fails. The dial holds
+ * its last whole list alone: one of another page, or with none, after the page's own means the page's ring is gone (PM
+ * 2026-11-22). Only the timed `change` needs a list in the window.
  */
 function ringParts(check: CheckOf<'ring'>, world: World, w: Window | undefined): Part[] {
   const expected = check.expect.map((key) => agentIdOf(world.session(key)))
   const page = PAGE[check.page]
-  const all = world.rings()
-  const last = w ? all.filter((r) => r.page === page && world.held(r.at, w.to)).at(-1) : undefined
+  const all = rings(world.seen)
+  const held = w ? all.filter((r) => world.held(r.at, w.to)).at(-1) : undefined
+  const last = held?.page === page ? held : undefined
   const lists = w ? all.filter((r) => r.page === page && within(r.at, w)) : []
   const right = (r: Ring): boolean => {
     const ids = new Set(r.rows.map((row) => row.id))
@@ -124,7 +130,10 @@ function ringParts(check: CheckOf<'ring'>, world: World, w: Window | undefined):
   const parts: Part[] = []
   const evidence: string[] = []
   if (!last) {
-    if (all.length > 0) evidence.push(`no whole list held on ${page}; ${all.length} whole lists seen`)
+    if (held) {
+      evidence.push(`list at ${held.at} on ${held.page || 'none'}, not ${page}: ${held.rows.length} rows ${
+        keyList(held.rows.map((r) => world.keyOf(r.id)))}`.trimEnd())
+    } else if (all.length > 0) evidence.push(`no whole list held on ${page}; ${all.length} whole lists seen`)
     for (const part of ['recall', 'precision', 'order', 'names', 'cap', 'archived']) parts.push({ part, score: 0, timed: false, evidence })
   } else {
     const ids = last.rows.map((r) => r.id)
@@ -161,18 +170,18 @@ function ringParts(check: CheckOf<'ring'>, world: World, w: Window | undefined):
 }
 
 /**
- * The last `apps` frame on the ring's page the dial holds as the window ends: its other pages count exactly the sessions
- * apart, no fewer (one merged into the ring) and no more (one shown twice). An editor's session apart is counted on its
- * own app's page, as U2's VS Code row is while Cursor's page is shown: one filed under Terminal is not where the person
- * looks for it. A base app's may be on any, as X10's Codex CLI is on its terminal's. Counts name no session, so a check
- * apart from no other is exact.
+ * The last `apps` frame the dial holds as the window ends, which must show the ring's page as the ring's list must: its
+ * other pages count exactly the sessions apart, no fewer (one merged into the ring) and no more (one shown twice). An
+ * editor's session apart is counted on its own app's page, as U2's VS Code row is while Cursor's page is shown: one filed
+ * under Terminal is not where the person looks for it. A base app's may be on any, as X10's Codex CLI is on its
+ * terminal's. Counts name no session, so a check apart from no other is exact.
  */
 function apartPart(apart: SessionKey[], page: string, world: World, w: Window | undefined): Part {
-  const frame = w
-    ? world.seen.frames.filter((f) => f.message.t === 'apps' && f.message.shown === page && world.held(f.at, w.to)).at(-1)
-    : undefined
+  const frame = w ? world.seen.frames.filter((f) => f.message.t === 'apps' && world.held(f.at, w.to)).at(-1) : undefined
   // With no apps frame nothing was counted, so it cannot pass. It says so only to a driver that saw frames.
   if (!frame) return { part: 'apart', score: 0, timed: false, evidence: world.seen.frames.length > 0 ? ['no apps frame'] : [] }
+  const shown = typeof frame.message.shown === 'string' ? frame.message.shown : ''
+  if (shown !== page) return { part: 'apart', score: 0, timed: false, evidence: [`apps at ${frame.at} on ${shown || 'none'}, not ${page}`] }
   const apps = Array.isArray(frame.message.apps) ? frame.message.apps as Array<{ id?: unknown; count?: unknown }> : []
   const counts = apps.map((a) => ({ id: String(a.id), count: typeof a.count === 'number' ? a.count : 0 }))
   // The ring's own page counts its rows: no session apart is counted there.
@@ -193,12 +202,44 @@ function apartPart(apart: SessionKey[], page: string, world: World, w: Window | 
  */
 function titleOf(world: World, key: SessionKey, to: number): string {
   const session = world.session(key)
+  if (session.app === 'orca') return orcaTitle(world, session, to)
   const folder = session.app === 'cursor' ? session.folders?.[0] ?? session.cwd : session.cwd
   let title = placeOf(session) !== undefined && engineOf(session) !== 'claude' ? posix.basename(folder) : session.title
   for (const step of world.stepsBefore(to)) {
     if (step.kind === 'codex.write' && step.names && Object.hasOwn(step.names, key)) title = step.names[key]!
   }
   return title
+}
+
+/**
+ * An Orca row's name at `to` (docs/plans/2026-11-22-dial-eval-orca-plan.md, Decision 13): its tab's rename in the latest
+ * layout, else Claude Code's own title, else its tab's title, else its folder's, as Orca lists no worktree but the
+ * layout's. Its tab is the panes open there, as both tiers lay them out (orcaListing.ts orcaLayout): a pane opens at its
+ * session's start and closes at `orca.close`, its end and Orca's quit; Orca's relaunch opens again those its quit closed.
+ */
+function orcaTitle(world: World, session: SessionDef, to: number): string {
+  let layout: StepOf<'orca.layout'> | undefined
+  const open = new Set<SessionKey>()
+  let quit: SessionKey[] = []
+  for (const step of world.stepsBefore(to)) {
+    if (step.kind === 'orca.layout') layout = step
+    else if (step.kind === 'hook' && step.event === 'start') open.add(step.session)
+    else if (step.kind === 'orca.close' || (step.kind === 'hook' && step.event === 'end')) open.delete(step.session)
+    else if (step.kind === 'quit' && step.app === 'orca') {
+      quit = [...open]
+      open.clear()
+    } else if (step.kind === 'relaunch' && step.app === 'orca') {
+      for (const key of quit) open.add(key)
+      quit = []
+    }
+  }
+  const laid = session.worktree !== undefined && layout?.worktrees.includes(session.worktree) === true
+  const tab = laid ? world.scenario.sessions.filter((s) => s.app === 'orca' && s.worktree === session.worktree
+    && (s.tab ?? 0) === (session.tab ?? 0) && (s === session || open.has(s.key))).map((s) => ({ key: s.key, title: s.title, split: s.split ?? 0 })) : []
+  const renamed = layout?.renamed ?? {}
+  if (tab.some((p) => Object.hasOwn(renamed, p.key))) return tabTitle(tab, renamed)
+  if (engineOf(session) === 'claude') return session.title
+  return laid ? tabTitle(tab, {}) : posix.basename(session.cwd)
 }
 
 /** Sessions the latest write before `to` left archived: a later write of the session unarchives it. */
@@ -262,23 +303,21 @@ function stillParts(check: CheckOf<'still'>, world: World, w: Window | undefined
   return [{ part: 'still', score: moved.length === 0 ? 1 : 0, timed: false, evidence }]
 }
 
-/** Each app's link scheme: the ChatGPT app's threads are Codex's. */
-const SCHEMES: Readonly<Record<App, string>> = { claude: 'claude://', chatgpt: 'codex://', vscode: 'vscode://', cursor: 'cursor://' }
+/** Each app's link scheme: the ChatGPT app's threads are Codex's. Orca's rows open by its CLI, with no link. */
+const SCHEMES: Readonly<Record<LinkedApp, string>> = { claude: 'claude://', chatgpt: 'codex://', vscode: 'vscode://', cursor: 'cursor://' }
 
 /**
  * The session's own link: the Claude app opens its store's `local_` id, the ChatGPT app the Codex thread, an editor's
- * Claude Code panel its session; an editor's other rows have none.
+ * Claude Code panel its session; an editor's other rows and Orca's have none.
  */
 function linkOf(session: SessionDef): string | undefined {
+  if (session.app === 'orca') return undefined
   const place = placeOf(session)
   if (place === 'panel') return `${SCHEMES[session.app]}anthropic.claude-code/open?session=${session.id}`
   if (place !== undefined) return undefined
   if (session.app === 'chatgpt') return `${SCHEMES.chatgpt}threads/${session.id}`
   return session.localId && `${SCHEMES.claude}code/continue?session=${session.localId}`
 }
-
-/** A command's program, without its folder or `.exe`. */
-const programOf = (argv: string[]): string => (argv[0] ?? '').split(/[\\/]/).at(-1)!.replace(/\.exe$/, '')
 
 /**
  * Whether a command brings the session's app to the front (the eval sees commands, not windows), in the form the
@@ -348,9 +387,9 @@ function holder(streams: ReadonlyMap<string, Stream>, key: SessionKey): string |
  * An editor row is graded by its kind (docs/plans/2026-11-22-dial-eval-vscode-cursor-plan.md, Decision 6): a terminal
  * whose shell a stream holds as the window opens on its `show` with `raise` there, and its app brought forward; one with
  * none on VS Code's front or Cursor's folder, its last resort; Cursor's agent on its folder; a panel, as the base apps,
- * on its link and front. A row the dial was never sent scores 0 on every part.
+ * on its link and front. An Orca row is graded by orcaOpenParts. A row the dial was never sent scores 0 on every part.
  */
-function openParts(check: CheckOf<'open'>, world: World, w: Window | undefined, platform: Platform): Part[] {
+function openParts(check: CheckOf<'open'>, world: World, w: Window | undefined, tier: Tier, platform: Platform): Part[] {
   const session = world.session(check.session)
   const place = placeOf(session)
   const link = linkOf(session)
@@ -367,7 +406,8 @@ function openParts(check: CheckOf<'open'>, world: World, w: Window | undefined, 
   // names: X5's tap must bring its app up another way.
   const refused = world.scenario.world?.linkFails ?? []
   const brings = (c: Seen['commands'][number]): boolean => c.ok
-    && !c.argv.some((arg) => refused.some((app) => arg.startsWith(SCHEMES[app]))) && fronts(c.argv, platform, session.app, link)
+    && !c.argv.some((arg) => refused.some((app) => arg.startsWith(SCHEMES[app])))
+    && fronts(c.argv, platform, session.app, link)
   const front = commands.find(brings)
   const folds = (c: Seen['commands'][number]): boolean => folder !== undefined && c.ok && opensFolder(c.argv, platform, folder)
   const folded = commands.find(folds)
@@ -381,6 +421,18 @@ function openParts(check: CheckOf<'open'>, world: World, w: Window | undefined, 
     const step = world.scenario.steps[s.index]!
     return step.kind === 'tap' || step.kind === 'swipe' ? [`${step.kind} on ${step.session} at ${s.at}`] : []
   }) : []
+  // A row the dial was never sent cannot be opened from it: another tap bringing the app forward must not pass a probe
+  // naming a session never written. Only a window in which the driver heard something says so.
+  const id = agentIdOf(session)
+  const listed = w !== undefined && world.seen.frames.some((f) => f.at < w.to && f.message.t === 'agent' && f.message.id === id)
+  const never = (parts: Part[]): Part[] => {
+    const lines = bounded([...(heard ? [`${session.key} never listed`] : []), ...parts[0]!.evidence])
+    return parts.map((p) => ({ ...p, score: 0, ...(p.timed ? { ms: null } : {}), evidence: lines }))
+  }
+  if (session.app === 'orca') {
+    const parts = orcaOpenParts(session, world, w, tier, platform, commands, inputs)
+    return listed ? parts : never(parts)
+  }
   const evidence = bounded([...inputs, ...commands.map((c) => `command at ${c.at}: ${
     [linked.includes(c) && 'link', brings(c) && 'front', folds(c) && 'folder', !c.ok && 'failed'].filter(Boolean).join(' ') || 'other'}`),
   ...shows.map((l) => `show at ${l.at} on ${l.window}: ${world.known(l.line.show)}${l.line.raise === true ? ' raise' : ''}`),
@@ -389,15 +441,7 @@ function openParts(check: CheckOf<'open'>, world: World, w: Window | undefined, 
     const latency = at !== undefined && w ? at - w.from : null
     return { part: 'latency', score: graded(latency, THRESHOLDS.open), timed: true, ms: latency, evidence }
   }
-  // An editor row the dial was never sent cannot be opened from it: another tap bringing the editor forward must not
-  // pass a probe naming a session never written. Only a window in which the driver heard something says so.
-  const id = agentIdOf(session)
-  const listed = w !== undefined && world.seen.frames.some((f) => f.at < w.to && f.message.t === 'agent' && f.message.id === id)
-  if (place !== undefined && !listed) {
-    const never = bounded([...(heard ? [`${session.key} never listed`] : []), ...evidence])
-    return editorParts().map((p) => ({ ...p, score: 0, ...(p.timed ? { ms: null } : {}), evidence: never }))
-  }
-  return editorParts()
+  return place !== undefined && !listed ? never(editorParts()) : editorParts()
 
   function editorParts(): Part[] {
     if (place === 'agent' || (place === 'terminal' && holding === undefined && session.app === 'cursor')) {
@@ -416,6 +460,82 @@ function openParts(check: CheckOf<'open'>, world: World, w: Window | undefined, 
       timing(front?.at),
     ]
   }
+}
+
+/** Whether a command is Orca's CLI running `<group> <verb>`, as `orca`, `orca-ide` or `orca.exe` from any folder. */
+const orcaRuns = (argv: string[], group: string, verb: string): boolean =>
+  ORCA_PROGRAMS.includes(programOf(argv)) && argv[1] === group && argv[2] === verb
+
+/**
+ * An Orca row as the person sees it (docs/plans/2026-11-22-dial-eval-orca-plan.md, Decision 11): the last `worktree
+ * activate` before the switch names its worktree, as one must whenever Orca's last layout before the input lists that
+ * worktree (none ran passes only when none does), a `terminal switch` to its handle at this launch succeeded, then a tap
+ * brings Orca forward, timed, and a rest does not; with no switch no part passes. Tier B on Linux records no raise, so a
+ * tap there has no raise part. Evidence says what each command was and, for a switch, whose handle it names.
+ */
+function orcaOpenParts(session: SessionDef, world: World, w: Window | undefined, tier: Tier, platform: Platform,
+  commands: Seen['commands'], inputs: string[]): Part[] {
+  // A relaunched Orca lays every pane out on a new handle: the one before it is no session's.
+  const launch = w ? world.seen.steps.filter((s) => {
+    const step = world.scenario.steps[s.index]!
+    return s.at <= w.from && step.kind === 'relaunch' && step.app === 'orca'
+  }).length : 0
+  const owners = new Map(world.scenario.sessions.filter((s) => s.app === 'orca').map((s) => [orcaPaneHandle(s, launch), s.key]))
+  const handle = orcaPaneHandle(session, launch)
+  const target = (c: Seen['commands'][number]): string | undefined =>
+    orcaRuns(c.argv, 'terminal', 'switch') ? flagOf(c.argv, '--terminal') : undefined
+  const raises = (c: Seen['commands'][number]): boolean => c.ok && fronts(c.argv, platform, 'orca', undefined)
+  const switched = commands.findIndex((c) => c.ok && target(c) === handle)
+  // Tier A's commands are in the order they ran. Tier B's fake Orca notes each run at its own time and the raise at its
+  // read (Decision 14), so one at the switch's time counts on either side.
+  const before = (i: number, j: number): boolean => i !== j && (tier === 'b' ? commands[i]!.at <= commands[j]!.at : i < j)
+  const shown = switched < 0 ? undefined : commands.filter((c, i) => orcaRuns(c.argv, 'worktree', 'activate') && before(i, switched)).at(-1)
+  const raised = switched < 0 ? undefined : commands.find((c, i) => raises(c) && before(switched, i))
+  const made = w ? world.seen.steps.find((s) => {
+    const step = world.scenario.steps[s.index]!
+    return within(s.at, w) && (step.kind === 'tap' || step.kind === 'swipe') && step.session === session.key
+  }) : undefined
+  const input = made && world.scenario.steps[made.index]
+  // The product activates the worktree whenever its last read of Orca's layout lists it: the layout as the input was made.
+  const layout = w ? world.stepsBefore(made?.at ?? w.from)
+    .filter((s): s is StepOf<'orca.layout'> => s.kind === 'orca.layout').at(-1) : undefined
+  const laid = session.worktree !== undefined && layout?.worktrees.includes(session.worktree) === true
+  const evidence = bounded([...inputs, ...commands.map((c) => {
+    const to = target(c)
+    const what = to !== undefined ? `switch ${owners.get(to) ?? 'other'}` : orcaRuns(c.argv, 'worktree', 'activate') ? 'worktree'
+      : orcaRuns(c.argv, 'terminal', 'send') ? 'send' : raises(c) ? 'front' : undefined
+    return `command at ${c.at}: ${[what, !c.ok && 'failed'].filter(Boolean).join(' ') || 'other'}`
+  }), ...(inputs.length > 0 && commands.length === 0 ? ['no command'] : []),
+  ...(inputs.length > 0 && commands.length > 0 && switched < 0 ? ['no switch'] : [])])
+  const activated = shown !== undefined && flagOf(shown.argv, '--worktree') === `id:${orcaWorktreeId(session.worktree ?? '')}`
+  // With no switch the pane was never shown: a dead input passes neither its worktree nor a rest's no raise.
+  const parts: Part[] = [
+    { part: 'worktree', score: switched >= 0 && (activated || (shown === undefined && !laid)) ? 1 : 0, timed: false, evidence },
+    { part: 'switch', score: switched < 0 ? 0 : 1, timed: false, evidence },
+  ]
+  if (input?.kind === 'swipe') parts.push({ part: 'noRaise', score: switched >= 0 && !commands.some(raises) ? 1 : 0, timed: false, evidence })
+  else if (tier === 'a' || platform !== 'linux') {
+    const latency = raised && w ? raised.at - w.from : null
+    parts.push({ part: 'raise', score: raised ? 1 : 0, timed: false, evidence },
+      { part: 'latency', score: graded(latency, THRESHOLDS.open), timed: true, ms: latency, evidence })
+  }
+  return parts
+}
+
+/**
+ * The carousel as the person sees it from the check's `after` on (Decision 12): it refused no tile, and never held tiles
+ * with none on the face. The face held as the window opens is shown from then on, so it counts; no face seen fails.
+ */
+function faceParts(world: World, w: Window | undefined): Part[] {
+  const faces = w ? world.seen.faces.filter((f) => f.at < w.to) : []
+  const start = w ? faces.filter((f) => f.at < w.from).at(-1) : undefined
+  const judged = [...(start ? [start] : []), ...faces.filter((f) => f.at >= w!.from)]
+  if (judged.length === 0) return [{ part: 'face', score: 0, timed: false, evidence: [] }]
+  const refused = start?.refused ?? 0
+  const wrong = judged.filter((f) => f.refused > refused || (f.tiles.length > 0 && f.active === null))
+  const evidence = bounded((wrong.length > 0 ? wrong : [judged.at(-1)!])
+    .map((f) => `face at ${f.at}: ${world.keyOf(f.active)}, ${f.tiles.length} tiles, refused ${f.refused}`))
+  return [{ part: 'face', score: wrong.length === 0 ? 1 : 0, timed: false, evidence }]
 }
 
 /**
@@ -506,7 +626,7 @@ function stateParts(check: CheckOf<'state'>, world: World, w: Window | undefined
   const session = world.session(check.session)
   const id = agentIdOf(session)
   const page = PAGE[session.app]
-  const rings = world.rings().filter((r) => r.page === page)
+  const lists = rings(world.seen)
   // Every session's changes, not only this one's: the evidence lists those in the window, so a probe on a session that
   // never changes still says what the driver saw.
   const all: Array<{ at: number; agentId: string; state: string }> = []
@@ -519,12 +639,15 @@ function stateParts(check: CheckOf<'state'>, world: World, w: Window | undefined
     if (next !== undefined) all.push({ at, agentId: message.agentId, state: next })
   }
   const changes = all.filter((c) => c.agentId === id)
-  // Shown: at some moment in the window the row is in its page's last whole list and in that state.
-  const moments = w ? [w.from, ...changes.map((c) => c.at), ...rings.map((r) => r.at)].filter((at) => within(at, w)).sort((x, y) => x - y) : []
+  // Shown: at some moment in the window the row is in that state and in the last whole list, which is its page's: the
+  // dial holds no other, as the ring check reads it. A list from before an unplug since is gone, and one that lands at
+  // the moment is held from it on.
+  const moments = w ? [w.from, ...changes.map((c) => c.at), ...lists.map((r) => r.at)].filter((at) => within(at, w)).sort((x, y) => x - y) : []
   const shownAt = moments.find((at) => {
     const now = changes.filter((c) => c.at <= at).at(-1)?.state ?? 'idle'
-    const ring = rings.filter((r) => r.at <= at).at(-1)
-    return now === check.state && ring !== undefined && ring.rows.some((r) => r.id === id)
+    const ring = lists.filter((r) => r.at <= at).at(-1)
+    return now === check.state && ring !== undefined && (ring.at === at || world.held(ring.at, at)) && ring.page === page
+      && ring.rows.some((r) => r.id === id)
   })
   const seenChanges = w ? all.filter((c) => within(c.at, w)) : []
   const evidence = bounded(seenChanges.map((c) => `${world.keyOf(c.agentId)} ${c.state} at ${c.at}`))
@@ -539,7 +662,10 @@ function stateParts(check: CheckOf<'state'>, world: World, w: Window | undefined
 
 function voiceParts(check: CheckOf<'voice'>, world: World, w: Window | undefined): Part[] {
   const deliveries = w ? world.seen.deliveries.filter((d) => within(d.at, w)) : []
-  const mine = deliveries.filter((d) => d.target === check.session)
+  const toSession = deliveries.filter((d) => d.target === check.session)
+  // Reached by the check's path alone; once counts the session's every delivery, so words that also came another way
+  // reached it twice.
+  const mine = toSession.filter((d) => check.path === undefined || d.path === check.path)
   const exact = mine.length > 0 && mine.every((d) => d.text === check.text)
   // What the dial was told of the voice (a refusal is a voice.error), so a voice that reached nobody says why.
   const told = w ? world.seen.frames.filter((f) => typeof f.message.t === 'string' && f.message.t.startsWith('voice.') && within(f.at, w)) : []
@@ -549,7 +675,7 @@ function voiceParts(check: CheckOf<'voice'>, world: World, w: Window | undefined
   ...(told.length > 0 && deliveries.length === 0 ? ['no delivery'] : [])])
   return [
     { part: 'reached', score: mine.length > 0 ? 1 : 0, timed: false, evidence },
-    { part: 'once', score: mine.length === 1 ? 1 : 0, timed: false, evidence },
+    { part: 'once', score: mine.length === 1 && toSession.length === 1 ? 1 : 0, timed: false, evidence },
     { part: 'exact', score: exact ? 1 : 0, timed: false, evidence },
   ]
 }
@@ -576,27 +702,28 @@ function costParts(seen: Seen): Part[] {
   ]
 }
 
-function partsOf(check: Check, scenario: Scenario, seen: Seen, platform: Platform): Part[] {
+function partsOf(check: Check, scenario: Scenario, seen: Seen, tier: Tier, platform: Platform): Part[] {
   const world = new World(scenario, seen)
   const w = world.window(check)
   switch (check.kind) {
     case 'ring': return ringParts(check, world, w)
     case 'focus': return focusParts(check, world, w)
     case 'still': return stillParts(check, world, w)
-    case 'open': return openParts(check, world, w, platform)
+    case 'open': return openParts(check, world, w, tier, platform)
     case 'state': return stateParts(check, world, w)
     case 'voice': return voiceParts(check, world, w)
     case 'recap': return recapParts(check, world, w)
     case 'cost': return costParts(seen)
     case 'scroll': return scrollParts(check, world, w)
     case 'logged': return loggedParts(world, w)
+    case 'face': return faceParts(world, w)
   }
 }
 
 export function evaluate(check: Check, scenario: Scenario, seen: Seen, tier: Tier, platform: Platform): CheckResult[] {
   // Tier A runs in the test process: its cost would be the test runner's, so it has no D8.
   if (check.kind === 'cost' && tier === 'a') return []
-  const parts = partsOf(check, scenario, seen, platform)
+  const parts = partsOf(check, scenario, seen, tier, platform)
   const base = { tier, platform, scenario: scenario.id, app: scenario.app, dim: check.dim, heldOut: scenario.heldOut }
   // Robustness asks whether the thing still works, not how fast: one pass/fail result over its untimed parts.
   if (check.dim === 'D7') {

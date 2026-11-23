@@ -176,27 +176,34 @@ LINUX_E2E_CANARY_PATHS = (".github/actions/cli-e2e-setup/", "cli/e2e/harness/", 
 # PR CI suite runs macOS.
 LINUX_E2E_ORCA_FILES = ("cli/e2e/dialOrcaFocus.e2e.ts", "cli/e2e/dialOrcaFullRing.e2e.ts", "cli/e2e/dialStream.e2e.ts",
                         "cli/e2e/dialPaneFollow.e2e.ts", "cli/e2e/dialClaudeAppFollow.e2e.ts")
-# What they cover and no other linux-e2e file does: the stand-in, InOrca, the fake orca CLI and Orca's adapter. A change
-# to one runs them beside the PR's own files; its deletion too, as a canary path's does.
+# What they cover and no other linux-e2e file does: the stand-in, InOrca, the fake orca CLI, Orca's adapter, and the
+# harness's loop that runs Orca's plugin and its dial stream (dialStream.e2e.ts drives them). A change to one runs them
+# beside the PR's own files; its deletion too, as a canary path's does.
 LINUX_E2E_ORCA_PATHS = ("cli/e2e/harness/orcaHost.ts", "cli/e2e/harness/inOrca.ts", "cli/e2e/harness/fakeOrca.ts",
-                        "cli/src/cable/hosts/orca.ts")
-# The dial app eval's tier B files (docs/plans/2026-11-21-dial-app-eval-design.md, and
-# docs/plans/2026-11-22-dial-eval-vscode-cursor-design.md for VS Code's and Cursor's), and what they cover: the hosts'
-# adapters, the eval's catalog and grader, the carousel model and the tier B driver; for the editors, the devices
-# process and the listener whose `vscode` stream the windows of both tiers open (and its path), the hook, the extension
-# and its setup, Cursor's engine and discovery, and the harness's editor windows and outside agents. A change to one runs
-# them beside the PR's own files; its deletion too, as the Orca paths' does.
+                        "cli/src/cable/hosts/orca.ts", "cli/e2e/harness/pluginLoop.ts", "cli/e2e/harness/pluginDial.ts")
+# The dial app eval's tier B files (docs/plans/2026-11-21-dial-app-eval-design.md,
+# docs/plans/2026-11-22-dial-eval-vscode-cursor-design.md for VS Code's and Cursor's and
+# docs/plans/2026-11-22-dial-eval-orca-design.md for Orca's), and what they cover: the hosts' adapters, the eval's
+# catalog and grader, the carousel model and the tier B driver; for the editors, the devices process and the listener
+# whose `vscode` stream the windows of both tiers open (and its path), the hook, the extension and its setup, Cursor's
+# engine and discovery, and the harness's editor windows and outside agents; for Orca, its plugin's code, the devices' Orca reads
+# (its homes and the recorded app), the harness's loop that runs the plugin and its dial stream, Orca's fake CLI and
+# terminal-host stand-in, and InOrca. A change to one runs them beside the PR's own files; its deletion too, as the
+# Orca paths' does.
 LINUX_E2E_APP_EVAL_FILES = ("cli/e2e/dialAppEvalClaude.e2e.ts", "cli/e2e/dialAppEvalChatgpt.e2e.ts",
                             "cli/e2e/dialAppEvalVscode.e2e.ts", "cli/e2e/dialAppEvalCursor.e2e.ts",
-                            "cli/e2e/dialAppEvalHeldOut.e2e.ts")
+                            "cli/e2e/dialAppEvalOrca.e2e.ts", "cli/e2e/dialAppEvalHeldOut.e2e.ts")
 LINUX_E2E_APP_EVAL_PATHS = ("cli/src/cable/hosts/", "cli/src/testing/dialAppEval/", "cli/src/testing/dialCarousel.ts",
                             "cli/e2e/harness/appEval*.ts", "cli/src/services/devices.ts",
                             "cli/src/services/devicesListener.ts", "cli/src/devices/listenerPath.ts", "cli/hook/notify.mjs",
                             "plugins/harness-device-vscode/src/", "cli/src/devices/vscodeExtension.ts",
                             "cli/src/cable/vscodeExtensionSetup.ts", "cli/src/engines/cursor/",
-                            "cli/src/core/engines/cursorDiscovery.ts",
+                            "cli/src/core/engines/cursorDiscovery.ts", "plugins/harness-device-orca/src/",
+                            "cli/src/devices/orcaHomes.ts", "cli/src/testing/recordedOrca.ts",
                             *(f"cli/e2e/harness/{name}.ts" for name in ("vscodeWindow", "outsideAgent", "codexOutside",
-                                                                         "cursorOutside", "editorWindow")),
+                                                                         "cursorOutside", "editorWindow", "fakeOrca",
+                                                                         "inOrca", "orcaHost", "pluginDial",
+                                                                         "pluginLoop")),
                             *LINUX_E2E_APP_EVAL_FILES)
 DIAL_HOST_FILES = ("cli/e2e/dialHost*.e2e.ts", "cli/e2e/deviceHerdr.e2e.ts")
 # dial-hosts: those files, the code they run and the job's own definition. The daemon runs every host adapter from its

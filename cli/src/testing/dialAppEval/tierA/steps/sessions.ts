@@ -2,7 +2,8 @@
  * Tier A's steps on live sessions: their hooks, and the app quitting and coming back. A hook enters as the core passes it,
  * through `ports.devices.observed`, with the hints the session's app gives its agent (hook/notify.mjs hostHints). The
  * session's process is in the machine model: a base app's alone, an editor's agent under its terminal's shell, or for
- * the panel and Cursor's own agent under the editor, the editor under Terminal when it was started from there. Its
+ * the panel and Cursor's own agent under the editor, the editor under Terminal when it was started from there; an Orca
+ * agent under its pane's shell, on that pane's terminal, which Orca's terminal host made (orcaPane). Its
  * transcript is in Harness's own engine homes, a Codex with a home of its own in that home, and Cursor's in Cursor's.
  * What each sends is chosen by the session's engine and place, never by its app. For a Claude Code session the mod is
  * this file: a loop holding `ports.devices.inboxPoll` open, so the devices' `modReady` holds as with the real plugin,
@@ -15,8 +16,11 @@ import { observedTitle } from '../../../../cable/hosts/observedTitle.js'
 import type { DevicesPort } from '../../../../core/api.js'
 import type { InboxAnswer } from '../../../../core/deviceHookCalls.js'
 import { parseObservedHook, type ObservedEvent, type ObservedEventName } from '../../../../core/observedHook.js'
-import { engineOf, placeOf, type App, type Editor, type Engine, type Platform, type SessionDef, type SessionKey } from '../../types.js'
+import { RECORDED_ORCA } from '../../../recordedOrca.js'
+import { engineOf, HELD_MAKER, hookHandle, orcaPaneHandle, placeOf, type App, type Editor, type Engine, type Platform, type SessionDef,
+  type SessionKey } from '../../types.js'
 import type { StepHandler, TierAWorld } from '../world.js'
+import { panesChanged } from './orca.js'
 
 /** The first process's pid; each start takes the next, so a relaunched session's process is a new one. */
 const FIRST_PID = 41_000
@@ -40,11 +44,19 @@ const EDITOR_PROGRAMS: Readonly<Record<Editor, { bundle: string; programs: Reado
 const TERMINAL_APP = '/System/Applications/Utilities/Terminal.app'
 const SHELLS: Readonly<Record<Platform, string>> = { darwin: '/bin/zsh', linux: '/bin/bash', win32: 'pwsh.exe' }
 const AGENTS: Readonly<Record<Engine, string>> = { claude: 'claude', codex: 'codex', cursor: 'cursor-agent' }
+/** The maker of Orca's panes' terminals as each platform names it (RECORDED_ORCA): its terminal host, the helper on macOS
+ *  and the daemon on Linux; on Windows, where the devices read no maker, the app. */
+const ORCA_HOSTS: Readonly<Record<Platform, string>> = {
+  darwin: RECORDED_ORCA.macos.chain.at(-1)!.comm, linux: RECORDED_ORCA.linux.deb.makerComm, win32: 'Orca.exe',
+}
 
 interface Live {
   pid: number
-  /** An editor terminal's shell, the agent's parent. */
+  /** Its terminal's shell: an editor terminal's, the agent's parent, or its Orca pane's. */
   shell?: number
+  /** The other processes of its Orca pane, which end with it: a held one's maker, and under tmux its client, its server
+   *  and the shell the agent runs in. */
+  others: number[]
   transcriptPath: string
   /** The Claude mod's loop: the poll it holds open, until the session ends. */
   mod?: { pollId?: string; ended: boolean }
@@ -53,10 +65,17 @@ interface State {
   live: Map<SessionKey, Live>
   /** The sessions each app's quit ended, for its relaunch. */
   quit: Map<App, SessionKey[]>
+  /** Orca's launch, 0 its first: its nth relaunch lays every pane out on its nth handle (orcaPaneHandle), the sessions
+   *  it ran at its quit and those started after alike. */
+  orcaLaunch: number
   /** Each editor's process while it runs: one per launch. */
   editors: Map<App, number>
   /** Terminal.app's process, once an editor started from it runs. */
   terminalApp?: number
+  /** Orca's terminal host, once an Orca pane runs, until Orca quits: one per launch. */
+  orcaHost?: number
+  /** The terminals made in this world, each an Orca pane's or a tmux pane's in one. */
+  ttys: number
   /** Poll ids are never reused in a world: the inbox keeps a gone id that came before its poll. */
   polls: number
   /** The processes started in this world. */
@@ -66,7 +85,7 @@ const states = new WeakMap<TierAWorld, State>()
 
 function stateOf(world: TierAWorld): State {
   let state = states.get(world)
-  if (!state) states.set(world, state = { live: new Map(), quit: new Map(), editors: new Map(), polls: 0, started: 0 })
+  if (!state) states.set(world, state = { live: new Map(), quit: new Map(), orcaLaunch: 0, editors: new Map(), ttys: 0, polls: 0, started: 0 })
   return state
 }
 
@@ -91,9 +110,22 @@ const fromTerminal = (world: TierAWorld): boolean => world.scenario.world?.launc
  * An editor's agent: its terminal says TERM_PROGRAM=vscode, Cursor's as VS Code's. macOS gives the editor's bundle id,
  * or Terminal's to an editor started from there, and the hook finds the editor itself on Windows; Linux gives no bundle
  * id. The panel's Claude Code adds the extension's entrypoint.
+ *
+ * An Orca agent (the plan's Decision 4): Orca's agent session everywhere, and its pane's handle unless its hooks name
+ * none; macOS adds Orca's bundle id. Under tmux the hook adds tmux's pane, as a tmux started in the pane hands its agents
+ * Orca's variables; the hook keeps no TMUX. No TERM_PROGRAM, as Orca sets none.
  */
 function hintsOf(world: TierAWorld, s: SessionDef): Record<string, string> {
   const { platform } = world
+  if (s.app === 'orca') {
+    const handle = hookHandle(s, stateOf(world).orcaLaunch)
+    return {
+      ORCA_AGENT_SESSION_ID: `eval-orca-${s.key}`,
+      ...(handle === undefined ? {} : { ORCA_TERMINAL_HANDLE: handle }),
+      ...(platform === 'darwin' ? { __CFBundleIdentifier: APP_BUNDLES.orca } : {}),
+      ...(s.tmux ? { TMUX_PANE: `%${world.scenario.sessions.indexOf(s)}` } : {}),
+    }
+  }
   const place = placeOf(s)
   if (place !== undefined) {
     const bundle = platform === 'linux' ? undefined : APP_BUNDLES[platform === 'darwin' && fromTerminal(world) ? 'terminal-app' : s.app]
@@ -115,9 +147,10 @@ function hintsOf(world: TierAWorld, s: SessionDef): Record<string, string> {
 
 /** The app a process table walk names for a base app's session (scannedApp.ts learnApps): macOS and Linux walk an app's
  *  sessions to it; Windows walks none, and a terminal is no listed app. An editor's agent has none of its own: the walk
- *  reaches its editor (machine.ts appOf). */
+ *  reaches its editor (machine.ts appOf). No process of Orca's has an app id (the plan's Decision 5): Orca's helper
+ *  names no bundle id, and the walk knows none of Orca's Linux names. */
 function walkedApp(s: SessionDef, platform: Platform): string | undefined {
-  if (platform === 'win32' || s.cli) return undefined
+  if (platform === 'win32' || s.cli || s.app === 'orca') return undefined
   return s.app === 'claude' ? 'claude' : 'codex'
 }
 
@@ -144,8 +177,47 @@ function editorProcess(world: TierAWorld, app: Editor): number {
   return pid
 }
 
+/** A process started now, on that terminal: its pid. */
+function startProcess(world: TierAWorld, ppid: number, executable: string, tty?: string): number {
+  const pid = nextPid(world)
+  world.machine.start({ pid, ppid, executable, ...(tty === undefined ? {} : { tty }) })
+  return pid
+}
+
+/** A new terminal as the platform names it, `ttys0NN` and `pts/N`; none on Windows, which has no `ps` to read one. */
+function nextTty(world: TierAWorld): string | undefined {
+  const n = stateOf(world).ttys++
+  if (world.platform === 'darwin') return `ttys0${String(n).padStart(2, '0')}`
+  return world.platform === 'linux' ? `pts/${n}` : undefined
+}
+
+/**
+ * The session's Orca pane (the plan's Decision 5): a shell on a terminal of its own, made by Orca's terminal host (on no
+ * terminal, launchd's or init's child), or a held pane's by a maker of its own that is not Orca's. Under tmux the pane's
+ * shell runs tmux's client, and tmux's server (on no terminal) runs the agent's shell on another terminal. The devices'
+ * maker check reads each chain as the machine's `ps` would show it (scannedApp.ts ptyMaker). Gives the pane's shell, the
+ * shell the agent runs under, and the pane's other processes, which end with it: Orca's host runs on for its other panes.
+ */
+function orcaPane(world: TierAWorld, s: SessionDef): { shell: number; parent: number; others: number[] } {
+  const state = stateOf(world)
+  const others: number[] = []
+  const maker = s.held ? startProcess(world, 1, HELD_MAKER) : state.orcaHost ??= startProcess(world, 1, ORCA_HOSTS[world.platform])
+  if (s.held) others.push(maker)
+  const tty = nextTty(world)
+  const shell = startProcess(world, maker, SHELLS[world.platform], tty)
+  if (!s.tmux) return { shell, parent: shell, others }
+  const client = startProcess(world, shell, 'tmux', tty)
+  const server = startProcess(world, 1, 'tmux')
+  const parent = startProcess(world, server, SHELLS[world.platform], nextTty(world))
+  others.push(client, server, parent)
+  return { shell, parent, others }
+}
+
 /** Codex's rollout of the session in a Codex home's sessions folder, as Codex names it. */
 const rollout = (sessions: string, id: string): string => join(sessions, '2026', '11', '21', `rollout-2026-11-21T09-00-00-${id}.jsonl`)
+
+/** The Codex home of a session with one of its own, in the world's folder of them: an Orca agent's is its account's. */
+export const codexHomeOf = (world: TierAWorld, key: SessionKey): string => join(world.folders.codexHomes, key)
 
 /** Where the engine writes the session's transcript: Harness's own homes, which the devices read answers in, a Codex
  *  home of its own, or Cursor's home (engines/cursor/contract.ts CURSOR_TRANSCRIPT, in a folder named by the cwd). */
@@ -153,7 +225,7 @@ function transcriptOf(world: TierAWorld, s: SessionDef): string {
   const slug = s.cwd.replace(/[^A-Za-z0-9]/g, '-')
   switch (engineOf(s)) {
     case 'claude': return join(world.folders.claudeProjects, slug, `${s.id}.jsonl`)
-    case 'codex': return rollout(s.codexHome === 'own' ? join(world.folders.codexHomes, s.key, 'sessions') : world.folders.codexSessions, s.id)
+    case 'codex': return rollout(s.codexHome === 'own' ? join(codexHomeOf(world, s.key), 'sessions') : world.folders.codexSessions, s.id)
     case 'cursor': return join(world.folders.cursorProjects, slug.replace(/^-+/, ''), 'agent-transcripts', s.id, `${s.id}.jsonl`)
   }
 }
@@ -217,7 +289,7 @@ export function running(world: TierAWorld, key: SessionKey): boolean {
   return stateOf(world).live.has(key)
 }
 
-/** A live editor terminal session's shell. */
+/** A live session's terminal's shell: an editor terminal's, or its Orca pane's. */
 export function shellOf(world: TierAWorld, key: SessionKey): number | undefined {
   return stateOf(world).live.get(key)?.shell
 }
@@ -233,6 +305,22 @@ export function keyOfShell(world: TierAWorld, pid: number): SessionKey | undefin
   return undefined
 }
 
+/** The handle of the session's Orca pane while it is open: from its start to its end, at Orca's launch. */
+export function orcaHandleOf(world: TierAWorld, key: SessionKey): string | undefined {
+  const s = world.session(key)
+  return s.app === 'orca' && running(world, key) ? orcaPaneHandle(s, stateOf(world).orcaLaunch) : undefined
+}
+
+/** The live session whose open Orca pane has this handle and is its own terminal: a held one's is the terminal another
+ *  program was started in, and a tmux one's runs tmux's client, so what either is sent reaches no agent. */
+export function keyOfOrcaHandle(world: TierAWorld, handle: string): SessionKey | undefined {
+  for (const key of stateOf(world).live.keys()) {
+    const s = world.session(key)
+    if (!s.held && !s.tmux && orcaHandleOf(world, key) === handle) return key
+  }
+  return undefined
+}
+
 /** The session runs: its processes and open session in the machine, its start hook, and for Claude Code the mod's poll. */
 export async function startSession(world: TierAWorld, key: SessionKey): Promise<void> {
   const state = stateOf(world)
@@ -244,29 +332,64 @@ export async function startSession(world: TierAWorld, key: SessionKey): Promise<
   // A relaunched session goes on in the transcript it had.
   appendFileSync(transcriptPath, '')
   const place = placeOf(s)
-  // placeOf names a place for an editor's session alone.
-  const editor = place === undefined ? 1 : editorProcess(world, s.app as Editor)
-  const shell = place === 'terminal' ? nextPid(world) : undefined
-  if (shell !== undefined) world.machine.start({ pid: shell, ppid: editor, executable: SHELLS[world.platform] })
+  let shell: number | undefined
+  let parent: number
+  let others: number[] = []
+  if (s.app === 'orca') ({ shell, parent, others } = orcaPane(world, s))
+  else {
+    // placeOf names a place for an editor's session alone.
+    const editor = place === undefined ? 1 : editorProcess(world, s.app as Editor)
+    shell = place === 'terminal' ? nextPid(world) : undefined
+    if (shell !== undefined) world.machine.start({ pid: shell, ppid: editor, executable: SHELLS[world.platform] })
+    parent = shell ?? editor
+  }
   const pid = nextPid(world)
   const app = place === undefined ? walkedApp(s, world.platform) : undefined
-  world.machine.start({ pid, ppid: shell ?? editor, executable: AGENTS[engine], ...(app === undefined ? {} : { app }) })
+  // On its shell's terminal, which only an Orca pane's has.
+  const tty = world.machine.processes.get(parent)?.tty
+  world.machine.start({ pid, ppid: parent, executable: AGENTS[engine], ...(tty === undefined ? {} : { tty }),
+    ...(app === undefined ? {} : { app }) })
   world.machine.owners.set(s.id, { engine, pid, cwd: s.cwd, transcriptPath })
-  const live: Live = { pid, ...(shell === undefined ? {} : { shell }), transcriptPath,
+  const live: Live = { pid, ...(shell === undefined ? {} : { shell }), others, transcriptPath,
     ...(engine === 'claude' ? { mod: { ended: false } } : {}) }
   state.live.set(key, live)
+  // Orca made the pane's terminal before its agent started in it: the plugin hears of the pane first.
+  if (s.app === 'orca') await panesChanged(world)
   tell(world, key, live, 'session-start')
   if (live.mod) holdMod(world, key, s.id, live.mod)
 }
 
 /** Its end hook, and the mod's poll closed as its client goes; the process runs on until it is ended. */
-function endSession(world: TierAWorld, key: SessionKey, live: Live): void {
+async function endSession(world: TierAWorld, key: SessionKey, live: Live): Promise<void> {
   tell(world, key, live, 'session-end')
+  await closeSession(world, key, live)
+}
+
+/** The session is no longer open, and the mod's poll goes with its client; an Orca session's pane closes with it. */
+async function closeSession(world: TierAWorld, key: SessionKey, live: Live): Promise<void> {
   world.machine.owners.delete(world.session(key).id)
   stateOf(world).live.delete(key)
-  if (!live.mod) return
-  live.mod.ended = true
-  if (live.mod.pollId !== undefined) devices(world).inboxGone(live.mod.pollId)
+  if (live.mod) {
+    live.mod.ended = true
+    if (live.mod.pollId !== undefined) devices(world).inboxGone(live.mod.pollId)
+  }
+  if (world.session(key).app === 'orca') await panesChanged(world)
+}
+
+/** Its pane closed under it (orca.close, the plan's Decision 8): the agent and its shell end with no hook, as a process
+ *  killed with its terminal runs none. */
+export async function dropSession(world: TierAWorld, key: SessionKey): Promise<void> {
+  const live = stateOf(world).live.get(key)
+  if (!live) throw new Error(`scenario ${world.scenario.id}: ${key}'s pane closes, but ${key} is not running`)
+  endProcesses(world, live)
+  await closeSession(world, key, live)
+}
+
+/** The agent's process, its terminal's shell and its pane's other processes end. */
+function endProcesses(world: TierAWorld, live: Live): void {
+  world.machine.end(live.pid)
+  if (live.shell !== undefined) world.machine.end(live.shell)
+  for (const pid of live.others) world.machine.end(pid)
 }
 
 function liveOf(world: TierAWorld, key: SessionKey): Live {
@@ -297,28 +420,33 @@ export const sessionsSteps: { hook: StepHandler<'hook'>; quit: StepHandler<'quit
         tell(world, step.session, live, 'turn-stop')
         break
       case 'end':
-        endSession(world, step.session, live)
+        await endSession(world, step.session, live)
         break
     }
   },
-  // The app's sessions end with their processes, and an editor's terminals and own process with it.
+  // The app's sessions end with their processes, an editor's terminals and own process with it, and Orca's terminal host
+  // with Orca: its relaunch starts another.
   quit: async (world, step) => {
     const state = stateOf(world)
     const ended = [...state.live].filter(([key]) => world.session(key).app === step.app)
     for (const [key, live] of ended) {
-      endSession(world, key, live)
-      world.machine.end(live.pid)
-      if (live.shell !== undefined) world.machine.end(live.shell)
+      await endSession(world, key, live)
+      endProcesses(world, live)
     }
     const editor = state.editors.get(step.app)
     if (editor !== undefined) world.machine.end(editor)
     state.editors.delete(step.app)
+    if (step.app === 'orca' && state.orcaHost !== undefined) {
+      world.machine.end(state.orcaHost)
+      state.orcaHost = undefined
+    }
     state.quit.set(step.app, ended.map(([key]) => key))
   },
   relaunch: async (world, step) => {
     const state = stateOf(world)
     const ended = state.quit.get(step.app) ?? []
     state.quit.delete(step.app)
+    if (step.app === 'orca') state.orcaLaunch++
     for (const key of ended) await startSession(world, key)
   },
 }

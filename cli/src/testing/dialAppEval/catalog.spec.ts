@@ -1,7 +1,9 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { HELD_OUT, MAIN, titleOf } from './catalog.js'
-import { STEP_KINDS, THRESHOLDS, type Check, type CheckKind, type Scenario, type SessionKey, type Step, type StepKind } from './types.js'
+import { runScenario } from './runner.js'
+import { hookHandle, orcaTerminalHandle, STEP_KINDS, THRESHOLDS, type Check, type CheckKind, type EvalDriver, type Scenario, type SessionKey, type Step,
+  type StepKind } from './types.js'
 
 const ALL = [...MAIN, ...HELD_OUT]
 const byId = (id: string): Scenario => ALL.find((s) => s.id === id)!
@@ -11,8 +13,10 @@ function stepKeys(step: Step): SessionKey[] {
   switch (step.kind) {
     case 'claude.write': return step.sessions
     case 'codex.write': return [...step.sessions, ...step.archived ?? [], ...Object.keys(step.names ?? {}), ...Object.keys(step.ages ?? {})]
-    case 'hook': case 'attach': case 'tap': case 'swipe': case 'editor.focus': case 'editor.closeTerminal': return [step.session]
+    case 'hook': case 'attach': case 'tap': case 'swipe': case 'editor.focus': case 'editor.closeTerminal':
+    case 'orca.focus': case 'orca.close': return [step.session]
     case 'editor.window': return [...step.terminals ?? [], ...step.active === null ? [] : [step.active]]
+    case 'orca.layout': return Object.keys(step.renamed ?? {})
     case 'voice': return [step.target]
     default: return []
   }
@@ -27,23 +31,52 @@ function checkKeys(check: Check): SessionKey[] {
 }
 
 describe('the catalog', () => {
-  it('the main ids are C1-C12, X1-X11, V1-V15 and U1-U14', () => {
+  it('the main ids are C1-C12, X1-X11, V1-V15, U1-U14 and O1-O17', () => {
     const range = (prefix: string, n: number) => Array.from({ length: n }, (_, i) => `${prefix}${i + 1}`)
-    expect(MAIN.map((s) => s.id)).toEqual([...range('C', 12), ...range('X', 11), ...range('V', 15), ...range('U', 14)])
+    expect(MAIN.map((s) => s.id)).toEqual([...range('C', 12), ...range('X', 11), ...range('V', 15), ...range('U', 14),
+      ...range('O', 17)])
     expect(MAIN.every((s) => !s.heldOut)).toBe(true)
   })
 
-  it('the held out are CH1-CH3, XH1-XH3, VH1-VH4 and UH1-UH3: 13 of 65, VS Code 4 of 19, Cursor 3 of 17', () => {
-    expect(HELD_OUT.map((s) => s.id)).toEqual(['CH1', 'CH2', 'CH3', 'XH1', 'XH2', 'XH3', 'VH1', 'VH2', 'VH3', 'VH4', 'UH1', 'UH2', 'UH3'])
+  it('the held out are CH1-CH3, XH1-XH3, VH1-VH4, UH1-UH3 and OH1-OH4: 17 of 86, VS Code 4 of 19, Cursor 3 of 17, Orca 4 of 21', () => {
+    expect(HELD_OUT.map((s) => s.id)).toEqual(['CH1', 'CH2', 'CH3', 'XH1', 'XH2', 'XH3', 'VH1', 'VH2', 'VH3', 'VH4', 'UH1', 'UH2', 'UH3',
+      'OH1', 'OH2', 'OH3', 'OH4'])
     expect(HELD_OUT.every((s) => s.heldOut)).toBe(true)
-    expect(ALL).toHaveLength(65)
+    expect(ALL).toHaveLength(86)
     const of = (app: string) => [HELD_OUT.filter((s) => s.app === app).length, ALL.filter((s) => s.app === app).length]
-    expect([of('vscode'), of('cursor')]).toEqual([[4, 19], [3, 17]])
+    expect([of('vscode'), of('cursor'), of('orca')]).toEqual([[4, 19], [3, 17], [4, 21]])
   })
 
   it('VH1 and UH3 are D5 alone, UH1 macOS only', () => {
     for (const id of ['VH1', 'UH3']) expect(byId(id).dims.filter((d) => d !== 'D8'), id).toEqual(['D5'])
     expect(byId('UH1').platforms).toEqual(['darwin'])
+  })
+
+  it('OH1 and OH2 are D5 alone, on Codex agents: OH1\'s focused a beside a Claude Code, OH2\'s two', () => {
+    // The plan's Decision 17: Codex's words are typed into its pane, so a send to the wrong pane is what they can catch.
+    for (const id of ['OH1', 'OH2']) expect(byId(id).dims.filter((d) => d !== 'D8'), id).toEqual(['D5'])
+    const engines = (id: string) => byId(id).sessions.filter((d) => !d.ghost).map((d) => [d.key, d.engine ?? 'claude'])
+    expect([engines('OH1'), engines('OH2')]).toEqual([[['a', 'codex'], ['b', 'claude']], [['a', 'codex'], ['b', 'codex']]])
+    // So their words are graded as typed: one that reached the agent another way is not what they ask.
+    for (const id of ['OH1', 'OH2']) expect(byId(id).checks.flatMap((c) => (c.kind === 'voice' ? [c.path] : [])), id).toEqual(['typed'])
+  })
+
+  it('OH2 is driven on macOS, Linux and Windows alike, with no gap of its own', async () => {
+    // PM, 2026-11-22: #4548 taught frontAppId Orca's Linux and Windows names, which OH2 waited for.
+    const calls: string[] = []
+    const note = (name: string) => async () => { calls.push(name) }
+    const driver: EvalDriver = { tier: 'a', start: note('start'), step: note('step'), settle: note('settle'), stop: note('stop'),
+      seen: () => ({ frames: [], faces: [], commands: [], deliveries: [], steps: [] }), gaps: () => [] }
+    for (const platform of ['darwin', 'linux', 'win32'] as const) {
+      calls.length = 0
+      const run = await runScenario(driver, byId('OH2'), platform)
+      expect([run.gaps, calls[0], calls.at(-1)], platform).toEqual([[], 'start', 'stop'])
+    }
+  })
+
+  it('OH4\'s b names no handle in its hooks, a beside it in the same worktree does', () => {
+    const agents = byId('OH4').sessions.filter((d) => !d.ghost)
+    expect(agents.map((d) => [d.key, d.worktree, hookHandle(d, 0)])).toEqual([['a', 'w1', orcaTerminalHandle('a')], ['b', 'w1', undefined]])
   })
 
   it('VH2\'s two windows both list a, the focused w2 last; UH2\'s agent has two folders, neither its cwd: a tap that opens the cwd fails', () => {
@@ -209,8 +242,8 @@ describe('the catalog', () => {
     expect(byId('C8').steps.filter((s) => s.kind === 'tap' || s.kind === 'swipe')).toEqual([])
   })
 
-  it('C3, CH1, CH2, XH1 and V2 are tier A only, V12 tier B only, every other scenario (C10, C11, X7, C8, X9, CH3 and XH3 among them) runs in both', () => {
-    const onlyA = ['C3', 'CH1', 'CH2', 'XH1', 'V2']
+  it('C3, CH1, CH2, XH1, V2 and O16 are tier A only, V12 tier B only, every other scenario (C10, C11, X7, C8, X9, CH3 and XH3 among them) runs in both', () => {
+    const onlyA = ['C3', 'CH1', 'CH2', 'XH1', 'V2', 'O16']
     const onlyB = ['V12']
     for (const s of ALL) expect(s.tiers, s.id).toEqual(onlyA.includes(s.id) ? ['a'] : onlyB.includes(s.id) ? ['b'] : ['a', 'b'])
   })
@@ -272,6 +305,7 @@ describe('the catalog', () => {
       voice: ['voice'],
       'editor.window': ['ring', 'open', 'scroll'], 'editor.focus': ['focus'], 'editor.closeTerminal': ['ring'],
       'editor.reload': ['ring', 'open'], 'editor.close': ['open', 'scroll'], stroke: ['scroll'],
+      'orca.layout': ['ring'], 'orca.focus': ['focus'], 'orca.front': ['ring'], 'orca.plugin': ['ring'], 'orca.close': ['ring'],
     }
     for (const s of ALL) expect(s.probes.length, s.id).toBeGreaterThan(0)
     // A stroke is left out: V11 and V13 alone stroke, and neither has a scroll probe that is caught. V11's row is filed
@@ -295,15 +329,23 @@ describe('the catalog', () => {
     // (started), so each V scenario has one wait fewer than its starts; then V7's turn and its wait on the person, V10's
     // pause after the reload, V11's rests between its tap, strokes and close, V13's rest before the stroke, V14's gap
     // between quit and relaunch, and V15's rest and its time unplugged; U8's turn, U12's pause after the close and U13's
-    // gap between quit and relaunch; VH1's rest on a and UH3's voice 200 ms after the prompt.
+    // gap between quit and relaunch; O4's rests after the focus, the tap and the swipe, O7's after the tap and the
+    // swipe, O8's two turns and the pause between them, O10's rest on b, O12's time quit, its time past the devices'
+    // next look after the relaunch and its rest after the focus, O16's agents a second apart, and O17's rest and its
+    // time unplugged; VH1's rest on a, UH3's voice 200 ms after the prompt, OH1's rest on a and OH2's voice 200 ms after
+    // the focus.
     const starts = (id: string, n: number): string[] => Array<string>(n - 1).fill(`${id} 1000`)
     expect(waits('own')).toEqual(['C6 5000', 'C9 1000', 'C9 3500', 'C10 2000', 'C11 1000', 'C11 3000', 'X3 5000', 'X8 2000',
       'X11 300', 'X11 300', ...starts('V1', 4), ...starts('V2', 20), ...starts('V3', 2), ...starts('V4', 2), ...starts('V5', 2),
       'V7 2000', 'V7 2000', ...starts('V10', 2), 'V10 2000', 'V11 1000', 'V11 1000', 'V11 1000', 'V13 1000',
       ...starts('V14', 3), 'V14 45000', ...starts('V15', 2), 'V15 1000', 'V15 3000',
       ...starts('U1', 4), ...starts('U2', 2), ...starts('U3', 2), ...starts('U4', 2), 'U8 2000', 'U12 2000', ...starts('U13', 3),
-      'U13 45000', ...starts('U14', 2), 'CH3 1000', 'XH3 200',
-      ...starts('VH1', 2), 'VH1 1000', ...starts('VH3', 3), ...starts('UH3', 2), 'UH3 200'])
+      'U13 45000', ...starts('U14', 2),
+      'O4 2000', 'O4 1000', 'O4 3000', 'O7 4000', 'O7 2000', 'O8 2000', 'O8 2000', 'O8 6000', 'O8 2000', 'O10 1000', 'O12 2000',
+      'O12 35000', 'O12 2000',
+      ...starts('O16', 40), 'O17 1000', 'O17 3000', 'CH3 1000', 'XH3 200',
+      ...starts('VH1', 2), 'VH1 1000', ...starts('VH3', 3), ...starts('UH3', 2), 'UH3 200',
+      'OH1 1000', 'OH2 200'])
     expect(new Set(waits('condition').map((w) => w.split(' ')[1]))).toEqual(new Set(['10000']))
     // The person reading the face once the list is there.
     expect(new Set(waits('reading').map((w) => w.split(' ')[1]))).toEqual(new Set(['1000']))
@@ -313,10 +355,10 @@ describe('the catalog', () => {
   it('an input on the dial or the app comes at least 1 s after its listing, and any step at least 1 s after an input', () => {
     // Faster, it lands in the same instant the list arrives, inside the devices' echo window after a push, or inside a
     // swipe's rest, whose open makes the devices drop the next title as its echo: no person does either. X11's switches
-    // 300 ms apart and XH3's voice 200 ms after the follow are those scenarios' point: only the input right after one of
-    // their own short waits is let through.
-    const inputs = new Set<Step['kind']>(['tap', 'swipe', 'voice', 'attach', 'thread', 'stroke', 'editor.focus'])
-    const quick = new Set(['X11', 'XH3'])
+    // 300 ms apart, XH3's voice 200 ms after the follow and OH2's 200 ms after the focus are those scenarios' point: only
+    // the input right after one of their own short waits is let through.
+    const inputs = new Set<Step['kind']>(['tap', 'swipe', 'voice', 'attach', 'thread', 'stroke', 'editor.focus', 'orca.focus'])
+    const quick = new Set(['X11', 'XH3', 'OH2'])
     for (const s of ALL) {
       // Since the last listing, or the last input once there is one. A condition wait may end at once: it counts 0.
       let since: number | null = null

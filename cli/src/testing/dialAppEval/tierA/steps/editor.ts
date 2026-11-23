@@ -16,6 +16,7 @@ import { REFUSED, type ListenerHandler, type ListenerStream, type ListenerStream
 import type { Editor, SessionKey } from '../../types.js'
 import type { StepHandler, TierAWorld } from '../world.js'
 import { agentPid, keyOfShell, sessionsSteps, shellOf } from './sessions.js'
+import { handlerOf } from './window.js'
 
 /** The fields of a line the devices write that name a shell by its pid (cable/hosts/vscodeTerminals.ts): an Enter line
  *  `{"enter":<shell>}` names its shell alone. */
@@ -53,12 +54,6 @@ const slotOf = (app: Editor, key: string): string => `${app} ${key}`
 /** The editor of the window a step names: its sessions' (the plan's Decision 5), else the scenario's app. */
 const editorOf = (world: TierAWorld, key: string): Editor =>
   (world.scenario.sessions.find((s) => s.window === key)?.app ?? world.scenario.app) as Editor
-
-function handlerOf<T extends ListenerHandler | ListenerStreamHandler>(world: TierAWorld, type: string): T {
-  const handler = world.listener[type]
-  if (!handler) throw new Error(`the devices opened no listener for ${type}`)
-  return handler as T
-}
 
 /** What a window's stream hears from the devices: each line recorded and taken at once, words typed where it names. */
 function stream(world: TierAWorld, window: string, ended: AbortSignal): ListenerStream {

@@ -19,9 +19,10 @@ import type { HcClient } from '../../../cable/hosts/hcClient.js'
 import type { HerdrClient } from '../../../cable/hosts/herdrClient.js'
 import { createLinuxRaise, type LinuxRaise } from '../../../cable/hosts/linuxRaise.js'
 import type { OpencodeClient } from '../../../cable/hosts/opencodeClient.js'
-import type { OrcaReadDeps, OrcaReads } from '../../../cable/hosts/orca.js'
+import type { OrcaChild, OrcaReadDeps } from '../../../cable/hosts/orca.js'
 import { env } from '../../../config/env.js'
 import { emptyPorts, type CoreApi, type CorePorts } from '../../../core/api.js'
+import { createOrcaHomesCache, readOrcaHomes } from '../../../devices/orcaHomes.js'
 import { VSCODE_EXTENSION_ID, type VscodeEditor, type VscodeExtensionDeps } from '../../../devices/vscodeExtension.js'
 import type { DevicesDeps, startDevices } from '../../../services/devices.js'
 import type { ListenerHandler, ListenerStreamHandler } from '../../../services/devicesListener.js'
@@ -29,11 +30,14 @@ import { claudeAppFixture } from '../../claudeAppFixture.js'
 import { codexAppFixture } from '../../codexAppFixture.js'
 import { fakeCore } from '../../fakeCore.js'
 import { RECORDED_LINUX_APPS } from '../../recordedLinuxApps.js'
-import { agentIdOf, type App, type Delivery, type Platform, type Scenario, type Seen, type SessionDef, type SessionKey,
+import { ORCA_PROGRAMS, programOf } from '../argv.js'
+import { agentIdOf, type App, type Delivery, type LinkedApp, type Platform, type Scenario, type Seen, type SessionDef, type SessionKey,
   type StepKind, type StepOf } from '../types.js'
 import { quiet } from './clock.js'
 import { LoopbackDial } from './loopbackDial.js'
 import { machine, type MachineModel } from './machine.js'
+import { answerOrca, orcaAccountHomes, watchChild } from './steps/orca.js'
+import { recordTyping } from './steps/voice.js'
 import { createStoreWatch, onHost } from './storeWatch.js'
 
 export interface TierAWorld {
@@ -73,23 +77,47 @@ export type StepHandler<K extends StepKind> = (world: TierAWorld, step: StepOf<K
 
 type Answer = { code: number; stdout?: string }
 
-/** Each app's macOS bundle id, the scheme of its links, and its Linux desktop file. */
-const APPS: Readonly<Record<App, { bundle: string; scheme: string; desktopFile: string }>> = {
+/** Each app's macOS bundle id, the scheme of its links, and its Linux desktop file: Orca's rows open by no link. */
+const APPS: Readonly<Record<LinkedApp, { bundle: string; scheme: string; desktopFile: string }>> = {
   claude: { bundle: 'com.anthropic.claudefordesktop', scheme: 'claude', desktopFile: 'com.anthropic.Claude.desktop' },
   chatgpt: { bundle: 'com.openai.codex', scheme: 'codex', desktopFile: 'chatgpt.desktop' },
   vscode: { bundle: 'com.microsoft.VSCode', scheme: 'vscode', desktopFile: RECORDED_LINUX_APPS.vscode.schemeDesktopFile },
   cursor: { bundle: 'com.todesktop.230313mzl4w4u92', scheme: 'cursor', desktopFile: RECORDED_LINUX_APPS.cursor.schemeDesktopFile },
 }
-/** The commands found on a Linux PATH here: the two a link needs. Nothing else of any platform's is installed. */
-const LINUX_TOOLS: ReadonlySet<string> = new Set(['xdg-mime', 'xdg-open'])
+/**
+ * The commands found on each platform's PATH here, made up, recorded and never run: Linux's two a link needs, and Orca's
+ * CLI where its .deb puts it on PATH (devices/orcaHomes.ts orcaBinary; the plan's Decision 6). On macOS Orca's is the
+ * app's own (orcaAppBin), and on Windows the per-user install's (ORCA_EXE), whose folder Orca's installer does not put
+ * on PATH. Nothing else of any platform's is installed.
+ */
+const ON_PATH: Readonly<Record<Platform, Readonly<Record<string, string>>>> = {
+  darwin: {},
+  linux: { 'xdg-mime': '/usr/bin/xdg-mime', 'xdg-open': '/usr/bin/xdg-open', 'orca-ide': '/opt/eval/orca/resources/bin/orca-ide' },
+  win32: {},
+}
+/**
+ * The Orca app's CLI, which HARNESS_ORCA_APP_BIN names: a made-up path in the spec's temp folder that nothing makes, so
+ * never this machine's Orca. Every world of a run names the same one: the devices read Orca's homes as they start, in
+ * any scenario, and a scenario run twice runs the same commands.
+ */
+const orcaAppBin = (): string => join(tmpdir(), 'dial-eval-orca', 'Orca.app', 'Contents', 'Resources', 'bin', 'orca')
+/** Windows' per-user programs' folder in the world's own, which LOCALAPPDATA names there: where the profile has it, so
+ *  the Claude app's store is where it is with none set. */
+const LOCAL_APP_DATA = join('AppData', 'Local')
+/** Orca's CLI in its per-user install on Windows, under LOCALAPPDATA. */
+const ORCA_EXE = (localAppData: string): string => win32.join(localAppData, 'Programs', 'orca', 'resources', 'bin', 'orca.exe')
+/** A child of Orca's CLI whose command failed: gone before it printed anything. */
+const EXITED: OrcaChild = { onData: () => {}, exited: Promise.resolve(), kill: () => {} }
+/** Every file of Orca's has its release's time: its `terminal --help` is read once, as in a real run. */
+const ORCA_MTIME_MS = 1_763_337_600_000
 /** Made-up places, recorded and never run. */
 const CODEX_BIN = '/opt/eval/bin/codex'
 const APP_CODEX_BIN = '/opt/eval/ChatGPT.app/codex'
 const CURSOR_BIN = '/opt/eval/bin/cursor'
 /** The programs whose commands the world answers as the scenario says, by name: macOS's and Linux's openers, the scheme
- *  lookup, the Windows helper and the Linux raise. Cursor's CLI is answered only as Linux's folder row runs it, on one
- *  folder (cable/hosts/cursorFolder.ts). A command of any other is one tier A does not model. */
-const ANSWERED: ReadonlySet<string> = new Set(['open', 'xdg-open', 'xdg-mime', 'harness-pty', 'raise'])
+ *  lookup, the Windows helper, the Linux raise and Orca's CLI (steps/orca.ts). Cursor's CLI is answered only as Linux's
+ *  folder row runs it, on one folder (cable/hosts/cursorFolder.ts). A command of any other is one tier A does not model. */
+const ANSWERED: ReadonlySet<string> = new Set(['open', 'xdg-open', 'xdg-mime', 'harness-pty', 'raise', ...ORCA_PROGRAMS])
 
 /** Harness's own engine homes are the suite's throwaway ones (vitest.setup.ts): never a folder outside this run's. */
 function emptied(folder: string): string {
@@ -100,8 +128,6 @@ function emptied(folder: string): string {
   return folder
 }
 
-/** A command's program, as its path or name ends. */
-const programOf = (argv: readonly string[]): string => (argv[0] ?? '').split(/[\\/]/).at(-1)!
 /** Whether the world answers a command (ANSWERED). */
 const answered = (argv: readonly string[]): boolean => ANSWERED.has(programOf(argv))
   || (argv.length === 2 && argv[0] === CURSOR_BIN && isAbsolute(argv[1]!))
@@ -163,12 +189,6 @@ const noOpencode = (typed: (text: string) => void): OpencodeClient => ({
   events: (_onEvent, onClose) => { queueMicrotask(() => onClose('no_service')); return { close: () => {} } },
   prompt: async (_session, text) => { typed(text); return 'failed' },
 })
-/** Orca's reads, which never land: no Orca runs here. */
-const noOrca: OrcaReads = {
-  orcaWatchesFocus: () => new Promise(() => {}),
-  orcaTabs: () => new Promise(() => {}),
-  watchOrcaFocus: () => { throw new Error('no Orca in tier A') },
-}
 
 export class World implements TierAWorld {
   readonly machine = machine
@@ -203,9 +223,13 @@ export class World implements TierAWorld {
     // Windows), and an empty folder variable counts as unset (cable/hosts/appPlaces.ts). The end-to-end tests' `open` is
     // not this world's.
     for (const name of ['HOME', 'USERPROFILE']) vi.stubEnv(name, root)
-    for (const name of ['LOCALAPPDATA', 'APPDATA', 'XDG_CONFIG_HOME', 'HARNESS_APPLICATIONS_DIR', 'HARNESS_OPEN_BIN']) vi.stubEnv(name, '')
+    for (const name of ['APPDATA', 'XDG_CONFIG_HOME', 'HARNESS_APPLICATIONS_DIR', 'HARNESS_OPEN_BIN']) vi.stubEnv(name, '')
+    // Windows' LOCALAPPDATA is the world's, where Orca installs for one account; no other platform has one.
+    vi.stubEnv('LOCALAPPDATA', platform === 'win32' ? join(root, LOCAL_APP_DATA) : '')
     // The welcome's voice language follows LANG (cableHost.ts voiceLang): the same on every host.
     vi.stubEnv('LANG', 'en_US.UTF-8')
+    // The Orca app the devices find on macOS is the eval's made-up one, whatever this machine has.
+    vi.stubEnv('HARNESS_ORCA_APP_BIN', orcaAppBin())
     // The fixture is at the platform's own first root, as this host names it (a Windows one's folders are this host's of
     // the same names): the readers read it there, and the store's watch on that root hears its writes as the app's.
     this.claudeStore = claudeAppFixture(onHost(claudeStoreRoots(platform, process.env, root)[0]!.root))
@@ -218,6 +242,9 @@ export class World implements TierAWorld {
     for (const s of scenario.sessions) for (const folder of [s.cwd, ...s.folders ?? []]) machine.folders.add(folder)
     this.folders = { claudeProjects: emptied(env.CLAUDE_PROJECTS_DIR), codexSessions: emptied(join(env.CODEX_HOME, 'sessions')),
       cursorProjects: emptied(join(env.CURSOR_HOME, 'projects')), codexHomes: join(root, 'codex-homes') }
+    // Orca's accounts' homes are there before any of their agents runs, as an account's is: the devices' read of them
+    // keeps only folders there (devices/orcaHomes.ts).
+    for (const home of orcaAccountHomes(this).codex) mkdirSync(home, { recursive: true })
     this.dial = new LoopbackDial(() => Date.now())
     const dataDir = join(root, 'data')
     mkdirSync(dataDir)
@@ -386,7 +413,7 @@ export class World implements TierAWorld {
     const { platform, scenario } = this
     const typed = (text: string): void => this.deliver({ path: 'typed', target: null, text })
     const failing = new Set(scenario.world?.linkFails ?? [])
-    const apps = Object.entries(APPS) as Array<[App, (typeof APPS)[App]]>
+    const apps = Object.entries(APPS) as Array<[LinkedApp, (typeof APPS)[LinkedApp]]>
     // A link of an app the scenario says fails them is refused.
     this.answer((argv) => (apps.some(([app, { scheme }]) => failing.has(app) && argv.some((arg) => arg.startsWith(`${scheme}://`)))
       ? { code: 1 } : undefined))
@@ -397,21 +424,38 @@ export class World implements TierAWorld {
       const found = apps.find(([app, { scheme }]) => argv[3] === `x-scheme-handler/${scheme}` && (app !== 'chatgpt' || installed))
       return { code: 0, stdout: found ? `${found[1].desktopFile}\n` : '' }
     })
+    // Words typed into a terminal are seen, and Orca's CLI is answered from the model, from before the devices start: they
+    // read Orca's homes at once. Typing is seen first, as Orca's rule answers its sends.
+    recordTyping(this)
+    answerOrca(this)
+    // Orca's CLI is found from the model too (the plan's Decision 6), and the devices build their own reads of it on
+    // these. A lookup's accept is never asked: it reads the real disk. Of Orca's files only its CLI is there, where the
+    // platform's installer puts it.
+    const orcaInstall = { darwin: orcaAppBin(), linux: ON_PATH.linux['orca-ide']!, win32: ORCA_EXE(join(root, LOCAL_APP_DATA)) }[platform]
     const orca: OrcaReadDeps = {
       run: async (file, args) => this.ran([file, ...args]),
-      onPath: (name) => (platform === 'linux' && LINUX_TOOLS.has(name) ? `/usr/bin/${name}` : null),
-      exists: () => false,
+      onPath: (name) => (Object.hasOwn(ON_PATH[platform], name) ? ON_PATH[platform][name]! : null),
+      exists: (path) => path === orcaInstall,
       platform,
-      // Orca's focus watch: never started, as its reads are given.
-      spawn: () => ({ onData: () => {}, exited: Promise.resolve(), kill: () => {} }),
-      mtime: () => null,
+      // Its focus watch, whose start is a command Orca ran: one that failed has already exited.
+      spawn: (file, args) => (this.ran([file, ...args]).code === 0 ? watchChild(this) : EXITED),
+      mtime: (path) => ({ realPath: path, mtimeMs: ORCA_MTIME_MS }),
     }
+    const log = (line: string): void => { this.logs.push({ at: Date.now(), line }) }
+    // Orca's accounts' homes, read as the devices read them on this computer (services/devices.ts orcaHomesCache): with
+    // `account list` on these deps and LOCALAPPDATA, which orcaHomesDeps carries and the Orca deps do not.
+    const localAppData = process.env.LOCALAPPDATA
+    const orcaHomes = createOrcaHomesCache({
+      read: () => readOrcaHomes({ ...orca, localAppData, uid: process.getuid?.() ?? -1,
+        run: async (file, args) => ({ ...this.ran([file, ...args]), timedOut: false }) }),
+      now: () => performance.now(),
+      log,
+    })
     return {
       logsDir: join(root, 'logs'),
       petsDir: join(root, 'pets'),
       cable: this.dial.cable,
       orca,
-      orcaReads: noOrca,
       codex: {
         run: async (file, args) => {
           const queue = args[0] === 'queue'
@@ -440,7 +484,7 @@ export class World implements TierAWorld {
       transcribe: async () => this.speech ?? '',
       bundleId: async (app) => machine.bundleIds.get(app),
       storePackageFolder: async () => (installed && platform === 'win32' ? join(root, 'OpenAI.Codex') : null),
-      log: (line) => { this.logs.push({ at: Date.now(), line }) },
+      log,
       onExit: () => {},
       listen: async (handlers) => {
         this.listener = handlers
@@ -448,7 +492,7 @@ export class World implements TierAWorld {
       },
       tty: async (pid) => machine.processes.get(pid)?.tty,
       claude: async () => null,
-      orcaHomes: { get: () => ({ claude: [], codex: [] }), answered: () => true, refresh: async () => false },
+      orcaHomes,
       vscodeExtension: noEditor('vscode', platform, root),
       cursorExtension: cursorInstalled(platform, root, (reason) => this.gap(reason)),
       orcaPlugin: { orca: () => null, run: async () => ({ code: null, stdout: '', timedOut: false }), files: () => null, folder: join(root, 'orca-plugin') },

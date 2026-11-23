@@ -86,6 +86,15 @@ function withPointsLost(main: readonly CheckResult[]): Array<CheckResult & { poi
   }))
 }
 
+/** The held-out gaps by reason, in its order, each with its tiers and platforms in theirs: no scenario's id. */
+function heldOutReasons(gaps: readonly CoverageGap[]): Report['heldOutGaps'] {
+  const distinct = <T extends string>(values: T[]): T[] => [...new Set(values)].sort(byText)
+  return distinct(gaps.map((g) => g.reason)).map((reason) => {
+    const of = gaps.filter((g) => g.reason === reason)
+    return { reason, tiers: distinct(of.map((g) => g.tier)), platforms: distinct(of.map((g) => g.platform)), runs: new Set(of.map(runKey)).size }
+  })
+}
+
 function rankedGroups(failing: ReadonlyArray<CheckResult & { pointsLost: number }>): Group[] {
   const groups = new Map<string, Group>()
   for (const r of failing) {
@@ -136,6 +145,7 @@ export function grade(results: RunResults, baseline: Baseline | null): Report {
     failing,
     groups: rankedGroups(failing),
     gaps: mainGaps,
+    heldOutGaps: heldOutReasons(heldOutGaps),
     delta: {
       apps: Object.fromEntries([...subsetScores(results, [...subsets].sort())].map(([subset, now]) => [subset,
         Object.fromEntries(APPS.map((app) => [app, { before: baseline?.apps[subset]?.[app] ?? null, after: now[app] }])) as

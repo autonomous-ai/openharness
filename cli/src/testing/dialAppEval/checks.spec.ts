@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { condition, evaluate, graded, wrongSends } from './checks.js'
 import { uncaughtProbes } from './runner.js'
-import { agentIdOf, THRESHOLDS, type Check, type CheckResult, type Platform, type Scenario, type Seen, type SessionDef,
-  type Step, type Tier, type Until } from './types.js'
+import { agentIdOf, orcaPaneHandle, orcaWorktreeId, THRESHOLDS, type Check, type CheckResult, type Delivery, type Platform,
+  type Scenario, type Seen, type SessionDef, type Step, type Tier, type Until } from './types.js'
 
 const uuid = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 const claude = (key: string, n: number): SessionDef =>
@@ -41,7 +41,7 @@ function list(at: number, page: string, rows: Row[]): Seen['frames'] {
 }
 const frame = (at: number, message: Record<string, unknown>): Seen['frames'][number] => ({ at, message })
 const face = (at: number, active: SessionDef | null): Seen['faces'][number] =>
-  ({ at, page: 'claude', tiles: [id(A), id(B), id(C)], active: active && id(active) })
+  ({ at, page: 'claude', tiles: [id(A), id(B), id(C)], active: active && id(active), refused: 0 })
 
 function run(check: Check, s: Scenario, w: Seen, tier: Tier = 'a', platform: Platform = 'darwin'): CheckResult[] {
   return evaluate(check, s, w, tier, platform)
@@ -82,14 +82,31 @@ describe('ring', () => {
     expect(results.every((r) => r.evidence.length > 0)).toBe(true)
   })
 
-  it('reads the ring the dial holds as the window ends: its page\'s last whole list before `at`', () => {
+  it('reads the ring the dial holds as the window ends: the last whole list before `at`, whatever its page', () => {
     const s = scenario([write, { kind: 'wait', ms: 1000, label: 'end' }])
     const check: Check = { ...ring, at: 'end' }
-    const frames = [...list(300, 'claude', [A, B, C]), ...list(400, 'codex', [T]), ...list(2000, 'claude', [A])]
+    const frames = [...list(300, 'claude', [A, B, C]), ...list(2000, 'claude', [A])]
     expect(scores(run(check, s, seen(s, [100, 1500], { frames })))).toMatchObject({ recall: 1, precision: 1 })
-    const late = run(check, s, seen(s, [100, 1500], { frames: [...list(400, 'codex', [T]), ...list(2000, 'claude', [A, B, C])] }))
-    expect(scores(late).recall).toBe(0)
-    expect(late[0]!.evidence).toEqual(['no whole list held on claude; 2 whole lists seen'])
+    // The dial moved to another page: claude's ring is not what it holds.
+    const moved = run(check, s, seen(s, [100, 1500], { frames: [...list(300, 'claude', [A, B, C]), ...list(400, 'codex', [T])] }))
+    expect(scores(moved)).toEqual({ recall: 0, precision: 0, order: 0, names: 0, cap: 0, archived: 0 })
+    expect(moved[0]!.evidence).toEqual(['list at 400 on codex, not claude: 1 rows t'])
+  })
+
+  it('a page\'s list followed by an empty list with no page fails: the dial shows nothing', () => {
+    const s = scenario([write])
+    const results = run(ring, s, seen(s, [100], { frames: [...list(200, 'claude', [A, B, C]), ...list(300, '', [])] }))
+    expect(scores(results)).toEqual({ recall: 0, precision: 0, order: 0, names: 0, cap: 0, archived: 0 })
+    expect(results[0]!.evidence).toEqual(['list at 300 on none, not claude: 0 rows'])
+  })
+
+  it('a later list of the same page is the one graded', () => {
+    const s = scenario([write])
+    const fixed = run(ring, s, seen(s, [100], { frames: [...list(200, 'claude', [A]), ...list(300, 'claude', [A, B, C])] }))
+    expect(scores(fixed)).toEqual({ recall: 1, precision: 1, order: 1, names: 1, cap: 1, archived: 1 })
+    const shrunk = run(ring, s, seen(s, [100], { frames: [...list(200, 'claude', [A, B, C]), ...list(300, 'claude', [A])] }))
+    expect(scores(shrunk)).toMatchObject({ recall: 1 / 3, precision: 1 })
+    expect(shrunk[0]!.evidence).toEqual(['list at 300 on claude: 1 rows a'])
   })
 
   it('a list from before `after` is the ring still held: right, it passes every untimed part, and only change needs a list in the window', () => {
@@ -181,6 +198,9 @@ describe('ring', () => {
     expect(apart(list(200, 'codex', [T])).score).toBe(0)
     // The apps frame the dial holds as the window ends, even one from before `after`.
     expect(run(check, s, seen(s, [300], { frames: counted(1) })).find((r) => r.check === 'r.apart')!.score).toBe(1)
+    // The last apps frame, whatever its page: one showing no page counts nothing of the ring's.
+    const left = apart([...counted(1), frame(300, { t: 'apps', shown: '', apps: [] })])
+    expect(left).toMatchObject({ score: 0, evidence: ['apps at 300 on none, not codex'] })
     // A ring check that names no sessions apart has no such part.
     expect(run({ ...ring }, scenario([write]), seen(scenario([write]), [100], { frames: list(200, 'claude', [A, B, C]) }))
       .some((r) => r.check === 'r.apart')).toBe(false)
@@ -383,6 +403,18 @@ describe('state', () => {
     expect(scores(run(state('working'), s, seen(s, [50, 500], { frames: ring })))).toEqual({ shown: 0, latency: 0 })
     const off = seen(s, [50, 500], { frames: [...list(100, 'claude', [B]), frame(800, { t: 'turn.started', agentId: id(A), text: '' })] })
     expect(scores(run(state('working'), s, off)).shown).toBe(0)
+    // The dial moved off the row's page before the turn: its page's older list is not what it shows.
+    const moved = seen(s, [50, 500], { frames: [...ring, ...list(600, '', []), frame(800, { t: 'turn.started', agentId: id(A), text: '' })] })
+    expect(scores(run(state('working'), s, moved)).shown).toBe(0)
+  })
+
+  it('an unplugged dial holds no list it had before: the row is shown only on a list since the unplug', () => {
+    const t = scenario([write, { kind: 'unplug' }, { kind: 'hook', session: 'a', event: 'turn-start', label: 'go' }])
+    const turn = frame(800, { t: 'turn.started', agentId: id(A), text: '' })
+    expect(scores(run(state('working'), t, seen(t, [50, 300, 500], { frames: [...ring, turn] }))).shown).toBe(0)
+    const back = run(state('working'), t, seen(t, [50, 300, 500], { frames: [...ring, turn, ...list(900, 'claude', [A, B, C])] }))
+    expect(scores(back)).toEqual({ shown: 1, latency: 1 })
+    expect(ms(back, 'latency')).toBe(400)
   })
 
   it('done has its own latency: 2500 ms full, 5000 half; idle has no latency', () => {
@@ -450,6 +482,21 @@ describe('voice', () => {
 
   it('a delivery before `after` is not this step\'s', () => {
     expect(scores(run(voice, s, seen(s, [500], { deliveries: [to(400, 'a')] }))).reached).toBe(0)
+  })
+
+  it('a voice check with a path is reached only by it, once only when nothing else reached the session, and its evidence lists every one', () => {
+    const typed: Seen['deliveries'][number] = { ...to(700, 'a'), path: 'typed' }
+    const by = (path: Delivery['path'], deliveries: Seen['deliveries']): CheckResult[] =>
+      run({ ...voice, path }, s, seen(s, [500], { deliveries }))
+    expect(scores(by('mod', [typed]))).toEqual({ reached: 0, once: 0, exact: 0 })
+    expect(scores(by('typed', [typed]))).toEqual({ reached: 1, once: 1, exact: 1 })
+    // The words came through the mod and were typed into the pane too: they reached the agent twice (O9: "nothing is
+    // typed into any pane").
+    const both = by('mod', [to(600, 'a'), typed])
+    expect(scores(both)).toEqual({ reached: 1, once: 0, exact: 1 })
+    // Another session's delivery is the gate's, not this check's.
+    expect(scores(by('typed', [typed, { ...to(650, 'b'), path: 'mod' }]))).toEqual({ reached: 1, once: 1, exact: 1 })
+    expect(both[0]!.evidence).toEqual(['delivery at 600 via mod to a, text exact', 'delivery at 700 via typed to a, text exact'])
   })
 
   it('a refused voice scores 0 with the dial\'s voice frames in the window and no delivery, never their text', () => {
@@ -575,7 +622,7 @@ it('evidence is empty when nothing was seen', () => {
   }
 })
 
-it('a condition holds once the last whole list on its page since the start is the one expected, in order', () => {
+it('a condition holds once the last whole list since the start is its page\'s, the one expected, in order', () => {
   const s = scenario([write])
   const until: Until = { kind: 'ring', page: 'claude', expect: ['a', 'b'] }
   // From the scenario's start, whatever step has run.
@@ -585,6 +632,9 @@ it('a condition holds once the last whole list on its page since the start is th
   expect(condition(until, s, seen(s, [], { frames: [...list(200, 'claude', [A, B]), ...list(300, 'claude', [A])] })))
     .toEqual({ holds: false, evidence: ['list at 300 on claude: 1 rows a'] })
   expect(condition(until, s, seen(s, []))).toEqual({ holds: false, evidence: [] })
+  // The dial moved off the page: the wait goes on.
+  expect(condition(until, s, seen(s, [], { frames: [...list(200, 'claude', [A, B]), ...list(300, '', [])] })))
+    .toEqual({ holds: false, evidence: ['list at 300 on none, not claude: 0 rows'] })
 })
 
 describe('editors', () => {
@@ -897,4 +947,278 @@ it('the base apps\' checks score as before: a Codex CLI thread is named by its t
   const results = run(open, s, seen(s, [100, 500], { commands: [{ at: 700, argv: ['/usr/bin/open', '-b', 'com.openai.codex', `codex://threads/${T.id}`], ok: true }] }))
   expect(scores(results)).toEqual({ link: 1, front: 1, latency: 1 })
   expect(results[0]!.evidence).toEqual(['tap on t at 500', 'command at 700: link front'])
+})
+
+describe('Orca', () => {
+  const orca = (key: string, n: number, more: Partial<SessionDef> = {}): SessionDef => {
+    const worktree = more.worktree ?? 'w1'
+    return { key, app: 'orca', id: uuid(n), title: `Eval ${key}`, cwd: `/work/eval-${worktree}`, ageMs: n * 1000, worktree, tab: 0, ...more }
+  }
+  const OA = orca('oa', 41)
+  const OB = orca('ob', 42, { worktree: 'w2', tab: 1 })
+  const OZ: SessionDef = { ...orca('oz', 49), ghost: true }
+  const sessions = [OA, OB, OZ]
+  const cmd = (at: number, argv: string[], ok = true): Seen['commands'][number] => ({ at, argv, ok })
+  /** Orca's CLI as each platform finds it (Decision 6). */
+  const CLI: Readonly<Record<Platform, string>> = {
+    darwin: '/eval/Orca.app/Contents/Resources/bin/orca',
+    linux: '/opt/eval/orca/resources/bin/orca-ide',
+    win32: 'C:\\Users\\eval\\AppData\\Local\\Programs\\orca\\resources\\bin\\orca.exe',
+  }
+  const activate = (at: number, worktree: string, platform: Platform = 'darwin'): Seen['commands'][number] =>
+    cmd(at, [CLI[platform], 'worktree', 'activate', '--worktree', `id:${orcaWorktreeId(worktree)}`, '--json'])
+  const switchTo = (at: number, handle: string, ok = true, platform: Platform = 'darwin'): Seen['commands'][number] =>
+    cmd(at, [CLI[platform], 'terminal', 'switch', '--terminal', handle, '--json'], ok)
+  /** Orca brought forward, as the devices run it on each platform (tier A's records). */
+  const RAISE: Readonly<Record<Platform, string[]>> = {
+    darwin: ['/usr/bin/open', '-b', 'com.stablyai.orca'],
+    linux: ['raise', '--app', 'orca', '--pid', '41000'],
+    win32: ['C:\\h\\harness-pty.exe', 'raise', 'com.stablyai.orca'],
+  }
+  const handle = (s: SessionDef, launch = 0): string => orcaPaneHandle(s, launch)
+  const input = (kind: 'tap' | 'swipe', key = 'oa'): Scenario => scenario([{ kind, session: key, label: 'go' }], sessions)
+  const open: Check = { id: 'o', kind: 'open', dim: 'D3', session: 'oa', link: false, after: 'go' }
+  /** What the driver saw after a push that listed every Orca row. */
+  const listed = (s: Scenario, times: number[], parts: Partial<Omit<Seen, 'steps'>> = {}): Seen =>
+    seen(s, times, { ...parts, frames: [...list(0, 'orca', [OA, OB]), ...(parts.frames ?? [])] })
+
+  describe('open', () => {
+    it('a tap on an Orca row passes on its worktree\'s activate, its handle\'s switch, then Orca\'s raise, on each platform', () => {
+      const s = input('tap')
+      for (const platform of ['darwin', 'linux', 'win32'] as const) {
+        const commands = [activate(600, 'w1', platform), switchTo(700, handle(OA), true, platform), cmd(800, RAISE[platform])]
+        const results = run(open, s, listed(s, [500], { commands }), 'a', platform)
+        expect(scores(results)).toEqual({ worktree: 1, switch: 1, raise: 1, latency: 1 })
+        expect(ms(results, 'latency')).toBe(300)
+        expect(results[0]!.evidence).toEqual(['tap on oa at 500', 'command at 600: worktree', 'command at 700: switch oa',
+          'command at 800: front'])
+      }
+      const late = (at: number): CheckResult[] =>
+        run(open, s, listed(s, [500], { commands: [switchTo(700, handle(OA)), cmd(at, RAISE.darwin)] }))
+      expect(scores(late(3500)).latency).toBe(0.5)
+      expect(scores(late(3501)).latency).toBe(0)
+      expect(ms(late(3501), 'latency')).toBe(3001)
+      // Another app brought forward is not Orca's raise.
+      expect(scores(run(open, s, listed(s, [500], { commands: [switchTo(700, handle(OA)), cmd(800, ['/usr/bin/open', '-b', 'com.microsoft.VSCode'])] }))))
+        .toEqual({ worktree: 1, switch: 1, raise: 0, latency: 0 })
+    })
+
+    it('an activate of another worktree before the switch fails worktree, and none passes it', () => {
+      const s = input('tap')
+      const worktree = (commands: Seen['commands']): number | undefined =>
+        scores(run(open, s, listed(s, [500], { commands: [...commands, switchTo(700, handle(OA)), cmd(800, RAISE.darwin)] }))).worktree
+      expect(worktree([activate(600, 'w2')])).toBe(0)
+      expect(worktree([activate(600, 'w1'), activate(650, 'w2')])).toBe(0)
+      expect(worktree([activate(600, 'w2'), activate(650, 'w1')])).toBe(1)
+      expect(worktree([])).toBe(1)
+      // An activate after the switch is not the one that showed the pane.
+      expect(scores(run(open, s, listed(s, [500], { commands: [activate(600, 'w1'), switchTo(700, handle(OA)), activate(750, 'w2'),
+        cmd(800, RAISE.darwin)] }))).worktree).toBe(1)
+    })
+
+    it("an activate of its worktree is needed whenever the last layout before the input lists it; none passes only when none does", () => {
+      const worktree = (steps: Step[], commands: Seen['commands']): number | undefined => {
+        const s = scenario([...steps, { kind: 'tap', session: 'oa', label: 'go' }], sessions)
+        const times = [...steps.map((_, i) => 100 * (i + 1)), 500]
+        return scores(run(open, s, listed(s, times, { commands: [...commands, switchTo(700, handle(OA)), cmd(800, RAISE.darwin)] }))).worktree
+      }
+      const laid = (worktrees: string[]): Step => ({ kind: 'orca.layout', worktrees })
+      expect(worktree([laid(['w1', 'w2'])], [])).toBe(0)
+      expect(worktree([laid(['w1', 'w2'])], [activate(600, 'w1')])).toBe(1)
+      expect(worktree([laid(['w1', 'w2'])], [activate(600, 'w2')])).toBe(0)
+      // The latest layout before the input no longer lists w1: Orca has no worktree of it to open.
+      expect(worktree([laid(['w1', 'w2']), laid(['w2'])], [])).toBe(1)
+      expect(worktree([laid(['w2']), laid(['w1', 'w2'])], [])).toBe(0)
+      // A layout after the input is not the one the input was made on.
+      const s = scenario([{ kind: 'tap', session: 'oa', label: 'go' }, laid(['w1'])], sessions)
+      expect(scores(run(open, s, listed(s, [500, 650], { commands: [switchTo(700, handle(OA)), cmd(800, RAISE.darwin)] }))).worktree).toBe(1)
+    })
+
+    it('a switch of another handle fails switch, and a raise before the switch fails raise', () => {
+      const s = input('tap')
+      const other = run(open, s, listed(s, [500], { commands: [switchTo(700, handle(OB)), cmd(800, RAISE.darwin)] }))
+      expect(scores(other)).toMatchObject({ switch: 0, raise: 0, latency: 0 })
+      expect(other[0]!.evidence).toEqual(['tap on oa at 500', 'command at 700: switch ob', 'command at 800: front', 'no switch'])
+      // A handle no session owns, and a switch that failed.
+      expect(run(open, s, listed(s, [500], { commands: [switchTo(700, 'term_00000000-0000-4000-8d00-0000000000ff')] }))[0]!.evidence)
+        .toEqual(['tap on oa at 500', 'command at 700: switch other', 'no switch'])
+      const failed = run(open, s, listed(s, [500], { commands: [switchTo(700, handle(OA), false), cmd(800, RAISE.darwin)] }))
+      expect(scores(failed)).toMatchObject({ switch: 0, raise: 0 })
+      expect(failed[0]!.evidence).toContain('command at 700: switch oa failed')
+      // Brought forward first, then switched: Orca came up on whatever pane it had.
+      const early = run(open, s, listed(s, [500], { commands: [cmd(600, RAISE.darwin), switchTo(700, handle(OA))] }))
+      expect(scores(early)).toEqual({ worktree: 1, switch: 1, raise: 0, latency: 0 })
+      expect(ms(early, 'latency')).toBeNull()
+      // Tier A's order is exact, even at one virtual ms; tier B reads a raise in its switch's read as after it (Decision 14).
+      const together = [cmd(700, RAISE.darwin), switchTo(700, handle(OA))]
+      expect(scores(run(open, s, listed(s, [500], { commands: together }))).raise).toBe(0)
+      expect(scores(run(open, s, listed(s, [500], { commands: together }), 'b'))).toEqual({ worktree: 1, switch: 1, raise: 1, latency: 1 })
+    })
+
+    it('a rest passes on its switch with no raise and fails on a raise; it has no latency part', () => {
+      const s = input('swipe')
+      for (const platform of ['darwin', 'linux', 'win32'] as const) {
+        const rest = run(open, s, listed(s, [500], { commands: [activate(600, 'w1', platform), switchTo(700, handle(OA), true, platform)] }), 'a', platform)
+        expect(scores(rest)).toEqual({ worktree: 1, switch: 1, noRaise: 1 })
+        expect(rest.every((r) => !r.timed)).toBe(true)
+        expect(rest[0]!.evidence).toEqual(['swipe on oa at 500', 'command at 600: worktree', 'command at 700: switch oa'])
+        const raised = run(open, s, listed(s, [500], { commands: [switchTo(700, handle(OA), true, platform), cmd(800, RAISE[platform])] }), 'a', platform)
+        expect(scores(raised)).toEqual({ worktree: 1, switch: 1, noRaise: 0 })
+      }
+    })
+
+    it('a tap or a rest with no switch passes no part, its worktree and its no raise neither, saying no switch', () => {
+      for (const kind of ['tap', 'swipe'] as const) {
+        const s = input(kind)
+        const none = run(open, s, listed(s, [500], { commands: [activate(600, 'w1'), cmd(700, ['/eval/other'])] }))
+        expect(scores(none)).toEqual(kind === 'tap' ? { worktree: 0, switch: 0, raise: 0, latency: 0 } : { worktree: 0, switch: 0, noRaise: 0 })
+        expect(none[0]!.evidence).toEqual([`${kind} on oa at 500`, 'command at 600: worktree', 'command at 700: other', 'no switch'])
+        // Nothing ran at all: a dead input.
+        expect(Object.values(scores(run(open, s, listed(s, [500]))))).toEqual(kind === 'tap' ? [0, 0, 0, 0] : [0, 0, 0])
+      }
+    })
+
+    it('after a relaunch the switch must name the session\'s next handle', () => {
+      const s = scenario([{ kind: 'relaunch', app: 'orca' }, { kind: 'tap', session: 'oa', label: 'go' }], sessions)
+      const switched = (h: string): Record<string, number> =>
+        scores(run(open, s, listed(s, [100, 500], { commands: [switchTo(700, h), cmd(800, RAISE.darwin)] })))
+      expect(switched(handle(OA, 1))).toEqual({ worktree: 1, switch: 1, raise: 1, latency: 1 })
+      expect(switched(handle(OA, 0))).toEqual({ worktree: 0, switch: 0, raise: 0, latency: 0 })
+      // The old handle is no session's now.
+      expect(run(open, s, listed(s, [100, 500], { commands: [switchTo(700, handle(OA, 0))] }))[0]!.evidence)
+        .toEqual(['tap on oa at 500', 'command at 700: switch other', 'no switch'])
+      // A relaunch of another app moves no Orca handle.
+      const other = scenario([{ kind: 'relaunch', app: 'claude' }, { kind: 'tap', session: 'oa', label: 'go' }], sessions)
+      expect(scores(run(open, other, listed(other, [100, 500], { commands: [switchTo(700, handle(OA)), cmd(800, RAISE.darwin)] }))).switch).toBe(1)
+    })
+
+    it('a tap in tier B on Linux has no raise and no latency part', () => {
+      const s = input('tap')
+      const commands = [activate(600, 'w1', 'linux'), switchTo(700, handle(OA), true, 'linux')]
+      expect(scores(run(open, s, listed(s, [500], { commands }), 'b', 'linux'))).toEqual({ worktree: 1, switch: 1 })
+      expect(scores(run(open, s, listed(s, [500], { commands }), 'a', 'linux'))).toEqual({ worktree: 1, switch: 1, raise: 0, latency: 0 })
+      expect(scores(run(open, s, listed(s, [500], { commands: [...commands, cmd(800, RAISE.darwin)] }), 'b', 'darwin')))
+        .toEqual({ worktree: 1, switch: 1, raise: 1, latency: 1 })
+    })
+
+    it('an Orca row the dial was never sent scores 0 on every part', () => {
+      const commands = [activate(600, 'w1'), switchTo(700, handle(OZ)), cmd(800, RAISE.darwin)]
+      for (const kind of ['tap', 'swipe'] as const) {
+        const s = input(kind, 'oz')
+        const never = run({ ...open, session: 'oz' }, s, listed(s, [500], { commands }))
+        expect(never.length).toBeGreaterThan(0)
+        for (const r of never) expect(r.score).toBe(0)
+        expect(never[0]!.evidence).toContain('oz never listed')
+      }
+      // A row listed only after the window closed was not there to tap.
+      const t = scenario([{ kind: 'tap', session: 'oa', label: 'go' }, { kind: 'tap', session: 'ob', label: 'end' }], sessions)
+      const late = run({ ...open, at: 'end' }, t, seen(t, [500, 900], { commands: [switchTo(700, handle(OA)), cmd(800, RAISE.darwin)],
+        frames: list(1000, 'orca', [OA, OB]) }))
+      expect(scores(late)).toEqual({ worktree: 0, switch: 0, raise: 0, latency: 0 })
+      // A driver that saw nothing says nothing.
+      const s = input('tap', 'oz')
+      expect(run({ ...open, session: 'oz' }, s, seen(s, [500])).flatMap((r) => r.evidence)).toEqual([])
+    })
+  })
+
+  describe('face', () => {
+    const s = input('tap')
+    const check: Check = { id: 'f', kind: 'face', dim: 'D2', after: 'go' }
+    const tiles = [id(OA), id(OB)]
+    const at = (when: number, active: SessionDef | null, refused = 0, held = tiles): Seen['faces'][number] =>
+      ({ at: when, page: 'orca', tiles: held, active: active && id(active), refused })
+    const face = (faces: Seen['faces'], c: Check = check): CheckResult[] => run(c, s, seen(s, [500], { faces }))
+
+    it('face passes with no refusal and a face on a tile whenever tiles are held, from its label on', () => {
+      // Before its label the carousel refused and held tiles with none on the face: that is not this check's.
+      const results = face([at(100, null, 1), at(200, OA, 2), at(600, OB, 2), at(700, OA, 2)])
+      expect(results.map((r) => [r.check, r.score, r.timed])).toEqual([['f.face', 1, false]])
+      expect(results[0]!.evidence).toEqual(['face at 700: oa, 2 tiles, refused 2'])
+      expect(face([at(600, OA)], { ...check, dim: 'D7' }).map((r) => [r.check, r.score])).toEqual([['f', 1]])
+    })
+
+    it('face fails on a refusal after its label, on tiles held with none on the face, and with no face seen', () => {
+      const refused = face([at(200, OA, 2), at(600, OB, 3), at(700, OA, 3)])
+      expect(scores(refused).face).toBe(0)
+      expect(refused[0]!.evidence).toEqual(['face at 600: ob, 2 tiles, refused 3', 'face at 700: oa, 2 tiles, refused 3'])
+      const none = face([at(200, OA), at(600, null)])
+      expect(scores(none).face).toBe(0)
+      expect(none[0]!.evidence).toEqual(['face at 600: none, 2 tiles, refused 0'])
+      // The face held as the label runs is shown from it on.
+      expect(scores(face([at(200, null), at(900, OA)])).face).toBe(0)
+      expect(face([]).map((r) => [r.score, r.evidence])).toEqual([[0, []]])
+      expect(face([at(600, OB, 1)], { ...check, dim: 'D7' }).map((r) => [r.check, r.score])).toEqual([['f', 0]])
+      // A window that never opened saw no face.
+      expect(scores(face([at(600, OA)], { ...check, after: 'never' })).face).toBe(0)
+    })
+
+    it('a face with no tiles and none on it passes', () => {
+      expect(scores(face([at(200, OA), at(600, null, 0, [])])).face).toBe(1)
+    })
+  })
+
+  it('an Orca row\'s expected name is its tab\'s rename, else Claude Code\'s own title, else its tab\'s title', () => {
+    const OC = orca('oc', 51, { worktree: 'w2', tab: 0, split: 1 })
+    const OD = orca('od', 52, { worktree: 'w2', tab: 0, split: 0, engine: 'codex' })
+    const OW = orca('ow', 53, { tab: 1, split: 0, engine: 'codex' })
+    const OX = orca('ox', 54, { tab: 1, split: 1, engine: 'codex' })
+    const OF = orca('of', 55, { worktree: 'w3', engine: 'codex' })
+    const named = [OA, OC, OD, OW, OX, OF]
+    // Each pane is open: its session started.
+    const t = scenario([...named.map((x): Step => ({ kind: 'hook', session: x.key, event: 'start' })),
+      { kind: 'orca.layout', worktrees: ['w1', 'w2'], renamed: { od: 'Eval   tab renamed ' }, label: 'w' },
+      { kind: 'orca.layout', worktrees: ['w1', 'w2'], label: 'later' }], named)
+    const times = [...named.map(() => 50), 100, 2000]
+    const ring = (at?: string): Check => ({ id: 'r', kind: 'ring', dim: 'D1', page: 'orca', expect: named.map((x) => x.key), after: 'w',
+      ...(at === undefined ? {} : { at }) })
+    const right: Row[] = [OA, [id(OC), 'Eval tab renamed'], [id(OD), 'Eval tab renamed'], OW, [id(OX), OW.title], [id(OF), 'eval-w3']]
+    // The rename of a tab names every pane in it, Claude Code's too; a Codex pane is named by its tab's lowest split; a
+    // session in no worktree Orca lists by its folder.
+    expect(scores(run(ring('later'), t, seen(t, times, { frames: list(200, 'orca', right) }))).names).toBe(1)
+    expect(scores(run(ring('later'), t, seen(t, times, { frames: list(200, 'orca', named) }))).names).toBe(2 / 6)
+    // Once the rename is gone the tab is titled by its lowest split again: Claude Code's by its own title.
+    const after: Row[] = [OA, OC, OD, OW, [id(OX), OW.title], [id(OF), 'eval-w3']]
+    expect(scores(run(ring(), t, seen(t, times, { frames: list(2100, 'orca', after) }))).names).toBe(1)
+    expect(condition({ kind: 'ring', page: 'orca', expect: named.map((x) => x.key) }, t, seen(t, times, { frames: list(2100, 'orca', after) })).holds)
+      .toBe(true)
+  })
+
+  it("an Orca row's tab is its panes Orca lays out: those started and not ended, closed or quit, and back at a relaunch", () => {
+    // ow, Claude Code, is the tab's lowest split while its pane is open: the Codex ox beside it is named by it then.
+    const OW = orca('ow', 53, { tab: 1, split: 0 })
+    const OX = orca('ox', 54, { tab: 1, split: 1, engine: 'codex' })
+    const start = (key: string): Step => ({ kind: 'hook', session: key, event: 'start' })
+    const name = (steps: Step[]): string => {
+      const t = scenario([{ kind: 'orca.layout', worktrees: ['w1'] }, ...steps, { kind: 'tap', session: 'ox', label: 'end' }], [OW, OX])
+      const times = t.steps.map((_, i) => 100 * (i + 1))
+      const named = (title: string): boolean => scores(run({ id: 'r', kind: 'ring', dim: 'D1', page: 'orca', expect: ['ox'], at: 'end' }, t,
+        seen(t, times, { frames: list(times.at(-1)! - 50, 'orca', [[id(OX), title]]) }))).names === 1
+      return [OW.title, OX.title].find(named) ?? 'neither'
+    }
+    expect(name([start('ox')])).toBe(OX.title)
+    expect(name([start('ow'), start('ox')])).toBe(OW.title)
+    expect(name([start('ow'), start('ox'), { kind: 'hook', session: 'ow', event: 'end' }])).toBe(OX.title)
+    expect(name([start('ow'), start('ox'), { kind: 'orca.close', session: 'ow' }])).toBe(OX.title)
+    expect(name([start('ow'), start('ox'), { kind: 'quit', app: 'orca' }])).toBe(OX.title)
+    expect(name([start('ow'), start('ox'), { kind: 'quit', app: 'orca' }, { kind: 'relaunch', app: 'orca' }])).toBe(OW.title)
+    expect(name([start('ow'), start('ox'), { kind: 'orca.close', session: 'ow' }, { kind: 'quit', app: 'orca' },
+      { kind: 'relaunch', app: 'orca' }])).toBe(OX.title)
+    expect(name([start('ow'), start('ox'), { kind: 'quit', app: 'claude' }])).toBe(OW.title)
+  })
+
+  it('no evidence holds a handle or a worktree id', () => {
+    const t = scenario([{ kind: 'relaunch', app: 'orca' }, { kind: 'tap', session: 'oa', label: 'go' }], sessions)
+    const commands = [activate(600, 'w2'), switchTo(650, handle(OA, 0)), switchTo(700, handle(OA, 1), false), switchTo(750, handle(OB, 1)),
+      cmd(760, [CLI.darwin, 'terminal', 'send', '--terminal', handle(OA, 1), '--text=Eval words', '--enter', '--json']),
+      cmd(800, RAISE.darwin), cmd(900, ['/eval/other', '/work/eval-w1'])]
+    const results = [
+      ...run(open, t, listed(t, [100, 500], { commands })),
+      ...run({ ...open, session: 'oz' }, t, listed(t, [100, 500], { commands })),
+      ...run({ id: 'f', kind: 'face', dim: 'D2', after: 'go' }, t, seen(t, [100, 500], { faces: [{ at: 600, page: 'orca', tiles: [id(OA)], active: null, refused: 1 }] })),
+    ]
+    const lines = results.flatMap((r) => r.evidence)
+    expect(lines).toContain('command at 760: send')
+    expect(lines).toContain('command at 900: other')
+    for (const line of lines) expect(line).not.toMatch(/term_|eval-repo|\/work\/|Eval|orca\b|[0-9a-f]{8}-/)
+  })
 })

@@ -4,8 +4,8 @@
 //
 // Scored and reported apart, never in the headline score. A function, not a list: the catalog imports it and it uses
 // the catalog's builders, so it is called once the catalog has them.
-import { chatgptGhost, claudeGhost, claudeSession, claudeSessions, cursor, editorGhost, keys, listed, panel, S, scenario, started, threads,
-  titleOf, vscode } from './catalog.js'
+import { chatgptGhost, claudeGhost, claudeSession, claudeSessions, cursor, editorGhost, keys, listed, orcaGhost, orcaOpening, orcaSession,
+  orcaStarted, panel, S, scenario, started, threads, titleOf, vscode } from './catalog.js'
 import type { Scenario } from './types.js'
 
 export function heldOut(): Scenario[] {
@@ -191,6 +191,56 @@ export function heldOut(): Scenario[] {
       ],
       checks: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 'b', text: 'Eval words for bravo.', after: 'voice' }],
       probes: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 'z', text: 'Eval words for bravo.', after: 'voice' }],
+    }, true),
+    scenario({
+      id: 'OH1', app: 'orca', title: 'Voice on the focused Codex agent while another Orca agent is working: only the focused one gets it',
+      dims: ['D5'], sessions: [orcaSession('a', { engine: 'codex' }), orcaSession('b', { tab: 1 }), orcaGhost],
+      steps: [
+        ...orcaOpening(['w1']),
+        ...orcaStarted(['b', 'a']),
+        { kind: 'hook', session: 'b', event: 'turn-start' },
+        ...listed('orca', ['a', 'b']),
+        // Wherever b's turn moved the dial, the person turns to a and rests there before speaking.
+        { kind: 'swipe', session: 'a' },
+        { kind: 'wait', ms: 1 * S },
+        { label: 'voice', kind: 'voice', transcript: 'Eval words for alpha.', target: 'a' },
+      ],
+      checks: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 'a', text: 'Eval words for alpha.', path: 'typed', after: 'voice' }],
+      probes: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 'z', text: 'Eval words for alpha.', after: 'voice' }],
+    }, true),
+    scenario({
+      id: 'OH2', app: 'orca', title: 'Voice 200 ms after a focus line moved the dial: the words are typed into the newly focused pane',
+      dims: ['D5'], sessions: [orcaSession('a', { engine: 'codex' }), orcaSession('b', { engine: 'codex', tab: 1 }), orcaGhost],
+      steps: [
+        ...orcaOpening(['w1']),
+        ...orcaStarted(['b', 'a']),
+        ...listed('orca', ['a', 'b']),
+        { label: 'focus', kind: 'orca.focus', session: 'b' },
+        { kind: 'wait', ms: 200 },
+        { label: 'voice', kind: 'voice', transcript: 'Eval words for bravo.', target: 'b' },
+      ],
+      checks: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 'b', text: 'Eval words for bravo.', path: 'typed', after: 'voice' }],
+      probes: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 'z', text: 'Eval words for bravo.', after: 'voice' }],
+    }, true),
+    scenario({
+      id: 'OH3', app: 'orca', title: 'A tap on an agent in a pane another program made: its pane is switched and Orca brought forward',
+      dims: ['D3'], sessions: [orcaSession('a'), orcaSession('b', { tab: 1, held: true }), orcaGhost],
+      steps: [
+        ...orcaOpening(['w1']),
+        ...orcaStarted(['b', 'a']),
+        ...listed('orca', ['a', 'b']),
+        { label: 'tap', kind: 'tap', session: 'b' },
+      ],
+      checks: [{ id: 'open', kind: 'open', dim: 'D3', session: 'b', link: false, after: 'tap' }],
+      probes: [{ id: 'open', kind: 'open', dim: 'D3', session: 'z', link: false, after: 'tap' }],
+    }, true),
+    scenario({
+      id: 'OH4', app: 'orca', title: 'Two Claude Code agents in one worktree, one with no handle in its hooks: each is its own row, in tab order',
+      dims: ['D1'], sessions: [orcaSession('a'), orcaSession('b', { tab: 1, handle: 'none' }), orcaGhost],
+      // b's pane is laid out like any other: only elimination can tell its hooks from a's.
+      steps: [...orcaOpening(['w1']), ...orcaStarted(['b', 'a'])],
+      checks: [{ id: 'ring', kind: 'ring', dim: 'D1', page: 'orca', expect: ['a', 'b'] }],
+      probes: [{ id: 'ring', kind: 'ring', dim: 'D1', page: 'orca', expect: ['a', 'b', 'z'] }],
     }, true),
   ]
 }

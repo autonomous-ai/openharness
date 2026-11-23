@@ -2,14 +2,17 @@
  * Tier A's driver (docs/plans/2026-11-21-dial-app-eval-design.md, "Tier A: replay, in process"): each scenario on a
  * fresh world of its own (world.ts), the devices started for the platform it is run on, on virtual time.
  *
- * The platform reaches every part that reads it through the devices' deps: the `orca` deps (the taps' and the links'
- * commands, and the editors' adapters', cable/hosts/vscode.ts, cursorFolder.ts, open.ts, appLink.ts), the Codex
- * queue's, the raises and the store places. The `process.platform` reads left on the devices' paths decide nothing a
- * check reads, on a Mac or a Linux host alike: each is in a default the world replaces (cable/hosts/codexQueue.ts,
- * cmuxCli.ts, orca.ts, kitty.ts, scannedApp.ts, vscodeTerminals.ts readForeground, devices/vscodeExtension.ts
- * vscodeExtensionDeps; cable/serial.ts, boardReset.ts, usbConsoleUser.ts), the address of a client it stands in for
- * (herdrClient.ts, hcClient.ts, opencodeClient.ts), or the dial setup's ownership of its files (devices/dialSkill.ts). A
- * step that meets one that does says so with `world.gap`, which leaves that scenario on that platform out of the scores.
+ * The platform reaches every part that reads it through the devices' deps: the `orca` deps (Orca's own CLI, the taps'
+ * and the links' commands, and the editors' adapters', cable/hosts/vscode.ts, cursorFolder.ts, open.ts, appLink.ts), the
+ * Codex queue's, the raises and the store places. The `process.platform` reads left on the devices' paths decide nothing
+ * a check reads, on a Mac or a Linux host alike: each is in a default the world replaces (cable/hosts/codexQueue.ts,
+ * cmuxCli.ts, orca.ts orcaDeps, kitty.ts, scannedApp.ts, vscodeTerminals.ts readForeground, devices/vscodeExtension.ts
+ * vscodeExtensionDeps, devices/orcaHomes.ts orcaHomesDeps, devices/orcaPlugin.ts; cable/serial.ts, boardReset.ts,
+ * usbConsoleUser.ts), the address of a client it stands in for (herdrClient.ts, hcClient.ts, opencodeClient.ts), or the
+ * dial setup's ownership of its files (devices/dialSkill.ts); the Orca plugin's own `inputs.platform` is on no tier A
+ * path, as tier A plays the plugin's messages itself (docs/plans/2026-11-22-dial-eval-orca-plan.md, Decision 20). A step
+ * that meets a read that does decide one says so with `world.gap`, which leaves that scenario on that platform out of the
+ * scores.
  */
 import { vi } from 'vitest'
 import type { startDevices } from '../../../services/devices.js'
@@ -23,8 +26,9 @@ import { claudeStoreSteps } from './steps/claudeStore.js'
 import { codexStoreSteps } from './steps/codexStore.js'
 import { dialSteps } from './steps/dial.js'
 import { closeWindows, editorSteps, reopenWindows } from './steps/editor.js'
+import { closeOrca, orcaModelSteps, reopenOrca } from './steps/orca.js'
 import { sessionsSteps } from './steps/sessions.js'
-import { recordTyping, voiceSteps } from './steps/voice.js'
+import { voiceSteps } from './steps/voice.js'
 import { windowSteps } from './steps/window.js'
 import { World, type StepHandler, type TierAWorld } from './world.js'
 
@@ -32,14 +36,18 @@ type Run = Exclude<Step, { kind: 'wait' }>
 const isEditor = (app: App): app is Editor => (EDITORS as readonly App[]).includes(app)
 const STEPS: { [K in Exclude<StepKind, 'wait'>]: StepHandler<K> } = {
   ...claudeStoreSteps, ...codexStoreSteps, ...sessionsSteps, ...windowSteps, ...dialSteps, ...voiceSteps, ...editorSteps,
-  // An editor's windows go with it, and come back on its relaunch reporting its sessions' new shells.
+  ...orcaModelSteps,
+  // An editor's windows go with it, and come back on its relaunch reporting its sessions' new shells. Orca's watches and
+  // the plugin's stream go with Orca, and the stream comes back on its relaunch.
   quit: async (world, step) => {
     await sessionsSteps.quit(world, step)
     if (isEditor(step.app)) closeWindows(world, step.app)
+    if (step.app === 'orca') closeOrca(world)
   },
   relaunch: async (world, step) => {
     await sessionsSteps.relaunch(world, step)
     if (isEditor(step.app)) await reopenWindows(world, step.app)
+    if (step.app === 'orca') reopenOrca(world)
   },
 }
 /** Virtual time for the dial to be found and welcomed: the fleet looks every 2 s, the dial greets every 2 s. */
@@ -60,9 +68,9 @@ export class TierADriver implements EvalDriver {
     this.steps = []
     this.next = 0
     const world = this.world = new World(scenario, platform, this.deps.startDevices)
-    // Before the dial is up: a link the devices run from then on reaches the apps, and words typed are seen.
+    // Before the dial is up: a link the devices run from then on reaches the apps. The world sees words typed and answers
+    // Orca's CLI from its start (world.ts).
     installFakeApps(world)
-    recordTyping(world)
     await world.quiet()
     const front = scenario.world?.front ?? scenario.app
     await windowSteps.front(world, { kind: 'front', app: front })

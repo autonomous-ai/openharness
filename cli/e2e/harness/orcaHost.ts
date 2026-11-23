@@ -9,12 +9,13 @@
  * untouched: nothing but the runner's own terminal is on the pty.
  */
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
+import { once } from 'node:events'
 import { mkdir, writeFile } from 'node:fs/promises'
-import { basename, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import { resolveBinaryOnPath } from '../../src/lib/binaryOnPath.js'
 import { RECORDED_ORCA } from '../../src/testing/recordedOrca.js'
-import type { IsolatedDaemon } from './daemon.js'
+import { until, type IsolatedDaemon } from './daemon.js'
 import { dialHost } from './dialHosts.js'
 
 const execFileAsync = promisify(execFile)
@@ -25,7 +26,7 @@ export const orcaHostCc: string | null = process.platform === 'win32' ? null : d
 
 /** The terminal host's name on this OS: macOS's helper bundle executable; on Linux the name the daemon gives itself,
  *  the same from the .deb and the AppImage. */
-const HOST_NAME = process.platform === 'darwin'
+export const ORCA_HOST_NAME = process.platform === 'darwin'
   ? basename(RECORDED_ORCA.macos.chain[RECORDED_ORCA.macos.chain.length - 1].comm)
   : RECORDED_ORCA.linux.deb.makerComm
 
@@ -84,24 +85,33 @@ process.send({ ready: process.pid })
 interface Ran { stdout: string; stderr: string; code: number | null; ms: number }
 
 /** A stand-in for Orca's terminal host: a forkpty helper built with cc under the name Orca's host has on this OS
- *  (RECORDED_ORCA: `Orca Agents` on macOS, the recorded comm on Linux), whose child, on that pty, is one long-lived
- *  runner that starts each command it is sent with pipes. The runner is the caller of every hook run through it. */
+ *  (RECORDED_ORCA: `Orca Agents` on macOS, the recorded comm on Linux), or another a test gives it, whose child, on that
+ *  pty, is one long-lived runner that starts each command it is sent with pipes. The runner is the caller of every hook
+ *  run through it. */
 export interface OrcaTerminal {
+  /** The runner's: every hook's caller. */
+  readonly pid: number
   run(file: string, args: string[], env: NodeJS.ProcessEnv, stdin: string, cwd: string): Promise<Ran>
+  /** Its host ends, and its runner with it: what ran on its pty is gone once this resolves. */
+  close(): Promise<void>
 }
 
-/** Built once a daemon root, however many terminals start at once. */
+/** Built once a daemon root and name, however many terminals start at once. */
 const built = new Map<string, Promise<string>>()
+/** For a closed host's runner to go: it ends as its pty hangs up and its channel closes. */
+const GONE_MS = 5_000
 /** How long the runner has to say it is ready: a Node start, on a slow worker. */
 const READY_MS = 20_000
 
-function build(d: IsolatedDaemon): Promise<string> {
-  let host = built.get(d.root)
+/** The host built under [name], its runner beside it: a folder of each name's own, so two names built at once never
+ *  write a file the other is compiling or starting. */
+function build(d: IsolatedDaemon, name: string): Promise<string> {
+  const folder = join(d.root, 'orca-host', name)
+  let host = built.get(folder)
   if (!host) {
     host = (async () => {
       if (!orcaHostCc) throw new Error("cc, which builds Orca's terminal host stand-in, is not installed")
-      const folder = join(d.root, 'orca-host')
-      const binary = join(folder, HOST_NAME)
+      const binary = join(folder, name)
       await mkdir(folder, { recursive: true })
       await writeFile(join(folder, 'host.c'), HOST)
       await writeFile(join(folder, 'runner.mjs'), RUNNER)
@@ -109,9 +119,19 @@ function build(d: IsolatedDaemon): Promise<string> {
       await execFileAsync(orcaHostCc, ['-o', binary, join(folder, 'host.c'), ...(process.platform === 'linux' ? ['-lutil'] : [])])
       return binary
     })()
-    built.set(d.root, host)
+    built.set(folder, host)
   }
   return host
+}
+
+/** Whether [pid] still runs. */
+export const running = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
 }
 
 async function ps(fields: string[], pid: number): Promise<string> {
@@ -120,10 +140,10 @@ async function ps(fields: string[], pid: number): Promise<string> {
 }
 
 /** Orca's terminal host stand-in, its runner on the pty and ready; its host process goes in [children], which the test
- *  ends. */
-export async function orcaTerminal(d: IsolatedDaemon, children: ChildProcess[]): Promise<OrcaTerminal> {
-  const binary = await build(d)
-  const host = spawn(binary, [process.execPath, join(d.root, 'orca-host', 'runner.mjs')], {
+ *  ends. Under [name] when given: a held pane's terminal, which another program than Orca's host made. */
+export async function orcaTerminal(d: IsolatedDaemon, children: ChildProcess[], { name = ORCA_HOST_NAME }: { name?: string } = {}): Promise<OrcaTerminal> {
+  const binary = await build(d, name)
+  const host = spawn(binary, [process.execPath, join(dirname(binary), 'runner.mjs')], {
     cwd: d.env.HOME, env: d.env, stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
   })
   children.push(host)
@@ -158,15 +178,17 @@ export async function orcaTerminal(d: IsolatedDaemon, children: ChildProcess[]):
     })
   })
   const pid = await runner
-  // A host under another name, or a runner on no pty, would leave every Orca pane held: the test would pass for nothing.
+  // A host under another name, or a runner on no pty, would leave every Orca pane held, or every held one own: the test
+  // would pass for nothing.
   const [ppid, tty] = (await ps(['ppid', 'tty'], pid)).split(/\s+/)
-  const name = basename(await ps(['comm'], Number(ppid)))
-  if (name !== HOST_NAME || tty === undefined || tty === '?') {
+  const parent = basename(await ps(['comm'], Number(ppid)))
+  if (parent !== name || tty === undefined || tty === '?') {
     host.kill('SIGKILL')
-    throw new Error(`Orca's terminal host stand-in runs its runner under "${name}" on tty "${tty}", not under "${HOST_NAME}" on a pty`)
+    throw new Error(`Orca's terminal host stand-in runs its runner under "${parent}" on tty "${tty}", not under "${name}" on a pty`)
   }
   let next = 0
   return {
+    pid,
     run(file, args, env, stdin, cwd) {
       if (gone) return Promise.reject(gone)
       const id = next++
@@ -178,6 +200,17 @@ export async function orcaTerminal(d: IsolatedDaemon, children: ChildProcess[]):
           reject(error)
         })
       })
+    },
+    async close() {
+      if (host.exitCode === null && host.signalCode === null) {
+        const exited = once(host, 'exit')
+        host.kill('SIGTERM')
+        await exited
+      }
+      // Its pty hung up with its host, and its channel closes now: the runner ends on either, as Orca's agents end with
+      // their terminal.
+      if (host.connected) host.disconnect()
+      await until("Orca's terminal host stand-in's runner to end", () => !running(pid), GONE_MS, 20)
     },
   }
 }

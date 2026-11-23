@@ -6,8 +6,9 @@
  *
  * Isolation: each daemon's open (HARNESS_OPEN_BIN, which only records: `writeRecordingOpen`), its home, its apps' folder,
  * both apps' stores, the editors' CLIs (HARNESS_VSCODE_BIN, HARNESS_CURSOR_BIN; on Linux Cursor's only records:
- * `writeRecordingCli`) and, on Linux, the raise's programs (`writeRaiseFakes`) are checked to be inside its root before it
- * starts, and it is signed in to the fake backend alone.
+ * `writeRecordingCli`), Orca's CLI (the fake, as `orca` and `orca-ide`: `orcaCliInside`) and, on Linux, the raise's
+ * programs (`writeRaiseFakes`) are checked to be inside its root before it starts, and it is signed in to the fake backend
+ * alone.
  * The network guard (src/testing/dialAppEval/netGuard.ts) is in this process and preloaded into every process of the
  * daemon and every child started here: a start whose running core or devices process did not load it fails, and the
  * driver's close fails on any attempt not yet handed on, those its last daemon made as it closed among them.
@@ -15,19 +16,23 @@
  * What it saw: the frames the dial received, at their arrival; the faces of the firmware's carousel model, fed those
  * frames and the person's own turns (a swipe moves the glass before the daemon hears of it); the commands of the
  * recording open and of the recording Cursor CLI, with their exit, a folder in the daemon's projects written as the
- * catalog's `/work/` one; the deliveries and editor streams the app's steps record; the devices' log lines, at their
- * read; and, after `stop`, what the scenario cost (appEvalCost.ts).
+ * catalog's `/work/` one, and the fake Orca's at their own times, each `terminal send` among them a `typed` delivery to
+ * the session whose pane it named; the deliveries and editor streams the app's steps record; the devices' log lines, at
+ * their read; and, after `stop`, what the scenario cost (appEvalCost.ts).
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative } from 'node:path'
 import { chatGptPlaces, claudeStoreRoots } from '../../src/cable/hosts/appPlaces.js'
+import { orcaBinary } from '../../src/devices/orcaHomes.js'
 import { resolveBinaryOnPath } from '../../src/lib/binaryOnPath.js'
 import { claudeAppFixture } from '../../src/testing/claudeAppFixture.js'
+import { flagOf } from '../../src/testing/dialAppEval/argv.js'
 import { describeAttempt, guardThisProcess, NET_GUARD_FILE_ENV, netGuardEnv, readNetGuard, type NetAttempt } from '../../src/testing/dialAppEval/netGuard.js'
-import { agentIdOf, PAGE, placeOf, type App, type Delivery, type EvalDriver, type Platform, type Scenario, type Seen,
-  type SessionDef, type SessionKey, type Step, type StepKind, type StepOf } from '../../src/testing/dialAppEval/types.js'
+import { orcaListing } from '../../src/testing/dialAppEval/orcaListing.js'
+import { agentIdOf, engineOf, FRONT_NAMES, PAGE, placeOf, type App, type Delivery, type EvalDriver, type LinkedApp, type Platform,
+  type Scenario, type Seen, type SessionDef, type SessionKey, type Step, type StepKind, type StepOf } from '../../src/testing/dialAppEval/types.js'
 import { CAROUSEL_REFRESH_MS, DialCarousel, type DialMessage } from '../../src/testing/dialCarousel.js'
 import { writeExecutable } from '../../src/testing/executableFixture.js'
 import { RECORDED_LINUX_APPS } from '../../src/testing/recordedLinuxApps.js'
@@ -37,6 +42,7 @@ import { IsolatedDaemon, SOURCES_CLI, until } from './daemon.js'
 import { Desk, devicesPids } from './desk.js'
 import { FakeBackend, type FakeMachine } from './fakeBackend.js'
 import type { FakeDial } from './fakeDial.js'
+import { FakeOrca } from './fakeOrca.js'
 import { writeSchemeApps } from './schemeApps.js'
 
 /** What the round dial's firmware says in its greeting: it holds one app's ring (docs/specs/2026-11-14-dial-app-filter.md). */
@@ -44,14 +50,7 @@ const FILTER = { appFilter: 'v1' }
 const SERIAL = 'EVAL-B'
 const MAC = 'e2:e0:00:00:0e:b1'
 /** The scheme of each app's links (cable/hosts/claudeApp.ts, codexApp.ts): the ChatGPT app's threads are Codex's. */
-const SCHEME: Readonly<Record<App, string>> = { claude: 'claude', chatgpt: 'codex', vscode: 'vscode', cursor: 'cursor' }
-/** The app in front as Harness Device names it: a bundle id on macOS, the window's process on Linux; `other` is an app
- *  the dial follows none of. */
-const FRONT: Readonly<Record<'darwin' | 'linux', Record<App | 'other', string>>> = {
-  darwin: { claude: 'com.anthropic.claudefordesktop', chatgpt: 'com.openai.codex', vscode: 'com.microsoft.VSCode',
-    cursor: 'com.todesktop.230313mzl4w4u92', other: 'com.apple.Safari' },
-  linux: { claude: 'claude-desktop', chatgpt: 'ChatGPT', vscode: 'code', cursor: 'cursor', other: 'firefox' },
-}
+const SCHEME: Readonly<Record<LinkedApp, string>> = { claude: 'claude', chatgpt: 'codex', vscode: 'vscode', cursor: 'cursor' }
 /** The machine each daemon signs in as, to hear its dial's words: the daemon asks its backend for each transcript. */
 const ME: FakeMachine = { machineId: 'e7'.repeat(16), computerId: 'e2e-dial-eval-computer', name: 'Fixture', token: 'e2e-dial-eval-token' }
 /** A fifth of a second of what the microphone heard: the fake backend answers its `speech` whatever the audio. */
@@ -73,6 +72,8 @@ const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : 
 
 /** One run of the recording open: the command it stands for, and whether it exited 0. */
 export type OpenRun = Omit<Seen['commands'][number], 'at'>
+/** One run the fake Orca noted: the name it was run by and its arguments, its exit, and its time. */
+export type OrcaRun = ReturnType<FakeOrca['log']>[number]
 
 export interface TierBWorld {
   readonly d: IsolatedDaemon; readonly desk: Desk; readonly dial: FakeDial
@@ -96,6 +97,11 @@ export interface TierBWorld {
   folder(path: string): string
   /** Ended at stop. */
   readonly children: ChildProcess[]
+  /** Orca's CLI, as `orca` and `orca-ide`: the fake. */
+  readonly orca: FakeOrca
+  /** The session's own Orca pane opened on [handle] now, or closed (null): what a `terminal send` types to a handle
+   *  reaches the session whose own pane it was at the send. */
+  orcaPane(key: SessionKey, handle: string | null): void
 }
 export type TierBHandler<K extends StepKind> = (world: TierBWorld, step: StepOf<K>) => Promise<void>
 
@@ -109,6 +115,11 @@ type Run = Exclude<Step, { kind: 'wait' }>
 /** A daemon, its desk and its backend, kept across the scenarios that do not ask for a fresh one. */
 interface Rig {
   d: IsolatedDaemon; desk: Desk; backend: FakeBackend
+  /** Orca's CLI, as `orca` and `orca-ide`: the fake, and whether it has watch-focus now. */
+  orca: FakeOrca
+  watchFocus: boolean
+  /** The sessions whose Orca account's home its Orca lists (orcaAccounts). */
+  accounts: SessionKey[]
   /** Where its recording open notes its runs, and its recording Cursor CLI its own (Linux's alone: none on macOS). */
   runs: string
   cursorRuns: string
@@ -151,7 +162,7 @@ export function guardLoaded(file: string, name: string, pids: readonly number[],
   }
 }
 /** The file beside the recording open that has the links of an app fail while it is there. */
-const failsFile = (open: string, app: App): string => join(dirname(open), `${SCHEME[app]}.fails`)
+const failsFile = (open: string, app: LinkedApp): string => join(dirname(open), `${SCHEME[app]}.fails`)
 
 /**
  * The open the devices run (HARNESS_OPEN_BIN), in place of the harness's own (harness/daemon.ts), which notes no exit: it
@@ -162,14 +173,14 @@ const failsFile = (open: string, app: App): string => join(dirname(open), `${SCH
  */
 export function writeRecordingOpen(path: string, runs: string): void {
   if ([path, runs].some((p) => p.includes("'"))) throw new Error('the recording open\'s folder holds a quote')
-  const fails = (Object.keys(SCHEME) as App[]).map((app) =>
+  const fails = (Object.keys(SCHEME) as LinkedApp[]).map((app) =>
     `case "$*" in *${SCHEME[app]}://*) [ -e '${failsFile(path, app)}' ] && code=1 ;; esac\n`)
   writeExecutable(path, `#!/bin/sh\ncode=0\n${fails.join('')}printf '%s %s\\n' "$code" "$*" >> '${runs}'\nexit "$code"\n`)
 }
 
 /** The apps whose links the recording open at [path] fails from now on; every other app's links open. */
 export function linksFail(path: string, apps: readonly App[]): void {
-  for (const app of Object.keys(SCHEME) as App[]) {
+  for (const app of Object.keys(SCHEME) as LinkedApp[]) {
     if (apps.includes(app)) writeFileSync(failsFile(path, app), '')
     else rmSync(failsFile(path, app), { force: true })
   }
@@ -199,6 +210,63 @@ export function writeRaiseFakes(bin: string): void {
 /** Those a daemon under [env] finds outside [root], or not at all. */
 export function raiseToolsOutside(root: string, env: NodeJS.ProcessEnv): string[] {
   return RAISE_TOOLS.filter((tool) => !inside(root, resolveBinaryOnPath(tool, env) ?? undefined))
+}
+
+/** The names a daemon runs Orca's CLI by: Linux looks for `orca-ide` before `orca` (devices/orcaHomes.ts orcaBinary). */
+const ORCA_NAMES = ['orca-ide', 'orca'] as const
+/**
+ * The Orca CLI a daemon under [env] would run, resolved as orcaBinary resolves it on [platform] over its PATH and
+ * HARNESS_ORCA_APP_BIN, and each of `orca-ide` and `orca` its PATH gives first: it throws unless every one's real path is
+ * inside [root]. Every session here runs inside the real Orca, whose `orca` is on the worker's PATH, and a daemon's PATH
+ * ends in the computer's folders, where Orca's .deb puts an `orca-ide`; a link in the root runs the file it names.
+ */
+export function orcaCliInside(env: NodeJS.ProcessEnv, root: string, platform: NodeJS.Platform): string {
+  // orcaBinary reads the app's path from this process's environment, as the devices read theirs: the daemon's for the
+  // call, this worker's again before anything else runs.
+  const own = process.env.HARNESS_ORCA_APP_BIN
+  const app = (path: string | undefined): void => {
+    if (path === undefined) delete process.env.HARNESS_ORCA_APP_BIN
+    else process.env.HARNESS_ORCA_APP_BIN = path
+  }
+  app(env.HARNESS_ORCA_APP_BIN)
+  let cli: string | null
+  try {
+    cli = orcaBinary({ onPath: (name, accept) => resolveBinaryOnPath(name, env, accept), exists: existsSync, platform, localAppData: env.LOCALAPPDATA })
+  } finally {
+    app(own)
+  }
+  const real = realpathSync(root)
+  const first = ORCA_NAMES.flatMap((name) => resolveBinaryOnPath(name, env) ?? [])
+  if (cli === null || ![cli, ...first].every((path) => inside(real, realpathSync(path)))) {
+    throw new Error("the daemon's Orca CLI is not inside its root")
+  }
+  return cli
+}
+
+/** The sessions whose Codex runs in a home of its own, an Orca account's: Orca lists that home (`orca account list`). */
+export function orcaAccounts(scenario: Pick<Scenario, 'sessions'>): SessionKey[] {
+  return scenario.sessions.filter((s) => s.app === 'orca' && engineOf(s) === 'codex' && s.codexHome === 'own').map((s) => s.key)
+}
+/** The Orca account's home a session's Codex runs in, in the daemon's root. */
+export const orcaAccountHome = (root: string, key: SessionKey): string => join(root, 'orca-accounts', key)
+
+/** The fake Orca's runs as commands, at their own times, each argument inside one of [projects] written as the catalog's
+ *  `/work/` folder. */
+export function orcaCommands(runs: readonly OrcaRun[], projects: readonly string[]): Seen['commands'] {
+  return runs.map(({ argv, ok, at }) => ({ at, argv: workPaths(argv, projects), ok }))
+}
+/**
+ * Each `terminal send` Orca took (cable/hosts/orca.ts) as a `typed` delivery at its time, to the session whose own pane
+ * the handle it names was then ([ownerOf]); to none for any other handle, a closed, held or tmux pane's among them,
+ * which the gate counts as a wrong send. One Orca refused typed nothing.
+ */
+export function orcaDeliveries(runs: readonly OrcaRun[], ownerOf: (handle: string, at: number) => SessionKey | undefined): Delivery[] {
+  return runs.flatMap(({ argv, ok, at }): Delivery[] => {
+    const text = argv.find((arg) => arg.startsWith('--text='))?.slice('--text='.length)
+    if (!ok || argv[1] !== 'terminal' || argv[2] !== 'send' || text === undefined) return []
+    const handle = flagOf(argv, '--terminal')
+    return [{ at, path: 'typed', target: (handle === undefined ? undefined : ownerOf(handle, at)) ?? null, text }]
+  })
 }
 
 /** Each run noted in [runs] as `<exit> <arguments>`, in order, as the command [program] with them. */
@@ -278,7 +346,7 @@ export function tierBGaps(scenario: Scenario, platform: Platform): string[] {
   const raised = ({ s, after }: (typeof opened)[number]): boolean =>
     placeOf(s) === 'terminal' && !(s.app === 'cursor' && windowClosed(scenario, s, after))
   return [
-    ...opened.some(({ s }) => failing.includes(s.app)) ? ["a failed link's app comes by Linux's raise, which tier B does not record"] : [],
+    ...opened.some(({ s }) => failing.some((app) => app === s.app)) ? ["a failed link's app comes by Linux's raise, which tier B does not record"] : [],
     ...opened.some(raised) ? ["an editor terminal's tap brings its editor by Linux's raise, which tier B does not record"] : [],
   ]
 }
@@ -314,7 +382,8 @@ async function end(child: ChildProcess): Promise<void> {
   clearTimeout(timer)
 }
 
-async function openRig(guard: string): Promise<Rig> {
+/** A daemon whose Orca lists the Orca accounts of [accounts]' sessions (orcaAccounts). */
+async function openRig(guard: string, accounts: SessionKey[]): Promise<Rig> {
   const backend = await FakeBackend.start()
   backend.addMachine(ME)
   let d: IsolatedDaemon | undefined
@@ -357,6 +426,16 @@ async function openRig(guard: string): Promise<Rig> {
     mkdirSync(dirname(chatgpt), { recursive: true })
     writeFileSync(chatgpt, process.platform === 'linux' ? '' : CHATGPT_INFO_PLIST)
     writeAppCodex(d)
+    // Orca's CLI the fake under both its names, with watch-focus as a current Orca, and the one the daemon would run
+    // inside its root: every session here runs inside the real Orca.
+    const orca = FakeOrca.install(d, { watchFocus: true })
+    orcaCliInside(d.env, d.root, process.platform)
+    // Orca's accounts: the home each Codex agent of its runs in, there before the devices start, as they read Orca's list
+    // as they start and not again for 5 minutes (devices/orcaHomes.ts ORCA_HOMES_REFRESH_MS). Tier A lists the same.
+    const { root } = d
+    const homes = accounts.map((key) => orcaAccountHome(root, key))
+    for (const home of homes) mkdirSync(home, { recursive: true })
+    orca.accounts({ codex: homes })
     const dials = join(d.root, 'dials.json')
     d.env.HARNESSD_TEST_DIAL_PORT = dials
     writeFileSync(dials, '[]')
@@ -368,7 +447,7 @@ async function openRig(guard: string): Promise<Rig> {
     await d.start()
     // An engine started by hand reads its hooks once, as it starts: they are in before any scenario starts one.
     await d.hooksInstalled(['claude', 'codex'])
-    return { d, desk: new Desk(dials), backend, runs, cursorRuns, projects, guard, given: 0, polled: new Map() }
+    return { d, desk: new Desk(dials), backend, orca, watchFocus: true, accounts, runs, cursorRuns, projects, guard, given: 0, polled: new Map() }
   } catch (error) {
     await d?.close().catch(() => {})
     await backend.close()
@@ -404,6 +483,10 @@ export class World implements TierBWorld {
   private readonly deliveries: Delivery[] = []
   private readonly streams: NonNullable<Seen['streams']> = []
   private readonly logs: NonNullable<Seen['logs']> = []
+  /** Each Orca pane a session owned, by its handle, from its open to its close. */
+  private readonly panes: Array<{ key: SessionKey; handle: string; from: number; to: number }> = []
+  /** When it began, ms since the epoch: the fake Orca's runs since are its own. */
+  private readonly began = Date.now()
   private plugged: FakeDial | undefined
   /** How many of the plugged dial's messages, of the open's runs and of the Cursor CLI's were read; where in the daemon's
    *  log the next read starts. */
@@ -431,6 +514,7 @@ export class World implements TierBWorld {
 
   get d(): IsolatedDaemon { return this.rig.d }
   get desk(): Desk { return this.rig.desk }
+  get orca(): FakeOrca { return this.rig.orca }
   get backend(): FakeBackend { return this.rig.backend }
   get dial(): FakeDial {
     if (!this.plugged) throw new Error(`${this.scenario.id}: no dial is plugged in`)
@@ -457,6 +541,12 @@ export class World implements TierBWorld {
   }
   title(text: string): void { this.tell({ thread: text }) }
   stream(window: string, line: Record<string, unknown>, at = Date.now()): void { this.streams.push({ at, window, line }) }
+  orcaPane(key: SessionKey, handle: string | null): void {
+    const now = Date.now()
+    const open = this.panes.find((p) => p.key === key && p.to === Infinity)
+    if (open) open.to = now
+    if (handle !== null) this.panes.push({ key, handle, from: now, to: Infinity })
+  }
   folder(path: string): string {
     if (!path.startsWith('/work/')) throw new Error(`${this.scenario.id}: ${path} is not a catalog folder`)
     const made = join(this.d.projectsDir, path.slice('/work/'.length))
@@ -580,16 +670,35 @@ export class World implements TierBWorld {
     if (failed) throw failed.error
   }
 
+  /**
+   * The fake Orca's runs since this world began, as commands in time order with the others, and its sends as deliveries.
+   * Read once, as the world stops: each run carries its own time, and a read of a daemon's every run at each of the
+   * world's reads would cost this worker a share of its CPU for nothing.
+   */
+  takeOrca(): void {
+    const runs = this.rig.orca.log().filter((run) => run.at >= this.began)
+    this.commands.push(...orcaCommands(runs, this.rig.projects))
+    this.commands.sort((a, b) => a.at - b.at)
+    this.deliveries.push(...orcaDeliveries(runs, (handle, at) =>
+      this.panes.find((p) => p.handle === handle && p.from <= at && at < p.to)?.key))
+  }
+
   private atWork(run: OpenRun): OpenRun { return { ...run, argv: workPaths(run.argv, this.rig.projects) } }
 
-  /** The face, recorded when it changed. */
+  /** The face, recorded when it changed (faceChange). */
   private face(at: number): void {
-    const { tiles, active } = this.carousel
-    const shown = { page: this.page, tiles: [...tiles], active: tiles[active] ?? null }
-    const last = this.faces.at(-1)
-    if (last && last.page === shown.page && last.active === shown.active && last.tiles.join('\n') === shown.tiles.join('\n')) return
-    this.faces.push({ at, ...shown })
+    const { tiles, active, refused } = this.carousel
+    const shown = { page: this.page, tiles: [...tiles], active: tiles[active] ?? null, refused }
+    if (faceChange(this.faces.at(-1), shown)) this.faces.push({ at, ...shown })
   }
+}
+
+type Face = Seen['faces'][number]
+/** Whether the face shown differs from the last one recorded: its page, tiles, the tile on it, or a refusal alone, so a
+ *  face check sees each refusal. */
+export function faceChange(last: Face | undefined, next: Omit<Face, 'at'>): boolean {
+  return !last || last.page !== next.page || last.active !== next.active || last.refused !== next.refused
+    || last.tiles.join('\n') !== next.tiles.join('\n')
 }
 
 /**
@@ -609,7 +718,7 @@ export const speak: TierBHandler<'voice'> = async (world, step) => {
 const GENERIC: { [K in GenericKind]: (world: World, step: StepOf<K>) => Promise<void> } = {
   front: async (world, step) => {
     world.front = step.app
-    world.tell({ front: FRONT[world.platform as 'darwin' | 'linux'][step.app] })
+    world.tell({ front: FRONT_NAMES[world.platform][step.app] })
   },
   thread: async (world, step) => { world.title(step.title) },
   tap: async (world, step) => { world.dial.send({ t: 'agent.open', agentId: world.agentId(step.session) }) },
@@ -658,9 +767,19 @@ export class TierBDriver implements EvalDriver {
     const polled = this.rig?.polled
     const counted = polled !== undefined && scenario.steps.some((s) => s.kind === 'voice')
       && scenario.sessions.some((s) => Date.now() - (polled.get(s.id) ?? -Infinity) < MOD_READY_MS)
-    if (this.rig && (scenario.fresh || counted)) await this.closeRig()
+    // The devices read Orca's accounts once as they start: a Codex in an account the running Orca does not list has a
+    // daemon of its own, whose Orca lists it.
+    const accounts = orcaAccounts(scenario)
+    const unlisted = this.rig !== undefined && accounts.some((key) => !this.rig!.accounts.includes(key))
+    if (this.rig && (scenario.fresh || counted || unlisted)) await this.closeRig()
     if (this.rig) await this.reset(this.rig)
-    const rig = this.rig ??= await openRig(join(this.own, `net-guard-${++this.daemons}.jsonl`))
+    const rig = this.rig ??= await openRig(join(this.own, `net-guard-${++this.daemons}.jsonl`), accounts)
+    // Rewritten only when it changes: each rewrite moves the launcher's mtime, and the devices ask `terminal --help` again.
+    const watchFocus = scenario.world?.orca?.watchFocus !== false
+    if (rig.watchFocus !== watchFocus) {
+      rig.orca.watchFocus(watchFocus)
+      rig.watchFocus = watchFocus
+    }
     const world = this.world = new World(rig, scenario, platform)
     for (const reason of gaps) world.gap(reason)
     linksFail(rig.d.env.HARNESS_OPEN_BIN!, scenario.world?.linkFails ?? [])
@@ -729,6 +848,8 @@ export class TierBDriver implements EvalDriver {
         if (world && costEnd) world.cost = await costEnd()
       }
     } finally {
+      // Whatever the close did: the gate sees each send.
+      world?.takeOrca()
       if (this.rig) this.collect(this.rig)
       if (!this.ready && this.rig) await this.closeRig()
     }
@@ -771,7 +892,13 @@ export class TierBDriver implements EvalDriver {
     // same file, and a recap could pass on an earlier scenario's answer.
     emptied(rig.d.env.CLAUDE_PROJECTS_DIR!)
     emptied(join(rig.d.env.CODEX_HOME!, 'sessions'))
+    for (const key of rig.accounts) emptied(join(orcaAccountHome(rig.d.root, key), 'sessions'))
     emptied(join(home, '.cursor', 'projects'))
+    // Orca lays nothing out until a scenario's layout, its watches end with the last scenario, and a new one tells no
+    // focus of it: a watch prints the last line told first.
+    rig.orca.listing(orcaListing([], {}))
+    rig.orca.endWatch()
+    rig.orca.focus(null)
     rig.backend.speech = null
     await rig.desk.unplug(SERIAL)
   }
