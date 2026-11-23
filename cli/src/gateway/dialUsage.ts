@@ -86,7 +86,10 @@ export function readDialFile(file: string, validDay: (day: string) => boolean, l
     return { read: { state: 'bad' }, stamp }
   }
   const { version, series, days } = value
-  if (version !== DIAL_USAGE_FILE_VERSION || !Number.isSafeInteger(series) || !isRecord(days)) return { read: { state: 'bad' }, stamp }
+  // A series above 0, as the devices write it (cable/dialUsageFile.ts): the gateway's -1 never comes from a file.
+  if (version !== DIAL_USAGE_FILE_VERSION || !Number.isSafeInteger(series) || (series as number) <= 0 || !isRecord(days)) {
+    return { read: { state: 'bad' }, stamp }
+  }
   const kept: Record<string, DialCounts> = {}
   for (const [day, counts] of Object.entries(days)) if (validDay(day) && isRecord(counts)) kept[day] = cleanCounts(counts)
   return { read: { state: 'ok', file: { series: series as number, days: kept } }, stamp }
