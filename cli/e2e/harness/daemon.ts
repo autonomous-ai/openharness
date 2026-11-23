@@ -172,7 +172,7 @@ export function loggedServicePids(log: string, name: string, master: number | nu
 /** Each process's pid and its parent's, from the whole table, and nothing else of any: no command line, which a service's
  *  pids need not read, and the devices' restart asks for these every 100 ms (appEvalDriver.ts restartDevices). */
 function processParents(): Array<{ pid: number; ppid: number }> {
-  return execFileSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }).split('\n').flatMap((line) => {
+  return execFileSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 10_000 }).split('\n').flatMap((line) => {
     const row = /^\s*(\d+)\s+(\d+)\s*$/.exec(line)
     return row ? [{ pid: Number(row[1]), ppid: Number(row[2]) }] : []
   })
