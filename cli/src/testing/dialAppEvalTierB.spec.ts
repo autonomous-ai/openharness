@@ -31,6 +31,7 @@ const driver = await import('../../e2e/harness/appEvalDriver.js' as string) as {
   orcaCliInside(env: NodeJS.ProcessEnv, root: string, platform: NodeJS.Platform): string
   selectOf(line: string): { app: string; tty: string; raise?: boolean } | undefined
   muxCommands(runs: readonly LoggedRun[], keyOf: (pane: string) => string | undefined): import('./dialAppEval/types.js').Seen['commands']
+  ownRig(rig: { polled: Map<string, number>; accounts: string[]; iterm?: object }, scenario: Scenario): boolean
 }
 type Face = import('./dialAppEval/types.js').Seen['faces'][number]
 type LoggedRun = { argv: string[]; ok: boolean; at: number }
@@ -436,6 +437,18 @@ describe("tier B's tmux and herdr runs", () => {
     } finally {
       for (const world of worlds) await world.close()
     }
+  })
+})
+
+describe("tier B's daemons", () => {
+  /** A daemon's rig as ownRig reads it: no poll counted, no Orca account; with [iterm], iTerm2's tmux and herdr kit. */
+  const rig = (iterm: boolean): Parameters<typeof driver.ownRig>[0] => ({ polled: new Map(), accounts: [], ...(iterm ? { iterm: {} } : {}) })
+
+  it("gives an iTerm2 scenario a daemon of its own after another app's, and another app's after iTerm2's: only iTerm2's has its tmux and herdr", () => {
+    expect(driver.ownRig(rig(false), byId('I1'))).toBe(true)
+    expect(driver.ownRig(rig(true), byId('V11'))).toBe(true)
+    expect(driver.ownRig(rig(true), byId('I2'))).toBe(false)
+    expect(driver.ownRig(rig(false), byId('V11'))).toBe(false)
   })
 })
 
