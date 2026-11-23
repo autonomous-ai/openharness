@@ -1289,6 +1289,27 @@ describe('iTerm2', () => {
     expect(condition(until, s, seen(s, [], { frames: counted(2) })).holds).toBe(true)
   })
 
+  it("a wait on the Apps screen holds once an apps frame since the last step shows that page and counts exactly those pages, what a person reads before a pick", () => {
+    const s = scenario([{ kind: 'devices.restart', label: 'restart' }], sessions)
+    const until: Until = { kind: 'apps', shown: 'iterm', counts: { iterm: 1, tmux: 1, herdr: 2 } }
+    const apps = (at: number, counts: Record<string, number>, shown = 'iterm'): Seen['frames'][number] => frame(at, { t: 'apps', shown,
+      apps: Object.entries(counts).map(([id, count]) => ({ id, name: id, count, waiting: 0 })) })
+    const right = { iterm: 1, tmux: 1, herdr: 2 }
+    expect(condition(until, s, seen(s, [1000], { frames: [apps(1500, right)] })))
+      .toEqual({ holds: true, evidence: ['apps at 1500 on iterm: iterm 1, tmux 1, herdr 2'] })
+    // The devices start again on the page the dial last showed, before they turn to the app in front.
+    expect(condition(until, s, seen(s, [1000], { frames: [apps(1000, right, 'herdr')] })))
+      .toEqual({ holds: false, evidence: ['apps at 1000 on herdr: iterm 1, tmux 1, herdr 2'] })
+    // The screen left from before the restart is not what the devices count now.
+    expect(condition(until, s, seen(s, [1000], { frames: [apps(500, right)] })))
+      .toEqual({ holds: false, evidence: ['no apps frame since the step at 1000'] })
+    // The scan has not found every agent yet, and a page that is not expected counts some.
+    expect(condition(until, s, seen(s, [1000], { frames: [apps(500, right), apps(1500, { iterm: 1, herdr: 2 })] })).holds).toBe(false)
+    expect(condition(until, s, seen(s, [1000], { frames: [apps(1500, { ...right, claude: 1 })] })).holds).toBe(false)
+    expect(condition(until, s, seen(s, [1000], { frames: [apps(1500, right), apps(1600, { iterm: 1, tmux: 1, herdr: 1 })] })))
+      .toEqual({ holds: false, evidence: ['apps at 1600 on iterm: iterm 1, tmux 1, herdr 1'] })
+  })
+
   it("an iTerm2 session in tmux is shown in its state on tmux's page; the same frames with the list on iTerm2's page fail it", () => {
     const s = scenario([{ kind: 'hook', session: 'im', event: 'turn-start', label: 'go' }], sessions)
     const state: Check = { id: 'st', kind: 'state', dim: 'D4', session: 'im', state: 'working', after: 'go' }

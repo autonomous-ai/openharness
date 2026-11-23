@@ -489,6 +489,21 @@ describe('the catalog', () => {
     }
   })
 
+  it('a pick after the devices start again comes after a wait on the Apps screen since then that counts the picked page', () => {
+    // Until the devices' scan counts a page's agents, a pick of it is ignored (cable/hosts/appFilter.ts pick): a person
+    // picks what the Apps screen shows, not on a timer.
+    for (const s of ALL) {
+      let counted: ReadonlySet<string> | null = null
+      for (const step of s.steps) {
+        if (step.kind === 'devices.restart') counted = new Set()
+        if (step.kind === 'wait' && step.until?.kind === 'apps' && counted) {
+          counted = new Set(Object.entries(step.until.counts).flatMap(([page, n]) => (n > 0 ? [page] : [])))
+        }
+        if (step.kind === 'pick' && counted) expect(counted.has(step.page), `${s.id} pick ${step.page}`).toBe(true)
+      }
+    }
+  })
+
   it('the held-out file cites both specs and says it is not to be read', () => {
     const lines = readFileSync(new URL('./heldOut.ts', import.meta.url), 'utf8').split('\n')
     const header = lines.slice(0, lines.findIndex((line) => !line.startsWith('//'))).map((line) => line.replace(/^\/\/ ?/, '')).join(' ')
