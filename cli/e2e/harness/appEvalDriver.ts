@@ -48,7 +48,7 @@ import { Desk, devicesPids } from './desk.js'
 import { FakeBackend, type FakeMachine } from './fakeBackend.js'
 import type { FakeDial } from './fakeDial.js'
 import { FakeOrca } from './fakeOrca.js'
-import { herdrRuns, ownHerdrsOnly } from './herdrServer.js'
+import { herdrBinary, herdrRuns, ownHerdrsOnly, PrivateHerdr } from './herdrServer.js'
 import { recordingWrapper, runLog, type LoggedRun } from './runLog.js'
 import { writeSchemeApps } from './schemeApps.js'
 
@@ -879,6 +879,9 @@ export class TierBDriver implements EvalDriver {
     linksFail(rig.d.env.HARNESS_OPEN_BIN!, scenario.world?.linkFails ?? [])
     const front = scenario.world?.front ?? scenario.app
     await GENERIC.front(world, { kind: 'front', app: front })
+    // herdr installed on an iTerm2 scenario's daemon, as on tier A's iTerm2 machine (the iTerm2 plan's Decision 7), before
+    // its dial comes: the devices look for it as a dial comes (services/devices.ts dialAttached).
+    if (scenario.app === 'iterm' && herdrBinary) await PrivateHerdr.install(rig.d)
     await world.plug()
     // Every page empty before the scenario goes on: nothing of the scenarios before it is listed, nor seen.
     const cut = await until(`${scenario.id}: the dial welcomed, and no app's page with a row`,

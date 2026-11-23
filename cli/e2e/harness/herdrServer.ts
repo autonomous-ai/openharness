@@ -36,6 +36,10 @@ const execFileAsync = promisify(execFile)
  *  tenth. */
 const MAX_OPENS = 16
 
+/** How long a line typed into a new pane's shell may go unrun before it is typed again: the fake Claude Code runs its
+ *  start hook within a second of it. */
+const RETYPE_MS = 2_000
+
 /** sun_path's room, its last byte the terminator: a longer socket path fails to bind. */
 const SOCKET_ROOM = 103
 
@@ -330,23 +334,50 @@ export class PrivateHerdr {
   }
 
   /** The suite's fake Claude Code started in a new pane's shell, so its hook runs with herdr's own HERDR_PANE_ID; with
-   *  [resume], going on in that conversation (`--resume <id>`), as after herdr started again. herdr's detection, and so
-   *  reportSession, does not find a resumed one: herdr reads the agent's name from its title, which carries the fake's
-   *  arguments (fakeEngine.mjs), and `claude --resume <id>` is not `claude`. */
-  async hooked(folder: string, { resume }: { resume?: string } = {}): Promise<{ pane: string; sessionId: string; id: string }> {
+   *  [resume], going on in that conversation (`--resume <id>`), as after herdr started again; with [env] set on its
+   *  command line, as a person types `NAME=value claude`. [pid]: its process. */
+  async hooked(folder: string, { resume, env = {} }: { resume?: string; env?: Readonly<Record<string, string>> } = {}):
+    Promise<{ pane: string; sessionId: string; id: string; pid: number }> {
     const pane = await this.pane(folder)
-    await until(`the shell in ${folder}`, async () => /\S/.test(await this.screen(pane)), 20_000, 100)
     // Its own SessionStart: the first after the log's length before it was typed.
     const from = this.d.hookLog().length
-    await this.type(pane, resume === undefined ? '"$CLAUDE_PATH"' : `"$CLAUDE_PATH" --resume ${resume}`)
-    const started = new RegExp(`claude pid=\\d+ SessionStart\\(${resume === undefined ? 'startup' : 'resume'}\\) session=(${resume ?? '\\S+'}) ran`)
-    const sessionId = await until(`${folder}'s SessionStart hook to run`, () => this.d.hookLog().slice(from).match(started)?.[1], 30_000, 100)
-    return { pane, sessionId, id: observedAgentId('claude', sessionId) }
+    const assigned = Object.entries(env).map(([name, value]) => `${name}='${value.replaceAll("'", "'\\''")}' `).join('')
+    const started = new RegExp(`claude pid=(\\d+) SessionStart\\(${resume === undefined ? 'startup' : 'resume'}\\) session=(${resume ?? '\\S+'}) ran`)
+    const [, pid, sessionId] = await this.launch(pane, folder, `${assigned}"$CLAUDE_PATH"${resume === undefined ? '' : ` --resume ${resume}`}`,
+      `${folder}'s SessionStart hook to run`, () => started.exec(this.d.hookLog().slice(from)))
+    return { pane, sessionId, id: observedAgentId('claude', sessionId), pid: Number(pid) }
   }
 
   /** A line typed into the pane, then Enter. */
   async type(paneId: string, line: string): Promise<void> {
     await this.rpc('pane.send_text', { pane_id: paneId, text: `${line}\n` })
+  }
+
+  /**
+   * [line] typed into the new [pane]'s shell once it has drawn its prompt, until [ran] holds. The shell can lose a line
+   * typed as it sets its terminal up, its prompt drawn (measured: in 1 of 30 panes it kept only the first letter): typed
+   * again, the half line cleared first (Ctrl+U), while nothing it was typed runs, the shell holding the foreground.
+   */
+  private async launch<T>(pane: string, folder: string, line: string, what: string,
+    ran: () => Promise<T | null | undefined | false> | T | null | undefined | false): Promise<T> {
+    await until(`the shell in ${folder}`, async () => /\S/.test(await this.screen(pane)), 20_000, 100)
+    await this.type(pane, line)
+    let typed = Date.now()
+    return until(what, async () => {
+      const done = await ran()
+      if (!done && Date.now() - typed >= RETYPE_MS && await this.shellInFront(pane)) {
+        await this.type(pane, `\x15${line}`)
+        typed = Date.now()
+      }
+      return done
+    }, 30_000, 100)
+  }
+
+  /** Whether the pane's shell holds its terminal's foreground, so no command typed into it runs. */
+  private async shellInFront(pane: string): Promise<boolean> {
+    const { process_info: info } = await this.rpc('pane.process_info', { pane_id: pane }) as
+      { process_info: { shell_pid: number; foreground_process_group_id: number } }
+    return info.foreground_process_group_id === info.shell_pid
   }
 
   /**
@@ -376,11 +407,8 @@ export class PrivateHerdr {
       execFileSync('cc', ['-o', agent, `${agent}.c`])
     }
     const pane = await this.pane(folder)
-    // Typed once the shell has drawn its prompt, so the line is not lost to its start.
-    await until(`the shell in ${folder}`, async () => /\S/.test(await this.screen(pane)), 20_000, 100)
-    await this.type(pane, agent)
     // Its prompt, as herdr reads a screen: each line's trailing space cut.
-    await until(`the fake agent in ${folder}`, async () => (await this.screen(pane)).includes('fake>'), 20_000, 100)
+    await this.launch(pane, folder, agent, `the fake agent in ${folder}`, async () => (await this.screen(pane)).includes('fake>'))
     await this.report(pane, state)
     return pane
   }

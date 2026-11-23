@@ -434,7 +434,10 @@ export async function run(engine, config = {}, { native = false } = {}) {
   // table, so the arguments are not read as part of it; a control character is shown as `ps` shows one.
   // Node's title rewrite makes macOS ps omit the environment. Evidence tests keep the interpreter
   // and its actual engine entrypoint, which discovery also recognizes, so endpoint markers are readable.
-  if (!config.preserveProcessArgs) process.title = [engine.padEnd(16), ...args].join(' ').replace(/[\x00-\x1f\x7f]/g, '?')
+  // In a herdr pane its title is its name alone: herdr tells an agent by its argv[0] whole (`pane.process_info`), and
+  // the name with arguments after it, `claude --resume <id>`, was no agent of herdr's.
+  const shown = process.env.HERDR_PANE_ID ? [engine] : [engine.padEnd(16), ...args]
+  if (!config.preserveProcessArgs) process.title = shown.join(' ').replace(/[\x00-\x1f\x7f]/g, '?')
   // Raw at once, as the real CLIs are (Ink and ratatui take the terminal before they draw anything): a
   // terminal still in line mode keeps at most 1 KiB of a line, so a paste that arrived before the
   // engine was ready lost the rest of itself (measured: 1,018 of 2,406 characters).

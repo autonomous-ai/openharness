@@ -31,8 +31,8 @@ export class InOwnTmux {
   }
 
   /** In a new window of [session], made in the background: the session's active window stays the one it had. */
-  static startIn(d: IsolatedDaemon, session: string, folder: string): Promise<InOwnTmux> {
-    return InOwnTmux.begin(d, folder, ['new-window', '-d', '-t', `${session}:`])
+  static startIn(d: IsolatedDaemon, session: string, folder: string, options: OwnTmuxOptions = {}): Promise<InOwnTmux> {
+    return InOwnTmux.begin(d, folder, ['new-window', '-d', '-t', `${session}:`], options)
   }
 
   /** [made] is the tmux command that makes its pane. */
