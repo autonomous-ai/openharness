@@ -107,6 +107,8 @@ export class DialUsageFile implements DialUsageSink {
   private readonly usage: Usage
   private cancel: (() => void) | undefined
   private closed = false
+  /** Memory holds what the file does not: a failed write leaves it so, for the next change or the stop to write. */
+  private dirty = false
   /** The file could not be read (EACCES, EMFILE): it may hold days the gateway has not sent, so this run writes
    *  nothing over it. */
   private readonly unread: boolean
@@ -148,15 +150,13 @@ export class DialUsageFile implements DialUsageSink {
     return this.counting() && !this.usage[markField(mark)]
   }
 
-  /** The devices' process stops: what waits is written now, and nothing after, so the stop's own endings (its
-   *  detach) count nothing, and no first use is spent that the file would not keep. */
+  /** The devices' process stops: what waits, or what a failed write left, is written now, and nothing after, so the
+   *  stop's own endings (its detach) count nothing, and no first use is spent that the file would not keep. */
   close(): void {
-    const waiting = this.cancel
+    this.cancel?.()
     this.cancel = undefined
     this.closed = true
-    if (!waiting) return
-    waiting()
-    this.write()
+    if (this.dirty) this.write()
   }
 
   /** Signed out, nothing is counted (signed-in computers only, by the spec). */
@@ -165,6 +165,7 @@ export class DialUsageFile implements DialUsageSink {
   }
 
   private changed(): void {
+    this.dirty = true
     if (this.cancel || this.unread) return
     this.cancel = this.deps.after(DIAL_USAGE_WRITE_MS, () => {
       this.cancel = undefined
@@ -173,6 +174,7 @@ export class DialUsageFile implements DialUsageSink {
   }
 
   private write(): void {
+    if (this.unread) return
     const { days } = this.usage
     const now = this.deps.now()
     for (const day of Object.keys(days)) if (!recent(day, now)) delete days[day]
@@ -185,6 +187,7 @@ export class DialUsageFile implements DialUsageSink {
     }
     try {
       atomicWriteFile(this.deps.file, text, 'cache')
+      this.dirty = false
     } catch (error) {
       // Its kind, never the message, which names the path. Memory stays the truth; the next change tries again.
       this.deps.log(`[device] usage · not saved · ${errorKind(error)}`)
