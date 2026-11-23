@@ -190,8 +190,10 @@ LINUX_E2E_ORCA_PATHS = ("cli/e2e/harness/orcaHost.ts", "cli/e2e/harness/inOrca.t
 # whose `vscode` stream the windows of both tiers open (and its path), the hook, the extension and its setup, Cursor's
 # engine and discovery, and the harness's editor windows and outside agents; for Orca, its plugin's code, the devices' Orca reads
 # (its homes and the recorded app), the harness's loop that runs the plugin and its dial stream, Orca's fake CLI and
-# terminal-host stand-in, and InOrca. A change to one runs them beside the PR's own files; its deletion too, as the
-# Orca paths' does.
+# terminal-host stand-in, and InOrca; for every app, the rest of the harness the driver runs (its desk, dial, backend,
+# mod inbox, scheme apps and ChatGPT's Codex CLI; iTerm2's tmux and herdr with the recording wrapper and the herdr-only
+# process table: test_ci_plan walks the imports). A change to one runs them beside the PR's own files; its deletion too,
+# as the Orca paths' does.
 LINUX_E2E_APP_EVAL_FILES = ("cli/e2e/dialAppEvalClaude.e2e.ts", "cli/e2e/dialAppEvalChatgpt.e2e.ts",
                             "cli/e2e/dialAppEvalVscode.e2e.ts", "cli/e2e/dialAppEvalCursor.e2e.ts",
                             "cli/e2e/dialAppEvalOrca.e2e.ts", "cli/e2e/dialAppEvalHeldOut.e2e.ts")
@@ -205,7 +207,10 @@ LINUX_E2E_APP_EVAL_PATHS = ("cli/src/cable/hosts/", "cli/src/testing/dialAppEval
                             *(f"cli/e2e/harness/{name}.ts" for name in ("vscodeWindow", "outsideAgent", "codexOutside",
                                                                          "cursorOutside", "editorWindow", "fakeOrca",
                                                                          "inOrca", "orcaHost", "pluginDial",
-                                                                         "pluginLoop")),
+                                                                         "pluginLoop", "desk", "fakeDial", "fakeBackend",
+                                                                         "modInbox", "schemeApps", "codexAppCli",
+                                                                         "herdrServer", "dialHosts", "ownTmux",
+                                                                         "runLog")),
                             *LINUX_E2E_APP_EVAL_FILES)
 DIAL_HOST_FILES = ("cli/e2e/dialHost*.e2e.ts", "cli/e2e/deviceHerdr.e2e.ts")
 # dial-hosts: those files, the code they run and the job's own definition. The daemon runs every host adapter from its
