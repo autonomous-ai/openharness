@@ -3557,8 +3557,8 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   })
 
   // Diego's Mac (2026-11-19): Claude Code in a pane of the tmux server the daemon started, so no bundle id, attached from
-  // a Terminal tab. The lookup's own runs are this spec's; the walk is tmux.spec.ts's.
-  it('an agent in the person\'s tmux is on the page of the app that holds its client, and a rest selects its tab, then its pane', async () => {
+  // a Terminal tab. The lookup's own runs are this spec's; the walk is tmux.spec.ts's. On tmux's page (Diego, 2026-11-23).
+  it('an agent in the person\'s tmux is on tmux\'s page, not the page of the app that holds its client, and a rest selects its tab, then its pane', async () => {
     const terminal = join(homedir(), 'Applications', 'Terminal.app')
     readers.processes.mockResolvedValue([
       ...IN_TMUX,
@@ -3575,8 +3575,8 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     attach(port)
     await vi.waitFor(() => expect(said()).toEqual(['[device] tmux client · found']))
     const apps = (await host().listAgentSnapshot({ apps: true })).apps?.apps
-    expect(apps).toContainEqual(expect.objectContaining({ id: 'terminal-app', count: 1 }))
-    expect(apps?.map(({ id }) => id)).not.toContain('tmux')
+    expect(apps).toContainEqual(expect.objectContaining({ id: 'tmux', count: 1 }))
+    expect(apps?.map(({ id }) => id)).not.toContain('terminal-app')
     await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
     const stream = listener.tabs()
     expect(listener.front('terminal-app')).toBeUndefined()
@@ -3618,7 +3618,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     const scanLine = () => logs.filter((line) => line.startsWith('[observed] scan ·'))
     const selected: [string, string[], number] = ['tmux', ['select-window', '-t', '%3', ';', 'select-pane', '-t', '%3'], 10_000]
 
-    it.each([['launchd', 1], ['iTerm2', 4296]])('Diego\'s case: a tmux agent idle in an iTerm2 tab, found by the attach scan, is on iTerm2\'s page; a rest selects its tab, then its pane; a tap selects the pane, brings iTerm2 forward and raises the tab (server under %s)', async (_, ppid) => {
+    it.each([['launchd', 1], ['iTerm2', 4296]])('Diego\'s case: a tmux agent idle in an iTerm2 tab, found by the attach scan, is on tmux\'s page; a rest selects its tab, then its pane; a tap selects the pane, brings iTerm2 forward and raises the tab (server under %s)', async (_, ppid) => {
       readers.processes.mockResolvedValue([...inTmux, ...clientInIterm('tmux', ppid)])
       found('sess-1', 4242)
       const listener = fakeListener()
@@ -3628,8 +3628,8 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       expect(scanLine()[0]).toMatch(/ · 1 nested placed$/)
       expect(said()).toEqual(['[device] tmux client · found'])
       const apps = (await host().listAgentSnapshot({ apps: true })).apps?.apps
-      expect(apps).toContainEqual(expect.objectContaining({ id: 'iterm', count: 1 }))
-      expect(apps?.map(({ id }) => id)).not.toContain('tmux')
+      expect(apps).toContainEqual(expect.objectContaining({ id: 'tmux', count: 1 }))
+      expect(apps?.map(({ id }) => id)).not.toContain('iterm')
       await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
       const stream = listener.tabs()
       expect(listener.front('iterm')).toBeUndefined()
@@ -3644,7 +3644,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       expect(stream.lines.at(-1)).toStrictEqual({ app: 'iterm', tty: '/dev/ttys004', raise: true })
     })
 
-    it('a herdr agent idle in an iTerm2 tab, found by the attach scan, is on iTerm2\'s page with its tab', async () => {
+    it('a herdr agent idle in an iTerm2 tab, found by the attach scan, is on herdr\'s page with its tab', async () => {
       readers.processes.mockResolvedValue([
         { pid: 4242, ppid: 4000, tty: 'ttys030', executable: 'claude' }, { pid: 4000, ppid: 3900, tty: 'ttys030', executable: 'zsh' },
         { pid: 3900, ppid: 1, executable: '/opt/homebrew/bin/herdr' }, ...clientInIterm('herdr', 1)])
@@ -3662,8 +3662,8 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       expect(scanLine()[0]).toMatch(/ · 1 nested placed$/)
       expect(said()).toEqual(['[device] herdr client · found'])
       const apps = (await host().listAgentSnapshot({ apps: true })).apps?.apps
-      expect(apps).toContainEqual(expect.objectContaining({ id: 'iterm', count: 1 }))
-      expect(apps?.map(({ id }) => id)).not.toContain('herdr')
+      expect(apps).toContainEqual(expect.objectContaining({ id: 'herdr', count: 1 }))
+      expect(apps?.map(({ id }) => id)).not.toContain('iterm')
       await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
       const stream = listener.tabs()
       expect(listener.front('iterm')).toBeUndefined()
@@ -3775,11 +3775,11 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
         return { ...herdr, listener, stream: listener.tabs() }
       }
 
-      it('a scan-found herdr agent whose herdr row has its session is one row on iTerm2\'s page; a rest selects its tab, then focuses its herdr pane; a tap focuses the pane, brings iTerm2 forward and raises the tab', async () => {
+      it('a scan-found herdr agent whose herdr row has its session is one row on herdr\'s page; a rest selects its tab, then focuses its herdr pane; a tap focuses the pane, brings iTerm2 forward and raises the tab', async () => {
         const { listener, stream, prompts } = await scanned([['w1:p2', 'sess-1']])
         expect(scanLine()[0]).toMatch(/ · 1 nested placed$/)
         expect((await listed()).map(({ id }) => id)).toEqual([ID])
-        expect((await host().listAgentSnapshot({ apps: true })).apps?.apps).toContainEqual(expect.objectContaining({ id: 'iterm', count: 1 }))
+        expect((await host().listAgentSnapshot({ apps: true })).apps?.apps).toContainEqual(expect.objectContaining({ id: 'herdr', count: 1 }))
         expect(listener.front('iterm')).toBeUndefined()
         host().swipeEnded(ID, 'rest')
         await swiped('ok')
@@ -3794,11 +3794,14 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
         expect(prompts).toEqual([])
       })
 
-      it('with no session in herdr\'s row the scan\'s copy gets its tab alone, and herdr\'s row stays on herdr\'s page', async () => {
+      // Nothing folds the two until its first hook: herdr's page counts both, accepted for now (PM, 2026-11-23,
+      // decision 1 of docs/plans/2026-11-23-dial-tmux-herdr-apps-plan.md).
+      it('with no session in herdr\'s row the scan\'s copy gets its tab alone, and it and herdr\'s row are both on herdr\'s page, herdr · 2', async () => {
         const { listener, stream } = await scanned([['w1:p2']])
         const rows = await listed()
         expect(rows).toHaveLength(2)
         expect(rows.map(({ id }) => id)).toContain(ID)
+        expect((await host().listAgentSnapshot({ apps: true })).apps?.apps?.map(({ id, count }) => `${id} ${count}`)).toEqual(['herdr 2'])
         expect(listener.front('iterm')).toBeUndefined()
         host().swipeEnded(ID, 'rest')
         await swiped('ok')
@@ -3976,7 +3979,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     port.observed(hook('session-start', { hostHints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux' } }))
     attach(port)
     await vi.waitFor(() => expect(said()).toEqual(['[device] tmux client · found']))
-    expect((await host().listAgentSnapshot({ apps: true })).apps?.apps).toContainEqual(expect.objectContaining({ id: 'wezterm', count: 1 }))
+    expect((await host().listAgentSnapshot({ apps: true })).apps?.apps).toContainEqual(expect.objectContaining({ id: 'tmux', count: 1 }))
     await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
     const wezterm = '/opt/wezterm/bin/wezterm'
     // Another app in front: neither WezTerm nor tmux is touched.
@@ -4017,7 +4020,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     port.observed(hook('session-start', { hostHints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux', KITTY_LISTEN_ON: 'unix:@kitty-1' } }))
     attach(port)
     await vi.waitFor(() => expect(said()).toEqual(['[device] tmux client · found']))
-    expect((await host().listAgentSnapshot({ apps: true })).apps?.apps).toContainEqual(expect.objectContaining({ id: 'kitty', count: 1 }))
+    expect((await host().listAgentSnapshot({ apps: true })).apps?.apps).toContainEqual(expect.objectContaining({ id: 'tmux', count: 1 }))
     await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
     // Another app in front: neither kitty nor tmux is touched.
     let runs = orcaRuns.length
@@ -4063,15 +4066,16 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       readers.bundleId.mockImplementation(async (bundle) => bundle === terminal ? 'com.apple.Terminal' : undefined)
     })
 
-    it('an agent in the person\'s herdr is on the page of the app that holds its client, and a rest selects its tab, then its herdr pane', async () => {
+    // On herdr's page (Diego, 2026-11-23).
+    it('an agent in the person\'s herdr is on herdr\'s page, not the page of the app that holds its client, and a rest selects its tab, then its herdr pane', async () => {
       const listener = fakeListener()
       const { port } = startHere({ listen: listener.listen, orca: onMac })
       port.observed(hook('session-start', { hostHints: { HERDR_PANE_ID: 'w1:p2' } }))
       attach(port)
       await vi.waitFor(() => expect(said()).toContain('[device] herdr client · found'))
       const apps = (await host().listAgentSnapshot({ apps: true })).apps?.apps
-      expect(apps).toContainEqual(expect.objectContaining({ id: 'terminal-app', count: 1 }))
-      expect(apps?.map(({ id }) => id)).not.toContain('herdr')
+      expect(apps).toContainEqual(expect.objectContaining({ id: 'herdr', count: 1 }))
+      expect(apps?.map(({ id }) => id)).not.toContain('terminal-app')
       await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
       const stream = listener.tabs()
       expect(listener.front('terminal-app')).toBeUndefined()
@@ -4112,7 +4116,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       await vi.waitFor(() => expect(said()).toEqual(['[device] herdr client · found']))
       expect(orcaRuns.filter(([file]) => file === 'tmux')).toEqual([])
       expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
-      expect((await host().listAgentSnapshot({ apps: true })).apps?.apps).toContainEqual(expect.objectContaining({ id: 'terminal-app', count: 1 }))
+      expect((await host().listAgentSnapshot({ apps: true })).apps?.apps).toContainEqual(expect.objectContaining({ id: 'herdr', count: 1 }))
       port.observed(hook('session-start', { sessionId: 'sess-2', callerPid: 5242, hostHints: { HERDR_PANE_ID: 'w1:p2', TMUX_PANE: '%3' } }))
       // No herdr made its terminal: the herdr pane its hints name only holds it, said once.
       const held = '[device] herdr · held'
@@ -4120,8 +4124,9 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
         .toEqual(['[device] herdr client · found', '[device] herdr client · none', '[device] tmux client · found']))
       expect(said().filter((line) => line === held)).toEqual([held])
       expect(orcaRuns.filter(([file]) => file === 'tmux').map(([, args]) => args[0])).toEqual(['display-message', 'list-clients'])
-      await vi.waitFor(async () => expect((await host().listAgentSnapshot({ apps: true })).apps?.apps)
-        .toContainEqual(expect.objectContaining({ id: 'terminal-app', count: 2 })))
+      // Each on the page of the multiplexer whose pane it runs in, its client's Terminal tab holding neither.
+      await vi.waitFor(async () => expect((await host().listAgentSnapshot({ apps: true })).apps?.apps
+        ?.map(({ id, count }) => `${id} ${count}`).sort()).toEqual(['herdr 1', 'tmux 1']))
     })
   })
 

@@ -778,8 +778,11 @@ export class ObservedSource implements HostSource {
    * agent does not leave its page meanwhile. The scan's place counts as such an ask at the first hook, when that hook is
    * nested too and comes from the process the scan found: Diego's idle agent placed on iTerm2's page by the scan
    * (2026-11-22) must not drop to tmux's page while its first hook's own lookup runs, while a resume in another pane
-   * holds another client. Only the latest ask's answer lands, while the session lives. Whether it is nested: its
-   * caller's tty is then the multiplexer's pane's, which no tab holds, so it is never read and an old one goes.
+   * holds another client. Only the latest ask's answer lands, while the session lives. Its multiplexer (HostAgent.nest)
+   * goes where the place goes and stays where it stays, and the answer gives the answer's, its host with it: an agent is
+   * on tmux's or herdr's page only while that lookup confirms its own terminal is the pane (Diego, 2026-11-23).
+   * Whether it is nested: its caller's tty is then the multiplexer's pane's, which no tab holds, so it is never read and
+   * an old one goes.
    */
   private askOuter(entry: Entry, e: ObservedHookEvent): boolean {
     const last = entry.outerAsk
@@ -791,6 +794,7 @@ export class ObservedSource implements HostSource {
     if (!same && !(scanned && answer && e.callerPid === entry.pid)) {
       entry.outer = undefined
       entry.outerPid = undefined
+      delete entry.agent.nest
     }
     if (!answer) {
       entry.outerAsk = undefined
@@ -806,6 +810,9 @@ export class ObservedSource implements HostSource {
       entry.outer = place.app ? { app: place.app, tty: place.tty, pid: place.pid } : undefined
       entry.outerPid = !place.app && Number.isSafeInteger(place.pid) && place.pid! > 0 ? place.pid : undefined
       entry.tty = entry.outer?.tty
+      if (place.nest) entry.agent.nest = place.nest
+      else delete entry.agent.nest
+      entry.agent.host = place.nest ?? detectHost(ask.hints)
       this.placeApp(entry, ask.hints, ask.pid)
       this.locate(entry)
       this.emit()
@@ -927,9 +934,9 @@ export class ObservedSource implements HostSource {
     entry.placed = undefined
     // A hook says where a session runs: one the open scan found is not known yet until its first, unless its parent
     // processes named its app. A hook whose hints name no app (the Codex app's own Codex) learns it from its caller's
-    // parents.
-    a.host = detectHost(e.hostHints)
+    // parents. Its host is the multiplexer askOuter keeps, else the nearest its hints name.
     const nested = this.askOuter(entry, e)
+    a.host = a.nest ?? detectHost(e.hostHints)
     this.placeApp(entry, e.hostHints, e.callerPid)
     delete a.appPending
     // Every event's own: a session resumed elsewhere must not be typed into the terminal it left.
@@ -1241,6 +1248,12 @@ export class ObservedSource implements HostSource {
       // Its tty is the multiplexer pane's pty, which on macOS has a tab's form: never read, as askOuter never reads a
       // nested caller's. Paired, it is in an hc terminal, whose pane is its own.
       if (nest && !entry.paired) {
+        // The maker's read confirmed its own terminal is that multiplexer's pane: on its page from here, whatever the
+        // lookup answers, as its first hook's lookup would put it (Diego, 2026-11-23). Zellij keeps its app's.
+        if (nest.host === 'tmux' || nest.host === 'herdr') {
+          entry.agent.nest = nest.host
+          entry.agent.host = nest.host
+        }
         this.locate(entry)
         asks.push([entry, nest])
       } else this.learnTty(entry, owner.pid)
