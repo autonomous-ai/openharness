@@ -227,16 +227,26 @@ describe.skipIf(process.platform === 'win32')('words to a resting ChatGPT app th
     const log = d.log()
     for (const secret of [t1, t2, 'Fixture Wake', words]) expect(log).not.toContain(secret)
 
-    // 6. The app runs the thread: its hooks make it one live row under the same id, working, still with voice.
+    // 6. The app runs the thread: its hooks make it one live row under the same id, working, still with voice, on the
+    // ChatGPT app's page. Its host is what its hooks' hints name: the app's bundle id on macOS; on Linux a hook carries
+    // none, so a terminal's (hostDetect.ts detectHost), and its process, named as the app's program, puts it on the app's
+    // page once its parents are walked (observed.ts learnApp). The list it asked for can come before that walk, so the
+    // first list that holds it is read, with the page it was sent on.
     const since = dial.messages.length
     await codex.hook('SessionStart', { source: 'resume' })
     await codex.hook('UserPromptSubmit')
     await dial.next((m) => m.t === 'turn.started' && m.agentId === id, 45_000, 'its turn started', since)
     const asked = dial.messages.length
     dial.send({ t: 'agents.list' })
-    const live = await until('the list it asked for', () => rosters(dial, asked).at(-1) ?? null, 30_000, 50)
-    const mine = live.filter((row) => row.id === id)
-    expect(mine).toEqual([expect.objectContaining({ id, host: 'codex', caps: expect.stringContaining('v') })])
+    const live = await until('the list it asked for, with it', () => {
+      const rows = rosters(dial, asked).at(-1)
+      if (!rows?.some((row) => row.id === id)) return null
+      const end = dial.messages.findLastIndex((m) => m.t === 'agents.end')
+      return { rows, page: dial.messages.slice(0, end).filter((m) => m.t === 'apps').at(-1)?.shown }
+    }, 30_000, 50)
+    expect(live.page).toBe('codex')
+    const mine = live.rows.filter((row) => row.id === id)
+    expect(mine).toEqual([expect.objectContaining({ id, host: LINUX ? 'terminal' : 'codex', caps: expect.stringContaining('v') })])
     for (const rows of rosters(dial)) expect(rows.filter((row) => row.id === id).length, JSON.stringify(rows)).toBeLessThanOrEqual(1)
     expect(openRuns(runs, process.platform as 'darwin' | 'linux')).toEqual([{ argv: opened(t1), ok: true }])
   })
