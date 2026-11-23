@@ -184,6 +184,7 @@ typedef enum {
     MAX_ACT_CANCEL,     // stop the recording and send nothing
     MAX_ACT_OPEN_TALK,  // a cell's one tap: agent.open for agent_id; max_ui_talk_due records for it a moment later
     MAX_ACT_PICK,       // an app was picked on Apps: send app.pick for `app`
+    MAX_ACT_TRY_UPDATE, // TEMP (the owner's call of 23 Nov): Inbox's Try update: an update played, no image written
 } max_act_kind_t;
 typedef struct {
     max_act_kind_t kind;

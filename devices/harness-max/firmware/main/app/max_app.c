@@ -79,6 +79,7 @@ static struct { char id[ID_MAX]; uint32_t key; } s_asked[ASKED_MAX];
 
 static atomic_bool s_asleep, s_force_frame;
 static atomic_bool s_updating, s_painted;   // an image is being written (readable without the lock); the first frame is out
+static atomic_bool s_trying;   // TEMP (the owner's call of 23 Nov): Inbox's Try update plays one (try_update)
 static atomic_uint s_last_activity;
 static char s_ota_to[24];    // the version being installed (the cable task's)
 static char s_updated[24];   // "Updated to X": set by pro_app_note_update, shown once the cable is up
@@ -497,6 +498,8 @@ static void new_form(void)
     send_taken(&s_touch_out, true);
 }
 
+static void try_update(void);   // TEMP (the owner's call of 23 Nov): with the update screen, below
+
 static void act(const max_act_t *a)
 {
     switch (a->kind) {
@@ -524,6 +527,7 @@ static void act(const max_act_t *a)
         unlock();
         pro_cable_app_pick(a->app, true);
         break;
+    case MAX_ACT_TRY_UPDATE: try_update(); break;   // TEMP (the owner's call of 23 Nov)
     case MAX_ACT_NONE: break;
     }
 }
@@ -785,6 +789,7 @@ static void update_screen(int pct, const char *to)
 
 bool pro_app_begin_update_gate(void)
 {
+    if (atomic_load(&s_trying)) return false;   // TEMP (the owner's call of 23 Nov): a tried update is on the glass
     lock();
     atomic_store(&s_updating, true);   // first: a voice start that opens after this sees it and backs out
     const bool busy = pro_voice_open() || pro_voice_start_pending();
@@ -826,6 +831,42 @@ void fw_update_ui_failed(void)
     update_screen(-1, NULL);   // the pages come back
     pro_app_notice("Update failed \xc2\xb7 trying again later");
     pro_app_bump_activity();
+}
+
+// TEMP (the owner's call of 23 Nov, to try the update screen): Inbox's Try update plays an update on the glass as the
+// cable's installer drives it (the fw_update_ui_* above), with no image written: half a minute of writing, a few
+// seconds of checking at 100 %, restarting, then the pages back saying "Updated to", as the bar does after a real one.
+// One at a time and none while a real one is written; a real offer is refused while this plays
+// (pro_app_begin_update_gate). Goes before the merge, with MAX_ACT_TRY_UPDATE and Inbox's button.
+#define TRY_UPDATE_TO "0.6.1"
+enum { TRY_UPDATE_STEP_MS = 300, TRY_UPDATE_CHECK_MS = 4000, TRY_UPDATE_RESTART_MS = 6000 };
+
+static void try_update_task(void *arg)
+{
+    (void)arg;
+    fw_update_ui_begin("", TRY_UPDATE_TO);
+    for (int pct = 0; pct < 100; pct++) {
+        fw_update_ui_pct(pct);
+        vTaskDelay(pdMS_TO_TICKS(TRY_UPDATE_STEP_MS));
+    }
+    fw_update_ui_pct(100);
+    vTaskDelay(pdMS_TO_TICKS(TRY_UPDATE_CHECK_MS));
+    fw_update_ui_restarting(TRY_UPDATE_TO);
+    vTaskDelay(pdMS_TO_TICKS(TRY_UPDATE_RESTART_MS));
+    update_screen(-1, NULL);   // the pages, as the bar comes back restarted
+    lock();
+    notice_locked("Updated to " TRY_UPDATE_TO);
+    unlock();
+    pro_app_bump_activity();
+    atomic_store(&s_trying, false);
+    vTaskDelete(NULL);
+}
+
+static void try_update(void)
+{
+    if (atomic_load(&s_updating) || atomic_exchange(&s_trying, true)) return;
+    if (xTaskCreatePinnedToCore(try_update_task, "max_try_update", 4096, NULL, 2, NULL, 0) != pdPASS)
+        atomic_store(&s_trying, false);
 }
 
 // After fw_mark_valid: if this boot is the first of an update, say so once the cable is up.

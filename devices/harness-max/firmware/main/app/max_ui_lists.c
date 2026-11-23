@@ -84,6 +84,11 @@ void max_draw_inbox(ht_scene_t *s, uint32_t now_ms)
         snprintf(line, sizeof line, "%d unread", unread);
         max_text(s, x0, DY(225), IB_HEAD_W - x0, &ph_rg_24, WAIT, line);
     }
+    // TEMP (the owner's call of 23 Nov, to try the update screen): Try update, at the column's foot level with the
+    // cards' and ahead of Close, whose column it lies in, plays an update on the glass. Goes with MAX_HIT_TRY_UPDATE.
+    const int try_y = NOTE_Y + NOTE_H - MAX_BUTTON_H, try_w = IB_HEAD_W - x0 - DX(20);
+    max_button(s, x0, try_y, try_w, MAX_BUTTON_H, STYLE_GHOST, "Try update", false);
+    max_hit(x0, try_y, try_w, MAX_BUTTON_H, MAX_HIT_TRY_UPDATE, 0);
     max_hit(0, 0, IB_HEAD_W, HT_HEIGHT, MAX_HIT_CLOSE, 0);
     if (!max_m.inbox_count)
         max_text_centered(s, (NOTES_X + HT_WIDTH) / 2, HT_HEIGHT / 2, HT_WIDTH - NOTES_X - 40, &ph_rg_36, REST,

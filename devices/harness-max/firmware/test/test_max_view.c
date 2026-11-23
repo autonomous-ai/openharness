@@ -128,6 +128,7 @@ static void check_hits(void)
         for (int j = 0; j < i; j++) {
             const max_hit_t *o = &max_m.hits[j];
             if (o->kind == MAX_HIT_RELAX) continue;   // TEMP: Relax lies in Apps' Close column, ahead of it
+            if (o->kind == MAX_HIT_TRY_UPDATE) continue;   // TEMP: Try update lies in Inbox's, ahead of it
             if (o->kind != MAX_HIT_TOAST && o->kind != MAX_HIT_DONE_NOTE) CHECK(apart(box_of(h), box_of(o)));
         }
     }
@@ -606,12 +607,21 @@ static void test_inbox(void)
     inbox(MAX_INBOX);
     show(MAX_VIEW_INBOX, NULL);
     render_at(T0);
-    CHECK(max_m.hits[0].kind == MAX_HIT_CLOSE && hits_of(MAX_HIT_NOTE) == max_m.hit_count - 1);
+    // TEMP (the owner's call of 23 Nov, to try the update screen): Try update, a button at the header column's foot,
+    // level with the cards' and under the unread count, ahead of Close, whose column it lies in; the cards as before.
+    const max_hit_t *try_update = &max_m.hits[0];
+    CHECK(try_update->kind == MAX_HIT_TRY_UPDATE && try_update->h == MAX_BUTTON_H && word("Try update"));
+    CHECK(try_update->x >= DX(34) && try_update->x + try_update->w <= DX(220) && try_update->w >= 160);
+    CHECK(try_update->y + try_update->h == HT_HEIGHT - DY(24));
+    const ht_run_t *unread = word("2 unread"), *label = word("Try update");
+    CHECK(unread && unread->y + unread->pro_height <= try_update->y);
+    CHECK(label && within(ht_run_bounds(label), box_of(try_update)));
+    CHECK(max_m.hits[1].kind == MAX_HIT_CLOSE && hits_of(MAX_HIT_NOTE) == max_m.hit_count - 2);
     CHECK(hits_of(MAX_HIT_NOTE) >= 3 && hits_of(MAX_HIT_NOTE) < MAX_INBOX);   // the rest past the glass
-    for (int i = 1; i < max_m.hit_count; i++) CHECK(max_m.hits[i].arg == i - 1);
+    for (int i = 2; i < max_m.hit_count; i++) CHECK(max_m.hits[i].arg == i - 2);
     CHECK(word("Inbox") && word("2 unread") && word("asks"));
     // Each card's words in its card; the last card's run off the glass's edge.
-    max_box_t boxes[MAX_INBOX + 1] = {box_of(&max_m.hits[0])};
+    max_box_t boxes[MAX_INBOX + 2] = {box_of(&max_m.hits[0])};
     for (int i = 1; i < max_m.hit_count; i++) {
         boxes[i] = box_of(&max_m.hits[i]);
         if (boxes[i].x + boxes[i].w == HT_WIDTH) boxes[i].w = DX(372);
@@ -624,7 +634,7 @@ static void test_inbox(void)
     max_m.inbox_count = 0;
     render_at(T0);
     CHECK(max_motion_ms(T0) == MAX_WAKE_MS);
-    CHECK(HITS_ARE(MAX_HIT_CLOSE) && word("Nothing new") && !word("0 unread"));
+    CHECK(HITS_ARE(MAX_HIT_TRY_UPDATE, MAX_HIT_CLOSE) && word("Nothing new") && !word("0 unread"));
 }
 
 static void test_apps(void)

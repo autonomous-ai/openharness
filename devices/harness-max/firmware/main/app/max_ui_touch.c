@@ -228,6 +228,10 @@ static max_act_t press(const max_hit_t *h, uint32_t now_ms)
     case MAX_HIT_RELAX:   // TEMP (the owner's call of 20 Nov, to try Ambient)
         if (view == MAX_VIEW_APPS) go(MAX_VIEW_AMBIENT);
         break;
+    case MAX_HIT_TRY_UPDATE:   // TEMP (the owner's call of 23 Nov): Overview under it, as the bar comes back restarted
+        if (view != MAX_VIEW_INBOX) break;
+        go(MAX_VIEW_OVERVIEW);
+        return act_for(MAX_ACT_TRY_UPDATE, NULL);
     case MAX_HIT_WAKE:   // the demo's first Ambient shows every app, while there is another to pick
         go(max_m.wake_to_apps && other_apps() ? MAX_VIEW_APPS : MAX_VIEW_OVERVIEW);
         break;

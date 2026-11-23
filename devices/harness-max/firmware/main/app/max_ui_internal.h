@@ -175,6 +175,7 @@ typedef enum {
     MAX_HIT_AWAY,        // Attention outside its buttons: bring the agent up on the computer, Overview
     MAX_HIT_WAKE,        // Ambient: Overview
     MAX_HIT_RELAX,       // TEMP (the owner's call of 20 Nov, to try Ambient): Apps' Relax opens Ambient
+    MAX_HIT_TRY_UPDATE,  // TEMP (the owner's call of 23 Nov, to try the update screen): Inbox's Try update plays one
 } max_hit_kind_t;
 typedef struct {
     int16_t x, y, w, h;

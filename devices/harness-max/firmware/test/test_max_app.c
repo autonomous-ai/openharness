@@ -45,6 +45,13 @@ static struct host_task RENDERER;
 static TaskFunction_t RENDER_FN;
 static jmp_buf PASS;
 static bool IN_PASS;   // render_pass() runs the render task: its wait ends the pass
+// TEMP (the owner's call of 23 Nov, to try the update screen): the task Try update starts, run by play_try_update();
+// its end (vTaskDelete) returns to it.
+static TaskFunction_t TRY_FN;
+static int TRY_TASKS;
+static jmp_buf TRY_END;
+static bool IN_TRY;
+static void try_step(void);
 SemaphoreHandle_t xSemaphoreCreateRecursiveMutex(void) { return calloc(1, sizeof(struct host_mutex)); }
 BaseType_t xSemaphoreTakeRecursive(SemaphoreHandle_t m, TickType_t w) { (void)m; (void)w; LOCK_DEPTH++; return pdTRUE; }
 BaseType_t xSemaphoreGiveRecursive(SemaphoreHandle_t m) { (void)m; CHECK(LOCK_DEPTH > 0); LOCK_DEPTH--; return pdTRUE; }
@@ -52,6 +59,12 @@ BaseType_t xTaskCreatePinnedToCore(TaskFunction_t fn, const char *name, uint32_t
                                    TaskHandle_t *out, int core)
 {
     (void)stack; (void)arg; (void)prio; (void)core;
+    if (!strcmp(name, "max_try_update")) {   // TEMP (the owner's call of 23 Nov): played by play_try_update()
+        CHECK(LOCK_DEPTH == 0 && !out && !TRY_FN);
+        TRY_FN = fn;
+        TRY_TASKS++;
+        return pdPASS;
+    }
     CHECK(!strcmp(name, "pro_render"));   // ram_telemetry and the heartbeat know it by this name
     RENDER_FN = fn;                       // run a pass at a time by render_pass()
     *out = &RENDERER;
@@ -65,7 +78,16 @@ uint32_t ulTaskNotifyTake(BaseType_t clear, TickType_t wait)
     if (IN_PASS) longjmp(PASS, 1);   // the pass is done: back to the test
     return 0;
 }
-void vTaskDelay(TickType_t ticks) { now += ticks; }
+void vTaskDelay(TickType_t ticks)
+{
+    now += ticks;
+    if (IN_TRY) try_step();
+}
+void vTaskDelete(TaskHandle_t t)
+{
+    CHECK(IN_TRY && !t && LOCK_DEPTH == 0);
+    longjmp(TRY_END, 1);
+}
 uint32_t uxTaskGetStackHighWaterMark(TaskHandle_t t) { (void)t; return 0; }
 int64_t esp_timer_get_time(void) { return (int64_t)now * 1000; }
 esp_err_t esp_task_wdt_add(void *task) { (void)task; return ESP_OK; }
@@ -581,6 +603,79 @@ static void test_update_screen_follows_the_device(void)
     CHECK(max_m.update_pct == -1 && !max_m.update_restarting);
 }
 
+// TEMP (the owner's call of 23 Nov, to try the update screen): Inbox's Try update plays an update on the glass as the
+// installer drives it, no image written: the percent up to 100, the check, restarting, then Overview saying "Updated
+// to". One at a time, none while a real one is written, and a real offer is refused while it plays.
+static int TRY_PCT, TRY_STEPS, TRY_AT_100;
+static bool TRY_BACK, TRY_RESTARTED, TRY_LIT;
+static void try_step(void)   // at each of the task's waits
+{
+    CHECK(LOCK_DEPTH == 0);
+    TRY_STEPS++;
+    TRY_LIT &= max_m.update_pct >= 0 && !pro_app_asleep();
+    pro_app_sleep();   // refused: the glass stays lit while the update is up
+    if (max_m.update_restarting) {
+        TRY_RESTARTED = true;
+        TRY_BACK |= max_m.update_pct != 100;
+    } else {
+        TRY_BACK |= TRY_RESTARTED || max_m.update_pct < TRY_PCT;
+        TRY_AT_100 += max_m.update_pct == 100;
+    }
+    TRY_PCT = max_m.update_pct;
+}
+static void play_try_update(void)
+{
+    const TaskFunction_t fn = TRY_FN;
+    CHECK(fn != NULL);
+    TRY_FN = NULL;
+    TRY_PCT = -1, TRY_STEPS = TRY_AT_100 = 0, TRY_BACK = TRY_RESTARTED = false, TRY_LIT = true;
+    IN_TRY = true;
+    if (!setjmp(TRY_END)) fn(NULL);
+    IN_TRY = false;
+}
+static void test_try_update_plays_one(void)
+{
+    fresh();
+    tap_on(find_hit(MAX_HIT_BELL, 0));
+    render_pass();
+    drawn_page(MAX_VIEW_INBOX);
+    const max_hit_t *try_update = plant(MAX_HIT_TRY_UPDATE, 0);
+    TRY_TASKS = 0;
+    tap_on(try_update);
+    CHECK(TRY_TASKS == 1 && max_m.view == MAX_VIEW_OVERVIEW && max_m.update_pct == -1);
+    // A second tap while it plays starts none, and a real offer waits for it.
+    max_show(MAX_VIEW_INBOX);
+    drawn_page(MAX_VIEW_INBOX);
+    try_update = plant(MAX_HIT_TRY_UPDATE, 0);
+    tap_on(try_update);
+    CHECK(TRY_TASKS == 1);
+    CHECK(!pro_app_begin_update_gate());
+    const uint32_t from = now;
+    play_try_update();
+    // 0..99 a step each, the check at 100, then restarting: never back, the glass lit throughout.
+    CHECK(TRY_STEPS == 102 && TRY_AT_100 == 1 && TRY_RESTARTED && !TRY_BACK && TRY_LIT);
+    CHECK(now - from == 99 * 300 + 300 + 4000 + 6000);
+    CHECK(max_m.update_pct == -1 && !max_m.update_restarting && max_m.view == MAX_VIEW_OVERVIEW);
+    CHECK(!strcmp(max_m.notice, "Updated to 0.6.1"));
+    // Done: a real offer goes through again, and so does another try; none while a real one is written.
+    CHECK(pro_app_begin_update_gate());
+    pro_app_end_update_gate();
+    max_show(MAX_VIEW_INBOX);
+    drawn_page(MAX_VIEW_INBOX);
+    try_update = plant(MAX_HIT_TRY_UPDATE, 0);
+    fw_update_ui_begin("0.9.0", "0.9.1");
+    tap_on(try_update);
+    CHECK(TRY_TASKS == 1);
+    fw_update_ui_failed();
+    max_show(MAX_VIEW_INBOX);
+    drawn_page(MAX_VIEW_INBOX);
+    try_update = plant(MAX_HIT_TRY_UPDATE, 0);
+    tap_on(try_update);
+    CHECK(TRY_TASKS == 2);
+    play_try_update();
+    CHECK(max_m.update_pct == -1 && !strcmp(max_m.notice, "Updated to 0.6.1"));
+}
+
 // A sleeping screen takes no contact: the caller swallows it.
 static void test_asleep_refuses_the_finger(void)
 {
@@ -865,6 +960,7 @@ int main(void)
     test_away_brings_the_agent_up();
     test_update_gate_holds_talk();
     test_update_screen_follows_the_device();
+    test_try_update_plays_one();
     test_asleep_refuses_the_finger();
     test_question_chimes_once();
     test_each_alert_its_chime();

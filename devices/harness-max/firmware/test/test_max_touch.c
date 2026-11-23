@@ -416,6 +416,21 @@ static void test_apps(void)
     CHECK(tap_on(relax).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_AMBIENT);
 }
 
+// TEMP (the owner's call of 23 Nov, to try the update screen): Inbox's Try update asks the app to play an update on the
+// glass, Overview under it, as the bar comes back restarted; only from Inbox.
+static void test_try_update(void)
+{
+    linked(ABCDE, 3);
+    max_show(MAX_VIEW_INBOX);
+    drawn_page(MAX_VIEW_INBOX);
+    const max_hit_t *try_update = plant(MAX_HIT_TRY_UPDATE, 0);
+    plant(MAX_HIT_CLOSE, 0);
+    max_m.view = MAX_VIEW_APPS;   // a tap between a change and the redraw
+    CHECK(tap_on(try_update).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_APPS);
+    max_m.view = MAX_VIEW_INBOX;
+    CHECK(tap_on(try_update).kind == MAX_ACT_TRY_UPDATE && max_m.view == MAX_VIEW_OVERVIEW);
+}
+
 // Ambient: a tap anywhere is Overview, and a person at the bar. The demo's first Ambient (max_ui_demo, V3
 // restNow(wakeToApps)) opens Apps instead, once, while there is another app to pick; with none, Overview.
 static void test_ambient_wakes(void)
@@ -1153,6 +1168,7 @@ int main(void)
     test_drag_while_open();
     test_inbox();
     test_apps();
+    test_try_update();
     test_ambient_wakes();
     test_agent_page_talks();
     test_slivers();
