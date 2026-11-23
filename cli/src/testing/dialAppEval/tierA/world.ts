@@ -442,16 +442,16 @@ export class World implements TierAWorld {
       onPath: (name) => (Object.hasOwn(ON_PATH[platform], name) ? ON_PATH[platform][name]! : null),
       exists: (path) => path === orcaInstall,
       platform,
+      localAppData: process.env.LOCALAPPDATA,
       // Its focus watch, whose start is a command Orca ran: one that failed has already exited.
       spawn: (file, args) => (this.ran([file, ...args]).code === 0 ? watchChild(this) : EXITED),
       mtime: (path) => ({ realPath: path, mtimeMs: ORCA_MTIME_MS }),
     }
     const log = (line: string): void => { this.logs.push({ at: Date.now(), line }) }
     // Orca's accounts' homes, read as the devices read them on this computer (services/devices.ts orcaHomesCache): with
-    // `account list` on these deps and LOCALAPPDATA, which orcaHomesDeps carries and the Orca deps do not.
-    const localAppData = process.env.LOCALAPPDATA
+    // `account list` on these deps.
     const orcaHomes = createOrcaHomesCache({
-      read: () => readOrcaHomes({ ...orca, localAppData, uid: process.getuid?.() ?? -1,
+      read: () => readOrcaHomes({ ...orca, uid: process.getuid?.() ?? -1,
         run: async (file, args) => ({ ...this.ran([file, ...args]), timedOut: false }) }),
       now: () => performance.now(),
       log,
