@@ -814,7 +814,11 @@ void fw_update_ui_pct(int pct) { update_screen(pct < 0 ? 0 : pct, s_ota_to); }
 void fw_update_ui_restarting(const char *to)
 {
     snprintf(s_ota_to, sizeof s_ota_to, "%s", to ? to : "");
-    update_screen(100, s_ota_to);
+    lock();   // update_screen's, at 100 % and restarting: the screen says so as the Pro's
+    s_update_shown = true;
+    atomic_store(&s_updating, true);
+    changed_if(max_ui_update_restarting(s_ota_to));
+    unlock();
 }
 
 void fw_update_ui_failed(void)

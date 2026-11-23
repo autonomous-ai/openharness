@@ -1,7 +1,8 @@
 // Harness Max's copy of Pod's drawing kinds, compiled by every Max build in place of the Pro's (sources.cmake). What the
 // Max changes: a triangle's vertex may lie as far as the run's int16 sixteenths reach (+-2047 px, the 1920 px glass's
-// lanes keep their bubble tails right of 1023 px) while its extent keeps tri_raster's 32-bit isqrt bound, and the veil
-// works a colour's blend once with a multiply. pod_draw.h (the Pro's) still says +-1023 px: this file is the Max's rule.
+// lanes keep their bubble tails right of 1023 px) while its extent keeps tri_raster's 32-bit isqrt bound, the veil
+// works a colour's blend once with a multiply, and a kind of its own past the Pro's: the filled ellipse (pod_ellipse,
+// declared in main/app/max_ui_draw.h). pod_draw.h (the Pro's) still says +-1023 px: this file is the Max's rule.
 // Its own header is named from main/, as it is not beside it.
 // pro_fork upstream: devices/harness-pro/firmware/main/pod/pod_draw.c
 // pro_fork blob: 4af5e8005df86ba02ac8ba76ae11439f455d844d (main 91f60b6a7b)
@@ -811,6 +812,70 @@ static void tri_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
     }
 }
 
+// ---- ellipse (the Max's) --------------------------------------------------------------------------------
+
+// The Max's own kind, numbered past the Pro's last.
+enum { POD_ELLIPSE = POD_VEIL + 1 };
+// centre and radii, sixteenths of a px
+typedef struct { int16_t cx16, cy16, rx16, ry16; } ellipse_params_t;
+_Static_assert(sizeof(ellipse_params_t) == 4 * sizeof(int16_t), "ellipse parameters: no padding byte");
+
+bool pod_ellipse(ht_scene_t *s, int cx16, int cy16, int rx16, int ry16, uint16_t ink)
+{
+    if (rx16 <= 0 || ry16 <= 0 || rx16 > 0x7FFF || ry16 > 0x7FFF) return false;
+    if (cx16 < -0x7FFF || cx16 > 0x7FFF || cy16 < -0x7FFF || cy16 > 0x7FFF) return false;
+    const int bx0 = ((cx16 - rx16) >> 4) - 1, by0 = ((cy16 - ry16) >> 4) - 1;
+    const int bx1 = ((cx16 + rx16 + 15) >> 4) + 1, by1 = ((cy16 + ry16 + 15) >> 4) + 1;
+    ht_run_t *r = new_run(s, POD_ELLIPSE, bx0, by0, bx1 - bx0, by1 - by0);
+    if (!r) return false;
+    const ellipse_params_t p = {(int16_t)cx16, (int16_t)cy16, (int16_t)rx16, (int16_t)ry16};
+    memcpy(r->text, &p, sizeof p);
+    r->fg = ink;
+    return true;
+}
+// Half the ellipse's width, rounded down, on the line d sixteenths below its centre; -1 on none of it.
+static int ellipse_half(int rx16, int ry16, int d)
+{
+    if (d <= -ry16 || d >= ry16) return -1;
+    return (int)((int64_t)rx16 * isqrt((uint32_t)(ry16 * ry16 - d * d)) / ry16);
+}
+// Row by row: a pixel whose four corners lie inside the ellipse at both of its row's edges is whole (the ellipse is
+// convex), one past the widest the two edges reach (a pixel of slack for the rounding) is left alone, and the rest
+// take the share of their 4 x 4 samples inside. 64-bit: a radius as far as int16 sixteenths reach.
+static void ellipse_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
+{
+    ellipse_params_t p;
+    memcpy(&p, r->text, sizeof p);
+    const int64_t a2 = (int64_t)p.rx16 * p.rx16, b2 = (int64_t)p.ry16 * p.ry16, ab2 = a2 * b2;
+    const int x1 = imax(clip.x, r->x), x2 = imin(clip.x + clip.w, r->x + r->w);
+    const int y1 = imax(clip.y, r->y), y2 = imin(clip.y + clip.h, r->y + r->pro_height);
+    for (int y = y1; y < y2; y++) {
+        const int top = y * 16 - p.cy16, bot = top + 16;
+        const int ht = ellipse_half(p.rx16, p.ry16, top), hb = ellipse_half(p.rx16, p.ry16, bot);
+        const int whole = ht < 0 || hb < 0 ? -1 : imin(ht, hb);
+        const int reach = top <= 0 && bot >= 0 ? p.rx16 : imax(ht, hb);
+        if (reach < 0) continue;
+        uint16_t *row = out + (y - clip.y) * clip.w - clip.x;
+        const int xa = imax(x1, ((p.cx16 - reach) >> 4) - 1), xb = imin(x2, ((p.cx16 + reach) >> 4) + 2);
+        for (int x = xa; x < xb; x++) {
+            const int l = x * 16 - p.cx16;
+            if (whole >= 0 && l >= -whole && l + 16 <= whole) {
+                row[x] = r->fg;
+                continue;
+            }
+            unsigned in = 0;
+            for (int j = 0; j < 4; j++) {
+                const int64_t dy = top + 2 + 4 * j, ty = dy * dy * a2;
+                for (int i = 0; i < 4; i++) {
+                    const int64_t dx = l + 2 + 4 * i;
+                    in += dx * dx * b2 + ty <= ab2;
+                }
+            }
+            if (in) row[x] = in >= 16 ? r->fg : mix565(r->fg, row[x], in, 16);
+        }
+    }
+}
+
 void pod_draw_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
 {
     if (r->w <= 0 || r->pro_height <= 0) return;
@@ -820,6 +885,7 @@ void pod_draw_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
     case POD_GRAD: grad_raster(r, clip, out); break;
     case POD_TRI: tri_raster(r, clip, out); break;
     case POD_VEIL: veil_raster(r, clip, out); break;
+    case POD_ELLIPSE: ellipse_raster(r, clip, out); break;
     default: break;
     }
 }

@@ -921,10 +921,107 @@ static void test_update_screen(void)
     linked(ABCDE, 5);
     max_ui_update(40, "0.9.0");
     render_at(T0);
-    CHECK(word("Updating") && word("40%") && word("Version 0.9.0"));
-    CHECK(max_m.hit_count == 0 && max_m.cell_hits == 0 && max_motion_ms(T0) == MAX_WAKE_MS);
+    // The Pro's update screen on the left: the wordmark, the percent in the ring, the version, the status.
+    CHECK(word("Harness") && word("40") && word("%") && word("Updating to 0.9.0"));
+    CHECK(word("Writing the new firmware") && word("Keep the cable in") && !word("Almost there"));
+    // Nothing on it is touched; the tea corner moves on by the clock, slowly.
+    CHECK(max_m.hit_count == 0 && max_m.cell_hits == 0);
+    CHECK(max_motion_ms(T0) > 0 && max_motion_ms(T0) <= 66);
     check_glass();
     check_budget();
+}
+
+// The status read off the percent alone, as the Pro's: writing below 100, checking at 100, then restarting into the
+// version, until a new percent (another update) says writing again.
+static void test_update_stages(void)
+{
+    linked(ABCDE, 5);
+    max_ui_update(100, "0.9.0");
+    render_at(T0);
+    CHECK(word("100") && word("Updating to 0.9.0") && word("Checking the new firmware") && word("Keep the cable in"));
+    max_ui_update_restarting("0.9.0");
+    render_at(T0);
+    CHECK(word("100") && word("Restarting into 0.9.0") && word("Almost there"));
+    CHECK(!word("Keep the cable in") && !word("Updating to 0.9.0"));
+    check_glass();
+    check_budget();
+    max_ui_update(3, "0.9.1");
+    render_at(T0);
+    CHECK(word("3") && word("Updating to 0.9.1") && word("Writing the new firmware"));
+    // A version past the Pro's 20 characters is cut as the Pro cuts it.
+    max_ui_update(5, "0.9.1-dev.0123456789abcdef");
+    render_at(T0);
+    CHECK(word("Updating to 0.9.1-dev.0123456789"));
+}
+
+static int pet_cells(ht_run_t out[], int cap)
+{
+    int n = 0;
+    for (int i = 0; i < S.count && n < cap; i++)
+        if (S.runs[i].pro_kind == K_POD_CELL) out[n++] = S.runs[i];
+    return n;
+}
+// The pets wait with their eyes shut and open them as the bar restarts: the same three pets, other frames. Codex's
+// z's rise only while it dozes, and every run of every frame of the loops stays on the glass, within the budget.
+static void test_update_pets(void)
+{
+    linked(ABCDE, 5);
+    max_ui_update(40, "0.9.0");
+    render_at(T0);
+    ht_run_t shut[8], open[8];
+    const int n = pet_cells(shut, 8);
+    CHECK(n == 3);
+    int zs = 0;
+    for (uint32_t t = 0; t <= 6000; t += 33) {
+        render_at(T0 + t);
+        zs += word("z") != NULL;
+        CHECK(pet_cells(open, 8) == 3);
+        check_glass();
+        check_budget();
+    }
+    CHECK(zs > 0);
+    max_ui_update_restarting("0.9.0");
+    render_at(T0);
+    CHECK(pet_cells(open, 8) == n);
+    int differ = 0;
+    for (int i = 0; i < n; i++) differ += shut[i].bitmap.asset != open[i].bitmap.asset;   // pod_cell's frame
+    CHECK(differ == 3);
+    for (uint32_t t = 0; t <= 6000; t += 33) {
+        render_at(T0 + t);
+        CHECK(!word("z"));
+        check_glass();
+        check_budget();
+    }
+}
+
+// The Max's ellipse kind: whole inside, untouched outside, partly inked along its edge, the same either side of both
+// axes, nothing past its run's box, a strip of it as the whole draws it; no run for a radius that is not there.
+static void test_ellipse(void)
+{
+    enum { W = 64, H = 40 };
+    static uint16_t full[W * H], part[W * H];
+    const uint16_t bg = 0x0000, ink = 0xFFFF;
+    ht_scene_clear(&S, bg);
+    CHECK(!pod_ellipse(&S, 100, 100, 0, 50, ink) && !pod_ellipse(&S, 100, 100, 50, -1, ink));
+    CHECK(!pod_ellipse(&S, 100, 100, 50, 40000, ink) && S.count == 0);
+    CHECK(pod_ellipse(&S, 32 * 16, 20 * 16, 24 * 16, 12 * 16, ink));   // 48 x 24 px about (32, 20)
+    ht_raster(&S, (ht_rect_t){0, 0, W, H}, full);
+    CHECK(full[20 * W + 32] == ink && full[20 * W + 12] == ink && full[11 * W + 32] == ink);
+    CHECK(full[20 * W + 6] == bg && full[6 * W + 32] == bg && full[0] == bg && full[(H - 1) * W + W - 1] == bg);
+    int partial = 0;
+    const ht_rect_t b = ht_run_bounds(&S.runs[0]);
+    for (int y = 0; y < H; y++)
+        for (int x = 0; x < W; x++) {
+            const uint16_t p = full[y * W + x];
+            partial += p != bg && p != ink;
+            CHECK(p == full[y * W + (W - 1 - x)] && p == full[(H - 1 - y) * W + x]);
+            if (p != bg) CHECK(x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h);
+        }
+    CHECK(partial > 20);
+    const ht_rect_t strip = {30, 7, 20, 9};
+    ht_raster(&S, strip, part);
+    for (int y = 0; y < strip.h; y++)
+        for (int x = 0; x < strip.w; x++) CHECK(part[y * strip.w + x] == full[(strip.y + y) * W + strip.x + x]);
 }
 
 // ---- New Harness ----
@@ -1064,6 +1161,9 @@ int main(void)
     test_notice();
     test_cut_after_an_ellipsis();
     test_update_screen();
+    test_update_stages();
+    test_update_pets();
+    test_ellipse();
     test_new_harness();
     printf("test_max_view: %d checks passed\n", checks);
     return 0;

@@ -293,6 +293,7 @@ typedef struct {
     char talk_id[ID_MAX];            // the agent the recording is for (set by the tap that starts it; "": Say's)
     int update_pct;                  // -1: no update
     char update_to[MAX_VERSION_BYTES];
+    bool update_restarting;          // the image is written and checked: the bar restarts into update_to
     // Demo V2's pages.
     max_view_t view;
     char attn_id[ID_MAX];            // Attention's agent

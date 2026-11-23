@@ -566,6 +566,21 @@ static void test_update_gate_holds_talk(void)
     CHECK(!V_OPEN);
 }
 
+// The update screen from the device's calls: the percent as it is written, restarting into the version (the Pro's
+// "Restarting into"), and a failure that brings the pages back.
+static void test_update_screen_follows_the_device(void)
+{
+    fresh();
+    fw_update_ui_begin("0.9.0", "0.9.1");
+    CHECK(max_m.update_pct == 0 && !strcmp(max_m.update_to, "0.9.1") && !max_m.update_restarting);
+    fw_update_ui_pct(62);
+    CHECK(max_m.update_pct == 62 && !max_m.update_restarting);
+    fw_update_ui_restarting("0.9.1");
+    CHECK(max_m.update_pct == 100 && max_m.update_restarting && !strcmp(max_m.update_to, "0.9.1"));
+    fw_update_ui_failed();
+    CHECK(max_m.update_pct == -1 && !max_m.update_restarting);
+}
+
 // A sleeping screen takes no contact: the caller swallows it.
 static void test_asleep_refuses_the_finger(void)
 {
@@ -849,6 +864,7 @@ int main(void)
     test_an_app_card_picks_it();
     test_away_brings_the_agent_up();
     test_update_gate_holds_talk();
+    test_update_screen_follows_the_device();
     test_asleep_refuses_the_finger();
     test_question_chimes_once();
     test_each_alert_its_chime();

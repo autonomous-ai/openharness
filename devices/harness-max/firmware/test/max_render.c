@@ -387,6 +387,7 @@ static void s_ambient_no_agents(void)
 }
 static void s_not_connected(void) { max_ui_reset(); show(MAX_VIEW_AMBIENT, NULL); }
 static void s_update(void) { orca(); max_ui_update(40, "0.9.0"); }
+static void s_update_restarting(void) { orca(); max_ui_update_restarting("0.9.0"); }
 
 // ---- New Harness, as the demo daemon's form answers ----
 static void form_open(void)
@@ -497,7 +498,7 @@ static const screen_t SCREENS[] = {
     {"attention-multi", s_attention_multi}, {"attention-error", s_attention_error},
     {"attention-long-vi", s_attention_long_vi},
     {"inbox", s_inbox}, {"inbox-empty", s_inbox_empty}, {"apps", s_apps}, {"ambient", s_ambient},
-    {"ambient-no-agents", s_ambient_no_agents}, {"not-connected", s_not_connected}, {"update", s_update},
+    {"ambient-no-agents", s_ambient_no_agents}, {"not-connected", s_not_connected}, {"update", s_update}, {"update-restarting", s_update_restarting},
     {"form-opening", s_form_opening}, {"form-page", s_form_page}, {"form-start", s_form_start},
     {"form-busy", s_form_busy}, {"form-failed", s_form_failed}, {"form-say", s_form_say}, {"form-toast", s_form_toast},
     {"row-opening", s_row_opening}, {"row-closing", s_row_closing}, {"row-drag", s_row_drag},

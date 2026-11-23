@@ -137,6 +137,9 @@ bool max_ui_wall(bool known, int hour, int min, int wday, int mday, int mon);
 bool max_ui_level(unsigned level, uint32_t now_ms);
 // A firmware update in progress: pct 0..100, or -1 when there is none. `to` is the version being installed.
 bool max_ui_update(int pct, const char *to);
+// The update is written and checked and the bar restarts into `to` (the Pro's "Restarting into"): 100 %, restarting.
+// The next max_ui_update clears it.
+bool max_ui_update_restarting(const char *to);
 
 // ---- the clock (render task) ----
 // True when something drawn depends on the time and has changed (an elapsed counter, a notice that ran out).

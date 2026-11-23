@@ -1012,7 +1012,14 @@ static void test_app_state(void)
     CHECK(max_ui_update(40, "0.9.0"));
     CHECK(!max_ui_update(40, "0.9.0"));
     CHECK(max_ui_update(41, "0.9.0"));
-    CHECK(max_ui_update(-1, NULL));
+    // Restarting: 100 % and the flag, a change once; another version is one again; a percent after it clears it.
+    CHECK(max_ui_update_restarting("0.9.0") && max_m.update_pct == 100 && max_m.update_restarting);
+    CHECK(!max_ui_update_restarting("0.9.0"));
+    CHECK(max_ui_update_restarting("0.9.1") && !strcmp(max_m.update_to, "0.9.1"));
+    CHECK(max_ui_update(100, "0.9.1") && !max_m.update_restarting);
+    CHECK(!max_ui_update(100, "0.9.1"));
+    CHECK(max_ui_update_restarting("0.9.1"));
+    CHECK(max_ui_update(-1, NULL) && !max_m.update_restarting);
     CHECK(max_m.update_pct == -1);
     // A machine list that did not change is no change.
     cable_machine_t m[2] = {{.id = "m1", .name = "MacBook Pro", .state = "ready", .local = true},

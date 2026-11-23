@@ -85,6 +85,10 @@ void max_box(ht_scene_t *s, int x, int y, int w, int h, int r, int line, unsigne
 void max_round(ht_scene_t *s, int cx, int cy, int d);
 // A line from (x0, y0) to (x1, y1), `w` px thick, in sixteenths of a px: two triangles that share their seam.
 void max_stroke16(ht_scene_t *s, int x0, int y0, int x1, int y1, int w, unsigned rgb);
+// A filled ellipse, anti-aliased: centre and radii in sixteenths of a px, ink native RGB565 (C()). The Max's own Pod
+// kind, in its pod_draw.c (main/pro_fork/pod/). False, nothing added, for a radius not above 0, a value past int16 or a
+// full scene.
+bool pod_ellipse(ht_scene_t *s, int cx16, int cy16, int rx16, int ry16, uint16_t ink);
 // pct % of colour a over colour b (0xRRGGBB), as the Pro's ph_mix; and q of MAX_ONE of a over b, rounded.
 unsigned max_mix(unsigned a, unsigned b, unsigned pct);
 unsigned max_mix_q(unsigned a, unsigned b, int32_t q);
@@ -222,6 +226,8 @@ void max_render_aside(ht_scene_t *s, uint32_t now_ms);   // max_ui_view.c
 // App Detail: the app column, the row of agents and the bell; an agent open across the row while the agent page is up.
 void max_draw_overview(ht_scene_t *s, uint32_t now_ms);                          // max_ui_overview.c
 void max_draw_ambient(ht_scene_t *s, uint32_t now_ms);                           // max_ui_overview.c
+// The firmware update screen, over the whole glass (max_m.update_pct >= 0).
+void max_draw_update(ht_scene_t *s, uint32_t now_ms);                            // max_ui_update.c
 // Ambient's drift (max_ui_overview.c), for the tests: speck i's place in V3's px (false past the last), and the 60 Hz
 // steps its clock has passed.
 bool max_drift_speck(int i, float *x, float *y);

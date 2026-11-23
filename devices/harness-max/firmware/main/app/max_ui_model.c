@@ -941,10 +941,22 @@ bool max_ui_update(int pct, const char *to)
     if (pct > 100) pct = 100;
     char version[MAX_VERSION_BYTES];
     max_copy(version, sizeof version, pct < 0 ? NULL : to);
-    const bool changed = pct != max_m.update_pct || strcmp(max_m.update_to, version);
+    const bool changed = pct != max_m.update_pct || strcmp(max_m.update_to, version) || max_m.update_restarting;
     max_m.update_pct = pct;
     memcpy(max_m.update_to, version, sizeof version);
+    max_m.update_restarting = false;
     return changed;
+}
+
+bool max_ui_update_restarting(const char *to)
+{
+    const bool was = max_m.update_restarting;
+    const int pct = max_m.update_pct;
+    char before[MAX_VERSION_BYTES];
+    memcpy(before, max_m.update_to, sizeof before);
+    max_ui_update(100, to);
+    max_m.update_restarting = true;
+    return !was || pct != 100 || strcmp(before, max_m.update_to);
 }
 
 // ---- the clock ----

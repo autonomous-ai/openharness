@@ -673,22 +673,6 @@ static void done_note(ht_scene_t *s, const max_agent_t *a, const done_t *d, int 
 
 // ---- the whole screen ----
 
-static void update_screen(ht_scene_t *s)
-{
-    const int cx = HT_WIDTH / 2, bar_w = 800;
-    char pct[16], version[MAX_VERSION_BYTES + 8];
-    snprintf(pct, sizeof pct, "%d%%", max_m.update_pct);
-    max_text_centered(s, cx, MAX_Y(140), 600, &ph_sb_34, FG, "Updating");
-    max_text_centered(s, cx, MAX_Y(214), 400, &ph_sb_48, FG, pct);
-    ht_pro_rect_aa(s, cx - bar_w / 2, MAX_Y(276), bar_w, 14, 7, C(TRACK));
-    if (max_m.update_pct > 0)
-        ht_pro_rect_aa(s, cx - bar_w / 2, MAX_Y(276), bar_w * max_m.update_pct / 100, 14, 7, C(DONE));
-    if (max_m.update_to[0]) {
-        snprintf(version, sizeof version, "Version %s", max_m.update_to);
-        max_text_centered(s, cx, MAX_Y(334), 600, &ph_sb_22, REST, version);
-    }
-}
-
 // The page the model shows. One that names an agent no longer in the ring shows Overview instead; App Detail draws the
 // agent page, its agent open across the row.
 static void page(ht_scene_t *s, uint32_t now_ms)
@@ -721,7 +705,7 @@ void max_ui_render(ht_scene_t *s, uint32_t now_ms)
     max_tint(0, 256);
     max_dim(0);
     if (max_m.update_pct >= 0) {
-        update_screen(s);
+        max_draw_update(s, now_ms);
     } else {
         // What each overlay says, kept while it goes: its agent may be gone by then.
         static EXT_RAM_BSS_ATTR max_agent_t toast_a, done_a;
