@@ -259,8 +259,10 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
     await stroke(d, dial)
     await until('three lines scrolled', () => window.scrolls.length === 3, 30_000, 50)
 
-    // 2. B's terminal active: the lines for A's run nothing, and the loop's minute line counts them dropped.
-    window.set({ active: b.shellPid! })
+    // 2. B's terminal active in the window, now not focused: the lines for A's run nothing, and the loop's minute line
+    // counts them dropped. Not focused, as when another VS Code window is: a focused one's move turns the dial to B, and
+    // the stroke would then be B's (vscodeTerminals.ts, `moved`).
+    window.set({ active: b.shellPid!, focused: false })
     await until("B's terminal active", () => window.took.at(-1)?.active === b.shellPid, 10_000, 50)
     await stroke(d, dial)
     const counted = await until('the stroke counted dropped', () => {
