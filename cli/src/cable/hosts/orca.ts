@@ -80,7 +80,10 @@ function started(file: string, args: string[], platform: NodeJS.Platform): { fil
 
 export function orcaDeps(platform: NodeJS.Platform = process.platform): OrcaReadDeps {
   return {
-    run: (file, args, timeoutMs) => new Promise((resolve) => {
+    run: (file, args, asked) => new Promise((resolve) => {
+      // execFile throws on a timeout that is not a whole number, and a caller's deadline on the devices' performance.now()
+      // clock leaves a fraction: every kitty focus read answered "refused" (dialPaneFocusFollow e2e, 2026-11-23).
+      const timeoutMs = Math.max(1, Math.ceil(asked))
       // The timeout's kill waits for the process to exit: one deaf to SIGTERM, or stuck where even SIGKILL waits, kept the
       // call and its terminal's one-command slot open for good. The deadline answers by itself.
       const deadline = setTimeout(() => resolve({ code: null, stdout: '' }), timeoutMs)
