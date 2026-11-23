@@ -11626,3 +11626,89 @@ describe('the dial follows the pane focused in Orca (docs/plans/2026-11-16-dial-
     })
   })
 })
+
+describe("Orca's chats on a Harness Max (cable/hosts/orcaChatSource.ts, owner 23 Nov)", () => {
+  /** Two of Orca's chats, by their Orca session ids, and the Claude session the first runs. */
+  const CHAT = '9f998ac4-26aa-48a7-b01a-b37dd6da1f02'
+  const SECOND = '26b31188-3db1-408f-8d87-472924793e29'
+  const SESSION = 'fc98437a-e7f1-40de-9f91-10289bb7b1d1'
+  const ORCA_BUNDLE = 'com.stablyai.orca'
+  const LIST: [string, string[], number] = ['/opt/orca/bin/orca', ['agent', 'list', '--json'], 5_000]
+  /** A chat row as `orca agent list --json` prints it. */
+  const chat = (orcaSessionId: string, title: string, updatedAt: number) => ({
+    orcaSessionId, kind: 'chat', agent: 'claude', state: 'done', worktreeId: 'repo-id::/work/max', workspace: 'Harness-Max',
+    repo: 'Harness-Max', hostId: 'local', title, lastAssistantMessage: 'Done.', updatedAt,
+  })
+  const ORCA_LIST = JSON.stringify({ id: 'x', ok: true, result: { agents: [chat(CHAT, 'Docs flow', 2), chat(SECOND, 'SSH into the board', 1)] } })
+  const host = () => seen.dial as unknown as DaemonCableHost
+  /** The page a Harness Max reads: the shown app's ring whole, Orca's while it is the one app with rows. */
+  const listed = async () => (await host().listAgentSnapshot({ apps: true, whole: true })).agents.map(({ id, name, caps }) => ({ id, name, caps }))
+  const lists = () => orcaRuns.filter(([, args]) => args[0] === 'agent')
+  const wait = (ms: number) => vi.advanceTimersByTimeAsync(ms)
+  beforeEach(() => { vi.useFakeTimers() })
+
+  /** The devices on macOS with an Orca whose list has the two chats, and a Max attached unless `max` says not. Every
+   *  `open` is a recorded run, nothing executed. */
+  const withOrca = async (max = true) => {
+    const onMac = {
+      ...orca, platform: 'darwin' as const,
+      run: async (file: string, args: string[], timeoutMs: number) => {
+        orcaRuns.push([file, args, timeoutMs])
+        return { code: 0, stdout: args[0] === 'agent' ? ORCA_LIST : '' }
+      },
+    }
+    const started = start({ faults: ['fleet'], orca: onMac, tty: async () => undefined })
+    ;(seen.cable as unknown as { whole: boolean }).whole = max
+    seen.host.watching!(true)
+    started.port.swarms(null)
+    await wait(0)
+    return started
+  }
+
+  it('with a Max attached, the chats are listed on Orca\'s page as Orca names them, sf, read again every 5 s; detached, they go and Orca is asked no more', async () => {
+    await withOrca()
+    expect(lists()).toEqual([LIST])
+    expect(await listed()).toEqual([
+      { id: observedAgentId('orca', CHAT), name: 'Docs flow', caps: 'sf' },
+      { id: observedAgentId('orca', SECOND), name: 'SSH into the board', caps: 'sf' },
+    ])
+    expect(host().appOf(observedAgentId('orca', CHAT))).toBe('orca')
+    expect(logs).toContain('[orca-chat] listed · 2 chats · 0 heard')
+    await wait(5_000)
+    expect(lists()).toEqual([LIST, LIST])
+    seen.host.watching!(false)
+    expect(await listed()).toEqual([])
+    await wait(20_000)
+    expect(lists()).toEqual([LIST, LIST])
+  })
+
+  it('with no Max attached (a Pro alone), Orca is never asked for its chats', async () => {
+    await withOrca(false)
+    await wait(20_000)
+    expect(lists()).toEqual([])
+    expect((await host().listAgentSnapshot({ apps: true })).agents).toEqual([])
+  })
+
+  it('a chat whose hook spoke is one row under the hooked copy\'s id, named as Orca names it', async () => {
+    const { port } = await withOrca()
+    port.observed({
+      engine: 'claude', sessionId: SESSION, event: 'session-start', cwd: '/work/max', callerPid: 4242,
+      hostHints: { ORCA_AGENT_SESSION_ID: CHAT, __CFBundleIdentifier: ORCA_BUNDLE },
+    } satisfies ObservedHookEvent)
+    await wait(0)
+    expect((await listed()).map(({ id, name }) => ({ id, name }))).toEqual([
+      { id: observedAgentId('claude', SESSION), name: 'Docs flow' },
+      { id: observedAgentId('orca', SECOND), name: 'SSH into the board' },
+    ])
+    expect(logs).not.toContain('[orca-chat] listed · 2 chats · 1 heard')
+    await wait(5_000)
+    expect(logs).toContain('[orca-chat] listed · 2 chats · 1 heard')
+  })
+
+  it('a tap on a chat brings Orca forward by its bundle, with nothing of the chat in the log', async () => {
+    await withOrca()
+    expect(await host().openAgent(observedAgentId('orca', SECOND))).toBeUndefined()
+    expect(orcaRuns.filter(([file]) => file === '/usr/bin/open')).toEqual([['/usr/bin/open', ['-b', ORCA_BUNDLE], 10_000]])
+    expect(logs.filter((line) => [CHAT, SECOND, 'Docs flow', 'SSH', '/work/max'].some((word) => line.includes(word)))).toEqual([])
+  })
+})

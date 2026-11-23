@@ -60,6 +60,7 @@ import { createOpenActions } from '../cable/hosts/open.js'
 import { createOpencodeClient, opencodeClientDeps, opencodeMessageId, type OpencodeClient } from '../cable/hosts/opencodeClient.js'
 import { OpencodeSource } from '../cable/hosts/opencodeSource.js'
 import { createOrcaAdapter, createOrcaReads, orcaDeps, type OrcaFocusWatch, type OrcaReadDeps, type OrcaReads, type OrcaTerminal } from '../cable/hosts/orca.js'
+import { OrcaChatSource } from '../cable/hosts/orcaChatSource.js'
 import { firstOuter } from '../cable/hosts/outer.js'
 import { readRecord } from '../cable/hosts/record.js'
 import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
@@ -84,7 +85,7 @@ import { DialVerdicts } from '../cable/dialPortVerdicts.js'
 import { createDialSetup } from '../cable/dialSetup.js'
 import { claudeFound, type ClaudeRun } from '../devices/claudePlugin.js'
 import { readOrcaConnected, readRemoved, SETUP_COUNTS } from '../devices/dialSkillFiles.js'
-import { createOrcaHomesCache, orcaHomesDeps, readOrcaHomes, type OrcaHomesCache } from '../devices/orcaHomes.js'
+import { createOrcaHomesCache, orcaBinary, orcaHomesDeps, readOrcaHomes, type OrcaHomesCache } from '../devices/orcaHomes.js'
 import { orcaPluginRun, type OrcaPluginRun } from '../devices/orcaPlugin.js'
 import { createOrcaPluginSetup, orcaPluginParts } from '../cable/orcaPluginSetup.js'
 import { harnessPath } from '../config/harnessHome.js'
@@ -847,6 +848,22 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     monotonic,
     log,
   }) : null
+  /** Orca's chats, with or without a process, read from `orca agent list` every 5 s (cable/hosts/orcaChatSource.ts): Orca
+   *  runs a chat itself, so no terminal and no transcript the scan adopts names it. Behind the observed agents' switch,
+   *  and listed only while a Harness Max is attached (owner 23 Nov): the other dials' Orca pages stay as main has them. */
+  const orcaChatSource = observed ? new OrcaChatSource({
+    binary: () => orcaBinary(apps),
+    run: apps.run,
+    wanted: () => cable.wantsWholeApps(),
+    heard: () => observed.orcaSessions(),
+    after: timerIn('orca-chat'),
+    // Through the opener, as a hooked agent's tap with no pane of its own: noted before `open -b`, which can take a while.
+    focus: (agentId) => {
+      noteMove()
+      return opener.open(agentId, { bundle: APP_BUNDLES.orca })
+    },
+    log,
+  }) : null
   const bundleId = deps.bundleId ?? readBundleId
   /** Whether the ChatGPT app is installed: the first of its places whose bundle has the app's id. */
   const chatGptInstalled = async (): Promise<boolean> => {
@@ -1148,7 +1165,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   })
   // What the dial lists with no window, or with one in the apps view: this computer's harness agents, and the ones outside
   // a pane unless switched off.
-  const registry = new HostRegistry([cableHost.harness, observed, herdr, hcSource, cmuxSource, opencode, claudeAppSource, codexAppSource].filter((source) => source !== null))
+  const registry = new HostRegistry([cableHost.harness, observed, herdr, hcSource, cmuxSource, opencode, claudeAppSource, codexAppSource, orcaChatSource].filter((source) => source !== null))
   cableHost.setRegistry(registry)
   // The dial's log lives with the app's, one file a day (dialLog.ts). The old unbounded `dial.log` in the
   // data folder is cut down to a pointer, for anyone with a bookmark.
@@ -1533,6 +1550,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     }
     if (fresh.size) part.call('dial', () => check(fresh))
   }
+  // A hook that names a listed chat's Orca session folds the chat's row into the hooked copy now, not at the next read,
+  // and before the dial's look: the dial never gets the chat twice.
+  observed?.onChange(() => part.call('orca-chat', () => orcaChatSource!.refold()))
   observed?.onChange(() => part.call('dial', outsideTurn))
   herdr?.onChange(() => part.call('dial', outsideTurn))
   // Before the dial's look, which then sees each session the scan found in the terminal it runs in.
@@ -1545,6 +1565,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // change. No thread is placed at the app's pane: a terminal thread's tap stays its terminal's.
   codexAppSource?.onChange(() => part.call('codex-app', () => observed!.setPaneNames('codex', codexAppSource.paneNames(), new Map())))
   codexAppSource?.onChange(() => part.call('dial', outsideTurn))
+  // Before the dial's look, so a hooked copy of a listed chat is named as Orca names it; setPaneNames tells only a change.
+  orcaChatSource?.onChange(() => part.call('orca-chat', () => observed!.setPaneNames('orca-chat', orcaChatSource.paneNames(), orcaChatSource.placed())))
+  orcaChatSource?.onChange(() => part.call('dial', outsideTurn))
   /** One of the observed source's timers, each run guarded as a notice is: one that throws is logged and the next runs. */
   const every = (ms: number, run: () => unknown): ReturnType<typeof setInterval> => {
     const timer = setInterval(() => part.call('observed', run), ms)
@@ -1844,6 +1867,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         return found ? codexAppSource.start() : codexAppSource.stop()
       })
     })
+    // There with the observed source. It reads only while a Max is attached too (orcaChatSource.ts): a Max that comes
+    // after a Pro is seen at the next read.
+    part.call('orca-chat', () => on ? orcaChatSource!.start() : orcaChatSource!.stop())
     if (!on) {
       // The next attach checks Orca's ring afresh, and a read under way lands on nothing.
       orcaRing = { again: false }

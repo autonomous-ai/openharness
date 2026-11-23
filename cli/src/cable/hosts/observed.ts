@@ -76,8 +76,8 @@ export function observedAgentId(engine: string, sessionId: string): string {
 }
 
 /** An answer as the dial's card keeps it. By code point: a cut through an emoji's surrogate pair leaves a broken
- *  character on the card. */
-function cutAnswer(text: string): string {
+ *  character on the card. Orca's chats' too (orcaChatSource.ts). */
+export function cutAnswer(text: string): string {
   const chars = Array.from(text)
   return chars.length > ANSWER_CHARS ? `${chars.slice(0, ANSWER_CHARS - 1).join('')}…` : text
 }
@@ -747,6 +747,18 @@ export class ObservedSource implements HostSource {
    *  folder for the page guard. */
   startedIn(agentId: string): string | undefined {
     return this.entries.get(agentId)?.startedIn
+  }
+
+  /** The session each Orca chat or terminal agent a hook told of runs, by the Orca session id its hints named
+   *  (ORCA_AGENT_SESSION_ID): how Orca's list of its chats (orcaChatSource.ts) gives a chat the hooked copy's id. An ended
+   *  copy's too: Orca still holds the chat under that session. */
+  orcaSessions(): Map<string, { engine: string; sessionId: string }> {
+    const sessions = new Map<string, { engine: string; sessionId: string }>()
+    for (const { agent, hints } of this.entries.values()) {
+      const orcaId = hints.ORCA_AGENT_SESSION_ID
+      if (orcaId && agent.sessionId) sessions.set(orcaId, { engine: agent.engine, sessionId: agent.sessionId })
+    }
+    return sessions
   }
 
   /** Takes the event; for a turn's start of a session it lists, answers what started it. */

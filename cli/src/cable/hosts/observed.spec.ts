@@ -4653,6 +4653,23 @@ describe('ObservedSource and a waiting prompt', () => {
   })
 })
 
+describe('ObservedSource and the Orca sessions its hooks named', () => {
+  it('maps each Orca session id a hook named to its session, keeps an ended copy, and skips a session that named none', () => {
+    const { src, ev } = setup()
+    expect(src.orcaSessions()).toEqual(new Map())
+    src.ingest(ev('session-start', { sessionId: 's1', hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1' } }))
+    src.ingest(ev('session-start', { engine: 'codex', sessionId: 't2', callerPid: 101, hostHints: { ORCA_AGENT_SESSION_ID: 'orca-2' } }))
+    src.ingest(ev('session-start', { sessionId: 's3', callerPid: 102, hostHints: { ORCA_TERMINAL_HANDLE: 'term_x' } }))
+    src.ingest(ev('session-start', { sessionId: 's4', callerPid: 103, hostHints: { ORCA_AGENT_SESSION_ID: '' } }))
+    const both = new Map([['orca-1', { engine: 'claude', sessionId: 's1' }], ['orca-2', { engine: 'codex', sessionId: 't2' }]])
+    expect(src.orcaSessions()).toEqual(both)
+    // Its end comes from the same process, with the same hints.
+    src.ingest(ev('session-end', { sessionId: 's1', hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1' } }))
+    expect(src.list().find(({ sessionId }) => sessionId === 's1')?.ended).toBe(true)
+    expect(src.orcaSessions()).toEqual(both)
+  })
+})
+
 describe('askedLine', () => {
   /** ` · answer in Orca`: 18 bytes, its dot two. */
   const WHERE = ' · answer in Orca'
