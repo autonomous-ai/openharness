@@ -7306,6 +7306,43 @@ describe('selecting a tmux client\'s tab turns the dial to tmux\'s page (docs/pl
     seen.host.appSettled!('iterm')
     expect(asked()).toEqual([])
   })
+
+  // A tmux server started in iTerm2 gives its panes iTerm2's bundle id: an agent started in one sits on iTerm2's page
+  // until its first lookup answers, and is not known to be there meanwhile.
+  it('a new agent in tmux whose lookup has not answered: iTerm2 settled with no agents of its own leaves the dial on tmux\'s page', async () => {
+    vi.useFakeTimers()
+    clock = 0
+    // The new agent (4243) in pane %4's shell, under the same server.
+    readers.processes.mockResolvedValue([...TMUX_IN_ITERM,
+      { pid: 4243, ppid: 4001, tty: 'ttys031', executable: 'claude' }, { pid: 4001, ppid: 3900, tty: 'ttys031', executable: 'zsh' }])
+    let answer = (): void => {}
+    const answered = new Promise<void>((resolve) => { answer = resolve })
+    // Pane %4's facts wait for the test: its lookup runs until then.
+    const run = async (file: string, args: string[], timeoutMs: number) => {
+      if (args[0] !== 'display-message' || !args.includes('%4')) return tmuxInItermRun(file, args, timeoutMs)
+      orcaRuns.push([file, args, timeoutMs])
+      await answered
+      return { code: 0, stdout: '4001|work|\n' }
+    }
+    const listener = fakeListener()
+    const { port } = start({ faults: ['fleet'], orca: { ...orca, platform: 'darwin', run }, listen: listener.listen, now: () => clock })
+    const inIterm = { TERM_PROGRAM: 'tmux', __CFBundleIdentifier: 'com.googlecode.iterm2' }
+    port.observed(hooked('sess-1', 4242, { TMUX_PANE: '%3', ...inIterm }))
+    seen.host.watching!(true)
+    port.swarms(null)
+    await vi.waitFor(() => expect(logs).toContain('[device] tmux client · found'))
+    expect((await read()).apps?.shown).toBe('tmux')
+    expect(listener.front('iterm')).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    port.observed(hooked('sess-2', 4243, { TMUX_PANE: '%4', ...inIterm }))
+    expect((await read()).apps?.shown).toBe('tmux')
+    answer()
+    await vi.waitFor(() => expect(logs.filter((line) => line === '[device] tmux client · found')).toHaveLength(2))
+    const list = await read()
+    expect(list.apps?.shown).toBe('tmux')
+    expect(list.agents.map(({ id }) => id).sort()).toEqual([ID, observedAgentId('claude', 'sess-2')].sort())
+    expect(switches()).toEqual([])
+  })
 })
 
 describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.md)', () => {
