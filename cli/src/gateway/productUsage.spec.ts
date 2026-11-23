@@ -537,6 +537,18 @@ it('drops a corrupt oversized pending report without sending an oversized reques
 const CLI = { surface: 'cli', release: '0.4.9', platform: 'macos', channel: 'production' } as const
 const ID = 'fixture-creation-one'
 const flush = async () => { for (let i = 0; i < 4; i++) await usage.sync() }
+/** The backend's answer, as it takes a signed-in report only for today and the two days before (backend
+ *  lib/productUsage.ts validDay): a report of an older day goes to [expired]. */
+const backendDays = (expired: unknown[]): ProductUsageDeps['request'] => async (method, _path, body) => {
+  if (method === 'GET') return { status: 200, body: { data: { enabled, revision } } }
+  const DAY = 86_400_000
+  if (Date.parse(`${(body as { day: string }).day}T00:00:00Z`) <= Math.floor(now / DAY) * DAY - 3 * DAY) {
+    expired.push(structuredClone(body))
+    return { status: 200, body: { data: { accepted: false, reason: 'EXPIRED' } } }
+  }
+  sent.push(structuredClone(body))
+  return { status: 200, body: { data: { accepted: true } } }
+}
 
 it('names the code of an `other` launch failure, so the codes add up to launch_failed_other', async () => {
   await usage.sync()
@@ -1272,6 +1284,25 @@ describe('the dial\'s day', () => {
     usage.counter('search_requests'); await flush()
     expect(accepted.reduce((sum, counters) => sum + (counters.search_requests ?? 0), 0)).toBe(2)
     expect(accepted.some(counters => counters.health_cli_report_rejected || counters.health_cli_report_failure_invalid)).toBe(false)
+  })
+
+  it('a return goes on its own day, which the backend still takes', async () => {
+    const expired: unknown[] = []
+    request.mockImplementation(backendDays(expired))
+    start(); await usage.sync()
+    const days: Record<string, Record<string, number>> = {}
+    for (const n of [0, 1, 7, 28]) {
+      now = Date.parse(`${day(n)}T10:00:00Z`)
+      days[day(n)] = used; devices(days); await flush()
+      // The next day closes it.
+      now += DAY; await flush()
+    }
+    expect(expired).toEqual([])
+    expect(Object.fromEntries(Object.entries(dialSent()).filter(([name]) => name.includes('_returning_')))).toEqual({
+      [`${day(1)} dial_d1_returning_installations`]: 1, [`${day(1)} dial_d1_returning_outside_app_installations`]: 1,
+      [`${day(7)} dial_d7_returning_installations`]: 1, [`${day(7)} dial_d7_returning_outside_app_installations`]: 1,
+      [`${day(28)} dial_d28_returning_installations`]: 1, [`${day(28)} dial_d28_returning_outside_app_installations`]: 1,
+    })
   })
 
   it('keeps Desktop\'s days 35 days for the outside flag', async () => {

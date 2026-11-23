@@ -171,15 +171,15 @@ describe('the gateway\'s merge of the dial\'s day', () => {
       .toEqual({ [`${day} dial_connected_outside_app_installation_days`]: 1 })
   })
 
-  it('returns on D−1, D−7, D−28, outside apart', () => {
+  it('returns from D−1, D−7, D−28 go on D, outside by the earlier day', () => {
     const day = shift(TODAY, -1), used = { dial_used_installation_days: 1 }
     const file = fileOf({ [shift(day, -28)]: used, [shift(day, -7)]: used, [shift(day, -1)]: used, [day]: used })
     // Desktop opened on D−7: that day and the ones after are in the app, D−28 is outside it.
     expect(totals(merge(freshDialRecord(false), file, TODAY, [shift(day, -7)]).adds, /returning/)).toEqual({
-      [`${shift(day, -1)} dial_d1_returning_installations`]: 1,
-      [`${shift(day, -7)} dial_d7_returning_installations`]: 1,
-      [`${shift(day, -28)} dial_d28_returning_installations`]: 1,
-      [`${shift(day, -28)} dial_d28_returning_outside_app_installations`]: 1,
+      [`${day} dial_d1_returning_installations`]: 1,
+      [`${day} dial_d7_returning_installations`]: 1,
+      [`${day} dial_d28_returning_installations`]: 1,
+      [`${day} dial_d28_returning_outside_app_installations`]: 1,
     })
   })
 
