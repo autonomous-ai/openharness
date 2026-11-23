@@ -19,7 +19,7 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, relative } from 'node:path'
 import { env } from '../config/env.js'
 import { cursorDataDir } from '../engines/cursor/contract.js'
 import { DEVICES_FALLBACKS, DEVICES_REQUESTS, type CoreApi, type CorePorts, type DeviceHookPort, type DevicesPort, type RouteAnswer, type SendResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
@@ -953,12 +953,17 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }) : null
   /** The ChatGPT app's own Codex home, in the person's home: the app's, not the `CODEX_HOME` Harness runs Codex under. */
   const codexAppHome = join(homedir(), '.codex')
+  /** Whether Harness's `CODEX_HOME` is that folder. `codex queue` runs under `CODEX_HOME` (cable/hosts/codexQueue.ts):
+   *  under another home every queue to an app thread answers thread not found, so its row offers no voice it cannot
+   *  give. The path's text, as a live thread's rollout is checked (observed.ts queueable): `relative` resolves both, so
+   *  a trailing separator or a `..` is the same folder, and on Windows it ignores case. */
+  const codexHomeIsApps = relative(env.CODEX_HOME, codexAppHome) === ''
   /** The ChatGPT app's Codex threads, with or without a process, listed from its metadata when a file of it changes, in
    *  its sidebar's order (docs/plans/2026-11-19-dial-chatgpt-ring-and-follow-design.md). It runs only while a dial is
    *  attached, behind the observed agents' switch, on macOS, Windows and Linux, and only with the ChatGPT app installed
    *  (dialAttached). A thread with a process is the observed source's copy, which holds its row while it runs
    *  (registry.ts). */
-  const codexAppSource = observed ? new CodexAppSource({
+  const codexAppSource = appWake ? new CodexAppSource({
     threads: deps.codexAppThreads ?? new CodexAppThreads(codexAppHome),
     watch: (changed) => (deps.watchStore ?? watchNearest)([codexAppHome], changed),
     after: timerIn('codex-app'),
@@ -967,6 +972,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     canShow: (threadId) => codexApp.canShow(codexPane(threadId)),
     // The noted copy keeps the show the ChatGPT app's adapter has.
     show: (threadId, agentId) => codexNoted.show!(codexPane(threadId), agentId),
+    canLink: (threadId) => codexApp.canLink(codexPane(threadId)),
+    // The thread is the app's: its own CLI, else the `codex` a launch would run.
+    canQueue: () => codexQueue.can(true),
+    inAppHome: codexHomeIsApps,
+    wake: appWake,
     rank: (rank) => cableHost.setRank('codex', rank),
     monotonic,
     log,
