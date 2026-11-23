@@ -198,14 +198,15 @@ function apartPart(apart: SessionKey[], page: string, world: World, w: Window | 
 
 /**
  * The title a row should carry at `to`: the latest `codex.write` that renamed it before then, else the fixture's. The
- * hooks of Codex and Cursor's agents in an editor carry no title, so their rows are named by the folder the hook sends:
- * a Cursor hook's first root, as notify.mjs sends it, else its cwd.
+ * hooks of Codex and Cursor's agents in an editor or iTerm2 carry no title, so their rows are named by the folder the
+ * hook sends: a Cursor hook's first root, as notify.mjs sends it, else its cwd.
  */
 function titleOf(world: World, key: SessionKey, to: number): string {
   const session = world.session(key)
   if (session.app === 'orca') return orcaTitle(world, session, to)
   const folder = session.app === 'cursor' ? session.folders?.[0] ?? session.cwd : session.cwd
-  let title = placeOf(session) !== undefined && engineOf(session) !== 'claude' ? posix.basename(folder) : session.title
+  const hooked = placeOf(session) !== undefined || itermPlaceOf(session) !== undefined
+  let title = hooked && engineOf(session) !== 'claude' ? posix.basename(folder) : session.title
   for (const step of world.stepsBefore(to)) {
     if (step.kind === 'codex.write' && step.names && Object.hasOwn(step.names, key)) title = step.names[key]!
   }
