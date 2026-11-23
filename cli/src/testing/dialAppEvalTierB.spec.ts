@@ -30,7 +30,8 @@ const driver = await import('../../e2e/harness/appEvalDriver.js' as string) as {
   faceChange(last: Face | undefined, next: Omit<Face, 'at'>): boolean
   orcaCliInside(env: NodeJS.ProcessEnv, root: string, platform: NodeJS.Platform): string
   selectOf(line: string): { app: string; tty: string; raise?: boolean } | undefined
-  muxCommands(runs: readonly LoggedRun[], keyOf: (pane: string) => string | undefined): import('./dialAppEval/types.js').Seen['commands']
+  muxCommands(runs: readonly LoggedRun[], keyOf: (pane: string, at: number) => string | undefined,
+    labelOf: (tty: string) => string | undefined): import('./dialAppEval/types.js').Seen['commands']
   ownRig(rig: { polled: Map<string, number>; accounts: string[]; iterm?: object }, scenario: Scenario): boolean
 }
 type Face = import('./dialAppEval/types.js').Seen['faces'][number]
@@ -275,10 +276,21 @@ describe("tier B's commands", () => {
       { argv: ['tmux', 'select-window', '-t', '%3', ';', 'select-pane', '-t', '%3'], ok: true, at: 1_000 },
       { argv: ['tmux', 'display-message', '-p', '-t', '%9', '#{pane_pid}|#{session_name}'], ok: false, at: 1_200 },
       { argv: ['herdr', 'agent', 'focus', 'w1:p2'], ok: true, at: 1_500 },
-    ], keyOf)).toEqual([
+    ], keyOf, () => undefined)).toEqual([
       { at: 1_000, argv: ['tmux', 'select-window', '-t', 'pane:b', ';', 'select-pane', '-t', 'pane:b'], ok: true },
       { at: 1_200, argv: ['tmux', 'display-message', '-p', '-t', 'pane:other', '#{pane_pid}|#{session_name}'], ok: false },
       { at: 1_500, argv: ['herdr', 'agent', 'focus', 'pane:a'], ok: true },
+    ])
+  })
+
+  it("a tmux run names a client's tty by its tab's label, tab:other for one no tab holds: no tty reaches a result", () => {
+    const labelOf = (tty: string): string | undefined => new Map([['/dev/ttys004', 'w1.1.0']]).get(tty)
+    expect(driver.muxCommands([
+      { argv: ['tmux', 'switch-client', '-c', '/dev/ttys004', '-t', '%3'], ok: true, at: 1_000 },
+      { argv: ['tmux', 'switch-client', '-c', '/dev/ttys009', '-t', '%3'], ok: true, at: 1_100 },
+    ], () => 'b', labelOf).map((c) => c.argv)).toEqual([
+      ['tmux', 'switch-client', '-c', 'tab:w1.1.0', '-t', 'pane:b'],
+      ['tmux', 'switch-client', '-c', 'tab:other', '-t', 'pane:b'],
     ])
   })
 })
