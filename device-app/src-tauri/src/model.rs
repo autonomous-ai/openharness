@@ -371,7 +371,7 @@ mod tests {
     fn the_update_rows() {
         let rows = [
             // The app's own update; the firmware's reads "Updating device…".
-            (AppUpdate::Installing, text("Updating Harness…")),
+            (AppUpdate::Installing, text("Updating Harness Device…")),
             (AppUpdate::Blocked("0.1.3".into()), act(MenuAction::Update, "Update 0.1.3…")),
         ];
         for (app_update, row) in rows {
