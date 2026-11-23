@@ -17,7 +17,7 @@ vi.mock('../config/env.js', async (original) => ({ env: {
 
 import { CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DaemonCableHost, type CableHostWiring } from './cableHost.js'
-import { CableSession, type CableAgent, type CableHost, type CablePort } from './cableSession.js'
+import { CableSession, type CableAgent, type CableHost, type CablePort, type WindowRoute } from './cableSession.js'
 import { DialLog } from './dialLog.js'
 import { DIAL_VOICE_SURFACE, DIAL_VOICE_SURFACE_HEADER } from '../lib/dialUsageContract.js'
 
@@ -238,6 +238,19 @@ describe('each voice turn reports one end', () => {
   it('each voice turn reports one end: sent by the window', async () => {
     const { voiceEnded, speak, answered } = await talk({ routeInWindow: async () => ({ t: 'sent', agentId: 'a2' }) })
     speak(); await answered()
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'sent', agentId: 'a2' }]])
+  })
+
+  // The window delivers what it picks: an abort while it picks does not take the words back.
+  it('each voice turn reports one end: sent by the window, though aborted while it picked', async () => {
+    let picked!: (route: WindowRoute) => void
+    const routeInWindow = vi.fn(() => new Promise<WindowRoute>((resolve) => { picked = resolve }))
+    const { port, voiceEnded, speak } = await talk({ routeInWindow })
+    speak()
+    await vi.waitFor(() => expect(routeInWindow).toHaveBeenCalled())
+    port.say({ t: 'voice.abort', uploadId: 'u1' })
+    picked({ t: 'sent', agentId: 'a2' })
+    await vi.waitFor(() => expect(voiceEnded).toHaveBeenCalled())
     expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'sent', agentId: 'a2' }]])
   })
 
