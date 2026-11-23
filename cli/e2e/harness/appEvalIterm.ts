@@ -28,7 +28,7 @@ import { appendFileSync } from 'node:fs'
 import { basename } from 'node:path'
 import { promisify } from 'node:util'
 import { APP_BUNDLES } from '../../src/cable/hosts/hostDetect.js'
-import { sessionTab, tabLabel, type TabRef } from '../../src/testing/dialAppEval/itermRecords.js'
+import { tabLabel, type TabRef } from '../../src/testing/dialAppEval/itermRecords.js'
 import { NET_GUARD_FILE_ENV } from '../../src/testing/dialAppEval/netGuard.js'
 import { engineOf, itermPlaceOf, type SessionDef, type SessionKey } from '../../src/testing/dialAppEval/types.js'
 import { appOf, claudeSteps, drop, start as startClaude, type ClaudeHost, type ClaudeTerminal } from './appEvalClaude.js'
@@ -36,7 +36,7 @@ import { guardEnv, guardLoaded, speak, type AppSteps, type TierBWorld } from './
 import { CodexOutside } from './codexOutside.js'
 import { until, type IsolatedDaemon } from './daemon.js'
 import { PrivateHerdr, type HerdrTab } from './herdrServer.js'
-import { closeTab, killTab, openTab, Outside, relaunchIterm, typeInto, type Tab } from './outsideAgent.js'
+import { closeTab, gone, killTab, openTab, Outside, relaunchIterm, typeInto, type Tab } from './outsideAgent.js'
 import { InOwnTmux } from './ownTmux.js'
 
 const execFileAsync = promisify(execFile)
@@ -271,10 +271,7 @@ export function leftOpen({ window, tab, label, tty, app, processes }: Client): O
 async function detach(world: TierBWorld, state: State, client: Client): Promise<void> {
   leave(state, client)
   await world.d.tmux.run('detach-client', '-t', client.tty)
-  await until(`the client in ${client.label} ended`, () => {
-    try { process.kill(client.pid, 0) } catch { return true }
-    return false
-  }, 10_000, 50)
+  await until(`the client in ${client.label} ended`, () => gone(client.pid), 10_000, 50)
   state.empty.set(client.label, leftOpen(client))
 }
 

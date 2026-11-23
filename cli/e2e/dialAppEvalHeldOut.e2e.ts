@@ -32,15 +32,11 @@ import { cursorSteps, vscodeSteps } from './harness/appEvalEditor.js'
 import { itermSteps } from './harness/appEvalIterm.js'
 import { orcaSteps } from './harness/appEvalOrca.js'
 import { herdrBinary, othersNow } from './harness/herdrServer.js'
+import { gone, itermServerPath } from './harness/outsideAgent.js'
 
 const WIN32 = process.platform === 'win32'
 const HOST = process.platform as Platform
 const SCENARIOS = WIN32 ? [] : scenariosFor('b', HOST).filter((s) => s.heldOut)
-
-const gone = (pid: number): boolean => {
-  try { process.kill(pid, 0) } catch { return true }
-  return false
-}
 
 /** What the devices ask tmux of a pane (cable/hosts/tmux.ts TMUX_PANE_FACTS): its process, its session and both owner
  *  tags in one format, which no hook asks (hook/notify.mjs readPaneDescription asks one tag). */
@@ -85,7 +81,7 @@ describe.skipIf(WIN32)('the dial eval, tier B: the held-out set', () => {
     }
     expect(() => orcaCliInside(d.env, d.root, process.platform)).not.toThrow()
     if (scenario.app === 'iterm') {
-      for (const path of [join(d.env.HOME!, 'Library', 'Application Support', 'iTerm2', 'iTermServer-3.6.6'), d.env.TMUX_TMPDIR,
+      for (const path of [itermServerPath(d), d.env.TMUX_TMPDIR,
         join(d.env.HOME!, '.config', 'herdr')]) {
         expect(inside(d.root, path), path).toBe(true)
       }

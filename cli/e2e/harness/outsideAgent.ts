@@ -205,7 +205,7 @@ export function typeInto(tab: ChildProcess, text: string): void {
 }
 
 /** Whether no process has [pid]. */
-function gone(pid: number): boolean {
+export function gone(pid: number): boolean {
   try { process.kill(pid, 0) } catch { return true }
   return false
 }
@@ -338,10 +338,7 @@ async function tabUnderItermServer(d: IsolatedDaemon, argv: readonly string[], e
       try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ }
       // launchd's child, not the test's: killed by its pid, and gone once no signal reaches it and the helper ended.
       try { process.kill(server, 'SIGKILL') } catch { /* already gone */ }
-      await until("iTerm2's server and its tab gone", () => {
-        try { process.kill(server, 0) } catch { return closed }
-        return false
-      }, 10_000, 50)
+      await until("iTerm2's server and its tab gone", () => gone(server) && closed, 10_000, 50)
     },
   }
 }

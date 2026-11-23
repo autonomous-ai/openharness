@@ -6,7 +6,10 @@
  * its time is its mtime.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+
+/** Where a recording wrapper in a daemon's [bin] notes [program]'s runs: beside that bin. */
+export const runsFolder = (bin: string, program: 'tmux' | 'herdr'): string => join(dirname(bin), `${program}-runs`)
 
 /** One run noted: the name it was run by, then its arguments; whether it exited 0; and its time, ms since the epoch. */
 export interface LoggedRun { argv: string[]; ok: boolean; at: number }

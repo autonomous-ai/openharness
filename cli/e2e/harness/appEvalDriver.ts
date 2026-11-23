@@ -48,8 +48,8 @@ import { Desk, devicesPids } from './desk.js'
 import { FakeBackend, type FakeMachine } from './fakeBackend.js'
 import type { FakeDial } from './fakeDial.js'
 import { FakeOrca } from './fakeOrca.js'
-import { herdrBinary, herdrRuns, ownHerdrsOnly, PrivateHerdr } from './herdrServer.js'
-import { recordingWrapper, runLog, type LoggedRun } from './runLog.js'
+import { herdrBinary, ownHerdrsOnly, PrivateHerdr } from './herdrServer.js'
+import { recordingWrapper, runLog, runsFolder, type LoggedRun } from './runLog.js'
 import { writeSchemeApps } from './schemeApps.js'
 
 /** What the round dial's firmware says in its greeting: it holds one app's ring (docs/specs/2026-11-14-dial-app-filter.md). */
@@ -466,9 +466,9 @@ async function openRig(guard: string, accounts: SessionKey[], iterm: boolean): P
     if (iterm) {
       const tmux = resolveBinaryOnPath('tmux', d.env)
       if (!tmux) throw new Error('the daemon finds no tmux')
-      const tmuxRuns = join(dirname(d.binDir), 'tmux-runs')
+      const tmuxRuns = runsFolder(d.binDir, 'tmux')
       writeExecutable(join(d.binDir, 'tmux'), recordingWrapper(tmux, tmuxRuns, TMUX_RECORDED))
-      kit = { tmuxRuns, herdrRuns: herdrRuns(d), herdrs: ownHerdrsOnly(d) }
+      kit = { tmuxRuns, herdrRuns: runsFolder(d.binDir, 'herdr'), herdrs: ownHerdrsOnly(d) }
       if (herdrBinary) await PrivateHerdr.install(d)
     }
     const home = d.env.HOME

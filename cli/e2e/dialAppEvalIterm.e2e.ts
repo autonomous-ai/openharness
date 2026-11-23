@@ -10,13 +10,13 @@
  * macOS only, as iTerm2. Never the person's iTerm2, tmux server, herdr, daemon or dial, and no `osascript`: the fake
  * iTerm2's bundle and its server are in the daemon's throwaway home, herdr's config is in it too, tmux's socket is in its
  * root, and the daemon's table holds no herdr outside this worker's tree or this daemon's own fake iTerm2 server
- * (ownHerdrsOnly). What the harness reads of processes: of its own, by pid, their parent, path (`comm`) and tty, the
- * herdr client's child named herdr (`pgrep -P -x`) and that server's sockets (`lsof -p`); of the whole table, each one's
- * pid, parent and path, to tell this worker's herdrs from the rest (othersNow, ownHerdrsOnly), and pid and parent alone,
- * to find the devices again after their restart; and, as at every tier B scenario's cost and every daemon's close, each
- * one's command line and working folder, matched against the daemon's root, only those under it kept (appEvalCost.ts,
- * testing/rootProcesses.ts). Never another process's environment. The network guard runs in this process and in every
- * process of each daemon.
+ * (ownHerdrsOnly). What the harness reads of processes: of its own, by pid, their parent, start time, path (`comm`) and
+ * tty, the herdr client's child named herdr (`pgrep -P -x`) and that server's sockets (`lsof -p`); of the whole table,
+ * each one's pid, parent and path, to tell this worker's herdrs from the rest (othersNow, ownHerdrsOnly), and pid and
+ * parent alone, to find the devices again after their restart; and, as at every tier B scenario's cost and every
+ * daemon's close, each one's command line and working folder, matched against the daemon's root, only those under it
+ * kept (appEvalCost.ts, testing/rootProcesses.ts). Never another process's environment. The network guard runs in this
+ * process and in every process of each daemon.
  */
 import { execFile } from 'node:child_process'
 import { readFileSync } from 'node:fs'
@@ -32,7 +32,7 @@ import { inside, TierBDriver } from './harness/appEvalDriver.js'
 import { itermSteps } from './harness/appEvalIterm.js'
 import { IsolatedDaemon } from './harness/daemon.js'
 import { herdrBinary, othersNow, ownHerdrsOnly, PrivateHerdr } from './harness/herdrServer.js'
-import { closeTab, openTab, relaunchIterm, tabUnder } from './harness/outsideAgent.js'
+import { closeTab, gone, itermServerPath, openTab, relaunchIterm, tabUnder } from './harness/outsideAgent.js'
 
 const execFileAsync = promisify(execFile)
 const MAC = process.platform === 'darwin'
@@ -67,14 +67,10 @@ const parents = async (pid: number): Promise<Array<{ pid: number; ppid: number; 
   return chain
 }
 
-const gone = (pid: number): boolean => {
-  try { process.kill(pid, 0) } catch { return true }
-  return false
-}
 /** The fake iTerm2's executable in its bundle, and its server, both in the daemon's home. */
 const iterm = (d: IsolatedDaemon) => ({
   app: join(d.env.HOME!, 'Applications', 'iTerm.app', 'Contents', 'MacOS', 'iTerm2'),
-  server: join(d.env.HOME!, 'Library', 'Application Support', 'iTerm2', 'iTermServer-3.6.6'),
+  server: itermServerPath(d),
 })
 
 describe.skipIf(!MAC)('the dial eval, tier B: the fake iTerm2 and herdr started from its tab', () => {

@@ -1,7 +1,7 @@
 /**
  * A herdr server of the test's own (docs/specs/2026-11-16-device-herdr.md), never the developer's: its config folder is
  * under the daemon's throwaway home, its update and manifest checks are off, so it calls no other computer, and the
- * daemon's own `herdr` is a wrapper pinned to it that notes the devices' `herdr agent` runs (herdrRuns). The daemon under
+ * daemon's own `herdr` is a wrapper pinned to it that notes the devices' `herdr agent` runs (runLog.ts). The daemon under
  * test inherits no `XDG_*` (testing/daemonEnvironment.ts), so it finds this server's socket under its home, as the herdr
  * client works it out.
  *
@@ -26,9 +26,9 @@ import { writeExecutable } from '../../src/testing/executableFixture.js'
 import { RECORDED_HERDR } from '../../src/testing/recordedHerdr.js'
 import { type IsolatedDaemon, until } from './daemon.js'
 import { dialHost } from './dialHosts.js'
-import { itermServerPath, tabUnder, type FakeApp } from './outsideAgent.js'
+import { gone, itermServerPath, tabUnder, type FakeApp } from './outsideAgent.js'
 import { forgetGroup, leaderGone, watchGroup } from './reaper.js'
-import { recordingWrapper } from './runLog.js'
+import { recordingWrapper, runsFolder } from './runLog.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -45,9 +45,6 @@ const SOCKET_ROOM = 103
 
 /** The server's socket, under its [config] folder. */
 const socketIn = (config: string): string => join(config, 'herdr', 'herdr.sock')
-
-/** Where the daemon's `herdr` notes the devices' `herdr agent` runs (runLog.ts), beside its own bin. */
-export const herdrRuns = (d: IsolatedDaemon): string => join(dirname(dirname(d.env.CLAUDE_PATH!)), 'herdr-runs')
 
 const FAKE_AGENT = `#include <stdio.h>
 #include <string.h>
@@ -87,11 +84,6 @@ const clientArgv = (): string[] => ['/bin/sh', '-c', 'stty rows 40 columns 120 &
 /** The client's environment: the daemon's, [env] beside it, pinned to the server under [config]. */
 const clientEnv = (d: IsolatedDaemon, config: string, env: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv =>
   ({ ...d.env, ...env, XDG_CONFIG_HOME: config, TERM: 'xterm-256color' })
-
-const gone = (pid: number): boolean => {
-  try { process.kill(pid, 0) } catch { return true }
-  return false
-}
 
 /** What tells [pid]'s process from one given its pid later: when it started and the path it was started from, never its
  *  argv; undefined once no process has it. */
@@ -179,11 +171,11 @@ export class PrivateHerdr {
     await writeFile(join(config, 'herdr', 'config.toml'), '[update]\nversion_check = false\nmanifest_check = false\n')
     // The daemon's bin is first on its PATH: its `herdr agent focus` reaches this server alone, whatever herdr reads
     // its home from, by a launcher pinned to it, and the wrapper in front of that notes the run (runLog.ts).
-    const runs = herdrRuns(d)
+    const runs = runsFolder(d.binDir, 'herdr')
     const pinned = join(runs, 'herdr')
     await mkdir(runs, { recursive: true })
     writeExecutable(pinned, `#!/bin/sh\nXDG_CONFIG_HOME='${config}' exec '${herdrBinary}' "$@"\n`)
-    writeExecutable(join(dirname(d.env.CLAUDE_PATH!), 'herdr'), recordingWrapper(pinned, runs, ['agent']))
+    writeExecutable(join(d.binDir, 'herdr'), recordingWrapper(pinned, runs, ['agent']))
     return config
   }
 
