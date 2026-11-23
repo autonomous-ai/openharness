@@ -270,14 +270,14 @@ declared in `BP` (not in `types/productUsage.ts`, whose bytes the CLI's core fil
 **Interfaces (produces):**
 - `VoiceQuotaReservationResult.usedMsBefore: number`: the bucket's exact `usedMs` before this reservation (the same as
   after for a `pending` or `committed` one).
-- `BV`: `export const VOICE_USAGE_METRICS = ['voice_dial_clips', 'voice_dial_audio_ms', 'voice_dial_transcribe_ms',
-  'voice_rest_clips', 'voice_rest_audio_ms', 'voice_rest_transcribe_ms', 'voice_account_days',
+- `BV`: `export const VOICE_USAGE_METRICS = ['voice_dial_clips', 'voice_dial_audio_s', 'voice_dial_transcribe_ms',
+  'voice_rest_clips', 'voice_rest_audio_s', 'voice_rest_transcribe_ms', 'voice_account_days',
   'voice_account_days_over_1m', 'voice_account_days_over_5m', 'voice_account_days_over_20m'] as const`,
   `type VoiceUsageMetric`, `type VoiceSurface = 'dial' | 'rest'`;
   `voiceSurface(header: string | string[] | undefined): VoiceSurface`: `'dial'` only for the exact string
   `DIAL_VOICE_SURFACE`, else `'rest'` (absent, repeated, any other value; the value is never logged or stored);
   `voiceIncrements(surface: VoiceSurface, beforeMs: number, clipMs: number, transcribeMs: number):
-  Array<[VoiceUsageMetric, number]>`: one `voice_<surface>_clips`, its `_audio_ms`, its `_transcribe_ms` (integers,
+  Array<[VoiceUsageMetric, number]>`: one `voice_<surface>_clips`, its `_audio_s` (whole seconds, rounded up per clip as the quota charges), its `_transcribe_ms` (integers,
   at least 0), `voice_account_days` when `beforeMs === 0`, and each `_over_<t>` whose edge (60 000, 300 000,
   1 200 000 ms) lies in `(beforeMs, beforeMs + clipMs]`. The account-day buckets stay over the account's whole voice,
   dial and rest together: `beforeMs` is the account's shared daily quota bucket, and bucketing the dial's own seconds
