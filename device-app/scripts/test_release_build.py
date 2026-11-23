@@ -458,6 +458,28 @@ class ReleaseCheckTests(Fakes):
                 self.assertEqual(result.stdout.splitlines()[-1], f"FAILED: {failed}")
                 self.assertIn("release-check: System.dll is not Authenticode-signed", result.stderr.splitlines())
 
+    def test_windows_signed_checks_every_dll_7zip_wrote_whatever_the_case_of_its_name(self):
+        # 7-Zip's *.dll matches a name in any case on Windows, and bash's *.dll glob only a lower-case one: an unsigned
+        # Banner.DLL beside signed plugins must not pass.
+        name = "Harness-Device-windows-x64-setup.exe"
+        dlls, uninstaller_dlls = (dict.fromkeys(names, True) | {"Banner.DLL": False}
+                                  for names in (PLUGIN_DLLS, UNINSTALLER_DLLS))
+        for packed, failed in (({"dlls": dlls}, f"every DLL in {name} is Authenticode-signed"),
+                               ({"uninstaller": {"signed": True, "dlls": uninstaller_dlls}},
+                                f"every DLL in the uninstall.exe in {name} is Authenticode-signed")):
+            with self.subTest(failed=failed):
+                shutil.rmtree(self.out, ignore_errors=True)
+                self.signed_installer("x64", **packed)
+                result = self.check(WINDOWS, "--signed")
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.stdout.splitlines()[-1], f"FAILED: {failed}")
+                self.assertIn("release-check: Banner.DLL is not Authenticode-signed", result.stderr.splitlines())
+        # A folder that holds only an upper-case one still carries a plugin DLL.
+        shutil.rmtree(self.out, ignore_errors=True)
+        self.signed_installer("x64", dlls={"System.DLL": True})
+        result = self.check(WINDOWS, "--signed")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_windows_signed_fails_when_no_dll_is_found(self):
         # An extraction that finds nothing, as when 7-Zip names the files otherwise, must not pass.
         name = "Harness-Device-windows-x64-setup.exe"
