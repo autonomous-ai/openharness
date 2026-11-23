@@ -31,6 +31,7 @@ import { codexAppFixture } from '../../codexAppFixture.js'
 import { fakeCore } from '../../fakeCore.js'
 import { RECORDED_LINUX_APPS } from '../../recordedLinuxApps.js'
 import { ORCA_PROGRAMS, programOf } from '../argv.js'
+import { namedPanes } from '../itermRecords.js'
 import { agentIdOf, type App, type Delivery, type LinkedApp, type Platform, type Scenario, type Seen, type SessionDef, type SessionKey,
   type StepKind, type StepOf } from '../types.js'
 import { quiet } from './clock.js'
@@ -55,6 +56,9 @@ export interface TierAWorld {
   readonly streams: NonNullable<Seen['streams']>
   /** Every line the devices log, at its virtual time. */
   readonly logs: NonNullable<Seen['logs']>
+  /** The session in each tmux and herdr pane the models opened, by the pane's id: a command naming one is recorded with
+   *  it as `pane:<key>` (itermRecords.ts namedPanes), so no pane id reaches a result. */
+  readonly panes: Map<string, SessionKey>
   /** What the devices' transcriber answers. */
   speech: string | null
   /** The app in front, as the last front step told the watch. */
@@ -118,6 +122,8 @@ const CURSOR_BIN = '/opt/eval/bin/cursor'
  *  lookup, the Windows helper, the Linux raise and Orca's CLI (steps/orca.ts). Cursor's CLI is answered only as Linux's
  *  folder row runs it, on one folder (cable/hosts/cursorFolder.ts). A command of any other is one tier A does not model. */
 const ANSWERED: ReadonlySet<string> = new Set(['open', 'xdg-open', 'xdg-mime', 'harness-pty', 'raise', ...ORCA_PROGRAMS])
+/** The programs whose commands name panes by id. */
+const MULTIPLEXERS: ReadonlySet<string> = new Set(['tmux', 'herdr'])
 
 /** Harness's own engine homes are the suite's throwaway ones (vitest.setup.ts): never a folder outside this run's. */
 function emptied(folder: string): string {
@@ -206,6 +212,7 @@ export class World implements TierAWorld {
   readonly deliveries: Seen['deliveries'] = []
   readonly streams: NonNullable<Seen['streams']> = []
   readonly logs: NonNullable<Seen['logs']> = []
+  readonly panes = new Map<string, SessionKey>()
   readonly gaps: string[] = []
   /** The virtual epoch ms of time 0: the driver sets it once the dial is welcomed and its page picked. */
   origin = Date.now()
@@ -228,6 +235,8 @@ export class World implements TierAWorld {
     vi.stubEnv('LOCALAPPDATA', platform === 'win32' ? join(root, LOCAL_APP_DATA) : '')
     // The welcome's voice language follows LANG (cableHost.ts voiceLang): the same on every host.
     vi.stubEnv('LANG', 'en_US.UTF-8')
+    // iTerm2 copies its server under the home, the world's, where the walk of a tab's parents looks for it.
+    if (scenario.app === 'iterm') machine.itermHome = root
     // The Orca app the devices find on macOS is the eval's made-up one, whatever this machine has.
     vi.stubEnv('HARNESS_ORCA_APP_BIN', orcaAppBin())
     // The fixture is at the platform's own first root, as this host names it (a Windows one's folders are this host's of
@@ -354,7 +363,8 @@ export class World implements TierAWorld {
 
   /**
    * A command the devices ran: answered by the world's rules, and recorded at its virtual time with whether it ran to a
-   * good end. One of a program the world does not answer (`modelled`) is a gap: its answer would be made up.
+   * good end, a multiplexer's with its panes named by session. One of a program the world does not answer (`modelled`) is
+   * a gap: its answer would be made up.
    */
   private ran(argv: string[], modelled = answered(argv)): Required<Answer> {
     if (!modelled) this.gap(`a command tier A does not answer: ${programOf(argv)}`)
@@ -366,7 +376,8 @@ export class World implements TierAWorld {
         break
       }
     }
-    this.commands.push({ at: Date.now(), argv, ok: answer.code === 0 })
+    const recorded = MULTIPLEXERS.has(programOf(argv)) ? namedPanes(argv, (pane) => this.panes.get(pane)) : argv
+    this.commands.push({ at: Date.now(), argv: recorded, ok: answer.code === 0 })
     return { stdout: '', ...answer }
   }
 
@@ -495,7 +506,11 @@ export class World implements TierAWorld {
         this.listener = handlers
         return { close: async () => {} }
       },
-      tty: async (pid) => machine.processes.get(pid)?.tty,
+      // As `ps -o tty=` reads it for a tab (cable/hosts/tabs.ts readTty): the model's bare name under /dev/.
+      tty: async (pid) => {
+        const tty = machine.processes.get(pid)?.tty
+        return tty === undefined ? undefined : `/dev/${tty}`
+      },
       claude: async () => null,
       orcaHomes,
       vscodeExtension: noEditor('vscode', platform, root),

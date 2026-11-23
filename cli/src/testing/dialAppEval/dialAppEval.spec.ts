@@ -63,17 +63,31 @@ vi.mock('../../lib/sessionSearch/external.js', async (real) => ({
   },
 }))
 // Which app each process runs in, the process table and terminals a session's place is read from, and the apps' bundle
-// ids: the model's, never this machine's `ps` or `plutil`.
-vi.mock('../../cable/hosts/scannedApp.js', async (real) => ({
-  ...await real<typeof import('../../cable/hosts/scannedApp.js')>(),
-  learnApps: async (pids: readonly number[]) => new Map(pids.flatMap((pid) => {
-    const app = machine.appOf(pid)
-    return app ? [[pid, app] as const] : []
-  })),
-  readProcessNames: async () => [...machine.processes.values()].map(({ pid, ppid, executable, tty }) => ({ pid, ppid, executable, ...(tty ? { tty } : {}) })),
-  readTtyName: async (pid: number) => machine.processes.get(pid)?.tty,
-  readBundleId: async (bundle: string) => machine.bundleIds.get(bundle),
-}))
+// ids: the model's, never this machine's `ps` or `plutil`. A process the model names no app for is walked on an iTerm2
+// scenario's machine by the real walk, over the model's table and bundle ids, from iTerm2's home: iTerm2's own processes
+// carry no app id, so its server rule is what names them (docs/plans/2026-11-22-dial-eval-iterm2-plan.md, Decision 4).
+vi.mock('../../cable/hosts/scannedApp.js', async (real) => {
+  const actual = await real<typeof import('../../cable/hosts/scannedApp.js')>()
+  return {
+    ...actual,
+    learnApps: async (pids: readonly number[]) => {
+      const named = new Map(pids.flatMap((pid) => {
+        const app = machine.appOf(pid)
+        return app ? [[pid, app] as const] : []
+      }))
+      const home = machine.itermHome
+      const rest = pids.filter((pid) => !named.has(pid))
+      if (home === undefined || !rest.length) return named
+      const walked = await actual.scannedApps(rest, { platform: 'darwin', roots: actual.appRoots(home), home,
+        processes: async () => [...machine.processes.values()].map(({ pid, ppid, executable }) => ({ pid, ppid, executable })),
+        bundleId: async (bundle) => machine.bundleIds.get(bundle) })
+      return new Map([...named, ...walked])
+    },
+    readProcessNames: async () => [...machine.processes.values()].map(({ pid, ppid, executable, tty }) => ({ pid, ppid, executable, ...(tty ? { tty } : {}) })),
+    readTtyName: async (pid: number) => machine.processes.get(pid)?.tty,
+    readBundleId: async (bundle: string) => machine.bundleIds.get(bundle),
+  }
+})
 // The folders there are the model's: Cursor's folder row opens a session's own, never one of this machine's.
 vi.mock('../../cable/hosts/cursorFolder.js', async (real) => ({
   ...await real<typeof import('../../cable/hosts/cursorFolder.js')>(),

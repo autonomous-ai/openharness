@@ -10,9 +10,12 @@
  * vscodeExtensionDeps, devices/orcaHomes.ts orcaHomesDeps, devices/orcaPlugin.ts; cable/serial.ts, boardReset.ts,
  * usbConsoleUser.ts), the address of a client it stands in for (herdrClient.ts, hcClient.ts, opencodeClient.ts), or the
  * dial setup's ownership of its files (devices/dialSkill.ts); the Orca plugin's own `inputs.platform` is on no tier A
- * path, as tier A plays the plugin's messages itself (docs/plans/2026-11-22-dial-eval-orca-plan.md, Decision 20). A step
- * that meets a read that does decide one says so with `world.gap`, which leaves that scenario on that platform out of the
- * scores.
+ * path, as tier A plays the plugin's messages itself (docs/plans/2026-11-22-dial-eval-orca-plan.md, Decision 20).
+ * iTerm2's paths read none of their own (cable/hosts/tabs.ts, hostDetect.ts): a tab's tty is the world's `tty` dep, read
+ * on macOS alone (services/devices.ts ttyOf), and the walk of its parents is scannedApp.ts's learnApps, the spec's mock,
+ * which walks on darwin, the one platform an iTerm2 scenario runs on (docs/plans/2026-11-22-dial-eval-iterm2-plan.md,
+ * Decision 4). A step that meets a read that does decide one says so with `world.gap`, which leaves that scenario on
+ * that platform out of the scores.
  */
 import { vi } from 'vitest'
 import type { startDevices } from '../../../services/devices.js'
@@ -26,6 +29,7 @@ import { claudeStoreSteps } from './steps/claudeStore.js'
 import { codexStoreSteps } from './steps/codexStore.js'
 import { dialSteps } from './steps/dial.js'
 import { closeWindows, editorSteps, reopenWindows } from './steps/editor.js'
+import { itermSteps, openTabs } from './steps/iterm.js'
 import { closeOrca, orcaModelSteps, reopenOrca } from './steps/orca.js'
 import { sessionsSteps } from './steps/sessions.js'
 import { voiceSteps } from './steps/voice.js'
@@ -34,16 +38,14 @@ import { World, type StepHandler, type TierAWorld } from './world.js'
 
 type Run = Exclude<Step, { kind: 'wait' }>
 const isEditor = (app: App): app is Editor => (EDITORS as readonly App[]).includes(app)
-/** iTerm2's steps, each built by its own task of docs/plans/2026-11-22-dial-eval-iterm2-plan.md (Tasks 4-7): until
- *  then a scenario that runs one fails. */
+/** tmux's, herdr's and the devices' restart steps, each built by its own task of
+ *  docs/plans/2026-11-22-dial-eval-iterm2-plan.md (Tasks 5-7): until then a scenario that runs one fails. */
 const notBuilt = (kind: StepKind) => (): Promise<void> => Promise.reject(new Error(`tier A: the ${kind} step is not built yet`))
 const STEPS: { [K in Exclude<StepKind, 'wait'>]: StepHandler<K> } = {
   ...claudeStoreSteps, ...codexStoreSteps, ...sessionsSteps, ...windowSteps, ...dialSteps, ...voiceSteps, ...editorSteps,
-  ...orcaModelSteps,
-  'iterm.tab': notBuilt('iterm.tab'), 'iterm.split': notBuilt('iterm.split'), 'iterm.closeTab': notBuilt('iterm.closeTab'),
-  'iterm.select': notBuilt('iterm.select'), 'iterm.relaunch': notBuilt('iterm.relaunch'), 'tmux.detach': notBuilt('tmux.detach'),
-  'tmux.attach': notBuilt('tmux.attach'), 'tmux.selectPane': notBuilt('tmux.selectPane'), 'herdr.focus': notBuilt('herdr.focus'),
-  'herdr.restart': notBuilt('herdr.restart'), 'devices.restart': notBuilt('devices.restart'),
+  ...orcaModelSteps, ...itermSteps,
+  'tmux.detach': notBuilt('tmux.detach'), 'tmux.attach': notBuilt('tmux.attach'), 'tmux.selectPane': notBuilt('tmux.selectPane'),
+  'herdr.focus': notBuilt('herdr.focus'), 'herdr.restart': notBuilt('herdr.restart'), 'devices.restart': notBuilt('devices.restart'),
   // An editor's windows go with it, and come back on its relaunch reporting its sessions' new shells. Orca's watches and
   // the plugin's stream go with Orca, and the stream comes back on its relaunch.
   quit: async (world, step) => {
@@ -79,6 +81,8 @@ export class TierADriver implements EvalDriver {
     // Orca's CLI from its start (world.ts).
     installFakeApps(world)
     await world.quiet()
+    // The watch opens its tabs stream as it starts, before the dial is plugged in: a rest or a tap selects a tab on it.
+    if (scenario.app === 'iterm') openTabs(world)
     const front = scenario.world?.front ?? scenario.app
     await windowSteps.front(world, { kind: 'front', app: front })
     world.dial.replug()
