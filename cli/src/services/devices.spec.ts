@@ -7775,6 +7775,16 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     expect(calls('questionClose')).toEqual([[caller, ids()[0]]])
   })
 
+  // A router that has read no list (the fleet's came back unavailable, and this host's own never listed) knows no
+  // machine for any agent: a tap on a Harness agent's card then finds none, and it is still not a caller no list holds.
+  it('the card of a Harness agent stays as a tap finds no machine for it', async () => {
+    const { listener } = devices({ core: bound() })
+    listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
+    await host().openAgent('h1')
+    expect(logs).toContain('[cable] cable: ignored open for unknown agent h1')
+    expect(calls('questionClose')).toEqual([])
+  })
+
   it('its card goes with its agent', async () => {
     vi.useFakeTimers()
     const { port, listener } = devices({ core: bound() })
