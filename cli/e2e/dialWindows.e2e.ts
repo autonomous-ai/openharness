@@ -8,12 +8,12 @@
  * - the real `harness device vscode link` names the pipe, its token and its record, and a window's stream signed with
  *   that token is answered with the proof and stays open;
  * - a request with another token is refused, and an answer without the proof is dropped;
- * - signed in, the stand-in dial's attach reaches the signed-in report: the devices and the gateway, both inside the
- *   core's process here, meet at the devices' dial-usage.json (docs/plans/2026-11-23-dial-usage-counts-design.md).
+ * - signed in, the stand-in dial's attach reaches the gateway's report queue: the devices and the gateway, both inside
+ *   the core's process here, meet at the devices' dial-usage.json (docs/plans/2026-11-23-dial-usage-counts-design.md).
  * Windows only: the Linux and macOS e2e runs find this file and skip it.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, request, type IncomingMessage, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -126,7 +126,7 @@ describe.runIf(process.platform === 'win32')('the dial on Windows', () => {
     }
   })
 
-  it('signed in, the stand-in dial\'s attach reaches the report', async () => {
+  it('signed in, the stand-in dial\'s attach reaches the gateway\'s report queue', async () => {
     const backend = await FakeBackend.start()
     backend.productUsage = { enabled: true, revision: 0, reports: [] }
     const machine = { machineId: 'd2'.repeat(16), computerId: 'e2e-dial-usage-windows', name: 'fixture', token: 'e2e-dial-usage-windows-token' }
@@ -144,10 +144,13 @@ describe.runIf(process.platform === 'win32')('the dial on Windows', () => {
       const day = new Date().toISOString().slice(0, 10)
       await daemon.dial.greet(90_000)
       await daemon.dial.next((m) => m.t === 'agents.end', 45_000, 'the first list')
-      // The first report waits up to a minute and the next one five (gateway/productUsage.ts); the dial's travels after
-      // the product's own.
-      await until('the dial\'s attach reported', () => backend.productUsage!.reports.some((report) => report.day === day
-        && (report.counters as Record<string, number>).dial_connected_installation_days === 1) || null, 420_000, 1_000)
+      // The gateway's tick, at most a minute after its start and then 45 to 75 seconds apart (gateway/productUsage.ts),
+      // takes the day into its queue, a file per account: the report it goes in is the macOS run's to wait for.
+      const queues = join(daemon.dataDir, 'product-usage')
+      await until('the gateway to take the dial\'s attach', () => existsSync(queues) && readdirSync(queues)
+        .filter((name) => name.endsWith('.json'))
+        .some((name) => (JSON.parse(readFileSync(join(queues, name), 'utf8')) as { dial?: { sent?: Record<string, Record<string, number>> } })
+          .dial?.sent?.[day]?.dial_connected_installation_days === 1) || null, 150_000, 1_000)
     } finally {
       await signedIn?.close()
       await backend.close()
