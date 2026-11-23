@@ -2,6 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 
+/// The name a person sees: the desktop app is Harness, and two apps named Harness sat side by side in Accessibility.
+pub const APP_NAME: &str = "Harness Device";
+
 /// One line of `harness hardware watch --json`. A line without a boolean `attached` is not a status.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct DialStatus {
@@ -512,6 +515,7 @@ mod tests {
     fn the_app_is_named_harness_device() {
         let config: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
         assert_eq!(config["productName"], "Harness Device");
+        assert_eq!(APP_NAME, config["productName"]);
         assert_eq!(config["identifier"], "ai.autonomous.harness.device");
         let macos = &config["bundle"]["macOS"];
         assert_eq!(macos.get("bundleName"), None);
