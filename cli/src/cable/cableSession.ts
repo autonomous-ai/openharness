@@ -2699,10 +2699,11 @@ export class CableSession {
       const inWindow = this.host.routeInWindow
         ? await this.host.routeInWindow(transcript, turn.cmd)
         : ({ t: 'unavailable' } as const)
+      // Sent whatever happened here meanwhile: an abort or a newer recording does not take back what the window delivered.
+      if (inWindow.t === 'sent') decide({ outcome: 'sent', agentId: inWindow.agentId })
       if (!current()) return
       if (inWindow.t === 'sent') {
         this.log(`cable: the window routed the spoken task → ${inWindow.agentId.slice(0, 8)}`)
-        decide({ outcome: 'sent', agentId: inWindow.agentId })
         await reply(this.withinCap({
           t: 'voice.transcript',
           routeId: '',
