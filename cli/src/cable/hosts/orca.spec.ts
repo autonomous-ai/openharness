@@ -290,6 +290,12 @@ describe('Orca actions', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
+  // kitty's focus read gives each run what is left of a deadline on the devices' performance.now() clock, a fraction.
+  it('a run whose timeout is a fraction of a millisecond runs the command', async () => {
+    const fake = fakeOrca('exit 3')
+    expect(await orcaDeps().run(fake.file, [], 1999.5)).toEqual({ code: 3, stdout: '', stderr: '' })
+  })
+
   // tmux's answer is what it printed: the pane's process (tmux.ts).
   it('run answers what the command printed', async () => {
     const fake = fakeOrca('echo 4242')
