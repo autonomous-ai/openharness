@@ -1,0 +1,191 @@
+import type { PrismaClient } from '@prisma/client'
+import { DIAL_FIRST_AGENT_BUCKETS, DIAL_OPEN_FAILURES, DIAL_OTHER_APPS, DIAL_RECOGNITION, DIAL_USAGE_ENGINES, DIAL_USAGE_HOSTS,
+  DIAL_USAGE_METRICS, DIAL_VOICE_FAILURES, DIAL_VOICE_OUTCOMES, DIAL_WAIT_BUCKETS } from '../types/dialUsage.js'
+import { VOICE_USAGE_METRICS } from '../lib/voiceUsage.js'
+
+/** The `dial` section of usage:daily (docs/plans/2026-11-23-dial-usage-counts-design.md, "Daily review"). */
+type Row = { dayUtc: Date; metric: string; value: number }
+type Count = number | '<5'
+export type Cells = { day: Count; d7: Count; d28: Count }
+type Raw = { day: number; d7: number; d28: number }
+type Column = keyof Raw
+type Measure = (column: Column) => number
+export type Section = { name: string; rows: Array<{ name: string; computers: Cells; events?: Cells }> }
+
+const DAY = 86_400_000
+// The design's read cost: 28 days of totals at most (Design 3).
+const READ_DAYS = 28
+const SPAN: Raw = { day: 1, d7: 7, d28: 28 }
+const COLUMNS = Object.keys(SPAN) as Column[]
+// At G1 30-50 computers, many of them the team's: a smaller cell is a person (design, "Small numbers also identify").
+const FEWEST = 5
+const RETURN_DAYS = [1, 7, 28] as const
+const NAMES = new Set<string>([...DIAL_USAGE_METRICS, ...VOICE_USAGE_METRICS, 'health_cli_collector_days'])
+/** Every dial and voice name, outside the team and the team's (`staff:`, `testing:`; lib/productUsage.ts apartPrefixes). */
+export const DIAL_REVIEW_METRICS = [...NAMES].flatMap(name => [name, `staff:${name}`, `testing:${name}`])
+
+/** The 28 complete days before [now] of DIAL_REVIEW_METRICS. A plain `$match`: Prisma sends `in` as `$expr`, which no
+ * index bounds (backend/AGENTS.md rule 3). Bounded by the (day, name) unique index: one row a day and name at most. */
+export async function readDialRows(db: Pick<PrismaClient, 'productUsageTotal'>, now: Date): Promise<Row[]> {
+  const today = Math.floor(now.getTime() / DAY) * DAY
+  const read = await db.productUsageTotal.aggregateRaw({ pipeline: [
+    { $match: { dayUtc: { $gte: { $date: new Date(today - READ_DAYS * DAY).toISOString() }, $lt: { $date: new Date(today).toISOString() } },
+      metric: { $in: DIAL_REVIEW_METRICS } } },
+    { $project: { _id: 0, day: { $dateToString: { date: '$dayUtc', format: '%Y-%m-%d', timezone: 'UTC' } }, metric: 1, value: 1 } },
+  ], options: { maxTimeMS: 15_000, allowDiskUse: false } }) as unknown as Array<{ day: string; metric: string; value: number }>
+  return read.map(row => ({ dayUtc: new Date(row.day), metric: row.metric, value: row.value }))
+}
+
+/** [cells] with each column under five computers, by [computers], shown as "<5". */
+function shown(computers: Raw, cells: Raw): Cells {
+  return Object.fromEntries(COLUMNS.map(k => [k, computers[k] < FEWEST ? '<5' : cells[k]])) as Cells
+}
+const raw = (measure: Measure): Raw => ({ day: measure('day'), d7: measure('d7'), d28: measure('d28') })
+
+export function dailyDialReview(rows: Row[], breakdowns: Row[], now: Date) {
+  const today = Math.floor(now.getTime() / DAY) * DAY
+  const outside = new Map<number, Record<string, number>>(), team = new Map<number, Record<string, number>>()
+  for (const row of rows) {
+    const stamp = row.dayUtc.getTime()
+    if (!Number.isSafeInteger(row.value) || row.value < 0 || stamp >= today || stamp < today - READ_DAYS * DAY) continue
+    const [, prefix, name] = /^(staff:|testing:)?(.*)$/.exec(row.metric)!
+    if (!NAMES.has(name!)) continue
+    const days = prefix ? team : outside, c = days.get(stamp) ?? {}
+    c[name!] = (c[name!] ?? 0) + row.value; days.set(stamp, c)
+  }
+  /** [metric] over [column]'s complete days, [lag] days earlier: a return's cohort. */
+  const total = (days: Map<number, Record<string, number>>, metric: string, column: Column, lag = 0) => {
+    let n = 0
+    for (let i = 1; i <= SPAN[column]; i++) n += days.get(today - (i + lag) * DAY)?.[metric] ?? 0
+    return n
+  }
+
+  const sections = (days: Map<number, Record<string, number>>): Section[] => {
+    const sum = (metric: string, lag = 0): Measure => column => total(days, metric, column, lag)
+    // Dial used: the day's flag, then the period flags, which count a computer once a period (Decision 3).
+    const period = (flag: string, week: string, days28: string): Measure => column =>
+      total(days, column === 'day' ? flag : column === 'd7' ? week : days28, column)
+    const line = (name: string, computers: Measure, events?: Measure) => {
+      const c = raw(computers), e = events && raw(events)
+      if (![c, e].some(r => r && COLUMNS.some(k => r[k] > 0))) return []
+      return [{ name, computers: shown(c, c), ...e ? { events: shown(c, e) } : {} }]
+    }
+    const voiced = sum('dial_voice_installation_days'), opened = sum('dial_open_installation_days')
+    const used = 'dial_used_installation_days', usedOutside = 'dial_used_outside_app_installation_days'
+    return [
+      { name: 'Who uses a dial', rows: [
+        ...line('Connected (computer-days)', sum('dial_connected_installation_days')),
+        ...line('Connected outside the app (computer-days)', sum('dial_connected_outside_app_installation_days')),
+        ...line('Used (day: computers; 7 and 28 days: distinct computers)',
+          period(used, 'dial_used_week_installations', 'dial_used_28d_installations')),
+        ...line('Used outside the app (day: computers; 7 and 28 days: distinct computers)',
+          period(usedOutside, 'dial_used_outside_app_week_installations', 'dial_used_outside_app_28d_installations')),
+        // Once ever per computer, so its sums are distinct computers already.
+        ...line('First use ever (distinct computers)', sum('dial_first_use_installations')),
+        ...line('First use ever outside the app (distinct computers)', sum('dial_first_use_outside_app_installations')),
+      ] },
+      { name: 'First agent on the dial, from a dial connected with an agent running', rows: [
+        ...DIAL_FIRST_AGENT_BUCKETS.flatMap(b => line(`First connection ever: ${b}`, sum(`dial_first_agent_first_${b}_installations`))),
+        ...DIAL_FIRST_AGENT_BUCKETS.flatMap(b => line(`Day's first connection: ${b}`, sum(`dial_first_agent_day_${b}_installations`))),
+      ] },
+      { name: 'Engines shown (agents capped per computer a day)',
+        rows: DIAL_USAGE_ENGINES.flatMap(e => line(e, sum(`dial_engine_${e}_installation_days`), sum(`dial_engine_${e}_agents`))) },
+      { name: 'Hosts shown (agents capped per computer a day)',
+        rows: DIAL_USAGE_HOSTS.flatMap(h => line(h, sum(`dial_host_${h}_installation_days`), sum(`dial_host_${h}_agents`))) },
+      { name: 'Hooked agents found, by engine (hooked engines only)', rows: DIAL_USAGE_ENGINES.flatMap(e =>
+        DIAL_RECOGNITION.flatMap(r => line(`${e}: ${r}`, sum(`dial_hooked_${e}_installation_days`), sum(`dial_hooked_${e}_${r}`)))) },
+      { name: 'The Other page, by app',
+        rows: DIAL_OTHER_APPS.flatMap(a => line(a, sum(`dial_other_app_${a}_installation_days`), sum(`dial_other_app_${a}_agents`))) },
+      { name: 'Voice to an agent', rows: [
+        ...DIAL_VOICE_OUTCOMES.flatMap(o => line(o, voiced, sum(`dial_voice_${o}`))),
+        ...DIAL_VOICE_FAILURES.flatMap(f => line(`failed: ${f}`, voiced, sum(`dial_voice_failed_${f}`))),
+        ...DIAL_USAGE_HOSTS.flatMap(h => DIAL_VOICE_OUTCOMES.flatMap(o =>
+          line(`${h}: ${o}`, sum(`dial_voice_host_${h}_installation_days`), sum(`dial_voice_host_${h}_${o}`)))),
+      ] },
+      { name: 'Tap to open', rows: [
+        ...(['ok', 'failed'] as const).flatMap(o => line(o, opened, sum(`dial_open_${o}`))),
+        ...DIAL_OPEN_FAILURES.flatMap(f => line(`failed: ${f}`, opened, sum(`dial_open_failed_${f}`))),
+        ...DIAL_USAGE_HOSTS.flatMap(h => (['ok', 'failed'] as const).flatMap(o =>
+          line(`${h}: ${o}`, sum(`dial_open_host_${h}_installation_days`), sum(`dial_open_host_${h}_${o}`)))),
+      ] },
+      // Decision 1: a computer with no dial runs no devices component, so the comparison is within dial computers.
+      { name: 'Wait for the person: days a dial was used against days it was connected and not used', rows: [
+        ...DIAL_WAIT_BUCKETS.flatMap(b => line(`Dial-used days, answered on the dial: ${b}`,
+          sum('dial_wait_used_day_installation_days'), sum(`dial_wait_used_day_dial_${b}`))),
+        ...DIAL_WAIT_BUCKETS.flatMap(b => line(`Dial-used days, answered elsewhere: ${b}`,
+          sum('dial_wait_used_day_installation_days'), sum(`dial_wait_used_day_elsewhere_${b}`))),
+        ...line('Dial-used days, no answer', sum('dial_wait_used_day_installation_days'), sum('dial_wait_used_day_none')),
+        ...DIAL_WAIT_BUCKETS.flatMap(b => line(`Connected, not-used days, answered elsewhere: ${b}`,
+          sum('dial_wait_unused_day_installation_days'), sum(`dial_wait_unused_day_elsewhere_${b}`))),
+        ...line('Connected, not-used days, no answer', sum('dial_wait_unused_day_installation_days'), sum('dial_wait_unused_day_none')),
+      ] },
+      { name: 'Wrong agent (proxies, not proof)', rows: [
+        ...line('Voice, then voice to another agent within 30 s', voiced, sum('dial_voice_redirected_30s')),
+        ...line('Delivered voice interrupted within 10 s (hooked agents)', voiced, sum('dial_voice_interrupted_10s')),
+        ...DIAL_USAGE_HOSTS.flatMap(h => [
+          ...line(`${h}: voice to another agent within 30 s`, sum(`dial_voice_host_${h}_installation_days`), sum(`dial_voice_host_${h}_redirected_30s`)),
+          ...line(`${h}: interrupted within 10 s`, sum(`dial_voice_host_${h}_installation_days`), sum(`dial_voice_host_${h}_interrupted_10s`)),
+        ]),
+      ] },
+      // A return is counted on its cohort's day once day N+L closes (the gateway): each column reads the cohorts L days
+      // earlier, inside the days read.
+      { name: 'Return (cohorts whose return day is complete, within the 28 days read)', rows: RETURN_DAYS.flatMap(lag => [
+        ...line(`Used on day N (N+${lag} complete)`, sum(used, lag)),
+        ...line(`Again on N+${lag}`, sum(`dial_d${lag}_returning_installations`, lag)),
+        ...line(`Used outside the app on day N (N+${lag} complete)`, sum(usedOutside, lag)),
+        ...line(`Outside the app, again on N+${lag}`, sum(`dial_d${lag}_returning_outside_app_installations`, lag)),
+      ]) },
+    ].filter(section => section.rows.length)
+  }
+
+  const voice = (days: Map<number, Record<string, number>>) => {
+    const cells = (metric: string) => raw(column => total(days, metric, column))
+    const less = (a: Raw, b: Raw): Raw => ({ day: Math.max(0, a.day - b.day), d7: Math.max(0, a.d7 - b.d7), d28: Math.max(0, a.d28 - b.d28) })
+    const minutes = (ms: Raw): Raw => ({ day: Math.round(ms.day / 6000) / 10, d7: Math.round(ms.d7 / 6000) / 10, d28: Math.round(ms.d28 / 6000) / 10 })
+    const accountDays = cells('voice_account_days'), over1m = cells('voice_account_days_over_1m')
+    const over5m = cells('voice_account_days_over_5m'), over20m = cells('voice_account_days_over_20m')
+    const totals = (surface: 'dial' | 'rest', computers: Raw) => ({ clips: shown(computers, cells(`voice_${surface}_clips`)),
+      audioMinutes: shown(computers, minutes(cells(`voice_${surface}_audio_ms`))),
+      transcribeMinutes: shown(computers, minutes(cells(`voice_${surface}_transcribe_ms`))) })
+    return { note: 'Voice from older CLIs counts as the rest until they update.',
+      accountDays: { label: 'All voice on the account, dial and the rest: account-days by audio a day.',
+        all: shown(accountDays, accountDays), under1m: shown(less(accountDays, over1m), less(accountDays, over1m)),
+        m1to5: shown(less(over1m, over5m), less(over1m, over5m)), m5to20: shown(less(over5m, over20m), less(over5m, over20m)),
+        over20m: shown(over20m, over20m) },
+      // The dial's totals by its own computers; the rest's, the phone and older CLIs, by the accounts with voice.
+      dial: totals('dial', cells('dial_voice_installation_days')), rest: totals('rest', accountDays) }
+  }
+
+  // Release and platform, each on its own (no cross product), where the day's collectors reach the health review's 20.
+  const margins = new Map<string, { day: number; dimension: 'platform' | 'release'; bucket: string; collectors: number; used: number }>()
+  for (const row of breakdowns) {
+    const m = /^breakdown:(release|platform):cli:([^:]+):(dial_used_installation_days|health_cli_collector_days)$/.exec(row.metric)
+    const day = row.dayUtc.getTime()
+    if (!m || day >= today || !Number.isSafeInteger(row.value) || row.value < 0) continue
+    const key = `${day}:${m[1]}:${m[2]}`
+    const margin = margins.get(key) ?? { day, dimension: m[1] as 'platform' | 'release', bucket: m[2]!, collectors: 0, used: 0 }
+    if (m[3] === 'health_cli_collector_days') margin.collectors += row.value
+    else margin.used += row.value
+    margins.set(key, margin)
+  }
+  const margin = (dimension: 'platform' | 'release') => [...margins.values()]
+    .filter(m => m.dimension === dimension && m.collectors >= 20 && m.used > 0)
+    .sort((a, b) => b.day - a.day || a.bucket.localeCompare(b.bucket))
+    .map(m => ({ day: new Date(m.day).toISOString().slice(0, 10), bucket: m.bucket, computers: m.used < FEWEST ? '<5' as const : m.used }))
+
+  const coverage = raw(column => total(outside, 'health_cli_collector_days', column))
+  return {
+    limits: [
+      'Signed-in computers only: voice needs a sign-in, so these lean to voice users and are not all dial users.',
+      'Agents found covers hooked engines only: an agent with no hook is invisible to the dial and to these counts.',
+      'Computer counts are computer-days unless a row says distinct computers; event counts beside them are not people.',
+      'Distinct computers count a computer once a Monday week or fixed 28-day period: a column across two periods can count it twice.',
+      'Any cell under 5 computers, and the events beside it, shows "<5".',
+      'day is the last complete UTC day; d7 and d28 the 7 and 28 complete days before today.',
+    ],
+    coverage: shown(coverage, coverage),
+    outsideTeam: sections(outside), team: sections(team),
+    voice: { outsideTeam: voice(outside), team: voice(team) },
+    margins: { platform: margin('platform'), release: margin('release') },
+  }
+}

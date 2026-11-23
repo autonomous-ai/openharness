@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, it } from 'vitest'
 import type { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import type { PrismaClient } from '@prisma/client'
-import { planDatabase, plan, profiled, reads } from './plans.test-support.js'
+import { planDatabase, plan, profiled } from './plans.test-support.js'
 import { voiceIncrements } from '../src/lib/voiceUsage.js'
 
 // The dial's counts from ingest to the `dial` section of usage:daily (docs/plans/2026-11-23-dial-usage-counts-plan.md,
@@ -44,7 +44,8 @@ it('counts the dial outside the team and the team apart, a dial clip and a rest 
   await usage.flushRelayUsage()
 
   const entries = await profiled(db, () => review.readDialRows(db, now))
-  const read = reads(entries, 'product_usage_totals', ['dayUtc', 'metric'])
+  // The read is the run's only one of the totals. Its list of names passes the profiler's 50 KB, which keeps no filter of it.
+  const read = entries.filter(e => e.ns.endsWith('.product_usage_totals'))
   expect(read, JSON.stringify(plan(read))).toHaveLength(1)
   expect(read[0]!.planSummary, JSON.stringify(plan(read))).toMatch(/IXSCAN \{ dayUtc: 1, metric: 1/)
   expect(read[0]!.docsExamined, JSON.stringify(plan(read))).toBe(read[0]!.nreturned)
