@@ -56,15 +56,15 @@ conflict is that line: keep #4566's line and add the phrase again).
 - Nothing in `cli/src/core/` or `cli/src/architecture.coreFiles.txt`: `git diff --stat ea93110980 -- cli/src/core
   cli/src/architecture.coreFiles.txt` prints nothing. `src/architecture*.spec.ts` stay green.
 - Values, exact: `FOCUS_POLL_MS = 500`, `FOCUS_READ_MS = 2_000`, `FOCUS_FAILS_MAX = 3` (all in `HO/focusPoll.ts`);
-  at most 16 WezTerm clients read (`FOCUS_CLIENTS_MAX`, `HO/wezterm.ts`); at most 16 kitty panes asked a read
-  (`FOCUS_PANES_MAX`, `HO/kitty.ts`), so at most 16 calls; the existing `ATTACH_ECHO_MS` (2 s), `TAB_ECHO_MS` (2 s),
+  at most 16 WezTerm clients read (`FOCUS_CLIENTS_MAX`, `HO/wezterm.ts`); at most 16 kitty calls a read
+  (`FOCUS_CALLS_MAX`, `HO/kitty.ts`); the existing `ATTACH_ECHO_MS` (2 s), `TAB_ECHO_MS` (2 s),
   `ECHO_KEPT` and `FRONT_SETTLE_MS` (1 s) unchanged.
 - Log lines, exact, and no others for this feature: `[device] pane · moved`, `[device] pane · skipped · no tile`,
   `[device] pane · skipped · echo`, `[device] pane · skipped · unknown agent`, `[device] pane · skipped · not in front`,
   `[device] focus poll · started`, `[device] focus poll · stopped · <n> reads, <m> failed`, and the same with
   ` · failing` at its end when the poll stopped itself, and `[device] kitty · focus refused` (through `KittyDeps.log`,
   once per refusal). Never a pane id, window id, socket, title or agent.
-- kitty's refusals: at most `FOCUS_PANES_MAX` (16) refused sockets kept, the oldest dropped first; a daemon restart
+- kitty's refusals: at most `FOCUS_CALLS_MAX` (16) refused sockets kept, the oldest dropped first; a daemon restart
   forgets them all.
 - Reads: `wezterm cli --no-auto-start list-clients --format json` (only `focused_pane_id` and `idle_time` read) and
   `kitten @ --to <socket> get-colors --match <expr>` (only the exit code and, on exit 1, whether stderr starts with
@@ -271,7 +271,7 @@ conflict is that line: keep #4566's line and add the phrase again).
   // HO/orca.ts
   run(file: string, args: string[], timeoutMs: number): Promise<{ code: number | null; stdout: string; stderr?: string }>
   // HO/kitty.ts
-  export const FOCUS_PANES_MAX = 16
+  export const FOCUS_CALLS_MAX = 16
   export interface KittyDeps {
     /* as now, and: */
     now(): number                          // the devices' monotonic clock
@@ -285,7 +285,7 @@ conflict is that line: keep #4566's line and add the phrase again).
   }
   ```
   The adapter keeps, in memory, its refused sockets: `listenOn` → the `socketId` at the refusal (null for an abstract
-  socket), at most `FOCUS_PANES_MAX`, the oldest dropped first.
+  socket), at most `FOCUS_CALLS_MAX`, the oldest dropped first.
 
 - [ ] **Step 1: Write the failing tests.**
   - `orca.spec.ts`: `'a non-zero exit is false'` expects `{ code: 3, stdout: '', stderr: '' }`; a new case `'a run's

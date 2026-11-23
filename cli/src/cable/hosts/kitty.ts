@@ -39,8 +39,8 @@ const HELD = 'held:'
 const PANE = /^(held:)?([0-9]{1,9})@(.+)$/
 /** `<client's pid>@<socket>`: a tab of an outer place. */
 const TAB = /^([1-9][0-9]{0,9})@(.+)$/
-/** The calls one focus read makes at most, so the kitty windows it asks of. Also the refused sockets kept. */
-export const FOCUS_PANES_MAX = 16
+/** The calls one focus read makes at most. Also the refused sockets kept: one read asks of 16 sockets at most. */
+export const FOCUS_CALLS_MAX = 16
 /** The least time a focus call is started with: ~20x the recorded call (RECORDED_KITTY.focusedMatch.callMs), so one
  *  that times out is kitty's failure, not the read's sliver, which would mark a healthy kitty refused. */
 const FOCUS_CALL_MIN_MS = 250
@@ -138,7 +138,7 @@ export function createKittyAdapter(deps: KittyDeps): HostAdapter & Required<Pick
   }
 
   const refuse = (listenOn: string, path: string | undefined) => {
-    if (refused.size === FOCUS_PANES_MAX) refused.delete(refused.keys().next().value!)
+    if (refused.size === FOCUS_CALLS_MAX) refused.delete(refused.keys().next().value!)
     refused.set(listenOn, path === undefined ? null : deps.socketId(path))
     deps.log('[device] kitty · focus refused')
   }
@@ -243,7 +243,7 @@ export function createKittyAdapter(deps: KittyDeps): HostAdapter & Required<Pick
         const at = windowOf(pane)
         if (!at?.own || refused.has(at.listenOn) || !ours(deps, at.path)) continue
         const cost = sockets.get(at.listenOn)?.ids.length === 2 ? 2 : 1
-        if (calls + cost > FOCUS_PANES_MAX) break
+        if (calls + cost > FOCUS_CALLS_MAX) break
         const on = sockets.get(at.listenOn) ?? sockets.set(at.listenOn, { socket: at, ids: [] }).get(at.listenOn)!
         on.ids.push(at.id)
         calls += cost

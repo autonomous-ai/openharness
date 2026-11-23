@@ -7,7 +7,7 @@ import { RECORDED_KITTY } from '../../testing/recordedKitty.js'
 import type { Place } from './adapter.js'
 import { APP_BUNDLES } from './hostDetect.js'
 import { FOCUS_READ_MS } from './focusPoll.js'
-import { createKittyAdapter, createKittyTabAdapter, FOCUS_PANES_MAX, kittyFinder, type KittyDeps } from './kitty.js'
+import { createKittyAdapter, createKittyTabAdapter, FOCUS_CALLS_MAX, kittyFinder, type KittyDeps } from './kitty.js'
 import { MAX_TEXT } from './orca.js'
 import type { ProcessName } from './scannedApp.js'
 
@@ -763,7 +763,7 @@ describe("kitty's focused windows (docs/plans/2026-11-23-dial-wezterm-kitty-focu
 
   // Each pane is one call at most, and a socket's `or` one more once it has a third pane: on one socket, 15 panes.
   it('at most 16 calls', async () => {
-    expect(FOCUS_PANES_MAX).toBe(16)
+    expect(FOCUS_CALLS_MAX).toBe(16)
     const many = recorder()
     many.focused.set(L, '16')
     const sixteen = Array.from({ length: 16 }, (_, i) => at(String(i + 1)))
