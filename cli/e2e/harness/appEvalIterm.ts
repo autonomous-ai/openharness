@@ -275,6 +275,12 @@ async function closeClient(world: TierBWorld, state: State, client: Client): Pro
   tabClosed(world.tabs, client.label, client.tty)
 }
 
+/** A detached client's tab, left open on its shell: an empty tab whose command is that shell, as the client is gone and
+ *  its pid may be another process's by the time the tab closes. */
+export function leftOpen({ window, tab, label, tty, app, processes }: Client): Opened & { processes: Tab } {
+  return { window, tab, label, tty, app, processes: { ...processes, pid: processes.shellPid! } }
+}
+
 /** The client detached, as `tmux detach` in its tab: it ends, and its tab stays open on its shell, an empty one that holds
  *  its tty, so no tab opened after takes it. */
 async function detach(world: TierBWorld, state: State, client: Client): Promise<void> {
@@ -284,8 +290,7 @@ async function detach(world: TierBWorld, state: State, client: Client): Promise<
     try { process.kill(client.pid, 0) } catch { return true }
     return false
   }, 10_000, 50)
-  const { window, tab, label, tty, app, processes } = client
-  state.empty.set(label, { window, tab, label, tty, app, processes })
+  state.empty.set(client.label, leftOpen(client))
 }
 
 /** The person's tmux session in [s]'s tab, its first client attached there: its name, and the pane of the shell it opened
