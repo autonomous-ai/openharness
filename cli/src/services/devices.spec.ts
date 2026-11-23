@@ -2180,8 +2180,11 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     vi.useFakeTimers()
     const { port } = start()
     seen.host.watching!(true)
-    // An ended session's look at the processes, still to come.
+    // A gone poll's and an ended session's looks at the processes, still to come.
     port.observed(hook('session-start'))
+    const poll = port.inboxPoll({ pollId: 'p1', sessionId: 'sess-1' })
+    port.inboxGone('p1')
+    expect(await poll).toEqual({})
     port.observed(hook('session-end'))
     expect(vi.getTimerCount()).toBeGreaterThan(0)
     await port.stop()
