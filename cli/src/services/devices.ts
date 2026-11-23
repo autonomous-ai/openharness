@@ -2267,11 +2267,18 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }
   ;(deps.onExit ?? ((run) => { process.once('exit', run) }))(() => shutdownVoiceRouter())
 
-  /** A Harness agent deleted: the question it held open was answered nowhere. */
-  const agentGone = (agentId: string): void => {
-    const requestId = questionsOpen.get(agentId)
-    questionsOpen.delete(agentId)
-    if (requestId !== undefined) count((usage) => usage.waitEnded(questionWait(agentId, requestId), 'gone'))
+  /** Each Harness agent's questions the dial's waits count, by request: it can hold two, of which `questionsOpen` keeps the
+   *  newest alone, and its next turn or its going ends every one. */
+  const questionWaits = new Map<string, Set<string>>()
+  const questionAsked = (agentId: string, requestId: string): void => {
+    questionWaits.set(agentId, (questionWaits.get(agentId) ?? new Set<string>()).add(requestId))
+    count((usage) => usage.waitOpened(questionWait(agentId, requestId), agentId))
+  }
+  /** Its next turn started (`answered`: the person answered where the dial did not see) or it was deleted (`gone`:
+   *  answered nowhere). */
+  const questionsEnded = (agentId: string, end: 'answered' | 'gone'): void => {
+    for (const requestId of questionWaits.get(agentId) ?? []) count((usage) => usage.waitEnded(questionWait(agentId, requestId), end))
+    questionWaits.delete(agentId)
   }
   /** A card bound for the devices, translated once for the cable. */
   const toCable = (frame: Record<string, unknown>): void => {
@@ -2280,6 +2287,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (close) {
       cableHost.harness.noteCard(close.agentId, 'question.close')
       inOrder(close.agentId, () => { void cable.questionClose(close.agentId, close.requestId) })
+      questionWaits.get(close.agentId)?.delete(close.requestId)
       count((usage) => usage.waitEnded(questionWait(close.agentId, close.requestId), 'answered'))
       // As the cable session's inbox does: the close of an older question leaves the newer one open. Only the open
       // question's close lets its notice out: a notice asked again rings the dial again, so a close heard twice, or of
@@ -2291,7 +2299,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       return
     }
     const question = cableQuestionFor(frame as Parameters<typeof cableQuestionFor>[0])
-    if (question) { questionsOpen.set(question.agentId, question.requestId); count((usage) => usage.waitOpened(questionWait(question.agentId, question.requestId), question.agentId)); cableHost.harness.noteCard(question.agentId, 'question'); tally('alert', 'rule:question', 'question', 0); inOrder(question.agentId, () => { void cable.question(question.agentId, question.requestId, question.questions) }); return }
+    if (question) { questionsOpen.set(question.agentId, question.requestId); questionAsked(question.agentId, question.requestId); cableHost.harness.noteCard(question.agentId, 'question'); tally('alert', 'rule:question', 'question', 0); inOrder(question.agentId, () => { void cable.question(question.agentId, question.requestId, question.questions) }); return }
     // A shell result is only the stats' input: the dial is told the sums when the turn ends.
     const ran = frame as { type?: string; agentId?: string; payload?: { kind?: string; id?: string; command?: string; isError?: boolean; outputTail?: string } }
     if (ran.payload?.kind === 'reply_text' && ran.agentId) {
@@ -2304,6 +2312,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       endNotice(agentId, 'answered')
       count((usage) => usage.turnStarted(agentId))
       // A question its last turn left open is stale: it must not hold a notice of this turn back.
+      questionsEnded(agentId, 'answered')
       questionsOpen.delete(ran.agentId)
       endReplies(ran.agentId, false)
       stats.take(ran.agentId)
@@ -2316,7 +2325,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     }
     // A tool card is a step for a `steps-v1` device and nothing for any other: the session drops it.
     const gone = (frame as { type?: string; payload?: { agentId?: unknown } })
-    if (gone.type === 'agent_deleted' && typeof gone.payload?.agentId === 'string') { latestUpdate.delete(gone.payload.agentId); began.delete(gone.payload.agentId); ended.delete(gone.payload.agentId); endReplies(gone.payload.agentId, false); endNotice(gone.payload.agentId, 'gone'); agentGone(gone.payload.agentId) }
+    if (gone.type === 'agent_deleted' && typeof gone.payload?.agentId === 'string') { latestUpdate.delete(gone.payload.agentId); began.delete(gone.payload.agentId); ended.delete(gone.payload.agentId); endReplies(gone.payload.agentId, false); endNotice(gone.payload.agentId, 'gone'); questionsEnded(gone.payload.agentId, 'gone'); questionsOpen.delete(gone.payload.agentId) }
     const step = cableStepFor(frame as Parameters<typeof cableStepFor>[0])
     if (step) { inOrder(step.agentId, () => { void cable.turnStep(step.agentId, step.step) }); return }
     const event = cableEventFor(frame as Parameters<typeof cableEventFor>[0])
