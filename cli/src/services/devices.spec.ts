@@ -13484,6 +13484,23 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
     expect(await counted(port)).toMatchObject({ dial_voice_delivered: 1, dial_voice_host_orca_delivered: 1 })
   })
 
+  it('a voice to another machine\'s agent is delivered by its turn\'s first card', async () => {
+    vi.useFakeTimers()
+    const { port } = start({ core: harnessAgent() })
+    seen.host.watching!(true)
+    const card = (kind: 'processing' | 'done') => seen.fleet!.events!({ machineId: 'm2', kind, agentId: 'b1', text: '', recap: '' })
+    seen.host.voiceEnded!({ outcome: 'sent', agentId: 'b1' })
+    card('processing')
+    // Sent while that turn runs: the turn's next card is not its delivery.
+    seen.host.voiceEnded!({ outcome: 'sent', agentId: 'b1' })
+    card('processing')
+    await vi.advanceTimersByTimeAsync(10_000)
+    card('done')
+    seen.host.voiceEnded!({ outcome: 'sent', agentId: 'b1' })
+    card('processing')
+    expect(await counted(port)).toMatchObject({ dial_voice_delivered: 2, dial_voice_failed: 1, dial_voice_failed_no_turn: 1 })
+  })
+
   it('a refused voice to a held agent is held', async () => {
     const { port } = start({ faults: ['fleet'] })
     // A herdr pane that only holds it: herdr did not make its terminal.
