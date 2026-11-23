@@ -680,8 +680,8 @@ static bool result_visible(void) {
     reset();
 }
 static void notice_checks(const char *dir) {
-    // Opening a read notification must not present its recap a second time.
-    // Exercise either receipt order, panes outside the current roster, and a
+    // Opening a finished-turn card leaves that turn's recap on the agent face,
+    // so the tap lands on the answer and not on the resting face. Exercise either receipt order, panes outside the current roster, and a
     // notification restored before that pane's result history has arrived.
     for(int off_tab=0;off_tab<2;off_tab++) for(int cached=0;cached<2;cached++)
     for(int seen_first=0;seen_first<2;seen_first++) {
@@ -708,13 +708,14 @@ static void notice_checks(const char *dir) {
         else ui_notif_seen(id);
         scene_take();
         assert(active() && !strcmp(active()->id,id) && s.view==HOME);
-        assert(s.notice_count==1 && !result_visible() && !starts && !question_sends);
-        // History fills the reader, while the already-read recap stays hidden.
+        // With no result yet there is no recap to show; a cached one is on the face.
+        assert(s.notice_count==1 && result_visible()==cached && !starts && !question_sends);
+        // History that arrives later fills the reader and shows its recap.
         ui_project_restore_event(id,"summary",result,result);
-        scene_take(); assert(!result_visible() && !strcmp(active()->full,result));
+        scene_take(); assert(result_visible() && !strcmp(active()->full,result));
         ui_project_remove(id); ui_project_set_name(id,"Build"); ui_focus_project(id);
         ui_project_restore_event(id,"summary",result,result);
-        scene_take(); assert(!result_visible());
+        scene_take(); assert(result_visible());
         if(!off_tab && cached && !seen_first) portrait(dir,"notification-opened");
         ui_project_emit(id,"session","processing","Working",NULL);
         ui_project_emit(id,"session","done",NULL,NULL);
