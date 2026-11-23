@@ -357,6 +357,24 @@ describe('a spec run\'s processes (SpawnedRuns)', () => {
     expect(new SpawnedRuns().belonging(run).map((row) => row.pid).sort()).toEqual([MEMBER, ITS_CHILD].sort())
     expect(beyond([MEMBER, ITS_CHILD], [DAEMON])).toEqual([])
   })
+
+  it("are killed after their SIGTERM while each runs as itself, never a process given one of their pids meanwhile", async () => {
+    const run = exitedRun(at(5))
+    const signal = vi.mocked(process.kill).getMockImplementation()!
+    vi.mocked(process.kill).mockImplementation((pid, sent) => {
+      // The member ends at its SIGTERM, and a process of the person's has its pid by the SIGKILL.
+      if (sent === 'SIGTERM' && pid === MEMBER) {
+        machine.rows = machine.rows.map((row) => row.pid === MEMBER ? made(MEMBER, 1, MEMBER, 'vim', '/Users/person', 'Mon Nov 23 10:07:00 2026') : row)
+        machine.runs = []
+      }
+      return signal(pid, sent)
+    })
+    await new SpawnedRuns().end(run)
+    const killed = machine.signals.filter(([, sent]) => sent === 'SIGKILL').map(([pid]) => pid)
+    expect(killed).toEqual(expect.arrayContaining([-GROUP, ITS_CHILD, DAEMON, DAEMONS_CHILD]))
+    expect(killed).not.toContain(MEMBER)
+    expect(beyond([ITS_CHILD, DAEMON, DAEMONS_CHILD], [MEMBER])).toEqual([])
+  })
 })
 
 describe("the worker's reaper", () => {
@@ -451,6 +469,45 @@ describe('the harness beside the sweep', () => {
       made(ITS_SERVER, CLIENT, ITS_SERVER, '/opt/homebrew/bin/herdr server'), made(P(500), 1, P(500), '/Users/person/.local/bin/herdr server')]
     expect(await childNamed(CLIENT, 'herdr')).toBe(ITS_SERVER)
     expect(beyond([ITS_SHELL, ITS_SERVER])).toEqual([])
+  })
+
+  it("kills herdr's server and client by the identity noted as each started, and of a pid another process has since, reads its start alone and kills nothing", async () => {
+    const herdr = await import('../../e2e/harness/herdrServer.js' as string) as {
+      identityOf(pid: number): unknown
+      clientStarted(pid: number, identity: unknown): { reused(): boolean }
+      killGroup(server: object): void
+      killOwn(pid: number, identity: unknown): void
+    }
+    const OWN = P(400), TAKEN = P(401)
+    machine.rows = [made(OWN, WORKER, OWN, '/opt/homebrew/bin/herdr'), made(TAKEN, WORKER, TAKEN, '/opt/homebrew/bin/herdr')]
+    const own = herdr.identityOf(OWN), taken = herdr.identityOf(TAKEN)
+    // TAKEN's process went, and one of the person's has its pid now.
+    machine.rows = [machine.rows[0]!, made(TAKEN, 1, TAKEN, '/Users/person/.local/bin/herdr', '/Users/person', 'Mon Nov 23 10:07:00 2026')]
+    machine.runs = []
+    expect(herdr.clientStarted(TAKEN, taken).reused()).toBe(true)
+    herdr.killGroup(herdr.clientStarted(TAKEN, taken))
+    herdr.killOwn(TAKEN, taken)
+    expect(machine.signals).toEqual([])
+    expect(beyond([], [TAKEN])).toEqual([])
+    herdr.killGroup(herdr.clientStarted(OWN, own))
+    herdr.killOwn(OWN, own)
+    expect(machine.signals).toEqual([[-OWN, 'SIGKILL'], [OWN, 'SIGKILL']])
+  })
+
+  it("kills a tab's command and shell while each runs as itself, never a process given one of their pids since", async () => {
+    const outside = await import('../../e2e/harness/outsideAgent.js' as string) as {
+      killTab(tab: object): void
+      closeTab(tab: object, what: string): Promise<void>
+    }
+    const ENGINE = P(600), SHELL = P(601)
+    const tab = { process: { exitCode: 0, signalCode: null, kill: vi.fn() }, pid: ENGINE, shellPid: SHELL, started: new Map([[ENGINE, LSTART], [SHELL, LSTART]]) }
+    // The engine went, and a process of the person's has its pid now.
+    machine.rows = [made(ENGINE, 1, ENGINE, 'vim', '/Users/person', 'Mon Nov 23 10:07:00 2026'), made(SHELL, WORKER, SHELL, '/bin/sh')]
+    outside.killTab(tab)
+    await outside.closeTab(tab, 'the tab')
+    // The made-up machine answers each signal that its process is gone: killTab's SIGKILL is not sent after its SIGCONT.
+    expect(machine.signals).toEqual([[SHELL, 'SIGCONT'], [SHELL, 'SIGKILL']])
+    expect(beyond([SHELL], [ENGINE])).toEqual([])
   })
 
   it("finds the endurance run's strays in the test's tree alone", async () => {
