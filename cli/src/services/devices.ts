@@ -266,8 +266,8 @@ const REMIND_MS = 20_000
 /** The observed source drops an ended session 10 s after its end, by the wall clock (observed.ts); looked at a beat later,
  *  as a timer can fire a little before the wall clock says it is due. */
 const ENDED_MS = 10_500
-/** A look at the processes this long after a Claude Code's held poll lost its client, once the dying process has left the
- *  process table. */
+/** A look at the processes this long after a Claude Code's held poll lost its client or a session ended, once the dying
+ *  process has left the process table. */
 const GONE_MS = 1_000
 /** How long the cable waits for the devices' listener to open: it opens in a few milliseconds. */
 const LISTENER_WAIT_MS = 1_000
@@ -1857,11 +1857,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** A look at the processes for each session that ended, once it is old enough to go: the 30 s one leaves it listed for
    *  up to 40 s. One per listed session (fifty at most), a later end of it putting its look off. */
   const endings = new Map<string, ReturnType<typeof setTimeout>>()
-  /** A look at the processes for each Claude Code whose held poll lost its client: a closed pane or a removed worktree
-   *  sends no session-end hook, and its row waited for the 30 s look (the dial eval's Orca O14/O15). A poll a newer one
-   *  replaced is told gone too, and its look finds the process running and changes nothing: one read of the process
-   *  table. Apart from the endings, so a poll's client going as its session ends does not put off that session's own
-   *  look. */
+  /** A look at the processes for each Claude Code whose held poll lost its client, and for each session that ended: a
+   *  closed pane or a removed worktree sends no session-end hook, and its row waited for the 30 s look (the dial eval's
+   *  Orca O14/O15); a closed terminal's ended session waited for the endings' 10 s (VS Code V2). A poll a newer one
+   *  replaced, and a session ended in a process that runs on (a /clear), is looked at too, and its look finds the
+   *  process running and changes nothing: one read of the process table. Apart from the endings, so these quick looks
+   *  never put off a session's own ended look. */
   const leavings = new Map<string, ReturnType<typeof setTimeout>>()
   const lookLater = (looks: Map<string, ReturnType<typeof setTimeout>>, ms: number, source: ObservedSource, agentId: string): void => {
     if (!outside(agentId)) return
@@ -2700,6 +2701,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         if (event.event === 'session-end') {
           const agentId = observedAgentId(event.engine, event.sessionId)
           dropEnded(observed, agentId)
+          lookLater(leavings, GONE_MS, observed, agentId)
           // Listed for a while once ended, but on no app's screen: a settle must not turn the dial to it.
           if (agentId === claudeAgent) claudeAgent = undefined
         }
