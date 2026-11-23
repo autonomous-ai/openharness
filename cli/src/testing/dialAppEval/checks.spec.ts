@@ -1258,6 +1258,17 @@ describe('iTerm2', () => {
     return run(check, s, listed(s, [500], parts))
   }
 
+  it('a Codex row\'s expected name is its folder\'s, a Claude Code row\'s its title, in a check and a wait alike', () => {
+    const IX = iterm('ix', 70, { engine: 'codex', tab: 4 })
+    const s = scenario([{ kind: 'hook', session: 'ix', event: 'start', label: 'w' }], [...sessions, IX])
+    const ring: Check = { id: 'r', kind: 'ring', dim: 'D1', page: 'iterm', expect: ['ia', 'ix'], after: 'w' }
+    expect(scores(run(ring, s, seen(s, [100], { frames: list(200, 'iterm', [IA, [id(IX), 'eval-ix']]) }))).names).toBe(1)
+    expect(scores(run(ring, s, seen(s, [100], { frames: list(200, 'iterm', [IA, IX]) }))).names).toBe(0.5)
+    expect(scores(run(ring, s, seen(s, [100], { frames: list(200, 'iterm', [[id(IA), 'eval-ia'], [id(IX), 'eval-ix']]) }))).names).toBe(0.5)
+    const until: Until = { kind: 'ring', page: 'iterm', expect: ['ia', 'ix'] }
+    expect(condition(until, s, seen(s, [], { frames: list(200, 'iterm', [IA, [id(IX), 'eval-ix']]) })).holds).toBe(true)
+  })
+
   it("a tap on a tab row passes on iTerm2 brought forward and its tab's select with raise", () => {
     const results = tapped('ia', { commands: [front(600)], streams: [select(700, 'w1.0.0')] })
     expect(scores(results)).toEqual({ tab: 1, front: 1, latency: 1 })
