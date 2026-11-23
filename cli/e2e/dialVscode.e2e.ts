@@ -17,8 +17,8 @@
  * loop finds the daemon through a launcher in the throwaway home alone, never this computer's own daemon or `harness`.
  *
  * The match follows the window's report and a `ps` read, and nothing says when it is done: the dial turns to the agent
- * again every 2 s until the window shows it (`FakeDial.turnUntil`), which also outlasts the 750 ms after the dial's landing
- * on A and each re-assert of it, when a turn is dropped. Every later wait is a frame or a line, never a fixed time.
+ * again every 2 s until the window shows it (`FakeDial.turnUntil`), which also outlasts the repaint of a switch the daemon
+ * drives, when a turn is dropped. Every later wait is a frame or a line, never a fixed time.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdirSync, realpathSync, writeFileSync } from 'node:fs'
@@ -259,8 +259,10 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
     await stroke(d, dial)
     await until('three lines scrolled', () => window.scrolls.length === 3, 30_000, 50)
 
-    // 2. B's terminal active: the lines for A's run nothing, and the loop's minute line counts them dropped.
-    window.set({ active: b.shellPid! })
+    // 2. B's terminal active in the window, now not focused: the lines for A's run nothing, and the loop's minute line
+    // counts them dropped. Not focused, as when another VS Code window is: a focused one's move turns the dial to B, and
+    // the stroke would then be B's (vscodeTerminals.ts, `moved`).
+    window.set({ active: b.shellPid!, focused: false })
     await until("B's terminal active", () => window.took.at(-1)?.active === b.shellPid, 10_000, 50)
     await stroke(d, dial)
     const counted = await until('the stroke counted dropped', () => {

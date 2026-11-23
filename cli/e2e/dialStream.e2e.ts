@@ -5,8 +5,8 @@
  * under the throwaway daemon's environment only, prints the devices' socket, and the test opens it there.
  *
  * A dial plugged in before any agent lands on the first one listed (cableSession.ts, the landing), and that is the stream's
- * first move. After it, and after each ring push that re-asserts it, a session drops a dial's other `focus` for 750 ms,
- * and the fake dial echoes nothing: each move is a `FakeDial.turnUntil`, sent again every 2 s until its line is read.
+ * first move. A turn that falls in the repaint of a switch the daemon drives is dropped: each move is a
+ * `FakeDial.turnUntil`, sent again every 2 s until its line is read.
  *
  * Orca's plugin's own loop (plugins/harness-device-orca/src/dial.ts, with Node's inputs) runs too, in a process whose
  * whole environment is the throwaway home and a bare PATH (harness/pluginDial.ts): it finds this daemon through a

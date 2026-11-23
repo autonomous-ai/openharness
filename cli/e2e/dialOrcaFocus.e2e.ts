@@ -102,8 +102,8 @@ describe("the dial follows Orca's focus and tabs", () => {
   }
 
   /** Two sessions in Orca terminals, listed, and the dial turned to the first by hand, its rest over. The dial landed on
-   *  the first as it was listed, and a turn to it within 750 ms of the second's re-assert is taken as that focus's echo:
-   *  the turn is made again until it swipes. */
+   *  the first as it was listed, and a turn to it may fall in the repaint of a switch the daemon drives: the turn is
+   *  made again until it swipes. */
   const turnedToFirst = async (d: IsolatedDaemon, dial: FakeDial, first: InOrca, second: InOrca): Promise<void> => {
     await listed(dial, first, second)
     await dial.turnUntil(first.id, 'the swipe', () => (d.log().includes('[device] swipe · ok') || undefined))

@@ -6,9 +6,9 @@
  * as the Harness Device app writes it.
  *
  * Each case lists its sessions and acts at once: the observed source checks a session's process every 30 s, and a
- * session's process here is whatever its hook's shell left as its parent. The dial lands on the first agent listed, and
- * drops a hand's turn for 750 ms after that focus and each re-assert of it: a turn right after a list is made again
- * until its effect is seen (`FakeDial.turnUntil`, `turnedPast`).
+ * session's process here is whatever its hook's shell left as its parent. The dial lands on the first agent listed,
+ * and a turn that falls in the repaint of a switch the daemon drives is dropped: a turn right after a list is made
+ * again until its effect is seen (`FakeDial.turnUntil`, `turnedPast`).
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -124,7 +124,7 @@ describe('the dial and the apps follow each other', () => {
   const swiped = (d: IsolatedDaemon): string | undefined => swipeLines(d)[0]
 
   /** Two sessions in Orca terminals, listed, and the dial turned to the first by hand, its rest over. The dial landed on
-   *  the first as it was listed, and a turn to it within 750 ms of the second's re-assert is taken as that focus's echo. */
+   *  the first as it was listed, and a turn to it may fall in the repaint of a switch the daemon drives. */
   const turnedToFirst = async (d: IsolatedDaemon, dial: FakeDial, first: InOrca, second: InOrca): Promise<void> => {
     await listed(dial, first, second)
     expect(await dial.turnUntil(first.id, 'the swipe', () => swiped(d))).toBe('[device] swipe · ok')
@@ -326,8 +326,6 @@ describe('the dial and the apps follow each other', () => {
     front(d, ORCA)
     await typedUntilMoved(d, dial, a.claude)
     expect(moved(d)).toBe(1)
-    // The tile it centred, reported as the firmware does: the daemon drops the dial's turns until it hears it (750 ms).
-    dial.send({ t: 'focus', agentId: a.claude.id })
     let since = dial.messages.length
     await a.claude.hook('Stop')
     await dial.next((m) => m.t === 'turn.done' && m.agentId === a.claude.id, 30_000, "A's turn done", since)

@@ -1340,16 +1340,19 @@ describe("Orca's commands on Windows", () => {
   }
   const processRow = (pid: number, parentPid: number, started: number): ProcessRow =>
     ({ pid, parentPid, executable: 'orca.exe', startMarker: `w:${started}`, args: '' })
+  // Never this process's pid, which a tree end leaves alone: the runner's pid can be any number, 4400 among them.
+  const ROOT = process.pid + 1
+  const BELOW = process.pid + 2
 
   it('stopping a watch ends what its child started, then the child through its own handle, never by its pid', async () => {
-    const child = fakeChild(4321)
-    const table = [processRow(4321, 100, 1000), processRow(4400, 4321, 2000)]
-    expect(await endedOnStop(child, async () => table)).toEqual(['pid 4400', 'child SIGKILL'])
+    const child = fakeChild(ROOT)
+    const table = [processRow(ROOT, 100, 1000), processRow(BELOW, ROOT, 2000)]
+    expect(await endedOnStop(child, async () => table)).toEqual([`pid ${BELOW}`, 'child SIGKILL'])
   })
 
   it("a watch whose child exits while the table is read ends nothing by pid: its pid, and its children's parent pid, may be another process's by then", async () => {
-    const child = fakeChild(4321)
-    const table = [processRow(4321, 100, 1000), processRow(4400, 4321, 2000)]
+    const child = fakeChild(ROOT)
+    const table = [processRow(ROOT, 100, 1000), processRow(BELOW, ROOT, 2000)]
     expect(await endedOnStop(child, async () => {
       Object.assign(child, { exitCode: 1 })
       return table
