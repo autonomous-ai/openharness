@@ -81,8 +81,8 @@ export function itermScenarios(): Scenario[] {
         // d's prompt, the last, turns the dial to herdr's page.
         ...listed('herdr', ['c', 'd'], ['a', 'b']),
         { label: 'restart', kind: 'devices.restart' },
-        // The Apps screen's counts, not a listed wait: every row the scan finds after a restart has the wrong name today,
-        // so a listed wait would only run to its limit.
+        // The Apps screen's counts before the picks, as a pick of a page the devices have not counted yet is ignored; the
+        // rows the scan finds keep their names, read from Claude Code's process record, and the checks grade them.
         ...counted('iterm', { iterm: 1, tmux: 1, herdr: 2 }),
         { label: 'toTmux', kind: 'pick', page: 'tmux' },
         { kind: 'wait', ms: 2 * S },
@@ -297,7 +297,7 @@ export function itermScenarios(): Scenario[] {
         { kind: 'wait', ms: 2 * S },
         { label: 'restart', kind: 'devices.restart' },
         // Listed waits, as the taps need their rows listed; each tap on the page that lists its row. The pick waits for
-        // the Apps screen's counts too, as a listed wait after a restart runs to its limit on the rows' names.
+        // the Apps screen's counts too, as a pick of a page the devices have not counted yet is ignored.
         ...listed('iterm', ['a'], ['b', 'c']),
         ...counted('iterm', { iterm: 1, tmux: 1, herdr: 1 }),
         { label: 'toTmux', kind: 'pick', page: 'tmux' },
