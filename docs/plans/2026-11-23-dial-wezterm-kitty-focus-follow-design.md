@@ -66,7 +66,8 @@ A read answers a map: key, a place with a focus of its own (`'wezterm'` for WezT
 each kitty); value, the focused pane's `Pane.id` exactly as the adapter's `paneOf` builds it (`<n>` for WezTerm,
 `<n>@<socket>` for kitty, without `held:`), or `null` when the focused pane is none of the agents'. `undefined` for a
 read that failed. Each read has one deadline, `FOCUS_READ_MS` (2 s), for all its calls together; a call that would pass
-it is not started.
+it is not started. A kitty call starts only with 250 ms or more left, about 20 times its recorded 11.5 ms: one given a
+sliver would time out on a healthy kitty and mark it refused. A read with less left fails and marks nothing.
 
 - **WezTerm** (`cable/hosts/wezterm.ts`): `focusedPane()` runs `list-clients` once and answers the focused pane id of
   the client with the least `idle_time` (the one the person typed or clicked in last; only one client, the GUI, was

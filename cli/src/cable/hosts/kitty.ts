@@ -42,6 +42,9 @@ const TAB = /^([1-9][0-9]{0,9})@(.+)$/
 /** The kitty windows one focus read asks of, so its calls: a read's calls never pass its panes. Also the refused sockets
  *  kept. */
 export const FOCUS_PANES_MAX = 16
+/** The least time a focus call is started with: ~20x the recorded call (RECORDED_KITTY.focusedMatch.callMs), so one
+ *  that times out is kitty's failure, not the read's sliver, which would mark a healthy kitty refused. */
+const FOCUS_CALL_MIN_MS = 250
 /** kitty's answer to a `--match` no window meets (RECORDED_KITTY.focusedMatch.notFocused); a refusal exits 1 too. */
 const NO_MATCH = 'Error: No matching windows'
 
@@ -140,12 +143,12 @@ export function createKittyAdapter(deps: KittyDeps): HostAdapter & Required<Pick
   // `get-colors`, as its output is kitty's colour table, discarded: `ls` holds the windows' environment (#4227). Only
   // its exit code and, on exit 1, whether kitty found no such window are read. `state:focused` is each kitty's focused
   // window; `state:active` is each tab's active one and `state:focused_os_window` matched in no kitty of two
-  // (RECORDED_KITTY.focusedMatch activeOfEveryTab, twoKittys). A call that ran and failed is a refusal; one with no time
-  // left is not started and marks nothing.
+  // (RECORDED_KITTY.focusedMatch activeOfEveryTab, twoKittys). A call that ran and failed is a refusal; one with less
+  // than FOCUS_CALL_MIN_MS left is not started and marks nothing.
   const ask = async (file: string, socket: { listenOn: string; path?: string }, expr: string, deadline: number):
   Promise<'match' | 'none' | 'failed'> => {
     const left = deadline - deps.now()
-    if (left <= 0) return 'failed'
+    if (left < FOCUS_CALL_MIN_MS) return 'failed'
     const { code, stderr } = await deps.run(file, ['@', '--to', socket.listenOn, 'get-colors', '--match', expr], left)
     if (code === 0) return 'match'
     if (code === 1 && stderr?.startsWith(NO_MATCH)) return 'none'
