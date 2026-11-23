@@ -331,7 +331,10 @@ export const herdrSteps: { [K in 'herdr.focus' | 'herdr.restart']: StepHandler<K
       .flatMap((pane) => (pane.status !== undefined && running(world, pane.key) ? [pane.key] : []))
     for (const key of keys) await dropSession(world, key)
     stopServer(world, model, server)
-    // herdr starts again from the same tab, and each agent that ran in it on a new pane.
+    // herdr starts again from the same tab, and each agent that ran in it on a new pane, under its old session id: the
+    // person resumes each conversation (`claude --resume <id>`), as tier B starts every herdr session's fake Claude Code,
+    // after a restart too (e2e/harness/appEvalIterm.ts inHerdr), so both tiers grade the same sessions coming back (I14),
+    // not new ones in their place.
     startServer(world, model, server.tab)
     for (const key of keys) await startSession(world, key)
   },
