@@ -1180,6 +1180,22 @@ describe('the dial\'s day', () => {
     expect(dialSent()).toEqual({ [`${TODAY} dial_connected_installation_days`]: 1, [`${TODAY} dial_open_ok`]: 4 })
   })
 
+  // `harness logout` stops the daemon without discarding, and the backend gives an account its machine id on this
+  // computer again: an account signing in again finds its own queue, older than the one signed in between.
+  it('an account signing in again after another takes the file as sent', async () => {
+    start(); await usage.sync()
+    devices({ [TODAY]: { dial_connected_installation_days: 1, dial_open_ok: 1 } }); await flush()
+    await usage.stop()
+    start(join(dir, 'another-account.json')); await flush()
+    devices({ [TODAY]: { ...used, dial_open_ok: 5 } }); await flush()
+    await usage.stop()
+    sent = []
+    start(); await flush()
+    expect(dialSent()).toEqual({})
+    devices({ [TODAY]: { ...used, dial_open_ok: 6 } }); await flush()
+    expect(dialSent()).toEqual({ [`${TODAY} dial_open_ok`]: 1 })
+  })
+
   it('a first state with no queue file sends what the file holds', async () => {
     devices({ [day(-1)]: { dial_connected_installation_days: 1, dial_open_ok: 2 }, [TODAY]: { dial_connected_installation_days: 1 } })
     start(); await flush()
