@@ -472,17 +472,19 @@ describe('the catalog', () => {
     }
   })
 
-  it('a step on a row of the dial comes after a wait until the dial lists that row', () => {
+  it('a step on a row of the dial comes after a wait until the dial lists that row, on the page the dial shows last', () => {
     for (const s of ALL) {
-      const listed = new Set<SessionKey>()
+      // The latest condition wait's rows: the dial shows one page, so a row another page lists is not under the person's
+      // hand (I15's tap on tmux's row while herdr's page is shown).
+      let listed: readonly SessionKey[] = []
       for (const step of s.steps) {
-        if (step.kind === 'wait' && step.until) for (const key of step.until.expect) listed.add(key)
+        if (step.kind === 'wait' && step.until) listed = step.until.expect
         const row = step.kind === 'tap' || step.kind === 'swipe' || step.kind === 'attach' ? step.session
           : step.kind === 'voice' ? step.target
           : step.kind === 'thread' ? s.sessions.find((d) => d.title === step.title)!.key
           : undefined
-        // Otherwise the step outruns the first list, and the dial has no row to act on.
-        if (row !== undefined) expect(listed.has(row), `${s.id} ${step.kind} ${row}`).toBe(true)
+        // Otherwise the step outruns the list, and the dial has no row to act on.
+        if (row !== undefined) expect(listed.includes(row), `${s.id} ${step.kind} ${row}`).toBe(true)
       }
     }
   })
