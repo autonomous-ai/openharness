@@ -28,6 +28,8 @@ import { isLocalOnly } from '../lib/cardUpdate.js'
 import { TurnStats, type TurnStatsFields } from '../cable/turnStats.js'
 import { cableEventFor, cableStepFor, cableQuestionCloseFor, cableQuestionFor, DaemonCableHost, type CableHostWiring } from '../cable/cableHost.js'
 import { CableSession, SHOWN_ONLY_PREFIX, type DialStatus, type FollowCause } from '../cable/cableSession.js'
+import { createDialUsage, type DialAgent, type DialUsage } from '../cable/dialUsage.js'
+import { DialUsageFile } from '../cable/dialUsageFile.js'
 import type { HostAdapter, Pane } from '../cable/hosts/adapter.js'
 import { chatGptPlaces, claudeStoreRoots } from '../cable/hosts/appPlaces.js'
 import { AppWake } from '../cable/hosts/appWake.js'
@@ -86,7 +88,7 @@ import { DialLog } from '../cable/dialLog.js'
 import { DialVerdicts } from '../cable/dialPortVerdicts.js'
 import { createDialSetup } from '../cable/dialSetup.js'
 import { claudeFound, type ClaudeRun } from '../devices/claudePlugin.js'
-import { readOrcaConnected, readRemoved, SETUP_COUNTS } from '../devices/dialSkillFiles.js'
+import { readOrcaConnected, readRemoved, readSetup, SETUP_COUNTS } from '../devices/dialSkillFiles.js'
 import { createOrcaHomesCache, orcaHomesDeps, readOrcaHomes, type OrcaHomesCache } from '../devices/orcaHomes.js'
 import { orcaPluginRun, type OrcaPluginRun } from '../devices/orcaPlugin.js'
 import { createOrcaPluginSetup, orcaPluginParts } from '../cable/orcaPluginSetup.js'
@@ -98,6 +100,7 @@ import { WindowSelection } from '../cable/windowSelection.js'
 import { WindowVisit } from '../cable/windowVisit.js'
 import { MachineListCache } from '../device/machineList.js'
 import type { NoticeAsk, NoticeResult } from '../lib/dialNotice.js'
+import { DIAL_USAGE_FILE } from '../lib/dialUsageContract.js'
 import { claudeProjectsRoots, codexHomeRoots, movedEngineHomes } from '../lib/engineHomes.js'
 import { harnessDevicesRequest } from '../lib/harnessDevices.js'
 import { codeOrLength, errorKind } from '../lib/log.js'
@@ -395,7 +398,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // waiting for a Harness agent find it (`lookHarness`): a dial can attach before the first read. Inside the core's
   // process the agents are read directly, with no refresh, and the look runs all the same: on Windows the devices there
   // have their listener (services/inline.ts), so a notice is made and restored there too.
-  const refresh = (): Promise<void> => (deps.refresh?.() ?? Promise.resolve()).then(() => lookHarness())
+  // The same read starts the dial's first-agent clock once a Harness agent runs. Only a coming is said here: whether any
+  // agent runs is read whole at each attach and each change outside a pane.
+  const refresh = (): Promise<void> => (deps.refresh?.() ?? Promise.resolve()).then(() => {
+    lookHarness()
+    if (cableHost.agentTotal() > 0) count((usage) => usage.agentsPresent(true))
+  })
   const fleet: Fleet | null = part.start('fleet', () => startFleet(core, { machines, desk: () => desk, refresh }).fleet, FLEET_FALLBACKS)
 
   // ── the window bridges ─────────────────────────────────────────────────────────────────────────────
@@ -456,7 +464,37 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     pending.add(timer)
     return () => { pending.delete(timer); clearTimeout(timer) }
   }
-  const inbox = new Inbox({ now: monotonic, after: timerIn('inbox') })
+  // The dial's usage counts (docs/plans/2026-11-23-dial-usage-counts-design.md): fixed names in a file of the devices'
+  // own, which the gateway reads, so no count goes through the core. Signed-in computers only.
+  const wallClock = (): number => Date.now()
+  const usageFile = new DialUsageFile({
+    file: join(core.dataDir, DIAL_USAGE_FILE),
+    now: wallClock,
+    after: timerIn('dialUsage'),
+    signedIn: () => core.account.signedIn(),
+    hadDial: () => readSetup(core.dataDir).dial,
+    log,
+  })
+  /** Where the dial would place an agent with no window: its own app for one outside a pane, Harness for the rest. */
+  const asItself = { apps: true }
+  const usageAgent = (agentId: string): DialAgent | undefined => {
+    const who = cableHost.describe(agentId)
+    return who && {
+      engine: who.engine,
+      host: cableHost.hostOf(agentId, asItself) ?? 'harness',
+      page: cableHost.appOf(agentId, asItself) ?? 'harness',
+      held: observed?.heldOnly(agentId) ?? false,
+    }
+  }
+  const dialUsage = createDialUsage({ sink: usageFile, now: wallClock, after: timerIn('dialUsage'), describe: usageAgent })
+  /** A count is the devices' own part: one that throws never reaches the dial. */
+  const count = (run: (usage: DialUsage) => void): void => part.call('dialUsage', () => run(dialUsage))
+  /** A row with a process behind it: an ended session or a row of an app's store runs nothing. */
+  const running = (agent: HostAgent): boolean => !agent.ended && !agent.resting
+  /** Whether an agent runs for the dial to show: the first-agent clock starts at the attach or once one does. */
+  const agentsRunning = (entries: HostEntry[] = outsideEntries()): boolean =>
+    cableHost.agentTotal() > 0 || entries.some(({ agent }) => running(agent))
+  const inbox =new Inbox({ now: monotonic, after: timerIn('inbox') })
   const apps = deps.orca ?? orcaDeps()
   /** Where herdr's socket is, from the daemon's own environment: the client reads it, and the herdr source watches for it. */
   const herdrAt = herdrClientDeps()
@@ -1198,15 +1236,29 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       if (on && orcaSetup) part.call('orcaPlugin', () => orcaSetup.pass())
       dialAttached(on)
       part.call('dialStream', () => dial.attached(on))
+      // Whether an agent runs first: an attach with one starts the first-agent clock at once.
+      count((usage) => {
+        usage.agentsPresent(agentsRunning())
+        usage.attached(on)
+      })
     },
-    dialShows: (agent) => part.call('dialStream', () => dial.shows(agent)),
+    dialShows: (agent) => {
+      part.call('dialStream', () => dial.shows(agent))
+      count((usage) => usage.shown(cableHost.shownAgentId() ?? null))
+    },
     // The core's own doors for a local agent. The fleet's router reaches them the same way; the dial uses
     // these only when it routes by itself, with the fleet off. An agent outside a pane never reaches them: the host shuts
     // each to it, the fleet's way too (cableHost.ts `outside`).
     sendTurn: (agentId, text) => core.turns.send(agentId, text),
     stopTurn: (agentId) => core.turns.stop(agentId),
-    answer: (agentId, requestId, answers) => core.questions.answer(agentId, requestId, answers),
-    answerReviewed: (answer) => core.questions.answerReviewed(answer),
+    answer: (agentId, requestId, answers) => {
+      count((usage) => usage.used())
+      core.questions.answer(agentId, requestId, answers)
+    },
+    answerReviewed: (answer) => {
+      count((usage) => usage.used())
+      return core.questions.answerReviewed(answer)
+    },
     recent: (agentId, n) => core.turns.recent(agentId, n),
     recentAsks: (agentId) => core.turns.asks(agentId),
     runtimeProfile: (session) => core.agents.runtimeProfile(session),
@@ -1219,6 +1271,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // tab, and an older window that does not know the field opens one as before.
     opened: (machineId, agentId, reason) =>
       core.clients.sendLocal({ type: 'dial_open', payload: { machineId, agentId, ...(reason ? { reason } : {}) } }),
+    // A person's tap on an agent, a notice's "In <app>" among them, is use of the dial. Its notice's card stays on the dial's
+    // face of that agent until its next turn.
+    tapped: () => count((usage) => usage.used()),
     noticeFrom: (agentId) => notices.from(agentId),
     newsKept: (agentId) => notifyMode.get() !== 'you' || failedLast.has(agentId),
     // A caller no list holds has no face on the dial to ask on, and with no session its next turn is never heard: kept,
@@ -1241,11 +1296,19 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     focused: (machineId, agentId) => core.clients.sendLocal({ type: 'dial_focus', payload: { machineId, agentId } }),
     // The outcome only: never the agent, its session or its terminal.
     swiped: (outcome) => log(`[device] swipe · ${outcome}`),
-    turned: noteMove,
+    // A hand's turn alone: the session drops a greet's own focus and a landing's echo before this.
+    turned: () => {
+      noteMove()
+      count((usage) => usage.used())
+    },
     localFollowed: (cause, outcome) => log(FOLLOWED[cause === 'attach' ? attachAsk : cause][outcome]),
     swarmSelected: (swarmId) => core.clients.sendLocal({ type: 'dial_swarm', payload: { swarmId } }),
     // Guarded as a notice into the dial is: a throw on the scroll path (a window's stream) is logged, never the session's.
-    scrolled: (phase, dy, velocity) => part.call('dial', () => routeScroll(phase, dy, velocity)),
+    scrolled: (phase, dy, velocity) => {
+      // A stroke is use once, at its start: its moves come many a second.
+      if (phase === 'down') count((usage) => usage.used())
+      part.call('dial', () => routeScroll(phase, dy, velocity))
+    },
     // Gestures stay at this desk. The device inventory and its settings also reach the owner's other
     // machines, through the encrypted device-management event.
     dialStatus: (status) => {
@@ -1290,7 +1353,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       part.call('dial', () => threadSettled(app))
       part.call('dial', () => editorSettled(app))
     },
-    appPicked: () => log('[device] app filter: picker'),
+    appPicked: () => {
+      count((usage) => usage.used())
+      log('[device] app filter: picker')
+    },
     // A pick that leaves the dial's ring as it was says why in fixed words (PM, 2026-11-20): the answer only, never the app.
     appPickKept: (answer) => log(`[device] app filter: pick · ${answer}`),
     // A pick on the dial brings its app to the front, on macOS and, through their raise, on Linux and Windows
@@ -1304,6 +1370,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     launchDesktop: opener.desktop,
     // A measure: the app's name only.
     desktopTimedOut: () => log('[device] open · harness · no window'),
+    voiceEnded: (end) => count((usage) => usage.voiceEnded(end)),
+    openEnded: (agentId, end) => count((usage) => usage.opened(agentId, end)),
     // With a window open, the tab or the shown app's ring: a measure as `switched` is, a view and a cause, never an app.
     // After the list read that can turn it, as a switch: every dial gets its tabs and list at once, the outside agents'
     // questions are asked or closed by the gate, and on a ring its agents mid-turn are told again.
@@ -1682,7 +1750,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         checking.set(agent.id, held)
       }
       // Only an observed agent has a hook to say its turn started (port.observed): another's going busy is its next turn.
-      if (entry.source !== observed && busy(entry) && !(was && busyState(was.state))) endNotice(agent.id)
+      if (entry.source !== observed && busy(entry) && !(was && busyState(was.state))) {
+        endNotice(agent.id)
+        count((usage) => usage.turnStarted(agent.id))
+      }
       // An agent a listing names for the first time ended no turn the dial saw: herdr says done of any turn that ended in a
       // pane it has not focused, and lists it again at each plug-in, reconnect and unfold. An observed one is first heard
       // by its hook, which may be the turn's end.
@@ -1692,6 +1763,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       else if (ended && agent.state === 'error') tellOf(agent.id, { ...card, kind: 'error' })
     }
     if (fresh.size) part.call('dial', () => check(fresh))
+    count((usage) => usage.agentsPresent(agentsRunning(entries)))
   }
   observed?.onChange(() => part.call('dial', outsideTurn))
   herdr?.onChange(() => part.call('dial', outsideTurn))
@@ -2171,7 +2243,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       return
     }
     if (ran.payload?.kind === 'turn_started' && ran.agentId) {
-      endNotice(ran.agentId)
+      const agentId = ran.agentId
+      endNotice(agentId)
+      count((usage) => usage.turnStarted(agentId))
       // A question its last turn left open is stale: it must not hold a notice of this turn back.
       questionsOpen.delete(ran.agentId)
       endReplies(ran.agentId, false)
@@ -2404,6 +2478,16 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         if (event.event === 'turn-start') endNotice(observedAgentId(event.engine, event.sessionId))
         if (!observed) return
         const source = observed.ingest(event)
+        if (event.event === 'turn-start') {
+          const agentId = observedAgentId(event.engine, event.sessionId)
+          // Its voice delivered, and once a day where the dial found it: on no list, held, on the Other page or placed.
+          count((usage) => {
+            usage.turnStarted(agentId)
+            const listed = outsideEntries().some(({ agent }) => agent.id === agentId && running(agent))
+            const unknown = { engine: event.engine, host: UNKNOWN_APP, page: UNKNOWN_APP, held: false }
+            usage.hooked(agentId, { ...unknown, ...usageAgent(agentId), listed, otherApp: observed.otherApp(agentId) })
+          })
+        }
         if (event.event === 'session-end') {
           const agentId = observedAgentId(event.engine, event.sessionId)
           dropEnded(observed, agentId)
@@ -2494,6 +2578,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       // A stop is not an ending: the detach below and a listing source's emptied list end cards in memory, and the next
       // start must still find them, so the file takes what was waiting and nothing after.
       part.call('notices', () => noticeFile.close())
+      // So too the counts: the stop's own detach and endings are not the person's.
+      count((usage) => usage.stop())
+      part.call('dialUsage', () => usageFile.close())
       herdrApp.stop()
       // The listener before anything, once it has opened: no front reaches a stopped cable or sets a timer after the
       // timers below are cleared.
