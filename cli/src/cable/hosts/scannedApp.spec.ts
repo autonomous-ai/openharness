@@ -124,10 +124,18 @@ describe('scannedApps on macOS', () => {
     expect(await scannedApps([800, 900], d)).toEqual(new Map([[800, 'claude'], [900, 'kitty']]))
   })
 
-  it('an app no table lists names nothing: never the unknown app', async () => {
-    const d = deps([[1000, 990, 'claude'], [990, 1, '/Applications/Alacritty.app/Contents/MacOS/alacritty']],
-      { '/Applications/Alacritty.app': 'org.alacritty' })
-    expect(await scannedApps([1000], d)).toEqual(new Map())
+  it('Alacritty, the unknown app, and an app no table lists name nothing: never the unknown app', async () => {
+    const d = deps([
+      [1000, 990, 'claude'], [990, 1, '/Applications/Alacritty.app/Contents/MacOS/alacritty'],
+      [1100, 1090, 'claude'], [1090, 1, '/Applications/Rio.app/Contents/MacOS/rio'],
+    ], { '/Applications/Alacritty.app': 'org.alacritty', '/Applications/Rio.app': 'com.raphaelamorim.rio' })
+    expect(await scannedApps([1000, 1100], d)).toEqual(new Map())
+  })
+
+  it('a session under Warp Preview is in Warp', async () => {
+    const d = deps([[1000, 990, 'claude'], [990, 980, '/bin/zsh'], [980, 1, '/Applications/WarpPreview.app/Contents/MacOS/preview']],
+      { '/Applications/WarpPreview.app': 'dev.warp.Warp-Preview' })
+    expect(await scannedApps([1000], d)).toEqual(new Map([[1000, 'warp']]))
   })
 
   it('tmux, launchd and a parent the table does not hold name nothing', async () => {

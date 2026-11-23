@@ -78,6 +78,13 @@ describe('frontAppId', () => {
     expect(frontAppId(bundle)).toBe(id)
   })
 
+  // The front follows to the page their agents are on: Alacritty sets no TERM_PROGRAM, and Warp's is WarpTerminal.
+  it('an agent in Alacritty or Warp Preview is on the page their bundle id in front gives', () => {
+    expect(detectApp({ __CFBundleIdentifier: 'org.alacritty' })).toBe(frontAppId('org.alacritty'))
+    expect(detectApp({ __CFBundleIdentifier: 'dev.warp.Warp-Preview', TERM_PROGRAM: 'WarpTerminal' }))
+      .toBe(frontAppId('dev.warp.Warp-Preview'))
+  })
+
   it.each(TERMINAL_EXES)('Alacritty and Warp map by their exe names on Windows and Linux: %s', (exe, id) => {
     expect(frontAppId(exe)).toBe(id)
   })
