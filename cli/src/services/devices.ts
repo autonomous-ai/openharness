@@ -2170,7 +2170,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const readPanes = async (source: ObservedSource, app: PaneFocus['app']): Promise<PaneAnswer | undefined> => {
     const moves = dialMoves
     const at = monotonic()
-    const panes = source.list().flatMap(({ id }) => source.paneOf(id, app) ?? [])
+    // Once each: two live agents can share a pane, as an ended session not yet seen as ended beside its successor.
+    const panes = [...new Set(source.list().flatMap(({ id }) => source.paneOf(id, app) ?? []))]
     if (app === 'wezterm') {
       const id = await wezterm.focusedPane()
       if (id === undefined) return undefined
