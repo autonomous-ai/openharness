@@ -32,19 +32,19 @@ import { closeWindows, editorSteps, reopenWindows } from './steps/editor.js'
 import { itermSteps, openTabs } from './steps/iterm.js'
 import { closeOrca, orcaModelSteps, reopenOrca } from './steps/orca.js'
 import { sessionsSteps } from './steps/sessions.js'
+import { tmuxSteps } from './steps/tmux.js'
 import { voiceSteps } from './steps/voice.js'
 import { windowSteps } from './steps/window.js'
 import { World, type StepHandler, type TierAWorld } from './world.js'
 
 type Run = Exclude<Step, { kind: 'wait' }>
 const isEditor = (app: App): app is Editor => (EDITORS as readonly App[]).includes(app)
-/** tmux's, herdr's and the devices' restart steps, each built by its own task of
- *  docs/plans/2026-11-22-dial-eval-iterm2-plan.md (Tasks 5-7): until then a scenario that runs one fails. */
+/** herdr's and the devices' restart steps, each built by its own task of docs/plans/2026-11-22-dial-eval-iterm2-plan.md
+ *  (Tasks 6 and 7): until then a scenario that runs one fails. */
 const notBuilt = (kind: StepKind) => (): Promise<void> => Promise.reject(new Error(`tier A: the ${kind} step is not built yet`))
 const STEPS: { [K in Exclude<StepKind, 'wait'>]: StepHandler<K> } = {
   ...claudeStoreSteps, ...codexStoreSteps, ...sessionsSteps, ...windowSteps, ...dialSteps, ...voiceSteps, ...editorSteps,
-  ...orcaModelSteps, ...itermSteps,
-  'tmux.detach': notBuilt('tmux.detach'), 'tmux.attach': notBuilt('tmux.attach'), 'tmux.selectPane': notBuilt('tmux.selectPane'),
+  ...orcaModelSteps, ...itermSteps, ...tmuxSteps,
   'herdr.focus': notBuilt('herdr.focus'), 'herdr.restart': notBuilt('herdr.restart'), 'devices.restart': notBuilt('devices.restart'),
   // An editor's windows go with it, and come back on its relaunch reporting its sessions' new shells. Orca's watches and
   // the plugin's stream go with Orca, and the stream comes back on its relaunch.

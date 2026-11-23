@@ -83,7 +83,6 @@ function fakeWorld(platform: Platform, of: Scenario = scenario) {
     folders: { claudeProjects: join(root, 'projects'), codexSessions: join(root, 'codex', 'sessions'),
       cursorProjects: join(root, 'cursor', 'projects'), codexHomes: join(root, 'codex-homes') },
     codexHome: { home: join(root, '.codex') },
-    panes: new Map<string, SessionKey>(),
     session: (key: SessionKey) => of.sessions.find((s) => s.key === key)!,
     deliver: (d: Omit<Delivery, 'at'>) => { deliveries.push(d) },
   } as unknown as TierAWorld

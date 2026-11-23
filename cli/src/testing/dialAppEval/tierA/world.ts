@@ -38,6 +38,7 @@ import { quiet } from './clock.js'
 import { LoopbackDial } from './loopbackDial.js'
 import { machine, type MachineModel } from './machine.js'
 import { answerOrca, orcaAccountHomes, watchChild } from './steps/orca.js'
+import { answerTmux, TMUX } from './steps/tmux.js'
 import { recordTyping } from './steps/voice.js'
 import { createStoreWatch, onHost } from './storeWatch.js'
 
@@ -119,9 +120,10 @@ const CODEX_BIN = '/opt/eval/bin/codex'
 const APP_CODEX_BIN = '/opt/eval/ChatGPT.app/codex'
 const CURSOR_BIN = '/opt/eval/bin/cursor'
 /** The programs whose commands the world answers as the scenario says, by name: macOS's and Linux's openers, the scheme
- *  lookup, the Windows helper, the Linux raise and Orca's CLI (steps/orca.ts). Cursor's CLI is answered only as Linux's
- *  folder row runs it, on one folder (cable/hosts/cursorFolder.ts). A command of any other is one tier A does not model. */
-const ANSWERED: ReadonlySet<string> = new Set(['open', 'xdg-open', 'xdg-mime', 'harness-pty', 'raise', ...ORCA_PROGRAMS])
+ *  lookup, the Windows helper, the Linux raise, Orca's CLI (steps/orca.ts) and tmux (steps/tmux.ts). Cursor's CLI is
+ *  answered only as Linux's folder row runs it, on one folder (cable/hosts/cursorFolder.ts). A command of any other is one
+ *  tier A does not model. */
+const ANSWERED: ReadonlySet<string> = new Set(['open', 'xdg-open', 'xdg-mime', 'harness-pty', 'raise', 'tmux', ...ORCA_PROGRAMS])
 /** The programs whose commands name panes by id. */
 const MULTIPLEXERS: ReadonlySet<string> = new Set(['tmux', 'herdr'])
 
@@ -444,6 +446,12 @@ export class World implements TierAWorld {
     // read Orca's homes at once. Typing is seen first, as Orca's rule answers its sends.
     recordTyping(this)
     answerOrca(this)
+    // tmux is on an iTerm2 scenario's machine alone (the plan's Decision 5): every other app's devices find none and run
+    // none, as on main.
+    if (scenario.app === 'iterm') {
+      machine.installed.set('tmux', TMUX)
+      answerTmux(this)
+    }
     // Orca's CLI is found from the model too (the plan's Decision 6), and the devices build their own reads of it on
     // these. A lookup's accept is never asked: it reads the real disk. Of Orca's files only its CLI is there, where the
     // platform's installer puts it.
