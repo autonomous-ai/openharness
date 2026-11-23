@@ -17,6 +17,7 @@ import type { HostAdapter, Pane, Place } from './adapter.js'
 import { APP_IDS } from './hostDetect.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 import type { Nested, NestedPlace, OuterLookup } from './outer.js'
+import type { Nest } from './types.js'
 import { parentChain, readPtyOwner, scannedApps, type ProcessName } from './scannedApp.js'
 import { clientTtyForm } from './tabs.js'
 
@@ -282,36 +283,43 @@ async function said(log: TmuxOuterDeps['log'], placing: Promise<NestedPlace | No
  * one the server started with, none when the daemon started it (Diego's Mac, 2026-11-19), and another app's after a
  * re-attach. It only reads, the pane's facts and its session's clients, and only for a pane of the person's that holds
  * the hook's caller (pid), on a terminal tmux made. Nothing at once when the hints name no tmux pane in form or the
- * caller is no pid; else the client's place, `{}` when none is found. Never rejects.
+ * caller is no pid; else the client's place, `{}` when none is found, with `nest` once tmux made the caller's terminal.
+ * Never rejects.
  */
 export function createTmuxOuter(deps: TmuxOuterDeps): OuterLookup {
   // By pane and caller: an answer holds for the caller whose chain held the pane, a pane of the same id may be another
   // server's.
-  const asked = heldAnswers<ClientPlace>(deps.now)
+  const asked = heldAnswers<ClientPlace & { nest?: Nest }>(deps.now)
 
-  /** `{}` when the pane is not the person's, holds no process of the caller's, tmux made no terminal the caller runs on,
-   *  or no client of its session is in a listed app; the step that could not be read, when one could not. */
-  async function placeOf(id: string, pid: number): Promise<ClientPlace | NotRead> {
+  /** The table that proved the pane the caller's, on a terminal tmux made; nothing when the pane is not the person's,
+   *  holds no process of the caller's or tmux made no terminal the caller runs on; the step that could not be read,
+   *  when one could not. */
+  async function tmuxMade(id: string, pid: number): Promise<readonly ProcessName[] | NotRead | undefined> {
     const facts = await paneFacts(deps, id)
     if (typeof facts === 'string') return facts
-    if (!facts.persons) return {}
+    if (!facts.persons) return undefined
     // One read of the table serves the pane's proof and the client's walk.
     const rows = await deps.processes().catch(() => undefined)
     if (!rows) return 'processes'
-    if (!holdsPane(rows, pid, facts.pid)) return {}
+    if (!holdsPane(rows, pid, facts.pid)) return undefined
     // A terminal started from the pane is under it too, and keeps its TMUX_PANE, yet its agents are in no tmux pane:
     // tmux must have made the caller's terminal, as Zellij's and herdr's lookups ask. The table holds no terminal: the
     // caller's and its parents' are read.
     const owner = await readPtyOwner(pid, rows, deps.tty).catch(() => null)
     if (owner === null) return 'processes'
-    if (owner !== 'tmux') return {}
-    return clientOf(deps, id, rows)
+    return owner === 'tmux' ? rows : undefined
   }
 
   return (hints, pid) => {
     const id = hints.TMUX_PANE
     if (!id || !TMUX_PANE_ID.test(id) || !PID.test(String(pid))) return undefined
-    return asked(`${id}:${pid}`, () => said(deps.log, placeOf(id, pid)))
+    return asked(`${id}:${pid}`, async () => {
+      const rows = await tmuxMade(id, pid)
+      if (!rows || typeof rows === 'string') return said(deps.log, Promise.resolve(rows ?? {}))
+      // From here the agent is in a pane tmux made, so on tmux's page (Diego, 2026-11-23), whatever its clients give:
+      // one in an app, none, or a step not read.
+      return { ...(await said(deps.log, clientOf(deps, id, rows))), nest: 'tmux' }
+    })
   }
 }
 

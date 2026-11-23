@@ -426,7 +426,7 @@ describe('the outer place of an agent in the person\'s tmux', () => {
   // Its process too: the window a raise brings forward on Linux is the one that holds the client (the dial-linux spec, 2.2).
   it('a person\'s pane with one client: the client\'s app, tty and process', async () => {
     const { calls, logs, reads, outer } = lookup({}, [], ONE)
-    expect(await outer(NESTED, 100)).toStrictEqual({ app: 'terminal-app', tty: '/dev/ttys004', pid: 4300 })
+    expect(await outer(NESTED, 100)).toStrictEqual({ app: 'terminal-app', tty: '/dev/ttys004', pid: 4300, nest: 'tmux' })
     expect(calls).toEqual([asked, clientsAsked])
     // One read of the table serves the pane's proof and the client's walk.
     expect(reads()).toBe(1)
@@ -498,9 +498,9 @@ describe('the outer place of an agent in the person\'s tmux', () => {
     expect(logs).toEqual(none)
   })
 
-  it('a detached session answers {}', async () => {
+  it('a detached session answers tmux alone', async () => {
     const { calls, logs, outer } = lookup({}, [], { ...ONE, clients: '' })
-    expect(await outer(NESTED, 100)).toEqual({})
+    expect(await outer(NESTED, 100)).toEqual({ nest: 'tmux' })
     expect(calls).toEqual([asked, clientsAsked])
     expect(logs).toEqual(none)
   })
@@ -514,29 +514,29 @@ describe('the outer place of an agent in the person\'s tmux', () => {
       'not a client\n', 'soon|4300|/dev/ttys009\n', '1794700099|0|/dev/ttys009\n', '1794700099||/dev/ttys009\n', // passed over
     ].join('')
     const { logs, outer } = lookup({}, [], { ...ONE, clients })
-    expect(await outer(NESTED, 100)).toEqual({ app: 'terminal-app', tty: '/dev/ttys004', pid: 4300 })
+    expect(await outer(NESTED, 100)).toEqual({ app: 'terminal-app', tty: '/dev/ttys004', pid: 4300, nest: 'tmux' })
     expect(logs).toEqual(found)
   })
 
   // Every Harness terminal and a phone's is a control-mode client: no tty, and its parent no app.
-  it('a control client used last answers {}', async () => {
+  it('a control client used last answers tmux alone', async () => {
     const clients = places(1794700050, 4300, '/dev/ttys004') + places(1794700100, 4242, '')
     const { logs, outer } = lookup({}, [], { ...ONE, clients })
-    expect(await outer(NESTED, 100)).toEqual({})
+    expect(await outer(NESTED, 100)).toEqual({ nest: 'tmux' })
     expect(logs).toEqual(none)
   })
 
   it('a tty out of form: the app alone', async () => {
     for (const tty of ['/dev/pts/3', '', 'ttys004', '/dev/ttys004; x', '/dev/ttys12345']) {
       const { logs, outer } = lookup({}, [], { ...ONE, clients: places(1794700050, 4300, tty) })
-      expect(await outer(NESTED, 100), tty).toStrictEqual({ app: 'terminal-app', pid: 4300 })
+      expect(await outer(NESTED, 100), tty).toStrictEqual({ app: 'terminal-app', pid: 4300, nest: 'tmux' })
       expect(logs, tty).toEqual(found)
     }
   })
 
-  it('a client whose parents name no listed app answers {}', async () => {
+  it('a client whose parents name no listed app answers tmux alone', async () => {
     const { logs, outer } = lookup({ bundleId: async () => 'com.example.other' }, [], ONE)
-    expect(await outer(NESTED, 100)).toEqual({})
+    expect(await outer(NESTED, 100)).toEqual({ nest: 'tmux' })
     expect(logs).toEqual(none)
   })
 
@@ -545,29 +545,31 @@ describe('the outer place of an agent in the person\'s tmux', () => {
   it('Linux: a client in a WezTerm window on /dev/pts/3: its app, tty and process', async () => {
     const processes = async () => [...TABLE, { pid: 4300, ppid: 4299, executable: 'tmux' }, { pid: 4299, ppid: 1, executable: 'wezterm-gui' }]
     const { logs, outer } = lookup({ platform: 'linux', processes }, [], { ...ONE, clients: places(1794700050, 4300, '/dev/pts/3') })
-    expect(await outer(NESTED, 100)).toStrictEqual({ app: 'wezterm', tty: '/dev/pts/3', pid: 4300 })
+    expect(await outer(NESTED, 100)).toStrictEqual({ app: 'wezterm', tty: '/dev/pts/3', pid: 4300, nest: 'tmux' })
     expect(logs).toEqual(found)
     const mac = lookup({ platform: 'linux', processes }, [], ONE)
-    expect(await mac.outer(NESTED, 100)).toStrictEqual({ app: 'wezterm', pid: 4300 })
+    expect(await mac.outer(NESTED, 100)).toStrictEqual({ app: 'wezterm', pid: 4300, nest: 'tmux' })
   })
 
-  it('tmux or ps that fails: {} and not read, with the step, never a rejection', async () => {
+  it('tmux or ps that fails: no app and not read, with the step, never a rejection', async () => {
     const absent = async (): Promise<TmuxPathOutcome> => ({ state: 'absent', reason: 'tmux was not found' })
     const roots = Object.assign([], { some: () => { throw new Error('roots not read') } })
-    const cases: Array<[string, ReturnType<typeof lookup>, Call[], string[]]> = [
-      ['no tmux is found', lookup({ tmux: absent }, [], ONE), [], notRead('tmux')],
-      ['tmux does not start', lookup({ run: async () => { throw new Error('spawn /x/bin/tmux EACCES') } }, [], ONE), [], notRead('pane')],
-      ['display-message fails', lookup({}, [1], ONE), [asked], notRead('pane')],
-      ['display-message says no fact', lookup({}, [], { ...ONE, pane: 'abc\n' }), [asked], notRead('pane')],
-      ['the table is not read', lookup({ processes: async () => { throw new Error('process table not read') } }, [], ONE), [asked], notRead('processes')],
-      ['the caller\'s terminal is not read', lookup({ tty: async () => { throw new Error('tty not read') } }, [], ONE), [asked], notRead('processes')],
-      ['list-clients fails', lookup({}, [0, 1], ONE), [asked, clientsAsked], notRead('clients')],
-      ['the app scan throws', lookup({ roots }, [], ONE), [asked, clientsAsked], notRead('app')],
-      ['a client with no activity', lookup({}, [], { ...ONE, clients: 'soon|4300|/dev/ttys004\n' }), [asked, clientsAsked], none],
-      ['a client with no process', lookup({}, [], { ...ONE, clients: '1|0|/dev/ttys004\n' }), [asked, clientsAsked], none],
+    // Once tmux is known to have made the caller's terminal, a client step that fails still answers tmux.
+    const tmux = { nest: 'tmux' }
+    const cases: Array<[string, ReturnType<typeof lookup>, Call[], string[], object]> = [
+      ['no tmux is found', lookup({ tmux: absent }, [], ONE), [], notRead('tmux'), {}],
+      ['tmux does not start', lookup({ run: async () => { throw new Error('spawn /x/bin/tmux EACCES') } }, [], ONE), [], notRead('pane'), {}],
+      ['display-message fails', lookup({}, [1], ONE), [asked], notRead('pane'), {}],
+      ['display-message says no fact', lookup({}, [], { ...ONE, pane: 'abc\n' }), [asked], notRead('pane'), {}],
+      ['the table is not read', lookup({ processes: async () => { throw new Error('process table not read') } }, [], ONE), [asked], notRead('processes'), {}],
+      ['the caller\'s terminal is not read', lookup({ tty: async () => { throw new Error('tty not read') } }, [], ONE), [asked], notRead('processes'), {}],
+      ['list-clients fails', lookup({}, [0, 1], ONE), [asked, clientsAsked], notRead('clients'), tmux],
+      ['the app scan throws', lookup({ roots }, [], ONE), [asked, clientsAsked], notRead('app'), tmux],
+      ['a client with no activity', lookup({}, [], { ...ONE, clients: 'soon|4300|/dev/ttys004\n' }), [asked, clientsAsked], none, tmux],
+      ['a client with no process', lookup({}, [], { ...ONE, clients: '1|0|/dev/ttys004\n' }), [asked, clientsAsked], none, tmux],
     ]
-    for (const [name, { calls, logs, outer }, ran, said] of cases) {
-      expect(await outer(NESTED, 100), name).toEqual({})
+    for (const [name, { calls, logs, outer }, ran, said, answer] of cases) {
+      expect(await outer(NESTED, 100), name).toEqual(answer)
       expect(calls, name).toEqual(ran)
       expect(logs, name).toEqual(said)
     }
@@ -575,7 +577,7 @@ describe('the outer place of an agent in the person\'s tmux', () => {
 
   // Command Code's turn-start comes at every tool call; a lookup is a `ps` and up to sixteen `plutil` runs.
   it('one lookup per pane and caller in flight, and one every 5 s', async () => {
-    const answer = { app: 'terminal-app', tty: '/dev/ttys004', pid: 4300 }
+    const answer = { app: 'terminal-app', tty: '/dev/ttys004', pid: 4300, nest: 'tmux' }
     const held: Array<() => void> = []
     const { calls, clock, outer } = lookup({
       run: async (file, args, timeoutMs) => {
@@ -919,7 +921,7 @@ const atPath = (call: Call): Call => ({ ...call, file: '/x/bin/tmux' })
 describe('tmux as the core finds it', () => {
   it('a tmux found off the PATH runs at its path: the lookup places the agent in Terminal at its tty', async () => {
     const { calls, logs, outer } = lookup({ tmux: ADOPTED }, [], ONE)
-    expect(await outer(NESTED, 100)).toEqual({ app: 'terminal-app', tty: '/dev/ttys004', pid: 4300 })
+    expect(await outer(NESTED, 100)).toEqual({ app: 'terminal-app', tty: '/dev/ttys004', pid: 4300, nest: 'tmux' })
     expect(calls).toEqual([atPath(asked), atPath(clientsAsked)])
     expect(logs).toEqual(found)
   })
