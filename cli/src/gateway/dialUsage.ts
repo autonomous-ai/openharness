@@ -3,7 +3,7 @@
 // knows (outside the app, returns, the period flags, the waits). docs/plans/2026-11-23-dial-usage-counts-design.md.
 import { statSync } from 'node:fs'
 import { DIAL_DEVICE_METRICS, DIAL_FILE_METRICS, DIAL_FLAG_METRICS, DIAL_USAGE_FILE_MAX_BYTES, DIAL_USAGE_FILE_VERSION,
-  DIAL_USAGE_MAX_COUNT, DIAL_WAIT_BUCKETS, type DialFileMetric, type DialUsageMetric } from '../lib/dialUsageContract.js'
+  DIAL_USAGE_MAX_COUNT, DIAL_WAIT_BUCKETS, DIAL_WAIT_RAW_METRICS, type DialFileMetric, type DialUsageMetric } from '../lib/dialUsageContract.js'
 import { jsonObject, readState } from '../lib/secureState.js'
 
 type DialCounts = Partial<Record<DialFileMetric, number>>
@@ -13,10 +13,11 @@ export type DialRead = { state: 'ok'; file: DialFileRead } | { state: 'none' } |
 export interface DialStamp { mtimeMs: number; size: number }
 /**
  * What the gateway has taken from the devices' file. `sent`: each open day's values as last taken (flags kept across
- * a new series). `closedThrough`: the newest day whose close is done; a day open at a baseline is at or before it,
+ * a new series). `earlierWaits`: each open day's raw waits from the file's earlier series, which its close adds to
+ * the last one's. `closedThrough`: the newest day whose close is done; a day open at a baseline is at or before it,
  * so its close derives nothing. `baseline`: the next merge takes the file as sent.
  */
-export interface DialRecord { series: number | null; sent: Record<string, DialCounts>
+export interface DialRecord { series: number | null; sent: Record<string, DialCounts>; earlierWaits: Record<string, DialCounts>
   closedThrough: string | null; baseline: boolean; usedDays: string[]; usedOutsideDays: string[] }
 export interface DialAdd { metric: DialUsageMetric; day: string; value: number }
 
@@ -93,18 +94,22 @@ export function readDialFile(file: string, validDay: (day: string) => boolean, l
 
 /** [baseline]: the first merge takes the file as sent, so nothing it held before is reported. */
 export function freshDialRecord(baseline: boolean): DialRecord {
-  return { series: null, sent: {}, closedThrough: null, baseline, usedDays: [], usedOutsideDays: [] }
+  return { series: null, sent: {}, earlierWaits: {}, closedThrough: null, baseline, usedDays: [], usedOutsideDays: [] }
 }
 
 /** A record read back from the gateway's queue file: each field rebuilt, anything else dropped. */
 export function cleanDialRecord(value: unknown, validDay: (day: string) => boolean): DialRecord {
   // A queue file from before the dial's counts has no record: the devices' file came with them, so none of it was sent.
   if (!isRecord(value)) return freshDialRecord(false)
-  const sent: Record<string, DialCounts> = {}
-  if (isRecord(value.sent)) for (const [day, counts] of Object.entries(value.sent)) if (validDay(day) && isRecord(counts)) sent[day] = cleanCounts(counts)
+  const byDay = (field: unknown): Record<string, DialCounts> => {
+    const result: Record<string, DialCounts> = {}
+    if (isRecord(field)) for (const [day, counts] of Object.entries(field)) if (validDay(day) && isRecord(counts)) result[day] = cleanCounts(counts)
+    return result
+  }
   const days = (list: unknown): string[] => Array.isArray(list)
     ? [...new Set(list.filter((day): day is string => typeof day === 'string' && validDay(day)))].sort() : []
-  return { series: Number.isSafeInteger(value.series) ? value.series as number : null, sent,
+  return { series: Number.isSafeInteger(value.series) ? value.series as number : null, sent: byDay(value.sent),
+    earlierWaits: byDay(value.earlierWaits),
     // Kept past the window and ahead of the clock: forgetting it would reopen, and send again, every day it closed.
     closedThrough: calendarDay(value.closedThrough) ? value.closedThrough : null,
     baseline: value.baseline === true, usedDays: days(value.usedDays), usedOutsideDays: days(value.usedOutsideDays) }
@@ -113,8 +118,8 @@ export function cleanDialRecord(value: unknown, validDay: (day: string) => boole
 /**
  * Merges [file] into [record]: each device name adds what the file holds over what was sent, then each day before
  * [closeBefore] closes, oldest first, with what only the gateway derives. Never counts twice across a restart of
- * either side: a new series (the file made again) keeps the flags sent and forgets the event counts sent, and a
- * closed day's later changes add nothing.
+ * either side: a new series (the file made again) keeps the flags sent, forgets the event counts sent and keeps the
+ * raw waits apart for the close, and a closed day's later changes add nothing.
  */
 export function mergeDial(record: DialRecord, file: DialFileRead, at: { closeBefore: string; desktopDays: readonly string[];
   validDay: (day: string) => boolean }): { record: DialRecord; adds: DialAdd[] } {
@@ -129,12 +134,16 @@ export function mergeDial(record: DialRecord, file: DialFileRead, at: { closeBef
       sent[day] = { ...counts }
       closedThrough = latest(closedThrough, day)
     }
-    return { record: { series: file.series, sent, closedThrough, baseline: false, usedDays, usedOutsideDays }, adds }
+    return { record: { series: file.series, sent, earlierWaits: {}, closedThrough, baseline: false, usedDays, usedOutsideDays }, adds }
   }
   const newSeries = file.series !== record.series
-  const sent: Record<string, DialCounts> = {}
+  const sent: Record<string, DialCounts> = {}, earlierWaits: Record<string, DialCounts> = {}
   for (const [day, counts] of Object.entries(record.sent)) if (at.validDay(day)) {
     sent[day] = newSeries ? Object.fromEntries(Object.entries(counts).filter(([name]) => flagNames.has(name))) : { ...counts }
+    // The new series counts its waits from nothing: what the earlier ones held stays apart, for the close.
+    const waits = { ...record.earlierWaits[day] }
+    if (newSeries) for (const name of DIAL_WAIT_RAW_METRICS) if (counts[name]) waits[name] = (waits[name] ?? 0) + counts[name]
+    if (Object.keys(waits).length) earlierWaits[day] = waits
   }
   for (const day of Object.keys(file.days).sort()) {
     if (!sent[day]) {
@@ -152,8 +161,9 @@ export function mergeDial(record: DialRecord, file: DialFileRead, at: { closeBef
   const add = (metric: DialUsageMetric, day: string, value = 1): void => { adds.push({ metric, day, value }) }
   for (const day of Object.keys(sent).sort()) {
     if (day >= at.closeBefore) break
-    const counts = sent[day]
+    const counts = sent[day], earlier = earlierWaits[day] ?? {}
     delete sent[day]
+    delete earlierWaits[day]
     if (record.closedThrough !== null && day <= record.closedThrough) continue
     const used = counts.dial_used_installation_days === 1
     const outside = !at.desktopDays.some(desktop => desktop >= shift(day, 1 - DESKTOP_WINDOW_DAYS) && desktop <= day)
@@ -180,10 +190,10 @@ export function mergeDial(record: DialRecord, file: DialFileRead, at: { closeBef
     }
     let waited = false
     for (const [raw, derived] of used ? USED_DAY_WAITS : UNUSED_DAY_WAITS) {
-      const value = counts[raw]
+      const value = (earlier[raw] ?? 0) + (counts[raw] ?? 0)
       if (value) { add(derived, day, value); waited = true }
     }
     if (waited) add(used ? 'dial_wait_used_day_installation_days' : 'dial_wait_unused_day_installation_days', day)
   }
-  return { record: { series: file.series, sent, closedThrough, baseline: false, usedDays, usedOutsideDays }, adds }
+  return { record: { series: file.series, sent, earlierWaits, closedThrough, baseline: false, usedDays, usedOutsideDays }, adds }
 }
