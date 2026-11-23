@@ -642,8 +642,13 @@ test('the log names each state as it changes, and holds no name, app or path', a
 })
 
 const H = (n: number) => `term_00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
-/** The body that tells the devices these terminals. */
-const fronted = (...ids: string[]) => `{"type":"orcaFront","terminals":[${ids.map((id) => `"${id}"`).join(',')}]}`
+/** The body that tells the devices these terminals, in a worktree Orca did not name. */
+const fronted = (...ids: string[]) => `{"type":"orcaFront","terminals":[${ids.map((id) => `"${id}"`).join(',')}],"workspace":null}`
+/** The body that tells the devices these terminals, in the worktree Orca names `workspace`. */
+const named = (workspace: string, ...ids: string[]) => JSON.stringify({ type: 'orcaFront', terminals: ids, workspace })
+// Orca's two forms of a worktree's id: its identity, and, for a worktree with none, its own id, which holds its folder.
+const IDENTITY = 'identity:wt2:local:0f8e2c1a-3b4d-4e5f-8a9b-0c1d2e3f4a5b'
+const WORKTREE = '6a1c2e3f-4b5d-4c6e-9f70-8a9b0c1d2e3f::/Users/someone/secret-wt'
 const bodies = (w: { posts: { body: string }[] }) => w.posts.map((post) => post.body)
 /** Every answer already given reaches the loop: it takes them in microtasks, and this resolves on a turn after them. */
 const answered = () => new Promise<void>((done) => setImmediate(done))
@@ -656,7 +661,7 @@ test("front() with a stream open posts the ids to the stream's socket", async ()
   await w.until(() => w.posts.length === 1)
   assert.deepEqual(
     w.posts.map(({ target, body }) => ({ target, body })),
-    [{ target: { socket }, body: '{"type":"orcaFront","terminals":["term_00000000-0000-4000-8000-000000000001","term_00000000-0000-4000-8000-000000000002"]}' }]
+    [{ target: { socket }, body: '{"type":"orcaFront","terminals":["term_00000000-0000-4000-8000-000000000001","term_00000000-0000-4000-8000-000000000002"],"workspace":null}' }]
   )
 })
 
@@ -664,7 +669,7 @@ test('front(null) posts "terminals":null', async () => {
   const { w } = await streaming()
   w.dial.front(null)
   await w.until(() => w.posts.length === 1)
-  assert.deepEqual(bodies(w), ['{"type":"orcaFront","terminals":null}'])
+  assert.deepEqual(bodies(w), ['{"type":"orcaFront","terminals":null,"workspace":null}'])
 })
 
 test('ids that are no handle are left out, the order kept, and at most 50 go', async () => {
@@ -673,7 +678,69 @@ test('ids that are no handle are left out, the order kept, and at most 50 go', a
   const handles = Array.from({ length: 54 }, (_, i) => H(54 - i))
   w.dial.front([...handles.slice(0, 2), 'x', H(1).toUpperCase(), 7 as unknown as string, ...handles.slice(2)])
   await w.until(() => w.posts.length === 1)
-  assert.deepEqual(JSON.parse(w.posts[0].body), { type: 'orcaFront', terminals: handles.slice(0, 50) })
+  assert.deepEqual(JSON.parse(w.posts[0].body), { type: 'orcaFront', terminals: handles.slice(0, 50), workspace: null })
+})
+
+// The first post waits for the stream to open on the loop's side too. Once it is open a post is made within front(),
+// and its 204 is taken by the time answered() resolves: the cases below wait no longer for the others, so one whose
+// post never comes fails instead of waiting for ever.
+
+test('front sends the workspace with the terminals, an identity id or a worktree id as given', async () => {
+  const { w } = await streaming()
+  // A worktree with chats alone has no terminal.
+  w.dial.front([], IDENTITY)
+  await w.until(() => w.posts.length === 1)
+  await answered()
+  w.dial.front([H(1), H(2)], WORKTREE)
+  await answered()
+  // A folder as Windows and a person may name it: a backslash, a space, a quote, Vietnamese letters, & and %.
+  const windows = `${WORKTREE.split('::')[0]}::C:\\Users\\Nguyễn Văn A' & "100%"\\wt`
+  w.dial.front([H(1)], windows)
+  await answered()
+  assert.deepEqual(bodies(w).slice(0, 2), [
+    `{"type":"orcaFront","terminals":[],"workspace":"${IDENTITY}"}`,
+    `{"type":"orcaFront","terminals":["${H(1)}","${H(2)}"],"workspace":"${WORKTREE}"}`,
+  ])
+  assert.deepEqual(JSON.parse(bodies(w)[2]), { type: 'orcaFront', terminals: [H(1)], workspace: windows })
+})
+
+test('an empty workspace, one past 1024 characters or one with a control character goes as null', async () => {
+  const { w } = await streaming()
+  // Orca's own limit, and one character: each goes as it is.
+  const longest = `identity:${'k'.repeat(1015)}`
+  assert.equal(longest.length, 1_024)
+  w.dial.front([H(1)], longest)
+  await w.until(() => w.posts.length === 1)
+  await answered()
+  w.dial.front([H(1)], 'x')
+  await answered()
+  // Each with terminals of its own, so no body is the one before it.
+  const refused: unknown[] = ['', `identity:${'k'.repeat(1016)}`, 'identity:a\nb', 'identity:a\u0000b', 'identity:a\u007fb', 'identity:a\u0085b', 7, {}, undefined, null]
+  for (const [i, workspace] of refused.entries()) {
+    w.dial.front([H(i + 2)], workspace as string)
+    await answered()
+  }
+  assert.deepEqual(bodies(w).slice(0, 2), [named(longest, H(1)), named('x', H(1))])
+  assert.deepEqual(bodies(w).slice(2).map((body) => JSON.parse(body).workspace), refused.map(() => null))
+})
+
+test('a change of workspace alone sends again; the same body does not', async () => {
+  const { w } = await streaming()
+  w.dial.front([H(1)], IDENTITY)
+  await w.until(() => w.posts.length === 1)
+  await answered()
+  w.dial.front([H(1)], IDENTITY)
+  await answered()
+  w.dial.front([H(1)], WORKTREE)
+  await answered()
+  // No id: a change too.
+  w.dial.front([H(1)])
+  await answered()
+  // An id that goes as null is the body the devices took.
+  w.dial.front([H(1)], '')
+  w.dial.front([H(1)], null)
+  await answered()
+  assert.deepEqual(bodies(w), [named(IDENTITY, H(1)), named(WORKTREE, H(1)), fronted(H(1))])
 })
 
 test('with no stream open nothing is posted, and the latest ids go when one opens', async () => {
@@ -723,18 +790,18 @@ test('the same ids again post nothing', async () => {
 test('a send that fails is sent once more 1 s later; if that fails too it is logged once, with no id', async () => {
   const { w } = await streaming()
   w.replies.push(500, null)
-  w.dial.front([H(1)])
+  w.dial.front([H(1)], WORKTREE)
   await w.until(() => w.due().includes(1_000))
   // The same ids during the wait, as a tab renamed sends them, wait for the retry too.
-  w.dial.front([H(1)])
+  w.dial.front([H(1)], WORKTREE)
   await answered()
   assert.deepEqual([w.posts.length, w.logs, w.due()], [1, [], [1_000]])
   w.to(1_000)
   await w.until(() => w.logs.length > 0)
   w.to(60_000)
   await answered()
-  assert.deepEqual([bodies(w), w.logs, w.timers.size], [[fronted(H(1)), fronted(H(1))], ['dial: front not sent'], 0])
-  assert.equal(w.logs.some((line) => line.includes('term_')), false)
+  assert.deepEqual([bodies(w), w.logs, w.timers.size], [[named(WORKTREE, H(1)), named(WORKTREE, H(1))], ['dial: front not sent'], 0])
+  assert.equal(w.logs.some((line) => line.includes('term_') || line.includes('secret-wt') || line.includes('::')), false)
 })
 
 test('after a logged failure the same ids post nothing, as a tab renamed gives them; other ids post, and so does the next open', async () => {
