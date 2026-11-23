@@ -13953,6 +13953,21 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
     })
   })
 
+  // herdr strips the outer terminal's variables but its bundle id from its panes: Alacritty's names no page of its own,
+  // and the agent is on herdr's page.
+  it('a hooked agent in herdr in Alacritty counts as placed on herdr\'s page, not on the Other page', async () => {
+    madeBy('herdr')
+    const { port } = start({ faults: ['fleet'], orca: { ...orca, platform: 'darwin' } })
+    const inAlacritty = { hostHints: { HERDR_PANE_ID: 'w1:p2', __CFBundleIdentifier: 'org.alacritty' } }
+    port.observed(hook('session-start', inAlacritty))
+    await vi.waitFor(() => expect(logs).toContain('[device] herdr client · not read · ttys'))
+    await attach(port)
+    port.observed(hook('turn-start', inAlacritty))
+    const counts = await counted(port)
+    expect(counts).toMatchObject({ dial_hooked_claude_installation_days: 1, dial_hooked_claude_placed: 1 })
+    expect(Object.keys(counts).filter((name) => name === 'dial_hooked_claude_other' || name.startsWith('dial_other_app_'))).toEqual([])
+  })
+
   it('a window open on its tab leaves a hooked agent in its own app', async () => {
     const { port } = start({ faults: ['fleet'] })
     const zed = { sessionId: 'sess-2', hostHints: { __CFBundleIdentifier: 'dev.zed.Zed' } }
