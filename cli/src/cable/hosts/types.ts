@@ -19,15 +19,18 @@ export interface HostAgent {
   host: string
   /** The outermost app the person sees, one of `APP_IDS`: what a tap brings and the tab it raises, and the app a
    *  prompt's follow compares with the front. The page is `pageOf`'s (`select.ts`). The unknown app's while
-   *  `appPending`. */
+   *  `appPending` for the scan. */
   app: string
   /** The nearest multiplexer whose pane is the agent's own terminal, as its lookup or the scan's maker read confirmed
    *  (`observed.ts`); tmux and herdr only (Diego, 2026-11-23). Its page is that multiplexer's unless its app is Orca
    *  (`select.ts` `pageOf`). */
   nest?: Nest
   /**
-   * Nothing has said where it runs yet: the open scan found it and no hook has told of it. It sits on the unknown app's
-   * page, so it can be reached, but is not known to be in that app, so it counts for nothing in the dial's default.
+   * Nothing has said where it runs yet: the open scan found it and no hook has told of it, or its hook came from a
+   * multiplexer's pane whose lookup has not answered (`observed.ts` ingest). It sits on the unknown app's page, or its
+   * multiplexer's when `nest` is set, or meanwhile the page of the app its hints name, so it can be reached, but is not
+   * known to be in that app, so it counts for nothing in the dial's default nor for the app in front (`select.ts`
+   * counts).
    */
   appPending?: true
   /** Its session ended and its source still lists it (the observed source's, until its tick drops it): no tap, rest or

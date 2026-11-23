@@ -816,6 +816,8 @@ export class ObservedSource implements HostSource {
       else delete entry.agent.nest
       entry.agent.host = place.nest ?? detectHost(ask.hints)
       this.placeApp(entry, ask.hints, ask.pid)
+      // Its first hook's ask held it pending (ingest): placed now.
+      delete entry.agent.appPending
       this.locate(entry)
       this.emit()
     })
@@ -940,7 +942,10 @@ export class ObservedSource implements HostSource {
     const nested = this.askOuter(entry, e)
     a.host = a.nest ?? detectHost(e.hostHints)
     this.placeApp(entry, e.hostHints, e.callerPid)
-    delete a.appPending
+    // One nested stays pending until its lookup answers: its hints' bundle id is the one its multiplexer's server started
+    // with (iTerm2's for a tmux started there), and that app in front must not turn the dial to it, then back once the
+    // answer puts it on tmux's page.
+    if (!nested) delete a.appPending
     // Every event's own: a session resumed elsewhere must not be typed into the terminal it left.
     entry.hints = e.hostHints
     entry.otherApp = otherProduct(e.hostHints)
