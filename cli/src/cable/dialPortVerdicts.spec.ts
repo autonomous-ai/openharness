@@ -2,7 +2,7 @@ import { chmodSync, constants, mkdtempSync, readFileSync, writeFileSync } from '
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { DialVerdicts } from './dialPortVerdicts.js'
+import { DialVerdicts, greetedAsDial } from './dialPortVerdicts.js'
 import type { DialPort } from './serial.js'
 
 // Pass-through, recording which paths are opened, written by name and renamed.
@@ -145,5 +145,17 @@ describe('verdicts on USB boards', () => {
     // A foreign board is never a Pro.
     verdicts.markForeign(board('1', 'BB:02'))
     expect(verdicts.isPro(board('1', 'BB:02'))).toBe(false)
+  })
+
+  it('tells whether any board ever greeted here as a dial', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'verdicts-')), 'dial-ports.json')
+    expect(greetedAsDial(file)).toBe(false)
+    const verdicts = new DialVerdicts(file)
+    verdicts.markForeign(board('1', 'BB:02'))
+    expect(greetedAsDial(file)).toBe(false)
+    verdicts.markDial(board('1'))
+    expect(greetedAsDial(file)).toBe(true)
+    writeFileSync(file, '{not json')
+    expect(greetedAsDial(file)).toBe(false)
   })
 })

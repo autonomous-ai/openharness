@@ -13383,6 +13383,19 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
     expect(await counted(port)).toEqual({ dial_connected_installation_days: 1, dial_used_installation_days: 1 })
   })
 
+  // dial-ports.json has kept each board that greeted as a dial since long before dial-setup.json's mark.
+  it('a computer whose board greeted as a dial before the setup mark spends no first connection or first use', async () => {
+    writeFileSync(join(dataDir, 'dial-ports.json'), JSON.stringify({ 'AA:01': { at: 1, dial: true } }))
+    const { port } = start({ core: harnessAgent(), faults: ['fleet'] })
+    await attach(port)
+    turnTo('h1')
+    host().dialShows({}, { name: 'api', app: 'harness' }, 'h1')
+    const counts = await counted(port)
+    expect(counts).toMatchObject({ dial_used_installation_days: 1, dial_first_agent_day_under_1m_installations: 1 })
+    expect(Object.keys(counts).filter((name) => name.startsWith('dial_first_') && !name.startsWith('dial_first_agent_day_')))
+      .toEqual([])
+  })
+
   it.each([
     ['a stroke', () => seen.host.scrolled!('down', 0, 0)],
     ['a tap', () => seen.host.tapped!('h1')],
