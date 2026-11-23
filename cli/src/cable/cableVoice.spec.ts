@@ -19,6 +19,7 @@ import { CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DaemonCableHost, type CableHostWiring } from './cableHost.js'
 import { CableSession, type CableAgent, type CableHost, type CablePort } from './cableSession.js'
 import { DialLog } from './dialLog.js'
+import { DIAL_VOICE_SURFACE, DIAL_VOICE_SURFACE_HEADER } from '../lib/dialUsageContract.js'
 
 const pcm = Buffer.alloc(32_000)
 const ok = () => new Response(JSON.stringify({ success: true, data: { transcript: 'a test sentence' } }), {
@@ -67,6 +68,18 @@ describe('cabled voice transcription', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(fetchMock.mock.calls[1]![1]?.headers).toMatchObject({ authorization: 'Bearer new-token' })
     expect(fetchMock.mock.calls[1]![1]?.body).toBe(fetchMock.mock.calls[0]![1]?.body)
+  })
+
+  it('marks the upload as the dial\'s, on the retry too, and with nothing else', async () => {
+    const { host, fetchMock } = setup()
+    fetchMock.mockResolvedValueOnce(rejected(401, 'UNAUTHORIZED')).mockResolvedValueOnce(ok())
+    await expect(host.transcribe(pcm, 16000, 'en')).resolves.toBe('a test sentence')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    for (const [, options] of fetchMock.mock.calls) {
+      expect(options?.headers).toMatchObject({ [DIAL_VOICE_SURFACE_HEADER]: DIAL_VOICE_SURFACE })
+      expect(Object.keys(options?.headers as Record<string, string>).sort())
+        .toEqual(['authorization', 'content-type', 'x-autonomous-env', 'x-harness-voice-surface'])
+    }
   })
 
   it('hands the abort signal to the post and to the 401 retry', async () => {
