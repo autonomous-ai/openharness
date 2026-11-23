@@ -96,7 +96,8 @@ export interface ObservedDeps {
   platform: NodeJS.Platform
   /** The machine's processes, read once for every session (externals/support.ts listProcesses); none when unreadable. */
   processes(): Promise<readonly Pick<RunningProcess, 'pid' | 'generation'>[]>
-  /** Whether a pid is running, for a session whose process has no generation to read (Windows has no `ps` here). */
+  /** Whether a pid is running: for a session whose process has no generation to read (Windows has no `ps` here), and
+   *  for a session's process when a hook other than its session-start comes from another (ingest). */
   alive(pid: number): boolean
   openSessions: Pick<OpenSessions, 'owners' | 'busy'>
   sessionRows: Pick<SessionRows, 'find'>
@@ -962,6 +963,16 @@ export class ObservedSource implements HostSource {
     }
     // A session that comes back after its end (a resume) is a live one again.
     entry.endAt = undefined
+    // And it runs in the process that took it up: an app that restarts brings its sessions back in new processes, and
+    // the old one's pid would have the next tick remove them (Orca quit and relaunched, its agents dropped off the dial
+    // until the next 30 s scan, dial eval O12, 2026-11-23). A new process says so by its session-start, or is the one
+    // left once the old one is gone. Another hook may come from a process passing by: a late one of the process it
+    // left, or on Windows the PowerShell or cmd a failed climb names, which exits with its hook (hook/notify.mjs
+    // hookCallerPid); moved there, a live session would go at the next tick. That tick notes the new generation.
+    if (e.callerPid !== entry.pid && (e.event === 'session-start' || !this.deps.alive(entry.pid))) {
+      entry.pid = e.callerPid
+      entry.generation = undefined
+    }
     if (!nested) this.learnTty(entry, e.callerPid)
     let source: PromptSource | undefined
     switch (e.event) {
@@ -1446,15 +1457,16 @@ export class ObservedSource implements HostSource {
   /** Removals: ended sessions, dead or reused pids, and sessions with no generation silent for 12 h. Called every 30 s by the owner. */
   async tick(): Promise<void> {
     if (!this.entries.size) return
-    // Only the sessions known as the read begins: one first heard of while `ps` runs may have a process it did not see.
-    const judged = [...this.entries]
+    // Only the sessions known as the read begins, each in the process it ran in then: one first heard of, or brought
+    // back in a new process (ingest), while `ps` runs may have a process it did not see.
+    const judged = [...this.entries].map(([id, e]) => [id, e, e.pid] as const)
     // One read of the machine's processes for every session: a `ps` each blocked the loop for seconds with 50 of them.
     // A table that cannot be read is empty: it always holds the process reading it.
     const table = new Map((await this.deps.processes()).map((p) => [p.pid, p.generation]))
     const now = this.deps.now()
     let changed = false
-    for (const [id, e] of judged) {
-      if (this.entries.get(id) !== e) continue
+    for (const [id, e, pid] of judged) {
+      if (this.entries.get(id) !== e || e.pid !== pid) continue
       // Its process's generation, noted at the first look that sees it.
       const gen = table.get(e.pid)
       if (gen) e.generation ??= gen

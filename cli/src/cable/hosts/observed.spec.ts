@@ -317,6 +317,71 @@ describe('ObservedSource removal', () => {
     expect(src.list()).toHaveLength(0)
   })
 
+  it('a session its app brings back in a new process after its end stays listed', async () => {
+    const { src, clock, gens, ev } = setup()
+    src.ingest(ev('session-start'))
+    await src.tick()
+    // The app quits: its agent ends, and the app's relaunch resumes the session in a process of its own.
+    src.ingest(ev('session-end'))
+    gens.set(100, null)
+    src.ingest(ev('session-start', { callerPid: 200 }))
+    clock.t += 20_000
+    await src.tick()
+    await src.tick()
+    expect(src.list()).toHaveLength(1)
+    expect(src.list()[0]).not.toHaveProperty('ended')
+  })
+
+  it('a session that comes back in a new process with no end of its old one stays listed', async () => {
+    const { src, clock, gens, alive, ev } = setup()
+    src.ingest(ev('session-start'))
+    await src.tick()
+    // Its process is killed with no hook, and a new one carries on the session.
+    gens.set(100, null)
+    alive.mockImplementation((pid) => pid !== 100)
+    src.ingest(ev('turn-start', { callerPid: 200 }))
+    clock.t += 20_000
+    await src.tick()
+    await src.tick()
+    expect(src.list()).toHaveLength(1)
+  })
+
+  it('a session that came back in a new process is removed once that process goes', async () => {
+    const { src, gens, ev } = setup()
+    src.ingest(ev('session-start'))
+    await src.tick()
+    src.ingest(ev('session-start', { callerPid: 200 }))
+    await src.tick()
+    gens.set(200, 'reused')
+    await src.tick()
+    expect(src.list()).toHaveLength(0)
+  })
+
+  it('a hook that names a process passing by leaves a live session in its own', async () => {
+    const { src, gens, alive, ev } = setup()
+    src.ingest(ev('session-start'))
+    await src.tick()
+    // On Windows a hook whose climb past its runner failed names that PowerShell, which exits with the hook.
+    src.ingest(ev('turn-start', { callerPid: 300 }))
+    gens.set(300, null)
+    alive.mockImplementation((pid) => pid !== 300)
+    await src.tick()
+    expect(src.list()).toHaveLength(1)
+  })
+
+  it('a late hook of the process a session left does not take it back there', async () => {
+    const { src, gens, alive, ev } = setup()
+    src.ingest(ev('session-start'))
+    await src.tick()
+    gens.set(100, null)
+    alive.mockImplementation((pid) => pid !== 100)
+    src.ingest(ev('session-start', { callerPid: 200 }))
+    // A subagent stopped as the old process exited still sends its SubagentStop, after the new one took the session.
+    src.ingest(ev('subagent-stop'))
+    await src.tick()
+    expect(src.list()).toHaveLength(1)
+  })
+
   it('tick reads every session\'s process generation in one call', async () => {
     const { src, procs, ev } = setup()
     for (let i = 0; i < 50; i++) src.ingest(ev('session-start', { sessionId: `s${i}`, callerPid: 200 + i }))
@@ -338,6 +403,19 @@ describe('ObservedSource removal', () => {
     read([{ pid: 100, generation: 'g100' }])
     await ticking
     expect(src.list().map((a) => a.sessionId)).toEqual(['s1', 's2'])
+  })
+
+  it('a session that moves to a new process while the process table is read is not judged by that table', async () => {
+    const { src, procs, ev } = setup()
+    src.ingest(ev('session-start'))
+    let read!: (rows: { pid: number; generation?: string }[]) => void
+    procs.mockImplementationOnce(() => new Promise((resolve) => { read = resolve }))
+    const ticking = src.tick()
+    // Its app brought it back in a process that started after the read began, so the table cannot hold it.
+    src.ingest(ev('session-start', { callerPid: 5000 }))
+    read([{ pid: 100, generation: 'g100' }])
+    await ticking
+    expect(src.list()).toHaveLength(1)
   })
 
   it('with no process table to read (Windows here), a session goes once its process is not alive', async () => {
