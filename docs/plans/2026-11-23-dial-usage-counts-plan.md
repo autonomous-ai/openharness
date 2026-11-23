@@ -566,9 +566,10 @@ so a throw never reaches the dial:
   `question:<agentId>:<requestId>`; the dial's `answer`/`answerReviewed` for it: `answeredOnDial`;
   `commander_question_close` (2106-2117): `answered`; `agent_deleted` (2143): `gone`.
 - A notice: `notify` answered `shown` with kind `waiting` or `plain` (Decision 8), key `notice:<agentId>`.
-  `endNotice` (1565) takes a cause, given at each of its callers: a tap (1191) `tapped` then `answered`; the next turn
-  (2129, 2157, 2359, 1644) `answered`; its agent leaving the list (1617), `agent_deleted` (2143) and a replacing notice
-  `gone`.
+  A tap on its card ends the wait `answered` on the dial at the tap (the card itself stays on the agent's face until its
+  next turn, #4555); `endNotice` then ends any wait still open: the next turn `answered`, its agent leaving the list or
+  `agent_deleted` `gone`; a following `proceeding` notice answers it, a following `waiting` or `plain` keeps it.
+  (Updated after the final review and the rebase onto #4555.)
 - An outside agent's wait (`shown`, `showWaits` 1496-1517): opened when it is added, `answered` when it goes while its
   agent is still listed, else `gone`; key `outside:<agentId>`.
 - The observed `turn-aborted` hook (2356): `turnAborted(agentId)` (Decision 2).
