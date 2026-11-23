@@ -120,6 +120,18 @@ describe('the gateway\'s merge of the dial\'s day', () => {
       .toEqual({ [`${TODAY} dial_used_outside_app_installation_days`]: 1 })
   })
 
+  it('a new series keeps the open day\'s waits so far', () => {
+    const one = merge(freshDialRecord(false), fileOf({ [TODAY]: { dial_connected_installation_days: 1, dial_wait_none: 2,
+      dial_wait_elsewhere_under_30s: 1 } }, 1), TODAY)
+    // The devices' file made again, twice, with the gateway restarted between: its waits start over each time.
+    const two = merge(one.record, fileOf({ [TODAY]: { dial_connected_installation_days: 1, dial_wait_none: 1 } }, 2), TODAY)
+    const restarted = cleanDialRecord(JSON.parse(JSON.stringify(two.record)), within(TODAY))
+    const three = merge(restarted, fileOf({ [TODAY]: { dial_connected_installation_days: 1, dial_wait_none: 4 } }, 3), TODAY)
+    expect(totals(merge(three.record, fileOf({ [TODAY]: { dial_connected_installation_days: 1, dial_wait_none: 4 } }, 3),
+      shift(TODAY, 1)).adds, /^dial_wait_/)).toEqual({ [`${TODAY} dial_wait_unused_day_installation_days`]: 1,
+      [`${TODAY} dial_wait_unused_day_none`]: 7, [`${TODAY} dial_wait_unused_day_elsewhere_under_30s`]: 1 })
+  })
+
   it('a baseline adds nothing and closes what is past', () => {
     const past = shift(TODAY, -3)
     const day = { dial_connected_installation_days: 1, dial_used_installation_days: 1, dial_open_ok: 2 }
@@ -240,9 +252,10 @@ describe('the gateway\'s merge of the dial\'s day', () => {
     expect(cleanDialRecord({ series: 3, baseline: true, closedThrough: ahead, PRIVATE_PROJECT_CANARY: 'x',
       sent: { [TODAY]: { dial_open_ok: 2, dial_not_a_name: 1, dial_used_installation_days: 2 },
         [shift(TODAY, -40)]: { dial_open_ok: 1 }, PRIVATE_PROJECT_CANARY: { dial_open_ok: 1 } },
+      earlierWaits: { [TODAY]: { dial_wait_none: 3, PRIVATE_PROJECT_CANARY: 1 }, [shift(TODAY, -40)]: { dial_wait_none: 1 } },
       usedDays: [TODAY, shift(TODAY, -40), 'PRIVATE_PROJECT_CANARY', TODAY, 5], usedOutsideDays: 'no' }, within(TODAY)))
       .toEqual({ series: 3, baseline: true, closedThrough: ahead, sent: { [TODAY]: { dial_open_ok: 2 } },
-        usedDays: [TODAY], usedOutsideDays: [] })
+        earlierWaits: { [TODAY]: { dial_wait_none: 3 } }, usedDays: [TODAY], usedOutsideDays: [] })
     expect(cleanDialRecord(undefined, within(TODAY))).toEqual(freshDialRecord(false))
     expect(cleanDialRecord({ closedThrough: '2026-02-30', series: 1.5 }, within(TODAY))).toEqual(freshDialRecord(false))
     const { record } = merge(freshDialRecord(false), fileOf({ [TODAY]: { dial_open_ok: 1 } }), shift(TODAY, 1))
