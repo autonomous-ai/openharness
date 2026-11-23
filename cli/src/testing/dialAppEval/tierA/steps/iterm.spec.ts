@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { CoreApi } from '../../../../core/api.js'
+import type { CoreApi, CorePorts, DevicesPort } from '../../../../core/api.js'
 import type { ObservedEvent } from '../../../../core/observedHook.js'
 import type { DevicesDeps, startDevices } from '../../../../services/devices.js'
 import { REFUSED, type ListenerStream } from '../../../../services/devicesListener.js'
@@ -232,6 +232,34 @@ describe("tier A's world on iTerm2's machine", () => {
     const server = machine.processes.get(machine.processes.get(pid)!.ppid)!.ppid
     expect(machine.processes.get(server)!.tty).toBeUndefined()
     expect(await deps.tty!(server)).toBeUndefined()
+  })
+
+  it("after a restart the tabs stream is open on the new devices' handler", async () => {
+    installClock()
+    machine.reset()
+    // Each start's devices open their own tabs handler, which keeps the streams it is handed.
+    const streams: ListenerStream[][] = []
+    const start = ((_core: CoreApi, ports: CorePorts, deps: DevicesDeps) => {
+      const held: ListenerStream[] = []
+      streams.push(held)
+      void deps.listen!({ tabs: { maxBytes: 64, perSecond: 1, open: (_message, stream) => { held.push(stream) } } }, () => {})
+      ports.devices = { stop: async () => {} } as unknown as DevicesPort
+      return {}
+    }) as unknown as typeof startDevices
+    const world = new World(tabs(), 'darwin', start)
+    worlds.push(world)
+    const { tty } = tabShell(world, { window: 'w1', tab: 1 })
+    openTabs(world)
+    await world.restartDevices()
+    openTabs(world)
+    expect(streams.map((held) => held.length)).toEqual([1, 1])
+    // A select the new devices write is recorded by its tab.
+    expect(streams[1]![0]!.write({ app: 'iterm', tty: `/dev/${tty}`, raise: true })).toBe(true)
+    expect(world.streams.map(({ window, line }) => ({ window, line }))).toEqual([
+      { window: 'tabs', line: { type: 'tabs' } },
+      { window: 'tabs', line: { type: 'tabs' } },
+      { window: 'tabs', line: { app: 'iterm', tab: 'w1.1.0', raise: true } },
+    ])
   })
 
   it('another app\'s world has no iTerm2 home', () => {

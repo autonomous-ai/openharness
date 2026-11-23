@@ -14,7 +14,7 @@ import { homedir, tmpdir } from 'node:os'
 import { basename } from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { claudeGhost, claudeSessions, editorGhost, editorSession, itermGhost, itermSession, keys, listed, MAIN, orcaGhost, orcaOpening,
-  orcaSession, orcaStarted, scenario, scenariosFor, started } from './catalog.js'
+  orcaSession, orcaStarted, scenario, scenariosFor, started, turned } from './catalog.js'
 import { rings } from './checks.js'
 import { loadBaseline, SKIP_RATCHET_ENV, tierAVerdict } from './grade.js'
 import { describeAttempt } from './netGuard.js'
@@ -600,6 +600,108 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
     expect(await herdrOf(MAIN.find((s) => s.id === 'C1')!)).toEqual({ said: [], ran: [] })
   })
 
+  /** The #4544 case (the spec's I2): a plain tab a in w1's tab 0, Claude Code in tmux t, whose client runs in tab 1, and
+   *  Claude Code in herdr h and g, whose client runs in tab 2, started a, t, h, then g, and listed in their tabs' order,
+   *  then `more`. */
+  const case4544 = (id: string, title: string, more: Step[]): Scenario => scenario({
+    id, app: 'iterm', title, dims: ['D1'], platforms: ['darwin'], tiers: ['a'],
+    sessions: [itermSession('a', { tab: 0 }), itermSession('t', { place: 'tmux', tab: 1 }), itermSession('h', { place: 'herdr', tab: 2 }),
+      itermSession('g', { place: 'herdr', tab: 2, split: 1 }), itermGhost],
+    steps: [...started(['a', 't', 'h', 'g']), ...listed('iterm', ['a', 't', 'h', 'g']), ...more],
+    checks: [], probes: [],
+  })
+  const i2 = case4544('I2', 'Eval the #4544 case, hooked', [])
+  /** I3: the four idle, each with a turn behind it, then the devices start again and no hook follows. */
+  const i3 = case4544('I3', 'Eval the #4544 case, found by the scan after the devices start again',
+    [...turned(['a', 't', 'h', 'g']), { label: 'restart', kind: 'devices.restart' }, { kind: 'wait', ms: 10_000 }])
+
+  it("I3: the four of I2, each with a turn behind it, are on iTerm2's page after the devices start again, before any hook, "
+    + 'and on no tmux, herdr or Other page', async () => {
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, i3, 'darwin')
+    expect(run.error).toBeUndefined()
+    expect(run.gaps).toEqual([])
+    const seen = driver.seen()
+    const restart = seen.steps.find((s) => s.label === 'restart')!
+    expect(seen.steps.filter((s) => s.index > restart.index && s.kind === 'hook')).toEqual([])
+    // What the new devices sent the dial, from their welcome on: the last hook came at the restart's own moment.
+    const welcome = seen.frames.findIndex((f) => f.at >= restart.at && f.message.t === 'welcome')
+    expect(welcome).toBeGreaterThanOrEqual(0)
+    const four = i3.sessions.slice(0, 4).map(agentIdOf)
+    const after = rings({ frames: seen.frames.slice(welcome) })
+    expect(after.at(-1)?.page).toBe('iterm')
+    expect(after.at(-1)!.rows.map((r) => r.id).sort()).toEqual([...four].sort())
+    expect(after.filter((r) => r.page !== 'iterm' && r.rows.some((row) => four.includes(row.id)))).toEqual([])
+  })
+
+  it('after the devices start again the mod polls the new devices: a voice reaches its session', async () => {
+    const spoken = scenario({
+      id: 'S9', app: 'iterm', title: 'Eval a voice after the devices start again', dims: ['D5'], platforms: ['darwin'], tiers: ['a'],
+      sessions: [itermSession('a'), itermGhost],
+      steps: [...started(['a']), ...listed('iterm', ['a']), ...turned(['a']), { kind: 'devices.restart' },
+        // The mod asks again within a minute of a poll the devices could not hold.
+        { kind: 'wait', ms: 60_000 },
+        { label: 'voice', kind: 'voice', transcript: 'Eval words for alpha.', target: 'a' }],
+      checks: [], probes: [],
+    })
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, spoken, 'darwin')
+    expect(run.error).toBeUndefined()
+    expect(run.gaps).toEqual([])
+    const { deliveries, steps } = driver.seen()
+    const voice = steps.find((s) => s.label === 'voice')!
+    expect(deliveries.filter((d) => d.at >= voice.at).map(({ path, target, text }) => ({ path, target, text })))
+      .toEqual([{ path: 'mod', target: 'a', text: 'Eval words for alpha.' }])
+  })
+
+  it("after the devices start again a rest on a tab row writes its select on the tabs stream the watch opened again", async () => {
+    const rested = twoTabs('S10', 'Eval a rest after the devices start again', ['a', 'b'],
+      [{ kind: 'devices.restart' }, { label: 'rest', kind: 'swipe', session: 'a' }, { kind: 'wait', ms: 2_000 }])
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, rested, 'darwin')
+    expect(run.error).toBeUndefined()
+    const { streams = [], steps } = driver.seen()
+    const rest = steps.find((s) => s.label === 'rest')!
+    // The devices' selects: the stream's open and the person's tab reports carry a type.
+    const selects = streams.filter((l) => l.window === 'tabs' && l.at >= rest.at && l.line.type === undefined)
+    expect(selects.map((l) => l.line)).toEqual([{ app: 'iterm', tab: 'w1.0.0' }])
+  })
+
+  it("after the devices start again the watch tells them the app in front again: b's tab selected turns the dial to b within 1 s",
+    async () => {
+    const selected = twoTabs('S11', "Eval b's tab selected after the devices start again", ['a', 'b'],
+      [{ kind: 'devices.restart' }, { kind: 'wait', ms: 2_000 }, { label: 'select', kind: 'iterm.select', window: 'w1', tab: 1 }])
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, selected, 'darwin')
+    expect(run.error).toBeUndefined()
+    const { faces, steps } = driver.seen()
+    const select = steps.find((s) => s.label === 'select')!
+    const [a, b] = selected.sessions.slice(0, 2).map(agentIdOf)
+    expect(faces.filter((f) => f.at < select.at).at(-1)?.active).toBe(a)
+    const moved = faces.find((f) => f.at >= select.at && f.active === b)
+    expect((moved?.at ?? Infinity) - select.at).toBeLessThanOrEqual(1_000)
+  })
+
+  it('a restart the dial never comes back from fails its step, saying so', async () => {
+    const unplugged = twoTabs('S12', 'Eval the devices start again with the dial unplugged', ['a'],
+      [{ kind: 'unplug' }, { kind: 'devices.restart' }])
+    const run = await runScenario(new TierADriver({ startDevices }), unplugged, 'darwin')
+    expect(run.error).toBe('step 4 (devices.restart) threw: S12: the devices never welcomed the dial after they started again')
+  })
+
+  it.for([i2, i3])('$id twice gives the same frames, streams, commands and deliveries at the same virtual times', async (of) => {
+    const seen = async () => {
+      const driver = new TierADriver({ startDevices })
+      expect((await runScenario(driver, of, 'darwin')).error).toBeUndefined()
+      const { frames, streams, commands, deliveries } = driver.seen()
+      return { frames, streams, commands, deliveries }
+    }
+    const first = await seen()
+    const second = await seen()
+    expect(first.commands.some((c) => basename(c.argv[0]!) === 'tmux')).toBe(true)
+    expect(second).toEqual(first)
+  })
+
   it("ttyAtime answers the model's access time, never this machine's", async () => {
     machine.reset()
     machine.atimes.set('ttys9998', 1_234)
@@ -608,10 +710,11 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
   })
 
   // The baseline is written on a Mac and checked on Linux: a result naming this host's folders would differ there.
-  it('no result carries an absolute path', () => {
+  // A tty or a pane id is the machine's, not the scenario's: evidence names tabs and panes by label (itermRecords.ts).
+  it('no result carries an absolute path, a tty or a pane id', () => {
     expect(runs.length).toBeGreaterThan(0)
     const written = JSON.stringify(collect(runs))
-    for (const part of [tmpdir(), homedir(), '/work/eval-']) expect(written).not.toContain(part)
+    for (const part of [tmpdir(), homedir(), '/work/eval-', '/dev/tty', 'ttys0', '%0', ':p1']) expect(written).not.toContain(part)
   })
 
   // The eval command judges the ratchet itself, over both tiers, and says so for its children (run.ts).
