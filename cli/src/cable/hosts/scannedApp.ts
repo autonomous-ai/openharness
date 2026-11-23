@@ -1,8 +1,8 @@
 // Which app a session the open scan found runs in, from its parent processes' executables alone
 // (docs/specs/2026-11-14-dial-app-filter.md, "The scan learns the app where that is cheap"), and which host made the
-// pseudo-terminal a hook's caller runs on (ptyMaker; windowsPtyOwner on Windows, which names no terminal). Nothing else of a process is read but the terminal it runs on: its
-// environment holds secrets, and its name is outside text (a process can write a prompt there), so a name is matched
-// against the tables and dropped, never kept, logged or sent.
+// pseudo-terminal a hook's caller runs on (ptyMaker; windowsPtyOwner on Windows, which names no terminal). Nothing else
+// of a process is read but the terminal it runs on: its environment holds secrets, and its name is outside text (a
+// process can write a prompt there), so a name is matched against the tables and dropped, never kept, logged or sent.
 
 import { execFile } from 'node:child_process'
 import { homedir } from 'node:os'
@@ -321,7 +321,7 @@ export function windowsPtyOwner(pid: number, rows: readonly WindowsProcess[]): s
 }
 
 /** windowsPtyOwner over the table [list] reads. That reader answers an empty table for one it could not read, and a
- *  table always holds the caller's own process at the least, so no row is a failed read; the error names nothing. */
+ *  table read lists its reader at the least, so no row is a failed read; the error names nothing. */
 export async function readWindowsPtyOwner(pid: number, list: () => Promise<readonly WindowsProcess[]>): Promise<string | undefined> {
   const rows = await list()
   if (!rows.length) throw new Error('process table not read')
