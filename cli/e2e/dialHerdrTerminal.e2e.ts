@@ -92,8 +92,8 @@ describe.skipIf(process.platform !== 'darwin' || !herdrBinary)("an agent in the 
   /**
    * A daemon of its own whose process table holds no herdr but the test's, a dial that holds one app's ring shown its
    * first list, then a herdr server of the test's own with its client in a Terminal tab, and two hooked agents in its
-   * panes, B to swipe from and the agent, each started once the client is attached, so its first hook finds it. Then the
-   * watch, with Terminal in front.
+   * panes, B to swipe from and the agent, each started once the client is attached, so its first hook finds it. No watch
+   * yet: each test starts its own, with Terminal in front, once what it needs before the front is done.
    */
   const fresh = async () => {
     const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false' } })
@@ -128,7 +128,7 @@ describe.skipIf(process.platform !== 'darwin' || !herdrBinary)("an agent in the 
     await herdr.report(b.pane, 'idle')
     await herdr.report(agent.pane, 'idle')
     for (const listed of [b, agent]) await dial.next((m) => m.t === 'agent' && m.id === listed.id, 45_000, `${listed.id} listed`)
-    return { d, dial, herdr, client, b, agent, hidden, others, run: watch(d) }
+    return { d, dial, herdr, client, b, agent, hidden, others }
   }
 
   /** The dial turns to B, then to the agent, again every 2 s until the watch prints [select]: the stream opens after
@@ -174,7 +174,8 @@ describe.skipIf(process.platform !== 'darwin' || !herdrBinary)("an agent in the 
   })
 
   it("with Terminal in front a swipe selects the client's tab, then the agent's herdr pane", async () => {
-    const { dial, herdr, client, b, agent, run } = await fresh()
+    const { d, dial, herdr, client, b, agent } = await fresh()
+    const run = watch(d)
     await swipedTo(dial, b, agent, run, selectOf(client.tty))
     await until("the agent's pane focused in herdr", () => focused(herdr, agent.pane), 30_000, 100)
     dial.send({ t: 'focus', agentId: b.id })
@@ -182,7 +183,8 @@ describe.skipIf(process.platform !== 'darwin' || !herdrBinary)("an agent in the 
   })
 
   it('with another app in front a swipe changes nothing in herdr', async () => {
-    const { d, dial, herdr, b, agent, run } = await fresh()
+    const { d, dial, herdr, b, agent } = await fresh()
+    const run = watch(d)
     // The person clicks B's pane, through the daemon's own herdr, which reaches the test's server alone.
     await execFileAsync(join(dirname(d.env.CLAUDE_PATH!), 'herdr'), ['agent', 'focus', b.pane], { env: d.env })
     await until("B's pane focused in herdr", () => focused(herdr, b.pane), 30_000, 100)
@@ -201,11 +203,14 @@ describe.skipIf(process.platform !== 'darwin' || !herdrBinary)("an agent in the 
   })
 
   it("a tab line with the client's tty turns the dial to herdr's page and the agent heard from last", async () => {
-    const { d, dial, herdr, client, agent, run } = await fresh()
-    // The agent's turn: it is heard from after B.
+    const { d, dial, herdr, client, agent } = await fresh()
+    // The agent's turn: it is heard from after B. Before the watch, so no app is in front and its prompt turns no page:
+    // with Terminal settled, the prompt would hold herdr's page and the other agent below would never be listed.
     let since = dial.messages.length
     await herdr.type(agent.pane, 'hello')
     await dial.next((m) => m.t === 'turn.done' && m.agentId === agent.id, 45_000, "the agent's turn done", since)
+    expect(d.log()).toContain('[device] prompt · skipped · not in front')
+    const run = watch(d)
     // Another agent in a Terminal tab of its own, the dial on it: Terminal, settled in front, has a page of its own, so
     // the tab's follow is to an agent of the app in front.
     const other = await Outside.start(d, 'other', { __CFBundleIdentifier: TERMINAL })
@@ -221,7 +226,8 @@ describe.skipIf(process.platform !== 'darwin' || !herdrBinary)("an agent in the 
   })
 
   it("the daemon's log has no tty, pane id, config path or session id", async () => {
-    const { d, dial, client, b, agent, run } = await fresh()
+    const { d, dial, client, b, agent } = await fresh()
+    const run = watch(d)
     await swipedTo(dial, b, agent, run, selectOf(client.tty))
     await until('the swipe ended', () => swipes(d).includes('[device] swipe · ok'), 30_000, 50)
     const log = d.log()
