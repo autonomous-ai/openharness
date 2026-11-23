@@ -93,7 +93,7 @@ const chats = (more: Partial<Scenario> = {}): Scenario => layout({
  *  world's answers have landed: they come on the run's own turn. */
 function chatSource(deps: DevicesDeps, heard: ReadonlyMap<string, HeardChat> = new Map()) {
   const source = new OrcaChatSource({ binary: () => orcaBinary(deps.orca!), run: deps.orca!.run, mtime: deps.orca!.mtime,
-    heard: () => heard, focus: async () => false, log: () => {}, now: () => Date.now() })
+    heard: () => heard, focus: async () => false, show: async () => 'failed', log: () => {}, now: () => Date.now() })
   const read = async (opts?: { worktrees?: boolean }): Promise<void> => {
     source.read(opts)
     await landed()

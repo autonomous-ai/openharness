@@ -26,7 +26,7 @@ import { cutAnswer, observedAgentId, type PaneName } from './observed.js'
 import { observedTitle } from './observedTitle.js'
 import type { OrcaDeps, OrcaReadDeps } from './orca.js'
 import { ORCA_CHAT_REFUSAL } from './orcaChat.js'
-import type { Caps, HostAgent, HostAgentState, HostSource } from './types.js'
+import type { Caps, HostAgent, HostAgentState, HostSource, PaneSwitch } from './types.js'
 
 /** How long each `orca` run may take: Orca answers its lists in a fraction of a second (0.2 s for 17 chats). */
 export const ORCA_CHAT_TIMEOUT_MS = 5_000
@@ -66,6 +66,8 @@ export interface OrcaChatDeps {
   heard(): ReadonlyMap<string, HeardChat>
   /** A tap: the chat's worktree comes up and Orca forward, as the devices route it. Orca's CLI opens no chat. */
   focus(agentId: string, worktreeId: string | undefined): Promise<boolean>
+  /** A rest: the chat's worktree comes up in Orca, which stays where it is (the design's decided 7). */
+  show(agentId: string): Promise<PaneSwitch>
   log(line: string): void
   /** A monotonic clock in ms, for the read's time. */
   now(): number
@@ -293,6 +295,16 @@ export class OrcaChatSource implements HostSource {
 
   async focus(agent: HostAgent): Promise<boolean> {
     return this.orcaIds.has(agent.id) ? this.deps.focus(agent.id, this.worktreeOfAgent(agent.id)) : false
+  }
+
+  /** A listed chat has its worktree to bring up at a rest, as a hooked copy's pane does (orcaChat.ts canShow). Without it
+   *  a swipe that rested on a chat with no process ran nothing (the dial eval, O20). */
+  hasPane(agent: HostAgent): boolean {
+    return this.orcaIds.has(agent.id) && this.worktreeOfAgent(agent.id) !== undefined
+  }
+
+  async showPane(agent: HostAgent): Promise<PaneSwitch> {
+    return this.hasPane(agent) ? this.deps.show(agent.id) : 'failed'
   }
 
   /** The rows again with the sessions the hooks named since the last read: a hook that names a chat's session folds its

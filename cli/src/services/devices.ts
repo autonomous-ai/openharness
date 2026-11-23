@@ -1062,6 +1062,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       noteMove()
       return opener.open(agentId, { bundle: APP_BUNDLES.orca, pane: { adapter: ORCA_CHAT_ADAPTER, id: orcaChats!.placed().get(agentId)! } })
     },
+    // A rest through the same adapter, which brings the worktree up and leaves Orca where it is. Noted as the adapters'
+    // shows are.
+    show: (agentId) => {
+      noteMove()
+      return orcaChat.show({ adapter: ORCA_CHAT_ADAPTER, id: orcaChats!.placed().get(agentId)! }, agentId)
+    },
     log,
     now: monotonic,
   }) : null
