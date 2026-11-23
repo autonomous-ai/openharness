@@ -121,11 +121,12 @@ export interface CableHostWiring {
    * `'question'` it was a question screen instead, and the window only brings the agent forward.
    */
   opened?: (machineId: string, agentId: string, reason?: OpenReason) => void
-  /** A person's tap opens an agent (an open with no reason), told as it is taken, before the open and whatever becomes
-   *  of it: the notice desk ends that agent's notice. Never a question screen that came up by itself. */
-  tapped?: (agentId: string) => void
   /** Who sent a notice, for an agent no list holds: `describe` asks it last, after the outside agents and the fleet. */
   noticeFrom?: (agentId: string) => { name: string; engine: string; machine: string } | undefined
+  /** A person's tap on an agent no list holds, which nothing here opens: the notice desk ends its card when its notice
+   *  found no list for it either (a router that has read none knows no machine of a listed agent), as the dial has no
+   *  face of that agent to ask on. Never a question screen that came up by itself. */
+  tappedUnlisted?: (agentId: string) => void
   /** The questions only the devices ask (an agent's notice, a prompt it waits on), as drawer rows: the dial keeps a
    *  question as a row of the drawer that what is unread replaces whole. */
   noticeRows?: () => UnreadNotification[]
@@ -1078,10 +1079,7 @@ export class DaemonCableHost implements CableHost {
   openAgent(agentId: string, reason?: OpenReason): void | Promise<void | { ok: false; error: string }> {
     // The last tap wins, whatever agent it is on: a tap still waiting for Desktop's window would open its agent over the
     // app this one brings forward. A question screen that came up by itself is no tap.
-    if (!reason) {
-      this.endWaiting()
-      this.wiring.tapped?.(agentId)
-    }
+    if (!reason) this.endWaiting()
     const outside = this.outsideEntry(agentId)
     if (outside) {
       // Only a person's tap switches the other app: a question screen that came up by itself never does.
@@ -1094,6 +1092,7 @@ export class DaemonCableHost implements CableHost {
       // Same rule as focus: an agent id without its machine is not routable, and guessing is how a
       // remote move used to land on a local agent.
       this.wiring.log(`cable: ignored open for unknown agent ${agentId}`)
+      if (!reason) this.wiring.tappedUnlisted?.(agentId)
       return
     }
     // With no window nothing could open a tap on one of this computer's agents: Desktop is started, and its window is

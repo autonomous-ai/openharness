@@ -7750,15 +7750,39 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     expect(closed()).toEqual([[ID, outside], ['h1', own]])
   })
 
-  it('its card goes when the person taps "In <app>" on the dial, never as the alert opens to be read', async () => {
+  // The dial's face of that agent shows its ask while the question is open: a tap that brought it forward leaves it.
+  it('its card stays as the person taps "In <app>" on the dial or the alert opens to be read, and goes at its next turn', async () => {
     const { port, listener } = devices()
     port.observed(hook('turn-start'))
     listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })
-    // The question screen that came up by itself.
+    // The question screen that came up by itself, then the person's tap.
     await host().openAgent(ID, 'question')
-    expect(calls('questionClose')).toEqual([])
     await host().openAgent(ID)
+    expect(calls('questionClose')).toEqual([])
+    port.observed(hook('turn-start'))
     expect(calls('questionClose')).toEqual([[ID, ids()[0]]])
+  })
+
+  // A caller no list holds has no face on the dial to ask on and nothing to open, and with no session its next turn is
+  // never heard: kept, its card would stay pinned until the devices restart.
+  it('the card of a caller no list holds goes as the person taps "In <app>", never as the alert opens to be read', async () => {
+    const { listener } = devices()
+    listener.notice({ text: LINE, folder: 'web' })
+    const caller = observedAgentId('notify', 'web')
+    await host().openAgent(caller, 'question')
+    expect(calls('questionClose')).toEqual([])
+    await host().openAgent(caller)
+    expect(calls('questionClose')).toEqual([[caller, ids()[0]]])
+  })
+
+  // A router that has read no list (the fleet's came back unavailable, and this host's own never listed) knows no
+  // machine for any agent: a tap on a Harness agent's card then finds none, and it is still not a caller no list holds.
+  it('the card of a Harness agent stays as a tap finds no machine for it', async () => {
+    const { listener } = devices({ core: bound() })
+    listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
+    await host().openAgent('h1')
+    expect(logs).toContain('[cable] cable: ignored open for unknown agent h1')
+    expect(calls('questionClose')).toEqual([])
   })
 
   it('its card goes with its agent', async () => {
@@ -7935,7 +7959,8 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       await vi.waitFor(() => expect(tiers()).toEqual([['a2', 'alert']]))
     })
 
-    it('rings again once the card went, at its next turn or a tap', async () => {
+    // A tap only brought the agent forward: the card is still pending, so its turn still ends silent.
+    it('rings again once the card went at its next turn, never after a tap alone', async () => {
       const { port, listener } = devices({ core: bound(), decideTier: null })
       port.observed(hook('turn-start'))
       listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
@@ -7944,7 +7969,8 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       await host().openAgent(ID)
       summary(port, 'h1')
       summary(port, ID)
-      await vi.waitFor(() => expect(tiers()).toEqual([['h1', 'alert'], [ID, 'alert']]))
+      await vi.waitFor(() => expect(tiers()).toHaveLength(2))
+      expect(tiers()).toEqual(expect.arrayContaining([['h1', 'alert'], [ID, 'silent']]))
     })
   })
 
