@@ -177,6 +177,14 @@ describe("tier A's tmux", () => {
     expect(w.active()).toBe('%1|0\n%2|1\n')
   })
 
+  it('tmux.selectPane on the pane already active fails its step: a move that changes nothing is the scenario\'s mistake', async () => {
+    const w = fakeWorld()
+    await w.start('t', 'u')
+    await expect(w.step('tmux.selectPane', { session: 't' }))
+      .rejects.toThrow("scenario T3: t's tmux pane is already its window's active one")
+    expect(w.active()).toBe('%1|1\n%2|0\n')
+  })
+
   it("a turn-start while the selected tab holds a client of the session moves that client's activity and its tty's atime, and "
     + 'with none selected moves nothing', async () => {
     const w = fakeWorld()
