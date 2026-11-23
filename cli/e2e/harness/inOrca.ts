@@ -12,7 +12,20 @@ export const IN_ORCA = { ORCA_AGENT_SESSION_ID: 'e2e-orca-session', ORCA_PAIRING
 
 /** The hooks of those the daemon installs for Claude Code (engines/claude/hookContract.ts) that a session's start, turn,
  *  wait and end run. */
-type ClaudeEvent = 'SessionStart' | 'UserPromptSubmit' | 'Notification' | 'Stop' | 'SessionEnd'
+export type ClaudeEvent = 'SessionStart' | 'UserPromptSubmit' | 'Notification' | 'Stop' | 'SessionEnd'
+
+/** The command the daemon installed in Claude Code's settings for [event], once it is there. */
+export function installedHook(d: IsolatedDaemon, event: ClaudeEvent): Promise<string> {
+  const settings = join(d.env.HOME!, '.claude', 'settings.json')
+  return until(`the ${event} hook in Claude Code's settings`, () => {
+    try {
+      const blocks = (JSON.parse(readFileSync(settings, 'utf8')) as { hooks?: Record<string, Array<{ hooks?: Array<{ command?: string }> }>> }).hooks?.[event] ?? []
+      return blocks.flatMap((block) => block.hooks ?? []).map((hook) => hook.command).find((line) => line?.includes('notify.mjs'))
+    } catch {
+      return undefined
+    }
+  }, 30_000, 100)
+}
 
 /** Claude Code in an Orca terminal, outside Harness: no tmux pane, no Harness pane, and Orca's own variables. [hints] are
  *  the session's own beside them, as its hook reads them: an Orca terminal's handle, or another app's names
@@ -61,16 +74,7 @@ export class InOrca {
   /** Its own hook for [event], the command the daemon installed in Claude Code's settings, run through a shell as Claude
    *  Code runs it. */
   async hook(event: ClaudeEvent, fields: Record<string, unknown> = {}): Promise<void> {
-    const settings = join(this.d.env.HOME!, '.claude', 'settings.json')
-    const command = await until(`the ${event} hook in Claude Code's settings`, () => {
-      try {
-        const blocks = (JSON.parse(readFileSync(settings, 'utf8')) as { hooks?: Record<string, Array<{ hooks?: Array<{ command?: string }> }>> }).hooks?.[event] ?? []
-        return blocks.flatMap((block) => block.hooks ?? []).map((hook) => hook.command).find((line) => line?.includes('notify.mjs'))
-      } catch {
-        return undefined
-      }
-    }, 30_000, 100)
-    const run = await this.run('/bin/sh', ['-c', command], { hook_event_name: event, ...fields })
+    const run = await this.run('/bin/sh', ['-c', await installedHook(this.d, event)], { hook_event_name: event, ...fields })
     expect(run.code, run.stderr).toBe(0)
   }
 
