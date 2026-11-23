@@ -408,23 +408,23 @@ describe("tier B's world at its start", () => {
 })
 
 describe("tier B's tmux and herdr runs", () => {
-  it("a non-iTerm2 world's commands hold no tmux or herdr run though their logs have some; an iTerm2 world's name each pane by its session", async () => {
+  it("an iTerm2 world's commands hold its daemon's tmux and herdr runs, each pane named by its session; another app's daemon notes none", async () => {
     dir = mkdtempSync(join(tmpdir(), 'tier-b-mux-'))
-    const rig = { d: { log: () => '' }, runs: join(dir, 'runs.log'), cursorRuns: join(dir, 'cursor-runs.log'), projects: [],
-      tmuxRuns: join(dir, 'tmux-runs'), herdrRuns: join(dir, 'herdr-runs') }
+    const other = { d: { log: () => '' }, runs: join(dir, 'runs.log'), cursorRuns: join(dir, 'cursor-runs.log'), projects: [] }
+    const rig = { ...other, iterm: { tmuxRuns: join(dir, 'tmux-runs'), herdrRuns: join(dir, 'herdr-runs') } }
     const iterm: Scenario = {
       id: 'EVAL', app: 'iterm', title: 'Eval tmux', dims: ['D3'], platforms: ['darwin'], tiers: ['b'], heldOut: false,
       sessions: [{ key: 'a', app: 'iterm', id: '00000000-0000-4000-8e00-00000000000a', title: 'Eval alpha', cwd: '/work/eval-a', ageMs: 0,
         place: 'tmux', window: 'w1', tab: 1, split: 0 }],
       steps: [], checks: [], probes: [],
     }
-    const worlds = [new driver.World(rig, byId('V11'), 'darwin'), new driver.World(rig, iterm, 'darwin')]
+    const worlds = [new driver.World(other, byId('V11'), 'darwin'), new driver.World(rig, iterm, 'darwin')]
     try {
       // The devices' runs and the core's, after both worlds began.
       const at = Date.now() + 1_000
-      noteIn(rig.tmuxRuns, 'run.t1', ['0', 'tmux', 'select-window', '-t', '%3', ';', 'select-pane', '-t', '%3'], at)
-      noteIn(rig.tmuxRuns, 'run.t2', ['0', 'tmux', 'list-panes', '-a', '-F', '#{pane_id}'], at + 100)
-      noteIn(rig.herdrRuns, 'run.h1', ['0', 'herdr', 'agent', 'focus', 'w1:p2'], at + 200)
+      noteIn(rig.iterm.tmuxRuns, 'run.t1', ['0', 'tmux', 'select-window', '-t', '%3', ';', 'select-pane', '-t', '%3'], at)
+      noteIn(rig.iterm.tmuxRuns, 'run.t2', ['0', 'tmux', 'list-panes', '-a', '-F', '#{pane_id}'], at + 100)
+      noteIn(rig.iterm.herdrRuns, 'run.h1', ['0', 'herdr', 'agent', 'focus', 'w1:p2'], at + 200)
       const [vscode, itermWorld] = worlds
       itermWorld!.muxPanes.set('%3', 'a')
       for (const world of worlds) world.takeMux()

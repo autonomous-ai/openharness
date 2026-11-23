@@ -6,10 +6,10 @@
  *
  * Isolation: each daemon's open (HARNESS_OPEN_BIN, which only records: `writeRecordingOpen`), its home, its apps' folder,
  * both apps' stores, the editors' CLIs (HARNESS_VSCODE_BIN, HARNESS_CURSOR_BIN; on Linux Cursor's only records:
- * `writeRecordingCli`), Orca's CLI (the fake, as `orca` and `orca-ide`: `orcaCliInside`), its `tmux` (a recording wrapper
- * of its private server's), its `ps` (which hides every herdr outside this worker: `ownHerdrsOnly`) and, on Linux, the
- * raise's programs (`writeRaiseFakes`) are checked to be inside its root before it starts, and it is signed in to the fake
- * backend alone.
+ * `writeRecordingCli`), Orca's CLI (the fake, as `orca` and `orca-ide`: `orcaCliInside`), on an iTerm2 scenario's daemon
+ * its `tmux` (a recording wrapper of its private server's) and its `ps` (which hides every herdr outside this worker:
+ * `ownHerdrsOnly`), and, on Linux, the raise's programs (`writeRaiseFakes`) are checked to be inside its root before it
+ * starts, and it is signed in to the fake backend alone.
  * The network guard (src/testing/dialAppEval/netGuard.ts) is in this process and preloaded into every process of the
  * daemon and every child started here: a start whose running core or devices process did not load it fails, and the
  * driver's close fails on any attempt not yet handed on, those its last daemon made as it closed among them.
@@ -119,7 +119,8 @@ export interface TierBWorld {
   readonly muxPanes: Map<string, SessionKey>
   /** The person's selected tab of iTerm2, by its label: told on the watch, and recorded on the tabs stream. */
   reportTab(label: string): void
-  /** The herdrs the daemon's process table kept, this worker's, and dropped, all others (ownHerdrsOnly). */
+  /** The herdrs the daemon's process table kept, this worker's, and dropped, all others (ownHerdrsOnly): an iTerm2
+   *  scenario's alone. */
   readonly herdrs: { kept(): number[]; dropped(): number[] }
 }
 export type TierBHandler<K extends StepKind> = (world: TierBWorld, step: StepOf<K>) => Promise<void>
@@ -151,10 +152,9 @@ interface Rig {
   given: number
   /** When each Claude session's last mod poll closed, by its id: the devices still count it ready for a while. */
   polled: Map<string, number>
-  /** Where its recording tmux and its herdr note the devices' runs (runLog.ts). */
-  tmuxRuns: string
-  herdrRuns: string
-  herdrs: { kept(): number[]; dropped(): number[] }
+  /** An iTerm2 scenario's daemon alone (ownRig): where its recording tmux and its herdr note the devices' runs
+   *  (runLog.ts), and the herdrs its process table kept and dropped. */
+  iterm?: { tmuxRuns: string; herdrRuns: string; herdrs: { kept(): number[]; dropped(): number[] } }
 }
 
 /** The ChatGPT app's bundle as the devices read it (`plutil`): its id and nothing else of the app. */
@@ -422,8 +422,23 @@ async function end(child: ChildProcess): Promise<void> {
   clearTimeout(timer)
 }
 
-/** A daemon whose Orca lists the Orca accounts of [accounts]' sessions (orcaAccounts). */
-async function openRig(guard: string, accounts: SessionKey[]): Promise<Rig> {
+/**
+ * Whether [scenario] needs a daemon of its own, not [rig]'s. It asks for one (`fresh`). Its ids are the catalog's, shared
+ * with those before it: a voice to a session whose poll the devices still count could reach it by an earlier scenario's
+ * poll. The devices read Orca's accounts once as they start: a Codex in an account the running Orca does not list needs
+ * one whose Orca lists it. And only an iTerm2 scenario's daemon runs the recording tmux, the herdr-only process table and
+ * herdr (openRig): another app's scenario runs on none of them, an iTerm2 one on all.
+ */
+export function ownRig(rig: Pick<Rig, 'polled' | 'accounts' | 'iterm'>, scenario: Scenario, now = Date.now()): boolean {
+  const counted = scenario.steps.some((s) => s.kind === 'voice')
+    && scenario.sessions.some((s) => now - (rig.polled.get(s.id) ?? -Infinity) < MOD_READY_MS)
+  const unlisted = orcaAccounts(scenario).some((key) => !rig.accounts.includes(key))
+  return scenario.fresh === true || counted || unlisted || (rig.iterm !== undefined) !== (scenario.app === 'iterm')
+}
+
+/** A daemon whose Orca lists the Orca accounts of [accounts]' sessions (orcaAccounts); with [iterm], an iTerm2
+ *  scenario's (ownRig). */
+async function openRig(guard: string, accounts: SessionKey[], iterm: boolean): Promise<Rig> {
   const backend = await FakeBackend.start()
   backend.addMachine(ME)
   let d: IsolatedDaemon | undefined
@@ -434,18 +449,24 @@ async function openRig(guard: string, accounts: SessionKey[]): Promise<Rig> {
     const cost = costEnv(d.root)
     // As enginehomes.e2e.ts preloads its fault: the master hands NODE_OPTIONS on to the core and every service.
     Object.assign(d.env, cost.env, netGuardEnv(guard, cost.nodeOptions))
-    // The devices' tmux runs noted by a wrapper first on the daemon's PATH, which runs the tmux the daemon found there,
-    // its private server's; and its process table holds no herdr but this worker's.
-    const tmux = resolveBinaryOnPath('tmux', d.env)
-    if (!tmux) throw new Error('the daemon finds no tmux')
-    const tmuxRuns = join(dirname(d.binDir), 'tmux-runs')
-    writeExecutable(join(d.binDir, 'tmux'), recordingWrapper(tmux, tmuxRuns, TMUX_RECORDED))
-    const herdrs = ownHerdrsOnly(d)
+    // An iTerm2 scenario's alone: the devices' tmux runs noted by a wrapper first on the daemon's PATH, which runs the tmux
+    // the daemon found there, its private server's; its process table holding no herdr but this worker's; and herdr
+    // installed, as on tier A's iTerm2 machine (the iTerm2 plan's Decision 7), before its dial comes: the devices look for
+    // it as a dial comes (services/devices.ts dialAttached).
+    let kit: Rig['iterm']
+    if (iterm) {
+      const tmux = resolveBinaryOnPath('tmux', d.env)
+      if (!tmux) throw new Error('the daemon finds no tmux')
+      const tmuxRuns = join(dirname(d.binDir), 'tmux-runs')
+      writeExecutable(join(d.binDir, 'tmux'), recordingWrapper(tmux, tmuxRuns, TMUX_RECORDED))
+      kit = { tmuxRuns, herdrRuns: herdrRuns(d), herdrs: ownHerdrsOnly(d) }
+      if (herdrBinary) await PrivateHerdr.install(d)
+    }
     const home = d.env.HOME
     const claudeStore = claudeStoreRoots(process.platform, d.env, home ?? '')[0]?.root
     const places = { open: d.env.HARNESS_OPEN_BIN, home, applications: d.env.HARNESS_APPLICATIONS_DIR, 'Claude store': claudeStore,
       'Codex home': home && join(home, '.codex'), 'VS Code CLI': d.env.HARNESS_VSCODE_BIN, 'Cursor CLI': d.env.HARNESS_CURSOR_BIN,
-      tmux: resolveBinaryOnPath('tmux', d.env) ?? undefined, ps: resolveBinaryOnPath('ps', d.env) ?? undefined }
+      ...kit ? { tmux: resolveBinaryOnPath('tmux', d.env) ?? undefined, ps: resolveBinaryOnPath('ps', d.env) ?? undefined } : {} }
     for (const [name, path] of Object.entries(places)) if (!inside(d.root, path)) throw new Error(`the daemon's ${name} is not inside its root`)
     const runs = join(dirname(places.open!), 'runs.log')
     writeRecordingOpen(places.open!, runs)
@@ -496,7 +517,7 @@ async function openRig(guard: string, accounts: SessionKey[]): Promise<Rig> {
     // An engine started by hand reads its hooks once, as it starts: they are in before any scenario starts one.
     await d.hooksInstalled(['claude', 'codex'])
     return { d, desk: new Desk(dials), backend, orca, watchFocus: true, accounts, runs, cursorRuns, projects, guard, given: 0, polled: new Map(),
-      tmuxRuns, herdrRuns: herdrRuns(d), herdrs }
+      iterm: kit }
   } catch (error) {
     await d?.close().catch(() => {})
     await backend.close()
@@ -569,7 +590,10 @@ export class World implements TierBWorld {
   get desk(): Desk { return this.rig.desk }
   get orca(): FakeOrca { return this.rig.orca }
   get backend(): FakeBackend { return this.rig.backend }
-  get herdrs(): { kept(): number[]; dropped(): number[] } { return this.rig.herdrs }
+  get herdrs(): { kept(): number[]; dropped(): number[] } {
+    if (!this.rig.iterm) throw new Error(`${this.scenario.id}: only an iTerm2 scenario's daemon keeps its table to its own herdrs`)
+    return this.rig.iterm.herdrs
+  }
   get dial(): FakeDial {
     if (!this.plugged) throw new Error(`${this.scenario.id}: no dial is plugged in`)
     return this.plugged
@@ -753,8 +777,9 @@ export class World implements TierBWorld {
    *  fake Orca's are: commands in time order with the others, each pane named by the session it holds. The core runs
    *  tmux too, and tier A answers the devices' tmux and herdr for iTerm2 alone: no other app's commands take them. */
   takeMux(): void {
-    if (this.scenario.app !== 'iterm') return
-    const runs = [...runLog(this.rig.tmuxRuns), ...runLog(this.rig.herdrRuns)].filter((run) => run.at >= this.began)
+    const kit = this.rig.iterm
+    if (!kit) return
+    const runs = [...runLog(kit.tmuxRuns), ...runLog(kit.herdrRuns)].filter((run) => run.at >= this.began)
     this.commands.push(...muxCommands(runs, (pane) => this.muxPanes.get(pane)))
     this.commands.sort((a, b) => a.at - b.at)
   }
@@ -856,18 +881,9 @@ export class TierBDriver implements EvalDriver {
     const gaps = tierBGaps(scenario, platform)
     this.ready = false
     this.next = 0
-    // The scenario's ids are the catalog's, shared with those before it: a voice to a session whose poll the devices still
-    // count could reach it by an earlier scenario's poll, so such a scenario has a daemon of its own.
-    const polled = this.rig?.polled
-    const counted = polled !== undefined && scenario.steps.some((s) => s.kind === 'voice')
-      && scenario.sessions.some((s) => Date.now() - (polled.get(s.id) ?? -Infinity) < MOD_READY_MS)
-    // The devices read Orca's accounts once as they start: a Codex in an account the running Orca does not list has a
-    // daemon of its own, whose Orca lists it.
-    const accounts = orcaAccounts(scenario)
-    const unlisted = this.rig !== undefined && accounts.some((key) => !this.rig!.accounts.includes(key))
-    if (this.rig && (scenario.fresh || counted || unlisted)) await this.closeRig()
+    if (this.rig && ownRig(this.rig, scenario)) await this.closeRig()
     if (this.rig) await this.reset(this.rig)
-    const rig = this.rig ??= await openRig(join(this.own, `net-guard-${++this.daemons}.jsonl`), accounts)
+    const rig = this.rig ??= await openRig(join(this.own, `net-guard-${++this.daemons}.jsonl`), orcaAccounts(scenario), scenario.app === 'iterm')
     // Rewritten only when it changes: each rewrite moves the launcher's mtime, and the devices ask `terminal --help` again.
     const watchFocus = scenario.world?.orca?.watchFocus !== false
     if (rig.watchFocus !== watchFocus) {
@@ -879,9 +895,6 @@ export class TierBDriver implements EvalDriver {
     linksFail(rig.d.env.HARNESS_OPEN_BIN!, scenario.world?.linkFails ?? [])
     const front = scenario.world?.front ?? scenario.app
     await GENERIC.front(world, { kind: 'front', app: front })
-    // herdr installed on an iTerm2 scenario's daemon, as on tier A's iTerm2 machine (the iTerm2 plan's Decision 7), before
-    // its dial comes: the devices look for it as a dial comes (services/devices.ts dialAttached).
-    if (scenario.app === 'iterm' && herdrBinary) await PrivateHerdr.install(rig.d)
     await world.plug()
     // Every page empty before the scenario goes on: nothing of the scenarios before it is listed, nor seen.
     const cut = await until(`${scenario.id}: the dial welcomed, and no app's page with a row`,
