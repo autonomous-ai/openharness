@@ -294,10 +294,17 @@ export function orcaDeliveries(runs: readonly LoggedRun[], ownerOf: (handle: str
   })
 }
 
+/** A terminal's device, as tmux names a client by its tty (`switch-client -c /dev/ttys004`). */
+const TTY = /^\/dev\//
+
 /** The devices' tmux and herdr runs as commands, at their own times, each pane id written as the session [keyOf] says
- *  held it at the run's time (namedPanes), so no pane id reaches a result. */
-export function muxCommands(runs: readonly LoggedRun[], keyOf: (pane: string, at: number) => SessionKey | undefined): Seen['commands'] {
-  return runs.map(({ argv, ok, at }) => ({ at, argv: namedPanes(argv, (pane) => keyOf(pane, at)), ok }))
+ *  held it at the run's time (namedPanes) and each tty as `tab:<label>` of the tab [labelOf] says holds it, `tab:other`
+ *  for none, so no pane id or tty reaches a result. */
+export function muxCommands(runs: readonly LoggedRun[], keyOf: (pane: string, at: number) => SessionKey | undefined,
+  labelOf: (tty: string) => string | undefined): Seen['commands'] {
+  return runs.map(({ argv, ok, at }) => ({
+    at, ok, argv: namedPanes(argv, (pane) => keyOf(pane, at)).map((arg) => (TTY.test(arg) ? `tab:${labelOf(arg) ?? 'other'}` : arg)),
+  }))
 }
 
 /** A select the watch printed (devices/client.ts): `{"select":{"app","tty","raise"?}}`; undefined for any other line. */
@@ -684,10 +691,9 @@ export class World implements TierBWorld {
         cwd: this.d.root, env: { ...this.d.env, TMUX_PANE: '' }, stdio: ['pipe', 'pipe', 'pipe'],
       })
       this.children.push(watch)
-      const labelOf = (tty: string): string | undefined => [...this.tabs].find(([, open]) => open === tty)?.[0]
       createInterface({ input: watch.stdout! }).on('line', (printed) => {
         const select = selectOf(printed)
-        if (select && !this.closed) this.stream(TABS_STREAM, selectRecord(select, labelOf))
+        if (select && !this.closed) this.stream(TABS_STREAM, selectRecord(select, (tty) => this.labelOf(tty)))
       })
       let said = ''
       watch.stderr!.on('data', (chunk: Buffer) => { said = (said + chunk.toString('utf8')).slice(-STDERR_KEPT) })
@@ -782,13 +788,15 @@ export class World implements TierBWorld {
   }
 
   /** An iTerm2 scenario's alone: the devices' tmux and herdr runs since this world began, read once as it stops, as the
-   *  fake Orca's are: commands in time order with the others, each pane named by the session it holds. The core runs
-   *  tmux too, and tier A answers the devices' tmux and herdr for iTerm2 alone: no other app's commands take them. */
+   *  fake Orca's are: commands in time order with the others, each pane named by the session it holds and each tty by
+   *  the tab open on it as the world stops. The core runs tmux too, and tier A answers the devices' tmux and herdr for
+   *  iTerm2 alone: no other app's commands take them. */
   takeMux(): void {
     const kit = this.rig.iterm
     if (!kit) return
     const runs = [...runLog(kit.tmuxRuns), ...runLog(kit.herdrRuns)].filter((run) => run.at >= this.began)
-    this.commands.push(...muxCommands(runs, (pane, at) => this.muxes.find((p) => p.pane === pane && p.from <= at && at < p.to)?.key))
+    this.commands.push(...muxCommands(runs, (pane, at) => this.muxes.find((p) => p.pane === pane && p.from <= at && at < p.to)?.key,
+      (tty) => this.labelOf(tty)))
     this.commands.sort((a, b) => a.at - b.at)
   }
 
@@ -812,6 +820,9 @@ export class World implements TierBWorld {
   }
 
   private atWork(run: OpenRun): OpenRun { return { ...run, argv: workPaths(run.argv, this.rig.projects) } }
+
+  /** The label of the iTerm2 tab open on [tty] now. */
+  private labelOf(tty: string): string | undefined { return [...this.tabs].find(([, open]) => open === tty)?.[0] }
 
   /** The face, recorded when it changed (faceChange). */
   private face(at: number): void {
