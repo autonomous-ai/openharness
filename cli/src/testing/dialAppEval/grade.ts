@@ -203,7 +203,7 @@ export function tierAVerdict(results: RunResults, baseline: Baseline): Verdict {
  * timing decides (the spec's CI rules, PM 2026-11-23). These were I3's and I15's ring order on iTerm2's page, and their
  * ringKept: the tmux row once reached that page only after its client lookup, so a list tick in the gap ordered it last.
  * Since tmux's and herdr's rows have pages of their own (docs/plans/2026-11-23-dial-tmux-herdr-apps-design.md), that
- * ring is a alone and its order cannot race. The keys stay until a Mac tier B run's evidence prunes or replaces them.
+ * ring holds a alone and its order cannot race. The keys stay until a Mac tier B run's evidence prunes or replaces them.
  */
 export const RACED_B: ReadonlySet<string> =
   new Set(['b/darwin/I3/ring.order', 'b/darwin/I3/ringKept', 'b/darwin/I15/ring.order', 'b/darwin/I15/ringKept'])
