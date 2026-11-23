@@ -45,7 +45,8 @@ window's three screens are plain TypeScript in `ui/`.
   `appimage-starts.sh`, which stay by hand
   ([What PR CI does not run](../docs/validation-and-release.md#what-pr-ci-does-not-run)).
 - `python3 -m unittest discover -s scripts -p 'test_*.py'`: the release rules. How a release is cut:
-  [RELEASE.md](RELEASE.md).
+  [RELEASE.md](RELEASE.md). `test_windows_sign.py` runs `windows-sign.ps1` under `pwsh` where it is installed (CI's
+  Linux leg); without `pwsh`, and on Windows, those tests skip.
 
 ## Rules a change keeps
 

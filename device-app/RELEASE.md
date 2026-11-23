@@ -5,7 +5,7 @@ One release carries, under one version:
 | Platform | Files | Signed |
 |---|---|---|
 | macOS 13 or later, universal | `Harness-Device.dmg`, the update `Harness-Device.app.tar.gz` and its `.sig` | Developer ID, notarized |
-| Windows 10 or 11, x64 and arm64 | `Harness-Device-windows-<arch>-setup.exe` (NSIS, per user) and its `.sig` | Authenticode, the app's exe and the installer |
+| Windows 10 or 11, x64 and arm64 | `Harness-Device-windows-<arch>-setup.exe` (NSIS, per user) and its `.sig` | Authenticode, the app's exe, the installer, its uninstaller and NSIS's plugin DLLs |
 | Linux, x64 and arm64 | `Harness-Device-linux-<arch>.AppImage` and its `.sig` | the update signature only |
 
 Each `.sig` is the updater's signature. The page is `https://harness.autonomous.ai/device`, which lists every
@@ -69,7 +69,7 @@ The first Windows and Linux release:
 | `build` | macos-15 | Compiles, then bundles, signs, notarizes and checks; keeps the three files and their sha256 and size as a run artifact for 7 days. |
 | `tauri-cli-windows` | windows, with `all` | Installs the Tauri CLI `sign-windows` runs, with no app code checked out; no secret, no identity. |
 | `build-windows` | windows, x64 and arm64, with `all` | Compiles `harness-device.exe` for its arch; no secret, no identity. |
-| `sign-windows` | windows, with `all` | Signs both exes, bundles each installer with that Tauri CLI, signs the installers, writes their update signatures, then records their sums; keeps them for 7 days. Compiles and installs nothing. |
+| `sign-windows` | windows, with `all` | Signs both exes, then bundles each installer with that Tauri CLI, whose sign command (`scripts/windows-sign.ps1`) signs the plugin DLLs, the uninstaller and the installer; then writes their update signatures and records their sums; keeps them for 7 days. Compiles and installs nothing. |
 | `check-windows` | windows, with `all` | Checks the installers `sign-windows` made; hands nothing on. |
 | `build-linux` | ubuntu-22.04 x64 and ubuntu-22.04-arm, with `all` | Compiles, bundles the AppImage, then signs it as an update in a step of its own, checks it; keeps it for 7 days. |
 | `publish` | ubuntu, only with `publish=true` | Checks each artifact against the sums its build recorded, uploads to GCS, writes the manifest, verifies the public downloads. With `all` it waits for every build, and uploads the one-line Linux installer after the version checks, before the manifest. |
@@ -87,15 +87,14 @@ The first Windows and Linux release:
 - **Windows signs in order** (`sign-windows`): the app's exe with Authenticode through Azure Artifact Signing
   ([Windows code signing](../docs/windows-code-signing.md)), always, since Smart App Control blocks an unsigned
   program; then NSIS packs it, with `--no-binary-patching`, so Tauri writes nothing into the signed exe and it keeps
-  its signature; then the installer is signed; then the update signature, last, over the bytes that ship. This job
-  runs no build code: the Tauri CLI comes from `tauri-cli-windows`, which checks out no app code, so a crate's build
-  script or an npm package cannot replace the program that runs beside the signing identity and the updater key. The
-  sums `publish` checks are recorded here too, as the files are made. A job that runs build code could still replace
-  another job's artifact, so the CLI's sha256 and the sums' travel as job outputs, which only the job that made them
-  can set: `sign-windows` runs the CLI, and `publish` takes the Windows sums, only when they match. NSIS's uninstaller
-  and plugin DLLs, which the installer writes to disk, stay unsigned: Tauri signs them only through a sign command it
-  runs in the middle of the bundle, and the signing action signs files between steps. Whether Smart App Control lets
-  them run is checked on a real PC before the first Windows release.
+  its signature. Inside the bundle Tauri's sign command (`scripts/windows-sign.ps1`) signs NSIS's five plugin DLLs,
+  the uninstaller makensis writes and the installer, and the script refuses any other file. Then the update
+  signature, last, over the bytes that ship. This job runs no build code: the Tauri CLI comes from
+  `tauri-cli-windows`, which checks out no app code, so a crate's build script or an npm package cannot replace the
+  program that runs beside the signing identity and the updater key. The sums `publish` checks are recorded here too,
+  as the files are made. A job that runs build code could still replace another job's artifact, so the CLI's sha256
+  and the sums' travel as job outputs, which only the job that made them can set: `sign-windows` runs the CLI, and
+  `publish` takes the Windows sums, only when they match.
 - **Each AppImage builds on its own arch**, on the oldest Ubuntu the desktop app supports: an AppImage carries the
   libraries of the machine that bundled it.
 - **Two notarizations.** Tauri notarizes and staples the app; it signs the dmg but does not notarize it, so the
@@ -106,7 +105,9 @@ The first Windows and Linux release:
   (`requireSignedVersion`); the dmg holds the app and an `Applications` link; `spctl` and `stapler validate` accept
   the app and the dmg. On Windows (`--signed`): each installer's update signature and its version, its Authenticode
   signature, and the `harness-device.exe` it packs (read out with 7-Zip): its Authenticode signature, kept through
-  NSIS, and its version. On Linux: the AppImage's arch, its static runtime, and its update signature and version.
+  NSIS, and its version; then the `uninstall.exe` it packs and every DLL in the installer and in that uninstaller,
+  each Valid, with at least one DLL in each. This is the uninstaller's gate, since makensis ignores a failed
+  signature there. On Linux: the AppImage's arch, its static runtime, and its update signature and version.
   Each prints `ok: <check>`, or `FAILED: <check>` and stops.
 - **Nothing reaches GCS without `publish`.** Only it and `sign-windows` hold `id-token: write`, and only `publish`
   authenticates to GCP; that `sign-windows`'s token (subject `…:environment:release`) gets no GCS credential is GCP's
@@ -117,7 +118,8 @@ The first Windows and Linux release:
 
 The scripts the jobs run: `scripts/release-setup.sh` (the runner's tools), `scripts/release-build.sh` (`compile`, then
 `bundle` under the fixed names above; on Windows, after Authenticode, and on Linux `sign-update`),
-`scripts/release-check.sh` and `scripts/device-manifest.py`.
+`scripts/windows-sign.ps1` (Tauri's sign command in `sign-windows`), `scripts/release-check.sh` and
+`scripts/device-manifest.py`.
 
 ## The manifest
 
@@ -236,10 +238,10 @@ tries again, but a version whose download, signature or install failed waits 2 m
 a newer version is tried at once.
 
 On Windows the installer ends the app the moment it starts, so the app downloads and checks the update at once, then
-holds the install until nothing a relaunch waits for runs. The installer (NSIS, passive) replaces the app in its
-folder and starts it again; the login item's Run value stays, since an update runs the old uninstaller with
-`/UPDATE`, which keeps it. The app also sets it again at every launch when it is missing, after an uninstall and a
-reinstall or a hand deletion; one Startup Apps turned off stays off.
+holds the install until nothing a relaunch waits for runs. The installer (NSIS, passive) replaces the app in its folder
+and starts it again; the login item's Run value stays, since the installer in update mode (`/UPDATE`) does not run the
+old uninstaller, so nothing deletes it. The app also sets it again at every launch when it is missing, after an
+uninstall and a reinstall or a hand deletion; one Startup Apps turned off stays off.
 
 Its log has one line per step, never a URL. The folder: `~/Library/Logs/ai.autonomous.harness.device/` on macOS,
 `%LOCALAPPDATA%\ai.autonomous.harness.device\logs\` on Windows, `~/.local/share/ai.autonomous.harness.device/logs/`

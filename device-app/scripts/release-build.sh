@@ -5,9 +5,10 @@
 # - `release-build.sh compile VERSION [CONFIG_JSON]` compiles the app, and refuses a signing secret in its environment.
 # - `release-build.sh bundle VERSION OUT_DIR [CONFIG_JSON]` bundles what compile built into an empty OUT_DIR, under the
 #   fixed names the manifest and the website use: on macOS the dmg and the update archive, signed and notarized, with
-#   the archive's update signature. On Windows the installer alone: Authenticode signs it next. On Linux the AppImage
-#   alone: Tauri's AppImage bundler downloads and runs linuxdeploy and its plugins unpinned, so it never runs with the
-#   updater key.
+#   the archive's update signature. On Windows the installer alone, signing nothing by itself: sign-windows passes
+#   Tauri's sign command as CONFIG_JSON, which only the bundle reads (the app never does), so compile does not take
+#   it. On Linux the AppImage alone: Tauri's AppImage bundler downloads and runs linuxdeploy and its plugins unpinned,
+#   so it never runs with the updater key.
 # - `release-build.sh sign-update VERSION OUT_DIR`, on Windows and Linux, writes the update signature of each installer
 #   or AppImage in OUT_DIR, with only the Tauri CLI running: on Windows once Authenticode signed the installer, so the
 #   signature covers the bytes that ship.
