@@ -2153,6 +2153,29 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     expect((await machineList(port)).agents).toEqual([])
   })
 
+  // The dial eval's VS Code V2: a closed integrated terminal's row waited for the ended session's 10 s.
+  it('an ended session whose process is gone leaves within 2 s', async () => {
+    vi.useFakeTimers()
+    const { port } = start({ faults: ['fleet'] })
+    port.observed(hook('session-start'))
+    port.observed(hook('session-end'))
+    readers.ended.add(4242)
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect((await machineList(port)).agents).toEqual([])
+  })
+
+  // A /clear ends a session in a process that runs on.
+  it('an ended session whose process still runs is listed until the ended rule\'s 10 s', async () => {
+    vi.useFakeTimers()
+    const { port } = start({ faults: ['fleet'] })
+    port.observed(hook('session-start'))
+    port.observed(hook('session-end'))
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect((await machineList(port)).agents.map((a) => a.id)).toEqual([ID])
+    await vi.advanceTimersByTimeAsync(9_000)
+    expect((await machineList(port)).agents).toEqual([])
+  })
+
   it('a gone for a poll not held looks at nothing', async () => {
     vi.useFakeTimers()
     const { port } = start({ faults: ['fleet'] })
@@ -10220,8 +10243,9 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
     return { ...started, fake, listener, front, attached, live, changed }
   }
 
-  it('on macOS with a dial attached its sessions are listed svf, idle, on the Claude app\'s page; detached, the source stops, its watches close and the reader forgets', async () => {
+  it('on macOS with a dial attached its sessions are listed svf, idle, on the Claude app\'s page; detached, the source stops, its watches close, the reader forgets and the rank goes', async () => {
     const { fake, live } = withStore()
+    const rank = vi.spyOn(host(), 'setRank')
     // No dial: the store is not read.
     expect(fake.calls).toEqual([])
     await live()
@@ -10233,10 +10257,12 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
     expect(watchedFolders.calls).toEqual(expect.arrayContaining([[[ROOT, posix.dirname(ROOT)], expect.any(Function)],
       [[ACCOUNT_DIR], expect.any(Function)], [[ORG_DIR], expect.any(Function)]]))
     expect(logs).toEqual(expect.arrayContaining(['[claude-app] watch · on', '[claude-app] listed · 1 sessions']))
+    expect(rank.mock.lastCall).toEqual(['claude', new Map([[ID, 0]])])
     seen.host.watching!(false)
     expect(await listed()).toEqual([])
     expect(watchedFolders.stopped).toBe(watchedFolders.calls.length)
     expect(fake.calls.at(-1)).toEqual(['forget'])
+    expect(rank.mock.lastCall).toEqual(['claude', undefined])
   })
 
   it('with HARNESS_DEVICE_OBSERVED off there is no source', async () => {
@@ -10311,6 +10337,16 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
       { id: observedAgentId('claude', SECOND), name: 'Ship it', caps: 'svf' }]))
     expect(await listed()).toHaveLength(2)
     expect(fake.calls.slice(before)).toEqual([['touch', ORG_DIR, `${LOCAL_SECOND}.json`], ['read']])
+  })
+
+  // The dial eval's C1, C9 and C10: a session the store lists after the dial's first list is in the store's place.
+  it('the Claude page\'s ring is in the store\'s order, newest first, a session written after the first read included', async () => {
+    const { fake, live, changed } = withStore()
+    await live()
+    expect(await ids()).toEqual([ID])
+    fake.sessions = [session({ localId: LOCAL_SECOND, sessionId: SECOND, title: 'Ship it', lastActivityAt: 2 }), session()]
+    await changed(ORG_DIR, `${LOCAL_SECOND}.json`)
+    expect(await ids()).toEqual([observedAgentId('claude', SECOND), ID])
   })
 
   it('a tap on a store row is one open of the continue link, and is the dial\'s own move and link', async () => {

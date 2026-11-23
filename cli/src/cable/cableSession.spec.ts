@@ -8058,6 +8058,7 @@ describe("a resting Claude app row's words (docs/plans/2026-11-21-dial-claude-ap
       show: async () => 'ok',
       canLink: () => true,
       wake,
+      rank: () => {},
       monotonic: () => 0,
       log: () => {},
     })
