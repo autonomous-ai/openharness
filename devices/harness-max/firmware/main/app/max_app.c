@@ -834,12 +834,13 @@ void fw_update_ui_failed(void)
 }
 
 // TEMP (the owner's call of 23 Nov, to try the update screen): Inbox's Try update plays an update on the glass as the
-// cable's installer drives it (the fw_update_ui_* above), with no image written: half a minute of writing, a few
-// seconds of checking at 100 %, restarting, then the pages back saying "Updated to", as the bar does after a real one.
+// cable's installer drives it (the fw_update_ui_* above), with no image written: 15 s of writing, 2 s of checking at
+// 100 %, 3 s restarting (twice as fast as first, the owner's call of 23 Nov), then the pages back saying "Updated to",
+// as the bar does after a real one.
 // One at a time and none while a real one is written; a real offer is refused while this plays
 // (pro_app_begin_update_gate). Goes before the merge, with MAX_ACT_TRY_UPDATE and Inbox's button.
 #define TRY_UPDATE_TO "0.6.1"
-enum { TRY_UPDATE_STEP_MS = 300, TRY_UPDATE_CHECK_MS = 4000, TRY_UPDATE_RESTART_MS = 6000 };
+enum { TRY_UPDATE_STEP_MS = 150, TRY_UPDATE_CHECK_MS = 2000, TRY_UPDATE_RESTART_MS = 3000 };
 
 static void try_update_task(void *arg)
 {

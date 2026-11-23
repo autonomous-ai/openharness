@@ -654,7 +654,7 @@ static void test_try_update_plays_one(void)
     play_try_update();
     // 0..99 a step each, the check at 100, then restarting: never back, the glass lit throughout.
     CHECK(TRY_STEPS == 102 && TRY_AT_100 == 1 && TRY_RESTARTED && !TRY_BACK && TRY_LIT);
-    CHECK(now - from == 99 * 300 + 300 + 4000 + 6000);
+    CHECK(now - from == 100 * 150 + 2000 + 3000);   // 20 s in all
     CHECK(max_m.update_pct == -1 && !max_m.update_restarting && max_m.view == MAX_VIEW_OVERVIEW);
     CHECK(!strcmp(max_m.notice, "Updated to 0.6.1"));
     // Done: a real offer goes through again, and so does another try; none while a real one is written.
