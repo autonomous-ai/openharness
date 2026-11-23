@@ -110,6 +110,8 @@ export interface DialUsageSink {
   add(metric: DialFileMetric, n?: number): boolean
   /** True the first time this computer ever reaches [mark]; kept in the file past its 35 days. */
   firstEver(mark: 'connected' | 'used'): boolean
+  /** What firstEver would answer now, spending nothing. */
+  unreached(mark: 'connected' | 'used'): boolean
 }
 export type DialVoiceEnd =
   | { outcome: 'sent'; agentId: string }

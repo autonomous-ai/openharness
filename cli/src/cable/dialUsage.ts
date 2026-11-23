@@ -117,7 +117,8 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
   const endMeasure = (b: FirstAgentBucket) => {
     if (!measure) return
     measure.stopHour?.()
-    if (measure.first) add(`dial_first_agent_first_${b}_installations`)
+    // The first connection is spent as its measure ends, not at the attach: one a restart cut short is taken again.
+    if (measure.first && sink.firstEver('connected')) add(`dial_first_agent_first_${b}_installations`)
     if (measure.day) add(`dial_first_agent_day_${b}_installations`)
     measure = undefined
   }
@@ -172,7 +173,7 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
       // is no new first.
       const dayFirst = add('dial_connected_installation_days')
       if (attaches === 1) midnight()
-      const first = sink.firstEver('connected')
+      const first = sink.unreached('connected')
       if (!first && !dayFirst) return
       // A measurement under way keeps its clock: a dial plugged in again is still the same wait for an agent.
       if (measure) {

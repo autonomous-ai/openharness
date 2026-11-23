@@ -44,6 +44,7 @@ const FLAGS = new Set<string>(DIAL_FLAG_METRICS)
 /** A flag is one computer, so it is never above 1. */
 const ceiling = (metric: string): number => FLAGS.has(metric) ? 1 : DIAL_USAGE_MAX_COUNT
 const dayOf = (ms: number): string => new Date(ms).toISOString().slice(0, 10)
+const markField = (mark: 'connected' | 'used') => mark === 'connected' ? 'connectedBefore' : 'usedBefore'
 
 /** A real UTC day among the last DIAL_USAGE_DAYS, today's included: a later one is another clock's. */
 const recent = (day: string, now: number): boolean => {
@@ -137,11 +138,14 @@ export class DialUsageFile implements DialUsageSink {
   }
 
   firstEver(mark: 'connected' | 'used'): boolean {
-    const field = mark === 'connected' ? 'connectedBefore' : 'usedBefore'
-    if (!this.counting() || this.usage[field]) return false
-    this.usage[field] = true
+    if (!this.unreached(mark)) return false
+    this.usage[markField(mark)] = true
     this.changed()
     return true
+  }
+
+  unreached(mark: 'connected' | 'used'): boolean {
+    return this.counting() && !this.usage[markField(mark)]
   }
 
   /** The devices' process stops: what waits is written now, and nothing after, so the stop's own endings (its
