@@ -284,9 +284,14 @@ describe('scannedApps elsewhere', () => {
     expect(await scannedApps([500], d)).toEqual(new Map())
   })
 
-  it('on Linux windowsterminal and a name no table lists name nothing', async () => {
-    const d = deps([[10, 1, 'windowsterminal'], [20, 1, 'alacritty']], {}, 'linux')
-    expect(await scannedApps([10, 20], d)).toEqual(new Map())
+  it('on Linux windowsterminal and alacritty, the unknown app, and a name no table lists name nothing', async () => {
+    const d = deps([[10, 1, 'windowsterminal'], [20, 1, 'alacritty'], [30, 1, 'foot']], {}, 'linux')
+    expect(await scannedApps([10, 20, 30], d)).toEqual(new Map())
+  })
+
+  it('on Linux a session under Warp\'s warp is in Warp', async () => {
+    const d = deps([[10, 9, 'claude'], [9, 8, 'zsh'], [8, 1, 'warp']], {}, 'linux')
+    expect(await scannedApps([10], d)).toEqual(new Map([[10, 'warp']]))
   })
 
   it('on Windows nothing is learned and nothing is read', async () => {
