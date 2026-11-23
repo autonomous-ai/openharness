@@ -13475,6 +13475,19 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
     expect(await counted(port)).toMatchObject({ dial_first_agent_first_1m_to_3m_installations: 1 })
   })
 
+  it('the first agent\'s clock waits for an agent on this computer, not the account\'s on its other machines', async () => {
+    vi.useFakeTimers()
+    const { port } = start()
+    seen.fleet!.answers.agentTotal = () => 3
+    seen.host.watching!(true)
+    await seen.fleet!.deps.refresh!()
+    await vi.advanceTimersByTimeAsync(600_000)
+    port.observed(hook('session-start'))
+    await vi.advanceTimersByTimeAsync(120_000)
+    host().dialShows({}, { name: 'api', app: 'Orca' }, ID)
+    expect(await counted(port)).toMatchObject({ dial_first_agent_first_1m_to_3m_installations: 1 })
+  })
+
   it('a voice to a Harness agent is delivered by its turn_started card within 10 s', async () => {
     vi.useFakeTimers()
     const { port } = start({ core: harnessAgent(), faults: ['fleet'] })
