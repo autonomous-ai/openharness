@@ -75,9 +75,9 @@ export const herdrBinary: string | null = dialHost('herdr', (() => {
  *  whether another process has its pid now. */
 interface ServerProcess { readonly pid: number; ended(): string | undefined; reused(): boolean }
 
-/** A terminal's tab running herdr's client: the client's pid, the tab's tty, and the fake iTerm2's process in an iTerm2
- *  tab (outsideAgent.ts tabUnder). */
-export interface HerdrTab { pid: number; tty: string; appPid?: number; close(): Promise<void> }
+/** A terminal's tab running herdr's client: the client's pid, the tab's tty, the fake iTerm2's process in an iTerm2
+ *  tab, and when the tab's processes started (outsideAgent.ts tabUnder). */
+export interface HerdrTab { pid: number; tty: string; appPid?: number; started: ReadonlyMap<number, string>; close(): Promise<void> }
 
 /** herdr's client as a person runs it in a terminal: given a size first, which a bare pseudo-terminal lacks and the
  *  client draws to. */

@@ -71,8 +71,11 @@ export function tabClosed(tabs: Map<string, string>, label: string, tty: string)
   if (tabs.get(label) === tty) tabs.delete(label)
 }
 
-/** A tab of the fake iTerm2's: where it is, its tty, and its fake iTerm2's process, none once iTerm2 relaunched. */
-interface Opened { window: string; tab: number; label: string; tty: string; app?: number }
+/** A tab of the fake iTerm2's: where it is, its tty, and its fake iTerm2's process with when it started, none once
+ *  iTerm2 relaunched. */
+interface Opened { window: string; tab: number; label: string; tty: string; app?: ItermApp }
+/** A fake iTerm2's process, and when the processes of the tab it opened started (relaunchIterm). */
+interface ItermApp { appPid: number; started: ReadonlyMap<number, string> }
 /** A tmux client's tab: the client (pid) is its shell's job. */
 interface Client extends Opened { pid: number; processes: Tab }
 interface State {
@@ -159,11 +162,12 @@ async function ttyOf(pid: number): Promise<string> {
   return `/dev/${(await execFileAsync('/bin/ps', ['-o', 'tty=', '-p', String(pid)])).stdout.trim()}`
 }
 
-/** The tab at [at] opened on [tty], under the fake iTerm2 [app]: it takes its label over. */
-function opening(world: TierBWorld, at: TabRef, tty: string, app: number | undefined): Opened {
+/** The tab at [at] opened on [tty], under its processes' fake iTerm2 [appPid] when it has one: it takes its label over. */
+function opening(world: TierBWorld, at: TabRef, tty: string,
+  { appPid, started }: { appPid?: number; started: ReadonlyMap<number, string> }): Opened {
   const label = tabLabel(at)
   tabOpened(world.tabs, label, tty)
-  return { window: at.window, tab: at.tab, label, tty, app }
+  return { window: at.window, tab: at.tab, label, tty, ...(appPid === undefined ? {} : { app: { appPid, started } }) }
 }
 
 /** The empty tab at [label], if one is open there, closed: a session or client that starts there takes its place, as the
@@ -181,7 +185,7 @@ async function emptyTab(world: TierBWorld, at: TabRef): Promise<void> {
   const state = itermOf(world)
   if (world.tabs.has(tabLabel(at))) return
   const tab = await openTab(world.d, world.d.env.HOME!, world.d.env, ['/bin/sh'], { app: 'iterm' })
-  state.empty.set(tabLabel(at), { ...opening(world, at, await ttyOf(tab.pid), tab.appPid), processes: tab })
+  state.empty.set(tabLabel(at), { ...opening(world, at, await ttyOf(tab.pid), tab), processes: tab })
 }
 
 /** Whether Claude Code's process [pid] ran its [event] hook in [sessionId] [times] since the hook log was [from] long,
@@ -208,7 +212,7 @@ async function inTab(world: TierBWorld, state: State, s: SessionDef, folder: str
   await closeEmpty(world, state, tabLabel(at))
   const outside = await Outside.start(world.d, folder, { ...itermHints(s), FAKE_CLAUDE_SESSION_TITLE: s.title }, 'iterm',
     { shell: true, resume: s.id })
-  const tab = opening(world, at, await ttyOf(outside.pid), outside.appPid)
+  const tab = opening(world, at, await ttyOf(outside.pid), outside)
   state.tabs.set(s.key, tab)
   const closed = (): void => {
     state.tabs.delete(s.key)
@@ -241,7 +245,7 @@ async function attach(world: TierBWorld, state: State, name: string, at: TabRef)
     await closeTab(processes, `the client tab of ${name}`)
     throw error
   }
-  const tab = opening(world, at, await ttyOf(pid), processes.appPid)
+  const tab = opening(world, at, await ttyOf(pid), processes)
   state.tmux.get(name)!.push({ ...tab, pid, processes })
 }
 
@@ -339,7 +343,7 @@ async function inHerdr(world: TierBWorld, state: State, s: SessionDef, folder: s
     const at = { window: s.window!, tab: s.tab! }
     await closeEmpty(world, state, tabLabel(at))
     const server = await PrivateHerdr.startIn(d, 'iterm', { env: itermHints(s) })
-    state.herdr = { server, opened: opening(world, at, server.tab.tty, server.tab.appPid) }
+    state.herdr = { server, opened: opening(world, at, server.tab.tty, server.tab) }
   }
   const { server } = state.herdr
   const opened = Date.now()
@@ -445,7 +449,7 @@ export const itermSteps: AppSteps = {
     // Each tab's own fake iTerm2 ends; its server, and what it runs, goes on under launchd.
     for (const tab of tabs) {
       if (tab.app === undefined) continue
-      await relaunchIterm({ appPid: tab.app })
+      await relaunchIterm(tab.app)
       tab.app = undefined
     }
   },
