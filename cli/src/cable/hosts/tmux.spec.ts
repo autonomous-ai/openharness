@@ -558,6 +558,8 @@ describe('the outer place of an agent in the person\'s tmux', () => {
     const tmux = { nest: 'tmux' }
     const cases: Array<[string, ReturnType<typeof lookup>, Call[], string[], object]> = [
       ['no tmux is found', lookup({ tmux: absent }, [], ONE), [], notRead('tmux'), {}],
+      ['the finder throws', lookup({ tmux: async () => { throw new Error('finder under /Users/someone') } }, [], ONE), [], notRead('tmux'), {}],
+      ['tmux throws at once', lookup({ run: () => { throw new Error('spawn /x/bin/tmux EACCES') } }, [], ONE), [], notRead('tmux'), {}],
       ['tmux does not start', lookup({ run: async () => { throw new Error('spawn /x/bin/tmux EACCES') } }, [], ONE), [], notRead('pane'), {}],
       ['display-message fails', lookup({}, [1], ONE), [asked], notRead('pane'), {}],
       ['display-message says no fact', lookup({}, [], { ...ONE, pane: 'abc\n' }), [asked], notRead('pane'), {}],

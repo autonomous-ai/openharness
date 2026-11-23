@@ -451,6 +451,8 @@ describe('the outer place of an agent in the person\'s herdr', () => {
       ['ps prints nothing', lookup({}, [0, 1], { ...ONE, ps: '' }), [lsofAsked('80,4300'), psAsked('4300')], notRead('ttys')],
       ['ps times out', lookup({}, [0, null], ONE), [lsofAsked('80,4300'), psAsked('4300')], notRead('ttys')],
       ['the app scan throws', lookup({ roots }, [], ONE), [lsofAsked('80,4300'), psAsked('4300')], notRead('app')],
+      // Any other step that throws is said as the app scan is: a lookup never rejects.
+      ['a run throws at once', lookup({ run: () => { throw new Error('spawn EACCES') } }, [], ONE), [], notRead('app')],
       ['the terminal of a client in no app is not read', lookup({
         bundleId: async () => 'com.example.other',
         tty: async (pid) => { if (pid === 4300) throw new Error('tty not read'); return TABLE.find((p) => p.pid === pid)?.tty },
@@ -833,6 +835,7 @@ describe('the place of an agent the scan found in the person\'s herdr', () => {
       ['ps prints nothing', lookup({}, [0, 1], { ...ONE, ps: '' }), [lsofAsked('80,4300'), psAsked('4300')], notRead('ttys')],
       ['ps times out', lookup({}, [0, null], ONE), [lsofAsked('80,4300'), psAsked('4300')], notRead('ttys')],
       ['the app scan throws', lookup({ roots }, [], ONE), [lsofAsked('80,4300'), psAsked('4300')], notRead('app')],
+      ['a run throws at once', lookup({ run: () => { throw new Error('spawn EACCES') } }, [], ONE), [], notRead('app')],
       ['the terminal of a client in no app is not read', lookup({
         bundleId: async () => 'com.example.other',
         tty: async (pid) => { if (pid === 4300) throw new Error('tty not read'); return TABLE.find((p) => p.pid === pid)?.tty },
