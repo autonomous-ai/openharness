@@ -1197,9 +1197,6 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // tab, and an older window that does not know the field opens one as before.
     opened: (machineId, agentId, reason) =>
       core.clients.sendLocal({ type: 'dial_open', payload: { machineId, agentId, ...(reason ? { reason } : {}) } }),
-    // A person's tap on an agent, a notice's "In <app>" among them, brings them to it: its notice goes. Opening the alert to
-    // read it does not.
-    tapped: (agentId) => endNotice(agentId),
     noticeFrom: (agentId) => notices.from(agentId),
     newsKept: (agentId) => notifyMode.get() !== 'you' || failedLast.has(agentId),
     // The notices and the waits are questions only the devices ask: what is unread replaces the dial's whole drawer,
@@ -1535,10 +1532,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // ── an agent's notice ──────────────────────────────────────────────────────────────────────────────
   //
   // `harness device notify`: the agent's own one line for the person, a card every dial pins until that agent's next turn
-  // starts, a tap opens it in its app, or it leaves (cable/notices.ts). It takes its own path to the dials, never `tell` or
-  // `showWaits`: it is the agent asking for the person, so it rings with a window open on its tab too, which holds an
-  // outside agent's turns (heldOnTab), and `showWaits` closes any question `shown` does not hold
-  // (docs/plans/2026-11-16-dial-agent-notify-design.md, "Which agents it covers").
+  // starts or it leaves (cable/notices.ts). A tap that opens it in its app keeps it, so the dial's face of that agent
+  // still asks. It takes its own path to the dials, never `tell` or `showWaits`: it is the agent asking for the person, so
+  // it rings with a window open on its tab too, which holds an outside agent's turns (heldOnTab), and `showWaits` closes
+  // any question `shown` does not hold (docs/plans/2026-11-16-dial-agent-notify-design.md, "Which agents it covers").
   /** Whose notice it is, read from what the devices hold, with no wait: the listener gives a connection 2 s. */
   const noticeCaller = ({ engine, sessionId, folder }: NoticeAsk): NoticeCaller => {
     const who = { name: folder ?? 'An agent', machine: core.machine.name() }
@@ -1577,7 +1574,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // In its agent's order, as an ask is.
     hold: (agentId, id, questions) => inOrder(agentId, () => { void cable.hold(agentId, id, questions) }),
   })
-  /** That agent's next turn started, a tap opened it, or it left: its card goes. */
+  /** That agent's next turn started or it left: its card goes. */
   const endNotice = (agentId: string): void => part.call('notices', () => notices.ended(agentId))
   /** Another question of that agent closed: its notice, covered or held back by it, is asked again. */
   const reaskNotice = (agentId: string): void => part.call('notices', () => notices.reask(agentId))

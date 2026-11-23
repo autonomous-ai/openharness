@@ -145,7 +145,7 @@ export class Notices {
     return answer('shown')
   }
 
-  /** Its agent's next turn started, the person opened it, or its agent left: its card goes. Nothing for an agent with none. */
+  /** Its agent's next turn started or its agent left: its card goes. Nothing for an agent with none. */
   ended(agentId: string): void {
     const card = this.cards.get(agentId)
     if (!card) return
