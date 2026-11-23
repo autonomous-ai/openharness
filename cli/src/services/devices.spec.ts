@@ -13404,6 +13404,23 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
     expect(existsSync(usageFile())).toBe(false)
   })
 
+  // The sign-in comes with the core's first view, which a dial's hello can come before.
+  it('a dial attached before the sign-in was read is connected at the read that says signed in', async () => {
+    vi.useFakeTimers()
+    let signedIn = true
+    const { port } = start({ core: fakeCore({ dataDir, account: { signedIn: vi.fn(() => signedIn) } }), faults: ['fleet'] })
+    // With no dial, a read counts nothing.
+    await host().listAgentSnapshot()
+    await vi.advanceTimersByTimeAsync(DIAL_USAGE_WRITE_MS)
+    expect(existsSync(usageFile())).toBe(false)
+    signedIn = false
+    seen.host.watching!(true)
+    signedIn = true
+    await host().listAgentSnapshot()
+    turnTo('h1')
+    expect(await counted(port)).toMatchObject({ dial_connected_installation_days: 1 })
+  })
+
   // Review Focus 4: a dial greets and turns back to the agent it showed with no hand on it. Connected, never used.
   it('a greet\'s own focus is not use', async () => {
     const { port } = start({ core: harnessAgent(), faults: ['fleet'] })
