@@ -97,7 +97,7 @@ function startServer(world: TierAWorld, model: Model, tab: TabRef): Server {
   const server: Server = { pid: startProcess(world, client.pid, HERDR), tab, clients: [client], panes: new Map(),
     subscriptions: new Set() }
   model.server = server
-  queueMicrotask(() => { for (const watch of [...world.machine.socketWatches]) watch() })
+  queueMicrotask(() => { for (const watch of [...world.machine.socketWatches.values()].flatMap((watches) => [...watches])) watch() })
   return server
 }
 

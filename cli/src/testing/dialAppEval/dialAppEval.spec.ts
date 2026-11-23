@@ -98,10 +98,11 @@ vi.mock('../../cable/hosts/cursorFolder.js', async (real) => ({
 vi.mock('../../cable/hosts/folderWatch.js', () => ({ watchNearest: () => () => {} }))
 vi.mock('../../cable/hosts/unixSocket.js', async (real) => ({
   ...await real<typeof import('../../cable/hosts/unixSocket.js')>(),
-  watchSocket: (_where: unknown, changed: () => void) => {
+  watchSocket: (where: { socketPath: string }, changed: () => void) => {
     const watch = (): void => changed()
-    machine.socketWatches.add(watch)
-    return () => { machine.socketWatches.delete(watch) }
+    const watches = machine.socketWatches.get(where.socketPath) ?? new Set()
+    machine.socketWatches.set(where.socketPath, watches.add(watch))
+    return () => { watches.delete(watch) }
   },
 }))
 // A terminal's last access is the model's (tierA/machine.ts atimes): herdr's client lookup ranks clients by it, and the

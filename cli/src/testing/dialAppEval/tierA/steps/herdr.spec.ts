@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { HerdrEntry, HerdrSubscriber } from '../../../../cable/hosts/herdrClient.js'
+import { herdrClientDeps, type HerdrEntry, type HerdrSubscriber } from '../../../../cable/hosts/herdrClient.js'
 import { createHerdrOuter } from '../../../../cable/hosts/herdrOuter.js'
 import { appRoots, ptyMaker } from '../../../../cable/hosts/scannedApp.js'
 import type { ObservedEvent, ObservedHookEvent } from '../../../../core/observedHook.js'
@@ -106,7 +106,12 @@ function fakeWorld() {
     roots: appRoots(root), bundleId: async (bundle) => machine.bundleIds.get(bundle),
     atime: async (tty) => machine.atimes.get(tty.slice('/dev/'.length)), onPath: () => null, sockets: async () => undefined,
   })
-  return { root, of, world, told, deliveries, gaps, client, run, start, hook, step, at, clients, serverOf, paneOf, list, outer }
+  /** A watch on the socket at [path], as the spec's watchSocket mock keeps the devices' (dialAppEval.spec.ts); herdr's
+   *  path is where the devices' client finds it. */
+  const watch = (told: () => void, path = herdrClientDeps().socketPath) => {
+    machine.socketWatches.set(path, (machine.socketWatches.get(path) ?? new Set()).add(told))
+  }
+  return { root, of, world, told, deliveries, gaps, client, run, start, hook, step, at, clients, serverOf, paneOf, list, outer, watch }
 }
 
 /** A subscriber that keeps what it is told, in order. */
@@ -157,7 +162,7 @@ describe("tier A's herdr", () => {
     expect(await w.client.request('agent.list', {})).toEqual({ ok: false, fault: 'no_socket' })
     // A watch on herdr's socket hears of it once, as the server starts.
     const stamps: Array<string | undefined> = []
-    machine.socketWatches.add(() => { stamps.push(w.client.socketStamp()) })
+    w.watch(() => { stamps.push(w.client.socketStamp()) })
     await w.start('a', 'h', 'g')
     await landed()
     expect(stamps).toEqual([w.client.socketStamp()])
@@ -304,7 +309,7 @@ describe("tier A's herdr", () => {
     const a = agentPid(w.world, 'a')
     // A watch on herdr's socket hears of the new one: the server runs again as it is told.
     const stamps: Array<string | undefined> = []
-    machine.socketWatches.add(() => { stamps.push(w.client.socketStamp()) })
+    w.watch(() => { stamps.push(w.client.socketStamp()) })
     const told = w.told.length
     await w.step('herdr.restart', {})
     await landed()
