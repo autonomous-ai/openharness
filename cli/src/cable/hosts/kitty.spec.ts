@@ -827,8 +827,9 @@ describe("kitty's focused windows (docs/plans/2026-11-23-dial-wezterm-kitty-focu
     expect(await adapter.focusedWindows([OWN])).toBeUndefined()
   })
 
-  // kitty in password mode with no password may ask the person on each call (focusedMatch.password): so kitty asks once a
-  // start at most.
+  // kitty in password mode refused at once, asking the person nothing (focusedMatch.password); a refused socket is still
+  // asked once a kitty start, so a refusing kitty is not asked twice a second, and a prompt an unrecorded version may
+  // show comes once a start at most.
   describe('a refused socket is asked once a kitty start', () => {
     it('a refusal: that read is undefined, the next asks that socket nothing and answers no entry for it', async () => {
       const { calls, adapter } = recorder({}, { 'get-colors': focusedMatch.password })

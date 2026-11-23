@@ -118,10 +118,12 @@ export function createKittyAdapter(deps: KittyDeps): HostAdapter & Required<Pick
   const sending = new Set<string>()
   let toldOff = false
   // The sockets whose focus read was refused or timed out, oldest first, each with its socket's identity then (null for
-  // an abstract one). kitty in password mode may ask the person at each call (RECORDED_KITTY.focusedMatch.password), so
-  // a socket is asked once a kitty start: until a new socket is at its path, or, as an abstract socket has no file to
-  // tell, until a read has no pane on it. The poll's FOCUS_FAILS_MAX so counts only the refused read: the later ones,
-  // with only refused sockets, answer an empty map, a good read.
+  // an abstract one). kitty 0.32.2 in password mode refused at once without asking the person
+  // (RECORDED_KITTY.focusedMatch.password); a socket is still asked once a kitty start, so a refusing kitty is not asked
+  // twice a second, and a prompt an unrecorded kitty version may show comes at most once a kitty start: until a new
+  // socket is at its path, or, as an abstract socket has no file to tell, until a read has no pane on it. The poll's
+  // FOCUS_FAILS_MAX so counts only the refused read: the later ones, with only refused sockets, answer an empty map, a
+  // good read.
   const refused = new Map<string, string | null>()
 
   const windowOf = (pane: Pane): { own: boolean; id: string; listenOn: string; path?: string } | undefined => {
