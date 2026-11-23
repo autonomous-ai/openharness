@@ -774,8 +774,7 @@ Off (Settings ▸ Experimental ▸ Hachi), none of them is drawn and ⇧⌘H is 
 ## Harness Device
 
 Harness Device is the menu-bar app for the dial (`device-app/`), on macOS,
-Windows and Linux, named **Harness** wherever a person sees it; only its file
-stays `Harness Device.app`, and its installed name `Harness Device` on Windows.
+Windows and Linux, named **Harness Device** wherever a person sees it.
 It sets up
 Harness, keeps it running and shows the dial's state; it offers sign-in and,
 with the ChatGPT app, follows its window. Claude Code, Codex and Orca
@@ -815,8 +814,8 @@ theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
   typed for another app must not allow. A screen with only `Cancel` focuses
   nothing.
 - Follow ChatGPT asks once, on macOS only: at the first launch, after Install
-  and Sign in, while Harness lacks Accessibility, whatever is plugged in or
-  installed. `Not now` or closing declines for good. The menu has no follow
+  and Sign in, while Harness Device lacks Accessibility, whatever is plugged in
+  or installed. `Not now` or closing declines for good. The menu has no follow
   item on any OS.
 - The menu-bar icon is the Pixel H drawn 8x8 pixels, a template image 18 points
   square (`device-app/src-tauri/icons/tray.png`): black on a light bar, white on
@@ -847,8 +846,8 @@ differences, each an OS limit:
   Linux always shows the light glyph, as no common way reads a panel's colour.
   A GNOME desktop without the AppIndicator extension has no tray, so the icon
   shows nowhere (Ubuntu ships the extension).
-- **About** opens Tauri's About dialog, in front, with `Harness`, the version
-  and the same credits line: macOS's standard panel is AppKit's.
+- **About** opens Tauri's About dialog, in front, with `Harness Device`, the
+  version and the same credits line: macOS's standard panel is AppKit's.
 - **Export logs** selects the zip in Explorer on Windows; on Linux it opens the
   zip's folder, as the file manager cannot select a file.
 - ChatGPT is always followed, with no screen: nothing gates reading a

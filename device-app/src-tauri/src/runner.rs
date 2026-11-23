@@ -1021,6 +1021,17 @@ mod tests {
             }
         }
 
+        /// Asks until the follow rules know ChatGPT is installed, 5 s at most. The dial's status reaches `send` before
+        /// the follow thread looks, and the look's answer goes to the rules alone: ChatGPT coming to the front before
+        /// it lands is judged not installed, and skips nothing.
+        fn known_installed(&self) {
+            let end = Instant::now() + WAIT;
+            while !self.runner.0.chatgpt.state.lock().unwrap().follow.knows_installed() {
+                assert!(Instant::now() < end, "never known installed");
+                thread::sleep(Duration::from_millis(1));
+            }
+        }
+
         fn logged(&self, line: &str) -> bool {
             self.fake.log().lines().iter().any(|logged| logged == line)
         }
@@ -2116,7 +2127,8 @@ mod tests {
         assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
         door.observed(1);
         let before = door.with(|state| state.reads.len());
-        // The list changes just after macOS's notice: the read at it still finds Harness there, the one after does not.
+        // The list changes just after macOS's notice: the read at it still finds Harness Device there, the one after
+        // does not.
         door.trust(&[true, false]);
         let noticed = Instant::now();
         door.notice();
@@ -2198,6 +2210,7 @@ mod tests {
         w.fake.script("hardware watch --json", &ATTACHED);
         assert_eq!(w.runner.run(Effect::SpawnWatch), None);
         w.next_in_any_order(&[a_dial(), follow(false)]);
+        w.known_installed();
         // In front from the start, then told again: ChatGPT has not come to the front.
         fronts.tell(CHATGPT_BUNDLE);
         fronts.tell(VSCODE);
@@ -2223,6 +2236,7 @@ mod tests {
         w.fake.script("hardware watch --json", &ATTACHED);
         assert_eq!(w.runner.run(Effect::SpawnWatch), None);
         w.next_in_any_order(&[a_dial(), follow(false)]);
+        w.known_installed();
         fronts.tell("ChatGPT.exe");
         w.fake.log().until(|lines| skipped(lines) == 1);
         // Allowed since: the read as ChatGPT comes to the front finds it, nothing is said, and it observes.

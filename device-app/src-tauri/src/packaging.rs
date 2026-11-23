@@ -55,9 +55,9 @@ fn linux_is_an_appimage() {
 }
 
 #[test]
-fn the_window_is_harness_at_420_by_320_with_no_taskbar_button() {
+fn the_window_is_harness_device_at_420_by_320_with_no_taskbar_button() {
     let window = &config("tauri.conf.json")["app"]["windows"][0];
-    assert_eq!(window["title"], "Harness");
+    assert_eq!(window["title"], "Harness Device");
     assert_eq!((window["width"].clone(), window["height"].clone()), (json!(420), json!(320)));
     assert_eq!(window["skipTaskbar"], true);
 }

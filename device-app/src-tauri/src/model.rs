@@ -5,6 +5,9 @@ use crate::types::{
     AppState, AppUpdate, CliState, Daemon, DialStatus, LogsExport, MenuAction, MenuItem, NotifyMode, Screen,
 };
 
+/// The row the app's own update shows; the firmware's reads `Updating device…` and the daemon's `Updating Harness`.
+pub const UPDATING_APP: &str = "Updating Harness Device…";
+
 /// The start of the line a saved export leaves in the menu, which the log writes as `Saved`.
 const SAVED_TO: &str = "Saved to ";
 
@@ -68,8 +71,7 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
         ));
     }
     match &state.app_update {
-        // The app's own update; the dial line's "Updating device…" is the firmware's.
-        AppUpdate::Installing => items.push(MenuItem::Text("Updating Harness…".into())),
+        AppUpdate::Installing => items.push(MenuItem::Text(UPDATING_APP.into())),
         // The app cannot replace its bundle: the click opens the download page.
         AppUpdate::Blocked(version) => items.push(MenuItem::Action(MenuAction::Update, format!("Update {version}…"))),
         AppUpdate::None => {}
@@ -194,7 +196,7 @@ mod tests {
         }
     }
 
-    /// macOS's door, which asks for Accessibility, Harness trusted or not.
+    /// macOS's door, which asks for Accessibility, Harness Device trusted or not.
     fn following(trusted: bool) -> FollowState {
         FollowState { trusted, gated: true }
     }
@@ -368,10 +370,15 @@ mod tests {
     }
 
     #[test]
+    fn the_apps_update_row_names_harness_device() {
+        assert_eq!(UPDATING_APP, "Updating Harness Device…");
+        assert_eq!(dial_line(&AppState { daemon: Daemon::Updating, ..state() }), "Updating Harness");
+    }
+
+    #[test]
     fn the_update_rows() {
         let rows = [
-            // The app's own update; the firmware's reads "Updating device…".
-            (AppUpdate::Installing, text("Updating Harness…")),
+            (AppUpdate::Installing, text(UPDATING_APP)),
             (AppUpdate::Blocked("0.1.3".into()), act(MenuAction::Update, "Update 0.1.3…")),
         ];
         for (app_update, row) in rows {

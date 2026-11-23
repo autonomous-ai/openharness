@@ -2,6 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 
+/// The name a person sees: the desktop app is Harness, and two apps named Harness sat side by side in Accessibility.
+pub const APP_NAME: &str = "Harness Device";
+
 /// One line of `harness hardware watch --json`. A line without a boolean `attached` is not a status.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct DialStatus {
@@ -232,8 +235,8 @@ pub enum Event {
     UpdateInstalled,
     UpdateFailed(UpdateFailure),
     LogsExported(Result<Exported, ExportFailure>),
-    /// Whether Harness may follow the ChatGPT window and whether a permission gates it (macOS's Accessibility): at
-    /// start, then at each change. Never told with no door.
+    /// Whether Harness Device may follow the ChatGPT window and whether a permission gates it (macOS's
+    /// Accessibility): at start, then at each change. Never told with no door.
     Follow {
         trusted: bool,
         gated: bool,
@@ -496,37 +499,48 @@ mod tests {
         assert_eq!(windows.len(), 1);
         let window = &windows[0];
         assert_eq!(window["label"], "main");
-        assert_eq!(window["title"], "Harness");
+        assert_eq!(window["title"], config["productName"]);
         assert_eq!((window["width"].as_f64(), window["height"].as_f64()), (Some(420.0), Some(320.0)));
         assert_eq!(window["resizable"], false);
         assert_eq!(window["center"], true);
         assert_eq!(window["visible"], false);
     }
 
-    /// The file stays Harness Device.app beside the desktop app's Harness.app, and updates find it by that name;
-    /// Finder, Login Items, the About panel and permission prompts show the bundle's name, Harness.
+    /// The desktop app is Harness, and two apps named Harness in Accessibility got the wrong one turned on: Finder,
+    /// Login Items, the About panel, TCC lists and permission prompts show this one as Harness Device, which Tauri
+    /// writes into CFBundleName and CFBundleDisplayName from productName when nothing overrides it. What installed
+    /// apps update through and their grants are keyed on stays: the bundle id, the entitlements, the update path and
+    /// the binary.
     #[test]
-    fn the_app_is_named_harness() {
+    fn the_app_is_named_harness_device() {
         let config: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
         assert_eq!(config["productName"], "Harness Device");
+        assert_eq!(APP_NAME, config["productName"]);
+        assert_eq!(config["identifier"], "ai.autonomous.harness.device");
         let macos = &config["bundle"]["macOS"];
-        assert_eq!(macos["bundleName"], "Harness");
-        // One line per tag, so the plist's indentation does not matter. Tauri writes the region "English": "en" names
-        // the folder the strings below ship in.
+        assert_eq!(macos.get("bundleName"), None);
+        assert_eq!(macos.get("files"), None);
+        assert_eq!(macos["entitlements"], "Entitlements.plist");
+        assert!(!std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("en.lproj").exists());
+        // One line per tag, so the plist's indentation does not matter.
         let plist: String = include_str!("../Info.plist").lines().map(str::trim).collect();
-        for entry in
-            ["<key>CFBundleDevelopmentRegion</key><string>en</string>", "<key>LSHasLocalizedDisplayName</key><true/>"]
-        {
-            assert!(plist.contains(entry), "{plist}");
+        for key in ["CFBundleDevelopmentRegion", "LSHasLocalizedDisplayName", "CFBundleName", "CFBundleDisplayName"] {
+            assert!(!plist.contains(key), "{key}");
         }
-        // macOS shows the localized name only while the plist's display name, which Tauri sets to productName, is the
-        // file's name.
-        assert!(!plist.contains("CFBundleDisplayName"), "{plist}");
-        let source = macos["files"]["Resources/en.lproj/InfoPlist.strings"].as_str().expect("InfoPlist.strings mapped");
-        let strings = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(source)).unwrap();
-        // A Windows checkout ends its lines with \r\n; the file ships from a macOS build only.
-        let strings = strings.replace("\r\n", "\n");
-        assert_eq!(strings, "CFBundleName = \"Harness\";\nCFBundleDisplayName = \"Harness\";\n");
+        let updater = &config["plugins"]["updater"];
+        assert_eq!(
+            updater["endpoints"],
+            json!(["https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/device/metadata.json"])
+        );
+        assert_eq!(
+            updater["pubkey"],
+            "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ3MzlCRkNDNjg3QjFGNjIKUldSaUgzdG96TDg1UjdIaUhrOUZJQWF1Q1BMUGVyV0crMmNZZ0ZMWkx1QWp0dS9UbE9IcXAwdjkK"
+        );
+        let cargo: Vec<&str> = include_str!("../Cargo.toml").lines().collect();
+        assert!(
+            cargo.windows(3).any(|lines| lines == ["[[bin]]", r#"name = "harness-device""#, r#"path = "src/main.rs""#]),
+            "the binary is harness-device"
+        );
     }
 
     /// A template image 18 points square at two pixels a point: macOS keeps only its alpha, so it tints it for a light
@@ -605,7 +619,7 @@ mod tests {
         let plist: String = include_str!("../Info.plist").lines().map(str::trim).collect();
         for entry in [
             "<key>NSLocalNetworkUsageDescription</key>\
-             <string>Harness finds and connects to Autonomous robots on your local network.</string>",
+             <string>Harness Device finds and connects to Autonomous robots on your local network.</string>",
             "<key>NSBonjourServices</key><array><string>_autonomous._tcp</string></array>",
             "<key>LSUIElement</key><true/>",
         ] {

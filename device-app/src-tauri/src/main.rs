@@ -16,7 +16,7 @@ use harness_device::state::{JsonStateFile, StateFile};
 use harness_device::tabs;
 use harness_device::tick;
 use harness_device::tray::{TrayIcon, tray_icon};
-use harness_device::types::{Action, Clock, Effect, Event, Log, MenuAction, MenuItem, SystemClock, View};
+use harness_device::types::{APP_NAME, Action, Clock, Effect, Event, Log, MenuAction, MenuItem, SystemClock, View};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -84,7 +84,7 @@ fn main() {
             }
         })
         .build(tauri::generate_context!())
-        .expect("Harness could not start");
+        .expect("Harness Device could not start");
     // Decision 3: no Dock icon. Set before the event loop runs: in `setup`, macOS has already made the app Regular and
     // the window is made, so the Dock icon shows for a moment at each launch.
     #[cfg(target_os = "macos")]
@@ -164,7 +164,7 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
     TrayIconBuilder::with_id(TRAY)
         .icon(tray_image(icon))
         .icon_as_template(icon == TrayIcon::Template)
-        .tooltip("Harness")
+        .tooltip(APP_NAME)
         .on_menu_event(move |_, event| {
             if let Some(action) = menu_action(event.id().as_ref()) {
                 let _ = chosen.send(Event::Menu(action));
@@ -413,7 +413,7 @@ fn about_item(
 #[cfg(not(target_os = "macos"))]
 fn about_item(handle: &AppHandle, text: &str, credits: Option<&str>) -> tauri::Result<Box<dyn IsMenuItem<tauri::Wry>>> {
     let metadata = AboutMetadata {
-        name: Some("Harness".into()),
+        name: Some(APP_NAME.into()),
         version: Some(handle.package_info().version.to_string()),
         comments: credits.map(Into::into),
         // GTK shows it as the dialog's logo, at its own size, as large as its stock one. Windows' dialog is a message

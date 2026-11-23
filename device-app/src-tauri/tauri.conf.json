@@ -10,7 +10,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Harness",
+        "title": "Harness Device",
         "width": 420,
         "height": 320,
         "resizable": false,
@@ -29,9 +29,7 @@
     "icon": ["icons/icon.png", "icons/icon.icns"],
     "macOS": {
       "minimumSystemVersion": "13.0",
-      "bundleName": "Harness",
-      "entitlements": "Entitlements.plist",
-      "files": { "Resources/en.lproj/InfoPlist.strings": "en.lproj/InfoPlist.strings" }
+      "entitlements": "Entitlements.plist"
     }
   },
   "plugins": {

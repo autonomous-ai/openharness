@@ -881,7 +881,7 @@ if ($Screens) {
   $TASKBAR = @('Shell_TrayWnd')
   # The hidden icons' flyout: Windows 10's, then Windows 11's.
   $OVERFLOW = @('NotifyIconOverflowWindow', 'TopLevelWindowForOverflowXamlIsland')
-  $ABOUT = 'About Harness'
+  $ABOUT = 'About Harness Device'
   $exportDir = Join-Path $work 'export'
   $exportTail = '\' + (Split-Path -Leaf $work) + '\export'
   $zipName = 'harness-logs-' + (Get-Date -Format 'yyyyMMdd-HHmm') + '.zip'
@@ -1095,12 +1095,12 @@ namespace E2E {
     @('Progman', 'WorkerW') -contains [E2E.Screens]::ClassOf([E2E.Screens]::TopAt($x, $y))
   }
 
-  # The app's tray icon (its tooltip is Harness) shown in windows of these classes, or null.
+  # The app's tray icon (its tooltip is Harness Device) shown in windows of these classes, or null.
   function Harness-Icon([string[]]$classes) {
     try {
       foreach ($bar in Ui-Windows $classes) {
         foreach ($button in Ui-All $bar ([Windows.Automation.ControlType]::Button)) {
-          if ($button.Current.Name -like 'Harness*' -and (Ui-Box $button)) { return $button }
+          if ($button.Current.Name -eq 'Harness Device' -and (Ui-Box $button)) { return $button }
         }
       }
     } catch { }
@@ -1552,7 +1552,7 @@ try {
   Fake-Script 'login_--json' @("{`"type`":`"authorize_url`",`"url`":`"https://example.invalid/harness-e2e?state=$token`"}", '@stdin')
   Launch 'sign-in'
   $script:harness = [IntPtr]::Zero
-  if (-not (Wait-For { $script:harness = [E2E.Native]::Find($script:app.Id, 'Harness'); $script:harness -ne [IntPtr]::Zero })) {
+  if (-not (Wait-For { $script:harness = [E2E.Native]::Find($script:app.Id, 'Harness Device'); $script:harness -ne [IntPtr]::Zero })) {
     Fail 'a first run not asked to sign in shows the Sign in window'
   }
   if (Wait-For { [E2E.Native]::Raise($script:harness, $false) }) {

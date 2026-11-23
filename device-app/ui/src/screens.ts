@@ -53,7 +53,7 @@ const FACES: Partial<Record<`${Screen}.${Phase}`, Face>> = {
     body: {
       kind: 'sentences',
       text: [
-        "Your dial moves to the thread you open in ChatGPT. Harness reads only the ChatGPT window's title, while ChatGPT is in front.",
+        "Your dial moves to the thread you open in ChatGPT. Harness Device reads only the ChatGPT window's title, while ChatGPT is in front.",
       ],
     },
     // It opens by itself: a Return typed for another app must not press Allow.
