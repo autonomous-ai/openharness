@@ -510,6 +510,22 @@ describe('the harness beside the sweep', () => {
     expect(beyond([SHELL], [ENGINE])).toEqual([])
   })
 
+  it("ends the fake iTerm2 while it runs as itself, and of a pid another process has since, sends nothing and waits for nothing", async () => {
+    const outside = await import('../../e2e/harness/outsideAgent.js' as string) as {
+      relaunchIterm(tab: { appPid?: number; started: ReadonlyMap<number, string> }): Promise<void>
+    }
+    const OWN = P(700), TAKEN = P(701)
+    // TAKEN's app went, and a process of the person's has its pid now and runs on.
+    machine.rows = [made(OWN, WORKER, OWN, 'iTerm2'), made(TAKEN, 1, TAKEN, 'vim', '/Users/person', 'Mon Nov 23 10:07:00 2026')]
+    const signal = vi.mocked(process.kill).getMockImplementation()!
+    vi.mocked(process.kill).mockImplementation((pid, sent) => pid === TAKEN && sent === 0 ? true : signal(pid, sent))
+    await outside.relaunchIterm({ appPid: TAKEN, started: new Map([[TAKEN, LSTART]]) })
+    expect(machine.signals).toEqual([])
+    await outside.relaunchIterm({ appPid: OWN, started: new Map([[OWN, LSTART]]) })
+    expect(machine.signals).toEqual([[OWN, 'SIGKILL']])
+    expect(beyond([OWN], [TAKEN])).toEqual([])
+  })
+
   it("finds the endurance run's strays in the test's tree alone", async () => {
     const { strays } = await import('../../e2e/harness/endurance.js' as string) as {
       strays(d: { root: string; treeRoots(): Promise<number[]> }): Promise<string[]>
