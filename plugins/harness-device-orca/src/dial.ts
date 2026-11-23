@@ -1,7 +1,7 @@
 // The loop behind the panel and the status bar: it asks `harness device orca link` where the devices listen (their
 // socket, or on Windows their pipe), holds the `dial` stream open there, and makes each of its lines the state. While
-// that stream is open it tells the devices the terminals of the worktree on Orca's screen, by their ids alone. Nothing
-// of `orca` is loaded here: the end to end test runs this file outside Orca.
+// that stream is open it tells the devices the worktree on Orca's screen by ids alone: its terminals' and Orca's own id
+// of it. Nothing of `orca` is loaded here: the end to end test runs this file outside Orca.
 import { posix, win32 } from 'node:path'
 import { MISSING, type DialInputs, type Ran, type Target } from './inputs'
 import { PIPE, TOKEN } from './pipeAuth'
@@ -12,8 +12,9 @@ const DIAL_OPEN = '{"type":"dial","standby":true}'
 
 export interface Dial {
   state(): DialState
-  /** The terminal ids of the worktree on Orca's screen, in Orca's order, or null when none is. */
-  front(terminals: readonly string[] | null): void
+  /** The terminal ids of the worktree on Orca's screen, in Orca's order, or null when none is; and Orca's id of that
+   *  worktree, when Orca gives one. */
+  front(terminals: readonly string[] | null, workspace?: string | null): void
   /** Ends the loop: nothing is told or logged once it is called. Resolves when the pass in flight has ended. */
   stop(): Promise<void>
 }
@@ -33,9 +34,12 @@ const LAST_WAIT_MS = 30_000
 const WATCHED_WAIT_MS = 300_000
 // The folder watch asks link at most this often.
 const WATCH_MS = 1_000
-// What the devices take of the worktree on screen: Orca's terminal handles, at most 50.
+// What the devices take of the worktree on screen: Orca's terminal handles, at most 50, and Orca's id of the worktree,
+// 1 to 1024 characters (Orca's own limit) with no control character.
 const HANDLE = /^term_[0-9a-f-]{36}$/
 const FRONT_MAX_TERMINALS = 50
+const FRONT_MAX_WORKSPACE = 1_024
+const CONTROL = /\p{Cc}/u
 const FRONT_RETRY_MS = 1_000
 
 // `marker` is the file that appears as the devices listen: their socket, or on Windows their record, devices.json.
@@ -271,11 +275,15 @@ export function startDial(inputs: DialInputs, tell: { changed(state: DialState):
 
   return {
     state: () => current,
-    front(terminals) {
+    front(terminals, workspace) {
       if (stopped) return
-      // Orca's list is outside text: only what the devices take goes, and no title, branch or path.
+      // Orca's context is outside text: only what the devices take goes, never a title, branch or name. The worktree's
+      // id goes as Orca gives it, since the devices match it to Orca's own ids; one they would refuse goes as null, so
+      // it never costs the terminals.
       const ids = terminals && terminals.filter((id) => typeof id === 'string' && HANDLE.test(id)).slice(0, FRONT_MAX_TERMINALS)
-      latest = JSON.stringify({ type: 'orcaFront', terminals: ids })
+      const id = typeof workspace === 'string' && workspace.length > 0 && workspace.length <= FRONT_MAX_WORKSPACE
+        && !CONTROL.test(workspace) ? workspace : null
+      latest = JSON.stringify({ type: 'orcaFront', terminals: ids, workspace: id })
       push()
     },
     async stop() {
