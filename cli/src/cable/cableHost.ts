@@ -38,6 +38,7 @@ import type { PetStore } from './pets/store.js'
 import { LANE_SESSION_OVER, LANE_TOKEN_UNAVAILABLE, type MachineFleet } from './machineFleet.js'
 import type { ReviewedAnswer, AnswerReceipt } from './questionInbox.js'
 import { isTier, type Tier } from '../lib/notifyTier.js'
+import type { DialOpenEnd, DialVoiceEnd } from '../lib/dialUsageContract.js'
 import { HarnessSource } from './hosts/harness.js'
 import { AppFilter, type AppCounts } from './hosts/appFilter.js'
 import { agentPlaceName, appDisplayName, hostDisplayName } from './hosts/hostDetect.js'
@@ -138,6 +139,10 @@ export interface CableHostWiring {
   launchDesktop?: () => Promise<boolean>
   /** No window came for a waiting open in HARNESS_OPEN_WAIT_MS: the open has ended. */
   desktopTimedOut?: () => void
+  /** How a voice turn ended, once a turn: the dial's usage counts (docs/plans/2026-11-23-dial-usage-counts-design.md). */
+  voiceEnded?: (end: DialVoiceEnd) => void
+  /** How a person's tap ended, once a tap, for the same counts. A question screen that came up by itself is no tap. */
+  openEnded?: (agentId: string, end: DialOpenEnd) => void
   notificationRead?: (machineId: string, agentId: string, readToken: string) => void
   /** A fork the dial asked for is open: the window puts it beside its source and focuses it. */
   forked?: (machineId: string, agentId: string, sourceAgentId: string) => void
@@ -604,6 +609,7 @@ export class DaemonCableHost implements CableHost {
     this.endWaiting()
     this.wiring.log(`cable: open ${waiting.machineId}/${waiting.agentId} (notification)`)
     this.wiring.opened?.(waiting.machineId, waiting.agentId)
+    this.openEnded(waiting.agentId, { outcome: 'ok' })
   }
 
   /**
@@ -811,6 +817,15 @@ export class DaemonCableHost implements CableHost {
 
   localFollowed(cause: FollowCause, outcome: 'moved' | 'no-tile'): void {
     this.wiring.localFollowed?.(cause, outcome)
+  }
+
+  voiceEnded(end: DialVoiceEnd): void {
+    this.wiring.voiceEnded?.(end)
+  }
+
+  /** How a person's tap ended, for the dial's usage counts. A count never changes what the tap does. */
+  private openEnded(agentId: string, end: DialOpenEnd): void {
+    try { this.wiring.openEnded?.(agentId, end) } catch { this.wiring.log('cable: open end not counted') }
   }
 
   /** The dial that reported last and what it shows. One report for all dials: a none from another dial is dropped, so
@@ -1084,15 +1099,20 @@ export class DaemonCableHost implements CableHost {
     if (outside) {
       // Only a person's tap switches the other app: a question screen that came up by itself never does.
       if (reason) return
-      return (outside.source.focus?.(outside.agent) ?? Promise.resolve(false))
-        .then((opened) => opened ? undefined : { ok: false as const, error: `${agentPlaceName(outside.agent)} did not open it.` })
+      return (outside.source.focus?.(outside.agent) ?? Promise.resolve(false)).then((opened) => {
+        this.openEnded(agentId, opened ? { outcome: 'ok' } : { outcome: 'failed', code: 'not_opened' })
+        return opened ? undefined : { ok: false as const, error: `${agentPlaceName(outside.agent)} did not open it.` }
+      })
     }
     const machineId = this.machineOf(agentId)
     if (!machineId) {
       // Same rule as focus: an agent id without its machine is not routable, and guessing is how a
       // remote move used to land on a local agent.
       this.wiring.log(`cable: ignored open for unknown agent ${agentId}`)
-      if (!reason) this.wiring.tappedUnlisted?.(agentId)
+      if (!reason) {
+        this.wiring.tappedUnlisted?.(agentId)
+        this.openEnded(agentId, { outcome: 'failed', code: 'unknown_agent' })
+      }
       return
     }
     // With no window nothing could open a tap on one of this computer's agents: Desktop is started, and its window is
@@ -1102,6 +1122,7 @@ export class DaemonCableHost implements CableHost {
     }
     this.wiring.log(`cable: open ${machineId}/${agentId} (${reason ?? 'notification'})`)
     this.wiring.opened?.(machineId, agentId, reason)
+    if (!reason) this.openEnded(agentId, { outcome: 'ok' })
   }
 
   /** The tap waits from now, before Desktop is asked: a window that connects while it is still being started finds it. */
@@ -1110,6 +1131,7 @@ export class DaemonCableHost implements CableHost {
       machineId, agentId,
       cancel: (this.wiring.appTimer ?? unrefAfter)(HARNESS_OPEN_WAIT_MS, () => {
         this.waiting = null
+        this.openEnded(agentId, { outcome: 'failed', code: 'desktop_no_window' })
         this.wiring.desktopTimedOut?.()
       }),
     }
@@ -1119,6 +1141,7 @@ export class DaemonCableHost implements CableHost {
     // and a later tap answers for itself.
     if (this.waiting !== tap) return
     this.endWaiting()
+    this.openEnded(agentId, { outcome: 'failed', code: 'desktop_not_started' })
     return { ok: false, error: `${hostDisplayName('harness')} did not open it.` }
   }
 

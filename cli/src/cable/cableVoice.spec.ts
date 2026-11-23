@@ -202,8 +202,11 @@ describe('each voice turn reports one end', () => {
       port.pcm(Buffer.alloc(3200, 7))
       port.say({ t: 'voice.end', ...end })
     }
-    /** The dial's answer has come: the end is reported by then. */
-    const answered = () => vi.waitFor(() => expect(port.voice()).toHaveLength(1))
+    /** The dial's answer has come, and the turn's end has been reported. */
+    const answered = () => vi.waitFor(() => {
+      expect(port.voice()).toHaveLength(1)
+      expect(host.voiceEnded).toHaveBeenCalled()
+    })
     return { port, host, voiceEnded, speak, answered }
   }
 
@@ -339,7 +342,7 @@ describe('each voice turn reports one end', () => {
   })
 
   it('a count that throws changes nothing the dial is told', async () => {
-    const { port, host, speak, answered } = await talk({ voiceEnded: () => { throw new Error('count failed') } })
+    const { port, host, speak, answered } = await talk({ voiceEnded: vi.fn(() => { throw new Error('count failed') }) })
     speak({ agentId: 'a1' }); await answered()
     expect(host.sendTurn).toHaveBeenCalledWith('a1', 'fix the login screen')
     expect(port.voice()).toEqual([expect.objectContaining({ t: 'voice.transcript', agentId: 'a1' })])
