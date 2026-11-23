@@ -234,9 +234,9 @@ as an AppImage, the one Linux form the updater replaces. A local `cargo tauri bu
 checks. A newer version is downloaded, its signature checked against the public key and the version signed into it
 against the manifest's, installed over the running bundle or AppImage, and the app relaunches. The relaunch waits
 while the window is open, `harness start` runs, or the CLI installs or a sign-in runs. While it updates, the menu's row
-reads `Updating Harness Device…`. Timeouts: check 30 s, download 5 min. A failure changes nothing on disk; the next check
-tries again, but a version whose download, signature or install failed waits 2 minutes, then 4, 8, up to an hour, and
-a newer version is tried at once.
+reads `Updating Harness Device…`. Timeouts: check 30 s, download 5 min. A failure changes nothing on disk; the next
+check tries again, but a version whose download, signature or install failed waits 2 minutes, then 4, 8, up to an hour,
+and a newer version is tried at once.
 
 On Windows the installer ends the app the moment it starts, so the app downloads and checks the update at once, then
 holds the install until nothing a relaunch waits for runs. The installer (NSIS, passive) replaces the app in its folder

@@ -100,8 +100,8 @@ and Tauri 2 in `src-tauri/`; the window's three screens are plain TypeScript in 
   `follow_hyprland.rs`), the same window system the app in front comes from. GNOME and KDE on Wayland have no door.
   A `chatgpt:` log line is fixed words, never a title.
 - **What Accessibility reads.** Only ChatGPT's focused window's `AXTitle`, and only while ChatGPT is in front, a watch
-  runs, the dial is attached and Harness Device is trusted. It sets nothing and performs no action; `follow.rs`'s test holds
-  `follow_macos.rs` to it.
+  runs, the dial is attached and Harness Device is trusted. It sets nothing and performs no action; `follow.rs`'s test
+  holds `follow_macos.rs` to it.
 - **What the other doors read.** Only the title of ChatGPT's window in front, under the same conditions but the
   permission: no other OS gates reading a window's title, so nothing does here. Windows reads the window's native text
   (`GetWindowTextW`) at a foreground or name change, for a process whose program is under
