@@ -11,7 +11,9 @@ import { itermGhost, itermSession, listed, S, scenario, started, turned, withGho
 import type { Check, Scenario, SessionDef, SessionKey } from './types.js'
 
 type Ring = Extract<Check, { kind: 'ring' }>
-const ring = (expect: SessionKey[], more: Partial<Ring> = {}): Ring => ({ id: 'ring', kind: 'ring', dim: 'D1', page: 'iterm', expect, ...more })
+/** On iTerm2's page, with no row on another's: a tmux or herdr agent also counted on tmux's, herdr's or Other's fails. */
+const ring = (expect: SessionKey[], more: Partial<Ring> = {}): Ring =>
+  ({ id: 'ring', kind: 'ring', dim: 'D1', page: 'iterm', expect, apart: [], ...more })
 const ringKept = (expect: SessionKey[], more: Partial<Ring> = {}): Ring => ring(expect, { id: 'ringKept', dim: 'D7', ...more })
 /** A Claude Code in w1's tab `tab`, at split `split` of it. */
 const tab = (key: SessionKey, at: number, split = 0): SessionDef => itermSession(key, { tab: at, split })

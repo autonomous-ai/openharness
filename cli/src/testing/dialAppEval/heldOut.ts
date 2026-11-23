@@ -289,8 +289,8 @@ export function heldOut(): Scenario[] {
       dims: ['D1'], tiers: ['a'], ...darwin, sessions: [...s20.map((key, i) => itermSession(key, { tab: i })), itermGhost],
       // s01 starts last, the newest.
       steps: [...started([...s20].reverse())],
-      checks: [{ id: 'ring', kind: 'ring', dim: 'D1', page: 'iterm', expect: s16 }],
-      probes: [{ id: 'ring', kind: 'ring', dim: 'D1', page: 'iterm', expect: [...s16, 'z'] }],
+      checks: [{ id: 'ring', kind: 'ring', dim: 'D1', page: 'iterm', expect: s16, apart: [] }],
+      probes: [{ id: 'ring', kind: 'ring', dim: 'D1', page: 'iterm', expect: [...s16, 'z'], apart: [] }],
     }, true),
     scenario({
       id: 'IH4', app: 'iterm', title: 'A scan-found herdr agent whose herdr row has no session: one row on iTerm2\'s page, and a tap reaches its tab',
@@ -305,7 +305,7 @@ export function heldOut(): Scenario[] {
         { label: 'tap', kind: 'tap', session: 'c' },
       ],
       checks: [
-        { id: 'ring', kind: 'ring', dim: 'D1', page: 'iterm', expect: ['c'], after: 'restart', at: 'tap' },
+        { id: 'ring', kind: 'ring', dim: 'D1', page: 'iterm', expect: ['c'], apart: [], after: 'restart', at: 'tap' },
         { id: 'open', kind: 'open', dim: 'D3', session: 'c', link: false, after: 'tap' },
       ],
       probes: [{ id: 'open', kind: 'open', dim: 'D3', session: 'z', link: false, after: 'tap' }],
