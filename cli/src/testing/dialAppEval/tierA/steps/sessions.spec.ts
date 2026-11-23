@@ -83,6 +83,7 @@ function fakeWorld(platform: Platform, of: Scenario = scenario) {
     folders: { claudeProjects: join(root, 'projects'), codexSessions: join(root, 'codex', 'sessions'),
       cursorProjects: join(root, 'cursor', 'projects'), codexHomes: join(root, 'codex-homes') },
     codexHome: { home: join(root, '.codex') },
+    panes: new Map<string, SessionKey>(),
     session: (key: SessionKey) => of.sessions.find((s) => s.key === key)!,
     deliver: (d: Omit<Delivery, 'at'>) => { deliveries.push(d) },
   } as unknown as TierAWorld
@@ -508,10 +509,10 @@ describe("tier A's Orca agents", () => {
       expect(hints).toMatchObject({ ORCA_AGENT_SESSION_ID: 'eval-orca-t', ORCA_TERMINAL_HANDLE: orcaTerminalHandle('t') })
       expect(hints.TMUX_PANE).toMatch(/^%\d+$/)
       const { agent, shell, maker: server } = chainOf(w.world, 't')
-      expect([shell.tty, server.executable, server.tty, server.ppid]).toEqual([agent.tty, 'tmux', undefined, 1])
+      expect([shell.tty, basename(server.executable), server.tty, server.ppid]).toEqual([agent.tty, 'tmux', undefined, 1])
       expect(ptyMaker(agent.pid, [...machine.processes.values()])).toEqual({ pid: server.pid, host: 'tmux' })
       // The pane Orca made runs tmux's client, on the pane's own terminal under Orca's host.
-      const client = [...machine.processes.values()].find((p) => p.executable === 'tmux' && p.tty !== undefined)!
+      const client = [...machine.processes.values()].find((p) => basename(p.executable) === 'tmux' && p.tty !== undefined)!
       const paneShell = machine.processes.get(client.ppid)!
       expect(client.tty).not.toBe(agent.tty)
       expect(paneShell.tty).toBe(client.tty)
@@ -623,7 +624,8 @@ describe("tier A's iTerm2 agents", () => {
   const itermAgents = (): Scenario => ({
     id: 'S6', app: 'iterm', title: 'Eval iTerm2', dims: ['D1'], platforms: ['darwin'], tiers: ['a'],
     heldOut: false, steps: [], checks: [], probes: [],
-    sessions: [itermSession('a'), itermSession('b', { engine: 'codex', tab: 1 })],
+    sessions: [itermSession('a'), itermSession('b', { engine: 'codex', tab: 1 }), itermSession('t', { place: 'tmux', tab: 2 }),
+      itermSession('x', { place: 'tmux', engine: 'codex', tab: 2, split: 1 })],
   })
 
   it("a Claude Code in an iTerm2 tab hooks with TERM_PROGRAM=iTerm.app and iTerm2's bundle id", async () => {
@@ -641,8 +643,30 @@ describe("tier A's iTerm2 agents", () => {
     expect(w.open()).toEqual([a!.id])
   })
 
+  it("a Claude Code in tmux hooks with TERM_PROGRAM=tmux, its TMUX_PANE and iTerm2's bundle id", async () => {
+    const of = itermAgents()
+    const w = fakeWorld('darwin', of)
+    await w.hook('t', 'start')
+    const t = of.sessions[2]!
+    expect(toldOf(w.told, t.id)).toMatchObject({ engine: 'claude', callerPid: agentPid(w.world, 't') })
+    // Its pane is the third session's: tmux's pane id is the session's index.
+    expect(toldOf(w.told, t.id).hostHints).toEqual({ TERM_PROGRAM: 'tmux', TMUX_PANE: '%2', __CFBundleIdentifier: ITERM_BUNDLE })
+    expect(w.open()).toEqual([t.id])
+  })
+
+  it("a Codex in tmux writes its rollout under the daemon's CODEX_HOME", async () => {
+    const of = itermAgents()
+    const w = fakeWorld('darwin', of)
+    await w.hook('x', 'start')
+    const x = toldOf(w.told, of.sessions[3]!.id)
+    expect(x.engine).toBe('codex')
+    expect(x.transcriptPath!.startsWith(join(w.world.folders.codexSessions, ''))).toBe(true)
+    expect(x.hostHints).toEqual({ TERM_PROGRAM: 'tmux', TMUX_PANE: '%3', __CFBundleIdentifier: ITERM_BUNDLE })
+  })
+
   it("the other apps' hooks, hints and processes are as before", async () => {
     expect(await othersAfter('darwin', [itermSession('i')])).toEqual(await othersAfter('darwin', []))
+    expect(await othersAfter('darwin', [itermSession('i', { place: 'tmux' })])).toEqual(await othersAfter('darwin', []))
   })
 })
 

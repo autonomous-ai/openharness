@@ -100,10 +100,14 @@ vi.mock('../../cable/hosts/unixSocket.js', async (real) => ({
   ...await real<typeof import('../../cable/hosts/unixSocket.js')>(),
   watchSocket: () => () => {},
 }))
-// The model's machine has no tmux, Zellij or kitty: no login shell is asked where they are.
+// The model's machine has no Zellij or kitty, and tmux only where the world installed it (an iTerm2 scenario's): no login
+// shell is asked where they are. A tmux found runs through the world's `run`, answered from its model (tierA/steps/tmux.ts).
 vi.mock('../../lib/tmuxOnPath.js', async (real) => ({
   ...await real<typeof import('../../lib/tmuxOnPath.js')>(),
-  ensureTmuxOnPath: async () => ({ state: 'absent', reason: 'not on the eval machine' }),
+  ensureTmuxOnPath: async () => {
+    const path = machine.installed.get('tmux')
+    return path === undefined ? { state: 'absent', reason: 'not on the eval machine' } : { state: 'adopted', path, from: 'standard install location' }
+  },
 }))
 vi.mock('../../cable/hosts/zellij.js', async (real) => ({
   ...await real<typeof import('../../cable/hosts/zellij.js')>(),
@@ -128,6 +132,7 @@ vi.mock('../../devices/orcaHomes.js', async (real) => ({
 
 const { startDevices } = await import('../../services/devices.js')
 const { learnApps } = await import('../../cable/hosts/scannedApp.js')
+const { ensureTmuxOnPath } = await import('../../lib/tmuxOnPath.js')
 
 const PLATFORMS: readonly Platform[] = ['darwin', 'win32', 'linux']
 /**
@@ -493,6 +498,54 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
     expect(faces.filter((f) => f.at < select.at).at(-1)?.active).toBe(a)
     const moved = faces.find((f) => f.at >= select.at && f.active === b)
     expect((moved?.at ?? Infinity) - select.at).toBeLessThanOrEqual(1_000)
+  })
+
+  /** A plain tab a in w1's tab 0 and Claude Code in tmux t, whose client runs in tab 1, started t then a and listed, then
+   *  `more`. */
+  const tmuxTab = (id: string, title: string, more: Step[]): Scenario => scenario({
+    id, app: 'iterm', title, dims: ['D3'], platforms: ['darwin'], tiers: ['a'],
+    sessions: [itermSession('a', { tab: 0 }), itermSession('t', { place: 'tmux', tab: 1 }), itermGhost],
+    steps: [...started(['t', 'a']), ...listed('iterm', ['a', 't']), ...more],
+    checks: [], probes: [],
+  })
+
+  it("tmux is found on an iTerm2 scenario's machine alone", async () => {
+    const found = async (of: Scenario) => {
+      const driver = new TierADriver({ startDevices })
+      await driver.start(of, 'darwin')
+      try {
+        return await ensureTmuxOnPath()
+      } finally {
+        await driver.stop()
+      }
+    }
+    const c1 = MAIN.find((s) => s.id === 'C1')!
+    expect(await found(tmuxTab('S7', 'Eval tmux is installed', []))).toEqual({ state: 'adopted', path: '/opt/eval/bin/tmux',
+      from: 'standard install location' })
+    expect((await found(c1)).state).toBe('absent')
+    // C1's devices run no tmux.
+    const driver = new TierADriver({ startDevices })
+    expect((await runScenario(driver, c1, 'darwin')).error).toBeUndefined()
+    expect(driver.seen().commands.filter((c) => basename(c.argv[0]!) === 'tmux')).toEqual([])
+  })
+
+  it("I6 inline: a rest on the tmux row with iTerm2 in front writes its client's tab select without raise and runs "
+    + 'select-window ; select-pane for its pane', async () => {
+    const i6 = tmuxTab('I6', 'Eval a rest on a tmux row', [{ label: 'rest', kind: 'swipe', session: 't' }, { kind: 'wait', ms: 2_000 }])
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, i6, 'darwin')
+    expect(run.error).toBeUndefined()
+    expect(run.gaps).toEqual([])
+    const { streams = [], commands, steps } = driver.seen()
+    const rest = steps.find((s) => s.label === 'rest')!
+    const selects = streams.filter((l) => l.window === 'tabs' && l.at >= rest.at)
+    expect(selects.map((l) => l.line)).toEqual([{ app: 'iterm', tab: 'w1.1.0' }])
+    const after = commands.filter((c) => c.at >= rest.at)
+    expect(after.filter((c) => c.argv.includes('select-pane')).map(({ argv, ok }) => ({ argv, ok }))).toEqual([
+      { argv: ['/opt/eval/bin/tmux', 'select-window', '-t', 'pane:t', ';', 'select-pane', '-t', 'pane:t'], ok: true },
+    ])
+    // Nothing brings iTerm2 forward on a rest: it is in front.
+    expect(after.filter((c) => c.argv[0] === '/usr/bin/open')).toEqual([])
   })
 
   // The baseline is written on a Mac and checked on Linux: a result naming this host's folders would differ there.
