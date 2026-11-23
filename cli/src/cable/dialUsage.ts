@@ -126,8 +126,10 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
   }
 
   const used = () => {
+    // A Wi-Fi device's input comes through the same wiring, and is no use of a dial.
+    if (attaches === 0) return
     // A sleep can hold the midnight timer past the day's turn: a day the dial was used is a day it was connected.
-    if (attaches > 0) add('dial_connected_installation_days')
+    add('dial_connected_installation_days')
     add('dial_used_installation_days')
     if (sink.firstEver('used')) add('dial_first_use_installations')
   }
