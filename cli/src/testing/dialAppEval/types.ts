@@ -196,7 +196,9 @@ export interface Scenario {
     extension?: false
     /** watchFocus false: Orca's CLI has no `terminal watch-focus`. plugin false: the Harness plugin is not installed in
      *  Orca, so no `dial` stream opens (O13). */
-    orca?: { watchFocus?: false; plugin?: false } }
+    orca?: { watchFocus?: false; plugin?: false }
+    /** Harness's `CODEX_HOME` is the ChatGPT app's Codex home, as on a computer that never set it. Tier A only. */
+    codexHome?: 'app' }
   steps: Step[]; checks: Check[]
   /** Checks that name a ghost session, so they must fail: they prove a check can fail with its evidence. Never scored. */
   probes: Check[]

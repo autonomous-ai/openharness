@@ -217,14 +217,16 @@ describe('the catalog', () => {
     }
   })
 
-  it('a voice speaks to a session with a running process, or to one its link resumes', () => {
+  it('a voice speaks to a session with a running process, to one its link resumes, or to a resting ChatGPT thread Codex can queue to', () => {
     // Words for a session with no process are refused before any send: the voice check and the gate then test nothing.
+    // A resting thread of the ChatGPT app is queued to, when Harness's Codex home is the app's (X12).
     for (const s of ALL) {
       for (const [i, step] of s.steps.entries()) {
         if (step.kind !== 'voice') continue
         const started = s.steps.slice(0, i).some((h) => h.kind === 'hook' && h.event === 'start' && h.session === step.target)
-        const resumable = s.sessions.find((d) => d.key === step.target)!.resumable === true
-        expect(started || resumable, `${s.id} voice ${step.target}`).toBe(true)
+        const target = s.sessions.find((d) => d.key === step.target)!
+        const queued = target.app === 'chatgpt' && s.world?.codexHome === 'app'
+        expect(started || target.resumable === true || queued, `${s.id} voice ${step.target}`).toBe(true)
       }
     }
   })

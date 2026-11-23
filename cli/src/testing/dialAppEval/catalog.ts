@@ -450,6 +450,21 @@ export const MAIN: Scenario[] = [
     ],
     probes: [{ id: 'focus', kind: 'focus', dim: 'D2', session: 'z', after: 'last' }],
   }),
+  scenario({
+    id: 'X12', app: 'chatgpt', title: 'Voice on a resting thread: it opens, then the exact words are queued to it once',
+    dims: ['D3', 'D5'], tiers: ['a'], world: { codexHome: 'app' }, sessions: [...threads(['t1']), chatgptGhost],
+    // No hook: the thread is in the app's metadata alone.
+    steps: [
+      { kind: 'codex.write', sessions: ['t1'] },
+      ...listed('chatgpt', ['t1']),
+      { label: 'voice', kind: 'voice', transcript: 'Eval words for one.', target: 't1' },
+    ],
+    checks: [
+      { id: 'open', kind: 'open', dim: 'D3', session: 't1', link: true, after: 'voice' },
+      { id: 'voice', kind: 'voice', dim: 'D5', session: 't1', text: 'Eval words for one.', path: 'codex', after: 'voice' },
+    ],
+    probes: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 'z', text: 'Eval words for one.', after: 'voice' }],
+  }),
   ...vscodeScenarios(),
   ...cursorScenarios(),
   ...orcaScenarios(),
