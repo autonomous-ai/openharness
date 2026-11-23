@@ -837,3 +837,13 @@ would let later pull requests run checks 2 and 3 on GitHub.
 `heldOut.ts`, `baseline.json`. **Test that must fail first:** a unit test reproducing I3/I15: after the devices start
 again, a session the scan found (a plain iTerm2 tab, and a tmux/herdr pane) is listed with its session's name, not its
 folder's. **Depends on:** the product review fixes (shares `observed.ts`). **Effort:** high. **Stop rule:** above.
+
+### Task 16: Tier B's fake Claude Code names itself in its process record
+
+Task 15 found the product right and tier A's mock missing Claude Code's process record (`sessions/<pid>.json`, `name`
+with `nameSource: 'user'`), and fixed tier A. Tier B's fake (`cli/e2e/harness/fakeEngine.mjs`) writes the record with
+no name, so after a restart its scan-found rows still show the folder's name, and splitting iTerm2's rings per page
+would repeat that zero on tmux's and herdr's pages in tier B. **Files:** `cli/e2e/harness/fakeEngine.mjs` and the
+harness spec or e2e that pins its record. **Test that must fail first:** the fake's record carries the session's name
+with `nameSource: 'user'` when the test names the session (as real Claude Code writes it). **Depends on:** none.
+**Effort:** high. Every e2e that reads the process record runs again.
