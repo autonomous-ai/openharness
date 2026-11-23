@@ -1,8 +1,9 @@
 /**
  * A herdr server of the test's own (docs/specs/2026-11-16-device-herdr.md), never the developer's: its config folder is
  * under the daemon's throwaway home, its update and manifest checks are off, so it calls no other computer, and the
- * daemon's own `herdr` is a wrapper pinned to it. The daemon under test inherits no `XDG_*` (testing/daemonEnvironment.ts),
- * so it finds this server's socket under its home, as the herdr client works it out.
+ * daemon's own `herdr` is a wrapper pinned to it that notes the devices' `herdr agent` runs (herdrRuns). The daemon under
+ * test inherits no `XDG_*` (testing/daemonEnvironment.ts), so it finds this server's socket under its home, as the herdr
+ * client works it out.
  *
  * Its agent is a C program named `claude`: herdr tells an agent by its process name, and a copied `/bin/cat` under that
  * name is killed by macOS. It prints `fake> `, then `GOT[<line>]` for each line it reads.
@@ -27,6 +28,7 @@ import { type IsolatedDaemon, until } from './daemon.js'
 import { dialHost } from './dialHosts.js'
 import { tabUnder, type FakeApp } from './outsideAgent.js'
 import { forgetGroup, leaderGone, watchGroup } from './reaper.js'
+import { recordingWrapper } from './runLog.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -39,6 +41,9 @@ const SOCKET_ROOM = 103
 
 /** The server's socket, under its [config] folder. */
 const socketIn = (config: string): string => join(config, 'herdr', 'herdr.sock')
+
+/** Where the daemon's `herdr` notes the devices' `herdr agent` runs (runLog.ts), beside its own bin. */
+export const herdrRuns = (d: IsolatedDaemon): string => join(dirname(dirname(d.env.CLAUDE_PATH!)), 'herdr-runs')
 
 const FAKE_AGENT = `#include <stdio.h>
 #include <string.h>
@@ -133,9 +138,12 @@ export class PrivateHerdr {
     await mkdir(join(config, 'herdr'), { recursive: true })
     await writeFile(join(config, 'herdr', 'config.toml'), '[update]\nversion_check = false\nmanifest_check = false\n')
     // The daemon's bin is first on its PATH: its `herdr agent focus` reaches this server alone, whatever herdr reads
-    // its home from.
-    await writeFile(join(dirname(d.env.CLAUDE_PATH!), 'herdr'),
-      `#!/bin/sh\nXDG_CONFIG_HOME='${config}' exec '${herdrBinary}' "$@"\n`, { mode: 0o755 })
+    // its home from, by a launcher pinned to it, and the wrapper in front of that notes the run (runLog.ts).
+    const runs = herdrRuns(d)
+    const pinned = join(runs, 'herdr')
+    await mkdir(runs, { recursive: true })
+    writeExecutable(pinned, `#!/bin/sh\nXDG_CONFIG_HOME='${config}' exec '${herdrBinary}' "$@"\n`)
+    writeExecutable(join(dirname(d.env.CLAUDE_PATH!), 'herdr'), recordingWrapper(pinned, runs, ['agent']))
     return config
   }
 

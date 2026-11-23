@@ -6,10 +6,11 @@
  * never runs: every session here runs inside it.
  */
 import { spawnSync } from 'node:child_process'
-import { appendFileSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, realpathSync, renameSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { ORCA_ECHO_MS } from '../../src/testing/dialAppEval/types.js'
 import type { IsolatedDaemon } from './daemon.js'
+import { noteFunction, runLog, type LoggedRun } from './runLog.js'
 
 /** A tab's panes, first to last: one handle is a leaf, more are pane splits (`first`, then `second`). With no title of
  *  its own a tab is titled `made up`. */
@@ -41,19 +42,14 @@ const HELP_WATCH = HELP.replace(
   '  switch             Switch to a terminal tab in the UI\n  watch-focus        Print the focused terminal, then each change\n',
 )
 
-// A run's note: its exit, then the name it was run by and each argument, one a line (the devices pass Orca no control
-// character, cable/hosts/orca.ts). Renamed into place, so it is read whole; its time is its mtime.
+// Each run is noted (runLog.ts) with its exit, the name it was run by and its arguments.
 // `exec tail` makes the daemon's child the `tail` itself, so its SIGTERM ends it; `-n 1` prints the last line told before
 // the watch started, as Orca prints the focus of that moment first. A switch Orca takes moves its focus: one that exits 0
 // is told on every watch ORCA_ECHO_MS later, as tier A's Orca tells it, by a job of its own that holds none of the
 // run's output, so the switch itself returns at once. The job is named by its `echo` path, which no watch's command
 // holds, so endWatch drops it as Orca's quit drops that pane, and watching() never counts it.
 const script = (dir: string, watchFocus: boolean): string => `#!/bin/sh
-note() {
-  file=$(mktemp '${dir}/log/.XXXXXX')
-  printf '%s\\n' "$@" > "$file"
-  mv "$file" '${dir}/log/'"run\${file##*/}"
-}
+${noteFunction(dir)}
 code=1
 case "$1 $2" in
   'terminal --help') cat <<'HELP'
@@ -89,7 +85,7 @@ export class FakeOrca {
     // The daemon's own `bin` (beside its fake engines): a daemon `beside` another shares that one's root, not its bin.
     const bin = dirname(d.env.CLAUDE_PATH!)
     const dir = join(dirname(bin), 'orca')
-    mkdirSync(join(dir, 'log'), { recursive: true })
+    mkdirSync(dir, { recursive: true })
     writeFileSync(join(dir, 'focus'), '')
     // Bin's link names the launcher in Orca's install the harness made, which is the Orca app's own too
     // (harness/daemon.ts): an `orca` anywhere else is not Orca's, and the daemon would run the app's, the stub.
@@ -113,14 +109,7 @@ export class FakeOrca {
   }
 
   /** Every run since install: the name it was run by and its arguments, its exit, and its time, oldest first. */
-  log(): Array<{ argv: string[]; ok: boolean; at: number }> {
-    const log = join(this.dir, 'log')
-    return readdirSync(log).filter((name) => name.startsWith('run')).map((name) => {
-      const path = join(log, name)
-      const [exit, ...argv] = readFileSync(path, 'utf8').split('\n').slice(0, -1)
-      return { argv, ok: exit === '0', at: statSync(path).mtimeMs }
-    }).sort((a, b) => a.at - b.at)
-  }
+  log(): LoggedRun[] { return runLog(this.dir) }
 
   /** `terminal switch` and `terminal send` exit 1 from now on. */
   refuse(): void { writeFileSync(join(this.dir, 'exit'), '1') }
