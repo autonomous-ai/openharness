@@ -400,9 +400,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // have their listener (services/inline.ts), so a notice is made and restored there too.
   // The same read starts the dial's first-agent clock once a Harness agent runs. Only a coming is said here: whether any
   // agent runs is read whole at each attach and each change outside a pane.
+  // And it says again that a dial is connected today: a dial's hello can come before the core's first view says signed
+  // in, which leaves its attach uncounted. A flag set once a day, so a read every second changes nothing.
   const refresh = (): Promise<void> => (deps.refresh?.() ?? Promise.resolve()).then(() => {
     lookHarness()
     if (cableHost.agentTotal() > 0) count((usage) => usage.agentsPresent(true))
+    if (dialOn) part.call('dialUsage', () => usageFile.add('dial_connected_installation_days'))
   })
   const fleet: Fleet | null = part.start('fleet', () => startFleet(core, { machines, desk: () => desk, refresh }).fleet, FLEET_FALLBACKS)
 
