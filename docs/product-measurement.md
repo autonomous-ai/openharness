@@ -156,6 +156,7 @@ product usage data". Voice is counted at the backend's transcription route (`/ap
 Reading the dial's counts:
 
 - Signed in only: voice needs a sign-in, so the counted computers lean to voice users. Not all dial users.
+- First connection and first use are reliable for computers whose dial attached on CLI 0.4.54 (2026-10-23) or later.
 - Never an id, serial, MAC, account, machine name, window title, path, project, prompt, voice text or transcript;
   product names only from the fixed lists. No cross products: engine, host and the release and OS margins are separate
   one-way splits.
