@@ -1,17 +1,25 @@
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync, type PathLike } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync, type PathLike } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { DIAL_USAGE_FILE } from '../lib/dialUsageContract.js'
 import { PRODUCT_USAGE_METRICS } from '../lib/productUsageContract.js'
 import { createProductUsage, type ProductUsageDeps } from './productUsage.js'
 
 // Every file opened for writing and every rename, in order, from node:fs and node:fs/promises alike; each call passes
-// through (lib/secureState.ts imports node:fs too). `blocking`: the paths of the synchronous ones.
-const disk = vi.hoisted(() => ({ calls: [] as Array<[op: 'write' | 'rename', path: string, to?: string]>, blocking: [] as string[] }))
+// through (lib/secureState.ts imports node:fs too). `blocking`: the paths of the synchronous ones. `stats` and `reads`:
+// the paths looked at and read whole, synchronously.
+const disk = vi.hoisted(() => ({ calls: [] as Array<[op: 'write' | 'rename', path: string, to?: string]>, blocking: [] as string[],
+  stats: [] as string[], reads: [] as string[] }))
 vi.mock('node:fs', async (original) => {
   const actual = await original<typeof import('node:fs')>()
   const { O_WRONLY, O_RDWR } = actual.constants
   return { ...actual,
+    statSync: (...args: Parameters<typeof actual.statSync>) => { disk.stats.push(String(args[0])); return actual.statSync(...args) },
+    readFileSync: (...args: Parameters<typeof actual.readFileSync>) => {
+      if (typeof args[0] !== 'number') disk.reads.push(String(args[0]))
+      return actual.readFileSync(...args)
+    },
     openSync: (...args: Parameters<typeof actual.openSync>) => {
       const flags = args[1]
       if (typeof flags === 'number' ? flags & (O_WRONLY | O_RDWR) : flags !== undefined && flags !== 'r') {
@@ -51,7 +59,10 @@ beforeEach(() => {
   })
   usage = createProductUsage({ file, now: () => now, request })
 })
-afterEach(async () => { await usage.stop(); disk.calls = []; disk.blocking = []; vi.restoreAllMocks(); rmSync(dir, { recursive: true, force: true }) })
+afterEach(async () => {
+  await usage.stop(); disk.calls = []; disk.blocking = []; disk.stats = []; disk.reads = []
+  vi.restoreAllMocks(); rmSync(dir, { recursive: true, force: true })
+})
 const totals = () => {
   const result: Record<string, number> = {}
   for (const report of sent as { counters: Record<string, number> }[]) for (const [k, v] of Object.entries(report.counters)) result[k] = (result[k] ?? 0) + v
@@ -1040,5 +1051,209 @@ describe('the counts file is written whole and never written over', () => {
     await usage.sync(); usage.counter('create_requests'); await usage.sync(); await usage.stop()
     chmodSync(file, 0o600)
     expect(readFileSync(file, 'utf8')).toBe(before)
+  })
+})
+
+// docs/plans/2026-11-23-dial-usage-counts-design.md: the devices count the dial's day into a file of their own, and the
+// gateway sends what it holds over what was sent, in its signed-in report.
+describe('the dial\'s day', () => {
+  const DAY = 86_400_000, TODAY = '2026-10-12'
+  const day = (n: number): string => new Date(Date.parse(`${TODAY}T00:00:00Z`) + n * DAY).toISOString().slice(0, 10)
+  const isDial = (metric: string) => metric.startsWith('dial_')
+  const used = { dial_connected_installation_days: 1, dial_used_installation_days: 1 }
+  let dialFile: string, mtime: number
+  // As start.ts lays them out: the devices' file in the daemon's data folder, the queue files in a folder of their own.
+  const start = (queue = file) => { usage = createProductUsage({ file: queue, now: () => now, request, dialFile }) }
+  /** The devices write their file; each write leaves a later mtime, as their writes 5 s apart do. */
+  const devices = (days: Record<string, Record<string, number>>, series = 1) => {
+    writeFileSync(dialFile, JSON.stringify({ version: 1, series, connectedBefore: true, usedBefore: true, days }))
+    mtime += 10; utimesSync(dialFile, mtime, mtime)
+  }
+  /** The dial's names the reports carried, summed by `<day> <name>`. */
+  const dialSent = () => {
+    const result: Record<string, number> = {}
+    for (const { day: at, counters } of sent as { day: string; counters: Record<string, number> }[]) {
+      for (const [metric, value] of Object.entries(counters)) if (isDial(metric)) result[`${at} ${metric}`] = (result[`${at} ${metric}`] ?? 0) + value
+    }
+    return result
+  }
+  const eachReportOneKind = () => {
+    for (const { counters } of sent as { counters: Record<string, number> }[]) {
+      const names = Object.keys(counters)
+      expect(names.every(isDial) || !names.some(isDial), names.join()).toBe(true)
+    }
+  }
+  beforeEach(async () => {
+    // A state that never had a queue file.
+    await usage.stop(); rmSync(file, { force: true })
+    mkdirSync(join(dir, 'data')); dialFile = join(dir, 'data', DIAL_USAGE_FILE)
+    mtime = Date.parse(`${TODAY}T00:00:00Z`) / 1000
+  })
+
+  it('reports the dial\'s day in a report of its own', async () => {
+    start(); await usage.sync()
+    devices({ [TODAY]: { ...used, dial_open_ok: 2, dial_wait_none: 1 } })
+    usage.counter('search_requests')
+    await flush()
+    eachReportOneKind()
+    // The product's own counts first, then the dial's.
+    expect((sent as { counters: Record<string, number> }[]).map(r => Object.keys(r.counters).some(isDial))).toEqual([false, true])
+    expect(totals().search_requests).toBe(1)
+    // A wait stays on this computer until its day closes.
+    expect(dialSent()).toEqual({ [`${TODAY} dial_connected_installation_days`]: 1, [`${TODAY} dial_used_installation_days`]: 1,
+      [`${TODAY} dial_open_ok`]: 2 })
+  })
+
+  it('a restart sends nothing twice', async () => {
+    start(); await usage.sync()
+    devices({ [TODAY]: { ...used, dial_open_ok: 2 } }); await flush()
+    // The gateway restarts: what it sent is in its queue file.
+    await usage.stop(); start(); await flush()
+    // The devices restart: their file made again, a new series counting from nothing.
+    devices({ [TODAY]: { ...used, dial_open_ok: 1 } }, 2); await flush()
+    expect(dialSent()).toEqual({ [`${TODAY} dial_connected_installation_days`]: 1, [`${TODAY} dial_used_installation_days`]: 1,
+      [`${TODAY} dial_open_ok`]: 3 })
+  })
+
+  it('off then on sends nothing counted before', async () => {
+    start(); await usage.sync()
+    devices({ [TODAY]: { dial_connected_installation_days: 1, dial_open_ok: 1 } }); await flush()
+    enabled = false; revision = 1; await usage.sync()
+    // Off for a while, through a restart, while the devices count on.
+    devices({ [TODAY]: { ...used, dial_open_ok: 4 } })
+    await usage.stop(); start(); await usage.sync()
+    enabled = true; revision = 2; await flush()
+    expect(dialSent()).toEqual({ [`${TODAY} dial_connected_installation_days`]: 1, [`${TODAY} dial_open_ok`]: 1 })
+    // What the devices count after it is sent.
+    devices({ [TODAY]: { ...used, dial_open_ok: 6 } }); await flush()
+    expect(dialSent()).toEqual({ [`${TODAY} dial_connected_installation_days`]: 1, [`${TODAY} dial_open_ok`]: 3 })
+  })
+
+  it('an account change and a CHOICE_CHANGED take the file as sent', async () => {
+    start(); await usage.sync()
+    devices({ [TODAY]: { dial_connected_installation_days: 1, dial_open_ok: 1 } }); await flush()
+    // Signed out, or into another account (start.ts): the queue is discarded.
+    await usage.stop(true)
+    devices({ [TODAY]: { ...used, dial_open_ok: 4 } })
+    start(); await flush()
+    expect(dialSent()).toEqual({ [`${TODAY} dial_connected_installation_days`]: 1, [`${TODAY} dial_open_ok`]: 1 })
+    // A report refused because the choice changed elsewhere: the queue goes, and the file is taken as sent again.
+    devices({ [TODAY]: { ...used, dial_open_ok: 6 } })
+    request.mockImplementationOnce(async () => ({ status: 200, body: { data: { enabled: true, revision: 0 } } }))
+      .mockImplementationOnce(async () => ({ status: 200, body: { data: { accepted: false, reason: 'CHOICE_CHANGED' } } }))
+    await usage.sync()
+    devices({ [TODAY]: { ...used, dial_open_ok: 7 } }); await flush()
+    expect(dialSent()).toEqual({ [`${TODAY} dial_connected_installation_days`]: 1, [`${TODAY} dial_open_ok`]: 1 })
+    devices({ [TODAY]: { ...used, dial_open_ok: 9 } }); await flush()
+    expect(dialSent()).toEqual({ [`${TODAY} dial_connected_installation_days`]: 1, [`${TODAY} dial_open_ok`]: 3 })
+  })
+
+  // A machine id is an account's (backend deviceAuth.ts), and so is the queue file named by it: another account signing
+  // in on this computer starts a queue of its own, while the devices' file still holds the account before's days.
+  it('another account\'s first queue takes the file as sent', async () => {
+    start(); await usage.sync()
+    devices({ [TODAY]: { dial_connected_installation_days: 1, dial_open_ok: 2 } }); await flush()
+    await usage.stop(true)
+    devices({ [TODAY]: { ...used, dial_open_ok: 3 } })
+    start(join(dir, 'another-account.json')); await flush()
+    expect(dialSent()).toEqual({ [`${TODAY} dial_connected_installation_days`]: 1, [`${TODAY} dial_open_ok`]: 2 })
+    devices({ [TODAY]: { ...used, dial_open_ok: 5 } }); await flush()
+    expect(dialSent()).toEqual({ [`${TODAY} dial_connected_installation_days`]: 1, [`${TODAY} dial_open_ok`]: 4 })
+  })
+
+  it('a first state with no queue file sends what the file holds', async () => {
+    devices({ [day(-1)]: { dial_connected_installation_days: 1, dial_open_ok: 2 }, [TODAY]: { dial_connected_installation_days: 1 } })
+    start(); await flush()
+    expect(dialSent()).toMatchObject({ [`${day(-1)} dial_connected_installation_days`]: 1, [`${day(-1)} dial_open_ok`]: 2,
+      [`${TODAY} dial_connected_installation_days`]: 1 })
+  })
+
+  // Nothing was there to hold a count from before: the first use of a dial plugged in after the sign-in is this account's.
+  it('a file the devices first make after a baseline is sent whole', async () => {
+    start(); await usage.sync()
+    await usage.stop(true)
+    start(); await flush()
+    devices({ [TODAY]: { ...used, dial_first_use_installations: 1 } }); await flush()
+    expect(dialSent()).toEqual({ [`${TODAY} dial_connected_installation_days`]: 1, [`${TODAY} dial_used_installation_days`]: 1,
+      [`${TODAY} dial_first_use_installations`]: 1 })
+  })
+
+  // Killed: no stop() writes the final state, so the spent baseline must already be on disk.
+  it('a baseline spent is kept, though the gateway is killed', async () => {
+    start(); await usage.sync()
+    await usage.stop(true)
+    // No devices' file yet: the baseline is spent on nothing, with nothing added to say so but the queue's next save.
+    start(); await usage.sync()
+    await vi.waitFor(() => expect(JSON.parse(readFileSync(file, 'utf8')).dial?.baseline).toBe(false), { timeout: 5_000 })
+    devices({ [TODAY]: { ...used, dial_first_use_installations: 1 } })
+    start(); await flush()
+    expect(dialSent()).toEqual({ [`${TODAY} dial_connected_installation_days`]: 1, [`${TODAY} dial_used_installation_days`]: 1,
+      [`${TODAY} dial_first_use_installations`]: 1 })
+  })
+
+  it('a day closes a minute past its end, so the devices\' last write of it counts', async () => {
+    start(); await usage.sync()
+    devices({ [TODAY]: { dial_open_ok: 1 } }); await usage.sync()
+    now = Date.parse(`${day(1)}T00:00:30Z`); await usage.sync()
+    // Their last write of the day, seconds after it ended.
+    devices({ [TODAY]: { dial_open_ok: 2 } })
+    now += 60_000; await flush()
+    expect(dialSent()[`${TODAY} dial_open_ok`]).toBe(2)
+  })
+
+  it('a 400 to dial names only is dropped, no rejection counted, and the next report goes', async () => {
+    // A backend from before the dial's names: one unknown name makes the whole report invalid.
+    const accepted: Record<string, number>[] = []
+    request.mockImplementation(async (method: string, _path: string, body?: unknown) => {
+      if (method === 'GET') return { status: 200, body: { data: { enabled: true, revision: 0 } } }
+      const counters = (body as { counters: Record<string, number> }).counters
+      sent.push(structuredClone(body))
+      if (Object.keys(counters).some(isDial)) return { status: 400, body: { error: { code: 'INVALID_USAGE_REPORT' } } }
+      accepted.push(counters)
+      return { status: 200, body: { data: { accepted: true } } }
+    })
+    start(); await usage.sync()
+    devices({ [TODAY]: { dial_connected_installation_days: 1, dial_open_ok: 1 } }); usage.counter('search_requests')
+    await flush()
+    eachReportOneKind()
+    expect(Object.keys(dialSent())).not.toEqual([])
+    const queue = JSON.parse(readFileSync(file, 'utf8'))
+    expect(queue.pending).toBeNull()
+    expect(queue.days).toEqual({})
+    usage.counter('search_requests'); await flush()
+    expect(accepted.reduce((sum, counters) => sum + (counters.search_requests ?? 0), 0)).toBe(2)
+    expect(accepted.some(counters => counters.health_cli_report_rejected || counters.health_cli_report_failure_invalid)).toBe(false)
+  })
+
+  it('keeps Desktop\'s days 35 days for the outside flag', async () => {
+    start(); await usage.sync(); usage.opened('desktop')
+    await usage.stop()
+    now += 27 * DAY; start(); await usage.sync()
+    devices({ [day(27)]: used })
+    now += DAY; devices({ [day(27)]: used, [day(28)]: used }); await flush()
+    // The devices' file unchanged: its last read closes the day.
+    now += DAY; await flush()
+    // Desktop opened on day 0 lies in day 27's last 28 days, not in day 28's.
+    expect(Object.keys(dialSent()).filter(name => name.endsWith(' dial_used_outside_app_installation_days')))
+      .toEqual([`${day(28)} dial_used_outside_app_installation_days`])
+  })
+
+  it('a bad file counts dial_file_unreadable once a day', async () => {
+    start(); await usage.sync()
+    // Another build's version: the same bytes at each tick.
+    writeFileSync(dialFile, JSON.stringify({ version: 2, series: 1, days: {} }))
+    await flush()
+    now += DAY; await flush()
+    await usage.stop(); start(); await flush()
+    expect(dialSent()).toEqual({ [`${TODAY} dial_file_unreadable_installation_days`]: 1,
+      [`${day(1)} dial_file_unreadable_installation_days`]: 1 })
+  })
+
+  it('with no dial file a tick only stats it', async () => {
+    start(); disk.stats = []; disk.reads = []
+    for (let i = 0; i < 3; i++) await usage.sync()
+    expect(disk.stats.filter(path => path === dialFile)).toHaveLength(3)
+    expect(disk.reads.filter(path => path === dialFile)).toEqual([])
+    expect(existsSync(dialFile)).toBe(false)
   })
 })
