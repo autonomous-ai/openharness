@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { HELD_OUT, MAIN, titleOf } from './catalog.js'
 import { evaluate } from './checks.js'
 import { runScenario } from './runner.js'
-import { agentIdOf, hookHandle, orcaTerminalHandle, STEP_KINDS, THRESHOLDS, type Check, type CheckKind, type EvalDriver, type Scenario, type Seen,
+import { agentIdOf, hookHandle, orcaTerminalHandle, pageId, sessionPage, STEP_KINDS, THRESHOLDS, type Check, type CheckKind, type EvalDriver, type Scenario, type Seen,
   type SessionKey, type Step, type StepKind } from './types.js'
 
 const ALL = [...MAIN, ...HELD_OUT]
@@ -59,9 +59,15 @@ describe('the catalog', () => {
     expect(agents.map((d) => [d.key, d.place, d.herdrSession])).toEqual([['c', 'herdr', false]])
   })
 
-  it("every iTerm2 ring, a check or a probe, counts the other pages too: none on tmux's, herdr's or Other's", () => {
+  it('every iTerm2 ring, a check or a probe, counts the other pages exactly: its apart is every agent of the scenario on '
+    + 'another page, in start order', () => {
+    // A ring that mixed pages becomes one ring per page, each counting the rest exactly (the plan's Global Constraints).
     for (const s of ALL.filter((s) => s.app === 'iterm')) {
-      for (const c of [...s.checks, ...s.probes]) if (c.kind === 'ring') expect(c.apart, `${s.id} ${c.id}`).toEqual([])
+      const order = [...new Set(s.steps.flatMap((step) => (step.kind === 'hook' && step.event === 'start' ? [step.session] : [])))]
+      const pageOf = (key: SessionKey): string => sessionPage(s.sessions.find((d) => d.key === key)!)
+      for (const c of [...s.checks, ...s.probes]) {
+        if (c.kind === 'ring') expect(c.apart, `${s.id} ${c.id}`).toEqual(order.filter((key) => pageOf(key) !== pageId(c.page)))
+      }
     }
   })
 
@@ -363,7 +369,7 @@ describe('the catalog', () => {
   it('every scenario has a probe, and each step kind but wait is used by a scenario whose probe can see it', () => {
     const sees: Record<Exclude<StepKind, 'wait'>, CheckKind[]> = {
       'claude.write': ['ring'], 'codex.write': ['ring'], quit: ['ring'], relaunch: ['ring'],
-      unplug: ['ring', 'focus'], replug: ['ring', 'focus'],
+      unplug: ['ring', 'focus'], replug: ['ring', 'focus'], pick: ['ring'],
       hook: ['state', 'recap'],
       tap: ['open', 'focus'], swipe: ['open', 'focus'],
       front: ['focus', 'open'], thread: ['focus', 'open'], attach: ['focus', 'open'],
@@ -400,8 +406,8 @@ describe('the catalog', () => {
     // gap between quit and relaunch; O4's rests after the focus, the tap and the swipe, O7's after the tap and the
     // swipe, O8's two turns and the pause between them, O10's rest on b, O12's time quit, its time past the devices'
     // next look after the relaunch and its rest after the focus, O16's agents a second apart, and O17's rest and its
-    // time unplugged; iTerm2's agents a second apart (started), I3's and I15's turns (turned), I4's pause before and
-    // after the split and its rest after the first tap, I6's rest, I7's rest after the first tap, I9's rests on b and on
+    // time unplugged; iTerm2's agents a second apart (started), I3's and I15's turns (turned), I3's rests after the
+    // devices start again and after each pick, I4's pause before and after the split and its rest after the first tap, I6's rest, I7's rest after the first tap, I9's rests on b and on
     // a and its wait after the echo, I10's rest after the move to a's pane, I10's and I11's rests after the select, I13's
     // rests after the detach and the attach, I14's time past the devices' next look after herdr starts again, I15's time
     // after the relaunch and its rest after the first tap, I16's long turn, I17's turn, I20's rest on c and I21's rest
@@ -418,12 +424,12 @@ describe('the catalog', () => {
       'O4 2000', 'O4 1000', 'O4 3000', 'O7 4000', 'O7 2000', 'O8 2000', 'O8 2000', 'O8 6000', 'O8 2000', 'O10 1000', 'O12 2000',
       'O12 35000', 'O12 2000',
       ...starts('O16', 40), 'O17 1000', 'O17 3000',
-      ...starts('I2', 4), ...starts('I3', 4), 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000', 'I4 1000', 'I4 1000', 'I4 4000',
-      ...starts('I5', 2), ...starts('I6', 2), 'I6 2000', ...starts('I7', 3), 'I7 4000', ...starts('I8', 2),
-      ...starts('I9', 2), 'I9 1000', 'I9 500', 'I9 3000', ...starts('I10', 2), 'I10 1000', 'I10 2000', ...starts('I11', 2), 'I11 2000',
+      ...starts('I2', 4), ...starts('I3', 4), 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000',
+      'I4 1000', 'I4 1000', 'I4 4000', ...starts('I5', 2), ...starts('I6', 3), 'I6 2000', ...starts('I7', 3), 'I7 4000',
+      ...starts('I8', 2), ...starts('I9', 2), 'I9 1000', 'I9 500', 'I9 3000', ...starts('I10', 2), 'I10 1000', 'I10 2000', ...starts('I11', 2), 'I11 2000',
       ...starts('I12', 2), ...starts('I13', 2), 'I13 2000', 'I13 2000', ...starts('I14', 3), 'I14 35000',
       ...starts('I15', 3), 'I15 2000', 'I15 2000', 'I15 2000', 'I15 2000', 'I15 4000', 'I16 30000', 'I17 2000',
-      ...starts('I18', 2), ...starts('I19', 2), ...starts('I20', 2), 'I20 1000', ...starts('I21', 3), 'I21 1000', 'I21 3000',
+      ...starts('I18', 2), ...starts('I19', 2), ...starts('I20', 2), 'I20 1000', ...starts('I21', 4), 'I21 1000', 'I21 3000',
       'CH3 1000', 'XH3 200',
       ...starts('VH1', 2), 'VH1 1000', ...starts('VH3', 3), ...starts('UH3', 2), 'UH3 200',
       'OH1 1000', 'OH2 200',
@@ -442,8 +448,8 @@ describe('the catalog', () => {
     // I9's tab report 500 ms after the rest are those scenarios' point: only the input right after one of their own short
     // waits is let through. The person's tab selection and pane moves in iTerm2 are inputs
     // (docs/plans/2026-11-22-dial-eval-iterm2-plan.md, Decision 11).
-    const inputs = new Set<Step['kind']>(['tap', 'swipe', 'voice', 'attach', 'thread', 'stroke', 'editor.focus', 'orca.focus',
-      'iterm.select', 'tmux.selectPane', 'herdr.focus'])
+    const inputs = new Set<Step['kind']>(['tap', 'swipe', 'voice', 'attach', 'thread', 'stroke', 'pick', 'editor.focus',
+      'orca.focus', 'iterm.select', 'tmux.selectPane', 'herdr.focus'])
     const quick = new Set(['X11', 'XH3', 'OH2', 'I9', 'IH1'])
     for (const s of ALL) {
       // Since the last listing, or the last input once there is one. A condition wait may end at once: it counts 0.
