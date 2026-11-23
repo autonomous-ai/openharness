@@ -35,6 +35,7 @@ const herdr = await import('../../e2e/harness/herdrServer.js' as string) as {
   identityOf(pid: number): string | undefined
   clientStarted(pid: number, identity: string | undefined): object
   killGroup(server: object): void
+  killOwn(pid: number, identity: string | undefined): void
   launchLost(screen: string, line: string): boolean
 }
 
@@ -118,6 +119,37 @@ describe.skipIf(process.platform === 'win32')("tier B's herdr server its client 
     try {
       // A server that had this pid before: started at another time, from another path.
       herdr.killGroup(herdr.clientStarted(stranger.pid, 'Thu Jan  1 00:00:00 1970     /opt/herdr'))
+      stranger.process.kill('SIGTERM')
+      expect(await stranger.ended).toBe('SIGTERM')
+    } finally {
+      stranger.process.kill('SIGKILL')
+    }
+  })
+})
+
+describe.skipIf(process.platform === 'win32')("tier B's herdr client, killed at the driver's last resort", () => {
+  /** A process of the test's, as herdr's client runs in its tab; and the signal it ends by. */
+  const client = (): { pid: number; ended: Promise<NodeJS.Signals | null>; process: ChildProcess } => {
+    const child = spawn('/bin/sleep', ['60'], { stdio: 'ignore' })
+    return { pid: child.pid!, process: child, ended: new Promise((done) => child.once('exit', (_code, signal) => done(signal))) }
+  }
+
+  it('is killed while its pid is its own', async () => {
+    const own = client()
+    try {
+      herdr.killOwn(own.pid, herdr.identityOf(own.pid))
+      expect(await own.ended).toBe('SIGKILL')
+    } finally {
+      own.process.kill('SIGKILL')
+    }
+  })
+
+  it('spares the process that took its pid once it went, and one whose identity was never read', async () => {
+    const stranger = client()
+    try {
+      // A client that had this pid before: started at another time, from another path.
+      herdr.killOwn(stranger.pid, 'Thu Jan  1 00:00:00 1970     /opt/herdr')
+      herdr.killOwn(stranger.pid, undefined)
       stranger.process.kill('SIGTERM')
       expect(await stranger.ended).toBe('SIGTERM')
     } finally {
