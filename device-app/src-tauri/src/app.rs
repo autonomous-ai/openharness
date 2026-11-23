@@ -1874,8 +1874,10 @@ mod tests {
         shown(Screen::Follow, Phase::Offer, &[])
     }
 
-    fn follow(trusted: bool, installed: bool) -> Event {
-        Event::Follow { trusted, installed }
+    /// What the runner tells of the follow door: macOS's asks for the permission (`gated`), every door off macOS is
+    /// trusted and asks nothing, and no door (GNOME or KDE on Wayland) is neither.
+    fn follow(trusted: bool, gated: bool) -> Event {
+        Event::Follow { trusted, gated }
     }
 
     fn attached() -> Event {
@@ -1903,7 +1905,7 @@ mod tests {
         effects.iter().any(|effect| matches!(effect, Effect::Save(_)))
     }
 
-    /// Found and signed in, then the ChatGPT app found on this Mac without the permission: the Follow screen shows.
+    /// Found and signed in, then this Mac's door told without the permission: the Follow screen shows.
     fn on_follow() -> App {
         let mut app = signed_in();
         assert_eq!(shows(&app.handle(follow(false, true))), [follow_offer()]);
@@ -1911,7 +1913,8 @@ mod tests {
     }
 
     #[test]
-    fn the_follow_screen_shows_once_chatgpt_is_found_without_the_permission_and_is_remembered() {
+    fn the_follow_screen_shows_at_the_first_launch_on_macos_without_the_permission_and_is_remembered() {
+        // No dial and no ChatGPT app: neither is waited for.
         let mut app = signed_in();
         let effects = app.handle(follow(false, true));
         assert_eq!(shows(&effects), [follow_offer()]);
@@ -1927,15 +1930,15 @@ mod tests {
     }
 
     #[test]
-    fn the_follow_screen_waits_for_chatgpt_and_never_shows_with_the_permission() {
+    fn the_follow_screen_never_shows_with_the_permission_off_macos_or_with_no_door() {
+        for door in [follow(true, true), follow(true, false), follow(false, false)] {
+            let mut app = signed_in();
+            assert!(shows(&app.handle(door.clone())).is_empty(), "{door:?}");
+            assert!(!app.state.saved.asked_follow, "{door:?}");
+        }
+        // macOS's permission taken back later: asked then.
         let mut app = signed_in();
-        // No ChatGPT app known yet, the permission given or not.
-        assert!(shows(&app.handle(follow(false, false))).is_empty());
-        assert!(shows(&app.handle(follow(true, false))).is_empty());
-        // Given, as off macOS: nothing is asked.
-        assert!(shows(&app.handle(follow(true, true))).is_empty());
-        assert!(!app.state.saved.asked_follow);
-        // ChatGPT found later, the permission missing: asked then.
+        app.handle(follow(true, true));
         assert_eq!(shows(&app.handle(follow(false, true))), [follow_offer()]);
     }
 
@@ -1987,8 +1990,8 @@ mod tests {
             let effects = app.handle(decline.clone());
             assert_eq!(shows(&effects), [None], "{decline:?}");
             assert!(!saves(&effects), "{decline:?}");
-            // The permission taken and given back, ChatGPT gone and found: nothing asks again.
-            for event in [follow(true, true), follow(false, true), follow(false, false), follow(false, true)] {
+            // The permission given and taken back: nothing asks again.
+            for event in [follow(true, true), follow(false, true)] {
                 assert!(shows(&app.handle(event)).is_empty(), "{decline:?}");
             }
             assert_eq!(app.view(), None);
@@ -2041,23 +2044,25 @@ mod tests {
     }
 
     #[test]
-    fn the_follow_state_is_said_once_chatgpt_is_known_installed_then_at_each_change() {
-        // A Mac that starts without the permission says so.
+    fn the_follow_state_is_said_at_start_then_at_each_change() {
+        // A Mac that starts without the permission says so, with no dial and no ChatGPT app.
         let mut app = signed_in();
-        app.handle(attached());
-        assert!(logs(&app.handle(follow(false, false))).is_empty());
         assert_eq!(logs(&app.handle(follow(false, true))), ["chatgpt: follow off · no permission"]);
         assert!(logs(&app.handle(follow(false, true))).is_empty());
         assert_eq!(logs(&app.handle(follow(true, true))), ["chatgpt: follow on"]);
         assert!(logs(&app.handle(follow(true, true))).is_empty());
         assert_eq!(logs(&app.handle(follow(false, true))), ["chatgpt: follow off · no permission"]);
-        assert!(logs(&app.handle(follow(false, false))).is_empty());
 
-        // Off macOS, always trusted: said once ChatGPT is known installed.
+        // A Mac with the permission, and every door off macOS, always trusted.
+        for door in [follow(true, true), follow(true, false)] {
+            let mut app = signed_in();
+            assert_eq!(logs(&app.handle(door.clone())), ["chatgpt: follow on"], "{door:?}");
+        }
+
+        // No door (GNOME or KDE on Wayland): nothing is said, never `no permission`.
         let mut app = signed_in();
-        app.handle(attached());
-        assert!(logs(&app.handle(follow(true, false))).is_empty());
-        assert_eq!(logs(&app.handle(follow(true, true))), ["chatgpt: follow on"]);
+        assert!(logs(&app.handle(follow(false, false))).is_empty());
+        assert!(logs(&app.handle(attached())).iter().all(|line| !line.starts_with("chatgpt:")));
     }
 
     #[test]

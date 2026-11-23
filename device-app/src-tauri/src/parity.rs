@@ -5,7 +5,7 @@
 //! (`follow::system`), always trusted off macOS: the rules read only its answers.
 
 use crate::app::App;
-use crate::follow::{AxTrust, ChatgptWindow, NoFollow};
+use crate::follow::{AxTrust, NoFollow, Ungated};
 use crate::install::DOWNLOADING_HARNESS;
 use crate::tick::menu_opened;
 use crate::types::{
@@ -84,9 +84,9 @@ fn the_one_os_property_of_the_rules_is_install_exits_app() {
         Event::Login(LoginEvent::Waiting("Waiting".into())),
         Event::Login(LoginEvent::Done(Ok(()))),
         Event::Auth(Some(true)),
-        Event::Follow { trusted: false, installed: true },
+        Event::Follow { trusted: false, gated: true },
         Event::Act(Action::Allow),
-        Event::Follow { trusted: true, installed: true },
+        Event::Follow { trusted: true, gated: true },
         menu_opened(B + 70, true),
         Event::Menu(MenuAction::SoundOff),
         status(true),
@@ -152,14 +152,12 @@ fn shows_the_row(effects: &[Effect]) -> bool {
     effects.iter().any(|effect| matches!(effect, Effect::Menu(items) if items.contains(&row)))
 }
 
-/// Whether the menu's last version has a follow item and whether the Follow ChatGPT screen shows, signed in with a
-/// dial attached, once the runner has told what the door answers.
-fn follow_shown(trusted: bool, installed: bool) -> (bool, bool) {
+/// Whether the menu's last version has a follow item and whether the Follow ChatGPT screen shows, signed in with no
+/// dial, once the runner has told what the door answers at start.
+fn follow_shown(trusted: bool, gated: bool) -> (bool, bool) {
     let seen = Saved { cli_seen: true, asked_sign_in: true, login_item: true, ..Saved::default() };
     let (mut app, mut effects) = App::new(seen, true, false, B, false);
-    for event in
-        [Event::StartDone { ok: true }, status(false), Event::Auth(Some(true)), Event::Follow { trusted, installed }]
-    {
+    for event in [Event::StartDone { ok: true }, Event::Auth(Some(true)), Event::Follow { trusted, gated }] {
         effects.extend(app.handle(event));
     }
     let menu = effects.iter().rev().find_map(|effect| match effect {
@@ -177,12 +175,15 @@ fn follow_shown(trusted: bool, installed: bool) -> (bool, bool) {
 
 #[test]
 fn only_macos_without_the_permission_asks_and_no_menu_has_a_follow_item() {
-    // macOS's door, the ChatGPT app installed and no permission yet: the screen, at start.
+    // macOS's door and no permission yet: the screen, at start, whatever is plugged in or installed.
     assert_eq!(follow_shown(false, true), (false, true));
-    // macOS's door with the permission, and every door off macOS, which is always trusted: neither.
+    // macOS's door with the permission: neither.
     assert_eq!(follow_shown(true, true), (false, false));
+    // Every door off macOS, which is always trusted and asks nothing: neither.
+    let ungated = Ungated(NoFollow);
+    assert_eq!(follow_shown(ungated.trusted(), ungated.gated()), (false, false));
     // A desktop with no door (GNOME or KDE on Wayland): neither.
-    assert_eq!(follow_shown(NoFollow.trusted(), NoFollow.installed()), (false, false));
+    assert_eq!(follow_shown(NoFollow.trusted(), NoFollow.gated()), (false, false));
 }
 
 /// Windows always has its door. On Linux the door is the session's (NoFollow on CI, with no window system): follow's
@@ -190,5 +191,7 @@ fn only_macos_without_the_permission_asks_and_no_menu_has_a_follow_item() {
 #[cfg(windows)]
 #[test]
 fn off_macos_the_door_is_trusted_with_nothing_saved() {
-    assert!(crate::follow::system(std::env::temp_dir()).trusted());
+    let door = crate::follow::system(std::env::temp_dir());
+    assert!(door.trusted());
+    assert!(!door.gated());
 }

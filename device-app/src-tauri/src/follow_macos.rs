@@ -351,6 +351,11 @@ mod tests {
     }
 
     #[test]
+    fn the_mac_door_asks_for_accessibility() {
+        assert!(MacFollow::new(PathBuf::from("/Users/someone")).gated());
+    }
+
+    #[test]
     fn installed_reads_only_the_two_places() {
         // Never the real /Applications: an empty folder stands in for it.
         let home = tempfile::tempdir().unwrap();

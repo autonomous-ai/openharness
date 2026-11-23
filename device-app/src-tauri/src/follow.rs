@@ -689,6 +689,7 @@ mod tests {
     fn off_macos_a_door_is_always_trusted_and_nothing_is_asked() {
         let door = Ungated(NoFollow);
         assert!(door.trusted());
+        assert!(!door.gated());
         let told = Arc::new(Mutex::new(0));
         let count = told.clone();
         door.start(Box::new(move || *count.lock().unwrap() += 1));
@@ -720,16 +721,18 @@ mod tests {
     }
 
     #[test]
-    fn shown_is_the_permission_and_the_app_installed() {
+    fn shown_is_the_permission_and_whether_the_door_asks_for_it_never_the_app_installed() {
         let mut follow = ChatgptFollow::default();
-        assert_eq!(follow.shown(), Shown { trusted: false, installed: false });
+        assert_eq!(follow.shown(), Shown { trusted: false, gated: false });
         follow.trusted(true);
-        assert_eq!(follow.shown(), Shown { trusted: true, installed: false });
-        follow.installed(true);
-        assert_eq!(follow.shown(), Shown { trusted: true, installed: true });
+        assert_eq!(follow.shown(), Shown { trusted: true, gated: false });
+        follow.gated(true);
+        assert_eq!(follow.shown(), Shown { trusted: true, gated: true });
         follow.trusted(false);
-        assert_eq!(follow.shown(), Shown { trusted: false, installed: true });
-        assert_eq!(Shown::default(), Shown { trusted: false, installed: false });
+        assert_eq!(follow.shown(), Shown { trusted: false, gated: true });
+        follow.installed(true);
+        assert_eq!(follow.shown(), Shown { trusted: false, gated: true });
+        assert_eq!(Shown::default(), Shown { trusted: false, gated: false });
     }
 
     #[test]
@@ -775,6 +778,7 @@ mod tests {
         assert!(!NoFollow.installed());
         assert!(NoFollow.observe(Box::new(move |_| *count.lock().unwrap() += 1)).is_none());
         assert!(!NoFollow.trusted());
+        assert!(!NoFollow.gated());
         NoFollow.prompt();
         let count = heard.clone();
         NoFollow.start(Box::new(move || *count.lock().unwrap() += 1));

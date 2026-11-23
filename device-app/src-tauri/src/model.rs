@@ -194,9 +194,9 @@ mod tests {
         }
     }
 
-    /// ChatGPT installed, Harness trusted or not.
+    /// macOS's door, which asks for Accessibility, Harness trusted or not.
     fn following(trusted: bool) -> FollowState {
-        FollowState { trusted, installed: true, ..FollowState::default() }
+        FollowState { trusted, gated: true }
     }
 
     fn text(label: &str) -> MenuItem {
@@ -223,8 +223,8 @@ mod tests {
         );
     }
 
-    /// Every CliState × Daemon × dial (none, attached, with Sound and Notifications) × signed_in × ChatGPT (not
-    /// installed, installed, followed).
+    /// Every CliState × Daemon × dial (none, attached, with Sound and Notifications) × signed_in × follow door (none,
+    /// macOS's without the permission, with it).
     fn states() -> Vec<AppState> {
         let dials = [None, Some(dial(true, Some("0.0.95"))), Some(notifying(NotifyMode::Full))];
         let follows = [FollowState::default(), following(false), following(true)];
@@ -437,8 +437,8 @@ mod tests {
     #[test]
     fn no_menu_has_a_follow_item() {
         for trusted in [false, true] {
-            for installed in [false, true] {
-                let follow = FollowState { installed, ..following(trusted) };
+            for gated in [false, true] {
+                let follow = FollowState { trusted, gated };
                 for dial in [notifying(NotifyMode::Full), dial(true, Some("0.0.95"))] {
                     let with = AppState { follow, dial: Some(dial.clone()), ..state() };
                     let without = AppState { follow: FollowState::default(), ..with.clone() };
@@ -449,8 +449,8 @@ mod tests {
     }
 
     #[test]
-    fn the_follow_screen_is_due_after_install_and_sign_in_once_with_chatgpt_and_no_permission() {
-        // At start: nothing needs ChatGPT in front.
+    fn the_follow_screen_is_due_after_install_and_sign_in_once_on_macos_without_the_permission() {
+        // At start, whatever is plugged in or installed: nothing needs a dial or the ChatGPT app.
         let untrusted = following(false);
         assert_eq!(due(&AppState { follow: untrusted, ..state() }), Some(Screen::Follow));
         for cli in [CliState::Installing, CliState::InstallFailed] {
@@ -462,10 +462,12 @@ mod tests {
         // Asked once: never again.
         let asked = Saved { asked_follow: true, ..state().saved };
         assert_eq!(due(&AppState { saved: asked, follow: untrusted, ..state() }), None);
-        // The permission given, as every door off macOS has it.
+        // The permission given.
         assert_eq!(due(&AppState { follow: following(true), ..state() }), None);
-        // No ChatGPT app known: nothing to follow.
-        assert_eq!(due(&AppState { follow: FollowState { installed: false, ..untrusted }, ..state() }), None);
+        // Every door off macOS, which asks nothing and is always trusted.
+        assert_eq!(due(&AppState { follow: FollowState { trusted: true, gated: false }, ..state() }), None);
+        // No door (GNOME or KDE on Wayland): nothing to ask for.
+        assert_eq!(due(&AppState { follow: FollowState::default(), ..state() }), None);
     }
 
     #[test]
