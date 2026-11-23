@@ -13386,8 +13386,8 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
   it.each([
     ['a stroke', () => seen.host.scrolled!('down', 0, 0)],
     ['a tap', () => seen.host.tapped!('h1')],
-    ['an answer', () => seen.host.answer('h1', 'r1', { q: 'yes' })],
-    ['a reviewed answer', () => void seen.host.answerReviewed!({ agentId: 'h1' } as never)],
+    ['an answer', () => host().answer('h1', 'r1', { q: 'yes' })],
+    ['a reviewed answer', () => void host().answerReviewed({ agentId: 'h1' } as never)],
     ['an app pick', () => seen.host.appPicked!()],
   ])('%s is use', async (_, input) => {
     const { port } = start({ core: harnessAgent(), faults: ['fleet'] })
@@ -13652,15 +13652,29 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
       await attach(port)
       port.card(question('q1'))
       await vi.advanceTimersByTimeAsync(30_000)
-      seen.host.answer('h1', 'q1', { q: 'yes' })
+      host().answer('h1', 'q1', { q: 'yes' })
       port.card(closed('q1'))
       port.card(question('q2'))
-      void seen.host.answerReviewed!({ agentId: 'h1', requestId: 'q2' } as never)
+      void host().answerReviewed({ agentId: 'h1', requestId: 'q2' } as never)
       port.card(closed('q2'))
       // A question whose agent goes was answered nowhere.
       port.card(question('q3'))
       port.card({ type: 'agent_deleted', payload: { agentId: 'h1' } })
       expect(await waits(port)).toEqual({ dial_wait_dial_30s_to_2m: 1, dial_wait_dial_under_30s: 1, dial_wait_none: 1 })
+    })
+
+    // The fleet's router takes the answer to the core: the devices hear of it from the host alone.
+    it('with the fleet on, a question answered on the dial is a dial wait and use', async () => {
+      const { port } = start({ core: harnessAgent() })
+      seen.host.watching!(true)
+      port.card(question('q1'))
+      host().answer('h1', 'q1', { q: 'yes' })
+      port.card(closed('q1'))
+      port.card(question('q2'))
+      void host().answerReviewed({ agentId: 'h1', requestId: 'q2' } as never)
+      port.card(closed('q2'))
+      expect(seen.fleet!.calls.map(([name]) => name)).toEqual(expect.arrayContaining(['answer', 'answerReviewed']))
+      expect(await counted(port)).toMatchObject({ dial_used_installation_days: 1, dial_wait_dial_under_30s: 2 })
     })
 
     it('a question closed elsewhere is an elsewhere wait', async () => {
