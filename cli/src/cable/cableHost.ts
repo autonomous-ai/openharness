@@ -38,7 +38,7 @@ import type { PetStore } from './pets/store.js'
 import { LANE_SESSION_OVER, LANE_TOKEN_UNAVAILABLE, type MachineFleet } from './machineFleet.js'
 import type { ReviewedAnswer, AnswerReceipt } from './questionInbox.js'
 import { isTier, type Tier } from '../lib/notifyTier.js'
-import type { DialOpenEnd, DialVoiceEnd } from '../lib/dialUsageContract.js'
+import { DIAL_VOICE_SURFACE, DIAL_VOICE_SURFACE_HEADER, type DialOpenEnd, type DialVoiceEnd } from '../lib/dialUsageContract.js'
 import { HarnessSource } from './hosts/harness.js'
 import { AppFilter, type AppCounts } from './hosts/appFilter.js'
 import { agentPlaceName, appDisplayName, hostDisplayName } from './hosts/hostDetect.js'
@@ -1453,6 +1453,8 @@ export class DaemonCableHost implements CableHost {
           authorization: `Bearer ${token}`,
           'x-autonomous-env': autonomousEnv,
           'content-type': `multipart/form-data; boundary=${boundary}`,
+          // How the backend counts the dial's voice apart from the rest (Decision 4): a fixed value, never an id.
+          [DIAL_VOICE_SURFACE_HEADER]: DIAL_VOICE_SURFACE,
         },
         body,
         signal,
