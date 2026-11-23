@@ -13136,6 +13136,19 @@ describe('Orca\'s chats on the dial (docs/plans/2026-11-23-dial-orca-chats-desig
     expect(orcaRuns).toEqual([activated(WT5), ORCA_FORWARD])
   })
 
+  // Decided 7: a rest brings the chat's worktree up too, and Orca stays where it is (found by the dial eval, O20).
+  it('a rest on a resting chat runs the same worktree activate, and brings nothing forward', async () => {
+    const { settle } = await withChats({ platform: 'darwin' })
+    seen.host.watching!(true)
+    await settled()
+    await settle('orca')
+    orcaRuns.length = 0
+    expect(host().swipeSwitches(resting(1))).toBe(true)
+    host().swipeEnded(resting(1), 'rest')
+    await settled()
+    expect(orcaRuns).toEqual([activated(WT5)])
+  })
+
   it('a tap on a hooked chat goes through the chat adapter, and a rest with Orca in front runs the same activate', async () => {
     const { port, settle } = await withChats({ platform: 'darwin' })
     seen.host.watching!(true)

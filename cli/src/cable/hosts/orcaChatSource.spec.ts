@@ -5,7 +5,7 @@ import {
   ORCA_CHAT_TIMEOUT_MS, ORCA_CHATS_KEPT, ORCA_ROWS_READ, OrcaChatSource, type HeardChat, type OrcaChatDeps,
 } from './orcaChatSource.js'
 import { HostRegistry } from './registry.js'
-import { capsLetters, type HostAgent, type HostSource } from './types.js'
+import { capsLetters, type HostAgent, type HostSource, type PaneSwitch } from './types.js'
 
 const T = 1_795_000_000_000
 const ORCA = '/Applications/Orca.app/Contents/Resources/bin/orca'
@@ -105,6 +105,7 @@ describe("Orca's chats on the dial", () => {
     let clock = 0
     let changes = 0
     const focus = vi.fn(async (_agentId: string, _worktreeId: string | undefined) => true)
+    const show = vi.fn(async (_agentId: string): Promise<PaneSwitch> => 'ok')
     const deps: OrcaChatDeps = {
       binary: () => state.binary,
       run: async (file, args, timeoutMs) => {
@@ -117,6 +118,7 @@ describe("Orca's chats on the dial", () => {
       mtime: () => state.stamp,
       heard: () => state.heard,
       focus,
+      show,
       log: (line) => { lines.push(line) },
       now: () => clock,
     }
@@ -124,7 +126,7 @@ describe("Orca's chats on the dial", () => {
     src.onChange(() => { changes++ })
     const lists = (group: string) => calls.filter(({ args }) => args[0] === group && args[1] === 'list').length
     return {
-      src, state, calls, focus,
+      src, state, calls, focus, show,
       changes: () => changes,
       said: () => [...lines],
       helps: () => calls.filter(({ args }) => args[1] === '--help').length,
@@ -659,6 +661,25 @@ describe("Orca's chats on the dial", () => {
     t.src.stop()
     expect(await t.src.focus(hooked)).toBe(false)
     expect(t.focus).toHaveBeenCalledTimes(2)
+  })
+
+  it('a rest on a listed chat shows it through the devices, as its tap does; any other id has no pane and shows nothing', async () => {
+    const t = setup()
+    const row0 = { id: 'someone-else' } as HostAgent
+    expect(t.src.hasPane(row0)).toBe(false)
+    await t.read()
+    const row = t.src.list().find(({ name }) => name === 'Chat 1')!
+    expect(t.src.hasPane(row)).toBe(true)
+    expect(await t.src.showPane(row)).toBe('ok')
+    expect(t.show).toHaveBeenLastCalledWith(row.id)
+    expect(t.src.hasPane({ ...row, id: 'someone-else' })).toBe(false)
+    expect(await t.src.showPane({ ...row, id: 'someone-else' })).toBe('failed')
+    expect(t.show).toHaveBeenCalledTimes(1)
+    // Nothing is listed after a stop: a rest shows nothing.
+    t.src.stop()
+    expect(t.src.hasPane(row)).toBe(false)
+    expect(await t.src.showPane(row)).toBe('failed')
+    expect(t.show).toHaveBeenCalledTimes(1)
   })
 
   it("tells a change of a row, of Orca's order or of the worktrees, never a new time alone", async () => {
