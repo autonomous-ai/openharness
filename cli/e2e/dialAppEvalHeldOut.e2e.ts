@@ -20,6 +20,7 @@
 import { readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { HARNESS_OWNER_OPTION, paneOwnerFormat } from '../src/lib/harnessSessionLabel.js'
 import { scenariosFor } from '../src/testing/dialAppEval/catalog.js'
 import { loadBaseline, SKIP_RATCHET_ENV, tierBVerdict } from '../src/testing/dialAppEval/grade.js'
 import { collect, runScenario, uncaughtProbes, writeResults, type ScenarioRun } from '../src/testing/dialAppEval/runner.js'
@@ -41,15 +42,19 @@ const gone = (pid: number): boolean => {
   return false
 }
 
+/** What the devices ask tmux of a pane (cable/hosts/tmux.ts TMUX_PANE_FACTS): its process, its session and both owner
+ *  tags in one format, which no hook asks (hook/notify.mjs readPaneDescription asks one tag). */
+const DEVICES_PANE_FACTS = `#{pane_pid}|#{session_name}|#{${HARNESS_OWNER_OPTION}}${paneOwnerFormat(false)}`
+
 /** What a scenario's run proves beside its checks, read from its world as it stopped. */
 const ALSO: Partial<Record<string, (driver: TierBDriver) => void>> = {
   // b's Codex wrote its thread in the daemon's CODEX_HOME, where the devices read its recap, and its hooks came from its
-  // tmux pane: the devices asked tmux of that pane.
+  // tmux pane: the devices asked tmux of that pane, by their own command, as the hook's tmux runs are noted too.
   IH5: (driver) => {
     const { d } = driver.lastWorld()
     const b = driver.lastWorld().session('b')
     expect(readdirSync(join(d.env.CODEX_HOME!, 'sessions'), { recursive: true }).some((name) => String(name).endsWith(`-${b.id}.jsonl`))).toBe(true)
-    expect(driver.seen().commands.filter((c) => c.argv[0] === 'tmux' && c.argv.includes('pane:b'))).not.toEqual([])
+    expect(driver.seen().commands.map((c) => c.argv)).toContainEqual(['tmux', 'display-message', '-p', '-t', 'pane:b', DEVICES_PANE_FACTS])
   },
 }
 

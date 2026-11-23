@@ -18,9 +18,9 @@
  * frames and the person's own turns (a swipe moves the glass before the daemon hears of it); the commands of the
  * recording open and of the recording Cursor CLI, with their exit, a folder in the daemon's projects written as the
  * catalog's `/work/` one, and the fake Orca's at their own times, each `terminal send` among them a `typed` delivery to
- * the session whose pane it named; in an iTerm2 scenario the devices' tmux and herdr runs at their own times, each pane
- * named by its session; the selects the watch printed, at their arrival, and the person's tab reports, each tab named by
- * its label; the deliveries and editor streams the app's steps record; the devices' log lines, at their read; and, after
+ * the session whose pane it named; in an iTerm2 scenario the tmux and `herdr agent` runs noted on its daemon's PATH at
+ * their own times, each pane named by its session and each tty by its tab; the selects the watch printed, at their
+ * arrival, and the person's tab reports, each tab named by its label; the deliveries and editor streams the app's steps record; the devices' log lines, at their read; and, after
  * `stop`, what the scenario cost (appEvalCost.ts).
  */
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -458,8 +458,8 @@ async function openRig(guard: string, accounts: SessionKey[], iterm: boolean): P
     const cost = costEnv(d.root)
     // As enginehomes.e2e.ts preloads its fault: the master hands NODE_OPTIONS on to the core and every service.
     Object.assign(d.env, cost.env, netGuardEnv(guard, cost.nodeOptions))
-    // An iTerm2 scenario's alone: the devices' tmux runs noted by a wrapper first on the daemon's PATH, which runs the tmux
-    // the daemon found there, its private server's; its process table holding no herdr but this worker's; and herdr
+    // An iTerm2 scenario's alone: the tmux runs noted by a wrapper first on the daemon's PATH, the devices', the core's and
+    // every hook's alike, which runs the tmux the daemon found there, its private server's; its process table holding no herdr but this worker's; and herdr
     // installed, as on tier A's iTerm2 machine (the iTerm2 plan's Decision 7), before its dial comes: the devices look for
     // it as a dial comes (services/devices.ts dialAttached).
     let kit: Rig['iterm']
@@ -787,10 +787,11 @@ export class World implements TierBWorld {
       this.panes.find((p) => p.handle === handle && p.from <= at && at < p.to)?.key))
   }
 
-  /** An iTerm2 scenario's alone: the devices' tmux and herdr runs since this world began, read once as it stops, as the
-   *  fake Orca's are: commands in time order with the others, each pane named by the session it holds and each tty by
-   *  the tab open on it as the world stops. The core runs tmux too, and tier A answers the devices' tmux and herdr for
-   *  iTerm2 alone: no other app's commands take them. */
+  /** An iTerm2 scenario's alone, as only its daemon notes them (openRig): the tmux runs of every process on the daemon's
+   *  PATH, the devices', the core's and each hook's alike, so a check of the devices' names their own command, and the
+   *  `herdr agent` runs, since this world began, read once as it stops, as the fake Orca's are: commands in time order
+   *  with the others, each pane named by the session that held it at the run and each tty by the tab open on it as the
+   *  world stops. */
   takeMux(): void {
     const kit = this.rig.iterm
     if (!kit) return
