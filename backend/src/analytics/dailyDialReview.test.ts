@@ -112,7 +112,8 @@ describe('dailyDialReview', () => {
 
   it('never crosses engine, host or margin', () => {
     const rows = DIAL_REVIEW_METRICS.flatMap(metric => Array.from({ length: 28 }, (_, i) => row(i + 1, metric, 10)))
-    const breakdowns = ['release:cli:0.6.84', 'platform:cli:linux'].flatMap(bucket => ['dial_used_installation_days', 'health_cli_collector_days']
+    const breakdowns = ['release:cli:0.6.84', 'platform:cli:linux'].flatMap(bucket => ['dial_connected_installation_days',
+      'dial_used_installation_days', 'dial_used_outside_app_installation_days', 'health_cli_collector_days']
       .map(metric => row(1, `breakdown:${bucket}:${metric}`, 30)))
     const review = dailyDialReview(rows, breakdowns, now)
     const engineOnly = DIAL_USAGE_ENGINES.filter(e => !(DIAL_USAGE_HOSTS as readonly string[]).includes(e))
@@ -125,8 +126,8 @@ describe('dailyDialReview', () => {
         ['macos', 'linux', 'windows'].some(p => tokens.includes(p))].filter(Boolean)
       expect(lists.length, name).toBeLessThanOrEqual(1)
     }
-    expect(review.margins).toEqual({ platform: [{ day: '2026-11-22', bucket: 'linux', computers: 30 }],
-      release: [{ day: '2026-11-22', bucket: '0.6.84', computers: 30 }] })
+    const margin = { day: '2026-11-22', connected: 30, used: 30, usedOutsideApp: 30 }
+    expect(review.margins).toEqual({ platform: [{ ...margin, bucket: 'linux' }], release: [{ ...margin, bucket: '0.6.84' }] })
   })
 
   it('leaves out a row with nothing', () => {
@@ -163,8 +164,15 @@ describe('dailyDialReview', () => {
     const review = dailyDialReview([], [b('platform:cli:macos', 'health_cli_collector_days', 25), b('platform:cli:macos', 'dial_used_installation_days', 8),
       b('platform:cli:linux', 'health_cli_collector_days', 10), b('platform:cli:linux', 'dial_used_installation_days', 6),
       b('release:cli:0.6.84', 'health_cli_collector_days', 30), b('release:cli:0.6.84', 'dial_used_installation_days', 3)], now)
-    expect(review.margins).toEqual({ platform: [{ day: '2026-11-22', bucket: 'macos', computers: 8 }],
-      release: [{ day: '2026-11-22', bucket: '0.6.84', computers: '<5' }] })
+    expect(review.margins).toEqual({ platform: [{ day: '2026-11-22', bucket: 'macos', connected: '<5', used: 8, usedOutsideApp: '<5' }],
+      release: [{ day: '2026-11-22', bucket: '0.6.84', connected: '<5', used: '<5', usedOutsideApp: '<5' }] })
+  })
+
+  it('shows connected, used and used outside the app in each margin, each hidden under five', () => {
+    const b = (metric: string, value: number) => row(1, `breakdown:platform:cli:macos:${metric}`, value)
+    const review = dailyDialReview([], [b('health_cli_collector_days', 25), b('dial_connected_installation_days', 9),
+      b('dial_used_outside_app_installation_days', 6)], now)
+    expect(review.margins.platform).toEqual([{ day: '2026-11-22', bucket: 'macos', connected: 9, used: '<5', usedOutsideApp: 6 }])
   })
 
   it('reads every dial and voice name, the team\'s too', () => {
