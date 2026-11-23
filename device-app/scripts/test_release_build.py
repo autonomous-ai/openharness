@@ -264,10 +264,12 @@ def signature(name, version):
     return base64.b64encode(text.encode()).decode()
 
 
-# Windows' own tools, for --signed: a file the tests write is JSON, {"signed": bool, "version": "X.Y.Z"}, and an
-# installer also holds the "app" NSIS packed. pwsh answers Get-AuthenticodeSignature (SIGNED_FILE) and the version
+# Windows' own tools, for --signed: a file the tests write is JSON, {"signed": bool, "version": "X.Y.Z"}. An installer
+# also holds what NSIS packed: the "app", the "uninstaller", which holds its own "dlls", and the plugin "dlls" as
+# {name: signed}. A falsy one is not packed. pwsh answers Get-AuthenticodeSignature (SIGNED_FILE) and the version
 # resource's ProductVersion (APP_FILE against APP_VERSION) from it. 7z appends its arguments to FAKE_7Z_LOG and, as
-# `7z e`, writes the installer's app into its -o folder.
+# `7z e`, writes into its -o folder the archive's app for harness-device.exe, its uninstaller as JSON for
+# uninstall.exe, and each of its dlls as {"signed": bool} under its name for *.dll, the extracted uninstaller's too.
 PWSH = r'''#!/usr/bin/env python3
 import json, os, sys
 command = sys.argv[-1]
@@ -286,11 +288,20 @@ with open(os.environ["FAKE_7Z_LOG"], "a") as log:
     log.write(json.dumps(args) + "\n")
 out = Path(next(arg[2:] for arg in args if arg.startswith("-o")))
 archive, name = [arg for arg in args[1:] if not arg.startswith("-")]
-app = json.loads(Path(archive).read_text()).get("app")
+packed = json.loads(Path(archive).read_text())
+if name == "*.dll":
+    files = {dll: {"signed": signed} for dll, signed in (packed.get("dlls") or {}).items()}
+else:
+    files = {name: packed.get({"harness-device.exe": "app", "uninstall.exe": "uninstaller"}[name])}
 out.mkdir(parents=True, exist_ok=True)
-if app is not None and name == "harness-device.exe":
-    (out / name).write_text(json.dumps(app))
+for file, content in files.items():
+    if content:
+        (out / file).write_text(json.dumps(content))
 '''
+
+# The plugin DLLs Tauri's NSIS installer carries, and those its uninstaller carries.
+PLUGIN_DLLS = ("NSISdl.dll", "StartMenu.dll", "System.dll", "nsDialogs.dll", "nsis_tauri_utils.dll")
+UNINSTALLER_DLLS = ("System.dll", "nsDialogs.dll", "nsis_tauri_utils.dll")
 
 
 def elf(machine, interp=False):
@@ -381,17 +392,22 @@ class ReleaseCheckTests(Fakes):
         self.assertEqual(result.stdout.splitlines()[-1],
                          "FAILED: Harness-Device-windows-x64-setup.exe's update signature is for 0.1.3")
 
-    def signed_installer(self, arch, app=None):
-        """An installer Authenticode signed, packing app: by default this release's exe, signed."""
+    def signed_installer(self, arch, app=None, uninstaller=None, dlls=None):
+        """An installer Authenticode signed, packing app, uninstaller and dlls ({name: signed}): by default this
+        release's exe, an uninstaller carrying its plugin DLLs, and the plugin DLLs, all signed."""
         self.installer(arch)
         name = f"Harness-Device-windows-{arch}-setup.exe"
-        packed = {"signed": True, "version": "0.1.3"} if app is None else app
-        (self.out / name).write_text(json.dumps({"signed": True, **({"app": packed} if packed else {})}))
+        (self.out / name).write_text(json.dumps({
+            "signed": True,
+            "app": {"signed": True, "version": "0.1.3"} if app is None else app,
+            "uninstaller": ({"signed": True, "dlls": dict.fromkeys(UNINSTALLER_DLLS, True)}
+                            if uninstaller is None else uninstaller),
+            "dlls": dict.fromkeys(PLUGIN_DLLS, True) if dlls is None else dlls}))
         return self.out / name
 
-    def test_windows_signed_checks_the_app_each_installer_packs(self):
-        # --no-binary-patching exists so the exe keeps the signature it had before NSIS packed it; Smart App Control
-        # blocks it otherwise.
+    def test_windows_signed_checks_the_app_the_uninstaller_and_every_dll_each_installer_packs(self):
+        # --no-binary-patching exists so the exe keeps the signature it had before NSIS packed it, and makensis ignores
+        # the exit code of the command that signs the uninstaller: Smart App Control blocks either unsigned.
         installers = [self.signed_installer(arch) for arch in ("arm64", "x64")]
         result = self.check(WINDOWS, "--signed")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -401,11 +417,59 @@ class ReleaseCheckTests(Fakes):
             expected += [f"ok: {name}'s update signature", f"ok: {name}'s update signature is for 0.1.3",
                          f"ok: {name}'s Authenticode signature", f"ok: {name} packs harness-device.exe",
                          f"ok: the harness-device.exe in {name} keeps its Authenticode signature",
-                         f"ok: the harness-device.exe in {name} is 0.1.3"]
+                         f"ok: the harness-device.exe in {name} is 0.1.3",
+                         f"ok: {name} packs uninstall.exe",
+                         f"ok: the uninstall.exe in {name} is Authenticode-signed",
+                         f"ok: {name} carries plugin DLLs",
+                         f"ok: every DLL in {name} is Authenticode-signed",
+                         f"ok: the uninstall.exe in {name} carries plugin DLLs",
+                         f"ok: every DLL in the uninstall.exe in {name} is Authenticode-signed"]
         self.assertEqual(result.stdout.splitlines(), expected)
         calls = [json.loads(line) for line in self.seven_zip_log.read_text().splitlines()]
-        self.assertEqual([(call[0], call[-2], call[-1]) for call in calls],
-                         [("e", str(installer), "harness-device.exe") for installer in installers])
+        self.assertEqual([(call[0], Path(call[-2]).name, call[-1]) for call in calls],
+                         [call for installer in installers for call in (
+                             ("e", installer.name, "harness-device.exe"), ("e", installer.name, "uninstall.exe"),
+                             ("e", installer.name, "*.dll"), ("e", "uninstall.exe", "*.dll"))])
+
+    def test_windows_signed_fails_an_uninstaller_unsigned_or_missing(self):
+        name = "Harness-Device-windows-x64-setup.exe"
+        for uninstaller, failed in (({"signed": False, "dlls": dict.fromkeys(UNINSTALLER_DLLS, True)},
+                                     f"the uninstall.exe in {name} is Authenticode-signed"),
+                                    ({}, f"{name} packs uninstall.exe")):
+            with self.subTest(uninstaller=uninstaller):
+                shutil.rmtree(self.out, ignore_errors=True)
+                self.signed_installer("x64", uninstaller=uninstaller)
+                result = self.check(WINDOWS, "--signed")
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.stdout.splitlines()[-1], f"FAILED: {failed}")
+
+    def test_windows_signed_fails_an_unsigned_dll_and_names_it(self):
+        name = "Harness-Device-windows-x64-setup.exe"
+        dlls, uninstaller_dlls = (dict.fromkeys(names, True) | {"System.dll": False}
+                                  for names in (PLUGIN_DLLS, UNINSTALLER_DLLS))
+        for packed, failed in (({"dlls": dlls}, f"every DLL in {name} is Authenticode-signed"),
+                               ({"uninstaller": {"signed": True, "dlls": uninstaller_dlls}},
+                                f"every DLL in the uninstall.exe in {name} is Authenticode-signed")):
+            with self.subTest(failed=failed):
+                shutil.rmtree(self.out, ignore_errors=True)
+                self.signed_installer("x64", **packed)
+                result = self.check(WINDOWS, "--signed")
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.stdout.splitlines()[-1], f"FAILED: {failed}")
+                self.assertIn("release-check: System.dll is not Authenticode-signed", result.stderr.splitlines())
+
+    def test_windows_signed_fails_when_no_dll_is_found(self):
+        # An extraction that finds nothing, as when 7-Zip names the files otherwise, must not pass.
+        name = "Harness-Device-windows-x64-setup.exe"
+        for packed, failed in (({"dlls": {}}, f"{name} carries plugin DLLs"),
+                               ({"uninstaller": {"signed": True, "dlls": {}}},
+                                f"the uninstall.exe in {name} carries plugin DLLs")):
+            with self.subTest(failed=failed):
+                shutil.rmtree(self.out, ignore_errors=True)
+                self.signed_installer("x64", **packed)
+                result = self.check(WINDOWS, "--signed")
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.stdout.splitlines()[-1], f"FAILED: {failed}")
 
     def test_windows_signed_fails_an_app_unsigned_at_another_version_or_missing(self):
         name = "Harness-Device-windows-x64-setup.exe"
