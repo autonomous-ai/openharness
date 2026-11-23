@@ -22,9 +22,10 @@
  *
  * A log line says only fixed words and counts: Orca's lists name people's folders, chats and their words.
  */
-import { observedAgentId, type PaneName } from './observed.js'
+import { cutAnswer, observedAgentId, type PaneName } from './observed.js'
 import { observedTitle } from './observedTitle.js'
 import type { OrcaDeps, OrcaReadDeps } from './orca.js'
+import { ORCA_CHAT_REFUSAL } from './orcaChat.js'
 import type { Caps, HostAgent, HostAgentState, HostSource } from './types.js'
 
 /** How long each `orca` run may take: Orca answers its lists in a fraction of a second (0.2 s for 17 chats). */
@@ -45,10 +46,6 @@ const MAX_WORKTREE_ID = MAX_PATH + 64
 /** Orca's identity keys are `wt2:local:<uuid>`; with `identity:` before it the plugin's id stays within 255. */
 const IDENTITY_KEY = /^[A-Za-z0-9:._-]{1,246}$/
 const IDENTITY = 'identity:'
-/** A card's answer, as observed.ts cutAnswer cuts a hooked agent's: 300 characters, by code point. */
-const ANSWER_CHARS = 300
-/** No process of the devices' takes a chat's words: Orca has no command to put them in one yet (decided 8). */
-const REFUSAL = 'Type in Orca for chats.'
 const AGENT_LIST = ['agent', 'list', '--json']
 const WORKTREE_LIST = ['worktree', 'list', '--json']
 
@@ -112,13 +109,10 @@ function folderOf(worktreeId: string): string | undefined {
   return folder.startsWith('/') && folder.length <= MAX_PATH ? folder : undefined
 }
 
-/** Orca's preview of the last answer as a card keeps it: on one line, cut by code point, since a cut through an emoji's
- *  surrogate pair leaves a broken character on the card. */
+/** Orca's preview of the last answer as a card keeps it: on one line, cut as a hooked agent's (observed.ts cutAnswer). */
 function answerOf(text: unknown): string | undefined {
   const words = typeof text === 'string' ? text.replace(/[\s\p{Cc}]+/gu, ' ').trim() : ''
-  if (words === '') return undefined
-  const chars = Array.from(words)
-  return chars.length > ANSWER_CHARS ? `${chars.slice(0, ANSWER_CHARS - 1).join('')}…` : words
+  return words === '' ? undefined : cutAnswer(words)
 }
 
 /** One row of Orca's list, or none: it is outside text, and a newer Orca may print rows this one does not know. A
@@ -293,7 +287,8 @@ export class OrcaChatSource implements HostSource {
   }
 
   voiceRefusal(): string {
-    return REFUSAL
+    // No process of the devices' takes a resting chat's words: Orca has no command to put them in one yet (decided 8).
+    return ORCA_CHAT_REFUSAL
   }
 
   async focus(agent: HostAgent): Promise<boolean> {
