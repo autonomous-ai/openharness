@@ -243,11 +243,11 @@ describe.skipIf(!MAC)('the dial eval, tier B: iTerm2', () => {
       expect(selects).toContainEqual({ app: 'iterm', tab: 'w1.1.0', raise: true })
       expect(JSON.stringify([run.results, run.probes])).not.toMatch(/\/dev\/|ttys[0-9]/)
     },
-    // b's client detached, its tab stays open on its shell, as the person's does and tier A's: no tab opened after takes
-    // its tty, so the tap's select, for the tab b's start looked up, names that tab every run, never the new client's.
+    // The tap reads b's tmux client afresh (docs/plans/2026-11-24-dial-iterm2-tab-and-restart-design.md), not the tab
+    // b's start looked up, so its select names the tab b's client was attached from last, as the scenario's open check.
     I13: () => {
       const selects = (driver.seen().streams ?? []).filter((l) => l.window === 'tabs' && l.line.type === undefined).map((l) => l.line)
-      expect(selects).toEqual([{ app: 'iterm', tab: 'w1.1.0', raise: true }])
+      expect(selects).toEqual([{ app: 'iterm', tab: 'w1.2.0', raise: true }])
     },
     // The Claude mod polled in tmux before the voice, so its words came by the mod, to b alone.
     I19: () => {
