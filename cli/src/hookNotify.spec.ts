@@ -13,6 +13,7 @@ import { observedTitle } from './cable/hosts/observedTitle.js'
 import { MAX_HINTS, MAX_TITLE, parseObservedHook } from './core/observedHook.js'
 import { ENGINES } from './engines/types.js'
 import { HARNESS_OWNER_OPTION, HARNESS_SESSION_PREFIX, harnessPaneOwner, ownerCommand, paneOwnerFormat } from './lib/harnessSessionLabel.js'
+import { engineName } from './lib/agentNames.js'
 import { hookRouteFile, publishHookRoute } from './lib/hookRoutes.js'
 import { hookTokenPath } from './lib/hookAuth.js'
 import { isTrustedLocal, listenLocalSocket, localSocketName, socketPathIn } from './lib/localSocket.js'
@@ -150,6 +151,8 @@ interface RunHookOpts {
   /** Each run of the fake `harness-pty` (windowsProcessTable's or windowsAncestors') appends a line here. The file is not
    *  made when it never runs. */
   psRunLog?: string
+  /** Each chunk the hook writes to stderr is pushed here; without it they go to the test's own stderr. */
+  stderr?: string[]
 }
 
 function runHook(opts: RunHookOpts): Promise<string> {
@@ -342,8 +345,10 @@ fs.readFileSync = (path, ...args) => {
     const child = spawn(command, argv, {
       env,
       cwd: opts.cwd,
-      stdio: ['pipe', 'pipe', 'inherit'],
+      stdio: ['pipe', 'pipe', 'pipe'],
     })
+    child.stderr.setEncoding('utf8')
+    child.stderr.on('data', (chunk: string) => { if (opts.stderr) opts.stderr.push(chunk); else process.stderr.write(chunk) })
     let stdout = ''
     child.stdout.setEncoding('utf8')
     child.stdout.on('data', (chunk) => { stdout += chunk })
@@ -1236,17 +1241,40 @@ syncBuiltinESMExports();\n`)
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
     const address = server.address()
     if (!address || typeof address === 'string') throw new Error('private fixture did not bind')
+    const stderr: string[] = []
     expect(await runHook({ port: address.port, tmuxPane: '%82', engine: 'hermes', processEngine: 'hermes',
       processExecutable: 'python3', processArgs: 'python3 /opt/venvs/hermes/lib/python3.12/site-packages/hermes-agent/hermes',
-      dataDir, hermesHome: join(dir, 'hermes'), hermesSource: 'cli',
+      dataDir, hermesHome: join(dir, 'hermes'), hermesSource: 'cli', stderr,
       input: { hook_event_name: 'on_session_start', session_id: '20260810_120000_a1b2c3' },
     })).toBe('{}\n')
+    if (outcome !== 'recovers') expect(stderr.join('')).toContain('[harness] Hermes admission is held;')
     expect(attempts).toBe(outcome === 'recovers' ? 3 : outcome === 'disconnects' ? 2 : 4)
     expect(new Set(firedAt).size).toBe(1)
     expect(new Set(deliveryIds).size).toBe(1)
     expect(deliveryIds[0]).toMatch(/^[a-f0-9-]{36}$/)
     expect(readFileSync(join(dataDir, 'registry.json'), 'utf8')).toBe('[]')
     expect(() => statSync(join(dataDir, 'registry-boot'))).toThrow()
+  })
+
+  it.each([['codex', 'Codex'], ['claude', 'Claude Code']] as const)('a held %s registration names %s, not Hermes', async (engine, name) => {
+    const dir = mkdtempSync(join(tmpdir(), `adapter-hook-${engine}-held-`))
+    tmpDirs.push(dir)
+    const transcriptPath = join(dir, 'transcript.jsonl')
+    writeFileSync(transcriptPath, '{}\n')
+    const server = createServer((req, res) => {
+      req.resume()
+      req.on('end', () => res.writeHead(429).end(JSON.stringify({ pending: false, retry: true, error: 'HOOK_ADMISSION_BUSY' })))
+    })
+    servers.push(server)
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('private fixture did not bind')
+    const stderr: string[] = []
+    await runHook({ port: address.port, tmuxPane: '%83', engine, processEngine: engine, dataDir: join(dir, 'data'), stderr,
+      input: { hook_event_name: 'SessionStart', session_id: `${engine}-held`, transcript_path: transcriptPath, cwd: dir },
+    })
+    expect(stderr.join('')).toContain(`[harness] ${name} admission is held; this delivery could not be confirmed.`)
+    expect(stderr.join('')).not.toContain('Hermes')
   })
 
   it.each([
@@ -1602,6 +1630,13 @@ syncBuiltinESMExports();\n`)
     const listed = [...literal!.matchAll(/'([^']+)'/g)].map((match) => match[1])
     expect([...listed].sort()).toEqual([...ENGINES].sort())
     expect(new Set(listed).size).toBe(listed.length)
+  })
+
+  it('names every engine in a sentence as the daemon does', () => {
+    // The hook keeps its own copy of engineName (it runs without the adapter's modules), as with REGISTRY_ENGINES.
+    const literal = /const ENGINE_NAMES = (\{[^}]*\})/.exec(readFileSync(HOOK, 'utf8'))?.[1]
+    expect(literal, 'ENGINE_NAMES in hook/notify.mjs').toBeDefined()
+    expect(runInNewContext(`(${literal})`)).toEqual(Object.fromEntries(ENGINES.map((engine) => [engine, engineName(engine)])))
   })
 
   it('registers an agent offline beside a terminal tile, and leaves the tile as it was', async () => {
