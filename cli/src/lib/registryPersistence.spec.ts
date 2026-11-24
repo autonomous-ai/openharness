@@ -252,14 +252,14 @@ it('a lock nobody holds is taken when its own owner fsync ends 2.5 s in, inside 
 })
 
 it('an owner fsync that ends past the writer\'s deadline does not publish, and fails as the deadline, not as busy', async () => {
-  const entered = deferred(), release = deferred(), begun = performance.now()
+  const entered = deferred(), release = deferred(), limit = deadline()
   interleave.phase = async (path, at) => {
     if (at === 'sync' && temporaryAt(path, at)) { entered.resolve(); await release.promise }
   }
   const apply = vi.fn(async () => {})
-  const result = registryFileLock(directory, deadline(), apply).catch(error => error)
+  const result = registryFileLock(directory, limit, apply).catch(error => error)
   await entered.promise
-  vi.spyOn(performance, 'now').mockReturnValue(begun + 5_500)
+  vi.spyOn(performance, 'now').mockReturnValue(limit.expires + 500)
   release.resolve()
   expect(await result).toMatchObject({ message: 'fixture deadline' })
   expect(apply).not.toHaveBeenCalled()
