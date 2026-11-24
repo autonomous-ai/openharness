@@ -57,12 +57,14 @@ describe('the cmux source (docs/plans/2026-11-17-dial-cmux-design.md)', () => {
     const focus = vi.fn(async (_pane: string, _agentId: string) => true)
     const canShow = vi.fn((_pane: string) => true)
     const show = vi.fn(async (_pane: string, _agentId: string): Promise<PaneSwitch> => 'ok')
+    const events = vi.fn()
     const deps: CmuxSourceDeps = {
       client: { sessions },
       watch: (tell) => {
         changed = tell
         return () => { if (changed === tell) changed = undefined }
       },
+      events,
       folder: () => state.folder,
       stores: () => ['claude', 'codex'],
       alive: (pid) => live.has(pid),
@@ -85,7 +87,7 @@ describe('the cmux source (docs/plans/2026-11-17-dial-cmux-design.md)', () => {
     const source = new CmuxSource(deps)
     source.onChange(() => { changes++ })
     return {
-      source, sessions, state, live, log, counts, prompt, focus, canShow, show,
+      source, sessions, state, live, log, counts, prompt, focus, canShow, show, events,
       get changes() { return changes },
       get watched() { return changed !== undefined },
       /** The agents each run asked for, in order: a word, or all. */
@@ -224,11 +226,40 @@ describe('the cmux source (docs/plans/2026-11-17-dial-cmux-design.md)', () => {
       expect(listed(s)).toEqual([key(S1), key(S3)])
     })
 
-    it('a change with no name asks for every agent', async () => {
+    it('a change with no name asks for every agent, and tells the devices cmux\'s event log may have changed', async () => {
       const s = setup()
       await started(s, [record()])
       s.change()
       expect(s.asked()).toEqual(['all', 'all'])
+      expect(s.events).toHaveBeenCalledTimes(1)
+    })
+
+    // docs/plans/2026-11-25-dial-cmux-focus-follow-design.md: the devices read the log, which is no store.
+    it('a change of cmux\'s event log tells the devices once and runs nothing', async () => {
+      const s = setup()
+      await started(s, [record()])
+      s.change('events.jsonl')
+      expect(s.events).toHaveBeenCalledTimes(1)
+      expect(s.asked()).toEqual(['all'])
+    })
+
+    it('a store\'s change, or the log\'s rotated file, tells the devices nothing', async () => {
+      const s = setup()
+      await started(s, [record()])
+      s.change('claude-hook-sessions.json')
+      s.change('events.jsonl.1')
+      expect(s.events).not.toHaveBeenCalled()
+    })
+
+    it('with the folder gone, a change of the log, named or not, tells nothing and runs nothing', async () => {
+      const s = setup()
+      await started(s, [record()])
+      s.state.folder = false
+      s.change('.cmuxterm')
+      s.change('events.jsonl')
+      s.change()
+      expect(s.events).not.toHaveBeenCalled()
+      expect(s.asked()).toEqual(['all'])
     })
 
     it('a name that is no store\'s runs nothing', async () => {
