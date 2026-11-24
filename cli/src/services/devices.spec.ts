@@ -14871,3 +14871,281 @@ describe('the dial follows the pane focused in WezTerm and kitty (docs/plans/202
     })
   })
 })
+
+describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-11-24-dial-tmux-pane-focus-follow-design.md)', () => {
+  type Run = [string, string[], number]
+  const { listClients } = RECORDED_WEZTERM
+  /** The poll's read of tmux: each client's tty and the pane its session shows, with the focus read's timeout. */
+  const READ: Run = ['tmux', ['list-clients', '-F', '#{client_tty}|#{pane_id}'], 2_000]
+  /** WezTerm's one read, with the binary the verbs use (the spec's `onPath`). */
+  const LIST_CLIENTS: Run = ['/opt/orca/bin/orca', ['cli', '--no-auto-start', 'list-clients', '--format', 'json'], 2_000]
+  /** What the poll's read of tmux prints and its exit code; while `held`, each such read waits until the spec lands it,
+   *  then answers as a run that reached its timeout. The pane WezTerm's GUI focused: none, no GUI
+   *  (RECORDED_WEZTERM.listClients.noGui). */
+  const tmuxSays = { clients: '/dev/ttys002|%3\n', code: 0, held: false, land: [] as Array<() => void> }
+  const weztermSays = { pane: 0 as number | undefined }
+  beforeEach(() => {
+    Object.assign(tmuxSays, { clients: '/dev/ttys002|%3\n', code: 0, held: false, land: [] })
+    weztermSays.pane = 0
+  })
+  /** On macOS, TMUX_IN_ITERM and a second agent (4243) in pane %4's shell (4001), under the same server. */
+  const IN_ITERM: ProcessRow[] = [...TMUX_IN_ITERM,
+    { pid: 4243, ppid: 4001, tty: 'ttys031', executable: 'claude' }, { pid: 4001, ppid: 3900, tty: 'ttys031', executable: 'zsh' }]
+  /** The same, the client (4300) in a terminal of no listed app. */
+  const IN_NO_APP: ProcessRow[] = IN_ITERM.map((p) => (p.pid === 4300 ? { ...p, ppid: 1 } : p))
+  /** The same, the client's shell (4299) in an Orca terminal. */
+  const IN_ORCA: ProcessRow[] = [...IN_ITERM.map((p) => (p.pid === 4299 ? { ...p, ppid: 4295 } : p)),
+    { pid: 4295, ppid: 1, executable: '/Applications/Orca.app/Contents/MacOS/Orca' }]
+  /** On Linux: sess-1's caller (4242) in WezTerm's pane 1, on a terminal WezTerm's GUI (3800) made, and sess-2's (4243)
+   *  in pane %4's shell (4001) of the person's tmux, whose server made its terminal and whose client (4300) is in another
+   *  WezTerm pane. */
+  const IN_WEZTERM: ProcessRow[] = [
+    { pid: 4242, ppid: 3800, tty: 'pts/1', executable: 'claude' }, { pid: 3800, ppid: 1, executable: 'wezterm-gui' },
+    { pid: 4243, ppid: 4001, tty: 'pts/6', executable: 'claude' }, { pid: 4001, ppid: 3900, tty: 'pts/6', executable: 'zsh' },
+    { pid: 3900, ppid: 1, executable: 'tmux' },
+    { pid: 4300, ppid: 4299, executable: 'tmux' }, { pid: 4299, ppid: 3800, executable: 'zsh' },
+  ]
+  /** The devices' runs, recorded: tmux's facts of panes %3 and %4 (their shells 4000 and 4001, in session `work`), their
+   *  session's one client (4300) on [clientTty], and its clients' listing as tmuxSays has it; WezTerm's clients as
+   *  recorded, focused on weztermSays.pane. */
+  const runOn = (clientTty: string) => async (file: string, args: string[], timeoutMs: number) => {
+    orcaRuns.push([file, args, timeoutMs])
+    if (file === 'tmux' && args[0] === 'display-message') return { code: 0, stdout: args.includes('%4') ? '4001|work|\n' : '4000|work|\n' }
+    if (file === 'tmux' && args[1] === '-t') return { code: 0, stdout: `1794700050|4300|${clientTty}\n` }
+    if (file === 'tmux' && args[0] === 'list-clients') {
+      if (!tmuxSays.held) return { code: tmuxSays.code, stdout: tmuxSays.clients }
+      await new Promise<void>((resolve) => { tmuxSays.land.push(resolve) })
+      return { code: null, stdout: '' }
+    }
+    if (!args.includes('list-clients')) return { code: 0, stdout: '' }
+    if (weztermSays.pane === undefined) return { code: listClients.noGui.exitCode, stdout: '', stderr: listClients.noGui.stderr }
+    const clients = (JSON.parse(listClients.gui.stdout) as object[]).map((client) => ({ ...client, focused_pane_id: weztermSays.pane }))
+    return { code: listClients.gui.exitCode, stdout: JSON.stringify(clients), stderr: '' }
+  }
+  /** Claude Code in session n, its caller 4241 + n, as its hook says with [hints]. */
+  const hook = (n: number, hints: Record<string, string>, over: Partial<ObservedHookEvent> = {}): ObservedHookEvent => ({
+    engine: 'claude', sessionId: `sess-${n}`, event: 'session-start', cwd: '/work/api', callerPid: 4241 + n,
+    transcriptPath: `/t/sess-${n}.jsonl`, hostHints: hints, ...over,
+  })
+  /** In the person's tmux, pane %(n + 2). */
+  const inTmux = (n: number, over: Partial<ObservedHookEvent> = {}) => hook(n, { TMUX_PANE: `%${n + 2}`, TERM_PROGRAM: 'tmux' }, over)
+  /** In WezTerm's pane n. */
+  const inWezterm = (n: number) => hook(n, { WEZTERM_PANE: String(n), TERM_PROGRAM: 'WezTerm' })
+  const agent = (n: number) => observedAgentId('claude', `sess-${n}`)
+  /** The poll's reads, WezTerm's and tmux's: not a tmux lookup's `list-clients -t`. */
+  const reads = () => orcaRuns.filter(([, args]) => args.includes('list-clients') && !args.includes('-t'))
+  const tmuxReads = () => reads().filter(([file]) => file === 'tmux')
+  const polls = () => logs.filter((line) => line.startsWith('[device] focus poll'))
+  const STARTED = '[device] focus poll · started'
+  const stopped = (reads: number, failed = 0) => `[device] focus poll · stopped · ${reads} reads, ${failed} failed`
+  let clock = 0
+  /** Lets what a landing sets off run. */
+  const settled = () => new Promise((resolve) => setImmediate(resolve))
+  /** The devices on macOS, or on Linux, the processes [rows] (IN_ITERM, or IN_WEZTERM), the agents of [hooks] (sess-1 and
+   *  sess-2 in tmux, or on Linux sess-1 in WezTerm and sess-2 in tmux) with each tmux agent's client lookup landed, no
+   *  window, a dial attached unless `attached` is false, no app settled in front, and the devices' monotonic clock at 0.
+   *  `settle` keeps an app in front for the settle; `next` lets FOCUS_POLL_MS pass, [times] over, each read landing. The
+   *  timers are held; `setImmediate` is left to let a landing run. */
+  const dialWith = async (over: { linux?: boolean; rows?: ProcessRow[]; hooks?: ObservedHookEvent[]; attached?: boolean; observed?: boolean } = {}) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    clock = 0
+    if (over.observed === false) {
+      const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
+      switched.HARNESS_DEVICE_OBSERVED = false
+      onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
+    }
+    readers.processes.mockResolvedValue(over.rows ?? (over.linux ? IN_WEZTERM : IN_ITERM))
+    readers.bundleId.mockImplementation(async (bundle) => (bundle === '/Applications/Orca.app' ? 'com.stablyai.orca' : undefined))
+    const listener = fakeListener()
+    const started = start({ faults: ['fleet'], listen: listener.listen, now: () => clock, tty: async () => undefined,
+      orca: { ...orca, platform: over.linux ? 'linux' : 'darwin', run: runOn(over.linux ? '/dev/pts/4' : '/dev/ttys002') } })
+    const hooks = over.hooks ?? (over.linux ? [inWezterm(1), inTmux(2)] : [inTmux(1), inTmux(2)])
+    for (const event of hooks) started.port.observed(event)
+    const lookups = over.observed === false ? 0 : hooks.filter(({ hostHints }) => hostHints?.TMUX_PANE).length
+    await vi.waitFor(() => expect(logs.filter((line) => line.startsWith('[device] tmux client ·'))).toHaveLength(lookups))
+    // The reads of their terminals' maker land.
+    await settled()
+    if (over.attached !== false) seen.host.watching!(true)
+    started.port.swarms(null)
+    const settle = async (app: string) => {
+      expect(listener.front(app)).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+      await settled()
+    }
+    const next = async (times = 1) => {
+      for (let i = 0; i < times; i++) {
+        await vi.advanceTimersByTimeAsync(FOCUS_POLL_MS)
+        await settled()
+      }
+    }
+    return { ...started, listener, settle, next }
+  }
+
+  describe('tmux: its life', () => {
+    it('iTerm2 settled with a dial attached and an agent in a tmux pane whose client iTerm2 holds starts one poll', async () => {
+      const { listener, next } = await dialWith()
+      // In front, not yet settled: nothing.
+      expect(listener.front('iterm')).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS - 1)
+      expect(reads()).toEqual([])
+      await vi.advanceTimersByTimeAsync(1)
+      await settled()
+      expect(reads()).toEqual([READ])
+      await next()
+      expect(reads()).toEqual([READ, READ])
+      expect(polls()).toEqual([STARTED])
+    })
+
+    it.each([
+      ['no dial attached', { attached: false }, 'iterm'],
+      ['another app settled', {}, 'ghostty'],
+      ['a pane whose client is in no listed app', { rows: IN_NO_APP }, 'iterm'],
+      // Its page is Orca's, whose own focus covers it (the spec's Out of scope).
+      ['an agent in tmux inside an Orca terminal with Orca settled', { rows: IN_ORCA }, 'orca'],
+      ['the observed agents off', { observed: false }, 'iterm'],
+    ])('nothing runs with %s', async (_, over, app) => {
+      const { settle, next } = await dialWith(over)
+      await settle(app)
+      await next(3)
+      expect(reads()).toEqual([])
+      expect(polls()).toEqual([])
+    })
+
+    it('another app settling, the last such agent ending, the last dial going and the devices stopping each stop it with its counts, and nothing runs after', async () => {
+      const { port, settle, next } = await dialWith({ hooks: [inTmux(1)] })
+      await settle('iterm')
+      await next()
+      // The third read lands before Ghostty settles.
+      await settle('ghostty')
+      expect(polls()).toEqual([STARTED, stopped(3)])
+      const ran = reads().length
+      await next(4)
+      expect(reads()).toHaveLength(ran)
+      await settle('iterm')
+      seen.host.watching!(false)
+      expect(polls()).toEqual([STARTED, stopped(3), STARTED, stopped(1)])
+      seen.host.watching!(true)
+      await settled()
+      port.observed(inTmux(1, { event: 'session-end' }))
+      expect(polls()).toEqual([STARTED, stopped(3), STARTED, stopped(1), STARTED, stopped(1)])
+      // Another agent in tmux, its client in iTerm2: its lookup lands.
+      port.observed(inTmux(2))
+      await settled()
+      expect(polls()).toEqual([STARTED, stopped(3), STARTED, stopped(1), STARTED, stopped(1), STARTED])
+      await port.stop()
+      expect(polls()).toEqual([STARTED, stopped(3), STARTED, stopped(1), STARTED, stopped(1), STARTED, stopped(1)])
+      const all = reads().length
+      await next(4)
+      expect(reads()).toHaveLength(all)
+    })
+
+    it('a dial attaching, and such an agent starting, with iTerm2 settled each start it', async () => {
+      const { port, settle } = await dialWith({ hooks: [], attached: false })
+      await settle('iterm')
+      seen.host.watching!(true)
+      await settled()
+      expect(polls()).toEqual([])
+      port.observed(inTmux(1))
+      await settled()
+      expect(polls()).toEqual([STARTED])
+      expect(reads()).toEqual([READ])
+      seen.host.watching!(false)
+      seen.host.watching!(true)
+      await settled()
+      expect(polls()).toEqual([STARTED, stopped(1), STARTED])
+      expect(reads()).toEqual([READ, READ])
+    })
+
+    it('WezTerm settled with an agent of its own, then an agent in tmux inside a WezTerm pane starts: the poll stops and starts with both places, and each read asks both', async () => {
+      const { port, settle, next } = await dialWith({ linux: true, hooks: [inWezterm(1)] })
+      await settle('wezterm')
+      expect(reads()).toEqual([LIST_CLIENTS])
+      port.observed(inTmux(2))
+      await settled()
+      expect(polls()).toEqual([STARTED, stopped(1), STARTED])
+      await next()
+      expect(reads().filter(([file]) => file !== 'tmux')).toEqual(Array(3).fill(LIST_CLIENTS))
+      expect(tmuxReads()).toEqual([READ, READ])
+    })
+
+    it('a tmux read that fails beside WezTerm\'s good one is no failed read', async () => {
+      const { settle, next } = await dialWith({ linux: true })
+      tmuxSays.code = 1
+      await settle('wezterm')
+      await next(4)
+      expect(tmuxReads()).toHaveLength(5)
+      expect(polls()).toEqual([STARTED])
+      // The person focuses the agent's WezTerm pane.
+      weztermSays.pane = 1
+      await next()
+      expect(calls('followLocal')).toEqual([[agent(1), 'pane']])
+      expect(logs).not.toContain('[device] app filter: switched · follow')
+      seen.host.watching!(false)
+      expect(polls()).toEqual([STARTED, stopped(6)])
+    })
+
+    it('tmux held to the end of its read while WezTerm answers: WezTerm\'s focus change turns the dial when the read ends, and no failure is counted', async () => {
+      const { settle, next } = await dialWith({ linux: true })
+      await settle('wezterm')
+      tmuxSays.held = true
+      weztermSays.pane = 1
+      await next()
+      // WezTerm answered; tmux's listing runs until its timeout.
+      expect(reads().filter(([file]) => file !== 'tmux')).toHaveLength(2)
+      expect(tmuxSays.land).toHaveLength(1)
+      expect(calls('followLocal')).toEqual([])
+      for (const land of tmuxSays.land.splice(0)) land()
+      await settled()
+      expect(calls('followLocal')).toEqual([[agent(1), 'pane']])
+      seen.host.watching!(false)
+      expect(polls()).toEqual([STARTED, stopped(2)])
+    })
+
+    it('WezTerm\'s read failing while tmux\'s lands is no failed read either', async () => {
+      const { settle, next } = await dialWith({ linux: true })
+      weztermSays.pane = 1
+      await settle('wezterm')
+      expect(calls('followLocal')).toEqual([[agent(1), 'pane']])
+      // No GUI for four reads, then the same pane: WezTerm's place kept its last answer, so nothing changed.
+      weztermSays.pane = undefined
+      await next(4)
+      weztermSays.pane = 1
+      await next()
+      expect(calls('followLocal')).toHaveLength(1)
+      seen.host.watching!(false)
+      expect(polls()).toEqual([STARTED, stopped(6)])
+    })
+
+    it('tmux the only place: three failed reads stop it as failing, an agents\' change does not start it again, the next settle does', async () => {
+      const { port, settle, next } = await dialWith()
+      tmuxSays.code = 1
+      await settle('iterm')
+      await next(2)
+      const FAILING = `${stopped(3, 3)} · failing`
+      expect(polls()).toEqual([STARTED, FAILING])
+      tmuxSays.code = 0
+      port.observed(inTmux(2, { event: 'session-end' }))
+      await settled()
+      await next(4)
+      expect(reads()).toHaveLength(3)
+      await settle('ghostty')
+      expect(reads()).toHaveLength(3)
+      await settle('iterm')
+      expect(reads()).toHaveLength(4)
+      expect(polls()).toEqual([STARTED, FAILING, STARTED])
+    })
+
+    it('its lines name no pane, tty or agent', async () => {
+      const { settle, next } = await dialWith()
+      await settle('iterm')
+      await next()
+      await settle('ghostty')
+      tmuxSays.code = 1
+      await settle('iterm')
+      await next(2)
+      const lines = polls()
+      expect(lines).toHaveLength(4)
+      for (const line of lines) expect(line).toMatch(/^\[device\] focus poll · (started|stopped · \d+ reads, \d+ failed( · failing)?)$/)
+    })
+  })
+})
