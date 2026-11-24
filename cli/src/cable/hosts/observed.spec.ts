@@ -5500,12 +5500,13 @@ describe('ObservedSource outer place', () => {
   })
 
   it('it drops at once for hints with no variable of its multiplexer, or with no lookup asked', async () => {
-    // Resumed in a plain iTerm2 tab, with a lookup asked all the same.
+    // Resumed in a Zellij pane in iTerm2: Zellij's lookup is asked, and no tmux variable is there.
     const plain = nested()
     plain.src.ingest(plain.ev('session-start', TMUX_HINTS()))
     await plain.asks[0].answer({ ...CLIENT, nest: 'tmux' })
     plain.outer.mockImplementationOnce(() => new Promise<OuterAnswer>(() => {}))
-    plain.src.ingest(plain.ev('needs-input', { hostHints: { TERM_PROGRAM: 'iTerm.app' }, callerPid: 101 }))
+    const inZellij = { ZELLIJ: '0', ZELLIJ_SESSION_NAME: 'main', ZELLIJ_PANE_ID: '1', TERM_PROGRAM: 'iTerm.app' }
+    plain.src.ingest(plain.ev('needs-input', { hostHints: inZellij, callerPid: 101 }))
     expect(plain.outer).toHaveBeenCalledTimes(2)
     expect(plain.agent()).not.toHaveProperty('nest')
     expect(pageOf(plain.agent())).toBe('iterm')
