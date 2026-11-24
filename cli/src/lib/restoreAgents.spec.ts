@@ -1362,6 +1362,21 @@ describe('restoreAgents — waiting for the engine', () => {
     expect(lines.some(line => line.includes('watch failed'))).toBe(true)
     expect(lines.some(line => line.includes('engine renamed'))).toBe(false)
   })
+
+  // Restore's deadline is what is left of its watch, not `publishEngine`'s default 5 s: a publication, and its
+  // re-write, never outlive the watch that made them.
+  it('publishes an engine that named itself within what is left of the watch\'s budget, the re-write too', async () => {
+    const h = harness([row()], { budgetMs: 1_000 })
+    h.probes.set('%0', [started, identity(7), identity(7)])
+    const writes = refreshing(h)
+    const before = performance.now()
+    await restoreAgents(h.deps)
+    await settled(h, 1, 1)
+    expect(writes.map(([executable]) => executable)).toEqual(['node', 'claude'])
+    expect(writes[1]![1]).toBe(writes[0]![1])
+    expect(writes[0]![1]).toBeGreaterThanOrEqual(before)
+    expect(writes[0]![1]).toBeLessThanOrEqual(performance.now() + 1_000)
+  })
 })
 
 describe('restoreAgents — terminals', () => {
