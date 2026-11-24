@@ -157,7 +157,9 @@ export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedCon
             await new Promise((resolve) => setTimeout(resolve, ENGINE_SETTLE_MS))
             waited += ENGINE_SETTLE_MS
             const still = await resolvePaneEngineProcess(backend, runtime, session.engine)
-            if (sameProcessIdentity(still, found)) return found
+            // The later look: on Linux a Node engine renames itself (process.title) while settling, and a
+            // restart that carried the first look's executable failed at publication (nightly run 45237523183).
+            if (sameProcessIdentity(still, found)) return still
           }
           delayMs = Math.min(delayMs * 2, 750)
         }
