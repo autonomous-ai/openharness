@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { HELD_OUT, MAIN } from './catalog.js'
 import { evaluate } from './checks.js'
 import { tabLabel } from './itermRecords.js'
-import { agentIdOf, itermPlaceOf, type Dimension, type Scenario, type Seen, type SessionDef } from './types.js'
+import { agentIdOf, itermPlaceOf, sessionPage, type Dimension, type Scenario, type Seen, type SessionDef } from './types.js'
 
 const ITERM = MAIN.filter((s) => s.app === 'iterm')
 const byId = (id: string): Scenario => ITERM.find((s) => s.id === id)!
@@ -107,6 +107,21 @@ describe("iTerm2's scenarios", () => {
     const select = steps.findIndex((step) => step.label === 'select')
     expect(steps.flatMap((step, i) => (step.kind === 'tmux.selectPane' ? [[step.session, i < select ? 'before select' : step.label]] : [])))
       .toEqual([['a', 'before select'], ['b', 'pane']])
+  })
+
+  it("I6 and I21 start d before b in b's tmux, so the pick lands on d and the swipe must move the dial to b", () => {
+    for (const s of [byId('I6'), byId('I21')]) {
+      const tmux = agents(s).filter((d) => sessionPage(d) === 'tmux')
+      // One tmux, whose client runs in b's tab.
+      expect(new Set(tmux.map((d) => d.tab)).size, s.id).toBe(1)
+      const starts = s.steps.flatMap((step) => (step.kind === 'hook' && step.event === 'start' ? [step.session] : []))
+      expect(starts.filter((key) => tmux.some((d) => d.key === key)), s.id).toEqual(['d', 'b'])
+      // Nothing between the pick and the swipe moves the face off d.
+      const pick = s.steps.findIndex((step) => step.kind === 'pick' && step.page === 'tmux')
+      const swipe = s.steps.findIndex((step) => step.kind === 'swipe')
+      expect([pick >= 0, s.steps[swipe]], s.id).toMatchObject([true, { kind: 'swipe', session: 'b' }])
+      expect(s.steps.slice(pick + 1, swipe).every((step) => step.kind === 'wait'), s.id).toBe(true)
+    }
   })
 
   it("I9's echo can fail: the dial left on a after the rest passes, iTerm2's report of b's tab pulling it back fails", () => {

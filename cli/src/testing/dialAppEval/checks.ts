@@ -10,9 +10,9 @@ import { CAROUSEL_TILES } from '../dialCarousel.js'
 import { flagOf, ORCA_PROGRAMS, programOf } from './argv.js'
 import { isTabLabel, sessionTab, TABS_STREAM } from './itermRecords.js'
 import { tabTitle } from './orcaListing.js'
-import { agentIdOf, EDITORS, engineOf, itermPlaceOf, orcaPaneHandle, orcaWorktreeId, PAGE, placeOf, SKIPPED_SCROLL, THRESHOLDS, type App, type Check,
-  type CheckResult, type LinkedApp, type Platform, type Scenario, type Seen, type SessionDef, type SessionKey, type StepOf, type Tier,
-  type Until, type WrongSend } from './types.js'
+import { agentIdOf, EDITORS, engineOf, itermPlaceOf, orcaPaneHandle, orcaWorktreeId, PAGE, pageId, placeOf, sessionPage, SKIPPED_SCROLL,
+  THRESHOLDS, type App, type Check, type CheckResult, type LinkedApp, type Page, type Platform, type Scenario, type Seen, type SessionDef,
+  type SessionKey, type StepOf, type Tier, type Until, type WrongSend } from './types.js'
 
 /** A failing check's evidence stays readable in the report, however long the scenario ran. */
 const MAX_EVIDENCE = 20
@@ -117,7 +117,7 @@ export function rings(seen: Pick<Seen, 'frames'>): Ring[] {
  */
 function ringParts(check: CheckOf<'ring'>, world: World, w: Window | undefined): Part[] {
   const expected = check.expect.map((key) => agentIdOf(world.session(key)))
-  const page = PAGE[check.page]
+  const page = pageId(check.page)
   const all = rings(world.seen)
   const held = w ? all.filter((r) => world.held(r.at, w.to)).at(-1) : undefined
   const last = held?.page === page ? held : undefined
@@ -703,7 +703,7 @@ const STATE_MARKS = { working: THRESHOLDS.working, 'needs-you': THRESHOLDS.needs
 function stateParts(check: CheckOf<'state'>, world: World, w: Window | undefined): Part[] {
   const session = world.session(check.session)
   const id = agentIdOf(session)
-  const page = PAGE[session.app]
+  const page = sessionPage(session)
   const lists = rings(world.seen)
   // Every session's changes, not only this one's: the evidence lists those in the window, so a probe on a session that
   // never changes still says what the driver saw.
@@ -814,14 +814,30 @@ export function evaluate(check: Check, scenario: Scenario, seen: Seen, tier: Tie
 }
 
 /**
- * A wait's condition holds once every untimed part of the same check, from the scenario's start, is right; the
- * evidence is what the dial had, for a wait that reaches its limit.
+ * A wait's condition holds once every untimed part of the same check, from the scenario's start, is right, or for the
+ * Apps screen once its counts are; the evidence is what the dial had, for a wait that reaches its limit.
  */
 export function condition(until: Until, scenario: Scenario, seen: Seen): { holds: boolean; evidence: string[] } {
+  if (until.kind === 'apps') return countsHeld(until, seen)
   // The id and dim name no result: only the parts are read, from the start.
   const world = new World(scenario, seen)
   const untimed = ringParts({ id: 'until', dim: scenario.dims[0]!, ...until }, world, { from: 0, to: Infinity }).filter((p) => !p.timed)
   return { holds: untimed.length > 0 && untimed.every((p) => p.score === 1), evidence: [...new Set(untimed.flatMap((p) => p.evidence))] }
+}
+
+/** The last apps frame since the last step shows the page and counts exactly these pages, these many each: no page
+ *  left out or extra. */
+function countsHeld({ shown, counts }: Extract<Until, { kind: 'apps' }>, seen: Seen): { holds: boolean; evidence: string[] } {
+  const since = seen.steps.at(-1)?.at ?? 0
+  const frame = seen.frames.filter((f) => f.message.t === 'apps' && f.at >= since).at(-1)
+  if (!frame) return { holds: false, evidence: [`no apps frame since the step at ${since}`] }
+  const apps = Array.isArray(frame.message.apps) ? frame.message.apps as Array<{ id?: unknown; count?: unknown }> : []
+  const pages = apps.map((a) => ({ id: String(a.id), count: typeof a.count === 'number' ? a.count : 0 })).filter((a) => a.count > 0)
+  const want = Object.entries(counts).filter(([, n]) => n! > 0).map(([page, n]) => ({ id: pageId(page as Page), count: n! }))
+  const on = typeof frame.message.shown === 'string' ? frame.message.shown : ''
+  const holds = on === pageId(shown) && pages.length === want.length
+    && want.every((w) => pages.some((a) => a.id === w.id && a.count === w.count))
+  return { holds, evidence: [`apps at ${frame.at} on ${on || 'none'}: ${pages.map((a) => `${a.id} ${a.count}`).join(', ')}`.trimEnd()] }
 }
 
 /**

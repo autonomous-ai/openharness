@@ -90,8 +90,16 @@ interface AppRing {
   working: number
 }
 
-/** The app whose page an agent is on: an app outside the set is the unknown one, so there are never more than APP_IDS. */
-export const pageOf = (a: HostAgent): string => (APP_IDS.includes(a.app) ? a.app : UNKNOWN_APP)
+/**
+ * The page an agent is on, the one rule every reader of the page goes through. An agent in tmux or herdr is on that
+ * multiplexer's page, whatever terminal holds its client (Diego, 2026-11-23), except in Orca: Orca's ring is its own tab
+ * order and `devices.ts orcaAgents` takes `app === 'orca'`, so Orca's page stays its app's. Otherwise the app's page; an
+ * app outside the set is the unknown one, so there are never more than APP_IDS.
+ */
+export const pageOf = (a: HostAgent): string => {
+  if (a.nest && a.app !== 'orca') return a.nest
+  return APP_IDS.includes(a.app) ? a.app : UNKNOWN_APP
+}
 
 /**
  * One `DialRing` per app, for the dial that shows one app at a time. The apps keep the order they appeared in, so the

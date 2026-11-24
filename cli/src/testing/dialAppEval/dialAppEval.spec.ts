@@ -34,6 +34,10 @@ vi.mock('child_process', refused)
 const counted = vi.hoisted(() => async (real: () => Promise<object>) => (await import('./tierA/clock.js')).countFsCalls(await real()))
 vi.mock('node:fs/promises', counted)
 vi.mock('fs/promises', counted)
+// Every random UUID from the machine's count, as every time is virtual: a scenario run twice makes the same frames.
+const counting = vi.hoisted(() => async (real: () => Promise<object>) => ({ ...await real(), randomUUID: () => machine.uuid() }))
+vi.mock('node:crypto', counting)
+vi.mock('crypto', counting)
 // The machine's processes, and whether one still runs, from the model. A session's transcript has no stamp there: one
 // waiting on the person stays so until its next hook.
 vi.mock('../../lib/sessionSearch/externals/support.js', async (real) => ({
@@ -42,14 +46,15 @@ vi.mock('../../lib/sessionSearch/externals/support.js', async (real) => ({
   processAlive: (pid: number) => machine.processes.has(pid),
   fileStamp: async () => null,
 }))
-// The sessions the machine's processes have open, and their folders and transcripts. Their record is not modelled, and
-// a session whose record cannot be read counts as busy, as OpenSessions.busy answers: a turn ends by its own Stop hook.
+// The sessions the machine's processes have open, their folders, transcripts and records (a Claude Code's names it, as
+// the scan reads it: steps/sessions.ts). Every session counts as busy, as OpenSessions.busy answers for a record it
+// cannot read: a turn ends by its own Stop hook.
 vi.mock('../../lib/sessionSearch/external.js', async (real) => ({
   ...await real<typeof import('../../lib/sessionSearch/external.js')>(),
   OpenSessions: class {
     async owners() {
       return new Map([...machine.owners].filter(([, owner]) => machine.processes.has(owner.pid))
-        .map(([sessionId, { engine, pid }]) => [sessionId, { pid, engine, tty: machine.processes.get(pid)?.tty ?? null, record: sessionId }]))
+        .map(([sessionId, { engine, pid, record }]) => [sessionId, { pid, engine, tty: machine.processes.get(pid)?.tty ?? null, record }]))
     }
     async busy() { return true }
   },
@@ -602,13 +607,13 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
   })
 
   /** The #4544 case (the spec's I2): a plain tab a in w1's tab 0, Claude Code in tmux t, whose client runs in tab 1, and
-   *  Claude Code in herdr h and g, whose client runs in tab 2, started a, t, h, then g, and listed in their tabs' order,
-   *  then `more`. */
+   *  Claude Code in herdr h and g, whose client runs in tab 2, started a, t, h, then g, and listed on iTerm2's page, a
+   *  alone with the other three counted on tmux's and herdr's, then `more`. */
   const case4544 = (id: string, title: string, more: Step[]): Scenario => scenario({
     id, app: 'iterm', title, dims: ['D1'], platforms: ['darwin'], tiers: ['a'],
     sessions: [itermSession('a', { tab: 0 }), itermSession('t', { place: 'tmux', tab: 1 }), itermSession('h', { place: 'herdr', tab: 2 }),
       itermSession('g', { place: 'herdr', tab: 2, split: 1 }), itermGhost],
-    steps: [...started(['a', 't', 'h', 'g']), ...listed('iterm', ['a', 't', 'h', 'g']), ...more],
+    steps: [...started(['a', 't', 'h', 'g']), ...listed('iterm', ['a'], ['t', 'h', 'g']), ...more],
     checks: [], probes: [],
   })
   const i2 = case4544('I2', 'Eval the #4544 case, hooked', [])
@@ -616,8 +621,8 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
   const i3 = case4544('I3', 'Eval the #4544 case, found by the scan after the devices start again',
     [...turned(['a', 't', 'h', 'g']), { label: 'restart', kind: 'devices.restart' }, { kind: 'wait', ms: 10_000 }])
 
-  it("I3: the four of I2, each with a turn behind it, are on iTerm2's page after the devices start again, before any hook, "
-    + 'and on no tmux, herdr or Other page', async () => {
+  it("I3: after the devices start again, before any hook, a is on iTerm2's page and t, h and g on tmux's and herdr's: the "
+    + 'apps frame counts iTerm2 1, tmux 1, herdr 2, and no Other page', async () => {
     const driver = new TierADriver({ startDevices })
     const run = await runScenario(driver, i3, 'darwin')
     expect(run.error).toBeUndefined()
@@ -628,11 +633,15 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
     // What the new devices sent the dial, from their welcome on: the last hook came at the restart's own moment.
     const welcome = seen.frames.findIndex((f) => f.at >= restart.at && f.message.t === 'welcome')
     expect(welcome).toBeGreaterThanOrEqual(0)
-    const four = i3.sessions.slice(0, 4).map(agentIdOf)
-    const after = rings({ frames: seen.frames.slice(welcome) })
+    const [a, ...nested] = i3.sessions.slice(0, 4).map(agentIdOf)
+    const frames = seen.frames.slice(welcome)
+    const after = rings({ frames })
     expect(after.at(-1)?.page).toBe('iterm')
-    expect(after.at(-1)!.rows.map((r) => r.id).sort()).toEqual([...four].sort())
-    expect(after.filter((r) => r.page !== 'iterm' && r.rows.some((row) => four.includes(row.id)))).toEqual([])
+    expect(after.at(-1)!.rows.map((r) => r.id)).toEqual([a])
+    // One tmux page and one herdr page count their agents across every terminal app (the spec's decision 1).
+    const apps = frames.filter((f) => f.message.t === 'apps').at(-1)?.message.apps as Array<{ id: string; count: number }> | undefined
+    expect((apps ?? []).filter((p) => p.count > 0).map((p) => `${p.id} ${p.count}`).sort()).toEqual(['herdr 2', 'iterm 1', 'tmux 1'])
+    expect(after.filter((r) => r.rows.some((row) => (r.page === 'iterm' ? nested.includes(row.id) : row.id === a)))).toEqual([])
   })
 
   it('after the devices start again the mod polls the new devices: a voice reaches its session', async () => {

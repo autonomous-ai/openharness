@@ -1269,6 +1269,55 @@ describe('iTerm2', () => {
     expect(condition(until, s, seen(s, [], { frames: list(200, 'iterm', [IA, [id(IX), 'eval-ix']]) })).holds).toBe(true)
   })
 
+  it("a ring on tmux's page reads the list the dial holds on tmux's page; the same list fails a ring on iTerm2's", () => {
+    const s = scenario([{ kind: 'hook', session: 'im', event: 'start', label: 'w' }], sessions)
+    const frames = list(200, 'tmux', [IM])
+    const onTmux: Check = { id: 'r', kind: 'ring', dim: 'D1', page: 'tmux', expect: ['im'], after: 'w' }
+    expect(scores(run(onTmux, s, seen(s, [100], { frames }))).recall).toBe(1)
+    const onIterm = run({ id: 'r', kind: 'ring', dim: 'D1', page: 'iterm', expect: ['im'], after: 'w' }, s, seen(s, [100], { frames }))
+    expect(scores(onIterm).recall).toBe(0)
+    expect(onIterm[0]!.evidence).toEqual(['list at 200 on tmux, not iterm: 1 rows im'])
+  })
+
+  it('a wait with apart holds once the other pages count them: iterm 1, tmux 1, herdr 1 does not hold for apart im, ih, ik; iterm 1, tmux 1, herdr 2 does', () => {
+    const s = scenario([{ kind: 'hook', session: 'ia', event: 'start', label: 'w' }], sessions)
+    const until: Until = { kind: 'ring', page: 'iterm', expect: ['ia'], apart: ['im', 'ih', 'ik'] }
+    const counted = (herdr: number): Seen['frames'] => [frame(200, { t: 'apps', shown: 'iterm', apps: [
+      { id: 'iterm', name: 'iTerm2', count: 1, waiting: 0 }, { id: 'tmux', name: 'tmux', count: 1, waiting: 0 },
+      { id: 'herdr', name: 'herdr', count: herdr, waiting: 0 }] }), ...list(200, 'iterm', [IA]).slice(1)]
+    expect(condition(until, s, seen(s, [], { frames: counted(1) })).holds).toBe(false)
+    expect(condition(until, s, seen(s, [], { frames: counted(2) })).holds).toBe(true)
+  })
+
+  it("a wait on the Apps screen holds once an apps frame since the last step shows that page and counts exactly those pages, what a person reads before a pick", () => {
+    const s = scenario([{ kind: 'devices.restart', label: 'restart' }], sessions)
+    const until: Until = { kind: 'apps', shown: 'iterm', counts: { iterm: 1, tmux: 1, herdr: 2 } }
+    const apps = (at: number, counts: Record<string, number>, shown = 'iterm'): Seen['frames'][number] => frame(at, { t: 'apps', shown,
+      apps: Object.entries(counts).map(([id, count]) => ({ id, name: id, count, waiting: 0 })) })
+    const right = { iterm: 1, tmux: 1, herdr: 2 }
+    expect(condition(until, s, seen(s, [1000], { frames: [apps(1500, right)] })))
+      .toEqual({ holds: true, evidence: ['apps at 1500 on iterm: iterm 1, tmux 1, herdr 2'] })
+    // The devices start again on the page the dial last showed, before they turn to the app in front.
+    expect(condition(until, s, seen(s, [1000], { frames: [apps(1000, right, 'herdr')] })))
+      .toEqual({ holds: false, evidence: ['apps at 1000 on herdr: iterm 1, tmux 1, herdr 2'] })
+    // The screen left from before the restart is not what the devices count now.
+    expect(condition(until, s, seen(s, [1000], { frames: [apps(500, right)] })))
+      .toEqual({ holds: false, evidence: ['no apps frame since the step at 1000'] })
+    // The scan has not found every agent yet, and a page that is not expected counts some.
+    expect(condition(until, s, seen(s, [1000], { frames: [apps(500, right), apps(1500, { iterm: 1, herdr: 2 })] })).holds).toBe(false)
+    expect(condition(until, s, seen(s, [1000], { frames: [apps(1500, { ...right, claude: 1 })] })).holds).toBe(false)
+    expect(condition(until, s, seen(s, [1000], { frames: [apps(1500, right), apps(1600, { iterm: 1, tmux: 1, herdr: 1 })] })))
+      .toEqual({ holds: false, evidence: ['apps at 1600 on iterm: iterm 1, tmux 1, herdr 1'] })
+  })
+
+  it("an iTerm2 session in tmux is shown in its state on tmux's page; the same frames with the list on iTerm2's page fail it", () => {
+    const s = scenario([{ kind: 'hook', session: 'im', event: 'turn-start', label: 'go' }], sessions)
+    const state: Check = { id: 'st', kind: 'state', dim: 'D4', session: 'im', state: 'working', after: 'go' }
+    const turn = frame(800, { t: 'turn.started', agentId: id(IM), text: '' })
+    expect(scores(run(state, s, seen(s, [500], { frames: [...list(100, 'tmux', [IM, IN]), turn] })))).toEqual({ shown: 1, latency: 1 })
+    expect(scores(run(state, s, seen(s, [500], { frames: [...list(100, 'iterm', [IM, IN]), turn] }))).shown).toBe(0)
+  })
+
   it("a tap on a tab row passes on iTerm2 brought forward and its tab's select with raise", () => {
     const results = tapped('ia', { commands: [front(600)], streams: [select(700, 'w1.0.0')] })
     expect(scores(results)).toEqual({ tab: 1, front: 1, latency: 1 })

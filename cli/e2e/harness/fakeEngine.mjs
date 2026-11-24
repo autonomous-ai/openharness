@@ -645,7 +645,11 @@ export async function run(engine, config = {}, { native = false } = {}) {
       if (held !== null) closeSync(held)
       held = openSync(transcript, 'r')
     } else if (procStart) {
-      writeProcessRecord({ pid: process.pid, sessionId, cwd: process.cwd(), procStart, status: 'idle' })
+      // The title a test gives the session is the person's name for it, which Claude Code keeps in its record: the
+      // devices name a session the scan found from there (cable/hosts/record.ts).
+      const title = process.env.FAKE_CLAUDE_SESSION_TITLE
+      writeProcessRecord({ pid: process.pid, sessionId, cwd: process.cwd(), procStart, status: 'idle',
+        ...(title ? { name: title, nameSource: 'user' } : {}) })
     }
   }
   // Claude Code's record says `busy` while a turn runs and `idle` between turns, and the devices' scan reads a
