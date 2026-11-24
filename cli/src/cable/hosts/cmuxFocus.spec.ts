@@ -398,6 +398,24 @@ describe('cmux\'s front from its event log (docs/plans/2026-11-25-dial-cmux-focu
       expect(log.positions).toEqual([0, 0, 0])
       expect(gaps()).toBe(0)
     })
+
+    // The dial back while the dropped read still waits: its settle's read is not handed the dropped one's nothing.
+    it('a read asked after a reset, while the one asked before it still waits, is a first read of its own', async () => {
+      const { log, focus } = setup()
+      log.append(focused(W1, S1) + keyed(WIN1, W1))
+      const release = log.hold()
+      const during = focus.read()
+      await vi.waitFor(() => expect(log.positions).toHaveLength(1))
+      const asked = focus.read()
+      focus.reset()
+      const after = focus.read()
+      release()
+      expect(await during).toEqual({})
+      expect(await asked).toEqual({})
+      expect(await after).toEqual({ workspace: low(W1), surface: low(S1) })
+      expect(log.positions).toEqual([0, 0])
+      expect(gaps()).toBe(0)
+    })
   })
 
   it('says the first read\'s time after a reset, then only a read slower than every one said', async () => {
