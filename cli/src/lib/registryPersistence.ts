@@ -348,8 +348,8 @@ export async function registryFileLock<T>(directory: string, deadline: RegistryW
   const started = performance.now()
   // Busy is 2 s of busy turns, counted from the first; building this writer's own owner is bounded by its deadline
   // alone. Counted from the call, a loaded Linux runner's owner fsync spent the 2 s and a lock nobody held was reported
-  // busy with 3 s of the deadline left (run 45396848621). The 2 s once kept Atomics.wait from holding the core's loop;
-  // that wait is a timer since #4356.
+  // busy with 2 to 3 s of the deadline left (run 45396848621, its test failed 2,994 ms in). The 2 s once kept
+  // Atomics.wait from holding the core's loop; that wait is a timer since #4356.
   let expires = deadline.expires, busy = false
   const check = () => {
     deadline.check()
