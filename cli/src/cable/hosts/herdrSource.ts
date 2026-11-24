@@ -14,8 +14,8 @@
  * The pane that takes herdr's focus is told as it comes, for the devices to follow
  * (docs/plans/2026-11-24-dial-tmux-pane-focus-follow-design.md), on a subscription of its own: herdr refuses a whole
  * subscription naming a kind it does not know, so a herdr with no `pane.focused` would lose the agents' rows too. It
- * opens once an attempt's agents are listed and ends with that attempt; refused or ended, it is not asked for again until
- * the next attempt, and the agents' rows are left as they are.
+ * opens once an attempt's agents are listed and ends with that attempt. Refused, it is not asked for again until the next
+ * attempt, and the agents' rows are left as they are; ended any other way, the next agents' list opens it again.
  *
  * The wait on herdr's socket, its retries and its stale rule are socketAttempts.ts's.
  *
@@ -120,7 +120,7 @@ export class HerdrSource implements HostSource {
   private timer: (() => void) | undefined
   /** The focus subscription, while one is open. */
   private focusing: { close(): void } | undefined
-  /** Whether this attempt's focus subscription was refused or ended. */
+  /** Whether herdr refused this attempt's focus subscription. */
   private focusEnded = false
   private openedAt: number | undefined
   private said: number | undefined
@@ -295,11 +295,12 @@ export class HerdrSource implements HostSource {
         const pane = data.pane_id
         if (name === FOCUSED && typeof pane === 'string' && HERDR_PANE.test(pane)) this.deps.onFocus(pane)
       },
-      // Refused (a herdr that does not know the kind: the plan's probe, row 10) or ended: one line, and not asked for again
-      // in this attempt, where that herdr would refuse it again.
+      // Refused (a herdr that does not know the kind: the plan's probe, row 10): not asked for again in this attempt,
+      // where that herdr would refuse it again. Any other end opens it again with the next agents' list, which comes only
+      // as the agents change, at most one a second.
       closed: (reason) => {
         this.focusing = undefined
-        this.focusEnded = true
+        this.focusEnded = reason === 'rejected' || reason === 'bad_answer'
         this.deps.log(`[herdr] focus · ${reason}`)
       },
     })
