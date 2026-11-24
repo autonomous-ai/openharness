@@ -3,13 +3,14 @@
  * session's poll on the daemon's `/api/hook/inbox` over the daemon's pipe and prints one JSON line for each answer. The
  * pipe is stood in by a Unix socket named harness-<32 hex> (as pipeAuth.spec.ts does), served with the daemon's token
  * as the daemon serves it (lib/localSocket.ts), so a request reaches the handler only with a valid auth. The follower's
- * waits and writes are recorded, never slept or printed.
+ * waits and writes are recorded, never slept or printed. Its caller is watched through a process table and pids that
+ * stand in for Claude Code's (`claude.exe` → `harness.exe` → this `node.exe`).
  */
 import { randomBytes } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { daemonRecordPath, writeDaemonRecord } from '../lib/daemonRecord.js'
 import { listenLocalSocket, unixSocketPath } from '../lib/localSocket.js'
 import { ensureDaemonToken } from '../lib/windows/pipeAuth.js'
@@ -36,15 +37,28 @@ const filetime = (ms: number) => `w:${(BigInt(Math.floor(ms)) + 11_644_473_600_0
 type Answer = { status: number; body: unknown }
 type Seen = { method: string; url: string; body: string }
 
-/** The daemon's handler: each poll gets the next of [answers], then 404, as a daemon older than the inbox answers. */
-function inboxHandler(answers: Answer[], seen: Seen[]) {
+/** A poll the daemon holds and never answers, as one with a dial holds it until the person speaks. */
+const held = (): Promise<Answer> => new Promise(() => {})
+
+/** A poll the daemon holds until [answer] is called. */
+function holding(): { poll: Promise<Answer>; answer(answer: Answer): void } {
+  let answer!: (answer: Answer) => void
+  const poll = new Promise<Answer>((resolve) => { answer = resolve })
+  return { poll, answer }
+}
+
+/**
+ * The daemon's handler: each poll gets the next of [answers], once it settles, then 404, as a daemon older than the
+ * inbox answers.
+ */
+function inboxHandler(answers: Array<Answer | Promise<Answer>>, seen: Seen[]) {
   return (req: IncomingMessage, res: ServerResponse): void => {
     let body = ''
     req.setEncoding('utf8')
     req.on('data', (chunk: string) => { body += chunk })
-    req.on('end', () => {
+    req.on('end', async () => {
       seen.push({ method: req.method ?? '', url: req.url ?? '', body })
-      const answer = answers.shift() ?? { status: 404, body: { error: 'NOT_FOUND' } }
+      const answer = await (answers.shift() ?? { status: 404, body: { error: 'NOT_FOUND' } })
       res.writeHead(answer.status, { 'content-type': 'application/json' })
       res.end(JSON.stringify(answer.body))
     })
@@ -65,7 +79,7 @@ function counted(server: Server): { connections: number } {
  * The daemon's pipe recorded in a data folder with its token, served by [serve]: the daemon, with this token; a server
  * that answers 200 `{"text":"x"}` with no proof; or the daemon's server with another token.
  */
-async function windowsDaemon(answers: Answer[], serve: 'daemon' | 'no proof' | 'another token' = 'daemon') {
+async function windowsDaemon(answers: Array<Answer | Promise<Answer>>, serve: 'daemon' | 'no proof' | 'another token' = 'daemon') {
   const dir = dataDir()
   const pipe = join(dir, `harness-${randomBytes(16).toString('hex')}`)
   const token = ensureDaemonToken(dir)
@@ -108,15 +122,41 @@ function stepping(stepMs: number): () => number {
   return () => (at += stepMs)
 }
 
+/** This follower's pid, its parent's (`harness.exe`) and Claude Code's, which started `harness.exe`. */
+const NODE = 100
+const HARNESS = 200
+const CLAUDE = 300
+type Row = { pid: number; parentPid: number; executable: string; startMarker: string }
+/** The process table as `harness-pty ps --json` reads it on Windows, with Claude Code's start marker [claude]. */
+const table = (claude = 'w:3'): Row[] => [
+  { pid: 1, parentPid: 0, executable: 'explorer.exe', startMarker: 'w:1' },
+  { pid: CLAUDE, parentPid: 1, executable: 'claude.exe', startMarker: claude },
+  { pid: HARNESS, parentPid: CLAUDE, executable: 'C:\\Users\\me\\.harness\\bin\\HARNESS.EXE', startMarker: 'w:4' },
+  { pid: NODE, parentPid: HARNESS, executable: 'node.exe', startMarker: 'w:5' },
+]
+
+/** Pids that run until a test ends one, and a table read from [tables] in turn, the last one after. */
+function processes(...tables: Array<() => Row[] | null>) {
+  const running = new Set([1, CLAUDE, HARNESS, NODE])
+  const counts = { rows: 0 }
+  const liveness = {
+    alive: (pid: number) => running.has(pid),
+    rows: async () => tables[Math.min(counts.rows++, tables.length - 1)]!(),
+  }
+  return { running, counts, liveness }
+}
+
 /**
- * The follower with its lines and waits recorded; the write of line [stopAt] fails, as one to a closed stdout does. Its
- * clock moves a second at each read unless a test gives one: every poll was held, as a daemon with a dial holds it.
+ * The follower started, with its lines and waits recorded; the write of line [stopAt] fails, as one to a closed stdout
+ * does. Its clock moves a second at each read unless a test gives one: every poll was held, as a daemon with a dial
+ * holds it.
  */
-async function follow(dir: string, options: Partial<InboxDeps> & { id?: string; stopAt?: number } = {}) {
+function start(dir: string, options: Partial<InboxDeps> & { id?: string; stopAt?: number } = {}) {
   const lines: string[] = []
   const waits: number[] = []
   const { id = SESSION, stopAt, ...deps } = options
-  const code = await followInbox(id, {
+  const ended = { done: false }
+  const run = followInbox(id, {
     dataDir: dir, port: PORT, platform: 'win32', acts: () => true, proof: tableProof().proof, fetch: never,
     write: async (line) => {
       lines.push(line)
@@ -124,11 +164,17 @@ async function follow(dir: string, options: Partial<InboxDeps> & { id?: string; 
     },
     wait: async (ms) => { waits.push(ms) },
     parentAlive: () => true,
+    pid: NODE, ppid: HARNESS, liveness: processes(() => table()).liveness,
     now: stepping(1_000),
     ...deps,
+  }).then((code) => {
+    ended.done = true
+    return { code, lines, waits }
   })
-  return { code, lines, waits }
+  return { run, ended, lines }
 }
+
+const follow = (dir: string, options: Parameters<typeof start>[1] = {}) => start(dir, options).run
 
 describe('the inbox follower on Windows', () => {
   it('prints what the person said, one line each, and polls again at once', async () => {
@@ -232,16 +278,13 @@ describe('the inbox follower on Windows', () => {
     expect(await follow(dir)).toEqual({ code: 0, lines: ['{}', '{}', '{}', '{}', JSON.stringify({ text: longest }), OFF], waits: [] })
   })
 
-  // Review Focus 6: Claude Code killed `harness.exe`, and its `node.exe` runs on.
-  it('ends with nothing more written and no poll once its parent is gone', async () => {
-    const before = await windowsDaemon([{ status: 200, body: { text: 'hi' } }])
-    expect(await follow(before.dir, { parentAlive: () => false })).toEqual({ code: 0, lines: [], waits: [] })
-    expect(before.count.connections).toBe(0)
-
-    const during = await windowsDaemon([{ status: 200, body: { text: 'hi' } }, { status: 200, body: {} }])
-    let checks = 0
-    expect(await follow(during.dir, { parentAlive: () => checks++ === 0 })).toEqual({ code: 0, lines: ['{"text":"hi"}'], waits: [] })
-    expect(during.seen).toHaveLength(1)
+  // Review Focus 6: `harness.exe` starts this `node.exe` with no job object, and Windows kills no child.
+  it.each([['harness.exe', HARNESS], ['Claude Code', CLAUDE]])('ends with nothing written and no poll when %s is gone at the start', async (_name, pid) => {
+    const { dir, count } = await windowsDaemon([{ status: 200, body: { text: 'hi' } }])
+    const { running, liveness } = processes(() => table())
+    running.delete(pid)
+    expect(await follow(dir, { liveness })).toEqual({ code: 0, lines: [], waits: [] })
+    expect(count.connections).toBe(0)
   })
 
   it('ends at once when a write fails, with no further poll', async () => {
@@ -267,6 +310,96 @@ describe('the inbox follower on Windows', () => {
   })
 })
 
+/**
+ * Claude Code ends while the follower runs (docs/plans/2026-11-19-dial-windows-vm-notes.md, Task 15): Windows kills no
+ * child, and `harness.exe` waits on this `node.exe`, so only the watch of its caller ends it. The watch's ticks run on
+ * fake intervals; the daemon's pipe runs on real time, so what crosses it is waited for, never slept on.
+ */
+describe('the inbox follower on Windows, once its caller is gone', () => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] }) })
+  afterEach(() => { vi.useRealTimers() })
+
+  it.each([['Claude Code', CLAUDE], ['harness.exe', HARNESS]])('ends within 2 s once %s is gone in the middle of a held poll, with no line', async (_name, pid) => {
+    const { dir, seen } = await windowsDaemon([held()])
+    const { running, liveness } = processes(() => table())
+    const follower = start(dir, { liveness, stopAt: 1 })
+    await vi.waitFor(() => expect(seen).toHaveLength(1))
+    running.delete(pid)
+    await vi.advanceTimersByTimeAsync(2_000)
+    await vi.waitFor(() => expect(follower.ended.done).toBe(true))
+    expect(await follower.run).toEqual({ code: 0, lines: [], waits: [] })
+  })
+
+  it('ends within 2 s once Claude Code is gone in the middle of the minute\'s wait, with no line', async () => {
+    const { dir, seen } = await windowsDaemon([{ status: 503, body: { error: 'NO_DEVICE' } }])
+    const { running, liveness } = processes(() => table())
+    const waits: number[] = []
+    // A wait only the end of its caller cuts short.
+    const wait = (ms: number, signal?: AbortSignal) => {
+      waits.push(ms)
+      return new Promise<void>((resolve) => { signal?.addEventListener('abort', () => resolve()) })
+    }
+    const follower = start(dir, { liveness, wait, stopAt: 1 })
+    await vi.waitFor(() => expect(waits).toEqual([60_000]))
+    running.delete(CLAUDE)
+    await vi.advanceTimersByTimeAsync(2_000)
+    await vi.waitFor(() => expect(follower.ended.done).toBe(true))
+    expect(follower.lines).toEqual([])
+    expect(seen).toHaveLength(1)
+  })
+
+  // A pid Windows gave to another process passes `alive`; the table's start marker tells it apart.
+  it.each([
+    ['taken by another process', () => table('w:9')],
+    ['missing from the table', () => table().filter((row) => row.pid !== CLAUDE)],
+  ])('ends at the minute\'s proof once Claude Code\'s pid is %s', async (_name, reread) => {
+    const { dir, seen } = await windowsDaemon([held()])
+    const { counts, liveness } = processes(() => table(), reread)
+    const follower = start(dir, { liveness, stopAt: 1 })
+    await vi.waitFor(() => expect(seen).toHaveLength(1))
+    await vi.advanceTimersByTimeAsync(59_000)
+    expect(counts.rows).toBe(1)
+    await vi.advanceTimersByTimeAsync(1_000)
+    await vi.waitFor(() => expect(follower.ended.done).toBe(true))
+    expect(await follower.run).toEqual({ code: 0, lines: [], waits: [] })
+    expect(counts.rows).toBe(2)
+  })
+
+  it('polls on and prints each line while Claude Code runs', async () => {
+    const first = holding()
+    const { dir, seen } = await windowsDaemon([first.poll, { status: 200, body: {} }])
+    const { counts, liveness } = processes(() => table())
+    const follower = start(dir, { liveness })
+    await vi.waitFor(() => expect(seen).toHaveLength(1))
+    await vi.advanceTimersByTimeAsync(180_000)
+    expect(follower.ended.done).toBe(false)
+    first.answer({ status: 200, body: { text: 'hi' } })
+    expect(await follower.run).toEqual({ code: 0, lines: ['{"text":"hi"}', '{}', OFF], waits: [] })
+    expect(counts.rows).toBe(4)
+  })
+
+  // Fail open: a live session's follower is never ended for want of a table.
+  const unreadable = (): null => null
+  const throws = (): never => { throw new Error('harness-pty ps failed') }
+  it.each<[string, Array<() => Row[] | null>]>([
+    ['unreadable at the start', [unreadable]],
+    ['throwing at the start', [throws]],
+    ['without this process at the start', [() => []]],
+    ['unreadable at the minute\'s proof', [() => table(), unreadable]],
+    ['throwing at the minute\'s proof', [() => table(), throws]],
+  ])('with the table %s, polls on and prints each line', async (_name, tables) => {
+    const first = holding()
+    const { dir, seen } = await windowsDaemon([first.poll])
+    const { liveness } = processes(...tables)
+    const follower = start(dir, { liveness })
+    await vi.waitFor(() => expect(seen).toHaveLength(1))
+    await vi.advanceTimersByTimeAsync(180_000)
+    expect(follower.ended.done).toBe(false)
+    first.answer({ status: 200, body: { text: 'hi' } })
+    expect(await follower.run).toEqual({ code: 0, lines: ['{"text":"hi"}', OFF], waits: [] })
+  })
+})
+
 describe('the inbox follower on macOS', () => {
   it('prints what the person said, through the daemon\'s socket', async () => {
     const dir = dataDir()
@@ -276,6 +409,23 @@ describe('the inbox follower on macOS', () => {
     const { counts, proof } = tableProof()
     expect(await follow(dir, { platform: 'darwin', proof })).toEqual({ code: 0, lines: ['{"text":"hi"}', '{}', OFF], waits: [] })
     expect(seen).toHaveLength(3)
+    expect(counts.rows).toBe(0)
+  })
+
+  it('ends within 2 s once its parent is gone in the middle of a held poll, and reads no table', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    cleanup.push(() => vi.useRealTimers())
+    const dir = dataDir()
+    const seen: Seen[] = []
+    const served = await listenLocalSocket(inboxHandler([held()], seen), unixSocketPath(dir, PORT, 'darwin')!)
+    cleanup.push(served.close)
+    const { running, counts, liveness } = processes(() => table())
+    const follower = start(dir, { platform: 'darwin', liveness, stopAt: 1 })
+    await vi.waitFor(() => expect(seen).toHaveLength(1))
+    running.delete(HARNESS)
+    await vi.advanceTimersByTimeAsync(2_000)
+    await vi.waitFor(() => expect(follower.ended.done).toBe(true))
+    expect(await follower.run).toEqual({ code: 0, lines: [], waits: [] })
     expect(counts.rows).toBe(0)
   })
 })
