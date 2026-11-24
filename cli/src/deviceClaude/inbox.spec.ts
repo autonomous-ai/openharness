@@ -163,7 +163,6 @@ function start(dir: string, options: Partial<InboxDeps> & { id?: string; stopAt?
       return lines.length !== stopAt
     },
     wait: async (ms) => { waits.push(ms) },
-    parentAlive: () => true,
     pid: NODE, ppid: HARNESS, liveness: processes(() => table()).liveness,
     now: stepping(1_000),
     ...deps,
@@ -335,9 +334,9 @@ describe('the inbox follower on Windows, once its caller is gone', () => {
     const { running, liveness } = processes(() => table())
     const waits: number[] = []
     // A wait only the end of its caller cuts short.
-    const wait = (ms: number, signal?: AbortSignal) => {
+    const wait = (ms: number, signal: AbortSignal) => {
       waits.push(ms)
-      return new Promise<void>((resolve) => { signal?.addEventListener('abort', () => resolve()) })
+      return new Promise<void>((resolve) => { signal.addEventListener('abort', () => resolve()) })
     }
     const follower = start(dir, { liveness, wait, stopAt: 1 })
     await vi.waitFor(() => expect(waits).toEqual([60_000]))

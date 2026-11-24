@@ -8,17 +8,21 @@
  * the inbox), its last line. The lines carry the meaning, not the exit code: `harness.exe` owns 3 and 4, and Node's own
  * crash is 1. Nothing goes to stderr, and no token, pipe name or text is in an error or a log line.
  *
- * It ends itself. When the mod leaves its loop, Claude Code on Windows kills nothing: 2-3 s later it closes its end of the
- * stdout pipe, and this process's next write fails with EPIPE (the VM notes, Task 15). So it ends at its next write: when
- * the held poll answers (at most 30 s), or after the 60 s wait. It also stops before its next poll once its parent is
- * gone, as `harness.exe` starts `node.exe` with no job object. A newer poll for the session ends an orphan's hold in the
- * core (core/deviceHookCalls.ts), so it is not held for long. Only the `harness` command's own process runs this; a client
- * of the daemon's existing route, nothing in the core.
+ * It ends itself. When the mod leaves its loop, or Claude Code ends, Windows kills nothing: Claude Code closes its end of
+ * the stdout pipe, and this process's next write fails with EPIPE (the VM notes, Task 15). That write comes when the held
+ * poll answers (at most 30 s) or after the 60 s wait, or never once another process holds the pipe, and meanwhile this
+ * process holds the session's poll in the core. Its parent tells nothing either: `harness.exe` starts `node.exe` with no
+ * job object and waits on it. So it watches its caller, the process above `harness.exe`: its pid and its parent's every
+ * second, and its start marker in the process table every minute, as Windows gives a pid to the next process. Within 2 s
+ * of either going it ends, in a held poll or a wait, and writes nothing more. A table it cannot read never ends it: it
+ * watches its parent alone then. A newer poll for the session ends an orphan's hold in the core (core/deviceHookCalls.ts).
+ * Only the `harness` command's own process runs this; a client of the daemon's existing route, nothing in the core.
  */
 import { statSync } from 'node:fs'
+import { win32 } from 'node:path'
 import { configuredPortOf, daemonRecordPath, readDaemonRecord } from '../lib/daemonRecord.js'
 import { daemonFetch } from '../lib/localTransport.js'
-import type { HostLiveness } from '../lib/processProof.js'
+import type { HostLiveness, HostProcessRow } from '../lib/processProof.js'
 import { readDaemonToken } from '../lib/windows/pipeAuth.js'
 import type { PipeTarget } from '../lib/windows/pipeClient.js'
 import { CLAUDE_SESSION_ID, createRecordProof } from '../devices/listenerPipe.js'
@@ -31,6 +35,10 @@ const POLL_MS = 30_000
 const RETRY_MS = 60_000
 /** A 200 with no text sooner than this was not held, and polling again at once would spin, as the Mac mod's HELD_MS. */
 const HELD_MS = 1_000
+/** How often the caller's pid and the parent's are checked: the follower ends within two of these of either going. */
+const TICK_MS = 1_000
+/** How often the caller's start marker is read again; each read starts `harness-pty ps`. */
+const REPROOF_MS = 60_000
 const OFF = '{"off":true}'
 const EMPTY = '{}'
 
@@ -84,56 +92,112 @@ export interface InboxDeps {
   fetch?: typeof fetch
   /** One line on stdout; false once stdout is closed. */
   write(line: string): Promise<boolean>
-  wait(ms: number): Promise<void>
-  /** Whether the process that started this one still runs. */
-  parentAlive(): boolean
+  /** Resolves after [ms], or at once when [signal] aborts. */
+  wait(ms: number, signal: AbortSignal): Promise<void>
+  /** This process's pid, and its parent's: on Windows `harness.exe`. */
+  pid: number
+  ppid: number
+  /** How its caller is proven to run (`watchCaller`). */
+  liveness: CallerLiveness
   /** The time in ms. */
   now(): number
 }
 
-/** Whether the process that started this one still runs: on Windows `harness.exe`, which Claude Code kills with the loop. */
-export function parentAlive(): boolean {
-  try {
-    process.kill(process.ppid, 0)
-    return true
-  } catch {
-    return false
-  }
+/** A process table row with its parent (lib/processTable.ts `ProcessRow`). */
+export interface CallerRow extends HostProcessRow { parentPid: number }
+
+/** Whether a pid runs, and the process table: on Windows devices/listenerPipe.ts `WINDOWS_LIVENESS`. */
+export interface CallerLiveness {
+  alive(pid: number): boolean
+  rows(): Promise<readonly CallerRow[] | null>
 }
 
-/** Follows the session's inbox until off, its parent gone or its stdout closed; 0 in every case. */
+/** Follows the session's inbox until off, its caller gone or its stdout closed; 0 in every case. */
 export async function followInbox(sessionId: string, deps: InboxDeps): Promise<number> {
   if (!CLAUDE_SESSION_ID.test(sessionId)) {
     await deps.write(OFF)
     return 0
   }
+  const watch = await watchCaller(deps)
+  try {
+    return await follow(sessionId, deps, watch.gone)
+  } finally {
+    watch.stop()
+  }
+}
+
+async function follow(sessionId: string, deps: InboxDeps, gone: AbortSignal): Promise<number> {
   const send = daemonFetch(deps.dataDir, deps.port, deps.fetch, deps.platform, (dataDir, port) => deps.proof.pipe(dataDir, port))
   for (;;) {
-    if (!deps.parentAlive()) return 0
+    if (gone.aborted) return 0
     if (!deps.acts()) {
       await deps.write(OFF)
       return 0
     }
     const sentAt = deps.now()
-    let line = await pollOnce(sessionId, send, deps)
+    let line = await pollOnce(sessionId, send, deps, gone)
+    // A poll the caller's end cut short is no failure of the daemon's.
+    if (gone.aborted) return 0
     if (line === null) {
       // The next poll proves the daemon by the table: a pid another process took passes the cheap check, not that one.
       deps.proof.forget(deps.dataDir, deps.port)
-      await deps.wait(RETRY_MS)
+      await deps.wait(RETRY_MS, gone)
       line = EMPTY
-    } else if (line === EMPTY && deps.now() - sentAt < HELD_MS) await deps.wait(RETRY_MS)
+    } else if (line === EMPTY && deps.now() - sentAt < HELD_MS) await deps.wait(RETRY_MS, gone)
+    if (gone.aborted) return 0
     if (!(await deps.write(line)) || line === OFF) return 0
   }
 }
 
+/**
+ * A signal that aborts once the process this one serves is gone, and the stop of its timers. On Windows that is
+ * Claude Code, the parent of `harness.exe` (or the parent itself when it is no `harness.exe`), found in the process
+ * table once; its pid is checked every TICK_MS and its start marker every REPROOF_MS. Its parent's pid is checked
+ * beside it, and alone on other platforms or when the table names no caller. A table that cannot be read ends nothing.
+ */
+async function watchCaller(deps: InboxDeps): Promise<{ gone: AbortSignal; stop(): void }> {
+  const ended = new AbortController()
+  const caller = deps.platform === 'win32' ? callerIn(await readRows(deps.liveness), deps.pid) : null
+  const tick = (): void => {
+    if (!deps.liveness.alive(deps.ppid) || (caller && !deps.liveness.alive(caller.pid))) ended.abort()
+  }
+  tick()
+  const timers = [setInterval(tick, TICK_MS)]
+  if (caller) {
+    timers.push(setInterval(async () => {
+      const rows = await readRows(deps.liveness)
+      if (rows && rows.find((row) => row.pid === caller.pid)?.startMarker !== caller.startMarker) ended.abort()
+    }, REPROOF_MS))
+  }
+  // Neither keeps the process alive: it ends when the follow does.
+  for (const timer of timers) timer.unref()
+  return { gone: ended.signal, stop: () => { for (const timer of timers) clearInterval(timer) } }
+}
+
+async function readRows(liveness: CallerLiveness): Promise<readonly CallerRow[] | null> {
+  try {
+    return await liveness.rows()
+  } catch {
+    return null
+  }
+}
+
+/** The row of the process [pid] runs for: its parent's parent past a `harness.exe`, else its parent; null when unknown. */
+function callerIn(rows: readonly CallerRow[] | null, pid: number): CallerRow | null {
+  const row = (of: number | undefined): CallerRow | undefined => rows?.find((candidate) => candidate.pid === of)
+  const parent = row(row(pid)?.parentPid)
+  if (!parent) return null
+  return (win32.basename(parent.executable).toLowerCase() === 'harness.exe' ? row(parent.parentPid) : parent) ?? null
+}
+
 /** One held poll: the line its answer prints, or null for none from a proven daemon (none there, no proof, no dial). */
-async function pollOnce(sessionId: string, send: typeof fetch, deps: InboxDeps): Promise<string | null> {
+async function pollOnce(sessionId: string, send: typeof fetch, deps: InboxDeps, gone: AbortSignal): Promise<string | null> {
   let answer: Response
   let body: string
   try {
     answer = await send(`http://127.0.0.1:${deps.port}/api/hook/inbox`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId }),
-      signal: AbortSignal.timeout(POLL_MS),
+      signal: AbortSignal.any([AbortSignal.timeout(POLL_MS), gone]),
     })
     body = await answer.text()
   } catch {

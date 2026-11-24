@@ -38,7 +38,7 @@ import { claudePluginState, claudePluginTurnedOff, ownDirectory, removeSkill, sk
 import { listable, MAX_HOMES, readRemoved, readSetup, readWritten, writeOrcaConnected, writePluginHomes, writeRemoved, type DialEngine } from '../devices/dialSkillFiles.js'
 import { tellDevices } from '../devices/listenerClient.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
-import { CLAUDE_SESSION_ID, devicesPipe, devicesRecordPath } from '../devices/listenerPipe.js'
+import { CLAUDE_SESSION_ID, devicesPipe, devicesRecordPath, WINDOWS_LIVENESS } from '../devices/listenerPipe.js'
 import { NOTICE_USAGE, runNotice } from '../devices/notice.js'
 import { type OrcaPluginDeps, type OrcaPluginRun, orcaRemove, orcaSetUp, orcaStatus } from '../devices/orcaPlugin.js'
 import { vscodeDisable, vscodeEnable, vscodeStatus, type VscodeChange, type VscodeEditor, type VscodeExtensionDeps } from '../devices/vscodeExtension.js'
@@ -47,7 +47,7 @@ import { localSocketRoute, socketIsPrivate } from '../lib/localTransport.js'
 import { daemonPipe } from '../lib/windows/daemonPipe.js'
 import type { PipeTarget } from '../lib/windows/pipeClient.js'
 import { daemonPost, runAsked } from './asked.js'
-import { createDaemonProof, followInbox, parentAlive } from './inbox.js'
+import { createDaemonProof, followInbox } from './inbox.js'
 import { claudePluginOn, claudeSettingsPath } from './plugin.js'
 
 /** `asked`, `link`, `inbox`, `attach`, `orca link` and `vscode link` are left out: they are the plugins', and typed by
@@ -115,7 +115,10 @@ export async function runDeviceCommand(argv: string[], deps: DeviceDeps): Promis
   if (words.length <= 3 && words[0] === 'claude' && words[1] === 'inbox') {
     return followInbox(words[2] ?? '', {
       dataDir: deps.dataDir, port: deps.port, platform: deps.platform, acts: () => pluginActs(deps.dataDir),
-      proof: createDaemonProof(), write: deps.write, wait: (ms) => sleep(ms), parentAlive, now: Date.now,
+      proof: createDaemonProof(), write: deps.write,
+      // Its end cuts the wait short: the abort is the only way it rejects.
+      wait: (ms, signal) => sleep(ms, undefined, { signal }).catch(() => {}),
+      pid: process.pid, ppid: process.ppid, liveness: WINDOWS_LIVENESS, now: Date.now,
     })
   }
   if (words.length <= 3 && words[0] === 'claude' && words[1] === 'attach') return attachSession(words[2] ?? '', deps)
