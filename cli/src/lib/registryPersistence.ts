@@ -346,8 +346,15 @@ async function removeTemporaryLock(folder: string): Promise<void> {
 export async function registryFileLock<T>(directory: string, deadline: RegistryWriteDeadline,
   apply: (checkOwner: () => void) => Promise<T>): Promise<T> {
   const started = performance.now()
-  const expires = Math.min(deadline.expires, started + LOCK_MS)
-  const check = () => { deadline.check(); if (performance.now() >= expires) throw new RegistryPersistenceUnavailable('registry lock is busy') }
+  // Busy is 2 s of busy turns, counted from the first; building this writer's own owner is bounded by its deadline
+  // alone. Counted from the call, a loaded Linux runner's owner fsync spent the 2 s and a lock nobody held was reported
+  // busy with 2 to 3 s of the deadline left (run 45396848621, its test failed 2,994 ms in). The 2 s once kept
+  // Atomics.wait from holding the core's loop; that wait is a timer since #4356.
+  let expires = deadline.expires, busy = false
+  const check = () => {
+    deadline.check()
+    if (busy && performance.now() >= expires) throw new RegistryPersistenceUnavailable('registry lock is busy')
+  }
   await privateRegistryDirectory(directory)
   check()
   ownGeneration ||= await startMarker(process.pid, expires - performance.now())
@@ -420,6 +427,7 @@ export async function registryFileLock<T>(directory: string, deadline: RegistryW
       }
       // Busy: the lock is there, or the publish was refused for a moment. The ownerless rule below stays for the empty
       // folders older builds can still leave; this one never leaves its lock without its owner.
+      if (!busy) { busy = true; expires = Math.min(deadline.expires, performance.now() + LOCK_MS) }
       check()
       let owner: Owner | undefined
       let since = Date.now()

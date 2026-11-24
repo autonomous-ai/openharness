@@ -69,10 +69,15 @@ when it starts that operation, after the preceding committed baseline is known.
 
 The writer proceeds as follows:
 
-1. Acquire the existing mkdir/owner.json lock asynchronously with its existing
-   two-second elapsed acquisition budget, including mkdir, owner creation, write,
-   fsync and token verification; the strict request's overall deadline can shorten
-   it further. Preserve owner generation/token and stale-owner policy,
+1. Acquire the existing mkdir/owner.json lock asynchronously. Building it (mkdir,
+   owner creation, write, fsync, rename and token verification) is bounded by the
+   request's overall deadline alone. The two-second busy budget counts only the wait
+   for a lock that is there, or a publish refused for a moment, from the first turn
+   that finds it so; the overall deadline can shorten it further. Counted from the
+   call, it let a loaded Linux runner's own owner fsync spend the two seconds, and a
+   lock nobody held was reported busy (run 45396848621). The two seconds were set
+   while that wait was `Atomics.wait`, which held the core's loop; #4356 made it the
+   awaited timer below. Preserve owner generation/token and stale-owner policy,
    private modes and no-symlink checks. Replace `Atomics.wait` with an awaited
    timer, and use an asynchronous, bounded process probe. Retain the owner-file
    fsync. Revalidate the token after asynchronous lock setup so a reclaimed
