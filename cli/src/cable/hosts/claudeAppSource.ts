@@ -127,23 +127,31 @@ export class ClaudeAppSource implements HostSource {
   private over = 0
   /** Whether the last pass of this start failed, so a run of failures says one line. */
   private failed = false
+  /** Ends the promise of this start, once its first pass ended or it stopped. */
+  private firstPass: (() => void) | undefined
 
   constructor(private readonly deps: ClaudeAppSourceDeps) {}
 
-  start(): void {
-    if (this.running) return
+  /** Ends once this start's first pass has: its rows taken, its read failed, or the source stopped meanwhile. The dial's
+   *  greeting waits for it (devices.ts dialAttached), so its first list holds the store's sessions. A start while it runs
+   *  ends at once. */
+  start(): Promise<void> {
+    if (this.running) return Promise.resolve()
     this.running = true
     this.slowest = undefined
     this.failed = false
+    const first = new Promise<void>((resolve) => { this.firstPass = resolve })
     // Held before the folders are listed, so a store made between the two is still heard.
     this.unwatch = this.deps.roots.map((root) => this.deps.watch(root.watch, (file) => this.rootChanged(root, file)))
     this.relist()
+    return first
   }
 
   stop(): void {
     if (!this.running) return
     this.running = false
     this.stops++
+    this.firstPassEnded()
     // The dial detached: a wake still opening or waiting answers that its session did not answer. The Claude app's
     // only: the wake is the ChatGPT app's too.
     this.deps.wake.stop('claude')
@@ -345,8 +353,15 @@ export class ClaudeAppSource implements HostSource {
       this.failed = true
     } finally {
       pass.under = false
+      // A pass begun before the last stop is not this start's: the start ends with its own.
+      if (this.stops === stops) this.firstPassEnded()
       this.next()
     }
+  }
+
+  private firstPassEnded(): void {
+    this.firstPass?.()
+    this.firstPass = undefined
   }
 
   /** Which roots are there; whether any is, said when that changed. */

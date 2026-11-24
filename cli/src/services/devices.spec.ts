@@ -10265,6 +10265,20 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
     expect(rank.mock.lastCall).toEqual(['claude', undefined])
   })
 
+  // The dial's greeting pushes its list once the attach ends (cableSession.ts): after a replug the ring showed the
+  // store's sessions only at the next tick's push, 1-2 s on (the dial eval's C11).
+  it('an attach ends once the store\'s first read has landed, so the greeting\'s list holds its sessions', async () => {
+    const { fake, port } = withStore()
+    fake.sessions = [session(), session({ localId: LOCAL_SECOND, sessionId: SECOND, title: 'Ship it', lastActivityAt: 2 })]
+    fake.hold = true
+    setTimeout(() => { for (const land of fake.held.splice(0)) land() }, 100)
+    const from = Date.now()
+    const attached = Promise.resolve(seen.host.watching!(true)).then(async () => ({ ms: Date.now() - from, ids: (await ids()).sort() }))
+    port.swarms(null)
+    await wait(100)
+    expect(await attached).toEqual({ ms: 100, ids: [ID, observedAgentId('claude', SECOND)].sort() })
+  })
+
   it('with HARNESS_DEVICE_OBSERVED off there is no source', async () => {
     const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
     switched.HARNESS_DEVICE_OBSERVED = false
@@ -10774,6 +10788,28 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
     expect(watchedFolders.stopped).toBe(watchedFolders.calls.length)
     expect(fake.calls.at(-1)).toBe('forget')
     expect(rank.mock.lastCall).toEqual(['codex', undefined])
+  })
+
+  // As the Claude app's store: the greeting's list holds the app's threads, after the look for the app and the first read.
+  it('an attach ends once the app was found and its threads\' first read has landed, so the greeting\'s list holds them', async () => {
+    const { fake, port } = withThreads()
+    fake.read = read([thread(), thread({ id: SECOND, name: 'Ship it', at: 2 })])
+    fake.hold = true
+    setTimeout(() => { for (const land of fake.held.splice(0)) land(BUNDLE) }, 100)
+    const from = Date.now()
+    const attached = Promise.resolve(seen.host.watching!(true)).then(async () => ({ ms: Date.now() - from, ids: (await ids()).sort() }))
+    port.swarms(null)
+    await wait(100)
+    expect(await attached).toEqual({ ms: 100, ids: [ID, observedAgentId('codex', SECOND)].sort() })
+  })
+
+  // What the greeting waits on never fails it: a look for the app that fails ends the attach, said by the part's guard.
+  it('an attach whose look for the app fails still ends, with no threads, said in one line', async () => {
+    const { port } = withThreads({ bundleId: async () => { throw new Error('plutil failed') } })
+    await expect(Promise.resolve(seen.host.watching!(true))).resolves.toBeUndefined()
+    port.swarms(null)
+    expect(await ids()).toEqual([])
+    expect(logs).toContainEqual(expect.stringMatching(/^\[devices\] codex-app failed · /))
   })
 
   it('the Claude app\'s store and the ChatGPT app\'s Codex home are watched through watchStore when given', async () => {

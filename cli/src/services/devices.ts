@@ -1264,7 +1264,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       if (on && vscodeSetup) part.call('vscodeExtension', () => vscodeSetup.pass())
       if (on && cursorSetup) part.call('cursorExtension', () => cursorSetup.pass())
       if (on && orcaSetup) part.call('orcaPlugin', () => orcaSetup.pass())
-      dialAttached(on)
+      const reads = dialAttached(on)
       part.call('dialStream', () => dial.attached(on))
       // Whether an agent outside a pane runs first: an attach with one starts the first-agent clock at once, and a Harness
       // agent starts it at the list's read that follows (refresh).
@@ -1272,6 +1272,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         usage.agentsPresent(outsideRunning())
         usage.attached(on)
       })
+      return reads
     },
     dialShows: (agent) => {
       part.call('dialStream', () => dial.shows(agent))
@@ -2251,7 +2252,16 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** The scan, the reminders, herdr's and Herdr Core's sockets, opencode's service, the Claude app's store and the ChatGPT
    *  app's metadata, for an attached dial alone. */
   let attached: ReturnType<typeof setInterval>[] = []
-  const dialAttached = (on: boolean): void => {
+  /** A part's work run as `part.call` runs it, and its end, which a throw or a rejection only ends: what waits on it never
+   *  fails. */
+  const partEnd = (name: string, run: () => unknown): Promise<unknown> => {
+    let work: unknown
+    part.call(name, () => (work = run()))
+    return Promise.resolve(work).catch(() => {})
+  }
+  /** Its promise ends once the Claude app's and the ChatGPT app's sources it started have read once: the dial's greeting
+   *  waits for it (cableSession.ts), as those sources hold no rows until then. */
+  const dialAttached = (on: boolean): Promise<void> => {
     dialOn = on
     for (const timer of attached) clearInterval(timer)
     attached = []
@@ -2265,7 +2275,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     part.call('notices', () => on ? notices.attached() : notices.detached())
     // With no dial, WezTerm's and kitty's focus is read no more: the devices' stop detaches too.
     part.call('pane', on ? checkPaneFocus : dropPaneFocus)
-    if (!observed || !herdr || !opencode || !claudeAppSource || !codexAppSource) return
+    if (!observed || !herdr || !opencode || !claudeAppSource || !codexAppSource) return Promise.resolve()
     // Only with herdr installed, read at each attach, as a tap needs it (herdr.ts): with none, no folder is watched
     // (~/.config, or the home folder, recursive on macOS) for a socket that never comes. herdr's zip on Windows puts it on
     // no PATH, and its folder appears only when it first runs, which may be after the dial came (the VM notes, Final head
@@ -2282,11 +2292,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       return cmuxFound ? cmuxSource.start() : cmuxSource.stop()
     })
     part.call('opencode', () => on ? opencode.start() : opencode.stop())
-    part.call('claude-app', () => on ? claudeAppSource.start() : claudeAppSource.stop())
+    const claudeRead = partEnd('claude-app', () => on ? claudeAppSource.start() : claudeAppSource.stop())
     // Only with the ChatGPT app installed, looked for at each attach as cmux is: a computer with Codex CLI alone gets
     // no ChatGPT page of threads a tap cannot open. A look that lands after the dial went, or after a newer attach's
     // look began, starts nothing.
-    part.call('codex-app', () => {
+    const codexRead = partEnd('codex-app', () => {
       const look = ++codexAppLooks
       if (!on) return codexAppSource.stop()
       return chatGptInstalled().then((found) => {
@@ -2294,11 +2304,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         return found ? codexAppSource.start() : codexAppSource.stop()
       })
     })
+    const reads = Promise.all([claudeRead, codexRead]).then(() => {})
     if (!on) {
       // The next attach checks Orca's ring afresh, and a read under way lands on nothing.
       orcaRing = { again: false }
       part.call('orca', dropFocus)
-      return
+      return reads
     }
     // Agents already running when the dial came are listed now, idle until their next hook event.
     part.call('observed', () => scanOpen(observed))
@@ -2315,6 +2326,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       // A person can take minutes to come to an agent that waits on them.
       every(REMIND_MS, remind),
     ]
+    return reads
   }
 
   // ── the mod's polls ────────────────────────────────────────────────────────────────────────────────

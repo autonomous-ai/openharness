@@ -92,8 +92,9 @@ export interface CableHostWiring {
   /** For the devices' tests: the transcriber in place of the backend's, so a capture is turned to text with nothing posted. */
   transcribe?: (pcm: Buffer, sampleRate: number, lang: string, signal?: AbortSignal) => Promise<string>
   /** A dial is on the wire on this computer, or none is any more: the core streams the turn cards and
-   *  makes the recaps for it, as for a device watching through the backend. */
-  watching?: (on: boolean) => void
+   *  makes the recaps for it, as for a device watching through the backend. An attach's promise ends once the reads
+   *  it started have landed, which the greeting's push waits for (cableSession.ts). */
+  watching?: (on: boolean) => void | Promise<void>
   /** Deliver text into an agent. The SAME path the web and the WiFi device use — see cli.ts. */
   sendTurn: (agentId: string, text: string) => void
   stopTurn: (agentId: string) => void
@@ -422,12 +423,14 @@ export class DaemonCableHost implements CableHost {
    * follows — that push calls listAgents(), which for a remote machine is an RPC over exactly this lane.
    * Awaiting it here would block the greeting, so it is fired and the push retries on the next tick if
    * it loses the race; a failure marks the machine unreachable rather than pretending it has no agents.
+   * It returns the reads `watching` started, which the greeting does wait for, at most half a second.
    */
-  onDialAttached(): void {
-    this.wiring.watching?.(true)
+  onDialAttached(): void | Promise<void> {
+    const reads = this.wiring.watching?.(true)
     this.stopLaneRetry()
     this.laneTries = 0
     this.openLane(++this.plugIn, 'cable: dial on the wire — opening the cloud lane')
+    return reads
   }
 
   private openLane(plugIn: number, line: string): void {
