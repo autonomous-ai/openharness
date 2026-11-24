@@ -1044,22 +1044,37 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
       expect(s.log).toEqual(['[herdr] socket · none'])
     })
 
-    it('a stop ends the start under way at once; the next start ends with its own list', async () => {
+    it('a stop ends the start under way at once; the next start ends with its own list, not the stopped one', async () => {
       server.agents = [agent('w1:p1')]
-      server.answer('agent.list', 'hold')
-      const s = setup()
+      const real = herdrClient()
+      let held!: () => void
+      const holding = new Promise<void>((resolve) => { held = resolve })
+      let release!: () => void
+      let lists = 0
+      // The first list's answer is read only once the source has stopped and started again.
+      const s = setup({
+        client: {
+          ...real,
+          request: async (method, params) => {
+            const answer = await real.request(method, params)
+            if (method === 'agent.list' && ++lists === 1) await new Promise<void>((resolve) => { release = resolve; held() })
+            return answer
+          },
+        },
+      })
       const first = ending(s.source.start())
-      await server.got('agent.list', 1)
-      await turn()
+      await holding
       expect(first.ended).toBe(false)
       s.source.stop()
       await turn()
       expect(first.ended).toBe(true)
-      server.answer('agent.list')
       const second = ending(s.source.start())
-      // Its subscription waits out the rest of the second since the last one opened.
+      // The stopped list lands and takes nothing; the new subscription waits out the rest of the second since the last
+      // one opened.
+      release()
       await turn()
       expect(second.ended).toBe(false)
+      expect(s.source.list()).toEqual([])
       s.advance(1000)
       await s.until(() => s.source.list().length === 1)
       await turn()
