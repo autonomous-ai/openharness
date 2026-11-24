@@ -236,8 +236,9 @@ function readPid(file: string): number | null {
 /**
  * The daemon [run]'s pid file names, when the file was written in the run's time, while that pid is still the process
  * it was written for: started no sooner than the run's own process, and no later than the file was written. Both start
- * times come from `ps`, like with like: Linux's lstart adds the boot time truncated to the second, so it can read up to
- * a second before the wall clock and would reject the run's real daemon if compared with `run.started`.
+ * times come from `ps`, like with like: Linux's lstart is the boot time truncated to the second plus the process's age,
+ * truncated again, so it can name the second before the one the wall clock was in, and compared with `run.started` it
+ * would reject the run's real daemon.
  * A file a test wrote before the run names a process of its own, and a pid file can outlive its process, the number
  * somebody else's by then: of that process its start time alone is read.
  */
