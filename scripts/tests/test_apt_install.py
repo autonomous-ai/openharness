@@ -86,6 +86,14 @@ MAIN_ARCHIVE_SOURCES = {
         "https://security.ubuntu.com/ubuntu/\tpriority:3\n"
     ),
 }
+# apt's sources as a GitHub ubuntu-22.04-arm runner has them: every mirror on ports.ubuntu.com, none on
+# archive.ubuntu.com.
+PORTS_SOURCES = {
+    "sources.list": (
+        "deb http://ports.ubuntu.com/ubuntu-ports/ jammy main\n"
+        "deb http://ports.ubuntu.com/ubuntu-ports/ jammy-security main\n"
+    ),
+}
 
 
 def read_sources(apt_dir, state):
@@ -177,6 +185,18 @@ class AptInstallTests(unittest.TestCase):
         self.assertIn(
             "::error title=apt::apt could not download tmux zsh from the runner's Ubuntu mirrors and archive.ubuntu.com"
             " after 3 attempts",
+            done.stdout,
+        )
+
+    def test_a_runner_on_ports_ubuntu_com_keeps_its_sources_and_never_claims_archive_ubuntu_com(self):
+        done, _ = self.install("tmux", "zsh", fail_downloads=99, sources=PORTS_SOURCES)
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertEqual(self.sources_seen, [PORTS_SOURCES] * 3)
+        self.assertEqual(self.sources_left, PORTS_SOURCES)
+        self.assertNotIn("archive.ubuntu.com", done.stdout)
+        self.assertIn("apt: attempt 1 of 3 could not download; trying again in 30s\n", done.stdout)
+        self.assertIn(
+            "::error title=apt::apt could not download tmux zsh from the runner's Ubuntu mirrors after 3 attempts",
             done.stdout,
         )
 
