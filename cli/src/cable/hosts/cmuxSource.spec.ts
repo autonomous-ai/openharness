@@ -451,6 +451,24 @@ describe('the cmux source (docs/plans/2026-11-17-dial-cmux-design.md)', () => {
       expect(listed(s)).toEqual([key(S1)])
     })
 
+    it('a start whose first run waits behind the 32 cmux processes a stopped start left ends once that run has landed', async () => {
+      const s = setup()
+      await started(s, [])
+      for (let n = 0; n < 32; n++) s.change(`w${n}-hook-sessions.json`)
+      s.source.stop()
+      const again = ending(s.source.start())
+      await turn()
+      expect(s.sessions).toHaveBeenCalledTimes(33)
+      expect(again.ended).toBe(false)
+      // One of the stopped runs ends: the all-agents run that waited starts, and only its answer ends the start.
+      await s.reply(1, ok([]))
+      expect(s.asked().slice(33)).toEqual(['all'])
+      expect(again.ended).toBe(false)
+      await s.reply(33, ok([record()]))
+      expect(again.ended).toBe(true)
+      expect(listed(s)).toEqual([key(S1)])
+    })
+
     it('a start while it runs ends at once', async () => {
       const s = setup()
       void s.source.start()
