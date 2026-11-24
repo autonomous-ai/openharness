@@ -13,8 +13,7 @@ import { windowsPaneLaunch } from '../../lib/windows/engineStart.js'
 import { sid } from '../../lib/log.js'
 import { matchesLaunchReceipt, OBSERVATION_BATCH_INCOMPLETE, SAVED_BINDING_CHANGED, type LaunchPublicationInput, type ProcessIdentity, type registry,
   type RegisteredSession } from '../../lib/registry.js'
-import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
-import { sameProcessIdentity } from '../../lib/terminalRuntime.js'
+import { publishEngine, resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
 import type { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
@@ -76,7 +75,9 @@ export interface RelaunchCommitDeps {
  * core/agents/hostMove.ts): its process and [grid], the one its launch put it on, active again, the pane handed back to
  * its backend's default disposal, then announced. The row keeps its gateway: no process is read for it, and the
  * relaunched engine says it again (its hook, or a Codex's argv on the next discovery pass). A Codex's or Pi's grid is
- * read off its argv in the background after, so an unavailable models service cannot hold this route. 'changed' when
+ * read off its argv in the background after, so an unavailable models service cannot hold this route. An engine that
+ * started as `node` and named itself before the publication's refresh is published under its new name
+ * (`publishEngine`), not held on a dead pid. 'changed' when
  * [current] went false before the row learned the engine, 'changed after commit' once it had, 'vanished' when the row
  * is gone.
  */
@@ -89,22 +90,21 @@ export async function commitRelaunchedEngine(
   const selected = deps.registry.byAgent(agentId)
   if (!selected) return 'vanished'
   const engine = selected.engine
-  const publication = await deps.registry.confirmLaunch(agentId, { ...input, processIdentity: identity, grid }, {
-    current,
-    refresh: async () => {
-      if (identity) {
-        // Null also when the probe could not answer.
-        const observed = await resolvePaneEngineProcess(place.backend, place.runtime, engine)
-        if (!observed) throw new IdentityReadUnavailable(NO_ENGINE)
-        if (!sameProcessIdentity(identity, observed) || observed.executable !== identity.executable) {
-          throw new IdentityReadUnavailable(ANOTHER_PROCESS)
-        }
-      } else {
+  const published = identity
+    // Null also when the probe could not answer.
+    ? publishEngine(identity, () => resolvePaneEngineProcess(place.backend, place.runtime, engine), { gone: NO_ENGINE, changed: ANOTHER_PROCESS },
+      (process, refresh, expires) => {
+        if (process !== identity) console.log(`[restart] publication · engine renamed · ${sid(agentId)}`)
+        return deps.registry.confirmLaunch(agentId, { ...input, processIdentity: process, grid }, { current, refresh, expires })
+      })
+    : deps.registry.confirmLaunch(agentId, { ...input, processIdentity: identity, grid }, {
+      current,
+      refresh: async () => {
         const pane = await place.backend.paneState(place.runtime)
         if (pane === 'gone' || pane === 'unknown' || pane.dead) throw new IdentityReadUnavailable(NO_SHELL)
-      }
-    },
-  }).catch((error: unknown) => {
+      },
+    })
+  const publication = await published.catch((error: unknown) => {
     // The dispatch's line names only the error's kind; this one names the check that held it (nightly run 45237523183).
     if (error instanceof IdentityReadUnavailable) {
       console.warn(`[restart] publication held · ${HELD_BY.find(held => held.message === error.message)?.label ?? 'other'}`)
