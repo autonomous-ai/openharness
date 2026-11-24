@@ -263,7 +263,7 @@ describe("tier A's herdr", () => {
     const [one, two] = w.clients()
     const h = agentPid(w.world, 'h')!
     // The devices' lookup finds both clients and takes the one typed into last: tab 2's, started after tab 1's.
-    expect(await w.outer()({ HERDR_PANE_ID: 'w1:p1' }, h)).toEqual({ app: 'iterm', tty: `/dev/${two!.tty!}`, pid: two!.pid })
+    expect(await w.outer()({ HERDR_PANE_ID: 'w1:p1' }, h)).toEqual({ app: 'iterm', tty: `/dev/${two!.tty!}`, pid: two!.pid, nest: 'herdr' })
     // A turn of h with no tab selected moves no client.
     vi.setSystemTime(T0 + 2_000)
     await w.hook('h', 'turn-start')
@@ -273,7 +273,7 @@ describe("tier A's herdr", () => {
     vi.setSystemTime(T0 + 3_000)
     await w.hook('h', 'turn-start')
     expect(machine.atimes.get(one!.tty!)).toBe(T0 + 3_000)
-    expect(await w.outer()({ HERDR_PANE_ID: 'w1:p1' }, h)).toEqual({ app: 'iterm', tty: `/dev/${one!.tty!}`, pid: one!.pid })
+    expect(await w.outer()({ HERDR_PANE_ID: 'w1:p1' }, h)).toEqual({ app: 'iterm', tty: `/dev/${one!.tty!}`, pid: one!.pid, nest: 'herdr' })
     expect(w.gaps).toEqual([])
   })
 

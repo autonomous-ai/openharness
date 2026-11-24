@@ -120,7 +120,8 @@ const bounded = (value: unknown, max: number): number =>
 const MACHINES_POLL_MS = 15_000
 /** The least time between two pushes of the machine list (spec 2026-11-13-device-without-the-app, "When"). */
 const AGENTS_PUSH_GAP_MS = 1_000
-/** The most a greeting holds its push for the reads its attach started (the Claude app's and the ChatGPT app's first,
+/** The most a greeting holds its push for the reads its attach started (the first read of each source that runs only
+ *  while a dial is attached: herdr's, Herdr Core's, cmux's, opencode's, the Claude app's and the ChatGPT app's,
  *  devices.ts dialAttached): pushed before them, its list had none of their rows until the next tick's push, 1-2 s on
  *  (the dial eval's C11). A read that lands in a moment makes the first list; a slow or stuck one costs the greeting no
  *  more than this, and its rows follow at the next push. */

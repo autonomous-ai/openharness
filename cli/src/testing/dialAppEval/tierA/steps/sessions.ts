@@ -11,7 +11,7 @@
  * this file: a loop holding `ports.devices.inboxPoll` open, so the devices' `modReady` holds as with the real plugin,
  * and each text a poll is answered with is a `mod` delivery to that session.
  */
-import { appendFileSync, mkdirSync } from 'node:fs'
+import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { APP_BUNDLES } from '../../../../cable/hosts/hostDetect.js'
 import { observedTitle } from '../../../../cable/hosts/observedTitle.js'
@@ -273,6 +273,26 @@ const PROMPT_LINES: Readonly<Record<Engine, (text: string) => object>> = {
 const answerLine = (s: SessionDef, text: string): string => `${JSON.stringify(ANSWER_LINES[engineOf(s)](text))}\n`
 const promptLine = (s: SessionDef): string => `${JSON.stringify(PROMPT_LINES[engineOf(s)]('Eval prompt.'))}\n`
 
+/**
+ * Claude Code's own process record, `sessions/<pid>.json` beside its projects folder, as it writes it for the session
+ * (engines/claude/sessionStore.ts `live.record`), with the fields the scan reads of it (cable/hosts/record.ts): who drives
+ * it, and the name its hook says as `session_title`. The Claude app sets that title itself and gives its own id of the
+ * session, so its record has no `nameSource`; any other name is one the person gave
+ * (docs/specs/2026-11-15-dial-session-name.md, decision 5). A session the devices find after they start again is named
+ * from it, as on a real machine.
+ */
+function writeRecord(world: TierAWorld, s: SessionDef, pid: number, hints: Record<string, string>): string {
+  const record = join(dirname(world.folders.claudeProjects), 'sessions', `${pid}.json`)
+  const entrypoint = hints.CLAUDE_CODE_ENTRYPOINT ?? 'cli'
+  const app = entrypoint === 'claude-desktop'
+  mkdirSync(dirname(record), { recursive: true })
+  writeFileSync(record, JSON.stringify({
+    pid, sessionId: s.id, cwd: s.cwd, entrypoint, name: s.title,
+    ...(app ? { hostSessionId: hints.CLAUDE_CODE_HOST_SESSION_ID } : { nameSource: 'user' }),
+  }))
+  return record
+}
+
 /** The hook's body as the core takes it (core/observedHook.ts parseObservedHook): one it would refuse fails the step. */
 function observe(world: TierAWorld, key: SessionKey, body: ObservedEvent): void {
   const event = parseObservedHook(body)
@@ -375,7 +395,8 @@ export async function startSession(world: TierAWorld, key: SessionKey): Promise<
   const tty = world.machine.processes.get(parent)?.tty
   world.machine.start({ pid, ppid: parent, executable: AGENTS[engine], ...(tty === undefined ? {} : { tty }),
     ...(app === undefined ? {} : { app }) })
-  world.machine.owners.set(s.id, { engine, pid, cwd: s.cwd, transcriptPath })
+  const record = engine === 'claude' ? writeRecord(world, s, pid, hintsOf(world, s)) : transcriptPath
+  world.machine.owners.set(s.id, { engine, pid, cwd: s.cwd, transcriptPath, record })
   const live: Live = { pid, ...(shell === undefined ? {} : { shell }), others, transcriptPath,
     ...(engine === 'claude' ? { mod: { ended: false } } : {}) }
   state.live.set(key, live)

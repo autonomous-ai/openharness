@@ -1,4 +1,4 @@
-// Tier A's dial steps (dial.ts): a tap, a swipe and a stroke reach the daemon as the firmware's frames, and the cable
+// Tier A's dial steps (dial.ts): a tap, a swipe, a stroke and a pick reach the daemon as the firmware's frames, and the cable
 // pulled and plugged in again is what the devices' fleet sees of a real one.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CableDecoder, CableType } from '../../../../cable/cableFrame.js'
@@ -43,6 +43,16 @@ describe("tier A's dial steps", () => {
       { t: 'agent.open', agentId: agentIdOf(sessions[0]!) },
       { t: 'focus', agentId: agentIdOf(sessions[1]!) },
     ])
+  })
+
+  it("pick sends app.pick with the page's wire id: tmux as itself, the ChatGPT app's as codex", async () => {
+    const dial = new LoopbackDial(() => Date.now())
+    const world = worldOf(dial)
+    await dialSteps.replug(world, { kind: 'replug' })
+    const { heard } = await opened(dial)
+    await dialSteps.pick(world, { kind: 'pick', page: 'tmux' })
+    await dialSteps.pick(world, { kind: 'pick', page: 'chatgpt' })
+    expect(heard).toEqual([{ t: 'app.pick', app: 'tmux' }, { t: 'app.pick', app: 'codex' }])
   })
 
   it('unplug closes the port and replug lets discovery find it again', async () => {

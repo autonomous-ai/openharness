@@ -36,7 +36,7 @@ import { flagOf } from '../../src/testing/dialAppEval/argv.js'
 import { namedPanes, selectRecord, TABS_STREAM } from '../../src/testing/dialAppEval/itermRecords.js'
 import { describeAttempt, guardThisProcess, NET_GUARD_FILE_ENV, netGuardEnv, readNetGuard, type NetAttempt } from '../../src/testing/dialAppEval/netGuard.js'
 import { orcaListing } from '../../src/testing/dialAppEval/orcaListing.js'
-import { agentIdOf, engineOf, frontName, PAGE, placeOf, type App, type Delivery, type EvalDriver, type LinkedApp, type Platform,
+import { agentIdOf, engineOf, frontName, PAGE, pageId, placeOf, type App, type Delivery, type EvalDriver, type LinkedApp, type Platform,
   type Scenario, type Seen, type SessionDef, type SessionKey, type Step, type StepKind, type StepOf } from '../../src/testing/dialAppEval/types.js'
 import { CAROUSEL_REFRESH_MS, DialCarousel, type DialMessage } from '../../src/testing/dialCarousel.js'
 import { writeExecutable } from '../../src/testing/executableFixture.js'
@@ -128,7 +128,7 @@ export interface TierBWorld {
 export type TierBHandler<K extends StepKind> = (world: TierBWorld, step: StepOf<K>) => Promise<void>
 
 /** The steps this driver runs itself, on the dial, the watch and the devices process. */
-type GenericKind = 'front' | 'thread' | 'tap' | 'swipe' | 'stroke' | 'unplug' | 'replug' | 'devices.restart'
+type GenericKind = 'front' | 'thread' | 'tap' | 'swipe' | 'stroke' | 'pick' | 'unplug' | 'replug' | 'devices.restart'
 /** The steps on an app's sessions and stores, and its voice, whose words land on that app's paths: each app's file gives
  *  those its scenarios take (appEvalClaude.ts, appEvalChatgpt.ts). */
 export type AppSteps = { [K in Exclude<StepKind, 'wait' | GenericKind>]?: TierBHandler<K> }
@@ -870,6 +870,7 @@ const GENERIC: { [K in GenericKind]: (world: World, step: StepOf<K>) => Promise<
     for (let move = 0; move < 3; move++) world.dial.send({ t: 'scroll', phase: 'move', dy: 8, v: 0 })
     world.dial.send({ t: 'scroll', phase: 'up', dy: 0, v: 0 })
   },
+  pick: async (world, step) => { world.pick(pageId(step.page)) },
   unplug: (world) => world.unplug(),
   replug: (world) => world.plug(),
   'devices.restart': (world) => world.restartDevices(),

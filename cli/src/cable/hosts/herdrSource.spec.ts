@@ -24,6 +24,14 @@ const detected = (pane: string, more: Record<string, unknown> = {}) =>
   ({ agent: 'claude', pane_id: pane, type: 'pane_agent_detected', workspace_id: pane.split(':')[0], ...more })
 const refusal = (code: string) => ({ line: { error: { code, message: code } } })
 const method = (request: unknown) => (request as { method: string }).method
+/** Lets what the source was answered be taken in. */
+const turn = () => new Promise((resolve) => setImmediate(resolve))
+/** Whether a start's promise has ended, read as the test goes. */
+const ending = (start: Promise<void>) => {
+  const state = { ended: false }
+  void start.then(() => { state.ended = true })
+  return state
+}
 const LOG_LINE = /^\[herdr\] (listed · \d+ agents|over · \d+ left out|skipped · \d+ pane-id|list · [a-z_]+|closed · [a-z_]+|retry · \d+|socket · (none|stale|live))$/
 
 describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026-11-16-device-herdr.md)', () => {
@@ -1002,6 +1010,86 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     s.source.start()
     await listRead(1)
     expect(subscribe).toHaveBeenCalledTimes(1)
+  })
+
+  // The dial's greeting waits for it (devices.ts dialAttached), so its first list holds herdr's agents.
+  describe('the end of a start', () => {
+    it('a start ends once its first list has landed, its agents listed', async () => {
+      server.agents = [agent('w1:p1')]
+      const s = setup()
+      await s.source.start()
+      expect(s.source.list().map(({ paneKeys }) => paneKeys)).toEqual([['herdr:w1:p1']])
+    })
+
+    it('a start whose first list fails ends too', async () => {
+      server.answer('agent.list', refusal('invalid_request'))
+      const s = setup()
+      await s.source.start()
+      expect(s.log).toEqual(['[herdr] socket · live', '[herdr] list · rejected', '[herdr] retry · 1'])
+    })
+
+    it('a start whose subscription closes ends too: a stale socket', async () => {
+      await server.stale()
+      const s = holding(stampAt(WALL - 60_000))
+      await s.source.start()
+      expect(s.log).toEqual(['[herdr] socket · stale'])
+    })
+
+    it('with no socket a start ends at once', async () => {
+      await server.stop()
+      const s = setup()
+      const start = ending(s.source.start())
+      await turn()
+      expect(start.ended).toBe(true)
+      expect(s.log).toEqual(['[herdr] socket · none'])
+    })
+
+    it('a stop ends the start under way at once; the next start ends with its own list, not the stopped one', async () => {
+      server.agents = [agent('w1:p1')]
+      const real = herdrClient()
+      let held!: () => void
+      const holding = new Promise<void>((resolve) => { held = resolve })
+      let release!: () => void
+      let lists = 0
+      // The first list's answer is read only once the source has stopped and started again.
+      const s = setup({
+        client: {
+          ...real,
+          request: async (method, params) => {
+            const answer = await real.request(method, params)
+            if (method === 'agent.list' && ++lists === 1) await new Promise<void>((resolve) => { release = resolve; held() })
+            return answer
+          },
+        },
+      })
+      const first = ending(s.source.start())
+      await holding
+      expect(first.ended).toBe(false)
+      s.source.stop()
+      await turn()
+      expect(first.ended).toBe(true)
+      const second = ending(s.source.start())
+      // The stopped list lands and takes nothing; the new subscription waits out the rest of the second since the last
+      // one opened.
+      release()
+      await turn()
+      expect(second.ended).toBe(false)
+      expect(s.source.list()).toEqual([])
+      s.advance(1000)
+      await s.until(() => s.source.list().length === 1)
+      await turn()
+      expect(second.ended).toBe(true)
+    })
+
+    it('a start while it runs ends at once', async () => {
+      server.answer('agent.list', 'hold')
+      const s = setup()
+      void s.source.start()
+      const again = ending(s.source.start())
+      await turn()
+      expect(again.ended).toBe(true)
+      s.source.stop()
+    })
   })
 
   it('voice', async () => {

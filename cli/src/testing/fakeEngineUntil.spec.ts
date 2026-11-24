@@ -130,4 +130,27 @@ describe('the fake Claude Code\'s session title', () => {
     const claude = start()
     expect(await claude.hooked('SessionStart')).not.toHaveProperty('session_title')
   }, 30_000)
+
+  // The devices name a session the scan found from Claude Code's own process record (cable/hosts/record.ts): a name the
+  // person gave is written there with `nameSource: 'user'`.
+  it('writes the title it was given in its process record, as the person\'s name for the session', async () => {
+    const claude = start({ FAKE_CLAUDE_SESSION_TITLE: 'Eval a' })
+    const { session_id: sessionId } = await claude.hooked('SessionStart')
+    expect(await processRecord()).toMatchObject({ sessionId, name: 'Eval a', nameSource: 'user' })
+  }, 30_000)
+
+  it('writes no name in its process record when given none', async () => {
+    const claude = start()
+    await claude.hooked('SessionStart')
+    const record = await processRecord()
+    expect(record).not.toHaveProperty('name')
+    expect(record).not.toHaveProperty('nameSource')
+  }, 30_000)
 })
+
+/** The fake's record, `~/.claude/sessions/<pid>.json`, the one file there once it is written. */
+const processRecord = (): Promise<Record<string, unknown>> => vi.waitFor(() => {
+  const folder = join(root, 'home', '.claude', 'sessions')
+  const [file] = readdirSync(folder)
+  return JSON.parse(readFileSync(join(folder, file), 'utf8')) as Record<string, unknown>
+}, { timeout: 20_000, interval: 20 })

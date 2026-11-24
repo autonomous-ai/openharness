@@ -7,8 +7,8 @@ import { heldOut } from './heldOut.js'
 import { itermScenarios } from './itermScenarios.js'
 import { orcaScenarios } from './orcaScenarios.js'
 import { vscodeScenarios } from './vscodeScenarios.js'
-import { orcaTerminalHandle, type App, type Check, type Editor, type Platform, type Scenario, type SessionDef, type SessionKey, type Step,
-  type Tier } from './types.js'
+import { orcaTerminalHandle, type Check, type Editor, type Page, type Platform, type Scenario, type SessionDef, type SessionKey,
+  type Step, type Tier } from './types.js'
 
 const EVERY_PLATFORM: Platform[] = ['darwin', 'win32', 'linux']
 export const S = 1_000
@@ -18,11 +18,21 @@ const UNTIL_MS = 10 * S
 /** How long a person looks at the face before acting on what it lists. */
 const READ_MS = 1 * S
 /**
- * A wait for the first list before a step that needs it: the dial has a ring of these sessions on that page. Then the
- * person reads it, their own timing and no synchronisation: an input in the instant the list lands is no person's.
+ * A wait for the first list before a step that needs it: the dial has a ring of these sessions on that page, and with
+ * `apart` the other pages count those. Then the person reads it, their own timing and no synchronisation: an input in
+ * the instant the list lands is no person's.
  */
-export const listed = (page: App, expect: SessionKey[]): Step[] => [
-  { kind: 'wait', ms: UNTIL_MS, until: { kind: 'ring', page, expect } },
+export const listed = (page: Page, expect: SessionKey[], apart?: SessionKey[]): Step[] => [
+  { kind: 'wait', ms: UNTIL_MS, until: { kind: 'ring', page, expect, ...(apart ? { apart } : {}) } },
+  { kind: 'wait', ms: READ_MS },
+]
+
+/**
+ * A wait for the Apps screen to show the page and count exactly these pages' agents, then the person reads it: what they
+ * look at before a pick, as a pick of a page whose agents the devices have not counted yet is ignored.
+ */
+export const counted = (shown: Page, counts: Partial<Record<Page, number>>): Step[] => [
+  { kind: 'wait', ms: UNTIL_MS, until: { kind: 'apps', shown, counts } },
   { kind: 'wait', ms: READ_MS },
 ]
 
