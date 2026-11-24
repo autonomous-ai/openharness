@@ -328,7 +328,7 @@
     "a/darwin/IH4/ring.archived": 1,
     "a/darwin/IH4/ring.cap": 1,
     "a/darwin/IH4/ring.names": 1,
-    "a/darwin/IH4/ring.order": 0,
+    "a/darwin/IH4/ring.order": 1,
     "a/darwin/IH4/ring.precision": 0.5,
     "a/darwin/IH4/ring.recall": 1,
     "a/darwin/IH4/wait.4": 1,
