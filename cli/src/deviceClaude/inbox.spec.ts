@@ -376,6 +376,20 @@ describe('the inbox follower on Windows, once its caller is gone', () => {
     expect(counts.rows).toBe(2)
   })
 
+  // A follower Claude Code started itself, with no `harness.exe` between them: its parent is the caller it proves.
+  it('ends at the minute\'s proof once its parent, no harness.exe, has its pid taken by another process', async () => {
+    const direct = (claude?: string): Row[] => table(claude)
+      .filter((row) => row.pid !== HARNESS)
+      .map((row) => (row.pid === NODE ? { ...row, parentPid: CLAUDE } : row))
+    const { dir, seen } = await windowsDaemon([held()])
+    const { counts, liveness } = processes(() => direct(), () => direct('w:9'))
+    const follower = start(dir, { liveness, ppid: CLAUDE, stopAt: 1 })
+    await vi.waitFor(() => expect(seen).toHaveLength(1))
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(await within(follower.run)).toEqual({ code: 0, lines: [], waits: [] })
+    expect(counts.rows).toBe(2)
+  })
+
   it('polls on and prints each line while Claude Code runs', async () => {
     const first = holding()
     const { dir, seen } = await windowsDaemon([first.poll, { status: 200, body: {} }])
