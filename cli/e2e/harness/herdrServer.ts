@@ -241,8 +241,8 @@ export class PrivateHerdr {
    * The layout herdr saved in its [config] folder gone (`install`'s): herdr 0.9.5 writes `herdr/session.json` and
    * `herdr/session-snapshots/` as it stops and a server started later restores their workspaces and panes, so a scenario
    * on the same daemon met the panes of the one before (iTerm2's I14 and I15 failed in a full run and passed alone).
-   * Its `herdr/session-history.json` too, which its persist module reads beside `session.json`: snapshots of workspaces
-   * by their folder, with their pane numbers, and the catalog's folders are every scenario's.
+   * Not `herdr/session-history.json`, the panes' screen text: herdr writes it only with `[experimental] pane_history`,
+   * which `install`'s config leaves off, and uses it only with the `session.json` it was written beside.
    * Refused while a server answers on its socket: it would write them again. Its config stays.
    */
   static async forget(config: string): Promise<void> {
@@ -250,7 +250,6 @@ export class PrivateHerdr {
     if (await answers(socket)) throw new Error(`herdr still runs on ${socket}: its layout is written again as it stops`)
     const herdr = join(config, 'herdr')
     await rm(join(herdr, 'session.json'), { force: true })
-    await rm(join(herdr, 'session-history.json'), { force: true })
     await rm(join(herdr, 'session-snapshots'), { recursive: true, force: true })
   }
 
