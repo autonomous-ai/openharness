@@ -118,8 +118,9 @@ export interface CallerLiveness {
  * The caller's liveness: the devices' table (devices/listenerPipe.ts `WINDOWS_LIVENESS`), but a pid it may not signal
  * (EPERM) runs. The watch fails open, as a live session's follower must never be ended, and a refused check would end
  * it at the first tick on every start. A pid another account took is still caught by the minute's start marker: that
- * account's process is missing from this account's table, or has another marker. The devices' and the daemon's proofs
- * keep EPERM as dead.
+ * account's process is missing from this account's table, or has another marker. The devices' proof and this
+ * follower's of the daemon (`createDaemonProof`) keep EPERM as dead: a pid another account took could have made the
+ * recorded pipe (lib/ownProcess.ts).
  */
 export const CALLER_LIVENESS: CallerLiveness = { alive: pidAlive, rows: WINDOWS_LIVENESS.rows }
 
