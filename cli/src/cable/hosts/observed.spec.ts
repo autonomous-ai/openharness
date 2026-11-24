@@ -5182,6 +5182,66 @@ describe('ObservedSource outer place', () => {
       await t.freshAsks[1](TAB_2)
       expect(await again).toBe(true)
     })
+
+    // A tap or rest waits up to OUTER_FRESH_WAIT_MS before it acts (PM, 2026-11-24: last action wins): one the person
+    // replaced meanwhile would bring forward what they left.
+    describe('the last tap or rest wins', () => {
+      it('two taps during one wait: only the later opens', async () => {
+        const t = nested({}, undefined, {}, { freshByHand: true })
+        t.src.ingest(t.ev('session-start', inTmux()))
+        await t.asks[0].answer(CLIENT)
+        const first = t.src.focus(t.agent())
+        const second = t.src.focus(t.agent())
+        expect(t.freshAsks).toHaveLength(1)
+        await t.freshAsks[0](TAB_2)
+        expect(await first).toBe('superseded')
+        expect(await second).toBe(true)
+        expect(t.actions.open).toHaveBeenCalledTimes(1)
+      })
+
+      it('a tap on a, then on b during a\'s wait: b opens, a does not', async () => {
+        const t = nested({}, undefined, {}, { freshByHand: true })
+        t.src.ingest(t.ev('session-start', inTmux()))
+        t.src.ingest(t.ev('session-start', { sessionId: 's2', callerPid: 200, ...inTmux({ TMUX_PANE: '%4' }) }))
+        await t.asks[0].answer(CLIENT)
+        await t.asks[1].answer(TAB_2)
+        const of = (sessionId: string) => t.src.list().find(({ id }) => id === observedAgentId('claude', sessionId))!
+        const tappingA = t.src.focus(of('s1'))
+        const tappingB = t.src.focus(of('s2'))
+        await t.freshAsks[0](CLIENT)
+        expect(await tappingA).toBe('superseded')
+        expect(t.actions.open).not.toHaveBeenCalled()
+        await t.freshAsks[1](TAB_2)
+        expect(await tappingB).toBe(true)
+        expect(t.actions.open.mock.calls.map(([id]) => id)).toEqual([of('s2').id])
+      })
+
+      it('a rest that a later rest or tap replaced shows nothing', async () => {
+        for (const later of ['rest', 'tap'] as const) {
+          const t = nested({}, undefined, {}, { freshByHand: true })
+          t.src.ingest(t.ev('session-start', inTmux()))
+          await t.asks[0].answer(CLIENT)
+          const resting = t.src.showPane(t.agent())
+          const replacing = later === 'rest' ? t.src.showPane(t.agent()) : t.src.focus(t.agent())
+          await t.freshAsks[0](TAB_2)
+          expect(await resting, later).toBe('superseded')
+          expect(await replacing, later).toBe(later === 'rest' ? 'ok' : true)
+          expect(t.actions.tabSelect.mock.calls, later).toEqual([['terminal-app', '/dev/ttys005', later === 'tap']])
+        }
+      })
+
+      it('a rest after a tap does not drop the tap', async () => {
+        const t = nested({}, undefined, {}, { freshByHand: true })
+        t.src.ingest(t.ev('session-start', inTmux()))
+        await t.asks[0].answer(CLIENT)
+        const tapping = t.src.focus(t.agent())
+        const resting = t.src.showPane(t.agent())
+        await t.freshAsks[0](TAB_2)
+        expect(await tapping).toBe(true)
+        expect(await resting).toBe('ok')
+        expect(t.actions.open).toHaveBeenCalledTimes(1)
+      })
+    })
   })
 
   // Diego, 2026-11-23: an agent in tmux or herdr is on that multiplexer's page, whatever terminal holds its client. Only
