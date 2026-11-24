@@ -19,8 +19,7 @@ import { describeGridLaunch, gridEnvVarNames } from '../../lib/gridLaunchWire.js
 import { validateLaunchOverrides, type LaunchOverridesDeps, type LaunchSource } from '../../lib/launchOverrides.js'
 import { codeOrLength, sid } from '../../lib/log.js'
 import { matchesLaunchReceipt, type registry, type RegisteredSession } from '../../lib/registry.js'
-import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
-import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
+import { publishEngine, resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
 import { bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
 import type { RuntimeProfileManager } from '../../lib/runtimeProfile.js'
 import { parseRuntimeProfile } from '../../lib/runtimeProfileWire.js'
@@ -31,7 +30,7 @@ import type { MoveConversation } from '../../engines/facets/providerMove.js'
 import { engineBin } from '../../lib/engineBin.js'
 import { sessionCodexHome } from '../../lib/engineHomes.js'
 import type { TerminalBackendCoordinator } from '../../lib/terminalBackendCoordinator.js'
-import { sameProcessIdentity, terminalRouteKey } from '../../lib/terminalRuntime.js'
+import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import type { createLaunchHelpers } from './launch.js'
 import type { PaneSwap } from './swap.js'
@@ -319,15 +318,15 @@ export function createAgentRetargeter({
         console.warn(`[grid] retarget ${sid(session.agentId)} failed · ${codeOrLength(outcome.error ?? outcome.detail)}`)
         return failed('RESPAWN_FAILED', outcome.detail)
       }
-      const publication = await registry.confirmLaunch(session.agentId, { processIdentity: outcome.processIdentity,
-        grid: grid ? { baseUrl: grid.baseUrl, model: grid.model ?? null } : null,
-        gridLaunchRecord: built.overrides.gridLaunchRecord ?? null, ...(grid && remembered ? { subscriptionModel: remembered } : {}),
-      }, { current: dispatchCurrent, refresh: async () => {
-        const observed = await resolvePaneEngineProcess(backend, pane, session.engine)
-        if (!sameProcessIdentity(observed, outcome.processIdentity) || observed?.executable !== outcome.processIdentity.executable) {
-          throw new IdentityReadUnavailable('the retargeted process changed before publication')
-        }
-      } })
+      const changedReason = 'the retargeted process changed before publication'
+      const publication = await publishEngine(outcome.processIdentity, () => resolvePaneEngineProcess(backend, pane, session.engine),
+        { gone: changedReason, changed: changedReason }, (identity, refresh, expires) => {
+          if (identity !== outcome.processIdentity) console.log(`[retarget] publication · engine renamed · ${sid(session.agentId)}`)
+          return registry.confirmLaunch(session.agentId, { processIdentity: identity,
+            grid: grid ? { baseUrl: grid.baseUrl, model: grid.model ?? null } : null,
+            gridLaunchRecord: built.overrides.gridLaunchRecord ?? null, ...(grid && remembered ? { subscriptionModel: remembered } : {}),
+          }, { current: dispatchCurrent, refresh, expires })
+        })
       const refreshed = publication.state === 'confirmed' ? publication.entry : null
       if (!refreshed) return changed()
       const committed = () => restartJobs.revision(session.agentId) === revision
