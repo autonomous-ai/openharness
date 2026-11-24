@@ -2309,8 +2309,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const agent = adapter === tmux.id ? nestedAt(source, adapter, id) : source.byPane(adapter, id)
     if (!agent) { log('[device] pane · skipped · unknown agent'); return }
     // An agent in tmux is on tmux's page, as a selected tab's is (Diego's decision 4, 2026-11-23; cableHost.ts
-    // followPage). WezTerm's and kitty's agents are on their app's own page.
-    if (adapter === tmux.id) cableHost.followPage(agent.id)
+    // followPage). WezTerm's and kitty's turn back to their app's own page, which a tmux follow inside one of their
+    // panes held on tmux's (the PM's decision, 2026-11-24).
+    cableHost.followPage(agent.id)
     return cable.followLocal(agent.id, 'pane')
   }
   /** The poll's app left the front, its last agent went, its places changed, or the dial went: the poll and the dial's
