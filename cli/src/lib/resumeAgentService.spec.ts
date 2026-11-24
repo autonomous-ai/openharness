@@ -80,7 +80,7 @@ vi.mock('./resumeStoppedAgent.js', async original => {
 })
 // The engine this fake stands for never exits, so there is no settle time to wait out; the rule is tested in
 // `resumeStoppedAgent.spec.ts`.
-vi.mock('./paneEngineProcess.js', () => ({ checkSessionRuntime: vi.fn(), resolvePaneEngineProcess: vi.fn(), ENGINE_SETTLE_MS: 0 }))
+vi.mock('./paneEngineProcess.js', async (real) => ({ ...await real<object>(), checkSessionRuntime: vi.fn(), resolvePaneEngineProcess: vi.fn(), ENGINE_SETTLE_MS: 0 }))
 // `resumeCapability` reads the real flag table through this module; only the argv builder and the
 // capability gate are faked. The gate would otherwise spawn the tester's own login shell to ask
 // `<engine> --help` about a flag, which is neither this file's subject nor the same answer on two
@@ -1444,6 +1444,39 @@ it.each(['cancel', 'process', 'owner'] as const)('revokes resumed authority when
   expect(outcome).not.toMatchObject({ ok: true })
   expect(releaseHold).not.toHaveBeenCalled()
   expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).not.toBeNull()
+})
+
+const started = { ...identity, executable: 'node' }
+
+it('publishes a resumed engine that named itself between the look and the refresh, under its new name', async () => {
+  // The wait's look, then each write's refresh.
+  vi.mocked(resolvePaneEngineProcess).mockReset().mockResolvedValueOnce(started).mockResolvedValue(identity)
+  const confirm = vi.spyOn(registry, 'confirmLaunch')
+  const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+  try {
+    expect(await start()).toMatchObject({ ok: true, session: { processIdentity: identity, launch: { state: 'ready' } } })
+    expect(confirm.mock.calls.map(call => call[1].processIdentity)).toEqual([started, identity])
+    expect(confirm.mock.calls[0]![2]!.expires).toEqual(expect.any(Number))
+    expect(confirm.mock.calls[1]![2]!.expires).toBe(confirm.mock.calls[0]![2]!.expires)
+    expect(resolvePaneEngineProcess).toHaveBeenLastCalledWith(tmuxTerminal, { backend: 'tmux', paneId: pane }, 'codex')
+    expect(releaseHold).toHaveBeenCalledOnce()
+    expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).toBeNull()
+    expect(log).toHaveBeenCalledWith(`[resume] publication · engine renamed · ${saved.agentId.slice(0, 8)}`)
+    registry.load()
+    expect(registry.byAgent(saved.agentId)?.processIdentity).toEqual(identity)
+  } finally { confirm.mockRestore(); log.mockRestore() }
+})
+
+it.each([['pid', { pid: 54322 }], ['start', { startMarker: 'replacement-process' }]] as const)('keeps a resumed Node runtime whose %s changed unconfirmed', async (_change, change) => {
+  vi.mocked(resolvePaneEngineProcess).mockReset().mockResolvedValueOnce(started).mockResolvedValue({ ...identity, ...change })
+  const confirm = vi.spyOn(registry, 'confirmLaunch')
+  try {
+    expect(await start()).toMatchObject({ ok: false, error: 'RESUME_UNCONFIRMED' })
+    expect(confirm).toHaveBeenCalledOnce()
+    expect(releaseHold).not.toHaveBeenCalled()
+    expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).not.toBeNull()
+    expect(registry.byAgent(saved.agentId)?.launch?.state).not.toBe('ready')
+  } finally { confirm.mockRestore() }
 })
 
 it('refuses resumed authority when a peer changes the selected durable row', async () => {
