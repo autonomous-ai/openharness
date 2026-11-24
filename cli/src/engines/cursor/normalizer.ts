@@ -396,23 +396,33 @@ export function cursorMessagesToEvents(
 
 export function lastCursorTurnText(rawLines: string[]): LastTurnText | null {
   let userMessage = ''
-  let assistantText = ''
+  // The answer is the text after the last tool call, as in Claude's recap (lastTurnTextFromRawLines). Joining
+  // every block put the narration Cursor writes before each call ahead of it: "Let me look…\n\nRenamed it."
+  // (dial eval hill-climb #7, 2026-11-23). The narration stays for a turn that ended on a tool call.
+  let assistantParts: string[] = []
+  let narration: string[] = []
   for (const line of rawLines) {
     const raw = parse(line)
     if (!raw) continue
     if (raw.role === 'user') {
       const first = contentBlocks(raw).find((block) => block.type === 'text')
       const text = cursorUserText(string(first?.text))
-      if (text) { userMessage = text; assistantText = '' }
+      if (text) { userMessage = text; assistantParts = []; narration = [] }
     } else if (raw.role === 'assistant') {
-      for (const block of contentBlocks(raw)) {
+      const blocks = contentBlocks(raw)
+      for (const block of blocks) {
         if (block.type === 'text') {
           const text = cursorAssistantText(string(block.text))
-          if (text) assistantText += `${assistantText ? '\n\n' : ''}${text}`
+          if (text) assistantParts.push(text)
         }
+      }
+      if (blocks.some((block) => block.type === 'tool_use')) {
+        narration = narration.concat(assistantParts)
+        assistantParts = []
       }
     }
   }
+  const assistantText = (assistantParts.length ? assistantParts : narration).join('\n\n')
   return assistantText ? { userMessage, assistantText } : null
 }
 
