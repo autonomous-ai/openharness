@@ -337,6 +337,19 @@ describe('the pane-process swap', () => {
     expect(await never).toBeNull()
   })
 
+  // On Linux a Node engine renames itself (process.title), which changes its executable but not its pid or
+  // start: a restart that carried the first look's name failed at publication (nightly run 45237523183).
+  it('returns the later look of a process that renamed itself while settling', async () => {
+    vi.useFakeTimers()
+    const { swap } = setup()
+    vi.mocked(resolvePaneEngineProcess)
+      .mockResolvedValueOnce({ pid: 99, startMarker: 'now', executable: 'node' } as never)
+      .mockResolvedValueOnce({ pid: 99, startMarker: 'now', executable: 'codex' } as never)
+    const waiting = swap.paneSwapDeps(session(), place()).waitForProcess()
+    await vi.advanceTimersByTimeAsync(150 + ENGINE_SETTLE_MS)
+    expect(await waiting).toEqual({ pid: 99, startMarker: 'now', executable: 'codex' })
+  })
+
   // A launch the engine refuses (`codex resume` after an update dropped it) runs for an instant: seen in
   // that instant, a restart called the conversation resumed and never fell back to a fresh start.
   it('counts a process as come up only when it is still the pane\'s engine a moment later', async () => {
