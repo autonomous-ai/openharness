@@ -309,6 +309,22 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     await focusHeard(s, 2)
   })
 
+  it('an answer to the focus subscription out of form is a refusal too: one line, and no subscription opens it again', async () => {
+    server.agents = [agent('w1:p1')]
+    const s = setup()
+    const subscribe = vi.spyOn(s.client, 'subscribe')
+    s.source.start()
+    await subscribed(1)
+    server.answer('events.subscribe', { line: { result: { type: 'agent_list' } } })
+    await subscribed(1, true)
+    server.answer('events.subscribe')
+    await s.until(() => s.log.includes('[herdr] focus · bad_answer'))
+    s.advance(1000)
+    await listRead(2)
+    expect(subscribe.mock.calls.map(([entries]) => entries)).toEqual([KINDS, FOCUS, [...KINDS, statusEntry('w1:p1')]])
+    expect(s.log.filter((line) => FOCUS_LINE.test(line))).toEqual(['[herdr] focus · bad_answer'])
+  })
+
   // A connection lost, a deadline or a line out of form is no refusal: focus-follow would stay off for the whole attempt.
   it('the focus subscription ending of itself is opened again with the next agents\' list', async () => {
     server.agents = [agent('w1:p1')]
