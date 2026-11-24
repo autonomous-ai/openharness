@@ -10,10 +10,10 @@ import { createHerdrAdapter } from './herdr.js'
 import { createHerdrAppAdapter } from './herdrApp.js'
 import type { HerdrPrompt } from './herdrClient.js'
 import { type Delivery, Inbox } from './inbox.js'
-import { askedLine, countWord, observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps, type PromptSource } from './observed.js'
+import { askedLine, countWord, observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps, OUTER_FRESH_WAIT_MS, type PromptSource } from './observed.js'
 import type { OpenTarget } from './open.js'
 import { createOrcaAdapter, MAX_TEXT, type OrcaDeps } from './orca.js'
-import type { Nested, NestedPlace, OuterLookup } from './outer.js'
+import { type Fresh, FRESH_WITHIN_MS, type Nested, type NestedPlace, type OuterLookup } from './outer.js'
 import type { ProcessName } from './scannedApp.js'
 import { pageOf } from './select.js'
 import { createTabsAdapter, type TabApp } from './tabs.js'
@@ -4695,22 +4695,28 @@ describe('ObservedSource outer place', () => {
 
   /** A source whose outer places the test answers by hand, in the order they were asked, as tmux's and herdr's lookups
    *  answer an event in their pane, and whose multiplexer each ask's lookup tells by hand once its maker read confirms
-   *  it; an event in neither is not nested. A tty read answers at once. */
-  function nested(over: Partial<Fakes> = {}, adapt = (adapters: readonly HostAdapter[]) => adapters, deps: Partial<ObservedDeps> = {}) {
+   *  it; an event in neither is not nested. A tap's or a rest's fresh ask answers `{}` at once, which changes nothing,
+   *  or, [freshByHand], goes to `freshAsks`, answered as `asks` are. A tty read answers at once. */
+  function nested(
+    over: Partial<Fakes> = {}, adapt = (adapters: readonly HostAdapter[]) => adapters, deps: Partial<ObservedDeps> = {},
+    { freshByHand }: { freshByHand?: true } = {},
+  ) {
     const asks: Array<{ answer(place: OuterAnswer): Promise<unknown>; made(nest: Nest): Promise<unknown> }> = []
-    const outer = vi.fn((hints: Readonly<Record<string, string>>, _pid: number, made?: (nest: Nest) => void) => (hints.TMUX_PANE || hints.HERDR_PANE_ID
-      ? new Promise<OuterAnswer>((resolve) => {
-        asks.push({
-          answer: (place) => { resolve(place); return vi.advanceTimersByTimeAsync(0) },
-          made: (nest) => { made?.(nest); return vi.advanceTimersByTimeAsync(0) },
-        })
+    const freshAsks: Array<(place: OuterAnswer) => Promise<unknown>> = []
+    const outer = vi.fn((hints: Readonly<Record<string, string>>, _pid: number, made?: (nest: Nest) => void, opts?: Fresh) => {
+      if (!hints.TMUX_PANE && !hints.HERDR_PANE_ID) return undefined
+      if (opts?.fresh && !freshByHand) return Promise.resolve<OuterAnswer>({})
+      return new Promise<OuterAnswer>((resolve) => {
+        const answer = (place: OuterAnswer) => { resolve(place); return vi.advanceTimersByTimeAsync(0) }
+        if (opts?.fresh) freshAsks.push(answer)
+        else asks.push({ answer, made: (nest) => { made?.(nest); return vi.advanceTimersByTimeAsync(0) } })
       })
-      : undefined))
+    })
     const tty = vi.fn(async (_pid: number): Promise<string | undefined> => '/dev/ttys031')
     const { actions, ran } = fakeActions(over)
     const s = setup({ actions: { ...actions, adapters: adapt(actions.adapters) }, tty, outer, ...deps })
     const agent = () => s.src.list()[0]
-    return { ...s, actions, ran, outer, asks, tty, agent }
+    return { ...s, actions, ran, outer, asks, freshAsks, tty, agent }
   }
 
   it('a nested event lands on its outer app, with its client\'s tty and that app\'s bundle', async () => {
@@ -5035,6 +5041,146 @@ describe('ObservedSource outer place', () => {
     expect(t.actions.open.mock.calls).toEqual([[t.agent().id, { bundle: 'com.apple.Terminal', pane: { adapter: 'tmux', id: '%3:100:terminal-app' } }]])
     expect(t.actions.tabSelect.mock.calls).toEqual([['terminal-app', '/dev/ttys004', true]])
     expect(t.actions.open.mock.invocationCallOrder[0]).toBeLessThan(t.actions.tabSelect.mock.invocationCallOrder[0])
+  })
+
+  // Eval I13 (PM, 2026-11-24): the person detached, attached again from iTerm2's tab 2 and typed nothing, so no hook
+  // asked again. A tap and a rest read where the client is now, waiting at most OUTER_FRESH_WAIT_MS.
+  describe('a tap or a rest reads its client afresh', () => {
+    const TAB_2 = { ...CLIENT, tty: '/dev/ttys005' }
+    const late = (logs: readonly string[]) => logs.filter((line) => line === '[observed] outer · late')
+
+    it('I13: a tap opens the tab its client is in now, read afresh with no hook since', async () => {
+      const t = nested({}, undefined, {}, { freshByHand: true })
+      t.src.ingest(t.ev('session-start', inTmux()))
+      await t.asks[0].answer(CLIENT)
+      const tapping = t.src.focus(t.agent())
+      expect(t.outer.mock.calls.at(-1)).toEqual([inTmux().hostHints, 100, undefined, { fresh: true }])
+      expect(t.actions.open).not.toHaveBeenCalled()
+      await t.freshAsks[0](TAB_2)
+      expect(await tapping).toBe(true)
+      expect(t.src.paneOf(t.agent().id, 'tabs')).toBe('terminal-app:/dev/ttys005')
+      expect(t.actions.tabSelect.mock.calls.at(-1)).toEqual(['terminal-app', '/dev/ttys005', true])
+    })
+
+    it('I13: a rest selects the tab its client is in now', async () => {
+      const t = nested({}, undefined, {}, { freshByHand: true })
+      t.src.ingest(t.ev('session-start', inTmux()))
+      await t.asks[0].answer(CLIENT)
+      const resting = t.src.showPane(t.agent())
+      expect(t.actions.tabSelect).not.toHaveBeenCalled()
+      await t.freshAsks[0](TAB_2)
+      expect(await resting).toBe('ok')
+      expect(t.actions.tabSelect.mock.calls).toEqual([['terminal-app', '/dev/ttys005', false]])
+      expect(t.ran.mock.calls).toEqual([paneAsked, selected])
+      expect(t.actions.tabSelect.mock.invocationCallOrder[0]).toBeLessThan(t.ran.mock.invocationCallOrder[0])
+    })
+
+    it('a lookup slower than the wait: the tap acts on the old tab at OUTER_FRESH_WAIT_MS, says late once, and the late answer lands', async () => {
+      for (const act of ['tap', 'rest'] as const) {
+        const t = nested({}, undefined, {}, { freshByHand: true })
+        t.src.ingest(t.ev('session-start', inTmux()))
+        await t.asks[0].answer(CLIENT)
+        const acting = act === 'tap' ? t.src.focus(t.agent()) : t.src.showPane(t.agent())
+        await vi.advanceTimersByTimeAsync(OUTER_FRESH_WAIT_MS - 1)
+        expect(t.actions.open, act).not.toHaveBeenCalled()
+        expect(t.actions.tabSelect, act).not.toHaveBeenCalled()
+        await vi.advanceTimersByTimeAsync(1)
+        expect(await acting, act).toBe(act === 'tap' ? true : 'ok')
+        expect(t.actions.open, act).toHaveBeenCalledTimes(act === 'tap' ? 1 : 0)
+        expect(t.actions.tabSelect.mock.calls, act).toEqual([['terminal-app', '/dev/ttys004', act === 'tap']])
+        expect(late(t.logs), act).toHaveLength(1)
+        await t.freshAsks[0](TAB_2)
+        expect(t.src.paneOf(t.agent().id, 'tabs'), act).toBe('terminal-app:/dev/ttys005')
+        expect(late(t.logs), act).toHaveLength(1)
+      }
+    })
+
+    // Detached and not attached again: the row keeps its page and its tab, and the tap opens the old app.
+    it('a fresh answer with no app and no client\'s process changes nothing', async () => {
+      for (const place of [{}, { nest: 'tmux' }, { pid: 0 }] as const) {
+        const t = nested({}, undefined, {}, { freshByHand: true })
+        t.src.ingest(t.ev('session-start', inTmux()))
+        await t.asks[0].answer({ ...CLIENT, nest: 'tmux' })
+        const told = t.changes.mock.calls.length
+        const tapping = t.src.focus(t.agent())
+        await t.freshAsks[0](place)
+        expect(await tapping, JSON.stringify(place)).toBe(true)
+        expect(t.agent().app, JSON.stringify(place)).toBe('terminal-app')
+        expect(t.actions.tabSelect.mock.calls, JSON.stringify(place)).toEqual([['terminal-app', '/dev/ttys004', true]])
+        expect(t.changes, JSON.stringify(place)).toHaveBeenCalledTimes(told)
+      }
+    })
+
+    it('a fresh answer with only its client\'s process lands: the raise gets that process (Linux)', async () => {
+      const t = nested({}, undefined, {}, { freshByHand: true })
+      t.src.ingest(t.ev('session-start', inTmux()))
+      await t.asks[0].answer({ pid: 4300 })
+      const { id } = t.agent()
+      const tapping = t.src.focus(t.agent())
+      await t.freshAsks[0]({ pid: 4500 })
+      expect(await tapping).toBe(true)
+      expect(t.src.windowOf(id)).toEqual({ pid: 4500, app: 'tmux' })
+    })
+
+    it('a hook\'s ask during a fresh one wins', async () => {
+      const t = nested({}, undefined, {}, { freshByHand: true })
+      t.src.ingest(t.ev('session-start', inTmux()))
+      await t.asks[0].answer(CLIENT)
+      const tapping = t.src.focus(t.agent())
+      t.src.ingest(t.ev('turn-start', inTmux()))
+      await t.asks[1].answer({ ...CLIENT, tty: '/dev/ttys006' })
+      await t.freshAsks[0](TAB_2)
+      expect(await tapping).toBe(true)
+      expect(t.src.paneOf(t.agent().id, 'tabs')).toBe('terminal-app:/dev/ttys006')
+      expect(t.actions.tabSelect.mock.calls.at(-1)).toEqual(['terminal-app', '/dev/ttys006', true])
+    })
+
+    it('a tap or rest on an agent in no multiplexer asks no lookup and waits for nothing', async () => {
+      const t = nested({}, undefined, {}, { freshByHand: true })
+      t.src.ingest(t.ev('session-start', { hostHints: { __CFBundleIdentifier: 'com.apple.Terminal' } }))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(await t.src.focus(t.agent())).toBe(true)
+      expect(await t.src.showPane(t.agent())).toBe('ok')
+      expect(t.outer).toHaveBeenCalledTimes(1)
+      expect(late(t.logs)).toEqual([])
+    })
+
+    it('a session that ends during the wait opens and shows nothing', async () => {
+      const t = nested({}, undefined, {}, { freshByHand: true })
+      t.src.ingest(t.ev('session-start', inTmux()))
+      await t.asks[0].answer(CLIENT)
+      const tapping = t.src.focus(t.agent())
+      const resting = t.src.showPane(t.agent())
+      t.src.ingest(t.ev('session-end', inTmux()))
+      await t.freshAsks[0](TAB_2)
+      expect(await tapping).toBe(false)
+      expect(await resting).toBe('failed')
+      expect(t.actions.open).not.toHaveBeenCalled()
+      expect(t.actions.tabSelect).not.toHaveBeenCalled()
+    })
+
+    it('a tap and a rest within the second run one fresh lookup an agent', async () => {
+      const t = nested({}, undefined, {}, { freshByHand: true })
+      t.src.ingest(t.ev('session-start', inTmux()))
+      await t.asks[0].answer(CLIENT)
+      const fresh = () => t.outer.mock.calls.filter(([, , , opts]) => opts?.fresh).length
+      const tapping = t.src.focus(t.agent())
+      const resting = t.src.showPane(t.agent())
+      expect(fresh()).toBe(1)
+      await vi.advanceTimersByTimeAsync(OUTER_FRESH_WAIT_MS)
+      expect(await tapping).toBe(true)
+      expect(await resting).toBe('ok')
+      expect(late(t.logs)).toHaveLength(2)
+      await t.freshAsks[0](TAB_2)
+      t.clock.t += FRESH_WITHIN_MS - 1
+      expect(await t.src.focus(t.agent())).toBe(true)
+      expect(fresh()).toBe(1)
+      t.clock.t += 1
+      const again = t.src.focus(t.agent())
+      expect(fresh()).toBe(2)
+      await t.freshAsks[1](TAB_2)
+      expect(await again).toBe(true)
+    })
   })
 
   // Diego, 2026-11-23: an agent in tmux or herdr is on that multiplexer's page, whatever terminal holds its client. Only
