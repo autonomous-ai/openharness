@@ -8,7 +8,7 @@ vi.mock('./portStream.js', () => ({ portStream: io.stream }))
 vi.mock('./portAccess.js', () => ({ portAccessProblem: io.access }))
 vi.mock('node:child_process', () => ({ execFile: io.configure }))
 
-import { SerialLink, SerialToolTimeoutError, createDarwinDialFinder, findDialPorts } from './serial.js'
+import { SerialLink, SerialToolTimeoutError, createDarwinDialFinder, findDialPorts, watchDialArrivals } from './serial.js'
 
 function port(nativeFd = 43) {
   const stream = Object.assign(new EventEmitter(), {
@@ -304,5 +304,48 @@ describe('an ioreg that never answers', () => {
     expect(await find()).toEqual([{ path: '/dev/cu.usbmodem1101', vendorId: 0x303a, productId: 0x1001 }])
     expect(runIoreg).toHaveBeenCalledTimes(2)
     expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+describe('a device arriving, as the OS says it', () => {
+  function devWatch() {
+    const watcher = Object.assign(new EventEmitter(), { close: vi.fn() })
+    let heard!: (event: string, name: string | null) => void
+    const watch = vi.fn((_dir: string, _options: unknown, listener: typeof heard) => { heard = listener; return watcher })
+    return { watcher, watch, hear: (name: string | null, event = 'rename') => heard(event, name) }
+  }
+
+  it('on Linux is a new USB serial node in /dev, and nothing else there', () => {
+    const dev = devWatch()
+    const signal = vi.fn()
+    const off = watchDialArrivals(signal, vi.fn(), { platform: 'linux', watch: dev.watch })
+    expect(dev.watch).toHaveBeenCalledWith('/dev', { persistent: false }, expect.any(Function))
+    for (const name of ['ttyACM0', 'ttyUSB3', 'ttyS0', 'tty1', 'shm', null]) dev.hear(name)
+    expect(signal).toHaveBeenCalledTimes(2)
+    off?.()
+    expect(dev.watcher.close).toHaveBeenCalledTimes(1)
+  })
+
+  it('on Linux is not a write to a dial already open, which a /dev watch hears as a change before Linux 6.19', () => {
+    const dev = devWatch()
+    const signal = vi.fn()
+    watchDialArrivals(signal, vi.fn(), { platform: 'linux', watch: dev.watch })
+    dev.hear('ttyACM0', 'change')
+    expect(signal).not.toHaveBeenCalled()
+  })
+
+  it('on Linux, a /dev watch that fails is closed and said once, leaving the scan timer', () => {
+    const dev = devWatch()
+    const log = vi.fn()
+    watchDialArrivals(vi.fn(), log, { platform: 'linux', watch: dev.watch })
+    dev.watcher.emit('error', Object.assign(new Error('too many'), { code: 'EMFILE' }))
+    expect(dev.watcher.close).toHaveBeenCalledTimes(1)
+    expect(log).toHaveBeenCalledExactlyOnceWith('cable: /dev watch failed (EMFILE) — a new dial is found by the next scan')
+  })
+
+  it('on macOS is not watched: the scan timer finds a new dial', () => {
+    const dev = devWatch()
+    expect(watchDialArrivals(vi.fn(), vi.fn(), { platform: 'darwin', watch: dev.watch })).toBeUndefined()
+    expect(dev.watch).not.toHaveBeenCalled()
   })
 })

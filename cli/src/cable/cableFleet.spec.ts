@@ -553,6 +553,79 @@ describe('USB dial fleet', () => {
   })
 })
 
+describe('a dial plugged in while the daemon runs', () => {
+  /** The OS's device-arrival signal, held by the test. */
+  function osArrivals() {
+    const os = { signal: undefined as (() => void) | undefined, off: vi.fn() }
+    return { os, arrivals: (signal: () => void) => { os.signal = signal; return os.off } }
+  }
+
+  it('is opened as soon as the OS says a device arrived, well before the next scan', async () => {
+    const { os, arrivals } = osArrivals()
+    const f = fixture({ arrivals })
+    f.setPorts([])
+    try {
+      f.fleet.start(); await f.fleet['scan']()
+      f.setPorts([device('/dev/tim', 'AA:01')])
+      const at = Date.now()
+      os.signal?.()
+      await vi.waitFor(() => expect(f.ports).toHaveLength(1))
+      // The scan timer (60 s here, 2 s in the daemon) would have found it much later.
+      expect(Date.now() - at).toBeLessThan(1_000)
+    } finally { await f.fleet.stop() }
+    expect(os.off).toHaveBeenCalledTimes(1)
+  })
+
+  it('scans once for a burst of arrivals, and opens the dial once', async () => {
+    const { os, arrivals } = osArrivals()
+    const f = fixture({ arrivals })
+    f.setPorts([])
+    try {
+      f.fleet.start(); await f.fleet['scan']()
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      f.setPorts([device('/dev/tim', 'AA:01')])
+      for (let i = 0; i < 5; i++) { os.signal?.(); await vi.advanceTimersByTimeAsync(50) }
+      await vi.waitFor(() => expect(f.ports).toHaveLength(1))
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(f.options.discover).toHaveBeenCalledTimes(2)
+      expect(f.options.open).toHaveBeenCalledTimes(1)
+    } finally { vi.useRealTimers(); await f.fleet.stop() }
+  })
+
+  it('is still found by the scan timer when the OS cannot say a device arrived, which is said once', async () => {
+    const f = fixture({ arrivals: () => { throw new Error('no watch') }, intervalMs: 20 })
+    f.setPorts([])
+    try {
+      f.fleet.start()
+      f.setPorts([device('/dev/tim', 'AA:01')])
+      await vi.waitFor(() => expect(f.ports).toHaveLength(1))
+      expect(vi.mocked(f.host.log).mock.calls.filter(([line]) => line.includes('arrivals'))).toEqual([
+        ['cable: device arrivals cannot be watched (Error) — a new dial is found by the next scan'],
+      ])
+    } finally { await f.fleet.stop() }
+  })
+
+  it('scans once more after the scan an arrival landed in, which looked before the dial was there', async () => {
+    const { os, arrivals } = osArrivals()
+    const f = fixture({ arrivals })
+    f.setPorts([])
+    try {
+      f.fleet.start(); await f.fleet['scan']()
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      let answer!: (ports: DialPort[]) => void
+      f.options.discover.mockImplementationOnce(() => new Promise<DialPort[]>((resolve) => { answer = resolve }))
+      const scanning = f.fleet['scan']()
+      os.signal?.()
+      await vi.advanceTimersByTimeAsync(1_000)
+      f.setPorts([device('/dev/tim', 'AA:01')])
+      answer([])
+      await scanning
+      await vi.waitFor(() => expect(f.ports).toHaveLength(1))
+      expect(f.options.discover).toHaveBeenCalledTimes(3)
+    } finally { vi.useRealTimers(); await f.fleet.stop() }
+  })
+})
+
 describe('a dial plugged in beside one already attached', () => {
   const asked = [{ key: 'k', q: 'Run it?', options: ['Yes', 'No'], multi: false }]
   const notice = [{ key: 'n', q: 'Done', options: ['In harness'], multi: false }]
