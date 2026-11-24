@@ -1640,6 +1640,16 @@ syncBuiltinESMExports();\n`)
     expect(runInNewContext(`(${literal})`)).toEqual(Object.fromEntries(ENGINES.map((engine) => [engine, engineName(engine)])))
   })
 
+  it('answers only engines the daemon names, so a held line never says "undefined"', () => {
+    // The held line reads ENGINE_NAMES[engine] with no fallback: an engine argEngine() answered outside ENGINES would
+    // print "undefined admission is held" to a 429 from whatever holds the port.
+    const body = /function argEngine\(\) \{([^}]*)\}/.exec(readFileSync(HOOK, 'utf8'))?.[1]
+    expect(body, 'argEngine in hook/notify.mjs').toBeDefined()
+    const answered = [...body!.matchAll(/'([a-z]+)'/g)].map((match) => match[1])
+    expect(answered).toContain('claude')
+    expect(answered.filter((engine) => !(ENGINES as readonly string[]).includes(engine!))).toEqual([])
+  })
+
   it('registers an agent offline beside a terminal tile, and leaves the tile as it was', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-terminal-'))
     tmpDirs.push(dir)
