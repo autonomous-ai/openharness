@@ -2372,14 +2372,18 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  With no dial linked nothing is followed or said. */
   const herdrFocused = (source: ObservedSource, paneId: string): Promise<void> | undefined => {
     if (!cable.isConnected) return
+    const key = herdrPaneKey(paneId)
     // First: the dial's own `herdr agent focus` excuses its event whatever else of it holds, and that one event alone.
-    if (herdrFocuses.echo(herdrPaneKey(paneId), monotonic())) { log('[device] herdr focus · skipped · echo'); return }
+    if (herdrFocuses.echo(key, monotonic())) { log('[device] herdr focus · skipped · echo'); return }
     // Its own pane, or the one herdr's list placed it at (shownAt, as tmux's): the event names herdr's bare id.
     const at = source.list().flatMap((agent) => {
       const full = source.shownAt(agent.id, herdrAdapter.id)
       const parts = full !== undefined && herdrPaneParts({ adapter: herdrAdapter.id, id: full })
       return parts && parts.id === paneId ? [{ agent, parts }] : []
     })
+    // A pane with no agent is ordinary use, and says nothing. The event is the server's whose agents the herdr source
+    // lists (its own, which tells it): another server's agent, whose pane id repeats one of it, is at no pane listed.
+    if (at.length === 0 || !herdr!.list().some(({ paneKeys }) => paneKeys?.includes(key))) return
     // Two there cannot say which one the person looks at; a held pane shows whatever runs in front of its agent; one in
     // herdr inside Orca is on Orca's page, which Orca's own focus covers.
     if (at.length !== 1 || at[0].parts.held || pageOf(at[0].agent) !== 'herdr') {
@@ -2387,9 +2391,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       return
     }
     const [{ agent, parts: { app } }] = at
-    // herdr's focus can move while the person is on another tab of that app (a pane closing hands it on, a second client
-    // moves it): where the app reports tabs, the agent's must be the one it reported last.
-    if (app === undefined || app !== cableHost.settledApp() || (reportsTabs(app) && lastTabs.get(app) !== source.tabTty(agent.id))) {
+    // The app the person went to settles FRONT_SETTLE_MS after the switch. herdr's focus can move while the person is on
+    // another tab of that app (a pane closing hands it on, a second client moves it): where the app reports tabs, the
+    // agent's must be the one it reported last.
+    if (app === undefined || app !== cableHost.settledApp() || app !== cableHost.latestFront() || !onTabInFront(source, app, agent.id)) {
       log('[device] herdr focus · skipped · not in front')
       return
     }
