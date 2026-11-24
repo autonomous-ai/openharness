@@ -6,6 +6,9 @@
  * tab that holds a herdr session, on that tab's tty. A pane takes herdr's focus as it opens, and as it is focused.
  * Each move of the focus to another pane is told to the subscriptions naming `pane.focused`, and nothing else is, as
  * herdr 0.9.5 did in docs/plans/2026-11-24-dial-tmux-pane-focus-follow-plan.md's probe findings, rows 4 to 9.
+ * A known gap: the model opens every pane focused, so it tells `pane_focused` at each opening, where tier B opens panes
+ * unfocused behind a plain workspace and real herdr tells nothing then (probe row 8); that makes tier A stricter, never
+ * weaker.
  *
  * The devices reach it as they reach the person's herdr. Its socket is a fake client (DevicesDeps.herdr), not a socket
  * server: real socket I/O would escape the driver's quiet check. It lists herdr's agents, tells their status to the
