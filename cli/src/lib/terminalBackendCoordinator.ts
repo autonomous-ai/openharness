@@ -330,6 +330,9 @@ export class TerminalBackendCoordinator {
       if (!backend) continue
       const validation = await this.validateRuntime(backend, runtime, session)
       if (validation.state !== 'alive') continue
+      // Asked again after the check, as validateLease does: it waits while a restart records its new engine, then
+      // answers `alive` for THAT engine, whose screen the input path never read. Nothing is written yet either.
+      if (!this.leaseIsCurrent(lease, session)) return terminalActionNotStarted(TERMINAL_LEASE_REFUSED)
       if (options?.allowed && !options.allowed()) return terminalActionNotStarted('terminal control revoked')
       const result = await backend.submitText(runtime, text, options)
       if (result.state === 'succeeded') {
