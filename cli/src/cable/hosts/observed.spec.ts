@@ -4802,6 +4802,7 @@ describe('ObservedSource outer place', () => {
     t.src.ingest(t.ev('session-start', inTmux()))
     await t.asks[0].answer(CLIENT)
     const raising = t.src.focus(t.agent())
+    await vi.advanceTimersByTimeAsync(0)
     expect(t.actions.open.mock.calls).toEqual([[t.agent().id, { bundle: 'com.apple.Terminal', pane: { adapter: 'tmux', id: '%3:100:terminal-app' } }]])
     expect(late.focus).not.toHaveBeenCalled()
     opened(true)

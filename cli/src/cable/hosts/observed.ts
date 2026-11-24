@@ -16,7 +16,7 @@ import type { Delivery } from './inbox.js'
 import { answerEngine, type AnswerEngine } from './lastAnswer.js'
 import { bundleOf, type OpenTarget } from './open.js'
 import { MAX_TEXT } from './orca.js'
-import type { Nested, NestedLookup, NestedPlace, OuterLookup } from './outer.js'
+import { FRESH_WITHIN_MS, type Nested, type NestedLookup, type NestedPlace, type OuterLookup } from './outer.js'
 import type { SessionRecord } from './record.js'
 import type { ProcessName } from './scannedApp.js'
 import { isTabApp } from './tabs.js'
@@ -49,6 +49,10 @@ const LINE_BYTES = 99
 /** A tty read that failed (`ps` timed out under load, or did not run) is tried again on a later event, no sooner than this:
  *  a busy machine is not handed one more `ps` per hook. */
 const TTY_RETRY_MS = 10_000
+/** How long a tap or a rest on an agent nested in a multiplexer waits for its client's place, read afresh, before it acts
+ *  on what it holds: the open keeps 300 ms of the eval's full-score 1 s (PM, 2026-11-24). tmux's fresh lookup took
+ *  p95 156 ms on macOS (docs/plans/2026-11-24-dial-iterm2-tab-and-restart-plan.md, Measured). */
+export const OUTER_FRESH_WAIT_MS = 700
 
 /** What a turn's start was: a prompt a person typed, one another session sent, or the dial's own words. */
 export type PromptSource = 'person' | 'relayed' | 'dial'
@@ -155,6 +159,11 @@ function walked(hints: Readonly<Record<string, string>>): boolean {
   return named === UNKNOWN_APP || (named === 'vscode' && !hints.__CFBundleIdentifier)
 }
 
+/** Whether an outer answer's client's process is one a raise can bring forward. */
+function clientPid(pid: number | undefined): boolean {
+  return Number.isSafeInteger(pid) && pid! > 0
+}
+
 /** Whether two events' hints are the same, key for key. */
 function sameHints(a: Readonly<Record<string, string>>, b: Readonly<Record<string, string>>): boolean {
   const keys = Object.keys(a)
@@ -242,6 +251,8 @@ interface Entry {
   /** The caller and hints its outer place was last asked for (ObservedDeps.outer), while it runs nested: only that ask's
    *  answer lands. */
   outerAsk?: { pid: number; hints: Readonly<Record<string, string>> }
+  /** Its client's place read afresh for a tap or a rest (askAfresh): landing, or landed at `settledAt` (deps.now()). */
+  fresh?: { landing: Promise<void>; settledAt?: number }
   /** The app and tab it is seen in, from that answer, while its caller and hints are those it was asked for; for a
    *  session the scan found nested, from the scan's lookup (placeNested) until its first hook's own answer lands. */
   outer?: Outer
@@ -506,6 +517,11 @@ export class ObservedSource implements HostSource {
     const e = this.entries.get(agent.id)
     const actions = this.deps.actions
     if (!e || !actions || !this.live(e)) return false
+    const waiting = this.waitFresh(e)
+    if (waiting) {
+      await waiting
+      if (!this.live(e)) return false
+    }
     const target = this.target(e)
     if (!actions.canOpen(e.agent.id, target)) return false
     const opened = await actions.open(e.agent.id, target)
@@ -528,6 +544,48 @@ export class ObservedSource implements HostSource {
     if (tab?.adapter.canFocus(tab.pane)) await tab.adapter.focus(tab.pane)
   }
 
+  /** A tap and a rest wait for its client's place read afresh (askAfresh), at most OUTER_FRESH_WAIT_MS: past it they act
+   *  on what it holds, and the late answer still lands. None when nothing is asked: a tap or rest on an agent in no
+   *  multiplexer acts in the same tick, as one that had no wait. */
+  private waitFresh(entry: Entry): Promise<void> | undefined {
+    const landing = this.askAfresh(entry)
+    if (!landing) return undefined
+    let timer: ReturnType<typeof setTimeout> | undefined
+    return Promise.race([
+      landing.then(() => false),
+      new Promise<true>((resolve) => { timer = setTimeout(() => resolve(true), OUTER_FRESH_WAIT_MS) }),
+    ]).then((late) => {
+      if (late) this.deps.log('[observed] outer · late')
+      else clearTimeout(timer)
+    })
+  }
+
+  /**
+   * Its client's place read afresh for a tap or a rest (eval I13, PM 2026-11-24): a hook asks only at a session's or a
+   * turn's start, so a person who attached its multiplexer from another tab since, and typed nothing, would be shown the
+   * old tab. Asked for its latest hook's ask, whose answer lands as that hook's does: a hook since then that asked anew
+   * wins (landOuter). An answer with no app and no client's process (detached, not attached again, or failed) changes
+   * nothing, so a tap never moves its row to another page. One landing an agent, shared while it runs and for
+   * FRESH_WITHIN_MS after: a burst of taps and rests runs one lookup. None when it is not nested, or its lookup has no
+   * answer here (Windows).
+   */
+  private askAfresh(entry: Entry): Promise<void> | undefined {
+    const held = entry.fresh
+    if (held && (held.settledAt === undefined || this.deps.now() - held.settledAt < FRESH_WITHIN_MS)) return held.landing
+    const ask = entry.outerAsk
+    if (!ask) return undefined
+    const answer = this.deps.outer?.(ask.hints, ask.pid, undefined, { fresh: true })
+    if (!answer) return undefined
+    const fresh: NonNullable<Entry['fresh']> = {
+      landing: answer.then((place) => {
+        fresh.settledAt = this.deps.now()
+        if (place.app || clientPid(place.pid)) this.landOuter(entry, ask, place.nest, place)
+      }),
+    }
+    entry.fresh = fresh
+    return fresh.landing
+  }
+
   /** Only a pane whose app can show it now (an Orca terminal, a Claude app session while that app is in front, a tab a
    *  watch can select) is shown without its app coming forward. */
   hasPane(agent: HostAgent): boolean {
@@ -537,6 +595,9 @@ export class ObservedSource implements HostSource {
   /** Each pane a rest shows, in turn: a tab first, as the pane inside it is seen only once its tab is. Busy if one was
    *  busy, failed only if every one failed. */
   async showPane(agent: HostAgent): Promise<PaneSwitch> {
+    const e = this.entries.get(agent.id)
+    const waiting = e && this.live(e) ? this.waitFresh(e) : undefined
+    if (waiting) await waiting
     const said: PaneSwitch[] = []
     for (const { adapter, pane } of this.shown(agent)) said.push(await adapter.show!(pane, agent.id))
     return said.includes('busy') ? 'busy' : said.includes('ok') ? 'ok' : 'failed'
@@ -820,7 +881,7 @@ export class ObservedSource implements HostSource {
     if (entry.outerAsk !== ask || !this.live(entry)) return
     if (place) {
       entry.outer = place.app ? { app: place.app, tty: place.tty, pid: place.pid } : undefined
-      entry.outerPid = !place.app && Number.isSafeInteger(place.pid) && place.pid! > 0 ? place.pid : undefined
+      entry.outerPid = !place.app && clientPid(place.pid) ? place.pid : undefined
       entry.tty = entry.outer?.tty
     } else if (entry.agent.nest === nest && !entry.agent.appPending) return
     if (nest) entry.agent.nest = nest
