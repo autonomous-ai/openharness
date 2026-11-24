@@ -26,6 +26,7 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { CmuxLogFiles } from '../cable/hosts/cmuxFocus.js'
 import { wholeLines } from './wholeLines.js'
 
 /** The cmux release the fake answers as; its header names each upstream file a field comes from (A1 to A7). */
@@ -264,4 +265,109 @@ export function touchStore(home: string, word: string): void {
   const folder = join(home, '.cmuxterm')
   mkdirSync(folder, { recursive: true })
   writeFileSync(join(folder, `${word}-hook-sessions.json`), JSON.stringify({ version: 1, sessions: {} }))
+}
+
+/** The boot id of a line that names none: docs/events.md's example at the tag. */
+const EVENT_BOOT = '0F221057-0320-41B7-8CB3-083C8D927D95'
+let eventSeq = 0
+
+/** Every object's keys in order, at every level, as JSONSerialization's `.sortedKeys` writes them. */
+const sortedKeys = (value: unknown): unknown => Array.isArray(value)
+  ? value.map(sortedKeys)
+  : value !== null && typeof value === 'object'
+    ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, sortedKeys((value as Record<string, unknown>)[key])]))
+    : value
+
+/**
+ * One line of cmux's event log, `~/.cmuxterm/events.jsonl`, as v0.65.2.2 writes it: the envelope of
+ * Sources/CmuxEventBus.swift `appendEventLocked`, an unset id written as null, keys sorted at every level and `/` escaped
+ * (`encodeLine`: JSONSerialization with `.sortedKeys` alone), and a newline after it (Sources/CmuxEventLogWriter.swift).
+ * The category, source and time are stand-ins: the tag sets them per event, and no reader takes them.
+ */
+export function cmuxEventLine(
+  name: string,
+  ids: { boot?: string; seq?: number; workspace?: string; surface?: string; pane?: string; window?: string } = {},
+  payload: Record<string, unknown> = {},
+): string {
+  const boot = ids.boot ?? EVENT_BOOT
+  const seq = ids.seq ?? ++eventSeq
+  const [category] = name.split('.')
+  const event = {
+    type: 'event', protocol: 'cmux-events', version: 1, boot_id: boot, seq, id: `${boot}-${seq}`, name, category,
+    source: `${category}.lifecycle`, occurred_at: '2026-11-25T00:00:00.000Z', workspace_id: ids.workspace ?? null,
+    surface_id: ids.surface ?? null, pane_id: ids.pane ?? null, window_id: ids.window ?? null, payload,
+  }
+  return `${JSON.stringify(sortedKeys(event)).replaceAll('/', '\\/')}\n`
+}
+
+/**
+ * cmux's event log in memory, for its reader's specs (cable/hosts/cmuxFocus.ts), so no spec reads or writes the
+ * person's `~/.cmuxterm`. A descriptor reads the file it was opened on, as on disk: after a rotation, the old one.
+ * `positions` holds where each read started; `rotate()` is cmux's own past 16 MiB (CmuxEventLogWriter.swift: the file
+ * moved away, a new empty one at the path); `rewrite()` cuts the same file to that text; `remove()` leaves no file, so
+ * `open` rejects with ENOENT until the next `append`; `failNext()` fails the next read; `hold()` keeps the next read
+ * waiting until the function it returns is called.
+ */
+export function fakeCmuxLog(): CmuxLogFiles & {
+  opens: number; positions: number[]; append(text: string): void; rotate(): void; rewrite(text: string): void
+  remove(): void; failNext(): void; hold(): () => void
+} {
+  interface File { ino: number; bytes: Buffer }
+  let inos = 0
+  const made = (): File => ({ ino: ++inos, bytes: Buffer.alloc(0) })
+  let file: File | undefined = made()
+  const fds = new Map<number, File>()
+  let lastFd = 2
+  let opens = 0
+  let fail = false
+  let held: Promise<void> | undefined
+  const positions: number[] = []
+  const opened = (fd: number): File => {
+    const at = fds.get(fd)
+    if (!at) throw Object.assign(new Error('EBADF: bad file descriptor'), { code: 'EBADF' })
+    return at
+  }
+  return {
+    get opens() { return opens },
+    positions,
+    open: async () => {
+      if (!file) throw Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' })
+      opens++
+      fds.set(++lastFd, file)
+      return lastFd
+    },
+    fstat: async (fd) => ({ dev: 1, ino: opened(fd).ino, size: opened(fd).bytes.length }),
+    read: async (fd, into, position) => {
+      const at = opened(fd)
+      positions.push(position)
+      const wait = held
+      held = undefined
+      await wait
+      if (fail) {
+        fail = false
+        throw Object.assign(new Error('EIO: i/o error'), { code: 'EIO' })
+      }
+      return position >= at.bytes.length ? 0 : at.bytes.copy(into, 0, position, position + into.length)
+    },
+    close: async (fd) => {
+      opened(fd)
+      fds.delete(fd)
+    },
+    append: (text) => {
+      file ??= made()
+      file.bytes = Buffer.concat([file.bytes, Buffer.from(text)])
+    },
+    rotate: () => { file = made() },
+    rewrite: (text) => {
+      file ??= made()
+      file.bytes = Buffer.from(text)
+    },
+    remove: () => { file = undefined },
+    failNext: () => { fail = true },
+    hold: () => {
+      let release = () => {}
+      held = new Promise((resolve) => { release = resolve })
+      return () => release()
+    },
+  }
 }

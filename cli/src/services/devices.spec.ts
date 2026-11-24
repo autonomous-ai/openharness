@@ -51,7 +51,7 @@ import type { TierInput } from '../lib/notifyTier.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { claudeAppFixture } from '../testing/claudeAppFixture.js'
 import { codexAppFixture } from '../testing/codexAppFixture.js'
-import { fakeCmux, touchStore } from '../testing/fakeCmux.js'
+import { cmuxEventLine, fakeCmux, fakeCmuxLog, touchStore } from '../testing/fakeCmux.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { herdrAppStatus } from '../testing/herdrAppStatus.js'
 import { RECORDED_KITTY } from '../testing/recordedKitty.js'
@@ -632,7 +632,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; agentsRead?: DevicesDeps['agentsRead']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; storePackageFolder?: DevicesDeps['storePackageFolder']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string; raise?: DevicesDeps['raise'] | null; windowsRaise?: DevicesDeps['windowsRaise'] | null; transcribe?: DevicesDeps['transcribe']; watchStore?: DevicesDeps['watchStore'] } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; agentsRead?: DevicesDeps['agentsRead']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; cmuxEvents?: DevicesDeps['cmuxEvents']; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; storePackageFolder?: DevicesDeps['storePackageFolder']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string; raise?: DevicesDeps['raise'] | null; windowsRaise?: DevicesDeps['windowsRaise'] | null; transcribe?: DevicesDeps['transcribe']; watchStore?: DevicesDeps['watchStore'] } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   const apps = over.orca ?? orca
   // None, and no read under way, unless the spec gives its own; null leaves the devices to read this computer's.
@@ -657,6 +657,9 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     hc: over.hc ?? hc,
     // Null: no client given, so the devices build their own.
     cmux: over.cmux === null ? undefined : over.cmux ?? noCmux,
+    // None unless the spec gives its own: on macOS the devices read cmux's event log under the suite's throwaway home,
+    // where there is none.
+    cmuxEvents: over.cmuxEvents,
     opencode: over.opencode ?? opencode,
     // None unless the spec gives its own: on macOS the devices read the Claude app's store under the suite's throwaway
     // home, where there is none.
@@ -10244,6 +10247,402 @@ describe('cmux\'s agents, from cmux\'s own stores (docs/plans/2026-11-17-dial-cm
       attach(port)
       await vi.waitFor(() => expect(logs).toContain('[cmux] listed · 1 agents'), { timeout: 10_000 })
       expect(cmux.calls()).toEqual([{ args: ['sessions', 'list', '--json', '--all'], stdin: '', env: [] }])
+    })
+  })
+
+  describe('cmux\'s event log, read while cmux is in front (docs/plans/2026-11-25-dial-cmux-focus-follow-design.md)', () => {
+    const WIN = '7C6B5A49-0000-4000-8000-00000000000D'
+    /** What cmux writes as it comes forward with S focused in W: the focus, and W's window made key. */
+    const FORWARD = cmuxEventLine('surface.focused', { workspace: W, surface: S })
+      + cmuxEventLine('window.keyed', { window: WIN }, { workspace_id: W })
+    /** As withCmux's, cmux's event log in memory holding FORWARD, and the devices' clock standing still: every read takes
+     *  0 ms. */
+    const withLog = (over: Parameters<typeof start>[0] = {}) => {
+      const events = fakeCmuxLog()
+      events.append(FORWARD)
+      return { ...withCmux({ cmuxEvents: events, now: () => 0, ...over }), events }
+    }
+    /** That app told in front, and settled. */
+    const settle = async (app: string) => {
+      host().front(app)
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    }
+
+    it('a dial attached while cmux is settled in front reads the log once cmux\'s agents are listed; with no dial, cmux settling read nothing', async () => {
+      const { fake, port, events } = withLog()
+      await settle('cmux')
+      expect(events.opens).toBe(0)
+      fake.hold = true
+      attach(port)
+      await flush()
+      expect(events.opens).toBe(0)
+      for (const land of fake.held.splice(0)) land()
+      await flush()
+      expect(events.opens).toBe(1)
+    })
+
+    it('with a dial attached, cmux settling reads the log once, then each change of it, named or not, once more; a store\'s change reads nothing', async () => {
+      const { events, live, changed } = withLog()
+      await live()
+      expect(events.opens).toBe(0)
+      await settle('cmux')
+      expect(events.opens).toBe(1)
+      events.append(cmuxEventLine('surface.focused', { workspace: W, surface: S }))
+      await changed('events.jsonl')
+      expect(events.opens).toBe(2)
+      // From where the last read ended: the new line alone.
+      expect(events.positions).toEqual([0, Buffer.byteLength(FORWARD)])
+      await changed()
+      expect(events.opens).toBe(3)
+      await changed('claude-hook-sessions.json')
+      expect(events.opens).toBe(3)
+    })
+
+    it('behind another app nothing is read, a change of the log neither; cmux leaving the front stops the reads', async () => {
+      const { events, live, changed } = withLog()
+      await live()
+      await settle('ghostty')
+      await changed('events.jsonl')
+      expect(events.opens).toBe(0)
+      await settle('cmux')
+      expect(events.opens).toBe(1)
+      await settle('ghostty')
+      await changed('events.jsonl')
+      expect(events.opens).toBe(1)
+    })
+
+    it('the dial gone, the log is forgotten: the next attach reads it from its start', async () => {
+      const { events, live, changed } = withLog()
+      await live()
+      await settle('cmux')
+      events.append(cmuxEventLine('surface.focused', { workspace: W, surface: S }))
+      await changed('events.jsonl')
+      seen.host.watching!(false)
+      await flush()
+      // The stopped source's watch tells nothing more.
+      await changed('events.jsonl')
+      expect(events.opens).toBe(2)
+      await live()
+      expect(events.positions).toEqual([0, Buffer.byteLength(FORWARD), 0])
+    })
+
+    it('a read under way as the dial goes lands on nothing: the next attach reads the log from its start', async () => {
+      const { port, events, live } = withLog()
+      await live()
+      const land = events.hold()
+      await settle('cmux')
+      expect(events.opens).toBe(1)
+      seen.host.watching!(false)
+      land()
+      await flush()
+      attach(port)
+      await flush()
+      expect(events.positions).toEqual([0, 0])
+    })
+
+    it('cmux not found at the attach: neither the attach nor cmux settling reads its log; found at the next, it is read', async () => {
+      const { fake, port, events, live } = withLog()
+      fake.found = false
+      await settle('cmux')
+      attach(port)
+      await flush()
+      await settle('ghostty')
+      await settle('cmux')
+      expect(events.opens).toBe(0)
+      seen.host.watching!(false)
+      fake.found = true
+      await live()
+      expect(events.opens).toBe(1)
+    })
+
+    it('the read\'s time is said for the first read, and not for a later one no slower', async () => {
+      const { live, changed } = withLog()
+      await live()
+      await settle('cmux')
+      await changed('events.jsonl')
+      await changed('events.jsonl')
+      expect(logs.filter((line) => line.startsWith('[cmux] read · events'))).toEqual(['[cmux] read · events · 0'])
+    })
+
+    // "Who is followed": the one live agent at the surface cmux's log names focused in its front workspace, never a wrong
+    // session, and never the dial's own move read back.
+    describe('the agent at cmux\'s focused surface is followed', () => {
+      const S2 = '9F8E7D6C-0000-4000-8000-00000000001B'
+      const S3 = '9F8E7D6C-0000-4000-8000-00000000001C'
+      const W2 = '5A1B2C3D-0000-4000-8000-00000000002A'
+      const WIN2 = '7C6B5A49-0000-4000-8000-00000000002D'
+      const ID2 = observedAgentId('claude', 'sess-2')
+      const ID3 = observedAgentId('claude', 'sess-3')
+      const ECHO = '[device] cmux focus · skipped · echo'
+      const UNKNOWN = '[device] cmux focus · skipped · unknown agent'
+      const NOT_IN_FRONT = '[device] cmux focus · skipped · not in front'
+      const follows = () => calls('followLocal').filter(([, cause]) => cause === 'pane')
+      const focusLines = () => logs.filter((line) => line.startsWith('[device] cmux focus'))
+      const unlinked = (off: boolean) => { (seen.cable as unknown as { connected: boolean }).connected = !off }
+      const focused = (surface: string, workspace = W) => cmuxEventLine('surface.focused', { workspace, surface })
+      /** The devices' monotonic clock: the dial's moves are dated by it. */
+      let clock = 0
+      beforeEach(() => { clock = 0 })
+      /** Claude Code's session n, hooked from cmux's own terminal at that surface, its ids in upper case as cmux gives
+       *  them. */
+      const inCmux = (n: number, surface: string, workspace = W, event: ObservedHookEvent['event'] = 'session-start'): ObservedHookEvent => ({
+        engine: 'claude', sessionId: `sess-${n}`, event, cwd: '/work/api', callerPid: 4241 + n, transcriptPath: `/t/sess-${n}.jsonl`,
+        hostHints: { TERM_PROGRAM: 'ghostty', CMUX_SURFACE_ID: surface, CMUX_WORKSPACE_ID: workspace },
+      })
+      /**
+       * withLog's devices on this clock, the agents of [hooks] hooked (sess-1 at S and sess-2 at S2, both in W, unless
+       * given), cmux listing [records] (none unless given), a dial attached and cmux settled in front with its log's front
+       * at S: the settle's read has landed. `write` appends those lines to the log, and the watch tells it changed.
+       */
+      const following = async ({ hooks = [inCmux(1, S), inCmux(2, S2)], records = [], run }: {
+        hooks?: ObservedHookEvent[]; records?: CmuxSession[]; run?: typeof orca.run
+      } = {}) => {
+        const scene = withLog({ now: () => clock, ...run && { orca: { ...onMac, run } } })
+        scene.fake.records = records
+        for (const event of hooks) scene.port.observed(event)
+        await scene.live()
+        await settle('cmux')
+        await flush()
+        const write = async (...lines: string[]) => {
+          scene.events.append(lines.join(''))
+          await scene.changed('events.jsonl')
+        }
+        return { ...scene, write }
+      }
+
+      it('a hooked agent at the surface cmux focused is followed, its ids and the log\'s in upper case: as cmux settles, then at a move', async () => {
+        const { write } = await following()
+        expect(follows()).toEqual([[ID, 'pane']])
+        await write(focused(S2))
+        expect(follows()).toEqual([[ID, 'pane'], [ID2, 'pane']])
+        expect(focusLines()).toEqual([])
+      })
+
+      it('a focus in a workspace behind moves nothing; a switch to it follows the agent at its focused surface', async () => {
+        const { write } = await following({ hooks: [inCmux(1, S), inCmux(2, S2, W2)] })
+        await write(focused(S2, W2))
+        expect(follows()).toEqual([[ID, 'pane']])
+        await write(cmuxEventLine('workspace.selected', { workspace: W2 }))
+        expect(follows()).toEqual([[ID, 'pane'], [ID2, 'pane']])
+      })
+
+      it('a dial attached while cmux is settled in front follows the agent at its focus', async () => {
+        const { port, live } = withLog({ now: () => clock })
+        port.observed(inCmux(1, S))
+        await settle('cmux')
+        await live()
+        await flush()
+        expect(follows()).toEqual([[ID, 'pane']])
+      })
+
+      it('cmux coming forward again follows the agent at its focus, though that focus did not move', async () => {
+        await following()
+        await settle('ghostty')
+        await settle('cmux')
+        await flush()
+        expect(follows()).toEqual([[ID, 'pane'], [ID, 'pane']])
+      })
+
+      it('a turn of the dial within 2 s before cmux settles: the settle is its echo; past them, cmux\'s next settle follows', async () => {
+        await following()
+        await settle('ghostty')
+        turnTo(ID2)
+        clock = 1_999
+        await settle('cmux')
+        await flush()
+        expect(follows()).toEqual([[ID, 'pane']])
+        expect(focusLines()).toEqual([ECHO])
+        await settle('ghostty')
+        clock = 2_000
+        await settle('cmux')
+        await flush()
+        expect(follows()).toEqual([[ID, 'pane'], [ID, 'pane']])
+      })
+
+      // The open scan's copy wins the fold over cmux's row by its session id, and holds no pane of cmux's: the row there
+      // names its session, its ids in lower case.
+      it('the open scan\'s copy of the session cmux lists at that surface is followed', async () => {
+        scanned()
+        await following({ hooks: [], records: [record({ surface: s, workspace: w, sessionId: 'sess-1' })] })
+        expect(follows()).toEqual([[ID, 'pane']])
+      })
+
+      it.each<[string, ObservedHookEvent[]]>([
+        ['a surface no agent is at (a shell)', [inCmux(2, S2)]],
+        ['two live agents at the surface', [inCmux(1, S), inCmux(2, S)]],
+      ])('%s: nothing is followed', async (_, hooks) => {
+        await following({ hooks })
+        expect(follows()).toEqual([])
+        expect(focusLines()).toEqual([UNKNOWN])
+      })
+
+      it('an ended session at the surface beside a live one: the live one is followed', async () => {
+        await following({ hooks: [inCmux(1, S), inCmux(1, S, W, 'session-end'), inCmux(2, S)] })
+        expect(follows()).toEqual([[ID2, 'pane']])
+      })
+
+      it('with two cmux windows a workspace selection names no front: nothing moves or is said, the same surface keyed again turns nothing back, another follows', async () => {
+        const { write } = await following({ hooks: [inCmux(1, S), inCmux(2, S2, W2)] })
+        await write(focused(S2, W2), cmuxEventLine('window.created', { window: WIN2 }))
+        await write(cmuxEventLine('workspace.selected', { workspace: W2 }))
+        await write(cmuxEventLine('window.keyed', { window: WIN }, { workspace_id: W }))
+        expect(follows()).toEqual([[ID, 'pane']])
+        expect(focusLines()).toEqual([])
+        await write(cmuxEventLine('window.keyed', { window: WIN2 }, { workspace_id: W2 }))
+        expect(follows()).toEqual([[ID, 'pane'], [ID2, 'pane']])
+      })
+
+      it('the dial\'s own tap on an agent in cmux: cmux\'s focus of its surface is the echo, that surface named again later moves nothing, the person\'s next move is followed', async () => {
+        const { write } = await following()
+        expect(await host().openAgent(ID2)).toBeUndefined()
+        expect(orcaRuns).toContainEqual(link(W, S2))
+        await write(focused(S2))
+        expect(focusLines()).toEqual([ECHO])
+        clock = 2_000
+        await write(focused(S2))
+        expect(follows()).toEqual([[ID, 'pane']])
+        await write(focused(S))
+        expect(follows()).toEqual([[ID, 'pane'], [ID, 'pane']])
+        expect(focusLines()).toEqual([ECHO])
+      })
+
+      it('the same for the dial\'s rest', async () => {
+        const { write } = await following()
+        expect(host().swipeSwitches(ID2)).toBe(true)
+        host().swipeEnded(ID2, 'rest')
+        await vi.waitFor(() => expect(said()).toContain('[device] swipe · ok'))
+        expect(orcaRuns).toContainEqual(link(W, S2))
+        await write(focused(S2))
+        expect(follows()).toEqual([[ID, 'pane']])
+        expect(focusLines()).toEqual([ECHO])
+      })
+
+      // Review Focus 1: cmux logs the workspace's selection, naming its old surface, before the tapped surface's focus.
+      it('a tap on an agent in another workspace: neither the workspace\'s old surface nor the tapped one moves the dial; 2 s on, the person\'s move is followed', async () => {
+        const { write } = await following({ hooks: [inCmux(1, S), inCmux(2, S2, W2), inCmux(3, S3, W2)] })
+        await write(focused(S2, W2))
+        expect(await host().openAgent(ID3)).toBeUndefined()
+        await write(cmuxEventLine('workspace.selected', { workspace: W2 }))
+        await write(focused(S3, W2))
+        expect(follows()).toEqual([[ID, 'pane']])
+        expect(focusLines()).toEqual([ECHO, ECHO])
+        clock = 2_000
+        await write(focused(S2, W2))
+        expect(follows()).toEqual([[ID, 'pane'], [ID2, 'pane']])
+      })
+
+      // Review Focus 2: a working agent's hooks write the log many times a second while cmux is in front.
+      it('a dial turned by hand stays put: a working agent\'s lines and its surface focused again turn nothing back', async () => {
+        const { write } = await following()
+        await write(focused(S2))
+        turnTo(ID)
+        clock = 5_000
+        for (let n = 0; n < 20; n++) await write(cmuxEventLine('notification.created', { workspace: W, surface: S2 }, { title: 'build' }))
+        await write(focused(S2))
+        expect(follows()).toEqual([[ID, 'pane'], [ID2, 'pane']])
+        expect(focusLines()).toEqual([])
+      })
+
+      it.each<[string, () => Promise<unknown>]>([
+        ['another app settled', () => settle('ghostty')],
+        // The app the person went to settles FRONT_SETTLE_MS after the switch.
+        ['another app told in front, not yet settled', async () => host().front('ghostty')],
+      ])('cmux left the front while the read ran (%s): skipped as not in front', async (_, leave) => {
+        const { events, changed } = await following()
+        const land = events.hold()
+        events.append(focused(S2))
+        await changed('events.jsonl')
+        await leave()
+        land()
+        await flush()
+        expect(follows()).toEqual([[ID, 'pane']])
+        expect(focusLines()).toEqual([NOT_IN_FRONT])
+      })
+
+      it('with no dial linked nothing is followed and nothing is said; linked again, the next read follows', async () => {
+        const { write } = await following()
+        unlinked(true)
+        await write(focused(S2))
+        expect(follows()).toEqual([[ID, 'pane']])
+        expect(focusLines()).toEqual([])
+        unlinked(false)
+        await write(focused(S2))
+        expect(follows()).toEqual([[ID, 'pane'], [ID2, 'pane']])
+      })
+
+      it('a read under way as the dial goes follows nothing when it lands', async () => {
+        const { events, changed } = await following()
+        const land = events.hold()
+        events.append(focused(S2))
+        await changed('events.jsonl')
+        seen.host.watching!(false)
+        land()
+        await flush()
+        expect(follows()).toEqual([[ID, 'pane']])
+        expect(focusLines()).toEqual([])
+      })
+
+      it('the dial going drops its own moves: attached again, cmux\'s focus of the surface it tapped is the person\'s', async () => {
+        // The tap's link ends past ATTACH_ECHO_MS of its start: the move is dated from its start, its surface's note from
+        // its end.
+        const links: Array<() => void> = []
+        const { write, live } = await following({ run: async (file, args, timeoutMs) => {
+          orcaRuns.push([file, args, timeoutMs])
+          if (args.some((arg) => arg.startsWith('cmux://'))) await new Promise<void>((resolve) => { links.push(resolve) })
+          return { code: 0, stdout: '' }
+        } })
+        const tapped = host().openAgent(ID2)
+        await vi.waitFor(() => expect(links).toHaveLength(1))
+        clock = 2_500
+        links[0]()
+        await tapped
+        seen.host.watching!(false)
+        await live()
+        await flush()
+        expect(follows()).toEqual([[ID, 'pane'], [ID, 'pane']])
+        await write(focused(S2))
+        expect(follows()).toEqual([[ID, 'pane'], [ID, 'pane'], [ID2, 'pane']])
+        expect(focusLines()).toEqual([])
+      })
+
+      // The settle's read and the attach's are one settle, read once cmux's agents are listed: the agent there is known,
+      // and followed once.
+      it.each<[string, ObservedHookEvent[], CmuxSession[]]>([
+        ['a hooked agent', [inCmux(1, S)], []],
+        ['an agent cmux alone lists', [], [record()]],
+      ])('cmux settling while the attach lists cmux\'s agents, and its log changing: %s at its focus is followed once, after the list', async (_, hooks, records) => {
+        const { fake, port, events, changed } = withLog({ now: () => clock })
+        fake.records = records
+        for (const event of hooks) port.observed(event)
+        fake.hold = true
+        attach(port)
+        await flush()
+        await settle('cmux')
+        events.append(focused(S))
+        await changed('events.jsonl')
+        expect(events.opens).toBe(0)
+        for (const land of fake.held.splice(0)) land()
+        await flush()
+        const [{ id }] = await listed()
+        expect(follows()).toEqual([[id, 'pane']])
+      })
+
+      it('its lines are fixed words', async () => {
+        const { events, changed, write } = await following()
+        await host().openAgent(ID2)
+        await write(focused(S2))
+        clock = 2_000
+        await write(focused(S3))
+        const land = events.hold()
+        events.append(focused(S))
+        await changed('events.jsonl')
+        host().front('ghostty')
+        land()
+        await flush()
+        const lines = focusLines()
+        expect(lines).toHaveLength(3)
+        for (const line of lines) expect(line).toMatch(/^\[device\] cmux focus · skipped · (echo|unknown agent|not in front)$/)
+      })
     })
   })
 })
