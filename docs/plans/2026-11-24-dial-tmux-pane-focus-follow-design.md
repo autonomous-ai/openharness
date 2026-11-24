@@ -81,8 +81,9 @@ of its panes (`PaneFocus.app: 'wezterm' | 'kitty'`, `readFocus`'s kitty-else bra
   last 2 s. The tmux adapter's rest and tap moves (`select-window`/`select-pane`, `switch-client`) are noted as the
   dial's own under the agent's full tmux pane id (`paneTaps.note`), as kitty's and WezTerm's focus are. The agent found
   is followed as a selected tab is: `cableHost.followPage(id)`, then `cable.followLocal(id, 'pane')`, so the dials turn
-  to tmux's page (the follow filter of #4578). WezTerm's and kitty's follows stay as they are (no `followPage`): their
-  agents are on the app's own page.
+  to tmux's page (the follow filter of #4578). WezTerm's and kitty's follows call `followPage` too (PM decision,
+  2026-11-24): with tmux inside a WezTerm pane, a tmux follow holds the dials on tmux's page while WezTerm stays in
+  front, and a later WezTerm pane's follow would then ask for an agent that is not on that page (`no tile`).
 - **Which agents.** Agents with a tmux pane in the observed source: hooked ones, and scan-found ones once the scan gave
   them a tmux pane. An agent with no tmux pane yet is not followed.
 

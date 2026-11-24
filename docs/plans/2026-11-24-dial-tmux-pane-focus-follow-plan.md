@@ -609,6 +609,22 @@ agents' one. The spec's "herdr: the `pane.focused` event" and "Cost" say so.
 
 ---
 
+### Task 8b: WezTerm's and kitty's follows turn the page too
+
+**Depends on:** 8 (same files). **Effort:** high. **Test that must fail first:** `devices.spec.ts`, in the Task 5
+describe: `'on Linux, WezTerm in front with tmux in one of its panes: a tmux follow holds tmux's page, then a WezTerm
+pane's agent is followed and the dials turn to WezTerm's page'` (today: `[device] pane · skipped · no tile`, or the ask
+for an agent not on the page shown), and the same for a kitty window.
+
+**Files:** `SV/devices.ts`, `SV/devices.spec.ts`.
+
+- [ ] Red: the cases above. Green: `paneAnswered` calls `cableHost.followPage(agent.id)` before
+  `cable.followLocal(agent.id, 'pane')` for every adapter, not only tmux. Existing WezTerm/kitty cases change only where
+  the new page turn is the rule. Run devices.spec.ts, `npm run typecheck`, `npm run test:core` and the iTerm2 tier A check
+  (no new line beyond I10's and I11's).
+
+---
+
 ### Task 9: The devices row
 
 **Depends on:** 6, 8. **Effort:** medium. **Test that must fail first:** none (docs: one commit).
