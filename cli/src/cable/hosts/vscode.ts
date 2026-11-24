@@ -198,8 +198,9 @@ export function clientPid(paneId: string): number | undefined {
   return isPid(pid) ? pid : undefined
 }
 
-/** The integrated terminal holding a multiplexer's client, in [editor]'s windows: no `open -b` of its own, as the tap's
- *  opener already brought the editor by the agent's bundle (observed.ts placeApp names the client's app's). */
+/** The integrated terminal holding a multiplexer's client, in [editor]'s windows: no `open -b` or raise of its own, as
+ *  the tap's opener already brought the editor by the agent's bundle, the client's app's (observed.ts placeApp), or on
+ *  Linux by the raise of the client's window (open.ts raiseWindow). */
 export function createVscodeClientAdapter(
   editor: keyof typeof EDITORS,
   deps: { inFront(): boolean; terminals: Pick<VscodeTerminals, 'terminalOf' | 'show'> },
