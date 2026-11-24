@@ -4,6 +4,7 @@ import type { RegisteredSession } from './registry.js'
 import { TERMINAL_UNAVAILABLE_CODE, type TerminalBackend, type TerminalBackendPrepared } from './terminalBackend.js'
 import { processIdentityKey, terminalInstanceId, terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
 import {
+  TERMINAL_LEASE_REFUSED,
   terminalActionNotStarted,
   type RuntimeValidation,
   type SubmitOptions,
@@ -314,7 +315,10 @@ export class TerminalBackendCoordinator {
     text: string,
     options?: SubmitOptions,
   ): Promise<TerminalActionResult> {
-    if (!this.leaseIsCurrent(lease, session)) return terminalActionNotStarted('terminal control lease changed')
+    // Refused as any lease is, so the input path asks again on the new generation: restore records a resumed
+    // engine after the row already reads active, and a message sent in between held a lease from before it
+    // (e2e adopt). Nothing was written yet, so asking again cannot type it twice.
+    if (!this.leaseIsCurrent(lease, session)) return terminalActionNotStarted(TERMINAL_LEASE_REFUSED)
     const ordered = this.orderedRuntimes(session)
     const candidates = [
       lease.runtime,
