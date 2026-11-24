@@ -603,6 +603,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  none, settles in front. The devices are told no app's quit, and Harness Device reports the tab again each time the
    *  app comes back (docs/plans/2026-11-24-dial-tmux-pane-focus-follow-design.md, "The front client"). */
   const lastTabs = new Map<TabApp, string>()
+  /** Whether the agent's tab (its multiplexer client's) is the one [app] reported selected last, where it reports tabs:
+   *  with none reported yet, the person may be on a plain tab of it. */
+  const onTabInFront = (source: ObservedSource, app: string, agentId: string): boolean => {
+    if (!reportsTabs(app)) return true
+    const tab = lastTabs.get(app)
+    return tab !== undefined && tab === source.tabTty(agentId)
+  }
   /** Where the dial moved an app lately, a rest's and a tap's alike, each as it started: the echoes an app's report is
    *  checked against, each excusing one. */
   const dialMovesTo = () => {
@@ -2299,7 +2306,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (changed.length !== 1) return
     const [{ adapter, id }] = changed
     // The app the person went to settles FRONT_SETTLE_MS after the switch, and the poll of the one they left runs till then.
-    if (cableHost.latestFront() !== focus.app) { log('[device] pane · skipped · not in front'); return }
+    // In WezTerm or kitty, an agent's own pane focused there is the one in front: tmux's pane changing in another of its
+    // panes (a script, the person in another tab) is not.
+    if (cableHost.latestFront() !== focus.app
+      || (adapter === tmux.id && [...answer.focused.values()].some((pane) => pane !== null && pane.adapter !== tmux.id))) {
+      log('[device] pane · skipped · not in front')
+      return
+    }
     // The first: a turn or a tap as the app came forward put the dial where the person wants it, and the focus as it
     // settles must not turn it back, as Orca's settle must not (#4311), nor the Claude app's. After it: a move of the
     // dial's own while the read ran leaves the pane it names, as for a tab report, and a tap's focus is seen a read later.
@@ -2308,6 +2321,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // Gone while the read ran. One in tmux may sit at the pane the scan placed it at, which byPane never reads.
     const agent = adapter === tmux.id ? nestedAt(source, adapter, id) : source.byPane(adapter, id)
     if (!agent) { log('[device] pane · skipped · unknown agent'); return }
+    // tmux's front client is the tab reported as the read started: the person may have selected another since.
+    if (!onTabInFront(source, focus.app, agent.id)) { log('[device] pane · skipped · not in front'); return }
     // An agent in tmux is on tmux's page, as a selected tab's is (Diego's decision 4, 2026-11-23; cableHost.ts
     // followPage). WezTerm's and kitty's turn back to their app's own page, which a tmux follow inside one of their
     // panes held on tmux's (the PM's decision, 2026-11-24).
