@@ -4,6 +4,8 @@
  * of its own, the agent under it; panes are `w1:p<n>` from `p1` in the order they open and never reused in a world, so a
  * pane a session had before herdr started again is no session's after. A client is a herdr process under the shell of a
  * tab that holds a herdr session, on that tab's tty. A pane takes herdr's focus as it opens, and as it is focused.
+ * Each move of the focus to another pane is told to the subscriptions naming `pane.focused`, and nothing else is, as
+ * herdr 0.9.5 did in docs/plans/2026-11-24-dial-tmux-pane-focus-follow-plan.md's probe findings, rows 4 to 9.
  *
  * The devices reach it as they reach the person's herdr. Its socket is a fake client (DevicesDeps.herdr), not a socket
  * server: real socket I/O would escape the driver's quiet check. It lists herdr's agents, tells their status to the
@@ -137,7 +139,7 @@ export function herdrPane(world: TierAWorld, s: SessionDef): number {
   const pane: Pane = { id: `${WORKSPACE}:p${DIGITS[model.opened++]!}`, key: s.key,
     shell: startProcess(world, server.pid, SHELLS[world.platform], tty), tty }
   server.panes.set(pane.id, pane)
-  server.focused = pane.id
+  focus(server, pane.id)
   world.panes.set(pane.id, s.key)
   return pane.shell
 }
@@ -150,6 +152,13 @@ function hear(server: Server, wants: (sub: Subscription) => boolean, name: strin
   for (const sub of server.subscriptions) {
     if (wants(sub)) queueMicrotask(() => { if (sub.open) sub.to.event(name, data) })
   }
+}
+
+/** herdr's focus moves to the pane: told on every subscription to focus moves, and only when it moves (probe row 6). */
+function focus(server: Server, paneId: string): void {
+  if (server.focused === paneId) return
+  server.focused = paneId
+  hear(server, (sub) => sub.kinds.has('pane.focused'), 'pane_focused', { pane_id: paneId, type: 'pane_focused', workspace_id: WORKSPACE })
 }
 
 /** herdr's word of an agent in a pane: told on every subscription to detections. */
@@ -260,7 +269,7 @@ function herdrCommand(world: TierAWorld, args: readonly string[]): Answer {
   }
   const server = serverOf(world)
   if (!server?.panes.has(args[2]!)) return FAILED
-  server.focused = args[2]
+  focus(server, args[2]!)
   return { code: 0 }
 }
 
@@ -318,7 +327,7 @@ export const herdrSteps: { [K in 'herdr.focus' | 'herdr.restart']: StepHandler<K
   // The person's own move: nothing of the devices' runs.
   'herdr.focus': async (world, { session }) => {
     const server = needServer(world)
-    server.focused = paneOf(world, server, session).id
+    focus(server, paneOf(world, server, session).id)
   },
   'herdr.restart': async (world) => {
     const model = modelOf(world)
