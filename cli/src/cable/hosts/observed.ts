@@ -311,6 +311,11 @@ export class ObservedSource implements HostSource {
    *  with none of that adapter's at, by agent id. */
   private readonly paneNames = new Map<string, { names: ReadonlyMap<string, PaneName>; placed: ReadonlyMap<string, string> }>()
   private scanning: Promise<void> | null = null
+  /** Each tap and rest, in turn, and the latest tap's turn: past its wait for a fresh place (waitFresh) a tap acts only
+   *  while no later tap came, and a rest only while no later tap or rest came, so neither brings forward what the
+   *  person left meanwhile (PM, 2026-11-24: last action wins). */
+  private acted = 0
+  private tapped = 0
 
   constructor(private readonly deps: ObservedDeps) {}
 
@@ -516,13 +521,16 @@ export class ObservedSource implements HostSource {
     return this.entries.get(e.agent.id) === e && e.endAt === undefined
   }
 
-  async focus(agent: HostAgent): Promise<boolean> {
+  async focus(agent: HostAgent): Promise<boolean | 'superseded'> {
+    const mine = ++this.acted
+    this.tapped = mine
     const e = this.entries.get(agent.id)
     const actions = this.deps.actions
     if (!e || !actions || !this.live(e)) return false
     const waiting = this.waitFresh(e)
     if (waiting) {
       await waiting
+      if (this.tapped !== mine) return 'superseded'
       if (!this.live(e)) return false
     }
     const target = this.target(e)
@@ -615,10 +623,14 @@ export class ObservedSource implements HostSource {
 
   /** Each pane a rest shows, in turn: a tab first, as the pane inside it is seen only once its tab is. Busy if one was
    *  busy, failed only if every one failed. */
-  async showPane(agent: HostAgent): Promise<PaneSwitch> {
+  async showPane(agent: HostAgent): Promise<PaneSwitch | 'superseded'> {
+    const mine = ++this.acted
     const e = this.entries.get(agent.id)
     const waiting = e && this.live(e) ? this.waitFresh(e) : undefined
-    if (waiting) await waiting
+    if (waiting) {
+      await waiting
+      if (this.acted !== mine) return 'superseded'
+    }
     const said: PaneSwitch[] = []
     for (const { adapter, pane } of this.shown(agent)) said.push(await adapter.show!(pane, agent.id))
     return said.includes('busy') ? 'busy' : said.includes('ok') ? 'ok' : 'failed'
