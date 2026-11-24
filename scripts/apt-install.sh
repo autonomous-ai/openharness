@@ -26,8 +26,8 @@ apt=(apt-get -q -o Acquire::Retries=3)
 
 # Points apt's sources, and the mirror lists they read (`mirror+file:PATH`), from regional mirrors
 # (us-east-2.ec2.archive.ubuntu.com, azure.archive.ubuntu.com) to archive.ubuntu.com. Every other host stays. Sets
-# main_archive only when the sources then name archive.ubuntu.com: an ARM runner's are all on ports.ubuntu.com, and its
-# log must not claim a mirror it never used.
+# main_archive only when a line apt reads (not a comment) then names archive.ubuntu.com: an ARM runner's are all on
+# ports.ubuntu.com, and its log must not claim a mirror it never used.
 main_archive=
 use_main_archive() {
   local SOURCELIST SOURCEPARTS file files=() mirror_lists
@@ -42,7 +42,7 @@ use_main_archive() {
     [ -f "$file" ] && files+=("$file")
   done
   perl -pi -e 's{://[A-Za-z0-9.-]+\.archive\.ubuntu\.com}{://archive.ubuntu.com}g' "${files[@]}"
-  grep -q '://archive\.ubuntu\.com' "${files[@]}" && main_archive=archive.ubuntu.com
+  grep -q '^[^#]*://archive\.ubuntu\.com' "${files[@]}" && main_archive=archive.ubuntu.com
 }
 
 attempt=1
