@@ -312,7 +312,7 @@ describe('a device arriving, as the OS says it', () => {
     const watcher = Object.assign(new EventEmitter(), { close: vi.fn() })
     let heard!: (event: string, name: string | null) => void
     const watch = vi.fn((_dir: string, _options: unknown, listener: typeof heard) => { heard = listener; return watcher })
-    return { watcher, watch, hear: (name: string | null) => heard('rename', name) }
+    return { watcher, watch, hear: (name: string | null, event = 'rename') => heard(event, name) }
   }
 
   it('on Linux is a new USB serial node in /dev, and nothing else there', () => {
@@ -324,6 +324,14 @@ describe('a device arriving, as the OS says it', () => {
     expect(signal).toHaveBeenCalledTimes(2)
     off?.()
     expect(dev.watcher.close).toHaveBeenCalledTimes(1)
+  })
+
+  it('on Linux is not a write to a dial already open, which a /dev watch hears as a change before Linux 6.19', () => {
+    const dev = devWatch()
+    const signal = vi.fn()
+    watchDialArrivals(signal, vi.fn(), { platform: 'linux', watch: dev.watch })
+    dev.hear('ttyACM0', 'change')
+    expect(signal).not.toHaveBeenCalled()
   })
 
   it('on Linux, a /dev watch that fails is closed and said once, leaving the scan timer', () => {
