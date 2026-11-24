@@ -295,13 +295,13 @@ export class HerdrSource implements HostSource {
         const pane = data.pane_id
         if (name === FOCUSED && typeof pane === 'string' && HERDR_PANE.test(pane)) this.deps.onFocus(pane)
       },
-      // Refused (a herdr that does not know the kind: the plan's probe, row 10): not asked for again in this attempt,
-      // where that herdr would refuse it again. Any other end opens it again with the next agents' list, which comes only
-      // as the agents change, at most one a second.
+      // Refused (a herdr that does not know the kind: the plan's probe, row 10): one line, and not asked for again in this
+      // attempt, where that herdr would refuse it again. Any other end, unsaid as it may come before or after the agents'
+      // own, opens it again with the next agents' list, which comes only as the agents change, at most one a second.
       closed: (reason) => {
         this.focusing = undefined
         this.focusEnded = reason === 'rejected' || reason === 'bad_answer'
-        this.deps.log(`[herdr] focus · ${reason}`)
+        if (this.focusEnded) this.deps.log(`[herdr] focus · ${reason}`)
       },
     })
   }
