@@ -3,7 +3,8 @@ import { detectApp, detectHost } from './hostDetect.js'
 import { bundleOf, createOpenActions, type OpenTarget } from './open.js'
 import { tmuxFinder } from '../../lib/binaryFinder.js'
 import type { TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
-import { createTmuxAdapter, createTmuxNested, createTmuxOuter, PANES_A_LISTING, type TmuxDeps, type TmuxOuterDeps } from './tmux.js'
+import { FRESH_WITHIN_MS } from './outer.js'
+import { createTmuxAdapter, createTmuxNested, createTmuxOuter, heldAnswers, PANES_A_LISTING, type TmuxDeps, type TmuxOuterDeps } from './tmux.js'
 import type { PtyProcess } from './scannedApp.js'
 
 const OPEN = '/usr/bin/open'
@@ -669,6 +670,27 @@ describe('the outer place of an agent in the person\'s tmux', () => {
     expect(await after).toEqual(answer)
   })
 
+  // Eval I13: the person detaches, attaches from another tab and types nothing; a tap or rest asks fresh and must see
+  // the new client, while a hook's turn-start, at every tool call, keeps the 5 s hold.
+  it('a fresh ask past the second reads the session\'s clients again inside the 5 s hold: tab 1, then tab 2', async () => {
+    const ttys = ['/dev/ttys004', '/dev/ttys005']
+    const { calls, clock, outer } = lookup({
+      run: async (file, args, timeoutMs) => {
+        calls.push({ file, args, timeoutMs })
+        if (args[0] === 'display-message') return { code: 0, stdout: says(90) }
+        return { code: 0, stdout: places(1794700050, 4300, ttys.length > 1 ? ttys.shift()! : ttys[0]) }
+      },
+    })
+    expect((await outer(NESTED, 100))?.tty).toBe('/dev/ttys004')
+    clock.t += FRESH_WITHIN_MS - 1
+    expect((await outer(NESTED, 100, undefined, { fresh: true }))?.tty).toBe('/dev/ttys004')
+    clock.t += 1
+    expect((await outer(NESTED, 100, undefined, { fresh: true }))?.tty).toBe('/dev/ttys005')
+    expect((await outer(NESTED, 100))?.tty).toBe('/dev/ttys005')
+    expect(calls.filter((call) => call.args[0] === 'display-message')).toEqual([asked, asked])
+    expect(calls.filter((call) => call.args[0] === 'list-clients')).toEqual([clientsAsked, clientsAsked])
+  })
+
   it('its lines name no pane, pid, tty, session, bundle or app', async () => {
     const lines: string[] = []
     for (const { logs, outer } of [lookup({}, [], ONE), lookup({}, [], { ...ONE, clients: '' }), lookup({}, [1], ONE)]) {
@@ -926,6 +948,34 @@ describe('the place of an agent the scan found in the person\'s tmux', () => {
     expect(clientReads()).toHaveLength(2)
   })
 
+  // A tap or rest on a scan-placed agent asks fresh (eval I13); a burst of them, on agents of one session, still costs
+  // one listing and one read of the session's clients.
+  it('a fresh ask past the second lists the panes and the session\'s clients again; two agents of one session asked fresh within it run one listing and one list-clients', async () => {
+    const rows = [...AGENT.rows, { pid: 200, ppid: 190, tty: 'ttys011', executable: 'claude' }, { pid: 190, ppid: 80, tty: 'ttys011', executable: 'zsh' }]
+    const panes = PANES + paneLine('%4', '/dev/ttys011', says(190))
+    const ttys = ['/dev/ttys004', '/dev/ttys005']
+    const { calls, clock, nested } = nestedLookup({
+      run: async (file, args, timeoutMs) => {
+        calls.push({ file, args, timeoutMs })
+        return { code: 0, stdout: args[0] === 'list-panes' ? panes : places(1794700050, 4300, ttys.length > 1 ? ttys.shift()! : ttys[0]) }
+      },
+    })
+    const first = { ...AGENT, rows }
+    const second = { pid: 200, tty: 'ttys011', rows }
+    expect([(await nested(first))?.tty, (await nested(second))?.tty]).toEqual(['/dev/ttys004', '/dev/ttys004'])
+    expect(calls).toEqual([panesListed, clientsAsked])
+    clock.t += FRESH_WITHIN_MS - 1
+    expect((await nested(first, { fresh: true }))?.tty).toBe('/dev/ttys004')
+    expect(calls).toHaveLength(2)
+    clock.t += 1
+    const [a, b] = await Promise.all([nested(first, { fresh: true }), nested(second, { fresh: true })])
+    expect([a?.tty, b?.tty]).toEqual(['/dev/ttys005', '/dev/ttys005'])
+    expect(calls).toEqual([panesListed, clientsAsked, panesListed, clientsAsked])
+    // The fresh answer is held: a plain ask within 5 s gets it, with nothing run.
+    expect((await nested(second))?.tty).toBe('/dev/ttys005')
+    expect(calls).toHaveLength(4)
+  })
+
   // The scan asks for its sessions one at a time: an answer kept from the listing's start would be gone after a listing
   // that hung to its timeout, and every ask after it would wait out one more.
   it('a listing that ran 10 s holds 5 s from its settle: the asks after it run none', async () => {
@@ -977,6 +1027,35 @@ describe('the place of an agent the scan found in the person\'s tmux', () => {
 /** tmux where the core found it, off the process's PATH: the master's PATH may hold no tmux. */
 const ADOPTED = async (): Promise<TmuxPathOutcome> => ({ state: 'adopted', path: '/x/bin/tmux', from: 'login shell' })
 const atPath = (call: Call): Call => ({ ...call, file: '/x/bin/tmux' })
+
+// A hook's turn-start comes at every tool call, so a plain ask is held 5 s; a tap or rest is the person's and must see a
+// re-attach since (eval I13), so a fresh ask shares only what is in flight or settled within the second.
+describe('held answers', () => {
+  it('a fresh ask shares one in flight or settled less than FRESH_WITHIN_MS ago, and asks anew after; the new answer is held', async () => {
+    const clock = { t: 0 }
+    const held = heldAnswers<number>(() => clock.t)
+    let runs = 0
+    const ask = vi.fn(async () => ++runs)
+    expect(await held('k', ask)).toBe(1)
+    clock.t = FRESH_WITHIN_MS - 1
+    expect(await held('k', ask, { fresh: true })).toBe(1)
+    expect(ask).toHaveBeenCalledTimes(1)
+    clock.t = FRESH_WITHIN_MS
+    expect(await held('k', ask, { fresh: true })).toBe(2)
+    clock.t = 4_000
+    expect(await held('k', ask)).toBe(2)
+    expect(ask).toHaveBeenCalledTimes(2)
+    clock.t = 7_000
+    let settle!: () => void
+    ask.mockImplementationOnce(() => new Promise<number>((resolve) => { settle = () => resolve(++runs) }))
+    const third = held('k', ask)
+    clock.t = 9_000
+    const shared = held('k', ask, { fresh: true })
+    settle()
+    expect([await third, await shared]).toEqual([3, 3])
+    expect(ask).toHaveBeenCalledTimes(3)
+  })
+})
 
 describe('tmux as the core finds it', () => {
   it('a tmux found off the PATH runs at its path: the lookup places the agent in Terminal at its tty', async () => {
