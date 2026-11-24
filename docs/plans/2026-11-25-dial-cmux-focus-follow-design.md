@@ -23,7 +23,10 @@ source only.
   - `surface.focused`: the focused surface of a workspace changed (`workspace_id`, `surface_id`). Published by
     `publishCmuxFocusedSelection` only when that workspace's focused surface changes, with `pane.focused`
     (`payload.selected_surface_id`) and `surface.selected` beside it. This is "the surface that should receive
-    keyboard/input commands".
+    keyboard/input commands". Every tab or pane selection, a tab or split created focused included, goes through
+    `Workspace.applyTabSelection` → `applyTabSelectionNow`, which ends with that publish (`Sources/Workspace.swift`
+    at the tag); only a remote tmux mirror's mutations skip it (`suppressesFocusActivation`), and their surfaces are no
+    local agent's.
   - `workspace.selected`: the selected workspace of a window changed (`workspace_id`). It names no window
     (`window_id` is not set), and a switch fires no `surface.focused`: that workspace's focused surface did not change.
   - `window.keyed`: a cmux window became the key window (AppKit), with `payload.workspace_id`, that window's selected
