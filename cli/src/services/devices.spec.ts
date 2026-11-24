@@ -14886,15 +14886,16 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
   /** The iTerm2 tab holding the client of the agents' session. */
   const TMUX_TAB = '/dev/ttys002'
   /** What the poll's read of tmux prints and its exit code; while `held`, each such read waits until the spec lands it,
-   *  then answers as a run that reached its timeout, or, held as `listing`, as tmuxSays has it then. With `second`, pane
-   *  %4's session is shown by a client of its own (4310) on that tty. The pane WezTerm's GUI focused: none, no GUI
+   *  then answers as a run that reached its timeout, or, held as `listing`, as tmuxSays has it then. While `slowSelect`,
+   *  a rest's or a tap's select-window waits until the spec lands it too. With `second`, pane %4's session is shown by a
+   *  client of its own (4310) on that tty. The pane WezTerm's GUI focused: none, no GUI
    *  (RECORDED_WEZTERM.listClients.noGui). The window kitty focused. */
   const tmuxSays = { clients: '/dev/ttys002|%3\n', code: 0, held: false as boolean | 'listing', land: [] as Array<() => void>,
-    second: undefined as string | undefined }
+    second: undefined as string | undefined, slowSelect: false }
   const weztermSays = { pane: 0 as number | undefined }
   const kittySays = { window: 0 }
   beforeEach(() => {
-    Object.assign(tmuxSays, { clients: '/dev/ttys002|%3\n', code: 0, held: false, land: [], second: undefined })
+    Object.assign(tmuxSays, { clients: '/dev/ttys002|%3\n', code: 0, held: false, land: [], second: undefined, slowSelect: false })
     weztermSays.pane = 0
     kittySays.window = 0
   })
@@ -14938,6 +14939,7 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
     if (file === 'tmux' && args[0] === 'display-message') return { code: 0, stdout: args.includes('%4') ? '4001|work|\n' : '4000|work|\n' }
     if (file === 'tmux' && args[0] === 'list-panes') return { code: 0, stdout: '%3|/dev/ttys030|4000|work|\n%4|/dev/ttys031|4001|work|\n' }
     if (file === 'tmux' && args[0] === 'select-window') {
+      if (tmuxSays.slowSelect) await new Promise<void>((resolve) => { tmuxSays.land.push(resolve) })
       tmuxSays.clients = `${clientTty}|${args.at(-1)}\n`
       return { code: 0, stdout: '' }
     }
@@ -15432,6 +15434,22 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
       expect(paneAsked()).toEqual([[agent(1), 'pane']])
     })
 
+    it('a rest whose select ends past TAB_ECHO_MS, a hand turn elsewhere meanwhile: the read after it ends is its echo, and the dial stays', async () => {
+      const { report, settle, next } = await dialWith()
+      report('iterm', TMUX_TAB)
+      await settle('iterm')
+      tmuxSays.slowSelect = true
+      host().swipeEnded(agent(2), 'rest')
+      await settled()
+      turnTo(agent(1))
+      clock = 2_500
+      await land()
+      expect(tmuxSays.clients).toBe(`${TMUX_TAB}|%4\n`)
+      await next()
+      expect(paneLines()).toEqual([ECHO])
+      expect(paneAsked()).toEqual([[agent(1), 'pane']])
+    })
+
     it('a hand turn while the pane stays: no read pulls the dial back', async () => {
       const { report, settle, next } = await dialWith()
       report('iterm', TMUX_TAB)
@@ -15640,10 +15658,14 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
     ]
     /** The server's client socket and the client connected to it, as lsof gives them. */
     const SOCKETS = 'p3900\nf5\nd0x1111\nn/Users/u/.config/herdr/herdr-client.sock\np4300\nf3\nd0x2222\nn->0x1111\n'
+    /** While `held`, the dial's `herdr agent focus` waits until the spec lands it. */
+    const focusRun = { held: false, land: [] as Array<() => void> }
+    beforeEach(() => { Object.assign(focusRun, { held: false, land: [] }) })
     /** The devices' runs, recorded: herdr's client lookup's lsof, and its ps of the client's tty, or on Linux the
      *  server's, as [ps] has it. */
     const herdrRun = (linux: boolean, ps = linux ? '3900 pts/4\n' : '4300 ttys004\n') => async (file: string, args: string[], timeoutMs: number) => {
       orcaRuns.push([file, args, timeoutMs])
+      if (focusRun.held && args[0] === 'agent') await new Promise<void>((resolve) => { focusRun.land.push(resolve) })
       return { code: 0, stdout: file === '/usr/sbin/lsof' ? SOCKETS : file.endsWith('/ps') ? ps : '' }
     }
     const herdrFocus = (pane: string): Run => ['/opt/herdr/bin/herdr', ['agent', 'focus', pane], 10_000]
@@ -15796,6 +15818,22 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
       await focus('w1:p2')
       expect(paneAsked()).toEqual([[agent(1), 'pane'], [agent(2), 'pane']])
       expect(focusLines()).toEqual([ECHO])
+    })
+
+    it('a rest whose herdr agent focus ends past TAB_ECHO_MS, a hand turn elsewhere meanwhile: herdr\'s event after it ends is its echo, and the dial stays', async () => {
+      const { report, settle, focus } = await herdrWith()
+      report('terminal-app', HERDR_TAB)
+      await settle('terminal-app')
+      focusRun.held = true
+      host().swipeEnded(agent(2), 'rest')
+      await vi.waitFor(() => expect(focusRun.land).toHaveLength(1))
+      turnTo(agent(1))
+      clock = 2_500
+      for (const landing of focusRun.land.splice(0)) landing()
+      await vi.waitFor(() => expect(logs).toContain('[device] swipe · ok'))
+      await focus('w1:p2')
+      expect(focusLines()).toEqual([ECHO])
+      expect(paneAsked()).toEqual([])
     })
 
     it('the dial going drops its own moves: attached again, herdr\'s event for the pane it rested on is the person\'s', async () => {
