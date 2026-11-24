@@ -15,7 +15,7 @@
 import { opendir, readlink, stat } from 'node:fs/promises'
 import { HERDR_PANE } from './herdrClient.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
-import type { OuterLookup } from './outer.js'
+import type { MadeAnswer, OuterLookup } from './outer.js'
 import { readPtyMaker, scannedApps, type ProcessName } from './scannedApp.js'
 import { clientTtyForm } from './tabs.js'
 import { heldAnswers, PID } from './tmux.js'
@@ -251,14 +251,15 @@ function saidAnswers(deps: ClientDeps): (key: string, place: () => Promise<Clien
  * Where the person sees an agent in a pane of their own herdr: in the app holding the herdr client they used last, at
  * that client's tty. Nothing at once on Windows, when the hints name no herdr pane in form or the caller is no pid; else
  * the client's place, its process alone when no app holds it, `{}` when no client is found or it runs inside a
- * multiplexer; with `nest: 'herdr'` once a herdr server made the caller's terminal. Never rejects.
+ * multiplexer; with `nest: 'herdr'` once a herdr server made the caller's terminal, told as soon as that is read
+ * (OuterLookup's made). Never rejects.
  */
 export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
   // Windows has no `ps` to read a client's tty with, and no form for one.
   const form = clientTtyForm(deps.platform)
   if (!form) return () => undefined
-  // By pane and caller, as tmux's.
-  const held = heldAnswers<ClientPlace & { nest?: Nest }>(deps.now)
+  // By pane and caller, as tmux's, with the server's read.
+  const held = heldAnswers<ClientPlace & { nest?: Nest }, MadeAnswer>(deps.now)
   const skipped = new Set<string>()
 
   /** A herdr pane id the lookup cannot take is said, once an id: a lookup that answers nothing otherwise leaves the
@@ -270,8 +271,9 @@ export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
     deps.log('[device] herdr client · skipped · pane-id')
   }
 
-  /** `{}` when no herdr server made the caller's terminal; else the place from the server on, on herdr's page. */
-  const placeOf = async (pid: number): Promise<ClientPlace & { nest?: Nest }> => {
+  /** The server that made the caller's terminal and the table it was read over; else the answer, said: `{}` when no
+   *  herdr server made it. */
+  const serverOf = async (pid: number): Promise<{ server: number; rows: readonly ProcessName[] } | ClientPlace> => {
     // One read of the table serves the server's, the clients' and their apps' walks.
     const rows = await deps.processes().catch(() => undefined)
     if (!rows) return said(deps, 'processes')
@@ -280,13 +282,26 @@ export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
     // herdr client. The table holds no terminal: the caller's and its parents' are read.
     const maker = await readPtyMaker(pid, rows, deps.tty).catch(() => null)
     if (maker === null) return said(deps, 'processes')
-    if (maker?.host !== 'herdr') return said(deps, {})
-    // The pane is herdr's whatever the client steps read: found, none or not read, the agent is on herdr's page even
-    // with no app known (Diego, 2026-11-23). A step that throws is said as the app scan: a lookup never rejects.
-    return { ...said(deps, await clientsOf(deps, form, maker.pid, rows).catch((): NotRead => 'app')), nest: 'herdr' }
+    if (maker?.host !== 'herdr') {
+      // Its own word: `none` is a herdr pane whose client was not found.
+      deps.log('[device] herdr client · outside')
+      return {}
+    }
+    return { server: maker.pid, rows }
   }
 
-  return (hints, pid) => {
+  /** `{}` when no herdr server made the caller's terminal; else the place from the server on, on herdr's page. */
+  const placeOf = (pid: number): MadeAnswer => {
+    const found = serverOf(pid)
+    // The pane is herdr's whatever the client steps read: found, none or not read, the agent is on herdr's page even
+    // with no app known (Diego, 2026-11-23). A step that throws is said as the app scan: a lookup never rejects.
+    const place = found.then(async (read) => ('server' in read
+      ? { ...said(deps, await clientsOf(deps, form, read.server, read.rows).catch((): NotRead => 'app')), nest: 'herdr' as const }
+      : read))
+    return Object.assign(place, { made: found.then((read) => 'server' in read) })
+  }
+
+  return (hints, pid, made) => {
     const id = hints.HERDR_PANE_ID
     if (!id) return undefined
     if (!HERDR_PANE.test(id)) {
@@ -294,7 +309,9 @@ export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
       return undefined
     }
     if (!PID.test(String(pid))) return undefined
-    return held(`${id}:${pid}`, () => placeOf(pid))
+    const answer = held(`${id}:${pid}`, () => placeOf(pid))
+    if (made) void answer.made.then((yes) => { if (yes) made('herdr') })
+    return answer
   }
 }
 

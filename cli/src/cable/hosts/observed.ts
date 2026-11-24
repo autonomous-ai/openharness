@@ -139,7 +139,7 @@ export interface ObservedDeps {
   /** The place of an agent nested in a multiplexer whose own pty is no tab (outer.ts firstOuter of herdrOuter.ts's,
    *  tmux.ts's and zellij.ts's lookups), by its event's hints and caller: undefined at once when it is not nested; else
    *  the app holding that multiplexer's client, the client's tty and its process, `{}` when none was found, never
-   *  rejected. Absent, nothing is learned. */
+   *  rejected; the multiplexer is told first, once the maker's read confirms it. Absent, nothing is learned. */
   outer?: OuterLookup
 }
 
@@ -792,7 +792,9 @@ export class ObservedSource implements HostSource {
     const scanned = entry.scanPlaced
     entry.scanPlaced = undefined
     if (same && e.event !== 'session-start' && e.event !== 'turn-start') return true
-    const answer = this.deps.outer?.(e.hostHints, e.callerPid)
+    const ask = { pid: e.callerPid, hints: e.hostHints }
+    // Its multiplexer lands as soon as the maker's read confirms it, before the client's steps end (OuterLookup's made).
+    const answer = this.deps.outer?.(e.hostHints, e.callerPid, (nest) => this.landOuter(entry, ask, nest))
     if (!same && !(scanned && answer && e.callerPid === entry.pid)) {
       entry.outer = undefined
       entry.outerPid = undefined
@@ -802,26 +804,33 @@ export class ObservedSource implements HostSource {
       entry.outerAsk = undefined
       return false
     }
-    const ask = { pid: e.callerPid, hints: e.hostHints }
     entry.outerAsk = ask
     entry.ttyPid = undefined
     entry.ttyFailedAt = undefined
     entry.tty = entry.outer?.tty
-    void answer.then((place) => {
-      if (entry.outerAsk !== ask || !this.live(entry)) return
+    void answer.then((place) => this.landOuter(entry, ask, place.nest, place))
+    return true
+  }
+
+  /** What [ask] learnt lands while it is the latest ask and the session lives: its multiplexer [nest] (none: its hints'
+   *  host), and the client's [place] once its steps end. A multiplexer told with nothing new changes nothing. */
+  private landOuter(
+    entry: Entry, ask: NonNullable<Entry['outerAsk']>, nest: Nest | undefined, place?: Awaited<NonNullable<ReturnType<OuterLookup>>>,
+  ): void {
+    if (entry.outerAsk !== ask || !this.live(entry)) return
+    if (place) {
       entry.outer = place.app ? { app: place.app, tty: place.tty, pid: place.pid } : undefined
       entry.outerPid = !place.app && Number.isSafeInteger(place.pid) && place.pid! > 0 ? place.pid : undefined
       entry.tty = entry.outer?.tty
-      if (place.nest) entry.agent.nest = place.nest
-      else delete entry.agent.nest
-      entry.agent.host = place.nest ?? detectHost(ask.hints)
-      this.placeApp(entry, ask.hints, ask.pid)
-      // Its first hook's ask held it pending (ingest): placed now.
-      delete entry.agent.appPending
-      this.locate(entry)
-      this.emit()
-    })
-    return true
+    } else if (entry.agent.nest === nest && !entry.agent.appPending) return
+    if (nest) entry.agent.nest = nest
+    else delete entry.agent.nest
+    entry.agent.host = nest ?? detectHost(ask.hints)
+    this.placeApp(entry, ask.hints, ask.pid)
+    // Its first hook's ask held it pending (ingest): placed now.
+    delete entry.agent.appPending
+    this.locate(entry)
+    this.emit()
   }
 
   /** Its app, and the one a tap brings forward: the app it is seen in when nested, else the one its hints name; hints

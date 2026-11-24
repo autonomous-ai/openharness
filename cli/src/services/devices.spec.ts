@@ -4139,7 +4139,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       // No herdr made its terminal: the herdr pane its hints name only holds it, said once.
       const held = '[device] herdr · held'
       await vi.waitFor(() => expect(said().filter((line) => line !== held))
-        .toEqual(['[device] herdr client · found', '[device] herdr client · none', '[device] tmux client · found']))
+        .toEqual(['[device] herdr client · found', '[device] herdr client · outside', '[device] tmux client · found']))
       expect(said().filter((line) => line === held)).toEqual([held])
       expect(orcaRuns.filter(([file]) => file === 'tmux').map(([, args]) => args[0])).toEqual(['display-message', 'list-clients'])
       // Each on the page of the multiplexer whose pane it runs in, its client's Terminal tab holding neither.

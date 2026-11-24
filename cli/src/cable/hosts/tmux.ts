@@ -16,7 +16,7 @@ import type { TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { APP_IDS } from './hostDetect.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
-import type { Nested, NestedPlace, OuterLookup } from './outer.js'
+import type { MadeAnswer, Nested, NestedPlace, OuterLookup } from './outer.js'
 import type { Nest } from './types.js'
 import { parentChain, readPtyOwner, scannedApps, type ProcessName } from './scannedApp.js'
 import { clientTtyForm } from './tabs.js'
@@ -227,16 +227,17 @@ type NotRead = 'tmux' | 'pane' | 'processes' | 'clients' | 'app'
 /**
  * Answers by key, each held OUTER_EVERY_MS from when it settled: the scan asks one session at a time, so an answer kept
  * from its start would be gone after a run that hung to its timeout, and each ask after it would wait out one more. One
- * in flight is shared. Only keys settled in the last 5 s, or still in flight, are kept. [ask] never rejects.
+ * in flight is shared, as [ask] gave it, with what it carries (MadeAnswer). Only keys settled in the last 5 s, or still
+ * in flight, are kept. [ask] never rejects.
  */
-export function heldAnswers<T>(now: () => number): (key: string, ask: () => Promise<T>) => Promise<T> {
-  const asked = new Map<string, { answer: Promise<T>; settledAt?: number }>()
+export function heldAnswers<T, Asked extends Promise<T> = Promise<T>>(now: () => number): (key: string, ask: () => Asked) => Asked {
+  const asked = new Map<string, { answer: Asked; settledAt?: number }>()
   return (key, ask) => {
     const at = now()
     for (const [held, last] of asked) if (last.settledAt !== undefined && at - last.settledAt >= OUTER_EVERY_MS) asked.delete(held)
     const last = asked.get(key)
     if (last) return last.answer
-    const entry: { answer: Promise<T>; settledAt?: number } = { answer: ask() }
+    const entry: { answer: Asked; settledAt?: number } = { answer: ask() }
     void entry.answer.then(() => { entry.settledAt = now() })
     asked.set(key, entry)
     return entry.answer
@@ -283,13 +284,13 @@ async function said(log: TmuxOuterDeps['log'], placing: Promise<NestedPlace | No
  * one the server started with, none when the daemon started it (Diego's Mac, 2026-11-19), and another app's after a
  * re-attach. It only reads, the pane's facts and its session's clients, and only for a pane of the person's that holds
  * the hook's caller (pid), on a terminal tmux made. Nothing at once when the hints name no tmux pane in form or the
- * caller is no pid; else the client's place, `{}` when none is found, with `nest` once tmux made the caller's terminal.
- * Never rejects.
+ * caller is no pid; else the client's place, `{}` when none is found, with `nest` once tmux made the caller's terminal,
+ * told as soon as that is read (OuterLookup's made). Never rejects.
  */
 export function createTmuxOuter(deps: TmuxOuterDeps): OuterLookup {
   // By pane and caller: an answer holds for the caller whose chain held the pane, a pane of the same id may be another
-  // server's.
-  const asked = heldAnswers<ClientPlace & { nest?: Nest }>(deps.now)
+  // server's. With the read that tmux made the caller's terminal.
+  const asked = heldAnswers<ClientPlace & { nest?: Nest }, MadeAnswer>(deps.now)
 
   /** The table that proved the pane the caller's, on a terminal tmux made; nothing when the pane is not the person's,
    *  holds no process of the caller's or tmux made no terminal the caller runs on; the step that could not be read,
@@ -310,18 +311,27 @@ export function createTmuxOuter(deps: TmuxOuterDeps): OuterLookup {
     return owner === 'tmux' ? rows : undefined
   }
 
-  return (hints, pid) => {
-    const id = hints.TMUX_PANE
-    if (!id || !TMUX_PANE_ID.test(id) || !PID.test(String(pid))) return undefined
-    return asked(`${id}:${pid}`, async () => {
-      // Its table and terminal reads answer their own word: what is left to throw is tmux's finder or run, so a lookup
-      // never rejects.
-      const rows = await tmuxMade(id, pid).catch((): NotRead => 'tmux')
+  /** `{}` when tmux made no terminal of the caller's, or a step before its clients was not read; else its client's
+   *  place, on tmux's page. */
+  function placeOf(id: string, pid: number): MadeAnswer {
+    // Its table and terminal reads answer their own word: what is left to throw is tmux's finder or run, so a lookup
+    // never rejects.
+    const read = tmuxMade(id, pid).catch((): NotRead => 'tmux')
+    const place = read.then(async (rows) => {
       if (!rows || typeof rows === 'string') return said(deps.log, Promise.resolve(rows ?? {}))
       // From here the agent is in a pane tmux made, so on tmux's page (Diego, 2026-11-23), whatever its clients give:
       // one in an app, none, or a step not read.
-      return { ...(await said(deps.log, clientOf(deps, id, rows))), nest: 'tmux' }
+      return { ...(await said(deps.log, clientOf(deps, id, rows))), nest: 'tmux' as const }
     })
+    return Object.assign(place, { made: read.then((rows) => Array.isArray(rows)) })
+  }
+
+  return (hints, pid, made) => {
+    const id = hints.TMUX_PANE
+    if (!id || !TMUX_PANE_ID.test(id) || !PID.test(String(pid))) return undefined
+    const answer = asked(`${id}:${pid}`, () => placeOf(id, pid))
+    if (made) void answer.made.then((yes) => { if (yes) made('tmux') })
+    return answer
   }
 }
 
