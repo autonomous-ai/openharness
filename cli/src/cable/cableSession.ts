@@ -523,7 +523,7 @@ export interface CableHost {
    * came up on its own — the window then only brings the agent forward if it is already on screen,
    * because a reconnect re-shows every unanswered question and each used to open a tab.
    */
-  openAgent(agentId: string, reason?: OpenReason): void | Promise<void | { ok: false; error: string }>
+  openAgent(agentId: string, reason?: OpenReason): void | Promise<void | 'superseded' | { ok: false; error: string }>
   readNotification?(agentId: string, readToken: string): void
   /** The dial asked for a fork of this agent — a second one with its history, opened in the window. */
   forkAgent(agentId: string): Promise<{ ok: true; agentId: string } | { ok: false; error: string; detail?: string }>
@@ -1797,6 +1797,8 @@ export class CableSession {
           if (this.lacks(agentId, 'f')) return
         }
         void Promise.resolve(this.host.openAgent(agentId, reason)).then((result) => {
+          // A later tap replaced this one before it acted: that tap toasts or moves the face for itself.
+          if (result === 'superseded') return
           if (result && !result.ok) return this.toast(result.error)
           // Another app moves no window, so no window focus will bring the dial to this agent's face: the tap's own
           // open says it. The dial does not answer a focus with one, and its echo of a swipe only marks the agent seen.

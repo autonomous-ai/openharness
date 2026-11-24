@@ -1129,7 +1129,7 @@ export class DaemonCableHost implements CableHost {
     return this.viaFleet((r) => r.machineOf(agentId))
   }
 
-  openAgent(agentId: string, reason?: OpenReason): void | Promise<void | { ok: false; error: string }> {
+  openAgent(agentId: string, reason?: OpenReason): void | Promise<void | 'superseded' | { ok: false; error: string }> {
     // The last tap wins, whatever agent it is on: a tap still waiting for Desktop's window would open its agent over the
     // app this one brings forward. A question screen that came up by itself is no tap.
     if (!reason) {
@@ -1141,6 +1141,8 @@ export class DaemonCableHost implements CableHost {
       // Only a person's tap switches the other app: a question screen that came up by itself never does.
       if (reason) return
       return (outside.source.focus?.(outside.agent) ?? Promise.resolve(false)).then((opened) => {
+        // A later tap replaced this one before it acted (eval I13, PM 2026-11-24): the later tap's end is the one counted.
+        if (opened === 'superseded') return opened
         this.openEnded(agentId, opened ? { outcome: 'ok' } : { outcome: 'failed', code: 'not_opened' })
         return opened ? undefined : { ok: false as const, error: `${agentPlaceName(outside.agent)} did not open it.` }
       }, (error: unknown) => {
