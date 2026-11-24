@@ -293,56 +293,56 @@ describe.skipIf(process.platform !== 'darwin')("an agent in the person's tmux, o
 
   // By hand, alone on an idle Mac: the devices' cost of following tmux's panes
   // (docs/plans/2026-11-24-dial-tmux-pane-focus-follow-design.md), taken before and after the change.
-  describe.runIf(process.env.TMUX_FOCUS_CPU === '1')('CPU', () => {
-    const MINUTE_MS = 60_000
-    const measured = (ms: number) => new Promise<void>((done) => setTimeout(done, ms))
-    const cpuMs = async (pid: number): Promise<number> =>
-      psTime((await execFileAsync('ps', ['-o', 'time=', '-p', String(pid)], { encoding: 'utf8' })).stdout)
-    const lines = (d: IsolatedDaemon, text: string): string[] => d.log().split('\n').filter((line) => line.includes(text))
+  // An it.runIf, not a nested describe.runIf: under a skipped describe that one's case reports pending, which
+  // CI's shard check (scripts/verify-cli-test-shards.py) fails on.
+  const MINUTE_MS = 60_000
+  const measured = (ms: number) => new Promise<void>((done) => setTimeout(done, ms))
+  const cpuMs = async (pid: number): Promise<number> =>
+    psTime((await execFileAsync('ps', ['-o', 'time=', '-p', String(pid)], { encoding: 'utf8' })).stdout)
+  const lines = (d: IsolatedDaemon, text: string): string[] => d.log().split('\n').filter((line) => line.includes(text))
 
-    it("the devices' CPU over a minute with the tmux client's tab in front, and with another app in front", async () => {
-      const { d, client, run } = await fresh()
-      // The watch has just told Terminal in front: the earliest a poll could start.
-      const freshAt = Date.now()
-      await until('the tmux client found', () => d.log().includes('[device] tmux client · found'), 30_000, 50)
-      run.tab(await client.tty())
-      await until('the tab line moved the dial', () => d.log().includes('[device] tab · moved'), 30_000, 50)
+  it.runIf(process.env.TMUX_FOCUS_CPU === '1')("the devices' CPU over a minute with the tmux client's tab in front, and with another app in front", async () => {
+    const { d, client, run } = await fresh()
+    // The watch has just told Terminal in front: the earliest a poll could start.
+    const freshAt = Date.now()
+    await until('the tmux client found', () => d.log().includes('[device] tmux client · found'), 30_000, 50)
+    run.tab(await client.tty())
+    await until('the tab line moved the dial', () => d.log().includes('[device] tab · moved'), 30_000, 50)
 
-      // What one read of the new place costs tmux, apart from the devices.
-      const runs: number[] = []
-      for (let i = 0; i < 20; i++) {
-        const at = performance.now()
-        await d.tmux.run('list-clients', '-F', '#{client_tty}|#{pane_id}')
-        runs.push(performance.now() - at)
-      }
-      runs.sort((x, y) => x - y)
-      const readMs = (runs[9] + runs[10]) / 2
+    // What one read of the new place costs tmux, apart from the devices.
+    const runs: number[] = []
+    for (let i = 0; i < 20; i++) {
+      const at = performance.now()
+      await d.tmux.run('list-clients', '-F', '#{client_tty}|#{pane_id}')
+      runs.push(performance.now() - at)
+    }
+    runs.sort((x, y) => x - y)
+    const readMs = (runs[9] + runs[10]) / 2
 
-      const [pid, ...more] = d.servicePids('devices')
-      expect(more).toEqual([])
+    const [pid, ...more] = d.servicePids('devices')
+    expect(more).toEqual([])
 
-      // A minute with the client's tab in front.
-      let cpu = await cpuMs(pid)
-      let at = performance.now()
-      await measured(MINUTE_MS)
-      const frontCpuPercent = 100 * (await cpuMs(pid) - cpu) / (performance.now() - at)
+    // A minute with the client's tab in front.
+    let cpu = await cpuMs(pid)
+    let at = performance.now()
+    await measured(MINUTE_MS)
+    const frontCpuPercent = 100 * (await cpuMs(pid) - cpu) / (performance.now() - at)
 
-      // A minute with Ghostty in front: any poll stops at its settle, and none starts.
-      const started = lines(d, '[device] focus poll · started').length
-      const awayAt = Date.now()
-      run.front(GHOSTTY)
-      cpu = await cpuMs(pid)
-      at = performance.now()
-      await measured(MINUTE_MS)
-      const awayCpuPercent = 100 * (await cpuMs(pid) - cpu) / (performance.now() - at)
+    // A minute with Ghostty in front: any poll stops at its settle, and none starts.
+    const started = lines(d, '[device] focus poll · started').length
+    const awayAt = Date.now()
+    run.front(GHOSTTY)
+    cpu = await cpuMs(pid)
+    at = performance.now()
+    await measured(MINUTE_MS)
+    const awayCpuPercent = 100 * (await cpuMs(pid) - cpu) / (performance.now() - at)
 
-      const reads = lines(d, '[device] focus poll · stopped · ')
-        .reduce((sum, line) => sum + Number(/ · (\d+) reads/.exec(line)?.[1] ?? 0), 0)
-      // Past the runner: a passing case's console is not printed.
-      process.stdout.write(`${JSON.stringify({ platform: platform(), arch: arch(), frontCpuPercent, awayCpuPercent, pollsStarted: started, reads, readMs })}\n`)
-      // One read at most every FOCUS_POLL_MS from the earliest start to Ghostty's settle, the first at once.
-      expect(reads).toBeLessThanOrEqual(Math.floor((awayAt + FRONT_SETTLE_MS - freshAt) / FOCUS_POLL_MS) + 1)
-      expect(lines(d, '[device] focus poll · started')).toHaveLength(started)
-    }, 300_000)
-  })
+    const reads = lines(d, '[device] focus poll · stopped · ')
+      .reduce((sum, line) => sum + Number(/ · (\d+) reads/.exec(line)?.[1] ?? 0), 0)
+    // Past the runner: a passing case's console is not printed.
+    process.stdout.write(`${JSON.stringify({ platform: platform(), arch: arch(), frontCpuPercent, awayCpuPercent, pollsStarted: started, reads, readMs })}\n`)
+    // One read at most every FOCUS_POLL_MS from the earliest start to Ghostty's settle, the first at once.
+    expect(reads).toBeLessThanOrEqual(Math.floor((awayAt + FRONT_SETTLE_MS - freshAt) / FOCUS_POLL_MS) + 1)
+    expect(lines(d, '[device] focus poll · started')).toHaveLength(started)
+  }, 300_000)
 })
