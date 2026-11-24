@@ -7,7 +7,7 @@
 // On Windows a COM port is neither, so harness-serial.exe (serial/) holds it and this file talks to its stdio
 // (windowsSerial.ts): still no native module.
 import { execFile } from 'node:child_process'
-import { closeSync, constants, existsSync, lstatSync, openSync, readFileSync, readSync, readdirSync } from 'node:fs'
+import { closeSync, constants, existsSync, lstatSync, openSync, readFileSync, readSync, readdirSync, watch } from 'node:fs'
 import { basename } from 'node:path'
 import type { Socket } from 'node:net'
 import type { Duplex } from 'node:stream'
@@ -95,6 +95,38 @@ export async function findDialPorts(): Promise<DialPort[]> {
   if (process.platform === 'linux') return findLinux()
   if (process.platform === 'win32') return (await windows()).windowsDialWatch().ports()
   return []
+}
+
+type WatchDir = (dir: string, options: { persistent: boolean }, listener: (event: string, name: string | null) => void) =>
+  { on(event: 'error', listener: (error: Error) => void): unknown; close(): void }
+
+/**
+ * Calls `signal` when the OS says a serial device may have arrived, so the fleet scans at once rather than at its
+ * next tick (a replug's slow ring, #4580). Returns the unsubscribe, or undefined where there is no cheap signal.
+ * The tick stays on every OS: it finds the dial when a watch fails.
+ */
+export function watchDialArrivals(signal: () => void, log: (line: string) => void,
+                                  deps: { platform: NodeJS.Platform; watch: WatchDir } = { platform: process.platform, watch }): (() => void) | undefined {
+  if (deps.platform === 'linux') {
+    // A dial is ttyACMn, one behind a USB-serial bridge ttyUSBn. Not persistent: the watch alone never keeps the daemon up.
+    const watcher = deps.watch('/dev', { persistent: false }, (_event, name) => { if (name && /^tty(ACM|USB)\d/.test(name)) signal() })
+    watcher.on('error', (error) => {
+      log(`cable: /dev watch failed (${errorKind(error)}) — a new dial is found by the next scan`)
+      watcher.close()
+    })
+    return () => watcher.close()
+  }
+  if (deps.platform === 'win32') {
+    // harness-serial's watch prints a line on each COM port arrival or removal (CM_Register_Notification).
+    // An import that fails is said by the scan, which imports the same file.
+    let off: (() => void) | undefined
+    let ended = false
+    windows().then((win) => { if (!ended) off = win.windowsDialWatch().onChange(signal) }, () => {})
+    return () => { ended = true; off?.() }
+  }
+  // macOS: fs.watch('/dev') hears nothing when a /dev/cu.* node appears, so a cheap signal would need an IOKit helper;
+  // the tick, gated by createDarwinDialFinder's /dev fingerprint, finds the dial.
+  return undefined
 }
 
 /**

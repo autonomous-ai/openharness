@@ -104,6 +104,8 @@ export interface WindowsDialWatch {
   ports(): Promise<DialPort[]>
   /** Whether this user is at the screen. Starts discovery; unknown (no valid line yet) reads as false. */
   console(): boolean
+  /** Called when a line changes the state (a COM port arrived or left, the console moved); returns the unsubscribe. */
+  onChange(listener: () => void): () => void
   stop(): void
 }
 
@@ -127,6 +129,7 @@ export function createWindowsDialWatch(deps: WatchDeps): WindowsDialWatch {
   let firstRead: Promise<void> | null = null
   let finishFirstRead: (() => void) | null = null
   let stopped = false
+  const listeners = new Set<() => void>()
   // The same trouble every scan is said once; a state in between lets it be said again.
   const say = (line: string): void => { if (line !== said) { said = line; log(line) } }
   const wake = (): void => { finishFirstRead?.(); finishFirstRead = null }
@@ -154,7 +157,10 @@ export function createWindowsDialWatch(deps: WatchDeps): WindowsDialWatch {
       for (let end = pending.indexOf('\n'); end >= 0; end = pending.indexOf('\n')) {
         const next = parseSerialState(pending.slice(0, end).trim())
         pending = pending.slice(end + 1)
-        if (next) { state = next; said = null; wake() }
+        if (!next) continue
+        const changed = JSON.stringify(next) !== JSON.stringify(state)
+        state = next; said = null; wake()
+        if (changed) for (const listener of listeners) listener()
       }
     })
     proc.stderr.setEncoding('utf8')
@@ -188,6 +194,10 @@ export function createWindowsDialWatch(deps: WatchDeps): WindowsDialWatch {
     console() {
       start()
       return state?.console ?? false
+    },
+    onChange(listener) {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
     },
     stop() {
       stopped = true
