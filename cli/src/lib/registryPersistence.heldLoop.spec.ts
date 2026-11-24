@@ -1,8 +1,10 @@
 /**
- * The core's first registry write must not start a child process: the e2e stall fault (core/stall.ts, `/spawn`) holds
+ * The core's first registry write must not wait on a child process: the e2e stall fault (core/stall.ts, `/spawn`) holds
  * the loop as soon as one starts, and a hold inside the write's deadline failed the write and sent a Mac core into safe
- * mode (e2e/stall.e2e.ts). Each case loads the module afresh, so its own start marker is read again, as at a core's start.
- * On Linux the marker comes from /proc and no case starts a `ps`; they are meant for macOS and hold there too.
+ * mode (e2e/stall.e2e.ts). On macOS the write still runs `ps` for its own start marker, synchronously, which the
+ * `child_process` channel (and so the fault) never sees. Each case loads the module afresh, so its own start marker is
+ * read again, as at a core's start. On Linux the marker comes from /proc and no case starts a `ps`; they are meant for
+ * macOS and hold there too.
  */
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { subscribe, unsubscribe } from 'node:diagnostics_channel'
@@ -28,7 +30,7 @@ afterEach(() => {
   rmSync(directory, { recursive: true, force: true })
 })
 
-it('a registry write starts no child process', async () => {
+it('a registry write waits on no child process', async () => {
   const { registryFileLock } = await fresh()
   let spawned = 0
   const count = () => { spawned++ }
