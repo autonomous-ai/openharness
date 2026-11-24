@@ -10,7 +10,7 @@ import { ResumePreparationError } from '../engines/facets/resumeRepair.js'
 import type { StoppedAgentStore } from './stoppedAgents.js'
 import { resumeStoppedAgent, waitForResumedAgent, resumeChanged, resumeUnconfirmed, RESUME_READINESS_BUDGET_MS } from './resumeStoppedAgent.js'
 import { checkPidRuntime } from './deleteAgentFallback.js'
-import { checkSessionRuntime, resolvePaneEngineProcess } from './paneEngineProcess.js'
+import { checkSessionRuntime, publishEngine, resolvePaneEngineProcess } from './paneEngineProcess.js'
 import { engineBin, enginePathOverride } from './engineBin.js'
 import { engineInstallRecipe } from './engineInstall.js'
 import type { ClearBackgroundJob } from '../engines/facets/backgroundJob.js'
@@ -150,22 +150,22 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       if (!process && !shell) return resumeChanged
       let ready: RegisteredSession | null
       try {
-        const published = await registry.confirmLaunch(saved.agentId, { processIdentity: process, grid, launchArgs }, {
-          current: ownsRoute,
-          refresh: async () => {
-            if (shell) {
+        const changed = 'the resumed process changed before readiness was saved'
+        const published = shell
+          ? await registry.confirmLaunch(saved.agentId, { processIdentity: null, grid, launchArgs }, {
+            current: ownsRoute,
+            refresh: async () => {
               const pane = await terminal.paneState(runtime)
               if (pane === 'gone' || pane === 'unknown' || pane.dead || pane.engineExit != null) {
                 throw new IdentityReadUnavailable('the resumed terminal could not be confirmed')
               }
-            } else {
-              const latest = await resolvePaneEngineProcess(terminal, runtime, saved.engine)
-              if (!sameProcessIdentity(process, latest) || latest?.executable !== process!.executable) {
-                throw new IdentityReadUnavailable('the resumed process changed before readiness was saved')
-              }
-            }
-          },
-        })
+            },
+          })
+          : await publishEngine(process!, () => resolvePaneEngineProcess(terminal, runtime, saved.engine),
+            { gone: changed, changed }, (identity, refresh, expires) => {
+              if (identity !== process) console.log(`[resume] publication · engine renamed · ${sid(saved.agentId)}`)
+              return registry.confirmLaunch(saved.agentId, { processIdentity: identity, grid, launchArgs }, { current: ownsRoute, refresh, expires })
+            })
         ready = published.state === 'confirmed' ? published.entry : null
       } catch (error) {
         if (!ownsRoute()) return resumeChanged
