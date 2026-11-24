@@ -109,7 +109,11 @@ export function watchDialArrivals(signal: () => void, log: (line: string) => voi
                                   deps: { platform: NodeJS.Platform; watch: WatchDir } = { platform: process.platform, watch }): (() => void) | undefined {
   if (deps.platform === 'linux') {
     // A dial is ttyACMn, one behind a USB-serial bridge ttyUSBn. Not persistent: the watch alone never keeps the daemon up.
-    const watcher = deps.watch('/dev', { persistent: false }, (_event, name) => { if (name && /^tty(ACM|USB)\d/.test(name)) signal() })
+    // Only a node made or removed ('rename'): before Linux 6.19 (fsnotify 635bc4de) every write to a device in /dev is
+    // a 'change' too, so the daemon's own writes to an attached dial would each start a scan.
+    const watcher = deps.watch('/dev', { persistent: false }, (event, name) => {
+      if (event === 'rename' && name && /^tty(ACM|USB)\d/.test(name)) signal()
+    })
     watcher.on('error', (error) => {
       log(`cable: /dev watch failed (${errorKind(error)}) — a new dial is found by the next scan`)
       watcher.close()
