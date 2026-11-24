@@ -86,6 +86,8 @@ export class HcSource implements HostSource {
   private over = 0
   /** The terminals the client left out past its own bound, this subscription's. */
   private unkept = 0
+  /** Ends the promise of this start, once its first snapshot came, its subscription ended or it stopped. */
+  private firstSnapshot: (() => void) | undefined
   private readonly attempts = new SocketAttempts({
     name: 'herdr-app',
     socketStamp: () => this.deps.client.socketStamp(),
@@ -101,15 +103,23 @@ export class HcSource implements HostSource {
 
   constructor(private readonly deps: HcSourceDeps) {}
 
-  start(): void {
-    if (this.running) return
+  /** Ends once this start's first snapshot has: Herdr's agents taken, the subscription failed, or the source stopped
+   *  meanwhile; with no socket, at once. The dial's greeting waits for it (devices.ts dialAttached), so its first list
+   *  holds Herdr's agents. A start while it runs ends at once. */
+  start(): Promise<void> {
+    if (this.running) return Promise.resolve()
     this.running = true
+    const first = new Promise<void>((resolve) => { this.firstSnapshot = resolve })
     this.attempts.start()
+    // No subscription opened: no socket, and nothing to wait for.
+    if (!this.subscription) this.firstSnapshotEnded()
+    return first
   }
 
   stop(): void {
     if (!this.running) return
     this.running = false
+    this.firstSnapshotEnded()
     this.close()
     this.attempts.stop()
     this.clear()
@@ -243,6 +253,8 @@ export class HcSource implements HostSource {
     this.subscription = this.deps.client.subscribe({
       snapshot: (terminals) => {
         listed = true
+        // Its waiters run once these terminals are taken.
+        this.firstSnapshotEnded()
         this.attempts.started()
         // Before the rows, whose change a listener may answer with a stop.
         this.attempts.listed()
@@ -262,7 +274,13 @@ export class HcSource implements HostSource {
   private closed(listed: boolean, reason: SocketFault): void {
     this.subscription = undefined
     this.following = false
+    this.firstSnapshotEnded()
     this.attempts.failed(!listed && (reason === 'rejected' || reason === 'bad_answer') ? 'list' : 'closed', reason)
+  }
+
+  private firstSnapshotEnded(): void {
+    this.firstSnapshot?.()
+    this.firstSnapshot = undefined
   }
 
   private close(): void {

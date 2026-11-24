@@ -398,6 +398,15 @@ const noCodexApp: NonNullable<DevicesDeps['codexAppThreads']> = {
   forget: () => {},
   names: () => new Map(),
 }
+/** The Claude app's store with nothing in it, answered at once: an attach that waits on another source's first read waits
+ *  on that alone, not on the throwaway home's folders read from disk, whose time the fake clock does not hold. */
+const emptyClaudeStore: NonNullable<DevicesDeps['claudeAppStore']> = {
+  folders: async () => ({ roots: [], accounts: [], orgs: [] }),
+  files: async () => {},
+  touch: async () => {},
+  read: async () => ({ sessions: [], parsed: 0, skipped: 0, over: 0, more: false }),
+  forget: () => {},
+}
 /** What the devices asked of opencode's service: recorded, so no spec reaches the developer's own opencode. It has no
  *  service.json, and its prompt fails. */
 const opencodeCalls: unknown[][] = []
@@ -1162,6 +1171,17 @@ describe('the dial\'s host, wired to the core', () => {
     expect(seen.bridges.WindowForm.calls.map(([name]) => name)).toEqual(['command', 'clear'])
     expect(w.fleet!()).not.toBeNull()
     void core
+  })
+
+  // The greeting waits on the first read of each source the attach started: herdr, Herdr Core and opencode with no socket
+  // or service, cmux not installed, no Claude app store and no ChatGPT app have none to wait for, so it pushes at once.
+  it('with no herdr, Herdr, cmux, opencode, Claude app or ChatGPT app there an attach ends at once', async () => {
+    vi.useFakeTimers()
+    start({ orca: { ...orca, platform: 'darwin' } })
+    const from = Date.now()
+    await seen.host.watching!(true)
+    expect(Date.now() - from).toBe(0)
+    expect(logs).toEqual(expect.arrayContaining(['[herdr] socket · none', '[herdr-app] socket · none']))
   })
 })
 
@@ -7371,20 +7391,23 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
 
   /**
    * The devices with a herdr the test drives, the dial not attached yet. Its socket is there (`stamp`). Each subscription
-   * keeps its entries, its callbacks and whether it was closed; `agent.list` answers `agents`; a prompt is recorded and
-   * answers the next of `prompts`, else sent; `binary` is the herdr the client saw write the marker (Windows). `live`
-   * attaches the dial, starts the first subscription and awaits the list that follows it; `status` is herdr telling the
-   * pane's status on it.
+   * keeps its entries, its callbacks and whether it was closed; `agent.list` answers `agents`, and while `hold` is set
+   * waits until the test lands it; a prompt is recorded and answers the next of `prompts`, else sent; `binary` is the
+   * herdr the client saw write the marker (Windows). `live` attaches the dial, starts the first subscription and awaits
+   * the list that follows it; `status` is herdr telling the pane's status on it.
    */
   const withHerdr = (over: Parameters<typeof start>[0] = {}) => {
     const subs: Array<{ entries: readonly HerdrEntry[]; to: HerdrSubscriber; closed: boolean }> = []
     const lists: Array<Promise<HerdrAnswer>> = []
     const herdr = { agents: [listing()] as unknown[], stamp: '1:1' as string | undefined, subs, asked: [] as unknown[][], prompts: [] as HerdrPrompt[],
-      binary: 'C:\\herdr\\herdr.exe' }
+      binary: 'C:\\herdr\\herdr.exe', hold: false, held: [] as Array<() => void> }
     const client: HerdrClient = {
       request: (method, params) => {
         herdr.asked.push(['request', method, params])
-        const answer = Promise.resolve<HerdrAnswer>({ ok: true, result: { type: 'agent_list', agents: herdr.agents } })
+        const list = (): HerdrAnswer => ({ ok: true, result: { type: 'agent_list', agents: herdr.agents } })
+        const answer = herdr.hold
+          ? new Promise<HerdrAnswer>((resolve) => { herdr.held.push(() => resolve(list())) })
+          : Promise.resolve(list())
         lists.push(answer)
         return answer
       },
@@ -7425,6 +7448,20 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
     seen.host.watching!(false)
     expect(herdr.subs.map(({ closed }) => closed)).toEqual([true])
     expect(await listed()).toEqual([])
+  })
+
+  // The dial's greeting pushes its list once the attach ends (cableSession.ts): after a replug herdr's agents showed only
+  // at the next tick's push, as the Claude app's sessions did (the dial eval's C11).
+  it('an attach ends once herdr\'s first list has landed, so the greeting\'s list holds its agents', async () => {
+    const { herdr, port } = withHerdr({ claudeAppStore: emptyClaudeStore })
+    herdr.hold = true
+    setTimeout(() => { for (const land of herdr.held.splice(0)) land() }, 100)
+    const from = Date.now()
+    const attached = Promise.resolve(seen.host.watching!(true)).then(async () => ({ ms: Date.now() - from, agents: await listed() }))
+    port.swarms(null)
+    herdr.subs[0].to.started()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(await attached).toEqual({ ms: 100, agents: [{ id: expect.any(String), name: 'api', caps: 'svf' }] })
   })
 
   it('a status change is a card', async () => {
@@ -8794,6 +8831,17 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
     expect(await listed()).toEqual([])
   })
 
+  // As herdr's: the greeting's list holds Herdr's agents, once Herdr Core's first snapshot has come.
+  it('an attach ends once Herdr Core\'s first snapshot has landed, so the greeting\'s list holds its agents', async () => {
+    const { hc, port } = withHc({ claudeAppStore: emptyClaudeStore })
+    setTimeout(() => hc.subs[0].to.snapshot([terminal('t7')]), 100)
+    const from = Date.now()
+    const attached = Promise.resolve(seen.host.watching!(true)).then(async () => ({ ms: Date.now() - from, agents: await listed() }))
+    port.swarms(null)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(await attached).toEqual({ ms: 100, agents: [{ id: expect.any(String), name: 'api', caps: 'svf' }] })
+  })
+
   it('a status change is a card', async () => {
     const { live, changed } = withHc()
     live()
@@ -9762,16 +9810,18 @@ describe('cmux\'s agents, from cmux\'s own stores (docs/plans/2026-11-17-dial-cm
   /**
    * The devices with a cmux the test drives, installed, with its stores' folder there, the dial not attached yet. Each call
    * of its client is recorded; `sessions` answers the records of that word (all, with none) unless it is one that fails,
-   * `mode` the mode, and the prompt is idle and empty. `live` attaches the dial and lets the first list land; `changed` is the latest watch telling
-   * a change of that file, and its run landing: one agent's runs start at least 250 ms apart.
+   * and while `hold` is set waits until the test lands it, `mode` the mode, and the prompt is idle and empty. `live`
+   * attaches the dial and lets the first list land; `changed` is the latest watch telling a change of that file, and its
+   * run landing: one agent's runs start at least 250 ms apart.
    */
   const withCmux = (over: Parameters<typeof start>[0] = {}) => {
     const fake = { found: true, records: [record()], mode: 'cmuxOnly' as string | undefined, calls: [] as unknown[][],
-      failing: [] as Array<string | undefined> }
+      failing: [] as Array<string | undefined>, hold: false, held: [] as Array<() => void> }
     const client: CmuxClient = {
       binary: () => fake.found ? CMUX_APP_BINARY : null,
       sessions: async (word) => {
         fake.calls.push(['sessions', word])
+        if (fake.hold) await new Promise<void>((resolve) => { fake.held.push(resolve) })
         if (fake.failing.includes(word)) return { ok: false, fault: 'failed' }
         return { ok: true, sessions: fake.records.filter((one) => word === undefined || one.word === word) }
       },
@@ -9818,6 +9868,18 @@ describe('cmux\'s agents, from cmux\'s own stores (docs/plans/2026-11-17-dial-cm
     seen.host.watching!(false)
     expect(await listed()).toEqual([])
     expect(watched.stopped).toBe(watched.calls.length)
+  })
+
+  // As herdr's: the greeting's list holds cmux's agents, once its first run of every agent has landed.
+  it('an attach ends once cmux\'s first run has landed, so the greeting\'s list holds its agents', async () => {
+    const { fake, port } = withCmux({ claudeAppStore: emptyClaudeStore })
+    fake.hold = true
+    setTimeout(() => { for (const land of fake.held.splice(0)) land() }, 100)
+    const from = Date.now()
+    const attached = Promise.resolve(seen.host.watching!(true)).then(async () => ({ ms: Date.now() - from, agents: await listed() }))
+    port.swarms(null)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(await attached).toEqual({ ms: 100, agents: [{ id: expect.any(String), name: 'api', caps: 'svf' }] })
   })
 
   it('a failed start reads each store\'s agent alone, so one bad store hides only its own agent', async () => {
@@ -10091,7 +10153,8 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
   /**
    * The devices with an opencode the test drives, the dial not attached yet. Its service.json is there (`stamp`). Each
    * stream keeps its callbacks and whether it was closed; the list, the running sessions, the permissions and the last
-   * answers are the test's own values, in the shapes of opencode v2.3.0; a prompt is recorded and answers the next of
+   * answers are the test's own values, in the shapes of opencode v2.3.0, the list waiting while `hold` is set until the
+   * test lands it; a prompt is recorded and answers the next of
    * `prompts`, else sent. `live` attaches the dial, says the stream is connected and waits for the list it asks; `tell` is
    * an event on the first stream; `reads` counts the last answers read.
    */
@@ -10100,6 +10163,7 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
     const oc = {
       sessions: [session()] as unknown[], active: {} as Record<string, unknown>, permissions: {} as Record<string, unknown[]>,
       answers: { [SES]: 'All 12 tests pass.' } as Record<string, string>, asked: [] as unknown[][], prompts: [] as OpencodePrompt[], streams,
+      hold: false, held: [] as Array<() => void>,
     }
     const ok = (data: unknown): OpencodeAnswer => ({ ok: true, json: { data, cursor: {} } })
     const client: OpencodeClient = {
@@ -10107,7 +10171,10 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
       find: async () => { oc.asked.push(['find']); return { stamp: 's1' } },
       request: async (method, path) => {
         oc.asked.push(['request', method, path])
-        if (path.startsWith('/api/session?')) return ok(oc.sessions)
+        if (path.startsWith('/api/session?')) {
+          if (oc.hold) await new Promise<void>((resolve) => { oc.held.push(resolve) })
+          return ok(oc.sessions)
+        }
         if (path === '/api/session/active') return ok(oc.active)
         const [, id, what] = /^\/api\/session\/([^/]+)\/(permission|message)/.exec(path)!
         if (what === 'permission') return ok(oc.permissions[id] ?? [])
@@ -10153,6 +10220,21 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
     expect(await listed()).toEqual([])
     // opencode's, and the Claude app store's.
     expect(watchedFolders.stopped).toBe(2)
+  })
+
+  // As herdr's: the greeting's list holds opencode's sessions, once its first list has landed.
+  it('an attach ends once opencode\'s first list has landed, so the greeting\'s list holds its sessions', async () => {
+    const { oc, port, tell } = withOpencode({ claudeAppStore: emptyClaudeStore })
+    oc.hold = true
+    setTimeout(() => { for (const land of oc.held.splice(0)) land() }, 100)
+    const from = Date.now()
+    const attached = Promise.resolve(seen.host.watching!(true)).then(async () => ({ ms: Date.now() - from, agents: await listed() }))
+    port.swarms(null)
+    // The service is found and its stream opened.
+    await vi.advanceTimersByTimeAsync(0)
+    tell('server.connected')
+    await vi.advanceTimersByTimeAsync(100)
+    expect(await attached).toEqual({ ms: 100, agents: [{ id: expect.any(String), name: 'Fix the login test', caps: 'sv' }] })
   })
 
   it('a turn is its cards', async () => {
