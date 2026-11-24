@@ -4,15 +4,17 @@ import type { Nest } from './types.js'
 
 type Answer = ReturnType<OuterLookup>
 
-/** A lookup that records its calls and answers what the test sets. */
-function lookup(answer: () => Answer): OuterLookup & { calls: [Readonly<Record<string, string>>, number][] } {
+/** A lookup that records its calls, and each call's fourth argument in `asked`, and answers what the test sets. */
+function lookup(answer: () => Answer): OuterLookup & { calls: [Readonly<Record<string, string>>, number][]; asked: unknown[] } {
   const calls: [Readonly<Record<string, string>>, number][] = []
+  const asked: unknown[] = []
   return Object.assign(
-    (hints: Readonly<Record<string, string>>, pid: number) => {
+    (hints: Readonly<Record<string, string>>, pid: number, _made?: unknown, opts?: unknown) => {
       calls.push([hints, pid])
+      asked.push(opts)
       return answer()
     },
-    { calls },
+    { calls, asked },
   )
 }
 
@@ -108,5 +110,18 @@ describe('the first lookup that finds an app', () => {
     expect(await told(telling(undefined, {}), telling('tmux', { nest: 'tmux' }))).toEqual([['tmux']])
     // The first not nested.
     expect(await told(() => undefined, telling('tmux', { nest: 'tmux' }))).toEqual([['tmux']])
+  })
+
+  it('a fresh ask goes to both lookups it chains; a hook\'s own ask passes none', async () => {
+    const first = lookup(() => Promise.resolve({}))
+    const second = lookup(() => Promise.resolve({ app: 'iterm', tty: '/dev/ttys005' }))
+    const both = firstOuter(first, second)
+    expect(await both(hints, 42, undefined, { fresh: true })).toEqual({ app: 'iterm', tty: '/dev/ttys005' })
+    expect(await both(hints, 42)).toEqual({ app: 'iterm', tty: '/dev/ttys005' })
+    expect([first.asked, second.asked]).toEqual([[{ fresh: true }, undefined], [{ fresh: true }, undefined]])
+    // Not nested in the first: the second alone, still fresh.
+    const alone = lookup(() => Promise.resolve({ app: 'ghostty' }))
+    await firstOuter(lookup(() => undefined), alone)(hints, 42, undefined, { fresh: true })
+    expect(alone.asked).toEqual([{ fresh: true }])
   })
 })
