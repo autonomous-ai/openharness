@@ -2302,7 +2302,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const read = await Promise.all(adapters.map(async (adapter) => {
       if ((placeFails.get(adapter) ?? 0) >= FOCUS_FAILS_MAX) return undefined
       const places = await readPlaces(source, app, adapter, last, signal)
-      placeFails.set(adapter, places === undefined ? (placeFails.get(adapter) ?? 0) + 1 : 0)
+      // A read under way as its poll stopped is not counted, as the poll counts none (focusPoll.ts): a kitty read cut
+      // short by the stop, or a tmux one that ends after the next settle cleared the counts, is no failure of the place.
+      if (!signal.aborted) placeFails.set(adapter, places === undefined ? (placeFails.get(adapter) ?? 0) + 1 : 0)
       return places
     }))
     if (read.every((places) => places === undefined)) return undefined
