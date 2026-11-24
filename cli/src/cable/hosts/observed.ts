@@ -915,13 +915,13 @@ export class ObservedSource implements HostSource {
    * Diego's idle agent placed on iTerm2's page by the scan (2026-11-22) must not drop to tmux's page while its first
    * hook's own lookup runs, while a resume in another pane holds another client; nor one the scan put on tmux's page
    * drop to the page of the app its pane's bundle id names. Only the latest ask's answer lands, while the session
-   * lives. Its multiplexer (HostAgent.nest) goes where the place goes and stays where it stays, and the answer gives the
-   * answer's, its host with it: an agent is on tmux's or herdr's page only while that lookup confirms its own terminal
-   * is the pane (Diego, 2026-11-23). Another caller or pane whose hints carry the variable of the multiplexer it was
-   * confirmed in (NEST_VARIABLE) keeps that multiplexer while its own ask runs, the last confirmation standing until the
-   * new one answers, as for the same caller: a resume's new caller in the same herdr left herdr's ring for its lookup's
+   * lives. Its multiplexer (HostAgent.nest) stays where the place stays, and the answer gives the answer's, its host with
+   * it: an agent is on tmux's or herdr's page only while that lookup confirms its own terminal is the pane (Diego,
+   * 2026-11-23). Where the place goes at once, its multiplexer goes with it, unless a lookup was asked and the hook's
+   * hints carry that multiplexer's own variable (NEST_VARIABLE): the last confirmation then stands until the new ask
+   * answers, as for the same caller, since a resume's new caller in the same herdr left herdr's ring for its lookup's
    * length and came back at its end, and two at once emptied herdr's page, the dial falling back to the app in front
-   * (eval I14, 2026-11-25). Another multiplexer's variable or none, or no ask, drops it at once with the place.
+   * (eval I14, 2026-11-25).
    * Whether it is nested: its caller's tty is then the multiplexer's pane's, which no tab holds, so it is never read and
    * an old one goes.
    */

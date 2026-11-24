@@ -37,10 +37,10 @@ The cause predates #4591; the window is a ps read or two long, so load decides w
 A hook from another caller, or another pane, whose own hints carry the variable of the multiplexer the agent was
 confirmed in (`HERDR_PANE_ID` for herdr, `TMUX_PANE` for tmux; that variable itself, not `detectHost`, which says herdr
 for tmux inside herdr, whose hints carry both) keeps that multiplexer while the new caller's lookup runs, as a new ask
-from the same caller already does. Only when a lookup was asked: with none, nothing is kept. The lookup's answer then confirms it or drops it (`landOuter`), as today. The
-client's place (its app's tab and process) is still dropped at once, so no tap or rest uses the old tab, and a caller
-whose hints name another multiplexer, or none, drops the multiplexer at once as today. With no lookup to ask (none
-configured), nothing is kept.
+from the same caller already does. Only when a lookup was asked: with none, nothing is kept. The lookup's answer then
+confirms it or drops it (`landOuter`), as today. The client's place (its app's tab and process) is still dropped at
+once, so no tap or rest uses the old tab, and a caller whose hints name another multiplexer, or none, drops the
+multiplexer at once as today.
 
 This changes one decision pinned by `observed.spec.ts` "another caller or pane drops nest at once", in both its cases
 (another caller, the same caller in another pane): for hints that carry the same multiplexer's variable, nest now stays
