@@ -12,12 +12,13 @@
  *
  * The devices reach it as they reach the person's herdr. Its socket is a fake client (DevicesDeps.herdr), not a socket
  * server: real socket I/O would escape the driver's quiet check. It lists herdr's agents, tells their status to the
- * subscriptions naming their panes as their hooks run, and takes words as herdr's client does: a `typed` delivery to the
- * session whose agent is in the pane, only for an idle or done agent of the kind named, and none for a pane with no
- * agent, which herdr refuses. `herdr agent focus`, and the lsof and ps of the lookup of a pane's client
- * (cable/hosts/herdrOuter.ts), are answered from this model through the world's `run`. A server's socket appears as it
- * starts, and every watch on it is told.
+ * subscriptions naming their panes as their hooks run, answers `pane.process_info` with a pane's shell and what runs in
+ * front of it, and takes words as herdr's client does: a `typed` delivery to the session whose agent is in the pane,
+ * only for an idle or done agent of the kind named, and none for a pane with no agent, which herdr refuses.
+ * `herdr agent focus`, and the lsof and ps of the lookup of a pane's client (cable/hosts/herdrOuter.ts), are answered
+ * from this model through the world's `run`. A server's socket appears as it starts, and every watch on it is told.
  */
+import { basename } from 'node:path'
 import { HERDR_KIND, HERDR_PANE, herdrClientDeps, type HerdrAnswer, type HerdrClient, type HerdrSubscriber }
   from '../../../../cable/hosts/herdrClient.js'
 import { CONTROL, MAX_TEXT } from '../../../../cable/hosts/orca.js'
@@ -203,12 +204,36 @@ function agentInfo(world: TierAWorld, server: Server, pane: Pane): Record<string
     ...(s.herdrSession === false ? {} : { agent_session: { agent: kind, kind: 'id', value: s.id } }) }
 }
 
+/**
+ * herdr 0.9.5's `pane.process_info`, as an isolated herdr server answered it and `herdr api schema --json` gives it: of
+ * the pane named, else of the focused one, its shell, and in front of it the agent on its terminal under that shell
+ * while one runs, else the shell; no `tty`, and `pane_not_found` for a pane id it has not or out of form. herdr closes
+ * a pane as its shell exits, so a pane whose shell has gone is not found. The model keeps no process's arguments or
+ * folder: the agent's argv is its program alone, the shell's a login shell's as herdr starts it, and either's folder
+ * the session's.
+ */
+function processInfo(world: TierAWorld, server: Server, params: Record<string, unknown>): HerdrAnswer {
+  const paneId = params.pane_id ?? server.focused
+  const pane = typeof paneId === 'string' ? server.panes.get(paneId) : undefined
+  const processes = world.machine.processes
+  const shell = pane && processes.get(pane.shell)
+  if (!pane || !shell) return { ok: false, fault: 'rejected', code: 'pane_not_found' }
+  const agent = [...processes.values()].find((p) => p.ppid === pane.shell && p.tty === pane.tty)
+  const front = agent ?? shell
+  const name = basename(front.executable)
+  const argv = [agent ? name : `-${name}`]
+  return { ok: true, result: { type: 'pane_process_info', process_info: { pane_id: pane.id, shell_pid: pane.shell,
+    foreground_process_group_id: front.pid, foreground_processes: [{ pid: front.pid, name, argv0: name, argv,
+      cmdline: argv.join(' '), cwd: world.session(pane.key).cwd }] } } }
+}
+
 /** herdr's socket as its client (herdrClient.ts) reaches it, while the server runs. */
 export function herdrClient(world: TierAWorld): HerdrClient {
   return {
-    request: async (method): Promise<HerdrAnswer> => {
+    request: async (method, params): Promise<HerdrAnswer> => {
       const server = serverOf(world)
       if (!server) return { ok: false, fault: 'no_socket' }
+      if (method === 'pane.process_info') return processInfo(world, server, params)
       if (method !== 'agent.list') {
         world.gap(`tier A does not model herdr's ${method}`)
         return { ok: false, fault: 'rejected', code: 'unknown_method' }

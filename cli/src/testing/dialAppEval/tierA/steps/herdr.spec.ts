@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { herdrClientDeps, type HerdrEntry, type HerdrSubscriber } from '../../../../cable/hosts/herdrClient.js'
+import { herdrClientDeps, herdrShellOf, type HerdrEntry, type HerdrSubscriber } from '../../../../cable/hosts/herdrClient.js'
 import { createHerdrOuter } from '../../../../cable/hosts/herdrOuter.js'
 import { appRoots, ptyMaker } from '../../../../cable/hosts/scannedApp.js'
 import type { ObservedEvent, ObservedHookEvent } from '../../../../core/observedHook.js'
@@ -188,6 +188,38 @@ describe("tier A's herdr", () => {
     expect(w.gaps).toEqual([])
     expect((await w.client.request('agent.get', { target: 'w1:p1' })).ok).toBe(false)
     expect(w.gaps).toEqual(["tier A does not model herdr's agent.get"])
+  })
+
+  it("pane.process_info answers a pane's shell and what runs in front of it as herdr 0.9.5 does, and refuses a pane it "
+    + 'has not', async () => {
+    const w = fakeWorld()
+    await w.start('h', 'g')
+    const agent = w.at(agentPid(w.world, 'h')!)
+    const shell = agent.ppid
+    const info = async (params: Record<string, unknown>) => {
+      const answer = await w.client.request('pane.process_info', params)
+      if (!answer.ok) return answer
+      expect(answer.result.type).toBe('pane_process_info')
+      return answer.result.process_info
+    }
+    // The agent runs in front of its pane's shell.
+    expect(await info({ pane_id: 'w1:p1' })).toEqual({ pane_id: 'w1:p1', shell_pid: shell, foreground_process_group_id: agent.pid,
+      foreground_processes: [{ pid: agent.pid, name: 'claude', argv0: 'claude', argv: ['claude'], cmdline: 'claude',
+        cwd: '/work/eval-h' }] })
+    expect(await herdrShellOf(w.client, 'w1:p1')).toEqual({ ok: true, shell })
+    // No pane named: herdr answers for the focused one, the newest.
+    expect(await info({})).toMatchObject({ pane_id: 'w1:p2', shell_pid: w.at(agentPid(w.world, 'g')!).ppid })
+    // The agent gone, the login shell is in front.
+    machine.end(agent.pid)
+    expect(await info({ pane_id: 'w1:p1' })).toEqual({ pane_id: 'w1:p1', shell_pid: shell, foreground_process_group_id: shell,
+      foreground_processes: [{ pid: shell, name: 'zsh', argv0: 'zsh', argv: ['-zsh'], cmdline: '-zsh', cwd: '/work/eval-h' }] })
+    // A pane herdr has not, out of form, or whose shell has gone: refused.
+    const refused = { ok: false, fault: 'rejected', code: 'pane_not_found' }
+    expect(await info({ pane_id: 'w1:p9' })).toEqual(refused)
+    expect(await info({ pane_id: 'nope' })).toEqual(refused)
+    machine.end(shell)
+    expect(await info({ pane_id: 'w1:p1' })).toEqual(refused)
+    expect(w.gaps).toEqual([])
   })
 
   it('a subscription hears each status change of a pane it names, and closes when the server ends', async () => {
