@@ -387,6 +387,22 @@ describe('SessionInputController', () => {
       elsewhere.forget('s1')
     })
 
+    it.each([
+      { state: 'unknown', dispatch: 'possibly_executed', reason: TERMINAL_LEASE_REFUSED },
+      { state: 'failed', dispatch: 'rejected', reason: TERMINAL_LEASE_REFUSED },
+    ] satisfies TerminalActionResult[])('never writes again a paste the lease changed under once it was sent ($dispatch)', async (sent) => {
+      const time = clock(), onError = vi.fn()
+      const inject = vi.fn(async (): Promise<TerminalActionResult> => sent)
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'), validateRuntime: async () => true,
+        inject, sendKey: async () => true, onError, ...time })
+      controller.submit('s1', 'typed while the engine changed')
+      await vi.waitFor(() => expect(inject).toHaveBeenCalledOnce())
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      expect(inject).toHaveBeenCalledOnce()
+      expect(time.sleep).not.toHaveBeenCalled()
+      controller.forget('s1')
+    })
+
     it('waits the same way for a message that wants a receipt, until it is cancelled', async () => {
       const time = clock(), onDelivery = vi.fn()
       const inject = vi.fn<() => Promise<TerminalActionResult>>().mockResolvedValueOnce(refused).mockResolvedValue(done)

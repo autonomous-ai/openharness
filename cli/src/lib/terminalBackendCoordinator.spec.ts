@@ -3,7 +3,7 @@ import type { RegisteredSession } from './registry.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import { prepareTerminalBackends, TerminalBackendCoordinator } from './terminalBackendCoordinator.js'
 import { terminalRouteKey } from './terminalRuntime.js'
-import type { TerminalRuntimeRef, TerminalStreamHandle, TerminalStreamSink } from './terminalTypes.js'
+import { TERMINAL_LEASE_REFUSED, type TerminalRuntimeRef, type TerminalStreamHandle, type TerminalStreamSink } from './terminalTypes.js'
 
 const tmux: TerminalRuntimeRef = { backend: 'tmux', paneId: '%1' }
 const second: TerminalRuntimeRef = { backend: 'tmux', paneId: '%2' }
@@ -220,6 +220,33 @@ describe('TerminalBackendCoordinator', () => {
       state: 'unknown', dispatch: 'possibly_executed',
     })
     expect(ambiguous).toHaveBeenCalledOnce()
+  })
+
+  it('refuses a lease its session outgrew before typing as any lease is refused, so the input path asks again', async () => {
+    const submit = submitBy({ state: 'succeeded', dispatch: 'executed' })
+    const coordinator = new TerminalBackendCoordinator([backend('tmux:default', submit)], ['tmux'])
+    const acquired = await coordinator.acquireLease(session())
+    if (acquired.state !== 'succeeded') throw new Error('no lease')
+    // Restore records the resumed engine after the row already reads active.
+    const restored = { ...session(), processIdentity: { pid: 43, executable: 'codex', startMarker: 'Sat Aug 15 10:01:00 2026' } }
+    await expect(coordinator.submitTextForLease(restored, acquired.value, 'hello')).resolves.toEqual({
+      state: 'failed', dispatch: 'not_started', reason: TERMINAL_LEASE_REFUSED,
+    })
+    expect(submit).not.toHaveBeenCalled()
+  })
+
+  it('returns a submit whose lease changed while it typed as the backend answered it, typed once', async () => {
+    const current = session()
+    const typed = { state: 'unknown' as const, dispatch: 'possibly_executed' as const, reason: 'lost response' }
+    const submit = vi.fn(async () => {
+      current.processIdentity = { pid: 43, executable: 'codex', startMarker: 'Sat Aug 15 10:01:00 2026' }
+      return typed
+    })
+    const coordinator = new TerminalBackendCoordinator([backend('tmux:default', submit)], ['tmux'])
+    const acquired = await coordinator.acquireLease(current)
+    if (acquired.state !== 'succeeded') throw new Error('no lease')
+    await expect(coordinator.submitTextForLease(current, acquired.value, 'hello')).resolves.toEqual(typed)
+    expect(submit).toHaveBeenCalledOnce()
   })
 
   it('never changes placement for a side effect issued through an already pinned multi-step lease', async () => {
