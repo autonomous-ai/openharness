@@ -343,7 +343,7 @@ describe('a spec run\'s processes (SpawnedRuns)', () => {
       made(NAMES_ROOT, 1, NAMES_ROOT, `vim ${root}/notes.txt`),
     ]
     const child = { exitCode: 0, signalCode: null } as unknown as ChildProcess
-    return { child, pgid: GROUP, root, label: 'leaky', started: at(0).getTime(), exited: Promise.resolve(0), stdout: '', stderr: '' }
+    return { child, pgid: GROUP, root, label: 'leaky', started: at(0).getTime(), leaderStarted: at(0).getTime(), exited: Promise.resolve(0), stdout: '', stderr: '' }
   }
 
   it('are its group, what descends from it, and the daemon its pid file names while that pid started in its time', () => {

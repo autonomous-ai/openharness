@@ -31,6 +31,8 @@ export interface Run {
   readonly label: string
   /** When it was started, ms. */
   readonly started: number
+  /** When its own process started, ms, as `ps` gives it (NaN when unread): what its daemon's start is measured from. */
+  readonly leaderStarted: number
   /** Settles when the run's own process has exited, with its status. */
   readonly exited: Promise<number | null>
   stdout: string
@@ -117,8 +119,10 @@ export class SpawnedRuns {
   start(root: string, argv: string[], options: { env?: NodeJS.ProcessEnv; cwd?: string; label?: string } = {}): Run {
     const started = Date.now()
     const child = spawn(process.execPath, argv, { cwd: options.cwd, env: options.env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    // Read before returning to the event loop: Node cannot have reaped the child yet, so `ps` still lists it.
+    const leaderStarted = child.pid === undefined ? Number.NaN : Date.parse(startTimes([child.pid]).get(child.pid) ?? '')
     const run: Run = {
-      child, pgid: child.pid ?? -1, root, label: options.label ?? argv.join(' ').slice(0, 120), started,
+      child, pgid: child.pid ?? -1, root, label: options.label ?? argv.join(' ').slice(0, 120), started, leaderStarted,
       exited: new Promise((resolve) => child.once('exit', (code) => resolve(code))),
       stdout: '', stderr: '',
     }
@@ -231,7 +235,9 @@ function readPid(file: string): number | null {
 
 /**
  * The daemon [run]'s pid file names, when the file was written in the run's time, while that pid is still the process
- * it was written for: started no sooner than the run, to the second `ps` gives, and no later than the file was written.
+ * it was written for: started no sooner than the run's own process, and no later than the file was written. Both start
+ * times come from `ps`, like with like: Linux's lstart adds the boot time truncated to the second, so it can read up to
+ * a second before the wall clock and would reject the run's real daemon if compared with `run.started`.
  * A file a test wrote before the run names a process of its own, and a pid file can outlive its process, the number
  * somebody else's by then: of that process its start time alone is read.
  */
@@ -241,7 +247,7 @@ function daemonOf(run: Run, table: readonly ProcessRow[]): number | undefined {
   const pid = readPid(file)
   if (!(written >= run.started) || pid === null || !table.some((row) => row.pid === pid)) return undefined
   const started = Date.parse(startTimes([pid]).get(pid) ?? '')
-  return started >= Math.floor(run.started / 1000) * 1000 && started <= written ? pid : undefined
+  return started >= run.leaderStarted && started <= written ? pid : undefined
 }
 
 /** The socket a tmux server started by a run would listen on: the run's TMUX_TMPDIR is its root. */
