@@ -15292,6 +15292,22 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
       expect(await shown()).toBe(app)
     })
 
+    it.each<[string, string, ProcessRow[], ObservedHookEvent, (on: number) => void]>([
+      ['WezTerm', 'wezterm', IN_WEZTERM, inWezterm(1), (on) => { weztermSays.pane = on }],
+      ['kitty', 'kitty', IN_KITTY, inKitty(1), (on) => { kittySays.window = on }],
+    ])('on Linux, %s in front on its own agent\'s pane: tmux\'s pane changing in another of its panes moves nothing', async (_, app, rows, own, focusOn) => {
+      tmuxSays.clients = '/dev/pts/4|%3\n'
+      focusOn(1)
+      const { settle, next } = await dialWith({ linux: true, rows, hooks: [own, inTmux(2)] })
+      await settle(app)
+      expect(asked()).toEqual([[agent(1), 'pane']])
+      // A script, or the person in another tab, changes the session's pane: the tmux client's pane is not the one in front.
+      tmuxSays.clients = '/dev/pts/4|%4\n'
+      await next()
+      expect(asked()).toEqual([[agent(1), 'pane']])
+      expect(paneLines()).toEqual(['[device] pane · skipped · not in front'])
+    })
+
     it('on Linux, where Ghostty tells no tab: two of its clients that show agents\' sessions move nothing, and the one left is followed', async () => {
       tmuxSays.second = '/dev/pts/7'
       tmuxSays.clients = '/dev/pts/4|%3\n/dev/pts/7|%4\n'
@@ -15460,6 +15476,19 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
       port.observed(inTmux(2, { event: 'session-end' }))
       await land()
       expect(paneLines()).toEqual(['[device] pane · skipped · unknown agent'])
+      expect(paneAsked()).toEqual([[agent(1), 'pane']])
+    })
+
+    it('the person selecting another tab while tmux is read: the pane the read names, on the tab they left, moves nothing', async () => {
+      const { report, settle, next } = await dialWith()
+      report('iterm', TMUX_TAB)
+      await settle('iterm')
+      tmuxSays.held = 'listing'
+      onPane(4)
+      await next()
+      report('iterm', '/dev/ttys001')
+      await land()
+      expect(paneLines()).toEqual(['[device] pane · skipped · not in front'])
       expect(paneAsked()).toEqual([[agent(1), 'pane']])
     })
 
