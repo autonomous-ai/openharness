@@ -32,6 +32,8 @@ use_main_archive() {
   for file in "$SOURCELIST" "$SOURCEPARTS"*.list "$SOURCEPARTS"*.sources; do
     [ -f "$file" ] && files+=("$file")
   done
+  # With no file named, grep and perl would read the step's input and could wait there for good.
+  [ "${#files[@]}" -gt 0 ] || return 0
   mirror_lists=$(grep -ho 'mirror+file:[^[:space:]]*' "${files[@]}" | sed 's/^mirror+file://' | sort -u)
   for file in $mirror_lists; do
     [ -f "$file" ] && files+=("$file")
