@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Place } from './adapter.js'
 import type { HerdrPrompt } from './herdrClient.js'
-import { createHerdrAdapter, type HerdrAdapterDeps } from './herdr.js'
+import { createHerdrAdapter, herdrPaneParts, type HerdrAdapterDeps } from './herdr.js'
 import { ptyMaker } from './scannedApp.js'
 
 const FAKE_PATH_HERDR = '/fake/bin/herdr'
@@ -153,6 +153,14 @@ describe('the herdr adapter', () => {
 
   it('paneKey is herdr:<pane id>', () => {
     expect(recorder().adapter.paneKey(pane('w1:p2'))).toBe('herdr:w1:p2')
+  })
+
+  // The devices match herdr's focus event, which names the bare id, by it (devices.ts herdrFocused).
+  it('herdrPaneParts: the bare id, its app, and a held pane', () => {
+    expect(herdrPaneParts(pane('w1:p2:iterm'))).toEqual({ id: 'w1:p2', app: 'iterm' })
+    expect(herdrPaneParts(pane('w1:p2'))).toEqual({ id: 'w1:p2' })
+    expect(herdrPaneParts(pane('held:w1:p2'))).toEqual({ id: 'w1:p2', held: true })
+    for (const id of ['w1:p2:nope', 'x', 'held:x']) expect(herdrPaneParts(pane(id)), id).toBeUndefined()
   })
 
   // The client speaks herdr's pipe on Windows (herdrClient.ts): the words go over it, and a tap is the command, as

@@ -7495,12 +7495,14 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
     // No dial: herdr is not asked.
     expect(herdr.subs).toEqual([])
     await live()
-    expect(herdr.subs.map(({ entries }) => entries)).toEqual([[{ type: 'pane.agent_detected' }, { type: 'pane.closed' }, { type: 'pane.exited' }]])
+    // The focus on a subscription of its own (docs/plans/2026-11-24-dial-tmux-pane-focus-follow-plan.md, Task 8).
+    expect(herdr.subs.map(({ entries }) => entries)).toEqual([[{ type: 'pane.agent_detected' }, { type: 'pane.closed' }, { type: 'pane.exited' }],
+      [{ type: 'pane.focused' }]])
     expect(await listed()).toEqual([{ id: expect.any(String), name: 'api', caps: 'svf' }])
     expect((await host().listAgentSnapshot()).agents).toEqual([expect.objectContaining({ engine: 'claude', host: 'herdr' })])
     expect(logs).toContain('[herdr] listed · 1 agents')
     seen.host.watching!(false)
-    expect(herdr.subs.map(({ closed }) => closed)).toEqual([true])
+    expect(herdr.subs.map(({ closed }) => closed)).toEqual([true, true])
     expect(await listed()).toEqual([])
   })
 
@@ -7692,7 +7694,8 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
     turnTo(id)
     expect(source.list()).toEqual([expect.objectContaining({ id, state: 'done', unseenDone: false })])
     expect(herdr.asked).toHaveLength(asked)
-    expect(herdr.subs).toHaveLength(1)
+    // The agents' subscription and the focus one.
+    expect(herdr.subs).toHaveLength(2)
   })
 
   /** A dial attached with herdr's socket there, then again with none: nothing subscribed, nothing watched. */
@@ -7767,11 +7770,11 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
   it('the devices stopping stops the source', async () => {
     const { port, herdr, live } = withHerdr()
     await live()
-    // A second after the first, the subscription that names the listed pane opens.
+    // A second after the first, the subscription that names the listed pane opens, beside the focus one.
     await vi.advanceTimersByTimeAsync(1_000)
-    expect(herdr.subs).toHaveLength(2)
+    expect(herdr.subs).toHaveLength(3)
     await port.stop()
-    expect(herdr.subs.map(({ closed }) => closed)).toEqual([true, true])
+    expect(herdr.subs.map(({ closed }) => closed)).toEqual([true, true, true])
     expect(vi.getTimerCount()).toBe(0)
     // With no socket, it waits on the watch: the devices stopping stops that too.
     const away = withHerdr()
@@ -15468,6 +15471,268 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
       const lines = paneLines()
       expect(lines).toHaveLength(5)
       for (const line of lines) expect(line).toMatch(/^\[device\] pane · (moved|skipped · (no tile|echo|unknown agent|not in front))$/)
+    })
+  })
+
+  // herdr pushes the pane that takes its focus (`pane.focused`, on a subscription of its own: herdrSource.ts), followed
+  // under the front and tab checks tmux's answer has, with no poll.
+  describe('herdr', () => {
+    const host = () => seen.dial as unknown as DaemonCableHost
+    const asked = () => calls('followLocal')
+    const paneAsked = () => asked().filter(([, cause]) => cause === 'pane')
+    const focusLines = () => logs.filter((line) => line.startsWith('[device] herdr focus'))
+    const switches = () => logs.filter((line) => line.startsWith('[device] app filter: switched ·'))
+    const shown = async () => (await host().listAgentSnapshot({ apps: true })).apps?.shown
+    const unlinked = (off: boolean) => { (seen.cable as unknown as { connected: boolean }).connected = !off }
+    const ECHO = '[device] herdr focus · skipped · echo'
+    const terminal = join(homedir(), 'Applications', 'Terminal.app')
+    /** The Terminal tab holding herdr's client. */
+    const HERDR_TAB = '/dev/ttys004'
+    /** On macOS, sess-1's caller (4242) in herdr pane w1:p1's shell (4000) and sess-2's (4243) in w1:p2's (4001), on the
+     *  terminals herdr's server (3900) made, and herdr's one client (4300) in a Terminal tab, under the home the devices
+     *  read apps in. */
+    const IN_TERMINAL: ProcessRow[] = [
+      { pid: 4242, ppid: 4000, tty: 'ttys030', executable: 'claude' }, { pid: 4000, ppid: 3900, tty: 'ttys030', executable: 'zsh' },
+      { pid: 4243, ppid: 4001, tty: 'ttys031', executable: 'claude' }, { pid: 4001, ppid: 3900, tty: 'ttys031', executable: 'zsh' },
+      { pid: 3900, ppid: 1, executable: '/opt/homebrew/bin/herdr' },
+      { pid: 4300, ppid: 4298, executable: 'herdr' }, { pid: 4298, ppid: 1, executable: join(terminal, 'Contents', 'MacOS', 'Terminal') },
+    ]
+    /** The same, the client in a terminal of no listed app. */
+    const IN_NO_APP = IN_TERMINAL.map((p) => (p.pid === 4300 ? { ...p, ppid: 1 } : p))
+    /** The same, the client in an Orca terminal. */
+    const IN_ORCA = [...IN_TERMINAL.map((p) => (p.pid === 4300 ? { ...p, ppid: 4295 } : p)),
+      { pid: 4295, ppid: 1, executable: '/Applications/Orca.app/Contents/MacOS/Orca' }]
+    /** The same, sess-2's shell on a terminal herdr did not make: its herdr pane only holds it. */
+    const HELD = IN_TERMINAL.map((p) => (p.pid === 4001 ? { ...p, ppid: 1 } : p))
+    /** On Linux, the same two agents under herdr's server, itself on the terminal of a Ghostty window (pts/4) with no other
+     *  herdr: the one candidate herdr's lookup reads there (herdrOuter.ts clientsOf). sess-3's caller (4244) in another
+     *  Ghostty window. */
+    const ON_LINUX: ProcessRow[] = [
+      { pid: 4242, ppid: 4000, tty: 'pts/5', executable: 'claude' }, { pid: 4000, ppid: 3900, tty: 'pts/5', executable: 'zsh' },
+      { pid: 4243, ppid: 4001, tty: 'pts/6', executable: 'claude' }, { pid: 4001, ppid: 3900, tty: 'pts/6', executable: 'zsh' },
+      { pid: 3900, ppid: 3899, tty: 'pts/4', executable: 'herdr' }, { pid: 3899, ppid: 3800, tty: 'pts/4', executable: 'zsh' },
+      { pid: 3800, ppid: 1, executable: 'ghostty' },
+      { pid: 4244, ppid: 3801, tty: 'pts/7', executable: 'claude' }, { pid: 3801, ppid: 3800, tty: 'pts/7', executable: 'zsh' },
+    ]
+    /** The server's client socket and the client connected to it, as lsof gives them. */
+    const SOCKETS = 'p3900\nf5\nd0x1111\nn/Users/u/.config/herdr/herdr-client.sock\np4300\nf3\nd0x2222\nn->0x1111\n'
+    /** The devices' runs, recorded: herdr's client lookup's lsof, and its ps of the client's tty, or on Linux the
+     *  server's. */
+    const herdrRun = (linux: boolean) => async (file: string, args: string[], timeoutMs: number) => {
+      orcaRuns.push([file, args, timeoutMs])
+      return { code: 0, stdout: file === '/usr/sbin/lsof' ? SOCKETS : file.endsWith('/ps') ? (linux ? '3900 pts/4\n' : '4300 ttys004\n') : '' }
+    }
+    const herdrFocus = (pane: string): Run => ['/opt/herdr/bin/herdr', ['agent', 'focus', pane], 10_000]
+    /** Claude Code in session n, in herdr's pane [pane]. */
+    const inHerdr = (n: number, pane: string) => hook(n, { HERDR_PANE_ID: pane })
+    /** herdr's row of the agent in [pane], naming [session] where herdr knows it. */
+    const listing = (pane: string, session?: string) => ({ pane_id: pane, agent: 'claude', agent_status: 'idle', cwd: '/work/api',
+      ...session ? { agent_session: { kind: 'id', agent: 'claude', value: session } } : {} })
+    /** The dial's own rest on sess-2: its tab, then `herdr agent focus` of its pane. */
+    const restOn2 = async () => {
+      host().swipeEnded(agent(2), 'rest')
+      await vi.waitFor(() => expect(logs).toContain('[device] swipe · ok'))
+      expect(orcaRuns).toContainEqual(herdrFocus('w1:p2'))
+    }
+    /**
+     * The devices on macOS, or on Linux, the processes [rows] (IN_TERMINAL, or ON_LINUX), the agents of [hooks] (sess-1 in
+     * w1:p1 and sess-2 in w1:p2) with each one's client lookup landed, a herdr the test drives listing [agents] (both), a
+     * dial attached with its tabs stream open, no app settled in front, and the devices' monotonic clock at 0. `live`
+     * starts herdr's newest subscription for agents, reads its list and starts the focus subscription that follows; `focus`
+     * is herdr telling that one a pane took the focus. `settle` and `report` as dialWith's. The timers are held.
+     */
+    const herdrWith = async (over: { linux?: boolean; rows?: ProcessRow[]; hooks?: ObservedHookEvent[]; agents?: unknown[] } = {}) => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+      clock = 0
+      readers.processes.mockResolvedValue(over.rows ?? (over.linux ? ON_LINUX : IN_TERMINAL))
+      readers.bundleId.mockImplementation(async (bundle) => (bundle === terminal ? 'com.apple.Terminal'
+        : bundle === '/Applications/Orca.app' ? 'com.stablyai.orca' : undefined))
+      const subs: Array<{ entries: readonly HerdrEntry[]; to: HerdrSubscriber }> = []
+      let list: Promise<HerdrAnswer> | undefined
+      const agents = over.agents ?? [listing('w1:p1'), listing('w1:p2')]
+      const client: HerdrClient = {
+        request: () => (list = Promise.resolve<HerdrAnswer>({ ok: true, result: { type: 'agent_list', agents } })),
+        subscribe: (entries, to) => { subs.push({ entries, to }); return { close: () => {} } },
+        prompt: async () => ({ outcome: 'sent' }),
+        socketStamp: () => '1:1',
+        binary: () => undefined,
+      }
+      const listener = fakeListener()
+      const started = start({ faults: ['fleet'], listen: listener.listen, now: () => clock, tty: async () => undefined, herdr: client,
+        orca: { ...orca, platform: over.linux ? 'linux' : 'darwin', run: herdrRun(over.linux === true),
+          onPath: (name: string) => (name === 'herdr-app' ? null : `/opt/${name}/bin/${name}`) } })
+      const hooks = over.hooks ?? [inHerdr(1, 'w1:p1'), inHerdr(2, 'w1:p2')]
+      for (const event of hooks) started.port.observed(event)
+      const lookups = hooks.filter(({ hostHints }) => hostHints?.HERDR_PANE_ID).length
+      await vi.waitFor(() => expect(logs.filter((line) => line.startsWith('[device] herdr client ·'))).toHaveLength(lookups))
+      await settled()
+      seen.host.watching!(true)
+      started.port.swarms(null)
+      // A rest's and a tap's tab line go on it.
+      listener.tabs()
+      const focused = () => subs.filter(({ entries }) => entries.some(({ type }) => type === 'pane.focused')).at(-1)!
+      const live = async () => {
+        subs.at(-1)!.to.started()
+        await list
+        focused().to.started()
+      }
+      await live()
+      const focus = async (pane: string) => {
+        focused().to.event('pane_focused', { pane_id: pane, type: 'pane_focused', workspace_id: 'w1' })
+        await settled()
+      }
+      const settle = async (app: string) => {
+        expect(listener.front(app)).toBeUndefined()
+        await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+        await settled()
+      }
+      const report = (app: string, tty: string): unknown =>
+        (listener.given[0].handlers.tab as ListenerHandler).handle({ type: 'tab', app, tty }, new AbortController().signal)
+      return { ...started, listener, live, focus, settle, report }
+    }
+    type Scene = Awaited<ReturnType<typeof herdrWith>>
+
+    it('Terminal settled and the herdr client\'s tab reported: herdr says the other pane took the focus, and the dials follow its agent on herdr\'s page', async () => {
+      const { report, settle, focus } = await herdrWith()
+      report('terminal-app', HERDR_TAB)
+      await settle('terminal-app')
+      await focus('w1:p2')
+      expect(asked().at(-1)).toEqual([agent(2), 'pane'])
+      expect(paneAsked()).toEqual([[agent(2), 'pane']])
+      expect(await shown()).toBe('herdr')
+      expect(focusLines()).toEqual([])
+    })
+
+    it.each<[string, { rows?: ProcessRow[]; linux?: boolean }, (scene: Scene) => Promise<unknown>]>([
+      ['another app settled', {}, async ({ report, settle }) => {
+        report('terminal-app', HERDR_TAB)
+        await settle('terminal-app')
+        await settle('ghostty')
+      }],
+      // With no tab to check, the app alone says it.
+      ['on Linux, another app settled', { linux: true }, ({ settle }) => settle('kitty')],
+      ['a tab app that reported no tab', {}, ({ settle }) => settle('terminal-app')],
+      // Review Focus 4: a pane closing hands herdr's focus on, or a second client moves it, while the person is on another
+      // tab of that app.
+      ['a plain tab reported while herdr\'s focus moves', {}, async ({ report, settle }) => {
+        report('terminal-app', '/dev/ttys001')
+        await settle('terminal-app')
+      }],
+      ['herdr\'s client in a terminal of no app, and none settled', { rows: IN_NO_APP }, async () => {}],
+    ])('%s: skipped as not in front', async (_, over, scene) => {
+      const started = await herdrWith(over)
+      await scene(started)
+      await started.focus('w1:p2')
+      expect(paneAsked()).toEqual([])
+      expect(focusLines()).toEqual(['[device] herdr focus · skipped · not in front'])
+    })
+
+    it('on Linux, with no tab reports, it is followed with no tab check, on herdr\'s page', async () => {
+      const { settle, focus } = await herdrWith({ linux: true, hooks: [inHerdr(1, 'w1:p1'), inHerdr(2, 'w1:p2'), hook(3, { TERM_PROGRAM: 'ghostty' })] })
+      // Ghostty's own agent's page is the one its settle shows.
+      await settle('ghostty')
+      expect(await shown()).toBe('ghostty')
+      await focus('w1:p2')
+      expect(asked()).toEqual([[agent(2), 'pane']])
+      expect(await shown()).toBe('herdr')
+      expect(switches().at(-1)).toBe('[device] app filter: switched · follow')
+    })
+
+    it('the dial\'s own rest runs herdr agent focus: herdr\'s event for that pane is its echo, and the person\'s next ones are followed', async () => {
+      const { report, settle, focus } = await herdrWith()
+      report('terminal-app', HERDR_TAB)
+      await settle('terminal-app')
+      await restOn2()
+      await focus('w1:p2')
+      expect(focusLines()).toEqual([ECHO])
+      await focus('w1:p1')
+      await focus('w1:p2')
+      expect(paneAsked()).toEqual([[agent(1), 'pane'], [agent(2), 'pane']])
+      expect(focusLines()).toEqual([ECHO])
+    })
+
+    it('the same for a tap', async () => {
+      const { report, settle, focus } = await herdrWith()
+      report('terminal-app', HERDR_TAB)
+      await settle('terminal-app')
+      expect(await host().openAgent(agent(2))).toBeUndefined()
+      expect(orcaRuns).toContainEqual(herdrFocus('w1:p2'))
+      await focus('w1:p2')
+      expect(focusLines()).toEqual([ECHO])
+      await focus('w1:p1')
+      await focus('w1:p2')
+      expect(paneAsked()).toEqual([[agent(1), 'pane'], [agent(2), 'pane']])
+      expect(focusLines()).toEqual([ECHO])
+    })
+
+    it('the dial going drops its own moves: attached again, herdr\'s event for the pane it rested on is the person\'s', async () => {
+      const { report, settle, focus, live } = await herdrWith()
+      report('terminal-app', HERDR_TAB)
+      await settle('terminal-app')
+      await restOn2()
+      seen.host.watching!(false)
+      seen.host.watching!(true)
+      // herdr's source opens its next subscription a second after its last.
+      await vi.advanceTimersByTimeAsync(1_000)
+      await live()
+      await focus('w1:p2')
+      expect(paneAsked()).toEqual([[agent(2), 'pane']])
+      expect(focusLines()).toEqual([])
+    })
+
+    it.each<[string, { rows?: ProcessRow[]; hooks?: ObservedHookEvent[] }, string, string]>([
+      ['a pane no agent has', {}, 'terminal-app', 'w1:p9'],
+      ['a held pane', { rows: HELD }, 'terminal-app', 'w1:p2'],
+      ['two live agents at the pane', { hooks: [inHerdr(1, 'w1:p2'), inHerdr(2, 'w1:p2')] }, 'terminal-app', 'w1:p2'],
+      ['an agent in herdr inside an Orca terminal, with Orca settled', { rows: IN_ORCA }, 'orca', 'w1:p2'],
+    ])('%s: skipped as unknown agent', async (_, over, app, pane) => {
+      const { report, settle, focus } = await herdrWith(over)
+      report('terminal-app', HERDR_TAB)
+      await settle(app)
+      await focus(pane)
+      expect(paneAsked()).toEqual([])
+      expect(focusLines()).toEqual(['[device] herdr focus · skipped · unknown agent'])
+    })
+
+    it('an agent herdr\'s own list placed at its pane, with no hook, is followed', async () => {
+      // sess-2 found by the attach scan, idle, its owner 4243: no hook has named its pane, and herdr's row names its session.
+      readers.known.set('sess-2', 'terminal')
+      readers.owners.set('sess-2', { engine: 'claude', pid: 4243 })
+      readers.rows.set('sess-2', { cwd: '/work/api', transcriptPath: null })
+      readers.working.set('sess-2', false)
+      const { report, settle, focus } = await herdrWith({ hooks: [inHerdr(1, 'w1:p1')], agents: [listing('w1:p1'), listing('w1:p2', 'sess-2')] })
+      await vi.waitFor(() => expect(logs).toContainEqual(expect.stringMatching(/^\[observed\] scan · .* · 1 nested placed$/)))
+      report('terminal-app', HERDR_TAB)
+      await settle('terminal-app')
+      await focus('w1:p2')
+      expect(paneAsked()).toEqual([[agent(2), 'pane']])
+    })
+
+    it('with no dial linked nothing is followed and nothing is logged', async () => {
+      const { report, settle, focus } = await herdrWith()
+      report('terminal-app', HERDR_TAB)
+      await settle('terminal-app')
+      unlinked(true)
+      await focus('w1:p2')
+      expect(paneAsked()).toEqual([])
+      expect(focusLines()).toEqual([])
+      unlinked(false)
+      await focus('w1:p2')
+      expect(paneAsked()).toEqual([[agent(2), 'pane']])
+    })
+
+    it('its lines are fixed words', async () => {
+      const { report, settle, focus } = await herdrWith()
+      report('terminal-app', HERDR_TAB)
+      await settle('terminal-app')
+      await restOn2()
+      await focus('w1:p2')
+      await focus('w1:p9')
+      report('terminal-app', '/dev/ttys001')
+      await focus('w1:p1')
+      const lines = focusLines()
+      expect(lines).toHaveLength(3)
+      for (const line of lines) expect(line).toMatch(/^\[device\] herdr focus · skipped · (not in front|echo|unknown agent)$/)
     })
   })
 })
