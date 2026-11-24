@@ -2263,8 +2263,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     part.call(name, () => (work = run()))
     return Promise.resolve(work).catch(() => {})
   }
-  /** Its promise ends once the Claude app's and the ChatGPT app's sources it started have read once: the dial's greeting
-   *  waits for it (cableSession.ts), as those sources hold no rows until then. */
+  /** Its promise ends once the sources it started (herdr's, Herdr Core's, cmux's, opencode's, the Claude app's and the
+   *  ChatGPT app's) have read once: the dial's greeting waits for it (cableSession.ts), as those sources hold no rows until
+   *  then. A source not started, or stopped, ends at once. */
   const dialAttached = (on: boolean): Promise<void> => {
     dialOn = on
     for (const timer of attached) clearInterval(timer)
@@ -2286,16 +2287,16 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // §6): there the source always runs, its watch on %APPDATA% itself until herdr's folder is there (never recursive),
     // and a tap runs the herdr that wrote the marker (herdrClient.ts binary).
     const herdrInstalled = () => apps.platform === 'win32' || apps.onPath('herdr') !== null
-    part.call('herdr', () => on && herdrInstalled() ? herdr.start() : herdr.stop())
+    const herdrRead = partEnd('herdr', () => on && herdrInstalled() ? herdr.start() : herdr.stop())
     // Only with Herdr installed, read at each attach as herdr's is: with none, no folder is watched for hc's socket.
-    if (hcSource) part.call('herdr-app', () => on && herdrApp.binary() ? hcSource.start() : hcSource.stop())
+    const hcRead = hcSource ? partEnd('herdr-app', () => on && herdrApp.binary() ? hcSource.start() : hcSource.stop()) : undefined
     // Only with cmux installed, read at each attach as Herdr's is: with none, no folder is watched for its stores, and a
     // hooked agent's words are not offered to it.
-    if (cmuxSource) part.call('cmux', () => {
+    const cmuxRead = cmuxSource ? partEnd('cmux', () => {
       cmuxFound = on && cmuxClient.binary() !== null
       return cmuxFound ? cmuxSource.start() : cmuxSource.stop()
-    })
-    part.call('opencode', () => on ? opencode.start() : opencode.stop())
+    }) : undefined
+    const opencodeRead = partEnd('opencode', () => on ? opencode.start() : opencode.stop())
     const claudeRead = partEnd('claude-app', () => on ? claudeAppSource.start() : claudeAppSource.stop())
     // Only with the ChatGPT app installed, looked for at each attach as cmux is: a computer with Codex CLI alone gets
     // no ChatGPT page of threads a tap cannot open. A look that lands after the dial went, or after a newer attach's
@@ -2308,7 +2309,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         return found ? codexAppSource.start() : codexAppSource.stop()
       })
     })
-    const reads = Promise.all([claudeRead, codexRead]).then(() => {})
+    const reads = Promise.all([herdrRead, hcRead, cmuxRead, opencodeRead, claudeRead, codexRead]).then(() => {})
     if (!on) {
       // The next attach checks Orca's ring afresh, and a read under way lands on nothing.
       orcaRing = { again: false }

@@ -111,6 +111,8 @@ export class HerdrSource implements HostSource {
   private said: number | undefined
   /** The rows the last list dropped for a pane id out of form, as said. */
   private skipped = 0
+  /** Ends the promise of this start, once its first list ended or it stopped. */
+  private firstList: (() => void) | undefined
   private readonly attempts = new SocketAttempts({
     name: 'herdr',
     socketStamp: () => this.deps.client.socketStamp(),
@@ -126,15 +128,23 @@ export class HerdrSource implements HostSource {
 
   constructor(private readonly deps: HerdrSourceDeps) {}
 
-  start(): void {
-    if (this.running) return
+  /** Ends once this start's first list has: herdr's agents taken, the list or the subscription failed, or the source
+   *  stopped meanwhile; with no socket, at once. The dial's greeting waits for it (devices.ts dialAttached), so its first
+   *  list holds herdr's agents. A start while it runs ends at once. */
+  start(): Promise<void> {
+    if (this.running) return Promise.resolve()
     this.running = true
+    const first = new Promise<void>((resolve) => { this.firstList = resolve })
     this.attempts.start()
+    // No subscription opening, now or after the second since the last one: no socket, and nothing to wait for.
+    if (!this.next && !this.timer) this.firstListEnded()
+    return first
   }
 
   stop(): void {
     if (!this.running) return
     this.running = false
+    this.firstListEnded()
     this.close()
     this.attempts.stop()
     this.clear()
@@ -246,6 +256,8 @@ export class HerdrSource implements HostSource {
   private listed(sub: Subscription, answer: HerdrAnswer): void {
     // Stopped, failed or replaced meanwhile: the newer subscription's own list says it.
     if (sub !== this.current) return
+    // Its waiters run once this answer is taken, read or not.
+    this.firstListEnded()
     const heard = this.heard
     this.heard = undefined
     const agents = answer.ok ? answer.result.agents : undefined
@@ -261,7 +273,13 @@ export class HerdrSource implements HostSource {
   private closed(sub: Subscription, reason: SocketFault): void {
     // An old one that ends while the new one opens missed nothing the new one's list will not say.
     if (sub !== (this.next ?? this.current)) return
+    this.firstListEnded()
     this.attempts.failed('closed', reason)
+  }
+
+  private firstListEnded(): void {
+    this.firstList?.()
+    this.firstList = undefined
   }
 
   private close(): void {
