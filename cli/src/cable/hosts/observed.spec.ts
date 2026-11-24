@@ -5160,6 +5160,30 @@ describe('ObservedSource outer place', () => {
       expect(t.actions.tabSelect).not.toHaveBeenCalled()
     })
 
+    // A lookup never rejects (OuterLookup), yet one that did, or threw, would leave its landing unsettled: held, it would
+    // fail every later tap and rest on the agent, and no fresh ask would run again.
+    it('a fresh lookup that rejects or throws: the tap acts on the old tab, says so, and a tap past the second asks again', async () => {
+      for (const fail of ['rejects', 'throws'] as const) {
+        const t = nested({}, undefined, {}, { freshByHand: true })
+        t.src.ingest(t.ev('session-start', inTmux()))
+        await t.asks[0].answer(CLIENT)
+        t.outer.mockImplementationOnce(() => {
+          if (fail === 'throws') throw new TypeError('tmux under /Users/someone')
+          return Promise.reject(new Error('tmux under /Users/someone'))
+        })
+        expect(await t.src.focus(t.agent()), fail).toBe(true)
+        expect(t.actions.tabSelect.mock.calls, fail).toEqual([['terminal-app', '/dev/ttys004', true]])
+        expect(t.logs.filter((line) => line.startsWith('[observed] outer')), fail)
+          .toEqual([`[observed] outer · lookup not read · ${fail === 'throws' ? 'TypeError' : 'Error'}`])
+        expect(t.logs.join('\n'), fail).not.toContain('someone')
+        t.clock.t += FRESH_WITHIN_MS
+        const again = t.src.focus(t.agent())
+        await t.freshAsks[0](TAB_2)
+        expect(await again, fail).toBe(true)
+        expect(t.actions.tabSelect.mock.calls.at(-1), fail).toEqual(['terminal-app', '/dev/ttys005', true])
+      }
+    })
+
     it('a tap and a rest within the second run one fresh lookup an agent', async () => {
       const t = nested({}, undefined, {}, { freshByHand: true })
       t.src.ingest(t.ev('session-start', inTmux()))
@@ -5985,6 +6009,28 @@ describe('ObservedSource and a nested session the scan found', () => {
         expect(t.actions.tabSelect.mock.calls).toEqual([['iterm', '/dev/ttys004', true]])
         expect(t.logs.filter((line) => line.startsWith('[observed] outer'))).toEqual(['[observed] outer · processes not read · Error'])
         expect(t.logs.join('\n')).not.toContain('someone')
+      })
+
+      it('a fresh lookup that rejects or throws changes nothing, said once, and a tap past the second asks again', async () => {
+        for (const fail of ['rejects', 'throws'] as const) {
+          const t = await placed({}, undefined, { freshByHand: true })
+          t.nested.mockImplementationOnce(() => {
+            if (fail === 'throws') throw new TypeError('no pane under /Users/someone')
+            return Promise.reject(new Error('osascript under /Users/someone'))
+          })
+          expect(await t.src.focus(t.a()), fail).toBe(true)
+          expect(t.actions.tabSelect.mock.calls, fail).toEqual([['iterm', '/dev/ttys004', true]])
+          expect(t.logs.filter((line) => line.startsWith('[observed] outer')), fail)
+            .toEqual([`[observed] outer · lookup not read · ${fail === 'throws' ? 'TypeError' : 'Error'}`])
+          expect(t.logs.join('\n'), fail).not.toContain('someone')
+          t.clock.t += FRESH_WITHIN_MS
+          const again = t.src.focus(t.a())
+          await flushed()
+          expect(t.freshAsks, fail).toHaveLength(1)
+          t.freshAsks[0](TAB_2)
+          expect(await again, fail).toBe(true)
+          expect(t.actions.tabSelect.mock.calls.at(-1), fail).toEqual(['iterm', '/dev/ttys005', true])
+        }
       })
 
       // Detached and not attached again, or a client in a terminal with no page: the row keeps its page and its tab.
