@@ -821,7 +821,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     return {
       table: readProcessNames,
       madeBy: (pids, rows) => readMadeBy(pids, rows, readTtyName, Object.keys(lookups)),
-      nested: (found) => lookups[found.host](found),
+      nested: (found, opts) => lookups[found.host](found, opts),
     }
   }
   const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, apps.platform, log, orcaHomes, {
