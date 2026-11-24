@@ -2071,8 +2071,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    * its first hook (known gap 1 of PR #4578).
    */
   let placedInHerdr = false
-  /** herdr's shell of each pane with no session asked, by pane id, none while asked or once the ask failed: herdr never
-   *  reuses a pane id, so each is asked once while listed, at most HERDR_SHELLS_MAX at a time. */
+  /** herdr's shell of the pane of each row with no session asked, none while asked or once the ask failed: each row is
+   *  asked once while listed, at most HERDR_SHELLS_MAX at a time. By the source's row, not its pane: a herdr that starts
+   *  again numbers its panes afresh, and its source lists each as a new row (herdrSource.ts). */
   const herdrShells = new Map<string, number | undefined>()
   const placeInHerdr = (source: ObservedSource, listing: HerdrSource): void => {
     const rows = listing.list()
@@ -2083,37 +2084,37 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       const app = source.windowOf(agentId)?.app
       placed.set(agentId, app !== undefined && app !== UNKNOWN_APP && APP_IDS.includes(app) ? `${pane}:${app}` : pane)
     }
-    const bare: string[] = []
+    const bare: { row: string; pane: string }[] = []
     for (const { id, engine, sessionId } of rows) {
       // A row it lists has its pane.
       const pane = listing.paneAt(id)!
       if (sessionId === undefined) {
-        bare.push(pane)
+        bare.push({ row: id, pane })
         continue
       }
       const agentId = observedAgentId(engine, sessionId)
       if (source.paneOf(agentId, 'herdr') === undefined) place(agentId, pane)
     }
-    for (const pane of herdrShells.keys()) if (!bare.includes(pane)) herdrShells.delete(pane)
+    for (const row of herdrShells.keys()) if (!bare.some((at) => at.row === row)) herdrShells.delete(row)
     const unplaced = source.foundNested('herdr')
       .filter(({ agentId }) => !placed.has(agentId) && source.paneOf(agentId, 'herdr') === undefined)
     let waiting = false
     for (const { agentId, parents } of unplaced) {
-      const pane = bare.find((at) => {
-        const shell = herdrShells.get(at)
+      const at = bare.find(({ row }) => {
+        const shell = herdrShells.get(row)
         return shell !== undefined && parents.includes(shell)
       })
-      if (pane === undefined) waiting = true
-      else place(agentId, pane)
+      if (at === undefined) waiting = true
+      else place(agentId, at.pane)
     }
     // Asked only while such an agent waits for its pane.
     if (waiting) {
-      for (const pane of bare.filter((at) => !herdrShells.has(at)).slice(0, HERDR_SHELLS_MAX - herdrShells.size)) {
-        herdrShells.set(pane, undefined)
+      for (const { row, pane } of bare.filter((at) => !herdrShells.has(at.row)).slice(0, HERDR_SHELLS_MAX - herdrShells.size)) {
+        herdrShells.set(row, undefined)
         void herdrShellOf(herdrClient, pane).then((answer) => {
           // Its kind only: a pane or a process would say where someone works.
           if (!answer.ok) return log(`[device] herdr shell · not read · ${answer.fault}`)
-          herdrShells.set(pane, answer.shell)
+          herdrShells.set(row, answer.shell)
           part.call('herdr', () => placeInHerdr(source, listing))
         })
       }
