@@ -233,7 +233,25 @@ it.each(['mkdir', 'write', 'sync'])('does not publish after the deadline expires
   expect(lockEntries()).toEqual([])
 })
 
-it('includes late owner publication in the two-second acquisition budget', async () => {
+// Run 45396848621 (Linux CI, a loaded runner): a lock nobody held was reported busy straight after its own owner fsync.
+it('a lock nobody holds is taken when its own owner fsync ends 2.5 s in, inside the writer\'s deadline', async () => {
+  const entered = deferred(), release = deferred(), begun = performance.now()
+  interleave.phase = async (path, at) => {
+    if (at === 'sync' && temporaryAt(path, at)) { entered.resolve(); await release.promise }
+  }
+  // The 2.5 s setup is also logged as a slow lock phase.
+  vi.spyOn(console, 'warn').mockImplementation(() => {})
+  const apply = vi.fn(async () => 'entered')
+  const result = registryFileLock(directory, deadline(), apply).catch(error => error)
+  await entered.promise
+  vi.spyOn(performance, 'now').mockReturnValue(begun + 2_500)
+  release.resolve()
+  expect(await result).toBe('entered')
+  expect(apply).toHaveBeenCalledOnce()
+  expect(lockEntries()).toEqual([])
+})
+
+it('an owner fsync that ends past the writer\'s deadline does not publish, and fails as the deadline, not as busy', async () => {
   const entered = deferred(), release = deferred(), begun = performance.now()
   interleave.phase = async (path, at) => {
     if (at === 'sync' && temporaryAt(path, at)) { entered.resolve(); await release.promise }
@@ -241,11 +259,36 @@ it('includes late owner publication in the two-second acquisition budget', async
   const apply = vi.fn(async () => {})
   const result = registryFileLock(directory, deadline(), apply).catch(error => error)
   await entered.promise
-  vi.spyOn(performance, 'now').mockReturnValue(begun + 2_500)
+  vi.spyOn(performance, 'now').mockReturnValue(begun + 5_500)
   release.resolve()
-  expect(await result).toMatchObject({ message: expect.stringContaining('registry lock is busy') })
+  expect(await result).toMatchObject({ message: 'fixture deadline' })
   expect(apply).not.toHaveBeenCalled()
   expect(lockEntries()).toEqual([])
+})
+
+it('a held lock is busy 2 s after it is first found held, not 2 s after the call began', async () => {
+  mkdirSync(lock, { mode: 0o700 })
+  publish('held')
+  const limit = deadline(), begun = performance.now()
+  // The time since the call began, kept apart from begun: in floating point, begun + 3_600 - begun is not always 3_600.
+  let elapsed = 0
+  vi.spyOn(performance, 'now').mockImplementation(() => begun + elapsed)
+  // Building its own owner takes 1.5 s, so the lock is first found held 1.5 s in.
+  interleave.phase = async (path, at) => { if (at === 'sync' && temporaryAt(path, at)) elapsed = 1_500 }
+  // Each busy turn looks at the lock once, and each look moves the clock on: past the call's 2 s, short of the first
+  // busy turn's 2 s, then past it. Any later look is past the writer's deadline, which ends a wait with no busy bound.
+  const looks = [2_100, 3_400, 3_600]
+  interleave.stat = async (path, value) => {
+    if (path === lock) elapsed = looks.shift() ?? 6_000
+    return value
+  }
+  const apply = vi.fn(async () => {})
+  expect(await registryFileLock(directory, limit, apply).catch(error => error))
+    .toMatchObject({ message: expect.stringContaining('registry lock is busy') })
+  expect(elapsed).toBe(3_600)
+  expect(apply).not.toHaveBeenCalled()
+  expect(JSON.parse(readFileSync(owner, 'utf8')).token).toBe('held')
+  expect(lockEntries()).toEqual(['registry.json.lock'])
 })
 
 it('a lock is never there without its owner', async () => {
