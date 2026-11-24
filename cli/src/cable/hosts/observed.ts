@@ -521,7 +521,7 @@ export class ObservedSource implements HostSource {
     return this.entries.get(e.agent.id) === e && e.endAt === undefined
   }
 
-  async focus(agent: HostAgent, latest?: () => boolean): Promise<boolean | 'superseded'> {
+  async focus(agent: HostAgent, latest: () => boolean): Promise<boolean | 'superseded'> {
     ++this.acted
     const e = this.entries.get(agent.id)
     const actions = this.deps.actions
@@ -529,7 +529,7 @@ export class ObservedSource implements HostSource {
     const waiting = this.waitFresh(e)
     if (waiting) {
       await waiting
-      if (latest && !latest()) return 'superseded'
+      if (!latest()) return 'superseded'
       if (!this.live(e)) return false
     }
     const target = this.target(e)

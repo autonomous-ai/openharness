@@ -1152,7 +1152,7 @@ describe('the dial with no window: this computer\'s agents', () => {
       const opened: string[] = []
       const waits: HostSource = { ...outsideApp(true), focus: async (agent, latest) => {
         await landed
-        if (latest && !latest()) return 'superseded'
+        if (!latest()) return 'superseded'
         opened.push(agent.id)
         return true
       } }
