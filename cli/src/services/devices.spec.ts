@@ -3874,7 +3874,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
         await vi.waitFor(() => expect(scanLine()).toHaveLength(1))
         await herdr.live()
         await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
-        return { ...herdr, listener, stream: listener.tabs() }
+        return { ...herdr, port, listener, stream: listener.tabs() }
       }
 
       it('a scan-found herdr agent whose herdr row has its session is one row on herdr\'s page; a rest selects its tab, then focuses its herdr pane; a tap focuses the pane, brings iTerm2 forward and raises the tab', async () => {
@@ -3939,6 +3939,23 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
         await host().openAgent(ID)
         expect(asked).toEqual(['w1:p2'])
         expect(focused()).toEqual([])
+      })
+
+      // A herdr that starts again numbers its panes afresh (herdrSource.spec.ts): the rows its source lists then are new
+      // ones, each asked again, as a shell kept by the pane's id would be the old herdr's.
+      it('herdr\'s rows listed afresh, as after a herdr that started again while no dial was attached, are asked again', async () => {
+        const shells = new Map([['w1:p2', 5000]])
+        const { asked, subs, port } = await scanned([['w1:p2']], herdrRun, true, shells)
+        expect(asked).toEqual(['w1:p2'])
+        expect((await host().listAgentSnapshot({ apps: true })).apps?.apps?.map(({ id, count }) => `${id} ${count}`)).toEqual(['herdr 2'])
+        seen.host.watching!(false)
+        shells.set('w1:p2', 4000)
+        attach(port)
+        // The agents' subscription of the second attach: the first attach's focus one (herdrSource.ts watchFocus) is subs[1].
+        await vi.waitFor(() => expect(subs).toHaveLength(3))
+        subs[2].started()
+        await vi.waitFor(async () => expect((await listed()).map(({ id }) => id)).toEqual([ID]))
+        expect(asked).toEqual(['w1:p2', 'w1:p2'])
       })
 
       it('at most 16 of herdr\'s rows with no session are asked', async () => {
