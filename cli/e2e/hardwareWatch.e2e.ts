@@ -212,8 +212,8 @@ describe('harness hardware watch with a dial: Notifications', () => {
     run.child.stdin!.write('{"notify":"you"}\n')
     await until('the watch to say Needs you', () => run.lines.slice(from).some((line) => notifyOf(line) === 'you'), 30_000)
     expect(readFileSync(join(d.dataDir, 'dial-notify.json'), 'utf8')).toBe('{"mode":"you"}\n')
-    // An ordinary finished turn is a drawer row: the dial does not beep.
-    expect(await turnEnds(dial, engine, 'build it', 0)).toMatchObject({ tier: 'list', quiet: true })
+    // An ordinary finished turn draws its tile alone, with no drawer row: the dial does not beep.
+    expect(await turnEnds(dial, engine, 'build it', 0)).toMatchObject({ tier: 'silent', silent: true })
 
     // Kept by the daemon: a watch on the daemon started again says it.
     const listedSince = dial.messages.length
