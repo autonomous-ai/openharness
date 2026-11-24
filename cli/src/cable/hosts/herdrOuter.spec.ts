@@ -6,6 +6,7 @@ import { RECORDED_HERDR } from '../../testing/recordedHerdr.js'
 import {
   createHerdrNested, createHerdrOuter, FDS_A_PROCESS, HERDR_CLIENTS_A_LOOKUP, procSockets, SKIPPED_IDS_KEPT, ttyAtime, type HerdrOuterDeps,
 } from './herdrOuter.js'
+import { FRESH_WITHIN_MS, type Fresh } from './outer.js'
 import { parseProcessNames, type PtyProcess } from './scannedApp.js'
 
 interface Call { file: string; args: string[]; timeoutMs: number }
@@ -92,7 +93,7 @@ function lookup(
   }
   // The process form is made on its first ask: each form keeps answers of its own.
   let nestedForm: ReturnType<typeof createHerdrNested> | undefined
-  const nested: ReturnType<typeof createHerdrNested> = (found) => (nestedForm ??= createHerdrNested(deps))(found)
+  const nested: ReturnType<typeof createHerdrNested> = (found, opts) => (nestedForm ??= createHerdrNested(deps))(found, opts)
   return { calls, logs, stats, ttys, held, clock, reads: () => reads, outer: createHerdrOuter(deps), nested }
 }
 
@@ -904,6 +905,65 @@ describe('the place of an agent the scan found in the person\'s herdr', () => {
       }
     }
   })
+})
+
+// Eval I13: the person detaches, attaches from another tab and types nothing; a tap or rest asks fresh and must see
+// the client's new tab, while a hook's turn-start, at every tool call, keeps the 5 s hold.
+describe('a fresh ask of herdr\'s lookups', () => {
+  /** A run that records each call; lsof and ss print [said]'s, and ps the next of [ps], then the last. */
+  function rerun(said: Said, ps: string[]) {
+    const ran: Call[] = []
+    const run: HerdrOuterDeps['run'] = async (file, args, timeoutMs) => {
+      ran.push({ file, args, timeoutMs })
+      const stdout = file === LSOF ? said.lsof! : file === SS ? said.ss! : ps.length > 1 ? ps.shift()! : ps[0]
+      return { code: 0, stdout }
+    }
+    return { ran, run }
+  }
+  const table = scene({ [P.terminalA]: 'wezterm-gui' }, [P.clientB])
+  /** Each platform's lookups, whose client is in tab 1, then in tab 2; the command that reads the client's sockets; and
+   *  the hooked and the scan's ask. */
+  const platforms = [
+    {
+      name: 'macOS', sockets: LSOF, tabs: ['/dev/ttys004', '/dev/ttys005'], place: (tty: string) => ({ ...IN_TERMINAL, tty }),
+      made: () => {
+        const { ran, run } = rerun(ONE, ['4300 ttys004\n', '4300 ttys005\n'])
+        return { ran, ...lookup({ run }, [], ONE) }
+      },
+      outer: (l: ReturnType<typeof lookup>, opts?: Fresh) => l.outer(PANE, 100, undefined, opts),
+      nested: (l: ReturnType<typeof lookup>, opts?: Fresh) => l.nested({ pid: 100, maker: 80, rows: TABLE }, opts),
+    },
+    {
+      name: 'Linux', sockets: SS, tabs: ['/dev/pts/0', '/dev/pts/6'], place: (tty: string) => ({ app: 'wezterm', tty, pid: P.clientA }),
+      made: () => {
+        const { ran, run } = rerun({ ss: RECORDED_HERDR.ss }, [recordedTtys(P.clientA), recordedTtys(P.clientA).replace('pts/0', 'pts/6')])
+        return { ran, ...onLinux(table, {}, { run }) }
+      },
+      outer: (l: ReturnType<typeof lookup>, opts?: Fresh) => l.outer(LINUX_PANE, P.agent, undefined, opts),
+      nested: (l: ReturnType<typeof lookup>, opts?: Fresh) => l.nested({ pid: P.agent, maker: P.serverA, rows: table }, opts),
+    },
+  ]
+
+  for (const form of ['outer', 'nested'] as const) {
+    it(`a fresh ask past the second reads herdr's client again inside the 5 s hold (${form})`, async () => {
+      for (const { name, sockets, tabs, place, made, ...asks } of platforms) {
+        const l = made()
+        const ask = (opts?: Fresh) => asks[form](l, opts)
+        const answer = (tty: string) => (form === 'outer' ? herdrs(place(tty)) : place(tty))
+        expect(await ask(), name).toEqual(answer(tabs[0]))
+        // Within 999 ms a fresh ask shares the answer: nothing new runs.
+        l.clock.t += FRESH_WITHIN_MS - 1
+        const count = l.ran.length
+        expect(await ask({ fresh: true }), name).toEqual(answer(tabs[0]))
+        expect(l.ran.length, name).toBe(count)
+        // At the second it reads the client again, and the new answer is held for a plain ask.
+        l.clock.t += 1
+        expect(await ask({ fresh: true }), name).toEqual(answer(tabs[1]))
+        expect(await ask(), name).toEqual(answer(tabs[1]))
+        expect(l.ran.filter((call) => call.file === sockets), name).toHaveLength(2)
+      }
+    })
+  }
 })
 
 describe('a process\'s sockets', () => {

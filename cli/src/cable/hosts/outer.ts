@@ -8,6 +8,13 @@ import type { Pane } from './adapter.js'
 import type { ProcessName } from './scannedApp.js'
 import type { Nest } from './types.js'
 
+/** A tap's or a rest's ask: it reads where the client is now, not a held answer, so the person's tab switch since
+ *  the agent's last hook counts (eval I13, PM 2026-11-24). A hook's own ask passes none. */
+export interface Fresh { fresh?: true }
+
+/** How long an answer still counts as fresh: a burst of taps and rests runs one lookup an agent. */
+export const FRESH_WITHIN_MS = 1_000
+
 /**
  * Where the person sees an agent nested in a multiplexer whose own pty is no tab: `undefined` at once when the agent
  * is not nested in it, else a promise that never rejects, `{}` when no app was found. The client's process comes with
@@ -22,6 +29,7 @@ export type OuterLookup = (
   hints: Readonly<Record<string, string>>,
   pid: number,
   made?: (nest: Nest) => void,
+  opts?: Fresh,
 ) => Promise<{ app?: string; tty?: string; pid?: number; nest?: Nest }> | undefined
 
 /** A lookup's answer with its maker's read (`made`: its multiplexer made the caller's terminal), which settles before
@@ -35,12 +43,12 @@ export type MadeAnswer = NonNullable<ReturnType<OuterLookup>> & { made: Promise<
  * second tells its multiplexer only when the first's answer has none.
  */
 export function firstOuter(first: OuterLookup, second: OuterLookup): OuterLookup {
-  return (hints, pid, made) => {
-    const found = first(hints, pid, made)
-    if (!found) return second(hints, pid, made)
+  return (hints, pid, made, opts) => {
+    const found = first(hints, pid, made, opts)
+    if (!found) return second(hints, pid, made, opts)
     return found.then(async (place) => {
       if (place.app) return place
-      const next = await second(hints, pid, place.nest ? undefined : made)
+      const next = await second(hints, pid, place.nest ? undefined : made, opts)
       const answer = next?.app ? next : place
       const nest = place.nest ?? next?.nest
       return nest ? { ...answer, nest } : answer
@@ -59,5 +67,5 @@ export interface Nested { host: string; pid: number; tty: string; maker: number;
 export interface NestedPlace { app?: string; tty?: string; pid?: number; pane?: Pane }
 
 /** Where the person sees a process the scan found nested (Nested): `undefined` at once for a host with no lookup by
- *  process, else a promise that never rejects, `{}` when no app was found. */
-export type NestedLookup = (found: Nested) => Promise<NestedPlace> | undefined
+ *  process, else a promise that never rejects, `{}` when no app was found. A fresh ask reads past every hold. */
+export type NestedLookup = (found: Nested, opts?: Fresh) => Promise<NestedPlace> | undefined

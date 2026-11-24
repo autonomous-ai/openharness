@@ -23,6 +23,7 @@ import { observedAgentId, ObservedSource } from '../cable/hosts/observed.js'
 import { OPENCODE_MESSAGE, opencodeClientDeps, type OpencodeAnswer, type OpencodeClient, type OpencodeEvent, type OpencodeFault, type OpencodePrompt } from '../cable/hosts/opencodeClient.js'
 import { OpencodeSource } from '../cable/hosts/opencodeSource.js'
 import { MAX_TEXT, type OrcaChild, type OrcaReads, type OrcaTabs, type OrcaTerminal } from '../cable/hosts/orca.js'
+import { FRESH_WITHIN_MS } from '../cable/hosts/outer.js'
 import { AppRings } from '../cable/hosts/select.js'
 import { env } from '../config/env.js'
 import { cursorDataDir } from '../engines/cursor/contract.js'
@@ -3241,6 +3242,9 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
 
   // On macOS a tap brings the agent's app forward by its bundle id (cable/hosts/open.ts); every run here is recorded.
   const mac = { ...orca, platform: 'darwin' as const }
+  /** A clock that stands still, for a tap or rest on an agent nested in tmux, herdr or Zellij: its fresh ask (eval I13)
+   *  shares the hook's answer, so the runs stay as listed; on the real clock they would hang on whether a second passed. */
+  const still = () => 0
 
   it('on macOS an agent in an app with a bundle id lists f, and a tap brings that app forward; a question screen opens nothing', async () => {
     const { port } = startHere({ orca: mac })
@@ -3548,7 +3552,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     // A Harness terminal used last, and the person's own client: neither's process is in the table, so the lookup finds
     // no app.
     const clients = '1794700100|5001|client-501|abcdef0123456789|harness-claude-1790000000000-x\n1794700050|5004|/dev/ttys004||work\n'
-    const { port } = startHere({ orca: { ...mac, run: async (file, args, timeoutMs) => {
+    const { port } = startHere({ now: still, orca: { ...mac, run: async (file, args, timeoutMs) => {
       orcaRuns.push([file, args, timeoutMs])
       return { code: 0, stdout: args[0] === 'display-message' ? says.shift()! : args[0] === 'list-clients' ? clients : '' }
     } } })
@@ -3575,7 +3579,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   it('a tap takes herdr\'s pane before tmux\'s, and tmux\'s before WezTerm\'s and Orca\'s', async () => {
     // herdr inside tmux: herdr's server made the agent's terminal.
     madeBy('herdr')
-    const { port } = startHere({ orca: { ...mac, run: async (file, args, timeoutMs) => {
+    const { port } = startHere({ now: still, orca: { ...mac, run: async (file, args, timeoutMs) => {
       orcaRuns.push([file, args, timeoutMs])
       return { code: 0, stdout: args[0] === 'display-message' ? '4000|work|\n' : args[0] === 'list-clients' ? '1794700050|5004|/dev/ttys004||work\n' : '' }
     } } })
@@ -3757,6 +3761,56 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       expect(readers.processes).not.toHaveBeenCalled()
       expect(readers.tty).not.toHaveBeenCalled()
       expect(orcaRuns).toEqual([])
+    })
+
+    // Eval I13: the person detaches from tmux in iTerm2's tab 1 and attaches again in tab 2, typing nothing. A tap or rest
+    // reads the client afresh (PM, 2026-11-24, approach A), so it opens tab 2, not the tab the lookup held.
+    describe('I13', () => {
+      let clock = 0
+      /** tmux's client, in the tab the person attached in last. */
+      let clientTab = '/dev/ttys004'
+      const reattachedRun = async (file: string, args: string[], timeoutMs: number) => {
+        if (args[0] !== 'list-clients') return tmuxRun(file, args, timeoutMs)
+        orcaRuns.push([file, args, timeoutMs])
+        return { code: 0, stdout: `1794700050|4300|${clientTab}\n` }
+      }
+      beforeEach(() => {
+        clock = 0
+        clientTab = '/dev/ttys004'
+        readers.processes.mockResolvedValue([...inTmux, ...clientInIterm('tmux', 1)])
+      })
+
+      it('I13 for an agent the attach scan found: re-attached in another iTerm2 tab with no hook, a rest past the second selects the new tab and a tap raises it', async () => {
+        found('sess-1', 4242)
+        const listener = fakeListener()
+        const { port } = startHere({ listen: listener.listen, orca: { ...mac, run: reattachedRun }, now: () => clock })
+        attach(port)
+        await vi.waitFor(() => expect(scanLine()).toEqual([expect.stringMatching(/ · 1 nested placed$/)]))
+        await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+        const stream = listener.tabs()
+        expect(listener.front('iterm')).toBeUndefined()
+        clientTab = '/dev/ttys005'
+        clock += FRESH_WITHIN_MS
+        host().swipeEnded(ID, 'rest')
+        await swiped('ok')
+        expect(stream.lines.at(-1)).toStrictEqual({ app: 'iterm', tty: '/dev/ttys005' })
+        expect(await host().openAgent(ID)).toBeUndefined()
+        expect(stream.lines.at(-1)).toStrictEqual({ app: 'iterm', tty: '/dev/ttys005', raise: true })
+      })
+
+      it('I13: a hooked agent in tmux, re-attached in another tab with no hook since, a tap past the second raises the new tab', async () => {
+        const listener = fakeListener()
+        const { port } = startHere({ listen: listener.listen, orca: { ...mac, run: reattachedRun }, now: () => clock })
+        port.observed(hook('session-start', { hostHints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux' } }))
+        attach(port)
+        await vi.waitFor(() => expect(said()).toEqual(['[device] tmux client · found']))
+        await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+        const stream = listener.tabs()
+        clientTab = '/dev/ttys005'
+        clock += FRESH_WITHIN_MS
+        expect(await host().openAgent(ID)).toBeUndefined()
+        expect(stream.lines.at(-1)).toStrictEqual({ app: 'iterm', tty: '/dev/ttys005', raise: true })
+      })
     })
 
     /** herdr's socket, listing a Claude Code row at each pane, with the session herdr's integration gave it, if any. The
@@ -4007,7 +4061,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     ])
     const panes = JSON.stringify([{ tab_id: 0, pane_id: 0, tty_name: '/dev/pts/2' }, { tab_id: 1, pane_id: 1, tty_name: '/dev/pts/4' }])
     const listener = fakeListener()
-    const { port } = startHere({ listen: listener.listen, orca: { ...orca, onPath: (name: string) => `/opt/${name}/bin/${name}`,
+    const { port } = startHere({ listen: listener.listen, now: still, orca: { ...orca, onPath: (name: string) => `/opt/${name}/bin/${name}`,
       run: async (file, args, timeoutMs) => {
         orcaRuns.push([file, args, timeoutMs])
         const stdout = args[0] === 'display-message' ? '4000|work|\n' : args[0] === 'list-clients' ? '1794700050|4300|/dev/pts/4\n'
@@ -4050,7 +4104,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       { pid: 4298, ppid: 1, executable: 'kitty' },
     ])
     const listener = fakeListener()
-    const { port } = startHere({ listen: listener.listen, orca: { ...orca, run: async (file, args, timeoutMs) => {
+    const { port } = startHere({ listen: listener.listen, now: still, orca: { ...orca, run: async (file, args, timeoutMs) => {
       orcaRuns.push([file, args, timeoutMs])
       const stdout = args[0] === 'display-message' ? '4000|work|\n' : args[0] === 'list-clients' ? '1794700050|4300|/dev/pts/4\n' : ''
       return { code: 0, stdout }
@@ -4107,7 +4161,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     // On herdr's page (Diego, 2026-11-23).
     it('an agent in the person\'s herdr is on herdr\'s page, not the page of the app that holds its client, and a rest selects its tab, then its herdr pane', async () => {
       const listener = fakeListener()
-      const { port } = startHere({ listen: listener.listen, orca: onMac })
+      const { port } = startHere({ listen: listener.listen, now: still, orca: onMac })
       port.observed(hook('session-start', { hostHints: { HERDR_PANE_ID: 'w1:p2' } }))
       attach(port)
       await vi.waitFor(() => expect(said()).toContain('[device] herdr client · found'))
@@ -4204,7 +4258,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
 
     it('a hooked agent in a Zellij pane lists v and f; on macOS its tap focuses the pane, then brings its app forward', async () => {
       madeBy('/opt/homebrew/bin/zellij')
-      const { port } = startHere({ orca: mac })
+      const { port } = startHere({ now: still, orca: mac })
       // macOS's Ghostty names itself by its bundle id, which a tap brings forward.
       port.observed(hook('session-start', { hostHints: { ...ZELLIJ, TERM_PROGRAM: 'ghostty', __CFBundleIdentifier: 'com.mitchellh.ghostty' } }))
       attach(port)
@@ -4370,7 +4424,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       const linux = fakeRaise()
       const kitty = await kittyAt()
       madeBy('zellij')
-      const { port } = startHere({ orca: listing(orca), raise: linux.raise })
+      const { port } = startHere({ now: still, orca: listing(orca), raise: linux.raise })
       port.observed(hook('session-start', { hostHints: { ...ZELLIJ, ...kitty } }))
       attach(port)
       await settled()
@@ -4426,7 +4480,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     // As before Zellij had an adapter: a tap on the Zellij pane that shows tmux's client would leave tmux's pane where it was.
     it('an agent in tmux inside a Zellij pane: a tap selects its tmux pane, as tmux\'s server made its terminal', async () => {
       madeBy('tmux: server')
-      const { port } = startHere({ orca: { ...orca, run: async (file: string, args: string[], timeoutMs: number) => {
+      const { port } = startHere({ now: still, orca: { ...orca, run: async (file: string, args: string[], timeoutMs: number) => {
         orcaRuns.push([file, args, timeoutMs])
         return { code: 0, stdout: args[0] === 'display-message' ? '4000|work|\n' : args[0] === 'list-clients' ? '1794700050|5004|/dev/pts/1||work\n' : '' }
       } } })

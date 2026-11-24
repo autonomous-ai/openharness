@@ -16,7 +16,7 @@ import type { Delivery } from './inbox.js'
 import { answerEngine, type AnswerEngine } from './lastAnswer.js'
 import { bundleOf, type OpenTarget } from './open.js'
 import { MAX_TEXT } from './orca.js'
-import type { Nested, NestedLookup, NestedPlace, OuterLookup } from './outer.js'
+import { FRESH_WITHIN_MS, type Nested, type NestedLookup, type NestedPlace, type OuterLookup } from './outer.js'
 import type { SessionRecord } from './record.js'
 import type { ProcessName } from './scannedApp.js'
 import { isTabApp } from './tabs.js'
@@ -49,6 +49,10 @@ const LINE_BYTES = 99
 /** A tty read that failed (`ps` timed out under load, or did not run) is tried again on a later event, no sooner than this:
  *  a busy machine is not handed one more `ps` per hook. */
 const TTY_RETRY_MS = 10_000
+/** How long a tap or a rest on an agent nested in a multiplexer waits for its client's place, read afresh, before it acts
+ *  on what it holds: the open keeps 300 ms of the eval's full-score 1 s (PM, 2026-11-24). tmux's fresh lookup took
+ *  p95 156 ms on macOS (docs/plans/2026-11-24-dial-iterm2-tab-and-restart-plan.md, Measured). */
+export const OUTER_FRESH_WAIT_MS = 700
 
 /** What a turn's start was: a prompt a person typed, one another session sent, or the dial's own words. */
 export type PromptSource = 'person' | 'relayed' | 'dial'
@@ -155,6 +159,11 @@ function walked(hints: Readonly<Record<string, string>>): boolean {
   return named === UNKNOWN_APP || (named === 'vscode' && !hints.__CFBundleIdentifier)
 }
 
+/** Whether an outer answer's client's process is one a raise can bring forward. */
+function clientPid(pid: number | undefined): boolean {
+  return Number.isSafeInteger(pid) && pid! > 0
+}
+
 /** Whether two events' hints are the same, key for key. */
 function sameHints(a: Readonly<Record<string, string>>, b: Readonly<Record<string, string>>): boolean {
   const keys = Object.keys(a)
@@ -242,12 +251,18 @@ interface Entry {
   /** The caller and hints its outer place was last asked for (ObservedDeps.outer), while it runs nested: only that ask's
    *  answer lands. */
   outerAsk?: { pid: number; hints: Readonly<Record<string, string>> }
+  /** Its client's place read afresh for a tap or a rest (askAfresh): landing, or landed at `settledAt` (deps.now()). */
+  fresh?: { landing: Promise<void>; settledAt?: number }
   /** The app and tab it is seen in, from that answer, while its caller and hints are those it was asked for; for a
    *  session the scan found nested, from the scan's lookup (placeNested) until its first hook's own answer lands. */
   outer?: Outer
   /** Its outer place is the scan's (placeNested), or its multiplexer is (HostAgent.nest from the scan's maker read), and
    *  no hook has come since: the first hook keeps them while that hook's own ask runs (askOuter). */
   scanPlaced?: true
+  /** What the scan asked its lookup by process (placeNested), when that lookup had an answer to give, until its first
+   *  hook: a tap's or a rest's fresh ask asks it again (askAfresh), over a table read then. The look's table is not
+   *  kept: it holds no client started since. */
+  scanNested?: Omit<Nested, 'rows'>
   /** The multiplexer's pane the scan's lookup placed a session found nested at, until its first hook: a rest and a tap
    *  show it (placeIn), and it is never one of its panes, so no words reach it before a hook names the pane. */
   placed?: Pane
@@ -297,6 +312,10 @@ export class ObservedSource implements HostSource {
    *  with none of that adapter's at, by agent id. */
   private readonly paneNames = new Map<string, { names: ReadonlyMap<string, PaneName>; placed: ReadonlyMap<string, string> }>()
   private scanning: Promise<void> | null = null
+  /** Each tap and rest here, in turn: past its wait for a fresh place (waitFresh) a rest acts only while no later tap or
+   *  rest came, so it shows nothing the person left meanwhile (PM, 2026-11-24: last action wins). A tap asks the dial's
+   *  own count (focus), as a later tap on another source's agent is none of these. */
+  private acted = 0
 
   constructor(private readonly deps: ObservedDeps) {}
 
@@ -502,10 +521,17 @@ export class ObservedSource implements HostSource {
     return this.entries.get(e.agent.id) === e && e.endAt === undefined
   }
 
-  async focus(agent: HostAgent): Promise<boolean> {
+  async focus(agent: HostAgent, latest: () => boolean): Promise<boolean | 'superseded'> {
+    ++this.acted
     const e = this.entries.get(agent.id)
     const actions = this.deps.actions
     if (!e || !actions || !this.live(e)) return false
+    const waiting = this.waitFresh(e)
+    if (waiting) {
+      await waiting
+      if (!latest()) return 'superseded'
+      if (!this.live(e)) return false
+    }
     const target = this.target(e)
     if (!actions.canOpen(e.agent.id, target)) return false
     const opened = await actions.open(e.agent.id, target)
@@ -528,6 +554,78 @@ export class ObservedSource implements HostSource {
     if (tab?.adapter.canFocus(tab.pane)) await tab.adapter.focus(tab.pane)
   }
 
+  /** A tap and a rest wait for its client's place read afresh (askAfresh), at most OUTER_FRESH_WAIT_MS: past it they act
+   *  on what it holds, and the late answer still lands. None when nothing is asked: a tap or rest on an agent in no
+   *  multiplexer acts in the same tick, as one that had no wait. */
+  private waitFresh(entry: Entry): Promise<void> | undefined {
+    const landing = this.askAfresh(entry)
+    if (!landing) return undefined
+    let timer: ReturnType<typeof setTimeout> | undefined
+    return Promise.race([
+      landing.then(() => false),
+      new Promise<true>((resolve) => { timer = setTimeout(() => resolve(true), OUTER_FRESH_WAIT_MS) }),
+    ]).then((late) => {
+      if (late) this.deps.log('[observed] outer · late')
+      else clearTimeout(timer)
+    })
+  }
+
+  /**
+   * Its client's place read afresh for a tap or a rest (eval I13, PM 2026-11-24): a hook asks only at a session's or a
+   * turn's start, and the scan once, so a person who attached its multiplexer from another tab since, and typed nothing,
+   * would be shown the old tab. One landing an agent, shared while it runs and for FRESH_WITHIN_MS after: a burst of
+   * taps and rests runs one lookup. None when there is nothing to ask (readAfresh). The landing always settles: a
+   * lookup never rejects, yet one that did, or threw, would hold it unsettled, and every later tap and rest on the agent
+   * would fail with it and never ask again.
+   */
+  private askAfresh(entry: Entry): Promise<void> | undefined {
+    const held = entry.fresh
+    if (held && (held.settledAt === undefined || this.deps.now() - held.settledAt < FRESH_WITHIN_MS)) return held.landing
+    let read: Promise<void> | undefined
+    try {
+      read = this.readAfresh(entry)
+    } catch (error) {
+      read = Promise.reject(error)
+    }
+    if (!read) return undefined
+    const fresh: NonNullable<Entry['fresh']> = {
+      landing: read.catch((error: unknown) => {
+        // Its kind, no error text: a path in it holds the account's name. The tap acts on what it holds.
+        this.deps.log(`[observed] outer · lookup not read · ${errorKind(error)}`)
+      }).then(() => { fresh.settledAt = this.deps.now() }),
+    }
+    entry.fresh = fresh
+    return fresh.landing
+  }
+
+  /**
+   * Its client's place, read afresh and landed. A hooked agent's is asked for its latest hook's ask, and lands as that
+   * hook's answer does: a hook since then that asked anew wins (landOuter). One with no app and no client's process
+   * (detached, not attached again, or failed) changes nothing, so a tap never moves its row to another page. A session
+   * the scan placed, no hook told of yet, is asked by process as the scan asked it, over a table read now (a client
+   * started since is in no older one), and lands as the scan's answer does (landNested): only one that names an app,
+   * while no hook came. A table that cannot be read changes nothing. None when it is not nested, or its lookup has no
+   * answer here (Windows).
+   */
+  private readAfresh(entry: Entry): Promise<void> | undefined {
+    const ask = entry.outerAsk
+    if (ask) {
+      return this.deps.outer?.(ask.hints, ask.pid, undefined, { fresh: true })?.then((place) => {
+        if (place.app || clientPid(place.pid)) this.landOuter(entry, ask, place.nest, place)
+      })
+    }
+    const found = entry.scanNested
+    const nested = this.deps.nested
+    if (!found || !entry.scanPlaced || !this.unhooked(entry) || !this.deps.table || !nested) return undefined
+    return this.deps.table().then(async (rows) => {
+      const place = await nested({ ...found, rows }, { fresh: true })
+      if (place) this.landNested(entry, place)
+    }, (error: unknown) => {
+      // Its kind, no error text: a path in it holds the account's name.
+      this.deps.log(`[observed] outer · processes not read · ${errorKind(error)}`)
+    })
+  }
+
   /** Only a pane whose app can show it now (an Orca terminal, a Claude app session while that app is in front, a tab a
    *  watch can select) is shown without its app coming forward. */
   hasPane(agent: HostAgent): boolean {
@@ -536,7 +634,14 @@ export class ObservedSource implements HostSource {
 
   /** Each pane a rest shows, in turn: a tab first, as the pane inside it is seen only once its tab is. Busy if one was
    *  busy, failed only if every one failed. */
-  async showPane(agent: HostAgent): Promise<PaneSwitch> {
+  async showPane(agent: HostAgent): Promise<PaneSwitch | 'superseded'> {
+    const mine = ++this.acted
+    const e = this.entries.get(agent.id)
+    const waiting = e && this.live(e) ? this.waitFresh(e) : undefined
+    if (waiting) {
+      await waiting
+      if (this.acted !== mine) return 'superseded'
+    }
     const said: PaneSwitch[] = []
     for (const { adapter, pane } of this.shown(agent)) said.push(await adapter.show!(pane, agent.id))
     return said.includes('busy') ? 'busy' : said.includes('ok') ? 'ok' : 'failed'
@@ -791,6 +896,7 @@ export class ObservedSource implements HostSource {
     const same = last !== undefined && last.pid === e.callerPid && sameHints(last.hints, e.hostHints)
     const scanned = entry.scanPlaced
     entry.scanPlaced = undefined
+    entry.scanNested = undefined
     if (same && e.event !== 'session-start' && e.event !== 'turn-start') return true
     const ask = { pid: e.callerPid, hints: e.hostHints }
     // Its multiplexer lands as soon as the maker's read confirms it, before the client's steps end (OuterLookup's made).
@@ -820,7 +926,7 @@ export class ObservedSource implements HostSource {
     if (entry.outerAsk !== ask || !this.live(entry)) return
     if (place) {
       entry.outer = place.app ? { app: place.app, tty: place.tty, pid: place.pid } : undefined
-      entry.outerPid = !place.app && Number.isSafeInteger(place.pid) && place.pid! > 0 ? place.pid : undefined
+      entry.outerPid = !place.app && clientPid(place.pid) ? place.pid : undefined
       entry.tty = entry.outer?.tty
     } else if (entry.agent.nest === nest && !entry.agent.appPending) return
     if (nest) entry.agent.nest = nest
@@ -1313,21 +1419,32 @@ export class ObservedSource implements HostSource {
    * (ObservedDeps.nested): Diego's idle nested agents in iTerm2 sat on Other's page after the devices started again,
    * each until it was next hooked (2026-11-22). Asked, and its answer landing, only while it lives, no hook told of it
    * and no hc terminal holds it: a hook's word is newer. An answer that names an app places it there, known, with its
-   * client's tab and process, as a hook's outer answer does, and at the multiplexer's pane it names, for a rest and a
-   * tap alone (Entry.placed); one that names none, or fails, leaves what the walk gave it: a failed one must not stop
-   * the look's next. Whether it was placed.
+   * client's tab and process (landNested); one that names none, or fails, leaves what the walk gave it: a failed one
+   * must not stop the look's next. Whether it was placed.
    */
   private async placeNested(entry: Entry, nest: Nested): Promise<boolean> {
-    const unhooked = (): boolean => this.live(entry) && entry.caller === undefined && !entry.paired
+    if (!this.unhooked(entry)) return false
     let place: NestedPlace | undefined
     try {
-      place = unhooked() ? await this.deps.nested?.(nest) : undefined
+      const asked = this.deps.nested?.(nest)
+      // Placed or not, a tap or a rest asks it again (askAfresh, eval I13). A lookup with no answer for it here (a tty out
+      // of its platform's form) has none then either, as it is asked the same facts: no table is read for it at a tap.
+      if (asked) entry.scanNested = { host: nest.host, pid: nest.pid, tty: nest.tty, maker: nest.maker }
+      place = await asked
     } catch (error) {
       // Its kind, no error text: a path in it holds the account's name.
       this.deps.log(`[observed] scan · lookup not read · ${errorKind(error)}`)
       return false
     }
-    if (!place?.app || !unhooked()) return false
+    return place !== undefined && this.landNested(entry, place)
+  }
+
+  /** A nested lookup's answer for a session the scan found (placeNested, readAfresh), landed while it lives, no hook told
+   *  of it and no hc terminal holds it: one that names an app places it there, known, with its client's tab and process,
+   *  as a hook's outer answer does, and at the multiplexer's pane it names, for a rest and a tap alone (Entry.placed).
+   *  Whether it was placed. */
+  private landNested(entry: Entry, place: NestedPlace): boolean {
+    if (!place.app || !this.unhooked(entry)) return false
     entry.outer = { app: place.app, tty: place.tty, pid: place.pid }
     entry.scanPlaced = true
     entry.placed = place.pane
@@ -1338,6 +1455,11 @@ export class ObservedSource implements HostSource {
     this.locate(entry)
     this.emit()
     return true
+  }
+
+  /** It lives, and neither a hook nor an hc terminal has said where it runs: the scan's word is the newest. */
+  private unhooked(entry: Entry): boolean {
+    return this.live(entry) && entry.caller === undefined && !entry.paired
   }
 
   /** Each session the scan found that no hook has told of yet, placed again in the hc terminal it runs in: Herdr's list

@@ -16,7 +16,7 @@ import type { TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { APP_IDS } from './hostDetect.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
-import type { MadeAnswer, Nested, NestedPlace, OuterLookup } from './outer.js'
+import { FRESH_WITHIN_MS, type Fresh, type MadeAnswer, type Nested, type NestedPlace, type OuterLookup } from './outer.js'
 import type { Nest } from './types.js'
 import { parentChain, readPtyOwner, scannedApps, type ProcessName } from './scannedApp.js'
 import { clientTtyForm } from './tabs.js'
@@ -229,14 +229,17 @@ type NotRead = 'tmux' | 'pane' | 'processes' | 'clients' | 'app'
  * from its start would be gone after a run that hung to its timeout, and each ask after it would wait out one more. One
  * in flight is shared, as [ask] gave it, with what it carries (MadeAnswer). Only keys settled in the last 5 s, or still
  * in flight, are kept. [ask] never rejects.
+ * A fresh ask shares only one in flight or settled less than FRESH_WITHIN_MS ago, else asks anew and holds that answer:
+ * a hook's turn-start comes at every tool call, so 5 s spares the lookups, but a tap or rest is the person's and must
+ * see a re-attach since (eval I13, PM 2026-11-24), while a burst of them still runs one lookup.
  */
-export function heldAnswers<T, Asked extends Promise<T> = Promise<T>>(now: () => number): (key: string, ask: () => Asked) => Asked {
+export function heldAnswers<T, Asked extends Promise<T> = Promise<T>>(now: () => number): (key: string, ask: () => Asked, opts?: Fresh) => Asked {
   const asked = new Map<string, { answer: Asked; settledAt?: number }>()
-  return (key, ask) => {
+  return (key, ask, opts) => {
     const at = now()
     for (const [held, last] of asked) if (last.settledAt !== undefined && at - last.settledAt >= OUTER_EVERY_MS) asked.delete(held)
     const last = asked.get(key)
-    if (last) return last.answer
+    if (last && !(opts?.fresh && last.settledAt !== undefined && at - last.settledAt >= FRESH_WITHIN_MS)) return last.answer
     const entry: { answer: Asked; settledAt?: number } = { answer: ask() }
     void entry.answer.then(() => { entry.settledAt = now() })
     asked.set(key, entry)
@@ -326,10 +329,10 @@ export function createTmuxOuter(deps: TmuxOuterDeps): OuterLookup {
     return Object.assign(place, { made: read.then((rows) => Array.isArray(rows)) })
   }
 
-  return (hints, pid, made) => {
+  return (hints, pid, made, opts) => {
     const id = hints.TMUX_PANE
     if (!id || !TMUX_PANE_ID.test(id) || !PID.test(String(pid))) return undefined
-    const answer = asked(`${id}:${pid}`, () => placeOf(id, pid))
+    const answer = asked(`${id}:${pid}`, () => placeOf(id, pid), opts)
     if (made) void answer.made.then((yes) => { if (yes) made('tmux') })
     return answer
   }
@@ -346,7 +349,9 @@ type PaneListing = readonly string[] | 'tmux' | 'pane'
  * app. Nothing at once when the platform names no client's tty, the agent is no pid or its tty is out of form; else the
  * place, `{}` when none is found. Never rejects.
  */
-export function createTmuxNested(deps: Omit<TmuxOuterDeps, 'processes' | 'tty'>): (found: Pick<Nested, 'pid' | 'tty' | 'rows'>) => Promise<NestedPlace> | undefined {
+export function createTmuxNested(
+  deps: Omit<TmuxOuterDeps, 'processes' | 'tty'>,
+): (found: Pick<Nested, 'pid' | 'tty' | 'rows'>, opts?: Fresh) => Promise<NestedPlace> | undefined {
   // The scan asks for up to fifty sessions a look: one listing serves them all, so a tmux that hangs costs the look one
   // timeout, not one an ask.
   const listings = heldAnswers<PaneListing>(deps.now)
@@ -368,10 +373,10 @@ export function createTmuxNested(deps: Omit<TmuxOuterDeps, 'processes' | 'tty'>)
 
   /** `{}` when no pane of the person's on [tty] holds the agent or one of its parents, or no client of its session is
    *  in a listed app; the step that could not be read, when one could not. */
-  async function placeOf(found: Pick<Nested, 'pid' | 'tty' | 'rows'>, tty: string): Promise<NestedPlace | NotRead> {
+  async function placeOf(found: Pick<Nested, 'pid' | 'tty' | 'rows'>, tty: string, opts?: Fresh): Promise<NestedPlace | NotRead> {
     // What is left to throw is tmux's finder or run, said as no tmux, as the hooked lookup says it: a held answer never
     // rejects, or it would be held past its 5 s for every later look.
-    const panes = await listings('', () => listPanes().catch((): PaneListing => 'tmux'))
+    const panes = await listings('', () => listPanes().catch((): PaneListing => 'tmux'), opts)
     if (typeof panes === 'string') return panes
     for (const line of panes) {
       const pane = TMUX_PANE_LINE.exec(line)
@@ -379,15 +384,15 @@ export function createTmuxNested(deps: Omit<TmuxOuterDeps, 'processes' | 'tty'>)
       if (!pane || !facts) continue
       if (!facts.persons || !holdsPane(found.rows, found.pid, facts.pid)) return {}
       // The app scan is what can throw: a held answer never rejects.
-      const place = await clients(facts.session, () => clientOf(deps, pane[1], found.rows).catch((): NotRead => 'app'))
+      const place = await clients(facts.session, () => clientOf(deps, pane[1], found.rows).catch((): NotRead => 'app'), opts)
       return typeof place !== 'string' && place.app ? { ...place, pane: { adapter: 'tmux', id: `${pane[1]}:${found.pid}:${place.app}` } } : place
     }
     return {}
   }
 
-  return (found) => {
+  return (found, opts) => {
     const tty = `/dev/${found.tty}`
     if (!clientTtyForm(deps.platform)?.test(tty) || !PID.test(String(found.pid))) return undefined
-    return asked(`${found.tty}:${found.pid}`, () => said(deps.log, placeOf(found, tty)))
+    return asked(`${found.tty}:${found.pid}`, () => said(deps.log, placeOf(found, tty, opts)), opts)
   }
 }

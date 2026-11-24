@@ -7843,6 +7843,20 @@ describe('what the dial cannot do for an agent', () => {
     } finally { await session.stop() }
   })
 
+  // A later tap replaced this one during its wait (eval I13, PM 2026-11-24, answer C): the later tap says what it did.
+  it('an open the host answers superseded shows no toast and moves no face', async () => {
+    const openAgent = vi.fn(async () => 'superseded' as const)
+    const { session, port } = await greeted(caps({ openAgent }))
+    try {
+      port.sent.length = 0
+      port.say({ t: 'agent.open', agentId: 'o1' })
+      await vi.waitFor(() => expect(openAgent).toHaveBeenCalledWith('o1', undefined))
+      await settle()
+      expect(toasts(port)).toEqual([])
+      expect(port.sent.filter((m) => m.t === 'focus')).toEqual([])
+    } finally { await session.stop() }
+  })
+
   it('turn.send with a rejecting host does not throw', async () => {
     const lines: string[] = []
     const sendTurn = vi.fn(async () => { throw new Error('gone') })
