@@ -24,10 +24,10 @@ import { statSync } from 'node:fs'
 import { win32 } from 'node:path'
 import { configuredPortOf, daemonRecordPath, readDaemonRecord } from '../lib/daemonRecord.js'
 import { daemonFetch } from '../lib/localTransport.js'
-import type { HostLiveness, HostProcessRow } from '../lib/processProof.js'
+import { pidAlive, type HostLiveness, type HostProcessRow } from '../lib/processProof.js'
 import { readDaemonToken } from '../lib/windows/pipeAuth.js'
 import type { PipeTarget } from '../lib/windows/pipeClient.js'
-import { CLAUDE_SESSION_ID, createRecordProof } from '../devices/listenerPipe.js'
+import { CLAUDE_SESSION_ID, createRecordProof, WINDOWS_LIVENESS } from '../devices/listenerPipe.js'
 
 /** The core's MAX_TEXT (core/deviceHookCalls.ts): a longer text is none. */
 const MAX_TEXT = 20_000
@@ -108,11 +108,20 @@ export interface InboxDeps {
 /** A process table row with its parent (lib/processTable.ts `ProcessRow`). */
 export interface CallerRow extends HostProcessRow { parentPid: number }
 
-/** Whether a pid runs, and the process table: on Windows devices/listenerPipe.ts `WINDOWS_LIVENESS`. */
+/** Whether a pid runs, and the process table (`CALLER_LIVENESS`). */
 export interface CallerLiveness {
   alive(pid: number): boolean
   rows(): Promise<readonly CallerRow[] | null>
 }
+
+/**
+ * The caller's liveness: the devices' table (devices/listenerPipe.ts `WINDOWS_LIVENESS`), but a pid it may not signal
+ * (EPERM) runs. The watch fails open, as a live session's follower must never be ended, and a refused check would end
+ * it at the first tick on every start. A pid another account took is still caught by the minute's start marker: that
+ * account's process is missing from this account's table, or has another marker. The devices' and the daemon's proofs
+ * keep EPERM as dead.
+ */
+export const CALLER_LIVENESS: CallerLiveness = { alive: pidAlive, rows: WINDOWS_LIVENESS.rows }
 
 /** Follows the session's inbox until off, its caller gone or its stdout closed; 0 in every case. */
 export async function followInbox(sessionId: string, deps: InboxDeps): Promise<number> {

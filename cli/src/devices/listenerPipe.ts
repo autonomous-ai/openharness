@@ -91,7 +91,8 @@ export const PROOF_MAX_AGE_MS = 60_000
 /**
  * The daemon pipe's liveness (lib/windows/daemonPipe.ts), copied because that file is the core's and keeps its own,
  * with this account's own processes alone alive. The table is loaded only when asked, because it brings the pty host's
- * launcher. The inbox follower watches its caller by it too (deviceClaude/inbox.ts), reading each row's parent.
+ * launcher. The inbox follower reads its caller in this table too, but counts a pid it may not signal as running
+ * (deviceClaude/inbox.ts `CALLER_LIVENESS`).
  */
 export const WINDOWS_LIVENESS = {
   alive: ownProcessRuns,
