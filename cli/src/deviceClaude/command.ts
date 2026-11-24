@@ -116,7 +116,7 @@ export async function runDeviceCommand(argv: string[], deps: DeviceDeps): Promis
     return followInbox(words[2] ?? '', {
       dataDir: deps.dataDir, port: deps.port, platform: deps.platform, acts: () => pluginActs(deps.dataDir),
       proof: createDaemonProof(), write: deps.write,
-      // Its end cuts the wait short: the abort is the only way it rejects.
+      // The caller's end cuts the wait short: the abort is the only way it rejects.
       wait: (ms, signal) => sleep(ms, undefined, { signal }).catch(() => {}),
       pid: process.pid, ppid: process.ppid, liveness: WINDOWS_LIVENESS, now: Date.now,
     })

@@ -12,10 +12,12 @@
  * the stdout pipe, and this process's next write fails with EPIPE (the VM notes, Task 15). That write comes when the held
  * poll answers (at most 30 s) or after the 60 s wait, or never once another process holds the pipe, and meanwhile this
  * process holds the session's poll in the core. Its parent tells nothing either: `harness.exe` starts `node.exe` with no
- * job object and waits on it. So it watches its caller, the process above `harness.exe`: its pid and its parent's every
- * second, and its start marker in the process table every minute, as Windows gives a pid to the next process. Within 2 s
- * of either going it ends, in a held poll or a wait, and writes nothing more. A table it cannot read never ends it: it
- * watches its parent alone then. A newer poll for the session ends an orphan's hold in the core (core/deviceHookCalls.ts).
+ * job object and waits on it. So it watches its caller, the process above `harness.exe`: the caller's pid and
+ * `harness.exe`'s every second, and the caller's start marker in the process table every minute, as Windows gives a
+ * dead process's pid to the next one. Within 2 s of either ending, or at the minute's read once the caller's pid went to
+ * another process, it ends, in a held poll or a wait, and writes nothing more. A table it cannot read never ends it: at
+ * the start it then watches `harness.exe` alone, and later it keeps the caller it found. A newer poll for the session
+ * ends an orphan's hold in the core (core/deviceHookCalls.ts).
  * Only the `harness` command's own process runs this; a client of the daemon's existing route, nothing in the core.
  */
 import { statSync } from 'node:fs'
