@@ -6000,6 +6000,20 @@ describe('ObservedSource and a nested session the scan found', () => {
         expect(t.actions.open.mock.calls).toEqual([[id, { bundle: 'com.googlecode.iterm2', pane: PANE }]])
       })
 
+      // Its lookup is asked the same host, process, tty and maker at a tap as at the scan, so one with no answer for it
+      // then (a tty out of its platform's form) has none at a tap either: no table is read for it, and nothing waited for.
+      it('a lookup with no answer for it at the scan: a tap and a rest read no table and wait for nothing', async () => {
+        const nested = vi.fn((_found: Nested, _opts?: Fresh): Promise<NestedPlace> | undefined => undefined)
+        const t = scan(new Map([[100, IN_TMUX]]), { nested }, { tmuxFront: () => 'iterm' })
+        t.found('a', 100)
+        await t.src.scanOpen()
+        expect(t.agent('a')).toMatchObject({ nest: 'tmux', host: 'tmux' })
+        await t.src.focus(t.agent('a'))
+        await t.src.showPane(t.agent('a'))
+        expect(t.table).toHaveBeenCalledTimes(1)
+        expect(nested).toHaveBeenCalledTimes(1)
+      })
+
       it('a fresh table that cannot be read changes nothing, said once', async () => {
         const t = await placed({}, undefined, { freshByHand: true })
         t.table.mockRejectedValueOnce(new Error('ps timed out under /Users/someone'))
