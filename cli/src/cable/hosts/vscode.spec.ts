@@ -685,9 +685,9 @@ describe('the terminal holding a multiplexer\'s client in VS Code or Cursor', ()
   const CLIENT = 4300
   const HELD: Terminal = { window: 'win-0001abcd', shell: 4299 }
   /** A tmux agent whose client the outer lookup found in [app]'s terminal, by the client's process. */
-  const nested = (app: string, pid: unknown = CLIENT): Place =>
+  const nested = (app: string): Place =>
     ({ host: 'tmux', app: 'tmux', hints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux' }, engine: 'claude', pid: 4242,
-      outer: { app, tty: '/dev/ttys004', pid: pid as number } })
+      outer: { app, tty: '/dev/ttys004', pid: CLIENT } })
   /** The adapter for [editor], over windows that hold the client's shell once a test sets `held`. */
   const client = (editor: 'vscode' | 'cursor' = 'vscode') => {
     const windows = { held: undefined as Terminal | undefined, writes: true, front: true, asked: [] as number[],
@@ -713,7 +713,7 @@ describe('the terminal holding a multiplexer\'s client in VS Code or Cursor', ()
     expect(client('cursor').adapter.paneOf(nested('cursor'))).toEqual(pane(`client:${CLIENT}`, 'cursor-tab'))
     expect(client('cursor').adapter.paneOf(nested('vscode'))).toBeUndefined()
     for (const pid of [undefined, 1, 0, -5, 4300.5, 2 ** 31, '4300']) {
-      expect(adapter.paneOf(nested('vscode', pid)), String(pid)).toBeUndefined()
+      expect(adapter.paneOf({ ...nested('vscode'), outer: { app: 'vscode', pid: pid as number } }), String(pid)).toBeUndefined()
     }
     const { outer: _, ...plain } = nested('vscode')
     expect(adapter.paneOf(plain)).toBeUndefined()

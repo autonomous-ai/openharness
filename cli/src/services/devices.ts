@@ -80,7 +80,7 @@ import { createTabsAdapter, isTabApp, readTty, type Tab, type TabApp } from '../
 import { createTmuxAdapter, createTmuxNested, createTmuxOuter, tmuxPaneParts } from '../cable/hosts/tmux.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { watchSocket } from '../cable/hosts/unixSocket.js'
-import { createVscodeAdapter, termPid } from '../cable/hosts/vscode.js'
+import { clientPid, createVscodeAdapter, createVscodeClientAdapter, termPid } from '../cable/hosts/vscode.js'
 import { readForeground, readProcessParents, vscodeStreams, type VscodeTerminal, type VscodeTerminalsDeps } from '../cable/hosts/vscodeTerminals.js'
 import { createWeztermAdapter, createWeztermTabAdapter } from '../cable/hosts/wezterm.js'
 import { createRexAdapter, createRexReads, rexBlocksRunning, rexFinder, rexPaneIds, rexPaneParts, type RexReads } from '../cable/hosts/rex.js'
@@ -792,6 +792,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   ].map(noting), claudeNoted, codexNoted, ...[
     createVscodeAdapter('vscode', { ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'vscode', terminals: vscodeNoted, raise: raise && ((window) => raise.raise(window)), windows }),
     createVscodeAdapter('cursor', { ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'cursor', terminals: vscodeNoted, raise: raise && ((window) => raise.raise(window)), windows }),
+    // The VS Code and Cursor terminal holding a multiplexer's client, as the kitty and WezTerm tabs below.
+    createVscodeClientAdapter('vscode', { inFront: () => cableHost.latestFront() === 'vscode', terminals: vscodeNoted }),
+    createVscodeClientAdapter('cursor', { inFront: () => cableHost.latestFront() === 'cursor', terminals: vscodeNoted }),
     // After Cursor's terminals and tabs: whatever agent in Cursor they do not reach opens its folder's window.
     createCursorFolderAdapter({ run: apps.run, platform: apps.platform, bin: openBin, isFolder, cli: () => cursorFolderCli(cursorExtension), windows }),
     // The WezTerm pane and the kitty window holding a multiplexer's client, as the tabs adapter's tab of Terminal,
@@ -2263,13 +2266,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     return readRexOrder(source)
   }
   if (observed) observed.onChange(() => part.call('rex', () => rexMembers(observed)))
-  // Each change tells VS Code's and Cursor's windows which agents run in one of their terminals, by their panes: only
-  // theirs may cost a read of the process table. A part of its own, so a throw there is never the dial's.
+  // Each change tells VS Code's and Cursor's windows which agents run in one of their terminals, by their panes, and the
+  // multiplexer clients they hold: only theirs may cost a read of the process table. An agent has at most one of each,
+  // so the list stays within twice the source's bound. A part of its own, so a throw there is never the dial's.
   if (observed) observed.onChange(() => part.call('vscode', () => vscode.agents(observed.list().flatMap(({ id }) =>
-    (['vscode', 'cursor'] as const).flatMap((editor) => {
-      const pid = termPid(observed.paneOf(id, editor) ?? '')
-      return pid === undefined ? [] : [pid]
-    })))))
+    (['vscode', 'cursor'] as const).flatMap((editor) => [termPid(observed.paneOf(id, editor) ?? ''),
+      clientPid(observed.paneOf(id, `${editor}-tab`) ?? '')].filter((pid) => pid !== undefined))))))
 
   /**
    * The open scan's copy of a session cmux lists, placed at that row's cmux pane
