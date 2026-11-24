@@ -7392,9 +7392,9 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
   /**
    * The devices with a herdr the test drives, the dial not attached yet. Its socket is there (`stamp`). Each subscription
    * keeps its entries, its callbacks and whether it was closed; `agent.list` answers `agents`, and while `hold` is set
-   * waits until the test lands it; a prompt is recorded and answers the next of `prompts`, else sent; `binary` is the herdr the client saw write the marker (Windows). `live`
-   * attaches the dial, starts the first subscription and awaits the list that follows it; `status` is herdr telling the
-   * pane's status on it.
+   * waits until the test lands it; a prompt is recorded and answers the next of `prompts`, else sent; `binary` is the
+   * herdr the client saw write the marker (Windows). `live` attaches the dial, starts the first subscription and awaits
+   * the list that follows it; `status` is herdr telling the pane's status on it.
    */
   const withHerdr = (over: Parameters<typeof start>[0] = {}) => {
     const subs: Array<{ entries: readonly HerdrEntry[]; to: HerdrSubscriber; closed: boolean }> = []
@@ -9810,8 +9810,9 @@ describe('cmux\'s agents, from cmux\'s own stores (docs/plans/2026-11-17-dial-cm
   /**
    * The devices with a cmux the test drives, installed, with its stores' folder there, the dial not attached yet. Each call
    * of its client is recorded; `sessions` answers the records of that word (all, with none) unless it is one that fails,
-   * and while `hold` is set waits until the test lands it, `mode` the mode, and the prompt is idle and empty. `live` attaches the dial and lets the first list land; `changed` is the latest watch telling
-   * a change of that file, and its run landing: one agent's runs start at least 250 ms apart.
+   * and while `hold` is set waits until the test lands it, `mode` the mode, and the prompt is idle and empty. `live`
+   * attaches the dial and lets the first list land; `changed` is the latest watch telling a change of that file, and its
+   * run landing: one agent's runs start at least 250 ms apart.
    */
   const withCmux = (over: Parameters<typeof start>[0] = {}) => {
     const fake = { found: true, records: [record()], mode: 'cmuxOnly' as string | undefined, calls: [] as unknown[][],
