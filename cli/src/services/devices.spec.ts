@@ -5138,15 +5138,15 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   describe('an agent in the person\'s tmux whose client is in a VS Code terminal', () => {
     const code = join(homedir(), 'Applications', 'Visual Studio Code.app')
     const CLIENT_SHELL = 4299
-    /** The client (4300) in the terminal's shell, under VS Code. */
-    const rows = [...IN_TMUX, { pid: 4300, ppid: CLIENT_SHELL, executable: 'tmux' },
-      { pid: CLIENT_SHELL, ppid: 4298, executable: 'zsh' }, { pid: 4298, ppid: 1, executable: join(code, 'Contents', 'MacOS', 'Electron') }]
     const selected: [string, string[], number] = ['tmux', ['select-window', '-t', '%3', ';', 'select-pane', '-t', '%3'], 10_000]
-    /** The agent hooked in pane %3, its client found in VS Code, and a window reporting [shells] once its chain is read. */
-    const inTmux = async (shells: number[]) => {
+    /** The agent hooked in pane %3, its client (4300) found in the terminal's shell under the editor at [app], whose
+     *  bundle id is [bundle], and a window reporting [shells] once its chain is read. */
+    const inTmux = async (shells: number[], app = code, bundle = VSCODE) => {
+      const rows = [...IN_TMUX, { pid: 4300, ppid: CLIENT_SHELL, executable: 'tmux' },
+        { pid: CLIENT_SHELL, ppid: 4298, executable: 'zsh' }, { pid: 4298, ppid: 1, executable: join(app, 'Contents', 'MacOS', 'Electron') }]
       readers.processes.mockResolvedValue(rows)
       processTable.rows = rows
-      readers.bundleId.mockImplementation(async (bundle) => bundle === code ? VSCODE : undefined)
+      readers.bundleId.mockImplementation(async (at) => at === app ? bundle : undefined)
       const listener = fakeListener()
       const { port } = startHere({ listen: listener.listen, orca: { ...mac, run: async (file, args, timeoutMs) => {
         orcaRuns.push([file, args, timeoutMs])
@@ -5183,6 +5183,20 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       expect(await host().openAgent(ID)).toBeUndefined()
       expect(orcaRuns.slice(runs).slice(-2)).toEqual([selected, ['/usr/bin/open', ['-b', VSCODE], 10_000]])
       expect(window.lines).toEqual([])
+    })
+
+    it('in a Cursor terminal, a tap brings Cursor forward and shows the client\'s terminal; a rest shows it while Cursor is in front', async () => {
+      const { listener, window } = await inTmux([CLIENT_SHELL], join(homedir(), 'Applications', 'Cursor.app'), CURSOR)
+      await vi.waitFor(() => expect(processTable.reads).toBe(1))
+      const runs = orcaRuns.length
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(orcaRuns.slice(runs).slice(-2)).toEqual([selected, ['/usr/bin/open', ['-b', CURSOR], 10_000]])
+      expect(window.lines).toEqual([{ show: CLIENT_SHELL, raise: true }])
+      expect(listener.front('cursor')).toBeUndefined()
+      host().swipeEnded(ID, 'rest')
+      await swiped('ok')
+      expect(window.lines).toEqual([{ show: CLIENT_SHELL, raise: true }, { show: CLIENT_SHELL }])
+      expect(orcaRuns.at(-1)).toEqual(selected)
     })
   })
 
