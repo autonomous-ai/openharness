@@ -1247,7 +1247,8 @@ syncBuiltinESMExports();\n`)
       dataDir, hermesHome: join(dir, 'hermes'), hermesSource: 'cli', stderr,
       input: { hook_event_name: 'on_session_start', session_id: '20260810_120000_a1b2c3' },
     })).toBe('{}\n')
-    if (outcome !== 'recovers') expect(stderr.join('')).toContain('[harness] Hermes admission is held;')
+    if (outcome === 'recovers') expect(stderr.join('')).not.toContain('admission is held')
+    else expect(stderr.join('')).toContain('[harness] Hermes admission is held;')
     expect(attempts).toBe(outcome === 'recovers' ? 3 : outcome === 'disconnects' ? 2 : 4)
     expect(new Set(firedAt).size).toBe(1)
     expect(new Set(deliveryIds).size).toBe(1)
