@@ -25,7 +25,10 @@ COMMAND_S=180
 apt=(apt-get -q -o Acquire::Retries=3)
 
 # Points apt's sources, and the mirror lists they read (`mirror+file:PATH`), from regional mirrors
-# (us-east-2.ec2.archive.ubuntu.com, azure.archive.ubuntu.com) to archive.ubuntu.com. Every other host stays.
+# (us-east-2.ec2.archive.ubuntu.com, azure.archive.ubuntu.com) to archive.ubuntu.com. Every other host stays. Sets
+# main_archive only when the sources then name archive.ubuntu.com: an ARM runner's are all on ports.ubuntu.com, and its
+# log must not claim a mirror it never used.
+main_archive=
 use_main_archive() {
   local SOURCELIST SOURCEPARTS file files=() mirror_lists
   eval "$(apt-config shell SOURCELIST Dir::Etc::sourcelist/f SOURCEPARTS Dir::Etc::sourceparts/d)"
@@ -39,6 +42,7 @@ use_main_archive() {
     [ -f "$file" ] && files+=("$file")
   done
   perl -pi -e 's{://[A-Za-z0-9.-]+\.archive\.ubuntu\.com}{://archive.ubuntu.com}g' "${files[@]}"
+  grep -q '://archive\.ubuntu\.com' "${files[@]}" && main_archive=archive.ubuntu.com
 }
 
 attempt=1
@@ -46,12 +50,13 @@ wait_s=30
 until timeout "$COMMAND_S" "${apt[@]}" update \
   && timeout "$COMMAND_S" "${apt[@]}" install -y --no-install-recommends --download-only "$@"; do
   if [ "$attempt" -ge "$ATTEMPTS" ]; then
-    echo "::error title=apt::apt could not download $* from the runner's Ubuntu mirrors and archive.ubuntu.com" \
-      "after $ATTEMPTS attempts"
+    echo "::error title=apt::apt could not download $* from the runner's Ubuntu" \
+      "mirrors${main_archive:+ and $main_archive} after $ATTEMPTS attempts"
     exit 1
   fi
   [ "$attempt" -eq 1 ] && use_main_archive
-  echo "apt: attempt $attempt of $ATTEMPTS could not download; trying again in ${wait_s}s from archive.ubuntu.com"
+  echo "apt: attempt $attempt of $ATTEMPTS could not download; trying again" \
+    "in ${wait_s}s${main_archive:+ from $main_archive}"
   sleep "$wait_s"
   attempt=$((attempt + 1))
   wait_s=$((wait_s * 2))
