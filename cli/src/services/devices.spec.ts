@@ -15574,10 +15574,10 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
     /** The server's client socket and the client connected to it, as lsof gives them. */
     const SOCKETS = 'p3900\nf5\nd0x1111\nn/Users/u/.config/herdr/herdr-client.sock\np4300\nf3\nd0x2222\nn->0x1111\n'
     /** The devices' runs, recorded: herdr's client lookup's lsof, and its ps of the client's tty, or on Linux the
-     *  server's. */
-    const herdrRun = (linux: boolean) => async (file: string, args: string[], timeoutMs: number) => {
+     *  server's, as [ps] has it. */
+    const herdrRun = (linux: boolean, ps = linux ? '3900 pts/4\n' : '4300 ttys004\n') => async (file: string, args: string[], timeoutMs: number) => {
       orcaRuns.push([file, args, timeoutMs])
-      return { code: 0, stdout: file === '/usr/sbin/lsof' ? SOCKETS : file.endsWith('/ps') ? (linux ? '3900 pts/4\n' : '4300 ttys004\n') : '' }
+      return { code: 0, stdout: file === '/usr/sbin/lsof' ? SOCKETS : file.endsWith('/ps') ? ps : '' }
     }
     const herdrFocus = (pane: string): Run => ['/opt/herdr/bin/herdr', ['agent', 'focus', pane], 10_000]
     /** Claude Code in session n, in herdr's pane [pane]. */
@@ -15593,12 +15593,13 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
     }
     /**
      * The devices on macOS, or on Linux, the processes [rows] (IN_TERMINAL, or ON_LINUX), the agents of [hooks] (sess-1 in
-     * w1:p1 and sess-2 in w1:p2) with each one's client lookup landed, a herdr the test drives listing [agents] (both), a
-     * dial attached with its tabs stream open, no app settled in front, and the devices' monotonic clock at 0. `live`
+     * w1:p1 and sess-2 in w1:p2) with each one's client lookup landed on the tty [ps] gives, a herdr the test drives
+     * listing [agents] (both), a dial attached with its tabs stream open, no app settled in front, and the devices'
+     * monotonic clock at 0. `live`
      * starts herdr's newest subscription for agents, reads its list and starts the focus subscription that follows; `focus`
      * is herdr telling that one a pane took the focus. `settle` and `report` as dialWith's. The timers are held.
      */
-    const herdrWith = async (over: { linux?: boolean; rows?: ProcessRow[]; hooks?: ObservedHookEvent[]; agents?: unknown[] } = {}) => {
+    const herdrWith = async (over: { linux?: boolean; rows?: ProcessRow[]; hooks?: ObservedHookEvent[]; agents?: unknown[]; ps?: string } = {}) => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
       clock = 0
       readers.processes.mockResolvedValue(over.rows ?? (over.linux ? ON_LINUX : IN_TERMINAL))
@@ -15616,7 +15617,7 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
       }
       const listener = fakeListener()
       const started = start({ faults: ['fleet'], listen: listener.listen, now: () => clock, tty: async () => undefined, herdr: client,
-        orca: { ...orca, platform: over.linux ? 'linux' : 'darwin', run: herdrRun(over.linux === true),
+        orca: { ...orca, platform: over.linux ? 'linux' : 'darwin', run: herdrRun(over.linux === true, over.ps),
           onPath: (name: string) => (name === 'herdr-app' ? null : `/opt/${name}/bin/${name}`) } })
       const hooks = over.hooks ?? [inHerdr(1, 'w1:p1'), inHerdr(2, 'w1:p2')]
       for (const event of hooks) started.port.observed(event)
@@ -15660,12 +15661,20 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
       expect(focusLines()).toEqual([])
     })
 
-    it.each<[string, { rows?: ProcessRow[]; linux?: boolean }, (scene: Scene) => Promise<unknown>]>([
+    it.each<[string, { rows?: ProcessRow[]; linux?: boolean; ps?: string }, (scene: Scene) => Promise<unknown>]>([
       ['another app settled', {}, async ({ report, settle }) => {
         report('terminal-app', HERDR_TAB)
         await settle('terminal-app')
         await settle('ghostty')
       }],
+      // The app the person went to settles FRONT_SETTLE_MS after the switch.
+      ['another app told in front, not yet settled', {}, async ({ listener, report, settle }) => {
+        report('terminal-app', HERDR_TAB)
+        await settle('terminal-app')
+        expect(listener.front('ghostty')).toBeUndefined()
+      }],
+      // Neither tab known: no tab reported, and the client on a terminal that names none.
+      ['a tab app that reported no tab, herdr\'s client on no tab', { ps: '4300 console\n' }, ({ settle }) => settle('terminal-app')],
       // With no tab to check, the app alone says it.
       ['on Linux, another app settled', { linux: true }, ({ settle }) => settle('kitty')],
       ['a tab app that reported no tab', {}, ({ settle }) => settle('terminal-app')],
@@ -15737,8 +15746,26 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
       expect(focusLines()).toEqual([])
     })
 
+    /** The same, sess-3's caller (4244) in a pane whose hook names w1:p3: a second herdr server's, whose ids repeat the
+     *  default server's. The source hears that one's focus, and its list has no agent at w1:p3. */
+    const ANOTHER_SERVER: ProcessRow[] = [...IN_TERMINAL,
+      { pid: 4244, ppid: 4002, tty: 'ttys032', executable: 'claude' }, { pid: 4002, ppid: 3900, tty: 'ttys032', executable: 'zsh' }]
+
+    // A move to a plain pane is ordinary use: no line.
+    it.each<[string, { rows?: ProcessRow[]; hooks?: ObservedHookEvent[] }, string]>([
+      ['a pane no agent has', {}, 'w1:p9'],
+      ['a pane of the default server with no agent, whose id another server\'s agent has', {
+        rows: ANOTHER_SERVER, hooks: [inHerdr(1, 'w1:p1'), inHerdr(2, 'w1:p2'), inHerdr(3, 'w1:p3')] }, 'w1:p3'],
+    ])('%s: nothing moves, and nothing is said', async (_, over, pane) => {
+      const { report, settle, focus } = await herdrWith(over)
+      report('terminal-app', HERDR_TAB)
+      await settle('terminal-app')
+      await focus(pane)
+      expect(paneAsked()).toEqual([])
+      expect(focusLines()).toEqual([])
+    })
+
     it.each<[string, { rows?: ProcessRow[]; hooks?: ObservedHookEvent[] }, string, string]>([
-      ['a pane no agent has', {}, 'terminal-app', 'w1:p9'],
       ['a held pane', { rows: HELD }, 'terminal-app', 'w1:p2'],
       ['two live agents at the pane', { hooks: [inHerdr(1, 'w1:p2'), inHerdr(2, 'w1:p2')] }, 'terminal-app', 'w1:p2'],
       ['an agent in herdr inside an Orca terminal, with Orca settled', { rows: IN_ORCA }, 'orca', 'w1:p2'],
@@ -15784,11 +15811,12 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
       await settle('terminal-app')
       await restOn2()
       await focus('w1:p2')
+      // A pane no agent has says nothing.
       await focus('w1:p9')
       report('terminal-app', '/dev/ttys001')
       await focus('w1:p1')
       const lines = focusLines()
-      expect(lines).toHaveLength(3)
+      expect(lines).toHaveLength(2)
       for (const line of lines) expect(line).toMatch(/^\[device\] herdr focus · skipped · (not in front|echo|unknown agent)$/)
     })
   })
