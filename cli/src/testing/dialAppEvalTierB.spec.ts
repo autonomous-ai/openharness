@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { createServer, type Server } from 'node:http'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { Worker } from 'node:worker_threads'
@@ -33,9 +33,14 @@ const driver = await import('../../e2e/harness/appEvalDriver.js' as string) as {
   muxCommands(runs: readonly LoggedRun[], keyOf: (pane: string, at: number) => string | undefined,
     labelOf: (tty: string) => string | undefined): import('./dialAppEval/types.js').Seen['commands']
   ownRig(rig: { polled: Map<string, number>; accounts: string[]; iterm?: object }, scenario: Scenario): boolean
+  emptyFixtures(rig: { d: { root: string; env: NodeJS.ProcessEnv }; accounts: string[]; iterm?: object }): Promise<void>
 }
 type Face = import('./dialAppEval/types.js').Seen['faces'][number]
 type LoggedRun = { argv: string[]; ok: boolean; at: number }
+
+const herdr = await import('../../e2e/harness/herdrServer.js' as string) as {
+  PrivateHerdr: { forget(config: string): Promise<void> }
+}
 
 const runLog = await import('../../e2e/harness/runLog.js' as string) as {
   recordingWrapper(real: string, dir: string, recorded: readonly string[]): string
@@ -439,6 +444,49 @@ describe("tier B's world at its start", () => {
     } finally {
       await world.close()
     }
+  })
+})
+
+describe("tier B's reset", () => {
+  it("empties the fake Claude Code's process records and herdr's saved layout, and keeps herdr's config", async () => {
+    dir = mkdtempSync(join(tmpdir(), 'tier-b-reset-'))
+    const home = join(dir, 'home')
+    const herdrConfig = join(home, '.config', 'herdr')
+    const files = {
+      record: join(dir, 'claude', 'sessions', '123.json'), layout: join(herdrConfig, 'session.json'),
+      snapshot: join(herdrConfig, 'session-snapshots', 'session-1.json'), config: join(herdrConfig, 'config.toml'),
+    }
+    for (const file of Object.values(files)) {
+      mkdirSync(dirname(file), { recursive: true })
+      writeFileSync(file, '{}')
+    }
+    const env = { HOME: home, CLAUDE_PROJECTS_DIR: join(dir, 'claude', 'projects'), CODEX_HOME: join(home, '.codex') }
+    await driver.emptyFixtures({ d: { root: dir, env }, accounts: [], iterm: {} })
+    expect([files.record, files.layout, files.snapshot].filter((file) => existsSync(file))).toEqual([])
+    expect(existsSync(join(herdrConfig, 'session-snapshots'))).toBe(false)
+    expect(existsSync(files.config)).toBe(true)
+  })
+
+  it("refuses to forget herdr's layout while a server answers on its socket, and forgets it past a socket nobody answers", async () => {
+    // The socket's path fits sun_path whatever TMPDIR is.
+    dir = mkdtempSync('/tmp/hf-')
+    const socket = join(dir, 'herdr', 'herdr.sock')
+    const layout = join(dir, 'herdr', 'session.json')
+    mkdirSync(dirname(socket))
+    writeFileSync(layout, '{}')
+    const server = createServer()
+    await new Promise<void>((done) => server.listen(socket, done))
+    try {
+      await expect(herdr.PrivateHerdr.forget(dir)).rejects.toThrow(/still runs/)
+      expect(existsSync(layout)).toBe(true)
+    } finally {
+      await new Promise((done) => server.close(done))
+    }
+    // A server killed leaves its socket behind.
+    spawnSync(process.execPath, ['-e', "require('node:net').createServer().listen(process.argv[1], () => process.exit(0))", socket])
+    expect(existsSync(socket)).toBe(true)
+    await herdr.PrivateHerdr.forget(dir)
+    expect(existsSync(layout)).toBe(false)
   })
 })
 
