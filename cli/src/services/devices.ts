@@ -615,9 +615,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const dialMovesTo = () => {
     let kept: Array<{ id: string; at: number }> = []
     return {
-      note(id: string): void {
-        const at = monotonic()
-        kept = [...kept.filter((sent) => at - sent.at < TAB_ECHO_MS), { id, at }].slice(-ECHO_KEPT)
+      /** Notes a move as it starts. What it gives dates that note from the move's end instead, while no echo took it: a
+       *  slow tmux or herdr shows the move only then, past TAB_ECHO_MS of its start. */
+      note(id: string): () => void {
+        const sent = { id, at: monotonic() }
+        kept = [...kept.filter((other) => sent.at - other.at < TAB_ECHO_MS), sent].slice(-ECHO_KEPT)
+        return () => { sent.at = monotonic() }
       },
       /** Whether a report of `id` made at `at` is an echo. The app runs the moves in order, so one before it will see no
        *  echo now (replaced while it waited, or its place already shown): it goes too. */
@@ -659,10 +662,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  echo. A keeper of their own, not paneTaps: herdr's event is pushed, and no poll's stop or start may drop these. */
   const herdrFocuses = dialMovesTo()
   /** herdr's adapter as the dial's verbs reach it: a tap on an agent herdr lists (below) is the dial's own move too, and a
-   *  rest's or a tap's `herdr agent focus` has herdr tell that pane took the focus a moment later. */
+   *  rest's or a tap's `herdr agent focus` has herdr tell that pane took the focus a moment later, after a slow command's
+   *  end too. */
   const herdrNoted = noting({ ...herdrAdapter,
-    focus: (pane: Pane) => { herdrFocuses.note(herdrAdapter.paneKey(pane)); return herdrAdapter.focus(pane) },
-    show: (pane: Pane, agentId: string) => { herdrFocuses.note(herdrAdapter.paneKey(pane)); return herdrAdapter.show!(pane, agentId) } })
+    focus: (pane: Pane) => { const ended = herdrFocuses.note(herdrAdapter.paneKey(pane)); return herdrAdapter.focus(pane).finally(ended) },
+    show: (pane: Pane, agentId: string) => {
+      const ended = herdrFocuses.note(herdrAdapter.paneKey(pane))
+      return herdrAdapter.show!(pane, agentId).finally(ended)
+    } })
   /** Herdr's adapter as the dial's verbs reach it: a tap or a rest on an agent hc lists (below) is the dial's own move. */
   const herdrAppNoted = noting(herdrApp)
   /** cmux's adapter as the dial's verbs reach it: a tap or a rest on an agent cmux lists (below) is the dial's own move. */
@@ -709,10 +716,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const kitty = createKittyAdapter(kittyDeps)
   const wezterm = createWeztermAdapter(apps)
   const adapters: readonly HostAdapter[] = [herdrNoted, noting(createZellijAdapter({ run: apps.run, zellij: zellijAt, platform: apps.platform })),
-    // A rest's or a tap's move of tmux's pane is the dial's own: the poll's read that sees it, a moment later, is its echo.
+    // A rest's or a tap's move of tmux's pane is the dial's own: the poll's read that sees it, a moment after it ends, is
+    // its echo.
     noting({ ...tmux,
-      focus: (pane: Pane) => { paneTaps.note(pane.id); return tmux.focus(pane) },
-      show: (pane: Pane, agentId: string) => { paneTaps.note(pane.id); return tmux.show!(pane, agentId) } }),
+      focus: (pane: Pane) => { const ended = paneTaps.note(pane.id); return tmux.focus(pane).finally(ended) },
+      show: (pane: Pane, agentId: string) => { const ended = paneTaps.note(pane.id); return tmux.show!(pane, agentId).finally(ended) } }),
     herdrAppNoted, cmuxAppNoted, ...[
     // A tap's focus is the dial's own move: the poll's read that sees it, a moment later, is its echo.
     { ...kitty, focus: (pane: Pane) => { paneTaps.note(pane.id); return kitty.focus(pane) } },
