@@ -87,9 +87,10 @@ MAIN_ARCHIVE_SOURCES = {
     ),
 }
 # apt's sources as a GitHub ubuntu-22.04-arm runner has them: every mirror on ports.ubuntu.com, none on
-# archive.ubuntu.com.
+# archive.ubuntu.com but a line commented out, which apt never reads.
 PORTS_SOURCES = {
     "sources.list": (
+        "# deb http://archive.ubuntu.com/ubuntu/ jammy main\n"
         "deb http://ports.ubuntu.com/ubuntu-ports/ jammy main\n"
         "deb http://ports.ubuntu.com/ubuntu-ports/ jammy-security main\n"
     ),
