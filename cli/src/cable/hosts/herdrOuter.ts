@@ -15,7 +15,7 @@
 import { opendir, readlink, stat } from 'node:fs/promises'
 import { HERDR_PANE } from './herdrClient.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
-import type { MadeAnswer, OuterLookup } from './outer.js'
+import type { Fresh, MadeAnswer, OuterLookup } from './outer.js'
 import { readPtyMaker, scannedApps, type ProcessName } from './scannedApp.js'
 import { clientTtyForm } from './tabs.js'
 import { heldAnswers, PID } from './tmux.js'
@@ -241,10 +241,10 @@ function said(deps: ClientDeps, place: ClientPlace | NotRead): ClientPlace {
 }
 
 /** tmux's heldAnswers, each answer said by its line: an lsof or ss that hangs to its timeout costs one timeout, not one
- *  an ask. */
-function saidAnswers(deps: ClientDeps): (key: string, place: () => Promise<ClientPlace | NotRead>) => Promise<ClientPlace> {
+ *  an ask. A fresh ask, a tap's or a rest's, reads the client again past FRESH_WITHIN_MS (eval I13). */
+function saidAnswers(deps: ClientDeps): (key: string, place: () => Promise<ClientPlace | NotRead>, opts?: Fresh) => Promise<ClientPlace> {
   const held = heldAnswers<ClientPlace>(deps.now)
-  return (key, place) => held(key, async () => said(deps, await place()))
+  return (key, place, opts) => held(key, async () => said(deps, await place()), opts)
 }
 
 /**
@@ -301,7 +301,7 @@ export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
     return Object.assign(place, { made: found.then((read) => 'server' in read) })
   }
 
-  return (hints, pid, made) => {
+  return (hints, pid, made, opts) => {
     const id = hints.HERDR_PANE_ID
     if (!id) return undefined
     if (!HERDR_PANE.test(id)) {
@@ -309,7 +309,7 @@ export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
       return undefined
     }
     if (!PID.test(String(pid))) return undefined
-    const answer = held(`${id}:${pid}`, () => placeOf(pid))
+    const answer = held(`${id}:${pid}`, () => placeOf(pid), opts)
     if (made) void answer.made.then((yes) => { if (yes) made('herdr') })
     return answer
   }
@@ -321,14 +321,16 @@ export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
  * ([rows]) and the agent's terminal's maker ([maker], the server) already, so neither is read again. Nothing at once on
  * Windows or when the pid or maker is no pid. Never rejects.
  */
-export function createHerdrNested(deps: ClientDeps): (found: { pid: number; maker: number; rows: readonly ProcessName[] }) => Promise<ClientPlace> | undefined {
+export function createHerdrNested(
+  deps: ClientDeps,
+): (found: { pid: number; maker: number; rows: readonly ProcessName[] }, opts?: Fresh) => Promise<ClientPlace> | undefined {
   const form = clientTtyForm(deps.platform)
   if (!form) return () => undefined
   // The answer depends on the server alone: two panes of one herdr cost one lookup.
   const held = saidAnswers(deps)
-  return ({ pid, maker, rows }) => {
+  return ({ pid, maker, rows }, opts) => {
     if (!PID.test(String(pid)) || !PID.test(String(maker))) return undefined
     // A step that throws is said as the app scan: a lookup never rejects.
-    return held(String(maker), () => clientsOf(deps, form, maker, rows).catch((): NotRead => 'app'))
+    return held(String(maker), () => clientsOf(deps, form, maker, rows).catch((): NotRead => 'app'), opts)
   }
 }

@@ -1132,6 +1132,43 @@ describe('the dial with no window: this computer\'s agents', () => {
       expect(openEnded.mock.calls).toEqual([['o1', { outcome: 'failed', code: 'not_opened' }]])
     })
 
+    // A later tap replaced this one during its wait (eval I13, PM 2026-11-24, answer C): the later tap's end is counted.
+    it('a tap its source answers superseded counts no open end and answers superseded', async () => {
+      const openEnded = vi.fn()
+      const { host } = await setup({ openEnded })
+      host.setRegistry(new HostRegistry([host.harness, { ...outsideApp(true), focus: async () => 'superseded' as const }]))
+      await host.listAgentSnapshot()
+      expect(await host.openAgent('o1')).toBe('superseded')
+      expect(openEnded).not.toHaveBeenCalled()
+    })
+
+    // The last tap wins whatever agent it is on: a tap still waiting in its source would bring its app forward over the
+    // one a later tap on another source's agent brought (PM, 2026-11-24).
+    it('a tap waiting in its source is superseded by a later tap on another source\'s agent', async () => {
+      const openEnded = vi.fn()
+      const { host } = await setup({ openEnded })
+      let land!: () => void
+      const landed = new Promise<void>((resolve) => { land = resolve })
+      const opened: string[] = []
+      const waits: HostSource = { ...outsideApp(true), focus: async (agent, latest) => {
+        await landed
+        if (!latest()) return 'superseded'
+        opened.push(agent.id)
+        return true
+      } }
+      const other: HostSource = { id: 'claude-app', list: () => [observedAgent({ id: 'c1' })],
+        capabilities: () => ({ status: true, voice: false, focus: true, answer: false }),
+        focus: async (agent) => { opened.push(agent.id); return true } }
+      host.setRegistry(new HostRegistry([host.harness, waits, other]))
+      await host.listAgentSnapshot()
+      const tappingA = host.openAgent('o1')
+      expect(await host.openAgent('c1')).toBeUndefined()
+      land()
+      expect(await tappingA).toBe('superseded')
+      expect(opened).toEqual(['c1'])
+      expect(openEnded.mock.calls).toEqual([['c1', { outcome: 'ok' }]])
+    })
+
     it('a tap reports its open: handed to the window', async () => {
       const openEnded = vi.fn()
       const { host } = await setup({ openEnded })
@@ -2889,7 +2926,7 @@ describe('the dial reaches the fleet through the core\'s port', () => {
     it('a tap on an agent with f runs source.focus', async () => {
       const { host, observed, heard } = setup()
       expect(await host.openAgent('o1')).toBeUndefined()
-      expect(observed.focus).toHaveBeenCalledWith(scratch)
+      expect(observed.focus).toHaveBeenCalledWith(scratch, expect.any(Function))
       expect(JSON.stringify(heard())).not.toContain('o1')
     })
 
@@ -2918,7 +2955,7 @@ describe('the dial reaches the fleet through the core\'s port', () => {
     })
 
     /** A source whose agent has a pane, which it shows as `shown` says. */
-    function withPane(shown: () => Promise<PaneSwitch> = async () => 'ok', source: Partial<HostSource> = {}) {
+    function withPane(shown: () => Promise<PaneSwitch | 'superseded'> = async () => 'ok', source: Partial<HostSource> = {}) {
       const showPane = vi.fn((_agent: HostAgent) => shown())
       const s = setup({ hasPane: vi.fn((_agent: HostAgent) => true), showPane, ...source })
       return { ...s, showPane, swiped: s.w.swiped as ReturnType<typeof vi.fn> }
@@ -2962,6 +2999,13 @@ describe('the dial reaches the fleet through the core\'s port', () => {
       expect(swiped).toHaveBeenCalledWith('superseded')
       expect(showPane).not.toHaveBeenCalled()
       expect(observed.focus).not.toHaveBeenCalled()
+    })
+
+    it('a rest its source answers superseded is told as superseded', async () => {
+      const { host, showPane, swiped } = withPane(async () => 'superseded')
+      host.swipeEnded('o1', 'rest')
+      await vi.waitFor(() => expect(swiped).toHaveBeenCalledWith('superseded'))
+      expect(showPane).toHaveBeenCalledWith(scratch)
     })
 
     it('a rest on an agent that has gone, and a showPane that rejects, tell failed', async () => {

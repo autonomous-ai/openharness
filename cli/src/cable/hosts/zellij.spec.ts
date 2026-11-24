@@ -6,6 +6,7 @@ import type { TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
 import { RECORDED_ZELLIJ } from '../../testing/recordedZellij.js'
 import type { Place } from './adapter.js'
 import { MAX_TEXT } from './orca.js'
+import { FRESH_WITHIN_MS } from './outer.js'
 import { parseProcessNames, type ProcessName, type PtyProcess } from './scannedApp.js'
 import { createZellijAdapter, createZellijOuter, zellijFinder, type ZellijDeps, type ZellijOuterDeps } from './zellij.js'
 
@@ -535,5 +536,24 @@ describe('the outer place of an agent in a Zellij pane', () => {
     expect(calls).toHaveLength(3)
     held[2]()
     expect([await later, await stuck]).toEqual([answer, answer])
+  })
+
+  // Eval I13: the person detaches, attaches from another app and types nothing; a tap or rest asks fresh and must see
+  // the new client, while a hook's turn-start, at every tool call, keeps the 5 s hold.
+  it('a fresh ask past the second reads the session\'s client again inside the 5 s hold', async () => {
+    // The client re-attached from kitty: Ghostty's place in the table is kitty's.
+    const tables = [TABLE, TABLE.map((p) => (p === GHOSTTY ? { ...p, executable: 'kitty' } : p))]
+    let reads = 0
+    const { calls, clock, outer } = lookup({ processes: async () => tables[Math.min(reads++, 1)] })
+    expect(await outer(hints, 100)).toStrictEqual({ app: 'ghostty', pid: 103 })
+    clock.t += FRESH_WITHIN_MS - 1
+    expect(await outer(hints, 100, undefined, { fresh: true })).toStrictEqual({ app: 'ghostty', pid: 103 })
+    expect([calls.length, reads]).toEqual([1, 1])
+    clock.t += 1
+    expect(await outer(hints, 100, undefined, { fresh: true })).toStrictEqual({ app: 'kitty', pid: 103 })
+    // The fresh answer is held: a plain ask within 5 s gets it, with nothing run.
+    expect(await outer(hints, 100)).toStrictEqual({ app: 'kitty', pid: 103 })
+    expect(calls).toEqual([ran(listClients.args), ran(listClients.args)])
+    expect(reads).toBe(2)
   })
 })
