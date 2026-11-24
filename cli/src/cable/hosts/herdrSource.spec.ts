@@ -40,9 +40,8 @@ const isFocus = ({ request }: FakeHerdrRequest) => method(request) === 'events.s
   && JSON.stringify((request as { params: { subscriptions: unknown } }).params.subscriptions) === JSON.stringify(FOCUS)
 /** A pane taking the focus, as herdr 0.9.5 told it (RECORDED.focused). */
 const focusedLine = (pane: string) => JSON.stringify({ data: { pane_id: pane, type: 'pane_focused', workspace_id: pane.split(':')[0] }, event: 'pane_focused' })
-/** The focus subscription's end, said: herdr dropping both may be heard on it first. */
+/** The focus subscription's refusal, said. */
 const FOCUS_LINE = /^\[herdr\] focus · /
-const notFocus = (lines: string[]) => lines.filter((line) => !FOCUS_LINE.test(line))
 const LOG_LINE = /^\[herdr\] (listed · \d+ agents|over · \d+ left out|skipped · \d+ pane-id|list · [a-z_]+|closed · [a-z_]+|focus · [a-z_]+|retry · \d+|socket · (none|stale|live))$/
 
 describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026-11-16-device-herdr.md)', () => {
@@ -325,6 +324,22 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     await listRead(2)
     expect(subscribe.mock.calls.map(([entries]) => entries)).toEqual([KINDS, FOCUS, [...KINDS, statusEntry('w1:p1')], FOCUS])
     await focusHeard(s, 2)
+  })
+
+  // Its end beside the agents' has no fixed order: only a refusal is a fault to see.
+  it('the focus subscription ending of itself says nothing', async () => {
+    server.agents = [agent('w1:p1')]
+    const s = setup()
+    s.source.start()
+    await subscribed(1)
+    server.answer('events.subscribe', 'close')
+    const first = await subscribed(1, true)
+    server.answer('events.subscribe')
+    await server.ended(first.connection)
+    s.advance(1000)
+    await listRead(2)
+    await focusHeard(s, 2)
+    expect(s.log.filter((line) => FOCUS_LINE.test(line))).toEqual([])
   })
 
   it('the focus subscription closes with the agents\': at a stop, and as an attempt fails, and opens again with the next', async () => {
@@ -935,7 +950,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
       s.advance(seconds * 1000)
     }
     await s.until(() => s.watchers.size === 1)
-    expect(notFocus(s.log.slice(from))).toEqual([
+    expect(s.log.slice(from)).toEqual([
       '[herdr] closed · ended', '[herdr] retry · 1',
       ...[2, 4, 8, 16, 32, 60].flatMap((seconds) => ['[herdr] closed · refused', `[herdr] retry · ${seconds}`]),
       '[herdr] closed · refused', '[herdr] socket · stale',
@@ -961,7 +976,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     await s.until(() => s.log.at(-1) === '[herdr] retry · 1')
     s.advance(1000)
     await listRead(2)
-    expect(notFocus(s.log)).toEqual(['[herdr] socket · none', '[herdr] socket · live', '[herdr] listed · 1 agents', '[herdr] closed · ended', '[herdr] retry · 1'])
+    expect(s.log).toEqual(['[herdr] socket · none', '[herdr] socket · live', '[herdr] listed · 1 agents', '[herdr] closed · ended', '[herdr] retry · 1'])
   })
 
   it('a herdr that answers and never lists is given up on after the last retry, and is not called stale', async () => {
@@ -1037,8 +1052,8 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     }
     const said = s.log.length
     server.drop()
-    await s.until(() => notFocus(s.log.slice(said)).length > 0)
-    expect(notFocus(s.log.slice(said))).toEqual(['[herdr] closed · ended', '[herdr] retry · 60'])
+    await s.until(() => s.log.length > said)
+    expect(s.log.slice(said)).toEqual(['[herdr] closed · ended', '[herdr] retry · 60'])
     expect(s.source.list()).toHaveLength(1)
     expect(s.watchers.size).toBe(0)
 
