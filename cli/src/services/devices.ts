@@ -73,7 +73,7 @@ import { appRoots, learnApps, readBundleId, readMadeBy, readProcessNames, readPt
 import { createScrollLines } from '../cable/hosts/scrollLines.js'
 import { pageOf } from '../cable/hosts/select.js'
 import { createTabsAdapter, readTty, type Tab } from '../cable/hosts/tabs.js'
-import { createTmuxAdapter, createTmuxNested, createTmuxOuter } from '../cable/hosts/tmux.js'
+import { createTmuxAdapter, createTmuxNested, createTmuxOuter, tmuxPaneParts } from '../cable/hosts/tmux.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { watchSocket } from '../cable/hosts/unixSocket.js'
 import { createVscodeAdapter, termPid } from '../cable/hosts/vscode.js'
@@ -680,7 +680,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // One lookup of tmux and one of zellij, each for the tap, the words and the client lookup (the outer lookups, below).
   const tmuxAt = tmuxFinder()
   const zellijAt = zellijFinder()
-  const tmux = noting(createTmuxAdapter({ run: apps.run, tmux: tmuxAt, processes: readProcessNames, log, front: () => cableHost.latestFront(), platform: apps.platform }))
+  // Kept as built, as kitty and WezTerm are: the focus poll reads its clients (below).
+  const tmux = createTmuxAdapter({ run: apps.run, tmux: tmuxAt, processes: readProcessNames, log, front: () => cableHost.latestFront(), platform: apps.platform })
   // One lookup of kitty, for its windows and for the tab holding a multiplexer's client.
   const kittyDeps = { run: apps.run, kitty: kittyFinder(), platform: apps.platform, log, uid: process.getuid?.() ?? -1, socketOwner,
     now: monotonic, socketId }
@@ -689,7 +690,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const kitty = createKittyAdapter(kittyDeps)
   const wezterm = createWeztermAdapter(apps)
   const adapters: readonly HostAdapter[] = [herdrNoted, noting(createZellijAdapter({ run: apps.run, zellij: zellijAt, platform: apps.platform })),
-    tmux, herdrAppNoted, cmuxAppNoted, ...[
+    noting(tmux), herdrAppNoted, cmuxAppNoted, ...[
     // A tap's focus is the dial's own move: the poll's read that sees it, a moment later, is its echo.
     { ...kitty, focus: (pane: Pane) => { paneTaps.note(pane.id); return kitty.focus(pane) } },
     { ...wezterm, focus: (pane: Pane) => { paneTaps.note(pane.id); return wezterm.focus(pane) } },
@@ -2155,7 +2156,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     log('[device] orca watch · ended')
   }
 
-  // ── the pane focused in WezTerm and kitty ──────────────────────────────────────────────────────────
+  // ── the pane focused in WezTerm, kitty and tmux ────────────────────────────────────────────────────
   //
   // The dials turn to the agent in the WezTerm pane or kitty window the person focuses, as in Orca: a prompt they typed
   // there was the only sign of it (docs/plans/2026-11-23-dial-wezterm-kitty-focus-follow-design.md). Neither app offers a
@@ -2164,33 +2165,80 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // of its own there, and zero calls otherwise. A poll that stopped itself starts again only at a settle: a WezTerm whose
   // GUI is gone is asked no more while it stays in front. Each line is an outcome or a count, never a pane, a socket or
   // the agent.
-  /** A read's answer: per place with a focus of its own (`wezterm`, each kitty's socket), the agent's pane focused there
-   *  or null; and the dial's moves and the time as the read started. */
-  type PaneAnswer = { focused: ReadonlyMap<string, string | null>; moves: number; at: number }
-  /** The poll, its app, whether its first answer is still to come, and its last answer. */
-  type PaneFocus = { app: 'wezterm' | 'kitty'; poll: FocusPoll; first: boolean; last?: ReadonlyMap<string, string | null> }
+  //
+  // tmux is one more place of that poll, in whichever app holds the client showing a live agent's session
+  // (docs/plans/2026-11-24-dial-tmux-pane-focus-follow-design.md, "tmux: one more place in the pane focus poll"): its own
+  // focus event needs a hook or a control client on the person's server, which Harness never adds, so a read lists its
+  // clients. The poll is the settled front app's, with the adapters whose places it reads there, and starts again when
+  // either changes. A read asks each adapter at once, and one whose read failed keeps its places' last answer: a tmux that
+  // fails, or hangs to its timeout, costs WezTerm's and kitty's follow nothing but that wait.
+  /** A pane focused in a place: the adapter whose pane it is, and the agent's pane id there (tmux's in full, `%3:100:iterm`). */
+  type FocusedPane = { adapter: string; id: string }
+  /** A read's answer: per place with a focus of its own (`wezterm`, each kitty's socket, `tmux`), the agent's pane focused
+   *  there or null; and the dial's moves and the time as the read started. */
+  type PaneAnswer = { focused: ReadonlyMap<string, FocusedPane | null>; moves: number; at: number }
+  /** The poll, the settled front app it runs for, the adapters whose places it reads there, whether its first answer is
+   *  still to come, and its last answer. */
+  type PaneFocus = { app: string; adapters: readonly string[]; poll: FocusPoll; first: boolean; last?: ReadonlyMap<string, FocusedPane | null> }
   let paneFocus: PaneFocus | undefined
   /** Set as a poll stops itself; cleared at the next settle of any app: only a settle starts it again (spec). */
   let paneFocusFailing = false
-  /** One read, of the panes the live agents have of their own in that app as it starts: an agent's own pane alone, as a
-   *  held one shows whatever is in front of it. WezTerm's one call is under way at a stop already; [signal] ends kitty's
-   *  read of several there. */
-  const readFocus = async (source: ObservedSource, app: PaneFocus['app'], signal: AbortSignal): Promise<PaneAnswer | undefined> => {
-    const moves = dialMoves
-    const at = monotonic()
+  /** The live agents on tmux's page whose tmux pane, their own or the one the scan placed them at (shownAt: paneOf reads
+   *  their own alone), names [app]: the app holding the client that shows its session. One in tmux inside Orca is on
+   *  Orca's page, whose own focus covers it. */
+  const tmuxPanes = (source: ObservedSource, app: string): Array<{ agent: HostAgent; full: string; pane: string }> =>
+    source.list().flatMap((agent) => {
+      const full = source.shownAt(agent.id, tmux.id)
+      if (full === undefined || pageOf(agent) !== 'tmux') return []
+      const parts = tmuxPaneParts({ adapter: tmux.id, id: full })
+      return parts?.app === app ? [{ agent, full, pane: parts.id }] : []
+    })
+  /** The adapters whose places the poll reads with [app] settled in front: WezTerm or kitty with an agent's own pane
+   *  there, and tmux with a tmuxPanes entry. */
+  const focusAdapters = (source: ObservedSource, app: string | undefined): string[] => {
+    if (app === undefined) return []
+    const own = (app === 'wezterm' || app === 'kitty') && source.list().some(({ id }) => source.paneOf(id, app) !== undefined)
+    return [...own ? [app] : [], ...tmuxPanes(source, app).length ? [tmux.id] : []]
+  }
+  /** tmux's place: undefined when its clients' listing failed, else null. The pane its front client shows is not
+   *  followed yet (docs/plans/2026-11-24-dial-tmux-pane-focus-follow-plan.md, Task 6). */
+  const tmuxFocused = async (): Promise<FocusedPane | null | undefined> => (await tmux.clientPanes()) === undefined ? undefined : null
+  /** One adapter's places as the read starts; undefined when its read failed. WezTerm and kitty are asked of the panes
+   *  the live agents have of their own there: an agent's own pane alone, as a held one shows whatever is in front of it.
+   *  WezTerm's one call is under way at a stop already; [signal] ends kitty's read of several there. */
+  const readPlaces = async (source: ObservedSource, adapter: string, last: PaneFocus['last'], signal: AbortSignal):
+  Promise<ReadonlyMap<string, FocusedPane | null> | undefined> => {
+    if (adapter === tmux.id) {
+      const pane = await tmuxFocused()
+      return pane === undefined ? undefined : new Map([[tmux.id, pane]])
+    }
     // Once each: two live agents can share a pane, as an ended session not yet seen as ended beside its successor.
-    const panes = [...new Set(source.list().flatMap(({ id }) => source.paneOf(id, app) ?? []))]
-    if (app === 'wezterm') {
+    const panes = [...new Set(source.list().flatMap(({ id }) => source.paneOf(id, adapter) ?? []))]
+    if (adapter === wezterm.id) {
       const id = await wezterm.focusedPane()
       if (id === undefined) return undefined
-      return { focused: new Map([['wezterm', id !== null && panes.includes(id) ? id : null]]), moves, at }
+      return new Map([[wezterm.id, id !== null && panes.includes(id) ? { adapter, id } : null]])
     }
-    // The windows found focused last asked first, as focus mostly stays where it was: one call a kitty then. None at the
-    // poll's first read, which runs within startFocusPoll, before `paneFocus` holds its poll.
-    const lately = new Set(paneFocus?.last?.values())
+    // The windows found focused last asked first, as focus mostly stays where it was: one call a kitty then.
+    const lately = new Set([...(last?.values() ?? [])].map((pane) => pane?.id))
     const ordered = [...panes.filter((id) => lately.has(id)), ...panes.filter((id) => !lately.has(id))]
     const focused = await kitty.focusedWindows(ordered.map((id) => ({ adapter: kitty.id, id })), signal)
-    return focused === undefined ? undefined : { focused, moves, at }
+    return focused && new Map<string, FocusedPane | null>([...focused].map(([place, id]) => [place, id === null ? null : { adapter, id }]))
+  }
+  /** One read, every adapter's places asked at once. It fails only when every one failed; one that failed keeps its
+   *  places' panes of the last answer, so they change nothing, and its places with none are left out. */
+  const readFocus = async (source: ObservedSource, adapters: readonly string[], signal: AbortSignal): Promise<PaneAnswer | undefined> => {
+    const moves = dialMoves
+    const at = monotonic()
+    // None at the poll's first read, which runs within startFocusPoll, before `paneFocus` holds its poll.
+    const last = paneFocus?.last
+    const read = await Promise.all(adapters.map((adapter) => readPlaces(source, adapter, last, signal)))
+    if (read.every((places) => places === undefined)) return undefined
+    const focused = new Map<string, FocusedPane | null>()
+    adapters.forEach((adapter, n) => {
+      for (const [place, pane] of read[n] ?? [...(last ?? [])].filter(([, kept]) => kept?.adapter === adapter)) focused.set(place, pane)
+    })
+    return { focused, moves, at }
   }
   /** An answer of the poll turns the dials to the agent in the one focused pane whose place changed since the last
    *  answer; for the poll's first, the one focused as its app settled, or as an agent or a dial came with it settled.
@@ -2203,11 +2251,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // None is kept before the first, so its every focused agent's pane is one. An unchanged answer moves nothing: a dial
     // turned by hand meanwhile stays where it was turned. A failed read is no answer: the next is compared with the last
     // good one.
-    const changed = [...answer.focused].flatMap(([place, id]) => id !== null && last?.get(place) !== id ? [id] : [])
+    const changed = [...answer.focused].flatMap(([place, pane]) => pane !== null && last?.get(place)?.id !== pane.id ? [pane] : [])
     focus.first = false
     focus.last = answer.focused
     if (changed.length !== 1) return
-    const [id] = changed
+    const [{ adapter, id }] = changed
     // The app the person went to settles FRONT_SETTLE_MS after the switch, and the poll of the one they left runs till then.
     if (cableHost.latestFront() !== focus.app) { log('[device] pane · skipped · not in front'); return }
     // The first: a turn or a tap as the app came forward put the dial where the person wants it, and the focus as it
@@ -2216,30 +2264,30 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (first ? dialMovedAt !== undefined && monotonic() - dialMovedAt < ATTACH_ECHO_MS
       : answer.moves !== dialMoves || paneTaps.echo(id, answer.at)) { log('[device] pane · skipped · echo'); return }
     // Gone while the read ran.
-    const agent = source.byPane(focus.app, id)
+    const agent = source.byPane(adapter, id)
     if (!agent) { log('[device] pane · skipped · unknown agent'); return }
     return cable.followLocal(agent.id, 'pane')
   }
-  /** The poll's app left the front, its last agent went, or the dial went: the poll and the dial's taps its answers are
-   *  checked against go with it. */
+  /** The poll's app left the front, its last agent went, its places changed, or the dial went: the poll and the dial's
+   *  taps its answers are checked against go with it. */
   const dropPaneFocus = (): void => {
     paneTaps.clear()
     paneFocus?.poll.stop()
     paneFocus = undefined
   }
-  /** Starts the poll WezTerm or kitty settled in front wants, with a dial attached and a live agent with a pane of its
-   *  own there, and stops one no longer wanted. */
+  /** Starts the poll the app settled in front wants, with a dial attached and a place to read there (focusAdapters),
+   *  stops one no longer wanted, and starts one again whose places changed. */
   const checkPaneFocus = (): void => {
     if (!observed) return
     const app = cableHost.settledApp()
-    const wanted = dialOn && !paneFocusFailing && (app === 'wezterm' || app === 'kitty')
-      && observed.list().some(({ id }) => observed.paneOf(id, app) !== undefined) ? app : undefined
-    if (paneFocus?.app === wanted) return
+    const adapters = dialOn && !paneFocusFailing ? focusAdapters(observed, app) : []
+    const wanted = adapters.length ? app : undefined
+    if (paneFocus?.app === wanted && (paneFocus?.adapters ?? []).join() === adapters.join()) return
     dropPaneFocus()
     if (wanted === undefined) return
     // Its answers and its own stop run in a part, which logs a throw: the poll swallows one unsaid (focusPoll.ts).
-    const polling: PaneFocus = { app: wanted, first: true, poll: startFocusPoll<PaneAnswer>({
-      read: (signal) => readFocus(observed, wanted, signal),
+    const polling: PaneFocus = { app: wanted, adapters, first: true, poll: startFocusPoll<PaneAnswer>({
+      read: (signal) => readFocus(observed, adapters, signal),
       answered: (answer) => part.call('pane', () => paneAnswered(observed, polling, answer)),
       failing: () => part.call('pane', () => {
         paneFocus = undefined
