@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { firstOuter, type OuterLookup } from './outer.js'
+import type { Nest } from './types.js'
 
 type Answer = ReturnType<OuterLookup>
 
@@ -86,5 +87,26 @@ describe('the first lookup that finds an app', () => {
     expect(await of({ pid: 4400, nest: 'herdr' }, {})).toEqual({ pid: 4400, nest: 'herdr' })
     // Zellij's answer carries none.
     expect(await of({}, { app: 'ghostty' })).toEqual({ app: 'ghostty' })
+  })
+
+  // A herdr pane in iTerm2 stayed on iTerm2's page while herdr's client steps ran (Mac eval IH4, 2026-11-24).
+  it('the multiplexer is told as its lookup reads it made the agent\'s terminal: the first\'s, else the second\'s', async () => {
+    type Place = NonNullable<Awaited<Answer>>
+    /** A lookup that tells [nest] at once, then answers [place]. */
+    const telling = (nest: Nest | undefined, place: Place): OuterLookup => (_hints, _pid, made) => {
+      if (nest) made?.(nest)
+      return Promise.resolve(place)
+    }
+    const told = async (first: OuterLookup, second: OuterLookup) => {
+      const made = vi.fn()
+      await firstOuter(first, second)(hints, 42, made)
+      return made.mock.calls
+    }
+    // herdr inside the person's tmux, its client in no app: herdr's alone, the second is not told.
+    expect(await told(telling('herdr', { nest: 'herdr' }), telling('tmux', { app: 'iterm', nest: 'tmux' }))).toEqual([['herdr']])
+    // tmux inside a herdr pane: herdr's server made no terminal of the caller's, tmux's did.
+    expect(await told(telling(undefined, {}), telling('tmux', { nest: 'tmux' }))).toEqual([['tmux']])
+    // The first not nested.
+    expect(await told(() => undefined, telling('tmux', { nest: 'tmux' }))).toEqual([['tmux']])
   })
 })

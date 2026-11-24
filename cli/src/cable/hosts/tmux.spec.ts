@@ -459,7 +459,41 @@ describe('the outer place of an agent in the person\'s tmux', () => {
       ['the table not read', lookup({ processes: async () => { throw new Error('process table not read') } }, [], ONE)],
       ['the caller\'s terminal not read', lookup({ tty: async () => { throw new Error('tty not read') } }, [], ONE)],
     ]
-    for (const [name, { outer }] of cases) expect(await outer(NESTED, 100), name).toStrictEqual({})
+    for (const [name, { outer }] of cases) {
+      // An inherited pane id never puts the agent on tmux's page.
+      const made = vi.fn()
+      expect(await outer(NESTED, 100, made), name).toStrictEqual({})
+      expect(made, name).not.toHaveBeenCalled()
+    }
+  })
+
+  // A herdr pane in iTerm2 stayed on iTerm2's page while herdr's client steps ran (Mac eval IH4, 2026-11-24): tmux's
+  // clients' list and app walk are such steps too, and the pane is tmux's from the maker's read on.
+  it('tmux\'s page is told once tmux made the caller\'s terminal, before its clients are listed, to each ask that shares the answer', async () => {
+    const held: Array<() => void> = []
+    const { calls, outer } = lookup({
+      run: async (file, args, timeoutMs) => {
+        calls.push({ file, args, timeoutMs })
+        if (args[0] === 'list-clients') await new Promise<void>((settle) => held.push(settle))
+        return { code: 0, stdout: args[0] === 'display-message' ? says(90) : places(1794700050, 4300, '/dev/ttys004') }
+      },
+    })
+    const answer = { app: 'terminal-app', tty: '/dev/ttys004', pid: 4300, nest: 'tmux' }
+    const made = vi.fn()
+    const again = vi.fn()
+    let settled = false
+    const first = outer(NESTED, 100, made)!
+    void first.then(() => { settled = true })
+    await vi.waitFor(() => expect(held.length).toBe(1))
+    await vi.waitFor(() => expect(made.mock.calls).toEqual([['tmux']]))
+    // Asked again while the clients are listed: the same answer, and told too.
+    const shared = outer(NESTED, 100, again)
+    await vi.waitFor(() => expect(again.mock.calls).toEqual([['tmux']]))
+    expect(settled).toBe(false)
+    held[0]()
+    expect([await first, await shared]).toEqual([answer, answer])
+    expect(made.mock.calls).toEqual([['tmux']])
+    expect(calls).toEqual([asked, clientsAsked])
   })
 
   it('tmux inside a herdr pane: hints naming both panes, tmux the maker: the answer says tmux', async () => {

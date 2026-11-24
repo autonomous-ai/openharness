@@ -50,6 +50,8 @@ const IN_TERMINAL = { app: 'terminal-app', tty: '/dev/ttys004', pid: 4300 }
 const herdrs = (place: object = {}) => ({ ...place, nest: 'herdr' })
 const found = ['[device] herdr client · found']
 const none = ['[device] herdr client · none']
+/** The lookup's line when no herdr server made the caller's terminal: no client was looked for. */
+const outside = ['[device] herdr client · outside']
 /** The lookup's line when a step could not be read, naming that step. */
 const notRead = (why: 'processes' | 'sockets' | 'ttys' | 'app') => [`[device] herdr client · not read · ${why}`]
 
@@ -221,7 +223,40 @@ describe('the outer place of an agent in the person\'s herdr', () => {
       ['a terminal started from a herdr pane', lookup({ processes: fromPane }, [], ONE), 302],
       ['a table not read', lookup({ processes: async () => { throw new Error('process table not read') } }, [], ONE), 100],
     ]
-    for (const [name, { outer }, pid] of cases) expect(await outer(PANE, pid), name).toStrictEqual({})
+    for (const [name, { outer }, pid] of cases) {
+      // An inherited pane id never puts the agent on herdr's page.
+      const made = vi.fn()
+      expect(await outer(PANE, pid, made), name).toStrictEqual({})
+      expect(made, name).not.toHaveBeenCalled()
+    }
+  })
+
+  // A herdr pane in iTerm2 stayed on iTerm2's page while the clients' steps ran, each up to 10 s (Mac eval IH4,
+  // 2026-11-24): the pane is herdr's from the maker's read on.
+  it('herdr\'s page is told once its server made the caller\'s terminal, before the clients\' steps end, to each ask that shares the answer', async () => {
+    const held: Array<() => void> = []
+    const { calls, outer } = lookup({
+      run: async (file, args, timeoutMs) => {
+        calls.push({ file, args, timeoutMs })
+        if (file === LSOF) await new Promise<void>((settle) => held.push(settle))
+        return { code: 0, stdout: file === LSOF ? ONE.lsof! : ONE.ps! }
+      },
+    })
+    const made = vi.fn()
+    const again = vi.fn()
+    let settled = false
+    const first = outer(PANE, 100, made)!
+    void first.then(() => { settled = true })
+    await vi.waitFor(() => expect(held.length).toBe(1))
+    await vi.waitFor(() => expect(made.mock.calls).toEqual([['herdr']]))
+    // Asked again while lsof runs: the same answer, and told too.
+    const shared = outer(PANE, 100, again)
+    await vi.waitFor(() => expect(again.mock.calls).toEqual([['herdr']]))
+    expect(settled).toBe(false)
+    held[0]()
+    expect([await first, await shared]).toEqual([herdrs(IN_TERMINAL), herdrs(IN_TERMINAL)])
+    expect(made.mock.calls).toEqual([['herdr']])
+    expect(calls.filter((call) => call.file === LSOF)).toEqual([lsofAsked('80,4300')])
   })
 
   // On Linux every program started from a pane is its child: the herdr server is among a WezTerm's parents, and the
@@ -235,7 +270,7 @@ describe('the outer place of an agent in the person\'s herdr', () => {
     expect(await outer(PANE, 302)).toEqual({})
     expect(ttys).toEqual([302, 301, 300])
     expect(calls).toEqual([])
-    expect(logs).toEqual(none)
+    expect(logs).toEqual(outside)
   })
 
   it('a terminal that cannot be read: not read · processes', async () => {
@@ -254,7 +289,7 @@ describe('the outer place of an agent in the person\'s herdr', () => {
     for (const [name, { calls, logs, outer }, pid] of cases) {
       expect(await outer(PANE, pid), name).toEqual({})
       expect(calls, name).toEqual([])
-      expect(logs, name).toEqual(none)
+      expect(logs, name).toEqual(outside)
     }
   })
 
@@ -538,11 +573,15 @@ describe('the outer place of an agent in the person\'s herdr', () => {
 
   it('its lines name no pane, pid, tty, path, bundle or app', async () => {
     const lines: string[] = []
-    for (const { logs, outer } of [lookup({}, [], ONE), lookup({}, [], { lsof: sockets({ 80: SERVER }), ps: '80 ??\n' }), lookup({}, [], { ...ONE, ps: '' })]) {
-      await outer(PANE, 100)
+    const asks: Array<[ReturnType<typeof lookup>, number]> = [
+      [lookup({}, [], ONE), 100], [lookup({}, [], { lsof: sockets({ 80: SERVER }), ps: '80 ??\n' }), 100],
+      [lookup({}, [], { ...ONE, ps: '' }), 100], [lookup({}, [], ONE), 4299],
+    ]
+    for (const [{ logs, outer }, pid] of asks) {
+      await outer(PANE, pid)
       lines.push(...logs)
     }
-    expect(lines).toEqual([...found, ...none, ...notRead('ttys')])
+    expect(lines).toEqual([...found, ...none, ...notRead('ttys'), ...outside])
     for (const line of lines) {
       for (const id of ['w1:p2', '80', '4300', '100', 'ttys004', CONFIG, 'herdr-client.sock', 'com.apple.Terminal', 'Terminal', 'terminal-app']) {
         expect(line).not.toContain(id)

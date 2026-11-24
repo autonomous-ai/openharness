@@ -18,7 +18,7 @@ import type { ProcessName } from './scannedApp.js'
 import { pageOf } from './select.js'
 import { createTabsAdapter, type TabApp } from './tabs.js'
 import { createTmuxAdapter } from './tmux.js'
-import type { HostAgent, PaneSwitch, TypeResult } from './types.js'
+import type { HostAgent, Nest, PaneSwitch, TypeResult } from './types.js'
 import { createVscodeAdapter } from './vscode.js'
 import { createWeztermAdapter } from './wezterm.js'
 import { createZellijAdapter } from './zellij.js'
@@ -4694,12 +4694,16 @@ describe('ObservedSource outer place', () => {
   const selected = ['tmux', ['select-window', '-t', '%3', ';', 'select-pane', '-t', '%3'], expect.any(Number)]
 
   /** A source whose outer places the test answers by hand, in the order they were asked, as tmux's and herdr's lookups
-   *  answer an event in their pane; an event in neither is not nested. A tty read answers at once. */
+   *  answer an event in their pane, and whose multiplexer each ask's lookup tells by hand once its maker read confirms
+   *  it; an event in neither is not nested. A tty read answers at once. */
   function nested(over: Partial<Fakes> = {}, adapt = (adapters: readonly HostAdapter[]) => adapters, deps: Partial<ObservedDeps> = {}) {
-    const asks: Array<{ answer(place: OuterAnswer): Promise<unknown> }> = []
-    const outer = vi.fn((hints: Readonly<Record<string, string>>, _pid: number) => (hints.TMUX_PANE || hints.HERDR_PANE_ID
+    const asks: Array<{ answer(place: OuterAnswer): Promise<unknown>; made(nest: Nest): Promise<unknown> }> = []
+    const outer = vi.fn((hints: Readonly<Record<string, string>>, _pid: number, made?: (nest: Nest) => void) => (hints.TMUX_PANE || hints.HERDR_PANE_ID
       ? new Promise<OuterAnswer>((resolve) => {
-        asks.push({ answer: (place) => { resolve(place); return vi.advanceTimersByTimeAsync(0) } })
+        asks.push({
+          answer: (place) => { resolve(place); return vi.advanceTimersByTimeAsync(0) },
+          made: (nest) => { made?.(nest); return vi.advanceTimersByTimeAsync(0) },
+        })
       })
       : undefined))
     const tty = vi.fn(async (_pid: number): Promise<string | undefined> => '/dev/ttys031')
@@ -4712,7 +4716,7 @@ describe('ObservedSource outer place', () => {
   it('a nested event lands on its outer app, with its client\'s tty and that app\'s bundle', async () => {
     const t = nested()
     t.src.ingest(t.ev('session-start', inTmux()))
-    expect(t.outer.mock.calls).toEqual([[inTmux().hostHints, 100]])
+    expect(t.outer.mock.calls).toEqual([[inTmux().hostHints, 100, expect.any(Function)]])
     expect(t.agent().app).toBe('tmux')
     const told = t.changes.mock.calls.length
     await t.asks[0].answer(CLIENT)
@@ -4839,13 +4843,13 @@ describe('ObservedSource outer place', () => {
     t.src.ingest(t.ev('needs-input', { ...inTmux(), callerPid: 101 }))
     expect(t.agent().app).toBe('tmux')
     expect(t.src.byTab('terminal-app', '/dev/ttys004')).toBeUndefined()
-    expect(t.outer.mock.calls[1]).toEqual([inTmux().hostHints, 101])
+    expect(t.outer.mock.calls[1]).toEqual([inTmux().hostHints, 101, expect.any(Function)])
     await t.asks[1].answer(CLIENT)
     expect(t.agent().app).toBe('terminal-app')
     t.src.ingest(t.ev('needs-input', { ...inTmux({ TMUX_PANE: '%4' }), callerPid: 101 }))
     expect(t.agent().app).toBe('tmux')
     expect(t.src.paneOf(t.agent().id, 'tabs')).toBeUndefined()
-    expect(t.outer.mock.calls[2]).toEqual([inTmux({ TMUX_PANE: '%4' }).hostHints, 101])
+    expect(t.outer.mock.calls[2]).toEqual([inTmux({ TMUX_PANE: '%4' }).hostHints, 101, expect.any(Function)])
     expect(t.tty).not.toHaveBeenCalled()
   })
 
@@ -5086,6 +5090,58 @@ describe('ObservedSource outer place', () => {
     expect(t.agent()).toMatchObject({ app: 'vscode', host: 'tmux' })
     expect(t.agent()).not.toHaveProperty('nest')
     expect(pageOf(t.agent())).toBe('vscode')
+  })
+
+  // Mac eval IH4 (2026-11-24): a hooked agent in a herdr pane inside iTerm2 sat on iTerm2's page past a 10 s wait while
+  // herdr's client steps ran (lsof, ps, the app walk, up to 10 s each). Its lookup tells the multiplexer once its maker
+  // read confirms it, and the client's place lands when its steps end.
+  it('a hooked agent is on its multiplexer\'s page once its lookup reads that the multiplexer made its terminal, before the client\'s steps end', async () => {
+    const cases = [
+      [{ HERDR_PANE_ID: 'w1:p2', __CFBundleIdentifier: 'com.googlecode.iterm2' }, 'herdr'],
+      [{ TMUX_PANE: '%3', TERM_PROGRAM: 'tmux', __CFBundleIdentifier: 'com.googlecode.iterm2' }, 'tmux'],
+    ] as const
+    for (const [hostHints, nest] of cases) {
+      const t = nested()
+      t.src.ingest(t.ev('session-start', { hostHints }))
+      // Pending while its lookup runs: iTerm2's page, in front, does not take it.
+      expect(t.agent(), nest).toMatchObject({ app: 'iterm', appPending: true })
+      expect(t.agent(), nest).not.toHaveProperty('nest')
+      const told = t.changes.mock.calls.length
+      await t.asks[0].made(nest)
+      expect(t.agent(), nest).toMatchObject({ app: 'iterm', host: nest, nest })
+      expect(t.agent(), nest).not.toHaveProperty('appPending')
+      expect(pageOf(t.agent()), nest).toBe(nest)
+      expect(t.changes, nest).toHaveBeenCalledTimes(told + 1)
+      // The client's place lands when its steps end, on the same page.
+      await t.asks[0].answer({ app: 'iterm', tty: '/dev/ttys005', pid: 4400, nest })
+      expect(t.agent(), nest).toMatchObject({ app: 'iterm', host: nest, nest })
+      expect(t.src.paneOf(t.agent().id, 'tabs'), nest).toBe('iterm:/dev/ttys005')
+      expect(pageOf(t.agent()), nest).toBe(nest)
+    }
+  })
+
+  it('a told multiplexer lands for the latest ask alone, while the session lives, and once', async () => {
+    const inHerdr = { hostHints: { HERDR_PANE_ID: 'w1:p2' } }
+    // It moved to another caller while its first ask ran: that ask's word lands nothing, the latest's does.
+    const t = nested()
+    t.src.ingest(t.ev('session-start', inHerdr))
+    t.src.ingest(t.ev('needs-input', { ...inHerdr, callerPid: 101 }))
+    await t.asks[0].made('herdr')
+    expect(t.agent()).not.toHaveProperty('nest')
+    expect(t.agent()).toMatchObject({ appPending: true })
+    await t.asks[1].made('herdr')
+    expect(t.agent()).toMatchObject({ host: 'herdr', nest: 'herdr' })
+    // Told again with nothing new: nothing is told.
+    const told = t.changes.mock.calls.length
+    await t.asks[1].made('herdr')
+    expect(t.changes).toHaveBeenCalledTimes(told)
+
+    // It ended while it was asked.
+    const ended = nested()
+    ended.src.ingest(ended.ev('session-start', inHerdr))
+    ended.src.ingest(ended.ev('session-end', inHerdr))
+    await ended.asks[0].made('herdr')
+    expect(ended.agent()).not.toHaveProperty('nest')
   })
 
   it('another caller or pane drops nest at once; an earlier ask\'s late answer sets nothing', async () => {
@@ -5442,7 +5498,7 @@ describe('ObservedSource and a nested session the scan found', () => {
       await look
       expect(t.agent('a'), made.host).toMatchObject({ nest: made.host, host: made.host })
       t.src.ingest(t.ev('turn-start', { sessionId: 'a', hostHints }))
-      expect(outer.mock.calls, made.host).toEqual([[hostHints, 100]])
+      expect(outer.mock.calls, made.host).toEqual([[hostHints, 100, expect.any(Function)]])
       expect(t.agent('a'), made.host).toMatchObject({ nest: made.host, host: made.host })
       expect(pageOf(t.agent('a')), made.host).toBe(made.host)
     }
@@ -5538,7 +5594,7 @@ describe('ObservedSource and a nested session the scan found', () => {
     it('the first hook after a scan\'s place keeps it on its app\'s page and tab until the hook\'s own answer lands, and that answer wins', async () => {
       const t = await placed()
       t.src.ingest(t.ev('session-start', { sessionId: 'a', ...inTmux() }))
-      expect(t.outer.mock.calls).toEqual([[inTmux().hostHints, 100]])
+      expect(t.outer.mock.calls).toEqual([[inTmux().hostHints, 100, expect.any(Function)]])
       // While it is asked, the row stays where the scan put it: the dial does not flicker to tmux's page.
       expect(t.a().app).toBe('iterm')
       expect(t.src.paneOf(t.id, 'tabs')).toBe('iterm:/dev/ttys004')
@@ -5559,7 +5615,7 @@ describe('ObservedSource and a nested session the scan found', () => {
       const t = await placed()
       // Resumed in another tmux pane, its old SessionEnd missed: the scan's place was the old process's.
       t.src.ingest(t.ev('session-start', { sessionId: 'a', ...inTmux('%5'), callerPid: 101 }))
-      expect(t.outer.mock.calls).toEqual([[inTmux('%5').hostHints, 101]])
+      expect(t.outer.mock.calls).toEqual([[inTmux('%5').hostHints, 101, expect.any(Function)]])
       expect(t.a().app).toBe('tmux')
       expect(t.src.paneOf(t.id, 'tabs')).toBeUndefined()
       expect(t.src.byTab('iterm', '/dev/ttys004')).toBeUndefined()
@@ -5601,7 +5657,7 @@ describe('ObservedSource and a nested session the scan found', () => {
       expect(t.src.shownAt(t.id, 'tmux')).toBe('%3:100:iterm')
       // Resumed in a herdr pane: still nested, its lookup runs, and tmux's pane is no longer where it is.
       t.src.ingest(t.ev('session-start', { sessionId: 'a', hostHints: { HERDR_PANE_ID: 'w1:p2' }, callerPid: 101 }))
-      expect(t.outer.mock.calls).toEqual([[{ HERDR_PANE_ID: 'w1:p2' }, 101]])
+      expect(t.outer.mock.calls).toEqual([[{ HERDR_PANE_ID: 'w1:p2' }, 101, expect.any(Function)]])
       expect(t.src.shownAt(t.id, 'tmux')).toBeUndefined()
       await t.hookAsks[0](ITERM)
       expect(t.src.shownAt(t.id, 'tmux')).toBeUndefined()
