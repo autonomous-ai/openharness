@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { HELD_OUT, MAIN, titleOf } from './catalog.js'
 import { evaluate } from './checks.js'
 import { runScenario } from './runner.js'
-import { agentIdOf, hookHandle, orcaTerminalHandle, STEP_KINDS, THRESHOLDS, type Check, type CheckKind, type EvalDriver, type Scenario, type Seen,
+import { agentIdOf, hookHandle, orcaTerminalHandle, pageId, sessionPage, STEP_KINDS, THRESHOLDS, type Check, type CheckKind, type EvalDriver, type Scenario, type Seen,
   type SessionKey, type Step, type StepKind } from './types.js'
 
 const ALL = [...MAIN, ...HELD_OUT]
@@ -59,9 +59,15 @@ describe('the catalog', () => {
     expect(agents.map((d) => [d.key, d.place, d.herdrSession])).toEqual([['c', 'herdr', false]])
   })
 
-  it("every iTerm2 ring, a check or a probe, counts the other pages too: none on tmux's, herdr's or Other's", () => {
+  it('every iTerm2 ring, a check or a probe, counts the other pages exactly: its apart is every agent of the scenario on '
+    + 'another page, in start order', () => {
+    // A ring that mixed pages becomes one ring per page, each counting the rest exactly (the plan's Global Constraints).
     for (const s of ALL.filter((s) => s.app === 'iterm')) {
-      for (const c of [...s.checks, ...s.probes]) if (c.kind === 'ring') expect(c.apart, `${s.id} ${c.id}`).toEqual([])
+      const order = [...new Set(s.steps.flatMap((step) => (step.kind === 'hook' && step.event === 'start' ? [step.session] : [])))]
+      const pageOf = (key: SessionKey): string => sessionPage(s.sessions.find((d) => d.key === key)!)
+      for (const c of [...s.checks, ...s.probes]) {
+        if (c.kind === 'ring') expect(c.apart, `${s.id} ${c.id}`).toEqual(order.filter((key) => pageOf(key) !== pageId(c.page)))
+      }
     }
   })
 
@@ -73,7 +79,8 @@ describe('the catalog', () => {
     }
   })
 
-  it("IH4's ring fails with its herdr row also on herdr's page: an apps frame of iterm 1, herdr 1", () => {
+  it("IH4's ring on herdr's page counts no other page: an apps frame shown herdr with herdr 1 passes its apart, and iterm 1 "
+    + 'beside it fails', () => {
     const ih4 = byId('IH4')
     const ring = ih4.checks.find((c) => c.id === 'ring')!
     const c = ih4.sessions.find((d) => d.key === 'c')!
@@ -82,11 +89,11 @@ describe('the catalog', () => {
       return { at, index, kind: ih4.steps[index]!.kind, label }
     }
     const apart = (apps: Array<{ id: string; count: number }>): number | undefined => evaluate(ring, ih4, {
-      frames: [{ at: 2000, message: { t: 'apps', shown: 'iterm', apps } }, { at: 2000, message: { t: 'agents.begin' } },
+      frames: [{ at: 2000, message: { t: 'apps', shown: 'herdr', apps } }, { at: 2000, message: { t: 'agents.begin' } },
         { at: 2000, message: { t: 'agent', id: agentIdOf(c), name: c.title } }, { at: 2000, message: { t: 'agents.end', total: 1, tab: '' } }],
       faces: [], commands: [], deliveries: [], steps: [step(1000, 'restart'), step(9000, 'tap')],
     }, 'a', 'darwin').find((r) => r.check === 'ring.apart')?.score
-    expect(apart([{ id: 'iterm', count: 1 }])).toBe(1)
+    expect(apart([{ id: 'herdr', count: 1 }])).toBe(1)
     expect(apart([{ id: 'iterm', count: 1 }, { id: 'herdr', count: 1 }])).toBe(0)
   })
 
@@ -268,7 +275,7 @@ describe('the catalog', () => {
     for (const s of ALL) {
       for (const c of s.checks.filter((c) => c.kind === 'state')) {
         const step = s.steps.findIndex((step) => step.label === c.after)
-        const listed = s.steps.slice(0, step).some((w) => w.kind === 'wait' && w.until?.expect.includes(c.session) === true)
+        const listed = s.steps.slice(0, step).some((w) => w.kind === 'wait' && w.until?.kind === 'ring' && w.until.expect.includes(c.session))
         expect(listed, `${s.id} ${c.id}`).toBe(true)
       }
       for (const [i, step] of s.steps.entries()) {
@@ -363,7 +370,7 @@ describe('the catalog', () => {
   it('every scenario has a probe, and each step kind but wait is used by a scenario whose probe can see it', () => {
     const sees: Record<Exclude<StepKind, 'wait'>, CheckKind[]> = {
       'claude.write': ['ring'], 'codex.write': ['ring'], quit: ['ring'], relaunch: ['ring'],
-      unplug: ['ring', 'focus'], replug: ['ring', 'focus'],
+      unplug: ['ring', 'focus'], replug: ['ring', 'focus'], pick: ['ring'],
       hook: ['state', 'recap'],
       tap: ['open', 'focus'], swipe: ['open', 'focus'],
       front: ['focus', 'open'], thread: ['focus', 'open'], attach: ['focus', 'open'],
@@ -400,8 +407,8 @@ describe('the catalog', () => {
     // gap between quit and relaunch; O4's rests after the focus, the tap and the swipe, O7's after the tap and the
     // swipe, O8's two turns and the pause between them, O10's rest on b, O12's time quit, its time past the devices'
     // next look after the relaunch and its rest after the focus, O16's agents a second apart, and O17's rest and its
-    // time unplugged; iTerm2's agents a second apart (started), I3's and I15's turns (turned), I4's pause before and
-    // after the split and its rest after the first tap, I6's rest, I7's rest after the first tap, I9's rests on b and on
+    // time unplugged; iTerm2's agents a second apart (started), I3's and I15's turns (turned), I3's rests after each
+    // pick, I4's pause before and after the split and its rest after the first tap, I6's rest, I7's rest after the first tap, I9's rests on b and on
     // a and its wait after the echo, I10's rest after the move to a's pane, I10's and I11's rests after the select, I13's
     // rests after the detach and the attach, I14's time past the devices' next look after herdr starts again, I15's time
     // after the relaunch and its rest after the first tap, I16's long turn, I17's turn, I20's rest on c and I21's rest
@@ -418,12 +425,12 @@ describe('the catalog', () => {
       'O4 2000', 'O4 1000', 'O4 3000', 'O7 4000', 'O7 2000', 'O8 2000', 'O8 2000', 'O8 6000', 'O8 2000', 'O10 1000', 'O12 2000',
       'O12 35000', 'O12 2000',
       ...starts('O16', 40), 'O17 1000', 'O17 3000',
-      ...starts('I2', 4), ...starts('I3', 4), 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000', 'I4 1000', 'I4 1000', 'I4 4000',
-      ...starts('I5', 2), ...starts('I6', 2), 'I6 2000', ...starts('I7', 3), 'I7 4000', ...starts('I8', 2),
-      ...starts('I9', 2), 'I9 1000', 'I9 500', 'I9 3000', ...starts('I10', 2), 'I10 1000', 'I10 2000', ...starts('I11', 2), 'I11 2000',
+      ...starts('I2', 4), ...starts('I3', 4), 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000',
+      'I4 1000', 'I4 1000', 'I4 4000', ...starts('I5', 2), ...starts('I6', 3), 'I6 2000', ...starts('I7', 3), 'I7 4000',
+      ...starts('I8', 2), ...starts('I9', 2), 'I9 1000', 'I9 500', 'I9 3000', ...starts('I10', 2), 'I10 1000', 'I10 2000', ...starts('I11', 2), 'I11 2000',
       ...starts('I12', 2), ...starts('I13', 2), 'I13 2000', 'I13 2000', ...starts('I14', 3), 'I14 35000',
       ...starts('I15', 3), 'I15 2000', 'I15 2000', 'I15 2000', 'I15 2000', 'I15 4000', 'I16 30000', 'I17 2000',
-      ...starts('I18', 2), ...starts('I19', 2), ...starts('I20', 2), 'I20 1000', ...starts('I21', 3), 'I21 1000', 'I21 3000',
+      ...starts('I18', 2), ...starts('I19', 2), ...starts('I20', 2), 'I20 1000', ...starts('I21', 4), 'I21 1000', 'I21 3000',
       'CH3 1000', 'XH3 200',
       ...starts('VH1', 2), 'VH1 1000', ...starts('VH3', 3), ...starts('UH3', 2), 'UH3 200',
       'OH1 1000', 'OH2 200',
@@ -442,8 +449,8 @@ describe('the catalog', () => {
     // I9's tab report 500 ms after the rest are those scenarios' point: only the input right after one of their own short
     // waits is let through. The person's tab selection and pane moves in iTerm2 are inputs
     // (docs/plans/2026-11-22-dial-eval-iterm2-plan.md, Decision 11).
-    const inputs = new Set<Step['kind']>(['tap', 'swipe', 'voice', 'attach', 'thread', 'stroke', 'editor.focus', 'orca.focus',
-      'iterm.select', 'tmux.selectPane', 'herdr.focus'])
+    const inputs = new Set<Step['kind']>(['tap', 'swipe', 'voice', 'attach', 'thread', 'stroke', 'pick', 'editor.focus',
+      'orca.focus', 'iterm.select', 'tmux.selectPane', 'herdr.focus'])
     const quick = new Set(['X11', 'XH3', 'OH2', 'I9', 'IH1'])
     for (const s of ALL) {
       // Since the last listing, or the last input once there is one. A condition wait may end at once: it counts 0.
@@ -466,17 +473,35 @@ describe('the catalog', () => {
     }
   })
 
-  it('a step on a row of the dial comes after a wait until the dial lists that row', () => {
+  it('a step on a row of the dial comes after a wait until the dial lists that row, on the page the dial shows last', () => {
     for (const s of ALL) {
-      const listed = new Set<SessionKey>()
+      // The latest condition wait's rows: the dial shows one page, so a row another page lists is not under the person's
+      // hand (I15's tap on tmux's row while herdr's page is shown).
+      let listed: readonly SessionKey[] = []
       for (const step of s.steps) {
-        if (step.kind === 'wait' && step.until) for (const key of step.until.expect) listed.add(key)
+        // An apps wait lists no rows.
+        if (step.kind === 'wait' && step.until) listed = step.until.kind === 'ring' ? step.until.expect : []
         const row = step.kind === 'tap' || step.kind === 'swipe' || step.kind === 'attach' ? step.session
           : step.kind === 'voice' ? step.target
           : step.kind === 'thread' ? s.sessions.find((d) => d.title === step.title)!.key
           : undefined
-        // Otherwise the step outruns the first list, and the dial has no row to act on.
-        if (row !== undefined) expect(listed.has(row), `${s.id} ${step.kind} ${row}`).toBe(true)
+        // Otherwise the step outruns the list, and the dial has no row to act on.
+        if (row !== undefined) expect(listed.includes(row), `${s.id} ${step.kind} ${row}`).toBe(true)
+      }
+    }
+  })
+
+  it('a pick after the devices start again comes after a wait on the Apps screen since then that counts the picked page', () => {
+    // Until the devices' scan counts a page's agents, a pick of it is ignored (cable/hosts/appFilter.ts pick): a person
+    // picks what the Apps screen shows, not on a timer.
+    for (const s of ALL) {
+      let counted: ReadonlySet<string> | null = null
+      for (const step of s.steps) {
+        if (step.kind === 'devices.restart') counted = new Set()
+        if (step.kind === 'wait' && step.until?.kind === 'apps' && counted) {
+          counted = new Set(Object.entries(step.until.counts).flatMap(([page, n]) => (n > 0 ? [page] : [])))
+        }
+        if (step.kind === 'pick' && counted) expect(counted.has(step.page), `${s.id} pick ${step.page}`).toBe(true)
       }
     }
   })

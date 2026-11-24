@@ -43,7 +43,7 @@ describe("VS Code's scenarios", () => {
     // V2's ring is full, so the agents that replace others go to the end in their turn: its own case holds it.
     for (const s of VSCODE.filter((s) => s.id !== 'V2')) {
       const order: SessionKey[] = s.steps.flatMap((step) => (step.kind === 'hook' && step.event === 'start' ? [step.session] : []))
-      const rings = [...s.steps.flatMap((step) => (step.kind === 'wait' && step.until ? [step.until.expect] : [])),
+      const rings = [...s.steps.flatMap((step) => (step.kind === 'wait' && step.until?.kind === 'ring' ? [step.until.expect] : [])),
         ...s.checks.flatMap((c) => (c.kind === 'ring' ? [c.expect] : [])), ...s.probes.flatMap((c) => (c.kind === 'ring' ? [c.expect] : []))]
       for (const ring of rings) expect(ring.filter((key) => key !== 'z'), s.id).toEqual(order.filter((key) => ring.includes(key)))
     }
@@ -79,8 +79,13 @@ describe("VS Code's scenarios", () => {
     expect(v11.steps.filter((step) => step.kind === 'stroke').map((step) => step.label)).toEqual(['stroke', 'skip'])
   })
 
-  it('V12 runs its Claude Code in the person\'s tmux', () => {
-    expect(byId('V12').sessions.find((d) => d.key === 'a')).toMatchObject({ tmux: true })
+  it("V12 runs its Claude Code in the person's tmux, so its row is on tmux's page, VS Code's counting none (decision 3)", () => {
+    const v12 = byId('V12')
+    expect(v12.sessions.find((d) => d.key === 'a')).toMatchObject({ tmux: true })
+    expect(v12.steps.filter((step) => step.kind === 'wait' && step.until).map((step) => step.kind === 'wait' && step.until))
+      .toEqual([{ kind: 'ring', page: 'tmux', expect: ['a'] }])
+    expect(v12.checks.filter((c) => c.kind === 'ring').map((c) => c.kind === 'ring' && [c.id, c.page, c.apart]))
+      .toEqual([['ring', 'tmux', []], ['ringKept', 'tmux', []]])
   })
 
   it('a tap on a terminal row asks for no link, a tap on the panel for its link', () => {

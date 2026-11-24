@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readLastAnswer } from '../../../../cable/hosts/lastAnswer.js'
+import { readRecord } from '../../../../cable/hosts/record.js'
 import { ptyMaker } from '../../../../cable/hosts/scannedApp.js'
 import type { InboxAnswer, InboxPoll } from '../../../../core/deviceHookCalls.js'
 import type { ObservedEvent, ObservedHookEvent } from '../../../../core/observedHook.js'
@@ -373,6 +374,22 @@ describe("tier A's live sessions", () => {
     expect(titles('turn-start')).toEqual(said)
   })
 
+  it("a Claude Code's own process record says who drives it: the Claude app's names its title and the app's id, the panel's and a "
+    + "terminal's the name the person gave", async () => {
+    const records = (w: ReturnType<typeof fakeWorld>) => [join(w.world.folders.claudeProjects, '..', 'sessions')]
+    const read = (w: ReturnType<typeof fakeWorld>, sessionId: string) => {
+      const { pid, record } = machine.owners.get(sessionId)!
+      return readRecord({ pid, record, sessionId }, { records: records(w) })
+    }
+    const app = fakeWorld('darwin')
+    await app.hook('a', 'start')
+    expect(await read(app, a.id)).toEqual({ name: 'Eval Alpha', hostSession: a.localId })
+    const editor = fakeWorld('darwin', editors)
+    for (const key of ['a', 'd']) await editor.hook(key, 'start')
+    expect(await read(editor, sessionOf('a').id)).toEqual({ name: 'Eval Alpha' })
+    expect(await read(editor, sessionOf('d').id)).toEqual({ name: 'Eval Delta' })
+  })
+
   it("the mod polls for every Claude Code session, the panel's included", async () => {
     const w = fakeWorld('darwin', editors)
     for (const key of ['a', 'd', 'b', 'c', 'e']) await w.hook(key, 'start')
@@ -673,6 +690,20 @@ describe("tier A's iTerm2 agents", () => {
     // herdr's first pane: the server started with iTerm2's TERM_PROGRAM and bundle id, and its panes inherit both.
     expect(toldOf(w.told, h.id).hostHints).toEqual({ HERDR_PANE_ID: 'w1:p1', TERM_PROGRAM: 'iTerm.app', __CFBundleIdentifier: ITERM_BUNDLE })
     expect(w.open()).toEqual([h.id])
+  })
+
+  it("a Claude Code's own process record, where the scan's owner points, names it as its hook does, in a tab, tmux or herdr (I3, I15)", async () => {
+    const of = itermAgents()
+    const w = fakeWorld('darwin', of)
+    // Claude Code's records folder beside the projects folder, as observedPlaces.ts derives it.
+    const records = [join(w.world.folders.claudeProjects, '..', 'sessions')]
+    for (const [key, i] of [['a', 0], ['t', 2], ['h', 4]] as const) {
+      await w.hook(key, 'start')
+      const s = of.sessions[i]!
+      const { pid, record } = machine.owners.get(s.id)!
+      expect(record).toBe(join(records[0]!, `${pid}.json`))
+      expect(await readRecord({ pid, record, sessionId: s.id }, { records })).toEqual({ name: s.title })
+    }
   })
 
   it("the other apps' hooks, hints and processes are as before", async () => {

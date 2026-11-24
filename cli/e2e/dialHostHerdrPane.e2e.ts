@@ -183,8 +183,8 @@ describe.skipIf(!herdrBinary)("the dial's words reach the agent's own pane, herd
     expect(await herdr.screen(shell)).not.toContain(WORDS)
     expect(lines(d, HELD)).toEqual([HELD])
 
-    // 3. No herdr server made its terminal: herdr's lookup finds no client to place it by, though one is attached.
-    await said(d, '[device] herdr client · none')
+    // 3. No herdr server made its terminal: herdr's lookup looks for no client to place it by, though one is attached.
+    await said(d, '[device] herdr client · outside')
     expect(lines(d, '[device] herdr client · found')).toEqual([])
 
     const tty = (JSON.parse(await mux.cli('list', '--format', 'json')) as Array<{ pane_id: number; tty_name?: string }>)

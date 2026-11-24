@@ -1,10 +1,11 @@
 /**
- * An agent in a herdr pane whose client runs in a kitty window is on kitty's page, and a rest while kitty is in front
- * focuses the client's kitty window, then the agent's herdr pane (docs/plans/2026-11-21-dial-linux-followups-design.md
- * § 2), on the real daemon: herdr's client attached to a herdr server of the test's own (harness/herdrServer.ts) runs in
- * the first window of a kitty of the test's own (harness/kittyWindow.ts), with remote control on for its socket alone,
- * on an X11 desk of the test's own (harness/x11Desk.ts), another tab of that kitty active, and the suite's hooked fake
- * Claude Code in a herdr pane. The server is started with that window's KITTY_WINDOW_ID and KITTY_LISTEN_ON, as one the
+ * An agent in a herdr pane whose client runs in a kitty window is on herdr's page (Diego, 2026-11-23:
+ * docs/plans/2026-11-23-dial-tmux-herdr-apps-design.md), and a rest while kitty is in front focuses the client's kitty
+ * window, then the agent's herdr pane (docs/plans/2026-11-21-dial-linux-followups-design.md § 2), on the real daemon:
+ * herdr's client attached to a herdr server of the test's own (harness/herdrServer.ts) runs in the first window of a
+ * kitty of the test's own (harness/kittyWindow.ts), with remote control on for its socket alone, on an X11 desk of the
+ * test's own (harness/x11Desk.ts), another tab of that kitty active, and the suite's hooked fake Claude Code in a herdr
+ * pane. The server is started with that window's KITTY_WINDOW_ID and KITTY_LISTEN_ON, as one the
  * client started there keeps them; herdr (0.9.5) strips KITTY_WINDOW_ID from its panes and keeps KITTY_LISTEN_ON, so the
  * agent's hooks name kitty's socket and no kitty window. A fake dial on the desk lists it, and the
  * test writes the `front` lines on the stdin of the real `harness hardware watch --json`, as Harness Device does. No
@@ -135,14 +136,14 @@ describe.skipIf(!herdrBinary || !kittyInstalled)("herdr's client in kitty", () =
   /** The daemon's rest lines, each from its `[device]` on. */
   const swipes = (d: IsolatedDaemon): string[] => lines(d, '[device] swipe ·')
 
-  it("lists the agent on kitty's page, one row, and on no other page", async () => {
+  it("lists the agent on herdr's page, one row, and on no other page", async () => {
     const { dial, agent } = await fresh()
     const apps = (m: DialMessage) => m.apps as Array<{ id: string; count: number }>
-    const frame = await until("kitty's page holding the agent", () => {
+    const frame = await until("herdr's page holding the agent", () => {
       const last = dial.messages.filter((m) => m.t === 'apps').at(-1)
-      return last && apps(last).some((a) => a.id === 'kitty' && a.count === 1) ? last : undefined
+      return last && apps(last).some((a) => a.id === 'herdr' && a.count === 1) ? last : undefined
     }, 45_000, 100)
-    expect(apps(frame).filter((a) => a.count > 0)).toEqual([expect.objectContaining({ id: 'kitty', count: 1 })])
+    expect(apps(frame).filter((a) => a.count > 0)).toEqual([expect.objectContaining({ id: 'herdr', count: 1 })])
     // Its ring's list, as the dial was last sent it: the agent once, and nothing else.
     const begin = dial.messages.map((m) => m.t).lastIndexOf('agents.begin')
     const end = dial.messages.map((m) => m.t).lastIndexOf('agents.end')
@@ -172,7 +173,7 @@ describe.skipIf(!herdrBinary || !kittyInstalled)("herdr's client in kitty", () =
 
   it('with another app in front a rest moves neither the window nor the herdr pane', async () => {
     const { d, dial, herdr, windows, client, agent } = await fresh()
-    // Orca in front, with an agent of its own: the dial, holding kitty's ring, turns to Orca's once Orca settled there,
+    // Orca in front, with an agent of its own: the dial, holding herdr's ring, turns to Orca's once Orca settled there,
     // so the front line has landed.
     const handle = `term_${randomUUID()}`
     unsaid.push(handle)

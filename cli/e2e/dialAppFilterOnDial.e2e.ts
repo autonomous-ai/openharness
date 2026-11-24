@@ -27,7 +27,7 @@ const MINUTES = Number(process.env.ON_DIAL_MINUTES ?? 45)
 // How `harness hardware watch` is started, as e2e/hardwareWatch.e2e.ts starts it: the run's bundle when there is one.
 const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : ['--import', 'tsx', 'src/cli.ts']
 const DEVICE_APP = resolve(CLI_ROOT, '../device-app/src-tauri/target/debug/harness-device')
-const CAUSES = ['front', 'pick', 'empty', 'notice']
+const CAUSES = ['front', 'pick', 'empty', 'notice', 'follow']
 const VIEWS = ['tabs', 'apps']
 
 /**
@@ -92,7 +92,7 @@ function expectNamedOnly(script: string): void {
 /** Every `app filter:` line says only what the filter may say: a switch, the picker, the view or a bring, and never an app. */
 function expectFilterLines(log: string): void {
   for (const line of log.split('\n').filter((line) => line.includes('app filter:'))) {
-    expect(line).toMatch(/\[device\] app filter: (switched · (front|pick|empty|notice)|picker|view (tabs|apps) · (front|pick|window|empty)|bring · (ok|failed))$/)
+    expect(line).toMatch(/\[device\] app filter: (switched · (front|pick|empty|notice|follow)|picker|view (tabs|apps) · (front|pick|window|empty)|bring · (ok|failed))$/)
   }
 }
 

@@ -575,7 +575,7 @@ describe('the dial\'s app filter', () => {
     expect(log).toContain('[device] app filter: picker')
     expect(log.includes('[device] app filter: bring · ok')).toBe(process.platform === 'darwin')
     for (const line of log.split('\n').filter((line) => line.includes('app filter') || line.includes('[devices] listener'))) {
-      expect(line).toMatch(/(\[devices\] listener open|\[devices\] listener in the last minute: \d+ unknown, \d+ oversized, \d+ over rate, \d+ refused, \d+ failed|\[device\] app filter: (switched · (front|pick|notice|empty)|picker|view (tabs|apps) · (front|pick|window|empty)|bring · (ok|failed)))$/)
+      expect(line).toMatch(/(\[devices\] listener open|\[devices\] listener in the last minute: \d+ unknown, \d+ oversized, \d+ over rate, \d+ refused, \d+ failed|\[device\] app filter: (switched · (front|pick|notice|empty|follow)|picker|view (tabs|apps) · (front|pick|window|empty)|bring · (ok|failed)))$/)
     }
     for (const word of [VSCODE_BUNDLE, GHOSTTY_BUNDLE, 'kitty', 'vscode', 'VS Code', 'ghostty', 'Ghostty']) expect(log).not.toContain(word)
   })

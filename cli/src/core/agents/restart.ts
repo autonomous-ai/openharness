@@ -11,7 +11,8 @@ import { buildEngineLaunchArgv, commandAvailableInInteractiveShell } from '../..
 import { launchedGrid, type GridAssignment } from '../../lib/gridAssignmentWire.js'
 import { windowsPaneLaunch } from '../../lib/windows/engineStart.js'
 import { sid } from '../../lib/log.js'
-import { matchesLaunchReceipt, type LaunchPublicationInput, type ProcessIdentity, type registry, type RegisteredSession } from '../../lib/registry.js'
+import { matchesLaunchReceipt, OBSERVATION_BATCH_INCOMPLETE, SAVED_BINDING_CHANGED, type LaunchPublicationInput, type ProcessIdentity, type registry,
+  type RegisteredSession } from '../../lib/registry.js'
 import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
 import { sameProcessIdentity } from '../../lib/terminalRuntime.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
@@ -51,6 +52,19 @@ async function engineInstalled(engine: AgentEngine): Promise<boolean | null> {
 
 type RestartAgentHandler = RestartAgent
 
+const NO_ENGINE = 'the relaunched engine is not in its pane'
+const ANOTHER_PROCESS = 'the replacement process changed before publication'
+const NO_SHELL = 'the replacement shell could not be confirmed'
+/** Which check held a relaunch's publication, told by comparing its error with each check's fixed words: the log
+ *  names the check, never the words. */
+const HELD_BY = ([
+  [NO_ENGINE, 'refresh found no engine'],
+  [ANOTHER_PROCESS, 'refresh found another process'],
+  [NO_SHELL, 'refresh found no shell'],
+  [OBSERVATION_BATCH_INCOMPLETE, 'registry batch incomplete'],
+  [SAVED_BINDING_CHANGED, 'saved binding changed'],
+] as const).map(([reason, label]) => ({ message: new IdentityReadUnavailable(reason).message, label }))
+
 export interface RelaunchCommitDeps {
   registry: Pick<typeof registry, 'confirmLaunch' | 'byAgent'>
   announceSession: (session: RegisteredSession) => void
@@ -79,15 +93,23 @@ export async function commitRelaunchedEngine(
     current,
     refresh: async () => {
       if (identity) {
+        // Null also when the probe could not answer.
         const observed = await resolvePaneEngineProcess(place.backend, place.runtime, engine)
-        if (!sameProcessIdentity(identity, observed) || observed?.executable !== identity.executable) {
-          throw new IdentityReadUnavailable('the replacement process changed before publication')
+        if (!observed) throw new IdentityReadUnavailable(NO_ENGINE)
+        if (!sameProcessIdentity(identity, observed) || observed.executable !== identity.executable) {
+          throw new IdentityReadUnavailable(ANOTHER_PROCESS)
         }
       } else {
         const pane = await place.backend.paneState(place.runtime)
-        if (pane === 'gone' || pane === 'unknown' || pane.dead) throw new IdentityReadUnavailable('the replacement shell could not be confirmed')
+        if (pane === 'gone' || pane === 'unknown' || pane.dead) throw new IdentityReadUnavailable(NO_SHELL)
       }
     },
+  }).catch((error: unknown) => {
+    // The dispatch's line names only the error's kind; this one names the check that held it (nightly run 45237523183).
+    if (error instanceof IdentityReadUnavailable) {
+      console.warn(`[restart] publication held · ${HELD_BY.find(held => held.message === error.message)?.label ?? 'other'}`)
+    }
+    throw error
   })
   if (publication.state !== 'confirmed') return 'changed'
   const refreshed = publication.entry

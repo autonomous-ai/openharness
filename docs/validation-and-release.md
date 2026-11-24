@@ -20,7 +20,7 @@ The rules AGENTS.md carried until 2026-11-11; the sections below have the detail
   one required check is `ci/required`. Push work in progress as a draft; mark it ready, then keep the head stable while
   CI and review run. Review independently of implementation. Base the branch on current `main`.
 - Never start extra runs: no manual CI run beside the automatic one, no pushes to retrigger. Read the failure, fix it,
-  push once. Rerun only a recorded flaky test.
+  push once. Rerun only a [recorded flaky test](#recorded-flaky-tests).
 - Checks PR CI does not run are yours when you touch their area: the CLI coverage gates (`npm run test:core`,
   `test:harnessd`, `test:resume`, `test:orchestrator`, `test:sharing`, `test:remote-viewers`, `test:portability`,
   `test:local-models`), serial and PTY specs, and Desktop tests on macOS for macOS code. Run them with
@@ -240,6 +240,15 @@ Do not add CI runs to a PR. Don't start **CI → Run workflow** for a PR that al
 an automatic run, and don't push again just to retrigger a failed check. Read the
 failure, fix it and push once. The account runs at most 20 jobs at once (5 on macOS),
 and every extra run delays every other PR.
+
+### Recorded flaky tests
+
+A record names the test, the job it runs in, the run where it failed and the date. It allows one rerun of that job.
+A second failure is a real failure. A recorded flaky test is still a bug: its owner fixes it and removes the record.
+
+| Test | Job | Failed | Run |
+| --- | --- | --- | --- |
+| `hosts_started_together_serve_once` (`pty/tests/control.rs`): one of eight hosts started together exited with status 1 (`tests/control.rs:383`), on a PR that changed nothing under `pty/`; not seen in the 25 failed CI runs before it | `pty-checks` | 2026-11-24 | [45326642430](https://github.com/autonomous-ai/openharness/actions/runs/45326642430) |
 
 ### Suite details
 

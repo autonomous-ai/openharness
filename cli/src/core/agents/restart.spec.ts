@@ -13,6 +13,7 @@ import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
 import type { RestartTarget } from '../../lib/terminalBackend.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 import { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
+import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 
 vi.mock('../../lib/engineBin.js', async (real) => ({ ...await real<object>(), enginePathOverride: vi.fn(() => undefined) }))
 vi.mock('../../lib/engineLaunch.js', async (real) => ({
@@ -106,13 +107,43 @@ describe('durable restart publication', () => {
     })
     vi.mocked(resolvePaneEngineProcess).mockResolvedValue(proof === 'gone' ? null : proof === 'replaced' ? { ...newProcess, startMarker: 'replacement' }
       : proof === 'executable' ? { ...newProcess, executable: 'other' } : newProcess)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const result = commitRelaunchedEngine(run.deps, 'a1', newProcess, null, { runtime, backend: run.tmuxBackend } as unknown as RestartTarget, () => true)
-    if (proof === 'same') expect(await result).toMatchObject({ processIdentity: newProcess })
-    else {
+    if (proof === 'same') {
+      expect(await result).toMatchObject({ processIdentity: newProcess })
+      expect(warn).not.toHaveBeenCalled()
+    } else {
       await expect(result).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
       expect(releaseHold).not.toHaveBeenCalled()
       expect(run.deps.announceSession).not.toHaveBeenCalled()
+      // Which check held it, in fixed words: the nightly's line named only the error's kind (run 45237523183).
+      expect(warn.mock.calls).toEqual([[`[restart] publication held · ${proof === 'gone' ? 'refresh found no engine' : 'refresh found another process'}`]])
     }
+  })
+
+  it.each([
+    ['the registry observation batch is incomplete', 'registry batch incomplete'],
+    ['the saved binding changed while its evidence was being read', 'saved binding changed'],
+    ['the registry owner changed while its write was being prepared', 'other'],
+  ])('names the registry check that held a publication: %s', async (reason, label) => {
+    const run = setup()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const held = new IdentityReadUnavailable(reason)
+    vi.mocked(run.deps.registry.confirmLaunch).mockRejectedValue(held)
+    await expect(commitRelaunchedEngine(run.deps, 'a1', newProcess, null, { runtime, backend: run.tmuxBackend } as unknown as RestartTarget, () => true))
+      .rejects.toBe(held)
+    expect(warn.mock.calls).toEqual([[`[restart] publication held · ${label}`]])
+    expect(String(warn.mock.calls[0])).not.toContain('a1')
+  })
+
+  it('logs no hold for a publication that failed another way', async () => {
+    const run = setup()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const failed = new Error('disk full')
+    vi.mocked(run.deps.registry.confirmLaunch).mockRejectedValue(failed)
+    await expect(commitRelaunchedEngine(run.deps, 'a1', newProcess, null, { runtime, backend: run.tmuxBackend } as unknown as RestartTarget, () => true))
+      .rejects.toBe(failed)
+    expect(warn).not.toHaveBeenCalled()
   })
 
   it.each(['alive', 'gone', 'unknown', 'dead'] as const)('rechecks a replacement shell: %s', async proof => {
@@ -123,12 +154,14 @@ describe('durable restart publication', () => {
       await authority?.refresh?.()
       return publish(id, input, authority)
     })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const result = commitRelaunchedEngine(run.deps, 'a1', null, null, { runtime, backend: { ...run.tmuxBackend, paneState } } as unknown as RestartTarget, () => true)
     if (proof === 'alive') expect(await result).toMatchObject({ engine: 'terminal' })
     else {
       await expect(result).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
       expect(releaseHold).not.toHaveBeenCalled()
       expect(run.deps.announceSession).not.toHaveBeenCalled()
+      expect(warn.mock.calls).toEqual([['[restart] publication held · refresh found no shell']])
     }
   })
 })

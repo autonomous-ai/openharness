@@ -71,6 +71,7 @@ import { readRecord } from '../cable/hosts/record.js'
 import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
 import { appRoots, learnApps, readBundleId, readMadeBy, readProcessNames, readPtyOwner, readTtyName, scanLearnsApps } from '../cable/hosts/scannedApp.js'
 import { createScrollLines } from '../cable/hosts/scrollLines.js'
+import { pageOf } from '../cable/hosts/select.js'
 import { createTabsAdapter, readTty, type Tab } from '../cable/hosts/tabs.js'
 import { createTmuxAdapter, createTmuxNested, createTmuxOuter } from '../cable/hosts/tmux.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
@@ -497,14 +498,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     hadDial: () => readSetup(core.dataDir).dial || greetedAsDial(dialPorts),
     log,
   })
-  /** Where the dial would place an agent with no window: its own app for one outside a pane, Harness for the rest. Read
-   *  from the registry itself, as the cable host answers none while a window holds the dial on its tab: [entries] when the
-   *  caller merged it already. */
+  /** Where the dial would place an agent with no window: its own page for one outside a pane (`pageOf`: tmux's or herdr's
+   *  for one nested there), Harness for the rest. Read from the registry itself, as the cable host answers none while a
+   *  window holds the dial on its tab: [entries] when the caller merged it already. */
   const usageAgent = (agentId: string, entries: HostEntry[] = registry.entries()): DialAgent | undefined => {
     const who = cableHost.describe(agentId)
     if (!who) return undefined
     const row = entries.find((e) => e.agent.id === agentId)?.agent
-    return { engine: who.engine, host: row?.host ?? 'harness', page: row?.app ?? 'harness', held: observed?.heldOnly(agentId) ?? false }
+    return { engine: who.engine, host: row?.host ?? 'harness', page: row ? pageOf(row) : 'harness', held: observed?.heldOnly(agentId) ?? false }
   }
   const dialUsage = createDialUsage({ sink: usageFile, now: wallClock, after: timerIn('dialUsage'), describe: usageAgent, log })
   /** A count is the devices' own part: one that throws never reaches the dial. */
@@ -1375,16 +1376,19 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         part.call('dial', remind)
       })
     },
+    // Before the settle of the app in front shows anything: the tab report waiting on it is judged, and its agent's page
+    // shown, so the settle shows tmux's or herdr's page directly (Diego's decision 4, 2026-11-23).
+    appSettling: (app) => part.call('dial', () => tabSettling(app)),
     // The settle of the app in front: the Claude app's turns the dial to the session it last attached
-    // (docs/specs/2026-11-15-dial-claude-app-follow.md), and any app's judges the tab report waiting on it. Each guarded on
-    // its own: the filter drops what this answers, so a follow that rejects would go unseen, and one that throws would
-    // cost the other its settle.
+    // (docs/specs/2026-11-15-dial-claude-app-follow.md), and any app's follows the tab report its settling judged. Each
+    // guarded on its own: the filter drops what this answers, so a follow that rejects would go unseen, and one that throws
+    // would cost the other its settle.
     appSettled: (app) => {
       if (app === 'claude') part.call('dial', claudeSettled)
       if (app === 'orca' && observed) part.call('orca', () => orcaSettled(observed))
       // Orca is often not running at the start or the attach: its coming to the front is the pass's next chance.
       if (app === 'orca' && orcaSetup) part.call('orcaPlugin', () => orcaSetup.pass())
-      part.call('dial', () => tabSettled(app))
+      part.call('dial', tabSettled)
       part.call('dial', () => threadSettled(app))
       part.call('dial', () => editorSettled(app))
       part.call('pane', () => {
@@ -2509,6 +2513,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // Focus reaches an agent with an Orca pane; one in a multiplexer inside Orca has none, and its prompt still moves the
     // dial.
     if (focusWatch && observed?.paneOf(agentId, 'orca') !== undefined) { log('[device] prompt · skipped · focus followed'); return }
+    // Before the dials are asked: an agent in tmux or herdr turns them to that page (Diego's decision 4, 2026-11-23).
+    cableHost.followPage(agentId)
     return cable.followLocal(agentId, 'prompt')
   }
   // ── the session the Claude app shows ───────────────────────────────────────────────────────────────
@@ -2565,13 +2571,17 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    * A tab selected in Terminal, iTerm2 or Ghostty turns the dials to its agent as a person's prompt does, once its app has
    * settled in front (docs/specs/2026-11-15-dial-terminal-follow.md, "2. Selecting a tab moves the dial"): Harness Device
    * reports as the app comes to the front, before it settles. The latest report waits for that settle, and another app
-   * settling drops it. Each line is an outcome, never the app, the tty or the agent.
+   * settling drops it. An agent in tmux or herdr there turns the dials to tmux's or herdr's page first (Diego's decision
+   * 4, 2026-11-23; cableHost.ts followPage). Each line is an outcome, never the app, the tty or the agent.
    */
   /** A tab report, when it came and how many moves the dial had made by then. */
   type TabReport = Tab & { at: number; moves: number }
   let tabReport: TabReport | undefined
-  /** Uses up the report: with no dial linked nothing is followed or counted, as with a prompt. */
-  const followTab = (report: TabReport): Promise<void> | undefined => {
+  /** The agent of the report its app's settling judged, followed once that settle has shown its page. */
+  let tabJudged: string | undefined
+  /** Uses up the report: its agent, the page shown turned to that agent's, or none. With no dial linked nothing is
+   *  followed or counted, as with a prompt. */
+  const tabAgent = (report: TabReport): string | undefined => {
     tabReport = undefined
     if (!cable.isConnected) return
     const { app, tty, at } = report
@@ -2583,16 +2593,30 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (selects.echo(tty, at)) { log('[device] tab · skipped · echo'); return }
     const agent = observed?.byTab(app, tty)
     if (!agent) { log('[device] tab · skipped · unknown agent'); return }
-    return cable.followLocal(agent.id, 'tab')
+    cableHost.followPage(agent.id)
+    return agent.id
+  }
+  const followTab = (report: TabReport): Promise<void> | undefined => {
+    const agentId = tabAgent(report)
+    return agentId === undefined ? undefined : cable.followLocal(agentId, 'tab')
   }
   const tabReported = (tab: Tab): Promise<void> | undefined => {
     const report = { ...tab, at: monotonic(), moves: dialMoves }
     if (cableHost.settledApp() === tab.app) return followTab(report)
     tabReport = report
   }
-  const tabSettled = (app: string): Promise<void> | undefined => {
+  /** Before the settle shows anything, the report waiting on that app is judged: the settle then shows its agent's page
+   *  directly, never the app's first (the spec's "A follow turns the page"). */
+  const tabSettling = (app: string): void => {
+    tabJudged = tabReport?.app === app ? tabAgent(tabReport) : undefined
+  }
+  /** After the settle has shown its page and turned the view: the dials follow the agent its settling judged. A report
+   *  still waiting is another app's, and dropped. */
+  const tabSettled = (): Promise<void> | undefined => {
+    const agentId = tabJudged
+    tabJudged = undefined
+    if (agentId !== undefined) return cable.followLocal(agentId, 'tab')
     if (!tabReport) return
-    if (tabReport.app === app) return followTab(tabReport)
     tabReport = undefined
     if (cable.isConnected) log('[device] tab · skipped · not in front')
   }
@@ -2814,6 +2838,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       for (const timer of [...endings.values(), ...leavings.values()]) clearTimeout(timer)
       for (const timer of pending) clearTimeout(timer)
       tabReport = undefined
+      tabJudged = undefined
       selects.clear()
       threadReport = undefined
       codexSwitches.clear()
