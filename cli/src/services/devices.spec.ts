@@ -14343,13 +14343,14 @@ describe('the dial follows the pane focused in WezTerm and kitty (docs/plans/202
   /** What the apps answer: the pane WezTerm's GUI focused (none: no GUI, RECORDED_WEZTERM.listClients.noGui), the window
    *  kitty focused, or, by socket, the window each kitty focused, and whether kitty refuses (focusedMatch.password). While
    *  `held`, WezTerm's reads wait until the spec lands them; while `heldKitty`, kitty's calls do. A tap's `activate-pane` or `focus-window` moves that focus,
-   *  as the apps do. */
+   *  as the apps do, once the spec lands it while `heldTap`. */
   const focus = { pane: 0 as number | undefined, window: 1, windows: new Map<string, number>(), refused: false, held: false, heldKitty: false,
-    land: [] as Array<() => void> }
-  beforeEach(() => { Object.assign(focus, { pane: 0, window: 1, windows: new Map(), refused: false, held: false, heldKitty: false, land: [] }) })
+    heldTap: false, land: [] as Array<() => void> }
+  beforeEach(() => { Object.assign(focus, { pane: 0, window: 1, windows: new Map(), refused: false, held: false, heldKitty: false, heldTap: false, land: [] }) })
   /** The devices' runs, recorded; `list-clients` and `get-colors` answered as the recorded apps did. */
   const apps = { ...orca, run: async (file: string, args: string[], timeoutMs: number) => {
     orcaRuns.push([file, args, timeoutMs])
+    if (focus.heldTap && (args.includes('activate-pane') || args[3] === 'focus-window')) await new Promise<void>((resolve) => { focus.land.push(resolve) })
     if (args.includes('list-clients')) {
       if (focus.held) await new Promise<void>((resolve) => { focus.land.push(resolve) })
       if (focus.pane === undefined) return { code: listClients.noGui.exitCode, stdout: '', stderr: listClients.noGui.stderr }
@@ -14812,6 +14813,25 @@ describe('the dial follows the pane focused in WezTerm and kitty (docs/plans/202
       await next()
       expect(asked()).toEqual([[agent(1), 'pane'], [agent(1), 'pane'], [agent(2), 'pane']])
       expect(paneLines()).toEqual([ECHO])
+    })
+
+    it.each(['wezterm', 'kitty'] as const)('%s: a tap whose focus ends past TAB_ECHO_MS, a hand turn elsewhere meanwhile: the read after it ends is its echo, and the dial stays', async (app) => {
+      const kitty = await kittyAt()
+      const { settle, next } = await dialWith(app === 'wezterm' ? { hooks: inPanes(3) }
+        : { hooks: [1, 2, 3].map((n) => inKitty(n, kitty.listenOn)), makers: ['kitty'] })
+      if (app === 'wezterm') focus.pane = 1
+      else focus.windows.set(kitty.listenOn, 1)
+      await settle(app)
+      focus.heldTap = true
+      const opened = host().openAgent(agent(2))
+      await vi.waitFor(() => expect(focus.land).toHaveLength(1))
+      turnTo(agent(3))
+      clock = 2_500
+      await land()
+      expect(await opened).toBeUndefined()
+      await next()
+      expect(paneLines()).toEqual([ECHO])
+      expect(asked()).toEqual([[agent(1), 'pane']])
     })
 
     it('a dial move while the read ran sets its answer aside as echo', async () => {
