@@ -92,9 +92,12 @@ of its panes (`PaneFocus.app: 'wezterm' | 'kitty'`, `readFocus`'s kitty-else bra
 - `herdrClient.ts`'s `HerdrEntry` gains `{ type: 'pane.focused' }`. `herdrSource.ts` subscribes to it on a
   subscription of its own, beside the one for agents, never in it (PM decision, 2026-11-24): the probe found that herdr
   refuses a whole subscription naming a kind it does not know and closes it, so a herdr older than `pane.focused`
-  would otherwise lose the agents' rows too. The focus subscription opens when the agents' one starts and closes with it;
-  refused or closed, it logs one fixed line and is not opened again until the source's next start, and the agents' rows
-  are untouched. It tells each focus event's bare pane id (`w1:p2`, checked against `HERDR_PANE`) to a new `onFocus`
+  would otherwise lose the agents' rows too. The focus subscription opens once an attempt's agents' list is read, stays
+  open while the agents' subscriptions replace one another, and closes when the attempt ends (a stop, a failed attempt,
+  a change of herdr's socket). Refused (`rejected`, or an answer out of form), it logs `[herdr] focus · <fault>` and is
+  not asked for again in that attempt, and the agents' rows are untouched; any other end (a lost connection, a deadline,
+  a line out of form) logs nothing and it opens again at the next agents' list, which comes only as the agents change,
+  at most one a second. It tells each focus event's bare pane id (`w1:p2`, checked against `HERDR_PANE`) to a new `onFocus`
   listener its deps give, and keeps no other state.
 - `devices.ts` follows a told pane only when all hold:
   - a dial is linked;
