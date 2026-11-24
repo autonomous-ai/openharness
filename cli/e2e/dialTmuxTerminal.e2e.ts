@@ -208,7 +208,8 @@ describe.skipIf(process.platform !== 'darwin')("an agent in the person's tmux, o
       picked = Date.now()
     })
     expect(roster.filter((m) => m.id === agent.id)).toHaveLength(1)
-    expect(d.log()).toContain('[device] tmux client · found')
+    // Said once the lookups settled, which may be a moment after the place reached the dial.
+    await until('the client line', () => d.log().includes('[device] tmux client · found'), 30_000, 50)
   })
 
   it("found by the scan after the devices start, an agent in the person's tmux whose client is in an iTerm2 tab is on tmux's page, one row, with no iTerm2 or Other page", async () => {
@@ -338,7 +339,7 @@ describe.skipIf(process.platform !== 'darwin')("an agent in the person's tmux, o
       const reads = lines(d, '[device] focus poll · stopped · ')
         .reduce((sum, line) => sum + Number(/ · (\d+) reads/.exec(line)?.[1] ?? 0), 0)
       // Past the runner: a passing case's console is not printed.
-      process.stdout.write(`${JSON.stringify({ platform: platform(), arch: arch(), frontCpuPercent, awayCpuPercent, reads, readMs })}\n`)
+      process.stdout.write(`${JSON.stringify({ platform: platform(), arch: arch(), frontCpuPercent, awayCpuPercent, pollsStarted: started, reads, readMs })}\n`)
       // One read at most every FOCUS_POLL_MS from the earliest start to Ghostty's settle, the first at once.
       expect(reads).toBeLessThanOrEqual(Math.floor((awayAt + FRONT_SETTLE_MS - freshAt) / FOCUS_POLL_MS) + 1)
       expect(lines(d, '[device] focus poll · started')).toHaveLength(started)
