@@ -15,7 +15,8 @@ import type { Nest } from './types.js'
  * `nest`: this lookup's multiplexer made the caller's terminal, whether or not a client was found, so the agent is on
  * that multiplexer's page even with no app known. [made] is told that multiplexer as soon as the maker's read confirms
  * it, before the client's steps (lsof, ps, the app walk, up to 10 s each) end: the agent is on its page meanwhile (Mac
- * eval IH4, 2026-11-24). An ask that shares a held answer is told too.
+ * eval IH4, 2026-11-24). An ask that shares a held answer is told too. Never told before the lookup returns: askOuter
+ * keeps its ask only once it has asked, and drops a word for any other.
  */
 export type OuterLookup = (
   hints: Readonly<Record<string, string>>,

@@ -5135,6 +5135,12 @@ describe('ObservedSource outer place', () => {
     const told = t.changes.mock.calls.length
     await t.asks[1].made('herdr')
     expect(t.changes).toHaveBeenCalledTimes(told)
+    // Told after its answer landed: the answer's place stands.
+    await t.asks[1].answer({ app: 'iterm', tty: '/dev/ttys005', pid: 4400, nest: 'herdr' })
+    const landed = t.changes.mock.calls.length
+    await t.asks[1].made('herdr')
+    expect(t.changes).toHaveBeenCalledTimes(landed)
+    expect(t.src.paneOf(t.agent().id, 'tabs')).toBe('iterm:/dev/ttys005')
 
     // It ended while it was asked.
     const ended = nested()
