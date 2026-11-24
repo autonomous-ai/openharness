@@ -29,6 +29,12 @@ const FAILED: CodexAppRead = { ok: false, kind: 'ENOENT' }
 const rankOf = (order: CodexAppThread[]): RingRank => new Map(order.map((one, at) => [agentOf(one), at]))
 /** Lets what the source was answered be taken in. */
 const turn = () => new Promise((resolve) => setImmediate(resolve))
+/** Whether a start's promise has ended, read as the test goes. */
+const ending = (start: Promise<void>) => {
+  const state = { ended: false }
+  void start.then(() => { state.ended = true })
+  return state
+}
 
 /** Every line any source said, and each read started while another was under way: checked after each test. */
 const lines: string[] = []
@@ -468,6 +474,56 @@ describe("the ChatGPT app's source (docs/plans/2026-11-19-dial-chatgpt-ring-and-
       expect(ids(s)).toEqual([agentOf(thread(1))])
       expect(s.changes).toBe(1)
       expect(s.ranks).toEqual([rankOf([thread(1)])])
+    })
+
+    // The dial's greeting waits for it (devices.ts dialAttached), so its first list holds the app's threads.
+    it('a start ends once its first read has landed, its rows listed', async () => {
+      const s = setup()
+      const start = ending(s.source.start())
+      await turn()
+      expect(start.ended).toBe(false)
+      await s.land(ok([thread(1), thread(2)]))
+      expect(start.ended).toBe(true)
+      expect(ids(s)).toEqual([agentOf(thread(1)), agentOf(thread(2))])
+    })
+
+    it('a start whose first read fails ends too', async () => {
+      const s = setup()
+      const start = ending(s.source.start())
+      await s.land(FAILED)
+      expect(start.ended).toBe(true)
+    })
+
+    it('a start with no home ends at once', async () => {
+      const s = setup()
+      s.home.there = false
+      const start = ending(s.source.start())
+      await turn()
+      expect(start.ended).toBe(true)
+    })
+
+    it('a stop ends the start under way at once; the next start ends with its own read, not the stopped one', async () => {
+      const s = setup()
+      const first = ending(s.source.start())
+      s.source.stop()
+      await turn()
+      expect(first.ended).toBe(true)
+      const second = ending(s.source.start())
+      // The stopped read lands and takes nothing: the start's own read runs after it.
+      await s.land(ok([thread(2)]))
+      expect(second.ended).toBe(false)
+      await s.land(ok([thread(1)]))
+      expect(second.ended).toBe(true)
+      expect(ids(s)).toEqual([agentOf(thread(1))])
+    })
+
+    it('a start while it runs ends at once', async () => {
+      const s = setup()
+      s.source.start()
+      const again = ending(s.source.start())
+      await turn()
+      expect(again.ended).toBe(true)
+      await s.land()
     })
   })
 

@@ -1954,7 +1954,7 @@
     "b/darwin/I3/ring.archived": 1,
     "b/darwin/I3/ring.cap": 1,
     "b/darwin/I3/ring.names": 0,
-    "b/darwin/I3/ring.order": 0,
+    "b/darwin/I3/ring.order": 1,
     "b/darwin/I3/ring.precision": 1,
     "b/darwin/I3/ring.recall": 1,
     "b/darwin/I3/ringKept": 0,
@@ -2697,7 +2697,7 @@
       "vscode": 98.57142857142857,
       "cursor": 91.66666666666666,
       "orca": 99.74358974358975,
-      "iterm": 86.53735632183907
+      "iterm": 86.79597701149424
     }
   }
 }
