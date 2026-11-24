@@ -1142,6 +1142,33 @@ describe('the dial with no window: this computer\'s agents', () => {
       expect(openEnded).not.toHaveBeenCalled()
     })
 
+    // The last tap wins whatever agent it is on: a tap still waiting in its source would bring its app forward over the
+    // one a later tap on another source's agent brought (PM, 2026-11-24).
+    it('a tap waiting in its source is superseded by a later tap on another source\'s agent', async () => {
+      const openEnded = vi.fn()
+      const { host } = await setup({ openEnded })
+      let land!: () => void
+      const landed = new Promise<void>((resolve) => { land = resolve })
+      const opened: string[] = []
+      const waits: HostSource = { ...outsideApp(true), focus: async (agent, latest) => {
+        await landed
+        if (latest && !latest()) return 'superseded'
+        opened.push(agent.id)
+        return true
+      } }
+      const other: HostSource = { id: 'claude-app', list: () => [observedAgent({ id: 'c1' })],
+        capabilities: () => ({ status: true, voice: false, focus: true, answer: false }),
+        focus: async (agent) => { opened.push(agent.id); return true } }
+      host.setRegistry(new HostRegistry([host.harness, waits, other]))
+      await host.listAgentSnapshot()
+      const tappingA = host.openAgent('o1')
+      expect(await host.openAgent('c1')).toBeUndefined()
+      land()
+      expect(await tappingA).toBe('superseded')
+      expect(opened).toEqual(['c1'])
+      expect(openEnded.mock.calls).toEqual([['c1', { outcome: 'ok' }]])
+    })
+
     it('a tap reports its open: handed to the window', async () => {
       const openEnded = vi.fn()
       const { host } = await setup({ openEnded })

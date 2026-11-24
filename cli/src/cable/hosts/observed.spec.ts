@@ -5210,12 +5210,19 @@ describe('ObservedSource outer place', () => {
     // A tap or rest waits up to OUTER_FRESH_WAIT_MS before it acts (PM, 2026-11-24: last action wins): one the person
     // replaced meanwhile would bring forward what they left.
     describe('the last tap or rest wins', () => {
+      // The dial's taps on any agent, in turn, as cableHost counts them: each asks whether it is still the latest.
+      const taps = () => {
+        let n = 0
+        return (src: ObservedSource, agent: HostAgent) => { const mine = ++n; return src.focus(agent, () => n === mine) }
+      }
+
       it('two taps during one wait: only the later opens', async () => {
         const t = nested({}, undefined, {}, { freshByHand: true })
         t.src.ingest(t.ev('session-start', inTmux()))
         await t.asks[0].answer(CLIENT)
-        const first = t.src.focus(t.agent())
-        const second = t.src.focus(t.agent())
+        const tap = taps()
+        const first = tap(t.src, t.agent())
+        const second = tap(t.src, t.agent())
         expect(t.freshAsks).toHaveLength(1)
         await t.freshAsks[0](TAB_2)
         expect(await first).toBe('superseded')
@@ -5230,14 +5237,27 @@ describe('ObservedSource outer place', () => {
         await t.asks[0].answer(CLIENT)
         await t.asks[1].answer(TAB_2)
         const of = (sessionId: string) => t.src.list().find(({ id }) => id === observedAgentId('claude', sessionId))!
-        const tappingA = t.src.focus(of('s1'))
-        const tappingB = t.src.focus(of('s2'))
+        const tap = taps()
+        const tappingA = tap(t.src, of('s1'))
+        const tappingB = tap(t.src, of('s2'))
         await t.freshAsks[0](CLIENT)
         expect(await tappingA).toBe('superseded')
         expect(t.actions.open).not.toHaveBeenCalled()
         await t.freshAsks[1](TAB_2)
         expect(await tappingB).toBe(true)
         expect(t.actions.open.mock.calls.map(([id]) => id)).toEqual([of('s2').id])
+      })
+
+      // A later tap on another source's agent (a Claude app session, Orca, Harness's own window) is no tap here: only
+      // cableHost's count says this one is no longer the latest.
+      it('a tap no longer the latest after its wait opens nothing', async () => {
+        const t = nested({}, undefined, {}, { freshByHand: true })
+        t.src.ingest(t.ev('session-start', inTmux()))
+        await t.asks[0].answer(CLIENT)
+        const tapping = t.src.focus(t.agent(), () => false)
+        await t.freshAsks[0](TAB_2)
+        expect(await tapping).toBe('superseded')
+        expect(t.actions.open).not.toHaveBeenCalled()
       })
 
       it('a rest that a later rest or tap replaced shows nothing', async () => {
