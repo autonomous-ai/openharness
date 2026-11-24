@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { AtomicWriteUnconfirmed, insideWindowsRoots, requireWindowsStateFile, syncStateDirectory, windowsStateRoots } from './secureState.js'
-import { lockStartMarker, processExists } from './processLiveness.js'
+import { lockStartMarker, processExists, processStartMarker } from './processLiveness.js'
 import { psEnv } from './childLocale.js'
 import { ownProcessGroup } from './windows/noWindow.js'
 import { errorKind } from './log.js'
@@ -236,7 +236,7 @@ async function startMarker(pid: number, budget: number): Promise<string | null> 
   }
   if (process.platform === 'win32' || budget <= 0) return null
   return new Promise(resolve => execFile('ps', ['-p', String(pid), '-o', 'lstart='], {
-    ...ownProcessGroup(), encoding: 'utf8', timeout: Math.max(1, Math.min(1_000, budget)), env: { ...psEnv(), TZ: 'UTC' },
+    ...ownProcessGroup(), encoding: 'utf8', timeout: Math.max(1, Math.min(1_000, Math.floor(budget))), env: { ...psEnv(), TZ: 'UTC' },
   }, (error, stdout) => resolve(!error && stdout.trim() ? `ps-c:${stdout.trim()}` : null)))
 }
 
@@ -357,7 +357,10 @@ export async function registryFileLock<T>(directory: string, deadline: RegistryW
   }
   await privateRegistryDirectory(directory)
   check()
-  ownGeneration ||= await startMarker(process.pid, expires - performance.now())
+  // Read synchronously, once per process: an async `ps` is a child process inside the write's deadline, and a loop held
+  // while it runs (the e2e stall fault holds it at the next child) turned the core's first write into a missed deadline
+  // and safe mode. macOS only: Linux reads /proc, Windows has no marker.
+  ownGeneration ||= processStartMarker(process.pid)
   check()
   const lock = join(directory, 'registry.json.lock')
   const ownerFile = join(lock, 'owner.json')
