@@ -18,7 +18,7 @@ import { bundleOf, type OpenTarget } from './open.js'
 import { MAX_TEXT } from './orca.js'
 import { FRESH_WITHIN_MS, type Nested, type NestedLookup, type NestedPlace, type OuterLookup } from './outer.js'
 import type { SessionRecord } from './record.js'
-import type { ProcessName } from './scannedApp.js'
+import { parentChain, type ProcessName } from './scannedApp.js'
 import { isTabApp } from './tabs.js'
 import type { Caps, HostAgent, HostAgentState, HostSource, Nest, PaneSwitch, SendResult } from './types.js'
 
@@ -266,6 +266,9 @@ interface Entry {
   /** The multiplexer's pane the scan's lookup placed a session found nested at, until its first hook: a rest and a tap
    *  show it (placeIn), and it is never one of its panes, so no words reach it before a hook names the pane. */
   placed?: Pane
+  /** Its parents below the server of the multiplexer that made its terminal, from the scan's table: its pane's shell is
+   *  one (foundNested). Read only until its first hook. */
+  nestParents?: readonly number[]
   /** The client's process from an answer that named no app (a client in a terminal with no page): the raise's alone,
    *  never a page, a tab or a pane, while its caller and hints are those it was asked for. */
   outerPid?: number
@@ -327,6 +330,13 @@ export class ObservedSource implements HostSource {
       // (docs/plans/2026-11-21-dial-linux-followups-design.md, Decided).
       const paneKeys = e.panes.flatMap(({ adapter, pane }) =>
         (adapter.paneKey && (!pane.held || e.ptyOwner === undefined) ? [adapter.paneKey(pane)] : []))
+      // A pane its caller placed it at is the listing source's own row of it (herdr's and cmux's, by its session or its
+      // shell): its key folds that row into this one. It stays no pane of its own, so no words reach it (shownOnly).
+      for (const [id, { placed }] of this.paneNames) {
+        const at = placed.get(e.agent.id)
+        const adapter = at === undefined ? undefined : this.deps.actions?.adapters.find((a) => a.id === id)
+        if (adapter?.paneKey) paneKeys.push(adapter.paneKey({ adapter: id, id: at! }))
+      }
       // An ended session gives its row to another source's live copy. It keeps its pane keys to find one whose session id
       // differs (the Claude app's store, before it names the new id): the registry folds nothing by an ended copy's keys.
       if (!this.live(e)) return { ...e.agent, ended: true, ...(paneKeys.length && { paneKeys }) }
@@ -756,6 +766,14 @@ export class ObservedSource implements HostSource {
       if (asker.sessionId !== undefined && asker.engine === e.agent.engine && asker.sessionId === e.agent.sessionId) return true
     }
     return false
+  }
+
+  /** Each live agent the scan found on a terminal [host]'s server made, no hook told of yet, with its parents below that
+   *  server: the devices find the herdr pane of one whose herdr row names no session by that pane's shell
+   *  (services/devices.ts placeInHerdr). */
+  foundNested(host: string): { agentId: string; parents: readonly number[] }[] {
+    return [...this.entries.values()].flatMap((e) =>
+      (e.nestParents && e.agent.nest === host && this.unhooked(e) ? [{ agentId: e.agent.id, parents: e.nestParents }] : []))
   }
 
   /** A live agent's latest process, the one whose window a raise brings forward, and its app; none once its session
@@ -1354,6 +1372,8 @@ export class ObservedSource implements HostSource {
     let paired = 0
     // The sessions on a terminal a multiplexer made, asked where the person sees them once every session is listed.
     const asks: [Entry, Nested][] = []
+    // The look's table by pid, built at its first nested session.
+    let byPid: ReadonlyMap<number, ProcessName> | undefined
     const now = this.deps.now()
     for (const [sessionId, engine] of listing) {
       // A hook may have told of it while the reads ran: it said more.
@@ -1390,6 +1410,10 @@ export class ObservedSource implements HostSource {
           entry.agent.host = nest.host
           entry.scanPlaced = true
         }
+        byPid ??= new Map(nest.rows.map((p) => [p.pid, p]))
+        const parents = parentChain(owner.pid, byPid).slice(1).map(({ pid }) => pid)
+        const server = parents.indexOf(nest.maker)
+        entry.nestParents = server < 0 ? parents : parents.slice(0, server)
         this.locate(entry)
         asks.push([entry, nest])
       } else this.learnTty(entry, owner.pid)

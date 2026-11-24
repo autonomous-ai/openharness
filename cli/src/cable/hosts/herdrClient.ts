@@ -302,3 +302,18 @@ export function createHerdrClient(deps: HerdrClientDeps): HerdrClient {
 
   return { request, subscribe, prompt, socketStamp, binary: () => look?.image }
 }
+
+/** A pane's shell as herdr names it, or why not: as a request's, or a pane id out of form (`bad_request`). */
+export type HerdrShell = { ok: true; shell: number } | ({ ok: false } & (HerdrFailure | { fault: 'bad_request' }))
+
+/** The shell herdr started in [paneId] (`pane.process_info`), within the request's timeout: the devices find the pane of
+ *  an agent herdr's row names no session for by it (services/devices.ts placeInHerdr). A function beside the client, so
+ *  every HerdrClient has it. */
+export async function herdrShellOf(client: Pick<HerdrClient, 'request'>, paneId: string): Promise<HerdrShell> {
+  if (!HERDR_PANE.test(paneId)) return { ok: false, fault: 'bad_request' }
+  const answer = await client.request('pane.process_info', { pane_id: paneId })
+  if (!answer.ok) return answer
+  const info = answer.result.process_info
+  const shell = isObject(info) ? info.shell_pid : undefined
+  return Number.isSafeInteger(shell) && (shell as number) > 0 ? { ok: true, shell: shell as number } : { ok: false, fault: 'bad_answer' }
+}

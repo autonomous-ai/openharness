@@ -52,7 +52,7 @@ import { createHcClient, hcClientDeps, hcPaneKey, hcSocketPath, type HcClient } 
 import { HcSource } from '../cable/hosts/hcSource.js'
 import { createHerdrAdapter, herdrPaneParts } from '../cable/hosts/herdr.js'
 import { createHerdrAppAdapter } from '../cable/hosts/herdrApp.js'
-import { createHerdrClient, herdrClientDeps, herdrPaneKey, type HerdrClient } from '../cable/hosts/herdrClient.js'
+import { createHerdrClient, herdrClientDeps, herdrPaneKey, herdrShellOf, type HerdrClient } from '../cable/hosts/herdrClient.js'
 import { createHerdrNested, createHerdrOuter, procSockets, ttyAtime } from '../cable/hosts/herdrOuter.js'
 import { HerdrSource } from '../cable/hosts/herdrSource.js'
 import { createKittyAdapter, createKittyTabAdapter, kittyFinder } from '../cable/hosts/kitty.js'
@@ -277,6 +277,8 @@ const LISTENER_WAIT_MS = 1_000
 const ATTACH_ECHO_MS = 2_000
 /** How many agents whose last turn failed are remembered for Needs you's list: a bound on what a busy fleet leaves. */
 const FAILED_KEPT = 64
+/** herdr's panes with no session whose shell is asked or known at once (placeInHerdr): a bound on what one herdr costs. */
+const HERDR_SHELLS_MAX = 16
 
 /** Whether [path] is a file: false when nothing is there, it is a folder, or on any error. */
 function isFile(path: string): boolean {
@@ -2063,21 +2065,58 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    * rest reached the tab alone. Only an agent with no herdr pane of its own. The place carries the app the agent is on,
    * as a rest needs it (herdr.ts canShow); while that app is not known, the bare pane, which a tap still focuses. A place
    * opens and shows, never takes words (observed.ts shownOnly).
+   *
+   * A row with no session (no `herdr integration install claude`) is the scan's agent's when herdr's shell of that pane
+   * is one of the agent's parents: placed there too, its key folds that row into the scan's copy, one row, not two until
+   * its first hook (known gap 1 of PR #4578).
    */
   let placedInHerdr = false
+  /** herdr's shell of each pane with no session asked, by pane id, none while asked or once the ask failed: herdr never
+   *  reuses a pane id, so each is asked once while listed, at most HERDR_SHELLS_MAX at a time. */
+  const herdrShells = new Map<string, number | undefined>()
   const placeInHerdr = (source: ObservedSource, listing: HerdrSource): void => {
     const rows = listing.list()
     // Each observed change lands here, herdr running or not: with no row and no place to drop, there is nothing to tell.
     if (rows.length === 0 && !placedInHerdr) return
     const placed = new Map<string, string>()
-    for (const { id, engine, sessionId } of rows) {
-      if (sessionId === undefined) continue
-      const agentId = observedAgentId(engine, sessionId)
-      if (source.paneOf(agentId, 'herdr') !== undefined) continue
+    const place = (agentId: string, pane: string) => {
       const app = source.windowOf(agentId)?.app
+      placed.set(agentId, app !== undefined && app !== UNKNOWN_APP && APP_IDS.includes(app) ? `${pane}:${app}` : pane)
+    }
+    const bare: string[] = []
+    for (const { id, engine, sessionId } of rows) {
       // A row it lists has its pane.
       const pane = listing.paneAt(id)!
-      placed.set(agentId, app !== undefined && app !== UNKNOWN_APP && APP_IDS.includes(app) ? `${pane}:${app}` : pane)
+      if (sessionId === undefined) {
+        bare.push(pane)
+        continue
+      }
+      const agentId = observedAgentId(engine, sessionId)
+      if (source.paneOf(agentId, 'herdr') === undefined) place(agentId, pane)
+    }
+    for (const pane of herdrShells.keys()) if (!bare.includes(pane)) herdrShells.delete(pane)
+    const unplaced = source.foundNested('herdr')
+      .filter(({ agentId }) => !placed.has(agentId) && source.paneOf(agentId, 'herdr') === undefined)
+    let waiting = false
+    for (const { agentId, parents } of unplaced) {
+      const pane = bare.find((at) => {
+        const shell = herdrShells.get(at)
+        return shell !== undefined && parents.includes(shell)
+      })
+      if (pane === undefined) waiting = true
+      else place(agentId, pane)
+    }
+    // Asked only while such an agent waits for its pane.
+    if (waiting) {
+      for (const pane of bare.filter((at) => !herdrShells.has(at)).slice(0, HERDR_SHELLS_MAX - herdrShells.size)) {
+        herdrShells.set(pane, undefined)
+        void herdrShellOf(herdrClient, pane).then((answer) => {
+          // Its kind only: a pane or a process would say where someone works.
+          if (!answer.ok) return log(`[device] herdr shell · not read · ${answer.fault}`)
+          herdrShells.set(pane, answer.shell)
+          part.call('herdr', () => placeInHerdr(source, listing))
+        })
+      }
     }
     source.setPaneNames('herdr', new Map(), placed)
     placedInHerdr = placed.size > 0
