@@ -39,6 +39,7 @@ import { ClaudeAppStore } from '../cable/hosts/claudeAppStore.js'
 import { MANAGED_SETTINGS, readFullscreen } from '../cable/hosts/claudeRenderer.js'
 import { cmuxClientDeps, cmuxStoreDir, cmuxStores, createCmuxClient, type CmuxClient } from '../cable/hosts/cmuxCli.js'
 import { createCmuxAppAdapter } from '../cable/hosts/cmuxApp.js'
+import { CMUX_EVENTS, cmuxLogFiles, createCmuxFocus, type CmuxFront, type CmuxLogFiles } from '../cable/hosts/cmuxFocus.js'
 import { CmuxSource } from '../cable/hosts/cmuxSource.js'
 import { createCursorFolderAdapter, isFolder } from '../cable/hosts/cursorFolder.js'
 import { watchNearest } from '../cable/hosts/folderWatch.js'
@@ -172,6 +173,8 @@ export interface DevicesDeps {
   hc?: HcClient
   /** For this service's tests: cmux's own command line (cable/hosts/cmuxCli.ts). */
   cmux?: CmuxClient
+  /** For this service's tests: cmux's event log by descriptor (cable/hosts/cmuxFocus.ts); the file, read-only, by default. */
+  cmuxEvents?: CmuxLogFiles
   /** For this service's tests: opencode's service (cable/hosts/opencodeClient.ts). */
   opencode?: OpencodeClient
   /** For this service's tests: the reader of the Claude app's store (cable/hosts/claudeAppStore.ts). */
@@ -966,6 +969,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // watchSocket holds the folder of the path it is given: a name in ~/.cmuxterm, none of cmux's, makes it hold that
     // folder, else its parent until it appears.
     watch: (changed) => watchSocket({ socketPath: join(cmuxStoresAt, 'stores'), home: homedir() }, changed),
+    events: () => part.call('cmux', cmuxRead),
     folder: () => existsSync(cmuxStoresAt),
     stores: () => cmuxStores(cmuxStoresAt),
     alive: pidAlive,
@@ -986,6 +990,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     log,
     count: voiced,
   }) : null
+  /** cmux's front workspace and the surface focused in it, from cmux's event log in its stores' folder
+   *  (docs/plans/2026-11-25-dial-cmux-focus-follow-design.md), where cmux's source runs: read only as cmuxRead says. */
+  const cmuxFocus = cmuxSource ? createCmuxFocus({ files: deps.cmuxEvents ?? cmuxLogFiles(), path: join(cmuxStoresAt, CMUX_EVENTS), monotonic, log }) : null
   /** opencode's sessions, listed and followed over its local server (docs/plans/2026-11-17-dial-opencode-design.md). It
    *  runs only while a dial is attached, behind the observed agents' switch, on every platform. It looks for no `opencode`
    *  on PATH: the desktop app runs the service with no CLI installed. */
@@ -1424,6 +1431,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       if (app === 'orca' && observed) part.call('orca', () => orcaSettled(observed))
       // Orca is often not running at the start or the attach: its coming to the front is the pass's next chance.
       if (app === 'orca' && orcaSetup) part.call('orcaPlugin', () => orcaSetup.pass())
+      // Behind another app cmux's log was not read: the read as cmux comes forward catches up.
+      if (app === 'cmux') part.call('cmux', cmuxRead)
       part.call('dial', tabSettled)
       part.call('dial', () => threadSettled(app))
       part.call('dial', () => editorSettled(app))
@@ -2474,6 +2483,31 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     return cable.followLocal(agent.id, 'pane')
   }
 
+  // ── the surface focused in cmux ──────────────────────────────────────────────────────────────────────
+  //
+  // cmux appends each move of its focus to its own event log, in the folder the cmux source watches: that watch tells each
+  // change of the log, so cmux's focus needs no poll, timer or socket of its own
+  // (docs/plans/2026-11-25-dial-cmux-focus-follow-design.md, decided 1-2). The log is read only while a dial is attached,
+  // cmux's source runs and cmux is the settled front app: behind another app the person is not looking at cmux, while a
+  // working agent's hooks write its log many times a second. A change then is not kept: the read as cmux settles catches
+  // up.
+  /** Bumped at each reset of the reader: a read that lands after one is dropped. */
+  let cmuxReads = 0
+  /** cmux's front as its log says it now; none when the log is not read (above), or for a read that landed after a
+   *  reset. */
+  const cmuxRead = async (): Promise<CmuxFront | undefined> => {
+    if (!dialOn || !cmuxFound || cableHost.settledApp() !== 'cmux') return
+    const at = cmuxReads
+    const front = await cmuxFocus!.read()
+    return at === cmuxReads ? front : undefined
+  }
+  /** cmux's source stopped (the dial went, or cmux was not found): what was read of the log is forgotten, and a read
+   *  under way lands on nothing. */
+  const dropCmuxFocus = (): void => {
+    cmuxReads++
+    cmuxFocus!.reset()
+  }
+
   /** The scan, the reminders, herdr's and Herdr Core's sockets, opencode's service, the Claude app's store and the ChatGPT
    *  app's metadata, for an attached dial alone. */
   let attached: ReturnType<typeof setInterval>[] = []
@@ -2513,8 +2547,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const hcRead = hcSource ? partEnd('herdr-app', () => on && herdrApp.binary() ? hcSource.start() : hcSource.stop()) : undefined
     // Only with cmux installed, read at each attach as Herdr's is: with none, no folder is watched for its stores, and a
     // hooked agent's words are not offered to it.
-    const cmuxRead = cmuxSource ? partEnd('cmux', () => {
+    const cmuxListed = cmuxSource ? partEnd('cmux', () => {
       cmuxFound = on && cmuxClient.binary() !== null
+      if (!cmuxFound) dropCmuxFocus()
       return cmuxFound ? cmuxSource.start() : cmuxSource.stop()
     }) : undefined
     const opencodeRead = partEnd('opencode', () => on ? opencode.start() : opencode.stop())
@@ -2530,7 +2565,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         return found ? codexAppSource.start() : codexAppSource.stop()
       })
     })
-    const reads = Promise.all([herdrRead, hcRead, cmuxRead, opencodeRead, claudeRead, codexRead]).then(() => {})
+    const reads = Promise.all([herdrRead, hcRead, cmuxListed, opencodeRead, claudeRead, codexRead]).then(() => {})
     if (!on) {
       // The next attach checks Orca's ring afresh, and a read under way lands on nothing.
       orcaRing = { again: false }
@@ -2545,6 +2580,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // A dial plugged in while Orca is already in front: a front told again starts no settle, so none would come until the
     // person left Orca and came back.
     part.call('orca', () => cableHost.settledApp() === 'orca' ? orcaSettled(observed) : undefined)
+    // The same for cmux: the read its settle makes, once cmux's agents are listed, so the agent at its focus is known (PM,
+    // 2026-11-25).
+    void cmuxListed?.then(() => part.call('cmux', cmuxRead))
     // Its questions were in its RAM: the ones still waiting are asked again, under their ids.
     part.call('dial', () => { for (const [agentId, question] of shown) ask(agentId, question) })
     part.call('dial', showWaits)

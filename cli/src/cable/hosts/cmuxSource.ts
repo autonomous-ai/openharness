@@ -17,6 +17,7 @@ import {
   CMUX_AUTOMATION_OFF, CMUX_STORE, cmuxPaneId, cmuxPaneKey, cmuxTakesWords,
   type CmuxClient, type CmuxLifecycle, type CmuxPrompt, type CmuxSession, type CmuxSessions,
 } from './cmuxCli.js'
+import { CMUX_EVENTS } from './cmuxFocus.js'
 import { MAX_AGENTS, shown } from './herdrSource.js'
 import { MAX_TEXT } from './orca.js'
 import type { Caps, HostAgent, HostAgentState, HostSource, PaneSwitch, SendResult } from './types.js'
@@ -34,6 +35,9 @@ export interface CmuxSourceDeps {
   /** Tells of each change where cmux's stores live, with the changed file's name when the OS gave one
    *  (unixSocket.ts watchSocket), until its stop is called. */
   watch(changed: (file?: string) => void): () => void
+  /** cmux's event log, in the same folder, may have changed: the devices read it (cmuxFocus.ts) through this watch, so
+   *  cmux's focus needs no watch of its own. */
+  events(): void
   /** Whether the stores' folder is there now. */
   folder(): boolean
   /** cmux's word of each store in that folder now (cmuxCli.ts cmuxStores). */
@@ -226,7 +230,7 @@ export class CmuxSource implements HostSource {
   }
 
   /** A change where the stores live. With the folder's parent held, it tells every change of the home folder too: only
-   *  the folder coming or going, or a store's own name, starts a run. */
+   *  the folder coming or going, or a store's own name, starts a run. The event log's name, or none, is told on. */
   private changed(file?: string): void {
     if (!this.running) return
     const was = this.there
@@ -237,6 +241,7 @@ export class CmuxSource implements HostSource {
       return
     }
     if (!there) return
+    if (file === undefined || file === CMUX_EVENTS) this.deps.events()
     if (file === undefined) {
       this.read(undefined)
       return
