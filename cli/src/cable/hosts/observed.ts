@@ -1425,11 +1425,13 @@ export class ObservedSource implements HostSource {
    */
   private async placeNested(entry: Entry, nest: Nested): Promise<boolean> {
     if (!this.unhooked(entry)) return false
-    // Placed or not, a tap or a rest asks it again (askAfresh, eval I13).
-    entry.scanNested = { host: nest.host, pid: nest.pid, tty: nest.tty, maker: nest.maker }
     let place: NestedPlace | undefined
     try {
-      place = await this.deps.nested?.(nest)
+      const asked = this.deps.nested?.(nest)
+      // Placed or not, a tap or a rest asks it again (askAfresh, eval I13). A lookup with no answer for it here (a tty out
+      // of its platform's form) has none then either, as it is asked the same facts: no table is read for it at a tap.
+      if (asked) entry.scanNested = { host: nest.host, pid: nest.pid, tty: nest.tty, maker: nest.maker }
+      place = await asked
     } catch (error) {
       // Its kind, no error text: a path in it holds the account's name.
       this.deps.log(`[observed] scan · lookup not read · ${errorKind(error)}`)
