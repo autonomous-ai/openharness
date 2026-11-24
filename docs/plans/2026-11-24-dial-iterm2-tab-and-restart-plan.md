@@ -90,8 +90,16 @@ is `fix/dial-herdr-rows-merge`, later.
 
 ## Measured (Task 1)
 
-To be filled by Task 1: machine, load (`uptime`), runs, p50, p95, max of one cold tmux lookup to `found`, and the
-`OUTER_FRESH_WAIT_MS` it confirms.
+2026-11-24, Apple M1 Pro (10 cores, 32 GB), macOS 26.6.2, tmux 3.6b. Load before the runs (`uptime`): 15.15, 26.89,
+29.18, a busy Mac, so the numbers lean high. 50 runs, each a new `createTmuxOuter` built as `devices.ts` builds it, one
+private tmux server, a pane holding a long-lived stand-in agent and one client attached from a shell under a fake
+iTerm2 server in a throwaway home. All 50 answered `{ app: 'iterm', tty, pid, nest: 'tmux' }`.
+
+| p50 | p95 | max |
+|---|---|---|
+| 138 ms | 156 ms | 159 ms |
+
+p95 is well under 700 ms: `OUTER_FRESH_WAIT_MS = 700` stays.
 
 ---
 
