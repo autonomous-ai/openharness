@@ -113,8 +113,9 @@ export interface HostSource {
   /** A sentence of the agent's own app for words no route reaches, said in place of the generic one; none keeps that. */
   voiceRefusal?(agent: HostAgent): string | undefined
   /** A tap: bring the agent's terminal forward; false when it did not come, `superseded` when a later tap replaced it
-   *  before it acted (eval I13, PM 2026-11-24). A source without it opens nothing. */
-  focus?(agent: HostAgent): Promise<boolean | 'superseded'>
+   *  before it acted (eval I13, PM 2026-11-24). [latest] says whether it is still the dial's latest tap, on any agent of
+   *  any source: one that waits before it acts asks it then. A source without it opens nothing. */
+  focus?(agent: HostAgent, latest?: () => boolean): Promise<boolean | 'superseded'>
   /** Whether the agent has a pane its app can show without coming forward. A source without it has none. */
   hasPane?(agent: HostAgent): boolean
   /** Shows the agent's pane inside its app, which stays where it is; `superseded` when a later tap or rest replaced it

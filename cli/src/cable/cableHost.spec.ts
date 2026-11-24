@@ -2926,7 +2926,7 @@ describe('the dial reaches the fleet through the core\'s port', () => {
     it('a tap on an agent with f runs source.focus', async () => {
       const { host, observed, heard } = setup()
       expect(await host.openAgent('o1')).toBeUndefined()
-      expect(observed.focus).toHaveBeenCalledWith(scratch)
+      expect(observed.focus).toHaveBeenCalledWith(scratch, expect.any(Function))
       expect(JSON.stringify(heard())).not.toContain('o1')
     })
 

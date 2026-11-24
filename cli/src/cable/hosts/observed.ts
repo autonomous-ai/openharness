@@ -312,11 +312,10 @@ export class ObservedSource implements HostSource {
    *  with none of that adapter's at, by agent id. */
   private readonly paneNames = new Map<string, { names: ReadonlyMap<string, PaneName>; placed: ReadonlyMap<string, string> }>()
   private scanning: Promise<void> | null = null
-  /** Each tap and rest, in turn, and the latest tap's turn: past its wait for a fresh place (waitFresh) a tap acts only
-   *  while no later tap came, and a rest only while no later tap or rest came, so neither brings forward what the
-   *  person left meanwhile (PM, 2026-11-24: last action wins). */
+  /** Each tap and rest here, in turn: past its wait for a fresh place (waitFresh) a rest acts only while no later tap or
+   *  rest came, so it shows nothing the person left meanwhile (PM, 2026-11-24: last action wins). A tap asks the dial's
+   *  own count (focus), as a later tap on another source's agent is none of these. */
   private acted = 0
-  private tapped = 0
 
   constructor(private readonly deps: ObservedDeps) {}
 
@@ -522,16 +521,15 @@ export class ObservedSource implements HostSource {
     return this.entries.get(e.agent.id) === e && e.endAt === undefined
   }
 
-  async focus(agent: HostAgent): Promise<boolean | 'superseded'> {
-    const mine = ++this.acted
-    this.tapped = mine
+  async focus(agent: HostAgent, latest?: () => boolean): Promise<boolean | 'superseded'> {
+    ++this.acted
     const e = this.entries.get(agent.id)
     const actions = this.deps.actions
     if (!e || !actions || !this.live(e)) return false
     const waiting = this.waitFresh(e)
     if (waiting) {
       await waiting
-      if (this.tapped !== mine) return 'superseded'
+      if (latest && !latest()) return 'superseded'
       if (!this.live(e)) return false
     }
     const target = this.target(e)
