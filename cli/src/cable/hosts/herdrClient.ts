@@ -118,7 +118,10 @@ export type HerdrAnswer = { ok: true; result: Record<string, unknown> } | ({ ok:
  *  holds another kind (`not_that_agent`). */
 export type HerdrPrompt = { outcome: 'sent' | 'busy' }
   | ({ outcome: 'failed' } & (HerdrFailure | { fault: 'bad_request' | 'not_that_agent' }))
-export type HerdrEntry = { type: 'pane.agent_detected' | 'pane.closed' | 'pane.exited' } | { type: 'pane.agent_status_changed'; pane_id: string }
+/** `pane.focused`'s event is `pane_focused`, its data `pane_id` and `workspace_id` (herdr 0.9.5: fakeHerdr.ts
+ *  RECORDED.focused). */
+export type HerdrEntry = { type: 'pane.agent_detected' | 'pane.closed' | 'pane.exited' | 'pane.focused' }
+  | { type: 'pane.agent_status_changed'; pane_id: string }
 export interface HerdrSubscriber {
   started(): void
   event(name: string, data: Record<string, unknown>): void

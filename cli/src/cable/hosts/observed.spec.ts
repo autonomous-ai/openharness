@@ -1581,7 +1581,7 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
       binary: () => undefined,
     }, front: () => undefined }), 'herdr'),
     createTmuxAdapter({ run: ran, tmux: async () => ({ state: 'present' }), processes: async () => [{ pid: 100, ppid: 1, executable: 'claude' }],
-      log: () => {}, front: () => fake.tmuxFront() }),
+      log: () => {}, front: () => fake.tmuxFront(), platform: 'darwin' }),
     // As devices.ts takes it where the hook's addresses are hc's own session's.
     createHerdrAppAdapter({ ...deps,
       client: { prompt: (address, kind, text) => fake.hcPrompt(address, kind, text), keys: async () => false },
@@ -3316,7 +3316,7 @@ describe('ObservedSource and the host that owns its caller\'s terminal', () => {
     const present = async () => ({ state: 'present' as const })
     const adapters = [
       createZellijAdapter({ run, zellij: present, platform: 'linux' }),
-      createTmuxAdapter({ run, tmux: present, processes: async () => [{ pid: 100, ppid: 1, executable: 'claude' }], log: () => {}, front: () => undefined }),
+      createTmuxAdapter({ run, tmux: present, processes: async () => [{ pid: 100, ppid: 1, executable: 'claude' }], log: () => {}, front: () => undefined, platform: 'darwin' }),
     ]
     const { actions } = fakeActions()
     const s = setup({ actions: { ...actions, adapters }, ptyOwner })
@@ -4406,6 +4406,18 @@ describe('ObservedSource tabs', () => {
     expect(t.src.hasPane(t.agent())).toBe(true)
   })
 
+  it('tabTty: a live agent\'s tty once read, none before, for an ended session or an unknown id', async () => {
+    const t = tabs()
+    t.src.ingest(t.ev('session-start', inTerminal))
+    const { id } = t.agent()
+    expect(t.src.tabTty(id)).toBeUndefined()
+    await t.reads[0].answer(TTY)
+    expect(t.src.tabTty(id)).toBe(TTY)
+    expect(t.src.tabTty('nobody')).toBeUndefined()
+    t.src.ingest(t.ev('session-end', inTerminal))
+    expect(t.src.tabTty(id)).toBeUndefined()
+  })
+
   it('iTerm2 and Ghostty are read too; Orca, VS Code and an unknown terminal are not', () => {
     const t = tabs()
     t.src.ingest(t.ev('session-start', { sessionId: 'iterm', callerPid: 101, hostHints: { TERM_PROGRAM: 'iTerm.app' } }))
@@ -4751,6 +4763,18 @@ describe('ObservedSource outer place', () => {
     t.src.ingest(t.ev('turn-start', inTmux()))
     await t.asks[1].answer({})
     expect(t.src.windowOf(id)).toEqual({ pid: 100, app: 'tmux' })
+  })
+
+  it('tabTty: a nested agent\'s is its client\'s tty, and none once no client holds it', async () => {
+    const t = nested()
+    t.src.ingest(t.ev('session-start', inTmux()))
+    const { id } = t.agent()
+    expect(t.src.tabTty(id)).toBeUndefined()
+    await t.asks[0].answer(CLIENT)
+    expect(t.src.tabTty(id)).toBe('/dev/ttys004')
+    t.src.ingest(t.ev('turn-start', inTmux()))
+    await t.asks[1].answer({})
+    expect(t.src.tabTty(id)).toBeUndefined()
   })
 
   // A client in a terminal with no page (docs/plans/2026-11-21-dial-linux-followups-design.md, Decided): its window is
@@ -5494,6 +5518,15 @@ describe('ObservedSource and a nested session the scan found', () => {
     // Their tty is the multiplexer pane's pty, which no tab holds.
     expect(t.tty).not.toHaveBeenCalled()
     expect(t.logs).toEqual(['[observed] scan · 2 found · 0 app known · 0 named · 0 answered · 0 ms · 2 nested placed'])
+  })
+
+  it('tabTty: the scan\'s place gives it', async () => {
+    const t = scan(new Map([[100, IN_TMUX]]))
+    t.found('a', 100)
+    const look = t.src.scanOpen()
+    await t.answer(0, ITERM)
+    await look
+    expect(t.src.tabTty(t.agent('a').id)).toBe('/dev/ttys004')
   })
 
   it('a look reads the table once for its walk, its makers and its lookups', async () => {

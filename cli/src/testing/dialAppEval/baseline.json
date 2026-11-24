@@ -96,11 +96,11 @@
     "a/darwin/I1/ring.order": 1,
     "a/darwin/I1/ring.precision": 1,
     "a/darwin/I1/ring.recall": 1,
-    "a/darwin/I10/focus.lands": 0,
-    "a/darwin/I10/focus.latency": 0,
+    "a/darwin/I10/focus.lands": 1,
+    "a/darwin/I10/focus.latency": 1,
     "a/darwin/I10/wait.3": 1,
-    "a/darwin/I11/focus.lands": 0,
-    "a/darwin/I11/focus.latency": 0,
+    "a/darwin/I11/focus.lands": 1,
+    "a/darwin/I11/focus.latency": 1,
     "a/darwin/I11/wait.3": 1,
     "a/darwin/I12/added.apart": 1,
     "a/darwin/I12/added.archived": 1,
@@ -1899,14 +1899,14 @@
     "b/darwin/I10/cost.cpu": 1,
     "b/darwin/I10/cost.leftovers": 1,
     "b/darwin/I10/cost.loopP99": 1,
-    "b/darwin/I10/focus.lands": 0,
-    "b/darwin/I10/focus.latency": 0,
+    "b/darwin/I10/focus.lands": 1,
+    "b/darwin/I10/focus.latency": 1,
     "b/darwin/I10/wait.3": 1,
     "b/darwin/I11/cost.cpu": 1,
     "b/darwin/I11/cost.leftovers": 1,
     "b/darwin/I11/cost.loopP99": 1,
-    "b/darwin/I11/focus.lands": 0,
-    "b/darwin/I11/focus.latency": 0,
+    "b/darwin/I11/focus.lands": 1,
+    "b/darwin/I11/focus.latency": 1,
     "b/darwin/I11/wait.3": 1,
     "b/darwin/I12/added.apart": 1,
     "b/darwin/I12/added.archived": 1,
@@ -2837,7 +2837,7 @@
       "vscode": 100,
       "cursor": 91.22807017543859,
       "orca": 98.95885167464114,
-      "iterm": 92.98245614035088
+      "iterm": 100
     },
     "b/darwin": {
       "claude": 100,
@@ -2845,7 +2845,7 @@
       "vscode": 98.57142857142857,
       "cursor": 91.66666666666666,
       "orca": 99.74358974358975,
-      "iterm": 92.63759086188993
+      "iterm": 99.30425752855659
     }
   }
 }

@@ -767,6 +767,13 @@ export class ObservedSource implements HostSource {
     return e && this.live(e) ? { pid: e.outer?.pid ?? e.outerPid ?? e.caller ?? e.pid, app: e.agent.app } : undefined
   }
 
+  /** A live agent's tab, the tty byTab reads: its own in a tab app, its multiplexer client's when nested (a hook's
+   *  outer answer, or the scan's place); none when it has none, or its session ended. */
+  tabTty(agentId: string): string | undefined {
+    const e = this.entries.get(agentId)
+    return e && this.live(e) ? e.tty : undefined
+  }
+
   /** A live agent's pane id in that adapter as a rest, a tap and its name read it (placeIn), a held one too, which
    *  only a tap shows; none once its session ended. Orca's ring for the worktree on screen reads this, not paneOf: a
    *  held terminal is still in the worktree the agent was started from, while words and the focus watch keep to its

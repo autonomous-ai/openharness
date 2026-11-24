@@ -31,6 +31,8 @@ const HERDR = '/opt/eval/bin/herdr'
 const T0 = 1_763_337_600_000
 /** What the herdr source subscribes to besides its panes' statuses (herdrSource.ts KINDS). */
 const KINDS: HerdrEntry[] = [{ type: 'pane.agent_detected' }, { type: 'pane.closed' }, { type: 'pane.exited' }]
+/** The herdr source's focus subscription, one of its own (herdrSource.ts FOCUS). */
+const FOCUS: HerdrEntry[] = [{ type: 'pane.focused' }]
 
 /** a in w1's plain tab 0; h and g in herdr, their client in tab 1, g's row with no session; k in herdr, its client in
  *  tab 2. */
@@ -129,6 +131,8 @@ function hearing() {
 const landed = (): Promise<void> => new Promise((resolve) => { setImmediate(resolve) })
 const status = (pane: string, agentStatus: string) =>
   ({ name: 'pane.agent_status_changed', data: { agent: 'claude', agent_status: agentStatus, pane_id: pane, workspace_id: 'w1' } })
+/** herdr 0.9.5's line as a pane takes the focus (the plan's probe findings, row 5). */
+const focused = (pane: string) => ({ name: 'pane_focused', data: { pane_id: pane, type: 'pane_focused', workspace_id: 'w1' } })
 
 describe("tier A's herdr", () => {
   it("the server is its first client's child on no tty, each pane's shell its child on a tty of its own, each client under "
@@ -300,6 +304,91 @@ describe("tier A's herdr", () => {
     await w.step('herdr.focus', { session: 'h' })
     expect((await w.list()).map((agent) => [agent.pane_id, agent.focused])).toEqual([['w1:p1', true], ['w1:p2', false]])
     expect([w.told.length, w.deliveries]).toEqual([2, []])
+  })
+
+  it('a subscription naming pane.focused hears the pane the person focuses, and one that does not name it hears nothing',
+    async () => {
+      const w = fakeWorld()
+      await w.start('h', 'g')
+      const named = hearing()
+      const other = hearing()
+      w.client.subscribe(FOCUS, named.to)
+      w.client.subscribe([{ type: 'pane.agent_status_changed', pane_id: 'w1:p1' }], other.to)
+      await landed()
+      await w.step('herdr.focus', { session: 'h' })
+      await landed()
+      expect(named.heard).toEqual(['started', focused('w1:p1')])
+      expect(other.heard).toEqual(['started'])
+    })
+
+  it('herdr agent focus tells it too, and one herdr refuses tells nothing', async () => {
+    const w = fakeWorld()
+    await w.start('h', 'g')
+    const { heard, to } = hearing()
+    w.client.subscribe(FOCUS, to)
+    await landed()
+    w.run(HERDR, 'agent', 'focus', 'w1:p1')
+    w.run(HERDR, 'agent', 'focus', 'w1:p9')
+    await landed()
+    expect(heard).toEqual(['started', focused('w1:p1')])
+  })
+
+  it('a focus that does not move tells nothing (probe row 6)', async () => {
+    const w = fakeWorld()
+    await w.start('h', 'g')
+    const { heard, to } = hearing()
+    w.client.subscribe(FOCUS, to)
+    await landed()
+    // g's pane opened last and holds the focus.
+    await w.step('herdr.focus', { session: 'g' })
+    w.run(HERDR, 'agent', 'focus', 'w1:p2')
+    await w.step('herdr.focus', { session: 'h' })
+    w.run(HERDR, 'agent', 'focus', 'w1:p1')
+    await landed()
+    expect(heard).toEqual(['started', focused('w1:p1')])
+  })
+
+  // As the herdr source hears them: its agents' subscription and its focus one.
+  it('a pane that opens takes the focus and is told, before its agent is detected (probe row 8)', async () => {
+    const w = fakeWorld()
+    await w.start('h')
+    const { heard, to } = hearing()
+    w.client.subscribe(KINDS, to)
+    w.client.subscribe(FOCUS, to)
+    await landed()
+    await w.start('g')
+    await landed()
+    expect(heard).toEqual(['started', 'started', focused('w1:p2'),
+      { name: 'pane_agent_detected', data: { agent: 'claude', pane_id: 'w1:p2', type: 'pane_agent_detected', workspace_id: 'w1' } }])
+  })
+
+  it('a focused pane closes only with its server, and the focus it hands on is told nothing (probe row 9)', async () => {
+    const w = fakeWorld()
+    await w.start('h', 'g')
+    const { heard, to } = hearing()
+    w.client.subscribe(FOCUS, to)
+    await landed()
+    await w.step('herdr.focus', { session: 'h' })
+    await w.step('herdr.restart', {})
+    await landed()
+    expect(heard).toEqual(['started', focused('w1:p1'), { closed: 'ended' }])
+  })
+
+  it('a closed subscription hears nothing, though the focus moved before it closed', async () => {
+    const w = fakeWorld()
+    await w.start('h', 'g')
+    const open = hearing()
+    const shut = hearing()
+    const late = hearing()
+    w.client.subscribe(FOCUS, open.to)
+    w.client.subscribe(FOCUS, shut.to).close()
+    const closing = w.client.subscribe(FOCUS, late.to)
+    await landed()
+    // herdr's own command moves the focus with no turn between it and the close.
+    w.run(HERDR, 'agent', 'focus', 'w1:p1')
+    closing.close()
+    await landed()
+    expect([open.heard, shut.heard, late.heard]).toEqual([['started', focused('w1:p1')], [], ['started']])
   })
 
   it('herdr.restart ends the server, its clients and agents with no hook, then starts each session again on a new pane with '
