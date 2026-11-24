@@ -3813,10 +3813,9 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       })
     })
 
-    /** herdr's socket, listing a Claude Code row at each pane, with the session herdr's integration gave it, if any. The
-     *  dial attached, `live` lets the source's subscription start and awaits its list. */
-    /** herdr's list of [rows], and its answer to each pane's process info: the shell [shells] names, else herdr's
-     *  refusal. */
+    /** herdr's socket, listing a Claude Code row at each pane, with the session herdr's integration gave it, if any, and
+     *  answering each pane's process info with the shell [shells] names, else herdr's refusal. The dial attached, `live`
+     *  lets the source's subscription start and awaits its list. */
     const herdrRows = (rows: ReadonlyArray<readonly [pane: string, session?: string]>, shells: ReadonlyMap<string, number> = new Map()) => {
       const subs: HerdrSubscriber[] = []
       const prompts: unknown[][] = []
