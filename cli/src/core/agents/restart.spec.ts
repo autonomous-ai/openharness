@@ -136,6 +136,16 @@ describe('durable restart publication', () => {
     expect(String(warn.mock.calls[0])).not.toContain('a1')
   })
 
+  it('logs no hold for a publication that failed another way', async () => {
+    const run = setup()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const failed = new Error('disk full')
+    vi.mocked(run.deps.registry.confirmLaunch).mockRejectedValue(failed)
+    await expect(commitRelaunchedEngine(run.deps, 'a1', newProcess, null, { runtime, backend: run.tmuxBackend } as unknown as RestartTarget, () => true))
+      .rejects.toBe(failed)
+    expect(warn).not.toHaveBeenCalled()
+  })
+
   it.each(['alive', 'gone', 'unknown', 'dead'] as const)('rechecks a replacement shell: %s', async proof => {
     const run = setup(terminal())
     const paneState = vi.fn(async () => proof === 'gone' || proof === 'unknown' ? proof : { dead: proof === 'dead', engineExit: null })
