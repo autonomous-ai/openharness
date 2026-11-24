@@ -8,6 +8,10 @@
 # indexes, then the packages, downloaded only) is tried up to three times, each command bounded, with a wait that
 # doubles between attempts, and apt retries each file itself as well. A blip costs a wait; an outage that lasts fails
 # in under 20 minutes, naming apt. The install from what was downloaded needs no network and runs once.
+#
+# A regional mirror that answers but crawls cut off all three attempts of the dial hosts job (run 45331534043,
+# 2026-11-24, #4578 and #4586): apt's mirror list moves to the next mirror only on an error, never on slowness. So the
+# retries fetch from Ubuntu's main archive instead.
 set -uo pipefail
 
 if [ "$#" -eq 0 ]; then
@@ -20,15 +24,32 @@ ATTEMPTS=3
 COMMAND_S=180
 apt=(apt-get -q -o Acquire::Retries=3)
 
+# Points apt's sources, and the mirror lists they read (`mirror+file:PATH`), from regional mirrors
+# (us-east-2.ec2.archive.ubuntu.com, azure.archive.ubuntu.com) to archive.ubuntu.com. Every other host stays.
+use_main_archive() {
+  local SOURCELIST SOURCEPARTS file files=() mirror_lists
+  eval "$(apt-config shell SOURCELIST Dir::Etc::sourcelist/f SOURCEPARTS Dir::Etc::sourceparts/d)"
+  for file in "$SOURCELIST" "$SOURCEPARTS"*.list "$SOURCEPARTS"*.sources; do
+    [ -f "$file" ] && files+=("$file")
+  done
+  mirror_lists=$(grep -ho 'mirror+file:[^[:space:]]*' "${files[@]}" | sed 's/^mirror+file://' | sort -u)
+  for file in $mirror_lists; do
+    [ -f "$file" ] && files+=("$file")
+  done
+  perl -pi -e 's{://[A-Za-z0-9.-]+\.archive\.ubuntu\.com}{://archive.ubuntu.com}g' "${files[@]}"
+}
+
 attempt=1
 wait_s=30
 until timeout "$COMMAND_S" "${apt[@]}" update \
   && timeout "$COMMAND_S" "${apt[@]}" install -y --no-install-recommends --download-only "$@"; do
   if [ "$attempt" -ge "$ATTEMPTS" ]; then
-    echo "::error title=apt::apt could not download $* from the runner's Ubuntu mirrors after $ATTEMPTS attempts"
+    echo "::error title=apt::apt could not download $* from the runner's Ubuntu mirrors and archive.ubuntu.com" \
+      "after $ATTEMPTS attempts"
     exit 1
   fi
-  echo "apt: attempt $attempt of $ATTEMPTS could not download; trying again in ${wait_s}s"
+  [ "$attempt" -eq 1 ] && use_main_archive
+  echo "apt: attempt $attempt of $ATTEMPTS could not download; trying again in ${wait_s}s from archive.ubuntu.com"
   sleep "$wait_s"
   attempt=$((attempt + 1))
   wait_s=$((wait_s * 2))
