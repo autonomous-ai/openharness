@@ -14878,6 +14878,7 @@ describe('the dial follows the pane focused in WezTerm and kitty (docs/plans/202
 describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-11-24-dial-tmux-pane-focus-follow-design.md)', () => {
   type Run = [string, string[], number]
   const { listClients } = RECORDED_WEZTERM
+  const { focusedMatch } = RECORDED_KITTY
   /** The poll's read of tmux: each client's tty and the pane its session shows, with the focus read's timeout. */
   const READ: Run = ['tmux', ['list-clients', '-F', '#{client_tty}|#{pane_id}'], 2_000]
   /** WezTerm's one read, with the binary the verbs use (the spec's `onPath`). */
@@ -14885,13 +14886,15 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
   /** What the poll's read of tmux prints and its exit code; while `held`, each such read waits until the spec lands it,
    *  then answers as a run that reached its timeout, or, held as `listing`, as tmuxSays has it then. With `second`, pane
    *  %4's session is shown by a client of its own (4310) on that tty. The pane WezTerm's GUI focused: none, no GUI
-   *  (RECORDED_WEZTERM.listClients.noGui). */
+   *  (RECORDED_WEZTERM.listClients.noGui). The window kitty focused. */
   const tmuxSays = { clients: '/dev/ttys002|%3\n', code: 0, held: false as boolean | 'listing', land: [] as Array<() => void>,
     second: undefined as string | undefined }
   const weztermSays = { pane: 0 as number | undefined }
+  const kittySays = { window: 0 }
   beforeEach(() => {
     Object.assign(tmuxSays, { clients: '/dev/ttys002|%3\n', code: 0, held: false, land: [], second: undefined })
     weztermSays.pane = 0
+    kittySays.window = 0
   })
   /** On macOS, TMUX_IN_ITERM and a second agent (4243) in pane %4's shell (4001), under the same server. */
   const IN_ITERM: ProcessRow[] = [...TMUX_IN_ITERM,
@@ -14910,6 +14913,8 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
     { pid: 3900, ppid: 1, executable: 'tmux' },
     { pid: 4300, ppid: 4299, executable: 'tmux' }, { pid: 4299, ppid: 3800, executable: 'zsh' },
   ]
+  /** The same in kitty: sess-1 in its window 1, the tmux client in another of its windows. */
+  const IN_KITTY: ProcessRow[] = IN_WEZTERM.map((p) => (p.pid === 3800 ? { ...p, executable: 'kitty' } : p))
   /** On macOS, IN_ITERM and the client of pane %4's session (4310, tmuxSays.second) in another iTerm2 tab. */
   const IN_TWO_TABS: ProcessRow[] = [...IN_ITERM,
     { pid: 4310, ppid: 4309, executable: 'tmux' }, { pid: 4309, ppid: 4308, executable: '-zsh' }, { pid: 4308, ppid: 4297, executable: 'login' }]
@@ -14925,7 +14930,7 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
   /** The devices' runs, recorded: tmux's facts of panes %3 and %4 (their shells 4000 and 4001, in session `work`, on
    *  ttys030 and ttys031), their session's one client (4300) on [clientTty], and its clients' listing as tmuxSays has it,
    *  whose pane on [clientTty] a rest's or a tap's select makes the one selected; WezTerm's clients as recorded, focused
-   *  on weztermSays.pane. */
+   *  on weztermSays.pane; kitty's `get-colors` as recorded, its window kittySays.window focused. */
   const runOn = (clientTty: string) => async (file: string, args: string[], timeoutMs: number) => {
     orcaRuns.push([file, args, timeoutMs])
     if (file === 'tmux' && args[0] === 'display-message') return { code: 0, stdout: args.includes('%4') ? '4001|work|\n' : '4000|work|\n' }
@@ -14943,6 +14948,11 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
       await new Promise<void>((resolve) => { tmuxSays.land.push(resolve) })
       return listing ? { code: tmuxSays.code, stdout: tmuxSays.clients } : { code: null, stdout: '' }
     }
+    if (args[3] === 'get-colors') {
+      return args[5] === `id:${kittySays.window} and state:focused`
+        ? { code: focusedMatch.focused.code, stdout: `${focusedMatch.focused.stdoutFirstLine}\n`, stderr: '' }
+        : { code: focusedMatch.notFocused.code, stdout: '', stderr: `Error: No matching windows for expression: ${args[5]}\n` }
+    }
     if (!args.includes('list-clients')) return { code: 0, stdout: '' }
     if (weztermSays.pane === undefined) return { code: listClients.noGui.exitCode, stdout: '', stderr: listClients.noGui.stderr }
     const clients = (JSON.parse(listClients.gui.stdout) as object[]).map((client) => ({ ...client, focused_pane_id: weztermSays.pane }))
@@ -14957,6 +14967,8 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
   const inTmux = (n: number, over: Partial<ObservedHookEvent> = {}) => hook(n, { TMUX_PANE: `%${n + 2}`, TERM_PROGRAM: 'tmux' }, over)
   /** In WezTerm's pane n. */
   const inWezterm = (n: number) => hook(n, { WEZTERM_PANE: String(n), TERM_PROGRAM: 'WezTerm' })
+  /** In kitty's window n, its socket Linux's abstract one. */
+  const inKitty = (n: number) => hook(n, { KITTY_WINDOW_ID: String(n), KITTY_LISTEN_ON: 'unix:@kitty-1' })
   const agent = (n: number) => observedAgentId('claude', `sess-${n}`)
   /** The poll's reads, WezTerm's and tmux's: not a tmux lookup's `list-clients -t`. */
   const reads = () => orcaRuns.filter(([, args]) => args.includes('list-clients') && !args.includes('-t'))
@@ -15262,6 +15274,22 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
       expect(asked()).toEqual([[agent(2), 'pane']])
       expect(await shown()).toBe('tmux')
       expect(switches().at(-1)).toBe('[device] app filter: switched · follow')
+    })
+
+    // The PM's decision (2026-11-24, the spec's "Following"): the app's own agent is not on the page a tmux follow holds.
+    it.each<[string, string, string, string, ProcessRow[], ObservedHookEvent, (on: number) => void]>([
+      ['WezTerm', 'WezTerm pane', 'WezTerm', 'wezterm', IN_WEZTERM, inWezterm(1), (on) => { weztermSays.pane = on }],
+      ['kitty', 'kitty window', 'kitty', 'kitty', IN_KITTY, inKitty(1), (on) => { kittySays.window = on }],
+    ])('on Linux, %s in front with tmux in one of its panes: a tmux follow holds tmux\'s page, then a %s\'s agent is followed and the dials turn to %s\'s page', async (_, __, ___, app, rows, own, focusOn) => {
+      tmuxSays.clients = '/dev/pts/4|%4\n'
+      const { settle, next } = await dialWith({ linux: true, rows, hooks: [own, inTmux(2)] })
+      await settle(app)
+      expect(asked()).toEqual([[agent(2), 'pane']])
+      expect(await shown()).toBe('tmux')
+      focusOn(1)
+      await next()
+      expect(asked()).toEqual([[agent(2), 'pane'], [agent(1), 'pane']])
+      expect(await shown()).toBe(app)
     })
 
     it('on Linux, where Ghostty tells no tab: two of its clients that show agents\' sessions move nothing, and the one left is followed', async () => {
