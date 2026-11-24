@@ -74,7 +74,8 @@ export interface CmuxFocusDeps {
 export interface CmuxFocus {
   /** The front as the log says it now. It never throws: a log that cannot be read is a front unknown. */
   read(): Promise<CmuxFront>
-  /** Forgets all it knows, and a read under way commits nothing: the next read is a first one. */
+  /** Forgets all it knows: a read under way commits nothing, one asked before the reset never runs, and the next read
+   *  is a first one. */
   reset(): void
 }
 
