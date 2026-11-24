@@ -62,7 +62,9 @@ A tap, and a rest, on an agent nested in a multiplexer read its client's place a
 ## Failures are seen
 
 The lookups already log `[device] tmux client · found|none|not read · <step>` and herdr's equivalent. `[observed] outer · late` is logged once per tap or rest whose wait ran out (no pid, no session), so a slow lookup is
-visible.
+visible. A fresh lookup that rejects or throws, which none should, is said by its kind alone
+(`[observed] outer · lookup not read · <kind>`); the tap or rest acts on what the entry holds, and a later one past the
+second asks again.
 
 ## Measures
 
