@@ -5529,6 +5529,24 @@ describe('ObservedSource and a nested session the scan found', () => {
     expect(t.src.tabTty(t.agent('a').id)).toBe('/dev/ttys004')
   })
 
+  // The devices find a scan-found herdr agent's pane by its shell, which herdr names (devices.ts placeInHerdr).
+  it('foundNested: each live agent the scan found in that host\'s pane, no hook told of, with its parents below the host\'s server', async () => {
+    const rows: readonly ProcessName[] = [...ROWS, { pid: 200, ppid: 190, executable: 'claude' },
+      { pid: 190, ppid: 185, executable: 'bash' }, { pid: 185, ppid: 180, executable: 'zsh' }, { pid: 180, ppid: 1, executable: 'herdr' }]
+    const t = scan(new Map([[100, IN_TMUX], [200, IN_HERDR]]), { table: async () => rows })
+    t.found('a', 100)
+    t.found('b', 200)
+    t.found('c', 300)
+    const look = t.src.scanOpen()
+    await t.answer(0, {})
+    await t.answer(1, {})
+    await look
+    expect(t.src.foundNested('herdr')).toEqual([{ agentId: t.agent('b').id, parents: [190, 185] }])
+    expect(t.src.foundNested('tmux')).toEqual([{ agentId: t.agent('a').id, parents: [90] }])
+    t.src.ingest(t.ev('turn-start', { sessionId: 'b', callerPid: 200, hostHints: { HERDR_PANE_ID: 'w1:p2' } }))
+    expect(t.src.foundNested('herdr')).toEqual([])
+  })
+
   it('a look reads the table once for its walk, its makers and its lookups', async () => {
     const pids = Array.from({ length: 50 }, (_, i) => 100 + i)
     const t = scan(new Map(pids.map((pid) => [pid, IN_TMUX])))
@@ -5891,6 +5909,26 @@ describe('ObservedSource and a nested session the scan found', () => {
       }
       expect(typed).not.toHaveBeenCalled()
       expect(t.actions.herdrPrompt).not.toHaveBeenCalled()
+    })
+
+    // herdr's row of a pane with no session folds into the scan's copy by that key (registry.ts): one row, not two.
+    it('a pane its listing placed it at carries that pane\'s key, and is still none of its own; the scan\'s lookup place carries none', async () => {
+      const t = await placed()
+      t.found('b', 200)
+      t.madeBy.mockResolvedValueOnce(new Map([[200, IN_HERDR]]))
+      const look = t.src.scanOpen()
+      await t.answer(1, { app: 'iterm', tty: '/dev/ttys005', pid: 4400 })
+      await look
+      const { id } = t.agent('b')
+      expect(t.agent('b')).not.toHaveProperty('paneKeys')
+      t.src.setPaneNames('herdr', new Map(), new Map([[id, 'w1:p2:iterm']]))
+      expect(t.agent('b').paneKeys).toEqual(['herdr:w1:p2'])
+      expect(t.src.paneOf(id, 'herdr')).toBeUndefined()
+      expect(t.src.byPane('herdr', 'w1:p2')).toBeUndefined()
+      expect(t.a()).not.toHaveProperty('paneKeys')
+      // The place gone, its key goes with it.
+      t.src.setPaneNames('herdr', new Map(), new Map())
+      expect(t.agent('b')).not.toHaveProperty('paneKeys')
     })
 
     it('the first hook after a scan\'s place keeps it on its app\'s page and tab until the hook\'s own answer lands, and that answer wins', async () => {

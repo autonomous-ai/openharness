@@ -3813,16 +3813,25 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       })
     })
 
-    /** herdr's socket, listing a Claude Code row at each pane, with the session herdr's integration gave it, if any. The
-     *  dial attached, `live` lets the source's subscription start and awaits its list. */
-    const herdrRows = (rows: ReadonlyArray<readonly [pane: string, session?: string]>) => {
+    /** herdr's socket, listing a Claude Code row at each pane, with the session herdr's integration gave it, if any, and
+     *  answering each pane's process info with the shell [shells] names, else herdr's refusal. The dial attached, `live`
+     *  lets the source's subscription start and awaits its list. */
+    const herdrRows = (rows: ReadonlyArray<readonly [pane: string, session?: string]>, shells: ReadonlyMap<string, number> = new Map()) => {
       const subs: HerdrSubscriber[] = []
       const prompts: unknown[][] = []
+      const asked: string[] = []
       let list: Promise<HerdrAnswer> | undefined
       const agents = rows.map(([pane, session]) => ({ pane_id: pane, agent: 'claude', agent_status: 'idle', cwd: '/work/api',
         ...session ? { agent_session: { kind: 'id', agent: 'claude', value: session } } : {} }))
       const client: HerdrClient = {
-        request: () => (list = Promise.resolve<HerdrAnswer>({ ok: true, result: { type: 'agent_list', agents } })),
+        request: (method, params) => {
+          if (method !== 'pane.process_info') return (list = Promise.resolve<HerdrAnswer>({ ok: true, result: { type: 'agent_list', agents } }))
+          const pane = String(params.pane_id)
+          asked.push(pane)
+          const shell = shells.get(pane)
+          return Promise.resolve<HerdrAnswer>(shell === undefined ? { ok: false, fault: 'rejected', code: 'pane_not_found' }
+            : { ok: true, result: { process_info: { shell_pid: shell, foreground_process_group_id: 4242 } } })
+        },
         subscribe: (_entries, to) => { subs.push(to); return { close: () => {} } },
         prompt: async (...args) => { prompts.push(args); return { outcome: 'sent' } },
         socketStamp: () => '1:1',
@@ -3833,7 +3842,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
         subs[0].started()
         await list
       }
-      return { client, subs, prompts, live }
+      return { client, subs, prompts, asked, live }
     }
     const rests = () => said().filter((line) => line.startsWith('[device] swipe ·'))
 
@@ -3854,23 +3863,25 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       const focused = () => orcaRuns.filter(([, args]) => args[0] === 'agent' && args[1] === 'focus')
       const onMac = (run: typeof herdrRun) => ({ ...mac, onPath: (name: string) => `/opt/${name}/bin/${name}`, run })
       /** The scan's herdr agent, its lookup landed and herdr's list read, the dial's tabs stream open. */
-      const scanned = async (rows: ReadonlyArray<readonly [string, string?]>, run = herdrRun, client = true) => {
+      const scanned = async (rows: ReadonlyArray<readonly [string, string?]>, run = herdrRun, client = true, shells = new Map<string, number>()) => {
         readers.processes.mockResolvedValue([...inHerdr, ...client ? clientInIterm('herdr', 1) : []])
         found('sess-1', 4242)
-        const herdr = herdrRows(rows)
+        const herdr = herdrRows(rows, shells)
         const listener = fakeListener()
         const { port } = startHere({ listen: listener.listen, herdr: herdr.client, orca: onMac(run) })
         attach(port)
         await vi.waitFor(() => expect(scanLine()).toHaveLength(1))
         await herdr.live()
         await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
-        return { ...herdr, listener, stream: listener.tabs() }
+        return { ...herdr, port, listener, stream: listener.tabs() }
       }
 
       it('a scan-found herdr agent whose herdr row has its session is one row on herdr\'s page; a rest selects its tab, then focuses its herdr pane; a tap focuses the pane, brings iTerm2 forward and raises the tab', async () => {
-        const { listener, stream, prompts } = await scanned([['w1:p2', 'sess-1']])
+        const { listener, stream, prompts, asked } = await scanned([['w1:p2', 'sess-1']])
         expect(scanLine()[0]).toMatch(/ · 1 nested placed$/)
         expect((await listed()).map(({ id }) => id)).toEqual([ID])
+        // Its row's session placed it: herdr is asked nothing more.
+        expect(asked).toEqual([])
         expect((await host().listAgentSnapshot({ apps: true })).apps?.apps).toContainEqual(expect.objectContaining({ id: 'herdr', count: 1 }))
         expect(listener.front('iterm')).toBeUndefined()
         host().swipeEnded(ID, 'rest')
@@ -3886,19 +3897,71 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
         expect(prompts).toEqual([])
       })
 
-      // Nothing folds the two until its first hook: herdr's page counts both, accepted for now (PM, 2026-11-23,
-      // decision 1 of docs/plans/2026-11-23-dial-tmux-herdr-apps-plan.md).
-      it('with no session in herdr\'s row the scan\'s copy gets its tab alone, and it and herdr\'s row are both on herdr\'s page, herdr · 2', async () => {
-        const { listener, stream } = await scanned([['w1:p2']])
+      // herdr names no session in its row until the person ran `herdr integration install claude`: herdr's own shell of
+      // the pane, the agent's parent, places it there instead, and herdr's row folds into it by that pane's key (known gap
+      // 1 of PR #4578: herdr · 2 until its first hook).
+      it('with no session in herdr\'s rows, the pane whose shell is the agent\'s parent places it and its row folds into the scan\'s copy; a rest selects its tab, then focuses that pane; voice still never reaches it', async () => {
+        const { listener, stream, asked, prompts, subs } = await scanned([['w1:p1'], ['w1:p2']], herdrRun, true, new Map([['w1:p1', 5000], ['w1:p2', 4000]]))
+        await vi.waitFor(async () => expect((await listed()).map(({ id }) => id)).toHaveLength(2))
         const rows = await listed()
-        expect(rows).toHaveLength(2)
         expect(rows.map(({ id }) => id)).toContain(ID)
         expect((await host().listAgentSnapshot({ apps: true })).apps?.apps?.map(({ id, count }) => `${id} ${count}`)).toEqual(['herdr 2'])
+        expect(asked.sort()).toEqual(['w1:p1', 'w1:p2'])
         expect(listener.front('iterm')).toBeUndefined()
         host().swipeEnded(ID, 'rest')
         await swiped('ok')
         expect(stream.lines).toStrictEqual([{ app: 'iterm', tty: '/dev/ttys004' }])
+        expect(orcaRuns.at(-1)).toEqual(focus('w1:p2'))
+        expect(rows.find(({ id }) => id === ID)!.caps).not.toContain('v')
+        expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false })
+        expect(prompts).toEqual([])
+        subs[0].event('pane_closed', { pane_id: 'w1:p1' })
+        await vi.waitFor(async () => expect((await listed()).map(({ id }) => id)).toEqual([ID]))
+        expect(asked.sort()).toEqual(['w1:p1', 'w1:p2'])
+      })
+
+      it('with no session in herdr\'s row and its one pane\'s shell the agent\'s parent: one row, the scan\'s copy, herdr · 1', async () => {
+        const { asked } = await scanned([['w1:p2']], herdrRun, true, new Map([['w1:p2', 4000]]))
+        await vi.waitFor(async () => expect((await listed()).map(({ id }) => id)).toEqual([ID]))
+        expect((await host().listAgentSnapshot({ apps: true })).apps?.apps?.map(({ id, count }) => `${id} ${count}`)).toEqual(['herdr 1'])
+        // Each pane is asked once: the changes since asked again for none.
+        expect(asked).toEqual(['w1:p2'])
+      })
+
+      // Failures are seen: by kind alone, and nothing changes, so the two rows stay as they were.
+      it('herdr\'s process info refused: said by its kind, asked once, and herdr\'s row and the scan\'s copy stay two, herdr · 2', async () => {
+        const { asked, subs } = await scanned([['w1:p2']])
+        await vi.waitFor(() => expect(said()).toContain('[device] herdr shell · not read · rejected'))
+        expect((await listed()).map(({ id }) => id)).toHaveLength(2)
+        expect((await host().listAgentSnapshot({ apps: true })).apps?.apps?.map(({ id, count }) => `${id} ${count}`)).toEqual(['herdr 2'])
+        subs[0].event('pane.agent_status_changed', { pane_id: 'w1:p2', agent_status: 'working', agent: 'claude' })
+        await host().openAgent(ID)
+        expect(asked).toEqual(['w1:p2'])
         expect(focused()).toEqual([])
+      })
+
+      // A herdr that starts again numbers its panes afresh (herdrSource.spec.ts): the rows its source lists then are new
+      // ones, each asked again, as a shell kept by the pane's id would be the old herdr's.
+      it('herdr\'s rows listed afresh, as after a herdr that started again while no dial was attached, are asked again', async () => {
+        const shells = new Map([['w1:p2', 5000]])
+        const { asked, subs, port } = await scanned([['w1:p2']], herdrRun, true, shells)
+        expect(asked).toEqual(['w1:p2'])
+        expect((await host().listAgentSnapshot({ apps: true })).apps?.apps?.map(({ id, count }) => `${id} ${count}`)).toEqual(['herdr 2'])
+        seen.host.watching!(false)
+        shells.set('w1:p2', 4000)
+        attach(port)
+        // The agents' subscription of the second attach: the first attach's focus one (herdrSource.ts watchFocus) is subs[1].
+        await vi.waitFor(() => expect(subs).toHaveLength(3))
+        subs[2].started()
+        await vi.waitFor(async () => expect((await listed()).map(({ id }) => id)).toEqual([ID]))
+        expect(asked).toEqual(['w1:p2', 'w1:p2'])
+      })
+
+      it('at most 16 of herdr\'s rows with no session are asked', async () => {
+        const panes = Array.from({ length: 20 }, (_, i) => `w1:p${i + 1}`)
+        const { asked } = await scanned(panes.map((pane) => [pane] as const))
+        await vi.waitFor(() => expect(said().filter((line) => line.startsWith('[device] herdr shell'))).toHaveLength(16))
+        expect(asked).toHaveLength(16)
       })
 
       // Review Focus 5: herdr's tap needs no app, its rest does.

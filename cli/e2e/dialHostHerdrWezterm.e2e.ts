@@ -9,9 +9,9 @@
  * reaches the developer's, and the daemon's process table hides every herdr outside the test's tree (ownHerdrsOnly).
  *
  * The same agent found by the open scan, idle since before the devices started, is on herdr's page too
- * (docs/plans/2026-11-22-dial-iterm2-tmux-herdr-design.md): its client found from herdr's server, and its herdr pane
- * focused only when herdr's own row of it names its session. When that row names none, the row is counted beside it
- * until the agent's first hook, a known gap the PM accepted (2026-11-23).
+ * (docs/plans/2026-11-22-dial-iterm2-tmux-herdr-design.md): its client found from herdr's server, and placed at its herdr
+ * pane by herdr's own row of it, by its session when the row names one, else by the pane whose shell is its parent, so a
+ * rest focuses that pane and herdr's row folds into it, one row.
  *
  * Skipped where herdr (or the cc that builds its agent) or WezTerm is not installed; CI's `e2e (dial hosts)` job
  * installs both, and there a missing one fails the file (harness/dialHosts.ts).
@@ -235,23 +235,15 @@ describe.skipIf(!herdrBinary || !weztermBinary)("herdr's client in WezTerm", () 
     expect(ring(dial)).toEqual([agent.id])
   })
 
-  it("found by the scan, with no session in herdr's row: it and herdr's row both on herdr's page until its first hook (a known gap)", async () => {
+  it("found by the scan, with no session in herdr's row: one row on herdr's page; a rest with WezTerm in front activates the client's pane and tab, then focuses the agent's herdr pane", async () => {
     const { d, dial, herdr, mux, client, agent } = await fresh('no session')
-    const focused = await herdr.focused()
-    await restShown(d, dial, agent.id)
+    await restUntil(d, dial, agent.id, "the agent's pane focused in herdr", async () => await herdr.focused() === agent.pane)
     expect(await mux.activeTab(client.pane)).toBe(true)
     expect(await mux.active(client.pane)).toBe(true)
-    // The rest's line comes once its every step ran: no herdr pane was focused.
-    expect(await herdr.focused()).toBe(focused)
     await scanPlaced(d)
-    // Nothing folds herdr's row into the scan's copy without a session: two rows of one agent on the one page (the PM's
-    // Decision 1, 2026-11-23).
-    await pages(dial, 'herdr 2')
-    // The apps frame goes before the ring it names, which may still be on its way.
-    const rows = await until('both rows on the ring', () => { const now = ring(dial); return now.length === 2 ? now : undefined }, 45_000, 100)
-    expect(rows).toContain(agent.id)
-    const other = rows.find((id) => id !== agent.id)
-    expect(dial.messages.some((m) => m.t === 'agent' && m.id === other && m.host === 'herdr')).toBe(true)
+    // herdr's row folds into the scan's copy by the pane whose shell is the agent's parent.
+    await pages(dial, 'herdr 1')
+    expect(ring(dial)).toEqual([agent.id])
   })
 
   it('with another app in front a rest moves neither the tab nor the herdr pane', async () => {
