@@ -5899,6 +5899,37 @@ describe('ObservedSource and a nested session the scan found', () => {
     }
   })
 
+  // Eval I14's resume after the devices started again: the maker read confirmed the multiplexer, and the first hook comes
+  // from a new process in another pane of it, its hints naming iTerm2. Its tab goes at once (askOuter); its multiplexer
+  // stays while that hook's own lookup runs, so it does not leave the multiplexer's ring, and that lookup's answer decides.
+  it('a nested first hook from another process in the same multiplexer keeps the multiplexer the maker read confirmed until its own lookup answers', async () => {
+    const cases = [
+      [IN_TMUX, { TMUX_PANE: '%5', TERM_PROGRAM: 'tmux', __CFBundleIdentifier: 'com.googlecode.iterm2' }],
+      [IN_HERDR, { HERDR_PANE_ID: 'w1:p3', __CFBundleIdentifier: 'com.googlecode.iterm2' }],
+    ] as const
+    for (const [made, hostHints] of cases) {
+      const asks: Array<(place: OuterAnswer) => void> = []
+      const outer = vi.fn((_hints: Readonly<Record<string, string>>, _pid: number) =>
+        new Promise<OuterAnswer>((resolve) => { asks.push(resolve) }))
+      const t = scan(new Map([[100, made]]), { outer })
+      t.found('a', 100)
+      const look = t.src.scanOpen()
+      await t.answer(0, ITERM)
+      await look
+      const { id } = t.agent('a')
+      t.src.ingest(t.ev('session-start', { sessionId: 'a', hostHints, callerPid: 101 }))
+      expect(outer.mock.calls, made.host).toEqual([[hostHints, 101, expect.any(Function)]])
+      expect(t.agent('a'), made.host).toMatchObject({ nest: made.host, host: made.host, app: 'iterm' })
+      expect(pageOf(t.agent('a')), made.host).toBe(made.host)
+      expect(t.src.paneOf(id, 'tabs'), made.host).toBeUndefined()
+      // Its new terminal is no pane of it (a terminal started from the pane): its hints' app.
+      asks[0]({})
+      await flushed()
+      expect(t.agent('a'), made.host).not.toHaveProperty('nest')
+      expect(pageOf(t.agent('a')), made.host).toBe('iterm')
+    }
+  })
+
   // Pending, it would count for no page: its first turn's prompt follow to its multiplexer's page would find none there.
   it('the scan\'s lookup named no app: a nested first hook from the process it found is no longer pending, as the maker read confirmed its page', async () => {
     const outer = vi.fn((_hints: Readonly<Record<string, string>>, _pid: number) => new Promise<OuterAnswer>(() => {}))
