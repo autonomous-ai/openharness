@@ -15181,6 +15181,22 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
       expect(tmuxReads()).toHaveLength(FOCUS_FAILS_MAX + 1)
     })
 
+    it('a tmux read under way as its poll stops, failing after the next settle, counts toward no FOCUS_FAILS_MAX', async () => {
+      const { settle, next } = await dialWith({ linux: true })
+      tmuxSays.held = true
+      await settle('wezterm')
+      await settle('ghostty')
+      tmuxSays.held = false
+      tmuxSays.code = 1
+      await settle('wezterm')
+      // The first poll's read reaches its timeout after the second poll's first read failed.
+      for (const land of tmuxSays.land.splice(0)) land()
+      await settled()
+      await next(3)
+      // The first poll's read, then the second poll's FOCUS_FAILS_MAX.
+      expect(tmuxReads()).toHaveLength(1 + FOCUS_FAILS_MAX)
+    })
+
     it('tmux held to the end of its read while WezTerm answers: WezTerm\'s focus change turns the dial when the read ends, and no failure is counted', async () => {
       const { settle, next } = await dialWith({ linux: true })
       await settle('wezterm')
