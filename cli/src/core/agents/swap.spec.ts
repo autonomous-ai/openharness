@@ -337,8 +337,9 @@ describe('the pane-process swap', () => {
     expect(await never).toBeNull()
   })
 
-  // On Linux a Node engine renames itself (process.title), which changes its executable but not its pid or
-  // start: a restart that carried the first look's name failed at publication (nightly run 45237523183).
+  // A Node engine started as `node` (Claude Code installed with npm) renames itself (process.title), which on
+  // Linux changes its `comm`, the row's executable, but not its pid or start; the publication's refresh compares
+  // the executable.
   it('returns the later look of a process that renamed itself while settling', async () => {
     vi.useFakeTimers()
     const { swap } = setup()
