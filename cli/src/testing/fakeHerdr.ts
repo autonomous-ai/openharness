@@ -36,6 +36,16 @@ export const RECORDED = {
     '{"data":{"agent_status":"unknown","pane_id":"w2:p1","workspace_id":"w2"},"event":"pane.agent_status_changed"}',
     '{"data":{"pane_id":"w2:p1","type":"pane_closed","workspace_id":"w2"},"event":"pane_closed"}',
   ],
+  /**
+   * Not the spike's: herdr 0.9.5 on macOS 26.6.2 (arm64), 2026-11-24, a server of the test's own (e2e/harness/herdrServer.ts
+   * PrivateHerdr), in a probe of docs/plans/2026-11-24-dial-tmux-pane-focus-follow-plan.md. A subscription to
+   * `pane.focused` alone, then the `pane.focus` RPC moving the focus to another pane (the plan's probe findings, row 5).
+   * The probe's request id `s` is written `r1`, as this file's other recordings, so the fake answers under the request's.
+   */
+  focused: [
+    '{"id":"r1","result":{"type":"subscription_started"}}',
+    '{"data":{"pane_id":"w2:p1","type":"pane_focused","workspace_id":"w2"},"event":"pane_focused"}',
+  ],
 }
 
 /** What a method answers: a line (the request's id goes first, so a line's own `id` takes its place), bytes as they are

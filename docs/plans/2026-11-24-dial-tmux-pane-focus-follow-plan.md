@@ -151,20 +151,26 @@ Commands run in `cli/`.
 
 ## Probe findings (Task 1 fills this in)
 
-herdr version probed: (Task 1). Host: (Task 1). Date: (Task 1).
+herdr version probed: 0.9.5. Host: macOS 26.6.2, arm64 (Darwin 25.6.0). Date: 2026-11-24. An isolated server
+(`PrivateHerdr.start` on `IsolatedDaemon.create()`, the daemon never started), two idle fake agents `w2:p1` and `w3:p1`, the plain
+workspace's `w1:p1` focused; one subscription to `pane.focused` held through rows 3 to 9, a second for row 10.
 
 | # | What | The spec expects | Found |
 |---|---|---|---|
-| 1 | `herdr --version`, through the pinned launcher | 0.9.5 | |
-| 2 | `herdr api schema --json`, through the pinned launcher: the protocol, the subscription kind for a pane taking the focus, its event's fields | 22; `pane.focused`; `pane_id`, `workspace_id` | |
-| 3 | The first line of a subscription naming that kind | `subscription_started` under the request's id | |
-| 4 | Lines in the second after the start, a pane focused, nothing moved | none (no replay) | |
-| 5 | `pane.focus` RPC to another pane (tier B's `herdr.focus` step): each line, whole | one line, event `pane_focused`, data `pane_id` and `workspace_id` | |
-| 6 | The same RPC again, the focus not moving | none | |
-| 7 | `herdr agent focus <pane>` to another pane (the dial's own move) | one line as row 5's | |
-| 8 | A new pane: `workspace.create` with a `cwd` (as `PrivateHerdr.pane`), then with `focus: true`, then `pane.split` of the focused pane | unknown: says whether an opening pane that takes the focus is told | |
-| 9 | `pane.close` of the focused pane | unknown: says whether the pane the focus goes to is told | |
-| 10 | A subscription naming an unknown kind beside a known one (`pane.nope`) | unknown: refused whole, or started | |
+| 1 | `herdr --version`, through the pinned launcher | 0.9.5 | `herdr 0.9.5` |
+| 2 | `herdr api schema --json`, through the pinned launcher: the protocol, the subscription kind for a pane taking the focus, its event's fields | 22; `pane.focused`; `pane_id`, `workspace_id` | Protocol 22. `pane.focused` is a subscription kind; its event is `pane_focused`, data required `type` (`pane_focused`), `pane_id`, `workspace_id` |
+| 3 | The first line of a subscription naming that kind | `subscription_started` under the request's id | `{"id":"s","result":{"type":"subscription_started"}}` |
+| 4 | Lines in the second after the start, a pane focused, nothing moved | none (no replay) | none |
+| 5 | `pane.focus` RPC to another pane (tier B's `herdr.focus` step): each line, whole | one line, event `pane_focused`, data `pane_id` and `workspace_id` | `{"data":{"pane_id":"w2:p1","type":"pane_focused","workspace_id":"w2"},"event":"pane_focused"}` |
+| 6 | The same RPC again, the focus not moving | none | none |
+| 7 | `herdr agent focus <pane>` to another pane (the dial's own move) | one line as row 5's | `{"data":{"pane_id":"w3:p1","type":"pane_focused","workspace_id":"w3"},"event":"pane_focused"}` |
+| 8 | A new pane: `workspace.create` with a `cwd` (as `PrivateHerdr.pane`), then with `focus: true`, then `pane.split` of the focused pane | unknown: says whether an opening pane that takes the focus is told | `workspace.create` with a `cwd`: the new pane is not focused, no line. With `focus: true`: its pane takes the focus and one line, as row 5's, names it (`w5:p1`). `pane.split` (its `focus` defaults to false): the new pane is not focused, no line |
+| 9 | `pane.close` of the focused pane | unknown: says whether the pane the focus goes to is told | Not told: the focus goes to the split beside it (`w5:p2`, per `pane.list`) and no line is written |
+| 10 | A subscription naming an unknown kind beside a known one (`pane.nope`) | unknown: refused whole, or started | Refused whole: `{"id":"s2","error":{"code":"invalid_request",...}}` (``unknown variant `pane.nope` ``), then the connection closes; a later focus reaches only the first subscription |
+
+Stop rules: rows 1, 2, 3 and 5 hold, so the task goes on. Row 4 shows no replay and row 6 no line. **Row 10 is
+refused whole: the main session is told before Task 8 starts** (a herdr from before `pane.focused` would refuse the
+devices' whole subscription).
 
 Not probed: a focus the person moves in herdr's own screen (keys, mouse), and a second client. Verification 7.
 
