@@ -527,6 +527,14 @@ sub-describe `'tmux: following'`; its first case is I10 as a unit test.
 Before starting: if Task 1 reported a replay, an event with no change of focus, or a refused unknown kind, wait for the
 main session's word.
 
+**PM decision after Task 1 (row 10, a refused unknown kind):** `pane.focused` is subscribed on a subscription of its own,
+never in the agents' one, so a herdr that does not know the kind keeps the agents' rows. It opens when the agents'
+subscription starts and closes with it (stop, replace by a new start, socket change); refused or closed, it logs one
+fixed line and is not opened again until the source's next start. The source's tests change accordingly: the agents'
+first subscription still names its three kinds (no change to that case), and a second subscription names
+`pane.focused` alone; add cases for its refusal (the agents' rows stay and no reopen loop) and its close with the
+agents' one. The spec's "herdr: the `pane.focused` event" and "Cost" say so.
+
 **Files:**
 - Modify: `HO/herdrSource.ts`, `HO/herdrSource.spec.ts`, `HO/herdr.ts`, `HO/herdr.spec.ts`, `SV/devices.ts`,
   `SV/devices.spec.ts`

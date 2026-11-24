@@ -34,7 +34,7 @@ stay 0, with `baseline.json` updated in the same pull request.
   `clientNames`).
 - **herdr 0.9.5:** its socket API (`herdr api schema --json`, protocol 22) has a `pane.focused` subscription whose event
   carries `pane_id` and `workspace_id`. The devices already hold a subscription on herdr's socket while a dial is attached
-  (`cable/hosts/herdrSource.ts`), so following it costs no new connection and no poll. The first herdr task probes an
+  (`cable/hosts/herdrSource.ts`), so following it needs no poll; it is one more subscription of its own (see below). The first herdr task probes an
   isolated real herdr server (its own socket, `e2e/harness/herdrServer.ts` `PrivateHerdr`), before the code relies on
   it, for: the event's name on the wire (expected `pane_focused`, as `pane_agent_detected` is sent for
   `pane.agent_detected`) and its fields; whether it fires on the `pane.focus` RPC (tier B's `herdr.focus` step), on
@@ -88,9 +88,13 @@ of its panes (`PaneFocus.app: 'wezterm' | 'kitty'`, `readFocus`'s kitty-else bra
 
 ### herdr: the `pane.focused` event
 
-- `herdrClient.ts`'s `HerdrEntry` gains `{ type: 'pane.focused' }`; `herdrSource.ts` adds it to the kinds it
-  subscribes to, and tells each focus event's bare pane id (`w1:p2`, checked against `HERDR_PANE`) to a new `onFocus`
-  listener its deps give. It keeps no state for it.
+- `herdrClient.ts`'s `HerdrEntry` gains `{ type: 'pane.focused' }`. `herdrSource.ts` subscribes to it on a
+  subscription of its own, beside the one for agents, never in it (PM decision, 2026-11-24): the probe found that herdr
+  refuses a whole subscription naming a kind it does not know and closes it, so a herdr older than `pane.focused`
+  would otherwise lose the agents' rows too. The focus subscription opens when the agents' one starts and closes with it;
+  refused or closed, it logs one fixed line and is not opened again until the source's next start, and the agents' rows
+  are untouched. It tells each focus event's bare pane id (`w1:p2`, checked against `HERDR_PANE`) to a new `onFocus`
+  listener its deps give, and keeps no other state.
 - `devices.ts` follows a told pane only when all hold:
   - a dial is linked;
   - one live agent has that herdr pane, not held (its herdr adapter pane id's first two fields are the told id);
@@ -133,7 +137,8 @@ poll's `started`/`stopped · n reads, n failed` lines cover tmux; herdr adds `[d
 - tmux: one `tmux list-clients` every 500 ms after the last read ends, only while an app holding a tmux client of a live
   agent's session is settled in front with a dial attached; zero calls otherwise. Numbers before and after (devices
   process CPU over 60 s with such an app in front, and one read's time) go in the pull request.
-- herdr: no new process, connection or timer; one more subscription kind on the existing connection.
+- herdr: no new process or timer, and no poll; one more idle connection to herdr's socket while a dial is attached
+  (the focus subscription), quiet until the focus moves. The pull request states this cost.
 
 ## Testing
 
