@@ -97,7 +97,7 @@ def read_sources(apt_dir, state):
 
 
 class AptInstallTests(unittest.TestCase):
-    def install(self, *packages, fail_updates=0, fail_downloads=0):
+    def install(self, *packages, fail_updates=0, fail_downloads=0, sources=SOURCES):
         with tempfile.TemporaryDirectory() as state:
             bin_dir = Path(state) / "bin"
             bin_dir.mkdir()
@@ -105,7 +105,8 @@ class AptInstallTests(unittest.TestCase):
             for name, body in fakes:
                 (bin_dir / name).write_text(body)
                 (bin_dir / name).chmod(0o755)
-            for name, text in SOURCES.items():
+            (Path(state) / "apt" / "sources.list.d").mkdir(parents=True)
+            for name, text in sources.items():
                 path = Path(state) / "apt" / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(text.replace("{state}", state))
@@ -113,7 +114,16 @@ class AptInstallTests(unittest.TestCase):
                 **os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "STATE": state,
                 "FAIL_UPDATES": str(fail_updates), "FAIL_DOWNLOADS": str(fail_downloads),
             }
-            done = subprocess.run(["bash", str(SCRIPT), *packages], env=env, capture_output=True, text=True, timeout=30)
+            # A step's input may stay open and silent: a command that read it would wait there for good.
+            silent_input, held_open = os.pipe()
+            try:
+                done = subprocess.run(
+                    ["bash", str(SCRIPT), *packages], env=env, stdin=silent_input, capture_output=True, text=True,
+                    timeout=30,
+                )
+            finally:
+                os.close(silent_input)
+                os.close(held_open)
             calls_file = Path(state) / "calls"
             calls = calls_file.read_text().splitlines() if calls_file.exists() else []
             # The sources each update read, in order, then the sources the run left.
@@ -169,6 +179,12 @@ class AptInstallTests(unittest.TestCase):
             " after 3 attempts",
             done.stdout,
         )
+
+    def test_a_runner_with_no_sources_still_fails_in_bounded_time_naming_apt(self):
+        done, calls = self.install("tmux", "zsh", fail_downloads=99, sources={})
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertEqual(calls.count(DOWNLOAD), 3)
+        self.assertIn("::error title=apt::", done.stdout)
 
     def test_no_package_is_a_usage_error(self):
         done, calls = self.install()
