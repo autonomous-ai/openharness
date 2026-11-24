@@ -187,7 +187,9 @@ async function ttyTab(d: IsolatedDaemon, app: FakeApp, argv: readonly string[], 
   }
 }
 
-/** Whether a server takes a connection on [socket]: a killed one's socket file is left behind and refuses it. */
+/** Whether a server takes a connection on [socket]: a killed one's socket file is left behind and refuses it, and no
+ *  socket file is no server. No deadline: the kernel answers a Unix socket's connect itself, at once, whatever the server
+ *  is doing. */
 function answers(socket: string): Promise<boolean> {
   return new Promise((resolve, reject) => {
     const connection = createConnection({ path: socket })
@@ -243,7 +245,7 @@ export class PrivateHerdr {
    */
   static async forget(config: string): Promise<void> {
     const socket = socketIn(config)
-    if (existsSync(socket) && await answers(socket)) throw new Error(`herdr still runs on ${socket}: its layout is written again as it stops`)
+    if (await answers(socket)) throw new Error(`herdr still runs on ${socket}: its layout is written again as it stops`)
     const herdr = join(config, 'herdr')
     await rm(join(herdr, 'session.json'), { force: true })
     await rm(join(herdr, 'session-snapshots'), { recursive: true, force: true })

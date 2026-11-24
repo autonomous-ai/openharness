@@ -445,8 +445,6 @@ export function ownRig(rig: Pick<Rig, 'polled' | 'accounts' | 'iterm'>, scenario
   return scenario.fresh === true || counted || unlisted || (rig.iterm !== undefined) !== (scenario.app === 'iterm')
 }
 
-/** A daemon whose Orca lists the Orca accounts of [accounts]' sessions (orcaAccounts); with [iterm], an iTerm2
- *  scenario's (ownRig). */
 /** The last scenario's files gone from a daemon kept for the next (its children ended at its stop). */
 export async function emptyFixtures(rig: Pick<Rig, 'accounts' | 'iterm'> & { d: Pick<IsolatedDaemon, 'root' | 'env'> }): Promise<void> {
   const home = rig.d.env.HOME!
@@ -464,6 +462,8 @@ export async function emptyFixtures(rig: Pick<Rig, 'accounts' | 'iterm'> & { d: 
   if (rig.iterm) await PrivateHerdr.forget(join(home, '.config'))
 }
 
+/** A daemon whose Orca lists the Orca accounts of [accounts]' sessions (orcaAccounts); with [iterm], an iTerm2
+ *  scenario's (ownRig). */
 async function openRig(guard: string, accounts: SessionKey[], iterm: boolean): Promise<Rig> {
   const backend = await FakeBackend.start()
   backend.addMachine(ME)
