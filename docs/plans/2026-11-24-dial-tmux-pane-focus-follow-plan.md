@@ -174,7 +174,7 @@ iTerm2's 21 main scenarios of tier A, none held out, in process on fakes, compar
 
 ```bash
 OUT=$(mktemp -d)
-DIAL_EVAL_OUT="$OUT" npx vitest run src/testing/dialAppEval/dialAppEval.spec.ts -t 'tier A on darwin I[0-9]+$'
+DIAL_EVAL_OUT="$OUT" npx vitest run src/testing/dialAppEval/dialAppEval.spec.ts -t "tier A on darwin 'I[0-9]+'$"
 node -e 'const fs=require("fs");const b=JSON.parse(fs.readFileSync("src/testing/dialAppEval/baseline.json","utf8")).checks;const r=JSON.parse(fs.readFileSync(process.argv[1]+"/results-a-spec.json","utf8"));for(const x of r.results){const k=[x.tier,x.platform,x.scenario,x.check].join("/");if(b[k]!==x.score)console.log(k,b[k],"->",x.score)}console.log("gaps",r.gaps.length,"wrong",r.wrongSends.length)' "$OUT"
 ```
 
