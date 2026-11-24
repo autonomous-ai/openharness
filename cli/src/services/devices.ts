@@ -616,7 +616,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     let kept: Array<{ id: string; at: number }> = []
     return {
       /** Notes a move as it starts. What it gives dates that note from the move's end instead, while no echo took it: a
-       *  slow tmux or herdr shows the move only then, past TAB_ECHO_MS of its start. */
+       *  slow app shows the move only then, past TAB_ECHO_MS of its start. */
       note(id: string): () => void {
         const sent = { id, at: monotonic() }
         kept = [...kept.filter((other) => sent.at - other.at < TAB_ECHO_MS), sent].slice(-ECHO_KEPT)
@@ -722,9 +722,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       focus: (pane: Pane) => { const ended = paneTaps.note(pane.id); return tmux.focus(pane).finally(ended) },
       show: (pane: Pane, agentId: string) => { const ended = paneTaps.note(pane.id); return tmux.show!(pane, agentId).finally(ended) } }),
     herdrAppNoted, cmuxAppNoted, ...[
-    // A tap's focus is the dial's own move: the poll's read that sees it, a moment later, is its echo.
-    { ...kitty, focus: (pane: Pane) => { paneTaps.note(pane.id); return kitty.focus(pane) } },
-    { ...wezterm, focus: (pane: Pane) => { paneTaps.note(pane.id); return wezterm.focus(pane) } },
+    // A tap's focus is the dial's own move: the poll's read that sees it, a moment after it ends, is its echo.
+    { ...kitty, focus: (pane: Pane) => { const ended = paneTaps.note(pane.id); return kitty.focus(pane).finally(ended) } },
+    { ...wezterm, focus: (pane: Pane) => { const ended = paneTaps.note(pane.id); return wezterm.focus(pane).finally(ended) } },
     // A rest's or a tap's switch: Orca's focus line for that pane, a moment later, is the dial's own echo.
     { ...orca,
       show: (pane: Pane, agentId: string) => { orcaSwitches.note(orcaHandle(pane.id)); return orca.show(pane, agentId) },
@@ -2378,16 +2378,16 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const polling: PaneFocus = { app: wanted, adapters, first: kept?.first ?? true,
       last: kept?.last && new Map([...kept.last].filter(([, pane]) => pane !== null && adapters.includes(pane.adapter))),
       poll: startFocusPoll<PaneAnswer>({
-      read: (signal) => readFocus(observed, wanted, adapters, signal),
-      answered: (answer) => part.call('pane', () => paneAnswered(observed, polling, answer)),
-      failing: () => part.call('pane', () => {
-        paneFocus = undefined
-        paneTaps.clear()
-        paneFocusFailing = true
-      }),
-      after: timerIn('pane'),
-      log,
-    }) }
+        read: (signal) => readFocus(observed, wanted, adapters, signal),
+        answered: (answer) => part.call('pane', () => paneAnswered(observed, polling, answer)),
+        failing: () => part.call('pane', () => {
+          paneFocus = undefined
+          paneTaps.clear()
+          paneFocusFailing = true
+        }),
+        after: timerIn('pane'),
+        log,
+      }) }
     paneFocus = polling
   }
   observed?.onChange(() => part.call('pane', checkPaneFocus))
