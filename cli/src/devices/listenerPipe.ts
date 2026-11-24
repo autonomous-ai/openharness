@@ -91,12 +91,13 @@ export const PROOF_MAX_AGE_MS = 60_000
 /**
  * The daemon pipe's liveness (lib/windows/daemonPipe.ts), copied because that file is the core's and keeps its own,
  * with this account's own processes alone alive. The table is loaded only when asked, because it brings the pty host's
- * launcher.
+ * launcher. The inbox follower reads its caller in this table too, but counts a pid it may not signal as running
+ * (deviceClaude/inbox.ts `CALLER_LIVENESS`).
  */
-const WINDOWS_LIVENESS: HostLiveness = {
+export const WINDOWS_LIVENESS = {
   alive: ownProcessRuns,
   rows: async () => (await import('../lib/windows/processTable.js')).windowsProcessRows(null),
-}
+} satisfies HostLiveness
 
 /** What a record proof reads at each call: the record's pipe and pid, when its file was written, and the pipe's token. */
 export interface RecordRead { record: { pipe: string; pid: number }; mtimeMs: number; token: Buffer }

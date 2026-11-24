@@ -394,6 +394,30 @@ describe('harness device claude inbox', () => {
     expect(written).toEqual(['{"text":"hi"}', '{"off":true}'])
   })
 
+  // Fail open: a caller this process may not signal (EPERM) still runs, and its follower polls on.
+  it('runs the follower while its parent refuses the check', async () => {
+    const dataDir = folder()
+    const said = ['hi']
+    const served = await listenLocalSocket((req, res) => {
+      req.resume()
+      req.on('end', () => {
+        const text = said.shift()
+        if (text) res.end(JSON.stringify({ text }))
+        else res.writeHead(404).end('{"error":"NOT_FOUND"}')
+      })
+    }, unixSocketPath(dataDir, PORT)!)
+    cleanup.push(served.close)
+    const kill = process.kill.bind(process)
+    const denied = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      if (pid === process.ppid && signal === 0) throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' })
+      return kill(pid, signal)
+    })
+    cleanup.push(() => denied.mockRestore())
+    const { written, write } = lines()
+    expect(await device(['claude', 'inbox', SESSION], { dataDir, write })).toEqual({ code: 0, out: [], err: [] })
+    expect(written).toEqual(['{"text":"hi"}', '{"off":true}'])
+  })
+
   it('with no id writes off', async () => {
     const { written, write } = lines()
     expect(await device(['claude', 'inbox'], { write })).toEqual({ code: 0, out: [], err: [] })
