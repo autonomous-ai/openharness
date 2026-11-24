@@ -454,7 +454,8 @@ describe("tier B's reset", () => {
     const herdrConfig = join(home, '.config', 'herdr')
     const files = {
       record: join(dir, 'claude', 'sessions', '123.json'), layout: join(herdrConfig, 'session.json'),
-      snapshot: join(herdrConfig, 'session-snapshots', 'session-1.json'), config: join(herdrConfig, 'config.toml'),
+      snapshot: join(herdrConfig, 'session-snapshots', 'session-1.json'), history: join(herdrConfig, 'session-history.json'),
+      config: join(herdrConfig, 'config.toml'),
     }
     for (const file of Object.values(files)) {
       mkdirSync(dirname(file), { recursive: true })
@@ -462,7 +463,7 @@ describe("tier B's reset", () => {
     }
     const env = { HOME: home, CLAUDE_PROJECTS_DIR: join(dir, 'claude', 'projects'), CODEX_HOME: join(home, '.codex') }
     await driver.emptyFixtures({ d: { root: dir, env }, accounts: [], iterm: {} })
-    expect([files.record, files.layout, files.snapshot].filter((file) => existsSync(file))).toEqual([])
+    expect([files.record, files.layout, files.snapshot, files.history].filter((file) => existsSync(file))).toEqual([])
     expect(existsSync(join(herdrConfig, 'session-snapshots'))).toBe(false)
     expect(existsSync(files.config)).toBe(true)
   })
