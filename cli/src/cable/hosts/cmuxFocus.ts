@@ -300,14 +300,19 @@ export function createCmuxFocus(deps: CmuxFocusDeps): CmuxFocus {
     read: () => {
       if (next) return next
       if (!current) return start()
-      next = current.then(() => {
-        next = undefined
-        return start()
+      const at = epoch
+      const queued: Promise<CmuxFront> = current.then(() => {
+        if (next === queued) next = undefined
+        // Asked before a reset, it is not run: the devices reset as the dial goes, and the log is not read without one.
+        return at === epoch ? start() : {}
       })
-      return next
+      next = queued
+      return queued
     },
     reset: () => {
       epoch++
+      // A read asked after the reset waits for the one under way, but is its own.
+      next = undefined
       kept = undefined
       failing = false
       slowest = undefined
