@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { daemonRecordPath, writeDaemonRecord } from '../lib/daemonRecord.js'
 import { listenLocalSocket, unixSocketPath } from '../lib/localSocket.js'
 import { ensureDaemonToken } from '../lib/windows/pipeAuth.js'
-import { createDaemonProof, followInbox, type InboxDeps } from './inbox.js'
+import { CALLER_LIVENESS, createDaemonProof, followInbox, type InboxDeps } from './inbox.js'
 
 const PORT = 4997
 const SESSION = '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
@@ -422,6 +422,18 @@ describe('the inbox follower on Windows, once its caller is gone', () => {
     expect(follower.ended.done).toBe(false)
     first.answer({ status: 200, body: { text: 'hi' } })
     expect(await follower.run).toEqual({ code: 0, lines: ['{"text":"hi"}', OFF], waits: [] })
+  })
+})
+
+describe('the inbox follower\'s caller watch', () => {
+  it('counts a pid it may not signal as running: a live session\'s follower is never ended', () => {
+    const denied = Object.assign(new Error('kill EPERM'), { code: 'EPERM' })
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => { throw denied })
+    try {
+      expect(CALLER_LIVENESS.alive(CLAUDE)).toBe(true)
+    } finally {
+      kill.mockRestore()
+    }
   })
 })
 
