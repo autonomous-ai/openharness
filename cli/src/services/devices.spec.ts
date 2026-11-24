@@ -13,7 +13,7 @@ import type { CodexRunEnd } from '../cable/hosts/codexQueue.js'
 import type { ClaudeAppSession } from '../cable/hosts/claudeAppStore.js'
 import type { CodexAppRead, CodexAppThread } from '../cable/hosts/codexAppThreads.js'
 import { CMUX_APP_BINARY, type CmuxClient, type CmuxInputState, type CmuxSession } from '../cable/hosts/cmuxCli.js'
-import { FOCUS_POLL_MS } from '../cable/hosts/focusPoll.js'
+import { FOCUS_FAILS_MAX, FOCUS_POLL_MS } from '../cable/hosts/focusPoll.js'
 import { hcClientDeps, type HcClient, type HcPrompt, type HcSubscriber, type HcTerminal } from '../cable/hosts/hcClient.js'
 import { herdrClientDeps, type HerdrAnswer, type HerdrClient, type HerdrEntry, type HerdrPrompt, type HerdrSubscriber } from '../cable/hosts/herdrClient.js'
 import { HerdrSource } from '../cable/hosts/herdrSource.js'
@@ -14883,6 +14883,8 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
   const READ: Run = ['tmux', ['list-clients', '-F', '#{client_tty}|#{pane_id}'], 2_000]
   /** WezTerm's one read, with the binary the verbs use (the spec's `onPath`). */
   const LIST_CLIENTS: Run = ['/opt/orca/bin/orca', ['cli', '--no-auto-start', 'list-clients', '--format', 'json'], 2_000]
+  /** The iTerm2 tab holding the client of the agents' session. */
+  const TMUX_TAB = '/dev/ttys002'
   /** What the poll's read of tmux prints and its exit code; while `held`, each such read waits until the spec lands it,
    *  then answers as a run that reached its timeout, or, held as `listing`, as tmuxSays has it then. With `second`, pane
    *  %4's session is shown by a client of its own (4310) on that tty. The pane WezTerm's GUI focused: none, no GUI
@@ -15024,7 +15026,8 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
 
   describe('tmux: its life', () => {
     it('iTerm2 settled with a dial attached and an agent in a tmux pane whose client iTerm2 holds starts one poll', async () => {
-      const { listener, next } = await dialWith()
+      const { listener, next, report } = await dialWith()
+      report('iterm', TMUX_TAB)
       // In front, not yet settled: nothing.
       expect(listener.front('iterm')).toBeUndefined()
       await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS - 1)
@@ -15037,6 +15040,18 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
       expect(polls()).toEqual([STARTED])
     })
 
+    it('iTerm2 settled on a tab that holds no tmux client: tmux is asked nothing until that tab is reported', async () => {
+      const { report, settle, next } = await dialWith()
+      await settle('iterm')
+      report('iterm', '/dev/ttys001')
+      await next(2)
+      expect(reads()).toEqual([])
+      expect(polls()).toEqual([STARTED])
+      report('iterm', TMUX_TAB)
+      await next()
+      expect(reads()).toEqual([READ])
+    })
+
     it.each([
       ['no dial attached', { attached: false }, 'iterm'],
       ['another app settled', {}, 'ghostty'],
@@ -15045,7 +15060,8 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
       ['an agent in tmux inside an Orca terminal with Orca settled', { rows: IN_ORCA }, 'orca'],
       ['the observed agents off', { observed: false }, 'iterm'],
     ])('nothing runs with %s', async (_, over, app) => {
-      const { settle, next } = await dialWith(over)
+      const { report, settle, next } = await dialWith(over)
+      report('iterm', TMUX_TAB)
       await settle(app)
       await next(3)
       expect(reads()).toEqual([])
@@ -15053,7 +15069,8 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
     })
 
     it('another app settling, the last such agent ending, the last dial going and the devices stopping each stop it with its counts, and nothing runs after', async () => {
-      const { port, settle, next } = await dialWith({ hooks: [inTmux(1)] })
+      const { port, report, settle, next } = await dialWith({ hooks: [inTmux(1)] })
+      report('iterm', TMUX_TAB)
       await settle('iterm')
       await next()
       // The third read lands before Ghostty settles.
@@ -15062,6 +15079,7 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
       const ran = reads().length
       await next(4)
       expect(reads()).toHaveLength(ran)
+      report('iterm', TMUX_TAB)
       await settle('iterm')
       seen.host.watching!(false)
       expect(polls()).toEqual([STARTED, stopped(3), STARTED, stopped(1)])
@@ -15081,7 +15099,8 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
     })
 
     it('a dial attaching, and such an agent starting, with iTerm2 settled each start it', async () => {
-      const { port, settle } = await dialWith({ hooks: [], attached: false })
+      const { port, report, settle } = await dialWith({ hooks: [], attached: false })
+      report('iterm', TMUX_TAB)
       await settle('iterm')
       seen.host.watching!(true)
       await settled()
@@ -15114,7 +15133,9 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
       tmuxSays.code = 1
       await settle('wezterm')
       await next(4)
-      expect(tmuxReads()).toHaveLength(5)
+      // Failed FOCUS_FAILS_MAX times in a row, tmux is asked no more, and WezTerm still is.
+      expect(tmuxReads()).toHaveLength(FOCUS_FAILS_MAX)
+      expect(reads().filter(([file]) => file !== 'tmux')).toHaveLength(5)
       expect(polls()).toEqual([STARTED])
       // The person focuses the agent's WezTerm pane.
       weztermSays.pane = 1
@@ -15123,6 +15144,19 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
       expect(logs).not.toContain('[device] app filter: switched · follow')
       seen.host.watching!(false)
       expect(polls()).toEqual([STARTED, stopped(6)])
+    })
+
+    it('tmux, asked no more after FOCUS_FAILS_MAX failed reads in a row, is asked again from the next settle', async () => {
+      const { settle, next } = await dialWith({ linux: true })
+      tmuxSays.code = 1
+      await settle('wezterm')
+      await next(2)
+      tmuxSays.code = 0
+      await next(2)
+      expect(tmuxReads()).toHaveLength(FOCUS_FAILS_MAX)
+      await settle('ghostty')
+      await settle('wezterm')
+      expect(tmuxReads()).toHaveLength(FOCUS_FAILS_MAX + 1)
     })
 
     it('tmux held to the end of its read while WezTerm answers: WezTerm\'s focus change turns the dial when the read ends, and no failure is counted', async () => {
@@ -15158,8 +15192,9 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
     })
 
     it('tmux the only place: three failed reads stop it as failing, an agents\' change does not start it again, the next settle does', async () => {
-      const { port, settle, next } = await dialWith()
+      const { port, report, settle, next } = await dialWith()
       tmuxSays.code = 1
+      report('iterm', TMUX_TAB)
       await settle('iterm')
       await next(2)
       const FAILING = `${stopped(3, 3)} · failing`
@@ -15171,17 +15206,20 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
       expect(reads()).toHaveLength(3)
       await settle('ghostty')
       expect(reads()).toHaveLength(3)
+      report('iterm', TMUX_TAB)
       await settle('iterm')
       expect(reads()).toHaveLength(4)
       expect(polls()).toEqual([STARTED, FAILING, STARTED])
     })
 
     it('its lines name no pane, tty or agent', async () => {
-      const { settle, next } = await dialWith()
+      const { report, settle, next } = await dialWith()
+      report('iterm', TMUX_TAB)
       await settle('iterm')
       await next()
       await settle('ghostty')
       tmuxSays.code = 1
+      report('iterm', TMUX_TAB)
       await settle('iterm')
       await next(2)
       const lines = polls()
@@ -15200,8 +15238,6 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
     const shown = async () => (await host().listAgentSnapshot({ apps: true })).apps?.shown
     const unlinked = (off: boolean) => { (seen.cable as unknown as { connected: boolean }).connected = !off }
     const ECHO = '[device] pane · skipped · echo'
-    /** The iTerm2 tab holding the client of the agents' session. */
-    const TMUX_TAB = '/dev/ttys002'
     /** That client's session shows pane %n. */
     const onPane = (n: number) => { tmuxSays.clients = `${TMUX_TAB}|%${n}\n` }
     /** Lands the tmux reads held, and what their answers set off. */
@@ -15404,6 +15440,37 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
       await next(3)
       expect(paneAsked()).toEqual([[agent(1), 'pane']])
       expect(paneLines()).toEqual([])
+    })
+
+    it('on Linux, a hand turn after WezTerm\'s agent was followed, then an agent in tmux starting in WezTerm: the poll starts again from what it found, and the dial stays', async () => {
+      weztermSays.pane = 1
+      // sess-3's caller (4244) in WezTerm's pane 3.
+      const rows: ProcessRow[] = [...IN_WEZTERM, { pid: 4244, ppid: 3800, tty: 'pts/3', executable: 'claude' }]
+      const { port, settle, next } = await dialWith({ linux: true, rows, hooks: [inWezterm(1), inWezterm(3)] })
+      await settle('wezterm')
+      expect(paneAsked()).toEqual([[agent(1), 'pane']])
+      turnTo(agent(3))
+      clock = 5_000
+      port.observed(inTmux(2))
+      await settled()
+      await next()
+      expect(polls()).toEqual([STARTED, stopped(1), STARTED])
+      expect(paneAsked()).toEqual([[agent(1), 'pane']])
+      expect(paneLines()).toEqual([])
+    })
+
+    it('on Linux, a rest on an agent in tmux inside WezTerm, then WezTerm\'s own agent ending: the poll starts again with the rest noted, so the read that sees its pane is its echo', async () => {
+      tmuxSays.clients = '/dev/pts/4|%3\n'
+      const { port, settle } = await dialWith({ linux: true })
+      await settle('wezterm')
+      host().swipeEnded(agent(2), 'rest')
+      await settled()
+      expect(tmuxSays.clients).toBe('/dev/pts/4|%4\n')
+      port.observed({ ...inWezterm(1), event: 'session-end' })
+      await settled()
+      expect(polls()).toEqual([STARTED, stopped(1), STARTED])
+      expect(paneLines()).toEqual([ECHO])
+      expect(paneAsked()).toEqual([])
     })
 
     it('the first answer after the poll starts is the settle\'s: followed, unless the dial moved within ATTACH_ECHO_MS', async () => {
