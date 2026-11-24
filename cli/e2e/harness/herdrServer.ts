@@ -14,7 +14,7 @@
  */
 import { execFile, execFileSync, spawn } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
-import { mkdir, readdir, readlink, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readlink, rm, writeFile } from 'node:fs/promises'
 import { createConnection } from 'node:net'
 import { userInfo } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative } from 'node:path'
@@ -187,6 +187,21 @@ async function ttyTab(d: IsolatedDaemon, app: FakeApp, argv: readonly string[], 
   }
 }
 
+/** Whether a server takes a connection on [socket]: a killed one's socket file is left behind and refuses it. */
+function answers(socket: string): Promise<boolean> {
+  return new Promise((resolve, reject) => {
+    const connection = createConnection({ path: socket })
+    connection.on('connect', () => {
+      connection.destroy()
+      resolve(true)
+    })
+    connection.on('error', (error: NodeJS.ErrnoException) => {
+      if (error.code === 'ECONNREFUSED' || error.code === 'ENOENT') resolve(false)
+      else reject(error)
+    })
+  })
+}
+
 export class PrivateHerdr {
   /** With `lettered`, the root pane of the workspace whose splits are its panes. */
   private lettered?: string
@@ -218,6 +233,20 @@ export class PrivateHerdr {
     writeExecutable(pinned, `#!/bin/sh\nXDG_CONFIG_HOME='${config}' exec '${herdrBinary}' "$@"\n`)
     writeExecutable(join(d.binDir, 'herdr'), recordingWrapper(pinned, runs, ['agent']))
     return config
+  }
+
+  /**
+   * The layout herdr saved in its [config] folder gone (`install`'s): herdr 0.9.5 writes `herdr/session.json` and
+   * `herdr/session-snapshots/` as it stops and a server started later restores their workspaces and panes, so a scenario
+   * on the same daemon met the panes of the one before (iTerm2's I14 and I15 failed in a full run and passed alone).
+   * Refused while a server answers on its socket: it would write them again. Its config stays.
+   */
+  static async forget(config: string): Promise<void> {
+    const socket = socketIn(config)
+    if (existsSync(socket) && await answers(socket)) throw new Error(`herdr still runs on ${socket}: its layout is written again as it stops`)
+    const herdr = join(config, 'herdr')
+    await rm(join(herdr, 'session.json'), { force: true })
+    await rm(join(herdr, 'session-snapshots'), { recursive: true, force: true })
   }
 
   /**

@@ -447,6 +447,23 @@ export function ownRig(rig: Pick<Rig, 'polled' | 'accounts' | 'iterm'>, scenario
 
 /** A daemon whose Orca lists the Orca accounts of [accounts]' sessions (orcaAccounts); with [iterm], an iTerm2
  *  scenario's (ownRig). */
+/** The last scenario's files gone from a daemon kept for the next (its children ended at its stop). */
+export async function emptyFixtures(rig: Pick<Rig, 'accounts' | 'iterm'> & { d: Pick<IsolatedDaemon, 'root' | 'env'> }): Promise<void> {
+  const home = rig.d.env.HOME!
+  emptied(claudeStoreRoots(process.platform, rig.d.env, home)[0]!.root)
+  emptied(join(home, '.codex'))
+  // Every session's transcript and rollout too: the ids are the catalog's, so a later scenario's session goes on in the
+  // same file, and a recap could pass on an earlier scenario's answer.
+  emptied(rig.d.env.CLAUDE_PROJECTS_DIR!)
+  // And the fake Claude Code's record of each process, beside its projects (fakeEngine.mjs): the devices name a session
+  // from it, so an earlier scenario's, under the same catalog id, named this one's.
+  emptied(join(dirname(rig.d.env.CLAUDE_PROJECTS_DIR!), 'sessions'))
+  emptied(join(rig.d.env.CODEX_HOME!, 'sessions'))
+  for (const key of rig.accounts) emptied(join(orcaAccountHome(rig.d.root, key), 'sessions'))
+  emptied(join(home, '.cursor', 'projects'))
+  if (rig.iterm) await PrivateHerdr.forget(join(home, '.config'))
+}
+
 async function openRig(guard: string, accounts: SessionKey[], iterm: boolean): Promise<Rig> {
   const backend = await FakeBackend.start()
   backend.addMachine(ME)
@@ -1017,15 +1034,7 @@ export class TierBDriver implements EvalDriver {
 
   /** The last scenario's fixtures gone (its children ended at its stop), and its dial unplugged. */
   private async reset(rig: Rig): Promise<void> {
-    const home = rig.d.env.HOME!
-    emptied(claudeStoreRoots(process.platform, rig.d.env, home)[0]!.root)
-    emptied(join(home, '.codex'))
-    // Every session's transcript and rollout too: the ids are the catalog's, so a later scenario's session goes on in the
-    // same file, and a recap could pass on an earlier scenario's answer.
-    emptied(rig.d.env.CLAUDE_PROJECTS_DIR!)
-    emptied(join(rig.d.env.CODEX_HOME!, 'sessions'))
-    for (const key of rig.accounts) emptied(join(orcaAccountHome(rig.d.root, key), 'sessions'))
-    emptied(join(home, '.cursor', 'projects'))
+    await emptyFixtures(rig)
     // Orca lays nothing out until a scenario's layout, its watches end with the last scenario, and a new one tells no
     // focus of it: a watch prints the last line told first.
     rig.orca.listing(orcaListing([], {}))
