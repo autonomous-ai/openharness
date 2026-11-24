@@ -77,9 +77,8 @@ export interface RelaunchCommitDeps {
  * relaunched engine says it again (its hook, or a Codex's argv on the next discovery pass). A Codex's or Pi's grid is
  * read off its argv in the background after, so an unavailable models service cannot hold this route. An engine that
  * started as `node` and named itself before the publication's refresh is published under its new name
- * (`publishEngine`), not held on a dead pid. 'changed' when
- * [current] went false before the row learned the engine, 'changed after commit' once it had, 'vanished' when the row
- * is gone.
+ * (`publishEngine`), not held on a dead pid. 'changed' when [current] went false before the row learned the engine,
+ * 'changed after commit' once it had, 'vanished' when the row is gone.
  */
 export async function commitRelaunchedEngine(
   deps: RelaunchCommitDeps, agentId: string, identity: ProcessIdentity | null, grid: GridAssignment | null | undefined, place: RestartTarget,
@@ -90,8 +89,8 @@ export async function commitRelaunchedEngine(
   const selected = deps.registry.byAgent(agentId)
   if (!selected) return 'vanished'
   const engine = selected.engine
+  // `resolvePaneEngineProcess` answers null also when the probe could not answer: the refresh holds that as NO_ENGINE.
   const published = identity
-    // Null also when the probe could not answer.
     ? publishEngine(identity, () => resolvePaneEngineProcess(place.backend, place.runtime, engine), { gone: NO_ENGINE, changed: ANOTHER_PROCESS },
       (process, refresh, expires) => {
         if (process !== identity) console.log(`[restart] publication · engine renamed · ${sid(agentId)}`)
