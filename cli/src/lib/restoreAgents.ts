@@ -44,7 +44,8 @@ import type { TerminalDispatchControl, TerminalRuntimeRef } from './terminalType
 import type { WindowsPaneLaunch } from './windows/engineStart.js'
 import { processAmong, sameProcessIdentity, sameTerminalPlacement, terminalInstanceId, terminalRouteKey } from './terminalRuntime.js'
 import { resumesConversation } from './resumeCapability.js'
-import { codeOrLength, errorKind } from './log.js'
+import { codeOrLength, errorKind, sid } from './log.js'
+import { publishEngine } from './paneEngineProcess.js'
 
 export interface RestoreLaunch {
   nativeToken?: string
@@ -943,22 +944,21 @@ async function watchRestoredPane(
         if ((initial.processIdentity && (!sameProcessIdentity(initial.processIdentity, identity) || initial.processIdentity.executable !== identity.executable))
           || (selected && (!sameProcessIdentity(selected, identity) || selected.executable !== identity.executable))) return
         const expires = performance.now() + Math.min(5_000, Math.max(0, budgetMs - (Date.now() - startedAt)))
-        const refresh = async () => {
-            const observed = await deps.probeProcess(runtime, engine)
-            if (!sameProcessIdentity(identity, observed) || observed?.executable !== identity.executable) {
-              throw new IdentityReadUnavailable('the restored process changed before publication')
-            }
-        }
+        const changed = 'the restored process changed before publication'
+        let published = identity
         // Recorded at first sight, before the settle window: the engine's hooks wait for a recorded process
         // (core/engines/hooks.ts), and recorded only after the window, a turn sent in it was folded as history
         // and no live turn_ended reached the person (e2e/adopt.e2e.ts, 2026-11-17).
-        let publication: LaunchPublication
-        try { publication = await deps.registry.confirmLaunch(agentId, { processIdentity: identity, grid }, { current, refresh, expires }) }
-        catch (error) {
-          if (!(error instanceof RegistryOwnershipChanged) || !selectFirstHook(identity)) throw error
-          await refresh()
-          publication = await deps.registry.confirmLaunch(agentId, { processIdentity: identity, grid }, { current, refresh, expires })
-        }
+        const publication = await publishEngine(identity, () => deps.probeProcess(runtime, engine), { gone: changed, changed }, async (process, refresh, expires) => {
+          if (process !== identity) deps.log(`[restore] publication · engine renamed · ${sid(agentId)}`)
+          published = process
+          try { return await deps.registry.confirmLaunch(agentId, { processIdentity: process, grid }, { current, refresh, expires }) }
+          catch (error) {
+            if (!(error instanceof RegistryOwnershipChanged) || !selectFirstHook(process)) throw error
+            await refresh()
+            return deps.registry.confirmLaunch(agentId, { processIdentity: process, grid }, { current, refresh, expires })
+          }
+        }, expires)
         const ready = publication.state === 'confirmed' ? publication.entry : null
         if (!lifecycle() || !ready || !matchesLaunchReceipt(deps.registry.byAgent(agentId), ready)) return
         // From here the watch follows the row it published by its receipt, not `restoreOwner`: a reopened
@@ -970,7 +970,7 @@ async function watchRestoredPane(
         // the agent with it (measured: claude resuming a conversation another client still held).
         // The pane's and the route's holds keep it through the window, not the record.
         const settled = await waitForSettle(deps, runtime, settleMs)
-        if (!current() && !selectFirstHook(identity)) return
+        if (!current() && !selectFirstHook(published)) return
         if (settled === 'gone') {
           // The row goes back to how it read before this engine was seen. Its process left on it, the guard above
           // took the fresh engine for a stranger's: the row kept a dead process, no conversation and its pane held.
