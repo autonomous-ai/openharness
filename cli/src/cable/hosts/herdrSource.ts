@@ -11,6 +11,12 @@
  * agent it cannot read (a status a newer herdr adds, or one past 64): asked again for such a pane, each subscription
  * would ask for the next, one a second for ever.
  *
+ * The pane that takes herdr's focus is told as it comes, for the devices to follow
+ * (docs/plans/2026-11-24-dial-tmux-pane-focus-follow-design.md), on a subscription of its own: herdr refuses a whole
+ * subscription naming a kind it does not know, so a herdr with no `pane.focused` would lose the agents' rows too. It
+ * opens once an attempt's agents are listed and ends with that attempt; refused or ended, it is not asked for again until
+ * the next attempt, and the agents' rows are left as they are.
+ *
  * The wait on herdr's socket, its retries and its stale rule are socketAttempts.ts's.
  *
  * Everything from the socket is checked here before use, and a log line says only fixed words and counts: herdr's
@@ -35,6 +41,9 @@ const SUBSCRIBE_EVERY_MS = 1000
 /** A session id as herdr's own integrations report one; anything else is not taken for one. */
 const SESSION_ID = /^[A-Za-z0-9._:-]{1,128}$/
 const KINDS: readonly HerdrEntry[] = [{ type: 'pane.agent_detected' }, { type: 'pane.closed' }, { type: 'pane.exited' }]
+/** The focus subscription's one kind, and its event's name (herdr 0.9.5: fakeHerdr.ts RECORDED.focused). */
+const FOCUS: readonly HerdrEntry[] = [{ type: 'pane.focused' }]
+const FOCUSED = 'pane_focused'
 
 type HerdrStatus = 'idle' | 'working' | 'blocked' | 'done' | 'unknown'
 const STATES: Record<HerdrStatus, HostAgentState> = { idle: 'idle', working: 'working', blocked: 'needs-you', done: 'done', unknown: 'idle' }
@@ -62,6 +71,8 @@ export interface HerdrSourceDeps {
   held(paneKey: string, asker: { engine: string; sessionId?: string }): boolean
   /** A tap: the herdr adapter's focus, as the devices hold it. */
   focus(paneId: string): Promise<boolean>
+  /** A pane herdr says took the focus, its bare id in form: told as it arrives, nothing kept. */
+  onFocus(paneId: string): void
   /** A timer, as the devices' parts take theirs: its cancel is returned. */
   after(ms: number, run: () => void): () => void
   /** The wall clock, for `lastActivityAt`; and a clock that never steps back, for how long a subscription lived. */
@@ -107,6 +118,10 @@ export class HerdrSource implements HostSource {
   private heard: Heard | undefined
   /** The next subscription's timer. */
   private timer: (() => void) | undefined
+  /** The focus subscription, while one is open. */
+  private focusing: { close(): void } | undefined
+  /** Whether this attempt's focus subscription was refused or ended. */
+  private focusEnded = false
   private openedAt: number | undefined
   private said: number | undefined
   /** The rows the last list dropped for a pane id out of form, as said. */
@@ -267,7 +282,27 @@ export class HerdrSource implements HostSource {
     }
     this.read(agents, heard)
     this.attempts.listed()
+    if (!this.focusing && !this.focusEnded) this.watchFocus()
     if ([...this.rows.keys()].some((pane) => !sub.panes.has(pane))) this.soon()
+  }
+
+  /** The focus subscription: kept while the agents' subscriptions replace one another, as it names no pane. */
+  private watchFocus(): void {
+    this.focusing = this.deps.client.subscribe(FOCUS, {
+      // Nothing waits on its start: its events come only after it.
+      started: () => {},
+      event: (name, data) => {
+        const pane = data.pane_id
+        if (name === FOCUSED && typeof pane === 'string' && HERDR_PANE.test(pane)) this.deps.onFocus(pane)
+      },
+      // Refused (a herdr that does not know the kind: the plan's probe, row 10) or ended: one line, and not asked for again
+      // in this attempt, where that herdr would refuse it again.
+      closed: (reason) => {
+        this.focusing = undefined
+        this.focusEnded = true
+        this.deps.log(`[herdr] focus · ${reason}`)
+      },
+    })
   }
 
   private closed(sub: Subscription, reason: SocketFault): void {
@@ -285,8 +320,12 @@ export class HerdrSource implements HostSource {
   private close(): void {
     this.current?.handle.close()
     this.next?.handle.close()
+    this.focusing?.close()
     this.current = undefined
     this.next = undefined
+    this.focusing = undefined
+    // The next attempt asks again: a herdr that started again may know the kind.
+    this.focusEnded = false
     this.heard = undefined
     this.timer?.()
     this.timer = undefined

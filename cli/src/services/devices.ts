@@ -50,9 +50,9 @@ import { APP_BUNDLES, APP_IDS, UNKNOWN_APP } from '../cable/hosts/hostDetect.js'
 import { APP_PACKAGE, codexQueueDeps, createCodexQueue, type CodexQueueDeps } from '../cable/hosts/codexQueue.js'
 import { createHcClient, hcClientDeps, hcPaneKey, hcSocketPath, type HcClient } from '../cable/hosts/hcClient.js'
 import { HcSource } from '../cable/hosts/hcSource.js'
-import { createHerdrAdapter } from '../cable/hosts/herdr.js'
+import { createHerdrAdapter, herdrPaneParts } from '../cable/hosts/herdr.js'
 import { createHerdrAppAdapter } from '../cable/hosts/herdrApp.js'
-import { createHerdrClient, herdrClientDeps, type HerdrClient } from '../cable/hosts/herdrClient.js'
+import { createHerdrClient, herdrClientDeps, herdrPaneKey, type HerdrClient } from '../cable/hosts/herdrClient.js'
 import { createHerdrNested, createHerdrOuter, procSockets, ttyAtime } from '../cable/hosts/herdrOuter.js'
 import { HerdrSource } from '../cable/hosts/herdrSource.js'
 import { createKittyAdapter, createKittyTabAdapter, kittyFinder } from '../cable/hosts/kitty.js'
@@ -648,8 +648,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // One with no `show` gets none: the source reads whether it has one (observed.ts rest).
     return show ? { ...noted, show: (pane, agentId) => { noteMove(); return show(pane, agentId) } } : noted
   }
-  /** herdr's adapter as the dial's verbs reach it: a tap on an agent herdr lists (below) is the dial's own move too. */
-  const herdrNoted = noting(herdrAdapter)
+  /** The herdr panes the dial focused lately (a rest, a tap), by herdr's key of each: herdr's event naming one is its
+   *  echo. A keeper of their own, not paneTaps: herdr's event is pushed, and no poll's stop or start may drop these. */
+  const herdrFocuses = dialMovesTo()
+  /** herdr's adapter as the dial's verbs reach it: a tap on an agent herdr lists (below) is the dial's own move too, and a
+   *  rest's or a tap's `herdr agent focus` has herdr tell that pane took the focus a moment later. */
+  const herdrNoted = noting({ ...herdrAdapter,
+    focus: (pane: Pane) => { herdrFocuses.note(herdrAdapter.paneKey(pane)); return herdrAdapter.focus(pane) },
+    show: (pane: Pane, agentId: string) => { herdrFocuses.note(herdrAdapter.paneKey(pane)); return herdrAdapter.show!(pane, agentId) } })
   /** Herdr's adapter as the dial's verbs reach it: a tap or a rest on an agent hc lists (below) is the dial's own move. */
   const herdrAppNoted = noting(herdrApp)
   /** cmux's adapter as the dial's verbs reach it: a tap or a rest on an agent cmux lists (below) is the dial's own move. */
@@ -900,6 +906,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // The command a hooked agent's tap runs (Q6): the dial's move is noted as every tap's is. Only a shown pane is true:
     // herdr's adapter never refuses one, though the noted copy is typed as any adapter's.
     focus: async (paneId) => (await herdrNoted.focus({ adapter: herdrAdapter.id, id: paneId })) === true,
+    // The pane herdr says took its focus turns the dials (herdrFocused, below).
+    onFocus: (paneId) => part.call('herdr', () => herdrFocused(observed, paneId)),
     after: timerIn('herdr'),
     now: Date.now,
     monotonic,
@@ -2338,6 +2346,41 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }
   observed?.onChange(() => part.call('pane', checkPaneFocus))
 
+  // ── the pane focused in herdr ──────────────────────────────────────────────────────────────────────
+  //
+  // herdr tells the pane that takes its focus on a subscription the herdr source holds while a dial is attached
+  // (docs/plans/2026-11-24-dial-tmux-pane-focus-follow-design.md, "herdr: the `pane.focused` event"), so its follow needs
+  // no poll. herdr has one focus a server, and its event names no client: the app settled in front and its tab say whether
+  // the person is looking at it. Each line is an outcome, never the pane, the tab or the agent.
+  /** The dials turn to the one live agent at the pane herdr says took the focus, on herdr's page, as to a tmux pane's.
+   *  With no dial linked nothing is followed or said. */
+  const herdrFocused = (source: ObservedSource, paneId: string): Promise<void> | undefined => {
+    if (!cable.isConnected) return
+    // First: the dial's own `herdr agent focus` excuses its event whatever else of it holds, and that one event alone.
+    if (herdrFocuses.echo(herdrPaneKey(paneId), monotonic())) { log('[device] herdr focus · skipped · echo'); return }
+    // Its own pane, or the one herdr's list placed it at (shownAt, as tmux's): the event names herdr's bare id.
+    const at = source.list().flatMap((agent) => {
+      const full = source.shownAt(agent.id, herdrAdapter.id)
+      const parts = full !== undefined && herdrPaneParts({ adapter: herdrAdapter.id, id: full })
+      return parts && parts.id === paneId ? [{ agent, parts }] : []
+    })
+    // Two there cannot say which one the person looks at; a held pane shows whatever runs in front of its agent; one in
+    // herdr inside Orca is on Orca's page, which Orca's own focus covers.
+    if (at.length !== 1 || at[0].parts.held || pageOf(at[0].agent) !== 'herdr') {
+      log('[device] herdr focus · skipped · unknown agent')
+      return
+    }
+    const [{ agent, parts: { app } }] = at
+    // herdr's focus can move while the person is on another tab of that app (a pane closing hands it on, a second client
+    // moves it): where the app reports tabs, the agent's must be the one it reported last.
+    if (app === undefined || app !== cableHost.settledApp() || (reportsTabs(app) && lastTabs.get(app) !== source.tabTty(agent.id))) {
+      log('[device] herdr focus · skipped · not in front')
+      return
+    }
+    cableHost.followPage(agent.id)
+    return cable.followLocal(agent.id, 'pane')
+  }
+
   /** The scan, the reminders, herdr's and Herdr Core's sockets, opencode's service, the Claude app's store and the ChatGPT
    *  app's metadata, for an attached dial alone. */
   let attached: ReturnType<typeof setInterval>[] = []
@@ -2399,6 +2442,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       // The next attach checks Orca's ring afresh, and a read under way lands on nothing.
       orcaRing = { again: false }
       part.call('orca', dropFocus)
+      // The dial's own herdr moves go with it: herdr's next events are the person's.
+      herdrFocuses.clear()
       return reads
     }
     // Agents already running when the dial came are listed now, idle until their next hook event.

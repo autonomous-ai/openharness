@@ -32,7 +32,9 @@ const PANE_WITH_APP = new RegExp(`^(${HERDR_PANE_FORM})(?::([a-z-]{1,32}))?$`)
 // A pane herdr did not make the agent's terminal for: it only holds the agent, and its id carries no app.
 const HELD = 'held:'
 
-function paneParts(pane: Pane): { id: string; app?: string; held?: true } | undefined {
+/** A pane's bare herdr id, the app holding its client when the id names one, and whether it only holds its agent; none
+ *  for an id out of form. The devices match herdr's focus event, which names the bare id, by it (devices.ts). */
+export function herdrPaneParts(pane: Pane): { id: string; app?: string; held?: true } | undefined {
   if (pane.id.startsWith(HELD)) {
     const id = pane.id.slice(HELD.length)
     return HERDR_PANE.test(id) ? { id, held: true } : undefined
@@ -100,26 +102,26 @@ export function createHerdrAdapter(deps: HerdrAdapterDeps): HerdrAdapter {
     },
     canFocus: () => true,
     async focus(pane) {
-      const parts = paneParts(pane)
+      const parts = herdrPaneParts(pane)
       return parts ? turn(parts.id) : false
     },
     canShow(pane) {
-      const app = paneParts(pane)?.app
+      const app = herdrPaneParts(pane)?.app
       return app !== undefined && app === deps.front()
     },
     async show(pane) {
-      const parts = paneParts(pane)
+      const parts = herdrPaneParts(pane)
       return parts && !parts.held && (await turn(parts.id)) ? 'ok' : 'failed'
     },
     async type(pane, text, engine) {
-      const parts = paneParts(pane)
+      const parts = herdrPaneParts(pane)
       return !!parts && !parts.held && (await prompt(parts.id, engine, text)).outcome === 'sent'
     },
     // A daemon started by launchd or systemd may not have the shell's XDG_CONFIG_HOME, and so no socket where herdr
     // listens: the words then skip herdr, and no other app types into a multiplexer's pane (orca.ts), so the agent's
     // voice is its mod's or the Codex queue's alone.
     canType: () => deps.client.socketStamp() !== undefined,
-    paneKey: (pane) => herdrPaneKey(paneParts(pane)?.id ?? pane.id),
+    paneKey: (pane) => herdrPaneKey(herdrPaneParts(pane)?.id ?? pane.id),
     prompt,
   }
 }
