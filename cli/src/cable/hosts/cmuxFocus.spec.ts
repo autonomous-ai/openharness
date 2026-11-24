@@ -372,6 +372,32 @@ describe('cmux\'s front from its event log (docs/plans/2026-11-25-dial-cmux-focu
       expect(log.positions).toEqual([0, 0])
       expect(gaps()).toBe(0)
     })
+
+    // The devices reset as the dial goes: a read asked before it would open the log with no dial attached, and keep what
+    // it read past the reset.
+    it('a reset drops the read asked during one: it never runs, and one asked after the reset is a first read', async () => {
+      const { log, focus } = setup()
+      log.append(focused(W1, S1) + keyed(WIN1, W1))
+      let release = log.hold()
+      const during = focus.read()
+      await vi.waitFor(() => expect(log.positions).toHaveLength(1))
+      const asked = focus.read()
+      focus.reset()
+      release()
+      expect(await during).toEqual({})
+      expect(await asked).toEqual({})
+      expect(log.opens).toBe(1)
+      release = log.hold()
+      const next = focus.read()
+      await vi.waitFor(() => expect(log.positions).toHaveLength(2))
+      focus.reset()
+      const after = focus.read()
+      release()
+      expect(await next).toEqual({})
+      expect(await after).toEqual({ workspace: low(W1), surface: low(S1) })
+      expect(log.positions).toEqual([0, 0, 0])
+      expect(gaps()).toBe(0)
+    })
   })
 
   it('says the first read\'s time after a reset, then only a read slower than every one said', async () => {
