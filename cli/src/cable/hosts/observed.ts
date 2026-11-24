@@ -575,14 +575,26 @@ export class ObservedSource implements HostSource {
    * Its client's place read afresh for a tap or a rest (eval I13, PM 2026-11-24): a hook asks only at a session's or a
    * turn's start, and the scan once, so a person who attached its multiplexer from another tab since, and typed nothing,
    * would be shown the old tab. One landing an agent, shared while it runs and for FRESH_WITHIN_MS after: a burst of
-   * taps and rests runs one lookup. None when there is nothing to ask (readAfresh).
+   * taps and rests runs one lookup. None when there is nothing to ask (readAfresh). The landing always settles: a
+   * lookup never rejects, yet one that did, or threw, would hold it unsettled, and every later tap and rest on the agent
+   * would fail with it and never ask again.
    */
   private askAfresh(entry: Entry): Promise<void> | undefined {
     const held = entry.fresh
     if (held && (held.settledAt === undefined || this.deps.now() - held.settledAt < FRESH_WITHIN_MS)) return held.landing
-    const read = this.readAfresh(entry)
+    let read: Promise<void> | undefined
+    try {
+      read = this.readAfresh(entry)
+    } catch (error) {
+      read = Promise.reject(error)
+    }
     if (!read) return undefined
-    const fresh: NonNullable<Entry['fresh']> = { landing: read.then(() => { fresh.settledAt = this.deps.now() }) }
+    const fresh: NonNullable<Entry['fresh']> = {
+      landing: read.catch((error: unknown) => {
+        // Its kind, no error text: a path in it holds the account's name. The tap acts on what it holds.
+        this.deps.log(`[observed] outer · lookup not read · ${errorKind(error)}`)
+      }).then(() => { fresh.settledAt = this.deps.now() }),
+    }
     entry.fresh = fresh
     return fresh.landing
   }
