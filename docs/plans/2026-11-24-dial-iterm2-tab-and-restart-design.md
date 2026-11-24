@@ -38,7 +38,8 @@ A tap, and a rest, on an agent nested in a multiplexer read its client's place a
    `outerAsk` (a new caller or hints, a session or turn start) wins: the fresh answer is dropped, as `landOuter` drops
    any answer not for the latest ask. A hook's own ask keeps today's behavior.
 3. **Scan-placed nested agents** (`Entry.scanPlaced`, no hook yet, `placed` or not). `placeNested` keeps the scan's
-   `Nested` facts on the entry (`host`, `pid`, `tty`, `maker`) while it is scan-placed. The fresh ask reads a fresh
+   `Nested` facts on the entry (`host`, `pid`, `tty`, `maker`) while it is scan-placed, when its lookup had an answer to
+   give: one with none at the scan (a tty out of its platform's form) has none at a tap either. The fresh ask reads a fresh
    process table (`ObservedDeps.table`), as the old look's table cannot hold a client started since, and asks
    `nested({ ...kept, rows }, { fresh: true })`. Its answer lands as `placeNested`'s does (`outer`, `placed`, `tty`, app,
    bundle), only while the entry is still unhooked and only when it names an app. A table read that fails changes

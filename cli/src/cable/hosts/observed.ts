@@ -259,8 +259,9 @@ interface Entry {
   /** Its outer place is the scan's (placeNested), or its multiplexer is (HostAgent.nest from the scan's maker read), and
    *  no hook has come since: the first hook keeps them while that hook's own ask runs (askOuter). */
   scanPlaced?: true
-  /** What the scan asked its lookup by process (placeNested), until its first hook: a tap's or a rest's fresh ask asks
-   *  it again (askAfresh), over a table read then. The look's table is not kept: it holds no client started since. */
+  /** What the scan asked its lookup by process (placeNested), when that lookup had an answer to give, until its first
+   *  hook: a tap's or a rest's fresh ask asks it again (askAfresh), over a table read then. The look's table is not
+   *  kept: it holds no client started since. */
   scanNested?: Omit<Nested, 'rows'>
   /** The multiplexer's pane the scan's lookup placed a session found nested at, until its first hook: a rest and a tap
    *  show it (placeIn), and it is never one of its panes, so no words reach it before a hook names the pane. */
