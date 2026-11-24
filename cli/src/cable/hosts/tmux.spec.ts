@@ -4,7 +4,7 @@ import { bundleOf, createOpenActions, type OpenTarget } from './open.js'
 import { tmuxFinder } from '../../lib/binaryFinder.js'
 import type { TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
 import { FRESH_WITHIN_MS } from './outer.js'
-import { createTmuxAdapter, createTmuxNested, createTmuxOuter, heldAnswers, PANES_A_LISTING, type TmuxDeps, type TmuxOuterDeps } from './tmux.js'
+import { createTmuxAdapter, createTmuxNested, createTmuxOuter, heldAnswers, PANES_A_LISTING, tmuxPaneParts, type TmuxDeps, type TmuxOuterDeps } from './tmux.js'
 import type { PtyProcess } from './scannedApp.js'
 
 const OPEN = '/usr/bin/open'
@@ -76,7 +76,7 @@ const HARNESS_PANES = [
 ]
 
 describe('the tmux adapter', () => {
-  // It takes no platform: tmux's own command is the same on each (the Linux tap below).
+  // Only its client listing reads the platform: tmux's own command is the same on each (the Linux tap below).
   it('its id is tmux, it taps before its app, it can focus on every platform, it shows, and it has no type', () => {
     const { adapter } = recorder()
     expect(adapter.id).toBe('tmux')
@@ -128,6 +128,51 @@ describe('the tmux adapter', () => {
     const failed = recorder({}, [1], OWN)
     await failed.opener.open('a1', target(IN_GHOSTTY))
     for (const line of [...refused.logs, ...failed.logs]) for (const id of [PANE, '90', '100', '4242', 'ttys004', '/']) expect(line).not.toContain(id)
+  })
+})
+
+/** The focus poll's read of the clients: each one's tty and the active pane of the session it shows. */
+const clientPanesListed: Call = { file: 'tmux', args: ['list-clients', '-F', '#{client_tty}|#{pane_id}'], timeoutMs: 2_000 }
+
+describe('the clients of the person\'s tmux and the pane each shows', () => {
+  it('one list-clients with the focus read\'s timeout gives each client\'s tty and its session\'s active pane', async () => {
+    const { calls, adapter } = recorder({}, [], { clients: '/dev/ttys004|%3\n/dev/ttys007|%12\n' })
+    expect(await adapter.clientPanes()).toEqual(new Map([['/dev/ttys004', '%3'], ['/dev/ttys007', '%12']]))
+    expect(calls).toEqual([clientPanesListed])
+  })
+
+  it('a line out of form is passed over', async () => {
+    // A control client has no tty; a tty of another platform's form, a pane out of form and a line with no bar are none.
+    const darwin = recorder({}, [], { clients: '|%3\n/dev/pts/4|%5\n/dev/ttys004|3\n/dev/ttys005\n/dev/ttys006|%7\n' })
+    expect(await darwin.adapter.clientPanes()).toEqual(new Map([['/dev/ttys006', '%7']]))
+    const both = { clients: '/dev/pts/4|%5\n/dev/ttys004|%3\n' }
+    expect(await recorder({ platform: 'linux' }, [], both).adapter.clientPanes()).toEqual(new Map([['/dev/pts/4', '%5']]))
+    expect(await recorder({ platform: 'win32' }, [], both).adapter.clientPanes()).toEqual(new Map())
+  })
+
+  it('only the first 1024 lines are parsed', async () => {
+    const lines = Array.from({ length: PANES_A_LISTING + 1 }, (_, i) => `/dev/ttys${i}|%${i}\n`).join('')
+    const { logs, adapter } = recorder({}, [], { clients: lines })
+    const panes = await adapter.clientPanes()
+    expect(panes?.size).toBe(PANES_A_LISTING)
+    expect(panes?.has(`/dev/ttys${PANES_A_LISTING}`)).toBe(false)
+    expect(logs).toEqual([])
+  })
+
+  it('no tmux found, an exit other than 0, and a run that rejects each answer undefined', async () => {
+    const said = { clients: '/dev/ttys004|%3\n' }
+    expect(await recorder({ tmux: async () => ({ state: 'absent', reason: 'tmux was not found' }) }, [], said).adapter.clientPanes()).toBeUndefined()
+    expect(await recorder({}, [1], said).adapter.clientPanes()).toBeUndefined()
+    expect(await recorder({ run: async () => { throw new Error('spawn failed') } }, [], said).adapter.clientPanes()).toBeUndefined()
+  })
+})
+
+describe('tmuxPaneParts', () => {
+  it('tmuxPaneParts gives the pane, the agent\'s process and its app', () => {
+    expect(tmuxPaneParts({ adapter: 'tmux', id: '%3:100:iterm' })).toEqual({ id: '%3', pid: 100, app: 'iterm' })
+    expect(tmuxPaneParts({ adapter: 'tmux', id: '%3:100' })).toEqual({ id: '%3', pid: 100 })
+    expect(tmuxPaneParts({ adapter: 'tmux', id: '%3' })).toBeUndefined()
+    expect(tmuxPaneParts({ adapter: 'tmux', id: '%3:100:nope' })).toBeUndefined()
   })
 })
 
