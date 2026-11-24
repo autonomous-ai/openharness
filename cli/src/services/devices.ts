@@ -680,7 +680,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // One lookup of tmux and one of zellij, each for the tap, the words and the client lookup (the outer lookups, below).
   const tmuxAt = tmuxFinder()
   const zellijAt = zellijFinder()
-  const tmux = noting(createTmuxAdapter({ run: apps.run, tmux: tmuxAt, processes: readProcessNames, log, front: () => cableHost.latestFront() }))
+  const tmux = noting(createTmuxAdapter({ run: apps.run, tmux: tmuxAt, processes: readProcessNames, log, front: () => cableHost.latestFront(), platform: apps.platform }))
   // One lookup of kitty, for its windows and for the tab holding a multiplexer's client.
   const kittyDeps = { run: apps.run, kitty: kittyFinder(), platform: apps.platform, log, uid: process.getuid?.() ?? -1, socketOwner,
     now: monotonic, socketId }

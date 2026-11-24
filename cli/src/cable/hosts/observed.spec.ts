@@ -1581,7 +1581,7 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
       binary: () => undefined,
     }, front: () => undefined }), 'herdr'),
     createTmuxAdapter({ run: ran, tmux: async () => ({ state: 'present' }), processes: async () => [{ pid: 100, ppid: 1, executable: 'claude' }],
-      log: () => {}, front: () => fake.tmuxFront() }),
+      log: () => {}, front: () => fake.tmuxFront(), platform: 'darwin' }),
     // As devices.ts takes it where the hook's addresses are hc's own session's.
     createHerdrAppAdapter({ ...deps,
       client: { prompt: (address, kind, text) => fake.hcPrompt(address, kind, text), keys: async () => false },
@@ -3316,7 +3316,7 @@ describe('ObservedSource and the host that owns its caller\'s terminal', () => {
     const present = async () => ({ state: 'present' as const })
     const adapters = [
       createZellijAdapter({ run, zellij: present, platform: 'linux' }),
-      createTmuxAdapter({ run, tmux: present, processes: async () => [{ pid: 100, ppid: 1, executable: 'claude' }], log: () => {}, front: () => undefined }),
+      createTmuxAdapter({ run, tmux: present, processes: async () => [{ pid: 100, ppid: 1, executable: 'claude' }], log: () => {}, front: () => undefined, platform: 'darwin' }),
     ]
     const { actions } = fakeActions()
     const s = setup({ actions: { ...actions, adapters }, ptyOwner })
