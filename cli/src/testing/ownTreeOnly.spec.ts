@@ -329,8 +329,11 @@ describe('a spec run\'s processes (SpawnedRuns)', () => {
   }
   const GROUP = P(210), MEMBER = P(211), ITS_CHILD = P(212), DAEMON = P(200), DAEMONS_CHILD = P(201), NAMES_ROOT = P(300)
 
-  /** A run that began at 10:00:00 and has exited, its group and a daemon its pid file names, written at 10:00:30. */
-  function exitedRun(daemonStarted: Date): Run {
+  /**
+   * A run that began at 10:00:00 and has exited, its group and a daemon its pid file names, written at 10:00:30; its own
+   * process started when `ps` says [leaderStarted].
+   */
+  function exitedRun(daemonStarted: Date, started = at(0).getTime(), leaderStarted = at(0)): Run {
     const root = mkdtempSync(join(tmpdir(), 'spawned-runs-'))
     folders.push(root)
     mkdirSync(join(root, 'data'))
@@ -343,7 +346,7 @@ describe('a spec run\'s processes (SpawnedRuns)', () => {
       made(NAMES_ROOT, 1, NAMES_ROOT, `vim ${root}/notes.txt`),
     ]
     const child = { exitCode: 0, signalCode: null } as unknown as ChildProcess
-    return { child, pgid: GROUP, root, label: 'leaky', started: at(0).getTime(), exited: Promise.resolve(0), stdout: '', stderr: '' }
+    return { child, pgid: GROUP, root, label: 'leaky', started, leaderStarted: leaderStarted.getTime(), exited: Promise.resolve(0), stdout: '', stderr: '' }
   }
 
   it('are its group, what descends from it, and the daemon its pid file names while that pid started in its time', () => {
@@ -354,6 +357,18 @@ describe('a spec run\'s processes (SpawnedRuns)', () => {
 
   it('leave out a pid its pid file names that started after the file was written: another process has it', () => {
     const run = exitedRun(at(40))
+    expect(new SpawnedRuns().belonging(run).map((row) => row.pid).sort()).toEqual([MEMBER, ITS_CHILD].sort())
+    expect(beyond([MEMBER, ITS_CHILD], [DAEMON])).toEqual([])
+  })
+
+  it("take the daemon whose `ps` start is the second before the run's clock, as Linux's can be, while no sooner than the run's own process", () => {
+    // Linux's lstart is the boot time truncated to the second plus the process's age, truncated again.
+    const run = exitedRun(at(-1), at(0).getTime() + 400, at(-1))
+    expect(new SpawnedRuns().belonging(run).map((row) => row.pid).sort()).toEqual([DAEMON, DAEMONS_CHILD, MEMBER, ITS_CHILD].sort())
+  })
+
+  it("leave out a pid its pid file names that started before the run's own process: the run did not start it", () => {
+    const run = exitedRun(at(-5))
     expect(new SpawnedRuns().belonging(run).map((row) => row.pid).sort()).toEqual([MEMBER, ITS_CHILD].sort())
     expect(beyond([MEMBER, ITS_CHILD], [DAEMON])).toEqual([])
   })
