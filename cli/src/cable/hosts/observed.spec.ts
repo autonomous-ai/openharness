@@ -5330,17 +5330,21 @@ describe('ObservedSource and a nested session the scan found', () => {
 
   /** A source whose look reads one table, whose makers name [made], with the real tabs, tmux and herdr adapters (tmux's
    *  runs recorded), a walk that names no app, and a tty read that answers at once; its nested lookups the test answers
-   *  by hand, in the order asked. */
+   *  by hand, in the order asked. A tap's or a rest's fresh ask answers `{}` at once, which changes nothing, or,
+   *  [freshByHand], goes to `freshAsks`, answered as `asks` are. */
   function scan(
     made: ReadonlyMap<number, Omit<Nested, 'pid' | 'rows'>>, deps: Partial<ObservedDeps> = {}, fakes: Partial<Fakes> = {},
-    adapt = (adapters: readonly HostAdapter[]) => adapters,
+    adapt = (adapters: readonly HostAdapter[]) => adapters, { freshByHand }: { freshByHand?: true } = {},
   ) {
     const table = vi.fn(async () => ROWS)
     const apps = vi.fn(async (_pids: readonly number[], _rows?: readonly ProcessName[]): Promise<ReadonlyMap<number, string>> => new Map())
     const madeBy = vi.fn(async (pids: readonly number[], _rows: readonly ProcessName[]) =>
       new Map(pids.flatMap((pid) => (made.has(pid) ? [[pid, made.get(pid)!] as const] : []))))
     const asks: Array<(place: NestedPlace) => void> = []
-    const nested = vi.fn((_found: Nested) => new Promise<NestedPlace>((resolve) => { asks.push(resolve) }))
+    const freshAsks: Array<(place: NestedPlace) => void> = []
+    const nested = vi.fn((_found: Nested, opts?: Fresh) => (opts?.fresh && !freshByHand
+      ? Promise.resolve<NestedPlace>({})
+      : new Promise<NestedPlace>((resolve) => { (opts?.fresh ? freshAsks : asks).push(resolve) })))
     const tty = vi.fn(async (_pid: number): Promise<string | undefined> => '/dev/ttys031')
     const { actions, ran } = fakeActions(fakes)
     const s = setup({ actions: { ...actions, adapters: adapt(actions.adapters) }, table, apps, madeBy, nested, tty, ...deps })
@@ -5358,7 +5362,7 @@ describe('ObservedSource and a nested session the scan found', () => {
       await flushed()
     }
     const agent = (sessionId: string) => s.src.list().find((a) => a.sessionId === sessionId)!
-    return { ...s, actions, ran, table, apps, madeBy, nested, tty, found, answer, agent }
+    return { ...s, actions, ran, table, apps, madeBy, nested, freshAsks, tty, found, answer, agent }
   }
 
   it('the devices start again with a tmux and a herdr agent idle: the scan puts each on its client\'s app with its tab, known, not on Other\'s page', async () => {
@@ -5681,15 +5685,20 @@ describe('ObservedSource and a nested session the scan found', () => {
 
     /** Session `a`, idle in tmux pane %3, as the scan placed it: on iTerm2's page, at its client's tab, with its pane,
      *  iTerm2 in front. Its hooks' own outer lookups the test answers by hand, in the order asked, as tmux's and herdr's
-     *  answer an event in their pane; an event in neither is not nested. */
-    async function placed(fakes: Partial<Fakes> = {}, adapt?: (adapters: readonly HostAdapter[]) => readonly HostAdapter[]) {
+     *  answer an event in their pane; an event in neither is not nested. A tap's or a rest's fresh ask of them answers
+     *  `{}` at once, which changes nothing; its fresh nested ask is answered as [fresh] says (scan). */
+    async function placed(
+      fakes: Partial<Fakes> = {}, adapt?: (adapters: readonly HostAdapter[]) => readonly HostAdapter[], fresh: { freshByHand?: true } = {},
+    ) {
       const hookAsks: Array<(place: OuterAnswer) => Promise<void>> = []
-      const outer = vi.fn((hints: Readonly<Record<string, string>>, _pid: number) => (hints.TMUX_PANE || hints.HERDR_PANE_ID
-        ? new Promise<OuterAnswer>((resolve) => {
+      const outer = vi.fn((hints: Readonly<Record<string, string>>, _pid: number, _made?: (nest: Nest) => void, opts?: Fresh) => {
+        if (!hints.TMUX_PANE && !hints.HERDR_PANE_ID) return undefined
+        if (opts?.fresh) return Promise.resolve<OuterAnswer>({})
+        return new Promise<OuterAnswer>((resolve) => {
           hookAsks.push(async (place) => { resolve(place); await flushed() })
         })
-        : undefined))
-      const t = scan(new Map([[100, IN_TMUX]]), { outer }, { tmuxFront: () => 'iterm', ...fakes }, adapt)
+      })
+      const t = scan(new Map([[100, IN_TMUX]]), { outer }, { tmuxFront: () => 'iterm', ...fakes }, adapt, fresh)
       t.found('a', 100)
       const look = t.src.scanOpen()
       await t.answer(0, { ...ITERM, pane: PANE })
@@ -5847,6 +5856,113 @@ describe('ObservedSource and a nested session the scan found', () => {
       expect(t.a()).not.toHaveProperty('nest')
       expect(t.a()).toMatchObject({ app: 'ghostty', host: 'ghostty' })
       expect(pageOf(t.a())).toBe('ghostty')
+    })
+
+    // Eval I13 for an agent the scan placed (PM, 2026-11-24): no hook since the devices started again, so nothing asks
+    // again after the person attached from iTerm2's tab 2. A tap and a rest ask its lookup by process afresh, over a
+    // table read now: the look's holds no client started since. The wait runs out only when a test says (fake timers).
+    describe('a tap or a rest reads its client afresh', () => {
+      beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }) })
+      afterEach(() => { vi.useRealTimers() })
+      const TAB_2 = { ...ITERM, tty: '/dev/ttys005', pane: PANE }
+      /** The table read at the tap: tab 2's iTerm2 session started since the look. */
+      const NOW_ROWS: readonly ProcessName[] = [...ROWS, { pid: 4400, ppid: 1, executable: 'login' }]
+
+      it('I13 for an agent the scan placed: re-attached in tab 2 with no hook, a tap reads a fresh table and opens tab 2', async () => {
+        const t = await placed({}, undefined, { freshByHand: true })
+        t.table.mockResolvedValueOnce(NOW_ROWS)
+        const tapping = t.src.focus(t.a())
+        await flushed()
+        expect(t.table).toHaveBeenCalledTimes(2)
+        expect(t.nested.mock.calls.at(-1)).toEqual([{ ...IN_TMUX, pid: 100, rows: NOW_ROWS }, { fresh: true }])
+        expect(t.nested.mock.calls.at(-1)![0].rows).toBe(NOW_ROWS)
+        expect(t.actions.open).not.toHaveBeenCalled()
+        expect(t.freshAsks).toHaveLength(1)
+        t.freshAsks[0](TAB_2)
+        expect(await tapping).toBe(true)
+        expect(t.src.paneOf(t.id, 'tabs')).toBe('iterm:/dev/ttys005')
+        expect(t.actions.tabSelect.mock.calls.at(-1)).toEqual(['iterm', '/dev/ttys005', true])
+      })
+
+      it('I13 for an agent the scan placed: a rest selects tab 2, then its tmux pane', async () => {
+        const t = await placed({}, undefined, { freshByHand: true })
+        const resting = t.src.showPane(t.a())
+        await flushed()
+        expect(t.actions.tabSelect).not.toHaveBeenCalled()
+        expect(t.freshAsks).toHaveLength(1)
+        t.freshAsks[0](TAB_2)
+        expect(await resting).toBe('ok')
+        expect(t.actions.tabSelect.mock.calls).toEqual([['iterm', '/dev/ttys005', false]])
+        expect(t.ran.mock.calls).toEqual([paneChecked, selected])
+      })
+
+      it('placed by its maker alone (the scan\'s lookup named no app), a fresh answer that names iTerm2 places it there', async () => {
+        const t = scan(new Map([[100, IN_TMUX]]), {}, { tmuxFront: () => 'iterm' }, undefined, { freshByHand: true })
+        t.found('a', 100)
+        const look = t.src.scanOpen()
+        await t.answer(0, {})
+        await look
+        const { id } = t.agent('a')
+        expect(t.agent('a')).toMatchObject({ nest: 'tmux', host: 'tmux' })
+        const tapping = t.src.focus(t.agent('a'))
+        await flushed()
+        expect(t.freshAsks).toHaveLength(1)
+        t.freshAsks[0]({ ...ITERM, pane: PANE })
+        expect(await tapping).toBe(true)
+        expect(t.agent('a')).toMatchObject({ app: 'iterm', nest: 'tmux' })
+        expect(t.agent('a')).not.toHaveProperty('appPending')
+        expect(t.src.shownAt(id, 'tmux')).toBe('%3:100:iterm')
+        expect(t.src.paneOf(id, 'tabs')).toBe('iterm:/dev/ttys004')
+        expect(t.actions.open.mock.calls).toEqual([[id, { bundle: 'com.googlecode.iterm2', pane: PANE }]])
+      })
+
+      it('a fresh table that cannot be read changes nothing, said once', async () => {
+        const t = await placed({}, undefined, { freshByHand: true })
+        t.table.mockRejectedValueOnce(new Error('ps timed out under /Users/someone'))
+        expect(await t.src.focus(t.a())).toBe(true)
+        expect(t.table).toHaveBeenCalledTimes(2)
+        expect(t.nested).toHaveBeenCalledTimes(1)
+        expect(t.actions.tabSelect.mock.calls).toEqual([['iterm', '/dev/ttys004', true]])
+        expect(t.logs.filter((line) => line.startsWith('[observed] outer'))).toEqual(['[observed] outer · processes not read · Error'])
+        expect(t.logs.join('\n')).not.toContain('someone')
+      })
+
+      // Detached and not attached again, or a client in a terminal with no page: the row keeps its page and its tab.
+      it('a fresh answer with no app changes nothing', async () => {
+        for (const place of [{}, { tty: '/dev/ttys005', pid: 4500 }] as const) {
+          const t = await placed({}, undefined, { freshByHand: true })
+          const told = t.changes.mock.calls.length
+          const tapping = t.src.focus(t.a())
+          await flushed()
+          expect(t.freshAsks, JSON.stringify(place)).toHaveLength(1)
+          t.freshAsks[0](place)
+          expect(await tapping, JSON.stringify(place)).toBe(true)
+          expect(t.a().app, JSON.stringify(place)).toBe('iterm')
+          expect(t.src.paneOf(t.id, 'tabs'), JSON.stringify(place)).toBe('iterm:/dev/ttys004')
+          expect(t.src.windowOf(t.id), JSON.stringify(place)).toEqual({ pid: 4300, app: 'iterm' })
+          expect(t.actions.tabSelect.mock.calls, JSON.stringify(place)).toEqual([['iterm', '/dev/ttys004', true]])
+          expect(t.changes, JSON.stringify(place)).toHaveBeenCalledTimes(told)
+        }
+      })
+
+      it('a hook during the fresh ask wins, and a later tap asks the hooked way', async () => {
+        const t = await placed({}, undefined, { freshByHand: true })
+        const tapping = t.src.focus(t.a())
+        await flushed()
+        expect(t.freshAsks).toHaveLength(1)
+        t.src.ingest(t.ev('session-start', { sessionId: 'a', ...inTmux() }))
+        await t.hookAsks[0]({ app: 'terminal-app', tty: '/dev/ttys006', pid: 4500 })
+        t.freshAsks[0](TAB_2)
+        expect(await tapping).toBe(true)
+        expect(t.a().app).toBe('terminal-app')
+        expect(t.src.paneOf(t.id, 'tabs')).toBe('terminal-app:/dev/ttys006')
+        expect(t.actions.tabSelect.mock.calls.at(-1)).toEqual(['terminal-app', '/dev/ttys006', true])
+        t.clock.t += FRESH_WITHIN_MS
+        expect(await t.src.focus(t.a())).toBe(true)
+        expect(t.outer.mock.calls.at(-1)).toEqual([inTmux().hostHints, 100, undefined, { fresh: true }])
+        expect(t.nested).toHaveBeenCalledTimes(2)
+        expect(t.table).toHaveBeenCalledTimes(2)
+      })
     })
   })
 })
