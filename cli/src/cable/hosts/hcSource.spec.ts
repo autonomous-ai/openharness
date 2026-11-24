@@ -20,6 +20,12 @@ const status = (state: string, app = 'claude-code') => ({ status: { state, app }
 const method = (request: unknown) => (request as { method: string }).method
 /** Lets what a socket has already said be read. */
 const turn = () => new Promise((resolve) => setImmediate(resolve))
+/** Whether a start's promise has ended, read as the test goes. */
+const ending = (start: Promise<void>) => {
+  const state = { ended: false }
+  void start.then(() => { state.ended = true })
+  return state
+}
 
 describe.skipIf(process.platform === 'win32')('the hc source (docs/plans/2026-11-16-herdr-app-design.md)', () => {
   let server: FakeHc
@@ -554,6 +560,58 @@ describe.skipIf(process.platform === 'win32')('the hc source (docs/plans/2026-11
     s.source.start()
     await s.until(() => s.log.includes('[herdr-app] listed · 0 agents'))
     expect(subscribe).toHaveBeenCalledTimes(1)
+  })
+
+  // The dial's greeting waits for it (devices.ts dialAttached), so its first list holds Herdr's agents.
+  describe('the end of a start', () => {
+    it('a start ends once its first snapshot has landed, its agents listed', async () => {
+      server.terminals = [agent('t7')]
+      const s = setup()
+      await s.source.start()
+      expect(listed(s)).toEqual(['herdr-app:t7'])
+    })
+
+    it('a start whose subscription fails ends too', async () => {
+      server.answer('hello', { result: { generation: 2 } })
+      const s = setup()
+      await s.source.start()
+      expect(s.log).toEqual(['[herdr-app] list · bad_answer', '[herdr-app] retry · 1'])
+    })
+
+    it('with no socket a start ends at once', async () => {
+      await server.stop()
+      const s = setup()
+      const start = ending(s.source.start())
+      await turn()
+      expect(start.ended).toBe(true)
+      expect(s.log).toEqual(['[herdr-app] socket · none'])
+    })
+
+    it('a stop ends the start under way at once; the next start ends with its own snapshot', async () => {
+      server.terminals = [agent('t7')]
+      server.answer('events.subscribe', 'hold')
+      const s = setup()
+      const first = ending(s.source.start())
+      await server.got('events.subscribe', 1)
+      await turn()
+      expect(first.ended).toBe(false)
+      s.source.stop()
+      await turn()
+      expect(first.ended).toBe(true)
+      server.answer('events.subscribe')
+      await s.source.start()
+      expect(listed(s)).toEqual(['herdr-app:t7'])
+    })
+
+    it('a start while it runs ends at once', async () => {
+      server.answer('events.subscribe', 'hold')
+      const s = setup()
+      void s.source.start()
+      const again = ending(s.source.start())
+      await turn()
+      expect(again.ended).toBe(true)
+      s.source.stop()
+    })
   })
 
   it('voice', async () => {
