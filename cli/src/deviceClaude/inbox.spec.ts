@@ -175,6 +175,21 @@ function start(dir: string, options: Partial<InboxDeps> & { id?: string; stopAt?
 
 const follow = (dir: string, options: Parameters<typeof start>[1] = {}) => start(dir, options).run
 
+/**
+ * What [run] settles to within a second of real time, or 'running'. Once the time a follower has to end in is past, it
+ * is awaited by this, not by vi.waitFor: that moves fake intervals on as it waits, and let a tick of 2.9 s pass a test
+ * of 2 s.
+ */
+async function within<T>(run: Promise<T>): Promise<T | 'running'> {
+  let timer: NodeJS.Timeout | undefined
+  const late = new Promise<'running'>((resolve) => { timer = setTimeout(() => resolve('running'), 1_000) })
+  try {
+    return await Promise.race([run, late])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 describe('the inbox follower on Windows', () => {
   it('prints what the person said, one line each, and polls again at once', async () => {
     const text = 'hi & 100% "x"\nnext'
@@ -325,8 +340,7 @@ describe('the inbox follower on Windows, once its caller is gone', () => {
     await vi.waitFor(() => expect(seen).toHaveLength(1))
     running.delete(pid)
     await vi.advanceTimersByTimeAsync(2_000)
-    await vi.waitFor(() => expect(follower.ended.done).toBe(true))
-    expect(await follower.run).toEqual({ code: 0, lines: [], waits: [] })
+    expect(await within(follower.run)).toEqual({ code: 0, lines: [], waits: [] })
   })
 
   it('ends within 2 s once Claude Code is gone in the middle of the minute\'s wait, with no line', async () => {
@@ -342,8 +356,7 @@ describe('the inbox follower on Windows, once its caller is gone', () => {
     await vi.waitFor(() => expect(waits).toEqual([60_000]))
     running.delete(CLAUDE)
     await vi.advanceTimersByTimeAsync(2_000)
-    await vi.waitFor(() => expect(follower.ended.done).toBe(true))
-    expect(follower.lines).toEqual([])
+    expect(await within(follower.run)).toEqual({ code: 0, lines: [], waits: [] })
     expect(seen).toHaveLength(1)
   })
 
@@ -359,8 +372,7 @@ describe('the inbox follower on Windows, once its caller is gone', () => {
     await vi.advanceTimersByTimeAsync(59_000)
     expect(counts.rows).toBe(1)
     await vi.advanceTimersByTimeAsync(1_000)
-    await vi.waitFor(() => expect(follower.ended.done).toBe(true))
-    expect(await follower.run).toEqual({ code: 0, lines: [], waits: [] })
+    expect(await within(follower.run)).toEqual({ code: 0, lines: [], waits: [] })
     expect(counts.rows).toBe(2)
   })
 
@@ -423,8 +435,7 @@ describe('the inbox follower on macOS', () => {
     await vi.waitFor(() => expect(seen).toHaveLength(1))
     running.delete(HARNESS)
     await vi.advanceTimersByTimeAsync(2_000)
-    await vi.waitFor(() => expect(follower.ended.done).toBe(true))
-    expect(await follower.run).toEqual({ code: 0, lines: [], waits: [] })
+    expect(await within(follower.run)).toEqual({ code: 0, lines: [], waits: [] })
     expect(counts.rows).toBe(0)
   })
 })
