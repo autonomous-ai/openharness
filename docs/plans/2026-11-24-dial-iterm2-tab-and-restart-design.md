@@ -50,9 +50,10 @@ A tap, and a rest, on an agent nested in a multiplexer read its client's place a
    (p50/p95, tier B's tmux) and sets the constant from it if 700 ms does not fit. Past the wait the tap or rest acts on
    what the entry holds; the late answer still lands. `hasPane()` stays synchronous, on what the entry holds. Tests
    drive the wait with fake timers.
-5. **Last action wins.** After the wait, a tap opens only if no later tap came from the dial meanwhile, and a rest
-   shows only if no later tap or rest came: one sequence number in `ObservedSource`, bumped at each `focus()` and
-   `showPane()`.
+5. **Last action wins.** After the wait, a tap opens only if no later tap came from the dial meanwhile, on any agent of
+   any source: `cableHost` counts the person's taps and hands `focus()` a check that its tap is still the latest. A rest
+   shows only if no later tap or rest came in `ObservedSource`: one sequence number there, bumped at each `focus()` and
+   `showPane()`. A rest brings no app forward, so one in another source's app cannot cover it.
 6. **Not touched.** Following a pane switch inside tmux or herdr without typing (eval I10/I11) is another item's; this
    change reads the client only when the person taps or rests on the row. The core is not touched: everything is in
    the devices process. Windows: the outer and nested lookups answer `undefined` there (no tmux, herdr or Zellij
