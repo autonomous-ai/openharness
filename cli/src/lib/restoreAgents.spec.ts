@@ -2,7 +2,7 @@ import { removeRegistryAgent } from '../testing/registryFixtures.js'
 import { describe, expect, it, vi } from 'vitest'
 import { createRestoreLaunch } from '../core/agents/restoreLaunch.js'
 import { WindowsBatchLaunchRefused } from './windows/launch.js'
-import { registry as realRegistry, type AgentLaunch, type ProcessIdentity, type RegisteredSession } from './registry.js'
+import { registry as realRegistry, RegistryOwnershipChanged, type AgentLaunch, type ProcessIdentity, type RegisteredSession } from './registry.js'
 import type { TerminalRuntimeRef, TmuxRuntimeRef } from './terminalTypes.js'
 import { GRID_CREDENTIAL_REQUIRED, heldLaunch, restoreAgents, terminalSurvey, type RestoreAgentsDeps, type RestoreLaunch, type RestoreLaunchResult } from './restoreAgents.js'
 import type { GridLaunchOverride } from './gridLaunch.js'
@@ -1290,6 +1290,92 @@ describe('restoreAgents — waiting for the engine', () => {
     await restoreAgents(deps)
     await settled(h, 1)
     expect(h.calls.filter((c) => c.startsWith('setLaunch:agent-a:failed'))).toEqual([])
+  })
+
+  const started = { ...identity(7), executable: 'node' }
+  /** Records each write, and runs its refresh before it publishes, as `confirmLaunch` does. */
+  const refreshing = (h: Harness) => {
+    const publish = h.deps.registry.confirmLaunch
+    const writes: Array<[string | undefined, number | undefined]> = []
+    h.deps.registry.confirmLaunch = async (id, input, authority) => {
+      writes.push([input.processIdentity?.executable, authority?.expires])
+      await authority?.refresh?.()
+      return publish(id, input, authority)
+    }
+    return writes
+  }
+
+  it('publishes an engine that named itself between the look and the refresh, then settles and hands the pane over', async () => {
+    const h = harness([row()])
+    h.probes.set('%0', [started, identity(7), identity(7)])   // the look, the refused refresh, the re-write's refresh
+    const writes = refreshing(h), log = vi.fn()
+    h.deps.log = log
+    await restoreAgents(h.deps)
+    await settled(h, 1, 1)
+    expect(writes.map(([executable]) => executable)).toEqual(['node', 'claude'])
+    expect(writes[0]![1]).toEqual(expect.any(Number))
+    expect(writes[1]![1]).toBe(writes[0]![1])   // restore's own expires, for both
+    expect(h.rows.get('agent-a')).toMatchObject({ processIdentity: identity(7), launch: { state: 'ready' } })
+    expect(h.calls).toContain('clearRemainOnExit:%0')
+    const lines = log.mock.calls.map(call => call.join(' '))
+    expect(lines).toContain('[restore] publication · engine renamed · agent-a')
+    expect(lines.some(line => line.includes('engine up'))).toBe(true)
+    expect(lines.some(line => line.includes('watch failed'))).toBe(false)
+  })
+
+  it('re-writes once when its own retry after a first hook is the look that sees the new name', async () => {
+    const h = harness([row({ sessionId: '' })])
+    h.probes.set('%0', [started, identity(7), identity(7)])   // the look, the retry's own refresh, the re-write's refresh
+    const publish = h.deps.registry.confirmLaunch
+    const writes: Array<string | undefined> = []
+    h.deps.registry.confirmLaunch = async (id, input, authority) => {
+      writes.push(input.processIdentity?.executable)
+      if (writes.length === 1) {
+        // The engine's first hook bound this process while the write was prepared.
+        Object.assign(h.rows.get(id)!, { sessionId: 'hooked', processIdentity: started })
+        throw new RegistryOwnershipChanged('the registry owner changed while its write was being prepared')
+      }
+      await authority?.refresh?.()
+      return publish(id, input, authority)
+    }
+    await restoreAgents(h.deps)
+    await settled(h, 1, 1)
+    expect(writes).toEqual(['node', 'claude'])
+    expect(h.rows.get('agent-a')).toMatchObject({ sessionId: 'hooked', processIdentity: identity(7), launch: { state: 'ready' } })
+    expect(h.calls).toContain('clearRemainOnExit:%0')
+  })
+
+  it.each([
+    ['pid', identity(8)],
+    ['start', { ...identity(7), startMarker: 'start again' }],
+  ])('ends the watch, as before, when a Node runtime\'s %s changed before the refresh', async (_part, changed) => {
+    const h = harness([row()])
+    h.probes.set('%0', [started, changed])
+    const writes = refreshing(h), log = vi.fn()
+    h.deps.log = log
+    await restoreAgents(h.deps)
+    await settled(h, 1)
+    expect(writes).toHaveLength(1)
+    expect(h.rows.get('agent-a')?.launch).not.toEqual({ state: 'ready' })
+    expect(h.calls).not.toContain('clearRemainOnExit:%0')
+    const lines = log.mock.calls.map(call => call.join(' '))
+    expect(lines.some(line => line.includes('watch failed'))).toBe(true)
+    expect(lines.some(line => line.includes('engine renamed'))).toBe(false)
+  })
+
+  // Restore's deadline is what is left of its watch, not `publishEngine`'s default 5 s: a publication, and its
+  // re-write, never outlive the watch that made them.
+  it('publishes an engine that named itself within what is left of the watch\'s budget, the re-write too', async () => {
+    const h = harness([row()], { budgetMs: 1_000 })
+    h.probes.set('%0', [started, identity(7), identity(7)])
+    const writes = refreshing(h)
+    const before = performance.now()
+    await restoreAgents(h.deps)
+    await settled(h, 1, 1)
+    expect(writes.map(([executable]) => executable)).toEqual(['node', 'claude'])
+    expect(writes[1]![1]).toBe(writes[0]![1])
+    expect(writes[0]![1]).toBeGreaterThanOrEqual(before)
+    expect(writes[0]![1]).toBeLessThanOrEqual(performance.now() + 1_000)
   })
 })
 

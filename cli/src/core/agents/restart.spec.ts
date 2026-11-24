@@ -14,6 +14,8 @@ import type { RestartTarget } from '../../lib/terminalBackend.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 import { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
+import { hostMoveDeps, type HostMoveWiring } from './hostMove.js'
+import { MoveGate } from '../../lib/hostMove/gate.js'
 
 vi.mock('../../lib/engineBin.js', async (real) => ({ ...await real<object>(), enginePathOverride: vi.fn(() => undefined) }))
 vi.mock('../../lib/engineLaunch.js', async (real) => ({
@@ -31,7 +33,7 @@ vi.mock('../../lib/processTable.js', async (real) => ({
   processLaunchArgs: vi.fn(async () => '/bin/claude --model opus -c model_provider=grid'),
 }))
 vi.mock('../../lib/workspaceCheck.js', () => ({ workspaceMissing: vi.fn(() => null) }))
-vi.mock('../../lib/paneEngineProcess.js', () => ({ resolvePaneEngineProcess: vi.fn() }))
+vi.mock('../../lib/paneEngineProcess.js', async (real) => ({ ...await real<object>(), resolvePaneEngineProcess: vi.fn() }))
 
 const runtime = { backend: 'tmux' as const, paneId: '%4' }
 /** The pane's backend handing the pane back to its default disposal (`TerminalBackend.releaseHold`). */
@@ -163,6 +165,73 @@ describe('durable restart publication', () => {
       expect(run.deps.announceSession).not.toHaveBeenCalled()
       expect(warn.mock.calls).toEqual([['[restart] publication held · refresh found no shell']])
     }
+  })
+
+  const started = { ...newProcess, executable: 'node' }
+  /** The registry runs the refresh before it publishes, as `confirmLaunch` does. */
+  const refreshing = (run: ReturnType<typeof setup>) => {
+    const publish = vi.mocked(run.deps.registry.confirmLaunch).getMockImplementation()!
+    vi.mocked(run.deps.registry.confirmLaunch).mockImplementation(async (id, input, authority) => { await authority?.refresh?.(); return publish(id, input, authority) })
+  }
+
+  it('publishes an engine that named itself between the look and the refresh, under its new name', async () => {
+    const run = setup()
+    refreshing(run)
+    vi.mocked(resolvePaneEngineProcess).mockResolvedValue(newProcess)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {}), log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const result = await commitRelaunchedEngine(run.deps, 'a1', started, null, { runtime, backend: run.tmuxBackend } as unknown as RestartTarget, () => true)
+    expect(result).toMatchObject({ processIdentity: newProcess, launch: { state: 'ready' } })
+    const calls = vi.mocked(run.deps.registry.confirmLaunch).mock.calls
+    expect(calls.map(call => call[1].processIdentity)).toEqual([started, newProcess])
+    expect(calls[0]![2]!.expires).toEqual(expect.any(Number))
+    expect(calls[1]![2]!.expires).toBe(calls[0]![2]!.expires)
+    expect(resolvePaneEngineProcess).toHaveBeenCalledWith(run.tmuxBackend, runtime, 'claude')
+    expect(releaseHold).toHaveBeenCalledWith(runtime, expect.any(Function))
+    expect(run.deps.announceSession).toHaveBeenCalledWith(expect.objectContaining({ processIdentity: newProcess }))
+    expect(log.mock.calls).toEqual([['[restart] publication · engine renamed · a1']])
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('a move\'s fallback to its old pane publishes the renamed engine the same way (hostMove.ts relaunchOld)', async () => {
+    const row = agent({ registeredAt: 1 } as Partial<RegisteredSession>)
+    const run = setup(row)
+    refreshing(run)
+    vi.mocked(restartAgent).mockResolvedValueOnce({ ok: true, resumed: true, processIdentity: started })
+    vi.mocked(resolvePaneEngineProcess).mockResolvedValue(newProcess)
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const w = { registry: run.deps.registry, terminals: run.deps.terminals, paneSwapDeps: run.deps.paneSwapDeps, gate: new MoveGate(),
+      buildLaunch: async () => ({ argv: ['claude'], grid: null, deferred: { prepare: vi.fn(), overrides: {}, permission: { bypassPermission: false } } }),
+      announce: run.deps.announceSession, log: vi.fn() } as unknown as HostMoveWiring
+    const move = hostMoveDeps(row, () => true, w)
+    await move.buildLaunch(row, { resumeSessionId: 's1', current: () => true, prepare: false })
+    expect(await move.relaunchOld(row)).toBe(true)
+    expect(vi.mocked(run.deps.registry.confirmLaunch).mock.calls.map(call => call[1].processIdentity)).toEqual([started, newProcess])
+    expect(run.deps.announceSession).toHaveBeenCalledWith(expect.objectContaining({ processIdentity: newProcess }))
+    expect(log.mock.calls).toEqual([['[restart] publication · engine renamed · a1']])
+  })
+
+  it.each([['pid', { pid: 3 }], ['start', { startMarker: 'replacement' }]] as const)('still holds a Node runtime whose %s changed, whatever it is named now', async (_what, change) => {
+    const run = setup()
+    refreshing(run)
+    vi.mocked(resolvePaneEngineProcess).mockResolvedValue({ ...newProcess, ...change })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {}), log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    await expect(commitRelaunchedEngine(run.deps, 'a1', started, null, { runtime, backend: run.tmuxBackend } as unknown as RestartTarget, () => true))
+      .rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+    expect(run.deps.registry.confirmLaunch).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls).toEqual([['[restart] publication held · refresh found another process']])
+    expect(log).not.toHaveBeenCalled()
+    expect(releaseHold).not.toHaveBeenCalled()
+    expect(run.deps.announceSession).not.toHaveBeenCalled()
+  })
+
+  it('a terminal\'s shell is published as it was: no engine looked for, no deadline of its own', async () => {
+    const run = setup(terminal())
+    refreshing(run)
+    const paneState = vi.fn(async () => ({ dead: false, engineExit: null }))
+    expect(await commitRelaunchedEngine(run.deps, 'a1', null, null, { runtime, backend: { ...run.tmuxBackend, paneState } } as unknown as RestartTarget, () => true))
+      .toMatchObject({ engine: 'terminal' })
+    expect(resolvePaneEngineProcess).not.toHaveBeenCalled()
+    expect(vi.mocked(run.deps.registry.confirmLaunch).mock.calls[0]![2]).not.toHaveProperty('expires')
   })
 })
 

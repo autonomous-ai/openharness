@@ -3,10 +3,12 @@
  * answers only for the pane's own root process; the walk below it is the process table's (processTable.ts).
  */
 import { agentCommandOwnershipSnapshotAsync, type AgentCommandOwnershipSnapshot } from './engineBin.js'
+import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import type { AgentEngine } from '../engines/types.js'
 import { errorKind } from './log.js'
-import { registry, type ProcessIdentity, type RegisteredSession } from './registry.js'
-import { comparableStartMarker, enrichProcessRows, processRows, processTreePids, selectEngineProcess, type ProcessRow } from './processTable.js'
+import { registry, type LaunchPublication, type ProcessIdentity, type RegisteredSession } from './registry.js'
+import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
+import { comparableStartMarker, enrichProcessRows, processRows, processTreePids, programName, selectEngineProcess, type ProcessRow } from './processTable.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import { processIdentityOf, sameProcessIdentity, terminalRuntimeLabel } from './terminalRuntime.js'
 import type { TerminalRuntimeRef } from './terminalTypes.js'
@@ -123,6 +125,50 @@ export async function checkSessionRuntime<Ref extends TerminalRuntimeRef>(
   }
   if (!saved) registry.updateProcessIdentity(session.sessionId, live)
   return { state: 'alive' }
+}
+
+/** What a Node engine runs as until it names itself (`programName` reads `node.exe` as `node`). */
+const NODE_RUNTIMES = new Set(['node', 'nodejs'])
+
+/** [observed] is the [recorded] process under the name it gave itself: a Node runtime that is one no longer. */
+export function renamedEngine(recorded: ProcessIdentity, observed: ProcessIdentity): boolean {
+  return sameProcessIdentity(recorded, observed)
+    && NODE_RUNTIMES.has(programName(recorded.executable)) && !NODE_RUNTIMES.has(programName(observed.executable))
+}
+
+/** A refresh saw the recorded engine renamed, as [observed]. Should one escape, it reads as the site's changed hold. */
+export class EngineRenamed extends IdentityReadUnavailable {
+  constructor(readonly observed: ProcessIdentity, reason: string) { super(reason) }
+}
+
+/**
+ * Publish a relaunched engine through [publish] (the site's own `registry.confirmLaunch`), whose [refresh] [look]s at
+ * the pane again; when that look sees the engine renamed, publish it once more under its new name, within the same
+ * [expires]. Claude Code installed with npm starts as `node` and sets `process.title`, which on Linux changes `comm`
+ * (measured 2026-11-24). A refresh that refused that rename left the row on a dead pid, the restart answered INTERNAL,
+ * and discovery made a second agent about 1.5 s later; #4584 covered only a rename between the wait's two looks. The
+ * re-write's refresh checks against the new name, which is no Node runtime's, so a second rename is refused.
+ */
+export async function publishEngine(
+  identity: ProcessIdentity,
+  look: () => Promise<ProcessIdentity | null>,
+  reasons: { gone: string; changed: string },
+  publish: (identity: ProcessIdentity, refresh: () => Promise<void>, expires: number) => Promise<LaunchPublication>,
+  expires: number = performance.now() + REGISTRY_WRITE_DEADLINE_MS,
+): Promise<LaunchPublication> {
+  const refresh = (recorded: ProcessIdentity) => async () => {
+    const observed = await look()
+    if (!observed) throw new IdentityReadUnavailable(reasons.gone)
+    if (sameProcessIdentity(recorded, observed) && observed.executable === recorded.executable) return
+    if (renamedEngine(recorded, observed)) throw new EngineRenamed(observed, reasons.changed)
+    throw new IdentityReadUnavailable(reasons.changed)
+  }
+  try {
+    return await publish(identity, refresh(identity), expires)
+  } catch (error) {
+    if (!(error instanceof EngineRenamed)) throw error
+    return publish(error.observed, refresh(error.observed), expires)
+  }
 }
 
 /**
