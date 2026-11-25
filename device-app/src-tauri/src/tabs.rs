@@ -120,12 +120,13 @@ impl Typing {
         }
     }
 
-    /// The word the log says.
-    fn kind(&self) -> &'static str {
-        match self {
+    /// The log's line of what became of it: its app and whether it is a write or an Enter, never its tty or text.
+    fn said(&self, outcome: &str) -> String {
+        let kind = match self {
             Typing::Write { .. } => "write",
             Typing::Enter { .. } => "enter",
-        }
+        };
+        format!("tabs: {} {kind} {outcome}", self.app().name())
     }
 }
 
@@ -276,14 +277,15 @@ pub struct Select {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Next {
     Run(Typing),
-    /// Answered no unrun: the line for the watch and, for one that waited too long, a line for the log.
+    /// Answered no unrun: the line for the watch and a line for the log, but for an app off, which said why once.
     Refused {
         line: String,
         log: Option<String>,
     },
 }
 
-/// What a call's answer gives: a line for the watch, and lines for the log, none of which holds a tty.
+/// What a call's answer, or a typing's answered at once, gives: a line for the watch, and lines for the log, none of
+/// which holds a tty.
 #[derive(Debug, Default)]
 pub struct Out {
     pub line: Option<String>,
@@ -425,24 +427,31 @@ impl TabFollow {
     }
 
     /// A typing from the watch, which came `at`. With no watch running, its app off or TYPING_QUEUED already waiting, it
-    /// is answered no at once: the line for the watch. A stopped watch's child may still print words before it ends.
-    pub fn typed(&mut self, typing: Typing, at: Instant) -> Option<String> {
-        if !self.watching || self.off.contains(&typing.app()) || self.typings.len() >= TYPING_QUEUED {
-            return Some(wrote_line(typing.id(), false));
+    /// is answered no at once: the line for the watch and, for a full queue, a line for the log. A stopped watch's child
+    /// may still print words before it ends.
+    pub fn typed(&mut self, typing: Typing, at: Instant) -> Out {
+        let refused = |log: Vec<String>| Out { line: Some(wrote_line(typing.id(), false)), log };
+        if !self.watching || self.off.contains(&typing.app()) {
+            return refused(Vec::new());
+        }
+        if self.typings.len() >= TYPING_QUEUED {
+            return refused(vec![typing.said("refused · queue full")]);
         }
         self.typings.push_back((typing, at));
-        None
+        Out::default()
     }
 
-    /// The oldest typing, taken `now`. It is answered no unrun when it waited past LATE_WRITE, with a line for the log,
-    /// or when its app is off or has not been allowed yet.
+    /// The oldest typing, taken `now`. It is answered no unrun when it waited past LATE_WRITE, or when its app is off or
+    /// has not been allowed yet.
     pub fn next_typing(&mut self, now: Instant) -> Option<Next> {
         let (typing, at) = self.typings.pop_front()?;
         let app = typing.app();
         let log = if now.saturating_duration_since(at) > LATE_WRITE {
-            Some(format!("tabs: {} {} dropped late", app.name(), typing.kind()))
-        } else if self.off.contains(&app) || !self.allowed.contains(&app) {
+            Some(typing.said("dropped late"))
+        } else if self.off.contains(&app) {
             None
+        } else if !self.allowed.contains(&app) {
+            Some(typing.said("refused · no answer yet"))
         } else {
             return Some(Next::Run(typing));
         };
@@ -452,8 +461,10 @@ impl TabFollow {
     /// A `write_text` or `send_enter` answer: ok only when it wrote.
     pub fn written(&mut self, typing: &Typing, done: Result<Written, TabError>) -> Out {
         let mut out = Out { line: Some(wrote_line(typing.id(), done == Ok(Written::Done))), log: Vec::new() };
-        if let Err(error @ (TabError::Denied | TabError::NoTty | TabError::NoScripting)) = done {
-            self.turn_off(typing.app(), error, &mut out.log);
+        match done {
+            Err(TabError::Failed) => out.log.push(typing.said("failed")),
+            Err(error) => self.turn_off(typing.app(), error, &mut out.log),
+            Ok(_) => {}
         }
         out
     }
@@ -1136,7 +1147,7 @@ mod tests {
         // Nothing of iTerm2 has answered yet: a write could wait on macOS's consent prompt.
         let mut follow = polling();
         follow.front(I.bundle());
-        assert_eq!(follow.typed(write(I, ID, "hi"), now), None);
+        assert_eq!(follow.typed(write(I, ID, "hi"), now).line, None);
         assert_eq!(follow.next_typing(now), refused_saying(ID, "tabs: iTerm2 write refused · no answer yet"));
         // A failed poll is no answer.
         follow.polled(I, Err(TabError::Failed), 0);
@@ -1167,14 +1178,15 @@ mod tests {
         let now = Instant::now();
         // Turned off while a typing waits: that one is answered no as its turn comes.
         let mut follow = writing();
-        assert_eq!(follow.typed(write(I, ID, "hi"), now), None);
+        assert_eq!(follow.typed(write(I, ID, "hi"), now).line, None);
         follow.polled(I, Err(TabError::Denied), 1);
         assert_eq!(follow.next_typing(now), refused(ID));
-        // Off, a new one is answered no at once, and none waits.
-        assert_eq!(follow.typed(enter(I, ENTER_ID), now), Some(wrote_line(ENTER_ID, false)));
+        // Off, a new one is answered no at once, and none waits. The app said why once.
+        let out = follow.typed(enter(I, ENTER_ID), now);
+        assert_eq!((out.line, out.log), (Some(wrote_line(ENTER_ID, false)), vec![]));
         assert_eq!(follow.next_typing(now), None);
         // The other app goes on.
-        assert_eq!(follow.typed(write(G, ID, "hi"), now), None);
+        assert_eq!(follow.typed(write(G, ID, "hi"), now).line, None);
         assert_eq!(follow.next_typing(now), Some(Next::Run(write(G, ID, "hi"))));
 
         // A write's answer turns its app off as a poll's or a select's does, and says so once.
@@ -1187,7 +1199,7 @@ mod tests {
             let out = follow.written(&write(I, ID, "hi"), Err(error));
             assert_eq!((out.line, out.log), (Some(wrote_line(ID, false)), vec![said.to_string()]));
             assert_eq!(follow.polls(), None);
-            assert_eq!(follow.typed(enter(I, ENTER_ID), now), Some(wrote_line(ENTER_ID, false)));
+            assert_eq!(follow.typed(enter(I, ENTER_ID), now).line, Some(wrote_line(ENTER_ID, false)));
             assert!(follow.written(&enter(I, ENTER_ID), Err(error)).log.is_empty());
         }
         // A failed write leaves it on, and says so.
@@ -1196,7 +1208,7 @@ mod tests {
         assert_eq!((out.line, out.log), (Some(wrote_line(ID, false)), vec!["tabs: iTerm2 write failed".to_string()]));
         let out = follow.written(&enter(G, ENTER_ID), Err(TabError::Failed));
         assert_eq!(out.log, ["tabs: Ghostty enter failed"]);
-        assert_eq!(follow.typed(enter(I, ENTER_ID), now), None);
+        assert_eq!(follow.typed(enter(I, ENTER_ID), now).line, None);
         assert_eq!(follow.next_typing(now), Some(Next::Run(enter(I, ENTER_ID))));
     }
 
@@ -1252,12 +1264,18 @@ mod tests {
         let mut follow = writing();
         let ids: Vec<String> = (0..10).map(|n| format!("{n:016x}")).collect();
         for id in &ids[..8] {
-            assert_eq!(follow.typed(write(I, id, "hi"), now), None);
+            let out = follow.typed(write(I, id, "hi"), now);
+            assert_eq!((out.line, out.log), (None, vec![]));
         }
-        assert_eq!(follow.typed(write(I, &ids[8], "hi"), now), Some(wrote_line(&ids[8], false)));
+        // It says so in one fixed line.
+        let out = follow.typed(write(I, &ids[8], "hi"), now);
+        assert_eq!(
+            (out.line, out.log),
+            (Some(wrote_line(&ids[8], false)), vec!["tabs: iTerm2 write refused · queue full".to_string()])
+        );
         // One taken leaves room for one.
         assert_eq!(follow.next_typing(now), Some(Next::Run(write(I, &ids[0], "hi"))));
-        assert_eq!(follow.typed(enter(I, &ids[9]), now), None);
+        assert_eq!(follow.typed(enter(I, &ids[9]), now).line, None);
         // The refused one never runs.
         for id in &ids[1..8] {
             assert_eq!(follow.next_typing(now), Some(Next::Run(write(I, id, "hi"))));
@@ -1291,12 +1309,12 @@ mod tests {
         // A stopped watch's child may still print a line before it ends.
         let mut follow = writing();
         follow.watching(false);
-        assert_eq!(follow.typed(write(I, ID, "hi"), now), Some(wrote_line(ID, false)));
-        assert_eq!(follow.typed(enter(G, ENTER_ID), now), Some(wrote_line(ENTER_ID, false)));
+        assert_eq!(follow.typed(write(I, ID, "hi"), now).line, Some(wrote_line(ID, false)));
+        assert_eq!(follow.typed(enter(G, ENTER_ID), now).line, Some(wrote_line(ENTER_ID, false)));
         assert_eq!(follow.next_typing(now), None);
         // The next watch's typings run.
         follow.watching(true);
-        assert_eq!(follow.typed(write(I, ID, "hi"), now), None);
+        assert_eq!(follow.typed(write(I, ID, "hi"), now).line, None);
         assert_eq!(follow.next_typing(now), Some(Next::Run(write(I, ID, "hi"))));
     }
 
@@ -1311,7 +1329,7 @@ mod tests {
         }
         // No session of the tty leaves its app on.
         assert_eq!(follow.polls(), Some(I));
-        assert_eq!(follow.typed(write(I, ID, "hi"), Instant::now()), None);
+        assert_eq!(follow.typed(write(I, ID, "hi"), Instant::now()).line, None);
     }
 
     #[test]
@@ -1349,14 +1367,17 @@ mod tests {
         for done in [Ok(Written::Done), Ok(Written::NoSession), Err(TabError::Failed), Err(TabError::Denied)] {
             said.extend(follow.written(&write(I, ID, words), done).log);
         }
-        // A typing for an app that has not answered yet.
+        // A typing for an app that has not answered yet, and one past a full queue.
         let mut follow = polling();
         follow.typed(write(I, ID, words), now);
         match follow.next_typing(now) {
             Some(Next::Refused { log: Some(log), .. }) => said.push(log),
             other => panic!("{other:?}"),
         }
-        assert_eq!(said.len(), 11, "{said:?}");
+        for _ in 0..=TYPING_QUEUED {
+            said.extend(follow.typed(write(I, ID, words), now).log);
+        }
+        assert_eq!(said.len(), 12, "{said:?}");
         for line in said {
             assert!(!line.contains("ttys") && !line.contains("/dev") && !line.contains("words"), "{line}");
         }
