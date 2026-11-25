@@ -379,10 +379,22 @@ describe('tabsTyping', () => {
     })
   })
 
+  it('a send while another is under way on the tty is busy, and asks nothing', async () => {
+    const w = world()
+    const first = w.typing.type(PANE, 'one', 'codex', w.atPrompt)
+    await drain()
+    const asked = w.log.length
+    expect(await w.typing.type(PANE, 'two', 'codex', w.atPrompt)).toEqual({ notSent: 'busy' })
+    expect(w.log).toHaveLength(asked)
+    w.clock.flush()
+    expect(await first).toBe(true)
+    expect(w.stream.sent.filter((line) => 'write' in line)).toEqual([{ write: { app: 'iterm', tty: TTY, text: 'one' } }])
+  })
+
   it('keeps the tty locked while a late answer may still come, and frees it once it settled', async () => {
     const w = world({}, ['unanswered'])
     expect(await w.send(PANE, 'one')).toEqual({ notSent: 'no-answer' })
-    expect(await w.send(PANE, 'two')).toBe(false)
+    expect(await w.send(PANE, 'two')).toEqual({ notSent: 'busy' })
     expect(w.stream.sent).toHaveLength(1)
     // Another tab's tty is not held by it.
     expect(await w.send(GHOSTTY, 'elsewhere')).toBe(true)
@@ -474,7 +486,7 @@ describe('tabsTyping', () => {
       w.replace({ ...w.stream.line, send: () => ({ answer: Promise.reject(new Error('answer')), settled }) })
       expect(await w.send()).toEqual({ notSent: 'no-answer' })
       w.replace(w.stream.line)
-      expect(await w.send()).toBe(false)
+      expect(await w.send()).toEqual({ notSent: 'busy' })
       settle()
       await drain()
       expect(await w.send()).toBe(true)

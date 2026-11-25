@@ -134,6 +134,24 @@ describe('createTwoStep', () => {
     expect(twoStep.sending(2)).toBe(false)
   })
 
+  it('answers a second send on a key still sending its held word, when given one; a step that throws is still failed', async () => {
+    const clock = fakeAfter()
+    const twoStep = createTwoStep<number>(clock.after)
+    const sent = twoStep.send(1, 'one', fakeSteps().steps, 'failed', 'busy')
+    await drain()
+    const again = fakeSteps()
+    expect(await twoStep.send(1, 'two', again.steps, 'failed', 'busy')).toBe('busy')
+    expect(again.calls).toEqual([])
+    const throws: TwoSteps<Why> = {
+      check: () => { throw new Error('boom') },
+      words: async () => ({ ok: true }),
+      enter: async () => ({ ok: true }),
+    }
+    expect(await twoStep.send(2, 'hi', throws, 'failed', 'busy')).toBe('failed')
+    clock.flush()
+    expect(await sent).toBe(true)
+  })
+
   it('keeps the key locked after the send ended, until every held answer settled', async () => {
     const clock = fakeAfter()
     const twoStep = createTwoStep<number>(clock.after)
