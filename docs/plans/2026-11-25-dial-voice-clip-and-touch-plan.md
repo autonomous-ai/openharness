@@ -5,7 +5,8 @@
 
 **Goal:** The round dial records at 30 dB instead of 37.5 dB, so loud speech no longer clips in the ADC, and the dial's
 voice gate, its level meter and the daemon's copy of the gate follow that gain. The dial states its gain in
-`voice.begin` as `micGain`, and a dial that sends none is read as 37.5 dB.
+`voice.begin` as `micGain`, and a dial that sends none is read as 37.5 dB. The daemon's `voice turn` log line names
+the gain it read, as `mic=`.
 
 **Architecture:** One constant, `AUDIO_MIC_GAIN_DB` (`audio_capture.h`), sets the ES7210's PGA (`audio_capture_start`),
 goes out in `voice.begin` beside `sr` (`cable_client_voice_begin`), and is passed by the capture loop to
@@ -34,11 +35,13 @@ Paths: `FW` = `devices/harness-device/firmware`, `CB` = `cli/src/cable`.
 | 3 | The dial's gate and meter follow the gain | `FW/main/voice_buffer.h`, `FW/main/voice_buffer.c`, `FW/main/audio_client_habitat.c`, `FW/test/test_voice_buffer.c`, `FW/test/test_voice_buffer.py`, `FW/test/run.sh`, `FW/test/test_audio_stream.py`, `FW/test/test_audio_threads.py` | 1, 2 | high | `test_voice_buffer.py` |
 | R | Rebase onto `main` after #4608 | every file on the branch | #4608 merged (outside this plan) | medium | none: a rebase |
 | 4 | The daemon's gate follows `micGain` | `CB/voiceLevel.ts`, `CB/voiceLevel.spec.ts`, `CB/__fixtures__/voiceVectors.ts`, `CB/voiceSegments.ts`, `CB/voiceSegments.spec.ts`, `CB/cableSession.ts`, `CB/cableVoice.spec.ts` | 1, R | high | `voiceLevel.spec.ts` twin cases; `voiceSegments.spec.ts` mic gain cases; `cableVoice.spec.ts` `micGain` case |
+| 5 | The turn line names the mic gain | `CB/cableSession.ts`, `CB/cableSession.spec.ts` | 4 | medium | `cableSession.spec.ts` "logs one line per voice turn" (no `mic=`) |
 
-**Shared files** (devcrew runs these one at a time): `FW/test/run.sh` (2, 3). Task R shares every file, so it waits
-for any running task and none starts while it runs.
+**Shared files** (devcrew runs these one at a time): `FW/test/run.sh` (2, 3); `CB/cableSession.ts` (4, 5). Task R
+shares every file, so it waits for any running task and none starts while it runs.
 
-**Longest chain:** two tasks: 1 → 3, 2 → 3, 1 → 4 and R → 4. Ready at once: 1 and 2. R is ready once #4608 merges.
+**Longest chain:** three tasks: 1 → 4 → 5 and R → 4 → 5. The firmware chains are two tasks (1 → 3, 2 → 3). Ready at
+once: 1 and 2. R is ready once #4608 merges.
 
 ## Global Constraints
 
@@ -50,7 +53,7 @@ for any running task and none starts while it runs.
   whether the Mac is free. Never list or scan other processes to find out.
 - **Sequencing.** Tasks 1-3 start now. Task 4 starts only after PR #4608 (branch `fix/dial-voice-clip-measure`,
   `clip=`) has merged into `main` and Task R has rebased this branch onto that `main`. That `main` also carries #4606
-  (`35c3a97389`, `CB/voiceGain.ts`).
+  (`35c3a97389`, `CB/voiceGain.ts`). Task 5 follows Task 4.
 - **The field is `micGain`** (a number, in dB), sent beside `sr`. It is not `gain` as the spec says, so it cannot be
   confused with the host's `gain=` in the turn line (coordinator, 2026-11-25). `CABLE_PROTO_VERSION` stays 3
   (`CB/cableSession.ts:46`).
@@ -63,8 +66,8 @@ for any running task and none starts while it runs.
   37.5 dB and 600 and sends no `micGain`, so the daemon reads its clips at 37.5 dB.
 - **No recorded voice in the repo.** The vectors are synthetic (`FW/test/voice_signal.py`), 182,400 bytes of PCM.
 - **No core change.** Nothing under `cli/src/core/` or `cli/src/services/` changes.
-- **Release order.** A CLI release carrying Task 4 goes out before any firmware upload of this change. That upload
-  (`make upload-circle`) is Diego's call. This PR does not touch `FW/version.txt`.
+- **Release order.** A CLI release carrying Tasks 4 and 5 goes out before any firmware upload of this change. That
+  upload (`make upload-circle`) is Diego's call. This PR does not touch `FW/version.txt`. See Release.
 - **Docs.** The spec and this plan go in unchanged. `docs/product-measurement.md` is unchanged (Decision 10).
 - **Platforms:** the round dial's firmware (ESP32-S3). The host CLI on macOS, Linux and Windows: the change is
   platform-free TypeScript.
@@ -367,6 +370,39 @@ it('micGainOf takes 37.5 and 30, and reads anything else as 37.5 dB', () => {
   `cableSession.spec.ts` are unchanged and pass: no `micGain` is read as 37.5 dB, as before.
 - [ ] **Step 5: Commit**: the red commit, then the code (`cli: the dial's voice gate follows the micGain it states`).
 
+### Task 5: The turn line names the mic gain
+
+**Files:** Modify `CB/cableSession.ts` (`logTurn` in the voice turn handler, and the comment above it),
+`CB/cableSession.spec.ts` ("logs one line per voice turn…", the only case that matches the line exactly). Depends on
+Task 4 (`turn.micGain`, and the same `cableSession.ts`). Effort medium: one template and one test.
+
+**Interfaces:** Consumes `VoiceTurn.micGain: MicGain` (Task 4). Produces the turn line, with `mic=` right after `sr=`:
+
+```
+cable: voice turn agent=… cmd=… lang=… sr=16000 mic=30 peak=… rms=… clip=… heard=… voice=… floor=… gain=… transcript=…
+```
+
+`mic=` is `${turn.micGain}`, the value `micGainOf` read at `voice.begin` (`30` or `37.5`), never the raw field. It sits
+after `sr=` and before `peak=`: both are the dial's own statements in `voice.begin`, where `micGain` already sits beside
+`sr`, and they read before the levels they explain (the same `rms` means 7.5 dB more speech at `mic=30`). It also stays
+away from the host's `gain=` at the end, so the two gains are not read as one (Decision 8). The comment above `logTurn`
+gains that `mic` is the gain the levels were recorded at.
+
+- [ ] **Step 1: Find every exact match.** Run `grep -rn "voice turn agent=" cli/src`. Expected: only the two
+  `toContain` lines in `cableSession.spec.ts`. Any other spec that matches the line exactly joins this task's files.
+- [ ] **Step 2: Write the failing test.** The case becomes
+  `'logs one line per voice turn: agent, command, language, rate, mic gain, level and transcript length, never the words'`.
+  Its first turn (no `micGain`) expects the line as it stands after Task R with `mic=37.5` after `sr=16000`, e.g.
+  `'cable: voice turn agent=a2 cmd=goal lang=vi sr=16000 mic=37.5 peak=32767 rms=1530 clip=1.25 heard=1 voice=2113 floor=1059 gain=0 transcript=20'`.
+  Its second, silent turn sends `micGain: 30` and expects `… sr=16000 mic=30 peak=0 rms=0 clip=0 heard=0 voice=0
+  floor=0 gain=0 transcript=0`. A third, the same silent turn with `micGain: 27` and `uploadId: 'odd'`, expects
+  `mic=37.5` and otherwise the second's line. The count of `cable: voice turn ` lines becomes 3.
+- [ ] **Step 3: Run** `cd cli && npx vitest run src/cable/cableSession.spec.ts -t 'logs one line per voice turn'`.
+  Expected: FAIL, the lines have no `mic=`.
+- [ ] **Step 4: Implement** `mic=${turn.micGain}` after `sr=${turn.rate}` in `logTurn`, and the comment.
+- [ ] **Step 5: Run** `npm run typecheck`, then `npx vitest run src/cable`. Expected: PASS.
+- [ ] **Step 6: Commit**: the red commit, then the code (`cli: the voice turn line names the dial's mic gain`).
+
 ---
 
 ## Verification
@@ -399,8 +435,9 @@ in the PR body.
 no backend. `test_cable_outbound.py` checks the bytes the dial writes, and `cableVoice.spec.ts` checks what the
 daemon does with them, over the loopback port with a stub transcriber. No account or backend is involved. A true end
 to end needs a dial running the 30 dB image, which only a flash or an OTA can give it, and implementers never flash.
-- **The field check is Diego's.** After the CLI release carrying Task 4, an OTA he approves, his dial and his eye. On
-  his Mac, from normal use, the `cable: voice turn` lines in `~/.harness/cli/data/harness.log` should show `clip`
+- **The field check is Diego's.** After the CLI release carrying Tasks 4 and 5, an OTA he approves, his dial and his
+  eye. On his Mac, from normal use, the `cable: voice turn` lines in `~/.harness/cli/data/harness.log` should show
+  `mic=30` (lines from before the OTA show `mic=37.5`, so the two are told apart by the line itself), `clip`
   near 0 on speech, RMS about 7.5 dB lower than before, the host's `gain=` about 6 to 7 dB on typical speech, and
   `heard=1` on speech. The daily integration report shows the `no_speech` and `no_words` shares before and after.
   His eye checks that the listening animation looks as it did. Only the field shows whether 30 dB still clips on real
@@ -411,11 +448,18 @@ to end needs a dial running the 30 dB image, which only a flash or an OTA can gi
 - `firmware-checks` running the round dial's other `run.sh` C tests. Only `test_*.py` run on CI today; this plan
   moves just `test_voice_buffer.c` behind a driver.
 
-**PR-body notes:** decisions 1 and 2 of the spec. `micGain` is optional, so the protocol version stays 3. The host
-side must reach a CLI release before the firmware upload: any CLI pushes the newest published image
-(`CB/fwPush.ts`), so a computer whose CLI has not updated reads that dial's quiet speech at 600 and counts it
-`no_speech` until it updates. Platforms: the ESP32-S3 round dial; the CLI on macOS, Linux and Windows. Evidence: the
-red-then-green commits, the outputs of checks 1-5.
+**PR-body notes:** decisions 1 and 2 of the spec. `micGain` is optional, so the protocol version stays 3. The turn
+line gains `mic=`. Platforms: the ESP32-S3 round dial; the CLI on macOS, Linux and Windows. Evidence: the
+red-then-green commits, the outputs of checks 1-5. The body carries the Release section below.
+
+## Release
+
+- **The PR is opened with the `hold` label** (it keeps the PR out of the merge train) and is not merged until Diego
+  approves decision 1: a firmware gain change, which reaches every round dial by OTA.
+- **The CLI goes first.** A CLI release carrying Tasks 4 and 5 (the gate that follows `micGain`, and `mic=`) goes
+  out first; the firmware upload (`make upload-circle`, Diego's call) comes after. Any CLI pushes the newest published
+  image (`CB/fwPush.ts`), so a computer whose CLI has not updated reads that dial's quiet speech at 600 and counts it
+  `no_speech` until it updates.
 
 ## Decisions
 
@@ -448,3 +492,10 @@ Made while planning, from the spec, the code and the coordinator's message of 20
 10. **`docs/product-measurement.md` is unchanged.** Its `no_speech` ("the dial firmware's voice gate hears no 320 ms
     of loud 10 ms blocks in a row") names no threshold, so it stays true at any gain.
 11. **The round firmware's `idf.py build` is a Verification check** (local, never flashed).
+
+Answered by the orchestrator on 2026-11-25, to the draft's two open questions:
+
+12. **The turn line carries the dial's mic gain, as `mic=<dB>`**: the value the daemon read from `voice.begin`'s
+    `micGain`, or 37.5 when the dial sent none or an unknown one (Task 5). It goes after `sr=` (Task 5 says why).
+13. **No 27 dB row now.** The table keeps two rows, 37.5 and 30. A 27 dB fallback (spec fallback B) is a later change
+    with a row on both sides, decided from the field numbers.
