@@ -142,6 +142,8 @@ bool max_show(max_view_t view)
     max_m.talk_closed = false;   // "Mic closed" belongs to the page it closed on
     max_m.sending = false;       // and the SEND scene to the page it played on
     max_m.view = view;
+    // Where the agent closing stood on its page: the row's order still held (the owner, 25 Nov: the row stays put).
+    const int at = was == MAX_VIEW_AGENT ? row_index(max_m.selected) : -1;
     // Opening an agent holds the row's order until it closes, so the open agent and the slivers beside it stay put as
     // states change.
     max_m.held_count = 0;
@@ -151,11 +153,11 @@ bool max_show(max_view_t view)
         for (int i = 0; i < max_m.held_count; i++) memcpy(max_m.held_row[i], max_m.agents[row[i]].id, ID_MAX);
     }
     if (view == MAX_VIEW_OVERVIEW) {
-        // Closed, the row is by need again with the agent that was open one cell in, where it stands; from any other
-        // page the row starts at its front.
-        const int i = was == MAX_VIEW_AGENT ? row_index(max_m.selected) : -1;
+        // Closed, the row is by need again and stays where the person left it: one cell before the place the agent had
+        // on its page (a send that set it to work moves it up the row, not the row). From any other page the row
+        // starts at its front.
         const int last = max_row_last();
-        max_m.row_first = i - 1 < 0 ? 0 : i - 1 > last ? last : i - 1;
+        max_m.row_first = at - 1 < 0 ? 0 : at - 1 > last ? last : at - 1;
         see_row();
     }
     return true;

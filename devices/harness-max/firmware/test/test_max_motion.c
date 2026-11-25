@@ -1,7 +1,7 @@
 // App Detail's row in motion (max_ui_row.c, max_ui_overview.c, max_ui_layer.c) against V3's numbers: the curves as
 // Flutter computes them, each part of an agent's look at fixed times while one opens and closes, the scroll carried
-// along and sent back, a page the row was not on snapping, the frame clock only while something moves, and the
-// slivers' layers kept while they move and painted again when their agent changes.
+// along both ways and sent to the front, a page the row was not on snapping, the frame clock only while something
+// moves, and the slivers' layers kept while they move and painted again when their agent changes.
 #include <math.h>
 
 #include "max_test.h"
@@ -141,8 +141,9 @@ static void test_carry(void)
     CHECK(scroll(T0 + 210) == 0 && scroll(T0 + 420) == 0);
 }
 
-// Closed, the cells take their width back where the row is, then the row goes back to the closed agent one cell in
-// (V3 _back), 420 ms after.
+// Closed, the cells take their width back and the scroll is carried along with them to the closed agent one cell in,
+// on the same curve over the same 420 ms: the closed agent stays on the glass all the way (the owner, 25 Nov: V3 _back
+// let the cells widen where the row was first, which pushed it off the glass and showed the row's front).
 static void test_closing(void)
 {
     row_of(5);
@@ -154,22 +155,52 @@ static void test_closing(void)
     CHECK(max_m.row_first == 1);
     render(T0 + 1000);
     const max_look_t *c = look("c");
-    CHECK(near(width("c", T0 + 1210), 543, 1) && scroll(T0 + 1210) == SLIVER_W);
+    CHECK(near(width("c", T0 + 1210), 543, 1) && near(scroll(T0 + 1210), 489, 1));
     CHECK(near(max_tween_at(&c->panel, T0 + 1150), 811, 3));   // 300 ms ease out, half way: .802 gone
     CHECK(max_tween_at(&c->panel, T0 + 1300) == 0 && near(max_tween_at(&c->face, T0 + 1125), 3285, 3));
-    render(T0 + 1420);   // the cells have their width: the way back begins
-    CHECK(width("c", T0 + 1420) == CELL_W && scroll(T0 + 1420) == SLIVER_W && max_row_moving(T0 + 1420));
-    CHECK(near(scroll(T0 + 1630), 489, 1) && scroll(T0 + 1840) == CELL_W);
-    frames(T0 + 1420, T0 + 2100);
-    CHECK(!max_row_moving(T0 + 2100) && max_motion_ms(T0 + 2100) == pets_beat(T0 + 2100));
-    // Rendered late, the way back still runs from when the move ended.
+    render(T0 + 1420);   // the cells have their width and the row is there
+    CHECK(width("c", T0 + 1420) == CELL_W && scroll(T0 + 1420) == CELL_W);
+    CHECK(place("c", T0 + 1420)->x == ROW_X + CELL_W);
+    frames(T0 + 1420, T0 + 1700);
+    CHECK(!max_row_moving(T0 + 1700) && max_motion_ms(T0 + 1700) == pets_beat(T0 + 1700));
+    // Rendered late, the carry still runs from the first render after the close.
     row_of(5);
     max_open("c");
     render(T0);
     max_show(MAX_VIEW_OVERVIEW);
     render(T0 + 1000);
-    render(T0 + 1630);
-    CHECK(near(scroll(T0 + 1630), 489, 1));
+    render(T0 + 1210);
+    CHECK(near(scroll(T0 + 1210), 489, 1));
+}
+
+// The sixth of ten, opened where the row showed it and closed: frame by frame it eases from its open place to its
+// closed one, never off the glass, and the row ends where it was before the agent opened (cells 5 to 7).
+static void test_closing_far(void)
+{
+    static const char *const TEN[] = {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"};
+    linked(TEN, 10);
+    max_show(MAX_VIEW_OVERVIEW);
+    max_m.idle_from = T0;
+    render(T0 - 5000);
+    max_m.row_first = 4;
+    frames(T0 - 4000, T0 - 3000);
+    CHECK(scroll(T0 - 3000) == 4 * CELL_W && place("f", T0 - 3000)->x == ROW_X + CELL_W);
+    max_open("f");
+    frames(T0 - 2000, T0 - 1000);
+    const int opened = place("f", T0 - 1000)->x;
+    CHECK(scroll(T0 - 1000) == 4 * SLIVER_W && opened == ROW_X + SLIVER_W);
+    max_show(MAX_VIEW_OVERVIEW);
+    CHECK(max_m.row_first == 4);
+    int was = opened;
+    for (uint32_t t = T0; t <= T0 + MAX_ROW_MS; t += MAX_ROW_FRAME_MS) {
+        render(t);
+        const max_place_t *f = place("f", t);
+        CHECK(f->x >= ROW_X && f->x + f->w <= ROW_X + ROW_W);   // on the glass all the way
+        CHECK(f->x >= was - 3);   // only ever to the right, but for each width's and the scroll's rounding
+        was = f->x;
+    }
+    render(T0 + MAX_ROW_MS);
+    CHECK(scroll(T0 + MAX_ROW_MS) == 4 * CELL_W && place("f", T0 + MAX_ROW_MS)->x == ROW_X + CELL_W);
 }
 
 // The model sends the row to its front (an agent moved up past it): the row eases there.
@@ -209,12 +240,12 @@ static void test_frame_clock(void)
     render(T0);
     CHECK(max_motion_ms(T0) == MAX_ROW_FRAME_MS && max_ui_next_wake_ms(T0) <= MAX_ROW_FRAME_MS);
     CHECK(!max_ui_tick(T0 + 5) && max_ui_tick(T0 + MAX_ROW_FRAME_MS));
-    max_show(MAX_VIEW_OVERVIEW);   // closed 16 ms in: the cells' 420 ms, then the way back's
+    max_show(MAX_VIEW_OVERVIEW);   // closed 16 ms in: the cells' 420 ms, the scroll carried along
     for (uint32_t t = T0 + 16; t < T0 + 2000; t += 16) {
         render(t);
         if (!max_row_moving(t)) {
-            // The way back ends 840 ms after the close; a dot lit near its end eases 250 ms more.
-            CHECK(t >= T0 + 16 + 2 * MAX_ROW_MS && t <= T0 + 16 + 2 * MAX_ROW_MS + 250 + 16);
+            // The move ends 420 ms after the close; a dot lit near its end eases 250 ms more.
+            CHECK(t >= T0 + 16 + MAX_ROW_MS && t <= T0 + 16 + MAX_ROW_MS + 250 + 16);
             CHECK(max_motion_ms(t) == pets_beat(t) && max_ui_next_wake_ms(t) == pets_beat(t));
             return;
         }
@@ -541,6 +572,7 @@ int main(void)
     test_opening();
     test_carry();
     test_closing();
+    test_closing_far();
     test_front();
     test_fresh_page();
     test_frame_clock();

@@ -217,7 +217,7 @@ typedef struct {
 
 // ---- App Detail's row in motion (max_ui_row.c), as V3's OverviewPage moves it ----
 #define MAX_ONE 4096                // a look's whole, as its parts count (Q12)
-#define MAX_ROW_MS 420u             // the row's move (V3 kRowMove), its carry, its way back and a settle
+#define MAX_ROW_MS 420u             // the row's move (V3 kRowMove), its carry and a settle
 #define MAX_ROW_FRAME_MS 16u        // a frame while anything in the row moves
 #define MAX_LOOP_FRAME_MS 33u       // a frame while only what loops by the clock moves (V3's Motion): its pulses and sweeps
 #define MAX_ROW_HITS 8              // the cells and slivers on the glass at once, cut by its ends
@@ -247,8 +247,6 @@ typedef struct {
     char open[ID_MAX];              // the open agent as the looks were sent ("" none)
     int first;                      // row_first as the scroll was sent
     bool had, drawn;                // the render before this one drew the row; this one did
-    bool back;                      // an agent closed: the scroll to row_first waits for the cells' width
-    uint32_t back_at;
     int16_t open_l, open_r;         // the open agent's window as drawn: a drag there is its own, not the row's
     // The finger on the row: it may drag it (grab); it does (drag), the row at drag_px when the finger was at drag_x.
     bool grab, drag;

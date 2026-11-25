@@ -1,9 +1,9 @@
 // App Detail's row in motion (max_ui_internal.h), as V3's OverviewPage moves it. Each agent's look eases to where the
 // page sends it, as V3's implicit animations do: the widths together as the row's one move (kRowEase over 420 ms), a
 // sliver's pet, words and dimming, the open agent's face, ground and panel. The scroll is carried along with the move
-// while an agent opens, goes back to the closed agent once the cells have their width again, and to the front when
-// the model sends it there. The finger drags the row px by px; let go with no agent open it settles on a cell's edge
-// (one further when flung), open it rests where it was let go. All of it runs on the clock (now_ms), never on frames.
+// while an agent opens or closes, so that agent never leaves the glass, and goes to the front when the model sends it
+// there. The finger drags the row px by px; let go with no agent open it settles on a cell's edge (one further when
+// flung), open it rests where it was let go. All of it runs on the clock (now_ms), never on frames.
 // Apps' cards, when more lie in a row than the glass shows, move with the finger the same way. The touch task and the
 // render task both come here: 1 KB frames.
 #include <string.h>
@@ -225,7 +225,7 @@ void max_row_step(uint32_t now_ms)
     r->look_count = n;
     if (fresh) {   // another page just now: the row is laid out where it rests (V3 builds the page afresh)
         for (int i = 0; i < n; i++) look_rest(&r->looks[i], open, false);
-        r->drag = r->grab = r->back = false;
+        r->drag = r->grab = false;
         rest(&r->px, open[0] ? open_px(open, row, n) : closed_px(n));
     } else if (turned) {
         const int px = scroll_at(now_ms, content_w(now_ms));
@@ -235,21 +235,12 @@ void max_row_step(uint32_t now_ms)
             look_send(l, open, now_ms);
         }
         r->drag = false;   // the page moved under the finger: it lets go of the row
-        r->back = false;
-        if (open[0]) {   // carried along with the move to where the open agent rests (V3 _carry)
-            r->px = (max_tween_t){px, open_px(open, row, n), now_ms, MAX_ROW_MS, MAX_EASE_ROW};
-        } else {         // it stays while the cells take their width, then goes back (V3 _back)
-            rest(&r->px, px);
-            r->back = true;
-            r->back_at = now_ms + MAX_ROW_MS;
-        }
-    } else if (!open[0] && !r->drag) {
-        if (r->back && (int32_t)(now_ms - r->back_at) >= 0) {
-            r->back = false;
-            r->px = (max_tween_t){max_tween_at(&r->px, r->back_at), closed_px(n), r->back_at, MAX_ROW_MS, MAX_EASE_ROW};
-        } else if (!r->back && max_m.row_first != r->first) {   // to the front, or wherever the model sent it
-            run(&r->px, closed_px(n), MAX_ROW_MS, MAX_EASE_ROW, now_ms);
-        }
+        // Carried along with the move (V3 _carry) to where the open agent rests, or, closed, to row_first: the scroll
+        // and every width on one curve, so the agent opening or closing stays on the glass. (V3 _back waited for the
+        // cells' width first: the closed agent went off the glass and the row seemed to jump to its front, 25 Nov.)
+        r->px = (max_tween_t){px, open[0] ? open_px(open, row, n) : closed_px(n), now_ms, MAX_ROW_MS, MAX_EASE_ROW};
+    } else if (!open[0] && !r->drag && max_m.row_first != r->first) {   // to the front, or wherever the model sent it
+        run(&r->px, closed_px(n), MAX_ROW_MS, MAX_EASE_ROW, now_ms);
     }
     memcpy(r->open, open, sizeof r->open);
     r->first = max_m.row_first;
@@ -275,8 +266,7 @@ void max_row_step(uint32_t now_ms)
 bool max_row_moving(uint32_t now_ms)
 {
     const max_row_t *r = &max_m.row;
-    if (r->back || !max_tween_done(&r->px, now_ms) || !max_tween_done(&r->fade_l, now_ms) ||
-        !max_tween_done(&r->fade_r, now_ms))
+    if (!max_tween_done(&r->px, now_ms) || !max_tween_done(&r->fade_l, now_ms) || !max_tween_done(&r->fade_r, now_ms))
         return true;
     for (int i = 0; i < r->look_count; i++) {
         const max_look_t *l = &r->looks[i];
@@ -341,12 +331,11 @@ void max_row_move(int x, uint32_t now_ms)
     if (!r->grab) return;
     if (!r->drag) {
         if (iabs(x - max_m.down_x) <= MAX_TAP_SLOP) return;
-        // It takes the row from where it is: the carry, the way back and any settle stop there, and the slop the finger
-        // went first is not the row's (Flutter's DragStartBehavior.start).
+        // It takes the row from where it is: the carry and any settle stop there, and the slop the finger went first is
+        // not the row's (Flutter's DragStartBehavior.start).
         const int content = content_w(now_ms);
         const int px = scroll_at(now_ms, content);
         rest(&r->px, px);
-        r->back = false;
         r->drag = true;
         r->drag_x = x;
         r->drag_px = px;

@@ -1068,6 +1068,37 @@ static void test_any_tap_sends(void)
     T += 1000;
 }
 
+// The sixth of ten opened with its mic on, then closed by X or by a send: the row stays where the person left it, one
+// cell before the place the agent had on its page (the owner, 25 Nov), even when the send set it to work and moved it
+// up the row. Nothing that moved past the glass meanwhile, it stays there.
+static void test_closing_keeps_the_row(void)
+{
+    linked(XS, 10);
+    max_show(MAX_VIEW_OVERVIEW);
+    max_m.row_first = 4;   // x4 x5 x6 on the glass
+    overview_drawn();
+    CHECK(tap_box(cell_of("x5")).kind == MAX_ACT_OPEN_TALK && max_m.view == MAX_VIEW_AGENT);
+    recording(true);
+    CHECK(tap_on(x_of_agent()).kind == MAX_ACT_CANCEL);
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW && max_m.row_first == 4);
+    max_ui_talk(MAX_TALK_IDLE, T);
+    // Sent: the words taken set it to work, to the row's front; the pane shrinks back with the row where it was.
+    overview_drawn();
+    CHECK(tap_box(cell_of("x5")).kind == MAX_ACT_OPEN_TALK);
+    recording(true);
+    CHECK(tap_page().kind == MAX_ACT_SEND && max_m.view == MAX_VIEW_AGENT);
+    max_ui_talk(MAX_TALK_SENDING, T + 100);
+    CHECK(max_ui_voice_result(true, "x5", T + 200) && max_find("x5")->state == MAX_WORKING);
+    max_ui_tick(T + 200 + 10000);   // its SEND scene played
+    char buf[64];
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW && max_m.row_first == 4);
+    CHECK(!strcmp(order_ids(buf, sizeof buf), "x5 x0 x1 x2 x3 x4 x6 x7 x8 x9"));
+    max_ui_tick(T + 200 + 20000);
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW && max_m.row_first == 4);
+    max_ui_talk(MAX_TALK_IDLE, T + 200 + 20000);
+    T += 30000;
+}
+
 // A touch that opens the mic may be held as long as it likes (the Pro's tap has no length): a cell's opens its page
 // and, a moment later, its mic; the agent page's body its mic now.
 static void test_a_long_press_opens_the_mic(void)
@@ -1264,6 +1295,7 @@ int main(void)
     test_talk_due_times();
     test_cell_tap_opens_the_mic_a_second_later();
     test_any_tap_sends();
+    test_closing_keeps_the_row();
     test_a_long_press_opens_the_mic();
     test_no_guard();
     test_the_clock_voids_the_contact();
