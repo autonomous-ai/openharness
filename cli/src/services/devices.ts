@@ -53,8 +53,8 @@ import { createHcClient, hcClientDeps, hcPaneKey, hcSocketPath, type HcClient } 
 import { HcSource } from '../cable/hosts/hcSource.js'
 import { createHerdrAdapter, herdrPaneParts } from '../cable/hosts/herdr.js'
 import { createHerdrAppAdapter } from '../cable/hosts/herdrApp.js'
-import { createHerdrClient, herdrClientDeps, herdrPaneKey, herdrShellOf, type HerdrClient } from '../cable/hosts/herdrClient.js'
-import { createHerdrNested, createHerdrOuter, procSockets, ttyAtime } from '../cable/hosts/herdrOuter.js'
+import { createHerdrClient, herdrClientDeps, herdrMarkerServer, herdrPaneKey, herdrShellOf, type HerdrClient } from '../cable/hosts/herdrClient.js'
+import { createHerdrNested, createHerdrOuter, procSockets, ttyAtime, type HerdrWindowsDeps } from '../cable/hosts/herdrOuter.js'
 import { HerdrSource } from '../cable/hosts/herdrSource.js'
 import { createKittyAdapter, createKittyTabAdapter, kittyFinder } from '../cable/hosts/kitty.js'
 import { Inbox } from '../cable/hosts/inbox.js'
@@ -73,7 +73,7 @@ import { ORCA_CHAT_TIMEOUT_MS, OrcaChatSource } from '../cable/hosts/orcaChatSou
 import { firstOuter, type NestedLookup } from '../cable/hosts/outer.js'
 import { readRecord } from '../cable/hosts/record.js'
 import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
-import { appRoots, learnApps, readBundleId, readMadeBy, readProcessNames, readPtyOwner, readTtyName, readWindowsPtyOwner, scanLearnsApps } from '../cable/hosts/scannedApp.js'
+import { appRoots, learnApps, readBundleId, readMadeBy, readProcessNames, readPtyOwner, readTtyName, readWindowsProcesses, readWindowsPtyOwner, scanLearnsApps } from '../cable/hosts/scannedApp.js'
 import { createScrollLines } from '../cable/hosts/scrollLines.js'
 import { pageOf } from '../cable/hosts/select.js'
 import { createTabsAdapter, isTabApp, readTty, type Tab, type TabApp } from '../cable/hosts/tabs.js'
@@ -903,6 +903,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  ids. */
   const outerDeps = { run: apps.run, processes: readProcessNames, log, now: monotonic, platform: apps.platform,
     roots: appRoots(homedir()), bundleId: readBundleId }
+  /** What herdr's client lookup reads on Windows, which has no `ps` and no ttys: the PTY host's table the maker is read
+   *  from, cut to four columns, and the server herdr's marker names, checked against that same table. */
+  const herdrWindows: HerdrWindowsDeps | undefined = apps.platform === 'win32' ? {
+    processes: () => readWindowsProcesses(listProcesses),
+    server: (rows) => herdrMarkerServer(herdrAt.socketPath, rows),
+  } : undefined
   /** How the open scan places a session it found in a pane of the person's tmux or herdr, before its first hook: Diego's
    *  idle agents in tmux inside iTerm2 sat on Other's page after the devices started again (2026-11-22). None where the
    *  scan learns no app (Windows has no `ps`): there it lists them as before. */
@@ -952,8 +958,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // An agent in a pane of the person's herdr, tmux or Zellij is on the page of the app holding the client that shows
   // it: each lookup answers nothing at once for an agent in none of its panes, and places only one on a terminal its
   // host made, so at most one names an app. herdr's first: its client's process alone, in a terminal with no page, is
-  // kept for Linux's raise when neither other names an app.
-  firstOuter(createHerdrOuter({ ...outerDeps, atime: ttyAtime, tty: readTtyName, onPath: apps.onPath, sockets: procSockets }),
+  // kept for the raise on Linux and Windows when neither other names an app.
+  firstOuter(createHerdrOuter({ ...outerDeps, atime: ttyAtime, tty: readTtyName, onPath: apps.onPath, sockets: procSockets,
+    windows: herdrWindows }),
     firstOuter(createTmuxOuter({ ...outerDeps, tmux: tmuxAt, tty: readTtyName }),
       createZellijOuter({ ...outerDeps, zellij: zellijAt, tty: readTtyName }))),
   // Windows has no `ps` and no ttys: the PTY host's process table, which the open scan reads too, gives the maker as the
