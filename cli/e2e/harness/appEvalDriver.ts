@@ -43,7 +43,7 @@ import { writeExecutable } from '../../src/testing/executableFixture.js'
 import { RECORDED_LINUX_APPS } from '../../src/testing/recordedLinuxApps.js'
 import { beginCost, costEnv } from './appEvalCost.js'
 import { writeAppCodex } from './codexAppCli.js'
-import { IsolatedDaemon, SOURCES_CLI, until } from './daemon.js'
+import { IsolatedDaemon, sourcesCli, until } from './daemon.js'
 import { Desk, devicesPids } from './desk.js'
 import { FakeBackend, type FakeMachine } from './fakeBackend.js'
 import type { FakeDial } from './fakeDial.js'
@@ -80,7 +80,7 @@ const MOD_READY_MS = 36_000
 const NOTHING_SEEN: Seen = { frames: [], faces: [], commands: [], deliveries: [], steps: [] }
 // How the real CLI is started: the run's bundle when there is one (E2E_BUNDLE), as the daemon runs. Either runs from any
 // folder, so each run here works in the daemon's root, where the cost counts what a scenario leaves running.
-const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : SOURCES_CLI
+const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : sourcesCli()
 
 /** One run of the recording open: the command it stands for, and whether it exited 0. */
 export type OpenRun = Omit<Seen['commands'][number], 'at'>

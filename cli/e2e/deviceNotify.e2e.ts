@@ -27,7 +27,7 @@ import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { observedAgentId } from '../src/cable/hosts/observed.js'
 import { LocalClient } from './harness/client.js'
 import { CodexOutside } from './harness/codexOutside.js'
-import { IsolatedDaemon, SOURCES_CLI, until } from './harness/daemon.js'
+import { IsolatedDaemon, sourcesCli, until } from './harness/daemon.js'
 import { Desk, devicesPids } from './harness/desk.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 import { FakeOrca } from './harness/fakeOrca.js'
@@ -44,7 +44,7 @@ const COMPOSED = 'Proceeding · Which cache for the user lookup? · Doing: in-pr
 // `--import tsx` would not resolve: tsx and the sources by their paths.
 const CLI_ENTRY = process.env.E2E_BUNDLE_PATH
   ? [process.env.E2E_BUNDLE_PATH]
-  : SOURCES_CLI
+  : sourcesCli()
 
 const row = async (client: LocalClient, agentId: string) =>
   ((await client.request<{ agents: Array<Record<string, any>> }>('agents_list', { includeStopped: true }, 30_000)).agents)

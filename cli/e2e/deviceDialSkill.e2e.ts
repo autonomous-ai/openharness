@@ -25,7 +25,7 @@ import { DIAL_PLUGIN_ID, DIAL_SKILL } from '../src/devices/dialSkill.js'
 import { copyNode } from '../src/testing/placeNode.js'
 import { VERSION } from '../src/version.js'
 import { LocalClient } from './harness/client.js'
-import { IsolatedDaemon, SOURCES_CLI, until } from './harness/daemon.js'
+import { IsolatedDaemon, sourcesCli, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import type { FakeDial } from './harness/fakeDial.js'
 
@@ -33,7 +33,7 @@ import type { FakeDial } from './harness/fakeDial.js'
 // `--import tsx` would not resolve: tsx and the sources by their paths.
 const CLI_ENTRY = process.env.E2E_BUNDLE_PATH
   ? [process.env.E2E_BUNDLE_PATH]
-  : SOURCES_CLI
+  : sourcesCli()
 
 /**
  * Codex 0.167.1's app-server as the scan sees it: a process named `codex`, with no terminal, holding one rollout open.
