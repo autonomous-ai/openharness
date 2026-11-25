@@ -93,10 +93,31 @@ describe('the warm worker on Windows', () => {
     expect(vi.mocked(spawnTied).mock.calls[0]?.[0]).toBe(exe)
   })
 
+  // Without SystemRoot a Windows program cannot open a socket, so the warm worker spawned but failed its first prompt.
+  it('gives Claude the Windows variables it needs', async () => {
+    const dir = asWindows()
+    file(join(dir, 'claude.exe'))
+    vi.stubEnv('SystemRoot', 'C:\\Windows')
+    vi.stubEnv('USERPROFILE', 'C:\\Users\\person')
+    vi.stubEnv('APPDATA', 'C:\\Users\\person\\AppData\\Roaming')
+    await expect(runRouterOneShot('claude', { prompt: 'p', cwd: dir })).rejects.toThrow()
+    expect(vi.mocked(spawnTied).mock.calls[0]?.[2]?.env).toMatchObject({
+      SystemRoot: 'C:\\Windows', USERPROFILE: 'C:\\Users\\person', APPDATA: 'C:\\Users\\person\\AppData\\Roaming',
+    })
+  })
+
   it('spawns the grok.exe the lookup found, not grok', async () => {
     const dir = asWindows()
     const exe = file(join(dir, 'grok.exe'))
     await expect(runGrokOneShot({ prompt: 'p', cwd: dir })).rejects.toThrow()
     expect(vi.mocked(spawnTied).mock.calls[0]?.[0]).toBe(exe)
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('the warm worker off Windows', () => {
+  it('gives Claude no Windows variable', async () => {
+    vi.stubEnv('SystemRoot', 'C:\\Windows')
+    await expect(runRouterOneShot('claude', { prompt: 'p', cwd: folder() })).rejects.toThrow()
+    expect(vi.mocked(spawnTied).mock.calls[0]?.[2]?.env).not.toHaveProperty('SystemRoot')
   })
 })
