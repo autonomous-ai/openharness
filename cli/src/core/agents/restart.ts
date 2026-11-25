@@ -11,7 +11,7 @@ import { buildEngineLaunchArgv, commandAvailableInInteractiveShell } from '../..
 import { launchedGrid, type GridAssignment } from '../../lib/gridAssignmentWire.js'
 import { windowsPaneLaunch } from '../../lib/windows/engineStart.js'
 import { sid } from '../../lib/log.js'
-import { matchesLaunchReceipt, OBSERVATION_BATCH_INCOMPLETE, SAVED_BINDING_CHANGED, type LaunchPublicationInput, type ProcessIdentity, type registry,
+import { heldFirstLaunch, matchesLaunchReceipt, OBSERVATION_BATCH_INCOMPLETE, SAVED_BINDING_CHANGED, type LaunchPublicationInput, type ProcessIdentity, type registry,
   type RegisteredSession } from '../../lib/registry.js'
 import { publishEngine, resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
@@ -193,7 +193,12 @@ export function createAgentRestarter({
     let session = registry.resolve(agentId)
     if (!session) return { ok: false, error: 'AGENT_NOT_FOUND' }
     if (session.guest) return GUEST_HARNESS_REFUSAL
-    if (!session.sessionId && (session.launch?.state === 'held' || session.launch?.state === 'starting') && session.launch.nativeToken) {
+    // A fresh launch would drop a native first launch's first prompt or fork. One the guard held starts again from
+    // its receipt, so its restart is that recovery, now (`restartHeld`); one without that proof keeps today's refusal.
+    if (!session.sessionId && session.launch?.state === 'starting' && session.launch.nativeToken) {
+      return { ok: false, error: 'NATIVE_LAUNCH_HELD', detail: 'This harness is still starting.' }
+    }
+    if (!session.sessionId && session.launch?.state === 'held' && session.launch.nativeToken && !heldFirstLaunch(session)) {
       return { ok: false, error: 'NATIVE_LAUNCH_HELD', detail: 'The original launch is held for recovery. Its first prompt or fork cannot be replaced by a fresh launch.' }
     }
     const held = restartHeld(session.agentId)
