@@ -99,6 +99,18 @@ describe('shared desktop/device notification policy', () => {
     ] as const) { policy.ended(id); expect(decided(policy, id, text, silent)).toEqual([null]) }
   })
 
+  it('a turn that goes on after its ask is answered is announced done when it ends', () => {
+    const policy = new AgentNotifications()
+    policy.started('s')
+    policy.asked('s', 'q')
+    policy.answered('s', 'q')
+    policy.ended('s')
+    const told = decided(policy, 's', 'Applied the approved change.')
+    expect(told).toEqual([])
+    vi.advanceTimersByTime(DONE_QUIET_MS)
+    expect(told).toEqual([{ id: expect.any(String), kind: 'done' }])
+  })
+
   it('keeps questions actionable and does not announce their answer as done', () => {
     const policy = new AgentNotifications()
     policy.started('s')

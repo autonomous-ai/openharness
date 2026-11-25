@@ -70,14 +70,24 @@ describe('one completed-result decision for desktop and device', () => {
   it.each(['replay', 'subagent', 'question'] as const)('updates device recaps silently for %s, with no desktop notification', async mode => {
     const { mirror, desktop, device, policy } = setup({ isSubagent: () => mode === 'subagent' })
     mirror.ingest([turn[0]], 's', { replay: mode === 'replay' })
-    if (mode === 'question') {
-      policy.asked('s', 'q')
-      policy.answered('s', 'q')
-    }
+    // A question still open as the turn ends is the person's news instead of this end.
+    if (mode === 'question') policy.asked('s', 'q')
     mirror.ingest(turn.slice(1), 's', { replay: mode === 'replay' })
     await vi.runAllTimersAsync()
     expect(desktop[0].payload.notification).toBeNull()
     expect(device.at(-1)?.payload.subagent).toBe(true)
+  })
+
+  it('announces a turn that went on after its ask was answered, as any turn', async () => {
+    const { mirror, desktop, device, policy } = setup()
+    mirror.ingest([turn[0]], 's')
+    policy.asked('s', 'q')
+    policy.answered('s', 'q')
+    mirror.ingest(turn.slice(1), 's')
+    await vi.runAllTimersAsync()
+    expect(desktop[0].payload.notification.kind).toBe('done')
+    expect(device.at(-1)?.payload.notification).toEqual(desktop[0].payload.notification)
+    expect(device.at(-1)?.payload).not.toHaveProperty('subagent')
   })
 
   it('ignores aborted, duplicate and superseded ends', async () => {
