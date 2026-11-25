@@ -129,7 +129,7 @@ gone() { ! kill -0 "$1" 2>/dev/null; }
 
 # cliSeen, askedSignIn, loginItem and askedFollow: nothing is installed, no window opens and no login item is
 # registered. The test's bundle id has no Accessibility, so without askedFollow the Follow ChatGPT screen would open at
-# launch, and an open window holds the update's relaunch.
+# launch.
 mkdir -p "$data"
 chmod 700 "$data"
 printf '%s\n' '{"version":1,"cliSeen":true,"askedSignIn":true,"loginItem":true,"askedFollow":true}' >"$data/state.json"
