@@ -62,6 +62,7 @@ function setup(row: RegisteredSession | null = agent(), over: Partial<RestartDep
           gridLaunchRecord === undefined ? {} : { gridLaunch: gridLaunchRecord?.override ?? null, gridWebSearch: gridLaunchRecord?.webSearch ?? null })
         return { state: 'confirmed', entry: structuredClone(refreshed) }
       }),
+      setLaunch: vi.fn<RestartDeps['registry']['setLaunch']>((_id, launch) => refreshed && Object.assign(refreshed, { launch })),
     } as unknown as RestartDeps['registry'],
     purgeBusy: vi.fn(() => false),
     stopJobs: new Map(),
@@ -297,13 +298,48 @@ describe('restarting an agent', () => {
     } finally { releaseStop?.() }
   })
 
-  it.each(['starting', 'held'] as const)('does not replace an unbound native %s launch with a generic fresh restart', async state => {
-    const run = setup(agent({ sessionId: '', launch: state === 'starting' ? { state, nativeToken: 'original' }
-      : { state, nativeToken: 'original', service: 'native', detail: 'Original request held' } }))
-    expect(await run.restart('a1')).toMatchObject({ ok: false, error: 'NATIVE_LAUNCH_HELD' })
-    expect(run.deps.restartHeld).not.toHaveBeenCalled()
-    expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
-    expect(restartAgent).not.toHaveBeenCalled()
+  describe('a native first launch', () => {
+    const guardHeldLaunch = { state: 'held' as const, service: 'native', nativeToken: 'original', detail: 'Starting again.', startsAgain: true as const }
+
+    it('a held first launch restarts through restartHeld, and its answer is the restart\'s', async () => {
+      const row = agent({ sessionId: '', processIdentity: undefined, launch: guardHeldLaunch })
+      // Held again by changing evidence: still a held first launch, shown starting, and the restart succeeded.
+      const heldAgain = { ok: true as const, session: row, resumed: false }
+      const run = setup(row, { restartHeld: vi.fn(() => Promise.resolve(heldAgain)) })
+      expect(await run.restart('a1')).toBe(heldAgain)
+      expect(run.deps.restartHeld).toHaveBeenCalledWith('a1')
+      expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
+      expect(restartAgent).not.toHaveBeenCalled()
+
+      const failed = { ok: false as const, error: 'ENGINE_DID_NOT_START', detail: 'This harness did not start. Close it and open a new one.' }
+      expect(await setup(row, { restartHeld: vi.fn(() => Promise.resolve(failed)) }).restart('a1')).toBe(failed)
+    })
+
+    it('a first launch still starting is refused: "This harness is still starting."', async () => {
+      const run = setup(agent({ sessionId: '', launch: { state: 'starting', nativeToken: 'original' } }))
+      expect(await run.restart('a1')).toEqual({ ok: false, error: 'NATIVE_LAUNCH_HELD', detail: 'This harness is still starting.' })
+      expect(run.deps.restartHeld).not.toHaveBeenCalled()
+      expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
+      expect(restartAgent).not.toHaveBeenCalled()
+    })
+
+    it('a held first launch without startsAgain is refused with the words of today', async () => {
+      const run = setup(agent({ sessionId: '', launch: { state: 'held', nativeToken: 'original', service: 'native', detail: 'Original request held' } }))
+      expect(await run.restart('a1')).toEqual({ ok: false, error: 'NATIVE_LAUNCH_HELD',
+        detail: 'The original launch is held for recovery. Its first prompt or fork cannot be replaced by a fresh launch.' })
+      expect(run.deps.restartHeld).not.toHaveBeenCalled()
+      expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
+      expect(restartAgent).not.toHaveBeenCalled()
+    })
+
+    it('a guard-held conversation goes to restartHeld, as every held conversation does', async () => {
+      const row = agent({ processIdentity: undefined, launch: guardHeldLaunch })
+      const resumed = { ok: true as const, session: row, resumed: true }
+      const run = setup(row, { restartHeld: vi.fn(() => Promise.resolve(resumed)) })
+      expect(await run.restart('a1')).toBe(resumed)
+      expect(run.deps.restartHeld).toHaveBeenCalledWith('a1')
+      expect(restartAgent).not.toHaveBeenCalled()
+    })
   })
 
   it.each(['inspection', 'permission', 'snapshot'] as const)('preserves the live process when restart loses %s evidence', async stage => {
@@ -360,6 +396,99 @@ describe('restarting an agent', () => {
     expect(respawn).toHaveBeenCalledExactlyOnceWith(['fixture-engine', 's1'])
     expect(keepAbandoned).not.toHaveBeenCalled()
     expect(run.deps.registry.confirmLaunch).not.toHaveBeenCalled()
+  })
+
+  describe('a swap the guard held', () => {
+    /** The real swap order (`restartAgent`) over a pane whose relaunch the guard held: no engine came up, and the pane is
+     *  the held shell under the inspected launch's token. [staleAfterRespawn]: the inspected executable is replaced as
+     *  the new shell starts, what the guard held it on. */
+    const guardHeldSwap = async (row: RegisteredSession, heldShell = async () => true, staleAfterRespawn = false) => {
+      let fresh = true
+      const native = { token: 'tok-1', current: () => fresh }
+      const actual = await vi.importActual<typeof import('../../lib/restartAgent.js')>('../../lib/restartAgent.js')
+      vi.mocked(restartAgent).mockImplementationOnce(actual.restartAgent)
+      const respawn = vi.fn(async () => { fresh = !staleAfterRespawn; return { ok: true } })
+      const run = setup(row, {
+        native: (async () => ({ ok: true, launch: native })) as never,
+        relaunchOverrides: (async () => ({ ok: true, overrides: { native, env: {}, extraArgs: [], clearEnv: [] } })) as never,
+        paneSwapDeps: () => ({ holdOpen: async () => ({ ok: true }), terminate: async () => 'gone', respawn,
+          waitForProcess: async () => null, heldShell, buildArgv: () => ['codex'], keepAbandoned: vi.fn(), log: () => {} }),
+        startAgain: vi.fn(),
+      } as Partial<RestartDeps>)
+      return { ...run, respawn }
+    }
+
+    it('a restart of a conversation the guard held starts it again: the row held to start again, the held passes asked, success shown starting', async () => {
+      const run = await guardHeldSwap(agent())
+      const startsAgain = { state: 'held', service: 'native', nativeToken: 'tok-1', startsAgain: true, detail: 'Starting again.' }
+      const reply = await run.restart('a1')
+      expect(reply).toEqual({ ok: true, session: expect.objectContaining({ agentId: 'a1', sessionId: 's1', launch: startsAgain }), resumed: true })
+      expect(run.deps.registry.setLaunch).toHaveBeenCalledExactlyOnceWith('a1', startsAgain)
+      expect(run.deps.announceSession).toHaveBeenCalledExactlyOnceWith(reply.ok && reply.session)
+      expect(run.deps.startAgain).toHaveBeenCalledExactlyOnceWith('a1')
+      expect(console.log).toHaveBeenCalledWith('[restart] a1 claude · held by the native guard · starting again')
+      expect(run.deps.registry.confirmLaunch).not.toHaveBeenCalled()
+      expect(releaseHold).not.toHaveBeenCalled()
+      expect(run.respawn).toHaveBeenCalledOnce()
+    })
+
+    // The executable replaced as the swap's shell started is why the guard held it: the inspection it was built with is
+    // stale from then on, and the restart is still the row's (e2e/heldLaunchRecovery.e2e.ts, 2026-11-25).
+    it('a conversation the guard held on evidence gone stale after the respawn starts again, answered as a success', async () => {
+      const run = await guardHeldSwap(agent(), undefined, true)
+      const startsAgain = { state: 'held', service: 'native', nativeToken: 'tok-1', startsAgain: true, detail: 'Starting again.' }
+      const reply = await run.restart('a1')
+      expect(reply).toEqual({ ok: true, session: expect.objectContaining({ agentId: 'a1', sessionId: 's1', launch: startsAgain }), resumed: true })
+      expect(run.deps.registry.setLaunch).toHaveBeenCalledExactlyOnceWith('a1', startsAgain)
+      expect(run.deps.startAgain).toHaveBeenCalledExactlyOnceWith('a1')
+      expect(run.deps.registry.confirmLaunch).not.toHaveBeenCalled()
+      expect(run.respawn).toHaveBeenCalledOnce()
+    })
+
+    it('a held swap on stale evidence whose row changed owner marks nothing', async () => {
+      const row = agent()
+      const run: Awaited<ReturnType<typeof guardHeldSwap>> = await guardHeldSwap(row, async () => {
+        vi.mocked(run.deps.sameRestartTarget).mockReturnValue(false); return true
+      }, true)
+      expect(await run.restart('a1')).toEqual(changed)
+      expect(row.launch).toBeUndefined()
+      expect(run.deps.registry.setLaunch).not.toHaveBeenCalled()
+      expect(run.deps.startAgain).not.toHaveBeenCalled()
+      expect(run.deps.announceSession).not.toHaveBeenCalled()
+    })
+
+    // The row keeps new words only once the engine is back (commitRelaunchedEngine), and the recovery builds from the row:
+    // marked, the engine would come back with the old words under a success.
+    it.each([[['--chrome']], [[]]])('a restart with new launch words %j the guard held answers as today and marks nothing', async (words) => {
+      const run = await guardHeldSwap(agent())
+      expect(await run.restart('a1', words)).toEqual({ ok: false, error: 'RESTART_FAILED', detail: 'claude did not come back up after restart' })
+      expect(run.deps.registry.setLaunch).not.toHaveBeenCalled()
+      expect(run.deps.startAgain).not.toHaveBeenCalled()
+      expect(run.deps.announceSession).not.toHaveBeenCalled()
+      expect(run.deps.registry.confirmLaunch).not.toHaveBeenCalled()
+      expect(run.respawn).toHaveBeenCalledOnce()
+    })
+
+    // A running row with no conversation has had its first launch confirmed, so it names no receipt (registry.ts
+    // `creationId`): marked, it would become a held first launch with nothing to rebuild from, and be failed.
+    it('a restart of a row with no conversation the guard held answers as today and marks nothing', async () => {
+      const run = await guardHeldSwap(agent({ sessionId: '' }))
+      expect(await run.restart('a1')).toEqual({ ok: false, error: 'RESTART_FAILED', detail: 'claude did not come back up after restart' })
+      expect(run.deps.registry.setLaunch).not.toHaveBeenCalled()
+      expect(run.deps.startAgain).not.toHaveBeenCalled()
+      expect(run.deps.announceSession).not.toHaveBeenCalled()
+      expect(run.respawn).toHaveBeenCalledOnce()
+    })
+
+    it('a held swap that changed under it marks nothing', async () => {
+      const row = agent()
+      const run: Awaited<ReturnType<typeof guardHeldSwap>> = await guardHeldSwap(row, async () => { run.state.live = false; return true })
+      expect(await run.restart('a1')).toEqual(changed)
+      expect(row.launch).toBeUndefined()
+      expect(run.deps.registry.setLaunch).not.toHaveBeenCalled()
+      expect(run.deps.startAgain).not.toHaveBeenCalled()
+      expect(run.deps.announceSession).not.toHaveBeenCalled()
+    })
   })
 
   describe('with new launch words', () => {

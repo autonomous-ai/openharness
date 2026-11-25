@@ -47,6 +47,8 @@ type Receipt = {
   fingerprint: string
   /** The guest a launch was made for. Absent for the owner's, and for every receipt written before guests existed. */
   guest?: string
+  /** A fork's first task, kept so a first launch the guard held is made again with it. Absent with none, and once scrubbed. */
+  firstTask?: string
   outcome: AgentCreationOutcome | { state: 'pending' }
 }
 
@@ -151,9 +153,30 @@ export class AgentCreationReceipts {
     return receipt?.version === 1 && receipt.guest !== undefined ? receipt.guest : null
   }
 
+  /** The first task of the launch receipt [id] made for [agentId]: a create's `native-create-v1` intent (`input.prompt`)
+   *  or a fork's receipt (`firstTask`), created for [agentId], pending or unconfirmed. `task` null: it had none, or it is
+   *  a fork's receipt that was scrubbed, which keeps no task (reached only by a row that outlives its purge's scrub).
+   *  Null when the receipt cannot say: missing, another agent's, cancelled, a scrubbed intent, failed, the other kind, a
+   *  model or legacy receipt, or unreadable. */
+  firstLaunchTask(id: string, agentId: string, kind: 'create' | 'fork'): { task: string | null } | null {
+    try {
+      const receipt = this.read(id), status = this.status(id)
+      if (receipt?.version !== (kind === 'create' ? 2 : 1) || (status.state !== 'pending' && status.state !== 'unconfirmed'
+        && (status.state !== 'created' || status.agentId !== agentId))) return null
+      if (receipt.version === 1) return { task: receipt.firstTask ?? null }
+      if ('cancelled' in receipt || receipt.request.kind !== 'native-create-v1') return null
+      const { input } = receipt.request
+      // An intent with no input cannot say it had no task: a relaunch without one would drop it.
+      if (!input || typeof input !== 'object') return null
+      const { prompt } = input as Record<string, unknown>
+      return { task: typeof prompt === 'string' && prompt ? prompt : null }
+    } catch { return null /* Damaged evidence cannot say what a launch was given. */ }
+  }
+
   /** `guest` marks a launch made for a guest: it is kept on the receipt so that only that guest, and the owner, can
-   * ask what became of it. A guest never attaches to a receipt that is not its own, whatever its fingerprint. */
-  run(id: string, fingerprint: string, create: () => Promise<AgentCreationOutcome>, guest?: string): Promise<AgentCreationStatus> {
+   * ask what became of it. A guest never attaches to a receipt that is not its own, whatever its fingerprint.
+   * `firstTask`: a fork's first task, kept beside its outcome (`firstLaunchTask`); the fingerprint already names it. */
+  run(id: string, fingerprint: string, create: () => Promise<AgentCreationOutcome>, guest?: string, firstTask?: string): Promise<AgentCreationStatus> {
     const running = this.inFlight.get(id)
     if (running) {
       if (running.fingerprint !== fingerprint) throw new AgentCreationReceiptError('CREATION_CONFLICT')
@@ -166,10 +189,11 @@ export class AgentCreationReceipts {
       if (receipt.fingerprint !== fingerprint) throw new AgentCreationReceiptError('CREATION_CONFLICT')
       return Promise.resolve(this.status(id))
     }
+    const kept = { ...(guest === undefined ? {} : { guest }), ...(firstTask ? { firstTask } : {}) }
     // O_EXCL is also the guard against another daemon reaching the same intent.
     // A partial/corrupt reservation is refused, never treated as a missing one.
     try {
-      this.write(id, { version: 1, fingerprint, ...(guest === undefined ? {} : { guest }), outcome: { state: 'pending' } }, true)
+      this.write(id, { version: 1, fingerprint, ...kept, outcome: { state: 'pending' } }, true)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
         const existing = this.read(id)
@@ -184,7 +208,7 @@ export class AgentCreationReceipts {
       let outcome: AgentCreationOutcome
       try { outcome = await create() }
       catch { outcome = { state: 'unconfirmed' } }
-      const completed: Receipt = { version: 1, fingerprint, ...(guest === undefined ? {} : { guest }), outcome }
+      const completed: Receipt = { version: 1, fingerprint, ...kept, outcome }
       try { this.write(id, completed, false) }
       catch { this.unsaved.set(id, completed) }
       return outcome
@@ -344,8 +368,9 @@ export class AgentCreationReceipts {
     }
   }
 
-  /** A deleted harness gives up the request (task text, folder) of every intent that made it. The receipt stays, its
-   * checksum over the scrubbed form, so a retried create still answers its outcome and never launches again. */
+  /** A deleted harness gives up the request (task text, folder) of every intent that made it, and the first task of the
+   * fork that made it. The receipt stays, an intent's checksum over the scrubbed form, so a retried create or fork still
+   * answers its outcome and never launches again. */
   async scrubCreated(agentId: string): Promise<number> {
     try { secureStateDirectory(this.directory, false) }
     catch (error) {
@@ -357,18 +382,25 @@ export class AgentCreationReceipts {
       if (!entry.isFile() || !entry.name.endsWith('.json')) continue
       const id = entry.name.slice(0, -5)
       if (!validCreationId(id)) continue
-      let receipt: IntentReceipt
+      let receipt: Receipt | IntentReceipt
       try {
         const read = this.read(id)
-        if (read?.version !== 2 || 'cancelled' in read || read.request.scrubbed === true) continue
-        const status = this.intentStatus(id, read, false)
-        if (status.state !== 'created' || status.agentId !== agentId) continue
-        receipt = read
+        if (read?.version === 1) {
+          if (!read.firstTask || read.outcome.state !== 'created' || read.outcome.agentId !== agentId) continue
+          const { firstTask: _task, ...kept } = read
+          receipt = kept
+        } else {
+          if (!read || 'cancelled' in read || read.request.scrubbed === true) continue
+          const status = this.intentStatus(id, read, false)
+          if (status.state !== 'created' || status.agentId !== agentId) continue
+          const request = { scrubbed: true }, { fingerprint, held } = read
+          receipt = { version: 2, fingerprint, request, held, checksum: creationFingerprint({ fingerprint, request, held }) }
+        }
       } catch { continue /* Unreadable evidence is skipped, as a scan for pending intents skips it. */ }
-      const request = { scrubbed: true }
-      const { fingerprint, held } = receipt
-      try { this.write(id, { version: 2, fingerprint, request, held, checksum: creationFingerprint({ fingerprint, request, held }) }, false) }
+      try { this.write(id, receipt, false) }
       catch (error) { throw storageFailure(this.directory, error) }
+      // An outcome kept in memory because it could not be written is on disk now, scrubbed.
+      this.unsaved.delete(id)
       scrubbed++
     }
     return scrubbed
@@ -543,7 +575,8 @@ export class AgentCreationReceipts {
         throw new Error('Legacy receipt has conflicting intent evidence')
       }
       if (value.version !== 1 || !/^[a-f0-9]{64}$/.test(value.fingerprint ?? '') || !outcome
-          || (value.guest !== undefined && (typeof value.guest !== 'string' || !value.guest)) ||
+          || (value.guest !== undefined && (typeof value.guest !== 'string' || !value.guest))
+          || (value.firstTask !== undefined && (typeof value.firstTask !== 'string' || !value.firstTask)) ||
           !['pending', 'unconfirmed', 'created', 'failed'].includes(outcome.state) ||
           (outcome.state === 'created' && (typeof outcome.agentId !== 'string' || !outcome.agentId ||
             (outcome.level !== undefined && outcome.level !== 'native' && outcome.level !== 'handoff') ||

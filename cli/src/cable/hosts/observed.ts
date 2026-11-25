@@ -151,6 +151,10 @@ export interface ObservedDeps {
  *  terminal is read. */
 const PTY_HINTS = ['WEZTERM_PANE', 'KITTY_WINDOW_ID', 'ZELLIJ_PANE_ID', 'HERDR_PANE_ID', 'ORCA_TERMINAL_HANDLE']
 
+/** The variable each multiplexer gives its panes, which a hook's hints carry while it runs in one (askOuter). Not
+ *  detectHost: it says herdr for a tmux inside herdr, whose hints carry both. */
+const NEST_VARIABLE: Readonly<Record<Nest, string>> = { tmux: 'TMUX_PANE', herdr: 'HERDR_PANE_ID' }
+
 /** Whether a caller's app is learnt from its parents: its hints name none, or name VS Code by TERM_PROGRAM alone, which
  *  Cursor's terminal says too. Only a bundle id tells the two apart: Linux has none, and an editor started from another
  *  app has none once the one it inherited is dropped (hostDetect.ts ownHints). */
@@ -904,15 +908,20 @@ export class ObservedSource implements HostSource {
    * sat on a "tmux" page while the dial followed Terminal, whose page was empty (2026-11-19), and one in the herdr his
    * Terminal tab ran sat on a "herdr" page the same way (2026-11-19). Asked at its session's start and
    * at each turn's, as the person may have attached from another app since, and at an event whose caller or hints the
-   * last ask was not for. Another caller or pane drops the place at once; a new ask keeps it until its answer, so the
-   * agent does not leave its page meanwhile. The scan's place, or the multiplexer its maker read gave with no place,
-   * counts as such an ask at the first hook, when that hook is nested too and comes from the process the scan found:
+   * last ask was not for. Another caller or pane drops the client's place (its tab and process) at once, so no tap or
+   * rest uses the old tab; a new ask keeps it until its answer, so the agent does not leave its page meanwhile. The
+   * scan's place, or the multiplexer its maker read gave with no place, counts as such an ask at the first hook, when
+   * that hook is nested too and comes from the process the scan found:
    * Diego's idle agent placed on iTerm2's page by the scan (2026-11-22) must not drop to tmux's page while its first
    * hook's own lookup runs, while a resume in another pane holds another client; nor one the scan put on tmux's page
    * drop to the page of the app its pane's bundle id names. Only the latest ask's answer lands, while the session
-   * lives. Its multiplexer (HostAgent.nest) goes where the place goes and stays where it stays, and the answer gives the
-   * answer's, its host with it: an agent is on tmux's or herdr's page only while that lookup confirms its own terminal
-   * is the pane (Diego, 2026-11-23).
+   * lives. Its multiplexer (HostAgent.nest) stays where the place stays, and the answer gives the answer's, its host with
+   * it: an agent is on tmux's or herdr's page only while that lookup confirms its own terminal is the pane (Diego,
+   * 2026-11-23). Where the place goes at once, its multiplexer goes with it, unless a lookup was asked and the hook's
+   * hints carry that multiplexer's own variable (NEST_VARIABLE): the last confirmation then stands until the new ask
+   * answers, as for the same caller, since a resume's new caller in the same herdr left herdr's ring for its lookup's
+   * length and came back at its end, and two at once emptied herdr's page, the dial falling back to the app in front
+   * (eval I14, 2026-11-25).
    * Whether it is nested: its caller's tty is then the multiplexer's pane's, which no tab holds, so it is never read and
    * an old one goes.
    */
@@ -929,7 +938,9 @@ export class ObservedSource implements HostSource {
     if (!same && !(scanned && answer && e.callerPid === entry.pid)) {
       entry.outer = undefined
       entry.outerPid = undefined
-      delete entry.agent.nest
+      // A caller whose hints still say the multiplexer it was confirmed in keeps it until its own ask answers (eval I14).
+      const nest = entry.agent.nest
+      if (!answer || !nest || !e.hostHints[NEST_VARIABLE[nest]]) delete entry.agent.nest
     }
     if (!answer) {
       entry.outerAsk = undefined

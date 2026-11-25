@@ -6,7 +6,7 @@ import { MISSING_HELPER, REPLACED_PROGRAM } from '../engines/kit/identityScan.js
 import { OPENCLAW_STATES } from '../engines/openclaw/contract.js'
 import { agentFrame, agentStarting, openclawStartingUntil } from './agentFrame.js'
 import { agentProject } from './agentProject.js'
-import type { RegisteredSession } from './registry.js'
+import type { AgentLaunch, RegisteredSession } from './registry.js'
 
 function session(grid: RegisteredSession['grid'], codexHome: RegisteredSession['codexHome'] = null): RegisteredSession {
   return {
@@ -302,6 +302,46 @@ describe('agentFrame', () => {
     legacy.launch = { state: 'failed', error: 'ENGINE_DID_NOT_START', detail: 'See terminal.' }
     expect(await agentFrame(legacy, { selectedModel: null, terminalAvailable: true }))
       .toMatchObject({ launch: { state: 'failed', error: 'ENGINE_DID_NOT_START', detail: 'See terminal.' } })
+  })
+
+  // A held row is inactive in the registry (setLaunch); one the guard held starts again by itself, so every client is
+  // shown its usual "Starting" (docs/plans/2026-11-25-held-launch-recovery-design.md, section 4).
+  const guardHeldLaunch = { state: 'held', service: 'native', detail: 'Starting again.', nativeToken: 'tok-1', startsAgain: true } as const
+
+  it.each([['a first launch', ''], ['a conversation', 's1']])('sends %s the guard held as a launch starting, and active', async (_case, sessionId) => {
+    const row = { ...session(null), sessionId, active: false, launch: guardHeldLaunch }
+    // Its activity is none, so `harness wait` never reads it idle: the reader skips a row the registry keeps inactive
+    // (core/turns/activity.spec.ts).
+    const frame = await agentFrame(row, { selectedModel: null, terminalAvailable: true })
+    expect(frame.launch).toEqual({ state: 'starting' })
+    expect(frame.status).toBe('active')
+    expect(JSON.stringify(frame)).not.toContain('startsAgain')
+    expect(JSON.stringify(frame)).not.toContain('tok-1')
+  })
+
+  it.each([
+    ['no guard proof, no session', { state: 'held', service: 'native', detail: 'Waiting.', nativeToken: 'tok-1' }, ''],
+    ['no guard proof, a conversation', { state: 'held', service: 'native', detail: 'Waiting.', nativeToken: 'tok-1' }, 's1'],
+    ['no native token', { state: 'held', service: 'models', detail: 'Waiting for models.', startsAgain: true }, ''],
+    // Its wait is that service's, not the guard's (design section 4).
+    ['the guard held it, its recovery waits for models', { ...guardHeldLaunch, service: 'models', detail: 'Waiting for the models service.' }, ''],
+    ['the guard held it, its recovery waits for the Store', { ...guardHeldLaunch, service: 'store', detail: 'Waiting for the Store.' }, 's1'],
+    ['the guard held it, its recovery waits for search', { ...guardHeldLaunch, service: 'search', detail: 'Waiting for search.' }, 's1'],
+  ] as const)('sends every other held launch as it is, but the core\'s own startsAgain: %s', async (_case, launch, sessionId) => {
+    const frame = await agentFrame({ ...session(null), sessionId, active: false, launch }, { selectedModel: null, terminalAvailable: true })
+    // No client ever sees `startsAgain` (design, Data 5): the held launch as a frame sent it before.
+    const { startsAgain: _, ...sent } = launch as AgentLaunch & { startsAgain?: true }
+    expect(frame.launch).toEqual(sent)
+    expect(JSON.stringify(frame)).not.toContain('startsAgain')
+    expect(frame.status).toBe('offline')
+  })
+
+  // The receipt that made the row is the core's own (registry.ts `creationId`).
+  it('never sends the creation id', async () => {
+    const row = { ...session(null), sessionId: '', active: false, launch: guardHeldLaunch, creationId: 'crt-0123456789abcdef' }
+    const frame = await agentFrame(row, { selectedModel: null, terminalAvailable: true })
+    expect(frame).not.toHaveProperty('creationId')
+    expect(JSON.stringify(frame)).not.toContain('crt-0123456789abcdef')
   })
 })
 

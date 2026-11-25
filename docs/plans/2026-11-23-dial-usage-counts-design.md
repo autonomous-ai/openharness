@@ -43,7 +43,7 @@ request (Ken, 2026-11-23).
 | Does a new dial work fast? | From the moment a dial is connected **and** an agent is running on the computer (whichever comes last) to the first agent on the dial: under 1 min, 1–3, 3–10, over 10, none within an hour. On the first connection ever and, apart, on each day's first connection | devices component |
 | Which engines and hosts? | Computers whose dial showed an agent of each engine; of each host; distinct agents shown by engine and by host (capped per computer per day) | devices component |
 | Does the dial find the agents? | Of the agents the daemon knows from their hooks (Claude Code, Codex and the other hooked engines): placed on a host's page, on "Other", held (voice not delivered by design), or not shown, by engine; agents on "Other" by the app holding them, from a fixed product list (Warp, Zed, Cursor, Windsurf, Alacritty, Terminal.app, …) plus `unlisted`. An agent with no hook is invisible to both sides: the review says recognition covers hooked engines only | devices component |
-| Does voice reach the agent? | Voice sent: delivered (the agent's turn began within 10 s), failed by fixed code, held, cancelled; tap to open ok / failed by code; by host | devices component |
+| Does voice reach the agent? | Voice sent: delivered (the agent's turn began within 10 s); queued (sent to an agent working or waiting on the person, whose turn did not begin within 10 s: Claude Code holds typed words until its turn ends, Codex 0.106+ steers them into the running turn); failed by fixed code (`no_turn` only for an agent that was not working; an empty voice by its cause: `no_audio`, no audio came; `too_long`, the recording passed the length cap; `no_speech`, an empty transcript of a recording the dial firmware's voice gate hears no speech in, no 320 ms of loud 10 ms blocks in a row; `no_words`, an empty transcript of a recording that gate hears speech in); held; cancelled. Tap to open ok / failed by code; by host | devices component |
 | What does voice cost? | Seconds of audio transcribed and transcription time: per-account-day buckets (under 1 min, 1–5, 5–20, over 20) and in total. Per account, not per computer: the route knows the account, not the computer, and the question is the price per person (harness-pm, 2026-11-23) | **backend, at the transcription route** (`backend/src/routes/voice.ts`): it already handles every second, signed in, and is exact |
 
 ### Phase 2
@@ -120,7 +120,10 @@ request (Ken, 2026-11-23).
    the day it was used, L days earlier.
 4. Scale: counters join the one daily report per computer; the devices component batches its file writes (one write
    per few seconds at most, not one per turn of the dial), and the gateway reads the file once per report tick.
-5. Compatibility: older CLIs send none; an older backend drops unknown names without refusing the report.
+5. Compatibility: older CLIs send none. An older backend refuses a whole report that holds a name it does not know, and
+   the gateway then drops that report's dial counts (`cli/src/gateway/productUsage.ts`): the backend that knows a new
+   name is released before the CLI that sends it. CLIs from 0.6.85 until the four empty-voice codes and `queued` came
+   (2026-11-25) report every empty voice as `no_speech` and a voice to a working agent as `no_turn`.
 6. Migration/rollback: none; removing the names stops the counts.
 7. Audience: written by clients, read by the team's review.
 8. Identity: the existing report's account link only.

@@ -230,13 +230,13 @@ describe('each voice turn reports one end', () => {
   it('each voice turn reports one end: sent to the agent named', async () => {
     const { voiceEnded, speak, answered } = await talk()
     speak({ agentId: 'a2' }); await answered()
-    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'sent', agentId: 'a2' }]])
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'sent', agentId: 'a2', since: expect.any(Number) }]])
   })
 
   it('each voice turn reports one end: sent to the router\'s pick', async () => {
     const { voiceEnded, speak, answered } = await talk()
     speak(); await answered()
-    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'sent', agentId: 'a1' }]])
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'sent', agentId: 'a1', since: expect.any(Number) }]])
   })
 
   // The agent's turn the words start may come before the dial is answered: it must find the voice sent.
@@ -252,7 +252,25 @@ describe('each voice turn reports one end', () => {
   it('each voice turn reports one end: sent by the window', async () => {
     const { voiceEnded, speak, answered } = await talk({ routeInWindow: async () => ({ t: 'sent', agentId: 'a2' }) })
     speak(); await answered()
-    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'sent', agentId: 'a2' }]])
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'sent', agentId: 'a2', since: expect.any(Number) }]])
+  })
+
+  // The words may start the agent's turn before the send returns (`codex queue`): the end says when the send began.
+  it.each(['direct', 'window'] as const)('each voice turn reports one end: sent, since the %s send began', async (way) => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    onTestFinished(() => { vi.useRealTimers() })
+    let sendBegan = 0
+    // A send that takes a second.
+    const slow = () => { sendBegan = Date.now(); vi.setSystemTime(sendBegan + 1_000) }
+    const { voiceEnded, speak, answered } = await talk(way === 'direct'
+      ? { sendTurn: vi.fn(async () => { slow() }) }
+      : { routeInWindow: async () => { slow(); return { t: 'sent' as const, agentId: 'a2' } } })
+    const spoken = Date.now()
+    speak(way === 'direct' ? { agentId: 'a2' } : {}); await answered()
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'sent', agentId: 'a2', since: expect.any(Number) }]])
+    const { since } = voiceEnded.mock.calls[0][0] as { since: number }
+    expect(since).toBeGreaterThanOrEqual(spoken)
+    expect(since).toBeLessThanOrEqual(sendBegan)
   })
 
   // The window delivers what it picks: an abort while it picks does not take the words back.
@@ -265,7 +283,7 @@ describe('each voice turn reports one end', () => {
     port.say({ t: 'voice.abort', uploadId: 'u1' })
     picked({ t: 'sent', agentId: 'a2' })
     await vi.waitFor(() => expect(voiceEnded).toHaveBeenCalled())
-    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'sent', agentId: 'a2' }]])
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'sent', agentId: 'a2', since: expect.any(Number) }]])
   })
 
   it('each voice turn reports one end: cancelled in the window', async () => {
@@ -307,7 +325,7 @@ describe('each voice turn reports one end', () => {
     port.say({ t: 'voice.begin', uploadId: 'old', agentId: 'a1' })
     port.say({ t: 'voice.begin', uploadId: 'new', agentId: 'a2' })
     port.pcm(Buffer.alloc(3200, 7)); port.say({ t: 'voice.end' }); await answered()
-    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'cancelled', agentId: 'a1' }], [{ outcome: 'sent', agentId: 'a2' }]])
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'cancelled', agentId: 'a1' }], [{ outcome: 'sent', agentId: 'a2', since: expect.any(Number) }]])
   })
 
   it('each voice turn reports one end: cancelled, the port closed while recording', async () => {
@@ -326,7 +344,7 @@ describe('each voice turn reports one end', () => {
     expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'cancelled', agentId: 'a1' }]])
   })
 
-  it('each voice turn reports one end: no_speech, a recording past the length cap', async () => {
+  it('each voice turn reports one end: too_long, a recording past the length cap', async () => {
     const { port, voiceEnded, answered } = await talk()
     port.say({ t: 'voice.begin', uploadId: 'u1', agentId: 'a1' })
     const frame = Buffer.alloc(8_000, 7)
@@ -335,7 +353,7 @@ describe('each voice turn reports one end', () => {
     for (let at = 0; at < bytes; at += frame.length) port.pcm(frame.subarray(0, Math.min(frame.length, bytes - at)))
     port.say({ t: 'voice.end' })
     await answered()
-    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'no_speech', agentId: 'a1' }]])
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'too_long', agentId: 'a1' }]])
   }, 60_000)
 
   it('each voice turn reports one end: cancelled, a recording refused at its begin then aborted or replaced', async () => {
@@ -349,7 +367,7 @@ describe('each voice turn reports one end', () => {
     const replaced = await talk({ capsOf })
     replaced.port.say({ t: 'voice.begin', uploadId: 'old', agentId: 'a1' })
     replaced.speak({ agentId: 'a2' }); await replaced.answered()
-    expect(replaced.voiceEnded.mock.calls).toEqual([[{ outcome: 'cancelled', agentId: 'a1' }], [{ outcome: 'sent', agentId: 'a2' }]])
+    expect(replaced.voiceEnded.mock.calls).toEqual([[{ outcome: 'cancelled', agentId: 'a1' }], [{ outcome: 'sent', agentId: 'a2', since: expect.any(Number) }]])
   })
 
   it('each voice turn reports one end: other, a form field\'s recording aborted', async () => {
@@ -383,16 +401,34 @@ describe('each voice turn reports one end', () => {
     expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'unlisted', agentId: 'a1' }]])
   })
 
-  it('each voice turn reports one end: no_speech, nothing recorded', async () => {
+  it('each voice turn reports one end: no_audio, nothing recorded', async () => {
     const { port, voiceEnded, answered } = await talk()
     port.say({ t: 'voice.begin', uploadId: 'u1', agentId: 'a1' }); port.say({ t: 'voice.end' }); await answered()
-    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'no_speech', agentId: 'a1' }]])
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'no_audio', agentId: 'a1' }]])
   })
 
-  it('each voice turn reports one end: no_speech, an empty transcript', async () => {
-    const { voiceEnded, speak, answered } = await talk({ transcribe: async () => '' })
-    speak({ agentId: 'a1' }); await answered()
-    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'no_speech', agentId: 'a1' }]])
+  // The dial's own voice gate heard nothing in either: a press with nothing said.
+  it('each voice turn reports one end: no_speech, an empty transcript of silence or a short clip', async () => {
+    const silent = await talk({ transcribe: async () => '' })
+    silent.port.say({ t: 'voice.begin', uploadId: 'u1', agentId: 'a1' })
+    silent.port.pcm(Buffer.alloc(8_000))
+    silent.port.say({ t: 'voice.end' }); await silent.answered()
+    expect(silent.voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'no_speech', agentId: 'a1' }]])
+
+    // 100 ms, loud: a tap, under the gate's 320 ms.
+    const short = await talk({ transcribe: async () => '' })
+    short.speak({ agentId: 'a1' }); await short.answered()
+    expect(short.voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'no_speech', agentId: 'a1' }]])
+  })
+
+  // Speech the transcriber wrote nothing for: seen on a dial as loud clipped speech Deepgram returned empty.
+  it('each voice turn reports one end: no_words, an empty transcript of 400 ms of loud audio', async () => {
+    const { port, voiceEnded, answered } = await talk({ transcribe: async () => '' })
+    port.say({ t: 'voice.begin', uploadId: 'u1', agentId: 'a1' })
+    // Two frames: a cable frame holds at most 8 KB.
+    port.pcm(Buffer.alloc(6_400, 7)); port.pcm(Buffer.alloc(6_400, 7))
+    port.say({ t: 'voice.end' }); await answered()
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'no_words', agentId: 'a1' }]])
   })
 
   it('each voice turn reports one end: transcribe_failed', async () => {

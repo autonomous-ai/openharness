@@ -551,6 +551,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const heldLaunches = createHeldLaunches({
     registry,
     restore: (only, current) => restoreOnly?.(only, current) ?? Promise.resolve({ restored: [], skipped: [], failed: [], held: [], unsurveyed: [] }),
+    // announceSession is defined below; no pass runs before it is.
+    announce: (session) => announceSession(session),
     log: (line) => console.log(line),
   })
   wakeGateway({ outOfProcess: servicesTheMasterRuns(harnessd, KNOWN_SERVICES), signedIn: !!session, dataDir: env.ADAPTER_DATA_DIR, want: (service) => coreLink.want(service) })
@@ -2612,8 +2614,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     cwd: homedir(),
     label: (engine) => buildHarnessSessionLabel(engine),
   })
+  // The receipts of creates asked with a creationId: the launches write them, a restore reads a held first launch's
+  // task from them, a purge scrubs a deleted harness's request.
+  const receipts = new AgentCreationReceipts(join(env.ADAPTER_DATA_DIR, 'agent-creations'))
   const restoreLaunch = createRestoreLaunch({
-    workspaceMissing, relaunchOverrides, prepareSessionResume, refreshGridWebSearch,
+    workspaceMissing, relaunchOverrides, prepareSessionResume, refreshGridWebSearch, receipts,
     downgradedPermission: (entry, native) => downgradedPermission(entry, entry.bypassPermission === true, 'restore', native),
     launch: (entry, opts, overrides, permission) => {
       const { env: launchEnv, extraArgs, ownerArgs, clearEnv } = overrides
@@ -2703,6 +2708,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       needs: (entry) => [...(externalResumePending(entry.externalResume) ? ['search'] : []), ...(entry.gridLaunch ? ['models'] : []), ...(entry.dsh ? ['store'] : []), ...(!isTerminalEngine(entry.engine) ? ['native'] : [])],
       waitingLaunch: (entry, held) => ({ argv: heldPaneArgv(held.detail, entry.externalResume?.token ?? held.nativeToken) }),
       killPane: restoreOn.killPane,
+      startAgain: (agentId) => heldLaunches.startAgain(agentId),
     }
     // Later passes launch the held agents, into the panes they wait in, outside this pass's transaction.
     restoreOnly = (only, current) => restoreAgents({ ...restoreDeps, only, cancelled: id => !current() || restoreCancelled(id) })
@@ -2845,6 +2851,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     retainExitedSession,
     terminals,
     holdRoute: (key) => agentReconciler.holdRoute(key, null),
+    startAgain: (agentId) => heldLaunches.startAgain(agentId),
   })
 
   // Opening a conversation Harness did not start, and taking it over from a terminal (core/agents/adopt.ts).
@@ -2950,8 +2957,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     moveConversation: providerMoves.move,
   })
 
-  // The receipts of creates asked with a creationId: the launches write them, a purge scrubs a deleted harness's request.
-  const receipts = new AgentCreationReceipts(join(env.ADAPTER_DATA_DIR, 'agent-creations'))
   // Stopping, purging and resuming an agent (core/agents/lifecycle.ts).
   const lifecycle = createAgentLifecycle({
     settlePane: restorePanes.settle,
@@ -3050,6 +3055,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     liveBypassPermission,
     paneSwapDeps,
     restartHeld: (agentId) => heldLaunches.restartHeld(agentId),
+    startAgain: (agentId) => heldLaunches.startAgain(agentId),
     moveHeld: (agentId) => moveHeld.has(agentId),
   })
   // Agents on a drained pty host move, one at a time and only while nobody uses them, to the target host once it can seed

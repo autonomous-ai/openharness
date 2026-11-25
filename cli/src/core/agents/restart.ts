@@ -11,7 +11,7 @@ import { buildEngineLaunchArgv, commandAvailableInInteractiveShell } from '../..
 import { launchedGrid, type GridAssignment } from '../../lib/gridAssignmentWire.js'
 import { windowsPaneLaunch } from '../../lib/windows/engineStart.js'
 import { sid } from '../../lib/log.js'
-import { matchesLaunchReceipt, OBSERVATION_BATCH_INCOMPLETE, SAVED_BINDING_CHANGED, type LaunchPublicationInput, type ProcessIdentity, type registry,
+import { heldFirstLaunch, matchesLaunchReceipt, OBSERVATION_BATCH_INCOMPLETE, SAVED_BINDING_CHANGED, type LaunchPublicationInput, type ProcessIdentity, type registry,
   type RegisteredSession } from '../../lib/registry.js'
 import { publishEngine, resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
@@ -26,6 +26,7 @@ import type { createLaunchHelpers } from './launch.js'
 import type { RestartAgent } from './launches.js'
 import type { PaneSwap } from './swap.js'
 import { moveHeldLine } from '../../lib/hostMove/moveAgent.js'
+import { guardHold } from '../../lib/restoreAgents.js'
 import type { LaunchOverridesDeps } from '../../lib/launchOverrides.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
@@ -149,13 +150,15 @@ export interface RestartDeps {
   restartHeld: (agentId: string) => Promise<HeldRestart> | null
   /** An agent a move a dead daemon left may still run beside (main.ts `moveHeld`): no engine of it starts this start. */
   moveHeld?: (agentId: string) => boolean
+  /** The held passes, asked to try that agent again (core/agents/heldLaunches.ts `startAgain`). */
+  startAgain?: (agentId: string) => void
 }
 
 export function createAgentRestarter({
   native: inspectNative,
   restartJobs, registry, purgeBusy, stopJobs, pinnedControls, terminals, sameRestartTarget, agentReconciler,
   terminalHintMachineName, announceSession, refreshGridAssignment, relaunchOverrides, downgradedPermission,
-  liveBypassPermission, paneSwapDeps, restartHeld, moveHeld,
+  liveBypassPermission, paneSwapDeps, restartHeld, moveHeld, startAgain,
 }: RestartDeps) {
   /**
    * Web or device restarted an agent (`agent_restart`): exit the live engine process and relaunch it in
@@ -193,7 +196,12 @@ export function createAgentRestarter({
     let session = registry.resolve(agentId)
     if (!session) return { ok: false, error: 'AGENT_NOT_FOUND' }
     if (session.guest) return GUEST_HARNESS_REFUSAL
-    if (!session.sessionId && (session.launch?.state === 'held' || session.launch?.state === 'starting') && session.launch.nativeToken) {
+    // A fresh launch would drop a native first launch's first prompt or fork. One the guard held starts again from
+    // its receipt, so its restart is that recovery, now (`restartHeld`); one without that proof keeps today's refusal.
+    if (!session.sessionId && session.launch?.state === 'starting' && session.launch.nativeToken) {
+      return { ok: false, error: 'NATIVE_LAUNCH_HELD', detail: 'This harness is still starting.' }
+    }
+    if (!session.sessionId && session.launch?.state === 'held' && session.launch.nativeToken && !heldFirstLaunch(session)) {
       return { ok: false, error: 'NATIVE_LAUNCH_HELD', detail: 'The original launch is held for recovery. Its first prompt or fork cannot be replaced by a fresh launch.' }
     }
     const held = restartHeld(session.agentId)
@@ -277,10 +285,23 @@ export function createAgentRestarter({
       const outcome = await restartAgent(
         { engine, sessionId: session.sessionId, ...(session.resumeOnly ? { resumeOnly: true as const } : {}) },
         restartPermission.bypassPermission === true,
-        { ...paneSwapDeps(session, place, built.overrides, restartPermission.permissionMode ?? null, dispatchCurrent), isCurrent: dispatchCurrent },
+        { ...paneSwapDeps(session, place, built.overrides, restartPermission.permissionMode ?? null, dispatchCurrent), isCurrent: dispatchCurrent, isOwned: current },
       )
 
       if (!current()) return changed
+      // The guard held the relaunch: the pane is the held shell under its launch's token, kept so (no publication, no
+      // release of the pane). A conversation starts again from it as any launch the guard held, and its restart is
+      // answered now. Not a running row with no conversation: its first launch was confirmed, so it names no receipt
+      // (registry.ts `creationId`) and, marked, would be failed. Nor one with new launch words: the row keeps them only
+      // once the engine is back, and the recovery builds from the row, so it would come back with the old ones.
+      const heldToken = built.overrides.native?.token
+      if (!outcome.ok && outcome.held && session.sessionId && heldToken && launchArgs === undefined) {
+        const row = registry.setLaunch(session.agentId, guardHold(session, heldToken))!
+        announceSession(row)
+        startAgain?.(session.agentId)
+        console.log(`[restart] ${sid(session.agentId)} ${engine} · held by the native guard · starting again`)
+        return { ok: true, session: row, resumed: true }
+      }
       // A refused relaunch (Windows: a batch-file engine cmd.exe would misread) stopped nothing: its own code.
       if (!outcome.ok) return { ok: false, error: outcome.error ?? 'RESTART_FAILED', detail: outcome.detail }
 

@@ -517,7 +517,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const row = entries.find((e) => e.agent.id === agentId)?.agent
     return { engine: who.engine, host: row?.host ?? 'harness', page: row ? pageOf(row) : 'harness', held: observed?.heldOnly(agentId) ?? false }
   }
-  const dialUsage = createDialUsage({ sink: usageFile, now: wallClock, after: timerIn('dialUsage'), describe: usageAgent, log })
+  /** Whether a voice's words wait for the agent's turn to end: its row at work or waiting on the person (a Harness agent's
+   *  from its cards), or another machine's turn running. Called only at a voice's end, which a dial's frame brings once
+   *  this start has returned: `remoteTurns`, `registry` and `busyState` are made below. */
+  const usageWorking = (agentId: string): boolean => remoteTurns.has(agentId)
+    || registry.entries().some(({ agent }) => agent.id === agentId && busyState(agent.state))
+  const dialUsage = createDialUsage({ sink: usageFile, now: wallClock, after: timerIn('dialUsage'), describe: usageAgent,
+    working: usageWorking, log })
   /** A count is the devices' own part: one that throws never reaches the dial. */
   const count = (run: (usage: DialUsage) => void): void => part.call('dialUsage', () => run(dialUsage))
   /** A Harness agent's question, as the dial's wait on the person: by its request, as an agent can hold two. */

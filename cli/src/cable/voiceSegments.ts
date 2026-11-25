@@ -37,7 +37,7 @@ export class VoiceSegments {
   private readonly lang: string
   private readonly transcribe: SegmentTranscriber
   private readonly timer: SegmentTimer
-  private readonly runningLevel = new VoiceLevel()
+  private readonly runningLevel: VoiceLevel
   private readonly frameLevels: FrameLevels
   /** The largest gain a segment went up with: 1 when every one went as it came. */
   private gain = 1
@@ -59,6 +59,7 @@ export class VoiceSegments {
     this.segmentSamples = 60 * rate
     this.windowStart = 55 * rate
     this.frameSamples = Math.floor(rate / 50)
+    this.runningLevel = new VoiceLevel(rate)
     this.frameLevels = new FrameLevels(this.frameSamples)
     this.lang = options.lang
     this.transcribe = options.transcribe
@@ -97,9 +98,10 @@ export class VoiceSegments {
     if (!this.stopped) this.stop(new DOMException('Voice recording cancelled', 'AbortError'))
   }
 
-  /** Complete once finish() has been called: the whole recording's peak and RMS, its voice and floor over 20 ms frames
-   *  (voiceGain.ts), and the largest gain a segment went up with, in dB. */
-  level(): { peak: number; rms: number; voice: number; floor: number; gain: number } {
+  /** Complete once finish() has been called: the whole recording's peak and RMS and whether the dial's gate heard
+   *  speech in it, as the dial sent it; its voice and floor over 20 ms frames (voiceGain.ts); and the largest gain a
+   *  segment went up with, in dB. */
+  level(): { peak: number; rms: number; heard: boolean; voice: number; floor: number; gain: number } {
     return { ...this.runningLevel.read(), ...voiceOf(this.frameLevels), gain: decibels(this.gain) }
   }
 

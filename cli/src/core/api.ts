@@ -94,12 +94,13 @@ export const TERMINALS_OFF: TerminalsPort = {
   watch: { frame: async () => {}, close: async () => {}, onOutput: () => () => {} },
 }
 
-/** Agent metadata a service may read; the saved credential belongs to launch/restore authority. */
-export type AgentView = Omit<RegisteredSession, 'gridLaunch'> & { /** Ephemeral authority for this run, only for a frame publisher. */ readonly frameEpoch?: string }
+/** Agent metadata a service may read; the saved credential belongs to launch/restore authority, and the creation
+ *  receipt's id to the core's recovery of a held first launch. */
+export type AgentView = Omit<RegisteredSession, 'gridLaunch' | 'creationId'> & { /** Ephemeral authority for this run, only for a frame publisher. */ readonly frameEpoch?: string }
 
 /** Always copy: a row without a key now may acquire one after an inline service retains its view. */
 export function agentView(session: RegisteredSession): AgentView {
-  const { gridLaunch: _gridLaunch, ...view } = session
+  const { gridLaunch: _gridLaunch, creationId: _creationId, ...view } = session
   return view
 }
 

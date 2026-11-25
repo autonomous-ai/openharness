@@ -3,7 +3,8 @@
 // a name: the sink's file is read and sent by the gateway.
 
 import {
-  DIAL_FIRST_AGENT_BUCKETS, DIAL_USAGE_AGENTS_MAX, DIAL_USAGE_ENGINES, DIAL_USAGE_HOSTS, DIAL_WAIT_BUCKETS,
+  DIAL_FIRST_AGENT_BUCKETS, DIAL_USAGE_AGENTS_MAX, DIAL_USAGE_ENGINES, DIAL_USAGE_HOSTS, DIAL_VOICE_OUTCOMES,
+  DIAL_WAIT_BUCKETS,
   type DialFileMetric, type DialOpenEnd, type DialOtherApp, type DialRecognition, type DialUsageEngine,
   type DialUsageHost, type DialUsageSink, type DialVoiceEnd, type DialVoiceFailure,
 } from '../lib/dialUsageContract.js'
@@ -19,6 +20,8 @@ export interface DialUsageDeps {
   now(): number // wall-clock ms
   after(ms: number, run: () => void): () => void
   describe(agentId: string): DialAgent | undefined
+  /** Whether the agent is at work or waits on the person now: words sent to it then wait for its turn's end. */
+  working(agentId: string): boolean
   /** Fixed lines only, never an id. */
   log(line: string): void
 }
@@ -41,7 +44,7 @@ export interface DialUsage {
 }
 
 type FirstAgentBucket = typeof DIAL_FIRST_AGENT_BUCKETS[number]
-type VoiceOutcome = 'delivered' | 'failed' | 'held' | 'cancelled'
+type VoiceOutcome = typeof DIAL_VOICE_OUTCOMES[number]
 
 const DAY_MS = 86_400_000
 // The spec's measures: delivered is a turn within 10 s, the wrong-agent proxies are 30 s and 10 s.
@@ -54,6 +57,7 @@ const FIRST_AGENT_EDGES = [60_000, 180_000, 600_000, FIRST_AGENT_NONE_MS]
 const WAIT_EDGES = [30_000, 120_000, 600_000]
 const VOICES_WAITING_MAX = 16
 const DELIVERED_TURNS_MAX = 16
+const UNWAITED_TURNS_MAX = 16
 const WAITS_MAX = 64
 // Far above the agents one person runs in a day; past it a day's later agents go uncounted, never twice.
 const HOOKED_MAX = 256
@@ -144,22 +148,35 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
     return true
   }
 
-  interface Voice { agentId: string; host?: DialUsageHost; stop: () => void }
+  interface Voice { agentId: string; host?: DialUsageHost; working: boolean; stop: () => void }
   const voices: Voice[] = [] // sent and waiting for their turn, oldest first
   let lastSent: { agentId: string; host?: DialUsageHost; at: number } | undefined
   const delivered = new Map<string, { host?: DialUsageHost; at: number }>() // agent → its delivered turn's start
+  // agent → when its last turn started with no voice waiting, oldest first. A send can return only after its words
+  // started the turn: `codex queue` exits after an idle Codex started the queued turn, the window answers after it
+  // delivered, a typing adapter finishes late. That turn belongs to the voice whose send began at or before it.
+  const unwaited = new Map<string, number>()
   const outcome = (o: VoiceOutcome, host: DialUsageHost | undefined) => {
     add(`dial_voice_${o}`)
     if (host) add(`dial_voice_host_${host}_${o}`)
+  }
+  const deliver = (agentId: string, host: DialUsageHost | undefined, at: number) => {
+    outcome('delivered', host)
+    delivered.set(agentId, { host, at })
+    if (delivered.size > DELIVERED_TURNS_MAX) delivered.delete(delivered.keys().next().value as string)
   }
   const failed = (code: DialVoiceFailure, host: DialUsageHost | undefined) => {
     outcome('failed', host)
     add(`dial_voice_failed_${code}`)
   }
+  // A working agent starts no turn for the words within 10 s, though they reached it: Claude Code holds them until its
+  // turn ends, Codex 0.106+ steers them into the running turn (2026-11-25: such a voice was counted no_turn, then ran
+  // 15 s later as its own turn).
   const noTurn = (voice: Voice) => {
     voices.splice(voices.indexOf(voice), 1)
     voice.stop()
-    failed('no_turn', voice.host)
+    if (voice.working) outcome('queued', voice.host)
+    else failed('no_turn', voice.host)
   }
 
   interface Wait { agentId: string; at: number; onDial: boolean }
@@ -237,8 +254,16 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
           if (lastSent.host) add(`dial_voice_host_${lastSent.host}_redirected_30s`)
         }
         lastSent = { agentId: end.agentId, host, at }
+        const started = unwaited.get(end.agentId)
+        // Within 10 s of the end too: the window's send begins before a person picks the agent, up to a minute before
+        // it delivers, and a turn begun meanwhile is another input's.
+        if (started !== undefined && started >= end.since && at - started < DELIVERED_MS) {
+          unwaited.delete(end.agentId)
+          return deliver(end.agentId, host, started)
+        }
         if (voices.length >= VOICES_WAITING_MAX) noTurn(voices[0])
-        const voice: Voice = { agentId: end.agentId, host, stop: () => {} }
+        // Read at the send: by the 10 s end the turn the words waited behind may be over.
+        const voice: Voice = { agentId: end.agentId, host, working: deps.working(end.agentId), stop: () => {} }
         voice.stop = after(DELIVERED_MS, () => noTurn(voice))
         voices.push(voice)
       }
@@ -258,14 +283,18 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
     turnStarted(agentId) {
       // A newer turn ends the agent's last: a stop now stops this one, which a voice delivers or not.
       delivered.delete(agentId)
+      unwaited.delete(agentId)
       const voice = voices.find(v => v.agentId === agentId)
-      if (!voice) return
+      if (!voice) {
+        // Set after the delete above, so the map stays oldest first.
+        unwaited.set(agentId, now())
+        if (unwaited.size > UNWAITED_TURNS_MAX) unwaited.delete(unwaited.keys().next().value as string)
+        return
+      }
       voices.splice(voices.indexOf(voice), 1)
       voice.stop()
-      outcome('delivered', voice.host)
       // Set after the delete above, so the map stays oldest first.
-      delivered.set(agentId, { host: voice.host, at: now() })
-      if (delivered.size > DELIVERED_TURNS_MAX) delivered.delete(delivered.keys().next().value as string)
+      deliver(agentId, voice.host, now())
     },
 
     turnAborted(agentId) {
@@ -332,6 +361,7 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
       attaches = 0
       lastSent = undefined
       delivered.clear()
+      unwaited.clear()
       waits.clear()
       shownToday.clear()
       agentCounts.clear()

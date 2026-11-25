@@ -64,7 +64,7 @@ export interface LaunchRequestDeps {
   receipts: Pick<AgentCreationReceipts, 'run' | 'status' | 'createdLaunchModel' | 'creator' | 'has' | 'runIntent' | 'pendingIntents' | 'pendingIntent' | 'cancelIntent'>
   /** Each launch, read when a request comes in: null on a machine that cannot launch agents. */
   createAgent: () => CreateAgent | null
-  prepareCreate?: (input: Parameters<CreateAgent>[0], authority: LaunchAuthority, context?: { local: boolean }) => Promise<LaunchPreparation<Awaited<ReturnType<CreateAgent>>>>
+  prepareCreate?: (input: Parameters<CreateAgent>[0], authority: LaunchAuthority, context?: { local: boolean; creationId?: string }) => Promise<LaunchPreparation<Awaited<ReturnType<CreateAgent>>>>
   /** The engine itself made ready, installed first when it is missing (engines/prepareNativeLaunch.ts): what a new
    *  project waits for before its folder is made. */
   prepareEngine?: (engine: CreateInput['engine'], source: NativeLaunchSource, authority: Pick<CreationAuthority, 'id' | 'current'>) => Promise<NativeLaunchResult>
@@ -221,6 +221,8 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       if (!ENGINES.includes(input.engine) || typeof input.cwd !== 'string' || input.resumeSessionId
         || (projectFolder !== null && typeof projectFolder.source !== 'string')) return null
       const { local, label } = saved
+      // The intent's id goes on the row, where a launch the guard held reads its first task back from this receipt.
+      const creationId = authority.id
       if (saved.selection) {
         authority.hold(modelHold)
         const target = await modelTarget(saved.selection as NewAgentModel)
@@ -250,12 +252,12 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
         const folder = waitForFolder(authority, projectFolder)
         if (folder !== 'go') return folder
         const invoke: CreateAgent = async (prepared) => {
-          const ready = await prepareCreate(prepared, { ...authority, label }, { local })
+          const ready = await prepareCreate(prepared, { ...authority, label }, { local, creationId })
           return ready.ok ? ready.dispatch() : { ok: false, error: ready.error, ...(ready.detail ? { detail: ready.detail } : {}) }
         }
         return () => executeCreate(input, projectFolder, local, invoke)
       }
-      const ready = await prepareCreate(input, { ...authority, label }, { local })
+      const ready = await prepareCreate(input, { ...authority, label }, { local, creationId })
       if (!authority.current()) return null
       if (!ready.ok) {
         if (ready.unavailable) { held(ready); return null }
@@ -692,15 +694,16 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     if (creationId !== undefined) {
       if (!validCreationId(creationId)) { reply({ error: 'INVALID_CREATION_ID' }); return }
       // Forking starts a new process too. Reserve the same durable intent used
-      // by agent_create so a lost receipt can be checked without another fork.
+      // by agent_create so a lost receipt can be checked without another fork. The receipt keeps the first task, and
+      // the fork's row names the receipt, so a launch the guard held can read its task back.
       const fork = onForkAgent
       try {
         void receipts.run(creationId, creationFingerprint({ operation: 'fork', agentId: target, name, prompt }), async () => {
-          const result = await fork({ agentId: target, name, prompt })
+          const result = await fork({ agentId: target, name, prompt, creationId })
           if (result.ok) return { state: 'created', agentId: result.session.agentId, level: result.level }
           if (result.error === 'SPAWN_FAILED' || result.error === 'REGISTRATION_FAILED') return { state: 'unconfirmed' }
           return { state: 'failed', error: result.error, ...(result.detail ? { detail: result.detail.slice(0, 2000) } : {}) }
-        }).then(async (status) => {
+        }, undefined, prompt ?? undefined).then(async (status) => {
           reply({ creationId, ...await creationStatusPayload(status) })
         }).catch(() => reply({ error: 'INTERNAL' }))
       } catch (error) {

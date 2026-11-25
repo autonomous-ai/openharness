@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { addressOf, agentOrigin, AGENTS_START_AGENTS_OFF, closeCommand, deleteCommand, DEPTH_REFUSAL, EXIT, GOAL_USAGE, goalCommand, parseDuration, psCommand, refusalNext, replyCommand, resumeCommand, routeCommand, showCommand, spawnCheck, spawnCount, spawnRefusal, SPAWN_LIMITS, step, tellCommand, waitCommand, watchCommand, whoamiCommand, type ClientDeps } from './commands.js'
+import { addressOf, agentOrigin, AGENTS_START_AGENTS_OFF, closeCommand, deleteCommand, DEPTH_REFUSAL, EXIT, GOAL_USAGE, goalCommand, parseDuration, psCommand, refusalNext, replyCommand, resumeCommand, routeCommand, showCommand, spawnCheck, spawnCount, spawnRefusal, SPAWN_LIMITS, STARTING_MS, step, tellCommand, waitCommand, watchCommand, whoamiCommand, type ClientDeps } from './commands.js'
 import { RefusedError, type Rpc } from '../messages/rpc.js'
 import { AgentClientError, type Daemon, type PushedEvent, type Where } from './daemon.js'
 import { Ledger, ledgerPath } from './ledger.js'
@@ -674,6 +674,36 @@ describe('harness wait', () => {
     const g = harness(s)
     expect(await waitCommand(['x'], g.deps)).toBe(EXIT.stopped)
     expect(g.out[0]).toBe('x: gone · it is gone')
+  })
+
+  // A first launch the guard held shows as starting while it starts again by itself, then up or failed by a bound
+  // (docs/plans/2026-11-25-held-launch-recovery-plan.md, decision 3): `wait` needs nothing new for it. With no session
+  // the daemon has no activity for it (core/turns/activity.ts `activityFrame`).
+  const startingAgain = () => frame('b1', { sessionId: '', status: 'active', activity: null, launch: { state: 'starting' }, createdAt: new Date(NOW - STARTING_MS - 60_000).toISOString() })
+  const unreadable = (d: FakeDaemon) => { d.extra.agent_close = (payload) => payload.mode === 'inspect' ? { activity: 'unknown' } : { closed: true } }
+
+  it('waits through a first launch starting again: never idle, failed or held, and times out still waiting', async () => {
+    const d = new FakeDaemon()
+    d.frames = [startingAgain()]
+    unreadable(d)
+    const h = harness(d)
+    expect(await waitCommand(['b1', '--timeout', '3s'], h.deps)).toBe(EXIT.timeout)
+    expect(h.out).toEqual(['b1: timeout · still working; wait again or read it: harness show b1'])
+    const json = harness(d)
+    expect(await waitCommand(['b1', '--timeout', '3s', '--json'], json.deps)).toBe(EXIT.timeout)
+    expect(JSON.parse(json.out.join('\n')).harnesses[0]).toMatchObject({ state: 'timeout' })
+  })
+
+  it('ends on the failed state a bound gives it, with its words', async () => {
+    const d = new FakeDaemon()
+    d.frames = [startingAgain()]
+    unreadable(d)
+    const detail = 'This harness did not start. Close it and open a new one.'
+    let looks = 0
+    d.extra.agents_list = () => ({ agents: [looks++ < 3 ? d.frames[0] : { ...d.frames[0], launch: { state: 'failed', error: 'ENGINE_DID_NOT_START', detail } }] })
+    const h = harness(d)
+    expect(await waitCommand(['b1'], h.deps)).toBe(EXIT.failed)
+    expect(h.out).toEqual([`b1: failed · ${detail}`])
   })
 
   it('tells where to look for a harness that is gone, and gives each one\'s next in JSON', async () => {

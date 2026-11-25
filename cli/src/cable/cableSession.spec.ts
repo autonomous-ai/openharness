@@ -2358,7 +2358,7 @@ describe('cable session', () => {
     expect(hachi[0].pcm.equals(speech)).toBe(true)
   })
 
-  it('logs one line per voice turn: agent, command, language, rate, level, voice, floor, gain and transcript length, never the words', async () => {
+  it('logs one line per voice turn: agent, command, language, rate, level, the gate, voice, floor, gain and transcript length, never the words', async () => {
     const lines: string[] = []
     let answer = 'fix the login screen'
     const host = makeHost({ log: (line) => lines.push(line), transcribe: async () => answer })
@@ -2366,13 +2366,15 @@ describe('cable session', () => {
     try {
       port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
       await settle()
-      const loud = Buffer.alloc(3200)
+      // 400 ms: past the dial's voice gate, so heard.
+      const loud = Buffer.alloc(12_800)
       for (let i = 0; i < loud.length / 2; i++) loud.writeInt16LE(i % 2 ? -1000 : 1000, i * 2)
       port.say({ t: 'voice.begin', agentId: 'a2', cmd: 'goal', lang: 'vi', sr: 16000, uploadId: 'loud' })
-      port.pcm(loud)
+      // Two frames: a cable frame holds at most 8 KB.
+      port.pcm(loud.subarray(0, 6_400)); port.pcm(loud.subarray(6_400))
       port.say({ t: 'voice.end', uploadId: 'loud' })
       await vi.waitFor(() => expect(host.sendTurn).toHaveBeenCalled())
-      expect(lines).toContain('cable: voice turn agent=a2 cmd=goal lang=vi sr=16000 peak=1000 rms=1000 voice=1059 floor=1059 gain=0 transcript=20')
+      expect(lines).toContain('cable: voice turn agent=a2 cmd=goal lang=vi sr=16000 peak=1000 rms=1000 heard=1 voice=1059 floor=1059 gain=0 transcript=20')
 
       // The failure Diego saw: silence in, nothing out. The line is what tells the two apart on his dial.
       answer = ''
@@ -2380,7 +2382,7 @@ describe('cable session', () => {
       port.pcm(Buffer.alloc(3200))
       port.say({ t: 'voice.end', uploadId: 'quiet' })
       await vi.waitFor(() => expect(port.sent).toContainEqual(expect.objectContaining({ t: 'voice.error', uploadId: 'quiet' })))
-      expect(lines).toContain('cable: voice turn agent=none cmd=none lang=en sr=16000 peak=0 rms=0 voice=0 floor=0 gain=0 transcript=0')
+      expect(lines).toContain('cable: voice turn agent=none cmd=none lang=en sr=16000 peak=0 rms=0 heard=0 voice=0 floor=0 gain=0 transcript=0')
       expect(lines.filter((l) => l.startsWith('cable: voice turn '))).toHaveLength(2)
       expect(lines.join('\n')).not.toContain('login')
     } finally { await session.stop() }

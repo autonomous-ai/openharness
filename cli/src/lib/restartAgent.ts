@@ -37,7 +37,8 @@ export async function bypassPermissionFor(
 
 export type RestartOutcome =
   | { ok: true; processIdentity: ProcessIdentity; resumed: boolean }
-  | { ok: false; detail: string; error?: 'ENGINE_LAUNCH_REFUSED' }
+  /** [held]: its pane is its own launch's held shell (`heldShell`). */
+  | { ok: false; detail: string; error?: 'ENGINE_LAUNCH_REFUSED'; held?: true }
 
 export type RestartAgentReply =
   | { ok: true; session: RegisteredSession; resumed: boolean }
@@ -93,6 +94,10 @@ export interface RelaunchArgvOptions { bypassPermission: boolean; resumeSessionI
 export interface RestartAgentDeps {
   /** False after Stop, replacement, or removal. Checked across every await. */
   isCurrent?: () => boolean
+  /** [isCurrent] without the launch's own evidence (`NativeLaunch.current`, its executable and hooks). Evidence that
+   *  goes stale after the respawn is what the guard holds the launch on, so its held shell ([heldShell]) is still this
+   *  swap's while this holds. Left out: [isCurrent]. */
+  isOwned?: () => boolean
   /** Re-arm `remain-on-exit` before anything is killed — see `tmuxBackend.ts`'s `holdOpen` (the pty host's
    *  `holdOpen` is the same keep). Without this, tmux tears the pane (and, being its only pane, the whole
    *  session) down the instant the old process exits. */
@@ -106,6 +111,8 @@ export interface RestartAgentDeps {
   respawnRefusal?: () => Promise<string | null>
   /** Poll the pane for a recognizable engine process, up to an internal budget. Null on timeout. */
   waitForProcess: () => Promise<ProcessIdentity | null>
+  /** Whether the pane is the native guard's held shell under this swap's own launch token. Left out: never asked. */
+  heldShell?: () => Promise<boolean | 'unknown'>
   /** Prepare persisted history only once the old writer is confirmed stopped. A failure must
    * preserve the conversation, not enter the fresh-session fallback. */
   prepareResume?: () => void | Promise<void>
@@ -147,6 +154,7 @@ export async function restartAgent(
 ): Promise<RestartOutcome> {
   const changed = { ok: false, detail: 'the harness changed or stopped during restart' } as const
   const current = () => deps.isCurrent?.() !== false
+  const owned = () => deps.isOwned ? deps.isOwned() : current()
   if (!current()) return changed
   // Before anything is stopped: refused after the kill, the agent was left with no engine at all.
   const refused = await deps.respawnRefusal?.()
@@ -188,16 +196,22 @@ export async function restartAgent(
     }
     if (!current()) return changed
   }
-  const spawnAndWait = async (withResume: boolean): Promise<ProcessIdentity | null> => {
+  const spawnAndWait = async (withResume: boolean): Promise<ProcessIdentity | 'held' | null> => {
     if (!current()) return null
     const argv = deps.buildArgv({ bypassPermission, ...(!withResume ? {} : preparedFork ? { resumeSessionId: preparedFork } : reopen(resumeSessionId)) })
     const spawned = await deps.respawn(argv)
-    if (!current()) return null
+    // Dispatched: from here the guard in the new shell judges the evidence, so only the owner is asked.
+    if (!owned()) return null
     if (!spawned.ok) {
       deps.log(`[restart] ${session.engine} respawn-pane failed: ${codeOrLength(spawned.reason ?? 'UNKNOWN')}`)
       return null
     }
-    return deps.waitForProcess()
+    const identity = await deps.waitForProcess()
+    if (identity || !deps.heldShell) return identity
+    // The guard held this launch: the fresh fallback respawned over its held shell on the same stale evidence and was
+    // held again (2026-11-25). 'held' is never respawned over, by the fallback below either; the caller starts it
+    // again from the hold.
+    return await deps.heldShell() === true ? 'held' : null
   }
 
   // Attempt a resume relaunch whenever we have a session id to resume, for every engine — an
@@ -206,7 +220,7 @@ export async function restartAgent(
   // when LAUNCH_RESUME_FLAG has no entry for the engine), so `resumed` still degrades correctly.
   let resumed = !!resumeSessionId
   let identity = await spawnAndWait(resumed)
-  if (!current()) return changed
+  if (identity !== 'held' && !current()) return changed
   if (!identity && resumed && !session.resumeOnly) {
     // Safe degradation: a working agent with a FRESH session under the same agentId/pane beats a dead
     // pane. Retry once with no resume attempt before giving up entirely.
@@ -214,10 +228,13 @@ export async function restartAgent(
     resumed = false
     identity = await spawnAndWait(false)
   }
+  const failed = `${session.engine} did not come back up after restart`
+  // Only the owner is asked of a held launch: the guard holds one whose evidence went stale after its respawn (the
+  // executable replaced as the shell started), and asked `isCurrent`, the restart answered "changed" and never marked
+  // the hold (e2e/heldLaunchRecovery.e2e.ts, 2026-11-25).
+  if (identity === 'held') return owned() ? { ok: false, held: true, detail: failed } : changed
   if (!current()) return changed
-  if (!identity) {
-    return { ok: false, detail: `${session.engine} did not come back up after restart` }
-  }
+  if (!identity) return { ok: false, detail: failed }
   // The agent works on in a new conversation; the one it was in, which the engine could not reopen, is
   // kept as a stopped harness to read and to resume once it can (round 24). A /clear keeps nothing.
   if (resumeSessionId && !resumed) deps.keepAbandoned?.()

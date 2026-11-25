@@ -57,6 +57,7 @@ import { PTY_HOST_INSTANCE } from './ptyHost/instance.js'
 import { isKittyGraphicsCommand } from './terminalTitle.js'
 import { errorKind, sid } from './log.js'
 import { HOOK_GATEWAY_ENGINES } from './gatewayRuntime.js'
+import { validCreationId } from './agentCreationReceipt.js'
 
 export type { ProcessIdentity } from './terminalTypes.js'
 
@@ -110,8 +111,21 @@ export type AgentLaunch =
    * Not launched yet because the service its launch asks could not be asked (core/agents/heldLaunches.ts): a
    * grid or saved-API agent while models is not running. Nothing about the agent is wrong. It waits in a pane
    * that says why, and is launched once the service is ready. Never a failure: a restore tries it again.
+   * `startsAgain`: the native guard held it, and the core saw its pane be the held shell under its token. It starts
+   * again by itself and clients see it starting (`guardHeld`, 2026-11-25).
    */
-  | { state: 'held'; service: string; detail: string; nativeToken?: string }
+  | { state: 'held'; service: string; detail: string; nativeToken?: string; startsAgain?: true }
+
+/** A launch the native guard held, to start again by itself: held, `startsAgain`, a `nativeToken`; any `sessionId`. */
+export function guardHeld(row: Pick<RegisteredSession, 'launch'> | undefined): boolean {
+  const launch = row?.launch
+  return launch?.state === 'held' && launch.startsAgain === true && !!launch.nativeToken
+}
+
+/** `guardHeld` and no `sessionId`: a first launch, recovered from its receipt. */
+export function heldFirstLaunch(row: Pick<RegisteredSession, 'launch' | 'sessionId'> | undefined): boolean {
+  return !!row && guardHeld(row) && !row.sessionId
+}
 
 /** Claude Code's hooks report `model` as {id, display_name}; Codex/Cursor report a plain string. This is
  *  the boundary where hook JSON becomes persisted state, so anything else is dropped rather than stored —
@@ -310,6 +324,13 @@ export interface RegisteredSession {
    * this or `firstTask`, never both.
    */
   firstTaskTyped?: { text: string; at: number }
+  /**
+   * The creation receipt that made this row (a create's intent, a fork's receipt): the one a held first launch is
+   * recovered from, its task read there and never put on the row (2026-11-25). Written once at registration, never on
+   * the agent's frame. Dropped once a launch of the row is confirmed (an engine ran, a hook bound a session, its engine
+   * left a shell): the task was delivered, and a later launch with no conversation must never read it again.
+   */
+  creationId?: string
   /**
    * The domain-specific harness this agent was created as (`autonomous/copper`), or null for a plain
    * engine. NOT a second engine: `engine` stays the base (`claude`, `codex`, …) and every normalizer,
@@ -731,7 +752,7 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   // `forkedFrom` is out too, so an invalid one is dropped rather than spread back in as-is.
   // `swarmSkill` is a Swarm role a build before the Swarm was deleted (2026-11-14) saved: dropped, and gone from the file at
   // its next write. Remove it from here on or after 2027-01-14.
-  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, launchModel: rawLaunchModel, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, launchArgs: rawLaunchArgs, browser: rawBrowser, quietTitle: rawQuietTitle, firstTask: _firstTask, firstTaskTyped: _firstTaskTyped, openclawLocal: rawOpenclawLocal, earlierSessionIds: rawEarlierSessionIds, hermesHomeDerived: _hermesHomeDerived, swarmSkill: _retiredSwarmSkill, ...rest } = row as Partial<RegisteredSession> & { swarmSkill?: unknown }
+  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, launchModel: rawLaunchModel, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, launchArgs: rawLaunchArgs, browser: rawBrowser, quietTitle: rawQuietTitle, firstTask: _firstTask, firstTaskTyped: _firstTaskTyped, creationId: rawCreationId, openclawLocal: rawOpenclawLocal, earlierSessionIds: rawEarlierSessionIds, hermesHomeDerived: _hermesHomeDerived, swarmSkill: _retiredSwarmSkill, ...rest } = row as Partial<RegisteredSession> & { swarmSkill?: unknown }
   const lastOpenedAt = normalizedOpenedAt(rawOpenedAt)
   // Out of the spread for the same reason: a half-formed record is dropped, never relaunched with.
   const scmLaunch = parseScmLaunchRecord(rawScmLaunch)
@@ -743,6 +764,7 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
     ...rest,
     ...(externalResume ? { externalResume } : {}),
     ...storedFirstTask(row),
+    ...(validCreationId(rawCreationId) ? { creationId: rawCreationId } : {}),
     ...(openclawLocal ? { openclawLocal } : {}),
     ...(earlierSessionIds ? { earlierSessionIds } : {}),
     ...storedHermesHomeDerived(row),
@@ -901,7 +923,8 @@ function normalizedLaunch(value: unknown): AgentLaunch | undefined {
   if (launch.state === 'held') {
     const held = value as { service?: unknown; detail?: unknown }
     if (typeof held.service !== 'string' || !/^[a-z][a-z-]{0,39}$/.test(held.service) || typeof held.detail !== 'string') return undefined
-    return { state: 'held', service: held.service, detail: held.detail.slice(0, 500), ...(nativeToken ? { nativeToken } : {}) }
+    return { state: 'held', service: held.service, detail: held.detail.slice(0, 500), ...(nativeToken ? { nativeToken } : {}),
+      ...((value as { startsAgain?: unknown }).startsAgain === true ? { startsAgain: true as const } : {}) }
   }
   if (launch.state !== 'failed' || typeof launch.error !== 'string' || !launch.error) return undefined
   const error = launch.error.slice(0, 80)
@@ -1502,6 +1525,7 @@ class Registry {
           ...storedHermesHomeDerived(raw),
           ...(typeof raw?.openclawStateDir === 'string' && raw.openclawStateDir ? { openclawStateDir: raw.openclawStateDir } : {}),
           ...storedFirstTask(raw),
+          ...(validCreationId(raw.creationId) ? { creationId: raw.creationId } : {}),
           ...(storedOpenclawLocal(raw.openclawLocal) ? { openclawLocal: storedOpenclawLocal(raw.openclawLocal) } : {}),
           ...(earlierSessionKeys(raw.earlierSessionIds) ? { earlierSessionIds: earlierSessionKeys(raw.earlierSessionIds) } : {}),
           ...normalizedForkedFrom((raw as { forkedFrom?: unknown }).forkedFrom),
@@ -1743,6 +1767,7 @@ class Registry {
         candidate.processIdentity = processIdentity
         candidate.active = true
         if (candidate.launch) candidate.launch = { state: 'ready' }
+        delete candidate.creationId
         if (input.gateway !== undefined) candidate.gateway = input.gateway
         if (input.grid !== undefined) candidate.grid = input.grid
         if (input.codexHome && !candidate.codexHome) candidate.codexHome = input.codexHome
@@ -1867,6 +1892,8 @@ class Registry {
     firstTask?: string
     /** OpenClaw's `--local` folder — see RegisteredSession.openclawLocal. */
     openclawLocal?: string
+    /** The creation receipt that made it — see RegisteredSession.creationId. */
+    creationId?: string
   }): Promise<RegisteredSession | null> {
     this.writer.assertOpen()
     input = structuredClone(input)
@@ -1914,6 +1941,7 @@ class Registry {
         ...(input.guest ? { guest: input.guest } : {}),
         ...(input.browser ? { browser: true as const } : {}),
         ...(input.firstTask ? { firstTask: input.firstTask } : {}),
+        ...(validCreationId(input.creationId) ? { creationId: input.creationId } : {}),
         // Its store is in that folder from the start: nothing waits for a TUI to be seen holding it.
         ...(input.openclawLocal ? { openclawLocal: input.openclawLocal, openclawStateDir: input.openclawLocal } : {}),
         transcriptPath: null,
@@ -2013,6 +2041,7 @@ class Registry {
           if (!candidate) {
             candidate = structuredClone({ ...this.byAgent(agentId)!, processIdentity: requested.processIdentity,
               active: true, launch: { state: 'ready' as const }, touchedAt: Date.now() })
+            delete candidate.creationId
             if (requested.grid !== undefined) candidate.grid = requested.grid
             if (requested.gateway !== undefined) candidate.gateway = requested.gateway
             if (requested.launchArgs !== undefined) {
@@ -2545,6 +2574,8 @@ class Registry {
         || this.agents.has(archived.agentId) || (archived.sessionId && this.bySession(archived.sessionId)) || !validProcessIdentity(identity)) return null
       const candidate: RegisteredSession = { ...archived, active: true, launch: { state: 'ready' }, processIdentity: identity,
         runtimes: structuredClone(terminal.runtimes), primaryRuntimeKey: terminal.primaryRuntimeKey, tmuxPane: terminal.tmuxPane, touchedAt: Date.now() }
+      // Its own engine ran on: the first launch was delivered, and a later one never reads its receipt again.
+      delete candidate.creationId
       const receipt = await this.persist(deadline, true, false, undefined, { agentId: archived.agentId, candidate,
         displaced: [{ agentId: terminalAgentId, candidate: null }], allowTransaction: true, resumed: true,
         verify: () => { verifyHolder(); verifySaved() }, refresh: authority.refresh })
@@ -2579,6 +2610,8 @@ class Registry {
       if (observation?.gateway !== undefined) candidate.gateway = observation.gateway
       if (observation?.grid !== undefined) candidate.grid = observation.grid
       delete candidate.previousAgentId
+      // An engine runs in the pane: whatever launch the row had is over, and a later one never reads its receipt.
+      delete candidate.creationId
       candidate.launch = { state: 'ready' }
       candidate.active = true
       if (validProcessIdentity(identity)) candidate.processIdentity = identity
@@ -2614,6 +2647,7 @@ class Registry {
       if (!separateShell) console.log(`[agent] ${sid(original.agentId)} first task dropped · its engine exited before it was typed`)
     }
     delete entry.firstTaskTyped
+    delete entry.creationId
     this.clearBinding(entry)
     delete entry.resumeOnly
     delete entry.externalResume
