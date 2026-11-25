@@ -862,7 +862,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     }), ...tabsTyping({
       line: () => tabs.line(),
       // Asked only in the observed source's own send, so the source is there: the source is built after its adapters.
-      shared: (tty, pid) => observed!.othersOnTty(tty, pid),
+      shared: (app, tty, pid) => observed!.othersOnTty(app, tty, pid),
       // Asked only for a pane with a proof, which only macOS's ttys give.
       process: deps.tabProcess ?? readTabProcess,
       readers: deps.ttyReaders ?? readTtyReaders,
