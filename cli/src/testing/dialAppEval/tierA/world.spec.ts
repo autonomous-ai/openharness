@@ -162,7 +162,7 @@ describe("tier A's world records every send, failing closed", () => {
     expect(world.gaps).toEqual(['a command tier A does not answer: ps'])
   })
 
-  // Decision 5 (docs/plans/2026-11-25-dial-voice-codex-terminals-design.md): ps's start, a tab's process and lsof's
+  // PM decision 1 (docs/plans/2026-11-25-dial-voice-codex-terminals-design.md): ps's start, a tab's process and lsof's
   // readers are not readable here, so no tab is typed into in the eval.
   it("an iTerm2 agent's tab has no proof and takes no words: the tabs probes are not readable", async () => {
     machine.reset()

@@ -77,6 +77,7 @@ import { appRoots, learnApps, readBundleId, readMadeBy, readProcessNames, readPt
 import { createScrollLines } from '../cable/hosts/scrollLines.js'
 import { pageOf } from '../cable/hosts/select.js'
 import { createTabsAdapter, isTabApp, readTabTty, type Tab, type TabApp, type TabTty } from '../cable/hosts/tabs.js'
+import { readTabProcess, readTtyReaders, tabsTyping, type TabProcess } from '../cable/hosts/tabsType.js'
 import { createTmuxAdapter, createTmuxNested, createTmuxOuter, tmuxPaneParts } from '../cable/hosts/tmux.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { watchSocket } from '../cable/hosts/unixSocket.js'
@@ -209,6 +210,12 @@ export interface DevicesDeps {
   /** For this service's tests: how an agent's tty and its process's start are read; `ps` by default
    *  (cable/hosts/tabs.ts). */
   tty?: (pid: number) => Promise<TabTty | undefined>
+  /** For this service's tests: how a tab's process is read before the dial's words go to it, its tty, groups and start;
+   *  `ps` by default (cable/hosts/tabsType.ts readTabProcess). */
+  tabProcess?: (pid: number) => Promise<TabProcess | undefined>
+  /** For this service's tests: the processes reading a tab's tty as their stdin; `lsof` by default
+   *  (cable/hosts/tabsType.ts readTtyReaders). */
+  ttyReaders?: (tty: string) => Promise<readonly number[] | undefined>
   /** For this service's tests: the process table VS Code's terminals are matched by; `ps` by default
    *  (cable/hosts/vscodeTerminals.ts). */
   processParents?: VscodeTerminalsDeps['processes']
@@ -604,8 +611,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const codexQueue = createCodexQueue({ ...(deps.codex ?? codexQueueDeps(chatGptPackage)), cwd: homedir() })
   // The stream a watch holds open on the devices' listener: a rest or a tap on an agent in Terminal, iTerm2 or Ghostty
   // asks it to select that agent's tab (docs/specs/2026-11-15-dial-terminal-follow.md). Only macOS's apps select a tab
-  // by its tty: elsewhere no agent's is read, and none has a tab.
-  const tabs = tabsStream()
+  // by its tty: elsewhere no agent's is read, and none has a tab. The dial's words go on it too, for Harness Device to
+  // write into an iTerm2 or Ghostty tab (docs/plans/2026-11-25-dial-voice-codex-terminals-design.md); its timers stop
+  // with the devices.
+  const tabs = tabsStream({ after: timerIn('tabs') })
   // The stream Orca's Harness Device plugin holds open: whether a dial is attached and the agent it shows
   // (docs/specs/2026-11-16-orca-device-plugin.md). A part of its own, so a throw on its path is never the dial's. Its
   // count's timer stops with the devices.
@@ -800,14 +809,23 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // iTerm2 and Ghostty.
     createWeztermTabAdapter({ ...apps, front: () => cableHost.latestFront() }),
     createKittyTabAdapter({ ...kittyDeps, front: () => cableHost.latestFront(), processes: readProcessNames, tty: readTtyName }),
-    createTabsAdapter({
+    { ...createTabsAdapter({
       isOpen: () => tabs.isOpen(),
       select: (tab, raise) => {
         if (!tabs.select(tab, raise)) return false
         selects.note(tab.tty)
         return true
       },
-    }),
+    }), ...tabsTyping({
+      line: () => tabs.line(),
+      // Asked only in the observed source's own send, so the source is there: the source is built after its adapters.
+      shared: (tty, pid) => observed!.othersOnTty(tty, pid),
+      // Asked only for a pane with a proof, which only macOS's ttys give.
+      process: deps.tabProcess ?? readTabProcess,
+      readers: deps.ttyReaders ?? readTtyReaders,
+      processes: readProcessNames,
+      after: timerIn('tabs'),
+    }) },
   ].map(noting)]
   const opener = createOpenActions({ run: apps.run, platform: apps.platform, adapters, log, bin: openBin, raise, windows,
     windowOf: (agentId) => observed?.windowOf(agentId),
@@ -2997,6 +3015,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     tab: tabHandler((tab) => part.call('dial', () => tabReported(tab))),
     thread: threadHandler((title) => part.call('dial', () => threadReported(title))),
     tabs: tabs.handler,
+    wrote: tabs.wrote,
     dial: dial.handler,
     orcaFront: orcaFrontHandler(() => dial.isOpen(), (terminals, workspace) => part.call('orca', () => orcaFronted(terminals, workspace))),
     notify: notifyHandler((mode) => {
