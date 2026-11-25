@@ -64,4 +64,14 @@ describe('the MCP servers a folder Harness made inherits from above', () => {
     write(join(home, '.mcp.json'), { mcpServers: ['argent'] })
     expect(recordInheritedMcp(contract, folder, userHome)).toEqual([])
   })
+
+  it('reads the user and folder settings saved with a BOM, as Windows PowerShell 5 writes them, and writes none back', () => {
+    write(join(home, '.mcp.json'), { mcpServers: { argent: {}, off: {} } })
+    write(join(userHome, 'settings.json'), `﻿${JSON.stringify({ disabledMcpjsonServers: ['off'] })}`)
+    write(join(folder, '.claude', 'settings.local.json'), `﻿${JSON.stringify({ model: 'haiku' })}`)
+    expect(recordInheritedMcp(contract, folder, userHome)).toEqual(['argent'])
+    const text = readFileSync(join(folder, '.claude', 'settings.local.json'), 'utf8')
+    expect(text.startsWith('﻿')).toBe(false)
+    expect(JSON.parse(text)).toEqual({ model: 'haiku', disabledMcpjsonServers: ['argent'] })
+  })
 })

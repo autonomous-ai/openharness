@@ -98,6 +98,15 @@ describe('engineAccount', () => {
     expect(asked.calls).toEqual([])
   })
 
+  it('takes an apiKeyHelper from a settings.json saved with a BOM, as Windows PowerShell 5 writes it', async () => {
+    const asked = cli({ claude: false })
+    const helper = home()
+    mkdirSync(join(helper, '.claude'))
+    writeFileSync(join(helper, '.claude', 'settings.json'), `﻿${JSON.stringify({ apiKeyHelper: '~/bin/key' })}`)
+    expect((await engineAccount('claude', { home: helper, env: {}, run: asked.run })).signedIn).toBe(true)
+    expect(asked.calls).toEqual([])
+  })
+
   it('counts a saved model API as a sign-in, so a machine with no subscription can start agents', async () => {
     // Headless run, 2026-11-03: a working OpenRouter key was saved for the team account, and the machine still read
     // "not signed in", so no start was admitted.
