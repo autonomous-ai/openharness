@@ -6,7 +6,7 @@ import {
   DIAL_FIRST_AGENT_BUCKETS, DIAL_USAGE_AGENTS_MAX, DIAL_USAGE_ENGINES, DIAL_USAGE_HOSTS, DIAL_VOICE_OUTCOMES,
   DIAL_WAIT_BUCKETS,
   type DialFileMetric, type DialOpenEnd, type DialOtherApp, type DialRecognition, type DialUsageEngine,
-  type DialUsageHost, type DialUsageSink, type DialVoiceEnd, type DialVoiceFailure,
+  type DialUsageHost, type DialUsageSink, type DialValueCount, type DialVoiceEnd, type DialVoiceFailure,
 } from '../lib/dialUsageContract.js'
 import { UNKNOWN_APP } from './hosts/hostDetect.js'
 
@@ -22,6 +22,9 @@ export interface DialUsageDeps {
   describe(agentId: string): DialAgent | undefined
   /** Whether the agent is at work or waits on the person now: words sent to it then wait for its turn's end. */
   working(agentId: string): boolean
+  /** Whether the agent's own app is known and another app is known to be in front: read at a ring and at a turn end the
+   *  dial announced. Anything unknown is not away. */
+  away(agentId: string): boolean
   /** Fixed lines only, never an id. */
   log(line: string): void
 }
@@ -33,7 +36,10 @@ export interface DialUsage {
   used(): void
   voiceEnded(end: DialVoiceEnd): void
   opened(agentId: string, end: DialOpenEnd): void
-  turnStarted(agentId: string): void
+  /** [byPerson]: its hook says the person, or the dial's words, started it; a turn whose source can't be told is not. */
+  turnStarted(agentId: string, byPerson?: boolean): void
+  /** A finished turn the dial rang or listed, or a failed one. */
+  turnAnnounced(agentId: string): void
   turnAborted(agentId: string): void
   hooked(agentId: string, agent: HookedAgent): void
   waitOpened(key: string, agentId: string): void
@@ -55,9 +61,13 @@ const FIRST_AGENT_NONE_MS = 3_600_000
 // The hour is an edge too, not only a timer: a sleep stops the timer but not the clock.
 const FIRST_AGENT_EDGES = [60_000, 180_000, 600_000, FIRST_AGENT_NONE_MS]
 const WAIT_EDGES = [30_000, 120_000, 600_000]
+// The value counts' windows: a ring answered within 2 or 10 min, a prompt within 10 min of an announced turn end.
+const VALUE_SHORT_MS = 120_000
+const VALUE_MS = 600_000
 const VOICES_WAITING_MAX = 16
 const DELIVERED_TURNS_MAX = 16
 const UNWAITED_TURNS_MAX = 16
+const ANNOUNCED_MAX = 16
 const WAITS_MAX = 64
 // Far above the agents one person runs in a day; past it a day's later agents go uncounted, never twice.
 const HOOKED_MAX = 256
@@ -154,8 +164,19 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
   const delivered = new Map<string, { host?: DialUsageHost; at: number }>() // agent → its delivered turn's start
   // agent → when its last turn started with no voice waiting, oldest first. A send can return only after its words
   // started the turn: `codex queue` exits after an idle Codex started the queued turn, the window answers after it
-  // delivered, a typing adapter finishes late. That turn belongs to the voice whose send began at or before it.
-  const unwaited = new Map<string, number>()
+  // delivered, a typing adapter finishes late. That turn belongs to the voice whose send began at or before it, and so
+  // does the announced turn end before it, whose prompt the voice then was.
+  const unwaited = new Map<string, { at: number; announced?: number }>()
+  // agent → when the dial announced its turn end with its app not in front, oldest first; its next turn start spends it.
+  const announced = new Map<string, number>()
+  const valued = (count: DialValueCount) => {
+    add('dial_value_installation_days')
+    add(`dial_value_${count}_installation_days`)
+    add(`dial_value_${count}`)
+  }
+  const prompted = (announcedAt: number | undefined, at: number) => {
+    if (announcedAt !== undefined && at - announcedAt < VALUE_MS) valued('done_away_prompted_10m')
+  }
   const outcome = (o: VoiceOutcome, host: DialUsageHost | undefined) => {
     add(`dial_voice_${o}`)
     if (host) add(`dial_voice_host_${host}_${o}`)
@@ -179,7 +200,8 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
     else failed('no_turn', voice.host)
   }
 
-  interface Wait { agentId: string; at: number; onDial: boolean }
+  // away: read at the ring, as the person saw it then.
+  interface Wait { agentId: string; at: number; onDial: boolean; away: boolean }
   const waits = new Map<string, Wait>() // oldest first
   let waitDropped = false
 
@@ -257,9 +279,10 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
         const started = unwaited.get(end.agentId)
         // Within 10 s of the end too: the window's send begins before a person picks the agent, up to a minute before
         // it delivers, and a turn begun meanwhile is another input's.
-        if (started !== undefined && started >= end.since && at - started < DELIVERED_MS) {
+        if (started !== undefined && started.at >= end.since && at - started.at < DELIVERED_MS) {
           unwaited.delete(end.agentId)
-          return deliver(end.agentId, host, started)
+          prompted(started.announced, started.at)
+          return deliver(end.agentId, host, started.at)
         }
         if (voices.length >= VOICES_WAITING_MAX) noTurn(voices[0])
         // Read at the send: by the 10 s end the turn the words waited behind may be over.
@@ -280,21 +303,35 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
       add(`dial_open_host_${host}_${end.outcome}`)
     },
 
-    turnStarted(agentId) {
-      // A newer turn ends the agent's last: a stop now stops this one, which a voice delivers or not.
+    turnStarted(agentId, byPerson = false) {
+      // A newer turn ends the agent's last: a stop now stops this one, which a voice delivers or not. Any start spends
+      // the announced turn end, the person's prompt or not.
       delivered.delete(agentId)
       unwaited.delete(agentId)
+      const announcedAt = announced.get(agentId)
+      announced.delete(agentId)
       const voice = voices.find(v => v.agentId === agentId)
       if (!voice) {
-        // Set after the delete above, so the map stays oldest first.
-        unwaited.set(agentId, now())
+        if (byPerson) prompted(announcedAt, now())
+        // Set after the delete above, so the map stays oldest first. Counted already, the announcement is not kept.
+        unwaited.set(agentId, { at: now(), announced: byPerson ? undefined : announcedAt })
         if (unwaited.size > UNWAITED_TURNS_MAX) unwaited.delete(unwaited.keys().next().value as string)
         return
       }
       voices.splice(voices.indexOf(voice), 1)
       voice.stop()
+      prompted(announcedAt, now())
       // Set after the delete above, so the map stays oldest first.
       deliver(agentId, voice.host, now())
+    },
+
+    turnAnnounced(agentId) {
+      // Read now: by the next prompt the person may have brought its app up.
+      if (attaches === 0 || !deps.away(agentId)) return
+      // Set after the delete, so the map stays oldest first.
+      announced.delete(agentId)
+      announced.set(agentId, now())
+      if (announced.size > ANNOUNCED_MAX) announced.delete(announced.keys().next().value as string)
     },
 
     turnAborted(agentId) {
@@ -331,7 +368,7 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
         if (!waitDropped) deps.log(`[device] usage · wait dropped · over ${WAITS_MAX} open`)
         waitDropped = true
       }
-      waits.set(key, { agentId, at: now(), onDial: false })
+      waits.set(key, { agentId, at: now(), onDial: false, away: deps.away(agentId) })
     },
 
     answeredOnDial(key) {
@@ -348,8 +385,16 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
       if (!wait) return
       waits.delete(key)
       if (end === 'gone') return add('dial_wait_none')
-      const b = bucket(now() - wait.at, WAIT_EDGES, DIAL_WAIT_BUCKETS)
+      const elapsed = now() - wait.at
+      const b = bucket(elapsed, WAIT_EDGES, DIAL_WAIT_BUCKETS)
       add(wait.onDial ? `dial_wait_dial_${b}` : `dial_wait_elsewhere_${b}`)
+      if (elapsed >= VALUE_MS) return
+      const answered = (ring: 'ring' | 'ring_away') => {
+        if (elapsed < VALUE_SHORT_MS) valued(`${ring}_answered_2m`)
+        valued(`${ring}_answered_10m`)
+      }
+      answered('ring')
+      if (wait.away) answered('ring_away')
     },
 
     stop() {
@@ -362,6 +407,7 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
       lastSent = undefined
       delivered.clear()
       unwaited.clear()
+      announced.clear()
       waits.clear()
       shownToday.clear()
       agentCounts.clear()

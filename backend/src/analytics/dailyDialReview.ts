@@ -1,6 +1,7 @@
 import type { PrismaClient } from '@prisma/client'
 import { DIAL_FIRST_AGENT_BUCKETS, DIAL_OPEN_FAILURES, DIAL_OTHER_APPS, DIAL_RECOGNITION, DIAL_USAGE_ENGINES, DIAL_USAGE_HOSTS,
-  DIAL_USAGE_MARGIN_METRICS, DIAL_USAGE_METRICS, DIAL_VOICE_FAILURES, DIAL_VOICE_OUTCOMES, DIAL_WAIT_BUCKETS } from '../types/dialUsage.js'
+  DIAL_USAGE_MARGIN_METRICS, DIAL_USAGE_METRICS, DIAL_VALUE_COUNTS, DIAL_VOICE_FAILURES, DIAL_VOICE_OUTCOMES,
+  DIAL_WAIT_BUCKETS, type DialValueCount } from '../types/dialUsage.js'
 import { VOICE_USAGE_METRICS } from '../lib/voiceUsage.js'
 
 /** The `dial` section of usage:daily (docs/plans/2026-11-23-dial-usage-counts-design.md, "Daily review"). */
@@ -24,6 +25,13 @@ const COLUMNS = Object.keys(SPAN) as Column[]
 // At G1 30-50 computers, many of them the team's: a smaller cell is a person (design, "Small numbers also identify").
 const FEWEST = 5
 const RETURN_DAYS = [1, 7, 28] as const
+const VALUE_LABELS = {
+  ring_answered_2m: 'Rang, answered anywhere within 2 min',
+  ring_answered_10m: 'Rang, answered anywhere within 10 min',
+  ring_away_answered_2m: 'Rang with its app not in front, answered within 2 min',
+  ring_away_answered_10m: 'Rang with its app not in front, answered within 10 min',
+  done_away_prompted_10m: "Turn end announced with its app not in front, the person's next prompt within 10 min",
+} as const satisfies Record<DialValueCount, string>
 // A return is counted on its return day N+L and rated against the used day N, L days earlier: an N+28 return in the
 // 28-day column needs used days 29-56 days back, so they read 28 days more than the rest (Design 3).
 const COHORT_NAMES = new Set<string>(['dial_used_installation_days', 'dial_used_outside_app_installation_days'])
@@ -104,12 +112,16 @@ export function dailyDialReview(rows: Row[], breakdowns: Row[], now: Date) {
         ...line('Connected outside the app (computer-days)', computerDays('dial_connected_outside_app_installation_days')),
         ...line('Used (day: computers; 7 and 28 days: distinct computers)',
           period(used, 'dial_used_week_installations', 'dial_used_28d_installations')),
+        ...line('Got value from the dial (day: computers; 7 and 28 days: distinct computers)',
+          period('dial_value_installation_days', 'dial_value_week_installations', 'dial_value_28d_installations')),
         ...line('Used outside the app (day: computers; 7 and 28 days: distinct computers)',
           period(usedOutside, 'dial_used_outside_app_week_installations', 'dial_used_outside_app_28d_installations')),
         // Once ever per computer, so its sums are distinct computers already.
         ...line('First use ever (distinct computers)', distinct(sum('dial_first_use_installations'))),
         ...line('First use ever outside the app (distinct computers)', distinct(sum('dial_first_use_outside_app_installations'))),
       ] },
+      { name: 'Value from the dial (counts, not proof: glancing at the dial is not measured)', rows: DIAL_VALUE_COUNTS.flatMap(v =>
+        line(VALUE_LABELS[v], computerDays(`dial_value_${v}_installation_days`), sum(`dial_value_${v}`))) },
       { name: 'First agent on the dial, from a dial connected with an agent running', rows: [
         ...DIAL_FIRST_AGENT_BUCKETS.flatMap(b => line(`First connection ever: ${b}`, distinct(sum(`dial_first_agent_first_${b}_installations`)))),
         ...DIAL_FIRST_AGENT_BUCKETS.flatMap(b => line(`Day's first connection: ${b}`, computerDays(`dial_first_agent_day_${b}_installations`))),
