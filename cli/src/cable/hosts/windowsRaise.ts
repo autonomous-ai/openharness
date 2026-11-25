@@ -4,6 +4,9 @@
  * Where Windows differs, and why:
  * - The app is named by its bundle id, as on macOS, not by a window class, as on Linux: a Windows window is found by the
  *   program that owns it, which `harness-pty raise --exe` matches by image name (pty/src/raise.rs).
+ * - A terminal of no listed app (Windows Terminal, Alacritty) holding an agent's herdr client is raised by its process,
+ *   `harness-pty raise --pid`: herdr's lookup found that process (herdrOuter.ts), and no bundle names it
+ *   (docs/plans/2026-11-25-dial-herdr-windows-app-design.md).
  * - A `refused` raise is a tap done: Windows gives the foreground only to a process with foreground rights, and a tap
  *   arrives over serial, which Windows does not count as input. Its documented answer is the taskbar flash.
  * - Harness Desktop is started through its own launcher, never raised: a running Desktop takes a second launch over and
@@ -39,6 +42,8 @@ export const WINDOWS_APPS: Readonly<Record<string, string>> = {
 /** The schemes `harness-pty open-link` takes (pty/src/cli.rs), checked here too so no other link reaches it. */
 const LINK = /^(claude|codex|vscode|cursor):\/\//
 const OUTCOMES: ReadonlySet<string> = new Set<RaiseOutcome>(['raised', 'refused', 'none'])
+/** The largest Windows process id: a DWORD, as the helper parses it (pty/src/cli.rs `RaiseTarget::Pid(u32)`). */
+const MAX_PID = 0xffff_ffff
 
 /**
  * Harness Desktop's launcher, `%LOCALAPPDATA%\Programs\Harness\Harness.exe`, where its installer puts it
@@ -67,6 +72,8 @@ export interface WindowsRaiseDeps {
 export interface WindowsRaise {
   /** Brings the app of [bundle] forward; false only when no window of it came or flashed. */
   app(bundle: string): Promise<boolean>
+  /** Brings forward the window of process [pid]; false only when no window of it came or flashed. */
+  window(pid: number): Promise<boolean>
   /** Opens [url] in its scheme's app, then brings [bundle]'s app forward: the link reaches the app, not the front. */
   link(url: string, bundle?: string): Promise<boolean>
   /** Opens [folder] in Cursor, which raises its window on it or opens one, then brings Cursor forward. */
@@ -85,19 +92,20 @@ export function createWindowsRaise(deps: WindowsRaiseDeps): WindowsRaise {
     const { code, stdout } = await run(binary, args)
     return code === 0 ? stdout.trim() : undefined
   }
-  const raise = async (bundle: string): Promise<RaiseOutcome> => {
-    if (!Object.hasOwn(WINDOWS_APPS, bundle)) return 'none'
-    const word = await helper(['raise', '--exe', WINDOWS_APPS[bundle]])
-    return word !== undefined && OUTCOMES.has(word) ? word as RaiseOutcome : 'none'
-  }
-  const app = async (bundle: string): Promise<boolean> => {
-    const outcome = await raise(bundle)
+  // [target] is the helper's `--exe <name>` or `--pid <n>`; none raises nothing, and is counted as a raise that found no
+  // window.
+  const raise = async (target: string[] | undefined): Promise<boolean> => {
+    const word = target && await helper(['raise', ...target])
+    const outcome: RaiseOutcome = word !== undefined && OUTCOMES.has(word) ? word as RaiseOutcome : 'none'
     deps.count(outcome)
     return outcome !== 'none'
   }
+  const app = (bundle: string): Promise<boolean> =>
+    raise(Object.hasOwn(WINDOWS_APPS, bundle) ? ['--exe', WINDOWS_APPS[bundle]] : undefined)
 
   return {
     app,
+    window: (pid) => raise(Number.isSafeInteger(pid) && pid >= 1 && pid <= MAX_PID ? ['--pid', String(pid)] : undefined),
     async link(url, bundle) {
       if (!LINK.test(url) || (await helper(['open-link', url])) !== 'opened') return false
       // The link was taken, whatever the raise answers: a refused open answers false, and the opener's fallback decides

@@ -444,19 +444,24 @@ function fakeRaise() {
   return fake
 }
 /** Windows' raise as every spec but its own has it: it brings nothing forward. */
-const noWindowsRaise: WindowsRaise = { app: async () => false, link: async () => false, cursorFolder: async () => false, desktop: async () => false }
-/** Windows' raise a spec drives: what it answers, each bundle it was asked to bring forward and each Desktop start. */
+const noWindowsRaise: WindowsRaise = {
+  app: async () => false, link: async () => false, cursorFolder: async () => false, desktop: async () => false, window: async () => false,
+}
+/** Windows' raise a spec drives: what it answers, each bundle it was asked to bring forward, each Desktop start and each
+ *  process whose window it was asked to bring forward. */
 function fakeWindowsRaise() {
-  const fake: { answer: boolean; apps: string[]; links: Array<[string, string | undefined]>; desktops: number; raise: WindowsRaise } = {
+  const fake: { answer: boolean; apps: string[]; links: Array<[string, string | undefined]>; desktops: number; windows: number[]; raise: WindowsRaise } = {
     answer: true,
     apps: [],
     links: [],
     desktops: 0,
+    windows: [],
     raise: {
       app: async (bundle) => { fake.apps.push(bundle); return fake.answer },
       link: async (url, bundle) => { fake.links.push([url, bundle]); return fake.answer },
       cursorFolder: async () => fake.answer,
       desktop: async () => { fake.desktops++; return fake.answer },
+      window: async (pid) => { fake.windows.push(pid); return fake.answer },
     },
   }
   return fake

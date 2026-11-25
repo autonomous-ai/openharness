@@ -188,6 +188,7 @@ describe('the Codex app on Windows', () => {
       link: (url, bundle) => answer(['link', url, String(bundle)]),
       cursorFolder: (folder) => answer(['cursorFolder', folder]),
       desktop: () => answer(['desktop']),
+      window: (pid) => answer(['window', String(pid)]),
     }
     return { ...recorder({ platform: 'win32', windows }), asked }
   }

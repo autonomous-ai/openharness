@@ -257,6 +257,7 @@ describe('the Cursor folder adapter on Windows', () => {
       link: async () => { throw new Error('no link') },
       cursorFolder: async (folder) => { folders.push(folder); return answers.length ? answers.shift()! : true },
       desktop: async () => { throw new Error('no desktop') },
+      window: async () => { throw new Error('no window') },
     }
     return { ...rig({ platform: 'win32', windows }), opened: folders }
   }
