@@ -119,6 +119,15 @@ class MergeTests(unittest.TestCase):
         self.client.plans = {123: False}
         self.assertEqual(merger.queue.pr_run(self.client, self.head)["id"], 124)
 
+    def test_the_plan_of_a_pr_that_moves_thousands_of_files_is_read(self):
+        # A plan lists every changed path and its reasons; one that moves a few thousand files is over 64 KiB.
+        paths = [f"cli/src/moved/file-{index:05}.ts" for index in range(4000)]
+        self.client.plan_fields = dict(paths=paths, reasons={path: ["cli"] for path in paths})
+        self.client.plans = {123: False}
+        result = self.finish(merge=False, automatic=True)
+        self.assertGreater(len(self.client.archives[1123]), 65536)
+        self.assertEqual(result["status"], "ready", result.get("error"))
+
     def test_only_draft_runs_on_the_head_cannot_merge(self):
         self.client.newer_runs = [dict(self.client.run, id=124, conclusion="failure")]
         self.client.plans = {124: True, 123: True}
@@ -420,7 +429,7 @@ class FakeClient:
         self.required_gate, self.run_list_reads, self.superseding_run = False, 0, None
         self.rules, self.receipt_patch = [], {}
         # Runs newer than self.run on the same head, and each run's ci-plan draft flag (no entry: still planning).
-        self.newer_runs, self.plans, self.archives = [], {}, {}
+        self.newer_runs, self.plans, self.plan_fields, self.archives = [], {}, {}, {}
         self.commits = [dict(sha=fixture.head, author=None, commit=dict(message="reviewed", author=dict(name="Fixture", email="fixture@example.test")))]
         self.pr = dict(number=5, title="Fixture", user=dict(login="fixture"), state="open", draft=False, merged=False, mergeable=True, mergeable_state="clean",
                        html_url="https://github.com/owner/repo/pull/5", head=dict(sha=fixture.head),
@@ -470,7 +479,8 @@ class FakeClient:
         return copy.deepcopy(self.gate_jobs if self.required_gate else self.jobs)
 
     def plan_artifact(self, run_id):
-        plan = dict(schema=1, kind="ci-plan", event="pull_request", head=self.fixture.head, draft=self.plans[run_id])
+        plan = dict(schema=1, kind="ci-plan", event="pull_request", head=self.fixture.head, draft=self.plans[run_id],
+                    **self.plan_fields)
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w") as bundle:
             bundle.writestr("ci-plan.json", json.dumps(plan))
