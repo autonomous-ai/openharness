@@ -27,10 +27,10 @@ The `tabs` adapter (`tabs.ts`) only selects tabs. Three gaps follow:
 
 ## Safe paths, by terminal and OS
 
-| Engine | macOS Terminal.app | macOS iTerm2 | macOS Ghostty ≥ 1.3 | Linux Ghostty | Windows |
+| Engine | macOS Terminal.app | macOS iTerm2 | macOS Ghostty with `tty` | Linux Ghostty | Windows |
 |---|---|---|---|---|---|
 | Codex on a trusted home (part A) | ✅ queue | ✅ queue | ✅ queue | ✅ queue | — (these apps do not run there; the queue in any other terminal gains the same homes) |
-| Codex on another home; another engine whose turn end Harness hears; Claude Code without its mod (part B) | ⛔ | ✅ `write` | ✅ `input text` + `send key` | ⛔ | — |
+| Codex on another home; another engine whose turn end Harness hears; Claude Code without its mod (part B) | ⛔ | ⛔ (Broadcast Input) | ✅ `input text` + `send key` | ⛔ | — |
 
 Part B types only when the agent is known to be at its prompt (`idleKnown`, `observed.ts:524-527`). That means:
 - Claude Code and Codex, always;
@@ -44,9 +44,14 @@ Why each cell is what it is:
 - **Queue:** this is the engine's own channel. No terminal is typed into, and an approval is never answered.
 - **Terminal.app ⛔:** its only per-tab write is `do script … in tab`. It always appends a newline in the same write,
   so the words cannot be kept apart from their Enter. The dictionary also defines it as running a shell command.
-- **iTerm2 ✅:** `write` (`Itrmsntx`) to one session found by `tty`, with `newline` false. The Enter is a second
-  `write` of a carriage return.
-- **Ghostty ≥ 1.3 on macOS ✅:** `input text "<t>" to <terminal>` (paste-style), then `send key "enter" to <terminal>`.
+- **iTerm2 ⛔ (final review, PM 2026-11-25):** its AppleScript `write` (`Itrmsntx`) goes through PTYSession
+  `writeTask:` with `canBroadcast:YES`: with Broadcast Input on, the words and their Enter reach every pane of the
+  broadcast group, where a shell would run them. Its dictionary has no property that says broadcast is on, so Harness
+  Device cannot detect it. iTerm2 is never written to; its tabs are still followed and selected. (Before the review:
+  `write` to one session found by `tty`, with `newline` false. The Enter is a second
+  `write` of a carriage return.)
+- **Ghostty on macOS, a build whose terminal has `tty` ✅** (v1.3.0 and v1.3.1 lack `tty`; only builds after them
+  have it, as the tab follow already needs): `input text "<t>" to <terminal>` (paste-style), then `send key "enter" to <terminal>`.
   The terminal is found by `tty`, as the select does today.
 - **Ghostty on Linux ⛔:** no AppleScript, and no documented per-terminal write.
 - **Windows:** none of the three apps exists there.
@@ -288,6 +293,46 @@ is run or scripted.
    the fake tabs stream ignores lines that are not selects, and the world answers the new `ps` / `lsof` probes "not
    readable", so `tabs` never types in the eval. Base: origin/main.
 2. **Engines:** an engine whose hooks never report the end of a turn always reads busy and is never typed into.
+
+## Changes after the final review (PM, 2026-11-25)
+
+These override the sections above where they differ.
+
+1. **iTerm2 ⛔ for writes**, for the Broadcast Input reason in the table's notes. Part B types only into Ghostty, a build
+   whose terminal has `tty`. Every hop refuses iTerm2: the devices (`tabsLines` typing apps), the watch and Harness
+   Device (`typing_of`), and Harness Device has no iTerm2 write handlers.
+2. **Handshake.** Harness Device starts its watch as `harness hardware watch --json --writes`. Only such a watch opens
+   the tabs stream with `"writes":true`, and the devices type only on a stream that said it. An older Harness Device
+   (0.1.x), which drops write lines, therefore gets no voice offered on tab agents, instead of a 3 s "did not answer".
+3. **Words left behind.** When the recheck before the Enter fails, or an answer comes late, the words stay unsubmitted
+   in the agent's input box, and the next send that works submits them together with its own words. Accepted: nothing
+   is typed to clear them (no Ctrl-U, no backspaces), since that would type more into a pane that just failed a check.
+   Diego's check covers it.
+4. **Limits of check 5.** `lsof -d 0` without root does not see another user's processes (a `sudo` prompt, `sudo vim`),
+   nor programs that read `/dev/tty` on another descriptor (`less` behind a pipe, pinentry, an ssh password prompt).
+   The main guards stay the agent's idle state from its hooks and `pgid == tpgid`; check 5 is defense in depth.
+5. **Trusted homes, cost.** `own()` is held for about 1 s, and each home's `sessions` folder and depth are worked out
+   once per hold, deepest first. Real paths are looked up only for `own()` homes; linked homes are taken as stored (a
+   link stores the real path), so a dead network volume cannot block the devices process.
+6. **Orca's Codex homes** are not filtered: a home the person linked or adopted is trusted, whoever else uses it. The
+   target is still right; such a session takes the queue instead of Orca's typing.
+7. **Other review fixes:** only an answered Apple Event counts as consent; a stopped or replaced watch's typings never
+   run; failed and refused typings log a fixed line naming only the app and write/enter; `ps` is read last before the
+   words; a tty still being read, or whose read failed, counts as possibly shared (refused); linked entries must be
+   absolute, at most 4096 characters, with no control characters; the stdin-holder table is read with `/bin/ps` under
+   `psEnv`; a lone surrogate is refused at every hop.
+
+### Check held for Diego, as it stands now
+
+1. Ghostty (a build with `tty`): Codex, idle, in a plain tab. Speak at the dial: the words appear and **Enter submits
+   them** as one turn. Note whether `input text` brings Ghostty forward.
+2. The same with Claude Code without the mod in Ghostty.
+3. iTerm2: Codex on a trusted home still gets voice (queue); cursor-agent in an iTerm2 tab gets "did not answer" and
+   nothing is typed.
+4. Negatives in Ghostty: Codex in tmux (not typed by `tabs`); Codex with `!sleep 30` running; Claude Code with its
+   Ctrl-G editor open; the agent quit, leaving a shell (nothing typed).
+5. Words left behind: make the Enter recheck fail (start a turn right after speaking) and confirm the next spoken words
+   submit together with the leftover ones, as accepted above.
 
 ## Not done
 

@@ -844,3 +844,12 @@ All three as recommended, already written into the tasks:
    `no-answer`; an ended stream `no-stream`. No reason in the `wrote` protocol.
 3. Check 5: the agent's own pid must be among the processes whose stdin is the tty; an empty list, a failed or
    timed-out `lsof`, or an unreadable table fails `foreground-child`.
+
+## After the final review (PM, 2026-11-25)
+
+The spec's "Changes after the final review" section overrides this plan where they differ: iTerm2 is never written to
+(Broadcast Input cannot be detected), so the typing tasks' iTerm2 cases are Ghostty's; Harness Device starts its watch
+with `--writes` and the devices type only on a stream that said `"writes":true`; words left behind are accepted; check
+5's limits are written down; `own()` is held about 1 s with each home's `sessions` folder worked out once per hold, and
+real paths are read only for `own()` homes; refused and failed typings in Harness Device log one fixed line. The check
+held for Diego is the spec's updated list.
