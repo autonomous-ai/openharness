@@ -1239,7 +1239,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const agentId = cableHost.shownAgentId()
     if (agentId === undefined) return 'no agent'
     const targets = adapters.flatMap((adapter): ScrollTarget[] => {
-      const id = adapter.scroll && observed?.paneOf(agentId, adapter.id)
+      // Rex's also the block its layout placed the agent at by its process (an agent the scan found, with no hook since):
+      // that block runs it, which a page key checks again (rex.ts pageKeys). A held block's id is refused by canScroll.
+      const id = adapter.scroll && (observed?.paneOf(agentId, adapter.id) ?? (adapter.id === rex.id ? observed?.shownAt(agentId, rex.id) : undefined))
       return id ? [{ adapter, pane: { adapter: adapter.id, id } }] : []
     })
     const address = hcSource?.paneOf(agentId)
@@ -1273,8 +1275,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity } })
   /** Lines to the stroke's pane. A page stroke reads its agent again first: once it waits on the person a key could
    *  land in the prompt, so the rest of the stroke is lines alone. */
+  /** The live agent at a stroke's pane: its own, or, in Rex, the agent its layout placed at that block by its process
+   *  (scrollTarget), which no hook has named yet. */
+  const strokeAgent = ({ adapter, pane }: ScrollTarget): HostAgent | undefined => observed?.byPane(adapter.id, pane.id)
+    ?? (adapter.id === rex.id ? observed?.list().find(({ id }) => observed.shownAt(id, rex.id) === pane.id) : undefined)
   const toPane = (route: ToPane, phase: 'down' | 'move' | 'up', dy: number): void => {
-    if (route.page && observed?.byPane(route.adapter.id, route.pane.id)?.state === 'needs-you') route.page = false
+    if (route.page && strokeAgent(route)?.state === 'needs-you') route.page = false
     route.adapter.scroll!(route.pane, route.lines.take(phase, dy), route.page)
   }
   /** What a stroke on that target waits on at its down: Herdr's whether its pane is on screen (its lines, or off screen:
@@ -1283,7 +1289,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  lines, never the windows: the person looks at that terminal, and its line scroll is what moved it before. */
   const routeOf = ({ adapter, pane }: ScrollTarget): Promise<'page' | 'lines' | 'offScreen'> | undefined => {
     if (adapter.onScreen) return adapter.onScreen(pane).then((visible) => (visible ? 'lines' : 'offScreen'))
-    const agent = observed?.byPane(adapter.id, pane.id)
+    const agent = strokeAgent({ adapter, pane })
     if (agent?.engine !== 'claude') return undefined
     const keys = adapter.pageKeys?.(pane, {
       asking: agent.state === 'needs-you', cwd: observed?.startedIn(agent.id), transcriptPath: observed?.transcriptOf(agent.id),

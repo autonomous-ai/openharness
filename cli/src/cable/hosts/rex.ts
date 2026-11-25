@@ -434,15 +434,10 @@ export function createRexAdapter(deps: RexDeps): HostAdapter & Required<Pick<Hos
     },
     // A stroke scrolls the agent's own block (or the one its process runs in), with Rex in front: a held block shows
     // whatever runs in front of the agent there.
+    // No `onScreen`, as VS Code's terminals: the devices ask a pane either whether it is on screen or whether it takes
+    // page keys (devices.ts routeOf), and Claude Code drawn fullscreen in Rex needs the second. The dial rests the block
+    // on screen as it turns to it (show).
     canScroll: (pane) => OWN_PANE.test(pane.id) && deps.front() === 'rex',
-    /** The block focused in the window its session shows (`session.view`): the one on screen. */
-    async onScreen(pane) {
-      const found = OWN_PANE.exec(pane.id)
-      if (!found) return false
-      const answer = await rex(['api', 'call', '-s', found[1], 'session.view']).catch(() => undefined)
-      const seen = answer?.code === 0 ? viewOf(answer.stdout) : undefined
-      return !!seen && seen.windows.find((w) => w.id === seen.active)?.focused === found[2]
-    },
     /** Claude Code drawn fullscreen, at no question, in the foreground of its block: its own keys scroll it. */
     pageKeys(pane, agent) {
       const found = OWN_PANE.exec(pane.id)

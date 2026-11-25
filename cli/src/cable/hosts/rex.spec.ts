@@ -263,14 +263,9 @@ describe('a stroke on a Rex agent', () => {
     expect(adapter.canScroll!(OWN)).toBe(false)
   })
 
-  it('on screen when its block is the focused one of the window its session shows', async () => {
-    const shown = stroke()
-    expect(await shown.adapter.onScreen!(OWN)).toBe(true)
-    expect(shown.calls[0].args).toEqual(['api', 'call', '-s', SESSION, 'session.view'])
-    expect(await shown.adapter.onScreen!({ adapter: 'rex', id: 'x' })).toBe(false)
-    // Another block focused there, or a view that failed: not on screen.
-    expect(await stroke({}, { view: sessionView.stdout }).adapter.onScreen!(OWN)).toBe(false)
-    expect(await stroke({}, { fail: 'session.view' }).adapter.onScreen!(OWN)).toBe(false)
+  // The devices ask a pane either onScreen or pageKeys (devices.ts routeOf): Claude Code fullscreen needs the second.
+  it('asks no onScreen, so the devices ask its page keys', () => {
+    expect(stroke().adapter.onScreen).toBeUndefined()
   })
 
   it("page keys for Claude Code drawn fullscreen, at no question, in its block's foreground", async () => {

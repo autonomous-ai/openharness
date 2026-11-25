@@ -17237,6 +17237,18 @@ describe('Rex\'s ring goes as Rex\'s sidebar, and the dial follows the block foc
     session, window: W(w), block: B(n), pid: 4241 + n, ...(title === undefined ? {} : { title }) })
   /** `rex` where the Rex app puts it: what the adapter's runs name. */
   const REX = '/fake/Rex Server.app/Contents/MacOS/rex'
+  /** The devices' runs, recorded: block n's foreground is its caller (4241 + n), and this user's Rex app is connected. */
+  const rexRun = async (file: string, args: string[], timeoutMs: number) => {
+    orcaRuns.push([file, args, timeoutMs])
+    if (file === REX && args[0] === 'block' && args[1] === 'call' && args[6] === 'process') {
+      return { code: 0, stdout: JSON.stringify({ foreground: { pid: 4241 + Number(args[5].slice(-12)) } }) }
+    }
+    if (file === REX && args[0] === 'client') {
+      return { code: 0, stdout: JSON.stringify({ clients: [{ client_id: 'client:00000000-0000-4000-8000-0000000000aa',
+        info: { kind: 'app', platform: 'macos' }, principal: { uid: process.getuid?.() } }] }) }
+    }
+    return { code: 0, stdout: '' }
+  }
   const found = async () => ({ state: 'adopted' as const, path: REX, from: 'standard install location' as const })
   const host = () => seen.dial as unknown as DaemonCableHost
   const asked = () => calls('followLocal')
@@ -17271,7 +17283,7 @@ describe('Rex\'s ring goes as Rex\'s sidebar, and the dial follows the block foc
     readers.processes.mockResolvedValue(REX_CALLERS)
     const listener = fakeListener()
     const started = start({ faults: ['fleet'], listen: listener.listen, now: () => clock, rexReads: reads, rex: found,
-      orca: { ...orca, platform: over.linux ? 'linux' : 'darwin' } })
+      orca: { ...orca, platform: over.linux ? 'linux' : 'darwin', run: rexRun } })
     for (const event of hooks) started.port.observed(event)
     // The reads of their terminals' maker land.
     await settled()
@@ -17454,6 +17466,51 @@ describe('Rex\'s ring goes as Rex\'s sidebar, and the dial follows the block foc
       const { settle } = await dialWith([hook(1)])
       await settle('ghostty')
       expect(polls()).toEqual([])
+    })
+
+    // Claude Code drawn fullscreen keeps no scrollback for Rex to scroll (Rex's docs): its own page keys move it.
+    describe('a stroke', () => {
+      /** A stroke on the glass of travel [dy], on the agent the dial shows. */
+      const strokeOn = async (agentId: string, dy: number) => {
+        host().dialShows({}, { name: 'api', app: 'rex' }, agentId)
+        host().scrolled('down', 0, 0)
+        host().scrolled('move', dy, 0)
+        host().scrolled('up', 0, 0)
+        for (let i = 0; i < 6; i++) await settled()
+      }
+      const pageKeys = (block: string) => rexRuns().filter((args) => args[0] === 'send-key' && args[4] === block).map((args) => args[5])
+
+      it("on a Claude Code agent's own block, fullscreen and in front there, sends its page keys", async () => {
+        const { settle } = await dialWith([hook(1)])
+        await settle('rex')
+        await strokeOn(agent(1), -80)
+        expect(pageKeys(B(1))).toEqual([expect.stringMatching(/^page(up|down)$/)])
+        expect(logs.filter((line) => line.startsWith('[device] scroll · skipped'))).toEqual([])
+      })
+
+      it('on an agent the layout placed by its process, as on its own block', async () => {
+        readers.known.set('rx-9', 'terminal')
+        readers.owners.set('rx-9', { engine: 'claude', pid: 4245 })
+        readers.rows.set('rx-9', { cwd: '/work/web', transcriptPath: null })
+        readers.working.set('rx-9', false)
+        readers.apps.mockResolvedValueOnce(new Map([[4245, 'rex']]))
+        const { land, settle } = await dialWith([hook(1)])
+        const scannedId = observedAgentId('claude', 'rx-9')
+        await vi.waitFor(() => expect(layouts.length).toBeGreaterThanOrEqual(1))
+        await land([pane(4, 'Found'), pane(1, 'Alpha', 2)])
+        await land([pane(4, 'Found'), pane(1, 'Alpha', 2)])
+        await settle('rex')
+        await strokeOn(scannedId, -80)
+        expect(pageKeys(B(4))).toEqual([expect.stringMatching(/^page(up|down)$/)])
+      })
+
+      it('with Rex not in front, a stroke on it scrolls nothing there', async () => {
+        const { settle } = await dialWith([hook(1)])
+        await settle('ghostty')
+        await strokeOn(agent(1), -80)
+        expect(pageKeys(B(1))).toEqual([])
+        expect(logs).toContain('[device] scroll · skipped · cannot scroll')
+      })
     })
 
     it('a rest on a Rex agent with Rex in front brings its block, and its own focus read after is the echo', async () => {
