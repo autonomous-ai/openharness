@@ -157,6 +157,8 @@ mod tests {
     const TTY: &str = "/dev/ttys023";
     const WRITE: &str = r#"{"write":{"id":"0123456789abcdef","app":"ghostty","tty":"/dev/ttys023","text":"hi"}}"#;
     const ENTER: &str = r#"{"enter":{"id":"fedcba9876543210","app":"ghostty","tty":"/dev/ttys023"}}"#;
+    /// The first line on every watch's stdin.
+    const WRITES: &str = r#"{"writes":true}"#;
 
     type Selects = mpsc::Receiver<(TabApp, String, bool)>;
 
@@ -280,6 +282,23 @@ mod tests {
         assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchExit(Some(0))));
     }
 
+    // PM decision 3 (2026-11-25): Harness Device 0.1.x drops write and Enter lines without a word, so a watch prints them
+    // only once it has read that this app answers them. Started as before: an older CLI takes no other argument.
+    #[cfg(unix)]
+    #[test]
+    fn a_new_watch_is_told_first_that_this_app_answers_writes() {
+        let fake = Fake::new();
+        fake.script("hardware watch --json", &[r#"{"attached":false}"#, "@record"]);
+        let (watch, events) = start(&fake);
+        assert_eq!(events.recv_timeout(WAIT), Ok(dial(false, None, None)));
+        watch.stop();
+        assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchExit(Some(0))));
+        assert_eq!(fake.calls(), ["hardware watch --json"]);
+        assert_eq!(fake.stdin(), [WRITES]);
+        // Nothing of it is logged.
+        assert_eq!(fake.log().lines(), ["harness hardware watch --json: exit 0"]);
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_front_line_reaches_the_watch() {
@@ -291,10 +310,10 @@ mod tests {
         watch.front(ghostty);
         watch.stop();
         assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchExit(Some(0))));
-        assert_eq!(fake.stdin(), [ghostty]);
+        assert_eq!(fake.stdin(), [WRITES, ghostty]);
         // A watch that has ended takes nothing, and the log says nothing of it.
         watch.front(vscode);
-        assert_eq!(fake.stdin(), [ghostty]);
+        assert_eq!(fake.stdin(), [WRITES, ghostty]);
         assert_eq!(fake.log().lines(), ["harness hardware watch --json: exit 0"]);
     }
 
@@ -403,10 +422,10 @@ mod tests {
         watch.wrote(wrote);
         watch.stop();
         assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchExit(Some(0))));
-        assert_eq!(fake.stdin(), [wrote]);
+        assert_eq!(fake.stdin(), [WRITES, wrote]);
         // A watch that has ended takes nothing, and the log says nothing of it.
         watch.wrote(wrote);
-        assert_eq!(fake.stdin(), [wrote]);
+        assert_eq!(fake.stdin(), [WRITES, wrote]);
         assert_eq!(fake.log().lines(), ["harness hardware watch --json: exit 0"]);
     }
 
@@ -423,10 +442,10 @@ mod tests {
         watch.tab(tab);
         watch.stop();
         assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchExit(Some(0))));
-        assert_eq!(fake.stdin(), [front, tab]);
+        assert_eq!(fake.stdin(), [WRITES, front, tab]);
         // A watch that has ended takes nothing, and the log never holds a tty.
         watch.tab(tab);
-        assert_eq!(fake.stdin(), [front, tab]);
+        assert_eq!(fake.stdin(), [WRITES, front, tab]);
         assert_eq!(fake.log().lines(), ["harness hardware watch --json: exit 0"]);
     }
 
@@ -442,10 +461,10 @@ mod tests {
         watch.sound(true);
         watch.stop();
         assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchExit(Some(0))));
-        assert_eq!(fake.stdin(), [off, on]);
+        assert_eq!(fake.stdin(), [WRITES, off, on]);
         // A watch that has ended takes nothing, and the log says nothing of it.
         watch.sound(false);
-        assert_eq!(fake.stdin(), [off, on]);
+        assert_eq!(fake.stdin(), [WRITES, off, on]);
         assert_eq!(fake.log().lines(), ["harness hardware watch --json: exit 0"]);
     }
 
@@ -461,10 +480,10 @@ mod tests {
         watch.notify(NotifyMode::Full);
         watch.stop();
         assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchExit(Some(0))));
-        assert_eq!(fake.stdin(), [you, full]);
+        assert_eq!(fake.stdin(), [WRITES, you, full]);
         // A watch that has ended takes nothing.
         watch.notify(NotifyMode::You);
-        assert_eq!(fake.stdin(), [you, full]);
+        assert_eq!(fake.stdin(), [WRITES, you, full]);
     }
 
     #[cfg(unix)]
