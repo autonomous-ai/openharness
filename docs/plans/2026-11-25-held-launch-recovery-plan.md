@@ -817,6 +817,30 @@ it('a restart of a running conversation the guard held resumes in its own pane, 
   `retrying fresh` line; the `→ held` line is never written (the row is never marked held).
 - [ ] **Step 3: Commit** the case (red).
 
+### Task 20: `creationId` goes once a launch of the row is confirmed
+
+Added after Task 9 (2026-11-25): the restored-pane watch also sees the guard hold launches with no `sessionId` that are
+not a first launch (the fresh fallback after a refused resume, `relaunchFresh`; a restore of a `ready` row whose engine
+never bound a session; at boot, a `starting` row that was a restore's own journaled relaunch). With the row's
+`creationId` still there, `heldFirstLaunch` would be true for them, and Task 14's receipt read would send the original
+first task a second time. The spec's "Data" item 1 now says `creationId` lives only until a launch of the row is
+confirmed.
+
+**Files:** Modify `cli/src/lib/registry.ts`; Test `cli/src/lib/registry.firstLaunch.spec.ts`.
+
+**Depends on:** 2 (landed). **Effort:** high.
+
+**Failing test:** `registry.firstLaunch.spec.ts`: a row registered with a `creationId` keeps it through `setLaunch`
+(starting, held with `startsAgain`, failed) and `beginNativeDispatch`, and loses it, durably (a reload has none), when
+`confirmLaunch` publishes the launch ready (with a process identity, and the terminal case with `null`), when
+`confirmEngineExit` publishes it a shell, and when a hook binds a session to it (`register`, already dropping it: pin
+it). After that, `heldFirstLaunch` of the row held again by the guard with no `sessionId` is false. A row without one is
+unchanged by all of these.
+
+- [ ] **Step 1:** the failing tests, commit (red).
+- [ ] **Step 2:** remove `creationId` from the candidate row in each confirmed publication above; nothing else changes.
+- [ ] **Step 3:** run `npx vitest run src/lib/registry.firstLaunch.spec.ts src/lib/registry` and the typecheck; commit.
+
 ## Decisions
 
 The orchestrator's answers of 2026-11-25 to the draft's five questions, final; the spec carries them (sections 1, 2

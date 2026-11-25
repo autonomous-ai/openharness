@@ -181,6 +181,7 @@ Every one whose task is nowhere on disk, or whose pane no longer proves that no 
 | A `model-create-v1` intent | written only by a daemon without native preparation; this one always has it (`main.ts:3154`) | transitional: one an older release saved and this one dispatches |
 | A handoff fork (an engine without a native fork) | its first prompt is composed from the source's memory at fork time and kept nowhere | rare: forks of those engines |
 | A guest's harness | never relaunched as the owner (`restoreLaunch.ts`, as today) | covered by the guest rules |
+| A later launch with no conversation the guard held: the fresh fallback after a refused resume, a restore of a harness whose engine never named its session | no `creationId` any more (its first task was delivered), and nothing tells it from a first launch with no receipt | rare: a launch with no conversation, held inside the rc window |
 | A fork receipt written before this release, of a fork with a first task | the task was never kept | transitional: one release |
 | A row held by the guard before this release | no `startsAgain`, no `creationId` | transitional: one release, keeps today's words |
 | Any first launch held without the guard's proof: its pane gone, or not the held shell under its token | no proof that no engine ran (`newPane.ts:243`, `restoreAgents.ts:536`, `:1017`) | as today: left as it is, never relaunched |
@@ -229,7 +230,10 @@ the same pull request; the frame showing `starting` needs none.
    and a fork made from a fork receipt (`launches.ts` `fork`, its `creationId`) record that id on the registry row they
    register (`createAndRegisterPane`). The id is passed explicitly from the intent or the receipt, never inferred from
    the preparation's `authority.id`: a create made without an intent passes its session label there
-   (`create.ts:454-455`), which `validCreationId` cannot tell from an id. Nothing else writes it.
+   (`create.ts:454-455`), which `validCreationId` cannot tell from an id. Nothing else writes it. It goes from the row
+   as soon as a launch of the row is confirmed (an engine ran: `confirmLaunch`, and a hook binding a session): from
+   then on the first task has been delivered, so a later launch of the row (a restart, a restore, the fresh fallback
+   after a refused resume) never reads it again. A `creationId` on a row is therefore always a first launch's.
 2. **`startsAgain` on a held launch.** The held launch's new optional field (section 1), set and cleared with the
    launch itself (`registry.setLaunch`), kept by the registry's `normalizedLaunch`.
 3. **A fork's receipt keeps its task.** The fork's receipt (`AgentCreationReceipts.run`, version 1) also keeps the
