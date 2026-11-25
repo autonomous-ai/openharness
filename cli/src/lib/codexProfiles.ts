@@ -9,13 +9,13 @@
  * anything for a remote machine) to this machine's own state directory.
  */
 
-import { realpathSync, statSync } from 'fs'
+import { lstatSync, realpathSync, statSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 import { env } from '../config/env.js'
 import { homeIsAbsolute } from '../engines/kit/homeAdoption.js'
 import { discoverCodexProfiles } from './codexProfileDiscovery.js'
-import { atomicWriteJson, hardenPrivateStateFileIfPresent, jsonArray, readState, requireState, secureStateDirectory } from './secureState.js'
+import { atomicWriteJson, hardenPrivateStateFileIfPresent, jsonArray, probeState, readState, requireState, secureStateDirectory } from './secureState.js'
 
 export interface CodexProfile {
   path: string
@@ -26,6 +26,7 @@ export type CodexProfileError = { error: 'INVALID_PATH' | 'NOT_FOUND' }
 
 const FILE = join(env.ADAPTER_DATA_DIR, 'codex-profiles.json')
 const MAX_LINKED = 256
+const LIST_MAX_BYTES = 1024 * 1024
 const CONTROL_CHARS_RE = /[\x00-\x1f\x7f]/
 
 function labelFor(path: string): string {
@@ -36,7 +37,7 @@ function labelFor(path: string): string {
 function readLinkedPaths(): Set<string> {
   try {
     // A list another account could write is not this reader's to set aside: no list, and the writer refuses it too.
-    hardenPrivateStateFileIfPresent(FILE, 1024 * 1024)
+    hardenPrivateStateFileIfPresent(FILE, LIST_MAX_BYTES)
   } catch {
     return new Set()
   }
@@ -47,7 +48,7 @@ function readLinkedPaths(): Set<string> {
 /** The paths a link starts from. Throws when another account could write the list, or it cannot be read now
  *  (StateFileUnreadable): read as none, the link would drop every other profile. */
 function linkedPathsToChange(): Set<string> {
-  hardenPrivateStateFileIfPresent(FILE, 1024 * 1024)
+  hardenPrivateStateFileIfPresent(FILE, LIST_MAX_BYTES)
   return linkedIn(requireState(FILE, jsonArray, 'cache') ?? [])
 }
 
@@ -57,6 +58,70 @@ function writeLinkedPaths(paths: Set<string>): void {
   secureStateDirectory(env.ADAPTER_DATA_DIR)
   // 'trust': the old file's owner and mode are checked, as this file always was.
   atomicWriteJson(FILE, [...paths].slice(0, MAX_LINKED), 'trust')
+}
+
+/**
+ * The homes the person linked, for a `codex queue` to run under. The queue loads the home's `config.toml`, so only
+ * Harness's own records name a home, and a list another account could write names none. Read-only, unlike
+ * `readLinkedPaths`: it never tightens the list's mode, and `probeState` never sets an unparsable list aside.
+ */
+export function readLinkedCodexHomes(): string[] {
+  let st
+  try {
+    st = lstatSync(FILE)
+  } catch {
+    return []
+  }
+  const uid = process.getuid?.()
+  // lstat: a link at the list is not a list. Windows has no mode bits; the data folder's place protects it there.
+  if (!st.isFile() || (uid !== undefined && st.uid !== uid) || st.size > LIST_MAX_BYTES) return []
+  if (process.platform !== 'win32' && (st.mode & 0o022) !== 0) return []
+  const read = probeState(FILE, jsonArray)
+  return read.state === 'ok' ? [...linkedIn(read.value)] : []
+}
+
+/** How long the linked list and each home's real path hold: the dial's list asks `can()` on every 1 s tick. */
+export const TRUSTED_HOMES_MS = 30_000
+
+function realOrNull(path: string): string | null {
+  try {
+    return realpathSync(path)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The Codex homes Harness trusts, for `codex queue`: [own]'s (the daemon's CODEX_HOME and the adopted homes), asked at
+ * every call so an adopted home counts at once, then the linked ones. Each is followed by its real path when that
+ * differs, since a linked home is stored by its real path. [now] is a monotonic clock.
+ */
+export function trustedCodexHomes(
+  own: () => readonly string[],
+  now: () => number,
+  read: () => string[] = readLinkedCodexHomes,
+  real: (path: string) => string | null = realOrNull,
+): () => readonly string[] {
+  let heldAt: number | undefined
+  let linked: string[] = []
+  // Made anew with each read of the list, so it holds only the homes asked about in one hold.
+  let reals = new Map<string, string | null>()
+  return () => {
+    const at = now()
+    if (heldAt === undefined || at - heldAt >= TRUSTED_HOMES_MS) {
+      heldAt = at
+      linked = read()
+      reals = new Map()
+    }
+    const homes = new Set<string>()
+    for (const home of [...own(), ...linked]) {
+      let resolved = reals.get(home)
+      if (resolved === undefined) reals.set(home, resolved = real(home))
+      homes.add(home)
+      if (resolved !== null) homes.add(resolved)
+    }
+    return [...homes]
+  }
 }
 
 /** Validate + resolve a folder path the same way for both linking and re-checking a saved one. */
