@@ -13,9 +13,9 @@
 import { homedir, tmpdir } from 'node:os'
 import { basename } from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { flagOf, ORCA_PROGRAMS, programOf } from './argv.js'
 import { claudeGhost, claudeSessions, editorGhost, editorSession, itermGhost, itermSession, keys, listed, MAIN, orcaGhost, orcaOpening,
   orcaSession, orcaStarted, scenario, scenariosFor, started, turned } from './catalog.js'
-import { flagOf, ORCA_PROGRAMS, programOf } from './argv.js'
 import { rings } from './checks.js'
 import { loadBaseline, SKIP_RATCHET_ENV, tierAVerdict } from './grade.js'
 import { describeAttempt } from './netGuard.js'
@@ -402,9 +402,16 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
   const o11 = MAIN.find((s) => s.id === 'O11')!
   const orcaTerminal = (argv: string[], verb: string): boolean =>
     ORCA_PROGRAMS.includes(programOf(argv)) && argv[1] === 'terminal' && argv[2] === verb
+  /** A tmux run that shows c's pane: Linux's `select-window ; select-pane`, as the client's app is Orca there, or macOS's
+   *  `switch-client`, as tier A finds no app for the client there (docs/plans/2026-11-25-dial-orca-tmux-o11-plan.md,
+   *  "What this plan decides"; checks.ts tmuxShows). */
+  const showsC = (argv: string[]): boolean => {
+    const verb = argv.findIndex((arg) => arg === 'select-pane' || arg === 'switch-client')
+    return programOf(argv) === 'tmux' && verb > 0 && flagOf(argv.slice(verb), '-t') === 'pane:c'
+  }
 
   // Eval O11 found tmux's pane alone came forward, inside whichever tab Orca showed (2026-11-25).
-  it.for(['darwin', 'linux'] as const)("O11's tap on c under tmux switches Orca to c's terminal before tmux selects its pane and Orca comes forward, and types nothing, on %s", async (platform) => {
+  it.for(['darwin', 'linux'] as const)("O11's tap on c under tmux switches Orca to c's terminal before tmux shows its pane and Orca comes forward, and types nothing, on %s", async (platform) => {
     const driver = new TierADriver({ startDevices })
     const run = await runScenario(driver, o11, platform)
     expect(run.error).toBeUndefined()
@@ -414,13 +421,13 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
     const after = commands.filter((c) => c.at >= tap.at && c.at < face.at)
     const switched = after.findIndex((c) => c.ok && orcaTerminal(c.argv, 'switch')
       && flagOf(c.argv, '--terminal') === orcaTerminalHandle('c'))
-    const selected = after.findIndex((c) => programOf(c.argv) === 'tmux' && c.argv.includes('select-pane')
-      && c.argv[c.argv.indexOf('select-pane') + 2] === 'pane:c')
+    const shown = after.findIndex((c) => c.ok && showsC(c.argv))
     const raised = after.findIndex((c) => raisesOrca[platform](c.argv))
     expect(switched).toBeGreaterThanOrEqual(0)
-    expect(selected).toBeGreaterThan(switched)
+    expect(shown).toBeGreaterThan(switched)
     expect(raised).toBeGreaterThan(switched)
     expect(after.filter((c) => orcaTerminal(c.argv, 'send'))).toEqual([])
+    expect(run.wrongSends).toEqual([])
     const open = Object.fromEntries(run.results.filter((r) => r.check.startsWith('open.')).map((r) => [r.check, r.score]))
     expect(open).toMatchObject({ 'open.worktree': 1, 'open.switch': 1, 'open.pane': 1 })
   })
