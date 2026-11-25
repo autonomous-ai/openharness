@@ -147,14 +147,14 @@ impl App {
                 self.now = now;
                 if self.relaunch && !self.relaunch_waits() {
                     self.relaunch = false;
-                    self.forget_unanswered_follow(effects);
+                    self.forget_unanswered(effects);
                     self.stop_watch(effects);
                     effects.push(Effect::Relaunch);
                     return;
                 }
                 if self.install_held && !self.relaunch_waits() {
                     self.install_held = false;
-                    self.forget_unanswered_follow(effects);
+                    self.forget_unanswered(effects);
                     self.installing();
                     // Drawn and said first: the install ends this process before anything after it runs.
                     self.send_menu(effects);
@@ -445,13 +445,19 @@ impl App {
         self.running() || self.keep.starting()
     }
 
-    /// The process ends with the window open: a Follow screen, counted as asked once it showed, was never answered,
-    /// so the new process asks again. Sign in is saved only once answered, and a first CLI install that failed runs again at
-    /// the start, so neither needs this.
-    fn forget_unanswered_follow(&mut self, effects: &mut Vec<Effect>) {
-        if self.showing(Screen::Follow) {
-            self.remember(|saved| saved.asked_follow = false, effects);
-        }
+    /// The process ends with the window open, its screen never answered, so the new process asks again: the Follow
+    /// screen counts as asked once it shows, and Sign in opened from the menu was asked before. A first CLI install
+    /// that failed runs again at the start by itself.
+    fn forget_unanswered(&mut self, effects: &mut Vec<Effect>) {
+        let Some(screen) = self.window.as_ref().map(|shown| shown.screen) else { return };
+        self.remember(
+            |saved| match screen {
+                Screen::SignIn => saved.asked_sign_in = false,
+                Screen::Follow => saved.asked_follow = false,
+                Screen::Install => {}
+            },
+            effects,
+        );
     }
 
     /// Only a button the window shows does something, so a second click on one that started a run does nothing.
