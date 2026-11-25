@@ -141,6 +141,21 @@ describe("tier A's voice step", () => {
     expect(wrongSends(scenario, seen())[0]).toEqual({ scenario: 'S1', target: 'a', got: null, path: 'typed', at: 600 })
   })
 
+  it('a tmux run that puts words in a pane is typed into no session', () => {
+    const { world, deliveries, ran, seen } = worldOf(new LoopbackDial(() => Date.now()))
+    recordTyping(world)
+    const tmux = '/opt/eval/bin/tmux'
+    const puts = [[tmux, 'send-keys', '-t', '%2', '-l', 'Eval words.'], [tmux, 'set-buffer', 'Eval words.'],
+      [tmux, 'load-buffer', '-'], [tmux, 'paste-buffer', '-t', '%2']]
+    // The rule answers nothing: the tmux model answers the run.
+    for (const argv of puts) expect(ran(argv)).toBeUndefined()
+    // A tmux run that puts no words in a pane is no delivery.
+    ran([tmux, 'list-clients', '-F', '#{client_tty}'])
+    ran([tmux, 'select-pane', '-t', '%2'])
+    expect(deliveries).toEqual(puts.map((argv) => ({ at: 600, path: 'typed', target: null, text: argv.at(-1) })))
+    expect(wrongSends(scenario, seen())).toHaveLength(4)
+  })
+
   it('words spoken to one session that reach another are reported as a wrong send', async () => {
     const dial = new LoopbackDial(() => Date.now())
     const { world, deliveries, seen } = worldOf(dial)
