@@ -94,6 +94,8 @@ export function openTabs(world: TierAWorld): void {
       return true
     },
     // Every line is taken as it is written: none waits to drain, so the devices need never be told they can write.
+    // Never told, they send no words either, a second reason the eval types into no tab: words go only after
+    // onWritable.
     onWritable: () => {},
     // The watch holds it open for the whole scenario.
     ended: new AbortController().signal,

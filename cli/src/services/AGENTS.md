@@ -235,7 +235,8 @@ master too old to run it starts it beside itself, still in its own process (`src
   change: a known gap. A handler of a second kind holds a stream open,
   one of its type across every connection (a keyed type keeps one per key up to its limit, a new key past it
   answered 409), and is told when the stream can take a line (`onWritable`) and why it
-  ended (`StreamEnd`): on `tabs` the devices tell the watch which terminal tab to select; on `dial` (`dialStream`),
+  ended (`StreamEnd`): on `tabs` the devices tell the watch which terminal tab to select and send a person's
+  words and their Enter, each answered by the watch's `wrote`; on `dial` (`dialStream`),
   opened with `standby` so it never takes the stream from another Orca, they tell Orca's Harness Device plugin
   (plugins/harness-device-orca) whether a dial is attached and which agent it shows, and its end drops what
   `orcaFront` set; on `vscode`, keyed by its window and at most 8, they tell Harness's VS Code extension
