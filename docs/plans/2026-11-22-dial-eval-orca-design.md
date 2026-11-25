@@ -61,7 +61,10 @@ eval runs inside Orca (every devcrew session does), so the runner's own environm
 PM decisions, 2026-11-21, scored as expected behavior:
 1. **Agents in another worktree's terminals are skipped.** While Orca is in front and the plugin has said which
    worktree is on screen, the ring lists only agents whose terminal is in that worktree.
-2. **tmux inside Orca stays off the ring.** An agent under tmux in an Orca pane is not an Orca row.
+2. **tmux inside Orca stays as today** (Diego, 2026-11-23, decision 3 of
+   `docs/plans/2026-11-23-dial-tmux-herdr-apps-design.md`; PM, 2026-11-25, option A of
+   `docs/plans/2026-11-25-dial-orca-tmux-o11-design.md`). An agent under tmux in an Orca pane is an Orca row on Orca's
+   page, at its tab's place when placed. This replaces the PM's 2026-11-21 rule that kept it off the ring.
 
 PM, 2026-11-22:
 3. **Graded on what the person expects, even where no path exists yet**, as the editor spec's decision 1: where the
@@ -101,13 +104,17 @@ PM, 2026-11-22:
 - **Scope** (decision 1): with the dial's `appFilter`, Orca settled in front and the plugin's front known, only agents
   whose shown terminal (own pane, then placed pane, then held pane: `shownAt`, #4534) is in that front.
 - **Order:** Orca's tab order from the layout read: worktrees as listed, then group, tab and pane, each split's `first`
-  before `second`. Agents with no Orca pane (no layout, or tmux inside Orca: `paneOf` gives none under tmux) go after
-  the ranked ones unless elimination placed them (one free terminal and one unplaced agent in the same worktree and
-  identity). They have no shown terminal, so a scope leaves them out.
+  before `second`. An agent with no Orca pane (no layout, or tmux inside Orca: `paneOf` gives none under tmux) that
+  elimination placed (one free terminal and one unplaced agent in the same worktree and identity) takes that
+  terminal's place. The rest go after the ranked ones; they have no shown terminal, so a scope leaves them out.
 - **tmux inside Orca** (decision 2): a real tmux started in an Orca pane hands its agents the variables it was started
   with: `TMUX`, `TMUX_PANE`, Orca's `ORCA_AGENT_SESSION_ID` and `ORCA_TERMINAL_HANDLE`, and on macOS
-  `__CFBundleIdentifier=com.stablyai.orca`. With the bundle id the host is `orca` but the agent has no pane; without it
-  the host is `tmux` (`hostDetect.ts`). O11 carries exactly these hints per platform.
+  `__CFBundleIdentifier=com.stablyai.orca`. tmux's lookup (`cable/hosts/tmux.ts`) proves tmux made the agent's terminal
+  and finds the app holding its session's last used client: on Linux Orca, by Orca's main process `orca-ide` above its
+  terminal host; on macOS the bundle id names Orca (`hostDetect.ts`). So the nest is `tmux`, the app is Orca and the
+  agent is on Orca's page (`select.ts` `pageOf`). Orca's adapter gives it no pane (`orca.ts`, `MULTIPLEXERS`);
+  `placeInOrca` places it by elimination at the Orca terminal where Orca saw its engine start. O11 carries exactly
+  these hints per platform.
 - **Names:** a tab the person renamed wins; then the session's own title; then the tab's title; then the folder's name.
 - **Cap:** 16 (`select.ts`): needs-you first, then most recent activity; with a full ring an agent enters only if it
   needs the person, replacing the idle agent that rested longest.
@@ -180,7 +187,12 @@ not the daemon's), so its words are typed.
 - **O10.** Voice on a Codex agent at rest in an Orca pane → `orca terminal send` to its handle only, once, with the
   exact text; no other pane gets words. (D5, gate)
 - **O11.** Claude Code under tmux in an Orca pane, beside two plain Orca agents, with the hints a real tmux there hands
-  on (Ring above) → it is not on the Orca ring (decision 2); the two are, in order. (D1)
+  on (Ring above) → it is listed at its tab, `[a, b, c]`; a tap switches Orca to its tab, tmux shows its pane and Orca
+  comes forward; voice reaches it by its mod, typed into no Orca pane and no tmux (decision 2). (D1, D3, D5, gate)
+  macOS and Linux, tier A alone: on Windows tmux runs only inside WSL, and an agent there hooks to WSL's own Harness,
+  never to the Windows devices; tier B's agent runs in no tmux pane and has no client, and Orca's rig records no tmux
+  run, so tier B would grade a world without the lookup. On macOS tmux's move may be `switch-client` or
+  `select-window ; select-pane`: both show `c`'s pane.
 - **O12.** Orca quits (its agents end, the watch ends, the plugin stream closes) and relaunches: Orca comes back in
   front, its agents come back with the same session ids in new terminals (new handles), and the plugin re-sends its
   front → the ring comes back right with no duplicate rows, and stays right past the devices' next 30 s observed tick
@@ -221,8 +233,6 @@ A bug reported from now on in Orca becomes a scenario in this catalog.
 - **O12:** the watch restarts only at Orca's next settle, so a focus line right after the relaunch may be missed.
 - **Windows:** every check that needs Orca's CLI (the layout's order, the switch, typed words), since the devices find
   no `orca.exe` there (decision 3).
-- **O11 on macOS, unscoped:** with the bundle id an agent under tmux is an Orca agent with no pane; it is out of the
-  scope, but listed whenever no scope holds.
 
 ### Not graded
 
@@ -282,6 +292,10 @@ graded.
   `orca.front` sends `orcaFront` on it.
 - Hooks carry `ORCA_AGENT_SESSION_ID` and the session's `ORCA_TERMINAL_HANDLE` in their hints; `tmux` ones carry
   `TMUX`/`TMUX_PANE` too.
+- A scenario with a `tmux` session gets the tmux model (`tierA/steps/tmux.ts`) on its Orca world, answering as a real
+  tmux would for a client in an Orca terminal, so tmux's lookup runs. Not on Windows, where tmux runs only inside WSL.
+- On Linux Orca's terminal host runs under Orca's main process (`orca-ide`), as Orca's .deb has it, so tmux's lookup
+  finds Orca there. On macOS the host stays under launchd, as recorded.
 - **OS branches:** darwin, linux and win32, with the platform given to the `orca` deps, the open and raise deps and the
   mocked `learnApps`. A branch that reads `process.platform` and cannot be chosen (`orcaHomesDeps`, the plugin's own
   `inputs.platform`) is listed as a coverage gap only where such a read decides a check (PM, 2026-11-22).
@@ -306,6 +320,9 @@ The base spec's tier B holds, with these additions, in `cli/e2e/harness/appEvalO
 - A tap's raise on Linux is not recorded in tier B (the base driver's gap); the open checks' raise part is left out
   there and listed.
 - Windows tier B: a gap, listed.
+- O11 is not run in tier B: its agent runs in no tmux pane and has no client (a detached session on the daemon's
+  private tmux server), and Orca's rig records no tmux run, so the tap's tmux move would fail for the model's sake. A
+  faithful tier B model for it is a task of its own (PM backlog).
 - One file under about 6 minutes on a CI runner, with a hint in `cli/ci-e2e-durations.json`. O3 (32 agents) and O16
   (40) use the lightest agent stand-in the stand-in host allows, and daemons are reused across scenarios as the base
   driver does; the plan's first tier B task measures O3 and, if the budget does not hold, makes O16 tier A only and

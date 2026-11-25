@@ -28,7 +28,7 @@ How the code places `c`:
 - Its hook's hints: `TMUX_PANE`, `TERM_PROGRAM=tmux`, Orca's `ORCA_AGENT_SESSION_ID` and `ORCA_TERMINAL_HANDLE` (inherited
   from the terminal the tmux server started in), and on macOS `__CFBundleIdentifier=com.stablyai.orca`.
 - tmux's lookup (`tmux.ts:321` `createTmuxOuter`) proves tmux made the agent's terminal and finds the app holding the
-  session's last used client: Orca (`scannedApp.ts:226`, Orca's terminal host). So `nest = 'tmux'`, `host = 'tmux'`,
+  session's last used client: Orca (on Linux by Orca's main process `orca-ide`). So `nest = 'tmux'`, `host = 'tmux'`,
   `app = 'orca'` (`observed.ts:963` `landOuter`, `placeApp`), on every platform where the lookup runs. On macOS the
   bundle id alone already gives `app = 'orca'` (`hostDetect.ts:163` `detectApp`).
 - `pageOf` keeps it on Orca's page (`select.ts:100`), and `orcaAgents` (`devices.ts:2107`, `app === 'orca'`) puts it in
@@ -47,7 +47,7 @@ What the person gets:
 | Row | An Orca row, in Orca's tab order at the tmux tab, named by that tab. Unplaced (two tmux agents in one folder, or an Orca that named no engine), it sits after the placed rows, named by its session's title. |
 | Worktree scope | In scope when placed in the worktree on screen. Unplaced, it drops out whenever the Orca plugin names a worktree, so it is off the ring while Orca is in front. |
 | Pro | The Orca room leaves it out: the Pro groups by `host`, which is `tmux` (#4578 known gap). |
-| Tap | Orca switches to its placed tab, tmux selects its window and pane on its own session (`tmux.ts:188`), Orca comes forward. Unplaced: tmux selects the pane, Orca comes forward on whatever tab it shows. |
+| Tap | Orca switches to its placed tab, tmux shows its pane on its own session (`tmux.ts:188`: it selects the window and pane, or on macOS may switch the client to it), Orca comes forward. Unplaced: tmux shows the pane, Orca comes forward on whatever tab it shows. |
 | Rest (swipe) | The same switch and select, with no raise, while Orca is in front (`tmux.ts:210` `canShow`). |
 | Voice | Never typed into the Orca handle or into tmux (the devices never type into the person's tmux, `services/AGENTS.md`). Claude Code takes the words through its mod, Codex through `codex queue` in Harness's Codex home; otherwise "did not answer". No wrong-session path. |
 | Focus follow: Orca tab | Not followed. Orca's focus line looks up an own Orca pane only (`devices.ts:2446` `byPane`); a placed agent has none: `focus · skipped · unknown agent`. |
