@@ -29,6 +29,9 @@ const MAX_LINKED = 256
 const LIST_MAX_BYTES = 1024 * 1024
 const CONTROL_CHARS_RE = /[\x00-\x1f\x7f]/
 
+/** A path a link takes as given: absolute, at most 4096 characters, no control character. */
+const wellFormed = (path: string): boolean => homeIsAbsolute(path) && path.length <= 4096 && !CONTROL_CHARS_RE.test(path)
+
 function labelFor(path: string): string {
   const parts = path.split('/').filter((p) => p.length > 0)
   return parts.length > 0 ? parts[parts.length - 1] : path
@@ -62,8 +65,9 @@ function writeLinkedPaths(paths: Set<string>): void {
 
 /**
  * The homes the person linked, for a `codex queue` to run under. The queue loads the home's `config.toml`, so only
- * Harness's own records name a home, and a list another account could write names none. Read-only, unlike
- * `readLinkedPaths`: it never tightens the list's mode, and `probeState` never sets an unparsable list aside.
+ * Harness's own records name a home: a list another account could write names none, and an entry no link could have
+ * written (wellFormed) is none. Read-only, unlike `readLinkedPaths`: it never tightens the list's mode, and `probeState`
+ * never sets an unparsable list aside.
  */
 export function readLinkedCodexHomes(): string[] {
   let st
@@ -77,7 +81,7 @@ export function readLinkedCodexHomes(): string[] {
   if (!st.isFile() || (uid !== undefined && st.uid !== uid) || st.size > LIST_MAX_BYTES) return []
   if (process.platform !== 'win32' && (st.mode & 0o022) !== 0) return []
   const read = probeState(FILE, jsonArray)
-  return read.state === 'ok' ? [...linkedIn(read.value)] : []
+  return read.state === 'ok' ? [...linkedIn(read.value)].filter(wellFormed) : []
 }
 
 /** How long the linked list and each home's real path hold: the dial's list asks `can()` on every 1 s tick. */
@@ -126,9 +130,7 @@ export function trustedCodexHomes(
 
 /** Validate + resolve a folder path the same way for both linking and re-checking a saved one. */
 export function resolveCodexProfilePath(path: string): CodexProfile | CodexProfileError {
-  if (!homeIsAbsolute(path) || path.length > 4096 || CONTROL_CHARS_RE.test(path)) {
-    return { error: 'INVALID_PATH' }
-  }
+  if (!wellFormed(path)) return { error: 'INVALID_PATH' }
   let st
   try {
     st = statSync(path)
