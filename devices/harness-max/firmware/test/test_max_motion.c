@@ -71,16 +71,20 @@ static uint32_t pets_beat(uint32_t now)
 // Flutter's Cubic.transform (its halving to within .001) and Interval, as doubles give them, in Q16.
 static void test_curves(void)
 {
-    static const struct { int32_t t, row, ease, late; } AT[] = {
-        {6554, 25968, 6252, 0},        {16384, 50257, 26837, 0},       {32768, 62006, 52559, 29013},
-        {49152, 64954, 62951, 59394}, {58982, 65458, 65159, 64700},
+    static const struct { int32_t t, row, ease, late, pane; } AT[] = {
+        {6554, 25968, 6252, 0, 10240},        {16384, 50257, 26837, 2955, 39823},  {32768, 62006, 52559, 42233, 57500},
+        {49152, 64954, 62951, 61265, 63916}, {58982, 65458, 65159, 64951, 65305},
     };
     for (unsigned i = 0; i < sizeof AT / sizeof AT[0]; i++) {
         CHECK(near(max_ease(MAX_EASE_ROW, AT[i].t), AT[i].row, 66));
         CHECK(near(max_ease(MAX_EASE, AT[i].t), AT[i].ease, 66));
         CHECK(near(max_ease(MAX_EASE_LATE, AT[i].t), AT[i].late, 66));
+        CHECK(near(max_ease(MAX_EASE_PANE, AT[i].t), AT[i].pane, 66));
     }
     CHECK(max_ease(MAX_EASE_ROW, 0) == 0 && max_ease(MAX_EASE_ROW, 65536) == 65536);
+    // The pane's first frame barely moves (kRowEase's leapt a seventh of the way): the leap the owner found dizzying.
+    CHECK(max_ease(MAX_EASE_PANE, 16 * 65536 / 360) < 65536 / 40 && max_ease(MAX_EASE_ROW, 16 * 65536 / 420) > 65536 / 8);
+    CHECK(max_ease(MAX_EASE_LATE, 65536 / 5) == 0 && max_ease(MAX_EASE_PANE, 65536) == 65536);
     CHECK(max_ease(MAX_EASE, -5) == 0 && max_ease(MAX_EASE_LATE, 70000) == 65536);
     // A tween at rest is its end; one running is its curve's way there, and again from where it is on a new end.
     max_tween_t t = {100, 200, 50, 400, MAX_EASE};
@@ -96,9 +100,10 @@ static void test_curves(void)
     CHECK(max_tween_frame(&u, 40) == 0 && max_tween_frame(&u, 450) == MAX_ONE && max_tween_frame(&u, 9000) == MAX_ONE);
 }
 
-// An agent opens: its cell widens over 420 ms as its neighbours narrow (kRowEase), its face fades (250 ms ease), its
-// ground darkens (350 ms ease), its panel comes in late (440 ms, Interval(140/440)); the slivers' pets go smaller and
-// lower with the move, their words fade in 200 ms and they dim in 350.
+// An agent opens: its cell widens over 360 ms as its neighbours narrow (Material 3's standard curve), its ground
+// darkens (350 ms ease); fade-through: its face is gone in 100 ms (ease) before its panel comes in over the move's last
+// four fifths (Interval(.2, 1, ease)), so the two never show together. The slivers' pets go smaller and lower with the
+// move, their words go in 100 ms and they dim in 350.
 static void test_opening(void)
 {
     row_of(5);
@@ -106,24 +111,26 @@ static void test_opening(void)
     max_open("c");
     render(T0);
     CHECK(width("c", T0) == CELL_W && max_row_moving(T0));
-    const uint32_t mid = T0 + 210;
-    CHECK(near(width("c", mid), 1133, 1) && near(width("b", mid), 194, 1) && near(width("e", mid), 194, 1));
+    CHECK(width("c", T0 + 16) - CELL_W < 20);   // no leap on the first frame (kRowEase's: 100 px)
     const max_look_t *c = look("c"), *b = look("b");
-    CHECK(near(max_tween_at(&c->panel, mid), 1520, 3));
-    CHECK(near(MAX_ONE - max_tween_at(&c->face, mid), 4033, 3) && near(max_tween_at(&c->ground, mid), 3625, 3));
+    CHECK(max_tween_at(&c->panel, T0 + 72) == 0 && max_tween_at(&c->face, T0 + 100) == 0);
+    const uint32_t mid = T0 + 180;
+    CHECK(near(width("c", mid), 1088, 1) && near(width("b", mid), 217, 1) && near(width("e", mid), 217, 1));
+    CHECK(near(max_tween_at(&c->panel, mid), 2640, 3));
+    CHECK(max_tween_at(&c->face, mid) == 0 && near(max_tween_at(&c->ground, mid), 3340, 3));
     CHECK(max_tween_at(&c->sl, mid) == 0 && max_tween_at(&c->dim, mid) == 0);
-    CHECK(near(max_tween_at(&b->sl, mid), 3875, 3) && max_tween_at(&b->words, mid) == 0);
-    CHECK(near(max_tween_at(&b->dim, mid), 3625, 3) && max_tween_at(&b->face, mid) == MAX_ONE);
+    CHECK(near(max_tween_at(&b->sl, mid), 3594, 3) && max_tween_at(&b->words, mid) == 0);
+    CHECK(near(max_tween_at(&b->dim, mid), 3340, 3) && max_tween_at(&b->face, mid) == MAX_ONE);
     CHECK(max_tween_at(&b->panel, mid) == 0 && max_tween_at(&b->ground, mid) == 0);
-    // At 420 ms the widths are there; the panel's fade runs to 440.
-    CHECK(width("c", T0 + 420) == OPEN_W && width("b", T0 + 420) == SLIVER_W);
-    CHECK(max_tween_at(&c->panel, T0 + 420) < MAX_ONE && max_tween_at(&c->panel, T0 + 440) == MAX_ONE);
+    // At 360 ms the widths are there, and the panel with them.
+    CHECK(width("c", T0 + 360) == OPEN_W && width("b", T0 + 360) == SLIVER_W);
+    CHECK(max_tween_at(&c->panel, T0 + 330) < MAX_ONE && max_tween_at(&c->panel, T0 + 360) == MAX_ONE);
     // Settled once the dots that went dark with the carry have eased (250 ms after a goes off the glass).
     frames(T0, T0 + 700);
     CHECK(!max_row_moving(T0 + 700));
     // The open agent and two slivers fill the row exactly as the cells did.
-    CHECK(place("b", T0 + 440)->x == ROW_X && place("c", T0 + 440)->x == ROW_X + SLIVER_W);
-    CHECK(place("d", T0 + 440)->x == ROW_X + SLIVER_W + OPEN_W);
+    CHECK(place("b", T0 + 360)->x == ROW_X && place("c", T0 + 360)->x == ROW_X + SLIVER_W);
+    CHECK(place("d", T0 + 360)->x == ROW_X + SLIVER_W + OPEN_W);
 }
 
 // The scroll is carried along with the move to where the open agent rests, a sliver before it (V3 _carry).
@@ -132,18 +139,19 @@ static void test_carry(void)
     row_of(6);
     max_open("e");   // the fifth: it rests with three slivers' width scrolled off
     render(T0);
-    CHECK(scroll(T0) == 0 && near(scroll(T0 + 210), 500, 1) && scroll(T0 + 420) == 3 * SLIVER_W);
-    CHECK(place("d", T0 + 420)->x == ROW_X && place("e", T0 + 420)->x == ROW_X + SLIVER_W);
+    CHECK(scroll(T0) == 0 && near(scroll(T0 + 180), 463, 1) && scroll(T0 + 360) == 3 * SLIVER_W);
+    CHECK(place("d", T0 + 360)->x == ROW_X && place("e", T0 + 360)->x == ROW_X + SLIVER_W);
     // The first agent opens with nothing before it: no carry.
     row_of(6);
     max_open("a");
     render(T0);
-    CHECK(scroll(T0 + 210) == 0 && scroll(T0 + 420) == 0);
+    CHECK(scroll(T0 + 180) == 0 && scroll(T0 + 360) == 0);
 }
 
 // Closed, the cells take their width back and the scroll is carried along with them to the closed agent one cell in,
-// on the same curve over the same 420 ms: the closed agent stays on the glass all the way (the owner, 25 Nov: V3 _back
-// let the cells widen where the row was first, which pushed it off the glass and showed the row's front).
+// on the same curve over the same 360 ms: the closed agent stays on the glass all the way (the owner, 25 Nov: V3 _back
+// let the cells widen where the row was first, which pushed it off the glass and showed the row's front). Its panel is
+// gone in 100 ms before its face comes back over the move's last four fifths.
 static void test_closing(void)
 {
     row_of(5);
@@ -155,13 +163,14 @@ static void test_closing(void)
     CHECK(max_m.row_first == 1);
     render(T0 + 1000);
     const max_look_t *c = look("c");
-    CHECK(near(width("c", T0 + 1210), 543, 1) && near(scroll(T0 + 1210), 489, 1));
-    CHECK(near(max_tween_at(&c->panel, T0 + 1150), 811, 3));   // 300 ms ease out, half way: .802 gone
-    CHECK(max_tween_at(&c->panel, T0 + 1300) == 0 && near(max_tween_at(&c->face, T0 + 1125), 3285, 3));
-    render(T0 + 1420);   // the cells have their width and the row is there
-    CHECK(width("c", T0 + 1420) == CELL_W && scroll(T0 + 1420) == CELL_W);
-    CHECK(place("c", T0 + 1420)->x == ROW_X + CELL_W);
-    frames(T0 + 1420, T0 + 1700);
+    CHECK(near(width("c", T0 + 1180), 588, 1) && near(scroll(T0 + 1180), 466, 1));
+    CHECK(near(max_tween_at(&c->panel, T0 + 1050), 811, 3));   // 100 ms ease out, half way: .802 gone
+    CHECK(max_tween_at(&c->panel, T0 + 1100) == 0 && max_tween_at(&c->face, T0 + 1072) == 0);
+    CHECK(near(max_tween_at(&c->face, T0 + 1180), 2640, 3));
+    render(T0 + 1360);   // the cells have their width and the row is there
+    CHECK(width("c", T0 + 1360) == CELL_W && scroll(T0 + 1360) == CELL_W);
+    CHECK(place("c", T0 + 1360)->x == ROW_X + CELL_W);
+    frames(T0 + 1360, T0 + 1700);
     CHECK(!max_row_moving(T0 + 1700) && max_motion_ms(T0 + 1700) == pets_beat(T0 + 1700));
     // Rendered late, the carry still runs from the first render after the close.
     row_of(5);
@@ -169,8 +178,8 @@ static void test_closing(void)
     render(T0);
     max_show(MAX_VIEW_OVERVIEW);
     render(T0 + 1000);
-    render(T0 + 1210);
-    CHECK(near(scroll(T0 + 1210), 489, 1));
+    render(T0 + 1180);
+    CHECK(near(scroll(T0 + 1180), 466, 1));
 }
 
 // The sixth of ten, opened where the row showed it and closed: frame by frame it eases from its open place to its
@@ -192,15 +201,15 @@ static void test_closing_far(void)
     max_show(MAX_VIEW_OVERVIEW);
     CHECK(max_m.row_first == 4);
     int was = opened;
-    for (uint32_t t = T0; t <= T0 + MAX_ROW_MS; t += MAX_ROW_FRAME_MS) {
+    for (uint32_t t = T0; t <= T0 + MAX_PANE_MS; t += MAX_ROW_FRAME_MS) {
         render(t);
         const max_place_t *f = place("f", t);
         CHECK(f->x >= ROW_X && f->x + f->w <= ROW_X + ROW_W);   // on the glass all the way
-        CHECK(f->x >= was - 3);   // only ever to the right, but for each width's and the scroll's rounding
+        CHECK(f->x >= was - 1);   // only ever to the right, but for its edge's and the scroll's rounding
         was = f->x;
     }
-    render(T0 + MAX_ROW_MS);
-    CHECK(scroll(T0 + MAX_ROW_MS) == 4 * CELL_W && place("f", T0 + MAX_ROW_MS)->x == ROW_X + CELL_W);
+    render(T0 + MAX_PANE_MS);
+    CHECK(scroll(T0 + MAX_PANE_MS) == 4 * CELL_W && place("f", T0 + MAX_PANE_MS)->x == ROW_X + CELL_W);
 }
 
 // The model sends the row to its front (an agent moved up past it): the row eases there.
@@ -240,12 +249,12 @@ static void test_frame_clock(void)
     render(T0);
     CHECK(max_motion_ms(T0) == MAX_ROW_FRAME_MS && max_ui_next_wake_ms(T0) <= MAX_ROW_FRAME_MS);
     CHECK(!max_ui_tick(T0 + 5) && max_ui_tick(T0 + MAX_ROW_FRAME_MS));
-    max_show(MAX_VIEW_OVERVIEW);   // closed 16 ms in: the cells' 420 ms, the scroll carried along
+    max_show(MAX_VIEW_OVERVIEW);   // closed 16 ms in: the cells' 360 ms, the scroll carried along
     for (uint32_t t = T0 + 16; t < T0 + 2000; t += 16) {
         render(t);
         if (!max_row_moving(t)) {
-            // The move ends 420 ms after the close; a dot lit near its end eases 250 ms more.
-            CHECK(t >= T0 + 16 + MAX_ROW_MS && t <= T0 + 16 + MAX_ROW_MS + 250 + 16);
+            // The move ends 360 ms after the close; a dot lit near its end eases 250 ms more.
+            CHECK(t >= T0 + 16 + MAX_PANE_MS && t <= T0 + 16 + MAX_PANE_MS + 250 + 16);
             CHECK(max_motion_ms(t) == pets_beat(t) && max_ui_next_wake_ms(t) == pets_beat(t));
             return;
         }
@@ -352,13 +361,13 @@ static void test_pets_kept(void)
             if (closing) max_show(MAX_VIEW_OVERVIEW);
             else max_open("c");
             frames(T0, T0 + 1000);
-            CHECK(run || max_layer_painted() > painted + 60);   // the first time: its pets' steps all blurred
+            CHECK(run || max_layer_painted() > painted + 30);   // the first time: its pets' steps all blurred
         }
         CHECK(max_layer_painted() == painted);
     }
 }
 
-// ---- the open agent's panel crossing its face ----
+// ---- the open agent's panel and its face: one at a time ----
 
 // The brightest green (of 63) S shows over [x0, x1) x [y0, y1).
 static int brightest(int x0, int x1, int y0, int y1)
@@ -390,10 +399,10 @@ static bool shows(const char *t, const ht_pro_font_t *f, int below, int least)
     return true;
 }
 
-// The open agent's panel fades out over its cell's face coming back, and in over the face going, both by their
-// colours toward the ground under them: neither one's ground, pet or box may lie over the other's words. Three
-// quarters through the panel's fade out, the face's name and its chip's word (their colours .9 of the way back) show
-// across their whole width; just after the panel begins to come in, the face's going (.2 of them left) still do.
+// Fade-through (the owner, 25 Nov): the open agent's panel and its cell's face, two faces in two places, never show
+// together. What goes is gone (100 ms) before what comes is a tenth there, on every frame of an opening and a closing;
+// nothing covers the face's words while it goes (40 ms into an opening, .4 of it left) or once it is back (300 ms into
+// a closing, .95 of it).
 static void test_cross_fade(void)
 {
     static const char NAME[] = "harness-firmware-max";
@@ -403,13 +412,26 @@ static void test_cross_fade(void)
         max_ui_turn("c", "started", "", 0, T0 - 10);
         const char *word = max_status_word(max_find("c"));
         max_open("c");
+        uint32_t from = T0;
         if (closing) {
             frames(T0, T0 + 700);
             max_show(MAX_VIEW_OVERVIEW);
-            frames(T0 + 1000, T0 + 1225);   // 300 ms ease out: .07 of the panel left; 250 ms ease in: .98 of the face
+            from = T0 + 1000;
+        }
+        for (uint32_t t = from; t <= from + MAX_PANE_MS; t += MAX_ROW_FRAME_MS) {
+            render(t);
+            const max_look_t *c = look("c");
+            CHECK(max_tween_at(&c->face, t) <= MAX_ONE / 10 || max_tween_at(&c->panel, t) <= MAX_ONE / 10);
+        }
+        if (closing) {
+            frames(from, from + 300);
             CHECK(shows(NAME, &ph_sb_34, 0, 30) && shows(word, &ph_sb_22, CHIP_Y, 20));
         } else {
-            frames(T0, T0 + 150);   // the panel's first ms in (Interval(140/440)); 250 ms ease out: .2 of the face left
+            row_of(5);
+            max_copy(max_find("c")->name, sizeof max_find("c")->name, NAME);
+            max_ui_turn("c", "started", "", 0, T0 - 10);
+            max_open("c");
+            frames(T0, T0 + 40);
             CHECK(shows(NAME, &ph_sb_34, 0, 6) && shows(word, &ph_sb_22, CHIP_Y, 4));
         }
     }

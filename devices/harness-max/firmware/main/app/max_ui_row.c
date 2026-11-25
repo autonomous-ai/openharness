@@ -1,6 +1,7 @@
 // App Detail's row in motion (max_ui_internal.h), as V3's OverviewPage moves it. Each agent's look eases to where the
-// page sends it, as V3's implicit animations do: the widths together as the row's one move (kRowEase over 420 ms), a
-// sliver's pet, words and dimming, the open agent's face, ground and panel. The scroll is carried along with the move
+// page sends it, as V3's implicit animations do: the widths together as the row's one move (Material 3's standard
+// curve over 360 ms), a sliver's pet, words and dimming, the open agent's face, ground and panel, what goes fading out
+// before what comes fades in (fade-through: never two faces at once). The scroll is carried along with the move
 // while an agent opens or closes, so that agent never leaves the glass, and goes to the front when the model sends it
 // there. The finger drags the row px by px; let go with no agent open it settles on a cell's edge (one further when
 // flung), open it rests where it was let go. All of it runs on the clock (now_ms), never on frames.
@@ -16,7 +17,8 @@ enum {
     FLING_PX = DX(18),    // and one that went less than this in its last moves (kTouchSlop)
     TRACK_MS = 100,       // the speed is the finger's over its last 100 ms (VelocityTracker's horizon)
     STOPPED_MS = 40,      // a finger that rested this long before a move or the lift had stopped
-    WORDS_MS = 200, FACE_MS = 250, DIM_MS = 350, GROUND_MS = 350, PANEL_IN_MS = 440, PANEL_OUT_MS = 300, DOT_MS = 250,
+    FADE_OUT_MS = 100,    // what an agent's look shows that goes (its face, words or panel); what comes, over the move
+    DIM_MS = 350, GROUND_MS = 350, DOT_MS = 250,
     FADE_MS = 250, FADE_SLOP = DX(4),   // the row's faded ends: on while more than this of it lies that way (V3 _Fade)
 };
 
@@ -50,8 +52,9 @@ int32_t max_ease(max_curve_t curve, int32_t t)
 {
     if (curve == MAX_EASE_ROW) return cubic(Q / 5, Q * 4 / 5, Q / 5, Q, t);   // Cubic(.2, .8, .2, 1)
     if (curve == MAX_EASE_IN_OUT) return cubic((Q * 42 + 50) / 100, 0, (Q * 58 + 50) / 100, Q, t);   // (.42, 0, .58, 1)
-    if (curve == MAX_EASE_LATE) {   // Interval(140 / 440, 1, ease): nothing for the first 140 ms of 440
-        const int32_t begin = 140 * Q / 440;
+    if (curve == MAX_EASE_PANE) return cubic(Q / 5, 0, 0, Q, t);                                     // (.2, 0, 0, 1)
+    if (curve == MAX_EASE_LATE) {   // Interval(.2, 1, ease): nothing for the first fifth
+        const int32_t begin = Q / 5;
         if (t <= begin) return 0;
         t = (int32_t)((int64_t)(t - begin) * Q / (Q - begin));
     }
@@ -60,14 +63,17 @@ int32_t max_ease(max_curve_t curve, int32_t t)
 
 // ---- the tweens ----
 
-int32_t max_tween_at(const max_tween_t *t, uint32_t now_ms)
+// Its value at now_ms in 1/65536ths, unrounded: the row's widths add up before any is rounded.
+static int64_t tween_q(const max_tween_t *t, uint32_t now_ms)
 {
     const int32_t gone = (int32_t)(now_ms - t->at);
-    if (!t->ms || gone >= t->ms) return t->to;
-    if (gone <= 0) return t->from;
+    if (!t->ms || gone >= t->ms) return (int64_t)t->to * Q;
+    if (gone <= 0) return (int64_t)t->from * Q;
     const int32_t e = max_ease((max_curve_t)t->curve, (int32_t)((int64_t)gone * Q / t->ms));
-    return t->from + (int32_t)(((int64_t)(t->to - t->from) * e + Q / 2) >> 16);
+    return (int64_t)t->from * Q + (int64_t)(t->to - t->from) * e;
 }
+static int round_q(int64_t v) { return (int)((v + Q / 2) >> 16); }
+int32_t max_tween_at(const max_tween_t *t, uint32_t now_ms) { return round_q(tween_q(t, now_ms)); }
 int32_t max_tween_frame(const max_tween_t *t, uint32_t now_ms)
 {
     const int32_t gone = (int32_t)(now_ms - t->at);
@@ -132,16 +138,20 @@ static int closed_px(int n)
     return imax(0, imin(max_m.row_first, last)) * CELL_W;
 }
 
+// An agent's width at now_ms as it eases, unrounded.
+static int64_t width_q(const char *id, uint32_t now_ms)
+{
+    const max_look_t *l = look_of(id);
+    return l ? tween_q(&l->w, now_ms) : (int64_t)width_for(id, max_m.row.open) * Q;
+}
 // The row's width at now_ms: its agents' widths as they ease.
 static int content_w(uint32_t now_ms)
 {
-    int row[MAX_AGENTS], w = 0;
+    int row[MAX_AGENTS];
     const int n = row_of(row);
-    for (int i = 0; i < n; i++) {
-        const max_look_t *l = look_of(max_m.agents[row[i]].id);
-        w += l ? max_tween_at(&l->w, now_ms) : width_for(max_m.agents[row[i]].id, max_m.row.open);
-    }
-    return w;
+    int64_t w = 0;
+    for (int i = 0; i < n; i++) w += width_q(max_m.agents[row[i]].id, now_ms);
+    return round_q(w);
 }
 
 // The scroll at now_ms within the row as it is then: a drag's, else where its tween is.
@@ -152,20 +162,21 @@ static int scroll_at(uint32_t now_ms, int content)
     return imax(0, imin(px, content - ROW_W));
 }
 
+// Each edge rounded once, from the unrounded widths before it: the edges move as smoothly as the widths ease, never a
+// few px back as each width's rounding comes and goes.
 int max_row_layout(uint32_t now_ms, max_place_t out[MAX_AGENTS], int *px)
 {
     int row[MAX_AGENTS];
     const int n = row_of(row);
-    const char *open = max_m.row.open;
-    int content = 0;
+    int64_t edge = 0;
     for (int i = 0; i < n; i++) {
         const max_agent_t *a = &max_m.agents[row[i]];
-        const max_look_t *l = look_of(a->id);
-        out[i] = (max_place_t){a, l, 0, l ? max_tween_at(&l->w, now_ms) : width_for(a->id, open)};
-        content += out[i].w;
+        const int x0 = round_q(edge);
+        edge += width_q(a->id, now_ms);
+        out[i] = (max_place_t){a, look_of(a->id), x0, round_q(edge) - x0};
     }
-    const int scroll = scroll_at(now_ms, content);
-    for (int i = 0, x = ROW_X - scroll; i < n; x += out[i].w, i++) out[i].x = x;
+    const int scroll = scroll_at(now_ms, round_q(edge));
+    for (int i = 0; i < n; i++) out[i].x += ROW_X - scroll;
     if (px) *px = scroll;
     return n;
 }
@@ -183,17 +194,24 @@ static void look_rest(max_look_t *l, const char *open, bool seen)
     rest(&l->panel, opened ? MAX_ONE : 0);
     rest(&l->dot, seen ? MAX_ONE : 0);
 }
+// Fade-through (the owner, 25 Nov: V3's cross-fade let the cell's face and the panel show at once, in two places, with
+// a dark gap between): what goes is gone in FADE_OUT_MS; what comes fades in over the move's last four fifths
+// (MAX_EASE_LATE), landing with the widths.
+static void fade(max_tween_t *t, bool on, uint32_t now_ms)
+{
+    if (on) ease_to(t, MAX_ONE, MAX_PANE_MS, MAX_EASE_LATE, now_ms);
+    else ease_to(t, 0, FADE_OUT_MS, MAX_EASE, now_ms);
+}
 // Each part on its way there, as V3's cell eases it: a part whose end is unchanged runs on.
 static void look_send(max_look_t *l, const char *open, uint32_t now_ms)
 {
     const bool opened = open[0] && !strcmp(l->id, open), sliver = open[0] && !opened;
-    ease_to(&l->sl, sliver ? MAX_ONE : 0, MAX_ROW_MS, MAX_EASE_ROW, now_ms);
-    ease_to(&l->words, sliver ? 0 : MAX_ONE, WORDS_MS, MAX_EASE, now_ms);
-    ease_to(&l->face, opened ? 0 : MAX_ONE, FACE_MS, MAX_EASE, now_ms);
+    ease_to(&l->sl, sliver ? MAX_ONE : 0, MAX_PANE_MS, MAX_EASE_PANE, now_ms);
+    fade(&l->words, !sliver, now_ms);
+    fade(&l->face, !opened, now_ms);
     ease_to(&l->dim, sliver ? MAX_ONE : 0, DIM_MS, MAX_EASE, now_ms);
     ease_to(&l->ground, opened ? MAX_ONE : 0, GROUND_MS, MAX_EASE, now_ms);
-    if (opened) ease_to(&l->panel, MAX_ONE, PANEL_IN_MS, MAX_EASE_LATE, now_ms);
-    else ease_to(&l->panel, 0, PANEL_OUT_MS, MAX_EASE, now_ms);
+    fade(&l->panel, opened, now_ms);
 }
 
 // At least half of it on the glass: its dot is lit.
@@ -231,14 +249,14 @@ void max_row_step(uint32_t now_ms)
         const int px = scroll_at(now_ms, content_w(now_ms));
         for (int i = 0; i < n; i++) {
             max_look_t *l = &r->looks[i];
-            run(&l->w, width_for(l->id, open), MAX_ROW_MS, MAX_EASE_ROW, now_ms);
+            run(&l->w, width_for(l->id, open), MAX_PANE_MS, MAX_EASE_PANE, now_ms);
             look_send(l, open, now_ms);
         }
         r->drag = false;   // the page moved under the finger: it lets go of the row
         // Carried along with the move (V3 _carry) to where the open agent rests, or, closed, to row_first: the scroll
         // and every width on one curve, so the agent opening or closing stays on the glass. (V3 _back waited for the
         // cells' width first: the closed agent went off the glass and the row seemed to jump to its front, 25 Nov.)
-        r->px = (max_tween_t){px, open[0] ? open_px(open, row, n) : closed_px(n), now_ms, MAX_ROW_MS, MAX_EASE_ROW};
+        r->px = (max_tween_t){px, open[0] ? open_px(open, row, n) : closed_px(n), now_ms, MAX_PANE_MS, MAX_EASE_PANE};
     } else if (!open[0] && !r->drag && max_m.row_first != r->first) {   // to the front, or wherever the model sent it
         run(&r->px, closed_px(n), MAX_ROW_MS, MAX_EASE_ROW, now_ms);
     }

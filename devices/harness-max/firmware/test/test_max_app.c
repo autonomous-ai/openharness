@@ -440,8 +440,8 @@ static void test_a_send_plays_send_then_working(void)
     now = played;
     render_pass();
     CHECK(!max_send_holds("a") && max_m.view == MAX_VIEW_OVERVIEW && a->state == MAX_WORKING && a->sent);
-    CHECK(max_row_moving(now) && max_row_moving(now + MAX_ROW_MS - 1));   // the pane shrinks back into its cell
-    for (int i = 0; i < 100 && max_row_moving(now); i++) {   // then the row scrolls back, frame by frame
+    CHECK(max_row_moving(now) && max_row_moving(now + MAX_PANE_MS - 1));   // the pane shrinks back into its cell
+    for (int i = 0; i < 100 && max_row_moving(now); i++) {   // the row carried along, frame by frame
         now += 20;
         render_pass();
     }

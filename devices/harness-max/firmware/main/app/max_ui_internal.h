@@ -217,14 +217,16 @@ typedef struct {
 
 // ---- App Detail's row in motion (max_ui_row.c), as V3's OverviewPage moves it ----
 #define MAX_ONE 4096                // a look's whole, as its parts count (Q12)
-#define MAX_ROW_MS 420u             // the row's move (V3 kRowMove), its carry and a settle
+#define MAX_ROW_MS 420u             // the row's move (V3 kRowMove) to the front, and a settle
+#define MAX_PANE_MS 360u            // an agent opening or closing across the row: the widths, the carry, the fade-through
 #define MAX_ROW_FRAME_MS 16u        // a frame while anything in the row moves
 #define MAX_LOOP_FRAME_MS 33u       // a frame while only what loops by the clock moves (V3's Motion): its pulses and sweeps
 #define MAX_ROW_HITS 8              // the cells and slivers on the glass at once, cut by its ends
 #define MAX_TRACK 8                 // the finger's last moves, for its speed as it lets go
-// The curves V3 eases by: kRowEase Cubic(.2, .8, .2, 1), Curves.ease, the open agent's fade in, Interval(140 / 440,
-// 1, ease), and the pulses' Curves.easeInOut, Cubic(.42, 0, .58, 1).
-typedef enum { MAX_EASE_ROW, MAX_EASE, MAX_EASE_LATE, MAX_EASE_IN_OUT } max_curve_t;
+// The curves: V3's kRowEase Cubic(.2, .8, .2, 1), Curves.ease and the pulses' Curves.easeInOut, Cubic(.42, 0, .58, 1);
+// a fade-through's coming in, Interval(.2, 1, ease) (what goes is gone first); and the pane's open and close, Material
+// 3's standard Cubic(.2, 0, 0, 1): no leap on its first frames (the owner, 25 Nov: kRowEase's made the pane dizzying).
+typedef enum { MAX_EASE_ROW, MAX_EASE, MAX_EASE_LATE, MAX_EASE_IN_OUT, MAX_EASE_PANE } max_curve_t;
 // One value easing from `from` at `at` to `to` over `ms`, as an implicit animation: a new end starts again from where
 // it is. At rest when ms is 0 or it has run.
 typedef struct {
