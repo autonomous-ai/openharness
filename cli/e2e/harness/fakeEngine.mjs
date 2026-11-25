@@ -142,7 +142,7 @@ const HOOK_EVENTS = {
 /** The field of an event's input a block's matcher is tested against, for the events whose matcher means something. */
 const MATCHED_FIELD = { SessionStart: 'source', PreToolUse: 'tool_name', Notification: 'notification_type' }
 
-/** A Claude Code settings file's text without a leading BOM, which Claude Code reads past (Windows PowerShell 5 writes
+/** A Claude Code settings or `.claude.json` file's text without a leading BOM, which Claude Code reads past (Windows PowerShell 5 writes
  *  one). Codex does not: its hooks.json is read as it is. */
 const settingsText = (file) => readFileSync(file, 'utf8').replace(/^\uFEFF/, '')
 
@@ -585,7 +585,8 @@ export async function run(engine, config = {}, { native = false } = {}) {
   // Asking whether to trust the folder (`trustPrompt`), before any conversation starts, as both CLIs
   // ask in a folder they have no answer for, reading the answer from their own config: Claude Code's
   // `projects[<folder or one above it>].hasTrustDialogAccepted` in `.claude.json` in CLAUDE_CONFIG_DIR,
-  // else the home folder (2.1.290: `join(CLAUDE_CONFIG_DIR || homedir(), '.claude.json')`); Codex's
+  // else the home folder (2.1.290: `join(CLAUDE_CONFIG_DIR || homedir(), '.claude.json')`), read past a leading BOM as
+  // its settings are and saved whole, without one; Codex's
   // `[projects."<folder>"] trust_level = "trusted"` in its CODEX_HOME's config.toml (0.160:
   // onboarding/directory_trust.rs, whatever the permission flags). Enter or 1 trusts and saves it as they
   // do; Esc, 2 or ctrl+c quits. Off unless a test asks: the real ones also skip folders this models
@@ -595,7 +596,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
     const trustFile = engine === 'claude' ? join(claudeHome ?? homedir(), '.claude.json') : join(codexHome, 'config.toml')
     const trusted = (() => {
       let text = ''
-      try { text = readFileSync(trustFile, 'utf8') } catch { return false }
+      try { text = engine === 'claude' ? settingsText(trustFile) : readFileSync(trustFile, 'utf8') } catch { return false }
       if (engine === 'codex') {
         const at = text.indexOf(`[projects.${JSON.stringify(cwd)}]`)
         return at >= 0 && /^trust_level\s*=\s*"trusted"/m.test(text.slice(at).split(/\n\[/)[0])
@@ -625,7 +626,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
       if (engine === 'codex') appendFileSync(trustFile, `\n[projects.${JSON.stringify(cwd)}]\ntrust_level = "trusted"\n`)
       else {
         let saved = {}
-        try { saved = JSON.parse(readFileSync(trustFile, 'utf8')) } catch { /* none yet */ }
+        try { saved = JSON.parse(settingsText(trustFile)) } catch { /* none yet */ }
         writeFileSync(trustFile, JSON.stringify({ ...saved, projects: { ...saved.projects, [cwd]: { ...saved.projects?.[cwd], hasTrustDialogAccepted: true } } }))
       }
       process.stdout.write('\x1b[H\x1b[2J')
