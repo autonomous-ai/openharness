@@ -374,6 +374,15 @@ describe('pending hook admission', () => {
     queue.submit('after', 'session', after)
     expect(after.inspect).not.toHaveBeenCalled()
   })
+
+  it("admits a new conversation's timed hook over a resumed row's untimed binding", async () => {
+    const queue = createPendingAdmissions()
+    const hook = request({ conversationId: 'new', binding: { id: 'old', at: null }, order: { scope: 'process', firedAt: 50, arrival: 1 } })
+    queue.submit('agent', 'd1', hook); await flush()
+    expect(hook.accept).toHaveBeenCalledOnce()
+    expect(hook.held).not.toHaveBeenCalled()
+    queue.close()
+  })
 })
 
 
