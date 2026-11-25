@@ -849,6 +849,11 @@ export class CableSession {
    *  (Orca's worktree, cableHost.ts appRing). Its wide screen shows many of the app's agents at once. Every other board
    *  gets the scope as before. */
   private wholeRings = false
+  /** `hello.board === 'max'` (owner, 25 Nov): a ring goes in one list, never split in two (syncAgentsNow). The Max's cable
+   *  client builds the whole roster and takes it at `agents.end`, up to 32 agents, so the round dial's add-before-remove
+   *  limit is not its own; a split's step 1 there was an empty list on an app switch (Harness to Orca), and the bar showed
+   *  Ambient until step 2. Every other board splits as before. */
+  private oneStepRings = false
   private seq = 0
   private resyncAt = 0
   /** From a dial's greeting to its push's walk of the open questions: a question asked meanwhile waits for that walk,
@@ -873,6 +878,7 @@ export class CableSession {
     this.seqOn = false
     this.markPermissions = false
     this.wholeRings = false
+    this.oneStepRings = false
     this.seq = 0
     this.resyncAt = 0
     this.playerOffset = this.playerRequest = 0
@@ -1566,6 +1572,7 @@ export class CableSession {
         this.seqOn = isP4Board(str('board'))
         this.markPermissions = str('board') === 'max'
         this.wholeRings = str('board') === 'max'
+        this.oneStepRings = str('board') === 'max'
         this.seq = 0
         const mac = str('mac') ?? ''
         // Rule 1: every greeting is answered, but only an unfamiliar dial gets the full state.
@@ -3044,10 +3051,11 @@ export class CableSession {
     // 17:32:40: Orca's one agent refused, the 16 stale tiles removed, the dial on "Choose a pane". Step 1 is the ring's
     // agents the dial holds, in the ring's order, which adds nothing and removes the rest; step 2, the ring, then fits,
     // and the hold below sends it. Only the first RING_PLACES rows of a list count, the dial's and the ring's: the
-    // firmware keeps no more (cable_client.c handle_agent). A dial that holds none never splits.
+    // firmware keeps no more (cable_client.c handle_agent). A dial that holds none never splits, nor does a Harness Max
+    // (oneStepRings).
     const held = new Set(this.lastRing.slice(0, RING_PLACES).map((a) => a.id))
     const front = full.slice(0, RING_PLACES)
-    const split = held.size > 0 && new Set([...held, ...front.map((a) => a.id)]).size > RING_PLACES
+    const split = !this.oneStepRings && held.size > 0 && new Set([...held, ...front.map((a) => a.id)]).size > RING_PLACES
     const agents = split ? front.filter((a) => held.has(a.id)) : full
     // WHETHER there is a window is in the key, not WHICH tab: an empty tab after the window shut sends the
     // same zero rows and draws a different screen, so that flip has to push. The tab's id does not — the

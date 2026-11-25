@@ -6322,6 +6322,40 @@ describe('a ring that would overflow the dial goes in two steps (docs/plans/2026
     } finally { await session.stop(); vi.useRealTimers() }
   })
 
+  it('a Harness Max takes every ring in one list, where a round dial or a Pro would split (owner, 25 Nov: Harness to Orca showed its Ambient)', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    try {
+      let rows = SIXTEEN
+      const max = await connect(makeHost({ dialShows: vi.fn(), log: vi.fn(), listAgentSnapshot: async () => machine(rows) }))
+      try {
+        await greet(max.port, { board: 'max' })
+        // Each step would split on a round dial: none of ORCA held, then ORCA's two with SIXTEEN, then two new among it.
+        for (const next of [ORCA, SIXTEEN, MIXED]) {
+          const mark = max.port.sent.length
+          vi.advanceTimersByTime(1_100)
+          rows = next
+          await max.session.syncAgents()
+          expect(lists(max.port, mark)).toEqual([ids(next)])
+        }
+        expect(splitLines(max.host)).toEqual([])
+      } finally { await max.session.stop() }
+      // The same move on a Pro still goes in two steps, as on main.
+      rows = SIXTEEN
+      const pro = await connect(makeHost({ dialShows: vi.fn(), log: vi.fn(), listAgentSnapshot: async () => machine(rows) }))
+      try {
+        await greet(pro.port, { board: 'pro' })
+        const mark = pro.port.sent.length
+        vi.advanceTimersByTime(1_100)
+        rows = ORCA
+        await pro.session.syncAgents()
+        vi.advanceTimersByTime(1_000)
+        await pro.session.syncAgents()
+        expect(lists(pro.port, mark)).toEqual([[], ids(ORCA)])
+        expect(splitLines(pro.host)).toEqual(['cable: agents split · 0 kept · 2 in ring'])
+      } finally { await pro.session.stop() }
+    } finally { vi.useRealTimers() }
+  })
+
   it('the split line is said once a split, with counts only', async () => {
     vi.useFakeTimers({ toFake: ['Date', 'performance'] })
     try {
