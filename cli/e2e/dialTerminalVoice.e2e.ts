@@ -15,6 +15,7 @@ import { writeFileSync } from 'node:fs'
 import { join, sep } from 'node:path'
 import { createInterface } from 'node:readline'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
+import { heardClip } from '../src/cable/__fixtures__/heardClip.js'
 import { devicesListenerPath } from '../src/devices/listenerPath.js'
 import { INJECT_PASTE_DELAY_BASE_MS } from '../src/lib/submitTiming.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
@@ -146,7 +147,7 @@ describe.skipIf(process.platform !== 'darwin')('the dial\'s words reach an agent
     relay.speech = words
     const since = dial.messages.length
     dial.send({ t: 'voice.begin', agentId: engine.id, uploadId: 'spoken-1', sr: 16_000, lang: 'en' })
-    dial.audio(Buffer.alloc(3_200, 1))
+    for (const frame of heardClip()) dial.audio(frame)
     dial.send({ t: 'voice.end', uploadId: 'spoken-1' })
     return dial.next((m) => m.t === 'voice.transcript' || m.t === 'voice.error', 45_000, 'the answer to its words', since)
   }

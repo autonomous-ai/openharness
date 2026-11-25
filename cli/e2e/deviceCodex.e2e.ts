@@ -161,7 +161,7 @@ describe('the dial talks to Codex outside Harness through codex queue', () => {
     // Spoken to all the same: refused, and no codex runs.
     const since = dial.messages.length
     dial.send({ t: 'voice.begin', agentId: codex.id, uploadId: 'spoken-1', sr: 16_000, lang: 'en' })
-    dial.audio(Buffer.alloc(3_200, 1))
+    for (const frame of heardClip()) dial.audio(frame)
     dial.send({ t: 'voice.end', uploadId: 'spoken-1' })
     const heard = await dial.next((m) => m.t === 'voice.transcript' || m.t === 'voice.error', 45_000, 'the answer to its words', since)
     expect(heard).toMatchObject({ t: 'voice.error' })
