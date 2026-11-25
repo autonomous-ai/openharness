@@ -168,6 +168,23 @@ describe("tier A's voice step", () => {
     expect(wrongSends(scenario, seen())).toHaveLength(4)
   })
 
+  it("a tmux run that puts words in a pane by a short form of the command's name, or by pipe-pane -I, is typed into no session", () => {
+    const { world, deliveries, ran, seen } = worldOf(new LoopbackDial(() => Date.now()))
+    recordTyping(world)
+    const tmux = '/opt/eval/bin/tmux'
+    // tmux(1) accepts the shortest unambiguous form of a command's name; pipe-pane -I types what its command prints.
+    const puts = [[tmux, 'send-k', '-t', '%2', '-l', 'Eval words.'], [tmux, 'set-b', 'Eval words.'],
+      [tmux, 'loa', '-'], [tmux, 'pa', '-t', '%2'], [tmux, 'pipep', '-I', '-t', '%2', 'Eval words.']]
+    for (const argv of puts) expect(ran(argv)).toBeUndefined()
+    // pipe-pane without -I only reads the pane, and these put nothing in it.
+    ran([tmux, 'pipe-pane', '-O', '-t', '%2', 'cat'])
+    ran([tmux, 'select-pane', '-t', '%2'])
+    ran([tmux, 'list-clients', '-F', '#{client_tty}'])
+    ran([tmux, 'set-option', '-g', 'status', 'off'])
+    expect(deliveries).toEqual(puts.map((argv) => ({ at: 600, path: 'typed', target: null, text: argv.at(-1) })))
+    expect(wrongSends(scenario, seen())).toHaveLength(5)
+  })
+
   it('words spoken to one session that reach another are reported as a wrong send', async () => {
     const dial = new LoopbackDial(() => Date.now())
     const { world, deliveries, seen } = worldOf(dial)
