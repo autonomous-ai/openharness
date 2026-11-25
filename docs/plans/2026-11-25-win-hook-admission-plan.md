@@ -42,8 +42,9 @@ or prompt.
   - `[hooks] <sid> <route> waits for its session's admission` — once per session per admission ahead of it;
   - `[hooks] <sid> waiting hooks ran · <n>` — when a session's waiting hooks have all run after their admissions
     settled;
-  - `[hooks] <sid> <route> runs unheld · <reason>`, `<reason>` one of `session_full`, `core_full`, `timed_out` — one
-    per hook that did not wait or stopped waiting;
+  - `[hooks] <sid> <route> runs unheld · <reason> · <n>`, `<reason>` one of `session_full`, `core_full`, `timed_out` —
+    at most once a minute per reason, `<n>` the hooks that did not wait or stopped waiting for it since its last line
+    (final review: one line per hook flooded the log while an admission stayed held);
   - `[hooks] <sid> <route> waiting hook failed · <errorKind>`.
   A replayed hook still unbound is refused through today's once-a-minute line, `[hooks] <sid> <route> refused ·
   unbound`.

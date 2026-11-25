@@ -115,6 +115,8 @@ session first" step, `core/agents/hermesTerminal.ts:141`, if that is all it is f
   arrived (the same `verifiedBoundMutation` fence, the same handler, its original fired-at time), the waiting hooks of
   a session one after another in arrival order. Bound by then, it takes effect; still unbound, it is refused as today
   and logged.
+- While a session has waiting hooks, or they are running, its new hooks go behind them, bound or not, so they keep
+  arrival order (final review). A bound session's hook waits only for those hooks, never for an admission.
 - A bound session's hooks run at once, as today, even while one of its prompts is being re-admitted: that
   re-admission can be held for reasons that have nothing to do with binding (an unreadable source, a binding change),
   and today those hooks take effect at once.
