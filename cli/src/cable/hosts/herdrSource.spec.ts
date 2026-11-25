@@ -2,7 +2,7 @@ import { dirname } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fakeHerdr, RECORDED, type FakeHerdr, type FakeHerdrRequest } from '../../testing/fakeHerdr.js'
 import { createHerdrAdapter } from './herdr.js'
-import { createHerdrClient, type HerdrPrompt } from './herdrClient.js'
+import { createHerdrClient, type HerdrPrompt, type HerdrSubscriber } from './herdrClient.js'
 import { HerdrSource, type HerdrSourceDeps } from './herdrSource.js'
 import { MAX_TEXT } from './orca.js'
 import type { HostAgent } from './types.js'
@@ -915,6 +915,50 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
       await listRead(n)
       expect(s.timers.map(({ ms }) => ms)).toEqual(next)
     }
+  })
+
+  // herdr 0.9.5 that stops while a re-list's subscription opens ends the current one, then refuses the new one (CI run
+  // 45721544951): the attempt failed as `closed · rejected`, a word that says nothing of a herdr that stopped.
+  it('herdr stopping while a re-list subscription opens fails the attempt as the current one ended, and its rows go', async () => {
+    const client = herdrClient()
+    let hold = false
+    let opening: { to: HerdrSubscriber; closed: boolean } | undefined
+    let currentEnded!: () => void
+    const ended = new Promise<void>((resolve) => { currentEnded = resolve })
+    const s = setup({
+      client: {
+        ...client,
+        subscribe: (entries, to) => {
+          if (JSON.stringify(entries) === JSON.stringify(FOCUS)) return client.subscribe(entries, to)
+          if (!hold) {
+            return client.subscribe(entries, { ...to, closed: (reason) => {
+              to.closed(reason)
+              currentEnded()
+            } })
+          }
+          // The re-list's subscription, unanswered until the test says.
+          const held = { to, closed: false }
+          opening = held
+          return { close: () => { held.closed = true } }
+        },
+      },
+    })
+    await listedBare(s)
+    hold = true
+    s.advance(1000)
+    expect(opening).toBeDefined()
+    const said = s.log.length
+    await server.stop()
+    await ended
+    // As the real client does, a subscription the source closed tells nothing.
+    if (!opening!.closed) opening!.to.closed('rejected')
+    expect(s.log.slice(said)).toEqual(['[herdr] closed · ended', '[herdr] retry · 1'])
+    // Only the retry is due: no re-list opens a subscription to a herdr that stopped.
+    expect(s.timers.map(({ ms }) => ms)).toEqual([1000])
+    s.advance(1000)
+    expect(s.source.list()).toEqual([])
+    expect(s.timers).toEqual([])
+    expect(s.log.at(-1)).toBe('[herdr] socket · none')
   })
 
   it('the id is kept across a reconnect while the pane stays listed, and is another once it left', async () => {
