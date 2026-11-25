@@ -118,6 +118,17 @@ WINDOWS_SPECS = (
     "cli/src/lib/windows/ptyInstall.windows.real.spec.ts", "cli/src/scripts/installPs1.spec.ts",
     "cli/src/testing/windowsPowerShell.spec.ts",
 )
+# windows-e2e: what the dial desk bundle (cli/scripts/windows-dial-e2e/desk.mts, which dialWindowsTools.e2e.ts builds
+# and runs on Windows) imports from the harness and the testing helpers: its desk, dial and daemon and what they start.
+# test_ci_plan walks the imports. The product code the bundle carries is selected by its own rules.
+WINDOWS_DESK_PATHS = (
+    *(f"cli/e2e/harness/{name}.ts" for name in ("artifacts", "client", "daemon", "desk", "fakeBackend", "fakeDial",
+                                                 "reaper")),
+    *(f"cli/src/testing/{name}.ts" for name in ("daemonEnvironment", "dialCarousel", "executableFixture", "ghStub",
+                                                 "isolatedTmux", "placeNode", "removeRoot", "rootProcesses",
+                                                 "socketPathRoom", "spawnedRuns", "startEnvFile", "testNode",
+                                                 "testPath")),
+)
 # A spec tests the module beside it named up to its first dot: secureState.spec.ts tests secureState.ts.
 WINDOWS_SPEC_MODULES = {str(PurePosixPath(spec).with_name(PurePosixPath(spec).name.split(".")[0] + ".ts"))
                         for spec in WINDOWS_SPECS if not spec.endswith("/")}
@@ -497,12 +508,14 @@ def windows_only(path):
 def windows_e2e(path):
     """What windows-e2e tests: Windows-only code, cross-platform code with win32 branches that broke only on Windows
     (#4513: the devices, the cable, the engines' hook scripts, the dial plugins), the TUI and the flasher windows.yml
-    runs, its specs with the modules they test, and the dial desk bundle dialWindowsTools.e2e.ts builds and runs."""
+    runs, its specs with the modules they test, and the dial desk bundle dialWindowsTools.e2e.ts builds and runs, with
+    what it imports from the harness and the testing helpers."""
     return windows_only(path) or not windows_docs(path) and (
         path.startswith(("cli/src/lib/windows/", "cli/src/devices/", "cli/src/cable/", "cli/hook/", "tui/",
                          "website/src/app/flash-circle.ps1/", "cli/scripts/windows-dial-e2e/"))
         or re.match(r"plugins/harness-device[^/]*/", path) is not None
-        or path in WINDOWS_SPEC_MODULES or any(covers(spec, path) for spec in WINDOWS_SPECS))
+        or path in WINDOWS_SPEC_MODULES or path in WINDOWS_DESK_PATHS
+        or any(covers(spec, path) for spec in WINDOWS_SPECS))
 
 
 def listed(entry, path):

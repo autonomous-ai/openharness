@@ -2088,6 +2088,7 @@ class FullCheckoutTests(unittest.TestCase):
              "SelectionTests.test_the_orca_e2e_files_are_every_linux_one_through_the_stand_in",
              "SelectionTests.test_every_path_the_app_eval_covers_is_in_the_checkout",
              "SelectionTests.test_the_harness_the_app_eval_files_run_runs_them",
+             "SelectionTests.test_the_windows_desk_imports_are_listed",
              "SelectionTests.test_every_declared_input_exists",
              "CrossReadTests.test_every_cross_read_in_this_repository_is_declared")
 
