@@ -30,10 +30,11 @@ interface Attempt { controller: AbortController; timeout: unknown }
  * flight and the tail are left at Done.
  */
 export class VoiceSegments {
-  /** Samples in a segment, where the cut window starts, and in a 20 ms frame. */
+  /** Samples in a segment, where the cut window starts, and in a 20 ms frame; bytes in a second. */
   private readonly segmentSamples: number
   private readonly windowStart: number
   private readonly frameSamples: number
+  private readonly secondBytes: number
   private readonly lang: string
   private readonly transcribe: SegmentTranscriber
   private readonly timer: SegmentTimer
@@ -59,6 +60,7 @@ export class VoiceSegments {
     this.segmentSamples = 60 * rate
     this.windowStart = 55 * rate
     this.frameSamples = Math.floor(rate / 50)
+    this.secondBytes = rate * 2
     this.runningLevel = new VoiceLevel(rate)
     this.frameLevels = new FrameLevels(this.frameSamples)
     this.lang = options.lang
@@ -138,6 +140,11 @@ export class VoiceSegments {
     const levels = new FrameLevels(this.frameSamples)
     levels.add(pcm)
     this.frameLevels.merge(levels)
+    // The tail of a recording no segment was cut from is all of it: under a second with no speech by the dial's gate, it
+    // is a press with nothing said. It has no words, as an empty transcript has, and spends no upload or voice time.
+    if (this.finishing && this.count.segments === 0 && pcm.length < this.secondBytes && !this.runningLevel.read().heard) {
+      return this.next()
+    }
     const gain = gainFor(levels)
     this.gain = Math.max(this.gain, gain)
     // Raised once, so a retry sends the same bytes.

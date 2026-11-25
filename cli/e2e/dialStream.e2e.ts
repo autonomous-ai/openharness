@@ -26,6 +26,7 @@ import { request, type ClientRequest } from 'node:http'
 import { join, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
+import { heardClip } from '../src/cable/__fixtures__/heardClip.js'
 import { observedAgentId } from '../src/cable/hosts/observed.js'
 import { devicesListenerPath } from '../src/devices/listenerPath.js'
 import { RECORDED_ORCA_AGENTS } from '../src/testing/recordedOrca.js'
@@ -571,7 +572,7 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
     // 3. Words to B's chat, which has no process: refused on the dial before any audio is kept, and typed nowhere.
     since = dial.messages.length
     dial.send({ t: 'voice.begin', agentId: chats.b1.id, uploadId: 'spoken-chat', sr: 16_000, lang: 'en' })
-    dial.audio(Buffer.alloc(3_200, 1))
+    for (const frame of heardClip()) dial.audio(frame)
     dial.send({ t: 'voice.end', uploadId: 'spoken-chat' })
     expect(await dial.next((m) => (m.t === 'voice.transcript' || m.t === 'voice.error') && m.uploadId === 'spoken-chat', 45_000, 'the answer to its words', since))
       .toMatchObject({ t: 'voice.error', message: 'Type in Orca for chats.' })

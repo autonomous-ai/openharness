@@ -15,6 +15,7 @@ import { execFileSync } from 'node:child_process'
 import { lstatSync, mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
+import { heardClip } from '../src/cable/__fixtures__/heardClip.js'
 import { alive } from '../src/testing/spawnedRuns.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
@@ -109,7 +110,7 @@ describe.skipIf(!herdrBinary)("herdr's agents on the dial, from a private herdr 
     relay.speech = words
     const since = dial.messages.length
     dial.send({ t: 'voice.begin', agentId, uploadId, sr: 16_000, lang: 'en' })
-    dial.audio(Buffer.alloc(3_200, 1))
+    for (const frame of heardClip()) dial.audio(frame)
     dial.send({ t: 'voice.end', uploadId })
     return dial.next((m) => m.t === 'voice.transcript' || m.t === 'voice.error', 45_000, 'the answer to its words', since)
   }
