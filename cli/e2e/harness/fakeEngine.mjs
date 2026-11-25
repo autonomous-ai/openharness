@@ -83,9 +83,9 @@
 // no rollout open, so a test can prove the daemon learned its home from something else (enginehomes.e2e.ts).
 // `firstHookDelayMs` is how long its first SessionStart takes to reach the daemon once the engine is up: the hook
 // command starting on a loaded machine, while the daemon has already found the engine and its conversation.
-// `lateTranscript` (Claude Code) creates each new conversation's transcript, its startup's (not a resume's) and a
-// `!clear`'s, only once the test writes `transcript.release` in the root (a minute at most): meanwhile
-// `transcript.waiting` there holds its session id, its SessionStart names the path that does not exist yet, turns run and
+// `lateTranscript` (Claude Code) creates each new conversation's transcript, its startup's, a fork's (not a resume's) and
+// a `!clear`'s, only once the test writes `transcript.<session id>.release` in the root (a minute at most): meanwhile
+// `transcript.<session id>.waiting` is there, its SessionStart names the path that does not exist yet, turns run and
 // their records are kept back; the release creates the file with them and removes both files. Claude Code on Windows
 // announces SessionStart before its transcript exists (2-3 s measured, CLI 0.6.89). `lazySessionStart` (Codex) sends
 // no SessionStart as it starts: its first prompt runs it (`resume` for a resumed process, else `startup`) before its
@@ -649,23 +649,20 @@ export async function run(engine, config = {}, { native = false } = {}) {
   const lateTranscript = engine === 'claude' && config.lateTranscript === true
   let unwritten = null
   const createLate = () => {
-    const { file, kept } = unwritten
+    const { file, kept, waiting, release } = unwritten
     unwritten = null
     appendFileSync(file, kept.join(''))
+    rmSync(waiting, { force: true })
+    rmSync(release, { force: true })
   }
+  // A pair of files per session: another process in the same root, or this one's next conversation, has its own.
   const holdTranscript = () => {
-    const mine = { file: transcript, kept: [] }
+    const mine = { file: transcript, kept: [],
+      waiting: join(config.root, `transcript.${sessionId}.waiting`), release: join(config.root, `transcript.${sessionId}.release`) }
     unwritten = mine
-    const waiting = join(config.root, 'transcript.waiting')
-    const release = join(config.root, 'transcript.release')
-    writeFileSync(waiting, sessionId)
-    void released(release).then(() => {
-      // A `!clear` created this one already, and the files are its next conversation's.
-      if (unwritten !== mine) return
-      createLate()
-      rmSync(waiting, { force: true })
-      rmSync(release, { force: true })
-    })
+    writeFileSync(mine.waiting, '')
+    // A `!clear` created this one already.
+    void released(mine.release).then(() => { if (unwritten === mine) createLate() })
   }
   let transcript = engine === 'claude'
     ? join(projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`)
@@ -673,7 +670,8 @@ export async function run(engine, config = {}, { native = false } = {}) {
       ? config.rolloutFor[resumed]
       : join(codexHome, 'sessions', '2026', '10', '03', `rollout-2026-10-03T00-00-00-${sessionId}.jsonl`)
   mkdirSync(dirname(transcript), { recursive: true })
-  if (lateTranscript && !resumed) holdTranscript()
+  // A fork's conversation is a new one: its transcript is new too.
+  if (lateTranscript && (!resumed || fork)) holdTranscript()
   else if (!existsSync(transcript)) writeFileSync(transcript, '')
   // What each CLI leaves for whoever needs to know which conversation this process is writing, as the
   // daemon does when the conversation's start-up hook was lost. Codex holds its rollout open for the

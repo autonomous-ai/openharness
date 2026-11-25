@@ -6,7 +6,7 @@
  * being refused as unbound. The fake engine's `lateTranscript` keeps the transcript back until the test releases it
  * (fakeEngine.mjs).
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
@@ -40,13 +40,11 @@ describe('hooks during an admission', () => {
     await d.start()
     return d
   }
-  const waitingFile = (d: IsolatedDaemon) => join(d.root, 'transcript.waiting')
-  const release = (d: IsolatedDaemon) => writeFileSync(join(d.root, 'transcript.release'), '')
-  /** The session whose transcript the engine keeps back, once it names one other than [other]. */
-  const waitingSession = (d: IsolatedDaemon, other?: string) => until('the engine to hold its new transcript back', () => {
-    const named = existsSync(waitingFile(d)) ? readFileSync(waitingFile(d), 'utf8').trim() : ''
-    return named && named !== other ? named : null
-  }, 30_000, 50)
+  const release = (d: IsolatedDaemon, sessionId: string) => writeFileSync(join(d.root, `transcript.${sessionId}.release`), '')
+  /** The session whose transcript the engine keeps back, once it is one other than [other]. */
+  const waitingSession = (d: IsolatedDaemon, other?: string) => until('the engine to hold its new transcript back', () =>
+    readdirSync(d.root).map((name) => /^transcript\.(.+)\.waiting$/.exec(name)?.[1]).find((named) => named && named !== other) ?? null,
+  30_000, 50)
 
   /**
    * A prompt typed into the pane while [sessionId]'s transcript is kept back: its Stop runs in the engine before the
@@ -65,7 +63,7 @@ describe('hooks during an admission', () => {
     // The Stop hook ran once the daemon answered it, so it reached the daemon before the session could be bound.
     await until(`the engine to run the Stop of ${word}`, () =>
       d.hookLog().split('\n').some((line) => line.includes(` Stop session=${sessionId} ran`)) || null, 30_000, 50)
-    release(d)
+    release(d, sessionId)
     if (streamed) await Promise.all([started, ended, recap])
     // The recap a device restoring its tile is answered with.
     await until(`the recap of ${word}`, async () => {
@@ -103,11 +101,11 @@ describe('hooks during an admission', () => {
     const client = await LocalClient.connect(d)
     const cwd = join(d.projectsDir, 'hook-wait-clear')
     mkdirSync(cwd, { recursive: true })
-    // The first conversation's transcript released at once, and one turn on it.
-    release(d)
     const created = await client.request('agent_create', { engine: 'claude', cwd, bypassPermission: true }, 90_000)
     expect(created.error, JSON.stringify(created)).toBeUndefined()
     const agentId: string = created.agent.id
+    // The first conversation's transcript released at once, and one turn on it.
+    release(d, await waitingSession(d))
     const first = await until('the agent to bind its first conversation', async () => {
       const now = await row(client, agentId)
       return now?.sessionId && now.status === 'active' && now.tmuxPane ? now : null
