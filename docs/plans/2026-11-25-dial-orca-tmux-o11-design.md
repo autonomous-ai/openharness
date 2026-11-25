@@ -3,8 +3,11 @@
 Date: 2026-11-25. Branch: `chore/dial-orca-tmux-o11-proposal`. No product code in this branch.
 
 **Decided (PM, 2026-11-25): option A**, as Diego's rule "inside Orca it stays as today". This branch also does A's eval
-change: O11 grades today's behavior with a tap and a voice check, and the Orca world has the tmux model on all three
-platforms. B goes to the backlog.
+change: O11 grades today's behavior with a tap and a voice check, and the Orca world has the tmux model. Refined with
+the plan (`2026-11-25-dial-orca-tmux-o11-plan.md`): O11 runs in tier A on macOS and Linux only. On Windows tmux runs
+only inside WSL, and a WSL agent's hooks never reach the Windows daemon. Tier B's tmux has no client, so a faithful
+model is a backlog item. The baseline drops `a/win32/O11/*` and `b/darwin/O11/*` only through a run. B goes to the
+backlog.
 
 ## The question
 
