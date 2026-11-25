@@ -1,12 +1,18 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import Page from "./page";
+import type { VisitorPlatform } from "@/lib/desktopPlatform";
 import { INSTALL_COMMAND } from "@/lib/installCommand";
+
+let platform: VisitorPlatform | null = null;
+vi.mock("@/lib/useVisitorPlatform", () => ({ useVisitorPlatform: () => platform }));
+
+const { default: Page } = await import("./page");
 
 const writeText = vi.fn<(text: string) => Promise<void>>();
 
 describe("/download", () => {
   beforeEach(() => {
+    platform = null;
     writeText.mockReset();
     writeText.mockResolvedValue();
     Object.defineProperty(navigator, "clipboard", {
@@ -43,6 +49,14 @@ describe("/download", () => {
     // No install script for the desktop app any more — direct links only. (The CLI section below
     // still has its own `cli/install.sh` script, which is intentional and covered separately.)
     expect(document.body).not.toHaveTextContent("desktop/install.sh");
+  });
+
+  it("marks the one Windows installer as this computer on Windows on ARM", () => {
+    platform = "windows-arm64";
+    render(<Page />);
+
+    expect(screen.getByRole("link", { name: /Windows/ })).toHaveTextContent("x64 and ARM · this computer");
+    expect(screen.getAllByText(/this computer/)).toHaveLength(1);
   });
 
   it("guides users through the CLI install, from the shared constants", () => {
