@@ -99,7 +99,9 @@ from one `listProcesses` table.
      not open);
    - has no `herdr.exe` among its parents. That leaves out a `herdr …` command run inside a pane, and a herdr client
      nested in a herdr pane;
-   - started no other herdr server: no `herdr.exe` child other than our server. That leaves out a client of a named
+   - started no other herdr server: no `herdr.exe` child, started after it (by start marker), other than our server.
+     The start marker matters because a server keeps its first client's pid as its parent after that client exits
+     (Part 1, step 5), and a new process may take that pid. That leaves out a client of a named
      session, which spawned its own server.
 
    At most `HERDR_CLIENTS_A_LOOKUP` (16), the newest by start marker.
@@ -143,25 +145,37 @@ from one `listProcesses` table.
 ## The test that fails first
 
 `cli/src/cable/hosts/herdrOuter.spec.ts`, a new `win32` block with a fake table (pid, ppid, exe name, start marker, no
-args):
+args). The tree is the one Part 1 recorded on Ken's VM (pids as recorded):
 
 ```
-explorer.exe 50
-└ WindowsTerminal.exe 100            w:…100
-  └ pwsh.exe 110
-    └ herdr.exe 120  (client A)      w:…120
-      └ herdr.exe 130  (server, marker 130)
-        └ pwsh.exe 140
-          └ claude.exe 150  ← caller, HERDR_PANE_ID=w1:p1
-Code.exe 200
-└ pwsh.exe 210
-  └ herdr.exe 220  (client B, newer) w:…220
+explorer.exe 5616
+├ WindowsTerminal.exe 7588                     (one process for every WT window)
+│ ├ OpenConsole.exe 4008                       (the tab's ConPTY)
+│ └ powershell.exe 5512                        (the tab's shell)
+│   └ herdr.exe 8412  client #1
+│     └ herdr.exe 5992  server (marker 5992)
+│       ├ OpenConsole.exe 2264                 (herdr's ConPTY)
+│       └ powershell.exe 8928                  (the pane)
+│         └ powershell.exe 8976  ← caller (stand-in agent), HERDR_PANE_ID
+├ Code.exe 5864                                (VS Code's main)
+│ └ Code.exe 6400                              (VS Code's pty host)
+│   ├ OpenConsole.exe 6936
+│   └ powershell.exe 9264
+│     └ herdr.exe 9904  client #2 (newer)
+└ powershell.exe 5604                          (Win+R, the default-terminal handoff)
+  ├ conhost.exe 4168
+  └ herdr.exe <n>  client #3 (newest)
 ```
 
-- **Red:** `createHerdrOuter({ platform: 'win32', … })(hints, 150)` returns `undefined` today.
+- **Red:** `createHerdrOuter({ platform: 'win32', … })(hints, 8976)` returns `undefined` today.
 - **Green:**
-  - it resolves `{ app: 'vscode', pid: 220, nest: 'herdr' }`;
-  - with client B gone, it resolves `{ pid: 100, nest: 'herdr' }` (Windows Terminal, the window owner);
+  - it resolves `{ app: 'vscode', pid: 9904, nest: 'herdr' }`: client #2 is in a listed app and beats the newer
+    client #3, which has no window;
+  - with client #2 gone, it resolves `{ pid: 7588, nest: 'herdr' }`: Windows Terminal, the window owner, beats the
+    newer client #3 (Decision 5);
+  - with client #1 gone too (8412 dead, the server's `ppid` still 8412), it resolves `{ nest: 'herdr' }`: client #3
+    has no window;
+  - with 8412 then reused by a newer unrelated process, nothing changes;
   - `made` is told `herdr`.
 - **More cases in the same block:**
   - a `herdr.exe` under the server (a pane's `herdr agent …`) is no client;
@@ -240,6 +254,42 @@ Record names, pids and parents only, never command lines.
 7. Detach the VS Code client, and send a prompt again: the agent goes back to herdr's page, and a tap raises WT.
 8. In a named session (`herdr --session x`), an agent gets no pane row: as before.
 9. Send the desk's log lines for steps 3 to 8. They name no pane, pid or path.
+
+## What Part 1 showed (Ken's VM, 2026-11-26)
+
+Windows 11 ARM64, herdr 0.9.5's x64 build under emulation (herdr ships no ARM64 build), WT opened from Start, a
+stand-in agent. Names, pids and parents only.
+
+1. **The server is a child of its first client**, as the tree above shows: client #1 8412 → server 5992. The server
+   runs its panes through a ConPTY of its own (OpenConsole 2264). A WT tab's ConPTY (OpenConsole 4008) is a child of
+   WindowsTerminal 7588, and so is the tab's shell (5512).
+2. **The pane's environment** (names only): `HERDR_BIN_PATH`, `HERDR_ENV`, `HERDR_PANE_ID`, `HERDR_SOCKET_PATH`,
+   `HERDR_TAB_ID`, `HERDR_WORKSPACE_ID`, `TERM`, `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, `WT_PROFILE_ID`. There is no
+   `WT_SESSION`, which a plain WT tab has. VS Code's integrated terminal had `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`,
+   `VSCODE_A11Y_MODE`, `VSCODE_INJECTION`, `VSCODE_NONCE`, `VSCODE_STABLE`, and no `WT_*`.
+3. **A second client from VS Code:** Code 5864 (main) → Code 6400 (pty host) → powershell 9264 → herdr 9904. Same
+   server.
+4. **The first client closed:** 8412 and its shell ended. The server and the agent kept running, and the server's
+   parent is still 8412, a dead pid that Windows may hand to another process. So the lookup walks **up from the
+   clients**, never up from the server, and a child counts only if it started after its parent.
+5. **The Win+R default-terminal handoff:** powershell 5604's parent is explorer 5616. Its conhost 4168 is its child,
+   and its OpenConsole 1948 is a child of svchost (DcomLaunch). WT shows it in a new window of the **same**
+   WindowsTerminal 7588. The shell carries no `WT_*`, `TERM_PROGRAM` or `VSCODE_*`. Nothing in the tree or the
+   environment links that client to WT, so it has no window here (`{ nest: 'herdr' }`).
+6. **`harness-pty raise --pid 7588`**, with Notepad in front, from a background process: `raised`, exit 0, WT in
+   front. But the window that came was the WT window used last (the Win+R one). With two windows in one process,
+   `--pid` cannot choose the window.
+
+What this changes:
+
+- **The design holds** (walk up from the clients; a client with a window beats a newer one without). The test's tree
+  is now the recorded one, and the "no other server" rule now uses start markers.
+- **A known gap, in this branch's results:**
+  - With several WT windows, a tap brings WT forward but may bring the wrong window.
+  - A client started through the Win+R handoff is placed on herdr's page with no window to raise.
+- **Decision 3's condition is met** (step 6 shows the gap). `harness-pty raise --console-of <pid>` goes to the PM as
+  its own item. It would attach to the client's console and raise the root owner of its console window, the very WT
+  window that holds that tab, and would close both gaps.
 
 ## Decisions (PM, 2026-11-26)
 
