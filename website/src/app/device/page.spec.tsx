@@ -4,10 +4,7 @@ import { fetchDeviceRelease, parseDeviceRelease } from "@/lib/deviceRelease";
 import nextConfig from "../../../next.config.js";
 import DevicePage, { metadata } from "./page";
 
-vi.mock("next/font/google", () => ({
-  Geist: () => ({ variable: "geist" }),
-  Geist_Mono: () => ({ variable: "geist-mono" }),
-}));
+vi.mock("next/font/local", () => ({ default: () => ({ variable: "geist" }) }));
 vi.mock("@/lib/useVisitorPlatform", () => ({ useVisitorPlatform: () => "macos" }));
 vi.mock("@/lib/deviceRelease", async (orig) => ({
   ...(await orig<typeof import("@/lib/deviceRelease")>()),
