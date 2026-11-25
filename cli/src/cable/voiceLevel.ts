@@ -37,10 +37,9 @@ export class VoiceLevel {
   private clipped = 0
   // The gate is the firmware's voice_gate_feed (devices/harness-device/firmware/main/voice_buffer.c), so the daemon and
   // the dial name one recording speech by one rule: a 10 ms block is loud when its mean |sample| is over the level for
-  // the dial's mic gain (600 at 37.5 dB), and the
-  // recording is heard once 320 ms of loud blocks run unbroken (2026-11-25: an empty transcript mixed a press with
-  // nothing said with loud speech the transcriber returned empty). The block under way carries across add() calls, as
-  // segments are cut at any sample.
+  // the dial's mic gain (600 at 37.5 dB), and the recording is heard once 320 ms of loud blocks run unbroken
+  // (2026-11-25: an empty transcript mixed a press with nothing said with loud speech the transcriber returned empty).
+  // The block under way carries across add() calls, as segments are cut at any sample.
   private readonly block: number
   private readonly needed: number
   private readonly loud: number
