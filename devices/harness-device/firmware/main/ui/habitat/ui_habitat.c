@@ -198,6 +198,7 @@ static EXT_RAM_BSS_ATTR struct {
     uint32_t memory_serial;
     int count, active, total;
     bool connected, window, loading, ready, dirty;
+    ui_link_hint_t link_hint;
     int bulk, offset;
     view_t view, voice_return;
     bool quiet, nap, focus_face, straight_title;
@@ -1146,7 +1147,23 @@ static void focus_bell(ht_scene_t *f, unsigned count, int bell_y)
 static void render_home(ht_scene_t *f)
 {
     s.pet_next_ms = 0; s.timer_at = 0;
-    if (!s.connected || s.loading) { render_brand(f); return; }
+    if (!s.connected || s.loading) {
+        render_brand(f);
+        // Loading (the boot before the first list, or a daemon that answered and whose list is on its way): the
+        // wordmark alone. Otherwise say where the dial is stuck, two lines at most, centred under the wordmark
+        // (its ink ends near y 260) and well inside the glass.
+        const char *hint = s.loading ? NULL
+                         : s.link_hint == UI_LINK_HINT_NO_COMPUTER ? "No computer found. Check the USB cable."
+                         : s.link_hint == UI_LINK_HINT_OPEN_APP ? "Open Harness Device on your computer." : NULL;
+        const ht_font_t *font = focus_face_for(UI_FONT);
+        for (int row = 0; hint && *hint && row < 2; row++) {
+            const char *start = hint, *end = focus_take(&hint, font, 336);
+            char line[HT_TEXT_BYTES];
+            snprintf(line, sizeof line, "%.*s", (int)(end - start), start);
+            focus_put(f, FACE_CX(336), 284 + row * font->height, 336, font, DIM, BG, line, true);
+        }
+        return;
+    }
     ht_focus_set_hold_apps(hold_picks_app());   // the face's hint names what a hold opens
     if (workspace.touching && workspace.moved && !workspace.cancelled) { render_workspace_preview(f); return; }
     agent_t *a = active();
@@ -3493,6 +3510,13 @@ void ui_set_connected(bool value)
         voice_close();
         view(HOME);
     }
+    change();
+    display_unlock();
+}
+void ui_set_link_hint(ui_link_hint_t hint)
+{
+    display_lock();
+    s.link_hint = hint;
     change();
     display_unlock();
 }
