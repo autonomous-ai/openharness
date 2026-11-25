@@ -70,13 +70,41 @@ def gate_evidence(client, run, output, root=None, base=None):
                 suites=receipt["suites"], reused=reused, artifact_id=artifact["id"], artifact_digest=artifact["digest"])
 
 
+# Runs of one head inspected for a plan that is not a draft: a push and "ready for review" start two.
+PLAN_RUNS = 5
+# A plan lists every changed path. One that can pass fits GitHub's 1 MB job output, so its zip stays below this.
+PLAN_BYTES = 1024 ** 2
+
+
+def run_plan(client, run):
+    """The verified ci-plan record of one run, or None while its plan job has not uploaded it."""
+    artifacts = [a for a in client.pages(f"actions/runs/{run['id']}/artifacts", "artifacts") if a.get("name") == "ci-plan"]
+    if not artifacts:
+        return None
+    if len(artifacts) != 1 or artifacts[0].get("size_in_bytes", PLAN_BYTES + 1) > PLAN_BYTES:
+        raise ValueError("expected one bounded CI plan")
+    archive = client.command("api", f"repos/{client.repository}/actions/artifacts/{artifacts[0]['id']}/zip", binary=True)
+    plan = ci.summary_contents(artifacts[0], archive, run, "ci-plan")
+    if (plan.get("schema") != 1 or plan.get("kind") != "ci-plan" or plan.get("head") != run["head_sha"]
+            or not isinstance(plan.get("draft"), bool)):
+        raise ValueError("CI plan identity does not match its run")
+    return plan
+
+
 def pr_run(client, head):
+    """The newest automatic PR CI run of head whose plan is not a draft; a run still planning counts."""
     runs = client.pages("actions/workflows/ci.yml/runs?event=pull_request&head_sha=" + head, "workflow_runs")
     candidates = sorted((r for r in runs if r.get("head_sha") == head and r.get("event") == "pull_request"),
                         key=lambda r: r["id"], reverse=True)
     if not candidates:
         raise ValueError("automatic CI has not run for the reviewed PR head")
-    return candidates[0]
+    for run in candidates[:PLAN_RUNS]:
+        plan = run_plan(client, run)
+        # A draft-time run fails ci/required by design; the run started by "ready for review" is the one to follow.
+        if plan is None or not plan["draft"]:
+            return run
+    raise ValueError(f"no automatic CI run of the ready PR was found; the latest {len(candidates[:PLAN_RUNS])} "
+                     "for the reviewed PR head planned a draft")
 
 
 def pr_gate(client, head, output, root=None, base=None):

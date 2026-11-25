@@ -688,11 +688,12 @@ make merge-pr ARGS="PR_NUMBER --reviewed-head HEAD_SHA --reviewed-base REVIEW_BA
 ```
 
 The checkout must be clean at the exact reviewed head and include the reviewed
-`main` commit. The helper follows the latest automatic PR CI for that head, verifies
-its immutable `ci/required` receipt, rechecks the source and GitHub mergeability,
-then directly squash-merges with the exact reviewed head. It verifies that the
-merged full tree matches the reviewed and tested tree. It retains source, run,
-attempt, artifact digest and phase timings under `.harness/validation/*-merge-*/`.
+`main` commit. The helper follows the latest automatic PR CI for that head whose
+plan is not a draft, verifies its immutable `ci/required` receipt, rechecks the
+source and GitHub mergeability, then directly squash-merges with the exact
+reviewed head. It verifies that the merged full tree matches the reviewed and
+tested tree. It retains source, run, attempt, artifact digest and phase timings
+under `.harness/validation/*-merge-*/`.
 Omit `--merge` for a read-only preview.
 
 A merge queue is not a prerequisite for merging or releasing. Do not add `--queue`
