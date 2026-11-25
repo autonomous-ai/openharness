@@ -154,9 +154,10 @@ export class AgentCreationReceipts {
   }
 
   /** The first task of the launch receipt [id] made for [agentId]: a create's `native-create-v1` intent (`input.prompt`)
-   *  or a fork's receipt (`firstTask`), created for [agentId], pending or unconfirmed. `task` null: it had none. Null when
-   *  the receipt cannot say: missing, another agent's, cancelled, scrubbed, failed, the other kind, a model or legacy
-   *  receipt, or unreadable. */
+   *  or a fork's receipt (`firstTask`), created for [agentId], pending or unconfirmed. `task` null: it had none, or it is
+   *  a fork's receipt that was scrubbed, which keeps no task (reached only by a row that outlives its purge's scrub).
+   *  Null when the receipt cannot say: missing, another agent's, cancelled, a scrubbed intent, failed, the other kind, a
+   *  model or legacy receipt, or unreadable. */
   firstLaunchTask(id: string, agentId: string, kind: 'create' | 'fork'): { task: string | null } | null {
     try {
       const receipt = this.read(id), status = this.status(id)
