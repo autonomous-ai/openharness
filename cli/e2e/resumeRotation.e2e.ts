@@ -25,8 +25,8 @@ async function turn(client: LocalClient, agentId: string, content: string): Prom
   const started = client.next(isTurn('turn_started', agentId), 45_000, `turn_started (${content})`)
   const ended = client.next(isTurn('turn_ended', agentId), 45_000, `turn_ended (${content})`)
   client.send('message', { agentId, content })
-  await started
-  await ended
+  // Together: a turn that never starts fails the case once, not again as its end's unhandled timeout.
+  await Promise.all([started, ended])
 }
 /** The engine as the next launch runs it: its config plus what the case says, renamed over the old wrapper. */
 function install(d: IsolatedDaemon, engine: Engine, extra: Partial<EngineConfig>): void {
