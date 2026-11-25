@@ -25,6 +25,7 @@ import { readCompanionIdentity, type CompanionIdentity } from './companionProtoc
 import { CABLE_MAX_PAYLOAD, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DialLog } from './dialLog.js'
 import { VoiceSegments, realTimer } from './voiceSegments.js'
+import { micGainOf, type MicGain } from './voiceLevel.js'
 import { FirmwareTransfer, otaKeyFor } from './fwPush.js'
 import { PACK_VERSION } from './pets/pack.js'
 import { planPetSync } from './pets/sync.js'
@@ -759,7 +760,7 @@ const PET_TRANSIENT = new Set(['timeout', 'unreadable', 'memory', 'busy'])
 
 /** Voice capture in flight: how many PCM bytes arrived, plus what `voice.begin` said about them. The audio itself goes to
  *  `voiceSegments`. */
-type VoiceTurn = { agentId?: string; cmd?: string; lang: string; rate: number; bytes: number;
+type VoiceTurn = { agentId?: string; cmd?: string; lang: string; rate: number; micGain: MicGain; bytes: number;
   selectionId?: string; selection?: Promise<SelectionResult>;
   carry?: CarryRead;
   question?: { pin?: QuestionSpeech };
@@ -2054,6 +2055,8 @@ export class CableSession {
           // speech sound fast — the transcriber is handed a container that lies about itself and answers
           // with nothing at all.
           rate: typeof msg.sr === 'number' && msg.sr > 0 ? msg.sr : DEFAULT_VOICE_RATE,
+          // Like the rate, the dial's own statement about its audio: the gain it recorded at sets the voice gate's level.
+          micGain: micGainOf(msg.micGain),
           bytes: 0,
           form,
           carry,
@@ -2075,8 +2078,8 @@ export class CableSession {
           (search && !search.command) || (form && !form.command) ||
           (this.voice.selectionId && (!this.voice.agentId || !this.host.selectPassage))
         if (!refusedAtDone) {
-          const { rate, lang } = this.voice
-          this.voiceSegments = new VoiceSegments({ rate, lang, timer: realTimer,
+          const { rate, micGain, lang } = this.voice
+          this.voiceSegments = new VoiceSegments({ rate, micGain, lang, timer: realTimer,
             transcribe: (pcm, signal) => this.host.transcribe(pcm, rate, lang, signal) })
         }
         return

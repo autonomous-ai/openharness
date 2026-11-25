@@ -1,5 +1,5 @@
 import { decibels, FrameLevels, gainFor, raised, voiceOf } from './voiceGain.js'
-import { VoiceLevel } from './voiceLevel.js'
+import { type MicGain, VoiceLevel } from './voiceLevel.js'
 
 /** A 60 s segment (1.92 MB at 16 kHz) uploads in about 31 s at 0.5 Mbps: an attempt at four times that is stuck. */
 export const ATTEMPT_TIMEOUT_MS = 120_000
@@ -53,13 +53,13 @@ export class VoiceSegments {
   /** Set by a failure that is not retried, or by abort(): nothing more is sent. */
   private stopped?: { error: unknown }
 
-  constructor(options: { rate: number; lang: string; transcribe: SegmentTranscriber; timer: SegmentTimer }) {
+  constructor(options: { rate: number; micGain: MicGain; lang: string; transcribe: SegmentTranscriber; timer: SegmentTimer }) {
     // The backend's WAV range; it also bounds the segment count whatever rate the dial states.
     const rate = Math.floor(Math.min(48_000, Math.max(8_000, options.rate)))
     this.segmentSamples = 60 * rate
     this.windowStart = 55 * rate
     this.frameSamples = Math.floor(rate / 50)
-    this.runningLevel = new VoiceLevel(rate)
+    this.runningLevel = new VoiceLevel(rate, options.micGain)
     this.frameLevels = new FrameLevels(this.frameSamples)
     this.lang = options.lang
     this.transcribe = options.transcribe
@@ -133,6 +133,7 @@ export class VoiceSegments {
   }
 
   private add(pcm: Buffer): void {
+    // Before raised(): the gate's levels are for the dial's own PCM at its mic gain.
     this.runningLevel.add(pcm)
     // Each segment by its own voice: it goes up while the person still talks, before the rest is heard.
     const levels = new FrameLevels(this.frameSamples)
