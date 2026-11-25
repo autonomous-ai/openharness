@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ProcessRow } from '../../lib/processTable.js'
 import { fakeHerdr, RECORDED, type FakeHerdr } from '../../testing/fakeHerdr.js'
 import {
-  createHerdrClient, HERDR_PANE, herdrClientDeps, herdrPipeOf, herdrShellOf, herdrSocketPath, MAX_LINE_BYTES,
+  createHerdrClient, HERDR_PANE, herdrClientDeps, herdrMarkerServer, herdrPipeOf, herdrShellOf, herdrSocketPath,
+  MAX_LINE_BYTES,
   type HerdrClientDeps, type HerdrEntry, type HerdrSubscriber,
 } from './herdrClient.js'
 import { MAX_TEXT } from './orca.js'
@@ -595,6 +596,25 @@ describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026
       await writeFile(marker, 'not a marker')
       expect(await windows().request('agent.list', {})).toEqual({ ok: false, fault: 'no_socket' })
       expect(server.connections).toBe(0)
+    })
+
+    // The lookup of herdr's clients reads its own table, and asks of it which pid is the server.
+    it('the server is the pid the marker names while that herdr runs, else none', async () => {
+      expect(await herdrMarkerServer(marker, [herdrRow({ pid: 7 }), herdrRow()])).toBe(process.pid)
+      expect(await herdrMarkerServer(marker, [herdrRow({ executable: 'HERDR.EXE' })])).toBe(process.pid)
+      for (const rows of [
+        [],
+        [herdrRow({ pid: process.pid + 1 })],
+        [herdrRow({ executable: 'node.exe' })],
+        // Another account's: no start marker.
+        [{ pid: process.pid, executable: 'herdr.exe' }],
+        [herdrRow({ startMarker: '' })],
+        // Started after herdr wrote the marker: Windows gave herdr's pid to it.
+        [herdrRow({ startMarker: 'w:134080736600000000' })],
+      ]) expect(await herdrMarkerServer(marker, rows)).toBeUndefined()
+      expect(await herdrMarkerServer(join(folder, 'none.sock'), [herdrRow()])).toBeUndefined()
+      await writeFile(marker, 'not a marker')
+      expect(await herdrMarkerServer(marker, [herdrRow()])).toBeUndefined()
     })
 
     // herdr's zip puts it on no PATH: a tap runs the herdr that wrote the marker (herdr.ts).
