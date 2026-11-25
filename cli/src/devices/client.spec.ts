@@ -322,6 +322,58 @@ describe('harness hardware watch', () => {
     expect(run.printed).toEqual(['{"attached":true,"fw":"0.0.95","muted":false}', '{"attached":false}'])
     await stillRunning(run)
   })
+  it('a status with an id and a voiceLang prints it after muted, and the mode stays last', async () => {
+    const run = watch()
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    dial(run.socket, { attached: true, id: 'usb-1', fw: '0.0.95', settings: { muted: false, voiceLang: 'vi' }, notify: 'you' })
+    expect(run.printed).toEqual(['{"attached":true,"fw":"0.0.95","muted":false,"voiceLang":"vi","notify":"you"}'])
+    await stillRunning(run)
+  })
+  it('a voiceLang prints without muted, and a code outside the six that keeps the pattern prints too', async () => {
+    const run = watch()
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    for (const voiceLang of ['ja', 'de', 'en-US']) dial(run.socket, { attached: true, id: 'usb-1', fw: '0.0.95', settings: { voiceLang } })
+    expect(run.printed).toEqual([
+      '{"attached":true,"fw":"0.0.95","voiceLang":"ja"}',
+      '{"attached":true,"fw":"0.0.95","voiceLang":"de"}',
+      '{"attached":true,"fw":"0.0.95","voiceLang":"en-US"}',
+    ])
+    await stillRunning(run)
+  })
+  it('only a change of voiceLang prints again', async () => {
+    const run = watch()
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    const usb = { attached: true, id: 'usb-1', fw: '0.0.95' }
+    dial(run.socket, { ...usb, settings: { muted: false, voiceLang: 'en', brightness: 80 } })
+    dial(run.socket, { ...usb, settings: { muted: false, voiceLang: 'en', brightness: 20 } })
+    dial(run.socket, { ...usb, settings: { muted: false, voiceLang: 'fr', brightness: 20 } })
+    expect(run.printed).toEqual([
+      '{"attached":true,"fw":"0.0.95","muted":false,"voiceLang":"en"}',
+      '{"attached":true,"fw":"0.0.95","muted":false,"voiceLang":"fr"}',
+    ])
+    await stillRunning(run)
+  })
+  it('without an id, settings or a voiceLang on the pattern the line is as before', async () => {
+    const run = watch()
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    const flat = { attached: true, fw: '0.0.95' }
+    dial(run.socket, flat)
+    for (const payload of [
+      { ...flat, settings: { voiceLang: 'vi' } },
+      { ...flat, id: '', settings: { voiceLang: 'vi' } },
+      { ...flat, id: 'usb-1' },
+      { ...flat, id: 'usb-1', settings: null },
+      ...[7, null, 'EN', 'english', 'vi\n', 'vi"}', '', 'en-us', 'en-USA', 'x'.repeat(200)]
+        .map(voiceLang => ({ ...flat, id: 'usb-1', settings: { voiceLang } })),
+      { ...flat, devices: [{ id: 'usb-2', settings: { voiceLang: 'vi' } }] },
+    ]) dial(run.socket, payload)
+    expect(run.printed).toEqual(['{"attached":true,"fw":"0.0.95"}'])
+    await stillRunning(run)
+  })
   it('exits 0 when stdin closes', async () => {
     const after = watch()
     expect(after.stdin.resume).toHaveBeenCalled()
