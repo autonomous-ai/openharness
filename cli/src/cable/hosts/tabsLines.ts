@@ -6,8 +6,9 @@
 import { TAB_TTY, type TabApp } from './tabs.js'
 import { CONTROL, MAX_TEXT } from './text.js'
 
-// Terminal.app is not one: its only per-tab write appends a newline in the same write, sending words unchecked.
-export const TYPE_APPS = ['iterm', 'ghostty'] as const satisfies readonly TabApp[]
+// Terminal.app is not one: its only per-tab write appends a newline in the same write, sending words unchecked. Nor is
+// iTerm2: its write reaches every pane its Broadcast Input joins, where a shell would run them, and nothing can see that.
+export const TYPE_APPS = ['ghostty'] as const satisfies readonly TabApp[]
 export type TypeApp = (typeof TYPE_APPS)[number]
 
 export const WRITE_ID = /^[0-9a-f]{16}$/

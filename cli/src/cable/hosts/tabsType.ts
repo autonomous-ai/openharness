@@ -1,18 +1,18 @@
 /**
- * The dial's words typed into an agent's own iTerm2 or Ghostty tab, through the watch and Harness Device's fixed write
- * handlers (docs/plans/2026-11-25-dial-voice-codex-terminals-design.md). They go only while every check holds, just
- * before the words and again just before their Enter, each against a way they would reach another program:
+ * The dial's words typed into an agent's own Ghostty tab, through the watch and Harness Device's fixed write handlers
+ * (docs/plans/2026-11-25-dial-voice-codex-terminals-design.md). They go only while every check holds, just before the
+ * words and again just before their Enter, each against a way they would reach another program:
  * 1. The stream is the very one the send began on: a newer watch is another Harness Device, which never had the words.
- * 2. The pane has a proof, in iTerm2 or Ghostty: a nested agent's tty is its multiplexer's, and Terminal.app's only
- *    per-tab write appends a newline to the words in the same write.
+ * 2. The pane has a proof, in Ghostty: a nested agent's tty is its multiplexer's, Terminal.app's only per-tab write
+ *    appends a newline to the words in the same write, and iTerm2's reaches every pane its Broadcast Input joins.
  * 3. No other live agent is on the tty: a `codex exec` from Claude's shell tool runs on Claude's tty and would take them.
  * 4. ps: the tty and start are the proof's, so a new process on the tty is another agent, and the agent leads the tty's
  *    foreground group: after a Ctrl-Z, or with a shell left in front, the words would run as a command.
  * 5. lsof: only the agent and its parents read the tty: Claude Code's Ctrl-G editor, a pager or a `!` command would
  *    take them.
  * 6. The source says the agent is at its prompt: a turn begun or a prompt open would take them as its answer.
- * 7. Harness Device writes only to the one session of the app whose tty is the pane's: a pty no session of the app holds
- *    (tmux's, an editor's, another terminal's) gets nothing.
+ * 7. Harness Device writes only to the one terminal of Ghostty whose tty is the pane's: a pty no terminal of Ghostty
+ *    holds (tmux's, an editor's, another app's) gets nothing.
  * It logs nothing: why a send stopped travels in its result, which the source logs as one fixed word.
  */
 import { execFile } from 'node:child_process'

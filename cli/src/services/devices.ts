@@ -612,7 +612,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // The stream a watch holds open on the devices' listener: a rest or a tap on an agent in Terminal, iTerm2 or Ghostty
   // asks it to select that agent's tab (docs/specs/2026-11-15-dial-terminal-follow.md). Only macOS's apps select a tab
   // by its tty: elsewhere no agent's is read, and none has a tab. The dial's words go on it too, for Harness Device to
-  // write into an iTerm2 or Ghostty tab (docs/plans/2026-11-25-dial-voice-codex-terminals-design.md); its timers stop
+  // write into a Ghostty tab (docs/plans/2026-11-25-dial-voice-codex-terminals-design.md); its timers stop
   // with the devices.
   const tabs = tabsStream({ after: timerIn('tabs') })
   // The stream Orca's Harness Device plugin holds open: whether a dial is attached and the agent it shows
