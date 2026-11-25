@@ -91,8 +91,9 @@
 // no SessionStart as it starts: its first prompt runs it (`resume` for a resumed process, else `startup`) before its
 // UserPromptSubmit, and a `!clear` before any prompt runs only its own (`clear`), as Codex sends SessionStart at its
 // first prompt. `lostHooks` lists hooks, `<event>` or `<event>:<source>`, it never runs and notes as lost in its hook
-// log, as a hook killed at its timeout on a loaded machine never reaches the daemon. Both read their hook settings with
-// or without a leading BOM, as the real CLIs do (one Windows PowerShell 5 writes). `root` is the
+// log, as a hook killed at its timeout on a loaded machine never reaches the daemon. Claude Code reads its hook settings
+// past a leading BOM (one Windows PowerShell 5 writes); Codex loads no hooks from a hooks.json that starts with one and
+// notes so in its hook log, as Codex 0.169 warns and loads none. `root` is the
 // test's throwaway root, the only place whose hooks it will run, and `hookLog` where it notes every hook
 // it ran. `withoutHooks` lists the hook events this release does not have, which it never runs (Codex 0.144.0:
 // `['Interrupt']`).
@@ -141,7 +142,8 @@ const HOOK_EVENTS = {
 /** The field of an event's input a block's matcher is tested against, for the events whose matcher means something. */
 const MATCHED_FIELD = { SessionStart: 'source', PreToolUse: 'tool_name', Notification: 'notification_type' }
 
-/** A settings file's text without a leading BOM, which both CLIs read past (Windows PowerShell 5 writes one). */
+/** A Claude Code settings file's text without a leading BOM, which Claude Code reads past (Windows PowerShell 5 writes
+ *  one). Codex does not: its hooks.json is read as it is. */
 const settingsText = (file) => readFileSync(file, 'utf8').replace(/^\uFEFF/, '')
 
 /** Inside `root`, or `root` itself. */
@@ -538,10 +540,16 @@ export async function run(engine, config = {}, { native = false } = {}) {
     process.exit(78)
   }
   const hookSettings = (() => {
+    let text
+    try { text = engine === 'claude' ? settingsText(hookSettingsFile) : readFileSync(hookSettingsFile, 'utf8') } catch { return {} }
     try {
-      const parsed = JSON.parse(settingsText(hookSettingsFile))
+      const parsed = JSON.parse(text)
       return parsed && typeof parsed.hooks === 'object' && parsed.hooks ? parsed.hooks : {}
-    } catch { return {} }
+    } catch {
+      // Codex 0.169 warns and loads none (codex-rs/hooks/src/engine/discovery.rs): a BOM is not JSON to serde_json.
+      hookLog(`hooks not loaded: ${hookSettingsFile} is not JSON`)
+      return {}
+    }
   })()
   // A conversation Codex archived (its rollout moved to `archived_sessions/`) is not resumed: Codex
   // refuses before its TUI is up (codex-rs app-server thread_processor.rs) until `codex unarchive <id>`
