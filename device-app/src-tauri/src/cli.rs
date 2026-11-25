@@ -37,15 +37,19 @@ const LINES_QUEUED: usize = 16;
 /// How long a child's end waits for its stderr to end too, so the log has its last line. The stream ends with the child
 /// unless something it left behind holds it open.
 const STDERR_GRACE: Duration = Duration::from_secs(1);
-/// The three shapes of a child's stderr its log carries as it comes (`logged_stderr`), as the watch says only there that
-/// a newer one took its tabs stream and goes on, or that a sound or Notifications change failed: this line exactly,
-/// SOUND_STDERR and a code, and NOTIFY_STDERR and a code. Every other line of stderr is outside text and stays out of
-/// the log but for a failure's last line.
+/// The four shapes of a child's stderr its log carries as it comes (`logged_stderr`), as the watch says only there that
+/// a newer one took its tabs stream and goes on, or that a sound, Notifications or Voice language change failed: this
+/// line exactly, or one of CODED_STDERR and a code. Every other line of stderr is outside text and stays out of the log
+/// but for a failure's last line.
 const LOGGED_STDERR: &str = "tabs stream replaced";
 /// A failed sound change, then its code: one of the watch's own words or the daemon's error code, never a message.
 const SOUND_STDERR: &str = "sound: ";
 /// A failed Notifications change, then its code, of the same kind as a sound change's.
 const NOTIFY_STDERR: &str = "notify: ";
+/// A failed Voice language change, then its code, of the same kind as a sound change's.
+const VOICE_STDERR: &str = "voice: ";
+/// The prefixes a code follows, one list so the check and the line's bound cannot disagree.
+const CODED_STDERR: [&str; 3] = [SOUND_STDERR, NOTIFY_STDERR, VOICE_STDERR];
 const CODE_MAX: usize = 32;
 /// The longest version the About panel shows: what the CLI prints is outside text.
 const VERSION_MAX: usize = 32;
@@ -497,8 +501,8 @@ impl StdinWriter {
 
 type Tail = Arc<Mutex<VecDeque<u8>>>;
 
-/// True for the lines of stderr a log carries as they come: LOGGED_STDERR exactly, or SOUND_STDERR or NOTIFY_STDERR and
-/// a code of 1 to CODE_MAX of `A-Z`, `0-9` and `_`, starting with a letter. Nothing else, so no path, address or message.
+/// True for the lines of stderr a log carries as they come: LOGGED_STDERR exactly, or one of CODED_STDERR and a code of
+/// 1 to CODE_MAX of `A-Z`, `0-9` and `_`, starting with a letter. Nothing else, so no path, address or message.
 fn logged_stderr(line: &[u8]) -> bool {
     let is_code = |code: &[u8]| match code {
         [first, rest @ ..] => {
@@ -509,7 +513,7 @@ fn logged_stderr(line: &[u8]) -> bool {
         [] => false,
     };
     line == LOGGED_STDERR.as_bytes()
-        || [SOUND_STDERR, NOTIFY_STDERR].iter().any(|prefix| line.strip_prefix(prefix.as_bytes()).is_some_and(is_code))
+        || CODED_STDERR.iter().any(|prefix| line.strip_prefix(prefix.as_bytes()).is_some_and(is_code))
 }
 
 /// Reads `stream` to its end on a thread, keeping its last TAIL_MAX bytes, then says so on `done`. `logged` is handed
@@ -524,7 +528,7 @@ fn tail(
     thread::spawn(move || {
         let mut chunk = [0; 8192];
         // The line so far, held only to one byte past the longest logged line: a longer line is not one.
-        let longest = LOGGED_STDERR.len().max(SOUND_STDERR.len().max(NOTIFY_STDERR.len()) + CODE_MAX);
+        let longest = CODED_STDERR.iter().map(|prefix| prefix.len() + CODE_MAX).fold(LOGGED_STDERR.len(), usize::max);
         let mut line = Vec::with_capacity(longest + 1);
         loop {
             match stream.read(&mut chunk) {
