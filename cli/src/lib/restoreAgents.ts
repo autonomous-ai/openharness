@@ -46,6 +46,7 @@ import { processAmong, sameProcessIdentity, sameTerminalPlacement, terminalInsta
 import { resumesConversation } from './resumeCapability.js'
 import { codeOrLength, errorKind, sid } from './log.js'
 import { publishEngine } from './paneEngineProcess.js'
+import { supportsNativeFork } from './engineLaunch.js'
 
 export interface RestoreLaunch {
   nativeToken?: string
@@ -87,6 +88,22 @@ export function heldLaunch(service: string, label = service === 'models' ? 'the 
 
 /** The row knows it was on a grid but not how to get back there. */
 export const GRID_CREDENTIAL_REQUIRED = 'GRID_CREDENTIAL_REQUIRED'
+
+/** What the row of a launch the guard held says: the words its held shell shows (engineLaunch.ts). */
+export const STARTING_AGAIN = 'Starting again.'
+/** A launch the guard held that cannot start again: the person's way out, the one they would take anyway. */
+export const DID_NOT_START = { error: 'ENGINE_DID_NOT_START', detail: 'This harness did not start. Close it and open a new one.' } as const
+
+/** The launch a row gets once its pane is seen to be the guard's held shell under [nativeToken]: held, to start again,
+ *  for a conversation (it resumes) and for a first launch whose request can be rebuilt (a `creationId`, and for a fork an
+ *  engine with a native fork and the session it forked); else the failed state. The held shell proves no engine ran
+ *  under that token (2026-11-25). */
+export function guardHold(row: RegisteredSession, nativeToken: string): Extract<AgentLaunch, { state: 'held' }> | { state: 'failed' } & typeof DID_NOT_START {
+  const fork = row.forkedFrom
+  // A handoff fork's first prompt was composed from its source at fork time and kept nowhere.
+  const rebuilt = !!row.sessionId || (!!row.creationId && (!fork || (supportsNativeFork(row.engine) && !!fork.sessionId)))
+  return rebuilt ? { state: 'held', service: 'native', nativeToken, startsAgain: true, detail: STARTING_AGAIN } : { state: 'failed', ...DID_NOT_START }
+}
 
 export interface RestoreAgentsDeps {
   /** Whether restore can rebuild and relaunch a pane on [runtime]'s backend: one that respawns in place
@@ -170,6 +187,9 @@ export interface RestoreAgentsDeps {
   waitingLaunch?: (entry: RegisteredSession, launch: Extract<AgentLaunch, { state: 'held' }>) => RestoreLaunch
   /** Close a held agent's pane whose launch then failed: it would otherwise go on saying it waits. */
   killPane?: (runtime: TerminalRuntimeRef) => Promise<void>
+  /** The held passes, asked to try that agent again: the guard held its launch (`guardHold`), and nothing else wakes
+   *  a hold seen outside a pass (core/agents/heldLaunches.ts). */
+  startAgain?: (agentId: string) => void
   /** How long a restored pane may take to show an engine process. Default matches `agent_create`. */
   budgetMs?: number
   /** How long the engine must stay up after appearing before the pane is handed over. */
@@ -490,8 +510,15 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
         const waiting = await deps.waitingPane?.(runtime, entry.launch.nativeToken)
         if (!current()) continue
         if (waiting === true) {
-          const row = deps.registry.setLaunch(entry.agentId, { state: 'held', service: 'native', nativeToken: entry.launch.nativeToken,
-            detail: 'Waiting to confirm the engine executable and native hooks.' })!
+          // The guard held it before this core saw its pane: it starts again, or fails with words that say what to do.
+          const launch = guardHold(entry, entry.launch.nativeToken)
+          const row = deps.registry.setLaunch(entry.agentId, launch)!
+          if (launch.state === 'failed') {
+            summary.failed.push({ agentId: entry.agentId, code: launch.error, reason: launch.detail })
+            deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · failed · ${launch.error}`)
+            continue
+          }
+          deps.startAgain?.(entry.agentId)
           const copy = { ...row }
           if (!copy.sessionId) summary.skipped.push({ agentId: entry.agentId, reason: 'original native launch awaits recovery' })
           else missing.push({ entry: copy, runtime, alive: true, current: restoreOwner(deps, copy) })
@@ -999,8 +1026,13 @@ async function watchRestoredPane(
       const row = deps.registry.byAgent(agentId)
       const nativeToken = row?.launch?.state === 'starting' ? row.launch.nativeToken : undefined
       if (nativeToken && await deps.waitingPane?.(runtime, nativeToken) === true) {
-        if (current()) deps.registry.setLaunch(agentId, { state: 'held', service: 'native', nativeToken,
-          detail: 'The engine did not start because its executable or native hooks changed. The original launch is held for recovery.' })
+        // The guard held this launch: no engine ran under its token.
+        const launch = guardHold(row!, nativeToken)
+        if (launch.state === 'failed') fail(launch.error, launch.detail)
+        else if (current()) {
+          deps.registry.setLaunch(agentId, launch)
+          deps.startAgain?.(agentId)
+        }
         return
       }
       // A pane tmux could not read is asked again, like one still starting.
