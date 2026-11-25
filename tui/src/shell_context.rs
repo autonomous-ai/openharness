@@ -892,7 +892,7 @@ fn switch_host(app: &mut App, machine: &str) {
         app.shell_context.connecting = false;
         match result {
             Ok(result) => if let Some(agent) = result.pointer("/agent/id").and_then(|a| a.as_str()) {
-                app.fleet.agents.insert((machine.clone(), agent.into()), crate::fleet::agent_from(&machine, &result["agent"], None));
+                app.fleet.merge_row(&machine, &result["agent"]);
                 app.shells.insert((machine.clone(), agent.into()));
                 bind(app, &request.token, &machine, agent);
                 if app.shell_context.pending.as_ref().is_some_and(|r| r.id == request.id && r.token == request.token) {

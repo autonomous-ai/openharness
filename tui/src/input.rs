@@ -685,7 +685,7 @@ fn create_external_as(app: &mut App, x: &crate::app::External, placement: Placem
         match reply {
             Ok(reply) => {
                 if let Some(id) = reply.pointer("/agent/id").and_then(|v| v.as_str()) {
-                    app.fleet.agents.insert((machine.clone(), id.to_string()), crate::fleet::agent_from(&machine, &reply["agent"], None));
+                    app.fleet.merge_row(&machine, &reply["agent"]);
                     let moved = source.as_ref().is_some_and(|(p, _)| app.focused() != Some(*p));
                     if inline.is_some() && moved {
                         // Keep the resumed process available, without taking the user away from
@@ -1110,7 +1110,7 @@ pub fn run(app: &mut App, command: &str) {
             if app.capture.is_none() { app.say("Cloning…", theme::SOFT) }
             app.spawn(async move { link.rpc("agent_fork", json!({ "agentId": agent, "creationId": uuid::Uuid::new_v4().to_string() }), Duration::from_secs(120)).await }, move |app, reply| match reply {
                 Ok(reply) => if let Some(id) = reply.pointer("/agent/id").and_then(|v| v.as_str()) {
-                    app.fleet.agents.insert((machine.clone(), id.to_string()), crate::fleet::agent_from(&machine, &reply["agent"], None));
+                    app.fleet.merge_row(&machine, &reply["agent"]);
                     app.open_agent(&machine, id, Placement::Auto(None));
                 },
                 Err(e) => app.say(format!("Clone failed: {e}"), theme::DANGER),
@@ -1253,7 +1253,7 @@ fn clone_on(app: &mut App, machine: String, agent: String) {
     if app.capture.is_none() { app.say("Cloning…", theme::SOFT) }
     app.spawn(async move { link.rpc("agent_fork", json!({ "agentId": agent, "creationId": uuid::Uuid::new_v4().to_string() }), Duration::from_secs(120)).await }, move |app, reply| match reply {
         Ok(reply) => if let Some(id) = reply.pointer("/agent/id").and_then(|v| v.as_str()) {
-            app.fleet.agents.insert((machine.clone(), id.to_string()), crate::fleet::agent_from(&machine, &reply["agent"], None));
+            app.fleet.merge_row(&machine, &reply["agent"]);
             app.open_agent(&machine, id, Placement::Auto(None));
         },
         Err(e) => app.say(format!("Clone failed: {e}"), theme::DANGER),
@@ -1365,7 +1365,7 @@ pub fn popup(app: &mut App, (x, y, w, h): (u16, u16, u16, u16), border: bool, cw
         let typed = take_shell_input(app, &buffered);
         let Ok(reply) = reply else { app.say("Could not start the popup", theme::DANGER); return };
         let Some(id) = reply.pointer("/agent/id").and_then(|v| v.as_str()) else { return };
-        app.fleet.agents.insert((machine.clone(), id.to_string()), crate::fleet::agent_from(&machine, &reply["agent"], None));
+        app.fleet.merge_row(&machine, &reply["agent"]);
         app.shells.insert((machine.clone(), id.to_string()));
         let pane = app.new_pane(&machine, id);
         // The far terminal is at least 40×12; the box shows it whole when it can.
@@ -1560,7 +1560,7 @@ fn shell_made(app: &mut App, machine: String, placement: Placement, reply: Resul
 fn shell_placed(app: &mut App, machine: String, placement: Placement, reply: Result<serde_json::Value, crate::daemon::RpcError>, typed: Vec<Vec<u8>>, print_new: Option<String>) -> crate::app::ShellCompletion {
     let reply = reply.map_err(|e| format!("create pane failed: {e}"))?;
     let id = reply.pointer("/agent/id").and_then(|v| v.as_str()).ok_or("The machine made no shell")?;
-    app.fleet.agents.insert((machine.clone(), id.to_string()), crate::fleet::agent_from(&machine, &reply["agent"], None));
+    app.fleet.merge_row(&machine, &reply["agent"]);
     app.shells.insert((machine.clone(), id.to_string()));
     if let Some(token) = reply["_hnContext"].as_str() {
         crate::shell_context::bind(app, token, &machine, id);
@@ -1663,7 +1663,7 @@ fn creation_finished(app: &mut App, machine: String, session: u32, opts: NewOpts
             if let Some(id) = reply.pointer("/agent/id").and_then(|v| v.as_str()) {
                 if let Some(form_id) = &opts.form_id { crate::new_harness::created(app, form_id, &reply["agent"]); }
                 if opts.first_run { crate::first_run::created(app, &machine, id) }
-                app.fleet.agents.insert((machine.clone(), id.to_string()), crate::fleet::agent_from(&machine, &reply["agent"], None));
+                app.fleet.merge_row(&machine, &reply["agent"]);
                 if reply["agent"]["engine"] == "terminal" { app.shells.insert((machine.clone(), id.to_string())); }
                 // Keep new harnesses in the current window, filling it or splitting beside
                 // the focused pane; -d keeps the previous pane focused.
@@ -3791,6 +3791,25 @@ pub fn menu_mouse(app: &mut App, m: &crate::mouse::Event) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The daemon's `agent_synced` (with the tmux pane) came before the create's reply (without it), and the reply
+    /// wiped the pane: the OS welcome was refused as "not the welcome on this computer" and no starter terminals came.
+    #[tokio::test]
+    async fn a_new_shell_keeps_the_pane_its_synced_frame_named_before_the_reply() {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19789, sink, (120, 40));
+        app.os_session = true;
+        app.fleet.local_id = "local-daemon".into();
+        // What on_frame's `agent_synced` does with the frame the daemon pushed first.
+        app.fleet.merge_row("local-daemon", &json!({"id": "welcome", "engine": "terminal", "tmuxPane": "%997"}));
+        let tab = app.tab().id.clone();
+        let reply = json!({"state": "created", "agent": {"id": "welcome", "engine": "terminal", "status": "active",
+            "startCommand": "/usr/bin/hn-os welcome"}});
+        shell_placed(&mut app, "local-daemon".into(), Placement::Fill(tab), Ok(reply), vec![], None).unwrap();
+        assert_eq!(app.fleet.agent("local-daemon", "welcome").unwrap().tmux_pane, "%997");
+        crate::os_welcome::command(&mut app, &["ready".into(), "%997".into()]);
+        assert!(app.os_welcome.guide_pane.is_some(), "the welcome is found by the pane the daemon named");
+    }
 
     /// C-b s holds its rows still while open; a harness that comes meanwhile joins its machine and
     /// folder's heading instead of starting the same heading again at the end.
