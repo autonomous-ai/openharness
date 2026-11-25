@@ -411,7 +411,7 @@ ok "the tray registers with the tray host"
 ok "the menu reads Plug in your device | Sign in… | Export logs | About | Quit"
 
 waits logged "login item: registered" || fail "the first run registers the login item"
-printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Harness' "$own_exec" 'X-GNOME-Autostart-enabled=true' \
+printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Harness Device' "$own_exec" 'X-GNOME-Autostart-enabled=true' \
   >"$work/entry.expected"
 cmp -s "$work/entry.expected" "$entry" || fail "the first run writes harnessd.desktop with the app's Exec="
 [[ "$(ls -A "$config/autostart")" == harnessd.desktop ]] || fail "the login item is the one harnessd.desktop"
@@ -546,11 +546,11 @@ kill "$sway_pid"
 
 # --- 5, 7: Hyprland, the installer's entry
 
-# The installer's own entry, and a line of the person's that a take-over keeps.
+# The installer's own entry, and a line of the person's that a take-over keeps; a take-over names it Harness Device.
 installers() {
-  printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Harness' "$1" 'X-GNOME-Autostart-enabled=true' 'X-E2E=kept'
+  printf '%s\n' '[Desktop Entry]' 'Type=Application' "$2" "$1" 'X-GNOME-Autostart-enabled=true' 'X-E2E=kept'
 }
-installers "Exec=\"$home/.local/bin/harness\" start" >"$entry"
+installers "Exec=\"$home/.local/bin/harness\" start" 'Name=Harness' >"$entry"
 app_entry_for "$work/gone/Harness-Device.AppImage"
 cp "$(command -v sleep)" "$work/procs/alacritty"
 cp "$(command -v sleep)" "$work/procs/wezterm-gui"
@@ -575,8 +575,9 @@ waits told wezterm-gui || fail "Hyprland: the watch is told the next one's"
 ok "Hyprland: the watch is told alacritty, then wezterm-gui, the exe name of each pid j/activewindow answers"
 
 waits logged "login item: updated" || fail "an entry that is on, with the installer's Exec=, is taken over"
-installers "$own_exec" | cmp -s - "$entry" || fail "a taken-over entry has the app's Exec= and keeps the rest"
-ok "an entry that is on, with the installer's Exec=, takes the app's Exec= and the log has login item: updated"
+installers "$own_exec" 'Name=Harness Device' | cmp -s - "$entry" \
+  || fail "a taken-over entry has the app's Exec= and Name=Harness Device and keeps the rest"
+ok "an entry that is on, with the installer's Exec=, takes the app's Exec= and name; the log has login item: updated"
 waits logged "app list: entry written" \
   || fail "an entry naming a file that is gone: the log has app list: entry written"
 cmp -s "$work/app-list.expected" "$app_entry" || fail "an entry naming a file that is gone is written again"
@@ -607,8 +608,8 @@ waits logged "$not_written" || fail "with a read-only applications folder the lo
 ok "with a read-only applications folder the tray still registers and the log says $not_written"
 
 # xprop's first string, the instance, is what GNOME matches StartupWMClass to (the vectors' startupWMClassSource).
-waits xdotool search --onlyvisible --name '^Harness$' >/dev/null || fail "the Sign in window shows"
-window="$(xdotool search --onlyvisible --name '^Harness$' | head -n 1)"
+waits xdotool search --onlyvisible --name '^Harness Device$' >/dev/null || fail "the Sign in window shows"
+window="$(xdotool search --onlyvisible --name '^Harness Device$' | head -n 1)"
 class="$(xprop -id "$window" WM_CLASS | sed -n 's/^WM_CLASS(STRING) = "\([^"]*\)".*/\1/p')"
 [[ "$class" == "$wm_class" ]] \
   || fail "StartupWMClass is the window's WM_CLASS: the window's is '$class', not '$wm_class'"
@@ -617,7 +618,7 @@ ok "StartupWMClass is the window's WM_CLASS"
 # Return takes the window's primary answer, Sign in, once the page has drawn it.
 sign_in() {
   local window
-  window="$(xdotool search --onlyvisible --name '^Harness$' | head -n 1)" || return 1
+  window="$(xdotool search --onlyvisible --name '^Harness Device$' | head -n 1)" || return 1
   [[ -n "$window" ]] && timeout 10 xdotool windowactivate --sync "$window" key Return \
     && WAIT=3 waits grep -Fxqs 'login --json' "$fake/calls.log"
 }

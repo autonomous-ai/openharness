@@ -1,20 +1,26 @@
 /**
- * Codex outside Harness, told by its own hooks, as harness/inOrca.ts tells Claude Code: no tmux pane, no Harness pane, and
- * the app it runs in named by the hints a test gives it. With no process of its own the hooks' caller is the test's, so
- * the session lives as long as the test; given one (`own`, or a terminal's tab: `inTab`), the hooks run under it, and
- * ending it ends the session, as a Codex that quits does: Codex runs no hook as a session ends. A turn its prompt hook
- * started stays working until its Stop hook, which a test runs once the turn's answer is in its rollout, and with no
- * process to read idle, for as long as a test needs without one.
+ * Codex outside Harness, told by its own hooks, as harness/inOrca.ts tells Claude Code: no Harness pane, and the app it
+ * runs in named by the hints a test gives it. With no process of its own the hooks' caller is the test's, so the session
+ * lives as long as the test; given one (`own`, a terminal's tab: `inTab`, or a pane of the person's tmux: `inTmux`), the
+ * hooks run under it, and ending it ends the session, as a Codex that quits does: Codex runs no hook as a session ends. A
+ * turn its prompt hook started stays working until its Stop hook, which a test runs once the turn's answer is in its
+ * rollout, and with no process to read idle, for as long as a test needs without one.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs'
+import { createServer, type Socket } from 'node:net'
 import { dirname, join } from 'node:path'
 import { expect } from 'vitest'
 import { observedAgentId } from '../../src/cable/hosts/observed.js'
 import { until, type IsolatedDaemon } from './daemon.js'
 import type { OrcaTerminal } from './orcaHost.js'
 import { closeTab, HOOK_RUNNER, hookRuns, hookTab, killTab, type HookRun, type Tab, type TabOptions } from './outsideAgent.js'
+
+/** For the hook runner in a tmux pane to reach its socket. */
+const CONNECT_MS = 30_000
+/** Each pane's socket a name of its own in the daemon's root. */
+let panes = 0
 
 export interface CodexOutsideOptions {
   /** Its thread: a new one when none is given. */
@@ -37,6 +43,8 @@ export class CodexOutside {
   /** Its own process's runs of its hooks, when it has one (HOOK_RUNNER). */
   private ownRun: HookRun | undefined
   private tab: Tab | undefined
+  /** In a tmux pane: its id and its command's process. */
+  private inPane: { id: string; pid: number } | undefined
   private readonly terminal: OrcaTerminal | undefined
 
   constructor(private readonly d: IsolatedDaemon, folder: string, private readonly children: ChildProcess[],
@@ -75,14 +83,50 @@ export class CodexOutside {
     return codex
   }
 
-  get id(): string { return observedAgentId('codex', this.sessionId) }
-  /** In a tab: its own process, and the shell it runs in. */
-  get pid(): number | undefined { return this.tab?.pid }
-  get shellPid(): number | undefined { return this.tab?.shellPid }
+  /**
+   * Its own process the command of a new window of the tmux session [session] on the daemon's private server, made in the
+   * background, as Codex started in the person's tmux: its hooks run under it, with what tmux sets in each pane it starts
+   * (TMUX_PANE, TERM_PROGRAM). The pane's terminal is its stdio, so its hooks come and go on a socket in the daemon's root.
+   * Ended by `end`, which kills its pane; [children] has none of it, as the tmux server's own.
+   */
+  static async inTmux(d: IsolatedDaemon, session: string, folder: string, children: ChildProcess[], hints: Record<string, string>,
+    options: Omit<CodexOutsideOptions, 'own' | 'terminal'> = {}): Promise<CodexOutside> {
+    const codex = new CodexOutside(d, folder, children, hints, options)
+    const what = `the Codex in ${folder}`
+    const path = join(d.root, `codex-pane-${++panes}.sock`)
+    const server = createServer()
+    let socket: Socket | undefined
+    server.once('connection', (connected) => { socket = connected })
+    await new Promise<void>((listening, failed) => server.once('error', failed).listen(path, listening))
+    try {
+      // Its pane's environment is its own, as its hooks', but for what tmux sets there.
+      const variables = Object.entries(codex.env).flatMap(([name, value]) => value === undefined ? [] : ['-e', `${name}=${value}`])
+      const [id, pid] = (await d.tmux.run('new-window', '-d', '-t', `${session}:`, '-P', '-F', '#{pane_id} #{pane_pid}', '-c', codex.cwd,
+        ...variables, process.execPath, '-e', HOOK_RUNNER, '', path)).split(' ')
+      codex.inPane = { id: id!, pid: Number(pid) }
+      const connected = await until(`${what} on its socket`, () => socket, CONNECT_MS, 50)
+      codex.ownRun = hookRuns(connected, connected, codex.cwd, what)
+      return codex
+    } catch (error) {
+      await codex.end()
+      throw error
+    } finally {
+      server.close()
+    }
+  }
 
-  /** What its hooks run under: the daemon's environment (which names no tmux or Harness pane), its home, and [hints]. */
+  get id(): string { return observedAgentId('codex', this.sessionId) }
+  /** In a tab or a tmux pane: its own process; in a tab, the shell it runs in. */
+  get pid(): number | undefined { return this.tab?.pid ?? this.inPane?.pid }
+  get shellPid(): number | undefined { return this.tab?.shellPid }
+  /** In a tmux pane: that pane's id. */
+  get pane(): string | undefined { return this.inPane?.id }
+
+  /** What its hooks run under: the daemon's environment (which names no tmux or Harness pane), its home, and [hints]; in a
+   *  tmux pane, what tmux sets there too. */
   get env(): NodeJS.ProcessEnv {
-    return { ...this.d.env, CODEX_HOME: this.home, ...this.hints }
+    const pane = this.inPane ? { TMUX_PANE: this.inPane.id, TERM_PROGRAM: 'tmux' } : {}
+    return { ...this.d.env, CODEX_HOME: this.home, ...this.hints, ...pane }
   }
 
   /** Its own hook for [event], the command the daemon installed in its Codex home's hooks.json, run through a shell as Codex
@@ -105,9 +149,11 @@ export class CodexOutside {
     expect(code, stderr).toBe(0)
   }
 
-  /** Its own process ended, and with it the session: in a tab, the tab closed. */
+  /** Its own process ended, and with it the session: in a tab, the tab closed; in a tmux pane, the pane killed. */
   async end(): Promise<void> {
     if (this.tab) return closeTab(this.tab, this.cwd)
+    // One that ended went with its pane already.
+    if (this.inPane) return this.d.tmux.run('kill-pane', '-t', this.inPane.id).then(() => {}, () => {})
     const own = this.process
     if (!own || own.exitCode !== null || own.signalCode !== null) return
     const exited = new Promise<void>((done) => own.once('exit', () => done()))
@@ -115,9 +161,10 @@ export class CodexOutside {
     await exited
   }
 
-  /** In a tab, the tab gone at once (outsideAgent.ts killTab), with no wait. */
+  /** In a tab, the tab gone at once (outsideAgent.ts killTab), with no wait; in a tmux pane, its process. */
   killTab(): void {
     if (this.tab) killTab(this.tab)
+    if (this.inPane) try { process.kill(this.inPane.pid, 'SIGKILL') } catch { /* already gone */ }
   }
 
   private async run(command: string, env: NodeJS.ProcessEnv, input: string): Promise<{ code: number | null; stderr: string }> {

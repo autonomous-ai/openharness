@@ -46,7 +46,8 @@ async function follow(data: string, stopAt?: number): Promise<string[]> {
       return lines.length !== stopAt
     },
     wait: async () => {},
-    parentAlive: () => true,
+    // The pipe is what this run proves; the caller's watch is inbox.spec.ts's, and reads no real table.
+    pid: process.pid, ppid: process.ppid, liveness: { alive: () => true, rows: async () => null },
     now: Date.now,
   })
   return lines

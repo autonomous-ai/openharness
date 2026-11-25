@@ -1,5 +1,9 @@
 export type HostAgentState = 'idle' | 'working' | 'needs-you' | 'done' | 'error'
 
+/** A multiplexer whose pane can be an agent's own terminal and that has its own page on the dial: tmux and herdr only
+ *  (Diego, 2026-11-23); Zellij and Rex stay on their app's. */
+export type Nest = 'tmux' | 'herdr'
+
 export interface HostAgent {
   /** What the dial sends back; a UUID. */
   id: string
@@ -13,11 +17,20 @@ export interface HostAgent {
   name: string
   /** 'harness' | 'orca' | 'herdr' | 'ghostty' | 'iterm' | 'vscode' | 'terminal' | ... */
   host: string
-  /** The outermost app, one of `APP_IDS`: the dial's page the agent is on. The unknown app's while `appPending`. */
+  /** The outermost app the person sees, one of `APP_IDS`: what a tap brings and the tab it raises, and the app a
+   *  prompt's follow compares with the front. The page is `pageOf`'s (`select.ts`). The unknown app's while
+   *  `appPending` for the scan. */
   app: string
+  /** The nearest multiplexer whose pane is the agent's own terminal, as its lookup or the scan's maker read confirmed
+   *  (`observed.ts`); tmux and herdr only (Diego, 2026-11-23). Its page is that multiplexer's unless its app is Orca
+   *  (`select.ts` `pageOf`). */
+  nest?: Nest
   /**
-   * Nothing has said where it runs yet: the open scan found it and no hook has told of it. It sits on the unknown app's
-   * page, so it can be reached, but is not known to be in that app, so it counts for nothing in the dial's default.
+   * Nothing has said where it runs yet: the open scan found it and no hook has told of it, or its hook came from a
+   * multiplexer's pane whose lookup has not answered, with no multiplexer known (`observed.ts` ingest). It sits on the
+   * unknown app's page, or its multiplexer's when `nest` is set, or meanwhile the page of the app its hints name, so it
+   * can be reached, but is not known to be in that app, so it counts for nothing in the dial's default nor for the app
+   * in front (`select.ts` counts).
    */
   appPending?: true
   /** Its session ended and its source still lists it (the observed source's, until its tick drops it): no tap, rest or
@@ -64,8 +77,9 @@ export type DialView = 'tabs' | 'apps'
  *  opening, the shown app left as Harness or no app. */
 export type ViewCause = 'front' | 'pick' | 'window' | 'empty'
 
-/** Why the shown app changed. */
-export type SwitchCause = 'front' | 'pick' | 'empty' | 'notice'
+/** Why the shown app changed. `follow`: a tab or prompt follow to an agent of the app in front turned to the agent's
+ *  own page, tmux's or herdr's (AppFilter.follow). */
+export type SwitchCause = 'front' | 'pick' | 'empty' | 'notice' | 'follow'
 
 export interface Caps {
   status: boolean
@@ -98,12 +112,15 @@ export interface HostSource {
   send?(agent: HostAgent, text: string): Promise<SendResult>
   /** A sentence of the agent's own app for words no route reaches, said in place of the generic one; none keeps that. */
   voiceRefusal?(agent: HostAgent): string | undefined
-  /** A tap: bring the agent's terminal forward; false when it did not come. A source without it opens nothing. */
-  focus?(agent: HostAgent): Promise<boolean>
+  /** A tap: bring the agent's terminal forward; false when it did not come, `superseded` when a later tap replaced it
+   *  before it acted (eval I13, PM 2026-11-24). [latest] says whether it is still the dial's latest tap, on any agent of
+   *  any source: one that waits before it acts asks it then. A source without it opens nothing. */
+  focus?(agent: HostAgent, latest: () => boolean): Promise<boolean | 'superseded'>
   /** Whether the agent has a pane its app can show without coming forward. A source without it has none. */
   hasPane?(agent: HostAgent): boolean
-  /** Shows the agent's pane inside its app, which stays where it is. */
-  showPane?(agent: HostAgent): Promise<PaneSwitch>
+  /** Shows the agent's pane inside its app, which stays where it is; `superseded` when a later tap or rest replaced it
+   *  before it acted. */
+  showPane?(agent: HostAgent): Promise<PaneSwitch | 'superseded'>
 }
 
 /** The capabilities as letters, always in the order s v f a. */

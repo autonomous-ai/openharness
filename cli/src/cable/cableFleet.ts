@@ -4,7 +4,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { resetBoard } from './boardReset.js'
 import { DialVerdicts } from './dialPortVerdicts.js'
-import { findDialPorts, portInUse, SerialLink, serialPortName, type DialPort } from './serial.js'
+import { findDialPorts, portInUse, SerialLink, serialPortName, watchDialArrivals, type DialPort } from './serial.js'
 import { isUsbConsoleUser } from './usbConsoleUser.js'
 import { errorKind } from '../lib/log.js'
 import type { CableSession, CableHost, CablePort, DialStatus, PortOpener } from './cableSession.js'
@@ -38,6 +38,8 @@ export interface CableFleetOptions {
   dropBackoffMs?: number
   /** Reset a board over its cable; false when it cannot be done here (boardReset.ts). */
   reset?: (path: string) => Promise<boolean>
+  /** Subscribe to the OS's device arrivals; returns the unsubscribe, or undefined where the OS gives none (serial.ts watchDialArrivals). */
+  arrivals?: (signal: () => void) => (() => void) | undefined
 }
 
 /** Faults within a minute that drop one dial; a hostile stream drops it at once. */
@@ -47,6 +49,8 @@ const FAULTS_TO_DROP = 5
 const DROP_BACKOFF_MS = 5_000
 const DROP_BACKOFF_MAX_MS = 60_000
 const DROP_FORGIVEN_MS = 300_000
+/** An arrival is scanned for this long after the OS's last signal: one plug raises several, and udev sets a node's access just after it appears. */
+const ARRIVAL_SETTLE_MS = 250
 /** Dials whose place is kept while they are away; past it the one away longest is forgotten. */
 const KEPT_FOCUS_MAX = 16
 /** Shown on a silent Harness Pro's row once a reset has not brought it back: short, the card gives it about two lines. */
@@ -90,6 +94,11 @@ export class CableFleet {
   private timer?: ReturnType<typeof setInterval>
   private scanTask?: Promise<void>
   private stopped = true
+  private readonly arrivals?: CableFleetOptions['arrivals']
+  private unwatchArrivals?: () => void
+  private arrivalTimer?: ReturnType<typeof setTimeout>
+  /** An arrival came in during a scan, which may have looked before the device was there: one more scan follows it. */
+  private scanAgain = false
   private readonly discover: () => Promise<DialPort[]>
   private readonly open: OpenPort
   private readonly serials: Set<string>
@@ -113,6 +122,9 @@ export class CableFleet {
   private readonly proInLogs = new Map<string, boolean>()
   /** The agent each dial away was on, by id, handed to its next session so the dial comes back there (keepFocus). */
   private readonly keptFocus = new Map<string, string>()
+  /** What the host's attach started for the first dial, which every dial attached beside it waits for too: two dials back
+   *  from one hub greet a moment apart, and the second's list lacked those rows until a tick's push. */
+  private attachReads: void | Promise<void> = undefined
 
   constructor(private readonly Session: SessionConstructor, private readonly host: CableHost,
               private readonly logs: string, private readonly Log: typeof DialLog,
@@ -125,6 +137,8 @@ export class CableFleet {
     this.canUseUsb = options.canUseUsb ?? ((dialHere) => isUsbConsoleUser({ dialHere }))
     this.watchEveryMs = options.watchEveryMs ?? 8_000
     this.reset = options.reset ?? resetBoard
+    // A discovery given in (the end-to-end suite's pseudo-terminals, tests) is not the OS's USB, so the OS's arrivals mean nothing to it.
+    this.arrivals = options.arrivals ?? (options.discover ? undefined : (signal) => watchDialArrivals(signal, (line) => this.host.log(line)))
   }
 
   get isConnected(): boolean { return [...this.entries.values()].some(e => e.session.isConnected) }
@@ -139,6 +153,11 @@ export class CableFleet {
     if (!this.stopped) return
     this.stopped = false
     this.timer = setInterval(() => void this.scan(), this.options.intervalMs ?? 2000)
+    try {
+      this.unwatchArrivals = this.arrivals?.(() => this.arrived())
+    } catch (error) {
+      this.host.log(`cable: device arrivals cannot be watched (${errorKind(error)}) — a new dial is found by the next scan`)
+    }
     void this.scan()
   }
 
@@ -146,9 +165,20 @@ export class CableFleet {
     this.stopped = true
     clearInterval(this.timer)
     this.timer = undefined
+    clearTimeout(this.arrivalTimer)
+    this.unwatchArrivals?.()
+    this.unwatchArrivals = undefined
     await this.scanTask
     await Promise.allSettled([...this.entries.values()].map(e => e.session.stop()))
     this.entries.clear()
+  }
+
+  private arrived(): void {
+    clearTimeout(this.arrivalTimer)
+    this.arrivalTimer = setTimeout(() => {
+      if (this.scanTask) this.scanAgain = true
+      else void this.scan()
+    }, ARRIVAL_SETTLE_MS)
   }
 
   private scan(): Promise<void> {
@@ -156,7 +186,12 @@ export class CableFleet {
     if (this.scanTask) return this.scanTask
     this.scanTask = this.reconcile().catch(error => {
       this.host.log(`cable: USB discovery failed: ${errorKind(error)}`)
-    }).finally(() => { this.scanTask = undefined })
+    }).finally(() => {
+      this.scanTask = undefined
+      if (!this.scanAgain) return
+      this.scanAgain = false
+      void this.scan()
+    })
     return this.scanTask
   }
 
@@ -240,13 +275,14 @@ export class CableFleet {
       this.heldNotes.delete(port.path)
       if (this.stopped) return
       const entry: Entry = { port, attached: false, status: { attached: false }, session: undefined!, faults: [] }
-      const attached = () => {
+      const attached = (): void | Promise<void> => {
         this.verdicts.markDial(port, entry.status.board)
         this.unanswered.delete(id)
         if (entry.attached) return
         const sibling = [...this.entries.values()].find(e => e.attached)
         entry.attached = true
-        if (!sibling) { this.host.onDialAttached?.(); return }
+        // What the attach started, for the greeting to wait on (cableSession.ts awaitAttachReads).
+        if (!sibling) return this.attachReads = this.host.onDialAttached?.()
         // The host asks again only as the first dial arrives, so this one is given what its sibling would be asked again.
         // Mid-greeting: the session only takes them in here, and asks each once as its greeting's push ends.
         const failed = (error: unknown) => this.host.log(`cable: ${serialPortName(port.path)} open questions: ${errorKind(error)} [usb ${id}]`)
@@ -254,6 +290,8 @@ export class CableFleet {
         for (const open of sibling.session.owedQuestions()) (open.held
           ? entry.session.hold(open.agentId, open.id, open.questions)
           : entry.session.question(open.agentId, open.id, open.questions)).catch(failed)
+        // Under way still when both came back together; long landed, it holds the greeting for nothing.
+        return this.attachReads
       }
       const gone = () => {
         if (!entry.attached) return

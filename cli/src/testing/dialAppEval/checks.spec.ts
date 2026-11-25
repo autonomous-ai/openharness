@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { observedAgentId } from '../../cable/hosts/observed.js'
 import { condition, evaluate, graded, wrongSends } from './checks.js'
+import { TABS_STREAM } from './itermRecords.js'
 import { uncaughtProbes } from './runner.js'
 import { agentIdOf, orcaPaneHandle, orcaWorktreeId, THRESHOLDS, type Check, type CheckResult, type Delivery, type Platform,
   type Scenario, type Seen, type SessionDef, type Step, type Tier, type Until } from './types.js'
@@ -1348,5 +1349,244 @@ describe('Orca', () => {
     expect(lines).toContain('command at 760: send')
     expect(lines).toContain('command at 900: other')
     for (const line of lines) expect(line).not.toMatch(/term_|eval-repo|\/work\/|Eval|orca\b|[0-9a-f]{8}-/)
+  })
+})
+
+describe('iTerm2', () => {
+  const iterm = (key: string, n: number, more: Partial<SessionDef> = {}): SessionDef =>
+    ({ key, app: 'iterm', id: uuid(n), title: `Eval ${key}`, cwd: `/work/eval-${key}`, ageMs: 0, window: 'w1', tab: 0, split: 0, ...more })
+  const IA = iterm('ia', 61)
+  const IS = iterm('is', 62, { split: 1 })
+  const IB = iterm('ib', 63, { tab: 1 })
+  const IM = iterm('im', 64, { place: 'tmux', tab: 2 })
+  const IN = iterm('in', 65, { place: 'tmux', tab: 2, split: 1 })
+  const IH = iterm('ih', 66, { place: 'herdr', tab: 3 })
+  const IK = iterm('ik', 67, { place: 'herdr', tab: 3, split: 1 })
+  const IZ: SessionDef = { ...iterm('iz', 69, { tab: 5 }), ghost: true }
+  const sessions = [IA, IS, IB, IM, IN, IH, IK, IZ]
+  type Line = NonNullable<Seen['streams']>[number]
+  const select = (at: number, tab: string, raise = true): Line =>
+    ({ at, window: TABS_STREAM, line: raise ? { app: 'iterm', tab, raise: true } : { app: 'iterm', tab } })
+  const report = (at: number, tab: string): Line => ({ at, window: TABS_STREAM, line: { type: 'tab', app: 'iterm', tab } })
+  const cmd = (at: number, argv: string[], ok = true): Seen['commands'][number] => ({ at, argv, ok })
+  const front = (at: number): Seen['commands'][number] => cmd(at, ['/usr/bin/open', '-b', 'com.googlecode.iterm2'])
+  const tmuxPane = (at: number, key: string, ok = true): Seen['commands'][number] =>
+    cmd(at, ['/opt/eval/bin/tmux', 'select-window', '-t', `pane:${key}`, ';', 'select-pane', '-t', `pane:${key}`], ok)
+  const focus = (at: number, key: string, ok = true): Seen['commands'][number] =>
+    cmd(at, ['/opt/eval/bin/herdr', 'agent', 'focus', `pane:${key}`], ok)
+  const input = (kind: 'tap' | 'swipe', key = 'ia'): Scenario => scenario([{ kind, session: key, label: 'go' }], sessions)
+  const open = (key = 'ia', more: Partial<Extract<Check, { kind: 'open' }>> = {}): Check =>
+    ({ id: 'o', kind: 'open', dim: 'D3', session: key, link: false, after: 'go', ...more })
+  /** What the driver saw after a push that listed every iTerm2 row, the watch's tabs stream open. */
+  const listed = (s: Scenario, times: number[], parts: Partial<Omit<Seen, 'steps'>> = {}): Seen =>
+    seen(s, times, { ...parts, frames: [...list(0, 'iterm', [IA, IS, IB, IM, IN, IH, IK]), ...(parts.frames ?? [])],
+      streams: [{ at: 0, window: TABS_STREAM, line: { type: 'tabs' } }, ...(parts.streams ?? [])] })
+  const tapped = (key: string, parts: Partial<Omit<Seen, 'steps'>>, check: Check = open(key)): CheckResult[] => {
+    const s = input('tap', key)
+    return run(check, s, listed(s, [500], parts))
+  }
+
+  it('a Codex row\'s expected name is its folder\'s, a Claude Code row\'s its title, in a check and a wait alike', () => {
+    const IX = iterm('ix', 70, { engine: 'codex', tab: 4 })
+    const s = scenario([{ kind: 'hook', session: 'ix', event: 'start', label: 'w' }], [...sessions, IX])
+    const ring: Check = { id: 'r', kind: 'ring', dim: 'D1', page: 'iterm', expect: ['ia', 'ix'], after: 'w' }
+    expect(scores(run(ring, s, seen(s, [100], { frames: list(200, 'iterm', [IA, [id(IX), 'eval-ix']]) }))).names).toBe(1)
+    expect(scores(run(ring, s, seen(s, [100], { frames: list(200, 'iterm', [IA, IX]) }))).names).toBe(0.5)
+    expect(scores(run(ring, s, seen(s, [100], { frames: list(200, 'iterm', [[id(IA), 'eval-ia'], [id(IX), 'eval-ix']]) }))).names).toBe(0.5)
+    const until: Until = { kind: 'ring', page: 'iterm', expect: ['ia', 'ix'] }
+    expect(condition(until, s, seen(s, [], { frames: list(200, 'iterm', [IA, [id(IX), 'eval-ix']]) })).holds).toBe(true)
+  })
+
+  it("a ring on tmux's page reads the list the dial holds on tmux's page; the same list fails a ring on iTerm2's", () => {
+    const s = scenario([{ kind: 'hook', session: 'im', event: 'start', label: 'w' }], sessions)
+    const frames = list(200, 'tmux', [IM])
+    const onTmux: Check = { id: 'r', kind: 'ring', dim: 'D1', page: 'tmux', expect: ['im'], after: 'w' }
+    expect(scores(run(onTmux, s, seen(s, [100], { frames }))).recall).toBe(1)
+    const onIterm = run({ id: 'r', kind: 'ring', dim: 'D1', page: 'iterm', expect: ['im'], after: 'w' }, s, seen(s, [100], { frames }))
+    expect(scores(onIterm).recall).toBe(0)
+    expect(onIterm[0]!.evidence).toEqual(['list at 200 on tmux, not iterm: 1 rows im'])
+  })
+
+  it('a wait with apart holds once the other pages count them: iterm 1, tmux 1, herdr 1 does not hold for apart im, ih, ik; iterm 1, tmux 1, herdr 2 does', () => {
+    const s = scenario([{ kind: 'hook', session: 'ia', event: 'start', label: 'w' }], sessions)
+    const until: Until = { kind: 'ring', page: 'iterm', expect: ['ia'], apart: ['im', 'ih', 'ik'] }
+    const counted = (herdr: number): Seen['frames'] => [frame(200, { t: 'apps', shown: 'iterm', apps: [
+      { id: 'iterm', name: 'iTerm2', count: 1, waiting: 0 }, { id: 'tmux', name: 'tmux', count: 1, waiting: 0 },
+      { id: 'herdr', name: 'herdr', count: herdr, waiting: 0 }] }), ...list(200, 'iterm', [IA]).slice(1)]
+    expect(condition(until, s, seen(s, [], { frames: counted(1) })).holds).toBe(false)
+    expect(condition(until, s, seen(s, [], { frames: counted(2) })).holds).toBe(true)
+  })
+
+  it("a wait on the Apps screen holds once an apps frame since the last step shows that page and counts exactly those pages, what a person reads before a pick", () => {
+    const s = scenario([{ kind: 'devices.restart', label: 'restart' }], sessions)
+    const until: Until = { kind: 'apps', shown: 'iterm', counts: { iterm: 1, tmux: 1, herdr: 2 } }
+    const apps = (at: number, counts: Record<string, number>, shown = 'iterm'): Seen['frames'][number] => frame(at, { t: 'apps', shown,
+      apps: Object.entries(counts).map(([id, count]) => ({ id, name: id, count, waiting: 0 })) })
+    const right = { iterm: 1, tmux: 1, herdr: 2 }
+    expect(condition(until, s, seen(s, [1000], { frames: [apps(1500, right)] })))
+      .toEqual({ holds: true, evidence: ['apps at 1500 on iterm: iterm 1, tmux 1, herdr 2'] })
+    // The devices start again on the page the dial last showed, before they turn to the app in front.
+    expect(condition(until, s, seen(s, [1000], { frames: [apps(1000, right, 'herdr')] })))
+      .toEqual({ holds: false, evidence: ['apps at 1000 on herdr: iterm 1, tmux 1, herdr 2'] })
+    // The screen left from before the restart is not what the devices count now.
+    expect(condition(until, s, seen(s, [1000], { frames: [apps(500, right)] })))
+      .toEqual({ holds: false, evidence: ['no apps frame since the step at 1000'] })
+    // The scan has not found every agent yet, and a page that is not expected counts some.
+    expect(condition(until, s, seen(s, [1000], { frames: [apps(500, right), apps(1500, { iterm: 1, herdr: 2 })] })).holds).toBe(false)
+    expect(condition(until, s, seen(s, [1000], { frames: [apps(1500, { ...right, claude: 1 })] })).holds).toBe(false)
+    expect(condition(until, s, seen(s, [1000], { frames: [apps(1500, right), apps(1600, { iterm: 1, tmux: 1, herdr: 1 })] })))
+      .toEqual({ holds: false, evidence: ['apps at 1600 on iterm: iterm 1, tmux 1, herdr 1'] })
+  })
+
+  it("an iTerm2 session in tmux is shown in its state on tmux's page; the same frames with the list on iTerm2's page fail it", () => {
+    const s = scenario([{ kind: 'hook', session: 'im', event: 'turn-start', label: 'go' }], sessions)
+    const state: Check = { id: 'st', kind: 'state', dim: 'D4', session: 'im', state: 'working', after: 'go' }
+    const turn = frame(800, { t: 'turn.started', agentId: id(IM), text: '' })
+    expect(scores(run(state, s, seen(s, [500], { frames: [...list(100, 'tmux', [IM, IN]), turn] })))).toEqual({ shown: 1, latency: 1 })
+    expect(scores(run(state, s, seen(s, [500], { frames: [...list(100, 'iterm', [IM, IN]), turn] }))).shown).toBe(0)
+  })
+
+  it("a tap on a tab row passes on iTerm2 brought forward and its tab's select with raise", () => {
+    const results = tapped('ia', { commands: [front(600)], streams: [select(700, 'w1.0.0')] })
+    expect(scores(results)).toEqual({ tab: 1, front: 1, latency: 1 })
+    expect(ms(results, 'latency')).toBe(200)
+    expect(results[0]!.evidence).toEqual(['tap on ia at 500', 'command at 600: front', 'select at 700: w1.0.0 raise'])
+    // A split's own select is its split's label.
+    expect(scores(tapped('is', { commands: [front(600)], streams: [select(700, 'w1.0.1')] }))).toEqual({ tab: 1, front: 1, latency: 1 })
+    // Another app brought forward, or iTerm2's that failed, is not iTerm2 coming up.
+    expect(scores(tapped('ia', { commands: [cmd(600, ['/usr/bin/open', '-b', 'com.apple.Terminal'])], streams: [select(700, 'w1.0.0')] })))
+      .toEqual({ tab: 1, front: 0, latency: 0 })
+    const failed = tapped('ia', { commands: [cmd(600, ['/usr/bin/open', '-b', 'com.googlecode.iterm2'], false)], streams: [select(700, 'w1.0.0')] })
+    expect(scores(failed)).toEqual({ tab: 1, front: 0, latency: 0 })
+    expect(failed[0]!.evidence).toContain('command at 600: front failed')
+  })
+
+  it("a select of its split's sibling, or one more select of another tab in the window, fails tab", () => {
+    const sibling = tapped('ia', { commands: [front(600)], streams: [select(700, 'w1.0.1')] })
+    expect(scores(sibling)).toEqual({ tab: 0, front: 1, latency: 0 })
+    expect(ms(sibling, 'latency')).toBeNull()
+    expect(sibling[0]!.evidence).toEqual(['tap on ia at 500', 'command at 600: front', 'select at 700: w1.0.1 raise'])
+    expect(scores(tapped('ia', { commands: [front(600)], streams: [select(700, 'w1.0.0'), select(800, 'w1.1.0')] })).tab).toBe(0)
+    expect(scores(tapped('ia', { commands: [front(600)], streams: [select(650, 'w1.1.0', false), select(700, 'w1.0.0')] })).tab).toBe(0)
+    // The person's own report of another tab is no select the devices wrote; a select before the input is not this one's.
+    expect(scores(tapped('ia', { commands: [front(600)], streams: [select(400, 'w1.1.0'), select(700, 'w1.0.0'), report(800, 'w1.1.0')] })))
+      .toEqual({ tab: 1, front: 1, latency: 1 })
+  })
+
+  it("a select without raise fails a tap's tab, and one with raise fails a rest's", () => {
+    expect(scores(tapped('ia', { commands: [front(600)], streams: [select(700, 'w1.0.0', false)] }))).toEqual({ tab: 0, front: 1, latency: 0 })
+    const s = input('swipe')
+    expect(scores(run(open(), s, listed(s, [500], { streams: [select(700, 'w1.0.0')] })))).toEqual({ tab: 0, noRaise: 0 })
+  })
+
+  it('a rest has tab and noRaise and no latency, and an open -b in the window fails noRaise', () => {
+    const s = input('swipe')
+    const rest = run(open(), s, listed(s, [500], { streams: [select(700, 'w1.0.0', false)] }))
+    expect(scores(rest)).toEqual({ tab: 1, noRaise: 1 })
+    expect(rest.every((r) => !r.timed)).toBe(true)
+    expect(rest[0]!.evidence).toEqual(['swipe on ia at 500', 'select at 700: w1.0.0'])
+    expect(scores(run(open(), s, listed(s, [500], { commands: [front(800)], streams: [select(700, 'w1.0.0', false)] }))))
+      .toEqual({ tab: 1, noRaise: 0 })
+    // A dead rest showed nothing: it passes no part, its no raise neither, as Orca's does.
+    const dead = run(open(), s, listed(s, [500], { frames: [frame(600, { t: 'focus', id: id(IA) })] }))
+    expect(scores(dead)).toEqual({ tab: 0, noRaise: 0 })
+    expect(dead[0]!.evidence).toEqual(['swipe on ia at 500', 'no select'])
+  })
+
+  it("a tmux row also needs select-window ; select-pane for pane:<key> that succeeded, and fails on one for another session's pane or one that failed", () => {
+    const tab = select(800, 'w1.2.0')
+    const passed = tapped('im', { commands: [tmuxPane(600, 'im'), front(700)], streams: [tab] })
+    expect(scores(passed)).toEqual({ tab: 1, front: 1, pane: 1, latency: 1 })
+    expect(passed[0]!.evidence).toEqual(['tap on im at 500', 'command at 600: pane im', 'command at 700: front', 'select at 800: w1.2.0 raise'])
+    // Its window's other pane: the same tab, another session's pane.
+    const other = tapped('im', { commands: [tmuxPane(600, 'in'), front(700)], streams: [tab] })
+    expect(scores(other)).toEqual({ tab: 1, front: 1, pane: 0, latency: 0 })
+    expect(other[0]!.evidence).toContain('command at 600: pane in')
+    const failed = tapped('im', { commands: [tmuxPane(600, 'im', false), front(700)], streams: [tab] })
+    expect(scores(failed).pane).toBe(0)
+    expect(failed[0]!.evidence).toContain('command at 600: pane im failed')
+    expect(scores(tapped('im', { commands: [tmuxPane(600, 'im'), tmuxPane(650, 'in'), front(700)], streams: [tab] })).pane).toBe(0)
+    // herdr's focus is not tmux's select, and a tmux run that only reads the pane selects none.
+    expect(scores(tapped('im', { commands: [focus(600, 'im'), front(700)], streams: [tab] })).pane).toBe(0)
+    const read = tapped('im', { commands: [cmd(600, ['/opt/eval/bin/tmux', 'display-message', '-p', '-t', 'pane:im', '-F', '#{pane_pid}']),
+      front(700)], streams: [tab] })
+    expect(scores(read).pane).toBe(0)
+    expect(read[0]!.evidence).toContain('command at 600: other')
+    // A rest on it shows its tab and its pane, and raises nothing.
+    const s = input('swipe', 'im')
+    expect(scores(run(open('im'), s, listed(s, [500], { commands: [tmuxPane(700, 'im')], streams: [select(600, 'w1.2.0', false)] }))))
+      .toEqual({ tab: 1, pane: 1, noRaise: 1 })
+  })
+
+  it('a herdr row also needs herdr agent focus for pane:<key>', () => {
+    const tab = select(800, 'w1.3.0')
+    expect(scores(tapped('ih', { commands: [focus(600, 'ih'), front(700)], streams: [tab] }))).toEqual({ tab: 1, front: 1, pane: 1, latency: 1 })
+    expect(scores(tapped('ik', { commands: [focus(600, 'ik'), front(700)], streams: [tab] }))).toEqual({ tab: 1, front: 1, pane: 1, latency: 1 })
+    expect(scores(tapped('ih', { commands: [focus(600, 'ik'), front(700)], streams: [tab] })).pane).toBe(0)
+    expect(scores(tapped('ih', { commands: [focus(600, 'ih', false), front(700)], streams: [tab] })).pane).toBe(0)
+    expect(scores(tapped('ih', { commands: [tmuxPane(600, 'ih'), front(700)], streams: [tab] })).pane).toBe(0)
+    // A pane no session holds is another's too.
+    expect(scores(tapped('ih', { commands: [focus(600, 'ih'), focus(650, 'other'), front(700)], streams: [tab] })).pane).toBe(0)
+  })
+
+  it("with check.tab the select must name that tab, not the session's own", () => {
+    const moved = open('im', { tab: 'w1.4.0' })
+    const commands = [tmuxPane(600, 'im'), front(700)]
+    expect(scores(tapped('im', { commands, streams: [select(800, 'w1.4.0')] }, moved))).toEqual({ tab: 1, front: 1, pane: 1, latency: 1 })
+    expect(scores(tapped('im', { commands, streams: [select(800, 'w1.2.0')] }, moved))).toEqual({ tab: 0, front: 1, pane: 1, latency: 0 })
+  })
+
+  it('latency is to the latest of the passing parts, null when one fails', () => {
+    const at = (frontAt: number, selectAt: number, paneAt: number): CheckResult[] =>
+      tapped('im', { commands: [tmuxPane(paneAt, 'im'), front(frontAt)], streams: [select(selectAt, 'w1.2.0')] })
+    expect(ms(at(600, 700, 3600), 'latency')).toBe(3100)
+    expect(scores(at(600, 700, 3600)).latency).toBe(0)
+    expect(ms(at(3400, 700, 600), 'latency')).toBe(2900)
+    expect(scores(at(3400, 700, 600)).latency).toBe(0.5)
+    expect(ms(at(600, 1500, 600), 'latency')).toBe(1000)
+    expect(scores(at(600, 1500, 600)).latency).toBe(1)
+    const noPane = tapped('im', { commands: [front(600)], streams: [select(700, 'w1.2.0')] })
+    expect(scores(noPane)).toEqual({ tab: 1, front: 1, pane: 0, latency: 0 })
+    expect(ms(noPane, 'latency')).toBeNull()
+  })
+
+  it("a tab row has no pane: a pane select naming it, tmux's or herdr's, is no part of its open nor of its latency", () => {
+    for (const pane of [focus(3600, 'ia'), tmuxPane(3600, 'ia')]) {
+      const results = tapped('ia', { commands: [front(600), pane], streams: [select(700, 'w1.0.0')] })
+      expect(scores(results)).toEqual({ tab: 1, front: 1, latency: 1 })
+      expect(ms(results, 'latency')).toBe(200)
+    }
+  })
+
+  it('an iTerm2 row the dial was never sent scores 0 on every part', () => {
+    for (const kind of ['tap', 'swipe'] as const) {
+      const s = input(kind, 'iz')
+      const never = run(open('iz'), s, listed(s, [500], { commands: [front(600)], streams: [select(700, 'w1.5.0', kind === 'tap')] }))
+      expect(never.length).toBeGreaterThan(0)
+      for (const r of never) expect(r.score).toBe(0)
+      expect(never[0]!.evidence).toContain('iz never listed')
+    }
+    // A row listed only after the window closed was not there to tap.
+    const t = scenario([{ kind: 'tap', session: 'ia', label: 'go' }, { kind: 'tap', session: 'ib', label: 'end' }], sessions)
+    const late = run(open('ia', { at: 'end' }), t, seen(t, [500, 900], { commands: [front(600)], streams: [select(700, 'w1.0.0')],
+      frames: list(1000, 'iterm', [IA, IB]) }))
+    expect(scores(late)).toEqual({ tab: 0, front: 0, latency: 0 })
+    // A driver that saw nothing says nothing.
+    const s = input('tap', 'iz')
+    expect(run(open('iz'), s, seen(s, [500])).flatMap((r) => r.evidence)).toEqual([])
+  })
+
+  it('no evidence holds a tty, a pane id or a tmux session name', () => {
+    const commands = [cmd(600, ['/opt/eval/bin/tmux', 'display-message', '-p', '-t', '%3', '-F', '#{pane_tty}']),
+      cmd(610, ['/opt/eval/bin/tmux', 'list-clients', '-t', 'eval-w1-2', '-F', '#{client_tty}']),
+      cmd(620, ['/opt/eval/bin/tmux', 'switch-client', '-c', '/dev/ttys004', '-t', 'pane:im']),
+      cmd(630, ['/opt/eval/bin/herdr', 'agent', 'focus', 'w1:p2']), cmd(640, ['/usr/sbin/lsof', '-a', '-U', '-p', '41000', '-F', 'pdn']),
+      tmuxPane(650, 'im'), front(700)]
+    // A select a driver failed to name by its label is printed as other.
+    const streams = [select(800, 'w1.2.0'), select(810, '/dev/ttys004'), select(820, 'ttys005', false)]
+    const lines = [...tapped('im', { commands, streams }), ...tapped('iz', { commands, streams })].flatMap((r) => r.evidence)
+    expect(lines).toContain('select at 810: other raise')
+    expect(lines).toContain('command at 650: pane im')
+    for (const line of lines) expect(line).not.toMatch(/ttys|\/dev\/|%[0-9]|:p[0-9]|eval-w|Eval|\/work\/|41000/)
   })
 })

@@ -60,8 +60,8 @@ describe('Inbox', () => {
     expect(newer.value).toBeUndefined()
     expect(other.value).toBeUndefined()
     expect(t.pending()).toBe(2)
-    // The core tells the older one gone too; the newer one stays held.
-    t.inbox.gone('p1')
+    // The core tells the older one gone too; the newer one stays held, and no session's open poll closed.
+    expect(t.inbox.gone('p1')).toBeUndefined()
     await settle()
     expect(newer.value).toBeUndefined()
     t.advance(25_000)
@@ -69,12 +69,12 @@ describe('Inbox', () => {
     expect(newer.value).toEqual({})
   })
 
-  it('gone ends the poll', async () => {
+  it('gone ends the poll and names its session; one it finds no open poll for names none', async () => {
     const t = setup()
     const poll = track(t.inbox.poll('p1', 's1'))
     const other = track(t.inbox.poll('p2', 's2'))
-    t.inbox.gone('p1')
-    t.inbox.gone('never-opened')
+    expect(t.inbox.gone('p1')).toBe('s1')
+    expect(t.inbox.gone('never-opened')).toBeUndefined()
     await settle()
     expect(poll.value).toEqual({})
     expect(other.value).toBeUndefined()

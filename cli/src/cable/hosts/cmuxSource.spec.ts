@@ -26,6 +26,12 @@ const codex = (more: Partial<CmuxSession> = {}) => record({ word: 'codex', kind:
 const ok = (sessions: CmuxSession[]): CmuxSessions => ({ ok: true, sessions })
 /** Lets what the source was answered be taken in. */
 const turn = () => new Promise((resolve) => setImmediate(resolve))
+/** Whether a start's promise has ended, read as the test goes. */
+const ending = (start: Promise<void>) => {
+  const state = { ended: false }
+  void start.then(() => { state.ended = true })
+  return state
+}
 
 describe('the cmux source (docs/plans/2026-11-17-dial-cmux-design.md)', () => {
   afterEach(() => {
@@ -51,12 +57,14 @@ describe('the cmux source (docs/plans/2026-11-17-dial-cmux-design.md)', () => {
     const focus = vi.fn(async (_pane: string, _agentId: string) => true)
     const canShow = vi.fn((_pane: string) => true)
     const show = vi.fn(async (_pane: string, _agentId: string): Promise<PaneSwitch> => 'ok')
+    const events = vi.fn()
     const deps: CmuxSourceDeps = {
       client: { sessions },
       watch: (tell) => {
         changed = tell
         return () => { if (changed === tell) changed = undefined }
       },
+      events,
       folder: () => state.folder,
       stores: () => ['claude', 'codex'],
       alive: (pid) => live.has(pid),
@@ -79,7 +87,7 @@ describe('the cmux source (docs/plans/2026-11-17-dial-cmux-design.md)', () => {
     const source = new CmuxSource(deps)
     source.onChange(() => { changes++ })
     return {
-      source, sessions, state, live, log, counts, prompt, focus, canShow, show,
+      source, sessions, state, live, log, counts, prompt, focus, canShow, show, events,
       get changes() { return changes },
       get watched() { return changed !== undefined },
       /** The agents each run asked for, in order: a word, or all. */
@@ -218,11 +226,40 @@ describe('the cmux source (docs/plans/2026-11-17-dial-cmux-design.md)', () => {
       expect(listed(s)).toEqual([key(S1), key(S3)])
     })
 
-    it('a change with no name asks for every agent', async () => {
+    it('a change with no name asks for every agent, and tells the devices cmux\'s event log may have changed', async () => {
       const s = setup()
       await started(s, [record()])
       s.change()
       expect(s.asked()).toEqual(['all', 'all'])
+      expect(s.events).toHaveBeenCalledTimes(1)
+    })
+
+    // docs/plans/2026-11-25-dial-cmux-focus-follow-design.md: the devices read the log, which is no store.
+    it('a change of cmux\'s event log tells the devices once and runs nothing', async () => {
+      const s = setup()
+      await started(s, [record()])
+      s.change('events.jsonl')
+      expect(s.events).toHaveBeenCalledTimes(1)
+      expect(s.asked()).toEqual(['all'])
+    })
+
+    it('a store\'s change, or the log\'s rotated file, tells the devices nothing', async () => {
+      const s = setup()
+      await started(s, [record()])
+      s.change('claude-hook-sessions.json')
+      s.change('events.jsonl.1')
+      expect(s.events).not.toHaveBeenCalled()
+    })
+
+    it('with the folder gone, a change of the log, named or not, tells nothing and runs nothing', async () => {
+      const s = setup()
+      await started(s, [record()])
+      s.state.folder = false
+      s.change('.cmuxterm')
+      s.change('events.jsonl')
+      s.change()
+      expect(s.events).not.toHaveBeenCalled()
+      expect(s.asked()).toEqual(['all'])
     })
 
     it('a name that is no store\'s runs nothing', async () => {
@@ -388,6 +425,87 @@ describe('the cmux source (docs/plans/2026-11-17-dial-cmux-design.md)', () => {
       s.change('claude-hook-sessions.json')
       await s.reply(1, ok([record()]))
       expect(listed(s)).toEqual([key(S1)])
+    })
+  })
+
+  // The dial's greeting waits for it (devices.ts dialAttached), so its first list holds cmux's agents.
+  describe('the end of a start', () => {
+    it('a start ends once its first all-agents run has landed, its rows listed; an agent\'s run does not end it', async () => {
+      const s = setup()
+      const start = ending(s.source.start())
+      s.change('codex-hook-sessions.json')
+      await s.reply(1, ok([codex({ surface: S2, pid: 102 })]))
+      expect(start.ended).toBe(false)
+      await s.reply(0, ok([record()]))
+      expect(start.ended).toBe(true)
+      expect(listed(s)).toEqual([key(S2), key(S1)])
+    })
+
+    it('a start whose first run fails or throws ends too', async () => {
+      const failed = setup()
+      const start = ending(failed.source.start())
+      await failed.reply(0, { ok: false, fault: 'failed' })
+      expect(start.ended).toBe(true)
+      const thrown = setup()
+      const again = ending(thrown.source.start())
+      await thrown.reject(0)
+      expect(again.ended).toBe(true)
+    })
+
+    it('with no stores folder a start ends at once, and one removed during the first run ends it', async () => {
+      const none = setup()
+      none.state.folder = false
+      const start = ending(none.source.start())
+      await turn()
+      expect(start.ended).toBe(true)
+      const removed = setup()
+      const again = ending(removed.source.start())
+      await turn()
+      expect(again.ended).toBe(false)
+      removed.state.folder = false
+      removed.change('.cmuxterm')
+      await turn()
+      expect(again.ended).toBe(true)
+    })
+
+    it('a stop ends the start under way at once; the next start ends with its own run, not the stopped one', async () => {
+      const s = setup()
+      const first = ending(s.source.start())
+      s.source.stop()
+      await turn()
+      expect(first.ended).toBe(true)
+      const second = ending(s.source.start())
+      await s.reply(0, ok([record()]))
+      expect(second.ended).toBe(false)
+      await s.reply(1, ok([record()]))
+      expect(second.ended).toBe(true)
+      expect(listed(s)).toEqual([key(S1)])
+    })
+
+    it('a start whose first run waits behind the 32 cmux processes a stopped start left ends once that run has landed', async () => {
+      const s = setup()
+      await started(s, [])
+      for (let n = 0; n < 32; n++) s.change(`w${n}-hook-sessions.json`)
+      s.source.stop()
+      const again = ending(s.source.start())
+      await turn()
+      expect(s.sessions).toHaveBeenCalledTimes(33)
+      expect(again.ended).toBe(false)
+      // One of the stopped runs ends: the all-agents run that waited starts, and only its answer ends the start.
+      await s.reply(1, ok([]))
+      expect(s.asked().slice(33)).toEqual(['all'])
+      expect(again.ended).toBe(false)
+      await s.reply(33, ok([record()]))
+      expect(again.ended).toBe(true)
+      expect(listed(s)).toEqual([key(S1)])
+    })
+
+    it('a start while it runs ends at once', async () => {
+      const s = setup()
+      void s.source.start()
+      const again = ending(s.source.start())
+      await turn()
+      expect(again.ended).toBe(true)
     })
   })
 

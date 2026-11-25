@@ -1,6 +1,6 @@
 // The devices (services/devices.ts): what the core tells them reaches the dial and the window bridges, what
 // they say reaches the core through its API alone, and the fleet failing costs the dial nothing.
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
 import { delimiter, dirname, join, parse, posix, sep, win32 } from 'node:path'
@@ -13,6 +13,7 @@ import type { CodexRunEnd } from '../cable/hosts/codexQueue.js'
 import type { ClaudeAppSession } from '../cable/hosts/claudeAppStore.js'
 import type { CodexAppRead, CodexAppThread } from '../cable/hosts/codexAppThreads.js'
 import { CMUX_APP_BINARY, type CmuxClient, type CmuxInputState, type CmuxSession } from '../cable/hosts/cmuxCli.js'
+import { FOCUS_FAILS_MAX, FOCUS_POLL_MS } from '../cable/hosts/focusPoll.js'
 import { hcClientDeps, type HcClient, type HcPrompt, type HcSubscriber, type HcTerminal } from '../cable/hosts/hcClient.js'
 import { herdrClientDeps, type HerdrAnswer, type HerdrClient, type HerdrEntry, type HerdrPrompt, type HerdrSubscriber } from '../cable/hosts/herdrClient.js'
 import { HerdrSource } from '../cable/hosts/herdrSource.js'
@@ -22,6 +23,7 @@ import { observedAgentId, ObservedSource } from '../cable/hosts/observed.js'
 import { OPENCODE_MESSAGE, opencodeClientDeps, type OpencodeAnswer, type OpencodeClient, type OpencodeEvent, type OpencodeFault, type OpencodePrompt } from '../cable/hosts/opencodeClient.js'
 import { OpencodeSource } from '../cable/hosts/opencodeSource.js'
 import { MAX_TEXT, type OrcaChild, type OrcaReads, type OrcaTabs, type OrcaTerminal } from '../cable/hosts/orca.js'
+import { FRESH_WITHIN_MS } from '../cable/hosts/outer.js'
 import { AppRings } from '../cable/hosts/select.js'
 import { env } from '../config/env.js'
 import { cursorDataDir } from '../engines/cursor/contract.js'
@@ -49,10 +51,12 @@ import type { TierInput } from '../lib/notifyTier.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { claudeAppFixture } from '../testing/claudeAppFixture.js'
 import { codexAppFixture } from '../testing/codexAppFixture.js'
-import { fakeCmux, touchStore } from '../testing/fakeCmux.js'
+import { cmuxEventLine, fakeCmux, fakeCmuxLog, touchStore } from '../testing/fakeCmux.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { herdrAppStatus } from '../testing/herdrAppStatus.js'
+import { RECORDED_KITTY } from '../testing/recordedKitty.js'
 import { RECORDED_ORCA_AGENTS, RECORDED_ORCA_WORKTREES } from '../testing/recordedOrca.js'
+import { RECORDED_WEZTERM } from '../testing/recordedWezterm.js'
 import type { Fleet, FleetDeps } from './fleet.js'
 import type { DevicesDeps } from './devices.js'
 import {
@@ -207,6 +211,8 @@ const readers = vi.hoisted(() => ({
   // A process's terminal, as its made-up row gives it: the table the devices read holds none.
   tty: vi.fn(async (pid: number): Promise<string | undefined> => (await readers.processes()).find((p) => p.pid === pid)?.tty),
   bundleId: vi.fn(async (_bundle: string): Promise<string | undefined> => undefined),
+  /** The pids whose process ended: every other one runs. */
+  ended: new Set<number>(),
 }))
 vi.mock('../lib/sessionSearch/external.js', async (real) => ({
   ...await real<typeof import('../lib/sessionSearch/external.js')>(),
@@ -228,7 +234,7 @@ vi.mock('../lib/sessionSearch/external.js', async (real) => ({
 vi.mock('../lib/sessionSearch/externals/support.js', async (real) => ({
   ...await real<typeof import('../lib/sessionSearch/externals/support.js')>(),
   listProcesses: async () => [],
-  processAlive: () => true,
+  processAlive: (pid: number) => !readers.ended.has(pid),
   fileStamp: async () => null,
 }))
 // Which app each session found runs in, the process table a tap on a tmux pane checks and the bundle ids its client's
@@ -302,6 +308,24 @@ const ORCA_CALLERS: ProcessRow[] = [{ pid: 3900, ppid: 1, executable: 'orca-agen
 /** The hook's caller (4242) in the shell (4000) of a pane of the person's tmux, whose server made their terminal. */
 const IN_TMUX: ProcessRow[] = [{ pid: 4242, ppid: 4000, tty: 'pts/5', executable: 'claude' },
   { pid: 4000, ppid: 3900, tty: 'pts/5', executable: 'zsh' }, { pid: 3900, ppid: 1, executable: 'tmux' }]
+/** Diego's iTerm2 (2026-11-23), on macOS: Claude Code (4101) in a plain tab on ttys001, and one (4242) in pane %3 of his
+ *  tmux, whose server made its terminal and whose client (4300) is in another tab, on ttys002, each tab's login under
+ *  iTerm2's server. */
+const TMUX_IN_ITERM: ProcessRow[] = [
+  { pid: 4101, ppid: 4102, tty: 'ttys001', executable: 'claude' }, { pid: 4102, ppid: 4103, tty: 'ttys001', executable: '-zsh' },
+  { pid: 4103, ppid: 4297, executable: 'login' },
+  { pid: 4242, ppid: 4000, tty: 'ttys030', executable: 'claude' }, { pid: 4000, ppid: 3900, tty: 'ttys030', executable: 'zsh' },
+  { pid: 3900, ppid: 1, executable: 'tmux' },
+  { pid: 4300, ppid: 4299, executable: 'tmux' }, { pid: 4299, ppid: 4298, executable: '-zsh' }, { pid: 4298, ppid: 4297, executable: 'login' },
+  { pid: 4297, ppid: 4296, executable: join(homedir(), 'Library', 'Application Support', 'iTerm2', 'iTermServer-3.6.6') },
+  { pid: 4296, ppid: 1, executable: '/Applications/iTerm.app/Contents/MacOS/iTerm2' },
+]
+/** tmux's answers for that pane, its process, and its session's one client, in the tab on ttys002. Every run is recorded. */
+const tmuxInItermRun = async (file: string, args: string[], timeoutMs: number) => {
+  orcaRuns.push([file, args, timeoutMs])
+  const stdout = args[0] === 'display-message' ? '4000|work|\n' : args[0] === 'list-clients' ? '1794700050|4300|/dev/ttys002\n' : ''
+  return { code: 0, stdout }
+}
 /** Lets the read of a hook's caller's terminal's maker land, on real timers. */
 const landed = () => new Promise((done) => setImmediate(done))
 /** herdr's client lookup on macOS for the caller madeBy('herdr') gives (herdrOuter.ts): its one run asks the server's
@@ -375,6 +399,15 @@ const noCodexApp: NonNullable<DevicesDeps['codexAppThreads']> = {
   read: async () => ({ ok: false, kind: 'ENOENT' }),
   forget: () => {},
   names: () => new Map(),
+}
+/** The Claude app's store with nothing in it, answered at once: an attach that waits on another source's first read waits
+ *  on that alone, not on the throwaway home's folders read from disk, whose time the fake clock does not hold. */
+const emptyClaudeStore: NonNullable<DevicesDeps['claudeAppStore']> = {
+  folders: async () => ({ roots: [], accounts: [], orgs: [] }),
+  files: async () => {},
+  touch: async () => {},
+  read: async () => ({ sessions: [], parsed: 0, skipped: 0, over: 0, more: false }),
+  forget: () => {},
 }
 /** What the devices asked of opencode's service: recorded, so no spec reaches the developer's own opencode. It has no
  *  service.json, and its prompt fails. */
@@ -575,7 +608,7 @@ beforeEach(() => {
   seen.bridges = {}
   seen.fleet = null
   readers.open = readers.external = null
-  readers.known.clear(); readers.owners.clear(); readers.rows.clear(); readers.working.clear()
+  readers.known.clear(); readers.owners.clear(); readers.rows.clear(); readers.working.clear(); readers.ended.clear()
   readers.scans = 0
   vi.clearAllMocks()
   readers.answer.mockResolvedValue(undefined)
@@ -600,7 +633,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; agentsRead?: DevicesDeps['agentsRead']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; storePackageFolder?: DevicesDeps['storePackageFolder']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string; raise?: DevicesDeps['raise'] | null; windowsRaise?: DevicesDeps['windowsRaise'] | null; transcribe?: DevicesDeps['transcribe']; watchStore?: DevicesDeps['watchStore'] } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; agentsRead?: DevicesDeps['agentsRead']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; cmuxEvents?: DevicesDeps['cmuxEvents']; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; storePackageFolder?: DevicesDeps['storePackageFolder']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string; raise?: DevicesDeps['raise'] | null; windowsRaise?: DevicesDeps['windowsRaise'] | null; transcribe?: DevicesDeps['transcribe']; watchStore?: DevicesDeps['watchStore'] } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   const apps = over.orca ?? orca
   // None, and no read under way, unless the spec gives its own; null leaves the devices to read this computer's.
@@ -625,6 +658,9 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     hc: over.hc ?? hc,
     // Null: no client given, so the devices build their own.
     cmux: over.cmux === null ? undefined : over.cmux ?? noCmux,
+    // None unless the spec gives its own: on macOS the devices read cmux's event log under the suite's throwaway home,
+    // where there is none.
+    cmuxEvents: over.cmuxEvents,
     opencode: over.opencode ?? opencode,
     // None unless the spec gives its own: on macOS the devices read the Claude app's store under the suite's throwaway
     // home, where there is none.
@@ -1141,6 +1177,17 @@ describe('the dial\'s host, wired to the core', () => {
     expect(seen.bridges.WindowForm.calls.map(([name]) => name)).toEqual(['command', 'clear'])
     expect(w.fleet!()).not.toBeNull()
     void core
+  })
+
+  // The greeting waits on the first read of each source the attach started: herdr, Herdr Core and opencode with no socket
+  // or service, cmux not installed, no Claude app store and no ChatGPT app have none to wait for, so it pushes at once.
+  it('with no herdr, Herdr, cmux, opencode, Claude app or ChatGPT app there an attach ends at once', async () => {
+    vi.useFakeTimers()
+    start({ orca: { ...orca, platform: 'darwin' } })
+    const from = Date.now()
+    await seen.host.watching!(true)
+    expect(Date.now() - from).toBe(0)
+    expect(logs).toEqual(expect.arrayContaining(['[herdr] socket · none', '[herdr-app] socket · none']))
   })
 })
 
@@ -2130,12 +2177,84 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     expect((await machineList(port)).agents.map((a) => a.id)).toEqual([codex])
   })
 
+  // The dial eval's Orca O14/O15: a closed pane or a removed worktree sends no session-end hook, and the row waited for
+  // the 30 s look at the processes.
+  it('a Claude Code whose pane closed leaves within 2 s of its held poll\'s client going', async () => {
+    vi.useFakeTimers()
+    const { port } = start({ faults: ['fleet'] })
+    port.observed(hook('session-start'))
+    // A poll a newer one replaced is told gone first too (core/deviceHookCalls.ts): its look finds the process running.
+    const replaced = port.inboxPoll({ pollId: 'p0', sessionId: 'sess-1' })
+    port.inboxGone('p0')
+    expect(await replaced).toEqual({})
+    await vi.advanceTimersByTimeAsync(2_000)
+    const poll = port.inboxPoll({ pollId: 'p1', sessionId: 'sess-1' })
+    expect((await machineList(port)).agents.map((a) => a.id)).toEqual([ID])
+    readers.ended.add(4242)
+    port.inboxGone('p1')
+    expect(await poll).toEqual({})
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect((await machineList(port)).agents).toEqual([])
+  })
+
+  // The dial eval's VS Code V2: a closed integrated terminal's row waited for the ended session's 10 s.
+  it('an ended session whose process is gone leaves within 2 s', async () => {
+    vi.useFakeTimers()
+    const { port } = start({ faults: ['fleet'] })
+    port.observed(hook('session-start'))
+    port.observed(hook('session-end'))
+    readers.ended.add(4242)
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect((await machineList(port)).agents).toEqual([])
+  })
+
+  // A /clear ends a session in a process that runs on.
+  it('an ended session whose process still runs is listed until the ended rule\'s 10 s', async () => {
+    vi.useFakeTimers()
+    const { port } = start({ faults: ['fleet'] })
+    port.observed(hook('session-start'))
+    port.observed(hook('session-end'))
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect((await machineList(port)).agents.map((a) => a.id)).toEqual([ID])
+    await vi.advanceTimersByTimeAsync(9_000)
+    expect((await machineList(port)).agents).toEqual([])
+  })
+
+  it('a gone for a poll not held looks at nothing', async () => {
+    vi.useFakeTimers()
+    const { port } = start({ faults: ['fleet'] })
+    port.observed(hook('session-start'))
+    const timers = vi.getTimerCount()
+    // Before its own poll, and for a session never listed.
+    port.inboxGone('early')
+    const poll = port.inboxPoll({ pollId: 'p2', sessionId: 'never-listed' })
+    port.inboxGone('p2')
+    expect(await poll).toEqual({})
+    expect(vi.getTimerCount()).toBe(timers)
+  })
+
+  // The look is the observed source's work: five failing in a minute switched the voice inbox off for the process's life.
+  it('a look that fails as a poll\'s client goes is the observed source\'s to say, and the inbox holds on', async () => {
+    const { port } = start({ faults: ['fleet'] })
+    vi.spyOn(ObservedSource.prototype, 'list').mockImplementation(() => { throw new Error('list broken') })
+    for (const pollId of ['p1', 'p2', 'p3', 'p4', 'p5']) {
+      const poll = port.inboxPoll({ pollId, sessionId: 'sess-1' })
+      port.inboxGone(pollId)
+      expect(await poll).toEqual({})
+    }
+    expect(logs.filter((line) => line.startsWith('[devices] inbox'))).toEqual([])
+    expect(logs).toContain('[devices] observed failed · Error')
+  })
+
   it('timers stop when the service stops', async () => {
     vi.useFakeTimers()
     const { port } = start()
     seen.host.watching!(true)
-    // An ended session's look at the processes, still to come.
+    // A gone poll's and an ended session's looks at the processes, still to come.
     port.observed(hook('session-start'))
+    const poll = port.inboxPoll({ pollId: 'p1', sessionId: 'sess-1' })
+    port.inboxGone('p1')
+    expect(await poll).toEqual({})
     port.observed(hook('session-end'))
     expect(vi.getTimerCount()).toBeGreaterThan(0)
     await port.stop()
@@ -3128,6 +3247,9 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
 
   // On macOS a tap brings the agent's app forward by its bundle id (cable/hosts/open.ts); every run here is recorded.
   const mac = { ...orca, platform: 'darwin' as const }
+  /** A clock that stands still, for a tap or rest on an agent nested in tmux, herdr or Zellij: its fresh ask (eval I13)
+   *  shares the hook's answer, so the runs stay as listed; on the real clock they would hang on whether a second passed. */
+  const still = () => 0
 
   it('on macOS an agent in an app with a bundle id lists f, and a tap brings that app forward; a question screen opens nothing', async () => {
     const { port } = startHere({ orca: mac })
@@ -3435,7 +3557,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     // A Harness terminal used last, and the person's own client: neither's process is in the table, so the lookup finds
     // no app.
     const clients = '1794700100|5001|client-501|abcdef0123456789|harness-claude-1790000000000-x\n1794700050|5004|/dev/ttys004||work\n'
-    const { port } = startHere({ orca: { ...mac, run: async (file, args, timeoutMs) => {
+    const { port } = startHere({ now: still, orca: { ...mac, run: async (file, args, timeoutMs) => {
       orcaRuns.push([file, args, timeoutMs])
       return { code: 0, stdout: args[0] === 'display-message' ? says.shift()! : args[0] === 'list-clients' ? clients : '' }
     } } })
@@ -3462,7 +3584,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   it('a tap takes herdr\'s pane before tmux\'s, and tmux\'s before WezTerm\'s and Orca\'s', async () => {
     // herdr inside tmux: herdr's server made the agent's terminal.
     madeBy('herdr')
-    const { port } = startHere({ orca: { ...mac, run: async (file, args, timeoutMs) => {
+    const { port } = startHere({ now: still, orca: { ...mac, run: async (file, args, timeoutMs) => {
       orcaRuns.push([file, args, timeoutMs])
       return { code: 0, stdout: args[0] === 'display-message' ? '4000|work|\n' : args[0] === 'list-clients' ? '1794700050|5004|/dev/ttys004||work\n' : '' }
     } } })
@@ -3482,8 +3604,8 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   })
 
   // Diego's Mac (2026-11-19): Claude Code in a pane of the tmux server the daemon started, so no bundle id, attached from
-  // a Terminal tab. The lookup's own runs are this spec's; the walk is tmux.spec.ts's.
-  it('an agent in the person\'s tmux is on the page of the app that holds its client, and a rest selects its tab, then its pane', async () => {
+  // a Terminal tab. The lookup's own runs are this spec's; the walk is tmux.spec.ts's. On tmux's page (Diego, 2026-11-23).
+  it('an agent in the person\'s tmux is on tmux\'s page, not the page of the app that holds its client, and a rest selects its tab, then its pane', async () => {
     const terminal = join(homedir(), 'Applications', 'Terminal.app')
     readers.processes.mockResolvedValue([
       ...IN_TMUX,
@@ -3500,8 +3622,8 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     attach(port)
     await vi.waitFor(() => expect(said()).toEqual(['[device] tmux client · found']))
     const apps = (await host().listAgentSnapshot({ apps: true })).apps?.apps
-    expect(apps).toContainEqual(expect.objectContaining({ id: 'terminal-app', count: 1 }))
-    expect(apps?.map(({ id }) => id)).not.toContain('tmux')
+    expect(apps).toContainEqual(expect.objectContaining({ id: 'tmux', count: 1 }))
+    expect(apps?.map(({ id }) => id)).not.toContain('terminal-app')
     await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
     const stream = listener.tabs()
     expect(listener.front('terminal-app')).toBeUndefined()
@@ -3543,7 +3665,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     const scanLine = () => logs.filter((line) => line.startsWith('[observed] scan ·'))
     const selected: [string, string[], number] = ['tmux', ['select-window', '-t', '%3', ';', 'select-pane', '-t', '%3'], 10_000]
 
-    it.each([['launchd', 1], ['iTerm2', 4296]])('Diego\'s case: a tmux agent idle in an iTerm2 tab, found by the attach scan, is on iTerm2\'s page; a rest selects its tab, then its pane; a tap selects the pane, brings iTerm2 forward and raises the tab (server under %s)', async (_, ppid) => {
+    it.each([['launchd', 1], ['iTerm2', 4296]])('Diego\'s case: a tmux agent idle in an iTerm2 tab, found by the attach scan, is on tmux\'s page; a rest selects its tab, then its pane; a tap selects the pane, brings iTerm2 forward and raises the tab (server under %s)', async (_, ppid) => {
       readers.processes.mockResolvedValue([...inTmux, ...clientInIterm('tmux', ppid)])
       found('sess-1', 4242)
       const listener = fakeListener()
@@ -3553,8 +3675,8 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       expect(scanLine()[0]).toMatch(/ · 1 nested placed$/)
       expect(said()).toEqual(['[device] tmux client · found'])
       const apps = (await host().listAgentSnapshot({ apps: true })).apps?.apps
-      expect(apps).toContainEqual(expect.objectContaining({ id: 'iterm', count: 1 }))
-      expect(apps?.map(({ id }) => id)).not.toContain('tmux')
+      expect(apps).toContainEqual(expect.objectContaining({ id: 'tmux', count: 1 }))
+      expect(apps?.map(({ id }) => id)).not.toContain('iterm')
       await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
       const stream = listener.tabs()
       expect(listener.front('iterm')).toBeUndefined()
@@ -3569,7 +3691,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       expect(stream.lines.at(-1)).toStrictEqual({ app: 'iterm', tty: '/dev/ttys004', raise: true })
     })
 
-    it('a herdr agent idle in an iTerm2 tab, found by the attach scan, is on iTerm2\'s page with its tab', async () => {
+    it('a herdr agent idle in an iTerm2 tab, found by the attach scan, is on herdr\'s page with its tab', async () => {
       readers.processes.mockResolvedValue([
         { pid: 4242, ppid: 4000, tty: 'ttys030', executable: 'claude' }, { pid: 4000, ppid: 3900, tty: 'ttys030', executable: 'zsh' },
         { pid: 3900, ppid: 1, executable: '/opt/homebrew/bin/herdr' }, ...clientInIterm('herdr', 1)])
@@ -3587,8 +3709,8 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       expect(scanLine()[0]).toMatch(/ · 1 nested placed$/)
       expect(said()).toEqual(['[device] herdr client · found'])
       const apps = (await host().listAgentSnapshot({ apps: true })).apps?.apps
-      expect(apps).toContainEqual(expect.objectContaining({ id: 'iterm', count: 1 }))
-      expect(apps?.map(({ id }) => id)).not.toContain('herdr')
+      expect(apps).toContainEqual(expect.objectContaining({ id: 'herdr', count: 1 }))
+      expect(apps?.map(({ id }) => id)).not.toContain('iterm')
       await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
       const stream = listener.tabs()
       expect(listener.front('iterm')).toBeUndefined()
@@ -3646,16 +3768,75 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       expect(orcaRuns).toEqual([])
     })
 
-    /** herdr's socket, listing a Claude Code row at each pane, with the session herdr's integration gave it, if any. The
-     *  dial attached, `live` lets the source's subscription start and awaits its list. */
-    const herdrRows = (rows: ReadonlyArray<readonly [pane: string, session?: string]>) => {
+    // Eval I13: the person detaches from tmux in iTerm2's tab 1 and attaches again in tab 2, typing nothing. A tap or rest
+    // reads the client afresh (PM, 2026-11-24, approach A), so it opens tab 2, not the tab the lookup held.
+    describe('I13', () => {
+      let clock = 0
+      /** tmux's client, in the tab the person attached in last. */
+      let clientTab = '/dev/ttys004'
+      const reattachedRun = async (file: string, args: string[], timeoutMs: number) => {
+        if (args[0] !== 'list-clients') return tmuxRun(file, args, timeoutMs)
+        orcaRuns.push([file, args, timeoutMs])
+        return { code: 0, stdout: `1794700050|4300|${clientTab}\n` }
+      }
+      beforeEach(() => {
+        clock = 0
+        clientTab = '/dev/ttys004'
+        readers.processes.mockResolvedValue([...inTmux, ...clientInIterm('tmux', 1)])
+      })
+
+      it('I13 for an agent the attach scan found: re-attached in another iTerm2 tab with no hook, a rest past the second selects the new tab and a tap raises it', async () => {
+        found('sess-1', 4242)
+        const listener = fakeListener()
+        const { port } = startHere({ listen: listener.listen, orca: { ...mac, run: reattachedRun }, now: () => clock })
+        attach(port)
+        await vi.waitFor(() => expect(scanLine()).toEqual([expect.stringMatching(/ · 1 nested placed$/)]))
+        await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+        const stream = listener.tabs()
+        expect(listener.front('iterm')).toBeUndefined()
+        clientTab = '/dev/ttys005'
+        clock += FRESH_WITHIN_MS
+        host().swipeEnded(ID, 'rest')
+        await swiped('ok')
+        expect(stream.lines.at(-1)).toStrictEqual({ app: 'iterm', tty: '/dev/ttys005' })
+        expect(await host().openAgent(ID)).toBeUndefined()
+        expect(stream.lines.at(-1)).toStrictEqual({ app: 'iterm', tty: '/dev/ttys005', raise: true })
+      })
+
+      it('I13: a hooked agent in tmux, re-attached in another tab with no hook since, a tap past the second raises the new tab', async () => {
+        const listener = fakeListener()
+        const { port } = startHere({ listen: listener.listen, orca: { ...mac, run: reattachedRun }, now: () => clock })
+        port.observed(hook('session-start', { hostHints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux' } }))
+        attach(port)
+        await vi.waitFor(() => expect(said()).toEqual(['[device] tmux client · found']))
+        await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+        const stream = listener.tabs()
+        clientTab = '/dev/ttys005'
+        clock += FRESH_WITHIN_MS
+        expect(await host().openAgent(ID)).toBeUndefined()
+        expect(stream.lines.at(-1)).toStrictEqual({ app: 'iterm', tty: '/dev/ttys005', raise: true })
+      })
+    })
+
+    /** herdr's socket, listing a Claude Code row at each pane, with the session herdr's integration gave it, if any, and
+     *  answering each pane's process info with the shell [shells] names, else herdr's refusal. The dial attached, `live`
+     *  lets the source's subscription start and awaits its list. */
+    const herdrRows = (rows: ReadonlyArray<readonly [pane: string, session?: string]>, shells: ReadonlyMap<string, number> = new Map()) => {
       const subs: HerdrSubscriber[] = []
       const prompts: unknown[][] = []
+      const asked: string[] = []
       let list: Promise<HerdrAnswer> | undefined
       const agents = rows.map(([pane, session]) => ({ pane_id: pane, agent: 'claude', agent_status: 'idle', cwd: '/work/api',
         ...session ? { agent_session: { kind: 'id', agent: 'claude', value: session } } : {} }))
       const client: HerdrClient = {
-        request: () => (list = Promise.resolve<HerdrAnswer>({ ok: true, result: { type: 'agent_list', agents } })),
+        request: (method, params) => {
+          if (method !== 'pane.process_info') return (list = Promise.resolve<HerdrAnswer>({ ok: true, result: { type: 'agent_list', agents } }))
+          const pane = String(params.pane_id)
+          asked.push(pane)
+          const shell = shells.get(pane)
+          return Promise.resolve<HerdrAnswer>(shell === undefined ? { ok: false, fault: 'rejected', code: 'pane_not_found' }
+            : { ok: true, result: { process_info: { shell_pid: shell, foreground_process_group_id: 4242 } } })
+        },
         subscribe: (_entries, to) => { subs.push(to); return { close: () => {} } },
         prompt: async (...args) => { prompts.push(args); return { outcome: 'sent' } },
         socketStamp: () => '1:1',
@@ -3666,7 +3847,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
         subs[0].started()
         await list
       }
-      return { client, subs, prompts, live }
+      return { client, subs, prompts, asked, live }
     }
     const rests = () => said().filter((line) => line.startsWith('[device] swipe ·'))
 
@@ -3687,24 +3868,26 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       const focused = () => orcaRuns.filter(([, args]) => args[0] === 'agent' && args[1] === 'focus')
       const onMac = (run: typeof herdrRun) => ({ ...mac, onPath: (name: string) => `/opt/${name}/bin/${name}`, run })
       /** The scan's herdr agent, its lookup landed and herdr's list read, the dial's tabs stream open. */
-      const scanned = async (rows: ReadonlyArray<readonly [string, string?]>, run = herdrRun, client = true) => {
+      const scanned = async (rows: ReadonlyArray<readonly [string, string?]>, run = herdrRun, client = true, shells = new Map<string, number>()) => {
         readers.processes.mockResolvedValue([...inHerdr, ...client ? clientInIterm('herdr', 1) : []])
         found('sess-1', 4242)
-        const herdr = herdrRows(rows)
+        const herdr = herdrRows(rows, shells)
         const listener = fakeListener()
         const { port } = startHere({ listen: listener.listen, herdr: herdr.client, orca: onMac(run) })
         attach(port)
         await vi.waitFor(() => expect(scanLine()).toHaveLength(1))
         await herdr.live()
         await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
-        return { ...herdr, listener, stream: listener.tabs() }
+        return { ...herdr, port, listener, stream: listener.tabs() }
       }
 
-      it('a scan-found herdr agent whose herdr row has its session is one row on iTerm2\'s page; a rest selects its tab, then focuses its herdr pane; a tap focuses the pane, brings iTerm2 forward and raises the tab', async () => {
-        const { listener, stream, prompts } = await scanned([['w1:p2', 'sess-1']])
+      it('a scan-found herdr agent whose herdr row has its session is one row on herdr\'s page; a rest selects its tab, then focuses its herdr pane; a tap focuses the pane, brings iTerm2 forward and raises the tab', async () => {
+        const { listener, stream, prompts, asked } = await scanned([['w1:p2', 'sess-1']])
         expect(scanLine()[0]).toMatch(/ · 1 nested placed$/)
         expect((await listed()).map(({ id }) => id)).toEqual([ID])
-        expect((await host().listAgentSnapshot({ apps: true })).apps?.apps).toContainEqual(expect.objectContaining({ id: 'iterm', count: 1 }))
+        // Its row's session placed it: herdr is asked nothing more.
+        expect(asked).toEqual([])
+        expect((await host().listAgentSnapshot({ apps: true })).apps?.apps).toContainEqual(expect.objectContaining({ id: 'herdr', count: 1 }))
         expect(listener.front('iterm')).toBeUndefined()
         host().swipeEnded(ID, 'rest')
         await swiped('ok')
@@ -3719,16 +3902,71 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
         expect(prompts).toEqual([])
       })
 
-      it('with no session in herdr\'s row the scan\'s copy gets its tab alone, and herdr\'s row stays on herdr\'s page', async () => {
-        const { listener, stream } = await scanned([['w1:p2']])
+      // herdr names no session in its row until the person ran `herdr integration install claude`: herdr's own shell of
+      // the pane, the agent's parent, places it there instead, and herdr's row folds into it by that pane's key (known gap
+      // 1 of PR #4578: herdr · 2 until its first hook).
+      it('with no session in herdr\'s rows, the pane whose shell is the agent\'s parent places it and its row folds into the scan\'s copy; a rest selects its tab, then focuses that pane; voice still never reaches it', async () => {
+        const { listener, stream, asked, prompts, subs } = await scanned([['w1:p1'], ['w1:p2']], herdrRun, true, new Map([['w1:p1', 5000], ['w1:p2', 4000]]))
+        await vi.waitFor(async () => expect((await listed()).map(({ id }) => id)).toHaveLength(2))
         const rows = await listed()
-        expect(rows).toHaveLength(2)
         expect(rows.map(({ id }) => id)).toContain(ID)
+        expect((await host().listAgentSnapshot({ apps: true })).apps?.apps?.map(({ id, count }) => `${id} ${count}`)).toEqual(['herdr 2'])
+        expect(asked.sort()).toEqual(['w1:p1', 'w1:p2'])
         expect(listener.front('iterm')).toBeUndefined()
         host().swipeEnded(ID, 'rest')
         await swiped('ok')
         expect(stream.lines).toStrictEqual([{ app: 'iterm', tty: '/dev/ttys004' }])
+        expect(orcaRuns.at(-1)).toEqual(focus('w1:p2'))
+        expect(rows.find(({ id }) => id === ID)!.caps).not.toContain('v')
+        expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false })
+        expect(prompts).toEqual([])
+        subs[0].event('pane_closed', { pane_id: 'w1:p1' })
+        await vi.waitFor(async () => expect((await listed()).map(({ id }) => id)).toEqual([ID]))
+        expect(asked.sort()).toEqual(['w1:p1', 'w1:p2'])
+      })
+
+      it('with no session in herdr\'s row and its one pane\'s shell the agent\'s parent: one row, the scan\'s copy, herdr · 1', async () => {
+        const { asked } = await scanned([['w1:p2']], herdrRun, true, new Map([['w1:p2', 4000]]))
+        await vi.waitFor(async () => expect((await listed()).map(({ id }) => id)).toEqual([ID]))
+        expect((await host().listAgentSnapshot({ apps: true })).apps?.apps?.map(({ id, count }) => `${id} ${count}`)).toEqual(['herdr 1'])
+        // Each pane is asked once: the changes since asked again for none.
+        expect(asked).toEqual(['w1:p2'])
+      })
+
+      // Failures are seen: by kind alone, and nothing changes, so the two rows stay as they were.
+      it('herdr\'s process info refused: said by its kind, asked once, and herdr\'s row and the scan\'s copy stay two, herdr · 2', async () => {
+        const { asked, subs } = await scanned([['w1:p2']])
+        await vi.waitFor(() => expect(said()).toContain('[device] herdr shell · not read · rejected'))
+        expect((await listed()).map(({ id }) => id)).toHaveLength(2)
+        expect((await host().listAgentSnapshot({ apps: true })).apps?.apps?.map(({ id, count }) => `${id} ${count}`)).toEqual(['herdr 2'])
+        subs[0].event('pane.agent_status_changed', { pane_id: 'w1:p2', agent_status: 'working', agent: 'claude' })
+        await host().openAgent(ID)
+        expect(asked).toEqual(['w1:p2'])
         expect(focused()).toEqual([])
+      })
+
+      // A herdr that starts again numbers its panes afresh (herdrSource.spec.ts): the rows its source lists then are new
+      // ones, each asked again, as a shell kept by the pane's id would be the old herdr's.
+      it('herdr\'s rows listed afresh, as after a herdr that started again while no dial was attached, are asked again', async () => {
+        const shells = new Map([['w1:p2', 5000]])
+        const { asked, subs, port } = await scanned([['w1:p2']], herdrRun, true, shells)
+        expect(asked).toEqual(['w1:p2'])
+        expect((await host().listAgentSnapshot({ apps: true })).apps?.apps?.map(({ id, count }) => `${id} ${count}`)).toEqual(['herdr 2'])
+        seen.host.watching!(false)
+        shells.set('w1:p2', 4000)
+        attach(port)
+        // The agents' subscription of the second attach: the first attach's focus one (herdrSource.ts watchFocus) is subs[1].
+        await vi.waitFor(() => expect(subs).toHaveLength(3))
+        subs[2].started()
+        await vi.waitFor(async () => expect((await listed()).map(({ id }) => id)).toEqual([ID]))
+        expect(asked).toEqual(['w1:p2', 'w1:p2'])
+      })
+
+      it('at most 16 of herdr\'s rows with no session are asked', async () => {
+        const panes = Array.from({ length: 20 }, (_, i) => `w1:p${i + 1}`)
+        const { asked } = await scanned(panes.map((pane) => [pane] as const))
+        await vi.waitFor(() => expect(said().filter((line) => line.startsWith('[device] herdr shell'))).toHaveLength(16))
+        expect(asked).toHaveLength(16)
       })
 
       // Review Focus 5: herdr's tap needs no app, its rest does.
@@ -3828,7 +4066,8 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       const hooked = (sessionId: string, callerPid: number, hostHints: Record<string, string>): ObservedHookEvent =>
         ({ engine: 'claude', sessionId, event: 'session-start', cwd: '/work/api', callerPid, transcriptPath: `/t/${sessionId}.jsonl`, hostHints })
 
-      it.each([['hooked', 'iTerm2'], ['hooked', 'launchd'], ['found by the scan', 'iTerm2'], ['found by the scan', 'launchd']])('the exact case: a plain tab, tmux and two herdr panes in iTerm2 are four rows on iTerm2\'s page, each reached at its own tab and pane (%s, the server under %s)', async (how, parent) => {
+      // Diego, 2026-11-23: each multiplexer has its own page, counting its agents across every terminal app.
+      it.each([['hooked', 'iTerm2'], ['hooked', 'launchd'], ['found by the scan', 'iTerm2'], ['found by the scan', 'launchd']])('the exact case: a plain tab, tmux and two herdr panes in iTerm2 are iTerm2 1, tmux 1, herdr 2, each reached at its own tab and pane (%s, the server under %s)', async (how, parent) => {
         readers.processes.mockResolvedValue(table(parent === 'launchd' ? 1 : 4296))
         // The plain tab's own walk (scannedApp.spec.ts holds the server's row).
         const own = readers.apps.getMockImplementation()!
@@ -3857,7 +4096,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
         const ids = [PLAIN, ID, P1, P2]
         await vi.waitFor(async () => expect((await listed()).map(({ id }) => id).sort()).toEqual([...ids].sort()))
         const apps = (await host().listAgentSnapshot({ apps: true })).apps?.apps ?? []
-        expect(apps.filter(({ count }) => count > 0)).toEqual([expect.objectContaining({ id: 'iterm', count: 4 })])
+        expect(apps.filter(({ count }) => count > 0).map(({ id, count }) => `${id} ${count}`).sort()).toEqual(['herdr 2', 'iterm 1', 'tmux 1'])
         const stream = listener.tabs()
         expect(listener.front('iterm')).toBeUndefined()
         const reached: Array<[unknown, unknown]> = []
@@ -3890,7 +4129,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     ])
     const panes = JSON.stringify([{ tab_id: 0, pane_id: 0, tty_name: '/dev/pts/2' }, { tab_id: 1, pane_id: 1, tty_name: '/dev/pts/4' }])
     const listener = fakeListener()
-    const { port } = startHere({ listen: listener.listen, orca: { ...orca, onPath: (name: string) => `/opt/${name}/bin/${name}`,
+    const { port } = startHere({ listen: listener.listen, now: still, orca: { ...orca, onPath: (name: string) => `/opt/${name}/bin/${name}`,
       run: async (file, args, timeoutMs) => {
         orcaRuns.push([file, args, timeoutMs])
         const stdout = args[0] === 'display-message' ? '4000|work|\n' : args[0] === 'list-clients' ? '1794700050|4300|/dev/pts/4\n'
@@ -3900,7 +4139,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     port.observed(hook('session-start', { hostHints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux' } }))
     attach(port)
     await vi.waitFor(() => expect(said()).toEqual(['[device] tmux client · found']))
-    expect((await host().listAgentSnapshot({ apps: true })).apps?.apps).toContainEqual(expect.objectContaining({ id: 'wezterm', count: 1 }))
+    expect((await host().listAgentSnapshot({ apps: true })).apps?.apps).toContainEqual(expect.objectContaining({ id: 'tmux', count: 1 }))
     await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
     const wezterm = '/opt/wezterm/bin/wezterm'
     // Another app in front: neither WezTerm nor tmux is touched.
@@ -3933,7 +4172,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       { pid: 4298, ppid: 1, executable: 'kitty' },
     ])
     const listener = fakeListener()
-    const { port } = startHere({ listen: listener.listen, orca: { ...orca, run: async (file, args, timeoutMs) => {
+    const { port } = startHere({ listen: listener.listen, now: still, orca: { ...orca, run: async (file, args, timeoutMs) => {
       orcaRuns.push([file, args, timeoutMs])
       const stdout = args[0] === 'display-message' ? '4000|work|\n' : args[0] === 'list-clients' ? '1794700050|4300|/dev/pts/4\n' : ''
       return { code: 0, stdout }
@@ -3941,7 +4180,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     port.observed(hook('session-start', { hostHints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux', KITTY_LISTEN_ON: 'unix:@kitty-1' } }))
     attach(port)
     await vi.waitFor(() => expect(said()).toEqual(['[device] tmux client · found']))
-    expect((await host().listAgentSnapshot({ apps: true })).apps?.apps).toContainEqual(expect.objectContaining({ id: 'kitty', count: 1 }))
+    expect((await host().listAgentSnapshot({ apps: true })).apps?.apps).toContainEqual(expect.objectContaining({ id: 'tmux', count: 1 }))
     await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
     // Another app in front: neither kitty nor tmux is touched.
     let runs = orcaRuns.length
@@ -3987,15 +4226,16 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       readers.bundleId.mockImplementation(async (bundle) => bundle === terminal ? 'com.apple.Terminal' : undefined)
     })
 
-    it('an agent in the person\'s herdr is on the page of the app that holds its client, and a rest selects its tab, then its herdr pane', async () => {
+    // On herdr's page (Diego, 2026-11-23).
+    it('an agent in the person\'s herdr is on herdr\'s page, not the page of the app that holds its client, and a rest selects its tab, then its herdr pane', async () => {
       const listener = fakeListener()
-      const { port } = startHere({ listen: listener.listen, orca: onMac })
+      const { port } = startHere({ listen: listener.listen, now: still, orca: onMac })
       port.observed(hook('session-start', { hostHints: { HERDR_PANE_ID: 'w1:p2' } }))
       attach(port)
       await vi.waitFor(() => expect(said()).toContain('[device] herdr client · found'))
       const apps = (await host().listAgentSnapshot({ apps: true })).apps?.apps
-      expect(apps).toContainEqual(expect.objectContaining({ id: 'terminal-app', count: 1 }))
-      expect(apps?.map(({ id }) => id)).not.toContain('herdr')
+      expect(apps).toContainEqual(expect.objectContaining({ id: 'herdr', count: 1 }))
+      expect(apps?.map(({ id }) => id)).not.toContain('terminal-app')
       await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
       const stream = listener.tabs()
       expect(listener.front('terminal-app')).toBeUndefined()
@@ -4036,16 +4276,17 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       await vi.waitFor(() => expect(said()).toEqual(['[device] herdr client · found']))
       expect(orcaRuns.filter(([file]) => file === 'tmux')).toEqual([])
       expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
-      expect((await host().listAgentSnapshot({ apps: true })).apps?.apps).toContainEqual(expect.objectContaining({ id: 'terminal-app', count: 1 }))
+      expect((await host().listAgentSnapshot({ apps: true })).apps?.apps).toContainEqual(expect.objectContaining({ id: 'herdr', count: 1 }))
       port.observed(hook('session-start', { sessionId: 'sess-2', callerPid: 5242, hostHints: { HERDR_PANE_ID: 'w1:p2', TMUX_PANE: '%3' } }))
       // No herdr made its terminal: the herdr pane its hints name only holds it, said once.
       const held = '[device] herdr · held'
       await vi.waitFor(() => expect(said().filter((line) => line !== held))
-        .toEqual(['[device] herdr client · found', '[device] herdr client · none', '[device] tmux client · found']))
+        .toEqual(['[device] herdr client · found', '[device] herdr client · outside', '[device] tmux client · found']))
       expect(said().filter((line) => line === held)).toEqual([held])
       expect(orcaRuns.filter(([file]) => file === 'tmux').map(([, args]) => args[0])).toEqual(['display-message', 'list-clients'])
-      await vi.waitFor(async () => expect((await host().listAgentSnapshot({ apps: true })).apps?.apps)
-        .toContainEqual(expect.objectContaining({ id: 'terminal-app', count: 2 })))
+      // Each on the page of the multiplexer whose pane it runs in, its client's Terminal tab holding neither.
+      await vi.waitFor(async () => expect((await host().listAgentSnapshot({ apps: true })).apps?.apps
+        ?.map(({ id, count }) => `${id} ${count}`).sort()).toEqual(['herdr 1', 'tmux 1']))
     })
   })
 
@@ -4085,7 +4326,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
 
     it('a hooked agent in a Zellij pane lists v and f; on macOS its tap focuses the pane, then brings its app forward', async () => {
       madeBy('/opt/homebrew/bin/zellij')
-      const { port } = startHere({ orca: mac })
+      const { port } = startHere({ now: still, orca: mac })
       // macOS's Ghostty names itself by its bundle id, which a tap brings forward.
       port.observed(hook('session-start', { hostHints: { ...ZELLIJ, TERM_PROGRAM: 'ghostty', __CFBundleIdentifier: 'com.mitchellh.ghostty' } }))
       attach(port)
@@ -4251,7 +4492,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       const linux = fakeRaise()
       const kitty = await kittyAt()
       madeBy('zellij')
-      const { port } = startHere({ orca: listing(orca), raise: linux.raise })
+      const { port } = startHere({ now: still, orca: listing(orca), raise: linux.raise })
       port.observed(hook('session-start', { hostHints: { ...ZELLIJ, ...kitty } }))
       attach(port)
       await settled()
@@ -4307,7 +4548,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     // As before Zellij had an adapter: a tap on the Zellij pane that shows tmux's client would leave tmux's pane where it was.
     it('an agent in tmux inside a Zellij pane: a tap selects its tmux pane, as tmux\'s server made its terminal', async () => {
       madeBy('tmux: server')
-      const { port } = startHere({ orca: { ...orca, run: async (file: string, args: string[], timeoutMs: number) => {
+      const { port } = startHere({ now: still, orca: { ...orca, run: async (file: string, args: string[], timeoutMs: number) => {
         orcaRuns.push([file, args, timeoutMs])
         return { code: 0, stdout: args[0] === 'display-message' ? '4000|work|\n' : args[0] === 'list-clients' ? '1794700050|5004|/dev/pts/1||work\n' : '' }
       } } })
@@ -6048,6 +6289,27 @@ describe('a person\'s prompt in the app in front turns the dial (docs/specs/2026
     expect(asked()).toEqual([[ID, 'prompt']])
   })
 
+  // Diego's decision 4 (2026-11-23): a follow to an agent in tmux turns the dial to tmux's page.
+  it('a prompt in the tmux agent, iTerm2 settled, turns the dial to tmux\'s page and asks the dials to follow it', async () => {
+    vi.useFakeTimers()
+    readers.processes.mockResolvedValue(TMUX_IN_ITERM)
+    const listener = fakeListener()
+    const { port } = start({ faults: ['fleet'], listen: listener.listen, orca: { ...orca, platform: 'darwin', run: tmuxInItermRun } })
+    const inTmux = { hostHints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux' } }
+    port.observed(hook('session-start', inTmux))
+    // A plain iTerm2 tab's agent: iTerm2's settle shows its own page.
+    port.observed(hook('session-start', { sessionId: 'sess-p', callerPid: 4101, hostHints: { TERM_PROGRAM: 'iTerm.app' } }))
+    seen.host.watching!(true)
+    port.swarms(null)
+    await vi.waitFor(() => expect(logs).toContain('[device] tmux client · found'))
+    expect(listener.front('iterm')).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    port.observed(hook('turn-start', inTmux))
+    expect(asked()).toEqual([[ID, 'prompt']])
+    expect((await host().listAgentSnapshot({ apps: true })).apps?.shown).toBe('tmux')
+    expect(logs.filter((line) => line.startsWith('[device] app filter: switched ·'))).toEqual(['[device] app filter: switched · follow'])
+  })
+
   it('a prompt in the Claude app, with the Claude app in front, asks the dials to follow it', async () => {
     const { port } = await dialWith('claude')
     port.observed(hook('turn-start', { sessionId: 'desk-1', hostHints: { __CFBundleIdentifier: 'com.anthropic.claudefordesktop' } }))
@@ -7007,6 +7269,9 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
     const { port, listener, report } = await dialWith()
     expect(Object.keys(seen.host).filter((key) => /settled/i.test(key))).toEqual(['appSettled'])
     report('terminal-app', TTY)
+    // As the filter tells them: the settling judges the waiting report, before the settle shows anything (its page is the
+    // agent's), and the settled follows its agent.
+    seen.host.appSettling!('terminal-app')
     seen.host.appSettled!('terminal-app')
     expect(asked()).toEqual([[ID, 'tab']])
     // The session the Claude app shows, attached while it was not in front: kept for the app's settle.
@@ -7028,6 +7293,197 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
     seen.host.appSettled!('claude')
     expect(logs).toContain('[devices] dial failed · Error')
     expect(tabLines()).toEqual(['[device] tab · skipped · not in front', '[device] tab · skipped · not in front'])
+  })
+})
+
+// Diego's decision 4 (2026-11-23): selecting the tab of a tmux client turns the dial to tmux's page, with no step through
+// the terminal's own (docs/plans/2026-11-23-dial-tmux-herdr-apps-design.md, "A follow turns the page").
+describe('selecting a tmux client\'s tab turns the dial to tmux\'s page (docs/plans/2026-11-23-dial-tmux-herdr-apps-design.md)', () => {
+  const ID = observedAgentId('claude', 'sess-1')
+  const PLAIN = observedAgentId('claude', 'sess-p')
+  const PLAIN_TAB = '/dev/ttys001'
+  const TMUX_TAB = '/dev/ttys002'
+  const hooked = (sessionId: string, callerPid: number, hostHints: Record<string, string>): ObservedHookEvent =>
+    ({ engine: 'claude', sessionId, event: 'session-start', cwd: '/work/api', callerPid, transcriptPath: `/t/${sessionId}.jsonl`, hostHints })
+  const host = () => seen.dial as unknown as DaemonCableHost
+  let clock = 0
+  /** A dial on the cable with no window, on macOS: an agent in a Terminal tab, whose page a spec shows first, the agent in
+   *  tmux whose client is in an iTerm2 tab, its client found, and unless `plain` is false one in a plain iTerm2 tab, with
+   *  its tty read. A watch's stream is open, no app settled in front, and the devices' monotonic clock at 0. `report` is a
+   *  tab line through the listener's handler; `settle` keeps an app in front for the settle. */
+  const dialWith = async ({ plain = true } = {}) => {
+    vi.useFakeTimers()
+    clock = 0
+    readers.processes.mockResolvedValue(TMUX_IN_ITERM)
+    const listener = fakeListener()
+    const tty = vi.fn(async (pid: number): Promise<string | undefined> => (pid === 4101 ? PLAIN_TAB : undefined))
+    const started = start({ faults: ['fleet'], orca: { ...orca, platform: 'darwin', run: tmuxInItermRun }, listen: listener.listen, tty, now: () => clock })
+    started.port.observed(hooked('sess-t', 4110, { __CFBundleIdentifier: 'com.apple.Terminal' }))
+    if (plain) started.port.observed(hooked('sess-p', 4101, { TERM_PROGRAM: 'iTerm.app' }))
+    started.port.observed(hooked('sess-1', 4242, { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux' }))
+    seen.host.watching!(true)
+    started.port.swarms(null)
+    await vi.waitFor(() => expect(logs).toContain('[device] tmux client · found'))
+    await Promise.all(tty.mock.results.map(({ value }) => value))
+    const stream = listener.tabs()
+    const report = (app: string, tty: string): unknown =>
+      (listener.given[0].handlers.tab as ListenerHandler).handle({ type: 'tab', app, tty }, new AbortController().signal)
+    const settle = async (app: string) => {
+      expect(listener.front(app)).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    }
+    return { ...started, listener, stream, report, settle }
+  }
+  const asked = () => calls('followLocal')
+  const switches = () => logs.filter((line) => line.startsWith('[device] app filter: switched ·'))
+  const views = () => logs.filter((line) => line.startsWith('[device] app filter: view'))
+  const tabLines = () => logs.filter((line) => line.startsWith('[device] tab'))
+  const read = () => host().listAgentSnapshot({ apps: true })
+
+  it('a tab report of the tmux client\'s tab, iTerm2 settled: the dials are asked to follow its agent, and the list a dial that says appFilter reads shows tmux\'s page with it', async () => {
+    const { report, settle } = await dialWith()
+    await settle('iterm')
+    expect(report('iterm', TMUX_TAB)).toBeUndefined()
+    expect(asked()).toEqual([[ID, 'tab']])
+    const list = await read()
+    expect(list.apps?.shown).toBe('tmux')
+    expect(list.agents.map(({ id }) => id)).toEqual([ID])
+    expect(switches().at(-1)).toBe('[device] app filter: switched · follow')
+    // And keeps it while iTerm2 stays in front.
+    expect((await read()).apps?.shown).toBe('tmux')
+  })
+
+  it('a report waiting for iTerm2 to settle: the settle shows tmux\'s page directly', async () => {
+    const { listener, report, settle } = await dialWith()
+    await settle('terminal-app')
+    expect(listener.front('iterm')).toBeUndefined()
+    report('iterm', TMUX_TAB)
+    expect(asked()).toEqual([])
+    await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    // From Terminal's page straight to tmux's: never iTerm2's on the way.
+    expect(switches()).toEqual(['[device] app filter: switched · follow'])
+    expect(asked()).toEqual([[ID, 'tab']])
+    expect((await read()).apps?.shown).toBe('tmux')
+  })
+
+  it('iTerm2 with no agents of its own: its settle shows nothing new, and the follow turns the page', async () => {
+    const { report, settle } = await dialWith({ plain: false })
+    await settle('terminal-app')
+    await settle('iterm')
+    expect(switches()).toEqual([])
+    report('iterm', TMUX_TAB)
+    expect(switches()).toEqual(['[device] app filter: switched · follow'])
+    expect(asked()).toEqual([[ID, 'tab']])
+    expect((await read()).apps?.shown).toBe('tmux')
+  })
+
+  it('the tmux tab, then a plain tab, both before the settle: the latest wins, and the settle shows iTerm2\'s page, front', async () => {
+    const { listener, report, settle } = await dialWith()
+    await settle('terminal-app')
+    expect(listener.front('iterm')).toBeUndefined()
+    report('iterm', TMUX_TAB)
+    report('iterm', PLAIN_TAB)
+    await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    expect(switches()).toEqual(['[device] app filter: switched · front'])
+    expect(asked()).toEqual([[PLAIN, 'tab']])
+    expect((await read()).apps?.shown).toBe('iterm')
+  })
+
+  it('the dial\'s own rest on the tmux row selects its tab: iTerm2\'s report of it is its echo, and the page stays', async () => {
+    const { report, settle, stream } = await dialWith()
+    await settle('iterm')
+    host().swipeEnded(ID, 'rest')
+    await vi.waitFor(() => expect(logs).toContain('[device] swipe · ok'))
+    expect(stream.lines).toStrictEqual([{ app: 'iterm', tty: TMUX_TAB }])
+    report('iterm', TMUX_TAB)
+    expect(tabLines()).toEqual(['[device] tab · skipped · echo'])
+    expect(asked()).toEqual([])
+    expect(switches()).toEqual([])
+    expect((await read()).apps?.shown).toBe('iterm')
+  })
+
+  it('a pick on the dial holds: the tmux tab\'s report turns no page', async () => {
+    const { report, settle } = await dialWith()
+    await settle('iterm')
+    expect(host().pickApp('terminal-app')).toBe('switched')
+    report('iterm', TMUX_TAB)
+    // The dials are asked all the same: one whose ring lacks the agent answers no tile.
+    expect(asked()).toEqual([[ID, 'tab']])
+    expect(switches()).toEqual(['[device] app filter: switched · pick'])
+    expect((await read()).apps?.shown).toBe('terminal-app')
+  })
+
+  it('a pick of tmux\'s page brings no app', async () => {
+    const { settle } = await dialWith()
+    await settle('iterm')
+    const runs = orcaRuns.length
+    expect(host().pickApp('tmux')).toBe('switched')
+    expect((await read()).apps?.shown).toBe('tmux')
+    // tmux has no bundle: a pick of iTerm2 after it is the one that brings an app.
+    expect(host().pickApp('iterm')).toBe('switched')
+    const brought = () => logs.filter((line) => line.startsWith('[device] app filter: bring'))
+    await vi.waitFor(() => expect(brought()).toHaveLength(1))
+    expect(brought()).toEqual(['[device] app filter: bring · ok'])
+    expect(orcaRuns.slice(runs)).toEqual([['/usr/bin/open', ['-b', 'com.googlecode.iterm2'], 10_000]])
+  })
+
+  it('with a window open on its tab and iTerm2 holding no agent of its own, the follow turns the view to apps on tmux\'s page', async () => {
+    const { port, report, settle } = await dialWith({ plain: false })
+    port.swarms({ active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: [], panes: 0 }], tiles: [] })
+    await settle('iterm')
+    expect(views()).toEqual(['[device] app filter: view tabs · window'])
+    report('iterm', TMUX_TAB)
+    expect(views()).toEqual(['[device] app filter: view tabs · window', '[device] app filter: view apps · front'])
+    expect(asked()).toEqual([[ID, 'tab']])
+    const list = await read()
+    expect(list.apps?.shown).toBe('tmux')
+    expect(list.agents.map(({ id }) => id)).toEqual([ID])
+  })
+
+  it('stop forgets the agent a settle judged: the settled that follows asks nothing', async () => {
+    const { port, report } = await dialWith()
+    report('iterm', TMUX_TAB)
+    seen.host.appSettling!('iterm')
+    await port.stop()
+    seen.host.appSettled!('iterm')
+    expect(asked()).toEqual([])
+  })
+
+  // A tmux server started in iTerm2 gives its panes iTerm2's bundle id: an agent started in one sits on iTerm2's page
+  // until its first lookup answers, and is not known to be there meanwhile.
+  it('a new agent in tmux whose lookup has not answered: iTerm2 settled with no agents of its own leaves the dial on tmux\'s page', async () => {
+    vi.useFakeTimers()
+    clock = 0
+    // The new agent (4243) in pane %4's shell, under the same server.
+    readers.processes.mockResolvedValue([...TMUX_IN_ITERM,
+      { pid: 4243, ppid: 4001, tty: 'ttys031', executable: 'claude' }, { pid: 4001, ppid: 3900, tty: 'ttys031', executable: 'zsh' }])
+    let answer = (): void => {}
+    const answered = new Promise<void>((resolve) => { answer = resolve })
+    // Pane %4's facts wait for the test: its lookup runs until then.
+    const run = async (file: string, args: string[], timeoutMs: number) => {
+      if (args[0] !== 'display-message' || !args.includes('%4')) return tmuxInItermRun(file, args, timeoutMs)
+      orcaRuns.push([file, args, timeoutMs])
+      await answered
+      return { code: 0, stdout: '4001|work|\n' }
+    }
+    const listener = fakeListener()
+    const { port } = start({ faults: ['fleet'], orca: { ...orca, platform: 'darwin', run }, listen: listener.listen, now: () => clock })
+    const inIterm = { TERM_PROGRAM: 'tmux', __CFBundleIdentifier: 'com.googlecode.iterm2' }
+    port.observed(hooked('sess-1', 4242, { TMUX_PANE: '%3', ...inIterm }))
+    seen.host.watching!(true)
+    port.swarms(null)
+    await vi.waitFor(() => expect(logs).toContain('[device] tmux client · found'))
+    expect((await read()).apps?.shown).toBe('tmux')
+    expect(listener.front('iterm')).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    port.observed(hooked('sess-2', 4243, { TMUX_PANE: '%4', ...inIterm }))
+    expect((await read()).apps?.shown).toBe('tmux')
+    answer()
+    await vi.waitFor(() => expect(logs.filter((line) => line === '[device] tmux client · found')).toHaveLength(2))
+    const list = await read()
+    expect(list.apps?.shown).toBe('tmux')
+    expect(list.agents.map(({ id }) => id).sort()).toEqual([ID, observedAgentId('claude', 'sess-2')].sort())
+    expect(switches()).toEqual([])
   })
 })
 
@@ -7057,20 +7513,23 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
 
   /**
    * The devices with a herdr the test drives, the dial not attached yet. Its socket is there (`stamp`). Each subscription
-   * keeps its entries, its callbacks and whether it was closed; `agent.list` answers `agents`; a prompt is recorded and
-   * answers the next of `prompts`, else sent; `binary` is the herdr the client saw write the marker (Windows). `live`
-   * attaches the dial, starts the first subscription and awaits the list that follows it; `status` is herdr telling the
-   * pane's status on it.
+   * keeps its entries, its callbacks and whether it was closed; `agent.list` answers `agents`, and while `hold` is set
+   * waits until the test lands it; a prompt is recorded and answers the next of `prompts`, else sent; `binary` is the
+   * herdr the client saw write the marker (Windows). `live` attaches the dial, starts the first subscription and awaits
+   * the list that follows it; `status` is herdr telling the pane's status on it.
    */
   const withHerdr = (over: Parameters<typeof start>[0] = {}) => {
     const subs: Array<{ entries: readonly HerdrEntry[]; to: HerdrSubscriber; closed: boolean }> = []
     const lists: Array<Promise<HerdrAnswer>> = []
     const herdr = { agents: [listing()] as unknown[], stamp: '1:1' as string | undefined, subs, asked: [] as unknown[][], prompts: [] as HerdrPrompt[],
-      binary: 'C:\\herdr\\herdr.exe' }
+      binary: 'C:\\herdr\\herdr.exe', hold: false, held: [] as Array<() => void> }
     const client: HerdrClient = {
       request: (method, params) => {
         herdr.asked.push(['request', method, params])
-        const answer = Promise.resolve<HerdrAnswer>({ ok: true, result: { type: 'agent_list', agents: herdr.agents } })
+        const list = (): HerdrAnswer => ({ ok: true, result: { type: 'agent_list', agents: herdr.agents } })
+        const answer = herdr.hold
+          ? new Promise<HerdrAnswer>((resolve) => { herdr.held.push(() => resolve(list())) })
+          : Promise.resolve(list())
         lists.push(answer)
         return answer
       },
@@ -7104,13 +7563,29 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
     // No dial: herdr is not asked.
     expect(herdr.subs).toEqual([])
     await live()
-    expect(herdr.subs.map(({ entries }) => entries)).toEqual([[{ type: 'pane.agent_detected' }, { type: 'pane.closed' }, { type: 'pane.exited' }]])
+    // The focus on a subscription of its own (docs/plans/2026-11-24-dial-tmux-pane-focus-follow-plan.md, Task 8).
+    expect(herdr.subs.map(({ entries }) => entries)).toEqual([[{ type: 'pane.agent_detected' }, { type: 'pane.closed' }, { type: 'pane.exited' }],
+      [{ type: 'pane.focused' }]])
     expect(await listed()).toEqual([{ id: expect.any(String), name: 'api', caps: 'svf' }])
     expect((await host().listAgentSnapshot()).agents).toEqual([expect.objectContaining({ engine: 'claude', host: 'herdr' })])
     expect(logs).toContain('[herdr] listed · 1 agents')
     seen.host.watching!(false)
-    expect(herdr.subs.map(({ closed }) => closed)).toEqual([true])
+    expect(herdr.subs.map(({ closed }) => closed)).toEqual([true, true])
     expect(await listed()).toEqual([])
+  })
+
+  // The dial's greeting pushes its list once the attach ends (cableSession.ts): after a replug herdr's agents showed only
+  // at the next tick's push, as the Claude app's sessions did (the dial eval's C11).
+  it('an attach ends once herdr\'s first list has landed, so the greeting\'s list holds its agents', async () => {
+    const { herdr, port } = withHerdr({ claudeAppStore: emptyClaudeStore })
+    herdr.hold = true
+    setTimeout(() => { for (const land of herdr.held.splice(0)) land() }, 100)
+    const from = Date.now()
+    const attached = Promise.resolve(seen.host.watching!(true)).then(async () => ({ ms: Date.now() - from, agents: await listed() }))
+    port.swarms(null)
+    herdr.subs[0].to.started()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(await attached).toEqual({ ms: 100, agents: [{ id: expect.any(String), name: 'api', caps: 'svf' }] })
   })
 
   it('a status change is a card', async () => {
@@ -7287,7 +7762,8 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
     turnTo(id)
     expect(source.list()).toEqual([expect.objectContaining({ id, state: 'done', unseenDone: false })])
     expect(herdr.asked).toHaveLength(asked)
-    expect(herdr.subs).toHaveLength(1)
+    // The agents' subscription and the focus one.
+    expect(herdr.subs).toHaveLength(2)
   })
 
   /** A dial attached with herdr's socket there, then again with none: nothing subscribed, nothing watched. */
@@ -7362,11 +7838,11 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
   it('the devices stopping stops the source', async () => {
     const { port, herdr, live } = withHerdr()
     await live()
-    // A second after the first, the subscription that names the listed pane opens.
+    // A second after the first, the subscription that names the listed pane opens, beside the focus one.
     await vi.advanceTimersByTimeAsync(1_000)
-    expect(herdr.subs).toHaveLength(2)
+    expect(herdr.subs).toHaveLength(3)
     await port.stop()
-    expect(herdr.subs.map(({ closed }) => closed)).toEqual([true, true])
+    expect(herdr.subs.map(({ closed }) => closed)).toEqual([true, true, true])
     expect(vi.getTimerCount()).toBe(0)
     // With no socket, it waits on the watch: the devices stopping stops that too.
     const away = withHerdr()
@@ -8480,6 +8956,17 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
     expect(await listed()).toEqual([])
   })
 
+  // As herdr's: the greeting's list holds Herdr's agents, once Herdr Core's first snapshot has come.
+  it('an attach ends once Herdr Core\'s first snapshot has landed, so the greeting\'s list holds its agents', async () => {
+    const { hc, port } = withHc({ claudeAppStore: emptyClaudeStore })
+    setTimeout(() => hc.subs[0].to.snapshot([terminal('t7')]), 100)
+    const from = Date.now()
+    const attached = Promise.resolve(seen.host.watching!(true)).then(async () => ({ ms: Date.now() - from, agents: await listed() }))
+    port.swarms(null)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(await attached).toEqual({ ms: 100, agents: [{ id: expect.any(String), name: 'api', caps: 'svf' }] })
+  })
+
   it('a status change is a card', async () => {
     const { live, changed } = withHc()
     live()
@@ -9448,16 +9935,18 @@ describe('cmux\'s agents, from cmux\'s own stores (docs/plans/2026-11-17-dial-cm
   /**
    * The devices with a cmux the test drives, installed, with its stores' folder there, the dial not attached yet. Each call
    * of its client is recorded; `sessions` answers the records of that word (all, with none) unless it is one that fails,
-   * `mode` the mode, and the prompt is idle and empty. `live` attaches the dial and lets the first list land; `changed` is the latest watch telling
-   * a change of that file, and its run landing: one agent's runs start at least 250 ms apart.
+   * and while `hold` is set waits until the test lands it, `mode` the mode, and the prompt is idle and empty. `live`
+   * attaches the dial and lets the first list land; `changed` is the latest watch telling a change of that file, and its
+   * run landing: one agent's runs start at least 250 ms apart.
    */
   const withCmux = (over: Parameters<typeof start>[0] = {}) => {
     const fake = { found: true, records: [record()], mode: 'cmuxOnly' as string | undefined, calls: [] as unknown[][],
-      failing: [] as Array<string | undefined> }
+      failing: [] as Array<string | undefined>, hold: false, held: [] as Array<() => void> }
     const client: CmuxClient = {
       binary: () => fake.found ? CMUX_APP_BINARY : null,
       sessions: async (word) => {
         fake.calls.push(['sessions', word])
+        if (fake.hold) await new Promise<void>((resolve) => { fake.held.push(resolve) })
         if (fake.failing.includes(word)) return { ok: false, fault: 'failed' }
         return { ok: true, sessions: fake.records.filter((one) => word === undefined || one.word === word) }
       },
@@ -9504,6 +9993,18 @@ describe('cmux\'s agents, from cmux\'s own stores (docs/plans/2026-11-17-dial-cm
     seen.host.watching!(false)
     expect(await listed()).toEqual([])
     expect(watched.stopped).toBe(watched.calls.length)
+  })
+
+  // As herdr's: the greeting's list holds cmux's agents, once its first run of every agent has landed.
+  it('an attach ends once cmux\'s first run has landed, so the greeting\'s list holds its agents', async () => {
+    const { fake, port } = withCmux({ claudeAppStore: emptyClaudeStore })
+    fake.hold = true
+    setTimeout(() => { for (const land of fake.held.splice(0)) land() }, 100)
+    const from = Date.now()
+    const attached = Promise.resolve(seen.host.watching!(true)).then(async () => ({ ms: Date.now() - from, agents: await listed() }))
+    port.swarms(null)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(await attached).toEqual({ ms: 100, agents: [{ id: expect.any(String), name: 'api', caps: 'svf' }] })
   })
 
   it('a failed start reads each store\'s agent alone, so one bad store hides only its own agent', async () => {
@@ -9750,6 +10251,402 @@ describe('cmux\'s agents, from cmux\'s own stores (docs/plans/2026-11-17-dial-cm
       expect(cmux.calls()).toEqual([{ args: ['sessions', 'list', '--json', '--all'], stdin: '', env: [] }])
     })
   })
+
+  describe('cmux\'s event log, read while cmux is in front (docs/plans/2026-11-25-dial-cmux-focus-follow-design.md)', () => {
+    const WIN = '7C6B5A49-0000-4000-8000-00000000000D'
+    /** What cmux writes as it comes forward with S focused in W: the focus, and W's window made key. */
+    const FORWARD = cmuxEventLine('surface.focused', { workspace: W, surface: S })
+      + cmuxEventLine('window.keyed', { window: WIN }, { workspace_id: W })
+    /** As withCmux's, cmux's event log in memory holding FORWARD, and the devices' clock standing still: every read takes
+     *  0 ms. */
+    const withLog = (over: Parameters<typeof start>[0] = {}) => {
+      const events = fakeCmuxLog()
+      events.append(FORWARD)
+      return { ...withCmux({ cmuxEvents: events, now: () => 0, ...over }), events }
+    }
+    /** That app told in front, and settled. */
+    const settle = async (app: string) => {
+      host().front(app)
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    }
+
+    it('a dial attached while cmux is settled in front reads the log once cmux\'s agents are listed; with no dial, cmux settling read nothing', async () => {
+      const { fake, port, events } = withLog()
+      await settle('cmux')
+      expect(events.opens).toBe(0)
+      fake.hold = true
+      attach(port)
+      await flush()
+      expect(events.opens).toBe(0)
+      for (const land of fake.held.splice(0)) land()
+      await flush()
+      expect(events.opens).toBe(1)
+    })
+
+    it('with a dial attached, cmux settling reads the log once, then each change of it, named or not, once more; a store\'s change reads nothing', async () => {
+      const { events, live, changed } = withLog()
+      await live()
+      expect(events.opens).toBe(0)
+      await settle('cmux')
+      expect(events.opens).toBe(1)
+      events.append(cmuxEventLine('surface.focused', { workspace: W, surface: S }))
+      await changed('events.jsonl')
+      expect(events.opens).toBe(2)
+      // From where the last read ended: the new line alone.
+      expect(events.positions).toEqual([0, Buffer.byteLength(FORWARD)])
+      await changed()
+      expect(events.opens).toBe(3)
+      await changed('claude-hook-sessions.json')
+      expect(events.opens).toBe(3)
+    })
+
+    it('behind another app nothing is read, a change of the log neither; cmux leaving the front stops the reads', async () => {
+      const { events, live, changed } = withLog()
+      await live()
+      await settle('ghostty')
+      await changed('events.jsonl')
+      expect(events.opens).toBe(0)
+      await settle('cmux')
+      expect(events.opens).toBe(1)
+      await settle('ghostty')
+      await changed('events.jsonl')
+      expect(events.opens).toBe(1)
+    })
+
+    it('the dial gone, the log is forgotten: the next attach reads it from its start', async () => {
+      const { events, live, changed } = withLog()
+      await live()
+      await settle('cmux')
+      events.append(cmuxEventLine('surface.focused', { workspace: W, surface: S }))
+      await changed('events.jsonl')
+      seen.host.watching!(false)
+      await flush()
+      // The stopped source's watch tells nothing more.
+      await changed('events.jsonl')
+      expect(events.opens).toBe(2)
+      await live()
+      expect(events.positions).toEqual([0, Buffer.byteLength(FORWARD), 0])
+    })
+
+    it('a read under way as the dial goes lands on nothing: the next attach reads the log from its start', async () => {
+      const { port, events, live } = withLog()
+      await live()
+      const land = events.hold()
+      await settle('cmux')
+      expect(events.opens).toBe(1)
+      seen.host.watching!(false)
+      land()
+      await flush()
+      attach(port)
+      await flush()
+      expect(events.positions).toEqual([0, 0])
+    })
+
+    it('cmux not found at the attach: neither the attach nor cmux settling reads its log; found at the next, it is read', async () => {
+      const { fake, port, events, live } = withLog()
+      fake.found = false
+      await settle('cmux')
+      attach(port)
+      await flush()
+      await settle('ghostty')
+      await settle('cmux')
+      expect(events.opens).toBe(0)
+      seen.host.watching!(false)
+      fake.found = true
+      await live()
+      expect(events.opens).toBe(1)
+    })
+
+    it('the read\'s time is said for the first read, and not for a later one no slower', async () => {
+      const { live, changed } = withLog()
+      await live()
+      await settle('cmux')
+      await changed('events.jsonl')
+      await changed('events.jsonl')
+      expect(logs.filter((line) => line.startsWith('[cmux] read · events'))).toEqual(['[cmux] read · events · 0'])
+    })
+
+    // "Who is followed": the one live agent at the surface cmux's log names focused in its front workspace, never a wrong
+    // session, and never the dial's own move read back.
+    describe('the agent at cmux\'s focused surface is followed', () => {
+      const S2 = '9F8E7D6C-0000-4000-8000-00000000001B'
+      const S3 = '9F8E7D6C-0000-4000-8000-00000000001C'
+      const W2 = '5A1B2C3D-0000-4000-8000-00000000002A'
+      const WIN2 = '7C6B5A49-0000-4000-8000-00000000002D'
+      const ID2 = observedAgentId('claude', 'sess-2')
+      const ID3 = observedAgentId('claude', 'sess-3')
+      const ECHO = '[device] cmux focus · skipped · echo'
+      const UNKNOWN = '[device] cmux focus · skipped · unknown agent'
+      const NOT_IN_FRONT = '[device] cmux focus · skipped · not in front'
+      const follows = () => calls('followLocal').filter(([, cause]) => cause === 'pane')
+      const focusLines = () => logs.filter((line) => line.startsWith('[device] cmux focus'))
+      const unlinked = (off: boolean) => { (seen.cable as unknown as { connected: boolean }).connected = !off }
+      const focused = (surface: string, workspace = W) => cmuxEventLine('surface.focused', { workspace, surface })
+      /** The devices' monotonic clock: the dial's moves are dated by it. */
+      let clock = 0
+      beforeEach(() => { clock = 0 })
+      /** Claude Code's session n, hooked from cmux's own terminal at that surface, its ids in upper case as cmux gives
+       *  them. */
+      const inCmux = (n: number, surface: string, workspace = W, event: ObservedHookEvent['event'] = 'session-start'): ObservedHookEvent => ({
+        engine: 'claude', sessionId: `sess-${n}`, event, cwd: '/work/api', callerPid: 4241 + n, transcriptPath: `/t/sess-${n}.jsonl`,
+        hostHints: { TERM_PROGRAM: 'ghostty', CMUX_SURFACE_ID: surface, CMUX_WORKSPACE_ID: workspace },
+      })
+      /**
+       * withLog's devices on this clock, the agents of [hooks] hooked (sess-1 at S and sess-2 at S2, both in W, unless
+       * given), cmux listing [records] (none unless given), a dial attached and cmux settled in front with its log's front
+       * at S: the settle's read has landed. `write` appends those lines to the log, and the watch tells it changed.
+       */
+      const following = async ({ hooks = [inCmux(1, S), inCmux(2, S2)], records = [], run }: {
+        hooks?: ObservedHookEvent[]; records?: CmuxSession[]; run?: typeof orca.run
+      } = {}) => {
+        const scene = withLog({ now: () => clock, ...run && { orca: { ...onMac, run } } })
+        scene.fake.records = records
+        for (const event of hooks) scene.port.observed(event)
+        await scene.live()
+        await settle('cmux')
+        await flush()
+        const write = async (...lines: string[]) => {
+          scene.events.append(lines.join(''))
+          await scene.changed('events.jsonl')
+        }
+        return { ...scene, write }
+      }
+
+      it('a hooked agent at the surface cmux focused is followed, its ids and the log\'s in upper case: as cmux settles, then at a move', async () => {
+        const { write } = await following()
+        expect(follows()).toEqual([[ID, 'pane']])
+        await write(focused(S2))
+        expect(follows()).toEqual([[ID, 'pane'], [ID2, 'pane']])
+        expect(focusLines()).toEqual([])
+      })
+
+      it('a focus in a workspace behind moves nothing; a switch to it follows the agent at its focused surface', async () => {
+        const { write } = await following({ hooks: [inCmux(1, S), inCmux(2, S2, W2)] })
+        await write(focused(S2, W2))
+        expect(follows()).toEqual([[ID, 'pane']])
+        await write(cmuxEventLine('workspace.selected', { workspace: W2 }))
+        expect(follows()).toEqual([[ID, 'pane'], [ID2, 'pane']])
+      })
+
+      it('a dial attached while cmux is settled in front follows the agent at its focus', async () => {
+        const { port, live } = withLog({ now: () => clock })
+        port.observed(inCmux(1, S))
+        await settle('cmux')
+        await live()
+        await flush()
+        expect(follows()).toEqual([[ID, 'pane']])
+      })
+
+      it('cmux coming forward again follows the agent at its focus, though that focus did not move', async () => {
+        await following()
+        await settle('ghostty')
+        await settle('cmux')
+        await flush()
+        expect(follows()).toEqual([[ID, 'pane'], [ID, 'pane']])
+      })
+
+      it('a turn of the dial within 2 s before cmux settles: the settle is its echo; past them, cmux\'s next settle follows', async () => {
+        await following()
+        await settle('ghostty')
+        turnTo(ID2)
+        clock = 1_999
+        await settle('cmux')
+        await flush()
+        expect(follows()).toEqual([[ID, 'pane']])
+        expect(focusLines()).toEqual([ECHO])
+        await settle('ghostty')
+        clock = 2_000
+        await settle('cmux')
+        await flush()
+        expect(follows()).toEqual([[ID, 'pane'], [ID, 'pane']])
+      })
+
+      // The open scan's copy wins the fold over cmux's row by its session id, and holds no pane of cmux's: the row there
+      // names its session, its ids in lower case.
+      it('the open scan\'s copy of the session cmux lists at that surface is followed', async () => {
+        scanned()
+        await following({ hooks: [], records: [record({ surface: s, workspace: w, sessionId: 'sess-1' })] })
+        expect(follows()).toEqual([[ID, 'pane']])
+      })
+
+      it.each<[string, ObservedHookEvent[]]>([
+        ['a surface no agent is at (a shell)', [inCmux(2, S2)]],
+        ['two live agents at the surface', [inCmux(1, S), inCmux(2, S)]],
+      ])('%s: nothing is followed', async (_, hooks) => {
+        await following({ hooks })
+        expect(follows()).toEqual([])
+        expect(focusLines()).toEqual([UNKNOWN])
+      })
+
+      it('an ended session at the surface beside a live one: the live one is followed', async () => {
+        await following({ hooks: [inCmux(1, S), inCmux(1, S, W, 'session-end'), inCmux(2, S)] })
+        expect(follows()).toEqual([[ID2, 'pane']])
+      })
+
+      it('with two cmux windows a workspace selection names no front: nothing moves or is said, the same surface keyed again turns nothing back, another follows', async () => {
+        const { write } = await following({ hooks: [inCmux(1, S), inCmux(2, S2, W2)] })
+        await write(focused(S2, W2), cmuxEventLine('window.created', { window: WIN2 }))
+        await write(cmuxEventLine('workspace.selected', { workspace: W2 }))
+        await write(cmuxEventLine('window.keyed', { window: WIN }, { workspace_id: W }))
+        expect(follows()).toEqual([[ID, 'pane']])
+        expect(focusLines()).toEqual([])
+        await write(cmuxEventLine('window.keyed', { window: WIN2 }, { workspace_id: W2 }))
+        expect(follows()).toEqual([[ID, 'pane'], [ID2, 'pane']])
+      })
+
+      it('the dial\'s own tap on an agent in cmux: cmux\'s focus of its surface is the echo, that surface named again later moves nothing, the person\'s next move is followed', async () => {
+        const { write } = await following()
+        expect(await host().openAgent(ID2)).toBeUndefined()
+        expect(orcaRuns).toContainEqual(link(W, S2))
+        await write(focused(S2))
+        expect(focusLines()).toEqual([ECHO])
+        clock = 2_000
+        await write(focused(S2))
+        expect(follows()).toEqual([[ID, 'pane']])
+        await write(focused(S))
+        expect(follows()).toEqual([[ID, 'pane'], [ID, 'pane']])
+        expect(focusLines()).toEqual([ECHO])
+      })
+
+      it('the same for the dial\'s rest', async () => {
+        const { write } = await following()
+        expect(host().swipeSwitches(ID2)).toBe(true)
+        host().swipeEnded(ID2, 'rest')
+        await vi.waitFor(() => expect(said()).toContain('[device] swipe · ok'))
+        expect(orcaRuns).toContainEqual(link(W, S2))
+        await write(focused(S2))
+        expect(follows()).toEqual([[ID, 'pane']])
+        expect(focusLines()).toEqual([ECHO])
+      })
+
+      // Review Focus 1: cmux logs the workspace's selection, naming its old surface, before the tapped surface's focus.
+      it('a tap on an agent in another workspace: neither the workspace\'s old surface nor the tapped one moves the dial; 2 s on, the person\'s move is followed', async () => {
+        const { write } = await following({ hooks: [inCmux(1, S), inCmux(2, S2, W2), inCmux(3, S3, W2)] })
+        await write(focused(S2, W2))
+        expect(await host().openAgent(ID3)).toBeUndefined()
+        await write(cmuxEventLine('workspace.selected', { workspace: W2 }))
+        await write(focused(S3, W2))
+        expect(follows()).toEqual([[ID, 'pane']])
+        expect(focusLines()).toEqual([ECHO, ECHO])
+        clock = 2_000
+        await write(focused(S2, W2))
+        expect(follows()).toEqual([[ID, 'pane'], [ID2, 'pane']])
+      })
+
+      // Review Focus 2: a working agent's hooks write the log many times a second while cmux is in front.
+      it('a dial turned by hand stays put: a working agent\'s lines and its surface focused again turn nothing back', async () => {
+        const { write } = await following()
+        await write(focused(S2))
+        turnTo(ID)
+        clock = 5_000
+        for (let n = 0; n < 20; n++) await write(cmuxEventLine('notification.created', { workspace: W, surface: S2 }, { title: 'build' }))
+        await write(focused(S2))
+        expect(follows()).toEqual([[ID, 'pane'], [ID2, 'pane']])
+        expect(focusLines()).toEqual([])
+      })
+
+      it.each<[string, () => Promise<unknown>]>([
+        ['another app settled', () => settle('ghostty')],
+        // The app the person went to settles FRONT_SETTLE_MS after the switch.
+        ['another app told in front, not yet settled', async () => host().front('ghostty')],
+      ])('cmux left the front while the read ran (%s): skipped as not in front', async (_, leave) => {
+        const { events, changed } = await following()
+        const land = events.hold()
+        events.append(focused(S2))
+        await changed('events.jsonl')
+        await leave()
+        land()
+        await flush()
+        expect(follows()).toEqual([[ID, 'pane']])
+        expect(focusLines()).toEqual([NOT_IN_FRONT])
+      })
+
+      it('with no dial linked nothing is followed and nothing is said; linked again, the next read follows', async () => {
+        const { write } = await following()
+        unlinked(true)
+        await write(focused(S2))
+        expect(follows()).toEqual([[ID, 'pane']])
+        expect(focusLines()).toEqual([])
+        unlinked(false)
+        await write(focused(S2))
+        expect(follows()).toEqual([[ID, 'pane'], [ID2, 'pane']])
+      })
+
+      it('a read under way as the dial goes follows nothing when it lands', async () => {
+        const { events, changed } = await following()
+        const land = events.hold()
+        events.append(focused(S2))
+        await changed('events.jsonl')
+        seen.host.watching!(false)
+        land()
+        await flush()
+        expect(follows()).toEqual([[ID, 'pane']])
+        expect(focusLines()).toEqual([])
+      })
+
+      it('the dial going drops its own moves: attached again, cmux\'s focus of the surface it tapped is the person\'s', async () => {
+        // The tap's link ends past ATTACH_ECHO_MS of its start: the move is dated from its start, its surface's note from
+        // its end.
+        const links: Array<() => void> = []
+        const { write, live } = await following({ run: async (file, args, timeoutMs) => {
+          orcaRuns.push([file, args, timeoutMs])
+          if (args.some((arg) => arg.startsWith('cmux://'))) await new Promise<void>((resolve) => { links.push(resolve) })
+          return { code: 0, stdout: '' }
+        } })
+        const tapped = host().openAgent(ID2)
+        await vi.waitFor(() => expect(links).toHaveLength(1))
+        clock = 2_500
+        links[0]()
+        await tapped
+        seen.host.watching!(false)
+        await live()
+        await flush()
+        expect(follows()).toEqual([[ID, 'pane'], [ID, 'pane']])
+        await write(focused(S2))
+        expect(follows()).toEqual([[ID, 'pane'], [ID, 'pane'], [ID2, 'pane']])
+        expect(focusLines()).toEqual([])
+      })
+
+      // The settle's read and the attach's are one settle, read once cmux's agents are listed: the agent there is known,
+      // and followed once.
+      it.each<[string, ObservedHookEvent[], CmuxSession[]]>([
+        ['a hooked agent', [inCmux(1, S)], []],
+        ['an agent cmux alone lists', [], [record()]],
+      ])('cmux settling while the attach lists cmux\'s agents, and its log changing: %s at its focus is followed once, after the list', async (_, hooks, records) => {
+        const { fake, port, events, changed } = withLog({ now: () => clock })
+        fake.records = records
+        for (const event of hooks) port.observed(event)
+        fake.hold = true
+        attach(port)
+        await flush()
+        await settle('cmux')
+        events.append(focused(S))
+        await changed('events.jsonl')
+        expect(events.opens).toBe(0)
+        for (const land of fake.held.splice(0)) land()
+        await flush()
+        const [{ id }] = await listed()
+        expect(follows()).toEqual([[id, 'pane']])
+      })
+
+      it('its lines are fixed words', async () => {
+        const { events, changed, write } = await following()
+        await host().openAgent(ID2)
+        await write(focused(S2))
+        clock = 2_000
+        await write(focused(S3))
+        const land = events.hold()
+        events.append(focused(S))
+        await changed('events.jsonl')
+        host().front('ghostty')
+        land()
+        await flush()
+        const lines = focusLines()
+        expect(lines).toHaveLength(3)
+        for (const line of lines) expect(line).toMatch(/^\[device\] cmux focus · skipped · (echo|unknown agent|not in front)$/)
+      })
+    })
+  })
 })
 
 describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial-opencode-design.md)", () => {
@@ -9777,7 +10674,8 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
   /**
    * The devices with an opencode the test drives, the dial not attached yet. Its service.json is there (`stamp`). Each
    * stream keeps its callbacks and whether it was closed; the list, the running sessions, the permissions and the last
-   * answers are the test's own values, in the shapes of opencode v2.3.0; a prompt is recorded and answers the next of
+   * answers are the test's own values, in the shapes of opencode v2.3.0, the list waiting while `hold` is set until the
+   * test lands it; a prompt is recorded and answers the next of
    * `prompts`, else sent. `live` attaches the dial, says the stream is connected and waits for the list it asks; `tell` is
    * an event on the first stream; `reads` counts the last answers read.
    */
@@ -9786,6 +10684,7 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
     const oc = {
       sessions: [session()] as unknown[], active: {} as Record<string, unknown>, permissions: {} as Record<string, unknown[]>,
       answers: { [SES]: 'All 12 tests pass.' } as Record<string, string>, asked: [] as unknown[][], prompts: [] as OpencodePrompt[], streams,
+      hold: false, held: [] as Array<() => void>,
     }
     const ok = (data: unknown): OpencodeAnswer => ({ ok: true, json: { data, cursor: {} } })
     const client: OpencodeClient = {
@@ -9793,7 +10692,10 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
       find: async () => { oc.asked.push(['find']); return { stamp: 's1' } },
       request: async (method, path) => {
         oc.asked.push(['request', method, path])
-        if (path.startsWith('/api/session?')) return ok(oc.sessions)
+        if (path.startsWith('/api/session?')) {
+          if (oc.hold) await new Promise<void>((resolve) => { oc.held.push(resolve) })
+          return ok(oc.sessions)
+        }
         if (path === '/api/session/active') return ok(oc.active)
         const [, id, what] = /^\/api\/session\/([^/]+)\/(permission|message)/.exec(path)!
         if (what === 'permission') return ok(oc.permissions[id] ?? [])
@@ -9839,6 +10741,21 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
     expect(await listed()).toEqual([])
     // opencode's, and the Claude app store's.
     expect(watchedFolders.stopped).toBe(2)
+  })
+
+  // As herdr's: the greeting's list holds opencode's sessions, once its first list has landed.
+  it('an attach ends once opencode\'s first list has landed, so the greeting\'s list holds its sessions', async () => {
+    const { oc, port, tell } = withOpencode({ claudeAppStore: emptyClaudeStore })
+    oc.hold = true
+    setTimeout(() => { for (const land of oc.held.splice(0)) land() }, 100)
+    const from = Date.now()
+    const attached = Promise.resolve(seen.host.watching!(true)).then(async () => ({ ms: Date.now() - from, agents: await listed() }))
+    port.swarms(null)
+    // The service is found and its stream opened.
+    await vi.advanceTimersByTimeAsync(0)
+    tell('server.connected')
+    await vi.advanceTimersByTimeAsync(100)
+    expect(await attached).toEqual({ ms: 100, agents: [{ id: expect.any(String), name: 'Fix the login test', caps: 'sv' }] })
   })
 
   it('a turn is its cards', async () => {
@@ -10168,8 +11085,9 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
     return { ...started, fake, listener, front, attached, live, changed }
   }
 
-  it('on macOS with a dial attached its sessions are listed svf, idle, on the Claude app\'s page; detached, the source stops, its watches close and the reader forgets', async () => {
+  it('on macOS with a dial attached its sessions are listed svf, idle, on the Claude app\'s page; detached, the source stops, its watches close, the reader forgets and the rank goes', async () => {
     const { fake, live } = withStore()
+    const rank = vi.spyOn(host(), 'setRank')
     // No dial: the store is not read.
     expect(fake.calls).toEqual([])
     await live()
@@ -10181,10 +11099,26 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
     expect(watchedFolders.calls).toEqual(expect.arrayContaining([[[ROOT, posix.dirname(ROOT)], expect.any(Function)],
       [[ACCOUNT_DIR], expect.any(Function)], [[ORG_DIR], expect.any(Function)]]))
     expect(logs).toEqual(expect.arrayContaining(['[claude-app] watch · on', '[claude-app] listed · 1 sessions']))
+    expect(rank.mock.lastCall).toEqual(['claude', new Map([[ID, 0]])])
     seen.host.watching!(false)
     expect(await listed()).toEqual([])
     expect(watchedFolders.stopped).toBe(watchedFolders.calls.length)
     expect(fake.calls.at(-1)).toEqual(['forget'])
+    expect(rank.mock.lastCall).toEqual(['claude', undefined])
+  })
+
+  // The dial's greeting pushes its list once the attach ends (cableSession.ts): after a replug the ring showed the
+  // store's sessions only at the next tick's push, 1-2 s on (the dial eval's C11).
+  it('an attach ends once the store\'s first read has landed, so the greeting\'s list holds its sessions', async () => {
+    const { fake, port } = withStore()
+    fake.sessions = [session(), session({ localId: LOCAL_SECOND, sessionId: SECOND, title: 'Ship it', lastActivityAt: 2 })]
+    fake.hold = true
+    setTimeout(() => { for (const land of fake.held.splice(0)) land() }, 100)
+    const from = Date.now()
+    const attached = Promise.resolve(seen.host.watching!(true)).then(async () => ({ ms: Date.now() - from, ids: (await ids()).sort() }))
+    port.swarms(null)
+    await wait(100)
+    expect(await attached).toEqual({ ms: 100, ids: [ID, observedAgentId('claude', SECOND)].sort() })
   })
 
   it('with HARNESS_DEVICE_OBSERVED off there is no source', async () => {
@@ -10259,6 +11193,16 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
       { id: observedAgentId('claude', SECOND), name: 'Ship it', caps: 'svf' }]))
     expect(await listed()).toHaveLength(2)
     expect(fake.calls.slice(before)).toEqual([['touch', ORG_DIR, `${LOCAL_SECOND}.json`], ['read']])
+  })
+
+  // The dial eval's C1, C9 and C10: a session the store lists after the dial's first list is in the store's place.
+  it('the Claude page\'s ring is in the store\'s order, newest first, a session written after the first read included', async () => {
+    const { fake, live, changed } = withStore()
+    await live()
+    expect(await ids()).toEqual([ID])
+    fake.sessions = [session({ localId: LOCAL_SECOND, sessionId: SECOND, title: 'Ship it', lastActivityAt: 2 }), session()]
+    await changed(ORG_DIR, `${LOCAL_SECOND}.json`)
+    expect(await ids()).toEqual([observedAgentId('claude', SECOND), ID])
   })
 
   it('a tap on a store row is one open of the continue link, and is the dial\'s own move and link', async () => {
@@ -10686,6 +11630,28 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
     expect(watchedFolders.stopped).toBe(watchedFolders.calls.length)
     expect(fake.calls.at(-1)).toBe('forget')
     expect(rank.mock.lastCall).toEqual(['codex', undefined])
+  })
+
+  // As the Claude app's store: the greeting's list holds the app's threads, after the look for the app and the first read.
+  it('an attach ends once the app was found and its threads\' first read has landed, so the greeting\'s list holds them', async () => {
+    const { fake, port } = withThreads()
+    fake.read = read([thread(), thread({ id: SECOND, name: 'Ship it', at: 2 })])
+    fake.hold = true
+    setTimeout(() => { for (const land of fake.held.splice(0)) land(BUNDLE) }, 100)
+    const from = Date.now()
+    const attached = Promise.resolve(seen.host.watching!(true)).then(async () => ({ ms: Date.now() - from, ids: (await ids()).sort() }))
+    port.swarms(null)
+    await wait(100)
+    expect(await attached).toEqual({ ms: 100, ids: [ID, observedAgentId('codex', SECOND)].sort() })
+  })
+
+  // What the greeting waits on never fails it: a look for the app that fails ends the attach, said by the part's guard.
+  it('an attach whose look for the app fails still ends, with no threads, said in one line', async () => {
+    const { port } = withThreads({ bundleId: async () => { throw new Error('plutil failed') } })
+    await expect(Promise.resolve(seen.host.watching!(true))).resolves.toBeUndefined()
+    port.swarms(null)
+    expect(await ids()).toEqual([])
+    expect(logs).toContainEqual(expect.stringMatching(/^\[devices\] codex-app failed · /))
   })
 
   it('the Claude app\'s store and the ChatGPT app\'s Codex home are watched through watchStore when given', async () => {
@@ -14029,6 +14995,21 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
     })
   })
 
+  // herdr strips the outer terminal's variables but its bundle id from its panes: Alacritty's names no page of its own,
+  // and the agent is on herdr's page.
+  it('a hooked agent in herdr in Alacritty counts as placed on herdr\'s page, not on the Other page', async () => {
+    madeBy('herdr')
+    const { port } = start({ faults: ['fleet'], orca: { ...orca, platform: 'darwin' } })
+    const inAlacritty = { hostHints: { HERDR_PANE_ID: 'w1:p2', __CFBundleIdentifier: 'org.alacritty' } }
+    port.observed(hook('session-start', inAlacritty))
+    await vi.waitFor(() => expect(logs).toContain('[device] herdr client · not read · ttys'))
+    await attach(port)
+    port.observed(hook('turn-start', inAlacritty))
+    const counts = await counted(port)
+    expect(counts).toMatchObject({ dial_hooked_claude_installation_days: 1, dial_hooked_claude_placed: 1 })
+    expect(Object.keys(counts).filter((name) => name === 'dial_hooked_claude_other' || name.startsWith('dial_other_app_'))).toEqual([])
+  })
+
   it('a window open on its tab leaves a hooked agent in its own app', async () => {
     const { port } = start({ faults: ['fleet'] })
     const zed = { sessionId: 'sess-2', hostHints: { __CFBundleIdentifier: 'dev.zed.Zed' } }
@@ -14225,6 +15206,1662 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
       await vi.advanceTimersByTimeAsync(9_999)
       port.observed(hook('turn-aborted'))
       expect(await counted(port)).toMatchObject({ dial_voice_interrupted_10s: 1, dial_voice_host_orca_interrupted_10s: 1 })
+    })
+  })
+})
+
+describe('the dial follows the pane focused in WezTerm and kitty (docs/plans/2026-11-23-dial-wezterm-kitty-focus-follow-design.md)', () => {
+  type Run = [string, string[], number]
+  const { listClients } = RECORDED_WEZTERM
+  const { focusedMatch } = RECORDED_KITTY
+  /** The callers of the hooks below (4240 + n), each on a terminal of its own made by the n-th of [makers], the last for
+   *  the rest: whose pane is the agent's own (scannedApp.ts ptyMaker). */
+  const callers = (...makers: string[]): ProcessRow[] => Array.from({ length: 16 }, (_, at) => [
+    { pid: 3900 + at, ppid: 1, executable: makers[Math.min(at, makers.length - 1)] },
+    { pid: 4241 + at, ppid: 3900 + at, tty: `pts/${at + 1}`, executable: 'claude' },
+  ]).flat()
+  /** Claude Code in session n, its caller 4240 + n, as its hook says with [hints]. */
+  const hook = (n: number, hints: Record<string, string>, over: Partial<ObservedHookEvent> = {}): ObservedHookEvent => ({
+    engine: 'claude', sessionId: `sess-${n}`, event: 'session-start', cwd: '/work/api', callerPid: 4240 + n,
+    transcriptPath: `/t/sess-${n}.jsonl`, hostHints: hints, ...over,
+  })
+  /** In WezTerm's pane n. */
+  const inWezterm = (n: number, over: Partial<ObservedHookEvent> = {}) => hook(n, { WEZTERM_PANE: String(n), TERM_PROGRAM: 'WezTerm' }, over)
+  /** In kitty's window n, of the kitty listening on [listenOn]. */
+  const inKitty = (n: number, listenOn: string, over: Partial<ObservedHookEvent> = {}) => hook(n, { KITTY_WINDOW_ID: String(n), KITTY_LISTEN_ON: listenOn }, over)
+  /** A socket of this account's at a short path, as kitty's (the Zellij and kitty describe's kittyAt), and another
+   *  listening at that path once the spec moved the first aside. */
+  const kittyAt = async () => {
+    const folder = mkdtempSync('/tmp/hk-')
+    onTestFinished(() => { rmSync(folder, { recursive: true, force: true }) })
+    const path = join(folder, 's')
+    const listen = async (): Promise<void> => {
+      const server = createServer()
+      await new Promise<void>((resolve) => { server.listen(path, resolve) })
+      onTestFinished(() => { server.close() })
+    }
+    await listen()
+    return { path, listenOn: `unix:${path}`, listen }
+  }
+  /** What the apps answer: the pane WezTerm's GUI focused (none: no GUI, RECORDED_WEZTERM.listClients.noGui), the window
+   *  kitty focused, or, by socket, the window each kitty focused, and whether kitty refuses (focusedMatch.password). While
+   *  `held`, WezTerm's reads wait until the spec lands them; while `heldKitty`, kitty's calls do. A tap's `activate-pane` or `focus-window` moves that focus,
+   *  as the apps do, once the spec lands it while `heldTap`. */
+  const focus = { pane: 0 as number | undefined, window: 1, windows: new Map<string, number>(), refused: false, held: false, heldKitty: false,
+    heldTap: false, land: [] as Array<() => void> }
+  beforeEach(() => { Object.assign(focus, { pane: 0, window: 1, windows: new Map(), refused: false, held: false, heldKitty: false, heldTap: false, land: [] }) })
+  /** The devices' runs, recorded; `list-clients` and `get-colors` answered as the recorded apps did. */
+  const apps = { ...orca, run: async (file: string, args: string[], timeoutMs: number) => {
+    orcaRuns.push([file, args, timeoutMs])
+    if (focus.heldTap && (args.includes('activate-pane') || args[3] === 'focus-window')) await new Promise<void>((resolve) => { focus.land.push(resolve) })
+    if (args.includes('list-clients')) {
+      if (focus.held) await new Promise<void>((resolve) => { focus.land.push(resolve) })
+      if (focus.pane === undefined) return { code: listClients.noGui.exitCode, stdout: '', stderr: listClients.noGui.stderr }
+      const clients = (JSON.parse(listClients.gui.stdout) as object[]).map((client) => ({ ...client, focused_pane_id: focus.pane }))
+      return { code: listClients.gui.exitCode, stdout: JSON.stringify(clients), stderr: '' }
+    }
+    if (args.includes('activate-pane')) focus.pane = Number(args.at(-1))
+    if (args[3] === 'focus-window') focus.windows.set(args[2], Number(args[5].slice('id:'.length)))
+    if (args[3] !== 'get-colors') return { code: 0, stdout: '' }
+    if (focus.heldKitty) await new Promise<void>((resolve) => { focus.land.push(resolve) })
+    if (focus.refused) return { code: focusedMatch.password.code, stdout: '', stderr: focusedMatch.password.stderr }
+    const expr = args[5]
+    const focused = focus.windows.get(args[2]) ?? focus.window
+    return [...expr.matchAll(/id:([0-9]+)/g)].some(([, id]) => Number(id) === focused)
+      ? { code: focusedMatch.focused.code, stdout: `${focusedMatch.focused.stdoutFirstLine}\n`, stderr: '' }
+      : { code: focusedMatch.notFocused.code, stdout: '', stderr: `Error: No matching windows for expression: ${expr}\n` }
+  } }
+  /** WezTerm's one read, with the binary the verbs use (the spec's `onPath`). */
+  const LIST_CLIENTS: Run = ['/opt/orca/bin/orca', ['cli', '--no-auto-start', 'list-clients', '--format', 'json'], 2_000]
+  const getColors = (listenOn: string, expr: string): Run => ['kitten', ['@', '--to', listenOn, 'get-colors', '--match', expr], 2_000]
+  const reads = () => orcaRuns.filter(([, args]) => args.includes('list-clients') || args.includes('get-colors'))
+  /** kitty's `--match` expressions, in order. */
+  const matches = () => reads().flatMap(([, args]) => args.includes('get-colors') ? [args.at(-1)] : [])
+  const polls = () => logs.filter((line) => line.startsWith('[device] focus poll'))
+  const STARTED = '[device] focus poll · started'
+  const stopped = (reads: number, failed = 0) => `[device] focus poll · stopped · ${reads} reads, ${failed} failed`
+  const REFUSED_LINE = '[device] kitty · focus refused'
+  let clock = 0
+  /** Lets what a landing sets off run. */
+  const settled = () => new Promise((resolve) => setImmediate(resolve))
+  /** The devices on the apps above, the agents of [hooks] (one in WezTerm's pane 1 unless given) on terminals [makers]
+   *  made (WezTerm's unless given), no window, a dial attached unless `attached` is false, no app settled in front, and
+   *  the devices' monotonic clock at 0. `settle` keeps an app in front for the settle, as `harness hardware watch` tells
+   *  it; `next` lets FOCUS_POLL_MS pass, [times] over, each read landing. The timers are held; `setImmediate` is left to
+   *  let a landing run. */
+  const dialWith = async (over: { hooks?: ObservedHookEvent[]; makers?: string[]; attached?: boolean } = {}) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    clock = 0
+    readers.processes.mockResolvedValue(callers(...over.makers ?? ['wezterm-gui']))
+    const listener = fakeListener()
+    const started = start({ faults: ['fleet'], listen: listener.listen, now: () => clock, orca: apps })
+    for (const event of over.hooks ?? [inWezterm(1)]) started.port.observed(event)
+    // The reads of their terminals' maker land.
+    await settled()
+    if (over.attached !== false) seen.host.watching!(true)
+    started.port.swarms(null)
+    const settle = async (app: string) => {
+      expect(listener.front(app)).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+      await settled()
+    }
+    const next = async (times = 1) => {
+      for (let i = 0; i < times; i++) {
+        await vi.advanceTimersByTimeAsync(FOCUS_POLL_MS)
+        await settled()
+      }
+    }
+    return { ...started, listener, settle, next }
+  }
+
+  describe('its life', () => {
+    it('WezTerm settled with a dial attached and an agent in a WezTerm pane of its own starts one poll', async () => {
+      const { listener, next, settle } = await dialWith()
+      // In front, not yet settled: nothing.
+      expect(listener.front('wezterm')).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS - 1)
+      expect(reads()).toEqual([])
+      await settle('ghostty')
+      await settle('wezterm')
+      expect(reads()).toEqual([LIST_CLIENTS])
+      await next()
+      expect(reads()).toEqual([LIST_CLIENTS, LIST_CLIENTS])
+      expect(polls()).toEqual([STARTED])
+    })
+
+    it.each([
+      ['no dial attached', { attached: false }, 'wezterm'],
+      ['another app settled', {}, 'ghostty'],
+      ['kitty settled, its agents in WezTerm', {}, 'kitty'],
+      // A shell's terminal holding the agent's: WezTerm's pane shows whatever is in front of it.
+      ['only held WezTerm panes', { makers: ['zsh'] }, 'wezterm'],
+    ])('nothing runs with %s', async (_, over, app) => {
+      const { settle, next } = await dialWith(over)
+      await settle(app)
+      await next(3)
+      expect(reads()).toEqual([])
+      expect(polls()).toEqual([])
+    })
+
+    it('another app or none settling stops it with its counts; so do the last dial going and the devices stopping', async () => {
+      const { port, settle, next } = await dialWith()
+      await settle('wezterm')
+      await next()
+      // The third read lands before Ghostty settles.
+      await settle('ghostty')
+      expect(polls()).toEqual([STARTED, stopped(3)])
+      const ran = reads().length
+      await next(4)
+      expect(reads()).toHaveLength(ran)
+      await settle('wezterm')
+      await settle('none')
+      expect(polls()).toEqual([STARTED, stopped(3), STARTED, stopped(2)])
+      await settle('wezterm')
+      seen.host.watching!(false)
+      expect(polls()).toEqual([STARTED, stopped(3), STARTED, stopped(2), STARTED, stopped(1)])
+      seen.host.watching!(true)
+      await settled()
+      await port.stop()
+      expect(polls()).toEqual([STARTED, stopped(3), STARTED, stopped(2), STARTED, stopped(1), STARTED, stopped(1)])
+      const all = reads().length
+      await next(4)
+      expect(reads()).toHaveLength(all)
+    })
+
+    it('the last WezTerm agent going stops it, and one starting while WezTerm is settled with a dial starts it', async () => {
+      const { port, settle, next } = await dialWith()
+      await settle('wezterm')
+      port.observed(inWezterm(1, { event: 'session-end' }))
+      expect(polls()).toEqual([STARTED, stopped(1)])
+      await next(3)
+      expect(reads()).toEqual([LIST_CLIENTS])
+      port.observed(inWezterm(2))
+      // Its terminal's maker read lands: its pane is its own.
+      await settled()
+      expect(polls()).toEqual([STARTED, stopped(1), STARTED])
+      expect(reads()).toEqual([LIST_CLIENTS, LIST_CLIENTS])
+    })
+
+    it('a dial attaching with WezTerm settled starts it', async () => {
+      const { settle } = await dialWith({ attached: false })
+      await settle('wezterm')
+      expect(reads()).toEqual([])
+      seen.host.watching!(true)
+      await settled()
+      expect(reads()).toEqual([LIST_CLIENTS])
+      expect(polls()).toEqual([STARTED])
+    })
+
+    it('a settle of the app whose poll runs keeps that poll', async () => {
+      const { listener, settle, next } = await dialWith()
+      await settle('wezterm')
+      // Ghostty in front for a moment, and WezTerm again before Ghostty settled.
+      expect(listener.front('ghostty')).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS / 2)
+      await settle('wezterm')
+      const ran = reads().length
+      await next()
+      expect(reads()).toHaveLength(ran + 1)
+      expect(polls()).toEqual([STARTED])
+    })
+
+    it('one poll at most: kitty settling stops WezTerm\'s and starts kitty\'s, on the agent\'s socket; WezTerm\'s read under way lands on nothing', async () => {
+      const kitty = await kittyAt()
+      const { settle, next } = await dialWith({ hooks: [inWezterm(1), inKitty(2, kitty.listenOn)], makers: ['wezterm-gui', 'kitty'] })
+      focus.held = true
+      await settle('wezterm')
+      expect(reads()).toEqual([LIST_CLIENTS])
+      await settle('kitty')
+      expect(polls()).toEqual([STARTED, stopped(0), STARTED])
+      expect(reads()).toEqual([LIST_CLIENTS, getColors(kitty.listenOn, 'id:2 and state:focused')])
+      // Its answer is dropped: no WezTerm read follows it, and its poll counted none.
+      for (const land of focus.land) land()
+      await settled()
+      await next(2)
+      expect(reads().filter(([, args]) => args.includes('list-clients'))).toEqual([LIST_CLIENTS])
+      expect(matches()).toEqual(Array(3).fill('id:2 and state:focused'))
+      expect(polls()).toEqual([STARTED, stopped(0), STARTED])
+    })
+
+    it('kitty: a read under way as the poll stops starts no more calls', async () => {
+      const kitty = await kittyAt()
+      const { settle, next } = await dialWith({ hooks: [1, 2, 3].map((n) => inKitty(n, kitty.listenOn)), makers: ['kitty'] })
+      // Focus on a shell: window 1 alone, then the `or` of 2 and 3, would be asked.
+      focus.window = 9
+      focus.heldKitty = true
+      await settle('kitty')
+      await settle('ghostty')
+      expect(polls()).toEqual([STARTED, stopped(0)])
+      for (const land of focus.land) land()
+      await settled()
+      await next(2)
+      expect(matches()).toEqual(['id:1 and state:focused'])
+      expect(logs).not.toContain(REFUSED_LINE)
+    })
+
+    it('three failed reads stop it as failing; an agents\' change or an attach does not start it again; the next settle of WezTerm does', async () => {
+      const { port, settle, next } = await dialWith()
+      focus.pane = undefined
+      await settle('wezterm')
+      await next(2)
+      const FAILING = `${stopped(3, 3)} · failing`
+      expect(polls()).toEqual([STARTED, FAILING])
+      focus.pane = 1
+      port.observed(inWezterm(2))
+      await settled()
+      seen.host.watching!(false)
+      seen.host.watching!(true)
+      await settled()
+      await next(4)
+      expect(reads()).toHaveLength(3)
+      await settle('ghostty')
+      expect(reads()).toHaveLength(3)
+      await settle('wezterm')
+      expect(reads()).toHaveLength(4)
+      expect(polls()).toEqual([STARTED, FAILING, STARTED])
+    })
+
+    it('kitty: the pane found focused last is asked first', async () => {
+      const kitty = await kittyAt()
+      const { settle, next } = await dialWith({ hooks: [1, 2, 3].map((n) => inKitty(n, kitty.listenOn)), makers: ['kitty'] })
+      focus.window = 3
+      await settle('kitty')
+      await next()
+      // The first read asks window 3 alone after the `or`, as focus may have moved; the next asks it first.
+      expect(matches()).toEqual(['id:1 and state:focused', 'state:focused and (id:2 or id:3)', 'id:2 and state:focused',
+        'id:3 and state:focused', 'id:3 and state:focused'])
+    })
+
+    it('kitty: two live agents on one window ask for it once a read', async () => {
+      const kitty = await kittyAt()
+      // An ended session not yet seen as ended holds its window beside the one started there.
+      const hints = { KITTY_WINDOW_ID: '1', KITTY_LISTEN_ON: kitty.listenOn }
+      const { settle, next } = await dialWith({ hooks: [hook(1, hints), hook(2, hints)], makers: ['kitty'] })
+      focus.window = 3
+      await settle('kitty')
+      await next()
+      expect(matches()).toEqual(['id:1 and state:focused', 'id:1 and state:focused'])
+    })
+
+    it('a read\'s panes are the live agents\' own as it starts', async () => {
+      const kitty = await kittyAt()
+      const { port, settle, next } = await dialWith({ hooks: [inKitty(1, kitty.listenOn)], makers: ['kitty'] })
+      await settle('kitty')
+      port.observed(inKitty(2, kitty.listenOn))
+      await settled()
+      focus.window = 2
+      await next()
+      port.observed(inKitty(1, kitty.listenOn, { event: 'session-end' }))
+      await next()
+      expect(matches()).toEqual(['id:1 and state:focused', 'id:1 and state:focused', 'id:2 and state:focused', 'id:2 and state:focused'])
+    })
+
+    it('a kitty that refuses is asked once: no poll stop, one line; a new socket at its path is asked once more', async () => {
+      const kitty = await kittyAt()
+      const { settle, next } = await dialWith({ hooks: [inKitty(1, kitty.listenOn)], makers: ['kitty'] })
+      focus.refused = true
+      await settle('kitty')
+      await next(4)
+      expect(reads()).toEqual([getColors(kitty.listenOn, 'id:1 and state:focused')])
+      expect(logs.filter((line) => line === REFUSED_LINE)).toHaveLength(1)
+      // That kitty gone, and none at its path: not asked.
+      renameSync(kitty.path, `${kitty.path}-old`)
+      await next()
+      expect(reads()).toHaveLength(1)
+      // Another kitty listening there: another socket, whose identity is not the refused one's (that one, moved aside,
+      // keeps its own, so the new socket cannot take it).
+      await kitty.listen()
+      await next(3)
+      expect(reads()).toEqual(Array(2).fill(getColors(kitty.listenOn, 'id:1 and state:focused')))
+      expect(logs.filter((line) => line === REFUSED_LINE)).toHaveLength(2)
+      expect(polls()).toEqual([STARTED])
+    })
+
+    it('with the observed agents off, nothing runs', async () => {
+      const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
+      switched.HARNESS_DEVICE_OBSERVED = false
+      onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
+      const { settle, next } = await dialWith()
+      await settle('wezterm')
+      seen.host.watching!(false)
+      seen.host.watching!(true)
+      await settled()
+      await next(3)
+      expect(reads()).toEqual([])
+      expect(polls()).toEqual([])
+    })
+  })
+
+  describe('following', () => {
+    const agent = (n: number) => observedAgentId('claude', `sess-${n}`)
+    const host = () => seen.dial as unknown as DaemonCableHost
+    const asked = () => calls('followLocal')
+    const paneLines = () => logs.filter((line) => line.startsWith('[device] pane'))
+    const unlinked = (off: boolean) => { (seen.cable as unknown as { connected: boolean }).connected = !off }
+    const ECHO = '[device] pane · skipped · echo'
+    /** Agents in WezTerm's panes 1 to n. */
+    const inPanes = (n: number) => Array.from({ length: n }, (_, at) => inWezterm(at + 1))
+    /** Lands the WezTerm reads held, and what their answers set off. */
+    const land = async () => {
+      for (const landing of focus.land.splice(0)) landing()
+      await settled()
+    }
+
+    it('the first answer is the settle\'s: the focused agent\'s pane turns the dial', async () => {
+      const { settle, next } = await dialWith({ hooks: inPanes(2) })
+      focus.pane = 2
+      await settle('wezterm')
+      expect(asked()).toEqual([[agent(2), 'pane']])
+      // Unchanged since: nothing more.
+      await next(2)
+      expect(asked()).toHaveLength(1)
+      // What the dials make of it is theirs to count.
+      expect(paneLines()).toEqual([])
+      seen.host.localFollowed!('pane', 'moved')
+      seen.host.localFollowed!('pane', 'no-tile')
+      expect(paneLines()).toEqual(['[device] pane · moved', '[device] pane · skipped · no tile'])
+    })
+
+    it('a dial move within ATTACH_ECHO_MS before the first answer sets it aside as echo', async () => {
+      const { settle } = await dialWith({ hooks: inPanes(2) })
+      focus.pane = 2
+      turnTo(agent(1))
+      clock = 1_999
+      await settle('wezterm')
+      expect(paneLines()).toEqual([ECHO])
+      expect(asked()).toEqual([])
+      // WezTerm's next settle starts another poll: its first answer, 2 s after the move, follows.
+      await settle('ghostty')
+      clock = 2_000
+      await settle('wezterm')
+      expect(asked()).toEqual([[agent(2), 'pane']])
+      expect(paneLines()).toEqual([ECHO])
+    })
+
+    it('a poll started at an agents\' change, WezTerm already settled, takes its first answer as the settle', async () => {
+      const { port, settle } = await dialWith({ hooks: [] })
+      focus.pane = 1
+      await settle('wezterm')
+      port.observed(inWezterm(1))
+      await settled()
+      expect(asked()).toEqual([[agent(1), 'pane']])
+    })
+
+    it('a poll a dial\'s attach started, WezTerm already settled, takes its first answer as the settle', async () => {
+      const { settle } = await dialWith({ attached: false })
+      focus.pane = 1
+      await settle('wezterm')
+      seen.host.watching!(true)
+      await settled()
+      expect(asked()).toEqual([[agent(1), 'pane']])
+    })
+
+    it('with no dial linked nothing is followed, and the first answer stays the first until one is read linked', async () => {
+      const { settle, next } = await dialWith({ hooks: inPanes(2) })
+      focus.pane = 2
+      unlinked(true)
+      await settle('wezterm')
+      await next(2)
+      expect(reads()).toHaveLength(3)
+      expect(asked()).toEqual([])
+      expect(paneLines()).toEqual([])
+      // The same answer all along: linked, the next is the first read linked, followed as the settle.
+      unlinked(false)
+      await next()
+      expect(asked()).toEqual([[agent(2), 'pane']])
+    })
+
+    it('a focus change turns the dial; an unchanged answer, a failed read and a pane no agent runs in turn nothing', async () => {
+      const { settle, next } = await dialWith({ hooks: inPanes(2) })
+      focus.pane = 1
+      await settle('wezterm')
+      await next()
+      focus.pane = 2
+      await next()
+      expect(asked()).toEqual([[agent(1), 'pane'], [agent(2), 'pane']])
+      // WezTerm's pane 0, a shell's: no agent runs there.
+      focus.pane = 0
+      await next()
+      // No GUI: the read fails.
+      focus.pane = undefined
+      await next()
+      expect(asked()).toHaveLength(2)
+      expect(paneLines()).toEqual([])
+    })
+
+    it('a failed read between two equal answers turns nothing: the next is compared with the last good one', async () => {
+      const { settle, next } = await dialWith({ hooks: inPanes(2) })
+      focus.pane = 1
+      await settle('wezterm')
+      focus.pane = undefined
+      await next()
+      focus.pane = 1
+      await next(2)
+      expect(asked()).toEqual([[agent(1), 'pane']])
+      expect(polls()).toEqual([STARTED])
+    })
+
+    it('a shell focused, then the same agent\'s pane again, turns the dial again', async () => {
+      const { settle, next } = await dialWith({ hooks: inPanes(2) })
+      focus.pane = 1
+      await settle('wezterm')
+      focus.pane = 0
+      await next()
+      focus.pane = 1
+      await next()
+      expect(asked()).toEqual([[agent(1), 'pane'], [agent(1), 'pane']])
+    })
+
+    it('a hand turn while the focus stays: no read pulls the dial back', async () => {
+      const { settle, next } = await dialWith({ hooks: inPanes(2) })
+      focus.pane = 1
+      await settle('wezterm')
+      turnTo(agent(2))
+      await next(3)
+      expect(asked()).toEqual([[agent(1), 'pane']])
+      expect(paneLines()).toEqual([])
+    })
+
+    it('two kittys: both focused on agents as kitty settles moves nothing; a window changed in one turns the dial to its agent; going from one to the other moves nothing', async () => {
+      const [one, two] = [await kittyAt(), await kittyAt()]
+      const { settle, next } = await dialWith({ hooks: [inKitty(1, one.listenOn), inKitty(2, two.listenOn), inKitty(3, one.listenOn),
+        inKitty(4, two.listenOn)], makers: ['kitty'] })
+      focus.windows.set(one.listenOn, 1).set(two.listenOn, 2)
+      await settle('kitty')
+      await next()
+      expect(asked()).toEqual([])
+      focus.windows.set(one.listenOn, 3)
+      await next()
+      expect(asked()).toEqual([[agent(3), 'pane']])
+      // The person goes to the other kitty's OS window: neither kitty's focused window changes.
+      await next(2)
+      expect(asked()).toHaveLength(1)
+      // The next focus change inside it does.
+      focus.windows.set(two.listenOn, 4)
+      await next()
+      expect(asked()).toEqual([[agent(3), 'pane'], [agent(4), 'pane']])
+      expect(paneLines()).toEqual([])
+    })
+
+    it('not the latest in front: skipped as not in front', async () => {
+      const { listener, settle, next } = await dialWith({ hooks: inPanes(2) })
+      focus.pane = 1
+      await settle('wezterm')
+      // Ghostty told in front, not yet settled: WezTerm's poll still runs.
+      expect(listener.front('ghostty')).toBeUndefined()
+      focus.pane = 2
+      await next()
+      expect(asked()).toEqual([[agent(1), 'pane']])
+      expect(paneLines()).toEqual(['[device] pane · skipped · not in front'])
+      expect(polls()).toEqual([STARTED])
+    })
+
+    it.each(['wezterm', 'kitty'] as const)('%s: the dial\'s tap on a pane, and a hand turn after it, are not pulled back by the read that sees the tap within TAB_ECHO_MS; the person focusing that pane again later turns the dial', async (app) => {
+      const kitty = await kittyAt()
+      const { settle, next } = await dialWith(app === 'wezterm' ? { hooks: inPanes(3) }
+        : { hooks: [1, 2, 3].map((n) => inKitty(n, kitty.listenOn)), makers: ['kitty'] })
+      const focusOn = (n: number) => { if (app === 'wezterm') focus.pane = n; else focus.windows.set(kitty.listenOn, n) }
+      focusOn(1)
+      await settle(app)
+      // The tap's activate-pane or focus-window moves the app's focus to pane 2, and the hand turns on to agent 3.
+      expect(await host().openAgent(agent(2))).toBeUndefined()
+      turnTo(agent(3))
+      clock = 1_999
+      await next()
+      expect(paneLines()).toEqual([ECHO])
+      expect(asked()).toEqual([[agent(1), 'pane']])
+      focusOn(1)
+      await next()
+      focusOn(2)
+      await next()
+      expect(asked()).toEqual([[agent(1), 'pane'], [agent(1), 'pane'], [agent(2), 'pane']])
+      expect(paneLines()).toEqual([ECHO])
+    })
+
+    it.each(['wezterm', 'kitty'] as const)('%s: a tap whose focus ends past TAB_ECHO_MS, a hand turn elsewhere meanwhile: the read after it ends is its echo, and the dial stays', async (app) => {
+      const kitty = await kittyAt()
+      const { settle, next } = await dialWith(app === 'wezterm' ? { hooks: inPanes(3) }
+        : { hooks: [1, 2, 3].map((n) => inKitty(n, kitty.listenOn)), makers: ['kitty'] })
+      if (app === 'wezterm') focus.pane = 1
+      else focus.windows.set(kitty.listenOn, 1)
+      await settle(app)
+      focus.heldTap = true
+      const opened = host().openAgent(agent(2))
+      await vi.waitFor(() => expect(focus.land).toHaveLength(1))
+      turnTo(agent(3))
+      clock = 2_500
+      await land()
+      expect(await opened).toBeUndefined()
+      await next()
+      expect(paneLines()).toEqual([ECHO])
+      expect(asked()).toEqual([[agent(1), 'pane']])
+    })
+
+    it('a dial move while the read ran sets its answer aside as echo', async () => {
+      const { settle, next } = await dialWith({ hooks: inPanes(3) })
+      focus.pane = 1
+      await settle('wezterm')
+      focus.held = true
+      await next()
+      // The read under way finds pane 2 focused, and the dial turns to agent 3 meanwhile: the answer names a pane the
+      // dial has left.
+      focus.pane = 2
+      turnTo(agent(3))
+      await land()
+      expect(paneLines()).toEqual([ECHO])
+      focus.held = false
+      await next(2)
+      expect(asked()).toEqual([[agent(1), 'pane']])
+    })
+
+    it('an agent gone during the read: skipped as unknown agent', async () => {
+      const { port, settle, next } = await dialWith({ hooks: inPanes(2) })
+      focus.pane = 1
+      await settle('wezterm')
+      focus.held = true
+      await next()
+      focus.pane = 2
+      port.observed(inWezterm(2, { event: 'session-end' }))
+      await land()
+      expect(paneLines()).toEqual(['[device] pane · skipped · unknown agent'])
+      expect(asked()).toEqual([[agent(1), 'pane']])
+    })
+
+    it('a prompt typed in a WezTerm pane still turns the dial while the poll runs', async () => {
+      const { port, settle } = await dialWith({ hooks: inPanes(2) })
+      focus.pane = 1
+      await settle('wezterm')
+      port.observed(inWezterm(2, { event: 'turn-start' }))
+      expect(asked()).toEqual([[agent(1), 'pane'], [agent(2), 'prompt']])
+    })
+
+    it('its lines name no pane, socket or agent', async () => {
+      const kitty = await kittyAt()
+      const { listener, settle, next } = await dialWith({ hooks: [inKitty(1, kitty.listenOn), inKitty(2, kitty.listenOn)], makers: ['kitty'] })
+      // The settle's answer just after a turn, the read that sees a tap, and one with Ghostty told in front.
+      turnTo(agent(2))
+      await settle('kitty')
+      await host().openAgent(agent(2))
+      await next()
+      expect(listener.front('ghostty')).toBeUndefined()
+      focus.windows.set(kitty.listenOn, 1)
+      await next()
+      seen.host.watching!(false)
+      seen.host.localFollowed!('pane', 'moved')
+      seen.host.localFollowed!('pane', 'no-tile')
+      const lines = [...polls(), ...paneLines()]
+      expect(lines).toHaveLength(7)
+      for (const line of lines) {
+        expect(line).toMatch(/^\[device\] (pane · (moved|skipped · (no tile|echo|unknown agent|not in front))|focus poll · (started|stopped · \d+ reads, \d+ failed( · failing)?))$/)
+      }
+    })
+  })
+})
+
+describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-11-24-dial-tmux-pane-focus-follow-design.md)', () => {
+  type Run = [string, string[], number]
+  const { listClients } = RECORDED_WEZTERM
+  const { focusedMatch } = RECORDED_KITTY
+  /** The poll's read of tmux: each client's tty and the pane its session shows, with the focus read's timeout. */
+  const READ: Run = ['tmux', ['list-clients', '-F', '#{client_tty}|#{pane_id}'], 2_000]
+  /** WezTerm's one read, with the binary the verbs use (the spec's `onPath`). */
+  const LIST_CLIENTS: Run = ['/opt/orca/bin/orca', ['cli', '--no-auto-start', 'list-clients', '--format', 'json'], 2_000]
+  /** The iTerm2 tab holding the client of the agents' session. */
+  const TMUX_TAB = '/dev/ttys002'
+  /** What the poll's read of tmux prints and its exit code; while `held`, each such read waits until the spec lands it,
+   *  then answers as a run that reached its timeout, or, held as `listing`, as tmuxSays has it then. While `slowSelect`,
+   *  a rest's or a tap's select-window waits until the spec lands it too. With `second`, pane %4's session is shown by a
+   *  client of its own (4310) on that tty. The pane WezTerm's GUI focused: none, no GUI
+   *  (RECORDED_WEZTERM.listClients.noGui). The window kitty focused. */
+  const tmuxSays = { clients: '/dev/ttys002|%3\n', code: 0, held: false as boolean | 'listing', land: [] as Array<() => void>,
+    second: undefined as string | undefined, slowSelect: false }
+  const weztermSays = { pane: 0 as number | undefined }
+  const kittySays = { window: 0 }
+  beforeEach(() => {
+    Object.assign(tmuxSays, { clients: '/dev/ttys002|%3\n', code: 0, held: false, land: [], second: undefined, slowSelect: false })
+    weztermSays.pane = 0
+    kittySays.window = 0
+  })
+  /** On macOS, TMUX_IN_ITERM and a second agent (4243) in pane %4's shell (4001), under the same server. */
+  const IN_ITERM: ProcessRow[] = [...TMUX_IN_ITERM,
+    { pid: 4243, ppid: 4001, tty: 'ttys031', executable: 'claude' }, { pid: 4001, ppid: 3900, tty: 'ttys031', executable: 'zsh' }]
+  /** The same, the client (4300) in a terminal of no listed app. */
+  const IN_NO_APP: ProcessRow[] = IN_ITERM.map((p) => (p.pid === 4300 ? { ...p, ppid: 1 } : p))
+  /** The same, the client's shell (4299) in an Orca terminal. */
+  const IN_ORCA: ProcessRow[] = [...IN_ITERM.map((p) => (p.pid === 4299 ? { ...p, ppid: 4295 } : p)),
+    { pid: 4295, ppid: 1, executable: '/Applications/Orca.app/Contents/MacOS/Orca' }]
+  /** On Linux: sess-1's caller (4242) in WezTerm's pane 1, on a terminal WezTerm's GUI (3800) made, and sess-2's (4243)
+   *  in pane %4's shell (4001) of the person's tmux, whose server made its terminal and whose client (4300) is in another
+   *  WezTerm pane. */
+  const IN_WEZTERM: ProcessRow[] = [
+    { pid: 4242, ppid: 3800, tty: 'pts/1', executable: 'claude' }, { pid: 3800, ppid: 1, executable: 'wezterm-gui' },
+    { pid: 4243, ppid: 4001, tty: 'pts/6', executable: 'claude' }, { pid: 4001, ppid: 3900, tty: 'pts/6', executable: 'zsh' },
+    { pid: 3900, ppid: 1, executable: 'tmux' },
+    { pid: 4300, ppid: 4299, executable: 'tmux' }, { pid: 4299, ppid: 3800, executable: 'zsh' },
+  ]
+  /** The same in kitty: sess-1 in its window 1, the tmux client in another of its windows. */
+  const IN_KITTY: ProcessRow[] = IN_WEZTERM.map((p) => (p.pid === 3800 ? { ...p, executable: 'kitty' } : p))
+  /** On macOS, IN_ITERM and the client of pane %4's session (4310, tmuxSays.second) in another iTerm2 tab. */
+  const IN_TWO_TABS: ProcessRow[] = [...IN_ITERM,
+    { pid: 4310, ppid: 4309, executable: 'tmux' }, { pid: 4309, ppid: 4308, executable: '-zsh' }, { pid: 4308, ppid: 4297, executable: 'login' }]
+  /** On Linux, both agents in the person's tmux, as on macOS, its clients each in a Ghostty window: pane %3's session's
+   *  (4300) and pane %4's (4310, tmuxSays.second). */
+  const IN_GHOSTTY: ProcessRow[] = [
+    { pid: 4242, ppid: 4000, tty: 'pts/5', executable: 'claude' }, { pid: 4000, ppid: 3900, tty: 'pts/5', executable: 'zsh' },
+    { pid: 4243, ppid: 4001, tty: 'pts/6', executable: 'claude' }, { pid: 4001, ppid: 3900, tty: 'pts/6', executable: 'zsh' },
+    { pid: 3900, ppid: 1, executable: 'tmux' }, { pid: 3800, ppid: 1, executable: 'ghostty' },
+    { pid: 4300, ppid: 4299, executable: 'tmux' }, { pid: 4299, ppid: 3800, executable: 'zsh' },
+    { pid: 4310, ppid: 4309, executable: 'tmux' }, { pid: 4309, ppid: 3800, executable: 'zsh' },
+  ]
+  /** The devices' runs, recorded: tmux's facts of panes %3 and %4 (their shells 4000 and 4001, in session `work`, on
+   *  ttys030 and ttys031), their session's one client (4300) on [clientTty], and its clients' listing as tmuxSays has it,
+   *  whose pane on [clientTty] a rest's or a tap's select makes the one selected; WezTerm's clients as recorded, focused
+   *  on weztermSays.pane; kitty's `get-colors` as recorded, its window kittySays.window focused. */
+  const runOn = (clientTty: string) => async (file: string, args: string[], timeoutMs: number) => {
+    orcaRuns.push([file, args, timeoutMs])
+    if (file === 'tmux' && args[0] === 'display-message') return { code: 0, stdout: args.includes('%4') ? '4001|work|\n' : '4000|work|\n' }
+    if (file === 'tmux' && args[0] === 'list-panes') return { code: 0, stdout: '%3|/dev/ttys030|4000|work|\n%4|/dev/ttys031|4001|work|\n' }
+    if (file === 'tmux' && args[0] === 'select-window') {
+      if (tmuxSays.slowSelect) await new Promise<void>((resolve) => { tmuxSays.land.push(resolve) })
+      tmuxSays.clients = `${clientTty}|${args.at(-1)}\n`
+      return { code: 0, stdout: '' }
+    }
+    if (file === 'tmux' && args[1] === '-t') {
+      return { code: 0, stdout: tmuxSays.second !== undefined && args.includes('%4') ? `1794700050|4310|${tmuxSays.second}\n` : `1794700050|4300|${clientTty}\n` }
+    }
+    if (file === 'tmux' && args[0] === 'list-clients') {
+      if (!tmuxSays.held) return { code: tmuxSays.code, stdout: tmuxSays.clients }
+      const listing = tmuxSays.held === 'listing'
+      await new Promise<void>((resolve) => { tmuxSays.land.push(resolve) })
+      return listing ? { code: tmuxSays.code, stdout: tmuxSays.clients } : { code: null, stdout: '' }
+    }
+    if (args[3] === 'get-colors') {
+      return args[5] === `id:${kittySays.window} and state:focused`
+        ? { code: focusedMatch.focused.code, stdout: `${focusedMatch.focused.stdoutFirstLine}\n`, stderr: '' }
+        : { code: focusedMatch.notFocused.code, stdout: '', stderr: `Error: No matching windows for expression: ${args[5]}\n` }
+    }
+    if (!args.includes('list-clients')) return { code: 0, stdout: '' }
+    if (weztermSays.pane === undefined) return { code: listClients.noGui.exitCode, stdout: '', stderr: listClients.noGui.stderr }
+    const clients = (JSON.parse(listClients.gui.stdout) as object[]).map((client) => ({ ...client, focused_pane_id: weztermSays.pane }))
+    return { code: listClients.gui.exitCode, stdout: JSON.stringify(clients), stderr: '' }
+  }
+  /** Claude Code in session n, its caller 4241 + n, as its hook says with [hints]. */
+  const hook = (n: number, hints: Record<string, string>, over: Partial<ObservedHookEvent> = {}): ObservedHookEvent => ({
+    engine: 'claude', sessionId: `sess-${n}`, event: 'session-start', cwd: '/work/api', callerPid: 4241 + n,
+    transcriptPath: `/t/sess-${n}.jsonl`, hostHints: hints, ...over,
+  })
+  /** In the person's tmux, pane %(n + 2). */
+  const inTmux = (n: number, over: Partial<ObservedHookEvent> = {}) => hook(n, { TMUX_PANE: `%${n + 2}`, TERM_PROGRAM: 'tmux' }, over)
+  /** In WezTerm's pane n. */
+  const inWezterm = (n: number) => hook(n, { WEZTERM_PANE: String(n), TERM_PROGRAM: 'WezTerm' })
+  /** In kitty's window n, its socket Linux's abstract one. */
+  const inKitty = (n: number) => hook(n, { KITTY_WINDOW_ID: String(n), KITTY_LISTEN_ON: 'unix:@kitty-1' })
+  const agent = (n: number) => observedAgentId('claude', `sess-${n}`)
+  /** The poll's reads, WezTerm's and tmux's: not a tmux lookup's `list-clients -t`. */
+  const reads = () => orcaRuns.filter(([, args]) => args.includes('list-clients') && !args.includes('-t'))
+  const tmuxReads = () => reads().filter(([file]) => file === 'tmux')
+  const polls = () => logs.filter((line) => line.startsWith('[device] focus poll'))
+  const STARTED = '[device] focus poll · started'
+  const stopped = (reads: number, failed = 0) => `[device] focus poll · stopped · ${reads} reads, ${failed} failed`
+  let clock = 0
+  /** Lets what a landing sets off run. */
+  const settled = () => new Promise((resolve) => setImmediate(resolve))
+  /** The devices on macOS, or on Linux, the processes [rows] (IN_ITERM, or IN_WEZTERM), the agents of [hooks] (sess-1 and
+   *  sess-2 in tmux, or on Linux sess-1 in WezTerm and sess-2 in tmux) with each tmux agent's client lookup landed, no
+   *  window, a dial attached unless `attached` is false, no app settled in front, and the devices' monotonic clock at 0.
+   *  `settle` keeps an app in front for the settle; `next` lets FOCUS_POLL_MS pass, [times] over, each read landing;
+   *  `report` is a tab line through the listener's handler. The timers are held; `setImmediate` is left to let a landing
+   *  run. */
+  const dialWith = async (over: { linux?: boolean; rows?: ProcessRow[]; hooks?: ObservedHookEvent[]; attached?: boolean; observed?: boolean } = {}) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    clock = 0
+    if (over.observed === false) {
+      const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
+      switched.HARNESS_DEVICE_OBSERVED = false
+      onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
+    }
+    readers.processes.mockResolvedValue(over.rows ?? (over.linux ? IN_WEZTERM : IN_ITERM))
+    readers.bundleId.mockImplementation(async (bundle) => (bundle === '/Applications/Orca.app' ? 'com.stablyai.orca' : undefined))
+    const listener = fakeListener()
+    const started = start({ faults: ['fleet'], listen: listener.listen, now: () => clock, tty: async () => undefined,
+      orca: { ...orca, platform: over.linux ? 'linux' : 'darwin', run: runOn(over.linux ? '/dev/pts/4' : '/dev/ttys002') } })
+    const hooks = over.hooks ?? (over.linux ? [inWezterm(1), inTmux(2)] : [inTmux(1), inTmux(2)])
+    for (const event of hooks) started.port.observed(event)
+    const lookups = over.observed === false ? 0 : hooks.filter(({ hostHints }) => hostHints?.TMUX_PANE).length
+    await vi.waitFor(() => expect(logs.filter((line) => line.startsWith('[device] tmux client ·'))).toHaveLength(lookups))
+    // The reads of their terminals' maker land.
+    await settled()
+    if (over.attached !== false) seen.host.watching!(true)
+    started.port.swarms(null)
+    const settle = async (app: string) => {
+      expect(listener.front(app)).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+      await settled()
+    }
+    const next = async (times = 1) => {
+      for (let i = 0; i < times; i++) {
+        await vi.advanceTimersByTimeAsync(FOCUS_POLL_MS)
+        await settled()
+      }
+    }
+    const report = (app: string, tty: string): unknown =>
+      (listener.given[0].handlers.tab as ListenerHandler).handle({ type: 'tab', app, tty }, new AbortController().signal)
+    return { ...started, listener, settle, next, report }
+  }
+
+  describe('tmux: its life', () => {
+    it('iTerm2 settled with a dial attached and an agent in a tmux pane whose client iTerm2 holds starts one poll', async () => {
+      const { listener, next, report } = await dialWith()
+      report('iterm', TMUX_TAB)
+      // In front, not yet settled: nothing.
+      expect(listener.front('iterm')).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS - 1)
+      expect(reads()).toEqual([])
+      await vi.advanceTimersByTimeAsync(1)
+      await settled()
+      expect(reads()).toEqual([READ])
+      await next()
+      expect(reads()).toEqual([READ, READ])
+      expect(polls()).toEqual([STARTED])
+    })
+
+    it('iTerm2 settled on a tab that holds no tmux client: tmux is asked nothing until that tab is reported', async () => {
+      const { report, settle, next } = await dialWith()
+      await settle('iterm')
+      report('iterm', '/dev/ttys001')
+      await next(2)
+      expect(reads()).toEqual([])
+      expect(polls()).toEqual([STARTED])
+      report('iterm', TMUX_TAB)
+      await next()
+      expect(reads()).toEqual([READ])
+    })
+
+    it.each([
+      ['no dial attached', { attached: false }, 'iterm'],
+      ['another app settled', {}, 'ghostty'],
+      ['a pane whose client is in no listed app', { rows: IN_NO_APP }, 'iterm'],
+      // Its page is Orca's, whose own focus covers it (the spec's Out of scope).
+      ['an agent in tmux inside an Orca terminal with Orca settled', { rows: IN_ORCA }, 'orca'],
+      ['the observed agents off', { observed: false }, 'iterm'],
+    ])('nothing runs with %s', async (_, over, app) => {
+      const { report, settle, next } = await dialWith(over)
+      report('iterm', TMUX_TAB)
+      await settle(app)
+      await next(3)
+      expect(reads()).toEqual([])
+      expect(polls()).toEqual([])
+    })
+
+    it('another app settling, the last such agent ending, the last dial going and the devices stopping each stop it with its counts, and nothing runs after', async () => {
+      const { port, report, settle, next } = await dialWith({ hooks: [inTmux(1)] })
+      report('iterm', TMUX_TAB)
+      await settle('iterm')
+      await next()
+      // The third read lands before Ghostty settles.
+      await settle('ghostty')
+      expect(polls()).toEqual([STARTED, stopped(3)])
+      const ran = reads().length
+      await next(4)
+      expect(reads()).toHaveLength(ran)
+      report('iterm', TMUX_TAB)
+      await settle('iterm')
+      seen.host.watching!(false)
+      expect(polls()).toEqual([STARTED, stopped(3), STARTED, stopped(1)])
+      seen.host.watching!(true)
+      await settled()
+      port.observed(inTmux(1, { event: 'session-end' }))
+      expect(polls()).toEqual([STARTED, stopped(3), STARTED, stopped(1), STARTED, stopped(1)])
+      // Another agent in tmux, its client in iTerm2: its lookup lands.
+      port.observed(inTmux(2))
+      await settled()
+      expect(polls()).toEqual([STARTED, stopped(3), STARTED, stopped(1), STARTED, stopped(1), STARTED])
+      await port.stop()
+      expect(polls()).toEqual([STARTED, stopped(3), STARTED, stopped(1), STARTED, stopped(1), STARTED, stopped(1)])
+      const all = reads().length
+      await next(4)
+      expect(reads()).toHaveLength(all)
+    })
+
+    it('a dial attaching, and such an agent starting, with iTerm2 settled each start it', async () => {
+      const { port, report, settle } = await dialWith({ hooks: [], attached: false })
+      report('iterm', TMUX_TAB)
+      await settle('iterm')
+      seen.host.watching!(true)
+      await settled()
+      expect(polls()).toEqual([])
+      port.observed(inTmux(1))
+      await settled()
+      expect(polls()).toEqual([STARTED])
+      expect(reads()).toEqual([READ])
+      seen.host.watching!(false)
+      seen.host.watching!(true)
+      await settled()
+      expect(polls()).toEqual([STARTED, stopped(1), STARTED])
+      expect(reads()).toEqual([READ, READ])
+    })
+
+    it('WezTerm settled with an agent of its own, then an agent in tmux inside a WezTerm pane starts: the poll stops and starts with both places, and each read asks both', async () => {
+      const { port, settle, next } = await dialWith({ linux: true, hooks: [inWezterm(1)] })
+      await settle('wezterm')
+      expect(reads()).toEqual([LIST_CLIENTS])
+      port.observed(inTmux(2))
+      await settled()
+      expect(polls()).toEqual([STARTED, stopped(1), STARTED])
+      await next()
+      expect(reads().filter(([file]) => file !== 'tmux')).toEqual(Array(3).fill(LIST_CLIENTS))
+      expect(tmuxReads()).toEqual([READ, READ])
+    })
+
+    it('a tmux read that fails beside WezTerm\'s good one is no failed read', async () => {
+      const { settle, next } = await dialWith({ linux: true })
+      tmuxSays.code = 1
+      await settle('wezterm')
+      await next(4)
+      // Failed FOCUS_FAILS_MAX times in a row, tmux is asked no more, and WezTerm still is.
+      expect(tmuxReads()).toHaveLength(FOCUS_FAILS_MAX)
+      expect(reads().filter(([file]) => file !== 'tmux')).toHaveLength(5)
+      expect(polls()).toEqual([STARTED])
+      // The person focuses the agent's WezTerm pane.
+      weztermSays.pane = 1
+      await next()
+      expect(calls('followLocal')).toEqual([[agent(1), 'pane']])
+      expect(logs).not.toContain('[device] app filter: switched · follow')
+      seen.host.watching!(false)
+      expect(polls()).toEqual([STARTED, stopped(6)])
+    })
+
+    it('tmux, asked no more after FOCUS_FAILS_MAX failed reads in a row, is asked again from the next settle', async () => {
+      const { settle, next } = await dialWith({ linux: true })
+      tmuxSays.code = 1
+      await settle('wezterm')
+      await next(2)
+      tmuxSays.code = 0
+      await next(2)
+      expect(tmuxReads()).toHaveLength(FOCUS_FAILS_MAX)
+      await settle('ghostty')
+      await settle('wezterm')
+      expect(tmuxReads()).toHaveLength(FOCUS_FAILS_MAX + 1)
+    })
+
+    it('a tmux read under way as its poll stops, failing after the next settle, counts toward no FOCUS_FAILS_MAX', async () => {
+      const { settle, next } = await dialWith({ linux: true })
+      tmuxSays.held = true
+      await settle('wezterm')
+      await settle('ghostty')
+      tmuxSays.held = false
+      tmuxSays.code = 1
+      await settle('wezterm')
+      // The first poll's read reaches its timeout after the second poll's first read failed.
+      for (const land of tmuxSays.land.splice(0)) land()
+      await settled()
+      await next(3)
+      // The first poll's read, then the second poll's FOCUS_FAILS_MAX.
+      expect(tmuxReads()).toHaveLength(1 + FOCUS_FAILS_MAX)
+    })
+
+    it('tmux held to the end of its read while WezTerm answers: WezTerm\'s focus change turns the dial when the read ends, and no failure is counted', async () => {
+      const { settle, next } = await dialWith({ linux: true })
+      await settle('wezterm')
+      tmuxSays.held = true
+      weztermSays.pane = 1
+      await next()
+      // WezTerm answered; tmux's listing runs until its timeout.
+      expect(reads().filter(([file]) => file !== 'tmux')).toHaveLength(2)
+      expect(tmuxSays.land).toHaveLength(1)
+      expect(calls('followLocal')).toEqual([])
+      for (const land of tmuxSays.land.splice(0)) land()
+      await settled()
+      expect(calls('followLocal')).toEqual([[agent(1), 'pane']])
+      seen.host.watching!(false)
+      expect(polls()).toEqual([STARTED, stopped(2)])
+    })
+
+    it('WezTerm\'s read failing while tmux\'s lands is no failed read either', async () => {
+      const { settle, next } = await dialWith({ linux: true })
+      weztermSays.pane = 1
+      await settle('wezterm')
+      expect(calls('followLocal')).toEqual([[agent(1), 'pane']])
+      // No GUI for four reads, then the same pane: WezTerm's place kept its last answer, so nothing changed.
+      weztermSays.pane = undefined
+      await next(4)
+      weztermSays.pane = 1
+      await next()
+      expect(calls('followLocal')).toHaveLength(1)
+      seen.host.watching!(false)
+      expect(polls()).toEqual([STARTED, stopped(6)])
+    })
+
+    it('tmux the only place: three failed reads stop it as failing, an agents\' change does not start it again, the next settle does', async () => {
+      const { port, report, settle, next } = await dialWith()
+      tmuxSays.code = 1
+      report('iterm', TMUX_TAB)
+      await settle('iterm')
+      await next(2)
+      const FAILING = `${stopped(3, 3)} · failing`
+      expect(polls()).toEqual([STARTED, FAILING])
+      tmuxSays.code = 0
+      port.observed(inTmux(2, { event: 'session-end' }))
+      await settled()
+      await next(4)
+      expect(reads()).toHaveLength(3)
+      await settle('ghostty')
+      expect(reads()).toHaveLength(3)
+      report('iterm', TMUX_TAB)
+      await settle('iterm')
+      expect(reads()).toHaveLength(4)
+      expect(polls()).toEqual([STARTED, FAILING, STARTED])
+    })
+
+    it('its lines name no pane, tty or agent', async () => {
+      const { report, settle, next } = await dialWith()
+      report('iterm', TMUX_TAB)
+      await settle('iterm')
+      await next()
+      await settle('ghostty')
+      tmuxSays.code = 1
+      report('iterm', TMUX_TAB)
+      await settle('iterm')
+      await next(2)
+      const lines = polls()
+      expect(lines).toHaveLength(4)
+      for (const line of lines) expect(line).toMatch(/^\[device\] focus poll · (started|stopped · \d+ reads, \d+ failed( · failing)?)$/)
+    })
+  })
+
+  describe('tmux: following', () => {
+    const host = () => seen.dial as unknown as DaemonCableHost
+    const asked = () => calls('followLocal')
+    /** The dials asked to follow a pane's agent: what a tab report asks is the tab follow's. */
+    const paneAsked = () => asked().filter(([, cause]) => cause === 'pane')
+    const paneLines = () => logs.filter((line) => line.startsWith('[device] pane'))
+    const switches = () => logs.filter((line) => line.startsWith('[device] app filter: switched ·'))
+    const shown = async () => (await host().listAgentSnapshot({ apps: true })).apps?.shown
+    const unlinked = (off: boolean) => { (seen.cable as unknown as { connected: boolean }).connected = !off }
+    const ECHO = '[device] pane · skipped · echo'
+    /** That client's session shows pane %n. */
+    const onPane = (n: number) => { tmuxSays.clients = `${TMUX_TAB}|%${n}\n` }
+    /** Lands the tmux reads held, and what their answers set off. */
+    const land = async () => {
+      for (const landing of tmuxSays.land.splice(0)) landing()
+      await settled()
+    }
+
+    it('iTerm2 settled and its tmux tab reported: the person moves to the other pane, and the dials follow its agent on tmux\'s page', async () => {
+      const { report, settle, next } = await dialWith()
+      await settle('iterm')
+      report('iterm', TMUX_TAB)
+      await next()
+      onPane(4)
+      await next()
+      expect(asked().at(-1)).toEqual([agent(2), 'pane'])
+      expect(await shown()).toBe('tmux')
+    })
+
+    it('a tab app that reported no tab: nothing moves, until it reports one', async () => {
+      const { report, settle, next } = await dialWith()
+      await settle('iterm')
+      onPane(4)
+      await next()
+      onPane(3)
+      await next()
+      expect(asked()).toEqual([])
+      report('iterm', TMUX_TAB)
+      await next()
+      expect(paneAsked()).toEqual([[agent(1), 'pane']])
+    })
+
+    it('a plain tab reported: a pane change in the tmux session moves nothing', async () => {
+      const { report, settle, next } = await dialWith()
+      report('iterm', '/dev/ttys001')
+      await settle('iterm')
+      onPane(4)
+      await next()
+      expect(asked()).toEqual([])
+      // The tmux client's tab: followed from there.
+      report('iterm', TMUX_TAB)
+      await next()
+      expect(paneAsked()).toEqual([[agent(2), 'pane']])
+    })
+
+    it('two tmux clients in two iTerm2 tabs: only the reported tab\'s client counts', async () => {
+      tmuxSays.second = '/dev/ttys003'
+      tmuxSays.clients = `${TMUX_TAB}|%3\n/dev/ttys003|%4\n`
+      const { report, settle, next } = await dialWith({ rows: IN_TWO_TABS })
+      report('iterm', TMUX_TAB)
+      await settle('iterm')
+      expect(paneAsked()).toEqual([[agent(1), 'pane']])
+      // The pane changes in the other tab's session (another client, a script): nothing moves.
+      tmuxSays.clients = `${TMUX_TAB}|%3\n/dev/ttys003|%5\n`
+      await next()
+      tmuxSays.clients = `${TMUX_TAB}|%3\n/dev/ttys003|%4\n`
+      await next()
+      expect(paneAsked()).toHaveLength(1)
+      // The person selects that tab: its client is the one now.
+      report('iterm', '/dev/ttys003')
+      await next()
+      expect(paneAsked()).toEqual([[agent(1), 'pane'], [agent(2), 'pane']])
+    })
+
+    it('on Linux, with no tab reports, the one client of the front app that shows an agent\'s session is followed, on tmux\'s page', async () => {
+      tmuxSays.clients = '/dev/pts/4|%4\n'
+      const { settle } = await dialWith({ linux: true })
+      // WezTerm's own agent's page is the one its settle shows.
+      await settle('wezterm')
+      expect(asked()).toEqual([[agent(2), 'pane']])
+      expect(await shown()).toBe('tmux')
+      expect(switches().at(-1)).toBe('[device] app filter: switched · follow')
+    })
+
+    // The PM's decision (2026-11-24, the spec's "Following"): the app's own agent is not on the page a tmux follow holds.
+    it.each<[string, string, string, string, ProcessRow[], ObservedHookEvent, (on: number) => void]>([
+      ['WezTerm', 'WezTerm pane', 'WezTerm', 'wezterm', IN_WEZTERM, inWezterm(1), (on) => { weztermSays.pane = on }],
+      ['kitty', 'kitty window', 'kitty', 'kitty', IN_KITTY, inKitty(1), (on) => { kittySays.window = on }],
+    ])('on Linux, %s in front with tmux in one of its panes: a tmux follow holds tmux\'s page, then a %s\'s agent is followed and the dials turn to %s\'s page', async (_, __, ___, app, rows, own, focusOn) => {
+      tmuxSays.clients = '/dev/pts/4|%4\n'
+      const { settle, next } = await dialWith({ linux: true, rows, hooks: [own, inTmux(2)] })
+      await settle(app)
+      expect(asked()).toEqual([[agent(2), 'pane']])
+      expect(await shown()).toBe('tmux')
+      focusOn(1)
+      await next()
+      expect(asked()).toEqual([[agent(2), 'pane'], [agent(1), 'pane']])
+      expect(await shown()).toBe(app)
+    })
+
+    it.each<[string, string, ProcessRow[], ObservedHookEvent, (on: number) => void]>([
+      ['WezTerm', 'wezterm', IN_WEZTERM, inWezterm(1), (on) => { weztermSays.pane = on }],
+      ['kitty', 'kitty', IN_KITTY, inKitty(1), (on) => { kittySays.window = on }],
+    ])('on Linux, %s in front on its own agent\'s pane: tmux\'s pane changing in another of its panes moves nothing', async (_, app, rows, own, focusOn) => {
+      tmuxSays.clients = '/dev/pts/4|%3\n'
+      focusOn(1)
+      const { settle, next } = await dialWith({ linux: true, rows, hooks: [own, inTmux(2)] })
+      await settle(app)
+      expect(asked()).toEqual([[agent(1), 'pane']])
+      // A script, or the person in another tab, changes the session's pane: the tmux client's pane is not the one in front.
+      tmuxSays.clients = '/dev/pts/4|%4\n'
+      await next()
+      expect(asked()).toEqual([[agent(1), 'pane']])
+      expect(paneLines()).toEqual(['[device] pane · skipped · not in front'])
+    })
+
+    it('on Linux, where Ghostty tells no tab: two of its clients that show agents\' sessions move nothing, and the one left is followed', async () => {
+      tmuxSays.second = '/dev/pts/7'
+      tmuxSays.clients = '/dev/pts/4|%3\n/dev/pts/7|%4\n'
+      const { settle, next } = await dialWith({ linux: true, rows: IN_GHOSTTY, hooks: [inTmux(1), inTmux(2)] })
+      await settle('ghostty')
+      tmuxSays.clients = '/dev/pts/4|%5\n/dev/pts/7|%4\n'
+      await next()
+      expect(asked()).toEqual([])
+      // The client on /dev/pts/7 detached.
+      tmuxSays.clients = '/dev/pts/4|%3\n'
+      await next()
+      expect(asked()).toEqual([[agent(1), 'pane']])
+    })
+
+    it('a pane no agent runs in moves nothing, and coming back to the agent\'s pane turns the dial again', async () => {
+      const { report, settle, next } = await dialWith()
+      report('iterm', TMUX_TAB)
+      await settle('iterm')
+      onPane(5)
+      await next()
+      onPane(3)
+      await next()
+      expect(paneAsked()).toEqual([[agent(1), 'pane'], [agent(1), 'pane']])
+      expect(paneLines()).toEqual([])
+    })
+
+    it('the same %N under another client\'s tty moves nothing', async () => {
+      const { report, settle, next } = await dialWith()
+      // The reported tab's client shows a pane %3 that is not the agent's: its %3 is shown on its own client's tab.
+      tmuxSays.clients = `${TMUX_TAB}|%4\n/dev/ttys003|%3\n`
+      report('iterm', '/dev/ttys003')
+      await settle('iterm')
+      await next()
+      expect(paneAsked()).toEqual([])
+      report('iterm', TMUX_TAB)
+      await next()
+      expect(paneAsked()).toEqual([[agent(2), 'pane']])
+    })
+
+    it('two live agents at the front client\'s pane move nothing', async () => {
+      // sess-2's caller (4243) in pane %3's shell too: an ended session not yet seen as ended beside its successor.
+      const rows = IN_ITERM.map((p) => (p.pid === 4243 ? { ...p, ppid: 4000, tty: 'ttys030' } : p))
+      const both = hook(2, { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux' })
+      const { port, report, settle, next } = await dialWith({ rows, hooks: [inTmux(1), both] })
+      report('iterm', TMUX_TAB)
+      await settle('iterm')
+      await next()
+      expect(paneAsked()).toEqual([])
+      // The ended one seen as ended: the other is the one there.
+      port.observed({ ...both, event: 'session-end' })
+      await next()
+      expect(paneAsked()).toEqual([[agent(1), 'pane']])
+    })
+
+    it.each(['rest', 'tap'] as const)('the dial\'s own %s on a tmux agent: the read that sees its pane is its echo within TAB_ECHO_MS, and the person moving there again later turns the dial', async (move) => {
+      const { report, settle, next } = await dialWith()
+      report('iterm', TMUX_TAB)
+      await settle('iterm')
+      expect(paneAsked()).toEqual([[agent(1), 'pane']])
+      // Its select makes pane %4 the session's selected one.
+      if (move === 'rest') host().swipeEnded(agent(2), 'rest')
+      else expect(await host().openAgent(agent(2))).toBeUndefined()
+      await settled()
+      expect(tmuxSays.clients).toBe(`${TMUX_TAB}|%4\n`)
+      clock = 1_999
+      await next()
+      expect(paneLines()).toEqual([ECHO])
+      onPane(3)
+      await next()
+      onPane(4)
+      await next()
+      expect(paneAsked()).toEqual([[agent(1), 'pane'], [agent(1), 'pane'], [agent(2), 'pane']])
+      expect(paneLines()).toEqual([ECHO])
+    })
+
+    it('a rest on one agent, then a hand turn elsewhere before a read sees the pane: the dial stays', async () => {
+      const { report, settle, next } = await dialWith()
+      report('iterm', TMUX_TAB)
+      await settle('iterm')
+      host().swipeEnded(agent(2), 'rest')
+      await settled()
+      expect(logs).toContain('[device] swipe · ok')
+      turnTo(agent(1))
+      await next()
+      expect(paneLines()).toEqual([ECHO])
+      expect(paneAsked()).toEqual([[agent(1), 'pane']])
+    })
+
+    it('a rest whose select ends past TAB_ECHO_MS, a hand turn elsewhere meanwhile: the read after it ends is its echo, and the dial stays', async () => {
+      const { report, settle, next } = await dialWith()
+      report('iterm', TMUX_TAB)
+      await settle('iterm')
+      tmuxSays.slowSelect = true
+      host().swipeEnded(agent(2), 'rest')
+      await settled()
+      turnTo(agent(1))
+      clock = 2_500
+      await land()
+      expect(tmuxSays.clients).toBe(`${TMUX_TAB}|%4\n`)
+      await next()
+      expect(paneLines()).toEqual([ECHO])
+      expect(paneAsked()).toEqual([[agent(1), 'pane']])
+    })
+
+    it('a hand turn while the pane stays: no read pulls the dial back', async () => {
+      const { report, settle, next } = await dialWith()
+      report('iterm', TMUX_TAB)
+      await settle('iterm')
+      turnTo(agent(2))
+      await next(3)
+      expect(paneAsked()).toEqual([[agent(1), 'pane']])
+      expect(paneLines()).toEqual([])
+    })
+
+    it('on Linux, a hand turn after WezTerm\'s agent was followed, then an agent in tmux starting in WezTerm: the poll starts again from what it found, and the dial stays', async () => {
+      weztermSays.pane = 1
+      // sess-3's caller (4244) in WezTerm's pane 3.
+      const rows: ProcessRow[] = [...IN_WEZTERM, { pid: 4244, ppid: 3800, tty: 'pts/3', executable: 'claude' }]
+      const { port, settle, next } = await dialWith({ linux: true, rows, hooks: [inWezterm(1), inWezterm(3)] })
+      await settle('wezterm')
+      expect(paneAsked()).toEqual([[agent(1), 'pane']])
+      turnTo(agent(3))
+      clock = 5_000
+      port.observed(inTmux(2))
+      await settled()
+      await next()
+      expect(polls()).toEqual([STARTED, stopped(1), STARTED])
+      expect(paneAsked()).toEqual([[agent(1), 'pane']])
+      expect(paneLines()).toEqual([])
+    })
+
+    it('on Linux, a rest on an agent in tmux inside WezTerm, then WezTerm\'s own agent ending: the poll starts again with the rest noted, so the read that sees its pane is its echo', async () => {
+      tmuxSays.clients = '/dev/pts/4|%3\n'
+      const { port, settle } = await dialWith({ linux: true })
+      await settle('wezterm')
+      host().swipeEnded(agent(2), 'rest')
+      await settled()
+      expect(tmuxSays.clients).toBe('/dev/pts/4|%4\n')
+      port.observed({ ...inWezterm(1), event: 'session-end' })
+      await settled()
+      expect(polls()).toEqual([STARTED, stopped(1), STARTED])
+      expect(paneLines()).toEqual([ECHO])
+      expect(paneAsked()).toEqual([])
+    })
+
+    it('the first answer after the poll starts is the settle\'s: followed, unless the dial moved within ATTACH_ECHO_MS', async () => {
+      const { report, settle } = await dialWith()
+      onPane(4)
+      turnTo(agent(1))
+      clock = 1_999
+      report('iterm', TMUX_TAB)
+      await settle('iterm')
+      expect(paneLines()).toEqual([ECHO])
+      expect(paneAsked()).toEqual([])
+      // iTerm2's next settle starts another poll, its tab reported again: its first answer, 2 s after the move, follows.
+      await settle('ghostty')
+      clock = 2_000
+      report('iterm', TMUX_TAB)
+      await settle('iterm')
+      expect(paneAsked()).toEqual([[agent(2), 'pane']])
+      expect(paneLines()).toEqual([ECHO])
+    })
+
+    it('an agent the scan placed at its tmux pane, with no hook yet, is followed', async () => {
+      // sess-2 found by the attach scan, idle, its owner 4243: no hook has named its pane.
+      readers.known.set('sess-2', 'terminal')
+      readers.owners.set('sess-2', { engine: 'claude', pid: 4243 })
+      readers.rows.set('sess-2', { cwd: '/work/api', transcriptPath: null })
+      readers.working.set('sess-2', false)
+      const { report, settle, next } = await dialWith({ hooks: [inTmux(1)] })
+      await vi.waitFor(() => expect(logs).toContainEqual(expect.stringMatching(/^\[observed\] scan · .* · 1 nested placed$/)))
+      report('iterm', TMUX_TAB)
+      await settle('iterm')
+      onPane(4)
+      await next()
+      expect(paneAsked()).toEqual([[agent(1), 'pane'], [agent(2), 'pane']])
+    })
+
+    it.each(['ghostty', 'none'])('%s settling drops the tab iTerm2 reported: back in iTerm2 nothing moves until it reports again', async (app) => {
+      const { report, settle, next } = await dialWith()
+      report('iterm', TMUX_TAB)
+      await settle('iterm')
+      expect(paneAsked()).toEqual([[agent(1), 'pane']])
+      await settle(app)
+      await settle('iterm')
+      onPane(4)
+      await next(2)
+      expect(paneAsked()).toHaveLength(1)
+      report('iterm', TMUX_TAB)
+      await next()
+      expect(paneAsked()).toEqual([[agent(1), 'pane'], [agent(2), 'pane']])
+    })
+
+    it('not the latest in front: skipped as not in front', async () => {
+      const { listener, report, settle, next } = await dialWith()
+      report('iterm', TMUX_TAB)
+      await settle('iterm')
+      // Ghostty told in front, not yet settled: iTerm2's poll still runs.
+      expect(listener.front('ghostty')).toBeUndefined()
+      onPane(4)
+      await next()
+      expect(paneAsked()).toEqual([[agent(1), 'pane']])
+      expect(paneLines()).toEqual(['[device] pane · skipped · not in front'])
+    })
+
+    it('an agent gone during the read: skipped as unknown agent', async () => {
+      const { port, report, settle, next } = await dialWith()
+      report('iterm', TMUX_TAB)
+      await settle('iterm')
+      tmuxSays.held = 'listing'
+      onPane(4)
+      await next()
+      port.observed(inTmux(2, { event: 'session-end' }))
+      await land()
+      expect(paneLines()).toEqual(['[device] pane · skipped · unknown agent'])
+      expect(paneAsked()).toEqual([[agent(1), 'pane']])
+    })
+
+    it('the person selecting another tab while tmux is read: the pane the read names, on the tab they left, moves nothing', async () => {
+      const { report, settle, next } = await dialWith()
+      report('iterm', TMUX_TAB)
+      await settle('iterm')
+      tmuxSays.held = 'listing'
+      onPane(4)
+      await next()
+      report('iterm', '/dev/ttys001')
+      await land()
+      expect(paneLines()).toEqual(['[device] pane · skipped · not in front'])
+      expect(paneAsked()).toEqual([[agent(1), 'pane']])
+    })
+
+    it('with no dial linked the reads go on and nothing is followed', async () => {
+      const { report, settle, next } = await dialWith()
+      unlinked(true)
+      report('iterm', TMUX_TAB)
+      await settle('iterm')
+      onPane(4)
+      await next(2)
+      expect(tmuxReads()).toHaveLength(3)
+      expect(asked()).toEqual([])
+      expect(paneLines()).toEqual([])
+      // Linked, the next read is the first read linked, followed as the settle.
+      unlinked(false)
+      await next()
+      expect(paneAsked()).toEqual([[agent(2), 'pane']])
+    })
+
+    it('its lines name no pane, tty or agent', async () => {
+      const { listener, port, report, settle, next } = await dialWith()
+      // The settle's answer just after a turn, one whose agent ended while it ran, and one with Ghostty told in front.
+      turnTo(agent(2))
+      report('iterm', TMUX_TAB)
+      await settle('iterm')
+      tmuxSays.held = 'listing'
+      onPane(4)
+      await next()
+      port.observed(inTmux(2, { event: 'session-end' }))
+      await land()
+      tmuxSays.held = false
+      expect(listener.front('ghostty')).toBeUndefined()
+      onPane(3)
+      await next()
+      seen.host.localFollowed!('pane', 'moved')
+      seen.host.localFollowed!('pane', 'no-tile')
+      const lines = paneLines()
+      expect(lines).toHaveLength(5)
+      for (const line of lines) expect(line).toMatch(/^\[device\] pane · (moved|skipped · (no tile|echo|unknown agent|not in front))$/)
+    })
+  })
+
+  // herdr pushes the pane that takes its focus (`pane.focused`, on a subscription of its own: herdrSource.ts), followed
+  // under the front and tab checks tmux's answer has, with no poll.
+  describe('herdr', () => {
+    const host = () => seen.dial as unknown as DaemonCableHost
+    const asked = () => calls('followLocal')
+    const paneAsked = () => asked().filter(([, cause]) => cause === 'pane')
+    const focusLines = () => logs.filter((line) => line.startsWith('[device] herdr focus'))
+    const switches = () => logs.filter((line) => line.startsWith('[device] app filter: switched ·'))
+    const shown = async () => (await host().listAgentSnapshot({ apps: true })).apps?.shown
+    const unlinked = (off: boolean) => { (seen.cable as unknown as { connected: boolean }).connected = !off }
+    const ECHO = '[device] herdr focus · skipped · echo'
+    const terminal = join(homedir(), 'Applications', 'Terminal.app')
+    /** The Terminal tab holding herdr's client. */
+    const HERDR_TAB = '/dev/ttys004'
+    /** On macOS, sess-1's caller (4242) in herdr pane w1:p1's shell (4000) and sess-2's (4243) in w1:p2's (4001), on the
+     *  terminals herdr's server (3900) made, and herdr's one client (4300) in a Terminal tab, under the home the devices
+     *  read apps in. */
+    const IN_TERMINAL: ProcessRow[] = [
+      { pid: 4242, ppid: 4000, tty: 'ttys030', executable: 'claude' }, { pid: 4000, ppid: 3900, tty: 'ttys030', executable: 'zsh' },
+      { pid: 4243, ppid: 4001, tty: 'ttys031', executable: 'claude' }, { pid: 4001, ppid: 3900, tty: 'ttys031', executable: 'zsh' },
+      { pid: 3900, ppid: 1, executable: '/opt/homebrew/bin/herdr' },
+      { pid: 4300, ppid: 4298, executable: 'herdr' }, { pid: 4298, ppid: 1, executable: join(terminal, 'Contents', 'MacOS', 'Terminal') },
+    ]
+    /** The same, the client in a terminal of no listed app. */
+    const IN_NO_APP = IN_TERMINAL.map((p) => (p.pid === 4300 ? { ...p, ppid: 1 } : p))
+    /** The same, the client in an Orca terminal. */
+    const IN_ORCA = [...IN_TERMINAL.map((p) => (p.pid === 4300 ? { ...p, ppid: 4295 } : p)),
+      { pid: 4295, ppid: 1, executable: '/Applications/Orca.app/Contents/MacOS/Orca' }]
+    /** The same, sess-2's shell on a terminal herdr did not make: its herdr pane only holds it. */
+    const HELD = IN_TERMINAL.map((p) => (p.pid === 4001 ? { ...p, ppid: 1 } : p))
+    /** On Linux, the same two agents under herdr's server, itself on the terminal of a Ghostty window (pts/4) with no other
+     *  herdr: the one candidate herdr's lookup reads there (herdrOuter.ts clientsOf). sess-3's caller (4244) in another
+     *  Ghostty window. */
+    const ON_LINUX: ProcessRow[] = [
+      { pid: 4242, ppid: 4000, tty: 'pts/5', executable: 'claude' }, { pid: 4000, ppid: 3900, tty: 'pts/5', executable: 'zsh' },
+      { pid: 4243, ppid: 4001, tty: 'pts/6', executable: 'claude' }, { pid: 4001, ppid: 3900, tty: 'pts/6', executable: 'zsh' },
+      { pid: 3900, ppid: 3899, tty: 'pts/4', executable: 'herdr' }, { pid: 3899, ppid: 3800, tty: 'pts/4', executable: 'zsh' },
+      { pid: 3800, ppid: 1, executable: 'ghostty' },
+      { pid: 4244, ppid: 3801, tty: 'pts/7', executable: 'claude' }, { pid: 3801, ppid: 3800, tty: 'pts/7', executable: 'zsh' },
+    ]
+    /** The server's client socket and the client connected to it, as lsof gives them. */
+    const SOCKETS = 'p3900\nf5\nd0x1111\nn/Users/u/.config/herdr/herdr-client.sock\np4300\nf3\nd0x2222\nn->0x1111\n'
+    /** While `held`, the dial's `herdr agent focus` waits until the spec lands it. */
+    const focusRun = { held: false, land: [] as Array<() => void> }
+    beforeEach(() => { Object.assign(focusRun, { held: false, land: [] }) })
+    /** The devices' runs, recorded: herdr's client lookup's lsof, and its ps of the client's tty, or on Linux the
+     *  server's, as [ps] has it. */
+    const herdrRun = (linux: boolean, ps = linux ? '3900 pts/4\n' : '4300 ttys004\n') => async (file: string, args: string[], timeoutMs: number) => {
+      orcaRuns.push([file, args, timeoutMs])
+      if (focusRun.held && args[0] === 'agent') await new Promise<void>((resolve) => { focusRun.land.push(resolve) })
+      return { code: 0, stdout: file === '/usr/sbin/lsof' ? SOCKETS : file.endsWith('/ps') ? ps : '' }
+    }
+    const herdrFocus = (pane: string): Run => ['/opt/herdr/bin/herdr', ['agent', 'focus', pane], 10_000]
+    /** Claude Code in session n, in herdr's pane [pane]. */
+    const inHerdr = (n: number, pane: string) => hook(n, { HERDR_PANE_ID: pane })
+    /** herdr's row of the agent in [pane], naming [session] where herdr knows it. */
+    const listing = (pane: string, session?: string) => ({ pane_id: pane, agent: 'claude', agent_status: 'idle', cwd: '/work/api',
+      ...session ? { agent_session: { kind: 'id', agent: 'claude', value: session } } : {} })
+    /** The dial's own rest on sess-2: its tab, then `herdr agent focus` of its pane. */
+    const restOn2 = async () => {
+      host().swipeEnded(agent(2), 'rest')
+      await vi.waitFor(() => expect(logs).toContain('[device] swipe · ok'))
+      expect(orcaRuns).toContainEqual(herdrFocus('w1:p2'))
+    }
+    /**
+     * The devices on macOS, or on Linux, the processes [rows] (IN_TERMINAL, or ON_LINUX), the agents of [hooks] (sess-1 in
+     * w1:p1 and sess-2 in w1:p2) with each one's client lookup landed on the tty [ps] gives, a herdr the test drives
+     * listing [agents] (both), a dial attached with its tabs stream open, no app settled in front, and the devices'
+     * monotonic clock at 0. `live`
+     * starts herdr's newest subscription for agents, reads its list and starts the focus subscription that follows; `focus`
+     * is herdr telling that one a pane took the focus. `settle` and `report` as dialWith's. The timers are held.
+     */
+    const herdrWith = async (over: { linux?: boolean; rows?: ProcessRow[]; hooks?: ObservedHookEvent[]; agents?: unknown[]; ps?: string } = {}) => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+      clock = 0
+      readers.processes.mockResolvedValue(over.rows ?? (over.linux ? ON_LINUX : IN_TERMINAL))
+      readers.bundleId.mockImplementation(async (bundle) => (bundle === terminal ? 'com.apple.Terminal'
+        : bundle === '/Applications/Orca.app' ? 'com.stablyai.orca' : undefined))
+      const subs: Array<{ entries: readonly HerdrEntry[]; to: HerdrSubscriber }> = []
+      let list: Promise<HerdrAnswer> | undefined
+      const agents = over.agents ?? [listing('w1:p1'), listing('w1:p2')]
+      const client: HerdrClient = {
+        request: () => (list = Promise.resolve<HerdrAnswer>({ ok: true, result: { type: 'agent_list', agents } })),
+        subscribe: (entries, to) => { subs.push({ entries, to }); return { close: () => {} } },
+        prompt: async () => ({ outcome: 'sent' }),
+        socketStamp: () => '1:1',
+        binary: () => undefined,
+      }
+      const listener = fakeListener()
+      const started = start({ faults: ['fleet'], listen: listener.listen, now: () => clock, tty: async () => undefined, herdr: client,
+        orca: { ...orca, platform: over.linux ? 'linux' : 'darwin', run: herdrRun(over.linux === true, over.ps),
+          onPath: (name: string) => (name === 'herdr-app' ? null : `/opt/${name}/bin/${name}`) } })
+      const hooks = over.hooks ?? [inHerdr(1, 'w1:p1'), inHerdr(2, 'w1:p2')]
+      for (const event of hooks) started.port.observed(event)
+      const lookups = hooks.filter(({ hostHints }) => hostHints?.HERDR_PANE_ID).length
+      await vi.waitFor(() => expect(logs.filter((line) => line.startsWith('[device] herdr client ·'))).toHaveLength(lookups))
+      await settled()
+      seen.host.watching!(true)
+      started.port.swarms(null)
+      // A rest's and a tap's tab line go on it.
+      listener.tabs()
+      const focused = () => subs.filter(({ entries }) => entries.some(({ type }) => type === 'pane.focused')).at(-1)!
+      const live = async () => {
+        subs.at(-1)!.to.started()
+        await list
+        focused().to.started()
+      }
+      await live()
+      const focus = async (pane: string) => {
+        focused().to.event('pane_focused', { pane_id: pane, type: 'pane_focused', workspace_id: 'w1' })
+        await settled()
+      }
+      const settle = async (app: string) => {
+        expect(listener.front(app)).toBeUndefined()
+        await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+        await settled()
+      }
+      const report = (app: string, tty: string): unknown =>
+        (listener.given[0].handlers.tab as ListenerHandler).handle({ type: 'tab', app, tty }, new AbortController().signal)
+      return { ...started, listener, live, focus, settle, report }
+    }
+    type Scene = Awaited<ReturnType<typeof herdrWith>>
+
+    it('Terminal settled and the herdr client\'s tab reported: herdr says the other pane took the focus, and the dials follow its agent on herdr\'s page', async () => {
+      const { report, settle, focus } = await herdrWith()
+      report('terminal-app', HERDR_TAB)
+      await settle('terminal-app')
+      await focus('w1:p2')
+      expect(asked().at(-1)).toEqual([agent(2), 'pane'])
+      expect(paneAsked()).toEqual([[agent(2), 'pane']])
+      expect(await shown()).toBe('herdr')
+      expect(focusLines()).toEqual([])
+    })
+
+    it.each<[string, { rows?: ProcessRow[]; linux?: boolean; ps?: string }, (scene: Scene) => Promise<unknown>]>([
+      ['another app settled', {}, async ({ report, settle }) => {
+        report('terminal-app', HERDR_TAB)
+        await settle('terminal-app')
+        await settle('ghostty')
+      }],
+      // The app the person went to settles FRONT_SETTLE_MS after the switch.
+      ['another app told in front, not yet settled', {}, async ({ listener, report, settle }) => {
+        report('terminal-app', HERDR_TAB)
+        await settle('terminal-app')
+        expect(listener.front('ghostty')).toBeUndefined()
+      }],
+      // Neither tab known: no tab reported, and the client on a terminal that names none.
+      ['a tab app that reported no tab, herdr\'s client on no tab', { ps: '4300 console\n' }, ({ settle }) => settle('terminal-app')],
+      // With no tab to check, the app alone says it.
+      ['on Linux, another app settled', { linux: true }, ({ settle }) => settle('kitty')],
+      ['a tab app that reported no tab', {}, ({ settle }) => settle('terminal-app')],
+      // Review Focus 4: a pane closing hands herdr's focus on, or a second client moves it, while the person is on another
+      // tab of that app.
+      ['a plain tab reported while herdr\'s focus moves', {}, async ({ report, settle }) => {
+        report('terminal-app', '/dev/ttys001')
+        await settle('terminal-app')
+      }],
+      ['herdr\'s client in a terminal of no app, and none settled', { rows: IN_NO_APP }, async () => {}],
+    ])('%s: skipped as not in front', async (_, over, scene) => {
+      const started = await herdrWith(over)
+      await scene(started)
+      await started.focus('w1:p2')
+      expect(paneAsked()).toEqual([])
+      expect(focusLines()).toEqual(['[device] herdr focus · skipped · not in front'])
+    })
+
+    it('on Linux, with no tab reports, it is followed with no tab check, on herdr\'s page', async () => {
+      const { settle, focus } = await herdrWith({ linux: true, hooks: [inHerdr(1, 'w1:p1'), inHerdr(2, 'w1:p2'), hook(3, { TERM_PROGRAM: 'ghostty' })] })
+      // Ghostty's own agent's page is the one its settle shows.
+      await settle('ghostty')
+      expect(await shown()).toBe('ghostty')
+      await focus('w1:p2')
+      expect(asked()).toEqual([[agent(2), 'pane']])
+      expect(await shown()).toBe('herdr')
+      expect(switches().at(-1)).toBe('[device] app filter: switched · follow')
+    })
+
+    it('the dial\'s own rest runs herdr agent focus: herdr\'s event for that pane is its echo, and the person\'s next ones are followed', async () => {
+      const { report, settle, focus } = await herdrWith()
+      report('terminal-app', HERDR_TAB)
+      await settle('terminal-app')
+      await restOn2()
+      await focus('w1:p2')
+      expect(focusLines()).toEqual([ECHO])
+      await focus('w1:p1')
+      await focus('w1:p2')
+      expect(paneAsked()).toEqual([[agent(1), 'pane'], [agent(2), 'pane']])
+      expect(focusLines()).toEqual([ECHO])
+    })
+
+    it('the same for a tap', async () => {
+      const { report, settle, focus } = await herdrWith()
+      report('terminal-app', HERDR_TAB)
+      await settle('terminal-app')
+      expect(await host().openAgent(agent(2))).toBeUndefined()
+      expect(orcaRuns).toContainEqual(herdrFocus('w1:p2'))
+      await focus('w1:p2')
+      expect(focusLines()).toEqual([ECHO])
+      await focus('w1:p1')
+      await focus('w1:p2')
+      expect(paneAsked()).toEqual([[agent(1), 'pane'], [agent(2), 'pane']])
+      expect(focusLines()).toEqual([ECHO])
+    })
+
+    it('a rest whose herdr agent focus ends past TAB_ECHO_MS, a hand turn elsewhere meanwhile: herdr\'s event after it ends is its echo, and the dial stays', async () => {
+      const { report, settle, focus } = await herdrWith()
+      report('terminal-app', HERDR_TAB)
+      await settle('terminal-app')
+      focusRun.held = true
+      host().swipeEnded(agent(2), 'rest')
+      await vi.waitFor(() => expect(focusRun.land).toHaveLength(1))
+      turnTo(agent(1))
+      clock = 2_500
+      for (const landing of focusRun.land.splice(0)) landing()
+      await vi.waitFor(() => expect(logs).toContain('[device] swipe · ok'))
+      await focus('w1:p2')
+      expect(focusLines()).toEqual([ECHO])
+      expect(paneAsked()).toEqual([])
+    })
+
+    it('the dial going drops its own moves: attached again, herdr\'s event for the pane it rested on is the person\'s', async () => {
+      const { report, settle, focus, live } = await herdrWith()
+      report('terminal-app', HERDR_TAB)
+      await settle('terminal-app')
+      await restOn2()
+      seen.host.watching!(false)
+      seen.host.watching!(true)
+      // herdr's source opens its next subscription a second after its last.
+      await vi.advanceTimersByTimeAsync(1_000)
+      await live()
+      await focus('w1:p2')
+      expect(paneAsked()).toEqual([[agent(2), 'pane']])
+      expect(focusLines()).toEqual([])
+    })
+
+    /** The same, sess-3's caller (4244) in a pane whose hook names w1:p3: a second herdr server's, whose ids repeat the
+     *  default server's. The source hears that one's focus, and its list has no agent at w1:p3. */
+    const ANOTHER_SERVER: ProcessRow[] = [...IN_TERMINAL,
+      { pid: 4244, ppid: 4002, tty: 'ttys032', executable: 'claude' }, { pid: 4002, ppid: 3900, tty: 'ttys032', executable: 'zsh' }]
+
+    // A move to a plain pane is ordinary use: no line.
+    it.each<[string, { rows?: ProcessRow[]; hooks?: ObservedHookEvent[] }, string]>([
+      ['a pane no agent has', {}, 'w1:p9'],
+      ['a pane of the default server with no agent, whose id another server\'s agent has', {
+        rows: ANOTHER_SERVER, hooks: [inHerdr(1, 'w1:p1'), inHerdr(2, 'w1:p2'), inHerdr(3, 'w1:p3')] }, 'w1:p3'],
+    ])('%s: nothing moves, and nothing is said', async (_, over, pane) => {
+      const { report, settle, focus } = await herdrWith(over)
+      report('terminal-app', HERDR_TAB)
+      await settle('terminal-app')
+      await focus(pane)
+      expect(paneAsked()).toEqual([])
+      expect(focusLines()).toEqual([])
+    })
+
+    it.each<[string, { rows?: ProcessRow[]; hooks?: ObservedHookEvent[] }, string, string]>([
+      ['a held pane', { rows: HELD }, 'terminal-app', 'w1:p2'],
+      ['two live agents at the pane', { hooks: [inHerdr(1, 'w1:p2'), inHerdr(2, 'w1:p2')] }, 'terminal-app', 'w1:p2'],
+      ['an agent in herdr inside an Orca terminal, with Orca settled', { rows: IN_ORCA }, 'orca', 'w1:p2'],
+    ])('%s: skipped as unknown agent', async (_, over, app, pane) => {
+      const { report, settle, focus } = await herdrWith(over)
+      report('terminal-app', HERDR_TAB)
+      await settle(app)
+      await focus(pane)
+      expect(paneAsked()).toEqual([])
+      expect(focusLines()).toEqual(['[device] herdr focus · skipped · unknown agent'])
+    })
+
+    it('an agent herdr\'s own list placed at its pane, with no hook, is followed', async () => {
+      // sess-2 found by the attach scan, idle, its owner 4243: no hook has named its pane, and herdr's row names its session.
+      readers.known.set('sess-2', 'terminal')
+      readers.owners.set('sess-2', { engine: 'claude', pid: 4243 })
+      readers.rows.set('sess-2', { cwd: '/work/api', transcriptPath: null })
+      readers.working.set('sess-2', false)
+      const { report, settle, focus } = await herdrWith({ hooks: [inHerdr(1, 'w1:p1')], agents: [listing('w1:p1'), listing('w1:p2', 'sess-2')] })
+      await vi.waitFor(() => expect(logs).toContainEqual(expect.stringMatching(/^\[observed\] scan · .* · 1 nested placed$/)))
+      report('terminal-app', HERDR_TAB)
+      await settle('terminal-app')
+      await focus('w1:p2')
+      expect(paneAsked()).toEqual([[agent(2), 'pane']])
+    })
+
+    it('with no dial linked nothing is followed and nothing is logged', async () => {
+      const { report, settle, focus } = await herdrWith()
+      report('terminal-app', HERDR_TAB)
+      await settle('terminal-app')
+      unlinked(true)
+      await focus('w1:p2')
+      expect(paneAsked()).toEqual([])
+      expect(focusLines()).toEqual([])
+      unlinked(false)
+      await focus('w1:p2')
+      expect(paneAsked()).toEqual([[agent(2), 'pane']])
+    })
+
+    it('its lines are fixed words', async () => {
+      const { report, settle, focus } = await herdrWith()
+      report('terminal-app', HERDR_TAB)
+      await settle('terminal-app')
+      await restOn2()
+      await focus('w1:p2')
+      // A pane no agent has says nothing.
+      await focus('w1:p9')
+      report('terminal-app', '/dev/ttys001')
+      await focus('w1:p1')
+      const lines = focusLines()
+      expect(lines).toHaveLength(2)
+      for (const line of lines) expect(line).toMatch(/^\[device\] herdr focus · skipped · (not in front|echo|unknown agent)$/)
     })
   })
 })

@@ -156,7 +156,7 @@ describe("Orca's scenarios", () => {
         const [p, q] = [place.get(x)!, place.get(y)!]
         return p[0]! - q[0]! || p[1]! - q[1]! || p[2]! - q[2]!
       }
-      const rings = [...s.steps.flatMap((step) => (step.kind === 'wait' && step.until ? [step.until.expect] : [])),
+      const rings = [...s.steps.flatMap((step) => (step.kind === 'wait' && step.until?.kind === 'ring' ? [step.until.expect] : [])),
         ...[...s.checks, ...s.probes].flatMap((c) => (c.kind === 'ring' ? [c.expect.filter((key) => key !== 'z')] : []))]
       for (const ring of rings) expect(ring, s.id).toEqual([...ring].sort(before))
     }

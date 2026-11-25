@@ -566,6 +566,9 @@ function rowFingerprint(row: unknown): string {
 /** The new image is visible, but its directory has not confirmed durability yet. */
 const BINDING_RECOVERY_HOLD = 'Waiting for native evidence after a concurrent binding write.'
 export class RegistryOwnershipChanged extends IdentityReadUnavailable {}
+/** Two reasons a binding's publication is held, which a restart's log names by a fixed label (core/agents/restart.ts). */
+export const OBSERVATION_BATCH_INCOMPLETE = 'the registry observation batch is incomplete'
+export const SAVED_BINDING_CHANGED = 'the saved binding changed while its evidence was being read'
 
 /** Storage errors can quote file contents or paths. Only fixed categories cross this boundary, and the disk's
  *  code on `cause`, so the log line can say `ENOSPC` or `EROFS`. */
@@ -3410,7 +3413,7 @@ class Registry {
       // wait for it. Check BEFORE merge conflict resolution: an incomplete pane swap must never be
       // made to look valid by evicting its other owner. Its last durable snapshot remains untouched.
       if (exiting && !validatedRows([...currentRows.values()])) throw new Error('Cannot flush an incomplete registry transaction at exit')
-      if (bindingCommit && !validatedRows([...currentRows.values()])) throw new IdentityReadUnavailable('the registry observation batch is incomplete')
+      if (bindingCommit && !validatedRows([...currentRows.values()])) throw new IdentityReadUnavailable(OBSERVATION_BATCH_INCOMPLETE)
       if (this.namesUnsaved) await this.persistNames(deadline)
       await privateRegistryDirectory(env.ADAPTER_DATA_DIR)
       deadline.check()
@@ -3509,7 +3512,7 @@ class Registry {
           if ((latest.has(bindingCommit.agentId) ? rowFingerprint(latest.get(bindingCommit.agentId)) : undefined)
             !== this.persistedBaseline.get(bindingCommit.agentId)) {
             throw externalAgentId ? new RegistryOwnershipChanged('The durable adoption changed while it was being prepared')
-              : new IdentityReadUnavailable('the saved binding changed while its evidence was being read')
+              : new IdentityReadUnavailable(SAVED_BINDING_CHANGED)
           }
           const displacedIds = new Set(bindingCommit.displaced?.map(row => row.agentId))
           for (const displaced of bindingCommit.displaced ?? []) {

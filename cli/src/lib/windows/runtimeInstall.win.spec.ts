@@ -22,7 +22,9 @@ describe.runIf(process.platform === 'win32')('ensureManagedRuntime on Windows', 
 
   afterEach(() => {
     vi.unstubAllGlobals()
-    rmSync(root, { recursive: true, force: true })
+    // Windows can still hold a file the test unpacked for a moment (EPERM in CI run 45397305799); Node retries
+    // EBUSY, EPERM and ENOTEMPTY when given retries.
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
     delete process.env.ADAPTER_RUNTIME_DIR
     delete process.env.ADAPTER_RUNTIME_METADATA_URL
   })

@@ -1,8 +1,25 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+
+/** Every run of the computer's process readers from this spec's worker, the fake Orca's among them. One that would read
+ *  every process (pgrep, pkill, a ps with no -p) is noted and never run: the person's own run on this computer. */
+const reads = vi.hoisted(() => [] as Array<{ file: string; args: string[] }>)
+vi.mock('node:child_process', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:child_process')>()
+  const { basename } = await import('node:path')
+  const spawnSync = ((file: string, args: readonly string[] = [], options?: object) => {
+    const name = basename(file)
+    if (['ps', 'lsof', 'pgrep', 'pkill'].includes(name) && (!file.includes('/') || /^\/(usr\/)?s?bin\//.test(file))) {
+      reads.push({ file, args: [...args] })
+      if (name !== 'ps' || !args.includes('-p')) return { pid: 0, output: [null, '', ''], stdout: '', stderr: '', status: 1, signal: null }
+    }
+    return real.spawnSync(file, args, options)
+  }) as typeof real.spawnSync
+  return { ...real, spawnSync, default: { ...real, spawnSync } }
+})
 
 // The harness's fake Orca, run as a daemon runs it. It is outside tsconfig's rootDir (src), so it is loaded untyped, as
 // dialAppEvalTierB.spec.ts loads the harness.
@@ -12,6 +29,7 @@ interface FakeOrca {
   watchFocus(on: boolean): void
   endWatch(): void
   watching(): boolean
+  echoing(): boolean
   focus(handle: string | null): void
 }
 const { FakeOrca } = await import('../../e2e/harness/fakeOrca.js' as string) as {
@@ -131,14 +149,14 @@ describe.skipIf(process.platform === 'win32')("the harness's fake Orca", () => {
   })
 
   it("a switch's echo still to come at endWatch is never told, as Orca's quit takes the pane with it", async () => {
-    const { fake, bin, launcher, run } = installed(true)
+    const { fake, launcher, run } = installed(true)
     expect(run('orca', 'terminal', 'switch', '--terminal', H1, '--json').status).toBe(0)
+    expect(fake.echoing()).toBe(true)
     fake.endWatch()
     const w = watch(launcher)
     await vi.waitFor(() => expect(fake.watching()).toBe(true), { timeout: 10_000, interval: 20 })
-    // No process of that switch's run is left, its echo's among them: told by now, or dropped.
-    await vi.waitFor(() => expect(spawnSync('pgrep', ['-f', `${join(bin, 'orca')} terminal switch`]).status).toBe(1),
-      { timeout: 10_000, interval: 20 })
+    // No echo of that switch's is left: ended by endWatch, as its run noted it.
+    await vi.waitFor(() => expect(fake.echoing()).toBe(false), { timeout: 10_000, interval: 20 })
     fake.focus(H2)
     await vi.waitFor(() => expect(w.lines).toContain(focusLine(H2)), { timeout: 10_000, interval: 20 })
     expect(w.lines).toEqual([focusLine(H2)])
@@ -152,5 +170,23 @@ describe.skipIf(process.platform === 'win32')("the harness's fake Orca", () => {
     await vi.waitFor(() => expect(w.lines).toEqual([focusLine(H1)]), { timeout: 10_000, interval: 20 })
     fake.endWatch()
     await ended
+  })
+
+  it('tells and ends its watches and echoes by the pid and start time each noted, asking nothing of another process', async () => {
+    const { fake, launcher, run } = installed(true)
+    const w = watch(launcher)
+    const ended = new Promise((resolve) => w.child.once('exit', resolve))
+    fake.focus(H1)
+    await vi.waitFor(() => expect(w.lines).toEqual([focusLine(H1)]), { timeout: 10_000, interval: 20 })
+    reads.length = 0
+    expect(fake.watching()).toBe(true)
+    expect(run('orca', 'terminal', 'switch', '--terminal', H2, '--json').status).toBe(0)
+    fake.endWatch()
+    await ended
+    expect(fake.watching()).toBe(false)
+    // A watch's own process is the one its run started (the script execs its tail): asked of by its pid.
+    expect(reads.some(({ args }) => args[args.indexOf('-p') + 1]!.split(',').map(Number).includes(w.child.pid!))).toBe(true)
+    expect(reads.filter(({ file, args }) => basename(file) !== 'ps' || !args.includes('-p') || args[args.indexOf('-o') + 1] !== 'pid=,lstart='))
+      .toEqual([])
   })
 })

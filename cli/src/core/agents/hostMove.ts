@@ -9,8 +9,8 @@
  */
 import { baseNode } from '../../harnessd/baseNode.js'
 import { matchesLaunchReceipt, type RegisteredSession, type registry } from '../../lib/registry.js'
-import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
-import { codeOrLength } from '../../lib/log.js'
+import { codeOrLength, sid } from '../../lib/log.js'
+import { publishEngine } from '../../lib/paneEngineProcess.js'
 import type { TerminalRuntimeRef } from '../../lib/terminalTypes.js'
 import type { MoveGate } from '../../lib/hostMove/gate.js'
 import { moveAgent, moveCreateRequest, type MoveAgentDeps, type MoveOutcome } from '../../lib/hostMove/moveAgent.js'
@@ -20,7 +20,7 @@ import type { RestoreAgentsDeps, RestoreLaunch } from '../../lib/restoreAgents.j
 import type { RestoreTerminals } from '../../lib/restoreTerminals.js'
 import { restartTargetOf, type TerminalBackend } from '../../lib/terminalBackend.js'
 import type { TerminalBackendCoordinator } from '../../lib/terminalBackendCoordinator.js'
-import { sameProcessIdentity, terminalRouteKey } from '../../lib/terminalRuntime.js'
+import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import { commitRelaunchedEngine } from './restart.js'
 import type { PaneSwap } from './swap.js'
 
@@ -122,15 +122,16 @@ export function hostMoveDeps(session: RegisteredSession, current: () => boolean,
     probeProcess: (runtime, engine) => w.restore.probeProcess(runtime, engine),
     swap: async (id, runtime, identity) => {
       const backend = w.terminals.backendFor(runtime)
-      const publication = await w.registry.confirmLaunch(id, { processIdentity: identity, runtimes: [runtime], grid: launch?.grid }, {
-        current: () => owns() && !!backend && w.terminals.backendFor(runtime) === backend,
-        refresh: async () => {
-          const observed = await w.restore.probeProcess(runtime, recorded.engine)
-          if (!sameProcessIdentity(identity, observed) || observed?.executable !== identity.executable) {
-            throw new IdentityReadUnavailable('the move destination changed before publication')
-          }
-        },
-      })
+      const changed = 'the move destination changed before publication'
+      const publication = await publishEngine(identity, () => w.restore.probeProcess(runtime, recorded.engine), { gone: changed, changed },
+        (process, refresh, expires) => {
+          if (process !== identity) w.log(`[move] publication · engine renamed · ${sid(id)}`)
+          return w.registry.confirmLaunch(id, { processIdentity: process, runtimes: [runtime], grid: launch?.grid }, {
+            current: () => owns() && !!backend && w.terminals.backendFor(runtime) === backend,
+            refresh,
+            expires,
+          })
+        })
       if (publication.state === 'confirmed') {
         confirmed = publication.entry
         w.invalidateControl(id)

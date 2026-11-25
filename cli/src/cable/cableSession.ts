@@ -120,6 +120,12 @@ const bounded = (value: unknown, max: number): number =>
 const MACHINES_POLL_MS = 15_000
 /** The least time between two pushes of the machine list (spec 2026-11-13-device-without-the-app, "When"). */
 const AGENTS_PUSH_GAP_MS = 1_000
+/** The most a greeting holds its push for the reads its attach started (the first read of each source that runs only
+ *  while a dial is attached: herdr's, Herdr Core's, cmux's, opencode's, the Claude app's and the ChatGPT app's,
+ *  devices.ts dialAttached): pushed before them, its list had none of their rows until the next tick's push, 1-2 s on
+ *  (the dial eval's C11). A read that lands in a moment makes the first list; a slow or stuck one costs the greeting no
+ *  more than this, and its rows follow at the next push. */
+const ATTACH_READS_MS = 500
 /**
  * A programmatic focus write may be followed by the dial reporting the tile it was painting just before
  * that write. Real hardware delivered that stale report 23 ms after the machine switch completed; keep
@@ -390,9 +396,9 @@ export type CableMachineSource = 'backend' | 'local' | 'signed-out'
 export type OpenReason = 'question'
 
 /** What turned the dial to an agent from this computer: a person's prompt, a terminal tab they selected, a Claude app
- *  they attached to, an Orca pane they focused, a thread they opened in the ChatGPT app, or a VS Code or Cursor terminal
- *  they focused. The outcome's log line is the cause's own. */
-export type FollowCause = 'prompt' | 'tab' | 'attach' | 'focus' | 'thread' | 'vscode'
+ *  they attached to, an Orca pane they focused, a thread they opened in the ChatGPT app, a VS Code or Cursor terminal
+ *  they focused, or a WezTerm pane or kitty window they focused. The outcome's log line is the cause's own. */
+export type FollowCause = 'prompt' | 'tab' | 'attach' | 'focus' | 'thread' | 'vscode' | 'pane'
 /** What a send answers. `message` is a sentence for the dial, shown in place of the generic one. */
 export type SendOutcome = { ok: true } | { ok: false; machine?: string; reason?: string; message?: string }
 
@@ -517,7 +523,7 @@ export interface CableHost {
    * came up on its own — the window then only brings the agent forward if it is already on screen,
    * because a reconnect re-shows every unanswered question and each used to open a tab.
    */
-  openAgent(agentId: string, reason?: OpenReason): void | Promise<void | { ok: false; error: string }>
+  openAgent(agentId: string, reason?: OpenReason): void | Promise<void | 'superseded' | { ok: false; error: string }>
   readNotification?(agentId: string, readToken: string): void
   /** The dial asked for a fork of this agent — a second one with its history, opened in the window. */
   forkAgent(agentId: string): Promise<{ ok: true; agentId: string } | { ok: false; error: string; detail?: string }>
@@ -573,8 +579,11 @@ export interface CableHost {
    * The daemon holds its cloud lane ON THE DIAL'S BEHALF — nothing else in this process uses it. So with
    * no dial there is nobody to hold it for, and holding it anyway leaves the account showing a device
    * that is attached to a machine while sitting unplugged in a drawer.
+   *
+   * What it returns ends once the reads the attach started have landed: the greeting's push waits for it, at most
+   * ATTACH_READS_MS.
    */
-  onDialAttached?(): void
+  onDialAttached?(): void | Promise<void>
   onDialGone?(): void
   /**
    * The port this session opened turned out not to be a Harness dial: it talked in something else, or
@@ -833,6 +842,11 @@ export class CableSession {
   /** From a dial's greeting to its push's walk of the open questions: a question asked meanwhile waits for that walk,
    *  which asks it after the drawer that would clear it. */
   private greeting = false
+  /** The greetings waiting for the reads their attach started (awaitAttachReads): while any does, no list goes, as the
+   *  last one's own push follows. A tick's list inside that wait lacked their rows and, with the agent the dial was on
+   *  before a replug not in it, landed the first agent over that record. A count, not a flag: a dial back on new firmware
+   *  greets again inside the first wait, and that wait's end let the first greeting's list go before the new reads. */
+  private attachReading = 0
 
   /** For the greeting's log line: which capabilities this hello named, or nothing. */
   private capabilitiesNamed(): string {
@@ -1601,7 +1615,8 @@ export class CableSession {
           this.greeting = true
           this.questionInbox.forget()
           try {
-            this.host.onDialAttached?.()
+            const reads = this.host.onDialAttached?.()
+            if (reads) await this.awaitAttachReads(reads)
             // Both halves of the test above mean the same thing to this line: a dial with nothing on its
             // screen. A repeat greeting from the same dial on the same image is a keepalive and is skipped,
             // which is the whole reason the branch exists.
@@ -1782,6 +1797,8 @@ export class CableSession {
           if (this.lacks(agentId, 'f')) return
         }
         void Promise.resolve(this.host.openAgent(agentId, reason)).then((result) => {
+          // A later tap replaced this one before it acted: that tap toasts or moves the face for itself.
+          if (result === 'superseded') return
           if (result && !result.ok) return this.toast(result.error)
           // Another app moves no window, so no window focus will bring the dial to this agent's face: the tap's own
           // open says it. The dial does not answer a focus with one, and its echo of a swipe only marks the agent seen.
@@ -2977,7 +2994,11 @@ export class CableSession {
 
   /** `ring` false: only the app list, which a pick the host ignored is answered with. */
   private async syncAgentsNow(force: boolean, ring = true): Promise<void> {
+    // Not even read: on a dial that says appFilter, a read without the app's rows turns the shown app away from it.
+    if (this.attachReading) return
     const { agents: full, tab, total, view, apps } = await this.agentSnapshot()
+    // A read under way as the dial greeted lacks the rows the greeting waits for.
+    if (this.attachReading) return
     // A ring that, with the tiles the dial holds, is more than RING_PLACES goes in two steps. The firmware adds a list's
     // agents before it removes the tiles the list no longer names, and refuses one past RING_PLACES (app_main.c
     // refresh_projects, ui_habitat.c ensure): such a list lost every agent the dial did not hold. Diego, 2026-11-20
@@ -3182,6 +3203,20 @@ export class CableSession {
         this.restoring = false
         if (this.restoreAgain) this.restoreInBackground()
       })
+  }
+
+  /** The reads an attach started, waited for at most ATTACH_READS_MS: one that fails or is late is pushed without, a late
+   *  one said, as its rows miss the first list. */
+  private async awaitAttachReads(reads: Promise<void>): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const late = new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(true), ATTACH_READS_MS) })
+    this.attachReading++
+    try {
+      if (await Promise.race([reads.then(() => false, () => false), late])) this.log('cable: attach reads · late · pushed without them')
+    } finally {
+      this.attachReading--
+      clearTimeout(timer)
+    }
   }
 
   /** Attach: tell the dial everything, whether or not any of it looks unchanged from here. */

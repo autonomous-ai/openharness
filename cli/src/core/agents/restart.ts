@@ -11,9 +11,9 @@ import { buildEngineLaunchArgv, commandAvailableInInteractiveShell } from '../..
 import { launchedGrid, type GridAssignment } from '../../lib/gridAssignmentWire.js'
 import { windowsPaneLaunch } from '../../lib/windows/engineStart.js'
 import { sid } from '../../lib/log.js'
-import { matchesLaunchReceipt, type LaunchPublicationInput, type ProcessIdentity, type registry, type RegisteredSession } from '../../lib/registry.js'
-import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
-import { sameProcessIdentity } from '../../lib/terminalRuntime.js'
+import { matchesLaunchReceipt, OBSERVATION_BATCH_INCOMPLETE, SAVED_BINDING_CHANGED, type LaunchPublicationInput, type ProcessIdentity, type registry,
+  type RegisteredSession } from '../../lib/registry.js'
+import { publishEngine, resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
 import type { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
@@ -51,6 +51,19 @@ async function engineInstalled(engine: AgentEngine): Promise<boolean | null> {
 
 type RestartAgentHandler = RestartAgent
 
+const NO_ENGINE = 'the relaunched engine is not in its pane'
+const ANOTHER_PROCESS = 'the replacement process changed before publication'
+const NO_SHELL = 'the replacement shell could not be confirmed'
+/** Which check held a relaunch's publication, told by comparing its error with each check's fixed words: the log
+ *  names the check, never the words. */
+const HELD_BY = ([
+  [NO_ENGINE, 'refresh found no engine'],
+  [ANOTHER_PROCESS, 'refresh found another process'],
+  [NO_SHELL, 'refresh found no shell'],
+  [OBSERVATION_BATCH_INCOMPLETE, 'registry batch incomplete'],
+  [SAVED_BINDING_CHANGED, 'saved binding changed'],
+] as const).map(([reason, label]) => ({ message: new IdentityReadUnavailable(reason).message, label }))
+
 export interface RelaunchCommitDeps {
   registry: Pick<typeof registry, 'confirmLaunch' | 'byAgent'>
   announceSession: (session: RegisteredSession) => void
@@ -62,9 +75,10 @@ export interface RelaunchCommitDeps {
  * core/agents/hostMove.ts): its process and [grid], the one its launch put it on, active again, the pane handed back to
  * its backend's default disposal, then announced. The row keeps its gateway: no process is read for it, and the
  * relaunched engine says it again (its hook, or a Codex's argv on the next discovery pass). A Codex's or Pi's grid is
- * read off its argv in the background after, so an unavailable models service cannot hold this route. 'changed' when
- * [current] went false before the row learned the engine, 'changed after commit' once it had, 'vanished' when the row
- * is gone.
+ * read off its argv in the background after, so an unavailable models service cannot hold this route. An engine that
+ * started as `node` and named itself before the publication's refresh is published under its new name
+ * (`publishEngine`), not held on a dead pid. 'changed' when [current] went false before the row learned the engine,
+ * 'changed after commit' once it had, 'vanished' when the row is gone.
  */
 export async function commitRelaunchedEngine(
   deps: RelaunchCommitDeps, agentId: string, identity: ProcessIdentity | null, grid: GridAssignment | null | undefined, place: RestartTarget,
@@ -75,19 +89,26 @@ export async function commitRelaunchedEngine(
   const selected = deps.registry.byAgent(agentId)
   if (!selected) return 'vanished'
   const engine = selected.engine
-  const publication = await deps.registry.confirmLaunch(agentId, { ...input, processIdentity: identity, grid }, {
-    current,
-    refresh: async () => {
-      if (identity) {
-        const observed = await resolvePaneEngineProcess(place.backend, place.runtime, engine)
-        if (!sameProcessIdentity(identity, observed) || observed?.executable !== identity.executable) {
-          throw new IdentityReadUnavailable('the replacement process changed before publication')
-        }
-      } else {
+  // `resolvePaneEngineProcess` answers null also when the probe could not answer: the refresh holds that as NO_ENGINE.
+  const published = identity
+    ? publishEngine(identity, () => resolvePaneEngineProcess(place.backend, place.runtime, engine), { gone: NO_ENGINE, changed: ANOTHER_PROCESS },
+      (process, refresh, expires) => {
+        if (process !== identity) console.log(`[restart] publication · engine renamed · ${sid(agentId)}`)
+        return deps.registry.confirmLaunch(agentId, { ...input, processIdentity: process, grid }, { current, refresh, expires })
+      })
+    : deps.registry.confirmLaunch(agentId, { ...input, processIdentity: identity, grid }, {
+      current,
+      refresh: async () => {
         const pane = await place.backend.paneState(place.runtime)
-        if (pane === 'gone' || pane === 'unknown' || pane.dead) throw new IdentityReadUnavailable('the replacement shell could not be confirmed')
-      }
-    },
+        if (pane === 'gone' || pane === 'unknown' || pane.dead) throw new IdentityReadUnavailable(NO_SHELL)
+      },
+    })
+  const publication = await published.catch((error: unknown) => {
+    // The dispatch's line names only the error's kind; this one names the check that held it (nightly run 45237523183).
+    if (error instanceof IdentityReadUnavailable) {
+      console.warn(`[restart] publication held · ${HELD_BY.find(held => held.message === error.message)?.label ?? 'other'}`)
+    }
+    throw error
   })
   if (publication.state !== 'confirmed') return 'changed'
   const refreshed = publication.entry

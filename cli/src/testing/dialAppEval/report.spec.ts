@@ -12,9 +12,9 @@ const none: Record<Dimension, number | null> = {
 /** Dimension scores 0-100, as the grader gives them. */
 const scores = (score: number | null, dims: Partial<Record<Dimension, number>> = {}, leftOut = 0): AppScores =>
   ({ score, dims: { ...none, ...dims }, leftOut })
-/** The editors and Orca score nothing unless a case says. */
-const apps = (claude: AppScores, chatgpt: AppScores, vscode = scores(null), cursor = scores(null), orca = scores(null)): Record<App, AppScores> =>
-  ({ claude, chatgpt, vscode, cursor, orca })
+/** The editors, Orca and iTerm2 score nothing unless a case says. */
+const apps = (claude: AppScores, chatgpt: AppScores, vscode = scores(null), cursor = scores(null), orca = scores(null),
+  iterm = scores(null)): Record<App, AppScores> => ({ claude, chatgpt, vscode, cursor, orca, iterm })
 
 const failing = (evidence: string[]): CheckResult & { pointsLost: number } => ({
   tier: 'a', platform: 'darwin', scenario: 'C1', check: 'ring.recall', app: 'claude', dim: 'D1', heldOut: false,
@@ -34,7 +34,8 @@ function report(over: Partial<Report> = {}): Report {
     gaps: [],
     heldOutGaps: [],
     delta: { apps: { a: { claude: { before: 75, after: 80 }, chatgpt: { before: null, after: 90 },
-      vscode: { before: null, after: null }, cursor: { before: null, after: null }, orca: { before: null, after: null } } },
+      vscode: { before: null, after: null }, cursor: { before: null, after: null }, orca: { before: null, after: null },
+      iterm: { before: null, after: null } } },
       checks: [], heldOutChanged: 2 },
     ...over,
   }
@@ -96,11 +97,11 @@ it('under the held-out table, each held-out gap\'s reason with its tiers, platfo
   const lines = ['- 3 runs left out, tier a, b on linux, win32: Eval front', '- 1 run left out, tier a on darwin: Eval other',
     '- 1 run left out, tier a on linux: platform read in <path>']
   const md = markdown(graded)
-  expect(md.slice(md.indexOf('## Held out'), md.indexOf('## By tier'))).toMatch(new RegExp(`\\| Orca \\|[^\\n]*\\|\\n\\n${lines.join('\\n')}\\n\\n$`))
+  expect(md.slice(md.indexOf('## Held out'), md.indexOf('## By tier'))).toMatch(new RegExp(`\\| iTerm2 \\|[^\\n]*\\|\\n\\n${lines.join('\\n')}\\n\\n$`))
   const rows = summary(graded).split('\n')
   const at = rows.indexOf(lines[0]!)
   expect(at).toBeGreaterThan(rows.indexOf('Held out'))
-  expect(rows[at - 1]).toMatch(/^Orca/)
+  expect(rows[at - 1]).toMatch(/^iTerm2/)
   expect(rows.slice(at, at + 4)).toEqual([...lines, ''])
   for (const text of [md, summary(graded)]) expect(text).not.toMatch(/OH2|OH9|Coverage gaps/)
 })
@@ -139,14 +140,31 @@ it('the score and held-out tables have a row for Orca, after Cursor', () => {
   expect(text.slice(text.indexOf('Held out'))).toMatch(/^Cursor[^\n]*\nOrca[^\n]*25 left out: 0$/m)
 })
 
-it("the Not covered line names Orca's tap raise in tier B on Linux, and O16 in tier B", () => {
+it('the score and held-out tables have a row for iTerm2, after Orca', () => {
+  const r = report({
+    apps: apps(scores(80), scores(90), scores(60), scores(40), scores(55), scores(45, { D3: 45 }, 1)),
+    heldOut: apps(scores(null), scores(null), scores(null), scores(null), scores(25), scores(35, { D1: 35 })),
+  })
+  const md = markdown(r)
+  const main = md.slice(md.indexOf('## Scores'), md.indexOf('## Held out'))
+  expect(main).toMatch(/\| Orca \|[^\n]*\|\n\| iTerm2 \| — \| — \| 45 \|[^\n]*\| 45 \| left out: 1 \|/)
+  const heldOut = md.slice(md.indexOf('## Held out'), md.indexOf('## By tier'))
+  expect(heldOut).toMatch(/\| Orca \|[^\n]*\|\n\| iTerm2 \| 35 \|[^\n]*\| 35 \| left out: 0 \|/)
+  expect(md.slice(md.indexOf('## By tier'))).toMatch(/\| a \| Orca \|[^\n]*\|\n\| a \| iTerm2 \|/)
+  const text = summary(r)
+  expect(text.slice(0, text.indexOf('Held out'))).toMatch(/^Orca[^\n]*\niTerm2[^\n]*45 left out: 1$/m)
+  expect(text.slice(text.indexOf('Held out'))).toMatch(/^Orca[^\n]*\niTerm2[^\n]*35 left out: 0$/m)
+  expect(text).toContain('- a, iTerm2: — → —')
+})
+
+it("the Not covered line names Orca's tap raise in tier B on Linux, and O16 in tier B, under iTerm2's row", () => {
   const line = 'Not covered: tier B on Windows; in tier B on Linux, the raise of a tap on an Orca row; O16 in tier B, for its time'
   const lines = summary(report()).split('\n')
-  expect(lines.indexOf(line)).toBe(lines.findIndex((l) => l.startsWith('Orca')) + 1)
+  expect(lines.indexOf(line)).toBe(lines.findIndex((l) => l.startsWith('iTerm2')) + 1)
   expect(lines.indexOf(line)).toBeLessThan(lines.indexOf('Held out'))
   const md = markdown(report())
   const main = md.slice(md.indexOf('## Scores'), md.indexOf('## Held out'))
-  expect(main).toMatch(/\| Orca \|[^\n]*\|\n\nNot covered: tier B on Windows; in tier B on Linux, the raise of a tap on an Orca row; O16 in tier B, for its time\n/)
+  expect(main).toMatch(/\| iTerm2 \|[^\n]*\|\n\nNot covered: tier B on Windows; in tier B on Linux, the raise of a tap on an Orca row; O16 in tier B, for its time\n/)
 })
 
 it('the delta counts the held-out checks that changed, never naming them', () => {

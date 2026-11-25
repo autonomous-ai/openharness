@@ -92,8 +92,9 @@ export interface CableHostWiring {
   /** For the devices' tests: the transcriber in place of the backend's, so a capture is turned to text with nothing posted. */
   transcribe?: (pcm: Buffer, sampleRate: number, lang: string, signal?: AbortSignal) => Promise<string>
   /** A dial is on the wire on this computer, or none is any more: the core streams the turn cards and
-   *  makes the recaps for it, as for a device watching through the backend. */
-  watching?: (on: boolean) => void
+   *  makes the recaps for it, as for a device watching through the backend. An attach's promise ends once the reads
+   *  it started have landed, which the greeting's push waits for (cableSession.ts). */
+  watching?: (on: boolean) => void | Promise<void>
   /** Deliver text into an agent. The SAME path the web and the WiFi device use — see cli.ts. */
   sendTurn: (agentId: string, text: string) => void
   stopTurn: (agentId: string) => void
@@ -180,6 +181,10 @@ export interface CableHostWiring {
   pets?: () => PetStore | null
   /** The app a dial that says `appFilter` shows changed from one app to another, and why: its dials are told at once. */
   appSwitched?: (cause: SwitchCause) => void
+  /** An app stayed in front for FRONT_SETTLE_MS, with or without a window, before the settle shows anything: a tab
+   *  report waiting on that app follows its agent's page here (`followPage`), so the settle shows that page directly,
+   *  never the app's first. */
+  appSettling?: (app: string) => void
   /** An app stayed in front for FRONT_SETTLE_MS, with or without a window, after any switch it caused: the Claude app's
    *  session and a tab report waiting on that app are followed then. */
   appSettled?: (app: string) => void
@@ -303,6 +308,7 @@ export class DaemonCableHost implements CableHost {
       // count as the last machine list left them: that read feeds their source (machineSnapshot).
       counts: () => this.counts(),
       switched: (cause) => wiring.appSwitched?.(cause),
+      settling: (app) => wiring.appSettling?.(app),
       settled: (app) => {
         this.viewOnSettle(app)
         wiring.appSettled?.(app)
@@ -422,12 +428,14 @@ export class DaemonCableHost implements CableHost {
    * follows — that push calls listAgents(), which for a remote machine is an RPC over exactly this lane.
    * Awaiting it here would block the greeting, so it is fired and the push retries on the next tick if
    * it loses the race; a failure marks the machine unreachable rather than pretending it has no agents.
+   * It returns the reads `watching` started, which the greeting does wait for, at most half a second.
    */
-  onDialAttached(): void {
-    this.wiring.watching?.(true)
+  onDialAttached(): void | Promise<void> {
+    const reads = this.wiring.watching?.(true)
     this.stopLaneRetry()
     this.laneTries = 0
     this.openLane(++this.plugIn, 'cable: dial on the wire — opening the cloud lane')
+    return reads
   }
 
   private openLane(plugIn: number, line: string): void {
@@ -688,6 +696,10 @@ export class DaemonCableHost implements CableHost {
    *  a time: the last tap on any agent wins (openAgent). In memory only. */
   private waiting: { machineId: string; agentId: string; cancel: () => void } | null = null
 
+  /** The person's taps, on any agent, in turn: a source that waits before it acts asks whether its tap is still the
+   *  latest (openAgent). */
+  private taps = 0
+
   /** [end] is how the waiting tap's open ended: every tap says one. */
   private endWaiting(end: DialOpenEnd): void {
     const waiting = this.waiting
@@ -776,8 +788,11 @@ export class DaemonCableHost implements CableHost {
     return this.onMachine(agentId, opts)?.agent.host
   }
 
+  /** The page the agent is on, which a notice's pick turns the dial to: tmux's or herdr's for an agent nested there
+   *  (Diego, 2026-11-23), else its app's. The name stays `appOf`, as the session asks it. */
   appOf(agentId: string, opts: { apps?: boolean } = {}): string | undefined {
-    return this.onMachine(agentId, opts)?.agent.app
+    const on = this.onMachine(agentId, opts)
+    return on && pageOf(on.agent)
   }
 
   /** A pick from the dial's list of apps. With a window, on the tab another app with agents turns the dial to its ring;
@@ -822,6 +837,22 @@ export class DaemonCableHost implements CableHost {
   /** The app last reported in front, before it settles, with or without a window. */
   latestFront(): string | undefined {
     return this.filter.latestFront()
+  }
+
+  /**
+   * A tab or prompt follow to this agent of the machine list: one in tmux or herdr inside the app settled in front turns
+   * the shown page to tmux's or herdr's and holds it (Diego's decision 4, 2026-11-23; `AppFilter.follow`). Told once per
+   * follow, before the dials are asked to follow it, so every dial's next read sees the page. With a window open the
+   * turn sets the view to the apps ring, as that app settling with agents does (`viewOnSettle`), unless Harness was
+   * picked over that app: the pick holds the tab, as a pick on the dial holds the filter.
+   */
+  followPage(agentId: string): void {
+    const agent = this.registry?.entries().find((e) => e.agent.id === agentId)?.agent
+    if (!agent || (this.swarms !== null && agent.app === this.pickedOver)) return
+    if (!this.filter.follow(agent.app, pageOf(agent)) || this.swarms === null) return
+    // Told from `appSettling`, before `viewOnSettle` ends it, a pick of Harness over the app settled before still holds.
+    this.pickedOver = undefined
+    this.setView('apps', 'front')
   }
 
   localFollowed(cause: FollowCause, outcome: 'moved' | 'no-tile'): void {
@@ -1102,10 +1133,11 @@ export class DaemonCableHost implements CableHost {
     return this.viaFleet((r) => r.machineOf(agentId))
   }
 
-  openAgent(agentId: string, reason?: OpenReason): void | Promise<void | { ok: false; error: string }> {
+  openAgent(agentId: string, reason?: OpenReason): void | Promise<void | 'superseded' | { ok: false; error: string }> {
     // The last tap wins, whatever agent it is on: a tap still waiting for Desktop's window would open its agent over the
     // app this one brings forward. A question screen that came up by itself is no tap.
     if (!reason) {
+      this.taps++
       this.endWaiting({ outcome: 'failed', code: 'desktop_no_window' })
       this.wiring.tapped?.(agentId)
     }
@@ -1113,7 +1145,10 @@ export class DaemonCableHost implements CableHost {
     if (outside) {
       // Only a person's tap switches the other app: a question screen that came up by itself never does.
       if (reason) return
-      return (outside.source.focus?.(outside.agent) ?? Promise.resolve(false)).then((opened) => {
+      const tap = this.taps
+      return (outside.source.focus?.(outside.agent, () => this.taps === tap) ?? Promise.resolve(false)).then((opened) => {
+        // A later tap replaced this one before it acted (eval I13, PM 2026-11-24): the later tap's end is the one counted.
+        if (opened === 'superseded') return opened
         this.openEnded(agentId, opened ? { outcome: 'ok' } : { outcome: 'failed', code: 'not_opened' })
         return opened ? undefined : { ok: false as const, error: `${agentPlaceName(outside.agent)} did not open it.` }
       }, (error: unknown) => {

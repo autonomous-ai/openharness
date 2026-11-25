@@ -159,7 +159,7 @@ type NotRead = 'zellij' | 'processes' | 'clients' | 'app'
  */
 export function createZellijOuter(deps: ZellijOuterDeps): OuterLookup {
   // By session and caller, as tmux's: a lookup in flight is shared past its 5 s, so a zellij that hangs to its timeout
-  // runs no second one.
+  // runs no second one. A tap's or rest's fresh ask reads the client again past the second (heldAnswers).
   const asked = heldAnswers<ClientPlace>(deps.now)
 
   /** `{}` when the caller is on no terminal a Zellij server made, or the session's one client is not the machine's one
@@ -200,9 +200,9 @@ export function createZellijOuter(deps: ZellijOuterDeps): OuterLookup {
     return place
   }
 
-  return (hints, pid) => {
+  return (hints, pid, _made, opts) => {
     const session = hinted(deps.platform, hints)?.session
     if (!session || !PID.test(String(pid))) return undefined
-    return asked(`${session}:${pid}`, () => lookUp(session, pid))
+    return asked(`${session}:${pid}`, () => lookUp(session, pid), opts)
   }
 }

@@ -11,8 +11,8 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, wr
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ownProcessGroup } from '../src/lib/windows/noWindow.js'
-import { workingFolders } from '../src/testing/rootProcesses.js'
-import { alive, processTable } from '../src/testing/spawnedRuns.js'
+import { seenNow, stillRunning } from '../src/testing/rootProcesses.js'
+import { alive, commandLines, namedTree } from '../src/testing/spawnedRuns.js'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { hungRateLimitRead, writeHungCodex } from './harness/hungCodex.js'
@@ -21,7 +21,7 @@ interface Started { root: string; master: number; core: number; socket: string; 
 
 /** The master [pid] and the service processes it runs (`… __service <names>`): the short-lived probes they start
  *  (`lsof`, `ps`) are left out, as their pids can go to strangers while the test waits. */
-const daemonProcesses = (pid: number): number[] => [pid, ...processTable()
+const daemonProcesses = (pid: number): number[] => [pid, ...namedTree([pid])
   .filter((row) => row.ppid === pid && / __service \S+$/.test(row.command)).map((row) => row.pid)]
 
 const tmuxServer = (socket: string): number | null => {
@@ -105,10 +105,11 @@ describe('a daemon under test', () => {
     watched = group.map((row) => row.pid)
     // Its child names nothing of the root: only its group reaches it.
     expect(group.filter((row) => !row.command.includes(`${d.root}/`))).toHaveLength(1)
+    const seen = seenNow([d.pid!])
     await d.close()
     daemon = undefined
     expect(watched.filter(alive), 'the read\'s Codex and its child').toEqual([])
-    expect(processTable().filter((row) => row.command.includes(`${d.root}/`)).map((row) => row.command)).toEqual([])
+    expect(stillRunning(seen), 'what the daemon\'s tree held').toEqual([])
     expect(existsSync(d.root)).toBe(false)
   })
 
@@ -167,13 +168,12 @@ describe('a daemon under test', () => {
       left.push(await until(`the ${name} stand-in to say its pid`, () => existsSync(join(d.root, `${name}.pid`)) ? Number(readFileSync(join(d.root, `${name}.pid`), 'utf8')) : null, 30_000, 100))
       watched = [...left]
     }
-    await until('all three to be a sleep', () => processTable().filter((row) => left.includes(row.pid) && row.command === 'sleep 600').length === 3 || null, 10_000, 100)
+    await until('all three to be a sleep', () => [...commandLines(left).values()].filter((command) => command === 'sleep 600').length === 3 || null, 10_000, 100)
+    const seen = seenNow([d.pid!, tmuxServer(d.tmux.socket)!])
     await d.close()
     daemon = undefined
     expect(left.filter(alive), 'what the tile left').toEqual([])
-    const table = processTable(), folders = workingFolders(table)
-    const inRoot = (pid: number) => { const folder = folders.get(pid); return folder === d.root || folder?.startsWith(`${d.root}/`) }
-    expect(table.filter((row) => row.command.includes(`${d.root}/`) || inRoot(row.pid)).map((row) => row.command)).toEqual([])
+    expect(stillRunning(seen), 'what the daemon\'s and its tmux server\'s trees held').toEqual([])
   })
 
   it.each<[string, 'exits' | 'waits', (child: ChildProcess) => void]>([

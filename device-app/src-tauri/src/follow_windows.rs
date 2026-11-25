@@ -82,8 +82,8 @@ pub fn reads_title(event: u32, hwnd: usize, id_object: i32, id_child: i32, foreg
     event == EVENT_OBJECT_NAMECHANGE && hwnd == foreground && id_object == OBJID_WINDOW && id_child == CHILDID_SELF
 }
 
-/// The Windows door's window. Windows gates no read of a window's title: the person's switch stands for the
-/// permission (`follow::Switched`).
+/// The Windows door's window. Windows gates no read of a window's title: the door is always trusted
+/// (`follow::Ungated`).
 pub struct WindowsFollow;
 
 #[cfg(windows)]

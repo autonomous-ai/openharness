@@ -2174,6 +2174,15 @@ const REGISTRY_ENGINES = new Set([
   'agy', 'copilot', 'openclaw', 'terminal',
 ])
 
+// Each engine's name in a sentence: the daemon's engineName (src/lib/agentNames.ts), which the hook cannot
+// import (it runs without the adapter's modules); hookNotify.spec.ts keeps this one equal to it. Every engine
+// argEngine() answers is in ENGINES (that spec holds it too), so every one has its name here.
+const ENGINE_NAMES = {
+  claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor', opencode: 'OpenCode', pi: 'Pi', omp: 'Oh My Pi', hermes: 'Hermes',
+  commandcode: 'Command Code', devin: 'Devin', muse: 'Muse', amp: 'Amp', kilo: 'Kilo', grok: 'Grok', agy: 'Antigravity',
+  copilot: 'Copilot', openclaw: 'OpenClaw', terminal: 'Terminal',
+}
+
 function validRegistryString(value, max = 4096) {
   return typeof value === 'string' && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value)
 }
@@ -2788,7 +2797,7 @@ async function main() {
     ok = await post(port, '/api/hook/session-start', body, undefined, facts)
     held ||= ok === 'held'
   }
-  if (held && ok !== true) process.stderr.write('[harness] Hermes admission is held; this delivery could not be confirmed. The current conversation is unchanged.\n')
+  if (held && ok !== true) process.stderr.write(`[harness] ${ENGINE_NAMES[engine]} admission is held; this delivery could not be confirmed. The current conversation is unchanged.\n`)
   if (ok === false && !held) await fallbackRegister(input, engine, tmuxPane)
 }
 

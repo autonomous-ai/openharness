@@ -10,14 +10,15 @@ import { createHerdrAdapter } from './herdr.js'
 import { createHerdrAppAdapter } from './herdrApp.js'
 import type { HerdrPrompt } from './herdrClient.js'
 import { type Delivery, Inbox } from './inbox.js'
-import { askedLine, countWord, cutAnswer, observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps, type PromptSource } from './observed.js'
+import { askedLine, countWord, cutAnswer, observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps, OUTER_FRESH_WAIT_MS, type PromptSource } from './observed.js'
 import type { OpenTarget } from './open.js'
 import { createOrcaAdapter, MAX_TEXT, type OrcaDeps } from './orca.js'
-import type { Nested, NestedPlace } from './outer.js'
+import { type Fresh, FRESH_WITHIN_MS, type Nested, type NestedPlace, type OuterLookup } from './outer.js'
 import type { ProcessName } from './scannedApp.js'
+import { pageOf } from './select.js'
 import { createTabsAdapter, type TabApp } from './tabs.js'
 import { createTmuxAdapter } from './tmux.js'
-import type { HostAgent, PaneSwitch, TypeResult } from './types.js'
+import type { HostAgent, Nest, PaneSwitch, TypeResult } from './types.js'
 import { createVscodeAdapter } from './vscode.js'
 import { createWeztermAdapter } from './wezterm.js'
 import { createZellijAdapter } from './zellij.js'
@@ -92,6 +93,12 @@ const graced = (): Promise<unknown> => vi.advanceTimersByTimeAsync(STOP_HOOK_GRA
 
 /** Every answer a read was given has reached the source. */
 const flushed = (): Promise<void> => new Promise((resolve) => { setImmediate(resolve) })
+
+/** A tap no later tap on any agent replaced, as cableHost's count says. */
+const latestTap = (): boolean => true
+
+/** What an outer lookup answers once it settles (outer.ts OuterLookup). */
+type OuterAnswer = NonNullable<Awaited<ReturnType<OuterLookup>>>
 
 describe('ObservedSource states', () => {
   beforeEach(() => { vi.useFakeTimers() })
@@ -317,6 +324,71 @@ describe('ObservedSource removal', () => {
     expect(src.list()).toHaveLength(0)
   })
 
+  it('a session its app brings back in a new process after its end stays listed', async () => {
+    const { src, clock, gens, ev } = setup()
+    src.ingest(ev('session-start'))
+    await src.tick()
+    // The app quits: its agent ends, and the app's relaunch resumes the session in a process of its own.
+    src.ingest(ev('session-end'))
+    gens.set(100, null)
+    src.ingest(ev('session-start', { callerPid: 200 }))
+    clock.t += 20_000
+    await src.tick()
+    await src.tick()
+    expect(src.list()).toHaveLength(1)
+    expect(src.list()[0]).not.toHaveProperty('ended')
+  })
+
+  it('a session that comes back in a new process with no end of its old one stays listed', async () => {
+    const { src, clock, gens, alive, ev } = setup()
+    src.ingest(ev('session-start'))
+    await src.tick()
+    // Its process is killed with no hook, and a new one carries on the session.
+    gens.set(100, null)
+    alive.mockImplementation((pid) => pid !== 100)
+    src.ingest(ev('turn-start', { callerPid: 200 }))
+    clock.t += 20_000
+    await src.tick()
+    await src.tick()
+    expect(src.list()).toHaveLength(1)
+  })
+
+  it('a session that came back in a new process is removed once that process goes', async () => {
+    const { src, gens, ev } = setup()
+    src.ingest(ev('session-start'))
+    await src.tick()
+    src.ingest(ev('session-start', { callerPid: 200 }))
+    await src.tick()
+    gens.set(200, 'reused')
+    await src.tick()
+    expect(src.list()).toHaveLength(0)
+  })
+
+  it('a hook that names a process passing by leaves a live session in its own', async () => {
+    const { src, gens, alive, ev } = setup()
+    src.ingest(ev('session-start'))
+    await src.tick()
+    // On Windows a hook whose climb past its runner failed names that PowerShell, which exits with the hook.
+    src.ingest(ev('turn-start', { callerPid: 300 }))
+    gens.set(300, null)
+    alive.mockImplementation((pid) => pid !== 300)
+    await src.tick()
+    expect(src.list()).toHaveLength(1)
+  })
+
+  it('a late hook of the process a session left does not take it back there', async () => {
+    const { src, gens, alive, ev } = setup()
+    src.ingest(ev('session-start'))
+    await src.tick()
+    gens.set(100, null)
+    alive.mockImplementation((pid) => pid !== 100)
+    src.ingest(ev('session-start', { callerPid: 200 }))
+    // A subagent stopped as the old process exited still sends its SubagentStop, after the new one took the session.
+    src.ingest(ev('subagent-stop'))
+    await src.tick()
+    expect(src.list()).toHaveLength(1)
+  })
+
   it('tick reads every session\'s process generation in one call', async () => {
     const { src, procs, ev } = setup()
     for (let i = 0; i < 50; i++) src.ingest(ev('session-start', { sessionId: `s${i}`, callerPid: 200 + i }))
@@ -338,6 +410,19 @@ describe('ObservedSource removal', () => {
     read([{ pid: 100, generation: 'g100' }])
     await ticking
     expect(src.list().map((a) => a.sessionId)).toEqual(['s1', 's2'])
+  })
+
+  it('a session that moves to a new process while the process table is read is not judged by that table', async () => {
+    const { src, procs, ev } = setup()
+    src.ingest(ev('session-start'))
+    let read!: (rows: { pid: number; generation?: string }[]) => void
+    procs.mockImplementationOnce(() => new Promise((resolve) => { read = resolve }))
+    const ticking = src.tick()
+    // Its app brought it back in a process that started after the read began, so the table cannot hold it.
+    src.ingest(ev('session-start', { callerPid: 5000 }))
+    read([{ pid: 100, generation: 'g100' }])
+    await ticking
+    expect(src.list()).toHaveLength(1)
   })
 
   it('with no process table to read (Windows here), a session goes once its process is not alive', async () => {
@@ -1496,7 +1581,7 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
       binary: () => undefined,
     }, front: () => undefined }), 'herdr'),
     createTmuxAdapter({ run: ran, tmux: async () => ({ state: 'present' }), processes: async () => [{ pid: 100, ppid: 1, executable: 'claude' }],
-      log: () => {}, front: () => fake.tmuxFront() }),
+      log: () => {}, front: () => fake.tmuxFront(), platform: 'darwin' }),
     // As devices.ts takes it where the hook's addresses are hc's own session's.
     createHerdrAppAdapter({ ...deps,
       client: { prompt: (address, kind, text) => fake.hcPrompt(address, kind, text), keys: async () => false },
@@ -1562,7 +1647,7 @@ describe('ObservedSource actions', () => {
     src.ingest(ev('session-start', { hostHints: { TERM_PROGRAM: 'ghostty' } }))
     const agent = src.list()[0]
     expect(src.capabilities(agent)).toMatchObject({ voice: false, focus: true })
-    expect(await src.focus(agent)).toBe(true)
+    expect(await src.focus(agent, latestTap)).toBe(true)
     expect(actions.open.mock.calls).toEqual([[agent.id, { bundle: 'com.mitchellh.ghostty' }]])
   })
 
@@ -2007,7 +2092,7 @@ describe('ObservedSource actions', () => {
     const agent = src.list()[0]
     expect(src.capabilities(agent)).toEqual({ status: true, voice: false, focus: false, answer: false })
     expect(await src.send(agent, 'git push --force')).toEqual({ ok: false, reason: 'proj did not answer.' })
-    expect(await src.focus(agent)).toBe(false)
+    expect(await src.focus(agent, latestTap)).toBe(false)
     // Ended in a turn too: nobody is there to take them.
     src.ingest(ev('turn-start', { sessionId: 's2', ...withHandle }))
     src.ingest(ev('session-end', { sessionId: 's2', ...withHandle }))
@@ -2046,11 +2131,11 @@ describe('ObservedSource actions', () => {
     src.ingest(ev('session-start', { sessionId: 'orca', ...withHandle }))
     src.ingest(ev('session-start', { sessionId: 'plain', callerPid: 102 }))
     const agent = (sessionId: string) => src.list().find((a) => a.sessionId === sessionId)!
-    expect(await src.focus(agent('orca'))).toBe(false)
+    expect(await src.focus(agent('orca'), latestTap)).toBe(false)
     expect(actions.open).toHaveBeenCalledWith(agent('orca').id, { bundle: 'com.stablyai.orca', pane: { adapter: 'orca', id: HANDLE } })
     actions.open.mockResolvedValue(true)
-    expect(await src.focus(agent('orca'))).toBe(true)
-    expect(await src.focus(agent('plain'))).toBe(false)
+    expect(await src.focus(agent('orca'), latestTap)).toBe(true)
+    expect(await src.focus(agent('plain'), latestTap)).toBe(false)
     expect(actions.open).toHaveBeenCalledTimes(2)
   })
 
@@ -2079,7 +2164,7 @@ describe('ObservedSource actions', () => {
     const { src, ev } = setup({ actions })
     src.ingest(ev('session-start', { callerPid: 100, hostHints: { TMUX_PANE: '%3' } }))
     src.ingest(ev('session-start', { callerPid: 200, hostHints: { TMUX_PANE: '%9' } }))
-    expect(await src.focus(src.list()[0])).toBe(true)
+    expect(await src.focus(src.list()[0], latestTap)).toBe(true)
     expect(actions.open.mock.calls).toEqual([[src.list()[0].id, { pane: { adapter: 'tmux', id: '%9:200' } }]])
   })
 
@@ -2088,7 +2173,7 @@ describe('ObservedSource actions', () => {
     const { src, ev } = setup({ actions })
     const sessionId = '8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
     src.ingest(ev('session-start', { sessionId, hostHints: { __CFBundleIdentifier: 'com.microsoft.VSCode', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' } }))
-    expect(await src.focus(src.list()[0])).toBe(true)
+    expect(await src.focus(src.list()[0], latestTap)).toBe(true)
     expect(actions.open.mock.calls).toEqual([[src.list()[0].id, { bundle: 'com.microsoft.VSCode', pane: { adapter: 'vscode', id: sessionId } }]])
   })
 
@@ -2115,7 +2200,7 @@ describe('ObservedSource actions', () => {
     const { actions } = fakeActions()
     const { src, ev } = setup({ actions })
     src.ingest(ev('session-start', { engine: 'codex', sessionId: THREAD, hostHints: { __CFBundleIdentifier: 'com.microsoft.VSCode', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' } }))
-    expect(await src.focus(src.list()[0])).toBe(true)
+    expect(await src.focus(src.list()[0], latestTap)).toBe(true)
     expect(actions.open.mock.calls).toEqual([[src.list()[0].id, { bundle: 'com.microsoft.VSCode' }]])
   })
 
@@ -2238,8 +2323,8 @@ describe('ObservedSource and the Herdr terminal a session the scan found runs in
     expect(placeOf(agent)).toEqual(placeOf(twin))
     expect(s.src.capabilities(agent)).toEqual(h.src.capabilities(twin))
     expect(s.src.capabilities(agent)).toMatchObject({ voice: true, focus: true })
-    expect(await s.src.focus(agent)).toBe(true)
-    expect(await h.src.focus(twin)).toBe(true)
+    expect(await s.src.focus(agent, latestTap)).toBe(true)
+    expect(await h.src.focus(twin, latestTap)).toBe(true)
     expect(s.actions.open.mock.calls).toEqual([[agent.id, { bundle: 'dev.herdr.app', pane: { adapter: 'herdr-app', id: 't7' } }]])
     expect(h.actions.open.mock.calls).toEqual(s.actions.open.mock.calls)
     expect(await s.src.send(agent, 'next')).toEqual({ ok: true })
@@ -2315,10 +2400,39 @@ describe('ObservedSource and the Herdr terminal a session the scan found runs in
     expect(placeOf(row('a'))).toEqual({ host: 'terminal', app: 'vscode', appPending: undefined, paneKeys: undefined })
     expect(herdrLines(s.logs)).toHaveLength(2)
     expect(s.src.capabilities(row('a'))).toMatchObject({ voice: false, focus: false })
-    expect(await s.src.focus(row('a'))).toBe(false)
+    expect(await s.src.focus(row('a'), latestTap)).toBe(false)
     expect(s.actions.canOpen).toHaveBeenLastCalledWith(row('a').id, {})
     expect(await s.src.send(row('a'), 'next')).toEqual({ ok: false, reason: 'a did not answer.' })
     expect(s.actions.hcPrompt).not.toHaveBeenCalled()
+  })
+
+  // The scan's maker read put it on tmux's page: a pairing is on Herdr's page, and gives that multiplexer back as it gives
+  // back the app.
+  it('a session the scan put on tmux\'s page is on Herdr\'s while paired, and on tmux\'s again once not, or at a nested hook', async () => {
+    const rows: ProcessName[] = [{ pid: 11, ppid: 90, executable: 'claude' }, { pid: 90, ppid: 80, executable: 'zsh' }, { pid: 80, ppid: 1, executable: 'tmux' }]
+    const outer = vi.fn((_hints: Readonly<Record<string, string>>, _pid: number) => new Promise<OuterAnswer>(() => {}))
+    const s = paired({
+      table: async () => rows, madeBy: async () => new Map([[11, { host: 'tmux', maker: 80, tty: 'ttys010' }]]), nested: async () => ({}), outer,
+    })
+    found(s, 'a', 11)
+    await s.src.scanOpen()
+    const a = (): HostAgent => s.src.list()[0]
+    expect(a()).toMatchObject({ host: 'tmux', nest: 'tmux', app: 'terminal', appPending: true })
+    s.terminals.set(11, 't7')
+    s.src.placeHerdr()
+    expect(placeOf(a())).toEqual({ host: 'herdr', app: 'herdr', appPending: undefined, paneKeys: ['herdr-app:t7'] })
+    expect(a()).not.toHaveProperty('nest')
+    expect(pageOf(a())).toBe('herdr')
+    s.terminals.delete(11)
+    s.src.placeHerdr()
+    expect(a()).toMatchObject({ host: 'tmux', nest: 'tmux', app: 'terminal', appPending: true })
+    expect(pageOf(a())).toBe('tmux')
+    // Paired again, then its first hook, nested, from its own process: tmux's page while that hook's lookup runs.
+    s.terminals.set(11, 't7')
+    s.src.placeHerdr()
+    s.src.ingest(s.ev('turn-start', { sessionId: 'a', callerPid: 11, cwd: '/x/a', hostHints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux', __CFBundleIdentifier: 'com.googlecode.iterm2' } }))
+    expect(a()).toMatchObject({ host: 'tmux', nest: 'tmux' })
+    expect(pageOf(a())).toBe('tmux')
   })
 
   it('a hook heard after the pairing places it by its own hints, and no later placeHerdr pairs it again', async () => {
@@ -2408,7 +2522,7 @@ describe('ObservedSource and a Claude app session the scan found (docs/plans/202
   const noClaude = async (t: Awaited<ReturnType<typeof scanned>>, agent: HostAgent): Promise<void> => {
     expect(t.src.hasPane(agent)).toBe(false)
     await t.src.showPane(agent)
-    await t.src.focus(agent)
+    await t.src.focus(agent, latestTap)
     expect(JSON.stringify(t.actions.open.mock.calls)).not.toContain(LOCAL)
     expect(JSON.stringify(t.actions.claudeShow.mock.calls)).not.toContain(LOCAL)
   }
@@ -2419,7 +2533,7 @@ describe('ObservedSource and a Claude app session the scan found (docs/plans/202
     expect(t.src.hasPane(agent)).toBe(true)
     expect(await t.src.showPane(agent)).toBe('ok')
     expect(t.actions.claudeShow.mock.calls).toEqual([[agent.id, LOCAL]])
-    expect(await t.src.focus(agent)).toBe(true)
+    expect(await t.src.focus(agent, latestTap)).toBe(true)
     // No hook named its app: its pane's adapter does, so a link that fails still brings the app (open.ts).
     expect(t.actions.open.mock.calls).toEqual([[agent.id, { bundle: CLAUDE_APP, pane: { adapter: 'claude', id: LOCAL } }]])
   })
@@ -2474,7 +2588,7 @@ describe('ObservedSource and a Claude app session the scan found (docs/plans/202
     const t = await scanned({ over: { herdrTerminal: (pid) => (pid === 11 ? 't7' : undefined) } })
     const [agent] = t.src.list()
     expect(agent).toMatchObject({ app: 'herdr', paneKeys: ['herdr-app:t7'] })
-    expect(await t.src.focus(agent)).toBe(true)
+    expect(await t.src.focus(agent, latestTap)).toBe(true)
     expect(t.actions.open.mock.calls[0][1].pane).toEqual({ adapter: 'herdr-app', id: 't7' })
     await noClaude(t, agent)
   })
@@ -2781,7 +2895,7 @@ describe('ObservedSource and the Codex app', () => {
     const { src, actions } = hooked()
     const agent = src.list()[0]
     expect(agent).toMatchObject({ app: 'codex', host: 'codex' })
-    expect(await src.focus(agent)).toBe(true)
+    expect(await src.focus(agent, latestTap)).toBe(true)
     expect(actions.open.mock.calls).toEqual([[agent.id, { bundle: 'com.openai.codex', pane }]])
   })
 
@@ -2791,7 +2905,7 @@ describe('ObservedSource and the Codex app', () => {
     expect(agent).toMatchObject({ app: 'codex', host: 'terminal' })
     expect(agent).not.toHaveProperty('appPending')
     expect(src.capabilities(agent)).toMatchObject({ focus: true })
-    expect(await src.focus(agent)).toBe(true)
+    expect(await src.focus(agent, latestTap)).toBe(true)
     expect(actions.open.mock.calls).toEqual([[agent.id, { pane }]])
     expect(actions.open.mock.calls[0][1]).not.toHaveProperty('bundle')
   })
@@ -2859,7 +2973,7 @@ describe('ObservedSource and the Codex app', () => {
   it('a Codex session in Ghostty has no Codex pane', async () => {
     const { src, actions } = hooked({ ...inApp, hostHints: { TERM_PROGRAM: 'ghostty' } })
     const agent = src.list()[0]
-    expect(await src.focus(agent)).toBe(true)
+    expect(await src.focus(agent, latestTap)).toBe(true)
     expect(actions.open.mock.calls).toEqual([[agent.id, { bundle: 'com.mitchellh.ghostty' }]])
     expect(src.hasPane(agent)).toBe(false)
   })
@@ -2872,7 +2986,7 @@ describe('ObservedSource and the Codex app', () => {
   it('a Claude Code session under the Codex app has no Codex pane', async () => {
     const { src, actions } = hooked({ ...inApp, engine: 'claude' })
     const agent = src.list()[0]
-    expect(await src.focus(agent)).toBe(true)
+    expect(await src.focus(agent, latestTap)).toBe(true)
     expect(actions.open.mock.calls).toEqual([[agent.id, { bundle: 'com.openai.codex' }]])
   })
 
@@ -2881,7 +2995,7 @@ describe('ObservedSource and the Codex app', () => {
     src.ingest(ev('turn-start', { ...inApp, hostHints: { TERM_PROGRAM: 'ghostty' } }))
     const agent = src.list()[0]
     expect(src.hasPane(agent)).toBe(false)
-    expect(await src.focus(agent)).toBe(true)
+    expect(await src.focus(agent, latestTap)).toBe(true)
     expect(actions.open.mock.calls).toEqual([[agent.id, { bundle: 'com.mitchellh.ghostty' }]])
   })
 })
@@ -2924,7 +3038,7 @@ describe('ObservedSource and a session the scan found', () => {
   it('a tap on a session the scan found takes its pane\'s adapter\'s bundle', async () => {
     const { src, actions } = await scanned('com.example.app')
     const agent = src.list()[0]
-    expect(await src.focus(agent)).toBe(true)
+    expect(await src.focus(agent, latestTap)).toBe(true)
     expect(actions.open.mock.calls).toEqual([[agent.id, { bundle: 'com.example.app', pane: { adapter: 'pid', id: 'p100' } }]])
   })
 
@@ -2932,14 +3046,14 @@ describe('ObservedSource and a session the scan found', () => {
     const { src, ev, actions } = await scanned('com.example.app')
     src.ingest(ev('turn-start', { callerPid: 222, hostHints: { TERM_PROGRAM: 'ghostty' } }))
     const agent = src.list()[0]
-    expect(await src.focus(agent)).toBe(true)
+    expect(await src.focus(agent, latestTap)).toBe(true)
     expect(actions.open.mock.calls).toEqual([[agent.id, { bundle: 'com.mitchellh.ghostty', pane: { adapter: 'pid', id: 'p222' } }]])
   })
 
   it('a pane whose adapter declares no bundle adds none', async () => {
     const { src, actions } = await scanned()
     const agent = src.list()[0]
-    expect(await src.focus(agent)).toBe(true)
+    expect(await src.focus(agent, latestTap)).toBe(true)
     expect(actions.open.mock.calls).toEqual([[agent.id, { pane: { adapter: 'pid', id: 'p100' } }]])
   })
 })
@@ -3142,7 +3256,7 @@ describe('ObservedSource and an editor started from Terminal', () => {
     expect([agent.host, agent.app]).toEqual(['vscode', app])
     expect(s.src.paneOf(agent.id, app)).toBe('term:100')
     // No window reported its terminal: the tap is the editor's bundle alone, Cursor's for an agent in Cursor.
-    expect(await s.src.focus(agent)).toBe(true)
+    expect(await s.src.focus(agent, latestTap)).toBe(true)
     expect(s.actions.open.mock.calls).toEqual([[agent.id, { bundle }]])
   })
 
@@ -3159,7 +3273,7 @@ describe('ObservedSource and an editor started from Terminal', () => {
     const agent = s.src.list()[0]
     expect(agent.app).toBe(app)
     expect(s.src.paneOf(agent.id, app)).toBe(sessionId)
-    expect(await s.src.focus(agent)).toBe(true)
+    expect(await s.src.focus(agent, latestTap)).toBe(true)
     expect(s.actions.open.mock.calls).toEqual([[agent.id, { bundle, pane: { adapter: app, id: sessionId } }]])
   })
 
@@ -3176,7 +3290,7 @@ describe('ObservedSource and an editor started from Terminal', () => {
     const agent = s.src.list()[0]
     expect([agent.host, agent.app]).toEqual(['claude', 'claude'])
     expect(s.src.paneOf(agent.id, 'claude')).toBe(SESSION)
-    expect(await s.src.focus(agent)).toBe(true)
+    expect(await s.src.focus(agent, latestTap)).toBe(true)
     expect(actions.open.mock.calls[0][1].bundle).toBe(CLAUDE_APP)
   })
 })
@@ -3202,7 +3316,7 @@ describe('ObservedSource and the host that owns its caller\'s terminal', () => {
     const present = async () => ({ state: 'present' as const })
     const adapters = [
       createZellijAdapter({ run, zellij: present, platform: 'linux' }),
-      createTmuxAdapter({ run, tmux: present, processes: async () => [{ pid: 100, ppid: 1, executable: 'claude' }], log: () => {}, front: () => undefined }),
+      createTmuxAdapter({ run, tmux: present, processes: async () => [{ pid: 100, ppid: 1, executable: 'claude' }], log: () => {}, front: () => undefined, platform: 'darwin' }),
     ]
     const { actions } = fakeActions()
     const s = setup({ actions: { ...actions, adapters }, ptyOwner })
@@ -3303,7 +3417,7 @@ describe('ObservedSource and the host that owns its caller\'s terminal', () => {
     const s = owned()
     s.src.ingest(s.ev('session-start', { hostHints: { ...ZELLIJ, TMUX_PANE: '%3' } }))
     await s.reads[0].answer('tmux')
-    expect(await s.src.focus(s.agent())).toBe(true)
+    expect(await s.src.focus(s.agent(), latestTap)).toBe(true)
     expect(s.actions.open.mock.calls.map(([, target]) => target.pane)).toEqual([{ adapter: 'tmux', id: '%3:100' }])
     expect(s.src.capabilities(s.agent())).toMatchObject({ voice: false })
   })
@@ -3351,7 +3465,7 @@ describe('ObservedSource and a pane that only holds the agent', () => {
     /** The pane a tap hands the opener now. */
     const tapped = async () => {
       actions.open.mockClear()
-      expect(await s.src.focus(agent())).toBe(true)
+      expect(await s.src.focus(agent(), latestTap)).toBe(true)
       return actions.open.mock.calls[0][1].pane
     }
     return { ...s, actions, ptyOwner, reads, agent, tapped }
@@ -3575,7 +3689,7 @@ describe('ObservedSource and an Orca terminal or a herdr pane that only holds th
     await s.reads[0].answer(undefined)
     expect(await s.src.send(s.agent(), 'two')).toEqual({ ok: true })
     expect(s.typed.mock.calls.map(([pane, text]) => [pane.id, text])).toEqual([['e1', 'one'], ['e1', 'two']])
-    expect(await s.src.focus(s.agent())).toBe(true)
+    expect(await s.src.focus(s.agent(), latestTap)).toBe(true)
     expect(s.actions.open.mock.calls.map(([, target]) => target.pane)).toEqual([{ adapter: 'editor', id: 'e1' }])
     expect(s.sends()).toEqual([])
   })
@@ -3587,7 +3701,7 @@ describe('ObservedSource and an Orca terminal or a herdr pane that only holds th
     await s.reads[0].answer(undefined)
     expect(await s.src.send(s.agent(), 'two')).toEqual({ ok: true })
     expect(s.typed.mock.calls.map(([pane, text]) => [pane.id, text])).toEqual([['e1', 'one'], ['e1', 'two']])
-    expect(await s.src.focus(s.agent())).toBe(true)
+    expect(await s.src.focus(s.agent(), latestTap)).toBe(true)
     expect(s.actions.open.mock.calls.map(([, target]) => target.pane)).toEqual([{ adapter: 'editor', id: 'e1' }])
     expect(s.herdrPrompt).not.toHaveBeenCalled()
   })
@@ -3688,7 +3802,7 @@ describe('ObservedSource panes', () => {
     expect(src.hasPane(agent)).toBe(true)
     expect(await src.showPane(agent)).toBe('ok')
     expect(actions.orcaSwitch.mock.calls).toEqual([[HANDLE]])
-    expect(await src.focus(agent)).toBe(true)
+    expect(await src.focus(agent, latestTap)).toBe(true)
     expect(actions.open).toHaveBeenCalledTimes(1)
     expect(actions.open.mock.calls[0][1].pane?.id).toBe(tapped)
   })
@@ -3718,7 +3832,7 @@ describe('ObservedSource panes', () => {
     expect(actions.orcaSend).not.toHaveBeenCalled()
     expect(actions.orcaSwitch).not.toHaveBeenCalled()
     // A tap: Orca comes forward, and never by its terminal's handle (open question 1).
-    expect(await src.focus(agent)).toBe(true)
+    expect(await src.focus(agent, latestTap)).toBe(true)
     expect(actions.open.mock.calls[0][1].bundle).toBe('com.stablyai.orca')
     expect(actions.open.mock.calls[0][1].pane?.adapter).not.toBe('orca')
   })
@@ -3738,7 +3852,7 @@ describe('ObservedSource panes', () => {
     expect(src.hasPane(agent)).toBe(false)
     expect(await src.showPane(agent)).toBe('failed')
     expect(actions.orcaSwitch).not.toHaveBeenCalled()
-    expect(await src.focus(agent)).toBe(true)
+    expect(await src.focus(agent, latestTap)).toBe(true)
     expect(actions.open).toHaveBeenCalledTimes(1)
     expect(actions.open.mock.calls[0][1].pane?.id).toBe('w1:p2')
   })
@@ -3880,12 +3994,12 @@ describe('ObservedSource panes', () => {
     // A tap hands its pane to the opener, which brings it forward: the source runs none of its own.
     const near = madeUp()
     const tap = first(near, both)
-    expect(await tap.src.focus(tap.agent)).toBe(true)
+    expect(await tap.src.focus(tap.agent, latestTap)).toBe(true)
     expect(tap.actions.open.mock.calls).toEqual([[tap.agent.id, { pane: PANE }]])
     expect(near.focus).not.toHaveBeenCalled()
     // It cannot bring its pane forward here: Orca's terminal is the first that can.
     near.canFocus.mockReturnValue(false)
-    expect(await tap.src.focus(tap.agent)).toBe(true)
+    expect(await tap.src.focus(tap.agent, latestTap)).toBe(true)
     expect(tap.actions.open.mock.calls[1]).toEqual([tap.agent.id, { bundle: 'com.stablyai.orca', pane: { adapter: 'orca', id: HANDLE } }])
     expect(near.focus).not.toHaveBeenCalled()
 
@@ -3893,7 +4007,7 @@ describe('ObservedSource panes', () => {
     const late = { ...madeUp(), tap: 'after' as const }
     let opened!: (yes: boolean) => void
     const raised = first(late, both, { open: vi.fn(() => new Promise<boolean>((resolve) => { opened = resolve })) })
-    const raising = raised.src.focus(raised.agent)
+    const raising = raised.src.focus(raised.agent, latestTap)
     expect(raised.actions.open.mock.calls).toEqual([[raised.agent.id, { bundle: 'com.stablyai.orca', pane: { adapter: 'orca', id: HANDLE } }]])
     expect(late.focus).not.toHaveBeenCalled()
     opened(true)
@@ -3902,19 +4016,19 @@ describe('ObservedSource panes', () => {
     // Its app did not come: nothing is raised.
     const unopened = { ...madeUp(), tap: 'after' as const }
     const closed = first(unopened, both, { open: vi.fn(async () => false) })
-    expect(await closed.src.focus(closed.agent)).toBe(false)
+    expect(await closed.src.focus(closed.agent, latestTap)).toBe(false)
     expect(unopened.focus).not.toHaveBeenCalled()
     // It cannot show its pane now: the pane a rest would show is Orca's, which comes before its app.
     const unshown = { ...madeUp(), tap: 'after' as const }
     unshown.canShow.mockReturnValue(false)
     const behind = first(unshown, both)
-    expect(await behind.src.focus(behind.agent)).toBe(true)
+    expect(await behind.src.focus(behind.agent, latestTap)).toBe(true)
     expect(unshown.focus).not.toHaveBeenCalled()
     // It is the pane a rest would show, but it cannot be brought forward here: nothing is raised.
     const stuck = { ...madeUp(), tap: 'after' as const }
     stuck.canFocus.mockReturnValue(false)
     const fixed = first(stuck, both)
-    expect(await fixed.src.focus(fixed.agent)).toBe(true)
+    expect(await fixed.src.focus(fixed.agent, latestTap)).toBe(true)
     expect(stuck.focus).not.toHaveBeenCalled()
   })
   // A rest shows a Claude app session in the app, only while that app is in front (docs/specs/2026-11-15-dial-claude-app-follow.md).
@@ -4198,7 +4312,7 @@ describe('ObservedSource panes', () => {
     expect(await s.src.showPane(agent)).toBe('ok')
     expect(actions.orcaSwitch.mock.calls).toEqual([[HANDLE]])
     expect(s.src.capabilities(agent)).toMatchObject({ focus: true, voice: false })
-    expect(await s.src.focus(agent)).toBe(true)
+    expect(await s.src.focus(agent, latestTap)).toBe(true)
     // No hook named its app: the app of the adapter it was placed in comes forward.
     expect(actions.open.mock.calls).toEqual([[id, { bundle: 'com.stablyai.orca', pane: { adapter: 'orca', id: HANDLE } }]])
     expect(await s.src.send(agent, 'run the tests')).toMatchObject({ ok: false })
@@ -4292,6 +4406,18 @@ describe('ObservedSource tabs', () => {
     expect(t.src.hasPane(t.agent())).toBe(true)
   })
 
+  it('tabTty: a live agent\'s tty once read, none before, for an ended session or an unknown id', async () => {
+    const t = tabs()
+    t.src.ingest(t.ev('session-start', inTerminal))
+    const { id } = t.agent()
+    expect(t.src.tabTty(id)).toBeUndefined()
+    await t.reads[0].answer(TTY)
+    expect(t.src.tabTty(id)).toBe(TTY)
+    expect(t.src.tabTty('nobody')).toBeUndefined()
+    t.src.ingest(t.ev('session-end', inTerminal))
+    expect(t.src.tabTty(id)).toBeUndefined()
+  })
+
   it('iTerm2 and Ghostty are read too; Orca, VS Code and an unknown terminal are not', () => {
     const t = tabs()
     t.src.ingest(t.ev('session-start', { sessionId: 'iterm', callerPid: 101, hostHints: { TERM_PROGRAM: 'iTerm.app' } }))
@@ -4306,7 +4432,7 @@ describe('ObservedSource tabs', () => {
     const t = tabs()
     t.src.ingest(t.ev('session-start', { hostHints: { ...inTerminal.hostHints, TMUX_PANE: '%3' } }))
     await t.reads[0].answer('/dev/ttys031')
-    expect(await t.src.focus(t.agent())).toBe(true)
+    expect(await t.src.focus(t.agent(), latestTap)).toBe(true)
     expect(t.actions.open.mock.calls).toEqual([[t.agent().id, { bundle: 'com.apple.Terminal', pane: { adapter: 'tmux', id: '%3:100' } }]])
   })
 
@@ -4473,7 +4599,7 @@ describe('ObservedSource tabs', () => {
     const t = tabs({ open: held.open })
     t.src.ingest(t.ev('session-start', inTerminal))
     await t.reads[0].answer(TTY)
-    const tap = t.src.focus(t.agent())
+    const tap = t.src.focus(t.agent(), latestTap)
     await flushed()
     expect(held.open.mock.calls).toEqual([[t.agent().id, { bundle: 'com.apple.Terminal' }]])
     expect(t.actions.tabSelect).not.toHaveBeenCalled()
@@ -4486,7 +4612,7 @@ describe('ObservedSource tabs', () => {
     const t = tabs({ open: vi.fn(async () => false) })
     t.src.ingest(t.ev('session-start', inTerminal))
     await t.reads[0].answer(TTY)
-    expect(await t.src.focus(t.agent())).toBe(false)
+    expect(await t.src.focus(t.agent(), latestTap)).toBe(false)
     expect(t.actions.tabSelect).not.toHaveBeenCalled()
   })
 
@@ -4496,7 +4622,7 @@ describe('ObservedSource tabs', () => {
       const t = tabs({ open: held.open })
       t.src.ingest(t.ev('session-start', inTerminal))
       await t.reads[0].answer(TTY)
-      const tap = t.src.focus(t.agent())
+      const tap = t.src.focus(t.agent(), latestTap)
       t.src.ingest(t.ev(meanwhile.event, { ...inTerminal, callerPid: meanwhile.pid }))
       held.answer(true)
       expect(await tap).toBe(true)
@@ -4510,7 +4636,7 @@ describe('ObservedSource tabs', () => {
     const t = tabs({ open: held.open })
     t.src.ingest(t.ev('session-start', inTerminal))
     await t.reads[0].answer(TTY)
-    const tap = t.src.focus(t.agent())
+    const tap = t.src.focus(t.agent(), latestTap)
     t.src.ingest(t.ev('turn-start', { hostHints: { ...inTerminal.hostHints, ORCA_TERMINAL_HANDLE: HANDLE } }))
     held.answer(true)
     expect(await tap).toBe(true)
@@ -4525,9 +4651,9 @@ describe('ObservedSource tabs', () => {
     t.src.ingest(t.ev('session-start', { sessionId: 'orca', callerPid: 101, hostHints: { ...inTerminal.hostHints, ORCA_TERMINAL_HANDLE: HANDLE } }))
     await t.reads[0].answer(TTY)
     await t.reads[1].answer('/dev/ttys024')
-    expect(await t.src.focus(t.agent())).toBe(true)
+    expect(await t.src.focus(t.agent(), latestTap)).toBe(true)
     t.actions.tabsOpen.mockReturnValue(true)
-    expect(await t.src.focus(t.agent('orca'))).toBe(true)
+    expect(await t.src.focus(t.agent('orca'), latestTap)).toBe(true)
     expect(t.actions.open).toHaveBeenCalledTimes(2)
     expect(t.actions.tabSelect).not.toHaveBeenCalled()
   })
@@ -4544,7 +4670,7 @@ describe('ObservedSource tabs', () => {
     await t.reads[0].answer(TTY)
     expect(t.src.hasPane(t.agent())).toBe(false)
     expect(await t.src.showPane(t.agent())).toBe('failed')
-    expect(await t.src.focus(t.agent())).toBe(true)
+    expect(await t.src.focus(t.agent(), latestTap)).toBe(true)
     expect(t.actions.open).toHaveBeenCalledTimes(1)
     expect(t.actions.open.mock.calls[0][1].bundle).toBe('com.mitchellh.ghostty')
     expect(t.actions.tabSelect).not.toHaveBeenCalled()
@@ -4582,26 +4708,36 @@ describe('ObservedSource outer place', () => {
   const paneAsked = ['tmux', ['display-message', '-p', '-t', '%3', expect.any(String)], expect.any(Number)]
   const selected = ['tmux', ['select-window', '-t', '%3', ';', 'select-pane', '-t', '%3'], expect.any(Number)]
 
-  /** A source whose outer places the test answers by hand, in the order they were asked, as the tmux lookup answers an
-   *  event in a tmux pane; an event in no tmux pane is not nested. A tty read answers at once. */
-  function nested(over: Partial<Fakes> = {}, adapt = (adapters: readonly HostAdapter[]) => adapters, deps: Partial<ObservedDeps> = {}) {
-    const asks: Array<{ answer(place: { app?: string; tty?: string; pid?: number }): Promise<unknown> }> = []
-    const outer = vi.fn((hints: Readonly<Record<string, string>>, _pid: number) => (hints.TMUX_PANE
-      ? new Promise<{ app?: string; tty?: string; pid?: number }>((resolve) => {
-        asks.push({ answer: (place) => { resolve(place); return vi.advanceTimersByTimeAsync(0) } })
+  /** A source whose outer places the test answers by hand, in the order they were asked, as tmux's and herdr's lookups
+   *  answer an event in their pane, and whose multiplexer each ask's lookup tells by hand once its maker read confirms
+   *  it; an event in neither is not nested. A tap's or a rest's fresh ask answers `{}` at once, which changes nothing,
+   *  or, [freshByHand], goes to `freshAsks`, answered as `asks` are. A tty read answers at once. */
+  function nested(
+    over: Partial<Fakes> = {}, adapt = (adapters: readonly HostAdapter[]) => adapters, deps: Partial<ObservedDeps> = {},
+    { freshByHand }: { freshByHand?: true } = {},
+  ) {
+    const asks: Array<{ answer(place: OuterAnswer): Promise<unknown>; made(nest: Nest): Promise<unknown> }> = []
+    const freshAsks: Array<(place: OuterAnswer) => Promise<unknown>> = []
+    const outer = vi.fn((hints: Readonly<Record<string, string>>, _pid: number, made?: (nest: Nest) => void, opts?: Fresh) => {
+      if (!hints.TMUX_PANE && !hints.HERDR_PANE_ID) return undefined
+      if (opts?.fresh && !freshByHand) return Promise.resolve<OuterAnswer>({})
+      return new Promise<OuterAnswer>((resolve) => {
+        const answer = (place: OuterAnswer) => { resolve(place); return vi.advanceTimersByTimeAsync(0) }
+        if (opts?.fresh) freshAsks.push(answer)
+        else asks.push({ answer, made: (nest) => { made?.(nest); return vi.advanceTimersByTimeAsync(0) } })
       })
-      : undefined))
+    })
     const tty = vi.fn(async (_pid: number): Promise<string | undefined> => '/dev/ttys031')
     const { actions, ran } = fakeActions(over)
     const s = setup({ actions: { ...actions, adapters: adapt(actions.adapters) }, tty, outer, ...deps })
     const agent = () => s.src.list()[0]
-    return { ...s, actions, ran, outer, asks, tty, agent }
+    return { ...s, actions, ran, outer, asks, freshAsks, tty, agent }
   }
 
   it('a nested event lands on its outer app, with its client\'s tty and that app\'s bundle', async () => {
     const t = nested()
     t.src.ingest(t.ev('session-start', inTmux()))
-    expect(t.outer.mock.calls).toEqual([[inTmux().hostHints, 100]])
+    expect(t.outer.mock.calls).toEqual([[inTmux().hostHints, 100, expect.any(Function)]])
     expect(t.agent().app).toBe('tmux')
     const told = t.changes.mock.calls.length
     await t.asks[0].answer(CLIENT)
@@ -4611,7 +4747,7 @@ describe('ObservedSource outer place', () => {
     expect(t.src.byTab('terminal-app', '/dev/ttys004')).toMatchObject({ id })
     expect(t.src.paneOf(id, 'tabs')).toBe('terminal-app:/dev/ttys004')
     expect(t.src.paneOf(id, 'tmux')).toBe('%3:100:terminal-app')
-    expect(await t.src.focus(t.agent())).toBe(true)
+    expect(await t.src.focus(t.agent(), latestTap)).toBe(true)
     expect(t.actions.open.mock.calls[0][1].bundle).toBe('com.apple.Terminal')
     expect(t.tty).not.toHaveBeenCalled()
   })
@@ -4629,6 +4765,18 @@ describe('ObservedSource outer place', () => {
     expect(t.src.windowOf(id)).toEqual({ pid: 100, app: 'tmux' })
   })
 
+  it('tabTty: a nested agent\'s is its client\'s tty, and none once no client holds it', async () => {
+    const t = nested()
+    t.src.ingest(t.ev('session-start', inTmux()))
+    const { id } = t.agent()
+    expect(t.src.tabTty(id)).toBeUndefined()
+    await t.asks[0].answer(CLIENT)
+    expect(t.src.tabTty(id)).toBe('/dev/ttys004')
+    t.src.ingest(t.ev('turn-start', inTmux()))
+    await t.asks[1].answer({})
+    expect(t.src.tabTty(id)).toBeUndefined()
+  })
+
   // A client in a terminal with no page (docs/plans/2026-11-21-dial-linux-followups-design.md, Decided): its window is
   // raised by its process, while the agent stays where its hints put it.
   it('an outer answer with only its client\'s process: no page, tab or pane moves, and the raise gets that process', async () => {
@@ -4643,7 +4791,7 @@ describe('ObservedSource outer place', () => {
     expect(t.src.byTab('terminal-app', '/dev/ttys004')).toBeUndefined()
     expect(t.src.windowOf(id)).toEqual({ pid: 4300, app: 'tmux' })
     expect(t.changes).toHaveBeenCalledTimes(told + 1)
-    expect(await t.src.focus(t.agent())).toBe(true)
+    expect(await t.src.focus(t.agent(), latestTap)).toBe(true)
     expect(t.actions.open.mock.calls).toEqual([[id, { pane: { adapter: 'tmux', id: '%3:100' } }]])
     expect(t.tty).not.toHaveBeenCalled()
     // A later answer of none, or one with a process out of form, keeps no process.
@@ -4680,7 +4828,8 @@ describe('ObservedSource outer place', () => {
     const t = nested({ open: vi.fn(() => new Promise<boolean>((resolve) => { opened = resolve })) }, (adapters) => [late, ...adapters])
     t.src.ingest(t.ev('session-start', inTmux()))
     await t.asks[0].answer(CLIENT)
-    const raising = t.src.focus(t.agent())
+    const raising = t.src.focus(t.agent(), latestTap)
+    await vi.advanceTimersByTimeAsync(0)
     expect(t.actions.open.mock.calls).toEqual([[t.agent().id, { bundle: 'com.apple.Terminal', pane: { adapter: 'tmux', id: '%3:100:terminal-app' } }]])
     expect(late.focus).not.toHaveBeenCalled()
     opened(true)
@@ -4728,13 +4877,13 @@ describe('ObservedSource outer place', () => {
     t.src.ingest(t.ev('needs-input', { ...inTmux(), callerPid: 101 }))
     expect(t.agent().app).toBe('tmux')
     expect(t.src.byTab('terminal-app', '/dev/ttys004')).toBeUndefined()
-    expect(t.outer.mock.calls[1]).toEqual([inTmux().hostHints, 101])
+    expect(t.outer.mock.calls[1]).toEqual([inTmux().hostHints, 101, expect.any(Function)])
     await t.asks[1].answer(CLIENT)
     expect(t.agent().app).toBe('terminal-app')
     t.src.ingest(t.ev('needs-input', { ...inTmux({ TMUX_PANE: '%4' }), callerPid: 101 }))
     expect(t.agent().app).toBe('tmux')
     expect(t.src.paneOf(t.agent().id, 'tabs')).toBeUndefined()
-    expect(t.outer.mock.calls[2]).toEqual([inTmux({ TMUX_PANE: '%4' }).hostHints, 101])
+    expect(t.outer.mock.calls[2]).toEqual([inTmux({ TMUX_PANE: '%4' }).hostHints, 101, expect.any(Function)])
     expect(t.tty).not.toHaveBeenCalled()
   })
 
@@ -4744,7 +4893,7 @@ describe('ObservedSource outer place', () => {
     await t.asks[0].answer({})
     expect(t.agent().app).toBe('ghostty')
     expect(t.src.paneOf(t.agent().id, 'tabs')).toBeUndefined()
-    expect(await t.src.focus(t.agent())).toBe(true)
+    expect(await t.src.focus(t.agent(), latestTap)).toBe(true)
     expect(t.actions.open.mock.calls).toEqual([[t.agent().id, { bundle: 'com.mitchellh.ghostty', pane: { adapter: 'tmux', id: '%3:100' } }]])
   })
 
@@ -4916,10 +5065,386 @@ describe('ObservedSource outer place', () => {
     const t = nested()
     t.src.ingest(t.ev('session-start', inTmux()))
     await t.asks[0].answer(CLIENT)
-    expect(await t.src.focus(t.agent())).toBe(true)
+    expect(await t.src.focus(t.agent(), latestTap)).toBe(true)
     expect(t.actions.open.mock.calls).toEqual([[t.agent().id, { bundle: 'com.apple.Terminal', pane: { adapter: 'tmux', id: '%3:100:terminal-app' } }]])
     expect(t.actions.tabSelect.mock.calls).toEqual([['terminal-app', '/dev/ttys004', true]])
     expect(t.actions.open.mock.invocationCallOrder[0]).toBeLessThan(t.actions.tabSelect.mock.invocationCallOrder[0])
+  })
+
+  // Eval I13 (PM, 2026-11-24): the person detached, attached again from iTerm2's tab 2 and typed nothing, so no hook
+  // asked again. A tap and a rest read where the client is now, waiting at most OUTER_FRESH_WAIT_MS.
+  describe('a tap or a rest reads its client afresh', () => {
+    const TAB_2 = { ...CLIENT, tty: '/dev/ttys005' }
+    const late = (logs: readonly string[]) => logs.filter((line) => line === '[observed] outer · late')
+
+    it('I13: a tap opens the tab its client is in now, read afresh with no hook since', async () => {
+      const t = nested({}, undefined, {}, { freshByHand: true })
+      t.src.ingest(t.ev('session-start', inTmux()))
+      await t.asks[0].answer(CLIENT)
+      const tapping = t.src.focus(t.agent(), latestTap)
+      expect(t.outer.mock.calls.at(-1)).toEqual([inTmux().hostHints, 100, undefined, { fresh: true }])
+      expect(t.actions.open).not.toHaveBeenCalled()
+      await t.freshAsks[0](TAB_2)
+      expect(await tapping).toBe(true)
+      expect(t.src.paneOf(t.agent().id, 'tabs')).toBe('terminal-app:/dev/ttys005')
+      expect(t.actions.tabSelect.mock.calls.at(-1)).toEqual(['terminal-app', '/dev/ttys005', true])
+    })
+
+    it('I13: a rest selects the tab its client is in now', async () => {
+      const t = nested({}, undefined, {}, { freshByHand: true })
+      t.src.ingest(t.ev('session-start', inTmux()))
+      await t.asks[0].answer(CLIENT)
+      const resting = t.src.showPane(t.agent())
+      expect(t.actions.tabSelect).not.toHaveBeenCalled()
+      await t.freshAsks[0](TAB_2)
+      expect(await resting).toBe('ok')
+      expect(t.actions.tabSelect.mock.calls).toEqual([['terminal-app', '/dev/ttys005', false]])
+      expect(t.ran.mock.calls).toEqual([paneAsked, selected])
+      expect(t.actions.tabSelect.mock.invocationCallOrder[0]).toBeLessThan(t.ran.mock.invocationCallOrder[0])
+    })
+
+    it('a lookup slower than the wait: the tap acts on the old tab at OUTER_FRESH_WAIT_MS, says late once, and the late answer lands', async () => {
+      for (const act of ['tap', 'rest'] as const) {
+        const t = nested({}, undefined, {}, { freshByHand: true })
+        t.src.ingest(t.ev('session-start', inTmux()))
+        await t.asks[0].answer(CLIENT)
+        const acting = act === 'tap' ? t.src.focus(t.agent(), latestTap) : t.src.showPane(t.agent())
+        await vi.advanceTimersByTimeAsync(OUTER_FRESH_WAIT_MS - 1)
+        expect(t.actions.open, act).not.toHaveBeenCalled()
+        expect(t.actions.tabSelect, act).not.toHaveBeenCalled()
+        await vi.advanceTimersByTimeAsync(1)
+        expect(await acting, act).toBe(act === 'tap' ? true : 'ok')
+        expect(t.actions.open, act).toHaveBeenCalledTimes(act === 'tap' ? 1 : 0)
+        expect(t.actions.tabSelect.mock.calls, act).toEqual([['terminal-app', '/dev/ttys004', act === 'tap']])
+        expect(late(t.logs), act).toHaveLength(1)
+        await t.freshAsks[0](TAB_2)
+        expect(t.src.paneOf(t.agent().id, 'tabs'), act).toBe('terminal-app:/dev/ttys005')
+        expect(late(t.logs), act).toHaveLength(1)
+      }
+    })
+
+    // Detached and not attached again: the row keeps its page and its tab, and the tap opens the old app.
+    it('a fresh answer with no app and no client\'s process changes nothing', async () => {
+      for (const place of [{}, { nest: 'tmux' }, { pid: 0 }] as const) {
+        const t = nested({}, undefined, {}, { freshByHand: true })
+        t.src.ingest(t.ev('session-start', inTmux()))
+        await t.asks[0].answer({ ...CLIENT, nest: 'tmux' })
+        const told = t.changes.mock.calls.length
+        const tapping = t.src.focus(t.agent(), latestTap)
+        await t.freshAsks[0](place)
+        expect(await tapping, JSON.stringify(place)).toBe(true)
+        expect(t.agent().app, JSON.stringify(place)).toBe('terminal-app')
+        expect(t.actions.tabSelect.mock.calls, JSON.stringify(place)).toEqual([['terminal-app', '/dev/ttys004', true]])
+        expect(t.changes, JSON.stringify(place)).toHaveBeenCalledTimes(told)
+      }
+    })
+
+    it('a fresh answer with only its client\'s process lands: the raise gets that process (Linux)', async () => {
+      const t = nested({}, undefined, {}, { freshByHand: true })
+      t.src.ingest(t.ev('session-start', inTmux()))
+      await t.asks[0].answer({ pid: 4300 })
+      const { id } = t.agent()
+      const tapping = t.src.focus(t.agent(), latestTap)
+      await t.freshAsks[0]({ pid: 4500 })
+      expect(await tapping).toBe(true)
+      expect(t.src.windowOf(id)).toEqual({ pid: 4500, app: 'tmux' })
+    })
+
+    it('a hook\'s ask during a fresh one wins', async () => {
+      const t = nested({}, undefined, {}, { freshByHand: true })
+      t.src.ingest(t.ev('session-start', inTmux()))
+      await t.asks[0].answer(CLIENT)
+      const tapping = t.src.focus(t.agent(), latestTap)
+      t.src.ingest(t.ev('turn-start', inTmux()))
+      await t.asks[1].answer({ ...CLIENT, tty: '/dev/ttys006' })
+      await t.freshAsks[0](TAB_2)
+      expect(await tapping).toBe(true)
+      expect(t.src.paneOf(t.agent().id, 'tabs')).toBe('terminal-app:/dev/ttys006')
+      expect(t.actions.tabSelect.mock.calls.at(-1)).toEqual(['terminal-app', '/dev/ttys006', true])
+    })
+
+    it('a tap or rest on an agent in no multiplexer asks no lookup and waits for nothing', async () => {
+      const t = nested({}, undefined, {}, { freshByHand: true })
+      t.src.ingest(t.ev('session-start', { hostHints: { __CFBundleIdentifier: 'com.apple.Terminal' } }))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(await t.src.focus(t.agent(), latestTap)).toBe(true)
+      expect(await t.src.showPane(t.agent())).toBe('ok')
+      expect(t.outer).toHaveBeenCalledTimes(1)
+      expect(late(t.logs)).toEqual([])
+    })
+
+    it('a session that ends during the wait opens and shows nothing', async () => {
+      const t = nested({}, undefined, {}, { freshByHand: true })
+      t.src.ingest(t.ev('session-start', inTmux()))
+      await t.asks[0].answer(CLIENT)
+      const tapping = t.src.focus(t.agent(), latestTap)
+      const resting = t.src.showPane(t.agent())
+      t.src.ingest(t.ev('session-end', inTmux()))
+      await t.freshAsks[0](TAB_2)
+      expect(await tapping).toBe(false)
+      expect(await resting).toBe('failed')
+      expect(t.actions.open).not.toHaveBeenCalled()
+      expect(t.actions.tabSelect).not.toHaveBeenCalled()
+    })
+
+    // A lookup never rejects (OuterLookup), yet one that did, or threw, would leave its landing unsettled: held, it would
+    // fail every later tap and rest on the agent, and no fresh ask would run again.
+    it('a fresh lookup that rejects or throws: the tap acts on the old tab, says so, and a tap past the second asks again', async () => {
+      for (const fail of ['rejects', 'throws'] as const) {
+        const t = nested({}, undefined, {}, { freshByHand: true })
+        t.src.ingest(t.ev('session-start', inTmux()))
+        await t.asks[0].answer(CLIENT)
+        t.outer.mockImplementationOnce(() => {
+          if (fail === 'throws') throw new TypeError('tmux under /Users/someone')
+          return Promise.reject(new Error('tmux under /Users/someone'))
+        })
+        expect(await t.src.focus(t.agent(), latestTap), fail).toBe(true)
+        expect(t.actions.tabSelect.mock.calls, fail).toEqual([['terminal-app', '/dev/ttys004', true]])
+        expect(t.logs.filter((line) => line.startsWith('[observed] outer')), fail)
+          .toEqual([`[observed] outer · lookup not read · ${fail === 'throws' ? 'TypeError' : 'Error'}`])
+        expect(t.logs.join('\n'), fail).not.toContain('someone')
+        t.clock.t += FRESH_WITHIN_MS
+        const again = t.src.focus(t.agent(), latestTap)
+        await t.freshAsks[0](TAB_2)
+        expect(await again, fail).toBe(true)
+        expect(t.actions.tabSelect.mock.calls.at(-1), fail).toEqual(['terminal-app', '/dev/ttys005', true])
+      }
+    })
+
+    it('a tap and a rest within the second run one fresh lookup an agent', async () => {
+      const t = nested({}, undefined, {}, { freshByHand: true })
+      t.src.ingest(t.ev('session-start', inTmux()))
+      await t.asks[0].answer(CLIENT)
+      const fresh = () => t.outer.mock.calls.filter(([, , , opts]) => opts?.fresh).length
+      const tapping = t.src.focus(t.agent(), latestTap)
+      const resting = t.src.showPane(t.agent())
+      expect(fresh()).toBe(1)
+      await vi.advanceTimersByTimeAsync(OUTER_FRESH_WAIT_MS)
+      expect(await tapping).toBe(true)
+      expect(await resting).toBe('ok')
+      expect(late(t.logs)).toHaveLength(2)
+      await t.freshAsks[0](TAB_2)
+      t.clock.t += FRESH_WITHIN_MS - 1
+      expect(await t.src.focus(t.agent(), latestTap)).toBe(true)
+      expect(fresh()).toBe(1)
+      t.clock.t += 1
+      const again = t.src.focus(t.agent(), latestTap)
+      expect(fresh()).toBe(2)
+      await t.freshAsks[1](TAB_2)
+      expect(await again).toBe(true)
+    })
+
+    // A tap or rest waits up to OUTER_FRESH_WAIT_MS before it acts (PM, 2026-11-24: last action wins): one the person
+    // replaced meanwhile would bring forward what they left.
+    describe('the last tap or rest wins', () => {
+      // The dial's taps on any agent, in turn, as cableHost counts them: each asks whether it is still the latest.
+      const taps = () => {
+        let n = 0
+        return (src: ObservedSource, agent: HostAgent) => { const mine = ++n; return src.focus(agent, () => n === mine) }
+      }
+
+      it('two taps during one wait: only the later opens', async () => {
+        const t = nested({}, undefined, {}, { freshByHand: true })
+        t.src.ingest(t.ev('session-start', inTmux()))
+        await t.asks[0].answer(CLIENT)
+        const tap = taps()
+        const first = tap(t.src, t.agent())
+        const second = tap(t.src, t.agent())
+        expect(t.freshAsks).toHaveLength(1)
+        await t.freshAsks[0](TAB_2)
+        expect(await first).toBe('superseded')
+        expect(await second).toBe(true)
+        expect(t.actions.open).toHaveBeenCalledTimes(1)
+      })
+
+      it('a tap on a, then on b during a\'s wait: b opens, a does not', async () => {
+        const t = nested({}, undefined, {}, { freshByHand: true })
+        t.src.ingest(t.ev('session-start', inTmux()))
+        t.src.ingest(t.ev('session-start', { sessionId: 's2', callerPid: 200, ...inTmux({ TMUX_PANE: '%4' }) }))
+        await t.asks[0].answer(CLIENT)
+        await t.asks[1].answer(TAB_2)
+        const of = (sessionId: string) => t.src.list().find(({ id }) => id === observedAgentId('claude', sessionId))!
+        const tap = taps()
+        const tappingA = tap(t.src, of('s1'))
+        const tappingB = tap(t.src, of('s2'))
+        await t.freshAsks[0](CLIENT)
+        expect(await tappingA).toBe('superseded')
+        expect(t.actions.open).not.toHaveBeenCalled()
+        await t.freshAsks[1](TAB_2)
+        expect(await tappingB).toBe(true)
+        expect(t.actions.open.mock.calls.map(([id]) => id)).toEqual([of('s2').id])
+      })
+
+      // A later tap on another source's agent (a Claude app session, Orca, Harness's own window) is no tap here: only
+      // cableHost's count says this one is no longer the latest.
+      it('a tap no longer the latest after its wait opens nothing', async () => {
+        const t = nested({}, undefined, {}, { freshByHand: true })
+        t.src.ingest(t.ev('session-start', inTmux()))
+        await t.asks[0].answer(CLIENT)
+        const tapping = t.src.focus(t.agent(), () => false)
+        await t.freshAsks[0](TAB_2)
+        expect(await tapping).toBe('superseded')
+        expect(t.actions.open).not.toHaveBeenCalled()
+      })
+
+      it('a rest that a later rest or tap replaced shows nothing', async () => {
+        for (const later of ['rest', 'tap'] as const) {
+          const t = nested({}, undefined, {}, { freshByHand: true })
+          t.src.ingest(t.ev('session-start', inTmux()))
+          await t.asks[0].answer(CLIENT)
+          const resting = t.src.showPane(t.agent())
+          const replacing = later === 'rest' ? t.src.showPane(t.agent()) : t.src.focus(t.agent(), latestTap)
+          await t.freshAsks[0](TAB_2)
+          expect(await resting, later).toBe('superseded')
+          expect(await replacing, later).toBe(later === 'rest' ? 'ok' : true)
+          expect(t.actions.tabSelect.mock.calls, later).toEqual([['terminal-app', '/dev/ttys005', later === 'tap']])
+        }
+      })
+
+      it('a rest after a tap does not drop the tap', async () => {
+        const t = nested({}, undefined, {}, { freshByHand: true })
+        t.src.ingest(t.ev('session-start', inTmux()))
+        await t.asks[0].answer(CLIENT)
+        const tapping = t.src.focus(t.agent(), latestTap)
+        const resting = t.src.showPane(t.agent())
+        await t.freshAsks[0](TAB_2)
+        expect(await tapping).toBe(true)
+        expect(await resting).toBe('ok')
+        expect(t.actions.open).toHaveBeenCalledTimes(1)
+      })
+    })
+  })
+
+  // Diego, 2026-11-23: an agent in tmux or herdr is on that multiplexer's page, whatever terminal holds its client. Only
+  // the lookup that confirmed its pane says so (`nest`), never the hints alone.
+  it('a hooked agent in tmux has nest and host tmux once its lookup says tmux: with a client\'s app and detached', async () => {
+    const t = nested()
+    t.src.ingest(t.ev('session-start', inTmux()))
+    expect(t.agent()).not.toHaveProperty('nest')
+    await t.asks[0].answer({ ...CLIENT, pid: 4300, nest: 'tmux' })
+    expect(t.agent()).toMatchObject({ app: 'terminal-app', host: 'tmux', nest: 'tmux' })
+    expect(pageOf(t.agent())).toBe('tmux')
+    // Asked again at its next turn: it keeps its multiplexer until the answer, which finds the person detached.
+    t.src.ingest(t.ev('turn-start', inTmux()))
+    expect(t.agent()).toMatchObject({ host: 'tmux', nest: 'tmux' })
+    await t.asks[1].answer({ nest: 'tmux' })
+    expect(t.agent()).toMatchObject({ app: 'tmux', host: 'tmux', nest: 'tmux' })
+  })
+
+  it('a hooked agent in herdr has nest and host herdr', async () => {
+    const t = nested()
+    t.src.ingest(t.ev('session-start', { hostHints: { HERDR_PANE_ID: 'w1:p2' } }))
+    await t.asks[0].answer({ app: 'iterm', tty: '/dev/ttys005', pid: 4400, nest: 'herdr' })
+    expect(t.agent()).toMatchObject({ app: 'iterm', host: 'herdr', nest: 'herdr' })
+    expect(pageOf(t.agent())).toBe('herdr')
+  })
+
+  // The nearest multiplexer wins: detectHost reads HERDR_PANE_ID first, which a tmux started in a herdr pane inherits.
+  it('tmux inside herdr: the hints name both panes and detectHost says herdr, the lookup says tmux: nest and host tmux', async () => {
+    const t = nested()
+    const both = { hostHints: { HERDR_PANE_ID: 'w1:p1', TMUX_PANE: '%3', TERM_PROGRAM: 'tmux' } }
+    t.src.ingest(t.ev('session-start', both))
+    expect(t.agent().host).toBe('herdr')
+    await t.asks[0].answer({ ...CLIENT, pid: 4300, nest: 'tmux' })
+    expect(t.agent()).toMatchObject({ app: 'terminal-app', host: 'tmux', nest: 'tmux' })
+    // A later answer that confirms no multiplexer: none, and its host is its hints' again.
+    t.src.ingest(t.ev('turn-start', both))
+    await t.asks[1].answer({})
+    expect(t.agent()).not.toHaveProperty('nest')
+    expect(t.agent().host).toBe('herdr')
+  })
+
+  it('herdr inside tmux: nest and host herdr', async () => {
+    const t = nested()
+    t.src.ingest(t.ev('session-start', { hostHints: { TMUX_PANE: '%3', HERDR_PANE_ID: 'w1:p2' } }))
+    await t.asks[0].answer({ app: 'iterm', tty: '/dev/ttys005', pid: 4400, nest: 'herdr' })
+    expect(t.agent()).toMatchObject({ app: 'iterm', host: 'herdr', nest: 'herdr' })
+  })
+
+  it('code . from a tmux pane: its lookup says no multiplexer: no nest, host as its hints name it, app vscode', async () => {
+    const t = nested()
+    t.src.ingest(t.ev('session-start', inTmux({ TERM_PROGRAM: 'vscode', __CFBundleIdentifier: 'com.microsoft.VSCode' })))
+    await t.asks[0].answer({})
+    expect(t.agent()).toMatchObject({ app: 'vscode', host: 'tmux' })
+    expect(t.agent()).not.toHaveProperty('nest')
+    expect(pageOf(t.agent())).toBe('vscode')
+  })
+
+  // Mac eval IH4 (2026-11-24): a hooked agent in a herdr pane inside iTerm2 sat on iTerm2's page past a 10 s wait while
+  // herdr's client steps ran (lsof, ps, the app walk, up to 10 s each). Its lookup tells the multiplexer once its maker
+  // read confirms it, and the client's place lands when its steps end.
+  it('a hooked agent is on its multiplexer\'s page once its lookup reads that the multiplexer made its terminal, before the client\'s steps end', async () => {
+    const cases = [
+      [{ HERDR_PANE_ID: 'w1:p2', __CFBundleIdentifier: 'com.googlecode.iterm2' }, 'herdr'],
+      [{ TMUX_PANE: '%3', TERM_PROGRAM: 'tmux', __CFBundleIdentifier: 'com.googlecode.iterm2' }, 'tmux'],
+    ] as const
+    for (const [hostHints, nest] of cases) {
+      const t = nested()
+      t.src.ingest(t.ev('session-start', { hostHints }))
+      // Pending while its lookup runs: iTerm2's page, in front, does not take it.
+      expect(t.agent(), nest).toMatchObject({ app: 'iterm', appPending: true })
+      expect(t.agent(), nest).not.toHaveProperty('nest')
+      const told = t.changes.mock.calls.length
+      await t.asks[0].made(nest)
+      expect(t.agent(), nest).toMatchObject({ app: 'iterm', host: nest, nest })
+      expect(t.agent(), nest).not.toHaveProperty('appPending')
+      expect(pageOf(t.agent()), nest).toBe(nest)
+      expect(t.changes, nest).toHaveBeenCalledTimes(told + 1)
+      // The client's place lands when its steps end, on the same page.
+      await t.asks[0].answer({ app: 'iterm', tty: '/dev/ttys005', pid: 4400, nest })
+      expect(t.agent(), nest).toMatchObject({ app: 'iterm', host: nest, nest })
+      expect(t.src.paneOf(t.agent().id, 'tabs'), nest).toBe('iterm:/dev/ttys005')
+      expect(pageOf(t.agent()), nest).toBe(nest)
+    }
+  })
+
+  it('a told multiplexer lands for the latest ask alone, while the session lives, and once', async () => {
+    const inHerdr = { hostHints: { HERDR_PANE_ID: 'w1:p2' } }
+    // It moved to another caller while its first ask ran: that ask's word lands nothing, the latest's does.
+    const t = nested()
+    t.src.ingest(t.ev('session-start', inHerdr))
+    t.src.ingest(t.ev('needs-input', { ...inHerdr, callerPid: 101 }))
+    await t.asks[0].made('herdr')
+    expect(t.agent()).not.toHaveProperty('nest')
+    expect(t.agent()).toMatchObject({ appPending: true })
+    await t.asks[1].made('herdr')
+    expect(t.agent()).toMatchObject({ host: 'herdr', nest: 'herdr' })
+    // Told again with nothing new: nothing is told.
+    const told = t.changes.mock.calls.length
+    await t.asks[1].made('herdr')
+    expect(t.changes).toHaveBeenCalledTimes(told)
+    // Told after its answer landed: the answer's place stands.
+    await t.asks[1].answer({ app: 'iterm', tty: '/dev/ttys005', pid: 4400, nest: 'herdr' })
+    const landed = t.changes.mock.calls.length
+    await t.asks[1].made('herdr')
+    expect(t.changes).toHaveBeenCalledTimes(landed)
+    expect(t.src.paneOf(t.agent().id, 'tabs')).toBe('iterm:/dev/ttys005')
+
+    // It ended while it was asked.
+    const ended = nested()
+    ended.src.ingest(ended.ev('session-start', inHerdr))
+    ended.src.ingest(ended.ev('session-end', inHerdr))
+    await ended.asks[0].made('herdr')
+    expect(ended.agent()).not.toHaveProperty('nest')
+  })
+
+  it('another caller or pane drops nest at once; an earlier ask\'s late answer sets nothing', async () => {
+    for (const moved of [{ callerPid: 101 }, inTmux({ TMUX_PANE: '%4' })]) {
+      const t = nested()
+      t.src.ingest(t.ev('session-start', inTmux()))
+      await t.asks[0].answer({ ...CLIENT, nest: 'tmux' })
+      t.src.ingest(t.ev('needs-input', { ...inTmux(), ...moved }))
+      expect(t.agent(), JSON.stringify(moved)).not.toHaveProperty('nest')
+
+      // It moved while its first ask ran: that answer lands nothing, the latest's does.
+      const late = nested()
+      late.src.ingest(late.ev('session-start', inTmux()))
+      late.src.ingest(late.ev('needs-input', { ...inTmux(), ...moved }))
+      await late.asks[0].answer({ ...CLIENT, nest: 'tmux' })
+      expect(late.agent(), JSON.stringify(moved)).not.toHaveProperty('nest')
+      await late.asks[1].answer({ ...CLIENT, nest: 'tmux' })
+      expect(late.agent().nest, JSON.stringify(moved)).toBe('tmux')
+    }
   })
 })
 
@@ -4936,17 +5461,21 @@ describe('ObservedSource and a nested session the scan found', () => {
 
   /** A source whose look reads one table, whose makers name [made], with the real tabs, tmux and herdr adapters (tmux's
    *  runs recorded), a walk that names no app, and a tty read that answers at once; its nested lookups the test answers
-   *  by hand, in the order asked. */
+   *  by hand, in the order asked. A tap's or a rest's fresh ask answers `{}` at once, which changes nothing, or,
+   *  [freshByHand], goes to `freshAsks`, answered as `asks` are. */
   function scan(
     made: ReadonlyMap<number, Omit<Nested, 'pid' | 'rows'>>, deps: Partial<ObservedDeps> = {}, fakes: Partial<Fakes> = {},
-    adapt = (adapters: readonly HostAdapter[]) => adapters,
+    adapt = (adapters: readonly HostAdapter[]) => adapters, { freshByHand }: { freshByHand?: true } = {},
   ) {
     const table = vi.fn(async () => ROWS)
     const apps = vi.fn(async (_pids: readonly number[], _rows?: readonly ProcessName[]): Promise<ReadonlyMap<number, string>> => new Map())
     const madeBy = vi.fn(async (pids: readonly number[], _rows: readonly ProcessName[]) =>
       new Map(pids.flatMap((pid) => (made.has(pid) ? [[pid, made.get(pid)!] as const] : []))))
     const asks: Array<(place: NestedPlace) => void> = []
-    const nested = vi.fn((_found: Nested) => new Promise<NestedPlace>((resolve) => { asks.push(resolve) }))
+    const freshAsks: Array<(place: NestedPlace) => void> = []
+    const nested = vi.fn((_found: Nested, opts?: Fresh) => (opts?.fresh && !freshByHand
+      ? Promise.resolve<NestedPlace>({})
+      : new Promise<NestedPlace>((resolve) => { (opts?.fresh ? freshAsks : asks).push(resolve) })))
     const tty = vi.fn(async (_pid: number): Promise<string | undefined> => '/dev/ttys031')
     const { actions, ran } = fakeActions(fakes)
     const s = setup({ actions: { ...actions, adapters: adapt(actions.adapters) }, table, apps, madeBy, nested, tty, ...deps })
@@ -4964,7 +5493,7 @@ describe('ObservedSource and a nested session the scan found', () => {
       await flushed()
     }
     const agent = (sessionId: string) => s.src.list().find((a) => a.sessionId === sessionId)!
-    return { ...s, actions, ran, table, apps, madeBy, nested, tty, found, answer, agent }
+    return { ...s, actions, ran, table, apps, madeBy, nested, freshAsks, tty, found, answer, agent }
   }
 
   it('the devices start again with a tmux and a herdr agent idle: the scan puts each on its client\'s app with its tab, known, not on Other\'s page', async () => {
@@ -4982,13 +5511,40 @@ describe('ObservedSource and a nested session the scan found', () => {
       expect(t.agent(sessionId)).not.toHaveProperty('appPending')
       expect(t.src.paneOf(id, 'tabs')).toBe(`iterm:${tty}`)
       expect(t.src.windowOf(id)).toEqual({ pid, app: 'iterm' })
-      expect(await t.src.focus(t.agent(sessionId))).toBe(true)
+      expect(await t.src.focus(t.agent(sessionId), latestTap)).toBe(true)
       expect(t.actions.open.mock.calls.at(-1)).toEqual([id, { bundle: 'com.googlecode.iterm2' }])
       expect(t.actions.tabSelect.mock.calls.at(-1)).toEqual(['iterm', tty, true])
     }
     // Their tty is the multiplexer pane's pty, which no tab holds.
     expect(t.tty).not.toHaveBeenCalled()
     expect(t.logs).toEqual(['[observed] scan · 2 found · 0 app known · 0 named · 0 answered · 0 ms · 2 nested placed'])
+  })
+
+  it('tabTty: the scan\'s place gives it', async () => {
+    const t = scan(new Map([[100, IN_TMUX]]))
+    t.found('a', 100)
+    const look = t.src.scanOpen()
+    await t.answer(0, ITERM)
+    await look
+    expect(t.src.tabTty(t.agent('a').id)).toBe('/dev/ttys004')
+  })
+
+  // The devices find a scan-found herdr agent's pane by its shell, which herdr names (devices.ts placeInHerdr).
+  it('foundNested: each live agent the scan found in that host\'s pane, no hook told of, with its parents below the host\'s server', async () => {
+    const rows: readonly ProcessName[] = [...ROWS, { pid: 200, ppid: 190, executable: 'claude' },
+      { pid: 190, ppid: 185, executable: 'bash' }, { pid: 185, ppid: 180, executable: 'zsh' }, { pid: 180, ppid: 1, executable: 'herdr' }]
+    const t = scan(new Map([[100, IN_TMUX], [200, IN_HERDR]]), { table: async () => rows })
+    t.found('a', 100)
+    t.found('b', 200)
+    t.found('c', 300)
+    const look = t.src.scanOpen()
+    await t.answer(0, {})
+    await t.answer(1, {})
+    await look
+    expect(t.src.foundNested('herdr')).toEqual([{ agentId: t.agent('b').id, parents: [190, 185] }])
+    expect(t.src.foundNested('tmux')).toEqual([{ agentId: t.agent('a').id, parents: [90] }])
+    t.src.ingest(t.ev('turn-start', { sessionId: 'b', callerPid: 200, hostHints: { HERDR_PANE_ID: 'w1:p2' } }))
+    expect(t.src.foundNested('herdr')).toEqual([])
   })
 
   it('a look reads the table once for its walk, its makers and its lookups', async () => {
@@ -5211,6 +5767,72 @@ describe('ObservedSource and a nested session the scan found', () => {
     expect(t.logs).toEqual(['[observed] scan · 1 found · 0 app known · 0 named · 0 answered · 37 ms · 1 nested placed'])
   })
 
+  // Diego, 2026-11-23: on its multiplexer's page from its listing, so it does not move page when its lookup answers.
+  it('a session on a terminal tmux or herdr made has nest and host at its listing, with and without its lookup naming an app; one paired with a Herdr terminal has none', async () => {
+    const t = scan(new Map([[100, IN_TMUX], [200, IN_HERDR], [300, IN_HERDR]]), { herdrTerminal: (pid) => (pid === 300 ? 't7' : undefined) })
+    t.found('a', 100)
+    t.found('b', 200)
+    t.found('c', 300)
+    const look = t.src.scanOpen()
+    await vi.waitFor(() => expect(t.nested).toHaveBeenCalledTimes(1))
+    expect(t.agent('a')).toMatchObject({ nest: 'tmux', host: 'tmux' })
+    expect(t.agent('b')).toMatchObject({ nest: 'herdr', host: 'herdr' })
+    await t.answer(0, ITERM)
+    await t.answer(1, {})
+    await look
+    expect(t.agent('a')).toMatchObject({ app: 'iterm', nest: 'tmux', host: 'tmux' })
+    expect(t.agent('b')).toMatchObject({ app: 'terminal', appPending: true, nest: 'herdr', host: 'herdr' })
+    expect([pageOf(t.agent('a')), pageOf(t.agent('b'))]).toEqual(['tmux', 'herdr'])
+    expect(t.agent('c')).toMatchObject({ app: 'herdr', host: 'herdr' })
+    expect(t.agent('c')).not.toHaveProperty('nest')
+  })
+
+  it('a Zellij maker gives no nest', async () => {
+    const t = scan(new Map([[100, { host: 'zellij', maker: 80, tty: 'ttys010' }]]))
+    t.found('a', 100)
+    const look = t.src.scanOpen()
+    await t.answer(0, { app: 'ghostty', tty: '/dev/ttys004', pid: 4300 })
+    await look
+    expect(t.agent('a')).toMatchObject({ app: 'ghostty', host: 'terminal' })
+    expect(t.agent('a')).not.toHaveProperty('nest')
+  })
+
+  // A detached session, a client in a terminal with no page, or a step not read: the scan's lookup names no app, yet its
+  // maker read put the agent on its multiplexer's page. Its pane inherited the bundle id of the app its server started in.
+  it('the scan\'s lookup named no app: a nested first hook from the process it found keeps nest, host and page while its own lookup runs', async () => {
+    const cases = [
+      [IN_TMUX, { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux', __CFBundleIdentifier: 'com.googlecode.iterm2' }],
+      [IN_HERDR, { HERDR_PANE_ID: 'w1:p2', __CFBundleIdentifier: 'com.googlecode.iterm2' }],
+    ] as const
+    for (const [made, hostHints] of cases) {
+      const outer = vi.fn((_hints: Readonly<Record<string, string>>, _pid: number) => new Promise<OuterAnswer>(() => {}))
+      const t = scan(new Map([[100, made]]), { outer })
+      t.found('a', 100)
+      const look = t.src.scanOpen()
+      await t.answer(0, {})
+      await look
+      expect(t.agent('a'), made.host).toMatchObject({ nest: made.host, host: made.host })
+      t.src.ingest(t.ev('turn-start', { sessionId: 'a', hostHints }))
+      expect(outer.mock.calls, made.host).toEqual([[hostHints, 100, expect.any(Function)]])
+      expect(t.agent('a'), made.host).toMatchObject({ nest: made.host, host: made.host })
+      expect(pageOf(t.agent('a')), made.host).toBe(made.host)
+    }
+  })
+
+  // Pending, it would count for no page: its first turn's prompt follow to its multiplexer's page would find none there.
+  it('the scan\'s lookup named no app: a nested first hook from the process it found is no longer pending, as the maker read confirmed its page', async () => {
+    const outer = vi.fn((_hints: Readonly<Record<string, string>>, _pid: number) => new Promise<OuterAnswer>(() => {}))
+    const t = scan(new Map([[100, IN_TMUX]]), { outer })
+    t.found('a', 100)
+    const look = t.src.scanOpen()
+    await t.answer(0, {})
+    await look
+    expect(t.agent('a')).toMatchObject({ appPending: true, nest: 'tmux' })
+    t.src.ingest(t.ev('turn-start', { sessionId: 'a', hostHints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux', __CFBundleIdentifier: 'com.googlecode.iterm2' } }))
+    expect(t.agent('a')).toMatchObject({ app: 'iterm', nest: 'tmux' })
+    expect(t.agent('a')).not.toHaveProperty('appPending')
+  })
+
   describe('its placed tmux pane, and its first hook', () => {
     /** The pane tmux's lookup by process names for `a`: tmux's pane id, the agent's process and its client's app. */
     const PANE = { adapter: 'tmux', id: '%3:100:iterm' }
@@ -5221,15 +5843,20 @@ describe('ObservedSource and a nested session the scan found', () => {
 
     /** Session `a`, idle in tmux pane %3, as the scan placed it: on iTerm2's page, at its client's tab, with its pane,
      *  iTerm2 in front. Its hooks' own outer lookups the test answers by hand, in the order asked, as tmux's and herdr's
-     *  answer an event in their pane; an event in neither is not nested. */
-    async function placed(fakes: Partial<Fakes> = {}, adapt?: (adapters: readonly HostAdapter[]) => readonly HostAdapter[]) {
-      const hookAsks: Array<(place: { app?: string; tty?: string; pid?: number }) => Promise<void>> = []
-      const outer = vi.fn((hints: Readonly<Record<string, string>>, _pid: number) => (hints.TMUX_PANE || hints.HERDR_PANE_ID
-        ? new Promise<{ app?: string; tty?: string; pid?: number }>((resolve) => {
+     *  answer an event in their pane; an event in neither is not nested. A tap's or a rest's fresh ask of them answers
+     *  `{}` at once, which changes nothing; its fresh nested ask is answered as [fresh] says (scan). */
+    async function placed(
+      fakes: Partial<Fakes> = {}, adapt?: (adapters: readonly HostAdapter[]) => readonly HostAdapter[], fresh: { freshByHand?: true } = {},
+    ) {
+      const hookAsks: Array<(place: OuterAnswer) => Promise<void>> = []
+      const outer = vi.fn((hints: Readonly<Record<string, string>>, _pid: number, _made?: (nest: Nest) => void, opts?: Fresh) => {
+        if (!hints.TMUX_PANE && !hints.HERDR_PANE_ID) return undefined
+        if (opts?.fresh) return Promise.resolve<OuterAnswer>({})
+        return new Promise<OuterAnswer>((resolve) => {
           hookAsks.push(async (place) => { resolve(place); await flushed() })
         })
-        : undefined))
-      const t = scan(new Map([[100, IN_TMUX]]), { outer }, { tmuxFront: () => 'iterm', ...fakes }, adapt)
+      })
+      const t = scan(new Map([[100, IN_TMUX]]), { outer }, { tmuxFront: () => 'iterm', ...fakes }, adapt, fresh)
       t.found('a', 100)
       const look = t.src.scanOpen()
       await t.answer(0, { ...ITERM, pane: PANE })
@@ -5254,7 +5881,7 @@ describe('ObservedSource and a nested session the scan found', () => {
       const open = vi.fn(async (_agentId: string, target: OpenTarget) =>
         !target.pane || (await adapters.find((a) => a.id === target.pane!.adapter)!.focus(target.pane)) === true)
       const t = await placed({ open }, (all) => (adapters = all))
-      expect(await t.src.focus(t.a())).toBe(true)
+      expect(await t.src.focus(t.a(), latestTap)).toBe(true)
       expect(open.mock.calls).toEqual([[t.id, { bundle: 'com.googlecode.iterm2', pane: PANE }]])
       expect(t.ran.mock.calls).toEqual([paneChecked, selected])
       expect(t.actions.tabSelect.mock.calls).toEqual([['iterm', '/dev/ttys004', true]])
@@ -5284,10 +5911,30 @@ describe('ObservedSource and a nested session the scan found', () => {
       expect(t.actions.herdrPrompt).not.toHaveBeenCalled()
     })
 
+    // herdr's row of a pane with no session folds into the scan's copy by that key (registry.ts): one row, not two.
+    it('a pane its listing placed it at carries that pane\'s key, and is still none of its own; the scan\'s lookup place carries none', async () => {
+      const t = await placed()
+      t.found('b', 200)
+      t.madeBy.mockResolvedValueOnce(new Map([[200, IN_HERDR]]))
+      const look = t.src.scanOpen()
+      await t.answer(1, { app: 'iterm', tty: '/dev/ttys005', pid: 4400 })
+      await look
+      const { id } = t.agent('b')
+      expect(t.agent('b')).not.toHaveProperty('paneKeys')
+      t.src.setPaneNames('herdr', new Map(), new Map([[id, 'w1:p2:iterm']]))
+      expect(t.agent('b').paneKeys).toEqual(['herdr:w1:p2'])
+      expect(t.src.paneOf(id, 'herdr')).toBeUndefined()
+      expect(t.src.byPane('herdr', 'w1:p2')).toBeUndefined()
+      expect(t.a()).not.toHaveProperty('paneKeys')
+      // The place gone, its key goes with it.
+      t.src.setPaneNames('herdr', new Map(), new Map())
+      expect(t.agent('b')).not.toHaveProperty('paneKeys')
+    })
+
     it('the first hook after a scan\'s place keeps it on its app\'s page and tab until the hook\'s own answer lands, and that answer wins', async () => {
       const t = await placed()
       t.src.ingest(t.ev('session-start', { sessionId: 'a', ...inTmux() }))
-      expect(t.outer.mock.calls).toEqual([[inTmux().hostHints, 100]])
+      expect(t.outer.mock.calls).toEqual([[inTmux().hostHints, 100, expect.any(Function)]])
       // While it is asked, the row stays where the scan put it: the dial does not flicker to tmux's page.
       expect(t.a().app).toBe('iterm')
       expect(t.src.paneOf(t.id, 'tabs')).toBe('iterm:/dev/ttys004')
@@ -5308,7 +5955,7 @@ describe('ObservedSource and a nested session the scan found', () => {
       const t = await placed()
       // Resumed in another tmux pane, its old SessionEnd missed: the scan's place was the old process's.
       t.src.ingest(t.ev('session-start', { sessionId: 'a', ...inTmux('%5'), callerPid: 101 }))
-      expect(t.outer.mock.calls).toEqual([[inTmux('%5').hostHints, 101]])
+      expect(t.outer.mock.calls).toEqual([[inTmux('%5').hostHints, 101, expect.any(Function)]])
       expect(t.a().app).toBe('tmux')
       expect(t.src.paneOf(t.id, 'tabs')).toBeUndefined()
       expect(t.src.byTab('iterm', '/dev/ttys004')).toBeUndefined()
@@ -5317,7 +5964,7 @@ describe('ObservedSource and a nested session the scan found', () => {
 
     it('a first hook that is not nested drops the scan\'s place at once', async () => {
       const t = await placed()
-      expect(await t.src.focus(t.a())).toBe(true)
+      expect(await t.src.focus(t.a(), latestTap)).toBe(true)
       expect(t.actions.open.mock.calls.at(-1)).toEqual([t.id, { bundle: 'com.googlecode.iterm2', pane: PANE }])
       // The session resumed in a plain Ghostty tab, which no multiplexer made.
       t.src.ingest(t.ev('turn-start', { sessionId: 'a', hostHints: { TERM_PROGRAM: 'ghostty' } }))
@@ -5328,7 +5975,7 @@ describe('ObservedSource and a nested session the scan found', () => {
       expect(t.tty.mock.calls).toEqual([[100]])
       expect(t.src.paneOf(t.id, 'tabs')).toBe('ghostty:/dev/ttys031')
       expect(t.src.shownAt(t.id, 'tmux')).toBeUndefined()
-      expect(await t.src.focus(t.a())).toBe(true)
+      expect(await t.src.focus(t.a(), latestTap)).toBe(true)
       expect(t.actions.open.mock.calls.at(-1)).toEqual([t.id, { bundle: 'com.mitchellh.ghostty' }])
     })
 
@@ -5350,7 +5997,7 @@ describe('ObservedSource and a nested session the scan found', () => {
       expect(t.src.shownAt(t.id, 'tmux')).toBe('%3:100:iterm')
       // Resumed in a herdr pane: still nested, its lookup runs, and tmux's pane is no longer where it is.
       t.src.ingest(t.ev('session-start', { sessionId: 'a', hostHints: { HERDR_PANE_ID: 'w1:p2' }, callerPid: 101 }))
-      expect(t.outer.mock.calls).toEqual([[{ HERDR_PANE_ID: 'w1:p2' }, 101]])
+      expect(t.outer.mock.calls).toEqual([[{ HERDR_PANE_ID: 'w1:p2' }, 101, expect.any(Function)]])
       expect(t.src.shownAt(t.id, 'tmux')).toBeUndefined()
       await t.hookAsks[0](ITERM)
       expect(t.src.shownAt(t.id, 'tmux')).toBeUndefined()
@@ -5363,8 +6010,173 @@ describe('ObservedSource and a nested session the scan found', () => {
       await t.hookAsks[0](ITERM)
       expect(t.src.paneOf(t.id, 'tmux')).toBe('%4:100:iterm')
       expect(t.src.shownAt(t.id, 'tmux')).toBe('%4:100:iterm')
-      expect(await t.src.focus(t.a())).toBe(true)
+      expect(await t.src.focus(t.a(), latestTap)).toBe(true)
       expect(t.actions.open.mock.calls.at(-1)).toEqual([t.id, { bundle: 'com.googlecode.iterm2', pane: { adapter: 'tmux', id: '%4:100:iterm' } }])
+    })
+
+    it('its first nested hook from its own process keeps nest until the hook\'s answer, then the answer\'s', async () => {
+      // Its hints name a herdr pane too, which detectHost reads first: only nest keeps it tmux's meanwhile.
+      const both = { hostHints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux', HERDR_PANE_ID: 'w1:p1' } }
+      for (const [answer, nest, host] of [[{ ...ITERM, nest: 'tmux' }, 'tmux', 'tmux'], [{}, undefined, 'herdr']] as const) {
+        const t = await placed()
+        t.src.ingest(t.ev('session-start', { sessionId: 'a', ...both }))
+        expect(t.a(), JSON.stringify(answer)).toMatchObject({ app: 'iterm', nest: 'tmux', host: 'tmux' })
+        await t.hookAsks[0](answer)
+        expect([t.a().nest, t.a().host], JSON.stringify(answer)).toEqual([nest, host])
+      }
+    })
+
+    // Review Focus 3: resumed in a plain tab, it is no longer in tmux, and its page is its app's at once.
+    it('a first hook that is not nested drops nest at once: host and page from its hints', async () => {
+      const t = await placed()
+      expect(t.a()).toMatchObject({ nest: 'tmux', host: 'tmux' })
+      t.src.ingest(t.ev('turn-start', { sessionId: 'a', hostHints: { TERM_PROGRAM: 'ghostty' } }))
+      expect(t.a()).not.toHaveProperty('nest')
+      expect(t.a()).toMatchObject({ app: 'ghostty', host: 'ghostty' })
+      expect(pageOf(t.a())).toBe('ghostty')
+    })
+
+    // Eval I13 for an agent the scan placed (PM, 2026-11-24): no hook since the devices started again, so nothing asks
+    // again after the person attached from iTerm2's tab 2. A tap and a rest ask its lookup by process afresh, over a
+    // table read now: the look's holds no client started since. The wait runs out only when a test says (fake timers).
+    describe('a tap or a rest reads its client afresh', () => {
+      beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }) })
+      afterEach(() => { vi.useRealTimers() })
+      const TAB_2 = { ...ITERM, tty: '/dev/ttys005', pane: PANE }
+      /** The table read at the tap: tab 2's iTerm2 session started since the look. */
+      const NOW_ROWS: readonly ProcessName[] = [...ROWS, { pid: 4400, ppid: 1, executable: 'login' }]
+
+      it('I13 for an agent the scan placed: re-attached in tab 2 with no hook, a tap reads a fresh table and opens tab 2', async () => {
+        const t = await placed({}, undefined, { freshByHand: true })
+        t.table.mockResolvedValueOnce(NOW_ROWS)
+        const tapping = t.src.focus(t.a(), latestTap)
+        await flushed()
+        expect(t.table).toHaveBeenCalledTimes(2)
+        expect(t.nested.mock.calls.at(-1)).toEqual([{ ...IN_TMUX, pid: 100, rows: NOW_ROWS }, { fresh: true }])
+        expect(t.nested.mock.calls.at(-1)![0].rows).toBe(NOW_ROWS)
+        expect(t.actions.open).not.toHaveBeenCalled()
+        expect(t.freshAsks).toHaveLength(1)
+        t.freshAsks[0](TAB_2)
+        expect(await tapping).toBe(true)
+        expect(t.src.paneOf(t.id, 'tabs')).toBe('iterm:/dev/ttys005')
+        expect(t.actions.tabSelect.mock.calls.at(-1)).toEqual(['iterm', '/dev/ttys005', true])
+      })
+
+      it('I13 for an agent the scan placed: a rest selects tab 2, then its tmux pane', async () => {
+        const t = await placed({}, undefined, { freshByHand: true })
+        const resting = t.src.showPane(t.a())
+        await flushed()
+        expect(t.actions.tabSelect).not.toHaveBeenCalled()
+        expect(t.freshAsks).toHaveLength(1)
+        t.freshAsks[0](TAB_2)
+        expect(await resting).toBe('ok')
+        expect(t.actions.tabSelect.mock.calls).toEqual([['iterm', '/dev/ttys005', false]])
+        expect(t.ran.mock.calls).toEqual([paneChecked, selected])
+      })
+
+      it('placed by its maker alone (the scan\'s lookup named no app), a fresh answer that names iTerm2 places it there', async () => {
+        const t = scan(new Map([[100, IN_TMUX]]), {}, { tmuxFront: () => 'iterm' }, undefined, { freshByHand: true })
+        t.found('a', 100)
+        const look = t.src.scanOpen()
+        await t.answer(0, {})
+        await look
+        const { id } = t.agent('a')
+        expect(t.agent('a')).toMatchObject({ nest: 'tmux', host: 'tmux' })
+        const tapping = t.src.focus(t.agent('a'), latestTap)
+        await flushed()
+        expect(t.freshAsks).toHaveLength(1)
+        t.freshAsks[0]({ ...ITERM, pane: PANE })
+        expect(await tapping).toBe(true)
+        expect(t.agent('a')).toMatchObject({ app: 'iterm', nest: 'tmux' })
+        expect(t.agent('a')).not.toHaveProperty('appPending')
+        expect(t.src.shownAt(id, 'tmux')).toBe('%3:100:iterm')
+        expect(t.src.paneOf(id, 'tabs')).toBe('iterm:/dev/ttys004')
+        expect(t.actions.open.mock.calls).toEqual([[id, { bundle: 'com.googlecode.iterm2', pane: PANE }]])
+      })
+
+      // Its lookup is asked the same host, process, tty and maker at a tap as at the scan, so one with no answer for it
+      // then (a tty out of its platform's form) has none at a tap either: no table is read for it, and nothing waited for.
+      it('a lookup with no answer for it at the scan: a tap and a rest read no table and wait for nothing', async () => {
+        const nested = vi.fn((_found: Nested, _opts?: Fresh): Promise<NestedPlace> | undefined => undefined)
+        const t = scan(new Map([[100, IN_TMUX]]), { nested }, { tmuxFront: () => 'iterm' })
+        t.found('a', 100)
+        await t.src.scanOpen()
+        expect(t.agent('a')).toMatchObject({ nest: 'tmux', host: 'tmux' })
+        await t.src.focus(t.agent('a'), latestTap)
+        await t.src.showPane(t.agent('a'))
+        expect(t.table).toHaveBeenCalledTimes(1)
+        expect(nested).toHaveBeenCalledTimes(1)
+      })
+
+      it('a fresh table that cannot be read changes nothing, said once', async () => {
+        const t = await placed({}, undefined, { freshByHand: true })
+        t.table.mockRejectedValueOnce(new Error('ps timed out under /Users/someone'))
+        expect(await t.src.focus(t.a(), latestTap)).toBe(true)
+        expect(t.table).toHaveBeenCalledTimes(2)
+        expect(t.nested).toHaveBeenCalledTimes(1)
+        expect(t.actions.tabSelect.mock.calls).toEqual([['iterm', '/dev/ttys004', true]])
+        expect(t.logs.filter((line) => line.startsWith('[observed] outer'))).toEqual(['[observed] outer · processes not read · Error'])
+        expect(t.logs.join('\n')).not.toContain('someone')
+      })
+
+      it('a fresh lookup that rejects or throws changes nothing, said once, and a tap past the second asks again', async () => {
+        for (const fail of ['rejects', 'throws'] as const) {
+          const t = await placed({}, undefined, { freshByHand: true })
+          t.nested.mockImplementationOnce(() => {
+            if (fail === 'throws') throw new TypeError('no pane under /Users/someone')
+            return Promise.reject(new Error('osascript under /Users/someone'))
+          })
+          expect(await t.src.focus(t.a(), latestTap), fail).toBe(true)
+          expect(t.actions.tabSelect.mock.calls, fail).toEqual([['iterm', '/dev/ttys004', true]])
+          expect(t.logs.filter((line) => line.startsWith('[observed] outer')), fail)
+            .toEqual([`[observed] outer · lookup not read · ${fail === 'throws' ? 'TypeError' : 'Error'}`])
+          expect(t.logs.join('\n'), fail).not.toContain('someone')
+          t.clock.t += FRESH_WITHIN_MS
+          const again = t.src.focus(t.a(), latestTap)
+          await flushed()
+          expect(t.freshAsks, fail).toHaveLength(1)
+          t.freshAsks[0](TAB_2)
+          expect(await again, fail).toBe(true)
+          expect(t.actions.tabSelect.mock.calls.at(-1), fail).toEqual(['iterm', '/dev/ttys005', true])
+        }
+      })
+
+      // Detached and not attached again, or a client in a terminal with no page: the row keeps its page and its tab.
+      it('a fresh answer with no app changes nothing', async () => {
+        for (const place of [{}, { tty: '/dev/ttys005', pid: 4500 }] as const) {
+          const t = await placed({}, undefined, { freshByHand: true })
+          const told = t.changes.mock.calls.length
+          const tapping = t.src.focus(t.a(), latestTap)
+          await flushed()
+          expect(t.freshAsks, JSON.stringify(place)).toHaveLength(1)
+          t.freshAsks[0](place)
+          expect(await tapping, JSON.stringify(place)).toBe(true)
+          expect(t.a().app, JSON.stringify(place)).toBe('iterm')
+          expect(t.src.paneOf(t.id, 'tabs'), JSON.stringify(place)).toBe('iterm:/dev/ttys004')
+          expect(t.src.windowOf(t.id), JSON.stringify(place)).toEqual({ pid: 4300, app: 'iterm' })
+          expect(t.actions.tabSelect.mock.calls, JSON.stringify(place)).toEqual([['iterm', '/dev/ttys004', true]])
+          expect(t.changes, JSON.stringify(place)).toHaveBeenCalledTimes(told)
+        }
+      })
+
+      it('a hook during the fresh ask wins, and a later tap asks the hooked way', async () => {
+        const t = await placed({}, undefined, { freshByHand: true })
+        const tapping = t.src.focus(t.a(), latestTap)
+        await flushed()
+        expect(t.freshAsks).toHaveLength(1)
+        t.src.ingest(t.ev('session-start', { sessionId: 'a', ...inTmux() }))
+        await t.hookAsks[0]({ app: 'terminal-app', tty: '/dev/ttys006', pid: 4500 })
+        t.freshAsks[0](TAB_2)
+        expect(await tapping).toBe(true)
+        expect(t.a().app).toBe('terminal-app')
+        expect(t.src.paneOf(t.id, 'tabs')).toBe('terminal-app:/dev/ttys006')
+        expect(t.actions.tabSelect.mock.calls.at(-1)).toEqual(['terminal-app', '/dev/ttys006', true])
+        t.clock.t += FRESH_WITHIN_MS
+        expect(await t.src.focus(t.a(), latestTap)).toBe(true)
+        expect(t.outer.mock.calls.at(-1)).toEqual([inTmux().hostHints, 100, undefined, { fresh: true }])
+        expect(t.nested).toHaveBeenCalledTimes(2)
+        expect(t.table).toHaveBeenCalledTimes(2)
+      })
     })
   })
 })

@@ -126,7 +126,7 @@ describe('screens', () => {
     await mount(at('follow', 'offer'))
     expect(heading()).toBe('Follow ChatGPT')
     expect(text()).toContain(
-      "Your dial moves to the thread you open in ChatGPT. Harness reads only the ChatGPT window's title, while ChatGPT is in front.",
+      "Your dial moves to the thread you open in ChatGPT. Harness Device reads only the ChatGPT window's title, while ChatGPT is in front.",
     )
     expect(buttons()).toEqual(['Not now', 'Allow'])
     // Return takes Not now: the screen opens by itself.
@@ -218,7 +218,7 @@ describe('screens', () => {
     push(at('follow', 'offer'))
     expect(document.activeElement?.textContent).toBe('Not now')
     expect(described()).toBe(
-      "Your dial moves to the thread you open in ChatGPT. Harness reads only the ChatGPT window's title, while ChatGPT is in front.",
+      "Your dial moves to the thread you open in ChatGPT. Harness Device reads only the ChatGPT window's title, while ChatGPT is in front.",
     )
   })
 
@@ -235,7 +235,7 @@ describe('screens', () => {
     push(at('sign_in', 'browser', ['Harness is finishing an update']))
     expect(document.activeElement?.textContent).not.toBe('Cancel')
 
-    // The offer opens by itself as the person switches to ChatGPT: a Return typed for ChatGPT must not press Allow.
+    // It opens by itself: a Return typed for another app must not press Allow.
     push(at('follow', 'offer'))
     expect(document.activeElement?.textContent).toBe('Not now')
     expect(page().querySelector('.primary')?.textContent).toBe('Allow')

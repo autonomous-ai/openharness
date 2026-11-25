@@ -1,16 +1,17 @@
 /**
- * An agent in a herdr pane whose client runs in a WezTerm pane is on WezTerm's page, and a rest while WezTerm is in
- * front activates the client's WezTerm pane and tab, then focuses the agent's herdr pane
- * (docs/plans/2026-11-21-dial-linux-followups-design.md § 2), on the real daemon: herdr's client attached to a herdr
- * server of the test's own (harness/herdrServer.ts) runs in a pane of a WezTerm mux server of the test's own
- * (harness/weztermMux.ts), another tab of its window active, and the suite's hooked fake Claude Code in a herdr pane. A
- * fake dial on the desk lists it, and the test writes the `front` lines on the stdin of the real
- * `harness hardware watch --json`, as Harness Device does. No `herdr` or `wezterm` the daemon runs reaches the
- * developer's, and the daemon's process table hides every herdr outside the test's tree (ownHerdrsOnly).
+ * An agent in a herdr pane whose client runs in a WezTerm pane is on herdr's page (Diego, 2026-11-23:
+ * docs/plans/2026-11-23-dial-tmux-herdr-apps-design.md), and a rest while WezTerm is in front activates the client's
+ * WezTerm pane and tab, then focuses the agent's herdr pane (docs/plans/2026-11-21-dial-linux-followups-design.md § 2),
+ * on the real daemon: herdr's client attached to a herdr server of the test's own (harness/herdrServer.ts) runs in a pane
+ * of a WezTerm mux server of the test's own (harness/weztermMux.ts), another tab of its window active, and the suite's
+ * hooked fake Claude Code in a herdr pane. A fake dial on the desk lists it, and the test writes the `front` lines on the
+ * stdin of the real `harness hardware watch --json`, as Harness Device does. No `herdr` or `wezterm` the daemon runs
+ * reaches the developer's, and the daemon's process table hides every herdr outside the test's tree (ownHerdrsOnly).
  *
- * The same agent found by the open scan, idle since before the devices started, is on WezTerm's page too
- * (docs/plans/2026-11-22-dial-iterm2-tmux-herdr-design.md): its client found from herdr's server, and its herdr pane
- * focused only when herdr's own row of it names its session.
+ * The same agent found by the open scan, idle since before the devices started, is on herdr's page too
+ * (docs/plans/2026-11-22-dial-iterm2-tmux-herdr-design.md): its client found from herdr's server, and placed at its herdr
+ * pane by herdr's own row of it, by its session when the row names one, else by the pane whose shell is its parent, so a
+ * rest focuses that pane and herdr's row folds into it, one row.
  *
  * Skipped where herdr (or the cc that builds its agent) or WezTerm is not installed; CI's `e2e (dial hosts)` job
  * installs both, and there a missing one fails the file (harness/dialHosts.ts).
@@ -208,9 +209,9 @@ describe.skipIf(!herdrBinary || !weztermBinary)("herdr's client in WezTerm", () 
   const scanPlaced = (d: IsolatedDaemon) => until("the scan's lookup to place the agent",
     () => /\[observed\] scan · 1 found · .* · 1 nested placed/.test(d.log()), 45_000, 100)
 
-  it("lists the agent on WezTerm's page, one row, and on no other page", async () => {
+  it("lists the agent on herdr's page, one row, and on no other page", async () => {
     const { dial, agent } = await fresh()
-    await pages(dial, 'wezterm 1')
+    await pages(dial, 'herdr 1')
     // The agent once, and nothing else.
     expect(ring(dial)).toEqual([agent.id])
   })
@@ -223,33 +224,31 @@ describe.skipIf(!herdrBinary || !weztermBinary)("herdr's client in WezTerm", () 
     await until("the agent's pane focused in herdr", async () => await herdr.focused() === agent.pane, 30_000, 100)
   })
 
-  it("found by the scan, with herdr's row of its session: one row on WezTerm's page; a rest with WezTerm in front activates the client's pane and tab, then focuses the agent's herdr pane", async () => {
+  it("found by the scan, with herdr's row of its session: one row on herdr's page; a rest with WezTerm in front activates the client's pane and tab, then focuses the agent's herdr pane", async () => {
     const { d, dial, herdr, mux, client, agent } = await fresh('session')
     await restUntil(d, dial, agent.id, "the agent's pane focused in herdr", async () => await herdr.focused() === agent.pane)
     expect(await mux.activeTab(client.pane)).toBe(true)
     expect(await mux.active(client.pane)).toBe(true)
     await scanPlaced(d)
     // herdr's row folds into the scan's copy by its session.
-    await pages(dial, 'wezterm 1')
+    await pages(dial, 'herdr 1')
     expect(ring(dial)).toEqual([agent.id])
   })
 
-  it("found by the scan, with no session in herdr's row: on WezTerm's page with its tab, and herdr's row on herdr's page", async () => {
+  it("found by the scan, with no session in herdr's row: one row on herdr's page; a rest with WezTerm in front activates the client's pane and tab, then focuses the agent's herdr pane", async () => {
     const { d, dial, herdr, mux, client, agent } = await fresh('no session')
-    const focused = await herdr.focused()
-    await restShown(d, dial, agent.id)
+    await restUntil(d, dial, agent.id, "the agent's pane focused in herdr", async () => await herdr.focused() === agent.pane)
     expect(await mux.activeTab(client.pane)).toBe(true)
     expect(await mux.active(client.pane)).toBe(true)
-    // The rest's line comes once its every step ran: no herdr pane was focused.
-    expect(await herdr.focused()).toBe(focused)
     await scanPlaced(d)
-    await pages(dial, 'herdr 1', 'wezterm 1')
+    // herdr's row folds into the scan's copy by the pane whose shell is the agent's parent.
+    await pages(dial, 'herdr 1')
     expect(ring(dial)).toEqual([agent.id])
   })
 
   it('with another app in front a rest moves neither the tab nor the herdr pane', async () => {
     const { d, dial, herdr, mux, client, agent } = await fresh()
-    // Orca in front, with an agent of its own: the dial, holding WezTerm's ring, turns to Orca's once Orca settled
+    // Orca in front, with an agent of its own: the dial, holding herdr's ring, turns to Orca's once Orca settled
     // there, so the front line has landed.
     const handle = `term_${randomUUID()}`
     unsaid.push(handle)

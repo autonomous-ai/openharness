@@ -41,8 +41,10 @@ const HELD = 'held:'
 export const orcaHandle = (paneId: string): string => paneId.startsWith(HELD) ? paneId.slice(HELD.length) : paneId
 
 export interface OrcaDeps {
-  /** Its stdout too: tmux's answer is what it printed (tmux.ts). */
-  run(file: string, args: string[], timeoutMs: number): Promise<{ code: number | null; stdout: string }>
+  /** Its stdout too: tmux's answer is what it printed (tmux.ts). Its stderr when it ran: kitty's focus read tells no
+   *  match from a refusal by it alone, as both exit 1 (kitty.ts focusedWindows, RECORDED_KITTY.focusedMatch); it is
+   *  compared, never kept or logged. */
+  run(file: string, args: string[], timeoutMs: number): Promise<{ code: number | null; stdout: string; stderr?: string }>
   /** The first executable [name] on PATH that [accept] takes: any, by default. */
   onPath(name: string, accept?: (path: string) => boolean): string | null
   exists(path: string): boolean
@@ -78,16 +80,19 @@ function started(file: string, args: string[], platform: NodeJS.Platform): { fil
 
 export function orcaDeps(platform: NodeJS.Platform = process.platform): OrcaReadDeps {
   return {
-    run: (file, args, timeoutMs) => new Promise((resolve) => {
+    run: (file, args, asked) => new Promise((resolve) => {
+      // execFile throws on a timeout that is not a whole number, and a caller's deadline on the devices' performance.now()
+      // clock leaves a fraction: every kitty focus read answered "refused" (dialPaneFocusFollow e2e, 2026-11-23).
+      const timeoutMs = Math.max(1, Math.ceil(asked))
       // The timeout's kill waits for the process to exit: one deaf to SIGTERM, or stuck where even SIGKILL waits, kept the
       // call and its terminal's one-command slot open for good. The deadline answers by itself.
       const deadline = setTimeout(() => resolve({ code: null, stdout: '' }), timeoutMs)
       try {
         const program = started(file, args, platform)
-        execFile(program.file, program.args, { timeout: timeoutMs, killSignal: 'SIGKILL', ...program.options }, (error, stdout) => {
+        execFile(program.file, program.args, { timeout: timeoutMs, killSignal: 'SIGKILL', ...program.options }, (error, stdout, stderr) => {
           clearTimeout(deadline)
           // A number is the exit code; a timeout's kill or a binary that could not start has none.
-          resolve({ code: error === null ? 0 : typeof error.code === 'number' ? error.code : null, stdout })
+          resolve({ code: error === null ? 0 : typeof error.code === 'number' ? error.code : null, stdout, stderr })
         })
       } catch {
         // A file or argument refused before starting (a NUL byte, a batch file the resolver does not run) throws rather

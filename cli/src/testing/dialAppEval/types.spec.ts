@@ -1,8 +1,9 @@
 import { expect, it } from 'vitest'
 import { frontAppId, FRONT_NONE } from '../../cable/hosts/frontApp.js'
 import { observedAgentId } from '../../cable/hosts/observed.js'
-import { APPS, DIMENSIONS, EDITORS, FRONT_NAMES, PAGE, WEIGHTS, agentIdOf, engineOf, hookHandle, orcaAgentSessionId, orcaPaneHandle,
-  orcaTerminalHandle, orcaWorktreeId, placeOf, resultKey, type Platform } from './types.js'
+import { claudeSession, itermSession, orcaSession, vscode } from './catalog.js'
+import { APPS, DIMENSIONS, EDITORS, PAGE, WEIGHTS, agentIdOf, engineOf, frontName, hookHandle, itermPlaceOf, orcaAgentSessionId, orcaPaneHandle,
+  orcaTerminalHandle, orcaWorktreeId, pageId, placeOf, resultKey, sessionPage, type Platform } from './types.js'
 
 const id = '00000000-0000-4000-8000-0000000000e1'
 
@@ -47,9 +48,47 @@ it("PAGE names Orca's page orca", () => {
   expect(PAGE.orca).toBe('orca')
 })
 
-it('APPS is the five apps, Orca last', () => {
-  expect(APPS).toEqual(['claude', 'chatgpt', 'vscode', 'cursor', 'orca'])
+it("PAGE names iTerm2's page iterm", () => {
+  expect(PAGE.iterm).toBe('iterm')
+})
+
+it("pageId names tmux and herdr as themselves and an app by PAGE; sessionPage puts an iTerm2 session in tmux or herdr on that page, and every other session on its app's", () => {
+  expect(pageId('tmux')).toBe('tmux')
+  expect(pageId('herdr')).toBe('herdr')
+  expect(pageId('chatgpt')).toBe('codex')
+  expect(sessionPage(itermSession('b', { place: 'tmux' }))).toBe('tmux')
+  expect(sessionPage(itermSession('c', { place: 'herdr' }))).toBe('herdr')
+  expect(sessionPage(itermSession('a'))).toBe('iterm')
+  expect(sessionPage(claudeSession('a', 0))).toBe('claude')
+})
+
+it("sessionPage puts Claude Code in the person's tmux on tmux's page, in an editor's terminal too, but keeps Orca's on Orca's (decision 3)", () => {
+  expect(sessionPage(vscode('a', { tmux: true }))).toBe('tmux')
+  expect(sessionPage(vscode('a'))).toBe('vscode')
+  expect(sessionPage(orcaSession('c', { tmux: true }))).toBe('orca')
+})
+
+it('APPS is the six apps, iTerm2 last', () => {
+  expect(APPS).toEqual(['claude', 'chatgpt', 'vscode', 'cursor', 'orca', 'iterm'])
   expect(EDITORS).toEqual(['vscode', 'cursor'])
+})
+
+it('itermPlaceOf is tab by default and undefined off iTerm2', () => {
+  expect(itermPlaceOf({ app: 'iterm' })).toBe('tab')
+  expect(itermPlaceOf({ app: 'iterm', place: 'herdr' })).toBe('herdr')
+  expect(itermPlaceOf({ app: 'vscode' })).toBeUndefined()
+  expect(itermPlaceOf({ app: 'orca' })).toBeUndefined()
+  // placeOf answers the editors' places alone.
+  expect(placeOf({ app: 'iterm', place: 'tmux' })).toBeUndefined()
+})
+
+it('an iTerm2 place on a VS Code session, an editor place or tmux: true on an iTerm2 session, are refused', () => {
+  expect(() => placeOf({ app: 'vscode', place: 'tmux' })).toThrow("vscode has no tmux place: only iTerm2's sessions run in a tab, tmux or herdr")
+  expect(() => engineOf({ app: 'claude', place: 'tab' })).toThrow('claude has no tab place')
+  expect(() => itermPlaceOf({ app: 'iterm', place: 'terminal' })).toThrow('iTerm2 has no terminal place: its sessions run in a tab, tmux or herdr')
+  expect(() => itermPlaceOf({ app: 'iterm', place: 'panel' })).toThrow('iTerm2 has no panel place')
+  expect(() => engineOf({ app: 'iterm', place: 'agent' })).toThrow('iterm has no agent of its own')
+  expect(() => itermPlaceOf({ app: 'iterm', tmux: true })).toThrow("an iTerm2 session's tmux is its place: tmux: true is refused")
 })
 
 it("orcaPaneHandle gives the session's handle at its first launch and 8d0n at its nth; a session whose hooks name none is laid out on its key's handle, and hookHandle gives it none", () => {
@@ -70,15 +109,24 @@ it('orcaWorktreeId is eval-repo::/work/eval-<key>', () => {
   expect(orcaWorktreeId('w1')).toBe('eval-repo::/work/eval-w1')
 })
 
-it("every app but Orca maps through frontAppId to its own page from its FRONT_NAMES name on every platform; Orca's macOS name maps to orca", () => {
+it("every app but Orca and iTerm2 maps through frontAppId to its own page from its front name on every platform; Orca's macOS name maps to orca", () => {
   for (const platform of ['darwin', 'linux', 'win32'] as Platform[]) {
-    for (const app of APPS.filter((a) => a !== 'orca')) expect(frontAppId(FRONT_NAMES[platform][app]), `${platform} ${app}`).toBe(PAGE[app])
-    expect(frontAppId(FRONT_NAMES[platform].other), platform).toBe(FRONT_NONE)
+    for (const app of APPS.filter((a) => a !== 'orca' && a !== 'iterm')) {
+      expect(frontAppId(frontName(platform, app)), `${platform} ${app}`).toBe(PAGE[app])
+    }
+    expect(frontAppId(frontName(platform, 'other')), platform).toBe(FRONT_NONE)
   }
-  expect(frontAppId(FRONT_NAMES.darwin.orca)).toBe('orca')
+  expect(frontAppId(frontName('darwin', 'orca'))).toBe('orca')
   // Linux's and Windows' own names for Orca, which the dial is graded on there whether or not the product tells them.
-  expect(FRONT_NAMES.linux.orca).toBe('orca-ide')
-  expect(FRONT_NAMES.win32.orca).toBe('orca.exe')
+  expect(frontName('linux', 'orca')).toBe('orca-ide')
+  expect(frontName('win32', 'orca')).toBe('orca.exe')
+})
+
+it("iTerm2's macOS front name maps through frontAppId to iterm, and frontName throws for iTerm2 on Linux and Windows", () => {
+  expect(frontName('darwin', 'iterm')).toBe('com.googlecode.iterm2')
+  expect(frontAppId(frontName('darwin', 'iterm'))).toBe(PAGE.iterm)
+  expect(() => frontName('linux', 'iterm')).toThrow('iterm has no front name on linux')
+  expect(() => frontName('win32', 'iterm')).toThrow('iterm has no front name on win32')
 })
 
 it('the weights are the spec\'s and sum to 100', () => {

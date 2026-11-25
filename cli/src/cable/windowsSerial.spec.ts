@@ -179,6 +179,18 @@ describe('the daemon\'s watch', () => {
     expect(await eventually(() => watch.ports(), (ports) => ports.length === 0)).toEqual([])
   })
 
+  it('tells its listeners when a line changes the state, not for a line that repeats it, until they unsubscribe', async () => {
+    const one = line({ console: true, ports: [{ path: 'COM3' }] })
+    const { watch } = watchWith([one, one, line({ console: true, ports: [{ path: 'COM3' }, { path: 'COM4' }] })])
+    const changed = vi.fn()
+    const gone = vi.fn()
+    watch.onChange(changed)
+    watch.onChange(gone)()
+    await eventually(() => watch.ports(), (ports) => ports.length === 2)
+    expect(changed).toHaveBeenCalledTimes(2)
+    expect(gone).not.toHaveBeenCalled()
+  })
+
   it('forgets the dials when the watch ends, says why once, and starts it again no sooner than 5 s', async () => {
     let clock = 0
     const command = vi.fn(fake)

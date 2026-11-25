@@ -492,6 +492,64 @@ describe('AppRings', () => {
     expect(ringIds(rings, 'ghostty')).toEqual(['g1', 'g2'])
   })
 
+  describe('the page of an agent in tmux or herdr (Diego, 2026-11-23)', () => {
+    const pages = (agents: HostAgent[]) => {
+      const rings = new AppRings()
+      rings.update(agents)
+      return rings.apps().map(({ id, count }) => [id, count])
+    }
+
+    it('Diego\'s case: a plain agent, one in tmux and two in herdr, all in iTerm2, are iTerm2 1, tmux 1, herdr 2', () => {
+      expect(pages([
+        agent('p', { app: 'iterm', host: 'iterm' }),
+        agent('t', { app: 'iterm', host: 'tmux', nest: 'tmux' }),
+        agent('h1', { app: 'iterm', host: 'herdr', nest: 'herdr' }),
+        agent('h2', { app: 'iterm', host: 'herdr', nest: 'herdr' }),
+      ])).toEqual([['iterm', 1], ['tmux', 1], ['herdr', 2]])
+    })
+
+    it('tmux in VS Code\'s or Cursor\'s terminal is on tmux\'s page; an inherited TMUX_PANE with no nest (code . from a tmux pane) stays on its app\'s', () => {
+      expect(pages([
+        agent('v', { app: 'vscode', host: 'tmux', nest: 'tmux' }),
+        agent('c', { app: 'cursor', host: 'tmux', nest: 'tmux' }),
+        agent('i', { app: 'vscode', host: 'tmux' }),
+      ])).toEqual([['tmux', 2], ['vscode', 1]])
+    })
+
+    it('tmux and herdr in Orca stay on Orca\'s page; tmux in Herdr.app is on tmux\'s', () => {
+      expect(pages([
+        agent('ot', { app: 'orca', host: 'tmux', nest: 'tmux' }),
+        agent('oh', { app: 'orca', host: 'herdr', nest: 'herdr' }),
+        agent('ht', { app: 'herdr', host: 'tmux', nest: 'tmux' }),
+      ])).toEqual([['orca', 2], ['tmux', 1]])
+    })
+
+    it('a terminal holding only herdr panes has no row; a nested agent whose client is in no listed app is on its multiplexer\'s page, not Other\'s', () => {
+      expect(pages([
+        agent('h1', { app: 'ghostty', host: 'herdr', nest: 'herdr' }),
+        agent('h2', { app: 'terminal', host: 'herdr', nest: 'herdr' }),
+        agent('t', { app: 'unknown-app', host: 'tmux', nest: 'tmux' }),
+      ])).toEqual([['herdr', 2], ['tmux', 1]])
+    })
+
+    it('counts: a nested agent counts for its multiplexer\'s page in all, known and inFront, never its app\'s', () => {
+      const { all, known, inFront } = new AppRings().counts([
+        agent('p', { app: 'iterm' }),
+        agent('t', { app: 'iterm', host: 'tmux', nest: 'tmux' }),
+      ])
+      for (const counted of [all, known, inFront]) expect([...counted]).toEqual([['iterm', 1], ['tmux', 1]])
+    })
+
+    it('twenty agents in tmux across three terminals: one tmux ring of 16, count 20', () => {
+      const apps = ['iterm', 'ghostty', 'vscode']
+      const rings = new AppRings()
+      rings.update(row(20).map((a, i) => ({ ...a, app: apps[i % 3], host: 'tmux', nest: 'tmux' as const })))
+      expect(rings.apps()).toEqual([{ id: 'tmux', count: 20, waiting: 0, working: 0 }])
+      expect(rings.ring('tmux').rows).toHaveLength(RING_PLACES)
+      expect(rings.ring('tmux').total).toBe(20)
+    })
+  })
+
   it('the map is bounded: 20 agents with 20 unknown app ids make one terminal ring', () => {
     const rings = new AppRings()
     rings.update(row(20).map((a, i) => at(`unknown-${i}`)(a)))

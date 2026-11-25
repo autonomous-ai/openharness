@@ -1,6 +1,6 @@
 import { dirname } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fakeHerdr, RECORDED, type FakeHerdr } from '../../testing/fakeHerdr.js'
+import { fakeHerdr, RECORDED, type FakeHerdr, type FakeHerdrRequest } from '../../testing/fakeHerdr.js'
 import { createHerdrAdapter } from './herdr.js'
 import { createHerdrClient, type HerdrPrompt } from './herdrClient.js'
 import { HerdrSource, type HerdrSourceDeps } from './herdrSource.js'
@@ -8,6 +8,9 @@ import { MAX_TEXT } from './orca.js'
 import type { HostAgent } from './types.js'
 
 const KINDS = [{ type: 'pane.agent_detected' }, { type: 'pane.closed' }, { type: 'pane.exited' }]
+/** The focus subscription's entries: a subscription of its own, as herdr refuses a whole one naming a kind it does not
+ *  know (docs/plans/2026-11-24-dial-tmux-pane-focus-follow-plan.md, probe row 10). */
+const FOCUS = [{ type: 'pane.focused' }]
 const statusEntry = (pane: string) => ({ type: 'pane.agent_status_changed', pane_id: pane })
 /** The wall clock the test starts at. */
 const WALL = 1_700_000_000_000
@@ -24,7 +27,22 @@ const detected = (pane: string, more: Record<string, unknown> = {}) =>
   ({ agent: 'claude', pane_id: pane, type: 'pane_agent_detected', workspace_id: pane.split(':')[0], ...more })
 const refusal = (code: string) => ({ line: { error: { code, message: code } } })
 const method = (request: unknown) => (request as { method: string }).method
-const LOG_LINE = /^\[herdr\] (listed · \d+ agents|over · \d+ left out|skipped · \d+ pane-id|list · [a-z_]+|closed · [a-z_]+|retry · \d+|socket · (none|stale|live))$/
+/** Lets what the source was answered be taken in. */
+const turn = () => new Promise((resolve) => setImmediate(resolve))
+/** Whether a start's promise has ended, read as the test goes. */
+const ending = (start: Promise<void>) => {
+  const state = { ended: false }
+  void start.then(() => { state.ended = true })
+  return state
+}
+/** Whether a request is the focus subscription. */
+const isFocus = ({ request }: FakeHerdrRequest) => method(request) === 'events.subscribe'
+  && JSON.stringify((request as { params: { subscriptions: unknown } }).params.subscriptions) === JSON.stringify(FOCUS)
+/** A pane taking the focus, as herdr 0.9.5 told it (RECORDED.focused). */
+const focusedLine = (pane: string) => JSON.stringify({ data: { pane_id: pane, type: 'pane_focused', workspace_id: pane.split(':')[0] }, event: 'pane_focused' })
+/** The focus subscription's refusal, said. */
+const FOCUS_LINE = /^\[herdr\] focus · /
+const LOG_LINE = /^\[herdr\] (listed · \d+ agents|over · \d+ left out|skipped · \d+ pane-id|list · [a-z_]+|closed · [a-z_]+|focus · [a-z_]+|retry · \d+|socket · (none|stale|live))$/
 
 describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026-11-16-device-herdr.md)', () => {
   let server: FakeHerdr
@@ -61,6 +79,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     let changes = 0
     const prompt = vi.fn((pane: string, kind: string, text: string): Promise<HerdrPrompt> => adapter.prompt(pane, kind, text))
     const focus = vi.fn(async (_pane: string) => true)
+    const onFocus = vi.fn((_pane: string) => settle())
     const deps: HerdrSourceDeps = {
       client,
       watch: (changed) => {
@@ -72,6 +91,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
       // No hooked agent holds a herdr pane.
       held: () => false,
       focus,
+      onFocus,
       after: (ms, run) => {
         const timer = { at: mono + ms, ms, run }
         timers.push(timer)
@@ -101,7 +121,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     })
     const due = () => timers.filter(({ at }) => at <= mono).sort((a, b) => a.at - b.at)[0]
     return {
-      source, client, prompt, focus, timers, watchers, log, counts,
+      source, client, prompt, focus, onFocus, timers, watchers, log, counts,
       get changes() { return changes },
       until: (check: () => boolean) => new Promise<void>((resolve) => {
         const done = () => {
@@ -137,6 +157,22 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
   async function listRead(n: number): Promise<void> {
     const { connection } = await server.got('agent.list', n)
     await server.ended(connection)
+  }
+
+  /** The n-th subscription for the agents, from 1, or with [focus] the n-th focus subscription, once it has arrived. */
+  async function subscribed(n: number, focus = false): Promise<FakeHerdrRequest> {
+    for (let i = 1; ; i++) {
+      const sub = await server.got('events.subscribe', i)
+      if (isFocus(sub) === focus && --n === 0) return sub
+    }
+  }
+
+  /** Once the n-th focus subscription tells: a pane taking the focus on it is told. */
+  async function focusHeard(s: Setup, n: number): Promise<void> {
+    await subscribed(n, true)
+    const told = s.onFocus.mock.calls.length
+    server.event('pane_focused', { pane_id: 'w9:p9', type: 'pane_focused', workspace_id: 'w9' })
+    await s.until(() => s.onFocus.mock.calls.length > told)
   }
 
   /** Starts the source and follows it to its second subscription, which names each listed pane: live, with no timer. */
@@ -180,7 +216,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     expect(s.timers).toHaveLength(1)
     s.advance(1)
     await listRead(2)
-    expect(server.requests.map(({ request }) => request)).toEqual([
+    expect(server.requests.filter((request) => !isFocus(request)).map(({ request }) => request)).toEqual([
       { id: expect.any(String), method: 'events.subscribe', params: { subscriptions: KINDS } },
       { id: expect.any(String), method: 'agent.list', params: {} },
       { id: expect.any(String), method: 'events.subscribe', params: { subscriptions: [...KINDS, statusEntry('w1:p1')] } },
@@ -189,16 +225,175 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     expect(s.timers).toEqual([])
   })
 
+  it('the focus is a subscription of its own, naming pane.focused alone, opened once the first has listed', async () => {
+    server.agents = [agent('w1:p1')]
+    const s = setup()
+    const subscribe = vi.spyOn(s.client, 'subscribe')
+    s.source.start()
+    expect(subscribe.mock.calls.map(([entries]) => entries)).toEqual([KINDS])
+    await listRead(1)
+    expect(subscribe.mock.calls.map(([entries]) => entries)).toEqual([KINDS, FOCUS])
+    expect((await subscribed(1, true)).request).toEqual({ id: expect.any(String), method: 'events.subscribe', params: { subscriptions: FOCUS } })
+  })
+
+  it('a focus event tells its pane, and changes no row', async () => {
+    server.agents = [agent('w1:p1')]
+    const s = setup()
+    await live(s)
+    await subscribed(1, true)
+    const changes = s.changes
+    // The recording: the `pane.focus` RPC moving herdr's focus to w2:p1.
+    server.send(lines(RECORDED.focused.slice(1)))
+    await s.until(() => s.onFocus.mock.calls.length > 0)
+    expect(s.onFocus.mock.calls).toEqual([['w2:p1']])
+    expect(s.changes).toBe(changes)
+  })
+
+  it('a focus event with a pane id out of form, or another event, tells nothing', async () => {
+    const s = setup()
+    s.source.start()
+    await listRead(1)
+    await subscribed(1, true)
+    server.send(lines([focusedLine('w2:pI'), focusedLine('w2'), JSON.stringify({ data: { pane_id: 7, type: 'pane_focused' }, event: 'pane_focused' }),
+      JSON.stringify({ data: { pane_id: 'w3:p1', type: 'pane_closed', workspace_id: 'w3' }, event: 'pane_closed' }), focusedLine('w2:p1')]))
+    await s.until(() => s.onFocus.mock.calls.length > 0)
+    expect(s.onFocus.mock.calls).toEqual([['w2:p1']])
+  })
+
+  it('the focus subscription stays while the next for agents replaces the first, and is not opened twice', async () => {
+    server.agents = [agent('w1:p1')]
+    const s = setup()
+    await live(s)
+    await focusHeard(s, 1)
+    expect(server.requests.filter(isFocus)).toHaveLength(1)
+  })
+
+  // A herdr that does not know `pane.focused` refuses the subscription naming it, and closes it (the plan's probe, row 10).
+  it('herdr refusing the focus subscription: one line, the agents\' rows stay, and no subscription for agents opens it again', async () => {
+    server.agents = [agent('w1:p1')]
+    const s = setup()
+    s.source.start()
+    await subscribed(1)
+    // The next subscription is the focus one, opened once the list is read: herdr refuses it.
+    server.answer('events.subscribe', refusal('invalid_request'))
+    await subscribed(1, true)
+    server.answer('events.subscribe')
+    await s.until(() => s.log.includes('[herdr] focus · rejected'))
+    s.advance(1000)
+    await listRead(2)
+    server.event('pane_agent_detected', detected('w2:p1'))
+    await s.until(() => s.timers.length === 1)
+    server.agents = [agent('w1:p1'), agent('w2:p1')]
+    s.advance(1000)
+    await listRead(3)
+    expect(s.source.list().map(({ paneKeys }) => paneKeys)).toEqual([['herdr:w1:p1'], ['herdr:w2:p1']])
+    expect(server.requests.filter(isFocus)).toHaveLength(1)
+    expect(s.log.filter((line) => FOCUS_LINE.test(line))).toEqual(['[herdr] focus · rejected'])
+    expect(s.timers).toEqual([])
+  })
+
+  // A herdr that started again may know it.
+  it('refused, the focus is asked for again with the next attempt only', async () => {
+    server.agents = [agent('w1:p1')]
+    const s = setup()
+    s.source.start()
+    await subscribed(1)
+    server.answer('events.subscribe', refusal('invalid_request'))
+    await subscribed(1, true)
+    server.answer('events.subscribe')
+    await s.until(() => s.log.includes('[herdr] focus · rejected'))
+    server.drop()
+    await s.until(() => s.log.at(-1) === '[herdr] retry · 1')
+    s.advance(1000)
+    await listRead(2)
+    await focusHeard(s, 2)
+  })
+
+  it('an answer to the focus subscription out of form is a refusal too: one line, and no subscription opens it again', async () => {
+    server.agents = [agent('w1:p1')]
+    const s = setup()
+    const subscribe = vi.spyOn(s.client, 'subscribe')
+    s.source.start()
+    await subscribed(1)
+    server.answer('events.subscribe', { line: { result: { type: 'agent_list' } } })
+    await subscribed(1, true)
+    server.answer('events.subscribe')
+    await s.until(() => s.log.includes('[herdr] focus · bad_answer'))
+    s.advance(1000)
+    await listRead(2)
+    expect(subscribe.mock.calls.map(([entries]) => entries)).toEqual([KINDS, FOCUS, [...KINDS, statusEntry('w1:p1')]])
+    expect(s.log.filter((line) => FOCUS_LINE.test(line))).toEqual(['[herdr] focus · bad_answer'])
+  })
+
+  // A connection lost, a deadline or a line out of form is no refusal: focus-follow would stay off for the whole attempt.
+  it('the focus subscription ending of itself is opened again with the next agents\' list', async () => {
+    server.agents = [agent('w1:p1')]
+    const s = setup()
+    const subscribe = vi.spyOn(s.client, 'subscribe')
+    s.source.start()
+    await subscribed(1)
+    server.answer('events.subscribe', 'close')
+    const first = await subscribed(1, true)
+    server.answer('events.subscribe')
+    await server.ended(first.connection)
+    s.advance(1000)
+    await listRead(2)
+    expect(subscribe.mock.calls.map(([entries]) => entries)).toEqual([KINDS, FOCUS, [...KINDS, statusEntry('w1:p1')], FOCUS])
+    await focusHeard(s, 2)
+  })
+
+  // Its end beside the agents' has no fixed order: only a refusal is a fault to see.
+  it('the focus subscription ending of itself says nothing', async () => {
+    server.agents = [agent('w1:p1')]
+    const s = setup()
+    s.source.start()
+    await subscribed(1)
+    server.answer('events.subscribe', 'close')
+    const first = await subscribed(1, true)
+    server.answer('events.subscribe')
+    await server.ended(first.connection)
+    s.advance(1000)
+    await listRead(2)
+    await focusHeard(s, 2)
+    expect(s.log.filter((line) => FOCUS_LINE.test(line))).toEqual([])
+  })
+
+  it('the focus subscription closes with the agents\': at a stop, and as an attempt fails, and opens again with the next', async () => {
+    server.agents = [agent('w1:p1')]
+    const s = setup()
+    await live(s)
+    const first = await subscribed(1, true)
+    s.source.stop()
+    await server.ended(first.connection)
+    s.source.start()
+    s.advance(1000)
+    await listRead(3)
+    const second = await subscribed(2, true)
+    // The list of a new subscription for agents fails: the attempt ends, its focus subscription with it.
+    server.answer('agent.list', refusal('invalid_request'))
+    server.event('pane_agent_detected', detected('w2:p1'))
+    await s.until(() => s.timers.length === 1)
+    s.advance(1000)
+    await s.until(() => s.log.at(-1) === '[herdr] retry · 1')
+    await server.ended(second.connection)
+    server.answer('agent.list')
+    s.advance(1000)
+    await listRead(5)
+    await focusHeard(s, 3)
+    // Closed with the agents', it says nothing of its own.
+    expect(s.log.filter((line) => FOCUS_LINE.test(line))).toEqual([])
+  })
+
   it('the new subscription opens before the old one closes', async () => {
     server.agents = [agent('w1:p1')]
     const s = setup()
     s.source.start()
     await listRead(1)
-    const { connection } = await server.got('events.subscribe', 1)
+    const { connection } = await subscribed(1)
     let closed = false
     void server.ended(connection).then(() => { closed = true })
     s.advance(1000)
-    await server.got('events.subscribe', 2)
+    await subscribed(2)
     expect(closed).toBe(false)
     await server.ended(connection)
   })
@@ -313,7 +508,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     await heard(s, 'w1:p1')
     expect(s.changes).toBe(changes + 1)
     expect(s.timers).toEqual([])
-    expect(server.requests.filter(({ request }) => method(request) === 'events.subscribe')).toHaveLength(2)
+    expect(server.requests.filter((sub) => method(sub.request) === 'events.subscribe' && !isFocus(sub))).toHaveLength(2)
   })
 
   it('a released detection, a closed pane and an exited pane each drop the pane at once', async () => {
@@ -334,7 +529,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
       ['herdr:w1:p1'],
     ])
     expect(s.timers).toEqual([])
-    expect(server.requests.filter(({ request }) => method(request) === 'events.subscribe')).toHaveLength(2)
+    expect(server.requests.filter((sub) => method(sub.request) === 'events.subscribe' && !isFocus(sub))).toHaveLength(2)
   })
 
   it('what a subscription tells while its list is in flight wins over that list', async () => {
@@ -381,7 +576,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     expect(s.timers.map(({ ms }) => ms)).toEqual([1000])
     server.agents = [agent('w9:p1'), agent('w1:p1'), agent('w2:p1'), agent('w3:p1')]
     s.advance(1000)
-    const third = await server.got('events.subscribe', 3)
+    const third = await subscribed(3)
     expect(third.request).toMatchObject({
       params: { subscriptions: [...KINDS, ...['w9:p1', 'w1:p1', 'w2:p1', 'w3:p1'].map(statusEntry)] },
     })
@@ -397,7 +592,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     s.source.start()
     await listRead(1)
     s.advance(1000)
-    const second = await server.got('events.subscribe', 2)
+    const second = await subscribed(2)
     expect(second.request).toMatchObject({ params: { subscriptions: [...KINDS, statusEntry('w1:p1'), statusEntry('w2:p1')] } })
     await listRead(2)
     // The second subscription's replay of w2:p1 has been heard.
@@ -414,7 +609,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     await s.until(() => s.timers.length === 1)
     server.answer('events.subscribe', 'hold')
     s.advance(1000)
-    await server.got('events.subscribe', 3)
+    await subscribed(3)
     server.event('pane_agent_detected', detected('w3:p1'))
     await heard(s, 'w1:p1')
     expect(s.timers).toEqual([])
@@ -431,7 +626,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     expect(s.source.list()).toHaveLength(64)
     expect(s.log).toEqual(['[herdr] socket · live', '[herdr] listed · 64 agents', '[herdr] over · 1 left out'])
     s.advance(1000)
-    const second = await server.got('events.subscribe', 2)
+    const second = await subscribed(2)
     expect(second.request).toMatchObject({
       params: { subscriptions: [...KINDS, ...Array.from({ length: 64 }, (_, i) => statusEntry(`w${i + 1}:p1`))] },
     })
@@ -453,7 +648,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     server.send(detections(1, 64))
     await heard(s, 'w1:p1')
     s.advance(1000)
-    const third = await server.got('events.subscribe', 3)
+    const third = await subscribed(3)
     expect(third.request).toMatchObject({
       params: { subscriptions: [...KINDS, statusEntry('w1:p1'), ...Array.from({ length: 63 }, (_, i) => statusEntry(`w${i + 1}:p9`))] },
     })
@@ -481,7 +676,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     server.event('pane_agent_detected', detected('w3:p1'))
     await s.until(() => s.timers.length === 1)
     s.advance(1000)
-    const fifth = await server.got('events.subscribe', 5)
+    const fifth = await subscribed(5)
     expect(fifth.request).toMatchObject({ params: { subscriptions: [...KINDS, statusEntry('w1:p1'), statusEntry('w3:p1')] } })
   })
 
@@ -610,7 +805,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     expect(s.source.list()[0]).toMatchObject({ state: 'done', unseenDone: false })
     expect(s.changes).toBe(changes + 1)
     // It asks herdr nothing.
-    expect(server.requests.map(({ request }) => method(request))).toEqual(['events.subscribe', 'agent.list', 'events.subscribe', 'agent.list'])
+    expect(server.requests.filter((request) => !isFocus(request)).map(({ request }) => method(request))).toEqual(['events.subscribe', 'agent.list', 'events.subscribe', 'agent.list'])
   })
 
   it('with no socket it watches, and connects when the socket appears', async () => {
@@ -929,12 +1124,14 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     server.agents = [agent('w1:p1')]
     s.advance(1000)
     await s.until(() => s.source.list().length === 1)
-    const { connection: live } = await server.got('events.subscribe', 2)
+    const { connection: live } = await subscribed(2)
+    // Its focus subscription has started, its deadline cleared on real timers.
+    await focusHeard(s, 1)
     // That list asks for a subscription naming w1:p1, which herdr never starts.
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     server.answer('events.subscribe', 'hold')
     s.advance(1000)
-    const { connection: held } = await server.got('events.subscribe', 3)
+    const { connection: held } = await subscribed(3)
     vi.advanceTimersByTime(10_000)
     await s.until(() => s.log.at(-1) === '[herdr] retry · 2')
     expect(s.log.slice(-2)).toEqual(['[herdr] closed · timeout', '[herdr] retry · 2'])
@@ -944,17 +1141,19 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     await server.ended(live)
   })
 
-  it('while live and idle it holds one connection and no timer', async () => {
+  it('while live and idle it holds two connections, the second subscription and the focus one, and no timer', async () => {
     server.agents = [agent('w1:p1')]
     const s = setup()
     await live(s)
-    expect(server.connections).toBe(4)
-    for (const connection of [1, 2, 4]) await server.ended(connection)
+    expect(server.connections).toBe(5)
+    for (const { connection } of [await subscribed(1), await server.got('agent.list', 1), await server.got('agent.list', 2)]) {
+      await server.ended(connection)
+    }
     expect(s.timers).toEqual([])
     expect(s.watchers.size).toBe(0)
-    // The third connection, the second subscription, still tells.
     await heard(s, 'w1:p1')
-    expect(server.connections).toBe(4)
+    await focusHeard(s, 1)
+    expect(server.connections).toBe(5)
   })
 
   it('stop while the list is in flight: its answer lists nothing, and no connection, watch or timer is left', async () => {
@@ -982,7 +1181,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     expect(s.changes).toBe(changes + 1)
     s.source.stop()
     expect(s.changes).toBe(changes + 1)
-    await server.ended(3)
+    for (const { connection } of [await subscribed(2), await subscribed(1, true)]) await server.ended(connection)
 
     const subscribe = vi.spyOn(s.client, 'subscribe')
     s.source.start()
@@ -995,13 +1194,93 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     expect(s.source.list().map(({ id }) => id)).toEqual(['u2'])
   })
 
-  it('start twice is one subscription', async () => {
+  it('start twice is one subscription, and one focus subscription', async () => {
     const s = setup()
     const subscribe = vi.spyOn(s.client, 'subscribe')
     s.source.start()
     s.source.start()
     await listRead(1)
-    expect(subscribe).toHaveBeenCalledTimes(1)
+    expect(subscribe.mock.calls.map(([entries]) => entries)).toEqual([KINDS, FOCUS])
+  })
+
+  // The dial's greeting waits for it (devices.ts dialAttached), so its first list holds herdr's agents.
+  describe('the end of a start', () => {
+    it('a start ends once its first list has landed, its agents listed', async () => {
+      server.agents = [agent('w1:p1')]
+      const s = setup()
+      await s.source.start()
+      expect(s.source.list().map(({ paneKeys }) => paneKeys)).toEqual([['herdr:w1:p1']])
+    })
+
+    it('a start whose first list fails ends too', async () => {
+      server.answer('agent.list', refusal('invalid_request'))
+      const s = setup()
+      await s.source.start()
+      expect(s.log).toEqual(['[herdr] socket · live', '[herdr] list · rejected', '[herdr] retry · 1'])
+    })
+
+    it('a start whose subscription closes ends too: a stale socket', async () => {
+      await server.stale()
+      const s = holding(stampAt(WALL - 60_000))
+      await s.source.start()
+      expect(s.log).toEqual(['[herdr] socket · stale'])
+    })
+
+    it('with no socket a start ends at once', async () => {
+      await server.stop()
+      const s = setup()
+      const start = ending(s.source.start())
+      await turn()
+      expect(start.ended).toBe(true)
+      expect(s.log).toEqual(['[herdr] socket · none'])
+    })
+
+    it('a stop ends the start under way at once; the next start ends with its own list, not the stopped one', async () => {
+      server.agents = [agent('w1:p1')]
+      const real = herdrClient()
+      let held!: () => void
+      const holding = new Promise<void>((resolve) => { held = resolve })
+      let release!: () => void
+      let lists = 0
+      // The first list's answer is read only once the source has stopped and started again.
+      const s = setup({
+        client: {
+          ...real,
+          request: async (method, params) => {
+            const answer = await real.request(method, params)
+            if (method === 'agent.list' && ++lists === 1) await new Promise<void>((resolve) => { release = resolve; held() })
+            return answer
+          },
+        },
+      })
+      const first = ending(s.source.start())
+      await holding
+      expect(first.ended).toBe(false)
+      s.source.stop()
+      await turn()
+      expect(first.ended).toBe(true)
+      const second = ending(s.source.start())
+      // The stopped list lands and takes nothing; the new subscription waits out the rest of the second since the last
+      // one opened.
+      release()
+      await turn()
+      expect(second.ended).toBe(false)
+      expect(s.source.list()).toEqual([])
+      s.advance(1000)
+      await s.until(() => s.source.list().length === 1)
+      await turn()
+      expect(second.ended).toBe(true)
+    })
+
+    it('a start while it runs ends at once', async () => {
+      server.answer('agent.list', 'hold')
+      const s = setup()
+      void s.source.start()
+      const again = ending(s.source.start())
+      await turn()
+      expect(again.ended).toBe(true)
+      s.source.stop()
+    })
   })
 
   it('voice', async () => {

@@ -17,7 +17,7 @@
  * of its own: it rides the gateway's sessions, and borrows the dial's walk and stroke through the core.
  */
 import { randomUUID } from 'node:crypto'
-import { existsSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, statSync, writeFileSync, type Stats } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { env } from '../config/env.js'
@@ -37,11 +37,13 @@ import { createClaudeAppAdapter } from '../cable/hosts/claudeApp.js'
 import { ClaudeAppSource, type ClaudeAppSourceDeps } from '../cable/hosts/claudeAppSource.js'
 import { ClaudeAppStore } from '../cable/hosts/claudeAppStore.js'
 import { MANAGED_SETTINGS, readFullscreen } from '../cable/hosts/claudeRenderer.js'
-import { cmuxClientDeps, cmuxStoreDir, cmuxStores, createCmuxClient, type CmuxClient } from '../cable/hosts/cmuxCli.js'
+import { cmuxClientDeps, cmuxPaneKey, cmuxStoreDir, cmuxStores, createCmuxClient, type CmuxClient } from '../cable/hosts/cmuxCli.js'
 import { createCmuxAppAdapter } from '../cable/hosts/cmuxApp.js'
+import { CMUX_EVENTS, cmuxLogFiles, createCmuxFocus, type CmuxFront, type CmuxLogFiles } from '../cable/hosts/cmuxFocus.js'
 import { CmuxSource } from '../cable/hosts/cmuxSource.js'
 import { createCursorFolderAdapter, isFolder } from '../cable/hosts/cursorFolder.js'
 import { watchNearest } from '../cable/hosts/folderWatch.js'
+import { FOCUS_FAILS_MAX, startFocusPoll, type FocusPoll } from '../cable/hosts/focusPoll.js'
 import { createCodexAppAdapter } from '../cable/hosts/codexApp.js'
 import { CodexAppSource, type CodexAppSourceDeps } from '../cable/hosts/codexAppSource.js'
 import { CodexAppThreads } from '../cable/hosts/codexAppThreads.js'
@@ -49,9 +51,9 @@ import { APP_BUNDLES, APP_IDS, UNKNOWN_APP } from '../cable/hosts/hostDetect.js'
 import { APP_PACKAGE, codexQueueDeps, createCodexQueue, type CodexQueueDeps } from '../cable/hosts/codexQueue.js'
 import { createHcClient, hcClientDeps, hcPaneKey, hcSocketPath, type HcClient } from '../cable/hosts/hcClient.js'
 import { HcSource } from '../cable/hosts/hcSource.js'
-import { createHerdrAdapter } from '../cable/hosts/herdr.js'
+import { createHerdrAdapter, herdrPaneParts } from '../cable/hosts/herdr.js'
 import { createHerdrAppAdapter } from '../cable/hosts/herdrApp.js'
-import { createHerdrClient, herdrClientDeps, type HerdrClient } from '../cable/hosts/herdrClient.js'
+import { createHerdrClient, herdrClientDeps, herdrPaneKey, herdrShellOf, type HerdrClient } from '../cable/hosts/herdrClient.js'
 import { createHerdrNested, createHerdrOuter, procSockets, ttyAtime } from '../cable/hosts/herdrOuter.js'
 import { HerdrSource } from '../cable/hosts/herdrSource.js'
 import { createKittyAdapter, createKittyTabAdapter, kittyFinder } from '../cable/hosts/kitty.js'
@@ -72,8 +74,9 @@ import { readRecord } from '../cable/hosts/record.js'
 import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
 import { appRoots, learnApps, readBundleId, readMadeBy, readProcessNames, readPtyOwner, readTtyName, scanLearnsApps } from '../cable/hosts/scannedApp.js'
 import { createScrollLines } from '../cable/hosts/scrollLines.js'
-import { createTabsAdapter, readTty, type Tab } from '../cable/hosts/tabs.js'
-import { createTmuxAdapter, createTmuxNested, createTmuxOuter } from '../cable/hosts/tmux.js'
+import { pageOf } from '../cable/hosts/select.js'
+import { createTabsAdapter, isTabApp, readTty, type Tab, type TabApp } from '../cable/hosts/tabs.js'
+import { createTmuxAdapter, createTmuxNested, createTmuxOuter, tmuxPaneParts } from '../cable/hosts/tmux.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { watchSocket } from '../cable/hosts/unixSocket.js'
 import { createVscodeAdapter, termPid } from '../cable/hosts/vscode.js'
@@ -172,6 +175,8 @@ export interface DevicesDeps {
   hc?: HcClient
   /** For this service's tests: cmux's own command line (cable/hosts/cmuxCli.ts). */
   cmux?: CmuxClient
+  /** For this service's tests: cmux's event log by descriptor (cable/hosts/cmuxFocus.ts); the file, read-only, by default. */
+  cmuxEvents?: CmuxLogFiles
   /** For this service's tests: opencode's service (cable/hosts/opencodeClient.ts). */
   opencode?: OpencodeClient
   /** For this service's tests: the reader of the Claude app's store (cable/hosts/claudeAppStore.ts). */
@@ -248,6 +253,7 @@ const FOLLOWED: Record<FollowCause | 'settle', Record<'moved' | 'no-tile', strin
   focus: { moved: '[device] focus · moved', 'no-tile': '[device] focus · skipped · no tile' },
   thread: { moved: '[device] thread · moved', 'no-tile': '[device] thread · skipped · no tile' },
   vscode: { moved: '[device] vscode · moved', 'no-tile': '[device] vscode · skipped · no tile' },
+  pane: { moved: '[device] pane · moved', 'no-tile': '[device] pane · skipped · no tile' },
 }
 /** A tab app reports back each tab the dial selects, and Orca each pane it switches to: a report within this long of the
  *  dial's move there is that move's echo. Every move of that long is kept, as a fast swipe's late report for a place it
@@ -269,6 +275,9 @@ const REMIND_MS = 20_000
 /** The observed source drops an ended session 10 s after its end, by the wall clock (observed.ts); looked at a beat later,
  *  as a timer can fire a little before the wall clock says it is due. */
 const ENDED_MS = 10_500
+/** A look at the processes this long after a Claude Code's held poll lost its client or a session ended, once the dying
+ *  process has left the process table. */
+const GONE_MS = 1_000
 /** How long the cable waits for the devices' listener to open: it opens in a few milliseconds. */
 const LISTENER_WAIT_MS = 1_000
 /** How long after the dial's own continue link to a Claude app session an attach is that link's echo: the app attaches
@@ -276,6 +285,8 @@ const LISTENER_WAIT_MS = 1_000
 const ATTACH_ECHO_MS = 2_000
 /** How many agents whose last turn failed are remembered for Needs you's list: a bound on what a busy fleet leaves. */
 const FAILED_KEPT = 64
+/** herdr's panes with no session whose shell is asked or known at once (placeInHerdr): a bound on what one herdr costs. */
+const HERDR_SHELLS_MAX = 16
 
 /** Whether [path] is a file: false when nothing is there, it is a folder, or on any error. */
 function isFile(path: string): boolean {
@@ -286,14 +297,25 @@ function isFile(path: string): boolean {
   }
 }
 
-/** The uid owning the socket at [path], for kitty's: null when none is there, it is no socket, or on any error. */
-function socketOwner(path: string): number | null {
+/** The socket at [path], for kitty's: null when none is there, it is no socket, or on any error. */
+function socketStat(path: string): Stats | null {
   try {
     const stat = statSync(path)
-    return stat.isSocket() ? stat.uid : null
+    return stat.isSocket() ? stat : null
   } catch {
     return null
   }
+}
+
+/** The uid owning the socket at [path]. */
+function socketOwner(path: string): number | null {
+  return socketStat(path)?.uid ?? null
+}
+
+/** The identity of the socket at [path] (`<dev>:<ino>`): a kitty started again there listens on a new one. */
+function socketId(path: string): string | null {
+  const stat = socketStat(path)
+  return stat === null ? null : `${stat.dev}:${stat.ino}`
 }
 
 /** Orca's account homes on this computer, read with its own `orca` (devices/orcaHomes.ts). */
@@ -486,14 +508,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     hadDial: () => readSetup(core.dataDir).dial || greetedAsDial(dialPorts),
     log,
   })
-  /** Where the dial would place an agent with no window: its own app for one outside a pane, Harness for the rest. Read
-   *  from the registry itself, as the cable host answers none while a window holds the dial on its tab: [entries] when the
-   *  caller merged it already. */
+  /** Where the dial would place an agent with no window: its own page for one outside a pane (`pageOf`: tmux's or herdr's
+   *  for one nested there), Harness for the rest. Read from the registry itself, as the cable host answers none while a
+   *  window holds the dial on its tab: [entries] when the caller merged it already. */
   const usageAgent = (agentId: string, entries: HostEntry[] = registry.entries()): DialAgent | undefined => {
     const who = cableHost.describe(agentId)
     if (!who) return undefined
     const row = entries.find((e) => e.agent.id === agentId)?.agent
-    return { engine: who.engine, host: row?.host ?? 'harness', page: row?.app ?? 'harness', held: observed?.heldOnly(agentId) ?? false }
+    return { engine: who.engine, host: row?.host ?? 'harness', page: row ? pageOf(row) : 'harness', held: observed?.heldOnly(agentId) ?? false }
   }
   const dialUsage = createDialUsage({ sink: usageFile, now: wallClock, after: timerIn('dialUsage'), describe: usageAgent, log })
   /** A count is the devices' own part: one that throws never reaches the dial. */
@@ -585,14 +607,30 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     log,
   })
   const ttyOf = apps.platform === 'darwin' ? deps.tty ?? readTty : undefined
+  /** Whether [app] reports its selected tab here: a tab app, where the devices read ttys (macOS). */
+  const reportsTabs = (app: string): app is TabApp => ttyOf !== undefined && isTabApp(app)
+  /** The tab each tab app reported selected last: set by every tab report, and an app's dropped when another app, or
+   *  none, settles in front. The devices are told no app's quit, and Harness Device reports the tab again each time the
+   *  app comes back (docs/plans/2026-11-24-dial-tmux-pane-focus-follow-design.md, "The front client"). */
+  const lastTabs = new Map<TabApp, string>()
+  /** Whether the agent's tab (its multiplexer client's) is the one [app] reported selected last, where it reports tabs:
+   *  with none reported yet, the person may be on a plain tab of it. */
+  const onTabInFront = (source: ObservedSource, app: string, agentId: string): boolean => {
+    if (!reportsTabs(app)) return true
+    const tab = lastTabs.get(app)
+    return tab !== undefined && tab === source.tabTty(agentId)
+  }
   /** Where the dial moved an app lately, a rest's and a tap's alike, each as it started: the echoes an app's report is
    *  checked against, each excusing one. */
   const dialMovesTo = () => {
     let kept: Array<{ id: string; at: number }> = []
     return {
-      note(id: string): void {
-        const at = monotonic()
-        kept = [...kept.filter((sent) => at - sent.at < TAB_ECHO_MS), { id, at }].slice(-ECHO_KEPT)
+      /** Notes a move as it starts. What it gives dates that note from the move's end instead, while no echo took it: a
+       *  slow app shows the move only then, past TAB_ECHO_MS of its start. */
+      note(id: string): () => void {
+        const sent = { id, at: monotonic() }
+        kept = [...kept.filter((other) => sent.at - other.at < TAB_ECHO_MS), sent].slice(-ECHO_KEPT)
+        return () => { sent.at = monotonic() }
       },
       /** Whether a report of `id` made at `at` is an echo. The app runs the moves in order, so one before it will see no
        *  echo now (replaced while it waited, or its place already shown): it goes too. */
@@ -610,6 +648,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const selects = dialMovesTo()
   /** The Orca panes the dial switched to lately. */
   const orcaSwitches = dialMovesTo()
+  /** The WezTerm panes and kitty windows the dial focused lately (a tap): a read naming one is its echo. */
+  const paneTaps = dialMovesTo()
   /** The dial's own moves, each as it starts: a hand's turn to any agent, a tap, and the pane a rest or a tap's raise
    *  switches. How many, and when the latest started: a settle is set aside by one made within it. */
   let dialMoves = 0
@@ -628,12 +668,31 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // One with no `show` gets none: the source reads whether it has one (observed.ts rest).
     return show ? { ...noted, show: (pane, agentId) => { noteMove(); return show(pane, agentId) } } : noted
   }
-  /** herdr's adapter as the dial's verbs reach it: a tap on an agent herdr lists (below) is the dial's own move too. */
-  const herdrNoted = noting(herdrAdapter)
+  /** The herdr panes the dial focused lately (a rest, a tap), by herdr's key of each: herdr's event naming one is its
+   *  echo. A keeper of their own, not paneTaps: herdr's event is pushed, and no poll's stop or start may drop these. */
+  const herdrFocuses = dialMovesTo()
+  /** herdr's adapter as the dial's verbs reach it: a tap on an agent herdr lists (below) is the dial's own move too, and a
+   *  rest's or a tap's `herdr agent focus` has herdr tell that pane took the focus a moment later, after a slow command's
+   *  end too. */
+  const herdrNoted = noting({ ...herdrAdapter,
+    focus: (pane: Pane) => { const ended = herdrFocuses.note(herdrAdapter.paneKey(pane)); return herdrAdapter.focus(pane).finally(ended) },
+    show: (pane: Pane, agentId: string) => {
+      const ended = herdrFocuses.note(herdrAdapter.paneKey(pane))
+      return herdrAdapter.show!(pane, agentId).finally(ended)
+    } })
   /** Herdr's adapter as the dial's verbs reach it: a tap or a rest on an agent hc lists (below) is the dial's own move. */
   const herdrAppNoted = noting(herdrApp)
-  /** cmux's adapter as the dial's verbs reach it: a tap or a rest on an agent cmux lists (below) is the dial's own move. */
-  const cmuxAppNoted = noting(cmuxApp)
+  /** The cmux surfaces the dial moved to lately (a rest, a tap), by cmux's key of each: cmux's log naming one focused is
+   *  its echo. A keeper of their own, not paneTaps: cmux's log is pushed, and no poll's stop or start may drop these. */
+  const cmuxFocuses = dialMovesTo()
+  /** cmux's adapter as the dial's verbs reach it: a tap or a rest on an agent cmux lists (below) is the dial's own move,
+   *  and cmux's link has cmux log that surface's focus a moment later, after a slow link's end too. */
+  const cmuxAppNoted = noting({ ...cmuxApp,
+    focus: (pane: Pane) => { const ended = cmuxFocuses.note(cmuxApp.paneKey(pane)); return cmuxApp.focus(pane).finally(ended) },
+    show: (pane: Pane, agentId: string) => {
+      const ended = cmuxFocuses.note(cmuxApp.paneKey(pane))
+      return cmuxApp.show(pane, agentId).finally(ended)
+    } })
   /** The Claude app's adapter as the dial's verbs reach it, a hooked agent's and a store row's alike: a rest's continue
    *  link is the dial's own move, and the app's attach that follows is its echo. */
   const claudeNoted = noting({ ...claude, show: (pane, agentId) => { noteLink(agentId); return claude.show(pane, agentId) } })
@@ -666,19 +725,30 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // One lookup of tmux and one of zellij, each for the tap, the words and the client lookup (the outer lookups, below).
   const tmuxAt = tmuxFinder()
   const zellijAt = zellijFinder()
-  const tmux = noting(createTmuxAdapter({ run: apps.run, tmux: tmuxAt, processes: readProcessNames, log, front: () => cableHost.latestFront() }))
+  // Kept as built, as kitty and WezTerm are: the focus poll reads its clients (below).
+  const tmux = createTmuxAdapter({ run: apps.run, tmux: tmuxAt, processes: readProcessNames, log, front: () => cableHost.latestFront(), platform: apps.platform })
   // One lookup of kitty, for its windows and for the tab holding a multiplexer's client.
-  const kittyDeps = { run: apps.run, kitty: kittyFinder(), platform: apps.platform, log, uid: process.getuid?.() ?? -1, socketOwner }
+  const kittyDeps = { run: apps.run, kitty: kittyFinder(), platform: apps.platform, log, uid: process.getuid?.() ?? -1, socketOwner,
+    now: monotonic, socketId }
   const orca = createOrcaAdapter(apps, { worktreeOf: (handle) => orcaWorktrees.get(handle), log, switching: (handle) => orcaSwitches.note(handle) })
+  // Kept as built: the focus poll reads them (below).
+  const kitty = createKittyAdapter(kittyDeps)
+  const wezterm = createWeztermAdapter(apps)
   /** An Orca chat, by its Orca session id: a rest or a tap brings its worktree up, by the worktree id the chat source's
    *  latest read gave (docs/plans/2026-11-23-dial-orca-chats-design.md, decided 7). After Orca's terminals: an agent in an
    *  Orca terminal names its Orca session too, and is that terminal's (orcaChat.ts orcaChatId). A chat's pane comes from
    *  the observed source or the chat source, which are built together below. */
   const orcaChat = createOrcaChatAdapter({ ...apps, worktreeOf: (orcaId) => orcaChats!.worktreeOf(orcaId), log })
   const adapters: readonly HostAdapter[] = [herdrNoted, noting(createZellijAdapter({ run: apps.run, zellij: zellijAt, platform: apps.platform })),
-    tmux, herdrAppNoted, cmuxAppNoted, ...[
-    createKittyAdapter(kittyDeps),
-    createWeztermAdapter(apps),
+    // A rest's or a tap's move of tmux's pane is the dial's own: the poll's read that sees it, a moment after it ends, is
+    // its echo.
+    noting({ ...tmux,
+      focus: (pane: Pane) => { const ended = paneTaps.note(pane.id); return tmux.focus(pane).finally(ended) },
+      show: (pane: Pane, agentId: string) => { const ended = paneTaps.note(pane.id); return tmux.show!(pane, agentId).finally(ended) } }),
+    herdrAppNoted, cmuxAppNoted, ...[
+    // A tap's focus is the dial's own move: the poll's read that sees it, a moment after it ends, is its echo.
+    { ...kitty, focus: (pane: Pane) => { const ended = paneTaps.note(pane.id); return kitty.focus(pane).finally(ended) } },
+    { ...wezterm, focus: (pane: Pane) => { const ended = paneTaps.note(pane.id); return wezterm.focus(pane).finally(ended) } },
     // A rest's or a tap's switch: Orca's focus line for that pane, a moment later, is the dial's own echo.
     { ...orca,
       show: (pane: Pane, agentId: string) => { orcaSwitches.note(orcaHandle(pane.id)); return orca.show(pane, agentId) },
@@ -808,7 +878,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     return {
       table: readProcessNames,
       madeBy: (pids, rows) => readMadeBy(pids, rows, readTtyName, Object.keys(lookups)),
-      nested: (found) => lookups[found.host](found),
+      nested: (found, opts) => lookups[found.host](found, opts),
     }
   }
   const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, apps.platform, log, orcaHomes, {
@@ -879,6 +949,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // The command a hooked agent's tap runs (Q6): the dial's move is noted as every tap's is. Only a shown pane is true:
     // herdr's adapter never refuses one, though the noted copy is typed as any adapter's.
     focus: async (paneId) => (await herdrNoted.focus({ adapter: herdrAdapter.id, id: paneId })) === true,
+    // The pane herdr says took its focus turns the dials (herdrFocused, below).
+    onFocus: (paneId) => part.call('herdr', () => herdrFocused(observed, paneId)),
     after: timerIn('herdr'),
     now: Date.now,
     monotonic,
@@ -920,6 +992,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // watchSocket holds the folder of the path it is given: a name in ~/.cmuxterm, none of cmux's, makes it hold that
     // folder, else its parent until it appears.
     watch: (changed) => watchSocket({ socketPath: join(cmuxStoresAt, 'stores'), home: homedir() }, changed),
+    events: () => part.call('cmux', () => cmuxRead(false)),
     folder: () => existsSync(cmuxStoresAt),
     stores: () => cmuxStores(cmuxStoresAt),
     alive: pidAlive,
@@ -940,6 +1013,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     log,
     count: voiced,
   }) : null
+  /** cmux's front workspace and the surface focused in it, from cmux's event log in its stores' folder
+   *  (docs/plans/2026-11-25-dial-cmux-focus-follow-design.md), where cmux's source runs: read only as cmuxRead says. */
+  const cmuxFocus = cmuxSource ? createCmuxFocus({ files: deps.cmuxEvents ?? cmuxLogFiles(), path: join(cmuxStoresAt, CMUX_EVENTS), monotonic, log }) : null
   /** opencode's sessions, listed and followed over its local server (docs/plans/2026-11-17-dial-opencode-design.md). It
    *  runs only while a dial is attached, behind the observed agents' switch, on every platform. It looks for no `opencode`
    *  on PATH: the desktop app runs the service with no CLI installed. */
@@ -992,9 +1068,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     log,
     count: voiced,
   }) : null
-  /** The Claude app's Code sessions, with or without a process, listed from its stores when a file of them changes
-   *  (docs/plans/2026-11-19-dial-claude-app-sessions-design.md). It runs only while a dial is attached, behind the
-   *  observed agents' switch, on macOS, Windows and Linux, where the app runs
+  /** The Claude app's Code sessions, with or without a process, listed from its stores when a file of them changes, in
+   *  the store's order, newest first (docs/plans/2026-11-19-dial-claude-app-sessions-design.md). It runs only while a
+   *  dial is attached, behind the observed agents' switch, on macOS, Windows and Linux, where the app runs
    *  (docs/plans/2026-11-20-dial-app-sessions-win-linux-design.md). A session with a process is the observed source's
    *  copy, which holds its row while it runs (registry.ts). */
   const claudeAppSource = appWake ? new ClaudeAppSource({
@@ -1013,6 +1089,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     show: (localId, agentId) => claudeNoted.show!(claudePane(localId), agentId),
     canLink: (localId) => claude.canLink(claudePane(localId)),
     wake: appWake,
+    rank: (rank) => cableHost.setRank('claude', rank),
     monotonic,
     log,
   }) : null
@@ -1279,7 +1356,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       if (on && vscodeSetup) part.call('vscodeExtension', () => vscodeSetup.pass())
       if (on && cursorSetup) part.call('cursorExtension', () => cursorSetup.pass())
       if (on && orcaSetup) part.call('orcaPlugin', () => orcaSetup.pass())
-      dialAttached(on)
+      const reads = dialAttached(on)
       part.call('dialStream', () => dial.attached(on))
       // Whether an agent outside a pane runs first: an attach with one starts the first-agent clock at once, and a Harness
       // agent starts it at the list's read that follows (refresh).
@@ -1287,6 +1364,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         usage.agentsPresent(outsideRunning())
         usage.attached(on)
       })
+      return reads
     },
     dialShows: (agent) => {
       part.call('dialStream', () => dial.shows(agent))
@@ -1389,10 +1467,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         part.call('dial', remind)
       })
     },
+    // Before the settle of the app in front shows anything: the tab report waiting on it is judged, and its agent's page
+    // shown, so the settle shows tmux's or herdr's page directly (Diego's decision 4, 2026-11-23).
+    appSettling: (app) => part.call('dial', () => tabSettling(app)),
     // The settle of the app in front: the Claude app's turns the dial to the session it last attached
-    // (docs/specs/2026-11-15-dial-claude-app-follow.md), and any app's judges the tab report waiting on it. Each guarded on
-    // its own: the filter drops what this answers, so a follow that rejects would go unseen, and one that throws would
-    // cost the other its settle.
+    // (docs/specs/2026-11-15-dial-claude-app-follow.md), and any app's follows the tab report its settling judged. Each
+    // guarded on its own: the filter drops what this answers, so a follow that rejects would go unseen, and one that throws
+    // would cost the other its settle.
     appSettled: (app) => {
       if (app === 'claude') part.call('dial', claudeSettled)
       if (app === 'orca' && observed) part.call('orca', () => orcaSettled(observed))
@@ -1400,9 +1481,18 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       if (app === 'orca' && orcaChats) part.call('orca-chat', () => readChats(orcaChats))
       // Orca is often not running at the start or the attach: its coming to the front is the pass's next chance.
       if (app === 'orca' && orcaSetup) part.call('orcaPlugin', () => orcaSetup.pass())
-      part.call('dial', () => tabSettled(app))
+      // Behind another app cmux's log was not read: the read as cmux comes forward catches up.
+      if (app === 'cmux') part.call('cmux', () => cmuxRead(true))
+      part.call('dial', tabSettled)
       part.call('dial', () => threadSettled(app))
       part.call('dial', () => editorSettled(app))
+      // Before the poll reads it: the person coming back to an app is on whichever tab its next report names.
+      part.call('dial', () => { for (const tabApp of lastTabs.keys()) if (tabApp !== app) lastTabs.delete(tabApp) })
+      part.call('pane', () => {
+        paneFocusFailing = false
+        placeFails.clear()
+        checkPaneFocus()
+      })
     },
     appPicked: () => {
       count((usage) => usage.used())
@@ -1903,13 +1993,21 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** A look at the processes for each session that ended, once it is old enough to go: the 30 s one leaves it listed for
    *  up to 40 s. One per listed session (fifty at most), a later end of it putting its look off. */
   const endings = new Map<string, ReturnType<typeof setTimeout>>()
-  const dropEnded = (source: ObservedSource, agentId: string): void => {
+  /** A look at the processes for each Claude Code whose held poll lost its client, and for each session that ended: a
+   *  closed pane or a removed worktree sends no session-end hook, and its row waited for the 30 s look (the dial eval's
+   *  Orca O14/O15); a closed terminal's ended session waited for the endings' 10 s (VS Code V2). A poll a newer one
+   *  replaced, and a session ended in a process that runs on (a /clear), is looked at too, and its look finds the
+   *  process running and changes nothing: one read of the process table. Apart from the endings, so these quick looks
+   *  never put off a session's own ended look. */
+  const leavings = new Map<string, ReturnType<typeof setTimeout>>()
+  const lookLater = (looks: Map<string, ReturnType<typeof setTimeout>>, ms: number, source: ObservedSource, agentId: string): void => {
     if (!outside(agentId)) return
-    clearTimeout(endings.get(agentId))
-    const timer = setTimeout(() => { endings.delete(agentId); part.call('observed', () => source.tick()) }, ENDED_MS)
+    clearTimeout(looks.get(agentId))
+    const timer = setTimeout(() => { looks.delete(agentId); part.call('observed', () => source.tick()) }, ms)
     timer.unref()
-    endings.set(agentId, timer)
+    looks.set(agentId, timer)
   }
+  const dropEnded = (source: ObservedSource, agentId: string): void => lookLater(endings, ENDED_MS, source, agentId)
   /** Each observed agent mid-turn that a dial lists (sixteen at most of the fifty in each list), told again: the dial forgets
    *  a turn it hears nothing of for 25 s, and one that just came, whose window just closed, or whose app the dial was just
    *  turned to, has heard nothing of it yet. */
@@ -2073,21 +2171,59 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    * rest reached the tab alone. Only an agent with no herdr pane of its own. The place carries the app the agent is on,
    * as a rest needs it (herdr.ts canShow); while that app is not known, the bare pane, which a tap still focuses. A place
    * opens and shows, never takes words (observed.ts shownOnly).
+   *
+   * A row with no session (no `herdr integration install claude`) is the scan's agent's when herdr's shell of that pane
+   * is one of the agent's parents: placed there too, its key folds that row into the scan's copy, one row, not two until
+   * its first hook (known gap 1 of PR #4578).
    */
   let placedInHerdr = false
+  /** herdr's shell of the pane of each row with no session asked, none while asked or once the ask failed: each row is
+   *  asked once while listed, at most HERDR_SHELLS_MAX at a time. By the source's row, not its pane: a herdr that starts
+   *  again numbers its panes afresh, and its source lists each as a new row (herdrSource.ts). */
+  const herdrShells = new Map<string, number | undefined>()
   const placeInHerdr = (source: ObservedSource, listing: HerdrSource): void => {
     const rows = listing.list()
     // Each observed change lands here, herdr running or not: with no row and no place to drop, there is nothing to tell.
     if (rows.length === 0 && !placedInHerdr) return
     const placed = new Map<string, string>()
-    for (const { id, engine, sessionId } of rows) {
-      if (sessionId === undefined) continue
-      const agentId = observedAgentId(engine, sessionId)
-      if (source.paneOf(agentId, 'herdr') !== undefined) continue
+    const place = (agentId: string, pane: string) => {
       const app = source.windowOf(agentId)?.app
+      placed.set(agentId, app !== undefined && app !== UNKNOWN_APP && APP_IDS.includes(app) ? `${pane}:${app}` : pane)
+    }
+    const bare: { row: string; pane: string }[] = []
+    for (const { id, engine, sessionId } of rows) {
       // A row it lists has its pane.
       const pane = listing.paneAt(id)!
-      placed.set(agentId, app !== undefined && app !== UNKNOWN_APP && APP_IDS.includes(app) ? `${pane}:${app}` : pane)
+      if (sessionId === undefined) {
+        bare.push({ row: id, pane })
+        continue
+      }
+      const agentId = observedAgentId(engine, sessionId)
+      if (source.paneOf(agentId, 'herdr') === undefined) place(agentId, pane)
+    }
+    for (const row of herdrShells.keys()) if (!bare.some((at) => at.row === row)) herdrShells.delete(row)
+    const unplaced = source.foundNested('herdr')
+      .filter(({ agentId }) => !placed.has(agentId) && source.paneOf(agentId, 'herdr') === undefined)
+    let waiting = false
+    for (const { agentId, parents } of unplaced) {
+      const at = bare.find(({ row }) => {
+        const shell = herdrShells.get(row)
+        return shell !== undefined && parents.includes(shell)
+      })
+      if (at === undefined) waiting = true
+      else place(agentId, at.pane)
+    }
+    // Asked only while such an agent waits for its pane.
+    if (waiting) {
+      for (const { row, pane } of bare.filter((at) => !herdrShells.has(at.row)).slice(0, HERDR_SHELLS_MAX - herdrShells.size)) {
+        herdrShells.set(row, undefined)
+        void herdrShellOf(herdrClient, pane).then((answer) => {
+          // Its kind only: a pane or a process would say where someone works.
+          if (!answer.ok) return log(`[device] herdr shell · not read · ${answer.fault}`)
+          herdrShells.set(row, answer.shell)
+          part.call('herdr', () => placeInHerdr(source, listing))
+        })
+      }
     }
     source.setPaneNames('herdr', new Map(), placed)
     placedInHerdr = placed.size > 0
@@ -2226,10 +2362,340 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     log('[device] orca watch · ended')
   }
 
+  // ── the pane focused in WezTerm, kitty and tmux ────────────────────────────────────────────────────
+  //
+  // The dials turn to the agent in the WezTerm pane or kitty window the person focuses, as in Orca: a prompt they typed
+  // there was the only sign of it (docs/plans/2026-11-23-dial-wezterm-kitty-focus-follow-design.md). Neither app offers a
+  // focus event Harness may subscribe to (theirs need the person's `wezterm.lua` or `kitty.conf`), so each read asks the
+  // app (focusPoll.ts): one poll at most, only while its app is settled in front, a dial attached and an agent in a pane
+  // of its own there, and zero calls otherwise. A poll that stopped itself starts again only at a settle: a WezTerm whose
+  // GUI is gone is asked no more while it stays in front. Each line is an outcome or a count, never a pane, a socket or
+  // the agent.
+  //
+  // tmux is one more place of that poll, in whichever app holds the client showing a live agent's session
+  // (docs/plans/2026-11-24-dial-tmux-pane-focus-follow-design.md, "tmux: one more place in the pane focus poll"): its own
+  // focus event needs a hook or a control client on the person's server, which Harness never adds, so a read lists its
+  // clients. The poll is the settled front app's, with the adapters whose places it reads there, and starts again when
+  // either changes (from what it found, when only the adapters did). A read asks each adapter at once, and one whose read
+  // failed keeps its places' last answer: a tmux that fails, or hangs to its timeout, costs WezTerm's and kitty's follow
+  // nothing but that wait, and after FOCUS_FAILS_MAX in a row not even that until the next settle.
+  /** A pane focused in a place: the adapter whose pane it is, and the agent's pane id there (tmux's in full, `%3:100:iterm`). */
+  type FocusedPane = { adapter: string; id: string }
+  /** A read's answer: per place with a focus of its own (`wezterm`, each kitty's socket, `tmux`), the agent's pane focused
+   *  there or null; and the dial's moves and the time as the read started. */
+  type PaneAnswer = { focused: ReadonlyMap<string, FocusedPane | null>; moves: number; at: number }
+  /** The poll, the settled front app it runs for, the adapters whose places it reads there, whether its first answer is
+   *  still to come, and its last answer. */
+  type PaneFocus = { app: string; adapters: readonly string[]; poll: FocusPoll; first: boolean; last?: ReadonlyMap<string, FocusedPane | null> }
+  let paneFocus: PaneFocus | undefined
+  /** Set as a poll stops itself; cleared at the next settle of any app: only a settle starts it again (spec). */
+  let paneFocusFailing = false
+  /** Each adapter's failed reads in a row, cleared at the next settle of any app: one at FOCUS_FAILS_MAX is asked no
+   *  more till then, as a poll that stopped itself is not started (a tmux that hangs beside WezTerm's good reads would
+   *  cost a run to its timeout every read). */
+  const placeFails = new Map<string, number>()
+  /** The live agents on tmux's page whose tmux pane, their own or the one the scan placed them at (shownAt: paneOf reads
+   *  their own alone), names [app]: the app holding the client that shows its session, on the tab [tty]. One in tmux
+   *  inside Orca is on Orca's page, whose own focus covers it. */
+  const tmuxPanes = (source: ObservedSource, app: string): Array<{ agent: HostAgent; full: string; pane: string; tty: string | undefined }> =>
+    source.list().flatMap((agent) => {
+      const full = source.shownAt(agent.id, tmux.id)
+      if (full === undefined || pageOf(agent) !== 'tmux') return []
+      const parts = tmuxPaneParts({ adapter: tmux.id, id: full })
+      return parts?.app === app ? [{ agent, full, pane: parts.id, tty: source.tabTty(agent.id) }] : []
+    })
+  /** The live agent at that adapter's pane, its own or the one the scan placed it at, when exactly one is: two there (an
+   *  ended session not yet seen as ended beside its successor) cannot say which the person looks at. */
+  const nestedAt = (source: ObservedSource, adapter: string, id: string): HostAgent | undefined => {
+    const at = source.list().filter((agent) => source.shownAt(agent.id, adapter) === id)
+    return at.length === 1 ? at[0] : undefined
+  }
+  /** The adapters whose places the poll reads with [app] settled in front: WezTerm or kitty with an agent's own pane
+   *  there, and tmux with a tmuxPanes entry. */
+  const focusAdapters = (source: ObservedSource, app: string | undefined): string[] => {
+    if (app === undefined) return []
+    const own = (app === 'wezterm' || app === 'kitty') && source.list().some(({ id }) => source.paneOf(id, app) !== undefined)
+    return [...own ? [app] : [], ...tmuxPanes(source, app).length ? [tmux.id] : []]
+  }
+  /**
+   * tmux's place, with [app] settled in front: the full pane id of the one live agent at the pane its front client shows,
+   * on that client's tab, else null; undefined when its clients' listing failed. The front client is the one on the tab
+   * [app] reported selected last, where it reports tabs: one with no tab reported yet has none, as the person may be on a
+   * plain tab of it, and its next report names theirs. Elsewhere it is the one client there showing an agent's session:
+   * with two, which the person looks at is not known. The agent's tab must be the client's too: a second tmux server's
+   * `%N` repeats, and its client is on another tab. With no agent's tab that could be the front client's, tmux is not
+   * asked: the person on a plain iTerm2 tab costs no run every FOCUS_POLL_MS.
+   */
+  const tmuxFocused = async (source: ObservedSource, app: string): Promise<FocusedPane | null | undefined> => {
+    const panes = tmuxPanes(source, app)
+    const ttys = [...new Set(panes.flatMap(({ tty }) => tty !== undefined && (!reportsTabs(app) || tty === lastTabs.get(app)) ? [tty] : []))]
+    if (!ttys.length) return null
+    const clients = await tmux.clientPanes()
+    if (clients === undefined) return undefined
+    const front = ttys.filter((tty) => clients.has(tty))
+    if (front.length !== 1) return null
+    const [tty] = front
+    const at = panes.filter((entry) => entry.tty === tty && entry.pane === clients.get(tty))
+    return at.length === 1 ? { adapter: tmux.id, id: at[0].full } : null
+  }
+  /** One adapter's places as the read starts; undefined when its read failed. WezTerm and kitty are asked of the panes
+   *  the live agents have of their own there: an agent's own pane alone, as a held one shows whatever is in front of it.
+   *  WezTerm's one call is under way at a stop already; [signal] ends kitty's read of several there. */
+  const readPlaces = async (source: ObservedSource, app: string, adapter: string, last: PaneFocus['last'], signal: AbortSignal):
+  Promise<ReadonlyMap<string, FocusedPane | null> | undefined> => {
+    if (adapter === tmux.id) {
+      const pane = await tmuxFocused(source, app)
+      return pane === undefined ? undefined : new Map([[tmux.id, pane]])
+    }
+    // Once each: two live agents can share a pane, as an ended session not yet seen as ended beside its successor.
+    const panes = [...new Set(source.list().flatMap(({ id }) => source.paneOf(id, adapter) ?? []))]
+    if (adapter === wezterm.id) {
+      const id = await wezterm.focusedPane()
+      if (id === undefined) return undefined
+      return new Map([[wezterm.id, id !== null && panes.includes(id) ? { adapter, id } : null]])
+    }
+    // The windows found focused last asked first, as focus mostly stays where it was: one call a kitty then.
+    const lately = new Set([...(last?.values() ?? [])].map((pane) => pane?.id))
+    const ordered = [...panes.filter((id) => lately.has(id)), ...panes.filter((id) => !lately.has(id))]
+    const focused = await kitty.focusedWindows(ordered.map((id) => ({ adapter: kitty.id, id })), signal)
+    return focused && new Map<string, FocusedPane | null>([...focused].map(([place, id]) => [place, id === null ? null : { adapter, id }]))
+  }
+  /** One read, every adapter's places asked at once but those that failed FOCUS_FAILS_MAX reads in a row (placeFails).
+   *  It fails only when every one failed or was not asked; one that failed or was not asked keeps its places' panes of
+   *  the last answer, so they change nothing, and its places with none are left out. */
+  const readFocus = async (source: ObservedSource, app: string, adapters: readonly string[], signal: AbortSignal): Promise<PaneAnswer | undefined> => {
+    const moves = dialMoves
+    const at = monotonic()
+    // At the poll's first read, which runs within startFocusPoll before `paneFocus` holds its poll: the last answer of
+    // the one it replaced for the same app (checkPaneFocus), or none.
+    const last = paneFocus?.last
+    const read = await Promise.all(adapters.map(async (adapter) => {
+      if ((placeFails.get(adapter) ?? 0) >= FOCUS_FAILS_MAX) return undefined
+      const places = await readPlaces(source, app, adapter, last, signal)
+      // A read under way as its poll stopped is not counted, as the poll counts none (focusPoll.ts): a kitty read cut
+      // short by the stop, or a tmux one that ends after the next settle cleared the counts, is no failure of the place.
+      if (!signal.aborted) placeFails.set(adapter, places === undefined ? (placeFails.get(adapter) ?? 0) + 1 : 0)
+      return places
+    }))
+    if (read.every((places) => places === undefined)) return undefined
+    const focused = new Map<string, FocusedPane | null>()
+    adapters.forEach((adapter, n) => {
+      for (const [place, pane] of read[n] ?? [...(last ?? [])].filter(([, kept]) => kept?.adapter === adapter)) focused.set(place, pane)
+    })
+    return { focused, moves, at }
+  }
+  /** An answer of the poll turns the dials to the agent in the one focused pane whose place changed since the last
+   *  answer; for the poll's first, the one focused as its app settled, or as an agent or a dial came with it settled.
+   *  Two places each with an agent focused cannot say which the person looks at: two kittys as kitty settles. With no
+   *  dial linked nothing is followed or counted, and the answer is not kept: the first stays the first until one is read
+   *  linked, so a dial attaching with WezTerm settled still turns to its focused agent. */
+  const paneAnswered = (source: ObservedSource, focus: PaneFocus, answer: PaneAnswer): Promise<void> | undefined => {
+    if (!cable.isConnected) return
+    const { first, last } = focus
+    // None is kept before the first, so its every focused agent's pane is one. An unchanged answer moves nothing: a dial
+    // turned by hand meanwhile stays where it was turned. A failed read is no answer: the next is compared with the last
+    // good one.
+    const changed = [...answer.focused].flatMap(([place, pane]) => pane !== null && last?.get(place)?.id !== pane.id ? [pane] : [])
+    focus.first = false
+    focus.last = answer.focused
+    if (changed.length !== 1) return
+    const [{ adapter, id }] = changed
+    // The app the person went to settles FRONT_SETTLE_MS after the switch, and the poll of the one they left runs till then.
+    // In WezTerm or kitty, an agent's own pane focused there is the one in front: tmux's pane changing in another of its
+    // panes (a script, the person in another tab) is not.
+    if (cableHost.latestFront() !== focus.app
+      || (adapter === tmux.id && [...answer.focused.values()].some((pane) => pane !== null && pane.adapter !== tmux.id))) {
+      log('[device] pane · skipped · not in front')
+      return
+    }
+    // The first: a turn or a tap as the app came forward put the dial where the person wants it, and the focus as it
+    // settles must not turn it back, as Orca's settle must not (#4311), nor the Claude app's. After it: a move of the
+    // dial's own while the read ran leaves the pane it names, as for a tab report, and a tap's focus is seen a read later.
+    if (first ? dialMovedAt !== undefined && monotonic() - dialMovedAt < ATTACH_ECHO_MS
+      : answer.moves !== dialMoves || paneTaps.echo(id, answer.at)) { log('[device] pane · skipped · echo'); return }
+    // Gone while the read ran. One in tmux may sit at the pane the scan placed it at, which byPane never reads.
+    const agent = adapter === tmux.id ? nestedAt(source, adapter, id) : source.byPane(adapter, id)
+    if (!agent) { log('[device] pane · skipped · unknown agent'); return }
+    // tmux's front client is the tab reported as the read started: the person may have selected another since.
+    if (!onTabInFront(source, focus.app, agent.id)) { log('[device] pane · skipped · not in front'); return }
+    // An agent in tmux is on tmux's page, as a selected tab's is (Diego's decision 4, 2026-11-23; cableHost.ts
+    // followPage). WezTerm's and kitty's turn back to their app's own page, which a tmux follow inside one of their
+    // panes held on tmux's (the PM's decision, 2026-11-24).
+    cableHost.followPage(agent.id)
+    return cable.followLocal(agent.id, 'pane')
+  }
+  /** The poll's app left the front, its last agent went, or the dial went: the poll and the dial's taps its answers are
+   *  checked against go with it. */
+  const dropPaneFocus = (): void => {
+    paneTaps.clear()
+    paneFocus?.poll.stop()
+    paneFocus = undefined
+  }
+  /** Starts the poll the app settled in front wants, with a dial attached and a place to read there (focusAdapters),
+   *  stops one no longer wanted, and starts one again whose places changed. */
+  const checkPaneFocus = (): void => {
+    if (!observed) return
+    const app = cableHost.settledApp()
+    const adapters = dialOn && !paneFocusFailing ? focusAdapters(observed, app) : []
+    const wanted = adapters.length ? app : undefined
+    if (paneFocus?.app === wanted && (paneFocus?.adapters ?? []).join() === adapters.join()) return
+    // The same app with other places (an agent in tmux starting in a WezTerm pane): only the poll starts again. Whether
+    // its first answer came, its last one of the places still read and the dial's own moves stand, so a place unchanged
+    // does not turn back a dial turned by hand since.
+    const kept = paneFocus?.app === wanted ? paneFocus : undefined
+    if (kept) kept.poll.stop()
+    else dropPaneFocus()
+    if (wanted === undefined) return
+    // Its answers and its own stop run in a part, which logs a throw: the poll swallows one unsaid (focusPoll.ts).
+    const polling: PaneFocus = { app: wanted, adapters, first: kept?.first ?? true,
+      last: kept?.last && new Map([...kept.last].filter(([, pane]) => pane !== null && adapters.includes(pane.adapter))),
+      poll: startFocusPoll<PaneAnswer>({
+        read: (signal) => readFocus(observed, wanted, adapters, signal),
+        answered: (answer) => part.call('pane', () => paneAnswered(observed, polling, answer)),
+        failing: () => part.call('pane', () => {
+          paneFocus = undefined
+          paneTaps.clear()
+          paneFocusFailing = true
+        }),
+        after: timerIn('pane'),
+        log,
+      }) }
+    paneFocus = polling
+  }
+  observed?.onChange(() => part.call('pane', checkPaneFocus))
+
+  // ── the pane focused in herdr ──────────────────────────────────────────────────────────────────────
+  //
+  // herdr tells the pane that takes its focus on a subscription the herdr source holds while a dial is attached
+  // (docs/plans/2026-11-24-dial-tmux-pane-focus-follow-design.md, "herdr: the `pane.focused` event"), so its follow needs
+  // no poll. herdr has one focus a server, and its event names no client: the app settled in front and its tab say whether
+  // the person is looking at it. Each line is an outcome, never the pane, the tab or the agent.
+  /** The dials turn to the one live agent at the pane herdr says took the focus, on herdr's page, as to a tmux pane's.
+   *  With no dial linked nothing is followed or said. */
+  const herdrFocused = (source: ObservedSource, paneId: string): Promise<void> | undefined => {
+    if (!cable.isConnected) return
+    const key = herdrPaneKey(paneId)
+    // First: the dial's own `herdr agent focus` excuses its event whatever else of it holds, and that one event alone.
+    if (herdrFocuses.echo(key, monotonic())) { log('[device] herdr focus · skipped · echo'); return }
+    // Its own pane, or the one herdr's list placed it at (shownAt, as tmux's): the event names herdr's bare id.
+    const at = source.list().flatMap((agent) => {
+      const full = source.shownAt(agent.id, herdrAdapter.id)
+      const parts = full !== undefined && herdrPaneParts({ adapter: herdrAdapter.id, id: full })
+      return parts && parts.id === paneId ? [{ agent, parts }] : []
+    })
+    // A pane with no agent is ordinary use, and says nothing. The event is the server's whose agents the herdr source
+    // lists (its own, which tells it): another server's agent, whose pane id repeats one of it, is at no pane listed.
+    if (at.length === 0 || !herdr!.list().some(({ paneKeys }) => paneKeys?.includes(key))) return
+    // Two there cannot say which one the person looks at; a held pane shows whatever runs in front of its agent; one in
+    // herdr inside Orca is on Orca's page, which Orca's own focus covers.
+    if (at.length !== 1 || at[0].parts.held || pageOf(at[0].agent) !== 'herdr') {
+      log('[device] herdr focus · skipped · unknown agent')
+      return
+    }
+    const [{ agent, parts: { app } }] = at
+    // The app the person went to settles FRONT_SETTLE_MS after the switch. herdr's focus can move while the person is on
+    // another tab of that app (a pane closing hands it on, a second client moves it): where the app reports tabs, the
+    // agent's must be the one it reported last.
+    if (app === undefined || app !== cableHost.settledApp() || app !== cableHost.latestFront() || !onTabInFront(source, app, agent.id)) {
+      log('[device] herdr focus · skipped · not in front')
+      return
+    }
+    cableHost.followPage(agent.id)
+    return cable.followLocal(agent.id, 'pane')
+  }
+
+  // ── the surface focused in cmux ──────────────────────────────────────────────────────────────────────
+  //
+  // cmux appends each move of its focus to its own event log, in the folder the cmux source watches: that watch tells each
+  // change of the log, so cmux's focus needs no poll, timer or socket of its own
+  // (docs/plans/2026-11-25-dial-cmux-focus-follow-design.md, decided 1-2). The log is read only while a dial is attached,
+  // cmux's source runs and cmux is the settled front app: behind another app the person is not looking at cmux, while a
+  // working agent's hooks write its log many times a second. A change then is not kept: the read as cmux settles catches
+  // up. Each line is an outcome, never the surface, the workspace or the agent.
+  /** Bumped at each reset of the reader: a read that lands after one is dropped. */
+  let cmuxReads = 0
+  /** This attach's first list of cmux's agents. A read waits for it, so the agent at cmux's focus is known: one asked as
+   *  cmux settles meanwhile, and the attach's own, are then one settle (cmuxSettle), followed once. */
+  let cmuxListing: Promise<unknown> | undefined
+  /** The front surface the last read named: a read naming it again moves nothing, so a dial turned by hand is not turned
+   *  back by a working agent's lines. */
+  let cmuxLast: string | undefined
+  /** cmux settled, or a dial came with it settled, and no read has named its front surface since: the next that does is
+   *  that settle's, followed even unchanged, as the person came to cmux from another app's agent. */
+  let cmuxSettle = false
+  /** Reads cmux's log and follows its front; `settle` as cmux settles. Nothing when the log is not read (above), or for a
+   *  read that landed after a reset. */
+  const cmuxRead = async (settle: boolean): Promise<void> => {
+    const at = cmuxReads
+    await cmuxListing
+    if (at !== cmuxReads || !dialOn || !cmuxFound || cableHost.settledApp() !== 'cmux') return
+    if (settle) cmuxSettle = true
+    const front = await cmuxFocus!.read()
+    if (at === cmuxReads) return cmuxFocused(front)
+  }
+  /** The one live agent of the merged list at that surface: its own pane's (a hooked copy's, cmux's row's), or the
+   *  session cmux's row there names (the open scan's copy, placed there). None, or two, is none: the dial never turns to a
+   *  wrong session (PM, 2026-11-25). */
+  const cmuxAgentAt = (surface: string): HostAgent | undefined => {
+    const key = cmuxPaneKey(surface)
+    const rows = cmuxSource!.list().filter(({ paneKeys }) => paneKeys?.includes(key))
+    const at = registry.entries().filter(({ agent }) => !agent.ended && (agent.paneKeys?.includes(key)
+      || rows.some((row) => row.sessionId !== undefined && row.engine === agent.engine && row.sessionId === agent.sessionId)))
+    return at.length === 1 ? at[0].agent : undefined
+  }
+  /** The dials turn to the agent at the surface cmux's log names focused in its front workspace. With no dial linked
+   *  nothing is followed, said or kept, as for the pane poll's answer: a dial linked later still turns to it. */
+  const cmuxFocused = (front: CmuxFront): Promise<void> | undefined => {
+    if (!cable.isConnected || front.surface === undefined) return
+    const settle = cmuxSettle
+    const changed = front.surface !== cmuxLast
+    cmuxSettle = false
+    cmuxLast = front.surface
+    if (!settle && !changed) return
+    const now = monotonic()
+    // A turn of the dial as cmux comes forward puts it where the person wants it, as at Orca's settle. A tap into another
+    // workspace has cmux log that workspace's old surface before the tapped one: while a move of the dial's is unseen, no
+    // front cmux names is the person's (PM, 2026-11-25).
+    if ((settle && dialMovedAt !== undefined && now - dialMovedAt < ATTACH_ECHO_MS)
+      || cmuxFocuses.echo(cmuxPaneKey(front.surface), now) || cmuxFocuses.unseen(now)) {
+      log('[device] cmux focus · skipped · echo')
+      return
+    }
+    const agent = cmuxAgentAt(front.surface)
+    if (!agent) { log('[device] cmux focus · skipped · unknown agent'); return }
+    // The app the person went to settles FRONT_SETTLE_MS after the switch, and the read may have run meanwhile.
+    if (cableHost.settledApp() !== 'cmux' || cableHost.latestFront() !== 'cmux') {
+      log('[device] cmux focus · skipped · not in front')
+      return
+    }
+    // No followPage: cmux's agents are on cmux's own page.
+    return cable.followLocal(agent.id, 'pane')
+  }
+  /** cmux's source stopped (the dial went, or cmux was not found): what was read of the log is forgotten, a read under way
+   *  lands on nothing, and the dial's own cmux moves go with it: cmux's next focus is the person's. */
+  const dropCmuxFocus = (): void => {
+    cmuxReads++
+    cmuxFocus!.reset()
+    cmuxLast = undefined
+    cmuxSettle = false
+    cmuxFocuses.clear()
+  }
+
   /** The scan, the reminders, herdr's and Herdr Core's sockets, opencode's service, the Claude app's store, the ChatGPT
    *  app's metadata and Orca's chats, for an attached dial alone. */
   let attached: ReturnType<typeof setInterval>[] = []
-  const dialAttached = (on: boolean): void => {
+  /** A part's work run as `part.call` runs it, and its end, which a throw or a rejection only ends: what waits on it never
+   *  fails. */
+  const partEnd = (name: string, run: () => unknown): Promise<unknown> => {
+    let work: unknown
+    part.call(name, () => (work = run()))
+    return Promise.resolve(work).catch(() => {})
+  }
+  /** Its promise ends once the sources it started (herdr's, Herdr Core's, cmux's, opencode's, the Claude app's and the
+   *  ChatGPT app's) have read once: the dial's greeting waits for it (cableSession.ts), as those sources hold no rows until
+   *  then. A source not started, or stopped, ends at once. Orca's chats are not waited on: their read runs `orca`, which
+   *  may take ORCA_CHAT_TIMEOUT_MS, and its rows come to the dials with the change it tells. */
+  const dialAttached = (on: boolean): Promise<void> => {
     dialOn = on
     for (const timer of attached) clearInterval(timer)
     attached = []
@@ -2241,28 +2707,32 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // whatever source is on.
     // With the last gone, a Harness agent's next turn goes unheard, so its card ends now.
     part.call('notices', () => on ? notices.attached() : notices.detached())
-    if (!observed || !herdr || !opencode || !claudeAppSource || !codexAppSource || !orcaChats) return
+    // With no dial, WezTerm's and kitty's focus is read no more: the devices' stop detaches too.
+    part.call('pane', on ? checkPaneFocus : dropPaneFocus)
+    if (!observed || !herdr || !opencode || !claudeAppSource || !codexAppSource || !orcaChats) return Promise.resolve()
     // Only with herdr installed, read at each attach, as a tap needs it (herdr.ts): with none, no folder is watched
     // (~/.config, or the home folder, recursive on macOS) for a socket that never comes. herdr's zip on Windows puts it on
     // no PATH, and its folder appears only when it first runs, which may be after the dial came (the VM notes, Final head
     // §6): there the source always runs, its watch on %APPDATA% itself until herdr's folder is there (never recursive),
     // and a tap runs the herdr that wrote the marker (herdrClient.ts binary).
     const herdrInstalled = () => apps.platform === 'win32' || apps.onPath('herdr') !== null
-    part.call('herdr', () => on && herdrInstalled() ? herdr.start() : herdr.stop())
+    const herdrRead = partEnd('herdr', () => on && herdrInstalled() ? herdr.start() : herdr.stop())
     // Only with Herdr installed, read at each attach as herdr's is: with none, no folder is watched for hc's socket.
-    if (hcSource) part.call('herdr-app', () => on && herdrApp.binary() ? hcSource.start() : hcSource.stop())
+    const hcRead = hcSource ? partEnd('herdr-app', () => on && herdrApp.binary() ? hcSource.start() : hcSource.stop()) : undefined
     // Only with cmux installed, read at each attach as Herdr's is: with none, no folder is watched for its stores, and a
     // hooked agent's words are not offered to it.
-    if (cmuxSource) part.call('cmux', () => {
+    const cmuxListed = cmuxSource ? partEnd('cmux', () => {
       cmuxFound = on && cmuxClient.binary() !== null
+      if (!cmuxFound) dropCmuxFocus()
       return cmuxFound ? cmuxSource.start() : cmuxSource.stop()
-    })
-    part.call('opencode', () => on ? opencode.start() : opencode.stop())
-    part.call('claude-app', () => on ? claudeAppSource.start() : claudeAppSource.stop())
+    }) : undefined
+    cmuxListing = cmuxListed
+    const opencodeRead = partEnd('opencode', () => on ? opencode.start() : opencode.stop())
+    const claudeRead = partEnd('claude-app', () => on ? claudeAppSource.start() : claudeAppSource.stop())
     // Only with the ChatGPT app installed, looked for at each attach as cmux is: a computer with Codex CLI alone gets
     // no ChatGPT page of threads a tap cannot open. A look that lands after the dial went, or after a newer attach's
     // look began, starts nothing.
-    part.call('codex-app', () => {
+    const codexRead = partEnd('codex-app', () => {
       const look = ++codexAppLooks
       if (!on) return codexAppSource.stop()
       return chatGptInstalled().then((found) => {
@@ -2276,11 +2746,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       chatsAsked = new Set()
       return on ? orcaChats.read() : orcaChats.stop()
     })
+    const reads = Promise.all([herdrRead, hcRead, cmuxListed, opencodeRead, claudeRead, codexRead]).then(() => {})
     if (!on) {
       // The next attach checks Orca's ring afresh, and a read under way lands on nothing.
       orcaRing = { again: false }
       part.call('orca', dropFocus)
-      return
+      // The dial's own herdr moves go with it: herdr's next events are the person's.
+      herdrFocuses.clear()
+      return reads
     }
     // Agents already running when the dial came are listed now, idle until their next hook event.
     part.call('observed', () => scanOpen(observed))
@@ -2288,6 +2761,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // A dial plugged in while Orca is already in front: a front told again starts no settle, so none would come until the
     // person left Orca and came back.
     part.call('orca', () => cableHost.settledApp() === 'orca' ? orcaSettled(observed) : undefined)
+    // The same for cmux: the read its settle makes, once cmux's agents are listed (cmuxRead), so the agent at its focus is
+    // known (PM, 2026-11-25).
+    part.call('cmux', () => cmuxRead(true))
     // Its questions were in its RAM: the ones still waiting are asked again, under their ids.
     part.call('dial', () => { for (const [agentId, question] of shown) ask(agentId, question) })
     part.call('dial', showWaits)
@@ -2297,6 +2773,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       // A person can take minutes to come to an agent that waits on them.
       every(REMIND_MS, remind),
     ]
+    return reads
   }
 
   // ── the mod's polls ────────────────────────────────────────────────────────────────────────────────
@@ -2306,7 +2783,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const { inboxPoll, inboxGone } = DEVICES_FALLBACKS
   const inboxCalls = part.start('inbox', (): Pick<DeviceHookPort, 'inboxPoll' | 'inboxGone'> & { stop(): void } => ({
     inboxPoll: ({ pollId, sessionId }) => inbox.poll(pollId, sessionId),
-    inboxGone: (pollId) => inbox.gone(pollId),
+    inboxGone: (pollId) => {
+      const sessionId = inbox.gone(pollId)
+      // The observed source's part, as an ending's look is: a list that throws must not switch the voice inbox off.
+      if (sessionId !== undefined && observed) {
+        part.call('observed', () => lookLater(leavings, GONE_MS, observed, observedAgentId('claude', sessionId)))
+      }
+    },
     stop: () => inbox.closeAll(),
   }), { inboxPoll, inboxGone, stop: undefined })
   /** Every poll held for the core's calls: that core went, or the devices stop. */
@@ -2473,6 +2956,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // Focus reaches an agent with an Orca pane; one in a multiplexer inside Orca has none, and its prompt still moves the
     // dial.
     if (focusWatch && observed?.paneOf(agentId, 'orca') !== undefined) { log('[device] prompt · skipped · focus followed'); return }
+    // Before the dials are asked: an agent in tmux or herdr turns them to that page (Diego's decision 4, 2026-11-23).
+    cableHost.followPage(agentId)
     return cable.followLocal(agentId, 'prompt')
   }
   // ── the session the Claude app shows ───────────────────────────────────────────────────────────────
@@ -2529,13 +3014,17 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    * A tab selected in Terminal, iTerm2 or Ghostty turns the dials to its agent as a person's prompt does, once its app has
    * settled in front (docs/specs/2026-11-15-dial-terminal-follow.md, "2. Selecting a tab moves the dial"): Harness Device
    * reports as the app comes to the front, before it settles. The latest report waits for that settle, and another app
-   * settling drops it. Each line is an outcome, never the app, the tty or the agent.
+   * settling drops it. An agent in tmux or herdr there turns the dials to tmux's or herdr's page first (Diego's decision
+   * 4, 2026-11-23; cableHost.ts followPage). Each line is an outcome, never the app, the tty or the agent.
    */
   /** A tab report, when it came and how many moves the dial had made by then. */
   type TabReport = Tab & { at: number; moves: number }
   let tabReport: TabReport | undefined
-  /** Uses up the report: with no dial linked nothing is followed or counted, as with a prompt. */
-  const followTab = (report: TabReport): Promise<void> | undefined => {
+  /** The agent of the report its app's settling judged, followed once that settle has shown its page. */
+  let tabJudged: string | undefined
+  /** Uses up the report: its agent, the page shown turned to that agent's, or none. With no dial linked nothing is
+   *  followed or counted, as with a prompt. */
+  const tabAgent = (report: TabReport): string | undefined => {
     tabReport = undefined
     if (!cable.isConnected) return
     const { app, tty, at } = report
@@ -2547,16 +3036,32 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (selects.echo(tty, at)) { log('[device] tab · skipped · echo'); return }
     const agent = observed?.byTab(app, tty)
     if (!agent) { log('[device] tab · skipped · unknown agent'); return }
-    return cable.followLocal(agent.id, 'tab')
+    cableHost.followPage(agent.id)
+    return agent.id
+  }
+  const followTab = (report: TabReport): Promise<void> | undefined => {
+    const agentId = tabAgent(report)
+    return agentId === undefined ? undefined : cable.followLocal(agentId, 'tab')
   }
   const tabReported = (tab: Tab): Promise<void> | undefined => {
+    // Every report, an echo's and one waiting for the settle too: it is the tab the person is on.
+    lastTabs.set(tab.app, tab.tty)
     const report = { ...tab, at: monotonic(), moves: dialMoves }
     if (cableHost.settledApp() === tab.app) return followTab(report)
     tabReport = report
   }
-  const tabSettled = (app: string): Promise<void> | undefined => {
+  /** Before the settle shows anything, the report waiting on that app is judged: the settle then shows its agent's page
+   *  directly, never the app's first (the spec's "A follow turns the page"). */
+  const tabSettling = (app: string): void => {
+    tabJudged = tabReport?.app === app ? tabAgent(tabReport) : undefined
+  }
+  /** After the settle has shown its page and turned the view: the dials follow the agent its settling judged. A report
+   *  still waiting is another app's, and dropped. */
+  const tabSettled = (): Promise<void> | undefined => {
+    const agentId = tabJudged
+    tabJudged = undefined
+    if (agentId !== undefined) return cable.followLocal(agentId, 'tab')
     if (!tabReport) return
-    if (tabReport.app === app) return followTab(tabReport)
     tabReport = undefined
     if (cable.isConnected) log('[device] tab · skipped · not in front')
   }
@@ -2678,6 +3183,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         if (event.event === 'session-end') {
           const agentId = observedAgentId(event.engine, event.sessionId)
           dropEnded(observed, agentId)
+          lookLater(leavings, GONE_MS, observed, agentId)
           // Listed for a while once ended, but on no app's screen: a settle must not turn the dial to it.
           if (agentId === claudeAgent) claudeAgent = undefined
         }
@@ -2774,9 +3280,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       await (await listening)?.close()
       for (const agentId of [...replies.keys()]) endReplies(agentId, false)   // no timer may fire into a stopped cable
       for (const timer of timers) clearInterval(timer)
-      for (const timer of endings.values()) clearTimeout(timer)
+      for (const timer of [...endings.values(), ...leavings.values()]) clearTimeout(timer)
       for (const timer of pending) clearTimeout(timer)
       tabReport = undefined
+      tabJudged = undefined
+      lastTabs.clear()
       selects.clear()
       threadReport = undefined
       codexSwitches.clear()

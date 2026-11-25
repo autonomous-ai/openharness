@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ProcessRow } from '../../lib/processTable.js'
 import { fakeHerdr, RECORDED, type FakeHerdr } from '../../testing/fakeHerdr.js'
 import {
-  createHerdrClient, HERDR_PANE, herdrClientDeps, herdrPipeOf, herdrSocketPath, MAX_LINE_BYTES,
+  createHerdrClient, HERDR_PANE, herdrClientDeps, herdrPipeOf, herdrShellOf, herdrSocketPath, MAX_LINE_BYTES,
   type HerdrClientDeps, type HerdrEntry, type HerdrSubscriber,
 } from './herdrClient.js'
 import { MAX_TEXT } from './orca.js'
@@ -458,6 +458,41 @@ describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026
     server.agents = [agent('w1:p1', 'claude', 'idle')]
     expect(await client().prompt('w1:p1', 'claude', 'x'.repeat(20_000))).toEqual({ outcome: 'sent' })
     expect((await server.got('agent.prompt', 1)).request).toMatchObject({ params: { target: 'w1:p1', text: 'x'.repeat(20_000) } })
+  })
+
+  // herdr's answer, as its own e2e server reads it (e2e/harness/herdrServer.ts shellInFront).
+  const processInfo = (info: unknown) => ({ line: { result: { process_info: info } } })
+
+  it('herdrShellOf asks herdr for the pane\'s process info and answers its shell', async () => {
+    server.answer('pane.process_info', processInfo({ shell_pid: 4000, foreground_process_group_id: 4242 }))
+    expect(await herdrShellOf(client(), 'w1:p2')).toEqual({ ok: true, shell: 4000 })
+    expect(server.requests).toEqual([
+      { connection: 1, request: { id: expect.any(String), method: 'pane.process_info', params: { pane_id: 'w1:p2' } } },
+    ])
+  })
+
+  it('herdrShellOf: an answer with no shell pid in form is bad_answer; herdr\'s refusal is rejected with its code', async () => {
+    const herdr = client()
+    for (const info of [undefined, {}, { shell_pid: '4000' }, { shell_pid: 0 }, { shell_pid: -1 }, { shell_pid: 1.5 }, 'x']) {
+      server.answer('pane.process_info', processInfo(info))
+      expect(await herdrShellOf(herdr, 'w1:p2'), JSON.stringify(info)).toEqual({ ok: false, fault: 'bad_answer' })
+    }
+    server.answer('pane.process_info', refusal('pane_not_found'))
+    expect(await herdrShellOf(herdr, 'w1:p2')).toEqual({ ok: false, fault: 'rejected', code: 'pane_not_found' })
+  })
+
+  it('herdrShellOf: no answer in 10 s is timeout', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    server.answer('pane.process_info', 'hold')
+    const asked = herdrShellOf(client(), 'w1:p2')
+    await server.got('pane.process_info', 1)
+    vi.advanceTimersByTime(10_000)
+    expect(await asked).toEqual({ ok: false, fault: 'timeout' })
+  })
+
+  it('herdrShellOf: a pane id not in its form is bad_request, and nothing connects', async () => {
+    expect(await herdrShellOf(client(), 'w1:p2; rm -rf /')).toEqual({ ok: false, fault: 'bad_request' })
+    expect(server.connections).toBe(0)
   })
 
   it('socketStamp is none without a socket of this user\'s, and another once a server starts again at the same path', async () => {

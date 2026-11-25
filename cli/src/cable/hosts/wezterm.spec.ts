@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import type { Place } from './adapter.js'
 import { MAX_TEXT, type OrcaDeps } from './orca.js'
 import { RECORDED_WEZTERM } from '../../testing/recordedWezterm.js'
-import { createWeztermAdapter, createWeztermTabAdapter, LISTED_PANES_MAX } from './wezterm.js'
+import { FOCUS_READ_MS } from './focusPoll.js'
+import { createWeztermAdapter, createWeztermTabAdapter, FOCUS_CLIENTS_MAX, LISTED_PANES_MAX } from './wezterm.js'
 
 const APP_WEZTERM = '/Applications/WezTerm.app/Contents/MacOS/wezterm'
 const FAKE_PATH_WEZTERM = '/fake/bin/wezterm'
@@ -349,5 +350,121 @@ describe("WezTerm's tab of an outer place", () => {
     const none = tabRecorder([], { onPath: () => null })
     expect(await none.adapter.show(tab('/dev/pts/0'), 'agent-1')).toBe('failed')
     expect(none.calls).toEqual([])
+  })
+})
+
+/** A runner that runs nothing and answers each call the next of [answers], then exit 1: the focused pane is read from
+ *  what `list-clients` printed. */
+function focusRecorder(answers: Array<{ code: number | null; stdout: string }>, over: Partial<OrcaDeps> = {}) {
+  const calls: Call[] = []
+  const deps: OrcaDeps = {
+    run: async (file, args, timeoutMs) => {
+      calls.push({ file, args, timeoutMs })
+      return answers.shift() ?? { code: 1, stdout: '' }
+    },
+    onPath: (name) => (name === 'wezterm' ? FAKE_PATH_WEZTERM : null),
+    exists: () => false,
+    platform: 'linux',
+    ...over,
+  }
+  return { calls, adapter: createWeztermAdapter(deps) }
+}
+
+const clients = RECORDED_WEZTERM.listClients
+const listClients: Call = { file: FAKE_PATH_WEZTERM, args: clients.argv.slice(1), timeoutMs: FOCUS_READ_MS }
+const recordedClient = (JSON.parse(clients.gui.stdout) as Array<Record<string, unknown>>)[0]!
+const answer = (...entries: unknown[]) => ({ code: 0, stdout: JSON.stringify(entries) })
+
+describe("WezTerm's focused pane (docs/plans/2026-11-23-dial-wezterm-kitty-focus-follow-design.md)", () => {
+  it('one list-clients, with the binary the verbs use, within FOCUS_READ_MS', async () => {
+    const { calls, adapter } = focusRecorder([
+      { code: clients.gui.exitCode, stdout: clients.gui.stdout },
+      { code: 0, stdout: clients.afterKey.stdout },
+      { code: 0, stdout: clients.afterActivate.stdout },
+    ])
+    expect(await adapter.focusedPane()).toBe('0')
+    expect(calls).toEqual([{ file: FAKE_PATH_WEZTERM, args: ['cli', '--no-auto-start', 'list-clients', '--format', 'json'], timeoutMs: 2_000 }])
+    expect(await adapter.focusedPane()).toBe('2')
+    expect(await adapter.focusedPane()).toBe('0')
+    expect(calls).toEqual([listClients, listClients, listClients])
+  })
+
+  // Only the GUI's one client was recorded: of several, the one the person typed or clicked in last is the one in front.
+  it('of several clients, the one idle least; of equals, the first', async () => {
+    const idle = (id: number, secs: number, nanos: number) => ({ ...recordedClient, focused_pane_id: id, idle_time: { secs, nanos } })
+    const { adapter } = focusRecorder([
+      answer(idle(4, 8, 0), idle(5, 2, 5)),
+      answer(idle(4, 2, 5), idle(5, 2, 9)),
+      answer(idle(4, 1, 900), idle(5, 2, 5)),
+      answer(idle(4, 2, 5), idle(5, 2, 5)),
+    ])
+    expect(await adapter.focusedPane()).toBe('5')
+    expect(await adapter.focusedPane()).toBe('4')
+    expect(await adapter.focusedPane()).toBe('4')
+    expect(await adapter.focusedPane()).toBe('4')
+  })
+
+  it('no client listed is null', async () => {
+    const { adapter } = focusRecorder([answer()])
+    expect(await adapter.focusedPane()).toBeNull()
+  })
+
+  const withPane = (focused_pane_id: unknown) => answer({ ...recordedClient, focused_pane_id })
+  const withIdle = (idle_time: unknown) => answer({ ...recordedClient, idle_time })
+  // Unrecorded: WezTerm's ClientInfo.focused_pane_id is an Option, null for a client with no pane yet (`wezterm connect`).
+  it('a client with no focused pane is passed over; with none other, null', async () => {
+    const idleLeast = { ...recordedClient, focused_pane_id: null, idle_time: { secs: 0, nanos: 0 } }
+    const { adapter } = focusRecorder([answer(idleLeast, recordedClient), withPane(null)])
+    expect(await adapter.focusedPane()).toBe('0')
+    expect(await adapter.focusedPane()).toBeNull()
+  })
+  it.each<[string, { code: number | null; stdout: string }]>([
+    ['no GUI (exit 1)', { code: clients.noGui.exitCode, stdout: clients.noGui.stdout }],
+    ['a timeout (exit null)', { code: null, stdout: '' }],
+    ['not JSON', { code: 0, stdout: 'not json' }],
+    ['not an array', { code: 0, stdout: '{}' }],
+    [`${FOCUS_CLIENTS_MAX + 1} clients`, answer(...Array.from({ length: FOCUS_CLIENTS_MAX + 1 }, () => recordedClient))],
+    ['an entry null', answer(recordedClient, null)],
+    ["focused_pane_id '1'", withPane('1')],
+    ['focused_pane_id -1', withPane(-1)],
+    ['focused_pane_id 1.5', withPane(1.5)],
+    ['focused_pane_id 1e10', withPane(1e10)],
+    ['focused_pane_id missing', withPane(undefined)],
+    ['idle_time missing', withIdle(undefined)],
+    ["idle_time secs '2'", withIdle({ secs: '2', nanos: 0 })],
+    ['idle_time with no nanos', withIdle({ secs: 2 })],
+  ])('out of form is undefined: %s', async (_, out) => {
+    const { calls, adapter } = focusRecorder([out])
+    expect(await adapter.focusedPane()).toBeUndefined()
+    expect(calls).toEqual([listClients])
+  })
+
+  it(`${FOCUS_CLIENTS_MAX} clients are read`, async () => {
+    expect(FOCUS_CLIENTS_MAX).toBe(16)
+    const { adapter } = focusRecorder([answer(...Array.from({ length: FOCUS_CLIENTS_MAX }, () => recordedClient))])
+    expect(await adapter.focusedPane()).toBe('0')
+  })
+
+  it('reads only focused_pane_id and idle_time', async () => {
+    const { username: _u, hostname: _h, pid: _p, workspace: _w, ...bare } = recordedClient
+    const { adapter } = focusRecorder([answer(bare), answer({ ...bare, username: 7, hostname: null, pid: 'x', workspace: [] })])
+    expect(await adapter.focusedPane()).toBe('0')
+    expect(await adapter.focusedPane()).toBe('0')
+  })
+
+  it('a failed call looks for the binary again at the next read, as the verbs do', async () => {
+    let looks = 0
+    const { calls, adapter } = focusRecorder([{ code: 1, stdout: '' }, { code: 0, stdout: clients.gui.stdout }],
+      { onPath: () => { looks++; return FAKE_PATH_WEZTERM } })
+    expect(await adapter.focusedPane()).toBeUndefined()
+    expect(await adapter.focusedPane()).toBe('0')
+    expect(looks).toBe(2)
+    expect(calls).toEqual([listClients, listClients])
+  })
+
+  it('no wezterm found runs nothing and is undefined', async () => {
+    const { calls, adapter } = focusRecorder([], { onPath: () => null })
+    expect(await adapter.focusedPane()).toBeUndefined()
+    expect(calls).toEqual([])
   })
 })
