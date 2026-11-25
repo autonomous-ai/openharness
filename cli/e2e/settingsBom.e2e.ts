@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
+import { MESSAGES_HOOK_MARK } from '../src/engines/kit/messagesHook.js'
 
 type Engine = 'claude' | 'codex'
 
@@ -61,12 +62,15 @@ describe('a settings file saved with a BOM', () => {
     const file = settingsFile(d, 'codex')
     await d.start()
     await d.hooksInstalled(['codex'])
-    const own = readFileSync(file, 'utf8')
+    // Agent Messages adds its block from a service of its own, after the daemon's hooks.
+    const own = await until('Harness\'s whole text in hooks.json', () => {
+      const text = readFileSync(file, 'utf8')
+      return text.includes(MESSAGES_HOOK_MARK) ? text : null
+    }, 30_000, 50)
     await d.stop()
     writeFileSync(file, `﻿${own}`)
     await d.start()
-    await d.hooksInstalled(['codex'])
-    expect(readFileSync(file, 'utf8')).toBe(own)
+    await until('hooks.json to be written again without its BOM', () => readFileSync(file, 'utf8') === own || null, 30_000, 50)
     const c = client = await LocalClient.connect(d)
 
     const cwd = join(d.projectsDir, 'bom-codex-own')
