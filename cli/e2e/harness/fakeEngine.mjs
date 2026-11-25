@@ -82,7 +82,17 @@
 // a fresh Codex's first run held the launch script's help probe open for seconds. `holdsRollout: false` (Codex) keeps
 // no rollout open, so a test can prove the daemon learned its home from something else (enginehomes.e2e.ts).
 // `firstHookDelayMs` is how long its first SessionStart takes to reach the daemon once the engine is up: the hook
-// command starting on a loaded machine, while the daemon has already found the engine and its conversation. `root` is the
+// command starting on a loaded machine, while the daemon has already found the engine and its conversation.
+// `lateTranscript` (Claude Code) creates each new conversation's transcript, its startup's (not a resume's) and a
+// `!clear`'s, only once the test writes `transcript.release` in the root (a minute at most): meanwhile
+// `transcript.waiting` there holds its session id, its SessionStart names the path that does not exist yet, turns run and
+// their records are kept back; the release creates the file with them and removes both files. Claude Code on Windows
+// announces SessionStart before its transcript exists (2-3 s measured, CLI 0.6.89). `lazySessionStart` (Codex) sends
+// no SessionStart as it starts: its first prompt runs it (`resume` for a resumed process, else `startup`) before its
+// UserPromptSubmit, and a `!clear` before any prompt runs only its own (`clear`), as Codex sends SessionStart at its
+// first prompt. `lostHooks` lists hooks, `<event>` or `<event>:<source>`, it never runs and notes as lost in its hook
+// log, as a hook killed at its timeout on a loaded machine never reaches the daemon. Both read their hook settings with
+// or without a leading BOM, as the real CLIs do (one Windows PowerShell 5 writes). `root` is the
 // test's throwaway root, the only place whose hooks it will run, and `hookLog` where it notes every hook
 // it ran. `withoutHooks` lists the hook events this release does not have, which it never runs (Codex 0.144.0:
 // `['Interrupt']`).
@@ -104,7 +114,7 @@
 // child in the same process group and terminal (`codexWrapper`).
 import { execFileSync, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, closeSync, constants, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, closeSync, constants, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -130,6 +140,9 @@ const HOOK_EVENTS = {
 }
 /** The field of an event's input a block's matcher is tested against, for the events whose matcher means something. */
 const MATCHED_FIELD = { SessionStart: 'source', PreToolUse: 'tool_name', Notification: 'notification_type' }
+
+/** A settings file's text without a leading BOM, which both CLIs read past (Windows PowerShell 5 writes one). */
+const settingsText = (file) => readFileSync(file, 'utf8').replace(/^\uFEFF/, '')
 
 /** Inside `root`, or `root` itself. */
 const within = (root, path) => {
@@ -253,7 +266,7 @@ function claudePlugin(config, argv) {
   const args = argv.slice(1)
   const stateFile = join(home, 'plugins', 'fake-plugin-state.json')
   const state = existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, 'utf8')) : { marketplaces: [], installed: [] }
-  const settings = existsSync(settingsFile) ? JSON.parse(readFileSync(settingsFile, 'utf8')) : {}
+  const settings = existsSync(settingsFile) ? JSON.parse(settingsText(settingsFile)) : {}
   const saveState = () => {
     mkdirSync(dirname(stateFile), { recursive: true })
     writeFileSync(stateFile, JSON.stringify(state))
@@ -526,7 +539,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
   }
   const hookSettings = (() => {
     try {
-      const parsed = JSON.parse(readFileSync(hookSettingsFile, 'utf8'))
+      const parsed = JSON.parse(settingsText(hookSettingsFile))
       return parsed && typeof parsed.hooks === 'object' && parsed.hooks ? parsed.hooks : {}
     } catch { return {} }
   })()
@@ -618,13 +631,41 @@ export async function run(engine, config = {}, { native = false } = {}) {
     const titled = setTimeout(() => process.stdout.write(`\x1b]0;✳ ${config.graphicsQuery.title}\x07`), config.graphicsQuery.titleAfterMs)
     titled.unref?.()
   }
+  /** Until the test writes `file` (or [other]), for at most a minute: a test that failed first does not leave this waiting. */
+  const released = async (file, other) => {
+    const written = () => existsSync(file) || (other !== undefined && existsSync(other))
+    for (const end = Date.now() + 60_000; !written() && Date.now() < end;) await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+  // `lateTranscript` (Claude Code): the new conversation whose transcript is not created yet, and its records kept back.
+  const lateTranscript = engine === 'claude' && config.lateTranscript === true
+  let unwritten = null
+  const createLate = () => {
+    const { file, kept } = unwritten
+    unwritten = null
+    appendFileSync(file, kept.join(''))
+  }
+  const holdTranscript = () => {
+    const mine = { file: transcript, kept: [] }
+    unwritten = mine
+    const waiting = join(config.root, 'transcript.waiting')
+    const release = join(config.root, 'transcript.release')
+    writeFileSync(waiting, sessionId)
+    void released(release).then(() => {
+      // A `!clear` created this one already, and the files are its next conversation's.
+      if (unwritten !== mine) return
+      createLate()
+      rmSync(waiting, { force: true })
+      rmSync(release, { force: true })
+    })
+  }
   let transcript = engine === 'claude'
     ? join(projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`)
     : resumed && !fork && config.rolloutFor?.[resumed]
       ? config.rolloutFor[resumed]
       : join(codexHome, 'sessions', '2026', '10', '03', `rollout-2026-10-03T00-00-00-${sessionId}.jsonl`)
   mkdirSync(dirname(transcript), { recursive: true })
-  if (!existsSync(transcript)) writeFileSync(transcript, '')
+  if (lateTranscript && !resumed) holdTranscript()
+  else if (!existsSync(transcript)) writeFileSync(transcript, '')
   // What each CLI leaves for whoever needs to know which conversation this process is writing, as the
   // daemon does when the conversation's start-up hook was lost. Codex holds its rollout open for the
   // session; Claude Code keeps a record per process, `~/.claude/sessions/<pid>.json`.
@@ -667,10 +708,14 @@ export async function run(engine, config = {}, { native = false } = {}) {
   const now = () => new Date().toISOString()
   /** `!lagwrite`: the turn's records, each with the time it was made, kept back until its Stop has returned. */
   let lagging = null
+  const append = (text) => {
+    if (unwritten) unwritten.kept.push(text)
+    else appendFileSync(transcript, text)
+  }
   const write = (record) => {
     const line = JSON.stringify(record) + '\n'
     if (lagging) lagging.push(line)
-    else appendFileSync(transcript, line)
+    else append(line)
   }
   let parent = null
   const claude = (record) => {
@@ -777,6 +822,8 @@ export async function run(engine, config = {}, { native = false } = {}) {
   })
   // The events this release does not have (`withoutHooks`): an older CLI never runs a hook for one.
   const withoutHooks = new Set(config.withoutHooks ?? [])
+  // The hooks lost on the way (`lostHooks`), by event or `<event>:<source>`.
+  const lostHooks = new Set(config.lostHooks ?? [])
   /**
    * Every hook the settings carry for this event, at once, each command once: resolves once they all ended. Undefined
    * when there is none to run, so a caller can go on in the same tick, as the CLI does with no hook to wait for.
@@ -793,6 +840,10 @@ export async function run(engine, config = {}, { native = false } = {}) {
       }
     }
     if (!commands.size) return undefined
+    if (lostHooks.has(event) || (fields.source && lostHooks.has(`${event}:${fields.source}`))) {
+      hookLog(`${event}${fields.source ? `(${fields.source})` : ''} session=${sessionId} lost`)
+      return undefined
+    }
     const input = hookInput(event, fields)
     return Promise.all([...commands].map(([command, timeout]) => runHookCommand(event, command, timeout, input, held))).then(() => {})
   }
@@ -802,11 +853,6 @@ export async function run(engine, config = {}, { native = false } = {}) {
   // requests were read late.
   let lateStop = null
   let latePrompt = null
-  /** Until the test writes `file` (or [other]), for at most a minute: a test that failed first does not leave this waiting. */
-  const released = async (file, other) => {
-    const written = () => existsSync(file) || (other !== undefined && existsSync(other))
-    for (const end = Date.now() + 60_000; !written() && Date.now() < end;) await new Promise((resolve) => setTimeout(resolve, 20))
-  }
   const hookHeld = () => {
     const file = join(config.root, `held-hook-${randomUUID()}`)
     return { file, release: () => writeFileSync(file, '') }
@@ -1007,8 +1053,12 @@ export async function run(engine, config = {}, { native = false } = {}) {
   process.stdout.write(`\x1b[?2004h${engine === 'claude' ? '✻ Welcome to Claude Code (fake)' : '>_ OpenAI Codex (fake)'}\r\n`)
   process.stdout.write(`  session ${sessionId}${resumed ? ' (resumed)' : ''}\r\n\r\n`)
   drawComposer()
-  if (config.firstHookDelayMs && !resumed) await new Promise((resolve) => setTimeout(resolve, config.firstHookDelayMs))
-  await runHooks('SessionStart', { source: resumed ? 'resume' : 'startup' })
+  // `lazySessionStart` (Codex): the source its first prompt's SessionStart names, until that prompt or a `!clear`.
+  let lazyStart = engine === 'codex' && config.lazySessionStart === true ? (resumed ? 'resume' : 'startup') : null
+  if (!lazyStart) {
+    if (config.firstHookDelayMs && !resumed) await new Promise((resolve) => setTimeout(resolve, config.firstHookDelayMs))
+    await runHooks('SessionStart', { source: resumed ? 'resume' : 'startup' })
+  }
 
   let turn = 0
   let open = null
@@ -1526,7 +1576,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
     const held = heldStop
     heldStop = null
     await runHooks('Stop', { stop_hook_active: false, ...(engine === 'codex' ? { turn_id: ended } : {}) }, held)
-    if (lagging) { appendFileSync(transcript, lagging.join('')); lagging = null }
+    if (lagging) { append(lagging.join('')); lagging = null }
     sayStatus('idle')
     if (engine === 'codex') codex('event_msg', { type: 'task_complete', turn_id: ended, last_agent_message: text })
   }
@@ -1664,17 +1714,21 @@ export async function run(engine, config = {}, { native = false } = {}) {
       // says both through its hooks, as the real CLIs do.
       if (open) await finish('(interrupted by a new conversation)')
       await runHooks('SessionEnd', { reason: 'clear' })
+      // The conversation that ended is on disk before the next begins.
+      if (unwritten) createLate()
       sessionId = randomUUID()
       transcript = engine === 'claude'
         ? join(projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`)
         : join(codexHome, 'sessions', '2026', '10', '03', `rollout-2026-10-03T00-00-00-${sessionId}.jsonl`)
       mkdirSync(dirname(transcript), { recursive: true })
-      writeFileSync(transcript, '')
+      if (lateTranscript) holdTranscript()
+      else writeFileSync(transcript, '')
       parent = null
       turn = 0
       if (engine === 'codex') codex('session_meta', { id: sessionId, cli_version: version, cwd, source: 'cli' })
       announceProcess()
       say('(new conversation)\r\n')
+      lazyStart = null
       await runHooks('SessionStart', { source: 'clear' })
       return
     }
@@ -1689,6 +1743,11 @@ export async function run(engine, config = {}, { native = false } = {}) {
     const late = lateStop
     lateStop = null
     const promptHeld = late ? hookHeld() : null
+    if (lazyStart) {
+      const source = lazyStart
+      lazyStart = null
+      await runHooks('SessionStart', { source })
+    }
     // Both CLIs run their UserPromptSubmit hooks on every prompt, before the prompt is taken: notify.mjs
     // sends it through the same door as SessionStart, the catch hook that re-registers a session whose
     // start-up announcement the daemon missed. The fields beyond the prompt are those each CLI was
