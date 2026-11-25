@@ -16,7 +16,7 @@ import { withoutOutputTail } from '../../lib/cardUpdate.js'
 import type { EngineTranscript } from '../../engines/facets/transcript.js'
 import { keepsStore } from '../../engines/otherEngines.js'
 import { EngineReadError } from '../../engines/worker/protocol.js'
-import { transcriptReadIdentity } from './readIdentity.js'
+import { readStillCurrent } from './readIdentity.js'
 import { lastActivityAt } from '../../lib/agentFrame.js'
 import { sid } from '../../lib/log.js'
 import { projectDisplayName, type RegisteredSession } from '../../lib/registry.js'
@@ -78,11 +78,11 @@ export function createHistory({ resolve, stopped, pages, readerFor, storeOf }: H
     const reader = readerFor(s.engine)
     // No engine reaches this without a reader (a shell keeps no transcript: registry.engineKeepsTranscriptFile).
     if (!reader) return emptyPage(s, sessionId)
-    const identity = transcriptReadIdentity(s)
+    const current = readStillCurrent(s)
     try {
       const read = store ? { ...s, store: await storeOf(s) } : s
       const { events, timestamp, ...page } = await reader.historyPage(read, { limit, before }, pages)
-      if (transcriptReadIdentity(lookup(sessionId)) !== identity) throw new EngineReadError('ENGINE_STALE_REPLY')
+      if (!current(lookup(sessionId))) throw new EngineReadError('ENGINE_STALE_REPLY')
       return { id: sessionId, title: projectDisplayName(s), events, timestamp, engine: s.engine, ...page }
     } catch (error) {
       const failed = error instanceof EngineReadError ? error : new EngineReadError('ENGINE_UNAVAILABLE')
