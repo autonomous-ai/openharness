@@ -81,7 +81,9 @@ orchestrator's turn, the Ubuntu VM off; no production backend or accounts anywhe
   1023-1030 and the window's `openQuestions` at 2474) and by `reannounceRemote`; it forgets only this module's own
   questions (the keys it put in `askedRemotely`), never a cloud agent's, which `cloud.ts` closes itself (Task 4).
   "Same question" is the spec's: same session, same question text, same row labels, same `multi`, no confirmed miss,
-  and neither the announced dialog nor the live one a permission dialog (`isApprovalDialog`). A permission dialog is
+  and neither the announced dialog nor the live one a permission dialog (`isApprovalDialog`, or rows shaped as an
+  approval's, `offersApproval`: the final review found `isApprovalDialog` misses Hermes's and Copilot's approvals, which
+  box their command with no `$ ` line; `keepsIdByWords` asks both). A permission dialog is
   the same ask only while its whole fingerprint is (`dialogSignature` included): its id stays `questionRequestId`'s and
   `heldRequestId` gives nothing for it, so its answer check is today's. The pre-turn baseline (`preTurn`) still compares whole fingerprints, on purpose: by words alone a new prompt that
   shares its first line with the last turn's would never be announced.
@@ -559,8 +561,8 @@ one commit).
 
 ### Task 11: Rebase on `main` once `fix/win-hook-admission` has merged
 
-**Files:** the branch. **Depends on:** Tasks 1-10 and 15, and `fix/win-hook-admission` merged to `main` (its worktree:
-`/Users/nqhieu84/orca/workspaces/openharness/win-hook-admission`). **Effort:** high. **Failing test:** none.
+**Files:** the branch. **Depends on:** Tasks 1-10 and 15, and `fix/win-hook-admission` merged to `main`. **Effort:**
+high. **Failing test:** none.
 
 - [ ] **Step 1:** `git fetch origin && git rebase origin/main`; resolve any conflict by keeping both changes (expected
   only in `cli/src/core/main.ts`, other hunks). Never force anything of `fix/win-hook-admission`'s back out.
