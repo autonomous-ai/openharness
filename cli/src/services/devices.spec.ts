@@ -13989,6 +13989,31 @@ describe('Orca\'s chats on the dial (docs/plans/2026-11-23-dial-orca-chats-desig
     expect(runs('agent list --json')).toBe(6)
   })
 
+  // Found on a dial (2026-11-25): unplugged and plugged back with the same worktree on Orca's screen, the ring held that
+  // worktree's terminals alone. The detach empties the worktree map, and the same worktree is no new worktree to ask it.
+  it('a dial attached again with the same worktree on Orca\'s screen reads the worktree list again: its chats are back', async () => {
+    const { listener } = await scoped()
+    listener.orcaFront([], ON_WT5)
+    await settled()
+    expect(await ring()).toEqual([resting(1), resting(2), resting(3)])
+    expect(runs('worktree list --json')).toBe(1)
+    seen.host.watching!(false)
+    await settled()
+    seen.host.watching!(true)
+    await settled()
+    await settled()
+    expect(await ring()).toEqual([resting(1), resting(2), resting(3)])
+    expect(runs('worktree list --json')).toBe(2)
+    // Mapped now: the next read asks for the chats alone.
+    seen.host.watching!(false)
+    await settled()
+    listener.orcaFront([], ON_WT8)
+    seen.host.watching!(true)
+    await settled()
+    expect(await ring()).toEqual([13, 14, 15, 16, 17].map(resting))
+    expect(runs('worktree list --json')).toBe(2)
+  })
+
   // Review Focus 3.
   it('a read that lands for an older worktree changes the map, never the scope: the ring is the latest worktree\'s', async () => {
     const { listener, answer, letGo } = await scoped()
