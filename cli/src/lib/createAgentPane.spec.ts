@@ -314,6 +314,24 @@ describe('createAndRegisterPane', () => {
     expect(openPendingAgent.mock.calls[1]![0]).not.toHaveProperty('firstTask')
   })
 
+  it('opens the pending agent with the creation id it was given, and none when not', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const openPendingAgent = vi.spyOn(registry, 'openPendingAgent')
+    const created = await createAndRegisterPane({
+      tmuxBackend: fakeTmux([succeeded('%1')]), registry, engine: 'codex', cwd: '/tmp/demo', sessionLabel: 'harness-codex-1',
+      argv: () => ['codex'], creationId: 'create-0123456789abcdef',
+    })
+    expect(openPendingAgent).toHaveBeenCalledWith(expect.objectContaining({ creationId: 'create-0123456789abcdef' }))
+    expect(created.ok && created.pending).toMatchObject({ creationId: 'create-0123456789abcdef' })
+    const plain = await createAndRegisterPane({
+      tmuxBackend: fakeTmux([succeeded('%2')]), registry, engine: 'codex', cwd: '/tmp/demo', sessionLabel: 'harness-codex-2', argv: () => ['codex'],
+    })
+    expect(openPendingAgent.mock.calls[1]![0]).not.toHaveProperty('creationId')
+    expect(plain.ok).toBe(true)
+    expect(plain.ok && plain.pending).not.toHaveProperty('creationId')
+  })
+
   it('a local launch\'s folder goes on its row', async () => {
     const { registry } = await loadRegistryModule()
     registry.load()
