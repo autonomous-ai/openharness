@@ -1292,9 +1292,10 @@ mod tests {
     }
 
     #[test]
-    fn only_three_shapes_of_stderr_are_logged_as_they_come() {
+    fn only_four_shapes_of_stderr_are_logged_as_they_come() {
         let longest = format!("sound: {}", "A".repeat(32));
         let longest_notify = format!("notify: {}", "A".repeat(32));
+        let longest_voice = format!("voice: {}", "A".repeat(32));
         for line in [
             "tabs stream replaced",
             "sound: DEVICE_OFFLINE",
@@ -1306,11 +1307,18 @@ mod tests {
             "notify: WRITE_FAILED",
             "notify: A",
             &longest_notify,
+            "voice: DEVICE_OFFLINE",
+            "voice: NO_DIAL",
+            "voice: NO_ANSWER",
+            "voice: FAILED",
+            "voice: A",
+            &longest_voice,
         ] {
             assert!(logged_stderr(line.as_bytes()), "{line}");
         }
         let too_long = format!("sound: {}", "A".repeat(33));
         let too_long_notify = format!("notify: {}", "A".repeat(33));
+        let too_long_voice = format!("voice: {}", "A".repeat(33));
         let refused = [
             "",
             "sound: ",
@@ -1333,11 +1341,24 @@ mod tests {
             "notify: /Users/person",
             "notify: person@example.com",
             &too_long_notify,
+            "voice: ",
+            "voice:NO_DIAL",
+            " voice: NO_DIAL",
+            "voice: NO_DIAL ",
+            "voice: no dial",
+            "Voice: NO_DIAL",
+            "voices: NO_DIAL",
+            "voice: vi",
+            "voice: Tiếng Việt",
+            "voice: /Users/person",
+            "voice: person@example.com",
+            &too_long_voice,
         ];
         for line in refused {
             assert!(!logged_stderr(line.as_bytes()), "{line}");
         }
         assert!(!logged_stderr(b"sound: \xff"));
+        assert!(!logged_stderr(b"voice: \xff"));
     }
 
     #[cfg(unix)]
@@ -1384,6 +1405,31 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_watch_logs_a_voice_code_as_it_comes_and_no_other_stderr() {
+        let fake = Fake::new();
+        fake.script(
+            "hardware watch --json",
+            &[
+                "@err voice: DEVICE_OFFLINE",
+                "@err voice: /Users/person/x",
+                "@err voice: Connect the VPN",
+                "started",
+                "@hang",
+            ],
+        );
+        let mut child = fake.cli().spawn(&WATCH).unwrap();
+        assert_eq!(child.line(WAIT), Ok(Some("started".into())));
+        // Its end waits for stderr's, so the line, logged as it is read, comes first.
+        child.killer().kill();
+        assert_eq!(child.exit(WAIT), Ok(None));
+        assert_eq!(
+            fake.log().lines(),
+            ["harness hardware watch --json: voice: DEVICE_OFFLINE", "harness hardware watch --json: killed"]
+        );
+    }
+
     /// A stream that hands on each chunk it is sent, as one read, and ends once its sender is gone.
     struct Chunks(mpsc::Receiver<Vec<u8>>);
 
@@ -1411,6 +1457,9 @@ mod tests {
         send.send(b"notify: NO_".to_vec()).unwrap();
         send.send(b"ANSWER\n".to_vec()).unwrap();
         assert_eq!(said.recv_timeout(WAIT), Ok("notify: NO_ANSWER".into()));
+        send.send(b"voice: NO_".to_vec()).unwrap();
+        send.send(b"DIAL\n".to_vec()).unwrap();
+        assert_eq!(said.recv_timeout(WAIT), Ok("voice: NO_DIAL".into()));
         // A line that starts or ends with it, or holds it far into a long one, is not it.
         send.send(b"tabs stream replaced!\nx tabs stream replaced\n".to_vec()).unwrap();
         let long = [b"tabs stream replaced".repeat(400), b"\n".to_vec()].concat();
