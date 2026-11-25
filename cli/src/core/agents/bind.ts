@@ -922,6 +922,13 @@ export function createBinding({
         const continuation = located.value
         if (!continuation || continuation.sessionId === agent.sessionId
           || registry.has(continuation.sessionId) || isRecentlyDeleted(continuation.sessionId)) return
+        // The marker is the file's last record, so the file was written when it was. One already there when the process
+        // started (a resume of a conversation that had continued elsewhere) is no rollover of this process: evidence must
+        // be newer than the binding it contradicts (core rule 6). Taken for one, it moved the agent off the file its
+        // process writes, until the process's next hook moved it back. A file or start that cannot be read proves nothing.
+        const written = await stat(agent.transcriptPath).then(info => info.mtimeMs, () => null)
+        const started = startMarkerMs(observed.processIdentity.startMarker)
+        if (written === null || started === null || written < started) return
         if (!current()) return
         console.log(`[discovery] ${sid(agent.agentId)} ${observed.engine} session continued ${sid(agent.sessionId)} → ${sid(continuation.sessionId)}`)
         const rotated = await commit({
