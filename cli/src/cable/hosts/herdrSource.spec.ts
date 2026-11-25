@@ -817,6 +817,18 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     expect(row(s, 'w2:p1')?.sessionId).toBeUndefined()
   })
 
+  // Node counts a timer in whole ms, and performance.now() does not: a timer can run up to 1 ms before its time there.
+  it('a re-list whose timer runs a little before its time counts all the same: the next one is the second', async () => {
+    const s = setup()
+    await listedBare(s)
+    expect(s.timers.map(({ ms }) => ms)).toEqual([1000])
+    s.advance(999)
+    s.timers.splice(0, 1)[0].run()
+    s.advance(1)
+    await listRead(4)
+    expect(s.timers.map(({ ms }) => ms)).toEqual([1000])
+  })
+
   it('a pane that closes before its re-list is due is not listed again', async () => {
     const s = setup()
     await listedBare(s)
