@@ -128,6 +128,33 @@ class MergeTests(unittest.TestCase):
         self.assertGreater(len(self.client.archives[1123]), 65536)
         self.assertEqual(result["status"], "ready", result.get("error"))
 
+    def test_a_plan_that_fails_verification_refuses_rather_than_skips_its_run(self):
+        cases = [("digest", dict(digest="sha256:" + "0" * 64), {}, "digest mismatch"),
+                 ("other-run", dict(workflow_run=dict(id=999, head_sha=self.head)), {}, "another source/run"),
+                 ("expired", dict(expired=True), {}, "another source/run"),
+                 ("oversized", dict(size_in_bytes=merger.queue.PLAN_BYTES + 1), {}, "one bounded CI plan"),
+                 ("other-head", {}, dict(head="e" * 40), "identity does not match"),
+                 ("draft-text", {}, dict(draft="false"), "identity does not match")]
+        for name, artifact, fields, error in cases:
+            self.client = FakeClient(self)
+            self.client.newer_runs = [dict(self.client.run, id=124, conclusion="failure")]
+            self.client.plans = {124: True, 123: False}
+            self.client.plan_artifact_patch, self.client.plan_fields = artifact, fields
+            self.output = self.output.with_name("plan-" + name)
+            with self.subTest(name):
+                result = self.finish(automatic=True)
+                self.assertEqual(result["status"], "not_merged")
+                self.assertIn(error, result["error"])
+                self.assertEqual(self.client.writes, [])
+
+    def test_only_the_latest_runs_of_the_head_are_read_for_a_plan(self):
+        self.client.newer_runs = [dict(self.client.run, id=run_id, conclusion="failure") for run_id in range(129, 123, -1)]
+        self.client.plans = {**{run["id"]: True for run in self.client.newer_runs}, 123: False}
+        result = self.finish(automatic=True)
+        self.assertIn("planned a draft", result["error"])
+        self.assertEqual(sorted(self.client.archives), [1000 + run_id for run_id in range(125, 130)])
+        self.assertEqual(self.client.writes, [])
+
     def test_only_draft_runs_on_the_head_cannot_merge(self):
         self.client.newer_runs = [dict(self.client.run, id=124, conclusion="failure")]
         self.client.plans = {124: True, 123: True}
@@ -429,7 +456,8 @@ class FakeClient:
         self.required_gate, self.run_list_reads, self.superseding_run = False, 0, None
         self.rules, self.receipt_patch = [], {}
         # Runs newer than self.run on the same head, and each run's ci-plan draft flag (no entry: still planning).
-        self.newer_runs, self.plans, self.plan_fields, self.archives = [], {}, {}, {}
+        self.newer_runs, self.plans, self.archives = [], {}, {}
+        self.plan_fields, self.plan_artifact_patch = {}, {}
         self.commits = [dict(sha=fixture.head, author=None, commit=dict(message="reviewed", author=dict(name="Fixture", email="fixture@example.test")))]
         self.pr = dict(number=5, title="Fixture", user=dict(login="fixture"), state="open", draft=False, merged=False, mergeable=True, mergeable_state="clean",
                        html_url="https://github.com/owner/repo/pull/5", head=dict(sha=fixture.head),
@@ -479,15 +507,15 @@ class FakeClient:
         return copy.deepcopy(self.gate_jobs if self.required_gate else self.jobs)
 
     def plan_artifact(self, run_id):
-        plan = dict(schema=1, kind="ci-plan", event="pull_request", head=self.fixture.head, draft=self.plans[run_id],
-                    **self.plan_fields)
+        plan = dict(dict(schema=1, kind="ci-plan", event="pull_request", head=self.fixture.head,
+                         draft=self.plans[run_id]), **self.plan_fields)
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w") as bundle:
             bundle.writestr("ci-plan.json", json.dumps(plan))
         archive = self.archives[1000 + run_id] = buf.getvalue()
-        return dict(id=1000 + run_id, name="ci-plan", expired=False, size_in_bytes=len(archive),
-                    workflow_run=dict(id=run_id, head_sha=self.fixture.head),
-                    digest="sha256:" + hashlib.sha256(archive).hexdigest())
+        return dict(dict(id=1000 + run_id, name="ci-plan", expired=False, size_in_bytes=len(archive),
+                         workflow_run=dict(id=run_id, head_sha=self.fixture.head),
+                         digest="sha256:" + hashlib.sha256(archive).hexdigest()), **self.plan_artifact_patch)
 
     def gate_artifacts(self):
         receipt = dict(schema=1, kind="ci-required", status="passed", source_sha=self.fixture.head,
