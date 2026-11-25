@@ -62,8 +62,12 @@ export const BUNDLE_APPS: Readonly<Record<string, string>> = {
   [HARNESS_BUNDLE]: 'harness',
 }
 
-// kitty sets no TERM_PROGRAM: off macOS its own variable names it (detectApp).
+// kitty sets no TERM_PROGRAM: off macOS its own variable names it (detectApp). Orca sets its own in every terminal it
+// spawns (stablyai/orca src/main/daemon/pty-subprocess/spawn-environment.ts, local-pty-spawn-environment.ts), and off
+// macOS no bundle id names it: without it an Orca agent sat on Other's page (Ken's Dell, Win11 x64, 2026-11-25, chain
+// claude.exe < powershell < powershell < Orca.exe < Orca.exe).
 const PROGRAM_APPS: Readonly<Record<string, string>> = {
+  Orca: 'orca',
   'iTerm.app': 'iterm',
   Apple_Terminal: 'terminal-app',
   ghostty: 'ghostty',
@@ -209,7 +213,8 @@ export function detectHost(hints: Record<string, string>): string {
   if (inCmux(hints)) return 'cmux'
   if (has('KITTY_WINDOW_ID')) return 'kitty'
   if (has('WEZTERM_PANE')) return 'wezterm'
-  if (has('ORCA_AGENT_SESSION_ID') || bundle === APP_BUNDLES.orca) return 'orca'
+  // Orca's TERM_PROGRAM names it off macOS too, where a claude typed by hand has no agent session (PROGRAM_APPS).
+  if (has('ORCA_AGENT_SESSION_ID') || bundle === APP_BUNDLES.orca || program === 'Orca') return 'orca'
   // Cursor is a VS Code fork and reports TERM_PROGRAM=vscode, so its bundle id decides first.
   if (bundle === APP_BUNDLES.cursor) return 'cursor'
   if (bundle === APP_BUNDLES.claude) return 'claude'
