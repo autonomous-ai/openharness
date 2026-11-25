@@ -301,9 +301,12 @@ These override the sections above where they differ.
 1. **iTerm2 ⛔ for writes**, for the Broadcast Input reason in the table's notes. Part B types only into Ghostty, a build
    whose terminal has `tty`. Every hop refuses iTerm2: the devices (`tabsLines` typing apps), the watch and Harness
    Device (`typing_of`), and Harness Device has no iTerm2 write handlers.
-2. **Handshake.** Harness Device starts its watch as `harness hardware watch --json --writes`. Only such a watch opens
-   the tabs stream with `"writes":true`, and the devices type only on a stream that said it. An older Harness Device
-   (0.1.x), which drops write lines, therefore gets no voice offered on tab agents, instead of a 3 s "did not answer".
+2. **Handshake.** Harness Device still starts `harness hardware watch --json`, and writes `{"writes":true}` as its first
+   line on the watch's stdin (an older watch ignores a line it does not know; a CLI flag would have stopped an older
+   CLI's watch altogether). Only a watch that heard it, on macOS, opens the tabs stream with `"writes":true`, and the
+   devices type only on a stream that said it. An older Harness Device (0.1.x), which drops write lines, therefore gets
+   no voice offered on tab agents, instead of a 3 s "did not answer". Known edge: a CLI newer than a still-running older
+   daemon gets a 413 on the standby open (44 bytes over the old 32) until the daemon restarts; the normal open fits.
 3. **Words left behind.** When the recheck before the Enter fails, or an answer comes late, the words stay unsubmitted
    in the agent's input box, and the next send that works submits them together with its own words. Accepted: nothing
    is typed to clear them (no Ctrl-U, no backspaces), since that would type more into a pane that just failed a check.
