@@ -490,6 +490,23 @@ describe('droppedKeys', () => {
     expect(droppedKeys(was, ran, ['a'], new Map([['a/darwin/C1', c1]])))
       .toEqual(['a/darwin/C1/ring.order', 'a/darwin/C1/wait.1'])
   })
+
+  it('lets go of a tier B timed key the run did not give: an update no longer writes one', () => {
+    // C1 in tier B: its cost check's cpu and loopP99 are timed, and its step-1 condition wait.
+    const b1 = { ...c1, tiers: ['b' as const], checks: [...c1.checks, { id: 'cost', kind: 'cost' as const, dim: 'D8' as const }] }
+    const was = baseline({ 'b/darwin/C1/ring.recall': 1, 'b/darwin/C1/ring.order': 1, 'b/darwin/C1/wait.1': 1,
+      'b/darwin/C1/cost.cpu': 1, 'b/darwin/C1/cost.loopP99': 1 })
+    const ranB = run([result({ tier: 'b', check: 'ring.recall', dim: 'D1', score: 1 })])
+    expect(droppedKeys(was, ranB, ['b'], new Map([['b/darwin/C1', b1]]))).toEqual(['b/darwin/C1/ring.order'])
+  })
+
+  it('grades every main tier B scenario on nothing seen to tell its timed keys, without throwing', () => {
+    const on = MAIN.filter((s) => s.tiers.includes('b') && s.platforms.includes('darwin'))
+    const was = baseline(Object.fromEntries(on.map((s) => [`b/darwin/${s.id}/cost.cpu`, 1])))
+    // A gap of a scenario outside the catalog given: tier B on darwin was driven, so its subset is replaced.
+    const driven = run([], { gaps: [{ tier: 'b', platform: 'darwin', scenario: 'Z1', app: 'claude', heldOut: false, reason: 'none' }] })
+    expect(droppedKeys(was, driven, ['b'], new Map(on.map((s) => [`b/darwin/${s.id}`, s])))).toEqual([])
+  })
 })
 
 describe('loadBaseline', () => {
