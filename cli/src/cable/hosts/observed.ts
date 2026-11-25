@@ -20,7 +20,8 @@ import { FRESH_WITHIN_MS, type Nested, type NestedLookup, type NestedPlace, type
 import type { SessionRecord } from './record.js'
 import { parentChain, type ProcessName, scanLearnsApps } from './scannedApp.js'
 import { isTabApp } from './tabs.js'
-import type { Caps, HostAgent, HostAgentState, HostSource, Nest, PaneSwitch, SendResult } from './types.js'
+import { type Caps, type HostAgent, type HostAgentState, type HostSource, isTabsReason, type Nest, type PaneSwitch, type SendResult,
+  type TabsReason } from './types.js'
 
 export { detectHost, hostDisplayName } from './hostDetect.js'
 
@@ -194,16 +195,19 @@ export interface ObservedActions {
   /** The Codex home Harness reads (env.CODEX_HOME): `codex queue` loads its config, so a hook's path never chooses it. */
   codexHome: string
   /** The route (`codex`, `mod`, or the adapter that typed, said by its fixed id) or the refusal, the adapter that
-   *  refused in its own sentence, and a failed queue's reason and which `codex` ran. Fixed words or an adapter only: a
-   *  string from a hook, a pane's id, a binary's path, cannot reach the log line. */
+   *  refused in its own sentence or did not send for a reason of the list, and a failed queue's reason and which
+   *  `codex` ran. Fixed words or an adapter only: a string from a hook, a pane's id, a binary's path, cannot reach the
+   *  log line. */
   count(what: 'mod' | 'waiting' | 'busy' | 'pending' | 'too-long' | 'no-answer' | 'codex' | 'codex-timeout'
     | 'codex-failed (refused)' | `codex-failed (${Exclude<CodexQueueFailure, 'refused'>} · ${CodexRan})`
-    | HostAdapter | { refused: HostAdapter }): void
+    | HostAdapter | { refused: HostAdapter } | { notSent: HostAdapter; reason: TabsReason }): void
 }
 
-/** What a count says in the log: a fixed word, the adapter that typed by its id, or `refused (<its id>)`. */
+/** What a count says in the log: a fixed word, the adapter that typed by its id, `refused (<its id>)`, or
+ *  `refused (<its id> · <reason>)`. */
 export function countWord(what: Parameters<ObservedActions['count']>[0]): string {
   if (typeof what === 'string') return what
+  if ('notSent' in what) return `refused (${what.notSent.id} · ${what.reason})`
   return 'refused' in what ? `refused (${what.refused.id})` : what.id
 }
 
@@ -496,8 +500,15 @@ export class ObservedSource implements HostSource {
       this.forgetDialPrompt(e, record)
       if (typed === 'busy') return busy()
       if (typed === 'waiting') return waiting()
-      // `false`, or an answer outside the type, says nothing: a refusal is read only off an object that holds one.
-      if (!typed || typeof typed !== 'object' || typeof typed.refused !== 'string') return noAnswer()
+      // `false`, or an answer outside the type, says nothing: a refusal, or a reason not to send, is read only off an
+      // object that holds one, and a reason only when it is a word of the list, so fixed words alone reach the log.
+      if (!typed || typeof typed !== 'object') return noAnswer()
+      if ('notSent' in typed) {
+        if (!isTabsReason(typed.notSent)) return noAnswer()
+        actions.count({ notSent: typer.adapter, reason: typed.notSent })
+        return { ok: false, reason: `${name} did not answer.` }
+      }
+      if (typeof typed.refused !== 'string') return noAnswer()
       actions.count({ refused: typer.adapter })
       return { ok: false, reason: typed.refused }
     }
@@ -743,6 +754,13 @@ export class ObservedSource implements HostSource {
       if (!found || e.agent.lastActivityAt > found.agent.lastActivityAt) found = e
     }
     return found && { ...found.agent }
+  }
+
+  /** Whether another live agent reads that tty than the one in process [pid]: one whose tty was read for another
+   *  process, or a nested one, whose tty is its client's tab. Words typed there could reach either. */
+  othersOnTty(tty: string, pid: number): boolean {
+    for (const e of this.entries.values()) if (e.tty === tty && e.ttyPid !== pid && this.live(e)) return true
+    return false
   }
 
   /** The live agent with that adapter's pane of that id: of two, the one heard from last. A held pane is not its own, as
