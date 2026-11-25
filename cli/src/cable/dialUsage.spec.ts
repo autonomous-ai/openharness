@@ -389,6 +389,27 @@ describe('createDialUsage', () => {
     expect(count('dial_voice_delivered')).toBe(1)
   })
 
+  // The window's send begins before a person picks the agent, up to a minute: a turn more than 10 s before the words
+  // went in is another input's.
+  it('a turn that started more than 10 s before the sent end is not the voice\'s', () => {
+    const { usage, count } = rig()
+    usage.attached(true)
+    const since = Date.now()
+    vi.advanceTimersByTime(20_000)
+    usage.turnStarted('a')
+    vi.advanceTimersByTime(10_000)
+    usage.voiceEnded({ outcome: 'sent', agentId: 'a', since })
+    expect(count('dial_voice_delivered')).toBe(0)
+    vi.advanceTimersByTime(10_000)
+    expect(count('dial_voice_failed_no_turn')).toBe(1)
+
+    const bSince = Date.now()
+    usage.turnStarted('b')
+    vi.advanceTimersByTime(9_999)
+    usage.voiceEnded({ outcome: 'sent', agentId: 'b', since: bSince })
+    expect(count('dial_voice_delivered')).toBe(1)
+  })
+
   it('a voice delivered as it was sent is interrupted within 10 s of its turn\'s start, and redirected', () => {
     const { usage, count } = rig()
     usage.attached(true)
