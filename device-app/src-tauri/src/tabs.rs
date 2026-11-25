@@ -146,8 +146,9 @@ pub fn typing_of(line: &str) -> Option<Typing> {
     let id = string("id")
         .filter(|id| id.len() == 16 && id.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')))?
         .to_string();
-    // Terminal has no write handler: `do script`, its only way to put text in a tab, runs the text as a command.
-    let app = string("app").and_then(TabApp::from_id).filter(|app| *app != TabApp::Terminal)?;
+    // Ghostty alone has write handlers. Terminal's `do script`, its only way to put text in a tab, runs the text as a
+    // command; iTerm2's `write` reaches every session its Broadcast Input joins, which its dictionary does not show.
+    let app = string("app").and_then(TabApp::from_id).filter(|app| *app == TabApp::Ghostty)?;
     let tty = string("tty").filter(|tty| tty_ok(tty))?.to_string();
     match (kind.as_str(), fields.len()) {
         ("write", 4) => {
@@ -222,7 +223,7 @@ pub trait TabScripts: Send + Sync {
     /// A tap's select: `open -b` is bringing the app forward, so the window is always raised.
     fn focus_tty(&self, app: TabApp, tty: &str) -> Result<Selected, TabError>;
     /// Spoken words, typed into the one session of the tty with no newline. An app with no write handler (Terminal,
-    /// every app off macOS) writes nothing.
+    /// iTerm2, every app off macOS) writes nothing.
     fn write_text(&self, _app: TabApp, _tty: &str, _text: &str) -> Result<Written, TabError> {
         Ok(Written::NoSession)
     }

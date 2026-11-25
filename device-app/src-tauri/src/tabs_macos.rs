@@ -24,7 +24,7 @@ use std::thread;
 // (procNotFound), a failed call: an answer is the rules' sign that macOS lets the app be scripted, and only an event
 // can give one.
 // With no visible window `selected_tty` answers the empty string; each select answers whether a tab held `t`, and each
-// write whether it wrote to the one session or terminal of `t`.
+// of Ghostty's writes whether it wrote to the one terminal of `t`.
 
 const TERMINAL: &str = r#"
 -- Terminal: «class cwin» window, «property pvis» visible, «property pidx» index, «property tcnt» selected tab,
@@ -67,8 +67,7 @@ end focus_tty
 
 const ITERM: &str = r#"
 -- iTerm2: «class cwin» window, «property pvis» visible, «property Crwn» current window, «property Wcsn» current
--- session, «class Trmt» tab, «class Trms» session, «property Stty» tty, «event Itrmslct» select, «event Itrmsntx» write,
--- «class Text» its text, «class Wtnl» its newline.
+-- session, «class Trmt» tab, «class Trms» session, «property Stty» tty, «event Itrmslct» select.
 property app_id : "com.googlecode.iterm2"
 
 on selected_tty()
@@ -105,30 +104,6 @@ end select_tty
 on focus_tty(t)
 	return select_tty(t, true)
 end focus_tty
-
-on write_text(t, s)
-	if not (running of application id app_id) then error number -600
-	with timeout of 2 seconds
-		tell application id app_id
-			-- Every window, visible or not: a hidden window's session is still the agent's.
-			set held to {}
-			repeat with w in (every «class cwin»)
-				repeat with k in (every «class Trmt» of w)
-					set held to held & (every «class Trms» of k whose «property Stty» is t)
-				end repeat
-			end repeat
-			-- Exactly one (check 7): a pty no session of iTerm2 holds is not its pane.
-			if length of held is not 1 then return false
-			-- No newline: the Enter is a write of its own, after the devices' settle and their checks again.
-			«event Itrmsntx» (item 1 of held) given «class Text»:s, «class Wtnl»:false
-		end tell
-	end timeout
-	return true
-end write_text
-
-on send_enter(t)
-	return write_text(t, character id 13)
-end send_enter
 "#;
 
 // Ghostty's `select tab` may bring Ghostty forward, so a swipe selects only while it is in front. A Ghostty with no
@@ -356,10 +331,11 @@ impl MacTabs {
         Ok(if self.held(app, handler, tty, front.map(Arg::Flag))? { Selected::Done } else { Selected::NoTab })
     }
 
-    /// A typing's write or Enter. Terminal has no write handler: `do script`, its only way to put text in a tab, runs
-    /// the text as a command and adds a newline.
+    /// A typing's write or Enter. Ghostty alone has write handlers: Terminal's `do script`, its only way to put text in
+    /// a tab, runs the text as a command and adds a newline, and iTerm2's `write` reaches every session its Broadcast
+    /// Input joins, which its dictionary does not show.
     fn write(&self, app: TabApp, handler: &'static str, tty: &str, text: Option<&str>) -> Result<Written, TabError> {
-        if app == TabApp::Terminal {
+        if app != TabApp::Ghostty {
             return Ok(Written::NoSession);
         }
         let text = text.map(|text| Arg::Text(text.to_string()));
