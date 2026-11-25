@@ -1911,6 +1911,47 @@ mod tests {
     }
 
     #[test]
+    fn a_stopped_watchs_typing_makes_no_call() {
+        let scripts = Arc::new(Scripts::default());
+        let (w, _fronts) = world_with_tabs(VSCODE, &scripts);
+        let words = write(ID, "hi");
+        // Its child prints the words once its stdin has closed, then a status that says they have come.
+        w.fake.script(
+            "hardware watch --json",
+            &[r#"{"attached":true}"#, SELECT_ITERM, "@record", &words, r#"{"attached":true}"#, "@wait end"],
+        );
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        // Answered, so iTerm2 may be scripted.
+        w.fake.log().until(|lines| lines.iter().any(|line| line == "tabs: iTerm2 select ok"));
+        assert_eq!(w.runner.run(Effect::StopWatch), None);
+        assert_eq!(w.next(), a_dial());
+        scripts.still(2);
+        w.fake.touch("end");
+        assert_eq!(w.next(), Event::WatchExit(Some(0)));
+        // The words' answer had no watch to go to.
+        assert_eq!(w.fake.stdin(), [VSCODE_LINE]);
+    }
+
+    #[test]
+    fn a_watch_that_ends_drops_its_typings_waiting() {
+        let scripts = Arc::new(Scripts::default());
+        let (w, _fronts) = world_with_tabs(VSCODE, &scripts);
+        let (one, two) = (write(ID, "one"), write(NEXT_ID, "two"));
+        // It ends by itself after the words.
+        w.fake.script("hardware watch --json", &[r#"{"attached":true}"#, SELECT_ITERM, "@wait go", &one, &two]);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        w.fake.log().until(|lines| lines.iter().any(|line| line == "tabs: iTerm2 select ok"));
+        // The first write's call is held, and the second waits behind it as the watch ends.
+        scripts.gate(true);
+        w.fake.touch("go");
+        assert_eq!(scripts.calls(4)[2..], ["running iTerm2", "write_text iTerm2 /dev/ttys023 one"]);
+        assert_eq!(w.next(), Event::WatchExit(Some(0)));
+        scripts.gate(false);
+        // The devices took the stream's end for the second write's answer: run now, it could meet another send's words.
+        scripts.still(4);
+    }
+
+    #[test]
     fn a_typing_for_an_app_turned_off_is_answered_no_at_once() {
         let scripts = Arc::new(Scripts::default());
         scripts.writes.lock().unwrap().push_back(Err(TabError::Denied));

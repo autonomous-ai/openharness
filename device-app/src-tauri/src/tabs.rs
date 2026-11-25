@@ -1279,6 +1279,21 @@ mod tests {
     }
 
     #[test]
+    fn a_stopped_watchs_typing_is_answered_no_and_never_runs() {
+        let now = Instant::now();
+        // A stopped watch's child may still print a line before it ends.
+        let mut follow = writing();
+        follow.watching(false);
+        assert_eq!(follow.typed(write(I, ID, "hi"), now), Some(wrote_line(ID, false)));
+        assert_eq!(follow.typed(enter(G, ENTER_ID), now), Some(wrote_line(ENTER_ID, false)));
+        assert_eq!(follow.next_typing(now), None);
+        // The next watch's typings run.
+        follow.watching(true);
+        assert_eq!(follow.typed(write(I, ID, "hi"), now), None);
+        assert_eq!(follow.next_typing(now), Some(Next::Run(write(I, ID, "hi"))));
+    }
+
+    #[test]
     fn done_answers_ok_and_no_session_answers_no() {
         let mut follow = writing();
         for typing in [write(I, ID, "hi"), enter(G, ENTER_ID)] {
