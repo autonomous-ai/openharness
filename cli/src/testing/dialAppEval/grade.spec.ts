@@ -418,6 +418,47 @@ describe('updateBaseline', () => {
   })
 })
 
+describe('tier B timed results', () => {
+  // Two runs that differ only in tier B timed results: I17's needs-you latency and its step-4 wait.
+  const tierB = (check: string, score: number, timed: boolean): CheckResult =>
+    result({ tier: 'b', app: 'iterm', scenario: 'I17', check, dim: 'D4', score, timed })
+  const runOf = (latency: number, wait: number): RunResults => run([
+    result({ check: 'open.latency', dim: 'D3', score: 0.5, timed: true }), // tier A timed: still written
+    tierB('needsYou.shown', 1, false),
+    tierB('needsYou.latency', latency, true),
+    tierB('wait.4', wait, true),
+  ])
+
+  it('two runs that differ only in a tier B timed result give the same baseline, checks and app scores, and no delta for them', () => {
+    const fast = updateBaseline(null, runOf(1, 1), ['a', 'b'])
+    const slow = updateBaseline(null, runOf(0.5, 0), ['a', 'b'])
+    expect(slow).toEqual(fast)
+    expect(fast.checks).toEqual({ 'a/darwin/C1/open.latency': 0.5, 'b/darwin/I17/needsYou.shown': 1 })
+    expect(fast.apps['b/darwin']!.iterm).toBe(100)
+    const report = grade(runOf(0.5, 0), fast)
+    expect(report.delta.checks).toEqual([])
+    expect(report.delta.apps['b/darwin']!.iterm).toEqual({ before: 100, after: 100 })
+  })
+
+  it('the headline, byTier and byPlatform still count a tier B timed result', () => {
+    const fast = grade(runOf(1, 1), null)
+    const slow = grade(runOf(0.5, 0), null)
+    expect(slow.apps.iterm.score).toBeLessThan(fast.apps.iterm.score!)
+    expect(slow.byTier.b.iterm.score).toBeLessThan(fast.byTier.b.iterm.score!)
+    expect(slow.byPlatform['b/darwin']!.iterm.score).toBeLessThan(fast.byPlatform['b/darwin']!.iterm.score!)
+    expect(slow.failing.map((r) => r.check)).toEqual(expect.arrayContaining(['needsYou.latency', 'wait.4']))
+  })
+
+  it('the delta leaves out a tier B timed key the old baseline holds, and counts no held-out one', () => {
+    const old = baseline({ 'b/darwin/I17/needsYou.shown': 1, 'b/darwin/I17/needsYou.latency': 1, 'b/darwin/I17/wait.4': 1,
+      'b/darwin/XH1/open.latency': 1 })
+    const held = result({ tier: 'b', app: 'iterm', scenario: 'XH1', heldOut: true, check: 'open.latency', dim: 'D3', score: 0, timed: true })
+    const report = grade(run([...runOf(0.5, 0).results, held]), old)
+    expect(report.delta.checks.filter((c) => c.key.startsWith('b/'))).toEqual([])
+    expect(report.delta.heldOutChanged).toBe(0)
+  })
+})
+
 describe('droppedKeys', () => {
   const before = baseline({
     'a/darwin/C1/ring.recall': 1, 'a/darwin/C1/ring.order': 1, 'a/linux/C1/ring.order': 1, 'a/darwin/X2/ring.recall': 1,
