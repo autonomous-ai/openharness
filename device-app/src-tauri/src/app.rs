@@ -1602,6 +1602,22 @@ mod tests {
     }
 
     #[test]
+    fn a_follow_screen_answered_after_a_held_install_that_failed_is_not_asked_again() {
+        // The install that would end the app fails: the app goes on with the Follow screen open, saved as not asked.
+        for answered in [Event::WindowClosed, Event::Act(Action::Later)] {
+            let mut app = found_where(true);
+            answer(&mut app, true);
+            app.handle(follow(false, true));
+            assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
+            held(&mut app);
+            assert_eq!(app.handle(tick(B + 10))[0], Effect::Save(SEEN));
+            app.handle(Event::UpdateFailed(UpdateFailure::Install));
+            let effects = app.handle(answered);
+            assert_eq!(effects[..2], [Effect::Save(Saved { asked_follow: true, ..SEEN }), Effect::Show(None)]);
+        }
+    }
+
+    #[test]
     fn an_install_waiting_to_relaunch_checks_no_more() {
         let mut app = found();
         app.handle(Event::WatchExit(Some(3)));
