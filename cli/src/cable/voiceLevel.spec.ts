@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { VoiceLevel } from './voiceLevel.js'
+import { voiceVectors } from './__fixtures__/voiceVectors.js'
+import { DEFAULT_MIC_GAIN, type MicGain, micGainOf, VoiceLevel } from './voiceLevel.js'
 
 const pcm = (...samples: number[]) => {
   const b = Buffer.alloc(samples.length * 2)
@@ -10,7 +11,7 @@ const pcm = (...samples: number[]) => {
 
 describe('VoiceLevel', () => {
   const level = (...parts: Buffer[]) => {
-    const running = new VoiceLevel(16_000)
+    const running = new VoiceLevel(16_000, DEFAULT_MIC_GAIN)
     for (const part of parts) running.add(part)
     const { peak, rms } = running.read()
     return { peak, rms }
@@ -46,7 +47,7 @@ describe('VoiceLevel clip', () => {
     return pcm(...Array.from({ length: n }, (_, i) => i % every ? 1000 : (i / every) % 2 ? -32768 : 32767))
   }
   const clip = (...parts: Buffer[]) => {
-    const level = new VoiceLevel(16_000)
+    const level = new VoiceLevel(16_000, DEFAULT_MIC_GAIN)
     for (const part of parts) level.add(part)
     return level.read().clip
   }
@@ -72,7 +73,7 @@ describe('VoiceLevel clip', () => {
 })
 
 // The dial firmware's own voice gate (voice_buffer.c voice_gate_feed): 10 ms blocks, a block loud when its mean |sample|
-// is over 600, heard once 320 ms of loud blocks run unbroken.
+// is over the level for the dial's mic gain, heard once 320 ms of loud blocks run unbroken.
 describe('VoiceLevel heard', () => {
   /** [ms] of alternating ±[amp] at [rate]. */
   const tone = (ms: number, amp: number, rate = 16_000) => {
@@ -80,7 +81,7 @@ describe('VoiceLevel heard', () => {
     return pcm(...Array.from({ length: samples }, (_, i) => i % 2 ? -amp : amp))
   }
   const heard = (rate: number, ...parts: Buffer[]) => {
-    const level = new VoiceLevel(rate)
+    const level = new VoiceLevel(rate, DEFAULT_MIC_GAIN)
     for (const part of parts) level.add(part)
     return level.read().heard
   }
@@ -90,9 +91,33 @@ describe('VoiceLevel heard', () => {
     expect(heard(16_000, tone(310, 1000), tone(500, 0))).toBe(false)
   })
 
-  it('a block is loud only when its mean is over 600', () => {
-    expect(heard(16_000, tone(400, 600))).toBe(false)
-    expect(heard(16_000, tone(400, 601))).toBe(true)
+  const heardAt = (gain: MicGain, ...parts: Buffer[]) => {
+    const level = new VoiceLevel(16_000, gain)
+    for (const part of parts) level.add(part)
+    return level.read().heard
+  }
+  const { gains, clips } = voiceVectors()
+
+  it('has levels for the gains the dial firmware has, and no other', () =>
+    expect(gains.map(g => g.gain)).toEqual([37.5, 30]))
+
+  it.each(gains)('at $gain dB a block is loud only over $loud, as on the dial', ({ gain, loud }) => {
+    expect(heardAt(gain, tone(400, loud))).toBe(false)
+    expect(heardAt(gain, tone(400, loud + 1))).toBe(true)
+  })
+
+  it('hears each shared clip as the dial does, at each mic gain, whole or split at an odd sample', () => {
+    for (const [name, clip] of clips) for (const { gain } of gains) {
+      expect([name, gain, heardAt(gain, clip.pcm)]).toEqual([name, gain, clip.heard.get(gain)])
+      expect([name, gain, heardAt(gain, clip.pcm.subarray(0, 2 * 4001), clip.pcm.subarray(2 * 4001))])
+        .toEqual([name, gain, clip.heard.get(gain)])
+    }
+  })
+
+  it('micGainOf takes 37.5 and 30, and reads anything else as 37.5 dB', () => {
+    expect(micGainOf(30)).toBe(30)
+    expect(micGainOf(37.5)).toBe(37.5)
+    for (const value of [undefined, null, '30', 27, 0, -30, 1e9, true, [30], {}]) expect(micGainOf(value)).toBe(37.5)
   })
 
   it('a quiet block between resets the run', () => {

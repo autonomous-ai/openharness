@@ -19,6 +19,7 @@ import { CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DaemonCableHost, type CableHostWiring } from './cableHost.js'
 import { CableSession, type CableAgent, type CableHost, type CablePort, type WindowRoute } from './cableSession.js'
 import { DialLog } from './dialLog.js'
+import { voiceVectors } from './__fixtures__/voiceVectors.js'
 import { DIAL_VOICE_SURFACE, DIAL_VOICE_SURFACE_HEADER } from '../lib/dialUsageContract.js'
 
 const pcm = Buffer.alloc(32_000)
@@ -429,6 +430,18 @@ describe('each voice turn reports one end', () => {
     port.pcm(Buffer.alloc(6_400, 7)); port.pcm(Buffer.alloc(6_400, 7))
     port.say({ t: 'voice.end' }); await answered()
     expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'no_words', agentId: 'a1' }]])
+  })
+
+  // Quiet speech recorded at 30 dB: heard only by the gate for that gain.
+  it('each voice turn reports one end: the gate reads the dial\'s micGain, 37.5 dB for none or one without levels', async () => {
+    const speech30 = voiceVectors().clips.get('speech30')!.pcm
+    for (const [micGain, code] of [[30, 'no_words'], [undefined, 'no_speech'], ['30', 'no_speech'], [27, 'no_speech']]) {
+      const { port, voiceEnded, answered } = await talk({ transcribe: async () => '' })
+      port.say({ t: 'voice.begin', uploadId: 'u1', agentId: 'a1', ...(micGain === undefined ? {} : { micGain }) })
+      for (let at = 0; at < speech30.length; at += 8_000) port.pcm(speech30.subarray(at, at + 8_000))
+      port.say({ t: 'voice.end' }); await answered()
+      expect([micGain, voiceEnded.mock.calls]).toEqual([micGain, [[{ outcome: 'failed', code, agentId: 'a1' }]]])
+    }
   })
 
   it('each voice turn reports one end: transcribe_failed', async () => {

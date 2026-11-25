@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { VoiceLevel } from './voiceLevel.js'
+import { voiceVectors } from './__fixtures__/voiceVectors.js'
+import { DEFAULT_MIC_GAIN, type MicGain, VoiceLevel } from './voiceLevel.js'
 import { realTimer, type SegmentTimer, type SegmentTranscriber, VoiceSegments } from './voiceSegments.js'
 
 /** Bytes in one second of 16 kHz mono 16-bit audio. */
@@ -63,7 +64,7 @@ interface Call { pcm: Buffer; signal: AbortSignal; resolve(text: string): void; 
 interface Timeout { fire(): void; ms: number }
 
 /** A recording at 16 kHz in English unless told otherwise; its transcriber answers when the test settles `calls[i]`. */
-function setup(options: { rate?: number; lang?: string; transcribe?: SegmentTranscriber } = {}) {
+function setup(options: { rate?: number; micGain?: MicGain; lang?: string; transcribe?: SegmentTranscriber } = {}) {
   const calls: Call[] = []
   const transcribe = vi.fn<SegmentTranscriber>(options.transcribe ?? ((pcm, signal) =>
     new Promise<string>((resolve, reject) => { calls.push({ pcm, signal, resolve, reject }) })))
@@ -82,7 +83,8 @@ function setup(options: { rate?: number; lang?: string; transcribe?: SegmentTran
       timeout.fire()
     }
   }
-  const segments = new VoiceSegments({ rate: options.rate ?? 16_000, lang: options.lang ?? 'en', transcribe, timer })
+  const segments = new VoiceSegments({ rate: options.rate ?? 16_000, micGain: options.micGain ?? DEFAULT_MIC_GAIN,
+    lang: options.lang ?? 'en', transcribe, timer })
   const sent = () => transcribe.mock.calls.map(([pcm]) => pcm.length)
   return { segments, transcribe, calls, sent, timeouts, fire }
 }
@@ -366,7 +368,7 @@ describe('VoiceSegments', () => {
     const { segments } = setup({ transcribe: answering() })
     pushIn(segments, pcm, 7_777, 4_001)
     const done = segments.finish()
-    const whole = new VoiceLevel(16_000)
+    const whole = new VoiceLevel(16_000, DEFAULT_MIC_GAIN)
     whole.add(pcm)
     expect(segments.level()).toMatchObject({ ...whole.read(), gain: 0 })
     await done
@@ -407,6 +409,52 @@ describe('VoiceSegments', () => {
     calls[2]!.resolve('loud')
     await expect(done).resolves.toBe('quiet loud')
     expect(segments.level().gain).toBe(18)
+  })
+})
+
+describe('the dial\'s mic gain and the raise', () => {
+  const { clips } = voiceVectors()
+  const clip = (name: string) => clips.get(name)!.pcm
+  /** One recording of `pcm` at `micGain`: its level, and the bytes that went up. */
+  const record = async (pcm: Buffer, micGain: MicGain) => {
+    const { segments, transcribe } = setup({ micGain, transcribe: answering('hello') })
+    segments.push(pcm)
+    await segments.finish()
+    return { level: segments.level(), sent: transcribe.mock.calls[0]![0] }
+  }
+  const atFullScale = (pcm: Buffer) =>
+    Array.from({ length: pcm.length / 2 }, (_, i) => pcm.readInt16LE(i * 2)).filter(s => s === 32767 || s === -32768)
+
+  it('the gate follows the dial\'s mic gain', async () => {
+    expect((await record(clip('speech30'), 30)).level.heard).toBe(true)
+    expect((await record(clip('speech30'), 37.5)).level.heard).toBe(false)
+  })
+
+  it('the gate reads the audio as the dial sent it, before the raise', async () => {
+    const { level, sent } = await record(clip('speech30'), 37.5)
+    expect(level.gain).toBeGreaterThanOrEqual(5)
+    expect(level.heard).toBe(false)
+    const raised = new VoiceLevel(16_000, 37.5)
+    raised.add(sent)
+    expect(raised.read().heard).toBe(true)
+  })
+
+  it('speech at 30 dB goes up raised back by about the 7.5 dB the mic lost, and the raise clips nothing', async () => {
+    const quiet = await record(clip('speech30'), 30)
+    expect(quiet.level.gain).toBeGreaterThanOrEqual(5)
+    expect(quiet.level.gain).toBeLessThanOrEqual(8)
+    expect(atFullScale(quiet.sent)).toEqual([])
+
+    const before = await record(clip('speech37'), 37.5)
+    expect(before.sent).toEqual(clip('speech37'))
+    expect(before.level.gain).toBe(0)
+  })
+
+  it('loud speech at 30 dB goes up as it came and unclipped, where at 37.5 dB the mic clipped it', async () => {
+    const loud30 = await record(clip('loud30'), 30)
+    expect(loud30.sent).toEqual(clip('loud30'))
+    expect(loud30.level).toMatchObject({ gain: 0, clip: 0 })
+    expect((await record(clip('loud37'), 37.5)).level.clip).toBeGreaterThan(0)
   })
 })
 
