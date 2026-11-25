@@ -3149,7 +3149,8 @@ describe('hook notify: a session outside a pane', () => {
   // A cut pane id, session name or socket would name another pane, session or socket: such a value is left out instead,
   // before the cap counts it, so it costs no other hint its place.
   it('a socket or a session name over 64 characters is left out, not cut, and takes none of the MAX_HINTS', async () => {
-    for (const name of WHOLE) {
+    // REX_SESSION goes only on macOS, for this home's own Rex server (notify.mjs onOwnRexServer).
+    for (const name of WHOLE.filter((whole) => SENT.includes(whole))) {
       for (const [value, sent] of [['x'.repeat(65), {}], ['x'.repeat(64), { [name]: 'x'.repeat(64) }]] as const) {
         const { port, requests } = await collect()
         await runHook({ port, env: { ...noHints, [name]: value }, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
