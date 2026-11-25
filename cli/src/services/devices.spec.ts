@@ -14913,6 +14913,19 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
     })
   })
 
+  // Claude Code holds typed words until the running turn ends: no turn starts within 10 s, though the words reached it.
+  it('a voice to a Harness agent whose turn runs is queued, not no_turn', async () => {
+    vi.useFakeTimers()
+    const { port } = start({ core: harnessAgent(), faults: ['fleet'] })
+    await attach(port)
+    port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'processing', text: 'Working' } })
+    seen.host.voiceEnded!({ outcome: 'sent', agentId: 'h1' })
+    await vi.advanceTimersByTimeAsync(10_000)
+    const counts = await counted(port)
+    expect(counts).toMatchObject({ dial_voice_queued: 1, dial_voice_host_harness_queued: 1 })
+    expect(counts.dial_voice_failed_no_turn).toBeUndefined()
+  })
+
   it('a voice to an outside agent is delivered by its turn-start hook', async () => {
     const { port } = start({ faults: ['fleet'] })
     port.observed(hook('session-start'))
@@ -14936,7 +14949,10 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
     card('done')
     seen.host.voiceEnded!({ outcome: 'sent', agentId: 'b1' })
     card('processing')
-    expect(await counted(port)).toMatchObject({ dial_voice_delivered: 2, dial_voice_failed: 1, dial_voice_failed_no_turn: 1 })
+    // The one sent while its turn ran was queued behind it.
+    const counts = await counted(port)
+    expect(counts).toMatchObject({ dial_voice_delivered: 2, dial_voice_queued: 1 })
+    expect(counts.dial_voice_failed_no_turn).toBeUndefined()
   })
 
   it('a refused voice to a held agent is held', async () => {

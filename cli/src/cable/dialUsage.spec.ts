@@ -33,16 +33,19 @@ function fileSink() {
 
 function rig(agents: Record<string, DialAgent> = { a: tmuxClaude, b: orcaCodex }, { sink, added } = fileSink()) {
   const logs: string[] = []
+  // The agents at work: none unless a test says so.
+  const working = new Set<string>()
   const usage = createDialUsage({
     sink,
     now: Date.now,
     after: (ms, run) => { const timer = setTimeout(run, ms); return () => clearTimeout(timer) },
     describe: id => agents[id],
+    working: id => working.has(id),
     log: line => logs.push(line),
   })
   const count = (metric: string) => added.filter(m => m === metric).length
   const prefixed = (prefix: string) => added.filter(m => m.startsWith(prefix))
-  return { usage, added, count, prefixed, agents, logs }
+  return { usage, added, count, prefixed, agents, logs, working }
 }
 
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(T0) })
@@ -318,6 +321,47 @@ describe('createDialUsage', () => {
     usage.stop()
     vi.advanceTimersByTime(10_000)
     expect(count('dial_voice_failed_no_turn')).toBe(2)
+  })
+
+  // A working agent holds typed words until its turn ends (Claude Code) or takes them into the running turn (Codex 0.106+):
+  // no turn starts within 10 s, though the words reached it.
+  it('sent to a working agent with no turn in 10 s is queued; to an idle one, no_turn; a turn in 10 s, delivered', () => {
+    const { usage, count, working } = rig()
+    usage.attached(true)
+    working.add('a')
+    usage.voiceEnded({ outcome: 'sent', agentId: 'a' })
+    // Read at the send: the agent idle by the time the 10 s run out was still working when the words went in.
+    working.delete('a')
+    vi.advanceTimersByTime(10_000)
+    expect(count('dial_voice_queued')).toBe(1)
+    expect(count('dial_voice_host_tmux_queued')).toBe(1)
+    expect(count('dial_voice_failed')).toBe(0)
+    expect(count('dial_voice_failed_no_turn')).toBe(0)
+
+    usage.voiceEnded({ outcome: 'sent', agentId: 'b' })
+    vi.advanceTimersByTime(10_000)
+    expect(count('dial_voice_failed_no_turn')).toBe(1)
+    expect(count('dial_voice_host_orca_failed')).toBe(1)
+    expect(count('dial_voice_queued')).toBe(1)
+
+    working.add('a')
+    usage.voiceEnded({ outcome: 'sent', agentId: 'a' })
+    vi.advanceTimersByTime(9_999)
+    usage.turnStarted('a')
+    expect(count('dial_voice_delivered')).toBe(1)
+    vi.advanceTimersByTime(10_000)
+    expect(count('dial_voice_queued')).toBe(1)
+  })
+
+  it('the oldest of 16 waiting, ended by a 17th, is queued if its agent was working', () => {
+    const { usage, count, working } = rig()
+    usage.attached(true)
+    working.add('a')
+    usage.voiceEnded({ outcome: 'sent', agentId: 'a' })
+    working.delete('a')
+    for (let i = 0; i < 16; i++) usage.voiceEnded({ outcome: 'sent', agentId: 'b' })
+    expect(count('dial_voice_queued')).toBe(1)
+    expect(count('dial_voice_failed_no_turn')).toBe(0)
   })
 
   it('refused to a held agent is held', () => {

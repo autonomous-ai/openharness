@@ -326,7 +326,7 @@ describe('each voice turn reports one end', () => {
     expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'cancelled', agentId: 'a1' }]])
   })
 
-  it('each voice turn reports one end: no_speech, a recording past the length cap', async () => {
+  it('each voice turn reports one end: too_long, a recording past the length cap', async () => {
     const { port, voiceEnded, answered } = await talk()
     port.say({ t: 'voice.begin', uploadId: 'u1', agentId: 'a1' })
     const frame = Buffer.alloc(8_000, 7)
@@ -335,7 +335,7 @@ describe('each voice turn reports one end', () => {
     for (let at = 0; at < bytes; at += frame.length) port.pcm(frame.subarray(0, Math.min(frame.length, bytes - at)))
     port.say({ t: 'voice.end' })
     await answered()
-    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'no_speech', agentId: 'a1' }]])
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'too_long', agentId: 'a1' }]])
   }, 60_000)
 
   it('each voice turn reports one end: cancelled, a recording refused at its begin then aborted or replaced', async () => {
@@ -383,16 +383,34 @@ describe('each voice turn reports one end', () => {
     expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'unlisted', agentId: 'a1' }]])
   })
 
-  it('each voice turn reports one end: no_speech, nothing recorded', async () => {
+  it('each voice turn reports one end: no_audio, nothing recorded', async () => {
     const { port, voiceEnded, answered } = await talk()
     port.say({ t: 'voice.begin', uploadId: 'u1', agentId: 'a1' }); port.say({ t: 'voice.end' }); await answered()
-    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'no_speech', agentId: 'a1' }]])
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'no_audio', agentId: 'a1' }]])
   })
 
-  it('each voice turn reports one end: no_speech, an empty transcript', async () => {
-    const { voiceEnded, speak, answered } = await talk({ transcribe: async () => '' })
-    speak({ agentId: 'a1' }); await answered()
-    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'no_speech', agentId: 'a1' }]])
+  // The dial's own voice gate heard nothing in either: a press with nothing said.
+  it('each voice turn reports one end: no_speech, an empty transcript of silence or a short clip', async () => {
+    const silent = await talk({ transcribe: async () => '' })
+    silent.port.say({ t: 'voice.begin', uploadId: 'u1', agentId: 'a1' })
+    silent.port.pcm(Buffer.alloc(8_000))
+    silent.port.say({ t: 'voice.end' }); await silent.answered()
+    expect(silent.voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'no_speech', agentId: 'a1' }]])
+
+    // 100 ms, loud: a tap, under the gate's 320 ms.
+    const short = await talk({ transcribe: async () => '' })
+    short.speak({ agentId: 'a1' }); await short.answered()
+    expect(short.voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'no_speech', agentId: 'a1' }]])
+  })
+
+  // Speech the transcriber wrote nothing for: seen on a dial as loud clipped speech Deepgram returned empty.
+  it('each voice turn reports one end: no_words, an empty transcript of 400 ms of loud audio', async () => {
+    const { port, voiceEnded, answered } = await talk({ transcribe: async () => '' })
+    port.say({ t: 'voice.begin', uploadId: 'u1', agentId: 'a1' })
+    // Two frames: a cable frame holds at most 8 KB.
+    port.pcm(Buffer.alloc(6_400, 7)); port.pcm(Buffer.alloc(6_400, 7))
+    port.say({ t: 'voice.end' }); await answered()
+    expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'no_words', agentId: 'a1' }]])
   })
 
   it('each voice turn reports one end: transcribe_failed', async () => {
