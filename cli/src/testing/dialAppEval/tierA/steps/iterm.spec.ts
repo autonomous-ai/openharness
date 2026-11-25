@@ -138,6 +138,21 @@ describe("tier A's iTerm2", () => {
     ])
   })
 
+  it('a write or an enter line on the tabs stream is taken and records nothing; a select after it is recorded', async () => {
+    const w = fakeWorld()
+    await w.start('a')
+    openTabs(w.world)
+    const { stream } = w.opened[0]!
+    const tty = w.ttyOf('a')
+    expect(stream.write({ write: { id: '0123456789abcdef', app: 'iterm', tty, text: 'hi' } })).toBe(true)
+    expect(stream.write({ enter: { id: 'fedcba9876543210', app: 'iterm', tty } })).toBe(true)
+    expect(stream.write({ app: 'iterm', tty })).toBe(true)
+    expect(w.lines()).toEqual([
+      { window: 'tabs', line: { type: 'tabs' } },
+      { window: 'tabs', line: { app: 'iterm', tab: 'w1.0.0' } },
+    ])
+  })
+
   it('a refused tabs stream throws', async () => {
     const w = fakeWorld()
     w.refuse.open = true
