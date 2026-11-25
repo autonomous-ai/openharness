@@ -141,6 +141,14 @@ it('captures a unique fresh session before its first hook arrives', async () => 
   expect(row.sessionId).toBe('')
   expect(findLiveSession).toHaveBeenCalledWith('claude', '/work', Date.parse(row.processIdentity!.startMarker), expect.objectContaining({ pid: 77, bornOnly: true, codexHome: undefined, expectedProcess: row.processIdentity }))
 })
+it('passes a start marker it cannot read on as no time', async () => {
+  // A process matched by its start ticks (Linux) may have stored a marker that is not a time.
+  row.processIdentity!.startMarker = 'unreadable'
+  vi.mocked(processRows).mockResolvedValue([{ ...row.processIdentity!, args: 'claude', parentPid: 1 }])
+  expect(await captureResumeIdentity(row)).toBe(row)
+  expect(processSessionEvidence).toHaveBeenCalledWith('claude', 77, '/work', NaN, expect.anything())
+  expect(findLiveSession).toHaveBeenCalledWith('claude', '/work', NaN, expect.anything())
+})
 it.each(['claude', 'codex'] as const)('does not give an unbound %s fork its parent from the recent-file pool', async engine => {
   Object.assign(row, { engine, forkedFrom: { agentId: 'parent-agent', name: 'Parent', sessionId: 'parent', transcriptPath: '/parent' } })
   // A parent created in the same process-clock interval is a unique "born" candidate,
