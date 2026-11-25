@@ -213,8 +213,8 @@ export function orcaScenarios(): Scenario[] {
     /**
      * tmux inside Orca stays as today (Diego, 2026-11-23; option A of docs/plans/2026-11-25-dial-orca-tmux-o11-design.md):
      * c is an Orca row at its tab's place, and voice reaches it by its mod. Its tap is graded on what the person expects,
-     * its tab and its tmux pane opened (the eval spec's decision 3), though today Orca stays on the tab it shows
-     * (observed.ts raiseAfter; the spec's Expected to fail at baseline). Tier A alone: tier B's c runs in no tmux pane and
+     * its tab and its tmux pane opened (the eval spec's decision 3): the tap switches Orca to c's tab first (observed.ts
+     * placedTab), then tmux shows its pane and Orca comes forward. Tier A alone: tier B's c runs in no tmux pane and
      * Orca's rig records no tmux run. Not on Windows: tmux runs only inside WSL there, whose agents never reach the
      * Windows devices.
      */
