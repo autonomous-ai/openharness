@@ -11,17 +11,29 @@
  * socket links among herdr's own processes' descriptors, their ttys (ps), and a tty's access time (stat), which moves
  * when the person types into it. Never another process's environment or argv: those hold secrets. Every value read is
  * outside text, held to its form, and lsof, ss and ps run with no shell.
+ *
+ * Windows (docs/plans/2026-11-25-dial-herdr-windows-app-design.md) names no tty, and only herdr holds the server's end of
+ * its client pipe, the one end that names a client's pid: there the clients are found by the process tree, from one read
+ * of the PTY host's table cut to four columns (pid, parent, image name, start), never its command lines. Nothing walks up
+ * from the server: its parent is its first client's pid, kept after that client ended, which Windows may hand to a newer
+ * process (Ken's VM, 2026-11-26). The walks go up from the caller to the server and up from each client.
  */
 import { opendir, readlink, stat } from 'node:fs/promises'
+import { win32 } from 'node:path'
+import { windowsStartTime } from '../../lib/windows/treeKill.js'
+import { FRONT_NONE, frontAppId } from './frontApp.js'
 import { HERDR_PANE } from './herdrClient.js'
+import { UNKNOWN_APP } from './hostDetect.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 import type { Fresh, MadeAnswer, OuterLookup } from './outer.js'
-import { readPtyMaker, scannedApps, type ProcessName } from './scannedApp.js'
+import {
+  parentChain, readPtyMaker, scannedApps, windowsName, windowsPtyMaker, type ProcessName, type WindowsProcess,
+} from './scannedApp.js'
 import { clientTtyForm } from './tabs.js'
 import { heldAnswers, PID } from './tmux.js'
 import type { Nest } from './types.js'
 
-/** The herdr processes besides the server a lookup asks of at most: the highest pids, the newest. */
+/** The herdr processes besides the server a lookup asks of at most: the newest, by pid (by start on Windows). */
 export const HERDR_CLIENTS_A_LOOKUP = 16
 /** The out-of-form pane ids said skipped, each said once: past this many the oldest goes. */
 export const SKIPPED_IDS_KEPT = 64
@@ -60,6 +72,16 @@ export interface HerdrOuterDeps {
   onPath: OrcaDeps['onPath']
   /** The socket inodes among a process's descriptors (procSockets); nothing when they cannot be read. */
   sockets(pid: number): Promise<readonly string[] | undefined>
+  /** What the Windows lookup reads; with none there, it answers nothing. */
+  windows?: HerdrWindowsDeps
+}
+
+/** What the Windows lookup reads, given on Windows alone (services/devices.ts). */
+export interface HerdrWindowsDeps {
+  /** The PTY host's table, four columns a row (scannedApp.ts readWindowsProcesses); rejects when not read. */
+  processes(): Promise<readonly WindowsProcess[]>
+  /** The server herdr's marker names, checked against [rows] (herdrClient.ts herdrMarkerServer); none when unknown. */
+  server(rows: readonly WindowsProcess[]): Promise<number | undefined>
 }
 
 /** The app that holds the herdr client showing an agent's pane, that client's tty when it names a tab, and its process,
@@ -96,6 +118,8 @@ export async function procSockets(pid: number, proc = '/proc'): Promise<readonly
 
 /** The process is herdr itself, by its executable's name exactly: `herdr-dev` or a `herdr.app` is not. */
 const isHerdr = (p: ProcessName): boolean => p.executable.split('/').pop() === 'herdr'
+/** Windows' herdr, by its image name with no case: `herdr.exe`. */
+const isWindowsHerdr = (p: ProcessName): boolean => windowsName(p.executable) === 'herdr'
 
 /** A run's stdout whatever its exit code: lsof and ps exit 1 when a pid in their list has gone, with the rest of their
  *  output intact. Nothing when it printed nothing, timed out or did not start. */
@@ -230,6 +254,43 @@ async function clientsOf(deps: ClientDeps, form: RegExp, server: number, rows: r
   return tty && form.test(tty) ? { app, tty, pid: client } : { app, pid: client }
 }
 
+/** Of a client's walk (parentChain, nearest first, the client included), the nearest step a listed app names, or a
+ *  terminal with no page of its own (Windows Terminal, Alacritty), the process that owns its window; whichever comes
+ *  first. Neither (explorer, a console of Windows' default-terminal handoff, a parent gone or its pid reused): none. */
+function windowedBy(walk: readonly WindowsProcess[]): { app?: string; owner?: number } {
+  for (const step of walk) {
+    const app = frontAppId(win32.basename(step.executable))
+    if (app === UNKNOWN_APP) return { owner: step.pid }
+    if (app !== FRONT_NONE) return { app }
+  }
+  return {}
+}
+
+/** Windows, over [rows] (the table): the newest client in a listed app, its app and process; else the newest in a
+ *  terminal with no page, its window's owner alone, even when a newer client is in no window (Decision 5: the
+ *  default-terminal handoff's console names none); else `{}`, as when herdr's marker names another server. Newest by
+ *  start, on a tie the higher pid: Windows keeps no time of a client's last key. */
+async function windowsClientOf(windows: HerdrWindowsDeps, server: number, rows: readonly WindowsProcess[]): Promise<ClientPlace> {
+  // The hook sends no pane id for a named session's pane: a second guard.
+  const marked = await windows.server(rows)
+  if (marked !== undefined && marked !== server) return {}
+  const table = new Map(rows.map((p) => [p.pid, p]))
+  const herdrs = rows.filter((p) => p.pid !== server && isWindowsHerdr(p)).map((p) => ({ p, walk: parentChain(p.pid, table) }))
+  // A herdr's parent is the one its walk takes: a parent pid reused by a process that started after it names no parent.
+  const parents = new Set(herdrs.flatMap(({ walk }) => (walk[1] ? [walk[1].pid] : [])))
+  // A herdr under another is a pane's `herdr agent …` or a nested client, and one that started a herdr besides the
+  // server is a named session's client. A row with no start is another account's: the PTY host could not open it.
+  const candidates = herdrs.flatMap(({ p, walk }) => {
+    const start = windowsStartTime(p.startMarker ?? '')
+    return start === null || parents.has(p.pid) || walk.slice(1).some(isWindowsHerdr) ? [] : [{ pid: p.pid, start, walk }]
+  }).sort((a, b) => (a.start === b.start ? b.pid - a.pid : a.start > b.start ? -1 : 1)).slice(0, HERDR_CLIENTS_A_LOOKUP)
+  const placed = candidates.map(({ pid, walk }) => ({ pid, ...windowedBy(walk) }))
+  const inApp = placed.find((c) => c.app !== undefined)
+  if (inApp) return { app: inApp.app, pid: inApp.pid }
+  const owned = placed.find((c) => c.owner !== undefined)
+  return owned ? { pid: owned.owner } : {}
+}
+
 /** [place] said by its line: a step not read says its word and answers `{}`. */
 function said(deps: ClientDeps, place: ClientPlace | NotRead): ClientPlace {
   if (typeof place === 'string') {
@@ -249,15 +310,20 @@ function saidAnswers(deps: ClientDeps): (key: string, place: () => Promise<Clien
 
 /**
  * Where the person sees an agent in a pane of their own herdr: in the app holding the herdr client they used last, at
- * that client's tty. Nothing at once on Windows, when the hints name no herdr pane in form or the caller is no pid; else
- * the client's place, its process alone when no app holds it, `{}` when no client is found or it runs inside a
- * multiplexer; with `nest: 'herdr'` once a herdr server made the caller's terminal, told as soon as that is read
- * (OuterLookup's made). Never rejects.
+ * that client's tty (on Windows, which names no tty, the client they attached from last). Nothing at once on Windows
+ * with no Windows table to read, when the hints name no herdr pane in form or the caller is no pid; else the client's
+ * place, its process alone (on Windows its window's owner) when no app holds it, `{}` when no client is found or it runs
+ * inside a multiplexer; with `nest: 'herdr'` once a herdr server made the caller's terminal, told as soon as that is
+ * read (OuterLookup's made). Never rejects.
  */
 export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
-  // Windows has no `ps` to read a client's tty with, and no form for one.
+  const windows = deps.platform === 'win32' ? deps.windows : undefined
+  // Windows has no `ps` to read a client's tty with, and no form for one: its clients are found by the process tree.
   const form = clientTtyForm(deps.platform)
-  if (!form) return () => undefined
+  const clientsFrom: ((server: number, rows: readonly WindowsProcess[]) => Promise<ClientPlace | NotRead>) | undefined = windows
+    ? (server, rows) => windowsClientOf(windows, server, rows)
+    : form && ((server, rows) => clientsOf(deps, form, server, rows))
+  if (!clientsFrom) return () => undefined
   // By pane and caller, as tmux's, with the server's read.
   const held = heldAnswers<ClientPlace & { nest?: Nest }, MadeAnswer>(deps.now)
   const skipped = new Set<string>()
@@ -273,14 +339,16 @@ export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
 
   /** The server that made the caller's terminal and the table it was read over; else the answer, said: `{}` when no
    *  herdr server made it. */
-  const serverOf = async (pid: number): Promise<{ server: number; rows: readonly ProcessName[] } | ClientPlace> => {
+  const serverOf = async (pid: number): Promise<{ server: number; rows: readonly WindowsProcess[] } | ClientPlace> => {
     // One read of the table serves the server's, the clients' and their apps' walks.
-    const rows = await deps.processes().catch(() => undefined)
+    const table: Promise<readonly WindowsProcess[]> = windows ? windows.processes() : deps.processes()
+    const rows = await table.catch(() => undefined)
     if (!rows) return said(deps, 'processes')
     // The server is the herdr that made the caller's terminal, not the nearest among its parents: a terminal started
     // from a herdr pane has that server among its parents too, and keeps the pane's variables, yet its agents are in no
-    // herdr client. The table holds no terminal: the caller's and its parents' are read.
-    const maker = await readPtyMaker(pid, rows, deps.tty).catch(() => null)
+    // herdr client. The table holds no terminal: the caller's and its parents' are read. Windows names none: its maker
+    // is the caller's nearest parent past shells and launchers.
+    const maker = windows ? windowsPtyMaker(pid, rows) : await readPtyMaker(pid, rows, deps.tty).catch(() => null)
     if (maker === null) return said(deps, 'processes')
     if (maker?.host !== 'herdr') {
       // Its own word: `none` is a herdr pane whose client was not found.
@@ -296,7 +364,7 @@ export function createHerdrOuter(deps: HerdrOuterDeps): OuterLookup {
     // The pane is herdr's whatever the client steps read: found, none or not read, the agent is on herdr's page even
     // with no app known (Diego, 2026-11-23). A step that throws is said as the app scan: a lookup never rejects.
     const place = found.then(async (read) => ('server' in read
-      ? { ...said(deps, await clientsOf(deps, form, read.server, read.rows).catch((): NotRead => 'app')), nest: 'herdr' as const }
+      ? { ...said(deps, await clientsFrom(read.server, read.rows).catch((): NotRead => 'app')), nest: 'herdr' as const }
       : read))
     return Object.assign(place, { made: found.then((read) => 'server' in read) })
   }
