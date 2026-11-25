@@ -88,12 +88,13 @@ async function verifyFile(path: string, artifact: ProcessImageArtifact): Promise
  * every failure. No account state, sessions or existing files are replaced. */
 export async function prepareProcessImageHelper(
   artifact: ProcessImageArtifact, runtimeDirectory: string,
+  folder: 'process-images' | 'dev-watch' = 'process-images',
 ): Promise<string | null> {
   let temporary: string | undefined
   try {
     const bytes = artifactBytes(artifact)
     await privateDirectory(runtimeDirectory, true)
-    const directory = join(runtimeDirectory, 'process-images')
+    const directory = join(runtimeDirectory, folder)
     await privateDirectory(directory)
     const target = join(directory, artifact.sha256)
     if (await verifyFile(target, artifact)) return target
