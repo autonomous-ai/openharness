@@ -106,9 +106,7 @@ cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${PET_SANITIZERS:-address,u
    "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c" -lm
 "$out/test_pet_store" "$here/vectors/pet_min.hpet" "$here/vectors/pet_min_v2.hpet"
 
-cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
-   -o "$out/test_voice_buffer" "$here/test_voice_buffer.c" "$here/../main/voice_buffer.c"
-"$out/test_voice_buffer"
+python3 "$here/test_voice_buffer.py"
 
 cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" -pthread \
    -o "$out/test_voice_buffer_threads" "$here/test_voice_buffer_threads.c" "$here/../main/voice_buffer.c"
