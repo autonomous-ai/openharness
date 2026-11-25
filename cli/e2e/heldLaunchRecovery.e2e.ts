@@ -120,4 +120,38 @@ describe.skipIf(process.platform === 'win32')('a launch the native guard held', 
     expect.soft(resumed).toHaveLength(1)
     expect.soft(resumed[0]?.args ?? []).toContain(S)
   }, 180_000)
+
+  it('a restart of a running conversation the guard held resumes in its own pane, answered at once as starting', async () => {
+    const d = await slowShellDaemon()
+    const c = client = await LocalClient.connect(d)
+    mkdirSync(join(d.projectsDir, 'r1'), { recursive: true })
+    const created = await harness(d, ['new', 'codex', join(d.projectsDir, 'r1'), '--name', 'r1', '--', 'hi'])
+    expect(created.code, created.out + created.err).toBe(0)
+    const { row: first } = await settle(c, 'r1', (row) => !!row.sessionId, 60_000)
+    expect(first, 'r1 to be ready with a conversation').toBeTruthy()
+    const id: string = first!.id, S: string = first!.sessionId, pane: string = first!.tmuxPane
+    const panePid = async () => (await d.tmux.run('display-message', '-p', '-t', pane, '#{pane_pid}')).trim()
+    const shell = await panePid()
+
+    const before = launches(d).length, restartAt = d.log().length
+    // The restart's native inspection runs before its kill, on the old Codex. Once the swap's respawn gives the pane a
+    // new shell, that shell is in its 2 s rc file: a new Codex then is what the guard reads.
+    const swapped = until('the swap to respawn r1\'s pane', async () => (await panePid()) !== shell, 60_000, 50)
+      .then(() => { upgradeCodex(d); return true }, () => false)
+    const restarted = await c.request('agent_restart', { agentId: id }, 60_000)
+    expect(await swapped, 'the swap respawned r1\'s pane').toBe(true)
+    expect.soft(restarted.error, JSON.stringify(restarted)).toBeUndefined()
+    expect.soft(restarted).toMatchObject({ resumed: true, agent: { id, sessionId: S, launch: { state: 'starting' } } })
+    const { row, states, synced } = await settle(c, 'r1', (one) => one.sessionId === S, 60_000)
+
+    expect(d.log().slice(restartAt)).toMatch(new RegExp(`\\[launch\\] ${id.slice(0, 8)} \\S+ → held`))
+    // A respawn over its own held shell reads the same stale evidence and is held again.
+    expect.soft(d.log().slice(restartAt)).not.toContain('retrying fresh')
+    expect.soft(states, 'r1 as listed').not.toContain('held')
+    expect.soft(synced, 'r1 as synced').not.toContain('held')
+    expect.soft(row?.launch?.state, `r1's launch, seen as ${states.join(' → ')}`).toBe('ready')
+    const resumed = launches(d).slice(before).filter((l) => l.engine === 'codex')
+    expect.soft(resumed).toHaveLength(1)
+    expect.soft(resumed[0]?.args ?? []).toContain(S)
+  }, 180_000)
 })
