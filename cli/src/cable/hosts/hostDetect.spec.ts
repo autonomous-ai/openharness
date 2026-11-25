@@ -149,6 +149,25 @@ describe('detectApp', () => {
     expect(detectApp({ WEZTERM_PANE: '0' })).toBe('wezterm')
   })
 
+  // Orca sets TERM_PROGRAM=Orca in every terminal it spawns; off macOS no bundle id names it (Ken's Dell, Win11 x64,
+  // 2026-11-25: the agent sat on Other's page).
+  it.each([
+    ['an Orca agent off macOS', { TERM_PROGRAM: 'Orca', ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: 'term_1' }],
+    ['a claude typed by hand in an Orca terminal', { TERM_PROGRAM: 'Orca' }],
+    ['an Orca agent on macOS', { TERM_PROGRAM: 'Orca', ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: 'term_1',
+      __CFBundleIdentifier: 'com.stablyai.orca' }],
+  ])("%s is Orca's", (_name, hints) => {
+    expect(detectApp(hints)).toBe('orca')
+    expect(detectHost(hints)).toBe('orca')
+  })
+
+  it("a multiplexer in an Orca terminal is the nearer host, Orca the app", () => {
+    const herdr = { TERM_PROGRAM: 'Orca', HERDR_PANE_ID: '1' }
+    expect(detectApp(herdr)).toBe('orca')
+    expect(detectHost(herdr)).toBe('herdr')
+    expect(detectHost({ TERM_PROGRAM: 'Orca', ZELLIJ: '0' })).toBe('zellij')
+  })
+
   it("the Claude desktop app's bundle id is claude, read Claude", () => {
     const hints = { __CFBundleIdentifier: 'com.anthropic.claudefordesktop' }
     expect(detectHost(hints)).toBe('claude')
