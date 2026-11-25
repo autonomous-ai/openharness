@@ -475,20 +475,24 @@ export function startHookServer(
   const peerAccount: PeerAccount = options.peerAccount ?? peerIsThisAccount
   const admissions = createPendingAdmissions({ isProcessCurrent: (key, scope) => admissionProcessScope(registry.byAgent(key)) === scope })
   const waits = createSessionHookWait(options.hookWait)
-  // Per agent and delivery, the end of its latest admission job. `admissions.submit` drops an older job of a delivery
-  // for a newer request of it, or keeps the older one while it is current and drops the newer request, whose callbacks
-  // then never run (pendingAdmission.ts). So a job that ends after a newer request of its delivery was submitted ends
-  // the delivery's wait, unless it ends `stale_hook`, the one way a dropped job ends; a kept one that ends so leaves
-  // its session's waiting hooks to their own time limit.
-  const admissionJobEnds = new Map<string, () => void>()
+  // Per agent and delivery, the end of its latest admission job's ticket, and the job whose end that is.
+  // `admissions.submit` drops an older job of a delivery for a newer request of it, or keeps the older one and drops the
+  // newer request, whose callbacks then never run (`kept`, pendingAdmission.ts). So the job still queued decides,
+  // whatever its reason; a dropped one ends `stale_hook`, if at all, and that end changes nothing. Its session's waiting
+  // hooks hang on that end: one never called leaves them to their time limit.
+  const admissionJobEnds = new Map<string, { end: () => void; live: object }>()
   const admissionJob = (agentId: string, deliveryId: string, ticket: AdmissionTicket) => {
-    const key = JSON.stringify([agentId, deliveryId]), end = ticket.queued()
-    admissionJobEnds.set(key, end)
-    return (reason?: string) => {
-      const latest = admissionJobEnds.get(key)
-      if (!latest || (latest !== end && reason === 'stale_hook')) return
-      admissionJobEnds.delete(key)
-      latest()
+    const key = JSON.stringify([agentId, deliveryId]), job = {}
+    const before = admissionJobEnds.get(key), latest = { end: ticket.queued(), live: job }
+    admissionJobEnds.set(key, latest)
+    return {
+      kept: () => { if (before) latest.live = before.live },
+      ended: (reason?: string) => {
+        const decides = admissionJobEnds.get(key)
+        if (!decides || (decides.live !== job && reason === 'stale_hook')) return
+        admissionJobEnds.delete(key)
+        decides.end()
+      },
     }
   }
   let admissionArrival = 0
@@ -990,7 +994,7 @@ export function startHookServer(
         const enqueue = () => {
           saveReceipt(history.records, deliveryId, { fingerprint, status: 200, reply: { pending: true }, pending: true, bytes: retainedBytes,
             ...(carriesStop ? { linkedStop } : {}) })
-          const jobEnded = admission && admissionJob(processAgent.agentId, deliveryId, admission)
+          const job = admission && admissionJob(processAgent.agentId, deliveryId, admission)
           const queued = admissions.submit(processAgent.agentId, deliveryId, {
             conversationId: body.sessionId,
             order: { ...admissionOrder, scope: admissionProcessScope(processAgent) ?? processAgent.agentId },
@@ -1007,7 +1011,7 @@ export function startHookServer(
                 console.log(`[hooks] ${sid(body.sessionId ?? '?')} ${body.hookEvent ?? 'session-start'} ignored · ${reason}`)
                 if (reason === 'invalid_session_registration') completedReply(400, { error: 'invalid session registration' })
                 else completedReply(200, { ignored: true, reason })
-              } finally { jobEnded?.(reason) }
+              } finally { job?.ended(reason) }
             },
             accept: () => {
               // Ended even if a step throws: unsettled, it would hold its session's later hooks. Those run on a later turn,
@@ -1021,9 +1025,10 @@ export function startHookServer(
                 if (parked) void Promise.resolve(linkedStop(parked.stop, parked.firedAt)).then(({ status }) => {
                   if (status !== 200) console.log(`[hooks] ${sid(body.sessionId ?? '?')} parked Stop not claimed · status=${status}`)
                 }).catch(error => console.warn(`[hooks] parked linked Stop claim failed · ${errorKind(error)}`))
-              } finally { jobEnded?.() }
+              } finally { job?.ended() }
             },
           })
+          if (queued === 'kept') job?.kept()
           if (queued) {
             // A registry commit has its own bounded deadline and owns its reply.
             // A queued predecessor or asynchronous source still answers pending.
@@ -1043,7 +1048,7 @@ export function startHookServer(
               answer(200, { pending: true })
             })
           } else {
-            jobEnded?.()
+            job?.ended()
             saveReceipt(history.records, deliveryId)
             const detail = 'Too many unverified hooks are pending; this hook was not queued. Retry after recovery.'
             console.log(`[hooks] ${sid(body.sessionId ?? '?')} held · HOOK_ADMISSION_BUSY`)
