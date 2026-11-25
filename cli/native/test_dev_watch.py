@@ -59,11 +59,13 @@ class DevWatchTest(unittest.TestCase):
                 stream.close()
 
     def read_line(self, child, timeout):
-        """One line within timeout seconds, or None. Reads go through a buffer: one read can hold several lines."""
+        """One line within timeout seconds, or None; a timeout of 0 takes what the helper has already written.
+        Reads go through a buffer: one read can hold several lines."""
         deadline = time.monotonic() + timeout
         while b'\n' not in self.pending:
-            left = deadline - time.monotonic()
-            if left < 0 or not select.select([child.stdout], [], [], max(left, 0))[0]:
+            # The pipe is looked at even once the deadline has passed: a timeout of 0 has passed it before the first
+            # look, and returning there left drain() reading nothing and a stale line for the next latency round.
+            if not select.select([child.stdout], [], [], max(deadline - time.monotonic(), 0))[0]:
                 return None
             chunk = os.read(child.stdout.fileno(), 4096)
             if not chunk:
@@ -78,7 +80,9 @@ class DevWatchTest(unittest.TestCase):
 
     def test_header_once_armed(self):
         child = self.start()
-        self.assertIsNone(self.read_line(child, 0))
+        # Any program on this Mac can make a /dev node meanwhile, so a dev line may follow; a second header never does.
+        while (line := self.read_line(child, 0)) is not None:
+            self.assertEqual(line, b'dev\n')
 
     def test_a_node_made_in_dev_is_a_dev_line(self):
         child = self.start()
