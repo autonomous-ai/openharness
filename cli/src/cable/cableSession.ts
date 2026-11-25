@@ -2726,11 +2726,13 @@ export class CableSession {
       //
       // The window DELIVERS what it picks, so there is nothing left to send here: a `sent` outcome is
       // already on its way to an agent, and calling sendTurn on it would deliver the sentence twice.
+      // Taken before: the window answers only after it delivered, by when the agent's turn may have started.
+      const since = Date.now()
       const inWindow = this.host.routeInWindow
         ? await this.host.routeInWindow(transcript, turn.cmd)
         : ({ t: 'unavailable' } as const)
       // Sent whatever happened here meanwhile: an abort or a newer recording does not take back what the window delivered.
-      if (inWindow.t === 'sent') decide({ outcome: 'sent', agentId: inWindow.agentId })
+      if (inWindow.t === 'sent') decide({ outcome: 'sent', agentId: inWindow.agentId, since })
       if (!current()) return
       if (inWindow.t === 'sent') {
         this.log(`cable: the window routed the spoken task → ${inWindow.agentId.slice(0, 8)}`)
@@ -2817,6 +2819,8 @@ export class CableSession {
     // line carries: only the app is logged. Decided before the words go: a window that opens or an entry that drops
     // while they are on their way leaves the list without the agent by the time it refuses.
     const refusedIn = this.outsideHarness(agentId) ? `(refused in ${this.hostName(agentId)})` : undefined
+    // Taken before: a send can return after its words started the turn (`codex queue` exits after an idle Codex began it).
+    const since = Date.now()
     try {
       const submitted = await this.host.sendTurn(agentId, text)
       if (submitted && !submitted.ok) {
@@ -2831,7 +2835,7 @@ export class CableSession {
       await reply({ t: 'voice.error', message: 'Could not send. Check the terminal before trying again.' })
       return
     }
-    decide({ outcome: 'sent', agentId })
+    decide({ outcome: 'sent', agentId, since })
     if (carried) {
       this.passageCarry.clear(carried.id)
       this.voiceCarryId = undefined

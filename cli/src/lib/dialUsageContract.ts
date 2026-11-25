@@ -118,7 +118,8 @@ export interface DialUsageSink {
   unreached(mark: 'connected' | 'used'): boolean
 }
 export type DialVoiceEnd =
-  | { outcome: 'sent'; agentId: string }
+  // since: when the send began, wall-clock ms: the words can start the agent's turn before the send returns.
+  | { outcome: 'sent'; agentId: string; since: number }
   | { outcome: 'failed'; code: DialVoiceFailure; agentId?: string }
   | { outcome: 'cancelled'; agentId?: string }
   | { outcome: 'other' } // a draft, a form field, a search: use, not voice to an agent
