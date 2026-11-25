@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { ProcessRow } from '../../lib/processTable.js'
 import type { RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { RECORDED_HERDR } from '../../testing/recordedHerdr.js'
 import { RECORDED_ORCA } from '../../testing/recordedOrca.js'
@@ -302,11 +303,59 @@ describe('scannedApps elsewhere', () => {
     expect(await scannedApps([10], d)).toEqual(new Map([[10, 'warp']]))
   })
 
-  it('on Windows nothing is learned and nothing is read', async () => {
-    const d = deps([[10, 1, 'code']], {}, 'win32')
-    expect(await scannedApps([10], d)).toEqual(new Map())
-    expect(d.processes).not.toHaveBeenCalled()
+})
+
+// After a daemon restart the scan found Claude Code in VS Code's terminal on Windows, but its row was on Other's page
+// until its next hook (docs/plans/2026-11-26-windows-rescan-after-restart-design.md): the walk learnt nothing there.
+describe('scannedApps on Windows', () => {
+  /** A session (10) of image [own] under these parents, nearest first, the last on no parent; each started before its
+   *  child, as `w:<FILETIME>` markers rise down a real tree. */
+  const under = (own: string, ...names: string[]): WindowsProcess[] => [own, ...names].map((executable, i, all) => ({
+    pid: 10 + i, ppid: i === all.length - 1 ? 1 : 11 + i, executable, startMarker: `w:${1000 - i * 10}`,
+  }))
+  const appOf = async (rows: readonly WindowsProcess[]): Promise<string | undefined> => {
+    const d = { platform: 'win32' as const, roots: ROOTS, processes: vi.fn(async () => rows), bundleId: vi.fn(async () => undefined) }
+    const app = (await scannedApps([10], d)).get(10)
+    expect(d.processes).toHaveBeenCalledTimes(1)
     expect(d.bundleId).not.toHaveBeenCalled()
+    return app
+  }
+
+  it('an agent in VS Code\'s or Cursor\'s terminal is in that editor, past the shell and the editor\'s own helpers', async () => {
+    expect(await appOf(under('claude.exe', 'pwsh.exe', 'Code.exe', 'Code.exe'))).toBe('vscode')
+    expect(await appOf(under('claude.exe', 'pwsh.exe', 'Cursor.exe', 'Cursor.exe'))).toBe('cursor')
+    // Codex from npm: its shim runs `cmd` → `node` → `codex.exe`.
+    expect(await appOf(under('codex.exe', 'node.exe', 'cmd.exe', 'pwsh.exe', 'Code.exe'))).toBe('vscode')
+  })
+
+  it('an agent in an Orca terminal is in Orca', async () => {
+    expect(await appOf(under('claude.exe', 'pwsh.exe', 'orca.exe'))).toBe('orca')
+  })
+
+  it('a parent that started after its child names nothing: another process on a reused pid', async () => {
+    const rows = under('claude.exe', 'pwsh.exe', 'Code.exe')
+    expect(await appOf(rows.map((p) => (p.pid === 12 ? { ...p, startMarker: 'w:2000' } : p)))).toBeUndefined()
+  })
+
+  it('an agent another agent ran from its shell tool names nothing, never the Claude app', async () => {
+    // `claude -p` from Claude Code's shell tool, and Codex run the same way.
+    expect(await appOf(under('claude.exe', 'bash.exe', 'claude.exe', 'pwsh.exe', 'Code.exe'))).toBeUndefined()
+    expect(await appOf(under('codex.exe', 'bash.exe', 'claude.exe', 'pwsh.exe', 'Code.exe'))).toBeUndefined()
+  })
+
+  it('a maker no table lists, or Windows Terminal, the unknown app, names nothing', async () => {
+    expect(await appOf(under('claude.exe', 'pwsh.exe', 'explorer.exe'))).toBeUndefined()
+    expect(await appOf(under('claude.exe', 'pwsh.exe', 'WindowsTerminal.exe'))).toBeUndefined()
+  })
+
+  it('learnApps reads the PTY host\'s table, and rejects when it could not be read', async () => {
+    const rows: ProcessRow[] = under('claude.exe', 'pwsh.exe', 'Code.exe')
+      .map(({ pid, ppid, executable, startMarker }) => ({ pid, parentPid: ppid, executable, startMarker: startMarker!, args: executable }))
+    expect(await learnApps([10], undefined, undefined, 'win32', async () => rows)).toEqual(new Map([[10, 'vscode']]))
+    for (const failed of [null, []]) {
+      // The error names nothing of the table: a process name is outside text.
+      await expect(learnApps([10], undefined, undefined, 'win32', async () => failed)).rejects.toEqual(new Error('process table not read'))
+    }
   })
 })
 
@@ -964,9 +1013,10 @@ describe('the scan\'s files', () => {
 
   // A tty column made every read of the table three times as slow on macOS (27 ms to 82 ms, 638 processes): only one
   // process's terminal is read, and only for the own-pane check.
+  // On Windows, which has no `ps`, the PTY host's table: its pid, parent, image and start alone.
   it('read the processes with one ps, comm last, and a terminal one process at a time: no command line, no cut name', () => {
     const source = readFileSync(fileURLToPath(new URL('./scannedApp.ts', import.meta.url)), 'utf8')
-    for (const reader of [/listProcesses/, /processTable/, /processRows/, /\bargs=/, /\bcommand=/, /lstart/, /\/proc\//]) {
+    for (const reader of [/listProcesses/, /\.args\b/, /nativeArgv/, /imagePath/, /commandPath/, /\bargs=/, /\bcommand=/, /lstart/, /\/proc\//]) {
       expect(source).not.toMatch(reader)
     }
     expect(source.match(/'ps'/g)).toEqual(["'ps'", "'ps'"])

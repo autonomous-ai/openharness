@@ -1,6 +1,12 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ObservedAsked, ObservedHookEvent } from '../../core/observedHook.js'
 import { STOP_HOOK_GRACE_MS } from '../../core/turns/turnHooks.js'
+import type { ProcessRow } from '../../lib/processTable.js'
+import { OpenSessions, SessionRows } from '../../lib/sessionSearch/external.js'
+import { claudeProvider } from '../../lib/sessionSearch/externals/claude.js'
 import { type HostAdapter, oncePerCaller, type Pane, type Place } from './adapter.js'
 import { createClaudeAppAdapter } from './claudeApp.js'
 import { createCodexAppAdapter } from './codexApp.js'
@@ -15,7 +21,7 @@ import { askedLine, countWord, cutAnswer, observedAgentId, type ObservedActions,
 import type { OpenTarget } from './open.js'
 import { createOrcaAdapter, MAX_TEXT, type OrcaDeps } from './orca.js'
 import { type Fresh, FRESH_WITHIN_MS, type Nested, type NestedPlace, type OuterLookup } from './outer.js'
-import type { ProcessName } from './scannedApp.js'
+import { learnApps, type ProcessName } from './scannedApp.js'
 import { pageOf } from './select.js'
 import { createTabsAdapter, type TabApp } from './tabs.js'
 import { createTmuxAdapter } from './tmux.js'
@@ -3324,6 +3330,59 @@ describe('ObservedSource and an editor started from Terminal', () => {
     expect(s.src.paneOf(agent.id, 'claude')).toBe(SESSION)
     expect(await s.src.focus(agent, latestTap)).toBe(true)
     expect(actions.open.mock.calls[0][1].bundle).toBe(CLAUDE_APP)
+  })
+})
+
+// Ken's VM, 2026-11-26: after the daemon restarted, Claude Code in VS Code's terminal came back only at its next hook. The
+// scan found it, but learnt no app on Windows, so it sat on Other's page with no terminal pane
+// (docs/plans/2026-11-26-windows-rescan-after-restart-design.md).
+describe('ObservedSource on Windows after a restart', () => {
+  const homes: string[] = []
+  afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }) })
+
+  it('a Claude Code the scan found in VS Code\'s terminal is on VS Code\'s page, known, at its terminal', async () => {
+    const SESSION = '8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
+    const started = Date.parse('2026-11-26T09:00:00Z')
+    // A Claude home of its own: the transcript, and the record the running Claude Code keeps of its pid.
+    const home = mkdtempSync(join(tmpdir(), 'observed-windows-'))
+    homes.push(home)
+    mkdirSync(join(home, 'projects', '-work-dial'), { recursive: true })
+    writeFileSync(join(home, 'projects', '-work-dial', `${SESSION}.jsonl`), `${JSON.stringify({
+      type: 'user', sessionId: SESSION, cwd: '/work/dial', entrypoint: 'cli', timestamp: '2026-11-26T09:00:01Z',
+      message: { role: 'user', content: 'fix the dial scroll' },
+    })}\n`)
+    mkdirSync(join(home, 'sessions'))
+    writeFileSync(join(home, 'sessions', '410.json'), JSON.stringify({ pid: 410, sessionId: SESSION, status: 'idle', startedAt: started + 400 }))
+    // VS Code's terminal as the PTY host lists it: VS Code, its pty host, PowerShell and Claude Code, each started after
+    // its parent.
+    const tree: ProcessRow[] = ([[400, 1, 'Code.exe'], [401, 400, 'Code.exe'], [409, 401, 'pwsh.exe'], [410, 409, 'claude.exe']] as const)
+      .map(([pid, parentPid, executable], i) => ({ pid, parentPid, executable, startMarker: `w:${134087000000000000 + i * 10_000}`, args: executable }))
+    const providers = [claudeProvider({ projectsDir: join(home, 'projects'), home })]
+    const openSessions = new OpenSessions({
+      providers,
+      view: () => ({
+        list: async () => [{ pid: 410, ppid: 409, executable: 'claude.exe', args: 'C:\\Users\\someone\\.local\\bin\\claude.exe', started }],
+        openFiles: async () => new Map(), openFilesOf: async () => new Map(), cwds: async () => new Map(), alive: (pid) => pid === 410,
+      }),
+      // Windows names no terminal (processTtys).
+      ttys: async (pids) => new Map(pids.map((pid) => [pid, null])),
+      harnessTtys: async () => new Set(),
+    })
+    const run = vi.fn(async (_file: string, _args: string[], _timeoutMs: number) => ({ code: 0, stdout: '' }))
+    const terminals = { terminalOf: () => undefined, show: () => false, scroll: () => false, pageKeys: () => false as const,
+      canType: () => false, type: async () => 'failed' as const }
+    const vscode = createVscodeAdapter('vscode', { run, onPath: (name) => `/fake/bin/${name}`, platform: 'win32', inFront: () => true, terminals })
+    // As devices.ts wires the scan on Windows: no look's table, so the walk reads the PTY host's own.
+    const s = setup({
+      platform: 'win32', openSessions, sessionRows: new SessionRows({ providers, excluded: ['/data/harness'] }),
+      actions: { ...fakeActions({}, 'win32').actions, adapters: [vscode] },
+      apps: (pids, rows) => learnApps(pids, rows, undefined, 'win32', async () => tree),
+    })
+    await s.src.scanOpen()
+    const agent = s.src.list()[0]
+    expect(agent).toMatchObject({ sessionId: SESSION, app: 'vscode' })
+    expect(agent).not.toHaveProperty('appPending')
+    expect(s.src.paneOf(agent.id, 'vscode')).toBe('term:410')
   })
 })
 
