@@ -401,7 +401,9 @@ export class HerdrSource implements HostSource {
     if (due === Infinity) return
     this.relistTimer = this.deps.after(Math.max(0, due - this.deps.monotonic()), () => {
       this.relistTimer = undefined
-      const now = this.deps.monotonic()
+      // Node counts a timer in whole ms and performance.now() does not, so this can run up to 1 ms before `due`: the rows
+      // due then count all the same, or this list would count for none and the same re-list would follow it at once.
+      const now = Math.max(this.deps.monotonic(), due)
       for (const row of this.bare.values()) if (dueAt(row) <= now) row.relists++
       this.soon()
     })
