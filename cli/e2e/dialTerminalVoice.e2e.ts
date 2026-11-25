@@ -1,10 +1,11 @@
 /**
- * The dial's spoken words reach an agent in a plain iTerm2 tab (docs/plans/2026-11-25-dial-voice-codex-terminals-design.md,
+ * The dial's spoken words reach an agent in a plain Ghostty tab (docs/plans/2026-11-25-dial-voice-codex-terminals-design.md,
  * part B), on the real daemon: Claude Code without its mod runs on a pseudo-terminal of its own (harness/outsideAgent.ts)
- * with iTerm2's hints in its hook environment, so `ps` and `lsof` read a real tty of the test's own process, and a fake
- * dial speaks to it. The real iTerm2 is never asked anything: no Harness Device runs, and the test plays it on the real
- * `harness hardware watch --json`: iTerm2 in front on its stdin, each write and enter line read on its stdout and
- * answered on its stdin, an enter typed into the tab as the words kept from the write and Enter.
+ * with Ghostty's hints in its hook environment, so `ps` and `lsof` read a real tty of the test's own process, and a fake
+ * dial speaks to it. The real Ghostty is never asked anything: no Harness Device runs, and the test plays it on the real
+ * `harness hardware watch --json`: Ghostty in front on its stdin, each write and enter line read on its stdout and
+ * answered on its stdin, an enter typed into the tab as the words kept from the write and Enter. An agent in iTerm2 gets
+ * no write line: iTerm2's write reaches every pane its Broadcast Input joins.
  *
  * macOS only: off macOS the watch prints no write line.
  */
@@ -23,9 +24,10 @@ import { Outside } from './harness/outsideAgent.js'
 
 /** The machine a daemon signs in as, to hear its dial's words: the daemon asks its backend for each transcript. */
 const ME: FakeMachine = { machineId: 'c7'.repeat(16), computerId: 'e2e-dial-terminal-voice-computer', name: 'Fixture', token: 'e2e-dial-terminal-voice-token' }
-const ITERM = 'com.googlecode.iterm2'
-/** What iTerm2 sets in its tabs: the hints that name the app the agent runs in. */
-const IN_ITERM = { TERM_PROGRAM: 'iTerm.app', __CFBundleIdentifier: ITERM }
+const GHOSTTY = 'com.mitchellh.ghostty'
+/** What Ghostty and iTerm2 set in their tabs: the hints that name the app the agent runs in. */
+const IN_GHOSTTY = { TERM_PROGRAM: 'ghostty', __CFBundleIdentifier: GHOSTTY }
+const IN_ITERM = { TERM_PROGRAM: 'iTerm.app', __CFBundleIdentifier: 'com.googlecode.iterm2' }
 /** The everyday daemon's port: a watch under test that reached it would take the stream from this Mac's Harness Device. */
 const EVERYDAY_PORT = '18473'
 /** Node may fire the settle's timer a millisecond early; the exact settle is twoStep.spec.ts's, on a fake clock. */
@@ -45,7 +47,7 @@ type Enter = { enter: { id: string; app: string; tty: string } }
 /** A write or enter line the watch printed, its id, when it came, and when the test answered it. */
 interface Typing { line: Write | Enter; id: string; at: number; answered: number }
 
-describe.skipIf(process.platform !== 'darwin')('the dial\'s words reach an agent in a plain iTerm2 tab', () => {
+describe.skipIf(process.platform !== 'darwin')('the dial\'s words reach an agent in a plain Ghostty tab', () => {
   let daemon: IsolatedDaemon | undefined
   let desk: Desk | undefined
   let backend: FakeBackend | undefined
@@ -65,9 +67,9 @@ describe.skipIf(process.platform !== 'darwin')('the dial\'s words reach an agent
   /**
    * `harness hardware watch --json` as Harness Device runs it, under the daemon's environment only: it finds this
    * daemon's data folder and the devices' socket in it, never this Mac's, so it can never take the tabs stream from a
-   * real Harness Device's watch. iTerm2 is in front from its first line. The test is Harness Device: each write line is
-   * kept and answered [written]; each enter line types the words kept into [engine]'s tab with Enter, as iTerm2's write
-   * of a carriage return submits them, and is answered ok.
+   * real Harness Device's watch. Ghostty is in front from its first line. The test is Harness Device: each write line is
+   * kept and answered [written]; each enter line types the words kept into [engine]'s tab with Enter, as Ghostty's
+   * `send key "enter"` submits them, and is answered ok.
    */
   const watch = (d: IsolatedDaemon, engine: Outside, written: boolean) => {
     const env: NodeJS.ProcessEnv = { ...d.env, TMUX_PANE: '' }
@@ -92,12 +94,12 @@ describe.skipIf(process.platform !== 'darwin')('the dial\'s words reach an agent
       tell({ wrote: { id, ok: 'enter' in line || written } })
       typings.push({ line, id, at, answered: Date.now() })
     })
-    tell({ front: ITERM })
+    tell({ front: GHOSTTY })
     return { typings: () => [...typings], stderr: () => stderr }
   }
 
   /**
-   * A daemon signed in as ME, a dial on the desk shown its first list, Claude Code without its mod in an iTerm2 tab
+   * A daemon signed in as ME, a dial on the desk shown its first list, Claude Code without its mod in a Ghostty tab
    * (with a shell in it when [shell]), and the watch answering each write [written]. Resolves once the dial lists the
    * agent with voice: its only way in is the tab, which types only while the watch holds the tabs stream.
    */
@@ -127,7 +129,7 @@ describe.skipIf(process.platform !== 'darwin')('the dial\'s words reach an agent
     await d.hooksInstalled(['claude'])
     const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
     await dial.next((m) => m.t === 'agents.end', 45_000, 'the first list')
-    const engine = await Outside.start(d, 'in-iterm', IN_ITERM, undefined, { shell })
+    const engine = await Outside.start(d, 'in-ghostty', IN_GHOSTTY, undefined, { shell })
     outside.push(engine)
     await dial.next((m) => m.t === 'agent' && m.id === engine.id, 45_000, 'the agent listed')
     const run = watch(d, engine, written)
@@ -168,8 +170,8 @@ describe.skipIf(process.platform !== 'darwin')('the dial\'s words reach an agent
     const typings = run.typings()
     expect(typings).toHaveLength(2)
     const [write, enter] = typings
-    expect(write.line).toEqual({ write: { id: expect.stringMatching(ID), app: 'iterm', tty, text: WORDS } })
-    expect(enter.line).toEqual({ enter: { id: expect.stringMatching(ID), app: 'iterm', tty } })
+    expect(write.line).toEqual({ write: { id: expect.stringMatching(ID), app: 'ghostty', tty, text: WORDS } })
+    expect(enter.line).toEqual({ enter: { id: expect.stringMatching(ID), app: 'ghostty', tty } })
     expect(enter.id).not.toBe(write.id)
     expect(enter.at - write.answered).toBeGreaterThanOrEqual(SETTLE_AT_LEAST_MS)
 
@@ -190,6 +192,21 @@ describe.skipIf(process.platform !== 'darwin')('the dial\'s words reach an agent
     expect(voiced(d, 'tabs')).toBe(false)
     expect(engine.ran(d, 'UserPromptSubmit')).toBe(false)
     keptPrivate(d, run, engine)
+  })
+
+  // PM decision 2 (2026-11-25): with Broadcast Input on, iTerm2's write would reach a shell pane of the group too.
+  it('an agent in a plain iTerm2 tab gets no write line, and the dial says it did not answer', async () => {
+    // Ghostty's agent listed with voice: the watch holds the tabs stream.
+    const { d, dial, relay, run } = await fresh()
+    const iterm = await Outside.start(d, 'in-iterm', IN_ITERM)
+    outside.push(iterm)
+    const row = await dial.next((m) => m.t === 'agent' && m.id === iterm.id, 45_000, 'the iTerm2 agent listed')
+
+    expect(await speak(dial, relay, iterm, WORDS)).toMatchObject({ t: 'voice.error', message: `${String(row.name)} did not answer.` })
+    await until('"[device] voice · no-answer" in the daemon\'s log', () => voiced(d, 'no-answer'), 30_000, 50)
+    expect(run.typings()).toEqual([])
+    expect(iterm.ran(d, 'UserPromptSubmit')).toBe(false)
+    keptPrivate(d, run, iterm)
   })
 
   it('an agent stopped with Ctrl-Z, its shell in front, gets no write', async () => {

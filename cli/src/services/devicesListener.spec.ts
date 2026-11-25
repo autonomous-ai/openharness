@@ -1271,23 +1271,23 @@ describe.skipIf(process.platform === 'win32')('the devices listener', () => {
       const tabs = tabsStream()
       const { path, lines } = await open({ tabs: tabs.handler, wrote: tabs.wrote })
       const watch = await asked(path)
-      const words = tabs.line()!.send({ write: { app: 'iterm', tty: '/dev/ttys003', text: 'hi 5f3a' } })
+      const words = tabs.line()!.send({ write: { app: 'ghostty', tty: '/dev/ttys003', text: 'hi 5f3a' } })
       const [written] = await watch.got(1)
       const { id } = (JSON.parse(written!) as { write: { id: string } }).write
       expect(id).toMatch(/^[0-9a-f]{16}$/)
-      expect(written).toBe(`{"write":{"id":"${id}","app":"iterm","tty":"/dev/ttys003","text":"hi 5f3a"}}`)
+      expect(written).toBe(`{"write":{"id":"${id}","app":"ghostty","tty":"/dev/ttys003","text":"hi 5f3a"}}`)
       expect((await connection(path).send(JSON.stringify({ type: 'wrote', id, ok: true }))).status).toBe(204)
       expect(await words.answer).toBe('ok')
       await words.settled
 
       // The listener's own stream says when the line drained.
       expect(await tabs.line()!.ready(3_000)).toBe(true)
-      const enter = tabs.line()!.send({ enter: { app: 'iterm', tty: '/dev/ttys003' } })
+      const enter = tabs.line()!.send({ enter: { app: 'ghostty', tty: '/dev/ttys003' } })
       const pressed = (await watch.got(2))[1]!
       const other = (JSON.parse(pressed) as { enter: { id: string } }).enter.id
       expect(other).toMatch(/^[0-9a-f]{16}$/)
       expect(other).not.toBe(id)
-      expect(pressed).toBe(`{"enter":{"id":"${other}","app":"iterm","tty":"/dev/ttys003"}}`)
+      expect(pressed).toBe(`{"enter":{"id":"${other}","app":"ghostty","tty":"/dev/ttys003"}}`)
       expect((await connection(path).send(JSON.stringify({ type: 'wrote', id: other, ok: 1 }))).status).toBe(400)
       expect((await connection(path).send(JSON.stringify({ type: 'wrote', id: other, ok: false }))).status).toBe(204)
       expect(await enter.answer).toBe('refused')
@@ -1657,8 +1657,8 @@ describe('tabs', () => {
 
   describe('a person\'s words on it', () => {
     const gone = new AbortController().signal
-    const WRITE = { write: { app: 'iterm', tty: '/dev/ttys003', text: 'hi' } } satisfies TabsWrite
-    const ENTER = { enter: { app: 'iterm', tty: '/dev/ttys003' } } satisfies TabsWrite
+    const WRITE = { write: { app: 'ghostty', tty: '/dev/ttys003', text: 'hi' } } satisfies TabsWrite
+    const ENTER = { enter: { app: 'ghostty', tty: '/dev/ttys003' } } satisfies TabsWrite
     const ITERM: Tab = { app: 'iterm', tty: '/dev/ttys003' }
     /** The fake ids, in the order they are handed out. */
     const ID = (n: number): string => `abcdef${String(n).padStart(10, '0')}`
@@ -1757,8 +1757,8 @@ describe('tabs', () => {
       one.drain()
       tabs.line()!.send({ enter: { ...ENTER.enter, text: 'hi' } } as TabsWrite)
       expect(one.lines.map((line) => JSON.stringify(line))).toEqual([
-        `{"write":{"id":"${ID(1)}","app":"iterm","tty":"/dev/ttys003","text":"hi"}}`,
-        `{"enter":{"id":"${ID(2)}","app":"iterm","tty":"/dev/ttys003"}}`,
+        `{"write":{"id":"${ID(1)}","app":"ghostty","tty":"/dev/ttys003","text":"hi"}}`,
+        `{"enter":{"id":"${ID(2)}","app":"ghostty","tty":"/dev/ttys003"}}`,
       ])
     })
 
@@ -1866,6 +1866,9 @@ describe('tabs', () => {
         { write: { ...WRITE.write, text: 'hi\u0007' } },
         { write: { ...WRITE.write, text: '' } },
         { enter: { ...ENTER.enter, tty: '/dev/disk0' } },
+        // iTerm2's write reaches every pane its Broadcast Input joins.
+        { write: { ...WRITE.write, app: 'iterm' } } as unknown as TabsWrite,
+        { enter: { ...ENTER.enter, app: 'iterm' } } as unknown as TabsWrite,
       ] satisfies TabsWrite[]
       for (const typing of dropped) {
         const sent = tabs.line()!.send(typing)
@@ -1943,7 +1946,7 @@ describe('tabs', () => {
       expect(tabs.select(ITERM, false)).toBe(true)
       expect(await line.send(ENTER).answer).toBe('unanswered')
       expect(one.lines.map((line) => JSON.stringify(line))).toEqual([
-        `{"write":{"id":"${ID(1)}","app":"iterm","tty":"/dev/ttys003","text":"hi"}}`,
+        `{"write":{"id":"${ID(1)}","app":"ghostty","tty":"/dev/ttys003","text":"hi"}}`,
         '{"app":"iterm","tty":"/dev/ttys003"}',
       ])
       expect(tabs.wrote.handle(wrote(ID(1), true), gone)).toBeUndefined()
@@ -2010,7 +2013,7 @@ describe('tabs', () => {
       newer.drain()
       expect(tabs.select(ITERM, true)).toBe(true)
       expect(newer.lines.map((line) => JSON.stringify(line))).toEqual([
-        `{"write":{"id":"${ID(2)}","app":"iterm","tty":"/dev/ttys003","text":"hi"}}`,
+        `{"write":{"id":"${ID(2)}","app":"ghostty","tty":"/dev/ttys003","text":"hi"}}`,
         '{"app":"iterm","tty":"/dev/ttys003","raise":true}',
       ])
       expect(older.lines).toHaveLength(1)

@@ -184,7 +184,7 @@ describe("tier A's world records every send, failing closed", () => {
     }
     const typing = tabsTyping({ line: () => line, shared: () => false, process: deps.tabProcess!, readers: deps.ttyReaders!,
       processes: async () => [], after: () => () => {} })
-    const pane = { adapter: 'tabs', id: 'iterm:/dev/ttys003', proof: { pid: 41_000, start: 'ps:1' } }
+    const pane = { adapter: 'tabs', id: 'ghostty:/dev/ttys003', proof: { pid: 41_000, start: 'ps:1' } }
     expect(await typing.type(pane, WORDS, 'claude', () => true)).toEqual({ notSent: 'process' })
     expect(sent).toEqual([])
   })

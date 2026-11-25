@@ -1060,7 +1060,7 @@ describe('harness hardware watch: the selected tab', () => {
 // writes on the watch's stdin for each.
 const WRITE_ID = '0123456789abcdef'
 const ENTER_ID = 'fedcba9876543210'
-const WRITE = JSON.stringify({ write: { id: WRITE_ID, app: 'iterm', tty: '/dev/ttys004', text: 'run the tests' } })
+const WRITE = JSON.stringify({ write: { id: WRITE_ID, app: 'ghostty', tty: '/dev/ttys004', text: 'run the tests' } })
 const ENTER = JSON.stringify({ enter: { id: ENTER_ID, app: 'ghostty', tty: '/dev/ttys005' } })
 const wroteLine = (wrote: unknown) => `${JSON.stringify({ wrote })}\n`
 
@@ -1076,7 +1076,7 @@ describe('harness hardware watch: spoken words', () => {
   it('a write line of 64 KiB with its newline prints, one a byte longer prints nothing, and the next line prints', async () => {
     const { run, send } = await streaming({ platform: 'darwin' })
     // The longest text, 20,000 three-byte letters; spaces after the JSON, which it allows, make the line as long as asked.
-    const longest = JSON.stringify({ write: { id: WRITE_ID, app: 'iterm', tty: '/dev/ttys004', text: '中'.repeat(20_000) } })
+    const longest = JSON.stringify({ write: { id: WRITE_ID, app: 'ghostty', tty: '/dev/ttys004', text: '中'.repeat(20_000) } })
     const padded = (bytes: number) => `${longest}${' '.repeat(bytes - Buffer.byteLength(longest))}`
     send(padded(65_536))
     send(ENTER)
@@ -1103,12 +1103,13 @@ describe('harness hardware watch: spoken words', () => {
       await stillRunning(run)
     })
   }
-  it('a line with Terminal.app, another tty, a short id, no text, a newline, a lone surrogate or another key prints nothing', async () => {
+  it('a line with Terminal.app, iTerm2, another tty, a short id, no text, a newline, a lone surrogate or another key prints nothing', async () => {
     const { run, send } = await streaming({ platform: 'darwin' })
-    const write = { id: WRITE_ID, app: 'iterm', tty: '/dev/ttys004', text: 'run the tests' }
+    const write = { id: WRITE_ID, app: 'ghostty', tty: '/dev/ttys004', text: 'run the tests' }
     const enter = { id: ENTER_ID, app: 'ghostty', tty: '/dev/ttys005' }
     for (const line of [
       { write: { ...write, app: 'terminal-app' } }, { enter: { ...enter, app: 'terminal-app' } },
+      { write: { ...write, app: 'iterm' } }, { enter: { ...enter, app: 'iterm' } },
       { write: { ...write, tty: '/dev/pts/1' } }, { enter: { ...enter, tty: '/dev/pts/1' } },
       { write: { ...write, id: WRITE_ID.slice(1) } }, { enter: { ...enter, id: ENTER_ID.slice(1) } },
       { write: { ...write, text: '' } }, { write: { ...write, text: 'run\nthe tests' } },
@@ -1116,8 +1117,8 @@ describe('harness hardware watch: spoken words', () => {
       { write, enter }, { write, raise: true },
     ]) send(JSON.stringify(line))
     // A lone surrogate is a JSON escape Harness Device cannot read into its text: the devices never send one (cleanWords).
-    send(`{"write":{"id":"${WRITE_ID}","app":"iterm","tty":"/dev/ttys004","text":"run \\ud800 tests"}}`)
-    send(`{"write":{"id":"${WRITE_ID}","app":"iterm","tty":"/dev/ttys004","text":"run \\udc00"}}`)
+    send(`{"write":{"id":"${WRITE_ID}","app":"ghostty","tty":"/dev/ttys004","text":"run \\ud800 tests"}}`)
+    send(`{"write":{"id":"${WRITE_ID}","app":"ghostty","tty":"/dev/ttys004","text":"run \\udc00"}}`)
     expect(run.printed).toEqual([])
     send(WRITE)
     expect(run.printed).toEqual([WRITE])
