@@ -134,6 +134,8 @@ const MINUTE = 60_000
 const LIVE = '{"type":"live"}'
 const TABS = '{"type":"tabs"}'
 const STANDBY = '{"type":"tabs","standby":true}'
+/** As a watch Harness Device told writes opens it: the one stream a person's words go on. */
+const WRITES = '{"type":"tabs","writes":true}'
 const REPLACED = '{"replaced":true}'
 const TAB: Tab = { app: 'terminal-app', tty: '/dev/ttys023' }
 
@@ -1267,10 +1269,30 @@ describe.skipIf(process.platform === 'win32')('the devices listener', () => {
       expect(reported).toHaveLength(TAB_PER_SECOND)
     })
 
+    it('the longest tabs open, standby and writes both false, is a stream; a byte more is 413', async () => {
+      const tabs = tabsStream()
+      const { path } = await open({ tabs: tabs.handler })
+      const longest = '{"type":"tabs","standby":false,"writes":false}'
+      const watch = await asked(path, longest)
+      expect(watch.status).toBe(200)
+      expect(tabs.isOpen()).toBe(true)
+      watch.close()
+      expect((await asked(path, `${longest.slice(0, -1)} }`)).status).toBe(413)
+    })
+
+    it('a tabs open whose writes is not a boolean is 400 and opens nothing', async () => {
+      const tabs = tabsStream()
+      const { path } = await open({ tabs: tabs.handler })
+      for (const writes of ['1', '"true"', 'null', '{}']) {
+        expect((await asked(path, `{"type":"tabs","writes":${writes}}`)).status, writes).toBe(400)
+      }
+      expect(tabs.isOpen()).toBe(false)
+    })
+
     it('words go to the watch under 16 random hex, their Enter under another, and each wrote posted to the listener answers its own', async () => {
       const tabs = tabsStream()
       const { path, lines } = await open({ tabs: tabs.handler, wrote: tabs.wrote })
-      const watch = await asked(path)
+      const watch = await asked(path, WRITES)
       const words = tabs.line()!.send({ write: { app: 'ghostty', tty: '/dev/ttys003', text: 'hi 5f3a' } })
       const [written] = await watch.got(1)
       const { id } = (JSON.parse(written!) as { write: { id: string } }).write
@@ -1645,14 +1667,12 @@ describe('thread', () => {
 })
 
 describe('tabs', () => {
-  it('the tabs stream is two a second on a connection, and its longest message, a standby false, fits', () => {
+  it('the tabs stream is two a second on a connection, and its longest message, standby and writes false, fits exactly', () => {
     const { handler } = tabsStream()
     expect(Object.keys(handler).sort()).toEqual(['maxBytes', 'open', 'perSecond'])
     expect(handler).toMatchObject({ maxBytes: TABS_MAX_BYTES, perSecond: TABS_PER_SECOND })
-    expect([TABS_MAX_BYTES, TABS_PER_SECOND]).toEqual([32, 2])
-    const longest = Buffer.byteLength('{"type":"tabs","standby":false}')
-    expect(longest).toBe(31)
-    expect(longest).toBeLessThanOrEqual(TABS_MAX_BYTES)
+    expect([TABS_MAX_BYTES, TABS_PER_SECOND]).toEqual([46, 2])
+    expect(Buffer.byteLength('{"type":"tabs","standby":false,"writes":false}')).toBe(TABS_MAX_BYTES)
   })
 
   describe('a person\'s words on it', () => {
@@ -1709,10 +1729,10 @@ describe('tabs', () => {
         }
       }
       const live = (): number[] => timers.filter((timer) => timer.live).map((timer) => timer.ms)
-      /** A watch opened as the listener opens one: it is writable once open has returned. */
+      /** A watch Harness Device told writes, opened as the listener opens one: it is writable once open has returned. */
       const watch = () => {
         const one = watched()
-        tabs.handler.open({ type: 'tabs' }, one.stream)
+        tabs.handler.open({ type: 'tabs', writes: true }, one.stream)
         one.drain()
         return one
       }
@@ -1735,6 +1755,41 @@ describe('tabs', () => {
       const longest = Buffer.byteLength(JSON.stringify(wrote('f'.repeat(16), false)))
       expect(longest).toBe(51)
       expect(longest).toBeLessThan(WROTE_MAX_BYTES)
+    })
+
+    // PM decision 3 (2026-11-25): Harness Device 0.1.x drops a write or Enter line unanswered, and never tells its watch
+    // writes, so the watch does not say it.
+    it('line is none for a stream whose watch did not say writes, or said false, and a select still goes on it', () => {
+      const { tabs } = typed()
+      for (const message of [{ type: 'tabs' }, { type: 'tabs', writes: false }, { type: 'tabs', standby: true }]) {
+        const one = watched()
+        expect(tabs.handler.open(message, one.stream)).toBeUndefined()
+        one.drain()
+        expect(tabs.isOpen()).toBe(true)
+        expect(tabs.line()).toBeUndefined()
+        expect(tabs.select(ITERM, false)).toBe(true)
+        expect(one.lines).toEqual([ITERM])
+      }
+    })
+
+    it('a newer stream whose watch did not say writes leaves no line, the older one not yet ended', () => {
+      const { tabs, watch } = typed()
+      const older = watch()
+      expect(tabs.line()).toBeDefined()
+      tabs.handler.open({ type: 'tabs' }, watched().stream)
+      expect(tabs.line()).toBeUndefined()
+      older.end('replaced')
+      expect(tabs.line()).toBeUndefined()
+    })
+
+    it('writes that is not a boolean is refused, and leaves the open stream\'s line as it was', () => {
+      const { tabs, watch } = typed()
+      watch()
+      const line = tabs.line()
+      for (const writes of ['true', 1, null, {}]) {
+        expect(tabs.handler.open({ type: 'tabs', writes }, watched().stream)).toBe(REFUSED)
+      }
+      expect(tabs.line()).toBe(line)
     })
 
     it('line is none with no stream open, the same object while one is, and none once it ended', () => {
@@ -1920,7 +1975,7 @@ describe('tabs', () => {
       const { tabs } = typed()
       const lines: unknown[] = []
       // As the devices' own tests fake the stream: it takes every line and never runs onWritable.
-      tabs.handler.open({ type: 'tabs' }, {
+      tabs.handler.open({ type: 'tabs', writes: true }, {
         write: (line) => {
           lines.push(line)
           return true
