@@ -310,6 +310,29 @@ describe('DeviceFleet', () => {
     expect(seen.map((e) => (e as { tier?: string }).tier)).toEqual(['silent', undefined, undefined])
   })
 
+  // A recap of a turn that ended unseen (CommanderMirror.catchUp) carries no tier and no sub-agent's mark: read as
+  // news, this dial decided it again and rang for history after the other machine's daemon restarted.
+  it('draws another machine\'s restored recap silent, as this computer\'s, and says so', () => {
+    const { fleet, say } = make()
+    const seen: FleetEvent[] = []
+    fleet.onEvent((e) => seen.push(e))
+    say({ type: 'commander_event', machineId: 'm1', agentId: 'a1', payload: { kind: 'summary', recap: 'Built.', text: 'done', notification: null, restored: true } })
+    expect(seen).toEqual([{ machineId: 'm1', kind: 'summary', agentId: 'a1', text: 'done', recap: 'Built.', subagent: true, notNews: 'restored' }])
+  })
+
+  // That machine's recaps name why its silent end is not news (lib/agentNotifications.ts): dropped here, this dial logged
+  // every one of them as a sub-agent's.
+  it('carries why another machine\'s silent card is not news, and no word that is not a reason', () => {
+    const { fleet, say } = make()
+    const seen: FleetEvent[] = []
+    fleet.onEvent((e) => seen.push(e))
+    say({ type: 'commander_event', machineId: 'm1', agentId: 'a1', payload: { kind: 'summary', recap: 'Built.', text: 'done', subagent: true, notNews: 'question' } })
+    say({ type: 'commander_event', machineId: 'm1', agentId: 'a1', payload: { kind: 'summary', recap: 'Built.', text: 'done', subagent: true, notNews: 'loud' } })
+    say({ type: 'commander_event', machineId: 'm1', agentId: 'a1', payload: { kind: 'summary', recap: 'Built.', text: 'done', subagent: true } })
+    expect(seen[0]).toEqual({ machineId: 'm1', kind: 'summary', agentId: 'a1', text: 'done', recap: 'Built.', subagent: true, notNews: 'question' })
+    expect(seen.map((e) => (e as { notNews?: string }).notNews)).toEqual(['question', undefined, undefined])
+  })
+
   // A cloud harness's card carries no tier (core/agents/cloud.ts): this dial decides it, and a failed turn rings in Needs you
   // only when the card still says it failed.
   it('carries a summary\'s failed, and only a summary\'s true one', () => {
