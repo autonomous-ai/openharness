@@ -116,8 +116,9 @@ vi.mock('../../cable/hosts/herdrOuter.js', async (real) => ({
   ...await real<typeof import('../../cable/hosts/herdrOuter.js')>(),
   ttyAtime: async (tty: string) => machine.atimes.get(tty.replace(/^\/dev\//, '')),
 }))
-// The model's machine has no Zellij or kitty, and tmux only where the world installed it (an iTerm2 scenario's): no login
-// shell is asked where they are. A tmux found runs through the world's `run`, answered from its model (tierA/steps/tmux.ts).
+// The model's machine has no Zellij or kitty, and tmux only where the world installed it (an iTerm2 scenario's, or one
+// whose Orca agent runs under tmux, never on Windows): no login shell is asked where they are. A tmux found runs
+// through the world's `run`, answered from its model (tierA/steps/tmux.ts).
 vi.mock('../../lib/tmuxOnPath.js', async (real) => ({
   ...await real<typeof import('../../lib/tmuxOnPath.js')>(),
   ensureTmuxOnPath: async () => {
@@ -544,10 +545,18 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
     checks: [], probes: [],
   })
 
-  it("tmux is found on an iTerm2 scenario's machine alone", async () => {
-    const found = async (of: Scenario) => {
+  /** Claude Code a in w1's tab 0 and c under tmux in its tab 1, started c then a and listed on Orca's page. */
+  const orcaTmux = scenario({
+    id: 'S8', app: 'orca', title: 'Eval an Orca agent under tmux', dims: ['D1'], tiers: ['a'],
+    sessions: [orcaSession('a', { worktree: 'w1', tab: 0 }), orcaSession('c', { worktree: 'w1', tab: 1, tmux: true }), orcaGhost],
+    steps: [...orcaOpening(['w1']), ...orcaStarted(['c', 'a']), ...listed('orca', ['a', 'c'])],
+    checks: [], probes: [],
+  })
+
+  it("tmux is found on an iTerm2 scenario's machine and on one whose Orca agent runs under tmux, never on Windows", async () => {
+    const found = async (of: Scenario, platform: Platform = 'darwin') => {
       const driver = new TierADriver({ startDevices })
-      await driver.start(of, 'darwin')
+      await driver.start(of, platform)
       try {
         return await ensureTmuxOnPath()
       } finally {
@@ -555,14 +564,29 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
       }
     }
     const c1 = MAIN.find((s) => s.id === 'C1')!
-    expect(await found(tmuxTab('S7', 'Eval tmux is installed', []))).toEqual({ state: 'adopted', path: '/opt/eval/bin/tmux',
-      from: 'standard install location' })
+    const adopted = { state: 'adopted', path: '/opt/eval/bin/tmux', from: 'standard install location' }
+    expect(await found(tmuxTab('S7', 'Eval tmux is installed', []))).toEqual(adopted)
+    for (const platform of ['darwin', 'linux'] as const) expect(await found(orcaTmux, platform), platform).toEqual(adopted)
+    expect((await found(orcaTmux, 'win32')).state).toBe('absent')
     expect((await found(c1)).state).toBe('absent')
     // C1's devices run no tmux.
     const driver = new TierADriver({ startDevices })
     expect((await runScenario(driver, c1, 'darwin')).error).toBeUndefined()
     expect(driver.seen().commands.filter((c) => basename(c.argv[0]!) === 'tmux')).toEqual([])
   })
+
+  it.for([['linux', 'found'], ['darwin', 'none']] as const)(
+    "an Orca agent under tmux: tmux's lookup runs on the world's tmux and finds its client in Orca on Linux, none on macOS (%s)",
+    async ([platform, client]) => {
+      const driver = new TierADriver({ startDevices })
+      const run = await runScenario(driver, orcaTmux, platform)
+      expect(run.error).toBeUndefined()
+      expect(run.gaps).toEqual([])
+      const { commands, logs = [] } = driver.seen()
+      expect(commands.filter((c) => c.argv[1] === 'list-clients').map(({ argv, ok }) => ({ argv: argv.slice(0, 4), ok })))
+        .toContainEqual({ argv: ['/opt/eval/bin/tmux', 'list-clients', '-t', 'pane:c'], ok: true })
+      expect(logs.map((l) => l.line)).toContain(`[device] tmux client · ${client}`)
+    })
 
   it("I6 inline: a rest on the tmux row with iTerm2 in front writes its client's tab select without raise and runs "
     + 'select-window ; select-pane for its pane', async () => {

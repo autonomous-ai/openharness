@@ -6,7 +6,7 @@ import { basename, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readLastAnswer } from '../../../../cable/hosts/lastAnswer.js'
 import { readRecord } from '../../../../cable/hosts/record.js'
-import { ptyMaker } from '../../../../cable/hosts/scannedApp.js'
+import { ptyMaker, scannedApps } from '../../../../cable/hosts/scannedApp.js'
 import type { InboxAnswer, InboxPoll } from '../../../../core/deviceHookCalls.js'
 import type { ObservedEvent, ObservedHookEvent } from '../../../../core/observedHook.js'
 import { lastCursorTurnText } from '../../../../engines/cursor/normalizer.js'
@@ -455,11 +455,13 @@ describe("tier A's Orca agents", () => {
     const shell = machine.processes.get(agent.ppid)!
     return { agent, shell, maker: machine.processes.get(shell.ppid)! }
   }
+  /** Orca's terminal host's parent: init, or on Linux Orca's main process by its name. */
+  const hostParent = (host: { ppid: number }) => host.ppid === 1 ? 1 : basename(machine.processes.get(host.ppid)!.executable)
   const ORCA_BUNDLE = 'com.stablyai.orca'
 
   it("an Orca agent runs on its shell's tty under Orca's terminal host, on no tty, named Orca Agents on macOS and "
     + 'orca-agents on Linux', async () => {
-    for (const [platform, host, tty] of [['darwin', 'Orca Agents', /^ttys0\d\d$/], ['linux', 'orca-agents', /^pts\/\d+$/]] as const) {
+    for (const [platform, host, tty, parent] of [['darwin', 'Orca Agents', /^ttys0\d\d$/, 1], ['linux', 'orca-agents', /^pts\/\d+$/, 'orca-ide']] as const) {
       const w = fakeWorld(platform, orcaAgents())
       await w.hook('a', 'start')
       await w.hook('b', 'start')
@@ -467,7 +469,7 @@ describe("tier A's Orca agents", () => {
       for (const { agent, shell, maker } of [a, b]) {
         expect(agent.tty).toMatch(tty)
         expect(shell.tty).toBe(agent.tty)
-        expect([basename(maker.executable), maker.tty, maker.ppid]).toEqual([host, undefined, 1])
+        expect([basename(maker.executable), maker.tty, hostParent(maker)]).toEqual([host, undefined, parent])
         // The devices' own maker check names Orca's host.
         expect(ptyMaker(agent.pid, [...machine.processes.values()]), platform).toEqual({ pid: maker.pid, host: 'orca' })
       }
@@ -534,8 +536,8 @@ describe("tier A's Orca agents", () => {
       const agent = machine.processes.get(agentPid(w.world, 'c')!)!
       const provider = machine.processes.get(agent.ppid)!
       const host = machine.processes.get(provider.ppid)!
-      expect([agent.executable, agent.tty, provider.executable, provider.tty, basename(host.executable), host.ppid], platform)
-        .toEqual(['claude', undefined, 'orca-provider-exec', undefined, hosts[platform], 1])
+      expect([agent.executable, agent.tty, provider.executable, provider.tty, basename(host.executable), hostParent(host)], platform)
+        .toEqual(['claude', undefined, 'orca-provider-exec', undefined, hosts[platform], platform === 'linux' ? 'orca-ide' : 1])
       // The same host as the pane's terminal's: Orca's one.
       expect(host.pid, platform).toBe(chainOf(w.world, 'a').maker.pid)
       // On no terminal: the devices' maker check finds none, and the world opens no pane of it.
@@ -634,6 +636,24 @@ describe("tier A's Orca agents", () => {
     }
     // Orca's terminal host runs on for its other panes, and goes with Orca.
     expect(left).toEqual({ drop: ['Orca Agents'], quit: [] })
+  })
+
+  it("on Linux Orca's terminal host runs under Orca's main process, orca-ide, which the walk names Orca; elsewhere under init", async () => {
+    for (const platform of PLATFORMS) {
+      const w = fakeWorld(platform, orcaAgents())
+      await w.hook('a', 'start')
+      const { maker, shell } = chainOf(w.world, 'a')
+      const parent = machine.processes.get(maker.ppid)
+      if (platform === 'linux') expect([basename(maker.executable), parent && basename(parent.executable), parent?.ppid]).toEqual(['orca-agents', 'orca-ide', 1])
+      else expect(maker.ppid, platform).toBe(1)
+      if (platform === 'linux') {
+        const rows = [...machine.processes.values()].map(({ pid, ppid, executable }) => ({ pid, ppid, executable }))
+        expect(await scannedApps([shell.pid], { platform, roots: [], processes: async () => rows, bundleId: async () => undefined }))
+          .toEqual(new Map([[shell.pid, 'orca']]))
+      }
+      await sessionsSteps.quit(w.world, { kind: 'quit', app: 'orca' })
+      expect([...machine.processes.values()].map((p) => basename(p.executable)), platform).not.toContain('orca-ide')
+    }
   })
 
   it("Orca's relaunch starts a terminal host of its own: the one before went with its quit", async () => {

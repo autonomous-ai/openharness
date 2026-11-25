@@ -125,9 +125,9 @@ const CURSOR_BIN = '/opt/eval/bin/cursor'
  *  lookup, the Windows helper, the Linux raise and Orca's CLI (steps/orca.ts). Cursor's CLI is answered only as Linux's
  *  folder row runs it, on one folder (cable/hosts/cursorFolder.ts). A command of any other is one tier A does not model. */
 const ANSWERED: ReadonlySet<string> = new Set(['open', 'xdg-open', 'xdg-mime', 'harness-pty', 'raise', ...ORCA_PROGRAMS])
-/** tmux (steps/tmux.ts), and herdr with the lsof and ps of its client lookup (steps/herdr.ts): answered on an iTerm2
- *  scenario's machine alone, the one their rules are on (deps). */
-const ITERM_ANSWERED: ReadonlySet<string> = new Set(['tmux', 'herdr', 'lsof', 'ps'])
+/** herdr with the lsof and ps of its client lookup (steps/herdr.ts): answered on an iTerm2 scenario's machine alone,
+ *  the one their rules are on (deps). tmux is answered wherever the machine installed it. */
+const ITERM_ANSWERED: ReadonlySet<string> = new Set(['herdr', 'lsof', 'ps'])
 /** The programs whose commands name panes by id. */
 const MULTIPLEXERS: ReadonlySet<string> = new Set(['tmux', 'herdr'])
 
@@ -140,9 +140,11 @@ function emptied(folder: string): string {
   return folder
 }
 
-/** Whether the world of an [app] scenario answers a command (ANSWERED, ITERM_ANSWERED). */
-const answered = (argv: readonly string[], app: App): boolean => ANSWERED.has(programOf(argv))
+/** Whether the world of an [app] scenario answers a command (ANSWERED, ITERM_ANSWERED), tmux's when its machine has
+ *  [tmux]. */
+const answered = (argv: readonly string[], app: App, tmux: boolean): boolean => ANSWERED.has(programOf(argv))
   || (app === 'iterm' && ITERM_ANSWERED.has(programOf(argv)))
+  || (tmux && programOf(argv) === 'tmux')
   || (argv.length === 2 && argv[0] === CURSOR_BIN && isAbsolute(argv[1]!))
 
 /** Codex's queue's send (cable/hosts/codexQueue.ts): the thread and the words, the thread none unless it reads both. */
@@ -389,7 +391,7 @@ export class World implements TierAWorld {
    * good end, a multiplexer's with its panes named by session. One of a program the world does not answer (`modelled`) is
    * a gap: its answer would be made up.
    */
-  private ran(argv: string[], modelled = answered(argv, this.scenario.app)): Required<Answer> {
+  private ran(argv: string[], modelled = answered(argv, this.scenario.app, machine.installed.has('tmux'))): Required<Answer> {
     if (!modelled) this.gap(`a command tier A does not answer: ${programOf(argv)}`)
     let answer: Answer = { code: 0 }
     for (const rule of this.rules) {
@@ -467,11 +469,15 @@ export class World implements TierAWorld {
     // read Orca's homes at once. Typing is seen first, as Orca's rule answers its sends.
     recordTyping(this)
     answerOrca(this)
-    // tmux and herdr are on an iTerm2 scenario's machine alone (the plan's Decisions 5 and 7): every other app's devices
-    // find neither and run neither, as on main.
-    if (scenario.app === 'iterm') {
+    // tmux is on an iTerm2 scenario's machine, and on one whose Orca agent runs under tmux: grading it as today needs
+    // tmux's real lookup (docs/plans/2026-11-25-dial-orca-tmux-o11-design.md, option A). Never on Windows, where tmux
+    // runs only inside WSL, whose agents hook to WSL's own Harness. herdr is iTerm2's alone (the plan's Decisions 5 and
+    // 7): every other app's devices find neither and run neither, as on main.
+    if (scenario.app === 'iterm' || (scenario.app === 'orca' && platform !== 'win32' && scenario.sessions.some((s) => s.tmux))) {
       machine.installed.set('tmux', TMUX)
       answerTmux(this)
+    }
+    if (scenario.app === 'iterm') {
       machine.installed.set('herdr', HERDR)
       answerHerdr(this)
     }
