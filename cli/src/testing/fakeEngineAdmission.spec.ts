@@ -175,7 +175,26 @@ describe('the fake Codex\'s `lazySessionStart`', () => {
     expect(eventsOf(codex.hooks())).toEqual(['SessionStart(resume)', 'UserPromptSubmit', 'Stop'])
   }, 30_000)
 
-  it('runs only a `!clear`\'s own SessionStart before its first prompt', async () => {
+  // Codex queues a new conversation's SessionStart and runs it only inside a turn (codex-rs core/src/hook_runtime.rs).
+  it('runs nothing at a `!clear` before any prompt', async () => {
+    const codex = start('codex', { config: { lazySessionStart: true } })
+    codex.type('!clear')
+    codex.type('!exit')
+    await codex.exited
+    expect(codex.hooks()).toEqual([])
+  }, 30_000)
+
+  it('runs nothing at a `!clear` after a prompt', async () => {
+    const codex = start('codex', { config: { lazySessionStart: true } })
+    codex.type('hello')
+    await codex.hooked('Stop')
+    codex.type('!clear')
+    codex.type('!exit')
+    await codex.exited
+    expect(eventsOf(codex.hooks())).toEqual(['SessionStart(startup)', 'UserPromptSubmit', 'Stop'])
+  }, 30_000)
+
+  it('runs a `!clear`\'s SessionStart (`clear`) at the next prompt, before its UserPromptSubmit', async () => {
     const codex = start('codex', { config: { lazySessionStart: true } })
     codex.type('!clear')
     codex.type('hello')
