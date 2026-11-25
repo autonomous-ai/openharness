@@ -41,6 +41,14 @@ void ui_enter_boot_loading(void);
 void ui_land_after_reload(void);
 // Global commander connection indicator (shown on every tile's header).
 void ui_set_connected(bool connected);
+// Where the dial is stuck while not connected, drawn dim under the wordmark. NONE is 0: the screen's
+// zeroed state and the session layer's first one agree, so nothing is sent until the hint changes.
+typedef enum {
+    UI_LINK_HINT_NONE,
+    UI_LINK_HINT_NO_COMPUTER,   // no USB host on the cable
+    UI_LINK_HINT_OPEN_APP,      // a host, but no daemon has spoken for a while
+} ui_link_hint_t;
+void ui_set_link_hint(ui_link_hint_t hint);
 // The custom pets changed (pet.map, a finished pack, pet.drop): redraw so the dial applies them at the next scene.
 void ui_pets_changed(void);
 // Node (paired machine) online↔offline from the `node_status` frame — distinct from ui_set_connected

@@ -2,7 +2,7 @@
 
 use crate::cli::{Cli, Killer, StdinCloser, StdinWriter, Timeout, Unwritten};
 use crate::tabs::{TabApp, select_of};
-use crate::types::{DialStatus, Event, Log, NotifyMode};
+use crate::types::{DialStatus, Event, Log, NotifyMode, VoiceLang};
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -53,6 +53,11 @@ impl Watch {
             NotifyMode::Full => r#"{"notify":"full"}"#,
             NotifyMode::You => r#"{"notify":"you"}"#,
         });
+    }
+
+    /// A change of the dial's voice language on the child's stdin: one of six fixed lines, its code static text.
+    pub fn voice(&self, lang: VoiceLang) {
+        self.write(&format!(r#"{{"voiceLang":"{}"}}"#, lang.code()));
     }
 
     /// One that has ended takes nothing, and nothing of the line is logged. One that has stopped reading drops it, and
@@ -135,7 +140,7 @@ mod tests {
     use crate::cli::{HarnessCli, find_cli};
     use crate::tabs::TabApp;
     use crate::testing::{Fake, wait_gone};
-    use crate::types::{DialStatus, Event, MemoryLog, NotifyMode};
+    use crate::types::{DialStatus, Event, MemoryLog, NotifyMode, VoiceLang};
     use std::io;
     use std::sync::{Arc, mpsc};
     use std::time::Duration;
@@ -184,6 +189,7 @@ mod tests {
             problem: None,
             muted: None,
             notify: None,
+            voice_lang: None,
         })
     }
 
@@ -191,7 +197,7 @@ mod tests {
     #[test]
     fn a_line_each_time_the_dial_changes() {
         let fake = Fake::new();
-        let attached = r#"{"attached":true,"fw":"0.0.95","hw":"cst816s","muted":true}"#;
+        let attached = r#"{"attached":true,"fw":"0.0.95","hw":"cst816s","muted":true,"voiceLang":"ja"}"#;
         fake.script("hardware watch --json", &[r#"{"attached":false}"#, "@wait next", attached, "@stdin"]);
         let (_watch, events) = start(&fake);
         assert_eq!(events.recv_timeout(WAIT), Ok(dial(false, None, None)));
@@ -205,6 +211,7 @@ mod tests {
             problem: None,
             muted: Some(true),
             notify: None,
+            voice_lang: Some(Some(VoiceLang::Ja)),
         };
         assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchLine(muted)));
         assert_eq!(fake.calls(), ["hardware watch --json"]);
@@ -363,6 +370,33 @@ mod tests {
         // A watch that has ended takes nothing.
         watch.notify(NotifyMode::You);
         assert_eq!(fake.stdin(), [you, full]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_voice_line_reaches_the_watch() {
+        let lines = [
+            r#"{"voiceLang":"en"}"#,
+            r#"{"voiceLang":"vi"}"#,
+            r#"{"voiceLang":"es"}"#,
+            r#"{"voiceLang":"fr"}"#,
+            r#"{"voiceLang":"ja"}"#,
+            r#"{"voiceLang":"it"}"#,
+        ];
+        let fake = Fake::new();
+        fake.script("hardware watch --json", &[r#"{"attached":true}"#, "@record"]);
+        let (watch, events) = start(&fake);
+        assert_eq!(events.recv_timeout(WAIT), Ok(dial(true, None, None)));
+        for lang in VoiceLang::ALL {
+            watch.voice(lang);
+        }
+        watch.stop();
+        assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchExit(Some(0))));
+        assert_eq!(fake.stdin(), lines);
+        // A watch that has ended takes nothing, and the log says nothing of it.
+        watch.voice(VoiceLang::Vi);
+        assert_eq!(fake.stdin(), lines);
+        assert_eq!(fake.log().lines(), ["harness hardware watch --json: exit 0"]);
     }
 
     #[cfg(unix)]

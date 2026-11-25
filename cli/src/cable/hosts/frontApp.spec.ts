@@ -59,6 +59,8 @@ const FRONT_BUNDLES: [string, string][] = [
   ['org.alacritty', 'terminal'],
   // Warp Preview (Homebrew cask warp@preview).
   ['dev.warp.Warp-Preview', 'warp'],
+  // The Rex Server app (its Info.plist, 2026-11-25): the parent of every Rex block's program, which the open scan reads.
+  ['com.superlogical.rex.server', 'rex'],
 ]
 
 // Alacritty's and Warp's processes: alacritty.exe and warp.exe on Windows, alacritty and warp on Linux, and Warp

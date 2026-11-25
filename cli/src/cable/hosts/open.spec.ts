@@ -201,9 +201,20 @@ describe('opening an agent outside Harness from the dial', () => {
     }
   })
 
+  // A Rex block carries no __CFBundleIdentifier: its TERM_PROGRAM, or its REX_BLOCK alone, names Rex
+  // (docs/specs/2026-11-25-dial-rex.md).
+  it('an agent in a Rex block brings Rex', async () => {
+    for (const hints of [{ TERM_PROGRAM: 'rex', REX_BLOCK: 'x' }, { REX_BLOCK: 'x' }] as Array<Record<string, string>>) {
+      expect(bundleOf(detectHost(hints), hints), JSON.stringify(hints)).toBe('com.superlogical.rex')
+      const { calls, opener } = recorder()
+      expect(await opener.open('a1', target(hints))).toBe(true)
+      expect(calls).toEqual([forward('com.superlogical.rex')])
+    }
+  })
+
   it('an app with no known bundle id opens nothing', async () => {
     const { calls, opener } = recorder()
-    const none: Array<Record<string, string>> = [{}, { TERM_PROGRAM: 'tmux' }, { ZELLIJ: '0' }, { REX_BLOCK: 'x' }, { __CFBundleIdentifier: 'com.example.unknown' }]
+    const none: Array<Record<string, string>> = [{}, { TERM_PROGRAM: 'tmux' }, { ZELLIJ: '0' }, { __CFBundleIdentifier: 'com.example.unknown' }]
     for (const hints of none) {
       expect(opener.can('a1', target(hints)), JSON.stringify(hints)).toBe(false)
       expect(await opener.open('a1', target(hints))).toBe(false)
@@ -832,10 +843,16 @@ describe('a pick on the dial brings its app forward', () => {
 
   it('bring of herdr, of an app with no bundle and of a name no app has runs nothing', async () => {
     const { calls, opener } = recorder()
-    for (const app of ['herdr', 'tmux', 'rex', 'zellij', 'terminal', 'constructor', '__proto__', 'toString']) {
+    for (const app of ['herdr', 'tmux', 'zellij', 'terminal', 'constructor', '__proto__', 'toString']) {
       expect(await opener.bring!(app), app).toBeUndefined()
     }
     expect(calls).toEqual([])
+  })
+
+  it('bring of Rex runs open -b com.superlogical.rex', async () => {
+    const { calls, opener } = recorder()
+    expect(await opener.bring!('rex')).toBe('ok')
+    expect(calls).toEqual([forward('com.superlogical.rex')])
   })
 
   // herdr's ring holds Herdr.app's agents too (docs/plans/2026-11-16-herdr-app-design.md): their window is Herdr's.

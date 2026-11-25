@@ -66,6 +66,8 @@ if '#define PANE_RESULT_BYTES ' in source:
 code += face_geometry(source)
 code += source[source.index('typedef enum {'):source.index('static EXT_RAM_BSS_ATTR struct {')]
 code += typedef('cable_swarm_t') + typedef('cable_notif_t') + typedef('cable_app_t')
+screens = (native / '../ui_screens.h').read_text()
+code += re.search(r'typedef enum \{[^}]*\} ui_link_hint_t;', screens).group(0) + '\n'
 code += r'''
 static struct {
     bool ready, connected, loading, voice_open, voice_start_pending, voice_waiting, voice_carry, voice_review, voice_draft_append, voice_review_preview, voice_search;
@@ -79,6 +81,7 @@ static struct {
     uint32_t touch_started, coast_until, character_activity, pet_until, nap_until, last_celebration;
     uint32_t voice_retry_until, error_until;
     char hint[40];
+    ui_link_hint_t link_hint;
     bool machine_view;
     cable_app_t apps[CABLE_MAX_APPS];
     int app_count;
@@ -232,7 +235,7 @@ code += function('color')
 code += function('settings_item') + function('settings_count') + function('hit_contains')
 code += function('find')
 code += 'static void notice_expire(uint32_t now);\n'
-for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'activity_text', 'host_name', 'face_app', 'agent_allows', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'face_id', 'tab_id_at', 'tabs_open', 'app_index', 'apps_open', 'hold_picks_app', 'apps_switch', 'apps_from_switch', 'hold_open', 'app_pick', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
+for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'activity_text', 'host_name', 'face_app', 'agent_allows', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'face_id', 'tab_id_at', 'tabs_open', 'app_index', 'apps_open', 'hold_picks_app', 'apps_switch', 'apps_from_switch', 'hold_open', 'app_pick', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload', 'ui_set_link_hint']:
     code += function(name)
 code += function('render_settings') + function('ui_visit_state')
 code += function('ui_project_known') + function('ui_focus_project') + function('ui_apply_pending_focus')
@@ -2270,12 +2273,41 @@ int main(int argc, char **argv) {
     assert(abs(brand.x*2+brand.w-466)<=1);
     tap(1000,233,220); assert(!starts);
     surface_tick(1500); assert(!character.motion.running);
+    // Not connected, the wordmark says where the dial is stuck: one dim line or two under it, no target.
+    {
+        static const struct { ui_link_hint_t hint; const char *copy, *name; } hints[] = {
+            {UI_LINK_HINT_NO_COMPUTER, "No computer found. Check the USB cable.", "offline-no-computer"},
+            {UI_LINK_HINT_OPEN_APP, "Open Harness Device on your computer.", "offline-open-app"},
+        };
+        for (size_t k = 0; k < sizeof hints / sizeof hints[0]; k++) {
+            assert(ui_can_display(hints[k].copy, UI_FONT, 336, 2));
+            unsigned before = changes;
+            ui_set_link_hint(hints[k].hint); assert(changes == before + 1);
+            scene_take(); portrait(dir, hints[k].name);
+            assert(scene.count >= 2 && scene.count <= 3 && !strcmp(scene.runs[0].text,"Harness") && !s.hit_count);
+            char shown[160] = "";
+            for (int i = 1; i < scene.count; i++) {
+                assert(scene.runs[i].fg == DIM);
+                ht_rect_t line = ht_run_bounds(&scene.runs[i]);
+                int dx = line.x+line.w-233, dy = line.y+line.h-233;   // its far bottom corner stays on the glass
+                assert(abs(line.x*2+line.w-466)<=1 && line.y >= brand.y+brand.h && dx*dx+dy*dy <= 230*230);
+                if (i > 1) strcat(shown, " ");
+                strcat(shown, scene.runs[i].text);
+            }
+            assert(!strcmp(shown, hints[k].copy));
+        }
+        ui_set_link_hint(UI_LINK_HINT_NONE); scene_take();
+        assert(scene.count==1 && !strcmp(scene.runs[0].text,"Harness"));
+        // Loading or updating, the wordmark stands alone whatever the hint.
+        ui_set_link_hint(UI_LINK_HINT_OPEN_APP);
+        s.loading=true; scene_take(); assert(scene.count==1 && !strcmp(scene.runs[0].text,"Harness"));
+    }
     // Handshake alone is not ready: retain the wordmark until the roster lands.
     s.connected=true; s.loading=true; scene_take(); portrait(dir,"connecting");
     assert(scene.count==1 && !strcmp(scene.runs[0].text,"Harness") && !s.hit_count);
     surface_tick(2000); assert(!character.motion.running);
     ui_land_after_reload(); scene_take(); assert(scene.count>1);
-    s.view=OTA; scene_take(); portrait(dir,"updating");
+    s.connected=false; s.view=OTA; scene_take(); portrait(dir,"updating");
     assert(scene.count==1 && !strcmp(scene.runs[0].text,"Harness") && !s.hit_count);
     reset(); s.count=0; s.active=-1; scene_take();
     tap(1000,233,220); assert(!starts);

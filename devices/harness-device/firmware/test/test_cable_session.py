@@ -8,6 +8,7 @@ import tempfile
 main = Path(__file__).resolve().parent / '../main'
 client = (main / 'cable_client.c').read_text()
 link = (main / 'cable_link.c').read_text()
+screens = (main / 'ui/ui_screens.h').read_text()
 
 def function(source, name):
     match = re.search(r'^[^\n]*\b' + name + r'\([^;]*?\)\n\{.*?^\}', source, re.M | re.S)
@@ -68,6 +69,17 @@ typedef int cable_agent_t;
 static cable_agent_t *s_agents;
 static int64_t esp_timer_get_time(void) { return now; }
 static void fw_update_tick(void) {}
+'''
+# The wordmark's hint: the production enum and wait, the session layer's state, and a fake USB host and screen.
+code += re.search(r'typedef enum \{[^}]*\} ui_link_hint_t;', screens).group(0) + '\n'
+code += re.search(r'^#define OPEN_APP_HINT_MS\s+\d+', client, re.M).group(0) + '\n'
+code += r'''
+static bool s_usb_host, usb_host = true;
+static int64_t s_alone_since_us;
+static ui_link_hint_t s_link_hint, hint_shown;
+static unsigned hint_calls;
+static bool usb_serial_jtag_is_connected(void) { return usb_host; }
+static void ui_set_link_hint(ui_link_hint_t hint) { hint_calls++; hint_shown = hint; }
 static void ui_set_connected(bool value) { connected = value; }
 static void session_down(const char *why) {
     (void)why; assert(owner == 1); down_count++; s_session = false; connected = false;
@@ -156,6 +168,23 @@ int main(void) {
     s_tick = counted_tick; owner = 1;
     if (!setjmp(loop_done)) reader_task(NULL);
     assert(ticks == 4 && frames == 3 && down_count == 1);
+    // The wordmark's hint: one call per change, never one per tick.
+    int64_t t = INT64_C(100000000);
+    s_session = false; hint_calls = 0; usb_host = false;
+    now = t; session_tick(NULL); assert(hint_shown == UI_LINK_HINT_NO_COMPUTER && hint_calls == 1);
+    now = t += 100000; session_tick(NULL); assert(hint_calls == 1);
+    // The host is back but no daemon has spoken: the wordmark alone for 5 s, then "open the app".
+    usb_host = true; now = t += 100000; session_tick(NULL); assert(hint_shown == UI_LINK_HINT_NONE && hint_calls == 2);
+    now = t + 4900000; session_tick(NULL); assert(hint_shown == UI_LINK_HINT_NONE && hint_calls == 2);
+    now = t + 5000000; session_tick(NULL); assert(hint_shown == UI_LINK_HINT_OPEN_APP && hint_calls == 3);
+    now = t + 5100000; session_tick(NULL); assert(hint_calls == 3);
+    now = t += 5100000; s_session = true; s_last_rx_us = now;
+    session_tick(NULL); assert(hint_shown == UI_LINK_HINT_NONE && hint_calls == 4);
+    now = t + 100000; session_tick(NULL); assert(hint_calls == 4);
+    // Silence ends the session: the 5 s count starts there, not at the last frame.
+    now = t += 15000001; session_tick(NULL); assert(!s_session && down_count == 2 && hint_calls == 4);
+    now = t + 4900000; session_tick(NULL); assert(hint_calls == 4);
+    now = t + 5000000; session_tick(NULL); assert(hint_shown == UI_LINK_HINT_OPEN_APP && hint_calls == 5);
     owner = 0; s_running = false; connected = false;
     vSemaphoreDelete(s_tx_lock);s_tx_lock=NULL;usb_serial_jtag_driver_uninstall();
     fail_driver = true; assert(!cable_link_start(on_frame,session_tick,NULL));
@@ -166,7 +195,7 @@ int main(void) {
     free(s_agents);
     vSemaphoreDelete(s_agents_lock);vSemaphoreDelete(s_models_sem);vTaskDelete(hello_handle);
     assert(!live&&!hellos);
-    puts("USB session: seven startup failures/retries, idempotence, early welcome, idle/error reads, timeout/reconnect and 64-bit wrap PASS");
+    puts("USB session: seven startup failures/retries, idempotence, early welcome, idle/error reads, timeout/reconnect, 64-bit wrap and the wordmark hint PASS");
 }
 '''
 with tempfile.TemporaryDirectory(prefix='harness-cable-session-') as folder:

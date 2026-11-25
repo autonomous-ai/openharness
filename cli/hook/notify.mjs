@@ -552,6 +552,10 @@ function postObserved(port, body) {
  * another terminal: it is sent from the default session alone. And on macOS alone: hc runs on Linux too, but macOS is
  * the one platform the devices try Herdr's window on (Q5).
  *
+ * REX_BLOCK and REX_SESSION are Rex's ids of the block (pane) the agent runs in and of the session holding it
+ * (`block:<uuid>`, `session:<uuid>`), which `rex send -s <session> -b <block>` targets: ids, no credential. REX_SESSION
+ * is sent only for a session on this home's own Rex server (onOwnRexServer), and whole.
+ *
  * CMUX_SURFACE_ID and CMUX_WORKSPACE_ID are cmux's ids of the terminal and the workspace it sits in (UUIDs): ids, no
  * credential. cmux sets TERM_PROGRAM=ghostty, so without them an agent in cmux reads as Ghostty's. Sent on macOS alone,
  * the one platform cmux runs on. cmux sets CMUX_SOCKET_PASSWORD and other CMUX_ names there too, and they must never
@@ -599,13 +603,26 @@ function postObserved(port, body) {
  *   source): their apps. Those names are sent as they are, but a multiplexer inside them (herdr) is the nearer host, and
  *   its own bundle names no window a tap can raise there (cable/hosts/windowsRaise.ts WINDOWS_APPS).
  */
-const HOST_HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'ZELLIJ_PANE_ID',
-  'ZELLIJ_SESSION_NAME', 'TMUX_PANE', 'HC_TERMINAL_ID', 'CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID', 'KITTY_WINDOW_ID',
-  'KITTY_LISTEN_ON', 'WEZTERM_PANE', 'ORCA_TERMINAL_HANDLE', 'ORCA_AGENT_SESSION_ID', 'CLAUDE_CODE_HOST_SESSION_ID',
-  'CLAUDE_CODE_ENTRYPOINT']
+const HOST_HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'REX_SESSION', 'ZELLIJ',
+  'ZELLIJ_PANE_ID', 'ZELLIJ_SESSION_NAME', 'TMUX_PANE', 'HC_TERMINAL_ID', 'CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID',
+  'KITTY_WINDOW_ID', 'KITTY_LISTEN_ON', 'WEZTERM_PANE', 'ORCA_TERMINAL_HANDLE', 'ORCA_AGENT_SESSION_ID',
+  'CLAUDE_CODE_HOST_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT']
 /** The hints a cut would turn into another pane, session or socket (see HOST_HINTS): sent whole or not at all. */
-const WHOLE_HINTS = ['ZELLIJ_PANE_ID', 'ZELLIJ_SESSION_NAME', 'KITTY_LISTEN_ON',
+const WHOLE_HINTS = ['REX_SESSION', 'ZELLIJ_PANE_ID', 'ZELLIJ_SESSION_NAME', 'KITTY_LISTEN_ON',
   'CLAUDE_CODE_HOST_SESSION_ID']
+
+/**
+ * Whether a Rex block's session is on the Rex server the devices reach: this home's own, the one `rex` reaches with no
+ * flag (docs/specs/2026-11-25-dial-rex.md). REX_SERVER, the socket's URL, is too long to send (73 characters in a home
+ * of 10), and on another server (shared, remote, a login server) the same session id names nothing, or another session:
+ * so the hook decides here and sends REX_SESSION only for this server, as a named herdr session sends no pane id. macOS
+ * only, where the Rex app runs.
+ */
+function onOwnRexServer() {
+  if (process.platform !== 'darwin') return false
+  const server = process.env.REX_SERVER
+  return !server || server === `unix://${encodeURI(join(homedir(), 'Library', 'Application Support', 'rex', 'server.sock'))}`
+}
 /** The core's observed route takes no more (core/observedHook.ts MAX_HINTS, which hookNotify.spec.ts keeps this equal to). */
 const MAX_HINTS = 10
 
@@ -623,6 +640,8 @@ function hostHints(appBundle) {
     // herdr sets HERDR_SESSION in its panes alone (herdr 0.8.0): the devices follow the default session, where this id
     // would be another agent's pane. Skipped before the cap counts it, so it costs no other hint its place.
     if (name === 'HERDR_PANE_ID' && process.env.HERDR_SESSION) continue
+    // A Rex session on a server the devices do not reach (onOwnRexServer). Skipped before the cap counts it too.
+    if (name === 'REX_SESSION' && !onOwnRexServer()) continue
     // The same for a named hc session's terminal address (see HOST_HINTS), and off macOS, where the devices do not try
     // Herdr. And in a herdr pane, the nearer host: a named herdr session sends no HERDR_PANE_ID above, and the address
     // alone would read as Herdr's own terminal (hostDetect.ts inHerdr).

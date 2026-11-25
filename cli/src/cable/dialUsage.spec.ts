@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   DIAL_FILE_METRICS, DIAL_FLAG_METRICS, DIAL_USAGE_AGENTS_MAX, type DialFileMetric, type DialUsageSink,
 } from '../lib/dialUsageContract.js'
-import { createDialUsage, dialEngine, dialHost, type DialAgent, type HookedAgent } from './dialUsage.js'
+import { createDialUsage, dialEngine, dialHost, type DialAgent, type DialUsage, type HookedAgent } from './dialUsage.js'
 
 const T0 = Date.parse('2026-11-23T10:00:00Z')
 const DAY_MS = 86_400_000
@@ -33,19 +33,21 @@ function fileSink() {
 
 function rig(agents: Record<string, DialAgent> = { a: tmuxClaude, b: orcaCodex }, { sink, added } = fileSink()) {
   const logs: string[] = []
-  // The agents at work: none unless a test says so.
+  // The agents at work, and those whose own app is not in front: none unless a test says so.
   const working = new Set<string>()
+  const away = new Set<string>()
   const usage = createDialUsage({
     sink,
     now: Date.now,
     after: (ms, run) => { const timer = setTimeout(run, ms); return () => clearTimeout(timer) },
     describe: id => agents[id],
     working: id => working.has(id),
+    away: id => away.has(id),
     log: line => logs.push(line),
   })
   const count = (metric: string) => added.filter(m => m === metric).length
   const prefixed = (prefix: string) => added.filter(m => m.startsWith(prefix))
-  return { usage, added, count, prefixed, agents, logs, working }
+  return { usage, added, count, prefixed, agents, logs, working, away }
 }
 
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(T0) })
@@ -683,10 +685,11 @@ describe('createDialUsage', () => {
   })
 
   it('every name it adds is in DIAL_FILE_METRICS', () => {
-    const { usage, added } = rig({
+    const { usage, added, away } = rig({
       a: tmuxClaude, b: orcaCodex,
       'secret-agent-id': { engine: 'unheard', host: 'some-new-host', page: 'terminal', held: true },
     })
+    for (const id of ['a', 'b', 'secret-agent-id', 'missing']) away.add(id)
     usage.agentsPresent(true)
     usage.attached(true)
     usage.used()
@@ -703,6 +706,9 @@ describe('createDialUsage', () => {
       usage.waitOpened(id, id)
       usage.tapped(id)
       usage.waitEnded(id, 'answered')
+      usage.turnEnded(id)
+      usage.turnAnnounced(id)
+      usage.turnStarted(id, true)
     }
     usage.voiceEnded({ outcome: 'sent', agentId: 'a', since: Date.now() })
     vi.advanceTimersByTime(DAY_MS)
@@ -710,5 +716,178 @@ describe('createDialUsage', () => {
     expect(added.length).toBeGreaterThan(30)
     expect(added.filter(m => !known.has(m))).toEqual([])
     expect(added.filter(m => m.includes('secret'))).toEqual([])
+  })
+})
+
+describe('the value from the dial', () => {
+  /** The value names added, each once: a flag is added at every count beside it, which the sink holds at 1 a day. */
+  const named = (added: DialFileMetric[]) => [...new Set(added.filter(m => m.startsWith('dial_value_')))].sort()
+  /** Its end's card came, then the dial rang or listed it. */
+  const announce = (usage: DialUsage, agentId: string) => {
+    usage.turnEnded(agentId)
+    usage.turnAnnounced(agentId)
+  }
+
+  it('a ring answered within 2 min counts in both, within 10 min in 10m, past it in neither, each with its flags', () => {
+    const { usage, count, added } = rig()
+    usage.attached(true)
+    for (const elapsed of [119_999, 120_000, 599_999, 600_000]) {
+      usage.waitOpened('k', 'a')
+      vi.advanceTimersByTime(elapsed)
+      usage.waitEnded('k', 'answered')
+    }
+    // An agent that goes answered nothing.
+    usage.waitOpened('k', 'a')
+    usage.waitEnded('k', 'gone')
+    expect(count('dial_value_ring_answered_2m')).toBe(1)
+    expect(count('dial_value_ring_answered_10m')).toBe(3)
+    expect(named(added)).toEqual(['dial_value_installation_days', 'dial_value_ring_answered_10m',
+      'dial_value_ring_answered_10m_installation_days', 'dial_value_ring_answered_2m',
+      'dial_value_ring_answered_2m_installation_days'])
+  })
+
+  it('away is read at the ring: its app in front by the answer still counts away, and the other way round', () => {
+    const { usage, count, away } = rig()
+    usage.attached(true)
+    away.add('a')
+    usage.waitOpened('k1', 'a')
+    away.delete('a')
+    vi.advanceTimersByTime(300_000)
+    usage.waitEnded('k1', 'answered')
+    usage.waitOpened('k2', 'a')
+    away.add('a')
+    usage.waitEnded('k2', 'answered')
+    expect(count('dial_value_ring_away_answered_2m')).toBe(0)
+    expect(count('dial_value_ring_away_answered_10m')).toBe(1)
+    expect(count('dial_value_ring_away_answered_10m_installation_days')).toBe(1)
+    expect(count('dial_value_ring_answered_10m')).toBe(2)
+    usage.waitOpened('k3', 'a')
+    usage.waitEnded('k3', 'answered')
+    expect(count('dial_value_ring_away_answered_2m')).toBe(1)
+    expect(count('dial_value_ring_away_answered_2m_installation_days')).toBe(1)
+  })
+
+  it('with no dial attached nothing rings and nothing is announced', () => {
+    const { usage, prefixed, away } = rig()
+    away.add('a')
+    usage.waitOpened('k', 'a')
+    usage.waitEnded('k', 'answered')
+    announce(usage, 'a')
+    usage.turnStarted('a', true)
+    usage.attached(true)
+    usage.turnStarted('a', true)
+    expect(prefixed('dial_value_')).toEqual([])
+  })
+
+  it('a turn end announced away, then the person\'s prompt within 10 min', () => {
+    const { usage, count, away, added } = rig()
+    usage.attached(true)
+    away.add('a')
+    announce(usage, 'a')
+    vi.advanceTimersByTime(599_999)
+    usage.turnStarted('a', true)
+    expect(count('dial_value_done_away_prompted_10m')).toBe(1)
+    expect(named(added)).toEqual(['dial_value_done_away_prompted_10m', 'dial_value_done_away_prompted_10m_installation_days',
+      'dial_value_installation_days'])
+    // That turn spent it.
+    usage.turnStarted('a', true)
+    announce(usage, 'a')
+    vi.advanceTimersByTime(600_000)
+    usage.turnStarted('a', true)
+    // Its app in front at the announcement.
+    away.delete('a')
+    announce(usage, 'a')
+    away.add('a')
+    usage.turnStarted('a', true)
+    expect(count('dial_value_done_away_prompted_10m')).toBe(1)
+  })
+
+  it('a turn whose source cannot be told counts nothing, and ends the announcement', () => {
+    const { usage, prefixed, away } = rig()
+    usage.attached(true)
+    away.add('a')
+    announce(usage, 'a')
+    usage.turnStarted('a')
+    usage.turnStarted('a', true)
+    expect(prefixed('dial_value_')).toEqual([])
+  })
+
+  it('an end announced after the agent\'s next turn started was that start\'s: no later prompt counts', () => {
+    const { usage, prefixed, away } = rig()
+    usage.attached(true)
+    away.add('a')
+    usage.turnEnded('a')
+    // A message queued while it worked starts the next turn as the summary waits behind its done.
+    usage.turnStarted('a', true)
+    usage.turnAnnounced('a')
+    usage.turnStarted('a', true)
+    expect(prefixed('dial_value_')).toEqual([])
+  })
+
+  it('at most 16 ends wait for their announcement, the oldest dropped first; a stop drops them', () => {
+    const ids = Array.from({ length: 17 }, (_, i) => `d${i}`)
+    const { usage, count, away } = rig(Object.fromEntries(ids.map(id => [id, tmuxClaude])))
+    usage.attached(true)
+    for (const id of ids) { away.add(id); usage.turnEnded(id) }
+    for (const id of ids) usage.turnAnnounced(id)
+    usage.turnStarted('d0', true)
+    expect(count('dial_value_done_away_prompted_10m')).toBe(0)
+    usage.turnStarted('d1', true)
+    expect(count('dial_value_done_away_prompted_10m')).toBe(1)
+    usage.turnEnded('d2')
+    usage.stop()
+    usage.attached(true)
+    usage.turnAnnounced('d2')
+    usage.turnStarted('d2', true)
+    expect(count('dial_value_done_away_prompted_10m')).toBe(1)
+  })
+
+  it('the dial\'s voice is the person\'s prompt, waiting as its turn starts or begun before a turn it started', () => {
+    const { usage, count, away } = rig()
+    usage.attached(true)
+    away.add('a')
+    away.add('b')
+    announce(usage, 'a')
+    usage.voiceEnded({ outcome: 'sent', agentId: 'a', since: Date.now() })
+    usage.turnStarted('a')
+    expect(count('dial_value_done_away_prompted_10m')).toBe(1)
+
+    // The turn starts before the send returns: it is the voice's, and so is the announcement's prompt.
+    announce(usage, 'b')
+    const since = Date.now()
+    usage.turnStarted('b')
+    vi.advanceTimersByTime(500)
+    usage.voiceEnded({ outcome: 'sent', agentId: 'b', since })
+    expect(count('dial_voice_delivered')).toBe(2)
+    expect(count('dial_value_done_away_prompted_10m')).toBe(2)
+
+    // A turn the hook says the dial's words started counts once, though the voice's send returns after it.
+    announce(usage, 'a')
+    const later = Date.now()
+    usage.turnStarted('a', true)
+    usage.voiceEnded({ outcome: 'sent', agentId: 'a', since: later })
+    expect(count('dial_voice_delivered')).toBe(3)
+    expect(count('dial_value_done_away_prompted_10m')).toBe(3)
+
+    // A voice whose turn never starts prompted nothing.
+    announce(usage, 'a')
+    usage.voiceEnded({ outcome: 'sent', agentId: 'a', since: Date.now() })
+    vi.advanceTimersByTime(10_000)
+    expect(count('dial_value_done_away_prompted_10m')).toBe(3)
+  })
+
+  it('at most 16 announcements are kept, the oldest dropped first; a stop drops them', () => {
+    const ids = Array.from({ length: 17 }, (_, i) => `d${i}`)
+    const { usage, count, away } = rig(Object.fromEntries(ids.map(id => [id, tmuxClaude])))
+    usage.attached(true)
+    for (const id of ids) { away.add(id); announce(usage, id) }
+    usage.turnStarted('d0', true)
+    expect(count('dial_value_done_away_prompted_10m')).toBe(0)
+    usage.turnStarted('d1', true)
+    expect(count('dial_value_done_away_prompted_10m')).toBe(1)
+    usage.stop()
+    usage.attached(true)
+    usage.turnStarted('d2', true)
+    expect(count('dial_value_done_away_prompted_10m')).toBe(1)
   })
 })

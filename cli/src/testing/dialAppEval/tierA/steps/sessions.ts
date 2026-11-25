@@ -123,7 +123,10 @@ const fromTerminal = (world: TierAWorld): boolean => world.scenario.world?.launc
  *
  * An Orca agent (the plan's Decision 4): Orca's agent session everywhere, and its pane's handle unless its hooks name
  * none or it is a chat, which no terminal holds; macOS adds Orca's bundle id. Under tmux the hook adds tmux's pane, as a
- * tmux started in the pane hands its agents Orca's variables; the hook keeps no TMUX. No TERM_PROGRAM, as Orca sets none.
+ * tmux started in the pane hands its agents Orca's variables; the hook keeps no TMUX. Orca's TERM_PROGRAM in its
+ * terminals, as Orca sets it in every terminal it spawns (stablyai/orca src/main/daemon/pty-subprocess/spawn-environment.ts,
+ * local-pty-spawn-environment.ts); in tmux, tmux's, as tmux sets its own in its panes. A chat's none: Orca drives it from
+ * its provider over stream-json, on no terminal.
  *
  * An iTerm2 tab's agent (docs/plans/2026-11-22-dial-eval-iterm2-plan.md, Decision 8): iTerm2's TERM_PROGRAM and its
  * bundle id, as iTerm2 gives every shell it starts. In tmux, tmux's TERM_PROGRAM and its pane, beside the bundle id the
@@ -141,6 +144,7 @@ function hintsOf(world: TierAWorld, s: SessionDef): Record<string, string> {
   if (s.app === 'orca') {
     const handle = hookHandle(s, stateOf(world).orcaLaunch)
     return {
+      ...(s.chat === undefined ? { TERM_PROGRAM: s.tmux ? 'tmux' : 'Orca' } : {}),
       ORCA_AGENT_SESSION_ID: orcaAgentSessionId(s.key),
       ...(handle === undefined ? {} : { ORCA_TERMINAL_HANDLE: handle }),
       ...(platform === 'darwin' ? { __CFBundleIdentifier: APP_BUNDLES.orca } : {}),

@@ -24,6 +24,7 @@ import { OPENCODE_MESSAGE, opencodeClientDeps, type OpencodeAnswer, type Opencod
 import { OpencodeSource } from '../cable/hosts/opencodeSource.js'
 import { MAX_TEXT, type OrcaChild, type OrcaReads, type OrcaTabs, type OrcaTerminal } from '../cable/hosts/orca.js'
 import { ORCA_CHAT_TIMEOUT_MS } from '../cable/hosts/orcaChatSource.js'
+import type { RexPane, RexReads } from '../cable/hosts/rex.js'
 import { FRESH_WITHIN_MS } from '../cable/hosts/outer.js'
 import { AppRings } from '../cable/hosts/select.js'
 import { env } from '../config/env.js'
@@ -214,6 +215,8 @@ const readers = vi.hoisted(() => ({
   bundleId: vi.fn(async (_bundle: string): Promise<string | undefined> => undefined),
   /** The pids whose process ended: every other one runs. */
   ended: new Set<number>(),
+  // Windows' process table, as the PTY host gives it: none unless a spec gives one.
+  listProcesses: vi.fn(async () => [] as Array<{ pid: number; ppid: number; executable: string; args: string }>),
 }))
 vi.mock('../lib/sessionSearch/external.js', async (real) => ({
   ...await real<typeof import('../lib/sessionSearch/external.js')>(),
@@ -234,7 +237,7 @@ vi.mock('../lib/sessionSearch/external.js', async (real) => ({
 }))
 vi.mock('../lib/sessionSearch/externals/support.js', async (real) => ({
   ...await real<typeof import('../lib/sessionSearch/externals/support.js')>(),
-  listProcesses: async () => [],
+  listProcesses: readers.listProcesses,
   processAlive: (pid: number) => !readers.ended.has(pid),
   fileStamp: async () => null,
 }))
@@ -616,6 +619,7 @@ beforeEach(() => {
   readers.record.mockResolvedValue({})
   readers.processes.mockResolvedValue([])
   readers.bundleId.mockResolvedValue(undefined)
+  readers.listProcesses.mockResolvedValue([])
   processTable.rows = []
   processTable.reads = 0
   processTable.held = false
@@ -634,7 +638,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; agentsRead?: DevicesDeps['agentsRead']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; cmuxEvents?: DevicesDeps['cmuxEvents']; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; storePackageFolder?: DevicesDeps['storePackageFolder']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string; raise?: DevicesDeps['raise'] | null; windowsRaise?: DevicesDeps['windowsRaise'] | null; transcribe?: DevicesDeps['transcribe']; watchStore?: DevicesDeps['watchStore'] } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; agentsRead?: DevicesDeps['agentsRead']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; cmuxEvents?: DevicesDeps['cmuxEvents']; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; storePackageFolder?: DevicesDeps['storePackageFolder']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string; raise?: DevicesDeps['raise'] | null; windowsRaise?: DevicesDeps['windowsRaise'] | null; transcribe?: DevicesDeps['transcribe']; watchStore?: DevicesDeps['watchStore']; rexReads?: DevicesDeps['rexReads']; rex?: DevicesDeps['rex'] } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   const apps = over.orca ?? orca
   // None, and no read under way, unless the spec gives its own; null leaves the devices to read this computer's.
@@ -654,6 +658,9 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     agentsRead: over.agentsRead,
     orca: apps,
     orcaReads: over.orcaReads ?? inertOrcaReads,
+    // Unset: built on `orca`'s runner, which runs nothing, and this computer's `rex`, which is then never run.
+    rexReads: over.rexReads,
+    rex: over.rex,
     codex: over.codex ?? codex,
     herdr: over.herdr ?? herdr,
     hc: over.hc ?? hc,
@@ -2276,6 +2283,32 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     expect(await poll).toEqual({})
   })
 
+  // The answer was sent raw, and the dial drew `**` and `##` in its headline (2026-11-25): it is cut as a Harness agent's
+  // turn is (lib/deviceRecap.ts deriveAnswerCard), and one with no prose rings no summary.
+  it("an observed answer's markdown is gone from the summary's headline and text, and an answer with no prose sends none", async () => {
+    vi.useFakeTimers()
+    readers.answer.mockResolvedValue('## Kết quả\n\n**Xong**: tất cả `12` test đều qua.')
+    const { port } = start()
+    port.observed(hook('turn-start'))
+    port.observed(hook('turn-stop'))
+    await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+    const [[, recap, text, , fullText]] = calls('summary') as Array<[string, string, string, string, string]>
+    // The headline opens on the first line of prose, as a Harness agent's (deriveTurnSummary).
+    expect(recap).toBe('Xong: tất cả 12 test đều qua.')
+    expect(text).toContain('Xong: tất cả 12 test đều qua.')
+    for (const shown of [recap, text]) expect(shown).not.toMatch(/\*\*|`|##/)
+    expect(fullText).toBe('## Kết quả\n\n**Xong**: tất cả `12` test đều qua.')
+    expect(await host().recentSummaries(ID)).toEqual([{ recap, text, fullText, ask: '' }])
+
+    readers.answer.mockResolvedValue('```\n```')
+    port.observed(hook('turn-start'))
+    port.observed(hook('turn-stop'))
+    await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+    expect(calls('turnDone')).toHaveLength(2)
+    expect(calls('summary')).toHaveLength(1)
+    expect(await host().recentSummaries(ID)).toEqual([])
+  })
+
   it('observed turn-stop reaches the dial as turn.done and summary with the last answer', async () => {
     vi.useFakeTimers()
     readers.answer.mockResolvedValue('All 12 tests pass.')
@@ -3244,6 +3277,46 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       ['/opt/orca/bin/orca', ['terminal', 'switch', '--terminal', HANDLE, '--json'], 10_000],
     ])
     expect(said()).toEqual(['[device] voice · orca'])
+  })
+
+  // On Windows the maker is read from the PTY host's process table, past the shells between (scannedApp.ts
+  // windowsPtyOwner): the caller 4242 in a shell that [maker] made, none when the table was not read.
+  const onWindows = (maker?: string) => {
+    readers.listProcesses.mockResolvedValue(maker === undefined ? [] : [{ pid: 4242, ppid: 4000, executable: 'claude.exe', args: '' },
+      { pid: 4000, ppid: 3900, executable: 'pwsh.exe', args: '' }, { pid: 3900, ppid: 1, executable: maker, args: '' }])
+    const { port } = startHere({ orca: { ...orca, platform: 'win32' } })
+    port.observed(hook('session-start', { hostHints: { ORCA_TERMINAL_HANDLE: HANDLE } }))
+    attach(port)
+  }
+  const orcaSends = () => orcaRuns.filter(([, args]) => args[0] === 'terminal' && args[1] === 'send')
+
+  it('on Windows an agent in a shell Orca made takes its words', async () => {
+    onWindows('C:\\Users\\someone\\AppData\\Local\\Programs\\Orca\\Orca.exe')
+    await landed()
+    expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
+    expect(orcaSends()).toEqual([
+      ['/opt/orca/bin/orca', ['terminal', 'send', '--terminal', HANDLE, '--text=run the tests', '--enter', '--wait-submit', '5', '--json'], 10_000],
+    ])
+    expect(said()).toEqual(['[device] voice · orca'])
+    expect(readers.processes).not.toHaveBeenCalled()
+    expect(readers.tty).not.toHaveBeenCalled()
+  })
+
+  it('on Windows an agent in a terminal another program made inside Orca is held', async () => {
+    onWindows('Code.exe')
+    await landed()
+    expect(await host().sendTurn(ID, 'run the tests')).not.toEqual({ ok: true })
+    expect(orcaSends()).toEqual([])
+    expect(said().filter((line) => line === '[device] orca · held')).toEqual(['[device] orca · held'])
+    expect(logs.filter((line) => line.includes('Code.exe'))).toEqual([])
+  })
+
+  it('on Windows a table not read keeps the pane held and is logged', async () => {
+    onWindows()
+    await landed()
+    expect(await host().sendTurn(ID, 'run the tests')).not.toEqual({ ok: true })
+    expect(orcaSends()).toEqual([])
+    expect(logs.filter((line) => line.startsWith('[observed] pty · not read · '))).toEqual(['[observed] pty · not read · Error'])
   })
 
   // On macOS a tap brings the agent's app forward by its bundle id (cable/hosts/open.ts); every run here is recorded.
@@ -15330,6 +15403,123 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
       expect(await counted(port)).toMatchObject({ dial_voice_interrupted_10s: 1, dial_voice_host_orca_interrupted_10s: 1 })
     })
   })
+
+  describe('the value from the dial', () => {
+    /** The value counts alone. */
+    const values = async (port: DevicesPort): Promise<Record<string, number>> =>
+      Object.fromEntries(Object.entries(await counted(port)).filter(([name]) => name.startsWith('dial_value_')))
+
+    // Away: the agent's own app is known and another app is in front. Anything unknown is not away.
+    it('a ring is away when the agent\'s app is known and another is in front', async () => {
+      vi.useFakeTimers()
+      const { port } = start({ faults: ['fleet'] })
+      port.observed(hook('session-start'))
+      // In Zed, which has no page of its own: its app is not known.
+      const zed = { sessionId: 'sess-2', hostHints: { __CFBundleIdentifier: 'dev.zed.Zed' } }
+      port.observed(hook('session-start', zed))
+      await attach(port)
+      const ring = async (over: Partial<ObservedHookEvent> = {}) => {
+        const sessionId = over.sessionId ?? 'sess-1'
+        port.observed(hook('turn-start', over))
+        port.observed({ engine: 'claude', sessionId, event: 'asked', tool: 'Bash', summary: 'npm test', cwd: '/work/api' })
+        port.observed(hook('turn-stop', over))
+        await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+      }
+      // Nothing in front yet.
+      await ring()
+      host().front('vscode')
+      await ring()
+      await ring(zed)
+      host().front('orca')
+      await ring()
+      expect(await values(port)).toMatchObject({ dial_value_ring_answered_2m: 4, dial_value_ring_away_answered_2m: 1,
+        dial_value_ring_away_answered_10m: 1, dial_value_installation_days: 1 })
+    })
+
+    it('a turn end the dial announced with its app not in front, then a voice: alert, list and a failed turn, not silent', async () => {
+      const { port } = start({ core: harnessAgent(), faults: ['fleet'] })
+      await attach(port)
+      host().front('vscode')
+      let cards = 0
+      const prompted = async (payload: Record<string, unknown>, sent: 'summary' | 'turnError' = 'summary') => {
+        port.card({ type: 'commander_event', agentId: 'h1', payload })
+        cards++
+        await vi.waitFor(() => expect(calls('summary').length + calls('turnError').length).toBe(cards))
+        expect(calls(sent).length).toBeGreaterThan(0)
+        seen.host.voiceEnded!({ outcome: 'sent', agentId: 'h1', since: Date.now() })
+        port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'turn_started' } })
+      }
+      await prompted({ kind: 'summary', text: 'done', tier: 'list' })
+      await prompted({ kind: 'summary', text: 'done', tier: 'silent' })
+      // Decided here, as alert.
+      await prompted({ kind: 'summary', text: 'done' })
+      await prompted({ kind: 'error', text: 'boom' }, 'turnError')
+      // Harness in front: Harness's own agent is not away.
+      host().front('harness')
+      await prompted({ kind: 'summary', text: 'done', tier: 'alert' })
+      expect(await values(port)).toEqual({ dial_value_done_away_prompted_10m: 3,
+        dial_value_done_away_prompted_10m_installation_days: 1, dial_value_installation_days: 1 })
+    })
+
+    it('a summary on screen is silent and announces nothing', async () => {
+      const { port } = start({ core: harnessAgent(), faults: ['fleet'] })
+      await attach(port)
+      host().front('vscode')
+      port.desk(['h1'], true)
+      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'summary', text: 'done', tier: 'alert' } })
+      seen.host.voiceEnded!({ outcome: 'sent', agentId: 'h1', since: Date.now() })
+      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'turn_started' } })
+      expect(await values(port)).toEqual({})
+    })
+
+    it('a summary held behind its done past the next turn\'s start announces nothing', async () => {
+      // The done holds its agent's cards for the turn's tokens, up to 2 s, and a message the person queued while the
+      // agent worked starts the next turn meanwhile: that start was the prompt after this end.
+      let finish!: (reading: null) => void
+      let reads = 0
+      const readUsage = vi.fn((_id: string) => (++reads === 2 ? new Promise<null>((resolve) => { finish = resolve }) : Promise.resolve(null)))
+      const { port } = start({ core: harnessAgent(), readUsage, faults: ['fleet'] })
+      await attach(port)
+      host().front('vscode')
+      const ev = (payload: Record<string, unknown>) => port.card({ type: 'commander_event', agentId: 'h1', payload })
+      ev({ kind: 'turn_started' })
+      ev({ kind: 'done', text: 'done' })
+      ev({ kind: 'summary', text: 'done', tier: 'alert' })
+      ev({ kind: 'turn_started' })
+      finish(null)
+      await vi.waitFor(() => expect(calls('summary')).toHaveLength(1))
+      // That next turn ends with Harness in front, not away: the voice after it follows no announced end.
+      host().front('harness')
+      ev({ kind: 'summary', text: 'done', tier: 'alert' })
+      await vi.waitFor(() => expect(calls('summary')).toHaveLength(2))
+      seen.host.voiceEnded!({ outcome: 'sent', agentId: 'h1', since: Date.now() })
+      ev({ kind: 'turn_started' })
+      expect(await values(port)).toEqual({})
+    })
+
+    it('a hooked agent\'s next prompt is the person\'s when its hook says so, not another session\'s message', async () => {
+      vi.useFakeTimers()
+      readers.answer.mockResolvedValue('All 12 tests pass.')
+      const { port } = start({ faults: ['fleet'] })
+      port.observed(hook('session-start'))
+      await attach(port)
+      host().front('vscode')
+      const ended = async () => {
+        port.observed(hook('turn-stop'))
+        await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+      }
+      port.observed(hook('turn-start'))
+      await ended()
+      // Another session's message starts its turn: no prompt of the person's, and the announcement is spent.
+      port.observed(hook('turn-start', { relayed: true }))
+      port.observed(hook('turn-start'))
+      await ended()
+      // Typed by the person.
+      port.observed(hook('turn-start'))
+      expect(await values(port)).toEqual({ dial_value_done_away_prompted_10m: 1,
+        dial_value_done_away_prompted_10m_installation_days: 1, dial_value_installation_days: 1 })
+    })
+  })
 })
 
 describe('the dial follows the pane focused in WezTerm and kitty (docs/plans/2026-11-23-dial-wezterm-kitty-focus-follow-design.md)', () => {
@@ -17023,6 +17213,322 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
       await settled()
       expect(await ring()).toEqual(before)
       expect(await shown()).toBe('herdr')
+    })
+  })
+})
+
+describe('Rex\'s ring goes as Rex\'s sidebar, and the dial follows the block focused in Rex (docs/specs/2026-11-25-dial-rex.md)', () => {
+  const SESSION = 'session:01a210ed-5a96-7e9a-a458-5e14e5bf854a'
+  const OTHER = 'session:01a21118-b015-74f1-b8fd-c4b33bb58038'
+  const B = (n: number) => `block:00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
+  const W = (n: number) => `window:00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
+  /** Rex's server (3900), which made the terminal of each caller (4241 + n), each its own (RECORDED_REX.processChain). */
+  const REX_CALLERS: ProcessRow[] = [{ pid: 3900, ppid: 1,
+    executable: join(homedir(), 'Library', 'Application Support', 'com.superlogical.rex', 'RexServer', 'Versions', 'Current', 'Rex Server.app', 'Contents', 'MacOS', 'rex') },
+  ...Array.from({ length: 6 }, (_, n) => ({ pid: 4241 + n, ppid: 3900, tty: `ttys0${n + 10}`, executable: 'claude' }))]
+  /** Claude Code in Rex block n of [session], its caller 4241 + n, as its hook says. */
+  const hook = (n: number, session = SESSION): ObservedHookEvent => ({
+    engine: 'claude', sessionId: `rx-${n}`, event: 'session-start', cwd: '/work/api', callerPid: 4241 + n,
+    transcriptPath: `/t/rx-${n}.jsonl`, hostHints: { TERM_PROGRAM: 'rex', REX_BLOCK: B(n), REX_SESSION: session },
+  })
+  const agent = (n: number) => observedAgentId('claude', `rx-${n}`)
+  /** Block n of [session] as Rex's layout lists it, in window [w], the caller 4241 + n in front, titled [title]. */
+  const pane = (n: number, title?: string, w = 1, session = SESSION): RexPane => ({
+    session, window: W(w), block: B(n), pid: 4241 + n, ...(title === undefined ? {} : { title }) })
+  /** `rex` where the Rex app puts it: what the adapter's runs name. */
+  const REX = '/fake/Rex Server.app/Contents/MacOS/rex'
+  /** The devices' runs, recorded: block n's foreground is its caller (4241 + n), and this user's Rex app is connected. */
+  const rexRun = async (file: string, args: string[], timeoutMs: number) => {
+    orcaRuns.push([file, args, timeoutMs])
+    if (file === REX && args[0] === 'block' && args[1] === 'call' && args[6] === 'process') {
+      return { code: 0, stdout: JSON.stringify({ foreground: { pid: 4241 + Number(args[5].slice(-12)) } }) }
+    }
+    if (file === REX && args[0] === 'client') {
+      return { code: 0, stdout: JSON.stringify({ clients: [{ client_id: 'client:00000000-0000-4000-8000-0000000000aa',
+        info: { kind: 'app', platform: 'macos' }, principal: { uid: process.getuid?.() } }] }) }
+    }
+    return { code: 0, stdout: '' }
+  }
+  const found = async () => ({ state: 'adopted' as const, path: REX, from: 'standard install location' as const })
+  const host = () => seen.dial as unknown as DaemonCableHost
+  const asked = () => calls('followLocal')
+  const orderLines = () => logs.filter((line) => line.startsWith('[device] rex order'))
+  const polls = () => logs.filter((line) => line.startsWith('[device] focus poll'))
+  const rexRuns = () => orcaRuns.filter(([file]) => file === REX).map(([, args]) => args)
+  /** Lets what a landing sets off run. */
+  const settled = () => new Promise((resolve) => setImmediate(resolve))
+  let clock = 0
+  /** The reads a spec lands: each layout read waits for its landing; focus answers as `focus.now` says, undefined for a
+   *  read that failed, each session asked for alone. */
+  const focus = { now: new Map<string, string | null>() as Map<string, string | null> | undefined, asked: [] as string[][] }
+  const layouts: Array<(panes: RexPane[] | null) => void> = []
+  const reads: RexReads = {
+    layout: () => new Promise((resolve) => { layouts.push(resolve) }),
+    focused: async (sessions) => {
+      focus.asked.push([...sessions])
+      return focus.now && new Map([...focus.now].filter(([session]) => sessions.includes(session)))
+    },
+  }
+  beforeEach(() => {
+    focus.now = new Map()
+    focus.asked = []
+    layouts.length = 0
+  })
+  /** The devices on macOS (on Linux with `linux`), Rex's callers in the table, the agents of [hooks], a dial attached
+   *  unless `attached` is false, no window; `settle` keeps an app in front for the settle, `next` lets FOCUS_POLL_MS pass,
+   *  [times] over, `land` lands the latest layout read. The timers are held; `setImmediate` is left. */
+  const dialWith = async (hooks: ObservedHookEvent[], over: { linux?: boolean; attached?: boolean } = {}) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    clock = 0
+    readers.processes.mockResolvedValue(REX_CALLERS)
+    const listener = fakeListener()
+    const started = start({ faults: ['fleet'], listen: listener.listen, now: () => clock, rexReads: reads, rex: found,
+      orca: { ...orca, platform: over.linux ? 'linux' : 'darwin', run: rexRun } })
+    for (const event of hooks) started.port.observed(event)
+    // The reads of their terminals' maker land.
+    await settled()
+    await settled()
+    if (over.attached !== false) seen.host.watching!(true)
+    started.port.swarms(null)
+    await settled()
+    const settle = async (app: string) => {
+      expect(listener.front(app)).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+      await settled()
+    }
+    const next = async (times = 1) => {
+      for (let i = 0; i < times; i++) {
+        await vi.advanceTimersByTimeAsync(FOCUS_POLL_MS)
+        await settled()
+      }
+    }
+    const land = async (panes: RexPane[] | null) => {
+      const read = layouts.at(-1)
+      expect(read, 'a layout read asked').toBeTypeOf('function')
+      read!(panes)
+      await settled()
+      await settled()
+    }
+    return { ...started, settle, next, land }
+  }
+  const ring = async () => (await host().listAgentSnapshot({ apps: true })).agents.map((a) => a.id)
+  const names = async () => (await host().listAgentSnapshot({ apps: true })).agents.map((a) => a.name)
+
+  describe('the ring', () => {
+    it("with a dial attached, Rex's agents ask one layout read, whose landing orders the ring as Rex's sidebar and names each by its block's title", async () => {
+      const { land } = await dialWith([hook(1), hook(2), hook(3)])
+      expect(layouts).toHaveLength(1)
+      await land([pane(3, 'Gamma', 1), pane(1, 'Alpha', 2), pane(2, 'Beta', 2)])
+      expect(await ring()).toEqual([agent(3), agent(1), agent(2)])
+      expect(await names()).toEqual(['Gamma', 'Alpha', 'Beta'])
+      // A block with no title keeps the agent's own name; the same members ask nothing more.
+      expect(layouts).toHaveLength(1)
+      expect(orderLines()).toEqual(['[device] rex order · read'])
+    })
+
+    it('a block whose program set no title leaves its agent its folder\'s name', async () => {
+      const { land } = await dialWith([hook(1)])
+      await land([pane(1)])
+      expect(await names()).toEqual(['api'])
+    })
+
+    it('a change during a read asks for one more after it lands, never two at once', async () => {
+      const { port, land } = await dialWith([hook(1)])
+      port.observed(hook(2))
+      await settled()
+      await settled()
+      expect(layouts).toHaveLength(1)
+      await land([pane(2, 'Beta'), pane(1, 'Alpha')])
+      expect(layouts).toHaveLength(2)
+      await land([pane(2, 'Beta'), pane(1, 'Alpha')])
+      expect(await ring()).toEqual([agent(2), agent(1)])
+    })
+
+    it('a read that fails says so and orders nothing; the next change asks again', async () => {
+      const { port, land } = await dialWith([hook(1), hook(2)])
+      await land(null)
+      expect(orderLines()).toEqual(['[device] rex order · failed'])
+      expect(await ring()).toEqual([agent(1), agent(2)])
+      port.observed(hook(3))
+      await settled()
+      await settled()
+      expect(layouts).toHaveLength(2)
+    })
+
+    it('no dial attached, or on Linux, where no Rex app runs: nothing is read', async () => {
+      await dialWith([hook(1)], { attached: false })
+      expect(layouts).toEqual([])
+      await dialWith([hook(2)], { linux: true })
+      expect(layouts).toEqual([])
+    })
+
+    it('a detach drops a read under way, and the next attach asks afresh', async () => {
+      const { land } = await dialWith([hook(1)])
+      seen.host.watching!(false)
+      await land([pane(1, 'Alpha')])
+      expect(orderLines()).toEqual([])
+      seen.host.watching!(true)
+      await settled()
+      expect(layouts).toHaveLength(2)
+    })
+
+    // An agent the scan found has no hook yet to name its block: the block running its process is its place, by pid.
+    it('an agent with no hook is placed at the block running its process: its order, its name, and the block a tap focuses', async () => {
+      readers.known.set('rx-9', 'terminal')
+      readers.owners.set('rx-9', { engine: 'claude', pid: 4245 })
+      readers.rows.set('rx-9', { cwd: '/work/web', transcriptPath: null })
+      readers.working.set('rx-9', false)
+      readers.apps.mockResolvedValueOnce(new Map([[4245, 'rex']]))
+      const { land } = await dialWith([hook(1)])
+      const scannedId = observedAgentId('claude', 'rx-9')
+      await vi.waitFor(() => expect(layouts.length).toBeGreaterThanOrEqual(1))
+      await land([{ ...pane(4, 'Found', 1), pid: 4245 }, pane(1, 'Alpha', 2)])
+      // Placed: the members changed, so one more read, whose landing places it the same way.
+      await land([{ ...pane(4, 'Found', 1), pid: 4245 }, pane(1, 'Alpha', 2)])
+      expect(await ring()).toEqual([scannedId, agent(1)])
+      expect(await names()).toEqual(['Found', 'Alpha'])
+      const before = layouts.length
+      await settled()
+      expect(layouts).toHaveLength(before)
+      // A tap focuses its block on the server, then asks the app to show it.
+      await host().openAgent(scannedId)
+      expect(rexRuns()[0]).toEqual(['block', 'focus', '-s', SESSION, B(4)])
+    })
+
+    it('an agent whose session ended, or whose block is not in the layout, takes no place: it goes after the placed', async () => {
+      const { port, land } = await dialWith([hook(1), hook(2)])
+      readers.ended.add(4242)
+      port.observed(hook(3))
+      await land([pane(3, 'Gamma'), pane(2, 'Beta')])
+      await land([pane(3, 'Gamma'), pane(2, 'Beta')])
+      expect(await ring()).toEqual([agent(3), agent(2), agent(1)])
+    })
+
+    // Zellij started in a Rex block keeps the block's variables, and Zellij's server made the agent's terminal: the block
+    // only holds it (rex.ts paneOf), and the block's foreground is Zellij's client, not the agent.
+    it('an agent in Zellij inside a Rex block keeps the block\'s place, by its held pane', async () => {
+      const inZellij: ObservedHookEvent = { ...hook(5), hostHints: { ...hook(5).hostHints, ZELLIJ: '0', ZELLIJ_PANE_ID: '1', ZELLIJ_SESSION_NAME: 'z' } }
+      const { land, port } = await dialWith([hook(1)])
+      readers.processes.mockResolvedValue([...REX_CALLERS.filter((p) => p.pid !== 4246),
+        { pid: 4246, ppid: 4100, tty: 'ttys030', executable: 'claude' }, { pid: 4100, ppid: 3950, tty: 'ttys030', executable: 'zsh' },
+        { pid: 3950, ppid: 1, executable: 'zellij' }])
+      port.observed(inZellij)
+      await settled()
+      await settled()
+      await land([{ ...pane(5, 'Zed', 1), pid: 5000 }, pane(1, 'Alpha', 2)])
+      await land([{ ...pane(5, 'Zed', 1), pid: 5000 }, pane(1, 'Alpha', 2)])
+      expect(await ring()).toEqual([agent(5), agent(1)])
+    })
+
+    // An older hook sends no REX_SESSION, so its agent has no block of its own: the block running its process places it,
+    // as one the scan found. With none running it, it has no block at all, and Rex's focus has nothing to follow.
+    it("an older hook's agent is placed by its process; with no block running it, it has none, and no poll runs", async () => {
+      const older: ObservedHookEvent = { ...hook(1), hostHints: { TERM_PROGRAM: 'rex', REX_BLOCK: B(1) } }
+      const placed = await dialWith([older])
+      await placed.land([pane(1, 'Alpha')])
+      await placed.land([pane(1, 'Alpha')])
+      expect(await names()).toEqual(['Alpha'])
+      const none = await dialWith([{ ...older, sessionId: 'rx-7' }])
+      await none.land([{ ...pane(1, 'Alpha'), pid: 9999 }])
+      await none.settle('rex')
+      expect(polls()).toEqual([])
+    })
+  })
+
+  describe('following the block focused in Rex', () => {
+    it('Rex settled with a dial attached polls each session holding an agent\'s block, and the first answer\'s focused agent turns the dial', async () => {
+      const { settle, next } = await dialWith([hook(1), hook(2, OTHER)])
+      focus.now = new Map([[SESSION, B(1)], [OTHER, null]])
+      await settle('rex')
+      expect(polls()).toEqual(['[device] focus poll · started'])
+      expect(focus.asked[0]).toEqual([SESSION, OTHER])
+      expect(asked()).toEqual([[agent(1), 'pane']])
+      // The person clicks a block in the other session: that session's place changed, and it alone.
+      focus.now = new Map([[SESSION, B(1)], [OTHER, B(2)]])
+      await next()
+      expect(asked()).toEqual([[agent(1), 'pane'], [agent(2), 'pane']])
+      // Unchanged since: nothing more.
+      await next(2)
+      expect(asked()).toHaveLength(2)
+    })
+
+    it('a block with no agent focused, or a read that failed, moves nothing', async () => {
+      const { settle, next } = await dialWith([hook(1)])
+      focus.now = new Map([[SESSION, B(5)]])
+      await settle('rex')
+      expect(asked()).toEqual([])
+      focus.now = undefined
+      await next()
+      expect(asked()).toEqual([])
+    })
+
+    it('another app settled, or no agent in Rex: no poll', async () => {
+      const { settle } = await dialWith([hook(1)])
+      await settle('ghostty')
+      expect(polls()).toEqual([])
+    })
+
+    // Claude Code drawn fullscreen keeps no scrollback for Rex to scroll (Rex's docs): its own page keys move it.
+    describe('a stroke', () => {
+      /** A stroke on the glass of travel [dy], on the agent the dial shows. */
+      const strokeOn = async (agentId: string, dy: number) => {
+        host().dialShows({}, { name: 'api', app: 'rex' }, agentId)
+        host().scrolled('down', 0, 0)
+        host().scrolled('move', dy, 0)
+        host().scrolled('up', 0, 0)
+        for (let i = 0; i < 6; i++) await settled()
+      }
+      /** The `rex send`s to [block] that carry only mouse-wheel events (rex.ts wheel). */
+      const wheels = (block: string) => rexRuns().filter((args) => args[0] === 'send' && args[4] === block)
+        .map((args) => args[6]).filter((text) => /^(\x1b\[<6[45];10;10M)+$/.test(text))
+
+      it("on a Claude Code agent's own block, fullscreen and in front there, sends it wheel lines", async () => {
+        const { settle } = await dialWith([hook(1)])
+        await settle('rex')
+        await strokeOn(agent(1), -80)
+        expect(wheels(B(1))).not.toEqual([])
+        expect(logs.filter((line) => line.startsWith('[device] scroll · skipped'))).toEqual([])
+      })
+
+      it('on an agent the layout placed by its process, as on its own block', async () => {
+        readers.known.set('rx-9', 'terminal')
+        readers.owners.set('rx-9', { engine: 'claude', pid: 4245 })
+        readers.rows.set('rx-9', { cwd: '/work/web', transcriptPath: null })
+        readers.working.set('rx-9', false)
+        readers.apps.mockResolvedValueOnce(new Map([[4245, 'rex']]))
+        const { land, settle } = await dialWith([hook(1)])
+        const scannedId = observedAgentId('claude', 'rx-9')
+        await vi.waitFor(() => expect(layouts.length).toBeGreaterThanOrEqual(1))
+        await land([pane(4, 'Found'), pane(1, 'Alpha', 2)])
+        await land([pane(4, 'Found'), pane(1, 'Alpha', 2)])
+        await settle('rex')
+        await strokeOn(scannedId, -80)
+        expect(wheels(B(4))).not.toEqual([])
+      })
+
+      it('with Rex not in front, a stroke on it scrolls nothing there', async () => {
+        const { settle } = await dialWith([hook(1)])
+        await settle('ghostty')
+        await strokeOn(agent(1), -80)
+        expect(wheels(B(1))).toEqual([])
+        expect(logs).toContain('[device] scroll · skipped · cannot scroll')
+      })
+    })
+
+    it('a rest on a Rex agent with Rex in front brings its block, and its own focus read after is the echo', async () => {
+      const { settle, next } = await dialWith([hook(1), hook(2)])
+      focus.now = new Map([[SESSION, B(1)]])
+      await settle('rex')
+      expect(asked()).toEqual([[agent(1), 'pane']])
+      expect(host().swipeSwitches(agent(2))).toBe(true)
+      host().swipeEnded(agent(2), 'rest')
+      await settled()
+      await settled()
+      expect(rexRuns()[0]).toEqual(['block', 'focus', '-s', SESSION, B(2)])
+      focus.now = new Map([[SESSION, B(2)]])
+      await next()
+      expect(asked()).toEqual([[agent(1), 'pane']])
+      expect(logs).toContain('[device] pane · skipped · echo')
     })
   })
 })

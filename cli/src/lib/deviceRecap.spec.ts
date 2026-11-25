@@ -1,5 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import { deriveLongRecap, deriveTurnSummary, extendShortRecap, LONG_RECAP_MAX_BYTES } from './deviceRecap.js'
+import { deriveAnswerCard, deriveLongRecap, deriveTurnSummary, extendShortRecap, LONG_RECAP_MAX_BYTES } from './deviceRecap.js'
+
+// An agent outside Harness (in Rex, Orca, a terminal) is heard by its transcript's last answer, which was sent to the dial
+// raw: its headline read `**Kết quả**` (2026-11-25).
+describe('deriveAnswerCard', () => {
+  const answer = '## Kết quả\n\n- **SJC**: 149,1 triệu đồng/lượng\n- `PNJ` tăng nhẹ.\n\nXem [bảng giá](https://example.com).'
+  it("cuts the answer as a Harness agent's turn is cut: no markdown in the headline or the text under it", () => {
+    const card = deriveAnswerCard(answer)!
+    const [recap, body] = deriveTurnSummary(answer)!.split('\n\n')
+    expect(card).toEqual({ recap, text: body, fullText: answer })
+    for (const shown of [card.recap, card.text]) expect(shown).not.toMatch(/\*\*|`|##|\]\(/)
+    expect(card.recap).toContain('SJC: 149,1 triệu đồng/lượng')
+  })
+  it('none for an answer with no prose', () => {
+    expect(deriveAnswerCard('  \n  ')).toBeNull()
+  })
+})
 
 describe('device recap minimum', () => {
   it.each(['Yes.', 'No.', 'Done.', 'Tests pass.', "It isn't external."])(

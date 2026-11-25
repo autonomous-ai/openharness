@@ -12,6 +12,7 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { isHarnessSession, paneOwnerFormat } from '../../harnessSessionLabel.js'
 import { processRows } from '../../processTable.js'
 import { tmuxFeatures } from '../../tmuxVersion.js'
+import { windowsStartTime } from '../../windows/treeKill.js'
 import { type ProcessView, type RunningProcess, type ScanContext, UNSETTLED } from './types.js'
 import { externalReadFailed } from '../evidence.js'
 
@@ -214,8 +215,11 @@ export function parseTtys(stdout: string): Map<number, string | null> {
 }
 
 /** The machine's processes, as the daemon's own process scan reads them (it repairs rewritten rows);
- *  none when `ps` could not be read. */
-export async function listProcesses(read: typeof processRows = processRows): Promise<RunningProcess[]> {
+ *  none when `ps` could not be read. `startMarker` is the Windows `w:<FILETIME>` start, kept so a parent walk
+ *  ends at a reused pid. */
+export async function listProcesses(
+  read: typeof processRows = processRows,
+): Promise<Array<RunningProcess & { startMarker?: string }>> {
   const rows = await read()
   if (!rows) externalReadFailed(new Error('process table unavailable'), 'process table')
   return (rows ?? []).map((row) => {
@@ -223,6 +227,7 @@ export async function listProcesses(read: typeof processRows = processRows): Pro
     return { pid: row.pid, ppid: row.parentPid, executable: row.executable, args: row.args,
       ...(row.commandPath !== undefined ? { commandPath: row.commandPath } : {}),
       ...(Number.isFinite(started) ? { started } : {}),
+      ...(windowsStartTime(row.startMarker) !== null ? { startMarker: row.startMarker } : {}),
       ...(row.startTicks !== undefined ? { generation: `linux:${row.startTicks}` }
         : Number.isFinite(started) ? { generation: `ps:${started}` } : {}) }
   })

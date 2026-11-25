@@ -1619,8 +1619,8 @@
     "a/win32/O5/focus.lands": 1,
     "a/win32/O5/focus.latency": 1,
     "a/win32/O5/wait.4": 1,
-    "a/win32/O6/focus.lands": 0,
-    "a/win32/O6/focus.latency": 0,
+    "a/win32/O6/focus.lands": 1,
+    "a/win32/O6/focus.latency": 1,
     "a/win32/O6/ring.archived": 1,
     "a/win32/O6/ring.cap": 1,
     "a/win32/O6/ring.names": 1,
@@ -2959,7 +2959,7 @@
       "chatgpt": 100,
       "vscode": 100,
       "cursor": 91.22807017543859,
-      "orca": 98.59539226417334,
+      "orca": 99.40510886336361,
       "iterm": 100
     },
     "b/darwin": {

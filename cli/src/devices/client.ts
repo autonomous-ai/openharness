@@ -67,7 +67,8 @@ export interface DialWatchDeps extends Pick<DevicesClientDeps, 'port' | 'dataDir
   /** The Harness Device app writes on it a `{"front":"<bundle id or exe name>"}` line each time the app in front changes,
    *  a `{"tab":{"app","tty"}}` line each time the selected tab of a tab app in front does, a `{"thread":"<title>"}`
    *  line each time the title of ChatGPT's window in front does, a `{"muted":<bool>}` line each time its Sound item is
-   *  clicked, and a `{"notify":"full"|"you"}` line each time a Notifications item is. */
+   *  clicked, a `{"voiceLang":"<code>"}` line each time a Voice language item is, and a `{"notify":"full"|"you"}` line
+   *  each time a Notifications item is. */
   stdin: {
     on(event: 'end' | 'close', listener: () => void): unknown
     on(event: 'data', listener: (chunk: Buffer | string) => void): unknown
@@ -110,13 +111,19 @@ const SELECT_LINE_MAX = 96
 // devices process that is gone is not asked once a second.
 const STREAM_RETRY_MS = 1_000
 const STREAM_RETRY_MAX_MS = 30_000
-// deviceRequest's bound: a Sound change a hung devices process never answers frees its slot, so the next click is sent.
-const SOUND_ANSWER_MS = 12_000
+// deviceRequest's bound, on every setting's slot: a Sound or Voice language change a hung devices process never answers
+// frees its slot, so the next click is sent.
+const SETTING_ANSWER_MS = 12_000
 // The same bound on a Notifications change: a hung devices process frees its slot, so the next click is sent.
 const NOTIFY_ANSWER_MS = 12_000
-// All of a refused Sound or Notifications change that goes on stderr, and from there into the app's log: a code, never
-// the daemon's words.
+// All of a refused Sound, Voice language or Notifications change that goes on stderr, and from there into the app's log:
+// a code, never the daemon's words.
 const CODE = /^[A-Z][A-Z0-9_]{0,31}$/
+// The languages the dial's voice is heard in: the backend's `VOICE_LANGS` (backend/src/lib/deepgram.ts), which the CLI
+// cannot import, and the ones Desktop offers (desktop/lib/devices/device_settings.dart). A Voice language line names one.
+const VOICE_LANGS = ['en', 'vi', 'es', 'fr', 'ja', 'it'] as const
+type VoiceLang = (typeof VOICE_LANGS)[number]
+const isVoiceLang = (value: unknown): value is VoiceLang => (VOICE_LANGS as readonly unknown[]).includes(value)
 
 /** One call per line of at most [max] bytes; a longer line is dropped whole, its start included. */
 function lines(max: number, line: (text: string) => void): (chunk: Buffer | string) => void {
@@ -134,18 +141,22 @@ function lines(max: number, line: (text: string) => void): (chunk: Buffer | stri
 }
 
 /**
- * A dial_status reduced to what the menu-bar app shows, so a change of any setting but `muted` and `notify` prints
- * nothing. `muted` only for a dial with an id, the one a Sound change can name; read from the primary's flat fields,
- * never `devices`. `notify`, the Notifications setting, only with a dial attached: it is this computer's, kept by the
- * devices' listener, and the status carries it beside the dial's own settings.
+ * A dial_status reduced to what the menu-bar app shows, so a change of any setting but `muted`, `voiceLang` and `notify`
+ * prints nothing. `muted` and `voiceLang` only for a dial with an id, the one a Sound or Voice language change can name;
+ * read from the primary's flat fields, never `devices`. `voiceLang` only on the settings patch's own pattern, so no
+ * other text of the dial reaches the app. `notify`, the Notifications setting, only with a dial attached: it is this
+ * computer's, kept by the devices' listener, and the status carries it beside the dial's own settings.
  */
 export function dialWatchLine(payload: unknown): string {
   const status = (typeof payload === 'object' && payload !== null ? payload : {}) as Record<string, unknown>
   const line: Record<string, unknown> = { attached: status.attached === true }
   for (const field of DIAL_FIELDS) if (typeof status[field] === 'string') line[field] = status[field]
   const settings = status.settings
-  if (typeof status.id === 'string' && status.id !== '' && typeof settings === 'object' && settings !== null
-    && typeof (settings as Record<string, unknown>).muted === 'boolean') line.muted = (settings as Record<string, unknown>).muted
+  if (typeof status.id === 'string' && status.id !== '' && typeof settings === 'object' && settings !== null) {
+    const { muted, voiceLang } = settings as Record<string, unknown>
+    if (typeof muted === 'boolean') line.muted = muted
+    if (typeof voiceLang === 'string' && deviceSettingsPatchSchema.shape.voiceLang.safeParse(voiceLang).success) line.voiceLang = voiceLang
+  }
   if (line.attached === true && isNotifyMode(status.notify)) line.notify = status.notify
   return JSON.stringify(line)
 }
@@ -271,32 +282,49 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
     }
     // Whether the daemon answered with dial-watch: before that, only machine_select goes on the socket.
     let answered = false
-    // The dial the last status named, the one a Sound line changes; the change on the socket, and the newest line read
-    // meanwhile, kept with the dial it was read for. Fast clicks never queue up, and a dial that became the primary
-    // since is never changed by a click made for another.
+    // The dial the last status named, the one a Sound or Voice language line changes.
     let dialId: string | undefined
-    let sounding: { requestId: string; timer: ReturnType<typeof setTimeout> } | undefined
-    let waiting: { id: string; muted: boolean } | undefined
-    const sendSound = (id: string, muted: boolean): void => {
-      const requestId = randomUUID()
-      sounding = { requestId, timer: setTimeout(() => soundDone('NO_ANSWER'), SOUND_ANSWER_MS) }
-      socket!.send(JSON.stringify({ type: 'harness_device_settings', payload: { id, patch: { muted }, requestId } }))
+    // A setting of the dial changed from a line, under its own word on stderr: the change on the socket, and the newest
+    // line read meanwhile, kept with the dial it was read for. Fast clicks never queue up, and a dial that became the
+    // primary since is never changed by a click made for another. Each setting has a slot of its own, so a Sound click
+    // never waits behind a Voice language one, nor is freed by its answer.
+    const dialSetting = <T>(key: 'muted' | 'voiceLang', word: 'sound' | 'voice') => {
+      let inFlight: { requestId: string; timer: ReturnType<typeof setTimeout> } | undefined
+      let waiting: { id: string; value: T } | undefined
+      const send = (id: string, value: T): void => {
+        const requestId = randomUUID()
+        inFlight = { requestId, timer: setTimeout(() => done('NO_ANSWER'), SETTING_ANSWER_MS) }
+        socket!.send(JSON.stringify({ type: 'harness_device_settings', payload: { id, patch: { [key]: value }, requestId } }))
+      }
+      // The change on the socket answered, or not in time: a failure is one line, and what waited is sent.
+      const done = (failure?: string): void => {
+        clearTimeout(inFlight?.timer)
+        inFlight = undefined
+        if (failure) deps.printError(`${word}: ${failure}`)
+        const next = waiting
+        waiting = undefined
+        if (next) send(next.id, next.value)
+      }
+      return {
+        change(value: T): void {
+          if (!answered) return deps.printError(`${word}: NOT_CONNECTED`)
+          if (!dialId) return deps.printError(`${word}: NO_DIAL`)
+          if (inFlight) waiting = { id: dialId, value }
+          else send(dialId, value)
+        },
+        // True only for the answer to its own change on the socket: another request's, or one that came after its
+        // 12 s, frees no slot.
+        answer(reply: { requestId?: unknown; ok?: unknown; error?: unknown } | null | undefined): boolean {
+          if (!inFlight || reply?.requestId !== inFlight.requestId) return false
+          // The daemon's own words (a path, a newline) never reach stderr: only a code does.
+          done(reply.ok === true ? undefined : typeof reply.error === 'string' && CODE.test(reply.error) ? reply.error : 'FAILED')
+          return true
+        },
+        stop(): void { clearTimeout(inFlight?.timer) },
+      }
     }
-    // The change on the socket answered, or not in time: a failure is one line, and what waited is sent.
-    const soundDone = (failure?: string): void => {
-      clearTimeout(sounding?.timer)
-      sounding = undefined
-      if (failure) deps.printError(`sound: ${failure}`)
-      const next = waiting
-      waiting = undefined
-      if (next) sendSound(next.id, next.muted)
-    }
-    const sound = (muted: boolean): void => {
-      if (!answered) return deps.printError('sound: NOT_CONNECTED')
-      if (!dialId) return deps.printError('sound: NO_DIAL')
-      if (sounding) waiting = { id: dialId, muted }
-      else sendSound(dialId, muted)
-    }
+    const sound = dialSetting<boolean>('muted', 'sound')
+    const voice = dialSetting<VoiceLang>('voiceLang', 'voice')
     // Whether the last status said a dial is attached: the menu offers Notifications only then, though the setting is
     // this computer's. A change goes to the devices' listener, which keeps it, one at a time; the newest line read
     // meanwhile waits. The line moves only with the dial_status the devices send once they have kept it.
@@ -333,7 +361,8 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
       clearTimeout(tabGap)
       clearTimeout(threadGap)
       clearTimeout(reopen)
-      clearTimeout(sounding?.timer)
+      sound.stop()
+      voice.stop()
       stream?.abort()
       deps.stdin.pause()
       try { socket?.close() } catch { /* already closed */ }
@@ -359,10 +388,12 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
     deps.stdin.on('close', quit)
     deps.stdin.on('data', lines(FRONT_LINE_MAX, line => {
       if (settled) return
-      let value: { front?: unknown; tab?: unknown; thread?: unknown; muted?: unknown; notify?: unknown } | null
+      let value: { front?: unknown; tab?: unknown; thread?: unknown; muted?: unknown; voiceLang?: unknown; notify?: unknown } | null
       try { value = JSON.parse(line) } catch { return }
       // The Sound item's click: exactly one boolean `muted`, so no other line, nor a key beside it, changes the dial.
-      if (typeof value?.muted === 'boolean' && Object.keys(value).length === 1) return sound(value.muted)
+      if (typeof value?.muted === 'boolean' && Object.keys(value).length === 1) return sound.change(value.muted)
+      // A Voice language item's click, held to the same: exactly one of the six, alone.
+      if (isVoiceLang(value?.voiceLang) && Object.keys(value).length === 1) return voice.change(value.voiceLang)
       // A Notifications item's click, held to the same: exactly one known mode, alone.
       if (isNotifyMode(value?.notify) && Object.keys(value).length === 1) return notify(value.notify)
       // The title of ChatGPT's window, held to the same: `thread` alone, and the rule Harness Device keeps.
@@ -405,11 +436,9 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
         }
         if (frame?.type === 'harness_device_settings_result') {
           const reply = frame.payload as { requestId?: unknown; ok?: unknown; error?: unknown } | null | undefined
-          // Another request's answer, or one that came after its 12 s: it frees no slot.
-          if (!sounding || reply?.requestId !== sounding.requestId) return
-          if (reply.ok === true) return soundDone()
-          // The daemon's own words (a path, a newline) never reach stderr: only a code does.
-          return soundDone(typeof reply.error === 'string' && CODE.test(reply.error) ? reply.error : 'FAILED')
+          // The slot whose change it answers takes it; one that answers neither is dropped.
+          if (!sound.answer(reply)) voice.answer(reply)
+          return
         }
         if (frame?.type !== 'dial_status' || typeof frame.payload !== 'object' || frame.payload === null) return
         // The devices process usually starts with the dial, after this watch: it hears the app in front as the dial attaches.

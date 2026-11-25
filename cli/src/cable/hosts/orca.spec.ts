@@ -512,11 +512,12 @@ describe('Orca adapter', () => {
       expect(adapter.paneOf({ ...madeBy(null), hints: { ORCA_TERMINAL_HANDLE: '--help' } })).toBeUndefined()
     })
 
-    // No maker is read on Windows (no `ps`): the handle stays the agent's own there.
-    it('Windows: the agent\'s own, as today', () => {
+    // The devices read the maker on Windows too, from the PTY host's process table: a handle is held there as elsewhere.
+    it('Windows: the agent\'s own only when Orca made its terminal, as elsewhere', () => {
       const { logs, adapter } = logged('win32')
-      for (const owner of [undefined, null, 'orca']) expect(adapter.paneOf(madeBy(owner)), String(owner)).toEqual(own)
-      expect(logs).toEqual([])
+      expect(adapter.paneOf(madeBy('orca'))).toEqual(own)
+      for (const owner of [undefined, null, 'wezterm']) expect(adapter.paneOf(madeBy(owner)), String(owner)).toEqual(held)
+      expect(logs).toEqual(['[device] orca · held'])
     })
 
     it('a held terminal takes a tap alone: the switch runs, a rest and words do nothing', async () => {

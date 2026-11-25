@@ -108,6 +108,50 @@ request (Ken, 2026-11-23).
     and the pull request says so.
   - Backend rule 5: a growth estimate from the vocabulary in the pull request, no production reads.
 
+## Value
+
+2026-11-25. About 47 computers have a dial connected a day and about 11 operate it. Use is not value: Ken counts what a
+computer got from the dial, not only that someone touched it. The wait counts cannot say the dial caused an answer, as
+the person may have looked at the agent's own app anyway. These counts take the cases where the dial is the likely
+reason: it rang or announced, the agent's app was not in front, and the person acted soon after.
+
+| Name | Counted when |
+|---|---|
+| `dial_value_installation_days` | Any of the counts below, that UTC day (a flag) |
+| `dial_value_ring_answered_2m`, `_10m` | The dial rang and the person answered that agent, anywhere, within 2 / 10 min. Cumulative: within 2 min counts in both |
+| `dial_value_ring_away_answered_2m`, `_10m` | The same, with the agent's app not in front at the ring |
+| `dial_value_done_away_prompted_10m` | A finished turn the dial announced with its app not in front, then the person's next prompt to that agent within 10 min |
+| `dial_value_week_installations`, `dial_value_28d_installations` | Gateway, as a day closes: distinct computers a Monday week / fixed 28-day period, as for dial used |
+
+Each event count has its computer flag beside it (`<name>_installation_days`). Settled (harness-pm, 2026-11-25):
+
+1. **Rang** is a wait the dial's counts already open (a question or permission ask, a notice that is not `proceeding`,
+   an outside agent whose hook says it waits on the person), which only happens while a dial is attached. **Answered**
+   is that wait's answered end, wherever the answer came from, timed from the ring. No timers: counted at the end.
+2. **Away** is read at the ring or the announcement: the agent's row is known, its app (the outermost app the person
+   sees) is a known app, the app in front is known, and the two differ. Anything unknown (no row, the unknown app, an
+   app the scan has still to tell, no front, another machine's agent) is not away.
+3. **Announced** is a finished turn's summary sent to the dial at `alert` or `list`, or a failed turn, which always
+   rings; a silent one (on screen, a sub-agent's, no dial, the notice's turn, Needs you lowering it) is not. It counts
+   only with a dial attached and the agent away at that moment; at most 16 are kept. A summary held behind its
+   turn's done (up to 2 s, for the tokens) past the agent's next turn start announces nothing: that start was the
+   prompt.
+4. **The person's prompt** is counted only where its source can be told; any next turn start ends the announcement,
+   counted or not. It is the dial's own voice delivered to that agent (a voice waiting as the turn starts, or a turn
+   the words started before their send returned), or an outside hooked agent's turn start whose prompt hook says the
+   person or the dial typed it.
+
+Which hosts can tell the person's prompt: outside hooked agents with a prompt hook, Claude Code (not another session's
+relayed message), Codex, Cursor, Copilot, Grok and the others whose prompt event maps to a turn start; never agy or
+commandcode, whose turn starts on a model or tool call. Harness's own panes and agents seen only through a listing
+(herdr, opencode, the Claude and ChatGPT app stores, Orca chats with no hook) count only through the dial's own voice;
+other machines' agents never.
+
+Limits: a glance at the dial cannot be measured, as there is no sensor, so these are counts, not proof. A notice counts
+answered at its agent's next turn, whoever started it. Away needs the app in front known.
+
+Release: backend first, then the CLI, since an older backend refuses a report with an unknown name.
+
 ## Design (docs/feature-design-rules.md)
 
 1. Growth: daily totals in `product_usage_totals`, deleted by the existing TTL after 396 days; on the computer, queued

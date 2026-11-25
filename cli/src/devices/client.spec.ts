@@ -322,6 +322,58 @@ describe('harness hardware watch', () => {
     expect(run.printed).toEqual(['{"attached":true,"fw":"0.0.95","muted":false}', '{"attached":false}'])
     await stillRunning(run)
   })
+  it('a status with an id and a voiceLang prints it after muted, and the mode stays last', async () => {
+    const run = watch()
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    dial(run.socket, { attached: true, id: 'usb-1', fw: '0.0.95', settings: { muted: false, voiceLang: 'vi' }, notify: 'you' })
+    expect(run.printed).toEqual(['{"attached":true,"fw":"0.0.95","muted":false,"voiceLang":"vi","notify":"you"}'])
+    await stillRunning(run)
+  })
+  it('a voiceLang prints without muted, and a code outside the six that keeps the pattern prints too', async () => {
+    const run = watch()
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    for (const voiceLang of ['ja', 'de', 'en-US']) dial(run.socket, { attached: true, id: 'usb-1', fw: '0.0.95', settings: { voiceLang } })
+    expect(run.printed).toEqual([
+      '{"attached":true,"fw":"0.0.95","voiceLang":"ja"}',
+      '{"attached":true,"fw":"0.0.95","voiceLang":"de"}',
+      '{"attached":true,"fw":"0.0.95","voiceLang":"en-US"}',
+    ])
+    await stillRunning(run)
+  })
+  it('only a change of voiceLang prints again', async () => {
+    const run = watch()
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    const usb = { attached: true, id: 'usb-1', fw: '0.0.95' }
+    dial(run.socket, { ...usb, settings: { muted: false, voiceLang: 'en', brightness: 80 } })
+    dial(run.socket, { ...usb, settings: { muted: false, voiceLang: 'en', brightness: 20 } })
+    dial(run.socket, { ...usb, settings: { muted: false, voiceLang: 'fr', brightness: 20 } })
+    expect(run.printed).toEqual([
+      '{"attached":true,"fw":"0.0.95","muted":false,"voiceLang":"en"}',
+      '{"attached":true,"fw":"0.0.95","muted":false,"voiceLang":"fr"}',
+    ])
+    await stillRunning(run)
+  })
+  it('without an id, settings or a voiceLang on the pattern the line is as before', async () => {
+    const run = watch()
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    const flat = { attached: true, fw: '0.0.95' }
+    dial(run.socket, flat)
+    for (const payload of [
+      { ...flat, settings: { voiceLang: 'vi' } },
+      { ...flat, id: '', settings: { voiceLang: 'vi' } },
+      { ...flat, id: 'usb-1' },
+      { ...flat, id: 'usb-1', settings: null },
+      ...[7, null, 'EN', 'english', 'vi\n', 'vi"}', '', 'en-us', 'en-USA', 'x'.repeat(200)]
+        .map(voiceLang => ({ ...flat, id: 'usb-1', settings: { voiceLang } })),
+      { ...flat, devices: [{ id: 'usb-2', settings: { voiceLang: 'vi' } }] },
+    ]) dial(run.socket, payload)
+    expect(run.printed).toEqual(['{"attached":true,"fw":"0.0.95"}'])
+    await stillRunning(run)
+  })
   it('exits 0 when stdin closes', async () => {
     const after = watch()
     expect(after.stdin.resume).toHaveBeenCalled()
@@ -1148,7 +1200,7 @@ const USB = { attached: true, id: 'usb-1', fw: '0.0.95', settings: { muted: fals
 const USB_LINE = '{"attached":true,"fw":"0.0.95","muted":false}'
 // A status the daemon puts in its answer: a watch that printed it would print a second line.
 const MUTED = { ...USB, settings: { muted: true } }
-interface SoundFrame { type: string; payload: { id: string; patch: { muted: boolean }; requestId: string } }
+interface SettingFrame { type: string; payload: { id: string; patch: { muted?: boolean; voiceLang?: string }; requestId: string } }
 /** A watch the daemon has answered, sent the dial's status. */
 async function attached(over: Partial<DialWatchDeps> = {}) {
   const run = watch(over)
@@ -1159,9 +1211,14 @@ async function attached(over: Partial<DialWatchDeps> = {}) {
 }
 // What the Harness Device app writes on the watch's stdin when Sound is clicked.
 const sound = (run: ReturnType<typeof watch>, value: unknown) => run.stdin.emit('data', `${JSON.stringify({ muted: value })}\n`)
-const sounds = (run: ReturnType<typeof watch>): SoundFrame[] =>
-  run.socket.send.mock.calls.map(([data]) => JSON.parse(data) as SoundFrame).filter(frame => frame.type === 'harness_device_settings')
-const answer = (run: ReturnType<typeof watch>, request: SoundFrame, reply: Record<string, unknown>) =>
+// What it writes when a Voice language item is clicked.
+const voice = (run: ReturnType<typeof watch>, value: unknown) => run.stdin.emit('data', `${JSON.stringify({ voiceLang: value })}\n`)
+/** Every change the watch sent the daemon, then those of Sound and those of Voice language. */
+const settings = (run: ReturnType<typeof watch>): SettingFrame[] =>
+  run.socket.send.mock.calls.map(([data]) => JSON.parse(data) as SettingFrame).filter(frame => frame.type === 'harness_device_settings')
+const sounds = (run: ReturnType<typeof watch>) => settings(run).filter(frame => 'muted' in frame.payload.patch)
+const voices = (run: ReturnType<typeof watch>) => settings(run).filter(frame => 'voiceLang' in frame.payload.patch)
+const answer = (run: ReturnType<typeof watch>, request: SettingFrame, reply: Record<string, unknown>) =>
   run.socket.emit('message', JSON.stringify({ type: 'harness_device_settings_result', payload: { ...reply, requestId: request.payload.requestId } }))
 
 describe('harness hardware watch: Sound', () => {
@@ -1287,6 +1344,169 @@ describe('harness hardware watch: Sound', () => {
     const closed = await attached()
     sound(closed, true)
     expect(sounds(closed)).toHaveLength(1)
+    closed.socket.emit('close', 1006, '')
+    expect(await closed.done).toBe(3)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+// A status the daemon puts in its answer to a Voice language change: a watch that printed it would print a second line.
+const VIETNAMESE = { ...USB, settings: { muted: false, voiceLang: 'vi' } }
+
+describe('harness hardware watch: Voice language', () => {
+  // The event loop's turns stay real: only the watch's own timers are the test's.
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }) })
+  it("a voiceLang line sends one request for the last status's dial", async () => {
+    const run = await attached()
+    voice(run, 'vi')
+    expect(voices(run)).toEqual([{ type: 'harness_device_settings', payload: { id: 'usb-1', patch: { voiceLang: 'vi' }, requestId: expect.any(String) } }])
+    answer(run, voices(run)[0]!, { ok: true, revision: 3, status: VIETNAMESE })
+    dial(run.socket, { ...USB, id: 'usb-2' })
+    voice(run, 'ja')
+    expect(voices(run)).toHaveLength(2)
+    expect(voices(run)[1]).toEqual({ type: 'harness_device_settings', payload: { id: 'usb-2', patch: { voiceLang: 'ja' }, requestId: expect.any(String) } })
+    expect(run.errors).toEqual([])
+    expect(run.printed).toEqual([USB_LINE])
+    await stillRunning(run)
+  })
+  it('lines that are not exactly one of the six languages send nothing', async () => {
+    const run = await attached()
+    for (const line of ['{"voiceLang":"de"}', '{"voiceLang":"EN"}', '{"voiceLang":"en-US"}', '{"voiceLang":""}', '{"voiceLang":1}',
+      '{"voiceLang":null}', '{"voiceLang":["vi"]}', '{"voiceLang":"vi","muted":true}', '{"voiceLang":"vi","id":"usb-9"}',
+      '{"patch":{"voiceLang":"vi"}}', '[{"voiceLang":"vi"}]', '"voiceLang"', '{"voiceLang":"vi"']) run.stdin.emit('data', `${line}\n`)
+    expect(settings(run)).toEqual([])
+    expect(run.errors).toEqual([])
+    for (const [i, lang] of ['en', 'vi', 'es', 'fr', 'ja', 'it'].entries()) {
+      voice(run, lang)
+      expect(voices(run)).toHaveLength(i + 1)
+      answer(run, voices(run)[i]!, { ok: true })
+    }
+    expect(voices(run).map(frame => frame.payload.patch)).toEqual([
+      { voiceLang: 'en' }, { voiceLang: 'vi' }, { voiceLang: 'es' }, { voiceLang: 'fr' }, { voiceLang: 'ja' }, { voiceLang: 'it' },
+    ])
+    expect(run.errors).toEqual([])
+    await stillRunning(run)
+  })
+  it('while one is in flight the latest language waits, and is sent when the first answers', async () => {
+    const run = await attached()
+    for (const lang of ['vi', 'es', 'fr', 'ja']) voice(run, lang)
+    expect(voices(run)).toHaveLength(1)
+    answer(run, voices(run)[0]!, { ok: true })
+    expect(voices(run)).toHaveLength(2)
+    expect(voices(run)[1]!.payload).toMatchObject({ id: 'usb-1', patch: { voiceLang: 'ja' } })
+    answer(run, voices(run)[1]!, { ok: true })
+    expect(voices(run)).toHaveLength(2)
+    expect(run.errors).toEqual([])
+    await stillRunning(run)
+  })
+  it('a waiting language keeps the dial it was read for', async () => {
+    const run = await attached()
+    voice(run, 'vi')
+    voice(run, 'es')
+    expect(voices(run)).toHaveLength(1)
+    dial(run.socket, { ...USB, id: 'usb-2' })
+    answer(run, voices(run)[0]!, { ok: true })
+    expect(voices(run)).toHaveLength(2)
+    expect(voices(run)[1]!.payload).toMatchObject({ id: 'usb-1', patch: { voiceLang: 'es' } })
+    await stillRunning(run)
+  })
+  it('Sound and Voice language each have their own slot', async () => {
+    const run = await attached()
+    sound(run, true)
+    voice(run, 'vi')
+    expect(sounds(run)).toHaveLength(1)
+    expect(voices(run)).toHaveLength(1)
+    sound(run, false)
+    voice(run, 'fr')
+    expect(settings(run)).toHaveLength(2)
+    // Each answer frees its own slot alone.
+    answer(run, voices(run)[0]!, { ok: true })
+    expect(voices(run)).toHaveLength(2)
+    expect(voices(run)[1]!.payload.patch).toEqual({ voiceLang: 'fr' })
+    expect(sounds(run)).toHaveLength(1)
+    answer(run, sounds(run)[0]!, { error: 'DEVICE_OFFLINE' })
+    expect(run.errors).toEqual(['sound: DEVICE_OFFLINE'])
+    expect(sounds(run)).toHaveLength(2)
+    expect(sounds(run)[1]!.payload.patch).toEqual({ muted: false })
+    answer(run, voices(run)[1]!, { error: 'DEVICE_UPDATING' })
+    expect(run.errors).toEqual(['sound: DEVICE_OFFLINE', 'voice: DEVICE_UPDATING'])
+    expect(sounds(run)).toHaveLength(2)
+    expect(voices(run)).toHaveLength(2)
+    expect(run.printed).toEqual([USB_LINE])
+    await stillRunning(run)
+  })
+  it('an error reply is one voice: line with its code, and nothing of the payload', async () => {
+    for (const code of ['DEVICE_OFFLINE', 'DEVICE_UPDATING', 'DEVICE_NOT_READY', 'DEVICE_WRITE_FAILED', 'SERVICE_UNAVAILABLE', 'BAD_DEVICE_SETTINGS', 'OWNER_REQUIRED']) {
+      const run = await attached()
+      voice(run, 'vi')
+      expect(voices(run)).toHaveLength(1)
+      answer(run, voices(run)[0]!, { error: code, service: 'devices', status: VIETNAMESE })
+      expect(run.errors).toEqual([`voice: ${code}`])
+      expect(run.printed).toEqual([USB_LINE])
+      await stillRunning(run)
+    }
+  })
+  it('a reply that is not ok and names no code prints voice: FAILED', async () => {
+    for (const reply of [
+      { error: 'The device at /dev/cu.usbmodem1 said no\nvoice: OK' }, { error: 'x'.repeat(200) }, { error: 'X'.repeat(33) },
+      { error: 'DEVICE_OFFLINE\n' }, { error: 'device_offline' }, { error: 5 }, {},
+    ]) {
+      const run = await attached()
+      voice(run, 'vi')
+      expect(voices(run)).toHaveLength(1)
+      answer(run, voices(run)[0]!, reply)
+      expect(run.errors).toEqual(['voice: FAILED'])
+      expect(run.printed).toEqual([USB_LINE])
+      await stillRunning(run)
+    }
+  })
+  it('before the daemon has answered, or with no dial, nothing is sent and stderr says so', async () => {
+    const run = watch()
+    await opened(run.socket)
+    voice(run, 'vi')
+    expect(run.errors).toEqual(['voice: NOT_CONNECTED'])
+    connected(run.socket, ['dial-watch'])
+    voice(run, 'vi')
+    expect(run.errors).toEqual(['voice: NOT_CONNECTED', 'voice: NO_DIAL'])
+    dial(run.socket, { attached: false })
+    voice(run, 'es')
+    expect(run.errors).toEqual(['voice: NOT_CONNECTED', 'voice: NO_DIAL', 'voice: NO_DIAL'])
+    expect(settings(run)).toEqual([])
+    await stillRunning(run)
+  })
+  it('no answer in 12 s frees the voice slot alone', async () => {
+    const run = await attached()
+    voice(run, 'vi')
+    voice(run, 'es')
+    await vi.advanceTimersByTimeAsync(6_000)
+    sound(run, true)
+    await vi.advanceTimersByTimeAsync(5_999)
+    expect(run.errors).toEqual([])
+    expect(voices(run)).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(run.errors).toEqual(['voice: NO_ANSWER'])
+    expect(voices(run)).toHaveLength(2)
+    expect(voices(run)[1]!.payload.patch).toEqual({ voiceLang: 'es' })
+    await vi.advanceTimersByTimeAsync(6_000)
+    expect(run.errors).toEqual(['voice: NO_ANSWER', 'sound: NO_ANSWER'])
+    expect(sounds(run)).toHaveLength(1)
+    // The first's answer, late: its slot is gone.
+    answer(run, voices(run)[0]!, { error: 'DEVICE_OFFLINE' })
+    expect(run.errors).toEqual(['voice: NO_ANSWER', 'sound: NO_ANSWER'])
+    await stillRunning(run)
+  })
+  it('stdin closing with both in flight exits 0 and leaves no timer', async () => {
+    const run = await attached()
+    sound(run, true)
+    voice(run, 'vi')
+    expect(settings(run)).toHaveLength(2)
+    run.stdin.emit('end')
+    expect(await run.done).toBe(0)
+    expect(vi.getTimerCount()).toBe(0)
+    const closed = await attached()
+    sound(closed, true)
+    voice(closed, 'vi')
+    expect(settings(closed)).toHaveLength(2)
     closed.socket.emit('close', 1006, '')
     expect(await closed.done).toBe(3)
     expect(vi.getTimerCount()).toBe(0)

@@ -322,6 +322,18 @@ describe('processes', () => {
     expect((await listProcesses(async () => [{ ...row, startTicks: 42 }]))[0].generation).toBe('linux:42')
   })
 
+  it('keeps a Windows start marker, and adds none to any other row', async () => {
+    const row = { pid: 5, parentPid: 1, executable: 'claude.exe', args: 'claude', startMarker: 'w:133456789012345678' }
+    expect(await listProcesses(async () => [row])).toEqual([
+      { pid: 5, ppid: 1, executable: 'claude.exe', args: 'claude', startMarker: 'w:133456789012345678' },
+    ])
+    const result = await listProcesses(async () => [
+      { ...row, startMarker: 'Sun Sep 27 09:05:03 2026' }, { ...row, pid: 6, startMarker: 'soon' },
+    ])
+    expect(result[0]).not.toHaveProperty('startMarker')
+    expect(result[1]).not.toHaveProperty('startMarker')
+  })
+
   it('carries the whole command path where ps cut it, and adds none of its own', async () => {
     const app = '/Users/someone/Library/Application Support/Claude/claude-code/2.1.325/485fdac4332e/claude.app/Contents/MacOS/claude'
     const row = { pid: 5, parentPid: 1, executable: app.slice(0, 16), args: app, startMarker: 'Sun Nov 15 15:41:22 2026' }

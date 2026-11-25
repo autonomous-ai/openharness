@@ -24,6 +24,11 @@ export const DIAL_OPEN_FAILURES = ['not_opened', 'desktop_not_started', 'desktop
   'unlisted'] as const
 export const DIAL_FIRST_AGENT_BUCKETS = ['under_1m', '1m_to_3m', '3m_to_10m', 'over_10m', 'none_1h'] as const
 export const DIAL_WAIT_BUCKETS = ['under_30s', '30s_to_2m', '2m_to_10m', 'over_10m'] as const
+/** What a computer got from the dial, not only its use (cable/dialUsage.ts): a ring answered within 2 or 10 min, anywhere;
+ * the same with the agent's app not in front at the ring; a turn end the dial announced with its app not in front, then
+ * the person's next prompt within 10 min. Cumulative: within 2 min counts in 10 min too. */
+export const DIAL_VALUE_COUNTS = ['ring_answered_2m', 'ring_answered_10m', 'ring_away_answered_2m', 'ring_away_answered_10m',
+  'done_away_prompted_10m'] as const
 
 export const DIAL_USAGE_FILE = 'dial-usage.json'
 export const DIAL_USAGE_FILE_VERSION = 1
@@ -42,6 +47,7 @@ export type DialOtherApp = typeof DIAL_OTHER_APPS[number]
 export type DialRecognition = typeof DIAL_RECOGNITION[number]
 export type DialVoiceFailure = typeof DIAL_VOICE_FAILURES[number]
 export type DialOpenFailure = typeof DIAL_OPEN_FAILURES[number]
+export type DialValueCount = typeof DIAL_VALUE_COUNTS[number]
 
 /** What the devices count; the gateway sends them as they come. */
 export const DIAL_DEVICE_METRICS = [
@@ -65,6 +71,8 @@ export const DIAL_DEVICE_METRICS = [
   ...DIAL_OPEN_FAILURES.map(f => `dial_open_failed_${f}` as const),
   ...DIAL_USAGE_HOSTS.flatMap(h => [`dial_open_host_${h}_installation_days`, `dial_open_host_${h}_ok`,
     `dial_open_host_${h}_failed`] as const),
+  'dial_value_installation_days',
+  ...DIAL_VALUE_COUNTS.flatMap(v => [`dial_value_${v}_installation_days`, `dial_value_${v}`] as const),
 ] as const
 
 /** In the file only, never sent: the gateway turns them into the used-day and unused-day waits as a day closes. */
@@ -85,6 +93,7 @@ export const DIAL_DERIVED_METRICS = [
     `dial_d${d}_returning_outside_app_installations`] as const),
   'dial_used_week_installations', 'dial_used_28d_installations',
   'dial_used_outside_app_week_installations', 'dial_used_outside_app_28d_installations',
+  'dial_value_week_installations', 'dial_value_28d_installations',
   'dial_wait_used_day_installation_days',
   ...DIAL_WAIT_BUCKETS.map(b => `dial_wait_used_day_dial_${b}` as const),
   ...DIAL_WAIT_BUCKETS.map(b => `dial_wait_used_day_elsewhere_${b}` as const),
