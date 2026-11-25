@@ -50,6 +50,9 @@ export interface AppWakeDeps {
   openThread(threadId: string, agentId: string): Promise<PaneSwitch>
   /** Codex's queue, where a ChatGPT thread's words go once its link opened. */
   queue: Pick<CodexQueue, 'send'>
+  /** The Codex home the thread's words are queued under: Harness's own (env.CODEX_HOME). A thread with no process has
+   *  no rollout a hook named, and the ChatGPT app's source offers voice only when this is the app's home (devices.ts). */
+  codexHome: string
   monotonic(): number
   log(line: string): void
   count(what: string): void
@@ -175,7 +178,7 @@ export class AppWake {
         if (link === 'busy') return fail('busy', `Still opening ${target.name}. Try again in a moment.`)
         phase = 'queueing'
         cancel()
-        deps.queue.send(target.threadId, text, true).then((result) => {
+        deps.queue.send(target.threadId, text, true, deps.codexHome).then((result) => {
           switch (result.outcome) {
             case 'queued': return end('sent', { ok: true }, `sent · ${Math.round(deps.monotonic() - opened)} ms`)
             case 'busy': return fail('pending', `${target.name} has not taken your last words yet.`)

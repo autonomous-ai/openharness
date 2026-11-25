@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { basename, join } from 'node:path'
+import { basename, join, resolve, sep } from 'node:path'
 // Types only: the devices process must not load core code.
 import type { ObservedAsked, ObservedEvent, ObservedHookEvent } from '../../core/observedHook.js'
 import { truncateUtf8 } from '../../lib/deviceRecentTrim.js'
@@ -192,8 +192,10 @@ export interface ObservedActions {
   open(agentId: string, target: OpenTarget): Promise<boolean>
   /** Codex's own queue (codexQueue.ts): a thread runs its words as its next turn, and no terminal is typed into. */
   codexQueue: Pick<CodexQueue, 'can' | 'send'>
-  /** The Codex home Harness reads (env.CODEX_HOME): `codex queue` loads its config, so a hook's path never chooses it. */
-  codexHome: string
+  /** The Codex homes Harness trusts, asked at each look: its own (env.CODEX_HOME), the ones it adopted and the profiles
+   *  the person linked, each also by its real path. `codex queue` loads a home's config, so a hook's path never names
+   *  one: it only picks among these. */
+  codexHomes(): readonly string[]
   /** The route (`codex`, `mod`, or the adapter that typed, said by its fixed id) or the refusal, the adapter that
    *  refused in its own sentence or did not send for a reason of the list, and a failed queue's reason and which
    *  `codex` ran. Fixed words or an adapter only: a string from a hook, a pane's id, a binary's path, cannot reach the
@@ -371,7 +373,7 @@ export class ObservedSource implements HostSource {
     const live = this.live(e)
     return {
       status: true,
-      voice: live && (!!this.first(e, words) || this.modReady(e, actions) || this.queueable(e, actions)),
+      voice: live && (!!this.first(e, words) || this.modReady(e, actions) || this.queueHome(e, actions) !== undefined),
       focus: live && actions.canOpen(e.agent.id, this.target(e)),
       // Its prompts are answered in its own app: the dial only shows them.
       answer: false,
@@ -403,12 +405,25 @@ export class ObservedSource implements HostSource {
   }
 
   /**
-   * Whether Codex's queue takes a live session's words: a Codex session whose rollout is in Harness's own Codex home, its
-   * session id the thread id. Whether codex is there is asked last: it looks for the binary.
+   * The Codex home a live session's words are queued under, when Codex's queue takes them: a Codex session whose rollout
+   * is in a home Harness trusts, its session id the thread id. The home comes only from Harness's lists, and the hook's
+   * path only picks among them: of the homes holding the rollout, the deepest is the session's (a home may lie inside
+   * another's sessions folder), the spelling that matched the one codex runs under. Whether codex is there is asked
+   * last: it looks for the binary.
    */
-  private queueable(e: Entry, actions: ObservedActions): boolean {
-    return e.agent.engine === 'codex' && !!e.transcriptPath && within(join(actions.codexHome, 'sessions'), e.transcriptPath)
-      && CODEX_THREAD.test(e.agent.sessionId!) && actions.codexQueue.can(this.inCodexApp(e))
+  private queueHome(e: Entry, actions: ObservedActions): string | undefined {
+    const rollout = e.transcriptPath
+    if (e.agent.engine !== 'codex' || !rollout || !CODEX_THREAD.test(e.agent.sessionId!)) return undefined
+    let home: string | undefined
+    let depth = -1
+    for (const trusted of actions.codexHomes()) {
+      const segments = resolve(trusted).split(sep).filter(Boolean).length
+      if (segments > depth && within(join(trusted, 'sessions'), rollout)) {
+        home = trusted
+        depth = segments
+      }
+    }
+    return home !== undefined && actions.codexQueue.can(this.inCodexApp(e)) ? home : undefined
   }
 
   /**
@@ -420,7 +435,7 @@ export class ObservedSource implements HostSource {
   }
 
   /**
-   * The dial's words for the agent, and nothing is held here. A Codex session's in Harness's own Codex home go to Codex's
+   * The dial's words for the agent, and nothing is held here. A Codex session's in a Codex home Harness trusts go to Codex's
    * own queue first, in every state: a queued message types nothing and answers no approval, and runs once the turn is over
    * (docs/specs/2026-11-15-device-codex.md, the spike). Claude Code's go to its mod in every state, as a Harness agent's
    * are (lib/sessionInput.ts), whose `$.prompt.submit` types nothing and starts them once the turn is over. Else, and
@@ -445,10 +460,11 @@ export class ObservedSource implements HostSource {
     const waiting = (): SendResult => refuse('waiting', `${name} is waiting for your answer in ${agentPlaceName(e.agent)}.`)
     const busy = (): SendResult => refuse('busy', `${name} is busy. Say it when it is done.`)
     const typer = this.first(e, words)
-    if (this.queueable(e, actions)) {
+    const home = this.queueHome(e, actions)
+    if (home !== undefined) {
       // Recorded first: an idle Codex starts the queued turn, and its hook can be heard, before `codex queue` has exited.
       const record = this.dialPrompt(e)
-      const queued = await actions.codexQueue.send(e.agent.sessionId!, text, this.inCodexApp(e))
+      const queued = await actions.codexQueue.send(e.agent.sessionId!, text, this.inCodexApp(e), home)
       if (queued.outcome === 'queued') {
         actions.count('codex')
         return { ok: true }
