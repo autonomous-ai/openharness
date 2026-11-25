@@ -501,10 +501,11 @@ fn flag(answer: &NSAppleEventDescriptor) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tabs::{CALL_TIMEOUT, NO_TTY};
+    use crate::tabs::{CALL_TIMEOUT, NO_TTY, Next, TabFollow, Typing};
     use std::process::Command;
+    use std::sync::LazyLock;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     const T: TabApp = TabApp::Terminal;
     const TTY: &str = "/dev/ttys023";
@@ -783,9 +784,13 @@ end send_enter
         }
     }
 
+    /// Each fixed handler's check that its app runs, which sends no event.
+    const RUNS: &str = "(running of application id app_id)";
+
     #[test]
     fn every_handler_that_tells_its_app_first_checks_that_it_runs() {
         // `tell application id` launches an app that is not running, and the app may have quit since the runner asked.
+        // One that does not run raises procNotFound, a failed call: an answer with no event is never macOS's consent.
         for app in APPS {
             let handlers: Vec<&str> = source(app).split("\non ").skip(1).collect();
             // Terminal has no write handlers.
@@ -796,10 +801,47 @@ end send_enter
                     assert!(!handler.contains('«'), "{app:?}: {handler}");
                     continue;
                 }
-                let answer = if handler.starts_with("selected_tty()") { r#""""# } else { "false" };
                 let first = handler.lines().nth(1).unwrap_or_default().trim();
-                assert_eq!(first, format!("if not (running of application id app_id) then return {answer}"), "{app:?}");
+                assert_eq!(first, format!("if not {RUNS} then error number -600"), "{app:?}");
             }
+        }
+    }
+
+    /// Each app's fixed script with its check that the app runs answering no, as once the app has quit.
+    static QUIT: LazyLock<[String; 3]> = LazyLock::new(|| APPS.map(|app| source(app).replace(RUNS, "false")));
+
+    fn quit(app: TabApp) -> &'static str {
+        &QUIT[APPS.iter().position(|known| *known == app).unwrap()]
+    }
+
+    #[test]
+    fn an_app_that_quit_answers_a_failed_call_that_is_no_consent() {
+        // Every check was replaced, and each comes before any event: no handler gets as far as its app.
+        for app in APPS {
+            assert!(source(app).contains(RUNS) && !quit(app).contains("running of"), "{app:?}");
+        }
+        let tabs = MacTabs { source: quit, ..scripted() };
+        for app in APPS {
+            assert_eq!(tabs.selected_tty(app), Err(TabError::Failed), "{app:?}");
+            assert_eq!(tabs.select_tty(app, TTY, true), Err(TabError::Failed), "{app:?}");
+            assert_eq!(tabs.select_tty(app, TTY, false), Err(TabError::Failed), "{app:?}");
+            assert_eq!(tabs.focus_tty(app, TTY), Err(TabError::Failed), "{app:?}");
+        }
+        let now = Instant::now();
+        for app in [TabApp::Iterm, TabApp::Ghostty] {
+            assert_eq!(tabs.write_text(app, TTY, "fix the build"), Err(TabError::Failed), "{app:?}");
+            assert_eq!(tabs.send_enter(app, TTY), Err(TabError::Failed), "{app:?}");
+            // macOS was never asked to let Harness Device script it: a typing for it is answered no unrun, as an
+            // event could bring the consent prompt and hold the tab thread for minutes.
+            let mut follow = TabFollow::default();
+            follow.front(app.bundle());
+            follow.watching(true);
+            follow.attached(true);
+            follow.polled(app, tabs.selected_tty(app), 0);
+            follow.selected(app, tabs.select_tty(app, TTY, true));
+            follow.selected(app, tabs.focus_tty(app, TTY));
+            follow.typed(Typing::Enter { id: "0123456789abcdef".into(), app, tty: TTY.into() }, now);
+            assert!(matches!(follow.next_typing(now), Some(Next::Refused { .. })), "{app:?}");
         }
     }
 
