@@ -494,10 +494,10 @@ def windows_only(path):
 def windows_e2e(path):
     """What windows-e2e tests: Windows-only code, cross-platform code with win32 branches that broke only on Windows
     (#4513: the devices, the cable, the engines' hook scripts, the dial plugins), the TUI and the flasher windows.yml
-    runs, and its specs with the modules they test."""
+    runs, its specs with the modules they test, and the dial desk bundle dialWindowsTools.e2e.ts builds and runs."""
     return windows_only(path) or not windows_docs(path) and (
         path.startswith(("cli/src/lib/windows/", "cli/src/devices/", "cli/src/cable/", "cli/hook/", "tui/",
-                         "website/src/app/flash-circle.ps1/"))
+                         "website/src/app/flash-circle.ps1/", "cli/scripts/windows-dial-e2e/"))
         or re.match(r"plugins/harness-device[^/]*/", path) is not None
         or path in WINDOWS_SPEC_MODULES or any(covers(spec, path) for spec in WINDOWS_SPECS))
 
