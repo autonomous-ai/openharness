@@ -473,7 +473,7 @@ export class World implements TierAWorld {
     // tmux's real lookup (docs/plans/2026-11-25-dial-orca-tmux-o11-design.md, option A). Never on Windows, where tmux
     // runs only inside WSL, whose agents hook to WSL's own Harness. herdr is iTerm2's alone (the plan's Decisions 5 and
     // 7): every other app's devices find neither and run neither, as on main.
-    if (scenario.app === 'iterm' || (platform !== 'win32' && scenario.sessions.some((s) => s.tmux))) {
+    if (scenario.app === 'iterm' || (scenario.app === 'orca' && platform !== 'win32' && scenario.sessions.some((s) => s.tmux))) {
       machine.installed.set('tmux', TMUX)
       answerTmux(this)
     }
