@@ -51,7 +51,7 @@ What the person gets:
 | Worktree scope | In scope when placed in the worktree on screen. Unplaced, it drops out whenever the Orca plugin names a worktree, so it is off the ring while Orca is in front. |
 | Pro | The Orca room leaves it out: the Pro groups by `host`, which is `tmux` (#4578 known gap). |
 | Tap | tmux shows its pane on its own session (`tmux.ts:188`: it selects the window and pane, or on macOS may switch the client to it), and Orca comes forward on whatever tab it shows. **Orca does not switch to its tab:** the tap opens the pane of the host that made its terminal, tmux's (`observed.ts` `target`), and after it only a `tap: 'after'` pane is focused (`raiseAfter`), which Orca's is not (`orca.ts` `tap: 'before'`). Found by O11's run, 2026-11-25. |
-| Rest (swipe) | tmux shows its pane, with no raise, while Orca is in front (`tmux.ts:210` `canShow`). |
+| Rest (swipe) | tmux shows its pane, with no raise, while Orca is in front, only once tmux's lookup found Orca holding the client (`tmux.ts:210` `canShow`): on Linux; on macOS when the client's parents name Orca. |
 | Voice | Never typed into the Orca handle or into tmux (the devices never type into the person's tmux, `services/AGENTS.md`). Claude Code takes the words through its mod, Codex through `codex queue` in Harness's Codex home; otherwise "did not answer". No wrong-session path. |
 | Focus follow: Orca tab | Not followed. Orca's focus line looks up an own Orca pane only (`devices.ts:2446` `byPane`); a placed agent has none: `focus · skipped · unknown agent`. |
 | Focus follow: tmux pane switch | Not followed. The tmux pane poll takes only agents on tmux's page (`devices.ts:2539`). |
@@ -90,8 +90,8 @@ Why:
 - **Product:** no change.
 - **Eval only** (`cli/src/testing/`): O11 expects `c` on Orca's ring at its tab, `[a, b, c]`; adds a tap on `c` (Orca
   switches to its tab, tmux selects its pane, Orca comes forward) and a voice step on `c` that must not type into any
-  Orca handle (the gate). The Orca world installs the tmux model for a scenario with a `tmux: true` session, so all
-  three platforms run the real lookup. The eval spec's decision 2 is replaced by Diego's 2026-11-23 rule.
+  Orca handle or into tmux (the gate). The Orca world installs the tmux model for a scenario with a `tmux: true`
+  session, so macOS and Linux run the real lookup. The eval spec's decision 2 is replaced by Diego's 2026-11-23 rule.
 - **Person:** nothing changes.
 - **Tap / voice:** graded now. Voice passes. The tap is graded on what the person expects, Orca switching to its tab
   (the eval's decision 3), so `open` is 0 at baseline: a hill-climb item, its product fix in the PM's backlog (PM,
@@ -133,12 +133,12 @@ A on the eval, plus three changes in the devices process (`services/devices.ts`,
 ## Recommendation
 
 **A.** It keeps Diego's rule and matches what Orca itself shows. It changes nothing for the person and adds no risk.
-It also fixes the eval's model, so O11 grades real behavior on all three platforms instead of failing on one and
-passing on two by accident. If Diego wants the dial to follow focus into tmux tabs in Orca, B's follow is a separate
+It also fixes the eval's model, so O11 grades real behavior on macOS and Linux instead of failing on one and passing
+on the other by accident. If Diego wants the dial to follow focus into tmux tabs in Orca, B's follow is a separate
 proposal after A.
 
 ## Not done here
 
-- No eval run: none was needed to explain the baseline, and none ran without the PM's Mac turn.
+- The proposal itself ran no eval; the eval runs came with option A's change, on the PM's Mac turns.
 - Not checked against a real Orca: the placement relies on Orca's terminal list naming the engine for a tab running a
   tmux client. Orca's public source says it does; a real check needs Diego's Orca.

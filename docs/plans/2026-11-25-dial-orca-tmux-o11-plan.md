@@ -63,8 +63,9 @@ Paths: `EV/` is `cli/src/testing/dialAppEval/`. Commands run in `cli/`.
   (`orcaScenarios.ts CHATS_TIERS`). `b/darwin/O11/*` leave the baseline at the regeneration.
 - **The tap's order is the spec's:** Orca switches to `c`'s placed terminal, tmux shows `c`'s pane, Orca comes forward.
   The check grades each part, not their order between Orca and tmux (as iTerm2's `open` does). Whether the placed
-  switch runs before tmux's move is the run's to show (Task 5's run): a part at 0 stops the task, it is not "fixed" by
-  weakening the check.
+  switch runs before tmux's move is the run's to show (Task 5's run). Task 5's run showed the tap leaves Orca on its tab
+  (`observed.ts` `raiseAfter`): every `open` part of O11 is 0 by design, a hill-climb item, its product fix in the PM's
+  backlog (2026-11-25); the check is not weakened. Any other part at 0 stops the task.
 - **The voice step needs the face on `c`:** a tap does not move the face (`loopbackDial.ts tap`), so after the tap the
   person turns the dial to `c` (a swipe, labelled `face`, which also ends the tap's window), then speaks, as O10 does.
 
@@ -97,8 +98,8 @@ Paths: `EV/` is `cli/src/testing/dialAppEval/`. Commands run in `cli/`.
   `npm run eval:dial-apps` need the main session's go (it asks the PM for the slot, after about 20:00 on 2026-11-25).
   A task's own specs and the O11 `-t` run (three scenarios) need no slot, but never during another eval.
 - **Tier A's baseline is exact** (`EV/grade.ts tierAVerdict`): from Task 2 until Task 7 the spec's `matches the
-  baseline` case names O11's keys as stale. That is expected; any other key it names is not (stop and tell the main
-  session). Run the tier A spec with `DIAL_EVAL_SKIP_RATCHET=1` in the meantime.
+  baseline` case names O11's keys: darwin's ring and wait keys as stale, the new `open.*` keys at 0 as regressions and
+  `a/win32/O11/*` as missing. That is expected; any other key it names is not (stop and tell the main session). Run the tier A spec with `DIAL_EVAL_SKIP_RATCHET=1` in the meantime.
 - Fixtures are made up: titles `Eval …`, folders `/work/eval-…`. No result's evidence holds a tmux pane id (`%N`), a
   client tty (`/dev/ttys…`, `/dev/pts/…`) or a handle; the existing privacy case in `EV/dialAppEval.spec.ts` stays green.
 - Every behavior task: a red commit (the failing tests), then a green commit. Only the specs the task touches, plus
@@ -332,7 +333,8 @@ node -e 'const fs=require("fs");const b=JSON.parse(fs.readFileSync("src/testing/
   Expected: three cases pass (`tier A on darwin O11`, `tier A on linux O11`, none on win32, and "no result carries an
   absolute path, a tty or a pane id" over those two runs); the second command lists
   O11's changed and new keys (`ring.precision` 1 on darwin, `wait.5` 1 on darwin, the new `open.*` and `voice.*`), no
-  `NOT 1` line, then `gaps 0 wrong 0`. A `NOT 1`, a gap or a wrong send: stop and tell the main session with the line
+  `NOT 1` line but the five `open.*` keys on each platform (0 by design, the tap leaves Orca on its tab), then
+  `gaps 0 wrong 0`. A `NOT 1`, a gap or a wrong send: stop and tell the main session with the line
   (it is a model bug or a spec error, Open question 2); change no check to make it pass.
 - [ ] **Step 6: Commit** red, then green: `Dial eval: O11 grades Claude Code under tmux in Orca as an Orca row`.
 
@@ -391,13 +393,13 @@ memory, its own ports). No account is used, real or test.
    `DIAL_EVAL_SKIP_RATCHET=1 npx vitest run src/testing/dialAppEval/dialAppEval.spec.ts -t "tmux is found|Orca agent under tmux"`.
    Seen: all green.
 2. **O11 in tier A on the three platforms** (no slot needed, never during another eval): Task 5 Step 5's two
-   commands. Seen: `tier A on darwin O11` and `tier A on linux O11` pass, no win32 case, every O11 key 1, `gaps 0 wrong 0`.
+   commands. Seen: `tier A on darwin O11` and `tier A on linux O11` pass, no win32 case, every O11 key 1 but the five `open.*` keys (0 by design), `gaps 0 wrong 0`.
 3. **The whole eval and the baseline, on this Mac, on the PM's slot (after about 20:00):**
    `cd cli && OUT=$(mktemp -d) && DIAL_EVAL_OUT="$OUT" TMPDIR=/tmp caffeinate -i npm run eval:dial-apps -- --update-baseline`
    (tier A's spec on darwin, linux and win32 in process on the Mac host; then tier B's seven files on darwin, the
    held-out one among them, which nobody opens; O11 is not in tier B). Seen: `Gate: passed`, 0 wrong-session sends (one:
-   stop, ask the PM, write no baseline); Orca's tier A score at least its baseline (99.41) and `b/darwin` Orca's at least
-   99.74 or only O11's keys gone; no other app's score moves; `baseline written`; the diff of Task 7 Step 2. The tester
+   stop, ask the PM, write no baseline); Orca's tier A score lower only by O11's `open.*` keys (97.29 on the first run) and `b/darwin`
+   Orca's changed only by O11's keys gone; no other app's score moves; `baseline written`; the diff of Task 7 Step 2. The tester
    reports the score table, O11's rows and that diff.
 4. **PR CI** runs the tier A spec (the unit suite) with the new baseline, and `linux-e2e` runs the six app-eval files on
    Linux, gate-only (`scripts/ci-plan.py LINUX_E2E_APP_EVAL_FILES`), on its own: nothing by hand.
