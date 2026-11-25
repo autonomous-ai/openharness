@@ -1653,7 +1653,7 @@ export function cableEventFor(
   if (frame.type !== 'commander_event' || !frame.agentId) return null
   const kind = frame.payload?.kind
   if (kind !== 'processing' && kind !== 'done' && kind !== 'summary' && kind !== 'error') return null
-  // `subagent`: the tile redraws, nobody is told (lib/agentNotifications.ts `silentCard`).
+  // A sub-agent's turn end or a restored recap: the tile redraws, nobody is told (lib/agentNotifications.ts `silentCard`).
   const silent = silentCard(frame.payload ?? {})
   // `notNews`: why a silent card is not news (lib/agentNotifications.ts), for the devices' log; a word that is not one is dropped.
   const notNews = notNewsOf(frame.payload ?? {})
