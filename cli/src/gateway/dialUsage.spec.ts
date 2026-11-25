@@ -250,15 +250,42 @@ describe('the gateway\'s merge of the dial\'s day', () => {
     expect(flags(merge(restarted, fileOf({ [shift(TODAY, 8)]: used }), shift(TODAY, 9)).adds)).toEqual({})
   })
 
+  it('the value period flags once a week and once a 28-day period, across a restart and a baseline', () => {
+    const value = { dial_value_installation_days: 1 }
+    const days = [shift(TODAY, -1), TODAY, shift(TODAY, 2), shift(TODAY, 7)]
+    const one = merge(freshDialRecord(false), fileOf(Object.fromEntries(days.map(day => [day, value]))), shift(TODAY, 8))
+    const flags = (adds: DialAdd[]) => totals(adds, /^dial_value_(week|28d)_installations$/)
+    expect(flags(one.adds)).toEqual({
+      [`${shift(TODAY, -1)} dial_value_week_installations`]: 1, [`${shift(TODAY, -1)} dial_value_28d_installations`]: 1,
+      [`${TODAY} dial_value_week_installations`]: 1, [`${TODAY} dial_value_28d_installations`]: 1,
+      [`${shift(TODAY, 7)} dial_value_week_installations`]: 1,
+    })
+    // The day's flag goes as it comes; a day with no value derives none.
+    expect(totals(one.adds, /^dial_value_installation_days$/)).toEqual(Object.fromEntries(days.map(day => [`${day} dial_value_installation_days`, 1])))
+    expect(one.record.valueDays).toEqual(days)
+    const restarted = cleanDialRecord(JSON.parse(JSON.stringify(one.record)), within(shift(TODAY, 9)))
+    expect(flags(merge(restarted, fileOf({ [shift(TODAY, 8)]: value }), shift(TODAY, 9)).adds)).toEqual({})
+    // A baseline keeps the value days: a later day of the same week and period still adds no flag.
+    const base = merge({ ...restarted, baseline: true }, fileOf({ [shift(TODAY, 9)]: value }), shift(TODAY, 9))
+    expect(base.record.valueDays).toEqual(restarted.valueDays)
+    expect(flags(merge(base.record, fileOf({ [shift(TODAY, 10)]: value }), shift(TODAY, 11)).adds)).toEqual({})
+    // A queue file from before the value counts has none: its first value day in a period adds the flag.
+    const old = cleanDialRecord({ series: 1, usedDays: [], usedOutsideDays: [] }, within(TODAY))
+    expect(old.valueDays).toEqual([])
+    expect(flags(merge(old, fileOf({ [TODAY]: value }), shift(TODAY, 1)).adds)).toEqual({
+      [`${TODAY} dial_value_week_installations`]: 1, [`${TODAY} dial_value_28d_installations`]: 1 })
+  })
+
   it('a record read back keeps only what a record holds, and a clock set back reopens no day', () => {
     const ahead = shift(TODAY, 2)
     expect(cleanDialRecord({ series: 3, baseline: true, closedThrough: ahead, PRIVATE_PROJECT_CANARY: 'x',
       sent: { [TODAY]: { dial_open_ok: 2, dial_not_a_name: 1, dial_used_installation_days: 2 },
         [shift(TODAY, -40)]: { dial_open_ok: 1 }, PRIVATE_PROJECT_CANARY: { dial_open_ok: 1 } },
       earlierWaits: { [TODAY]: { dial_wait_none: 3, PRIVATE_PROJECT_CANARY: 1 }, [shift(TODAY, -40)]: { dial_wait_none: 1 } },
-      usedDays: [TODAY, shift(TODAY, -40), 'PRIVATE_PROJECT_CANARY', TODAY, 5], usedOutsideDays: 'no' }, within(TODAY)))
+      usedDays: [TODAY, shift(TODAY, -40), 'PRIVATE_PROJECT_CANARY', TODAY, 5], usedOutsideDays: 'no',
+      valueDays: [TODAY, TODAY, shift(TODAY, -40), 'PRIVATE_PROJECT_CANARY'] }, within(TODAY)))
       .toEqual({ series: 3, baseline: true, closedThrough: ahead, sent: { [TODAY]: { dial_open_ok: 2 } },
-        earlierWaits: { [TODAY]: { dial_wait_none: 3 } }, usedDays: [TODAY], usedOutsideDays: [] })
+        earlierWaits: { [TODAY]: { dial_wait_none: 3 } }, usedDays: [TODAY], usedOutsideDays: [], valueDays: [TODAY] })
     expect(cleanDialRecord(undefined, within(TODAY))).toEqual(freshDialRecord(false))
     expect(cleanDialRecord({ closedThrough: '2026-02-30', series: 1.5 }, within(TODAY))).toEqual(freshDialRecord(false))
     const { record } = merge(freshDialRecord(false), fileOf({ [TODAY]: { dial_open_ok: 1 } }), shift(TODAY, 1))

@@ -15305,6 +15305,98 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
       expect(await counted(port)).toMatchObject({ dial_voice_interrupted_10s: 1, dial_voice_host_orca_interrupted_10s: 1 })
     })
   })
+
+  describe('the value from the dial', () => {
+    /** The value counts alone. */
+    const values = async (port: DevicesPort): Promise<Record<string, number>> =>
+      Object.fromEntries(Object.entries(await counted(port)).filter(([name]) => name.startsWith('dial_value_')))
+
+    // Away: the agent's own app is known and another app is in front. Anything unknown is not away.
+    it('a ring is away when the agent\'s app is known and another is in front', async () => {
+      vi.useFakeTimers()
+      const { port } = start({ faults: ['fleet'] })
+      port.observed(hook('session-start'))
+      // In Zed, which has no page of its own: its app is not known.
+      const zed = { sessionId: 'sess-2', hostHints: { __CFBundleIdentifier: 'dev.zed.Zed' } }
+      port.observed(hook('session-start', zed))
+      await attach(port)
+      const ring = async (over: Partial<ObservedHookEvent> = {}) => {
+        const sessionId = over.sessionId ?? 'sess-1'
+        port.observed(hook('turn-start', over))
+        port.observed({ engine: 'claude', sessionId, event: 'asked', tool: 'Bash', summary: 'npm test', cwd: '/work/api' })
+        port.observed(hook('turn-stop', over))
+        await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+      }
+      // Nothing in front yet.
+      await ring()
+      host().front('vscode')
+      await ring()
+      await ring(zed)
+      host().front('orca')
+      await ring()
+      expect(await values(port)).toMatchObject({ dial_value_ring_answered_2m: 4, dial_value_ring_away_answered_2m: 1,
+        dial_value_ring_away_answered_10m: 1, dial_value_installation_days: 1 })
+    })
+
+    it('a turn end the dial announced with its app not in front, then a voice: alert, list and a failed turn, not silent', async () => {
+      const { port } = start({ core: harnessAgent(), faults: ['fleet'] })
+      await attach(port)
+      host().front('vscode')
+      let cards = 0
+      const prompted = async (payload: Record<string, unknown>, sent: 'summary' | 'turnError' = 'summary') => {
+        port.card({ type: 'commander_event', agentId: 'h1', payload })
+        cards++
+        await vi.waitFor(() => expect(calls('summary').length + calls('turnError').length).toBe(cards))
+        expect(calls(sent).length).toBeGreaterThan(0)
+        seen.host.voiceEnded!({ outcome: 'sent', agentId: 'h1', since: Date.now() })
+        port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'turn_started' } })
+      }
+      await prompted({ kind: 'summary', text: 'done', tier: 'list' })
+      await prompted({ kind: 'summary', text: 'done', tier: 'silent' })
+      // Decided here, as alert.
+      await prompted({ kind: 'summary', text: 'done' })
+      await prompted({ kind: 'error', text: 'boom' }, 'turnError')
+      // Harness in front: Harness's own agent is not away.
+      host().front('harness')
+      await prompted({ kind: 'summary', text: 'done', tier: 'alert' })
+      expect(await values(port)).toEqual({ dial_value_done_away_prompted_10m: 3,
+        dial_value_done_away_prompted_10m_installation_days: 1, dial_value_installation_days: 1 })
+    })
+
+    it('a summary on screen is silent and announces nothing', async () => {
+      const { port } = start({ core: harnessAgent(), faults: ['fleet'] })
+      await attach(port)
+      host().front('vscode')
+      port.desk(['h1'], true)
+      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'summary', text: 'done', tier: 'alert' } })
+      seen.host.voiceEnded!({ outcome: 'sent', agentId: 'h1', since: Date.now() })
+      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'turn_started' } })
+      expect(await values(port)).toEqual({})
+    })
+
+    it('a hooked agent\'s next prompt is the person\'s when its hook says so, not another session\'s message', async () => {
+      vi.useFakeTimers()
+      readers.answer.mockResolvedValue('All 12 tests pass.')
+      const { port } = start({ faults: ['fleet'] })
+      port.observed(hook('session-start'))
+      await attach(port)
+      host().front('vscode')
+      const ended = async () => {
+        port.observed(hook('turn-stop'))
+        await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+      }
+      port.observed(hook('turn-start'))
+      await ended()
+      // Another session's message starts its turn: no prompt of the person's, and the announcement is spent.
+      port.observed(hook('turn-start', { relayed: true }))
+      port.observed(hook('turn-start'))
+      await ended()
+      // Typed by the person.
+      port.observed(hook('turn-start'))
+      expect(await values(port)).toEqual({ dial_value_done_away_prompted_10m: 1,
+        dial_value_done_away_prompted_10m_installation_days: 1, dial_value_installation_days: 1 })
+    })
+  })
 })
 
 describe('the dial follows the pane focused in WezTerm and kitty (docs/plans/2026-11-23-dial-wezterm-kitty-focus-follow-design.md)', () => {
