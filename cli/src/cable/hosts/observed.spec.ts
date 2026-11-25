@@ -4881,7 +4881,7 @@ describe('ObservedSource outer place', () => {
         canFocus: () => true, focus: vi.fn(async (_pane: Pane) => true) }
       const app = { id: 'app', tap: 'before' as const,
         paneOf: (): Pane | undefined => (held ? { adapter: 'app', id: 'a1', held: true } : undefined),
-        canFocus: () => true, focus: vi.fn(async (_pane: Pane) => true) }
+        canFocus: () => true, focus: vi.fn(async (_pane: Pane): Promise<boolean | 'refused'> => true) }
       const t = nested({ canOpen: vi.fn((_agentId: string, _target: OpenTarget) => canOpen) }, () => [mux, app])
       return {
         ...t, mux, app,
@@ -4903,16 +4903,28 @@ describe('ObservedSource outer place', () => {
         expect(t.actions.open.mock.calls[0][1].pane, JSON.stringify(answer)).toEqual({ adapter: 'mux', id: 'm1' })
         expect(t.app.focus.mock.invocationCallOrder[0]).toBeLessThan(t.actions.open.mock.invocationCallOrder[0])
         expect(t.mux.focus, JSON.stringify(answer)).not.toHaveBeenCalled()
+        expect(t.logs.filter((line) => line.includes('placed')), JSON.stringify(answer)).toEqual([])
       }
     })
 
-    it('a placed pane that did not come still opens', async () => {
+    // Failures are seen: the open still brings the app, on the tab it showed, and only this line says why.
+    it('a placed pane that did not come still opens, and the log names its adapter alone', async () => {
       const t = placedApp()
       t.app.focus.mockResolvedValueOnce(false)
       await t.start()
       expect(await t.src.focus(t.agent(), latestTap)).toBe(true)
       expect(t.app.focus).toHaveBeenCalledTimes(1)
       expect(t.actions.open).toHaveBeenCalledTimes(1)
+      expect(t.logs.filter((line) => line.includes('placed'))).toEqual(['[observed] open · app · placed pane not shown'])
+    })
+
+    it('a placed pane its adapter refused still opens, with no line of its own: the adapter said so', async () => {
+      const t = placedApp()
+      t.app.focus.mockResolvedValueOnce('refused')
+      await t.start()
+      expect(await t.src.focus(t.agent(), latestTap)).toBe(true)
+      expect(t.actions.open).toHaveBeenCalledTimes(1)
+      expect(t.logs.filter((line) => line.includes('placed'))).toEqual([])
     })
 
     it('an agent in no multiplexer opens alone, as before', async () => {
