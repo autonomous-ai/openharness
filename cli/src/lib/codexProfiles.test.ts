@@ -42,6 +42,9 @@ async function loadModule(): Promise<typeof CodexProfilesModule> {
 
 const emptyDiscovery = { home: '/nonexistent-empty-home', environment: {} }
 
+/** An absolute path on this host, as a link takes it: a drive letter's on Windows. */
+const abs = (name: string): string => process.platform === 'win32' ? `C:\\${name}` : `/${name}`
+
 describe('codexProfiles', () => {
   beforeEach(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'codex-profiles-data-'))
@@ -297,9 +300,18 @@ describe('codexProfiles', () => {
 
   it('a linked list names its first 256 homes', async () => {
     const { readLinkedCodexHomes } = await loadModule()
-    const listed = Array.from({ length: 300 }, (_, i) => `/h/${i}`)
+    const listed = Array.from({ length: 300 }, (_, i) => abs(`h${i}`))
     writeFileSync(join(dataDir, 'codex-profiles.json'), JSON.stringify(listed), { mode: 0o600 })
     expect(readLinkedCodexHomes()).toEqual(listed.slice(0, 256))
+  })
+
+  // The queue loads the home's config.toml: an entry no link could have written (resolveCodexProfilePath) names none.
+  it('a linked list names only absolute homes of at most 4096 characters with no control character', async () => {
+    const { readLinkedCodexHomes } = await loadModule()
+    const longest = abs('x').padEnd(4096, 'x')
+    const listed = [abs('a'), 'relative/b', abs('c\nd'), abs('e\x7f'), longest, `${longest}x`, abs('f')]
+    writeFileSync(join(dataDir, 'codex-profiles.json'), JSON.stringify(listed), { mode: 0o600 })
+    expect(readLinkedCodexHomes()).toEqual([abs('a'), longest, abs('f')])
   })
 
   it('the trusted homes are the own ones then the linked ones, each followed by its real path, once', async () => {
