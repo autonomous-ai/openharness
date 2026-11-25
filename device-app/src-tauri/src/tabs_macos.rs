@@ -20,7 +20,9 @@ use std::thread;
 // so a source compiles on a Mac without that app, compiling sends no event, and an app whose dictionary lacks a term
 // answers an error number instead of failing to compile. Every event is inside a 2 s timeout (tabs::CALL_TIMEOUT).
 // Each handler that tells its app first asks AppleScript, with no event, whether it runs: `tell application id`
-// launches one that does not, and it may have quit since the runner asked.
+// launches one that does not, and it may have quit since the runner asked. One that does not run raises -600
+// (procNotFound), a failed call: an answer is the rules' sign that macOS lets the app be scripted, and only an event
+// can give one.
 // With no visible window `selected_tty` answers the empty string; each select answers whether a tab held `t`, and each
 // write whether it wrote to the one session or terminal of `t`.
 
@@ -30,7 +32,7 @@ const TERMINAL: &str = r#"
 property app_id : "com.apple.Terminal"
 
 on selected_tty()
-	if not (running of application id app_id) then return ""
+	if not (running of application id app_id) then error number -600
 	with timeout of 2 seconds
 		tell application id app_id
 			repeat with w in (every «class cwin» whose «property pvis» is true)
@@ -42,7 +44,7 @@ on selected_tty()
 end selected_tty
 
 on select_tty(t, in_front)
-	if not (running of application id app_id) then return false
+	if not (running of application id app_id) then error number -600
 	with timeout of 2 seconds
 		tell application id app_id
 			repeat with w in (every «class cwin» whose «property pvis» is true)
@@ -70,7 +72,7 @@ const ITERM: &str = r#"
 property app_id : "com.googlecode.iterm2"
 
 on selected_tty()
-	if not (running of application id app_id) then return ""
+	if not (running of application id app_id) then error number -600
 	with timeout of 2 seconds
 		tell application id app_id
 			set shown to every «class cwin» whose «property pvis» is true
@@ -81,7 +83,7 @@ on selected_tty()
 end selected_tty
 
 on select_tty(t, in_front)
-	if not (running of application id app_id) then return false
+	if not (running of application id app_id) then error number -600
 	with timeout of 2 seconds
 		tell application id app_id
 			repeat with w in (every «class cwin» whose «property pvis» is true)
@@ -105,7 +107,7 @@ on focus_tty(t)
 end focus_tty
 
 on write_text(t, s)
-	if not (running of application id app_id) then return false
+	if not (running of application id app_id) then error number -600
 	with timeout of 2 seconds
 		tell application id app_id
 			-- Every window, visible or not: a hidden window's session is still the agent's.
@@ -141,7 +143,7 @@ const GHOSTTY: &str = r#"
 property app_id : "com.mitchellh.ghostty"
 
 on selected_tty()
-	if not (running of application id app_id) then return ""
+	if not (running of application id app_id) then error number -600
 	with timeout of 2 seconds
 		tell application id app_id
 			-- A window, tab or terminal that is not there is no tab.
@@ -164,7 +166,7 @@ on selected_tty()
 end selected_tty
 
 on select_tty(t, in_front)
-	if not (running of application id app_id) then return false
+	if not (running of application id app_id) then error number -600
 	if not in_front then return false
 	with timeout of 2 seconds
 		tell application id app_id
@@ -197,7 +199,7 @@ on focus_tty(t)
 end focus_tty
 
 on write_text(t, s)
-	if not (running of application id app_id) then return false
+	if not (running of application id app_id) then error number -600
 	with timeout of 2 seconds
 		tell application id app_id
 			-- Every window, visible or not: a hidden window's terminal is still the agent's.
@@ -215,7 +217,7 @@ on write_text(t, s)
 end write_text
 
 on send_enter(t)
-	if not (running of application id app_id) then return false
+	if not (running of application id app_id) then error number -600
 	with timeout of 2 seconds
 		tell application id app_id
 			-- Found again as write_text finds it, in every window, and only when exactly one terminal holds t.
