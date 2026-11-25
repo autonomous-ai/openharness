@@ -14,6 +14,10 @@ use std::time::Duration;
 const FIRST_LINE: Duration = Duration::from_secs(20);
 /// How long a stopped watch has to end by itself before its group is killed.
 const STOP_GRACE: Duration = Duration::from_secs(3);
+/// A watch's first stdin line: this app answers each write and Enter line. Harness Device 0.1.x drops them without a
+/// word, so a watch that never reads it prints none, and the devices send it no words. A line, not an argument: an
+/// older CLI ignores a line it does not know, where an argument it does not know ends the whole watch.
+const WRITES: &str = r#"{"writes":true}"#;
 
 /// A running watch. Stopping it, or dropping it, closes the child's stdin: the child then exits 0 by itself.
 pub struct Watch {
@@ -83,7 +87,8 @@ impl Drop for Watch {
     }
 }
 
-/// Runs `hardware watch --json`: an `Event::WatchLine` for each status line it prints, then one `Event::WatchExit`.
+/// Runs `hardware watch --json`, told first that this app answers writes: an `Event::WatchLine` for each status line it
+/// prints, then one `Event::WatchExit`.
 /// Each select line it prints goes to `select` with its app, tty and raise, and each write or Enter line to `typing`;
 /// neither is an Event: a tty and a spoken text never are.
 pub fn spawn_watch(
@@ -136,7 +141,9 @@ fn spawn_watch_within(
         // An Err only if the thread that reaps the child died; the run is over either way.
         send(Event::WatchExit(child.exit(Duration::MAX).unwrap_or(None)));
     });
-    Ok(Watch { stdin, writer, killer, grace, log, not_reading: AtomicBool::new(false) })
+    let watch = Watch { stdin, writer, killer, grace, log, not_reading: AtomicBool::new(false) };
+    watch.write(WRITES);
+    Ok(watch)
 }
 
 // Every test runs the fake CLI, a shell script.
