@@ -26,7 +26,7 @@ import type { createLaunchHelpers } from './launch.js'
 import type { RestartAgent } from './launches.js'
 import type { PaneSwap } from './swap.js'
 import { moveHeldLine } from '../../lib/hostMove/moveAgent.js'
-import { guardHold } from '../../lib/restoreAgents.js'
+import { guardHold, legacyNativeHold } from '../../lib/restoreAgents.js'
 import type { LaunchOverridesDeps } from '../../lib/launchOverrides.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
@@ -198,10 +198,12 @@ export function createAgentRestarter({
     if (session.guest) return GUEST_HARNESS_REFUSAL
     // A fresh launch would drop a native first launch's first prompt or fork. One the guard held starts again from
     // its receipt, so its restart is that recovery, now (`restartHeld`); one without that proof keeps today's refusal.
+    // One 0.6.86 or older held has that proof in its words: its restore re-reads the held shell and marks it (or fails
+    // it) as a pass would; refused here, a row no pass could read stayed held until the core restarted.
     if (!session.sessionId && session.launch?.state === 'starting' && session.launch.nativeToken) {
       return { ok: false, error: 'NATIVE_LAUNCH_HELD', detail: 'This harness is still starting.' }
     }
-    if (!session.sessionId && session.launch?.state === 'held' && session.launch.nativeToken && !heldFirstLaunch(session)) {
+    if (!session.sessionId && session.launch?.state === 'held' && session.launch.nativeToken && !heldFirstLaunch(session) && !legacyNativeHold(session)) {
       return { ok: false, error: 'NATIVE_LAUNCH_HELD', detail: 'The original launch is held for recovery. Its first prompt or fork cannot be replaced by a fresh launch.' }
     }
     const held = restartHeld(session.agentId)

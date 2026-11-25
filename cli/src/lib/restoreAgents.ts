@@ -118,7 +118,7 @@ const LEGACY_HELD_DETAILS: ReadonlySet<string> = new Set([
 
 /** A first launch 0.6.86 or older held for the guard. By its words, not its shape: current code still holds a first
  *  launch with a native token and no mark on purpose (newPane.ts), and that one stays held. */
-function legacyNativeHold(row: RegisteredSession): boolean {
+export function legacyNativeHold(row: RegisteredSession): boolean {
   const launch = row.launch
   return launch?.state === 'held' && launch.service === 'native' && !!launch.nativeToken && !launch.startsAgain
     && !row.sessionId && LEGACY_HELD_DETAILS.has(launch.detail)
