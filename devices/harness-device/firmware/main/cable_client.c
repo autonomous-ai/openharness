@@ -13,7 +13,7 @@
 #include "device_mac.h"
 #include "esp_app_desc.h"
 #include "esp_log.h"
-#include "audio_capture.h"   // audio_notify_done() — the completion beep
+#include "audio_capture.h"   // audio_notify_done() (the completion beep), AUDIO_MIC_GAIN_DB
 #include "audio_client.h"
 #include "esp_timer.h"
 #include "fw_update.h"
@@ -535,6 +535,7 @@ bool cable_client_voice_begin(const char *agent_id, const char *cmd, const char 
     if (cmd && cmd[0]) msg_string(&root, "cmd", cmd);
     msg_string(&root, "lang", lang && lang[0] ? lang : "en");
     msg_number(&root, "sr", sample_rate);
+    msg_number(&root, "micGain", AUDIO_MIC_GAIN_DB);
     char upload_id[24];
     audio_client_copy_upload_id(upload_id, sizeof(upload_id));
     msg_string(&root, "uploadId", upload_id);

@@ -20,6 +20,12 @@
 // forwards the DIAL's number instead of guessing, and the backend writes it into the WAV header.
 #define AUDIO_SAMPLE_RATE 16000
 
+// The ES7210's analog (PGA) gain. 37.5 dB is the chip's top step, where normal desk speech already touches full
+// scale, and that clip happens in the ADC, before any code sees the samples. 30 dB is the driver's own default
+// and maps to the chip exactly. Like the rate, the gain travels with the audio, as `micGain` in `voice.begin`,
+// because the daemon's copy of the voice gate scales with it.
+#define AUDIO_MIC_GAIN_DB 30.0f
+
 // One-time init of I2S RX + ES7210. Returns true on success (tolerant: false → no mic).
 bool audio_capture_init(void);
 

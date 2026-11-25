@@ -279,6 +279,8 @@ int cable_client_models_list(const char *agent_id, const char *picker_mode, cons
 //
 // `sample_rate` travels because the daemon has to state it to the transcriber, and a rate assumed on that
 // side is a rate that silently doubles or halves the speech when this side changes.
+// `micGain` travels beside it for the same reason (the daemon's gate scales with it), read from
+// AUDIO_MIC_GAIN_DB rather than passed.
 // False means no valid begin frame was sent; do not send uncorrelated PCM.
 bool cable_client_voice_begin(const char *agent_id, const char *cmd, const char *lang, int sample_rate);
 

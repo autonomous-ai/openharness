@@ -271,7 +271,7 @@ bool audio_capture_start(void)
     // Make sure the I2S RX clock is running (esp_codec_dev_open may leave it disabled).
     esp_err_t en = i2s_channel_enable(s_rx);
     if (en != ESP_OK && en != ESP_ERR_INVALID_STATE) ESP_LOGW(TAG, "i2s enable: %s", esp_err_to_name(en));
-    esp_codec_dev_set_in_gain(s_mic, 37.5);  // higher analog mic gain
+    esp_codec_dev_set_in_gain(s_mic, AUDIO_MIC_GAIN_DB);
     atomic_store(&s_rx_overruns,0);
     s_open = true;
     ESP_LOGI(TAG, "mic stream open (%d Hz mono)", AUDIO_SAMPLE_RATE);
