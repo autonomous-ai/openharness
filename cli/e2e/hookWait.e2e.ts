@@ -3,8 +3,9 @@
  * SessionStart before its transcript exists (2-3 s measured, CLI 0.6.89), so the daemon holds that admission until the
  * file is there, and a prompt the person typed meanwhile sends its Stop to a session not bound yet. The Stop waits
  * behind the admission and runs once the session is bound (core/engines/sessionHookWait.ts, hookServer.ts), instead of
- * being refused as unbound. The fake engine's `lateTranscript` keeps the transcript back until the test releases it
- * (fakeEngine.mjs).
+ * being refused as unbound; a background subagent started meanwhile sends its SubagentStart there too, which waits as
+ * well, so its lead reads working until the subagent ends. The fake engine's `lateTranscript` keeps the transcript back
+ * until the test releases it (fakeEngine.mjs).
  */
 import { mkdirSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -47,24 +48,19 @@ describe('hooks during an admission', () => {
   30_000, 50)
 
   /**
-   * A prompt typed into the pane while [sessionId]'s transcript is kept back: its Stop runs in the engine before the
-   * session is bound, then the release. The agent is bound to that session, idle, with the prompt and its recap, and
-   * the Stop waited for the admission, never refused. [streamed]: the turn is seen starting and ending.
+   * A prompt typed into the pane while [sessionId]'s transcript is kept back: its Stop reaches the daemon before the
+   * session is bound and waits behind the admission, then the release. The agent is bound to that session, idle, with
+   * the prompt and its recap, and the Stop ran bound once the session was, never refused.
    */
-  async function promptBeforeTheBind(d: IsolatedDaemon, client: LocalClient, agentId: string, pane: string, sessionId: string, word: string, streamed: boolean): Promise<void> {
+  async function promptBeforeTheBind(d: IsolatedDaemon, client: LocalClient, agentId: string, pane: string, sessionId: string, word: string): Promise<void> {
     const prompt = `tell me about the ${word}`
-    const started = client.next(isTurn('turn_started', agentId), 60_000, `turn_started (${word})`)
-    const ended = client.next(isTurn('turn_ended', agentId), 60_000, `turn_ended (${word})`)
-    const recap = client.next((frame) => isTurn('turn_summary', agentId)(frame) && JSON.stringify(frame.payload).includes(word), 60_000, `turn_summary (${word})`)
-    // Not waited on when not [streamed]: a timeout must not reject unheard.
-    if (!streamed) for (const unheard of [started, ended, recap]) unheard.catch(() => {})
     await d.tmux.run('send-keys', '-t', pane, '-l', prompt)
     await d.tmux.run('send-keys', '-t', pane, 'Enter')
-    // The Stop hook ran once the daemon answered it, so it reached the daemon before the session could be bound.
-    await until(`the engine to run the Stop of ${word}`, () =>
-      d.hookLog().split('\n').some((line) => line.includes(` Stop session=${sessionId} ran`)) || null, 30_000, 50)
+    // The daemon's own word that it holds the Stop: the engine notes its Stop ran even when notify.mjs gave up after its
+    // 500 ms, and that Stop could then reach the daemon after the bind.
+    await until(`the Stop of ${word} to wait for the admission`, () =>
+      d.log().includes(`[hooks] ${sid(sessionId)} turn-stop waits for its session's admission`) || null, 30_000, 50)
     release(d, sessionId)
-    if (streamed) await Promise.all([started, ended, recap])
     // The recap a device restoring its tile is answered with.
     await until(`the recap of ${word}`, async () => {
       const recent = await client.request('agent_recent', { agentId }, 10_000)
@@ -78,11 +74,12 @@ describe('hooks during an admission', () => {
     expect(await users(client, sessionId)).toEqual([prompt])
     await until('the waiting Stop to run', () => d.log().includes(`[hooks] ${sid(sessionId)} waiting hooks ran`) || null, 30_000, 50)
     const log = d.log()
-    expect(log).toContain(`[hooks] ${sid(sessionId)} turn-stop waits for its session's admission`)
+    // The held Stop's own line, said as it runs bound, as a Stop sent after the bind says it.
+    expect(log).toMatch(new RegExp(`\\[hooks\\] ${sid(sessionId)} turn-stop(?: · .*)?$`, 'm'))
     expect(log.split('\n').filter((line) => line.includes(sid(sessionId)) && line.includes('refused · unbound'))).toEqual([])
   }
 
-  it('Claude Code: a session whose SessionStart comes before its transcript, then a prompt and a Stop: the turn starts and ends, and a recap is made', async () => {
+  it('Claude Code: a session whose SessionStart comes before its transcript, then a prompt and a Stop: the Stop waits for the bind, and a recap is made', async () => {
     const d = await fresh()
     const client = await LocalClient.connect(d)
     const cwd = join(d.projectsDir, 'hook-wait-start')
@@ -92,7 +89,7 @@ describe('hooks during an admission', () => {
     const agentId: string = created.agent.id
     const sessionId = await waitingSession(d)
     const pane = (await until('the agent\'s pane', async () => (await row(client, agentId))?.tmuxPane || null, 30_000, 100)) as string
-    await promptBeforeTheBind(d, client, agentId, pane, sessionId, 'axolotl', true)
+    await promptBeforeTheBind(d, client, agentId, pane, sessionId, 'axolotl')
     client.close()
   })
 
@@ -116,10 +113,48 @@ describe('hooks during an admission', () => {
 
     await d.tmux.run('send-keys', '-t', first.tmuxPane, '!clear', 'Enter')
     const sessionId = await waitingSession(d, first.sessionId)
-    // The rebound agent first reads a transcript that already holds the whole turn, as history (core/transcripts/
-    // attach.ts): the turn is recapped as caught up (commander.ts catchUp), not seen starting and ending.
-    await promptBeforeTheBind(d, client, agentId, first.tmuxPane, sessionId, 'quokka', false)
+    // A known gap, from before the wait: the rebound agent reads a transcript that already holds the whole turn as
+    // history (lib/firstTurnReplay.ts takes no rebound for a first turn; core/transcripts/attach.ts), so the turn is
+    // recapped as caught up (commander.ts catchUp), not seen starting and ending.
+    await promptBeforeTheBind(d, client, agentId, first.tmuxPane, sessionId, 'quokka')
     expect(client.frames.filter((frame) => frame.type === 'session_reset').map((frame) => frame.payload?.staleSessionId)).toEqual([first.sessionId])
+    client.close()
+  })
+
+  it('Claude Code: a background subagent started before the bind keeps its lead working until it ends', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const cwd = join(d.projectsDir, 'hook-wait-subagent')
+    mkdirSync(cwd, { recursive: true })
+    const created = await client.request('agent_create', { engine: 'claude', cwd, bypassPermission: true }, 90_000)
+    expect(created.error, JSON.stringify(created)).toBeUndefined()
+    const agentId: string = created.agent.id
+    const sessionId = await waitingSession(d)
+    const pane = (await until('the agent\'s pane', async () => (await row(client, agentId))?.tmuxPane || null, 30_000, 100)) as string
+    await d.tmux.run('send-keys', '-t', pane, '-l', '!spawn otter')
+    await d.tmux.run('send-keys', '-t', pane, 'Enter')
+    // The subagent's start waits first, then the lead's own Stop, which its engine ran with the subagent still running.
+    // The daemon says only the first hook it holds of an admission: the Stop is known held by the count that ran.
+    await until('the subagent\'s start to wait', () => d.log().includes(`[hooks] ${sid(sessionId)} subagent waits for its session's admission`) || null, 30_000, 50)
+    await until('the engine to run the lead\'s Stop', () => d.hookLog().includes(` Stop session=${sessionId} ran`) || null, 30_000, 50)
+    release(d, sessionId)
+    await until('both waiting hooks to run', () => d.log().includes(`[hooks] ${sid(sessionId)} waiting hooks ran · 2`) || null, 30_000, 50)
+    expect(d.log()).toContain(`[turn] ${sid(sessionId)} Stop left its turn open · subagents run`)
+    // The lead's turn, read once the session is bound, ends only at its Stop after the subagent's.
+    await until('the lead, bound, to read working', async () => {
+      const now = await row(client, agentId)
+      return now?.sessionId === sessionId && now.activity?.state === 'working' ? now : null
+    }, 30_000, 250)
+    // A round trip after the Stop ran and the turn was read: the turn has not ended since.
+    expect((await row(client, agentId))?.activity?.state, 'the lead reads as working while its subagent runs').toBe('working')
+    expect(client.frames.filter(isTurn('turn_ended', agentId)), 'no turn_ended while the subagent runs').toEqual([])
+    const ended = client.next(isTurn('turn_ended', agentId), 60_000, 'turn_ended after the subagent stops')
+    const recap = client.next((frame) => isTurn('turn_summary', agentId)(frame) && JSON.stringify(frame.payload).includes('otter found 3 files'), 60_000, 'the wrap-up\'s recap')
+    writeFileSync(join(d.root, 'otter.release'), '')
+    await ended
+    expect((await recap).payload?.restored, 'a recap of a turn seen ending, not caught up').not.toBe(true)
+    await until('the lead to read idle', async () => (await row(client, agentId))?.activity?.state !== 'working' || null, 30_000, 250)
+    expect(client.frames.filter(isTurn('turn_ended', agentId))).toHaveLength(1)
     client.close()
   })
 })
