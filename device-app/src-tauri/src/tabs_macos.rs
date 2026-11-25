@@ -1,8 +1,8 @@
 //! The tabs of Terminal, iTerm2 and Ghostty on macOS, through three fixed scripts run in this process by
 //! `NSAppleScript`: macOS asks the person once to let Harness Device control each app, and the daemon sends no event.
-//! A tty reaches a script only as a handler's parameter, after the tty check, and never as script text.
+//! A tty and a spoken text reach a script only as a handler's parameters, after their checks, and never as script text.
 
-use crate::tabs::{Selected, TabApp, TabError, TabScripts, tab_error, tty_ok};
+use crate::tabs::{Selected, TabApp, TabError, TabScripts, Written, tab_error, tty_ok};
 use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::AnyObject;
 use objc2::{AnyThread, ClassType, msg_send};
@@ -21,7 +21,8 @@ use std::thread;
 // answers an error number instead of failing to compile. Every event is inside a 2 s timeout (tabs::CALL_TIMEOUT).
 // Each handler that tells its app first asks AppleScript, with no event, whether it runs: `tell application id`
 // launches one that does not, and it may have quit since the runner asked.
-// With no visible window `selected_tty` answers the empty string; each select answers whether a tab held `t`.
+// With no visible window `selected_tty` answers the empty string; each select answers whether a tab held `t`, and each
+// write whether it wrote to the one session or terminal of `t`.
 
 const TERMINAL: &str = r#"
 -- Terminal: «class cwin» window, «property pvis» visible, «property pidx» index, «property tcnt» selected tab,
@@ -64,7 +65,8 @@ end focus_tty
 
 const ITERM: &str = r#"
 -- iTerm2: «class cwin» window, «property pvis» visible, «property Crwn» current window, «property Wcsn» current
--- session, «class Trmt» tab, «class Trms» session, «property Stty» tty, «event Itrmslct» select.
+-- session, «class Trmt» tab, «class Trms» session, «property Stty» tty, «event Itrmslct» select, «event Itrmsntx» write,
+-- «class Text» its text, «class Wtnl» its newline.
 property app_id : "com.googlecode.iterm2"
 
 on selected_tty()
@@ -101,14 +103,41 @@ end select_tty
 on focus_tty(t)
 	return select_tty(t, true)
 end focus_tty
+
+on write_text(t, s)
+	if not (running of application id app_id) then return false
+	with timeout of 2 seconds
+		tell application id app_id
+			-- Every window, visible or not: a hidden window's session is still the agent's.
+			set held to {}
+			repeat with w in (every «class cwin»)
+				repeat with k in (every «class Trmt» of w)
+					set held to held & (every «class Trms» of k whose «property Stty» is t)
+				end repeat
+			end repeat
+			-- Exactly one (check 7): a pty no session of iTerm2 holds is not its pane.
+			if length of held is not 1 then return false
+			-- No newline: the Enter is a write of its own, after the devices' settle and their checks again.
+			«event Itrmsntx» (item 1 of held) given «class Text»:s, «class Wtnl»:false
+		end tell
+	end timeout
+	return true
+end write_text
+
+on send_enter(t)
+	return write_text(t, character id 13)
+end send_enter
 "#;
 
 // Ghostty's `select tab` may bring Ghostty forward, so a swipe selects only while it is in front. A Ghostty with no
 // `tty` and a terminal or tab that closed between two events fail a tty read alike: the script raises tabs::NO_TTY only
-// when the object it read is still there.
+// when the object it read is still there. A write that fails either way is an error: it writes nothing.
+// The writes' codes, `input text` (GhstInTx, its `to` GItT) and `send key` (GhstSKey, its `to` GKeT), are from
+// Ghostty's dictionary at v1.3.0: https://raw.githubusercontent.com/ghostty-org/ghostty/v1.3.0/macos/Ghostty.sdef
 const GHOSTTY: &str = r#"
 -- Ghostty: «class Gwnd» window, «property GFWn» front window, «property GWsT» selected tab, «class Gtab» tab,
--- «property GTfT» focused terminal, «class Gtrm» terminal, «property Gtty» tty, «event GhstSlTb» select tab.
+-- «property GTfT» focused terminal, «class Gtrm» terminal, «property Gtty» tty, «event GhstSlTb» select tab,
+-- «event GhstInTx» input text, «class GItT» its terminal, «event GhstSKey» send key, «class GKeT» its terminal.
 property app_id : "com.mitchellh.ghostty"
 
 on selected_tty()
@@ -166,6 +195,40 @@ end select_tty
 on focus_tty(t)
 	return select_tty(t, true)
 end focus_tty
+
+on write_text(t, s)
+	if not (running of application id app_id) then return false
+	with timeout of 2 seconds
+		tell application id app_id
+			-- Every window, visible or not: a hidden window's terminal is still the agent's.
+			set held to {}
+			repeat with w in (every «class Gwnd»)
+				set held to held & (every «class Gtrm» of w whose «property Gtty» is t)
+			end repeat
+			-- Exactly one (check 7): a pty no terminal of Ghostty holds is not its pane.
+			if length of held is not 1 then return false
+			-- Pasted, with no newline: the Enter is its own event, after the devices' settle and their checks again.
+			«event GhstInTx» s given «class GItT»:(item 1 of held)
+		end tell
+	end timeout
+	return true
+end write_text
+
+on send_enter(t)
+	if not (running of application id app_id) then return false
+	with timeout of 2 seconds
+		tell application id app_id
+			-- Found again as write_text finds it, in every window, and only when exactly one terminal holds t.
+			set held to {}
+			repeat with w in (every «class Gwnd»)
+				set held to held & (every «class Gtrm» of w whose «property Gtty» is t)
+			end repeat
+			if length of held is not 1 then return false
+			«event GhstSKey» "enter" given «class GKeT»:(item 1 of held)
+		end tell
+	end timeout
+	return true
+end send_enter
 "#;
 
 /// Harness Device's own table: the app a line names picks one of these, and nothing of the line reaches its text.
@@ -274,16 +337,31 @@ impl MacTabs {
         }
     }
 
-    /// A swipe's or a tap's select. A tty that fails the check is refused before any descriptor is made.
-    fn select(&self, app: TabApp, handler: &'static str, tty: &str, front: Option<bool>) -> Result<Selected, TabError> {
+    /// Calls `handler` with a tty and, for some, a second parameter; its answer is whether the app held the tty. A tty
+    /// that fails the check is refused before any descriptor is made.
+    fn held(&self, app: TabApp, handler: &'static str, tty: &str, second: Option<Arg>) -> Result<bool, TabError> {
         if !tty_ok(tty) {
             return Err(TabError::Failed);
         }
         self.scripted(app)?;
         let mut args = vec![Arg::Text(tty.to_string())];
-        args.extend(front.map(Arg::Flag));
-        let held = call((self.source)(app), handler, args, flag).map_err(tab_error)?;
-        Ok(if held { Selected::Done } else { Selected::NoTab })
+        args.extend(second);
+        call((self.source)(app), handler, args, flag).map_err(tab_error)
+    }
+
+    /// A swipe's or a tap's select.
+    fn select(&self, app: TabApp, handler: &'static str, tty: &str, front: Option<bool>) -> Result<Selected, TabError> {
+        Ok(if self.held(app, handler, tty, front.map(Arg::Flag))? { Selected::Done } else { Selected::NoTab })
+    }
+
+    /// A typing's write or Enter. Terminal has no write handler: `do script`, its only way to put text in a tab, runs
+    /// the text as a command and adds a newline.
+    fn write(&self, app: TabApp, handler: &'static str, tty: &str, text: Option<&str>) -> Result<Written, TabError> {
+        if app == TabApp::Terminal {
+            return Ok(Written::NoSession);
+        }
+        let text = text.map(|text| Arg::Text(text.to_string()));
+        Ok(if self.held(app, handler, tty, text)? { Written::Done } else { Written::NoSession })
     }
 }
 
@@ -304,6 +382,14 @@ impl TabScripts for MacTabs {
 
     fn focus_tty(&self, app: TabApp, tty: &str) -> Result<Selected, TabError> {
         self.select(app, "focus_tty", tty, None)
+    }
+
+    fn write_text(&self, app: TabApp, tty: &str, text: &str) -> Result<Written, TabError> {
+        self.write(app, "write_text", tty, Some(text))
+    }
+
+    fn send_enter(&self, app: TabApp, tty: &str) -> Result<Written, TabError> {
+        self.write(app, "send_enter", tty, None)
     }
 }
 
@@ -415,7 +501,7 @@ fn flag(answer: &NSAppleEventDescriptor) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tabs::{CALL_TIMEOUT, NO_TTY, Written};
+    use crate::tabs::{CALL_TIMEOUT, NO_TTY};
     use std::process::Command;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
@@ -636,7 +722,12 @@ end send_enter
 
     #[test]
     fn iterms_write_never_adds_a_newline() {
-        let writes: Vec<&str> = ITERM.lines().map(str::trim).filter(|line| line.contains("«event Itrmsntx»")).collect();
+        // Not the comment that names the codes.
+        let writes: Vec<&str> = ITERM
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.starts_with("--") && line.contains("«event Itrmsntx»"))
+            .collect();
         assert_eq!(writes.len(), 1, "{ITERM}");
         for write in writes {
             assert!(write.ends_with(" given «class Text»:s, «class Wtnl»:false"), "{write}");
