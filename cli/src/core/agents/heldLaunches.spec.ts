@@ -636,21 +636,66 @@ describe('a launch the guard held starts again on attempts of its own', () => {
     expect(timesOf(h, 'a')).toEqual([500, 4_500])
   })
 
-  it('a recovery whose watch ran out is held as today: no attempts of its own, the shared schedule and its answers', async () => {
-    // Its evidence changed between journal and run: the pane stayed the old held shell, the watch never saw the new
-    // token, and after its budget the row is held without startsAgain (lib/restoreAgents.ts).
-    const detail = 'Waiting to confirm the engine executable and native hooks.'
-    const h = setup([guardRow('a', 's-a')], (only) => h.asked.length === 1 ? summary({ restored: [...only] }) : summary({ held: [...only] }))
+  it('a dispatch the terminal turned away with its pane still the held shell is held before dispatch: the next attempt comes', async () => {
+    // Its evidence changed between the journal and the respawn: the row went starting under the new token, and the
+    // restore put it back to its hold under the old one, which its pane still is (lib/restoreAgents.ts).
+    const h = setup([guardRow('a', 's-a')], (only) => {
+      h.registry.get('a')!.launch = { state: 'starting', nativeToken: `a-${h.asked.length}` }
+      h.registry.get('a')!.launch = GUARD('a-0')
+      return summary({ held: [...only] })
+    })
     await h.held.boot(async () => {})
     h.held.startAgain('a')
-    await vi.advanceTimersByTimeAsync(2_000)
-    h.registry.get('a')!.launch = { state: 'held', service: 'native', nativeToken: 'a-1', detail }
-    await vi.advanceTimersByTimeAsync(8_000)
-    expect(timesOf(h, 'a')).toEqual([2_000])
-    await h.held.restoreHeld()
     await vi.advanceTimersByTimeAsync(6_000)
-    expect(timesOf(h, 'a')).toEqual([2_000, 10_000, 12_000, 16_000])
-    expect(await h.held.restartHeld('a')).toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE', detail })
+    expect(timesOf(h, 'a')).toEqual([2_000, 6_000])
+    expect(await h.held.restartHeld('a')).toMatchObject({ ok: true, session: { agentId: 'a', launch: GUARD('a-0') }, resumed: true })
+  })
+
+  it.each([
+    ['its own attempt', async (h: ReturnType<typeof setup>) => { h.held.startAgain('a'); await vi.advanceTimersByTimeAsync(2_000) }],
+    ['a pass', async (h: ReturnType<typeof setup>) => { await h.held.restoreHeld() }],
+    ["a person's restart", async (h: ReturnType<typeof setup>) => { await h.held.restartHeld('a') }],
+  ] as const)('announces a row %s failed, once: its pane, kept, tells discovery nothing', async (_, attempt) => {
+    // Its request unreadable, its pane gone or not its held shell, its build refused: the restore failed it.
+    const h = setup([guardRow('a')], (only) => {
+      for (const id of only) h.registry.get(id)!.launch = { state: 'failed', ...DID_NOT_START }
+      return summary({ failed: [...only].map((agentId) => ({ agentId, code: DID_NOT_START.error, reason: DID_NOT_START.detail })) })
+    })
+    await h.held.boot(async () => {})
+    await attempt(h)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(h.announce).toHaveBeenCalledOnce()
+    expect(h.announce).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a', launch: { state: 'failed', ...DID_NOT_START } }))
+  })
+
+  it('waits with no bound while held for another service: only its holds for native count toward the 15 minutes', async () => {
+    let service = 'models'
+    const h = setup([guardRow('a')], (only) => {
+      h.registry.get('a')!.launch = GUARD('a-0', service)
+      return summary({ held: [...only] })
+    })
+    await h.held.boot(async () => {})
+    h.held.startAgain('a')
+    await vi.advanceTimersByTimeAsync(60 * 60_000)
+    expect(h.registry.get('a')?.launch).toEqual(GUARD('a-0', 'models'))
+    // Held for native from here: its 15 minutes start now.
+    service = 'native'
+    await vi.advanceTimersByTimeAsync(14 * 60_000)
+    expect(h.registry.get('a')?.launch).toEqual(GUARD('a-0'))
+    expect(h.announce).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(2 * 60_000)
+    expect(h.registry.get('a')?.launch).toEqual({ state: 'failed', ...DID_NOT_START })
+    expect(lines(h, 'NATIVE_EVIDENCE_UNSETTLED')).toEqual(['[restore] codex · agent a · first launch held 15 minutes · NATIVE_EVIDENCE_UNSETTLED'])
+  })
+
+  it('says nothing of a row its pass failed: the restore said it, once', async () => {
+    const h = setup([row('a', HELD), guardRow('b')], (only) => {
+      for (const id of only) h.registry.get(id)!.launch = { state: 'failed', error: 'GRID_ENGINE_UNSUPPORTED', detail: 'No way to its grid.' }
+      return summary({ failed: [...only].map((agentId) => ({ agentId, code: 'GRID_ENGINE_UNSUPPORTED', reason: 'No way to its grid.' })) })
+    })
+    await h.held.boot(async () => {})
+    await h.held.restoreHeld()
+    expect(lines(h, 'could not launch')).toEqual([])
   })
 
   describe("a person's restart", () => {
