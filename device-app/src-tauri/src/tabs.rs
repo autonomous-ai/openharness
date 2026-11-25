@@ -558,12 +558,11 @@ mod tests {
         Some(Next::Refused { line: wrote_line(id, false), log: Some(said.into()) })
     }
 
-    /// iTerm2 in front, and both apps that take a typing answered once without an error.
+    /// Ghostty, the one app that takes a typing, in front, its poll answered once without an error.
     fn writing() -> TabFollow {
         let mut follow = polling();
-        follow.front(I.bundle());
-        follow.polled(I, Ok(None), 0);
-        follow.selected(G, Ok(Selected::NoTab));
+        follow.front(G.bundle());
+        follow.polled(G, Ok(None), 0);
         follow
     }
 
@@ -679,8 +678,8 @@ mod tests {
     #[test]
     fn a_write_line_is_read_only_when_its_app_tty_id_and_text_pass() {
         assert_eq!(
-            typing_of(r#"{"write":{"id":"0123456789abcdef","app":"iterm","tty":"/dev/ttys023","text":"hi"}}"#),
-            Some(write(I, ID, "hi"))
+            typing_of(r#"{"write":{"id":"0123456789abcdef","app":"ghostty","tty":"/dev/ttys023","text":"hi"}}"#),
+            Some(write(G, ID, "hi"))
         );
         let typing = typing_of(&write_line("ghostty", "/dev/ttys0", ENTER_ID, "hi there")).unwrap();
         assert_eq!(
@@ -689,30 +688,30 @@ mod tests {
         );
         assert_eq!((typing.id(), typing.app(), typing.tty()), (ENTER_ID, G, "/dev/ttys0"));
         let write_with = |key: &str, value: Value| {
-            let mut line = serde_json::json!({ "write": { "id": ID, "app": "iterm", "tty": TTY, "text": "hi" } });
+            let mut line = serde_json::json!({ "write": { "id": ID, "app": "ghostty", "tty": TTY, "text": "hi" } });
             line["write"][key] = value;
             line.to_string()
         };
         for dropped in [
             write_line("orca", TTY, ID, "hi"),
             write_line("vscode", TTY, ID, "hi"),
-            write_line("com.googlecode.iterm2", TTY, ID, "hi"),
-            write_line("iTerm2", TTY, ID, "hi"),
-            write_line("iterm", "/dev/ttys12345", ID, "hi"),
-            write_line("iterm", "/dev/pts/1", ID, "hi"),
-            write_line("iterm", "/dev/ttys023; rm", ID, "hi"),
+            write_line("com.mitchellh.ghostty", TTY, ID, "hi"),
+            write_line("Ghostty", TTY, ID, "hi"),
+            write_line("ghostty", "/dev/ttys12345", ID, "hi"),
+            write_line("ghostty", "/dev/pts/1", ID, "hi"),
+            write_line("ghostty", "/dev/ttys023; rm", ID, "hi"),
             // Ids of 15 and 17 hex, upper case, and a letter past f.
-            write_line("iterm", TTY, "0123456789abcde", "hi"),
-            write_line("iterm", TTY, "0123456789abcdef0", "hi"),
-            write_line("iterm", TTY, "0123456789ABCDEF", "hi"),
-            write_line("iterm", TTY, "0123456789abcdeg", "hi"),
-            write_line("iterm", TTY, ID, ""),
+            write_line("ghostty", TTY, "0123456789abcde", "hi"),
+            write_line("ghostty", TTY, "0123456789abcdef0", "hi"),
+            write_line("ghostty", TTY, "0123456789ABCDEF", "hi"),
+            write_line("ghostty", TTY, "0123456789abcdeg", "hi"),
+            write_line("ghostty", TTY, ID, ""),
             write_with("text", Value::from(7)),
             write_with("text", Value::Null),
             write_with("id", Value::from(7)),
             write_with("raise", Value::from(true)),
-            r#"{"write":{"id":"0123456789abcdef","app":"iterm","tty":"/dev/ttys023"}}"#.into(),
-            r#"{"write":{"id":"0123456789abcdef","app":"iterm","tty":"/dev/ttys023","text":"hi"},"x":1}"#.into(),
+            r#"{"write":{"id":"0123456789abcdef","app":"ghostty","tty":"/dev/ttys023"}}"#.into(),
+            r#"{"write":{"id":"0123456789abcdef","app":"ghostty","tty":"/dev/ttys023","text":"hi"},"x":1}"#.into(),
             r#"{"write":"hi"}"#.into(),
             "not json".into(),
             "".into(),
@@ -722,12 +721,15 @@ mod tests {
     }
 
     #[test]
-    fn terminal_never_takes_a_write() {
-        // Terminal's only way to put words in a tab would run them as a command.
-        assert_eq!(typing_of(&write_line("terminal-app", TTY, ID, "hi")), None);
-        assert_eq!(typing_of(&enter_line("terminal-app", TTY, ID)), None);
-        assert_eq!(typing_of(&write_line("iterm", TTY, ID, "hi")), Some(write(I, ID, "hi")));
-        assert_eq!(typing_of(&enter_line("iterm", TTY, ID)), Some(enter(I, ID)));
+    fn only_ghostty_takes_a_write() {
+        // Terminal's only way to put words in a tab would run them as a command, and iTerm2's write reaches every
+        // session its Broadcast Input joins, which its dictionary does not show.
+        for app in ["terminal-app", "iterm"] {
+            assert_eq!(typing_of(&write_line(app, TTY, ID, "hi")), None, "{app}");
+            assert_eq!(typing_of(&enter_line(app, TTY, ID)), None, "{app}");
+        }
+        assert_eq!(typing_of(&write_line("ghostty", TTY, ID, "hi")), Some(write(G, ID, "hi")));
+        assert_eq!(typing_of(&enter_line("ghostty", TTY, ID)), Some(enter(G, ID)));
     }
 
     #[test]
@@ -752,14 +754,14 @@ mod tests {
 
     #[test]
     fn a_line_with_another_key_is_dropped() {
-        let write = r#"{"id":"0123456789abcdef","app":"iterm","tty":"/dev/ttys023","text":"hi"}"#;
-        let enter = r#"{"id":"fedcba9876543210","app":"iterm","tty":"/dev/ttys023"}"#;
+        let write = r#"{"id":"0123456789abcdef","app":"ghostty","tty":"/dev/ttys023","text":"hi"}"#;
+        let enter = r#"{"id":"fedcba9876543210","app":"ghostty","tty":"/dev/ttys023"}"#;
         for dropped in [
             format!(r#"{{"write":{write},"enter":{enter}}}"#),
             format!(r#"{{"Write":{write}}}"#),
             format!(r#"{{"select":{enter}}}"#),
             format!(r#"{{"tab":{enter}}}"#),
-            r#"{"select":{"app":"iterm","tty":"/dev/ttys023"}}"#.into(),
+            r#"{"select":{"app":"ghostty","tty":"/dev/ttys023"}}"#.into(),
             r#"{"wrote":{"id":"0123456789abcdef","ok":true}}"#.into(),
             r#"{"attached":true,"fw":"0.1.0","hw":"round"}"#.into(),
             "{}".into(),
@@ -773,25 +775,25 @@ mod tests {
     fn the_longest_text_is_counted_in_utf16_units_as_the_cli_counts_it() {
         assert_eq!(MAX_TEXT, 20_000);
         for text in ["é".repeat(20_000), "😀".repeat(10_000), "中".repeat(20_000), "a".repeat(20_000)] {
-            let line = write_line("iterm", TTY, ID, &text);
+            let line = write_line("ghostty", TTY, ID, &text);
             // The longest line, with its newline, is one the watch's reader hands on.
             assert!(line.len() < crate::cli::LINE_MAX, "{}", line.len());
-            assert_eq!(typing_of(&line), Some(write(I, ID, &text)));
+            assert_eq!(typing_of(&line), Some(write(G, ID, &text)));
         }
         // 20,001 units, and 10,001 emoji: 10,001 chars but 20,002 units.
         for text in ["é".repeat(20_001), format!("{}a", "😀".repeat(10_000)), "😀".repeat(10_001), "中".repeat(20_001)]
         {
-            assert_eq!(typing_of(&write_line("iterm", TTY, ID, &text)), None);
+            assert_eq!(typing_of(&write_line("ghostty", TTY, ID, &text)), None);
         }
     }
 
     #[test]
     fn a_text_the_devices_cleaned_passes_and_a_control_character_does_not() {
         for text in ["a\u{2028}b", "a\u{a0}b", "a\u{fffd}b", "emoji 😀 and 中文"] {
-            assert_eq!(typing_of(&write_line("iterm", TTY, ID, text)), Some(write(I, ID, text)), "{text:?}");
+            assert_eq!(typing_of(&write_line("ghostty", TTY, ID, text)), Some(write(G, ID, text)), "{text:?}");
         }
         for text in ["a\nb", "a\rb", "a\tb", "a\u{7f}b", "a\u{85}b", "\u{1b}[0m", "a\u{0}b", "\n"] {
-            assert_eq!(typing_of(&write_line("iterm", TTY, ID, text)), None, "{text:?}");
+            assert_eq!(typing_of(&write_line("ghostty", TTY, ID, text)), None, "{text:?}");
         }
     }
 
@@ -1144,23 +1146,26 @@ mod tests {
     #[test]
     fn a_typing_runs_only_for_an_app_whose_poll_or_select_answered() {
         let now = Instant::now();
-        // Nothing of iTerm2 has answered yet: a write could wait on macOS's consent prompt.
+        // Nothing of Ghostty has answered yet: a write could wait on macOS's consent prompt.
         let mut follow = polling();
-        follow.front(I.bundle());
-        assert_eq!(follow.typed(write(I, ID, "hi"), now).line, None);
-        assert_eq!(follow.next_typing(now), refused_saying(ID, "tabs: iTerm2 write refused · no answer yet"));
+        follow.front(G.bundle());
+        assert_eq!(follow.typed(write(G, ID, "hi"), now).line, None);
+        assert_eq!(follow.next_typing(now), refused_saying(ID, "tabs: Ghostty write refused · no answer yet"));
         // A failed poll is no answer.
-        follow.polled(I, Err(TabError::Failed), 0);
-        follow.typed(write(I, ID, "hi"), now);
-        assert_eq!(follow.next_typing(now), refused_saying(ID, "tabs: iTerm2 write refused · no answer yet"));
-        // A poll that answered, even with no window, is.
-        follow.polled(I, Ok(None), 0);
-        follow.typed(write(I, ID, "hi"), now);
-        assert_eq!(follow.next_typing(now), Some(Next::Run(write(I, ID, "hi"))));
+        follow.polled(G, Err(TabError::Failed), 0);
+        follow.typed(write(G, ID, "hi"), now);
+        assert_eq!(follow.next_typing(now), refused_saying(ID, "tabs: Ghostty write refused · no answer yet"));
         // One app's answer is not another's.
+        follow.polled(I, Ok(None), 0);
+        follow.selected(T, Ok(Selected::NoTab));
         follow.typed(enter(G, ENTER_ID), now);
         assert_eq!(follow.next_typing(now), refused_saying(ENTER_ID, "tabs: Ghostty enter refused · no answer yet"));
+        // A poll that answered, even with no window, is.
+        follow.polled(G, Ok(None), 0);
+        follow.typed(write(G, ID, "hi"), now);
+        assert_eq!(follow.next_typing(now), Some(Next::Run(write(G, ID, "hi"))));
         // A select answers for its app too, unless it failed.
+        let mut follow = polling();
         follow.selected(G, Err(TabError::Failed));
         follow.typed(enter(G, ENTER_ID), now);
         assert_eq!(follow.next_typing(now), refused_saying(ENTER_ID, "tabs: Ghostty enter refused · no answer yet"));
@@ -1169,8 +1174,8 @@ mod tests {
         assert_eq!(follow.next_typing(now), Some(Next::Run(enter(G, ENTER_ID))));
         // The consent is the app's, not the watch's: a new watch's typing runs.
         follow.watching(true);
-        follow.typed(write(I, ID, "hi"), now);
-        assert_eq!(follow.next_typing(now), Some(Next::Run(write(I, ID, "hi"))));
+        follow.typed(write(G, ID, "hi"), now);
+        assert_eq!(follow.next_typing(now), Some(Next::Run(write(G, ID, "hi"))));
     }
 
     #[test]
@@ -1178,38 +1183,40 @@ mod tests {
         let now = Instant::now();
         // Turned off while a typing waits: that one is answered no as its turn comes.
         let mut follow = writing();
-        assert_eq!(follow.typed(write(I, ID, "hi"), now).line, None);
-        follow.polled(I, Err(TabError::Denied), 1);
+        assert_eq!(follow.typed(write(G, ID, "hi"), now).line, None);
+        follow.polled(G, Err(TabError::Denied), 1);
         assert_eq!(follow.next_typing(now), refused(ID));
         // Off, a new one is answered no at once, and none waits. The app said why once.
-        let out = follow.typed(enter(I, ENTER_ID), now);
+        let out = follow.typed(enter(G, ENTER_ID), now);
         assert_eq!((out.line, out.log), (Some(wrote_line(ENTER_ID, false)), vec![]));
         assert_eq!(follow.next_typing(now), None);
-        // The other app goes on.
+        // Another app turned off leaves it on.
+        let mut follow = writing();
+        follow.selected(I, Err(TabError::Denied));
         assert_eq!(follow.typed(write(G, ID, "hi"), now).line, None);
         assert_eq!(follow.next_typing(now), Some(Next::Run(write(G, ID, "hi"))));
 
         // A write's answer turns its app off as a poll's or a select's does, and says so once.
         for (error, said) in [
-            (TabError::Denied, "tabs: iTerm2 not allowed"),
-            (TabError::NoTty, "tabs: iTerm2 has no tty"),
-            (TabError::NoScripting, "tabs: iTerm2 has no scripting"),
+            (TabError::Denied, "tabs: Ghostty not allowed"),
+            (TabError::NoTty, "tabs: Ghostty has no tty"),
+            (TabError::NoScripting, "tabs: Ghostty has no scripting"),
         ] {
             let mut follow = writing();
-            let out = follow.written(&write(I, ID, "hi"), Err(error));
+            let out = follow.written(&write(G, ID, "hi"), Err(error));
             assert_eq!((out.line, out.log), (Some(wrote_line(ID, false)), vec![said.to_string()]));
             assert_eq!(follow.polls(), None);
-            assert_eq!(follow.typed(enter(I, ENTER_ID), now).line, Some(wrote_line(ENTER_ID, false)));
-            assert!(follow.written(&enter(I, ENTER_ID), Err(error)).log.is_empty());
+            assert_eq!(follow.typed(enter(G, ENTER_ID), now).line, Some(wrote_line(ENTER_ID, false)));
+            assert!(follow.written(&enter(G, ENTER_ID), Err(error)).log.is_empty());
         }
         // A failed write leaves it on, and says so.
         let mut follow = writing();
-        let out = follow.written(&write(I, ID, "hi"), Err(TabError::Failed));
-        assert_eq!((out.line, out.log), (Some(wrote_line(ID, false)), vec!["tabs: iTerm2 write failed".to_string()]));
+        let out = follow.written(&write(G, ID, "hi"), Err(TabError::Failed));
+        assert_eq!((out.line, out.log), (Some(wrote_line(ID, false)), vec!["tabs: Ghostty write failed".to_string()]));
         let out = follow.written(&enter(G, ENTER_ID), Err(TabError::Failed));
         assert_eq!(out.log, ["tabs: Ghostty enter failed"]);
-        assert_eq!(follow.typed(enter(I, ENTER_ID), now).line, None);
-        assert_eq!(follow.next_typing(now), Some(Next::Run(enter(I, ENTER_ID))));
+        assert_eq!(follow.typed(enter(G, ENTER_ID), now).line, None);
+        assert_eq!(follow.next_typing(now), Some(Next::Run(enter(G, ENTER_ID))));
     }
 
     #[test]
@@ -1217,15 +1224,15 @@ mod tests {
         assert_eq!(LATE_WRITE, Duration::from_millis(500));
         let came = Instant::now();
         let mut follow = writing();
-        follow.typed(write(I, ID, "hi"), came);
-        assert_eq!(follow.next_typing(came + LATE_WRITE), Some(Next::Run(write(I, ID, "hi"))));
+        follow.typed(write(G, ID, "hi"), came);
+        assert_eq!(follow.next_typing(came + LATE_WRITE), Some(Next::Run(write(G, ID, "hi"))));
         // Each one that waited longer, behind macOS's consent prompt for another app, is dropped with its own line.
-        follow.typed(write(I, ID, "hi"), came);
+        follow.typed(write(G, ID, "hi"), came);
         follow.typed(enter(G, ENTER_ID), came);
         let late = |line: &str, log: &str| Some(Next::Refused { line: line.into(), log: Some(log.into()) });
         assert_eq!(
             follow.next_typing(came + LATE_WRITE + Duration::from_millis(1)),
-            late(&wrote_line(ID, false), "tabs: iTerm2 write dropped late")
+            late(&wrote_line(ID, false), "tabs: Ghostty write dropped late")
         );
         assert_eq!(
             follow.next_typing(came + Duration::from_secs(60)),
@@ -1234,25 +1241,25 @@ mod tests {
         assert_eq!(follow.next_typing(came + Duration::from_secs(60)), None);
         // One that came after them runs: only the prompt held the thread.
         let later = came + Duration::from_secs(60);
-        follow.typed(enter(I, ENTER_ID), later);
-        assert_eq!(follow.next_typing(later), Some(Next::Run(enter(I, ENTER_ID))));
+        follow.typed(enter(G, ENTER_ID), later);
+        assert_eq!(follow.next_typing(later), Some(Next::Run(enter(G, ENTER_ID))));
     }
 
     #[test]
     fn typings_run_in_order_and_a_select_keeps_its_own_slot() {
         let now = Instant::now();
         let mut follow = writing();
-        follow.typed(write(I, ID, "one"), now);
-        follow.select(I, OTHER.into(), false, now);
-        follow.typed(enter(I, ENTER_ID), now);
+        follow.typed(write(G, ID, "one"), now);
+        follow.select(G, OTHER.into(), false, now);
+        follow.typed(enter(G, ENTER_ID), now);
         // The newest select replaces the one waiting, and no typing.
-        follow.select(I, TTY.into(), true, now);
+        follow.select(G, TTY.into(), true, now);
         follow.typed(write(G, ENTER_ID, "two"), now);
-        assert_eq!(follow.next_typing(now), Some(Next::Run(write(I, ID, "one"))));
-        assert_eq!(follow.next_select(now), select(I, TTY, true, true));
+        assert_eq!(follow.next_typing(now), Some(Next::Run(write(G, ID, "one"))));
+        assert_eq!(follow.next_select(now), select(G, TTY, true, true));
         assert_eq!(follow.next_select(now), None);
         // Taking the select left the typings as they were.
-        assert_eq!(follow.next_typing(now), Some(Next::Run(enter(I, ENTER_ID))));
+        assert_eq!(follow.next_typing(now), Some(Next::Run(enter(G, ENTER_ID))));
         assert_eq!(follow.next_typing(now), Some(Next::Run(write(G, ENTER_ID, "two"))));
         assert_eq!(follow.next_typing(now), None);
     }
@@ -1264,23 +1271,23 @@ mod tests {
         let mut follow = writing();
         let ids: Vec<String> = (0..10).map(|n| format!("{n:016x}")).collect();
         for id in &ids[..8] {
-            let out = follow.typed(write(I, id, "hi"), now);
+            let out = follow.typed(write(G, id, "hi"), now);
             assert_eq!((out.line, out.log), (None, vec![]));
         }
         // It says so in one fixed line.
-        let out = follow.typed(write(I, &ids[8], "hi"), now);
+        let out = follow.typed(write(G, &ids[8], "hi"), now);
         assert_eq!(
             (out.line, out.log),
-            (Some(wrote_line(&ids[8], false)), vec!["tabs: iTerm2 write refused · queue full".to_string()])
+            (Some(wrote_line(&ids[8], false)), vec!["tabs: Ghostty write refused · queue full".to_string()])
         );
         // One taken leaves room for one.
-        assert_eq!(follow.next_typing(now), Some(Next::Run(write(I, &ids[0], "hi"))));
-        assert_eq!(follow.typed(enter(I, &ids[9]), now).line, None);
+        assert_eq!(follow.next_typing(now), Some(Next::Run(write(G, &ids[0], "hi"))));
+        assert_eq!(follow.typed(enter(G, &ids[9]), now).line, None);
         // The refused one never runs.
         for id in &ids[1..8] {
-            assert_eq!(follow.next_typing(now), Some(Next::Run(write(I, id, "hi"))));
+            assert_eq!(follow.next_typing(now), Some(Next::Run(write(G, id, "hi"))));
         }
-        assert_eq!(follow.next_typing(now), Some(Next::Run(enter(I, &ids[9]))));
+        assert_eq!(follow.next_typing(now), Some(Next::Run(enter(G, &ids[9]))));
         assert_eq!(follow.next_typing(now), None);
     }
 
@@ -1289,18 +1296,18 @@ mod tests {
         let now = Instant::now();
         // Their answer would go to a watch that is gone.
         let mut follow = writing();
-        follow.typed(write(I, ID, "hi"), now);
-        follow.typed(enter(I, ENTER_ID), now);
+        follow.typed(write(G, ID, "hi"), now);
+        follow.typed(enter(G, ENTER_ID), now);
         follow.watching(true);
         assert_eq!(follow.next_typing(now), None);
-        follow.typed(write(I, ID, "hi"), now);
+        follow.typed(write(G, ID, "hi"), now);
         follow.watching(false);
         assert_eq!(follow.next_typing(now), None);
         // The next watch's typings are queued afresh.
         follow.watching(true);
         follow.attached(true);
-        follow.typed(write(I, ID, "hi"), now);
-        assert_eq!(follow.next_typing(now), Some(Next::Run(write(I, ID, "hi"))));
+        follow.typed(write(G, ID, "hi"), now);
+        assert_eq!(follow.next_typing(now), Some(Next::Run(write(G, ID, "hi"))));
     }
 
     #[test]
@@ -1309,27 +1316,27 @@ mod tests {
         // A stopped watch's child may still print a line before it ends.
         let mut follow = writing();
         follow.watching(false);
-        assert_eq!(follow.typed(write(I, ID, "hi"), now).line, Some(wrote_line(ID, false)));
+        assert_eq!(follow.typed(write(G, ID, "hi"), now).line, Some(wrote_line(ID, false)));
         assert_eq!(follow.typed(enter(G, ENTER_ID), now).line, Some(wrote_line(ENTER_ID, false)));
         assert_eq!(follow.next_typing(now), None);
         // The next watch's typings run.
         follow.watching(true);
-        assert_eq!(follow.typed(write(I, ID, "hi"), now).line, None);
-        assert_eq!(follow.next_typing(now), Some(Next::Run(write(I, ID, "hi"))));
+        assert_eq!(follow.typed(write(G, ID, "hi"), now).line, None);
+        assert_eq!(follow.next_typing(now), Some(Next::Run(write(G, ID, "hi"))));
     }
 
     #[test]
     fn done_answers_ok_and_no_session_answers_no() {
         let mut follow = writing();
-        for typing in [write(I, ID, "hi"), enter(G, ENTER_ID)] {
+        for typing in [write(G, ID, "hi"), enter(G, ENTER_ID)] {
             let out = follow.written(&typing, Ok(Written::Done));
             assert_eq!((out.line, out.log), (Some(wrote_line(typing.id(), true)), vec![]));
             let out = follow.written(&typing, Ok(Written::NoSession));
             assert_eq!((out.line, out.log), (Some(wrote_line(typing.id(), false)), vec![]));
         }
         // No session of the tty leaves its app on.
-        assert_eq!(follow.polls(), Some(I));
-        assert_eq!(follow.typed(write(I, ID, "hi"), Instant::now()).line, None);
+        assert_eq!(follow.polls(), Some(G));
+        assert_eq!(follow.typed(write(G, ID, "hi"), Instant::now()).line, None);
     }
 
     #[test]
@@ -1356,7 +1363,7 @@ mod tests {
         // Nor the spoken words: each typing dropped late, and a write that turned its app off.
         let words = "the words spoken";
         let mut follow = writing();
-        follow.typed(write(I, ID, words), now);
+        follow.typed(write(G, ID, words), now);
         follow.typed(enter(G, ENTER_ID), now);
         for _ in 0..2 {
             match follow.next_typing(now + Duration::from_secs(1)) {
@@ -1365,17 +1372,17 @@ mod tests {
             }
         }
         for done in [Ok(Written::Done), Ok(Written::NoSession), Err(TabError::Failed), Err(TabError::Denied)] {
-            said.extend(follow.written(&write(I, ID, words), done).log);
+            said.extend(follow.written(&write(G, ID, words), done).log);
         }
         // A typing for an app that has not answered yet, and one past a full queue.
         let mut follow = polling();
-        follow.typed(write(I, ID, words), now);
+        follow.typed(write(G, ID, words), now);
         match follow.next_typing(now) {
             Some(Next::Refused { log: Some(log), .. }) => said.push(log),
             other => panic!("{other:?}"),
         }
         for _ in 0..=TYPING_QUEUED {
-            said.extend(follow.typed(write(I, ID, words), now).log);
+            said.extend(follow.typed(write(G, ID, words), now).log);
         }
         assert_eq!(said.len(), 12, "{said:?}");
         for line in said {

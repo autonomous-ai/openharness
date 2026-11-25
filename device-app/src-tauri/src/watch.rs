@@ -155,7 +155,7 @@ mod tests {
     const SHORT: Duration = Duration::from_millis(300);
     const ID: &str = "0123456789abcdef";
     const TTY: &str = "/dev/ttys023";
-    const WRITE: &str = r#"{"write":{"id":"0123456789abcdef","app":"iterm","tty":"/dev/ttys023","text":"hi"}}"#;
+    const WRITE: &str = r#"{"write":{"id":"0123456789abcdef","app":"ghostty","tty":"/dev/ttys023","text":"hi"}}"#;
     const ENTER: &str = r#"{"enter":{"id":"fedcba9876543210","app":"ghostty","tty":"/dev/ttys023"}}"#;
 
     type Selects = mpsc::Receiver<(TabApp, String, bool)>;
@@ -336,17 +336,20 @@ mod tests {
         let lines = [
             r#"{"attached":true}"#,
             WRITE,
-            // Terminal has no write handler, and a tty that fails the check reaches no script.
+            // Terminal and iTerm2 have no write handler, and a tty that fails the check reaches no script.
             r#"{"write":{"id":"0123456789abcdef","app":"terminal-app","tty":"/dev/ttys023","text":"hi"}}"#,
-            r#"{"write":{"id":"0123456789abcdef","app":"iterm","tty":"/dev/ttys023; rm","text":"hi"}}"#,
+            r#"{"write":{"id":"0123456789abcdef","app":"iterm","tty":"/dev/ttys023","text":"hi"}}"#,
+            r#"{"enter":{"id":"fedcba9876543210","app":"iterm","tty":"/dev/ttys023"}}"#,
+            r#"{"write":{"id":"0123456789abcdef","app":"ghostty","tty":"/dev/ttys023; rm","text":"hi"}}"#,
         ];
         fake.script("hardware watch --json", &lines);
         let (_watch, events, selects, typings) = start_reading(&fake);
         assert_eq!(events.recv_timeout(WAIT), Ok(dial(true, None, None)));
         assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchExit(Some(0))));
-        let write = Typing::Write { id: ID.into(), app: TabApp::Iterm, tty: TTY.into(), text: "hi".into() };
+        let write = Typing::Write { id: ID.into(), app: TabApp::Ghostty, tty: TTY.into(), text: "hi".into() };
         assert_eq!(typings.recv_timeout(WAIT), Ok(write));
-        // One, then nothing: the thread has ended, and neither the Terminal write nor the bad tty went anywhere.
+        // One, then nothing: the thread has ended, and neither the Terminal and iTerm2 lines nor the bad tty went
+        // anywhere.
         assert_eq!(typings.recv_timeout(WAIT), Err(mpsc::RecvTimeoutError::Disconnected));
         assert_eq!(selects.recv_timeout(WAIT), Err(mpsc::RecvTimeoutError::Disconnected));
         // Nothing of a typing is logged.
@@ -373,7 +376,7 @@ mod tests {
         // The longest text, 3 bytes a UTF-16 unit, padded to the longest line the CLI's reader hands on.
         let text = "中".repeat(MAX_TEXT);
         let line = |length: usize| {
-            let head = format!(r#"{{"write":{{"id":"{ID}","app":"iterm","tty":"{TTY}","text":"{text}"}}"#);
+            let head = format!(r#"{{"write":{{"id":"{ID}","app":"ghostty","tty":"{TTY}","text":"{text}"}}"#);
             format!("{head}{}}}", " ".repeat(length - head.len() - 1))
         };
         let (longest, over) = (line(LINE_MAX), line(LINE_MAX + 1));
@@ -382,7 +385,7 @@ mod tests {
         fake.script("hardware watch --json", &[&longest, &over]);
         let (_watch, events, _, typings) = start_reading(&fake);
         assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchExit(Some(0))));
-        let write = Typing::Write { id: ID.into(), app: TabApp::Iterm, tty: TTY.into(), text };
+        let write = Typing::Write { id: ID.into(), app: TabApp::Ghostty, tty: TTY.into(), text };
         assert_eq!(typings.recv_timeout(WAIT), Ok(write));
         assert_eq!(typings.recv_timeout(WAIT), Err(mpsc::RecvTimeoutError::Disconnected));
     }

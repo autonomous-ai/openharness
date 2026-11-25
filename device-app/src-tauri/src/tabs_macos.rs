@@ -565,7 +565,7 @@ end focus_tty
     /// Stands in for an app's script in the tty check's test alone: no other test compiles it.
     const SENT: &str = "on select_tty(t, in_front)\n\treturn true\nend select_tty\n\non focus_tty(t)\n\treturn true\nend focus_tty\n\non write_text(t, s)\n\treturn true\nend write_text\n\non send_enter(t)\n\treturn true\nend send_enter";
 
-    /// Stands in for iTerm2's and Ghostty's writes, with no event: whether each got the tty and the text it names.
+    /// Stands in for Ghostty's writes, with no event: whether each got the tty and the text it names.
     const WRITES: &str = r#"
 on write_text(t, s)
 	return t is "/dev/ttys023" and s is "fix the build"
@@ -576,7 +576,8 @@ on send_enter(t)
 end send_enter
 "#;
 
-    /// Stands in for every app's writes in Terminal's test alone, where it writes for any tty: no other test compiles it.
+    /// Stands in for every app's writes in the test of the apps with no write handler alone, where it writes for any
+    /// tty: no other test compiles it.
     const WRITES_ANY: &str =
         "on write_text(t, s)\n\treturn true\nend write_text\n\non send_enter(t)\n\treturn true\nend send_enter";
 
@@ -640,9 +641,6 @@ end send_enter
                     "class Trms",
                     "property Stty",
                     "event Itrmslct",
-                    "event Itrmsntx",
-                    "class Text",
-                    "class Wtnl",
                 ],
                 TabApp::Ghostty => &[
                     "class Gwnd",
@@ -679,63 +677,42 @@ end send_enter
     }
 
     #[test]
-    fn iterm_and_ghostty_have_the_write_handlers_and_terminal_none() {
+    fn only_ghostty_has_the_write_handlers() {
         for app in APPS {
             for handler in ["on write_text(t, s)", "on send_enter(t)"] {
                 let count = source(app).lines().filter(|line| *line == handler).count();
-                assert_eq!(count, usize::from(app != T), "{app:?}: {handler}");
+                assert_eq!(count, usize::from(app == TabApp::Ghostty), "{app:?}: {handler}");
             }
         }
-        assert!(!TERMINAL.contains("write_text") && !TERMINAL.contains("send_enter"), "{TERMINAL}");
-    }
-
-    #[test]
-    fn the_write_handlers_search_every_window_and_write_to_exactly_one() {
-        for (app, windows, events) in [
-            (TabApp::Iterm, "repeat with w in (every «class cwin»)", &["«event Itrmsntx»"][..]),
-            (TabApp::Ghostty, "repeat with w in (every «class Gwnd»)", &["«event GhstInTx»", "«event GhstSKey»"][..]),
-        ] {
-            let mut written = 0;
-            for handler in source(app)
-                .split("\non ")
-                .skip(1)
-                .filter(|handler| handler.starts_with("write_text(") || handler.starts_with("send_enter("))
-            {
-                // A hidden window's session is still the agent's.
-                assert!(!handler.contains("«property pvis»"), "{app:?}: {handler}");
-                let lines: Vec<&str> = handler.lines().map(str::trim).collect();
-                let writes: Vec<usize> =
-                    (0..lines.len()).filter(|&at| events.iter().any(|event| lines[at].contains(event))).collect();
-                if writes.is_empty() {
-                    // iTerm2's Enter is its write of a carriage return, through the handler that searches.
-                    assert_eq!(lines.get(1), Some(&"return write_text(t, character id 13)"), "{app:?}: {handler}");
-                    continue;
-                }
-                assert_eq!(writes.len(), 1, "{app:?}: {handler}");
-                let write = writes[0];
-                let search = lines.iter().position(|line| *line == windows);
-                let one = lines.iter().position(|line| *line == "if length of held is not 1 then return false");
-                assert!(search.is_some() && search < one && one < Some(write), "{app:?}: {handler}");
-                assert!(lines[write].contains("(item 1 of held)"), "{app:?}: {}", lines[write]);
-                written += 1;
-            }
-            assert_eq!(written, if app == TabApp::Iterm { 1 } else { 2 }, "{app:?}");
+        // iTerm2's write reaches every session its Broadcast Input joins, which its dictionary does not show.
+        for script in [TERMINAL, ITERM] {
+            assert!(!script.contains("write_text") && !script.contains("send_enter"), "{script}");
         }
     }
 
     #[test]
-    fn iterms_write_never_adds_a_newline() {
-        // Not the comment that names the codes.
-        let writes: Vec<&str> = ITERM
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.starts_with("--") && line.contains("«event Itrmsntx»"))
-            .collect();
-        assert_eq!(writes.len(), 1, "{ITERM}");
-        for write in writes {
-            assert!(write.ends_with(" given «class Text»:s, «class Wtnl»:false"), "{write}");
+    fn ghosttys_write_handlers_search_every_window_and_write_to_exactly_one() {
+        let mut written = 0;
+        for handler in GHOSTTY
+            .split("\non ")
+            .skip(1)
+            .filter(|handler| handler.starts_with("write_text(") || handler.starts_with("send_enter("))
+        {
+            // A hidden window's terminal is still the agent's.
+            assert!(!handler.contains("«property pvis»"), "{handler}");
+            let lines: Vec<&str> = handler.lines().map(str::trim).collect();
+            let writes: Vec<usize> = (0..lines.len())
+                .filter(|&at| ["«event GhstInTx»", "«event GhstSKey»"].iter().any(|event| lines[at].contains(event)))
+                .collect();
+            assert_eq!(writes.len(), 1, "{handler}");
+            let write = writes[0];
+            let search = lines.iter().position(|line| *line == "repeat with w in (every «class Gwnd»)");
+            let one = lines.iter().position(|line| *line == "if length of held is not 1 then return false");
+            assert!(search.is_some() && search < one && one < Some(write), "{handler}");
+            assert!(lines[write].contains("(item 1 of held)"), "{}", lines[write]);
+            written += 1;
         }
-        assert!(!ITERM.contains("«class Wtnl»:true"), "{ITERM}");
+        assert_eq!(written, 2);
     }
 
     #[test]
@@ -753,26 +730,27 @@ end send_enter
     #[test]
     fn a_write_passes_its_tty_and_text_as_parameters() {
         let tabs = MacTabs { source: |_| WRITES, ..scripted() };
-        for app in [TabApp::Iterm, TabApp::Ghostty] {
-            assert_eq!(tabs.write_text(app, TTY, "fix the build"), Ok(Written::Done), "{app:?}");
-            assert_eq!(tabs.write_text(app, TTY, "fix the tests"), Ok(Written::NoSession), "{app:?}");
-            assert_eq!(tabs.write_text(app, "/dev/ttys024", "fix the build"), Ok(Written::NoSession), "{app:?}");
-            assert_eq!(tabs.send_enter(app, TTY), Ok(Written::Done), "{app:?}");
-            assert_eq!(tabs.send_enter(app, "/dev/ttys024"), Ok(Written::NoSession), "{app:?}");
-        }
+        let g = TabApp::Ghostty;
+        assert_eq!(tabs.write_text(g, TTY, "fix the build"), Ok(Written::Done));
+        assert_eq!(tabs.write_text(g, TTY, "fix the tests"), Ok(Written::NoSession));
+        assert_eq!(tabs.write_text(g, "/dev/ttys024", "fix the build"), Ok(Written::NoSession));
+        assert_eq!(tabs.send_enter(g, TTY), Ok(Written::Done));
+        assert_eq!(tabs.send_enter(g, "/dev/ttys024"), Ok(Written::NoSession));
         // Compiled once for every tty and text: neither is in what was compiled.
         assert_eq!(compiled(WRITES).len(), 1);
     }
 
     #[test]
-    fn terminal_answers_no_session_with_no_event() {
+    fn terminal_and_iterm_answer_no_session_with_no_event() {
         let tabs = MacTabs { source: |_| WRITES_ANY, ..scripted() };
-        assert_eq!(tabs.write_text(T, TTY, "fix the build"), Ok(Written::NoSession));
-        assert_eq!(tabs.send_enter(T, TTY), Ok(Written::NoSession));
+        for app in [T, TabApp::Iterm] {
+            assert_eq!(tabs.write_text(app, TTY, "fix the build"), Ok(Written::NoSession), "{app:?}");
+            assert_eq!(tabs.send_enter(app, TTY), Ok(Written::NoSession), "{app:?}");
+        }
         // No call reached the script thread: its script was not even compiled.
         assert!(compiled(WRITES_ANY).is_empty());
-        // The same stand-in writes for iTerm2.
-        assert_eq!(tabs.write_text(TabApp::Iterm, TTY, "fix the build"), Ok(Written::Done));
+        // The same stand-in writes for Ghostty.
+        assert_eq!(tabs.write_text(TabApp::Ghostty, TTY, "fix the build"), Ok(Written::Done));
         assert_eq!(compiled(WRITES_ANY).len(), 1);
     }
 
@@ -795,8 +773,8 @@ end send_enter
         // One that does not run raises procNotFound, a failed call: an answer with no event is never macOS's consent.
         for app in APPS {
             let handlers: Vec<&str> = source(app).split("\non ").skip(1).collect();
-            // Terminal has no write handlers.
-            assert_eq!(handlers.len(), if app == T { 3 } else { 5 }, "{app:?}");
+            // Only Ghostty has write handlers.
+            assert_eq!(handlers.len(), if app == TabApp::Ghostty { 5 } else { 3 }, "{app:?}");
             for handler in handlers {
                 if !handler.contains("tell application") {
                     // It sends no event of its own: it calls one that checks.
@@ -830,21 +808,20 @@ end send_enter
             assert_eq!(tabs.focus_tty(app, TTY), Err(TabError::Failed), "{app:?}");
         }
         let now = Instant::now();
-        for app in [TabApp::Iterm, TabApp::Ghostty] {
-            assert_eq!(tabs.write_text(app, TTY, "fix the build"), Err(TabError::Failed), "{app:?}");
-            assert_eq!(tabs.send_enter(app, TTY), Err(TabError::Failed), "{app:?}");
-            // macOS was never asked to let Harness Device script it: a typing for it is answered no unrun, as an
-            // event could bring the consent prompt and hold the tab thread for minutes.
-            let mut follow = TabFollow::default();
-            follow.front(app.bundle());
-            follow.watching(true);
-            follow.attached(true);
-            follow.polled(app, tabs.selected_tty(app), 0);
-            follow.selected(app, tabs.select_tty(app, TTY, true));
-            follow.selected(app, tabs.focus_tty(app, TTY));
-            follow.typed(Typing::Enter { id: "0123456789abcdef".into(), app, tty: TTY.into() }, now);
-            assert!(matches!(follow.next_typing(now), Some(Next::Refused { .. })), "{app:?}");
-        }
+        let app = TabApp::Ghostty;
+        assert_eq!(tabs.write_text(app, TTY, "fix the build"), Err(TabError::Failed));
+        assert_eq!(tabs.send_enter(app, TTY), Err(TabError::Failed));
+        // macOS was never asked to let Harness Device script it: a typing for it is answered no unrun, as an event
+        // could bring the consent prompt and hold the tab thread for minutes.
+        let mut follow = TabFollow::default();
+        follow.front(app.bundle());
+        follow.watching(true);
+        follow.attached(true);
+        follow.polled(app, tabs.selected_tty(app), 0);
+        follow.selected(app, tabs.select_tty(app, TTY, true));
+        follow.selected(app, tabs.focus_tty(app, TTY));
+        follow.typed(Typing::Enter { id: "0123456789abcdef".into(), app, tty: TTY.into() }, now);
+        assert!(matches!(follow.next_typing(now), Some(Next::Refused { .. })));
     }
 
     #[test]
@@ -902,17 +879,15 @@ end send_enter
         for bad in ["/dev/ttys023; rm", "/dev/ttys023\n", "/dev/pts/3", "/dev/ttys12345", ""] {
             assert_eq!(tabs.select_tty(T, bad, true), Err(TabError::Failed), "{bad:?}");
             assert_eq!(tabs.focus_tty(T, bad), Err(TabError::Failed), "{bad:?}");
-            for app in [TabApp::Iterm, TabApp::Ghostty] {
-                assert_eq!(tabs.write_text(app, bad, "fix the build"), Err(TabError::Failed), "{app:?}: {bad:?}");
-                assert_eq!(tabs.send_enter(app, bad), Err(TabError::Failed), "{app:?}: {bad:?}");
-            }
+            assert_eq!(tabs.write_text(TabApp::Ghostty, bad, "fix the build"), Err(TabError::Failed), "{bad:?}");
+            assert_eq!(tabs.send_enter(TabApp::Ghostty, bad), Err(TabError::Failed), "{bad:?}");
         }
         // No call reached the script thread: its script was not even compiled.
         assert!(compiled(SENT).is_empty());
         // The same calls with a tty that passes are sent.
         assert_eq!(tabs.select_tty(T, TTY, true), Ok(Selected::Done));
         assert_eq!(tabs.focus_tty(T, TTY), Ok(Selected::Done));
-        assert_eq!(tabs.write_text(TabApp::Iterm, TTY, "fix the build"), Ok(Written::Done));
+        assert_eq!(tabs.write_text(TabApp::Ghostty, TTY, "fix the build"), Ok(Written::Done));
         assert_eq!(tabs.send_enter(TabApp::Ghostty, TTY), Ok(Written::Done));
         assert_eq!(compiled(SENT).len(), 1);
     }
