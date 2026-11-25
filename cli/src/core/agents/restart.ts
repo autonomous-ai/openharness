@@ -26,6 +26,7 @@ import type { createLaunchHelpers } from './launch.js'
 import type { RestartAgent } from './launches.js'
 import type { PaneSwap } from './swap.js'
 import { moveHeldLine } from '../../lib/hostMove/moveAgent.js'
+import { guardHold } from '../../lib/restoreAgents.js'
 import type { LaunchOverridesDeps } from '../../lib/launchOverrides.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
@@ -149,13 +150,15 @@ export interface RestartDeps {
   restartHeld: (agentId: string) => Promise<HeldRestart> | null
   /** An agent a move a dead daemon left may still run beside (main.ts `moveHeld`): no engine of it starts this start. */
   moveHeld?: (agentId: string) => boolean
+  /** The held passes, asked to try that agent again (core/agents/heldLaunches.ts `startAgain`). */
+  startAgain?: (agentId: string) => void
 }
 
 export function createAgentRestarter({
   native: inspectNative,
   restartJobs, registry, purgeBusy, stopJobs, pinnedControls, terminals, sameRestartTarget, agentReconciler,
   terminalHintMachineName, announceSession, refreshGridAssignment, relaunchOverrides, downgradedPermission,
-  liveBypassPermission, paneSwapDeps, restartHeld, moveHeld,
+  liveBypassPermission, paneSwapDeps, restartHeld, moveHeld, startAgain,
 }: RestartDeps) {
   /**
    * Web or device restarted an agent (`agent_restart`): exit the live engine process and relaunch it in
@@ -286,6 +289,17 @@ export function createAgentRestarter({
       )
 
       if (!current()) return changed
+      // The guard held the relaunch: the pane is the held shell under its launch's token, kept so (no publication, no
+      // release of the pane). A conversation starts again from it as any launch the guard held, and its restart is
+      // answered now; a row without one would become a held first launch, whose recovery sends its first task again.
+      const heldToken = built.overrides.native?.token
+      if (!outcome.ok && outcome.held && session.sessionId && heldToken) {
+        const row = registry.setLaunch(session.agentId, guardHold(session, heldToken))!
+        announceSession(row)
+        startAgain?.(session.agentId)
+        console.log(`[restart] ${sid(session.agentId)} ${engine} · held by the native guard · starting again`)
+        return { ok: true, session: row, resumed: true }
+      }
       // A refused relaunch (Windows: a batch-file engine cmd.exe would misread) stopped nothing: its own code.
       if (!outcome.ok) return { ok: false, error: outcome.error ?? 'RESTART_FAILED', detail: outcome.detail }
 

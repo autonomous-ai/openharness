@@ -37,7 +37,8 @@ export async function bypassPermissionFor(
 
 export type RestartOutcome =
   | { ok: true; processIdentity: ProcessIdentity; resumed: boolean }
-  | { ok: false; detail: string; error?: 'ENGINE_LAUNCH_REFUSED' }
+  /** [held]: its pane is its own launch's held shell (`heldShell`). */
+  | { ok: false; detail: string; error?: 'ENGINE_LAUNCH_REFUSED'; held?: true }
 
 export type RestartAgentReply =
   | { ok: true; session: RegisteredSession; resumed: boolean }
@@ -106,6 +107,8 @@ export interface RestartAgentDeps {
   respawnRefusal?: () => Promise<string | null>
   /** Poll the pane for a recognizable engine process, up to an internal budget. Null on timeout. */
   waitForProcess: () => Promise<ProcessIdentity | null>
+  /** Whether the pane is the native guard's held shell under this swap's own launch token. Left out: never asked. */
+  heldShell?: () => Promise<boolean | 'unknown'>
   /** Prepare persisted history only once the old writer is confirmed stopped. A failure must
    * preserve the conversation, not enter the fresh-session fallback. */
   prepareResume?: () => void | Promise<void>
@@ -188,7 +191,7 @@ export async function restartAgent(
     }
     if (!current()) return changed
   }
-  const spawnAndWait = async (withResume: boolean): Promise<ProcessIdentity | null> => {
+  const spawnAndWait = async (withResume: boolean): Promise<ProcessIdentity | 'held' | null> => {
     if (!current()) return null
     const argv = deps.buildArgv({ bypassPermission, ...(!withResume ? {} : preparedFork ? { resumeSessionId: preparedFork } : reopen(resumeSessionId)) })
     const spawned = await deps.respawn(argv)
@@ -197,7 +200,12 @@ export async function restartAgent(
       deps.log(`[restart] ${session.engine} respawn-pane failed: ${codeOrLength(spawned.reason ?? 'UNKNOWN')}`)
       return null
     }
-    return deps.waitForProcess()
+    const identity = await deps.waitForProcess()
+    if (identity || !deps.heldShell) return identity
+    // The guard held this launch: the fresh fallback respawned over its held shell on the same stale evidence and was
+    // held again (2026-11-25). 'held' is never respawned over, by the fallback below either; the caller starts it
+    // again from the hold.
+    return await deps.heldShell() === true ? 'held' : null
   }
 
   // Attempt a resume relaunch whenever we have a session id to resume, for every engine — an
@@ -215,9 +223,9 @@ export async function restartAgent(
     identity = await spawnAndWait(false)
   }
   if (!current()) return changed
-  if (!identity) {
-    return { ok: false, detail: `${session.engine} did not come back up after restart` }
-  }
+  const failed = `${session.engine} did not come back up after restart`
+  if (identity === 'held') return { ok: false, held: true, detail: failed }
+  if (!identity) return { ok: false, detail: failed }
   // The agent works on in a new conversation; the one it was in, which the engine could not reopen, is
   // kept as a stopped harness to read and to resume once it can (round 24). A /clear keeps nothing.
   if (resumeSessionId && !resumed) deps.keepAbandoned?.()
