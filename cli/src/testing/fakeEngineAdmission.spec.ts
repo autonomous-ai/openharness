@@ -16,12 +16,12 @@ const { fakeEngineShim } = await import('../../e2e/harness/daemon.js' as string)
 const EVENTS = ['SessionStart', 'UserPromptSubmit', 'Stop']
 
 let root = ''
-let engine: ChildProcess | undefined
+let engines: ChildProcess[] = []
 
 afterEach(() => {
-  // Its own process group: the npm Codex wrapper's engine child goes with it.
-  try { if (engine?.pid) process.kill(-engine.pid, 'SIGKILL') } catch { /* already gone */ }
-  engine = undefined
+  // Each in its own process group: the npm Codex wrapper's engine child goes with it.
+  for (const engine of engines) try { if (engine.pid) process.kill(-engine.pid, 'SIGKILL') } catch { /* already gone */ }
+  engines = []
   rmSync(root, { recursive: true, force: true })
 })
 
@@ -33,10 +33,12 @@ interface Started {
   /** Until the engine noted a line holding [text] in its hook log. */
   logged(text: string): Promise<void>
   exited: Promise<void>
+  /** Another process of the same engine, in the same root and homes. */
+  another(args?: string[]): Started
 }
 
-/** A fake engine in a throwaway root, its homes there too, typed into on its stdin as at its composer. */
-/** [claudeJson]: the text of Claude Code's `~/.claude.json`, given the folder the engine runs in as it reads it. */
+/** A fake engine in a throwaway root, its homes there too, typed into on its stdin as at its composer. [claudeJson]: the
+ *  text of Claude Code's `~/.claude.json`, given the folder the engine runs in as it reads it. */
 function start(name: 'claude' | 'codex', { config = {}, args = [], bom = false, claudeJson }: {
   config?: Record<string, unknown>; args?: string[]; bom?: boolean; claudeJson?: (cwd: string) => string
 } = {}): Started {
@@ -59,28 +61,32 @@ function start(name: 'claude' | 'codex', { config = {}, args = [], bom = false, 
   writeFileSync(bin, fakeEngineShim(name, {
     port: 1, dataDir: join(root, 'data'), claudeProjectsDir: join(home, '.claude', 'projects'), codexHome, root, hookLog, ...config,
   }), { mode: 0o755 })
-  // Only its own home: none of this machine's engine settings reach it.
-  engine = spawn(bin, args, { cwd: root, env: { PATH: process.env.PATH, HOME: home }, stdio: ['pipe', 'ignore', 'ignore'], detached: true })
-  const exited = new Promise<void>((resolve) => engine!.once('exit', () => resolve()))
   const hooks = (): Array<Record<string, unknown>> => {
     let text = ''
     try { text = readFileSync(ran, 'utf8') } catch { return [] }
     // A hook still writing its line is read at the next look.
     return text.split('\n').flatMap((line) => { try { return [JSON.parse(line) as Record<string, unknown>] } catch { return [] } })
   }
-  return {
-    hooks,
-    type: (text) => { engine!.stdin!.write(`${text}\r`) },
-    hooked: (event, test = () => true) => vi.waitFor(() => {
-      const found = hooks().find((input) => input.hook_event_name === event && test(input))
-      if (!found) throw new Error(`no ${event} hook yet`)
-      return found
-    }, { timeout: 20_000, interval: 20 }),
-    logged: (text) => vi.waitFor(() => {
-      expect(existsSync(hookLog) ? readFileSync(hookLog, 'utf8') : '').toContain(text)
-    }, { timeout: 20_000, interval: 20 }),
-    exited,
+  const launch = (argv: string[]): Started => {
+    // Only its own home: none of this machine's engine settings reach it.
+    const engine = spawn(bin, argv, { cwd: root, env: { PATH: process.env.PATH, HOME: home }, stdio: ['pipe', 'ignore', 'ignore'], detached: true })
+    engines.push(engine)
+    return {
+      hooks,
+      type: (text) => { engine.stdin!.write(`${text}\r`) },
+      hooked: (event, test = () => true) => vi.waitFor(() => {
+        const found = hooks().find((input) => input.hook_event_name === event && test(input))
+        if (!found) throw new Error(`no ${event} hook yet`)
+        return found
+      }, { timeout: 20_000, interval: 20 }),
+      logged: (text) => vi.waitFor(() => {
+        expect(existsSync(hookLog) ? readFileSync(hookLog, 'utf8') : '').toContain(text)
+      }, { timeout: 20_000, interval: 20 }),
+      exited: new Promise<void>((resolve) => engine.once('exit', () => resolve())),
+      another: (more = []) => launch(more),
+    }
   }
+  return launch(args)
 }
 
 const eventsOf = (hooks: Array<Record<string, unknown>>): string[] =>
@@ -88,32 +94,61 @@ const eventsOf = (hooks: Array<Record<string, unknown>>): string[] =>
 
 // Claude Code on Windows announces SessionStart before its transcript exists (2-3 s measured, CLI 0.6.89).
 describe('the fake Claude Code\'s `lateTranscript`', () => {
+  /** The files that say a session's transcript is kept back, and release it: one pair per session. */
+  const waiting = (sessionId: unknown) => join(root, `transcript.${String(sessionId)}.waiting`)
+  const release = (sessionId: unknown) => join(root, `transcript.${String(sessionId)}.release`)
+  const createdOnRelease = async (sessionId: unknown) => {
+    await vi.waitFor(() => {
+      expect(existsSync(waiting(sessionId))).toBe(false)
+      expect(existsSync(release(sessionId))).toBe(false)
+    }, { timeout: 20_000, interval: 20 })
+  }
+
   it('names a transcript that does not exist yet, keeps its records back, and creates it once released', async () => {
     const claude = start('claude', { config: { lateTranscript: true } })
     const started = await claude.hooked('SessionStart', (input) => input.source === 'startup')
     const transcript = String(started.transcript_path)
     expect(existsSync(transcript)).toBe(false)
-    expect(readFileSync(join(root, 'transcript.waiting'), 'utf8')).toBe(started.session_id)
+    expect(existsSync(waiting(started.session_id))).toBe(true)
     claude.type('hello late')
     await claude.hooked('Stop')
     expect(existsSync(transcript)).toBe(false)
-    writeFileSync(join(root, 'transcript.release'), '')
+    writeFileSync(release(started.session_id), '')
     await vi.waitFor(() => { expect(readFileSync(transcript, 'utf8')).toContain('"content":"hello late"') }, { timeout: 20_000, interval: 20 })
-    await vi.waitFor(() => {
-      expect(existsSync(join(root, 'transcript.waiting'))).toBe(false)
-      expect(existsSync(join(root, 'transcript.release'))).toBe(false)
-    }, { timeout: 20_000, interval: 20 })
+    await createdOnRelease(started.session_id)
   }, 40_000)
 
   it('creates a `!clear`\'s new transcript late too', async () => {
     const claude = start('claude', { config: { lateTranscript: true } })
-    await claude.hooked('SessionStart', (input) => input.source === 'startup')
-    writeFileSync(join(root, 'transcript.release'), '')
-    await vi.waitFor(() => { expect(existsSync(join(root, 'transcript.waiting'))).toBe(false) }, { timeout: 20_000, interval: 20 })
+    const started = await claude.hooked('SessionStart', (input) => input.source === 'startup')
+    writeFileSync(release(started.session_id), '')
+    await createdOnRelease(started.session_id)
     claude.type('!clear')
     const cleared = await claude.hooked('SessionStart', (input) => input.source === 'clear')
     expect(existsSync(String(cleared.transcript_path))).toBe(false)
-    expect(readFileSync(join(root, 'transcript.waiting'), 'utf8')).toBe(cleared.session_id)
+    expect(existsSync(waiting(cleared.session_id))).toBe(true)
+  }, 40_000)
+
+  it('creates a fork\'s new transcript late too', async () => {
+    const forked = randomUUID()
+    const claude = start('claude', { config: { lateTranscript: true }, args: ['--resume', forked, '--fork-session'] })
+    const started = await claude.hooked('SessionStart')
+    expect(started.session_id).not.toBe(forked)
+    expect(existsSync(String(started.transcript_path))).toBe(false)
+    expect(existsSync(waiting(started.session_id))).toBe(true)
+  }, 40_000)
+
+  it('keeps each process\'s transcript back on its own, two in one root', async () => {
+    const first = start('claude', { config: { lateTranscript: true } })
+    const one = await first.hooked('SessionStart')
+    const second = first.another()
+    const two = await second.hooked('SessionStart', (input) => input.session_id !== one.session_id)
+    expect([existsSync(waiting(one.session_id)), existsSync(waiting(two.session_id))]).toEqual([true, true])
+    writeFileSync(release(one.session_id), '')
+    await createdOnRelease(one.session_id)
+    expect(existsSync(String(one.transcript_path))).toBe(true)
+    expect(existsSync(String(two.transcript_path))).toBe(false)
+    expect(existsSync(waiting(two.session_id))).toBe(true)
   }, 40_000)
 })
 
