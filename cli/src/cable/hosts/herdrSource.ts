@@ -260,7 +260,7 @@ export class HerdrSource implements HostSource {
     const to: HerdrSubscriber = {
       started: () => this.started(sub),
       event: (name, data) => this.event(name, data),
-      closed: (reason) => this.closed(sub, reason),
+      closed: (reason) => this.closed(reason),
     }
     const entries = [...KINDS, ...panes.map((pane_id) => ({ type: 'pane.agent_status_changed' as const, pane_id }))]
     this.openedAt = this.deps.monotonic()
@@ -317,9 +317,10 @@ export class HerdrSource implements HostSource {
     })
   }
 
-  private closed(sub: Subscription, reason: SocketFault): void {
-    // An old one that ends while the new one opens missed nothing the new one's list will not say.
-    if (sub !== (this.next ?? this.current)) return
+  /** Only the current one or the one opening can end: one replaced was closed, and tells nothing. The current one ending
+   *  while another opens fails the attempt all the same: it is herdr stopping, as re-lists open one every few seconds,
+   *  and herdr 0.9.5 then refuses the one opening, whose fault would say `rejected` of a herdr that stopped. */
+  private closed(reason: SocketFault): void {
     this.firstListEnded()
     this.attempts.failed('closed', reason)
   }
