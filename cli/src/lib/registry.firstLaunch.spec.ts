@@ -103,3 +103,59 @@ it.each<{ name: string; row: Pick<RegisteredSession, 'launch' | 'sessionId'> | u
   expect(registry.guardHeld(row)).toBe(guardHeld)
   expect(registry.heldFirstLaunch(row)).toBe(firstLaunch)
 })
+
+// A creation id names a first launch only: once a launch of the row is confirmed its first task was delivered, and a
+// later launch with no conversation the guard holds (the fresh fallback, a restore of a row that never bound one) is not one.
+const engineProcess = { pid: 4242, startMarker: 'fixture-start', executable: '/fixture/codex' }
+type Registry = typeof import('./registry.js')['registry']
+type Publication = { name: string; engine: 'codex' | 'terminal' | 'openclaw'; publish: (registry: Registry, agentId: string) => Promise<unknown>; heldAgain?: true }
+const publications: Publication[] = [
+  { name: 'a launch confirmed ready with its process', engine: 'codex', heldAgain: true,
+    publish: async (registry, agentId) => expect((await registry.confirmLaunch(agentId, { processIdentity: engineProcess })).state).toBe('confirmed') },
+  { name: 'a terminal confirmed ready, with no process', engine: 'terminal', heldAgain: true,
+    publish: async (registry, agentId) => expect((await registry.confirmLaunch(agentId, { processIdentity: null })).state).toBe('confirmed') },
+  { name: 'a launch discovery found running', engine: 'codex', heldAgain: true,
+    publish: async (registry, agentId) => expect((await registry.openProcessAgent({ engine: 'codex', runtimes, cwd: root, processIdentity: engineProcess }))?.entry.agentId).toBe(agentId) },
+  { name: 'an engine exit that leaves a shell', engine: 'codex',
+    publish: async (registry, agentId) => expect((await registry.confirmEngineExit(agentId, 'shell')).state).toBe('confirmed') },
+  { name: 'a hook binding a session', engine: 'openclaw',
+    publish: async (registry, agentId) => expect((await registry.register({ engine: 'openclaw', sessionId: 'agent:main:harness-1', runtimes, cwd: root }))?.entry.agentId).toBe(agentId) },
+]
+
+it('keeps the creation id through every launch that is not confirmed', async () => {
+  const { registry } = await load()
+  const row = (await registry.openPendingAgent({ engine: 'codex', cwd: root, runtimes, nativeToken: TOKEN, creationId: CREATION }))!
+  for (const launch of [{ state: 'starting', nativeToken: TOKEN }, guard({}), { state: 'failed', error: 'ENGINE_DID_NOT_START' }, guard({})] as AgentLaunch[]) {
+    expect(registry.setLaunch(row.agentId, launch)?.creationId).toBe(CREATION)
+  }
+  expect((await registry.beginNativeDispatch(row.agentId, randomUUID()))?.creationId).toBe(CREATION)
+  expect(disk()[0].creationId).toBe(CREATION)
+  expect((await load()).registry.byAgent(row.agentId)?.creationId).toBe(CREATION)
+})
+
+it.each(publications)('drops the creation id, durably, at $name', async ({ engine, publish, heldAgain }) => {
+  const { registry } = await load()
+  const row = (await registry.openPendingAgent({ engine, cwd: root, runtimes, nativeToken: TOKEN, creationId: CREATION }))!
+  await publish(registry, row.agentId)
+  expect(registry.byAgent(row.agentId)).not.toHaveProperty('creationId')
+  await registry.flush()
+  expect(disk()[0]).not.toHaveProperty('creationId')
+  const next = await load()
+  expect(next.registry.byAgent(row.agentId)).not.toHaveProperty('creationId')
+  if (!heldAgain) return
+  // Held again by the guard with no conversation, it names no receipt a first task could be read from again.
+  const held = next.registry.setLaunch(row.agentId, guard({}))!
+  expect(held.sessionId).toBe('')
+  expect(held).not.toHaveProperty('creationId')
+})
+
+it.each(publications)('leaves a row with no creation id as it was, at $name', async ({ engine, publish }) => {
+  const { registry } = await load()
+  const row = (await registry.openPendingAgent({ engine, cwd: root, runtimes, nativeToken: TOKEN }))!
+  await publish(registry, row.agentId)
+  expect(registry.byAgent(row.agentId)).not.toHaveProperty('creationId')
+  // The bind's row carries no launch: its engine reports in.
+  expect(registry.byAgent(row.agentId)?.launch).toEqual(engine === 'openclaw' ? undefined : { state: 'ready' })
+  await registry.flush()
+  expect(disk()[0]).not.toHaveProperty('creationId')
+})
