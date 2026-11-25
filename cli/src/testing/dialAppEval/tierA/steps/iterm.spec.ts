@@ -242,7 +242,7 @@ describe("tier A's world on iTerm2's machine", () => {
     const { pid, tty } = tabShell(world, { window: 'w1', tab: 0 })
     expect(tty).toMatch(/^ttys\d{3}$/)
     expect(machine.processes.get(pid)!.tty).toBe(tty)
-    expect(await deps.tty!(pid)).toBe(`/dev/${tty}`)
+    expect(await deps.tty!(pid)).toEqual({ tty: `/dev/${tty}` })
     // iTerm2's server, its login's parent, runs on no tty: it has none.
     const server = machine.processes.get(machine.processes.get(pid)!.ppid)!.ppid
     expect(machine.processes.get(server)!.tty).toBeUndefined()
