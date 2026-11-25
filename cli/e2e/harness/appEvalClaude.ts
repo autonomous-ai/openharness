@@ -27,13 +27,13 @@ import { fetchOverSocket } from '../../src/lib/localTransport.js'
 import { claudeAppFixture } from '../../src/testing/claudeAppFixture.js'
 import type { SessionDef, SessionKey } from '../../src/testing/dialAppEval/types.js'
 import { inside, speak, type AppSteps, type OpenRun, type TierBWorld } from './appEvalDriver.js'
-import { SOURCES_CLI, until, type IsolatedDaemon } from './daemon.js'
+import { sourcesCli, until, type IsolatedDaemon } from './daemon.js'
 import { inboxPoll } from './modInbox.js'
 import { NoKeys, Outside, type FakeApp as OutsideApp } from './outsideAgent.js'
 
 const LINUX = process.platform === 'linux'
 // How the real CLI is started: the run's bundle when there is one (E2E_BUNDLE), as the daemon runs, from any folder.
-const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : SOURCES_CLI
+const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : sourcesCli()
 /** For a hook the fake ran to be in its log. */
 const HOOK_MS = 30_000
 /** For a session's SessionEnd hook as it leaves: past it, its process goes all the same. */

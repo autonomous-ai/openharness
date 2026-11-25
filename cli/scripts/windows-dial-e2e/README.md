@@ -15,8 +15,8 @@ The Dell has Smart App Control on, and it stays on: Windows runs no unsigned pro
 CLI's build) nor a branch build of `harness-serial.exe` or `harness-pty.exe` runs. So:
 
 - the desk and the CLI are built on the Mac, `cd cli && node scripts/windows-dial-e2e/bundle.mjs <out>` (`<out>` empty
-  or new), and `<out>` is copied over whole. The desk is then `<out>\scripts\windows-dial-e2e\desk.mjs`, which needs no
-  `node_modules` and starts the `cli.js` beside it;
+  or new), and `<out>` is copied over whole. The desk is then `<out>\cli\scripts\windows-dial-e2e\desk.mjs`, which needs
+  no `node_modules` and starts the `cli.js` beside it;
 - they run under the installed release's own signed programs, in `%USERPROFILE%\.harness\runtime`: the `node.exe` that
   `current-node` names, and the `harness-serial.exe` and `harness-pty.exe` in `pty\<the folder current-pty names>`
   (release 0.6.22 or later). `--serial-bin` names that `harness-serial.exe`, and `HARNESS_PTY_BIN` that

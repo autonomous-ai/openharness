@@ -42,10 +42,14 @@ import { forgetGroup, forgetOwn, forgetTmux, leaderGone, watchGroup, watchOwn, w
 const exec = promisify(execFile)
 const here = dirname(fileURLToPath(import.meta.url))
 export const CLI_ROOT = resolve(here, '../..')
-/** tsx by its path: a bare `--import tsx` resolves from the working folder, and a daemon's is not always this checkout. */
-export const TSX_LOADER = pathToFileURL(createRequire(join(CLI_ROOT, 'package.json')).resolve('tsx')).href
-/** The sources' CLI, runnable from any folder. */
-export const SOURCES_CLI: readonly string[] = ['--import', TSX_LOADER, join(CLI_ROOT, 'src', 'cli.ts')]
+/**
+ * The sources' CLI, runnable from any folder: tsx by its path, as a bare `--import tsx` resolves from the working folder,
+ * and a daemon's is not always this checkout. Resolved when asked, not on import: the bundled desk
+ * (scripts/windows-dial-e2e/bundle.mjs) imports this file where no tsx is installed.
+ */
+export function sourcesCli(): string[] {
+  return ['--import', pathToFileURL(createRequire(join(CLI_ROOT, 'package.json')).resolve('tsx')).href, join(CLI_ROOT, 'src', 'cli.ts')]
+}
 
 /** What a fake engine's wrapper hands `fakeEngine.mjs` `run()`: where it writes, and which release it is. */
 export interface EngineConfig {
@@ -682,7 +686,7 @@ esac
     // From the sources on macOS, the helper a release embeds comes in by a preload (processImages.ts): without it the
     // daemon held every Codex read for good. The master passes its flags on to the core and the services.
     const preload = this.options.withoutProcessImages ? undefined : process.env.E2E_PROCESS_IMAGES_PRELOAD
-    const script = bundle ? [bundle] : [...(preload ? ['--import', preload] : []), ...SOURCES_CLI]
+    const script = bundle ? [bundle] : [...(preload ? ['--import', preload] : []), ...sourcesCli()]
     // A process group of its own, which the core and the services join: one signal reaches all of them, whether or
     // not the master is still there, and the worker's reaper (reaper.ts) ends it should the worker go without closing it.
     const env = this.options.foreground ? await this.shellEnv() : this.env
