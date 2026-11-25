@@ -75,6 +75,11 @@ def imports_from(root, sources, within):
     return seen
 
 
+def config_list(config, key):
+    """The single-quoted entries of a vitest config's `key: [...]` list."""
+    return re.findall(r"'([^']+)'", re.search(rf"\b{key}: \[([^\]]*)\]", config).group(1))
+
+
 class SelectionTests(unittest.TestCase):
     def test_backend_changes_run_the_integration_shards_and_nothing_else_does(self):
         # Task #2459: the Super Tab integration suite runs in PR CI for backend changes only.
@@ -347,6 +352,20 @@ class SelectionTests(unittest.TestCase):
                 self.assertIn("windows-e2e", planner.select([path])[0])
                 self.assertFalse(planner.e2e_plan([path], {"windows-e2e"})["windows_arm64"])
 
+    def test_a_config_list_the_walk_cannot_read_whole_fails(self):
+        # A double-quoted entry, a spread, a variable or a second list would drop entries silently, and a harness file
+        # only they lead to would go unlisted.
+        for config in ("include: ['e2e/a.e2e.ts'],\n    include: ['e2e/b.e2e.ts'],",
+                       "include: ['e2e/a.e2e.ts', \"e2e/b.e2e.ts\"],",
+                       "include: ['e2e/a.e2e.ts', ...MORE],", "include: ['e2e/a.e2e.ts', extra],"):
+            with self.subTest(config=config), self.assertRaises(ValueError):
+                config_list(config, "include")
+        self.assertEqual(config_list("include: ['e2e/a.e2e.ts', 'e2e/b.e2e.ts'],", "include"),
+                         ["e2e/a.e2e.ts", "e2e/b.e2e.ts"])
+        # A commented-out list above the real one is not read.
+        self.assertEqual(config_list("// include: ['e2e/old.e2e.ts'],\n    include: ['e2e/a.e2e.ts'],", "include"),
+                         ["e2e/a.e2e.ts"])
+
     def test_what_the_windows_e2e_harness_imports_is_listed(self):
         # From the Windows e2e config's files, setup files and global setup, and the desk bundle's entry, through the
         # harness and the testing helpers only: product code selects windows-e2e only where its own folder rules say so,
@@ -356,7 +375,7 @@ class SelectionTests(unittest.TestCase):
         config = (root / "cli/vitest.e2e.windows.config.ts").read_text()
         sources = ["cli/scripts/windows-dial-e2e/desk.mts"]
         for key in ("setupFiles", "globalSetup", "include"):
-            named = re.findall(r"'([^']+)'", re.search(rf"\b{key}: \[([^\]]*)\]", config).group(1))
+            named = config_list(config, key)
             self.assertTrue(named, key)
             sources += [posixpath.normpath(posixpath.join("cli", name)) for name in named]
         run = imports_from(root, sources, ("cli/e2e/harness/", "cli/src/testing/"))
