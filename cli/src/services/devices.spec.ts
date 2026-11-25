@@ -221,7 +221,9 @@ const readers = vi.hoisted(() => ({
   answer: vi.fn(async (..._args: unknown[]): Promise<string | undefined> => undefined),
   apps: vi.fn(async (_pids: readonly number[], _rows?: readonly unknown[]) => new Map<number, string>()),
   record: vi.fn(async (..._args: unknown[]): Promise<{ name?: string; hostSession?: string }> => ({})),
-  processes: vi.fn(async () => [] as Array<{ pid: number; ppid: number; tty?: string; executable: string }>),
+  processes: vi.fn(async (_exec?: unknown) => [] as Array<{ pid: number; ppid: number; tty?: string; executable: string }>),
+  // What /bin/ps under psEnv prints (cable/hosts/tabs.ts runPs): nothing, never this machine's processes.
+  ps: vi.fn(async (_args: string[], _bounds: { timeout: number; maxBuffer: number }): Promise<string | null> => null),
   // A process's terminal, as its made-up row gives it: the table the devices read holds none.
   tty: vi.fn(async (pid: number): Promise<string | undefined> => (await readers.processes()).find((p) => p.pid === pid)?.tty),
   bundleId: vi.fn(async (_bundle: string): Promise<string | undefined> => undefined),
@@ -268,6 +270,10 @@ vi.mock('../cable/hosts/codexServed.js', async (real) => ({
   ...await real<typeof import('../cable/hosts/codexServed.js')>(),
   servedLookup: (platform: NodeJS.Platform) =>
     (platform === 'win32' ? undefined : async (asks: readonly unknown[]) => asks.map(() => undefined)),
+}))
+vi.mock('../cable/hosts/tabs.js', async (real) => ({
+  ...await real<typeof import('../cable/hosts/tabs.js')>(),
+  runPs: readers.ps,
 }))
 // Where tmux is: on the PATH, so no spec asks the developer's login shell.
 vi.mock('../lib/tmuxOnPath.js', async (real) => ({
@@ -8186,6 +8192,20 @@ describe('the dial\'s words typed into an iTerm2 or Ghostty tab (docs/plans/2026
       expect(logs.filter((line) => secrets.some((secret) => line.includes(secret)))).toEqual([])
     })
   }
+
+  it('the table the stdin check reads is /bin/ps\'s under psEnv, not a ps from the PATH', async () => {
+    await inTabs()
+    readers.processes.mockClear()
+    expect(await say(A, 'run the tests')).toEqual({ ok: true })
+    // Checked before the words and again before their Enter.
+    const execs = readers.processes.mock.calls.map(([exec]) => exec)
+    expect(execs).toEqual([expect.any(Function), expect.any(Function)])
+    const bounds = { timeout: 1_000, maxBuffer: 65_536 }
+    for (const exec of execs) {
+      await (exec as (command: string, args: readonly string[], options: typeof bounds) => Promise<string | null>)('ps', ['-axo', 'pid=,ppid=,comm='], bounds)
+    }
+    expect(readers.ps.mock.calls).toEqual([[['-axo', 'pid=,ppid=,comm='], bounds], [['-axo', 'pid=,ppid=,comm='], bounds]])
+  })
 
   it('wrong session: words for A never make a line naming B\'s tty, and with another start on A\'s tty none at all', async () => {
     const { watch, tabProcess } = await inTabs({ agents: 2 })
