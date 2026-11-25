@@ -19,7 +19,7 @@ import { MAX_TEXT } from './orca.js'
 import { FRESH_WITHIN_MS, type Nested, type NestedLookup, type NestedPlace, type OuterLookup } from './outer.js'
 import type { SessionRecord } from './record.js'
 import { parentChain, type ProcessName, scanLearnsApps } from './scannedApp.js'
-import { isTabApp } from './tabs.js'
+import { isTabApp, type TabTty } from './tabs.js'
 import { type Caps, type HostAgent, type HostAgentState, type HostSource, isTabsReason, type Nest, type PaneSwitch, type SendResult,
   type TabsReason } from './types.js'
 
@@ -130,9 +130,9 @@ export interface ObservedDeps {
   /** What a Claude Code session's own process record gives (record.ts): the name the person gave it, and the Claude
    *  app's id of it; one that rejects gives nothing. Absent, the scan names by folder and places by its app alone. */
   record?(owner: Pick<SessionOwner, 'pid' | 'record'> & { sessionId: string }): Promise<SessionRecord>
-  /** The tty of a process in a tab app (tabs.ts readTty), rejecting when `ps` could not be read; absent (off macOS), no
-   *  agent has a tab. */
-  tty?(pid: number): Promise<string | undefined>
+  /** The tty of a process in a tab app and that process's start (tabs.ts readTabTty), rejecting when `ps` could not be
+   *  read; absent (off macOS), no agent has a tab. */
+  tty?(pid: number): Promise<TabTty | undefined>
   /** The host that made the pseudo-terminal a process runs on (scannedApp.ts readPtyOwner, on Windows
    *  readWindowsPtyOwner), rejecting when the process table could not be read. Absent, no terminal's or multiplexer's
    *  pane is any agent's own. */
@@ -250,9 +250,11 @@ interface Entry {
   hostSession?: string
   /** Every pane an adapter knows it by, from its latest event and its tty, in the adapters' order. */
   panes: readonly Located[]
-  /** The process its tty was read for, its latest in a tab app, and that tty once read. */
+  /** The process its tty was read for, its latest in a tab app, and that tty once read, with that process's start from
+   *  the same read: a tty another way gave (its multiplexer client's) has none. */
   ttyPid?: number
   tty?: string
+  ttyStart?: string
   /** When the read of ttyPid began, once that read failed. */
   ttyFailedAt?: number
   /** The caller the host that made its terminal was read for, that host once read (null: none the dial types into), and
@@ -476,11 +478,13 @@ export class ObservedSource implements HostSource {
       if (delivery === 'busy') return refuse('pending', `${name} has not taken your last words yet.`)
     }
     // In that wait the session may also have ended, moved to another terminal or gone: the old one holds something else.
-    // Each event names its panes afresh, so the same pane is known by its adapter and id.
+    // Each event names its panes afresh, so the same pane is known by its adapter and id, and a tab's by its proof too:
+    // another process on the same tty has the same id.
     if (!typer) return noAnswer()
     const there = (): boolean => {
       const still = this.first(e, words)
       return this.live(e) && still?.pane.adapter === typer.pane.adapter && still.pane.id === typer.pane.id
+        && still.pane.proof?.pid === typer.pane.proof?.pid && still.pane.proof?.start === typer.pane.proof?.start
     }
     if (!there()) return noAnswer()
     // A prompt open in the terminal takes what is typed as its answer: Enter there would allow what the dial only shows,
@@ -738,10 +742,11 @@ export class ObservedSource implements HostSource {
     })
   }
 
-  /** Where it runs, as its adapters read it. */
+  /** Where it runs, as its adapters read it: a proof only where its own tty and its process's start were read. */
   private placeOf(entry: Entry): Place {
     const hints = entry.paired ? { HC_TERMINAL_ID: entry.paired.address } : entry.hints
-    return { host: entry.agent.host, app: entry.agent.app, hints, tty: entry.tty, hostSession: entry.hostSession,
+    const proof = entry.ttyStart === undefined ? undefined : { pid: entry.ttyPid!, start: entry.ttyStart }
+    return { host: entry.agent.host, app: entry.agent.app, hints, tty: entry.tty, proof, hostSession: entry.hostSession,
       pid: entry.caller ?? entry.pid, sessionId: entry.agent.sessionId, engine: entry.agent.engine, cwd: entry.agent.cwd,
       outer: entry.outer, ptyOwner: entry.ptyOwner }
   }
@@ -837,13 +842,15 @@ export class ObservedSource implements HostSource {
     if (entry.ttyPid === pid && (entry.ttyFailedAt === undefined || now - entry.ttyFailedAt < TTY_RETRY_MS)) return
     entry.ttyPid = undefined
     entry.tty = undefined
+    entry.ttyStart = undefined
     entry.ttyFailedAt = undefined
     this.locate(entry)
     if (!this.deps.tty || !isTabApp(entry.agent.app)) return
     entry.ttyPid = pid
-    this.deps.tty(pid).then((tty) => {
+    this.deps.tty(pid).then((read) => {
       if (entry.ttyPid !== pid) return
-      entry.tty = tty
+      entry.tty = read?.tty
+      entry.ttyStart = read?.start
       this.locate(entry)
     }, (error) => {
       if (entry.ttyPid === pid) entry.ttyFailedAt = now
@@ -972,6 +979,7 @@ export class ObservedSource implements HostSource {
     entry.ttyPid = undefined
     entry.ttyFailedAt = undefined
     entry.tty = entry.outer?.tty
+    entry.ttyStart = undefined
     void answer.then((place) => this.landOuter(entry, ask, place.nest, place))
     return true
   }
@@ -986,6 +994,7 @@ export class ObservedSource implements HostSource {
       entry.outer = place.app ? { app: place.app, tty: place.tty, pid: place.pid } : undefined
       entry.outerPid = !place.app && clientPid(place.pid) ? place.pid : undefined
       entry.tty = entry.outer?.tty
+      entry.ttyStart = undefined
     } else if (entry.agent.nest === nest && !entry.agent.appPending) return
     if (nest) entry.agent.nest = nest
     else delete entry.agent.nest
@@ -1526,6 +1535,7 @@ export class ObservedSource implements HostSource {
     entry.scanPlaced = true
     entry.placed = place.pane
     entry.tty = place.tty
+    entry.ttyStart = undefined
     entry.agent.app = place.app
     delete entry.agent.appPending
     entry.bundle = APP_BUNDLES[place.app]

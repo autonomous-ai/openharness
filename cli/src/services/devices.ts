@@ -76,7 +76,7 @@ import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
 import { appRoots, learnApps, readBundleId, readMadeBy, readProcessNames, readPtyOwner, readTtyName, readWindowsPtyOwner, scanLearnsApps } from '../cable/hosts/scannedApp.js'
 import { createScrollLines } from '../cable/hosts/scrollLines.js'
 import { pageOf } from '../cable/hosts/select.js'
-import { createTabsAdapter, isTabApp, readTty, type Tab, type TabApp } from '../cable/hosts/tabs.js'
+import { createTabsAdapter, isTabApp, readTabTty, type Tab, type TabApp, type TabTty } from '../cable/hosts/tabs.js'
 import { createTmuxAdapter, createTmuxNested, createTmuxOuter, tmuxPaneParts } from '../cable/hosts/tmux.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { watchSocket } from '../cable/hosts/unixSocket.js'
@@ -205,8 +205,9 @@ export interface DevicesDeps {
    *  (services/inline.ts). Elsewhere inside the core's process (`HARNESSD_SERVICES=none`, Harness OS) there is none, so
    *  the core's process opens no socket for the devices, and the dial follows no app in front there. */
   listen?: (handlers: Readonly<Record<string, ListenerHandler | ListenerStreamHandler>>, log: (line: string) => void) => Promise<DevicesListener | null>
-  /** For this service's tests: how an agent's tty is read; `ps` by default (cable/hosts/tabs.ts). */
-  tty?: (pid: number) => Promise<string | undefined>
+  /** For this service's tests: how an agent's tty and its process's start are read; `ps` by default
+   *  (cable/hosts/tabs.ts). */
+  tty?: (pid: number) => Promise<TabTty | undefined>
   /** For this service's tests: the process table VS Code's terminals are matched by; `ps` by default
    *  (cable/hosts/vscodeTerminals.ts). */
   processParents?: VscodeTerminalsDeps['processes']
@@ -629,7 +630,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     after: timerIn('vscode'),
     log,
   })
-  const ttyOf = apps.platform === 'darwin' ? deps.tty ?? readTty : undefined
+  const ttyOf = apps.platform === 'darwin' ? deps.tty ?? readTabTty : undefined
   /** Whether [app] reports its selected tab here: a tab app, where the devices read ttys (macOS). */
   const reportsTabs = (app: string): app is TabApp => ttyOf !== undefined && isTabApp(app)
   /** The tab each tab app reported selected last: set by every tab report, and an app's dropped when another app, or

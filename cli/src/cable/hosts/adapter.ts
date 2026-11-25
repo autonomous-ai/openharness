@@ -20,12 +20,20 @@ export interface Outer {
   pid?: number
 }
 
+/** The process a tab's tty was read for and when it started, from one `ps` read (tabs.ts readTabTty): a new process on
+ *  the same tty is another pane, which the dial's words never reach. */
+export interface Proof {
+  pid: number
+  start: string
+}
+
 /** Where an outside agent runs, from its latest hook event and what was learnt of its process. */
 export interface Place {
   host: string                                  // detectHost
   app: string                                   // detectApp
   hints: Readonly<Record<string, string>>       // that event's host hints, as the core checked them
   tty?: string                                  // its process's tty, read for a tab app (observed.ts learnTty)
+  proof?: Proof                                 // that read's process and start, for one not nested; only tabs reads it
   pid?: number                                  // its process: that event's caller
   sessionId?: string                            // the engine's own id of the session: the VS Code extension's link names it
   engine?: string                               // whose session it is: that link names Claude Code's alone
@@ -54,6 +62,8 @@ export interface Pane {
   id: string
   /** The pane holds the agent's terminal but its host did not make it: a tap alone, after the agent's other panes. */
   held?: true
+  /** A tab's pane: the process its tty was read for, which the source checks is still the one there. */
+  proof?: Proof
 }
 
 /** Callers a line is kept said for: more than the agents the observed source lists (MAX_SESSIONS, 50). */
