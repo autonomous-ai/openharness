@@ -1281,6 +1281,38 @@ describe('resume edges the desk sees', () => {
     expect(deps.stoppedAgents.beginResume(saved.agentId)).toBeNull()
   })
 
+  // The resumed engine's own hook can bind another conversation (a `/clear`, Codex's first prompt naming a new thread),
+  // or name the first one of a resume that had none, before its settle time ends or while its pane is let go. The
+  // resume follows the row onto it: answered AGENT_CHANGED, the pane outlived the engine as a dead one.
+  const rotated = '33333333-3333-4333-8333-333333333333'
+  async function rotate(process = identity) {
+    const home = join(dir, 'codex'), transcript = join(home, 'sessions', `rollout-${rotated}.jsonl`)
+    mkdirSync(join(home, 'sessions'), { recursive: true })
+    writeFileSync(transcript, JSON.stringify({ type: 'session_meta', payload: { id: rotated, cwd: dir, source: 'cli' } }) + '\n')
+    expect(await registry.register({ engine: 'codex', sessionId: rotated, transcriptPath: transcript, codexHome: home,
+      cwd: dir, runtimes: [{ backend: 'tmux', paneId: pane }], processIdentity: process })).not.toBeNull()
+  }
+  it.each([
+    ['original-session', 'it settles'], ['', 'it settles'], ['original-session', 'its pane is let go'],
+  ] as const)('confirms a resume whose own process moves the row off "%s" while %s', async (from, when) => {
+    rewrite({ codexHome: join(dir, 'codex'), ...from ? {} : { sessionId: '', transcriptPath: '' } })
+    vi.mocked(resolvePaneEngineProcess).mockReset().mockResolvedValue(identity)
+    if (when === 'it settles') vi.mocked(resolvePaneEngineProcess).mockImplementationOnce(async () => { await rotate(); return identity })
+    else releaseHold.mockImplementationOnce(async (_runtime, current?: () => boolean) => { await rotate(); expect(current?.()).toBe(true) })
+    expect(await start()).toMatchObject({ ok: true, session: { sessionId: rotated, processIdentity: identity } })
+    expect(releaseHold).toHaveBeenCalledOnce()
+    expect(registry.byAgent(saved.agentId)).toMatchObject({ sessionId: rotated, launch: { state: 'ready' } })
+    expect(deps.announceSession).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: rotated }))
+    expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).toBeNull()
+  })
+  // Another process's conversation on the row is not the resume's to follow.
+  it('does not follow a row another process moved onto another conversation', async () => {
+    vi.mocked(resolvePaneEngineProcess).mockReset().mockResolvedValue(identity)
+      .mockImplementationOnce(async () => { await rotate({ ...identity, pid: 54322 }); return identity })
+    expect(await start()).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
+    expect(releaseHold).not.toHaveBeenCalled()
+  })
+
   // A verdict another path set on the row (an older daemon's mismatch guard) is reported as itself, and said in the
   // log as it is, with no "undefined" where a reason would be.
   it('reports a failure the row was given elsewhere, without a reason, as itself', async () => {

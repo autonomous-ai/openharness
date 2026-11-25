@@ -102,6 +102,25 @@ it('a reopened conversation, bound but never stamped, keeps its watch when its h
   expect(w.deps.clearRemainOnExit).toHaveBeenCalledOnce()
 })
 
+// Its own engine binding another conversation in the window (a `/clear`, Codex's first prompt naming a new thread)
+// is the same restore: ended there, the watch left the pane held, to outlive the engine as a dead pane.
+it('a resumed conversation its own engine moves off in the settle window keeps its watch', async () => {
+  const bound = await starting(true)
+  const saved = structuredClone(bound)
+  await removeRegistryAgent(registry, bound.agentId)
+  expect(await registry.resumePendingAgent(saved, [runtime], token)).toMatchObject({ sessionId: id })
+  const next = '44444444-4444-4444-8444-444444444444', rollout = join(home, 'sessions', `rollout-${next}.jsonl`)
+  writeFileSync(rollout, JSON.stringify({ type: 'session_meta', payload: { id: next, cwd: directory, source: 'cli' } }) + '\n')
+  const w = watch()
+  await restoreAgents(w.deps)
+  await w.settling
+  expect(await registry.register({ engine: 'codex', sessionId: next, transcriptPath: rollout, codexHome: home,
+    cwd: directory, runtimes: [runtime], processIdentity: engine }, { verifiedNativeSource: true })).not.toBeNull()
+  w.settle(); await w.finished
+  expect(w.deps.clearRemainOnExit).toHaveBeenCalledOnce()
+  expect(registry.byAgent(bound.agentId)).toMatchObject({ sessionId: next, earlierSessionIds: [id], processIdentity: engine })
+})
+
 it('a fresh engine whose first hook binds in the settle window is accepted', async () => {
   const row = await starting(false)
   const w = watch()
