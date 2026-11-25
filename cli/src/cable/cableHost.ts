@@ -38,7 +38,7 @@ import type { PetStore } from './pets/store.js'
 import { LANE_SESSION_OVER, LANE_TOKEN_UNAVAILABLE, type MachineFleet } from './machineFleet.js'
 import type { ReviewedAnswer, AnswerReceipt } from './questionInbox.js'
 import { isTier, type Tier } from '../lib/notifyTier.js'
-import { NOT_NEWS, type NotNews } from '../lib/agentNotifications.js'
+import { notNewsOf, type NotNews } from '../lib/agentNotifications.js'
 import { DIAL_VOICE_SURFACE, DIAL_VOICE_SURFACE_HEADER, type DialOpenEnd, type DialVoiceEnd } from '../lib/dialUsageContract.js'
 import { HarnessSource } from './hosts/harness.js'
 import { AppFilter, type AppCounts } from './hosts/appFilter.js'
@@ -1657,8 +1657,7 @@ export function cableEventFor(
   // `restored` recap (a turn that ended unseen, CommanderMirror.catchUp) is drawn the same way: history, not news.
   const silent = frame.payload?.subagent === true || frame.payload?.restored === true
   // `notNews`: why a silent card is not news (lib/agentNotifications.ts), for the devices' log; a word that is not one is dropped.
-  const said = frame.payload?.notNews
-  const notNews = frame.payload?.restored === true ? 'restored' : NOT_NEWS.find((reason) => reason === said)
+  const notNews = notNewsOf(frame.payload ?? {})
   const update = frame.payload?.update
   const fullText = frame.payload?.fullText
   // `tier`: how loudly the turn tells, decided once by the recaps (services/recaps.ts) for every screen.

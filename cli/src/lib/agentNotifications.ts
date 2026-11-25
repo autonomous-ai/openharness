@@ -9,10 +9,17 @@ export const DONE_QUIET_MS = 1_500
 /** Why a turn's end is not news, in fixed words the devices log (never an id or text): the caller's silent (a
  * sub-agent's or abandoned turn), not eligible (a replayed, cancelled or already-decided turn), no result text, a
  * question waiting at the end, the session's next turn first, no turn known; and a recap restored after its turn
- * ended unseen (CommanderMirror.catchUp, named by cable/cableHost.ts). Not "quiet": that is a quiet delivery's turn
+ * ended unseen (CommanderMirror.catchUp, named by notNewsOf). Not "quiet": that is a quiet delivery's turn
  * (core/api.ts `DeliveryOptions`) and this file's quiet window. */
 export const NOT_NEWS = ['subagent', 'replay', 'empty', 'question', 'next-turn', 'gone', 'restored'] as const
 export type NotNews = typeof NOT_NEWS[number]
+
+/** Why a card says it is not news, read from a card this computer or another machine sent: a restored recap's, else
+ *  its word if it is one, else none. Read the same on the dial's two paths (cable/cableHost.ts, device/deviceFleet.ts). */
+export function notNewsOf(payload: { restored?: unknown; notNews?: unknown }): NotNews | undefined {
+  if (payload.restored === true) return 'restored'
+  return NOT_NEWS.find((reason) => reason === payload.notNews)
+}
 
 type Tell = (notification: AgentNotification | null, notNews?: NotNews) => void
 type Turn = {
