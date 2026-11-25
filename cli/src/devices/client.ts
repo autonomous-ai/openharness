@@ -110,9 +110,6 @@ const TELL_GAP_MS = 100
 const QUIT_TELL_MS = 2_000
 // A select on the devices' stream is `{"app","tty"}`, and a tap's `"raise":true` too, under 70 bytes: a longer line is none.
 const SELECT_LINE_MAX = 96
-// JSON.stringify writes a lone surrogate as an escape Harness Device cannot read into its text, and the devices clean
-// every one away (cleanWords): a text with one was not theirs. Not global, so `test` keeps no lastIndex between texts.
-const LONE_SURROGATE = /\p{Cs}/u
 // A stream that ends or does not open is opened again 1 s later, the wait doubling to 30 s while it does not open: a
 // devices process that is gone is not asked once a second.
 const STREAM_RETRY_MS = 1_000
@@ -258,7 +255,8 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
       try { value = JSON.parse(line) } catch { return }
       const typing = typingOf(value)
       if (typing) {
-        if (writes && !('write' in typing && LONE_SURROGATE.test(typing.write.text))) deps.print(JSON.stringify(typing))
+        // typingOf refuses a lone surrogate, which Harness Device cannot read into its text.
+        if (writes) deps.print(JSON.stringify(typing))
         return
       }
       if (Buffer.byteLength(line) > SELECT_LINE_MAX) return
