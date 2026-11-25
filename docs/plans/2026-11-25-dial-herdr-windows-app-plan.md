@@ -15,7 +15,7 @@ confirmed the pane on Windows. Nothing in the core, nothing stored, no Rust chan
 
 **Tech Stack:** TypeScript (Node), Vitest.
 
-**Spec:** `docs/plans/2026-11-25-dial-herdr-windows-app-design.md` (approved, PM 2026-11-26).
+**Spec:** `docs/plans/2026-11-25-dial-herdr-windows-app-design.md` (approved, PM 2026-11-26, with its Decisions 1-6).
 
 **Running tests.** The Mac is held for the tier B eval. Implementers write the tests and commit red, then green, but
 run nothing until the PM frees the Mac; the main session runs each task's command on the PM's go. Each task's command
@@ -25,14 +25,18 @@ each task's tests (interfaces change across files).
 
 ## Global Constraints
 
-- Platforms: Windows gains the behaviour; macOS and Linux behaviour must not change (PM decision 2). Each changed path
+- Platforms: Windows gains the behaviour; macOS and Linux behaviour must not change (decision 2). Each changed path
   that has a darwin or linux branch keeps a test pinning it.
 - Of the Windows table only `pid`, `ppid`, `executable` and `startMarker` are read, never `args`, `nativeArgv` or
-  `commandPath` (PM decision 4, core rule 4): the rows the lookup receives are copied to those four fields.
-- Several clients: the newest by start marker wins, a tie to the higher pid; a candidate with a listed app beats every
-  candidate without one (PM decision 1).
-- No `raise --console-of`, no Rust change: only `harness-pty raise --pid <n>` (PM decision 3).
-- Nothing in `cli/src/core/`, nothing stored, `createHerdrNested` and the open scan stay off on Windows (PM decision 5).
+  `commandPath` (spec, "What Windows does offer"): the rows the lookup receives are copied to those four fields.
+- Several clients: the newest by start marker wins, a tie to the higher pid (decision 1); a candidate with a listed app
+  beats every candidate without one, and then one with a window owner beats every one without (decision 5).
+- No client in a listed app (Windows Terminal, Alacritty, no window): the agent's app is `UNKNOWN_APP` (`terminal`),
+  on herdr's page, never the hint's app (decision 4).
+- A tap whose `herdr agent focus` failed or was refused still raises the known window owner, as Linux's fallback does
+  (decision 6).
+- No `raise --console-of`, no Rust change: only `harness-pty raise --pid <n>` (decision 3).
+- Nothing in `cli/src/core/`, nothing stored, `createHerdrNested` and the open scan stay off on Windows (spec, "Design · 2").
 - Bounds: at most `HERDR_CLIENTS_A_LOOKUP` (16) candidates a lookup, parent walks bounded by `WALK_PARENTS` through
   `parentChain`.
 - Log lines are the existing ones: `[device] herdr client · found | none | outside | not read · processes`, and the
@@ -46,12 +50,13 @@ each task's tests (interfaces change across files).
 2. **A reused pid**: a client whose recorded parent pid now belongs to a newer `Code.exe` or `WindowsTerminal.exe`
    gets no app from it. Test in Task 3.
 3. **Windows' default-terminal handoff** (`pwsh` from Win+R, a conhost console under `explorer.exe`): the agent is on
-   herdr's page with no window, and a tap focuses the pane and raises nothing. Tests in Tasks 3 and 4.
+   herdr's page with no window, and a tap focuses the pane and raises nothing; beside an older client in Windows
+   Terminal, that terminal's window is the tap's (decision 5). Tests in Tasks 3 and 4.
 4. **A terminal started from a herdr pane** keeps `HERDR_PANE_ID` but herdr did not make its terminal (`outside`,
    `{}`): its own hint's bundle stays its tap's. Test in Task 5.
 5. **A stale Orca hint** (the server's first client was in Orca): an agent attached from Windows Terminal must not sit
-   on Orca's page (`pageOf` keeps Orca's page for `app === 'orca'`). Test in Task 5, its expected app per open
-   question 1.
+   on Orca's page (`pageOf` keeps Orca's page for `app === 'orca'`): its app is `terminal`, its page herdr's (decision
+   4). Test in Task 5.
 
 ---
 
@@ -152,7 +157,7 @@ each task's tests (interfaces change across files).
   ```
   On `win32` with no `windows`, `createHerdrOuter` answers `undefined` at once, as today. Off Windows nothing changes.
 
-The rules (spec "Design · 2", with the PM's decisions):
+The rules (spec "Design · 2", with Decisions 1 and 5):
 
 1. One `windows.processes()` read; a rejection → `{}` and `not read · processes`.
 2. `windowsPtyMaker(caller, rows)`; not `herdr` → `{}` and `outside`. `herdr` → `made('herdr')` is told (the same
@@ -166,9 +171,11 @@ The rules (spec "Design · 2", with the PM's decisions):
    `frontAppId(win32.basename(executable))` is a listed app (`APP_IDS`, not `UNKNOWN_APP`) gives the candidate's app;
    the nearest that is `UNKNOWN_APP` (`WindowsTerminal.exe`, `alacritty.exe`) gives its window owner, that step's pid;
    whichever comes first ends the walk. Neither → no window.
-6. Pick: the newest candidate with an app → `{ app, pid: <client pid>, nest: 'herdr' }` (`found`); else the newest
-   candidate (see open question 2) with a window owner → `{ pid: <owner pid>, nest: 'herdr' }` (`none`); else
-   `{ nest: 'herdr' }` (`none`). No `tty` on Windows.
+6. Pick, in three tiers, the newest within a tier: the newest candidate with an app →
+   `{ app, pid: <client pid>, nest: 'herdr' }` (`found`); else the newest candidate with a window owner, even when a
+   newer candidate has none (decision 5) → `{ pid: <owner pid>, nest: 'herdr' }` (`none`); else `{ nest: 'herdr' }`
+   (`none`). No `tty` on Windows. The answer never carries `UNKNOWN_APP` as `app`: the agent's `terminal` app is set by
+   `observed.ts` (Task 5, decision 4).
 
 The fake table (no `args`; `mark(n)` = `` `w:${134080735400000000n + BigInt(n)}` ``, so a larger pid started later):
 
@@ -200,8 +207,11 @@ Code.exe 200                        mark(200)
   - `a row with no start marker is left out` (client B without `startMarker` → client A's answer).
   - `the handoff console has no window`: client A's chain ends at `conhost.exe` → `explorer.exe`, client B gone →
     `{ nest: 'herdr' }`.
+  - `a window beats a newer client with none` (decision 5): client B gone, and client C `herdr.exe` 400 (`mark(400)`)
+    under `pwsh.exe` 390 under `conhost.exe` 380 under `explorer.exe` 50 → `{ pid: 100, nest: 'herdr' }`, log `none`.
   - `at most 16 candidates`: 20 extra `herdr.exe` rows under one `pwsh` under `explorer.exe`, older than client B →
-    still B; and 20 newer windowless ones push B out → the answer has no app (pins the bound).
+    still B; and 20 newer windowless ones push A and B out → `{ nest: 'herdr' }` (pins the bound: inside it, decision
+    5 would have kept A's window).
   - `the table not read`: `processes` rejects → `{}`, `not read · processes`, `made` not told.
   - `a maker that is not herdr`: caller under `WindowsTerminal.exe` directly → `{}`, `outside`.
   - `the marker names another server`: `server` → `999` → `{ nest: 'herdr' }`, `made` told.
@@ -238,9 +248,14 @@ Code.exe 200                        mark(200)
     and runs nothing.
   - `OpenDeps.windowOf?(agentId): { pid?: number; app?: string; outer?: true } | undefined` — `outer: true` when the
     pid is the outer answer's (Task 5 produces it).
-  - In `open()`, the `tap === 'before'` branch: `bundle` → `forward(bundle)`; else Linux's `raiseWindow`; else on
-    Windows, when `windowOf(agentId)` has `outer: true` and a pid, `windows.window(pid)`. Never the caller's own pid.
-    (The fallback branch for a failed pane focus is open question 3: unchanged until answered.)
+  - One Windows step, `ownerWindow(agentId)`: when `windows` is there and `windowOf(agentId)` has `outer: true` and a
+    pid, `() => windows.window(pid)`; else none. Never the caller's own pid.
+  - In `open()`, the `tap === 'before'` branch after a shown pane: `bundle` → `forward(bundle)`; else Linux's
+    `raiseWindow`; else `ownerWindow(agentId)`.
+  - The fallback after a pane focus that failed or was refused (decision 6, Linux's parity): the app step becomes
+    `bundle` → `forward(bundle)`; else Linux's `raiseWindow`; else `ownerWindow(agentId)`; none → `false`, as today.
+    The `[device] open · <adapter> · fallback` line stays as it is: logged on a failed focus with an app step, not on
+    a refused one. `can()` is unchanged (the herdr pane makes the tap possible).
 
 - [ ] **Step 1: Write the failing tests**
   - `windowsRaise.spec.ts`, "createWindowsRaise window": `window(4242)` runs
@@ -256,13 +271,25 @@ Code.exe 200                        mark(200)
       `window` call.
     - `with a bundle the app comes as before`: target `{ pane, bundle: VSCODE }` → `[['app', VSCODE]]`, no `window`.
     - `the handoff console: no window, nothing raised`: `windowOf` → undefined → `asked` is `[]`, open answers true.
-    - The Linux case "a tap on Linux brings the window forward through the raise" stays green unchanged.
+    - `a failed focus still raises the outer window owner` (decision 6): `focus` answers false, target `{ pane }`,
+      `windowOf` → `{ pid: 100, app: 'terminal', outer: true }` → `asked` is `[['window', '100']]`, logs
+      `['[device] open · herdr · fallback']`, open answers the raise's answer (true; with `onWindows([false])`, false).
+    - `a refused focus raises it with no line`: `focus` answers `'refused'` (as the existing "a pane its adapter
+      refuses" case) → `[['window', '100']]`, no log line.
+    - `a failed focus with no window owner and no bundle: nothing`: `windowOf` → undefined → `asked` is `[]`, open
+      answers false, no log line.
+    - `a failed focus never raises a pid that is not the outer answer's`: `windowOf` → `{ pid: 150, app: 'terminal' }`
+      → `asked` is `[]`, false.
+    - `a failed focus with a bundle brings the app as before`: target `{ pane, bundle: VSCODE }` →
+      `[['app', VSCODE]]`, no `window`.
+    - The Linux cases "a tap on Linux brings the window forward through the raise" (including "a pane that failed logs
+      the fallback and raises") stay green unchanged.
 - [ ] **Step 2: Run, expect FAIL** — `cd cli && npx vitest run src/cable/hosts/windowsRaise.spec.ts src/cable/hosts/open.spec.ts`:
-  `window` is not a function, and no raise runs. Commit red.
+  `window` is not a function, no raise runs, and the failed focus answers false. Commit red.
 - [ ] **Step 3: Implement** `window` in `createWindowsRaise` (a second `raise` form beside the `--exe` one, sharing
-  `helper` and the outcome check), the `outer` field on `OpenDeps.windowOf`, and the Windows step in `open()`. Add
-  `window` to each listed fake. Update the module comments of both files (the raise by pid, and why only an outer
-  answer's pid).
+  `helper` and the outcome check), the `outer` field on `OpenDeps.windowOf`, and `ownerWindow` used by both branches
+  of `open()`. Add `window` to each listed fake. Update the module comments of both files (the raise by pid, why only
+  an outer answer's pid, and why a failed focus still raises it: Linux's fallback does, PM 2026-11-26).
 - [ ] **Step 4: Run, expect PASS** — `cd cli && npx vitest run src/cable/hosts/windowsRaise.spec.ts src/cable/hosts/open.spec.ts src/cable/hosts/vscode.spec.ts src/cable/hosts/appLink.spec.ts src/cable/hosts/cursorFolder.spec.ts src/cable/hosts/codexApp.spec.ts`
   and `npm run typecheck`.
 - [ ] **Step 5: Commit** the files above.
@@ -280,32 +307,35 @@ Code.exe 200                        mark(200)
   - `windowOf(agentId): { pid: number; app: string; outer?: true } | undefined` — `outer: true` when the pid is
     `e.outer?.pid ?? e.outerPid`; otherwise as today.
   - `placeApp` on `win32` once herdr's lookup confirmed the pane (`entry.agent.nest === 'herdr'`, told by `made` or the
-    answer): `entry.agent.app = entry.outer?.app ?? <open question 1>`, `entry.bundle = entry.outer ? APP_BUNDLES[entry.outer.app] : undefined`.
+    answer): `entry.agent.app = entry.outer?.app ?? UNKNOWN_APP`, `entry.bundle = entry.outer ? APP_BUNDLES[entry.outer.app] : undefined`
+    (decision 4: no client in a listed app is the unknown app `terminal`, on herdr's page, never the hint's app). No
+    walk of the caller's parents (`learnApp`) there: the pane's parents are herdr's server, not the client's app.
     On darwin and linux, and on win32 without herdr's nest, `placeApp` is unchanged. (On Windows herdr's nest comes
     from herdr's lookup alone: the scan's nesting and Herdr's pairing are off there.)
 
 - [ ] **Step 1: Write the failing tests** (`nested({}, undefined, { platform: 'win32' })`, hints
   `{ HERDR_PANE_ID: 'w1:p1', __CFBundleIdentifier: 'com.microsoft.VSCode' }`, the stale VS Code):
   - `on Windows a herdr client in Windows Terminal: no stale bundle, its window is the terminal's`: `made('herdr')`, then
-    answer `{ pid: 100, nest: 'herdr' }` → `open` gets no `bundle`; `windowOf(id)` → `{ pid: 100, app: <Q1>, outer: true }`;
-    `pageOf`'s page is `herdr`.
+    answer `{ pid: 100, nest: 'herdr' }` → the agent's `app` is `'terminal'`; `open` gets no `bundle`;
+    `windowOf(id)` → `{ pid: 100, app: 'terminal', outer: true }`; `pageOf`'s page is `herdr`.
   - `on Windows the client's app replaces the hint's`: answer `{ app: 'cursor', pid: 220, nest: 'herdr' }` → app
     `cursor`, `open`'s bundle `APP_BUNDLES.cursor`.
-  - `on Windows, told herdr before the answer, the stale bundle is already gone`: after `made('herdr')` alone, a tap's
-    target has no `bundle`.
-  - `on Windows no window: nothing to raise`: answer `{ nest: 'herdr' }` → no bundle, `windowOf` has no `outer`.
+  - `on Windows, told herdr before the answer, the stale app is already gone`: after `made('herdr')` alone, the agent's
+    `app` is `'terminal'`, its page `herdr`, and a tap's target has no `bundle`.
+  - `on Windows no window: nothing to raise`: answer `{ nest: 'herdr' }` → app `'terminal'`, no bundle, `windowOf` has
+    no `outer`.
   - `a stale Orca hint stays off Orca's page` (Review Focus 5): hints `{ HERDR_PANE_ID, ORCA_TERMINAL_HANDLE: …,
-    ORCA_AGENT_SESSION_ID: … }`, answer `{ pid: 100, nest: 'herdr' }` → the agent's page is `herdr` (expected app per
-    Q1).
+    ORCA_AGENT_SESSION_ID: … }`, answer `{ pid: 100, nest: 'herdr' }` → the agent's app is `'terminal'` and its page
+    `herdr`, never `orca`.
   - `outside herdr keeps its own bundle` (Review Focus 4): win32, answer `{}` → the hint's bundle stays.
   - `on macOS the same answer keeps the hint's bundle` (decision 2): `platform: 'darwin'`, answer
     `{ pid: 100, nest: 'herdr' }` → `open`'s bundle is `com.microsoft.VSCode`, as today.
   - Update the existing "windowOf: a nested agent is in its client's window…" expectation:
     `{ pid: 4300, app: 'terminal-app', outer: true }` (its other two lines unchanged).
-- [ ] **Step 2: Run, expect FAIL** — `cd cli && npx vitest run src/cable/hosts/observed.spec.ts`: the stale VS Code
-  bundle is the tap's, and `windowOf` has no `outer`. Commit red.
+- [ ] **Step 2: Run, expect FAIL** — `cd cli && npx vitest run src/cable/hosts/observed.spec.ts`: the agent's app is
+  the hint's `vscode` (or `orca`), the stale VS Code bundle is the tap's, and `windowOf` has no `outer`. Commit red.
 - [ ] **Step 3: Implement** in `windowOf` and `placeApp`, with a comment naming why (the pane inherits the first
-  client's environment, spec "What Windows does today").
+  client's environment, spec "What Windows does today"; the PM's decision 4, 2026-11-26).
 - [ ] **Step 4: Run, expect PASS** — the same command.
 - [ ] **Step 5: Commit** `observed.ts`, `observed.spec.ts`.
 
@@ -330,7 +360,8 @@ Code.exe 200                        mark(200)
     Code`: the log has `[device] herdr client · found`; the apps list has `vscode`; `openAgent` runs
     `herdr agent focus <pane>` and the raise asks `app` for `com.microsoft.VSCode`.
   - `with only the Windows Terminal client, the agent is on herdr's page and a tap raises the terminal's window`:
-    `[device] herdr client · none`; the page is `herdr`; the fake raise's `windows` is `[100]`.
+    `[device] herdr client · none`; the agent's app is `terminal` and its page `herdr`; the fake raise's `windows` is
+    `[100]`, and its `app` was never asked.
   - `the table not read`: `listProcesses` → `[]` → `[device] herdr client · not read · processes`.
   - No log line holds a pid, `herdr.exe` or a path (`logs.filter(l => /\d{3}|herdr\.exe|\\/.test(l))` over the herdr
     client lines is empty).
@@ -340,9 +371,11 @@ Code.exe 200                        mark(200)
   - in the herdr client sentence, after "on macOS and Linux, and its tab is that client's tty (`cable/hosts/herdrOuter.ts`)":
     on Windows from the PTY host's process table (`harness-pty ps`, pid, parent, image name and start marker alone),
     its clients the `herdr.exe` processes outside any herdr pane that started no server of their own, at most 16, the
-    newest started first, one in a listed app before one in none, with no tab but VS Code's and Cursor's; one in
-    Windows Terminal or Alacritty is on herdr's page and a tap raises that terminal's window by its process
-    (`harness-pty raise --pid`, `cable/hosts/windowsRaise.ts`);
+    newest started first, one in a listed app before one in none and one in a window before one in none, with no tab
+    but VS Code's and Cursor's; an agent whose client is in no listed app is on herdr's page as the unknown app, never
+    the app its pane's environment names (herdr's server keeps its first client's), and where that client is in
+    Windows Terminal or Alacritty a tap raises that terminal's window by its process, also when herdr's focus of the
+    pane failed (`harness-pty raise --pid`, `cable/hosts/windowsRaise.ts`);
   - "neither is followed on Windows, where tmux runs only inside WSL and herdr's lookup of the app holding its client
     is macOS and Linux only" → "…and herdr's client has no tab there".
 - [ ] **Step 4: Run, expect PASS** — `cd cli && npx vitest run src/services/devices.spec.ts` and `npm run typecheck`.
