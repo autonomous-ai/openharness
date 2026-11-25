@@ -21,6 +21,7 @@ import type { ChildProcess } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
+import { heardClip } from '../src/cable/__fixtures__/heardClip.js'
 import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
@@ -305,10 +306,11 @@ describe('the device without the app', () => {
     client.close()
   })
 
-  it('voice to the paneless agent gets voice.error on voice.end', async () => {
+  it('voice to an Orca chat gets voice.error on voice.end', async () => {
     const { d, desk } = await fresh()
     const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
     await heard(dial, (m) => m.t === 'agents.end', 'the first list')
+    // An Orca session id with no terminal handle is an Orca chat (orcaChat.ts): no route takes its words.
     const engine = await startOutside(d, 'in-orca', { ORCA_AGENT_SESSION_ID: 'e2e-orca-session' })
     await showing(dial, 'the agent listed', (r) => ids(r).includes(engine.id))
     const since = dial.messages.length
@@ -317,7 +319,7 @@ describe('the device without the app', () => {
     const refused = await heard(dial, (m) => m.t === 'voice.error', 'the refusal', since)
     expect(refused).toMatchObject({
       uploadId: 'e2e-voice-1',
-      message: 'This agent is in Orca. Talking to it from the device comes in an update.',
+      message: 'Type in Orca for chats.',
     })
   })
 
@@ -383,7 +385,7 @@ describe('the device without the app', () => {
     relay.speech = words
     const since = dial.messages.length
     dial.send({ t: 'voice.begin', agentId: engine.id, uploadId: 'e2e-long-1', sr: 16_000, lang: 'en' })
-    dial.audio(Buffer.alloc(3_200, 1))
+    for (const frame of heardClip()) dial.audio(frame)
     dial.send({ t: 'voice.end', uploadId: 'e2e-long-1' })
     const answer = await heard(dial, (m) => (m.t === 'voice.transcript' || m.t === 'voice.error') && m.uploadId === 'e2e-long-1',
       'the answer to its words', since)
@@ -417,7 +419,7 @@ describe('the device without the app', () => {
     relay.speech = words
     const since = dial.messages.length
     dial.send({ t: 'voice.begin', agentId: panel.id, uploadId: 'e2e-panel-1', sr: 16_000, lang: 'en' })
-    dial.audio(Buffer.alloc(3_200, 1))
+    for (const frame of heardClip()) dial.audio(frame)
     dial.send({ t: 'voice.end', uploadId: 'e2e-panel-1' })
     const answer = await heard(dial, (m) => (m.t === 'voice.transcript' || m.t === 'voice.error') && m.uploadId === 'e2e-panel-1',
       'the answer to its words', since)

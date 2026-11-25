@@ -216,6 +216,35 @@ describe('VoiceSegments', () => {
     expect(empty.sent()).toEqual([])
   })
 
+  it('a recording under a second the gate heard no speech in is sent to no transcriber, and has no words', async () => {
+    // Every 10 ms block's mean at the gate's 600, not over it.
+    const quiet = setup({ transcribe: answering('thank you') })
+    quiet.segments.push(tone(0.99, 16_000, 600))
+    await expect(quiet.segments.finish()).resolves.toBe('')
+    expect(quiet.sent()).toEqual([])
+    expect(quiet.segments.counts()).toEqual({ segments: 0, early: 0, retries: 0 })
+    expect(quiet.segments.level()).toMatchObject({ peak: 600, rms: 600, heard: false, gain: 0 })
+
+    const heard = setup({ transcribe: answering('yes') })
+    heard.segments.push(tone(0.4, 16_000, 601))
+    await expect(heard.segments.finish()).resolves.toBe('yes')
+    expect(heard.sent()).toEqual([12_800])
+
+    const second = setup({ transcribe: answering('') })
+    second.segments.push(tone(1, 16_000, 0))
+    await expect(second.segments.finish()).resolves.toBe('')
+    expect(second.sent()).toEqual([SECOND])
+  })
+
+  it('the tail of a recording a segment was cut from is sent, however short and quiet', async () => {
+    // 60.5 s of silence: the cut leaves 0.52 s the gate heard nothing in, which is the end of a recording, not all of it.
+    const { segments, sent } = setup({ transcribe: answering('one', '') })
+    segments.push(tone(60.5, 16_000, 0))
+    await expect(segments.finish()).resolves.toBe('one')
+    expect(sent()).toEqual([1_919_360, 16_640])
+    expect(segments.counts()).toEqual({ segments: 2, early: 1, retries: 0 })
+  })
+
   it('a failure before finish() is retried once, at once; a second stops the recording', async () => {
     const unavailable = new Error(UNAVAILABLE)
     const transcribe = vi.fn<SegmentTranscriber>()

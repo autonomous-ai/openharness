@@ -9,6 +9,7 @@ import type { ChildProcess } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
+import { heardClip } from '../src/cable/__fixtures__/heardClip.js'
 import { appQueued, pathQueueRuns, writeAppCodex, writePathCodexWhoseQueueFails } from './harness/codexAppCli.js'
 import { CodexOutside } from './harness/codexOutside.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
@@ -71,7 +72,7 @@ describe('the dial talks to Codex outside Harness through codex queue', () => {
     relay.speech = words
     since = dial.messages.length
     dial.send({ t: 'voice.begin', agentId: codex.id, uploadId: 'spoken-1', sr: 16_000, lang: 'en' })
-    dial.audio(Buffer.alloc(3_200, 1))
+    for (const frame of heardClip()) dial.audio(frame)
     dial.send({ t: 'voice.end', uploadId: 'spoken-1' })
     const heard = await dial.next((m) => m.t === 'voice.transcript' || m.t === 'voice.error', 45_000, 'the transcript', since)
     expect(heard).toMatchObject({ t: 'voice.transcript', text: words, agentId: codex.id })

@@ -2630,12 +2630,13 @@ export class CableSession {
         `tail=${Math.round(performance.now() - arrived)}ms`)
     })
     // One line per turn, numbers only: whether an empty transcript was silence on the dial or words the
-    // transcriber missed, and for which agent (OPENHARNES-18). No audio and no text.
+    // transcriber missed, and for which agent (OPENHARNES-18); and whether it went to transcription at all, as a short
+    // recording the gate heard nothing in does not (voiceSegments.ts). No audio and no text.
     const level = segments.level()
     const logTurn = (transcript: string) => this.log(`cable: voice turn agent=${turn.agentId ?? 'none'} ` +
       `cmd=${turn.cmd || 'none'} lang=${turn.lang} sr=${turn.rate} peak=${level.peak} rms=${level.rms} ` +
       `clip=${level.clip} heard=${level.heard ? 1 : 0} voice=${level.voice} floor=${level.floor} gain=${level.gain} ` +
-      `transcript=${transcript}`)
+      `sent=${segments.counts().segments > 0 ? 1 : 0} transcript=${transcript}`)
     let transcript: string
     try {
       transcript = await finished

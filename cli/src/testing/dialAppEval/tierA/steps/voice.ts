@@ -1,12 +1,11 @@
 // Tier A's step of speaking to the dial, and the one delivery path the world does not record itself: words the devices
 // type into a terminal through their injected `run`. The mod's inbox (sessions.ts), the core's turns.send and the Codex
 // queue's `codex` run (world.ts) record theirs, each with its target, so the gate sees a send to the wrong session.
+import { heardClip } from '../../../../cable/__fixtures__/heardClip.js'
 import { flagOf } from '../../argv.js'
 import type { StepHandler, TierAWorld } from '../world.js'
 import { keyOfOrcaHandle } from './sessions.js'
 
-/** A tenth of a second of made-up 16 kHz 16-bit audio: the transcriber answers what the step says, never this. */
-const PCM = Buffer.alloc(3_200, 1)
 /** Enter, sent on its own after the words (kitty's send-text escape, WezTerm's key): no words. */
 const ENTER = new Set(['\\r', '\r'])
 
@@ -43,6 +42,8 @@ export const voiceSteps: { voice: StepHandler<'voice'> } = {
   // The person speaks to the session on the dial's face; the step's target is who the words must reach.
   voice: async (world, step) => {
     world.speech = step.transcript
-    world.dial.voice([PCM])
+    // Audio the gate hears: the transcriber answers what the step says, never this, but a clip under a second the
+    // gate does not hear is never sent to it.
+    world.dial.voice(heardClip())
   },
 }
