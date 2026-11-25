@@ -1281,7 +1281,7 @@ describe('resume edges the desk sees', () => {
     expect(deps.stoppedAgents.beginResume(saved.agentId)).toBeNull()
   })
 
-  // A verdict another path set on the row (a hook's mismatch guard) is reported as itself, and said in the
+  // A verdict another path set on the row (an older daemon's mismatch guard) is reported as itself, and said in the
   // log as it is, with no "undefined" where a reason would be.
   it('reports a failure the row was given elsewhere, without a reason, as itself', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
