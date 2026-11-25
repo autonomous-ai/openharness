@@ -85,7 +85,7 @@ describe.skipIf(!herdrBinary || !x11Installed)("herdr's client in an xterm", () 
     // no app the dial lists: the client's place is its process alone. herdr made the agent's terminal, so it is herdr's
     // all the same, on herdr's page whatever holds the client (select.ts pageOf, Diego's decision of 2026-11-23).
     const agent = await server.hooked('api')
-    await said(d, '[device] herdr client · none')
+    await said(d, '[device] herdr client · found · window')
     const apps = (m: DialMessage) => m.apps as Array<{ id: string; count: number }>
     const frame = await until("herdr's page holding the agent", () => {
       const last = dial.messages.filter((m) => m.t === 'apps').at(-1)
@@ -93,7 +93,7 @@ describe.skipIf(!herdrBinary || !x11Installed)("herdr's client in an xterm", () 
     }, 45_000, 100)
     expect(apps(frame).filter((a) => a.count > 0)).toEqual([expect.objectContaining({ id: 'herdr', count: 1 })])
     await dial.next((m) => m.t === 'agent' && m.id === agent.id && m.host === 'herdr', 45_000, 'the agent listed')
-    expect(lines(d, '[device] herdr client · found')).toEqual([])
+    expect(lines(d, '[device] herdr client · found')).not.toContain('[device] herdr client · found')
     // herdr focuses only an agent it has seen, and its detection lags the hook by a moment (herdr 0.9.5).
     await until('herdr to see the agent', async () => {
       const read = await server.rpc('agent.get', { target: agent.pane }).catch(() => undefined)

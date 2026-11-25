@@ -8036,7 +8036,7 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
     // Decision 5, end to end: the handoff's client #3 is newer, and in no window.
     it('with client #2 gone, the agent is the unknown app\'s on herdr\'s page, and a tap raises Windows Terminal\'s window', async () => {
       const { raise, agent } = await inHerdr(SECOND_GONE)
-      expect(lookups()).toEqual(['[device] herdr client · none'])
+      expect(lookups()).toEqual(['[device] herdr client · found · window'])
       expect(agent()).toMatchObject({ app: 'terminal', nest: 'herdr' })
       expect(await pages()).toContain('herdr')
       expect(await host().openAgent(ID)).toBeUndefined()

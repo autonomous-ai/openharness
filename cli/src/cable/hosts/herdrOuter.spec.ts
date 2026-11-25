@@ -51,6 +51,8 @@ const IN_TERMINAL = { app: 'terminal-app', tty: '/dev/ttys004', pid: 4300 }
 /** A hooked lookup's answer once herdr's server made the caller's terminal: [place] on herdr's page. */
 const herdrs = (place: object = {}) => ({ ...place, nest: 'herdr' })
 const found = ['[device] herdr client · found']
+/** A client found in no app: the window to raise is its process's, or on Windows its window owner's. */
+const foundWindow = ['[device] herdr client · found · window']
 const none = ['[device] herdr client · none']
 /** The lookup's line when no herdr server made the caller's terminal: no client was looked for. */
 const outside = ['[device] herdr client · outside']
@@ -202,7 +204,7 @@ describe('the outer place of an agent in the person\'s herdr', () => {
     ]
     const cases: Array<[string, ReturnType<typeof lookup>, Record<string, unknown>, string[]]> = [
       ['a client in an app', lookup({}, [], ONE), { ...IN_TERMINAL, nest: 'herdr' }, found],
-      ['a client in no app', lookup({ bundleId: async () => 'com.example.other' }, [], ONE), { pid: 4300, nest: 'herdr' }, none],
+      ['a client in no app', lookup({ bundleId: async () => 'com.example.other' }, [], ONE), { pid: 4300, nest: 'herdr' }, foundWindow],
       ['no client', lookup({ processes: async () => TABLE.filter((p) => p.pid !== 4300) }, [], { ps: '80 ??\n' }), { nest: 'herdr' }, none],
       ['a client inside the person\'s tmux', lookup({ processes: async () => inTmux }, [], {
         lsof: sockets({ 80: SERVER, 4400: [['0xb4', '->0xa1']] }), ps: '4400 ttys009\n',
@@ -407,11 +409,11 @@ describe('the outer place of an agent in the person\'s herdr', () => {
     const atime = { '/dev/ttys004': 1000, '/dev/ttys007': 2000 }
     const { logs, outer } = lookup({ processes }, [], { ...TWO, atime })
     expect(await outer(PANE, 100)).toStrictEqual(herdrs({ pid: 4310 }))
-    expect(logs).toEqual(none)
+    expect(logs).toEqual(foundWindow)
     // Linux: the recorded clients, each in a terminal the dial lists no page for.
     const linux = onLinux(scene(), { ps: recordedTtys(P.clientA, P.clientB), atime: { '/dev/pts/0': 2000, '/dev/pts/2': 1000 } })
     expect(await linux.outer(LINUX_PANE, P.agent)).toStrictEqual(herdrs({ pid: P.clientA }))
-    expect(linux.logs).toEqual(none)
+    expect(linux.logs).toEqual(foundWindow)
   })
 
   it('a client gone before ps is dropped', async () => {
@@ -442,7 +444,7 @@ describe('the outer place of an agent in the person\'s herdr', () => {
   it('a client whose parents name no listed app: the client\'s process alone', async () => {
     const { logs, outer } = lookup({ bundleId: async () => 'com.example.other' }, [], ONE)
     expect(await outer(PANE, 100)).toStrictEqual(herdrs({ pid: 4300 }))
-    expect(logs).toEqual(none)
+    expect(logs).toEqual(foundWindow)
   })
 
   it('herdr in Herdr\'s terminal: the holder is under no root the scan reads, the client\'s process alone', async () => {
@@ -452,7 +454,7 @@ describe('the outer place of an agent in the person\'s herdr', () => {
     ]
     const { logs, outer } = lookup({ processes }, [], ONE)
     expect(await outer(PANE, 100)).toStrictEqual(herdrs({ pid: 4300 }))
-    expect(logs).toEqual(none)
+    expect(logs).toEqual(foundWindow)
   })
 
   // herdr before 0.9.0 (#4500's macOS tests ran 0.8.0): `--no-session` ran the panes under the client itself, on ptys
@@ -578,12 +580,13 @@ describe('the outer place of an agent in the person\'s herdr', () => {
     const asks: Array<[ReturnType<typeof lookup>, number]> = [
       [lookup({}, [], ONE), 100], [lookup({}, [], { lsof: sockets({ 80: SERVER }), ps: '80 ??\n' }), 100],
       [lookup({}, [], { ...ONE, ps: '' }), 100], [lookup({}, [], ONE), 4299],
+      [lookup({ bundleId: async () => 'com.example.other' }, [], ONE), 100],
     ]
     for (const [{ logs, outer }, pid] of asks) {
       await outer(PANE, pid)
       lines.push(...logs)
     }
-    expect(lines).toEqual([...found, ...none, ...notRead('ttys'), ...outside])
+    expect(lines).toEqual([...found, ...none, ...notRead('ttys'), ...outside, ...foundWindow])
     for (const line of lines) {
       for (const id of ['w1:p2', '80', '4300', '100', 'ttys004', CONFIG, 'herdr-client.sock', 'com.apple.Terminal', 'Terminal', 'terminal-app']) {
         expect(line).not.toContain(id)
@@ -817,7 +820,7 @@ describe('herdr\'s clients on Windows', () => {
   it('with client #2 gone, Windows Terminal\'s window beats the newer handoff client', async () => {
     const { logs, outer } = onWindows(recorded(SECOND_GONE))
     expect(await outer(WIN_PANE, WIN_CALLER)).toStrictEqual(IN_WINDOWS_TERMINAL)
-    expect(logs).toEqual(none)
+    expect(logs).toEqual(foundWindow)
   })
 
   // Part 1 step 5: nothing in the tree links the handoff's console to a window.
