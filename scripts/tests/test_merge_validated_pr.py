@@ -106,6 +106,27 @@ class MergeTests(unittest.TestCase):
                 self.assertIn("CI changed during verification", result["error"])
                 self.assertEqual(self.client.writes, [])
 
+    def test_a_draft_time_run_on_the_same_head_never_hides_the_ready_run(self):
+        # #4596: pushed, then marked ready a second later; the draft-time run got the larger id.
+        self.client.newer_runs = [dict(self.client.run, id=124, conclusion="failure")]
+        self.client.plans = {124: True, 123: False}
+        result = self.finish(merge=False, automatic=True)
+        self.assertEqual(result["status"], "ready")
+        self.assertEqual(result["run_id"], 123)
+
+    def test_a_newer_run_still_planning_is_followed_rather_than_an_older_ready_one(self):
+        self.client.newer_runs = [dict(self.client.run, id=124, status="in_progress", conclusion=None)]
+        self.client.plans = {123: False}
+        self.assertEqual(merger.queue.pr_run(self.client, self.head)["id"], 124)
+
+    def test_only_draft_runs_on_the_head_cannot_merge(self):
+        self.client.newer_runs = [dict(self.client.run, id=124, conclusion="failure")]
+        self.client.plans = {124: True, 123: True}
+        result = self.finish(automatic=True)
+        self.assertEqual(result["status"], "not_merged")
+        self.assertIn("planned a draft", result["error"])
+        self.assertEqual(self.client.writes, [])
+
     def reused_receipt(self):
         record = dict(origin_sha="e" * 40, origin_tree="f" * 40, run_id=99, run_attempt=1,
                       run_url="https://github.com/owner/repo/actions/runs/99", reason="passed in run 99")
@@ -398,6 +419,8 @@ class FakeClient:
         self.tested_tree = fixture.tree
         self.required_gate, self.run_list_reads, self.superseding_run = False, 0, None
         self.rules, self.receipt_patch = [], {}
+        # Runs newer than self.run on the same head, and each run's ci-plan draft flag (no entry: still planning).
+        self.newer_runs, self.plans, self.archives = [], {}, {}
         self.commits = [dict(sha=fixture.head, author=None, commit=dict(message="reviewed", author=dict(name="Fixture", email="fixture@example.test")))]
         self.pr = dict(number=5, title="Fixture", user=dict(login="fixture"), state="open", draft=False, merged=False, mergeable=True, mergeable_state="clean",
                        html_url="https://github.com/owner/repo/pull/5", head=dict(sha=fixture.head),
@@ -426,6 +449,9 @@ class FakeClient:
         if path == "actions/runs/123":
             self.run_reads += 1
             return copy.deepcopy(self.run)
+        newer = [run for run in self.newer_runs if path == f"actions/runs/{run['id']}"]
+        if newer:
+            return copy.deepcopy(newer[0])
         if path == f"git/commits/{self.merged_sha}":
             return dict(sha=self.merged_sha, tree=dict(sha=self.merged_tree), parents=[dict(sha=self.actual_base)])
         if path == f"git/commits/{self.fixture.head}":
@@ -435,30 +461,43 @@ class FakeClient:
     def pages(self, path, key):
         if key == "workflow_runs":
             self.run_list_reads += 1
-            return [copy.deepcopy(self.superseding_run if self.run_list_reads > 1 and self.superseding_run else self.run)]
-        if self.required_gate:
-            if key == "jobs":
-                return copy.deepcopy(self.gate_jobs)
-            if key == "artifacts":
-                receipt = dict(schema=1, kind="ci-required", status="passed", source_sha=self.fixture.head,
-                               source_tree=self.tested_tree, event="pull_request", run_id=123, run_attempt=1,
-                               suites=[], required_jobs=["process-checks"],
-                               results={"plan": "success", "process-checks": "success"})
-                receipt.update(self.receipt_patch)
-                buf = io.BytesIO()
-                with zipfile.ZipFile(buf, "w") as bundle:
-                    bundle.writestr("ci-required.json", json.dumps(receipt))
-                self.archive = buf.getvalue()
-                return [dict(id=20, name="ci-required", expired=False, size_in_bytes=len(self.archive),
-                             workflow_run=dict(id=123, head_sha=self.fixture.head),
-                             digest="sha256:" + hashlib.sha256(self.archive).hexdigest())]
+            return copy.deepcopy(self.newer_runs + [self.superseding_run if self.run_list_reads > 1 and self.superseding_run else self.run])
         assert key in {"jobs", "artifacts"}, key
-        return copy.deepcopy(self.jobs) if key == "jobs" else []
+        if key == "artifacts":
+            run_id = int(path.split("/")[2])
+            plans = [self.plan_artifact(run_id)] if run_id in self.plans else []
+            return plans + (self.gate_artifacts() if self.required_gate and run_id == 123 else [])
+        return copy.deepcopy(self.gate_jobs if self.required_gate else self.jobs)
+
+    def plan_artifact(self, run_id):
+        plan = dict(schema=1, kind="ci-plan", event="pull_request", head=self.fixture.head, draft=self.plans[run_id])
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as bundle:
+            bundle.writestr("ci-plan.json", json.dumps(plan))
+        archive = self.archives[1000 + run_id] = buf.getvalue()
+        return dict(id=1000 + run_id, name="ci-plan", expired=False, size_in_bytes=len(archive),
+                    workflow_run=dict(id=run_id, head_sha=self.fixture.head),
+                    digest="sha256:" + hashlib.sha256(archive).hexdigest())
+
+    def gate_artifacts(self):
+        receipt = dict(schema=1, kind="ci-required", status="passed", source_sha=self.fixture.head,
+                       source_tree=self.tested_tree, event="pull_request", run_id=123, run_attempt=1,
+                       suites=[], required_jobs=["process-checks"],
+                       results={"plan": "success", "process-checks": "success"})
+        receipt.update(self.receipt_patch)
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as bundle:
+            bundle.writestr("ci-required.json", json.dumps(receipt))
+        archive = self.archives[20] = buf.getvalue()
+        return [dict(id=20, name="ci-required", expired=False, size_in_bytes=len(archive),
+                     workflow_run=dict(id=123, head_sha=self.fixture.head),
+                     digest="sha256:" + hashlib.sha256(archive).hexdigest())]
 
     def command(self, *args, binary=False):
         if binary:
-            assert args == ("api", "repos/owner/repo/actions/artifacts/20/zip")
-            return self.archive
+            artifact = int(args[1].split("/")[-2])
+            assert args == ("api", f"repos/owner/repo/actions/artifacts/{artifact}/zip")
+            return self.archives[artifact]
         self.writes.append(args)
         before = json.loads((self.fixture.output / "receipt.json").read_text())
         assert before["status"] == "merge_requested" and before["reviewed_head"] == self.fixture.head
