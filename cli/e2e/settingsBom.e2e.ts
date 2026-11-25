@@ -49,4 +49,39 @@ describe('a settings file saved with a BOM', () => {
     expect(readFileSync(file)[0]).toBe('{'.charCodeAt(0))
     expect(d.log()).not.toContain('failed to write')
   })
+
+  // Codex 0.169 reads hooks.json with serde_json, which refuses a BOM, and runs none of its hooks: Harness's own text
+  // after one is written again without it, though the text is the same.
+  it('codex: a hooks.json of a BOM and Harness\'s own text is written again without the BOM, and its hooks run', async () => {
+    const d = daemon = await IsolatedDaemon.create()
+    onTestFailed(() => {
+      console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`)
+      console.log(`---- hooks the engine ran\n${d.hookLog().split('\n').slice(-40).join('\n')}`)
+    })
+    const file = settingsFile(d, 'codex')
+    await d.start()
+    await d.hooksInstalled(['codex'])
+    const own = readFileSync(file, 'utf8')
+    await d.stop()
+    writeFileSync(file, `﻿${own}`)
+    await d.start()
+    await d.hooksInstalled(['codex'])
+    expect(readFileSync(file, 'utf8')).toBe(own)
+    const c = client = await LocalClient.connect(d)
+
+    const cwd = join(d.projectsDir, 'bom-codex-own')
+    mkdirSync(cwd, { recursive: true })
+    const created = await c.request('agent_create', { engine: 'codex', cwd, bypassPermission: true }, 90_000)
+    expect(created.error, JSON.stringify(created)).toBeUndefined()
+    const agent = await until('the agent to bind its conversation', async () => {
+      const rows = (await c.request<{ agents: Array<Record<string, any>> }>('agents_list', {}, 30_000)).agents
+      const found = rows.find((one) => one.id === created.agent.id)
+      return found?.sessionId && found.status === 'active' ? found : null
+    }, 60_000, 500)
+    const ended = c.next(isTurn('turn_ended', agent.id), 45_000, 'turn_ended')
+    c.send('message', { agentId: agent.id, content: 'after the BOM' })
+    await ended
+    await until('the engine to run its Stop', () => d.hookLog().includes(` Stop session=${agent.sessionId} ran`) || null, 30_000, 50)
+    expect(d.hookLog()).not.toContain('hooks not loaded')
+  })
 })
