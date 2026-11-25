@@ -1,9 +1,10 @@
 /**
  * The devices' own local listener: the one way a local tool tells the devices process something, so the core never
  * hears it (cli/AGENTS.md, Protect the core, rule 7). `harness hardware watch` tells it the app in front, the selected
- * tab (`tab`), the thread the ChatGPT app shows (`thread`) and the Notifications setting (`notify`), the harness-device
- * mod the session the Claude app shows (`attach`), and `harness device notify` an agent's one line for the dial
- * (`notice`); later device routes register a handler of their own beside these, each with its own body and rate limit.
+ * tab (`tab`), the thread the ChatGPT app shows (`thread`), the Notifications setting (`notify`) and whether Harness
+ * Device wrote a person's words to a tab (`wrote`), the harness-device mod the session the Claude app shows (`attach`),
+ * and `harness device notify` an agent's one line for the dial (`notice`); later device routes register a handler of
+ * their own beside these, each with its own body and rate limit.
  *
  * Who may connect is the core's own answer (lib/localSocket.ts): a 0600 socket in a folder that is this account's
  * alone, so the kernel refuses another account's connect. Node reads no peer's uid. A client checks the socket's owner
@@ -23,6 +24,7 @@
  * type, one per key up to its limit, a new key past it answered 409: a newer one ends the older with a last line,
  * `{"replaced":true}`, and one asked with `"standby":true` opens only while none is.
  */
+import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Socket } from 'node:net'
 import { lstatSync, type Stats } from 'node:fs'
@@ -37,6 +39,7 @@ import { APP_IDS } from '../cable/hosts/hostDetect.js'
 import { FRONT_NONE } from '../cable/hosts/frontApp.js'
 import { ORCA_HANDLE } from '../cable/hosts/orca.js'
 import { REPLACED_LINE, tabOf, type Tab } from '../cable/hosts/tabs.js'
+import { TYPE_ANSWER_MS, typingLine, wroteOf, type TabsLine, type TabsTyping, type WroteAnswer } from '../cable/hosts/tabsLines.js'
 import { threadTitleOf } from '../cable/hosts/threadTitle.js'
 import { isNotifyMode, type NotifyMode } from '../cable/notifyMode.js'
 import { NOTICE_SESSION, noticeFolder, noticeLine, type NoticeAsk, type NoticeResult } from '../lib/dialNotice.js'
@@ -553,29 +556,142 @@ export const TABS_PER_SECOND = 2
 /** Its longest message, `{"type":"tabs","standby":false}`, is 31 bytes. */
 export const TABS_MAX_BYTES = 32
 
+/** Ten a second on a connection: Harness Device answers each typing once, and spoken words are two typings. */
+export const WROTE_PER_SECOND = 10
+/** Its longest message, `{"type":"wrote","id":"<16 hex>","ok":false}`, is 51 bytes. */
+export const WROTE_MAX_BYTES = 64
+/** Typings waiting for their `wrote` at once, past which a send is answered `unanswered` at once. Only the open stream
+ *  has any: a stream's end answers every one of its own. */
+export const WRITES_PENDING = 8
+
 export interface TabsStream {
   handler: ListenerStreamHandler
   isOpen(): boolean
-  /** One line for the watch to select the tab; a tap's raises its window too. False with no stream open. */
+  /** One line for the watch to select the tab; a tap's raises its window too. False with no stream open. Written
+   *  whenever the stream takes it: a person's words waiting to be written or answered never hold it back. */
   select(tab: Tab, raise: boolean): boolean
+  /** The open stream's line for a person's words: the same object until its stream ends; none with no stream open. */
+  line(): TabsLine | undefined
+  /** `{ type, id, ok }`, the watch telling what Harness Device wrote: it answers the send waiting on that id. */
+  wrote: ListenerHandler
 }
 
-/** The stream a watch holds open to hear which tab to select. Nothing waits for one that is not open: a select then is
- *  not sent. */
-export function tabsStream(): TabsStream {
-  let open: ListenerStream | undefined
+/** A stream a watch opened, as the tabs stream writes on it. */
+interface Opened {
+  stream: ListenerStream
+  line: TabsLine
+  select(line: unknown): boolean
+  /** Its sends waiting for their `wrote`, by id: each answers (unless its time did already), settles and is gone. */
+  pending: Map<string, (word: WroteAnswer) => void>
+}
+
+const sentNothing = (word: WroteAnswer): ReturnType<TabsLine['send']> => ({ answer: Promise.resolve(word), settled: Promise.resolve() })
+
+function unrefAfter(ms: number, run: () => void): () => void {
+  const timer = setTimeout(run, ms).unref()
+  return () => clearTimeout(timer)
+}
+
+/**
+ * The stream a watch holds open: the devices tell it which tab to select, and send a person's words and their Enter on
+ * it for Harness Device to write (cable/hosts/tabsLines.ts), each answered by the watch's `wrote`. Nothing waits for a
+ * stream that is not open: a select then is not sent. It logs nothing: a line holds a tty and a person's words.
+ */
+export function tabsStream({ id = () => randomBytes(8).toString('hex'), after = unrefAfter }: {
+  id?: () => string
+  after?: (ms: number, run: () => void) => () => void
+} = {}): TabsStream {
+  let open: Opened | undefined
+
+  const opened = (stream: ListenerStream): Opened => {
+    // Whether the stream can take a person's words: from its saying so to the next line written on it, a select's or a
+    // send's. A select never asks: it is written whenever the stream takes it, as before words went on the stream.
+    let writable = false
+    const waiters = new Set<(ok: boolean) => void>()
+    const pending: Opened['pending'] = new Map()
+    const put = (line: unknown): boolean => {
+      writable = false
+      return stream.write(line)
+    }
+    stream.onWritable(() => {
+      writable = true
+      for (const wake of waiters) wake(true)
+    })
+    stream.ended.addEventListener('abort', () => {
+      writable = false
+      for (const wake of waiters) wake(false)
+      // A watch answers only what was sent on its own stream: what this one had not answered, none will.
+      for (const settle of pending.values()) settle('ended')
+      // A newer stream is the open one by the time the older ends.
+      if (open?.stream === stream) open = undefined
+    })
+    const line: TabsLine = {
+      writable: () => writable,
+      ready: (ms) => {
+        if (writable || stream.ended.aborted) return Promise.resolve(writable)
+        return new Promise((resolve) => {
+          // Every waiter wakes at a drain, and the first words sent take it: the others find it unwritable again.
+          const wake = (ok: boolean): void => {
+            waiters.delete(wake)
+            cancel()
+            resolve(ok)
+          }
+          waiters.add(wake)
+          const cancel = after(ms, () => wake(false))
+        })
+      },
+      send: (typing) => {
+        if (stream.ended.aborted) return sentNothing('ended')
+        if (!writable || pending.size >= WRITES_PENDING) return sentNothing('unanswered')
+        const key = id()
+        // Made anew, the id first: the line holds these keys and nothing else the caller's object holds.
+        const sent: TabsTyping = 'write' in typing
+          ? { write: { id: key, app: typing.write.app, tty: typing.write.tty, text: typing.write.text } }
+          : { enter: { id: key, app: typing.enter.app, tty: typing.enter.tty } }
+        if (typingLine(sent) === null || !put(sent)) return sentNothing('unanswered')
+        let answer!: (word: WroteAnswer) => void
+        let settle!: () => void
+        const result = {
+          answer: new Promise<WroteAnswer>((resolve) => { answer = resolve }),
+          settled: new Promise<void>((resolve) => { settle = resolve }),
+        }
+        // One not answered in time has failed, but it waits on for its `wrote` or its stream's end, and the tty's lock
+        // waits on `settled`: Harness Device's script thread can hold a write for minutes behind a consent prompt, and a
+        // late write must never meet another send's Enter.
+        const cancel = after(TYPE_ANSWER_MS, () => answer('unanswered'))
+        pending.set(key, (word) => {
+          pending.delete(key)
+          cancel()
+          answer(word)
+          settle()
+        })
+        return result
+      },
+      ended: stream.ended,
+    }
+    return { stream, line, select: put, pending }
+  }
+
   return {
     handler: {
       maxBytes: TABS_MAX_BYTES,
       perSecond: TABS_PER_SECOND,
-      open: (_message, stream) => {
-        open = stream
-        // A newer stream is the open one by the time the older ends.
-        stream.ended.addEventListener('abort', () => { if (open === stream) open = undefined })
-      },
+      open: (_message, stream) => { open = opened(stream) },
     },
     isOpen: () => open !== undefined,
-    select: ({ app, tty }, raise) => open?.write(raise ? { app, tty, raise: true } : { app, tty }) ?? false,
+    select: ({ app, tty }, raise) => open?.select(raise ? { app, tty, raise: true } : { app, tty }) ?? false,
+    line: () => open?.line,
+    wrote: {
+      maxBytes: WROTE_MAX_BYTES,
+      perSecond: WROTE_PER_SECOND,
+      handle: ({ type: _type, ...told }) => {
+        const wrote = wroteOf(told)
+        if (!wrote) return REFUSED
+        // Any process of this account may post one, so only a random id the open stream waits on answers anything; one
+        // answered, of an ended stream or never sent is taken and changes nothing.
+        open?.pending.get(wrote.id)?.(wrote.ok ? 'ok' : 'refused')
+      },
+    },
   }
 }
 
