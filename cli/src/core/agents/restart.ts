@@ -285,7 +285,7 @@ export function createAgentRestarter({
       const outcome = await restartAgent(
         { engine, sessionId: session.sessionId, ...(session.resumeOnly ? { resumeOnly: true as const } : {}) },
         restartPermission.bypassPermission === true,
-        { ...paneSwapDeps(session, place, built.overrides, restartPermission.permissionMode ?? null, dispatchCurrent), isCurrent: dispatchCurrent },
+        { ...paneSwapDeps(session, place, built.overrides, restartPermission.permissionMode ?? null, dispatchCurrent), isCurrent: dispatchCurrent, isOwned: current },
       )
 
       if (!current()) return changed
