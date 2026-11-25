@@ -98,15 +98,15 @@ impl Tabs {
         self.changed.notify_one();
     }
 
-    /// A typing from the watch numbered `number`, and a word to the tab thread. The line is its answer when it has one
-    /// at once.
-    fn typed(&self, number: u64, typing: Typing) -> Option<String> {
+    /// A typing from the watch numbered `number`, and a word to the tab thread. The line is its answer, and the log its
+    /// lines, when the rules answer it at once.
+    fn typed(&self, number: u64, typing: Typing) -> Out {
         let mut state = self.state.lock().unwrap();
         state.typings_of = number;
-        let line = state.follow.typed(typing, Instant::now());
+        let out = state.follow.typed(typing, Instant::now());
         drop(state);
         self.changed.notify_one();
-        line
+        out
     }
 
     fn end(&self) {
@@ -584,8 +584,8 @@ impl Shared {
         }
     }
 
-    /// A typing from the watch numbered `number`, on its thread. One the rules answer at once is answered to that watch
-    /// now: the devices wait on it, and the tab thread may be held for minutes.
+    /// A typing from the watch numbered `number`, on its thread. One the rules answer at once is answered to that watch,
+    /// and logged, now: the devices wait on it, and the tab thread may be held for minutes.
     fn typed(&self, number: u64, typing: Typing) {
         // Held through the tell, as a select's: a newer watch cannot take its number in between and have this one's
         // typing run for it.
@@ -593,10 +593,13 @@ impl Shared {
         if *current != number {
             return;
         }
-        let line = self.tabs.typed(number, typing);
+        let out = self.tabs.typed(number, typing);
         drop(current);
-        if let Some(line) = line {
-            self.wrote(number, &line);
+        if let Some(line) = &out.line {
+            self.wrote(number, line);
+        }
+        for line in out.log {
+            self.doors.log.line(&line);
         }
     }
 
