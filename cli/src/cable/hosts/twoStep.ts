@@ -8,7 +8,7 @@
  * first refusal stops the send, and a step that throws submits nothing.
  */
 import { INJECT_PASTE_DELAY_BASE_MS, INJECT_PASTE_DELAY_MAX_MS } from '../../lib/submitTiming.js'
-import { CONTROL, MAX_TEXT } from './orca.js'
+import { CONTROL, MAX_TEXT } from './text.js'
 
 /** A lone surrogate: UTF-8 has no form for it, so it is typed as the replacement character. */
 export const LONE_SURROGATE = /\p{Cs}/gu

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MAX_TEXT } from './orca.js'
+import { MAX_TEXT } from './text.js'
 import { cleanWords, createTwoStep, settleMs, type StepAnswer, type TwoSteps } from './twoStep.js'
 
 type Why = 'busy' | 'refused' | 'failed'
