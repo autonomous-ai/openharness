@@ -18,8 +18,13 @@ const WALL = 1_700_000_000_000
  *  after WALL, so it is never young. */
 const stampAt = (ms: number) => `7:${BigInt(ms) * 1_000_000n}`
 
-const agent = (pane: string, status = 'idle', more: Record<string, unknown> = {}) =>
-  ({ pane_id: pane, agent: 'claude', agent_status: status, cwd: '/work/api', ...more })
+/** An agent as herdr lists it once its integration reported the session: a row listed with none is listed again. */
+const agent = (pane: string, status = 'idle', more: Record<string, unknown> = {}) => ({
+  pane_id: pane, agent: 'claude', agent_status: status, cwd: '/work/api',
+  agent_session: { source: 'herdr:claude', agent: 'claude', kind: 'id', value: `s-${pane}` }, ...more,
+})
+/** An agent herdr lists before its session is reported, or with no integration to report one. */
+const NO_SESSION = { agent_session: undefined }
 const lines = (recorded: string[]) => `${recorded.join('\n')}\n`
 const statusLine = (pane: string, status: string) =>
   JSON.stringify({ data: { agent: 'claude', agent_status: status, pane_id: pane, workspace_id: pane.split(':')[0] }, event: 'pane.agent_status_changed' })
@@ -766,6 +771,63 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     expect(s.source.list().map(({ sessionId }) => sessionId)).toEqual(['abc-123', undefined, undefined, undefined, undefined])
   })
 
+  /** Live with w1:p1, then w2:p1 detected and listed by the third list with no session: its re-lists are the next ones. */
+  async function listedBare(s: Setup): Promise<void> {
+    server.agents = [agent('w1:p1')]
+    await live(s)
+    server.event('pane_agent_detected', detected('w2:p1'))
+    await s.until(() => s.timers.length === 1)
+    server.agents = [agent('w1:p1'), agent('w2:p1', 'idle', NO_SESSION)]
+    s.advance(1000)
+    await listRead(3)
+    expect(row(s, 'w2:p1')?.sessionId).toBeUndefined()
+  }
+  const lists = () => server.requests.filter(({ request }) => method(request) === 'agent.list').length
+
+  it('a row listed with no session is listed again 1 s later, and takes the session herdr reported with no event', async () => {
+    const s = setup()
+    await listedBare(s)
+    expect(s.timers.map(({ ms }) => ms)).toEqual([1000])
+    // herdr's integration reports the session now, and tells no subscription (herdr 0.9.5).
+    server.agents = [agent('w1:p1'), agent('w2:p1')]
+    const changes = s.changes
+    s.advance(1000)
+    await listRead(4)
+    expect(row(s, 'w2:p1')?.sessionId).toBe('s-w2:p1')
+    expect(s.changes).toBe(changes + 1)
+    expect(s.timers).toEqual([])
+  })
+
+  it('a row whose session never comes is listed again 3 times, 1, 2 and 4 s after it was first, then never', async () => {
+    const s = setup()
+    await listedBare(s)
+    expect(s.timers.map(({ ms }) => ms)).toEqual([1000])
+    s.advance(1000)
+    await listRead(4)
+    expect(s.timers.map(({ ms }) => ms)).toEqual([1000])
+    s.advance(1000)
+    await listRead(5)
+    expect(s.timers.map(({ ms }) => ms)).toEqual([2000])
+    s.advance(2000)
+    await listRead(6)
+    expect(s.timers).toEqual([])
+    s.advance(600_000)
+    await heard(s, 'w1:p1')
+    expect(lists()).toBe(6)
+    expect(row(s, 'w2:p1')?.sessionId).toBeUndefined()
+  })
+
+  it('a pane that closes before its re-list is due is not listed again', async () => {
+    const s = setup()
+    await listedBare(s)
+    server.event('pane_closed', { pane_id: 'w2:p1', type: 'pane_closed', workspace_id: 'w2' })
+    await s.until(() => row(s, 'w2:p1') === undefined)
+    expect(s.timers).toEqual([])
+    s.advance(600_000)
+    await heard(s, 'w1:p1')
+    expect(lists()).toBe(3)
+  })
+
   it('the id is kept across a reconnect while the pane stays listed, and is another once it left', async () => {
     server.agents = [agent('w1:p1')]
     const s = setup()
@@ -1370,7 +1432,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     const s = setup({ held })
     await live(s)
     expect(await s.source.send(row(s, 'w1:p1')!, 'run the tests')).toEqual({ ok: true })
-    expect(held.mock.calls).toEqual([['herdr:w1:p1', { engine: 'claude' }]])
+    expect(held.mock.calls).toEqual([['herdr:w1:p1', { engine: 'claude', sessionId: 's-w1:p1' }]])
     expect(s.prompt.mock.calls).toEqual([['w1:p1', 'claude', 'run the tests']])
   })
 
