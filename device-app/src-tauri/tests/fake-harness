@@ -10,8 +10,8 @@
 #   @exit N     exits N
 #   @driver     from here on, stdin closing prints harness login --json's CANCELLED result and exits 1
 # A run that ends by itself appends its arguments to ends.log; a killed one leaves no line. A run that waits (@wait,
-# @hang) ends as a killed one once the process that started it or the folder has gone: the app starts it in a process
-# group of its own, so a killed test run never reaches it, and it would wait for ever.
+# @hang) ends as a killed one within 0.25 s once the process that started it or the folder has gone: the app starts it
+# in a process group of its own, so a killed test run never reaches it, and it would wait for ever.
 
 dir=${FAKE_HARNESS:-$(dirname "$0")/fake}
 parent=$PPID
@@ -34,15 +34,23 @@ end() {
   exit "$1"
 }
 
-# Waits until the file $1 is in the folder; with no name, for ever. `kill -0` and `[` are builtins: a turn forks only
-# its sleep.
+# Waits until the file $1 is in the folder; with no name, for ever. `kill -0` and `[` are builtins and the count is
+# the shell's own arithmetic: a turn forks only its sleep. The first 50 turns are short, so a test that touches the file
+# soon goes on at once; then a turn is 0.25 s, as 50 forks a second cost a waiting fake about a tenth of a CPU for as
+# long as it waits.
 wait_for() {
+  turns=0
   while [ -z "$1" ] || [ ! -e "$dir/$1" ]; do
     if ! kill -0 "$parent" 2>/dev/null || [ ! -d "$dir" ]; then
       unwatch
       exit 1
     fi
-    sleep 0.02
+    if [ "$turns" -lt 50 ]; then
+      turns=$((turns + 1))
+      sleep 0.02
+    else
+      sleep 0.25
+    fi
   done
 }
 
