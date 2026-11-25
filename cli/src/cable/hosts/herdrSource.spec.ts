@@ -840,6 +840,58 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     expect(lists()).toBe(3)
   })
 
+  it('a stop with a re-list due leaves no timer, and lists nothing more', async () => {
+    const s = setup()
+    await listedBare(s)
+    s.source.stop()
+    expect(s.timers).toEqual([])
+    s.advance(600_000)
+    expect(lists()).toBe(3)
+  })
+
+  it('a drop with a re-list due leaves the retry alone, and the retry\'s list asks for the re-list again', async () => {
+    const s = setup()
+    await listedBare(s)
+    server.drop()
+    await s.until(() => s.log.at(-1) === '[herdr] retry · 1')
+    expect(s.timers.map(({ ms }) => ms)).toEqual([1000])
+    s.advance(1000)
+    await listRead(4)
+    expect(row(s, 'w2:p1')?.sessionId).toBeUndefined()
+    // The first re-list fell due as the retry listed: it is the next list.
+    expect(s.timers.map(({ ms }) => ms)).toEqual([0])
+    server.agents = [agent('w1:p1'), agent('w2:p1')]
+    s.advance(1000)
+    await listRead(5)
+    expect(row(s, 'w2:p1')?.sessionId).toBe('s-w2:p1')
+    expect(s.timers).toEqual([])
+  })
+
+  // After herdr starts again each session runs twice, in the pane herdr restored and a new one (dial eval I14), and its
+  // panes are numbered afresh: a pane id seen before is another agent, whose session is not reported yet either.
+  it('a herdr that starts again gives a row with no session its three re-lists anew, at a pane id whose ran out', async () => {
+    const s = setup()
+    await listedBare(s)
+    for (const [ms, n] of [[1000, 4], [1000, 5], [2000, 6]]) {
+      s.advance(ms)
+      await listRead(n)
+    }
+    expect(s.timers).toEqual([])
+    await server.stop()
+    await server.start()
+    await s.until(() => s.log.at(-1) === '[herdr] retry · 1')
+    s.advance(1000)
+    await listRead(7)
+    expect(row(s, 'w2:p1')?.sessionId).toBeUndefined()
+    // Its first re-list, and the subscription that names the panes listed.
+    expect(s.timers.map(({ ms }) => ms)).toEqual([1000, 1000])
+    for (const [ms, n, next] of [[1000, 8, [1000]], [1000, 9, [2000]], [2000, 10, []]] as const) {
+      s.advance(ms)
+      await listRead(n)
+      expect(s.timers.map(({ ms }) => ms)).toEqual(next)
+    }
+  })
+
   it('the id is kept across a reconnect while the pane stays listed, and is another once it left', async () => {
     server.agents = [agent('w1:p1')]
     const s = setup()
