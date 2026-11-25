@@ -13,7 +13,8 @@ export const DIAL_OTHER_APPS = ['zed', 'alacritty', 'hyper', 'tabby', 'jetbrains
   'unlisted', 'unknown'] as const
 /** How the dial shows a hooked agent, best first. */
 export const DIAL_RECOGNITION = ['placed', 'held', 'other', 'not_shown'] as const
-/** queued: sent to an agent at work, whose turn did not start within 10 s; it holds or steers the words in. */
+/** queued: sent to an agent at work or waiting on the person, whose turn did not start within 10 s; it holds or steers
+ * the words in. */
 export const DIAL_VOICE_OUTCOMES = ['delivered', 'queued', 'failed', 'held', 'cancelled'] as const
 /** The empty voice by cause: no_audio (none came), too_long (past the cap), no_speech (the dial's voice gate heard none),
  * no_words (it heard speech the transcript has no word of). */

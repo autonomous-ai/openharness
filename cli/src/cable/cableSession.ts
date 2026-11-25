@@ -2632,14 +2632,14 @@ export class CableSession {
     // One line per turn, numbers only: whether an empty transcript was silence on the dial or words the
     // transcriber missed, and for which agent (OPENHARNES-18). No audio and no text.
     const level = segments.level()
-    const heard = (transcript: string) => this.log(`cable: voice turn agent=${turn.agentId ?? 'none'} ` +
+    const logTurn = (transcript: string) => this.log(`cable: voice turn agent=${turn.agentId ?? 'none'} ` +
       `cmd=${turn.cmd || 'none'} lang=${turn.lang} sr=${turn.rate} peak=${level.peak} rms=${level.rms} ` +
       `heard=${level.heard ? 1 : 0} transcript=${transcript}`)
     let transcript: string
     try {
       transcript = await finished
     } catch (err) {
-      heard('failed')
+      logTurn('failed')
       // An abort stops the uploads as well: that turn ends cancelled, not failed.
       if (current()) {
         decide({ outcome: 'failed', code: 'transcribe_failed', agentId: turn.agentId })
@@ -2648,7 +2648,7 @@ export class CableSession {
       await reply({ t: 'voice.error', message: (err as Error).message })
       return
     }
-    heard(String(transcript.length))
+    logTurn(String(transcript.length))
     if (!current()) return
     if (!transcript) {
       // Speech by the dial's own gate with no word in the transcript is the transcriber's miss (language, noise,
