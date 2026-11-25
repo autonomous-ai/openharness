@@ -125,6 +125,8 @@ export function inCmux(hints: Readonly<Record<string, string>>): boolean {
 
 /** The word Claude Code's extension gives the sessions of its tab, in VS Code and in its forks alike. */
 export const EXTENSION_TAB = 'claude-vscode'
+/** The word the Claude app gives the Claude Code it starts. */
+const CLAUDE_APP_ENTRYPOINT = 'claude-desktop'
 
 /** The hints of the app an agent's own terminal or tab is in. An editor started with `code .` or `cursor .` from another
  *  app inherits that app's bundle id, while its own terminals say TERM_PROGRAM=vscode and its extension's tab says
@@ -144,9 +146,12 @@ export function ownHints(hints: Record<string, string>): Record<string, string> 
  *  it: without it an Orca agent sat on Other's page (Ken's Dell, Win11 x64, 2026-11-25, chain claude.exe < powershell <
  *  powershell < Orca.exe < Orca.exe). A program started there that sets no TERM_PROGRAM of its own keeps Orca's
  *  (Alacritty, the Claude and ChatGPT apps): a bundle id, which the hook sends on Windows too (notify.mjs
- *  lookUpWindowsApp), names that app instead, and on Linux the caller's parents do (observed.ts walked). */
+ *  lookUpWindowsApp), names that app instead, and on Linux the caller's parents do (observed.ts walked). So does the
+ *  word a session gives of where it runs: the extension's tab and the Claude app's sessions are in no terminal. */
 export function inOrca(hints: Readonly<Record<string, string>>): boolean {
-  return hints.TERM_PROGRAM === 'Orca' && !hints.__CFBundleIdentifier
+  const entrypoint = hints.CLAUDE_CODE_ENTRYPOINT
+  return hints.TERM_PROGRAM === 'Orca' && !hints.__CFBundleIdentifier && entrypoint !== EXTENSION_TAB
+    && entrypoint !== CLAUDE_APP_ENTRYPOINT
 }
 
 /** The outermost app an agent runs in. The bundle id and TERM_PROGRAM name it, unlike a multiplexer's own variables,
