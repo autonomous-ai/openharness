@@ -1734,6 +1734,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // Read as the card comes, not as its turn in the queue does: a summary can wait up to 2 s behind its turn's done
     // (TOKENS_WAIT_MS), and the next turn's start, a message sent while the agent worked, ends the notice meanwhile.
     const notice = event.kind === 'summary' && notices.pending(event.agentId)
+    // So is the end it may announce: a turn started while the card waits is the agent's next, and spends it.
+    if (event.kind === 'summary' || event.kind === 'error') count((usage) => usage.turnEnded(event.agentId))
     inOrder(event.agentId, () => dispatch(event, notice))
   }
 

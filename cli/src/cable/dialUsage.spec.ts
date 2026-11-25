@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   DIAL_FILE_METRICS, DIAL_FLAG_METRICS, DIAL_USAGE_AGENTS_MAX, type DialFileMetric, type DialUsageSink,
 } from '../lib/dialUsageContract.js'
-import { createDialUsage, dialEngine, dialHost, type DialAgent, type HookedAgent } from './dialUsage.js'
+import { createDialUsage, dialEngine, dialHost, type DialAgent, type DialUsage, type HookedAgent } from './dialUsage.js'
 
 const T0 = Date.parse('2026-11-23T10:00:00Z')
 const DAY_MS = 86_400_000
@@ -706,6 +706,7 @@ describe('createDialUsage', () => {
       usage.waitOpened(id, id)
       usage.tapped(id)
       usage.waitEnded(id, 'answered')
+      usage.turnEnded(id)
       usage.turnAnnounced(id)
       usage.turnStarted(id, true)
     }
@@ -721,6 +722,11 @@ describe('createDialUsage', () => {
 describe('the value from the dial', () => {
   /** The value names added, each once: a flag is added at every count beside it, which the sink holds at 1 a day. */
   const named = (added: DialFileMetric[]) => [...new Set(added.filter(m => m.startsWith('dial_value_')))].sort()
+  /** Its end's card came, then the dial rang or listed it. */
+  const announce = (usage: DialUsage, agentId: string) => {
+    usage.turnEnded(agentId)
+    usage.turnAnnounced(agentId)
+  }
 
   it('a ring answered within 2 min counts in both, within 10 min in 10m, past it in neither, each with its flags', () => {
     const { usage, count, added } = rig()
@@ -766,7 +772,7 @@ describe('the value from the dial', () => {
     away.add('a')
     usage.waitOpened('k', 'a')
     usage.waitEnded('k', 'answered')
-    usage.turnAnnounced('a')
+    announce(usage, 'a')
     usage.turnStarted('a', true)
     usage.attached(true)
     usage.turnStarted('a', true)
@@ -777,7 +783,7 @@ describe('the value from the dial', () => {
     const { usage, count, away, added } = rig()
     usage.attached(true)
     away.add('a')
-    usage.turnAnnounced('a')
+    announce(usage, 'a')
     vi.advanceTimersByTime(599_999)
     usage.turnStarted('a', true)
     expect(count('dial_value_done_away_prompted_10m')).toBe(1)
@@ -785,12 +791,12 @@ describe('the value from the dial', () => {
       'dial_value_installation_days'])
     // That turn spent it.
     usage.turnStarted('a', true)
-    usage.turnAnnounced('a')
+    announce(usage, 'a')
     vi.advanceTimersByTime(600_000)
     usage.turnStarted('a', true)
     // Its app in front at the announcement.
     away.delete('a')
-    usage.turnAnnounced('a')
+    announce(usage, 'a')
     away.add('a')
     usage.turnStarted('a', true)
     expect(count('dial_value_done_away_prompted_10m')).toBe(1)
@@ -800,10 +806,40 @@ describe('the value from the dial', () => {
     const { usage, prefixed, away } = rig()
     usage.attached(true)
     away.add('a')
-    usage.turnAnnounced('a')
+    announce(usage, 'a')
     usage.turnStarted('a')
     usage.turnStarted('a', true)
     expect(prefixed('dial_value_')).toEqual([])
+  })
+
+  it('an end announced after the agent\'s next turn started was that start\'s: no later prompt counts', () => {
+    const { usage, prefixed, away } = rig()
+    usage.attached(true)
+    away.add('a')
+    usage.turnEnded('a')
+    // A message queued while it worked starts the next turn as the summary waits behind its done.
+    usage.turnStarted('a', true)
+    usage.turnAnnounced('a')
+    usage.turnStarted('a', true)
+    expect(prefixed('dial_value_')).toEqual([])
+  })
+
+  it('at most 16 ends wait for their announcement, the oldest dropped first; a stop drops them', () => {
+    const ids = Array.from({ length: 17 }, (_, i) => `d${i}`)
+    const { usage, count, away } = rig(Object.fromEntries(ids.map(id => [id, tmuxClaude])))
+    usage.attached(true)
+    for (const id of ids) { away.add(id); usage.turnEnded(id) }
+    for (const id of ids) usage.turnAnnounced(id)
+    usage.turnStarted('d0', true)
+    expect(count('dial_value_done_away_prompted_10m')).toBe(0)
+    usage.turnStarted('d1', true)
+    expect(count('dial_value_done_away_prompted_10m')).toBe(1)
+    usage.turnEnded('d2')
+    usage.stop()
+    usage.attached(true)
+    usage.turnAnnounced('d2')
+    usage.turnStarted('d2', true)
+    expect(count('dial_value_done_away_prompted_10m')).toBe(1)
   })
 
   it('the dial\'s voice is the person\'s prompt, waiting as its turn starts or begun before a turn it started', () => {
@@ -811,13 +847,13 @@ describe('the value from the dial', () => {
     usage.attached(true)
     away.add('a')
     away.add('b')
-    usage.turnAnnounced('a')
+    announce(usage, 'a')
     usage.voiceEnded({ outcome: 'sent', agentId: 'a', since: Date.now() })
     usage.turnStarted('a')
     expect(count('dial_value_done_away_prompted_10m')).toBe(1)
 
     // The turn starts before the send returns: it is the voice's, and so is the announcement's prompt.
-    usage.turnAnnounced('b')
+    announce(usage, 'b')
     const since = Date.now()
     usage.turnStarted('b')
     vi.advanceTimersByTime(500)
@@ -826,7 +862,7 @@ describe('the value from the dial', () => {
     expect(count('dial_value_done_away_prompted_10m')).toBe(2)
 
     // A turn the hook says the dial's words started counts once, though the voice's send returns after it.
-    usage.turnAnnounced('a')
+    announce(usage, 'a')
     const later = Date.now()
     usage.turnStarted('a', true)
     usage.voiceEnded({ outcome: 'sent', agentId: 'a', since: later })
@@ -834,7 +870,7 @@ describe('the value from the dial', () => {
     expect(count('dial_value_done_away_prompted_10m')).toBe(3)
 
     // A voice whose turn never starts prompted nothing.
-    usage.turnAnnounced('a')
+    announce(usage, 'a')
     usage.voiceEnded({ outcome: 'sent', agentId: 'a', since: Date.now() })
     vi.advanceTimersByTime(10_000)
     expect(count('dial_value_done_away_prompted_10m')).toBe(3)
@@ -844,7 +880,7 @@ describe('the value from the dial', () => {
     const ids = Array.from({ length: 17 }, (_, i) => `d${i}`)
     const { usage, count, away } = rig(Object.fromEntries(ids.map(id => [id, tmuxClaude])))
     usage.attached(true)
-    for (const id of ids) { away.add(id); usage.turnAnnounced(id) }
+    for (const id of ids) { away.add(id); announce(usage, id) }
     usage.turnStarted('d0', true)
     expect(count('dial_value_done_away_prompted_10m')).toBe(0)
     usage.turnStarted('d1', true)

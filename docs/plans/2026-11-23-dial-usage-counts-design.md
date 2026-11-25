@@ -133,7 +133,9 @@ Each event count has its computer flag beside it (`<name>_installation_days`). S
    app the scan has still to tell, no front, another machine's agent) is not away.
 3. **Announced** is a finished turn's summary sent to the dial at `alert` or `list`, or a failed turn, which always
    rings; a silent one (on screen, a sub-agent's, no dial, the notice's turn, Needs you lowering it) is not. It counts
-   only with a dial attached and the agent away at that moment; at most 16 are kept.
+   only with a dial attached and the agent away at that moment; at most 16 are kept. A summary held behind its
+   turn's done (up to 2 s, for the tokens) past the agent's next turn start announces nothing: that start was the
+   prompt.
 4. **The person's prompt** is counted only where its source can be told; any next turn start ends the announcement,
    counted or not. It is the dial's own voice delivered to that agent (a voice waiting as the turn starts, or a turn
    the words started before their send returned), or an outside hooked agent's turn start whose prompt hook says the

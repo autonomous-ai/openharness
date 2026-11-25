@@ -38,6 +38,8 @@ export interface DialUsage {
   opened(agentId: string, end: DialOpenEnd): void
   /** [byPerson]: its hook says the person, or the dial's words, started it; a turn whose source can't be told is not. */
   turnStarted(agentId: string, byPerson?: boolean): void
+  /** A finished or failed turn's card came: only an end whose card came since the agent's last turn start is announced. */
+  turnEnded(agentId: string): void
   /** A finished turn the dial rang or listed, or a failed one. */
   turnAnnounced(agentId: string): void
   turnAborted(agentId: string): void
@@ -169,6 +171,10 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
   const unwaited = new Map<string, { at: number; announced?: number }>()
   // agent → when the dial announced its turn end with its app not in front, oldest first; its next turn start spends it.
   const announced = new Map<string, number>()
+  // The agents whose turn end's card came and whose next turn has not started, oldest first. A summary waits in its
+  // agent's queue behind the done, up to 2 s for the turn's tokens, and a message the person queued while the agent
+  // worked starts the next turn meanwhile: announced after that start, the end would wait for a prompt already made.
+  const ending = new Set<string>()
   const valued = (count: DialValueCount) => {
     add('dial_value_installation_days')
     add(`dial_value_${count}_installation_days`)
@@ -308,6 +314,7 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
       // the announced turn end, the person's prompt or not.
       delivered.delete(agentId)
       unwaited.delete(agentId)
+      ending.delete(agentId)
       const announcedAt = announced.get(agentId)
       announced.delete(agentId)
       const voice = voices.find(v => v.agentId === agentId)
@@ -325,9 +332,16 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
       deliver(agentId, voice.host, now())
     },
 
+    turnEnded(agentId) {
+      // Set after the delete, so the set stays oldest first.
+      ending.delete(agentId)
+      ending.add(agentId)
+      if (ending.size > ANNOUNCED_MAX) ending.delete(ending.values().next().value as string)
+    },
+
     turnAnnounced(agentId) {
       // Read now: by the next prompt the person may have brought its app up.
-      if (attaches === 0 || !deps.away(agentId)) return
+      if (attaches === 0 || !ending.has(agentId) || !deps.away(agentId)) return
       // Set after the delete, so the map stays oldest first.
       announced.delete(agentId)
       announced.set(agentId, now())
@@ -408,6 +422,7 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
       delivered.clear()
       unwaited.clear()
       announced.clear()
+      ending.clear()
       waits.clear()
       shownToday.clear()
       agentCounts.clear()
