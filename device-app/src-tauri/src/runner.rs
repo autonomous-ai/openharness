@@ -700,7 +700,7 @@ mod tests {
     use crate::testing::{Fake, alive, fake_harness, wait_gone};
     use crate::types::{
         DialStatus, Effect, Event, ExportFailure, Exported, LoginEvent, MenuItem, NotifyMode, Output, Saved,
-        UpdateFailure,
+        UpdateFailure, VoiceLang,
     };
     use crate::update::AppUpdater;
     use std::collections::VecDeque;
@@ -1383,6 +1383,7 @@ mod tests {
             Effect::CancelLogin,
             Effect::SetSound(true),
             Effect::SetNotify(NotifyMode::You),
+            Effect::SetVoice(VoiceLang::Vi),
             Effect::OpenUrl("https://id.example/a".into()),
             Effect::OpenDesktop,
             Effect::RegisterLoginItem,
@@ -1692,6 +1693,25 @@ mod tests {
         assert_eq!(w.fake.stdin(), [you, full]);
         let lines = w.fake.log().lines();
         assert!(lines.iter().all(|line| !line.contains("notify")), "{lines:?}");
+        assert_eq!(w.rest(), []);
+    }
+
+    #[test]
+    fn a_voice_change_is_written_to_the_watch() {
+        let (vi, ja) = (r#"{"voiceLang":"vi"}"#, r#"{"voiceLang":"ja"}"#);
+        let w = world();
+        assert!(w.runner.find_cli());
+        w.fake.script("hardware watch --json", &RECORDING);
+        assert_eq!(w.answer(Effect::SpawnWatch), no_dial());
+        assert_eq!(w.runner.run(Effect::SetVoice(VoiceLang::Vi)), None);
+        assert_eq!(w.runner.run(Effect::SetVoice(VoiceLang::Ja)), None);
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(w.fake.stdin(), [vi, ja]);
+        // With no watch running there is nothing to write to.
+        assert_eq!(w.runner.run(Effect::SetVoice(VoiceLang::Vi)), None);
+        assert_eq!(w.fake.stdin(), [vi, ja]);
+        let lines = w.fake.log().lines();
+        assert!(lines.iter().all(|line| !line.contains("voiceLang")), "{lines:?}");
         assert_eq!(w.rest(), []);
     }
 

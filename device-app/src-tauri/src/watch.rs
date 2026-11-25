@@ -135,7 +135,7 @@ mod tests {
     use crate::cli::{HarnessCli, find_cli};
     use crate::tabs::TabApp;
     use crate::testing::{Fake, wait_gone};
-    use crate::types::{DialStatus, Event, MemoryLog, NotifyMode};
+    use crate::types::{DialStatus, Event, MemoryLog, NotifyMode, VoiceLang};
     use std::io;
     use std::sync::{Arc, mpsc};
     use std::time::Duration;
@@ -363,6 +363,33 @@ mod tests {
         // A watch that has ended takes nothing.
         watch.notify(NotifyMode::You);
         assert_eq!(fake.stdin(), [you, full]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_voice_line_reaches_the_watch() {
+        let lines = [
+            r#"{"voiceLang":"en"}"#,
+            r#"{"voiceLang":"vi"}"#,
+            r#"{"voiceLang":"es"}"#,
+            r#"{"voiceLang":"fr"}"#,
+            r#"{"voiceLang":"ja"}"#,
+            r#"{"voiceLang":"it"}"#,
+        ];
+        let fake = Fake::new();
+        fake.script("hardware watch --json", &[r#"{"attached":true}"#, "@record"]);
+        let (watch, events) = start(&fake);
+        assert_eq!(events.recv_timeout(WAIT), Ok(dial(true, None, None)));
+        for lang in VoiceLang::ALL {
+            watch.voice(lang);
+        }
+        watch.stop();
+        assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchExit(Some(0))));
+        assert_eq!(fake.stdin(), lines);
+        // A watch that has ended takes nothing, and the log says nothing of it.
+        watch.voice(VoiceLang::Vi);
+        assert_eq!(fake.stdin(), lines);
+        assert_eq!(fake.log().lines(), ["harness hardware watch --json: exit 0"]);
     }
 
     #[cfg(unix)]

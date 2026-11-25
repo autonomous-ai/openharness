@@ -437,6 +437,21 @@ mod tests {
     }
 
     #[test]
+    fn the_six_voice_languages() {
+        assert_eq!(VoiceLang::ALL.map(VoiceLang::code), ["en", "vi", "es", "fr", "ja", "it"]);
+        assert_eq!(
+            VoiceLang::ALL.map(VoiceLang::name),
+            ["English", "Tiếng Việt", "Español", "Français", "日本語", "Italiano"]
+        );
+        for lang in VoiceLang::ALL {
+            assert_eq!(VoiceLang::from_code(lang.code()), Some(lang));
+        }
+        for code in ["de", "EN", "en-US", "en ", ""] {
+            assert_eq!(VoiceLang::from_code(code), None, "{code:?}");
+        }
+    }
+
+    #[test]
     fn a_view_is_the_json_the_window_reads() {
         let view = View { screen: Screen::SignIn, phase: Phase::Browser, lines: vec!["Waiting".into()] };
         assert_eq!(
