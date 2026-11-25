@@ -13,17 +13,35 @@
  *
  * A separate flight for each agent, after the boot: two passes never dispatch the same agent twice. An agent
  * the person stopped or closed meanwhile is no longer held, and is left alone.
+ *
+ * A launch the native guard held (`guardHeld`: its executable or hooks changed in the rc window) is one nothing else
+ * wakes, so it has attempts of its own, seen at run time (`startAgain`) or met by a pass: attempt n at least
+ * `heldRetryMs(n)` after the one before, whichever pass or timer comes, and a dispatch held again is the next attempt.
+ * So no attempt comes more often than that (each runs a login shell in its pane: 2026-10-15's 27,491 attempts a day).
+ * And they end: a guard that keeps failing for a reason the fresh inspection does not see would show "Starting" for
+ * good, so 10 dispatches held again, or 15 minutes of attempts held before dispatch, fail the row with the words a
+ * person acts on. In memory: a core restart starts them again.
  */
 import { codeOrLength, errorKind, sid } from '../../lib/log.js'
 import { windowsHeldPaneArgv } from '../../lib/windows/engineStart.js'
-import type { registry, RegisteredSession } from '../../lib/registry.js'
-import type { RestoreSummary } from '../../lib/restoreAgents.js'
+import { guardHeld, type registry, type RegisteredSession } from '../../lib/registry.js'
+import { DID_NOT_START, type RestoreSummary } from '../../lib/restoreAgents.js'
 
 /** How long a hold waits before the next timer pass: 2 s, doubling with each pass that launched nothing, at most
- *  30 s. An engine that becomes available is still picked up within half a minute without anyone asking. */
+ *  30 s; and a launch the guard held, after each of its attempts. An engine that becomes available is still picked
+ *  up within half a minute without anyone asking. */
 export function heldRetryMs(quietPasses: number): number {
   return Math.min(2_000 * 2 ** quietPasses, 30_000)
 }
+
+/** Dispatches the guard held again before a launch it held fails: about 5 minutes of attempts. */
+const GUARD_HOLDS = 10
+/** How long attempts held before dispatch (its evidence still changing: brew mid-install) go on, from the first hold. */
+const UNSETTLED_MS = 15 * 60_000
+
+/** A launch the guard held: since when, its attempts, and the launch its last attempt dispatched, whose hold is the
+ *  next attempt rather than a new count. */
+interface Attempts { first: number; made: number; heldAgain: number; due: number; dispatched?: string }
 
 /** The service a row is held for, or null. */
 export function heldFor(row: Pick<RegisteredSession, 'launch'> | undefined): string | null {
@@ -31,17 +49,28 @@ export function heldFor(row: Pick<RegisteredSession, 'launch'> | undefined): str
 }
 
 export interface HeldLaunchesDeps {
-  registry: Pick<typeof registry, 'list' | 'byAgent'>
+  registry: Pick<typeof registry, 'list' | 'byAgent' | 'setLaunch'>
   /** The boot's restore, of exactly these agents, outside the registry's transaction (lib/restoreAgents.ts `only`). */
   restore: (only: ReadonlySet<string>, current: () => boolean) => Promise<RestoreSummary>
+  /** A row a bound failed, to every client. */
+  announce: (session: RegisteredSession) => void
   log: (line: string) => void
+  /** Monotonic milliseconds; `performance.now()` unless a test gives its own. A wall-clock step (sleep, NTP) neither
+   *  stalls nor bursts attempts. */
+  now?: () => number
 }
 
 export type HeldRestart =
   | { ok: true; session: RegisteredSession; resumed: boolean }
   | { ok: false; error: string; detail?: string }
 
-export function createHeldLaunches({ registry, restore, log }: HeldLaunchesDeps) {
+/** The token a launch runs or waits under, if it has one. */
+function tokenOf(row: RegisteredSession | undefined): string | undefined {
+  const launch = row?.launch
+  return launch?.state === 'held' || launch?.state === 'starting' ? launch.nativeToken : undefined
+}
+
+export function createHeldLaunches({ registry, restore, announce, log, now = () => performance.now() }: HeldLaunchesDeps) {
   let opened!: () => void
   const ready = new Promise<void>(done => { opened = done })
   let closed = false
@@ -57,7 +86,77 @@ export function createHeldLaunches({ registry, restore, log }: HeldLaunchesDeps)
   const lastCode = new Map<string, string>()
   const active = new Map<string, Promise<RestoreSummary>>()
   let nextAgent = 0
+  // Each launch the guard held, and the one timer for the earliest due of them.
+  const attempts = new Map<string, Attempts>()
+  let attemptTimer: ReturnType<typeof setTimeout> | undefined
   const empty = (): RestoreSummary => ({ restored: [], skipped: [], failed: [], held: [], unsurveyed: [] })
+  // Why an agent stays held, once until it changes: it was dropped, so eight agents waited with nothing to say why.
+  const because = (agentId: string, said: string): void => {
+    if (lastCode.get(agentId) === said) return
+    lastCode.set(agentId, said)
+    log(`[restore] ${sid(agentId)} · could not launch from held · ${said}`)
+  }
+  /** A launch the guard held, from its first hold now: its first attempt [wait] later. */
+  const begin = (agentId: string, wait: number): Attempts => {
+    const at = now(), record = { first: at, made: 0, heldAgain: 0, due: at + wait }
+    attempts.set(agentId, record)
+    return record
+  }
+  /** A bound reached: the failed state whose words say what to do. Its pane, the held shell, is kept. */
+  const fail = (row: RegisteredSession, why: string, code: string): void => {
+    attempts.delete(row.agentId)
+    announce(registry.setLaunch(row.agentId, { state: 'failed', ...DID_NOT_START })!)
+    log(`[restore] ${row.engine} · agent ${sid(row.agentId)} · ${row.sessionId ? 'relaunch' : 'first launch'} ${why} · ${code}`)
+  }
+  /** An attempt's end: the launch it dispatched, whose hold is its next attempt; or held before dispatch, why, and past
+   *  the bound the failed state. */
+  const settle = (agentId: string, record: Attempts, summary: RestoreSummary): void => {
+    const row = registry.byAgent(agentId)
+    // Dispatched: starting under its new token, one tmux turned away after its journal too (the watch follows it, and
+    // the summary has it failed). Or ready, failed or gone, which `arm` forgets.
+    if (!guardHeld(row)) { record.dispatched = tokenOf(row); return }
+    if (now() - record.first >= UNSETTLED_MS) { fail(row!, 'held 15 minutes', 'NATIVE_EVIDENCE_UNSETTLED'); return }
+    // The restore says nothing of it (lib/restoreAgents.ts `hold`): its failure's code, or the service it is held for
+    // again, a word of the core's own.
+    const failed = summary.failed.find((entry) => entry.agentId === agentId)
+    if (failed) because(agentId, codeOrLength(failed.code))
+    else if (summary.held.includes(agentId)) because(agentId, heldFor(row)!)
+  }
+  /** The one timer, set for the earliest due launch the guard held that can fly. One no longer held nor its recovery
+   *  starting (ready, failed, stopped or gone) is forgotten: a later hold of it starts again at 2 s. */
+  const arm = (): void => {
+    clearTimeout(attemptTimer)
+    attemptTimer = undefined
+    if (closed) return
+    const at = now()
+    let next = Infinity
+    for (const [agentId, record] of attempts) {
+      const row = registry.byAgent(agentId)
+      if (!guardHeld(row)) {
+        // Its recovery starting: the guard's next word on it (`startAgain`) or its start says what comes next.
+        if (row?.launch?.state !== 'starting' || !row.launch.nativeToken) attempts.delete(agentId)
+        continue
+      }
+      // In flight, or due while all four flights are taken: a flight's end arms again, so nothing spins.
+      if (active.has(agentId) || (active.size >= 4 && record.due <= at)) continue
+      next = Math.min(next, record.due)
+    }
+    if (next === Infinity) return
+    attemptTimer = setTimeout(runDue, Math.max(0, next - at))
+    attemptTimer.unref?.()
+  }
+  /** The timer's attempts: the launches due now alone, never a pass over every held agent. */
+  const runDue = (): void => {
+    attemptTimer = undefined
+    void ready.then(() => {
+      const at = now()
+      for (const [agentId, record] of attempts) {
+        if (record.due > at || !guardHeld(registry.byAgent(agentId))) continue
+        restoreOne(agentId).catch((error) => because(agentId, errorKind(error)))
+      }
+      arm()
+    })
+  }
   const retryContention = (summary: RestoreSummary): void => {
     if (summary.restored.length) quietPasses = 0
     if (closed || retryTimer || (!summary.retry && !summary.held.length)) return
@@ -77,19 +176,30 @@ export function createHeldLaunches({ registry, restore, log }: HeldLaunchesDeps)
   const restoreOne = (agentId: string): Promise<RestoreSummary> => {
     const existing = active.get(agentId)
     if (existing) return existing
-    if (closed || !heldFor(registry.byAgent(agentId))) return Promise.resolve(empty())
+    const row = registry.byAgent(agentId)
+    if (closed || !heldFor(row)) return Promise.resolve(empty())
+    // A launch the guard held met with no record (held before a core restart): this is its first attempt.
+    const record = guardHeld(row) ? attempts.get(agentId) ?? begin(agentId, 0) : undefined
     if (active.size >= 4) {
+      // Turned away, a launch the guard held made no attempt: it stays due, and a flight's end tries it (`arm`).
+      if (record) return Promise.resolve({ ...empty(), held: [agentId] })
       const summary: RestoreSummary = { ...empty(), held: [agentId], retry: true }
       retryContention(summary)
       return Promise.resolve(summary)
     }
+    if (record) record.due = now() + heldRetryMs(++record.made)
+    // A launch the guard held keeps its own schedule: neither its dispatch nor its hold moves the shared one.
     const flight = Promise.resolve().then(() => closed ? empty() : restore(new Set([agentId]), current)).then(summary => {
       active.delete(agentId)
-      retryContention(summary)
+      if (record) settle(agentId, record, summary)
+      else retryContention(summary)
+      arm()
       return summary
     }, error => {
       active.delete(agentId)
-      retryContention({ ...empty(), retry: true })
+      if (record) settle(agentId, record, empty())
+      else retryContention({ ...empty(), retry: true })
+      arm()
       throw error
     })
     active.set(agentId, flight)
@@ -100,9 +210,15 @@ export function createHeldLaunches({ registry, restore, log }: HeldLaunchesDeps)
     if (closed) return null
     // Asked from outside the timer (a service connected, the core became ready): something changed, so wait less.
     if (joinRunning) quietPasses = 0
+    const at = now()
+    const guarded = new Set<string>()
     const held = registry.list().filter(row => {
       const holder = heldFor(row)
-      return holder !== null && (service === undefined || holder === service) && (joinRunning || !active.has(row.agentId))
+      if (holder === null || (service !== undefined && holder !== service) || (!joinRunning && active.has(row.agentId))) return false
+      if (!guardHeld(row)) return true
+      // A launch the guard held is tried only once its own attempt is due, whichever pass this is.
+      guarded.add(row.agentId)
+      return (attempts.get(row.agentId)?.due ?? at) <= at
     }).map(row => row.agentId)
     if (!held.length) return null
     const offset = nextAgent % held.length
@@ -117,15 +233,10 @@ export function createHeldLaunches({ registry, restore, log }: HeldLaunchesDeps)
       for (const key of ['restored', 'skipped', 'failed', 'held', 'unsurveyed'] as const) (summary[key] as unknown[]).push(...result[key])
       if (result.retry) summary.retry = true
     }
-    retryContention(summary)
+    retryContention({ ...summary, restored: summary.restored.filter(id => !guarded.has(id)), held: summary.held.filter(id => !guarded.has(id)) })
     if (rejected) throw failure
-    // Why an agent stays held, by its failure's code, once until it changes: it was dropped, so eight agents waited with
-    // nothing to say why. A launch's own error code is typed a string, so one that is not a code is said by its length.
-    for (const { agentId, code } of summary.failed) {
-      if (lastCode.get(agentId) === code) continue
-      lastCode.set(agentId, code)
-      log(`[restore] ${sid(agentId)} · could not launch from held · ${codeOrLength(code)}`)
-    }
+    // By its failure's code. A launch's own error code is typed a string, so one that is not a code is said by its length.
+    for (const { agentId, code } of summary.failed) because(agentId, codeOrLength(code))
     // A pass runs every 500 ms while the flights are full: on Windows, 2026-11-04, that was two lines a second for good.
     const pass = `${service ?? 'every service'} · launched ${summary.restored.length} of ${held.length}`
     if (pass !== lastPass || summary.restored.length) {
@@ -144,20 +255,38 @@ export function createHeldLaunches({ registry, restore, log }: HeldLaunchesDeps)
       const before = registry.byAgent(agentId)
       if (!before || closed) return { ok: false, error: 'AGENT_NOT_FOUND' }
       if (!heldFor(before)) return { ok: true, session: before, resumed: !!before.sessionId }
-      quietPasses = 0
+      // A launch the guard held: an attempt now, which counts, on its own schedule. Any other is news the shared one hears.
+      const guard = guardHeld(before)
+      if (!guard) quietPasses = 0
       const summary = await restoreOne(agentId)
-      retryContention(summary)
-      const now = registry.byAgent(agentId)
-      if (!now) return { ok: false, error: 'AGENT_NOT_FOUND' }
+      if (!guard) retryContention(summary)
+      const after = registry.byAgent(agentId)
+      if (!after) return { ok: false, error: 'AGENT_NOT_FOUND' }
       if (summary.restored.includes(agentId)) {
         log(`[restart] ${sid(agentId)} launched from held`)
-        return { ok: true, session: now, resumed: !!now.sessionId }
+        return { ok: true, session: after, resumed: !!after.sessionId }
       }
-      const launch = now.launch
-      if (launch?.state === 'held') return { ok: false, error: 'SERVICE_UNAVAILABLE', detail: launch.detail }
+      const launch = after.launch
       if (launch?.state === 'failed') return { ok: false, error: launch.error, ...(launch.detail ? { detail: launch.detail } : {}) }
+      // Held again before dispatch, or its pane not read: it starts by itself, as the person asked.
+      if (guard) return { ok: true, session: after, resumed: !!after.sessionId }
+      if (launch?.state === 'held') return { ok: false, error: 'SERVICE_UNAVAILABLE', detail: launch.detail }
       return { ok: false, error: 'RESTART_FAILED', detail: summary.failed.find((row) => row.agentId === agentId)?.reason ?? 'The harness could not be launched.' }
     })
+  }
+
+  /** The guard held this agent's launch, seen at run time (lib/restoreAgents.ts, newPane.ts, restart.ts): its first
+   *  attempt 2 s after that hold. A hold of the launch its last attempt dispatched is its next attempt, never a new
+   *  count, and the 10th fails it; any other (another launch of it, after it was ready or failed) starts again at 2 s. */
+  const startAgain = (agentId: string): void => {
+    const row = registry.byAgent(agentId)
+    if (closed || !guardHeld(row)) return
+    const record = attempts.get(agentId)
+    if (record && record.dispatched === tokenOf(row)) {
+      delete record.dispatched
+      if (++record.heldAgain >= GUARD_HOLDS) { fail(row!, `held again ${GUARD_HOLDS} times`, 'NATIVE_GUARD_REPEATED'); return }
+    } else begin(agentId, heldRetryMs(0))
+    arm()
   }
 
   return {
@@ -167,7 +296,8 @@ export function createHeldLaunches({ registry, restore, log }: HeldLaunchesDeps)
     },
     restoreHeld,
     restartHeld,
-    close: () => { closed = true; clearTimeout(retryTimer); opened() },
+    startAgain,
+    close: () => { closed = true; clearTimeout(retryTimer); clearTimeout(attemptTimer); opened() },
   }
 }
 
