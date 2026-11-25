@@ -72,6 +72,8 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
       front: () => undefined, log: () => {},
     })
     let mono = 0
+    // How far each read of the monotonic clock moves it on, as performance.now() does between two reads.
+    let step = 0
     let wall = WALL
     const timers: Array<{ at: number; ms: number; run: () => void }> = []
     const watchers = new Set<() => void>()
@@ -107,7 +109,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
         }
       },
       now: () => wall,
-      monotonic: () => mono,
+      monotonic: () => (mono += step),
       uuid: () => `u${++ids}`,
       log: (line) => {
         log.push(line)
@@ -128,6 +130,8 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     return {
       source, client, prompt, focus, onFocus, timers, watchers, log, counts,
       get changes() { return changes },
+      /** Each read of the monotonic clock from here on moves it on by [ms]. */
+      tick: (ms: number) => { step = ms },
       until: (check: () => boolean) => new Promise<void>((resolve) => {
         const done = () => {
           if (!check()) return false
@@ -827,6 +831,27 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     s.advance(1)
     await listRead(4)
     expect(s.timers.map(({ ms }) => ms)).toEqual([1000])
+  })
+
+  // performance.now() moves on between two reads: rows one list gave no session are due a few µs apart.
+  it('rows one list gave no session share each re-list, whose timer runs a little before its time', async () => {
+    server.agents = [agent('w1:p1')]
+    const s = setup()
+    await live(s)
+    server.event('pane_agent_detected', detected('w2:p1'))
+    server.event('pane_agent_detected', detected('w3:p1'))
+    await s.until(() => s.timers.length === 1)
+    server.agents = [agent('w1:p1'), agent('w2:p1', 'idle', NO_SESSION), agent('w3:p1', 'idle', NO_SESSION)]
+    s.advance(1000)
+    s.tick(0.001)
+    await listRead(3)
+    s.tick(0)
+    expect(s.timers.map(({ ms }) => Math.round(ms))).toEqual([1000])
+    s.advance(999)
+    s.timers.splice(0, 1)[0].run()
+    s.advance(1)
+    await listRead(4)
+    expect(s.timers.map(({ ms }) => Math.round(ms))).toEqual([1000])
   })
 
   it('a pane that closes before its re-list is due is not listed again', async () => {
