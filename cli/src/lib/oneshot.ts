@@ -51,8 +51,26 @@ function cursorBin(): string {
   throw new Error('Cursor CLI command is ambiguous or unavailable; install cursor-agent or set CURSOR_PATH to its absolute path')
 }
 
+/**
+ * Windows' own variables a program there needs: without SystemRoot it cannot open a socket, so Claude's warm worker
+ * spawned but failed its first prompt; without TEMP or the profile folders it has no temp or settings folder. Not
+ * startEnvironment's WINDOWS_ONLY: that names only what a start drops off Windows (on Windows a start keeps the whole
+ * environment), and Claude's child is built from a short list, so the list names what it needs itself. The other
+ * one-shots start from oneShotParentEnv, the whole daemon environment, so they have these already.
+ */
+const WINDOWS_SYSTEM_VARIABLES = [
+  'SystemRoot', 'windir', 'ComSpec', 'PATHEXT', 'SystemDrive', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP',
+  'ProgramData', 'ProgramFiles', 'ProgramFiles(x86)', 'HOMEDRIVE', 'HOMEPATH', 'USERNAME', 'USERDOMAIN', 'COMPUTERNAME',
+] as const
+
+function windowsSystemEnv(): NodeJS.ProcessEnv {
+  if (process.platform !== 'win32') return {}
+  return Object.fromEntries(WINDOWS_SYSTEM_VARIABLES.flatMap((name) => process.env[name] ? [[name, process.env[name]]] : []))
+}
+
 function buildEnv(): NodeJS.ProcessEnv {
   return {
+    ...windowsSystemEnv(),
     PATH: process.env.PATH || '',
     HOME: process.env.HOME || homedir(),
     USER: process.env.USER || userInfo().username,
