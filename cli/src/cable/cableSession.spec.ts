@@ -2358,7 +2358,7 @@ describe('cable session', () => {
     expect(hachi[0].pcm.equals(speech)).toBe(true)
   })
 
-  it('logs one line per voice turn: agent, command, language, rate, level, the gate, voice, floor, gain and transcript length, never the words', async () => {
+  it('logs one line per voice turn: agent, command, language, rate, level, the gate, voice, floor, gain, whether it was sent and transcript length, never the words', async () => {
     const lines: string[] = []
     let answer = 'fix the login screen'
     const host = makeHost({ log: (line) => lines.push(line), transcribe: async () => answer })
@@ -2374,7 +2374,7 @@ describe('cable session', () => {
       port.pcm(loud.subarray(0, 6_400)); port.pcm(loud.subarray(6_400))
       port.say({ t: 'voice.end', uploadId: 'loud' })
       await vi.waitFor(() => expect(host.sendTurn).toHaveBeenCalled())
-      expect(lines).toContain('cable: voice turn agent=a2 cmd=goal lang=vi sr=16000 peak=32767 rms=1530 clip=1.25 heard=1 voice=2113 floor=1059 gain=0 transcript=20')
+      expect(lines).toContain('cable: voice turn agent=a2 cmd=goal lang=vi sr=16000 peak=32767 rms=1530 clip=1.25 heard=1 voice=2113 floor=1059 gain=0 sent=1 transcript=20')
 
       // The failure Diego saw: silence in, nothing out. The line is what tells the two apart on his dial.
       answer = ''
@@ -2382,9 +2382,47 @@ describe('cable session', () => {
       port.pcm(Buffer.alloc(3200))
       port.say({ t: 'voice.end', uploadId: 'quiet' })
       await vi.waitFor(() => expect(port.sent).toContainEqual(expect.objectContaining({ t: 'voice.error', uploadId: 'quiet' })))
-      expect(lines).toContain('cable: voice turn agent=none cmd=none lang=en sr=16000 peak=0 rms=0 clip=0 heard=0 voice=0 floor=0 gain=0 transcript=0')
+      expect(lines).toContain('cable: voice turn agent=none cmd=none lang=en sr=16000 peak=0 rms=0 clip=0 heard=0 voice=0 floor=0 gain=0 sent=0 transcript=0')
       expect(lines.filter((l) => l.startsWith('cable: voice turn '))).toHaveLength(2)
       expect(lines.join('\n')).not.toContain('login')
+    } finally { await session.stop() }
+  })
+
+  it('sends no recording under a second the gate heard no speech in, and answers it as an empty transcript', async () => {
+    const lines: string[] = []
+    const transcribe = vi.fn(async () => 'thank you')
+    const voiceEnded = vi.fn()
+    const host = makeHost({ log: (line) => lines.push(line), transcribe, voiceEnded })
+    const { session, port } = await connect(host)
+    /** One recording to a1, in frames of at most 8 KB, and the dial's answer to it. */
+    const record = (uploadId: string, pcm: Buffer) => {
+      port.say({ t: 'voice.begin', agentId: 'a1', lang: 'en', sr: 16000, uploadId })
+      for (let at = 0; at < pcm.length; at += 8_000) port.pcm(pcm.subarray(at, at + 8_000))
+      port.say({ t: 'voice.end', uploadId })
+      return vi.waitFor(() => {
+        const answer = port.sent.find((m) => (m.t === 'voice.transcript' || m.t === 'voice.error') && m.uploadId === uploadId)
+        expect(answer).toBeDefined()
+        return answer!
+      })
+    }
+    const sent = () => lines.filter((l) => l.startsWith('cable: voice turn ')).map((l) => / sent=(\d) /.exec(l)?.[1])
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await settle()
+
+      // 0.8 s of silence: a press with nothing said.
+      expect(await record('quiet', Buffer.alloc(25_600))).toEqual({ t: 'voice.error', message: "Didn't catch that", uploadId: 'quiet' })
+      expect(transcribe).not.toHaveBeenCalled()
+      expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'no_speech', agentId: 'a1' }]])
+      expect(sent()).toEqual(['0'])
+
+      // 0.8 s the gate hears (every sample 1799, over its 600): sent.
+      expect(await record('heard', Buffer.alloc(25_600, 7))).toMatchObject({ t: 'voice.transcript', agentId: 'a1' })
+      expect(transcribe).toHaveBeenCalledTimes(1)
+      // 1.2 s of silence: long enough to be sent.
+      expect(await record('long', Buffer.alloc(38_400))).toMatchObject({ t: 'voice.transcript', agentId: 'a1' })
+      expect(transcribe).toHaveBeenCalledTimes(2)
+      expect(sent()).toEqual(['0', '1', '1'])
     } finally { await session.stop() }
   })
 
