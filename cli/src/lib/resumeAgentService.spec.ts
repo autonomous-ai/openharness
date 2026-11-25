@@ -1177,8 +1177,10 @@ describe('existing runtime and readiness verification', () => {
     expect(await start()).toEqual({ ok: false, error: 'TMUX_UNAVAILABLE' })
     expect(resolvePaneEngineProcess).not.toHaveBeenCalled(); expect(deps.announceSession).not.toHaveBeenCalled()
   })
-  it('asks a live unconfirmed resume for confirmation again, withdrawing the old verdict first', async () => {
-    ;(await live({ processIdentity: identity, launch: { state: 'failed', error: 'RESUME_UNCONFIRMED', detail: 'fixture' } }))
+  // And one an older build failed when a hook of its own process named another conversation: nothing sets that verdict
+  // any more, and repeated, it kept a running engine "Start failed" until discovery healed the row.
+  it.each(['RESUME_UNCONFIRMED', 'RESUME_SESSION_MISMATCH'])('asks a live resume failed %s for confirmation again, withdrawing the old verdict first', async error => {
+    ;(await live({ processIdentity: identity, launch: { state: 'failed', error, detail: 'fixture' } }))
     vi.mocked(checkPidRuntime).mockResolvedValue({ state: 'alive' })
     // The registry hands out its live row, so read the state as each announcement is made.
     const announced: string[] = []; vi.mocked(deps.announceSession).mockImplementation(row => { announced.push(row.launch?.state ?? '') })
@@ -1203,11 +1205,11 @@ describe('existing runtime and readiness verification', () => {
     expect(existsSync(join(dir, 'saved', `${saved.agentId}.resume`))).toBe(false)
     expect(create).not.toHaveBeenCalled()
   })
-  it('does not re-verify a live process that reported another conversation', async () => {
-    ;(await live({ processIdentity: identity, launch: { state: 'failed', error: 'RESUME_SESSION_MISMATCH', detail: 'fixture' } }))
+  it('does not re-verify a live process another verdict failed', async () => {
+    ;(await live({ processIdentity: identity, launch: { state: 'failed', error: 'RESUME_FAILED', detail: 'fixture' } }))
     vi.mocked(checkPidRuntime).mockResolvedValue({ state: 'alive' })
-    expect(await start()).toMatchObject({ error: 'RESUME_SESSION_MISMATCH', detail: 'fixture' })
-    expect(registry.byAgent(saved.agentId)?.launch).toMatchObject({ state: 'failed', error: 'RESUME_SESSION_MISMATCH' })
+    expect(await start()).toMatchObject({ error: 'RESUME_FAILED', detail: 'fixture' })
+    expect(registry.byAgent(saved.agentId)?.launch).toMatchObject({ state: 'failed', error: 'RESUME_FAILED' })
     expect(deps.announceSession).not.toHaveBeenCalled()
   })
   it('waits for a real readiness observation before replying', async () => {
