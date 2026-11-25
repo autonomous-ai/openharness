@@ -1859,6 +1859,25 @@ describe('tabs', () => {
       expect(one.lines).toHaveLength(1)
     })
 
+    it('a typing the watch would drop answers unanswered and is settled at once, writing nothing: no tty is held for it', async () => {
+      const { tabs, watch } = typed()
+      const one = watch()
+      const dropped = [
+        { write: { ...WRITE.write, text: 'hi\u0007' } },
+        { write: { ...WRITE.write, text: '' } },
+        { enter: { ...ENTER.enter, tty: '/dev/disk0' } },
+      ] satisfies TabsWrite[]
+      for (const typing of dropped) {
+        const sent = tabs.line()!.send(typing)
+        expect(await settledYet(sent.settled)).toBe(true)
+        expect(await settledYet(sent.answer)).toBe(true)
+        expect(await sent.answer).toBe('unanswered')
+      }
+      expect(one.lines).toEqual([])
+      tabs.line()!.send(WRITE)
+      expect(one.lines).toHaveLength(1)
+    })
+
     it('a ninth send while eight wait for their wrote answers unanswered at once and writes nothing; an answer makes room', async () => {
       const { tabs, fire, watch } = typed()
       const one = watch()
