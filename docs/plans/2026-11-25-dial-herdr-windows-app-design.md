@@ -248,5 +248,11 @@ Record names, pids and parents only, never command lines.
 3. **Windows' default-terminal handoff:** `harness-pty raise --console-of <pid>` is proposed as its own item, only if
    Part 1 step 6 shows the shell's parent is `explorer.exe`.
 
+4. **No client in a listed app** (Windows Terminal, Alacritty, or no window): the agent's app is `terminal`, the unknown
+   app, on herdr's page; never the hint's app, which may be stale.
+5. **A client with a window beats a newer one without** (the Win+R console handoff), as a client in an app beats one in
+   none on macOS.
+6. **A failed `herdr agent focus`** with a window owner known still raises that window, as Linux's fallback does.
+
 Part 1 went to Ken's VM on 2026-11-26. Code starts once its result is in, or earlier where the fake tree in the test
 already matches what herdr's source says. Tests run only once the PM frees the Mac.
