@@ -495,6 +495,10 @@ const orcaRuns = (argv: string[], group: string, verb: string): boolean =>
  * A chat has no terminal, and Orca's CLI opens no chat (docs/plans/2026-11-23-dial-orca-chats-design.md, "Dial to
  * Orca"): its `worktree activate` of the chat's worktree that succeeded stands for the switch, and with none no part
  * passes.
+ *
+ * A row under tmux in tier A has a pane part after its switch: a tmux command that succeeded showed its own pane and
+ * none showed another session's (docs/plans/2026-11-25-dial-orca-tmux-o11-design.md, Tap). Tier B's Orca rig records no
+ * tmux run, so there it has none.
  */
 function orcaOpenParts(session: SessionDef, world: World, w: Window | undefined, tier: Tier, platform: Platform,
   commands: Seen['commands'], inputs: string[]): Part[] {
@@ -523,10 +527,15 @@ function orcaOpenParts(session: SessionDef, world: World, w: Window | undefined,
   const layout = w ? world.stepsBefore(input?.at ?? w.from)
     .filter((s): s is StepOf<'orca.layout'> => s.kind === 'orca.layout').at(-1) : undefined
   const laid = session.worktree !== undefined && layout?.worktrees.includes(session.worktree) === true
+  const tmuxed = session.tmux === true && tier === 'a' && !chat
+  const pane = (c: Seen['commands'][number]): string | undefined => (tmuxed ? tmuxShows(c.argv, world) : undefined)
+  // A failed move showed no pane.
+  const panes = commands.filter((c) => c.ok).flatMap((c) => pane(c) ?? [])
   const evidence = bounded([...inputs, ...commands.map((c) => {
     const to = target(c)
+    const shows = pane(c)
     const what = to !== undefined ? `switch ${owners.get(to) ?? 'other'}` : orcaRuns(c.argv, 'worktree', 'activate') ? 'worktree'
-      : orcaRuns(c.argv, 'terminal', 'send') ? 'send' : raises(c) ? 'front' : undefined
+      : orcaRuns(c.argv, 'terminal', 'send') ? 'send' : raises(c) ? 'front' : shows !== undefined ? `pane ${shows}` : undefined
     return `command at ${c.at}: ${[what, !c.ok && 'failed'].filter(Boolean).join(' ') || 'other'}`
   }), ...(inputs.length > 0 && commands.length === 0 ? ['no command'] : []),
   ...(inputs.length > 0 && commands.length > 0 && switched < 0 ? [chat ? 'no activate' : 'no switch'] : [])])
@@ -535,6 +544,8 @@ function orcaOpenParts(session: SessionDef, world: World, w: Window | undefined,
   const parts: Part[] = chat ? [{ part: 'worktree', score: switched < 0 ? 0 : 1, timed: false, evidence }] : [
     { part: 'worktree', score: switched >= 0 && (activated || (shown === undefined && !laid)) ? 1 : 0, timed: false, evidence },
     { part: 'switch', score: switched < 0 ? 0 : 1, timed: false, evidence },
+    ...(tmuxed ? [{ part: 'pane', score: switched >= 0 && panes.length > 0 && panes.every((k) => k === session.key) ? 1 : 0,
+      timed: false, evidence }] : []),
   ]
   if (input?.kind === 'swipe') parts.push({ part: 'noRaise', score: switched >= 0 && !commands.some(raises) ? 1 : 0, timed: false, evidence })
   else if (tier === 'a' || platform !== 'linux') {
@@ -561,6 +572,21 @@ function paneSelect(argv: string[], world: World): { program: 'tmux' | 'herdr'; 
     case 'herdr': return target(argv[1] === 'agent' && argv[2] === 'focus' ? argv[3] : undefined, 'herdr')
   }
   return undefined
+}
+
+/**
+ * The session whose pane a tmux command shows: one it selects (paneSelect), or the one it switches a client to,
+ * `switch-client … -t pane:<key>`, as the devices do when tmux's lookup finds no app for the client (on macOS, Orca's
+ * helper; docs/plans/2026-11-25-dial-orca-tmux-o11-plan.md, "What this plan decides"). Both show that pane in its tab.
+ */
+function tmuxShows(argv: string[], world: World): string | undefined {
+  if (programOf(argv) !== 'tmux') return undefined
+  const selected = paneSelect(argv, world)
+  if (selected) return selected.key
+  const at = argv.indexOf('switch-client')
+  const flag = at > 0 ? argv.indexOf('-t', at) : -1
+  const pane = flag > 0 ? argv[flag + 1] : undefined
+  return pane === undefined ? undefined : pane.startsWith('pane:') ? world.known(pane.slice('pane:'.length)) : 'other'
 }
 
 /**
