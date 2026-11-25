@@ -542,6 +542,11 @@ mod tests {
         Some(Next::Refused { line: wrote_line(id, false), log: None })
     }
 
+    /// Answered no unrun with the line that says why.
+    fn refused_saying(id: &str, said: &str) -> Option<Next> {
+        Some(Next::Refused { line: wrote_line(id, false), log: Some(said.into()) })
+    }
+
     /// iTerm2 in front, and both apps that take a typing answered once without an error.
     fn writing() -> TabFollow {
         let mut follow = polling();
@@ -1132,22 +1137,22 @@ mod tests {
         let mut follow = polling();
         follow.front(I.bundle());
         assert_eq!(follow.typed(write(I, ID, "hi"), now), None);
-        assert_eq!(follow.next_typing(now), refused(ID));
+        assert_eq!(follow.next_typing(now), refused_saying(ID, "tabs: iTerm2 write refused · no answer yet"));
         // A failed poll is no answer.
         follow.polled(I, Err(TabError::Failed), 0);
         follow.typed(write(I, ID, "hi"), now);
-        assert_eq!(follow.next_typing(now), refused(ID));
+        assert_eq!(follow.next_typing(now), refused_saying(ID, "tabs: iTerm2 write refused · no answer yet"));
         // A poll that answered, even with no window, is.
         follow.polled(I, Ok(None), 0);
         follow.typed(write(I, ID, "hi"), now);
         assert_eq!(follow.next_typing(now), Some(Next::Run(write(I, ID, "hi"))));
         // One app's answer is not another's.
         follow.typed(enter(G, ENTER_ID), now);
-        assert_eq!(follow.next_typing(now), refused(ENTER_ID));
+        assert_eq!(follow.next_typing(now), refused_saying(ENTER_ID, "tabs: Ghostty enter refused · no answer yet"));
         // A select answers for its app too, unless it failed.
         follow.selected(G, Err(TabError::Failed));
         follow.typed(enter(G, ENTER_ID), now);
-        assert_eq!(follow.next_typing(now), refused(ENTER_ID));
+        assert_eq!(follow.next_typing(now), refused_saying(ENTER_ID, "tabs: Ghostty enter refused · no answer yet"));
         follow.selected(G, Ok(Selected::NoTab));
         follow.typed(enter(G, ENTER_ID), now);
         assert_eq!(follow.next_typing(now), Some(Next::Run(enter(G, ENTER_ID))));
@@ -1185,10 +1190,12 @@ mod tests {
             assert_eq!(follow.typed(enter(I, ENTER_ID), now), Some(wrote_line(ENTER_ID, false)));
             assert!(follow.written(&enter(I, ENTER_ID), Err(error)).log.is_empty());
         }
-        // A failed write leaves it on.
+        // A failed write leaves it on, and says so.
         let mut follow = writing();
         let out = follow.written(&write(I, ID, "hi"), Err(TabError::Failed));
-        assert_eq!((out.line, out.log), (Some(wrote_line(ID, false)), vec![]));
+        assert_eq!((out.line, out.log), (Some(wrote_line(ID, false)), vec!["tabs: iTerm2 write failed".to_string()]));
+        let out = follow.written(&enter(G, ENTER_ID), Err(TabError::Failed));
+        assert_eq!(out.log, ["tabs: Ghostty enter failed"]);
         assert_eq!(follow.typed(enter(I, ENTER_ID), now), None);
         assert_eq!(follow.next_typing(now), Some(Next::Run(enter(I, ENTER_ID))));
     }
@@ -1342,7 +1349,14 @@ mod tests {
         for done in [Ok(Written::Done), Ok(Written::NoSession), Err(TabError::Failed), Err(TabError::Denied)] {
             said.extend(follow.written(&write(I, ID, words), done).log);
         }
-        assert_eq!(said.len(), 9, "{said:?}");
+        // A typing for an app that has not answered yet.
+        let mut follow = polling();
+        follow.typed(write(I, ID, words), now);
+        match follow.next_typing(now) {
+            Some(Next::Refused { log: Some(log), .. }) => said.push(log),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(said.len(), 11, "{said:?}");
         for line in said {
             assert!(!line.contains("ttys") && !line.contains("/dev") && !line.contains("words"), "{line}");
         }

@@ -563,7 +563,7 @@ mod tests {
     use crate::loginitem::LoginItem;
     use crate::open::Opener;
     use crate::state::StateFile;
-    use crate::tabs::{LATE_WRITE, NoTabs, Selected, TabApp, TabError, TabScripts, Written};
+    use crate::tabs::{LATE_WRITE, NoTabs, Selected, TYPING_QUEUED, TabApp, TabError, TabScripts, Written};
     use crate::testing::{Fake, alive, fake_harness, wait_gone};
     use crate::types::{
         DialStatus, Effect, Event, ExportFailure, Exported, LoginEvent, MemoryLog, MenuItem, NotifyMode, Output, Saved,
@@ -1805,8 +1805,42 @@ mod tests {
         scripts.still(2);
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
         assert_eq!(w.fake.stdin(), [VSCODE_LINE.to_string(), wrote(ID, false)]);
-        // A typing answered unrun has no outcome to log.
-        assert_eq!(tabs_said(&log), ["tabs: iTerm2 select ok"]);
+        // A typing answered unrun says why in one fixed line, which names the app alone.
+        assert_eq!(tabs_said(&log), ["tabs: iTerm2 write refused · no answer yet", "tabs: iTerm2 select ok"]);
+    }
+
+    #[test]
+    fn a_typing_past_a_full_queue_is_answered_no_at_once_in_one_fixed_line() {
+        let scripts = Arc::new(Scripts::default());
+        let (w, _fronts) = world_with_tabs(VSCODE, &scripts);
+        let ids: Vec<String> = (0..=TYPING_QUEUED).map(|n| format!("{n:016x}")).collect();
+        let words: Vec<String> = ids.iter().map(|id| write(id, "the words spoken")).collect();
+        // The status after the writes says they have all come.
+        let mut lines = vec![r#"{"attached":true}"#, SELECT_ITERM, "@wait go"];
+        lines.extend(words.iter().map(String::as_str));
+        lines.extend([r#"{"attached":true}"#, "@record"]);
+        w.fake.script("hardware watch --json", &lines);
+        scripts.gate(true);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        // The select is held, as macOS's consent prompt would hold it, and the writes queue behind it.
+        assert_eq!(scripts.calls(2), ["running iTerm2", "select_tty iTerm2 /dev/ttys023 back"]);
+        w.fake.touch("go");
+        assert_eq!(w.next(), a_dial());
+        // The one past the queue is answered and said while the call is still held.
+        let log = w.fake.log();
+        assert_eq!(tabs_said(&log), ["tabs: iTerm2 write refused · queue full"]);
+        // The queued ones wait past the bound, and are dropped late once the call answers.
+        scripts.still_for(2, LATE_WRITE + EVERY);
+        scripts.gate(false);
+        let late = |lines: &[String]| lines.iter().filter(|line| *line == "tabs: iTerm2 write dropped late").count();
+        log.until(|lines| late(lines) == TYPING_QUEUED);
+        scripts.still(2);
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        // The one past the queue was answered first.
+        let mut answers = vec![VSCODE_LINE.to_string(), wrote(&ids[TYPING_QUEUED], false)];
+        answers.extend(ids[..TYPING_QUEUED].iter().map(|id| wrote(id, false)));
+        assert_eq!(w.fake.stdin(), answers);
+        assert!(log.lines().iter().all(|line| !line.contains("ttys") && !line.contains("words")), "{:?}", log.lines());
     }
 
     #[test]
