@@ -326,8 +326,9 @@ export interface RegisteredSession {
   firstTaskTyped?: { text: string; at: number }
   /**
    * The creation receipt that made this row (a create's intent, a fork's receipt): the one a held first launch is
-   * recovered from, its task read there and never put on the row (2026-11-25). Written once at registration, never
-   * changed, never on the agent's frame.
+   * recovered from, its task read there and never put on the row (2026-11-25). Written once at registration, never on
+   * the agent's frame. Dropped once a launch of the row is confirmed (an engine ran, a hook bound a session, its engine
+   * left a shell): the task was delivered, and a later launch with no conversation must never read it again.
    */
   creationId?: string
   /**
@@ -1766,6 +1767,7 @@ class Registry {
         candidate.processIdentity = processIdentity
         candidate.active = true
         if (candidate.launch) candidate.launch = { state: 'ready' }
+        delete candidate.creationId
         if (input.gateway !== undefined) candidate.gateway = input.gateway
         if (input.grid !== undefined) candidate.grid = input.grid
         if (input.codexHome && !candidate.codexHome) candidate.codexHome = input.codexHome
@@ -2039,6 +2041,7 @@ class Registry {
           if (!candidate) {
             candidate = structuredClone({ ...this.byAgent(agentId)!, processIdentity: requested.processIdentity,
               active: true, launch: { state: 'ready' as const }, touchedAt: Date.now() })
+            delete candidate.creationId
             if (requested.grid !== undefined) candidate.grid = requested.grid
             if (requested.gateway !== undefined) candidate.gateway = requested.gateway
             if (requested.launchArgs !== undefined) {
@@ -2640,6 +2643,7 @@ class Registry {
       if (!separateShell) console.log(`[agent] ${sid(original.agentId)} first task dropped · its engine exited before it was typed`)
     }
     delete entry.firstTaskTyped
+    delete entry.creationId
     this.clearBinding(entry)
     delete entry.resumeOnly
     delete entry.externalResume
