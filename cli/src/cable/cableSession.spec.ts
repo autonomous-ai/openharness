@@ -2358,7 +2358,7 @@ describe('cable session', () => {
     expect(hachi[0].pcm.equals(speech)).toBe(true)
   })
 
-  it('logs one line per voice turn: agent, command, language, rate, level, the gate, voice, floor, gain and transcript length, never the words', async () => {
+  it('logs one line per voice turn: agent, command, language, rate, mic gain, level and transcript length, never the words', async () => {
     const lines: string[] = []
     let answer = 'fix the login screen'
     const host = makeHost({ log: (line) => lines.push(line), transcribe: async () => answer })
@@ -2374,16 +2374,23 @@ describe('cable session', () => {
       port.pcm(loud.subarray(0, 6_400)); port.pcm(loud.subarray(6_400))
       port.say({ t: 'voice.end', uploadId: 'loud' })
       await vi.waitFor(() => expect(host.sendTurn).toHaveBeenCalled())
-      expect(lines).toContain('cable: voice turn agent=a2 cmd=goal lang=vi sr=16000 peak=32767 rms=1530 clip=1.25 heard=1 voice=2113 floor=1059 gain=0 transcript=20')
+      expect(lines).toContain('cable: voice turn agent=a2 cmd=goal lang=vi sr=16000 mic=37.5 peak=32767 rms=1530 clip=1.25 heard=1 voice=2113 floor=1059 gain=0 transcript=20')
 
       // The failure Diego saw: silence in, nothing out. The line is what tells the two apart on his dial.
       answer = ''
-      port.say({ t: 'voice.begin', lang: 'en', sr: 16000, uploadId: 'quiet' })
+      port.say({ t: 'voice.begin', lang: 'en', sr: 16000, micGain: 30, uploadId: 'quiet' })
       port.pcm(Buffer.alloc(3200))
       port.say({ t: 'voice.end', uploadId: 'quiet' })
       await vi.waitFor(() => expect(port.sent).toContainEqual(expect.objectContaining({ t: 'voice.error', uploadId: 'quiet' })))
-      expect(lines).toContain('cable: voice turn agent=none cmd=none lang=en sr=16000 peak=0 rms=0 clip=0 heard=0 voice=0 floor=0 gain=0 transcript=0')
-      expect(lines.filter((l) => l.startsWith('cable: voice turn '))).toHaveLength(2)
+      expect(lines).toContain('cable: voice turn agent=none cmd=none lang=en sr=16000 mic=30 peak=0 rms=0 clip=0 heard=0 voice=0 floor=0 gain=0 transcript=0')
+
+      // A gain with no levels is read, and so named, as 37.5 dB: never the raw field.
+      port.say({ t: 'voice.begin', lang: 'en', sr: 16000, micGain: 27, uploadId: 'odd' })
+      port.pcm(Buffer.alloc(3200))
+      port.say({ t: 'voice.end', uploadId: 'odd' })
+      await vi.waitFor(() => expect(port.sent).toContainEqual(expect.objectContaining({ t: 'voice.error', uploadId: 'odd' })))
+      expect(lines).toContain('cable: voice turn agent=none cmd=none lang=en sr=16000 mic=37.5 peak=0 rms=0 clip=0 heard=0 voice=0 floor=0 gain=0 transcript=0')
+      expect(lines.filter((l) => l.startsWith('cable: voice turn '))).toHaveLength(3)
       expect(lines.join('\n')).not.toContain('login')
     } finally { await session.stop() }
   })
