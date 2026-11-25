@@ -2175,6 +2175,26 @@ describe('ObservedSource actions', () => {
       expect(t.src.tabTty(t.src.list().find((a) => a.sessionId === 'b')!.id)).toBe(TTY)
       expect(t.src.othersOnTty(TTY, 4101)).toBe(true)
     })
+
+    // A codex exec Claude Code runs reads Claude's tty: until Claude's own read answers, Claude may be on it.
+    it('one in a tab app whose tty read failed, or has not answered, may be on that tty', async () => {
+      const reads = [(): Promise<TabTty> => Promise.reject(new Error('ps')), (): Promise<TabTty> => new Promise(() => {})]
+      for (const claudeRead of reads) {
+        const t = setup({ tty: vi.fn((pid: number) => (pid === 4101 ? claudeRead() : Promise.resolve({ tty: TTY }))) })
+        t.src.ingest(t.ev('session-start', { ...inIterm, sessionId: 'a', callerPid: 4101 }))
+        t.src.ingest(t.ev('session-start', { ...inIterm, engine: 'codex', sessionId: 'b', callerPid: 4102 }))
+        await flushed()
+        expect(t.src.othersOnTty(TTY, 4102)).toBe(true)
+      }
+    })
+
+    it('one whose tty read answered none is on no tty', async () => {
+      const t = setup({ tty: vi.fn(async (pid: number) => (pid === 4101 ? undefined : { tty: TTY })) })
+      t.src.ingest(t.ev('session-start', { ...inIterm, sessionId: 'a', callerPid: 4101 }))
+      t.src.ingest(t.ev('session-start', { ...inIterm, engine: 'codex', sessionId: 'b', callerPid: 4102 }))
+      await flushed()
+      expect(t.src.othersOnTty(TTY, 4102)).toBe(false)
+    })
   })
 
   it('a text over MAX_TEXT characters is refused before any route', async () => {
