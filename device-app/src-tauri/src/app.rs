@@ -1580,6 +1580,14 @@ mod tests {
         let effects = app.handle(tick(B + 10));
         assert_eq!(effects[0], Effect::Save(SEEN), "{effects:?}");
         starts_the_held_install(&effects[1..]);
+
+        // Signed in elsewhere, as with `harness login`, while it shows: the Later stays saved.
+        let mut app = App::new(later, true, false, B, false).0;
+        answer(&mut app, false);
+        app.handle(Event::Menu(MenuAction::SignIn));
+        app.handle(Event::Auth(Some(true)));
+        installed(&mut app);
+        assert_eq!(app.handle(tick(B + 10)), [Effect::StopWatch, Effect::Relaunch]);
     }
 
     #[test]
