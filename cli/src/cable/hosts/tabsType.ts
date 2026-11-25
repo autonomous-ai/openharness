@@ -165,7 +165,7 @@ export function tabsTyping(deps: TabsTypeDeps): Required<Pick<HostAdapter, 'canT
         check,
         words: () => step({ write: { app, tty, text: words } }),
         enter: () => step({ enter: { app, tty } }),
-      }, false)
+      }, false, 'busy')
       return typeof sent === 'string' ? { notSent: sent } : sent
     },
   }

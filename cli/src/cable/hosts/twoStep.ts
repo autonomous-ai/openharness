@@ -41,9 +41,9 @@ export interface TwoSteps<R> {
 export interface TwoStep<K> {
   /** Whether a send is under way on that key. */
   sending(key: K): boolean
-  /** Runs the steps for those words: true once the Enter went, else the first refusal, or `failed` when a send is
-   *  under way on that key or a step throws. Never rejects. */
-  send<R>(key: K, words: string, steps: TwoSteps<R>, failed: R): Promise<true | R>
+  /** Runs the steps for those words: true once the Enter went, else the first refusal, `busy` (`failed` unless given)
+   *  when a send is under way on that key, or `failed` when a step throws. Never rejects. */
+  send<R>(key: K, words: string, steps: TwoSteps<R>, failed: R, busy?: R): Promise<true | R>
 }
 
 export function createTwoStep<K>(after: (ms: number, run: () => void) => unknown): TwoStep<K> {
@@ -51,8 +51,8 @@ export function createTwoStep<K>(after: (ms: number, run: () => void) => unknown
   const locked = new Set<K>()
   return {
     sending: (key) => locked.has(key),
-    send: async (key, words, steps, failed) => {
-      if (locked.has(key)) return failed
+    send: async (key, words, steps, failed, busy = failed) => {
+      if (locked.has(key)) return busy
       locked.add(key)
       const held: Promise<void>[] = []
       const run = async <R>(step: () => Promise<StepAnswer<R>>): Promise<StepAnswer<R>> => {

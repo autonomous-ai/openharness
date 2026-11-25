@@ -134,7 +134,7 @@ describe('createTwoStep', () => {
     expect(twoStep.sending(2)).toBe(false)
   })
 
-  it('answers a second send on a key still sending its held word, when given one; a step that throws is still failed', async () => {
+  it('answers a second send on a key still sending busy, when given one; a step that throws is still failed', async () => {
     const clock = fakeAfter()
     const twoStep = createTwoStep<number>(clock.after)
     const sent = twoStep.send(1, 'one', fakeSteps().steps, 'failed', 'busy')
