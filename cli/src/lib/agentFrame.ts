@@ -256,12 +256,15 @@ export async function lastActivityAt(s: RegisteredSession): Promise<number> {
     ?? (s.lastHookAt || s.boundAt || s.registeredAt)
 }
 
-/** The launch and the activity a client is shown for [row]: a launch the guard held (`guardHeld`), which starts again
- *  by itself, reads as a launch starting. The registry keeps the true hold, which the restore and the held passes run on. */
-export function shownLaunch(row: Pick<RegisteredSession, 'launch' | 'active' | 'sessionId'>): { launch: AgentLaunch; active: boolean } {
+/** The launch and the activity a client is shown for [row]: a launch the guard held (`guardHeld`) for `native`, which
+ *  starts again by itself, reads as a launch starting. One whose recovery waits for another service (models, the Store,
+ *  search) is that service's hold, as any launch held for it. The registry keeps the true hold, which the restore and
+ *  the held passes run on. */
+export function shownLaunch(row: Pick<RegisteredSession, 'launch' | 'active'>): { launch: AgentLaunch | undefined; active: boolean } {
+  const launch = row.launch
   // A held row is inactive in the registry (setLaunch), which would read as offline; a launch starting is active.
-  if (guardHeld(row)) return { launch: { state: 'starting' }, active: true }
-  return { launch: row.launch ?? { state: 'ready' }, active: row.active }
+  if (launch?.state === 'held' && launch.service === 'native' && guardHeld(row)) return { launch: { state: 'starting' }, active: true }
+  return { launch, active: row.active }
 }
 
 function frameTitle(s: RegisteredSession): string | null {
@@ -301,7 +304,7 @@ export async function agentFrame(
     activity: contextActivity?.() ?? null,
     closePlan: s.closePlan ? { state: s.closePlan.state, ...(s.closePlan.detail ? { detail: s.closePlan.detail } : {}) } : null,
     closeSupported: true,
-    launch: shown.launch,
+    launch: shown.launch ?? { state: 'ready' },
     ...((s.identityHold || s.interpretationHold || s.admissionHold) ? { identityHold: s.identityHold || s.interpretationHold || s.admissionHold } : {}),
     ...(s.identityHold && (NAMED_STATES.has(s.identityHold) || isOpenclawLocalStopped(s.identityHold)) ? { namedState: s.identityHold } : {}),
     createdAt: new Date(s.registeredAt).toISOString(),

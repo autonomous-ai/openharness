@@ -2574,6 +2574,8 @@ class Registry {
         || this.agents.has(archived.agentId) || (archived.sessionId && this.bySession(archived.sessionId)) || !validProcessIdentity(identity)) return null
       const candidate: RegisteredSession = { ...archived, active: true, launch: { state: 'ready' }, processIdentity: identity,
         runtimes: structuredClone(terminal.runtimes), primaryRuntimeKey: terminal.primaryRuntimeKey, tmuxPane: terminal.tmuxPane, touchedAt: Date.now() }
+      // Its own engine ran on: the first launch was delivered, and a later one never reads its receipt again.
+      delete candidate.creationId
       const receipt = await this.persist(deadline, true, false, undefined, { agentId: archived.agentId, candidate,
         displaced: [{ agentId: terminalAgentId, candidate: null }], allowTransaction: true, resumed: true,
         verify: () => { verifyHolder(); verifySaved() }, refresh: authority.refresh })
@@ -2608,6 +2610,8 @@ class Registry {
       if (observation?.gateway !== undefined) candidate.gateway = observation.gateway
       if (observation?.grid !== undefined) candidate.grid = observation.grid
       delete candidate.previousAgentId
+      // An engine runs in the pane: whatever launch the row had is over, and a later one never reads its receipt.
+      delete candidate.creationId
       candidate.launch = { state: 'ready' }
       candidate.active = true
       if (validProcessIdentity(identity)) candidate.processIdentity = identity

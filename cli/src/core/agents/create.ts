@@ -400,7 +400,8 @@ export function createAgentCreator({
     const result = await createAndRegisterPane({
       current, agentId, ...(native ? { nativeToken: native.token } : {}),
       // Named by the caller's intent, never taken from the authority: a create without one has its session label there.
-      ...(context?.creationId ? { creationId: context.creationId } : {}),
+      // A terminal is ready at once, with no first launch to rebuild: it names none.
+      ...(context?.creationId && !isTerminalEngine(engine) ? { creationId: context.creationId } : {}),
       tmuxBackend: createBackend,
       registry,
       engine,

@@ -37,9 +37,7 @@ export interface WifiAgentsDeps {
 export function storeAgents(deps: Pick<WifiAgentsDeps, 'registry' | 'machineId'>): StoreAgent[] {
   const machineId = deps.machineId()
   return deps.registry.list().map(s => {
-    const shown = shownLaunch(s), active = shown.active
-    // No launch record is not a ready one: an unbound agent with none is still starting.
-    const launch = s.launch && shown.launch
+    const { launch, active } = shownLaunch(s)
     return { agentId: s.agentId, machineId, packageId: s.dsh ? installedDsh(s.dsh)?.id ?? s.dsh : null,
       engine: s.engine, workspace: canonicalPath(s.cwd), state: active ? 'active' : 'inactive',
       runtime: !deps.registry.terminalAvailable(s.agentId) || launch?.state === 'failed' ? 'unavailable'

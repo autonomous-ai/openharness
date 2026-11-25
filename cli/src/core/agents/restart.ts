@@ -291,9 +291,11 @@ export function createAgentRestarter({
       if (!current()) return changed
       // The guard held the relaunch: the pane is the held shell under its launch's token, kept so (no publication, no
       // release of the pane). A conversation starts again from it as any launch the guard held, and its restart is
-      // answered now; a row without one would become a held first launch, whose recovery sends its first task again.
+      // answered now. Not a running row with no conversation: its first launch was confirmed, so it names no receipt
+      // (registry.ts `creationId`) and, marked, would be failed. Nor one with new launch words: the row keeps them only
+      // once the engine is back, and the recovery builds from the row, so it would come back with the old ones.
       const heldToken = built.overrides.native?.token
-      if (!outcome.ok && outcome.held && session.sessionId && heldToken) {
+      if (!outcome.ok && outcome.held && session.sessionId && heldToken && launchArgs === undefined) {
         const row = registry.setLaunch(session.agentId, guardHold(session, heldToken))!
         announceSession(row)
         startAgain?.(session.agentId)
