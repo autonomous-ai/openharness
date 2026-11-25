@@ -255,7 +255,9 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
         }
         lastSent = { agentId: end.agentId, host, at }
         const started = unwaited.get(end.agentId)
-        if (started !== undefined && started >= end.since) {
+        // Within 10 s of the end too: the window's send begins before a person picks the agent, up to a minute before
+        // it delivers, and a turn begun meanwhile is another input's.
+        if (started !== undefined && started >= end.since && at - started < DELIVERED_MS) {
           unwaited.delete(end.agentId)
           return deliver(end.agentId, host, started)
         }
