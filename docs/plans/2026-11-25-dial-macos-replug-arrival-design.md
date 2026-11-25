@@ -88,7 +88,7 @@ The `darwin-process-images` path, reused, not copied:
   `devWatch` entry holds the second binary's `sha256`, `size` and `base64`. Same `release.yml` job, same upload.
 - `cli/build-bundle.mjs` defines `__DARWIN_DEV_WATCH__` from that entry beside `__DARWIN_PROCESS_IMAGES__`.
 - `cli/src/lib/nativeProcessImages.ts`'s `prepareProcessImageHelper` takes the folder name as a parameter
-  (`process-images` stays the default), so the dev-watch helper is extracted, hash-checked and kept the same way, in
+  (`folder: string = 'process-images'`, so the core names no component's folder), so the dev-watch helper is extracted, hash-checked and kept the same way, in
   `<runtime>/dev-watch/<sha256>`. No other change to that file. It is a core file (`architecture.coreFiles.txt`):
   the parameter's default keeps what the core does unchanged, and copying the extraction instead would make a second
   way to do it (PM, 2026-11-25). So `npm run test:core` runs once, in a Mac slot the PM grants.

@@ -288,7 +288,7 @@ head, Verification check 8). Depends on: none.
 
 **Interfaces:**
 - Produces: `prepareProcessImageHelper(artifact: ProcessImageArtifact, runtimeDirectory: string, folder:
-  'process-images' | 'dev-watch' = 'process-images'): Promise<string | null>`. Nothing else in the file changes;
+  string = 'process-images'): Promise<string | null>`. Nothing else in the file changes;
   `bundledProcessImageHelper` keeps calling it with two arguments.
 
 - [ ] **Step 1: Write the failing test** in `describe('bundled native helper preparation')`

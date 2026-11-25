@@ -88,7 +88,7 @@ async function verifyFile(path: string, artifact: ProcessImageArtifact): Promise
  * every failure. No account state, sessions or existing files are replaced. */
 export async function prepareProcessImageHelper(
   artifact: ProcessImageArtifact, runtimeDirectory: string,
-  folder: 'process-images' | 'dev-watch' = 'process-images',
+  folder: string = 'process-images',
 ): Promise<string | null> {
   let temporary: string | undefined
   try {
