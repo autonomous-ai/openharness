@@ -2388,13 +2388,14 @@ describe('cable session', () => {
       await vi.waitFor(() => expect(host.sendTurn).toHaveBeenCalled())
       expect(lines).toContain('cable: voice turn agent=a2 cmd=goal lang=vi sr=16000 peak=32767 rms=1530 clip=1.25 heard=1 voice=2113 floor=1059 gain=0 sent=1 transcript=20')
 
-      // The failure Diego saw: silence in, nothing out. The line is what tells the two apart on his dial.
+      // The failure Diego saw: silence in, nothing out. The line is what tells the two apart on his dial. A second, so it
+      // is sent and the transcriber answers it: a shorter one the gate heard nothing in is not sent (sent=0, below).
       answer = ''
       port.say({ t: 'voice.begin', lang: 'en', sr: 16000, uploadId: 'quiet' })
-      port.pcm(Buffer.alloc(3200))
+      for (let at = 0; at < 32_000; at += 8_000) port.pcm(Buffer.alloc(8_000))
       port.say({ t: 'voice.end', uploadId: 'quiet' })
       await vi.waitFor(() => expect(port.sent).toContainEqual(expect.objectContaining({ t: 'voice.error', uploadId: 'quiet' })))
-      expect(lines).toContain('cable: voice turn agent=none cmd=none lang=en sr=16000 peak=0 rms=0 clip=0 heard=0 voice=0 floor=0 gain=0 sent=0 transcript=0')
+      expect(lines).toContain('cable: voice turn agent=none cmd=none lang=en sr=16000 peak=0 rms=0 clip=0 heard=0 voice=0 floor=0 gain=0 sent=1 transcript=0')
       expect(lines.filter((l) => l.startsWith('cable: voice turn '))).toHaveLength(2)
       expect(lines.join('\n')).not.toContain('login')
     } finally { await session.stop() }

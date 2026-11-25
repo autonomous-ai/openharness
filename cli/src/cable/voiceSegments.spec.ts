@@ -236,6 +236,15 @@ describe('VoiceSegments', () => {
     expect(second.sent()).toEqual([SECOND])
   })
 
+  it('the tail of a recording a segment was cut from is sent, however short and quiet', async () => {
+    // 60.5 s of silence: the cut leaves 0.52 s the gate heard nothing in, which is the end of a recording, not all of it.
+    const { segments, sent } = setup({ transcribe: answering('one', '') })
+    segments.push(tone(60.5, 16_000, 0))
+    await expect(segments.finish()).resolves.toBe('one')
+    expect(sent()).toEqual([1_919_360, 16_640])
+    expect(segments.counts()).toEqual({ segments: 2, early: 1, retries: 0 })
+  })
+
   it('a failure before finish() is retried once, at once; a second stops the recording', async () => {
     const unavailable = new Error(UNAVAILABLE)
     const transcribe = vi.fn<SegmentTranscriber>()

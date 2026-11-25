@@ -411,17 +411,22 @@ describe('each voice turn reports one end', () => {
 
   // The dial's own voice gate heard nothing in either: a press with nothing said.
   it('each voice turn reports one end: no_speech, an empty transcript of silence or a short clip', async () => {
-    const silent = await talk({ transcribe: async () => '' })
+    // A second of silence: long enough to be sent, and the transcriber answers it with nothing.
+    const silentTranscribe = vi.fn(async () => '')
+    const silent = await talk({ transcribe: silentTranscribe })
     silent.port.say({ t: 'voice.begin', uploadId: 'u1', agentId: 'a1' })
-    silent.port.pcm(Buffer.alloc(8_000))
+    for (let at = 0; at < 32_000; at += 8_000) silent.port.pcm(Buffer.alloc(8_000))
     silent.port.say({ t: 'voice.end' }); await silent.answered()
+    expect(silentTranscribe).toHaveBeenCalledOnce()
     expect(silent.voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'no_speech', agentId: 'a1' }]])
 
-    // 100 ms, loud: a tap, under the gate's 320 ms.
-    const short = await talk({ transcribe: async () => '' })
+    // 100 ms, loud: a tap, under the gate's 320 ms, and under a second, so it is never sent.
+    const shortTranscribe = vi.fn(async () => '')
+    const short = await talk({ transcribe: shortTranscribe })
     short.port.say({ t: 'voice.begin', uploadId: 'u1', agentId: 'a1' })
     short.port.pcm(Buffer.alloc(3200, 7))
     short.port.say({ t: 'voice.end' }); await short.answered()
+    expect(shortTranscribe).not.toHaveBeenCalled()
     expect(short.voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'no_speech', agentId: 'a1' }]])
   })
 
