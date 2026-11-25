@@ -7,7 +7,7 @@ import { createCodexQueue } from '../../../cable/hosts/codexQueue.js'
 import { env } from '../../../config/env.js'
 import type { CoreApi, CorePorts, DevicesPort } from '../../../core/api.js'
 import type { DevicesDeps, startDevices } from '../../../services/devices.js'
-import { claudeSessions, orcaSession, scenario, threads } from '../catalog.js'
+import { claudeSessions, orcaSession, scenario, threads, vscode } from '../catalog.js'
 import type { Platform, Scenario } from '../types.js'
 import { installClock } from './clock.js'
 import { machine } from './machine.js'
@@ -179,6 +179,16 @@ describe("tier A's world records every send, failing closed", () => {
     const { world, deps } = worldOn('win32', underTmux)
     expect(machine.installed.has('tmux')).toBe(false)
     await deps.orca!.run('/opt/eval/bin/tmux', listPanes, 1_000)
+    expect(world.gaps).toEqual(['a command tier A does not answer: tmux'])
+  })
+
+  it("tmux is Orca's world's alone: a VS Code session under tmux finds no tmux, and a run is a gap", async () => {
+    const underTmux = scenario({ id: 'W3', app: 'vscode', title: 'Eval a VS Code agent under tmux', dims: ['D1'], steps: [],
+      checks: [], probes: [], sessions: [vscode('a', { tmux: true })] })
+    machine.reset()
+    const { world, deps } = worldOn('darwin', underTmux)
+    expect(machine.installed.has('tmux')).toBe(false)
+    await deps.orca!.run('/opt/eval/bin/tmux', ['list-panes', '-a', '-F', '#{pane_id}'], 1_000)
     expect(world.gaps).toEqual(['a command tier A does not answer: tmux'])
   })
 
