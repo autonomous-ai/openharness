@@ -581,8 +581,9 @@ function paneSelect(argv: string[], world: World): { program: 'tmux' | 'herdr'; 
 
 /**
  * The session whose pane a tmux command shows: one it selects (paneSelect), or the one it switches a client to,
- * `switch-client … -t pane:<key>`, as the devices do when tmux's lookup finds no app for the client (on macOS, Orca's
- * helper; docs/plans/2026-11-25-dial-orca-tmux-o11-plan.md, "What this plan decides"). Both show that pane in its tab.
+ * `switch-client … -t pane:<key>`, as the devices do when tmux's lookup finds no app for the client: on macOS the
+ * client's parents end at Orca's terminal host, whose app tier A does not record
+ * (docs/plans/2026-11-25-dial-orca-tmux-o11-plan.md, "What this plan decides"). Both show that pane in its tab.
  */
 function tmuxShows(argv: string[], world: World): string | undefined {
   if (programOf(argv) !== 'tmux') return undefined

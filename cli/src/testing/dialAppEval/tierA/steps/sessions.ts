@@ -221,11 +221,12 @@ export function nextTty(world: TierAWorld): string | undefined {
 }
 
 /**
- * The session's Orca pane (the plan's Decision 5): a shell on a terminal of its own, made by Orca's terminal host (on no
- * terminal: orcaHostOf), or a held pane's by a maker of its own that is not Orca's. Under tmux the pane's
- * shell runs tmux's client, and the agent runs in a tmux pane (tmux.ts tmuxPane), on another terminal. The devices'
- * maker check reads each chain as the machine's `ps` would show it (scannedApp.ts ptyMaker). Gives the pane's shell, the
- * shell the agent runs under, and the pane's other processes, which end with it: Orca's host runs on for its other panes.
+ * The session's Orca pane (the plan's Decision 5): a shell on a terminal of its own, made by Orca's terminal host (on
+ * no terminal: a child of launchd or init, or on Linux of Orca's main process; orcaHostOf), or a held pane's by a maker
+ * of its own that is not Orca's. Under tmux the pane's shell runs tmux's client, and the agent runs in a tmux pane
+ * (tmux.ts tmuxPane), on another terminal. The devices' maker check reads each chain as the machine's `ps` would show
+ * it (scannedApp.ts ptyMaker). Gives the pane's shell, the shell the agent runs under, and the pane's other processes,
+ * which end with it: Orca's host runs on for its other panes.
  */
 function orcaPane(world: TierAWorld, s: SessionDef): { shell: number; parent: number; others: number[] } {
   const state = stateOf(world)

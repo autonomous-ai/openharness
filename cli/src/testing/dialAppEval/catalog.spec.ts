@@ -411,15 +411,15 @@ describe('the catalog', () => {
     // gap between quit and relaunch; O4's rests after the focus, the tap and the swipe, O7's after the tap and the
     // swipe, O8's two turns and the pause between them, O10's rest on b, O11's rests after the tap and the swipe, O12's
     // time quit, its time past the devices' next look after the relaunch and its rest after the focus, O16's agents a
-    // second apart, O17's rest and its time unplugged, and O20's after the tap and the swipe; iTerm2's agents a second apart (started), I3's and I15's turns
-    // (turned), I3's rests after each pick, I4's pause before and after the split and its rest after the first tap,
-    // I6's rest, I7's rest after the first tap, I9's rests on b and on a and its wait after the echo, I10's rest after
-    // the move to a's pane, I10's and I11's rests after the select, I13's rests after the detach and the attach, I14's
-    // time past the devices' next look after herdr starts again, I15's time after the relaunch and its rest after the
-    // first tap, I16's long turn, I17's turn, I20's rest on c and I21's rest and its time unplugged; VH1's rest on a,
-    // UH3's voice 200 ms after the prompt, OH1's rest on a and OH2's voice 200 ms after the focus; IH1's voice 200 ms
-    // after the select, IH2's rests after the attach and each select, its two turns and the pause between them, IH3's
-    // agents a second apart, IH4's turn (turned) and IH5's turn.
+    // second apart, O17's rest and its time unplugged, and O20's after the tap and the swipe; iTerm2's agents a second
+    // apart (started), I3's and I15's turns (turned), I3's rests after each pick, I4's pause before and after the split
+    // and its rest after the first tap, I6's rest, I7's rest after the first tap, I9's rests on b and on a and its wait
+    // after the echo, I10's rest after the move to a's pane, I10's and I11's rests after the select, I13's rests after
+    // the detach and the attach, I14's time past the devices' next look after herdr starts again, I15's time after the
+    // relaunch and its rest after the first tap, I16's long turn, I17's turn, I20's rest on c and I21's rest and its
+    // time unplugged; VH1's rest on a, UH3's voice 200 ms after the prompt, OH1's rest on a and OH2's voice 200 ms
+    // after the focus; IH1's voice 200 ms after the select, IH2's rests after the attach and each select, its two turns
+    // and the pause between them, IH3's agents a second apart, IH4's turn (turned) and IH5's turn.
     const starts = (id: string, n: number): string[] => Array<string>(n - 1).fill(`${id} 1000`)
     expect(waits('own')).toEqual(['C6 5000', 'C9 1000', 'C9 3500', 'C10 2000', 'C11 1000', 'C11 3000', 'X3 5000', 'X8 2000',
       'X11 300', 'X11 300', ...starts('V1', 4), ...starts('V2', 20), ...starts('V3', 2), ...starts('V4', 2), ...starts('V5', 2),
