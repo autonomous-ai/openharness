@@ -89,7 +89,9 @@ The `darwin-process-images` path, reused, not copied:
 - `cli/build-bundle.mjs` defines `__DARWIN_DEV_WATCH__` from that entry beside `__DARWIN_PROCESS_IMAGES__`.
 - `cli/src/lib/nativeProcessImages.ts`'s `prepareProcessImageHelper` takes the folder name as a parameter
   (`process-images` stays the default), so the dev-watch helper is extracted, hash-checked and kept the same way, in
-  `<runtime>/dev-watch/<sha256>`. No other change to that file.
+  `<runtime>/dev-watch/<sha256>`. No other change to that file. It is a core file (`architecture.coreFiles.txt`):
+  the parameter's default keeps what the core does unchanged, and copying the extraction instead would make a second
+  way to do it (PM, 2026-11-25). So `npm run test:core` runs once, in a Mac slot the PM grants.
 - A dev build without the artifact has no helper: `watchDialArrivals` returns `undefined`, the tick runs, as today.
 
 Why C and not Rust (PM, 2026-11-25): AGENTS.md rule 9 lists no C, but the CLI already ships one macOS helper in C,
@@ -100,9 +102,10 @@ program that only blocks in `kevent()`. So this helper is C on that precedent, a
 
 ### In the daemon: `watchDialArrivals` on darwin (`cli/src/cable/serial.ts`)
 
-- New dep `spawnDevWatch: () => ChildProcess | null` (null: no helper in this build). The real one awaits nothing
-  itself: it starts `bundledDevWatchHelper()` and spawns `--watch` when the path resolves, as the Windows branch does
-  with its import.
+- New dep `spawnDevWatch: () => Promise<ChildProcess> | null` (null at once: no helper in this build, and then
+  nothing is logged: a dev build without the artifact is not a failure, and a release always carries it). Writing the
+  helper to disk is async, so `watchDialArrivals` does not await it: it subscribes when the promise resolves, as the
+  Windows branch does with its import.
 - Each `dev` line calls `signal()`. The header line and anything else are ignored.
 - The helper's exit or spawn error: one line, `cable: /dev watch ended (<kind>) — a new dial is found by the next scan`
   (the Linux wording), no respawn. The tick keeps working; a daemon restart arms the watch again.
@@ -139,8 +142,11 @@ Red first, at the layer where the behavior lives:
 - No e2e: the e2e suite gives the fleet its own pseudo-terminal discovery, which arms no OS watch by design.
 - No real replug of a dial: dropped by the PM (2026-11-25).
 
-Local gates: no core file changes, so `npm run test:core` is not needed. The native test, any bundle or e2e check and
-any heavy suite run only in a Mac slot the PM grants.
+Local gates: `npm run test:core` (for the one parameter in `nativeProcessImages.ts`), the native test, any bundle
+check and any heavy suite run only in a Mac slot the PM grants.
+
+Measures (AGENTS.md rule 8): none added at run time (PM, 2026-11-25). The latency target is held by the native
+test, which records node-to-line time; the existing `cable:` connect log line still shows when a dial attached.
 
 ## Size
 
