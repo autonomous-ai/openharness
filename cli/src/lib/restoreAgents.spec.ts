@@ -850,6 +850,7 @@ describe('restoreAgents — which agents get a pane back', () => {
       relaunchOverrides: async () => ({ ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [] } }),
       downgradedPermission: async () => ({ bypassPermission: false }),
       prepareSessionResume: async () => {}, refreshGridWebSearch: () => {},
+      receipts: { firstLaunchTask: () => null },
       launch: (entry) => {
         if (entry.agentId === 'agent-a') throw new WindowsBatchLaunchRefused('claude', 'C:\\tools\\claude.cmd')
         return { argv: [entry.engine, '--resume', entry.sessionId] }
