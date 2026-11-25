@@ -2634,7 +2634,8 @@ export class CableSession {
     const level = segments.level()
     const logTurn = (transcript: string) => this.log(`cable: voice turn agent=${turn.agentId ?? 'none'} ` +
       `cmd=${turn.cmd || 'none'} lang=${turn.lang} sr=${turn.rate} peak=${level.peak} rms=${level.rms} ` +
-      `heard=${level.heard ? 1 : 0} voice=${level.voice} floor=${level.floor} gain=${level.gain} transcript=${transcript}`)
+      `clip=${level.clip} heard=${level.heard ? 1 : 0} voice=${level.voice} floor=${level.floor} gain=${level.gain} ` +
+      `transcript=${transcript}`)
     let transcript: string
     try {
       transcript = await finished
