@@ -552,15 +552,33 @@ export class ObservedSource implements HostSource {
     }
     const target = this.target(e)
     if (!actions.canOpen(e.agent.id, target)) return false
+    const tab = this.placedTab(e, target)
+    if (tab) {
+      // One that did not come still leaves the open its multiplexer's pane and the app.
+      await tab.adapter.focus(tab.pane)
+      if (!latest()) return 'superseded'
+      if (!this.live(e)) return false
+    }
     const opened = await actions.open(e.agent.id, target)
     if (opened) await this.raiseAfter(agent)
     return opened
   }
 
+  /** The pane a nested agent was placed at in an app that switches before its own open, other than the tapped pane's:
+   *  the tab its multiplexer's client runs in, which the open never brings, as it names one pane (eval O11, 2026-11-25:
+   *  the app came forward on the tab it showed). Never one of its own panes nor a held one, and only a focus: a place
+   *  is a guess, shown wrong it costs a look (shownOnly). */
+  private placedTab(e: Entry, target: OpenTarget): Located | undefined {
+    if (!e.agent.nest) return undefined
+    return this.shownOnly(e).find(({ adapter, pane }) => adapter.tap === 'before' && adapter.id !== target.pane?.adapter
+      && !pane.held && !e.panes.some((own) => own.pane === pane) && adapter.canFocus(pane))
+  }
+
   /** `open -b` brings the app forward on whichever tab it had: a pane that comes after its app (a tab) is raised once it
    *  came, also when the tapped pane was the multiplexer's inside that tab. Read after the open, as an agent that ended
    *  or moved meanwhile has no such pane to raise. A nested agent's is raised without asking whether a rest could show
-   *  it: one shown only while its app is in front would be skipped while the front report lags the open. */
+   *  it: one shown only while its app is in front would be skipped while the front report lags the open. Its placed tab
+   *  in an app that switches before its own was switched to before the open (placedTab). */
   private async raiseAfter(agent: HostAgent): Promise<void> {
     const e = this.entries.get(agent.id)
     if (e?.outer && this.live(e)) {
@@ -681,7 +699,9 @@ export class ObservedSource implements HostSource {
   }
 
   /** What a tap opens: its app, and the first of its panes the opener brings forward. Asked at each look, as a rest's.
-   *  An agent placed by its caller, or found by the scan, has had no hook to name its app: its pane's adapter names it. */
+   *  An agent placed by its caller, or found by the scan, has had no hook to name its app: its pane's adapter names it.
+   *  A nested agent's placed tab in another app that switches first is not the target: focus switches to it before the
+   *  open (placedTab). */
   private target(e: Entry): OpenTarget {
     const panes = this.shownOnly(e)
     // The pane of the host that made its terminal is where it is: one before it in the adapters' order only holds it

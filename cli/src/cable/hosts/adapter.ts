@@ -127,7 +127,10 @@ export interface HostAdapter {
    *  (a tab is selected once its app is in front). A pane that comes after its app is raised by the source once the app
    *  came (observed.ts raiseAfter): the tab holding a nested agent's multiplexer client whenever `canFocus` says so,
    *  another only when it is the pane a rest would show. So for an agent not nested, an adapter with `tap: 'after'`
-   *  needs `show`: without it, its `focus` never runs from a tap. */
+   *  needs `show`: without it, its `focus` never runs from a tap. A nested agent's pane placed in a `tap: 'before'`
+   *  adapter other than the tapped pane's (an Orca tab holding its tmux client) is switched to before the open
+   *  (observed.ts placedTab): the open names one pane, and its app came forward on the tab it showed (eval O11,
+   *  2026-11-25). */
   readonly tap: 'before' | 'instead' | 'after'
   /** Its app's macOS bundle id: a tap brings that app forward for an agent at one of its panes whose app no hook named,
    *  one its caller placed there or the scan found (observed.ts target()). */
