@@ -1527,23 +1527,45 @@ mod tests {
     }
 
     #[test]
-    fn an_open_window_delays_the_relaunch() {
+    fn an_open_window_does_not_delay_the_relaunch() {
+        // Sign in left open, as at a first launch: the new process offers it again.
         let mut app = on_sign_in();
         installed(&mut app);
-        assert!(!has(&app.handle(tick(B + 10)), &Effect::Relaunch));
-        app.handle(Event::WindowClosed);
-        assert!(app.handle(tick(B + 15)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
+        assert!(app.handle(tick(B + 10)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
+    }
+
+    #[test]
+    fn a_follow_screen_open_at_the_relaunch_is_asked_again_by_the_new_process() {
+        let mut app = on_follow();
+        installed(&mut app);
+        assert_eq!(app.handle(tick(B + 10)), [Effect::Save(SEEN), Effect::StopWatch, Effect::Relaunch]);
+
+        // Where installing ends the app, the install ends it too.
+        let mut app = found_where(true);
+        answer(&mut app, true);
+        assert_eq!(shows(&app.handle(follow(false, true))), [follow_offer()]);
+        assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
+        held(&mut app);
+        let effects = app.handle(tick(B + 10));
+        assert_eq!(effects[0], Effect::Save(SEEN), "{effects:?}");
+        starts_the_held_install(&effects[1..]);
     }
 
     #[test]
     fn an_install_waiting_to_relaunch_checks_no_more() {
-        let mut app = on_sign_in();
-        installed(&mut app);
-        // The window stays open past a minute: this process is still the old version, and a check would find the
-        // installed one again and install it a second time.
-        assert!(!has(&app.handle(tick(B + 10 + M1)), &Effect::CheckUpdate));
-        app.handle(Event::WindowClosed);
-        assert!(app.handle(tick(B + 15 + M1)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
+        let mut app = found();
+        app.handle(Event::WatchExit(Some(3)));
+        assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
+        app.handle(Event::WatchExit(Some(3)));
+        assert!(has(&app.handle(tick(B + 10)), &Effect::RunStart));
+        app.handle(Event::UpdateChecked(Some("0.1.3".into())));
+        app.handle(Event::UpdateDownloaded);
+        app.handle(Event::UpdateInstalled);
+        // A daemon start holds the relaunch past a minute: this process is still the old version, and a check would
+        // find the installed one again and install it a second time.
+        assert!(!has(&app.handle(tick(B + 5 + M1)), &Effect::CheckUpdate));
+        app.handle(Event::StartDone { ok: true });
+        assert!(app.handle(tick(B + 10 + M1)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
     }
 
     /// The check finds 0.1.3 and its download answers, where installing ends the app: no row and no install yet.
@@ -1563,13 +1585,11 @@ mod tests {
 
     #[test]
     fn where_the_install_exits_the_app_it_waits_for_what_a_relaunch_waits_for() {
-        // The window open.
+        // The window open does not hold it: the new process shows it again.
         let mut app = on_sign_in_where(true);
         assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
         held(&mut app);
-        assert!(!has(&app.handle(tick(B + 10)), &Effect::InstallUpdate));
-        app.handle(Event::WindowClosed);
-        starts_the_held_install(&app.handle(tick(B + 15)));
+        starts_the_held_install(&app.handle(tick(B + 10)));
 
         // A sign-in running, its window closed.
         let mut app = on_sign_in_where(true);
@@ -1605,15 +1625,16 @@ mod tests {
 
     #[test]
     fn a_held_install_starts_no_second_check() {
-        let mut app = on_sign_in_where(true);
+        let mut app = found_where(true);
+        app.handle(Event::WatchExit(Some(3)));
         assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
+        app.handle(Event::WatchExit(Some(3)));
+        assert!(has(&app.handle(tick(B + 10)), &Effect::RunStart));
         held(&mut app);
-        // The window stays open for minutes: the download waits to be installed, and a check would fetch it again.
-        for now in [B + 5 + M1, B + 5 + 2 * M1] {
-            assert!(!has(&app.handle(tick(now)), &Effect::CheckUpdate), "{now}");
-        }
-        app.handle(Event::WindowClosed);
-        starts_the_held_install(&app.handle(tick(B + 10 + 2 * M1)));
+        // A daemon start holds it past a minute: the download waits to be installed, and a check would fetch it again.
+        assert!(!has(&app.handle(tick(B + 5 + M1)), &Effect::CheckUpdate));
+        app.handle(Event::StartDone { ok: true });
+        starts_the_held_install(&app.handle(tick(B + 10 + M1)));
     }
 
     #[test]
