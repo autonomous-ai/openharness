@@ -239,13 +239,13 @@
    "runs": [
     {
      "logs": [
-      "error [hooks] Cursor hooks file is invalid JSON; leaving it unchanged: <root>/home/.config/cursor/hooks.json"
+      "log [hooks] installed Cursor lifecycle/task hooks → <hash <root>/home/.config/cursor/hooks.json>"
      ],
      "threw": null
     },
     {
      "logs": [
-      "error [hooks] Cursor hooks file is invalid JSON; leaving it unchanged: <root>/home/.config/cursor/hooks.json"
+      "log [hooks] Cursor lifecycle/task hooks already installed"
      ],
      "threw": null
     }
@@ -262,7 +262,7 @@
     "home/.config/cursor/hooks.json": {
      "type": "file",
      "mode": "644",
-     "text": "aa25e978046d680e"
+     "text": "f46cc82e93ac3dd3"
     }
    }
   },
@@ -7440,13 +7440,14 @@
    "runs": [
     {
      "logs": [
-      "error [hooks] Devin config file is invalid JSON; leaving it unchanged: <root>/home/.config/devin/config.json"
+      "log [hooks] installed Devin SessionStart/UserPromptSubmit/Stop/SessionEnd hooks → <hash <root>/home/.config/devin/config.json>",
+      "log [hooks] (takes effect on the next devin session start)"
      ],
      "threw": null
     },
     {
      "logs": [
-      "error [hooks] Devin config file is invalid JSON; leaving it unchanged: <root>/home/.config/devin/config.json"
+      "log [hooks] Devin session hooks already installed"
      ],
      "threw": null
     }
@@ -7463,7 +7464,7 @@
     "home/.config/devin/config.json": {
      "type": "file",
      "mode": "644",
-     "text": "aa25e978046d680e"
+     "text": "139af7531520d198"
     }
    }
   },
@@ -8370,13 +8371,14 @@
    "runs": [
     {
      "logs": [
-      "error [hooks] Command Code settings file is invalid JSON; leaving it unchanged: <root>/home/.commandcode/settings.json"
+      "log [hooks] installed Command Code SessionStart/Stop hooks → <hash <root>/home/.commandcode/settings.json>",
+      "log [hooks] (takes effect on the next commandcode session start)"
      ],
      "threw": null
     },
     {
      "logs": [
-      "error [hooks] Command Code settings file is invalid JSON; leaving it unchanged: <root>/home/.commandcode/settings.json"
+      "log [hooks] Command Code session hooks already installed"
      ],
      "threw": null
     }
@@ -8389,7 +8391,7 @@
     "home/.commandcode/settings.json": {
      "type": "file",
      "mode": "644",
-     "text": "aa25e978046d680e"
+     "text": "e6ba49d50df273e3"
     }
    }
   },
@@ -9226,15 +9228,14 @@
    "runs": [
     {
      "logs": [
-      "error [hooks] Grok hooks file is invalid JSON; leaving it unchanged: <root>/home/.grok/hooks/harness.json",
-      "error [hooks] fix the file, then restart harness login"
+      "log [hooks] installed Grok lifecycle/StopFailure hooks → <hash <root>/home/.grok/hooks/harness.json>",
+      "log [hooks] (takes effect on the next Grok session start)"
      ],
      "threw": null
     },
     {
      "logs": [
-      "error [hooks] Grok hooks file is invalid JSON; leaving it unchanged: <root>/home/.grok/hooks/harness.json",
-      "error [hooks] fix the file, then restart harness login"
+      "log [hooks] Grok lifecycle/StopFailure hooks already installed"
      ],
      "threw": null
     }
@@ -9251,7 +9252,7 @@
     "home/.grok/hooks/harness.json": {
      "type": "file",
      "mode": "644",
-     "text": "aa25e978046d680e"
+     "text": "fdf01705b60e85fe"
     }
    }
   },
@@ -10188,15 +10189,14 @@
    "runs": [
     {
      "logs": [
-      "error [hooks] agy hooks file is invalid JSON; leaving it unchanged: <root>/home/.gemini/config/hooks.json",
-      "error [hooks] fix the file, then restart harness login"
+      "log [hooks] installed agy lifecycle hooks → <hash <root>/home/.gemini/config/hooks.json>",
+      "log [hooks] (takes effect on the next agy session start)"
      ],
      "threw": null
     },
     {
      "logs": [
-      "error [hooks] agy hooks file is invalid JSON; leaving it unchanged: <root>/home/.gemini/config/hooks.json",
-      "error [hooks] fix the file, then restart harness login"
+      "log [hooks] agy lifecycle hooks already installed"
      ],
      "threw": null
     }
@@ -10213,7 +10213,7 @@
     "home/.gemini/config/hooks.json": {
      "type": "file",
      "mode": "644",
-     "text": "aa25e978046d680e"
+     "text": "49e01513b7aa4e4b"
     }
    }
   },

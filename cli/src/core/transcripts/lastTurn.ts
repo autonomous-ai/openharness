@@ -9,7 +9,7 @@
 import type { EngineTranscript } from '../../engines/facets/transcript.js'
 import { keepsStore } from '../../engines/otherEngines.js'
 import { EngineReadError } from '../../engines/worker/protocol.js'
-import { transcriptReadIdentity } from './readIdentity.js'
+import { readStillCurrent } from './readIdentity.js'
 import type { LastTurnText } from '../../engines/kit/events.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 
@@ -27,10 +27,10 @@ export function createLastTurnReader({ bySession, readerFor, storeOf }: LastTurn
     // No reader, no last turn: a shell keeps no transcript, and every other engine has one.
     const reader = readerFor(s.engine)
     if (!reader) return null
-    const identity = transcriptReadIdentity(s)
+    const current = readStillCurrent(s)
     try {
       const answer = await reader.lastTurnText(keepsStore(s.engine) ? { ...s, store: await storeOf(s) } : s)
-      return transcriptReadIdentity(bySession(sessionId)) === identity ? answer : null
+      return current(bySession(sessionId)) ? answer : null
     } catch (error) {
       console.warn(`[engine ${s.engine}] last turn unavailable · ${error instanceof EngineReadError ? error.code : 'ENGINE_UNAVAILABLE'}`)
       return null

@@ -24,6 +24,20 @@ export const RESUME_READINESS_BUDGET_MS = 10 * 60_000
 export const resumeChanged = { ok: false, error: 'AGENT_CHANGED', detail: 'The harness changed while opening. Select it again.' } as const
 export const resumeUnconfirmed = { ok: false, error: 'RESUME_UNCONFIRMED', detail: 'The saved conversation has not been confirmed yet. Check the terminal, then select the harness again to check its status.' } as const
 
+/** Verdicts a running engine is asked about again rather than repeated: never confirmed is not disproved, and
+ *  RESUME_SESSION_MISMATCH is an older build's, for a hook of the resumed process naming another conversation, which
+ *  binds it now (`registry.register`). Repeated, it kept a running engine "Start failed" until discovery healed it. */
+export const reconfirmed = (error: string) => error === 'RESUME_UNCONFIRMED' || error === 'RESUME_SESSION_MISMATCH'
+
+/** [row] holds the conversation [sessionId] names, or one [process] (the resumed engine, as its pane showed it) moved
+ *  it onto since: a `/clear`, a `/new`, Codex's first prompt naming a new thread, or the first one of a resume that had
+ *  none, each bound by that process's own hook (`registry.register`). The engine running is the truth; another
+ *  process's conversation on the row is another owner's. */
+export function holdsResumedConversation(row: RegisteredSession, sessionId: string, process: ProcessIdentity | null | undefined): boolean {
+  return row.sessionId === sessionId
+    || sameProcessIdentity(row.processIdentity, process) && (!sessionId || !!row.earlierSessionIds?.includes(sessionId))
+}
+
 /** Enter means attach or exact resume. A route, shell or allocated pane alone is not success. */
 const liveIdentity = (row: RegisteredSession) => JSON.stringify([
   row.agentId, row.engine, row.sessionId, row.registeredAt, row.codexHome,
@@ -57,11 +71,10 @@ export async function resumeStoppedAgent(deps: ResumeStoppedDeps): Promise<Resta
       if (runtime.state === 'unknown') return resumeUnconfirmed
       if (runtime.state === 'alive') {
         if (latest.resumeOnly && latest.launch?.state === 'failed') {
-          // Never confirmed is not the same as disproved: the engine is running, so ask for
-          // confirmation again rather than repeating the old verdict.
-          if (latest.launch.error === 'RESUME_UNCONFIRMED') return deps.waitForReady(latest)
+          // The engine is running, so ask for confirmation again rather than repeating the old verdict.
+          if (reconfirmed(latest.launch.error)) return deps.waitForReady(latest)
           // Any other verdict is reported as ITSELF. Relabelling them all "not confirmed yet" told
-          // somebody whose resume had reopened the wrong conversation to go and check the terminal,
+          // somebody whose resume had failed for another reason to go and check the terminal,
           // and hid the one fact that would have explained what they were looking at.
           return { ok: false, error: latest.launch.error, detail: latest.launch.detail }
         }
@@ -125,7 +138,7 @@ export async function waitForResumedAgent(saved: RegisteredSession, deps: Resume
     if (!deps.current()) return resumeChanged
     const row = deps.session()
     if (!row) return { ok: false, error: 'RESUME_FAILED', detail: 'The resume runtime disappeared. The saved conversation is still retained.' }
-    if (row.sessionId !== saved.sessionId || row.engine !== saved.engine) return resumeChanged
+    if (!holdsResumedConversation(row, saved.sessionId, process ?? seen?.process) || row.engine !== saved.engine) return resumeChanged
     if (row.launch?.state === 'failed') return { ok: false, error: row.launch.error, detail: row.launch.detail }
     // A pane tmux could not read is asked again: a call that timed out while the daemon's event loop
     // was held said the harness had exited, and a resume that was coming up was failed for it.
@@ -149,14 +162,14 @@ export async function waitForResumedAgent(saved: RegisteredSession, deps: Resume
     // `lastHookAt: 0` while every fresh launch beside them had hooked. Waiting for it turned a
     // working harness into ten minutes of "Starting" and then a permanent "Start failed" over a pane
     // the person could type in — with `active` cleared and the desk refusing to open it, the cost of
-    // the strict rule was never the resume, it was the harness. A resume that reopened the WRONG
-    // conversation is still caught, by `registry.register`'s mismatch guard, when the hook arrives.
+    // the strict rule was never the resume, it was the harness. A resume whose engine reports another
+    // conversation binds it as a rotation when its hook arrives (`registry.register`).
     //
     // Up means still up a settle time later. A launch the engine refuses (`codex resume` after an
     // update dropped it) runs for an instant, and a resume that saw it in that instant was confirmed
     // over a dead engine (`e2e/updates.e2e.ts`). The restart holds the same rule (`swap.ts`). Every
-    // check above runs on each probe in between, so a pane that exits or a row a hook fails wins
-    // over the confirmation; another process in the pane starts the settle time again.
+    // check above runs on each probe in between, so a pane that exits or a verdict another path puts
+    // on the row wins over the confirmation; another process in the pane starts the settle time again.
     if (process) {
       if (!seen || !sameProcessIdentity(seen.process, process)) seen = { process, at: now() }
       if (now() - seen.at >= ENGINE_SETTLE_MS) return { ok: true, session: { ...row, processIdentity: process }, resumed: resumesConversation(saved.engine, saved.sessionId) }

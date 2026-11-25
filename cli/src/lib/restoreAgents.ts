@@ -44,6 +44,7 @@ import type { TerminalDispatchControl, TerminalRuntimeRef } from './terminalType
 import type { WindowsPaneLaunch } from './windows/engineStart.js'
 import { processAmong, sameProcessIdentity, sameTerminalPlacement, terminalInstanceId, terminalRouteKey } from './terminalRuntime.js'
 import { resumesConversation } from './resumeCapability.js'
+import { holdsResumedConversation } from './resumeStoppedAgent.js'
 import { codeOrLength, errorKind, sid } from './log.js'
 import { publishEngine } from './paneEngineProcess.js'
 import { STARTING_AGAIN, supportsNativeFork } from './engineLaunch.js'
@@ -1030,8 +1031,16 @@ async function watchRestoredPane(
         const ready = publication.state === 'confirmed' ? publication.entry : null
         if (!lifecycle() || !ready || !matchesLaunchReceipt(deps.registry.byAgent(agentId), ready)) return
         // From here the watch follows the row it published by its receipt, not `restoreOwner`: a reopened
-        // conversation's own hook stamps `boundAt` in the window, and the watch then ended with the pane held.
-        current = () => lifecycle() && matchesLaunchReceipt(deps.registry.byAgent(agentId), ready)
+        // conversation's own hook stamps `boundAt` in the window, and the watch then ended with the pane held. So did
+        // its engine moving it onto another conversation (a `/clear`, Codex's first prompt naming a new thread): the
+        // receipt is followed there, its conversation and the evidence of it being all that moved.
+        current = () => {
+          const row = deps.registry.byAgent(agentId)
+          return lifecycle() && (matchesLaunchReceipt(row, ready) || !!row && row.sessionId !== ready.sessionId
+            && holdsResumedConversation(row, ready.sessionId, ready.processIdentity)
+            && matchesLaunchReceipt({ ...row, sessionId: ready.sessionId, transcriptPath: ready.transcriptPath,
+              evidenceRevision: ready.evidenceRevision }, ready))
+        }
         // A resume the engine rejects does not fail to start — it starts, prints why, and exits a
         // few seconds later. Keep the pane (and the fallback) for a settling window before handing
         // it over; a pane let go at first sight of the process vanished with the engine and took

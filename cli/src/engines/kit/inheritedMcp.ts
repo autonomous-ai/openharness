@@ -9,6 +9,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { settingsText } from '../../lib/settingsText.js'
 import type { InheritedMcpContract } from '../facets/launch.js'
 import { replaceConfigFile } from './folderTrust.js'
 
@@ -17,7 +18,7 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> => type
 /** The file's JSON object; null for none, or anything but an object. */
 function readObject(file: string): Record<string, unknown> | null {
   try {
-    const value: unknown = JSON.parse(readFileSync(file, 'utf8'))
+    const value: unknown = JSON.parse(settingsText(readFileSync(file)))
     return isPlainObject(value) ? value : null
   } catch { return null }
 }

@@ -88,13 +88,12 @@ const KEY = String.raw`(?:[A-Za-z0-9_-]+|"(?:[^"\\\r\n]|\\.)*"|'[^'\r\n]*')`
 const HEADER = new RegExp(String.raw`^[ \t]*\[\[?[ \t]*${KEY}(?:[ \t]*\.[ \t]*${KEY})*[ \t]*\]\]?[ \t]*(?:#.*)?\r?$`)
 
 /**
- * The text as it is read for its structure: multi-line strings and a byte order mark blanked to spaces,
- * newlines kept, so that a line inside a string is never taken for a header or a key, and every offset still
- * points into the real text. Codex refuses a config.toml that does not parse, every setting in it lost: a
- * header appended in the wrong place would cost a person far more than a hook review.
+ * The text as it is read for its structure: multi-line strings blanked to spaces, newlines kept, so that a line
+ * inside a string is never taken for a header or a key, and every offset still points into the real text. Codex
+ * refuses a config.toml that does not parse, every setting in it lost: a header appended in the wrong place would
+ * cost a person far more than a hook review. The text has no BOM: inspectHookFile reads past one.
  */
 const structure = (text: string): string => text
-  .replace(/^﻿/, ' ')
   .replace(/"""[\s\S]*?"""|'''[\s\S]*?'''/g, (string) => string.replace(/[^\n]/g, ' '))
 
 /** How many arrays and inline tables a line opens, less those it closes; its strings and comment left out. */
@@ -189,8 +188,9 @@ export function withReviewRecords(text: string, record: HookReviewRecord, record
 /**
  * `harness uninstall`: the config file's text without each record [owned] calls Harness's (its key and hash), in the
  * one form Harness, and the engine on "Trust all", writes it: its own table holding the hash and nothing else. The
- * table goes with the blank lines after it, up to the next header; every other byte stays. A record with more in its
- * table is the engine's or the person's and is kept.
+ * table goes with the blank lines after it, up to the next header; every other byte of the text stays (a BOM the file
+ * had is not in it, and the file is written without one). A record with more in its table is the engine's or the
+ * person's and is kept.
  */
 export function withoutReviewRecords(text: string, record: HookReviewRecord, owned: (key: string, hash: string) => boolean): { text: string; removed: number } {
   const shape = structure(text)

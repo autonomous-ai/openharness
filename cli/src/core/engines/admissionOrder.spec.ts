@@ -28,7 +28,7 @@ it('uses arrival for already observed legacy deliveries but cannot infer that a 
   expect(order.status('agent', 'a', stamp(undefined, 1))).toBe('older')
   expect(order.status('agent', 'a', stamp(undefined, 2))).toBe('older')
   expect(order.status('agent', 'a', stamp(undefined, 3))).toBe('ambiguous')
-  expect(order.status('agent', 'a', stamp(50, 3))).toBe('ambiguous')
+  expect(order.status('agent', 'a', stamp(50, 3))).toBe('current')
   order.accept('agent', 'b', stamp(50, 4))
   expect(order.status('agent', 'a', stamp(undefined, 5))).toBe('ambiguous')
   order.accept('agent', 'b', stamp(undefined, 6))
@@ -71,5 +71,31 @@ it('retains current binding authority across a restart, external rebind and proc
   expect(order.status('agent', 'b', stamp(26, 4))).toBe('older')
   order.observe('agent', 'process-2', { id: 'd', at: null })
   expect(order.status('agent', 'd', stamp(10, 5, 'process-2'))).toBe('current')
-  expect(order.status('agent', 'a', stamp(10, 6, 'process-2'))).toBe('ambiguous')
+  expect(order.status('agent', 'a', stamp(10, 6, 'process-2'))).toBe('current')
+})
+
+it('a binding with no time sets no watermark: every hook of its process is current against it', () => {
+  const order = createAdmissionOrder()
+  order.observe('agent', 'p', { id: 'old', at: null })
+  expect(order.status('agent', 'new', stamp(10, 1, 'p'))).toBe('current')
+  expect(order.status('agent', 'new', stamp(undefined, 2, 'p'))).toBe('current')
+})
+
+it('an untimed binding of another conversation drops the watermark it replaces, one of the same keeps it', () => {
+  const order = createAdmissionOrder()
+  order.accept('agent', 'b', stamp(20, 1, 'p'))
+  order.observe('agent', 'p', { id: 'b', at: null })
+  expect(order.status('agent', 'a', stamp(10, 2, 'p'))).toBe('older')
+  order.observe('agent', 'p', { id: 'c', at: null })
+  expect(order.status('agent', 'a', stamp(10, 3, 'p'))).toBe('current')
+})
+
+it('an untimed accepted watermark does not hold a timed hook that arrived after it', () => {
+  const order = createAdmissionOrder()
+  order.accept('agent', 'b', stamp(undefined, 5))
+  expect(order.status('agent', 'a', stamp(30, 6))).toBe('current')
+  expect(order.status('agent', 'a', stamp(30, 4))).toBe('older')
+  expect(order.status('agent', 'a', stamp(undefined, 6))).toBe('ambiguous')
+  order.accept('agent', 'b', stamp(20, 7))
+  expect(order.status('agent', 'a', stamp(20, 8))).toBe('ambiguous')
 })

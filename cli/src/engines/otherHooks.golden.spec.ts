@@ -367,9 +367,11 @@ const casesFor = (vendor: Vendor): Case[] => CASES.filter((one) => !one.vendors 
 // byte-for-byte compatibility check (including modes and aliases).
 const IO_HELD = new Set(['a dangling symlink', 'a symlink into a missing folder', 'a read-only file', 'an unreadable file',
   'a read-only folder', 'a read-only folder holding a writable file', 'the file is a folder'])
-const INVALID_VALUE = new Set(['empty file', 'whitespace only', 'malformed JSON', 'byte order mark', 'JSON null', 'JSON array', 'JSON string', 'JSON number'])
+const INVALID_VALUE = new Set(['empty file', 'whitespace only', 'malformed JSON', 'JSON null', 'JSON array', 'JSON string', 'JSON number'])
 const INVALID_HOOKS = new Set(['hooks is a string', 'hooks is an array', 'hooks is null'])
-const FOREIGN_SOURCE = new Set([...INVALID_VALUE, ...INVALID_HOOKS, 'foreign content', 'a symlink to foreign content', 'a private file', 'a temporary file left by this process'])
+// A settings file saved with a BOM is read as its text (lib/settingsText.ts); a plugin's source of `{}` is still not
+// Harness's plugin, with a BOM or without one. Hermes's `{}` is a flow mapping its hooks cannot be appended to.
+const FOREIGN_SOURCE = new Set([...INVALID_VALUE, ...INVALID_HOOKS, 'byte order mark', 'foreign content', 'a symlink to foreign content', 'a private file', 'a temporary file left by this process'])
 function held(vendor: Vendor, name: string): boolean {
   if (IO_HELD.has(name)) return true
   if (KIND[vendor] === 'source') return FOREIGN_SOURCE.has(name)

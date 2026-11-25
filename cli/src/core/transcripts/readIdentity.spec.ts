@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest'
 import type { RegisteredSession } from '../../lib/registry.js'
-import { transcriptReadIdentity } from './readIdentity.js'
+import { readStillCurrent, transcriptReadIdentity } from './readIdentity.js'
 
 it('copies binding identity before yielding, ignoring ordinary activity updates', () => {
   const session = { agentId: 'a', sessionId: 's', engine: 'claude', transcriptPath: '/t', codexHome: '/home', boundAt: 1,
@@ -35,4 +35,18 @@ it('revokes old reads across a complete same-path hold and recovery', () => {
   expect(transcriptReadIdentity(session)).not.toBe(before)
   delete session.identityHold; session.evidenceRevision = 2
   expect(transcriptReadIdentity(session)).not.toBe(before)
+})
+
+it('answers a read once its resumed conversation is bound by the same process, and across nothing else', () => {
+  const processIdentity = { pid: 7, executable: 'hermes', startMarker: 'one' }
+  const resumed = { agentId: 'a', sessionId: 's', engine: 'hermes', transcriptPath: null, boundAt: null, processIdentity } as unknown as RegisteredSession
+  const read = readStillCurrent(resumed)
+  const bound = { ...resumed, boundAt: 5, lastHookAt: 5 }
+  expect(read(bound)).toBe(true)
+  expect(read({ ...bound, sessionId: 'other' })).toBe(false)
+  expect(read({ ...bound, processIdentity: { ...processIdentity, pid: 8 } })).toBe(false)
+  expect(read({ ...bound, identityHold: 'header incomplete' })).toBe(false)
+  expect(read(undefined)).toBe(false)
+  // A binding stamped again is another binding of the conversation: the row left it and came back.
+  expect(readStillCurrent(bound)({ ...bound, boundAt: 6 })).toBe(false)
 })

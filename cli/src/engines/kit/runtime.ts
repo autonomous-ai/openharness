@@ -1,5 +1,6 @@
 /** Shared runtime value and formatting mechanics; no engine registry or profile manager. */
 import { readFile } from 'node:fs/promises'
+import { settingsText } from '../../lib/settingsText.js'
 import type { EngineRuntime, ProfileEvidence, RuntimeControl, RuntimeField, RuntimeModelOption, RuntimeProfile, RuntimeSession, RuntimeState } from '../facets/runtime.js'
 
 /**
@@ -119,7 +120,7 @@ export function currentPaneUi(paneText: string): string {
 }
 
 export async function readJson(file: string): Promise<Record<string, unknown> | null> {
-  try { return record(JSON.parse(await readFile(file, 'utf8'))) } catch { return null }
+  try { return record(JSON.parse(settingsText(await readFile(file)))) } catch { return null }
 }
 
 export function addOption(

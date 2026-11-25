@@ -21,6 +21,7 @@
 import { constants } from 'node:fs'
 import { open, stat, type FileHandle } from 'node:fs/promises'
 import { basename, dirname, extname, isAbsolute, join, normalize } from 'node:path'
+import { settingsText } from '../../lib/settingsText.js'
 
 /** A settings file is about 1–10 KiB; a larger file is not read. */
 export const SETTINGS_MAX_BYTES = 256 * 1024
@@ -67,7 +68,8 @@ export interface SettingsFs {
   open(path: string, flags: number): Promise<FileHandle>
 }
 
-/** One file's text: none when it is missing, not a regular file, over SETTINGS_MAX_BYTES or unreadable. Never rejects. */
+/** One file's text, without a leading BOM: none when it is missing, not a regular file, over SETTINGS_MAX_BYTES, not
+ *  UTF-8 or unreadable. Never rejects. */
 export async function readSettings(path: string, fs: SettingsFs = { stat, open }): Promise<string | undefined> {
   let file: FileHandle | undefined
   try {
@@ -83,7 +85,7 @@ export async function readSettings(path: string, fs: SettingsFs = { stat, open }
     // Its size, up to the cap, and one byte past it: a full buffer is a file over the cap, or one that grew meanwhile.
     const buffer = Buffer.alloc(Math.min(opened.size, SETTINGS_MAX_BYTES) + 1)
     const { bytesRead } = await file.read(buffer, 0, buffer.length, 0)
-    return bytesRead === buffer.length ? undefined : buffer.toString('utf8', 0, bytesRead)
+    return bytesRead === buffer.length ? undefined : settingsText(buffer.subarray(0, bytesRead))
   } catch {
     return undefined
   } finally {

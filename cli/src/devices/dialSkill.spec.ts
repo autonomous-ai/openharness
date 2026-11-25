@@ -486,6 +486,8 @@ When the task stops on a step only the person can take, ring their dial before y
     }
     expect(claudePluginState(at('on.json', '{"enabledPlugins":{"harness-device@openharness":true}}'))).toBe('on')
     expect(claudePluginState(at('beside.json', '{"model":"opus","enabledPlugins":{"other@x":false,"harness-device@openharness":true}}'))).toBe('on')
+    // Windows PowerShell 5's `Set-Content -Encoding utf8` starts the file with a BOM; Claude Code reads it either way.
+    expect(claudePluginState(at('bom.json', '﻿{"enabledPlugins":{"harness-device@openharness":true}}'))).toBe('on')
 
     const off: Array<[string, string]> = [
       ['the entry false', at('false.json', '{"enabledPlugins":{"harness-device@openharness":false}}')],

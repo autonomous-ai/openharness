@@ -150,8 +150,9 @@ export function createPendingAdmissions({ retryMs = 1_000, capacity = 64, isProc
     }
   }
   return {
-    /** False means backpressure: nothing was queued or evicted, so the sender must retry. */
-    submit<T>(key: string, id: string, request: PendingAdmission<T>): boolean {
+    /** False means backpressure: nothing was queued or evicted, so the sender must retry. `kept`: the delivery's older job
+     *  stays queued in this request's place, and this request's callbacks never run. */
+    submit<T>(key: string, id: string, request: PendingAdmission<T>): boolean | 'kept' {
       if (closed) return false
       const queue = jobs.get(key) ?? []
       const duplicate = queue.findIndex(job => job.id === id)
@@ -159,9 +160,9 @@ export function createPendingAdmissions({ retryMs = 1_000, capacity = 64, isProc
       if (duplicate !== -1 && queue[duplicate]!.request.order.scope === request.order.scope) {
         const previous = queue[duplicate]!
         const known = previous.request.order.firedAt
-        if (known !== undefined && (request.order.firedAt === undefined || request.order.firedAt < known)) return true
+        if (known !== undefined && (request.order.firedAt === undefined || request.order.firedAt < known)) return 'kept'
         if (known === request.order.firedAt) {
-          if (previous.request.current()) return true
+          if (previous.request.current()) return 'kept'
           // Same delivery, freshly verified after its old binding/route became stale.
           request = { ...request, order: { ...request.order, arrival: previous.request.order.arrival } }
         }

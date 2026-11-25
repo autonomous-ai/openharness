@@ -54,13 +54,14 @@ type World = {
 /**
  * Sets the world beneath the mod. `launchers` are the argv[0]s that start, and `exitCode` is what each exits with, as
  * the launcher's `link` exits 1 too while the plugin is off; `answers` are the daemon's answers, one per poll, the last
- * repeated. `configDir` is CLAUDE_CONFIG_DIR, and `settings: 'unreadable'` makes every read of a file fail. `devices` is
- * the devices' socket the launcher prints, '' for none. `platform` is the session's, macOS unless given.
+ * repeated. `configDir` is CLAUDE_CONFIG_DIR, and `settings: 'unreadable'` makes every read of a file fail, `'bom'` starts
+ * each with the BOM PowerShell 5's `Set-Content -Encoding utf8` writes. `devices` is the devices' socket the launcher
+ * prints, '' for none. `platform` is the session's, macOS unless given.
  */
 function world(
   on: On,
   { launchers = [LOCAL], exitCode = 0, answers, configDir, settings = 'readable', devices = DEVICES, platform = 'macos' }: {
-    launchers?: string[]; exitCode?: number; answers: Answer[]; configDir?: string; settings?: 'readable' | 'unreadable'
+    launchers?: string[]; exitCode?: number; answers: Answer[]; configDir?: string; settings?: 'readable' | 'unreadable' | 'bom'
     devices?: string; platform?: 'macos' | 'linux'
   },
 ): World {
@@ -103,7 +104,8 @@ function world(
     w.reads.push(e.path)
     if (w.readMs) await clock.sleep(w.readMs)
     if (settings === 'unreadable') return { deny: 'EACCES' }
-    return { value: JSON.stringify({ enabledPlugins: w.enabled ? { 'harness-device@openharness': true } : {} }) }
+    const text = JSON.stringify({ enabledPlugins: w.enabled ? { 'harness-device@openharness': true } : {} })
+    return { value: settings === 'bom' ? `\uFEFF${text}` : text }
   })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.attach', (_, e) => ({ clientId: e.clientId }))
@@ -343,6 +345,19 @@ test('with CLAUDE_CONFIG_DIR set, the settings are read there', async ($, on) =>
   await start($, w)
   await w.clock.advance(25_000)
   expect(w.reads).toEqual(['/home/dee/profile-b/settings.json'])
+})
+
+// Claude Code reads a settings.json saved with a BOM, and so does `harness device claude link` (claudePluginOn).
+test('settings saved with a BOM are read: disabled there, its text is not submitted', async ($, on) => {
+  const said = async (clock: Clock) => {
+    await clock.sleep(10_000)
+    return { status: 200, text: JSON.stringify({ text: 'run the tests' }) }
+  }
+  const w = world(on, { answers: [said, held(25_000)], settings: 'bom' })
+  await start($, w)
+  w.enabled = false
+  await w.clock.advance(10_000)
+  expect(w.submitted).toHaveLength(0)
 })
 
 test('settings it cannot read keep the mod as it was: the text is submitted', async ($, on) => {

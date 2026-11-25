@@ -6,13 +6,16 @@
  * What is worth pinning is where it must add NOTHING: the person hid the engine's attribution, or set a value that
  * the line would replace and that cannot be kept exactly.
  */
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { InstructionAttribution, SettingAttribution } from '../facets/launch.js'
 import { launch as claude } from '../claude/launch.js'
 import { launch as codex } from '../codex/launch.js'
 import { attributionArgs } from '../launches.js'
 import { attributionArgsIn, type AttributionFiles } from './attribution.js'
-import { topLevelEntry } from './launchArgs.js'
+import { readConfig, topLevelEntry } from './launchArgs.js'
 
 const shell = vi.hoisted(() => ({ env: {} as NodeJS.ProcessEnv }))
 vi.mock('../../lib/loginShellEnv.js', () => ({ loginShellEnvironment: () => shell.env }))
@@ -201,6 +204,16 @@ describe('attributionArgs, composed from the launch contracts', () => {
     attributionArgs('codex', LINE, { cwd: null, profile: '/profiles/work', environment: { HOME: '/home/me', CODEX_HOME: '/moved' }, read })
     attributionArgs('codex', LINE, { cwd: null, environment: { HOME: '/home/me', CODEX_HOME: '/moved' }, read })
     expect(asked).toEqual(['/profiles/work/config.toml', '/moved/config.toml'])
+  })
+
+  // PowerShell 5's `Set-Content -Encoding utf8` saves settings.json with a BOM, which Claude Code reads past
+  // (lib/settingsText.ts): the person's choice in it still holds.
+  it('reads a settings file saved with a BOM as Claude Code does', () => {
+    const home = mkdtempSync(join(tmpdir(), 'attribution-'))
+    try {
+      writeFileSync(join(home, 'settings.json'), `\uFEFF${json({ includeCoAuthoredBy: false })}`)
+      expect(attributionArgsIn(claudeContract, LINE, { home, personal: home, cwd: null, read: readConfig })).toEqual([])
+    } finally { rmSync(home, { recursive: true, force: true }) }
   })
 
   it('reads the real file when no reader is given', () => {

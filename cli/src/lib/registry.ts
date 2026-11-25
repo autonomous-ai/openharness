@@ -15,7 +15,6 @@
 
 import { DSH_ID_RE } from '../dsh/id.js'
 import { AGENT_NAME_RE } from './engineLaunch.js'
-import { resumesConversation } from './resumeCapability.js'
 import { namingTitle } from './sessionTitle.js'
 import { reportedProfileHome, transcriptProject } from '../engines/discoveries.js'
 import { automaticAgentName, engineLabel, isAutomaticName } from './agentNames.js'
@@ -2330,24 +2329,16 @@ class Registry {
       // Two ways to be in that state, and both have to count:
       //  - `lastHookAt === 0` — a resume allocated by `resumePendingAgent` and not yet hooked. Its
       //    `launch` may ALREADY read `ready`, because a resume is confirmed by its own live engine
-      //    process now (`resumeStoppedAgent.ts`) and that is usually earlier than the hook. Reading
-      //    only `launch` here disarmed this guard for exactly the resumes it exists to protect.
+      //    process now (`resumeStoppedAgent.ts`) and that is usually earlier than the hook.
       //  - a launch that is not `ready` — a row put back by the post-reboot restore, which relaunches
       //    `--resume` against a row that kept `lastHookAt` from its previous life.
-      if (existing?.resumeOnly && (existing.lastHookAt === 0 || (existing.launch && existing.launch.state !== 'ready'))) {
-        // A native startup hook, carrying the verified process, must confirm this exact history —
-        // but only where an exact history was asked for. A resume that opened a NEW conversation (an
-        // engine with no resume argv, or a row with no id to reopen) reports a different id BECAUSE
-        // it did what it was told; failing it there would refuse the resume the caller requested.
-        if (!validProcessIdentity(input.processIdentity)) return null
-        if (sessionId !== existing.sessionId && resumesConversation(engine, existing.sessionId)) {
-          const failed: RegisteredSession = { ...existing, active: false, touchedAt: now,
-            launch: { state: 'failed', error: 'RESUME_SESSION_MISMATCH', detail: 'The agent reported a different conversation. The requested conversation is still saved.' } }
-          await this.persist(deadline, true, false, undefined, { agentId, candidate: failed, allowTransaction: true, refresh: options.refresh, verify: () => { verifyOwner(); proof?.verify() } })
-          this.traceLaunch(agentId, existing.launch, failed.launch, 'resume conversation mismatch')
-          return null
-        }
-      }
+      // Only a hook carrying the verified process binds it: one without could be any process in the pane, and
+      // cannot speak for the resumed engine. A verified one that names another conversation (a `/clear`, a `/new`,
+      // Codex's first prompt naming a new thread) is a rotation like any other: the running engine is the truth,
+      // and failing the row instead left it "Start failed" over an engine the person was typing into
+      // (docs/plans/2026-11-25-win-hook-admission-design.md, A).
+      if (existing?.resumeOnly && (existing.lastHookAt === 0 || (existing.launch && existing.launch.state !== 'ready'))
+        && !validProcessIdentity(input.processIdentity)) return null
       // Even a first bind can carry a drifted cwd (a fork inherits its source's; `claude --resume` typed
       // from a subfolder). Claude's transcript never moves from the project dir it was started in, so a
       // cwd that does not round-trip to that directory name is not this session's folder — the row's own

@@ -619,6 +619,27 @@ describe('history crossing a reader boundary', () => {
     }
   })
 
+  it('answers a resumed conversation that its own process binds while the page is read, whatever its engine', async () => {
+    // A resume its own process confirmed is attached unbound (`boundAt: null`) until that process binds it: Hermes's
+    // next terminal record pass, Codex's first prompt, a Claude Code SessionStart that came late (CLI end to end run
+    // 45653603482, e2e/readerClose.e2e.ts). The same conversation, read the same way.
+    for (const engine of ['hermes', 'claude', 'codex']) {
+      const processIdentity = { pid: 7, executable: engine, startMarker: 'one' }
+      let row = session(engine, { transcriptPath: engine === 'hermes' ? null : `/${engine}.jsonl`,
+        codexHome: engine === 'codex' ? '/codex' : null, resumeOnly: true, boundAt: null, lastHookAt: 0, processIdentity })
+      let finish!: () => void
+      const waiting = new Promise<void>((r) => { finish = r })
+      const adapter = { historyPage: async () => { await waiting; return { events: [], timestamp: MTIME.toISOString() } }, lastTurnText: async () => null }
+      const h = setup(row, [], () => adapter)
+      h.deps.resolve.mockImplementation(() => row)
+      const result = h.sessionGet({ sessionId: row.agentId })
+      // The registry rebuilds the row it binds.
+      row = { ...row, boundAt: NOW, lastHookAt: NOW, processIdentity: { ...processIdentity } }
+      finish()
+      expect.soft(await result, engine).toEqual({ ...about(row, MTIME), id: row.agentId, events: [] })
+    }
+  })
+
   it('returns explicit retry guidance and never invokes the inline pager on a failed worker read', async () => {
     for (const error of [new EngineReadError('ENGINE_REPLY_TOO_LARGE'), new Error('socket failed')]) {
       const h = setup(session('codex', { transcriptPath: '/read.jsonl' }), [], () => ({

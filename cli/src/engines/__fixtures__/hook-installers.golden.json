@@ -148,18 +148,23 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write settings.json: SyntaxError"
+     "log [hooks] installed Claude Code session, turn, wait and subagent hooks → <hash <root>/moved/claude-work/settings.json> (outside the home)",
+     "log [hooks] (takes effect on the next claude session start)"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write settings.json: SyntaxError"
+     "log [hooks] Claude Code session, turn, wait and subagent hooks already installed"
     ],
     "threw": null
    }
   ],
   "files": {
+   "home/.harness": {
+    "type": "dir",
+    "mode": "700"
+   },
    "moved/claude-work": {
     "type": "dir",
     "mode": "755"
@@ -167,7 +172,7 @@
    "moved/claude-work/settings.json": {
     "type": "file",
     "mode": "644",
-    "text": "﻿{}"
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Notification\": [\n      {\n        \"matcher\": \"permission_prompt|elicitation_dialog|elicitation_url_dialog|quota_auto_resume_stale\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"AskUserQuestion\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Elicitation\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"SubagentStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"SubagentStop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  },\n  \"permissions\": {\n    \"allow\": [\n      \"Bash(harness --help)\",\n      \"Bash(harness -h)\",\n      \"Bash(<root>/home/.local/bin/harness --help)\",\n      \"Bash(harness whoami:*)\",\n      \"Bash(<root>/home/.local/bin/harness whoami:*)\",\n      \"mcp__harness__harness_whoami\",\n      \"mcp__plugin_harness_harness__harness_whoami\",\n      \"Bash(harness ps:*)\",\n      \"Bash(<root>/home/.local/bin/harness ps:*)\",\n      \"mcp__harness__harness_list\",\n      \"mcp__plugin_harness_harness__harness_list\",\n      \"Bash(harness search:*)\",\n      \"Bash(<root>/home/.local/bin/harness search:*)\",\n      \"mcp__harness__harness_search\",\n      \"mcp__plugin_harness_harness__harness_search\",\n      \"Bash(harness machines:*)\",\n      \"Bash(<root>/home/.local/bin/harness machines:*)\",\n      \"mcp__harness__harness_machines\",\n      \"mcp__plugin_harness_harness__harness_machines\",\n      \"Bash(harness show:*)\",\n      \"Bash(<root>/home/.local/bin/harness show:*)\",\n      \"mcp__harness__harness_read\",\n      \"mcp__plugin_harness_harness__harness_read\",\n      \"Bash(harness wait:*)\",\n      \"Bash(<root>/home/.local/bin/harness wait:*)\",\n      \"mcp__harness__harness_wait\",\n      \"mcp__plugin_harness_harness__harness_wait\",\n      \"Bash(harness new:*)\",\n      \"Bash(<root>/home/.local/bin/harness new:*)\",\n      \"mcp__harness__harness_start\",\n      \"mcp__plugin_harness_harness__harness_start\",\n      \"Bash(harness close:*)\",\n      \"Bash(<root>/home/.local/bin/harness close:*)\",\n      \"mcp__harness__harness_close\",\n      \"mcp__plugin_harness_harness__harness_close\",\n      \"Bash(harness send:*)\",\n      \"Bash(<root>/home/.local/bin/harness send:*)\",\n      \"mcp__harness__harness_send\",\n      \"mcp__plugin_harness_harness__harness_send\",\n      \"Bash(harness tell:*)\",\n      \"Bash(<root>/home/.local/bin/harness tell:*)\",\n      \"mcp__harness__harness_tell\",\n      \"mcp__plugin_harness_harness__harness_tell\",\n      \"Bash(harness browser:*)\",\n      \"Bash(<root>/home/.local/bin/harness browser:*)\",\n      \"Bash(harness device notify:*)\",\n      \"Bash(<root>/home/.local/bin/harness device notify:*)\"\n    ]\n  }\n}\n"
    }
   }
  },
@@ -1665,26 +1670,47 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: SyntaxError"
+     "log [hooks] installed Codex session and turn hooks → <hash <root>/moved/codex-work/hooks.json> (outside the home)",
+     "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)",
+     "log [hooks] recorded Harness's own Codex hooks as reviewed → config.toml (outside the home)"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: SyntaxError"
+     "log [hooks] Codex session and turn hooks already installed → <hash <root>/moved/codex-work/hooks.json> (outside the home)"
     ],
     "threw": null
    }
   ],
   "files": {
+   "home/.harness": {
+    "type": "dir",
+    "mode": "700"
+   },
    "moved/codex-work": {
     "type": "dir",
     "mode": "755"
    },
+   "moved/codex-work/config.toml": {
+    "type": "file",
+    "mode": "600",
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:stop:0:0\"]\ntrusted_hash = \"<hash Stop command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:permission_request:0:0\"]\ntrusted_hash = \"<hash PermissionRequest command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash PreToolUse command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:interrupt:0:0\"]\ntrusted_hash = \"<hash Interrupt command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+   },
    "moved/codex-work/hooks.json": {
     "type": "file",
     "mode": "644",
-    "text": "﻿{}"
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"request_user_input\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Interrupt\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 3\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   },
+   "moved/codex-work/rules": {
+    "type": "dir",
+    "mode": "700"
+   },
+   "moved/codex-work/rules/harness.rules": {
+    "type": "file",
+    "mode": "600",
+    "text": "# Written by Harness, which rewrites it: do not edit. Its agent commands (harness whoami, ps, search, machines, show, wait, new, close, send, tell, browser, device notify)\n# need Harness's daemon, which Codex's sandbox cannot reach, so they run outside it without asking. What each\n# may do is for Harness to decide: Settings > Experimental, and an agent gives work to and closes only what it started.\nhost_executable(name=\"harness\", paths=[\"<root>/home/.local/bin/harness\"])\nprefix_rule(pattern=[\"harness\", [\"whoami\", \"ps\", \"search\", \"machines\", \"show\", \"wait\", \"new\", \"close\", \"send\", \"tell\", \"browser\"]], decision=\"allow\")\nprefix_rule(pattern=[\"<node>\", \"<root>/home/.harness/cli/cli.js\", [\"whoami\", \"ps\", \"search\", \"machines\", \"show\", \"wait\", \"new\", \"close\", \"send\", \"tell\", \"browser\"]], decision=\"allow\")\nprefix_rule(pattern=[\"harness\", \"device\", \"notify\"], decision=\"allow\")\n"
    }
   }
  },

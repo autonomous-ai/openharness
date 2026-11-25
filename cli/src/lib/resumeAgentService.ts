@@ -2,13 +2,13 @@
 import { transcriptSize, type RelaunchMarks } from '../core/transcripts/relaunch.js'
 import { isTerminalEngine } from '../engines/types.js'
 import { installedDsh } from '../dsh/installed.js'
-import { engineKeepsTranscriptFile, matchesLaunchReceipt, registry as liveRegistry, type LaunchPublication, type RegisteredSession, type RegistryAuthority } from './registry.js'
+import { engineKeepsTranscriptFile, matchesLaunchReceipt, registry as liveRegistry, type LaunchPublication, type ProcessIdentity, type RegisteredSession, type RegistryAuthority } from './registry.js'
 import { controlTranscriptEvidence } from '../engines/transcriptBindings.js'
 import { materializeResumeTranscript } from '../engines/resumeTranscript.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import { ResumePreparationError } from '../engines/facets/resumeRepair.js'
 import type { StoppedAgentStore } from './stoppedAgents.js'
-import { resumeStoppedAgent, waitForResumedAgent, resumeChanged, resumeUnconfirmed, RESUME_READINESS_BUDGET_MS } from './resumeStoppedAgent.js'
+import { holdsResumedConversation, reconfirmed, resumeStoppedAgent, waitForResumedAgent, resumeChanged, resumeUnconfirmed, RESUME_READINESS_BUDGET_MS } from './resumeStoppedAgent.js'
 import { checkPidRuntime } from './deleteAgentFallback.js'
 import { checkSessionRuntime, publishEngine, resolvePaneEngineProcess } from './paneEngineProcess.js'
 import { engineBin, enginePathOverride } from './engineBin.js'
@@ -105,8 +105,10 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
   }
   const confirmedResume = (saved: RegisteredSession) => {
     const row = registry.byAgent(saved.agentId)
-    return !!row && row.engine === saved.engine && row.sessionId === saved.sessionId
-      && row.registeredAt === saved.registeredAt && row.transcriptPath === saved.transcriptPath
+    // Its own process moving it onto another conversation since leaves it the same resume.
+    return !!row && row.engine === saved.engine && (row.sessionId === saved.sessionId
+      ? row.transcriptPath === saved.transcriptPath : holdsResumedConversation(row, saved.sessionId, saved.processIdentity))
+      && row.registeredAt === saved.registeredAt
       && row.codexHome === saved.codexHome && row.claudeHome === saved.claudeHome && row.hermesHome === saved.hermesHome
       && (saved.processIdentity ? sameProcessIdentity(saved.processIdentity, row.processIdentity)
         && saved.processIdentity.executable === row.processIdentity?.executable : !row.processIdentity)
@@ -117,10 +119,12 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
   const waitForResume = async (entry: RegisteredSession, current: () => boolean, grid: GridAssignment | null, launchArgs?: string[]) => {
     // Registry observations may update the same object; pin the route being verified.
     const saved = structuredClone(entry)
+    // The engine the pane last showed: a row it moved onto another conversation is still this resume's.
+    let seen: ProcessIdentity | null = null
     const ownsRoute = () => {
       const row = registry.byAgent(saved.agentId)
       const latest = row && terminalTargetOf(row, backendFor)
-      return current() && row?.engine === saved.engine && row.sessionId === saved.sessionId
+      return current() && row?.engine === saved.engine && holdsResumedConversation(row, saved.sessionId, seen)
         && row.tmuxPane === saved.tmuxPane && latest?.backend === target?.backend
         && !!latest && !!target && sameTerminalPlacement(latest.runtime, target.runtime)
     }
@@ -132,7 +136,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
     // A second look at an unconfirmed resume: the verdict is withdrawn before the check, or the
     // readiness probe would return it straight back. The desk sees the tile leave "Start failed".
     const unconfirmed = ownsRoute() ? registry.byAgent(saved.agentId) : undefined
-    if (unconfirmed?.launch?.state === 'failed' && unconfirmed.launch.error === 'RESUME_UNCONFIRMED') {
+    if (unconfirmed?.launch?.state === 'failed' && reconfirmed(unconfirmed.launch.error)) {
       // No await separates the verified row above from this synchronous update.
       announceSession(registry.setLaunch(saved.agentId, { state: 'starting' })!)
     }
@@ -140,7 +144,11 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
     const result = shell ? { ok: true as const, session: saved, resumed: true } : await waitForResumedAgent(saved, {
       current: ownsRoute,
       session: () => registry.byAgent(saved.agentId),
-      process: () => resolvePaneEngineProcess(terminal, runtime, saved.engine),
+      process: async () => {
+        const found = await resolvePaneEngineProcess(terminal, runtime, saved.engine)
+        if (found) seen = found
+        return found
+      },
       pane: () => terminal.paneState(runtime),
       sleep: ms => new Promise(resolve => { const timer = setTimeout(resolve, ms); timer.unref?.() }),
     })
@@ -176,11 +184,12 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       await terminal.releaseHold(runtime, () => ownsRoute() && confirmedResume(ready!))
       if (!ownsRoute() || !confirmedResume(ready)) return resumeChanged
       stoppedAgents.finishResume(saved.agentId)
-      const confirmed = ready
+      // The row as it is now: one its own process moved onto another conversation is announced on that one.
+      const confirmed = registry.byAgent(saved.agentId)!
       const hooked = confirmed.lastHookAt > 0
       console.log(`[resume] ${sid(saved.agentId)} confirmed · engine=${saved.engine}`
         + ` · hook=${hooked ? 'yes' : 'no'} · ${result.resumed ? 'same conversation' : 'fresh'}`)
-      announceSession(ready)
+      announceSession(confirmed)
       // Confirmed by its own process, the conversation is followed whether or not a hook ever comes.
       // Only the hook's registration attached it: discovery attaches a row it finds still launching,
       // and this one is ready already. With its SessionStart refused (round 23: the hook beat the
@@ -189,11 +198,11 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       // conversation it reopened: a resume that started a new one has nothing to follow until the engine
       // names it, and the row's old conversation is not being written any more.
       if (!shell && !hooked && result.resumed) {
-        void attachSession(ready).catch((error) => {
+        void attachSession(confirmed).catch((error) => {
           console.error(`[resume] ${sid(saved.agentId)} attach failed:`, errorKind(error))
         })
       }
-      return { ...result, session: ready }
+      return { ...result, session: confirmed }
     } else if (result.error !== 'AGENT_CHANGED') {
       const row = registry.byAgent(saved.agentId)!
       const failed = registry.setLaunch(row.agentId, { state: 'failed', error: result.error, detail: result.detail })
