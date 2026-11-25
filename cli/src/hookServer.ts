@@ -1062,11 +1062,13 @@ export function startHookServer(
       const route = req.method === 'POST' ? FOLLOW_UP_ROUTES.get(url) : undefined
       if (route) {
         if (!hookOk) { json(401, { error: 'UNAUTHORIZED' }); return }
-        let body: BoundHookBody
+        let body: BoundHookBody, bytes: number
         try {
-          const parsed = JSON.parse(await readBody(req)) as unknown
+          const text = await readBody(req)
+          const parsed = JSON.parse(text) as unknown
           if (!validHookBody(parsed) || FOLLOW_UP_TAKES[route]?.(parsed) === false) { json(400, { error: 'invalid hook body' }); return }
           body = parsed
+          bytes = Buffer.byteLength(text)
         } catch { json(400, { error: 'bad json' }); return }
         const firedAt = hookFiredAt(req)
         // The Stop a Cursor or Command Code registration carries keeps its registration's path, ahead of any wait.
@@ -1084,10 +1086,10 @@ export function startHookServer(
         }
         // Its session not bound yet, behind an admission of it that arrived first: kept and answered `pending`, which its
         // client takes as sent, and run as it arrived once that admission settled. Refused, it was lost: its client sends
-        // a hook once.
+        // a hook once. Bound or not, behind its session's hooks still waiting or running, which it would overtake.
         const { engine, sessionId } = body
-        if (engine && sessionId && registry.bySession(sessionId)?.engine !== engine && waits.hold(sessionKey(engine, sessionId),
-          { route, sessionId, bytes: Buffer.byteLength(JSON.stringify(body)), run: async () => { await followUp(route, body, firedAt) } })) {
+        if (engine && sessionId && waits.hold(sessionKey(engine, sessionId), { route, sessionId, bytes,
+          bound: registry.bySession(sessionId)?.engine === engine, run: async () => { await followUp(route, body, firedAt) } })) {
           json(200, { pending: true }); return
         }
         const reply = await followUp(route, body, firedAt)

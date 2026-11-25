@@ -29,7 +29,10 @@ export interface AdmissionTicket {
   queued(): () => void
 }
 
-export interface WaitingHook { route: WaitingRoute; sessionId: string; bytes: number; run: () => Promise<void> }
+/** [bound]: its session was bound when it arrived. It waits only for its session's hooks still waiting or running, which
+ *  it would overtake, never for an admission: a bound session's prompt can be re-admitted for reasons that have nothing
+ *  to do with binding. */
+export interface WaitingHook { route: WaitingRoute; sessionId: string; bytes: number; bound: boolean; run: () => Promise<void> }
 type UnheldReason = 'session_full' | 'core_full' | 'timed_out'
 
 export function createSessionHookWait(bounds: Partial<SessionHookWaitBounds> = {}) {
@@ -51,8 +54,8 @@ export function createSessionHookWait(bounds: Partial<SessionHookWaitBounds> = {
     unheldSaid.set(reason, { at: Date.now(), hooks: 0 })
   }
 
-  const behind = (session: Session, waiter: Waiter) =>
-    [...session.admissions.values()].some(admission => admission.arrival < waiter.arrival)
+  const behind = (session: Session, waiter: Waiter) => !waiter.hook.bound
+    && [...session.admissions.values()].some(admission => admission.arrival < waiter.arrival)
   // Never while a drain runs: a new state for the key would start a second drain beside the running hook.
   const prune = (key: string, session: Session) => {
     if (!session.admissions.size && !session.waiting.length && !session.draining) sessions.delete(key)
@@ -73,7 +76,7 @@ export function createSessionHookWait(bounds: Partial<SessionHookWaitBounds> = {
     if (!session || session.draining) return
     session.draining = true
     let ran = 0, last: WaitingHook | undefined
-    // A hook ready means every hook before it is ready: it has every admission they wait behind ahead of it too.
+    // In arrival order: a hook ready behind one that is not waits for it.
     for (let head = session.waiting[0]; !closed && head && !behind(session, head); head = session.waiting[0]) {
       leave(session, head)
       ran++
@@ -126,12 +129,14 @@ export function createSessionHookWait(bounds: Partial<SessionHookWaitBounds> = {
       }
     },
     /** True: [hook] waits, its caller answers `200 {pending: true}` and [hook.run] is called once, later. False: run it
-     *  now (nothing unsettled ahead of it, or over a bound, which is logged at most once a minute per reason). */
+     *  now (nothing ahead of it, or over a bound, which is logged at most once a minute per reason). Ahead of it: its
+     *  session's hooks still waiting or running and, unbound, its session's unsettled admissions. */
     hold(key: string, hook: WaitingHook): boolean {
       const session = sessions.get(key)
-      if (!session?.admissions.size) return false
+      // Behind its session's hooks still waiting or running, bound or not: beside them, it could overtake them.
+      if (!session || (!session.waiting.length && !session.draining && (hook.bound || !session.admissions.size))) return false
       // Every admission still here is unsettled and arrived before this hook.
-      const ahead = [...session.admissions.values()]
+      const ahead = hook.bound ? [] : [...session.admissions.values()]
       if (session.waiting.length >= perSession) { unheld(hook, 'session_full'); return false }
       if (waitingCount >= total || waitingBytes + hook.bytes > totalBytes) { unheld(hook, 'core_full'); return false }
       if (ahead.some(admission => !admission.announced)) {
@@ -142,6 +147,8 @@ export function createSessionHookWait(bounds: Partial<SessionHookWaitBounds> = {
         leave(session, waiter)
         unheld(hook, 'timed_out')
         void runOne(hook)
+        // A bound hook queued behind it is ready now, and nothing else would start it before its own time.
+        if (session.waiting.length) setImmediate(() => { void drain(key) })
       }, maxWaitMs) }
       waiter.timer.unref()
       session.waiting.push(waiter)
