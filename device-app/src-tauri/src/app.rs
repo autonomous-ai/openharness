@@ -147,12 +147,14 @@ impl App {
                 self.now = now;
                 if self.relaunch && !self.relaunch_waits() {
                     self.relaunch = false;
+                    self.forget_unanswered(effects);
                     self.stop_watch(effects);
                     effects.push(Effect::Relaunch);
                     return;
                 }
                 if self.install_held && !self.relaunch_waits() {
                     self.install_held = false;
+                    self.forget_unanswered(effects);
                     self.installing();
                     // Drawn and said first: the install ends this process before anything after it runs.
                     self.send_menu(effects);
@@ -436,10 +438,29 @@ impl App {
         self.state.cli == CliState::Installing || self.login.is_some()
     }
 
-    /// The relaunch, and an install that ends the app, would also cut short a daemon start or what the window shows,
-    /// so they wait for them too; a check does not, as the first launch's window is open right after the CLI install.
+    /// The relaunch, and an install that ends the app, would cut short a run or a daemon start, so they wait for
+    /// them, each bounded by its deadline. Never for the window: it has no deadline, so it held the update for as
+    /// long as it stayed open, and its screens hold nothing typed, so the new process shows them again.
     fn relaunch_waits(&self) -> bool {
-        self.running() || self.keep.starting() || self.window.is_some()
+        self.running() || self.keep.starting()
+    }
+
+    /// The process ends with the window open, its screen never answered, so the new process asks again: the Follow
+    /// screen counts as asked once it shows, and Sign in opened from the menu was asked before. Sign in that shows
+    /// though this computer signed in elsewhere is no question left. A first CLI install that failed runs again at the
+    /// start by itself.
+    fn forget_unanswered(&mut self, effects: &mut Vec<Effect>) {
+        let Some(screen) = self.window.as_ref().map(|shown| shown.screen) else { return };
+        let signed_in = self.state.signed_in == Some(true);
+        self.remember(
+            |saved| match screen {
+                Screen::SignIn if !signed_in => saved.asked_sign_in = false,
+                Screen::SignIn => {}
+                Screen::Follow => saved.asked_follow = false,
+                Screen::Install => {}
+            },
+            effects,
+        );
     }
 
     /// Only a button the window shows does something, so a second click on one that started a run does nothing.
@@ -595,8 +616,9 @@ impl App {
     }
 
     fn show(&mut self, view: Option<View>, effects: &mut Vec<Effect>) {
-        // The Follow screen counts as asked once it shows: one the app quit before is asked at the next start.
-        if view.as_ref().is_some_and(|shown| shown.screen == Screen::Follow) {
+        // The Follow screen counts as asked once it shows: one the app quit before is asked at the next start. And
+        // again as it goes: a held install that failed leaves it open, saved as not asked (`forget_unanswered`).
+        if view.as_ref().is_some_and(|shown| shown.screen == Screen::Follow) || self.showing(Screen::Follow) {
             self.remember(|saved| saved.asked_follow = true, effects);
         }
         self.window = view.clone();
@@ -1498,7 +1520,7 @@ mod tests {
         assert_eq!(app.handle(Event::UpdateDownloaded), [Effect::InstallUpdate]);
         app.handle(Event::UpdateInstalled);
         assert!(!has(&app.handle(tick(B + 10)), &Effect::Relaunch));
-        // Signed in, the window closes: nothing holds the relaunch any more.
+        // Signed in: nothing holds the relaunch any more.
         app.handle(login(LoginEvent::Done(Ok(()))));
         assert!(app.handle(tick(B + 15)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
     }
@@ -1526,24 +1548,102 @@ mod tests {
         assert!(app.handle(tick(B + 20)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
     }
 
+    /// The app the relaunch starts, from what this one saved.
+    fn relaunched(app: &App) -> App {
+        App::new(app.state.saved, true, false, B, false).0
+    }
+
     #[test]
-    fn an_open_window_delays_the_relaunch() {
+    fn an_open_window_does_not_delay_the_relaunch() {
+        // Sign in left open, as at a first launch: never answered, it was never saved as asked, and the new process
+        // offers it again.
         let mut app = on_sign_in();
         installed(&mut app);
-        assert!(!has(&app.handle(tick(B + 10)), &Effect::Relaunch));
-        app.handle(Event::WindowClosed);
-        assert!(app.handle(tick(B + 15)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
+        assert_eq!(app.handle(tick(B + 10)), [Effect::StopWatch, Effect::Relaunch]);
+        assert_eq!(shows(&answer(&mut relaunched(&app), false)), [shown(Screen::SignIn, Phase::Offer, &[])]);
+    }
+
+    #[test]
+    fn sign_in_opened_from_the_menu_and_open_at_the_relaunch_is_offered_again_by_the_new_process() {
+        // Later at the first launch, then Sign in from the menu, left open.
+        let later = Saved { asked_sign_in: true, ..SEEN };
+        let mut app = App::new(later, true, false, B, false).0;
+        answer(&mut app, false);
+        app.handle(Event::Menu(MenuAction::SignIn));
+        installed(&mut app);
+        assert_eq!(app.handle(tick(B + 10)), [Effect::Save(SEEN), Effect::StopWatch, Effect::Relaunch]);
+        assert_eq!(shows(&answer(&mut relaunched(&app), false)), [shown(Screen::SignIn, Phase::Offer, &[])]);
+
+        // Where installing ends the app, the install ends it too.
+        let mut app = App::new(later, true, false, B, true).0;
+        answer(&mut app, false);
+        app.handle(Event::Menu(MenuAction::SignIn));
+        assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
+        held(&mut app);
+        let effects = app.handle(tick(B + 10));
+        assert_eq!(effects[0], Effect::Save(SEEN), "{effects:?}");
+        starts_the_held_install(&effects[1..]);
+
+        // Signed in elsewhere, as with `harness login`, while it shows: the Later stays saved.
+        let mut app = App::new(later, true, false, B, false).0;
+        answer(&mut app, false);
+        app.handle(Event::Menu(MenuAction::SignIn));
+        app.handle(Event::Auth(Some(true)));
+        installed(&mut app);
+        assert_eq!(app.handle(tick(B + 10)), [Effect::StopWatch, Effect::Relaunch]);
+    }
+
+    #[test]
+    fn a_follow_screen_open_at_the_relaunch_is_asked_again_by_the_new_process() {
+        let mut app = on_follow();
+        installed(&mut app);
+        assert_eq!(app.handle(tick(B + 10)), [Effect::Save(SEEN), Effect::StopWatch, Effect::Relaunch]);
+        let mut new = relaunched(&app);
+        answer(&mut new, true);
+        assert_eq!(shows(&new.handle(follow(false, true))), [follow_offer()]);
+
+        // Where installing ends the app, the install ends it too.
+        let mut app = found_where(true);
+        answer(&mut app, true);
+        assert_eq!(shows(&app.handle(follow(false, true))), [follow_offer()]);
+        assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
+        held(&mut app);
+        let effects = app.handle(tick(B + 10));
+        assert_eq!(effects[0], Effect::Save(SEEN), "{effects:?}");
+        starts_the_held_install(&effects[1..]);
+    }
+
+    #[test]
+    fn a_follow_screen_answered_after_a_held_install_that_failed_is_not_asked_again() {
+        // The install that would end the app fails: the app goes on with the Follow screen open, saved as not asked.
+        for answered in [Event::WindowClosed, Event::Act(Action::Later)] {
+            let mut app = found_where(true);
+            answer(&mut app, true);
+            app.handle(follow(false, true));
+            assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
+            held(&mut app);
+            assert_eq!(app.handle(tick(B + 10))[0], Effect::Save(SEEN));
+            app.handle(Event::UpdateFailed(UpdateFailure::Install));
+            let effects = app.handle(answered);
+            assert_eq!(effects[..2], [Effect::Save(Saved { asked_follow: true, ..SEEN }), Effect::Show(None)]);
+        }
     }
 
     #[test]
     fn an_install_waiting_to_relaunch_checks_no_more() {
-        let mut app = on_sign_in();
-        installed(&mut app);
-        // The window stays open past a minute: this process is still the old version, and a check would find the
-        // installed one again and install it a second time.
-        assert!(!has(&app.handle(tick(B + 10 + M1)), &Effect::CheckUpdate));
-        app.handle(Event::WindowClosed);
-        assert!(app.handle(tick(B + 15 + M1)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
+        let mut app = found();
+        app.handle(Event::WatchExit(Some(3)));
+        assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
+        app.handle(Event::WatchExit(Some(3)));
+        assert!(has(&app.handle(tick(B + 10)), &Effect::RunStart));
+        app.handle(Event::UpdateChecked(Some("0.1.3".into())));
+        app.handle(Event::UpdateDownloaded);
+        app.handle(Event::UpdateInstalled);
+        // A daemon start holds the relaunch past a minute: this process is still the old version, and a check would
+        // find the installed one again and install it a second time.
+        assert!(!has(&app.handle(tick(B + 5 + M1)), &Effect::CheckUpdate));
+        app.handle(Event::StartDone { ok: true });
+        assert!(app.handle(tick(B + 10 + M1)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
     }
 
     /// The check finds 0.1.3 and its download answers, where installing ends the app: no row and no install yet.
@@ -1563,13 +1663,11 @@ mod tests {
 
     #[test]
     fn where_the_install_exits_the_app_it_waits_for_what_a_relaunch_waits_for() {
-        // The window open.
+        // The window open does not hold it: the new process shows it again.
         let mut app = on_sign_in_where(true);
         assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
         held(&mut app);
-        assert!(!has(&app.handle(tick(B + 10)), &Effect::InstallUpdate));
-        app.handle(Event::WindowClosed);
-        starts_the_held_install(&app.handle(tick(B + 15)));
+        starts_the_held_install(&app.handle(tick(B + 10)));
 
         // A sign-in running, its window closed.
         let mut app = on_sign_in_where(true);
@@ -1605,15 +1703,16 @@ mod tests {
 
     #[test]
     fn a_held_install_starts_no_second_check() {
-        let mut app = on_sign_in_where(true);
+        let mut app = found_where(true);
+        app.handle(Event::WatchExit(Some(3)));
         assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
+        app.handle(Event::WatchExit(Some(3)));
+        assert!(has(&app.handle(tick(B + 10)), &Effect::RunStart));
         held(&mut app);
-        // The window stays open for minutes: the download waits to be installed, and a check would fetch it again.
-        for now in [B + 5 + M1, B + 5 + 2 * M1] {
-            assert!(!has(&app.handle(tick(now)), &Effect::CheckUpdate), "{now}");
-        }
-        app.handle(Event::WindowClosed);
-        starts_the_held_install(&app.handle(tick(B + 10 + 2 * M1)));
+        // A daemon start holds it past a minute: the download waits to be installed, and a check would fetch it again.
+        assert!(!has(&app.handle(tick(B + 5 + M1)), &Effect::CheckUpdate));
+        app.handle(Event::StartDone { ok: true });
+        starts_the_held_install(&app.handle(tick(B + 10 + M1)));
     }
 
     #[test]

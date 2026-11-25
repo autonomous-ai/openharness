@@ -12,8 +12,8 @@ import { RECORDED_ORCA } from '../../testing/recordedOrca.js'
 import { ObservedSource, type ObservedDeps } from './observed.js'
 import {
   appRoots, learnApps, parseProcessNames, ptyMaker, readBundleId, readMadeBy, readProcessNames, readPtyMaker,
-  readPtyOwner, readTtyName, scannedApps,
-  WALK_PARENTS, type ProcessName, type PtyProcess, type ScannedAppDeps,
+  readPtyOwner, readTtyName, readWindowsPtyOwner, scannedApps, windowsPtyOwner,
+  WALK_PARENTS, type ProcessName, type PtyProcess, type ScannedAppDeps, type WindowsProcess,
 } from './scannedApp.js'
 
 // The patient exec, as the scan's default reads get it: each call is kept, and a command a test gives an answer for is
@@ -514,6 +514,90 @@ describe('the host that owns a process\'s terminal, read', () => {
   it('none for `?` and `??`', async () => {
     expect(await readTtyName(1, async () => '?\n')).toBeUndefined()
     expect(await readTtyName(1, async () => '??      \n')).toBeUndefined()
+  })
+})
+
+describe('the host that made a Windows process\'s terminal', () => {
+  /** A made-up Windows table, each row `[pid, ppid, executable]`, and its `w:<FILETIME>` start after when it has one. */
+  const win = (rows: Array<[number, number, string, string?]>): WindowsProcess[] =>
+    rows.map(([pid, ppid, executable, startMarker]) => ({ pid, ppid, executable, ...(startMarker === undefined ? {} : { startMarker }) }))
+  const ORCA = win([[10, 9, 'claude.exe'], [9, 8, 'pwsh.exe'], [8, 1, 'Orca.exe']])
+  /** A caller (10) under these parents, nearest first, the last on no parent. */
+  const under = (...names: string[]): WindowsProcess[] =>
+    win([[10, 11, 'claude.exe'], ...names.map((name, i): [number, number, string] => [11 + i, i === names.length - 1 ? 1 : 12 + i, name])])
+
+  it('names orca for an agent in a shell Orca made', () => {
+    expect(windowsPtyOwner(10, ORCA)).toBe('orca')
+    expect(windowsPtyOwner(10, under('pwsh.exe', 'C:\\Users\\someone\\AppData\\Local\\Programs\\Orca\\Orca.exe'))).toBe('orca')
+    expect(windowsPtyOwner(10, under('pwsh.exe', 'ORCA.EXE'))).toBe('orca')
+  })
+
+  it('passes cmd and node, and a shim of the caller\'s own name', () => {
+    const codex = win([[10, 11, 'codex.exe'], [11, 12, 'node.exe'], [12, 13, 'cmd.exe'], [13, 14, 'pwsh.exe'], [14, 1, 'Orca.exe']])
+    expect(windowsPtyOwner(10, codex)).toBe('orca')
+    expect(windowsPtyOwner(10, under('claude.exe', 'powershell.exe', 'Orca.exe'))).toBe('orca')
+    expect(windowsPtyOwner(10, under('bash.exe', 'sh.exe', 'pwsh.exe', 'Orca.exe'))).toBe('orca')
+    // Volta's shim runs Codex's script as `cmd /C`, whose Node starts the real `codex.exe`.
+    expect(windowsPtyOwner(10, win([[10, 11, 'codex.exe'], [11, 12, 'node.exe'], [12, 13, 'cmd.exe'], [13, 14, 'codex.exe'],
+      [14, 15, 'pwsh.exe'], [15, 1, 'Orca.exe']]))).toBe('orca')
+    // A Scoop shim of a shim.
+    expect(windowsPtyOwner(10, under('claude.exe', 'claude.exe', 'pwsh.exe', 'Orca.exe'))).toBe('orca')
+    // Claude Code from npm is Node itself.
+    expect(windowsPtyOwner(10, win([[10, 11, 'node.exe'], [11, 12, 'cmd.exe'], [12, 13, 'pwsh.exe'], [13, 1, 'Orca.exe']]))).toBe('orca')
+  })
+
+  // Node or the caller's own name above a shell is no launcher or shim: it is another agent that ran this one from its own
+  // tool, whose terminal (Codex's own pseudo-console) or pipes (Claude Code's shell tool) the caller runs on, not Orca's.
+  it('names none for another agent above a shell', () => {
+    // Codex run by Codex in an Orca terminal: Codex's shell tool runs PowerShell on a pseudo-console Codex made.
+    expect(windowsPtyOwner(10, win([[10, 11, 'codex.exe'], [11, 12, 'pwsh.exe'], [12, 13, 'codex.exe'], [13, 14, 'node.exe'],
+      [14, 15, 'cmd.exe'], [15, 16, 'pwsh.exe'], [16, 1, 'Orca.exe']]))).toBeUndefined()
+    // `claude -p` from Claude Code's shell tool in an Orca terminal.
+    expect(windowsPtyOwner(10, under('bash.exe', 'claude.exe', 'pwsh.exe', 'Orca.exe'))).toBeUndefined()
+    // The same with Claude Code from npm: the agent above the shell is Node.
+    expect(windowsPtyOwner(10, win([[10, 11, 'node.exe'], [11, 12, 'bash.exe'], [12, 13, 'node.exe'], [13, 14, 'cmd.exe'],
+      [14, 15, 'pwsh.exe'], [15, 1, 'Orca.exe']]))).toBeUndefined()
+  })
+
+  it('names herdr and wezterm for theirs', () => {
+    expect(windowsPtyOwner(10, under('pwsh.exe', 'herdr.exe'))).toBe('herdr')
+    expect(windowsPtyOwner(10, under('pwsh.exe', 'wezterm-gui.exe'))).toBe('wezterm')
+    expect(windowsPtyOwner(10, under('pwsh.exe', 'wezterm-mux-server.exe'))).toBe('wezterm')
+  })
+
+  it('names none for a terminal another program made', () => {
+    expect(windowsPtyOwner(10, under('pwsh.exe', 'Code.exe'))).toBeUndefined()
+    // The first other parent decides: a terminal made inside Orca's pane is that terminal's.
+    expect(windowsPtyOwner(10, under('pwsh.exe', 'eval-terminal', 'Orca.exe'))).toBeUndefined()
+  })
+
+  it('names none when a parent started after its child', () => {
+    expect(windowsPtyOwner(10, win([[10, 9, 'claude.exe', 'w:200'], [9, 8, 'pwsh.exe', 'w:150'], [8, 1, 'Orca.exe', 'w:300']]))).toBeUndefined()
+    expect(windowsPtyOwner(10, win([[10, 9, 'claude.exe', 'w:200'], [9, 8, 'pwsh.exe', 'w:150'], [8, 1, 'Orca.exe', 'w:100']]))).toBe('orca')
+  })
+
+  it('names none for a caller not in the table, a walk of shells alone, or a shell whose parent is gone', () => {
+    expect(windowsPtyOwner(99, ORCA)).toBeUndefined()
+    expect(windowsPtyOwner(10, win([[10, 9, 'claude.exe'], [9, 1, 'pwsh.exe']]))).toBeUndefined()
+    expect(windowsPtyOwner(10, win([[10, 9, 'claude.exe'], [9, 8, 'pwsh.exe']]))).toBeUndefined()
+  })
+
+  it('macOS and Linux names are not read here, and Windows names not there', async () => {
+    expect(windowsPtyOwner(10, under('pwsh.exe', 'Orca Agents'))).toBeUndefined()
+    // macOS's `Orca` is the app, not its terminal host.
+    const mac = table([[10, 9, 'claude', 'ttys003'], [9, 8, '-zsh', 'ttys003'], [8, 1, '/Applications/Orca.app/Contents/MacOS/Orca']])
+    const ttyOf = (rows: readonly PtyProcess[]) => async (pid: number) => rows.find((r) => r.pid === pid)?.tty
+    expect(await readPtyOwner(10, mac, ttyOf(mac))).toBeUndefined()
+    const exe = table([[10, 9, 'claude', 'pts/3'], [9, 8, 'bash', 'pts/3'], [8, 1, 'Orca.exe']])
+    expect(await readPtyOwner(10, exe, ttyOf(exe))).toBeUndefined()
+  })
+
+  it('readWindowsPtyOwner rejects on an empty table and answers the walk otherwise', async () => {
+    const error = await readWindowsPtyOwner(10, async () => []).catch((e: unknown) => e)
+    // The error names nothing of the table: a process name is outside text.
+    expect(error).toEqual(new Error('process table not read'))
+    expect(await readWindowsPtyOwner(10, async () => ORCA)).toBe('orca')
+    expect(await readWindowsPtyOwner(10, async () => under('pwsh.exe', 'Code.exe'))).toBeUndefined()
   })
 })
 

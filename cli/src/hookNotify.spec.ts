@@ -3,7 +3,7 @@ import { createHash, randomBytes } from 'crypto'
 import { createServer, type IncomingHttpHeaders } from 'http'
 import { connect as netConnect, createServer as createNetServer } from 'net'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'fs'
-import { tmpdir } from 'os'
+import { homedir, tmpdir } from 'os'
 import { dirname, join, win32 } from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
 import { runInNewContext } from 'vm'
@@ -169,6 +169,11 @@ function runHook(opts: RunHookOpts): Promise<string> {
     // spec sets.
     delete env.HERDR_SESSION
     delete env.HC_SESSION
+    // Run inside a Rex block, the hook would send that block's ids, and leave out the REX_SESSION a spec sets when the
+    // developer's server is not this home's default.
+    delete env.REX_BLOCK
+    delete env.REX_SESSION
+    delete env.REX_SERVER
     // Run inside VS Code, Cursor or Alacritty, a hook run as on Windows would name that app from these.
     delete env.VSCODE_GIT_ASKPASS_NODE
     delete env.VSCODE_PID
@@ -2775,22 +2780,22 @@ describe('hook notify posts over the daemon\'s pipe on Windows (W1)', () => {
 
 describe('hook notify: a session outside a pane', () => {
   /** The environment names the hook may send as host hints, and nothing else (spec: The hook). */
-  const HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'ZELLIJ_PANE_ID',
-    'ZELLIJ_SESSION_NAME', 'TMUX_PANE', 'HC_TERMINAL_ID', 'CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID', 'KITTY_WINDOW_ID',
-    'KITTY_LISTEN_ON', 'WEZTERM_PANE', 'ORCA_TERMINAL_HANDLE', 'ORCA_AGENT_SESSION_ID', 'CLAUDE_CODE_HOST_SESSION_ID',
-    'CLAUDE_CODE_ENTRYPOINT']
+  const HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'REX_SESSION', 'ZELLIJ',
+    'ZELLIJ_PANE_ID', 'ZELLIJ_SESSION_NAME', 'TMUX_PANE', 'HC_TERMINAL_ID', 'CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID',
+    'KITTY_WINDOW_ID', 'KITTY_LISTEN_ON', 'WEZTERM_PANE', 'ORCA_TERMINAL_HANDLE', 'ORCA_AGENT_SESSION_ID',
+    'CLAUDE_CODE_HOST_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT']
   /** The hints a cut would turn into another value: left out whole over 64 characters. The Claude app's session id
    *  may be longer (claudeApp.ts CLAUDE_SESSION), and cut, it would still pass as another session's. */
-  const WHOLE = ['ZELLIJ_PANE_ID', 'ZELLIJ_SESSION_NAME', 'KITTY_LISTEN_ON', 'CLAUDE_CODE_HOST_SESSION_ID']
+  const WHOLE = ['REX_SESSION', 'ZELLIJ_PANE_ID', 'ZELLIJ_SESSION_NAME', 'KITTY_LISTEN_ON', 'CLAUDE_CODE_HOST_SESSION_ID']
   /** The hints sent on macOS alone: the one platform the devices try Herdr's window on, though hc runs on Linux too
-   *  (spec Q5), and the one cmux runs on. */
+   *  (spec Q5), the one cmux runs on, and the one the Rex app runs on (docs/specs/2026-11-25-dial-rex.md). */
   const CMUX_IDS = ['CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID']
-  const MAC_ONLY = ['HC_TERMINAL_ID', ...CMUX_IDS]
+  const MAC_ONLY = ['HC_TERMINAL_ID', 'REX_SESSION', ...CMUX_IDS]
   /** HINTS as this platform's hook sends them. */
   const SENT = HINTS.filter((name) => !MAC_ONLY.includes(name) || process.platform === 'darwin')
-  /** The names a session outside a pane can set, as many as the hook sends: runHook sets no TMUX_PANE without a pane, and
-   *  in a herdr pane the hook sends no hc address and none of cmux's ids. */
-  const panelessHints = SENT.filter((name) => !['TMUX_PANE', 'HC_TERMINAL_ID', ...CMUX_IDS].includes(name)).slice(0, MAX_HINTS)
+  /** The names a session outside a pane can set, as many as the hook sends: runHook sets no TMUX_PANE without a pane, in
+   *  a herdr pane the hook sends no hc address and none of cmux's ids, and a run as on Windows sends no REX_SESSION. */
+  const panelessHints = SENT.filter((name) => !['TMUX_PANE', 'HC_TERMINAL_ID', 'REX_SESSION', ...CMUX_IDS].includes(name)).slice(0, MAX_HINTS)
   /** A cmux terminal's surface and workspace. */
   const SURFACE = '0f7c1e52-3a8b-4d2e-9c61-5b2a7e4d9f10'
   const WORKSPACE = '6d2b9a4e-1c7f-4e85-b3a0-8f1d2c6e7b54'
@@ -3144,7 +3149,8 @@ describe('hook notify: a session outside a pane', () => {
   // A cut pane id, session name or socket would name another pane, session or socket: such a value is left out instead,
   // before the cap counts it, so it costs no other hint its place.
   it('a socket or a session name over 64 characters is left out, not cut, and takes none of the MAX_HINTS', async () => {
-    for (const name of WHOLE) {
+    // REX_SESSION goes only on macOS, for this home's own Rex server (notify.mjs onOwnRexServer).
+    for (const name of WHOLE.filter((whole) => SENT.includes(whole))) {
       for (const [value, sent] of [['x'.repeat(65), {}], ['x'.repeat(64), { [name]: 'x'.repeat(64) }]] as const) {
         const { port, requests } = await collect()
         await runHook({ port, env: { ...noHints, [name]: value }, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
@@ -3194,6 +3200,25 @@ describe('hook notify: a session outside a pane', () => {
     expect(requests).toHaveLength(1)
     expect(requests[0].body.hostHints).toEqual({})
     expect(JSON.stringify(requests[0].body)).not.toMatch(/side/)
+  })
+
+  // REX_SERVER is too long to send, and a Rex session of another server (shared, remote, a login server) is not one the
+  // devices' `rex` reaches: the hook sends REX_SESSION for this home's own server alone (docs/specs/2026-11-25-dial-rex.md).
+  it.runIf(process.platform === 'darwin')("sends REX_SESSION for this home's own Rex server only, and never REX_SERVER", async () => {
+    const session = 'session:01a210ed-5a96-7e9a-a458-5e14e5bf854a'
+    const block = 'block:01a210ed-5a96-7f3e-a907-8aa1ac357dcf'
+    const own = `unix://${encodeURI(join(homedir(), 'Library', 'Application Support', 'rex', 'server.sock'))}`
+    for (const [server, sent] of [[undefined, true], [own, true], ['unix:///tmp/rex-shared/server.sock', false], ['tcp://studio:7501', false]] as const) {
+      const { port, requests } = await collect()
+      await runHook({
+        port,
+        env: { ...noHints, TERM_PROGRAM: 'rex', REX_BLOCK: block, REX_SESSION: session, ...(server === undefined ? {} : { REX_SERVER: server }) },
+        input: { hook_event_name: 'Stop', session_id: 'sess-1' },
+      })
+      await received(requests)
+      expect(requests[0].body.hostHints, String(server)).toEqual({ TERM_PROGRAM: 'rex', REX_BLOCK: block, ...(sent ? { REX_SESSION: session } : {}) })
+      expect(JSON.stringify(requests[0].body)).not.toMatch(/server\.sock|studio/)
+    }
   })
 
   // Left out before the cap counts it: a pane id never sent would cost the farthest hint its place, and so would the hc

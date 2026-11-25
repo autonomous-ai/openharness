@@ -605,13 +605,18 @@ impl Fleet {
 
     /// Upsert rows without dropping anyone — the fast live-only list arriving before the full one.
     pub fn merge_roster(&mut self, machine_id: &str, rows: &[Value]) {
-        for row in rows {
-            let id = s(row, "id");
-            if id.is_empty() { continue }
-            let key = (machine_id.to_string(), id);
-            let agent = agent_from(machine_id, row, self.agents.get(&key));
-            self.agents.insert(key, agent);
-        }
+        for row in rows { self.merge_row(machine_id, row) }
+    }
+
+    /// One row, merged with what is already known of it. A create's reply (`describe`) names no tmux pane, and the
+    /// daemon's `agent_synced` for the same harness can come first: a row built from nothing wiped the pane that frame
+    /// gave, and the OS welcome could not find its own pane by it (Harness OS 0.1.18's VM runs, 2026-11-25).
+    pub fn merge_row(&mut self, machine_id: &str, row: &Value) {
+        let id = s(row, "id");
+        if id.is_empty() { return }
+        let key = (machine_id.to_string(), id);
+        let agent = agent_from(machine_id, row, self.agents.get(&key));
+        self.agents.insert(key, agent);
     }
 
     pub fn find_by_session(&mut self, machine_id: &str, session: &str) -> Option<&mut Agent> {

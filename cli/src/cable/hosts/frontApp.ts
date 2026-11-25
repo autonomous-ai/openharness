@@ -8,6 +8,10 @@ export const FRONT_NONE = 'none'
 
 // Bundle ids known in front only, outside BUNDLE_APPS so that detecting and opening an app stay as they are.
 const FRONT_BUNDLES: Readonly<Record<string, string>> = {
+  // The Rex Server app the Rex app installs under ~/Library/Application Support (its Info.plist, 2026-11-25): every Rex
+  // block's program is its child, so the open scan names a Rex agent's app by it (scannedApp.ts). It runs no window and is
+  // never in front. docs/specs/2026-11-25-dial-rex.md.
+  'com.superlogical.rex.server': 'rex',
   // Alacritty's Info.plist (alacritty's extra/osx/Alacritty.app): an agent there has no host of its own, so the unknown
   // app, as WindowsTerminal below.
   'org.alacritty': 'terminal',

@@ -241,8 +241,9 @@ export function createOrcaAdapter(deps: OrcaDeps, worktrees: OrcaWorktrees = NO_
       if (!handle || !ORCA_HANDLE.test(handle)) return undefined
       // VS Code from `code .`, a terminal or an editor started in an Orca terminal keeps its handle, and words typed by it
       // land at that terminal's prompt: only a terminal Orca's terminal host made the agent's terminal for takes words.
-      // Any other only switches. Windows reads no maker (no `ps`): there the handle stays the agent's.
-      if (deps.platform === 'win32' || place.ptyOwner === 'orca') return { adapter: 'orca', id: handle }
+      // Any other only switches. On every platform: the devices read the maker on Windows too, from the PTY host's
+      // process table.
+      if (place.ptyOwner === 'orca') return { adapter: 'orca', id: handle }
       if (place.ptyOwner !== undefined) sayHeld(place.pid)
       return { adapter: 'orca', id: `${HELD}${handle}`, held: true }
     },

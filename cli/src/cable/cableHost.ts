@@ -45,6 +45,7 @@ import { agentPlaceName, appDisplayName, hostDisplayName } from './hosts/hostDet
 import type { HostEntry, HostRegistry } from './hosts/registry.js'
 import { APP_LIMIT, AppRings, DialRing, pageOf, type RingRank } from './hosts/select.js'
 import { FRONT_NONE } from './hosts/frontApp.js'
+import { deriveAnswerCard } from '../lib/deviceRecap.js'
 import { capsLetters, type AppList, type AppPick, type DialView, type HostAgent, type PaneSwitch, type SwitchCause, type ViewCause } from './hosts/types.js'
 
 /** Which of an app's agents its ring lists while that app is shown and settled in front (Orca's worktree on screen). */
@@ -1372,8 +1373,9 @@ export class DaemonCableHost implements CableHost {
   recentSummaries(agentId: string): Promise<Array<{ recap: string; text: string; ask: string; fullText?: string }>> {
     const outside = this.outside(agentId)
     if (outside) {
-      const answer = outside.lastAnswer
-      return Promise.resolve(answer ? [{ recap: answer, text: answer, ask: '', fullText: answer }] : [])
+      // Cut as its live card was (devices.ts outsideTurn): the markdown gone from the headline and the text under it.
+      const card = outside.lastAnswer ? deriveAnswerCard(outside.lastAnswer) : null
+      return Promise.resolve(card ? [{ ...card, ask: '' }] : [])
     }
     return this.viaFleet((r) => r.recentSummaries(agentId))
   }
