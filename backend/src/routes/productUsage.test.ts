@@ -434,6 +434,13 @@ it('takes a report of dial counts only and keeps each name', async () => {
   expect(response.json().data).toEqual({ accepted: true })
   expect(methods.ingestProductUsage).toHaveBeenCalledExactlyOnceWith('account', { ...good, context: cli, counters })
 })
+it('takes the value from the dial: the counts, their flags and the period flags', async () => {
+  const counters = { dial_value_installation_days: 1, dial_value_ring_answered_2m: 2, dial_value_ring_answered_10m_installation_days: 1,
+    dial_value_ring_away_answered_10m: 1, dial_value_done_away_prompted_10m: 1, dial_value_week_installations: 1,
+    dial_value_28d_installations: 1 }
+  expect((await submit({ ...good, context: cli, counters })).statusCode).toBe(200)
+  expect(methods.ingestProductUsage).toHaveBeenCalledExactlyOnceWith('account', { ...good, context: cli, counters })
+})
 it('keeps dial names beside product names', async () => {
   const counters = { turns_started: 2, dial_connected_installation_days: 1, dial_open_ok: 4 }
   expect((await submit({ ...good, context: cli, counters })).statusCode).toBe(200)

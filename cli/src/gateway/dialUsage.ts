@@ -15,10 +15,11 @@ export interface DialStamp { mtimeMs: number; size: number }
  * What the gateway has taken from the devices' file. `sent`: each open day's values as last taken (flags kept across
  * a new series). `earlierWaits`: each open day's raw waits from the file's earlier series, which its close adds to
  * the last one's. `closedThrough`: the newest day whose close is done; a day open at a baseline is at or before it,
- * so its close derives nothing. `baseline`: the next merge takes the file as sent.
+ * so its close derives nothing. `baseline`: the next merge takes the file as sent. `usedDays`, `usedOutsideDays`,
+ * `valueDays`: the closed days the dial was used, used outside the app, got value, for the returns and period flags.
  */
 export interface DialRecord { series: number | null; sent: Record<string, DialCounts>; earlierWaits: Record<string, DialCounts>
-  closedThrough: string | null; baseline: boolean; usedDays: string[]; usedOutsideDays: string[] }
+  closedThrough: string | null; baseline: boolean; usedDays: string[]; usedOutsideDays: string[]; valueDays: string[] }
 export interface DialAdd { metric: DialUsageMetric; day: string; value: number }
 
 const DAY = 86_400_000
@@ -97,7 +98,7 @@ export function readDialFile(file: string, validDay: (day: string) => boolean, l
 
 /** [baseline]: the first merge takes the file as sent, so nothing it held before is reported. */
 export function freshDialRecord(baseline: boolean): DialRecord {
-  return { series: null, sent: {}, earlierWaits: {}, closedThrough: null, baseline, usedDays: [], usedOutsideDays: [] }
+  return { series: null, sent: {}, earlierWaits: {}, closedThrough: null, baseline, usedDays: [], usedOutsideDays: [], valueDays: [] }
 }
 
 /** A record read back from the gateway's queue file: each field rebuilt, anything else dropped. */
@@ -115,7 +116,9 @@ export function cleanDialRecord(value: unknown, validDay: (day: string) => boole
     earlierWaits: byDay(value.earlierWaits),
     // Kept past the window and ahead of the clock: forgetting it would reopen, and send again, every day it closed.
     closedThrough: calendarDay(value.closedThrough) ? value.closedThrough : null,
-    baseline: value.baseline === true, usedDays: days(value.usedDays), usedOutsideDays: days(value.usedOutsideDays) }
+    baseline: value.baseline === true, usedDays: days(value.usedDays), usedOutsideDays: days(value.usedOutsideDays),
+    // A queue file from before the value counts has none, so reads as [].
+    valueDays: days(value.valueDays) }
 }
 
 /**
@@ -128,6 +131,7 @@ export function mergeDial(record: DialRecord, file: DialFileRead, at: { closeBef
   validDay: (day: string) => boolean }): { record: DialRecord; adds: DialAdd[] } {
   const adds: DialAdd[] = []
   const usedDays = record.usedDays.filter(at.validDay), usedOutsideDays = record.usedOutsideDays.filter(at.validDay)
+  const valueDays = record.valueDays.filter(at.validDay)
   let closedThrough = latest(record.closedThrough, shift(at.closeBefore, -1))
   if (record.baseline) {
     // Sharing turned on again, or another account: what the file holds is taken as sent, and the days still open
@@ -137,7 +141,7 @@ export function mergeDial(record: DialRecord, file: DialFileRead, at: { closeBef
       sent[day] = { ...counts }
       closedThrough = latest(closedThrough, day)
     }
-    return { record: { series: file.series, sent, earlierWaits: {}, closedThrough, baseline: false, usedDays, usedOutsideDays }, adds }
+    return { record: { series: file.series, sent, earlierWaits: {}, closedThrough, baseline: false, usedDays, usedOutsideDays, valueDays }, adds }
   }
   const newSeries = file.series !== record.series
   const sent: Record<string, DialCounts> = {}, earlierWaits: Record<string, DialCounts> = {}
@@ -169,6 +173,7 @@ export function mergeDial(record: DialRecord, file: DialFileRead, at: { closeBef
     delete earlierWaits[day]
     if (record.closedThrough !== null && day <= record.closedThrough) continue
     const used = counts.dial_used_installation_days === 1
+    const first = (days: string[], length: number): boolean => !days.some(other => period(other, length) === period(day, length))
     const outside = !at.desktopDays.some(desktop => desktop >= shift(day, 1 - DESKTOP_WINDOW_DAYS) && desktop <= day)
     if (outside) {
       if (counts.dial_connected_installation_days === 1) add('dial_connected_outside_app_installation_days', day)
@@ -183,13 +188,17 @@ export function mergeDial(record: DialRecord, file: DialFileRead, at: { closeBef
         if (usedDays.includes(cohort)) add(`dial_d${lag}_returning_installations`, day)
         if (usedOutsideDays.includes(cohort)) add(`dial_d${lag}_returning_outside_app_installations`, day)
       }
-      const first = (days: string[], length: number): boolean => !days.some(other => period(other, length) === period(day, length))
       if (first(usedDays, 7)) add('dial_used_week_installations', day)
       if (first(usedDays, 28)) add('dial_used_28d_installations', day)
       if (outside && first(usedOutsideDays, 7)) add('dial_used_outside_app_week_installations', day)
       if (outside && first(usedOutsideDays, 28)) add('dial_used_outside_app_28d_installations', day)
       usedDays.push(day)
       if (outside) usedOutsideDays.push(day)
+    }
+    if (counts.dial_value_installation_days === 1) {
+      if (first(valueDays, 7)) add('dial_value_week_installations', day)
+      if (first(valueDays, 28)) add('dial_value_28d_installations', day)
+      valueDays.push(day)
     }
     let waited = false
     for (const [raw, derived] of used ? USED_DAY_WAITS : UNUSED_DAY_WAITS) {
@@ -198,5 +207,5 @@ export function mergeDial(record: DialRecord, file: DialFileRead, at: { closeBef
     }
     if (waited) add(used ? 'dial_wait_used_day_installation_days' : 'dial_wait_unused_day_installation_days', day)
   }
-  return { record: { series: file.series, sent, earlierWaits, closedThrough, baseline: false, usedDays, usedOutsideDays }, adds }
+  return { record: { series: file.series, sent, earlierWaits, closedThrough, baseline: false, usedDays, usedOutsideDays, valueDays }, adds }
 }

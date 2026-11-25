@@ -522,8 +522,17 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  this start has returned: `remoteTurns`, `registry` and `busyState` are made below. */
   const usageWorking = (agentId: string): boolean => remoteTurns.has(agentId)
     || registry.entries().some(({ agent }) => agent.id === agentId && busyState(agent.state))
+  /** Whether the agent's own app is known and another known app is in front: its row's app (Harness's agents' is
+   *  `harness`, as the front is while Harness Desktop is), not the unknown app nor one the scan has still to tell. No row
+   *  (another machine's agent) or no front is not away. Called only at a ring or a turn's end, once this start has
+   *  returned: `registry` is made below. */
+  const usageAway = (agentId: string): boolean => {
+    const front = cableHost.latestFront()
+    const row = registry.entries().find(({ agent }) => agent.id === agentId)?.agent
+    return front !== undefined && row !== undefined && !row.appPending && row.app !== UNKNOWN_APP && row.app !== front
+  }
   const dialUsage = createDialUsage({ sink: usageFile, now: wallClock, after: timerIn('dialUsage'), describe: usageAgent,
-    working: usageWorking, log })
+    working: usageWorking, away: usageAway, log })
   /** A count is the devices' own part: one that throws never reaches the dial. */
   const count = (run: (usage: DialUsage) => void): void => part.call('dialUsage', () => run(dialUsage))
   /** A Harness agent's question, as the dial's wait on the person: by its request, as an agent can hold two. */
@@ -1592,6 +1601,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     } finally { clearTimeout(timer) }
   }
 
+  /** A finished turn the dial rang or listed, for the value counts: a silent one told the person nothing. */
+  const announced = (agentId: string, tier: Tier): void => {
+    if (tier !== 'silent') count((usage) => usage.turnAnnounced(agentId))
+  }
   /** One card for the dial, in its four calls. A remote machine's and this computer's are the same calls,
    *  so a new kind of card lands on both the day it lands on either. [notice]: its agent's notice was pending as the
    *  card came (toDial). */
@@ -1646,20 +1659,26 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         const lowered = tileOnly && event.tier !== 'silent'
         if (lowered) tally('silent', 'rule:needs-you', 'needs-you', 0)
         else tally(event.tier, 'recaps', 'decided upstream', 0)
-        void cable.summary(agentId, recap, event.text, lowered ? 'silent' : event.tier, event.fullText, false)
+        const tier = lowered ? 'silent' : event.tier
+        announced(agentId, tier)
+        void cable.summary(agentId, recap, event.text, tier, event.fullText, false)
         return
       }
       // Returned, so the agent's next card waits behind this one (inOrder): a late recap must not follow turn.started.
       return tierOf({ engine: who?.engine ?? '', recap, durationS: turn?.durationS ?? null,
         stats: turn?.stats ?? {}, subagent: false, onScreen: false, failed: event.failed === true, needsYou })
         .then((d) => d.tier, (): Tier => (tileOnly ? 'silent' : 'list'))
-        .then((tier) => { void cable.summary(agentId, recap, event.text, tier, event.fullText, false) })
+        .then((tier) => {
+          announced(agentId, tier)
+          void cable.summary(agentId, recap, event.text, tier, event.fullText, false)
+        })
     }
     else {
       began.delete(event.agentId); ended.delete(event.agentId)
       stats.take(event.agentId) // a failed turn's sums must not leak into the next turn
       starts.delete(event.agentId)
       tally('alert', 'rule:failed', 'turn.error', 0)
+      count((usage) => usage.turnAnnounced(event.agentId))
       void cable.turnError(event.agentId, event.text)
     }
   }
@@ -1715,6 +1734,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // Read as the card comes, not as its turn in the queue does: a summary can wait up to 2 s behind its turn's done
     // (TOKENS_WAIT_MS), and the next turn's start, a message sent while the agent worked, ends the notice meanwhile.
     const notice = event.kind === 'summary' && notices.pending(event.agentId)
+    // So is the end it may announce: a turn started while the card waits is the agent's next, and spends it.
+    if (event.kind === 'summary' || event.kind === 'error') count((usage) => usage.turnEnded(event.agentId))
     inOrder(event.agentId, () => dispatch(event, notice))
   }
 
@@ -3208,7 +3229,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
           // Its voice delivered, and once a day where the dial found it: on no list, held, on the Other page or placed. Only
           // a dial on counts where, so with none the registry is not merged for it.
           count((usage) => {
-            usage.turnStarted(agentId)
+            // The person's prompt only where the hook can tell: another session's message is not, nor a turn with no
+            // prompt event (agy, commandcode).
+            usage.turnStarted(agentId, source === 'person' || source === 'dial')
             if (!dialOn) return
             const entries = registry.entries()
             // Its own row, or the row of the agent that holds its session: a Harness agent's, which the dial shows for it.

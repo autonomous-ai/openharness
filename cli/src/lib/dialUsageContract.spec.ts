@@ -46,6 +46,19 @@ describe('the dial usage vocabulary', () => {
     for (const margin of DIAL_USAGE_MARGIN_METRICS) expect(flags.has(margin)).toBe(true)
   })
 
+  // The names sent to the PM for the value from the dial: each count with its computer flag, sent as it comes, and the
+  // period flags the gateway derives as a day closes.
+  it('names the value from the dial', () => {
+    const device = new Set<string>(DIAL_DEVICE_METRICS)
+    expect(device.has('dial_value_installation_days')).toBe(true)
+    for (const count of ['ring_answered_2m', 'ring_answered_10m', 'ring_away_answered_2m', 'ring_away_answered_10m',
+      'done_away_prompted_10m']) {
+      expect(device.has(`dial_value_${count}`), count).toBe(true)
+      expect(device.has(`dial_value_${count}_installation_days`), count).toBe(true)
+    }
+    expect(DIAL_DERIVED_METRICS).toEqual(expect.arrayContaining(['dial_value_week_installations', 'dial_value_28d_installations']))
+  })
+
   it('a report of the 64 longest names at DIAL_USAGE_MAX_COUNT fits the backend\'s 8 KiB body', () => {
     const counters = Object.fromEntries([...DIAL_USAGE_METRICS].sort((a, b) => b.length - a.length).slice(0, 64)
       .map((m) => [m, DIAL_USAGE_MAX_COUNT]))

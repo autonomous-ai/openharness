@@ -110,6 +110,37 @@ describe('dailyDialReview', () => {
     expect(review.limits.join(' ')).toMatch(/Monday week/)
   })
 
+  it('shows who got value from the dial after who used it, and the value counts in a section of their own', () => {
+    const review = dailyDialReview([row(1, 'dial_used_installation_days', 8), row(1, 'dial_value_installation_days', 6),
+      row(2, 'dial_value_installation_days', 6), row(2, 'dial_value_week_installations', 7), row(20, 'dial_value_28d_installations', 9),
+      row(1, 'dial_value_ring_answered_2m_installation_days', 5), row(1, 'dial_value_ring_answered_2m', 12),
+      row(1, 'dial_value_ring_answered_10m_installation_days', 6), row(1, 'dial_value_ring_answered_10m', 20),
+      row(1, 'dial_value_ring_away_answered_10m_installation_days', 2), row(1, 'dial_value_ring_away_answered_10m', 3),
+      row(1, 'dial_value_done_away_prompted_10m_installation_days', 5), row(1, 'dial_value_done_away_prompted_10m', 7),
+      row(1, 'staff:dial_value_installation_days', 2), row(1, 'staff:dial_value_ring_answered_2m_installation_days', 3),
+      row(1, 'testing:dial_value_ring_answered_2m_installation_days', 4), row(1, 'staff:dial_value_ring_answered_2m', 9)], [], now)
+    const who = review.outsideTeam.find(s => s.name === 'Who uses a dial')!.rows
+    const used = who.findIndex(r => r.name.startsWith('Used ('))
+    expect(who[used + 1]).toEqual({ name: 'Got value from the dial (day: computers; 7 and 28 days: distinct computers)',
+      computers: { day: 6, d7: 7, d28: 9 } })
+    const names = review.outsideTeam.map(s => s.name)
+    const value = names.findIndex(n => n.startsWith('Value from the dial'))
+    expect(value).toBe(names.indexOf('Who uses a dial') + 1)
+    expect(review.outsideTeam[value]!.rows).toEqual([
+      { name: 'Rang, answered anywhere within 2 min', computers: { day: 5, d7: 5, d28: 5 }, events: { day: 12, d7: 12, d28: 12 } },
+      { name: 'Rang, answered anywhere within 10 min', computers: { day: 6, d7: 6, d28: 6 }, events: { day: 20, d7: 20, d28: 20 } },
+      { name: 'Rang with its app not in front, answered within 10 min', computers: { day: '<5', d7: '<5', d28: '<5' },
+        events: { day: '<5', d7: '<5', d28: '<5' } },
+      { name: 'Turn end announced with its app not in front, the person\'s next prompt within 10 min',
+        computers: { day: 5, d7: 5, d28: 5 }, events: { day: 7, d7: 7, d28: 7 } },
+    ])
+    // The team's apart, under the same rule: staff and testing together.
+    expect(rowOf(review.team, 'Value from the dial', 'Rang, answered anywhere within 2 min'))
+      .toEqual({ name: 'Rang, answered anywhere within 2 min', computers: { day: 7, d7: 7, d28: 7 }, events: { day: 9, d7: 9, d28: 9 } })
+    expect(rowOf(review.team, 'Who uses a dial', 'Got value from the dial (day: computers; 7 and 28 days: distinct computers)')?.computers)
+      .toEqual({ day: '<5', d7: '<5', d28: '<5' })
+  })
+
   it('never crosses engine, host or margin', () => {
     const rows = DIAL_REVIEW_METRICS.flatMap(metric => Array.from({ length: 28 }, (_, i) => row(i + 1, metric, 10)))
     const breakdowns = ['release:cli:0.6.84', 'platform:cli:linux'].flatMap(bucket => ['dial_connected_installation_days',
