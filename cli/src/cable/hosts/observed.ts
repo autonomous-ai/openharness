@@ -100,7 +100,7 @@ export interface ObservedDeps {
   platform: NodeJS.Platform
   /** The machine's processes, read once for every session (externals/support.ts listProcesses); none when unreadable. */
   processes(): Promise<readonly Pick<RunningProcess, 'pid' | 'generation'>[]>
-  /** Whether a pid is running: for a session whose process has no generation to read (Windows has no `ps` here), and
+  /** Whether a pid is running: for a session whose process has no generation to read (a start the table could not give), and
    *  for a session's process when a hook other than its session-start comes from another (ingest). */
   alive(pid: number): boolean
   openSessions: Pick<OpenSessions, 'owners' | 'busy'>

@@ -514,7 +514,9 @@ describe('a launch the guard held starts again on attempts of its own', () => {
   })
 
   it('a held row without startsAgain keeps the shared schedule and its answers of today', async () => {
-    const detail = 'Waiting to confirm the engine executable and native hooks.'
+    // A hold current code keeps on purpose (newPane.ts). 0.6.86's held words are the guard's: the restore marks those
+    // (restoreAgents.ts legacyNativeHold), so they are no row of today.
+    const detail = 'Waiting to confirm the native engine process. The original launch and terminal are preserved.'
     const h = setup([row('a', { state: 'held', service: 'native', nativeToken: 'a-0', detail }, { sessionId: '' })], (only) => summary({ held: [...only] }))
     await h.held.boot(async () => {})
     // Not one the guard held: no attempts of its own.
