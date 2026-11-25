@@ -198,7 +198,7 @@ describe.skipIf(process.platform !== 'darwin')('the dial\'s words reach an agent
   })
 
   // PM decision 2 (2026-11-25): with Broadcast Input on, iTerm2's write would reach a shell pane of the group too.
-  it('an agent in a plain iTerm2 tab gets no write line, and the dial says iTerm2 takes no words yet', async () => {
+  it('an agent in a plain iTerm2 tab gets no write line, and the dial says to type the reply in iTerm2', async () => {
     // Ghostty's agent listed with voice: the watch holds the tabs stream.
     const { d, dial, relay, run } = await fresh()
     const iterm = await Outside.start(d, 'in-iterm', IN_ITERM)
@@ -206,7 +206,7 @@ describe.skipIf(process.platform !== 'darwin')('the dial\'s words reach an agent
     await dial.next((m) => m.t === 'agent' && m.id === iterm.id, 45_000, 'the iTerm2 agent listed')
 
     // No route takes its words, so it is listed without voice and the dial's turn is refused before any route is asked.
-    const refusal = 'This agent is in iTerm2. Talking to it from the device comes in an update.'
+    const refusal = 'This agent is in iTerm2. Type your reply in iTerm2.'
     expect(await speak(dial, relay, iterm, WORDS)).toMatchObject({ t: 'voice.error', message: refusal })
     await until('the refusal in the daemon\'s log',
       () => d.log().split('\n').some((line) => line.endsWith(`cable: voice → error "${refusal}"`)), 30_000, 50)
