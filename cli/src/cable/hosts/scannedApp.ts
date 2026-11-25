@@ -8,6 +8,7 @@ import { execFile } from 'node:child_process'
 import { homedir } from 'node:os'
 import { basename, win32 } from 'node:path'
 import { patientExec } from '../../lib/patientExec.js'
+import { processRows } from '../../lib/processTable.js'
 import type { RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { windowsStartTime } from '../../lib/windows/treeKill.js'
 import { frontAppId } from './frontApp.js'
@@ -101,7 +102,8 @@ export async function readTtyName(pid: number, exec: Exec = execText): Promise<s
 export interface ScannedAppDeps {
   platform: NodeJS.Platform
   roots: readonly string[]
-  processes(): Promise<readonly ProcessName[]>
+  /** On Windows with each process's start, which ends a walk at a reused pid (parentChain). */
+  processes(): Promise<readonly WindowsProcess[]>
   bundleId(bundle: string): Promise<string | undefined>
   /** The home whose iTerm2 folders hold iTerm2's server; homedir() when absent. */
   home?: string
@@ -126,16 +128,26 @@ type Step = { bundle: string } | { app: string }
 /** A listed app, never the unknown one: the scan does not answer "Other", it leaves the session to its first hook. */
 const listed = (app: string): boolean => app !== UNKNOWN_APP && APP_IDS.includes(app)
 
-/** Whether the scan learns a session's app from its parents here. Windows waits for the first hook: a dead parent's pid
- *  can be another process's there. */
+/** Whether the scan learns a session's app, and its tmux, herdr or Zellij pane, from `ps`, its parents' names and their
+ *  terminals. Not on Windows, which has no `ps` and names no terminal: there the walk reads the PTY host's table for the
+ *  app alone (windowsPtyMaker), and an agent in a multiplexer waits for its first hook. */
 export const scanLearnsApps = (platform: NodeJS.Platform): boolean => platform === 'darwin' || platform === 'linux'
 
 /** Each pid's app, from the nearest of it and its parents that names one; a pid nothing named is left out. */
 export async function scannedApps(pids: readonly number[], deps: ScannedAppDeps): Promise<Map<number, string>> {
   const apps = new Map<number, string>()
-  if (!scanLearnsApps(deps.platform) || !pids.length) return apps
+  if ((!scanLearnsApps(deps.platform) && deps.platform !== 'win32') || !pids.length) return apps
   // One picture of the machine: a parent's id is never matched against a process that took it a moment later.
-  const table = new Map((await deps.processes()).map((p) => [p.pid, p]))
+  const rows = await deps.processes()
+  const table = new Map(rows.map((p) => [p.pid, p]))
+  if (deps.platform === 'win32') {
+    for (const pid of pids) {
+      const maker = windowsPtyMaker(pid, rows)
+      const app = maker && windowsAppOf(table.get(maker.pid)!.executable)
+      if (app) apps.set(pid, app)
+    }
+    return apps
+  }
   const walks = pids.map((pid) => [pid, parentChain(pid, table).map((p) => p.executable)] as const)
   if (deps.platform === 'linux') {
     for (const [pid, names] of walks) {
@@ -307,9 +319,9 @@ export const windowsName = (executable: string): string => win32.basename(execut
  * shell, launcher or shim of the caller's own name (a Scoop or Volta `claude.exe` starting the real one). A shim or
  * launcher starts the caller itself or through `cmd`: Node or one of the caller's name above any other shell is
  * another agent that ran the caller from its own tool (Codex run by Codex, `claude -p` from Claude Code's shell tool,
- * Claude Code from npm being Node), and the caller is on its terminal or pipes, not the pane's. That parent is the
- * maker, with no host when WINDOWS_PTY_HOSTS does not list it; none when the caller is not in [rows] or the walk finds
- * shells alone. Its name is matched and dropped, never kept.
+ * Claude Code from npm being Node), and the caller is on its terminal or pipes, not the pane's: then none. Any other
+ * parent is the maker, with no host when WINDOWS_PTY_HOSTS does not list it; none too when the caller is not in [rows]
+ * or the walk finds shells alone. Its name is matched and dropped, never kept.
  */
 export function windowsPtyMaker(pid: number, rows: readonly WindowsProcess[]): PtyMaker | undefined {
   const [own, ...parents] = parentChain(pid, new Map(rows.map((p) => [p.pid, p])))
@@ -323,6 +335,7 @@ export function windowsPtyMaker(pid: number, rows: readonly WindowsProcess[]): P
       shelled = true
       continue
     }
+    if (name === WINDOWS_LAUNCHER || name === ownName) return undefined
     return Object.hasOwn(WINDOWS_PTY_HOSTS, name) ? { pid: parent.pid, host: WINDOWS_PTY_HOSTS[name] } : { pid: parent.pid }
   }
   return undefined
@@ -331,6 +344,14 @@ export function windowsPtyMaker(pid: number, rows: readonly WindowsProcess[]): P
 /** windowsPtyMaker's host alone. */
 export function windowsPtyOwner(pid: number, rows: readonly WindowsProcess[]): string | undefined {
   return windowsPtyMaker(pid, rows)?.host
+}
+
+/** The listed app a Windows maker's image names (frontAppId, which takes Orca's `orca.exe` only with its `.exe`). Never
+ *  the Claude app: its window's `claude.exe` is Claude Code's own image too, so such a maker is an agent that ran this
+ *  one from its shell tool (Codex from Claude Code's), not the app. */
+function windowsAppOf(executable: string): string | undefined {
+  const app = frontAppId(`${windowsName(executable)}.exe`)
+  return listed(app) && app !== 'claude' ? app : undefined
 }
 
 /** The table [list] reads, each row cut to its pid, parent, image name and start: the PTY host's rows carry the
@@ -380,10 +401,17 @@ export async function readMadeBy(
   return made
 }
 
-/** The app each of these processes runs in, read from this machine; from [rows] when the look has read its table. */
-export function learnApps(pids: readonly number[], rows?: readonly ProcessName[], exec: Exec = execText): Promise<Map<number, string>> {
+/** The app each of these processes runs in, read from this machine; from [rows] when the look has read its table. On
+ *  Windows, which has no `ps`, from the PTY host's table [windowsRows] cut to four columns (readWindowsProcesses). */
+export function learnApps(
+  pids: readonly number[], rows?: readonly ProcessName[], exec: Exec = execText, platform: NodeJS.Platform = process.platform,
+  windowsRows: typeof processRows = processRows,
+): Promise<Map<number, string>> {
+  // Each row's four columns are taken by name, so its command line is never copied (the scan's files spec).
+  const windows = async (): Promise<WindowsProcess[]> => ((await windowsRows()) ?? [])
+    .map(({ pid, parentPid, executable, startMarker }) => ({ pid, ppid: parentPid, executable, startMarker }))
+  const read = (): Promise<readonly WindowsProcess[]> => (platform === 'win32' ? readWindowsProcesses(windows) : readProcessNames(exec))
   return scannedApps(pids, {
-    platform: process.platform, roots: appRoots(homedir()),
-    processes: () => (rows ? Promise.resolve(rows) : readProcessNames(exec)), bundleId: readBundleId,
+    platform, roots: appRoots(homedir()), processes: () => (rows ? Promise.resolve(rows) : read()), bundleId: readBundleId,
   })
 }
