@@ -121,6 +121,10 @@ A new `HostSource` with the id `herdr`.
   - A `pane_agent_detected` for a pane not yet known starts a new subscription with that pane added. The new
     subscription opens before the old one closes. At most one new subscription is started per second; detections
     that arrive meanwhile join it.
+  - A row listed with no session is listed again, through a new subscription and its list, 1, 2 and 4 s after it was
+    first listed so: at most three times, and never once it has its session, its pane left or the list emptied.
+    herdr's integration reports a session apart from the list, often after it, and tells no event when it does (herdr
+    0.9.5, measured 2026-11-26). An agent with no integration costs those three lists and nothing more.
   - A `released` detection, a `pane_closed` or a `pane_exited` drops that pane at once. A pane that left needs no new
     subscription: pane ids are never reused.
   - A status event sets that agent's state.
