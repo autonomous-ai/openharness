@@ -191,21 +191,23 @@ mod tests {
         let program = fake.program();
         let invocation = find_cli(program.parent().unwrap(), Some(&path), Some(&program)).unwrap();
         let watch = HarnessCli::new(invocation, fake.log()).spawn(&["hardware", "watch", "--json"]).unwrap();
-        // The turns once there are more than `least`, asked every 10 ms for 30 s at most: through the shim a short turn
-        // takes ~65 ms on a busy Mac, so the first 50 take seconds.
+        // The turns once there are more than `least`, and when that was asked, every 10 ms for 30 s at most: through the
+        // shim a short turn takes ~65 ms on a busy Mac, so the first 50 take seconds.
         let turns_past = |least: usize| {
             let end = Instant::now() + Duration::from_secs(30);
             loop {
+                let asked = Instant::now();
                 let turns = fs::read_to_string(shims.path().join("sleeps.log")).unwrap_or_default().lines().count();
-                if turns > least || Instant::now() >= end {
-                    return turns;
+                if turns > least || asked >= end {
+                    return (turns, asked);
                 }
                 thread::sleep(Duration::from_millis(10));
             }
         };
-        let settled = turns_past(50);
-        let start = Instant::now();
-        let later = turns_past(settled + 3);
+        // From before the read that saw `settled` to after the one that saw 4 more: 3 whole turns at least, however
+        // late this thread runs, so a slow machine never fails it.
+        let (settled, start) = turns_past(50);
+        let (later, _) = turns_past(settled + 3);
         let took = start.elapsed();
         watch.killer().kill();
         assert!(settled > 50, "the fake turned {settled} times");
