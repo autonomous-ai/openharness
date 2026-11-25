@@ -222,6 +222,34 @@ describe('a session\'s hooks waiting behind its admission', () => {
     waits.close()
   })
 
+  // A hook past its time is in its place still: beside it, the hooks after it, queued or sent while it runs, overtook it.
+  it('runs the hooks after a hook past its time once it has run, never beside it', async () => {
+    const waits = createSessionHookWait({ maxWaitMs: 1_000 })
+    const ticket = waits.admission(KEY, 'd1')
+    const calls: string[] = []
+    const running = gate()
+    waits.hold(KEY, hook('turn-stop', () => { calls.push('turn-stop'); return running.promise }))
+    await vi.advanceTimersByTimeAsync(500)
+    expect(waits.hold(KEY, hook('tool-start', async () => { calls.push('tool-start') }, { bound: true }))).toBe(true)
+    await vi.advanceTimersByTimeAsync(500)
+    await turn()
+    expect(waits.hold(KEY, hook('wait', async () => { calls.push('wait') }, { bound: true }))).toBe(true)
+    await turn()
+    expect(calls).toEqual(['turn-stop'])
+    running.open()
+    await turn()
+    expect(calls).toEqual(['turn-stop', 'tool-start', 'wait'])
+    // The admission it left still holds a hook of its unbound session that arrives now.
+    expect(waits.hold(KEY, hook('subagent', async () => { calls.push('subagent') }))).toBe(true)
+    await turn()
+    expect(calls).toHaveLength(3)
+    ticket.requestDone()
+    await turn()
+    expect(calls.at(-1)).toBe('subagent')
+    expect(lines.filter(line => line.includes('runs unheld'))).toEqual([unheldLine(S, 'turn-stop', 'timed_out')])
+    waits.close()
+  })
+
   it('starts a run on a later turn, never inside the call that settled the admission', async () => {
     const waits = createSessionHookWait()
     const ticket = waits.admission(KEY, 'd1')
