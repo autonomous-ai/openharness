@@ -15,7 +15,7 @@
 
 ## Base
 
-- Branch `feat/device-app-voice-language`, from `main` at `0a4f7cf05a`.
+- Branch `feat/device-app-voice-language`, from `main` at `33d9c496c2`; its first commit, `0a4f7cf05a`, is the design.
 - Before the first task: `cd cli && npm ci`, and `cd device-app/ui && npm ci && npm run build`. Neither `node_modules` nor `ui/dist` is in this worktree. `cargo test --lib` needs no `ui/dist`, but `main.rs`'s tests (`--bin harness-device`) and a full `cargo test` embed it.
 - Every cargo command runs with `CARGO_TARGET_DIR=~/.cache/harness-device-target`, so Tauri compiles once (`device-app/AGENTS.md`). Below, `cargo test` means `CARGO_TARGET_DIR=~/.cache/harness-device-target cargo test --locked`.
 - Tasks name code by name, never by line. If a name below is gone, stop and report.
@@ -312,7 +312,7 @@ None.
 
 **2. Local gates,** recorded in the pull request (PR CI does not run them):
 - On a Mac, freely: `(cd device-app/ui && npm ci && npm run build) && cd device-app/src-tauri && CARGO_TARGET_DIR=~/.cache/harness-device-target cargo test --locked`. PR CI compiles none of the macOS code ("Harness Device on macOS", `docs/validation-and-release.md`).
-- `git diff --stat 0a4f7cf05a -- cli/src/core cli/src/services cli/src/harnessd cli/src/cable cli/src/architecture.coreFiles.txt` prints nothing, so `npm run test:core` and `npm run test:harnessd` are not needed. If it prints a line, stop and report.
+- `git diff --stat 33d9c496c2 -- cli/src/core cli/src/services cli/src/harnessd cli/src/cable cli/src/architecture.coreFiles.txt` prints nothing, so `npm run test:core` and `npm run test:harnessd` are not needed. If it prints a line, stop and report.
 - Ask the PM for the Mac slot first, then `python3 scripts/local-checks.py --run` from a clean tree at the final commit. `--list` names no check for this plan's paths today (`{}`); paste what it prints.
 - Not needed: `macos.sh` (nothing here installs, starts, follows, draws the tray or updates), the serial and PTY specs, `make desktop-test`, `make device-test`.
 
