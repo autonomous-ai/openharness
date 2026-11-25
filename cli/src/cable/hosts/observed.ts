@@ -11,7 +11,7 @@ import { errorKind } from '../../lib/log.js'
 import { roundDrawable } from '../roundGlyphs.js'
 import type { HostAdapter, Outer, Pane, Place } from './adapter.js'
 import { CODEX_THREAD, type CodexQueue, type CodexQueueFailure, type CodexRan } from './codexQueue.js'
-import { agentPlaceName, APP_BUNDLES, detectApp, detectHost, EXTENSION_TAB, otherProduct, ownHints, UNKNOWN_APP } from './hostDetect.js'
+import { agentPlaceName, APP_BUNDLES, detectApp, detectHost, EXTENSION_TAB, inOrca, otherProduct, ownHints, UNKNOWN_APP } from './hostDetect.js'
 import type { Delivery } from './inbox.js'
 import { answerEngine, type AnswerEngine } from './lastAnswer.js'
 import { bundleOf, type OpenTarget } from './open.js'
@@ -157,10 +157,12 @@ const NEST_VARIABLE: Readonly<Record<Nest, string>> = { tmux: 'TMUX_PANE', herdr
 
 /** Whether a caller's app is learnt from its parents: its hints name none, or name VS Code by TERM_PROGRAM alone, which
  *  Cursor's terminal says too. Only a bundle id tells the two apart: Linux has none, and an editor started from another
- *  app has none once the one it inherited is dropped (hostDetect.ts ownHints). */
+ *  app has none once the one it inherited is dropped (hostDetect.ts ownHints). So for Orca by TERM_PROGRAM alone, which
+ *  every program started from an Orca terminal keeps unless it sets its own (kitty, the Claude app): Orca stands when
+ *  the parents name none (on Windows they never do, scannedApp.ts scanLearnsApps). */
 function walked(hints: Readonly<Record<string, string>>): boolean {
   const named = detectApp(hints)
-  return named === UNKNOWN_APP || (named === 'vscode' && !hints.__CFBundleIdentifier)
+  return named === UNKNOWN_APP || (named === 'vscode' && !hints.__CFBundleIdentifier) || inOrca(hints)
 }
 
 /** Whether an outer answer's client's process is one a raise can bring forward. */
