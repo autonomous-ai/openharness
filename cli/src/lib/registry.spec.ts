@@ -601,15 +601,19 @@ describe('registry remote display names', () => {
   // run synchronously: 3.3 ms on the core's loop for each save, for a value that never changes while the process lives.
   it.skipIf(process.platform === 'win32')('reads its own start once, however many times it saves, and again only while it could not be read', async () => {
     const read = vi.fn().mockReturnValueOnce('').mockReturnValue('fixture-generation')
-    vi.doMock('node:child_process', async original => ({ ...await original<object>(), execFile: (_command: string, _args: string[], _options: unknown, done: (error: null, stdout: string) => void) => {
-      done(null, process.platform === 'linux' ? '' : read())
-    } }))
-    vi.doMock('node:fs/promises', async original => {
-      const fs = await original<typeof import('node:fs/promises')>()
-      return { ...fs, readFile: async (...args: Parameters<typeof fs.readFile>) => {
-        if (String(args[0]) === `/proc/${process.pid}/stat`) return read() ? `1 (fixture) ${Array(19).fill('0').join(' ')} 1` : ''
-        return fs.readFile(...args)
-      } }
+    vi.doMock('node:child_process', async original => {
+      const child = await original<typeof import('node:child_process')>()
+      return { ...child, execFileSync: ((command: string, args: string[], options: object) => {
+        if (command === 'ps' && args.includes(String(process.pid)) && args.includes('lstart=')) return process.platform === 'linux' ? '' : read()
+        return child.execFileSync(command, args, options)
+      }) as typeof child.execFileSync }
+    })
+    vi.doMock('fs', async original => {
+      const fs = await original<typeof import('fs')>()
+      return { ...fs, readFileSync: ((...args: Parameters<typeof fs.readFileSync>) => {
+        if (process.platform === 'linux' && String(args[0]) === `/proc/${process.pid}/stat`) return read() ? `1 (fixture) ${Array(19).fill('0').join(' ')} 1` : ''
+        return fs.readFileSync(...args)
+      }) as typeof fs.readFileSync }
     })
     try {
       const { registry } = await loadRegistryModule()
@@ -620,7 +624,7 @@ describe('registry remote display names', () => {
       }
       expect(registry.byAgent('saved-4')).toBeTruthy()
       expect(read).toHaveBeenCalledTimes(2)
-    } finally { vi.doUnmock('node:child_process'); vi.doUnmock('node:fs/promises') }
+    } finally { vi.doUnmock('node:child_process'); vi.doUnmock('fs') }
   })
 
   it('bounds each live-lock attempt to 2 s on the clock, however long each pause really takes', async () => {
