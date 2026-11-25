@@ -249,7 +249,9 @@ it('fails a post-rc held create made without a creationId, with words that say w
   const id = response.agent.id
   const row = async () => (await c.request('agents_list', { includeStopped: true })).agents.find((one: any) => one.id === id)
   const failed = { launch: { state: 'failed', error: 'ENGINE_DID_NOT_START', detail: 'This harness did not start. Close it and open a new one.' } }
-  await until('the post-rc native hold', () => d.log().includes(`[launch] ${id.slice(0, 8)} starting → held`), 30_000)
+  // The hold's guard fails the create as it is held, so the row never shows held: it goes straight to failed.
+  await until('the guard to fail the post-rc native hold', () => d.log().split('\n').some(line =>
+    line.includes(`[launch] ${id.slice(0, 8)} starting → failed`) && line.includes('ENGINE_DID_NOT_START')), 30_000)
   const { tmuxPane: pane } = await until('the create to fail with nothing to start again from', async () => {
     const found = await row()
     if (found?.launch?.state !== 'failed') throw new Error(`launch ${JSON.stringify(found?.launch ?? null)}`)
