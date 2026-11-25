@@ -129,7 +129,13 @@ forever, run a login shell in the pane every 30 s, and keep `harness wait` waiti
   the failed state of section 4, its reason logged once by a fixed code (`[restore] <engine> · agent <sid> · first
   launch held again 10 times · NATIVE_GUARD_REPEATED`).
 - **Attempts held before dispatch because the evidence is still changing** (brew mid-install) keep waiting, up to **15
-  minutes from the first hold**; then the row goes to the same failed state (`NATIVE_EVIDENCE_UNSETTLED`).
+  minutes from the first hold**; then the row goes to the same failed state (`NATIVE_EVIDENCE_UNSETTLED`). Only a
+  hold for `native` counts toward it: a guard-held row whose recovery waits for another service (models for a grid,
+  the Store for a harness, search for an external conversation) waits as any row held for that service does, with no
+  bound, and is shown so (section 4).
+- **A dispatch the terminal turned away after its journal** (the evidence changed between `beginNativeDispatch` and
+  the respawn, so the respawn did not start) leaves the pane the held shell under the old token: the row goes back to
+  that guard-held launch (old token, `startsAgain`) and the next attempt comes, never a watch of a token no pane has.
 - A person's `agent_restart` of a row that got there answers as for any failed launch with no engine (section 4). The
   bounds are counted in memory: a daemon restart starts them again, once.
 
@@ -153,9 +159,10 @@ success with the row, shown starting.
 ### 4. What the person sees
 
 - **A held first launch is shown as starting.** Every frame built from a row (`lib/agentFrame.ts:295`, the one place a
-  row's `launch` goes to a client) shows a held launch with `startsAgain` as `{ state: 'starting' }`, so every client
-  draws its usual "Starting" with no client change. The registry keeps the true `held` state, which every core path
-  above runs on.
+  row's `launch` goes to a client) shows a held launch with `startsAgain` held for `native` as `{ state: 'starting' }`,
+  so every client draws its usual "Starting" with no client change. The registry keeps the true `held` state, which
+  every core path above runs on. One held with `startsAgain` for another service is shown, and worded, as any launch
+  held for that service ("Waiting for the models service. …"): its wait is that service's, not the guard's.
 - The held shell's own text in the pane (tmux's in-pane hold and the Windows held argv):
   "Waiting for native launch preparation to be confirmed." → "Starting again."
 - The row's detail for a held first launch (newPane, restoreAgents' watch): "Starting again." (logs and the registry;
@@ -257,7 +264,8 @@ Reviewed revision: (this file)  Reviewer: P1 builder-check. Each line: answered 
    runs in its own pane; flights are capped at four across the core (`heldLaunches`). The metric that warns first: the
    `[restore] held · native · launched n of m` line repeating for one agent.
 5. Compatibility: rows without `creationId` (older rows, the creates listed above) are the unrecoverable case; older
-   fork receipts without a task recover a fork that had none and fail one that had one (its task is not on disk). Every
+   fork receipts without a task cannot be told from a fork with none; the case is unreachable, since a row with a
+   `creationId` always names a receipt this release wrote (the fork reserves it and registers the row in one process). Every
    reader of the row was checked by search: the registry's normalize and save keep `creationId`; `agentFrame.ts` and
    every frame built from a row never send it. A client that sends no `creationId` creates rows without it.
    `startsAgain` is read by the restore, the held passes, restart and the frame; no client ever sees it (the frame
