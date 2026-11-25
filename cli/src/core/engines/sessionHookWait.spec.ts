@@ -10,8 +10,8 @@ const OTHER_KEY = sessionKey('codex', OTHER)
 
 type TestHook = WaitingHook & { run: Mock<() => Promise<void>> }
 function hook(route: WaitingRoute = 'turn-stop', run: () => Promise<void> = async () => {},
-  { sessionId = SESSION, bytes = 100 } = {}): TestHook {
-  return { route, sessionId, bytes, run: vi.fn(run) }
+  { sessionId = SESSION, bytes = 100, bound = false } = {}): TestHook {
+  return { route, sessionId, bytes, bound, run: vi.fn(run) }
 }
 /** A run the test ends by hand. */
 function gate() {
@@ -166,10 +166,10 @@ describe('a session\'s hooks waiting behind its admission', () => {
     await turn()
     expect(calls).toEqual(['wait', 'subagent', 'turn-stop'])
     // While the last one runs, its session's admissions all settle and a new one comes and goes: a hook with nothing
-    // ahead runs at once, and one behind the new admission runs after the running one, never beside it.
+    // ahead and one behind the new admission both run after the running one, in arrival order, never beside it.
     const d3 = waits.admission(KEY, 'd3')
     d3.requestDone()
-    expect(waits.hold(KEY, hook('tool-start'))).toBe(false)
+    expect(waits.hold(KEY, hook('tool-start', async () => { calls.push('tool-start') }))).toBe(true)
     const d4 = waits.admission(KEY, 'd4')
     expect(waits.hold(KEY, hook('session-end', async () => { calls.push('session-end') }))).toBe(true)
     d4.requestDone()
@@ -177,8 +177,48 @@ describe('a session\'s hooks waiting behind its admission', () => {
     expect(calls).toEqual(['wait', 'subagent', 'turn-stop'])
     gates[2]!.open()
     await turn()
-    expect(calls).toEqual(['wait', 'subagent', 'turn-stop', 'session-end'])
-    expect(lines.filter(line => line.includes('waiting hooks ran'))).toEqual([ranLine(S, 4)])
+    expect(calls).toEqual(['wait', 'subagent', 'turn-stop', 'tool-start', 'session-end'])
+    expect(lines.filter(line => line.includes('waiting hooks ran'))).toEqual([ranLine(S, 5)])
+    waits.close()
+  })
+
+  // Beside them, a hook sent after the bind would overtake the hooks that waited for it.
+  it('queues a bound session\'s hook behind its waiting or running hooks, and behind nothing else', async () => {
+    const waits = createSessionHookWait()
+    const calls: string[] = []
+    const running = gate()
+    const d1 = waits.admission(KEY, 'd1')
+    expect(waits.hold(KEY, hook('turn-stop', () => { calls.push('turn-stop'); return running.promise }))).toBe(true)
+    d1.requestDone()
+    await turn()
+    expect(calls).toEqual(['turn-stop'])
+    // A prompt of the bound session being re-admitted holds none of its hooks: only the one still running does.
+    const d2 = waits.admission(KEY, 'd2')
+    expect(waits.hold(KEY, hook('tool-start', async () => { calls.push('tool-start') }, { bound: true }))).toBe(true)
+    running.open()
+    await turn()
+    expect(calls).toEqual(['turn-stop', 'tool-start'])
+    // Nothing waiting or running: it runs at once, while its session's prompt is re-admitted or not.
+    expect(waits.hold(KEY, hook('wait', undefined, { bound: true }))).toBe(false)
+    expect(waits.hold(OTHER_KEY, hook('wait', undefined, { sessionId: OTHER, bound: true }))).toBe(false)
+    expect(lines).toEqual([waitsLine(S, 'turn-stop'), ranLine(S, 2)])
+    d2.requestDone()
+    waits.close()
+  })
+
+  it('runs a bound hook queued behind a hook that left at its time limit, not at its own', async () => {
+    const waits = createSessionHookWait({ maxWaitMs: 1_000 })
+    waits.admission(KEY, 'd1')
+    const stop = hook()
+    waits.hold(KEY, stop)
+    await vi.advanceTimersByTimeAsync(500)
+    const bound = hook('tool-start', undefined, { bound: true })
+    expect(waits.hold(KEY, bound)).toBe(true)
+    await vi.advanceTimersByTimeAsync(500)
+    expect(stop.run).toHaveBeenCalledOnce()
+    await turn()
+    expect(bound.run).toHaveBeenCalledOnce()
+    expect(lines.filter(line => line.includes('runs unheld'))).toEqual([unheldLine(S, 'turn-stop', 'timed_out')])
     waits.close()
   })
 

@@ -197,6 +197,30 @@ describe('a follow-up hook of a session being admitted', () => {
     expect(order).toEqual([...order].sort((a, b) => a - b))
   })
 
+  it('runs a hook sent once its session is bound after the hooks that waited for the bind', async () => {
+    let replay: Promise<void> | undefined
+    const resolveHookAgent = vi.fn(async ({ onWait }: { onWait?: () => void }) => {
+      // The first waiting hook's replay is slow: its process lookup waits for the test.
+      if (!onWait && replay) { const slow = replay; replay = undefined; wake(); await slow }
+      return registry.byPaneEngine('%1', 'claude') ?? null
+    })
+    const { handlers, post } = await start({ resolveHookAgent })
+    await holdStart(post)
+    expect(await post('turn-stop', followUp(), firedAt(1_000))).toEqual(held)
+    const slow = gate()
+    replay = slow.promise
+    await bind(handlers)
+    await until(() => replay === undefined)
+    expect(await post('tool-start', followUp({ toolUseId: 'tool-1', toolName: 'Read' }), firedAt(2_000))).toEqual(held)
+    expect(handlers.onToolStart).not.toHaveBeenCalled()
+    slow.open()
+    await until(() => lines.includes(`[hooks] ${N} waiting hooks ran · 2`))
+    expect(handlers.onTurnStop.mock.invocationCallOrder[0]).toBeLessThan(handlers.onToolStart.mock.invocationCallOrder[0]!)
+    // Nothing of it waiting or running: the next runs at once.
+    expect(await post('turn-start', followUp(), firedAt(3_000))).toEqual({ status: 200, body: { ok: true } })
+    expect(handlers.onTurnStart).toHaveBeenCalledOnce()
+  })
+
   it('admits a later prompt while an earlier Stop waits', async () => {
     const { handlers, post } = await start()
     await holdStart(post)
