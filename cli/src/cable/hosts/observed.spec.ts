@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ObservedAsked, ObservedHookEvent } from '../../core/observedHook.js'
 import { STOP_HOOK_GRACE_MS } from '../../core/turns/turnHooks.js'
+import type { TrustedCodexHome } from '../../lib/codexProfiles.js'
 import { type HostAdapter, oncePerCaller, type Pane, type Place } from './adapter.js'
 import { createClaudeAppAdapter } from './claudeApp.js'
 import { createCodexAppAdapter } from './codexApp.js'
@@ -1526,6 +1527,9 @@ interface Fakes extends Omit<ObservedActions, 'adapters'> {
 const counted = (count: { mock: { calls: Array<Parameters<ObservedActions['count']>> } }): string[] =>
   count.mock.calls.map(([what]) => countWord(what))
 
+/** Trusted Codex homes in the order given, each with its sessions folder, as trustedCodexHomes lists them. */
+const trusted = (...homes: string[]): TrustedCodexHome[] => homes.map((home) => ({ home, sessions: `${home}/sessions` }))
+
 /** Routes that answer as told, recording what each was handed. The adapters are the real ones for that platform, their
  *  verbs the fakes, and any command of their own goes to an inert runner. */
 function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'darwin') {
@@ -1561,7 +1565,7 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
       send: vi.fn(async (_threadId: string, _text: string, _isApp: boolean, _home: string): Promise<CodexQueueResult> => ({ outcome: 'queued' })),
     },
     // Harness trusts its own Codex home alone.
-    codexHomes: (): readonly string[] => ['/home/u/.codex'],
+    codexHomes: (): readonly TrustedCodexHome[] => trusted('/home/u/.codex'),
     count: vi.fn((_what: Parameters<ObservedActions['count']>[0]) => {}),
   }
   const fake = { ...fakes, ...over } as typeof fakes
@@ -2941,7 +2945,7 @@ describe('ObservedSource and codex queue', () => {
     const rolloutIn = (home: string) => `${home}/sessions/2026/11/15/rollout-2026-11-15T16-07-59-${THREAD}.jsonl`
     /** A Codex session in Ghostty whose rollout is [transcriptPath], with Harness trusting [homes]. */
     const under = (homes: readonly string[], transcriptPath: string) => {
-      const { actions } = fakeActions({ codexHomes: () => homes })
+      const { actions } = fakeActions({ codexHomes: () => trusted(...homes) })
       const t = setup({ actions })
       t.src.ingest(t.ev('session-start', { ...cx, transcriptPath }))
       return { ...t, actions }
@@ -2973,18 +2977,19 @@ describe('ObservedSource and codex queue', () => {
         expect(actions.codexQueue.send).not.toHaveBeenCalled()
       })
 
-    it('of two trusted homes holding the rollout, the deepest is the one it runs under, in either order', async () => {
+    // trustedCodexHomes lists the deepest first (lib/codexProfiles.ts): a home inside another's sessions folder is the session's.
+    it('of two trusted homes holding the rollout, the first listed is the one it runs under', async () => {
       for (const homes of [['/h/a', '/h/a/sessions/b'], ['/h/a/sessions/b', '/h/a']]) {
         const { src, actions } = under(homes, rolloutIn('/h/a/sessions/b'))
         expect(await src.send(src.list()[0], 'next')).toEqual({ ok: true })
-        expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', false, '/h/a/sessions/b']])
+        expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', false, homes[0]]])
       }
     })
 
-    // An adopted home counts at once, and one no longer trusted stops at once.
+    // What codexHomes says counts at once, a home added or dropped: its holds are trustedCodexHomes' (lib/codexProfiles.ts).
     it('the trusted homes are asked again at each look', async () => {
       let homes: readonly string[] = []
-      const { actions } = fakeActions({ codexHomes: () => homes })
+      const { actions } = fakeActions({ codexHomes: () => trusted(...homes) })
       const { src, ev } = setup({ actions })
       src.ingest(ev('session-start', { ...cx, transcriptPath: rolloutIn('/h/adopted') }))
       expect(src.capabilities(src.list()[0]).voice).toBe(false)
