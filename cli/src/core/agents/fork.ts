@@ -71,7 +71,7 @@ export function createAgentForker({
   native: inspectNative, prepareNative, authority: captureAuthority,
   createBackend, noBackendCode = 'TMUX_UNAVAILABLE', registry, mirror, pendingForkInherit, watchNewPane, announceSession, attach, prepareApiTools, relaunchOverrides, gridName, dshLaunch,
 }: ForkAgentDeps) {
-  const prepare = async ({ agentId, name, prompt }: Parameters<ForkAgent>[0], authority: LaunchAuthority): Promise<LaunchPreparation<Awaited<ReturnType<ForkAgent>>>> => {
+  const prepare = async ({ agentId, name, prompt, creationId }: Parameters<ForkAgent>[0], authority: LaunchAuthority): Promise<LaunchPreparation<Awaited<ReturnType<ForkAgent>>>> => {
     const ownsSource = captureAuthority?.(agentId) ?? (() => true)
     const owner = () => authority.current() && ownsSource()
     const changed = { ok: false, error: 'AGENT_CHANGED', detail: 'The original fork source changed or stopped during preparation.' } as const
@@ -225,6 +225,8 @@ export function createAgentForker({
         ...(source.sessionId ? { sessionId: source.sessionId, ...(source.transcriptPath ? { transcriptPath: source.transcriptPath } : {}) } : {}),
       },
       ...(firstTask ? { firstTask } : {}),
+      // The receipt the fork was asked under, so a launch the native guard holds is recovered from it.
+      ...(creationId ? { creationId } : {}),
     })
     if (!result.ok) return { ok: false, error: result.error, detail: result.detail }
     const { spawned, pending } = result

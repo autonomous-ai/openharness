@@ -135,7 +135,7 @@ describe('agent_create, refused before any pane exists', () => {
     expect(prepareCreate).not.toHaveBeenCalled()
     await run.ask(input)
     await vi.waitFor(() => expect(run.replies[1]).toMatchObject({ state: 'created' }))
-    expect(prepareCreate).toHaveBeenCalledWith(expect.objectContaining({ grid, prompt: 'original prompt' }), expect.any(Object), { local: true })
+    expect(prepareCreate).toHaveBeenCalledWith(expect.objectContaining({ grid, prompt: 'original prompt' }), expect.any(Object), { local: true, creationId: CREATION })
     expect(dispatch).toHaveBeenCalledOnce()
   })
 
@@ -195,6 +195,20 @@ describe('agent_create, refused before any pane exists', () => {
     expect(await ready!()).toEqual({ state: 'unconfirmed' })
     expect(dispatch).not.toHaveBeenCalled()
     expect(preTrustClaudeProject).not.toHaveBeenCalled()
+  })
+
+  it('hands the native-create preparation its intent\'s id, for a folder and for a new project', async () => {
+    // The row records the intent that made it, so a launch the guard held can read its first task back from it.
+    const dispatch = vi.fn(async () => ({ ok: true as const, session: session('new-agent') }))
+    const prepareCreate = vi.fn<NonNullable<LaunchRequestDeps['prepareCreate']>>(async () => ({ ok: true, dispatch }))
+    const prepareEngine = vi.fn<NonNullable<LaunchRequestDeps['prepareEngine']>>(async () => ({ ok: true, launch: {} as never }))
+    const { ask, deps } = setup({ prepareCreate, prepareEngine })
+    await ask({ creationId: CREATION, engine: 'claude', cwd: '/fixture/work' }, false)
+    await vi.waitFor(() => expect(deps.receipts.status(CREATION)).toEqual({ state: 'created', agentId: 'new-agent' }))
+    await ask({ creationId: `${CREATION}-new`, engine: 'codex', projectSource: 'new', projectName: 'scratch1' })
+    await vi.waitFor(() => expect(deps.receipts.status(`${CREATION}-new`)).toEqual({ state: 'created', agentId: 'new-agent' }))
+    expect(prepareCreate.mock.calls.map(([, , context]) => context)).toStrictEqual([
+      { local: false, creationId: CREATION }, { local: true, creationId: `${CREATION}-new` }])
   })
 
   it('recovers native and later service holds with the same request label and original authority', async () => {
@@ -743,7 +757,7 @@ describe('agent_create with a receipt', () => {
     clock += 3_000; await requests.recover()
     await vi.waitFor(() => expect(deps.receipts.status(CREATION)).toEqual({ state: 'created', agentId: 'new-agent' }))
     expect(workspaces.prepareFolder).toHaveBeenCalledOnce()
-    expect(prepareCreate).toHaveBeenCalledWith(expect.objectContaining({ cwd: join(root.projects, 'worktrees', 'repo', 'feature') }), expect.anything(), { local: true })
+    expect(prepareCreate).toHaveBeenCalledWith(expect.objectContaining({ cwd: join(root.projects, 'worktrees', 'repo', 'feature') }), expect.anything(), { local: true, creationId: CREATION })
     // A new empty folder is the core's own, and never waits for them.
     workspaces.ready.mockReturnValue(false)
     await ask({ engine: 'claude', projectSource: 'new', creationId: `${CREATION}-new` })
@@ -824,7 +838,7 @@ describe('agent_create with a receipt', () => {
     expect(prepareEngine).toHaveBeenCalledWith('codex', expect.objectContaining({ prompt: 'Reply with pong' }), expect.objectContaining({ id: CREATION }))
     expect(prepareNewFolder).toHaveBeenCalledOnce()
     expect(prepareCreate).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/projects/prepared', prompt: 'Reply with pong' }),
-      expect.objectContaining({ id: CREATION, label: expect.stringMatching(/^harness-codex-/) }), { local: true })
+      expect.objectContaining({ id: CREATION, label: expect.stringMatching(/^harness-codex-/) }), { local: true, creationId: CREATION })
     expect(dispatch).toHaveBeenCalledOnce()
     expect(create).not.toHaveBeenCalled()
   })
@@ -1374,6 +1388,28 @@ describe('agent_fork', () => {
     const bare = setup({}, { fork: vi.fn(async () => ({ ok: false as const, error: 'NOT_FORKABLE' })) })
     await bare.forkAsk({ agentId: 'a1', creationId: CREATION })
     await vi.waitFor(() => expect(bare.replies).toStrictEqual([{ creationId: CREATION, state: 'failed', failure: { code: 'NOT_FORKABLE' } }]))
+  })
+
+  it('keeps a fork\'s first task on its receipt and names the receipt to the fork', async () => {
+    // The fork's receipt is where a launch the guard held reads its first task back; the row names that receipt.
+    const forkOf = async (payload: Record<string, unknown>) => {
+      const run = setup()
+      const receiptRun = vi.spyOn(run.deps.receipts, 'run')
+      await run.forkAsk(payload)
+      if (payload.creationId) await vi.waitFor(() => expect(run.replies).toHaveLength(1))
+      return { run: receiptRun.mock.calls, fork: vi.mocked(run.fork!).mock.calls.map(([input]) => input) }
+    }
+    const tasked = await forkOf({ agentId: 'a1', name: 'second', prompt: 'carry on', creationId: CREATION })
+    expect(tasked.run).toStrictEqual([[CREATION, creationFingerprint({ operation: 'fork', agentId: 'a1', name: 'second', prompt: 'carry on' }),
+      expect.any(Function), undefined, 'carry on']])
+    expect(tasked.fork).toStrictEqual([{ agentId: 'a1', name: 'second', prompt: 'carry on', creationId: CREATION }])
+    const bare = await forkOf({ agentId: 'a1', creationId: CREATION })
+    expect(bare.run[0][1]).toBe(creationFingerprint({ operation: 'fork', agentId: 'a1', name: null, prompt: null }))
+    expect(bare.run[0][4]).toBeUndefined()
+    expect(bare.fork).toStrictEqual([{ agentId: 'a1', name: null, prompt: null, creationId: CREATION }])
+    const unnamed = await forkOf({ agentId: 'a1', prompt: 'carry on' })
+    expect(unnamed.run).toHaveLength(0)
+    expect(unnamed.fork).toStrictEqual([{ agentId: 'a1', name: null, prompt: 'carry on' }])
   })
 
   it('says why a receipt could not be kept, and INTERNAL when the answer cannot be put together', async () => {

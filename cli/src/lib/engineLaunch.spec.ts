@@ -838,7 +838,7 @@ printf '%s %s' "$harness_status" "$resumed"`], { encoding: 'utf8', stdio: ['igno
       ]) {
         const held = onWindows(() => buildEngineLaunchArgv('codex', { native: changed }, ''))
         expect(held.slice(1, 2)).toEqual(['-e'])
-        expect(held.slice(3)).toEqual(['harness-held', 'Waiting for native launch preparation to be confirmed.', token])
+        expect(held.slice(3)).toEqual(['harness-held', 'Starting again.', token])
         expect(isHeldStartCommand(held.join(' '), token)).toBe(true)
         expect(held.filter((arg) => POSIX_ONLY.test(arg))).toEqual([])
       }

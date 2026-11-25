@@ -196,6 +196,23 @@ describe('the core API services stand on', () => {
     expect(core.agents.resolve('missing')).toBeUndefined()
   })
 
+  it('gives a service no creation id', () => {
+    // The creation receipt's id is the core's own record of which intent made a row: no service reads it.
+    const live = { ...row('live'), creationId: 'creation-live' }, stopped = { ...row('stopped'), creationId: 'creation-stopped' }
+    const deps = coreDeps()
+    deps.registry.list = () => [live]
+    deps.registry.advertised = () => [live]
+    deps.registry.byAgent = id => id === live.agentId ? live : undefined
+    deps.registry.resolve = id => id === live.sessionId ? live : undefined
+    deps.stoppedAgents.list = () => [stopped]
+    const core = createCoreApi({ ...deps, cloudRows: () => [{ ...row('cloud'), creationId: 'creation-cloud' }] })
+    const views = [...core.agents.all(), ...core.agents.live(), ...core.agents.advertised(),
+      core.agents.byAgent('live')!, core.agents.resolve('s-live')!, ...core.agents.cloud!()]
+    expect(views).toHaveLength(7)
+    for (const session of views) expect(session).toEqual(row(session.agentId))
+    expect(live.creationId).toBe('creation-live')
+  })
+
   it('sends metadata without launch credentials through every agent-list service dispatch', async () => {
     const override = { networkId: 'fixture', networkName: 'Fixture', baseUrl: 'https://fixture.invalid/v1', apiKey: 'synthetic-agent-dispatch-canary' }
     const live: RegisteredSession = { ...row('live'), dsh: 'fixture', browser: true, gridLaunch: override }

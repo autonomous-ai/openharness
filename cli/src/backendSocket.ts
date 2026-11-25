@@ -280,8 +280,8 @@ export class BackendSocket {
   forkProvider: ((payload: Record<string, unknown>, reply: (result: Record<string, unknown>) => void) => Promise<void>) | null = null
   /** Opens a NEW agent that starts with `agentId`'s whole history (lib/forkAgent.ts), exactly as
    *  `agent_create` does, for the fork requests and the cable. `level` says what the new agent actually
-   *  got: the engine's own fork, or a handoff message. */
-  onForkAgent: ((input: { agentId: string; name: string | null; prompt: string | null }) =>
+   *  got: the engine's own fork, or a handoff message. `creationId` names the fork's receipt, kept on its row. */
+  onForkAgent: ((input: { agentId: string; name: string | null; prompt: string | null; creationId?: string }) =>
     Promise<
       { ok: true; session: RegisteredSession; level: 'native' | 'handoff' }
       | { ok: false; error: string; detail?: string }

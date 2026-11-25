@@ -60,6 +60,7 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
     browser?: boolean
     firstTask?: string
     openclawLocal?: string
+    creationId?: string
   }) => Promise<RegisteredSession | null> }
   nativeToken?: string
   /** The agent id the row gets, chosen before the pane so its argv can name it (OpenClaw's session key). */
@@ -123,6 +124,9 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
   /** OpenClaw's `--local` folder this pane runs on, recorded on the row so every relaunch keeps it (registry.ts
    *  `openclawLocal`). Already in `argv` and `env`: this is the record, not the launch. */
   openclawLocal?: string
+  /** The creation receipt this agent is made from (a create's intent, a fork's receipt), recorded on the row: a first
+   *  launch the native guard holds is recovered from it (registry.ts `creationId`). */
+  creationId?: string
   /** Rechecked by the backend after its gates and immediately before process dispatch. */
   current?: () => boolean
   onDispatch?: () => void | Promise<void>
@@ -188,6 +192,7 @@ export async function createAndRegisterPane<Ref extends TerminalRuntimeRef = Ter
         ...(deps.browser ? { browser: true } : {}),
         ...(deps.firstTask ? { firstTask: deps.firstTask } : {}),
         ...(deps.openclawLocal ? { openclawLocal: deps.openclawLocal } : {}),
+        ...(deps.creationId ? { creationId: deps.creationId } : {}),
       })
     } catch (error) {
       const closed = await deps.tmuxBackend.kill(spawned.runtime)

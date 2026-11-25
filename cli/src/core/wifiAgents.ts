@@ -7,6 +7,7 @@
  */
 import { realpathSync } from 'node:fs'
 import { installedDsh } from '../dsh/installed.js'
+import { shownLaunch } from '../lib/agentFrame.js'
 import type { AutonomousDeviceAgent } from '../lib/autonomous-device/service.js'
 import type { StoreAgent } from '../lib/autonomous-device/store.js'
 import type { RegisteredSession, registry } from '../lib/registry.js'
@@ -35,11 +36,14 @@ export interface WifiAgentsDeps {
  *  yet. A device's Store preparation reads it to find an agent already working in a folder. */
 export function storeAgents(deps: Pick<WifiAgentsDeps, 'registry' | 'machineId'>): StoreAgent[] {
   const machineId = deps.machineId()
-  return deps.registry.list().map(s => ({ agentId: s.agentId, machineId, packageId: s.dsh ? installedDsh(s.dsh)?.id ?? s.dsh : null,
-    engine: s.engine, workspace: canonicalPath(s.cwd), state: s.active ? 'active' : 'inactive',
-    runtime: !deps.registry.terminalAvailable(s.agentId) || s.launch?.state === 'failed' ? 'unavailable'
-      : s.launch?.state === 'starting' ? 'starting' : s.active ? (s.launch?.state === 'ready' || s.sessionId || s.engine === 'terminal' ? 'ready' : 'starting') : 'unavailable',
-    ...(s.launch?.state === 'failed' ? { error: s.launch.detail ?? s.launch.error } : {}) }))
+  return deps.registry.list().map(s => {
+    const { launch, active } = shownLaunch(s)
+    return { agentId: s.agentId, machineId, packageId: s.dsh ? installedDsh(s.dsh)?.id ?? s.dsh : null,
+      engine: s.engine, workspace: canonicalPath(s.cwd), state: active ? 'active' : 'inactive',
+      runtime: !deps.registry.terminalAvailable(s.agentId) || launch?.state === 'failed' ? 'unavailable'
+        : launch?.state === 'starting' ? 'starting' : active ? (launch?.state === 'ready' || s.sessionId || s.engine === 'terminal' ? 'ready' : 'starting') : 'unavailable',
+      ...(launch?.state === 'failed' ? { error: launch.detail ?? launch.error } : {}) }
+  })
 }
 
 export function wifiView(deps: WifiAgentsDeps): WifiView {

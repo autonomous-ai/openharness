@@ -17,6 +17,7 @@ import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import type { TerminalBackendCoordinator } from '../../lib/terminalBackendCoordinator.js'
 import type { TerminalRuntimeRef } from '../../lib/terminalTypes.js'
 import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
+import { guardHold } from '../../lib/restoreAgents.js'
 import { sameProcessIdentity, terminalRouteKey, terminalRuntimeLabel } from '../../lib/terminalRuntime.js'
 
 export interface PaneWatcherDeps {
@@ -32,6 +33,8 @@ export interface PaneWatcherDeps {
   terminals: Pick<TerminalBackendCoordinator, 'backendFor'>
   /** Keeps discovery off a pane until the returned release (TerminalAgentReconciler.holdRoute, with no timer). */
   holdRoute: (routeKey: string) => () => void
+  /** The held passes, asked to try that agent again once the guard held its new pane (core/agents/heldLaunches.ts). */
+  startAgain?: (agentId: string) => void
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => {
@@ -42,7 +45,7 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => {
 /** The process the watcher found is no longer what its pane runs when the readiness is published. */
 class PaneChanged extends IdentityReadUnavailable {}
 
-export function createPaneWatcher({ registry, announceSession, triggerHint, captureTerminal, retainExitedSession, terminals, holdRoute, revision, cancelled }: PaneWatcherDeps) {
+export function createPaneWatcher({ registry, announceSession, triggerHint, captureTerminal, retainExitedSession, terminals, holdRoute, revision, cancelled, startAgain }: PaneWatcherDeps) {
   /**
    * Watch a pane this daemon just opened until its engine process shows up (ready), dies (failed), or
    * ten minutes pass. Shared by create and fork: the two open panes the same way and wait the same way.
@@ -166,9 +169,12 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
         const waiting = nativeToken && await backend.isHeld?.(spawned.runtime, nativeToken)
         if (!current() || !matchesLaunchReceipt(registry.byAgent(pending.agentId), waitingOwner)) return
         if (waiting === true) {
-          const held = registry.setLaunch(pending.agentId, { state: 'held', service: 'native', nativeToken,
-            detail: 'The engine did not start because its executable or native hooks changed. The original launch is held for recovery.' })
+          // A new pane is a create's or a fork's first launch: it starts again only if its request can be rebuilt.
+          const launch = guardHold(waitingOwner, nativeToken)
+          const held = registry.setLaunch(pending.agentId, launch)
           if (held) announceSession(held)
+          if (launch.state === 'failed') console.warn(`[agent] create failed · ${engine} · ${launch.error}`)
+          else startAgain?.(pending.agentId)
           return
         }
         if (paneState.dead) {

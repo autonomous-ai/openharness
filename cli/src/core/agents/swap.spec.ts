@@ -43,6 +43,7 @@ function setup(row: RegisteredSession | null = session()) {
     holdOpen: vi.fn(async () => ({ state: 'succeeded' })),
     respawn: vi.fn(async () => ({ state: 'succeeded' })),
     respawnRefusal: vi.fn(async (request: { env?: Record<string, string> }) => request.env ? 'too old' : null),
+    isHeld: vi.fn(async (_runtime: unknown, _token: string) => true),
   }
   latest = { backend: tmuxBackend as never, runtime }
   const deps: PaneSwapDeps = {
@@ -61,6 +62,19 @@ describe('the pane-process swap', () => {
     const prepared = setup().swap.paneSwapDeps(session(), place(), { native })
     prepared.buildArgv({ resumeSessionId: 's1', bypassPermission: false })
     expect(buildEngineLaunchArgv).toHaveBeenCalledWith('claude', expect.objectContaining({ native, resumeSessionId: 's1' }))
+  })
+  it('reads its own launch\'s held shell by that launch\'s token', async () => {
+    const { swap, tmuxBackend } = setup()
+    const prepared = swap.paneSwapDeps(session(), place(), { native: { token: 'tok-1' } as NativeLaunch })
+    expect(await prepared.heldShell?.()).toBe(true)
+    expect(tmuxBackend.isHeld).toHaveBeenCalledExactlyOnceWith(runtime, 'tok-1')
+  })
+  it('has no held-shell read without a native launch or a backend that can tell', () => {
+    const { swap } = setup()
+    expect(swap.paneSwapDeps(session(), place(), {}).heldShell).toBeUndefined()
+    expect(swap.paneSwapDeps(session(), place(), { native: {} as NativeLaunch }).heldShell).toBeUndefined()
+    const cannotTell = { holdOpen: vi.fn(), respawn: vi.fn() } as never
+    expect(swap.paneSwapDeps(session(), { backend: cannotTell, runtime }, { native: { token: 'tok-1' } as NativeLaunch }).heldShell).toBeUndefined()
   })
   it('hands the owner\'s launch words to the argv builder, which puts them last, for a restart, a retarget and a host move alike', () => {
     const prepared = setup().swap.paneSwapDeps(session(), place(), { ownerArgs: ['--chrome'] })

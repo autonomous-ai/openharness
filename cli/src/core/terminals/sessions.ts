@@ -1,5 +1,6 @@
 /** Terminal identity and exit evidence stay with the core's live registry. */
 import type { CoreApi, TerminalsPort } from '../api.js'
+import { shownLaunch } from '../../lib/agentFrame.js'
 import { primaryRuntime } from '../../lib/terminalRuntime.js'
 import type { TerminalPaneRead, TerminalRuntimeRef } from '../../lib/terminalTypes.js'
 import type { checkPidRuntime } from '../../lib/deleteAgentFallback.js'
@@ -38,7 +39,7 @@ export function createTerminalSessions(deps: TerminalSessionDeps): Pick<Terminal
       if (!row) return null
       return {
         id: row.agentId, sessionId: row.sessionId, engine: row.engine, name: deps.agents.displayName(row),
-        status: 'active', launch: row.launch, terminal: { available: deps.agents.terminalAvailable(row.agentId) },
+        status: 'active', launch: shownLaunch(row).launch, terminal: { available: deps.agents.terminalAvailable(row.agentId) },
         project: { cwd: row.cwd, root: row.cwd, name: row.projectDir },
       }
     },
