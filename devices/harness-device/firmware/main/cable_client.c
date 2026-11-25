@@ -76,8 +76,8 @@ static bool              s_started; // boot owner; successful start is idempoten
 // Only the USB reader accesses this after start. A volatile 64-bit value is
 // not atomic on this 32-bit CPU; session expiry must share the reader's owner.
 static int64_t           s_last_rx_us;
-// The wordmark's hint, owned by the reader like s_last_rx_us. s_usb_host starts false so the first tick
-// reads the host (IDF reports one at boot) as appearing, which starts the OPEN_APP count at boot.
+// The wordmark's hint, owned by the reader like s_last_rx_us. s_usb_host starts false so a host already
+// there at the first tick counts as appearing, which starts the OPEN_APP count at boot.
 static bool              s_usb_host;
 static int64_t           s_alone_since_us;   // the latest of: the host appearing, a tick with a session up
 static ui_link_hint_t    s_link_hint;

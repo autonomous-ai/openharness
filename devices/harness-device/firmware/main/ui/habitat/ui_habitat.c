@@ -1149,8 +1149,9 @@ static void render_home(ht_scene_t *f)
     s.pet_next_ms = 0; s.timer_at = 0;
     if (!s.connected || s.loading) {
         render_brand(f);
-        // Loading means a daemon answered: the wordmark alone. Otherwise say where the dial is stuck, two
-        // lines at most, centred under the wordmark (its ink ends near y 260) and well inside the glass.
+        // Loading (the boot before the first list, or a daemon that answered and whose list is on its way): the
+        // wordmark alone. Otherwise say where the dial is stuck, two lines at most, centred under the wordmark
+        // (its ink ends near y 260) and well inside the glass.
         const char *hint = s.loading ? NULL
                          : s.link_hint == UI_LINK_HINT_NO_COMPUTER ? "No computer found. Check the USB cable."
                          : s.link_hint == UI_LINK_HINT_OPEN_APP ? "Open Harness Device on your computer." : NULL;
