@@ -1554,6 +1554,28 @@ mod tests {
     }
 
     #[test]
+    fn sign_in_opened_from_the_menu_and_open_at_the_relaunch_is_offered_again_by_the_new_process() {
+        // Later at the first launch, then Sign in from the menu, left open.
+        let later = Saved { asked_sign_in: true, ..SEEN };
+        let mut app = App::new(later, true, false, B, false).0;
+        answer(&mut app, false);
+        app.handle(Event::Menu(MenuAction::SignIn));
+        installed(&mut app);
+        assert_eq!(app.handle(tick(B + 10)), [Effect::Save(SEEN), Effect::StopWatch, Effect::Relaunch]);
+        assert_eq!(shows(&answer(&mut relaunched(&app), false)), [shown(Screen::SignIn, Phase::Offer, &[])]);
+
+        // Where installing ends the app, the install ends it too.
+        let mut app = App::new(later, true, false, B, true).0;
+        answer(&mut app, false);
+        app.handle(Event::Menu(MenuAction::SignIn));
+        assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
+        held(&mut app);
+        let effects = app.handle(tick(B + 10));
+        assert_eq!(effects[0], Effect::Save(SEEN), "{effects:?}");
+        starts_the_held_install(&effects[1..]);
+    }
+
+    #[test]
     fn a_follow_screen_open_at_the_relaunch_is_asked_again_by_the_new_process() {
         let mut app = on_follow();
         installed(&mut app);
