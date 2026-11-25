@@ -9,6 +9,7 @@ import type { HandoffDeps } from './agentHandoff.js'
 import { isSubagentTranscript } from './subagentTranscript.js'
 import type { RecentRecap } from './recapReads.js'
 import type { RegisteredSession } from './registry.js'
+import { startMarkerMs } from './processProof.js'
 import type { RepairedSession } from './sessionRepair.js'
 import type { TurnSource } from './sessionSearch/sessionTurns.js'
 import { SQLITE_BACKED_ENGINES } from './sqliteRead.js'
@@ -65,7 +66,7 @@ export function sessionDiscovery(deps: DiscoveryDeps): (session: RegisteredSessi
     if (DATABASE_ENGINES.has(session.engine)) return Promise.resolve(null)
     // As the repair sweep: the process itself, by its start and pid. Without them there is nothing certain to look for.
     const pid = session.processIdentity?.pid
-    const startedAt = Date.parse(session.processIdentity?.startMarker ?? '')
+    const startedAt = startMarkerMs(session.processIdentity?.startMarker ?? '') ?? NaN
     if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0 || !Number.isFinite(startedAt)) return Promise.resolve(null)
     let live = false
     try { live = deps.isLive(session.agentId) } catch { live = false }

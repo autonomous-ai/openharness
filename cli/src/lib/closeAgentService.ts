@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import type { ScreenReading } from '../engines/facets/screen.js'
 import type { RegisteredSession, registry as liveRegistry } from './registry.js'
 import { terminalRouteKey } from './terminalRuntime.js'
+import { startMarkerMs } from './processProof.js'
 import type { StopAgentOptions } from './stopAgentService.js'
 import { resumeMode } from './resumeCapability.js'
 import { codeOrLength, sid } from './log.js'
@@ -92,7 +93,7 @@ function harnessIdentity(s: RegisteredSession): string {
  *  installed in its pane first starts minutes after the pane opened), its row's otherwise. A clock that went back
  *  says nothing: never young. */
 function age(s: RegisteredSession, at: number): number {
-  const born = Date.parse(s.processIdentity?.startMarker ?? '')
+  const born = startMarkerMs(s.processIdentity?.startMarker ?? '') ?? NaN
   const since = Number.isFinite(born) && born > s.registeredAt ? Math.min(born, at) : s.registeredAt
   return at - s.registeredAt < 0 ? -1 : at - since
 }
