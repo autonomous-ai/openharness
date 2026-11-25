@@ -424,10 +424,10 @@ impl TabFollow {
         }
     }
 
-    /// A typing from the watch, which came `at`. With its app off or TYPING_QUEUED already waiting, it is answered no at
-    /// once: the line for the watch.
+    /// A typing from the watch, which came `at`. With no watch running, its app off or TYPING_QUEUED already waiting, it
+    /// is answered no at once: the line for the watch. A stopped watch's child may still print words before it ends.
     pub fn typed(&mut self, typing: Typing, at: Instant) -> Option<String> {
-        if self.off.contains(&typing.app()) || self.typings.len() >= TYPING_QUEUED {
+        if !self.watching || self.off.contains(&typing.app()) || self.typings.len() >= TYPING_QUEUED {
             return Some(wrote_line(typing.id(), false));
         }
         self.typings.push_back((typing, at));
