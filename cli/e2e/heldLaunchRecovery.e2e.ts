@@ -75,14 +75,16 @@ describe.skipIf(process.platform === 'win32')('a launch the native guard held', 
     const waiting = harness(d, ['wait', 'b1', '--timeout', '2m'])
     const { row, states, synced } = await settle(c, 'b1', () => true, 30_000)
     const waited = await waiting
-    await created
+    const made = await created
 
     expect(d.log()).toContain(`[launch] ${b1.id.slice(0, 8)} starting → held`)
     // Soft: a failure names each of what a person sees, not only the first.
+    expect.soft(made.code, made.out + made.err).toBe(0)
     expect.soft(states, 'b1 as listed').not.toContain('held')
     expect.soft(synced, 'b1 as synced').not.toContain('held')
     expect.soft(row?.launch?.state, `b1's launch, seen as ${states.join(' → ')}`).toBe('ready')
-    expect.soft(launches(d).filter((l) => l.engine === 'codex' && l.args.includes('hello'))).toHaveLength(1)
+    // One Codex in all, and it has the task: a second one, with the task or without, is two engines in one pane.
+    expect.soft(launches(d).filter((l) => l.engine === 'codex')).toEqual([expect.objectContaining({ args: expect.arrayContaining(['hello']) })])
     expect.soft(waited.code, waited.out + waited.err).toBe(0)
     expect.soft(waited.out.trim()).toBe('b1: idle · read it: harness show b1')
   }, 180_000)

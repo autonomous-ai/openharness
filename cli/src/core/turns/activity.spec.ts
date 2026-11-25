@@ -190,6 +190,20 @@ describe('turn activity', () => {
     expect(activityOf([], byAgent, () => null)).toEqual({})
   })
 
+  // The frame shows a launch the guard held as starting and active (lib/agentFrame.ts `shownLaunch`) while the registry
+  // keeps it inactive: its activity is none, even one read before the hold, so `harness wait` never reads it idle.
+  it('an agent the guard held, inactive in the registry, has no activity, whatever it had before', async () => {
+    let row = live
+    const { readers } = setup({ bySession: (sessionId) => sessionId === row.sessionId ? row : undefined })
+    readers.turnActivity.observe('s1', 'turn_started')
+    expect(readers.activityFrame(row)?.state).toBe('working')
+    row = { ...live, active: false, launch: { state: 'held', service: 'native', detail: 'Starting again.', nativeToken: 'tok-1', startsAgain: true } }
+    const read = vi.spyOn(readers.runtimeActivity, 'read').mockResolvedValue('idle')
+    expect(readers.activityFrame(row)).toBeNull()
+    expect(await given(readers.turnActivity).probe('s1')).toBe('unknown')
+    expect(read).not.toHaveBeenCalled()
+  })
+
   it('shows the app an agent\'s activity, and none for a plain terminal', () => {
     const { readers } = setup()
     const frame = { state: 'working' } as ActivityFrame
