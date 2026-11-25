@@ -1,3 +1,4 @@
+import type { ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { constants } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -8,7 +9,7 @@ vi.mock('./portStream.js', () => ({ portStream: io.stream }))
 vi.mock('./portAccess.js', () => ({ portAccessProblem: io.access }))
 vi.mock('node:child_process', () => ({ execFile: io.configure }))
 
-import { SerialLink, SerialToolTimeoutError, createDarwinDialFinder, findDialPorts, watchDialArrivals } from './serial.js'
+import { SerialLink, SerialToolTimeoutError, createDarwinDialFinder, findDialPorts, spawnBundledDevWatch, watchDialArrivals } from './serial.js'
 
 function port(nativeFd = 43) {
   const stream = Object.assign(new EventEmitter(), {
@@ -315,10 +316,28 @@ describe('a device arriving, as the OS says it', () => {
     return { watcher, watch, hear: (name: string | null, event = 'rename') => heard(event, name) }
   }
 
+  // The /dev watch helper's process as watchDialArrivals uses it: its stdout, its stdin, its kill.
+  function helper() {
+    return Object.assign(new EventEmitter(), {
+      stdout: Object.assign(new EventEmitter(), { setEncoding: vi.fn() }),
+      stdin: Object.assign(new EventEmitter(), { end: vi.fn() }),
+      kill: vi.fn(),
+    })
+  }
+  function onMac(start: () => Promise<unknown> | null) {
+    const dev = devWatch()
+    const signal = vi.fn()
+    const log = vi.fn()
+    const spawnDevWatch = vi.fn(start as () => Promise<ChildProcess> | null)
+    const off = watchDialArrivals(signal, log, { platform: 'darwin', watch: dev.watch, spawnDevWatch })
+    return { dev, signal, log, spawnDevWatch, off }
+  }
+  const NEXT = ' — a new dial is found by the next scan'
+
   it('on Linux is a new USB serial node in /dev, and nothing else there', () => {
     const dev = devWatch()
     const signal = vi.fn()
-    const off = watchDialArrivals(signal, vi.fn(), { platform: 'linux', watch: dev.watch })
+    const off = watchDialArrivals(signal, vi.fn(), { platform: 'linux', watch: dev.watch, spawnDevWatch: vi.fn() })
     expect(dev.watch).toHaveBeenCalledWith('/dev', { persistent: false }, expect.any(Function))
     for (const name of ['ttyACM0', 'ttyUSB3', 'ttyS0', 'tty1', 'shm', null]) dev.hear(name)
     expect(signal).toHaveBeenCalledTimes(2)
@@ -329,7 +348,7 @@ describe('a device arriving, as the OS says it', () => {
   it('on Linux is not a write to a dial already open, which a /dev watch hears as a change before Linux 6.19', () => {
     const dev = devWatch()
     const signal = vi.fn()
-    watchDialArrivals(signal, vi.fn(), { platform: 'linux', watch: dev.watch })
+    watchDialArrivals(signal, vi.fn(), { platform: 'linux', watch: dev.watch, spawnDevWatch: vi.fn() })
     dev.hear('ttyACM0', 'change')
     expect(signal).not.toHaveBeenCalled()
   })
@@ -337,15 +356,101 @@ describe('a device arriving, as the OS says it', () => {
   it('on Linux, a /dev watch that fails is closed and said once, leaving the scan timer', () => {
     const dev = devWatch()
     const log = vi.fn()
-    watchDialArrivals(vi.fn(), log, { platform: 'linux', watch: dev.watch })
+    watchDialArrivals(vi.fn(), log, { platform: 'linux', watch: dev.watch, spawnDevWatch: vi.fn() })
     dev.watcher.emit('error', Object.assign(new Error('too many'), { code: 'EMFILE' }))
     expect(dev.watcher.close).toHaveBeenCalledTimes(1)
     expect(log).toHaveBeenCalledExactlyOnceWith('cable: /dev watch failed (EMFILE) — a new dial is found by the next scan')
   })
 
-  it('on macOS is not watched: the scan timer finds a new dial', () => {
-    const dev = devWatch()
-    expect(watchDialArrivals(vi.fn(), vi.fn(), { platform: 'darwin', watch: dev.watch })).toBeUndefined()
-    expect(dev.watch).not.toHaveBeenCalled()
+  it('on macOS, each line from the /dev watch helper is an arrival', async () => {
+    const child = helper()
+    const mac = onMac(() => Promise.resolve(child))
+    await tick()
+    expect(child.stdout.setEncoding).toHaveBeenCalledWith('utf8')
+    for (const chunk of ['{"schema":1,"mode":"watch"}\n', 'dev\n', 'de', 'v\ndev\n', 'devx\n']) child.stdout.emit('data', chunk)
+    expect(mac.signal).toHaveBeenCalledTimes(3)
+    expect(mac.log).not.toHaveBeenCalled()
+    expect(mac.dev.watch).not.toHaveBeenCalled()
+  })
+
+  it('on macOS, a build with no /dev watch helper watches nothing and says nothing', () => {
+    const mac = onMac(() => null)
+    expect(mac.off).toBeUndefined()
+    expect(mac.spawnDevWatch).toHaveBeenCalledOnce()
+    expect(mac.dev.watch).not.toHaveBeenCalled()
+    expect(mac.log).not.toHaveBeenCalled()
+  })
+
+  it('a build that pins no /dev watch helper has none to spawn', () => {
+    expect(spawnBundledDevWatch()).toBeNull()
+  })
+
+  it.each([
+    [1, null, 'exit 1'],
+    [null, 'SIGKILL', 'SIGKILL'],
+  ])('on macOS, a helper that exits (%s, %s) is said once, and nothing more signals', async (code, killedBy, kind) => {
+    const child = helper()
+    const mac = onMac(() => Promise.resolve(child))
+    await tick()
+    child.emit('exit', code, killedBy)
+    child.stdout.emit('data', 'dev\n')
+    child.emit('error', Object.assign(new Error('gone'), { code: 'ENOENT' }))
+    expect(mac.log).toHaveBeenCalledExactlyOnceWith(`cable: /dev watch ended (${kind})` + NEXT)
+    expect(mac.signal).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['its pinned bytes cannot be written', 'HELPER_UNAVAILABLE'],
+    ['it cannot be spawned', 'ENOENT'],
+  ])('on macOS, a helper that cannot start because %s is said once', async (_, code) => {
+    const error = Object.assign(new Error('cannot start'), { code })
+    const child = helper()
+    // Extraction rejects the start; a spawn that fails hands back the child, which then emits 'error', as Node's does.
+    const spawned = code === 'ENOENT'
+    const mac = onMac(() => spawned ? Promise.resolve(child) : Promise.reject(error))
+    await tick()
+    if (spawned) { child.emit('error', error); child.emit('exit', 1, null) }
+    child.stdout.emit('data', 'dev\n')
+    expect(mac.log).toHaveBeenCalledExactlyOnceWith(`cable: /dev watch ended (${code})` + NEXT)
+    expect(mac.signal).not.toHaveBeenCalled()
+  })
+
+  it('on macOS, the unsubscribe ends the helper\'s stdin and kills it, and its exit says nothing', async () => {
+    const child = helper()
+    const mac = onMac(() => Promise.resolve(child))
+    await tick()
+    mac.off!()
+    expect(child.stdin.end).toHaveBeenCalledOnce()
+    expect(child.kill).toHaveBeenCalledOnce()
+    child.stdin.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }))
+    child.emit('exit', null, 'SIGTERM')
+    child.stdout.emit('data', 'dev\n')
+    expect(mac.log).not.toHaveBeenCalled()
+    expect(mac.signal).not.toHaveBeenCalled()
+  })
+
+  it('on macOS, an unsubscribe before the helper started kills it when it comes, and nothing signals', async () => {
+    const child = helper()
+    let started!: (child: unknown) => void
+    const mac = onMac(() => new Promise((resolve) => { started = resolve }))
+    mac.off!()
+    started(child)
+    await tick()
+    expect(child.stdin.end).toHaveBeenCalledOnce()
+    expect(child.kill).toHaveBeenCalledOnce()
+    // A spawn that failed says so after the child is handed back: unheard, it would throw in the devices process.
+    child.emit('error', Object.assign(new Error('spawn'), { code: 'ENOENT' }))
+    child.stdout.emit('data', 'dev\n')
+    expect(mac.signal).not.toHaveBeenCalled()
+    expect(mac.log).not.toHaveBeenCalled()
+  })
+
+  it('on macOS, a line longer than 64 bytes is dropped and the next one still counts', async () => {
+    const child = helper()
+    const mac = onMac(() => Promise.resolve(child))
+    await tick()
+    child.stdout.emit('data', 'x'.repeat(100))
+    child.stdout.emit('data', 'dev\ndev\n')
+    expect(mac.signal).toHaveBeenCalledTimes(1)
   })
 })
