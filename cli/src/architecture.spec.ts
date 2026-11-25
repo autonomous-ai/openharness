@@ -221,7 +221,8 @@ const EDGE: RegExp[] = [
   // The change-agent handoff reads and redacts history and runs git: the edge host owns that work.
   /^lib\/agentHandoff\.ts$/,
   // Codex's profiles and their discovery: a launch on a profile home has its connections written by the connectors
-  // service (ConnectorsPort.syncProfileHome), and the profiles' lists are models' and usage's.
+  // service (ConnectorsPort.syncProfileHome), the profiles' lists are models' and usage's, and the devices process reads
+  // the linked homes, read-only, for Codex's queue (readLinkedCodexHomes).
   /^lib\/(codexProfiles|codexProfileDiscovery)\.ts$/,
   // Usage owns all aggregate readers and ledgers. Core reads validated wire snapshots only.
   /^lib\/(agentTokenUsage|agentOutputStats|sessionWork)\.ts$/,
