@@ -955,10 +955,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // Only where a hook's address is taken: following another hc session, Herdr's adapter gives its terminals no pane, so
   // a session paired there would be listed twice on Herdr's page.
   hookIds ? (pid): string | undefined => hcSource?.terminalOf(pid) : undefined,
-  // An agent in a pane of the person's herdr, tmux or Zellij is on the page of the app holding the client that shows
-  // it: each lookup answers nothing at once for an agent in none of its panes, and places only one on a terminal its
-  // host made, so at most one names an app. herdr's first: its client's process alone, in a terminal with no page, is
-  // kept for the raise on Linux and Windows when neither other names an app.
+  // An agent in a pane of the person's herdr, tmux or Zellij is seen in the app holding the client that shows it, the
+  // app a tap brings forward: on herdr's or tmux's page (in Orca, on Orca's), on that app's page in Zellij (select.ts
+  // pageOf, Diego 2026-11-23). Each lookup answers nothing at once for an agent in none of its panes, and
+  // places only one on a terminal its host made, so at most one names an app. herdr's first: with its client in a
+  // terminal with no page, a process is kept for the raise when neither other names an app: on Linux the client's own,
+  // whose raise finds the window above it; on Windows the terminal's, which owns that window.
   firstOuter(createHerdrOuter({ ...outerDeps, atime: ttyAtime, tty: readTtyName, onPath: apps.onPath, sockets: procSockets,
     windows: herdrWindows }),
     firstOuter(createTmuxOuter({ ...outerDeps, tmux: tmuxAt, tty: readTtyName }),

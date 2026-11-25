@@ -787,8 +787,9 @@ export class ObservedSource implements HostSource {
   /** A live agent's latest process, the one whose window a raise brings forward, and its app; none once its session
    *  ended, as its window holds something else now. Nested in a multiplexer, the process is the client its app holds:
    *  the agent's own is under the multiplexer's server, which owns no window. A client in a terminal with no page is
-   *  that client too (Entry.outerPid). `outer` says the pid is that client's: only such a pid is raised on Windows
-   *  (open.ts), as the agent's own process there is under herdr's server. */
+   *  that client too (Entry.outerPid), or on Windows the terminal whose window holds it (herdrOuter.ts). `outer` says
+   *  the pid is the outer answer's: only such a pid is raised on Windows (open.ts), as the agent's own process there is
+   *  under herdr's server. */
   windowOf(agentId: string): { pid: number; app: string; outer?: true } | undefined {
     const e = this.entries.get(agentId)
     if (!e || !this.live(e)) return undefined
@@ -985,11 +986,11 @@ export class ObservedSource implements HostSource {
   /** Its app, and the one a tap brings forward: the app it is seen in when nested, else the one its hints name; hints
    *  that name none, or only a word Cursor says too (walked), learn it from the caller's parents. */
   private placeApp(entry: Entry, hints: Readonly<Record<string, string>>, pid: number): void {
-    // On Windows a herdr pane's hints are those of the client that started herdr's server, as the pane inherits its
-    // environment and the hook names its app from the pane's parents, herdr's server (spec
-    // 2026-11-25-dial-herdr-windows-app-design.md, "What Windows does today"): once herdr's lookup confirmed the pane,
-    // only its answer names the app, and a client in no listed app is the unknown one, never the hint's (decision 4, PM
-    // 2026-11-26). No walk either: the caller's parents end at herdr's server.
+    // On Windows a herdr pane's hints are those of the client that started herdr's server: the hook names its app from
+    // its own environment (notify.mjs lookUpWindowsApp), which the pane inherits from the server, and the server from
+    // that first client (spec 2026-11-25-dial-herdr-windows-app-design.md, "What Windows does today"). Once herdr's
+    // lookup confirmed the pane, only its answer names the app, and a client in no listed app is the unknown one, never
+    // the hint's (decision 4, PM 2026-11-26). No walk either: the caller's parents end at herdr's server.
     if (this.deps.platform === 'win32' && entry.agent.nest === 'herdr') {
       entry.agent.app = entry.outer?.app ?? UNKNOWN_APP
       entry.bundle = entry.outer ? APP_BUNDLES[entry.outer.app] : undefined

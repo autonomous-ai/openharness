@@ -62,7 +62,8 @@ export interface OpenDeps {
   /** Windows' way to bring an app forward by its bundle, where macOS runs `open -b`; none elsewhere. */
   windows?: WindowsRaise
   /** An agent's window as the observed source knows it: its process and app (observed.ts windowOf), and `outer` when the
-   *  process is the one herdr's lookup found holding the agent's client. */
+   *  process is the outer lookup's answer (the agent's multiplexer client, or on Windows the terminal holding herdr's),
+   *  not the agent's own. */
   windowOf?(agentId: string): { pid?: number; app?: string; outer?: true } | undefined
 }
 
