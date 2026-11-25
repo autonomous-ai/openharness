@@ -76,6 +76,7 @@ static size_t pet_store_held(char ids[][17],size_t max) {(void)ids;(void)max;ret
 '''
 code += defines('ID_MAX', 'CABLE_READ_TOKEN_MAX', 'CABLE_APP_ID_MAX', 'CABLE_PRODUCT', 'CABLE_PROTO_VERSION')
 code += defines('PET_STORE_MAX_PACKS', source=(MAIN / 'pet_store.h').read_text())
+code += defines('AUDIO_MIC_GAIN_DB', source=(MAIN / 'audio_capture.h').read_text())
 for name in ['cable_client_supports', 'send_json', 'msg']:
     code += function(name)
 for name in ['msg_check', 'msg_string', 'msg_number', 'msg_bool', 'msg_array', 'msg_item']:
@@ -140,10 +141,15 @@ int main(void) {
         fail_at=0;
         // app.pick carries the app, and nothing else.
         if(which==26) assert(!strcmp(expected,"{\"t\":\"app.pick\",\"app\":\"ghostty\"}"));
-        if(which==0) {
+        if(which==0||which==24) {
             cJSON *begin=cJSON_Parse(expected);assert(begin);
             const cJSON *id=cJSON_GetObjectItemCaseSensitive(begin,"agentId");
-            assert(cJSON_IsString(id)&&!strcmp(id->valuestring,"target-agent"));cJSON_Delete(begin);
+            assert(which==24?!id:cJSON_IsString(id)&&!strcmp(id->valuestring,"target-agent"));
+            // The gain travels beside the rate: the daemon's copy of the voice gate scales with it.
+            const cJSON *gain=cJSON_GetObjectItemCaseSensitive(begin,"micGain");
+            assert(cJSON_IsNumber(gain)&&gain->valuedouble==AUDIO_MIC_GAIN_DB);
+            const cJSON *rate=cJSON_GetObjectItemCaseSensitive(begin,"sr");
+            assert(cJSON_IsNumber(rate)&&rate->valueint==16000);cJSON_Delete(begin);
         }
     }
     sends=0;cable_client_send_scroll((cable_scroll_phase_t)-1,0,0);

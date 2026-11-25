@@ -195,6 +195,7 @@ python3 "$here/test_fw_update.py"
 python3 "$here/test_cable_logging.py"
 python3 "$here/test_audio_notify.py"
 python3 "$here/test_audio_init.py"
+python3 "$here/test_audio_gain.py"
 python3 "$here/test_audio_stream.py"
 python3 "$here/test_audio_threads.py"
 
