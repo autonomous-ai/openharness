@@ -7445,15 +7445,16 @@ describe('the dial\'s words typed into a Ghostty tab (docs/plans/2026-11-25-dial
 
   /** A watch holding the tabs stream open, as the listener runs one: it takes a line once the last has drained, a moment
    *  after its write, and tells Harness Device's answer to each write and Enter as `wrote`, through the listener's own
-   *  handler: ok at once, unless the spec answers by hand. */
-  const watch = (listener: ReturnType<typeof fakeListener>, answers: boolean) => {
+   *  handler: ok at once, unless the spec answers by hand. It says `writes`, as a watch Harness Device told writes
+   *  does, unless [writes] is false. */
+  const watch = (listener: ReturnType<typeof fakeListener>, answers: boolean, writes: boolean) => {
     const lines: Typing[] = []
     let writable = false
     let drained = (): void => {}
     const ready = (): void => { writable = true; drained() }
     const wrote = (id: string, ok = true): unknown =>
       (listener.given[0].handlers.wrote as ListenerHandler).handle({ type: 'wrote', id, ok }, new AbortController().signal)
-    expect((listener.given[0].handlers.tabs as ListenerStreamHandler).open({ type: 'tabs' }, {
+    expect((listener.given[0].handlers.tabs as ListenerStreamHandler).open(writes ? { type: 'tabs', writes: true } : { type: 'tabs' }, {
       write: (line) => {
         if (!writable) return false
         writable = false
@@ -7474,8 +7475,8 @@ describe('the dial\'s words typed into a Ghostty tab (docs/plans/2026-11-25-dial
 
   /** On macOS, `agents` of A and B in tabs of their own (Ghostty's unless `hostHints` say), their ttys and starts read,
    *  each the lead of its tty's foreground group and with its shell alone on its stdin beside it, a dial on the cable
-   *  with no window, and a watch's stream open. */
-  const inTabs = async ({ agents = 1, hostHints = GHOSTTY, answers = true }: { agents?: number; hostHints?: Record<string, string>; answers?: boolean } = {}) => {
+   *  with no window, and a watch's stream open, saying `writes` unless [writes] is false. */
+  const inTabs = async ({ agents = 1, hostHints = GHOSTTY, answers = true, writes = true }: { agents?: number; hostHints?: Record<string, string>; answers?: boolean; writes?: boolean } = {}) => {
     vi.useFakeTimers()
     readers.processes.mockResolvedValue(ROWS)
     const listener = fakeListener()
@@ -7491,8 +7492,10 @@ describe('the dial\'s words typed into a Ghostty tab (docs/plans/2026-11-25-dial
     seen.host.watching!(true)
     started.port.swarms(null)
     await Promise.all(tty.mock.results.map(({ value }) => value))
-    return { ...started, tabProcess, ttyReaders, watch: watch(listener, answers) }
+    return { ...started, tabProcess, ttyReaders, watch: watch(listener, answers, writes) }
   }
+  /** The dial's capabilities of that agent: `v` while its words have a way in. */
+  const caps = async (agentId: string) => (await host().listAgentSnapshot()).agents.find(({ id }) => id === agentId)?.caps
   /** The dial's words to that agent, given the time of their settle. */
   const say = async (agentId: string, text: string) => {
     const sent = host().sendTurn(agentId, text)
@@ -7505,6 +7508,7 @@ describe('the dial\'s words typed into a Ghostty tab (docs/plans/2026-11-25-dial
 
   it('words for an agent in Ghostty: its text written, the settle, its Enter written, and the dial is told sent', async () => {
     const { watch } = await inTabs({ answers: false })
+    expect(await caps(A)).toContain('v')
     const sent = host().sendTurn(A, 'run the tests')
     await vi.advanceTimersByTimeAsync(0)
     expect(watch.lines).toEqual([{ write: { id: expect.stringMatching(ID), app: 'ghostty', tty: ttyOf(1), text: 'run the tests' } }])
@@ -7519,6 +7523,17 @@ describe('the dial\'s words typed into a Ghostty tab (docs/plans/2026-11-25-dial
     expect(said()).toEqual(['[device] voice · tabs'])
     const secrets = ['ttys', 'run the tests', 'tests', String(pidOf(1)), watch.lines[0].write!.id, watch.lines[1].enter!.id]
     expect(logs.filter((line) => secrets.some((secret) => line.includes(secret)))).toEqual([])
+  })
+
+  // PM decision 3 (2026-11-25): Harness Device 0.1.x drops write and enter lines unanswered, and never tells its watch
+  // writes, so the watch does not say it.
+  it('a watch whose stream did not say writes offers no voice: no line, no probe, and the dial is told it did not answer', async () => {
+    const { watch, tabProcess, ttyReaders } = await inTabs({ writes: false })
+    expect(await caps(A)).not.toContain('v')
+    expect(await say(A, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
+    expect(watch.lines).toEqual([])
+    expect([tabProcess.mock.calls, ttyReaders.mock.calls]).toEqual([[], []])
+    expect(said()).toEqual(['[device] voice · no-answer'])
   })
 
   // PM decision 2 (2026-11-25): iTerm2's write reaches every pane its Broadcast Input joins, where a shell would run the
