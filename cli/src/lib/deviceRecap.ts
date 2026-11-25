@@ -39,6 +39,20 @@ export function deriveTurnBody(text: string): string {
   return clip(stripMarkdown(text).replace(/\s+/g, ' ').trim(), BODY_MAX_CHARS)
 }
 
+/**
+ * The card of an answer heard from an agent outside Harness (one in Rex, Orca or a terminal: its transcript's last turn),
+ * cut as a Harness agent's turn is (deriveTurnSummary): the headline and the text under it with the markdown gone, and
+ * the answer itself as the full text, which the dial's long view strips as it is sent (cable/cableSession.ts
+ * deriveLongRecap). Sent raw, the dial drew `**` and `##` in the headline (2026-11-25). Null when it has no prose.
+ */
+export function deriveAnswerCard(answer: string): { recap: string; text: string; fullText: string } | null {
+  const stripped = stripMarkdown(answer)
+  const flat = stripped.replace(/\s+/g, ' ').trim()
+  if (!flat) return null
+  const recap = clip(firstProseOpening(stripped) || flat, RECAP_MAX_CHARS, ' +')
+  return { recap, text: deriveTurnBody(answer) || recap, fullText: answer }
+}
+
 /** The longer text a `recap: "long-v1"` device draws under the headline. */
 export const LONG_RECAP_MAX_CHARS = 1200
 /** The frame cap is 8192 B; the long text never takes more than this many UTF-8 bytes of it. */

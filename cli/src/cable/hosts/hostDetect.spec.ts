@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { APP_BUNDLES, APP_IDS, appDisplayName, detectApp, detectHost, EXTENSION_TAB, hostDisplayName, inCmux, inHerdr, otherProduct, ownHints, UNKNOWN_APP } from './hostDetect.js'
+import { APP_BUNDLES, APP_IDS, appDisplayName, BUNDLE_APPS, detectApp, detectHost, EXTENSION_TAB, hostDisplayName, inCmux, inHerdr, otherProduct, ownHints, UNKNOWN_APP } from './hostDetect.js'
 
 describe('detectHost', () => {
   it.each([
@@ -68,6 +68,15 @@ describe('detectApp', () => {
     ['REX_BLOCK', 'ghostty', 'ghostty'], ['REX_BLOCK', 'iTerm.app', 'iterm'], ['REX_BLOCK', 'Apple_Terminal', 'terminal-app'],
   ])('zellij, herdr and rex inside Ghostty, iTerm2 and Terminal give the terminal: %s in %s', (own, program, app) => {
     expect(detectApp({ [own]: '1', TERM_PROGRAM: program })).toBe(app)
+  })
+
+  // A Rex block's own environment (RECORDED_REX.env): no bundle id, Rex's TERM_PROGRAM. It read as "Other" before
+  // docs/specs/2026-11-25-dial-rex.md.
+  it("a Rex block is Rex's: its page, its bundle, and the app in front", () => {
+    expect(detectApp({ TERM_PROGRAM: 'rex', REX_BLOCK: 'block:01a210ed-5a96-7f3e-a907-8aa1ac357dcf' })).toBe('rex')
+    expect(detectHost({ TERM_PROGRAM: 'rex', REX_BLOCK: 'block:01a210ed-5a96-7f3e-a907-8aa1ac357dcf' })).toBe('rex')
+    expect(APP_BUNDLES.rex).toBe('com.superlogical.rex')
+    expect(BUNDLE_APPS['com.superlogical.rex']).toBe('rex')
   })
 
   it('the bundle id decides before TERM_PROGRAM: Cursor before VS Code', () => {
