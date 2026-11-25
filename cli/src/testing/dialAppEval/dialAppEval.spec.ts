@@ -15,6 +15,7 @@ import { basename } from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { claudeGhost, claudeSessions, editorGhost, editorSession, itermGhost, itermSession, keys, listed, MAIN, orcaGhost, orcaOpening,
   orcaSession, orcaStarted, scenario, scenariosFor, started, turned } from './catalog.js'
+import { flagOf, ORCA_PROGRAMS, programOf } from './argv.js'
 import { rings } from './checks.js'
 import { loadBaseline, SKIP_RATCHET_ENV, tierAVerdict } from './grade.js'
 import { describeAttempt } from './netGuard.js'
@@ -395,6 +396,33 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
     expect(after[0]?.slice(1)).toEqual(['worktree', 'activate', '--worktree', `id:${orcaWorktreeId('w2')}`, '--json'])
     expect(after).toHaveLength(2)
     expect(raisesOrca.darwin(after[1]!)).toBe(true)
+  })
+
+  /** O11: a, b and c in w1, c under tmux in its tab; its tap on c, then the person turns to c. */
+  const o11 = MAIN.find((s) => s.id === 'O11')!
+  const orcaTerminal = (argv: string[], verb: string): boolean =>
+    ORCA_PROGRAMS.includes(programOf(argv)) && argv[1] === 'terminal' && argv[2] === verb
+
+  // Eval O11 found tmux's pane alone came forward, inside whichever tab Orca showed (2026-11-25).
+  it.for(['darwin', 'linux'] as const)("O11's tap on c under tmux switches Orca to c's terminal before tmux selects its pane and Orca comes forward, and types nothing, on %s", async (platform) => {
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, o11, platform)
+    expect(run.error).toBeUndefined()
+    const { commands, steps } = driver.seen()
+    const tap = steps.find((s) => s.label === 'tap')!
+    const face = steps.find((s) => s.label === 'face')!
+    const after = commands.filter((c) => c.at >= tap.at && c.at < face.at)
+    const switched = after.findIndex((c) => c.ok && orcaTerminal(c.argv, 'switch')
+      && flagOf(c.argv, '--terminal') === orcaTerminalHandle('c'))
+    const selected = after.findIndex((c) => programOf(c.argv) === 'tmux' && c.argv.includes('select-pane')
+      && c.argv[c.argv.indexOf('select-pane') + 2] === 'pane:c')
+    const raised = after.findIndex((c) => raisesOrca[platform](c.argv))
+    expect(switched).toBeGreaterThanOrEqual(0)
+    expect(selected).toBeGreaterThan(switched)
+    expect(raised).toBeGreaterThan(switched)
+    expect(after.filter((c) => orcaTerminal(c.argv, 'send'))).toEqual([])
+    const open = Object.fromEntries(run.results.filter((r) => r.check.startsWith('open.')).map((r) => [r.check, r.score]))
+    expect(open).toMatchObject({ 'open.worktree': 1, 'open.switch': 1, 'open.pane': 1 })
   })
 
   it("a ring of 40 agents in 40 worktrees reads Orca's layout at most once per change in its agents, and not once in a minute with no change", async () => {
