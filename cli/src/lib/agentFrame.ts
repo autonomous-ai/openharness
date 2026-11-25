@@ -259,12 +259,14 @@ export async function lastActivityAt(s: RegisteredSession): Promise<number> {
 /** The launch and the activity a client is shown for [row]: a launch the guard held (`guardHeld`) for `native`, which
  *  starts again by itself, reads as a launch starting. One whose recovery waits for another service (models, the Store,
  *  search) is that service's hold, as any launch held for it. The registry keeps the true hold, which the restore and
- *  the held passes run on. */
+ *  the held passes run on; `startsAgain` is the core's own word, which no client sees. */
 export function shownLaunch(row: Pick<RegisteredSession, 'launch' | 'active'>): { launch: AgentLaunch | undefined; active: boolean } {
   const launch = row.launch
+  if (launch?.state !== 'held' || !launch.startsAgain) return { launch, active: row.active }
   // A held row is inactive in the registry (setLaunch), which would read as offline; a launch starting is active.
-  if (launch?.state === 'held' && launch.service === 'native' && guardHeld(row)) return { launch: { state: 'starting' }, active: true }
-  return { launch, active: row.active }
+  if (launch.service === 'native' && guardHeld(row)) return { launch: { state: 'starting' }, active: true }
+  const { startsAgain: _, ...held } = launch
+  return { launch: held, active: row.active }
 }
 
 function frameTitle(s: RegisteredSession): string | null {
