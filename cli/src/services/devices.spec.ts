@@ -1365,7 +1365,7 @@ describe('what the windows say, reaching the dial', () => {
 
     it('logs why a silent summary is not news, and a sub-agent\'s as a sub-agent\'s', () => {
       const { port } = start({ decideTier: vi.fn() })
-      port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'summary', text: 'done', subagent: true, quiet: 'question' } })
+      port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'summary', text: 'done', subagent: true, notNews: 'question' } })
       port.card({ type: 'commander_event', agentId: 'a9', payload: { kind: 'summary', text: 'done', subagent: true } })
       expect(logs).toContain('[cable] notify · silent · rule:question · question · 0ms')
       expect(logs).toContain('[cable] notify · silent · rule:subagent · subagent · 0ms')

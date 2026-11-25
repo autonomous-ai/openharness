@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { AgentNotifications, DONE_QUIET_MS, type AgentNotification, type Quiet } from './agentNotifications.js'
+import { AgentNotifications, DONE_QUIET_MS, type AgentNotification, type NotNews } from './agentNotifications.js'
 
 beforeEach(() => { vi.useFakeTimers() })
 afterEach(() => { vi.useRealTimers() })
 
 /** Decide a session's ended turn and return what it was told so far: its notification, or why it has none. */
-function decided(policy: AgentNotifications, sessionId: string, result: string, silent = false): (AgentNotification | Quiet | undefined)[] {
-  const told: (AgentNotification | Quiet | undefined)[] = []
-  policy.decide(sessionId, result, silent, (n, quiet) => { told.push(n ?? quiet) })
+function decided(policy: AgentNotifications, sessionId: string, result: string, silent = false): (AgentNotification | NotNews | undefined)[] {
+  const told: (AgentNotification | NotNews | undefined)[] = []
+  policy.decide(sessionId, result, silent, (n, notNews) => { told.push(n ?? notNews) })
   return told
 }
 
@@ -93,10 +93,10 @@ describe('shared desktop/device notification policy', () => {
     policy.started('worker')
     policy.started('aborted')
     policy.cancelled('aborted')
-    for (const [id, text, silent, quiet] of [
+    for (const [id, text, silent, notNews] of [
       ['history', 'Historical answer', false, 'replay'], ['empty', '  ', false, 'empty'],
       ['worker', 'Child finished', true, 'subagent'], ['aborted', 'Partial work', false, 'replay'],
-    ] as const) { policy.ended(id); expect(decided(policy, id, text, silent)).toEqual([quiet]) }
+    ] as const) { policy.ended(id); expect(decided(policy, id, text, silent)).toEqual([notNews]) }
   })
 
   it('a turn that goes on after its ask is answered is announced done when it ends', () => {
