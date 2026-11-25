@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -36,7 +36,10 @@ interface Started {
 }
 
 /** A fake engine in a throwaway root, its homes there too, typed into on its stdin as at its composer. */
-function start(name: 'claude' | 'codex', { config = {}, args = [], bom = false }: { config?: Record<string, unknown>; args?: string[]; bom?: boolean } = {}): Started {
+/** [claudeJson]: the text of Claude Code's `~/.claude.json`, given the folder the engine runs in as it reads it. */
+function start(name: 'claude' | 'codex', { config = {}, args = [], bom = false, claudeJson }: {
+  config?: Record<string, unknown>; args?: string[]; bom?: boolean; claudeJson?: (cwd: string) => string
+} = {}): Started {
   root = mkdtempSync(join(tmpdir(), 'fake-admission-'))
   const home = join(root, 'home')
   const codexHome = join(root, 'codex')
@@ -44,6 +47,8 @@ function start(name: 'claude' | 'codex', { config = {}, args = [], bom = false }
   const hookLog = join(root, 'hook-runs.log')
   const settings = name === 'claude' ? join(home, '.claude', 'settings.json') : join(codexHome, 'hooks.json')
   mkdirSync(dirname(settings), { recursive: true })
+  // The real path: a process's working folder is one (macOS's tmpdir is under a link).
+  if (claudeJson) writeFileSync(join(home, '.claude.json'), claudeJson(realpathSync(root)))
   const command = `{ cat; echo; } >> '${ran}'`
   writeFileSync(settings, `${bom ? '﻿' : ''}${JSON.stringify({
     hooks: Object.fromEntries(EVENTS.map((event) => [event, [{ hooks: [{ type: 'command', command }] }]])),
@@ -173,5 +178,28 @@ describe('the fake engines\' hook settings', () => {
     fake.type('!exit')
     await fake.exited
     expect(fake.hooks()).toEqual([])
+  }, 30_000)
+})
+
+// Claude Code reads its `.claude.json` past a leading BOM, as it reads its settings: the trust it holds counts, and the
+// answer to its question is saved with the rest of the file.
+describe('the fake Claude Code\'s `trustPrompt` over a `.claude.json` that starts with a BOM', () => {
+  it('asks nothing in a folder it trusts', async () => {
+    const claude = start('claude', { config: { trustPrompt: true },
+      claudeJson: (cwd) => `﻿${JSON.stringify({ projects: { [cwd]: { hasTrustDialogAccepted: true } } })}` })
+    expect(await claude.hooked('SessionStart')).toMatchObject({ source: 'startup' })
+  }, 30_000)
+
+  it('saves a folder it is told to trust with the rest of the file', async () => {
+    let folder = ''
+    const claude = start('claude', { config: { trustPrompt: true }, claudeJson: (cwd) => {
+      folder = cwd
+      return `﻿${JSON.stringify({ numStartups: 3, projects: { '/elsewhere': { hasTrustDialogAccepted: true } } })}`
+    } })
+    claude.type('')
+    await claude.hooked('SessionStart')
+    expect(JSON.parse(readFileSync(join(root, 'home', '.claude.json'), 'utf8'))).toEqual({
+      numStartups: 3, projects: { '/elsewhere': { hasTrustDialogAccepted: true }, [folder]: { hasTrustDialogAccepted: true } },
+    })
   }, 30_000)
 })
