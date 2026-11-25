@@ -334,25 +334,45 @@ class SelectionTests(unittest.TestCase):
                 self.assertFalse(planner.e2e_plan([path], {"windows-e2e"})["windows_arm64"])
         self.assertNotIn("windows-e2e", planner.select(["cli/scripts/windows-dial-e2e/README.md"])[0])
 
-    def test_what_the_windows_desk_imports_runs_windows_end_to_end_on_x64_alone(self):
-        # The desk bundle carries the harness's desk, dial and daemon and the testing helpers they start: a change to one
-        # changes what dialWindowsTools.e2e.ts runs on Windows.
-        for path in ("cli/src/testing/placeNode.ts", "cli/e2e/harness/fakeDial.ts", "cli/e2e/harness/daemon.ts"):
+    def test_what_the_windows_e2e_harness_runs_runs_windows_end_to_end_on_x64_alone(self):
+        # windows.yml runs vitest.e2e.windows.config.ts: its setup files and global setup, the testing helpers its files
+        # import (the apps' fixtures), the desk bundle's desk, dial and daemon, and what they read or start by path. A PR
+        # that broke claudeAppFixture.ts on Windows went green without windows-e2e.
+        for path in ("cli/src/testing/placeNode.ts", "cli/e2e/harness/fakeDial.ts", "cli/e2e/harness/daemon.ts",
+                     "cli/src/testing/claudeAppFixture.ts", "cli/src/testing/codexAppFixture.ts",
+                     "cli/e2e/harness/bundle.ts", "cli/e2e/harness/artifactsSetup.ts", "cli/vitest.setup.ts",
+                     "cli/build-bundle.mjs", "devices/harness-device/firmware/version.txt",
+                     "cli/e2e/harness/reaperProcess.mjs"):
             with self.subTest(path=path):
                 self.assertIn("windows-e2e", planner.select([path])[0])
                 self.assertFalse(planner.e2e_plan([path], {"windows-e2e"})["windows_arm64"])
 
-    def test_the_windows_desk_imports_are_listed(self):
-        # Through the harness and the testing helpers only: the product code the bundle carries is selected by its own
-        # rules, and walking it would run windows-e2e for almost every CLI pull request.
+    def test_what_the_windows_e2e_harness_imports_is_listed(self):
+        # From the Windows e2e config's files, setup files and global setup, and the desk bundle's entry, through the
+        # harness and the testing helpers only: product code selects windows-e2e only where its own folder rules say so,
+        # and walking it would run windows-e2e for almost every CLI pull request.
         root = REPOSITORY
-        sources = ["cli/scripts/windows-dial-e2e/desk.mts", "cli/e2e/dialWindowsTools.e2e.ts"]
-        full_checkout(self, *sources, "cli/e2e/harness", "cli/src/testing")
-        run = imports_from(root, sources, ("cli/e2e/harness/", "cli/src/testing/")) - set(sources)
+        full_checkout(self, "cli/vitest.e2e.windows.config.ts", "cli/e2e/harness", "cli/src/testing")
+        config = (root / "cli/vitest.e2e.windows.config.ts").read_text()
+        sources = ["cli/scripts/windows-dial-e2e/desk.mts"]
+        for key in ("setupFiles", "globalSetup", "include"):
+            named = re.findall(r"'([^']+)'", re.search(rf"\b{key}: \[([^\]]*)\]", config).group(1))
+            self.assertTrue(named, key)
+            sources += [posixpath.normpath(posixpath.join("cli", name)) for name in named]
+        run = imports_from(root, sources, ("cli/e2e/harness/", "cli/src/testing/"))
         self.assertEqual(sorted(path for path in run if not planner.windows_e2e(path)), [])
-        for entry in planner.WINDOWS_DESK_PATHS:
+        # What a file the walk takes reads or starts by a path the walk cannot see, with the file that names it.
+        by_path = {"cli/build-bundle.mjs": "cli/e2e/harness/bundle.ts",
+                   "devices/harness-device/firmware/version.txt": "cli/e2e/harness/fakeDial.ts",
+                   "cli/e2e/harness/reaperProcess.mjs": "cli/e2e/harness/reaper.ts"}
+        for path, named_in in by_path.items():
+            with self.subTest(path=path):
+                self.assertIn(named_in, run)
+                self.assertIn(posixpath.basename(path), (root / named_in).read_text())
+                self.assertIn(path, planner.WINDOWS_E2E_HARNESS_PATHS)
+        for entry in planner.WINDOWS_E2E_HARNESS_PATHS:
             with self.subTest(entry=entry):
-                self.assertIn(entry, run)
+                self.assertIn(entry, run | set(by_path))
                 self.assertTrue((root / entry).is_file())
 
     def test_a_cross_platform_file_outside_the_lists_runs_no_end_to_end_suite(self):
@@ -2088,7 +2108,7 @@ class FullCheckoutTests(unittest.TestCase):
              "SelectionTests.test_the_orca_e2e_files_are_every_linux_one_through_the_stand_in",
              "SelectionTests.test_every_path_the_app_eval_covers_is_in_the_checkout",
              "SelectionTests.test_the_harness_the_app_eval_files_run_runs_them",
-             "SelectionTests.test_the_windows_desk_imports_are_listed",
+             "SelectionTests.test_what_the_windows_e2e_harness_imports_is_listed",
              "SelectionTests.test_every_declared_input_exists",
              "CrossReadTests.test_every_cross_read_in_this_repository_is_declared")
 
