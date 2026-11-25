@@ -334,6 +334,27 @@ class SelectionTests(unittest.TestCase):
                 self.assertFalse(planner.e2e_plan([path], {"windows-e2e"})["windows_arm64"])
         self.assertNotIn("windows-e2e", planner.select(["cli/scripts/windows-dial-e2e/README.md"])[0])
 
+    def test_what_the_windows_desk_imports_runs_windows_end_to_end_on_x64_alone(self):
+        # The desk bundle carries the harness's desk, dial and daemon and the testing helpers they start: a change to one
+        # changes what dialWindowsTools.e2e.ts runs on Windows.
+        for path in ("cli/src/testing/placeNode.ts", "cli/e2e/harness/fakeDial.ts", "cli/e2e/harness/daemon.ts"):
+            with self.subTest(path=path):
+                self.assertIn("windows-e2e", planner.select([path])[0])
+                self.assertFalse(planner.e2e_plan([path], {"windows-e2e"})["windows_arm64"])
+
+    def test_the_windows_desk_imports_are_listed(self):
+        # Through the harness and the testing helpers only: the product code the bundle carries is selected by its own
+        # rules, and walking it would run windows-e2e for almost every CLI pull request.
+        root = REPOSITORY
+        sources = ["cli/scripts/windows-dial-e2e/desk.mts", "cli/e2e/dialWindowsTools.e2e.ts"]
+        full_checkout(self, *sources, "cli/e2e/harness", "cli/src/testing")
+        run = imports_from(root, sources, ("cli/e2e/harness/", "cli/src/testing/")) - set(sources)
+        self.assertEqual(sorted(path for path in run if not planner.windows_e2e(path)), [])
+        for entry in planner.WINDOWS_DESK_PATHS:
+            with self.subTest(entry=entry):
+                self.assertIn(entry, run)
+                self.assertTrue((root / entry).is_file())
+
     def test_a_cross_platform_file_outside_the_lists_runs_no_end_to_end_suite(self):
         # The spec's negative: a typical CLI change pays for none of them.
         for path in ("cli/src/lib/tmuxBackend.ts", "cli/src/core/agents.ts", "cli/src/lib/engineLaunch.ts",
