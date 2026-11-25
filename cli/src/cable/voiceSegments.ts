@@ -1,3 +1,4 @@
+import { decibels, FrameLevels, gainFor, raised, voiceOf } from './voiceGain.js'
 import { VoiceLevel } from './voiceLevel.js'
 
 /** A 60 s segment (1.92 MB at 16 kHz) uploads in about 31 s at 0.5 Mbps: an attempt at four times that is stuck. */
@@ -37,6 +38,9 @@ export class VoiceSegments {
   private readonly transcribe: SegmentTranscriber
   private readonly timer: SegmentTimer
   private readonly runningLevel = new VoiceLevel()
+  private readonly frameLevels: FrameLevels
+  /** The largest gain a segment went up with: 1 when every one went as it came. */
+  private gain = 1
   private readonly count: SegmentCounts = { segments: 0, early: 0, retries: 0 }
   /** Audio not yet cut, kept as it came and joined once per cut: 8 KB chunks against a 1.92 MB segment. */
   private pending: Buffer[] = []
@@ -55,6 +59,7 @@ export class VoiceSegments {
     this.segmentSamples = 60 * rate
     this.windowStart = 55 * rate
     this.frameSamples = Math.floor(rate / 50)
+    this.frameLevels = new FrameLevels(this.frameSamples)
     this.lang = options.lang
     this.transcribe = options.transcribe
     this.timer = options.timer
@@ -92,9 +97,10 @@ export class VoiceSegments {
     if (!this.stopped) this.stop(new DOMException('Voice recording cancelled', 'AbortError'))
   }
 
-  /** Complete once finish() has been called. */
-  level(): { peak: number; rms: number } {
-    return this.runningLevel.read()
+  /** Complete once finish() has been called: the whole recording's peak and RMS, its voice and floor over 20 ms frames
+   *  (voiceGain.ts), and the largest gain a segment went up with, in dB. */
+  level(): { peak: number; rms: number; voice: number; floor: number; gain: number } {
+    return { ...this.runningLevel.read(), ...voiceOf(this.frameLevels), gain: decibels(this.gain) }
   }
 
   counts(): SegmentCounts {
@@ -126,7 +132,14 @@ export class VoiceSegments {
 
   private add(pcm: Buffer): void {
     this.runningLevel.add(pcm)
-    this.queue.push({ pcm, retry: false })
+    // Each segment by its own voice: it goes up while the person still talks, before the rest is heard.
+    const levels = new FrameLevels(this.frameSamples)
+    levels.add(pcm)
+    this.frameLevels.merge(levels)
+    const gain = gainFor(levels)
+    this.gain = Math.max(this.gain, gain)
+    // Raised once, so a retry sends the same bytes.
+    this.queue.push({ pcm: raised(pcm, gain), retry: false })
     this.next()
   }
 

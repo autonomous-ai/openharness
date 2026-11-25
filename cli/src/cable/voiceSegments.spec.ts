@@ -17,6 +17,16 @@ function tone(seconds: number, rate: number, amplitude: number): Buffer {
   return Buffer.alloc(Math.round(seconds * rate) * 2, sample)
 }
 
+/** `seconds` of speech at 16 kHz as the gain reads it: each second a half-second pause, then a half second of a 200 Hz
+ *  hum of `amplitude`, whose samples peak at `amplitude` exactly (sample 8_020 is one). */
+function hum(seconds: number, amplitude: number): Buffer {
+  const pcm = Buffer.alloc(seconds * 16_000 * 2)
+  for (let i = 0; i < seconds * 16_000; i++) {
+    if (i % 16_000 >= 8_000) pcm.writeInt16LE(Math.round(Math.sin((2 * Math.PI * 200 * i) / 16_000) * amplitude), i * 2)
+  }
+  return pcm
+}
+
 /** Overwrites the frame of `frameSamples` samples that starts at sample `sample` with `amplitude`. */
 function frameAt(pcm: Buffer, sample: number, frameSamples: number, amplitude: number): Buffer {
   for (let i = sample; i < sample + frameSamples; i++) pcm.writeInt16LE(amplitude, i * 2)
@@ -358,8 +368,45 @@ describe('VoiceSegments', () => {
     const done = segments.finish()
     const whole = new VoiceLevel()
     whole.add(pcm)
-    expect(segments.level()).toEqual(whole.read())
+    expect(segments.level()).toMatchObject({ ...whole.read(), gain: 0 })
     await done
+  })
+
+  it('a quiet voice goes up raised, a loud one as it came, byte for byte', async () => {
+    const quiet = setup({ transcribe: answering('hello') })
+    const low = hum(2, 200)
+    quiet.segments.push(low)
+    await expect(quiet.segments.finish()).resolves.toBe('hello')
+    const [[sent]] = quiet.transcribe.mock.calls
+    expect(sent).toHaveLength(low.length)
+    // A peak of 200 is an RMS of 141, about -47 dBFS: raised by the most there is, 18 dB, eight times.
+    expect(sent!.readInt16LE(8_020 * 2)).toBe(1600)
+    expect(quiet.segments.level()).toEqual({ peak: 200, rms: 100, voice: 150, floor: 0, gain: 18 })
+
+    const loud = setup({ transcribe: answering('hello') })
+    const high = hum(2, 6000)
+    loud.segments.push(high)
+    await loud.segments.finish()
+    expect(loud.transcribe.mock.calls[0]![0]).toEqual(high)
+    expect(loud.segments.level()).toMatchObject({ gain: 0 })
+  })
+
+  it('each segment goes up by its own voice, and a retry sends its raised bytes again', async () => {
+    const { segments, calls } = setup()
+    // A minute of a quiet voice, then a loud one: the first segment is raised, the tail is not.
+    segments.push(Buffer.concat([hum(60, 200), hum(5, 6000)]))
+    calls[0]!.reject(new Error(UNAVAILABLE))
+    await flush()
+    expect(calls[1]!.pcm).toBe(calls[0]!.pcm)
+    expect(calls[0]!.pcm.readInt16LE(8_020 * 2)).toBe(1600)
+    const done = segments.finish()
+    calls[1]!.resolve('quiet')
+    await flush()
+    const tail = calls[2]!.pcm
+    expect(Math.max(...Array.from({ length: 400 }, (_, i) => tail.readInt16LE((tail.length / 2 - 400 + i) * 2)))).toBe(6000)
+    calls[2]!.resolve('loud')
+    await expect(done).resolves.toBe('quiet loud')
+    expect(segments.level().gain).toBe(18)
   })
 })
 
