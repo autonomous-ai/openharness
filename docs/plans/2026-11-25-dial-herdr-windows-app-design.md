@@ -1,7 +1,8 @@
 # Dial on Windows: the app that holds the herdr client
 
-Status: approved by the PM (2026-11-26), with the three decisions below. Investigation only so far: no code changed.
-Nothing here was run, because the Mac stays quiet for the tier B eval.
+Status: approved by the PM (2026-11-26), with Decisions 1-6 below. Part 1 ran on Ken's VM ("What Part 1 showed"); the
+code follows the plan (2026-11-25-dial-herdr-windows-app-plan.md), and its tests wait for the Mac, held for the tier B
+eval.
 
 ## Goal
 
@@ -92,7 +93,7 @@ from one `listProcesses` table.
 
 1. **Server.** Run `windowsPtyMaker` on the caller. If the maker is not `herdr`, answer `{}` and log
    `herdr client · outside`, as today.
-2. **Default session only.** If herdr's marker names another server pid (`herdrClient.ts`, a new `server()`), answer
+2. **Default session only.** If herdr's marker names another server pid (`herdrClient.ts` `herdrMarkerServer`), answer
    `{ nest: 'herdr' }` and no client. The hook already sends no pane id for a named session, so this is a second guard.
 3. **Candidates.** Every `herdr.exe` row that:
    - is not the server;
@@ -208,7 +209,7 @@ Full, not small: about 5 code files, more than 150 lines, and a VM check that ha
 - `windowsRaise.ts`
 - `open.ts`
 - `observed.ts`
-- `herdrClient.ts` (`server()`)
+- `herdrClient.ts` (`herdrMarkerServer`)
 - `services/devices.ts`: the wiring, `listProcesses` for win32
 - their specs
 - `cli/AGENTS.md`: the devices row says Windows too

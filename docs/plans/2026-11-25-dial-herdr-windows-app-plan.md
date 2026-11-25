@@ -386,7 +386,7 @@ pid   ppid  image                k   role
   `HERDR_PANE_ID: 'w1:p1'`, `fakeWindowsRaise()`). Widen the `readers.listProcesses` fake's type (~line 219) to
   `Array<RunningProcess & { startMarker?: string }>`, the real reader's, so rows with a start marker type-check:
   - `on Windows an agent in herdr attached from VS Code has app `vscode` on herdr's page, and a tap focuses the pane then raises
-    Code`: the log has `[device] herdr client · found`; the apps list has `vscode`; `openAgent` runs
+    Code`: the log has `[device] herdr client · found`; the apps list has `herdr`, not `vscode`; `openAgent` runs
     `herdr agent focus <pane>` and the raise asks `app` for `com.microsoft.VSCode`.
   - `with client #2 gone, the agent is on herdr's page and a tap raises Windows Terminal's window` (the handoff
     client #3 stays, newer, with no window: decision 5 end to end): `[device] herdr client · none`; the agent's app is
