@@ -492,10 +492,24 @@ describe('createOrcaHomesCache', () => {
     expect(await t.cache.refresh()).toBe(true)
     expect(t.cache.get()).toEqual(B)
     expect(t.reads()).toBe(3)
+    // The unchanged second read says nothing.
     expect(t.lines).toEqual([
       '[observed] orca homes · 2 claude · 1 codex',
+      '[observed] orca homes · 1 claude · 2 codex',
+    ])
+  })
+
+  it('says a line again once another came between: A, B, A', async () => {
+    const t = cacheOf([ok(A), ok(B), ok(A)])
+    await t.cache.refresh()
+    t.advance(5 * 60_000)
+    await t.cache.refresh()
+    t.advance(5 * 60_000)
+    await t.cache.refresh()
+    expect(t.lines).toEqual([
       '[observed] orca homes · 2 claude · 1 codex',
       '[observed] orca homes · 1 claude · 2 codex',
+      '[observed] orca homes · 2 claude · 1 codex',
     ])
   })
 
@@ -547,6 +561,6 @@ describe('createOrcaHomesCache', () => {
     t.advance(5 * 60_000)
     expect(await t.cache.refresh()).toBe(false)
     // The error's text is never said: it can name paths and emails.
-    expect(t.lines.slice(1)).toEqual(['[observed] orca homes · not read · failed', '[observed] orca homes · not read · failed'])
+    expect(t.lines.slice(1)).toEqual(['[observed] orca homes · not read · failed'])
   })
 })
