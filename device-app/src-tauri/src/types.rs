@@ -20,6 +20,10 @@ pub struct DialStatus {
     /// know.
     #[serde(default, deserialize_with = "notify_mode")]
     pub notify: Option<NotifyMode>,
+    /// The language the dial listens in. None: no `voiceLang` (an older CLI or firmware), so no submenu. Some(None): a
+    /// code outside the six, shown with none checked. Some(Some(lang)): that one checked.
+    #[serde(default, rename = "voiceLang", deserialize_with = "voice_lang")]
+    pub voice_lang: Option<Option<VoiceLang>>,
 }
 
 /// This computer's Notifications setting, kept by the daemon. Needs you (`You`): an ordinary finished turn neither
@@ -37,6 +41,55 @@ fn notify_mode<'de, D: serde::Deserializer<'de>>(value: D) -> Result<Option<Noti
         Some("you") => Some(NotifyMode::You),
         _ => None,
     })
+}
+
+/// Lenient, as `notify_mode`: a value that is no string is no language, and the line is still a status.
+fn voice_lang<'de, D: serde::Deserializer<'de>>(value: D) -> Result<Option<Option<VoiceLang>>, D::Error> {
+    Ok(serde_json::Value::deserialize(value)?.as_str().map(VoiceLang::from_code))
+}
+
+/// The language the dial listens in, saved on the dial. The six Desktop offers, in its order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VoiceLang {
+    En,
+    Vi,
+    Es,
+    Fr,
+    Ja,
+    It,
+}
+
+impl VoiceLang {
+    pub const ALL: [VoiceLang; 6] = [Self::En, Self::Vi, Self::Es, Self::Fr, Self::Ja, Self::It];
+
+    /// The code the dial holds: static text, so a line built from it is fixed text.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::En => "en",
+            Self::Vi => "vi",
+            Self::Es => "es",
+            Self::Fr => "fr",
+            Self::Ja => "ja",
+            Self::It => "it",
+        }
+    }
+
+    /// Each in its own name, so a person finds theirs whatever the language around it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::En => "English",
+            Self::Vi => "Tiếng Việt",
+            Self::Es => "Español",
+            Self::Fr => "Français",
+            Self::Ja => "日本語",
+            Self::It => "Italiano",
+        }
+    }
+
+    /// None for any text but the six codes, exactly.
+    pub fn from_code(code: &str) -> Option<VoiceLang> {
+        Self::ALL.into_iter().find(|lang| lang.code() == code)
+    }
 }
 
 /// harnessd, as the keep-alive last saw it.
@@ -132,6 +185,7 @@ pub enum MenuAction {
     SoundOff,
     NotifyFull,
     NotifyYou,
+    Voice(VoiceLang),
     Update,
     OpenHarness,
     About,
@@ -260,6 +314,7 @@ pub enum Effect {
     /// `true` turns the dial's sound on.
     SetSound(bool),
     SetNotify(NotifyMode),
+    SetVoice(VoiceLang),
     OpenUrl(String),
     OpenDesktop,
     RegisterLoginItem,
@@ -405,6 +460,7 @@ mod tests {
                 problem: None,
                 muted: None,
                 notify: None,
+                voice_lang: None,
             }
         );
         for line in [r#"{}"#, r#"{"error":"x"}"#, r#"{"attached":"yes"}"#] {
@@ -433,6 +489,46 @@ mod tests {
             r#"{"attached":true,"notify":null}"#,
         ] {
             assert_eq!(notify(line).unwrap(), None, "{line}");
+        }
+    }
+
+    #[test]
+    fn a_status_line_carries_voice_lang() {
+        let voice = |line: &str| serde_json::from_str::<DialStatus>(line).map(|status| status.voice_lang);
+        assert_eq!(voice(r#"{"attached":true,"voiceLang":"vi"}"#).unwrap(), Some(Some(VoiceLang::Vi)));
+        for lang in VoiceLang::ALL {
+            let line = format!(r#"{{"attached":true,"voiceLang":"{}"}}"#, lang.code());
+            assert_eq!(voice(&line).unwrap(), Some(Some(lang)), "{line}");
+        }
+        // A code outside the six: the submenu shows, none checked.
+        for code in ["de", "en-US"] {
+            let line = format!(r#"{{"attached":true,"voiceLang":"{code}"}}"#);
+            assert_eq!(voice(&line).unwrap(), Some(None), "{line}");
+        }
+        assert_eq!(voice(r#"{"attached":true}"#).unwrap(), None);
+        // A value of another type is no language: the line is still a status.
+        for line in [
+            r#"{"attached":true,"voiceLang":7}"#,
+            r#"{"attached":true,"voiceLang":null}"#,
+            r#"{"attached":true,"voiceLang":["vi"]}"#,
+            r#"{"attached":true,"voiceLang":{}}"#,
+        ] {
+            assert_eq!(voice(line).unwrap(), None, "{line}");
+        }
+    }
+
+    #[test]
+    fn the_six_voice_languages() {
+        assert_eq!(VoiceLang::ALL.map(VoiceLang::code), ["en", "vi", "es", "fr", "ja", "it"]);
+        assert_eq!(
+            VoiceLang::ALL.map(VoiceLang::name),
+            ["English", "Tiếng Việt", "Español", "Français", "日本語", "Italiano"]
+        );
+        for lang in VoiceLang::ALL {
+            assert_eq!(VoiceLang::from_code(lang.code()), Some(lang));
+        }
+        for code in ["de", "EN", "en-US", "en ", ""] {
+            assert_eq!(VoiceLang::from_code(code), None, "{code:?}");
         }
     }
 
