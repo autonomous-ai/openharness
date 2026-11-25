@@ -20,6 +20,10 @@ pub struct DialStatus {
     /// know.
     #[serde(default, deserialize_with = "notify_mode")]
     pub notify: Option<NotifyMode>,
+    /// The language the dial listens in. None: no `voiceLang` (an older CLI or firmware), so no submenu. Some(None): a
+    /// code outside the six, shown with none checked. Some(Some(lang)): that one checked.
+    #[serde(default, rename = "voiceLang", deserialize_with = "voice_lang")]
+    pub voice_lang: Option<Option<VoiceLang>>,
 }
 
 /// This computer's Notifications setting, kept by the daemon. Needs you (`You`): an ordinary finished turn neither
@@ -37,6 +41,11 @@ fn notify_mode<'de, D: serde::Deserializer<'de>>(value: D) -> Result<Option<Noti
         Some("you") => Some(NotifyMode::You),
         _ => None,
     })
+}
+
+/// Lenient, as `notify_mode`: a value that is no string is no language, and the line is still a status.
+fn voice_lang<'de, D: serde::Deserializer<'de>>(value: D) -> Result<Option<Option<VoiceLang>>, D::Error> {
+    Ok(serde_json::Value::deserialize(value)?.as_str().map(VoiceLang::from_code))
 }
 
 /// The language the dial listens in, saved on the dial. The six Desktop offers, in its order.

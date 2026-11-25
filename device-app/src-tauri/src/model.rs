@@ -2,7 +2,7 @@
 
 use crate::logs::reason;
 use crate::types::{
-    AppState, AppUpdate, CliState, Daemon, DialStatus, LogsExport, MenuAction, MenuItem, NotifyMode, Screen,
+    AppState, AppUpdate, CliState, Daemon, DialStatus, LogsExport, MenuAction, MenuItem, NotifyMode, Screen, VoiceLang,
 };
 
 /// The row the app's own update shows; the firmware's reads `Updating device…` and the daemon's `Updating Harness`.
@@ -70,6 +70,16 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
             ],
         ));
     }
+    // None checked when the dial holds a code outside the six: a click on one sets it.
+    if let Some(held) = settable(state).and_then(|dial| dial.voice_lang) {
+        items.push(MenuItem::Submenu(
+            "Voice language".into(),
+            VoiceLang::ALL
+                .into_iter()
+                .map(|lang| MenuItem::Check(MenuAction::Voice(lang), lang.name().into(), held == Some(lang)))
+                .collect(),
+        ));
+    }
     match &state.app_update {
         AppUpdate::Installing => items.push(MenuItem::Text(UPDATING_APP.into())),
         // The app cannot replace its bundle: the click opens the download page.
@@ -112,7 +122,7 @@ pub fn due(state: &AppState) -> Option<Screen> {
 }
 
 /// The menu as one log line: its labels joined by ` | `, without separators. A submenu is its label and its checked
-/// item's: `Notifications: All`.
+/// item's: `Notifications: All`; with none checked, its label alone, so a support log tells it from an absent one.
 pub fn menu_log(items: &[MenuItem]) -> String {
     let labels: Vec<String> = items
         .iter()
@@ -123,17 +133,22 @@ pub fn menu_log(items: &[MenuItem]) -> String {
                 Some(label.clone())
             }
             MenuItem::Check(_, label, true) => Some(format!("{label} ✓")),
-            MenuItem::Submenu(label, choices) => choices.iter().find_map(|choice| match choice {
-                MenuItem::Check(_, chosen, true) => Some(format!("{label}: {chosen}")),
-                _ => None,
-            }),
+            MenuItem::Submenu(label, choices) => Some(
+                choices
+                    .iter()
+                    .find_map(|choice| match choice {
+                        MenuItem::Check(_, chosen, true) => Some(format!("{label}: {chosen}")),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| label.clone()),
+            ),
             MenuItem::Separator => None,
         })
         .collect();
     labels.join(" | ")
 }
 
-/// An attached dial on a running Harness, not updating: when Sound and Notifications can be changed.
+/// An attached dial on a running Harness, not updating: when Sound, Notifications and Voice language can be changed.
 fn settable(state: &AppState) -> Option<&DialStatus> {
     if state.cli != CliState::Found || state.daemon != Daemon::Up {
         return None;
