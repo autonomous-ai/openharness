@@ -48,7 +48,8 @@ each task's tests (interfaces change across files).
 1. **A named session beside the default one** (`herdr --session x` spawns its own server under its client): that
    client is no candidate, and its server is never taken for ours. Test in Task 3.
 2. **A reused pid**: a client whose recorded parent pid now belongs to a newer `Code.exe` or `WindowsTerminal.exe`
-   gets no app from it. Test in Task 3.
+   gets no app from it, and the server's `ppid` (its first client's pid, kept after that client died) is never read as
+   a client. Tests in Task 3.
 3. **Windows' default-terminal handoff** (`pwsh` from Win+R, a conhost console under `explorer.exe`): the agent is on
    herdr's page with no window, and a tap focuses the pane and raises nothing; beside an older client in Windows
    Terminal, that terminal's window is the tap's (decision 5). Tests in Tasks 3 and 4.
@@ -132,18 +133,18 @@ each task's tests (interfaces change across files).
 
 **Effort:** high. **Depends on:** Task 1.
 
-> **Before this task's code lands:** check the fake tree below against Ken's VM Part 1 result (spec, "Steps for Ken's
-> Windows VM / Dell", Part 1 steps 2, 4, 5, 6). If the server's parent, a client's chain or the handoff shell's
-> parent differ, the tree and the expectations change first; a differing step 5 or 6 goes back to the main session as
-> a question.
+The fake tree is the one Part 1 recorded on Ken's VM (spec, "The test that fails first" and "What Part 1 showed",
+2026-11-26), with its pids. Known gap, no code for it in this branch (spec, "What Part 1 showed"): with several WT
+windows `raise --pid` brings the WT window used last, and a client started through the Win+R handoff has no window.
+No test pins either.
 
 **Files:**
 - Modify: `cli/src/cable/hosts/herdrOuter.ts` (`createHerdrOuter`; new `windowsClientOf`; `HerdrOuterDeps`)
 - Test: `cli/src/cable/hosts/herdrOuter.spec.ts` (new describe "herdr's clients on Windows")
 
 **Interfaces:**
-- Consumes: `windowsPtyMaker`, `windowsName`, `parentChain`, `WindowsProcess` (Task 1); `frontAppId` (`frontApp.ts`);
-  `UNKNOWN_APP`, `APP_IDS` (`hostDetect.ts`).
+- Consumes: `windowsPtyMaker`, `windowsName`, `parentChain`, `WindowsProcess` (Task 1); `frontAppId`, `FRONT_NONE`
+  (`frontApp.ts`); `UNKNOWN_APP` (`hostDetect.ts`).
 - Produces (Task 6 wires it):
   ```ts
   /** What the Windows lookup reads, given on Windows alone (services/devices.ts). */
@@ -157,72 +158,94 @@ each task's tests (interfaces change across files).
   ```
   On `win32` with no `windows`, `createHerdrOuter` answers `undefined` at once, as today. Off Windows nothing changes.
 
-The rules (spec "Design · 2", with Decisions 1 and 5):
+The rules (spec "Design · 2" and "What Part 1 showed", with Decisions 1 and 5). The server is a child of its first
+client and keeps that pid as its `ppid` after the client dies, and Windows may give the pid to a newer process (Part 1
+step 4): so nothing walks up from the server. The lookup walks up from the caller to the server (rule 2, which stops
+there) and up from each client (rules 4 and 5), never past the server.
 
 1. One `windows.processes()` read; a rejection → `{}` and `not read · processes`.
 2. `windowsPtyMaker(caller, rows)`; not `herdr` → `{}` and `outside`. `herdr` → `made('herdr')` is told (the same
    `MadeAnswer` path as `placeOf`), and the maker's pid is the server.
 3. `windows.server(rows)` names a pid other than the server → `{ nest: 'herdr' }` (line `none`). None named → go on.
 4. Candidates: rows with `windowsName === 'herdr'`, not the server, with a `startMarker`, no `herdr` among their
-   parents (`parentChain(...).slice(1)`), and no `herdr` child other than the server (a child counts only when it
-   started after the candidate, the reused-pid rule `parentChain` uses). The 16 newest by start marker (tie: higher
-   pid).
+   parents (`parentChain(candidate.pid, table).slice(1)`), and no `herdr` child other than the server. A `herdr` row
+   is the candidate's child only when `parentChain(row.pid, table)[1]` is the candidate: `parentChain` ends at a parent
+   that started after its child, so a row whose `ppid` names a pid reused by a newer process is no child of it (the
+   start-marker rule, spec "Candidates"). The 16 newest by start marker (tie: higher pid).
 5. Each candidate's walk (`parentChain`, nearest first, candidate included): the nearest step whose
-   `frontAppId(win32.basename(executable))` is a listed app (`APP_IDS`, not `UNKNOWN_APP`) gives the candidate's app;
-   the nearest that is `UNKNOWN_APP` (`WindowsTerminal.exe`, `alacritty.exe`) gives its window owner, that step's pid;
-   whichever comes first ends the walk. Neither → no window.
+   `frontAppId(win32.basename(executable))` is neither `FRONT_NONE` nor `UNKNOWN_APP` gives the candidate's app; the
+   nearest that is `UNKNOWN_APP` (`WindowsTerminal.exe`, `alacritty.exe`) gives its window owner, that step's pid;
+   whichever comes first ends the walk. Neither (`explorer.exe`, `conhost.exe`, a dead or reused parent) → no window.
 6. Pick, in three tiers, the newest within a tier: the newest candidate with an app →
    `{ app, pid: <client pid>, nest: 'herdr' }` (`found`); else the newest candidate with a window owner, even when a
    newer candidate has none (decision 5) → `{ pid: <owner pid>, nest: 'herdr' }` (`none`); else `{ nest: 'herdr' }`
    (`none`). No `tty` on Windows. The answer never carries `UNKNOWN_APP` as `app`: the agent's `terminal` app is set by
    `observed.ts` (Task 5, decision 4).
 
-The fake table (no `args`; `mark(n)` = `` `w:${134080735400000000n + BigInt(n)}` ``, so a larger pid started later):
+The fake table, `RECORDED_WINDOWS` in the spec: pid, ppid, image name and `startMarker: mark(k)` alone, no `args`
+(`mark(k)` = `` `w:${134080735400000000n + BigInt(Math.round(k * 1000))}` ``, `k` the start order below, so start
+order is not pid order; a fractional `k` starts a row between two others). Part 1 gave no pid for client #3: the
+fake's 3720, lower than #2's, pins that the newest is by start marker.
 
 ```
-explorer.exe 50                     mark(50)
-└ WindowsTerminal.exe 100           mark(100)
-  └ pwsh.exe 110                    mark(110)
-    └ herdr.exe 120  client A       mark(120)
-      └ herdr.exe 130  server       mark(130)
-        └ pwsh.exe 140              mark(140)
-          └ claude.exe 150  caller  mark(150), hints { HERDR_PANE_ID: 'w1:p1' }
-Code.exe 200                        mark(200)
-└ pwsh.exe 210                      mark(210)
-  └ herdr.exe 220  client B         mark(220)
+pid   ppid  image                k   role
+5616  4900  explorer.exe          1   (4900 not in the table)
+7588  5616  WindowsTerminal.exe   2   one process for every WT window
+4008  7588  OpenConsole.exe       3   the tab's ConPTY
+5512  7588  powershell.exe        4   the tab's shell
+8412  5512  herdr.exe             5   client #1
+5992  8412  herdr.exe             6   server (marker 5992)
+2264  5992  OpenConsole.exe       7   herdr's ConPTY
+8928  5992  powershell.exe        8   the pane
+8976  8928  powershell.exe        9   caller (stand-in agent), hints { HERDR_PANE_ID: 'w1:p1' }
+5864  5616  Code.exe             10   VS Code's main
+6400  5864  Code.exe             11   VS Code's pty host
+6936  6400  OpenConsole.exe      12
+9264  6400  powershell.exe       13
+9904  9264  herdr.exe            14   client #2
+5604  5616  powershell.exe       15   Win+R, the default-terminal handoff
+4168  5604  conhost.exe          16
+3720  5604  herdr.exe            17   client #3, newest
 ```
+
+"#2 gone" drops 9904 and 9264; "#1 gone" drops 8412 and 5512 and keeps the server's `ppid` 8412.
 
 - [ ] **Step 1: Write the failing tests** (`lookup({ platform: 'win32', windows: { processes, server } })`, `server`
-  answering `undefined` unless a case says):
-  - `the newest client, in VS Code, places the agent`: `(PANE, 150)` → `{ app: 'vscode', pid: 220, nest: 'herdr' }`,
-    log `found`, `made` told `'herdr'`, no `run` call.
-  - `with client B gone, Windows Terminal's window`: → `{ pid: 100, nest: 'herdr' }`, log `none`.
-  - `an app beats a newer client in a terminal`: client B under WT instead and an older client in `Code.exe` → the
-    Code one (`app: 'vscode'`).
-  - `a tie on the start marker goes to the higher pid`.
-  - `a herdr under the server is no client` (`herdr.exe` 160, child of pwsh 140).
-  - `a named session's client is no client` (`herdr.exe` 300 with its own child `herdr.exe` 310).
-  - `a reused parent pid ends the walk`: client B's ppid 200 is a `Code.exe` with `mark(230)` → no app; with no other
-    candidate → `{ nest: 'herdr' }`.
-  - `a row with no start marker is left out` (client B without `startMarker` → client A's answer).
-  - `the handoff console has no window`: client A's chain ends at `conhost.exe` → `explorer.exe`, client B gone →
-    `{ nest: 'herdr' }`.
-  - `a window beats a newer client with none` (decision 5): client B gone, and client C `herdr.exe` 400 (`mark(400)`)
-    under `pwsh.exe` 390 under `conhost.exe` 380 under `explorer.exe` 50 → `{ pid: 100, nest: 'herdr' }`, log `none`.
-  - `at most 16 candidates`: 20 extra `herdr.exe` rows under one `pwsh` under `explorer.exe`, older than client B →
-    still B; and 20 newer windowless ones push A and B out → `{ nest: 'herdr' }` (pins the bound: inside it, decision
-    5 would have kept A's window).
+  answering `undefined` unless a case says; caller 8976 with `{ HERDR_PANE_ID: 'w1:p1' }`):
+  - `the client in VS Code places the agent, before the newer one with no window`: → `{ app: 'vscode', pid: 9904,
+    nest: 'herdr' }`, log `found`, `made` told `'herdr'`, no `run` call.
+  - `with client #2 gone, Windows Terminal's window beats the newer handoff client` (decision 5): →
+    `{ pid: 7588, nest: 'herdr' }`, log `none`.
+  - `with client #1 gone too, no window`: → `{ nest: 'herdr' }`, log `none`, `made` told.
+  - `a reused pid of the first client changes nothing`: #1 and #2 gone, and a row `Code.exe` 8412 (ppid 5616,
+    `mark(18)`) → `{ nest: 'herdr' }` (the server's `ppid` now names a newer `Code.exe`, never its client); with #2
+    kept → `{ app: 'vscode', pid: 9904, nest: 'herdr' }`.
+  - `an app beats a newer client in a terminal`: a row `powershell.exe` 7700 (ppid 7588, `mark(18)`) and `herdr.exe`
+    7710 (ppid 7700, `mark(19)`) → still 9904.
+  - `a tie on the start marker goes to the higher pid`: `herdr.exe` 9950 (ppid 9264, `mark(14)`) → `pid: 9950`.
+  - `a herdr under the server is no client`: `herdr.exe` 9990 (ppid 8928, `mark(18)`) → still 9904.
+  - `a named session's client is no client`: `powershell.exe` 7100 (ppid 6400, `mark(18)`), `herdr.exe` 7110 (ppid
+    7100, `mark(19)`) and its server `herdr.exe` 7120 (ppid 7110, `mark(20)`) → still 9904, never 7110.
+  - `a herdr whose parent pid was reused is no child of it`: `herdr.exe` 300 (ppid 9904, `mark(13)`, started before
+    client #2) → still 9904.
+  - `a reused parent pid ends the walk`: 9264 replaced by a `Code.exe` 9264 (ppid 5616, `mark(20)`) → client #2 has no
+    app; → `{ pid: 7588, nest: 'herdr' }`.
+  - `a row with no start marker is left out`: client #2 without `startMarker` → `{ pid: 7588, nest: 'herdr' }`.
+  - `at most 16 candidates`: 20 `herdr.exe` rows 20001..20020 (ppid 5604, `mark(100 + i)`, newer than all) push #1
+    and #2 out → `{ nest: 'herdr' }` (inside the bound, the app tier would have kept #2); the same 20 started before
+    #2 (`mark(13 + i / 100)`) → still 9904.
   - `the table not read`: `processes` rejects → `{}`, `not read · processes`, `made` not told.
-  - `a maker that is not herdr`: caller under `WindowsTerminal.exe` directly → `{}`, `outside`.
-  - `the marker names another server`: `server` → `999` → `{ nest: 'herdr' }`, `made` told.
-  - `on Windows with no windows deps, nothing`: `createHerdrOuter({ platform: 'win32' })(PANE, 150)` → `undefined`.
+  - `a maker that is not herdr`: caller `powershell.exe` 6000 (ppid 5512, `mark(18)`) → `{}`, `outside`.
+  - `the marker names another server`: `server` → `1234` → `{ nest: 'herdr' }`, `made` told.
+  - `on Windows with no windows deps, nothing`: `createHerdrOuter({ platform: 'win32' })(PANE, 8976)` → `undefined`.
   - Existing macOS and Linux describes stay unchanged and green.
 - [ ] **Step 2: Run, expect FAIL** — `cd cli && npx vitest run src/cable/hosts/herdrOuter.spec.ts`: the win32 lookups
   return `undefined`. Commit red.
 - [ ] **Step 3: Implement** `windowsClientOf(deps, server, rows): ClientPlace` and the win32 branch of
   `createHerdrOuter` reusing `heldAnswers`, `said`, `skip` and the `made` plumbing of `placeOf`. `isHerdr` stays as it
   is for macOS and Linux; Windows uses `windowsName(executable) === 'herdr'`. Update the module comment: what Windows
-  reads (four columns, never argv) and why the tree stands in for the socket (no pipe client pid).
+  reads (four columns, never argv), why the tree stands in for the socket (no pipe client pid), and why nothing walks
+  up from the server (its parent is its first client's pid, kept after that client died).
 - [ ] **Step 4: Run, expect PASS** — the same command, and `npm run typecheck`.
 - [ ] **Step 5: Commit** `herdrOuter.ts`, `herdrOuter.spec.ts`.
 
@@ -353,15 +376,21 @@ Code.exe 200                        mark(200)
   `WindowsRaise.window` (Task 4), `windowOf`'s `outer` (Task 5).
 - Produces: on `win32`, `createHerdrOuter({ ...outerDeps, …, windows: { processes: () => readWindowsProcesses(listProcesses), server: (rows) => herdrMarkerServer(herdrAt.socketPath, rows) } })`;
   elsewhere no `windows`. `readWindowsPtyOwner(pid, listProcesses)` stays (it reads four columns since Task 1).
+  `listProcesses` returns `RunningProcess & { startMarker?: string }` rows (`args` included); `readWindowsProcesses`
+  (Task 1, landed) cuts each to `pid`, `ppid`, `executable` and `startMarker` before the lookup sees it.
+- Already done by Task 4, not touched here: both Windows raise fakes in `devices.spec.ts` (`noWindowsRaise` has
+  `window`, and `fakeWindowsRaise()` records each raised pid in `windows: number[]`).
 
-- [ ] **Step 1: Write the failing tests** (devices on `win32`, `readers.listProcesses` answering Task 3's tree with an
-  `args` field on every row, a hook from caller 150 with `HERDR_PANE_ID`, `fakeWindowsRaise()`):
+- [ ] **Step 1: Write the failing tests** (devices on `win32`, `readers.listProcesses` answering Task 3's recorded tree
+  with an `args` field on every row and each row's `startMarker`, a hook from caller 8976 with
+  `HERDR_PANE_ID: 'w1:p1'`, `fakeWindowsRaise()`). Widen the `readers.listProcesses` fake's type (~line 219) to
+  `Array<RunningProcess & { startMarker?: string }>`, the real reader's, so rows with a start marker type-check:
   - `on Windows an agent in herdr attached from VS Code is on VS Code's page, and a tap focuses the pane then raises
     Code`: the log has `[device] herdr client · found`; the apps list has `vscode`; `openAgent` runs
     `herdr agent focus <pane>` and the raise asks `app` for `com.microsoft.VSCode`.
-  - `with only the Windows Terminal client, the agent is on herdr's page and a tap raises the terminal's window`:
-    `[device] herdr client · none`; the agent's app is `terminal` and its page `herdr`; the fake raise's `windows` is
-    `[100]`, and its `app` was never asked.
+  - `with client #2 gone, the agent is on herdr's page and a tap raises Windows Terminal's window` (the handoff
+    client #3 stays, newer, with no window: decision 5 end to end): `[device] herdr client · none`; the agent's app is
+    `terminal` and its page `herdr`; the fake raise's `windows` is `[7588]`, and its `apps` stays empty.
   - `the table not read`: `listProcesses` → `[]` → `[device] herdr client · not read · processes`.
   - No log line holds a pid, `herdr.exe` or a path (`logs.filter(l => /\d{3}|herdr\.exe|\\/.test(l))` over the herdr
     client lines is empty).
@@ -401,7 +430,8 @@ Code.exe 200                        mark(200)
       copy `<out>` to the VM (`cli/scripts/windows-dial-e2e/README.md`: the release's signed `node.exe` and
       `harness-pty.exe`; the spec says `raise --pid` ships, and a helper without `raise` leaves step 4's raise unchecked, as the README says).
    2. Start the desk on the stand-in dial (`desk.mjs --own-account`, the test user's own homes in
-      `%USERPROFILE%\.harness-dial-check`), herdr running with an agent in a pane attached from Windows Terminal.
+      `%USERPROFILE%\.harness-dial-check`), herdr running with an agent in a pane attached from one Windows Terminal
+      window (a second WT window may come forward instead: the known gap).
    3. `list`: the agent's row is on herdr's page; the log has `[device] herdr client · none` (WT), never `not read`.
    4. Bring another app forward, `tap <row>`: herdr switches to the agent's pane, WT comes forward (or its taskbar
       flashes), the log counts `[device] raise · window · raised` or `refused`. **Needs Ken's eye.**
@@ -411,7 +441,9 @@ Code.exe 200                        mark(200)
    7. Detach the VS Code client, prompt again: back on herdr's page, and a tap raises WT.
    8. A named session (`herdr --session x`): the agent gets no pane row, as before.
    9. Ken sends the desk's log lines for steps 3 to 8; they name no pane, pid or path.
-4. **Before Task 3's code lands:** the VM Part 1 result (sent to Ken 2026-11-26) is checked against Task 3's tree.
+4. **Part 1 (done, Ken's VM, 2026-11-26):** its tree is Task 3's fake table. Its known gap is not checked here: with
+   several WT windows a tap may raise the WT window used last, and a Win+R handoff client has no window (spec, "What
+   Part 1 showed"). Part 2 step 2 opens one WT window so step 4 checks the raise itself.
 
 No new workflow is proposed: windows.yml already runs the Windows dial end to end, and the herdr steps need a person's
 eye on the window that comes forward.
