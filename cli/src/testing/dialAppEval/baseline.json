@@ -2134,7 +2134,7 @@
     "b/darwin/I17/cost.cpu": 1,
     "b/darwin/I17/cost.leftovers": 1,
     "b/darwin/I17/cost.loopP99": 1,
-    "b/darwin/I17/needsYou.latency": 1,
+    "b/darwin/I17/needsYou.latency": 0.5,
     "b/darwin/I17/needsYou.shown": 1,
     "b/darwin/I17/wait.1": 1,
     "b/darwin/I18/cost.cpu": 1,
@@ -2733,8 +2733,8 @@
     "b/darwin/V12/cost.leftovers": 1,
     "b/darwin/V12/cost.loopP99": 1,
     "b/darwin/V12/open.front": 1,
-    "b/darwin/V12/open.latency": 0,
-    "b/darwin/V12/open.show": 0,
+    "b/darwin/V12/open.latency": 1,
+    "b/darwin/V12/open.show": 1,
     "b/darwin/V12/ring.apart": 1,
     "b/darwin/V12/ring.archived": 1,
     "b/darwin/V12/ring.cap": 1,
@@ -2965,10 +2965,10 @@
     "b/darwin": {
       "claude": 100,
       "chatgpt": 100,
-      "vscode": 98.57142857142857,
+      "vscode": 100,
       "cursor": 91.66666666666666,
       "orca": 99.74358974358975,
-      "iterm": 99.30425752855659
+      "iterm": 98.47092419522328
     }
   }
 }
