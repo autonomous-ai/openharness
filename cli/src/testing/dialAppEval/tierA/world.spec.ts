@@ -96,16 +96,16 @@ describe("tier A's world records every send, failing closed", () => {
 
   it("a send of the devices' own Codex queue is a codex delivery to its thread", async () => {
     const { world, deps } = worldOn('darwin')
-    const queue = createCodexQueue({ ...deps.codex!, home: '/eval-codex-home', cwd: '/eval-cwd' })
-    expect(await queue.send(world.session('t1').id, WORDS, true)).toEqual({ outcome: 'queued' })
+    const queue = createCodexQueue({ ...deps.codex!, cwd: '/eval-cwd' })
+    expect(await queue.send(world.session('t1').id, WORDS, true, '/eval-codex-home')).toEqual({ outcome: 'queued' })
     expect(world.seen([]).deliveries).toEqual([{ at: 0, path: 'codex', target: 't1', text: WORDS }])
   })
 
   it('a codex queue run that failed queued nothing', async () => {
     const { world, deps } = worldOn('darwin')
     world.answer((argv) => (argv.includes('queue') ? { code: 1 } : undefined))
-    const queue = createCodexQueue({ ...deps.codex!, home: '/eval-codex-home', cwd: '/eval-cwd' })
-    expect(await queue.send(world.session('t1').id, WORDS, true)).toMatchObject({ outcome: 'failed', reason: 'exit 1' })
+    const queue = createCodexQueue({ ...deps.codex!, cwd: '/eval-cwd' })
+    expect(await queue.send(world.session('t1').id, WORDS, true, '/eval-codex-home')).toMatchObject({ outcome: 'failed', reason: 'exit 1' })
     expect(world.seen([]).deliveries).toEqual([])
   })
 
