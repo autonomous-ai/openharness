@@ -230,6 +230,7 @@ while the desktop app runs (it has its own `HarnessStatusMenu`).
 | Claude Code, Codex | no row: the devices service sets them up ([dial agents always on](2026-11-17-dial-agents-always-on-design.md)) |
 | **Sound** (check item) | only while Harness runs and the dial is attached, not updating, and reports its settings; checked when the dial's sound is on ([design](2026-11-16-device-app-sound-design.md)) |
 | **Notifications** (submenu) | **All** and **Needs you**, the one in force checked; only while Harness runs and the dial is attached and not updating ([design](2026-11-16-dial-agent-notify-design.md)) |
+| **Voice language** (submenu) | English, Tiếng Việt, Español, Français, 日本語 and Italiano, each in its own language, the one the dial holds checked, none for another code; only while Harness runs and the dial is attached, not updating, and reports its settings ([design](2026-11-25-device-app-voice-language-design.md)) |
 | "Updating Harness Device…" (disabled) | while the app installs its own update ([design](2026-11-16-device-app-release-design.md)) |
 | **Update X…** | when the app cannot replace its bundle; opens `harness.autonomous.ai/device` ([design](2026-11-16-device-app-release-design.md)) |
 | separator | |
