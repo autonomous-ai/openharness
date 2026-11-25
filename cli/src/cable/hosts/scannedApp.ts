@@ -1,6 +1,6 @@
 // Which app a session the open scan found runs in, from its parent processes' executables alone
 // (docs/specs/2026-11-14-dial-app-filter.md, "The scan learns the app where that is cheap"), and which host made the
-// pseudo-terminal a hook's caller runs on (ptyMaker; windowsPtyOwner on Windows, which names no terminal). Nothing else
+// pseudo-terminal a hook's caller runs on (ptyMaker; windowsPtyMaker on Windows, which names no terminal). Nothing else
 // of a process is read but the terminal it runs on: its environment holds secrets, and its name is outside text (a
 // process can write a prompt there), so a name is matched against the tables and dropped, never kept, logged or sent.
 
@@ -298,19 +298,20 @@ const WINDOWS_SCRIPT_SHELL = 'cmd'
 const WINDOWS_LAUNCHER = 'node'
 
 /** A Windows image name as the tables hold it: Windows matches names with no case, and `.exe` says nothing. */
-const windowsName = (executable: string): string => win32.basename(executable).replace(/\.exe$/i, '').toLowerCase()
+export const windowsName = (executable: string): string => win32.basename(executable).replace(/\.exe$/i, '').toLowerCase()
 
 /**
- * The host that made the pseudo-console a Windows process runs on. Windows names no terminal, but the program that makes
+ * The process that made the pseudo-console a Windows process runs on, and its host when WINDOWS_PTY_HOSTS lists it
+ * (herdr's maker is its server). Windows names no terminal, but the program that makes
  * a pseudo-console starts its shell as its own child (ConPTY), so the maker is the caller's nearest parent that is no
  * shell, launcher or shim of the caller's own name (a Scoop or Volta `claude.exe` starting the real one). A shim or
  * launcher starts the caller itself or through `cmd`: Node or one of the caller's name above any other shell is
  * another agent that ran the caller from its own tool (Codex run by Codex, `claude -p` from Claude Code's shell tool,
- * Claude Code from npm being Node), and the caller is on its terminal or pipes, not the pane's. That parent decides:
- * none when WINDOWS_PTY_HOSTS does not list it, when the caller is not in [rows], or when the walk finds shells alone.
- * Its name is matched and dropped, never kept.
+ * Claude Code from npm being Node), and the caller is on its terminal or pipes, not the pane's. That parent is the
+ * maker, with no host when WINDOWS_PTY_HOSTS does not list it; none when the caller is not in [rows] or the walk finds
+ * shells alone. Its name is matched and dropped, never kept.
  */
-export function windowsPtyOwner(pid: number, rows: readonly WindowsProcess[]): string | undefined {
+export function windowsPtyMaker(pid: number, rows: readonly WindowsProcess[]): PtyMaker | undefined {
   const [own, ...parents] = parentChain(pid, new Map(rows.map((p) => [p.pid, p])))
   if (!own) return undefined
   const ownName = windowsName(own.executable)
@@ -322,17 +323,30 @@ export function windowsPtyOwner(pid: number, rows: readonly WindowsProcess[]): s
       shelled = true
       continue
     }
-    return Object.hasOwn(WINDOWS_PTY_HOSTS, name) ? WINDOWS_PTY_HOSTS[name] : undefined
+    return Object.hasOwn(WINDOWS_PTY_HOSTS, name) ? { pid: parent.pid, host: WINDOWS_PTY_HOSTS[name] } : { pid: parent.pid }
   }
   return undefined
 }
 
-/** windowsPtyOwner over the table [list] reads. That reader answers an empty table for one it could not read, and a
- *  table read lists its reader at the least, so no row is a failed read; the error names nothing. */
-export async function readWindowsPtyOwner(pid: number, list: () => Promise<readonly WindowsProcess[]>): Promise<string | undefined> {
+/** windowsPtyMaker's host alone. */
+export function windowsPtyOwner(pid: number, rows: readonly WindowsProcess[]): string | undefined {
+  return windowsPtyMaker(pid, rows)?.host
+}
+
+/** The table [list] reads, each row cut to its pid, parent, image name and start: the PTY host's rows carry the
+ *  command line too, which is outside text and can carry a secret, so no lookup holds it. That reader answers an empty
+ *  table for one it could not read, and a table read lists its reader at the least, so no row is a failed read; the
+ *  error names nothing. */
+export async function readWindowsProcesses(list: () => Promise<readonly WindowsProcess[]>): Promise<WindowsProcess[]> {
   const rows = await list()
   if (!rows.length) throw new Error('process table not read')
-  return windowsPtyOwner(pid, rows)
+  return rows.map(({ pid, ppid, executable, startMarker }) =>
+    (startMarker === undefined ? { pid, ppid, executable } : { pid, ppid, executable, startMarker }))
+}
+
+/** windowsPtyOwner over the table [list] reads (readWindowsProcesses). */
+export async function readWindowsPtyOwner(pid: number, list: () => Promise<readonly WindowsProcess[]>): Promise<string | undefined> {
+  return windowsPtyOwner(pid, await readWindowsProcesses(list))
 }
 
 /** A session a multiplexer made: its host as PTY_HOSTS names it, the maker's pid, and the session's own terminal
