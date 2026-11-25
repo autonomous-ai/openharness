@@ -136,10 +136,12 @@ export function tabsTyping(deps: TabsTypeDeps): Required<Pick<HostAdapter, 'canT
         return readers.every((reader) => own.has(reader))
       }
       const check = async (): Promise<TabsReason | undefined> => {
+        // ps read last, as lsof may take its 2 s: a Ctrl-Z or a quit meanwhile would leave the words at a shell.
+        const isAlone = await alone()
         const now = await (async () => deps.process(pid))().catch(() => undefined)
         if (!now || now.tty !== tty || now.start !== proof.start || now.tpgid <= 0) return 'process'
         if (now.pgid !== now.tpgid) return 'background'
-        if (!(await alone())) return 'foreground-child'
+        if (!isAlone) return 'foreground-child'
         // Asked after the reads, which take seconds at most: a newer watch, another agent on the tty or a turn begun
         // meanwhile stops the line.
         if (deps.line() !== line) return 'no-stream'
