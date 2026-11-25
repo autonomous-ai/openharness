@@ -16,7 +16,9 @@ use harness_device::state::{JsonStateFile, StateFile};
 use harness_device::tabs;
 use harness_device::tick;
 use harness_device::tray::{TrayIcon, tray_icon};
-use harness_device::types::{APP_NAME, Action, Clock, Effect, Event, Log, MenuAction, MenuItem, SystemClock, View};
+use harness_device::types::{
+    APP_NAME, Action, Clock, Effect, Event, Log, MenuAction, MenuItem, SystemClock, View, VoiceLang,
+};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -434,6 +436,12 @@ fn menu_id(action: MenuAction) -> &'static str {
         MenuAction::SoundOff => "sound_off",
         MenuAction::NotifyFull => "notify_full",
         MenuAction::NotifyYou => "notify_you",
+        MenuAction::Voice(VoiceLang::En) => "voice_en",
+        MenuAction::Voice(VoiceLang::Vi) => "voice_vi",
+        MenuAction::Voice(VoiceLang::Es) => "voice_es",
+        MenuAction::Voice(VoiceLang::Fr) => "voice_fr",
+        MenuAction::Voice(VoiceLang::Ja) => "voice_ja",
+        MenuAction::Voice(VoiceLang::It) => "voice_it",
         MenuAction::Update => "update",
         MenuAction::OpenHarness => "open_harness",
         MenuAction::About => "about",
@@ -446,13 +454,14 @@ fn menu_action(id: &str) -> Option<MenuAction> {
     use MenuAction::*;
     [Install, SignIn, SoundOn, SoundOff, NotifyFull, NotifyYou, Update, OpenHarness, About, Quit, ExportLogs]
         .into_iter()
+        .chain(VoiceLang::ALL.map(Voice))
         .find(|action| menu_id(*action) == id)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use harness_device::types::{Phase, Screen, VoiceLang};
+    use harness_device::types::{Phase, Screen};
 
     fn view(screen: Screen, phase: Phase, lines: &[&str]) -> View {
         View { screen, phase, lines: lines.iter().map(|line| line.to_string()).collect() }

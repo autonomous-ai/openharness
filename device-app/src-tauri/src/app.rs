@@ -286,6 +286,11 @@ impl App {
                     // As Sound's: the check moves when the watch's next line says the mode was saved.
                     effects.push(Effect::Menu(self.menu.clone()));
                 }
+                MenuAction::Voice(lang) => {
+                    effects.push(Effect::SetVoice(lang));
+                    // As Sound's: the check moves when the watch's next line says the language was saved.
+                    effects.push(Effect::Menu(self.menu.clone()));
+                }
                 MenuAction::Update => effects.push(Effect::OpenUrl(DEVICE_PAGE.into())),
                 MenuAction::OpenHarness => effects.push(Effect::OpenDesktop),
                 MenuAction::About => effects.push(Effect::ShowAbout(about_credits(&self.state))),

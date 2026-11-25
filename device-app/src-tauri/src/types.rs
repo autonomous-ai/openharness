@@ -176,6 +176,7 @@ pub enum MenuAction {
     SoundOff,
     NotifyFull,
     NotifyYou,
+    Voice(VoiceLang),
     Update,
     OpenHarness,
     About,
