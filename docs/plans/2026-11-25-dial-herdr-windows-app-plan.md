@@ -39,8 +39,9 @@ each task's tests (interfaces change across files).
 - Nothing in `cli/src/core/`, nothing stored, `createHerdrNested` and the open scan stay off on Windows (spec, "Design · 2").
 - Bounds: at most `HERDR_CLIENTS_A_LOOKUP` (16) candidates a lookup, parent walks bounded by `WALK_PARENTS` through
   `parentChain`.
-- Log lines are the existing ones: `[device] herdr client · found | none | outside | not read · processes`, and the
-  raise's `[device] raise · window · raised | refused | none`. They name no pane, pid, path or image name.
+- Log lines: `[device] herdr client · found | found · window | none | outside | not read · processes` (`found · window`:
+  a window to raise and no app, on every platform), and the raise's `[device] raise · window · raised | refused | none`.
+  They name no pane, pid, path or image name.
 - Names and copy follow `docs/naming-system.md`; comments say why (cli/AGENTS.md rule 7).
 
 ## Review Focus
@@ -178,7 +179,7 @@ there) and up from each client (rules 4 and 5), never past the server.
    whichever comes first ends the walk. Neither (`explorer.exe`, `conhost.exe`, a dead or reused parent) → no window.
 6. Pick, in three tiers, the newest within a tier: the newest candidate with an app →
    `{ app, pid: <client pid>, nest: 'herdr' }` (`found`); else the newest candidate with a window owner, even when a
-   newer candidate has none (decision 5) → `{ pid: <owner pid>, nest: 'herdr' }` (`none`); else `{ nest: 'herdr' }`
+   newer candidate has none (decision 5) → `{ pid: <owner pid>, nest: 'herdr' }` (`found · window`); else `{ nest: 'herdr' }`
    (`none`). No `tty` on Windows. The answer never carries `UNKNOWN_APP` as `app`: the agent's `terminal` app is set by
    `observed.ts` (Task 5, decision 4).
 
@@ -215,7 +216,7 @@ pid   ppid  image                k   role
   - `the client in VS Code places the agent, before the newer one with no window`: → `{ app: 'vscode', pid: 9904,
     nest: 'herdr' }`, log `found`, `made` told `'herdr'`, no `run` call.
   - `with client #2 gone, Windows Terminal's window beats the newer handoff client` (decision 5): →
-    `{ pid: 7588, nest: 'herdr' }`, log `none`.
+    `{ pid: 7588, nest: 'herdr' }`, log `found · window`.
   - `with client #1 gone too, no window`: → `{ nest: 'herdr' }`, log `none`, `made` told.
   - `a reused pid of the first client changes nothing`: #1 and #2 gone, and a row `Code.exe` 8412 (ppid 5616,
     `mark(18)`) → `{ nest: 'herdr' }` (the server's `ppid` now names a newer `Code.exe`, never its client); with #2
@@ -389,7 +390,7 @@ pid   ppid  image                k   role
     Code`: the log has `[device] herdr client · found`; the apps list has `herdr`, not `vscode`; `openAgent` runs
     `herdr agent focus <pane>` and the raise asks `app` for `com.microsoft.VSCode`.
   - `with client #2 gone, the agent is on herdr's page and a tap raises Windows Terminal's window` (the handoff
-    client #3 stays, newer, with no window: decision 5 end to end): `[device] herdr client · none`; the agent's app is
+    client #3 stays, newer, with no window: decision 5 end to end): `[device] herdr client · found · window`; the agent's app is
     `terminal` and its page `herdr`; the fake raise's `windows` is `[7588]`, and its `apps` stays empty.
   - `the table not read`: `listProcesses` → `[]` → `[device] herdr client · not read · processes`.
   - No log line holds a pid, `herdr.exe` or a path (`logs.filter(l => /\d{3}|herdr\.exe|\\/.test(l))` over the herdr
@@ -432,7 +433,7 @@ pid   ppid  image                k   role
    2. Start the desk on the stand-in dial (`desk.mjs --own-account`, the test user's own homes in
       `%USERPROFILE%\.harness-dial-check`), herdr running with an agent in a pane attached from one Windows Terminal
       window (a second WT window may come forward instead: the known gap).
-   3. `list`: the agent's row is on herdr's page; the log has `[device] herdr client · none` (WT), never `not read`.
+   3. `list`: the agent's row is on herdr's page; the log has `[device] herdr client · found · window` (WT), never `not read`.
    4. Bring another app forward, `tap <row>`: herdr switches to the agent's pane, WT comes forward (or its taskbar
       flashes), the log counts `[device] raise · window · raised` or `refused`. **Needs Ken's eye.**
    5. Attach a second client from VS Code's integrated terminal, send a prompt so the hook runs: `list` keeps the agent

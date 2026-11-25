@@ -122,7 +122,8 @@ from one `listProcesses` table.
      do for a terminal with no page.
    - `{ nest: 'herdr' }`, when no candidate has a window.
 
-   The same log lines as today: `[device] herdr client · found | none | not read · processes`.
+   The log lines: `[device] herdr client · found` (an app), `found · window` (a window owner, no app), `none` (no
+   window), `not read · processes`.
 
 `createHerdrNested` stays off on Windows (the scan's gap above).
 
@@ -246,8 +247,8 @@ Record names, pids and parents only, never command lines.
    to the VM.
 2. Start the desk on the stand-in dial (`--own-account` on the test user), with herdr 0.9.5 and an agent in a herdr
    pane attached from Windows Terminal.
-3. `list`: the agent's row is on herdr's page. The log has `[device] herdr client · found` or `none`, never
-   `not read`.
+3. `list`: the agent's row is on herdr's page. The log has `[device] herdr client · found` or `found · window`
+   (WT), never `not read`.
 4. Bring another app forward, then `tap <row>`: herdr switches to the agent's pane, WT comes forward, and the log
    counts `[device] raise · window · raised` (or `refused`, the taskbar flash).
 5. Attach a second client from VS Code's integrated terminal, and send a prompt from the agent so its hook runs:

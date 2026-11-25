@@ -291,13 +291,14 @@ async function windowsClientOf(windows: HerdrWindowsDeps, server: number, rows: 
   return owned ? { pid: owned.owner } : {}
 }
 
-/** [place] said by its line: a step not read says its word and answers `{}`. */
+/** [place] said by its line: a step not read says its word and answers `{}`. A client in no app whose window can be
+ *  raised by its process (on Windows its window's owner) is found all the same: `none` would read as nothing found. */
 function said(deps: ClientDeps, place: ClientPlace | NotRead): ClientPlace {
   if (typeof place === 'string') {
     deps.log(`[device] herdr client · not read · ${place}`)
     return {}
   }
-  deps.log(`[device] herdr client · ${place.app ? 'found' : 'none'}`)
+  deps.log(`[device] herdr client · ${place.app ? 'found' : place.pid !== undefined ? 'found · window' : 'none'}`)
   return place
 }
 
