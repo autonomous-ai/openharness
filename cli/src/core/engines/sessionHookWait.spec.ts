@@ -25,7 +25,7 @@ const turn = () => new Promise<void>(resolve => setImmediate(resolve))
 
 const waitsLine = (s: string, route: string) => `[hooks] ${s} ${route} waits for its session's admission`
 const ranLine = (s: string, n: number) => `[hooks] ${s} waiting hooks ran · ${n}`
-const unheldLine = (s: string, route: string, reason: string) => `[hooks] ${s} ${route} runs unheld · ${reason}`
+const unheldLine = (s: string, route: string, reason: string, hooks = 1) => `[hooks] ${s} ${route} runs unheld · ${reason} · ${hooks}`
 const failedLine = (s: string, route: string, kind: string) => `[hooks] ${s} ${route} waiting hook failed · ${kind}`
 
 let lines: string[]
@@ -224,13 +224,39 @@ describe('a session\'s hooks waiting behind its admission', () => {
     expect(bytes.hold(KEY, hook('turn-start', undefined, { bytes: 4 }))).toBe(true)
     bytes.close()
 
+    // Each wait keeps its own minutes; the byte bound's second refusal falls in its first's minute.
     expect(lines.filter(line => line.includes('runs unheld'))).toEqual([
       unheldLine(S, 'tool-start', 'session_full'),
       unheldLine(O, 'subagent', 'core_full'),
       unheldLine(S, 'tool-start', 'core_full'),
-      unheldLine(S, 'turn-start', 'core_full'),
     ])
     expect(SESSION_HOOK_WAIT_BOUNDS).toEqual({ perSession: 32, total: 256, totalBytes: 4 * 1024 * 1024, maxWaitMs: 120_000 })
+  })
+
+  // A session over its bound would say it for every hook it sends, and a stuck admission for every hook behind it.
+  it('says hooks that run unheld at most once a minute for each reason, with how many since its last line', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    const waits = createSessionHookWait({ perSession: 1, total: 2 })
+    const third = sessionKey('claude', 'c0ffee00-third')
+    waits.admission(KEY, 'd1')
+    expect(waits.hold(KEY, hook())).toBe(true)
+    expect(waits.hold(KEY, hook('wait'))).toBe(false)
+    expect(waits.hold(KEY, hook('subagent'))).toBe(false)
+    waits.admission(OTHER_KEY, 'd1')
+    expect(waits.hold(OTHER_KEY, hook('wait', undefined, { sessionId: OTHER }))).toBe(true)
+    // Another reason has its own minute.
+    waits.admission(third, 'd1')
+    expect(waits.hold(third, hook('tool-start', undefined, { sessionId: 'c0ffee00-third' }))).toBe(false)
+    await vi.advanceTimersByTimeAsync(59_999)
+    expect(waits.hold(KEY, hook('tool-start'))).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(waits.hold(KEY, hook('turn-start'))).toBe(false)
+    expect(lines.filter(line => line.includes('runs unheld'))).toEqual([
+      unheldLine(S, 'wait', 'session_full'),
+      unheldLine('c0ffee00', 'tool-start', 'core_full'),
+      unheldLine(S, 'turn-start', 'session_full', 3),
+    ])
+    waits.close()
   })
 
   it('runs a hook past its time at once, and says so', async () => {
@@ -291,10 +317,11 @@ describe('a session\'s hooks waiting behind its admission', () => {
     await turn()
     await vi.advanceTimersByTimeAsync(500)
     await turn()
+    // The second time-out is in the first's minute: only its failure is said.
     expect(lines.slice(3)).toEqual([
       waitsLine(S, 'subagent'),
       unheldLine(S, 'subagent', 'timed_out'), failedLine(S, 'subagent', 'RangeError'),
-      unheldLine(S, 'wait', 'timed_out'), failedLine(S, 'wait', 'string'),
+      failedLine(S, 'wait', 'string'),
     ])
     expect(lines.join('\n')).not.toMatch(/prompt|notes|tool input|body/)
     waits.close()

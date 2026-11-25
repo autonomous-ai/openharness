@@ -30,6 +30,7 @@ export interface AdmissionTicket {
 }
 
 export interface WaitingHook { route: WaitingRoute; sessionId: string; bytes: number; run: () => Promise<void> }
+type UnheldReason = 'session_full' | 'core_full' | 'timed_out'
 
 export function createSessionHookWait(bounds: Partial<SessionHookWaitBounds> = {}) {
   const { perSession, total, totalBytes, maxWaitMs } = { ...SESSION_HOOK_WAIT_BOUNDS, ...bounds }
@@ -40,6 +41,15 @@ export function createSessionHookWait(bounds: Partial<SessionHookWaitBounds> = {
   const sessions = new Map<string, Session>()
   // One arrival count for admissions and hooks: a hook waits only behind the admissions that arrived before it.
   let arrival = 0, waitingCount = 0, waitingBytes = 0, closed = false
+  // Per reason, when its line was last said and the hooks run unheld for it since: a session over its bound would say
+  // it for every hook it sends, and a stuck admission for every hook behind it.
+  const unheldSaid = new Map<UnheldReason, { at: number; hooks: number }>()
+  const unheld = ({ route, sessionId }: WaitingHook, reason: UnheldReason) => {
+    const said = unheldSaid.get(reason)
+    if (said && Date.now() - said.at < 60_000) { said.hooks++; return }
+    console.warn(`[hooks] ${sid(sessionId)} ${route} runs unheld · ${reason} · ${(said?.hooks ?? 0) + 1}`)
+    unheldSaid.set(reason, { at: Date.now(), hooks: 0 })
+  }
 
   const behind = (session: Session, waiter: Waiter) =>
     [...session.admissions.values()].some(admission => admission.arrival < waiter.arrival)
@@ -116,25 +126,21 @@ export function createSessionHookWait(bounds: Partial<SessionHookWaitBounds> = {
       }
     },
     /** True: [hook] waits, its caller answers `200 {pending: true}` and [hook.run] is called once, later. False: run it
-     *  now (nothing unsettled ahead of it, or over a bound, which is logged). */
+     *  now (nothing unsettled ahead of it, or over a bound, which is logged at most once a minute per reason). */
     hold(key: string, hook: WaitingHook): boolean {
       const session = sessions.get(key)
       if (!session?.admissions.size) return false
       // Every admission still here is unsettled and arrived before this hook.
       const ahead = [...session.admissions.values()]
-      const unheld = (reason: 'session_full' | 'core_full') => {
-        console.warn(`[hooks] ${sid(hook.sessionId)} ${hook.route} runs unheld · ${reason}`)
-        return false
-      }
-      if (session.waiting.length >= perSession) return unheld('session_full')
-      if (waitingCount >= total || waitingBytes + hook.bytes > totalBytes) return unheld('core_full')
+      if (session.waiting.length >= perSession) { unheld(hook, 'session_full'); return false }
+      if (waitingCount >= total || waitingBytes + hook.bytes > totalBytes) { unheld(hook, 'core_full'); return false }
       if (ahead.some(admission => !admission.announced)) {
         console.log(`[hooks] ${sid(hook.sessionId)} ${hook.route} waits for its session's admission`)
         for (const admission of ahead) admission.announced = true
       }
       const waiter: Waiter = { arrival: ++arrival, hook, timer: setTimeout(() => {
         leave(session, waiter)
-        console.warn(`[hooks] ${sid(hook.sessionId)} ${hook.route} runs unheld · timed_out`)
+        unheld(hook, 'timed_out')
         void runOne(hook)
       }, maxWaitMs) }
       waiter.timer.unref()

@@ -230,7 +230,7 @@ describe('a follow-up hook of a session being admitted', () => {
     await holdStart(post)
     expect(await post('turn-stop', followUp(), firedAt(1_000))).toEqual(held)
     expect(await post('wait', followUp({ hookEvent: 'PermissionRequest' }), firedAt(1_001))).toEqual({ status: 403, body: { error: 'UNBOUND_HOOK' } })
-    expect(lines).toContain(`[hooks] ${N} wait runs unheld · session_full`)
+    expect(lines).toContain(`[hooks] ${N} wait runs unheld · session_full · 1`)
     expect(lines).toContain(unboundLine('wait'))
     expect(handlers.onPersonWait).not.toHaveBeenCalled()
   })
@@ -241,7 +241,7 @@ describe('a follow-up hook of a session being admitted', () => {
     expect(await post('turn-stop', followUp(), firedAt(1_000))).toEqual(held)
     await vi.advanceTimersByTimeAsync(2_000)
     await until(() => lines.includes(unboundLine('turn-stop')))
-    expect(lines).toContain(`[hooks] ${N} turn-stop runs unheld · timed_out`)
+    expect(lines).toContain(`[hooks] ${N} turn-stop runs unheld · timed_out · 1`)
     expect(handlers.onTurnStop).not.toHaveBeenCalled()
   })
 
