@@ -961,7 +961,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       send: (threadId, text, isApp, home) =>
         appWake!.waitsFor(threadId) ? Promise.resolve({ outcome: 'busy' as const }) : codexQueue.send(threadId, text, isApp, home),
     },
-    // Harness's own records alone: its CODEX_HOME and the homes it adopted, asked at each look, and the profiles the
+    // Harness's own records alone: its CODEX_HOME and the homes it adopted, held 1 s, and the profiles the
     // person linked. Orca's Codex homes stay out: Orca's own route types into its terminals.
     codexHomes: trustedCodexHomes(() => codexHomeRoots(env.CODEX_HOME), monotonic),
     count: (what) => voiced(countWord(what)),

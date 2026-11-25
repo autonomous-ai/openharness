@@ -11,7 +11,7 @@
 
 import { lstatSync, realpathSync, statSync } from 'fs'
 import { homedir } from 'os'
-import { join } from 'path'
+import { join, resolve, sep } from 'path'
 import { env } from '../config/env.js'
 import { homeIsAbsolute } from '../engines/kit/homeAdoption.js'
 import { discoverCodexProfiles } from './codexProfileDiscovery.js'
@@ -84,8 +84,16 @@ export function readLinkedCodexHomes(): string[] {
   return read.state === 'ok' ? [...linkedIn(read.value)].filter(wellFormed) : []
 }
 
-/** How long the linked list and each home's real path hold: the dial's list asks `can()` on every 1 s tick. */
+/** How long the linked list and each own home's real path hold: the dial's list asks `can()` on every 1 s tick. */
 export const TRUSTED_HOMES_MS = 30_000
+/** How long the own homes hold: one look reads the adopted homes' catalog from disk, and asks them once per row. */
+export const OWN_HOMES_MS = 1_000
+
+/** A home Harness trusts, with its `sessions` folder resolved: a rollout in that folder is the home's session's. */
+export interface TrustedCodexHome {
+  home: string
+  sessions: string
+}
 
 function realOrNull(path: string): string | null {
   try {
@@ -96,35 +104,47 @@ function realOrNull(path: string): string | null {
 }
 
 /**
- * The Codex homes Harness trusts, for `codex queue`: [own]'s (the daemon's CODEX_HOME and the adopted homes), asked at
- * every call so an adopted home counts at once, then the linked ones. Each is followed by its real path when that
- * differs, since a linked home is stored by its real path. [now] is a monotonic clock.
+ * The Codex homes Harness trusts, for `codex queue`: [own]'s (the daemon's CODEX_HOME and the adopted homes), each
+ * also by its real path when that differs, then the linked ones as stored, since a link stores a home's real path (a
+ * linked home on a dead network volume is never asked). The deepest come first, as a home may lie inside another's
+ * sessions folder: the first whose folder holds a rollout is its session's. [now] is a monotonic clock.
  */
 export function trustedCodexHomes(
   own: () => readonly string[],
   now: () => number,
   read: () => string[] = readLinkedCodexHomes,
   real: (path: string) => string | null = realOrNull,
-): () => readonly string[] {
-  let heldAt: number | undefined
+): () => readonly TrustedCodexHome[] {
+  let linkedAt: number | undefined
+  let ownAt: number | undefined
   let linked: string[] = []
   // Made anew with each read of the list, so it holds only the homes asked about in one hold.
   let reals = new Map<string, string | null>()
+  let trusted: TrustedCodexHome[] = []
   return () => {
     const at = now()
-    if (heldAt === undefined || at - heldAt >= TRUSTED_HOMES_MS) {
-      heldAt = at
+    if (linkedAt === undefined || at - linkedAt >= TRUSTED_HOMES_MS) {
+      linkedAt = at
       linked = read()
       reals = new Map()
+      ownAt = undefined
     }
+    if (ownAt !== undefined && at - ownAt < OWN_HOMES_MS) return trusted
+    ownAt = at
     const homes = new Set<string>()
-    for (const home of [...own(), ...linked]) {
+    for (const home of own()) {
       let resolved = reals.get(home)
       if (resolved === undefined) reals.set(home, resolved = real(home))
       homes.add(home)
       if (resolved !== null) homes.add(resolved)
     }
-    return [...homes]
+    for (const home of linked) homes.add(home)
+    // A stable sort: of two homes as deep, the one listed first stays first.
+    trusted = [...homes].map((home) => {
+      const sessions = resolve(home, 'sessions')
+      return { home, sessions, depth: sessions.split(sep).filter(Boolean).length }
+    }).sort((a, b) => b.depth - a.depth).map(({ home, sessions }) => ({ home, sessions }))
+    return trusted
   }
 }
 

@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
-import { basename, join, resolve, sep } from 'node:path'
+import { basename } from 'node:path'
 // Types only: the devices process must not load core code.
 import type { ObservedAsked, ObservedEvent, ObservedHookEvent } from '../../core/observedHook.js'
+import type { TrustedCodexHome } from '../../lib/codexProfiles.js'
 import { truncateUtf8 } from '../../lib/deviceRecentTrim.js'
 import type { DialOtherApp } from '../../lib/dialUsageContract.js'
 import type { OpenSessions, SessionOwner, SessionRows } from '../../lib/sessionSearch/external.js'
@@ -192,10 +193,10 @@ export interface ObservedActions {
   open(agentId: string, target: OpenTarget): Promise<boolean>
   /** Codex's own queue (codexQueue.ts): a thread runs its words as its next turn, and no terminal is typed into. */
   codexQueue: Pick<CodexQueue, 'can' | 'send'>
-  /** The Codex homes Harness trusts, asked at each look: its own (env.CODEX_HOME), the ones it adopted and the profiles
-   *  the person linked, each also by its real path. `codex queue` loads a home's config, so a hook's path never names
-   *  one: it only picks among these. */
-  codexHomes(): readonly string[]
+  /** The Codex homes Harness trusts, asked at each look, deepest first (lib/codexProfiles.ts trustedCodexHomes): its own
+   *  (env.CODEX_HOME), the ones it adopted and the profiles the person linked. `codex queue` loads a home's config, so a
+   *  hook's path never names one: it only picks among these. */
+  codexHomes(): readonly TrustedCodexHome[]
   /** The route (`codex`, `mod`, or the adapter that typed, said by its fixed id) or the refusal, the adapter that
    *  refused in its own sentence or did not send for a reason of the list, and a failed queue's reason and which
    *  `codex` ran. Fixed words or an adapter only: a string from a hook, a pane's id, a binary's path, cannot reach the
@@ -410,22 +411,14 @@ export class ObservedSource implements HostSource {
   /**
    * The Codex home a live session's words are queued under, when Codex's queue takes them: a Codex session whose rollout
    * is in a home Harness trusts, its session id the thread id. The home comes only from Harness's lists, and the hook's
-   * path only picks among them: of the homes holding the rollout, the deepest is the session's (a home may lie inside
-   * another's sessions folder), the spelling that matched the one codex runs under. Whether codex is there is asked
-   * last: it looks for the binary.
+   * path only picks among them: the first listed whose sessions folder holds the rollout, the deepest (a home may lie
+   * inside another's sessions folder), and the spelling that matched the one codex runs under. Whether codex is there is
+   * asked last: it looks for the binary.
    */
   private queueHome(e: Entry, actions: ObservedActions): string | undefined {
     const rollout = e.transcriptPath
     if (e.agent.engine !== 'codex' || !rollout || !CODEX_THREAD.test(e.agent.sessionId!)) return undefined
-    let home: string | undefined
-    let depth = -1
-    for (const trusted of actions.codexHomes()) {
-      const segments = resolve(trusted).split(sep).filter(Boolean).length
-      if (segments > depth && within(join(trusted, 'sessions'), rollout)) {
-        home = trusted
-        depth = segments
-      }
-    }
+    const home = actions.codexHomes().find(({ sessions }) => within(sessions, rollout))?.home
     return home !== undefined && actions.codexQueue.can(this.inCodexApp(e)) ? home : undefined
   }
 
