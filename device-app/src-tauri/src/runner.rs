@@ -8,7 +8,7 @@ use crate::loginitem::LoginItem;
 use crate::logs;
 use crate::open::Opener;
 use crate::state::StateFile;
-use crate::tabs::{Out, POLL_EVERY, Select, TabApp, TabFollow, TabScripts};
+use crate::tabs::{Next, Out, POLL_EVERY, Select, TabApp, TabFollow, TabScripts, Typing, Written};
 use crate::types::{Effect, Event, ExportFailure, Log, LoginEvent};
 use crate::update::AppUpdater;
 use crate::watch::{self, Watch};
@@ -70,12 +70,17 @@ struct Tabs {
 #[derive(Default)]
 struct TabState {
     follow: TabFollow,
+    /// The number of the watch whose typings wait in `follow`: a new watch drops those of the one before, so they are
+    /// all of one.
+    typings_of: u64,
     /// The runner has gone: the tab thread ends.
     ended: bool,
 }
 
 /// The tab thread's next call, or the lines for the log that came with none.
 enum Call {
+    /// The oldest typing, and the number of the watch it came from: its answer goes to that watch alone.
+    Typing(Next, u64),
     Select(Select),
     Poll(TabApp),
     Said(Vec<String>),
@@ -88,13 +93,25 @@ impl Tabs {
         self.changed.notify_one();
     }
 
+    /// A typing from the watch numbered `number`, and a word to the tab thread. The line is its answer when it has one
+    /// at once.
+    fn typed(&self, number: u64, typing: Typing) -> Option<String> {
+        let mut state = self.state.lock().unwrap();
+        state.typings_of = number;
+        let line = state.follow.typed(typing, Instant::now());
+        drop(state);
+        self.changed.notify_one();
+        line
+    }
+
     fn end(&self) {
         self.state.lock().unwrap().ended = true;
         self.changed.notify_one();
     }
 
-    /// Waits for the next call: a waiting select first, else a poll `every` after the last one began. With neither to
-    /// do it waits with no timer. None once the runner has gone, and what the rules said before it went is taken first.
+    /// Waits for the next call: the oldest typing first, as its 500 ms bound is the tightest, then a waiting select,
+    /// else a poll `every` after the last one began. With none to do it waits with no timer. None once the runner has
+    /// gone, and what the rules said before it went is taken first.
     fn next(&self, every: Duration, polled_at: Option<Instant>) -> Option<Call> {
         let mut state = self.state.lock().unwrap();
         loop {
@@ -104,6 +121,9 @@ impl Tabs {
             }
             if state.ended {
                 return None;
+            }
+            if let Some(next) = state.follow.next_typing(Instant::now()) {
+                return Some(Call::Typing(next, state.typings_of));
             }
             if let Some(select) = state.follow.next_select(Instant::now()) {
                 return Some(Call::Select(select));
@@ -324,7 +344,7 @@ impl Shared {
         thread::spawn(move || send(work(&*updater)));
     }
 
-    fn spawn_watch(&self) {
+    fn spawn_watch(self: &Arc<Self>) {
         let Some(cli) = self.cli() else { return self.answer(Event::Cli(false)) };
         let mut watch = self.watch.lock().unwrap();
         // Numbered before the watch it replaces stops: that one's late WatchExit(Some(0)) would read as the app
@@ -341,6 +361,8 @@ impl Shared {
         }
         let (watching, send, tabs) = (self.watching.clone(), self.send.clone(), self.tabs.clone());
         let (selecting, selects) = (self.watching.clone(), self.tabs.clone());
+        // Weakly: the watch's thread keeps its callbacks for as long as it runs, and the runner must still go.
+        let typed = Arc::downgrade(self);
         let spawned = watch::spawn_watch(
             &*cli,
             self.doors.log.clone(),
@@ -363,6 +385,11 @@ impl Shared {
                 let current = selecting.lock().unwrap();
                 if *current == number {
                     selects.tell(|follow| follow.select(app, tty, raise, Instant::now()));
+                }
+            },
+            move |typing| {
+                if let Some(shared) = typed.upgrade() {
+                    shared.typed(number, typing);
                 }
             },
         );
@@ -402,8 +429,36 @@ impl Shared {
         }
     }
 
-    /// The tab thread: one call at a time, until the runner goes. A tab line goes to the watch running now, and only
-    /// each answer's outcome to the log.
+    /// A typing from the watch numbered `number`, on its thread. One the rules answer at once is answered to that watch
+    /// now: the devices wait on it, and the tab thread may be held for minutes.
+    fn typed(&self, number: u64, typing: Typing) {
+        // Held through the tell, as a select's: a newer watch cannot take its number in between and have this one's
+        // typing run for it.
+        let current = self.watching.lock().unwrap();
+        if *current != number {
+            return;
+        }
+        let line = self.tabs.typed(number, typing);
+        drop(current);
+        if let Some(line) = line {
+            self.wrote(number, &line);
+        }
+    }
+
+    /// A typing's answer, to the watch numbered `number` while it is the one running: a newer watch never hears of an
+    /// older one's words.
+    fn wrote(&self, number: u64, line: &str) {
+        // `watch` first, as spawn_watch takes them, and held through the write.
+        let watch = self.watch.lock().unwrap();
+        if *self.watching.lock().unwrap() == number
+            && let Some(watch) = watch.as_ref()
+        {
+            watch.wrote(line);
+        }
+    }
+
+    /// The tab thread: one call at a time, until the runner goes. A tab line goes to the watch running now, a typing's
+    /// answer to the watch it came from, and only each answer's outcome to the log.
     fn follow_tabs(&self, every: Duration) {
         let (scripts, started_at) = (&self.doors.tabs, Instant::now());
         let mut polled_at = None;
@@ -415,7 +470,8 @@ impl Shared {
                     polled_at = Some(start);
                     Some(*app)
                 }
-                Call::Said(_) => None,
+                // A typing is answered even when its app does not run.
+                Call::Typing(..) | Call::Said(_) => None,
             };
             // An Apple Event to an app that is not running would launch it, and the app in front may have just quit.
             if app.is_some_and(|app| !scripts.running(app)) {
@@ -423,6 +479,29 @@ impl Shared {
             }
             let out = match call {
                 Call::Said(log) => Out { line: None, log },
+                Call::Typing(next, number) => {
+                    let out = match next {
+                        Next::Refused { line, log } => Out { line: Some(line), log: log.into_iter().collect() },
+                        Next::Run(typing) => {
+                            let app = typing.app();
+                            // The terminal may have quit since the words, and an event would launch it again: one
+                            // that does not run has no session.
+                            let done = if !scripts.running(app) {
+                                Ok(Written::NoSession)
+                            } else {
+                                match &typing {
+                                    Typing::Write { tty, text, .. } => scripts.write_text(app, tty, text),
+                                    Typing::Enter { tty, .. } => scripts.send_enter(app, tty),
+                                }
+                            };
+                            self.tabs.answer(|follow| follow.written(&typing, done))
+                        }
+                    };
+                    if let Some(line) = &out.line {
+                        self.wrote(number, line);
+                    }
+                    out
+                }
                 Call::Select(Select { app, tty, frontmost, raise }) => {
                     let done =
                         if raise { scripts.focus_tty(app, &tty) } else { scripts.select_tty(app, &tty, frontmost) };
