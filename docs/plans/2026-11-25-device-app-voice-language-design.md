@@ -154,11 +154,16 @@ app click ──stdin {"voiceLang":"vi"}──▶ watch ──harness_device_set
   - `app.rs`: the menu action yields `SetVoice` and the menu again.
   - `watch.rs`: `voice` writes the fixed line.
   - `main.rs`: the ids round-trip.
-- **End to end:** none new. The fake CLI's watch lines carry no `voiceLang`, so the existing e2e menus are unchanged.
-  The rule lives in the reducer and the watch, and is tested there.
-- **By hand, with a dial (Verification; Ken's machines or Diego's dial, the PM decides):**
-  - Choose Tiếng Việt from the menu, speak, and see a Vietnamese transcript.
-  - Desktop's row follows, and the reverse.
+- **End to end, CLI** `cli/e2e/hardwareWatch.e2e.ts` (PR CI `linux-e2e` runs it, as the pull request modifies it):
+  on the real daemon with a fake dial, the watch's status line carries `voiceLang`; a stdin `{"voiceLang":"vi"}`
+  reaches the devices service as `harness_device_settings` with patch `{voiceLang:'vi'}` and the dial as
+  `settings.set`; the `dial_status` Desktop reads carries the chosen language; Desktop's change moves the line.
+- **End to end, app:** none new. The app's own fake CLI drives `watch.rs` and `runner.rs` in `cargo test`; the
+  existing e2e menus (`linux.sh`, `windows.ps1`) are unchanged, as their lines carry no `voiceLang`.
+- **By hand, against the fake CLI (does not block the merge):** a look at the native submenu.
+- **After release, by Diego (non-blocking):** on his own dial, choose Tiếng Việt from the menu, speak, and see a
+  Vietnamese transcript; Desktop's row follows, and the reverse; the native menu in the real app. No check before the
+  merge touches production or a person's own daemon or dial.
 
 ## Platforms
 
