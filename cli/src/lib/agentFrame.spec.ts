@@ -303,6 +303,39 @@ describe('agentFrame', () => {
     expect(await agentFrame(legacy, { selectedModel: null, terminalAvailable: true }))
       .toMatchObject({ launch: { state: 'failed', error: 'ENGINE_DID_NOT_START', detail: 'See terminal.' } })
   })
+
+  // A held row is inactive in the registry (setLaunch); one the guard held starts again by itself, so every client is
+  // shown its usual "Starting" (docs/plans/2026-11-25-held-launch-recovery-design.md, section 4).
+  const guardHeldLaunch = { state: 'held', service: 'native', detail: 'Starting again.', nativeToken: 'tok-1', startsAgain: true } as const
+
+  it.each([['a first launch', ''], ['a conversation', 's1']])('sends %s the guard held as a launch starting, and active', async (_case, sessionId) => {
+    const row = { ...session(null), sessionId, active: false, launch: guardHeldLaunch }
+    // The daemon has no activity for a row with no session (core/turns/activity.ts): `harness wait` must not read idle.
+    const frame = await agentFrame(row, { selectedModel: null, terminalAvailable: true, activity: () => null })
+    expect(frame.launch).toEqual({ state: 'starting' })
+    expect(frame.status).toBe('active')
+    expect(frame.activity).toBeNull()
+    expect(JSON.stringify(frame)).not.toContain('startsAgain')
+    expect(JSON.stringify(frame)).not.toContain('tok-1')
+  })
+
+  it.each([
+    ['no guard proof, no session', { state: 'held', service: 'native', detail: 'Waiting.', nativeToken: 'tok-1' }, ''],
+    ['no guard proof, a conversation', { state: 'held', service: 'native', detail: 'Waiting.', nativeToken: 'tok-1' }, 's1'],
+    ['no native token', { state: 'held', service: 'models', detail: 'Waiting for models.', startsAgain: true }, ''],
+  ] as const)('sends every other held launch as it is: %s', async (_case, launch, sessionId) => {
+    const frame = await agentFrame({ ...session(null), sessionId, active: false, launch }, { selectedModel: null, terminalAvailable: true })
+    expect(frame.launch).toEqual(launch)
+    expect(frame.status).toBe('offline')
+  })
+
+  // The receipt that made the row is the core's own (registry.ts `creationId`).
+  it('never sends the creation id', async () => {
+    const row = { ...session(null), sessionId: '', active: false, launch: guardHeldLaunch, creationId: 'crt-0123456789abcdef' }
+    const frame = await agentFrame(row, { selectedModel: null, terminalAvailable: true })
+    expect(frame).not.toHaveProperty('creationId')
+    expect(JSON.stringify(frame)).not.toContain('crt-0123456789abcdef')
+  })
 })
 
 describe('agentFrame updatedAt', () => {
