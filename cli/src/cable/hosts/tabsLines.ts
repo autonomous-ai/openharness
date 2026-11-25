@@ -51,10 +51,14 @@ function target(line: Record<string, unknown>): { id: string; app: TypeApp; tty:
   return { id, app: app as TypeApp, tty }
 }
 
+/** A lone surrogate has no UTF-8 form: the devices type it as the replacement character, so one here was never cleaned. */
+const LONE_SURROGATE = /\p{Cs}/u
+
 /** Words as every hop counts them: UTF-16 units, as Harness Device's encode_utf16. */
 function isWords(text: unknown): text is string {
   // search, not test: CONTROL is global, and test would keep its lastIndex from one text to the next.
   return typeof text === 'string' && text !== '' && text.length <= MAX_TEXT && text.search(CONTROL) === -1
+    && text.search(LONE_SURROGATE) === -1
 }
 
 export function typingOf(value: unknown): TabsTyping | null {
