@@ -1164,6 +1164,30 @@ describe('the review\'s simulation: a real QuestionWatcher and AskQuestionContro
     expect(w.keys).toEqual([])
   })
 
+  // Hermes and Copilot box an approval's command with no `$ ` line, so isApprovalDialog does not see it as one: it must
+  // still never keep its id once its command changes under the same words. Hermes titles it by the URL line, not the
+  // command above it; Copilot folds the boxed value into the question cut at 120 characters, so a long one's tail is
+  // in the dialog alone.
+  const longSubject = (tail: string): string => `│ │ https://example.com/${'a'.repeat(110)}/${tail} `
+  it.each([
+    ['permission-hermes.txt', 'hermes', '│ curl -s ', '│ curl -s ', '│ rm -rf  ', 'Allow once'],
+    ['permission-copilot.txt', 'copilot', '│ │ https://example.com ', longSubject('push'), longSubject('wipe'), 'Yes'],
+  ])('%s: an approval whose command changes under the same words is a new ask, and the old answer is refused', async (file, engine, from, first, then, answer) => {
+    const pane = paneOf(file)
+    expect(pane).toContain(from)
+    const a = pane.replace(from, first), b = pane.replace(from, then)
+    expect(wordsOf(viewIn(file, a))).toBe(wordsOf(viewIn(file, b)))
+    const w = world(engine, a)
+    await w.poll()
+    w.show(b); await w.poll()
+    expect(w.announced).toEqual([idIn(file, a), idIn(file, b)])
+    expect(w.watcher.heldRequestId('s1', viewIn(file, b))).toBeUndefined()
+
+    const r = await w.controller.answer({ agentId: 'a1', requestId: w.announced[0], answers: { x: answer } })
+    expect(r).toMatchObject({ ok: false, error: 'STALE_QUESTION' })
+    expect(w.keys).toEqual([])
+  })
+
   // A dialog the test paints: its first line the question, its numbered lines the rows, the whole of it the dialog.
   const painted = (permission: boolean) => (screen: string): PaneView => {
     const lines = screen.split('\n')
