@@ -465,6 +465,7 @@ lib/sessionSync.ts
 lib/sessionTitle.ts
 lib/sessionWorkWire.ts
 lib/setUpWithin.ts
+lib/settingsText.ts
 lib/sgrCarry.ts
 lib/sharedMachinesPort.ts
 lib/shellProtocol.ts

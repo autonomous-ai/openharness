@@ -6,6 +6,7 @@ import { basename, dirname, join } from 'node:path'
 import { NativeEvidenceBudget } from './nativeEvidence.js'
 import { NativePaths, verifyNativePathFacts } from './nativePaths.js'
 import { directorySyncSupported } from '../../lib/secureState.js'
+import { settingsText } from '../../lib/settingsText.js'
 import { isRoot, renameReplacing, unchangedFlushFlags } from './windowsFiles.js'
 import { HookPreparationHeld } from './hookHeld.js'
 // Every importer of the class from here keeps working; windowsFiles.ts imports it from the leaf, with no cycle.
@@ -138,7 +139,7 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
         offset += read
       }
       if (version(fstatSync(fd, { bigint: true })) !== before) throw new HookPreparationHeld('the settings file changed while being read')
-      content = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes)
+      content = settingsText(bytes)
     } finally { closeSync(fd) }
   }
   const verify = () => {
