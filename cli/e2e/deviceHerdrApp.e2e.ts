@@ -23,6 +23,7 @@ import { randomUUID } from 'node:crypto'
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
+import { heardClip } from '../src/cable/__fixtures__/heardClip.js'
 import { observedAgentId } from '../src/cable/hosts/observed.js'
 import { resolveBinaryOnPath } from '../src/lib/binaryOnPath.js'
 import { herdrAppStatus } from '../src/testing/herdrAppStatus.js'
@@ -157,7 +158,7 @@ describe.skipIf(!hcBinary)("Herdr's agents on the dial, from a private Herdr Cor
     relay.speech = words
     const since = dial.messages.length
     dial.send({ t: 'voice.begin', agentId, uploadId, sr: 16_000, lang: 'en' })
-    dial.audio(Buffer.alloc(3_200, 1))
+    for (const frame of heardClip()) dial.audio(frame)
     dial.send({ t: 'voice.end', uploadId })
     return dial.next((m) => m.t === 'voice.transcript' || m.t === 'voice.error', 45_000, 'the answer to its words', since)
   }

@@ -15,6 +15,7 @@ vi.mock('../config/env.js', async (original) => ({ env: {
   BACKEND_WS_URL: 'wss://api.example.test/', CABLE_STT_PATH: '/api/voice/stt',
 } }))
 
+import { heardClip } from './__fixtures__/heardClip.js'
 import { CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DaemonCableHost, type CableHostWiring } from './cableHost.js'
 import { CableSession, type CableAgent, type CableHost, type CablePort, type WindowRoute } from './cableSession.js'
@@ -214,7 +215,7 @@ describe('each voice turn reports one end', () => {
     /** One recording, from the press to the release. */
     const speak = (begin: Record<string, unknown> = {}, end: Record<string, unknown> = {}) => {
       port.say({ t: 'voice.begin', uploadId: 'u1', ...begin })
-      port.pcm(Buffer.alloc(3200, 7))
+      for (const frame of heardClip()) port.pcm(frame)
       port.say({ t: 'voice.end', ...end })
     }
     /** The dial's answer has come, and the turn's end has been reported. */
@@ -324,14 +325,15 @@ describe('each voice turn reports one end', () => {
     const { port, voiceEnded, answered } = await talk()
     port.say({ t: 'voice.begin', uploadId: 'old', agentId: 'a1' })
     port.say({ t: 'voice.begin', uploadId: 'new', agentId: 'a2' })
-    port.pcm(Buffer.alloc(3200, 7)); port.say({ t: 'voice.end' }); await answered()
+    for (const frame of heardClip()) port.pcm(frame)
+    port.say({ t: 'voice.end' }); await answered()
     expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'cancelled', agentId: 'a1' }], [{ outcome: 'sent', agentId: 'a2', since: expect.any(Number) }]])
   })
 
   it('each voice turn reports one end: cancelled, the port closed while recording', async () => {
     const { port, voiceEnded, unplug } = await talk()
     port.say({ t: 'voice.begin', uploadId: 'u1', agentId: 'a1' })
-    port.pcm(Buffer.alloc(3200, 7))
+    for (const frame of heardClip()) port.pcm(frame)
     unplug()
     expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'cancelled', agentId: 'a1' }]])
   })
@@ -417,7 +419,9 @@ describe('each voice turn reports one end', () => {
 
     // 100 ms, loud: a tap, under the gate's 320 ms.
     const short = await talk({ transcribe: async () => '' })
-    short.speak({ agentId: 'a1' }); await short.answered()
+    short.port.say({ t: 'voice.begin', uploadId: 'u1', agentId: 'a1' })
+    short.port.pcm(Buffer.alloc(3200, 7))
+    short.port.say({ t: 'voice.end' }); await short.answered()
     expect(short.voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'no_speech', agentId: 'a1' }]])
   })
 
@@ -425,8 +429,7 @@ describe('each voice turn reports one end', () => {
   it('each voice turn reports one end: no_words, an empty transcript of 400 ms of loud audio', async () => {
     const { port, voiceEnded, answered } = await talk({ transcribe: async () => '' })
     port.say({ t: 'voice.begin', uploadId: 'u1', agentId: 'a1' })
-    // Two frames: a cable frame holds at most 8 KB.
-    port.pcm(Buffer.alloc(6_400, 7)); port.pcm(Buffer.alloc(6_400, 7))
+    for (const frame of heardClip()) port.pcm(frame)
     port.say({ t: 'voice.end' }); await answered()
     expect(voiceEnded.mock.calls).toEqual([[{ outcome: 'failed', code: 'no_words', agentId: 'a1' }]])
   })

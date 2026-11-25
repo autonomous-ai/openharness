@@ -116,10 +116,10 @@ describe("tier A's voice step", () => {
     heard.length = 0
     await voiceSteps.voice(world, { kind: 'voice', transcript: 'Eval words for alpha.', target: 'a' })
     expect(world.speech).toBe('Eval words for alpha.')
-    expect(heard.map((f) => f.type)).toEqual([CableType.Json, CableType.Pcm, CableType.Json])
-    const [begin, audio, end] = heard
+    expect(heard.map((f) => f.type)).toEqual([CableType.Json, CableType.Pcm, CableType.Pcm, CableType.Json])
+    const [begin, first, second, end] = heard
     expect(begin!.json).toMatchObject({ t: 'voice.begin', agentId: world.agentId('a'), sr: 16_000 })
-    expect(audio!.bytes).toBeGreaterThan(0)
+    expect(first!.bytes + second!.bytes).toBeGreaterThan(0)
     expect(end!.json).toEqual({ t: 'voice.end', uploadId: begin!.json!.uploadId })
   })
 

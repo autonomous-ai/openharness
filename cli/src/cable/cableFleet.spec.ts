@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
+import { heardClip } from './__fixtures__/heardClip.js'
 import { CableFleet as SourceFleet, testDialDiscovery, type CableFleetOptions } from './cableFleet.js'
 import { CableSession, SHOWN_ONLY_PREFIX, type CableHost, type CablePort } from './cableSession.js'
 import { CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
@@ -28,7 +29,7 @@ class Peer implements CablePort {
   async close(why = 'disconnected') { if (this.isOpen) { this.isOpen = false; this.onClosed(why) } }
   say(message: Record<string, unknown>) { this.onData(Buffer.from(encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify(message))))) }
   raw(bytes: Buffer) { this.onData(bytes) }
-  pcm(value: number) { this.onData(Buffer.from(encodeCableFrame(CableType.Pcm, Buffer.alloc(3200, value)))) }
+  pcm(value: number) { for (const frame of heardClip(value)) this.onData(Buffer.from(encodeCableFrame(CableType.Pcm, frame))) }
 }
 
 function fixture(extra: Partial<CableFleetOptions> = {}, Log: typeof DialLog = DialLog) {
@@ -376,7 +377,7 @@ describe('USB dial fleet', () => {
       for (const p of f.ports) p.say({ t: 'voice.end' })
       await vi.waitFor(() => expect(f.host.sendTurn).toHaveBeenCalledTimes(2))
       const audio = vi.mocked(f.host.transcribe).mock.calls.map(c => c[0])
-      expect(audio.map(b => [b.length, b[0]])).toEqual([[3200, 17], [3200, 34]])
+      expect(audio.map(b => [b.length, b[0]])).toEqual([[12_800, 17], [12_800, 34]])
       expect(audio.every(b => b.every(v => v === b[0]))).toBe(true)
       for (const [i, p] of f.ports.entries()) {
         expect(p.sent.some(m => m.t === 'voice.transcript' && m.text === `audio-${i ? 34 : 17}`)).toBe(true)

@@ -19,6 +19,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
+import { heardClip } from '../src/cable/__fixtures__/heardClip.js'
 import { chatGptPlaces } from '../src/cable/hosts/appPlaces.js'
 import { observedAgentId } from '../src/cable/hosts/observed.js'
 import { codexAppFixture } from '../src/testing/codexAppFixture.js'
@@ -104,7 +105,7 @@ const wakeLines = (d: IsolatedDaemon): string[] => d.log().split('\n').filter((l
 const speak = (dial: FakeDial, agentId: string, uploadId: string): Promise<DialMessage> => {
   const since = dial.messages.length
   dial.send({ t: 'voice.begin', agentId, uploadId, sr: 16_000, lang: 'en' })
-  dial.audio(Buffer.alloc(3_200, 1))
+  for (const frame of heardClip()) dial.audio(frame)
   dial.send({ t: 'voice.end', uploadId })
   return dial.next((m) => (m.t === 'voice.transcript' || m.t === 'voice.error') && m.uploadId === uploadId, 65_000,
     'the answer to its words', since)

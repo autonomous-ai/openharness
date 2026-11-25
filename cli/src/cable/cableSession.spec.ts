@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, onTestFinished, vi, type Mock } from 'vitest'
 
+import { heardClip } from './__fixtures__/heardClip.js'
 import { CABLE_MAX_FRAME, CABLE_MAX_PAYLOAD, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DaemonCableHost } from './cableHost.js'
 import type { MachineFleet } from './machineFleet.js'
@@ -588,7 +589,8 @@ describe('cable session', () => {
       expect(port.sent.find(x => x.t === 'carry.state')).not.toHaveProperty('text')
       expect(host.sendTurn).not.toHaveBeenCalled()
       port.say({ t: 'voice.begin', uploadId: 'carried', agentId: 'a2', carryId: 'carry-1' })
-      port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+      for (const frame of heardClip()) port.pcm(frame)
+      port.say({ t: 'voice.end' })
       await vi.waitFor(() => expect(host.sendTurn).toHaveBeenCalledOnce())
       const sent = vi.mocked(host.sendTurn).mock.calls[0]!
       expect(sent[0]).toBe('a2')
@@ -597,7 +599,8 @@ describe('cable session', () => {
       expect(host.route).not.toHaveBeenCalled()
       expect(port.sent.find(x => x.t === 'voice.transcript')).toMatchObject({ carryId: 'carry-1', agentId: 'a2' })
       port.say({ t: 'voice.begin', uploadId: 'duplicate', agentId: 'a2', carryId: 'carry-1' })
-      port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+      for (const frame of heardClip()) port.pcm(frame)
+      port.say({ t: 'voice.end' })
       await vi.waitFor(() => expect(port.sent.some(x => x.t === 'voice.error' && x.uploadId === 'duplicate')).toBe(true))
       expect(host.sendTurn).toHaveBeenCalledOnce()
     } finally { await session.stop() }
@@ -611,7 +614,8 @@ describe('cable session', () => {
       try {
         port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' }); await settle()
         port.say({ t: 'voice.begin', uploadId: 'invalid-carry', carryId: 'missing', ...fields })
-        port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+        for (const frame of heardClip()) port.pcm(frame)
+        port.say({ t: 'voice.end' })
         await vi.waitFor(() => expect(port.types()).toContain('voice.error'))
         expect(host.transcribe).not.toHaveBeenCalled()
         expect(host.sendTurn).not.toHaveBeenCalled()
@@ -634,7 +638,8 @@ describe('cable session', () => {
       port.say({ t: 'carry.prepare', carryId: 'carry-drop', requestId: 'r', agentId: 'a1', selectionId: 'p', revision: 1 })
       await vi.waitFor(() => expect(port.types()).toContain('carry.state'))
       port.say({ t: 'voice.begin', uploadId: 'drop', agentId: 'a2', carryId: 'carry-drop' })
-      port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+      for (const frame of heardClip()) port.pcm(frame)
+      port.say({ t: 'voice.end' })
       await vi.waitFor(() => expect(host.transcribe).toHaveBeenCalledOnce())
       port.say({ t: 'carry.cancel', carryId: 'carry-drop' }); await settle()
       finish('Explain this'); await settle()
@@ -656,12 +661,14 @@ describe('cable session', () => {
       port.say({ t: 'carry.prepare', carryId: 'carry-retry', requestId: 'r', agentId: 'a1', selectionId: 'p', revision: 1 })
       await vi.waitFor(() => expect(port.types()).toContain('carry.state'))
       port.say({ t: 'voice.begin', uploadId: 'refused', agentId: 'a2', carryId: 'carry-retry' })
-      port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+      for (const frame of heardClip()) port.pcm(frame)
+      port.say({ t: 'voice.end' })
       await vi.waitFor(() => expect(port.types()).toContain('voice.error'))
       expect(port.types()).not.toContain('voice.transcript')
       expect(host.sendTurn).toHaveBeenCalledOnce()
       port.say({ t: 'voice.begin', uploadId: 'retry', agentId: 'a2', carryId: 'carry-retry' })
-      port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+      for (const frame of heardClip()) port.pcm(frame)
+      port.say({ t: 'voice.end' })
       await vi.waitFor(() => expect(port.types()).toContain('voice.transcript'))
       expect(host.sendTurn).toHaveBeenCalledTimes(2)
       expect(vi.mocked(host.sendTurn).mock.calls[1]![1]).toContain('> source')
@@ -687,7 +694,8 @@ describe('cable session', () => {
       port.say({ t: 'carry.prepare', carryId: 'carry-ring', requestId: 'r', agentId: 'a1', selectionId: 'p', revision: 1 })
       await vi.waitFor(() => expect(port.types()).toContain('carry.state'))
       port.say({ t: 'voice.begin', uploadId: 'ring', agentId: 'o1', carryId: 'carry-ring' })
-      port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+      for (const frame of heardClip()) port.pcm(frame)
+      port.say({ t: 'voice.end' })
       await vi.waitFor(() => expect(port.types()).toContain('voice.transcript'))
       expect(vi.mocked(host.sendTurn).mock.calls[0]![0]).toBe('o1')
       expect(port.types()).not.toContain('voice.error')
@@ -760,7 +768,7 @@ describe('cable session', () => {
       port.say({ t: 'voice.begin', uploadId: 'quoted', agentId: 'a2', selectionId: 'selection-1', selectionRevision: 3 })
       await settle()
       expect(selectPassage).toHaveBeenCalledWith({ op: 'pin', agentId: 'a2', selectionId: 'selection-1', revision: 3 })
-      port.pcm(Buffer.alloc(3200))
+      for (const frame of heardClip()) port.pcm(frame)
       port.say({ t: 'voice.end' })
       await vi.waitFor(() => expect(host.sendTurn).toHaveBeenCalledOnce())
       expect(host.sendTurn).toHaveBeenCalledWith('a2', 'Explain this.\n\nContext I selected from this agent\'s terminal:\n>   first line\n> second line')
@@ -776,7 +784,7 @@ describe('cable session', () => {
       port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
       await settle()
       port.say({ t: 'voice.begin', uploadId: 'changed', agentId: 'a2', selectionId: 'old', selectionRevision: 1 })
-      port.pcm(Buffer.alloc(3200))
+      for (const frame of heardClip()) port.pcm(frame)
       port.say({ t: 'voice.end' })
       await vi.waitFor(() => expect(port.types()).toContain('voice.error'))
       expect(host.sendTurn).not.toHaveBeenCalled()
@@ -795,7 +803,7 @@ describe('cable session', () => {
       port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
       await settle()
       port.say({ t: 'voice.begin', uploadId: 'cancelled-quote', agentId: 'a1', selectionId: 'selected', selectionRevision: 1 })
-      port.pcm(Buffer.alloc(3200))
+      for (const frame of heardClip()) port.pcm(frame)
       port.say({ t: 'voice.end' })
       await settle()
       port.say({ t: 'voice.abort', uploadId: 'cancelled-quote' })
@@ -2044,7 +2052,8 @@ describe('cable session', () => {
     const { session, port } = await connect(host)
     try {
       port.say({ t: 'voice.begin', formId: 'form-one', formRevision: 2, uploadId: 'speech' })
-      port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+      for (const frame of heardClip()) port.pcm(frame)
+      port.say({ t: 'voice.end' })
       await vi.waitFor(() => expect(port.types()).toContain('voice.form'))
       expect(form.mock.calls.map(([c]) => c.op)).toEqual(['query.begin', 'query', 'query.cancel'])
       expect(form).toHaveBeenCalledWith({ op: 'query', formId: 'form-one', revision: 2, queryId: 'speech', text: 'Codex.' })
@@ -2060,7 +2069,8 @@ describe('cable session', () => {
     const { session, port } = await connect(host)
     try {
       port.say({ t: 'voice.begin', uploadId: 'speech', ...metadata })
-      port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+      for (const frame of heardClip()) port.pcm(frame)
+      port.say({ t: 'voice.end' })
       await vi.waitFor(() => expect(port.types()).toContain('voice.error'))
       expect(transcribe).not.toHaveBeenCalled(); expect(host.sendTurn).not.toHaveBeenCalled()
       expect(route).not.toHaveBeenCalled(); expect(routeInWindow).not.toHaveBeenCalled()
@@ -2075,7 +2085,8 @@ describe('cable session', () => {
     const { session, port } = await connect(host)
     try {
       port.say({ t: 'voice.begin', formId: 'form-one', formRevision: 2, uploadId: 'speech' })
-      port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+      for (const frame of heardClip()) port.pcm(frame)
+      port.say({ t: 'voice.end' })
       await vi.waitFor(() => expect(transcribe).toHaveBeenCalled())
       port.say({ t: 'voice.abort', uploadId: 'speech' }); await settle()
       complete('Codex'); await settle()
@@ -2091,12 +2102,12 @@ describe('cable session', () => {
     const { session, port } = await connect(host)
     try {
       port.say({ t: 'voice.begin', uploadId: 'old' })
-      port.pcm(Buffer.alloc(3200))
+      for (const frame of heardClip()) port.pcm(frame)
       port.say({ t: 'voice.end' })
       await vi.waitFor(() => expect(routeInWindow).toHaveBeenCalled())
       port.say({ t: 'voice.abort', uploadId: 'old' })
       port.say({ t: 'voice.begin', uploadId: 'new', agentId: 'a1' })
-      port.pcm(Buffer.alloc(3200))
+      for (const frame of heardClip()) port.pcm(frame)
       // This can arrive after the replacement starts: it still belongs to the old turn.
       port.say({ t: 'voice.abort', uploadId: 'old' })
       complete(outcome === 'sent' ? { t: 'sent', agentId: 'a2' } : { t: outcome })
@@ -2119,7 +2130,7 @@ describe('cable session', () => {
     const { session, port } = await connect(host)
     try {
       port.say({ t: 'voice.begin', uploadId: 'discarded' })
-      port.pcm(Buffer.alloc(3200))
+      for (const frame of heardClip()) port.pcm(frame)
       port.say({ t: 'voice.end' })
       await vi.waitFor(() => expect(transcribe).toHaveBeenCalled())
       port.say({ t: 'voice.abort', uploadId: 'discarded' })
@@ -2136,7 +2147,7 @@ describe('cable session', () => {
     const { session, port } = await connect(host)
     try {
       port.say({ t: 'voice.begin', uploadId: 'failed' })
-      port.pcm(Buffer.alloc(3200))
+      for (const frame of heardClip()) port.pcm(frame)
       port.say({ t: 'voice.end' })
       await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'voice.error', uploadId: 'failed', message: 'retry voice' }))
     } finally { await session.stop() }
@@ -2150,7 +2161,7 @@ describe('cable session', () => {
     port.sent.length = 0
 
     port.say({ t: 'voice.begin', lang: 'vi' })
-    port.pcm(Buffer.alloc(3200, 7))
+    for (const frame of heardClip()) port.pcm(frame)
     port.say({ t: 'voice.end' })
     await vi.waitFor(() => expect(port.types()).toContain('voice.transcript'))
 
@@ -2171,7 +2182,7 @@ describe('cable session', () => {
     port.sent.length = 0
 
     port.say({ t: 'voice.begin', lang: 'en' })
-    port.pcm(Buffer.alloc(3200, 7))
+    for (const frame of heardClip()) port.pcm(frame)
     port.say({ t: 'voice.end' })
     await vi.waitFor(() => expect(port.types()).toContain('voice.transcript'))
 
@@ -2191,7 +2202,7 @@ describe('cable session', () => {
     await settle()
 
     port.say({ t: 'voice.begin', lang: 'en', cmd: 'goal' })
-    port.pcm(Buffer.alloc(3200, 7))
+    for (const frame of heardClip()) port.pcm(frame)
     port.say({ t: 'voice.end' })
     await vi.waitFor(() => expect(routeInWindow).toHaveBeenCalled())
 
@@ -2208,7 +2219,7 @@ describe('cable session', () => {
     port.sent.length = 0
 
     port.say({ t: 'voice.begin', lang: 'en' })
-    port.pcm(Buffer.alloc(3200, 7))
+    for (const frame of heardClip()) port.pcm(frame)
     port.say({ t: 'voice.end' })
     await vi.waitFor(() => expect(port.types()).toContain('voice.error'))
 
@@ -2227,7 +2238,7 @@ describe('cable session', () => {
     port.sent.length = 0
 
     port.say({ t: 'voice.begin', lang: 'en' })
-    port.pcm(Buffer.alloc(3200, 7))
+    for (const frame of heardClip()) port.pcm(frame)
     port.say({ t: 'voice.end' })
     await vi.waitFor(() => expect(port.types()).toContain('voice.error'))
 
@@ -2243,7 +2254,7 @@ describe('cable session', () => {
     await settle()
 
     port.say({ t: 'voice.begin', lang: 'en' })
-    port.pcm(Buffer.alloc(3200, 7))
+    for (const frame of heardClip()) port.pcm(frame)
     port.say({ t: 'voice.end' })
     await vi.waitFor(() => expect(host.sendTurn).toHaveBeenCalled())
 
@@ -2260,7 +2271,7 @@ describe('cable session', () => {
     await settle()
 
     port.say({ t: 'voice.begin', agentId: 'a2', lang: 'en' })
-    port.pcm(Buffer.alloc(3200, 1))
+    for (const frame of heardClip()) port.pcm(frame)
     port.say({ t: 'voice.end' })
     await vi.waitFor(() => expect(host.sendTurn).toHaveBeenCalled())
 
@@ -2284,7 +2295,7 @@ describe('cable session', () => {
       port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
       await settle()
       port.say({ t: 'voice.begin', agentId: 'a1', uploadId: 'focused-pane' })
-      port.pcm(Buffer.alloc(3200, 1))
+      for (const frame of heardClip()) port.pcm(frame)
       // Focus can change during capture and during the asynchronous transcription.
       focused = 'a1'
       port.say({ t: 'voice.end', uploadId: 'focused-pane' })
@@ -2318,7 +2329,7 @@ describe('cable session', () => {
     port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
     await settle()
     port.say({ t: 'voice.begin', lang: 'vi', sr: 8000 })
-    port.pcm(Buffer.alloc(1600, 3))
+    for (const frame of heardClip()) port.pcm(frame)
     port.say({ t: 'voice.end' })
     await vi.waitFor(() => expect(sawRate).toBe(8000))
     await session.stop()
@@ -2329,7 +2340,8 @@ describe('cable session', () => {
   // no tile for it, drops the focus and goes on naming its own tile. None of that may reach the transcriber.
   it('hands the transcriber the same audio whether the window is on Hachi or on an ordinary agent', async () => {
     const HACHI = '476fed00-hachi'
-    const speech = Buffer.alloc(3200)
+    // 400 ms, so the dial's voice gate hears it: a shorter clip it does not hear is never transcribed.
+    const speech = Buffer.alloc(12_800)
     for (let i = 0; i < speech.length / 2; i++) speech.writeInt16LE(Math.round(8000 * Math.sin(i / 3)), i * 2)
     const heard = async (focused: string, dialTile: string) => {
       const calls: Array<{ pcm: Buffer; rate: number; lang: string }> = []
@@ -2344,8 +2356,8 @@ describe('cable session', () => {
         port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
         await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'focus', agentId: focused }))
         port.say({ t: 'voice.begin', agentId: dialTile, lang: 'en', sr: 16000, uploadId: 'u1' })
-        port.pcm(speech.subarray(0, 1600))
-        port.pcm(speech.subarray(1600))
+        port.pcm(speech.subarray(0, 6_400))
+        port.pcm(speech.subarray(6_400))
         port.say({ t: 'voice.end', uploadId: 'u1' })
         await vi.waitFor(() => expect(host.sendTurn).toHaveBeenCalledWith(focused, 'what is on my plate'))
         return calls
@@ -2438,7 +2450,7 @@ describe('cable session', () => {
       port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
       await settle()
       port.say({ t: 'voice.begin', lang: 'en', sr: 16000 })
-      port.pcm(Buffer.alloc(3200, 7))
+      for (const frame of heardClip()) port.pcm(frame)
       port.say({ t: 'voice.end' })
       await vi.waitFor(() => expect(host.sendTurn).toHaveBeenCalled())
       expect(lines).toContain('cable: routed → a1 (confidence 0.87)')
@@ -2456,7 +2468,7 @@ describe('cable session', () => {
     port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
     await settle()
     port.say({ t: 'voice.begin', lang: 'en' })
-    port.pcm(Buffer.alloc(64))
+    for (const frame of heardClip()) port.pcm(frame)
     port.say({ t: 'voice.end' })
     await vi.waitFor(() => expect(port.types()).toContain('voice.error'))
 
@@ -3424,7 +3436,8 @@ describe('speak an answer, then review', () => {
     const { session, port, host, token, answerReviewed } = await prepare()
     try {
       port.say({ t: 'voice.begin', agentId: 'a1', questionToken: token, questionIndex: 0, uploadId: 'speech-q' })
-      port.pcm(Buffer.alloc(640)); port.say({ t: 'voice.end' })
+      for (const frame of heardClip()) port.pcm(frame)
+      port.say({ t: 'voice.end' })
       await vi.waitFor(() => expect(port.types()).toContain('voice.question'))
       const draft = port.sent.find(m => m.t === 'voice.question')!
       expect(draft).toMatchObject({ agentId: 'a1', token, questionIndex: 0, text: 'Only the parser, please.', uploadId: 'speech-q' })
@@ -3441,7 +3454,8 @@ describe('speak an answer, then review', () => {
     const { session, port, host, token, answerReviewed } = await prepare({ transcribe })
     try {
       port.say({ t: 'voice.begin', agentId: 'a1', questionToken: token, questionIndex: 0, uploadId: 'speech-q' })
-      port.pcm(Buffer.alloc(640)); port.say({ t: 'voice.end' })
+      for (const frame of heardClip()) port.pcm(frame)
+      port.say({ t: 'voice.end' })
       await vi.waitFor(() => expect(transcribe).toHaveBeenCalled())
       if (reason === 'discard') port.say({ t: 'voice.abort', uploadId: 'speech-q' })
       if (reason === 'close') await session.questionClose('a1', 'q-speak')
@@ -3458,7 +3472,8 @@ describe('speak an answer, then review', () => {
     const { session, port, host, answerReviewed } = await prepare({ transcribe, route })
     try {
       port.say({ t: 'voice.begin', agentId: 'a1', ...metadata, uploadId: 'speech-q' })
-      port.pcm(Buffer.alloc(640)); port.say({ t: 'voice.end' })
+      for (const frame of heardClip()) port.pcm(frame)
+      port.say({ t: 'voice.end' })
       await vi.waitFor(() => expect(port.types()).toContain('voice.error'))
       expect(transcribe).not.toHaveBeenCalled(); expect(route).not.toHaveBeenCalled()
       expect(answerReviewed).not.toHaveBeenCalled(); expect(host.sendTurn).not.toHaveBeenCalled()
@@ -3476,7 +3491,8 @@ describe('speak an answer, then review', () => {
 describe('task voice draft over the cable', () => {
   async function recorded(port: LoopbackPort, fields: Record<string, unknown> = {}, review = true) {
     const uploadId = `draft-${port.sent.length}`
-    port.say({ t: 'voice.begin', uploadId, ...fields }); port.pcm(Buffer.alloc(320))
+    port.say({ t: 'voice.begin', uploadId, ...fields })
+    for (const frame of heardClip()) port.pcm(frame)
     port.say({ t: 'voice.end', uploadId, review })
     await vi.waitFor(() => expect(port.sent.some(m => m.uploadId === uploadId && ['voice.draft','voice.error','voice.transcript'].includes(m.t as string))).toBe(true))
     return port.sent.find(m => m.uploadId === uploadId && m.t !== 'voice.quota')!
@@ -3547,7 +3563,8 @@ describe('task voice draft over the cable', () => {
   it('ignores an old voice.end and keeps the new capture alive', async () => {
     const {host,session,port}=await connect()
     try {
-      port.say({t:'voice.begin',agentId:'a1',uploadId:'new'});port.pcm(Buffer.alloc(320))
+      port.say({t:'voice.begin',agentId:'a1',uploadId:'new'})
+      for (const frame of heardClip()) port.pcm(frame)
       port.say({t:'voice.end',uploadId:'old',review:true});await settle()
       expect(port.types()).not.toContain('voice.draft');expect(host.sendTurn).not.toHaveBeenCalled()
       port.say({t:'voice.end',uploadId:'new',review:true})
@@ -3560,7 +3577,9 @@ describe('task voice draft over the cable', () => {
     const host=makeHost({transcribe}),{session,port}=await connect(host)
     try {
       const p=await recorded(port,{agentId:'a1'})
-      port.say({t:'voice.begin',draftId:p.id,draftRevision:p.revision,draftOp:'replace',uploadId:'late'});port.pcm(Buffer.alloc(320));port.say({t:'voice.end',uploadId:'late'})
+      port.say({t:'voice.begin',draftId:p.id,draftRevision:p.revision,draftOp:'replace',uploadId:'late'})
+      for (const frame of heardClip()) port.pcm(frame)
+      port.say({t:'voice.end',uploadId:'late'})
       await vi.waitFor(()=>expect(transcribe).toHaveBeenCalledTimes(2));await command(port,p,'discard')
       resolve('Too late.');await settle();await settle()
       expect(port.sent.some(m=>m.t==='voice.draft' && m.uploadId==='late')).toBe(false)
@@ -3610,7 +3629,8 @@ describe('spoken output search purpose', () => {
     const { session, port } = await connect(host)
     try {
       port.say({ t: 'voice.begin', uploadId: 'search-voice', ...metadata })
-      port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end', review: true })
+      for (const frame of heardClip()) port.pcm(frame)
+      port.say({ t: 'voice.end', review: true })
       await vi.waitFor(() => expect(port.types()).toContain('voice.search'))
       expect(selectPassage.mock.calls.map(([c]) => c.op)).toEqual(['read', 'search'])
       expect(selectPassage).toHaveBeenLastCalledWith({ op: 'search', agentId: 'a2', selectionId: 'search-one', revision: 3, query: 'error [x]' })
@@ -3627,7 +3647,8 @@ describe('spoken output search purpose', () => {
       try {
         port.say({ t:'voice.begin', uploadId:'bad-search', ...metadata, ...extra,
           ...(Object.keys(extra).length === 1 && 'searchRevision' in extra && extra.searchRevision === 3 ? {searchId:undefined} : {}) })
-        port.pcm(Buffer.alloc(3200)); port.say({t:'voice.end'})
+        for (const frame of heardClip()) port.pcm(frame)
+        port.say({t:'voice.end'})
         await vi.waitFor(() => expect(port.types()).toContain('voice.error'))
         expect(host.sendTurn).not.toHaveBeenCalled(); expect(transcribe).not.toHaveBeenCalled(); expect(route).not.toHaveBeenCalled()
       } finally { await session.stop() }
@@ -3638,7 +3659,9 @@ describe('spoken output search purpose', () => {
     const selectPassage=vi.fn<NonNullable<CableHost['selectPassage']>>(async()=>read)
     const host=makeHost({selectPassage,transcribe}), {session,port}=await connect(host)
     try {
-      port.say({t:'voice.begin',uploadId:'cancel-search',...metadata}); port.pcm(Buffer.alloc(3200)); port.say({t:'voice.end'})
+      port.say({t:'voice.begin',uploadId:'cancel-search',...metadata})
+      for (const frame of heardClip()) port.pcm(frame)
+      port.say({t:'voice.end'})
       await vi.waitFor(()=>expect(transcribe).toHaveBeenCalled())
       port.say({t:'voice.abort',uploadId:'cancel-search'}); await settle(); finish('late phrase'); await settle()
       expect(selectPassage.mock.calls.map(([c])=>c.op)).toEqual(['read','cancel'])
@@ -6917,7 +6940,7 @@ describe('the app filter', () => {
   const focuses = (port: LoopbackPort) => port.sent.filter((m) => m.t === 'focus')
   const speak = (port: LoopbackPort, agentId: string, uploadId: string) => {
     port.say({ t: 'voice.begin', agentId, lang: 'en', sr: 16000, uploadId })
-    port.pcm(Buffer.alloc(3200, 7))
+    for (const frame of heardClip()) port.pcm(frame)
     port.say({ t: 'voice.end', uploadId })
   }
   const voiceAnswered = (port: LoopbackPort) => port.types().some((t) => t === 'voice.transcript' || t === 'voice.error')
@@ -7559,7 +7582,7 @@ describe('what the dial cannot do for an agent', () => {
   }
   const speak = (port: LoopbackPort, agentId: string, uploadId: string) => {
     port.say({ t: 'voice.begin', agentId, lang: 'en', sr: 16000, uploadId })
-    port.pcm(Buffer.alloc(3200, 7))
+    for (const frame of heardClip()) port.pcm(frame)
   }
   const toasts = (port: LoopbackPort) => port.sent.filter((m) => m.t === 'toast')
 
@@ -7582,7 +7605,8 @@ describe('what the dial cannot do for an agent', () => {
         port.say({ t: 'answer', agentId, requestId: id, answers: { prompt: 'In Orca' } })
         port.say({ t: 'answer.reviewed', agentId, requestId: 'send-1', token, choices: [1] })
         port.say({ t: 'voice.begin', agentId, questionToken: token, questionIndex: 0, uploadId: `speech-${agentId}` })
-        port.pcm(Buffer.alloc(640)); port.say({ t: 'voice.end', uploadId: `speech-${agentId}` })
+        for (const frame of heardClip()) port.pcm(frame)
+        port.say({ t: 'voice.end', uploadId: `speech-${agentId}` })
         await vi.waitFor(() => expect(port.sent.some((m) => m.t === 'voice.error' && m.uploadId === `speech-${agentId}`)).toBe(true))
         await vi.waitFor(() => expect(port.sent.some((m) => m.t === 'answer.receipt' && m.agentId === agentId)).toBe(true))
         expect(port.sent.find((m) => m.t === 'answer.receipt' && m.agentId === agentId)).toMatchObject({ ok: false })
@@ -7651,7 +7675,7 @@ describe('what the dial cannot do for an agent', () => {
     const { session, port } = await greeted(host)
     try {
       port.say({ t: 'voice.begin', lang: 'en', sr: 16000, uploadId: 'u3' })
-      port.pcm(Buffer.alloc(3200, 7))
+      for (const frame of heardClip()) port.pcm(frame)
       port.say({ t: 'voice.end', uploadId: 'u3' })
       await vi.waitFor(() => expect(host.sendTurn).toHaveBeenCalledWith('a2', 'fix the login screen'))
       // a1 runs in Orca: its id and name are never weighed, and the router sends what it weighs to the backend.
@@ -7665,7 +7689,7 @@ describe('what the dial cannot do for an agent', () => {
     const { session, port } = await greeted(host)
     try {
       port.say({ t: 'voice.begin', lang: 'en', sr: 16000, uploadId: 'u3' })
-      port.pcm(Buffer.alloc(3200, 7))
+      for (const frame of heardClip()) port.pcm(frame)
       port.say({ t: 'voice.end', uploadId: 'u3' })
       await vi.waitFor(() => expect(host.sendTurn).toHaveBeenCalledWith('a2', 'fix the login screen'))
       expect(route).toHaveBeenCalledWith('fix the login screen', [AGENTS[1]])
@@ -7697,7 +7721,7 @@ describe('what the dial cannot do for an agent', () => {
       router.routed.length = 0
       router.ranked.length = 0
       port.say({ t: 'voice.begin', lang: 'en', sr: 16000, uploadId: 'u1' })
-      port.pcm(Buffer.alloc(3200, 7))
+      for (const frame of heardClip()) port.pcm(frame)
       port.say({ t: 'voice.end', uploadId: 'u1' })
       await vi.waitFor(() => expect(sendTurn).toHaveBeenCalledWith('h2', 'fix the login screen'))
       expect(router.ranked).toHaveLength(1)
@@ -7733,7 +7757,7 @@ describe('what the dial cannot do for an agent', () => {
       router.routed.length = 0
       router.ranked.length = 0
       port.say({ t: 'voice.begin', lang: 'en', sr: 16000, uploadId: 'u1' })
-      port.pcm(Buffer.alloc(3200, 7))
+      for (const frame of heardClip()) port.pcm(frame)
       port.say({ t: 'voice.end', uploadId: 'u1' })
       await vi.waitFor(() => expect(sendTurn).toHaveBeenCalledWith('h2', 'fix the login screen'))
       const left = JSON.stringify([router.routed, router.ranked])
@@ -7823,7 +7847,7 @@ describe('what the dial cannot do for an agent', () => {
     const { session, port } = await greeted(caps({ sendTurn }))
     try {
       port.say({ t: 'voice.begin', agentId: 'a2', lang: 'en', sr: 16000, uploadId: 'u1' })
-      port.pcm(Buffer.alloc(3200, 7))
+      for (const frame of heardClip()) port.pcm(frame)
       port.say({ t: 'voice.end', uploadId: 'u1', review: true })
       await vi.waitFor(() => expect(port.types()).toContain('voice.draft'))
       const draft = port.sent.find((m) => m.t === 'voice.draft')!
@@ -8288,7 +8312,7 @@ describe("a resting Claude app row's words (docs/plans/2026-11-21-dial-claude-ap
   }
   const speak = (port: LoopbackPort, uploadId: string) => {
     port.say({ t: 'voice.begin', agentId: ROW, lang: 'en', sr: 16000, uploadId })
-    port.pcm(Buffer.alloc(3200, 7))
+    for (const frame of heardClip()) port.pcm(frame)
   }
 
   it('a resting Claude app row takes voice; words while it opens are refused on the dial in plain words', async () => {
@@ -8399,7 +8423,7 @@ describe("a resting ChatGPT row's words (docs/plans/2026-11-23-dial-chatgpt-voic
   }
   const speak = (port: LoopbackPort, uploadId: string) => {
     port.say({ t: 'voice.begin', agentId: ROW, lang: 'en', sr: 16000, uploadId })
-    port.pcm(Buffer.alloc(3200, 7))
+    for (const frame of heardClip()) port.pcm(frame)
   }
 
   it('a resting ChatGPT row takes voice; words while it opens are refused on the dial in plain words', async () => {
@@ -8867,7 +8891,8 @@ describe('a long recording and its long transcript', () => {
   /** 16 kHz mono 16-bit, as both dials record. */
   const SECOND = 32_000
 
-  /** One voice turn as the dial sends it, PCM in frames of 8,000 bytes, and the answer that carries its uploadId. */
+  /** One voice turn as the dial sends it, PCM of zeros in frames of 8,000 bytes, and the answer that carries its uploadId.
+   *  A second at least: a shorter one of silence is never transcribed. */
   async function record(port: LoopbackPort, uploadId: string, bytes: number, fields: Record<string, unknown> = { agentId: 'a1' }) {
     port.say({ t: 'voice.begin', uploadId, ...fields })
     const frame = Buffer.alloc(8_000)
@@ -8930,7 +8955,7 @@ describe('a long recording and its long transcript', () => {
       expect(LONG).toHaveLength(10_000)
       const { session, port, host, lines } = await listening(() => LONG)
       try {
-        const answer = await record(port, 'named', 3_200)
+        const answer = await record(port, 'named', SECOND)
         expect(host.sendTurn).toHaveBeenCalledOnce()
         expect(host.sendTurn).toHaveBeenCalledWith('a1', LONG)
         expect(answer).toEqual({ ...SENT, uploadId: 'named', agentId: 'a1' })
@@ -8942,7 +8967,7 @@ describe('a long recording and its long transcript', () => {
       const { session, port, lines } = await listening(() => LONG,
         { routeInWindow: async () => ({ t: 'sent' as const, agentId: 'a2' }) })
       try {
-        const answer = await record(port, 'window', 3_200, {})
+        const answer = await record(port, 'window', SECOND, {})
         expect(answer).toEqual({ ...SENT, uploadId: 'window', agentId: 'a2', agentName: 'Device firmware voice' })
         expect(lines.some(l => l.includes('dropped a voice.transcript'))).toBe(false)
       } finally { await session.stop() }
@@ -8951,7 +8976,7 @@ describe('a long recording and its long transcript', () => {
     it('3,000 characters of three UTF-8 bytes each', async () => {
       const { session, port } = await listening(() => 'ệ'.repeat(3_000))
       try {
-        const answer = await record(port, 'accented', 3_200)
+        const answer = await record(port, 'accented', SECOND)
         expect(answer).toMatchObject({ t: 'voice.transcript', agentId: 'a1' })
         expect(answer).not.toHaveProperty('text')
       } finally { await session.stop() }
@@ -8963,9 +8988,9 @@ describe('a long recording and its long transcript', () => {
       let words = fits
       const { session, port } = await listening(() => words)
       try {
-        expect(await record(port, 'margin', 3_200)).toEqual({ ...empty, text: fits, uploadId: 'margin' })
+        expect(await record(port, 'margin', SECOND)).toEqual({ ...empty, text: fits, uploadId: 'margin' })
         words = `${fits}a`
-        const over = await record(port, 'over', 3_200)
+        const over = await record(port, 'over', SECOND)
         expect(over).toMatchObject({ t: 'voice.transcript', uploadId: 'over', agentId: 'a1' })
         expect(over).not.toHaveProperty('text')
       } finally { await session.stop() }
@@ -8980,7 +9005,8 @@ describe('a long recording is transcribed while the person talks', () => {
   /** A segment of silence: 60 s cut at the start of its last 20 ms frame, the latest of equally quiet ones. */
   const SEGMENT = 1_919_360
 
-  /** PCM in frames of 8,000 bytes of zeros, as the dial streams it; a pause after each lets uploads run meanwhile. */
+  /** PCM in frames of 8,000 bytes of zeros, as the dial streams it; a pause after each lets uploads run meanwhile. A
+   *  recording a second at least: a shorter one of silence is never transcribed. */
   async function stream(port: LoopbackPort, bytes: number, { settleEvery = false }: { settleEvery?: boolean } = {}) {
     const frame = Buffer.alloc(8_000)
     for (let at = 0; at < bytes; at += frame.length) {
@@ -9073,7 +9099,7 @@ describe('a long recording is transcribed while the person talks', () => {
         }
         port.say({ t: 'voice.begin', uploadId: 'held', ...(carried ? { agentId: 'a2', carryId: 'carry-held' } : { agentId: 'a1' }) })
         if (afterEnd) {
-          await stream(port, 3_200)
+          await stream(port, SECOND)
           port.say({ t: 'voice.end', uploadId: 'held' })
         } else {
           await stream(port, 61 * SECOND, { settleEvery: true })
@@ -9086,11 +9112,11 @@ describe('a long recording is transcribed while the person talks', () => {
         if (trigger === 'the port closing') await port.close()
         if (trigger === 'a new voice.begin') {
           port.say({ t: 'voice.begin', uploadId: 'next', agentId: 'a1' })
-          await stream(port, 3_200)
+          await stream(port, SECOND)
           port.say({ t: 'voice.end', uploadId: 'next' })
           expect(await answerTo(port, 'next')).toMatchObject({ t: 'voice.transcript', text: 'fix the login screen' })
           expect(calls).toHaveLength(2)
-          expect(calls[1]!.bytes).toBe(3_200)
+          expect(calls[1]!.bytes).toBe(SECOND)
         }
         await vi.waitFor(() => expect(calls[0]!.signal?.aborted).toBe(true))
 
@@ -9145,7 +9171,7 @@ describe('a long recording is transcribed while the person talks', () => {
     try {
       port.say(HELLO); await settle()
       port.say({ t: 'voice.begin', uploadId: 'twice', agentId: 'a1' })
-      await stream(port, 3_200)
+      await stream(port, SECOND)
       port.say({ t: 'voice.end', uploadId: 'twice' })
       await vi.waitFor(() => expect(calls).toHaveLength(1))
       port.say({ t: 'voice.end', uploadId: 'twice' })

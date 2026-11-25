@@ -28,6 +28,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative } from 'node:path'
 import { createInterface } from 'node:readline'
+import { heardClip } from '../../src/cable/__fixtures__/heardClip.js'
 import { chatGptPlaces, claudeStoreRoots } from '../../src/cable/hosts/appPlaces.js'
 import { orcaBinary } from '../../src/devices/orcaHomes.js'
 import { resolveBinaryOnPath } from '../../src/lib/binaryOnPath.js'
@@ -60,8 +61,6 @@ const MAC = 'e2:e0:00:00:0e:b1'
 const SCHEME: Readonly<Record<LinkedApp, string>> = { claude: 'claude', chatgpt: 'codex', vscode: 'vscode', cursor: 'cursor' }
 /** The machine each daemon signs in as, to hear its dial's words: the daemon asks its backend for each transcript. */
 const ME: FakeMachine = { machineId: 'e7'.repeat(16), computerId: 'e2e-dial-eval-computer', name: 'Fixture', token: 'e2e-dial-eval-token' }
-/** A fifth of a second of what the microphone heard: the fake backend answers its `speech` whatever the audio. */
-const VOICE_PCM = Buffer.alloc(3_200, 1)
 /** For the dial to be found, welcomed and shown its list: the fleet looks every 2 s, the dial greets every 2 s; and for
  *  the devices to drop the last scenario's rows, at their 30 s look at the latest (deskEmpty). */
 const START_WITHIN_MS = 45_000
@@ -868,7 +867,9 @@ export const speak: TierBHandler<'voice'> = async (world, step) => {
   const agentId = w.carousel.tiles[w.carousel.active]
   const uploadId = `eval-voice-${w.steps.length}`
   w.dial.send({ t: 'voice.begin', ...(agentId ? { agentId } : {}), uploadId, sr: 16_000, lang: 'en' })
-  w.dial.audio(VOICE_PCM)
+  // The fake backend answers its `speech` whatever the audio, but the gate must hear it: a clip under a second it does
+  // not hear is never sent.
+  for (const frame of heardClip()) w.dial.audio(frame)
   w.dial.send({ t: 'voice.end', uploadId })
 }
 
