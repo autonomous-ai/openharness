@@ -613,8 +613,9 @@ impl App {
     }
 
     fn show(&mut self, view: Option<View>, effects: &mut Vec<Effect>) {
-        // The Follow screen counts as asked once it shows: one the app quit before is asked at the next start.
-        if view.as_ref().is_some_and(|shown| shown.screen == Screen::Follow) {
+        // The Follow screen counts as asked once it shows: one the app quit before is asked at the next start. And
+        // again as it goes: a held install that failed leaves it open, saved as not asked (`forget_unanswered`).
+        if view.as_ref().is_some_and(|shown| shown.screen == Screen::Follow) || self.showing(Screen::Follow) {
             self.remember(|saved| saved.asked_follow = true, effects);
         }
         self.window = view.clone();
