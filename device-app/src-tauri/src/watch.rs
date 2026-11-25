@@ -497,6 +497,7 @@ mod tests {
     #[test]
     fn a_voice_line_reaches_the_watch() {
         let lines = [
+            WRITES,
             r#"{"voiceLang":"en"}"#,
             r#"{"voiceLang":"vi"}"#,
             r#"{"voiceLang":"es"}"#,

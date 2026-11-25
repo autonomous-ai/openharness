@@ -1416,10 +1416,10 @@ mod tests {
         assert_eq!(w.runner.run(Effect::SetVoice(VoiceLang::Vi)), None);
         assert_eq!(w.runner.run(Effect::SetVoice(VoiceLang::Ja)), None);
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [vi, ja]);
+        assert_eq!(w.fake.stdin(), [WRITES, vi, ja]);
         // With no watch running there is nothing to write to.
         assert_eq!(w.runner.run(Effect::SetVoice(VoiceLang::Vi)), None);
-        assert_eq!(w.fake.stdin(), [vi, ja]);
+        assert_eq!(w.fake.stdin(), [WRITES, vi, ja]);
         let lines = w.fake.log().lines();
         assert!(lines.iter().all(|line| !line.contains("voiceLang")), "{lines:?}");
         assert_eq!(w.rest(), []);
