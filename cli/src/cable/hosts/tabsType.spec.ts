@@ -71,6 +71,8 @@ function fakeLine(log: string[], answers: WroteAnswer[] = []) {
       return new Promise((woken) => wakes.push(woken))
     },
     send: (typing) => {
+      // As the devices' line: one not writable sends nothing and is answered at once.
+      if (!writable) return { answer: Promise.resolve('unanswered'), settled: Promise.resolve() }
       sent.push(typing)
       log.push('write' in typing ? 'write' : 'enter')
       const answer = answers.shift() ?? 'ok'
@@ -467,6 +469,33 @@ describe('tabsTyping', () => {
       w.clock.flush()
       expect(await typed).toEqual({ notSent: 'no-answer' })
       expect(w.stream.sent).toEqual([])
+    })
+
+    it('a line filled again during the checks after a drain waits again and checks again, all within TYPE_ANSWER_MS', async () => {
+      let refill = false
+      const w = world({
+        readers: async () => {
+          if (refill) {
+            refill = false
+            w.stream.fill()
+          }
+          return [AGENT, 4100]
+        },
+      })
+      w.stream.fill()
+      const typed = w.typing.type(PANE, 'hi', 'codex', w.atPrompt)
+      await drain()
+      refill = true
+      w.stream.wake(true)
+      await drain()
+      expect(w.stream.sent).toEqual([])
+      expect(w.stream.readyMs).toEqual([TYPE_ANSWER_MS, TYPE_ANSWER_MS])
+      w.stream.wake(true)
+      await drain()
+      expect(w.stream.sent).toEqual([{ write: { app: 'iterm', tty: TTY, text: 'hi' } }])
+      expect(w.clock.asked).toEqual([TYPE_ANSWER_MS, settleMs('hi')])
+      w.clock.flush()
+      expect(await typed).toBe(true)
     })
   })
 
