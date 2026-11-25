@@ -19,8 +19,9 @@
  * `heldRetryMs(n)` after the one before, whichever pass or timer comes, and a dispatch held again is the next attempt.
  * So no attempt comes more often than that (each runs a login shell in its pane: 2026-10-15's 27,491 attempts a day).
  * And they end: a guard that keeps failing for a reason the fresh inspection does not see would show "Starting" for
- * good, so 10 dispatches held again, or 15 minutes of attempts held before dispatch, fail the row with the words a
- * person acts on. In memory: a core restart starts them again.
+ * good, so 10 dispatches held again, or 15 minutes held for native before dispatch, fail the row with the words a
+ * person acts on. Held for another service, it waits as any row held for that service does. In memory: a core restart
+ * starts them again.
  */
 import { codeOrLength, errorKind, sid } from '../../lib/log.js'
 import { windowsHeldPaneArgv } from '../../lib/windows/engineStart.js'
@@ -36,12 +37,12 @@ export function heldRetryMs(quietPasses: number): number {
 
 /** Dispatches the guard held again before a launch it held fails: about 5 minutes of attempts. */
 const GUARD_HOLDS = 10
-/** How long attempts held before dispatch (its evidence still changing: brew mid-install) go on, from the first hold. */
+/** How long attempts held for native before dispatch (its evidence still changing: brew mid-install) go on. */
 const UNSETTLED_MS = 15 * 60_000
 
-/** A launch the guard held: since when, its attempts, and the launch its last attempt dispatched, whose hold is the
- *  next attempt rather than a new count. */
-interface Attempts { first: number; made: number; heldAgain: number; due: number; dispatched?: string }
+/** A launch the guard held: its attempts, how long it has been held for native (`unsettled`, as of `seen`), and the
+ *  launch its last attempt dispatched, whose hold is the next attempt rather than a new count. */
+interface Attempts { made: number; heldAgain: number; due: number; unsettled: number; seen: number; dispatched?: string }
 
 /** The service a row is held for, or null. */
 export function heldFor(row: Pick<RegisteredSession, 'launch'> | undefined): string | null {
@@ -98,7 +99,7 @@ export function createHeldLaunches({ registry, restore, announce, log, now = () 
   }
   /** A launch the guard held, from its first hold now: its first attempt [wait] later. */
   const begin = (agentId: string, wait: number): Attempts => {
-    const at = now(), record = { first: at, made: 0, heldAgain: 0, due: at + wait }
+    const at = now(), record = { made: 0, heldAgain: 0, due: at + wait, unsettled: 0, seen: at }
     attempts.set(agentId, record)
     return record
   }
@@ -112,10 +113,21 @@ export function createHeldLaunches({ registry, restore, announce, log, now = () 
    *  the bound the failed state. */
   const settle = (agentId: string, record: Attempts, summary: RestoreSummary): void => {
     const row = registry.byAgent(agentId)
-    // Dispatched: starting under its new token, one tmux turned away after its journal too (the watch follows it, and
-    // the summary has it failed). Or ready, failed or gone, which `arm` forgets.
-    if (!guardHeld(row)) { record.dispatched = tokenOf(row); return }
-    if (now() - record.first >= UNSETTLED_MS) { fail(row!, 'held 15 minutes', 'NATIVE_EVIDENCE_UNSETTLED'); return }
+    if (!guardHeld(row)) {
+      // Failed by it (its request unreadable, its pane gone or not its held shell, its build refused): its pane is
+      // kept, so discovery says nothing of it, and every client hears it here. `arm` then forgets it.
+      if (row?.launch?.state === 'failed') announce(row)
+      // Dispatched: starting under its new token, one tmux may have run after its journal too (the watch follows it,
+      // and the summary has it failed). Or ready or gone, which `arm` forgets.
+      else record.dispatched = tokenOf(row)
+      return
+    }
+    // Only a hold for native counts toward its bound: held for another service it waits as any row held for that
+    // service does. The time since the attempt before goes to the hold this one ended in.
+    const at = now()
+    if (heldFor(row) === 'native') record.unsettled += at - record.seen
+    record.seen = at
+    if (record.unsettled >= UNSETTLED_MS) { fail(row!, 'held 15 minutes', 'NATIVE_EVIDENCE_UNSETTLED'); return }
     // The restore says nothing of it (lib/restoreAgents.ts `hold`): its failure's code, or the service it is held for
     // again, a word of the core's own.
     const failed = summary.failed.find((entry) => entry.agentId === agentId)
@@ -235,8 +247,9 @@ export function createHeldLaunches({ registry, restore, announce, log, now = () 
     }
     retryContention({ ...summary, restored: summary.restored.filter(id => !guarded.has(id)), held: summary.held.filter(id => !guarded.has(id)) })
     if (rejected) throw failure
-    // By its failure's code. A launch's own error code is typed a string, so one that is not a code is said by its length.
-    for (const { agentId, code } of summary.failed) because(agentId, codeOrLength(code))
+    // Why one stays held, by its failure's code; one the pass failed the restore has said, once. A launch's own error
+    // code is typed a string, so one that is not a code is said by its length.
+    for (const { agentId, code } of summary.failed) if (heldFor(registry.byAgent(agentId))) because(agentId, codeOrLength(code))
     // A pass runs every 500 ms while the flights are full: on Windows, 2026-11-04, that was two lines a second for good.
     const pass = `${service ?? 'every service'} · launched ${summary.restored.length} of ${held.length}`
     if (pass !== lastPass || summary.restored.length) {

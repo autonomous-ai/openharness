@@ -46,7 +46,7 @@ import { processAmong, sameProcessIdentity, sameTerminalPlacement, terminalInsta
 import { resumesConversation } from './resumeCapability.js'
 import { codeOrLength, errorKind, sid } from './log.js'
 import { publishEngine } from './paneEngineProcess.js'
-import { supportsNativeFork } from './engineLaunch.js'
+import { STARTING_AGAIN, supportsNativeFork } from './engineLaunch.js'
 
 export interface RestoreLaunch {
   nativeToken?: string
@@ -89,20 +89,23 @@ export function heldLaunch(service: string, label = service === 'models' ? 'the 
 /** The row knows it was on a grid but not how to get back there. */
 export const GRID_CREDENTIAL_REQUIRED = 'GRID_CREDENTIAL_REQUIRED'
 
-/** What the row of a launch the guard held says: the words its held shell shows (engineLaunch.ts). */
-export const STARTING_AGAIN = 'Starting again.'
 /** A launch the guard held that cannot start again: the person's way out, the one they would take anyway. */
 export const DID_NOT_START = { error: 'ENGINE_DID_NOT_START', detail: 'This harness did not start. Close it and open a new one.' } as const
 
-/** The launch a row gets once its pane is seen to be the guard's held shell under [nativeToken]: held, to start again,
- *  for a conversation (it resumes) and for a first launch whose request can be rebuilt (a `creationId`, and for a fork an
- *  engine with a native fork and the session it forked); else the failed state. The held shell proves no engine ran
- *  under that token (2026-11-25). */
-export function guardHold(row: RegisteredSession, nativeToken: string): Extract<AgentLaunch, { state: 'held' }> | { state: 'failed' } & typeof DID_NOT_START {
+/** Whether a first launch's request can be rebuilt from what its row names: the receipt that made it (`creationId`),
+ *  and for a fork an engine with a native fork and the session it forked. */
+export function firstLaunchRebuildable<T extends Pick<RegisteredSession, 'creationId' | 'forkedFrom' | 'engine'>>(row: T): row is T & { creationId: string } {
   const fork = row.forkedFrom
   // A handoff fork's first prompt was composed from its source at fork time and kept nowhere.
-  const rebuilt = !!row.sessionId || (!!row.creationId && (!fork || (supportsNativeFork(row.engine) && !!fork.sessionId)))
-  return rebuilt ? { state: 'held', service: 'native', nativeToken, startsAgain: true, detail: STARTING_AGAIN } : { state: 'failed', ...DID_NOT_START }
+  return !!row.creationId && (!fork || (supportsNativeFork(row.engine) && !!fork.sessionId))
+}
+
+/** The launch a row gets once its pane is seen to be the guard's held shell under [nativeToken]: held, to start again,
+ *  for a conversation (it resumes) and for a first launch whose request can be rebuilt; else the failed state. The held
+ *  shell proves no engine ran under that token (2026-11-25). */
+export function guardHold(row: RegisteredSession, nativeToken: string): Extract<AgentLaunch, { state: 'held' }> | { state: 'failed' } & typeof DID_NOT_START {
+  return row.sessionId || firstLaunchRebuildable(row)
+    ? { state: 'held', service: 'native', nativeToken, startsAgain: true, detail: STARTING_AGAIN } : { state: 'failed', ...DID_NOT_START }
 }
 
 export interface RestoreAgentsDeps {
@@ -649,11 +652,12 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
   const unavailable = new Map<string, string | undefined>()
   /** Held in its waiting pane: the one it has, or a new one. False when no pane could be opened for it. */
   const hold = async (entry: RegisteredSession, runtime: TerminalRuntimeRef, alive: boolean, current: () => boolean, service: string, detail?: string): Promise<boolean> => inPane(deps, entry, current, async owns => {
-    // A launch the guard held keeps its words and its pane, which already says them, whatever holds it now: the held
-    // passes log why, once per change (core/agents/heldLaunches.ts).
+    // A launch the guard held keeps its pane, which already says "Starting again.", whatever holds it now: the held
+    // passes log why, once per change (core/agents/heldLaunches.ts). Held for another service, its wait is that
+    // service's, and its row says so as any row held for it does.
     const guard = guardHeld(entry)
     const launch = { ...heldLaunch(service), ...((entry.launch?.state === 'held' || entry.launch?.state === 'starting') && entry.launch.nativeToken ? { nativeToken: entry.launch.nativeToken } : {}),
-      ...(guard ? { startsAgain: true, detail: STARTING_AGAIN } : detail ? { detail } : {}) } as Extract<AgentLaunch, { state: 'held' }>
+      ...(guard ? { startsAgain: true } : {}), ...(guard && service === 'native' ? { detail: STARTING_AGAIN } : detail ? { detail } : {}) } as Extract<AgentLaunch, { state: 'held' }>
     let pane = runtime
     if (!alive) {
       const created = await deps.createPane(entry, deps.waitingLaunch?.(entry, launch) ?? { argv: [] }, { current })
@@ -754,11 +758,20 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
             : deps.createPane(entry, launch, control)).catch(error => ({ ok: false as const, reason: String(error) }))
           if (!owns()) return
           if (!created.ok) {
-            // A native dispatch tmux turned away after its journal, before or after running it (on evidence that changed
-            // in between, too): the row is starting under its new token. It is watched as boot watches one, never
-            // respawned over, and never left starting with nothing watching it.
+            // A native dispatch the terminal turned away after its journal: the row is starting under its new token.
+            // Its pane still the held shell under the token it waited under (its evidence changed between the journal
+            // and the respawn), no engine ran and no pane has the new token: the row goes back to that hold, for the
+            // next attempt. Otherwise tmux may have run it: it is watched as boot watches one, never respawned over,
+            // and never left starting with nothing watching it.
             const journal = journaled && !entry.externalResume && !deps.cancelled?.(entry.agentId) ? release : undefined
             if (!journal && !dispatchCurrent()) return
+            const waited = journal && entry.launch?.state === 'held' ? entry.launch : undefined
+            if (waited?.nativeToken && await deps.waitingPane?.(pane, waited.nativeToken) === true) {
+              if (!owns()) return
+              deps.registry.setLaunch(entry.agentId, waited)
+              summary.held.push(entry.agentId)
+              return
+            }
             if (journal) {
               const currentWatch = restoreOwner(deps, deps.registry.byAgent(entry.agentId)!)
               watching = true
@@ -902,7 +915,9 @@ async function watchRestoredPane(
     if (entry.terminalHost) {
       mayRetryFresh = false
       deps.log(`[restore] ${engine} · agent ${agentId} · did not come back up resuming its session — back to the terminal`)
-      const shell = { ...entry, engine: 'terminal' as const, sessionId: '', subscriptionModel: null }
+      // A shell, not a first launch: with no conversation and the guard's hold its resume carried, the copy would read
+      // as a held first launch, whose build fails it "did not start".
+      const shell = { ...entry, engine: 'terminal' as const, sessionId: '', subscriptionModel: null, launch: undefined }
       const launch = await deps.buildLaunch(shell, { current })
       if (!current() || 'cancelled' in launch) return false
       if ('held' in launch) return holdHere(launch)

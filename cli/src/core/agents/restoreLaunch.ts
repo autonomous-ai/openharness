@@ -2,10 +2,10 @@
 import { externalResumePending } from '../../lib/externalResume.js'
 import { launchedGrid } from '../../lib/gridAssignmentWire.js'
 import type { AgentCreationReceipts } from '../../lib/agentCreationReceipt.js'
-import { supportsNativeFork, typedFirstPrompt } from '../../lib/engineLaunch.js'
+import { typedFirstPrompt } from '../../lib/engineLaunch.js'
 import { heldFirstLaunch, type RegisteredSession } from '../../lib/registry.js'
 import type { LaunchOverrides, LaunchOverridesResult } from '../../lib/launchOverrides.js'
-import { DID_NOT_START, type RestoreAgentsDeps, type RestoreLaunch } from '../../lib/restoreAgents.js'
+import { DID_NOT_START, firstLaunchRebuildable, type RestoreAgentsDeps, type RestoreLaunch } from '../../lib/restoreAgents.js'
 import { windowsLaunchRefusal } from '../../lib/windows/launch.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
@@ -24,9 +24,8 @@ interface RestoreLaunchDeps {
  *  native fork the fork again. Null when that request cannot be rebuilt. The task is private: it goes to the argv
  *  only, never to a log or the row. */
 function firstLaunch(entry: RegisteredSession, receipts: RestoreLaunchDeps['receipts']): { firstPrompt?: string; forkSessionId?: string } | null {
+  if (!firstLaunchRebuildable(entry)) return null
   const fork = entry.forkedFrom
-  // A handoff fork's first prompt was composed from its source at fork time and kept nowhere.
-  if (!entry.creationId || (fork && !(supportsNativeFork(entry.engine) && fork.sessionId))) return null
   const read = receipts.firstLaunchTask(entry.creationId, entry.agentId, fork ? 'fork' : 'create')
   if (!read) return null
   // An engine that takes its task typed keeps it on the row (`firstTask`), typed once after ready: none in the argv.
@@ -46,7 +45,7 @@ export function createRestoreLaunch(deps: RestoreLaunchDeps): RestoreAgentsDeps[
     if (missing) return missing
     const entry = given
     // A first launch the guard held is relaunched into its own held pane with the request that made it, read before
-    // any service is asked; one that cannot be rebuilt did not start (lib/restoreAgents.ts guardHold).
+    // any service is asked; one that cannot be rebuilt did not start (lib/restoreAgents.ts firstLaunchRebuildable).
     const first = heldFirstLaunch(entry) ? firstLaunch(entry, deps.receipts) : {}
     if (!first) return { error: DID_NOT_START.error, detail: DID_NOT_START.detail }
     const built = await deps.relaunchOverrides(entry, entry, current)

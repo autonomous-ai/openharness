@@ -4,7 +4,8 @@ import { createRestoreLaunch } from '../core/agents/restoreLaunch.js'
 import { WindowsBatchLaunchRefused } from './windows/launch.js'
 import { registry as realRegistry, RegistryOwnershipChanged, type AgentLaunch, type ProcessIdentity, type RegisteredSession } from './registry.js'
 import type { TerminalRuntimeRef, TmuxRuntimeRef } from './terminalTypes.js'
-import { DID_NOT_START, GRID_CREDENTIAL_REQUIRED, guardHold, heldLaunch, restoreAgents, STARTING_AGAIN, terminalSurvey, type RestoreAgentsDeps, type RestoreLaunch, type RestoreLaunchResult } from './restoreAgents.js'
+import { STARTING_AGAIN } from './engineLaunch.js'
+import { DID_NOT_START, GRID_CREDENTIAL_REQUIRED, guardHold, heldLaunch, restoreAgents, terminalSurvey, type RestoreAgentsDeps, type RestoreLaunch, type RestoreLaunchResult } from './restoreAgents.js'
 import type { GridLaunchOverride } from './gridLaunch.js'
 import { createStopAgentService, type StopAgentServiceDeps } from './stopAgentService.js'
 import { AgentRestartCoordinator } from './restartAgent.js'
@@ -2039,7 +2040,7 @@ describe('the guard\'s hold: a launch it held starts again, first launch or conv
         else h.deps.buildLaunch = async () => ({ held: service, detail: `Waiting for ${service}.` })
         expect(await restoreAgents(h.deps)).toEqual({ restored: [], skipped: [], failed: [], held: ['agent-a'], unsurveyed: [] })
         // Its wait is that service's, not the guard's: the frame shows it held for that service.
-        const detail = service === 'native' ? STARTING_AGAIN : defer ? heldLaunch(service).detail : `Waiting for ${service}.`
+        const detail = service === 'native' ? STARTING_AGAIN : defer ? (heldLaunch(service) as { detail: string }).detail : `Waiting for ${service}.`
         expect(entry.launch).toEqual({ ...startsAgain('original'), service, detail })
         expect(h.paneCreates + h.respawns).toBe(0)
         expect(log).not.toHaveBeenCalled()

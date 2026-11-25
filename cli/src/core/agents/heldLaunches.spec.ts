@@ -1,7 +1,8 @@
 import { execFileSync } from 'node:child_process'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { guardHeld, type AgentLaunch, type RegisteredSession } from '../../lib/registry.js'
-import { DID_NOT_START, heldLaunch, STARTING_AGAIN, type RestoreSummary } from '../../lib/restoreAgents.js'
+import { STARTING_AGAIN } from '../../lib/engineLaunch.js'
+import { DID_NOT_START, heldLaunch, type RestoreSummary } from '../../lib/restoreAgents.js'
 import { createHeldLaunches, heldFor, heldPaneArgv, heldRetryMs } from './heldLaunches.js'
 
 const running: ReturnType<typeof createHeldLaunches>[] = []
@@ -603,6 +604,19 @@ describe('a launch the guard held starts again on attempts of its own', () => {
     h.registry.delete('a')
     await vi.advanceTimersByTimeAsync(60_000)
     expect(timesOf(h, 'a')).toEqual([2_000])
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('forgets an agent stopped or closed during its attempt: nothing more is tried, nothing announced', async () => {
+    const h = setup([guardRow('a')], (only) => {
+      h.registry.delete('a')
+      return summary({ skipped: [...only].map((agentId) => ({ agentId, reason: 'gone' })) })
+    })
+    await h.held.boot(async () => {})
+    h.held.startAgain('a')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(timesOf(h, 'a')).toEqual([2_000])
+    expect(h.announce).not.toHaveBeenCalled()
     expect(vi.getTimerCount()).toBe(0)
   })
 

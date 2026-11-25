@@ -645,6 +645,9 @@ function launchFileOf(argv: readonly string[]): string | null {
   return null
 }
 
+/** What the held shell of a launch the native guard held says, and the row of that launch (lib/restoreAgents.ts). */
+export const STARTING_AGAIN = 'Starting again.'
+
 /**
  * Full argv for a fresh tmux pane. `exec` replaces the shell with the engine,
  * preserving process discovery while loading the same startup files a user
@@ -666,7 +669,7 @@ export function buildEngineLaunchArgv(
   // executable or settings changed since they were confirmed waits in a held pane instead, as the guard below does.
   if (process.platform === 'win32') {
     return opts.native?.executable && !nativeLaunchConfirmed(opts.native)
-      ? windowsHeldPaneArgv('Starting again.', opts.native.token)
+      ? windowsHeldPaneArgv(STARTING_AGAIN, opts.native.token)
       : command
   }
   // An engine whose declared startup runs in the script gets one even where the daemon has no login shell.
@@ -702,7 +705,7 @@ export function buildEngineLaunchArgv(
     : opts.installFirst
       ? installFirstScript(opts.installFirst)
       : 'harness_engine_bin=$1\n'
-  const heldCommand = `/bin/sh -c ${shellSingleQuote('trap \'\' INT QUIT TSTP; printf \'%s\\n\' \"$1\"; while :; do sleep 3600; done')} harness-held ${shellSingleQuote('Starting again.')} ${shellSingleQuote(opts.native?.token ?? '')}`
+  const heldCommand = `/bin/sh -c ${shellSingleQuote('trap \'\' INT QUIT TSTP; printf \'%s\\n\' \"$1\"; while :; do sleep 3600; done')} harness-held ${shellSingleQuote(STARTING_AGAIN)} ${shellSingleQuote(opts.native?.token ?? '')}`
   // tmux retains pane_start_command across exec. Transition this pane to the
   // inert command so core can recognize its exact token after a crash, using the
   // same server-side predicate as every other held launch. No engine has run.
