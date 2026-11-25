@@ -17478,13 +17478,15 @@ describe('Rex\'s ring goes as Rex\'s sidebar, and the dial follows the block foc
         host().scrolled('up', 0, 0)
         for (let i = 0; i < 6; i++) await settled()
       }
-      const pageKeys = (block: string) => rexRuns().filter((args) => args[0] === 'send-key' && args[4] === block).map((args) => args[5])
+      /** The `rex send`s to [block] that carry only mouse-wheel events (rex.ts wheel). */
+      const wheels = (block: string) => rexRuns().filter((args) => args[0] === 'send' && args[4] === block)
+        .map((args) => args[6]).filter((text) => /^(\x1b\[<6[45];10;10M)+$/.test(text))
 
-      it("on a Claude Code agent's own block, fullscreen and in front there, sends its page keys", async () => {
+      it("on a Claude Code agent's own block, fullscreen and in front there, sends it wheel lines", async () => {
         const { settle } = await dialWith([hook(1)])
         await settle('rex')
         await strokeOn(agent(1), -80)
-        expect(pageKeys(B(1))).toEqual([expect.stringMatching(/^page(up|down)$/)])
+        expect(wheels(B(1))).not.toEqual([])
         expect(logs.filter((line) => line.startsWith('[device] scroll · skipped'))).toEqual([])
       })
 
@@ -17501,14 +17503,14 @@ describe('Rex\'s ring goes as Rex\'s sidebar, and the dial follows the block foc
         await land([pane(4, 'Found'), pane(1, 'Alpha', 2)])
         await settle('rex')
         await strokeOn(scannedId, -80)
-        expect(pageKeys(B(4))).toEqual([expect.stringMatching(/^page(up|down)$/)])
+        expect(wheels(B(4))).not.toEqual([])
       })
 
       it('with Rex not in front, a stroke on it scrolls nothing there', async () => {
         const { settle } = await dialWith([hook(1)])
         await settle('ghostty')
         await strokeOn(agent(1), -80)
-        expect(pageKeys(B(1))).toEqual([])
+        expect(wheels(B(1))).toEqual([])
         expect(logs).toContain('[device] scroll · skipped · cannot scroll')
       })
     })

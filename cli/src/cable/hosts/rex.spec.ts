@@ -251,6 +251,13 @@ describe('a stroke on a Rex agent', () => {
   /** Lets the pages that wait run out: each is a few awaits and a gap that passes at once. */
   const settle = async () => { for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve)) }
   const keys = (calls: Call[]) => calls.filter((c) => c.args[0] === 'send-key').map((c) => c.args.at(-1))
+  /** Each `rex send` of wheel events, as its direction and count: `up×3`. */
+  const wheels = (calls: Call[]) => calls.filter((c) => c.args[0] === 'send').map((c) => {
+    const text = c.args.at(-1)!
+    const up = (text.match(/\x1b\[<64;10;10M/g) ?? []).length
+    const down = (text.match(/\x1b\[<65;10;10M/g) ?? []).length
+    return up ? `up×${up}` : `down×${down}`
+  })
   const appScrolls = (calls: Call[]) => calls.filter((c) => c.args[2] === 'client.perform')
     .map((c) => (JSON.parse(c.args[3]) as { action: string; block_id: string }))
 
@@ -286,29 +293,47 @@ describe('a stroke on a Rex agent', () => {
     expect(await slow.adapter.pageKeys!(OWN, agent)).toBe(false)
   })
 
-  it('8 lines are one page key, toward older lines PageUp; the rest carries to the next lines', async () => {
+  // A page key moved Claude Code half a screen at a time, which read as jerky (Diego, 2026-11-25): a wheel line is about
+  // one line (measured in Rex, 65 → 64 → 63 and back).
+  it('each dial line is one wheel line, toward older lines the wheel up, up to 10 in one send', async () => {
     const { adapter, calls } = stroke()
-    adapter.scroll!(OWN, -5, true)
+    adapter.scroll!(OWN, -3, true)
     await settle()
+    expect(wheels(calls)).toEqual(['up×3'])
+    adapter.scroll!(OWN, 2, true)
+    await settle()
+    expect(wheels(calls)).toEqual(['up×3', 'down×2'])
+    adapter.scroll!(OWN, -14, true)
+    await settle()
+    expect(wheels(calls)).toEqual(['up×3', 'down×2', 'up×10', 'up×4'])
     expect(keys(calls)).toEqual([])
-    adapter.scroll!(OWN, -11, true)
-    await settle()
-    expect(keys(calls)).toEqual(['pageup', 'pageup'])
-    adapter.scroll!(OWN, 8, true)
-    await settle()
-    expect(keys(calls)).toEqual(['pageup', 'pageup', 'pagedown'])
+    expect(calls.find((c) => c.args[0] === 'send')!.args.slice(0, 6)).toEqual(['send', '-s', SESSION, '-b', BLOCK, '--'])
   })
 
-  it('a fling waits for no more than 4 pages, and a pause forgets what was short of one', async () => {
-    const { adapter, calls, tick } = stroke()
+  it('a fling waits for no more than 20 wheel lines either way', async () => {
+    const { adapter, calls } = stroke()
     adapter.scroll!(OWN, -200, true)
     await settle()
-    expect(keys(calls)).toEqual(['pageup', 'pageup', 'pageup', 'pageup'])
-    adapter.scroll!(OWN, -7, true)
-    tick(REX_SCROLL_IDLE_MS)
-    adapter.scroll!(OWN, -7, true)
+    expect(wheels(calls)).toEqual(['up×10', 'up×10'])
+  })
+
+  it("with no page keys, 8 dial lines are one page of Rex's scrollback; the rest carries, and a pause forgets it", async () => {
+    const { adapter, calls, tick } = stroke()
+    adapter.scroll!(OWN, -5)
     await settle()
-    expect(keys(calls)).toHaveLength(4)
+    expect(appScrolls(calls)).toEqual([])
+    adapter.scroll!(OWN, -11)
+    await settle()
+    expect(appScrolls(calls).map((s) => s.action)).toEqual(['client.scroll.page_up', 'client.scroll.page_up'])
+    adapter.scroll!(OWN, -7)
+    tick(REX_SCROLL_IDLE_MS)
+    adapter.scroll!(OWN, -7)
+    await settle()
+    expect(appScrolls(calls)).toHaveLength(2)
+    // A fling waits for no more than 4 pages.
+    adapter.scroll!(OWN, -200)
+    await settle()
+    expect(appScrolls(calls)).toHaveLength(6)
   })
 
   it("with no page keys, the Rex app's Scroll Page Up or Down of that block, asked of this user's app", async () => {

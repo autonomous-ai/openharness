@@ -119,6 +119,10 @@ export const REX_SCROLL_GAP_MS = 100
 export const REX_SCROLL_PAGES_MAX = 4
 /** A pane's remainder short of a page is forgotten once no line came for this long, as VS Code's (PAGE_IDLE_MS). */
 export const REX_SCROLL_IDLE_MS = 1_000
+/** The most wheel lines one `rex send` carries, the most that wait either way, and the gap after each send. */
+export const REX_WHEEL_BATCH = 10
+export const REX_WHEEL_PENDING_MAX = 20
+export const REX_WHEEL_GAP_MS = 30
 /** How long a stroke's `pageKeys` may take, settings and the foreground read together. */
 export const REX_PAGE_KEYS_MS = 1_000
 
@@ -369,11 +373,7 @@ export function createRexAdapter(deps: RexDeps): HostAdapter & Required<Pick<Hos
    * Up or Down (Rex's Mac Actions), asked of this user's apps: it scrolls a block's scrollback, as the spike saw on a
    * shell's 300 lines, and answers not_supported where there is none. Never rejects.
    */
-  const page = async (session: string, block: string, up: boolean, keys: boolean): Promise<void> => {
-    if (keys) {
-      await rex(['send-key', '-s', session, '-b', block, up ? 'pageup' : 'pagedown'])
-      return
-    }
+  const page = async (session: string, block: string, up: boolean): Promise<void> => {
     for (const client of await appClients()) {
       const request = JSON.stringify({ client_id: client, action: up ? 'client.scroll.page_up' : 'client.scroll.page_down',
         session_id: session, block_id: block, timeout_ms: SELECT_TIMEOUT_MS })
@@ -381,20 +381,32 @@ export function createRexAdapter(deps: RexDeps): HostAdapter & Required<Pick<Hos
     }
   }
 
-  /** Per pane, what a scroll holds: the lines short of a page, the pages still to go (below zero, up), whether they are
-   *  keys, and whether a run of them is under way. */
+  /**
+   * [n] lines of [block] toward older lines when [up], as mouse-wheel events in one `rex send`: Claude Code drawn
+   * fullscreen takes the wheel's SGR events (`ESC[<64;col;rowM` up, `65` down) and moves about a line for each (measured in
+   * Rex, 65 → 64 → 63 and back), where a page key moves about half a screen (65 → 38), which read as jerky on the dial
+   * (Diego, 2026-11-25). The column and row are the measured ones, inside the pane. Never rejects.
+   */
+  const wheel = async (session: string, block: string, up: boolean, n: number): Promise<void> => {
+    await rex(['send', '-s', session, '-b', block, '--', `\x1b[<${up ? 64 : 65};10;10M`.repeat(n)])
+  }
+
+  /** Per pane, what a scroll holds: the lines short of a page, the steps still to go (below zero, up: pages of Rex's
+   *  scrollback, or wheel lines with [keys]), whether they are wheel lines, and whether a run of them is under way. */
   const scrolls = new Map<string, { lines: number; pages: number; keys: boolean; at: number; running: boolean }>()
   const now = deps.now ?? (() => performance.now())
-  /** The pages that wait for [id], one at a time, each followed by the gap; the lines that come meanwhile add to them. */
+  /** The steps that wait for [id]: a page at a time, or up to REX_WHEEL_BATCH wheel lines in one send, each followed by
+   *  its gap; the lines that come meanwhile add to them. */
   const drain = async (id: string, session: string, block: string): Promise<void> => {
     const held = scrolls.get(id)!
     held.running = true
     try {
       while (held.pages !== 0) {
         const up = held.pages < 0
-        held.pages += up ? 1 : -1
-        await page(session, block, up, held.keys).catch(() => undefined)
-        await wait(REX_SCROLL_GAP_MS)
+        const n = held.keys ? Math.min(Math.abs(held.pages), REX_WHEEL_BATCH) : 1
+        held.pages += up ? n : -n
+        await (held.keys ? wheel(session, block, up, n) : page(session, block, up)).catch(() => undefined)
+        await wait(held.keys ? REX_WHEEL_GAP_MS : REX_SCROLL_GAP_MS)
       }
     } finally {
       held.running = false
@@ -458,10 +470,15 @@ export function createRexAdapter(deps: RexDeps): HostAdapter & Required<Pick<Hos
       const held = scrolls.get(pane.id) ?? { lines: 0, pages: 0, keys, at, running: false }
       if (at - held.at >= REX_SCROLL_IDLE_MS || held.keys !== keys) Object.assign(held, { lines: 0, pages: 0, keys })
       held.at = at
-      held.lines += lines
-      const pages = Math.trunc(held.lines / REX_SCROLL_PAGE_LINES)
-      held.lines -= pages * REX_SCROLL_PAGE_LINES
-      held.pages = Math.max(-REX_SCROLL_PAGES_MAX, Math.min(REX_SCROLL_PAGES_MAX, held.pages + pages))
+      if (keys) {
+        // A wheel line for each dial line, the most that wait bounded: a fling stops with the finger.
+        held.pages = Math.max(-REX_WHEEL_PENDING_MAX, Math.min(REX_WHEEL_PENDING_MAX, held.pages + lines))
+      } else {
+        held.lines += lines
+        const pages = Math.trunc(held.lines / REX_SCROLL_PAGE_LINES)
+        held.lines -= pages * REX_SCROLL_PAGE_LINES
+        held.pages = Math.max(-REX_SCROLL_PAGES_MAX, Math.min(REX_SCROLL_PAGES_MAX, held.pages + pages))
+      }
       scrolls.set(pane.id, held)
       if (!held.running && held.pages !== 0) void drain(pane.id, found[1], found[2])
     },
