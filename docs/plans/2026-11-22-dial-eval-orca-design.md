@@ -231,6 +231,9 @@ A bug reported from now on in Orca becomes a scenario in this catalog.
 
 - **O15's close, O14's removal:** the leave waits for the observed tick (30 s) and the 10 s end delay.
 - **O12:** the watch restarts only at Orca's next settle, so a focus line right after the relaunch may be missed.
+- **O11's tap:** a tap opens the tmux pane alone and raises Orca on whatever tab it shows; Orca does not switch to the
+  agent's tab (`observed.ts` `raiseAfter` focuses only a `tap: 'after'` pane). Every `open` part is 0; the product fix
+  is in the PM's backlog (2026-11-25).
 - **Windows:** every check that needs Orca's CLI (the layout's order, the switch, typed words), since the devices find
   no `orca.exe` there (decision 3).
 
