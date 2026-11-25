@@ -1,9 +1,11 @@
 /** Restore may wait for preparation; session ownership must survive that wait before core writes. */
 import { externalResumePending } from '../../lib/externalResume.js'
 import { launchedGrid } from '../../lib/gridAssignmentWire.js'
-import type { RegisteredSession } from '../../lib/registry.js'
+import type { AgentCreationReceipts } from '../../lib/agentCreationReceipt.js'
+import { supportsNativeFork, typedFirstPrompt } from '../../lib/engineLaunch.js'
+import { heldFirstLaunch, type RegisteredSession } from '../../lib/registry.js'
 import type { LaunchOverrides, LaunchOverridesResult } from '../../lib/launchOverrides.js'
-import type { RestoreAgentsDeps, RestoreLaunch } from '../../lib/restoreAgents.js'
+import { DID_NOT_START, type RestoreAgentsDeps, type RestoreLaunch } from '../../lib/restoreAgents.js'
 import { windowsLaunchRefusal } from '../../lib/windows/launch.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
@@ -13,8 +15,23 @@ interface RestoreLaunchDeps {
   downgradedPermission(entry: RegisteredSession, native?: LaunchOverrides['native']): Promise<{ permissionMode?: string | null; bypassPermission?: boolean; nativeHold?: string }>
   prepareSessionResume(entry: RegisteredSession, current: () => boolean): Promise<unknown>
   refreshGridWebSearch(agentId: string, overrides: LaunchOverrides): void
-  launch(entry: RegisteredSession, opts: { resumeSessionId?: string; agentId: string }, overrides: LaunchOverrides,
-    permission: { permissionMode?: string | null; bypassPermission?: boolean }): RestoreLaunch
+  launch(entry: RegisteredSession, opts: { resumeSessionId?: string; agentId: string; firstPrompt?: string; forkSessionId?: string },
+    overrides: LaunchOverrides, permission: { permissionMode?: string | null; bypassPermission?: boolean }): RestoreLaunch
+  receipts: Pick<AgentCreationReceipts, 'firstLaunchTask'>
+}
+
+/** What a held first launch's relaunch adds to its argv: the first task the receipt the row names kept, and for a
+ *  native fork the fork again. Null when that request cannot be rebuilt. The task is private: it goes to the argv
+ *  only, never to a log or the row. */
+function firstLaunch(entry: RegisteredSession, receipts: RestoreLaunchDeps['receipts']): { firstPrompt?: string; forkSessionId?: string } | null {
+  const fork = entry.forkedFrom
+  // A handoff fork's first prompt was composed from its source at fork time and kept nowhere.
+  if (!entry.creationId || (fork && !(supportsNativeFork(entry.engine) && fork.sessionId))) return null
+  const read = receipts.firstLaunchTask(entry.creationId, entry.agentId, fork ? 'fork' : 'create')
+  if (!read) return null
+  // An engine that takes its task typed keeps it on the row (`firstTask`), typed once after ready: none in the argv.
+  const firstPrompt = read.task && !typedFirstPrompt(entry.engine, read.task) ? read.task : undefined
+  return { ...(firstPrompt ? { firstPrompt } : {}), ...(fork?.sessionId ? { forkSessionId: fork.sessionId } : {}) }
 }
 
 export function createRestoreLaunch(deps: RestoreLaunchDeps): RestoreAgentsDeps['buildLaunch'] {
@@ -28,6 +45,10 @@ export function createRestoreLaunch(deps: RestoreLaunchDeps): RestoreAgentsDeps[
     const missing = deps.workspaceMissing(given.cwd)
     if (missing) return missing
     const entry = given
+    // A first launch the guard held is relaunched into its own held pane with the request that made it, read before
+    // any service is asked; one that cannot be rebuilt did not start (lib/restoreAgents.ts guardHold).
+    const first = heldFirstLaunch(entry) ? firstLaunch(entry, deps.receipts) : {}
+    if (!first) return { error: DID_NOT_START.error, detail: DID_NOT_START.detail }
     const built = await deps.relaunchOverrides(entry, entry, current)
     if (!current()) return { cancelled: true }
     if (!built.ok && built.error === 'AGENT_CHANGED') return { cancelled: true }
@@ -63,7 +84,7 @@ export function createRestoreLaunch(deps: RestoreLaunchDeps): RestoreAgentsDeps[
     let launched: RestoreLaunch
     // The row's id goes with the launch: an engine whose sessions Harness names reopens the agent's own when it resumes
     // none (engineLaunch.ts `agentId`).
-    try { launched = await deps.launch(entry, { ...opts, agentId: entry.agentId }, built.overrides, permission) } catch (error) {
+    try { launched = await deps.launch(entry, { ...opts, agentId: entry.agentId, ...first }, built.overrides, permission) } catch (error) {
       const { error: code, detail } = windowsLaunchRefusal(error)
       return { error: code, detail }
     }
