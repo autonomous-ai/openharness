@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { launch as claudeLaunch } from '../claude/launch.js'
+import { readConfig } from './launchArgs.js'
 import { statusLineSetting } from './statusLine.js'
 
 // How the watched path is changed: opened for writing in place, or a file renamed onto it.
@@ -45,4 +46,15 @@ it('the save goes through a temporary file renamed onto the target', () => {
   expect(disk.changes).toEqual(['rename'])
   expect(readFileSync(file, 'utf8')).not.toBe('// an older script\n')
   if (process.platform !== 'win32') expect(statSync(file).mode & 0o777).toBe(0o600)
+})
+
+// PowerShell 5's `Set-Content -Encoding utf8` saves settings.json with a BOM, which Claude Code reads past
+// (lib/settingsText.ts): the person's own status line still runs after Harness's.
+it('passes along the person\'s own status line from a settings file saved with a BOM', () => {
+  const home = join(dataDir, 'home')
+  mkdirSync(home)
+  writeFileSync(join(home, 'settings.json'), `\uFEFF${JSON.stringify({ statusLine: { type: 'command', command: 'echo owner-line' } })}`)
+  const files = { home, personal: dataDir, cwd: null, read: readConfig }
+  const setting = statusLineSetting(claudeLaunch.statusLine!, files, dataDir, 'darwin') as { statusLine: { command: string } }
+  expect(setting.statusLine.command).toContain(`--then ${Buffer.from('echo owner-line', 'utf8').toString('base64url')}`)
 })
