@@ -446,13 +446,16 @@ impl App {
     }
 
     /// The process ends with the window open, its screen never answered, so the new process asks again: the Follow
-    /// screen counts as asked once it shows, and Sign in opened from the menu was asked before. A first CLI install
-    /// that failed runs again at the start by itself.
+    /// screen counts as asked once it shows, and Sign in opened from the menu was asked before. Sign in that shows
+    /// though this computer signed in elsewhere is no question left. A first CLI install that failed runs again at the
+    /// start by itself.
     fn forget_unanswered(&mut self, effects: &mut Vec<Effect>) {
         let Some(screen) = self.window.as_ref().map(|shown| shown.screen) else { return };
+        let signed_in = self.state.signed_in == Some(true);
         self.remember(
             |saved| match screen {
-                Screen::SignIn => saved.asked_sign_in = false,
+                Screen::SignIn if !signed_in => saved.asked_sign_in = false,
+                Screen::SignIn => {}
                 Screen::Follow => saved.asked_follow = false,
                 Screen::Install => {}
             },
