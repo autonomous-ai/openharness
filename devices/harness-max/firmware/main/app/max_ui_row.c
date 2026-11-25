@@ -4,7 +4,8 @@
 // while an agent opens, goes back to the closed agent once the cells have their width again, and to the front when
 // the model sends it there. The finger drags the row px by px; let go with no agent open it settles on a cell's edge
 // (one further when flung), open it rests where it was let go. All of it runs on the clock (now_ms), never on frames.
-// The touch task and the render task both come here: 1 KB frames.
+// Apps' cards, when more lie in a row than the glass shows, move with the finger the same way. The touch task and the
+// render task both come here: 1 KB frames.
 #include <string.h>
 
 #include "max_ui_draw.h"
@@ -336,8 +337,8 @@ void max_row_down(int x, uint32_t now_ms)
 void max_row_move(int x, uint32_t now_ms)
 {
     max_row_t *r = &max_m.row;
+    track(x, now_ms);   // every move, the row's or not: Apps' cards fling by it too
     if (!r->grab) return;
-    track(x, now_ms);
     if (!r->drag) {
         if (iabs(x - max_m.down_x) <= MAX_TAP_SLOP) return;
         // It takes the row from where it is: the carry, the way back and any settle stop there, and the slop the finger
@@ -390,4 +391,71 @@ void max_row_cancel(void)
     const max_row_t *r = &max_m.row;
     if (r->drag) settle(0, r->track_t[r->track_n - 1]);   // a lost finger rests: no fling, from its last move
     max_m.row.grab = false;
+}
+
+// ---- Apps' cards ----
+
+int max_strip_px(uint32_t now_ms)
+{
+    const max_strip_t *s = &max_m.strip;
+    return imax(0, imin(s->drag ? s->drag_px : max_tween_at(&s->px, now_ms), s->end));
+}
+
+// Only where the last render drew Apps with cards past the glass, right of the header column, with nothing over them.
+void max_strip_down(int x)
+{
+    max_strip_t *s = &max_m.strip;
+    s->grab = s->drawn && max_m.view == MAX_VIEW_APPS && s->end > 0 && !max_form_open() && max_m.update_pct < 0 &&
+              x >= s->left;
+    s->drag = false;
+}
+
+void max_strip_move(int x, uint32_t now_ms)
+{
+    max_strip_t *s = &max_m.strip;
+    if (!s->grab) return;
+    if (!s->drag) {
+        if (iabs(x - max_m.down_x) <= MAX_TAP_SLOP) return;
+        // From where they are (a settle stops there), and the slop the finger went first is not theirs.
+        const int px = max_strip_px(now_ms);
+        rest(&s->px, px);
+        s->drag = true;
+        s->drag_x = x;
+        s->drag_px = px;
+    }
+    s->drag_px = imax(0, imin(s->drag_px + s->drag_x - x, s->end));   // held at the ends, as the row
+    s->drag_x = x;
+    max_m.dirty = true;
+}
+
+// Let go with this speed: the cards settle with a card's left edge on the cards' left edge, the nearest or, flung, the
+// next one the way they went; at the far end, the last card's right edge on the glass's.
+static void strip_settle(int v, uint32_t now_ms)
+{
+    max_strip_t *s = &max_m.strip;
+    const int px = max_strip_px(now_ms);
+    s->drag = false;
+    rest(&s->px, px);
+    if (s->step > 0) {
+        const int side = v > 0 ? 1 : v < 0 ? -1 : 0, last = (s->end + s->step - 1) / s->step;
+        const int card = imax(0, imin((2 * px + side * s->step + s->step) / (2 * s->step), last));
+        run(&s->px, imin(card * s->step, s->end), MAX_ROW_MS, MAX_EASE_ROW, now_ms);
+    }
+    max_m.dirty = true;
+}
+
+bool max_strip_up(uint32_t now_ms)
+{
+    max_strip_t *s = &max_m.strip;
+    const bool dragged = s->drag;
+    if (dragged) strip_settle(fling(now_ms), now_ms);
+    s->grab = false;
+    return dragged;
+}
+
+void max_strip_cancel(void)
+{
+    const max_row_t *r = &max_m.row;
+    if (max_m.strip.drag) strip_settle(0, r->track_t[r->track_n - 1]);
+    max_m.strip.grab = false;
 }

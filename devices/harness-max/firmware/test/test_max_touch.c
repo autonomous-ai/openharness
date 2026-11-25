@@ -406,7 +406,7 @@ static void test_apps(void)
     CHECK(tap_on(add).kind == MAX_ACT_NONE);   // one form at a time
     max_form_dismiss();
     CHECK(tap_on(close).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_OVERVIEW);
-    // TEMP (the owner's call of 20 Nov, to try Ambient): Relax (unseen under "APPS") opens Ambient, only from Apps.
+    // TEMP (the owner's call of 20 Nov, to try Ambient): Relax (unseen under "Apps") opens Ambient, only from Apps.
     max_show(MAX_VIEW_APPS);
     drawn_page(MAX_VIEW_APPS);
     const max_hit_t *relax = plant(MAX_HIT_RELAX, 0);
@@ -414,6 +414,89 @@ static void test_apps(void)
     CHECK(tap_on(relax).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_INBOX);
     max_m.view = MAX_VIEW_APPS;
     CHECK(tap_on(relax).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_AMBIENT);
+}
+
+// Apps' cards as a render lays them out past the glass (max_draw_apps): 290 wide and 20 apart from the header column
+// on, the last 1140 px past the glass at the start, the scroll at px.
+static void cards_drawn(int px)
+{
+    max_m.strip.drawn = true;
+    max_m.strip.end = 1140;
+    max_m.strip.step = 310;
+    max_m.strip.left = APP_W;
+    max_m.strip.drag = max_m.strip.grab = false;
+    max_tween_rest(&max_m.strip.px, px);
+}
+// The finger's way along Apps' cards from x: down, `moves` moves of dx in all ms apart, then let go `rest` ms after the
+// last move.
+static max_act_t slide(int x, int dx, int moves, uint32_t ms, uint32_t rest)
+{
+    T += 1000;
+    max_ui_touch(true, x, 240, T);
+    for (int k = 1; k <= moves; k++) max_ui_touch(true, x + dx * k / moves, 240, T + (uint32_t)k * ms);
+    return max_ui_touch(false, x + dx, 240, T + (uint32_t)moves * ms + rest);
+}
+static uint32_t settled(void) { return T + 5000; }   // well past any settle
+
+// Past the glass, Apps' cards follow the finger (the owner's A' of 25 Nov) and settle on a card's edge: the nearest
+// when let go at rest, the next one the way it went when flung, held to the ends. A drag picks nothing.
+static void test_apps_drag(void)
+{
+    linked(ABCDE, 3);
+    const pro_app_row_t apps[] = {{"orca", "Orca", 3, 1}, {"vscode", "VS Code", 2, 0}};
+    max_ui_apps("orca", apps, 2, 0);
+    max_show(MAX_VIEW_APPS);
+    drawn_page(MAX_VIEW_APPS);
+    plant_at(MAX_HIT_APP, 0, APP_W, 40, 290, 400);
+    cards_drawn(0);
+    // Let go at rest 300 px on: the card nearest, one card on. No pick, Apps stays.
+    CHECK(slide(1200, -300, 6, 30, 200).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_APPS);
+    CHECK(!max_m.strip.drag && !max_m.strip.grab && max_m.strip.px.to == 310);
+    CHECK(max_strip_px(settled()) == 310);
+    // While the finger is down the cards are where it put them, held at the start.
+    cards_drawn(0);
+    T += 1000;
+    max_ui_touch(true, 1200, 240, T);
+    max_ui_touch(true, 1100, 240, T + 30);   // past the slop: the cards take the finger from here
+    max_ui_touch(true, 1000, 240, T + 60);
+    CHECK(max_m.strip.drag && max_strip_px(T + 60) == 100);
+    max_ui_touch(true, 1600, 240, T + 90);   // back past the start
+    CHECK(max_strip_px(T + 90) == 0);
+    max_ui_touch_cancel();   // a lost finger rests: the nearest edge, no fling
+    CHECK(!max_m.strip.drag && max_m.strip.px.to == 0);
+    // Flung: the next card the way it went, even from a little way.
+    cards_drawn(0);
+    CHECK(slide(1200, -120, 4, 20, 10).kind == MAX_ACT_NONE && max_m.strip.px.to == 310);
+    cards_drawn(620);
+    CHECK(slide(800, 120, 4, 20, 10).kind == MAX_ACT_NONE && max_m.strip.px.to == 310);
+    // Held to the far end: the last card's right edge on the glass's margin, not a card's edge past it.
+    cards_drawn(620);
+    CHECK(slide(1500, -1200, 6, 20, 10).kind == MAX_ACT_NONE && max_m.strip.px.to == 1140);
+    CHECK(max_strip_px(settled()) == 1140);
+    // A tap is still a pick.
+    cards_drawn(0);
+    CHECK(tap(APP_W + 100, 240).kind == MAX_ACT_PICK && max_m.view == MAX_VIEW_OVERVIEW);
+    // Nothing to drag: every card on the glass, the header column (Close's), another page, or the form over Apps.
+    max_show(MAX_VIEW_APPS);
+    drawn_page(MAX_VIEW_APPS);
+    cards_drawn(0);
+    max_m.strip.end = 0;
+    CHECK(slide(1200, -300, 6, 30, 200).kind == MAX_ACT_NONE && max_strip_px(settled()) == 0 && !max_m.strip.drag);
+    cards_drawn(0);
+    plant_at(MAX_HIT_CLOSE, 0, 0, 0, APP_W, HT_HEIGHT);
+    CHECK(slide(APP_W - 40, -200, 6, 30, 200).kind == MAX_ACT_NONE && max_strip_px(settled()) == 0);
+    cards_drawn(0);
+    max_m.view = MAX_VIEW_INBOX;
+    CHECK(slide(1200, -300, 6, 30, 200).kind == MAX_ACT_NONE && max_strip_px(settled()) == 0);
+    max_m.view = MAX_VIEW_APPS;
+    cards_drawn(0);
+    CHECK(max_ui_form_open("form-1", 0) && max_form_open());
+    CHECK(slide(1200, -300, 6, 30, 200).kind == MAX_ACT_NONE && max_strip_px(settled()) == 0);
+    max_form_dismiss();
+    // A page drawn since (not Apps): the cards are not on the glass to drag.
+    cards_drawn(0);
+    max_m.strip.drawn = false;
+    CHECK(slide(1200, -300, 6, 30, 200).kind == MAX_ACT_NONE && max_strip_px(settled()) == 0);
 }
 
 // TEMP (the owner's call of 23 Nov, to try the update screen): Inbox's Try update asks the app to play an update on the
@@ -1168,6 +1251,7 @@ int main(void)
     test_drag_while_open();
     test_inbox();
     test_apps();
+    test_apps_drag();
     test_try_update();
     test_ambient_wakes();
     test_agent_page_talks();

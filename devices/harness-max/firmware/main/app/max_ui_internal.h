@@ -259,6 +259,17 @@ typedef struct {
     max_tween_t fade_l, fade_r;     // the row's faded ends (MAX_ONE shown): while more of it lies that way
     uint32_t moves;                 // the renders it moved in: a motion since may have used what max_ui_warm painted
 } max_row_t;
+// Apps' cards when more lie in a row than the glass shows (max_ui_lists.c lays them out, max_ui_row.c moves them with
+// the finger, as the row's): px is how far the first card lies left of the cards' left edge. The render keeps what
+// the finger needs: the scroll's end (0: every card on the glass), a card and its gap, where the cards begin.
+typedef struct {
+    max_tween_t px;
+    bool had, drawn;                // the render before this one drew Apps; this one did (a fresh page: !had)
+    bool grab, drag;                // the finger may drag the cards; it does, the cards at drag_px when it was at drag_x
+    int drag_x, drag_px;
+    int end, step, left;
+    max_tween_t fade_l, fade_r;     // the cards' faded ends (MAX_ONE shown): while more of them lie that way
+} max_strip_t;
 // An overlay (the toast, the done note, the notice) as the last render drew it: up, or fading out from when it went.
 typedef struct {
     bool up;
@@ -338,6 +349,7 @@ typedef struct {
     uint8_t wall_hour, wall_min, wall_wday, wall_mday, wall_mon;   // local time; wday 0 = Sunday, mon 0 = January
     // From the row to cell_box: what a render carries to the next (max_ui_warm.c carries it along a motion it draws).
     max_row_t row;                   // App Detail's row in motion (max_ui_row.c)
+    max_strip_t strip;               // Apps' cards under the finger (max_ui_row.c)
     // The render's own clocks (max_ui_view.c): what loops, from when the page came up (page_from, the page drawn as
     // page_face: the agent page is App Detail's); the band's colours easing between talking and not for band_id; the
     // overlays fading.
@@ -503,6 +515,14 @@ void max_row_down(int x, uint32_t now_ms);
 void max_row_move(int x, uint32_t now_ms);
 bool max_row_up(int x, uint32_t now_ms);
 void max_row_cancel(void);
+// Apps' cards: the scroll at now_ms (a drag's, else where its settle is, held to 0..end); and the finger's side, as
+// the row's: down at x, moved to x, let go (true when it dragged the cards: they settle on a card's edge, one further
+// when flung), or lost.
+int max_strip_px(uint32_t now_ms);
+void max_strip_down(int x);
+void max_strip_move(int x, uint32_t now_ms);
+bool max_strip_up(uint32_t now_ms);
+void max_strip_cancel(void);
 
 // ---- questions (max_ui_ask.c) ----
 max_ask_t *max_ask_of(const char *agent);

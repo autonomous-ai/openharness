@@ -1,6 +1,7 @@
 // The finger on the pages (max_ui.h): a tap acts on what the last render drew (its hits first, then App Detail's
-// cells or the slivers beside the open agent), a sideways drag on the row moves it with the finger (max_ui_row.c), a
-// sideways swipe moves the form's choice. A tap on a card's button or the form queues its message in the outbox.
+// cells or the slivers beside the open agent), a sideways drag on the row, or on Apps' cards past the glass, moves them
+// with the finger (max_ui_row.c), a sideways swipe moves the form's choice. A tap on a card's button or the form queues
+// its message in the outbox.
 // While a recording is up the glass is its send, as the Pro's (max_ui_internal.h): X cancels it, any other tap sends it
 // (a sliver too: it opens nothing), however long the finger was down; a drag does nothing and the mic stays open. The
 // clock's side of a recording is max_ui_talk_due.
@@ -369,10 +370,12 @@ max_act_t max_ui_touch(bool down, int x, int y, uint32_t now_ms)
             max_m.down_y = y;
             max_m.held = false;
             max_row_down(x, now_ms);
+            max_strip_down(x);
         } else {
             if (iabs(x - max_m.down_x) > MAX_TAP_SLOP || iabs(y - max_m.down_y) > MAX_TAP_SLOP)
                 max_m.moved = true;   // out and back is still a drag
             max_row_move(x, now_ms);
+            max_strip_move(x, now_ms);
         }
         return nothing();
     }
@@ -380,10 +383,12 @@ max_act_t max_ui_touch(bool down, int x, int y, uint32_t now_ms)
     if (!max_m.down || max_m.update_pct >= 0) {   // no contact, or nothing to touch while the image is written
         max_m.down = false;
         max_row_cancel();
+        max_strip_cancel();
         return nothing();
     }
     max_m.down = false;
     if (max_row_up(x, now_ms)) return nothing();   // it dragged the row: the row settles, nothing else happens
+    if (max_strip_up(now_ms)) return nothing();    // so Apps' cards
     const int dx = x - max_m.down_x, dy = y - max_m.down_y;
     if (!max_m.moved && iabs(dx) <= MAX_TAP_SLOP && iabs(dy) <= MAX_TAP_SLOP) return tap(max_m.down_x, max_m.down_y, now_ms);
     if (iabs(dx) >= MAX_SWIPE_PX && iabs(dx) * 2 > iabs(dy) * 3) return swipe(dx, now_ms);
@@ -394,4 +399,5 @@ void max_ui_touch_cancel(void)
 {
     max_m.down = false;
     max_row_cancel();
+    max_strip_cancel();
 }

@@ -181,6 +181,13 @@ static void attention(const char *id, max_attn_t kind, uint32_t from)
 static void render_at(uint32_t now)
 {
     max_m.row.drawn = false;
+    max_m.strip.drawn = false;   // so Apps' cards: where they rest as the page comes up
+    ht_scene_clear(&S, ht_rgb(HT_THEME_CANVAS));
+    max_ui_render(&S, now);
+}
+// A render of the page that was drawn just before, its cards where the finger left them.
+static void render_again(uint32_t now)
+{
     ht_scene_clear(&S, ht_rgb(HT_THEME_CANVAS));
     max_ui_render(&S, now);
 }
@@ -637,42 +644,105 @@ static void test_inbox(void)
     CHECK(HITS_ARE(MAX_HIT_TRY_UPDATE, MAX_HIT_CLOSE) && word("Nothing new") && !word("0 unread"));
 }
 
+// Apps' cards as drawn: the hits, and the boxes their words lie in (a card cut by the glass's edge or the header
+// column is drawn whole: its box is the whole card's).
+static int app_boxes(max_box_t *boxes, int card_w)
+{
+    for (int i = 0; i < max_m.hit_count; i++) {
+        boxes[i] = box_of(&max_m.hits[i]);
+        const bool card = max_m.hits[i].kind == MAX_HIT_APP || max_m.hits[i].kind == MAX_HIT_NEW;
+        if (card && boxes[i].x + boxes[i].w == HT_WIDTH) boxes[i].w = card_w;
+        if (card && boxes[i].x == APP_W && boxes[i].w < card_w) {   // under the header column
+            boxes[i].x = boxes[i].x + boxes[i].w - card_w;
+            boxes[i].w = card_w;
+        }
+    }
+    return max_m.hit_count;
+}
+static void check_apps(int card_w)
+{
+    max_box_t boxes[MAX_HITS];
+    check_words(boxes, app_boxes(boxes, card_w));
+    check_glass();
+    check_hits();
+}
+
+// The owner's A' of 25 Nov: a header column as Inbox's, as wide as App Detail's app column (Close where the app's icon
+// was), then the cards: up to five share the width, more are 290 px and the finger drags them.
 static void test_apps(void)
 {
     ring(NULL);
     show(MAX_VIEW_APPS, NULL);
     render_at(T0);
-    // TEMP (the owner's call of 20 Nov, to try Ambient): Relax, unseen, right under "APPS" in Close's column and ahead
-    // of it; the cards as before.
+    // TEMP (the owner's call of 20 Nov, to try Ambient): Relax, unseen, right under "Apps" in Close's column and ahead
+    // of it.
     const max_hit_t *relax = &max_m.hits[0];
     CHECK(relax->kind == MAX_HIT_RELAX && !word("Relax"));
-    CHECK(relax->x + relax->w <= DX(210) && relax->y > HT_HEIGHT / 2 + DY(13) && relax->h == MAX_BUTTON_H);
-    CHECK(max_m.hits[1].kind == MAX_HIT_CLOSE && hits_of(MAX_HIT_APP) == max_m.hit_count - 2);
-    for (int i = 2; i < max_m.hit_count; i++) CHECK(max_m.hits[i].arg == i - 2);
-    CHECK(word("Shown") && word("3 agents") && word("1 agent") && word("No agents") && word("Harness"));
-    // Cards 196 wide, a little wider than the mockup's 176 (the owner's call of 20 Nov): of the eight apps, six whole
-    // on the glass from the header column on, the next past its edge.
-    CHECK(hits_of(MAX_HIT_APP) == 6);
+    CHECK(relax->x >= 0 && relax->x + relax->w <= APP_W && relax->y > DY(180) && relax->h == MAX_BUTTON_H);
+    const max_hit_t *close = &max_m.hits[1];
+    CHECK(close->kind == MAX_HIT_CLOSE && close->x == 0 && close->w == APP_W && close->h == HT_HEIGHT);
+    CHECK(word("Apps") && !word("APPS") && word("2 waiting"));   // Harness's one and Terminal's
+    CHECK(word("SHOWN") && word("3 agents") && word("1 agent") && word("No agents") && word("Harness"));
+    CHECK(word("1 waiting") && word("Apps")->x < APP_W);
+    // Eight apps and New: past five they are 290 wide from the header column on, the sixth past the glass's edge.
+    const int w = DX(224), step = w + DX(16);
+    CHECK(w == 290 && hits_of(MAX_HIT_APP) == 6 && !find_hit(MAX_HIT_NEW, 0));
     for (int i = 0; i < 6; i++) {
         const max_hit_t *h = find_hit(MAX_HIT_APP, i);
-        CHECK(h && h->w == DX(196) && h->x == DX(211) + i * (DX(196) + DX(16)) && h->x + h->w <= HT_WIDTH);
+        CHECK(h && h->x == APP_W + i * step && h->y == DY(27) && h->h == HT_HEIGHT - 2 * DY(27));
+        CHECK(i < 5 ? h->w == w : h->x + h->w == HT_WIDTH && h->w == HT_WIDTH - APP_W - 5 * step);
     }
-    max_box_t boxes[PRO_APPS_MAX + 3] = {box_of(&max_m.hits[0])};
-    for (int i = 1; i < max_m.hit_count; i++) {
-        boxes[i] = box_of(&max_m.hits[i]);
-        if (boxes[i].x + boxes[i].w == HT_WIDTH) boxes[i].w = DX(196);
-    }
-    check_words(boxes, max_m.hit_count);
-    check_glass();
-    check_hits();
-    CHECK(max_motion_ms(T0) == MAX_WAKE_MS);
-    // Few apps: "+ New" last while the computer offers New Harness, else none.
+    CHECK(max_m.strip.end == 9 * w + 8 * DX(16) - (HT_WIDTH - DX(28) - APP_W) && max_m.strip.step == step);
+    CHECK(max_strip_px(T0) == 0);
+    check_apps(w);
+    CHECK(max_motion_ms(T0) == MAX_WAKE_MS);   // at rest: nothing moves, nothing loops
+
+    // Dragged to the end: the last card's right edge where the glass's margin is, the cards before it under the header
+    // column, the one that peeks past it a card of its own to tap.
+    max_tween_rest(&max_m.strip.px, max_m.strip.end);
+    render_again(T0);
+    CHECK(find_hit(MAX_HIT_NEW, 0) && find_hit(MAX_HIT_NEW, 0)->x + w == HT_WIDTH - DX(28));
+    const max_hit_t *peek = find_hit(MAX_HIT_APP, 3);
+    CHECK(peek && peek->x == APP_W && peek->w < w && !find_hit(MAX_HIT_APP, 2));
+    CHECK(max_m.hits[1].kind == MAX_HIT_CLOSE && word("Apps"));
+    check_apps(w);
+    // Its fades ease in: the render task wants frames until they are there.
+    CHECK(max_motion_ms(T0) == MAX_ROW_FRAME_MS);
+
+    // Fresh, with the shown app's card past the glass: Apps comes up with it whole on the glass, a card's edge at the
+    // header column.
+    max_ui_apps("warp", APPS, 8, T0);
+    render_at(T0);
+    const max_hit_t *warp = find_hit(MAX_HIT_APP, 7);
+    CHECK(max_strip_px(T0) == 3 * step && warp && warp->w == w && warp->x + w <= HT_WIDTH - DX(28));
+    CHECK(find_hit(MAX_HIT_APP, 3) && find_hit(MAX_HIT_APP, 3)->x == APP_W && !find_hit(MAX_HIT_APP, 2));
+    check_apps(w);
+
+    // Five: they share the width, edge to edge.
+    max_ui_apps("orca", APPS, 4, T0);
+    render_at(T0);
+    const int five = (HT_WIDTH - DX(28) - APP_W - 4 * DX(16)) / 5;
+    CHECK(HITS_ARE(MAX_HIT_RELAX, MAX_HIT_CLOSE, MAX_HIT_APP, MAX_HIT_APP, MAX_HIT_APP, MAX_HIT_APP, MAX_HIT_NEW));
+    CHECK(find_hit(MAX_HIT_APP, 0)->x == APP_W && find_hit(MAX_HIT_NEW, 0)->w == five && five > w);
+    CHECK(max_m.strip.end == 0 && max_strip_px(T0) == 0);
+    check_apps(five);
+    // Few: at most 400 px each, the group centred, the same room either side; "+ New" last while the computer offers
+    // New Harness, else none.
     max_ui_apps("orca", APPS, 2, T0);
     render_at(T0);
     CHECK(HITS_ARE(MAX_HIT_RELAX, MAX_HIT_CLOSE, MAX_HIT_APP, MAX_HIT_APP, MAX_HIT_NEW) && word("New") && word("+"));
+    const max_hit_t *first = find_hit(MAX_HIT_APP, 0), *add = find_hit(MAX_HIT_NEW, 0);
+    CHECK(first->w == DX(308) && add->w == DX(308) && word("Harness agent"));
+    CHECK(abs((first->x - APP_W) - (HT_WIDTH - DX(28) - (add->x + add->w))) <= 1);
+    check_apps(DX(308));
     max_ui_offers(false);
     render_at(T0);
     CHECK(HITS_ARE(MAX_HIT_RELAX, MAX_HIT_CLOSE, MAX_HIT_APP, MAX_HIT_APP) && !word("New"));
+    // Nothing waits: the header says nothing of it, and no card a pill.
+    const pro_app_row_t calm[] = {{"orca", "Orca", 2, 0}, {"vscode", "VS Code", 1, 0}};
+    max_ui_apps("orca", calm, 2, T0);
+    render_at(T0);
+    CHECK(!word("0 waiting") && !word("1 waiting") && word("SHOWN") && word("2 agents"));
 }
 
 static void test_ambient(void)

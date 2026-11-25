@@ -367,6 +367,21 @@ static void s_inbox_empty(void)
     show(MAX_VIEW_INBOX, NULL);
 }
 static void s_apps(void) { orca(); show(MAX_VIEW_APPS, NULL); }
+// The owner's A' of 25 Nov at each width: few apps share it (at most 400 px each, centred), five fill it, more run past
+// the glass and the finger drags them to the end.
+static void s_apps_few(void)
+{
+    static const pro_app_row_t few[] = {{"orca", "Orca", 5, 1}, {"terminal", "Terminal", 2, 1}};
+    orca();
+    max_ui_apps("orca", few, 2, T0);
+    show(MAX_VIEW_APPS, NULL);
+}
+static void s_apps_fit(void)
+{
+    orca();
+    max_ui_apps("orca", APPS, 4, T0);
+    show(MAX_VIEW_APPS, NULL);
+}
 static void s_ambient(void)
 {
     max_ui_reset();
@@ -483,6 +498,15 @@ static void s_row_drag(void)
     max_ui_touch(true, 900, 240, T0 - 40);
 }
 
+static void s_apps_end(void)
+{
+    orca();
+    show(MAX_VIEW_APPS, NULL);
+    frame(T0 - 1000);   // Apps comes up, its cards from the first
+    max_tween_rest(&max_m.strip.px, max_m.strip.end);   // dragged to the end
+    frame(T0 - 500);    // its ends' fades ease in by T0
+}
+
 typedef struct { const char *name; void (*setup)(void); } screen_t;
 static const screen_t SCREENS[] = {
     {"overview", s_overview}, {"overview-harness", s_overview_harness}, {"overview-one", s_overview_one},
@@ -497,7 +521,7 @@ static const screen_t SCREENS[] = {
     {"attention-failed", s_attention_failed}, {"attention-six", s_attention_six},
     {"attention-multi", s_attention_multi}, {"attention-error", s_attention_error},
     {"attention-long-vi", s_attention_long_vi},
-    {"inbox", s_inbox}, {"inbox-empty", s_inbox_empty}, {"apps", s_apps}, {"ambient", s_ambient},
+    {"inbox", s_inbox}, {"inbox-empty", s_inbox_empty}, {"apps", s_apps}, {"apps-few", s_apps_few}, {"apps-fit", s_apps_fit}, {"apps-end", s_apps_end}, {"ambient", s_ambient},
     {"ambient-no-agents", s_ambient_no_agents}, {"not-connected", s_not_connected}, {"update", s_update}, {"update-restarting", s_update_restarting},
     {"form-opening", s_form_opening}, {"form-page", s_form_page}, {"form-start", s_form_start},
     {"form-busy", s_form_busy}, {"form-failed", s_form_failed}, {"form-say", s_form_say}, {"form-toast", s_form_toast},

@@ -680,7 +680,7 @@ static void page(ht_scene_t *s, uint32_t now_ms)
     const max_agent_t *attn = max_find(max_m.attn_id);
     if (max_m.view == MAX_VIEW_ATTENTION && attn) max_draw_attention(s, attn, now_ms);
     else if (max_m.view == MAX_VIEW_INBOX) max_draw_inbox(s, now_ms);
-    else if (max_m.view == MAX_VIEW_APPS) max_draw_apps(s);
+    else if (max_m.view == MAX_VIEW_APPS) max_draw_apps(s, now_ms);
     else if (max_m.view == MAX_VIEW_AMBIENT) max_draw_ambient(s, now_ms);
     else max_draw_overview(s, now_ms);
 }
@@ -701,6 +701,8 @@ void max_ui_render(ht_scene_t *s, uint32_t now_ms)
     max_m.row.had = max_m.row.drawn;   // whether the row was on the glass just before (max_row_step)
     max_m.row.drawn = false;
     max_m.row.open_l = max_m.row.open_r = 0;
+    max_m.strip.had = max_m.strip.drawn;   // so Apps' cards (max_draw_apps)
+    max_m.strip.drawn = false;
     s_moving = false;
     max_tint(0, 256);
     max_dim(0);

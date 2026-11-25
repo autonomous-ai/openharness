@@ -285,7 +285,7 @@ static int reach(const item_t *it, kind_t k)
 
 // The row's faded ends (V3 _Fade): black from .9 at the row's end to clear FADE_W in, from under the rails down, each
 // by its own opacity (max_row_step eases them).
-static void fades(ht_scene_t *s, uint32_t now_ms)
+void max_fade_end(ht_scene_t *s, int edge, bool right, int32_t on)
 {
     static EXT_RAM_BSS_ATTR uint16_t black[FADE_W * FADE_H];   // nothing but black
     static EXT_RAM_BSS_ATTR uint8_t alpha[2][FADE_W * FADE_H];
@@ -297,14 +297,16 @@ static void fades(ht_scene_t *s, uint32_t now_ms)
         }
         made = true;
     }
-    const int32_t on[2] = {max_tween_at(&max_m.row.fade_l, now_ms), max_tween_at(&max_m.row.fade_r, now_ms)};
-    for (int k = 0; k < 2; k++) {
-        const unsigned opacity = (unsigned)on[k] * 255 / MAX_ONE;
-        const ht_pro_bitmap_t b = {black, alpha[k], FADE_W, FADE_H, 1, NULL};
-        const int x = k ? ROW_X + ROW_W - FADE_W : ROW_X;
-        if (opacity >= 255) ht_pro_image(s, x, RAIL_H, &b);
-        else if (opacity) ht_pro_image_faded(s, x, RAIL_H, &b, opacity);
-    }
+    const unsigned opacity = (unsigned)on * 255 / MAX_ONE;
+    const ht_pro_bitmap_t b = {black, alpha[right], FADE_W, FADE_H, 1, NULL};
+    const int x = right ? edge - FADE_W : edge;
+    if (opacity >= 255) ht_pro_image(s, x, RAIL_H, &b);
+    else if (opacity) ht_pro_image_faded(s, x, RAIL_H, &b, opacity);
+}
+static void fades(ht_scene_t *s, uint32_t now_ms)
+{
+    max_fade_end(s, ROW_X, false, max_tween_at(&max_m.row.fade_l, now_ms));
+    max_fade_end(s, ROW_X + ROW_W, true, max_tween_at(&max_m.row.fade_r, now_ms));
 }
 
 void max_draw_overview(ht_scene_t *s, uint32_t now_ms)

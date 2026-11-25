@@ -240,7 +240,10 @@ void max_agent_body(ht_scene_t *s, const max_agent_t *a, int x, int w, unsigned 
                     uint32_t now_ms);
 void max_draw_attention(ht_scene_t *s, const max_agent_t *a, uint32_t now_ms);   // max_ui_card.c
 void max_draw_inbox(ht_scene_t *s, uint32_t now_ms);                             // max_ui_lists.c
-void max_draw_apps(ht_scene_t *s);                                               // max_ui_lists.c
+void max_draw_apps(ht_scene_t *s, uint32_t now_ms);                              // max_ui_lists.c
+// A faded end of a row that runs on past it (V3 _Fade): black from .9 at `edge` to clear DX(64) in, the way into the
+// row (right: the row lies left of edge), from under the rails down, `on` of MAX_ONE shown (max_ui_overview.c).
+void max_fade_end(ht_scene_t *s, int edge, bool right, int32_t on);
 // New Harness over the whole glass: its title row with Close at the right end, its choices under it, its buttons at
 // the foot. The toast and the notice keep to the title row, left of Close, while it is up.
 enum {
