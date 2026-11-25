@@ -804,6 +804,8 @@ mod tests {
     const VSCODE: &str = "com.microsoft.VSCode";
     const GHOSTTY_LINE: &str = r#"{"front":"com.mitchellh.ghostty"}"#;
     const VSCODE_LINE: &str = r#"{"front":"com.microsoft.VSCode"}"#;
+    /// What the app first tells every watch on its stdin: it answers each write and Enter line.
+    const WRITES: &str = r#"{"writes":true}"#;
     /// A watch that keeps what it reads on its stdin until it is stopped.
     const RECORDING: [&str; 2] = [r#"{"attached":false}"#, "@record"];
     /// The same, with the dial attached.
@@ -1797,7 +1799,7 @@ mod tests {
         // An app with no name: the watch takes it as no listed app in front.
         fronts.tell("");
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [GHOSTTY_LINE, VSCODE_LINE, r#"{"front":""}"#]);
+        assert_eq!(w.fake.stdin(), [WRITES, GHOSTTY_LINE, VSCODE_LINE, r#"{"front":""}"#]);
     }
 
     #[test]
@@ -1810,10 +1812,10 @@ mod tests {
         assert_eq!(w.runner.run(Effect::SetSound(false)), None);
         assert_eq!(w.runner.run(Effect::SetSound(true)), None);
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [off, on]);
+        assert_eq!(w.fake.stdin(), [WRITES, off, on]);
         // With no watch running there is nothing to write to.
         assert_eq!(w.runner.run(Effect::SetSound(false)), None);
-        assert_eq!(w.fake.stdin(), [off, on]);
+        assert_eq!(w.fake.stdin(), [WRITES, off, on]);
         let lines = w.fake.log().lines();
         assert!(lines.iter().all(|line| !line.contains("muted")), "{lines:?}");
         assert_eq!(w.rest(), []);
@@ -1829,10 +1831,10 @@ mod tests {
         assert_eq!(w.runner.run(Effect::SetNotify(NotifyMode::You)), None);
         assert_eq!(w.runner.run(Effect::SetNotify(NotifyMode::Full)), None);
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [you, full]);
+        assert_eq!(w.fake.stdin(), [WRITES, you, full]);
         // With no watch running there is nothing to write to.
         assert_eq!(w.runner.run(Effect::SetNotify(NotifyMode::You)), None);
-        assert_eq!(w.fake.stdin(), [you, full]);
+        assert_eq!(w.fake.stdin(), [WRITES, you, full]);
         let lines = w.fake.log().lines();
         assert!(lines.iter().all(|line| !line.contains("notify")), "{lines:?}");
         assert_eq!(w.rest(), []);
@@ -1845,18 +1847,19 @@ mod tests {
         // In front before any watch ran: the first is told it as it starts.
         assert_eq!(w.answer(Effect::SpawnWatch), no_dial());
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [GHOSTTY_LINE]);
+        assert_eq!(w.fake.stdin(), [WRITES, GHOSTTY_LINE]);
         // Changed while no watch ran: the next is told the new one.
         fronts.tell(VSCODE);
         assert_eq!(w.answer(Effect::SpawnWatch), no_dial());
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [GHOSTTY_LINE, VSCODE_LINE]);
+        assert_eq!(w.fake.stdin(), [WRITES, GHOSTTY_LINE, WRITES, VSCODE_LINE]);
         // A watch that replaces a running one is told it too, once.
         assert_eq!(w.answer(Effect::SpawnWatch), no_dial());
         assert_eq!(w.answer(Effect::SpawnWatch), no_dial());
         assert!(wait_gone(w.fake.pids()[2]));
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [GHOSTTY_LINE, VSCODE_LINE, VSCODE_LINE, VSCODE_LINE]);
+        let watches = [WRITES, GHOSTTY_LINE, WRITES, VSCODE_LINE, WRITES, VSCODE_LINE, WRITES, VSCODE_LINE];
+        assert_eq!(w.fake.stdin(), watches);
     }
 
     #[test]
@@ -1868,7 +1871,7 @@ mod tests {
             fronts.tell(value);
         }
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [GHOSTTY_LINE, VSCODE_LINE, GHOSTTY_LINE]);
+        assert_eq!(w.fake.stdin(), [WRITES, GHOSTTY_LINE, VSCODE_LINE, GHOSTTY_LINE]);
     }
 
     #[test]
@@ -1902,7 +1905,7 @@ mod tests {
             ["running Terminal", "selected_tty Terminal", "running Terminal", "selected_tty Terminal"]
         );
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [TERMINAL_LINE.to_string(), tab(TTY)]);
+        assert_eq!(w.fake.stdin(), [WRITES.to_string(), TERMINAL_LINE.to_string(), tab(TTY)]);
     }
 
     #[test]
@@ -1935,7 +1938,7 @@ mod tests {
         // The fifth starts once the first four answers are handled.
         scripts.polls(5);
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [TERMINAL_LINE.to_string(), tab(TTY), tab(OTHER)]);
+        assert_eq!(w.fake.stdin(), [WRITES.to_string(), TERMINAL_LINE.to_string(), tab(TTY), tab(OTHER)]);
     }
 
     #[test]
@@ -1951,7 +1954,7 @@ mod tests {
         scripts.gate(false);
         scripts.still(2);
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [TERMINAL_LINE, VSCODE_LINE]);
+        assert_eq!(w.fake.stdin(), [WRITES, TERMINAL_LINE, VSCODE_LINE]);
     }
 
     #[test]
@@ -2062,7 +2065,7 @@ mod tests {
         assert_eq!(scripts.calls(3)[..3], ["running Terminal"; 3]);
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
         assert!(scripts.calls(0).iter().all(|call| call == "running Terminal"), "{:?}", scripts.calls(0));
-        assert_eq!(w.fake.stdin(), [TERMINAL_LINE]);
+        assert_eq!(w.fake.stdin(), [WRITES, TERMINAL_LINE]);
     }
 
     #[test]
@@ -2118,7 +2121,7 @@ mod tests {
         let (log, doubles, stdin) = (w.fake.log(), w.doubles.clone(), w.fake.stdin());
         assert_eq!(w.rest(), []);
         // The ttys went to the watch, and nowhere else.
-        assert_eq!(stdin, [TERMINAL_LINE.to_string(), tab(TTY), tab(OTHER)]);
+        assert_eq!(stdin, [WRITES.to_string(), TERMINAL_LINE.to_string(), tab(TTY), tab(OTHER)]);
         let lines = log.lines();
         assert_eq!(lines.iter().filter(|line| *line == "tabs: Terminal select ok").count(), 2, "{lines:?}");
         assert!(lines.iter().all(|line| !line.contains("ttys")), "{lines:?}");
@@ -2157,7 +2160,10 @@ mod tests {
             assert_eq!(calls[at - 1], "running Ghostty", "{calls:?}");
         }
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [GHOSTTY_LINE.to_string(), wrote(ID, true), wrote(ENTER_ID, true)]);
+        assert_eq!(
+            w.fake.stdin(),
+            [WRITES.to_string(), GHOSTTY_LINE.to_string(), wrote(ID, true), wrote(ENTER_ID, true)]
+        );
     }
 
     #[test]
@@ -2172,7 +2178,7 @@ mod tests {
         w.fake.touch("go");
         scripts.after("write_text");
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [GHOSTTY_LINE.to_string(), wrote(ID, false)]);
+        assert_eq!(w.fake.stdin(), [WRITES.to_string(), GHOSTTY_LINE.to_string(), wrote(ID, false)]);
         // It leaves Ghostty on.
         assert!(tabs_said(&w.fake.log()).is_empty());
     }
@@ -2197,7 +2203,10 @@ mod tests {
         assert_eq!(scripts.calls(6)[4..], ["running Ghostty", "running Ghostty"]);
         scripts.still(6);
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [VSCODE_LINE.to_string(), wrote(ID, true), wrote(ENTER_ID, false)]);
+        assert_eq!(
+            w.fake.stdin(),
+            [WRITES.to_string(), VSCODE_LINE.to_string(), wrote(ID, true), wrote(ENTER_ID, false)]
+        );
     }
 
     #[test]
@@ -2213,7 +2222,7 @@ mod tests {
         log.until(|lines| lines.iter().any(|line| line == "tabs: Ghostty select ok"));
         scripts.still(2);
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [VSCODE_LINE.to_string(), wrote(ID, false)]);
+        assert_eq!(w.fake.stdin(), [WRITES.to_string(), VSCODE_LINE.to_string(), wrote(ID, false)]);
         // A typing answered unrun says why in one fixed line, which names the app alone.
         assert_eq!(tabs_said(&log), ["tabs: Ghostty write refused · no answer yet", "tabs: Ghostty select ok"]);
     }
@@ -2246,7 +2255,7 @@ mod tests {
         scripts.still(2);
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
         // The one past the queue was answered first.
-        let mut answers = vec![VSCODE_LINE.to_string(), wrote(&ids[TYPING_QUEUED], false)];
+        let mut answers = vec![WRITES.to_string(), VSCODE_LINE.to_string(), wrote(&ids[TYPING_QUEUED], false)];
         answers.extend(ids[..TYPING_QUEUED].iter().map(|id| wrote(id, false)));
         assert_eq!(w.fake.stdin(), answers);
         assert!(log.lines().iter().all(|line| !line.contains("ttys") && !line.contains("words")), "{:?}", log.lines());
@@ -2275,7 +2284,7 @@ mod tests {
         log.until(|lines| lines.iter().any(|line| line == "tabs: Ghostty write dropped late"));
         scripts.still(2);
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [VSCODE_LINE.to_string(), wrote(ID, false)]);
+        assert_eq!(w.fake.stdin(), [WRITES.to_string(), VSCODE_LINE.to_string(), wrote(ID, false)]);
         // The late line names the app alone: no line holds the tty or the words.
         assert_eq!(tabs_said(&log), ["tabs: Ghostty select ok", "tabs: Ghostty write dropped late"]);
         assert!(log.lines().iter().all(|line| !line.contains("ttys") && !line.contains("words")), "{:?}", log.lines());
@@ -2310,7 +2319,10 @@ mod tests {
         );
         scripts.still(8);
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [VSCODE_LINE.to_string(), wrote(ID, true), wrote(NEXT_ID, true)]);
+        assert_eq!(
+            w.fake.stdin(),
+            [WRITES.to_string(), VSCODE_LINE.to_string(), wrote(ID, true), wrote(NEXT_ID, true)]
+        );
     }
 
     #[test]
@@ -2341,7 +2353,7 @@ mod tests {
         scripts.still(6);
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
         // Neither watch heard of the words: the one that sent them had gone, and the one after never sent them.
-        assert_eq!(w.fake.stdin(), [VSCODE_LINE, VSCODE_LINE]);
+        assert_eq!(w.fake.stdin(), [WRITES, VSCODE_LINE, WRITES, VSCODE_LINE]);
     }
 
     #[test]
@@ -2363,7 +2375,7 @@ mod tests {
         w.fake.touch("end");
         assert_eq!(w.next(), Event::WatchExit(Some(0)));
         // The words' answer had no watch to go to.
-        assert_eq!(w.fake.stdin(), [VSCODE_LINE]);
+        assert_eq!(w.fake.stdin(), [WRITES, VSCODE_LINE]);
     }
 
     #[test]
@@ -2407,7 +2419,10 @@ mod tests {
         scripts.still(4);
         assert_eq!(scripts.calls(4)[2..], ["running Ghostty", "write_text Ghostty /dev/ttys023 the words spoken"]);
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [VSCODE_LINE.to_string(), wrote(ID, false), wrote(NEXT_ID, false)]);
+        assert_eq!(
+            w.fake.stdin(),
+            [WRITES.to_string(), VSCODE_LINE.to_string(), wrote(ID, false), wrote(NEXT_ID, false)]
+        );
         // No line holds the tty or the words.
         assert_eq!(tabs_said(&log), ["tabs: Ghostty select ok", "tabs: Ghostty not allowed"]);
         assert!(log.lines().iter().all(|line| !line.contains("ttys") && !line.contains("words")), "{:?}", log.lines());
@@ -2424,7 +2439,7 @@ mod tests {
         door.observed(1);
         door.hear(0, title("Fix login"));
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [CHATGPT_LINE, FIX_LOGIN]);
+        assert_eq!(w.fake.stdin(), [WRITES, CHATGPT_LINE, FIX_LOGIN]);
         assert_eq!(door.with(|state| state.observations.len()), 1);
     }
 
@@ -2510,8 +2525,8 @@ mod tests {
         door.hear(4, title("Fix login"));
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
         door.dropped(4);
-        let first = [CHATGPT_LINE, FIX_LOGIN, VSCODE_LINE, CHATGPT_LINE, FIX_LOGIN, FIX_LOGIN, FIX_LOGIN];
-        assert_eq!(w.fake.stdin(), [&first[..], &[CHATGPT_LINE, FIX_LOGIN]].concat());
+        let first = [WRITES, CHATGPT_LINE, FIX_LOGIN, VSCODE_LINE, CHATGPT_LINE, FIX_LOGIN, FIX_LOGIN, FIX_LOGIN];
+        assert_eq!(w.fake.stdin(), [&first[..], &[WRITES, CHATGPT_LINE, FIX_LOGIN]].concat());
     }
 
     #[test]
@@ -2532,7 +2547,7 @@ mod tests {
         door.hear(0, title("Plan the trip"));
         door.hear(1, title("Fix login"));
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [CHATGPT_LINE, FIX_LOGIN, VSCODE_LINE, CHATGPT_LINE, FIX_LOGIN]);
+        assert_eq!(w.fake.stdin(), [WRITES, CHATGPT_LINE, FIX_LOGIN, VSCODE_LINE, CHATGPT_LINE, FIX_LOGIN]);
     }
 
     #[test]
@@ -2686,7 +2701,7 @@ mod tests {
         door.hear(1, Heard::NoObserver);
         assert_eq!(said(&w), 2);
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [CHATGPT_LINE, VSCODE_LINE, CHATGPT_LINE]);
+        assert_eq!(w.fake.stdin(), [WRITES, CHATGPT_LINE, VSCODE_LINE, CHATGPT_LINE]);
     }
 
     #[test]
@@ -2729,7 +2744,7 @@ mod tests {
         });
         done.recv_timeout(WAIT).expect("the app in front is told at once");
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
-        assert_eq!(w.fake.stdin(), [CHATGPT_LINE, VSCODE_LINE]);
+        assert_eq!(w.fake.stdin(), [WRITES, CHATGPT_LINE, VSCODE_LINE]);
         // Once ChatGPT answers, the observation it gives is dropped: ChatGPT left the front meanwhile.
         door.gate(false);
         door.dropped(0);
@@ -2758,7 +2773,7 @@ mod tests {
         // The titles went to the watch, and nowhere else.
         let (secret, another) = (r#"{"thread":"Secret thread"}"#, r#"{"thread":"Another secret"}"#);
         let empty = r#"{"thread":""}"#;
-        assert_eq!(stdin, [CHATGPT_LINE, secret, another, empty, VSCODE_LINE, CHATGPT_LINE, secret]);
+        assert_eq!(stdin, [WRITES, CHATGPT_LINE, secret, another, empty, VSCODE_LINE, CHATGPT_LINE, secret]);
         assert!(events.contains(&follow(true)), "{events:?}");
         assert!(events.iter().all(|event| !format!("{event:?}").contains("ecret")), "{events:?}");
         let lines = log.lines();
