@@ -11,6 +11,7 @@ stay as written, because TABLE is that doc's table and pins it to the digit.
 
 import math
 import random
+import sys
 
 RATE = 16000
 
@@ -81,7 +82,7 @@ def main():
     for row in rows:
         print('\t'.join(str(v) for v in row))
     if rows != TABLE:
-        print("does not match the design doc's table")
+        print("voice_signal.py: table() does not match the design doc's table", file=sys.stderr)
         return 1
     print("matches the design doc's table")
     return 0

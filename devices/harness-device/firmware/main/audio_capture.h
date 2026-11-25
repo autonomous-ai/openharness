@@ -23,7 +23,9 @@
 // The ES7210's analog (PGA) gain. 37.5 dB is the chip's top step, where normal desk speech already touches full
 // scale, and that clip happens in the ADC, before any code sees the samples. 30 dB is the driver's own default
 // and maps to the chip exactly. Like the rate, the gain travels with the audio, as `micGain` in `voice.begin`,
-// because the daemon's copy of the voice gate scales with it.
+// because the daemon's copy of the voice gate scales with it. A new value needs its own levels in voice_buffer.c and
+// in the daemon's voiceLevel.ts, and a CLI release before the firmware ships: until then both read it as 37.5 dB,
+// and quiet speech at a lower gain is counted as no speech.
 #define AUDIO_MIC_GAIN_DB 30.0f
 
 // One-time init of I2S RX + ES7210. Returns true on success (tolerant: false → no mic).
