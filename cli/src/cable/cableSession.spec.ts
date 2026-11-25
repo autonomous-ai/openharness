@@ -8363,6 +8363,7 @@ describe("a resting Claude app row's words (docs/plans/2026-11-21-dial-claude-ap
       // The ChatGPT app's: no ChatGPT row here.
       openThread: vi.fn(),
       queue: { send: vi.fn() },
+      codexHome: '/eval-codex-home',
       monotonic: () => 0,
       log: () => {},
       count: () => {},
@@ -8474,6 +8475,7 @@ describe("a resting ChatGPT row's words (docs/plans/2026-11-23-dial-chatgpt-voic
       after: (ms, run) => { timers.push({ ms, run }); return () => {} },
       openThread: (threadId) => { opens.push(threadId); return new Promise<never>(() => {}) },
       queue: { send: async (threadId, text) => { queued.push({ threadId, text }); return { outcome: 'queued' } } },
+      codexHome: '/eval-codex-home',
       monotonic: () => 0,
       log: () => {},
       count: () => {},
