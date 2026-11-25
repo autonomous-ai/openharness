@@ -332,6 +332,20 @@ describe('restarting an agent', () => {
       expect(restartAgent).not.toHaveBeenCalled()
     })
 
+    // Spelled out, not read from the code under test: these rows are on people's disks, and match only word for word.
+    it.each([
+      'Waiting to confirm the engine executable and native hooks.',
+      'The engine did not start because its executable or native hooks changed. The original launch is held for recovery.',
+    ])('a held first launch 0.6.86 saved goes to restartHeld, whose restore starts it again or fails it: %s', async detail => {
+      const row = agent({ sessionId: '', processIdentity: undefined, launch: { state: 'held', service: 'native', nativeToken: 'original', detail } })
+      const restarted = { ok: true as const, session: row, resumed: false }
+      const run = setup(row, { restartHeld: vi.fn(() => Promise.resolve(restarted)) })
+      expect(await run.restart('a1')).toBe(restarted)
+      expect(run.deps.restartHeld).toHaveBeenCalledWith('a1')
+      expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
+      expect(restartAgent).not.toHaveBeenCalled()
+    })
+
     it('a guard-held conversation goes to restartHeld, as every held conversation does', async () => {
       const row = agent({ processIdentity: undefined, launch: guardHeldLaunch })
       const resumed = { ok: true as const, session: row, resumed: true }

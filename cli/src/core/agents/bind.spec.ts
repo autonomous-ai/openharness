@@ -899,6 +899,25 @@ describe('binding a running process to its session', () => {
       expect(run.deps.registry.register).toHaveBeenCalledTimes(3)
     })
 
+    // A Windows start marker is a FILETIME; these two are 10 s apart.
+    const windowsEarlier = 'w:133700000000000000', windowsLater = 'w:133700000100000000'
+
+    it('a later Windows process may claim a session an earlier one holds', async () => {
+      const run = setup()
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(agent({ sessionId: '' }))
+      run.bySession.set('r', agent({ agentId: 'older', processIdentity: { pid: 1, startMarker: windowsEarlier } } as Partial<RegisteredSession>))
+      await run.binding.bindObservedAgent(observed({ resumeSessionId: 'r', processIdentity: { pid: 42, startMarker: windowsLater } } as Partial<DiscoveredTerminalAgent>))
+      expect(run.deps.registry.register).toHaveBeenCalledOnce()
+    })
+
+    it('an earlier Windows process may not claim a session a later one holds', async () => {
+      const run = setup()
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(agent({ sessionId: '' }))
+      run.bySession.set('r', agent({ agentId: 'newer', processIdentity: { pid: 1, startMarker: windowsLater } } as Partial<RegisteredSession>))
+      await run.binding.bindObservedAgent(observed({ resumeSessionId: 'r', processIdentity: { pid: 42, startMarker: windowsEarlier } } as Partial<DiscoveredTerminalAgent>))
+      expect(run.deps.registry.register).not.toHaveBeenCalled()
+    })
+
     it('moves a session from the agent that had it, telling everything that held it for that agent', async () => {
       const run = setup()
       vi.mocked(run.deps.registry.byProcess).mockReturnValue(agent({ sessionId: '' }))
@@ -954,6 +973,14 @@ describe('binding a running process to its session', () => {
       await run.binding.bindObservedAgent(observed())
       expect(findLiveSession).toHaveBeenCalledTimes(25)
       expect(findLiveSession).toHaveBeenLastCalledWith('claude', '/work', Date.parse('2026-10-04T10:00:00Z'), { bornOnly: true, pid: 42, codexHome: undefined, hermesHome: undefined, expectedProcess: observed().processIdentity })
+    })
+
+    it('repairs a Windows process from its start', async () => {
+      const run = setup()
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(agent({ sessionId: '' }))
+      // The FILETIME of 2024-09-05T08:53:20Z.
+      await run.binding.bindObservedAgent(observed({ processIdentity: { pid: 42, startMarker: 'w:133700000000000000' } } as Partial<DiscoveredTerminalAgent>))
+      expect(findLiveSession).toHaveBeenCalledWith('claude', '/work', Date.parse('2024-09-05T08:53:20Z'), expect.objectContaining({ pid: 42 }))
     })
 
     it('binds what it finds, with the Hermes home it was found in, and starts the count over', async () => {

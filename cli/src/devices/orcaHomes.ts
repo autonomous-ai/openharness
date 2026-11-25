@@ -189,6 +189,9 @@ export function createOrcaHomesCache(deps: { read(): Promise<OrcaHomesRead>; now
   let answered = false
   let readAt: number | undefined
   let reading: Promise<boolean> | undefined
+  // Read every 5 minutes on a computer without Orca, the unchanged `not read · no orca` line filled the log (1059 lines
+  // in one log): a line is said only when it differs from the last one said.
+  let lastLine: string | undefined
 
   // A read that throws is a failed one. What it threw is never said: it can name paths and emails.
   const read = async (): Promise<OrcaHomesRead> => {
@@ -211,9 +214,11 @@ export function createOrcaHomesCache(deps: { read(): Promise<OrcaHomesRead>; now
         const changed = !sameList(homes.claude, next.homes.claude) || !sameList(homes.codex, next.homes.codex)
         homes = next.homes
         answered = next.failure === undefined
-        deps.log(next.failure === undefined
+        const line = next.failure === undefined
           ? `[observed] orca homes · ${homes.claude.length} claude · ${homes.codex.length} codex`
-          : `[observed] orca homes · not read · ${next.failure}`)
+          : `[observed] orca homes · not read · ${next.failure}`
+        if (line !== lastLine) deps.log(line)
+        lastLine = line
         return changed
       })
       return reading

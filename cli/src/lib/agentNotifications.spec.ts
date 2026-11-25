@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { AgentNotifications, DONE_QUIET_MS, type AgentNotification, type NotNews } from './agentNotifications.js'
+import { AgentNotifications, DONE_QUIET_MS, silentCard, type AgentNotification, type NotNews } from './agentNotifications.js'
 
 beforeEach(() => { vi.useFakeTimers() })
 afterEach(() => { vi.useRealTimers() })
@@ -128,5 +128,15 @@ describe('shared desktop/device notification policy', () => {
     const implemented = decided(policy, 's', 'Implemented your choice.')
     vi.runAllTimers()
     expect(implemented).toEqual([{ id: expect.any(String), kind: 'done' }])
+  })
+})
+
+describe('silentCard', () => {
+  it("a card is silent for a sub-agent's turn end or a restored recap, never for a word that is not true", () => {
+    expect(silentCard({ subagent: true })).toBe(true)
+    expect(silentCard({ restored: true })).toBe(true)
+    expect(silentCard({})).toBe(false)
+    expect(silentCard({ subagent: 'true' })).toBe(false)
+    expect(silentCard({ restored: 1 })).toBe(false)
   })
 })

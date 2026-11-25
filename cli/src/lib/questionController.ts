@@ -6,7 +6,7 @@ import type { ShapedQuestion, QuestionRow, QuestionView, ReviewView, PaneView } 
 export type { ShapedQuestion, QuestionRow, QuestionView, ReviewView, PaneView, FoundDialog } from '../engines/facets/screen.js'
 import { contract as amp } from '../engines/amp/contract.js'
 import { contract as kilo } from '../engines/kilo/contract.js'
-import { isApprovalDialog, walkKeys } from '../engines/kit/questionPane.js'
+import { isApprovalDialog, offersApproval, walkKeys } from '../engines/kit/questionPane.js'
 import { errorKind } from './log.js'
 function multiSubmitKey(engine: AgentEngine): string { return engine === 'devin' ? 'Enter' : 'Tab' }
 const STEP_MS = 350          // let the TUI repaint between keystrokes
@@ -176,6 +176,8 @@ export interface AskQuestionDeps {
   sendKey: (terminalTarget: string, key: string) => Promise<boolean>
   /** Pins one backend locator for the whole multi-step dialog drive. */
   acquireControl?: (sessionId: string, opts?: { forAnswer?: boolean }) => (() => void) | null
+  /** The id the watcher still holds for this session's question when `view` is that question (QuestionWatcher.heldRequestId). */
+  heldRequestId?: (sessionId: string, view: QuestionView) => string | undefined
   /** Injected for tests. */
   wait?: (ms: number) => Promise<void>
 }
@@ -383,10 +385,12 @@ export class AskQuestionController {
       lastQuestion = view.question
 
       // Is this the question the answer was for? Only the FIRST one needs the id: every later screen is
-      // one our own keys advanced to, and must be named by its text (below).
+      // one our own keys advanced to, and must be named by its text (below). A question whose dialog moved
+      // since it was announced keeps the id the watcher announced; an approval never does (keepsIdByWords).
       let positional = false
       if (answered === 0 && asked.requestId) {
-        if (!asked.owners.some((owner) => questionRequestId(owner, view) === asked.requestId)) {
+        if (!asked.owners.some((owner) => questionRequestId(owner, view) === asked.requestId
+          || this.deps.heldRequestId?.(owner, view) === asked.requestId)) {
           console.warn(`[question] ${terminalTarget.slice(0, 8)} answer for req=${asked.requestId} arrived after the dialog changed to a question of ${view.question.length} chars — nothing typed`)
           return STALE_CHANGED
         }
@@ -558,8 +562,9 @@ export class QuestionWatcher {
   private timer: NodeJS.Timeout | undefined
   private readonly pendingPolls = new Map<string, { cancelled: boolean }>()
   private readonly pendingBaselines = new Map<string, { cancelled: boolean }>()
-  private last = new Map<string, string>() // sessionId → fingerprint of the announced question
+  private last = new Map<string, string>() // sessionId → fingerprint of the question last seen
   private lastId = new Map<string, string>()  // sessionId → requestId of the announced question
+  private lastWords = new Map<string, string>() // sessionId → its words, kept only when it is a question (questionWords)
   private misses = new Map<string, number>()  // sessionId → consecutive polls with no dialog
   /** Watched sessions a hook said wait, with no dialog of this turn read since. */
   private readonly told = new Set<string>()
@@ -709,19 +714,34 @@ export class QuestionWatcher {
     this.told.clear()
     this.last.clear()
     this.lastId.clear()
+    this.lastWords.clear()
     this.misses.clear()
   }
 
-  /** A device (re)joined: forget what we announced so an open question is pushed again. */
+  /**
+   * A device (re)joined: forget what was last seen so the next poll pushes an open question again, under the
+   * id it was announced with. The ids stay: they are what a later stop or confirmed miss closes, and cleared
+   * here, a question answered or abandoned after a device joined stayed open on every client.
+   */
   reset(): void {
     this.last.clear()
-    this.lastId.clear()
     this.misses.clear()
+  }
+
+  /**
+   * The id this session's question was announced under, while it is held (no confirmed miss), when `view` is
+   * that question: one that may keep its id (keepsIdByWords), with the words announced. Undefined for anything
+   * else, and always for an approval, whose id is its whole body's (questionRequestId).
+   */
+  heldRequestId(sessionId: string, view: QuestionView): string | undefined {
+    const words = this.lastWords.get(sessionId)
+    return words !== undefined && keepsIdByWords(view) && words === questionWords(view) ? this.lastId.get(sessionId) : undefined
   }
 
   private forget(sessionId: string): void {
     this.last.delete(sessionId)
     this.lastId.delete(sessionId)
+    this.lastWords.delete(sessionId)
     this.misses.delete(sessionId)
   }
 
@@ -748,6 +768,7 @@ export class QuestionWatcher {
     this.misses.delete(sessionId)
     if (requestId) {
       this.lastId.delete(sessionId)
+      this.lastWords.delete(sessionId)
       this.deps.onQuestionGone?.(sessionId, requestId)
       return
     }
@@ -812,15 +833,30 @@ export class QuestionWatcher {
     // This turn's dialog is on screen: its close is told as a question's (onQuestionGone), not as clear.
     this.told.delete(sessionId)
     if (this.last.get(sessionId) === fingerprint) return
+    const seen = this.last.has(sessionId)
     this.last.set(sessionId, fingerprint)
+    // The question announced, its dialog moved but not its words: the same question, under the same id. Pushed
+    // again only when nothing was seen since a reset or an unconfirmed miss, as a new dialog would be.
+    const held = this.heldRequestId(sessionId, view)
+    if (held) {
+      if (!seen) this.announce(sessionId, held, view)
+      return
+    }
 
     // A pane-derived question has no tool_use id. The key only has to round-trip through the device and
     // back (the answer is keyed into the pane, not matched to a tool call), so the question's own text
     // serves as both — and the device dedups a repeated push by this id. The answer brings the id back,
     // and AskQuestionController recomputes it off the live pane before typing: a different id there
-    // means a different dialog, and the answer is refused (STALE_QUESTION) instead of keyed into it.
-    const requestId = questionRequestId(sessionId, view)
+    // (and none the watcher holds for it) means a different dialog, and the answer is refused
+    // (STALE_QUESTION) instead of keyed into it.
+    this.announce(sessionId, questionRequestId(sessionId, view), view)
+  }
+
+  private announce(sessionId: string, requestId: string, view: QuestionView): void {
     this.lastId.set(sessionId, requestId)
+    // An approval leaves no words, so it can never keep an id past a change of its body.
+    if (keepsIdByWords(view)) this.lastWords.set(sessionId, questionWords(view))
+    else this.lastWords.delete(sessionId)
     const baseline = this.pendingBaselines.get(sessionId)
     if (baseline) baseline.cancelled = true
     this.deps.onQuestion(sessionId, requestId, [{
@@ -830,7 +866,6 @@ export class QuestionWatcher {
       multi: view.multi,
       ...(view.typeRow && !view.multi && !view.permission ? { canText: true } : {}),
     }], { permission: isApprovalDialog(view), dialog: view.dialog ?? view.question })
-
   }
 }
 
@@ -853,10 +888,31 @@ function questionCaptureGeneration(session: RegisteredSession | undefined): stri
  * every poll — the needs-you alert, the sound, the dial push, again and again — and every answer from a
  * dial, a device or the cable was refused as STALE_QUESTION. `dialogSignature` is the dialog with all of
  * that taken out; the raw text still goes, unchanged, to the pair's floor (isApprovalDialog, pair/sensor).
+ *
+ * Something it does not strip can still move it: one question was seen re-announced every minute under a new
+ * id, and each answer refused. So a question keeps the id it was announced under while its words stay
+ * (QuestionWatcher.heldRequestId), and an approval's id moves with its whole body (keepsIdByWords): an answer
+ * meant for one command must never be typed into another.
  */
 function fingerprintOf(view: QuestionView): string {
-  const base = `${view.question}|${view.rows.map((r) => r.label).join('|')}|${view.multi}`
+  const base = questionWords(view)
   return view.dialog === undefined ? base : `${base}|${dialogSignature(view.dialog)}`
+}
+
+/** A question's words, its options and its arity: what it asks, whatever else its dialog paints. */
+function questionWords(view: QuestionView): string {
+  return `${view.question}|${view.rows.map((r) => r.label).join('|')}|${view.multi}`
+}
+
+/**
+ * Whether a dialog may keep the id it was announced under while the rest of its body moves (heldRequestId): a
+ * question may, an approval never, so an answer meant for one command is never typed into another. isApprovalDialog
+ * alone misses Hermes's and Copilot's, which box their command with no `$ ` line, and Hermes titles its prompt by the
+ * URL under the command: kept by its words, `curl -s` becoming `rm -rf` was not asked again, and the answer was taken.
+ * Rows shaped as an approval's are enough to refuse, so a yes-or-no question moves its id with its body, as before.
+ */
+function keepsIdByWords(view: QuestionView): boolean {
+  return !isApprovalDialog(view) && !offersApproval(view.rows)
 }
 
 // A live status group: an elapsed time (`21s`, `30.5s`, `01m30s`, `1h02m`), a token counter (`↓ 82 tok`,

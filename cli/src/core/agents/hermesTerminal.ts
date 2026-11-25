@@ -7,6 +7,7 @@
 import { HERMES_TERMINAL_SAID } from '../../engines/hermes/contract.js'
 import type { Terminal, TerminalRecordRead } from '../../engines/kit/terminalRecord.js'
 import { sid } from '../../lib/log.js'
+import { startMarkerMs } from '../../lib/processProof.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 import { START_SLACK_MS } from '../../lib/sessionRepair.js'
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
@@ -84,7 +85,7 @@ export function createHermesTerminal(deps: HermesTerminalDeps) {
     const entry = entryOf(agent.agentId)
     const { pid, startMarker } = observed.processIdentity
     const process = `${pid}:${startMarker}`
-    const startedAtMs = Date.parse(startMarker)
+    const startedAtMs = startMarkerMs(startMarker) ?? NaN
     if (entry.run?.process !== process) entry.run = { process, recordSeen: false }
     const run = entry.run
     let names = run.names

@@ -11,10 +11,10 @@ import { access, lstat, opendir, readlink, realpath, stat } from 'node:fs/promis
 import { homedir } from 'node:os'
 import { basename, delimiter, dirname, isAbsolute, join, normalize, resolve, sep } from 'node:path'
 import { env } from '../config/env.js'
-import { ENGINES, PROCESS_ENGINES, type AgentEngine } from '../engines/types.js'
-import { engineInstallPaths, engineInstallRecipe } from './engineInstall.js'
+import { ENGINES, PROCESS_ENGINES, type AgentEngine, type ProcessEngine } from '../engines/types.js'
+import { ENGINE_INSTALL, engineInstallPaths, engineInstallRecipe } from './engineInstall.js'
 import { currentUserShell } from './userShell.js'
-import { windowsLaunchCandidates, windowsLaunchCommand } from './binaryOnPath.js'
+import { resolveBinaryOnPath, windowsLaunchCandidates, windowsLaunchCommand } from './binaryOnPath.js'
 import { hermesBootFile, hermesRoot } from './windows/hermesLaunch.js'
 import { errorKind } from './log.js'
 
@@ -639,6 +639,34 @@ export function enginePathOverride(engine: AgentEngine): string | undefined {
     case 'openclaw': return env.OPENCLAW_PATH
     case 'terminal': return undefined
   }
+}
+
+/**
+ * [engine] where the daemon's lookup looks with no shell started: its path override, its install names on PATH, then the
+ * folders its installer uses; null when none is there. Not engineBin's synchronous lookup, which starts the login shell
+ * again once its last read failed. On Windows each is tried with Windows' extensions (a name that already ends in one,
+ * as it is), and never `cmd`, the command processor there; a file counts only when it can be read as one (a Store
+ * app's alias cannot).
+ */
+export function engineNearby(engine: ProcessEngine, options: { platform?: NodeJS.Platform; environment?: NodeJS.ProcessEnv; home?: string } = {}): string | null {
+  const { platform = process.platform, environment = process.env, home = homedir() } = options
+  const recipe = ENGINE_INSTALL[engine]
+  const names = platform === 'win32' ? recipe.executable.names.filter((name) => name !== 'cmd') : recipe.executable.names
+  const commands = [enginePathOverride(engine), ...names, ...engineInstallPaths(recipe, home, platform, environment.LOCALAPPDATA)]
+  const found = (path: string): boolean => executableFileIdentity(path) !== null
+  for (const command of commands) {
+    if (!command) continue
+    if (platform !== 'win32') {
+      const bin = resolveBinaryOnPath(command, environment, found)
+      if (bin) return bin
+      continue
+    }
+    // No candidates: the name already ends in a program's extension, so it is tried as it is.
+    const candidates = windowsLaunchCandidates(command, environment, platform)
+    const bin = (candidates.length ? candidates : [command]).find(found)
+    if (bin) return bin
+  }
+  return null
 }
 
 export function engineBin(engine: AgentEngine, platform: NodeJS.Platform = process.platform): string {

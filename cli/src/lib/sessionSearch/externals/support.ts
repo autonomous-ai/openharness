@@ -10,6 +10,7 @@ import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 
 import { isHarnessSession, paneOwnerFormat } from '../../harnessSessionLabel.js'
+import { startMarkerMs } from '../../processProof.js'
 import { processRows } from '../../processTable.js'
 import { tmuxFeatures } from '../../tmuxVersion.js'
 import { windowsStartTime } from '../../windows/treeKill.js'
@@ -223,7 +224,7 @@ export async function listProcesses(
   const rows = await read()
   if (!rows) externalReadFailed(new Error('process table unavailable'), 'process table')
   return (rows ?? []).map((row) => {
-    const started = Date.parse(row.startMarker)
+    const started = startMarkerMs(row.startMarker) ?? NaN
     return { pid: row.pid, ppid: row.parentPid, executable: row.executable, args: row.args,
       ...(row.commandPath !== undefined ? { commandPath: row.commandPath } : {}),
       ...(Number.isFinite(started) ? { started } : {}),
