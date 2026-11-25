@@ -11,7 +11,7 @@ import { INJECT_PASTE_DELAY_BASE_MS, INJECT_PASTE_DELAY_MAX_MS } from '../../lib
 import { CONTROL, MAX_TEXT } from './text.js'
 
 /** A lone surrogate: UTF-8 has no form for it, so it is typed as the replacement character. */
-export const LONE_SURROGATE = /\p{Cs}/gu
+const LONE_SURROGATE = /\p{Cs}/gu
 
 /** The words to type, or none when nothing is left or they are too long. A newline would submit part of them and an
  *  escape would steer the screen: only the Enter step submits. */
@@ -39,8 +39,6 @@ export interface TwoSteps<R> {
 }
 
 export interface TwoStep<K> {
-  /** Whether a send is under way on that key. */
-  sending(key: K): boolean
   /** Runs the steps for those words: true once the Enter went, else the first refusal, `busy` (`failed` unless given)
    *  when a send is under way on that key, or `failed` when a step throws. Never rejects. */
   send<R>(key: K, words: string, steps: TwoSteps<R>, failed: R, busy?: R): Promise<true | R>
@@ -50,7 +48,6 @@ export function createTwoStep<K>(after: (ms: number, run: () => void) => unknown
   // Two dials' words at once on one terminal would mix in one prompt.
   const locked = new Set<K>()
   return {
-    sending: (key) => locked.has(key),
     send: async (key, words, steps, failed, busy = failed) => {
       if (locked.has(key)) return busy
       locked.add(key)

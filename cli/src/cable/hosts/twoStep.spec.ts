@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { MAX_TEXT } from './text.js'
-import { cleanWords, createTwoStep, settleMs, type StepAnswer, type TwoSteps } from './twoStep.js'
+import { cleanWords, createTwoStep, settleMs, type StepAnswer, type TwoStep, type TwoSteps } from './twoStep.js'
 
 type Why = 'busy' | 'refused' | 'failed'
 
@@ -47,6 +47,14 @@ function fakeSteps(answers: Partial<{
 
 /** Lets every promise already settled run its callbacks. */
 const drain = () => new Promise<void>((done) => { setImmediate(done) })
+
+/** A send on [key] carried to its end: true when the key was free for it. */
+async function sendAgain(twoStep: TwoStep<number>, clock: { flush(): void }, key: number): Promise<true | Why> {
+  const sent = twoStep.send<Why>(key, 'again', fakeSteps().steps, 'failed')
+  await drain()
+  clock.flush()
+  return sent
+}
 
 describe('cleanWords', () => {
   it('types a control character as a space and a lone surrogate as the replacement character', () => {
@@ -117,7 +125,6 @@ describe('createTwoStep', () => {
     const first = fakeSteps()
     const sent = twoStep.send(1, 'one', first.steps, 'failed')
     await drain()
-    expect(twoStep.sending(1)).toBe(true)
 
     const again = fakeSteps()
     expect(await twoStep.send(1, 'two', again.steps, 'failed')).toBe('failed')
@@ -130,8 +137,8 @@ describe('createTwoStep', () => {
     clock.flush()
     expect(await sent).toBe(true)
     expect(await elsewhere).toBe(true)
-    expect(twoStep.sending(1)).toBe(false)
-    expect(twoStep.sending(2)).toBe(false)
+    expect(await sendAgain(twoStep, clock, 1)).toBe(true)
+    expect(await sendAgain(twoStep, clock, 2)).toBe(true)
   })
 
   it('answers a second send on a key still sending busy, when given one; a step that throws is still failed', async () => {
@@ -160,14 +167,13 @@ describe('createTwoStep', () => {
     const { steps } = fakeSteps({ wordsAnswer: { ok: false, why: 'refused', held } })
     expect(await twoStep.send(1, 'hi', steps, 'failed')).toBe('refused')
     await drain()
-    expect(twoStep.sending(1)).toBe(true)
     const locked = fakeSteps()
     expect(await twoStep.send(1, 'hi', locked.steps, 'failed')).toBe('failed')
     expect(locked.calls).toEqual([])
 
     release()
     await drain()
-    expect(twoStep.sending(1)).toBe(false)
+    expect(await sendAgain(twoStep, clock, 1)).toBe(true)
   })
 
   it('answers failed for a step that throws or rejects, and frees the key', async () => {
@@ -178,7 +184,7 @@ describe('createTwoStep', () => {
       enter: async () => ({ ok: true }),
     }
     expect(await twoStep.send(1, 'hi', throws, 'failed')).toBe('failed')
-    expect(twoStep.sending(1)).toBe(false)
+    expect(await twoStep.send(1, 'hi', fakeSteps().steps, 'failed')).toBe(true)
 
     const rejects: TwoSteps<Why> = {
       check: async () => undefined,
@@ -186,6 +192,6 @@ describe('createTwoStep', () => {
       enter: () => Promise.reject(new Error('gone')),
     }
     expect(await twoStep.send(1, 'hi', rejects, 'failed')).toBe('failed')
-    expect(twoStep.sending(1)).toBe(false)
+    expect(await twoStep.send(1, 'hi', fakeSteps().steps, 'failed')).toBe(true)
   })
 })
