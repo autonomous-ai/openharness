@@ -297,13 +297,48 @@ describe('restarting an agent', () => {
     } finally { releaseStop?.() }
   })
 
-  it.each(['starting', 'held'] as const)('does not replace an unbound native %s launch with a generic fresh restart', async state => {
-    const run = setup(agent({ sessionId: '', launch: state === 'starting' ? { state, nativeToken: 'original' }
-      : { state, nativeToken: 'original', service: 'native', detail: 'Original request held' } }))
-    expect(await run.restart('a1')).toMatchObject({ ok: false, error: 'NATIVE_LAUNCH_HELD' })
-    expect(run.deps.restartHeld).not.toHaveBeenCalled()
-    expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
-    expect(restartAgent).not.toHaveBeenCalled()
+  describe('a native first launch', () => {
+    const guardHeldLaunch = { state: 'held' as const, service: 'native', nativeToken: 'original', detail: 'Starting again.', startsAgain: true as const }
+
+    it('a held first launch restarts through restartHeld, and its answer is the restart\'s', async () => {
+      const row = agent({ sessionId: '', processIdentity: undefined, launch: guardHeldLaunch })
+      // Held again by changing evidence: still a held first launch, shown starting, and the restart succeeded.
+      const heldAgain = { ok: true as const, session: row, resumed: false }
+      const run = setup(row, { restartHeld: vi.fn(() => Promise.resolve(heldAgain)) })
+      expect(await run.restart('a1')).toBe(heldAgain)
+      expect(run.deps.restartHeld).toHaveBeenCalledWith('a1')
+      expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
+      expect(restartAgent).not.toHaveBeenCalled()
+
+      const failed = { ok: false as const, error: 'ENGINE_DID_NOT_START', detail: 'This harness did not start. Close it and open a new one.' }
+      expect(await setup(row, { restartHeld: vi.fn(() => Promise.resolve(failed)) }).restart('a1')).toBe(failed)
+    })
+
+    it('a first launch still starting is refused: "This harness is still starting."', async () => {
+      const run = setup(agent({ sessionId: '', launch: { state: 'starting', nativeToken: 'original' } }))
+      expect(await run.restart('a1')).toEqual({ ok: false, error: 'NATIVE_LAUNCH_HELD', detail: 'This harness is still starting.' })
+      expect(run.deps.restartHeld).not.toHaveBeenCalled()
+      expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
+      expect(restartAgent).not.toHaveBeenCalled()
+    })
+
+    it('a held first launch without startsAgain is refused with the words of today', async () => {
+      const run = setup(agent({ sessionId: '', launch: { state: 'held', nativeToken: 'original', service: 'native', detail: 'Original request held' } }))
+      expect(await run.restart('a1')).toEqual({ ok: false, error: 'NATIVE_LAUNCH_HELD',
+        detail: 'The original launch is held for recovery. Its first prompt or fork cannot be replaced by a fresh launch.' })
+      expect(run.deps.restartHeld).not.toHaveBeenCalled()
+      expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
+      expect(restartAgent).not.toHaveBeenCalled()
+    })
+
+    it('a guard-held conversation goes to restartHeld, as every held conversation does', async () => {
+      const row = agent({ processIdentity: undefined, launch: guardHeldLaunch })
+      const resumed = { ok: true as const, session: row, resumed: true }
+      const run = setup(row, { restartHeld: vi.fn(() => Promise.resolve(resumed)) })
+      expect(await run.restart('a1')).toBe(resumed)
+      expect(run.deps.restartHeld).toHaveBeenCalledWith('a1')
+      expect(restartAgent).not.toHaveBeenCalled()
+    })
   })
 
   it.each(['inspection', 'permission', 'snapshot'] as const)('preserves the live process when restart loses %s evidence', async stage => {
