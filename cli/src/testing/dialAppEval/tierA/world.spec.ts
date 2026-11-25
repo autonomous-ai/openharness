@@ -4,6 +4,8 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createCodexQueue } from '../../../cable/hosts/codexQueue.js'
+import type { TabsLine } from '../../../cable/hosts/tabsLines.js'
+import { tabsTyping } from '../../../cable/hosts/tabsType.js'
 import { env } from '../../../config/env.js'
 import type { CoreApi, CorePorts, DevicesPort } from '../../../core/api.js'
 import type { DevicesDeps, startDevices } from '../../../services/devices.js'
@@ -158,6 +160,33 @@ describe("tier A's world records every send, failing closed", () => {
     const { world, deps } = worldOn('darwin', { ...S1, app: 'claude' })
     await deps.orca!.run('/bin/ps', ['-o', 'pid=,tty=', '-p', '41000'], 1_000)
     expect(world.gaps).toEqual(['a command tier A does not answer: ps'])
+  })
+
+  // Decision 5 (docs/plans/2026-11-25-dial-voice-codex-terminals-design.md): ps's start, a tab's process and lsof's
+  // readers are not readable here, so no tab is typed into in the eval.
+  it("an iTerm2 agent's tab has no proof and takes no words: the tabs probes are not readable", async () => {
+    machine.reset()
+    const { deps } = worldOn('darwin', { ...S1, app: 'iterm' })
+    machine.start({ pid: 41_000, ppid: 1, executable: 'claude', tty: 'ttys003' })
+    expect(await deps.tty!(41_000)).toEqual({ tty: '/dev/ttys003' })
+    expect(await deps.tabProcess!(41_000)).toBeUndefined()
+    expect(await deps.ttyReaders!('/dev/ttys003')).toBeUndefined()
+    // Even a pane given a proof by hand gets no line: its process is not read.
+    const sent: unknown[] = []
+    const line: TabsLine = {
+      writable: () => true,
+      ready: async () => true,
+      send: (typing) => {
+        sent.push(typing)
+        return { answer: Promise.resolve('ok'), settled: Promise.resolve() }
+      },
+      ended: new AbortController().signal,
+    }
+    const typing = tabsTyping({ line: () => line, shared: () => false, process: deps.tabProcess!, readers: deps.ttyReaders!,
+      processes: async () => [], after: () => () => {} })
+    const pane = { adapter: 'tabs', id: 'iterm:/dev/ttys003', proof: { pid: 41_000, start: 'ps:1' } }
+    expect(await typing.type(pane, WORDS, 'claude', () => true)).toEqual({ notSent: 'process' })
+    expect(sent).toEqual([])
   })
 
   it("Cursor's CLI is answered only on a folder, as Linux's folder row runs it: any other run is a gap", async () => {
