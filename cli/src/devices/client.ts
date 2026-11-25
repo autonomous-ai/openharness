@@ -134,18 +134,22 @@ function lines(max: number, line: (text: string) => void): (chunk: Buffer | stri
 }
 
 /**
- * A dial_status reduced to what the menu-bar app shows, so a change of any setting but `muted` and `notify` prints
- * nothing. `muted` only for a dial with an id, the one a Sound change can name; read from the primary's flat fields,
- * never `devices`. `notify`, the Notifications setting, only with a dial attached: it is this computer's, kept by the
- * devices' listener, and the status carries it beside the dial's own settings.
+ * A dial_status reduced to what the menu-bar app shows, so a change of any setting but `muted`, `voiceLang` and `notify`
+ * prints nothing. `muted` and `voiceLang` only for a dial with an id, the one a Sound or Voice language change can name;
+ * read from the primary's flat fields, never `devices`. `voiceLang` only on the settings patch's own pattern, so no
+ * other text of the dial reaches the app. `notify`, the Notifications setting, only with a dial attached: it is this
+ * computer's, kept by the devices' listener, and the status carries it beside the dial's own settings.
  */
 export function dialWatchLine(payload: unknown): string {
   const status = (typeof payload === 'object' && payload !== null ? payload : {}) as Record<string, unknown>
   const line: Record<string, unknown> = { attached: status.attached === true }
   for (const field of DIAL_FIELDS) if (typeof status[field] === 'string') line[field] = status[field]
   const settings = status.settings
-  if (typeof status.id === 'string' && status.id !== '' && typeof settings === 'object' && settings !== null
-    && typeof (settings as Record<string, unknown>).muted === 'boolean') line.muted = (settings as Record<string, unknown>).muted
+  if (typeof status.id === 'string' && status.id !== '' && typeof settings === 'object' && settings !== null) {
+    const { muted, voiceLang } = settings as Record<string, unknown>
+    if (typeof muted === 'boolean') line.muted = muted
+    if (typeof voiceLang === 'string' && deviceSettingsPatchSchema.shape.voiceLang.safeParse(voiceLang).success) line.voiceLang = voiceLang
+  }
   if (line.attached === true && isNotifyMode(status.notify)) line.notify = status.notify
   return JSON.stringify(line)
 }
