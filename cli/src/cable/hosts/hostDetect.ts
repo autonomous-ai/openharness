@@ -20,6 +20,8 @@ export const APP_BUNDLES: Readonly<Record<string, string>> = {
   warp: 'dev.warp.Warp-Stable',
   claude: 'com.anthropic.claudefordesktop',
   codex: 'com.openai.codex',
+  // The Rex app's (its Info.plist, 2026-11-25). Its panes carry no __CFBundleIdentifier: TERM_PROGRAM names it there.
+  rex: 'com.superlogical.rex',
 }
 
 const NAMES: Record<string, string> = {
@@ -71,6 +73,8 @@ const PROGRAM_APPS: Readonly<Record<string, string>> = {
   WarpTerminal: 'warp',
   WezTerm: 'wezterm',
   tmux: 'tmux',
+  // Rex's blocks (docs/specs/2026-11-25-dial-rex.md): Rex is the app the person sees, with no terminal around it.
+  rex: 'rex',
 }
 
 export function hostDisplayName(id: string): string {

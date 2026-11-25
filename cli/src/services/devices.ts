@@ -59,6 +59,7 @@ import { HerdrSource } from '../cable/hosts/herdrSource.js'
 import { createKittyAdapter, createKittyTabAdapter, kittyFinder } from '../cable/hosts/kitty.js'
 import { Inbox } from '../cable/hosts/inbox.js'
 import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer, type AnswerEngine } from '../cable/hosts/lastAnswer.js'
+import { deriveAnswerCard } from '../lib/deviceRecap.js'
 import { systemLinuxRaise, type LinuxRaise } from '../cable/hosts/linuxRaise.js'
 import { createWindowsRaise, harnessDesktopLauncher, type WindowsRaise } from '../cable/hosts/windowsRaise.js'
 import { askedLine, countWord, hostDisplayName, observedAgentId, ObservedSource, type ObservedActions, type ObservedDeps, type PromptSource } from '../cable/hosts/observed.js'
@@ -82,6 +83,7 @@ import { watchSocket } from '../cable/hosts/unixSocket.js'
 import { createVscodeAdapter, termPid } from '../cable/hosts/vscode.js'
 import { readForeground, readProcessParents, vscodeStreams, type VscodeTerminal, type VscodeTerminalsDeps } from '../cable/hosts/vscodeTerminals.js'
 import { createWeztermAdapter, createWeztermTabAdapter } from '../cable/hosts/wezterm.js'
+import { createRexAdapter, createRexReads, rexBlocksRunning, rexFinder, rexPaneIds, rexPaneParts, type RexReads } from '../cable/hosts/rex.js'
 import { createZellijAdapter, createZellijOuter, zellijFinder } from '../cable/hosts/zellij.js'
 import { createEngineTally } from '../cable/engineTally.js'
 import { createVscodeExtensionSetup } from '../cable/vscodeExtensionSetup.js'
@@ -166,6 +168,10 @@ export interface DevicesDeps {
   orca?: OrcaReadDeps
   /** For this service's tests: Orca's focus and order reads (cable/hosts/orca.ts); built on `orca` when unset. */
   orcaReads?: OrcaReads
+  /** For this service's tests: Rex's layout and focus reads (cable/hosts/rex.ts); built on the found `rex` when unset. */
+  rexReads?: RexReads
+  /** For this service's tests: where `rex` is (cable/hosts/rex.ts rexFinder, this computer's when unset). */
+  rex?: ReturnType<typeof rexFinder>
   /** For this service's tests: how `codex` is found and run, what it runs under, and the read of the login shell that
    *  both take (cable/hosts/codexQueue.ts). */
   codex?: Omit<CodexQueueDeps, 'home' | 'cwd'>
@@ -610,9 +616,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const renderer = {
     defaultHome: dirname(env.CLAUDE_PROJECTS_DIR), managed: deps.claudeManagedSettings ?? MANAGED_SETTINGS[apps.platform],
   }
+  /** Whether Claude Code's settings draw a session fullscreen: VS Code's terminals and Rex's blocks page it alike. */
+  const claudeFullscreen = deps.claudeFullscreen ?? ((cwd: string, transcriptPath: string | undefined) => readFullscreen(cwd, transcriptPath, renderer))
   const vscode = vscodeStreams({
     processes: deps.processParents ?? readProcessParents,
-    fullscreen: deps.claudeFullscreen ?? ((cwd, transcriptPath) => readFullscreen(cwd, transcriptPath, renderer)),
+    fullscreen: claudeFullscreen,
     foreground: deps.processGroups ?? readForeground,
     changed: () => part.call('dial', () => cable.syncAgents()),
     focused: (pid, terminal, at, regained) => part.call('dial', () => editorFocused(pid, terminal, at, regained)),
@@ -754,12 +762,24 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  Orca terminal names its Orca session too, and is that terminal's (orcaChat.ts orcaChatId). A chat's pane comes from
    *  the observed source or the chat source, which are built together below. */
   const orcaChat = createOrcaChatAdapter({ ...apps, worktreeOf: (orcaId) => orcaChats!.worktreeOf(orcaId), log })
+  // One lookup of Rex's `rex`, for the tap, the rest, the words, the ring's order and the focus poll (below).
+  const rexAt = deps.rex ?? rexFinder()
+  // Claude Code's fullscreen read as VS Code's terminals read it, so a stroke on a Rex agent pages it the same way.
+  const rex = createRexAdapter({ run: apps.run, rex: rexAt, platform: apps.platform, uid: process.getuid?.() ?? -1,
+    front: () => cableHost.latestFront(), log, now: monotonic, fullscreen: claudeFullscreen })
+  const rexReads = deps.rexReads ?? createRexReads({ run: apps.run, rex: rexAt })
   const adapters: readonly HostAdapter[] = [herdrNoted, noting(createZellijAdapter({ run: apps.run, zellij: zellijAt, platform: apps.platform })),
     // A rest's or a tap's move of tmux's pane is the dial's own: the poll's read that sees it, a moment after it ends, is
     // its echo.
     noting({ ...tmux,
       focus: (pane: Pane) => { const ended = paneTaps.note(pane.id); return tmux.focus(pane).finally(ended) },
       show: (pane: Pane, agentId: string) => { const ended = paneTaps.note(pane.id); return tmux.show!(pane, agentId).finally(ended) } }),
+    // Rex after the multiplexers, which are the nearer host when started in a Rex block, and before the terminals: one
+    // started in a Rex block keeps its REX_BLOCK (docs/specs/2026-11-25-dial-rex.md). A rest's or a tap's block focus is
+    // the dial's own: the focus poll's read that sees it is its echo, as tmux's.
+    noting({ ...rex,
+      focus: (pane: Pane) => { const ended = paneTaps.note(pane.id); return rex.focus(pane).finally(ended) },
+      show: (pane: Pane, agentId: string) => { const ended = paneTaps.note(pane.id); return rex.show(pane, agentId).finally(ended) } }),
     herdrAppNoted, cmuxAppNoted, ...[
     // A tap's focus is the dial's own move: the poll's read that sees it, a moment after it ends, is its echo.
     { ...kitty, focus: (pane: Pane) => { const ended = paneTaps.note(pane.id); return kitty.focus(pane).finally(ended) } },
@@ -1219,7 +1239,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const agentId = cableHost.shownAgentId()
     if (agentId === undefined) return 'no agent'
     const targets = adapters.flatMap((adapter): ScrollTarget[] => {
-      const id = adapter.scroll && observed?.paneOf(agentId, adapter.id)
+      // Rex's also the block its layout placed the agent at by its process (an agent the scan found, with no hook since):
+      // that block runs it, which a page key checks again (rex.ts pageKeys). A held block's id is refused by canScroll.
+      const id = adapter.scroll && (observed?.paneOf(agentId, adapter.id) ?? (adapter.id === rex.id ? observed?.shownAt(agentId, rex.id) : undefined))
       return id ? [{ adapter, pane: { adapter: adapter.id, id } }] : []
     })
     const address = hcSource?.paneOf(agentId)
@@ -1253,8 +1275,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity } })
   /** Lines to the stroke's pane. A page stroke reads its agent again first: once it waits on the person a key could
    *  land in the prompt, so the rest of the stroke is lines alone. */
+  /** The live agent at a stroke's pane: its own, or, in Rex, the agent its layout placed at that block by its process
+   *  (scrollTarget), which no hook has named yet. */
+  const strokeAgent = ({ adapter, pane }: ScrollTarget): HostAgent | undefined => observed?.byPane(adapter.id, pane.id)
+    ?? (adapter.id === rex.id ? observed?.list().find(({ id }) => observed.shownAt(id, rex.id) === pane.id) : undefined)
   const toPane = (route: ToPane, phase: 'down' | 'move' | 'up', dy: number): void => {
-    if (route.page && observed?.byPane(route.adapter.id, route.pane.id)?.state === 'needs-you') route.page = false
+    if (route.page && strokeAgent(route)?.state === 'needs-you') route.page = false
     route.adapter.scroll!(route.pane, route.lines.take(phase, dy), route.page)
   }
   /** What a stroke on that target waits on at its down: Herdr's whether its pane is on screen (its lines, or off screen:
@@ -1263,7 +1289,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  lines, never the windows: the person looks at that terminal, and its line scroll is what moved it before. */
   const routeOf = ({ adapter, pane }: ScrollTarget): Promise<'page' | 'lines' | 'offScreen'> | undefined => {
     if (adapter.onScreen) return adapter.onScreen(pane).then((visible) => (visible ? 'lines' : 'offScreen'))
-    const agent = observed?.byPane(adapter.id, pane.id)
+    const agent = strokeAgent({ adapter, pane })
     if (agent?.engine !== 'claude') return undefined
     const keys = adapter.pageKeys?.(pane, {
       asking: agent.state === 'needs-you', cwd: observed?.startedIn(agent.id), transcriptPath: observed?.transcriptOf(agent.id),
@@ -1946,7 +1972,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         // turn's (this turn's was not found) is not said again.
         if (agent.state === 'done' && agent.lastAnswer && agent.lastAnswer !== was.answer) {
           was.answer = agent.lastAnswer
-          tellOf(agent.id, { ...card, kind: 'summary', text: agent.lastAnswer, recap: agent.lastAnswer, fullText: agent.lastAnswer })
+          // Cut as a Harness agent's turn is: markdown gone from the headline and the text under it.
+          const cut = deriveAnswerCard(agent.lastAnswer)
+          if (cut) tellOf(agent.id, { ...card, kind: 'summary', ...cut })
         }
         continue
       }
@@ -2166,6 +2194,75 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     return readOrcaOrder(source)
   }
   if (observed) observed.onChange(() => part.call('orca', () => orcaMembers(observed)))
+
+  // ── Rex's ring: its order, its names, and the blocks of the agents the scan found ─────────────────────────
+  //
+  // Read from Rex (createRexReads `layout`) each time an agent enters or leaves Rex's page, or one's Rex pane changes,
+  // while a dial is attached, one read at a time, as Orca's (docs/specs/2026-11-25-dial-rex.md, section 5). The ring then
+  // goes as Rex's sidebar does, session by session, tab by tab, block by block, and each agent is named by the title its
+  // block's program set, which the app names the pane and the tab by. An agent the scan found has no hook yet to name its
+  // block: the block whose foreground process is that agent's is its place, matched by pid, for its order, its name and
+  // the block a rest or a tap focuses (never its words: observed.ts shownOnly). Never polled: a tab dragged with no agent
+  // coming or going waits for the next change.
+  /** Rex's ring as the attached dial has it, as orcaRing. */
+  let rexRing: { members?: ReadonlySet<string>; again: boolean } = { again: false }
+  let rexOrdering = false
+  /** The agents on Rex's page: an agent in tmux inside a Rex block is on tmux's (select.ts pageOf). */
+  const rexAgents = (): HostAgent[] => registry.entries().filter(({ agent }) => pageOf(agent) === 'rex').map(({ agent }) => agent)
+  const readRexOrder = (source: ObservedSource): Promise<void> => {
+    const read = rexReads.layout()
+    rexOrdering = true
+    const ring = rexRing
+    return read.then((panes) => {
+      if (ring !== rexRing) return
+      if (panes === null) { log('[device] rex order · failed'); return }
+      log('[device] rex order · read')
+      const at = new Map(panes.map((pane, index) => [`${pane.session}/${pane.block}`, index]))
+      const placed = new Map<string, string>()
+      const rank = new Map<string, number>()
+      for (const { id } of rexAgents()) {
+        // Its own block, as its hook named it. Never the block an earlier read placed it at (shownAt): placed once and
+        // read back as its own, it would be placed no more, and the next read would place it again, without end.
+        const own = source.paneOf(id, rex.id)
+        let parts = own === undefined ? undefined : rexPaneParts(own)
+        if (!parts) {
+          // Found by the scan, or no hook yet: the block running its process, when exactly one is, at every read.
+          const running = rexBlocksRunning(panes, source.windowOf(id)?.pid)
+          if (running.length === 1) {
+            const [{ session, block, pid }] = running
+            placed.set(id, rexPaneIds(session, block, pid)[0])
+            parts = { session, block, held: false }
+          }
+        }
+        // A held block (a multiplexer in it) keeps the agent's place in Rex's order: its process is not the block's.
+        const held = parts ? undefined : source.shownAt(id, rex.id)
+        parts ??= held === undefined ? undefined : rexPaneParts(held)
+        const index = parts && at.get(`${parts.session}/${parts.block}`)
+        if (index !== undefined) rank.set(id, index)
+      }
+      cableHost.setRank('rex', rank)
+      // Every id a block's agent may hold there, its own and the held one, names it by the block's title.
+      source.setPaneNames('rex', new Map(panes.flatMap(({ session, block, pid, title }) => (title === undefined ? []
+        : rexPaneIds(session, block, pid).map((id) => [id, { title, renamed: false }] as const)))), placed)
+    }).finally(() => {
+      rexOrdering = false
+      if (!rexRing.again) return
+      rexRing.again = false
+      part.call('rex', () => readRexOrder(source))
+    })
+  }
+  /** Asks for a read when Rex's page has other members, or a member another Rex pane, than at the last check. */
+  const rexMembers = (source: ObservedSource): Promise<void> | undefined => {
+    // macOS alone, where the Rex app runs: a Linux or Windows pane says TERM_PROGRAM=rex too, with no `rex` to read.
+    if (!dialOn || apps.platform !== 'darwin') return
+    const members = new Set(rexAgents().map(({ id }) => `${id} ${source.shownAt(id, rex.id) ?? ''}`))
+    const was = rexRing.members
+    rexRing.members = members
+    if (members.size === 0 || (was?.size === members.size && [...was].every((id) => members.has(id)))) return
+    if (rexOrdering) { rexRing.again = true; return }
+    return readRexOrder(source)
+  }
+  if (observed) observed.onChange(() => part.call('rex', () => rexMembers(observed)))
   // Each change tells VS Code's and Cursor's windows which agents run in one of their terminals, by their panes: only
   // theirs may cost a read of the process table. A part of its own, so a throw there is never the dial's.
   if (observed) observed.onChange(() => part.call('vscode', () => vscode.agents(observed.list().flatMap(({ id }) =>
@@ -2454,7 +2551,34 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const focusAdapters = (source: ObservedSource, app: string | undefined): string[] => {
     if (app === undefined) return []
     const own = (app === 'wezterm' || app === 'kitty') && source.list().some(({ id }) => source.paneOf(id, app) !== undefined)
+    if (app === rex.id) return rexPanes(source).length ? [rex.id] : []
     return [...own ? [app] : [], ...tmuxPanes(source, app).length ? [tmux.id] : []]
+  }
+  /** The live agents on Rex's page with a block there, their own or the one Rex's layout placed them at (shownAt), and
+   *  that block's session. */
+  const rexPanes = (source: ObservedSource): Array<{ agent: HostAgent; id: string; session: string; block: string }> =>
+    source.list().filter((agent) => pageOf(agent) === 'rex').flatMap((agent) => {
+      const id = source.shownAt(agent.id, rex.id) ?? ''
+      const parts = rexPaneParts(id)
+      return parts && !parts.held ? [{ agent, id, session: parts.session, block: parts.block }] : []
+    })
+  /**
+   * Rex's places, one per session holding an agent's block: the agent's pane at the block focused in the window that
+   * session shows, else null; undefined when every session's read failed. The Rex app shows one session at a time, and
+   * Rex tells no client which (API revision 8): a session whose focus changed since the last read is the one the person
+   * works in, so the poll follows a place that changed (paneAnswered), and a pick of another session in the sidebar alone,
+   * which changes no focus, moves nothing (docs/specs/2026-11-25-dial-rex.md).
+   */
+  const rexFocused = async (source: ObservedSource, signal: AbortSignal): Promise<ReadonlyMap<string, FocusedPane | null> | undefined> => {
+    const panes = rexPanes(source)
+    const focused = await rexReads.focused([...new Set(panes.map(({ session }) => session))], signal)
+    if (focused === undefined) return undefined
+    const places = new Map<string, FocusedPane | null>()
+    for (const [session, block] of focused) {
+      const at = panes.filter((pane) => pane.session === session && pane.block === block)
+      places.set(`rex:${session}`, at.length === 1 ? { adapter: rex.id, id: at[0].id } : null)
+    }
+    return places
   }
   /**
    * tmux's place, with [app] settled in front: the full pane id of the one live agent at the pane its front client shows,
@@ -2486,6 +2610,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       const pane = await tmuxFocused(source, app)
       return pane === undefined ? undefined : new Map([[tmux.id, pane]])
     }
+    if (adapter === rex.id) return rexFocused(source, signal)
     // Once each: two live agents can share a pane, as an ended session not yet seen as ended beside its successor.
     const panes = [...new Set(source.list().flatMap(({ id }) => source.paneOf(id, adapter) ?? []))]
     if (adapter === wezterm.id) {
@@ -2552,8 +2677,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // dial's own while the read ran leaves the pane it names, as for a tab report, and a tap's focus is seen a read later.
     if (first ? dialMovedAt !== undefined && monotonic() - dialMovedAt < ATTACH_ECHO_MS
       : answer.moves !== dialMoves || paneTaps.echo(id, answer.at)) { log('[device] pane · skipped · echo'); return }
-    // Gone while the read ran. One in tmux may sit at the pane the scan placed it at, which byPane never reads.
-    const agent = adapter === tmux.id ? nestedAt(source, adapter, id) : source.byPane(adapter, id)
+    // Gone while the read ran. One in tmux may sit at the pane the scan placed it at, which byPane never reads, and one in
+    // Rex at the block Rex's layout placed it at.
+    const agent = adapter === tmux.id || adapter === rex.id ? nestedAt(source, adapter, id) : source.byPane(adapter, id)
     if (!agent) { log('[device] pane · skipped · unknown agent'); return }
     // tmux's front client is the tab reported as the read started: the person may have selected another since.
     if (!onTabInFront(source, focus.app, agent.id)) { log('[device] pane · skipped · not in front'); return }
@@ -2789,6 +2915,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (!on) {
       // The next attach checks Orca's ring afresh, and a read under way lands on nothing.
       orcaRing = { again: false }
+      rexRing = { again: false }
       part.call('orca', dropFocus)
       // The dial's own herdr moves go with it: herdr's next events are the person's.
       herdrFocuses.clear()
@@ -2797,6 +2924,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // Agents already running when the dial came are listed now, idle until their next hook event.
     part.call('observed', () => scanOpen(observed))
     part.call('orca', () => orcaMembers(observed))
+    part.call('rex', () => rexMembers(observed))
     // A dial plugged in while Orca is already in front: a front told again starts no settle, so none would come until the
     // person left Orca and came back.
     part.call('orca', () => cableHost.settledApp() === 'orca' ? orcaSettled(observed) : undefined)

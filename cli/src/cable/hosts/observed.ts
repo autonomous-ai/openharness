@@ -150,7 +150,7 @@ export interface ObservedDeps {
 
 /** The hints of the panes that take words only on the terminal their host made (Place.ptyOwner): no other caller's
  *  terminal is read. */
-const PTY_HINTS = ['WEZTERM_PANE', 'KITTY_WINDOW_ID', 'ZELLIJ_PANE_ID', 'HERDR_PANE_ID', 'ORCA_TERMINAL_HANDLE']
+const PTY_HINTS = ['WEZTERM_PANE', 'KITTY_WINDOW_ID', 'ZELLIJ_PANE_ID', 'HERDR_PANE_ID', 'ORCA_TERMINAL_HANDLE', 'REX_BLOCK']
 
 /** The variable each multiplexer gives its panes, which a hook's hints carry while it runs in one (askOuter). Not
  *  detectHost: it says herdr for a tmux inside herdr, whose hints carry both. */

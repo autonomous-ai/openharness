@@ -246,8 +246,13 @@ export function ptyMaker(pid: number, rows: readonly PtyProcess[]): PtyMaker | u
   return host ? { pid: maker.pid, host } : { pid: maker.pid }
 }
 
+/** Rex's server, which makes every block's pseudo-terminal (docs/specs/2026-11-25-dial-rex.md, the spike): `rex` in the
+ *  Rex Server app the Rex app installs. By its path alone: a bare `rex` is too common a name to trust. */
+const REX_SERVER = '/Rex Server.app/Contents/MacOS/rex'
+
 /** The host PTY_HOSTS names for a process's name; none for any other. */
 function ptyHostOf(executable: string): string | undefined {
+  if (executable.endsWith(REX_SERVER)) return 'rex'
   const name = basename(executable)
   return Object.hasOwn(PTY_HOSTS, name) ? PTY_HOSTS[name] : undefined
 }
