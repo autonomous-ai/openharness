@@ -22,7 +22,9 @@
  * A stream type (`tabs`, `dial`) is answered with NDJSON lines that stay open: the way the devices process says something
  * to a watch without the watch asking each time. One of a type is open at once, across every connection, or, for a keyed
  * type, one per key up to its limit, a new key past it answered 409: a newer one ends the older with a last line,
- * `{"replaced":true}`, and one asked with `"standby":true` opens only while none is.
+ * `{"replaced":true}`, and one asked with `"standby":true` opens only while none is. A `tabs` stream carries a person's
+ * words only when its watch said `"writes":true`, as it does once Harness Device has told it so: Harness Device 0.1.x
+ * never does, and drops them.
  */
 import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -553,8 +555,8 @@ export function threadHandler(report: (title: string) => void): ListenerHandler 
 
 /** Two a second on a connection: a watch opens it again after it ends, and a loop cannot churn it. */
 export const TABS_PER_SECOND = 2
-/** Its longest message, `{"type":"tabs","standby":false}`, is 31 bytes. */
-export const TABS_MAX_BYTES = 32
+/** Its longest message, `{"type":"tabs","standby":false,"writes":false}`, is 46 bytes. */
+export const TABS_MAX_BYTES = 46
 
 /** Ten a second on a connection: Harness Device answers each typing once, and spoken words are two typings. */
 export const WROTE_PER_SECOND = 10
@@ -570,7 +572,8 @@ export interface TabsStream {
   /** One line for the watch to select the tab; a tap's raises its window too. False with no stream open. Written
    *  whenever the stream takes it: a person's words waiting to be written or answered never hold it back. */
   select(tab: Tab, raise: boolean): boolean
-  /** The open stream's line for a person's words: the same object until its stream ends; none with no stream open. */
+  /** The open stream's line for a person's words: the same object until its stream ends; none with no stream open, or
+   *  one whose watch did not say `writes`. */
   line(): TabsLine | undefined
   /** `{ type, id, ok }`, the watch telling what Harness Device wrote: it answers the send waiting on that id. */
   wrote: ListenerHandler
@@ -579,7 +582,8 @@ export interface TabsStream {
 /** A stream a watch opened, as the tabs stream writes on it. */
 interface Opened {
   stream: ListenerStream
-  line: TabsLine
+  /** None when its watch did not say `writes`: Harness Device 0.1.x drops a typing unanswered. */
+  line?: TabsLine
   select(line: unknown): boolean
   /** Its sends waiting for their `wrote`, by id: each answers (unless its time did already), settles and is gone. */
   pending: Map<string, (word: WroteAnswer) => void>
@@ -593,9 +597,10 @@ function unrefAfter(ms: number, run: () => void): () => void {
 }
 
 /**
- * The stream a watch holds open: the devices tell it which tab to select, and send a person's words and their Enter on
- * it for Harness Device to write (cable/hosts/tabsLines.ts), each answered by the watch's `wrote`. Nothing waits for a
- * stream that is not open: a select then is not sent. It logs nothing: a line holds a tty and a person's words.
+ * The stream a watch holds open: the devices tell it which tab to select and, when its watch said `writes`, send a
+ * person's words and their Enter on it for Harness Device to write (cable/hosts/tabsLines.ts), each answered by the
+ * watch's `wrote`. Nothing waits for a stream that is not open: a select then is not sent. It logs nothing: a line holds
+ * a tty and a person's words.
  */
 export function tabsStream({ id = () => randomBytes(8).toString('hex'), after = unrefAfter }: {
   id?: () => string
@@ -603,7 +608,7 @@ export function tabsStream({ id = () => randomBytes(8).toString('hex'), after = 
 } = {}): TabsStream {
   let open: Opened | undefined
 
-  const opened = (stream: ListenerStream): Opened => {
+  const opened = (stream: ListenerStream, writes: boolean): Opened => {
     // Whether the stream can take a person's words: from its saying so to the next line written on it, a select's or a
     // send's. A select never asks: it is written whenever the stream takes it, as before words went on the stream.
     let writable = false
@@ -670,14 +675,17 @@ export function tabsStream({ id = () => randomBytes(8).toString('hex'), after = 
       },
       ended: stream.ended,
     }
-    return { stream, line, select: put, pending }
+    return { stream, line: writes ? line : undefined, select: put, pending }
   }
 
   return {
     handler: {
       maxBytes: TABS_MAX_BYTES,
       perSecond: TABS_PER_SECOND,
-      open: (_message, stream) => { open = opened(stream) },
+      open: ({ writes }, stream) => {
+        if (writes !== undefined && typeof writes !== 'boolean') return REFUSED
+        open = opened(stream, writes === true)
+      },
     },
     isOpen: () => open !== undefined,
     select: ({ app, tty }, raise) => open?.select(raise ? { app, tty, raise: true } : { app, tty }) ?? false,
