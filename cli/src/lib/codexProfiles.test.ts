@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import type * as CodexProfilesModule from './codexProfiles.js'
@@ -241,5 +241,101 @@ describe('codexProfiles', () => {
     const { listCodexProfiles } = await loadModule()
     writeFileSync(join(dataDir, 'codex-profiles.json'), 'not json', { mode: 0o600 })
     expect(listCodexProfiles([], emptyDiscovery)).toEqual([])
+  })
+
+  // Windows has no mode bits: the data folder's place protects the list there.
+  it.skipIf(process.platform === 'win32')('the linked homes are read and the list keeps its mode', async () => {
+    const { readLinkedCodexHomes } = await loadModule()
+    const file = join(dataDir, 'codex-profiles.json')
+    writeFileSync(file, JSON.stringify(['/a', '/b']))
+    chmodSync(file, 0o600)
+    expect(readLinkedCodexHomes()).toEqual(['/a', '/b'])
+
+    // The linker's reader makes this one 0o600.
+    chmodSync(file, 0o640)
+    expect(readLinkedCodexHomes()).toEqual(['/a', '/b'])
+    expect(statSync(file).mode & 0o777).toBe(0o640)
+  })
+
+  it.skipIf(process.platform === 'win32')('a linked list another account could write names no home', async () => {
+    const { readLinkedCodexHomes } = await loadModule()
+    const file = join(dataDir, 'codex-profiles.json')
+    writeFileSync(file, JSON.stringify(['/a']))
+    for (const mode of [0o660, 0o606]) {
+      chmodSync(file, mode)
+      expect(readLinkedCodexHomes()).toEqual([])
+      expect(statSync(file).mode & 0o777).toBe(mode)
+    }
+  })
+
+  it.skipIf(process.platform === 'win32')('a link at the linked list names no home', async () => {
+    const { readLinkedCodexHomes } = await loadModule()
+    const elsewhere = join(home, 'elsewhere.json')
+    writeFileSync(elsewhere, JSON.stringify(['/a']))
+    chmodSync(elsewhere, 0o600)
+    symlinkSync(elsewhere, join(dataDir, 'codex-profiles.json'))
+    expect(readLinkedCodexHomes()).toEqual([])
+  })
+
+  it('a linked list that is not JSON names no home and stays where it is', async () => {
+    const { readLinkedCodexHomes } = await loadModule()
+    const file = join(dataDir, 'codex-profiles.json')
+    writeFileSync(file, '["/a', { mode: 0o600 })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(readLinkedCodexHomes()).toEqual([])
+    expect(readFileSync(file, 'utf8')).toBe('["/a')
+    expect(existsSync(`${file}.unreadable`)).toBe(false)
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('a missing linked list, or one over 1 MiB, names no home', async () => {
+    const { readLinkedCodexHomes } = await loadModule()
+    expect(readLinkedCodexHomes()).toEqual([])
+    writeFileSync(join(dataDir, 'codex-profiles.json'), JSON.stringify(['/a', 'x'.repeat(1024 * 1024)]), { mode: 0o600 })
+    expect(readLinkedCodexHomes()).toEqual([])
+  })
+
+  it('a linked list names its first 256 homes', async () => {
+    const { readLinkedCodexHomes } = await loadModule()
+    const listed = Array.from({ length: 300 }, (_, i) => `/h/${i}`)
+    writeFileSync(join(dataDir, 'codex-profiles.json'), JSON.stringify(listed), { mode: 0o600 })
+    expect(readLinkedCodexHomes()).toEqual(listed.slice(0, 256))
+  })
+
+  it('the trusted homes are the own ones then the linked ones, each followed by its real path, once', async () => {
+    const { trustedCodexHomes } = await loadModule()
+    const real = (path: string) => path === '/o' ? '/private/o' : path === '/gone' ? null : path
+    expect(trustedCodexHomes(() => ['/o'], () => 0, () => ['/l'], real)()).toEqual(['/o', '/private/o', '/l'])
+    // Linked by its real path, and a home whose real path cannot be read now.
+    expect(trustedCodexHomes(() => ['/o'], () => 0, () => ['/private/o', '/gone', '/l'], real)())
+      .toEqual(['/o', '/private/o', '/gone', '/l'])
+  })
+
+  it('the linked list and the real paths are held 30 s, the own homes asked at every call', async () => {
+    const { trustedCodexHomes, TRUSTED_HOMES_MS } = await loadModule()
+    expect(TRUSTED_HOMES_MS).toBe(30_000)
+    let clock = 0
+    let ownHomes = ['/o']
+    const own = vi.fn(() => ownHomes)
+    const read = vi.fn(() => ['/l'])
+    const real = vi.fn((path: string) => path)
+    const homes = trustedCodexHomes(own, () => clock, read, real)
+    for (let call = 0; call < 100; call++) {
+      clock = call * 299
+      homes()
+    }
+    expect(own).toHaveBeenCalledTimes(100)
+    expect(read).toHaveBeenCalledTimes(1)
+    expect(real).toHaveBeenCalledTimes(2)
+
+    // An adopted home counts at once.
+    ownHomes = ['/o', '/adopted']
+    expect(homes()).toEqual(['/o', '/adopted', '/l'])
+    expect(read).toHaveBeenCalledTimes(1)
+
+    clock = 30_000
+    homes()
+    expect(read).toHaveBeenCalledTimes(2)
+    expect(real).toHaveBeenCalledTimes(6)
   })
 })
