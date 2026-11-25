@@ -50,14 +50,15 @@ What the person gets:
 | Row | An Orca row, in Orca's tab order at the tmux tab, named by that tab. Unplaced (two tmux agents in one folder, or an Orca that named no engine), it sits after the placed rows, named by its session's title. |
 | Worktree scope | In scope when placed in the worktree on screen. Unplaced, it drops out whenever the Orca plugin names a worktree, so it is off the ring while Orca is in front. |
 | Pro | The Orca room leaves it out: the Pro groups by `host`, which is `tmux` (#4578 known gap). |
-| Tap | Orca switches to its placed tab, tmux shows its pane on its own session (`tmux.ts:188`: it selects the window and pane, or on macOS may switch the client to it), Orca comes forward. Unplaced: tmux shows the pane, Orca comes forward on whatever tab it shows. |
-| Rest (swipe) | The same switch and select, with no raise, while Orca is in front (`tmux.ts:210` `canShow`). |
+| Tap | tmux shows its pane on its own session (`tmux.ts:188`: it selects the window and pane, or on macOS may switch the client to it), and Orca comes forward on whatever tab it shows. **Orca does not switch to its tab:** the tap opens the pane of the host that made its terminal, tmux's (`observed.ts` `target`), and after it only a `tap: 'after'` pane is focused (`raiseAfter`), which Orca's is not (`orca.ts` `tap: 'before'`). Found by O11's run, 2026-11-25. |
+| Rest (swipe) | tmux shows its pane, with no raise, while Orca is in front (`tmux.ts:210` `canShow`). |
 | Voice | Never typed into the Orca handle or into tmux (the devices never type into the person's tmux, `services/AGENTS.md`). Claude Code takes the words through its mod, Codex through `codex queue` in Harness's Codex home; otherwise "did not answer". No wrong-session path. |
 | Focus follow: Orca tab | Not followed. Orca's focus line looks up an own Orca pane only (`devices.ts:2446` `byPane`); a placed agent has none: `focus · skipped · unknown agent`. |
 | Focus follow: tmux pane switch | Not followed. The tmux pane poll takes only agents on tmux's page (`devices.ts:2539`). |
 | Focus follow: prompt | Followed while Orca is in front: an agent with no own Orca pane is not skipped. |
 
-So today it is an Orca row that taps and speaks right, but the dial does not follow you to it.
+So today it is an Orca row that speaks right; a tap shows its tmux pane but leaves Orca on whatever tab it was on, and the
+dial does not follow you to it.
 
 ## 2. What O11 expects and why it scores low
 
@@ -92,7 +93,9 @@ Why:
   Orca handle (the gate). The Orca world installs the tmux model for a scenario with a `tmux: true` session, so all
   three platforms run the real lookup. The eval spec's decision 2 is replaced by Diego's 2026-11-23 rule.
 - **Person:** nothing changes.
-- **Tap / voice:** as today, correct; graded now.
+- **Tap / voice:** graded now. Voice passes. The tap is graded on what the person expects, Orca switching to its tab
+  (the eval's decision 3), so `open` is 0 at baseline: a hill-climb item, its product fix in the PM's backlog (PM,
+  2026-11-25).
 - **Wrong-session risk:** none new.
 - **Left open:** the dial does not follow a focus to that tab or a tmux pane switch inside it; the Pro's Orca room
   leaves it out.
