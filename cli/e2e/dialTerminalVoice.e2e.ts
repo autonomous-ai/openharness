@@ -3,7 +3,8 @@
  * part B), on the real daemon: Claude Code without its mod runs on a pseudo-terminal of its own (harness/outsideAgent.ts)
  * with Ghostty's hints in its hook environment, so `ps` and `lsof` read a real tty of the test's own process, and a fake
  * dial speaks to it. The real Ghostty is never asked anything: no Harness Device runs, and the test plays it on the real
- * `harness hardware watch --json`: Ghostty in front on its stdin, each write and enter line read on its stdout and
+ * `harness hardware watch --json`: told on its stdin first that it answers writes, as Harness Device tells it (no write
+ * line goes to a watch never told so), then Ghostty in front, each write and enter line read on its stdout and
  * answered on its stdin, an enter typed into the tab as the words kept from the write and Enter. An agent in iTerm2 gets
  * no write line: iTerm2's write reaches every pane its Broadcast Input joins.
  *
@@ -67,7 +68,8 @@ describe.skipIf(process.platform !== 'darwin')('the dial\'s words reach an agent
   /**
    * `harness hardware watch --json` as Harness Device runs it, under the daemon's environment only: it finds this
    * daemon's data folder and the devices' socket in it, never this Mac's, so it can never take the tabs stream from a
-   * real Harness Device's watch. Ghostty is in front from its first line. The test is Harness Device: each write line is
+   * real Harness Device's watch. Its first line says it answers writes, as Harness Device's does, then Ghostty is in
+   * front. The test is Harness Device: each write line is
    * kept and answered [written]; each enter line types the words kept into [engine]'s tab with Enter, as Ghostty's
    * `send key "enter"` submits them, and is answered ok.
    */
@@ -94,6 +96,7 @@ describe.skipIf(process.platform !== 'darwin')('the dial\'s words reach an agent
       tell({ wrote: { id, ok: 'enter' in line || written } })
       typings.push({ line, id, at, answered: Date.now() })
     })
+    tell({ writes: true })
     tell({ front: GHOSTTY })
     return { typings: () => [...typings], stderr: () => stderr }
   }
