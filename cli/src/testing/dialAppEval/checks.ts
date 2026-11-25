@@ -497,8 +497,8 @@ const orcaRuns = (argv: string[], group: string, verb: string): boolean =>
  * passes.
  *
  * A row under tmux in tier A has a pane part after its switch: a tmux command that succeeded showed its own pane and
- * none showed another session's (docs/plans/2026-11-25-dial-orca-tmux-o11-design.md, Tap). Tier B's Orca rig records no
- * tmux run, so there it has none.
+ * none showed another session's (docs/plans/2026-11-25-dial-orca-tmux-o11-design.md, Tap), and a tap is timed to the
+ * later of its raise and its own pane's first show. Tier B's Orca rig records no tmux run, so there it has none.
  */
 function orcaOpenParts(session: SessionDef, world: World, w: Window | undefined, tier: Tier, platform: Platform,
   commands: Seen['commands'], inputs: string[]): Part[] {
@@ -530,7 +530,11 @@ function orcaOpenParts(session: SessionDef, world: World, w: Window | undefined,
   const tmuxed = session.tmux === true && tier === 'a' && !chat
   const pane = (c: Seen['commands'][number]): string | undefined => (tmuxed ? tmuxShows(c.argv, world) : undefined)
   // A failed move showed no pane.
-  const panes = commands.filter((c) => c.ok).flatMap((c) => pane(c) ?? [])
+  const moves = commands.filter((c) => c.ok).flatMap((c) => {
+    const key = pane(c)
+    return key === undefined ? [] : [{ at: c.at, key }]
+  })
+  const own = moves.find((m) => m.key === session.key)
   const evidence = bounded([...inputs, ...commands.map((c) => {
     const to = target(c)
     const shows = pane(c)
@@ -544,12 +548,13 @@ function orcaOpenParts(session: SessionDef, world: World, w: Window | undefined,
   const parts: Part[] = chat ? [{ part: 'worktree', score: switched < 0 ? 0 : 1, timed: false, evidence }] : [
     { part: 'worktree', score: switched >= 0 && (activated || (shown === undefined && !laid)) ? 1 : 0, timed: false, evidence },
     { part: 'switch', score: switched < 0 ? 0 : 1, timed: false, evidence },
-    ...(tmuxed ? [{ part: 'pane', score: switched >= 0 && panes.length > 0 && panes.every((k) => k === session.key) ? 1 : 0,
+    ...(tmuxed ? [{ part: 'pane', score: switched >= 0 && moves.length > 0 && moves.every((m) => m.key === session.key) ? 1 : 0,
       timed: false, evidence }] : []),
   ]
   if (input?.kind === 'swipe') parts.push({ part: 'noRaise', score: switched >= 0 && !commands.some(raises) ? 1 : 0, timed: false, evidence })
   else if (tier === 'a' || platform !== 'linux') {
-    const latency = raised && w ? raised.at - w.from : null
+    // The person sees their pane once both Orca is forward and tmux shows it, as iTerm2 times its latest part.
+    const latency = raised && w ? Math.max(raised.at, own?.at ?? raised.at) - w.from : null
     parts.push({ part: 'raise', score: raised ? 1 : 0, timed: false, evidence },
       { part: 'latency', score: graded(latency, THRESHOLDS.open), timed: true, ms: latency, evidence })
   }
