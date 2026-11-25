@@ -68,7 +68,7 @@ import { createOpencodeClient, opencodeClientDeps, opencodeMessageId, type Openc
 import { OpencodeSource } from '../cable/hosts/opencodeSource.js'
 import { createOrcaAdapter, createOrcaReads, orcaDeps, orcaHandle, type OrcaFocusWatch, type OrcaReadDeps, type OrcaReads, type OrcaTerminal } from '../cable/hosts/orca.js'
 import { createOrcaChatAdapter, ORCA_CHAT_ADAPTER } from '../cable/hosts/orcaChat.js'
-import { OrcaChatSource } from '../cable/hosts/orcaChatSource.js'
+import { ORCA_CHAT_TIMEOUT_MS, OrcaChatSource } from '../cable/hosts/orcaChatSource.js'
 import { firstOuter, type NestedLookup } from '../cable/hosts/outer.js'
 import { readRecord } from '../cable/hosts/record.js'
 import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
@@ -1428,7 +1428,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       noteMove()
       count((usage) => usage.used())
     },
-    localFollowed: (cause, outcome) => log(FOLLOWED[cause === 'attach' ? attachAsk : cause][outcome]),
+    localFollowed: (cause, outcome) => {
+      // The latest follow is the person's latest move: a chat's prompt still waiting for Orca's list is older.
+      if (cause !== 'prompt') chatPrompt = undefined
+      log(FOLLOWED[cause === 'attach' ? attachAsk : cause][outcome])
+    },
     swarmSelected: (swarmId) => core.clients.sendLocal({ type: 'dial_swarm', payload: { swarmId } }),
     // Guarded as a notice into the dial is: a throw on the scroll path (a window's stream) is logged, never the session's.
     scrolled: (phase, dy, velocity) => {
@@ -1983,6 +1987,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // The chats' places in Orca's ring follow Orca's list (rankOrca, below).
   orcaChats?.onChange(() => part.call('orca', () => rankOrca(orcaChats)))
   orcaChats?.onChange(() => part.call('dial', outsideTurn))
+  // After the dial's look, so its ring holds the chat it turns to.
+  orcaChats?.onChange(() => part.call('dial', () => chatListed(orcaChats)))
   /** One of the observed source's timers, each run guarded as a notice is: one that throws is logged and the next runs. */
   const every = (ms: number, run: () => unknown): ReturnType<typeof setInterval> => {
     const timer = setInterval(() => part.call('observed', run), ms)
@@ -2947,6 +2953,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    * Harness agent.
    */
   const followPrompt = (agentId: string, source: PromptSource): Promise<void> | undefined => {
+    chatPrompt = undefined
     // No dial linked: nothing to turn or count. The turn still used up a dial's prompt, in `ingest`.
     if (!cable.isConnected) return
     if (source === 'relayed') { log('[device] prompt · skipped · relayed'); return }
@@ -2958,7 +2965,28 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (focusWatch && observed?.paneOf(agentId, 'orca') !== undefined) { log('[device] prompt · skipped · focus followed'); return }
     // Before the dials are asked: an agent in tmux or herdr turns them to that page (Diego's decision 4, 2026-11-23).
     cableHost.followPage(agentId)
+    if (orcaChats && observed?.paneOf(agentId, ORCA_CHAT_ADAPTER) !== undefined && orcaChats.worktreeOfAgent(agentId) === undefined) {
+      chatPrompt = { agentId, source, at: monotonic(), moves: dialMoves }
+    }
     return cable.followLocal(agentId, 'prompt')
+  }
+  /**
+   * A new Orca chat's first prompt comes before the read its first hook asked lands, and a scoped ring holds only the
+   * chats Orca's list names (chatOnScreen): the dials answer no tile. The prompt is kept, the latest alone, and followed
+   * again once Orca's list names its chat, unless the dial moved or followed anything since, or the list came later
+   * than a read may take. Dropped at any later prompt.
+   */
+  let chatPrompt: { agentId: string; source: PromptSource; at: number; moves: number } | undefined
+  /** Orca's list changed: a kept chat prompt it names now is followed, once. */
+  const chatListed = (chats: OrcaChatSource): Promise<void> | undefined => {
+    const kept = chatPrompt
+    if (!kept) return
+    const late = monotonic() - kept.at > ORCA_CHAT_TIMEOUT_MS
+    if (!late && kept.moves === dialMoves && chats.worktreeOfAgent(kept.agentId) === undefined) return
+    chatPrompt = undefined
+    if (late) { log('[device] prompt · skipped · listed late'); return }
+    if (kept.moves !== dialMoves) { log('[device] prompt · skipped · dial moved'); return }
+    return followPrompt(kept.agentId, kept.source)
   }
   // ── the session the Claude app shows ───────────────────────────────────────────────────────────────
   //

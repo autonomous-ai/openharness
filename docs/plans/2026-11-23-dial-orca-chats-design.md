@@ -184,7 +184,10 @@ The APPS page's Orca count is every Orca agent, chats included, as today for ter
 
 - **Worktree:** the plugin's `orcaFront` changes the ring (today, now with chats).
 - **Prompt:** a chat's turn-start hook moves the dial to it while Orca is in front (`followLocal`), now that the chat is
-  a tile in scope. The log says `prompt · moved` where it said `no tile`.
+  a tile in scope. The log says `prompt · moved` where it said `no tile`. A new chat's first prompt comes before the
+  read its first hook asked lands (found on a dial, 2026-11-25): it is kept, the latest alone, and followed once Orca's
+  list names the chat, unless the dial moved or followed anything since, or the list came later than a read may take
+  (`ORCA_CHAT_TIMEOUT_MS`). Those two log `prompt · skipped · dial moved` and `listed late`.
 - **State:** a chat's working, done and needs-you come from its hooks while its process runs, and from Orca's list
   otherwise.
 - **A click on a tab or chat:** not followed until Part 2.

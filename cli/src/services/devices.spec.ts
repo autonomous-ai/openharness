@@ -23,6 +23,7 @@ import { observedAgentId, ObservedSource } from '../cable/hosts/observed.js'
 import { OPENCODE_MESSAGE, opencodeClientDeps, type OpencodeAnswer, type OpencodeClient, type OpencodeEvent, type OpencodeFault, type OpencodePrompt } from '../cable/hosts/opencodeClient.js'
 import { OpencodeSource } from '../cable/hosts/opencodeSource.js'
 import { MAX_TEXT, type OrcaChild, type OrcaReads, type OrcaTabs, type OrcaTerminal } from '../cable/hosts/orca.js'
+import { ORCA_CHAT_TIMEOUT_MS } from '../cable/hosts/orcaChatSource.js'
 import { FRESH_WITHIN_MS } from '../cable/hosts/outer.js'
 import { AppRings } from '../cable/hosts/select.js'
 import { env } from '../config/env.js'
@@ -13833,7 +13834,7 @@ describe('Orca\'s chats on the dial (docs/plans/2026-11-23-dial-orca-chats-desig
    * (an activate, an `open -b`) answers 0, each recorded. No window, no dial, no stream and nothing settled in front yet.
    * The timers are held; `setImmediate` is left to let a read land.
    */
-  const withChats = async (over: { platform?: NodeJS.Platform; agents?: readonly unknown[] } = {}) => {
+  const withChats = async (over: { platform?: NodeJS.Platform; agents?: readonly unknown[]; now?: () => number } = {}) => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
     const answer = { agents: (over.agents ?? AGENTS) as unknown, held: false, waiting: [] as Array<() => void> }
     const deps = {
@@ -13854,7 +13855,7 @@ describe('Orca\'s chats on the dial (docs/plans/2026-11-23-dial-orca-chats-desig
     }
     const listener = fakeListener()
     const fake = fakeOrcaReads()
-    const started = start({ orca: deps, orcaReads: fake.reads, listen: listener.listen, tty: async () => undefined, faults: ['fleet'] })
+    const started = start({ orca: deps, orcaReads: fake.reads, listen: listener.listen, tty: async () => undefined, faults: ['fleet'], now: over.now })
     started.port.swarms(null)
     const settle = async (app: string) => {
       expect(listener.front(app)).toBeUndefined()
@@ -14091,6 +14092,86 @@ describe('Orca\'s chats on the dial (docs/plans/2026-11-23-dial-orca-chats-desig
     dialFollows()
     port.observed(inChat(3, 'turn-start'))
     await vi.waitFor(() => expect(logs.filter((line) => line.startsWith('[device] prompt'))).toEqual(['[device] prompt · moved']))
+  })
+
+  describe('the first prompt of a chat Orca\'s list does not name yet', () => {
+    const prompts = () => logs.filter((line) => line.startsWith('[device] prompt'))
+    /**
+     * Orca settled in front on wt-5, its list without chats 3 and 17. Chat 17's hook asks a read, held; chat 3 is new,
+     * and its hook asks one more after it. Its prompt comes before either lands, so the scoped ring lacks it: no tile.
+     */
+    const newChatPrompt = async (over: { now?: () => number } = {}) => {
+      const started = await scoped({ ...over, agents: AGENTS.filter((_, at) => at !== 2 && at !== 16) })
+      started.listener.orcaFront([], ON_WT5)
+      await settled()
+      expect(await ring()).toEqual([resting(1), resting(2)])
+      dialFollows()
+      started.answer.held = true
+      started.port.observed(inChat(17))
+      started.port.observed(inChat(3))
+      started.port.observed(inChat(3, 'turn-start'))
+      await vi.waitFor(() => expect(prompts()).toEqual(['[device] prompt · skipped · no tile']))
+      /** Both reads let go, chat 3 in their list. */
+      const listed = async () => {
+        started.answer.agents = AGENTS
+        started.answer.held = false
+        await started.letGo()
+        await started.letGo()
+      }
+      return { ...started, listed }
+    }
+
+    it('moves the dial once the read that lists it lands, and only then', async () => {
+      const { answer, letGo } = await newChatPrompt()
+      // The read under way when the chat was made lists chat 17 alone: the list changed, and chat 3 is still to come.
+      answer.agents = AGENTS.filter((_, at) => at !== 2)
+      await letGo()
+      expect(prompts()).toEqual(['[device] prompt · skipped · no tile'])
+      answer.agents = AGENTS
+      answer.held = false
+      await letGo()
+      await vi.waitFor(() => expect(prompts()).toEqual(['[device] prompt · skipped · no tile', '[device] prompt · moved']))
+      expect(await ring()).toEqual([resting(1), resting(2), hooked(3)])
+      // Once: the list's next changes, emptied with the dial and read again at the next, follow nothing.
+      seen.host.watching!(false)
+      seen.host.watching!(true)
+      await settled()
+      await settled()
+      expect(prompts()).toEqual(['[device] prompt · skipped · no tile', '[device] prompt · moved'])
+    })
+
+    it('is dropped when the dial moved before the list named it', async () => {
+      const { listed } = await newChatPrompt()
+      expect(await host().openAgent(resting(1))).toBeUndefined()
+      await listed()
+      expect(prompts()).toEqual(['[device] prompt · skipped · no tile', '[device] prompt · skipped · dial moved'])
+    })
+
+    it('is dropped when the list named it later than a read may take', async () => {
+      let clock = 0
+      const { listed } = await newChatPrompt({ now: () => clock })
+      clock += ORCA_CHAT_TIMEOUT_MS + 1
+      await listed()
+      expect(prompts()).toEqual(['[device] prompt · skipped · no tile', '[device] prompt · skipped · listed late'])
+    })
+
+    it('is dropped when the dial followed anything else meanwhile', async () => {
+      const { listed } = await newChatPrompt()
+      // What the dial made of Orca's focus on a terminal, say: the latest follow is the person's latest move.
+      seen.host.localFollowed!('focus', 'moved')
+      await listed()
+      expect(prompts()).toEqual(['[device] prompt · skipped · no tile'])
+    })
+
+    it('is replaced by a later prompt', async () => {
+      const { port, listener, listed } = await newChatPrompt()
+      listener.orcaFront([H(1)], ON_WT5)
+      port.observed(inTerminal(1))
+      port.observed(inTerminal(1, { event: 'turn-start' }))
+      await vi.waitFor(() => expect(prompts()).toEqual(['[device] prompt · skipped · no tile', '[device] prompt · moved']))
+      await listed()
+      expect(prompts()).toEqual(['[device] prompt · skipped · no tile', '[device] prompt · moved'])
+    })
   })
 
   it('a tap on a resting chat runs worktree activate with its id, then Orca comes forward', async () => {
