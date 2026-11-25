@@ -76,7 +76,7 @@ import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
 import { appRoots, learnApps, readBundleId, readMadeBy, readProcessNames, readPtyOwner, readTtyName, readWindowsPtyOwner, scanLearnsApps } from '../cable/hosts/scannedApp.js'
 import { createScrollLines } from '../cable/hosts/scrollLines.js'
 import { pageOf } from '../cable/hosts/select.js'
-import { createTabsAdapter, isTabApp, readTabTty, type Tab, type TabApp, type TabTty } from '../cable/hosts/tabs.js'
+import { createTabsAdapter, isTabApp, readTabTty, runPs, type Tab, type TabApp, type TabTty } from '../cable/hosts/tabs.js'
 import { readTabProcess, readTtyReaders, tabsTyping, type TabProcess } from '../cable/hosts/tabsType.js'
 import { createTmuxAdapter, createTmuxNested, createTmuxOuter, tmuxPaneParts } from '../cable/hosts/tmux.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
@@ -823,7 +823,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       // Asked only for a pane with a proof, which only macOS's ttys give.
       process: deps.tabProcess ?? readTabProcess,
       readers: deps.ttyReaders ?? readTtyReaders,
-      processes: readProcessNames,
+      // Only pid and ppid are read, but the check lets words into a tty: /bin/ps, never one from the PATH.
+      processes: () => readProcessNames((_ps, args, bounds) => runPs([...args], bounds)),
       after: timerIn('tabs'),
     }) },
   ].map(noting)]
