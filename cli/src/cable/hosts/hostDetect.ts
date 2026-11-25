@@ -125,6 +125,8 @@ export function inCmux(hints: Readonly<Record<string, string>>): boolean {
 
 /** The word Claude Code's extension gives the sessions of its tab, in VS Code and in its forks alike. */
 export const EXTENSION_TAB = 'claude-vscode'
+/** The word the Claude app gives the Claude Code it starts. */
+const CLAUDE_APP_ENTRYPOINT = 'claude-desktop'
 
 /** The hints of the app an agent's own terminal or tab is in. An editor started with `code .` or `cursor .` from another
  *  app inherits that app's bundle id, while its own terminals say TERM_PROGRAM=vscode and its extension's tab says
@@ -137,6 +139,19 @@ export function ownHints(hints: Record<string, string>): Record<string, string> 
   if (!inEditor || bundle === undefined || bundle === APP_BUNDLES.vscode || bundle === APP_BUNDLES.cursor) return hints
   const { __CFBundleIdentifier: _inherited, ...own } = hints
   return own
+}
+
+/** Orca named by its TERM_PROGRAM alone. Orca sets it in every terminal it spawns (stablyai/orca
+ *  src/main/daemon/pty-subprocess/spawn-environment.ts, local-pty-spawn-environment.ts), and off macOS no bundle id names
+ *  it: without it an Orca agent sat on Other's page (Ken's Dell, Win11 x64, 2026-11-25, chain claude.exe < powershell <
+ *  powershell < Orca.exe < Orca.exe). A program started there that sets no TERM_PROGRAM of its own keeps Orca's
+ *  (Alacritty, the Claude and ChatGPT apps): a bundle id, which the hook sends on Windows too (notify.mjs
+ *  lookUpWindowsApp), names that app instead, and on Linux the caller's parents do (observed.ts walked). So does the
+ *  word a session gives of where it runs: the extension's tab and the Claude app's sessions are in no terminal. */
+export function inOrca(hints: Readonly<Record<string, string>>): boolean {
+  const entrypoint = hints.CLAUDE_CODE_ENTRYPOINT
+  return hints.TERM_PROGRAM === 'Orca' && !hints.__CFBundleIdentifier && entrypoint !== EXTENSION_TAB
+    && entrypoint !== CLAUDE_APP_ENTRYPOINT
 }
 
 /** The outermost app an agent runs in. The bundle id and TERM_PROGRAM name it, unlike a multiplexer's own variables,
@@ -153,6 +168,7 @@ export function detectApp(hints: Record<string, string>): string {
   // Cursor is a VS Code fork and reports TERM_PROGRAM=vscode, so the bundle id decides first. A hint is outside text:
   // only a table's own key names an app, never one an object inherits (`constructor`).
   if (Object.hasOwn(BUNDLE_APPS, bundle)) return BUNDLE_APPS[bundle]
+  if (inOrca(hints)) return 'orca'
   if (Object.hasOwn(PROGRAM_APPS, program)) return PROGRAM_APPS[program]
   if (bundle || program) return UNKNOWN_APP
   if (hints.KITTY_WINDOW_ID) return 'kitty'
@@ -209,7 +225,8 @@ export function detectHost(hints: Record<string, string>): string {
   if (inCmux(hints)) return 'cmux'
   if (has('KITTY_WINDOW_ID')) return 'kitty'
   if (has('WEZTERM_PANE')) return 'wezterm'
-  if (has('ORCA_AGENT_SESSION_ID') || bundle === APP_BUNDLES.orca) return 'orca'
+  // Orca's TERM_PROGRAM names it off macOS too, where a claude typed by hand has no agent session (inOrca).
+  if (has('ORCA_AGENT_SESSION_ID') || bundle === APP_BUNDLES.orca || inOrca(hints)) return 'orca'
   // Cursor is a VS Code fork and reports TERM_PROGRAM=vscode, so its bundle id decides first.
   if (bundle === APP_BUNDLES.cursor) return 'cursor'
   if (bundle === APP_BUNDLES.claude) return 'claude'

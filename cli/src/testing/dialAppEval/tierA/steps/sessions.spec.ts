@@ -494,7 +494,7 @@ describe("tier A's Orca agents", () => {
     }
   })
 
-  it("its hook says ORCA_AGENT_SESSION_ID and its handle on every platform, and Orca's bundle id on macOS alone", async () => {
+  it("its hook says ORCA_AGENT_SESSION_ID, its handle and Orca's TERM_PROGRAM on every platform, and Orca's bundle id on macOS alone", async () => {
     for (const platform of PLATFORMS) {
       const w = fakeWorld(platform, orcaAgents())
       await w.hook('a', 'start')
@@ -502,9 +502,9 @@ describe("tier A's Orca agents", () => {
       const [a, b] = orcaAgents().sessions
       const bundle = platform === 'darwin' ? { __CFBundleIdentifier: ORCA_BUNDLE } : {}
       expect(toldOf(w.told, a!.id)).toMatchObject({ engine: 'claude', cwd: '/work/eval-w1', title: 'Eval Alpha' })
-      expect(toldOf(w.told, a!.id).hostHints).toEqual({ ORCA_AGENT_SESSION_ID: 'eval-orca-a', ORCA_TERMINAL_HANDLE: orcaTerminalHandle('a'), ...bundle })
+      expect(toldOf(w.told, a!.id).hostHints).toEqual({ ORCA_AGENT_SESSION_ID: 'eval-orca-a', ORCA_TERMINAL_HANDLE: orcaTerminalHandle('a'), TERM_PROGRAM: 'Orca', ...bundle })
       expect(toldOf(w.told, b!.id).engine).toBe('codex')
-      expect(toldOf(w.told, b!.id).hostHints).toEqual({ ORCA_AGENT_SESSION_ID: 'eval-orca-b', ORCA_TERMINAL_HANDLE: orcaTerminalHandle('b'), ...bundle })
+      expect(toldOf(w.told, b!.id).hostHints).toEqual({ ORCA_AGENT_SESSION_ID: 'eval-orca-b', ORCA_TERMINAL_HANDLE: orcaTerminalHandle('b'), TERM_PROGRAM: 'Orca', ...bundle })
     }
   })
 
@@ -512,7 +512,7 @@ describe("tier A's Orca agents", () => {
     for (const platform of PLATFORMS) {
       const w = fakeWorld(platform, orcaAgents())
       await w.hook('n', 'start')
-      expect(toldOf(w.told, orcaAgents().sessions[4]!.id).hostHints).toEqual({ ORCA_AGENT_SESSION_ID: 'eval-orca-n',
+      expect(toldOf(w.told, orcaAgents().sessions[4]!.id).hostHints).toEqual({ ORCA_AGENT_SESSION_ID: 'eval-orca-n', TERM_PROGRAM: 'Orca',
         ...(platform === 'darwin' ? { __CFBundleIdentifier: ORCA_BUNDLE } : {}) })
     }
   })

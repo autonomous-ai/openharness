@@ -11,14 +11,14 @@ import { errorKind } from '../../lib/log.js'
 import { roundDrawable } from '../roundGlyphs.js'
 import type { HostAdapter, Outer, Pane, Place } from './adapter.js'
 import { CODEX_THREAD, type CodexQueue, type CodexQueueFailure, type CodexRan } from './codexQueue.js'
-import { agentPlaceName, APP_BUNDLES, detectApp, detectHost, EXTENSION_TAB, otherProduct, ownHints, UNKNOWN_APP } from './hostDetect.js'
+import { agentPlaceName, APP_BUNDLES, detectApp, detectHost, EXTENSION_TAB, inOrca, otherProduct, ownHints, UNKNOWN_APP } from './hostDetect.js'
 import type { Delivery } from './inbox.js'
 import { answerEngine, type AnswerEngine } from './lastAnswer.js'
 import { bundleOf, type OpenTarget } from './open.js'
 import { MAX_TEXT } from './orca.js'
 import { FRESH_WITHIN_MS, type Nested, type NestedLookup, type NestedPlace, type OuterLookup } from './outer.js'
 import type { SessionRecord } from './record.js'
-import { parentChain, type ProcessName } from './scannedApp.js'
+import { parentChain, type ProcessName, scanLearnsApps } from './scannedApp.js'
 import { isTabApp } from './tabs.js'
 import type { Caps, HostAgent, HostAgentState, HostSource, Nest, PaneSwitch, SendResult } from './types.js'
 
@@ -157,10 +157,13 @@ const NEST_VARIABLE: Readonly<Record<Nest, string>> = { tmux: 'TMUX_PANE', herdr
 
 /** Whether a caller's app is learnt from its parents: its hints name none, or name VS Code by TERM_PROGRAM alone, which
  *  Cursor's terminal says too. Only a bundle id tells the two apart: Linux has none, and an editor started from another
- *  app has none once the one it inherited is dropped (hostDetect.ts ownHints). */
-function walked(hints: Readonly<Record<string, string>>): boolean {
+ *  app has none once the one it inherited is dropped (hostDetect.ts ownHints). So for Orca by TERM_PROGRAM alone, which
+ *  every program started from an Orca terminal keeps unless it sets its own (kitty, the ChatGPT app): Orca stands when
+ *  the parents name none. Not on Windows, where they never do (scannedApp.ts scanLearnsApps): a walk would only hold
+ *  the agent on Other's page until it answered. */
+function walked(hints: Readonly<Record<string, string>>, platform: NodeJS.Platform): boolean {
   const named = detectApp(hints)
-  return named === UNKNOWN_APP || (named === 'vscode' && !hints.__CFBundleIdentifier)
+  return named === UNKNOWN_APP || (named === 'vscode' && !hints.__CFBundleIdentifier) || (inOrca(hints) && scanLearnsApps(platform))
 }
 
 /** Whether an outer answer's client's process is one a raise can bring forward. */
@@ -853,7 +856,7 @@ export class ObservedSource implements HostSource {
       entry.callerApp = app
       // Its latest hook named its app, or it is seen in the app holding its multiplexer's client (askOuter), which a walk
       // that ends at the multiplexer's server cannot name: that stands. An ended one is on no app's page.
-      if (!walked(entry.hints) || entry.outer || !this.live(entry)) return
+      if (!walked(entry.hints, this.deps.platform) || entry.outer || !this.live(entry)) return
       // It moved to another process during the walk: that one is walked now.
       if (entry.caller !== pid) {
         this.learnApp(entry, entry.caller!, detectApp(entry.hints))
@@ -979,7 +982,7 @@ export class ObservedSource implements HostSource {
    *  that name none, or only a word Cursor says too (walked), learn it from the caller's parents. */
   private placeApp(entry: Entry, hints: Readonly<Record<string, string>>, pid: number): void {
     const named = detectApp(hints)
-    const walk = walked(hints)
+    const walk = walked(hints, this.deps.platform)
     entry.agent.app = entry.outer?.app ?? (walk && this.deps.apps ? this.learnApp(entry, pid, named) : named)
     // An app named by a word another app says too (walked: VS Code's TERM_PROGRAM, which Cursor says) has the bundle of
     // the app its parents named, else a tap on Cursor started from Terminal (`cursor .`) opened VS Code. So has the
