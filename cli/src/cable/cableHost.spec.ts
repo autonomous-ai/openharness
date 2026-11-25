@@ -2532,6 +2532,15 @@ describe('cableEventFor', () => {
     expect(cableEventFor({ ...base, payload: { kind: 'tool', text: 'Bash' } })).toBeNull()
   })
 
+  it('carries why a silent summary is not news, and no word that is not a reason', () => {
+    const base = { type: 'commander_event', agentId: 'a1', payload: { kind: 'summary', text: 'body', recap: 'recap', subagent: true } }
+    expect(cableEventFor({ ...base, payload: { ...base.payload, notNews: 'question' } })).toMatchObject({ subagent: true, notNews: 'question' })
+    expect(cableEventFor({ ...base, payload: { ...base.payload, notNews: 'loud' } })).not.toHaveProperty('notNews')
+    expect(cableEventFor(base)).not.toHaveProperty('notNews')
+    // A turn recapped after it ended unseen says so.
+    expect(cableEventFor({ ...base, payload: { kind: 'summary', text: 'body', restored: true } })).toMatchObject({ subagent: true, notNews: 'restored' })
+  })
+
   it('carries a summary\'s tier, decided by the recaps, and no word that is not one', () => {
     const base = { type: 'commander_event', agentId: 'a1', payload: { kind: 'summary', text: 'body', recap: 'recap' } }
     for (const tier of ['alert', 'list', 'silent'] as const) {
