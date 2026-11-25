@@ -88,7 +88,13 @@ plain TypeScript in `ui/`.
   Its sources: AppKit on macOS, a WinEvent hook on Windows, and on Linux X11, sway or Hyprland, whichever the session
   is; GNOME and KDE on Wayland give it to no other program, so there it is not followed.
 - **Fixed scripts.** Every AppleScript is fixed text in `tabs_macos.rs`, for an app from its own list of three. A tty
-  passes the tty check and reaches a script only as a handler parameter, never in its text.
+  and a text pass the checks and reach a script only as handler parameters, never in its text.
+- **Spoken text and terminal writes.** A text reaches a terminal only through the fixed `write_text` and `send_enter`
+  handlers of iTerm2 and Ghostty in `tabs_macos.rs`, as a handler parameter, after the watch's and the app's checks.
+  Never Terminal; never keystrokes, System Events or `do script`. It goes to exactly one session or terminal of that
+  tty, in every window; to an app whose poll or select answered in this run; and a typing older than 500 ms on the tab
+  thread is dropped. Its answer goes only to the watch it came from. A text is never logged: the late line names the
+  app alone.
 - **A tab's tty is private.** It is written to the watch's stdin and nowhere else. A `tabs:` log line names Terminal,
   iTerm2 or Ghostty, never a tty.
 - **One entitlement.** `src-tauri/Entitlements.plist` holds `com.apple.security.automation.apple-events` and no other
