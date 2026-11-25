@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import subprocess
 import tempfile
+import tracemalloc
 import unittest
 from unittest import mock
 import zipfile
@@ -357,6 +358,23 @@ class EvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "contents"):
             self.collect()
         self.assertFalse((self.output.parent / "escaped.json").exists())
+
+    def test_an_archive_that_lies_about_its_size_is_refused_without_inflating_it(self):
+        # The uploader writes the size fields; 64 KiB of deflated zeros claiming 1 KiB inflates to 64 MiB.
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, "w", zipfile.ZIP_DEFLATED) as bundle, bundle.open("cli-test-summary.json", "w") as member:
+            for _ in range(64):
+                member.write(bytes(1024 ** 2))
+        archive = bytearray(stream.getvalue())
+        central = archive.rfind(b"PK\x01\x02")
+        archive[22:26] = archive[central + 24:central + 28] = (1024).to_bytes(4, "little")
+        archive = bytes(archive)
+        artifact = dict(self.artifact, size_in_bytes=len(archive), digest="sha256:" + hashlib.sha256(archive).hexdigest())
+        tracemalloc.start()
+        self.addCleanup(tracemalloc.stop)
+        with self.assertRaises(zipfile.BadZipFile):
+            recorder.summary_contents(artifact, archive, self.run, "cli-test-summary")
+        self.assertLess(tracemalloc.get_traced_memory()[1], 8 * 1024 ** 2)
 
     def test_duplicate_or_inconsistent_coverage_is_rejected(self):
         for bad in [dict(self.summary, files=5), dict(self.summary, passed=True),
