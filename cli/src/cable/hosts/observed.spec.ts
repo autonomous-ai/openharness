@@ -16,7 +16,7 @@ import { createOrcaAdapter, MAX_TEXT, type OrcaDeps } from './orca.js'
 import { type Fresh, FRESH_WITHIN_MS, type Nested, type NestedPlace, type OuterLookup } from './outer.js'
 import type { ProcessName } from './scannedApp.js'
 import { pageOf } from './select.js'
-import { createTabsAdapter, type TabApp } from './tabs.js'
+import { createTabsAdapter, type TabApp, type TabTty } from './tabs.js'
 import { createTmuxAdapter } from './tmux.js'
 import type { HostAgent, Nest, PaneSwitch, TypeResult } from './types.js'
 import { createVscodeAdapter } from './vscode.js'
@@ -2112,7 +2112,7 @@ describe('ObservedSource actions', () => {
     const inIterm = { hostHints: { TERM_PROGRAM: 'iTerm.app' } }
     /** A source whose every tty read answers [TTY], and whose tmux events sit in an iTerm2 tab of [TTY]. */
     const onTty = () => setup({
-      tty: vi.fn(async (_pid: number) => TTY),
+      tty: vi.fn(async (_pid: number): Promise<TabTty> => ({ tty: TTY })),
       outer: vi.fn((hints: Readonly<Record<string, string>>) =>
         (hints.TMUX_PANE ? Promise.resolve<OuterAnswer>({ app: 'iterm', tty: TTY, pid: 4300 }) : undefined)),
     })
@@ -3319,7 +3319,7 @@ describe('ObservedSource and the app a hook\'s caller runs in', () => {
   })
 
   it('a caller whose parents name a tab app has its tty read then, and its tab is its pane', async () => {
-    const tty = vi.fn(async (_pid: number): Promise<string | undefined> => '/dev/ttys023')
+    const tty = vi.fn(async (_pid: number): Promise<TabTty | undefined> => ({ tty: '/dev/ttys023' }))
     let answer!: (apps: ReadonlyMap<number, string>) => void
     const apps = vi.fn((_pids: readonly number[]) => new Promise<ReadonlyMap<number, string>>((resolve) => { answer = resolve }))
     const { actions } = fakeActions()
@@ -4485,12 +4485,16 @@ describe('ObservedSource tabs', () => {
   const TTY = '/dev/ttys023'
   const inTerminal = { hostHints: { __CFBundleIdentifier: 'com.apple.Terminal' } }
 
-  /** A source whose tty reads the test answers by hand, in the order they began, with a watch's stream open. */
+  /** A source whose tty reads the test answers by hand, in the order they began, with a watch's stream open: a tty, with
+   *  its process's start when one is given. */
   function tabs(over: Partial<Fakes> = {}, deps: Partial<ObservedDeps> = {}) {
-    const reads: Array<{ answer(tty: string | undefined): Promise<void>; fail(): Promise<void> }> = []
-    const tty = vi.fn((_pid: number) => new Promise<string | undefined>((resolve, reject) => {
+    const reads: Array<{ answer(tty: string | undefined, start?: string): Promise<void>; fail(): Promise<void> }> = []
+    const tty = vi.fn((_pid: number) => new Promise<TabTty | undefined>((resolve, reject) => {
       reads.push({
-        answer: (answered) => { resolve(answered); return flushed() },
+        answer: (answered, start) => {
+          resolve(answered === undefined ? undefined : { tty: answered, ...(start === undefined ? {} : { start }) })
+          return flushed()
+        },
         fail: () => { reject(new Error('ps failed')); return flushed() },
       })
     }))
@@ -4655,7 +4659,7 @@ describe('ObservedSource tabs', () => {
     expect(t.tty).toHaveBeenCalledTimes(1)
 
     // No routes for the dial's voice and tap: status only.
-    const bare = setup({ tty: vi.fn(async () => TTY) })
+    const bare = setup({ tty: vi.fn(async (): Promise<TabTty> => ({ tty: TTY })) })
     bare.src.ingest(bare.ev('session-start', inTerminal))
     await flushed()
     expect(bare.src.hasPane(bare.src.list()[0])).toBe(false)
@@ -4784,6 +4788,80 @@ describe('ObservedSource tabs', () => {
     expect(t.actions.orcaSwitch).not.toHaveBeenCalled()
   })
 
+  describe('the proof of its process', () => {
+    const TTY3 = '/dev/ttys003'
+    const inIterm = { hostHints: { TERM_PROGRAM: 'iTerm.app' } }
+    /** The tabs adapter with a typer that writes its words, waits to be told, then writes their Enter only while the
+     *  prompt check holds: each step keeps the pane it was given. */
+    const typed = (deps: Partial<ObservedDeps> = {}) => {
+      const steps: Array<{ step: 'words' | 'enter'; pane: Pane }> = []
+      let atPrompt: (() => boolean) | undefined
+      let enter!: () => void
+      const type = vi.fn(async (pane: Pane, _text: string, _engine: string, check?: () => boolean): Promise<TypeResult> => {
+        atPrompt = check
+        steps.push({ step: 'words', pane })
+        await new Promise<void>((resolve) => { enter = resolve })
+        if (!check?.()) return false
+        steps.push({ step: 'enter', pane })
+        return true
+      })
+      const adapter: HostAdapter = { ...createTabsAdapter({ isOpen: () => true, select: () => true }), type }
+      const t = tabs({}, { actions: { ...fakeActions().actions, adapters: [adapter] }, ...deps })
+      return { ...t, steps, atPrompt: () => atPrompt!(), enter: async () => { enter(); await flushed() } }
+    }
+
+    it('an agent in iTerm2 has its tab pane carry the pid its tty was read for, and that process\'s start', async () => {
+      const t = typed()
+      t.src.ingest(t.ev('session-start', { ...inIterm, callerPid: 4101 }))
+      expect(t.tty.mock.calls).toEqual([[4101]])
+      await t.reads[0].answer(TTY3, 'ps:1')
+      const sent = t.src.send(t.agent(), 'next')
+      await flushed()
+      expect(t.steps).toEqual([{ step: 'words', pane: { adapter: 'tabs', id: `iterm:${TTY3}`, proof: { pid: 4101, start: 'ps:1' } } }])
+      await t.enter()
+      expect(await sent).toEqual({ ok: true })
+    })
+
+    it('a tty read with no start gives its pane no proof', async () => {
+      const t = typed()
+      t.src.ingest(t.ev('session-start', { ...inIterm, callerPid: 4101 }))
+      await t.reads[0].answer(TTY3)
+      void t.src.send(t.agent(), 'next')
+      await flushed()
+      expect(t.steps).toEqual([{ step: 'words', pane: { adapter: 'tabs', id: `iterm:${TTY3}` } }])
+    })
+
+    it('a nested agent\'s tab pane has none: the tab holds its multiplexer\'s client', async () => {
+      const outer = vi.fn((hints: Readonly<Record<string, string>>) =>
+        (hints.TMUX_PANE ? Promise.resolve<OuterAnswer>({ app: 'iterm', tty: TTY3, pid: 4300 }) : undefined))
+      const t = typed({ outer })
+      t.src.ingest(t.ev('session-start', { callerPid: 4101, hostHints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux' } }))
+      await flushed()
+      expect(t.tty).not.toHaveBeenCalled()
+      void t.src.send(t.agent(), 'next')
+      await flushed()
+      expect(t.steps).toEqual([{ step: 'words', pane: { adapter: 'tabs', id: `iterm:${TTY3}` } }])
+    })
+
+    // The same tab, another process: the person quit the agent and started another there between the words and the Enter.
+    it('a hook from another process on the same tty makes the prompt check false: the Enter is not sent', async () => {
+      const t = typed()
+      t.src.ingest(t.ev('session-start', { ...inIterm, callerPid: 4101 }))
+      await t.reads[0].answer(TTY3, 'ps:1')
+      const sent = t.src.send(t.agent(), 'next')
+      await flushed()
+      expect(t.atPrompt()).toBe(true)
+      t.src.ingest(t.ev('session-start', { ...inIterm, callerPid: 4102 }))
+      await t.reads[1].answer(TTY3, 'ps:2')
+      // Its pane has the same id again: only the proof tells the two processes apart.
+      expect(t.src.paneOf(t.agent().id, 'tabs')).toBe(`iterm:${TTY3}`)
+      expect(t.atPrompt()).toBe(false)
+      await t.enter()
+      expect(await sent).toEqual({ ok: false, reason: 'proj did not answer.' })
+      expect(t.steps.map(({ step }) => step)).toEqual(['words'])
+    })
+  })
+
   it('byTab: the live agent of that app and tty, the most recently active of two, none for another app, an ended session or an unknown tty', async () => {
     const t = tabs()
     t.src.ingest(t.ev('session-start', { sessionId: 'a', callerPid: 100, ...inTerminal }))
@@ -4834,7 +4912,7 @@ describe('ObservedSource outer place', () => {
         else asks.push({ answer, made: (nest) => { made?.(nest); return vi.advanceTimersByTimeAsync(0) } })
       })
     })
-    const tty = vi.fn(async (_pid: number): Promise<string | undefined> => '/dev/ttys031')
+    const tty = vi.fn(async (_pid: number): Promise<TabTty | undefined> => ({ tty: '/dev/ttys031' }))
     const { actions, ran } = fakeActions(over)
     const s = setup({ actions: { ...actions, adapters: adapt(actions.adapters) }, tty, outer, ...deps })
     const agent = () => s.src.list()[0]
@@ -5664,7 +5742,7 @@ describe('ObservedSource and a nested session the scan found', () => {
     const nested = vi.fn((_found: Nested, opts?: Fresh) => (opts?.fresh && !freshByHand
       ? Promise.resolve<NestedPlace>({})
       : new Promise<NestedPlace>((resolve) => { (opts?.fresh ? freshAsks : asks).push(resolve) })))
-    const tty = vi.fn(async (_pid: number): Promise<string | undefined> => '/dev/ttys031')
+    const tty = vi.fn(async (_pid: number): Promise<TabTty | undefined> => ({ tty: '/dev/ttys031' }))
     const { actions, ran } = fakeActions(fakes)
     const s = setup({ actions: { ...actions, adapters: adapt(actions.adapters) }, table, apps, madeBy, nested, tty, ...deps })
     /** A session found open in a terminal, idle, its owner [pid]. */
