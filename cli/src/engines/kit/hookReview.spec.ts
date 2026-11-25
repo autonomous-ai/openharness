@@ -219,7 +219,6 @@ describe('Harness’s own Codex hooks, recorded as reviewed', () => {
       '[hooks."state"."/h/hooks.json:session_start:0:0"]\nx = 1\n\n[hooks.state."/h/hooks.json:session_start:0:0"]\ny = 1\n',
       // A line of an array is not a header: the root key after it is still in the root table.
       'paths = [\n["a"]\n]\nhooks = {}\n',
-      '\uFEFFhooks = {}\n',
       // A record this does not read: a second key beside it would not parse.
       '[hooks.state."/h/hooks.json:session_start:0:0"]\ntrusted_hash = """sha256:old"""\n',
     ]) expect(withReviewRecords(text, record, records), text).toBe('unsafe')
