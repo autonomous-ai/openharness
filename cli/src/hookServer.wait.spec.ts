@@ -36,6 +36,12 @@ async function until(done: () => boolean): Promise<void> {
 }
 /** One turn of the loop: a drain starts by `setImmediate` after the call that settled its admission. */
 const turn = () => new Promise<void>(resolve => setImmediate(resolve))
+/** A step the test lets go on by hand. */
+function gate() {
+  let open!: () => void
+  const promise = new Promise<void>(resolve => { open = resolve })
+  return { promise, open }
+}
 const firedAt = (at: number) => ({ 'x-harness-hook-fired-at': String(at) })
 const transcript = (sessionId: string) => join(root, `${sessionId}.jsonl`)
 const session = (sessionId: string, hookEvent = 'SessionStart', pane = '%1') => ({ engine: 'claude', sessionId,
@@ -309,6 +315,78 @@ describe('a follow-up hook of a session being admitted', () => {
     expect(lines).toContain(unboundLine('turn-stop'))
     expect(lines.filter(line => line.includes('runs unheld'))).toEqual([])
     expect(await post('turn-stop', followUp(), firedAt(2_000))).toEqual({ status: 403, body: { error: 'UNBOUND_HOOK' } })
+    expect(handlers.onTurnStop).not.toHaveBeenCalled()
+  })
+
+  // Sent again with a later time while its job is in its registry write, the delivery's newer job replaces it: the
+  // replaced job ends `stale_hook`, which is not the delivery's end.
+  it('keeps the waiting hooks of a SessionStart sent again behind the job that replaced its running one', async () => {
+    const { handlers, post } = await start()
+    const writes = [gate(), gate()], gated = [...writes]
+    const real = registry.register.bind(registry)
+    const register = vi.spyOn(registry, 'register').mockImplementation(async (input, options) => {
+      if (input.sessionId === NEW) { const write = gated.shift(); wake(); await write?.promise }
+      return real(input, options)
+    })
+    writeFileSync(transcript(NEW), '{}\n')
+    const at = Date.now() + 60_000, delivery = { 'x-harness-hook-delivery-id': 'fixture-delivery-0004' }
+    const first = post('session-start', session(NEW), { ...firedAt(at), ...delivery })
+    await until(() => gated.length === 1)
+    // A write longer than its client waits: answered pending.
+    await vi.advanceTimersByTimeAsync(250)
+    expect(await first).toEqual(held)
+    expect(await post('turn-stop', followUp(), firedAt(1_000))).toEqual(held)
+    await dropReceipts(post)
+    expect(await post('session-start', session(NEW), { ...firedAt(at + 1), ...delivery })).toEqual(held)
+    writes[0]!.open()
+    await until(() => lines.includes(`[hooks] ${N} SessionStart ignored · stale_hook`))
+    await until(() => gated.length === 0)
+    await turn(); await turn()
+    expect(lines).not.toContain(unboundLine('turn-stop'))
+    expect(handlers.onTurnStop).not.toHaveBeenCalled()
+    writes[1]!.open()
+    await until(() => handlers.onTurnStop.mock.calls.length > 0)
+    expect(handlers.onTurnStop).toHaveBeenCalledWith({ sessionId: NEW, status: undefined, transcriptPath: undefined, firedAt: 1_000 })
+    expect(handlers.onRegistered).toHaveBeenCalledWith(expect.objectContaining({ sessionId: NEW }), expect.objectContaining({ rebound: OLD }))
+    expect(handlers.onTurnStop.mock.invocationCallOrder[0]).toBeGreaterThan(handlers.onRegistered.mock.invocationCallOrder[0]!)
+    expect(register.mock.calls.filter(([input]) => input.sessionId === NEW)).toHaveLength(2)
+  })
+
+  it('settles a SessionStart refused for a full queue, and refuses its waiting hooks then', async () => {
+    let record: Promise<void> | undefined, recorded!: () => void
+    const resolveHookAgent = vi.fn(async ({ onWait }: { onWait?: () => void }) => {
+      if (onWait && record) { onWait(); await record }
+      return registry.byPaneEngine('%1', 'claude') ?? null
+    })
+    const { handlers, post } = await start({ resolveHookAgent })
+    // 64 conversations of the agent pending, the queue's capacity.
+    for (let i = 0; i < 64; i++) {
+      const other = `eeeeeeee-5555-4555-8555-${i.toString(16).padStart(12, '0')}`
+      expect(await post('session-start', session(other), firedAt(200 + i))).toEqual(held)
+    }
+    record = new Promise<void>(resolve => { recorded = resolve })
+    expect(await post('session-start', session(NEW), firedAt(500))).toMatchObject({ status: 202 })
+    expect(await post('turn-stop', followUp(), firedAt(1_000))).toEqual(held)
+    recorded()
+    await until(() => lines.includes(`[hooks] ${N} held · HOOK_ADMISSION_BUSY`))
+    await turn(); await turn()
+    expect(lines).toContain(unboundLine('turn-stop'))
+    expect(lines.filter(line => line.includes('runs unheld'))).toEqual([])
+    expect(handlers.onTurnStop).not.toHaveBeenCalled()
+  })
+
+  it('settles a SessionStart rejected as an invalid registration, and refuses its waiting hooks then', async () => {
+    const { handlers, post } = await start()
+    await holdStart(post)
+    expect(await post('turn-stop', followUp(), firedAt(1_000))).toEqual(held)
+    // The registry takes no row for it.
+    vi.spyOn(registry, 'register').mockResolvedValue(null)
+    writeFileSync(transcript(NEW), '{}\n')
+    await vi.advanceTimersByTimeAsync(1_000)
+    await until(() => lines.includes(`[hooks] ${N} SessionStart ignored · invalid_session_registration`))
+    await turn(); await turn()
+    expect(lines).toContain(unboundLine('turn-stop'))
+    expect(lines.filter(line => line.includes('runs unheld'))).toEqual([])
     expect(handlers.onTurnStop).not.toHaveBeenCalled()
   })
 
