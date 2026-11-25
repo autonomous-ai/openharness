@@ -52,6 +52,7 @@ import type { VscodeEditor, VscodeExtensionDeps } from '../devices/vscodeExtensi
 import { devicesListenerPath } from '../devices/listenerPath.js'
 import { STOP_HOOK_GRACE_MS } from '../core/turns/turnHooks.js'
 import type { FleetEvent } from '../cable/machineFleet.js'
+import * as engineHomes from '../lib/engineHomes.js'
 import { claudeProjectsRoots, codexHomeRoots } from '../lib/engineHomes.js'
 import type { ExternalProvider, ProcessView, RunningProcess } from '../lib/sessionSearch/externals/types.js'
 import type { TierInput } from '../lib/notifyTier.js'
@@ -95,6 +96,9 @@ vi.mock('../devices/vscodeExtension.js', async (real) => ({ ...await real<object
 // fake.
 vi.mock('../devices/orcaPlugin.js', async (real) => ({ ...await real<object>() }))
 vi.mock('../cable/orcaPluginSetup.js', async (real) => ({ ...await real<object>() }))
+// A copy too, so a spec can give the devices the homes Harness adopted without adopting one for the whole file: an
+// adoption stays in the module for as long as it is loaded.
+vi.mock('../lib/engineHomes.js', async (real) => ({ ...await real<object>() }))
 vi.mock('../cable/cableHost.js', async (real) => {
   const actual = await real<typeof import('../cable/cableHost.js')>()
   return {
@@ -6862,6 +6866,34 @@ describe('codex queue, for Codex outside a pane (docs/specs/2026-11-15-device-co
     expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
     expect(codexRuns).toEqual([])
     expect(orcaRuns).toEqual([])
+  })
+
+  // `codex queue` loads the home's config.toml (cable/hosts/observed.ts queueHome): only Harness's own lists name one, and
+  // Orca's route types into its own terminals.
+  it('the queue runs under the home of Harness\'s that holds the rollout: its own, an adopted one, a linked profile, never an Orca account\'s', async () => {
+    const homes = realpathSync(mkdtempSync(join(tmpdir(), 'devices-codex-homes-')))
+    onTestFinished(() => rmSync(homes, { recursive: true, force: true }))
+    const [adopted, linked, orcaCodex] = ['adopted', 'linked', 'orca'].map((name) => join(homes, name))
+    vi.spyOn(engineHomes, 'codexHomeRoots').mockImplementation((own) => [own, adopted])
+    // As the linker keeps it (lib/codexProfiles.ts): the profile by its real path, in the data folder, this account's alone.
+    const profiles = join(env.ADAPTER_DATA_DIR, 'codex-profiles.json')
+    writeFileSync(profiles, JSON.stringify([linked]), { mode: 0o600 })
+    onTestFinished(() => rmSync(profiles, { force: true }))
+    const sessions = [env.CODEX_HOME, adopted, linked, orcaCodex].map((home, i) => {
+      const sessionId = `0000000${i}-a3b7-7270-b39e-1245893274c1`
+      const rollout = join(home, 'sessions', '2026', '11', '15', `rollout-2026-11-15T16-07-59-${sessionId}.jsonl`)
+      return { home, sessionId, id: observedAgentId('codex', sessionId), rollout }
+    })
+    const { port } = start({ faults: ['fleet'], orcaHomes: fakeOrcaHomes({ claude: [], codex: [orcaCodex] }) })
+    sessions.forEach(({ sessionId, rollout }, i) => port.observed(hook('session-start', { sessionId, transcriptPath: rollout, callerPid: 4300 + i })))
+    seen.host.watching!(true)
+    port.swarms(null)
+    const trusted = sessions.slice(0, 3)
+    for (const { id } of trusted) expect(await host().sendTurn(id, 'run the tests')).toEqual({ ok: true })
+    expect(codexRuns.map(([, args, { env: run }]) => [args[2], run.CODEX_HOME])).toEqual(trusted.map(({ sessionId, home }) => [sessionId, home]))
+    expect(await host().sendTurn(sessions[3].id, 'run the tests')).toMatchObject({ ok: false })
+    expect(codexRuns).toHaveLength(3)
+    expect(logs.filter((line) => sessions.some(({ home }) => line.includes(home)))).toEqual([])
   })
 
   it('a failed queue is said in one line with its exit code, then today\'s route answers', async () => {
