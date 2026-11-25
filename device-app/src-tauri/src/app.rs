@@ -1510,7 +1510,7 @@ mod tests {
         assert_eq!(app.handle(Event::UpdateDownloaded), [Effect::InstallUpdate]);
         app.handle(Event::UpdateInstalled);
         assert!(!has(&app.handle(tick(B + 10)), &Effect::Relaunch));
-        // Signed in, the window closes: nothing holds the relaunch any more.
+        // Signed in: nothing holds the relaunch any more.
         app.handle(login(LoginEvent::Done(Ok(()))));
         assert!(app.handle(tick(B + 15)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
     }
@@ -1538,12 +1538,19 @@ mod tests {
         assert!(app.handle(tick(B + 20)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
     }
 
+    /// The app the relaunch starts, from what this one saved.
+    fn relaunched(app: &App) -> App {
+        App::new(app.state.saved, true, false, B, false).0
+    }
+
     #[test]
     fn an_open_window_does_not_delay_the_relaunch() {
-        // Sign in left open, as at a first launch: the new process offers it again.
+        // Sign in left open, as at a first launch: never answered, it was never saved as asked, and the new process
+        // offers it again.
         let mut app = on_sign_in();
         installed(&mut app);
-        assert!(app.handle(tick(B + 10)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
+        assert_eq!(app.handle(tick(B + 10)), [Effect::StopWatch, Effect::Relaunch]);
+        assert_eq!(shows(&answer(&mut relaunched(&app), false)), [shown(Screen::SignIn, Phase::Offer, &[])]);
     }
 
     #[test]
@@ -1551,6 +1558,9 @@ mod tests {
         let mut app = on_follow();
         installed(&mut app);
         assert_eq!(app.handle(tick(B + 10)), [Effect::Save(SEEN), Effect::StopWatch, Effect::Relaunch]);
+        let mut new = relaunched(&app);
+        answer(&mut new, true);
+        assert_eq!(shows(&new.handle(follow(false, true))), [follow_offer()]);
 
         // Where installing ends the app, the install ends it too.
         let mut app = found_where(true);
