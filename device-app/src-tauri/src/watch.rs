@@ -2,7 +2,7 @@
 
 use crate::cli::{Cli, Killer, StdinCloser, StdinWriter, Timeout, Unwritten};
 use crate::tabs::{TabApp, select_of};
-use crate::types::{DialStatus, Event, Log, NotifyMode};
+use crate::types::{DialStatus, Event, Log, NotifyMode, VoiceLang};
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -53,6 +53,11 @@ impl Watch {
             NotifyMode::Full => r#"{"notify":"full"}"#,
             NotifyMode::You => r#"{"notify":"you"}"#,
         });
+    }
+
+    /// A change of the dial's voice language on the child's stdin: one of six fixed lines, its code static text.
+    pub fn voice(&self, lang: VoiceLang) {
+        self.write(&format!(r#"{{"voiceLang":"{}"}}"#, lang.code()));
     }
 
     /// One that has ended takes nothing, and nothing of the line is logged. One that has stopped reading drops it, and

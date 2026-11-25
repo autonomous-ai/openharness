@@ -39,6 +39,50 @@ fn notify_mode<'de, D: serde::Deserializer<'de>>(value: D) -> Result<Option<Noti
     })
 }
 
+/// The language the dial listens in, saved on the dial. The six Desktop offers, in its order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VoiceLang {
+    En,
+    Vi,
+    Es,
+    Fr,
+    Ja,
+    It,
+}
+
+impl VoiceLang {
+    pub const ALL: [VoiceLang; 6] = [Self::En, Self::Vi, Self::Es, Self::Fr, Self::Ja, Self::It];
+
+    /// The code the dial holds: static text, so a line built from it is fixed text.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::En => "en",
+            Self::Vi => "vi",
+            Self::Es => "es",
+            Self::Fr => "fr",
+            Self::Ja => "ja",
+            Self::It => "it",
+        }
+    }
+
+    /// Each in its own name, so a person finds theirs whatever the language around it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::En => "English",
+            Self::Vi => "Tiếng Việt",
+            Self::Es => "Español",
+            Self::Fr => "Français",
+            Self::Ja => "日本語",
+            Self::It => "Italiano",
+        }
+    }
+
+    /// None for any text but the six codes, exactly.
+    pub fn from_code(code: &str) -> Option<VoiceLang> {
+        Self::ALL.into_iter().find(|lang| lang.code() == code)
+    }
+}
+
 /// harnessd, as the keep-alive last saw it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Daemon {
@@ -260,6 +304,7 @@ pub enum Effect {
     /// `true` turns the dial's sound on.
     SetSound(bool),
     SetNotify(NotifyMode),
+    SetVoice(VoiceLang),
     OpenUrl(String),
     OpenDesktop,
     RegisterLoginItem,

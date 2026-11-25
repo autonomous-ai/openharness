@@ -366,6 +366,12 @@ impl Runner {
                     watch.notify(mode);
                 }
             }
+            // As the sound: the check moves only when the dial's next status says so.
+            Effect::SetVoice(lang) => {
+                if let Some(watch) = &*shared.watch.lock().unwrap() {
+                    watch.voice(lang);
+                }
+            }
             Effect::OpenUrl(url) => shared.open(|open| open.url(&url), "browser"),
             Effect::OpenDesktop => shared.open(|open| open.desktop(), "desktop app"),
             // On the caller's thread: one ServiceManagement call, once at start.
