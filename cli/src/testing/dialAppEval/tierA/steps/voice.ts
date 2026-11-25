@@ -8,9 +8,26 @@ import { keyOfOrcaHandle } from './sessions.js'
 
 /** Enter, sent on its own after the words (kitty's send-text escape, WezTerm's key): no words. */
 const ENTER = new Set(['\\r', '\r'])
-/** The tmux commands that put words in a pane, or in the buffer a paste puts there, each with its alias from tmux's
- *  manual: words put by an alias must not pass the gate unseen. */
-const TMUX_PUTS = new Set(['send-keys', 'send', 'set-buffer', 'setb', 'load-buffer', 'loadb', 'paste-buffer', 'pasteb'])
+/** The tmux commands that put words in a pane, or in the buffer a paste puts there. tmux(1) runs a command by its alias
+ *  or by any prefix of its name from the shortest unambiguous one up (`shortest`, read off the manual's command list):
+ *  words put by any of these forms must not pass the gate unseen. */
+const TMUX_PUTS = [
+  { name: 'send-keys', alias: 'send', shortest: 'send-k' },
+  { name: 'set-buffer', alias: 'setb', shortest: 'set-b' },
+  { name: 'load-buffer', alias: 'loadb', shortest: 'loa' },
+  { name: 'paste-buffer', alias: 'pasteb', shortest: 'pa' },
+  { name: 'pipe-pane', alias: 'pipep', shortest: 'pi' },
+]
+/** pipe-pane types into the pane only with -I, alone or among its other flags: what its command prints is written to
+ *  the pane as if typed (tmux(1)). */
+const PIPE_IN = /^-[IOo]*I/
+
+function putsInTmux(argv: readonly string[]): boolean {
+  return argv.some((arg) => {
+    const put = TMUX_PUTS.find(({ name, alias, shortest }) => arg === alias || (arg.startsWith(shortest) && name.startsWith(arg)))
+    return put !== undefined && (put.name !== 'pipe-pane' || argv.some((flag) => PIPE_IN.test(flag)))
+  })
+}
 
 /** The words a command types into a terminal: Orca's `terminal send`, with the handle of the pane they go to, kitty's and
  *  WezTerm's `send-text`, Zellij's `write-chars` (cable/hosts/orca.ts, kitty.ts, wezterm.ts, zellij.ts), and tmux's runs
@@ -22,7 +39,7 @@ function typedWords(argv: readonly string[]): { text: string; handle?: string } 
     const handle = flagOf(argv, '--terminal')
     return text === undefined ? undefined : { text, ...(handle === undefined ? {} : { handle }) }
   }
-  if (programOf(argv) === 'tmux') return argv.some((arg) => TMUX_PUTS.has(arg)) ? { text: argv.at(-1)! } : undefined
+  if (programOf(argv) === 'tmux') return putsInTmux(argv) ? { text: argv.at(-1)! } : undefined
   if (!argv.includes('send-text') && !argv.includes('write-chars')) return undefined
   const words = flagOf(argv, '--')
   return words === undefined || ENTER.has(words) ? undefined : { text: words }
