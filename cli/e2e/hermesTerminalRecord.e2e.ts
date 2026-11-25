@@ -25,7 +25,7 @@ const REMOVED = "[hooks] removed Harness's Hermes hooks → "
 const REMOVAL = /\[hooks\] removed Harness's Hermes hooks → ([0-9a-f]{8})$/gm
 
 type Agent = { id: string; sessionId?: string; status?: string; launch?: { state: string }; identityHold?: string }
-type Saved = { agentId: string; sessionId: string; cwd: string | null; hermesHome?: string | null; hermesHomeDerived?: true; lastHookAt: number }
+type Saved = { agentId: string; sessionId: string; cwd: string | null; hermesHome?: string | null; hermesHomeDerived?: true; lastHookAt: number; earlierSessionIds?: string[] }
 type Started = { given: string; terminal: string | null; session: string }
 
 let daemon: IsolatedDaemon | undefined
@@ -178,14 +178,15 @@ it('follows a resumed Hermes through /new without failing it', async () => {
     expect((await c.request('agent_resume', { agentId: a.agentId }, 90_000)).error).toBeUndefined())
   expect(resumed.session).toBe(a.started.session)
   // `/new` at once, before a pass reads the record naming the resumed conversation: the record only ever names the new
-  // one, and the resumed one, which `/new` ended, is confirmed from the store before the agent follows (Review Focus 3).
+  // one, and the agent follows it as a rotation, the resumed conversation kept as an earlier one.
   r.tell({ new: true })
   const next = await movedFrom(r.home, resumed.terminal!, a.started.session)
   await boundTo(c, a.agentId, next)
   const agent = await row(c, a.agentId)
   expect(agent?.launch?.state).not.toBe('failed')
   expect(r.d.log()).not.toContain('RESUME_SESSION_MISMATCH')
-  await until('the resumed conversation confirmed', () => (saved(r.d, a.agentId)?.lastHookAt ?? 0) > 0 || null, 10_000, 100)
+  await until('the new conversation bound', () => (saved(r.d, a.agentId)?.lastHookAt ?? 0) > 0 || null, 10_000, 100)
+  expect(saved(r.d, a.agentId)?.earlierSessionIds).toContain(a.started.session)
 })
 
 it('binds nothing from a record an earlier process left, binds once by the repair, and says switches are not followed', async () => {

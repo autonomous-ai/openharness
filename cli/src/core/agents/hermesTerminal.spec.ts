@@ -138,6 +138,13 @@ describe('following a Hermes from its terminal record', () => {
     expect(deps.kind).not.toHaveBeenCalled()
   })
 
+  it('follows a resumed row a /new left straight onto the session its record names', async () => {
+    // Resumed on OLD, then `/new` before the pass: the record already names S, and the registry takes it as a rotation.
+    const { deps, t } = setup()
+    deps.endedSince.mockResolvedValue(true)
+    expect(await t.follow(agent({ sessionId: OLD, resumeOnly: true, lastHookAt: 0 }), observed(), pass())).toEqual({ sessionId: S })
+  })
+
   it('confirms a resumed row a `/new` left before a pass saw its record, then follows the record', async () => {
     // Resumed on OLD, then `/new` before the pass: the record already names S. Hermes ends the session a terminal leaves
     // (`end_session`), so OLD ended since this process started was open in it: confirmed first, never failed.
