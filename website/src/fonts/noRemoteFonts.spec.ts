@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { describe, expect, it } from "vitest";
 
 // next/font/google downloads at build time, so a Google hiccup fails `next build`; fonts are vendored instead.
 // The module name is built so this file does not match its own text.
