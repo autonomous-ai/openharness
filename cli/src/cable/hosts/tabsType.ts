@@ -77,8 +77,8 @@ export async function readTtyReaders(tty: string, run: RunLsof = runLsof): Promi
 export interface TabsTypeDeps {
   /** The watch's tabs stream now; none while no watch holds one. */
   line(): TabsLine | undefined
-  /** Whether another live agent than the one in process [pid] is on that tty (observed.ts othersOnTty). */
-  shared(tty: string, pid: number): boolean
+  /** Whether another live agent than the one in process [pid] is on that tty of [app] (observed.ts othersOnTty). */
+  shared(app: TypeApp, tty: string, pid: number): boolean
   process(pid: number): Promise<TabProcess | undefined>
   readers(tty: string): Promise<readonly number[] | undefined>
   processes(): Promise<readonly ProcessName[]>
@@ -154,7 +154,7 @@ export function tabsTyping(deps: TabsTypeDeps): Required<Pick<HostAdapter, 'canT
         // Asked after the reads, which take seconds at most: a newer watch, another agent on the tty or a turn begun
         // meanwhile stops the line.
         if (deps.line() !== line) return 'no-stream'
-        if (deps.shared(tty, pid)) return 'shared'
+        if (deps.shared(app, tty, pid)) return 'shared'
         return atPrompt?.() ? undefined : 'busy'
       }
       const step = async (typing: TabsWrite): Promise<StepAnswer<TabsReason>> => {
