@@ -168,6 +168,17 @@ describe('detectApp', () => {
     expect(detectHost({ TERM_PROGRAM: 'Orca', ZELLIJ: '0' })).toBe('zellij')
   })
 
+  // On Windows the hook sends the bundle id of the app it found (notify.mjs lookUpWindowsApp), while a program started
+  // from an Orca terminal that sets no TERM_PROGRAM of its own keeps Orca's: the bundle id names the app.
+  it("an app started from an Orca terminal with its own bundle id is that app's, not Orca's", () => {
+    expect(detectApp({ TERM_PROGRAM: 'Orca', __CFBundleIdentifier: 'org.alacritty' })).toBe(UNKNOWN_APP)
+    const cursor = { TERM_PROGRAM: 'Orca', __CFBundleIdentifier: APP_BUNDLES.cursor }
+    expect(detectApp(cursor)).toBe('cursor')
+    expect(detectHost(cursor)).toBe('cursor')
+    expect(detectHost({ TERM_PROGRAM: 'Orca', __CFBundleIdentifier: APP_BUNDLES.claude })).toBe('claude')
+    expect(detectHost({ TERM_PROGRAM: 'Orca', __CFBundleIdentifier: APP_BUNDLES.codex })).toBe('codex')
+  })
+
   it("the Claude desktop app's bundle id is claude, read Claude", () => {
     const hints = { __CFBundleIdentifier: 'com.anthropic.claudefordesktop' }
     expect(detectHost(hints)).toBe('claude')

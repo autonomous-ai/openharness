@@ -3164,6 +3164,27 @@ describe('ObservedSource and the app a hook\'s caller runs in', () => {
     expect(s.apps).toHaveBeenCalledTimes(1)
   })
 
+  // Every program started from an Orca terminal keeps its TERM_PROGRAM=Orca unless it sets its own (kitty, the Claude
+  // app), and Linux has no bundle id to name it: the caller's parents do.
+  it('a hook that names Orca by TERM_PROGRAM alone is placed in the app its caller\'s parents name', async () => {
+    const s = walked()
+    s.src.ingest(s.ev('session-start', { hostHints: { TERM_PROGRAM: 'Orca' } }))
+    expect(s.apps.mock.calls).toEqual([[[100]]])
+    await s.walks[0].answer('kitty')
+    expect(s.agent('s1').app).toBe('kitty')
+  })
+
+  it('a walk that names no app leaves Orca, as TERM_PROGRAM said; with Orca\'s bundle id nothing is walked', async () => {
+    const s = walked()
+    s.src.ingest(s.ev('session-start', { hostHints: { TERM_PROGRAM: 'Orca' } }))
+    await s.walks[0]?.answer()
+    expect(s.agent('s1').app).toBe('orca')
+    s.src.ingest(s.ev('session-start', { sessionId: 'b', callerPid: 101,
+      hostHints: { TERM_PROGRAM: 'Orca', __CFBundleIdentifier: 'com.stablyai.orca' } }))
+    expect(s.agent('b').app).toBe('orca')
+    expect(s.apps).toHaveBeenCalledTimes(1)
+  })
+
   it('a hook whose hints name an app walks nothing', () => {
     const s = walked()
     s.src.ingest(s.ev('session-start', { ...inApp, hostHints: { __CFBundleIdentifier: 'com.openai.codex' } }))
