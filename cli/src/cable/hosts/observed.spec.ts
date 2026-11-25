@@ -2964,6 +2964,15 @@ describe('ObservedSource and codex queue', () => {
       expect(actions.codexQueue.can).not.toHaveBeenCalled()
     })
 
+    // A home holds a rollout by whole parts of its resolved path.
+    it.each([['climbs out of a trusted home by ..', '/h/own/sessions/../../hooked'], ['sits in a look-alike of a trusted home', '/h/own2']])(
+      'a rollout that %s is not queue-able', async (_, home) => {
+        const { src, actions } = under(HOMES, rolloutIn(home))
+        expect(src.capabilities(src.list()[0]).voice).toBe(false)
+        expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+        expect(actions.codexQueue.send).not.toHaveBeenCalled()
+      })
+
     it('of two trusted homes holding the rollout, the deepest is the one it runs under, in either order', async () => {
       for (const homes of [['/h/a', '/h/a/sessions/b'], ['/h/a/sessions/b', '/h/a']]) {
         const { src, actions } = under(homes, rolloutIn('/h/a/sessions/b'))
