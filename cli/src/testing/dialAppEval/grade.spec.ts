@@ -449,12 +449,12 @@ describe('tier B timed results', () => {
     expect(slow.failing.map((r) => r.check)).toEqual(expect.arrayContaining(['needsYou.latency', 'wait.4']))
   })
 
-  it('the delta leaves out a tier B timed key the old baseline holds, and counts no held-out one', () => {
-    const old = baseline({ 'b/darwin/I17/needsYou.shown': 1, 'b/darwin/I17/needsYou.latency': 1, 'b/darwin/I17/wait.4': 1,
-      'b/darwin/XH1/open.latency': 1 })
+  it('the delta leaves out a tier B timed key the old baseline holds, keeps a tier A one, and counts no held-out one', () => {
+    const old = baseline({ 'a/darwin/C1/open.latency': 1, 'b/darwin/I17/needsYou.shown': 1, 'b/darwin/I17/needsYou.latency': 1,
+      'b/darwin/I17/wait.4': 1, 'b/darwin/XH1/open.latency': 1 })
     const held = result({ tier: 'b', app: 'iterm', scenario: 'XH1', heldOut: true, check: 'open.latency', dim: 'D3', score: 0, timed: true })
     const report = grade(run([...runOf(0.5, 0).results, held]), old)
-    expect(report.delta.checks.filter((c) => c.key.startsWith('b/'))).toEqual([])
+    expect(report.delta.checks).toEqual([{ key: 'a/darwin/C1/open.latency', before: 1, after: 0.5 }])
     expect(report.delta.heldOutChanged).toBe(0)
   })
 })
