@@ -317,7 +317,7 @@ describe('the device without the app', () => {
     const refused = await heard(dial, (m) => m.t === 'voice.error', 'the refusal', since)
     expect(refused).toMatchObject({
       uploadId: 'e2e-voice-1',
-      message: 'This agent is in Orca. Talking to it from the device comes in an update.',
+      message: 'This agent is in Orca. Type your reply in Orca.',
     })
   })
 

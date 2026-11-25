@@ -2043,7 +2043,7 @@ export class CableSession {
           this.voice = null
           this.voiceRefusal = { generation: this.voiceGeneration, agentId,
             message: this.host.voiceRefusal?.(agentId, this.asItself)
-              ?? `This agent is in ${this.hostName(agentId)}. Talking to it from the device comes in an update.` }
+              ?? `This agent is in ${this.hostName(agentId)}. Type your reply in ${this.hostName(agentId)}.` }
           return
         }
         this.voice = {
