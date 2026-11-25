@@ -86,6 +86,7 @@ core/engines/runtimeTransport.ts
 core/engines/screenTransport.ts
 core/engines/screens.ts
 core/engines/sessionBinding.ts
+core/engines/sessionHookWait.ts
 core/engines/snapshotTransport.ts
 core/engines/submissionTransport.ts
 core/engines/submissions.ts

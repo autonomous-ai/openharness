@@ -15,6 +15,7 @@ import { homeIsAbsolute } from './engines/kit/homeAdoption.js'
 import { isInteractiveSource, rowSessionSource, storeSourceQuery } from './engines/kit/storeSource.js'
 import { IdentityReadUnavailable } from './engines/kit/identityScan.js'
 import { createPendingAdmissions, type AdmissionDecision, type AdmissionHold } from './core/engines/pendingAdmission.js'
+import { createSessionHookWait, sessionKey, type AdmissionTicket, type SessionHookWaitBounds, type WaitingRoute } from './core/engines/sessionHookWait.js'
 import { paneReadIdentity } from './core/transcripts/readIdentity.js'
 import { processIdentityKey } from './lib/terminalRuntime.js'
 import { isRecentlyDeleted } from './lib/deletedSessions.js'
@@ -433,11 +434,25 @@ export interface HookServerOptions {
   admissionReceiptCapacity?: number
   /** Bound native payload and provenance retained by pending admission or linked Stop. */
   admissionBytesCapacity?: number
+  /** A test's bounds for the hooks waiting behind their session's admission (core/engines/sessionHookWait.ts). */
+  hookWait?: Partial<SessionHookWaitBounds>
 }
 
 /** Claude Code's own SessionEnd reasons, its hook input's `reason` (read from Claude Code 2.1.330): fixed words, logged as
  *  they are. Any other engine's reason is logged as a code or a length. */
 const SESSION_END_REASONS: readonly string[] = ['clear', 'resume', 'logout', 'prompt_input_exit', 'other']
+
+/** A session's follow-up hooks: each needs its session bound, and waits behind its session's admission until it is. */
+const FOLLOW_UP_ROUTES = new Map<string, WaitingRoute>([
+  ['/api/hook/turn-stop', 'turn-stop'], ['/api/hook/wait', 'wait'], ['/api/hook/subagent', 'subagent'],
+  ['/api/hook/tool-start', 'tool-start'], ['/api/hook/turn-start', 'turn-start'], ['/api/hook/session-end', 'session-end'],
+])
+/** What a route takes of a valid body: a wait says that the engine waits and when, never on what (what the person is
+ *  asked stays in the pane), and a subagent hook says started or stopped. */
+const FOLLOW_UP_TAKES: Partial<Record<WaitingRoute, (body: BoundHookBody) => boolean>> = {
+  wait: (body) => body.input === undefined && body.prompt === undefined,
+  subagent: (body) => body.hookEvent === 'SubagentStart' || body.hookEvent === 'SubagentStop',
+}
 
 /** The `/api/status` fields a caller without the local credential is answered. */
 // Which daemon this is (its pid and computer, as a takeover or a status check compares) and where its socket
@@ -459,6 +474,23 @@ export function startHookServer(
   const hookToken = loadOrCreateHookToken(env.ADAPTER_DATA_DIR)
   const peerAccount: PeerAccount = options.peerAccount ?? peerIsThisAccount
   const admissions = createPendingAdmissions({ isProcessCurrent: (key, scope) => admissionProcessScope(registry.byAgent(key)) === scope })
+  const waits = createSessionHookWait(options.hookWait)
+  // Per agent and delivery, the end of its latest admission job. `admissions.submit` drops an older job of a delivery
+  // for a newer request of it, or keeps the older one while it is current and drops the newer request, whose callbacks
+  // then never run (pendingAdmission.ts). So a job that ends after a newer request of its delivery was submitted ends
+  // the delivery's wait, unless it ends `stale_hook`, the one way a dropped job ends; a kept one that ends so leaves
+  // its session's waiting hooks to their own time limit.
+  const admissionJobEnds = new Map<string, () => void>()
+  const admissionJob = (agentId: string, deliveryId: string, ticket: AdmissionTicket) => {
+    const key = JSON.stringify([agentId, deliveryId]), end = ticket.queued()
+    admissionJobEnds.set(key, end)
+    return (reason?: string) => {
+      const latest = admissionJobEnds.get(key)
+      if (!latest || (latest !== end && reason === 'stale_hook')) return
+      admissionJobEnds.delete(key)
+      latest()
+    }
+  }
   let admissionArrival = 0
   const admissionHolds = new Map<string, Map<string, string>>()
   type StopAcknowledgement = { status: number; reply: unknown }
@@ -481,7 +513,61 @@ export function startHookServer(
   let lastRefusalLogAt = 0
   /** Apart from a refused host's minute: a pane whose binding went stale, refused every turn, never hides one. */
   let lastUnboundLogAt = 0
+  /** 403 to a hook its session's process did not send. Said at most once a minute, as a refused host is, in a minute
+   *  of its own: a pane whose binding went stale sends one every turn. */
+  const unbound = (sessionId: string | undefined, route: WaitingRoute) => {
+    if (Date.now() - lastUnboundLogAt > 60_000) {
+      lastUnboundLogAt = Date.now()
+      console.warn(`[hooks] ${sid(sessionId ?? '?')} ${route} refused · unbound`)
+    }
+    return { status: 403, body: { error: 'UNBOUND_HOOK' } }
+  }
+  /** A follow-up hook bound to its session's process, and its effect: one code for a hook as it arrives and as it runs
+   *  once its session's admission settled, with the time its engine ran it. */
+  const followUp = async (route: WaitingRoute, body: BoundHookBody, firedAt: number | undefined): Promise<{ status: number; body: unknown }> => {
+    const owner = await verifiedBoundMutation(body, handlers)
+    if (!owner) return unbound(body.sessionId, route)
+    const { sessionId } = owner
+    const at = firedAt ? { firedAt } : {}
+    switch (route) {
+      case 'session-end': {
+        const reason = body.reason && (SESSION_END_REASONS.includes(body.reason) ? body.reason : codeOrLength(body.reason))
+        console.log(`[hooks] ${sid(sessionId)} session-end${reason ? ` · reason=${reason}` : ''}`)
+        handlers.onSessionEnd(sessionId, body.reason)
+        break
+      }
+      case 'tool-start':
+        if (body.toolUseId && body.toolName) {
+          console.log(`[hooks] ${sid(sessionId)} tool-start · tool=${body.toolName}`)
+          handlers.onToolStart?.({ sessionId, toolUseId: body.toolUseId, toolName: body.toolName, input: body.input })
+        }
+        break
+      case 'turn-start':
+        handlers.onTurnStart?.({ sessionId })
+        break
+      case 'turn-stop': {
+        const identity = paneReadIdentity(owner)
+        console.log(`[hooks] ${sid(sessionId)} turn-stop${body.status ? ` · status=${body.status}` : ''}`)
+        const stop = { sessionId, status: body.status, transcriptPath: body.transcriptPath, ...at }
+        if (handlers.stopHookDelayMs) setTimeout(() => {
+          if (paneReadIdentity(registry.byAgent(owner.agentId)) === identity) handlers.onTurnStop?.(stop)
+        }, handlers.stopHookDelayMs)
+        else handlers.onTurnStop?.(stop)
+        break
+      }
+      case 'wait':
+        handlers.onPersonWait?.({ sessionId, ...at })
+        break
+      case 'subagent':
+        handlers.onSubagent?.({ sessionId, started: body.hookEvent === 'SubagentStart', ...at })
+        break
+    }
+    return { status: 200, body: { ok: true } }
+  }
   const handle: http.RequestListener = (req, res) => {
+    // A session-start's admission once its body is read: unsettled until this request's route returns, by whichever
+    // return, the process-record wait included (core/engines/sessionHookWait.ts).
+    let admission: AdmissionTicket | undefined
     void (async () => {
       const url = (req.url ?? '').split('?')[0]
       const json = (code: number, body: unknown): void => {
@@ -595,6 +681,11 @@ export function startHookServer(
           if (!validHookBody(parsed)) { json(400, { error: 'invalid hook body' }); return }
           body = parsed
         } catch { json(400, { error: 'bad json' }); return }
+        const engine = body.engine ?? 'claude'
+        const deliveryHeader = req.headers['x-harness-hook-delivery-id']
+        const nativeDeliveryId = typeof deliveryHeader === 'string' && /^[a-zA-Z0-9_-]{16,96}$/.test(deliveryHeader) ? deliveryHeader : undefined
+        const deliveryId = nativeDeliveryId ?? randomUUID()
+        if (body.sessionId) admission = waits.admission(sessionKey(engine, body.sessionId), deliveryId)
         // Only a refused header's name is logged: its value is a path or a word of the hook's own environment.
         const refusedHeader = (name: string) => console.warn(`[hooks] ${sid(body.sessionId ?? '?')} ${body.hookEvent ?? 'session-start'} header refused · ${name}`)
         const { refused, ...taken } = hookFacts(req)
@@ -625,7 +716,6 @@ export function startHookServer(
             + ` but this machine is v${VERSION} — that pane loaded an older copy.`)
           console.warn('[hooks] restart the pane (or reload its plugins) to pick up the current build')
         }
-        const engine = body.engine ?? 'claude'
         // Capture before process resolution yields. Native time is unchanged across client retries.
         const admissionOrder = { firedAt: hookFiredAt(req), arrival: ++admissionArrival }
         const fingerprint = createHash('sha256').update(JSON.stringify([body, admissionOrder.firedAt])).digest('hex')
@@ -643,9 +733,6 @@ export function startHookServer(
           body.tmuxPane = hint.backend === 'tmux' ? hint.paneId : undefined
         }
         if (!runtimeHints.length) { ignore('not_in_terminal'); return }
-        const deliveryHeader = req.headers['x-harness-hook-delivery-id']
-        const nativeDeliveryId = typeof deliveryHeader === 'string' && /^[a-zA-Z0-9_-]{16,96}$/.test(deliveryHeader) ? deliveryHeader : undefined
-        const deliveryId = nativeDeliveryId ?? randomUUID()
         const carriesStop = !!nativeDeliveryId && (engine === 'cursor' && body.hookEvent === 'stop'
           || engine === 'commandcode' && (body.hookEvent === 'Stop' || body.hookEvent === 'StopFailure'))
         const stopProvenance = (value: BoundHookBody, firedAt: number | undefined) => JSON.stringify([
@@ -903,6 +990,7 @@ export function startHookServer(
         const enqueue = () => {
           saveReceipt(history.records, deliveryId, { fingerprint, status: 200, reply: { pending: true }, pending: true, bytes: retainedBytes,
             ...(carriesStop ? { linkedStop } : {}) })
+          const jobEnded = admission && admissionJob(processAgent.agentId, deliveryId, admission)
           const queued = admissions.submit(processAgent.agentId, deliveryId, {
             conversationId: body.sessionId,
             order: { ...admissionOrder, scope: admissionProcessScope(processAgent) ?? processAgent.agentId },
@@ -913,21 +1001,27 @@ export function startHookServer(
             commit,
             held,
             reject: reason => {
-              parkedStop = undefined
-              clearHold()
-              console.log(`[hooks] ${sid(body.sessionId ?? '?')} ${body.hookEvent ?? 'session-start'} ignored · ${reason}`)
-              if (reason === 'invalid_session_registration') completedReply(400, { error: 'invalid session registration' })
-              else completedReply(200, { ignored: true, reason })
+              try {
+                parkedStop = undefined
+                clearHold()
+                console.log(`[hooks] ${sid(body.sessionId ?? '?')} ${body.hookEvent ?? 'session-start'} ignored · ${reason}`)
+                if (reason === 'invalid_session_registration') completedReply(400, { error: 'invalid session registration' })
+                else completedReply(200, { ignored: true, reason })
+              } finally { jobEnded?.(reason) }
             },
             accept: () => {
-              completedReply(200, { ok: true }); notify()
-              // A turn-stop parked while this was in flight is claimed as one sent now would be, through every fence.
-              const parked = parkedStop
-              parkedStop = undefined
-              // Its client left on pending and hears no reply: a claim that closed nothing is said here.
-              if (parked) void Promise.resolve(linkedStop(parked.stop, parked.firedAt)).then(({ status }) => {
-                if (status !== 200) console.log(`[hooks] ${sid(body.sessionId ?? '?')} parked Stop not claimed · status=${status}`)
-              }).catch(error => console.warn(`[hooks] parked linked Stop claim failed · ${errorKind(error)}`))
+              // Ended even if a step throws: unsettled, it would hold its session's later hooks. Those run on a later turn,
+              // after the bind's announcements here, which they rely on.
+              try {
+                completedReply(200, { ok: true }); notify()
+                // A turn-stop parked while this was in flight is claimed as one sent now would be, through every fence.
+                const parked = parkedStop
+                parkedStop = undefined
+                // Its client left on pending and hears no reply: a claim that closed nothing is said here.
+                if (parked) void Promise.resolve(linkedStop(parked.stop, parked.firedAt)).then(({ status }) => {
+                  if (status !== 200) console.log(`[hooks] ${sid(body.sessionId ?? '?')} parked Stop not claimed · status=${status}`)
+                }).catch(error => console.warn(`[hooks] parked linked Stop claim failed · ${errorKind(error)}`))
+              } finally { jobEnded?.() }
             },
           })
           if (queued) {
@@ -949,6 +1043,7 @@ export function startHookServer(
               answer(200, { pending: true })
             })
           } else {
+            jobEnded?.()
             saveReceipt(history.records, deliveryId)
             const detail = 'Too many unverified hooks are pending; this hook was not queued. Retry after recovery.'
             console.log(`[hooks] ${sid(body.sessionId ?? '?')} held · HOOK_ADMISSION_BUSY`)
@@ -959,55 +1054,39 @@ export function startHookServer(
         return
       }
 
-      /** 403 to a hook its session's process did not send. Said at most once a minute, as a refused host is, in a minute
-       *  of its own: a pane whose binding went stale sends one every turn. */
-      const refuseUnbound = (sessionId: string | undefined, route: string): void => {
-        if (Date.now() - lastUnboundLogAt > 60_000) {
-          lastUnboundLogAt = Date.now()
-          console.warn(`[hooks] ${sid(sessionId ?? '?')} ${route} refused · unbound`)
-        }
-        json(403, { error: 'UNBOUND_HOOK' })
-      }
-      /** A hook read, checked and bound to its session's process, and what `takes` says of its body: null once refused. */
-      const boundHook = async (route: string, takes = (_: BoundHookBody) => true): Promise<BoundHookBody & { sessionId: string } | null> => {
-        if (!hookOk) { json(401, { error: 'UNAUTHORIZED' }); return null }
+      const route = req.method === 'POST' ? FOLLOW_UP_ROUTES.get(url) : undefined
+      if (route) {
+        if (!hookOk) { json(401, { error: 'UNAUTHORIZED' }); return }
         let body: BoundHookBody
         try {
           const parsed = JSON.parse(await readBody(req)) as unknown
-          if (!validHookBody(parsed) || !takes(parsed)) { json(400, { error: 'invalid hook body' }); return null }
+          if (!validHookBody(parsed) || FOLLOW_UP_TAKES[route]?.(parsed) === false) { json(400, { error: 'invalid hook body' }); return }
           body = parsed
-        } catch { json(400, { error: 'bad json' }); return null }
-        const owner = await verifiedBoundMutation(body, handlers)
-        if (!owner) { refuseUnbound(body.sessionId, route); return null }
-        return { ...body, sessionId: owner.sessionId }
-      }
-
-      if (req.method === 'POST' && url === '/api/hook/session-end') {
-        const hook = await boundHook('session-end')
-        if (!hook) return
-        const reason = hook.reason && (SESSION_END_REASONS.includes(hook.reason) ? hook.reason : codeOrLength(hook.reason))
-        console.log(`[hooks] ${sid(hook.sessionId)} session-end${reason ? ` · reason=${reason}` : ''}`)
-        handlers.onSessionEnd(hook.sessionId, hook.reason)
-        json(200, { ok: true })
-        return
-      }
-
-      if (req.method === 'POST' && url === '/api/hook/tool-start') {
-        const hook = await boundHook('tool-start')
-        if (!hook) return
-        if (hook.toolUseId && hook.toolName) {
-          console.log(`[hooks] ${sid(hook.sessionId)} tool-start · tool=${hook.toolName}`)
-          handlers.onToolStart?.({ sessionId: hook.sessionId, toolUseId: hook.toolUseId, toolName: hook.toolName, input: hook.input })
+        } catch { json(400, { error: 'bad json' }); return }
+        const firedAt = hookFiredAt(req)
+        // The Stop a Cursor or Command Code registration carries keeps its registration's path, ahead of any wait.
+        const delivery = route === 'turn-stop' ? req.headers['x-harness-hook-delivery-id'] : undefined
+        if (typeof delivery === 'string') {
+          const pending = resolvingStops.get(delivery)?.stop ?? [...admissionReceipts.values()]
+            .map(history => history.records.get(delivery)?.linkedStop).find(Boolean)
+          const acknowledgement = await pending?.(body, firedAt)
+          if (acknowledgement) { json(acknowledgement.status, acknowledgement.reply); return }
+          if (/^[a-zA-Z0-9_-]{16,96}$/.test(delivery) && (body.engine === 'cursor' || body.engine === 'commandcode')) {
+            // These native clients register this same delivery before Stop. A
+            // refused queue or a restarted core has no completion authority yet.
+            json(202, { pending: false, retry: true, detail: 'Waiting for the linked Stop registration to be admitted.' }); return
+          }
         }
-        json(200, { ok: true })
-        return
-      }
-
-      if (req.method === 'POST' && url === '/api/hook/turn-start') {
-        const hook = await boundHook('turn-start')
-        if (!hook) return
-        handlers.onTurnStart?.({ sessionId: hook.sessionId })
-        json(200, { ok: true })
+        // Its session not bound yet, behind an admission of it that arrived first: kept and answered `pending`, which its
+        // client takes as sent, and run as it arrived once that admission settled. Refused, it was lost: its client sends
+        // a hook once.
+        const { engine, sessionId } = body
+        if (engine && sessionId && registry.bySession(sessionId)?.engine !== engine && waits.hold(sessionKey(engine, sessionId),
+          { route, sessionId, bytes: Buffer.byteLength(JSON.stringify(body)), run: async () => { await followUp(route, body, firedAt) } })) {
+          json(200, { pending: true }); return
+        }
+        const reply = await followUp(route, body, firedAt)
+        json(reply.status, reply.body)
         return
       }
 
@@ -1038,61 +1117,6 @@ export function startHookServer(
         // No device is not an empty hold: the mod asks again in 60 s, not at once.
         if (answer === 'off') { json(503, { error: 'NO_DEVICE' }); return }
         json(200, answer)
-        return
-      }
-
-      if (req.method === 'POST' && url === '/api/hook/turn-stop') {
-        if (!hookOk) { json(401, { error: 'UNAUTHORIZED' }); return }
-        let body: BoundHookBody
-        try {
-          const parsed = JSON.parse(await readBody(req)) as unknown
-          if (!validHookBody(parsed)) { json(400, { error: 'invalid hook body' }); return }
-          body = parsed
-        } catch { json(400, { error: 'bad json' }); return }
-        const delivery = req.headers['x-harness-hook-delivery-id']
-        if (typeof delivery === 'string') {
-          const pending = resolvingStops.get(delivery)?.stop ?? [...admissionReceipts.values()]
-            .map(history => history.records.get(delivery)?.linkedStop).find(Boolean)
-          const acknowledgement = await pending?.(body, hookFiredAt(req))
-          if (acknowledgement) { json(acknowledgement.status, acknowledgement.reply); return }
-          if (/^[a-zA-Z0-9_-]{16,96}$/.test(delivery) && (body.engine === 'cursor' || body.engine === 'commandcode')) {
-            // These native clients register this same delivery before Stop. A
-            // refused queue or a restarted core has no completion authority yet.
-            json(202, { pending: false, retry: true, detail: 'Waiting for the linked Stop registration to be admitted.' }); return
-          }
-        }
-        const owner = await verifiedBoundMutation(body, handlers)
-        if (!owner) { refuseUnbound(body.sessionId, 'turn-stop'); return }
-        if (body.sessionId) {
-          const identity = paneReadIdentity(owner)
-          console.log(`[hooks] ${sid(body.sessionId)} turn-stop${body.status ? ` · status=${body.status}` : ''}`)
-          const fired = hookFiredAt(req)
-          const stop = { sessionId: body.sessionId, status: body.status, transcriptPath: body.transcriptPath, ...(fired ? { firedAt: fired } : {}) }
-          if (handlers.stopHookDelayMs) setTimeout(() => {
-            if (paneReadIdentity(registry.byAgent(owner.agentId)) === identity) handlers.onTurnStop?.(stop)
-          }, handlers.stopHookDelayMs)
-          else handlers.onTurnStop?.(stop)
-        }
-        json(200, { ok: true })
-        return
-      }
-
-      if (req.method === 'POST' && url === '/api/hook/wait') {
-        // That the engine waits and when, never on what: what the person is asked stays in the pane.
-        const hook = await boundHook('wait', (body) => body.input === undefined && body.prompt === undefined)
-        if (!hook) return
-        const firedAt = hookFiredAt(req)
-        handlers.onPersonWait?.({ sessionId: hook.sessionId, ...(firedAt ? { firedAt } : {}) })
-        json(200, { ok: true })
-        return
-      }
-
-      if (req.method === 'POST' && url === '/api/hook/subagent') {
-        const hook = await boundHook('subagent', (body) => body.hookEvent === 'SubagentStart' || body.hookEvent === 'SubagentStop')
-        if (!hook) return
-        const firedAt = hookFiredAt(req)
-        handlers.onSubagent?.({ sessionId: hook.sessionId, started: hook.hookEvent === 'SubagentStart', ...(firedAt ? { firedAt } : {}) })
-        json(200, { ok: true })
         return
       }
 
@@ -1152,10 +1176,10 @@ export function startHookServer(
         res.writeHead(500, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ error: 'INTERNAL' }))
       } else if (!res.writableEnded) res.end()
-    })
+    }).finally(() => admission?.requestDone())
   }
   const server = http.createServer(handle)
-  server.once('close', () => admissions.close())
+  server.once('close', () => { admissions.close(); waits.close() })
 
   return new Promise((resolve, reject) => {
     let fellBack = false
