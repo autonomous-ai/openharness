@@ -1161,6 +1161,64 @@ describe('Orca', () => {
       const s = input('tap', 'oz')
       expect(run({ ...open, session: 'oz' }, s, seen(s, [500])).flatMap((r) => r.evidence)).toEqual([])
     })
+
+    describe('under tmux', () => {
+      const OT = orca('ot', 43, { tab: 1, tmux: true })
+      const tmuxed = (kind: 'tap' | 'swipe' = 'tap'): Scenario => scenario([{ kind, session: 'ot', label: 'go' }], [OA, OB, OT, OZ])
+      const opened: Check = { ...open, session: 'ot' }
+      const shown = (s: Scenario, commands: Seen['commands']): Seen => seen(s, [500], { commands, frames: list(0, 'orca', [OA, OB, OT]) })
+      /** tmux showing a pane as the devices move it: its window and pane selected (Linux), or the client used last
+       *  switched to it (macOS, where tmux's lookup finds no app for the client); panes as tier A records them. */
+      const TMUX = '/opt/eval/bin/tmux'
+      const moved = (at: number, pane: string, platform: Platform, ok = true): Seen['commands'][number] => cmd(at, platform === 'linux'
+        ? [TMUX, 'select-window', '-t', pane, ';', 'select-pane', '-t', pane]
+        : [TMUX, 'switch-client', '-c', '/dev/ttys004', '-t', pane], ok)
+      const tapped = (platform: Platform, ...tmux: Seen['commands']): CheckResult[] => run(opened, tmuxed(),
+        shown(tmuxed(), [activate(600, 'w1', platform), switchTo(700, handle(OT), true, platform), ...tmux, cmd(800, RAISE[platform])]), 'a', platform)
+      const LEAK = /%[0-9]+|\/dev\/|ttys|pts\//
+
+      it("a tap passes on its tab's switch, tmux showing its pane and Orca's raise, by a select on Linux and a client switch on macOS", () => {
+        for (const platform of ['linux', 'darwin'] as const) {
+          const results = tapped(platform, moved(750, 'pane:ot', platform))
+          expect(results.map((r) => r.check)).toEqual(['o.worktree', 'o.switch', 'o.pane', 'o.raise', 'o.latency'])
+          expect(scores(results), platform).toEqual({ worktree: 1, switch: 1, pane: 1, raise: 1, latency: 1 })
+          expect(results[0]!.evidence).toEqual(['tap on ot at 500', 'command at 600: worktree', 'command at 700: switch ot',
+            'command at 750: pane ot', 'command at 800: front'])
+        }
+        // A rest shows its pane too, and raises nothing.
+        const rest = run(opened, tmuxed('swipe'), shown(tmuxed('swipe'), [switchTo(700, handle(OT)), moved(750, 'pane:ot', 'darwin')]))
+        expect(scores(rest)).toEqual({ worktree: 1, switch: 1, pane: 1, noRaise: 1 })
+      })
+
+      it("pane is 0 when tmux shows another session's pane, its move failed, or tmux ran nothing; the other parts as before", () => {
+        for (const platform of ['linux', 'darwin'] as const) {
+          for (const tmux of [[moved(750, 'pane:oa', platform)], [moved(750, 'pane:ot', platform, false)], [],
+            [moved(750, 'pane:ot', platform), moved(760, 'pane:other', platform)]]) {
+            expect(scores(tapped(platform, ...tmux)), platform).toEqual({ worktree: 1, switch: 1, pane: 0, raise: 1, latency: 1 })
+          }
+          expect(tapped(platform, moved(750, 'pane:oa', platform))[0]!.evidence).toContain('command at 750: pane oa')
+          expect(tapped(platform, moved(750, 'pane:ot', platform, false))[0]!.evidence).toContain('command at 750: pane ot failed')
+          expect(tapped(platform, moved(750, 'pane:other', platform))[0]!.evidence).toContain('command at 750: pane other')
+        }
+      })
+
+      it('no evidence line names a pane id or a client tty', () => {
+        for (const platform of ['linux', 'darwin'] as const) {
+          for (const tmux of [[moved(750, 'pane:ot', platform)], [moved(750, 'pane:oa', platform)], [moved(750, 'pane:ot', platform, false)],
+            [moved(750, 'pane:other', platform)], []]) {
+            for (const line of tapped(platform, ...tmux).flatMap((r) => r.evidence)) expect(line).not.toMatch(LEAK)
+          }
+        }
+      })
+
+      it('a plain Orca row has no pane part, nor a row under tmux in tier B', () => {
+        const s = input('tap')
+        const commands = [activate(600, 'w1'), switchTo(700, handle(OA)), moved(750, 'pane:oa', 'darwin'), cmd(800, RAISE.darwin)]
+        expect(scores(run(open, s, listed(s, [500], { commands })))).toEqual({ worktree: 1, switch: 1, raise: 1, latency: 1 })
+        const b = run(opened, tmuxed(), shown(tmuxed(), [activate(600, 'w1'), switchTo(700, handle(OT)), cmd(800, RAISE.darwin)]), 'b')
+        expect(scores(b)).toEqual({ worktree: 1, switch: 1, raise: 1, latency: 1 })
+      })
+    })
   })
 
   describe('chats', () => {
