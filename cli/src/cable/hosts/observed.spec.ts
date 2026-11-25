@@ -3185,6 +3185,16 @@ describe('ObservedSource and the app a hook\'s caller runs in', () => {
     expect(s.apps).toHaveBeenCalledTimes(1)
   })
 
+  // Windows' parents name no app (scannedApp.ts scanLearnsApps): a walk there would only hold an Orca agent on Other's
+  // page until it answers, as its first turn after the devices started again is followed and counted.
+  it('on Windows a hook that names Orca by TERM_PROGRAM alone is Orca\'s at once, walking nothing', () => {
+    const apps = vi.fn(async (): Promise<ReadonlyMap<number, string>> => new Map())
+    const s = setup({ platform: 'win32', apps })
+    s.src.ingest(s.ev('turn-start', { hostHints: { TERM_PROGRAM: 'Orca' } }))
+    expect(s.src.list()[0].app).toBe('orca')
+    expect(apps).not.toHaveBeenCalled()
+  })
+
   it('a hook whose hints name an app walks nothing', () => {
     const s = walked()
     s.src.ingest(s.ev('session-start', { ...inApp, hostHints: { __CFBundleIdentifier: 'com.openai.codex' } }))

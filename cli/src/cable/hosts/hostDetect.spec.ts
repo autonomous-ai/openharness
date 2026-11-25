@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { APP_BUNDLES, APP_IDS, appDisplayName, detectApp, detectHost, hostDisplayName, inCmux, inHerdr, otherProduct, ownHints, UNKNOWN_APP } from './hostDetect.js'
+import { APP_BUNDLES, APP_IDS, appDisplayName, detectApp, detectHost, EXTENSION_TAB, hostDisplayName, inCmux, inHerdr, otherProduct, ownHints, UNKNOWN_APP } from './hostDetect.js'
 
 describe('detectHost', () => {
   it.each([
@@ -177,6 +177,16 @@ describe('detectApp', () => {
     expect(detectHost(cursor)).toBe('cursor')
     expect(detectHost({ TERM_PROGRAM: 'Orca', __CFBundleIdentifier: APP_BUNDLES.claude })).toBe('claude')
     expect(detectHost({ TERM_PROGRAM: 'Orca', __CFBundleIdentifier: APP_BUNDLES.codex })).toBe('codex')
+  })
+
+  // VS Code or the Claude app started from an Orca terminal keeps its TERM_PROGRAM, and on macOS the editor's inherited
+  // bundle id is dropped (ownHints): the word the session gives of where it runs names no Orca terminal.
+  it("the extension's tab and the Claude app's sessions are never Orca's, though they inherit its TERM_PROGRAM", () => {
+    for (const entrypoint of [EXTENSION_TAB, 'claude-desktop']) {
+      const hints = { TERM_PROGRAM: 'Orca', CLAUDE_CODE_ENTRYPOINT: entrypoint }
+      expect(detectApp(hints)).toBe(UNKNOWN_APP)
+      expect(detectHost(hints)).toBe('terminal')
+    }
   })
 
   it("the Claude desktop app's bundle id is claude, read Claude", () => {
