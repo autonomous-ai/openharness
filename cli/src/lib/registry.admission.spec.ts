@@ -225,7 +225,7 @@ it('does not consume post-rename uncertainty as success after a local removal ch
   expect(readFileSync(file, 'utf8')).not.toBe(written)
 })
 
-it.each(['rename', 'changed-proof', 'peer-commit'])('keeps a resumed binding intact when its rotation\'s write meets %s',async mode => {
+it.each(['rename', 'changed-proof', 'peer-commit'])('keeps a resumed binding intact when its rotation\'s write meets %s', async mode => {
   expect((await registry.register(input()))).not.toBeNull()
   const row = registry.byAgent(target)!
   row.resumeOnly = true; row.lastHookAt = 0; row.launch = { state: 'starting' }; (await registry.flush())

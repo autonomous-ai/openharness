@@ -95,4 +95,3 @@ export async function hermesStoreStamp(home: string): Promise<string> {
   const stamps = await Promise.all([`${store}-wal`, store].map(file => lstat(file).then(info => `${info.mtimeMs}:${info.size}`, () => '-')))
   return stamps.join('|')
 }
-
