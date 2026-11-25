@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { join, resolve } from 'path'
 import type * as CodexProfilesModule from './codexProfiles.js'
 
 // Pass-through, recording what the shared writer does on disk: the renames and the opens.
@@ -314,18 +314,36 @@ describe('codexProfiles', () => {
     expect(readLinkedCodexHomes()).toEqual([abs('a'), longest, abs('f')])
   })
 
-  it('the trusted homes are the own ones then the linked ones, each followed by its real path, once', async () => {
+  /** As queueHome reads them: each home with its resolved sessions folder. */
+  const listed = (...homes: string[]) => homes.map((home) => ({ home, sessions: resolve(home, 'sessions') }))
+
+  it('the trusted homes are the own ones, each also by its real path, then the linked ones as stored, once, deepest first', async () => {
     const { trustedCodexHomes } = await loadModule()
     const real = (path: string) => path === '/o' ? '/private/o' : path === '/gone' ? null : path
-    expect(trustedCodexHomes(() => ['/o'], () => 0, () => ['/l'], real)()).toEqual(['/o', '/private/o', '/l'])
-    // Linked by its real path, and a home whose real path cannot be read now.
-    expect(trustedCodexHomes(() => ['/o'], () => 0, () => ['/private/o', '/gone', '/l'], real)())
-      .toEqual(['/o', '/private/o', '/gone', '/l'])
+    expect(trustedCodexHomes(() => ['/o'], () => 0, () => ['/l'], real)()).toEqual(listed('/private/o', '/o', '/l'))
+    // Linked by its real path, and an own home whose real path cannot be read now.
+    expect(trustedCodexHomes(() => ['/o', '/gone'], () => 0, () => ['/private/o', '/l'], real)())
+      .toEqual(listed('/private/o', '/o', '/gone', '/l'))
   })
 
-  it('the linked list and the real paths are held 30 s, the own homes asked at every call', async () => {
-    const { trustedCodexHomes, TRUSTED_HOMES_MS } = await loadModule()
-    expect(TRUSTED_HOMES_MS).toBe(30_000)
+  // queueHome takes the first whose sessions folder holds the rollout: a home inside another's is the session's.
+  it('a home inside another home\'s sessions folder comes before it, each sessions folder resolved', async () => {
+    const { trustedCodexHomes } = await loadModule()
+    expect(trustedCodexHomes(() => ['/h/a', '/h/x/../y'], () => 0, () => ['/h/a/sessions/b'], (path) => path)())
+      .toEqual([...listed('/h/a/sessions/b', '/h/a'), { home: '/h/x/../y', sessions: resolve('/h/y/sessions') }])
+  })
+
+  // linkCodexProfile stores a profile by its real path: a linked home on a dead network volume never blocks a look.
+  it('only the own homes are asked their real path, never a linked one', async () => {
+    const { trustedCodexHomes } = await loadModule()
+    const real = vi.fn((path: string) => path)
+    trustedCodexHomes(() => ['/o'], () => 0, () => ['/l1', '/l2'], real)()
+    expect(real.mock.calls).toEqual([['/o']])
+  })
+
+  it('the own homes are held 1 s, the linked list and the real paths 30 s', async () => {
+    const { trustedCodexHomes, OWN_HOMES_MS, TRUSTED_HOMES_MS } = await loadModule()
+    expect([OWN_HOMES_MS, TRUSTED_HOMES_MS]).toEqual([1_000, 30_000])
     let clock = 0
     let ownHomes = ['/o']
     const own = vi.fn(() => ownHomes)
@@ -333,21 +351,22 @@ describe('codexProfiles', () => {
     const real = vi.fn((path: string) => path)
     const homes = trustedCodexHomes(own, () => clock, read, real)
     for (let call = 0; call < 100; call++) {
-      clock = call * 299
+      clock = call * 9
       homes()
     }
-    expect(own).toHaveBeenCalledTimes(100)
-    expect(read).toHaveBeenCalledTimes(1)
-    expect(real).toHaveBeenCalledTimes(2)
+    expect([own, read, real].map((fn) => fn.mock.calls.length)).toEqual([1, 1, 1])
 
-    // An adopted home counts at once.
+    // An adopted home counts within the second.
     ownHomes = ['/o', '/adopted']
-    expect(homes()).toEqual(['/o', '/adopted', '/l'])
-    expect(read).toHaveBeenCalledTimes(1)
+    clock = 1_000
+    expect(homes()).toEqual(listed('/o', '/adopted', '/l'))
+    expect([own, read, real].map((fn) => fn.mock.calls.length)).toEqual([2, 1, 2])
+    clock = 1_999
+    homes()
+    expect(own).toHaveBeenCalledTimes(2)
 
     clock = 30_000
     homes()
-    expect(read).toHaveBeenCalledTimes(2)
-    expect(real).toHaveBeenCalledTimes(6)
+    expect([own, read, real].map((fn) => fn.mock.calls.length)).toEqual([3, 2, 4])
   })
 })
