@@ -77,7 +77,7 @@ it.each(['held alive', 'held gone', 'starting gone'] as const)('preserves the or
   const h = harness([entry], { alivePanes: phase.endsWith('alive') ? ['%3'] : [] })
   h.deps.waitingPane = async () => true
   h.deps.keepAbandoned = vi.fn()
-  const held = createHeldLaunches({ registry: h.deps.registry, restore: only => restoreAgents({ ...h.deps, only }), log: () => {} })
+  const held = createHeldLaunches({ registry: h.deps.registry, restore: only => restoreAgents({ ...h.deps, only }), announce: () => {}, log: () => {} })
   await held.boot(() => restoreAgents(h.deps))
   expect(entry.launch).toMatchObject({ state: 'held', nativeToken: 'original' })
   expect(await held.restartHeld(entry.agentId)).toMatchObject({ ok: false, error: 'SERVICE_UNAVAILABLE' })
@@ -99,7 +99,7 @@ it('revokes an active held restore when shutdown begins during launch preparatio
     return new Promise<RestoreLaunch>(done => { finish = done })
   })
   h.deps.keepAbandoned = vi.fn()
-  const held = createHeldLaunches({ registry: h.deps.registry, log: () => {},
+  const held = createHeldLaunches({ registry: h.deps.registry, announce: () => {}, log: () => {},
     restore: (only, current) => restoreAgents({ ...h.deps, only, cancelled: () => !current() }) })
   await held.boot(async () => {})
   const pending = held.restoreHeld()
@@ -373,7 +373,7 @@ describe('restore ownership across asynchronous work', () => {
     h.deps.revision = id => jobs.revision(id)
     h.deps.cancelled = () => false
     h.probes.set('%3', [identity(7)])
-    const retry = createHeldLaunches({ registry: h.deps.registry, log: vi.fn(),
+    const retry = createHeldLaunches({ registry: h.deps.registry, announce: () => {}, log: vi.fn(),
       restore: only => restoreAgents({ ...h.deps, only }) })
     await retry.boot(async () => {})
     expect(await jobs.run('agent-a', async () => {
@@ -1602,7 +1602,7 @@ describe('missing held panes against the durable registry', () => {
     let finish!: () => void
     const previous = operations.run('agent-a', () => new Promise<void>(done => { finish = done }))
     h.probes.set('%0', [identity(8)])
-    const held = createHeldLaunches({ registry: h.deps.registry, restore: only => restoreAgents({ ...h.deps, only }), log: () => {} })
+    const held = createHeldLaunches({ registry: h.deps.registry, restore: only => restoreAgents({ ...h.deps, only }), announce: () => {}, log: () => {} })
     await held.boot(async () => {})
     expect(await held.restoreHeld('store')).toMatchObject({ retry: true })
     expect(h.paneCreates).toBe(0)
