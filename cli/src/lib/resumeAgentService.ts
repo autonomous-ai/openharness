@@ -8,7 +8,7 @@ import { materializeResumeTranscript } from '../engines/resumeTranscript.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import { ResumePreparationError } from '../engines/facets/resumeRepair.js'
 import type { StoppedAgentStore } from './stoppedAgents.js'
-import { holdsResumedConversation, resumeStoppedAgent, waitForResumedAgent, resumeChanged, resumeUnconfirmed, RESUME_READINESS_BUDGET_MS } from './resumeStoppedAgent.js'
+import { holdsResumedConversation, reconfirmed, resumeStoppedAgent, waitForResumedAgent, resumeChanged, resumeUnconfirmed, RESUME_READINESS_BUDGET_MS } from './resumeStoppedAgent.js'
 import { checkPidRuntime } from './deleteAgentFallback.js'
 import { checkSessionRuntime, publishEngine, resolvePaneEngineProcess } from './paneEngineProcess.js'
 import { engineBin, enginePathOverride } from './engineBin.js'
@@ -136,7 +136,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
     // A second look at an unconfirmed resume: the verdict is withdrawn before the check, or the
     // readiness probe would return it straight back. The desk sees the tile leave "Start failed".
     const unconfirmed = ownsRoute() ? registry.byAgent(saved.agentId) : undefined
-    if (unconfirmed?.launch?.state === 'failed' && unconfirmed.launch.error === 'RESUME_UNCONFIRMED') {
+    if (unconfirmed?.launch?.state === 'failed' && reconfirmed(unconfirmed.launch.error)) {
       // No await separates the verified row above from this synchronous update.
       announceSession(registry.setLaunch(saved.agentId, { state: 'starting' })!)
     }

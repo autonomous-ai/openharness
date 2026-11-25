@@ -24,6 +24,11 @@ export const RESUME_READINESS_BUDGET_MS = 10 * 60_000
 export const resumeChanged = { ok: false, error: 'AGENT_CHANGED', detail: 'The harness changed while opening. Select it again.' } as const
 export const resumeUnconfirmed = { ok: false, error: 'RESUME_UNCONFIRMED', detail: 'The saved conversation has not been confirmed yet. Check the terminal, then select the harness again to check its status.' } as const
 
+/** Verdicts a running engine is asked about again rather than repeated: never confirmed is not disproved, and
+ *  RESUME_SESSION_MISMATCH is an older build's, for a hook of the resumed process naming another conversation, which
+ *  binds it now (`registry.register`). Repeated, it kept a running engine "Start failed" until discovery healed it. */
+export const reconfirmed = (error: string) => error === 'RESUME_UNCONFIRMED' || error === 'RESUME_SESSION_MISMATCH'
+
 /** [row] holds the conversation [sessionId] names, or one [process] (the resumed engine, as its pane showed it) moved
  *  it onto since: a `/clear`, a `/new`, Codex's first prompt naming a new thread, or the first one of a resume that had
  *  none, each bound by that process's own hook (`registry.register`). The engine running is the truth; another
@@ -66,11 +71,10 @@ export async function resumeStoppedAgent(deps: ResumeStoppedDeps): Promise<Resta
       if (runtime.state === 'unknown') return resumeUnconfirmed
       if (runtime.state === 'alive') {
         if (latest.resumeOnly && latest.launch?.state === 'failed') {
-          // Never confirmed is not the same as disproved: the engine is running, so ask for
-          // confirmation again rather than repeating the old verdict.
-          if (latest.launch.error === 'RESUME_UNCONFIRMED') return deps.waitForReady(latest)
+          // The engine is running, so ask for confirmation again rather than repeating the old verdict.
+          if (reconfirmed(latest.launch.error)) return deps.waitForReady(latest)
           // Any other verdict is reported as ITSELF. Relabelling them all "not confirmed yet" told
-          // somebody whose resume had reopened the wrong conversation to go and check the terminal,
+          // somebody whose resume had failed for another reason to go and check the terminal,
           // and hid the one fact that would have explained what they were looking at.
           return { ok: false, error: latest.launch.error, detail: latest.launch.detail }
         }
