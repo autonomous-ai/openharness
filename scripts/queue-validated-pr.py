@@ -72,6 +72,8 @@ def gate_evidence(client, run, output, root=None, base=None):
 
 # Runs of one head inspected for a plan that is not a draft: a push and "ready for review" start two.
 PLAN_RUNS = 5
+# A plan lists every changed path. One that can pass fits GitHub's 1 MB job output, so its zip stays below this.
+PLAN_BYTES = 1024 ** 2
 
 
 def run_plan(client, run):
@@ -79,7 +81,7 @@ def run_plan(client, run):
     artifacts = [a for a in client.pages(f"actions/runs/{run['id']}/artifacts", "artifacts") if a.get("name") == "ci-plan"]
     if not artifacts:
         return None
-    if len(artifacts) != 1 or artifacts[0].get("size_in_bytes", 65537) > 65536:
+    if len(artifacts) != 1 or artifacts[0].get("size_in_bytes", PLAN_BYTES + 1) > PLAN_BYTES:
         raise ValueError("expected one bounded CI plan")
     archive = client.command("api", f"repos/{client.repository}/actions/artifacts/{artifacts[0]['id']}/zip", binary=True)
     plan = ci.summary_contents(artifacts[0], archive, run, "ci-plan")
