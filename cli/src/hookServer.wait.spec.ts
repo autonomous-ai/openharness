@@ -94,10 +94,29 @@ async function start(overrides: Partial<HookServerHandlers> = {}, hookWait?: Par
   return { handlers, post }
 }
 
+type Post = Awaited<ReturnType<typeof start>>['post']
+
 /** The new conversation's SessionStart, held until its transcript is written. */
-async function holdStart(post: Awaited<ReturnType<typeof start>>['post'], headers: Record<string, string> = {}) {
+async function holdStart(post: Post, headers: Record<string, string> = {}) {
   expect(await post('session-start', session(NEW), { ...firedAt(500), ...headers })).toEqual(held)
   expect(lines).toContain(`[hooks] ${N} SessionStart held · DURABLE_ADMISSION_WAIT · IdentityReadUnavailable IDENTITY_UNAVAILABLE`)
+}
+
+/** Drops the agent's admission receipts, as they are when its process changes, here changed and changed back: a delivery
+ *  sent again then reaches the queue instead of its pending receipt. */
+async function dropReceipts(post: Post) {
+  await registry.openProcessAgent({ engine: 'claude', tmuxPane: '%2', cwd: root,
+    processIdentity: { pid: 5102, startMarker: 'fixture-start', executable: '<claude>' } })
+  const other = 'dddddddd-4444-4444-8444-dddddddddddd'
+  writeFileSync(transcript(other), '{}\n')
+  const real = registry.byAgent.bind(registry)
+  const changed = vi.spyOn(registry, 'byAgent').mockImplementation(id => {
+    const row = real(id)
+    return id === agentId && row ? { ...row, processIdentity: { ...row.processIdentity!, pid: 9_999 } } : row
+  })
+  // Another agent's hook while this one's process reads as another: this one's receipts go.
+  expect(await post('session-start', session(other, 'SessionStart', '%2'), firedAt(600))).toEqual({ status: 200, body: { ok: true } })
+  changed.mockRestore()
 }
 
 /** The transcript is written and the held SessionStart's retry runs: the agent binds NEW. */
@@ -255,32 +274,42 @@ describe('a follow-up hook of a session being admitted', () => {
   })
 
   // pendingAdmission keeps a delivery's older job while it is current and drops the newer request, whose callbacks then
-  // never run: the kept job's end settles the delivery. A delivery sent again reaches the queue once its agent's receipts
-  // were dropped, as they are when the agent's process changes, here changed and changed back.
+  // never run: the kept job's end settles the delivery.
   it('settles a SessionStart sent again whose older job was kept by that job\'s end', async () => {
     const { handlers, post } = await start()
     // The process change drops the queue's watermark too, so the next look orders against the binding's own time.
     const delivery = { ...firedAt(Date.now() + 60_000), 'x-harness-hook-delivery-id': 'fixture-delivery-0002' }
     await holdStart(post, delivery)
     expect(await post('turn-stop', followUp(), firedAt(1_000))).toEqual(held)
-    await registry.openProcessAgent({ engine: 'claude', tmuxPane: '%2', cwd: root,
-      processIdentity: { pid: 5102, startMarker: 'fixture-start', executable: '<claude>' } })
-    const other = 'dddddddd-4444-4444-8444-dddddddddddd'
-    writeFileSync(transcript(other), '{}\n')
-    const real = registry.byAgent.bind(registry)
-    const changed = vi.spyOn(registry, 'byAgent').mockImplementation(id => {
-      const row = real(id)
-      return id === agentId && row ? { ...row, processIdentity: { ...row.processIdentity!, pid: 9_999 } } : row
-    })
-    // Another agent's hook while this one's process reads as another: this one's receipts go.
-    expect(await post('session-start', session(other, 'SessionStart', '%2'), firedAt(600))).toEqual({ status: 200, body: { ok: true } })
-    changed.mockRestore()
+    await dropReceipts(post)
     expect(await post('session-start', session(NEW), delivery)).toEqual(held)
     // Kept, not replaced: a new job would have been inspected and held on its own.
     expect(lines.filter(line => line.includes(`${N} SessionStart held`))).toHaveLength(1)
     await bind(handlers)
     await until(() => handlers.onTurnStop.mock.calls.length > 0)
     expect(handlers.onTurnStop).toHaveBeenCalledWith({ sessionId: NEW, status: undefined, transcriptPath: undefined, firedAt: 1_000 })
+  })
+
+  // Rejected `stale_hook`, as a replaced job ends, it still ends its delivery: unsettled, every later unbound hook of the
+  // session would wait out its time limit and be refused then.
+  it('settles a SessionStart sent again whose kept older job ends stale_hook', async () => {
+    const { handlers, post } = await start({}, { maxWaitMs: 60_000 })
+    const delivery = { ...firedAt(Date.now() + 60_000), 'x-harness-hook-delivery-id': 'fixture-delivery-0002' }
+    await holdStart(post, delivery)
+    expect(await post('turn-stop', followUp(), firedAt(1_000))).toEqual(held)
+    await dropReceipts(post)
+    expect(await post('session-start', session(NEW), delivery)).toEqual(held)
+    expect(lines.filter(line => line.includes(`${N} SessionStart held`))).toHaveLength(1)
+    // The agent left: the kept job's retry rejects it `stale_hook`.
+    registry.setActive(agentId, false)
+    await vi.advanceTimersByTimeAsync(1_000)
+    await until(() => lines.includes(`[hooks] ${N} SessionStart ignored · stale_hook`))
+    await turn(); await turn()
+    // Refused at its replay, long before its time limit, and the next hook at once.
+    expect(lines).toContain(unboundLine('turn-stop'))
+    expect(lines.filter(line => line.includes('runs unheld'))).toEqual([])
+    expect(await post('turn-stop', followUp(), firedAt(2_000))).toEqual({ status: 403, body: { error: 'UNBOUND_HOOK' } })
+    expect(handlers.onTurnStop).not.toHaveBeenCalled()
   })
 
   it('keeps the Cursor linked Stop on its own path', async () => {
