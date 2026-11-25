@@ -111,6 +111,7 @@ mod tests {
     use super::*;
     use crate::cli::{Cli, spawn_lock};
     use std::io;
+    use std::os::unix::fs::PermissionsExt;
     use std::process::{Command, Stdio};
 
     /// The fake program a runner starts; unset, the test is no runner.
@@ -164,6 +165,52 @@ mod tests {
             unsafe { libc::kill(-pid, libc::SIGKILL) };
         }
         assert!(gone, "the fake outlived its parent");
+    }
+
+    /// Each turn of a wait forks a `sleep`: at 50 turns a second one waiting fake costs a twelfth of a CPU, and a
+    /// killed test run's fakes each cost that until they see their parent gone. Past its first second a wait turns
+    /// slowly.
+    #[test]
+    fn a_waiting_fake_settles_into_slow_turns() {
+        let fake = Fake::new();
+        fake.script("hardware watch --json", &[r#"{"attached":false}"#, "@wait never"]);
+        // First on the run's PATH: a `sleep` that logs each turn, then sleeps.
+        let shims = tempfile::tempdir().unwrap();
+        {
+            // Written while no spawn forks (cli::spawn_lock): a child holding it open for writing would keep the fake
+            // from running it (ETXTBSY on Linux).
+            let _spawning = spawn_lock();
+            let shim = shims.path().join("sleep");
+            fs::write(&shim, "#!/bin/sh\nprintf '%s\\n' \"$*\" >>\"${0%/*}/sleeps.log\"\nexec /bin/sleep \"$@\"\n")
+                .unwrap();
+            fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let mut path = vec![shims.path().to_path_buf()];
+        path.extend(env::split_paths(&env::var_os("PATH").unwrap_or_default()));
+        let path = env::join_paths(path).unwrap();
+        let program = fake.program();
+        let invocation = find_cli(program.parent().unwrap(), Some(&path), Some(&program)).unwrap();
+        let watch = HarnessCli::new(invocation, fake.log()).spawn(&["hardware", "watch", "--json"]).unwrap();
+        // The turns once there are more than `least`, asked every 10 ms for 30 s at most: through the shim a short turn
+        // takes ~65 ms on a busy Mac, so the first 50 take seconds.
+        let turns_past = |least: usize| {
+            let end = Instant::now() + Duration::from_secs(30);
+            loop {
+                let turns = fs::read_to_string(shims.path().join("sleeps.log")).unwrap_or_default().lines().count();
+                if turns > least || Instant::now() >= end {
+                    return turns;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+        };
+        let settled = turns_past(50);
+        let start = Instant::now();
+        let later = turns_past(settled + 3);
+        let took = start.elapsed();
+        watch.killer().kill();
+        assert!(settled > 50, "the fake turned {settled} times");
+        assert!(later >= settled + 4, "the fake stopped turning at {later}");
+        assert!(took >= Duration::from_millis(500), "4 turns past the first 50 took {took:?}");
     }
 
     /// A test's folder goes when the test ends, however it ends: a fake whose folder has gone has nothing left to wait
