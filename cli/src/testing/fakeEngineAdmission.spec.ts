@@ -157,10 +157,21 @@ describe('the fake engines\' `lostHooks`', () => {
   }, 30_000)
 })
 
-// Claude Code and Codex read their hook settings with or without a leading BOM (one Windows PowerShell 5 writes).
+// Claude Code reads its hook settings past a leading BOM (one Windows PowerShell 5 writes); Codex 0.169+ does not
+// (codex-rs/hooks/src/engine/discovery.rs: `fs::read_to_string`, then `serde_json::from_str`; a parse failure warns and
+// loads no hooks).
 describe('the fake engines\' hook settings', () => {
-  it.each(['claude', 'codex'] as const)('%s runs the hooks of a settings file that starts with a BOM', async (name) => {
-    const fake = start(name, { bom: true })
+  it('claude runs the hooks of a settings file that starts with a BOM', async () => {
+    const fake = start('claude', { bom: true })
     expect(await fake.hooked('SessionStart')).toMatchObject({ source: 'startup' })
+  }, 30_000)
+
+  it('codex loads no hooks from a hooks.json that starts with a BOM, and notes why', async () => {
+    const fake = start('codex', { bom: true })
+    await fake.logged(`hooks not loaded: ${join(root, 'codex', 'hooks.json')} is not JSON`)
+    fake.type('hello')
+    fake.type('!exit')
+    await fake.exited
+    expect(fake.hooks()).toEqual([])
   }, 30_000)
 })
