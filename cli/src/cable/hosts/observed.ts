@@ -257,6 +257,9 @@ interface Entry {
   ttyPid?: number
   tty?: string
   ttyStart?: string
+  /** The read of ttyPid answered, a tty or none: until then, and once it failed, the agent may be on any tab's tty
+   *  (othersOnTty). */
+  ttyRead?: true
   /** When the read of ttyPid began, once that read failed. */
   ttyFailedAt?: number
   /** The caller the host that made its terminal was read for, that host once read (null: none the dial types into), and
@@ -778,9 +781,13 @@ export class ObservedSource implements HostSource {
   }
 
   /** Whether another live agent reads that tty than the one in process [pid]: one whose tty was read for another
-   *  process, or a nested one, whose tty is its client's tab. Words typed there could reach either. */
+   *  process, a nested one, whose tty is its client's tab, or one whose tty is read, as it is in a tab app, and that read
+   *  has not answered or failed: it may be on any. Words typed there could reach either. */
   othersOnTty(tty: string, pid: number): boolean {
-    for (const e of this.entries.values()) if (e.tty === tty && e.ttyPid !== pid && this.live(e)) return true
+    for (const e of this.entries.values()) {
+      if (e.ttyPid === pid || !this.live(e)) continue
+      if (e.tty === tty || (e.ttyPid !== undefined && !e.ttyRead)) return true
+    }
     return false
   }
 
@@ -859,6 +866,7 @@ export class ObservedSource implements HostSource {
     entry.ttyPid = undefined
     entry.tty = undefined
     entry.ttyStart = undefined
+    entry.ttyRead = undefined
     entry.ttyFailedAt = undefined
     this.locate(entry)
     if (!this.deps.tty || !isTabApp(entry.agent.app)) return
@@ -867,6 +875,7 @@ export class ObservedSource implements HostSource {
       if (entry.ttyPid !== pid) return
       entry.tty = read?.tty
       entry.ttyStart = read?.start
+      entry.ttyRead = true
       this.locate(entry)
     }, (error) => {
       if (entry.ttyPid === pid) entry.ttyFailedAt = now
