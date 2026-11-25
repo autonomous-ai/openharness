@@ -1363,6 +1363,14 @@ describe('what the windows say, reaching the dial', () => {
       expect(decideTier).not.toHaveBeenCalled()
     })
 
+    it('logs why a silent summary is not news, and a sub-agent\'s as a sub-agent\'s', () => {
+      const { port } = start({ decideTier: vi.fn() })
+      port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'summary', text: 'done', subagent: true, notNews: 'question' } })
+      port.card({ type: 'commander_event', agentId: 'a9', payload: { kind: 'summary', text: 'done', subagent: true } })
+      expect(logs).toContain('[cable] notify · silent · rule:question · question · 0ms')
+      expect(logs).toContain('[cable] notify · silent · rule:subagent · subagent · 0ms')
+    })
+
     it('never asks the decider while no device is connected, and still draws the tile', () => {
       const decideTier = vi.fn()
       const { port } = start({ decideTier })
@@ -5131,6 +5139,73 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(orcaRuns).toEqual([])
     front('ghostty')
     expect(host().swipeSwitches(ID)).toBe(false)
+  })
+
+  // Dial eval V12: Claude Code in the person's tmux, whose client is attached from a VS Code terminal. The agent's chain
+  // runs through the tmux server, so the window's shell is found on the client's (vscode.ts createVscodeClientAdapter).
+  describe('an agent in the person\'s tmux whose client is in a VS Code terminal', () => {
+    const code = join(homedir(), 'Applications', 'Visual Studio Code.app')
+    const CLIENT_SHELL = 4299
+    const selected: [string, string[], number] = ['tmux', ['select-window', '-t', '%3', ';', 'select-pane', '-t', '%3'], 10_000]
+    /** The agent hooked in pane %3, its client (4300) found in the terminal's shell under the editor at [app], whose
+     *  bundle id is [bundle], and a window reporting [shells] once its chain is read. */
+    const inTmux = async (shells: number[], app = code, bundle = VSCODE) => {
+      const rows = [...IN_TMUX, { pid: 4300, ppid: CLIENT_SHELL, executable: 'tmux' },
+        { pid: CLIENT_SHELL, ppid: 4298, executable: 'zsh' }, { pid: 4298, ppid: 1, executable: join(app, 'Contents', 'MacOS', 'Electron') }]
+      readers.processes.mockResolvedValue(rows)
+      processTable.rows = rows
+      readers.bundleId.mockImplementation(async (at) => at === app ? bundle : undefined)
+      const listener = fakeListener()
+      const { port } = startHere({ listen: listener.listen, orca: { ...mac, run: async (file, args, timeoutMs) => {
+        orcaRuns.push([file, args, timeoutMs])
+        return { code: 0, stdout: args[0] === 'display-message' ? '4000|work|\n' : args[0] === 'list-clients' ? '1794700050|4300|/dev/ttys004\n' : '' }
+      } } })
+      port.observed(hook('session-start', { hostHints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux' } }))
+      attach(port)
+      await vi.waitFor(() => expect(said()).toEqual(['[device] tmux client · found']))
+      await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+      const window = listener.vscode(WINDOW_ID)
+      expect(listener.vscodeState(WINDOW_ID, shells)).toBeUndefined()
+      return { listener, window }
+    }
+
+    it('a tap selects its tmux pane, brings VS Code forward, then shows the client\'s terminal with the raise; a rest shows it in front', async () => {
+      const { listener, window } = await inTmux([CLIENT_SHELL])
+      await vi.waitFor(() => expect(processTable.reads).toBe(1))
+      const runs = orcaRuns.length
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(orcaRuns.slice(runs).slice(-2)).toEqual([selected, ['/usr/bin/open', ['-b', VSCODE], 10_000]])
+      expect(window.lines).toEqual([{ show: CLIENT_SHELL, raise: true }])
+      expect(listener.front('vscode')).toBeUndefined()
+      expect(host().swipeSwitches(ID)).toBe(true)
+      host().swipeEnded(ID, 'rest')
+      await swiped('ok')
+      expect(window.lines).toEqual([{ show: CLIENT_SHELL, raise: true }, { show: CLIENT_SHELL }])
+      expect(orcaRuns.at(-1)).toEqual(selected)
+    })
+
+    it('with no window listing a shell on the client\'s chain, a tap brings VS Code forward and shows no terminal', async () => {
+      const { window } = await inTmux([5000])
+      await vi.waitFor(() => expect(processTable.reads).toBe(1))
+      const runs = orcaRuns.length
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(orcaRuns.slice(runs).slice(-2)).toEqual([selected, ['/usr/bin/open', ['-b', VSCODE], 10_000]])
+      expect(window.lines).toEqual([])
+    })
+
+    it('in a Cursor terminal, a tap brings Cursor forward and shows the client\'s terminal; a rest shows it while Cursor is in front', async () => {
+      const { listener, window } = await inTmux([CLIENT_SHELL], join(homedir(), 'Applications', 'Cursor.app'), CURSOR)
+      await vi.waitFor(() => expect(processTable.reads).toBe(1))
+      const runs = orcaRuns.length
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(orcaRuns.slice(runs).slice(-2)).toEqual([selected, ['/usr/bin/open', ['-b', CURSOR], 10_000]])
+      expect(window.lines).toEqual([{ show: CLIENT_SHELL, raise: true }])
+      expect(listener.front('cursor')).toBeUndefined()
+      host().swipeEnded(ID, 'rest')
+      await swiped('ok')
+      expect(window.lines).toEqual([{ show: CLIENT_SHELL, raise: true }, { show: CLIENT_SHELL }])
+      expect(orcaRuns.at(-1)).toEqual(selected)
+    })
   })
 
   it('an agent that left has its chain dropped', async () => {

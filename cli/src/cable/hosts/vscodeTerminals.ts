@@ -120,7 +120,8 @@ export interface VscodeTerminal { window: string; shell: number }
 
 export interface VscodeTerminals {
   handlers: { vscode: ListenerStreamHandler; 'vscode-state': ListenerHandler }
-  /** The pids of the VS Code and Cursor agents listed now (at most observed.ts's 50). A new one may ask for a read; one that is gone drops its chain. */
+  /** The pids of the VS Code and Cursor agents listed now, and of the multiplexer clients their terminals hold: at most
+   *  two an agent, of observed.ts's 50. A new one may ask for a read; one that is gone drops its chain. */
   agents(pids: readonly number[]): void
   /** The window and shell that hold the agent with that pid, from its kept chain; none while unknown. */
   terminalOf(agentPid: number): VscodeTerminal | undefined
@@ -154,7 +155,8 @@ export interface VscodeTerminalsDeps {
   foreground(agent: number, shell: number): Promise<ProcessGroups | undefined>
   /** Which agents have a terminal changed. */
   changed(): void
-  /** A person focused that terminal at `at` (now's clock): the pid of the listed agent running there, none when no
+  /** A person focused that terminal at `at` (now's clock): the pid of the listed agent running there, or of a listed
+   *  multiplexer client, which no agent's `term:` pane names, so the devices follow nothing for it; none when no
    *  listed agent does or while a chain that may be its agent's is read (it is told again once read). Each replaces the
    *  one before it, none too. `regained`: its window came into focus on the
    *  terminal it had, as it does when the dial's own tap brings the editor forward. */
