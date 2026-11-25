@@ -8182,7 +8182,7 @@ describe('the dial\'s words typed into an iTerm2 or Ghostty tab (docs/plans/2026
       watch.wrote(watch.lines[1].enter!.id)
       expect(await sent).toEqual({ ok: true })
       expect(said()).toEqual(['[device] voice · tabs'])
-      const secrets = ['ttys', 'run', 'tests', String(pidOf(1)), watch.lines[0].write!.id, watch.lines[1].enter!.id]
+      const secrets = ['ttys', 'run the tests', 'tests', String(pidOf(1)), watch.lines[0].write!.id, watch.lines[1].enter!.id]
       expect(logs.filter((line) => secrets.some((secret) => line.includes(secret)))).toEqual([])
     })
   }

@@ -549,6 +549,10 @@ export class World implements TierAWorld {
         const tty = machine.processes.get(pid)?.tty
         return tty === undefined ? undefined : { tty: `/dev/${tty}` }
       },
+      // Nor are a tab's process (`ps`) and its tty's readers (`lsof`) readable: the eval types into no tab
+      // (docs/plans/2026-11-25-dial-voice-codex-terminals-design.md, PM decision 1).
+      tabProcess: async () => undefined,
+      ttyReaders: async () => undefined,
       claude: async () => null,
       orcaHomes,
       vscodeExtension: noEditor('vscode', platform, root),
