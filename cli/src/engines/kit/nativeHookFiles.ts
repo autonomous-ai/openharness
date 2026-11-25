@@ -120,7 +120,7 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
   const facts = paths.snapshot()
   const directory = directoryPath(dirname(file))
   const target = located?.path ?? join(directory, basename(file))
-  let before: string | null = null, content: string | null = null, mode = defaultMode
+  let before: string | null = null, content: string | null = null, mode = defaultMode, bom = false
   if (located) {
     const fd = openSync(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
     try {
@@ -140,6 +140,7 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
       }
       if (version(fstatSync(fd, { bigint: true })) !== before) throw new HookPreparationHeld('the settings file changed while being read')
       content = settingsText(bytes)
+      bom = bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf
     } finally { closeSync(fd) }
   }
   const verify = () => {
@@ -157,11 +158,13 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
     try { now = lstatSync(target, { bigint: true }) } catch (error) { if (!missing(error)) throw error; now = null }
     if ((now ? version(now) : null) !== before) throw new HookPreparationHeld('the settings file changed before publication')
   }
+  // Codex reads its hooks.json with serde_json, which refuses a BOM: the same text after one is a change, written without it.
+  const unchanged = (next: string | null) => content === next && !bom
   const prepare = (next: string | null) => {
     verify()
     if (next !== null && Buffer.byteLength(next) > MAX_BYTES) throw new HookPreparationHeld('the prepared settings exceed their size limit')
     if (next === null && content !== null && lstatSync(file).isSymbolicLink()) throw new HookPreparationHeld('the plugin entry is an alias')
-    if (content === next) return
+    if (unchanged(next)) return
     if (content !== null && next !== null && (mode & 0o200) === 0) throw new HookPreparationHeld('the settings file is read-only')
     let parent = dirname(target)
     for (let depth = 0; depth < 256; depth++) {
@@ -179,7 +182,7 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
     async replace(next: string, attempt: HookPreparationAttempt, exclusive = false): Promise<HookFilePublication> {
       attempt.verify(); prepare(next)
       if (exclusive && content !== null) throw new HookPreparationHeld('another owner already published this claim')
-      if (content === next) {
+      if (unchanged(next)) {
         // A previous rename may have succeeded before directory sync failed.
         // Equality alone cannot turn that uncertainty into a durable success.
         const flags = unchangedFlushFlags(mode)
