@@ -24,6 +24,15 @@ export const RESUME_READINESS_BUDGET_MS = 10 * 60_000
 export const resumeChanged = { ok: false, error: 'AGENT_CHANGED', detail: 'The harness changed while opening. Select it again.' } as const
 export const resumeUnconfirmed = { ok: false, error: 'RESUME_UNCONFIRMED', detail: 'The saved conversation has not been confirmed yet. Check the terminal, then select the harness again to check its status.' } as const
 
+/** [row] holds the conversation [sessionId] names, or one [process] (the resumed engine, as its pane showed it) moved
+ *  it onto since: a `/clear`, a `/new`, Codex's first prompt naming a new thread, or the first one of a resume that had
+ *  none, each bound by that process's own hook (`registry.register`). The engine running is the truth; another
+ *  process's conversation on the row is another owner's. */
+export function holdsResumedConversation(row: RegisteredSession, sessionId: string, process: ProcessIdentity | null | undefined): boolean {
+  return row.sessionId === sessionId
+    || sameProcessIdentity(row.processIdentity, process) && (!sessionId || !!row.earlierSessionIds?.includes(sessionId))
+}
+
 /** Enter means attach or exact resume. A route, shell or allocated pane alone is not success. */
 const liveIdentity = (row: RegisteredSession) => JSON.stringify([
   row.agentId, row.engine, row.sessionId, row.registeredAt, row.codexHome,
@@ -125,7 +134,7 @@ export async function waitForResumedAgent(saved: RegisteredSession, deps: Resume
     if (!deps.current()) return resumeChanged
     const row = deps.session()
     if (!row) return { ok: false, error: 'RESUME_FAILED', detail: 'The resume runtime disappeared. The saved conversation is still retained.' }
-    if (row.sessionId !== saved.sessionId || row.engine !== saved.engine) return resumeChanged
+    if (!holdsResumedConversation(row, saved.sessionId, process ?? seen?.process) || row.engine !== saved.engine) return resumeChanged
     if (row.launch?.state === 'failed') return { ok: false, error: row.launch.error, detail: row.launch.detail }
     // A pane tmux could not read is asked again: a call that timed out while the daemon's event loop
     // was held said the harness had exited, and a resume that was coming up was failed for it.
