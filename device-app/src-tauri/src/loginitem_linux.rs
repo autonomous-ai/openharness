@@ -216,7 +216,7 @@ mod tests {
     use std::fs;
     use std::os::unix::ffi::OsStrExt;
     use std::path::{Path, PathBuf};
-    use std::process::Command;
+    use std::process::{Command, Stdio};
 
     const APPIMAGE: &str = "/a/H.AppImage";
     const LAUNCHER: &str = "/h/.local/bin/harness";
@@ -405,7 +405,14 @@ mod tests {
         // Both ways a session reads the entry.
         let run = |reading: fn(&str) -> Vec<String>| {
             let argv = reading(&exec_line(&appimage, &launcher).unwrap());
-            let output = Command::new(&argv[0]).args(&argv[1..]).output().unwrap();
+            let child = {
+                // As around every spawn (cli::spawn_lock); the wait runs without it.
+                let _spawning = crate::cli::spawn_lock();
+                let mut command = Command::new(&argv[0]);
+                command.args(&argv[1..]).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+                command.spawn().unwrap()
+            };
+            let output = child.wait_with_output().unwrap();
             assert!(output.status.success(), "{argv:?}: {output:?}");
             String::from_utf8(output.stdout).unwrap()
         };
