@@ -11,11 +11,10 @@ import { env } from '../config/env.js'
 import { heldHome } from '../lib/processHeldFiles.js'
 import { processView } from '../lib/processMounts.js'
 import type { ProcessIdentity } from '../lib/terminalTypes.js'
-import { HERMES_HELD_STORE, HERMES_HISTORY_ID_RE, HERMES_SESSION_END, HERMES_SOURCE, HERMES_TERMINAL_RECORD, hermesDbPath } from './hermes/contract.js'
+import { HERMES_HELD_STORE, HERMES_HISTORY_ID_RE, HERMES_SOURCE, HERMES_TERMINAL_RECORD, hermesDbPath } from './hermes/contract.js'
 import { readTerminalRecord, terminalRecordNames, terminalRecordStamp, type Terminal, type TerminalRecordRead } from './kit/terminalRecord.js'
 import { isInteractiveSource, readStoreSessionSource } from './kit/storeSource.js'
 import { IdentityReadUnavailable } from './kit/identityScan.js'
-import { sqliteReadAll } from '../lib/sqliteRead.js'
 import type { AgentEngine } from './types.js'
 
 const transcripts = { cursor: CURSOR_TRANSCRIPT, grok: GROK_TRANSCRIPT, agy: AGY_TRANSCRIPT, copilot: COPILOT_TRANSCRIPT }
@@ -95,16 +94,4 @@ export async function hermesStoreStamp(home: string): Promise<string> {
   const store = hermesDbPath(home)
   const stamps = await Promise.all([`${store}-wal`, store].map(file => lstat(file).then(info => `${info.mtimeMs}:${info.size}`, () => '-')))
   return stamps.join('|')
-}
-
-/**
- * Whether a session was ended at or after [sinceMs]. Hermes ends the session a terminal leaves and opens again one it
- * resumes, so one ended since a process started was open in that process. Throws when the store cannot be read.
- */
-export async function hermesSessionEndedSince(home: string, sessionId: string, sinceMs: number): Promise<boolean> {
-  if (!HERMES_HISTORY_ID_RE.test(sessionId)) return false
-  const result = await sqliteReadAll(hermesDbPath(home), HERMES_SESSION_END.query, [sessionId], { maxBuffer: HERMES_SESSION_END.maxBuffer })
-  if (!result.ok) throw new IdentityReadUnavailable('the Hermes session end is unavailable')
-  const ended = result.rows[0]?.[HERMES_SESSION_END.column]
-  return typeof ended === 'number' && ended * 1000 >= sinceMs
 }

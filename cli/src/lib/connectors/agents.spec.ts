@@ -56,3 +56,31 @@ describe('the MCP shim', () => {
     expect(readFileSync(old, 'utf8')).toBe('not this writer\'s')
   })
 })
+
+// PowerShell 5's `Set-Content -Encoding utf8` saves a config with a BOM, which Claude Code reads past; `Out-File` saves
+// UTF-16, and another tool may save Latin-1. Read as UTF-8 those came back with U+FFFD in place of each byte.
+describe('an agent config a Windows tool saved', () => {
+  it('gives Claude Code its servers in a .claude.json saved with a BOM', () => {
+    const claude = join(home, '.claude.json')
+    writeFileSync(claude, `\uFEFF${JSON.stringify({ numStartups: 3 })}`)
+    expect(sync(vault, env, undefined, 'darwin').claude).toEqual(['linear'])
+    const data = JSON.parse(readFileSync(claude, 'utf8'))
+    expect(data.numStartups).toBe(3)
+    expect(Object.keys(data.mcpServers)).toEqual(['linear'])
+  })
+
+  it('leaves a .claude.json that is not UTF-8 exactly as it is', () => {
+    const claude = join(home, '.claude.json'), bytes = Buffer.from('{"note":"caf\xe9"}', 'latin1')
+    writeFileSync(claude, bytes)
+    sync(vault, env, undefined, 'darwin')
+    expect(readFileSync(claude)).toEqual(bytes)
+  })
+
+  it('leaves a config.toml that is not UTF-8 exactly as it is', () => {
+    const codex = join(home, '.codex', 'config.toml'), bytes = Buffer.from('model = "caf\xe9"\n', 'latin1')
+    mkdirSync(join(home, '.codex'))
+    writeFileSync(codex, bytes)
+    sync(vault, env, undefined, 'darwin')
+    expect(readFileSync(codex)).toEqual(bytes)
+  })
+})

@@ -79,6 +79,13 @@ export interface EngineConfig {
   /** Hold startup before the transcript opens until this disposable path's .release file exists. */
   startupGate?: string
   firstHookDelayMs?: number
+  /** Claude Code: create each new conversation's transcript only once `<root>/transcript.<session id>.release` exists
+   *  (`transcript.<session id>.waiting` is there meanwhile), its SessionStart first, as on Windows (fakeEngine.mjs). */
+  lateTranscript?: boolean
+  /** Codex: run each conversation's SessionStart (the start's, a `!clear`'s) at its next prompt, as Codex does. */
+  lazySessionStart?: boolean
+  /** The hooks lost on the way, `<event>` or `<event>:<source>`: never run, noted as lost in the hook log. */
+  lostHooks?: string[]
   updateAvailable?: string
   /** Ask whether to trust a folder the engine's own config has no answer for, as the real CLIs do. */
   trustPrompt?: boolean

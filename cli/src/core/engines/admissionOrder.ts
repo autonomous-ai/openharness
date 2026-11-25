@@ -24,7 +24,10 @@ export function createAdmissionOrder(isProcessCurrent: (key: string, scope: stri
       // A persisted binding protects a restarted core too. A changed binding made
       // outside this queue is newer authority than its previous watermark.
       if (!last || last.order.scope !== scope || last.id !== binding.id) {
-        accepted.set(key, { id: binding.id, order: { scope, firedAt: binding.at ?? undefined, arrival: 0 } })
+        // An untimed binding (a resumed row no hook confirmed) is only a reservation:
+        // every hook of its process is newer, so it orders nothing.
+        if (binding.at === null) accepted.delete(key)
+        else accepted.set(key, { id: binding.id, order: { scope, firedAt: binding.at, arrival: 0 } })
       }
     },
     status(key: string, id: string, order: AdmissionOrder): 'current' | 'older' | 'ambiguous' {
@@ -33,8 +36,10 @@ export function createAdmissionOrder(isProcessCurrent: (key: string, scope: stri
       if (order.firedAt !== undefined && last.order.firedAt !== undefined) {
         return order.firedAt < last.order.firedAt ? 'older' : order.firedAt === last.order.firedAt ? 'ambiguous' : 'current'
       }
-      // A late headerless delivery is not evidence that another conversation is newer.
-      return order.arrival <= last.order.arrival ? 'older' : 'ambiguous'
+      if (order.arrival <= last.order.arrival) return 'older'
+      // A timed hook that arrived after an untimed acceptance is newer; a late
+      // headerless delivery is not evidence that another conversation is newer.
+      return order.firedAt !== undefined ? 'current' : 'ambiguous'
     },
     accept(key: string, id: string, order: AdmissionOrder): void {
       const last = accepted.get(key)

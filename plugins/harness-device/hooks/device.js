@@ -259,7 +259,8 @@ async function isOn($, settingsPath) {
   if (!settingsPath) return true
   let settings
   try {
-    settings = JSON.parse(await $.fs.read(settingsPath))
+    // One leading BOM, as PowerShell 5's `Set-Content -Encoding utf8` saves it and Claude Code reads past it.
+    settings = JSON.parse((await $.fs.read(settingsPath)).replace(/^\uFEFF/, ''))
   } catch {
     return true
   }

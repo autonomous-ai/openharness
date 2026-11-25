@@ -866,8 +866,8 @@ export function createBinding({
           processIdentity: observed.processIdentity,
           hookEvent: 'HermesTerminal',
         })
-        // A new session is a switch, said once the registry took it: one it refuses (a resume that reopened another
-        // conversation) is tried again in the repair's rhythm, and is no switch; a resumed one confirmed is none either.
+        // A new session is a switch, said once the registry took it (a resumed row's included): one it refuses is tried
+        // again in the repair's rhythm, and is no switch; a resumed one confirmed is none either.
         if (!rotated) return
         if (rotated.isNew) console.log(`[discovery] ${sid(agent.agentId)} switched hermes session ${sid(was)} → ${sid(answer.sessionId)}`)
         // A confirmed one is followed all the same, as a hook's re-register is: the confirmation binds the row (`boundAt`),
@@ -922,6 +922,13 @@ export function createBinding({
         const continuation = located.value
         if (!continuation || continuation.sessionId === agent.sessionId
           || registry.has(continuation.sessionId) || isRecentlyDeleted(continuation.sessionId)) return
+        // The marker is the file's last record, so the file was written when it was. One already there when the process
+        // started (a resume of a conversation that had continued elsewhere) is no rollover of this process: evidence must
+        // be newer than the binding it contradicts (core rule 6). Taken for one, it moved the agent off the file its
+        // process writes, until the process's next hook moved it back. A file or start that cannot be read proves nothing.
+        const written = await stat(agent.transcriptPath).then(info => info.mtimeMs, () => null)
+        const started = startMarkerMs(observed.processIdentity.startMarker)
+        if (written === null || started === null || written < started) return
         if (!current()) return
         console.log(`[discovery] ${sid(agent.agentId)} ${observed.engine} session continued ${sid(agent.sessionId)} → ${sid(continuation.sessionId)}`)
         const rotated = await commit({

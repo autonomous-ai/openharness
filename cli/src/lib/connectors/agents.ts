@@ -5,8 +5,9 @@
  * needs no config change, and an agent already running keeps working.
  *
  * Only entries Harness made are changed or removed: their names are recorded in projections.json, so a
- * server the person added by hand keeps its name and contents. A config that is not plain JSON (comments)
- * is left exactly as it is. Configs are replaced through a symlink, as engines/kit/folderTrust.ts does.
+ * server the person added by hand keeps its name and contents. A config that is not plain JSON (comments), or not
+ * UTF-8, is left exactly as it is; one saved with a BOM is read past it (settingsText.ts). Configs are replaced through
+ * a symlink, as engines/kit/folderTrust.ts does.
  */
 import { randomBytes } from 'node:crypto'
 import { existsSync, readFileSync, realpathSync, renameSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
@@ -17,6 +18,7 @@ import { errorKind } from '../log.js'
 import { managedNodePath } from '../nodeRuntime.js'
 import { ownProcessRuns } from '../ownProcess.js'
 import { atomicWriteFile } from '../secureState.js'
+import { settingsText } from '../settingsText.js'
 import { MCP_SHIM_SOURCE } from './mcpShimSource.js'
 import { CODE, locked, writePrivate, type Store } from './store.js'
 import { transport } from './rest.js'
@@ -202,7 +204,7 @@ class JsonAgent implements Agent {
     if (this.profile && !within(this.profile, this.path)) return owned
     let data: Record<string, unknown> = {}
     if (existsSync(this.path)) {
-      try { data = JSON.parse(readFileSync(this.path, 'utf8')) } catch { return owned }
+      try { data = JSON.parse(settingsText(readFileSync(this.path))) } catch { return owned }
       if (!data || typeof data !== 'object' || Array.isArray(data)) return owned
     }
     const current = data[this.key]
@@ -237,7 +239,7 @@ class CodexAgent implements Agent {
     if (this.profile && !within(this.profile, this.path)) return owned
     let lines: string[] = []
     if (existsSync(this.path)) {
-      try { lines = readFileSync(this.path, 'utf8').split('\n') } catch { return owned }
+      try { lines = settingsText(readFileSync(this.path)).split('\n') } catch { return owned }
       if (lines.at(-1) === '') lines.pop()
     }
     const kept: string[] = []

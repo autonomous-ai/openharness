@@ -352,7 +352,7 @@ afterAll(() => {
 
 // These recorded cases exposed destructive recovery, unknown ownership or
 // permission failures. Keep their original artifact and assert preservation.
-const HELD = new Set(['empty file', 'whitespace only', 'malformed JSON', 'byte order mark', 'JSON null', 'JSON array',
+const HELD = new Set(['empty file', 'whitespace only', 'malformed JSON', 'JSON null', 'JSON array',
   'JSON string', 'JSON number', 'hooks is a string', 'hooks is an array', 'hooks is null', 'an event is not a list',
   'odd blocks', 'a command that is not text', 'a dangling symlink', 'a symlink into a missing folder',
   'a read-only file', 'an unreadable file', 'a read-only folder', 'a read-only folder holding a writable file', 'the file is a folder'])

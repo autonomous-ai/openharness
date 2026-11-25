@@ -2,13 +2,15 @@
  * The dial skill in one agent home's `skills/dial/SKILL.md`, the same for Claude Code and Codex (both read
  * `<home>/skills/<name>/SKILL.md`), so a session knows it can ring the dial. Harness writes, refreshes and removes only
  * its own file, known by its marker line: anything else at that path is the person's. The `harness device` command and
- * the devices service both import it, so it loads nothing but Node's own modules (lib/secureState.ts loads only those).
+ * the devices service both import it, so it loads nothing but Node's own modules (lib/secureState.ts and
+ * lib/settingsText.ts load only those).
  */
 import { randomUUID } from 'node:crypto'
 import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { insideWindowsRoots } from '../lib/secureState.js'
+import { settingsText } from '../lib/settingsText.js'
 
 export const DIAL_SKILL_DESCRIPTION = 'The person has a Harness dial on their desk. Use it when the task stops on a step only they can take: give information, act outside your reach (connect a VPN, sign in, plug in a device, get another person to sign off), or decide.'
 
@@ -232,8 +234,8 @@ const UNKNOWN = Symbol('unknown')
 
 /**
  * The plugin's entry as Claude Code's user settings hold it, undefined when they have none; UNKNOWN when the file says
- * nothing: missing, not a regular file, past 1 MiB, not JSON or not an object. One read, sized by the file: the plugin's
- * hook and mod read it on every call.
+ * nothing: missing, not a regular file, past 1 MiB, not UTF-8, not JSON or not an object. One read, sized by the file:
+ * the plugin's hook and mod read it on every call.
  */
 function pluginEntry(settingsPath: string): unknown {
   let settings: unknown
@@ -245,7 +247,7 @@ function pluginEntry(settingsPath: string): unknown {
       if (!info.isFile() || info.size > MAX_SETTINGS_BYTES) return UNKNOWN
       const buffer = Buffer.allocUnsafe(info.size)
       const length = readSync(fd, buffer, 0, info.size, 0)
-      settings = JSON.parse(buffer.toString('utf8', 0, length))
+      settings = JSON.parse(settingsText(buffer.subarray(0, length)))
     } finally {
       closeSync(fd)
     }

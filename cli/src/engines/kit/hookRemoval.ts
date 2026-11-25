@@ -125,7 +125,8 @@ export async function removeOwnedFile(file: string, owned: (content: string) => 
  * alone, any of the hooks Harness writes there now ([held.now]), which finds them again on a second uninstall after
  * one that stopped between the hooks and their records. [held.now] is worked out here, inside the preparation: a hook
  * line Harness cannot write for this computer now (a path its quoting refuses, notifyHooks.ts `quoteHookCommand`) finds
- * none, and only the records of the hooks in [held.before] go. The rest of the config stays byte for byte.
+ * none, and only the records of the hooks in [held.before] go. The rest of the config stays byte for byte, but for a
+ * BOM it had, which the rewrite leaves out (nativeHookFiles.ts `inspectHookFile`).
  *
  * The limit: Codex keys a record by the hook's place in the settings file (block, hook) and holds its hash, which
  * covers the whole command. A record for a hook of Harness's that is no longer in the file, written by another

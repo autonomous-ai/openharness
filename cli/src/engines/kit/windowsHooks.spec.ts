@@ -136,6 +136,50 @@ describe('a hook argument the Windows runner refuses', () => {
   })
 })
 
+// Windows PowerShell 5's `Set-Content -Encoding utf8` starts a file with a BOM, and `Out-File` writes UTF-16. With the BOM
+// kept, every install failed with a SyntaxError and every create waited on the engine's hooks for good
+// (docs/plans/2026-11-25-win-hook-admission-design.md, D).
+describe('a settings file Windows PowerShell saved', () => {
+  it('installs Claude Code\'s hooks into a settings.json Windows PowerShell 5 saved with a BOM, and writes it back without one', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
+    const home = join(dir, 'claude'), file = join(home, claude.settings.fileName)
+    mkdirSync(home); writeFileSync(file, '﻿{"theme":"dark"}\r\n')
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    expect(await installHookSettings('claude', claude.settings, 19473, home, {}, 'win32')).toBe(true)
+    const written = readFileSync(file)
+    expect(written[0]).toBe('{'.charCodeAt(0))
+    const settings = JSON.parse(written.toString('utf8'))
+    expect(settings.theme).toBe('dark')
+    expect(settings.hooks.Stop).toHaveLength(1)
+  })
+
+  it('installs Codex\'s hooks into a hooks.json and a config.toml each saved with a BOM, and writes both back without one', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
+    const home = join(dir, 'codex'), file = join(home, codex.settings.fileName), config = join(home, codex.settings.reviewed!.fileName)
+    mkdirSync(home)
+    writeFileSync(file, '﻿{"hooks":{}}\r\n'); writeFileSync(config, '﻿model = "gpt-5"\r\n')
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(await installHookSettings('codex', codex.settings, 19473, home, {}, 'win32')).toBe(true)
+    for (const path of [file, config]) expect(readFileSync(path)[0]).not.toBe(0xef)
+    expect(Object.keys(JSON.parse(readFileSync(file, 'utf8')).hooks)).toEqual(codex.settings.events.map(({ event }) => event))
+    const reviews = readFileSync(config, 'utf8')
+    expect(reviews.startsWith('model = "gpt-5"')).toBe(true)
+    expect(reviews).toContain('trusted_hash = ')
+  })
+
+  it('holds a settings.json saved as UTF-16, as before, and leaves it byte for byte', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
+    const home = join(dir, 'claude'), file = join(home, claude.settings.fileName)
+    const utf16 = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('{"theme":"dark"}\r\n', 'utf16le')])
+    mkdirSync(home); writeFileSync(file, utf16)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    expect(await installHookSettings('claude', claude.settings, 19473, home, {}, 'win32')).toBe(false)
+    expect(readFileSync(file).equals(utf16)).toBe(true)
+  })
+})
+
 // B4.2 review: exec form keeps its arguments in `args`. A drift check that compared `command` alone saw every exec-form
 // hook as current, whatever its port; one that compared the line saw none, and rewrote the file at every start.
 describe('Claude Code\'s exec-form hook already in place', () => {

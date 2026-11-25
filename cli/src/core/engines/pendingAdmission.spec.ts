@@ -255,7 +255,7 @@ describe('pending hook admission', () => {
     expect(queue.submit('agent', 'overflow', overflow)).toBe(false)
     expect(overflow.inspect).not.toHaveBeenCalled()
     // Repeating a delivery keeps its original place and timer without consuming another slot.
-    expect(queue.submit('agent', 'child', child)).toBe(true); await flush(); await flush()
+    expect(queue.submit('agent', 'child', child)).toBe('kept'); await flush(); await flush()
     await vi.advanceTimersByTimeAsync(20)
     expect(child.reject).toHaveBeenCalledExactlyOnceWith('delegated')
     expect(parent.accept).toHaveBeenCalledExactlyOnceWith('parent')
@@ -373,6 +373,44 @@ describe('pending hook admission', () => {
     const after = request()
     queue.submit('after', 'session', after)
     expect(after.inspect).not.toHaveBeenCalled()
+  })
+
+  // The caller learns that the newer request's callbacks will never run: the kept job's end, whatever its reason, is the
+  // delivery's end (hookServer.ts admissionJob).
+  it('says when it keeps a delivery\'s older job in place of a newer request of it', async () => {
+    vi.useFakeTimers()
+    const queue = createPendingAdmissions()
+    let live = true
+    const held = request({ order: { scope: 'process', firedAt: 20, arrival: 1 }, current: () => live,
+      inspect: async () => ({ kind: 'hold', code: 'SOURCE_UNREADABLE', reason: 'unreadable' }) })
+    expect(queue.submit('agent', 'd1', held)).toBe(true); await flush()
+    const resent = [
+      request({ order: { scope: 'process', firedAt: 20, arrival: 2 } }),
+      request({ order: { scope: 'process', firedAt: 10, arrival: 3 } }),
+      request({ order: { scope: 'process', firedAt: undefined, arrival: 4 } }),
+    ]
+    for (const each of resent) expect(queue.submit('agent', 'd1', each)).toBe('kept')
+    await flush()
+    for (const each of resent) expect(each.inspect).not.toHaveBeenCalled()
+    // Replaced, not kept: the same time once the older job is no longer current, or a later one.
+    live = false
+    const fresh = request({ order: { scope: 'process', firedAt: 20, arrival: 5 },
+      inspect: async () => ({ kind: 'hold', code: 'SOURCE_UNREADABLE', reason: 'unreadable' }) })
+    expect(queue.submit('agent', 'd1', fresh)).toBe(true); await flush()
+    expect(fresh.held).toHaveBeenCalledOnce()
+    const later = request({ order: { scope: 'process', firedAt: 30, arrival: 6 } })
+    expect(queue.submit('agent', 'd1', later)).toBe(true); await flush()
+    expect(later.accept).toHaveBeenCalledOnce()
+    queue.close()
+  })
+
+  it("admits a new conversation's timed hook over a resumed row's untimed binding", async () => {
+    const queue = createPendingAdmissions()
+    const hook = request({ conversationId: 'new', binding: { id: 'old', at: null }, order: { scope: 'process', firedAt: 50, arrival: 1 } })
+    queue.submit('agent', 'd1', hook); await flush()
+    expect(hook.accept).toHaveBeenCalledOnce()
+    expect(hook.held).not.toHaveBeenCalled()
+    queue.close()
   })
 })
 
