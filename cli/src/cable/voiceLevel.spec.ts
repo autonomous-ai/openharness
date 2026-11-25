@@ -38,6 +38,39 @@ describe('VoiceLevel', () => {
   })
 })
 
+// Full scale is where the dial's mic saturates: peak alone cannot tell one touched sample from a flat-topped clip.
+describe('VoiceLevel clip', () => {
+  /** [n] samples of 1000, with [clipped] of them at full scale, alternating +32767 and -32768. */
+  const clipping = (n: number, clipped: number) => {
+    const every = Math.floor(n / clipped)
+    return pcm(...Array.from({ length: n }, (_, i) => i % every ? 1000 : (i / every) % 2 ? -32768 : 32767))
+  }
+  const clip = (...parts: Buffer[]) => {
+    const level = new VoiceLevel(16_000)
+    for (const part of parts) level.add(part)
+    return level.read().clip
+  }
+
+  it('is the share of samples at full scale, per mille', () => {
+    expect(clip(clipping(16_000, 16))).toBe(1)
+    expect(clip(clipping(16_000, 5))).toBe(0.31)
+  })
+
+  it('does not count a sample just under full scale', () => {
+    expect(clip(pcm(32766, -32767, 0, 0))).toBe(0)
+  })
+
+  it('is zero for a clean recording and for no audio', () => {
+    expect(clip(pcm(1000, -1000))).toBe(0)
+    expect(clip()).toBe(0)
+  })
+
+  it('counts across adds split at an odd sample offset', () => {
+    const whole = clipping(16_000, 16)
+    expect(clip(whole.subarray(0, 2 * 8001), whole.subarray(2 * 8001))).toBe(1)
+  })
+})
+
 // The dial firmware's own voice gate (voice_buffer.c voice_gate_feed): 10 ms blocks, a block loud when its mean |sample|
 // is over 600, heard once 320 ms of loud blocks run unbroken.
 describe('VoiceLevel heard', () => {

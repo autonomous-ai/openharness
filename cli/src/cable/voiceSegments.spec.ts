@@ -381,7 +381,7 @@ describe('VoiceSegments', () => {
     expect(sent).toHaveLength(low.length)
     // A peak of 200 is an RMS of 141, about -47 dBFS: raised by the most there is, 18 dB, eight times.
     expect(sent!.readInt16LE(8_020 * 2)).toBe(1600)
-    expect(quiet.segments.level()).toEqual({ peak: 200, rms: 100, heard: false, voice: 150, floor: 0, gain: 18 })
+    expect(quiet.segments.level()).toEqual({ peak: 200, rms: 100, clip: 0, heard: false, voice: 150, floor: 0, gain: 18 })
 
     const loud = setup({ transcribe: answering('hello') })
     const high = hum(2, 6000)
