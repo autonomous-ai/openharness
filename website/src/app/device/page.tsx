@@ -1,12 +1,13 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import { fetchDeviceRelease } from "@/lib/deviceRelease";
 import { DeviceDownload } from "./DeviceDownload";
 import { DeviceFiles } from "./DeviceFiles";
 import styles from "./page.module.css";
 
-const geist = Geist({ subsets: ["latin"], weight: ["400", "500", "600"], variable: "--font-geist" });
-const geistMono = Geist_Mono({ subsets: ["latin"], weight: ["400", "500"], variable: "--font-geist-mono" });
+// Vendored, so the build never downloads from Google (a changed Google URL failed `next build`).
+const geist = localFont({ src: "../../fonts/geist/Geist-latin.woff2", weight: "400 600", display: "swap", variable: "--font-geist" });
+const geistMono = localFont({ src: "../../fonts/geist/GeistMono-latin.woff2", weight: "400 500", display: "swap", variable: "--font-geist-mono" });
 
 export const metadata: Metadata = { title: "Harness Device", description: "Set up and use your Harness Device." };
 
