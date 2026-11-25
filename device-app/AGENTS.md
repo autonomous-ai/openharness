@@ -113,9 +113,11 @@ and Tauri 2 in `src-tauri/`; the window's three screens are plain TypeScript in 
 - **Spoken text and terminal writes.** A text reaches a terminal only through the fixed `write_text` and `send_enter`
   handlers of iTerm2 and Ghostty in `tabs_macos.rs`, as a handler parameter, after the watch's and the app's checks.
   Never Terminal; never keystrokes, System Events or `do script`. It goes to exactly one session or terminal of that
-  tty, in every window; to an app whose poll or select answered in this run; and a typing older than 500 ms on the tab
-  thread is dropped. Its answer goes only to the watch it came from. A text is never logged: the late line names the
-  app alone.
+  tty, in every window; to an app whose poll or select answered without an error in this run; and a typing older than
+  500 ms on the tab thread is dropped. Its answer goes only to the watch it came from. A text is never logged: a
+  typing's `tabs:` line names the app and whether it was a write or an Enter. Words reach Ghostty only in a build
+  whose terminal has `tty` (`«property Gtty»`): 1.3.0 and 1.3.1 lack it, and only Ghostty's main branch has it. Any
+  other Ghostty is turned off the first time a poll or select reads a terminal's tty (`tabs: Ghostty has no tty`).
 - **A tab's tty is private.** It is written to the watch's stdin and nowhere else. A `tabs:` log line names Terminal,
   iTerm2 or Ghostty, never a tty.
 - **One entitlement.** `src-tauri/Entitlements.plist` holds `com.apple.security.automation.apple-events` and no other
