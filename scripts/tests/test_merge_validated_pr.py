@@ -486,9 +486,6 @@ class FakeClient:
         if path == "actions/runs/123":
             self.run_reads += 1
             return copy.deepcopy(self.run)
-        newer = [run for run in self.newer_runs if path == f"actions/runs/{run['id']}"]
-        if newer:
-            return copy.deepcopy(newer[0])
         if path == f"git/commits/{self.merged_sha}":
             return dict(sha=self.merged_sha, tree=dict(sha=self.merged_tree), parents=[dict(sha=self.actual_base)])
         if path == f"git/commits/{self.fixture.head}":

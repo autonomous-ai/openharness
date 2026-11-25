@@ -103,8 +103,8 @@ def pr_run(client, head):
         # A draft-time run fails ci/required by design; the run started by "ready for review" is the one to follow.
         if plan is None or not plan["draft"]:
             return run
-    raise ValueError(f"the latest {len(candidates[:PLAN_RUNS])} automatic CI runs for the reviewed PR head "
-                     "planned a draft; no run of the ready PR was found")
+    raise ValueError(f"no automatic CI run of the ready PR was found; the latest {len(candidates[:PLAN_RUNS])} "
+                     "for the reviewed PR head planned a draft")
 
 
 def pr_gate(client, head, output, root=None, base=None):
