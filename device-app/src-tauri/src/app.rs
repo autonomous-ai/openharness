@@ -147,12 +147,14 @@ impl App {
                 self.now = now;
                 if self.relaunch && !self.relaunch_waits() {
                     self.relaunch = false;
+                    self.forget_unanswered_follow(effects);
                     self.stop_watch(effects);
                     effects.push(Effect::Relaunch);
                     return;
                 }
                 if self.install_held && !self.relaunch_waits() {
                     self.install_held = false;
+                    self.forget_unanswered_follow(effects);
                     self.installing();
                     // Drawn and said first: the install ends this process before anything after it runs.
                     self.send_menu(effects);
@@ -436,10 +438,20 @@ impl App {
         self.state.cli == CliState::Installing || self.login.is_some()
     }
 
-    /// The relaunch, and an install that ends the app, would also cut short a daemon start or what the window shows,
-    /// so they wait for them too; a check does not, as the first launch's window is open right after the CLI install.
+    /// The relaunch, and an install that ends the app, would cut short a run or a daemon start, so they wait for
+    /// them, each bounded by its deadline. Never for the window: it has no deadline, so it held the update for as
+    /// long as it stayed open, and its screens hold nothing typed, so the new process shows them again.
     fn relaunch_waits(&self) -> bool {
-        self.running() || self.keep.starting() || self.window.is_some()
+        self.running() || self.keep.starting()
+    }
+
+    /// The process ends with the window open: a Follow screen, counted as asked once it showed, was never answered,
+    /// so the new process asks again. Sign in is saved only once answered, and a first CLI install that failed runs again at
+    /// the start, so neither needs this.
+    fn forget_unanswered_follow(&mut self, effects: &mut Vec<Effect>) {
+        if self.showing(Screen::Follow) {
+            self.remember(|saved| saved.asked_follow = false, effects);
+        }
     }
 
     /// Only a button the window shows does something, so a second click on one that started a run does nothing.
