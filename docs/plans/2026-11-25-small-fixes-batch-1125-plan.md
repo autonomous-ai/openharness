@@ -515,13 +515,13 @@ shown not to be vacuous in Step 2. One commit.
 
 ### Task 9: windows-e2e for the Windows desk's imports
 
-**Files:** Modify `scripts/ci-plan.py` (a `WINDOWS_DESK_PATHS` tuple beside `WINDOWS_SPECS`; `windows_e2e` returns true
+**Files:** Modify `scripts/ci-plan.py` (a `WINDOWS_E2E_HARNESS_PATHS` tuple beside `WINDOWS_SPECS`; `windows_e2e` returns true
 for its paths), `scripts/tests/test_ci_plan.py`, `docs/validation-and-release.md` (the windows-e2e row of "The end-to-end
 suites").
 
 **Depends on:** nothing. **Effort:** high (the planner; two security reviews before merge). **Failing test:** below.
 
-**Interfaces:** Produces `WINDOWS_DESK_PATHS`: the 20 files listed under "What this plan decides" (item 9), x64 alone
+**Interfaces:** Produces `WINDOWS_E2E_HARNESS_PATHS`: the 20 files listed under "What this plan decides" (item 9), x64 alone
 (not `windows_only`).
 
 - [ ] **Step 1: Write the failing tests.**
@@ -531,11 +531,11 @@ suites").
   - `test_the_windows_desk_imports_are_listed` (full checkout; `full_checkout(self, …)` as its neighbours): `run =
     imports_from(root, ["cli/scripts/windows-dial-e2e/desk.mts", "cli/e2e/dialWindowsTools.e2e.ts"],
     ("cli/e2e/harness/", "cli/src/testing/"))` minus the two sources; no path in `run` fails `planner.windows_e2e`; every
-    `WINDOWS_DESK_PATHS` entry is in `run` (a stale entry fails) and is a file.
+    `WINDOWS_E2E_HARNESS_PATHS` entry is in `run` (a stale entry fails) and is a file.
 - [ ] **Step 2: Run to see them fail.** `python3 -m unittest scripts/tests/test_ci_plan.py -k windows_desk`. Commit (red).
 - [ ] **Step 3: Implement**, with the comment the dial hosts' list has: what the desk bundle builds and runs, and
   test_ci_plan walks the imports. The doc's windows-e2e row names them ("and what the dial desk bundle imports from
-  `cli/e2e/harness/` and `cli/src/testing/`, `WINDOWS_DESK_PATHS`").
+  `cli/e2e/harness/` and `cli/src/testing/`, `WINDOWS_E2E_HARNESS_PATHS`").
 - [ ] **Step 4: Run** `python3 -m unittest scripts/tests/test_ci_plan.py`. Expected: PASS.
 - [ ] **Step 5: Commit** `ci: windows-e2e runs for what the Windows desk imports`.
 
