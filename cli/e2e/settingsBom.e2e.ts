@@ -1,0 +1,52 @@
+/**
+ * An engine settings file saved with a UTF-8 BOM, as Windows PowerShell 5's `Set-Content -Encoding utf8` writes one: the
+ * daemon reads it as its text, installs its hooks and writes it back without the BOM, so a create starts, binds and
+ * ends its turn instead of being held for hooks that were never written (lib/settingsText.ts).
+ */
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
+import { LocalClient, type Frame } from './harness/client.js'
+import { IsolatedDaemon, until } from './harness/daemon.js'
+
+type Engine = 'claude' | 'codex'
+
+/** Where the daemon installs each engine's hooks: Claude Code's `~/.claude/settings.json`, Codex's `$CODEX_HOME/hooks.json`. */
+const settingsFile = (d: IsolatedDaemon, engine: Engine): string =>
+  engine === 'claude' ? join(d.env.HOME!, '.claude', 'settings.json') : join(d.engineConfig.codexHome, 'hooks.json')
+
+const isTurn = (type: string, agentId: string) => (frame: Frame) => frame.type === type && frame.agentId === agentId
+
+describe('a settings file saved with a BOM', () => {
+  let daemon: IsolatedDaemon | undefined
+  let client: LocalClient | undefined
+  afterEach(async () => { client?.close(); await daemon?.close(); client = undefined; daemon = undefined })
+
+  it.each<Engine>(['claude', 'codex'])('%s: a settings file that starts with a BOM does not hold a create', async (engine) => {
+    const d = daemon = await IsolatedDaemon.create()
+    onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
+    const file = settingsFile(d, engine)
+    mkdirSync(join(file, '..'), { recursive: true })
+    writeFileSync(file, '﻿{}\n')
+    await d.start()
+    const c = client = await LocalClient.connect(d)
+
+    const cwd = join(d.projectsDir, `bom-${engine}`)
+    mkdirSync(cwd, { recursive: true })
+    const created = await c.request('agent_create', { engine, cwd, bypassPermission: true }, 90_000)
+    expect(created.error, JSON.stringify(created)).toBeUndefined()
+    await until('the agent to bind its conversation', async () => {
+      const rows = (await c.request<{ agents: Array<Record<string, any>> }>('agents_list', {}, 30_000)).agents
+      const agent = rows.find((one) => one.id === created.agent.id)
+      return agent?.sessionId && agent.status === 'active' ? agent : null
+    }, 60_000, 500)
+    const started = c.next(isTurn('turn_started', created.agent.id), 45_000, 'turn_started')
+    const ended = c.next(isTurn('turn_ended', created.agent.id), 45_000, 'turn_ended')
+    c.send('message', { agentId: created.agent.id, content: 'after the BOM' })
+    await started
+    await ended
+
+    expect(readFileSync(file)[0]).toBe('{'.charCodeAt(0))
+    expect(d.log()).not.toContain('failed to write')
+  })
+})
