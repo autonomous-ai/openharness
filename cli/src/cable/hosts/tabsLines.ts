@@ -1,10 +1,10 @@
 /**
  * The lines that carry a person's words to a terminal tab: the devices process sends a typing to the watch, the watch
  * hands it to Harness Device, and Harness Device answers `wrote`. These lines reach a terminal's script, so every hop
- * checks them again as outside text. The watch loads this file, so it imports only tabs.ts and orca.ts.
+ * checks them again as outside text. The watch loads this file, so it imports only tabs.ts and text.ts.
  */
-import { CONTROL, MAX_TEXT } from './orca.js'
 import { TAB_TTY, type TabApp } from './tabs.js'
+import { CONTROL, MAX_TEXT } from './text.js'
 
 // Terminal.app is not one: its only per-tab write appends a newline in the same write, sending words unchecked.
 export const TYPE_APPS = ['iterm', 'ghostty'] as const satisfies readonly TabApp[]
