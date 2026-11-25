@@ -297,6 +297,26 @@ describe('restartAgent', () => {
     expect(d.calls.filter((call) => call === 'respawn')).toHaveLength(2)
   })
 
+  // The guard holds a launch whose executable changed as its new shell started: the evidence going stale after the
+  // respawn is the hold's cause, not a change of the swap's owner (e2e/heldLaunchRecovery.e2e.ts, 2026-11-25).
+  it('a launch the guard held on evidence gone stale after its respawn answers held while the swap is still its own', async () => {
+    let evidence = true
+    const d = deps({ respawn: async () => { evidence = false; return { ok: true } }, waitForProcess: async () => null })
+    const outcome = await restartAgent({ engine: 'codex', sessionId: 's1' }, false,
+      { ...d, isCurrent: () => evidence, isOwned: () => true, heldShell: async () => true })
+    expect(outcome).toEqual({ ok: false, held: true, detail: 'codex did not come back up after restart' })
+    expect(d.calls.filter((call) => call === 'respawn')).toHaveLength(1)
+  })
+
+  it('a held shell is not its own once the swap changed owner: it answers changed', async () => {
+    let evidence = true, owned = true
+    const d = deps({ respawn: async () => { evidence = false; return { ok: true } }, waitForProcess: async () => { owned = false; return null } })
+    const outcome = await restartAgent({ engine: 'codex', sessionId: 's1' }, false,
+      { ...d, isCurrent: () => evidence && owned, isOwned: () => owned, heldShell: async () => true })
+    expect(outcome).toEqual({ ok: false, detail: 'the harness changed or stopped during restart' })
+    expect(d.calls.filter((call) => call === 'respawn')).toHaveLength(1)
+  })
+
   it('asks nothing when the engine came back up', async () => {
     const heldShell = vi.fn(async () => true)
     expect(await restartAgent({ engine: 'codex', sessionId: 's1' }, false, { ...deps(), heldShell })).toMatchObject({ ok: true, resumed: true })

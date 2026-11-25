@@ -399,13 +399,15 @@ describe('restarting an agent', () => {
   })
 
   describe('a swap the guard held', () => {
-    const native = { token: 'tok-1', current: () => true }
     /** The real swap order (`restartAgent`) over a pane whose relaunch the guard held: no engine came up, and the pane is
-     *  the held shell under the inspected launch's token. */
-    const guardHeldSwap = async (row: RegisteredSession, heldShell = async () => true) => {
+     *  the held shell under the inspected launch's token. [staleAfterRespawn]: the inspected executable is replaced as
+     *  the new shell starts, what the guard held it on. */
+    const guardHeldSwap = async (row: RegisteredSession, heldShell = async () => true, staleAfterRespawn = false) => {
+      let fresh = true
+      const native = { token: 'tok-1', current: () => fresh }
       const actual = await vi.importActual<typeof import('../../lib/restartAgent.js')>('../../lib/restartAgent.js')
       vi.mocked(restartAgent).mockImplementationOnce(actual.restartAgent)
-      const respawn = vi.fn(async () => ({ ok: true }))
+      const respawn = vi.fn(async () => { fresh = !staleAfterRespawn; return { ok: true } })
       const run = setup(row, {
         native: (async () => ({ ok: true, launch: native })) as never,
         relaunchOverrides: (async () => ({ ok: true, overrides: { native, env: {}, extraArgs: [], clearEnv: [] } })) as never,
@@ -428,6 +430,31 @@ describe('restarting an agent', () => {
       expect(run.deps.registry.confirmLaunch).not.toHaveBeenCalled()
       expect(releaseHold).not.toHaveBeenCalled()
       expect(run.respawn).toHaveBeenCalledOnce()
+    })
+
+    // The executable replaced as the swap's shell started is why the guard held it: the inspection it was built with is
+    // stale from then on, and the restart is still the row's (e2e/heldLaunchRecovery.e2e.ts, 2026-11-25).
+    it('a conversation the guard held on evidence gone stale after the respawn starts again, answered as a success', async () => {
+      const run = await guardHeldSwap(agent(), undefined, true)
+      const startsAgain = { state: 'held', service: 'native', nativeToken: 'tok-1', startsAgain: true, detail: 'Starting again.' }
+      const reply = await run.restart('a1')
+      expect(reply).toEqual({ ok: true, session: expect.objectContaining({ agentId: 'a1', sessionId: 's1', launch: startsAgain }), resumed: true })
+      expect(run.deps.registry.setLaunch).toHaveBeenCalledExactlyOnceWith('a1', startsAgain)
+      expect(run.deps.startAgain).toHaveBeenCalledExactlyOnceWith('a1')
+      expect(run.deps.registry.confirmLaunch).not.toHaveBeenCalled()
+      expect(run.respawn).toHaveBeenCalledOnce()
+    })
+
+    it('a held swap on stale evidence whose row changed owner marks nothing', async () => {
+      const row = agent()
+      const run: Awaited<ReturnType<typeof guardHeldSwap>> = await guardHeldSwap(row, async () => {
+        vi.mocked(run.deps.sameRestartTarget).mockReturnValue(false); return true
+      }, true)
+      expect(await run.restart('a1')).toEqual(changed)
+      expect(row.launch).toBeUndefined()
+      expect(run.deps.registry.setLaunch).not.toHaveBeenCalled()
+      expect(run.deps.startAgain).not.toHaveBeenCalled()
+      expect(run.deps.announceSession).not.toHaveBeenCalled()
     })
 
     // Marked, a ready row with no conversation would become a held first launch, whose recovery sends its first task again.
