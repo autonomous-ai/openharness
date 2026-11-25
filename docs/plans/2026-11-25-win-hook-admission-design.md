@@ -125,8 +125,9 @@ session first" step, `core/agents/hermesTerminal.ts:141`, if that is all it is f
   than the current prompt does not end it).
 - Bounded: a few dozen waiting hooks per session and a few hundred across the core, each waiting at most a few
   minutes (the builder picks the numbers against the measured hold times; a normal wait is under 3 s). A hook over a
-  bound or past its time runs at once through the normal path, as it would today, with a log line naming the route
-  and the reason, never the body.
+  bound runs at once through the normal path, as it would today; one past its time stops waiting for its admission and
+  runs in its place, once the hooks ahead of it have run, so the hooks after it never overtake it (final review). Each
+  with a log line naming the route and the reason, never the body.
 - The linked Stop of Cursor and Command Code, which their registration delivery carries, keeps its own path.
 
 ### 4. Engine settings files are read with or without a BOM (D)
@@ -186,8 +187,8 @@ Each fails before its change:
   accepted watermark does not hold a later timed hook; equal times and untimed candidates are held as today.
 - Hook server: during a held SessionStart, and during its process-record wait, each of the six routes answers pending
   and then runs, in arrival order, with its original fired-at time, after the admission is accepted; after a
-  rejection, it is refused and logged; over a bound or past its time it runs at once and is logged; a hook of a bound
-  session, or of a session with no admission pending, runs at once.
+  rejection, it is refused and logged; over a bound it runs at once, past its time in its place, and is logged; a hook
+  of a bound session, or of a session with no admission pending, runs at once unless its session's hooks wait or run.
 - Hook files: a settings file with a BOM installs, and a create is not held for it.
 - End to end, the real daemon and the fake engines: a Claude Code session whose SessionStart comes before its
   transcript, then a prompt and a Stop: the turn starts and ends, and a recap is made; a resumed Codex agent whose
