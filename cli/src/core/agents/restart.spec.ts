@@ -457,7 +457,20 @@ describe('restarting an agent', () => {
       expect(run.deps.announceSession).not.toHaveBeenCalled()
     })
 
-    // Marked, a ready row with no conversation would become a held first launch, whose recovery sends its first task again.
+    // The row keeps new words only once the engine is back (commitRelaunchedEngine), and the recovery builds from the row:
+    // marked, the engine would come back with the old words under a success.
+    it.each([[['--chrome']], [[]]])('a restart with new launch words %j the guard held answers as today and marks nothing', async (words) => {
+      const run = await guardHeldSwap(agent())
+      expect(await run.restart('a1', words)).toEqual({ ok: false, error: 'RESTART_FAILED', detail: 'claude did not come back up after restart' })
+      expect(run.deps.registry.setLaunch).not.toHaveBeenCalled()
+      expect(run.deps.startAgain).not.toHaveBeenCalled()
+      expect(run.deps.announceSession).not.toHaveBeenCalled()
+      expect(run.deps.registry.confirmLaunch).not.toHaveBeenCalled()
+      expect(run.respawn).toHaveBeenCalledOnce()
+    })
+
+    // A running row with no conversation has had its first launch confirmed, so it names no receipt (registry.ts
+    // `creationId`): marked, it would become a held first launch with nothing to rebuild from, and be failed.
     it('a restart of a row with no conversation the guard held answers as today and marks nothing', async () => {
       const run = await guardHeldSwap(agent({ sessionId: '' }))
       expect(await run.restart('a1')).toEqual({ ok: false, error: 'RESTART_FAILED', detail: 'claude did not come back up after restart' })

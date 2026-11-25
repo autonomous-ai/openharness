@@ -61,6 +61,12 @@ describe('the agents as the Wi-Fi device lists them', () => {
     expect(rows.map(row => [row.agentId, row.state, row.runtime])).toEqual([['first', 'active', 'starting'], ['conversation', 'active', 'starting']])
   })
 
+  it('lists a guard-held launch whose recovery waits for another service as any launch held for it', () => {
+    const models = agent({ agentId: 'models', sessionId: '', active: false,
+      launch: { state: 'held', service: 'models', detail: 'Waiting for the models service.', nativeToken: 'token', startsAgain: true } })
+    expect(storeAgents({ registry: registryOf([models]), machineId: () => 'mac' }).map(row => [row.state, row.runtime])).toEqual([['inactive', 'unavailable']])
+  })
+
   it('lists the agents the apps are shown, with their names, the Store\'s evidence, and whether each is running', () => {
     const agents = [agent({ agentId: 'a', sessionId: 's-a', launch: { state: 'ready' } }), agent({ agentId: 'b', sessionId: 's-b', cwd: '/b' })]
     const view = wifiView({ registry: registryOf(agents, (id) => id === 'a'), machineId: () => 'mac', displayName: (s) => `name ${s.agentId}`,

@@ -120,6 +120,15 @@ const publications: Publication[] = [
     publish: async (registry, agentId) => expect((await registry.confirmEngineExit(agentId, 'shell')).state).toBe('confirmed') },
   { name: 'a hook binding a session', engine: 'openclaw',
     publish: async (registry, agentId) => expect((await registry.register({ engine: 'openclaw', sessionId: 'agent:main:harness-1', runtimes, cwd: root }))?.entry.agentId).toBe(agentId) },
+  { name: 'a terminal adopting the engine started in it', engine: 'terminal', heldAgain: true,
+    publish: async (registry, agentId) => expect((await registry.adoptEngine(agentId, 'codex', engineProcess))?.engine).toBe('codex') },
+  { name: 'an archived harness reinstated on the pane its engine never left', engine: 'codex', heldAgain: true,
+    publish: async (registry, agentId) => {
+      const saved = structuredClone(registry.byAgent(agentId)!)
+      expect((await registry.confirmEngineExit(agentId, 'remove')).state).toBe('confirmed')
+      const holder = (await registry.openPendingAgent({ engine: 'terminal', cwd: root, runtimes: [{ backend: 'tmux', paneId: '%2' }] }))!
+      expect((await registry.reinstateArchived(holder.agentId, saved, engineProcess))?.agentId).toBe(agentId)
+    } },
 ]
 
 it('keeps the creation id through every launch that is not confirmed', async () => {

@@ -18,4 +18,9 @@ describe('the shell service\'s view of an agent', () => {
     expect((await sessionsOf(row).describe('a'))?.launch).toEqual({ state: 'starting' })
     expect(row.launch).toBe(held)
   })
+
+  it('describes a row with no launch record as having none', async () => {
+    const row = { agentId: 'a', sessionId: 's-a', engine: 'claude', cwd: '/work/project', projectDir: 'project', active: true } as RegisteredSession
+    expect(await sessionsOf(row).describe('a')).toMatchObject({ id: 'a', launch: undefined })
+  })
 })

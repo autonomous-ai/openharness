@@ -635,6 +635,16 @@ describe('creating an agent', () => {
       for (const [pane] of vi.mocked(createAndRegisterPane).mock.calls) expect(pane).not.toHaveProperty('creationId')
     })
 
+    // A terminal is ready at once, with no first launch to rebuild: a creation id on its row would outlive that.
+    it('records none for a terminal made through an intent', async () => {
+      vi.mocked(createAndRegisterPane).mockResolvedValueOnce({ ok: true, spawned: { runtime: { paneId: '%2' } }, pending: { ...pending, engine: 'terminal' } } as never)
+      const prepared = await setup().create.prepare(request({ engine: 'terminal' }),
+        { id: 'harness-terminal-fixture', label: 'harness-terminal-fixture', current: () => true, hold: () => {} },
+        { local: true, creationId: 'intent-0123456789abcdef' })
+      expect(prepared.ok && await prepared.dispatch()).toMatchObject({ ok: true, session: { launch: { state: 'ready' } } })
+      expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).not.toHaveProperty('creationId')
+    })
+
     it('builds a retry pane\'s launch again with the same options, as the first pane\'s shell removed its one-time file', async () => {
       expect(await setup().create(request())).toMatchObject({ ok: true })
       expect(vi.mocked(createAndRegisterPane).mock.calls[0][0].argv).toBe(vi.mocked(launchAttempts).mock.results.at(-1)!.value)

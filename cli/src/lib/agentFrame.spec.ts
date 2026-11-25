@@ -310,11 +310,11 @@ describe('agentFrame', () => {
 
   it.each([['a first launch', ''], ['a conversation', 's1']])('sends %s the guard held as a launch starting, and active', async (_case, sessionId) => {
     const row = { ...session(null), sessionId, active: false, launch: guardHeldLaunch }
-    // The daemon has no activity for a row with no session (core/turns/activity.ts): `harness wait` must not read idle.
-    const frame = await agentFrame(row, { selectedModel: null, terminalAvailable: true, activity: () => null })
+    // Its activity is none, so `harness wait` never reads it idle: the reader skips a row the registry keeps inactive
+    // (core/turns/activity.spec.ts).
+    const frame = await agentFrame(row, { selectedModel: null, terminalAvailable: true })
     expect(frame.launch).toEqual({ state: 'starting' })
     expect(frame.status).toBe('active')
-    expect(frame.activity).toBeNull()
     expect(JSON.stringify(frame)).not.toContain('startsAgain')
     expect(JSON.stringify(frame)).not.toContain('tok-1')
   })
@@ -323,6 +323,10 @@ describe('agentFrame', () => {
     ['no guard proof, no session', { state: 'held', service: 'native', detail: 'Waiting.', nativeToken: 'tok-1' }, ''],
     ['no guard proof, a conversation', { state: 'held', service: 'native', detail: 'Waiting.', nativeToken: 'tok-1' }, 's1'],
     ['no native token', { state: 'held', service: 'models', detail: 'Waiting for models.', startsAgain: true }, ''],
+    // Its wait is that service's, not the guard's (design section 4).
+    ['the guard held it, its recovery waits for models', { ...guardHeldLaunch, service: 'models', detail: 'Waiting for the models service.' }, ''],
+    ['the guard held it, its recovery waits for the Store', { ...guardHeldLaunch, service: 'store', detail: 'Waiting for the Store.' }, 's1'],
+    ['the guard held it, its recovery waits for search', { ...guardHeldLaunch, service: 'search', detail: 'Waiting for search.' }, 's1'],
   ] as const)('sends every other held launch as it is: %s', async (_case, launch, sessionId) => {
     const frame = await agentFrame({ ...session(null), sessionId, active: false, launch }, { selectedModel: null, terminalAvailable: true })
     expect(frame.launch).toEqual(launch)
