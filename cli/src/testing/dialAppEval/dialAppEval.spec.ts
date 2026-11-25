@@ -116,8 +116,9 @@ vi.mock('../../cable/hosts/herdrOuter.js', async (real) => ({
   ...await real<typeof import('../../cable/hosts/herdrOuter.js')>(),
   ttyAtime: async (tty: string) => machine.atimes.get(tty.replace(/^\/dev\//, '')),
 }))
-// The model's machine has no Zellij or kitty, and tmux only where the world installed it (an iTerm2 scenario's): no login
-// shell is asked where they are. A tmux found runs through the world's `run`, answered from its model (tierA/steps/tmux.ts).
+// The model's machine has no Zellij or kitty, and tmux only where the world installed it (an iTerm2 scenario's, or one
+// whose Orca agent runs under tmux, never on Windows): no login shell is asked where they are. A tmux found runs
+// through the world's `run`, answered from its model (tierA/steps/tmux.ts).
 vi.mock('../../lib/tmuxOnPath.js', async (real) => ({
   ...await real<typeof import('../../lib/tmuxOnPath.js')>(),
   ensureTmuxOnPath: async () => {
