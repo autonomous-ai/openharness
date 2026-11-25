@@ -36,6 +36,9 @@ mod tests {
     #[test]
     fn a_second_acquire_is_refused_until_the_first_is_dropped() {
         let folder = tempfile::tempdir().unwrap();
+        // A child another test spawns holds a copy of the lock's descriptor until it execs, and with it the lock
+        // after `drop(first)`: no spawn runs while this test holds the lock.
+        let _spawning = crate::cli::spawn_lock();
         let first = acquire(folder.path()).unwrap().expect("the first launch takes the lock");
         assert!(acquire(folder.path()).unwrap().is_none());
         // A relaunch lets go first: the new process then takes the lock while the old one is still exiting.

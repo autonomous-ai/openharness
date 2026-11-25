@@ -826,7 +826,13 @@ mod tests {
                 Ok(())
             });
         }
-        let output = again.output().unwrap();
+        let child = {
+            use std::process::Stdio;
+            // As around every spawn (cli::spawn_lock); the wait runs without it.
+            let _spawning = crate::cli::spawn_lock();
+            again.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap()
+        };
+        let output = child.wait_with_output().unwrap();
         // SAFETY: the descriptor is this test's own, closed once.
         unsafe { libc::close(pty) };
         let said = String::from_utf8_lossy(&output.stdout);
