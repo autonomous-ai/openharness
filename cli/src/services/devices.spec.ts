@@ -29,6 +29,8 @@ import type { RexPane, RexReads } from '../cable/hosts/rex.js'
 import { FRESH_WITHIN_MS } from '../cable/hosts/outer.js'
 import { AppRings } from '../cable/hosts/select.js'
 import type { TabTty } from '../cable/hosts/tabs.js'
+import type { TabProcess } from '../cable/hosts/tabsType.js'
+import { settleMs } from '../cable/hosts/twoStep.js'
 import { env } from '../config/env.js'
 import { cursorDataDir } from '../engines/cursor/contract.js'
 import { routeVoiceTask } from '../lib/voiceRouter.js'
@@ -69,7 +71,7 @@ import type { Fleet, FleetDeps } from './fleet.js'
 import type { DevicesDeps } from './devices.js'
 import {
   ATTACH_MAX_BYTES, ATTACH_PER_SECOND, FRONT_MAX_BYTES, FRONT_PER_SECOND, NOTICE_MAX_BYTES, NOTICE_PER_SECOND, NOTIFY_MAX_BYTES, NOTIFY_PER_SECOND, REFUSED, TAB_MAX_BYTES, TAB_PER_SECOND, TABS_MAX_BYTES, TABS_PER_SECOND, THREAD_MAX_BYTES, THREAD_PER_SECOND,
-  type DevicesListener, type ListenerHandler, type ListenerStreamHandler,
+  WROTE_MAX_BYTES, WROTE_PER_SECOND, type DevicesListener, type ListenerHandler, type ListenerStreamHandler,
 } from './devicesListener.js'
 
 // A dial's and a route's refusal, in words holding a path: the daemon's log must name them by length alone.
@@ -663,7 +665,7 @@ afterEach(() => {
 /** What cli.js carries for Claude Code's marketplace, cut to its own file. */
 const CLAUDE_PLUGIN: ClaudePluginFiles = { files: { '.claude-plugin/marketplace.json': '{"name":"openharness"}\n' }, executable: [] }
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; agentsRead?: DevicesDeps['agentsRead']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; cmuxEvents?: DevicesDeps['cmuxEvents']; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; storePackageFolder?: DevicesDeps['storePackageFolder']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; codexFound?: DevicesDeps['codexFound'] | null; claudePlugin?: DevicesDeps['claudePlugin'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string; raise?: DevicesDeps['raise'] | null; windowsRaise?: DevicesDeps['windowsRaise'] | null; transcribe?: DevicesDeps['transcribe']; watchStore?: DevicesDeps['watchStore']; rexReads?: DevicesDeps['rexReads']; rex?: DevicesDeps['rex'] } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; agentsRead?: DevicesDeps['agentsRead']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; cmuxEvents?: DevicesDeps['cmuxEvents']; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; storePackageFolder?: DevicesDeps['storePackageFolder']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; tabProcess?: DevicesDeps['tabProcess']; ttyReaders?: DevicesDeps['ttyReaders']; claude?: DevicesDeps['claude'] | null; codexFound?: DevicesDeps['codexFound'] | null; claudePlugin?: DevicesDeps['claudePlugin'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string; raise?: DevicesDeps['raise'] | null; windowsRaise?: DevicesDeps['windowsRaise'] | null; transcribe?: DevicesDeps['transcribe']; watchStore?: DevicesDeps['watchStore']; rexReads?: DevicesDeps['rexReads']; rex?: DevicesDeps['rex'] } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   const apps = over.orca ?? orca
   // None, and no read under way, unless the spec gives its own; null leaves the devices to read this computer's.
@@ -713,6 +715,9 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     onCoreGone: (run) => { gone.push(run) },
     listen: over.listen,
     tty: over.tty,
+    // A tab's process and the readers of its tty that are not read unless the spec gives its own: no spec runs ps or lsof.
+    tabProcess: over.tabProcess ?? (async () => undefined),
+    ttyReaders: over.ttyReaders ?? (async () => undefined),
     // A `claude` that finds none unless the spec gives its own: no spec runs the developer's. null leaves it out.
     claude: over.claude === null ? undefined : over.claude ?? (async () => null),
     // A `codex` that finds none unless the spec gives its own: no spec runs the developer's. null leaves it out.
@@ -917,12 +922,12 @@ describe('the devices, as the core starts them', () => {
 })
 
 describe('the devices\' own listener (services/devicesListener.ts)', () => {
-  it('the devices open their listener once, with front, attach, the tab handler, the ChatGPT thread, the tabs stream, the dial stream, the worktree on Orca\'s screen, the Notifications setting, the notice and VS Code\'s windows', () => {
+  it('the devices open their listener once, with front, attach, the tab handler, the ChatGPT thread, the tabs stream and what was written on it, the dial stream, the worktree on Orca\'s screen, the Notifications setting, the notice and VS Code\'s windows', () => {
     const listener = fakeListener()
     start({ listen: listener.listen })
     expect(listener.listen).toHaveBeenCalledTimes(1)
     const [{ handlers, log }] = listener.given
-    expect(Object.keys(handlers)).toEqual(['front', 'attach', 'tab', 'thread', 'tabs', 'dial', 'orcaFront', 'notify', 'notice', 'vscode', 'vscode-state'])
+    expect(Object.keys(handlers)).toEqual(['front', 'attach', 'tab', 'thread', 'tabs', 'wrote', 'dial', 'orcaFront', 'notify', 'notice', 'vscode', 'vscode-state'])
     expect(handlers.orcaFront).toMatchObject({ maxBytes: 8192, perSecond: 10 })
     expect(handlers.notice).toMatchObject({ maxBytes: NOTICE_MAX_BYTES, perSecond: NOTICE_PER_SECOND })
     expect(handlers.front).toMatchObject({ maxBytes: FRONT_MAX_BYTES, perSecond: FRONT_PER_SECOND })
@@ -932,6 +937,8 @@ describe('the devices\' own listener (services/devicesListener.ts)', () => {
     expect(handlers.tab).toMatchObject({ maxBytes: TAB_MAX_BYTES, perSecond: TAB_PER_SECOND })
     expect(handlers.thread).toMatchObject({ maxBytes: THREAD_MAX_BYTES, perSecond: THREAD_PER_SECOND })
     expect(handlers.tabs).toMatchObject({ maxBytes: TABS_MAX_BYTES, perSecond: TABS_PER_SECOND })
+    expect(handlers.wrote).toMatchObject({ maxBytes: WROTE_MAX_BYTES, perSecond: WROTE_PER_SECOND })
+    expect([WROTE_MAX_BYTES, WROTE_PER_SECOND]).toEqual([64, 10])
     expect(handlers.dial).toMatchObject({ maxBytes: 64, perSecond: 1 })
     expect(handlers.notify).toMatchObject({ maxBytes: NOTIFY_MAX_BYTES, perSecond: NOTIFY_PER_SECOND })
     // The listener's own handlers: a name that is no app id, a session id that is no UUID, and an app with no tabs, are
@@ -8071,6 +8078,152 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
     seen.host.appSettled!('claude')
     expect(logs).toContain('[devices] dial failed · Error')
     expect(tabLines()).toEqual(['[device] tab · skipped · not in front', '[device] tab · skipped · not in front'])
+  })
+})
+
+// The dial's words typed into an agent's own iTerm2 or Ghostty tab, on the tabs stream a watch holds open, which Harness
+// Device writes and answers (docs/plans/2026-11-25-dial-voice-codex-terminals-design.md). ps, lsof and the watch are fakes.
+describe('the dial\'s words typed into an iTerm2 or Ghostty tab (docs/plans/2026-11-25-dial-voice-codex-terminals-design.md)', () => {
+  const A = observedAgentId('claude', 'sess-1')
+  const B = observedAgentId('claude', 'sess-2')
+  /** Agent n's tty and its process: /dev/ttys003 and 4101 for A, /dev/ttys004 and 4102 for B. */
+  const ttyOf = (n: number) => `/dev/ttys00${2 + n}`
+  const pidOf = (n: number) => 4100 + n
+  const nOf = (pid: number) => pid - 4100
+  /** When agent n's process started, as ps reads it (lib/lstart.ts). */
+  const startOf = (n: number) => `ps:${1_764_064_800_000 + n}`
+  const ITERM = { TERM_PROGRAM: 'iTerm.app' }
+  /** Claude Code in a tab of its own, as its hook says: A in api, B in web. */
+  const hook = (n: number, hostHints: Record<string, string>): ObservedHookEvent => ({
+    engine: 'claude', sessionId: `sess-${n}`, event: 'session-start', cwd: n === 1 ? '/work/api' : '/work/web', callerPid: pidOf(n),
+    transcriptPath: `/t/sess-${n}.jsonl`, hostHints,
+  })
+  /** Each agent under the login shell of its own tab (4001, 4002). */
+  const ROWS: ProcessRow[] = [1, 2].flatMap((n) => [
+    { pid: pidOf(n), ppid: 4000 + n, tty: ttyOf(n).slice('/dev/'.length), executable: 'claude' },
+    { pid: 4000 + n, ppid: 1, tty: ttyOf(n).slice('/dev/'.length), executable: '-zsh' },
+  ])
+  const host = () => seen.dial as unknown as DaemonCableHost
+  const said = () => logs.filter((line) => line.startsWith('[device] '))
+  type Typing = { write?: { id: string; app: string; tty: string; text: string }; enter?: { id: string; app: string; tty: string } }
+
+  /** A watch holding the tabs stream open, as the listener runs one: it takes a line once the last has drained, a moment
+   *  after its write, and tells Harness Device's answer to each write and Enter as `wrote`, through the listener's own
+   *  handler: ok at once, unless the spec answers by hand. */
+  const watch = (listener: ReturnType<typeof fakeListener>, answers: boolean) => {
+    const lines: Typing[] = []
+    let writable = false
+    let drained = (): void => {}
+    const ready = (): void => { writable = true; drained() }
+    const wrote = (id: string, ok = true): unknown =>
+      (listener.given[0].handlers.wrote as ListenerHandler).handle({ type: 'wrote', id, ok }, new AbortController().signal)
+    expect((listener.given[0].handlers.tabs as ListenerStreamHandler).open({ type: 'tabs' }, {
+      write: (line) => {
+        if (!writable) return false
+        writable = false
+        const typing = line as Typing
+        lines.push(typing)
+        void Promise.resolve().then(ready)
+        const id = (typing.write ?? typing.enter)?.id
+        if (answers && id !== undefined) void Promise.resolve().then(() => wrote(id))
+        return true
+      },
+      onWritable: (run) => { drained = run },
+      ended: new AbortController().signal,
+    })).toBeUndefined()
+    // The listener tells a stream it can take a line once it has opened.
+    ready()
+    return { lines, wrote }
+  }
+
+  /** On macOS, `agents` of A and B in tabs of their own (iTerm2's unless `hostHints` say), their ttys and starts read,
+   *  each the lead of its tty's foreground group and with its shell alone on its stdin beside it, a dial on the cable
+   *  with no window, and a watch's stream open. */
+  const inTabs = async ({ agents = 1, hostHints = ITERM, answers = true }: { agents?: number; hostHints?: Record<string, string>; answers?: boolean } = {}) => {
+    vi.useFakeTimers()
+    readers.processes.mockResolvedValue(ROWS)
+    const listener = fakeListener()
+    const tty = vi.fn(async (pid: number): Promise<TabTty | undefined> => ({ tty: ttyOf(nOf(pid)), start: startOf(nOf(pid)) }))
+    const tabProcess = vi.fn(async (pid: number): Promise<TabProcess | undefined> =>
+      ({ tty: ttyOf(nOf(pid)), pgid: pid, tpgid: pid, start: startOf(nOf(pid)) }))
+    const ttyReaders = vi.fn(async (tty: string): Promise<readonly number[] | undefined> => {
+      const n = [1, 2].find((one) => ttyOf(one) === tty)
+      return n === undefined ? [] : [pidOf(n), 4000 + n]
+    })
+    const started = start({ faults: ['fleet'], orca: { ...orca, platform: 'darwin' }, listen: listener.listen, tty, tabProcess, ttyReaders })
+    for (let n = 1; n <= agents; n++) started.port.observed(hook(n, hostHints))
+    seen.host.watching!(true)
+    started.port.swarms(null)
+    await Promise.all(tty.mock.results.map(({ value }) => value))
+    return { ...started, tabProcess, ttyReaders, watch: watch(listener, answers) }
+  }
+  /** The dial's words to that agent, given the time of their settle. */
+  const say = async (agentId: string, text: string) => {
+    const sent = host().sendTurn(agentId, text)
+    await vi.advanceTimersByTimeAsync(settleMs(text))
+    return sent
+  }
+  /** Each line as what it is and the tty it names, a write's text beside it. */
+  const named = (lines: Typing[]) => lines.map(({ write, enter }) => (write ? ['write', write.tty, write.text] : ['enter', enter!.tty]))
+  const ID = /^[0-9a-f]{16}$/
+
+  for (const [app, hostHints] of [['iterm', ITERM], ['ghostty', { TERM_PROGRAM: 'ghostty' }]] as const) {
+    it(`words for an agent in ${app}: its text written, the settle, its Enter written, and the dial is told sent`, async () => {
+      const { watch } = await inTabs({ hostHints, answers: false })
+      const sent = host().sendTurn(A, 'run the tests')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(watch.lines).toEqual([{ write: { id: expect.stringMatching(ID), app, tty: ttyOf(1), text: 'run the tests' } }])
+      expect(watch.wrote(watch.lines[0].write!.id)).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(settleMs('run the tests') - 1)
+      expect(watch.lines).toHaveLength(1)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(watch.lines.slice(1)).toEqual([{ enter: { id: expect.stringMatching(ID), app, tty: ttyOf(1) } }])
+      expect(watch.lines[1].enter!.id).not.toBe(watch.lines[0].write!.id)
+      watch.wrote(watch.lines[1].enter!.id)
+      expect(await sent).toEqual({ ok: true })
+      expect(said()).toEqual(['[device] voice · tabs'])
+      const secrets = ['ttys', 'run', 'tests', String(pidOf(1)), watch.lines[0].write!.id, watch.lines[1].enter!.id]
+      expect(logs.filter((line) => secrets.some((secret) => line.includes(secret)))).toEqual([])
+    })
+  }
+
+  it('wrong session: words for A never make a line naming B\'s tty, and with another start on A\'s tty none at all', async () => {
+    const { watch, tabProcess } = await inTabs({ agents: 2 })
+    expect(await say(A, 'run the tests')).toEqual({ ok: true })
+    expect(named(watch.lines)).toEqual([['write', ttyOf(1), 'run the tests'], ['enter', ttyOf(1)]])
+    // Another process on A's tty since its proof was read: ps reads another start there.
+    tabProcess.mockImplementation(async (pid) => ({ tty: ttyOf(nOf(pid)), pgid: pid, tpgid: pid, start: startOf(nOf(pid) + 8) }))
+    expect(await say(A, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
+    expect(watch.lines).toHaveLength(2)
+    expect(said()).toEqual(['[device] voice · tabs', '[device] voice · refused (tabs · process)'])
+    expect(watch.lines.filter(({ write, enter }) => (write ?? enter)!.tty === ttyOf(2))).toEqual([])
+  })
+
+  // Review Focus 5: the lock is per tty, so neither send waits on the other.
+  it('words to A and to B at once: each write and Enter names its own tty, and B\'s write goes before A\'s Enter', async () => {
+    const { watch } = await inTabs({ agents: 2 })
+    const both = Promise.all([host().sendTurn(A, 'words for api'), host().sendTurn(B, 'words for web')])
+    await vi.advanceTimersByTimeAsync(settleMs('words for api'))
+    expect(await both).toEqual([{ ok: true }, { ok: true }])
+    expect(named(watch.lines)).toEqual([
+      ['write', ttyOf(1), 'words for api'], ['write', ttyOf(2), 'words for web'], ['enter', ttyOf(1)], ['enter', ttyOf(2)],
+    ])
+  })
+
+  it('an agent that does not lead its tty\'s foreground group takes nothing: refused (tabs · background)', async () => {
+    const { watch, tabProcess } = await inTabs()
+    // After a Ctrl-Z its shell leads the tty's foreground group: the words would run as a command.
+    tabProcess.mockImplementation(async (pid) => ({ tty: ttyOf(1), pgid: pid, tpgid: 4001, start: startOf(1) }))
+    expect(await say(A, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
+    expect(watch.lines).toEqual([])
+    expect(said()).toEqual(['[device] voice · refused (tabs · background)'])
+  })
+
+  it('an agent in Terminal takes no words: no line, no probe, and the dial is told it did not answer', async () => {
+    const { watch, tabProcess, ttyReaders } = await inTabs({ hostHints: { __CFBundleIdentifier: 'com.apple.Terminal' } })
+    expect(await say(A, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
+    expect(watch.lines).toEqual([])
+    expect([tabProcess.mock.calls, ttyReaders.mock.calls]).toEqual([[], []])
   })
 })
 
