@@ -1202,6 +1202,13 @@ describe('Orca', () => {
         }
       })
 
+      it('a tap is timed to the later of the raise and its own pane shown, as iTerm2 times its latest part', () => {
+        for (const platform of ['linux', 'darwin'] as const) {
+          expect(scores(tapped(platform, moved(4500, 'pane:ot', platform))), platform)
+            .toEqual({ worktree: 1, switch: 1, pane: 1, raise: 1, latency: 0 })
+        }
+      })
+
       it('no evidence line names a pane id or a client tty', () => {
         for (const platform of ['linux', 'darwin'] as const) {
           for (const tmux of [[moved(750, 'pane:ot', platform)], [moved(750, 'pane:oa', platform)], [moved(750, 'pane:ot', platform, false)],
