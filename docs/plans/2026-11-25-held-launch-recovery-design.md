@@ -142,6 +142,14 @@ It answers an error only when the attempt sends the row to the failed state. A f
 as today (`NATIVE_LAUNCH_HELD`), with plain copy: "This harness is still starting."; so are the held first launches
 without `startsAgain` (above), with their words of today.
 
+**A restart of a running conversation** goes through the pane swap, not the restore (`restart.ts:277`,
+`lib/restartAgent.ts`, `core/agents/swap.ts`). When the guard holds the swap's new launch, the swap today finds no
+engine within 8 s and respawns over the held shell with the same stale evidence, without `expectedHeldToken`, is held
+again, and answers "did not come back up after restart"; the row is never marked held. Same cause, so: a swap that sees
+its own launch's held shell (by that launch's token) never respawns over it. It sets the row to a launch the guard held
+(`startsAgain`, its conversation kept), hands it to the held passes (the same attempts and bounds), and restart answers
+success with the row, shown starting.
+
 ### 4. What the person sees
 
 - **A held first launch is shown as starting.** Every frame built from a row (`lib/agentFrame.ts:295`, the one place a

@@ -12,7 +12,9 @@ do.
 held launch). The restore's held pass, which already relaunches a held row into its own pane with `expectedHeldToken`,
 learns to read a first launch's original task from that receipt (`restoreLaunch.ts`) and to launch it into its held
 pane only; a held conversation keeps its resume of today. `heldLaunches` gives each guard-held agent its own bounded
-attempt schedule, armed by the two watchers that see the hold at run time; `agent_restart` runs an attempt at once.
+attempt schedule, armed by the two watchers that see the hold at run time; `agent_restart` runs an attempt at once. A
+restart of a running conversation whose pane swap the guard holds never respawns over its own held shell: it marks
+the row held to start again and hands it to the same attempts.
 Every frame, and every other place a row's launch leaves the core, shows such a row as a launch starting
 (`shownLaunch`); the registry keeps the true hold.
 
@@ -21,7 +23,7 @@ Every frame, and every other place a row's launch leaves the core, shows such a 
 
 **Spec:** `docs/plans/2026-11-25-held-launch-recovery-design.md` (read it with this plan; it was revised on 2026-11-25
 with the bounded retry of section 2, "The retry ends", the `harness wait` test, and the four answers listed under
-[Decisions](#decisions)). The orchestrator's decisions of 2026-11-25 are final: approach A; `creationId` on the row, passed explicitly; `startsAgain: true` on the held launch,
+[Decisions](#decisions), and again with section 3's "A restart of a running conversation", Tasks 18-19). The orchestrator's decisions of 2026-11-25 are final: approach A; `creationId` on the row, passed explicitly; `startsAgain: true` on the held launch,
 sent as `{ state: 'starting' }`; no client change; the unrecoverable and the no-proof cases as the spec lists them;
 never a new waiting pane for a first launch; the per-agent backoff and its bounds; restart runs `restartHeld`; the copy;
 `src/architecture.coreFiles.txt` unchanged; 100% per file; no fixed sleeps.
@@ -110,6 +112,17 @@ never a new waiting pane for a first launch; the per-agent backoff and its bound
   10 times · NATIVE_GUARD_REPEATED`, `… · relaunch held 15 minutes · NATIVE_EVIDENCE_UNSETTLED`).
 - **Clock.** `heldLaunches` reads time only through `now` (default `performance.now()`), so a wall-clock step neither
   stalls nor bursts attempts.
+- **The swap's hold** (section 3, "A restart of a running conversation"; Task 18). The swap's launch is built with
+  the restart's fresh native inspection (`built.overrides.native`), whose `token` the held shell runs under. The rule
+  "never respawn over it" lives where the respawn-then-fallback order lives, `lib/restartAgent.ts`: after a spawn whose
+  wait found no engine, the swap asks once whether its pane is the held shell under that token (`heldShell`, read by
+  `backend.isHeld` in `swap.ts`); `true` ends the swap with no further respawn, `false` and `'unknown'` keep today's
+  path (the fresh fallback). So it holds for every swap (restart, retarget, a move's fallback). Only `restart.ts`
+  marks the row and hands it on, and only a row with a `sessionId`: a ready row without one would become a
+  `heldFirstLaunch`, whose recovery delivers the receipt's first task a second time. Without one, and for retarget and
+  a move, the answer is today's error. The reply's `resumed` is `true`: the conversation is kept and the held pass
+  resumes it; `false` would make Desktop say "Started a new conversation." (`restart_agent_action.dart:262`). The
+  backend's hold on the pane is not released (the pane stays the held shell), and `commitRelaunchedEngine` is not run.
 - **Older fork receipts.** A row with a `creationId` always has a receipt this release wrote: the fork reserves it and
   registers the row in the same process, and a pending receipt a dead core left is never run again
   (`AgentCreationReceipts.run`). So a fork receipt with no `firstTask` is a fork with none.
@@ -183,12 +196,15 @@ Each line is a case the spec implies and its test list does not exercise; the te
 | 14 | The restore's launch carries the original task | high | 2, 3, 9 |
 | 15 | The frame shows a guard-held launch starting | high | 2 |
 | 16 | The other places a row leaves the core | medium | 15 |
-| 17 | Wiring (`core/main.ts`); turns Task 1 green | high | 1, 6, 8, 10, 11, 12, 14, 15 |
+| 17 | Wiring (`core/main.ts`); turns Tasks 1 and 19 green | high | 1, 6, 8, 10, 11, 12, 14, 15, 18, 19 |
+| 18 | A restart whose swap the guard held starts again (the swap) | xhigh | 2, 9, 13 |
+| 19 | The red end to end of a restart the guard held | high | 1 |
 
-Longest chain: four tasks (2 → 9 → 10 → 17; also 2 → 7 → 8 → 17, 2 → 9 → 12 → 17, 2 → 9 → 14 → 17). Task 1 stays
-red until Task 17. Files, all under `cli/` (each in one task only):
+Longest chain: four tasks (2 → 9 → 10 → 17; also 2 → 7 → 8 → 17, 2 → 9 → 12 → 17, 2 → 9 → 14 → 17, 2 → 9 → 18 → 17,
+2 → 13 → 18 → 17). Tasks 1 and 19 stay red until Task 17. Files, all under `cli/` (each in one task only, but
+where a task names the earlier one it follows):
 
-- 1: `e2e/heldLaunchRecovery.e2e.ts` (new), `e2e/eagerHooks.e2e.ts`.
+- 1, 19: `e2e/heldLaunchRecovery.e2e.ts` (new in 1; 19 adds a case), `e2e/eagerHooks.e2e.ts` (1 only).
 - 2: `src/lib/registry.ts`, `src/lib/createAgentPane.ts`, `src/lib/registry.firstLaunch.spec.ts` (new),
   `src/lib/createAgentPane.spec.ts`.
 - 3: `src/lib/agentCreationReceipt.ts`, `src/lib/agentCreationReceipt.spec.ts`.
@@ -200,12 +216,14 @@ red until Task 17. Files, all under `cli/` (each in one task only):
 - 9, 10: `src/lib/restoreAgents.ts`, `src/lib/restoreAgents.spec.ts` (9, then 10).
 - 11: `src/core/agents/newPane.ts`, `src/core/agents/newPane.spec.ts`.
 - 12: `src/core/agents/heldLaunches.ts`, `src/core/agents/heldLaunches.spec.ts`.
-- 13: `src/core/agents/restart.ts`, `src/core/agents/restart.spec.ts`.
+- 13, 18: `src/core/agents/restart.ts`, `src/core/agents/restart.spec.ts` (13, then 18).
+- 18: `src/lib/restartAgent.ts`, `src/lib/restartAgent.spec.ts`, `src/core/agents/swap.ts`,
+  `src/core/agents/swap.spec.ts`.
 - 14: `src/core/agents/restoreLaunch.ts`, `src/core/agents/restoreLaunch.spec.ts`.
 - 15: `src/lib/agentFrame.ts`, `src/lib/agentFrame.spec.ts`.
 - 16: `src/core/wifiAgents.ts`, `src/core/terminals/sessions.ts`, `src/core/api.ts`, `src/core/wifiAgents.spec.ts`,
   `src/core/terminals/sessions.spec.ts` (new), `src/core/api.spec.ts`.
-- 17: `src/core/main.ts`.
+- 17: `src/core/main.ts` (it wires Task 18's dep too, so it follows 18).
 
 ---
 
@@ -696,21 +714,113 @@ export function shownLaunch(row: Pick<RegisteredSession, 'launch' | 'active' | '
 
 **Files:** Modify `cli/src/core/main.ts` (wiring only).
 
-**Depends on:** 1, 6, 8, 10, 11, 12, 14, 15. **Effort:** high (the integration). **Failing test:** Task 1's two e2e
-files; this task turns them green.
+**Depends on:** 1, 6, 8, 10, 11, 12, 14, 15, 18, 19. **Effort:** high (the integration). **Failing test:** Task 1's
+two e2e files and Task 19's case; this task turns them green.
 
 - [ ] **Step 1:** Move `const receipts = new AgentCreationReceipts(...)` (`main.ts:2954`) above `createRestoreLaunch`
   (`:2615`) and pass `receipts` to it; give `createHeldLaunches` (`:551`) `announce: (session) => announceSession(session)`
-  (defined at `:850`, called only after); give `createPaneWatcher` (`:2839`) and `restoreDeps` (`:2674`)
-  `startAgain: (agentId) => heldLaunches.startAgain(agentId)`. Nothing else.
+  (defined at `:850`, called only after); give `createPaneWatcher` (`:2839`), `restoreDeps` (`:2674`) and
+  `createAgentRestarter` (`:3035`) `startAgain: (agentId) => heldLaunches.startAgain(agentId)`. Nothing else.
 - [ ] **Step 2: Run** `npm run typecheck`, then `npx vitest run --config vitest.e2e.config.ts
   e2e/heldLaunchRecovery.e2e.ts e2e/eagerHooks.e2e.ts`; Expected: PASS.
-- [ ] **Step 3: Commit** the change (its red is Task 1's commit).
+- [ ] **Step 3: Commit** the change (its red is Task 1's and Task 19's commits).
+
+### Task 18: A restart whose swap the guard held starts again
+
+**Files:** Modify `cli/src/lib/restartAgent.ts`, `cli/src/core/agents/swap.ts` (`paneSwapDeps`),
+`cli/src/core/agents/restart.ts` (after Task 13; lines 277-285); Test `cli/src/lib/restartAgent.spec.ts`,
+`cli/src/core/agents/swap.spec.ts`, `cli/src/core/agents/restart.spec.ts` (after Task 13).
+
+**Depends on:** 2 (`startsAgain`), 9 (`guardHold`), 13 (`restart.ts` and its spec are Task 13's first).
+**Effort:** xhigh (a respawn over a pane: never two engines, never the conversation lost). **Failing test:** below;
+end to end, Task 19's case, green with Task 17's wiring.
+
+**Interfaces:** Consumes `guardHold`, `STARTING_AGAIN` (Task 9). Produces:
+
+```ts
+// lib/restartAgent.ts
+export type RestartOutcome =
+  | { ok: true; processIdentity: ProcessIdentity; resumed: boolean }
+  | { ok: false; detail: string; error?: 'ENGINE_LAUNCH_REFUSED'; held?: true }  // held: its pane is its own launch's held shell
+// RestartAgentDeps:
+/** Whether the pane is the native guard's held shell under this swap's own launch token. Left out: never asked. */
+heldShell?: () => Promise<boolean | 'unknown'>
+// core/agents/restart.ts, RestartDeps:
+/** The held passes, asked to try that agent again (core/agents/heldLaunches.ts `startAgain`). */
+startAgain?: (agentId: string) => void
+```
+
+`swap.ts` gives `heldShell: () => backend.isHeld(runtime, launch.native.token)` only when `launch.native?.token` and
+`backend.isHeld` exist. `restartAgent`: after any spawn whose `waitForProcess` answered null, `heldShell` `true` returns
+`{ ok: false, held: true, detail: '<engine> did not come back up after restart' }` at once (no fresh fallback, no
+`keepAbandoned`); `false` or `'unknown'` goes on as today. `restart.ts`, on `held` with `session.sessionId`, still
+`current()`: `registry.setLaunch(agentId, guardHold(<the row now>, built.overrides.native.token))` (the conversation's
+`sessionId` kept), `announceSession`, `startAgain(agentId)` once, a log line `[restart] <sid> <engine> · held by the
+native guard · starting again`, and `{ ok: true, session: <that row>, resumed: true }`; no `commitRelaunchedEngine`, no
+`releaseHold`. On `held` without a `sessionId`: today's `{ ok: false, error: 'RESTART_FAILED', detail }`, the row
+untouched. Retarget and a move's fallback get the `held` outcome as a failure, as today, and change nothing.
+
+- [ ] **Step 1: Write the failing tests:**
+  - `restartAgent.spec.ts`: `it('never respawns over its own launch's held shell: a resume the guard held answers held,
+    with no fresh fallback')` (`waitForProcess` null, `heldShell` true → that outcome, `respawn` called once, no
+    "retrying fresh" line, `keepAbandoned` not called); `it.each([false, 'unknown'])('falls back fresh as today when
+    its pane is not its held shell (%s)')` (two respawns); `it('asks nothing when the engine came back up')`;
+    `it('a fresh start the guard held answers held, once')` (no `sessionId`: one respawn).
+  - `swap.spec.ts`: `it('reads its own launch's held shell by that launch's token')` (`isHeld(runtime, 'tok-1')` for
+    `{ native: { token: 'tok-1', … } }`); `it('has no held-shell read without a native launch or a backend that can
+    tell')`.
+  - `restart.spec.ts` (the spec's fake `paneSwapDeps` with `waitForProcess: async () => null`, `heldShell: async () =>
+    true`): `it('a restart of a conversation the guard held starts it again: the row held to start again, the held
+    passes asked, success shown starting')` (the row `{ state: 'held', service: 'native', nativeToken: <the inspected
+    launch's token>, startsAgain: true, detail: 'Starting again.' }` with its `sessionId`, announced once,
+    `startAgain('a1')` once, the reply `{ ok: true, session: <the row>, resumed: true }`, `confirmLaunch` and
+    `releaseHold` not called, one respawn); `it('a restart of a row with no conversation the guard held answers as
+    today and marks nothing')`; `it('a held swap that changed under it marks nothing')` (`current()` false after the
+    swap → `AGENT_CHANGED`, launch unchanged, no `startAgain`).
+- [ ] **Step 2: Run** `npx vitest run src/lib/restartAgent.spec.ts src/core/agents/swap.spec.ts
+  src/core/agents/restart.spec.ts`; Expected: FAIL (no `heldShell`, the fallback respawns, restart answers
+  `RESTART_FAILED`).
+- [ ] **Step 3: Implement** the three changes above. A comment at the check says why (the fallback respawned over the
+  held shell on the same stale evidence and was held again, 2026-11-25).
+- [ ] **Step 4: Run** the three specs (100% for `swap.ts` and `restart.ts`: `--coverage
+  --coverage.include=src/core/agents/swap.ts --coverage.include=src/core/agents/restart.ts`) and `npm run typecheck`
+  (retarget and the move compile unchanged); Expected: PASS. **Step 5: Commit** red, then the change.
+
+### Task 19: The red end to end of a restart the guard held
+
+**Files:** Modify `cli/e2e/heldLaunchRecovery.e2e.ts` (after Task 1: one case added, its helpers reused).
+
+**Depends on:** 1. **Effort:** high. **Failing test:** the case below; red until Task 17.
+
+- [ ] **Step 1: Write the case:**
+
+```ts
+it('a restart of a running conversation the guard held resumes in its own pane, answered at once as starting', async () => {
+  // The same daemon set-up. `harness new codex <projects>/r1 --name r1 -- hi`; until r1 is ready with a sessionId S.
+  // Its pane P (the frame's tmuxPane) and P's #{pane_pid} read with d.tmux.run('display-message', '-p', '-t', P, ...).
+  // A watcher polls that pid every 50 ms; once it changes (the swap's respawn: the new shell is in its 2 s rc file),
+  // it replaces bin/codex by rename. The restart's native inspection ran before the kill, on the old shim.
+  const restarted = await client.request('agent_restart', { agentId: id }, 60_000)
+  expect(restarted.error, JSON.stringify(restarted)).toBeUndefined()
+  expect(restarted).toMatchObject({ resumed: true, agent: { id, sessionId: S, launch: { state: 'starting' } } })
+  // until('r1 resumed', ..., 60_000, 250): every frame of r1 seen has launch.state !== 'held'; ends on ready, sessionId S.
+  expect(d.log().slice(restartAt)).toMatch(new RegExp(`\\[launch\\] ${id.slice(0, 8)} \\S+ → held`))  // the guard held the swap
+  expect(d.log().slice(restartAt)).not.toContain('retrying fresh')                                     // no respawn over it
+  const resumed = launches(d).slice(before).filter(l => l.engine === 'codex')                           // launches after the restart
+  expect(resumed).toHaveLength(1)
+  expect(resumed[0].args).toContain(S)
+}, 180_000)
+```
+
+- [ ] **Step 2: Run** `npx vitest run --config vitest.e2e.config.ts e2e/heldLaunchRecovery.e2e.ts -t "a restart"`;
+  Expected: FAIL: the restart answers `RESTART_FAILED`, `codex did not come back up after restart`, after the log's
+  `retrying fresh` line; the `→ held` line is never written (the row is never marked held).
+- [ ] **Step 3: Commit** the case (red).
 
 ## Decisions
 
-The orchestrator's answers of 2026-11-25 to the draft's four questions, final; the spec carries them (sections 1, 2
-"The retry ends", 4).
+The orchestrator's answers of 2026-11-25 to the draft's five questions, final; the spec carries them (sections 1, 2
+"The retry ends", 3, 4).
 
 1. **Restart on the failed tile** keeps today's answer: `agent_restart` of a failed launch with no engine answers
    `NO_ACTIVE_PROCESS` (`restart.ts:243`); the pane (the held shell) is kept. Nothing relaunches it. Pinned end to end
@@ -726,19 +836,11 @@ The orchestrator's answers of 2026-11-25 to the draft's four questions, final; t
    attempts and both bounds. Its recovery is the restore's resume of today into its own held pane with
    `expectedHeldToken`; no receipt. Which rule covers which row is under "What this plan decides" ("Which rule is
    whose", "A guard-held conversation's pane"). Tasks 1, 2, 9, 10, 12, 13, 14, 15 and 16.
-
-## Open question
-
-1. **A restart of a ready conversation does not reach this path.** `agent_restart` of a ready row runs the pane swap
-   (`restart.ts:277`, `lib/restartAgent.ts`, `core/agents/swap.ts`), not the restore: the guard holds the resume under
-   the swap's token, `waitForProcess` (8 s) finds no engine, the fresh fallback respawns over the held shell without
-   `expectedHeldToken` on the same stale evidence and is held again, and restart answers "codex did not come back up
-   after restart" with the row never set held, so neither `restoreAgents.ts:1002` nor `startsAgain` is reached. The
-   spec's "a restart … whose restored pane became the held shell" holds only for a restart of a row already held
-   (`restartHeld`). The plan therefore pins decision 4 end to end with a boot restore of a conversation (Task 1, case
-   c1), not with the suggested restart. Should a restart of a ready conversation whose guard holds be in this pull
-   request (a change to the swap: see the held shell under its token, then hand the row to the held passes), or a
-   follow-up?
+5. **A restart of a running conversation whose pane swap the guard holds** (the draft's open question) is the same
+   cause and in this pull request, as its own task with a red test: the swap never respawns over its own launch's held
+   shell (by that launch's token); the row becomes a launch the guard held (`startsAgain`, its conversation kept),
+   handed to the held passes (`startAgain`); `agent_restart` answers success with the row, shown starting (spec
+   section 3; "The swap's hold" under "What this plan decides"). Tasks 18 and 19, wired in 17.
 
 ## Verification
 
@@ -751,8 +853,10 @@ The orchestrator's answers of 2026-11-25 to the draft's four questions, final; t
    `starting → held`, then `held → starting`, then the ready line; `launch-argv` has one Codex launch with `hello`;
    `harness wait` prints `b1: idle · read it: harness show b1`; c1's log shows the restore's `· resuming` line, then
    `starting → held`, then the ready line with the same conversation, and `launch-argv` has one Codex launch after the
-   stop; the failed create answers Restart with `NO_ACTIVE_PROCESS` and keeps its pane. Before Task 17 they fail as
-   Task 1, Step 3 says.
+   stop; r1's restart answers at once with `resumed: true` and the row starting, the log shows `→ held` and no
+   `retrying fresh`, and `launch-argv` has one Codex launch after the restart, resuming the same conversation; the
+   failed create answers Restart with `NO_ACTIVE_PROCESS` and keeps its pane. Before Task 17 they fail as Task 1,
+   Step 3 and Task 19, Step 2 say.
    Also locally, darwin only: `npx vitest run --config vitest.e2e.config.ts e2e/identityHoldVisible.e2e.ts`.
 2. **Regression end to end, on GitHub by hand** (long): Actions → CI → Run workflow, scope `linux-e2e`, `e2e_files`
    `cli/e2e/forks.e2e.ts cli/e2e/agentClient.e2e.ts cli/e2e/restartIdentity.e2e.ts cli/e2e/recovery.e2e.ts
@@ -766,6 +870,7 @@ The orchestrator's answers of 2026-11-25 to the draft's four questions, final; t
    src/lib/agentCreationReceipt.spec.ts src/lib/engineLaunch src/agentClient/commands.spec.ts
    src/core/agents/create.spec.ts src/core/agents/fork.spec.ts src/core/agents/launches.spec.ts src/lib/restoreAgents
    src/core/agents/newPane.spec.ts src/core/agents/heldLaunches.spec.ts src/core/agents/restart.spec.ts
+   src/lib/restartAgent.spec.ts src/core/agents/swap.spec.ts src/core/agents/retarget.spec.ts src/core/agents/hostMove.spec.ts
    src/core/agents/restoreLaunch.spec.ts src/lib/agentFrame src/core/wifiAgents.spec.ts
    src/core/terminals/sessions.spec.ts src/services/shell.spec.ts src/core/api.spec.ts`.
 6. **GitHub, on the pull request, by path** (`scripts/ci-plan.py`): the CLI unit suite, and `linux-e2e`, which runs the
