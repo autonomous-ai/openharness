@@ -670,7 +670,7 @@ mod tests {
     use crate::model::UPDATING_APP;
     use crate::types::{
         Action, DialStatus, Effect, Event, ExportFailure, Exported, LoginEvent, MenuAction, MenuItem, NotifyMode,
-        Phase, Saved, Screen, UpdateFailure, View,
+        Phase, Saved, Screen, UpdateFailure, View, VoiceLang,
     };
     use std::path::PathBuf;
 
@@ -1157,6 +1157,31 @@ mod tests {
         for _ in 0..2 {
             for (action, on) in [(MenuAction::SoundOff, false), (MenuAction::SoundOn, true)] {
                 assert_eq!(app.handle(Event::Menu(action)), [Effect::SetSound(on), Effect::Menu(menu.clone())]);
+            }
+        }
+    }
+
+    #[test]
+    fn a_voice_click_asks_the_dial_and_draws_the_menu_again() {
+        let mut app = found();
+        let line = DialStatus {
+            attached: true,
+            fw: Some("0.0.95".into()),
+            hw: None,
+            board: None,
+            updating: None,
+            problem: None,
+            muted: None,
+            notify: None,
+        };
+        let menu = menu_of(&app.handle(Event::WatchLine(line)));
+        // Twice over: a click remembers nothing, so the same click gives the same effects.
+        for _ in 0..2 {
+            for lang in VoiceLang::ALL {
+                assert_eq!(
+                    app.handle(Event::Menu(MenuAction::Voice(lang))),
+                    [Effect::SetVoice(lang), Effect::Menu(menu.clone())]
+                );
             }
         }
     }

@@ -452,7 +452,7 @@ fn menu_action(id: &str) -> Option<MenuAction> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use harness_device::types::{Phase, Screen};
+    use harness_device::types::{Phase, Screen, VoiceLang};
 
     fn view(screen: Screen, phase: Phase, lines: &[&str]) -> View {
         View { screen, phase, lines: lines.iter().map(|line| line.to_string()).collect() }
@@ -463,17 +463,22 @@ mod tests {
         use MenuAction::*;
         let actions =
             [Install, SignIn, SoundOn, SoundOff, NotifyFull, NotifyYou, Update, OpenHarness, About, Quit, ExportLogs];
-        for action in actions {
+        let actions: Vec<_> = actions.into_iter().chain(VoiceLang::ALL.map(Voice)).collect();
+        for &action in &actions {
             assert_eq!(menu_action(menu_id(action)), Some(action));
         }
         let ids: std::collections::HashSet<_> = actions.into_iter().map(menu_id).collect();
-        assert_eq!(ids.len(), 11);
+        assert_eq!(ids.len(), 17);
         assert_eq!(menu_id(About), "about");
         assert_eq!(menu_id(ExportLogs), "export_logs");
         assert_eq!(menu_id(NotifyFull), "notify_full");
         assert_eq!(menu_id(NotifyYou), "notify_you");
         assert_eq!(menu_action("sound"), None);
         assert_eq!(menu_action("notify"), None);
+        assert_eq!(menu_id(Voice(VoiceLang::Vi)), "voice_vi");
+        assert_eq!(menu_id(Voice(VoiceLang::Ja)), "voice_ja");
+        assert_eq!(menu_action("voice"), None);
+        assert_eq!(menu_action("voice_de"), None);
     }
 
     #[test]
