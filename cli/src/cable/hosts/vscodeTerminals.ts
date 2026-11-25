@@ -41,10 +41,9 @@
 import { isAbsolute } from 'node:path'
 import { REFUSED, type ListenerHandler, type ListenerStream, type ListenerStreamHandler } from '../../services/devicesListener.js'
 import { processRows, type ProcessRow } from '../../lib/processTable.js'
-import { INJECT_PASTE_DELAY_BASE_MS, INJECT_PASTE_DELAY_MAX_MS } from '../../lib/submitTiming.js'
 import type { PageAgent } from './adapter.js'
-import { CONTROL, MAX_TEXT } from './orca.js'
 import { execText, parentChain, PS_TIMEOUT_MS, type Exec, type ProcessName } from './scannedApp.js'
+import { cleanWords, createTwoStep, type StepAnswer } from './twoStep.js'
 
 export const VSCODE_WINDOWS = 8
 export const VSCODE_TERMINALS = 32
@@ -73,8 +72,6 @@ export const VSCODE_LINE_MAX_BYTES = 65_536
 export type VscodeTyped = 'typed' | 'background' | 'failed'
 
 const WINDOW_ID = /^[A-Za-z0-9-]{8,36}$/
-/** A lone surrogate: UTF-8 has no form for it, so it is typed as the replacement character. */
-const LONE_SURROGATE = /\p{Cs}/gu
 const PID_MAX = 2 ** 31 - 1
 const MINUTE_MS = 60_000
 /** A tty's foreground group is -1 on Linux for a process with no terminal. */
@@ -230,8 +227,8 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
   let told = new Map<number, string>()
   /** Each agent's guard still reading, by its pid: an ask meanwhile joins it rather than reading again. */
   const guards = new Map<number, Promise<Verdict>>()
-  /** Each shell a send of the dial's words is under way in: two dials' words at once would mix in one prompt. */
-  const sending = new Set<number>()
+  /** The sends of the dial's words, one at a time in each shell. */
+  const twoStep = createTwoStep<number>(deps.after)
   let counted = { ...NONE_COUNTED }
   let minute = false
 
@@ -525,13 +522,12 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
       })
     },
     type: async (agentPid, text, atPrompt) => {
-      // A newline would submit part of the words and an escape would steer the screen: only the Enter line submits.
-      const words = text.replace(CONTROL, ' ').replace(LONE_SURROGATE, '\ufffd')
-      if (!words || words.length > MAX_TEXT) return 'failed'
+      const words = cleanWords(text)
+      if (!words) return 'failed'
       const chain = chains.get(agentPid)
       const terminal = terminalOf(agentPid)
       const window = terminal && windows.get(terminal.window)
-      if (!chain || !terminal || !window?.types || sending.has(terminal.shell)) return 'failed'
+      if (!chain || !terminal || !window?.types) return 'failed'
       const { window: id, shell } = terminal
       const line = { type: words, pid: shell }
       if (Buffer.byteLength(JSON.stringify(line)) + 1 > VSCODE_LINE_MAX_BYTES) return 'failed'
@@ -541,25 +537,21 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
         const now = terminalOf(agentPid)
         return windows.get(id) === window && window.types && chains.get(agentPid) === chain && now?.window === id && now.shell === shell
       }
-      sending.add(shell)
-      try {
-        const refused = await typeGuard(agentPid, shell, chain)
-        if (refused) return refused
-        // Asked again after the guard's read: a turn that started or a prompt that opened meanwhile would take the words
-        // as its answer, and Codex's approval reads a typed `y` as a yes.
-        if (!same() || !atPrompt() || !window.stream.write(line)) return 'failed'
-        // Codex's paste-burst detector turns an Enter within 120 ms of a burst of keys into a newline (codex-rs
-        // paste_burst.rs), and Claude Code needs time to take a long input before an Enter submits it.
-        const settle = Math.min(INJECT_PASTE_DELAY_MAX_MS, INJECT_PASTE_DELAY_BASE_MS + Math.floor(words.length / 60))
-        await new Promise<void>((settled) => { deps.after(settle, settled) })
-        // An Enter that waited behind a line still draining would go after the checks it passed: it does not wait.
-        return !(await typeGuard(agentPid, shell, chain)) && same() && atPrompt() && window.stream.write({ enter: shell }) ? 'typed' : 'failed'
-      } catch {
-        // A caller's check or a stream that throws submits nothing: the send never rejects.
-        return 'failed'
-      } finally {
-        sending.delete(shell)
-      }
+      // An Enter that waited behind a line still draining would go after the checks it passed: no line waits.
+      const written = (sent: unknown): StepAnswer<VscodeTyped> => (window.stream.write(sent) ? { ok: true } : { ok: false, why: 'failed' })
+      const typed = await twoStep.send<VscodeTyped>(shell, words, {
+        check: async (before) => {
+          const refused = await typeGuard(agentPid, shell, chain)
+          // After the words, an agent gone to the background still leaves them unsubmitted: the send failed.
+          if (refused) return before === 'words' ? refused : 'failed'
+          // Asked after the guard's read: a turn that started or a prompt that opened meanwhile would take the words as
+          // its answer, and Codex's approval reads a typed `y` as a yes.
+          return same() && atPrompt() ? undefined : 'failed'
+        },
+        words: async () => written(line),
+        enter: async () => written({ enter: shell }),
+      }, 'failed')
+      return typed === true ? 'typed' : typed
     },
   }
 }
