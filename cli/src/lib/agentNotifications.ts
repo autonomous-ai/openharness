@@ -6,7 +6,14 @@ export type AgentNotification = { id: string; kind: 'done' | 'needsYou' }
  * within it means the person is not done with the agent yet. */
 export const DONE_QUIET_MS = 1_500
 
-type Tell = (notification: AgentNotification | null) => void
+/** Why a turn's end is not news, in fixed words the devices log (never an id or text): the caller's silent (a
+ * sub-agent's or abandoned turn), not eligible (a replayed, cancelled or already-decided turn), no result text, a
+ * question waiting at the end, the session's next turn first, no turn known; and a recap restored after its turn
+ * ended unseen (CommanderMirror.catchUp, named by cable/cableHost.ts). */
+export const QUIET = ['subagent', 'replay', 'empty', 'question', 'next-turn', 'gone', 'restored'] as const
+export type Quiet = typeof QUIET[number]
+
+type Tell = (notification: AgentNotification | null, quiet?: Quiet) => void
 type Turn = {
   id: string
   eligible: boolean
@@ -25,7 +32,7 @@ export class AgentNotifications {
 
   started(sessionId: string, replay = false): void {
     const previous = this.turns.get(sessionId)
-    if (previous) this.drop(previous)
+    if (previous) this.drop(previous, 'next-turn')
     this.turns.set(sessionId, { id: randomUUID(), eligible: !replay, replay })
   }
 
@@ -47,18 +54,22 @@ export class AgentNotifications {
   /**
    * Decide the ended turn's notification. `tell` is called once: when the quiet window ends, or at once when it
    * already has; with null at once when the session's next turn starts first. Never for a session forgotten first.
+   * A null always comes with why (Quiet).
    */
   decide(sessionId: string, result: string, silent: boolean, tell: Tell): void {
     const turn = this.turns.get(sessionId)
-    if (!turn) return tell(null)
+    if (!turn) return tell(null, 'gone')
     const eligible = turn.eligible
     turn.eligible = false // Duplicate completion never creates another alert.
     turn.replay = false
-    if (!eligible || silent || !result.trim()) return tell(null)
+    if (!eligible) return tell(null, 'replay')
+    if (silent) return tell(null, 'subagent')
+    if (!result.trim()) return tell(null, 'empty')
     // A question asked inside the window is the person's news instead of this end.
     const decided = (): void => {
       turn.pending = undefined
-      tell(this.questions.has(sessionId) ? null : { id: turn.id, kind: 'done' })
+      if (this.questions.has(sessionId)) tell(null, 'question')
+      else tell({ id: turn.id, kind: 'done' })
     }
     // An end this policy never heard is long past: decided at once.
     const wait = DONE_QUIET_MS - (performance.now() - (turn.endedAt ?? -Infinity))
@@ -84,7 +95,7 @@ export class AgentNotifications {
 
   cancelled(sessionId: string): void {
     const turn = this.turns.get(sessionId)
-    if (turn) { turn.eligible = false; turn.replay = false; this.drop(turn) }
+    if (turn) { turn.eligible = false; turn.replay = false; this.drop(turn, 'replay') }
   }
 
   forget(sessionId: string): void {
@@ -94,11 +105,11 @@ export class AgentNotifications {
   }
 
   /** A decision still in its window is told null now, so its recap lands before whatever replaced the turn. */
-  private drop(turn: Turn): void {
+  private drop(turn: Turn, quiet: Quiet): void {
     if (!turn.pending) return
     clearTimeout(turn.pending.timer)
     const { tell } = turn.pending
     turn.pending = undefined
-    tell(null)
+    tell(null, quiet)
   }
 }

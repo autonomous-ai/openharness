@@ -1668,7 +1668,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       const recap = event.recap || event.text
       const onScreen = alreadyOnScreen(agentId)
       const noted = (tier: Tier, rule: string): void => tally(tier, `rule:${rule}`, rule, 0)
-      if (onScreen || event.subagent) { noted('silent', event.subagent ? 'subagent' : 'onScreen'); void cable.summary(agentId, recap, event.text, 'silent', event.fullText, event.subagent); return }
+      if (onScreen || event.subagent) { noted('silent', event.subagent ? event.quiet ?? 'subagent' : 'onScreen'); void cable.summary(agentId, recap, event.text, 'silent', event.fullText, event.subagent); return }
       // No device attached (or the serial side disabled): nobody to tell, so the recap never leaves the machine.
       if (!cable.isConnected) { ended.delete(agentId); void cable.summary(agentId, recap, event.text, 'silent', event.fullText, false); return }
       const turn = ended.get(agentId) // a sub-agent's summary leaves the main turn's numbers alone

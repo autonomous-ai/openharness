@@ -873,14 +873,14 @@ export class CommanderMirror {
           // The recap waits with its notification out the quiet window. A next turn opening inside it tells null at
           // once (lib/agentNotifications.ts), so the recap still lands, silent, before that turn's first card.
           const silent = (this.opts.isSubagent?.(sessionId) ?? false) || st.abandoned
-          this.notifications.decide(sessionId, body || recap, silent, (notification) => {
+          this.notifications.decide(sessionId, body || recap, silent, (notification, quiet) => {
             // One decision feeds both clients. A silent recap still updates the
             // device's tile; only real completed results create inbox entries.
             // Told from the window's timer or a tier's promise, where a throw would take the whole host down.
             const tell = (tier: Tier | null): void => {
               try {
                 this.emit(sessionId, { kind: 'summary', text: body || recap, recap,
-                  notification, ...(!notification ? { subagent: true } : {}), ...(tier ? { tier } : {}) })
+                  notification, ...(!notification ? { subagent: true, quiet } : {}), ...(tier ? { tier } : {}) })
                 this.opts.sendWeb({ type: 'turn_summary', agentId: this.opts.agentIdFor?.(sessionId) ?? sessionId,
                   dbSessionId: sessionId, payload: { summary, sessionId, notification, ...(tier ? { tier } : {}) } })
               } catch (err) {
@@ -888,6 +888,7 @@ export class CommanderMirror {
               }
             }
             const decide = this.opts.decideTier
+            if (!notification) this.trace(sessionId, `${sid} not news · ${quiet}`)
             if (!decide) tell(null)
             // Not news (a sub-agent's, a replay, a question still open at its end): silent, and nobody is asked.
             else if (!notification) tell('silent')

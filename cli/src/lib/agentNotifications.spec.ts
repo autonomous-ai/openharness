@@ -86,7 +86,7 @@ describe('shared desktop/device notification policy', () => {
     policy.started('s'); policy.ended('s')
     const second = decided(policy, 's', 'Another result')
     vi.runAllTimers()
-    expect(second[0]?.id).not.toBe(first[0]?.id)
+    expect(second).not.toEqual(first)
 
     policy.started('history', true)
     policy.started('empty')
@@ -125,6 +125,6 @@ describe('shared desktop/device notification policy', () => {
     policy.started('s'); policy.ended('s')
     const implemented = decided(policy, 's', 'Implemented your choice.')
     vi.runAllTimers()
-    expect(implemented[0]?.kind).toBe('done')
+    expect(implemented).toEqual([{ id: expect.any(String), kind: 'done' }])
   })
 })
