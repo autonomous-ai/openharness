@@ -278,6 +278,19 @@ describe('tabsTyping', () => {
       expect(w.stream.sent).toEqual([])
     })
 
+    it('ps is read after lsof: the agent stopped while lsof ran gets no words', async () => {
+      let stopped = false
+      const w = world({
+        readers: async () => {
+          stopped = true
+          return [AGENT, 4100]
+        },
+        process: async () => (stopped ? { ...FRONT, tpgid: 4300 } : FRONT),
+      })
+      expect(await w.send()).toEqual({ notSent: 'background' })
+      expect(w.stream.sent).toEqual([])
+    })
+
     it('a newer watch took the stream during the probes', async () => {
       const newer = fakeLine([])
       let replace = (): void => {}
