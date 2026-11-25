@@ -2652,15 +2652,17 @@ async function main() {
   }
 
   if (((engine === 'claude' || engine === 'devin') && event === 'SessionEnd') || (engine === 'cursor' && event === 'sessionEnd')) {
+    let pending = false
     const ok = await post(port, '/api/hook/session-end', {
       sessionId: input.session_id || input.conversation_id,
       reason: input.reason,
       ...mutationFields,
-    })
+    }, (reply) => { pending = reply?.pending === true })
     if (ok === false) await fallbackSessionEnd(input.session_id || input.conversation_id, input.reason, engine, tmuxPane)
-    // Only once the daemon has taken the end in: a reply that did not come in time ('late') is no answer,
-    // and the tasks it would have settled are still the daemon's to settle.
-    if (engine === 'cursor' && ok === true) await clearCursorTasks(input.session_id || input.conversation_id)
+    // Only once the daemon has taken the end in: a reply that did not come in time ('late') is no answer, nor is one
+    // kept pending behind its session's admission, which may still refuse it, and the tasks it would have settled are
+    // still the daemon's to settle.
+    if (engine === 'cursor' && ok === true && !pending) await clearCursorTasks(input.session_id || input.conversation_id)
     return
   }
 
