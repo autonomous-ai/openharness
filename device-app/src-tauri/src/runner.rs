@@ -484,10 +484,10 @@ mod tests {
     use crate::loginitem::LoginItem;
     use crate::open::Opener;
     use crate::state::StateFile;
-    use crate::tabs::{NoTabs, Selected, TabApp, TabError, TabScripts};
+    use crate::tabs::{LATE_WRITE, NoTabs, Selected, TabApp, TabError, TabScripts, Written};
     use crate::testing::{Fake, alive, fake_harness, wait_gone};
     use crate::types::{
-        DialStatus, Effect, Event, ExportFailure, Exported, LoginEvent, MenuItem, NotifyMode, Output, Saved,
+        DialStatus, Effect, Event, ExportFailure, Exported, LoginEvent, MemoryLog, MenuItem, NotifyMode, Output, Saved,
         UpdateFailure, VoiceLang,
     };
     use crate::update::AppUpdater;
@@ -520,6 +520,14 @@ mod tests {
     const OTHER: &str = "/dev/ttys024";
     const SELECT: &str = r#"{"select":{"app":"terminal-app","tty":"/dev/ttys023"}}"#;
     const RAISE: &str = r#"{"select":{"app":"terminal-app","tty":"/dev/ttys023","raise":true}}"#;
+    const ITERM: &str = "com.googlecode.iterm2";
+    const ITERM_LINE: &str = r#"{"front":"com.googlecode.iterm2"}"#;
+    const SELECT_ITERM: &str = r#"{"select":{"app":"iterm","tty":"/dev/ttys023"}}"#;
+    const SELECT_OTHER: &str = r#"{"select":{"app":"iterm","tty":"/dev/ttys024"}}"#;
+    const ID: &str = "0123456789abcdef";
+    const NEXT_ID: &str = "00000000000000ff";
+    const ENTER_ID: &str = "fedcba9876543210";
+    const ENTER: &str = r#"{"enter":{"id":"fedcba9876543210","app":"iterm","tty":"/dev/ttys023"}}"#;
     /// Every test runner's poll interval: short, so a test waits on calls, never on the clock.
     const EVERY: Duration = Duration::from_millis(20);
     const CHATGPT_LINE: &str = r#"{"front":"com.openai.codex"}"#;
@@ -634,6 +642,8 @@ mod tests {
         not_running: AtomicBool,
         /// What selected_tty answers, in turn; the last one again once the others are used.
         ttys: Mutex<VecDeque<Result<Option<String>, TabError>>>,
+        /// What write_text and send_enter answer, in turn; Done once the others are used.
+        writes: Mutex<VecDeque<Result<Written, TabError>>>,
         calls: Mutex<Vec<String>>,
         called: Condvar,
         shut: Mutex<bool>,
@@ -668,10 +678,37 @@ mod tests {
             self.until(|calls| calls.iter().filter(|call| call.starts_with("selected_tty")).count() >= n)
         }
 
+        /// Waits until a call has started after the first one that starts with `prefix`: the tab thread has handled
+        /// that one's answer.
+        fn after(&self, prefix: &str) -> Vec<String> {
+            self.until(|calls| {
+                calls.iter().position(|call| call.starts_with(prefix)).is_some_and(|at| at + 1 < calls.len())
+            })
+        }
+
+        /// The write_text and send_enter calls so far.
+        fn typed(&self) -> Vec<String> {
+            let calls = self.calls.lock().unwrap();
+            calls
+                .iter()
+                .filter(|call| call.starts_with("write_text") || call.starts_with("send_enter"))
+                .cloned()
+                .collect()
+        }
+
+        fn written(&self) -> Result<Written, TabError> {
+            self.writes.lock().unwrap().pop_front().unwrap_or(Ok(Written::Done))
+        }
+
         /// No call starts for ten ticks: there are still `n`.
         fn still(&self, n: usize) {
+            self.still_for(n, EVERY * 10);
+        }
+
+        /// No call starts for `wait`: there are still `n`.
+        fn still_for(&self, n: usize, wait: Duration) {
             let calls = self.calls.lock().unwrap();
-            let (calls, _) = self.called.wait_timeout_while(calls, EVERY * 10, |calls| calls.len() == n).unwrap();
+            let (calls, _) = self.called.wait_timeout_while(calls, wait, |calls| calls.len() == n).unwrap();
             assert_eq!(calls.len(), n, "{calls:?}");
         }
 
@@ -714,6 +751,16 @@ mod tests {
         fn focus_tty(&self, app: TabApp, tty: &str) -> Result<Selected, TabError> {
             self.call(format!("focus_tty {} {tty}", app.name()));
             Ok(Selected::Done)
+        }
+
+        fn write_text(&self, app: TabApp, tty: &str, text: &str) -> Result<Written, TabError> {
+            self.call(format!("write_text {} {tty} {text}", app.name()));
+            self.written()
+        }
+
+        fn send_enter(&self, app: TabApp, tty: &str) -> Result<Written, TabError> {
+            self.call(format!("send_enter {} {tty}", app.name()));
+            self.written()
         }
     }
 
@@ -920,6 +967,20 @@ mod tests {
 
     fn tab(tty: &str) -> String {
         format!(r#"{{"tab":{{"app":"terminal-app","tty":"{tty}"}}}}"#)
+    }
+
+    /// A watch's write line of `text` for iTerm2's tty TTY.
+    fn write(id: &str, text: &str) -> String {
+        format!(r#"{{"write":{{"id":"{id}","app":"iterm","tty":"{TTY}","text":"{text}"}}}}"#)
+    }
+
+    fn wrote(id: &str, ok: bool) -> String {
+        format!(r#"{{"wrote":{{"id":"{id}","ok":{ok}}}}}"#)
+    }
+
+    /// The `tabs:` lines of the log.
+    fn tabs_said(log: &MemoryLog) -> Vec<String> {
+        log.lines().into_iter().filter(|line| line.starts_with("tabs:")).collect()
     }
 
     #[test]
@@ -1579,6 +1640,232 @@ mod tests {
         scripts.still(scripts.calls(0).len());
         // Nothing holds the doors any more.
         assert_eq!(Arc::strong_count(&scripts), 1);
+    }
+
+    #[test]
+    fn a_write_and_its_enter_after_an_ok_poll_each_run_once_and_are_answered_ok() {
+        let scripts = Arc::new(Scripts::default());
+        let (w, _fronts) = world_with_tabs(ITERM, &scripts);
+        let words = write(ID, "hi");
+        w.fake.script("hardware watch --json", &[r#"{"attached":true}"#, "@wait go", &words, ENTER, "@record"]);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        // A poll answered: macOS lets Harness Device script iTerm2.
+        scripts.polls(1);
+        w.fake.touch("go");
+        let calls = scripts.after("send_enter");
+        assert_eq!(scripts.typed(), ["write_text iTerm2 /dev/ttys023 hi", "send_enter iTerm2 /dev/ttys023"]);
+        // Each asked first whether iTerm2 runs.
+        for typed in ["write_text", "send_enter"] {
+            let at = calls.iter().position(|call| call.starts_with(typed)).unwrap();
+            assert_eq!(calls[at - 1], "running iTerm2", "{calls:?}");
+        }
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(w.fake.stdin(), [ITERM_LINE.to_string(), wrote(ID, true), wrote(ENTER_ID, true)]);
+    }
+
+    #[test]
+    fn a_write_no_session_of_its_tty_takes_is_answered_no() {
+        let scripts = Arc::new(Scripts::default());
+        scripts.writes.lock().unwrap().push_back(Ok(Written::NoSession));
+        let (w, _fronts) = world_with_tabs(ITERM, &scripts);
+        let words = write(ID, "hi");
+        w.fake.script("hardware watch --json", &[r#"{"attached":true}"#, "@wait go", &words, "@record"]);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        scripts.polls(1);
+        w.fake.touch("go");
+        scripts.after("write_text");
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(w.fake.stdin(), [ITERM_LINE.to_string(), wrote(ID, false)]);
+        // It leaves iTerm2 on.
+        assert!(tabs_said(&w.fake.log()).is_empty());
+    }
+
+    #[test]
+    fn an_enter_for_a_terminal_that_quit_since_the_words_makes_no_call_and_is_answered_no() {
+        let scripts = Arc::new(Scripts::default());
+        let (w, _fronts) = world_with_tabs(VSCODE, &scripts);
+        let words = write(ID, "hi");
+        w.fake.script(
+            "hardware watch --json",
+            &[
+                r#"{"attached":true}"#,
+                SELECT_ITERM,
+                "@wait words",
+                &words,
+                "@wait enter",
+                ENTER,
+                SELECT_OTHER,
+                "@record",
+            ],
+        );
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        assert_eq!(scripts.calls(2), ["running iTerm2", "select_tty iTerm2 /dev/ttys023 back"]);
+        w.fake.touch("words");
+        assert_eq!(scripts.calls(4)[2..], ["running iTerm2", "write_text iTerm2 /dev/ttys023 hi"]);
+        // iTerm2 quits between the words and the Enter: an event to it would launch it again.
+        scripts.not_running.store(true, Ordering::SeqCst);
+        w.fake.touch("enter");
+        // The Enter asks whether it runs and goes no further, as the select after it does once the Enter is answered.
+        assert_eq!(scripts.calls(6)[4..], ["running iTerm2", "running iTerm2"]);
+        scripts.still(6);
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(w.fake.stdin(), [VSCODE_LINE.to_string(), wrote(ID, true), wrote(ENTER_ID, false)]);
+    }
+
+    #[test]
+    fn a_typing_for_an_app_no_poll_or_select_answered_yet_makes_no_call_and_is_answered_no() {
+        let scripts = Arc::new(Scripts::default());
+        let (w, _fronts) = world_with_tabs(VSCODE, &scripts);
+        let words = write(ID, "hi");
+        // The select after the write is taken once the write is answered.
+        w.fake.script("hardware watch --json", &[r#"{"attached":true}"#, &words, SELECT_ITERM, "@record"]);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        assert_eq!(scripts.calls(2), ["running iTerm2", "select_tty iTerm2 /dev/ttys023 back"]);
+        let log = w.fake.log();
+        log.until(|lines| lines.iter().any(|line| line == "tabs: iTerm2 select ok"));
+        scripts.still(2);
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(w.fake.stdin(), [VSCODE_LINE.to_string(), wrote(ID, false)]);
+        // A typing answered unrun has no outcome to log.
+        assert_eq!(tabs_said(&log), ["tabs: iTerm2 select ok"]);
+    }
+
+    #[test]
+    fn a_write_that_waited_past_500_ms_behind_a_held_call_makes_no_call_and_is_one_fixed_line() {
+        let scripts = Arc::new(Scripts::default());
+        let (w, _fronts) = world_with_tabs(VSCODE, &scripts);
+        let words = write(ID, "the words spoken");
+        // The status after the write says it has come.
+        w.fake.script(
+            "hardware watch --json",
+            &[r#"{"attached":true}"#, SELECT_ITERM, "@wait go", &words, r#"{"attached":true}"#, "@record"],
+        );
+        scripts.gate(true);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        // The select is held, as macOS's consent prompt would hold it.
+        assert_eq!(scripts.calls(2), ["running iTerm2", "select_tty iTerm2 /dev/ttys023 back"]);
+        w.fake.touch("go");
+        assert_eq!(w.next(), a_dial());
+        // Nothing runs around the held call while the write waits past the bound.
+        scripts.still_for(2, LATE_WRITE + EVERY);
+        scripts.gate(false);
+        let log = w.fake.log();
+        log.until(|lines| lines.iter().any(|line| line == "tabs: iTerm2 write dropped late"));
+        scripts.still(2);
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(w.fake.stdin(), [VSCODE_LINE.to_string(), wrote(ID, false)]);
+        // The late line names the app alone: no line holds the tty or the words.
+        assert_eq!(tabs_said(&log), ["tabs: iTerm2 select ok", "tabs: iTerm2 write dropped late"]);
+        assert!(log.lines().iter().all(|line| !line.contains("ttys") && !line.contains("words")), "{:?}", log.lines());
+    }
+
+    #[test]
+    fn typings_run_in_the_order_they_came_and_before_a_select_waiting_with_them() {
+        let scripts = Arc::new(Scripts::default());
+        let (w, _fronts) = world_with_tabs(VSCODE, &scripts);
+        let (one, two) = (write(ID, "one"), write(NEXT_ID, "two"));
+        // The select comes before the writes, and the status after them says they have all come.
+        w.fake.script(
+            "hardware watch --json",
+            &[
+                r#"{"attached":true}"#,
+                SELECT_ITERM,
+                "@wait go",
+                SELECT_OTHER,
+                &one,
+                &two,
+                r#"{"attached":true}"#,
+                "@record",
+            ],
+        );
+        scripts.gate(true);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        assert_eq!(scripts.calls(2), ["running iTerm2", "select_tty iTerm2 /dev/ttys023 back"]);
+        w.fake.touch("go");
+        assert_eq!(w.next(), a_dial());
+        scripts.gate(false);
+        assert_eq!(
+            scripts.calls(8)[2..],
+            [
+                "running iTerm2",
+                "write_text iTerm2 /dev/ttys023 one",
+                "running iTerm2",
+                "write_text iTerm2 /dev/ttys023 two",
+                "running iTerm2",
+                "select_tty iTerm2 /dev/ttys024 back",
+            ]
+        );
+        scripts.still(8);
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(w.fake.stdin(), [VSCODE_LINE.to_string(), wrote(ID, true), wrote(NEXT_ID, true)]);
+    }
+
+    #[test]
+    fn an_older_watchs_typing_is_answered_to_no_watch() {
+        let scripts = Arc::new(Scripts::default());
+        let (w, _fronts) = world_with_tabs(VSCODE, &scripts);
+        let (one, two) = (write(ID, "one"), write(NEXT_ID, "two"));
+        w.fake.script(
+            "hardware watch --json",
+            &[r#"{"attached":true}"#, SELECT_ITERM, "@wait go", &one, &two, r#"{"attached":true}"#, "@record"],
+        );
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        let log = w.fake.log();
+        // Answered, so iTerm2 may be scripted, and the select's call has passed the gate.
+        log.until(|lines| lines.iter().any(|line| line == "tabs: iTerm2 select ok"));
+        // The first write's call is held, and the second waits behind it.
+        scripts.gate(true);
+        w.fake.touch("go");
+        assert_eq!(w.next(), a_dial());
+        assert_eq!(scripts.calls(4)[2..], ["running iTerm2", "write_text iTerm2 /dev/ttys023 one"]);
+        // Harness Device starts a new watch meanwhile.
+        w.fake.script("hardware watch --json", &[r#"{"attached":true}"#, SELECT_OTHER, "@record"]);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        assert!(wait_gone(w.fake.pids()[0]));
+        scripts.gate(false);
+        // The new watch's select runs once the old watch's write is answered; the old watch's second write never runs.
+        assert_eq!(scripts.calls(6)[4..], ["running iTerm2", "select_tty iTerm2 /dev/ttys024 back"]);
+        scripts.still(6);
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        // Neither watch heard of the words: the one that sent them had gone, and the one after never sent them.
+        assert_eq!(w.fake.stdin(), [VSCODE_LINE, VSCODE_LINE]);
+    }
+
+    #[test]
+    fn a_typing_for_an_app_turned_off_is_answered_no_at_once() {
+        let scripts = Arc::new(Scripts::default());
+        scripts.writes.lock().unwrap().push_back(Err(TabError::Denied));
+        let (w, _fronts) = world_with_tabs(VSCODE, &scripts);
+        let (one, two) = (write(ID, "the words spoken"), write(NEXT_ID, "the words spoken"));
+        // The watch's own thread answers the second: the status after it comes once that answer is written.
+        w.fake.script(
+            "hardware watch --json",
+            &[
+                r#"{"attached":true}"#,
+                SELECT_ITERM,
+                "@wait one",
+                &one,
+                "@wait two",
+                &two,
+                r#"{"attached":true}"#,
+                "@record",
+            ],
+        );
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        let log = w.fake.log();
+        log.until(|lines| lines.iter().any(|line| line == "tabs: iTerm2 select ok"));
+        // The person said no to Automation for iTerm2 as the first words came.
+        w.fake.touch("one");
+        log.until(|lines| lines.iter().any(|line| line == "tabs: iTerm2 not allowed"));
+        w.fake.touch("two");
+        assert_eq!(w.next(), a_dial());
+        scripts.still(4);
+        assert_eq!(scripts.calls(4)[2..], ["running iTerm2", "write_text iTerm2 /dev/ttys023 the words spoken"]);
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(w.fake.stdin(), [VSCODE_LINE.to_string(), wrote(ID, false), wrote(NEXT_ID, false)]);
+        // No line holds the tty or the words.
+        assert_eq!(tabs_said(&log), ["tabs: iTerm2 select ok", "tabs: iTerm2 not allowed"]);
+        assert!(log.lines().iter().all(|line| !line.contains("ttys") && !line.contains("words")), "{:?}", log.lines());
     }
 
     #[test]
