@@ -12,7 +12,7 @@ from native_shapes import defines
 
 main=Path(__file__).resolve().parent/'../main'
 source=re.sub(r'^#include .*\n','',(main/'audio_client_habitat.c').read_text(),flags=re.M)
-code=defines('ID_MAX')+r'''
+code=defines('ID_MAX')+defines('AUDIO_MIC_GAIN_DB',source=(main/'audio_capture.h').read_text())+r'''
 #include "audio_client.h"
 #include "voice_buffer.h"
 #include <assert.h>

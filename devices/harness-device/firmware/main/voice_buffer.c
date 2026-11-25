@@ -48,7 +48,26 @@ uint32_t voice_buffer_used(voice_buffer_t *b)
     uint32_t tail = atomic_load_explicit(&b->tail, memory_order_acquire);
     return atomic_load_explicit(&b->head, memory_order_acquire) - tail;
 }
-void voice_gate_feed(voice_gate_t *gate, const int16_t *pcm, size_t samples, unsigned rate)
+// The gate's loud level and the meter's steps, by the gain they hold at. 37.5 dB: set by ear. 30 dB: the design
+// doc's gate of 250 (the formula gives 253) and each 37.5 dB step scaled by 10^(-7.5/20). A table, not a formula,
+// so the daemon's copy (cli/src/cable/voiceLevel.ts) holds the same integers; test/vectors/voice_gate.txt pins both.
+static const struct {
+    float gain_db;
+    uint32_t loud, steps[4];
+} levels[] = {
+    {37.5f, 600, {64, 180, 500, 1600}},
+    {30.0f, 250, {27, 76, 211, 675}},
+};
+
+static unsigned levels_at(float mic_gain_db)
+{
+    for (unsigned i = 0; i < sizeof(levels) / sizeof(levels[0]); i++)
+        if (levels[i].gain_db == mic_gain_db)
+            return i;
+    return 0;
+}
+
+void voice_gate_feed(voice_gate_t *gate, const int16_t *pcm, size_t samples, unsigned rate, float mic_gain_db)
 {
     if (gate->heard || !samples)
         return;
@@ -57,7 +76,7 @@ void voice_gate_feed(voice_gate_t *gate, const int16_t *pcm, size_t samples, uns
         int v = pcm[i];
         energy += (uint32_t)(v < 0 ? -v : v);
     }
-    if (energy / samples > 600)
+    if (energy / samples > levels[levels_at(mic_gain_db)].loud)
         gate->loud_samples += (uint32_t)samples;
     else
         gate->loud_samples = 0;
@@ -65,7 +84,7 @@ void voice_gate_feed(voice_gate_t *gate, const int16_t *pcm, size_t samples, uns
         gate->heard = true;
 }
 
-unsigned voice_level_feed(voice_level_t *meter, const int16_t *pcm, size_t samples)
+unsigned voice_level_feed(voice_level_t *meter, const int16_t *pcm, size_t samples, float mic_gain_db)
 {
     if (!samples) return 0;
     int lo = pcm[0], hi = pcm[0];
@@ -77,6 +96,10 @@ unsigned voice_level_feed(voice_level_t *meter, const int16_t *pcm, size_t sampl
     uint32_t span = (uint32_t)(hi - lo);
     meter->envelope = meter->envelope * 31 / 32;
     if (span > meter->envelope) meter->envelope = span;
-    uint32_t value = meter->envelope;
-    return value < 64 ? 0 : value < 180 ? 1 : value < 500 ? 2 : value < 1600 ? 3 : 4;
+    // The level is the number of steps the envelope has reached.
+    const uint32_t *steps = levels[levels_at(mic_gain_db)].steps;
+    unsigned level = 0;
+    while (level < 4 && meter->envelope >= steps[level])
+        level++;
+    return level;
 }

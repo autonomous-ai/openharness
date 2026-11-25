@@ -20,8 +20,10 @@ typedef struct {
     uint32_t loud_samples;
     bool heard;
 } voice_gate_t;
-void voice_gate_feed(voice_gate_t *gate, const int16_t *pcm, size_t samples, unsigned rate);
+// mic_gain_db: the PGA gain the PCM was captured at. The gate's loud level and the meter's steps were set by ear at
+// 37.5 dB and scale with it; a gain with no levels of its own reads as 37.5 dB, as the daemon reads one.
+void voice_gate_feed(voice_gate_t *gate, const int16_t *pcm, size_t samples, unsigned rate, float mic_gain_db);
 
 // Visual mic envelope only. Never used to stop capture, gate speech or modify PCM.
 typedef struct { uint32_t envelope; } voice_level_t;
-unsigned voice_level_feed(voice_level_t *meter, const int16_t *pcm, size_t samples);
+unsigned voice_level_feed(voice_level_t *meter, const int16_t *pcm, size_t samples, float mic_gain_db);

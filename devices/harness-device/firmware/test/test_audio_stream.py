@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import tempfile
+from native_shapes import defines
 
 main = Path(__file__).resolve().parent / '../main'
 source = Path(os.environ.get('AUDIO_STREAM_SOURCE', main / 'audio_client_habitat.c')).read_text()
@@ -13,7 +14,7 @@ def function(name):
     assert match, name
     return match.group(0) + '\n'
 
-code = r'''
+code = defines('AUDIO_MIC_GAIN_DB', source=(main / 'audio_capture.h').read_text()) + r'''
 #include "voice_buffer.h"
 #include <assert.h>
 #include <stdarg.h>

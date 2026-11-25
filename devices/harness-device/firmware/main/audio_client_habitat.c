@@ -81,8 +81,8 @@ static void capture(void *unused)
             }
             if (atomic_load(&abort_requested))
                 break;
-            voice_gate_feed(&gate, pcm, (size_t)n / 2, AUDIO_SAMPLE_RATE);
-            atomic_store_explicit(&input_level, voice_level_feed(&meter, pcm, (size_t)n / 2),
+            voice_gate_feed(&gate, pcm, (size_t)n / 2, AUDIO_SAMPLE_RATE, AUDIO_MIC_GAIN_DB);
+            atomic_store_explicit(&input_level, voice_level_feed(&meter, pcm, (size_t)n / 2, AUDIO_MIC_GAIN_DB),
                                   memory_order_relaxed);
             atomic_store(&heard, gate.heard);
             if (!voice_buffer_write(&buffer, (uint8_t *)pcm, (size_t)n)) {
