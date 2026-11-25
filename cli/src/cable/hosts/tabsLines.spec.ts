@@ -45,6 +45,11 @@ describe('tabsLines', () => {
     for (const bad of ['', 'a\nb', 'a\u007fb', 'a\u0085b']) expect(typingOf(write(bad))).toBeNull()
   })
 
+  it('refuses a text holding a lone surrogate, high or low, and takes a pair', () => {
+    for (const bad of ['a\ud800b', 'a\udc00b', '\ud83d', 'a\ud800b\ud800c']) expect(typingOf(write(bad))).toBeNull()
+    expect(typingOf(write('a😀b'))).toEqual(write('a😀b'))
+  })
+
   it('refuses a key the line does not have', () => {
     expect(typingOf(write('hi', { extra: 1 }))).toBeNull()
     expect(typingOf({ ...write('hi'), extra: 1 })).toBeNull()
