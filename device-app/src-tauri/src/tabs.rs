@@ -1,8 +1,10 @@
 //! The tabs of Terminal, iTerm2 and Ghostty, for the dial to follow: the lines the watch reads and writes, the tty
-//! check, and when to ask an app for its selected tab. A tty is private like the app in front: it goes on the watch's
-//! stdin and into a fixed script's parameter, never into the log, an Event or the state file.
+//! check, when to ask an app for its selected tab, and the spoken words waiting to be typed. A tty is private like the
+//! app in front: it goes on the watch's stdin and into a fixed script's parameter, never into the log, an Event or the
+//! state file. A spoken text is as private as a tty; it goes to a fixed handler's parameter and nowhere else.
 
 use serde_json::Value;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -11,6 +13,13 @@ pub const POLL_EVERY: Duration = Duration::from_millis(500);
 /// Each Apple Event's timeout. Only macOS's consent prompt holds a call longer, so a select that waited longer is for
 /// where the dial rested back then.
 pub const CALL_TIMEOUT: Duration = Duration::from_secs(2);
+/// How long a typing may wait for the tab thread. The devices checked the agent at its prompt just before sending it:
+/// one held longer, behind macOS's consent prompt, would type on checks that may no longer hold.
+pub const LATE_WRITE: Duration = Duration::from_millis(500);
+/// The longest spoken text, in UTF-16 units as the CLI counts it: a count of chars would refuse texts it sent.
+pub const MAX_TEXT: usize = 20_000;
+/// The typings that may wait for the tab thread; the devices wait on each one's answer, so one more is answered no.
+pub const TYPING_QUEUED: usize = 8;
 
 /// The apps whose tabs the dial follows, from Harness Device's own table: nothing of the daemon names a bundle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,6 +93,82 @@ pub fn select_of(line: &str) -> Option<(TabApp, String, bool)> {
     tty_ok(tty).then(|| (app, tty.to_string(), raise))
 }
 
+/// A watch's `{"write":{…}}` or `{"enter":{…}}` line: spoken words for the one session of a tty, or the Enter after
+/// them, each answered by its id.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Typing {
+    Write { id: String, app: TabApp, tty: String, text: String },
+    Enter { id: String, app: TabApp, tty: String },
+}
+
+impl Typing {
+    pub fn id(&self) -> &str {
+        match self {
+            Typing::Write { id, .. } | Typing::Enter { id, .. } => id,
+        }
+    }
+
+    pub fn app(&self) -> TabApp {
+        match self {
+            Typing::Write { app, .. } | Typing::Enter { app, .. } => *app,
+        }
+    }
+
+    pub fn tty(&self) -> &str {
+        match self {
+            Typing::Write { tty, .. } | Typing::Enter { tty, .. } => tty,
+        }
+    }
+
+    /// The word the log says.
+    fn kind(&self) -> &'static str {
+        match self {
+            Typing::Write { .. } => "write",
+            Typing::Enter { .. } => "enter",
+        }
+    }
+}
+
+/// The typing of a watch's line, checked again as the devices and the watch checked it, since its text goes into a
+/// terminal: exactly the keys of a write or an Enter, an app with a write handler, a tty that passes `tty_ok`, an id
+/// of 16 lowercase hex, and a text of 1 to MAX_TEXT UTF-16 units with no control character.
+pub fn typing_of(line: &str) -> Option<Typing> {
+    let line: serde_json::Map<String, Value> = serde_json::from_str(line).ok()?;
+    let mut line = line.into_iter();
+    let Some((kind, Value::Object(fields))) = line.next() else {
+        return None;
+    };
+    if line.next().is_some() {
+        return None;
+    }
+    let string = |key: &str| fields.get(key).and_then(Value::as_str);
+    let id = string("id")
+        .filter(|id| id.len() == 16 && id.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')))?
+        .to_string();
+    // Terminal has no write handler: `do script`, its only way to put text in a tab, runs the text as a command.
+    let app = string("app").and_then(TabApp::from_id).filter(|app| *app != TabApp::Terminal)?;
+    let tty = string("tty").filter(|tty| tty_ok(tty))?.to_string();
+    match (kind.as_str(), fields.len()) {
+        ("write", 4) => {
+            let text = string("text").filter(|text| text_ok(text))?.to_string();
+            Some(Typing::Write { id, app, tty, text })
+        }
+        ("enter", 3) => Some(Typing::Enter { id, app, tty }),
+        _ => None,
+    }
+}
+
+/// The devices turned every control character into a space, so one here was never theirs, and a newline would submit
+/// the words before the Enter's checks ran.
+fn text_ok(text: &str) -> bool {
+    !text.is_empty() && text.encode_utf16().count() <= MAX_TEXT && !text.chars().any(char::is_control)
+}
+
+/// `{"wrote":{"id":"…","ok":…}}` for the watch's stdin: the answer to the typing of that id.
+pub fn wrote_line(id: &str, ok: bool) -> String {
+    serde_json::json!({ "wrote": { "id": id, "ok": ok } }).to_string()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TabError {
     /// The person said no to Automation for this app.
@@ -118,7 +203,14 @@ pub enum Selected {
     NoTab,
 }
 
-/// The fixed scripts. A tty passed in has passed `tty_ok`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Written {
+    Done,
+    /// No session of the app holds the tty, or more than one does: it is not the agent's pane.
+    NoSession,
+}
+
+/// The fixed scripts. A tty passed in has passed `tty_ok`, and a text `typing_of`'s check.
 pub trait TabScripts: Send + Sync {
     /// Whether the app runs: an Apple Event to one that does not would launch it.
     fn running(&self, app: TabApp) -> bool;
@@ -128,6 +220,15 @@ pub trait TabScripts: Send + Sync {
     fn select_tty(&self, app: TabApp, tty: &str, frontmost: bool) -> Result<Selected, TabError>;
     /// A tap's select: `open -b` is bringing the app forward, so the window is always raised.
     fn focus_tty(&self, app: TabApp, tty: &str) -> Result<Selected, TabError>;
+    /// Spoken words, typed into the one session of the tty with no newline. An app with no write handler (Terminal,
+    /// every app off macOS) writes nothing.
+    fn write_text(&self, _app: TabApp, _tty: &str, _text: &str) -> Result<Written, TabError> {
+        Ok(Written::NoSession)
+    }
+    /// The Enter after the words, to the one session of the tty.
+    fn send_enter(&self, _app: TabApp, _tty: &str) -> Result<Written, TabError> {
+        Ok(Written::NoSession)
+    }
 }
 
 /// Runs nothing: `running` is false, so no other call is made.
@@ -171,6 +272,17 @@ pub struct Select {
     pub raise: bool,
 }
 
+/// The oldest typing, as the tab thread takes it.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Next {
+    Run(Typing),
+    /// Answered no unrun: the line for the watch and, for one that waited too long, a line for the log.
+    Refused {
+        line: String,
+        log: Option<String>,
+    },
+}
+
 /// What a call's answer gives: a line for the watch, and lines for the log, none of which holds a tty.
 #[derive(Debug, Default)]
 pub struct Out {
@@ -190,6 +302,11 @@ pub struct TabFollow {
     attached: bool,
     /// Denied, with no tty or with no scripting, until Harness Device starts again: asking again would only fail again.
     off: Vec<TabApp>,
+    /// The apps whose poll or select answered without an error since Harness Device started. macOS has let them be
+    /// scripted, so a write to one never brings its consent prompt, which would hold the tab thread for minutes.
+    allowed: Vec<TabApp>,
+    /// The typings in the order they came, each with when it came: unlike a select, every one is answered.
+    typings: VecDeque<(Typing, Instant)>,
     /// The tty the watch was told last, for the app polled now.
     last: Option<(TabApp, String)>,
     /// The select to run next, and when it came.
@@ -212,6 +329,8 @@ impl TabFollow {
     pub fn watching(&mut self, on: bool) {
         self.watching = on;
         self.attached = false;
+        // Their answers would go to a watch that is gone.
+        self.typings.clear();
         self.restart();
     }
 
@@ -229,6 +348,9 @@ impl TabFollow {
     /// A `selected_tty` answer, `now` in seconds.
     pub fn polled(&mut self, app: TabApp, answer: Result<Option<String>, TabError>, now: u64) -> Out {
         let mut out = Out::default();
+        if answer.is_ok() {
+            self.allow(app);
+        }
         match answer {
             Ok(Some(tty)) if self.polls() == Some(app) && tty_ok(&tty) => {
                 if self.last.as_ref().is_none_or(|(_, last)| *last != tty) {
@@ -280,6 +402,9 @@ impl TabFollow {
     /// A `select_tty` or `focus_tty` answer.
     pub fn selected(&mut self, app: TabApp, done: Result<Selected, TabError>) -> Out {
         let mut out = Out::default();
+        if done.is_ok() {
+            self.allow(app);
+        }
         let outcome = match done {
             Ok(Selected::Done) => "ok",
             Ok(Selected::NoTab) => "none",
@@ -290,6 +415,46 @@ impl TabFollow {
             }
         };
         out.log.push(format!("tabs: {} select {outcome}", app.name()));
+        out
+    }
+
+    fn allow(&mut self, app: TabApp) {
+        if !self.allowed.contains(&app) {
+            self.allowed.push(app);
+        }
+    }
+
+    /// A typing from the watch, which came `at`. With its app off or TYPING_QUEUED already waiting, it is answered no at
+    /// once: the line for the watch.
+    pub fn typed(&mut self, typing: Typing, at: Instant) -> Option<String> {
+        if self.off.contains(&typing.app()) || self.typings.len() >= TYPING_QUEUED {
+            return Some(wrote_line(typing.id(), false));
+        }
+        self.typings.push_back((typing, at));
+        None
+    }
+
+    /// The oldest typing, taken `now`. It is answered no unrun when it waited past LATE_WRITE, with a line for the log,
+    /// or when its app is off or has not been allowed yet.
+    pub fn next_typing(&mut self, now: Instant) -> Option<Next> {
+        let (typing, at) = self.typings.pop_front()?;
+        let app = typing.app();
+        let log = if now.saturating_duration_since(at) > LATE_WRITE {
+            Some(format!("tabs: {} {} dropped late", app.name(), typing.kind()))
+        } else if self.off.contains(&app) || !self.allowed.contains(&app) {
+            None
+        } else {
+            return Some(Next::Run(typing));
+        };
+        Some(Next::Refused { line: wrote_line(typing.id(), false), log })
+    }
+
+    /// A `write_text` or `send_enter` answer: ok only when it wrote.
+    pub fn written(&mut self, typing: &Typing, done: Result<Written, TabError>) -> Out {
+        let mut out = Out { line: Some(wrote_line(typing.id(), done == Ok(Written::Done))), log: Vec::new() };
+        if let Err(error @ (TabError::Denied | TabError::NoTty | TabError::NoScripting)) = done {
+            self.turn_off(typing.app(), error, &mut out.log);
+        }
         out
     }
 
