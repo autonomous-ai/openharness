@@ -6,6 +6,8 @@ import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
 import { createLaunchHelpers } from './launch.js'
 import { createLaunchAuthority } from './launchAuthority.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
+import { buildEngineCommandArgv } from '../../lib/engineLaunch.js'
+import { DID_NOT_START } from '../../lib/restoreAgents.js'
 
 const entry = { agentId: 'agent', sessionId: 'conversation', cwd: '/workspace' } as RegisteredSession
 const built: Extract<LaunchOverridesResult, { ok: true }> = { ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [] } }
@@ -15,7 +17,8 @@ const setup = () => {
     relaunchOverrides: vi.fn(async (): Promise<LaunchOverridesResult> => built),
     downgradedPermission: vi.fn(async () => ({ bypassPermission: false })),
     prepareSessionResume: vi.fn(async (_entry: RegisteredSession, _current: () => boolean) => {}), refreshGridWebSearch: vi.fn(),
-    launch: vi.fn(() => ({ argv: ['engine'] })),
+    launch: vi.fn((_entry: RegisteredSession, _opts: object, ..._rest: unknown[]): { argv: string[] } => ({ argv: ['engine'] })),
+    receipts: { firstLaunchTask: vi.fn((_id: string, _agentId: string, _kind: 'create' | 'fork'): { task: string | null } | null => ({ task: 'fix it' })) },
   }
   return { deps, build: createRestoreLaunch(deps) }
 }
@@ -251,4 +254,87 @@ it('keeps unadmitted external work held before workspace checks, service prepara
       expect(deps.prepareSessionResume).not.toHaveBeenCalled()
     }
   }
+})
+
+// A first launch the guard held (no conversation, `startsAgain`): its own pane is the held shell, and its request is
+// rebuilt from the receipt the row names (2026-11-25).
+const guardHeldLaunch = { state: 'held', service: 'native', nativeToken: 'token-1', startsAgain: true, detail: 'Starting again.' } as const
+const heldCreate = { agentId: 'agent', sessionId: '', cwd: '/workspace', engine: 'claude', creationId: 'intent-1', launch: guardHeldLaunch } as RegisteredSession
+const heldFork = { ...heldCreate, engine: 'codex', forkedFrom: { agentId: 'source', name: 'Source', sessionId: 'source-conversation' } } as RegisteredSession
+
+describe('a held first launch', () => {
+  it('relaunches a held create with the first task its intent kept', async () => {
+    const { deps, build } = setup()
+    expect(await build(heldCreate, { current: () => true })).toEqual({ argv: ['engine'], grid: null })
+    expect(deps.receipts.firstLaunchTask).toHaveBeenCalledWith('intent-1', 'agent', 'create')
+    expect(deps.launch).toHaveBeenCalledWith(heldCreate, { agentId: 'agent', firstPrompt: 'fix it' }, built.overrides, { bypassPermission: false })
+  })
+
+  it('relaunches a held native fork as the fork again, with the task its receipt kept', async () => {
+    const { deps, build } = setup()
+    expect(await build(heldFork, { current: () => true })).toEqual({ argv: ['engine'], grid: null })
+    expect(deps.receipts.firstLaunchTask).toHaveBeenCalledWith('intent-1', 'agent', 'fork')
+    expect(deps.launch).toHaveBeenCalledWith(heldFork, { agentId: 'agent', firstPrompt: 'fix it', forkSessionId: 'source-conversation' },
+      built.overrides, { bypassPermission: false })
+  })
+
+  it('adds nothing to the argv of an engine that takes its task typed', async () => {
+    const { deps, build } = setup()
+    // Its task is the row's `firstTask`, typed once after ready (registry.takeFirstTask).
+    const typed = { ...heldCreate, engine: 'openclaw', firstTask: 'fix it' } as RegisteredSession
+    expect(await build(typed, { current: () => true })).toEqual({ argv: ['engine'], grid: null })
+    expect(deps.receipts.firstLaunchTask).toHaveBeenCalledWith('intent-1', 'agent', 'create')
+    expect(deps.launch).toHaveBeenCalledWith(typed, { agentId: 'agent' }, built.overrides, { bypassPermission: false })
+  })
+
+  it.each([[heldCreate, {}], [heldFork, { forkSessionId: 'source-conversation' }]])('a task none was given adds none', async (row, fork) => {
+    const { deps, build } = setup()
+    deps.receipts.firstLaunchTask.mockReturnValue({ task: null })
+    expect(await build(row, { current: () => true })).toEqual({ argv: ['engine'], grid: null })
+    expect(deps.launch).toHaveBeenCalledWith(row, { agentId: 'agent', ...fork }, built.overrides, { bypassPermission: false })
+  })
+
+  it.each([
+    ['no creation id', { ...heldCreate, creationId: undefined }, false],
+    ['a receipt that cannot say', heldCreate, true],
+    ['a handoff fork', { ...heldFork, engine: 'opencode' }, false],
+    ['a fork without the session it forked', { ...heldFork, forkedFrom: { agentId: 'source', name: 'Source' } }, false],
+  ] as const)('refuses %s: the harness did not start, and nothing is launched', async (_case, row, asked) => {
+    const { deps, build } = setup()
+    deps.receipts.firstLaunchTask.mockReturnValue(null)
+    expect(await build(row as RegisteredSession, { current: () => true })).toEqual({ error: DID_NOT_START.error, detail: DID_NOT_START.detail })
+    expect(deps.receipts.firstLaunchTask).toHaveBeenCalledTimes(asked ? 1 : 0)
+    expect(deps.relaunchOverrides).not.toHaveBeenCalled()
+    expect(deps.launch).not.toHaveBeenCalled()
+  })
+
+  it('reads no receipt for any other row', async () => {
+    const rows: [RegisteredSession, string | undefined][] = [
+      // A guard-held conversation: its resume of today.
+      [{ ...heldCreate, sessionId: 'conversation' } as RegisteredSession, 'conversation'],
+      [{ ...heldFork, sessionId: 'conversation' } as RegisteredSession, 'conversation'],
+      // Held without the guard's proof, starting, ready: none is a held first launch.
+      [{ ...heldCreate, launch: { state: 'held', service: 'native', nativeToken: 'token-1', detail: 'Waiting.' } } as RegisteredSession, undefined],
+      [{ ...heldCreate, launch: { state: 'starting', nativeToken: 'token-1' } } as RegisteredSession, undefined],
+      [{ ...heldCreate, launch: { state: 'ready' } } as RegisteredSession, undefined],
+    ]
+    for (const [row, resumeSessionId] of rows) {
+      const { deps, build } = setup()
+      expect(await build(row, { ...(resumeSessionId ? { resumeSessionId } : {}), current: () => true })).toEqual({ argv: ['engine'], grid: null })
+      expect(deps.receipts.firstLaunchTask).not.toHaveBeenCalled()
+      expect(deps.launch).toHaveBeenCalledWith(row, { ...(resumeSessionId ? { resumeSessionId } : {}), agentId: 'agent' }, built.overrides, { bypassPermission: false })
+    }
+  })
+
+  // Review Focus 3: the task is handed on as the create launched it, one argv word, nothing read into it.
+  it('hands the task on byte for byte', async () => {
+    const task = 'it\'s "$(rm -rf ~)" `x`\nnext'
+    const { deps, build } = setup()
+    deps.receipts.firstLaunchTask.mockReturnValue({ task })
+    deps.launch.mockImplementation((row: RegisteredSession, opts: object) => ({ argv: buildEngineCommandArgv(row.engine, opts) }))
+    const launched = await build(heldCreate, { current: () => true })
+    if (!('argv' in launched)) throw new Error('expected a launch')
+    expect(launched.argv.filter(word => word.includes('rm -rf'))).toEqual([task])
+    expect(launched.argv.at(-1)).toBe(task)
+  })
 })

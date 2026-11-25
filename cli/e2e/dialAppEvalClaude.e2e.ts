@@ -18,8 +18,7 @@ import { loadBaseline, SKIP_RATCHET_ENV, tierBVerdict } from '../src/testing/dia
 import { readNetGuard } from '../src/testing/dialAppEval/netGuard.js'
 import { collect, runScenario, uncaughtProbes, writeResults, type ScenarioRun } from '../src/testing/dialAppEval/runner.js'
 import type { Platform } from '../src/testing/dialAppEval/types.js'
-import { rootProcesses, workingFolders } from '../src/testing/rootProcesses.js'
-import { processTable } from '../src/testing/spawnedRuns.js'
+import { underRoot } from '../src/testing/rootProcesses.js'
 import { claudeSteps } from './harness/appEvalClaude.js'
 import { TierBDriver } from './harness/appEvalDriver.js'
 
@@ -74,8 +73,7 @@ describe.skipIf(WIN32)('the dial eval, tier B: the Claude app', () => {
       // The write starts the app.
       await driver.step(c1.steps[0] as Exclude<(typeof c1.steps)[number], { kind: 'wait' }>)
       const { d, children } = driver.lastWorld()
-      const table = processTable()
-      const under = rootProcesses(d.root, table, process.pid, workingFolders(table)).all
+      const under = underRoot(d.root, await d.treeRoots()).map((row) => row.pid)
       expect(children.length).toBeGreaterThanOrEqual(2)
       expect(children.map((child) => child.pid).filter((pid) => !under.includes(pid!))).toEqual([])
     } finally {
@@ -206,7 +204,7 @@ describe.skipIf(WIN32)('the dial eval, tier B: the Claude app', () => {
     await runScenario(driver, SCENARIOS.find((s) => s.id === 'C11')!, HOST)
     const { steps, faces } = driver.seen()
     const replug = steps.find((s) => s.kind === 'replug')!.at
-    expect(faces.filter((f) => f.at < replug).at(-1)).toEqual({ at: expect.any(Number), page: '', tiles: [], active: null })
+    expect(faces.filter((f) => f.at < replug).at(-1)).toEqual({ at: expect.any(Number), page: '', tiles: [], active: null, refused: 0 })
   })
 
   it("a resume the fake Claude app could not start fails its scenario, saying why, and not the file", async () => {

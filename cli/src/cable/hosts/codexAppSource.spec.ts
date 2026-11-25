@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { WakeTarget } from './appWake.js'
 import { CodexAppSource, type CodexAppSourceDeps } from './codexAppSource.js'
 import type { CodexAppRead, CodexAppThread } from './codexAppThreads.js'
 import { observedAgentId } from './observed.js'
 import type { RingRank } from './select.js'
-import { capsLetters, type HostAgent, type PaneSwitch } from './types.js'
+import { capsLetters, type HostAgent, type PaneSwitch, type SendResult } from './types.js'
 
 const T = 1_763_000_000_000
 const LOG =
@@ -28,6 +29,12 @@ const FAILED: CodexAppRead = { ok: false, kind: 'ENOENT' }
 const rankOf = (order: CodexAppThread[]): RingRank => new Map(order.map((one, at) => [agentOf(one), at]))
 /** Lets what the source was answered be taken in. */
 const turn = () => new Promise((resolve) => setImmediate(resolve))
+/** Whether a start's promise has ended, read as the test goes. */
+const ending = (start: Promise<void>) => {
+  const state = { ended: false }
+  void start.then(() => { state.ended = true })
+  return state
+}
 
 /** Every line any source said, and each read started while another was under way: checked after each test. */
 const lines: string[] = []
@@ -45,8 +52,9 @@ describe("the ChatGPT app's source (docs/plans/2026-11-19-dial-chatgpt-ring-and-
   })
 
   /** A source on a reader whose reads the test answers by hand, a watch the test fires, and one fake clock for its
-   *  timers and its measures. */
-  function setup() {
+   *  timers and its measures. Its link opens, a `codex queue` can run and Harness's Codex home is the app's, unless the
+   *  test says otherwise; the wake records its calls and answers sent. */
+  function setup({ inAppHome = true }: { inAppHome?: boolean } = {}) {
     const clock = { now: 0 }
     const timers: Array<{ due: number; run: () => void; done: boolean }> = []
     const pending: Array<(read: CodexAppRead) => void> = []
@@ -61,6 +69,9 @@ describe("the ChatGPT app's source (docs/plans/2026-11-19-dial-chatgpt-ring-and-
     const focus = vi.fn(async (_threadId: string, _agentId: string) => true)
     const canShow = vi.fn((_threadId: string) => true)
     const show = vi.fn(async (_threadId: string, _agentId: string): Promise<PaneSwitch> => 'ok')
+    const canLink = vi.fn((_threadId: string) => true)
+    const canQueue = vi.fn(() => true)
+    const wake = { send: vi.fn(async (_target: WakeTarget, _text: string): Promise<SendResult> => ({ ok: true })), stop: vi.fn() }
     /** What a read answers when the test does not say. */
     const answers = { read: ok([thread(1)]) }
     /** Codex's names the reader answers, by thread id, and the ids each names() call was asked for. */
@@ -96,6 +107,10 @@ describe("the ChatGPT app's source (docs/plans/2026-11-19-dial-chatgpt-ring-and-
       focus,
       canShow,
       show,
+      canLink,
+      canQueue,
+      inAppHome,
+      wake,
       rank: (rank) => {
         if (ranking.error) throw ranking.error
         ranks.push(rank)
@@ -109,7 +124,7 @@ describe("the ChatGPT app's source (docs/plans/2026-11-19-dial-chatgpt-ring-and-
     const source = new CodexAppSource(deps)
     source.onChange(() => { changes++ })
     return {
-      source, home, answers, named, namesAsked, watches, log, ranks, ranking, focus, canShow, show,
+      source, home, answers, named, namesAsked, watches, log, ranks, ranking, focus, canShow, show, canLink, canQueue, wake,
       get changes() { return changes },
       /** The reader's calls, in order. */
       calls: () => [...calls],
@@ -137,8 +152,8 @@ describe("the ChatGPT app's source (docs/plans/2026-11-19-dial-chatgpt-ring-and-
   type Setup = ReturnType<typeof setup>
 
   /** Started, its first read landed and its second passed. */
-  async function started(read?: CodexAppRead): Promise<Setup> {
-    const s = setup()
+  async function started(read?: CodexAppRead, over?: Parameters<typeof setup>[0]): Promise<Setup> {
+    const s = setup(over)
     if (read) s.answers.read = read
     s.source.start()
     await s.land()
@@ -156,16 +171,45 @@ describe("the ChatGPT app's source (docs/plans/2026-11-19-dial-chatgpt-ring-and-
   const ids = (s: Setup) => s.source.list().map(({ id }) => id)
 
   describe('the row', () => {
-    it('each listed thread is an idle resting row under the observed id, with no voice and no send', async () => {
+    it('each listed thread is an idle resting row under the observed id', async () => {
       const one = thread(1, { inProject: true })
       const s = await started(ok([one]))
       expect(s.source.list()).toStrictEqual([{
         id: agentOf(one), engine: 'codex', sessionId: one.id, name: 'Task 1', cwd: '/work/p1', host: 'codex',
         app: 'codex', state: 'idle', unseenDone: false, resting: true, lastActivityAt: T - 1000,
       }])
-      expect(s.source.capabilities()).toEqual({ status: true, voice: false, focus: true, answer: false })
-      expect(capsLetters(s.source.capabilities())).toBe('sf')
-      expect('send' in s.source).toBe(false)
+    })
+
+    it('a listed row takes voice exactly when its link opens, a codex queue can run and Harness\'s Codex home is the app\'s', async () => {
+      const one = thread(1)
+      for (const link of [true, false]) {
+        for (const queue of [true, false]) {
+          for (const home of [true, false]) {
+            const s = await started(ok([one]), { inAppHome: home })
+            s.canLink.mockReturnValue(link)
+            s.canQueue.mockReturnValue(queue)
+            const [agent] = s.source.list()
+            const caps = s.source.capabilities(agent!)
+            expect(caps).toEqual({ status: true, voice: link && queue && home, focus: true, answer: false })
+            expect(capsLetters(caps)).toBe(link && queue && home ? 'svf' : 'sf')
+            expect(s.canLink.mock.calls).toEqual(home ? [[one.id]] : [])
+            expect(s.canQueue).toHaveBeenCalledTimes(home && link ? 1 : 0)
+          }
+        }
+      }
+      const s = await started(ok([one]))
+      const stranger: HostAgent = { ...s.source.list()[0]!, id: agentOf(thread(2)) }
+      expect(s.source.capabilities(stranger).voice).toBe(false)
+      expect(s.canLink).not.toHaveBeenCalled()
+    })
+
+    // Review Focus 4: the dial's list asks each row's caps on every 1 s tick.
+    it('with Harness\'s Codex home not the app\'s, neither the link nor the queue look is asked', async () => {
+      const s = await started(ok([thread(1)]), { inAppHome: false })
+      const [agent] = s.source.list()
+      expect(s.source.capabilities(agent!).voice).toBe(false)
+      expect(s.canLink).not.toHaveBeenCalled()
+      expect(s.canQueue).not.toHaveBeenCalled()
     })
 
     it('a tap opens the thread through focus; a swipe asks canShow and shows it', async () => {
@@ -193,6 +237,38 @@ describe("the ChatGPT app's source (docs/plans/2026-11-19-dial-chatgpt-ring-and-
         [thread(1).id, { title: 'Task 1', renamed: false }],
         [thread(2).id, { title: 'Task 2', renamed: false }],
       ]))
+    })
+  })
+
+  describe('words to a resting thread (docs/plans/2026-11-23-dial-chatgpt-voice-resting-design.md)', () => {
+    it('its words go to the wake with the row\'s values as they arrive, and the wake\'s answer is its answer', async () => {
+      const one = thread(1)
+      const s = await started(ok([one, thread(2)]))
+      const [agent] = s.source.list()
+      expect(await s.source.send(agent!, 'run the tests')).toEqual({ ok: true })
+      expect(s.wake.send.mock.calls).toEqual([[{ app: 'codex', threadId: one.id, agentId: agentOf(one), name: 'Task 1' }, 'run the tests']])
+      // Renamed since: the next words name the row as it is then.
+      await after(s, ok([{ ...one, name: 'Task 9' }, thread(2)]))
+      const refusal = { ok: false, reason: 'Still opening Task 2. Try again in a moment.' }
+      s.wake.send.mockResolvedValueOnce(refusal)
+      expect(await s.source.send(agent!, 'and lint')).toBe(refusal)
+      expect(s.wake.send.mock.calls[1]).toEqual([{ app: 'codex', threadId: one.id, agentId: agentOf(one), name: 'Task 9' }, 'and lint'])
+    })
+
+    it('a row no longer listed answers did not answer and opens nothing', async () => {
+      const s = await started(ok([thread(1)]))
+      const [agent] = s.source.list()
+      await after(s, ok([thread(2)]))
+      expect(await s.source.send(agent!, 'run the tests')).toEqual({ ok: false, reason: 'Task 1 did not answer.' })
+      expect(s.wake.send).not.toHaveBeenCalled()
+    })
+
+    // Review Focus 3: it stops at every attach where the ChatGPT app is not found, while a Claude wake may run.
+    it('stop() stops the ChatGPT wake once, never the Claude one', async () => {
+      const s = await started(ok([thread(1)]))
+      s.source.stop()
+      s.source.stop()
+      expect(s.wake.stop.mock.calls).toEqual([['codex']])
     })
   })
 
@@ -398,6 +474,56 @@ describe("the ChatGPT app's source (docs/plans/2026-11-19-dial-chatgpt-ring-and-
       expect(ids(s)).toEqual([agentOf(thread(1))])
       expect(s.changes).toBe(1)
       expect(s.ranks).toEqual([rankOf([thread(1)])])
+    })
+
+    // The dial's greeting waits for it (devices.ts dialAttached), so its first list holds the app's threads.
+    it('a start ends once its first read has landed, its rows listed', async () => {
+      const s = setup()
+      const start = ending(s.source.start())
+      await turn()
+      expect(start.ended).toBe(false)
+      await s.land(ok([thread(1), thread(2)]))
+      expect(start.ended).toBe(true)
+      expect(ids(s)).toEqual([agentOf(thread(1)), agentOf(thread(2))])
+    })
+
+    it('a start whose first read fails ends too', async () => {
+      const s = setup()
+      const start = ending(s.source.start())
+      await s.land(FAILED)
+      expect(start.ended).toBe(true)
+    })
+
+    it('a start with no home ends at once', async () => {
+      const s = setup()
+      s.home.there = false
+      const start = ending(s.source.start())
+      await turn()
+      expect(start.ended).toBe(true)
+    })
+
+    it('a stop ends the start under way at once; the next start ends with its own read, not the stopped one', async () => {
+      const s = setup()
+      const first = ending(s.source.start())
+      s.source.stop()
+      await turn()
+      expect(first.ended).toBe(true)
+      const second = ending(s.source.start())
+      // The stopped read lands and takes nothing: the start's own read runs after it.
+      await s.land(ok([thread(2)]))
+      expect(second.ended).toBe(false)
+      await s.land(ok([thread(1)]))
+      expect(second.ended).toBe(true)
+      expect(ids(s)).toEqual([agentOf(thread(1))])
+    })
+
+    it('a start while it runs ends at once', async () => {
+      const s = setup()
+      s.source.start()
+      const again = ending(s.source.start())
+      await turn()
+      expect(again.ended).toBe(true)
+      await s.land()
     })
   })
 

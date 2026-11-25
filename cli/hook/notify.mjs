@@ -567,7 +567,9 @@ function postObserved(port, body) {
  * so a session with more than MAX_HINTS set loses the farthest. Zellij's names come before kitty's: a session in Zellij
  * inside kitty keeps Zellij's, the nearer host. HC_TERMINAL_ID comes after the multiplexers: one started
  * in an hc terminal keeps that terminal's address, and is the nearer host. cmux's ids come after them: a multiplexer
- * started in a cmux terminal keeps cmux's ids, and is the nearer host. CLAUDE_CODE_ENTRYPOINT is last, the first the
+ * started in a cmux terminal keeps cmux's ids, and is the nearer host. ORCA_TERMINAL_HANDLE comes before
+ * ORCA_AGENT_SESSION_ID: a session id with no handle is an Orca chat's (cable/hosts/orcaChat.ts orcaChatId), so the cap
+ * never makes an Orca terminal's agent look like a chat. CLAUDE_CODE_ENTRYPOINT is last, the first the
  * cap drops: without it a tap still brings the app forward.
  *
  * On Windows no app sets __CFBundleIdentifier, and Cursor and VS Code both set TERM_PROGRAM=vscode: the hook finds the
@@ -599,7 +601,7 @@ function postObserved(port, body) {
  */
 const HOST_HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'ZELLIJ_PANE_ID',
   'ZELLIJ_SESSION_NAME', 'TMUX_PANE', 'HC_TERMINAL_ID', 'CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID', 'KITTY_WINDOW_ID',
-  'KITTY_LISTEN_ON', 'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_TERMINAL_HANDLE', 'CLAUDE_CODE_HOST_SESSION_ID',
+  'KITTY_LISTEN_ON', 'WEZTERM_PANE', 'ORCA_TERMINAL_HANDLE', 'ORCA_AGENT_SESSION_ID', 'CLAUDE_CODE_HOST_SESSION_ID',
   'CLAUDE_CODE_ENTRYPOINT']
 /** The hints a cut would turn into another pane, session or socket (see HOST_HINTS): sent whole or not at all. */
 const WHOLE_HINTS = ['ZELLIJ_PANE_ID', 'ZELLIJ_SESSION_NAME', 'KITTY_LISTEN_ON',
@@ -2172,6 +2174,15 @@ const REGISTRY_ENGINES = new Set([
   'agy', 'copilot', 'openclaw', 'terminal',
 ])
 
+// Each engine's name in a sentence: the daemon's engineName (src/lib/agentNames.ts), which the hook cannot
+// import (it runs without the adapter's modules); hookNotify.spec.ts keeps this one equal to it. Every engine
+// argEngine() answers is in ENGINES (that spec holds it too), so every one has its name here.
+const ENGINE_NAMES = {
+  claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor', opencode: 'OpenCode', pi: 'Pi', omp: 'Oh My Pi', hermes: 'Hermes',
+  commandcode: 'Command Code', devin: 'Devin', muse: 'Muse', amp: 'Amp', kilo: 'Kilo', grok: 'Grok', agy: 'Antigravity',
+  copilot: 'Copilot', openclaw: 'OpenClaw', terminal: 'Terminal',
+}
+
 function validRegistryString(value, max = 4096) {
   return typeof value === 'string' && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value)
 }
@@ -2786,7 +2797,7 @@ async function main() {
     ok = await post(port, '/api/hook/session-start', body, undefined, facts)
     held ||= ok === 'held'
   }
-  if (held && ok !== true) process.stderr.write('[harness] Hermes admission is held; this delivery could not be confirmed. The current conversation is unchanged.\n')
+  if (held && ok !== true) process.stderr.write(`[harness] ${ENGINE_NAMES[engine]} admission is held; this delivery could not be confirmed. The current conversation is unchanged.\n`)
   if (ok === false && !held) await fallbackRegister(input, engine, tmuxPane)
 }
 

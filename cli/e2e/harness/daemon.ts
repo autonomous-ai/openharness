@@ -14,7 +14,7 @@
  * It runs on a copy of the worker's Node alone in its folder (e2e/harness/testNode.ts), so it finds no engine beside
  * its Node.
  */
-import { execFile, spawn, type ChildProcess } from 'node:child_process'
+import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, symlink, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
@@ -32,20 +32,24 @@ import { hooks as codexHooks } from '../../src/engines/codex/hookContract.js'
 import { readAdoptedHomes } from '../../src/engines/kit/homeAdoption.js'
 import { OUTSIDE_HOME } from '../../src/lib/log.js'
 import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
-import { endRootProcesses } from '../../src/testing/rootProcesses.js'
+import { endRootProcesses, seenNow, stillRunning } from '../../src/testing/rootProcesses.js'
 import { assertSocketPathFits } from '../../src/testing/socketPathRoom.js'
-import { alive, processTable } from '../../src/testing/spawnedRuns.js'
+import { alive, startTimes } from '../../src/testing/spawnedRuns.js'
 import { assertNodeAlone } from '../../src/testing/testNode.js'
 import { SYSTEM_FOLDERS } from '../../src/testing/testPath.js'
-import { forgetGroup, forgetTmux, leaderGone, watchGroup, watchTmux } from './reaper.js'
+import { forgetGroup, forgetOwn, forgetTmux, leaderGone, watchGroup, watchOwn, watchTmux } from './reaper.js'
 
 const exec = promisify(execFile)
 const here = dirname(fileURLToPath(import.meta.url))
 export const CLI_ROOT = resolve(here, '../..')
-/** tsx by its path: a bare `--import tsx` resolves from the working folder, and a daemon's is not always this checkout. */
-export const TSX_LOADER = pathToFileURL(createRequire(join(CLI_ROOT, 'package.json')).resolve('tsx')).href
-/** The sources' CLI, runnable from any folder. */
-export const SOURCES_CLI: readonly string[] = ['--import', TSX_LOADER, join(CLI_ROOT, 'src', 'cli.ts')]
+/**
+ * The sources' CLI, runnable from any folder: tsx by its path, as a bare `--import tsx` resolves from the working folder,
+ * and a daemon's is not always this checkout. Resolved when asked, not on import: the bundled desk
+ * (scripts/windows-dial-e2e/bundle.mjs) imports this file where no tsx is installed.
+ */
+export function sourcesCli(): string[] {
+  return ['--import', pathToFileURL(createRequire(join(CLI_ROOT, 'package.json')).resolve('tsx')).href, join(CLI_ROOT, 'src', 'cli.ts')]
+}
 
 /** What a fake engine's wrapper hands `fakeEngine.mjs` `run()`: where it writes, and which release it is. */
 export interface EngineConfig {
@@ -167,6 +171,15 @@ export function loggedServicePids(log: string, name: string, master: number | nu
   const children = new Set(table.filter((row) => row.ppid === master).map((row) => row.pid))
   const logged = [...log.matchAll(new RegExp(`\\[harnessd\\] service ${name} started \\(pid (\\d+)\\)`, 'g'))].map((match) => Number(match[1]))
   return [...new Set(logged)].filter((pid) => children.has(pid))
+}
+
+/** Each process's pid and its parent's, from the whole table, and nothing else of any: no command line, which a service's
+ *  pids need not read, and the devices' restart asks for these every 100 ms (appEvalDriver.ts restartDevices). */
+function processParents(): Array<{ pid: number; ppid: number }> {
+  return execFileSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 10_000 }).split('\n').flatMap((line) => {
+    const row = /^\s*(\d+)\s+(\d+)\s*$/.exec(line)
+    return row ? [{ pid: Number(row[1]), ppid: Number(row[2]) }] : []
+  })
 }
 
 /** listeningPort of [output]; before the daemon said one, an error by name rather than a guess. */
@@ -338,6 +351,12 @@ export class IsolatedDaemon {
     private readonly settingNames: readonly string[],
     /** Its own fakes and stubs, first on its PATH: a test writes a fake of a command there (harness/schemeApps.ts). */
     readonly binDir: string,
+    /** What the test's tree held each time a stop or a kill was about to end this daemon, by start time (see): what the
+     *  close's sweep still knows to be the test's once launchd has it. A daemon beside another shares that one's. */
+    private readonly seen: Map<number, string>,
+    /** What the harness started for this daemon's test that can leave the test's tree, by its start time (own). A daemon
+     *  beside another shares that one's. */
+    private readonly owned: Map<number, string>,
   ) {}
 
   static async create(options: DaemonOptions = {}): Promise<IsolatedDaemon> {
@@ -555,7 +574,7 @@ esac
       TERMINAL_RECONCILE_INTERVAL_MS: '5000',
     }
     const env = daemonEnvironment(tmux.env, { ...settings, ...options.env })
-    return new IsolatedDaemon(root, tmux, port, env, options, config, opensLog, Object.keys(settings), dirs.bin)
+    return new IsolatedDaemon(root, tmux, port, env, options, config, opensLog, Object.keys(settings), dirs.bin, beside?.seen ?? new Map(), beside?.owned ?? new Map())
   }
 
   /** What the fake engines noted of every hook they ran (fakeEngine.mjs `hookLog`); kept once the root is gone. */
@@ -603,7 +622,39 @@ esac
   /** The service process [name]'s pids (`search`, `edge`, `models`, `gateway`, `devices`, `agentBrowser`), started by
    *  its own master, by the pid it logged, and still its child. Not by name: no process sets a title, and a daemon under
    *  test runs on a Node with no name link, so `ps` shows `node` for every one of them. */
-  servicePids(name: string): number[] { return loggedServicePids(this.output, name, this.pid, processTable()) }
+  servicePids(name: string): number[] { return loggedServicePids(this.output, name, this.pid, processParents()) }
+
+  /**
+   * [pid], a process the harness just started for this daemon's test that can leave the test's tree before anything sees
+   * it (a fake app's tab, the fake iTerm2's server, herdr's server), noted by its start time: the close's sweep and the
+   * worker's reaper end it, and what descends from it, while it runs as itself, though launchd has it by then. Its start
+   * alone, which an exec keeps: a tab's says its pid before it execs, and Linux's name moves as Node starts.
+   */
+  own(pid: number): void {
+    const started = startTimes([pid]).get(pid)
+    // Gone already: nothing of it is left to end.
+    if (started === undefined) return
+    this.owned.set(pid, started)
+    watchOwn(pid, started)
+  }
+
+  /** Where the test's own process tree starts (spawnedRuns.ts processTree): this worker, whose children the daemon's
+   *  masters are, the root's tmux server, which daemonizes to launchd, by its pid asked of its own socket, and what the
+   *  harness noted it started (own) that still runs as itself. */
+  async treeRoots(): Promise<number[]> {
+    const server = Number(await this.tmux.run('display-message', '-p', '#{pid}').catch(() => ''))
+    return [process.pid, ...(server > 1 ? [server] : []), ...stillRunning(this.owned)]
+  }
+
+  /** What the test's tree holds now, noted by start time before a stop or a kill ends anything (seenNow). A table that
+   *  cannot be read stops neither: it is said, and the close's sweep goes by what was seen before and what was noted. */
+  private async see(): Promise<void> {
+    try {
+      for (const [pid, started] of seenNow(await this.treeRoots())) this.seen.set(pid, started)
+    } catch (error) {
+      console.error(`[e2e sweep] could not see the test's processes before ending the daemon: ${(error as Error).message}`)
+    }
+  }
 
   /** `ready: 'port'` returns as soon as the port answers, the way a client sees a restarting daemon;
    *  `'none'` as soon as the process is started. */
@@ -635,7 +686,7 @@ esac
     // From the sources on macOS, the helper a release embeds comes in by a preload (processImages.ts): without it the
     // daemon held every Codex read for good. The master passes its flags on to the core and the services.
     const preload = this.options.withoutProcessImages ? undefined : process.env.E2E_PROCESS_IMAGES_PRELOAD
-    const script = bundle ? [bundle] : [...(preload ? ['--import', preload] : []), ...SOURCES_CLI]
+    const script = bundle ? [bundle] : [...(preload ? ['--import', preload] : []), ...sourcesCli()]
     // A process group of its own, which the core and the services join: one signal reaches all of them, whether or
     // not the master is still there, and the worker's reaper (reaper.ts) ends it should the worker go without closing it.
     const env = this.options.foreground ? await this.shellEnv() : this.env
@@ -737,6 +788,7 @@ esac
   async stop(ms = 15_000): Promise<void> {
     const child = this.child
     if (!child) return
+    await this.see()
     const exited = new Promise<void>((done) => child.once('exit', () => done()))
     child.kill('SIGTERM')
     const timer = setTimeout(() => IsolatedDaemon.killGroup(child), ms)
@@ -760,6 +812,7 @@ esac
   async kill(): Promise<void> {
     const child = this.child
     if (!child) return
+    await this.see()
     const exited = new Promise<void>((done) => child.once('exit', () => done()))
     child.kill('SIGKILL')
     await exited
@@ -837,6 +890,8 @@ esac
   async close(): Promise<void> {
     // While the panes are still there: a daemon that stops can take its agents' panes with it.
     if (artifactsEnabled()) await this.keepPanes()
+    // Seen before the tmux server goes: a stop sees for a daemon still running.
+    if (!this.child) await this.see()
     await this.stop().catch(() => {})
     // Once the daemon has said all it will, and before the root (and the engines' hook log) is removed.
     let escaped: unknown = null
@@ -855,15 +910,16 @@ esac
     // A daemon beside another shares its tmux server and its root: that one closes them.
     let left: string[] = []
     if (!this.options.beside) {
-      // The server names the root on its own command line: stopped first, its panes with it, so the sweep meets only
-      // what left the daemon's groups.
+      // Stopped first, its panes with it, so the sweep meets only what left the daemon's groups, seen before.
       await this.tmux.run('kill-server').catch(() => { /* already gone */ })
       // The census of 2026-11-14 found 14 fake `codex app-server` pairs outliving their runs: a Codex rate-limit read
       // runs in a process group of its own (lib/codexRateLimits.ts), out of reach of the daemon's groups. Ended before
       // the root is removed, so nothing that names it writes into it as it goes.
-      left = await endRootProcesses(this.root)
+      left = await endRootProcesses(this.root, this.seen, this.owned)
       await this.tmux.close()
       forgetTmux(this.tmux.socket)
+      for (const pid of this.owned.keys()) forgetOwn(pid)
+      this.owned.clear()
     }
     if (escaped) throw escaped
     if (left.length) throw new Error(`a daemon under test left processes that would not end (root ${this.root}): ${left.join('; ')}`)

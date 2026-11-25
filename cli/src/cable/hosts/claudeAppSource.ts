@@ -6,7 +6,9 @@
  * (registry.ts) and the row keeps its id as the session's process comes and goes. No process runs it, so it rests: no
  * weight in the dial's default app. It takes voice where its link opens, and its words wake the session: they open it
  * by that link, then go to its mod once its process runs (appWake.ts,
- * docs/plans/2026-11-21-dial-claude-app-wake-send-design.md).
+ * docs/plans/2026-11-21-dial-claude-app-wake-send-design.md). Every listed session gets its place in the store's order
+ * as the page's rank, so a session the store lists after the dial's first list, and a running session's hooked copy,
+ * are placed too.
  *
  * Pushed by non-recursive watches of the store's folders, never polled. A working turn writes its session's file several
  * times a second, so one pass runs at a time, and the changes during it give one more after it, at least 250 ms after
@@ -23,6 +25,7 @@ import { localIdOf } from './claudeAppStore.js'
 import type { ClaudeAppSession, ClaudeAppStore, StoreFolders, StoreRead } from './claudeAppStore.js'
 import { observedAgentId } from './observed.js'
 import { observedTitle } from './observedTitle.js'
+import type { RingRank } from './select.js'
 import type { Caps, HostAgent, HostSource, PaneSwitch, SendResult } from './types.js'
 
 /** The least time between the starts of two passes (cmuxSource.ts's rule). */
@@ -51,6 +54,8 @@ export interface ClaudeAppSourceDeps {
   canLink(localId: string): boolean
   /** The devices' one wake, which every dial's words for a resting session go through. */
   wake: Pick<AppWake, 'send' | 'stop'>
+  /** The Claude page's rank: each agent's place in the store's order, newest first, or none. */
+  rank(rank: RingRank | undefined): void
   monotonic(): number
   log(line: string): void
 }
@@ -98,6 +103,8 @@ export class ClaudeAppSource implements HostSource {
   readonly id = 'claude-app'
   private readonly listeners = new Set<() => void>()
   private rows: Row[] = []
+  /** The listed order the rank was last given for, its ids joined; none while no rank is set. */
+  private order: string | undefined
   private running = false
   /** The count of stops: a pass started before the last stop takes nothing. */
   private stops = 0
@@ -120,25 +127,34 @@ export class ClaudeAppSource implements HostSource {
   private over = 0
   /** Whether the last pass of this start failed, so a run of failures says one line. */
   private failed = false
+  /** Ends the promise of this start, once its first pass ended or it stopped. */
+  private firstPass: (() => void) | undefined
 
   constructor(private readonly deps: ClaudeAppSourceDeps) {}
 
-  start(): void {
-    if (this.running) return
+  /** Ends once this start's first pass has: its rows taken, its read failed, or the source stopped meanwhile. The dial's
+   *  greeting waits for it (devices.ts dialAttached), so its first list holds the store's sessions. A start while it runs
+   *  ends at once. */
+  start(): Promise<void> {
+    if (this.running) return Promise.resolve()
     this.running = true
     this.slowest = undefined
     this.failed = false
+    const first = new Promise<void>((resolve) => { this.firstPass = resolve })
     // Held before the folders are listed, so a store made between the two is still heard.
     this.unwatch = this.deps.roots.map((root) => this.deps.watch(root.watch, (file) => this.rootChanged(root, file)))
     this.relist()
+    return first
   }
 
   stop(): void {
     if (!this.running) return
     this.running = false
     this.stops++
-    // The dial detached: a wake still opening or waiting answers that its session did not answer.
-    this.deps.wake.stop()
+    this.firstPassEnded()
+    // The dial detached: a wake still opening or waiting answers that its session did not answer. The Claude app's
+    // only: the wake is the ChatGPT app's too.
+    this.deps.wake.stop('claude')
     for (const stop of this.unwatch) stop()
     this.unwatch = []
     this.watchFolders(NO_FOLDERS)
@@ -177,7 +193,7 @@ export class ClaudeAppSource implements HostSource {
     const row = this.find(agent.id)
     if (!row) return { ok: false, reason: `${agent.name} did not answer.` }
     const { localId, agent: { id, sessionId, name } } = row
-    return this.deps.wake.send({ localId, sessionId: sessionId!, agentId: id, name }, text)
+    return this.deps.wake.send({ app: 'claude', localId, sessionId: sessionId!, agentId: id, name }, text)
   }
 
   async focus(agent: HostAgent): Promise<boolean> {
@@ -207,10 +223,15 @@ export class ClaudeAppSource implements HostSource {
     }
   }
 
-  /** Drops the rows, told once if there were any. The next count is said again, even with as many rows. */
+  /** Drops the rows and the rank, the rows told once if there were any. The next count is said again, even with as many
+   *  rows. */
   private drop(): void {
     this.said = undefined
     this.over = 0
+    if (this.order !== undefined) {
+      this.order = undefined
+      this.deps.rank(undefined)
+    }
     if (this.rows.length === 0) return
     this.rows = []
     this.emit()
@@ -332,8 +353,15 @@ export class ClaudeAppSource implements HostSource {
       this.failed = true
     } finally {
       pass.under = false
+      // A pass begun before the last stop is not this start's: the start ends with its own.
+      if (this.stops === stops) this.firstPassEnded()
       this.next()
     }
+  }
+
+  private firstPassEnded(): void {
+    this.firstPass?.()
+    this.firstPass = undefined
   }
 
   /** Which roots are there; whether any is, said when that changed. */
@@ -373,6 +401,13 @@ export class ClaudeAppSource implements HostSource {
     this.rows = read.sessions.map(rowOf)
     this.timed(ms, read)
     this.counted(read.over)
+    // A new rank only for a new order: the dial's ring sorts again on each new rank, and a working turn writes its
+    // session's file many times. Set before the change is told, so the dial's next list has it.
+    const order = this.rows.map(({ agent }) => agent.id).join('\n')
+    if (order !== this.order) {
+      this.order = order
+      this.deps.rank(new Map(this.rows.map(({ agent }, at) => [agent.id, at])))
+    }
     if (shape(this.rows) !== before) this.emit()
   }
 

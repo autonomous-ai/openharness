@@ -14,9 +14,11 @@
 import { HARNESS_OWNER_OPTION, isHarnessSession, paneOwnerFormat } from '../../lib/harnessSessionLabel.js'
 import type { TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
 import type { HostAdapter, Pane, Place } from './adapter.js'
+import { FOCUS_READ_MS } from './focusPoll.js'
 import { APP_IDS } from './hostDetect.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
-import type { Nested, NestedPlace, OuterLookup } from './outer.js'
+import { FRESH_WITHIN_MS, type Fresh, type MadeAnswer, type Nested, type NestedPlace, type OuterLookup } from './outer.js'
+import type { Nest } from './types.js'
 import { parentChain, readPtyOwner, scannedApps, type ProcessName } from './scannedApp.js'
 import { clientTtyForm } from './tabs.js'
 
@@ -53,6 +55,8 @@ const MAX_SWITCHED = 16
 const TMUX_CLIENT_PLACES = '#{client_activity}|#{client_pid}|#{client_tty}'
 /** One line of TMUX_CLIENT_PLACES; one with no whole activity or no pid in form is no client. */
 const TMUX_CLIENT_PLACE = /^([0-9]+)\|([1-9][0-9]{0,9})\|(.*)$/
+/** Each client of the server: its tty, then the active pane of the session it shows. Cut at the last bar. */
+const TMUX_CLIENT_PANES = '#{client_tty}|#{pane_id}'
 /** How long a pane's answer holds, from when its lookup settled: Command Code's turn-start comes at every tool call, and a
  *  lookup is a `ps` and up to BUNDLES_A_PASS `plutil` runs. The herdr and Zellij lookups hold their answers as long
  *  (herdrOuter.ts, zellij.ts). */
@@ -67,14 +71,24 @@ export interface TmuxDeps {
   log(line: string): void
   /** The app in front (cableHost.latestFront()): a rest shows a pane only in the app the person is looking at. */
   front(): string | undefined
+  /** Whose form a client's tty is checked against (clientTtyForm). */
+  platform: NodeJS.Platform
+}
+
+export interface TmuxAdapter extends HostAdapter {
+  /** Each client's terminal and the active pane of the session it shows, tty → `%N`; undefined when no tmux was found
+   *  or the run failed. */
+  clientPanes(): Promise<ReadonlyMap<string, string> | undefined>
 }
 
 /** One run of tmux where it was found; nothing when no tmux was. A run that rejects is one that failed, so the lookup's
  *  line names the step that ran it. */
-async function runTmux(deps: Pick<TmuxDeps, 'run' | 'tmux'>, args: string[]): Promise<{ code: number | null; stdout: string } | undefined> {
+async function runTmux(
+  deps: Pick<TmuxDeps, 'run' | 'tmux'>, args: string[], timeoutMs = RUN_TIMEOUT_MS,
+): Promise<{ code: number | null; stdout: string } | undefined> {
   const found = await deps.tmux()
   if (found.state === 'absent') return undefined
-  return deps.run(found.state === 'adopted' ? found.path : 'tmux', args, RUN_TIMEOUT_MS).catch(() => ({ code: null, stdout: '' }))
+  return deps.run(found.state === 'adopted' ? found.path : 'tmux', args, timeoutMs).catch(() => ({ code: null, stdout: '' }))
 }
 
 /** A pane's process, its session, and whether it is the person's by the rule the hook and the client filter hold (no
@@ -101,14 +115,14 @@ function holdsPane(rows: readonly ProcessName[], pid: number, panePid: number): 
 }
 
 /** The parts of this adapter's pane id; nothing when it is out of form, its app field one no listed app's. */
-function paneParts(pane: Pane): { id: string; pid: number; app?: string } | undefined {
+export function tmuxPaneParts(pane: Pane): { id: string; pid: number; app?: string } | undefined {
   const parts = PANE_AND_PID.exec(pane.id)
   if (!parts) return undefined
   const [, id, pid, app] = parts
   return app === undefined || APP_IDS.includes(app) ? { id, pid: Number(pid), app } : undefined
 }
 
-export function createTmuxAdapter(deps: TmuxDeps): HostAdapter {
+export function createTmuxAdapter(deps: TmuxDeps): TmuxAdapter {
   /** Each pane's last switched client's process, by pane id, oldest first. */
   const switched = new Map<string, number>()
 
@@ -172,7 +186,7 @@ export function createTmuxAdapter(deps: TmuxDeps): HostAdapter {
     /** A pane with its app is selected on its own session: the tap raises that app's tab, whose client shows the session.
      *  Without one, the person's client used last is switched to the pane. */
     async focus(pane) {
-      const parts = paneParts(pane)
+      const parts = tmuxPaneParts(pane)
       if (!parts) return false
       // An earlier tap's client is not this tap's window.
       switched.delete(pane.id)
@@ -194,12 +208,27 @@ export function createTmuxAdapter(deps: TmuxDeps): HostAdapter {
     },
     // A rest never switches a client: only the session's own pane moves, and only in the app the person looks at.
     canShow(pane) {
-      const app = paneParts(pane)?.app
+      const app = tmuxPaneParts(pane)?.app
       return app !== undefined && app === deps.front()
     },
     async show(pane) {
-      const parts = paneParts(pane)
+      const parts = tmuxPaneParts(pane)
       return parts && (await checkedPane(parts.id, parts.pid)) === true && (await select(parts.id)) ? 'ok' : 'failed'
+    },
+    // A read of the pane focus poll, so it has the poll's timeout, not a tap's: one that hung to 10 s would hold every
+    // place of the read that long (docs/plans/2026-11-24-dial-tmux-pane-focus-follow-design.md, "The read").
+    async clientPanes() {
+      const listed = await runTmux(deps, ['list-clients', '-F', TMUX_CLIENT_PANES], FOCUS_READ_MS)
+      if (listed?.code !== 0) return undefined
+      const form = clientTtyForm(deps.platform)
+      const panes = new Map<string, string>()
+      for (const line of listed.stdout.split('\n').slice(0, PANES_A_LISTING)) {
+        const bar = line.lastIndexOf('|')
+        const tty = line.slice(0, bar)
+        const pane = line.slice(bar + 1)
+        if (bar >= 0 && form?.test(tty) && TMUX_PANE_ID.test(pane)) panes.set(tty, pane)
+      }
+      return panes
     },
   }
 }
@@ -226,16 +255,20 @@ type NotRead = 'tmux' | 'pane' | 'processes' | 'clients' | 'app'
 /**
  * Answers by key, each held OUTER_EVERY_MS from when it settled: the scan asks one session at a time, so an answer kept
  * from its start would be gone after a run that hung to its timeout, and each ask after it would wait out one more. One
- * in flight is shared. Only keys settled in the last 5 s, or still in flight, are kept. [ask] never rejects.
+ * in flight is shared, as [ask] gave it, with what it carries (MadeAnswer). Only keys settled in the last 5 s, or still
+ * in flight, are kept. [ask] never rejects.
+ * A fresh ask shares only one in flight or settled less than FRESH_WITHIN_MS ago, else asks anew and holds that answer:
+ * a hook's turn-start comes at every tool call, so 5 s spares the lookups, but a tap or rest is the person's and must
+ * see a re-attach since (eval I13, PM 2026-11-24), while a burst of them still runs one lookup.
  */
-export function heldAnswers<T>(now: () => number): (key: string, ask: () => Promise<T>) => Promise<T> {
-  const asked = new Map<string, { answer: Promise<T>; settledAt?: number }>()
-  return (key, ask) => {
+export function heldAnswers<T, Asked extends Promise<T> = Promise<T>>(now: () => number): (key: string, ask: () => Asked, opts?: Fresh) => Asked {
+  const asked = new Map<string, { answer: Asked; settledAt?: number }>()
+  return (key, ask, opts) => {
     const at = now()
     for (const [held, last] of asked) if (last.settledAt !== undefined && at - last.settledAt >= OUTER_EVERY_MS) asked.delete(held)
     const last = asked.get(key)
-    if (last) return last.answer
-    const entry: { answer: Promise<T>; settledAt?: number } = { answer: ask() }
+    if (last && !(opts?.fresh && last.settledAt !== undefined && at - last.settledAt >= FRESH_WITHIN_MS)) return last.answer
+    const entry: { answer: Asked; settledAt?: number } = { answer: ask() }
     void entry.answer.then(() => { entry.settledAt = now() })
     asked.set(key, entry)
     return entry.answer
@@ -282,36 +315,54 @@ async function said(log: TmuxOuterDeps['log'], placing: Promise<NestedPlace | No
  * one the server started with, none when the daemon started it (Diego's Mac, 2026-11-19), and another app's after a
  * re-attach. It only reads, the pane's facts and its session's clients, and only for a pane of the person's that holds
  * the hook's caller (pid), on a terminal tmux made. Nothing at once when the hints name no tmux pane in form or the
- * caller is no pid; else the client's place, `{}` when none is found. Never rejects.
+ * caller is no pid; else the client's place, `{}` when none is found, with `nest` once tmux made the caller's terminal,
+ * told as soon as that is read (OuterLookup's made). Never rejects.
  */
 export function createTmuxOuter(deps: TmuxOuterDeps): OuterLookup {
   // By pane and caller: an answer holds for the caller whose chain held the pane, a pane of the same id may be another
-  // server's.
-  const asked = heldAnswers<ClientPlace>(deps.now)
+  // server's. With the read that tmux made the caller's terminal.
+  const asked = heldAnswers<ClientPlace & { nest?: Nest }, MadeAnswer>(deps.now)
 
-  /** `{}` when the pane is not the person's, holds no process of the caller's, tmux made no terminal the caller runs on,
-   *  or no client of its session is in a listed app; the step that could not be read, when one could not. */
-  async function placeOf(id: string, pid: number): Promise<ClientPlace | NotRead> {
+  /** The table that proved the pane the caller's, on a terminal tmux made; nothing when the pane is not the person's,
+   *  holds no process of the caller's or tmux made no terminal the caller runs on; the step that could not be read,
+   *  when one could not. */
+  async function tmuxMade(id: string, pid: number): Promise<readonly ProcessName[] | NotRead | undefined> {
     const facts = await paneFacts(deps, id)
     if (typeof facts === 'string') return facts
-    if (!facts.persons) return {}
+    if (!facts.persons) return undefined
     // One read of the table serves the pane's proof and the client's walk.
     const rows = await deps.processes().catch(() => undefined)
     if (!rows) return 'processes'
-    if (!holdsPane(rows, pid, facts.pid)) return {}
+    if (!holdsPane(rows, pid, facts.pid)) return undefined
     // A terminal started from the pane is under it too, and keeps its TMUX_PANE, yet its agents are in no tmux pane:
     // tmux must have made the caller's terminal, as Zellij's and herdr's lookups ask. The table holds no terminal: the
     // caller's and its parents' are read.
     const owner = await readPtyOwner(pid, rows, deps.tty).catch(() => null)
     if (owner === null) return 'processes'
-    if (owner !== 'tmux') return {}
-    return clientOf(deps, id, rows)
+    return owner === 'tmux' ? rows : undefined
   }
 
-  return (hints, pid) => {
+  /** `{}` when tmux made no terminal of the caller's, or a step before its clients was not read; else its client's
+   *  place, on tmux's page. */
+  function placeOf(id: string, pid: number): MadeAnswer {
+    // Its table and terminal reads answer their own word: what is left to throw is tmux's finder or run, so a lookup
+    // never rejects.
+    const read = tmuxMade(id, pid).catch((): NotRead => 'tmux')
+    const place = read.then(async (rows) => {
+      if (!rows || typeof rows === 'string') return said(deps.log, Promise.resolve(rows ?? {}))
+      // From here the agent is in a pane tmux made, so on tmux's page (Diego, 2026-11-23), whatever its clients give:
+      // one in an app, none, or a step not read.
+      return { ...(await said(deps.log, clientOf(deps, id, rows))), nest: 'tmux' as const }
+    })
+    return Object.assign(place, { made: read.then((rows) => Array.isArray(rows)) })
+  }
+
+  return (hints, pid, made, opts) => {
     const id = hints.TMUX_PANE
     if (!id || !TMUX_PANE_ID.test(id) || !PID.test(String(pid))) return undefined
-    return asked(`${id}:${pid}`, () => said(deps.log, placeOf(id, pid)))
+    const answer = asked(`${id}:${pid}`, () => placeOf(id, pid), opts)
+    if (made) void answer.made.then((yes) => { if (yes) made('tmux') })
+    return answer
   }
 }
 
@@ -326,7 +377,9 @@ type PaneListing = readonly string[] | 'tmux' | 'pane'
  * app. Nothing at once when the platform names no client's tty, the agent is no pid or its tty is out of form; else the
  * place, `{}` when none is found. Never rejects.
  */
-export function createTmuxNested(deps: Omit<TmuxOuterDeps, 'processes' | 'tty'>): (found: Pick<Nested, 'pid' | 'tty' | 'rows'>) => Promise<NestedPlace> | undefined {
+export function createTmuxNested(
+  deps: Omit<TmuxOuterDeps, 'processes' | 'tty'>,
+): (found: Pick<Nested, 'pid' | 'tty' | 'rows'>, opts?: Fresh) => Promise<NestedPlace> | undefined {
   // The scan asks for up to fifty sessions a look: one listing serves them all, so a tmux that hangs costs the look one
   // timeout, not one an ask.
   const listings = heldAnswers<PaneListing>(deps.now)
@@ -348,8 +401,10 @@ export function createTmuxNested(deps: Omit<TmuxOuterDeps, 'processes' | 'tty'>)
 
   /** `{}` when no pane of the person's on [tty] holds the agent or one of its parents, or no client of its session is
    *  in a listed app; the step that could not be read, when one could not. */
-  async function placeOf(found: Pick<Nested, 'pid' | 'tty' | 'rows'>, tty: string): Promise<NestedPlace | NotRead> {
-    const panes = await listings('', listPanes)
+  async function placeOf(found: Pick<Nested, 'pid' | 'tty' | 'rows'>, tty: string, opts?: Fresh): Promise<NestedPlace | NotRead> {
+    // What is left to throw is tmux's finder or run, said as no tmux, as the hooked lookup says it: a held answer never
+    // rejects, or it would be held past its 5 s for every later look.
+    const panes = await listings('', () => listPanes().catch((): PaneListing => 'tmux'), opts)
     if (typeof panes === 'string') return panes
     for (const line of panes) {
       const pane = TMUX_PANE_LINE.exec(line)
@@ -357,15 +412,15 @@ export function createTmuxNested(deps: Omit<TmuxOuterDeps, 'processes' | 'tty'>)
       if (!pane || !facts) continue
       if (!facts.persons || !holdsPane(found.rows, found.pid, facts.pid)) return {}
       // The app scan is what can throw: a held answer never rejects.
-      const place = await clients(facts.session, () => clientOf(deps, pane[1], found.rows).catch((): NotRead => 'app'))
+      const place = await clients(facts.session, () => clientOf(deps, pane[1], found.rows).catch((): NotRead => 'app'), opts)
       return typeof place !== 'string' && place.app ? { ...place, pane: { adapter: 'tmux', id: `${pane[1]}:${found.pid}:${place.app}` } } : place
     }
     return {}
   }
 
-  return (found) => {
+  return (found, opts) => {
     const tty = `/dev/${found.tty}`
     if (!clientTtyForm(deps.platform)?.test(tty) || !PID.test(String(found.pid))) return undefined
-    return asked(`${found.tty}:${found.pid}`, () => said(deps.log, placeOf(found, tty)))
+    return asked(`${found.tty}:${found.pid}`, () => said(deps.log, placeOf(found, tty, opts)), opts)
   }
 }

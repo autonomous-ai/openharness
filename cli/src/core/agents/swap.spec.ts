@@ -43,6 +43,7 @@ function setup(row: RegisteredSession | null = session()) {
     holdOpen: vi.fn(async () => ({ state: 'succeeded' })),
     respawn: vi.fn(async () => ({ state: 'succeeded' })),
     respawnRefusal: vi.fn(async (request: { env?: Record<string, string> }) => request.env ? 'too old' : null),
+    isHeld: vi.fn(async (_runtime: unknown, _token: string) => true),
   }
   latest = { backend: tmuxBackend as never, runtime }
   const deps: PaneSwapDeps = {
@@ -61,6 +62,19 @@ describe('the pane-process swap', () => {
     const prepared = setup().swap.paneSwapDeps(session(), place(), { native })
     prepared.buildArgv({ resumeSessionId: 's1', bypassPermission: false })
     expect(buildEngineLaunchArgv).toHaveBeenCalledWith('claude', expect.objectContaining({ native, resumeSessionId: 's1' }))
+  })
+  it('reads its own launch\'s held shell by that launch\'s token', async () => {
+    const { swap, tmuxBackend } = setup()
+    const prepared = swap.paneSwapDeps(session(), place(), { native: { token: 'tok-1' } as NativeLaunch })
+    expect(await prepared.heldShell?.()).toBe(true)
+    expect(tmuxBackend.isHeld).toHaveBeenCalledExactlyOnceWith(runtime, 'tok-1')
+  })
+  it('has no held-shell read without a native launch or a backend that can tell', () => {
+    const { swap } = setup()
+    expect(swap.paneSwapDeps(session(), place(), {}).heldShell).toBeUndefined()
+    expect(swap.paneSwapDeps(session(), place(), { native: {} as NativeLaunch }).heldShell).toBeUndefined()
+    const cannotTell = { holdOpen: vi.fn(), respawn: vi.fn() } as never
+    expect(swap.paneSwapDeps(session(), { backend: cannotTell, runtime }, { native: { token: 'tok-1' } as NativeLaunch }).heldShell).toBeUndefined()
   })
   it('hands the owner\'s launch words to the argv builder, which puts them last, for a restart, a retarget and a host move alike', () => {
     const prepared = setup().swap.paneSwapDeps(session(), place(), { ownerArgs: ['--chrome'] })
@@ -335,6 +349,20 @@ describe('the pane-process swap', () => {
     // 150, 300, 600, then 750 ms at a time: the budget is spent on the look that crosses 8 s.
     await vi.advanceTimersByTimeAsync(9_000)
     expect(await never).toBeNull()
+  })
+
+  // A Node engine started as `node` (Claude Code installed with npm) renames itself (process.title), which on
+  // Linux changes its `comm`, the row's executable, but not its pid or start; the publication's refresh compares
+  // the executable.
+  it('returns the later look of a process that renamed itself while settling', async () => {
+    vi.useFakeTimers()
+    const { swap } = setup()
+    vi.mocked(resolvePaneEngineProcess)
+      .mockResolvedValueOnce({ pid: 99, startMarker: 'now', executable: 'node' } as never)
+      .mockResolvedValueOnce({ pid: 99, startMarker: 'now', executable: 'codex' } as never)
+    const waiting = swap.paneSwapDeps(session(), place()).waitForProcess()
+    await vi.advanceTimersByTimeAsync(150 + ENGINE_SETTLE_MS)
+    expect(await waiting).toEqual({ pid: 99, startMarker: 'now', executable: 'codex' })
   })
 
   // A launch the engine refuses (`codex resume` after an update dropped it) runs for an instant: seen in

@@ -1,12 +1,11 @@
-//! Following the thread opened in the ChatGPT app: when to observe its window, the line the watch reads, and when to
-//! offer the Follow ChatGPT screen. The window's title is private like a tty: it goes on the watch's stdin and nowhere
-//! else, never into the log, an Event, the state file or the window.
+//! Following the thread opened in the ChatGPT app: when to observe its window, the line the watch reads, and when
+//! ChatGPT came to the front without the permission. The window's title is private like a tty: it goes on the watch's
+//! stdin and nowhere else, never into the log, an Event, the state file or the window.
 
 use crate::front::{LinuxFront, linux_front};
 use crate::tabs::Out;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 #[cfg(unix)]
 use {std::io, std::net::Shutdown, std::os::unix::net::UnixStream, std::sync::Mutex};
@@ -95,59 +94,48 @@ pub trait ChatgptWindow: Send + Sync {
     fn observe(&self, heard: Box<dyn Fn(Heard) + Send + Sync>) -> Option<Box<dyn Send>>;
 }
 
-/// Whether Harness may use Accessibility.
+/// Whether Harness Device may use Accessibility.
 pub trait AxTrust: Send + Sync {
     fn trusted(&self) -> bool;
+    /// Whether a permission gates following, which the Follow ChatGPT screen asks for: macOS's Accessibility only.
+    fn gated(&self) -> bool;
     /// macOS's own prompt.
     fn prompt(&self);
-    /// `changed` is called each time macOS may have changed the permission. Off macOS nothing changes it but the
-    /// switch, which the runner reads back.
+    /// `changed` is called each time macOS may have changed the permission. Off macOS nothing changes it.
     fn start(&self, changed: Box<dyn Fn() + Send + Sync>);
-    /// Off macOS, Harness's own switch stands for the permission: the person turns following on or off.
-    fn switch(&self, _on: bool) {}
 }
 
 pub trait FollowDoor: ChatgptWindow + AxTrust {}
 
 impl<T: ChatgptWindow + AxTrust> FollowDoor for T {}
 
-/// Every door off macOS: its window, and Harness's own switch, which stands for the permission since nothing gates
-/// reading a window's title there.
-pub struct Switched<W> {
-    window: W,
-    on: AtomicBool,
-}
+/// Every door off macOS: its window, always trusted, since nothing gates reading a window's title there.
+pub struct Ungated<W>(pub W);
 
-impl<W> Switched<W> {
-    pub fn new(window: W, on: bool) -> Switched<W> {
-        Switched { window, on: AtomicBool::new(on) }
-    }
-}
-
-impl<W: ChatgptWindow> ChatgptWindow for Switched<W> {
+impl<W: ChatgptWindow> ChatgptWindow for Ungated<W> {
     fn installed(&self) -> bool {
-        self.window.installed()
+        self.0.installed()
     }
 
     fn observe(&self, heard: Box<dyn Fn(Heard) + Send + Sync>) -> Option<Box<dyn Send>> {
-        self.window.observe(heard)
+        self.0.observe(heard)
     }
 }
 
-impl<W: Send + Sync> AxTrust for Switched<W> {
+impl<W: Send + Sync> AxTrust for Ungated<W> {
     fn trusted(&self) -> bool {
-        self.on.load(Ordering::SeqCst)
+        true
+    }
+
+    fn gated(&self) -> bool {
+        false
     }
 
     /// Nothing to ask.
     fn prompt(&self) {}
 
-    /// Nothing to hear: the runner reads the switch back at each click.
+    /// Nothing changes it.
     fn start(&self, _changed: Box<dyn Fn() + Send + Sync>) {}
-
-    fn switch(&self, on: bool) {
-        self.on.store(on, Ordering::SeqCst);
-    }
 }
 
 /// What an observation on a socket and its thread share: whether it was dropped, and once connected, the
@@ -236,6 +224,11 @@ impl AxTrust for NoFollow {
         false
     }
 
+    /// Nothing to follow, so nothing to ask for.
+    fn gated(&self) -> bool {
+        false
+    }
+
     fn prompt(&self) {}
 
     fn start(&self, _changed: Box<dyn Fn() + Send + Sync>) {}
@@ -265,23 +258,20 @@ pub fn door_kind(os: &str, linux: Option<LinuxFront>) -> DoorKind {
     }
 }
 
-/// The door this platform and session have. `switch_on` is Harness's saved switch, which gates every door off macOS.
-pub fn system(
-    #[cfg_attr(not(target_os = "macos"), expect(unused_variables))] home: PathBuf,
-    #[cfg_attr(target_os = "macos", expect(unused_variables))] switch_on: bool,
-) -> Arc<dyn FollowDoor> {
+/// The door this platform and session have.
+pub fn system(#[cfg_attr(not(target_os = "macos"), expect(unused_variables))] home: PathBuf) -> Arc<dyn FollowDoor> {
     let linux = cfg!(target_os = "linux").then(|| linux_front(&|name| std::env::var(name).ok()));
     match door_kind(std::env::consts::OS, linux) {
         #[cfg(target_os = "macos")]
         DoorKind::Mac => Arc::new(crate::follow_macos::MacFollow::new(home)),
         #[cfg(windows)]
-        DoorKind::Windows => Arc::new(Switched::new(crate::follow_windows::WindowsFollow, switch_on)),
+        DoorKind::Windows => Arc::new(Ungated(crate::follow_windows::WindowsFollow)),
         #[cfg(target_os = "linux")]
-        DoorKind::X11(display) => Arc::new(Switched::new(crate::follow_x11::X11Follow::new(display), switch_on)),
+        DoorKind::X11(display) => Arc::new(Ungated(crate::follow_x11::X11Follow::new(display))),
         #[cfg(target_os = "linux")]
-        DoorKind::Sway => Arc::new(Switched::new(crate::follow_sway::SwayFollow, switch_on)),
+        DoorKind::Sway => Arc::new(Ungated(crate::follow_sway::SwayFollow)),
         #[cfg(target_os = "linux")]
-        DoorKind::Hyprland => Arc::new(Switched::new(crate::follow_hyprland::HyprlandFollow, switch_on)),
+        DoorKind::Hyprland => Arc::new(Ungated(crate::follow_hyprland::HyprlandFollow)),
         _ => Arc::new(NoFollow),
     }
 }
@@ -295,23 +285,25 @@ pub enum Observer {
     Same,
 }
 
-/// What the menu's item shows.
+/// What the app is told: the permission, and whether the door asks for it. The default is what the app starts with,
+/// no door: one that exists is told at start.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Shown {
     pub trusted: bool,
-    pub installed: bool,
+    pub gated: bool,
 }
 
-/// When to observe the ChatGPT window, what to tell the watch, and when to offer the Follow ChatGPT screen. It calls
-/// no door: the runner does, and hands each answer here.
+/// When to observe the ChatGPT window, what to tell the watch, and when ChatGPT came to the front without the
+/// permission. It calls no door: the runner does, and hands each answer here.
 #[derive(Default)]
 pub struct ChatgptFollow {
     chatgpt: bool,
-    /// Whether the front source has told its first value: ChatGPT in front as the app starts is no offer.
+    /// Whether the front source has told its first value: ChatGPT in front as the app starts did not come to it.
     fronted: bool,
     watching: bool,
     attached: bool,
     trusted: bool,
+    gated: bool,
     installed: bool,
     /// The number of the last start, and whether it observes now.
     start: u64,
@@ -320,7 +312,7 @@ pub struct ChatgptFollow {
     last: Option<String>,
     /// Whether this start has said `chatgpt: no observer`.
     no_observer: bool,
-    offer: bool,
+    skipped: bool,
     look: bool,
 }
 
@@ -329,7 +321,7 @@ impl ChatgptFollow {
     pub fn front(&mut self, bundle: &str) {
         let chatgpt = is_chatgpt_front(bundle);
         if self.fronted && chatgpt && !self.chatgpt {
-            self.offer = self.watching && self.attached && self.installed && !self.trusted;
+            self.skipped = self.watching && self.attached && self.installed && !self.trusted;
         }
         self.chatgpt = chatgpt;
         self.fronted = true;
@@ -351,8 +343,18 @@ impl ChatgptFollow {
         self.trusted = on;
     }
 
+    pub fn gated(&mut self, on: bool) {
+        self.gated = on;
+    }
+
     pub fn installed(&mut self, on: bool) {
         self.installed = on;
+    }
+
+    /// The runner's look tells no one else; only the tests ask the rules.
+    #[cfg(test)]
+    pub fn knows_installed(&self) -> bool {
+        self.installed
     }
 
     pub fn observes(&self) -> bool {
@@ -401,9 +403,9 @@ impl ChatgptFollow {
         out
     }
 
-    /// Whether to offer the Follow ChatGPT screen, once for each time ChatGPT came to the front untrusted.
-    pub fn take_offer(&mut self) -> bool {
-        std::mem::take(&mut self.offer)
+    /// Whether ChatGPT came to the front untrusted, with the dial attached, since this was last taken: once each time.
+    pub fn take_skipped(&mut self) -> bool {
+        std::mem::take(&mut self.skipped)
     }
 
     /// Whether to read again if ChatGPT is installed: once after each attach.
@@ -412,7 +414,7 @@ impl ChatgptFollow {
     }
 
     pub fn shown(&self) -> Shown {
-        Shown { trusted: self.trusted, installed: self.installed }
+        Shown { trusted: self.trusted, gated: self.gated }
     }
 }
 
@@ -428,7 +430,7 @@ mod tests {
         json!({ "thread": title }).to_string()
     }
 
-    /// ChatGPT in front, a watch running, the dial attached and Harness trusted, its first start taken.
+    /// ChatGPT in front, a watch running, the dial attached and Harness Device trusted, its first start taken.
     fn observing() -> (ChatgptFollow, u64) {
         let mut follow = ChatgptFollow::default();
         follow.front(CHATGPT_BUNDLE);
@@ -615,9 +617,9 @@ mod tests {
         logs_hold_no_title(&outs);
     }
 
-    /// A watch running, the dial attached, ChatGPT installed, Harness not trusted, and `first` the front source's
-    /// first value.
-    fn offering(first: &str) -> ChatgptFollow {
+    /// A watch running, the dial attached, ChatGPT installed, Harness Device not trusted, and `first` the front
+    /// source's first value.
+    fn untrusted(first: &str) -> ChatgptFollow {
         let mut follow = ChatgptFollow::default();
         follow.front(first);
         follow.watching(true);
@@ -627,18 +629,18 @@ mod tests {
     }
 
     #[test]
-    fn the_offer_comes_when_chatgpt_comes_to_the_front_untrusted() {
-        // ChatGPT in front as the app starts: never offered at start.
-        let mut follow = offering(CHATGPT_BUNDLE);
-        assert!(!follow.take_offer());
+    fn skipped_is_told_when_chatgpt_comes_to_the_front_untrusted() {
+        // ChatGPT in front as the app starts: never told at start.
+        let mut follow = untrusted(CHATGPT_BUNDLE);
+        assert!(!follow.take_skipped());
         follow.front(VS_CODE);
-        assert!(!follow.take_offer());
+        assert!(!follow.take_skipped());
         follow.front(CHATGPT_BUNDLE);
-        assert!(follow.take_offer());
-        assert!(!follow.take_offer());
+        assert!(follow.take_skipped());
+        assert!(!follow.take_skipped());
         // No other app between: ChatGPT did not come to the front.
         follow.front(CHATGPT_BUNDLE);
-        assert!(!follow.take_offer());
+        assert!(!follow.take_skipped());
 
         type Set = fn(&mut ChatgptFollow);
         let nots: [Set; 4] = [
@@ -648,28 +650,28 @@ mod tests {
             |follow| follow.attached(false),
         ];
         for (index, not) in nots.into_iter().enumerate() {
-            let mut follow = offering(VS_CODE);
+            let mut follow = untrusted(VS_CODE);
             not(&mut follow);
             follow.front(CHATGPT_BUNDLE);
-            assert!(!follow.take_offer(), "{index}");
+            assert!(!follow.take_skipped(), "{index}");
         }
     }
 
     #[test]
     fn chatgpt_exe_in_any_case_and_chatgpt_are_chatgpt_in_front_as_the_bundle_id_is() {
         for value in [CHATGPT_BUNDLE, "ChatGPT.exe", "chatgpt.EXE", "ChatGPT"] {
-            let mut follow = offering(VS_CODE);
+            let mut follow = untrusted(VS_CODE);
             follow.front(value);
-            assert!(follow.take_offer(), "{value}");
+            assert!(follow.take_skipped(), "{value}");
             follow.trusted(true);
             assert!(follow.observes(), "{value}");
             assert!(matches!(follow.observer(), Observer::Start(_)), "{value}");
         }
         // Linux's program name is matched exactly, and a macOS bundle's file name is no front value.
         for value in ["chatgpt", "ChatGPT.app"] {
-            let mut follow = offering(VS_CODE);
+            let mut follow = untrusted(VS_CODE);
             follow.front(value);
-            assert!(!follow.take_offer(), "{value}");
+            assert!(!follow.take_skipped(), "{value}");
             follow.trusted(true);
             assert!(!follow.observes(), "{value}");
         }
@@ -707,21 +709,14 @@ mod tests {
     }
 
     #[test]
-    fn off_macos_the_switch_is_the_permission_and_nothing_is_asked_or_told() {
-        assert!(!Switched::new(NoFollow, false).trusted());
-        let door = Switched::new(NoFollow, true);
+    fn off_macos_a_door_is_always_trusted_and_nothing_is_asked() {
+        let door = Ungated(NoFollow);
         assert!(door.trusted());
+        assert!(!door.gated());
         let told = Arc::new(Mutex::new(0));
         let count = told.clone();
         door.start(Box::new(move || *count.lock().unwrap() += 1));
-        // The menu's click: the runner reads it back.
-        door.switch(false);
-        assert!(!door.trusted());
         door.prompt();
-        assert!(!door.trusted());
-        door.switch(false);
-        assert!(!door.trusted());
-        door.switch(true);
         assert!(door.trusted());
         assert_eq!(*told.lock().unwrap(), 0);
     }
@@ -749,16 +744,18 @@ mod tests {
     }
 
     #[test]
-    fn shown_is_the_permission_and_the_app_installed() {
+    fn shown_is_the_permission_and_whether_the_door_asks_for_it_never_the_app_installed() {
         let mut follow = ChatgptFollow::default();
-        assert_eq!(follow.shown(), Shown { trusted: false, installed: false });
+        assert_eq!(follow.shown(), Shown { trusted: false, gated: false });
         follow.trusted(true);
-        assert_eq!(follow.shown(), Shown { trusted: true, installed: false });
-        follow.installed(true);
-        assert_eq!(follow.shown(), Shown { trusted: true, installed: true });
+        assert_eq!(follow.shown(), Shown { trusted: true, gated: false });
+        follow.gated(true);
+        assert_eq!(follow.shown(), Shown { trusted: true, gated: true });
         follow.trusted(false);
-        assert_eq!(follow.shown(), Shown { trusted: false, installed: true });
-        assert_eq!(Shown::default(), Shown { trusted: false, installed: false });
+        assert_eq!(follow.shown(), Shown { trusted: false, gated: true });
+        follow.installed(true);
+        assert_eq!(follow.shown(), Shown { trusted: false, gated: true });
+        assert_eq!(Shown::default(), Shown { trusted: false, gated: false });
     }
 
     #[test]
@@ -804,6 +801,7 @@ mod tests {
         assert!(!NoFollow.installed());
         assert!(NoFollow.observe(Box::new(move |_| *count.lock().unwrap() += 1)).is_none());
         assert!(!NoFollow.trusted());
+        assert!(!NoFollow.gated());
         NoFollow.prompt();
         let count = heard.clone();
         NoFollow.start(Box::new(move || *count.lock().unwrap() += 1));

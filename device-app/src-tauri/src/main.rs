@@ -16,7 +16,7 @@ use harness_device::state::{JsonStateFile, StateFile};
 use harness_device::tabs;
 use harness_device::tick;
 use harness_device::tray::{TrayIcon, tray_icon};
-use harness_device::types::{Action, Clock, Effect, Event, Log, MenuAction, MenuItem, SystemClock, View};
+use harness_device::types::{APP_NAME, Action, Clock, Effect, Event, Log, MenuAction, MenuItem, SystemClock, View};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -84,7 +84,7 @@ fn main() {
             }
         })
         .build(tauri::generate_context!())
-        .expect("Harness could not start");
+        .expect("Harness Device could not start");
     // Decision 3: no Dock icon. Set before the event loop runs: in `setup`, macOS has already made the app Regular and
     // the window is made, so the Dock icon shows for a moment at each launch.
     #[cfg(target_os = "macos")]
@@ -122,7 +122,7 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
         front: front::system(log.clone()),
         tabs: tabs::system(),
         updater: harness_device::update::system(handle),
-        follow: follow::system(paths.home_dir()?, !saved.follow_off),
+        follow: follow::system(paths.home_dir()?),
     };
 
     // A watch or a sign-in hands its events over holding a lock that stopping or cancelling it takes: `send` only
@@ -164,7 +164,7 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
     TrayIconBuilder::with_id(TRAY)
         .icon(tray_image(icon))
         .icon_as_template(icon == TrayIcon::Template)
-        .tooltip("Harness")
+        .tooltip(APP_NAME)
         .on_menu_event(move |_, event| {
             if let Some(action) = menu_action(event.id().as_ref()) {
                 let _ = chosen.send(Event::Menu(action));
@@ -214,8 +214,6 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
         SystemDesktopApp.installed(),
         clock.now(),
         harness_device::update::install_exits_app(),
-        // Only macOS gates reading another app's window title: elsewhere the item is Harness's own switch.
-        !cfg!(target_os = "macos"),
     );
     let looping = handle.clone();
     thread::spawn(move || run_loop(&looping, &log, app, &runner, first, queue));
@@ -415,7 +413,7 @@ fn about_item(
 #[cfg(not(target_os = "macos"))]
 fn about_item(handle: &AppHandle, text: &str, credits: Option<&str>) -> tauri::Result<Box<dyn IsMenuItem<tauri::Wry>>> {
     let metadata = AboutMetadata {
-        name: Some("Harness".into()),
+        name: Some(APP_NAME.into()),
         version: Some(handle.package_info().version.to_string()),
         comments: credits.map(Into::into),
         // GTK shows it as the dialog's logo, at its own size, as large as its stock one. Windows' dialog is a message
@@ -441,32 +439,14 @@ fn menu_id(action: MenuAction) -> &'static str {
         MenuAction::About => "about",
         MenuAction::Quit => "quit",
         MenuAction::ExportLogs => "export_logs",
-        MenuAction::FollowChatgpt => "follow_chatgpt",
-        MenuAction::FollowSettings => "follow_settings",
-        MenuAction::FollowSwitch => "follow_switch",
     }
 }
 
 fn menu_action(id: &str) -> Option<MenuAction> {
     use MenuAction::*;
-    [
-        Install,
-        SignIn,
-        SoundOn,
-        SoundOff,
-        NotifyFull,
-        NotifyYou,
-        Update,
-        OpenHarness,
-        About,
-        Quit,
-        ExportLogs,
-        FollowChatgpt,
-        FollowSettings,
-        FollowSwitch,
-    ]
-    .into_iter()
-    .find(|action| menu_id(*action) == id)
+    [Install, SignIn, SoundOn, SoundOff, NotifyFull, NotifyYou, Update, OpenHarness, About, Quit, ExportLogs]
+        .into_iter()
+        .find(|action| menu_id(*action) == id)
 }
 
 #[cfg(test)]
@@ -481,34 +461,17 @@ mod tests {
     #[test]
     fn every_menu_action_has_its_own_id() {
         use MenuAction::*;
-        let actions = [
-            Install,
-            SignIn,
-            SoundOn,
-            SoundOff,
-            NotifyFull,
-            NotifyYou,
-            Update,
-            OpenHarness,
-            About,
-            Quit,
-            ExportLogs,
-            FollowChatgpt,
-            FollowSettings,
-            FollowSwitch,
-        ];
+        let actions =
+            [Install, SignIn, SoundOn, SoundOff, NotifyFull, NotifyYou, Update, OpenHarness, About, Quit, ExportLogs];
         for action in actions {
             assert_eq!(menu_action(menu_id(action)), Some(action));
         }
         let ids: std::collections::HashSet<_> = actions.into_iter().map(menu_id).collect();
-        assert_eq!(ids.len(), 14);
+        assert_eq!(ids.len(), 11);
         assert_eq!(menu_id(About), "about");
         assert_eq!(menu_id(ExportLogs), "export_logs");
         assert_eq!(menu_id(NotifyFull), "notify_full");
         assert_eq!(menu_id(NotifyYou), "notify_you");
-        assert_eq!(menu_id(FollowChatgpt), "follow_chatgpt");
-        assert_eq!(menu_id(FollowSettings), "follow_settings");
-        assert_eq!(menu_id(FollowSwitch), "follow_switch");
         assert_eq!(menu_action("sound"), None);
         assert_eq!(menu_action("notify"), None);
     }

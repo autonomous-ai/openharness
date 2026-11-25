@@ -161,11 +161,12 @@ DEVICE_APP_PACKAGES = (("appimage", "x64"), ("appimage", "arm64"), ("nsis", "x64
 DEVICE_APP_BUILDS = {"device-app-e2e": DEVICE_APP_PACKAGES, "device-app-desktop": DEVICE_APP_PACKAGES,
                      "device-app-install": (("appimage", "x64"),)}
 # linux-e2e: a CLI e2e file the PR adds or modifies, but those another job runs: windows-e2e the dial and the apps'
-# sessions on it on Windows, diskfull.e2e.ts needs macOS, the agent browser's Podman file runs by hand (about 50
-# minutes), and dial-hosts the files that need the hosts installed (cli/e2e/harness/dialHosts.ts's DIAL_HOST_FILES, which
-# the CI config leaves out).
+# sessions on it on Windows, diskfull.e2e.ts needs macOS, the dial app eval's iTerm2 file needs macOS (iTerm2 is a Mac
+# app; the tester runs it, docs/plans/2026-11-22-dial-eval-iterm2-design.md), the agent browser's Podman file runs by
+# hand (about 50 minutes), and dial-hosts the files that need the hosts installed (cli/e2e/harness/dialHosts.ts's
+# DIAL_HOST_FILES, which the CI config leaves out).
 LINUX_E2E_NEVER = {"cli/e2e/dialWindows.e2e.ts", "cli/e2e/dialWindowsAppSessions.e2e.ts", "cli/e2e/diskfull.e2e.ts",
-                   "cli/e2e/agentBrowserPodman.e2e.ts"}
+                   "cli/e2e/dialAppEvalIterm.e2e.ts", "cli/e2e/agentBrowserPodman.e2e.ts"}
 # What every e2e file runs on but none tests itself: the jobs' setup action (its real backend, which dial-hosts does not
 # ask for), the harness, Vitest's e2e configs and the timing hints. A change to one runs linux-e2e's canary, a short file
 # (two daemons on the real backend, one case) beside the PR's own; the canary's own deletion runs it, so that PR fails.
@@ -176,28 +177,41 @@ LINUX_E2E_CANARY_PATHS = (".github/actions/cli-e2e-setup/", "cli/e2e/harness/", 
 # Linux; the macOS-only ones are run locally (docs/plans/2026-11-21-dial-linux-followups-plan.md, Verification), as no
 # PR CI suite runs macOS.
 LINUX_E2E_ORCA_FILES = ("cli/e2e/dialOrcaFocus.e2e.ts", "cli/e2e/dialOrcaFullRing.e2e.ts", "cli/e2e/dialStream.e2e.ts",
-                        "cli/e2e/dialPaneFollow.e2e.ts", "cli/e2e/dialClaudeAppFollow.e2e.ts")
-# What they cover and no other linux-e2e file does: the stand-in, InOrca, the fake orca CLI and Orca's adapter. A change
-# to one runs them beside the PR's own files; its deletion too, as a canary path's does.
+                        "cli/e2e/dialPaneFollow.e2e.ts", "cli/e2e/dialClaudeAppFollow.e2e.ts",
+                        "cli/e2e/deviceNotify.e2e.ts")
+# What they cover and no other linux-e2e file does: the stand-in, InOrca, the fake orca CLI, Orca's adapter, and the
+# harness's loop that runs Orca's plugin and its dial stream (dialStream.e2e.ts drives them). A change to one runs them
+# beside the PR's own files; its deletion too, as a canary path's does.
 LINUX_E2E_ORCA_PATHS = ("cli/e2e/harness/orcaHost.ts", "cli/e2e/harness/inOrca.ts", "cli/e2e/harness/fakeOrca.ts",
-                        "cli/src/cable/hosts/orca.ts")
-# The dial app eval's tier B files (docs/plans/2026-11-21-dial-app-eval-design.md, and
-# docs/plans/2026-11-22-dial-eval-vscode-cursor-design.md for VS Code's and Cursor's), and what they cover: the hosts'
-# adapters, the eval's catalog and grader, the carousel model and the tier B driver; for the editors, the devices
-# process and the listener whose `vscode` stream the windows of both tiers open (and its path), the hook, the extension
-# and its setup, Cursor's engine and discovery, and the harness's editor windows and outside agents. A change to one runs
-# them beside the PR's own files; its deletion too, as the Orca paths' does.
+                        "cli/src/cable/hosts/orca.ts", "cli/e2e/harness/pluginLoop.ts", "cli/e2e/harness/pluginDial.ts")
+# The dial app eval's tier B files (docs/plans/2026-11-21-dial-app-eval-design.md,
+# docs/plans/2026-11-22-dial-eval-vscode-cursor-design.md for VS Code's and Cursor's and
+# docs/plans/2026-11-22-dial-eval-orca-design.md for Orca's), and what they cover: the hosts' adapters, the eval's
+# catalog and grader, the carousel model and the tier B driver; for the editors, the devices process and the listener
+# whose `vscode` stream the windows of both tiers open (and its path), the hook, the extension and its setup, Cursor's
+# engine and discovery, and the harness's editor windows and outside agents; for Orca, its plugin's code, the devices' Orca reads
+# (its homes and the recorded app), the harness's loop that runs the plugin and its dial stream, Orca's fake CLI and
+# terminal-host stand-in, and InOrca; for every app, the rest of the harness the driver runs (its desk, dial, backend,
+# mod inbox, scheme apps and ChatGPT's Codex CLI; iTerm2's tmux and herdr with the recording wrapper and the herdr-only
+# process table: test_ci_plan walks the imports). A change to one runs them beside the PR's own files; its deletion too,
+# as the Orca paths' does.
 LINUX_E2E_APP_EVAL_FILES = ("cli/e2e/dialAppEvalClaude.e2e.ts", "cli/e2e/dialAppEvalChatgpt.e2e.ts",
                             "cli/e2e/dialAppEvalVscode.e2e.ts", "cli/e2e/dialAppEvalCursor.e2e.ts",
-                            "cli/e2e/dialAppEvalHeldOut.e2e.ts")
+                            "cli/e2e/dialAppEvalOrca.e2e.ts", "cli/e2e/dialAppEvalHeldOut.e2e.ts")
 LINUX_E2E_APP_EVAL_PATHS = ("cli/src/cable/hosts/", "cli/src/testing/dialAppEval/", "cli/src/testing/dialCarousel.ts",
                             "cli/e2e/harness/appEval*.ts", "cli/src/services/devices.ts",
                             "cli/src/services/devicesListener.ts", "cli/src/devices/listenerPath.ts", "cli/hook/notify.mjs",
                             "plugins/harness-device-vscode/src/", "cli/src/devices/vscodeExtension.ts",
                             "cli/src/cable/vscodeExtensionSetup.ts", "cli/src/engines/cursor/",
-                            "cli/src/core/engines/cursorDiscovery.ts",
+                            "cli/src/core/engines/cursorDiscovery.ts", "plugins/harness-device-orca/src/",
+                            "cli/src/devices/orcaHomes.ts", "cli/src/testing/recordedOrca.ts",
                             *(f"cli/e2e/harness/{name}.ts" for name in ("vscodeWindow", "outsideAgent", "codexOutside",
-                                                                         "cursorOutside", "editorWindow")),
+                                                                         "cursorOutside", "editorWindow", "fakeOrca",
+                                                                         "inOrca", "orcaHost", "pluginDial",
+                                                                         "pluginLoop", "desk", "fakeDial", "fakeBackend",
+                                                                         "modInbox", "schemeApps", "codexAppCli",
+                                                                         "herdrServer", "dialHosts", "ownTmux",
+                                                                         "runLog")),
                             *LINUX_E2E_APP_EVAL_FILES)
 DIAL_HOST_FILES = ("cli/e2e/dialHost*.e2e.ts", "cli/e2e/deviceHerdr.e2e.ts")
 # dial-hosts: those files, the code they run and the job's own definition. The daemon runs every host adapter from its
@@ -208,8 +222,8 @@ DIAL_HOST_PATHS = (
     "cli/e2e/harness/dialHosts.ts", "cli/vitest.e2e.dialHosts.config.ts", "cli/src/cable/hosts/",
     "cli/src/testing/dialCarousel.ts", *(f"cli/src/cable/{name}.ts" for name in ("cableFrame", "portAccess", "roundGlyphs")),
     *(f"cli/e2e/harness/{name}.ts" for name in ("desk", "fakeBackend", "fakeDial", "fakeOrca", "herdrServer", "inOrca",
-                                                 "kittyWindow", "orcaHost", "outsideAgent", "swayDesk", "weztermMux",
-                                                 "x11Desk", "zellijSession")),
+                                                 "kittyWindow", "orcaHost", "outsideAgent", "runLog", "swayDesk",
+                                                 "weztermMux", "x11Desk", "zellijSession")),
     ".github/workflows/cli-e2e-dial-hosts.yml", ".github/actions/cli-e2e-setup/",
 )
 # The names linux-e2e passes on: they reach the jobs' shells through env, and Vitest as file filters, so plain names only.
@@ -229,12 +243,13 @@ LINUX_E2E_FULL_SHARDS = 8
 # The desktop VM tests run in a sparse checkout of exactly these inputs (ci-source-inputs.py).
 DEPENDS = {
     "backend": ("cli/src/lib/productHealthContract.ts", "cli/src/lib/productUsageContract.ts",
-                "daemons/frames.json",
+                "cli/src/lib/dialUsageContract.ts", "daemons/frames.json",
                 "desktop/lib/measurement/", "mobile/lib/measurement/",
                 "provider/reference-provider/", "tests/fixtures/"),
     "cli": ("backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts", "desktop/",
             "cli/e2e/harness/", "devices/harness-device/firmware/main/ui/habitat/focus_faces.c",
-            "devices/harness-device/firmware/test/vectors/", "docs/contracts/", "mobile/", "pty/", "store/", "tui/"),
+            "devices/harness-device/firmware/test/vectors/", "devices/harness-device/firmware/version.txt",
+            "docs/contracts/", "mobile/", "pty/", "store/", "tui/"),
     "companions": ("cli/", "docs/research/2026-09-30-memory-batch-extraction-cases.json",
                    "docs/research/2026-09-30-memory-extraction-cases.json"),
     # Its generators write (and its checks may compare) these outputs.
@@ -248,10 +263,11 @@ DEPENDS = {
     "max": ("devices/harness-pro/",),
     # Its tools also import the web release scripts; its tests see only the sparse inputs.
     "desktop": ci.SOURCE_INPUTS["desktop"] + ("website/scripts/harness-web-assets.mjs", "website/scripts/precompress.mjs"),
-    # Its release tests read both release workflows (test_release_workflow.py, a path built from parts).
+    # Its release tests read both release workflows (test_release_workflow.py) and the signing action's inputs
+    # (test_windows_sign.py), each through a path built from parts.
     # app_list.rs holds its Linux app-list entry to the vectors every writer of it reads.
-    "device-app": (".github/workflows/release-desktop.yml", ".github/workflows/release-device.yml",
-                   "tests/fixtures/app-list-entry-vectors.json"),
+    "device-app": (".github/actions/windows-signing/action.yml", ".github/workflows/release-desktop.yml",
+                   ".github/workflows/release-device.yml", "tests/fixtures/app-list-entry-vectors.json"),
     "mobile": ("backend/src/types/productHealthContract.ts", "backend/src/types/productUsage.ts", "cli/src/",
                "daemons/banner.json", "daemons/frames.json", "daemons/plates.json", "daemons/roster.json", "desktop/",
                "docs/performance/"),
@@ -300,18 +316,20 @@ DEPENDS.update({
 # hand, or named in full where it is read. A miss here runs one suite too few on a PR; reuse still sees the change.
 PR_READS = {
     "backend": ("cli/src/lib/productHealthContract.ts", "cli/src/lib/productUsageContract.ts",
-                "daemons/frames.json",
+                "cli/src/lib/dialUsageContract.ts", "daemons/frames.json",
                 "desktop/lib/measurement/", "mobile/lib/measurement/",
                 "provider/reference-provider/", "tests/fixtures/"),
     # cli/scripts/connector-assets.mjs, which a spec imports, names the connector icons' desktop and phone copies it writes.
     # store/: the dsh specs read its agents, viewers and starter (the scan skips it: a path outside every component).
     # focus_faces.c: roundGlyphs.spec.ts holds the daemon's copy of the dial's glyph table to the firmware's.
+    # version.txt: the e2e fake dial greets with the round firmware's version (fakeDial.spec.ts).
     "cli": ("backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts",
             "cli/e2e/harness/", "desktop/assets/connector-icons/",
             "desktop/lib/connectors/connector_icons.dart", "desktop/lib/measurement/product_health_contract.dart",
             "desktop/test/viewer/deviceAck.vectors.json", "desktop/test/viewer/deviceHistory.vectors.json",
             "devices/harness-device/firmware/main/ui/habitat/focus_faces.c",
-            "devices/harness-device/firmware/test/vectors/", "docs/contracts/", "mobile/assets/connector-icons/",
+            "devices/harness-device/firmware/test/vectors/", "devices/harness-device/firmware/version.txt",
+            "docs/contracts/", "mobile/assets/connector-icons/",
             "mobile/lib/phone/connector_icons.dart", "mobile/test/viewer/deviceAck.vectors.json",
             "mobile/test/viewer/deviceHistory.vectors.json",
             "pty/", "store/", "tui/"),
@@ -351,11 +369,11 @@ PR_READS = {
                 # device_app_launcher_test.dart holds the app-list entry Desktop writes to the vectors.
                 "tests/fixtures/app-list-entry-vectors.json",
                 "website/scripts/harness-web-assets.mjs", "website/scripts/precompress.mjs"),
-    # test_release_workflow.py reads its own release workflow and Desktop's runners and signing inputs, through a path
-    # built from parts, which the scan cannot see.
+    # test_release_workflow.py reads its own release workflow and Desktop's runners and signing inputs, and
+    # test_windows_sign.py the signing action's inputs, through a path built from parts, which the scan cannot see.
     # app_list.rs holds its Linux app-list entry to the vectors every writer of it reads.
-    "device-app": (".github/workflows/release-desktop.yml", ".github/workflows/release-device.yml",
-                   "tests/fixtures/app-list-entry-vectors.json"),
+    "device-app": (".github/actions/windows-signing/action.yml", ".github/workflows/release-desktop.yml",
+                   ".github/workflows/release-device.yml", "tests/fixtures/app-list-entry-vectors.json"),
     # The desktop files the phone's tests read: the words and helpers its tests compare; a desktop-only change to one once
     # failed only in a batch, two batches later (River, 2026-11-03). test_ci_plan's
     # test_every_desktop_file_the_phone_tests_read_selects_mobile scans mobile/test and fails on one missing here.
@@ -480,10 +498,10 @@ def windows_only(path):
 def windows_e2e(path):
     """What windows-e2e tests: Windows-only code, cross-platform code with win32 branches that broke only on Windows
     (#4513: the devices, the cable, the engines' hook scripts, the dial plugins), the TUI and the flasher windows.yml
-    runs, and its specs with the modules they test."""
+    runs, its specs with the modules they test, and the dial desk bundle dialWindowsTools.e2e.ts builds and runs."""
     return windows_only(path) or not windows_docs(path) and (
         path.startswith(("cli/src/lib/windows/", "cli/src/devices/", "cli/src/cable/", "cli/hook/", "tui/",
-                         "website/src/app/flash-circle.ps1/"))
+                         "website/src/app/flash-circle.ps1/", "cli/scripts/windows-dial-e2e/"))
         or re.match(r"plugins/harness-device[^/]*/", path) is not None
         or path in WINDOWS_SPEC_MODULES or any(covers(spec, path) for spec in WINDOWS_SPECS))
 

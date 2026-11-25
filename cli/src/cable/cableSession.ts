@@ -125,6 +125,12 @@ const bounded = (value: unknown, max: number): number =>
 const MACHINES_POLL_MS = 15_000
 /** The least time between two pushes of the machine list (spec 2026-11-13-device-without-the-app, "When"). */
 const AGENTS_PUSH_GAP_MS = 1_000
+/** The most a greeting holds its push for the reads its attach started (the first read of each source that runs only
+ *  while a dial is attached: herdr's, Herdr Core's, cmux's, opencode's, the Claude app's and the ChatGPT app's,
+ *  devices.ts dialAttached): pushed before them, its list had none of their rows until the next tick's push, 1-2 s on
+ *  (the dial eval's C11). A read that lands in a moment makes the first list; a slow or stuck one costs the greeting no
+ *  more than this, and its rows follow at the next push. */
+const ATTACH_READS_MS = 500
 /**
  * A programmatic focus write may be followed by the dial reporting the tile it was painting just before
  * that write. Real hardware delivered that stale report 23 ms after the machine switch completed; keep
@@ -395,9 +401,9 @@ export type CableMachineSource = 'backend' | 'local' | 'signed-out'
 export type OpenReason = 'question'
 
 /** What turned the dial to an agent from this computer: a person's prompt, a terminal tab they selected, a Claude app
- *  they attached to, an Orca pane they focused, a thread they opened in the ChatGPT app, or a VS Code or Cursor terminal
- *  they focused. The outcome's log line is the cause's own. */
-export type FollowCause = 'prompt' | 'tab' | 'attach' | 'focus' | 'thread' | 'vscode'
+ *  they attached to, an Orca pane they focused, a thread they opened in the ChatGPT app, a VS Code or Cursor terminal
+ *  they focused, or a WezTerm pane or kitty window they focused. The outcome's log line is the cause's own. */
+export type FollowCause = 'prompt' | 'tab' | 'attach' | 'focus' | 'thread' | 'vscode' | 'pane'
 /** What a send answers. `message` is a sentence for the dial, shown in place of the generic one. */
 export type SendOutcome = { ok: true } | { ok: false; machine?: string; reason?: string; message?: string }
 
@@ -409,6 +415,7 @@ import type { FormCommand, FormResult } from './windowForm.js'
 import { deriveLongRecap, extendShortRecap } from '../lib/deviceRecap.js'
 import type { TurnStatsFields } from './turnStats.js'
 import type { Tier } from '../lib/notifyTier.js'
+import type { DialVoiceEnd, DialVoiceFailure } from '../lib/dialUsageContract.js'
 import { APP_IDS, appDisplayName, hostDisplayName } from './hosts/hostDetect.js'
 import { RING_PLACES } from './hosts/select.js'
 import type { AppList, AppPick } from './hosts/types.js'
@@ -505,6 +512,9 @@ export interface CableHost {
   /** The agent this dial shows changed: as its ring last drew it and its id, or null for none. `dial` is the session that
    *  says so, which is how a host tells two dials apart. */
   dialShows?(dial: object, agent: DialAgent | null, agentId: string | null): void
+  /** How a voice turn ended, once a turn, for the dial's usage counts (docs/plans/2026-11-23-dial-usage-counts-design.md):
+   *  sent, failed by code, cancelled, or other (a draft, a form field, a search). */
+  voiceEnded?(end: DialVoiceEnd): void
   focus(agentId: string): void
   /**
    * "Put this one in front of me" — a NOTIFICATION was tapped.
@@ -518,7 +528,7 @@ export interface CableHost {
    * came up on its own — the window then only brings the agent forward if it is already on screen,
    * because a reconnect re-shows every unanswered question and each used to open a tab.
    */
-  openAgent(agentId: string, reason?: OpenReason): void | Promise<void | { ok: false; error: string }>
+  openAgent(agentId: string, reason?: OpenReason): void | Promise<void | 'superseded' | { ok: false; error: string }>
   readNotification?(agentId: string, readToken: string): void
   /** The dial asked for a fork of this agent — a second one with its history, opened in the window. */
   forkAgent(agentId: string): Promise<{ ok: true; agentId: string } | { ok: false; error: string; detail?: string }>
@@ -574,8 +584,11 @@ export interface CableHost {
    * The daemon holds its cloud lane ON THE DIAL'S BEHALF — nothing else in this process uses it. So with
    * no dial there is nobody to hold it for, and holding it anyway leaves the account showing a device
    * that is attached to a machine while sitting unplugged in a drawer.
+   *
+   * What it returns ends once the reads the attach started have landed: the greeting's push waits for it, at most
+   * ATTACH_READS_MS.
    */
-  onDialAttached?(): void
+  onDialAttached?(): void | Promise<void>
   onDialGone?(): void
   /**
    * The port this session opened turned out not to be a Harness dial: it talked in something else, or
@@ -759,6 +772,9 @@ type VoiceTurn = { agentId?: string; cmd?: string; lang: string; rate: number; b
   search?: { command?: SelectionCommand; pin: Promise<SelectionResult> };
   form?: { command?: FormCommand; pin: Promise<FormResult> } }
 
+/** Words for a draft, a question, a field or a search: use of the dial, not voice to an agent's turn (its usage counts). */
+const otherVoice = (turn: VoiceTurn) => !!(turn.draft || turn.question || turn.form || turn.search)
+
 export class CableSession {
   private link: CablePort | null = null
   private decoder = new CableDecoder()
@@ -838,6 +854,11 @@ export class CableSession {
   /** From a dial's greeting to its push's walk of the open questions: a question asked meanwhile waits for that walk,
    *  which asks it after the drawer that would clear it. */
   private greeting = false
+  /** The greetings waiting for the reads their attach started (awaitAttachReads): while any does, no list goes, as the
+   *  last one's own push follows. A tick's list inside that wait lacked their rows and, with the agent the dial was on
+   *  before a replug not in it, landed the first agent over that record. A count, not a flag: a dial back on new firmware
+   *  greets again inside the first wait, and that wait's end let the first greeting's list go before the new reads. */
+  private attachReading = 0
 
   /** For the greeting's log line: which capabilities this hello named, or nothing. */
   private capabilitiesNamed(): string {
@@ -1043,7 +1064,7 @@ export class CableSession {
   private voiceUploadId = ''
   /** A recording refused at `voice.begin` (its agent has no `v`), said on `voice.end`: today's firmware drops a voice
    *  error that arrives before the person lets go. Any later turn, abort or close moves the generation on and drops it. */
-  private voiceRefusal?: { generation: number; message: string }
+  private voiceRefusal?: { generation: number; message: string; agentId: string }
 
   /** False for a link that proves nothing of who is at its far end (cableTcp.ts): its dial answers no permission
    *  prompt. A USB dial is one the person plugged in, and answers both. */
@@ -1366,6 +1387,7 @@ export class CableSession {
     this.lastAppsKey = ''
     this.lastMachinesKey = ''
     this.resetCapabilities()
+    this.dropRecording()
     this.voice = null
     this.voiceGeneration++
     this.abortVoiceSegments()
@@ -1622,7 +1644,8 @@ export class CableSession {
           this.greeting = true
           this.questionInbox.forget()
           try {
-            this.host.onDialAttached?.()
+            const reads = this.host.onDialAttached?.()
+            if (reads) await this.awaitAttachReads(reads)
             // Both halves of the test above mean the same thing to this line: a dial with nothing on its
             // screen. A repeat greeting from the same dial on the same image is a keepalive and is skipped,
             // which is the whole reason the branch exists.
@@ -1803,6 +1826,8 @@ export class CableSession {
           if (this.lacks(agentId, 'f')) return
         }
         void Promise.resolve(this.host.openAgent(agentId, reason)).then((result) => {
+          // A later tap replaced this one before it acted: that tap toasts or moves the face for itself.
+          if (result === 'superseded') return
           if (result && !result.ok) return this.toast(result.error)
           // Another app moves no window, so no window focus will bring the dial to this agent's face: the tap's own
           // open says it. The dial does not answer a focus with one, and its echo of a swipe only marks the agent seen.
@@ -1864,6 +1889,7 @@ export class CableSession {
         if (!id) return
         this.passageCarry.clear(id)
         if (this.voiceCarryId === id) {
+          this.dropRecording()
           this.voiceGeneration++
           this.abortVoiceSegments()
           this.voice = null
@@ -1974,6 +2000,7 @@ export class CableSession {
         if (str('agentId')) this.host.updateAgent(str('agentId')!, str('model'), str('effort'))
         return
       case 'voice.begin': {
+        this.dropRecording()
         this.abortVoiceSegments()
         this.cancelFormVoice()
         this.cancelSearchVoice()
@@ -2045,7 +2072,7 @@ export class CableSession {
         // nothing goes to the transcriber. A form, a search, a draft or a question is not its terminal.
         if (agentId && !formVoice && !searchVoice && !draftVoice && !questionVoice && this.lacks(agentId, 'v')) {
           this.voice = null
-          this.voiceRefusal = { generation: this.voiceGeneration,
+          this.voiceRefusal = { generation: this.voiceGeneration, agentId,
             message: this.host.voiceRefusal?.(agentId, this.asItself)
               ?? `This agent is in ${this.hostName(agentId)}. Talking to it from the device comes in an update.` }
           return
@@ -2096,6 +2123,7 @@ export class CableSession {
         this.cancelSearchVoice()
         if (this.voice?.selectionId && this.voice.agentId) void this.host.selectPassage?.({
           op: 'cancel', agentId: this.voice.agentId, selectionId: this.voice.selectionId })
+        this.dropRecording()
         this.voiceGeneration++
         this.abortVoiceSegments()
         this.voice = null
@@ -2501,6 +2529,8 @@ export class CableSession {
       this.cancelFormVoice()
       this.cancelSearchVoice()
       this.abortVoiceSegments()
+      // Its voice.end is answered "Didn't catch that" with no turn left to say so.
+      this.dropRecording('too_long')
       this.voice = null
       return
     }
@@ -2513,19 +2543,54 @@ export class CableSession {
     this.voiceSegments = undefined
   }
 
+  /** How a voice turn ended, for the dial's usage counts. A count never changes what the dial does or is told. */
+  private voiceEnded(end: DialVoiceEnd): void {
+    try { this.host.voiceEnded?.(end) } catch (error) { this.log(`cable: voice end not counted · ${errorKind(error)}`) }
+  }
+
+  /** A recording whose voice.end never came ends here, its one end said: a newer recording, an abort, a cancelled
+   *  carry, the port closing or the length cap took it. A voice.end already taken says its own (finishVoice). */
+  private dropRecording(code?: DialVoiceFailure): void {
+    const turn = this.voice
+    const refused = this.voiceRefusal?.generation === this.voiceGeneration ? this.voiceRefusal : undefined
+    if (!turn && !refused) return
+    const agentId = turn?.agentId ?? refused?.agentId
+    this.voiceEnded(turn && otherVoice(turn) ? { outcome: 'other' }
+      : code ? { outcome: 'failed', code, agentId } : { outcome: 'cancelled', agentId })
+  }
+
   private async finishVoice(review = false): Promise<void> {
     // Only a turn's own: with no turn, the field holds a recording an earlier voice.end is still transcribing.
     const segments = this.voice ? this.voiceSegments : undefined
+    // Read before the answer takes them: whether this voice.end ends a turn, and whether its words are for an agent.
+    const turn = this.voice
+    // A voice.end with no turn ends none: its recording's end was said already.
+    let ended = !turn && this.voiceRefusal?.generation !== this.voiceGeneration
+    const other = review || (!!turn && otherVoice(turn))
+    // Said once, as soon as it is decided: the agent's turn the words start may come before the dial is answered.
+    const end = (decided: DialVoiceEnd) => {
+      if (ended) return
+      ended = true
+      this.voiceEnded(other ? { outcome: 'other' } : decided)
+    }
     try {
-      await this.answerVoice(segments, review)
+      await this.answerVoice(segments, review, end)
+    } catch (error) {
+      // This daemon's own error, not the person's cancel.
+      end({ outcome: 'failed', code: 'unlisted', agentId: turn?.agentId })
+      throw error
     } finally {
       // Every way out that did not use the transcript stops the uploads; once finish() has settled this does nothing.
       segments?.abort()
       if (this.voiceSegments === segments) this.voiceSegments = undefined
+      // An exit that decided nothing returned because a newer recording, an abort or the port closing took the turn:
+      // the words reached no agent.
+      end({ outcome: 'cancelled', agentId: turn?.agentId })
     }
   }
 
-  private async answerVoice(segments: VoiceSegments | undefined, review: boolean): Promise<void> {
+  private async answerVoice(segments: VoiceSegments | undefined, review: boolean,
+    decide: (end: DialVoiceEnd) => void): Promise<void> {
     const arrived = performance.now()
     const turn = this.voice
     const generation = this.voiceGeneration
@@ -2537,9 +2602,12 @@ export class CableSession {
       return current() ? this.send({ ...message, ...(uploadId ? { uploadId } : {}) }) : Promise.resolve(false)
     }
     this.voice = null
-    const refusal = this.voiceRefusal?.generation === generation ? this.voiceRefusal.message : undefined
+    const refusal = this.voiceRefusal?.generation === generation ? this.voiceRefusal : undefined
     this.voiceRefusal = undefined
-    if (refusal) { await reply({ t: 'voice.error', message: refusal }); return }
+    if (refusal) {
+      decide({ outcome: 'failed', code: 'refused', agentId: refusal.agentId })
+      await reply({ t: 'voice.error', message: refusal.message }); return
+    }
     if (turn?.draft && (!turn.draft.pin || !this.voiceDraft.current(turn.draft.pin))) {
       await reply({ t: 'voice.error', message: 'That draft changed. Review it again.' }); return
     }
@@ -2549,6 +2617,7 @@ export class CableSession {
       return
     }
     if (turn?.carry && !turn.carry.ok) {
+      decide({ outcome: 'failed', code: 'unlisted', agentId: turn.agentId })
       await reply({ t: 'voice.error', message: turn.carry.error })
       return
     }
@@ -2570,10 +2639,12 @@ export class CableSession {
       op: 'cancel', agentId: turn.agentId, selectionId: turn.selectionId })
     if (!current()) return
     if (selection && (!selection.ok || !selection.text)) {
+      decide({ outcome: 'failed', code: 'unlisted', agentId: turn?.agentId })
       await reply({ t: 'voice.error', message: selection.ok ? 'Choose the text again.' : selection.error })
       return
     }
     if (!turn || turn.bytes === 0 || !segments) {
+      decide({ outcome: 'failed', code: 'no_audio', agentId: turn?.agentId })
       this.cancelFormVoice()
       this.cancelSearchVoice()
       await reply({ t: 'voice.error', message: "Didn't catch that" })
@@ -2591,21 +2662,30 @@ export class CableSession {
     })
     // One line per turn, numbers only: whether an empty transcript was silence on the dial or words the
     // transcriber missed, and for which agent (OPENHARNES-18). No audio and no text.
-    const { peak, rms } = segments.level()
-    const heard = (transcript: string) => this.log(`cable: voice turn agent=${turn.agentId ?? 'none'} ` +
-      `cmd=${turn.cmd || 'none'} lang=${turn.lang} sr=${turn.rate} peak=${peak} rms=${rms} transcript=${transcript}`)
+    const level = segments.level()
+    const logTurn = (transcript: string) => this.log(`cable: voice turn agent=${turn.agentId ?? 'none'} ` +
+      `cmd=${turn.cmd || 'none'} lang=${turn.lang} sr=${turn.rate} peak=${level.peak} rms=${level.rms} ` +
+      `clip=${level.clip} heard=${level.heard ? 1 : 0} voice=${level.voice} floor=${level.floor} gain=${level.gain} ` +
+      `transcript=${transcript}`)
     let transcript: string
     try {
       transcript = await finished
     } catch (err) {
-      heard('failed')
-      if (current()) { this.cancelFormVoice(); this.cancelSearchVoice() }
+      logTurn('failed')
+      // An abort stops the uploads as well: that turn ends cancelled, not failed.
+      if (current()) {
+        decide({ outcome: 'failed', code: 'transcribe_failed', agentId: turn.agentId })
+        this.cancelFormVoice(); this.cancelSearchVoice()
+      }
       await reply({ t: 'voice.error', message: (err as Error).message })
       return
     }
-    heard(String(transcript.length))
+    logTurn(String(transcript.length))
     if (!current()) return
     if (!transcript) {
+      // Speech by the dial's own gate with no word in the transcript is the transcriber's miss (language, noise,
+      // clipping), not a press with nothing said.
+      decide({ outcome: 'failed', code: level.heard ? 'no_words' : 'no_speech', agentId: turn.agentId })
       this.cancelFormVoice()
       this.cancelSearchVoice()
       await reply({ t: 'voice.error', message: "Didn't catch that" })
@@ -2678,9 +2758,13 @@ export class CableSession {
       //
       // The window DELIVERS what it picks, so there is nothing left to send here: a `sent` outcome is
       // already on its way to an agent, and calling sendTurn on it would deliver the sentence twice.
+      // Taken before: the window answers only after it delivered, by when the agent's turn may have started.
+      const since = Date.now()
       const inWindow = this.host.routeInWindow
         ? await this.host.routeInWindow(transcript, turn.cmd)
         : ({ t: 'unavailable' } as const)
+      // Sent whatever happened here meanwhile: an abort or a newer recording does not take back what the window delivered.
+      if (inWindow.t === 'sent') decide({ outcome: 'sent', agentId: inWindow.agentId, since })
       if (!current()) return
       if (inWindow.t === 'sent') {
         this.log(`cable: the window routed the spoken task → ${inWindow.agentId.slice(0, 8)}`)
@@ -2700,12 +2784,14 @@ export class CableSession {
       if (inWindow.t === 'cancelled') {
         // A person closed the palette. Nothing was sent and nothing should be — but the dial is still
         // showing the sending overlay, so it has to be told, or it sits there until its own watchdog.
+        decide({ outcome: 'cancelled' })
         await reply({ t: 'voice.error', message: 'Cancelled in the window' })
         return
       }
       if (inWindow.t === 'abandoned') {
         // It took the words and went quiet. Routing here now would race a pick that may still be coming,
         // and two turns from one sentence is worse than none — so say where the words went instead.
+        decide({ outcome: 'failed', code: 'window_busy' })
         await reply({ t: 'voice.error', message: 'Still waiting on the window' })
         return
       }
@@ -2716,6 +2802,7 @@ export class CableSession {
         // The router's reason paraphrases the spoken sentence, so the log keeps only the pick and how sure it was.
         this.log(`cable: routed → ${agentId} (confidence ${decision.confidence.toFixed(2)})`)
       } catch (err) {
+        decide({ outcome: 'failed', code: 'route_failed' })
         await reply({ t: 'voice.error', message: (err as Error).message })
         return
       }
@@ -2723,6 +2810,7 @@ export class CableSession {
     agentName = agents.find((a) => a.id === agentId)?.name ?? ''
 
     if (!agentId) {
+      decide({ outcome: 'failed', code: 'no_agent' })
       await reply({ t: 'voice.error', message: 'No harness to send that to' })
       return
     }
@@ -2734,6 +2822,7 @@ export class CableSession {
       const held = (await this.agentSnapshot()).agents
       if (!current()) return
       if (!held.some(a => a.id === agentId)) {
+        decide({ outcome: 'failed', code: 'no_agent', agentId })
         await reply({ t: 'voice.error', message: 'That recipient is no longer available. Choose it again.' })
         return
       }
@@ -2762,18 +2851,23 @@ export class CableSession {
     // line carries: only the app is logged. Decided before the words go: a window that opens or an entry that drops
     // while they are on their way leaves the list without the agent by the time it refuses.
     const refusedIn = this.outsideHarness(agentId) ? `(refused in ${this.hostName(agentId)})` : undefined
+    // Taken before: a send can return after its words started the turn (`codex queue` exits after an idle Codex began it).
+    const since = Date.now()
     try {
       const submitted = await this.host.sendTurn(agentId, text)
       if (submitted && !submitted.ok) {
+        decide({ outcome: 'failed', code: 'refused', agentId })
         await reply({ t: 'voice.error', message: submitted.message ?? (carried
           ? 'Could not reach that harness. Your carried text is still here.'
           : 'Could not reach that harness. Check its connection and try again.') }, refusedIn)
         return
       }
     } catch (_) {
+      decide({ outcome: 'failed', code: 'send_failed', agentId })
       await reply({ t: 'voice.error', message: 'Could not send. Check the terminal before trying again.' })
       return
     }
+    decide({ outcome: 'sent', agentId, since })
     if (carried) {
       this.passageCarry.clear(carried.id)
       this.voiceCarryId = undefined
@@ -2939,7 +3033,11 @@ export class CableSession {
 
   /** `ring` false: only the app list, which a pick the host ignored is answered with. */
   private async syncAgentsNow(force: boolean, ring = true): Promise<void> {
+    // Not even read: on a dial that says appFilter, a read without the app's rows turns the shown app away from it.
+    if (this.attachReading) return
     const { agents: full, tab, total, view, apps } = await this.agentSnapshot()
+    // A read under way as the dial greeted lacks the rows the greeting waits for.
+    if (this.attachReading) return
     // A ring that, with the tiles the dial holds, is more than RING_PLACES goes in two steps. The firmware adds a list's
     // agents before it removes the tiles the list no longer names, and refuses one past RING_PLACES (app_main.c
     // refresh_projects, ui_habitat.c ensure): such a list lost every agent the dial did not hold. Diego, 2026-11-20
@@ -3144,6 +3242,20 @@ export class CableSession {
         this.restoring = false
         if (this.restoreAgain) this.restoreInBackground()
       })
+  }
+
+  /** The reads an attach started, waited for at most ATTACH_READS_MS: one that fails or is late is pushed without, a late
+   *  one said, as its rows miss the first list. */
+  private async awaitAttachReads(reads: Promise<void>): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const late = new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(true), ATTACH_READS_MS) })
+    this.attachReading++
+    try {
+      if (await Promise.race([reads.then(() => false, () => false), late])) this.log('cable: attach reads · late · pushed without them')
+    } finally {
+      this.attachReading--
+      clearTimeout(timer)
+    }
   }
 
   /** Attach: tell the dial everything, whether or not any of it looks unchanged from here. */

@@ -86,6 +86,15 @@ function withPointsLost(main: readonly CheckResult[]): Array<CheckResult & { poi
   }))
 }
 
+/** The held-out gaps by reason, in its order, each with its tiers and platforms in theirs: no scenario's id. */
+function heldOutReasons(gaps: readonly CoverageGap[]): Report['heldOutGaps'] {
+  const distinct = <T extends string>(values: T[]): T[] => [...new Set(values)].sort(byText)
+  return distinct(gaps.map((g) => g.reason)).map((reason) => {
+    const of = gaps.filter((g) => g.reason === reason)
+    return { reason, tiers: distinct(of.map((g) => g.tier)), platforms: distinct(of.map((g) => g.platform)), runs: new Set(of.map(runKey)).size }
+  })
+}
+
 function rankedGroups(failing: ReadonlyArray<CheckResult & { pointsLost: number }>): Group[] {
   const groups = new Map<string, Group>()
   for (const r of failing) {
@@ -136,6 +145,7 @@ export function grade(results: RunResults, baseline: Baseline | null): Report {
     failing,
     groups: rankedGroups(failing),
     gaps: mainGaps,
+    heldOutGaps: heldOutReasons(heldOutGaps),
     delta: {
       apps: Object.fromEntries([...subsetScores(results, [...subsets].sort())].map(([subset, now]) => [subset,
         Object.fromEntries(APPS.map((app) => [app, { before: baseline?.apps[subset]?.[app] ?? null, after: now[app] }])) as
@@ -188,7 +198,17 @@ export function tierAVerdict(results: RunResults, baseline: Baseline): Verdict {
   return lines.length > 0 ? { ok: false, message: lines.join('\n') } : { ok: true, message: 'tier A matches the baseline' }
 }
 
-/** Only pass/fail checks the platform's baseline passes are held: timed ones depend on the runner. */
+/**
+ * Tier B pass/fail checks reported but not held, as a timed one is: each grades a race in the product that the run's
+ * timing decides (the spec's CI rules, PM 2026-11-23). These were I3's and I15's ring order on iTerm2's page, and their
+ * ringKept: the tmux row once reached that page only after its client lookup, so a list tick in the gap ordered it last.
+ * Since tmux's and herdr's rows have pages of their own (docs/plans/2026-11-23-dial-tmux-herdr-apps-design.md), that
+ * ring holds a alone and its order cannot race. The keys stay until a Mac tier B run's evidence prunes or replaces them.
+ */
+export const RACED_B: ReadonlySet<string> =
+  new Set(['b/darwin/I3/ring.order', 'b/darwin/I3/ringKept', 'b/darwin/I15/ring.order', 'b/darwin/I15/ringKept'])
+
+/** Only pass/fail checks the platform's baseline passes are held: timed ones depend on the runner, RACED_B's on a race. */
 export function tierBVerdict(results: RunResults, baseline: Baseline, platform: Platform): Verdict {
   const gate = gateFailure(results)
   if (gate) return gate
@@ -199,6 +219,7 @@ export function tierBVerdict(results: RunResults, baseline: Baseline, platform: 
   const regressions = scoredResults(results)
     .filter((r) => r.tier === 'b' && r.platform === platform && !r.timed && r.score < 1 && baseline.checks[resultKey(r)] === 1)
     .map(resultKey)
+    .filter((key) => !RACED_B.has(key))
   return regressions.length > 0
     ? { ok: false, message: `regression: ${regressions.join(', ')}` }
     : { ok: true, message: `tier B on ${platform} holds its baseline` }

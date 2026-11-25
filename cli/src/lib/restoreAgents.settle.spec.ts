@@ -113,6 +113,20 @@ it('a fresh engine whose first hook binds in the settle window is accepted', asy
   expect(registry.byAgent(row.agentId)).toMatchObject({ sessionId: id, processIdentity: engine })
 })
 
+it('a fresh engine that named itself before the refresh, whose first hook binds it in the settle window, is accepted', async () => {
+  const row = await starting(false)
+  let looks = 0
+  const w = watch({ probeProcess: async () => looks++ ? engine : { ...engine, executable: 'node' } })
+  await restoreAgents(w.deps)
+  await Promise.race([w.settling, w.finished])   // a watch that ended at the refresh never settles
+  expect(registry.byAgent(row.agentId)).toMatchObject({ processIdentity: engine, launch: { state: 'ready' } })
+  expect(await hook()).not.toBeNull()
+  w.settle(); await w.finished
+  expect(w.deps.clearRemainOnExit).toHaveBeenCalledOnce()
+  expect(registry.byAgent(row.agentId)).toMatchObject({ sessionId: id, processIdentity: engine })
+  expect(w.deps.log).toHaveBeenCalledWith(`[restore] publication · engine renamed · ${row.agentId.slice(0, 8)}`)
+})
+
 it('an engine that dies in the settle window is forgotten, and the fresh launch is recorded in its place', async () => {
   const row = await starting(true)
   let died = false, respawned = false

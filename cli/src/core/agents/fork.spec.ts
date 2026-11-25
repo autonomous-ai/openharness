@@ -234,6 +234,24 @@ describe('forking an agent', () => {
     expect(vi.mocked(createAndRegisterPane).mock.calls[0]![0]).not.toHaveProperty('launchModel')
   })
 
+  // The receipt a launch the native guard holds is recovered from (registry.ts `creationId`).
+  it('records the fork receipt\'s id on the fork\'s row', async () => {
+    const prepared = await setup().fork.prepare({ agentId: 'a1', name: null, prompt: null, creationId: 'fork-0123456789abcdef' },
+      { id: 'harness-claude-fixture', label: 'harness-claude-fixture', current: () => true, hold: vi.fn() })
+    expect(prepared.ok && await prepared.dispatch()).toMatchObject({ ok: true })
+    expect(vi.mocked(createAndRegisterPane).mock.calls[0]![0].creationId).toBe('fork-0123456789abcdef')
+  })
+
+  it('records none for a fork asked without one', async () => {
+    expect(await setup().fork({ agentId: 'a1', name: null, prompt: null })).toMatchObject({ ok: true })
+    const prepared = await setup().fork.prepare({ agentId: 'a1', name: null, prompt: null },
+      { id: 'receipt-like-authority-id', label: 'harness-claude-fixture', current: () => true, hold: vi.fn() })
+    expect(prepared.ok && await prepared.dispatch()).toMatchObject({ ok: true })
+    expect(vi.mocked(createAndRegisterPane).mock.calls.map(([request]) => request)).toEqual([
+      expect.not.objectContaining({ creationId: expect.anything() }), expect.not.objectContaining({ creationId: expect.anything() }),
+    ])
+  })
+
   it('does not open instruction files or install API notes while its harness waits for the Store', async () => {
     vi.mocked(installedDsh).mockReturnValueOnce({ manifest: { name: 'Fixture' } } as never)
     launchDsh.mockResolvedValueOnce({ ok: false, error: 'DSH_UNAVAILABLE', detail: 'Waiting for the Store.', unavailable: 'store' })

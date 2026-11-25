@@ -24,6 +24,7 @@ import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { createProductUsage } from './productUsage.js'
+import { DIAL_USAGE_FILE } from '../lib/dialUsageContract.js'
 import { env } from '../config/env.js'
 import type { GatewayAccount, GatewayEvents, GatewayOps, HttpAnswer, ServiceRequests, WindowRelay } from '../core/api.js'
 import { AutonomousDeviceDirect } from '../lib/autonomous-device/direct.js'
@@ -217,6 +218,9 @@ export function startGateway(given: GatewayHost): StartedGateway {
     sample: gatewayResourceSample(),
     // The gateway runs on the daemon's Node, as every service of the master does.
     node: () => nodeStatus(),
+    // The devices count the dial's day into their own file in the same data folder (their core.dataDir is the core's):
+    // read here, so no dial count goes through the core.
+    dialFile: join(env.ADAPTER_DATA_DIR, DIAL_USAGE_FILE),
   }) : null
   // The choice is read at once, so collection starts with the gateway; its first report waits for its first
   // tick, a random 10 to 60 seconds on (gateway/productUsage.ts), rather than the second a release started it.

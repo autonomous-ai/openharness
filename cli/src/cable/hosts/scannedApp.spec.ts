@@ -124,10 +124,18 @@ describe('scannedApps on macOS', () => {
     expect(await scannedApps([800, 900], d)).toEqual(new Map([[800, 'claude'], [900, 'kitty']]))
   })
 
-  it('an app no table lists names nothing: never the unknown app', async () => {
-    const d = deps([[1000, 990, 'claude'], [990, 1, '/Applications/Alacritty.app/Contents/MacOS/alacritty']],
-      { '/Applications/Alacritty.app': 'org.alacritty' })
-    expect(await scannedApps([1000], d)).toEqual(new Map())
+  it('Alacritty, the unknown app, and an app no table lists name nothing: never the unknown app', async () => {
+    const d = deps([
+      [1000, 990, 'claude'], [990, 1, '/Applications/Alacritty.app/Contents/MacOS/alacritty'],
+      [1100, 1090, 'claude'], [1090, 1, '/Applications/Rio.app/Contents/MacOS/rio'],
+    ], { '/Applications/Alacritty.app': 'org.alacritty', '/Applications/Rio.app': 'com.raphaelamorim.rio' })
+    expect(await scannedApps([1000, 1100], d)).toEqual(new Map())
+  })
+
+  it('a session under Warp Preview is in Warp', async () => {
+    const d = deps([[1000, 990, 'claude'], [990, 980, '/bin/zsh'], [980, 1, '/Applications/WarpPreview.app/Contents/MacOS/preview']],
+      { '/Applications/WarpPreview.app': 'dev.warp.Warp-Preview' })
+    expect(await scannedApps([1000], d)).toEqual(new Map([[1000, 'warp']]))
   })
 
   it('tmux, launchd and a parent the table does not hold name nothing', async () => {
@@ -284,9 +292,14 @@ describe('scannedApps elsewhere', () => {
     expect(await scannedApps([500], d)).toEqual(new Map())
   })
 
-  it('on Linux windowsterminal and a name no table lists name nothing', async () => {
-    const d = deps([[10, 1, 'windowsterminal'], [20, 1, 'alacritty']], {}, 'linux')
-    expect(await scannedApps([10, 20], d)).toEqual(new Map())
+  it('on Linux windowsterminal and alacritty, the unknown app, and a name no table lists name nothing', async () => {
+    const d = deps([[10, 1, 'windowsterminal'], [20, 1, 'alacritty'], [30, 1, 'foot']], {}, 'linux')
+    expect(await scannedApps([10, 20, 30], d)).toEqual(new Map())
+  })
+
+  it('on Linux a session under Warp\'s warp is in Warp', async () => {
+    const d = deps([[10, 9, 'claude'], [9, 8, 'zsh'], [8, 1, 'warp']], {}, 'linux')
+    expect(await scannedApps([10], d)).toEqual(new Map([[10, 'warp']]))
   })
 
   it('on Windows nothing is learned and nothing is read', async () => {

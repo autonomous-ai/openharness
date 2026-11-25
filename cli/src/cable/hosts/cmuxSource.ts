@@ -17,6 +17,7 @@ import {
   CMUX_AUTOMATION_OFF, CMUX_STORE, cmuxPaneId, cmuxPaneKey, cmuxTakesWords,
   type CmuxClient, type CmuxLifecycle, type CmuxPrompt, type CmuxSession, type CmuxSessions,
 } from './cmuxCli.js'
+import { CMUX_EVENTS } from './cmuxFocus.js'
 import { MAX_AGENTS, shown } from './herdrSource.js'
 import { MAX_TEXT } from './orca.js'
 import type { Caps, HostAgent, HostAgentState, HostSource, PaneSwitch, SendResult } from './types.js'
@@ -34,6 +35,9 @@ export interface CmuxSourceDeps {
   /** Tells of each change where cmux's stores live, with the changed file's name when the OS gave one
    *  (unixSocket.ts watchSocket), until its stop is called. */
   watch(changed: (file?: string) => void): () => void
+  /** cmux's event log, in the same folder, may have changed: the devices read it (cmuxFocus.ts) through this watch, so
+   *  cmux's focus needs no watch of its own. */
+  events(): void
   /** Whether the stores' folder is there now. */
   folder(): boolean
   /** cmux's word of each store in that folder now (cmuxCli.ts cmuxStores). */
@@ -106,17 +110,25 @@ export class CmuxSource implements HostSource {
   private said: number | undefined
   private unkept = 0
   private over = 0
+  /** Ends the promise of this start, once its first all-agents run answered, the folder went or it stopped. */
+  private firstRun: (() => void) | undefined
 
   constructor(private readonly deps: CmuxSourceDeps) {}
 
-  start(): void {
-    if (this.running) return
+  /** Ends once this start's first all-agents run has: cmux's agents taken, the run failed, or the folder went or the source
+   *  stopped meanwhile; with no stores folder, at once. The dial's greeting waits for it (devices.ts dialAttached), so its
+   *  first list holds cmux's agents. A start while it runs ends at once. */
+  start(): Promise<void> {
+    if (this.running) return Promise.resolve()
     this.running = true
     this.failing.clear()
     this.slowest.clear()
+    const first = new Promise<void>((resolve) => { this.firstRun = resolve })
     // Held before the folder is asked after, so a folder made between the two is still heard.
     this.unwatch = this.deps.watch((file) => this.changed(file))
     if (this.look()) this.read(undefined)
+    else this.firstRunEnded()
+    return first
   }
 
   stop(): void {
@@ -218,7 +230,7 @@ export class CmuxSource implements HostSource {
   }
 
   /** A change where the stores live. With the folder's parent held, it tells every change of the home folder too: only
-   *  the folder coming or going, or a store's own name, starts a run. */
+   *  the folder coming or going, or a store's own name, starts a run. The event log's name, or none, is told on. */
   private changed(file?: string): void {
     if (!this.running) return
     const was = this.there
@@ -229,6 +241,7 @@ export class CmuxSource implements HostSource {
       return
     }
     if (!there) return
+    if (file === undefined || file === CMUX_EVENTS) this.deps.events()
     if (file === undefined) {
       this.read(undefined)
       return
@@ -239,6 +252,8 @@ export class CmuxSource implements HostSource {
 
   /** Drops every run under way, every record and every row: a run that answers after is not taken. */
   private forget(): void {
+    // The first run is dropped with the others: nothing is left to wait for.
+    this.firstRunEnded()
     for (const run of this.runs.values()) run.cancel()
     this.runs.clear()
     this.waiting = false
@@ -288,7 +303,14 @@ export class CmuxSource implements HostSource {
     const taken = this.runs.get(word) === run
     if (taken) this.next(word, run)
     if (this.waiting) this.read(undefined)
+    // A run begun before the last stop is not taken, nor this start's. Its waiters run once this answer is taken.
+    if (taken && word === undefined) this.firstRunEnded()
     if (taken) this.answered(word, order, this.deps.monotonic() - began, answer)
+  }
+
+  private firstRunEnded(): void {
+    this.firstRun?.()
+    this.firstRun = undefined
   }
 
   /** A word's run that ended, 250 ms after it started, frees its word: a change since it started reads it again. */

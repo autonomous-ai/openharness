@@ -529,6 +529,17 @@ describe('PtyHostBackend input', () => {
     expect(calls.map((c) => c.op)).toEqual(['paste'])
   })
 
+  it('submitText says a paste whose Enter the host refused may have been typed, so nothing types it again', async () => {
+    for (const key of [
+      { state: 'failed' as const, dispatch: 'rejected' as const, code: 'bad_request', reason: 'pane %1 refused the key' },
+      { state: 'failed' as const, dispatch: 'not_started' as const, code: 'no_pane', reason: 'no pane %1' },
+    ]) {
+      const { backend, calls } = await ready({ key })
+      expect(await backend.submitText(PANE, 'hi')).toEqual({ state: 'unknown', dispatch: 'possibly_executed', reason: key.reason })
+      expect(calls.map((c) => c.op)).toEqual(['paste', 'key'])
+    }
+  })
+
   it('setTitle sets it on the host; notify needs nothing', async () => {
     const { backend, calls } = await ready()
     expect(await backend.setTitle(PANE, 'x'.repeat(300))).toEqual({ state: 'succeeded', dispatch: 'executed' })

@@ -6,7 +6,9 @@
  *
  * Isolation: each daemon's open (HARNESS_OPEN_BIN, which only records: `writeRecordingOpen`), its home, its apps' folder,
  * both apps' stores, the editors' CLIs (HARNESS_VSCODE_BIN, HARNESS_CURSOR_BIN; on Linux Cursor's only records:
- * `writeRecordingCli`) and, on Linux, the raise's programs (`writeRaiseFakes`) are checked to be inside its root before it
+ * `writeRecordingCli`), Orca's CLI (the fake, as `orca` and `orca-ide`: `orcaCliInside`), on an iTerm2 scenario's daemon
+ * its `tmux` (a recording wrapper of its private server's) and its `ps` (which hides every herdr outside this worker:
+ * `ownHerdrsOnly`), and, on Linux, the raise's programs (`writeRaiseFakes`) are checked to be inside its root before it
  * starts, and it is signed in to the fake backend alone.
  * The network guard (src/testing/dialAppEval/netGuard.ts) is in this process and preloaded into every process of the
  * daemon and every child started here: a start whose running core or devices process did not load it fails, and the
@@ -15,28 +17,39 @@
  * What it saw: the frames the dial received, at their arrival; the faces of the firmware's carousel model, fed those
  * frames and the person's own turns (a swipe moves the glass before the daemon hears of it); the commands of the
  * recording open and of the recording Cursor CLI, with their exit, a folder in the daemon's projects written as the
- * catalog's `/work/` one; the deliveries and editor streams the app's steps record; the devices' log lines, at their
- * read; and, after `stop`, what the scenario cost (appEvalCost.ts).
+ * catalog's `/work/` one, and the fake Orca's at their own times, each `terminal send` among them a `typed` delivery to
+ * the session whose pane it named; in an iTerm2 scenario the tmux and `herdr agent` runs noted on its daemon's PATH at
+ * their own times, each pane named by its session and each tty by its tab; the selects the watch printed, at their
+ * arrival, and the person's tab reports, each tab named by its label; the deliveries and editor streams the app's steps record; the devices' log lines, at their read; and, after
+ * `stop`, what the scenario cost (appEvalCost.ts).
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative } from 'node:path'
+import { createInterface } from 'node:readline'
 import { chatGptPlaces, claudeStoreRoots } from '../../src/cable/hosts/appPlaces.js'
+import { orcaBinary } from '../../src/devices/orcaHomes.js'
 import { resolveBinaryOnPath } from '../../src/lib/binaryOnPath.js'
 import { claudeAppFixture } from '../../src/testing/claudeAppFixture.js'
+import { flagOf } from '../../src/testing/dialAppEval/argv.js'
+import { namedPanes, selectRecord, TABS_STREAM } from '../../src/testing/dialAppEval/itermRecords.js'
 import { describeAttempt, guardThisProcess, NET_GUARD_FILE_ENV, netGuardEnv, readNetGuard, type NetAttempt } from '../../src/testing/dialAppEval/netGuard.js'
-import { agentIdOf, PAGE, placeOf, type App, type Delivery, type EvalDriver, type Platform, type Scenario, type Seen,
-  type SessionDef, type SessionKey, type Step, type StepKind, type StepOf } from '../../src/testing/dialAppEval/types.js'
+import { orcaListing } from '../../src/testing/dialAppEval/orcaListing.js'
+import { agentIdOf, engineOf, frontName, PAGE, pageId, placeOf, type App, type Delivery, type EvalDriver, type LinkedApp, type Platform,
+  type Scenario, type Seen, type SessionDef, type SessionKey, type Step, type StepKind, type StepOf } from '../../src/testing/dialAppEval/types.js'
 import { CAROUSEL_REFRESH_MS, DialCarousel, type DialMessage } from '../../src/testing/dialCarousel.js'
 import { writeExecutable } from '../../src/testing/executableFixture.js'
 import { RECORDED_LINUX_APPS } from '../../src/testing/recordedLinuxApps.js'
 import { beginCost, costEnv } from './appEvalCost.js'
 import { writeAppCodex } from './codexAppCli.js'
-import { IsolatedDaemon, SOURCES_CLI, until } from './daemon.js'
+import { IsolatedDaemon, sourcesCli, until } from './daemon.js'
 import { Desk, devicesPids } from './desk.js'
 import { FakeBackend, type FakeMachine } from './fakeBackend.js'
 import type { FakeDial } from './fakeDial.js'
+import { FakeOrca } from './fakeOrca.js'
+import { herdrBinary, ownHerdrsOnly, PrivateHerdr } from './herdrServer.js'
+import { recordingWrapper, runLog, runsFolder, type LoggedRun } from './runLog.js'
 import { writeSchemeApps } from './schemeApps.js'
 
 /** What the round dial's firmware says in its greeting: it holds one app's ring (docs/specs/2026-11-14-dial-app-filter.md). */
@@ -44,14 +57,7 @@ const FILTER = { appFilter: 'v1' }
 const SERIAL = 'EVAL-B'
 const MAC = 'e2:e0:00:00:0e:b1'
 /** The scheme of each app's links (cable/hosts/claudeApp.ts, codexApp.ts): the ChatGPT app's threads are Codex's. */
-const SCHEME: Readonly<Record<App, string>> = { claude: 'claude', chatgpt: 'codex', vscode: 'vscode', cursor: 'cursor' }
-/** The app in front as Harness Device names it: a bundle id on macOS, the window's process on Linux; `other` is an app
- *  the dial follows none of. */
-const FRONT: Readonly<Record<'darwin' | 'linux', Record<App | 'other', string>>> = {
-  darwin: { claude: 'com.anthropic.claudefordesktop', chatgpt: 'com.openai.codex', vscode: 'com.microsoft.VSCode',
-    cursor: 'com.todesktop.230313mzl4w4u92', other: 'com.apple.Safari' },
-  linux: { claude: 'claude-desktop', chatgpt: 'ChatGPT', vscode: 'code', cursor: 'cursor', other: 'firefox' },
-}
+const SCHEME: Readonly<Record<LinkedApp, string>> = { claude: 'claude', chatgpt: 'codex', vscode: 'vscode', cursor: 'cursor' }
 /** The machine each daemon signs in as, to hear its dial's words: the daemon asks its backend for each transcript. */
 const ME: FakeMachine = { machineId: 'e7'.repeat(16), computerId: 'e2e-dial-eval-computer', name: 'Fixture', token: 'e2e-dial-eval-token' }
 /** A fifth of a second of what the microphone heard: the fake backend answers its `speech` whatever the audio. */
@@ -62,6 +68,11 @@ const START_WITHIN_MS = 45_000
 const CHILD_END_MS = 5_000
 /** The end of the watch's stderr a failure says. */
 const STDERR_KEPT = 2_000
+/** For the devices killed outright to be started again by the master, and to welcome the dial: a welcomed dial greets
+ *  every 15 s (fakeDial.ts keepGreeting). */
+const RESTART_WITHIN_MS = 45_000
+/** The tmux commands the devices find and select a pane by (cable/hosts/tmux.ts), noted by the daemon's recording tmux. */
+const TMUX_RECORDED = ['display-message', 'list-clients', 'list-panes', 'select-window', 'switch-client']
 /** The devices take a Claude session whose mod poll closed this long ago for one whose next poll is coming
  *  (cable/hosts/inbox.ts READY_MS, 35 s), and a second more for the two clocks. */
 const MOD_READY_MS = 36_000
@@ -69,7 +80,7 @@ const MOD_READY_MS = 36_000
 const NOTHING_SEEN: Seen = { frames: [], faces: [], commands: [], deliveries: [], steps: [] }
 // How the real CLI is started: the run's bundle when there is one (E2E_BUNDLE), as the daemon runs. Either runs from any
 // folder, so each run here works in the daemon's root, where the cost counts what a scenario leaves running.
-const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : SOURCES_CLI
+const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : sourcesCli()
 
 /** One run of the recording open: the command it stands for, and whether it exited 0. */
 export type OpenRun = Omit<Seen['commands'][number], 'at'>
@@ -96,11 +107,28 @@ export interface TierBWorld {
   folder(path: string): string
   /** Ended at stop. */
   readonly children: ChildProcess[]
+  /** Orca's CLI, as `orca` and `orca-ide`: the fake. */
+  readonly orca: FakeOrca
+  /** The session's own Orca pane opened on [handle] now, or closed (null): what a `terminal send` types to a handle
+   *  reaches the session whose own pane it was at the send. */
+  orcaPane(key: SessionKey, handle: string | null): void
+  /** Each iTerm2 tab's tty (`/dev/ttysNNN`) by its label (itermRecords.ts tabLabel), as the iTerm2 steps open them: a tab
+   *  opened again under a label takes it over. A select of a tty no label holds is recorded as `other`. */
+  readonly tabs: Map<string, string>
+  /** The session's own tmux or herdr pane opened at [at] (now when not given), or closed (null): the devices' tmux and
+   *  herdr runs name a pane by the session that held it at each run's time, as herdr gives a pane id again once it
+   *  started again. */
+  muxPane(key: SessionKey, pane: string | null, at?: number): void
+  /** The person's selected tab of iTerm2, by its label: told on the watch, and recorded on the tabs stream. */
+  reportTab(label: string): void
+  /** The herdrs the daemon's process table kept, this worker's, and dropped, all others (ownHerdrsOnly): an iTerm2
+   *  scenario's alone. */
+  readonly herdrs: { kept(): number[]; dropped(): number[] }
 }
 export type TierBHandler<K extends StepKind> = (world: TierBWorld, step: StepOf<K>) => Promise<void>
 
-/** The steps this driver runs itself, on the dial and the watch. */
-type GenericKind = 'front' | 'thread' | 'tap' | 'swipe' | 'stroke' | 'unplug' | 'replug'
+/** The steps this driver runs itself, on the dial, the watch and the devices process. */
+type GenericKind = 'front' | 'thread' | 'tap' | 'swipe' | 'stroke' | 'pick' | 'unplug' | 'replug' | 'devices.restart'
 /** The steps on an app's sessions and stores, and its voice, whose words land on that app's paths: each app's file gives
  *  those its scenarios take (appEvalClaude.ts, appEvalChatgpt.ts). */
 export type AppSteps = { [K in Exclude<StepKind, 'wait' | GenericKind>]?: TierBHandler<K> }
@@ -109,6 +137,11 @@ type Run = Exclude<Step, { kind: 'wait' }>
 /** A daemon, its desk and its backend, kept across the scenarios that do not ask for a fresh one. */
 interface Rig {
   d: IsolatedDaemon; desk: Desk; backend: FakeBackend
+  /** Orca's CLI, as `orca` and `orca-ide`: the fake, and whether it has watch-focus now. */
+  orca: FakeOrca
+  watchFocus: boolean
+  /** The sessions whose Orca account's home its Orca lists (orcaAccounts). */
+  accounts: SessionKey[]
   /** Where its recording open notes its runs, and its recording Cursor CLI its own (Linux's alone: none on macOS). */
   runs: string
   cursorRuns: string
@@ -121,6 +154,9 @@ interface Rig {
   given: number
   /** When each Claude session's last mod poll closed, by its id: the devices still count it ready for a while. */
   polled: Map<string, number>
+  /** An iTerm2 scenario's daemon alone (ownRig): where its recording tmux and its herdr note the devices' runs
+   *  (runLog.ts), and the herdrs its process table kept and dropped. */
+  iterm?: { tmuxRuns: string; herdrRuns: string; herdrs: { kept(): number[]; dropped(): number[] } }
 }
 
 /** The ChatGPT app's bundle as the devices read it (`plutil`): its id and nothing else of the app. */
@@ -151,7 +187,7 @@ export function guardLoaded(file: string, name: string, pids: readonly number[],
   }
 }
 /** The file beside the recording open that has the links of an app fail while it is there. */
-const failsFile = (open: string, app: App): string => join(dirname(open), `${SCHEME[app]}.fails`)
+const failsFile = (open: string, app: LinkedApp): string => join(dirname(open), `${SCHEME[app]}.fails`)
 
 /**
  * The open the devices run (HARNESS_OPEN_BIN), in place of the harness's own (harness/daemon.ts), which notes no exit: it
@@ -162,14 +198,14 @@ const failsFile = (open: string, app: App): string => join(dirname(open), `${SCH
  */
 export function writeRecordingOpen(path: string, runs: string): void {
   if ([path, runs].some((p) => p.includes("'"))) throw new Error('the recording open\'s folder holds a quote')
-  const fails = (Object.keys(SCHEME) as App[]).map((app) =>
+  const fails = (Object.keys(SCHEME) as LinkedApp[]).map((app) =>
     `case "$*" in *${SCHEME[app]}://*) [ -e '${failsFile(path, app)}' ] && code=1 ;; esac\n`)
   writeExecutable(path, `#!/bin/sh\ncode=0\n${fails.join('')}printf '%s %s\\n' "$code" "$*" >> '${runs}'\nexit "$code"\n`)
 }
 
 /** The apps whose links the recording open at [path] fails from now on; every other app's links open. */
 export function linksFail(path: string, apps: readonly App[]): void {
-  for (const app of Object.keys(SCHEME) as App[]) {
+  for (const app of Object.keys(SCHEME) as LinkedApp[]) {
     if (apps.includes(app)) writeFileSync(failsFile(path, app), '')
     else rmSync(failsFile(path, app), { force: true })
   }
@@ -199,6 +235,87 @@ export function writeRaiseFakes(bin: string): void {
 /** Those a daemon under [env] finds outside [root], or not at all. */
 export function raiseToolsOutside(root: string, env: NodeJS.ProcessEnv): string[] {
   return RAISE_TOOLS.filter((tool) => !inside(root, resolveBinaryOnPath(tool, env) ?? undefined))
+}
+
+/** The names a daemon runs Orca's CLI by: Linux looks for `orca-ide` before `orca` (devices/orcaHomes.ts orcaBinary). */
+const ORCA_NAMES = ['orca-ide', 'orca'] as const
+/**
+ * The Orca CLI a daemon under [env] would run, resolved as orcaBinary resolves it on [platform] over its PATH and
+ * HARNESS_ORCA_APP_BIN, and each of `orca-ide` and `orca` its PATH gives first: it throws unless every one's real path is
+ * inside [root]. Every session here runs inside the real Orca, whose `orca` is on the worker's PATH, and a daemon's PATH
+ * ends in the computer's folders, where Orca's .deb puts an `orca-ide`; a link in the root runs the file it names.
+ */
+export function orcaCliInside(env: NodeJS.ProcessEnv, root: string, platform: NodeJS.Platform): string {
+  // orcaBinary reads the app's path from this process's environment, as the devices read theirs: the daemon's for the
+  // call, this worker's again before anything else runs.
+  const own = process.env.HARNESS_ORCA_APP_BIN
+  const app = (path: string | undefined): void => {
+    if (path === undefined) delete process.env.HARNESS_ORCA_APP_BIN
+    else process.env.HARNESS_ORCA_APP_BIN = path
+  }
+  app(env.HARNESS_ORCA_APP_BIN)
+  let cli: string | null
+  try {
+    cli = orcaBinary({ onPath: (name, accept) => resolveBinaryOnPath(name, env, accept), exists: existsSync, platform, localAppData: env.LOCALAPPDATA })
+  } finally {
+    app(own)
+  }
+  const real = realpathSync(root)
+  const first = ORCA_NAMES.flatMap((name) => resolveBinaryOnPath(name, env) ?? [])
+  if (cli === null || ![cli, ...first].every((path) => inside(real, realpathSync(path)))) {
+    throw new Error("the daemon's Orca CLI is not inside its root")
+  }
+  return cli
+}
+
+/** The sessions whose Codex runs in a home of its own, an Orca account's: Orca lists that home (`orca account list`). */
+export function orcaAccounts(scenario: Pick<Scenario, 'sessions'>): SessionKey[] {
+  return scenario.sessions.filter((s) => s.app === 'orca' && engineOf(s) === 'codex' && s.codexHome === 'own').map((s) => s.key)
+}
+/** The Orca account's home a session's Codex runs in, in the daemon's root. */
+export const orcaAccountHome = (root: string, key: SessionKey): string => join(root, 'orca-accounts', key)
+
+/** The fake Orca's runs as commands, at their own times, each argument inside one of [projects] written as the catalog's
+ *  `/work/` folder. */
+export function orcaCommands(runs: readonly LoggedRun[], projects: readonly string[]): Seen['commands'] {
+  return runs.map(({ argv, ok, at }) => ({ at, argv: workPaths(argv, projects), ok }))
+}
+/**
+ * Each `terminal send` Orca took (cable/hosts/orca.ts) as a `typed` delivery at its time, to the session whose own pane
+ * the handle it names was then ([ownerOf]); to none for any other handle, a closed, held or tmux pane's among them,
+ * which the gate counts as a wrong send. One Orca refused typed nothing.
+ */
+export function orcaDeliveries(runs: readonly LoggedRun[], ownerOf: (handle: string, at: number) => SessionKey | undefined): Delivery[] {
+  return runs.flatMap(({ argv, ok, at }): Delivery[] => {
+    const text = argv.find((arg) => arg.startsWith('--text='))?.slice('--text='.length)
+    if (!ok || argv[1] !== 'terminal' || argv[2] !== 'send' || text === undefined) return []
+    const handle = flagOf(argv, '--terminal')
+    return [{ at, path: 'typed', target: (handle === undefined ? undefined : ownerOf(handle, at)) ?? null, text }]
+  })
+}
+
+/** A terminal's device, as tmux names a client by its tty (`switch-client -c /dev/ttys004`). */
+const TTY = /^\/dev\//
+
+/** The devices' tmux and herdr runs as commands, at their own times, each pane id written as the session [keyOf] says
+ *  held it at the run's time (namedPanes) and each tty as `tab:<label>` of the tab [labelOf] says holds it, `tab:other`
+ *  for none, so no pane id or tty reaches a result. */
+export function muxCommands(runs: readonly LoggedRun[], keyOf: (pane: string, at: number) => SessionKey | undefined,
+  labelOf: (tty: string) => string | undefined): Seen['commands'] {
+  return runs.map(({ argv, ok, at }) => ({
+    at, ok, argv: namedPanes(argv, (pane) => keyOf(pane, at)).map((arg) => (TTY.test(arg) ? `tab:${labelOf(arg) ?? 'other'}` : arg)),
+  }))
+}
+
+/** A select the watch printed (devices/client.ts): `{"select":{"app","tty","raise"?}}`; undefined for any other line. */
+export function selectOf(line: string): { app: string; tty: string; raise?: boolean } | undefined {
+  let value: unknown
+  try { value = JSON.parse(line) } catch { return undefined }
+  const select = (value as { select?: unknown } | null)?.select
+  if (typeof select !== 'object' || select === null) return undefined
+  const { app, tty, raise } = select as Record<string, unknown>
+  if (typeof app !== 'string' || typeof tty !== 'string' || (raise !== undefined && typeof raise !== 'boolean')) return undefined
+  return raise === undefined ? { app, tty } : { app, tty, raise }
 }
 
 /** Each run noted in [runs] as `<exit> <arguments>`, in order, as the command [program] with them. */
@@ -278,7 +395,7 @@ export function tierBGaps(scenario: Scenario, platform: Platform): string[] {
   const raised = ({ s, after }: (typeof opened)[number]): boolean =>
     placeOf(s) === 'terminal' && !(s.app === 'cursor' && windowClosed(scenario, s, after))
   return [
-    ...opened.some(({ s }) => failing.includes(s.app)) ? ["a failed link's app comes by Linux's raise, which tier B does not record"] : [],
+    ...opened.some(({ s }) => failing.some((app) => app === s.app)) ? ["a failed link's app comes by Linux's raise, which tier B does not record"] : [],
     ...opened.some(raised) ? ["an editor terminal's tap brings its editor by Linux's raise, which tier B does not record"] : [],
   ]
 }
@@ -314,7 +431,40 @@ async function end(child: ChildProcess): Promise<void> {
   clearTimeout(timer)
 }
 
-async function openRig(guard: string): Promise<Rig> {
+/**
+ * Whether [scenario] needs a daemon of its own, not [rig]'s. It asks for one (`fresh`). Its ids are the catalog's, shared
+ * with those before it: a voice to a session whose poll the devices still count could reach it by an earlier scenario's
+ * poll. The devices read Orca's accounts once as they start: a Codex in an account the running Orca does not list needs
+ * one whose Orca lists it. And only an iTerm2 scenario's daemon runs the recording tmux, the herdr-only process table and
+ * herdr (openRig): another app's scenario runs on none of them, an iTerm2 one on all.
+ */
+export function ownRig(rig: Pick<Rig, 'polled' | 'accounts' | 'iterm'>, scenario: Scenario, now = Date.now()): boolean {
+  const counted = scenario.steps.some((s) => s.kind === 'voice')
+    && scenario.sessions.some((s) => now - (rig.polled.get(s.id) ?? -Infinity) < MOD_READY_MS)
+  const unlisted = orcaAccounts(scenario).some((key) => !rig.accounts.includes(key))
+  return scenario.fresh === true || counted || unlisted || (rig.iterm !== undefined) !== (scenario.app === 'iterm')
+}
+
+/** The last scenario's files gone from a daemon kept for the next (its children ended at its stop). */
+export async function emptyFixtures(rig: Pick<Rig, 'accounts' | 'iterm'> & { d: Pick<IsolatedDaemon, 'root' | 'env'> }): Promise<void> {
+  const home = rig.d.env.HOME!
+  emptied(claudeStoreRoots(process.platform, rig.d.env, home)[0]!.root)
+  emptied(join(home, '.codex'))
+  // Every session's transcript and rollout too: the ids are the catalog's, so a later scenario's session goes on in the
+  // same file, and a recap could pass on an earlier scenario's answer.
+  emptied(rig.d.env.CLAUDE_PROJECTS_DIR!)
+  // And the fake Claude Code's record of each process, beside its projects (fakeEngine.mjs): the devices name a session
+  // from it, so an earlier scenario's, under the same catalog id, named this one's.
+  emptied(join(dirname(rig.d.env.CLAUDE_PROJECTS_DIR!), 'sessions'))
+  emptied(join(rig.d.env.CODEX_HOME!, 'sessions'))
+  for (const key of rig.accounts) emptied(join(orcaAccountHome(rig.d.root, key), 'sessions'))
+  emptied(join(home, '.cursor', 'projects'))
+  if (rig.iterm) await PrivateHerdr.forget(join(home, '.config'))
+}
+
+/** A daemon whose Orca lists the Orca accounts of [accounts]' sessions (orcaAccounts); with [iterm], an iTerm2
+ *  scenario's (ownRig). */
+async function openRig(guard: string, accounts: SessionKey[], iterm: boolean): Promise<Rig> {
   const backend = await FakeBackend.start()
   backend.addMachine(ME)
   let d: IsolatedDaemon | undefined
@@ -325,10 +475,24 @@ async function openRig(guard: string): Promise<Rig> {
     const cost = costEnv(d.root)
     // As enginehomes.e2e.ts preloads its fault: the master hands NODE_OPTIONS on to the core and every service.
     Object.assign(d.env, cost.env, netGuardEnv(guard, cost.nodeOptions))
+    // An iTerm2 scenario's alone: the tmux runs noted by a wrapper first on the daemon's PATH, the devices', the core's and
+    // every hook's alike, which runs the tmux the daemon found there, its private server's; its process table holding no herdr but this worker's; and herdr
+    // installed, as on tier A's iTerm2 machine (the iTerm2 plan's Decision 7), before its dial comes: the devices look for
+    // it as a dial comes (services/devices.ts dialAttached).
+    let kit: Rig['iterm']
+    if (iterm) {
+      const tmux = resolveBinaryOnPath('tmux', d.env)
+      if (!tmux) throw new Error('the daemon finds no tmux')
+      const tmuxRuns = runsFolder(d.binDir, 'tmux')
+      writeExecutable(join(d.binDir, 'tmux'), recordingWrapper(tmux, tmuxRuns, TMUX_RECORDED))
+      kit = { tmuxRuns, herdrRuns: runsFolder(d.binDir, 'herdr'), herdrs: ownHerdrsOnly(d) }
+      if (herdrBinary) await PrivateHerdr.install(d)
+    }
     const home = d.env.HOME
     const claudeStore = claudeStoreRoots(process.platform, d.env, home ?? '')[0]?.root
     const places = { open: d.env.HARNESS_OPEN_BIN, home, applications: d.env.HARNESS_APPLICATIONS_DIR, 'Claude store': claudeStore,
-      'Codex home': home && join(home, '.codex'), 'VS Code CLI': d.env.HARNESS_VSCODE_BIN, 'Cursor CLI': d.env.HARNESS_CURSOR_BIN }
+      'Codex home': home && join(home, '.codex'), 'VS Code CLI': d.env.HARNESS_VSCODE_BIN, 'Cursor CLI': d.env.HARNESS_CURSOR_BIN,
+      ...kit ? { tmux: resolveBinaryOnPath('tmux', d.env) ?? undefined, ps: resolveBinaryOnPath('ps', d.env) ?? undefined } : {} }
     for (const [name, path] of Object.entries(places)) if (!inside(d.root, path)) throw new Error(`the daemon's ${name} is not inside its root`)
     const runs = join(dirname(places.open!), 'runs.log')
     writeRecordingOpen(places.open!, runs)
@@ -357,6 +521,16 @@ async function openRig(guard: string): Promise<Rig> {
     mkdirSync(dirname(chatgpt), { recursive: true })
     writeFileSync(chatgpt, process.platform === 'linux' ? '' : CHATGPT_INFO_PLIST)
     writeAppCodex(d)
+    // Orca's CLI the fake under both its names, with watch-focus as a current Orca, and the one the daemon would run
+    // inside its root: every session here runs inside the real Orca.
+    const orca = FakeOrca.install(d, { watchFocus: true })
+    orcaCliInside(d.env, d.root, process.platform)
+    // Orca's accounts: the home each Codex agent of its runs in, there before the devices start, as they read Orca's list
+    // as they start and not again for 5 minutes (devices/orcaHomes.ts ORCA_HOMES_REFRESH_MS). Tier A lists the same.
+    const { root } = d
+    const homes = accounts.map((key) => orcaAccountHome(root, key))
+    for (const home of homes) mkdirSync(home, { recursive: true })
+    orca.accounts({ codex: homes })
     const dials = join(d.root, 'dials.json')
     d.env.HARNESSD_TEST_DIAL_PORT = dials
     writeFileSync(dials, '[]')
@@ -368,7 +542,8 @@ async function openRig(guard: string): Promise<Rig> {
     await d.start()
     // An engine started by hand reads its hooks once, as it starts: they are in before any scenario starts one.
     await d.hooksInstalled(['claude', 'codex'])
-    return { d, desk: new Desk(dials), backend, runs, cursorRuns, projects, guard, given: 0, polled: new Map() }
+    return { d, desk: new Desk(dials), backend, orca, watchFocus: true, accounts, runs, cursorRuns, projects, guard, given: 0, polled: new Map(),
+      iterm: kit }
   } catch (error) {
     await d?.close().catch(() => {})
     await backend.close()
@@ -392,9 +567,12 @@ export class World implements TierBWorld {
   readonly children: ChildProcess[] = []
   readonly steps: Seen['steps'] = []
   readonly gaps: string[] = []
+  readonly tabs = new Map<string, string>()
   /** The firmware's, from its last power on. */
   carousel = new DialCarousel()
   cost: Seen['cost']
+  /** The scenario's cost, ended at its stop after its children: measured on the devices process running now. */
+  costEnd: (() => Promise<NonNullable<Seen['cost']>>) | undefined
   /** Time 0, ms since the epoch: set as the scenario starts. */
   origin = Date.now()
   front: App | 'other' = 'other'
@@ -404,6 +582,12 @@ export class World implements TierBWorld {
   private readonly deliveries: Delivery[] = []
   private readonly streams: NonNullable<Seen['streams']> = []
   private readonly logs: NonNullable<Seen['logs']> = []
+  /** Each Orca pane a session owned, by its handle, from its open to its close. */
+  private readonly panes: Array<{ key: SessionKey; handle: string; from: number; to: number }> = []
+  /** Each tmux and herdr pane a session held, by its id, from its open to its close. */
+  private readonly muxes: Array<{ key: SessionKey; pane: string; from: number; to: number }> = []
+  /** When it began, ms since the epoch: the fake Orca's runs since are its own. */
+  private readonly began = Date.now()
   private plugged: FakeDial | undefined
   /** How many of the plugged dial's messages, of the open's runs and of the Cursor CLI's were read; where in the daemon's
    *  log the next read starts. */
@@ -431,7 +615,12 @@ export class World implements TierBWorld {
 
   get d(): IsolatedDaemon { return this.rig.d }
   get desk(): Desk { return this.rig.desk }
+  get orca(): FakeOrca { return this.rig.orca }
   get backend(): FakeBackend { return this.rig.backend }
+  get herdrs(): { kept(): number[]; dropped(): number[] } {
+    if (!this.rig.iterm) throw new Error(`${this.scenario.id}: only an iTerm2 scenario's daemon keeps its table to its own herdrs`)
+    return this.rig.iterm.herdrs
+  }
   get dial(): FakeDial {
     if (!this.plugged) throw new Error(`${this.scenario.id}: no dial is plugged in`)
     return this.plugged
@@ -456,7 +645,24 @@ export class World implements TierBWorld {
     if (failure) throw failure.error
   }
   title(text: string): void { this.tell({ thread: text }) }
+  reportTab(label: string): void {
+    const tty = this.tabs.get(label)
+    if (tty === undefined) throw new Error(`${this.scenario.id}: no iTerm2 tab ${label} is open`)
+    this.stream(TABS_STREAM, { type: 'tab', app: PAGE.iterm, tab: label })
+    this.tell({ tab: { app: PAGE.iterm, tty } })
+  }
   stream(window: string, line: Record<string, unknown>, at = Date.now()): void { this.streams.push({ at, window, line }) }
+  orcaPane(key: SessionKey, handle: string | null): void {
+    const now = Date.now()
+    const open = this.panes.find((p) => p.key === key && p.to === Infinity)
+    if (open) open.to = now
+    if (handle !== null) this.panes.push({ key, handle, from: now, to: Infinity })
+  }
+  muxPane(key: SessionKey, pane: string | null, at = Date.now()): void {
+    const open = this.muxes.find((p) => p.key === key && p.to === Infinity)
+    if (open) open.to = at
+    if (pane !== null) this.muxes.push({ key, pane, from: at, to: Infinity })
+  }
   folder(path: string): string {
     if (!path.startsWith('/work/')) throw new Error(`${this.scenario.id}: ${path} is not a catalog folder`)
     const made = join(this.d.projectsDir, path.slice('/work/'.length))
@@ -492,15 +698,20 @@ export class World implements TierBWorld {
 
   /**
    * One line on the stdin of the watch Harness Device runs, started under the daemon's environment on its first line. A
-   * watch that ends before the scenario fails it, with the end of what it said on its stderr.
+   * watch that ends before the scenario fails it, with the end of what it said on its stderr. Each select it prints is
+   * recorded on the tabs stream at its arrival, its tab named by its label.
    */
-  tell(line: { front: string } | { thread: string }): void {
+  tell(line: { front: string } | { thread: string } | { tab: { app: string; tty: string } }): void {
     if (this.closed) return
     if (!this.watch) {
       const watch = this.watch = spawn(process.execPath, [...CLI_ENTRY, 'hardware', 'watch', '--json'], {
-        cwd: this.d.root, env: { ...this.d.env, TMUX_PANE: '' }, stdio: ['pipe', 'ignore', 'pipe'],
+        cwd: this.d.root, env: { ...this.d.env, TMUX_PANE: '' }, stdio: ['pipe', 'pipe', 'pipe'],
       })
       this.children.push(watch)
+      createInterface({ input: watch.stdout! }).on('line', (printed) => {
+        const select = selectOf(printed)
+        if (select && !this.closed) this.stream(TABS_STREAM, selectRecord(select, (tty) => this.labelOf(tty)))
+      })
       let said = ''
       watch.stderr!.on('data', (chunk: Buffer) => { said = (said + chunk.toString('utf8')).slice(-STDERR_KEPT) })
       watch.once('exit', (code, signal) => {
@@ -580,16 +791,71 @@ export class World implements TierBWorld {
     if (failed) throw failed.error
   }
 
+  /**
+   * The fake Orca's runs since this world began, as commands in time order with the others, and its sends as deliveries.
+   * Read once, as the world stops: each run carries its own time, and a read of a daemon's every run at each of the
+   * world's reads would cost this worker a share of its CPU for nothing.
+   */
+  takeOrca(): void {
+    const runs = this.rig.orca.log().filter((run) => run.at >= this.began)
+    this.commands.push(...orcaCommands(runs, this.rig.projects))
+    this.commands.sort((a, b) => a.at - b.at)
+    this.deliveries.push(...orcaDeliveries(runs, (handle, at) =>
+      this.panes.find((p) => p.handle === handle && p.from <= at && at < p.to)?.key))
+  }
+
+  /** An iTerm2 scenario's alone, as only its daemon notes them (openRig): the tmux runs of every process on the daemon's
+   *  PATH, the devices', the core's and each hook's alike, so a check of the devices' names their own command, and the
+   *  `herdr agent` runs, since this world began, read once as it stops, as the fake Orca's are: commands in time order
+   *  with the others, each pane named by the session that held it at the run and each tty by the tab open on it as the
+   *  world stops. */
+  takeMux(): void {
+    const kit = this.rig.iterm
+    if (!kit) return
+    const runs = [...runLog(kit.tmuxRuns), ...runLog(kit.herdrRuns)].filter((run) => run.at >= this.began)
+    this.commands.push(...muxCommands(runs, (pane, at) => this.muxes.find((p) => p.pane === pane && p.from <= at && at < p.to)?.key,
+      (tty) => this.labelOf(tty)))
+    this.commands.sort((a, b) => a.at - b.at)
+  }
+
+  /**
+   * The devices process killed outright, as a crash, and started again by the master on the same root, sessions and dial:
+   * done once the dial is welcomed again and the new process runs with the network guard in it. The scenario's cost is
+   * measured from that start: the measure of the one killed went with it, and one that never came back has none.
+   */
+  async restartDevices(): Promise<void> {
+    const before = devicesPids(this.d)
+    const back = this.dial.messages.length
+    this.costEnd = undefined
+    for (const pid of before) process.kill(pid, 'SIGKILL')
+    await this.dial.welcomeAfter(back, RESTART_WITHIN_MS)
+    const started = await until('the devices started again', () => {
+      const pids = devicesPids(this.d)
+      return pids.length > 0 && !pids.some((pid) => before.includes(pid)) ? pids : null
+    }, RESTART_WITHIN_MS, 100)
+    guardLoaded(this.rig.guard, 'devices', started)
+    this.costEnd = (await beginCost(this.d)).end
+  }
+
   private atWork(run: OpenRun): OpenRun { return { ...run, argv: workPaths(run.argv, this.rig.projects) } }
 
-  /** The face, recorded when it changed. */
+  /** The label of the iTerm2 tab open on [tty] now. */
+  private labelOf(tty: string): string | undefined { return [...this.tabs].find(([, open]) => open === tty)?.[0] }
+
+  /** The face, recorded when it changed (faceChange). */
   private face(at: number): void {
-    const { tiles, active } = this.carousel
-    const shown = { page: this.page, tiles: [...tiles], active: tiles[active] ?? null }
-    const last = this.faces.at(-1)
-    if (last && last.page === shown.page && last.active === shown.active && last.tiles.join('\n') === shown.tiles.join('\n')) return
-    this.faces.push({ at, ...shown })
+    const { tiles, active, refused } = this.carousel
+    const shown = { page: this.page, tiles: [...tiles], active: tiles[active] ?? null, refused }
+    if (faceChange(this.faces.at(-1), shown)) this.faces.push({ at, ...shown })
   }
+}
+
+type Face = Seen['faces'][number]
+/** Whether the face shown differs from the last one recorded: its page, tiles, the tile on it, or a refusal alone, so a
+ *  face check sees each refusal. */
+export function faceChange(last: Face | undefined, next: Omit<Face, 'at'>): boolean {
+  return !last || last.page !== next.page || last.active !== next.active || last.refused !== next.refused
+    || last.tiles.join('\n') !== next.tiles.join('\n')
 }
 
 /**
@@ -609,7 +875,7 @@ export const speak: TierBHandler<'voice'> = async (world, step) => {
 const GENERIC: { [K in GenericKind]: (world: World, step: StepOf<K>) => Promise<void> } = {
   front: async (world, step) => {
     world.front = step.app
-    world.tell({ front: FRONT[world.platform as 'darwin' | 'linux'][step.app] })
+    world.tell({ front: frontName(world.platform, step.app) })
   },
   thread: async (world, step) => { world.title(step.title) },
   tap: async (world, step) => { world.dial.send({ t: 'agent.open', agentId: world.agentId(step.session) }) },
@@ -621,8 +887,10 @@ const GENERIC: { [K in GenericKind]: (world: World, step: StepOf<K>) => Promise<
     for (let move = 0; move < 3; move++) world.dial.send({ t: 'scroll', phase: 'move', dy: 8, v: 0 })
     world.dial.send({ t: 'scroll', phase: 'up', dy: 0, v: 0 })
   },
+  pick: async (world, step) => { world.pick(pageId(step.page)) },
   unplug: (world) => world.unplug(),
   replug: (world) => world.plug(),
+  'devices.restart': (world) => world.restartDevices(),
 }
 
 export class TierBDriver implements EvalDriver {
@@ -639,8 +907,6 @@ export class TierBDriver implements EvalDriver {
   private readonly reached: NetAttempt[] = []
   /** The index in the scenario of the next step after the last one run. */
   private next = 0
-  /** The running scenario's cost, ended at its stop after its children. */
-  private costEnd: (() => Promise<NonNullable<Seen['cost']>>) | undefined
 
   /** Each scenario runs on its own app's steps. */
   constructor(private readonly appSteps: Partial<Record<App, AppSteps>>) {}
@@ -653,14 +919,15 @@ export class TierBDriver implements EvalDriver {
     const gaps = tierBGaps(scenario, platform)
     this.ready = false
     this.next = 0
-    // The scenario's ids are the catalog's, shared with those before it: a voice to a session whose poll the devices still
-    // count could reach it by an earlier scenario's poll, so such a scenario has a daemon of its own.
-    const polled = this.rig?.polled
-    const counted = polled !== undefined && scenario.steps.some((s) => s.kind === 'voice')
-      && scenario.sessions.some((s) => Date.now() - (polled.get(s.id) ?? -Infinity) < MOD_READY_MS)
-    if (this.rig && (scenario.fresh || counted)) await this.closeRig()
+    if (this.rig && ownRig(this.rig, scenario)) await this.closeRig()
     if (this.rig) await this.reset(this.rig)
-    const rig = this.rig ??= await openRig(join(this.own, `net-guard-${++this.daemons}.jsonl`))
+    const rig = this.rig ??= await openRig(join(this.own, `net-guard-${++this.daemons}.jsonl`), orcaAccounts(scenario), scenario.app === 'iterm')
+    // Rewritten only when it changes: each rewrite moves the launcher's mtime, and the devices ask `terminal --help` again.
+    const watchFocus = scenario.world?.orca?.watchFocus !== false
+    if (rig.watchFocus !== watchFocus) {
+      rig.orca.watchFocus(watchFocus)
+      rig.watchFocus = watchFocus
+    }
     const world = this.world = new World(rig, scenario, platform)
     for (const reason of gaps) world.gap(reason)
     linksFail(rig.d.env.HARNESS_OPEN_BIN!, scenario.world?.linkFails ?? [])
@@ -680,7 +947,7 @@ export class TierBDriver implements EvalDriver {
     for (const [name, pids] of Object.entries(running)) guardLoaded(rig.guard, name, pids)
     const cost = await beginCost(rig.d)
     world.origin = Date.now()
-    this.costEnd = cost.end
+    world.costEnd = cost.end
     this.ready = true
   }
 
@@ -719,8 +986,8 @@ export class TierBDriver implements EvalDriver {
 
   async stop(): Promise<void> {
     const world = this.world
-    const costEnd = this.costEnd
-    this.costEnd = undefined
+    const costEnd = world?.costEnd
+    if (world) world.costEnd = undefined
     try {
       try {
         await world?.close()
@@ -729,6 +996,9 @@ export class TierBDriver implements EvalDriver {
         if (world && costEnd) world.cost = await costEnd()
       }
     } finally {
+      // Whatever the close did: the gate sees each send.
+      world?.takeOrca()
+      world?.takeMux()
       if (this.rig) this.collect(this.rig)
       if (!this.ready && this.rig) await this.closeRig()
     }
@@ -764,14 +1034,12 @@ export class TierBDriver implements EvalDriver {
 
   /** The last scenario's fixtures gone (its children ended at its stop), and its dial unplugged. */
   private async reset(rig: Rig): Promise<void> {
-    const home = rig.d.env.HOME!
-    emptied(claudeStoreRoots(process.platform, rig.d.env, home)[0]!.root)
-    emptied(join(home, '.codex'))
-    // Every session's transcript and rollout too: the ids are the catalog's, so a later scenario's session goes on in the
-    // same file, and a recap could pass on an earlier scenario's answer.
-    emptied(rig.d.env.CLAUDE_PROJECTS_DIR!)
-    emptied(join(rig.d.env.CODEX_HOME!, 'sessions'))
-    emptied(join(home, '.cursor', 'projects'))
+    await emptyFixtures(rig)
+    // Orca lays nothing out until a scenario's layout, its watches end with the last scenario, and a new one tells no
+    // focus of it: a watch prints the last line told first.
+    rig.orca.listing(orcaListing([], {}))
+    rig.orca.endWatch()
+    rig.orca.focus(null)
     rig.backend.speech = null
     await rig.desk.unplug(SERIAL)
   }

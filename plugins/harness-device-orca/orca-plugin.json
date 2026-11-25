@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "harness-device",
   "name": "Harness Device",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "The dial's state in Orca.",
   "license": "MIT",
   "engines": { "orca": ">=1.4.248" },

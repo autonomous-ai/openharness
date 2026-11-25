@@ -34,6 +34,12 @@ it('creates two independent margins with no joint dimensions or arbitrary labels
   expect(cleanUsageContext({ ...context, release: 'PRIVATE/custom-build', private: 'PRIVATE' })).toEqual({ ...context, release: 'unknown' })
   expect(cleanUsageContext({ ...context, platform: 'PRIVATE' })).toBeUndefined()
 })
+it('margins the dial\'s who-uses flags and no other dial name', () => {
+  const production = { surface: 'cli', release: '0.6.82', platform: 'linux', channel: 'production' } as const
+  expect(healthBreakdowns(production, 'dial_used_installation_days')).toEqual([
+    'breakdown:release:cli:0.6.82:dial_used_installation_days', 'breakdown:platform:cli:linux:dial_used_installation_days'])
+  expect(healthBreakdowns(production, 'dial_voice_delivered')).toEqual([])
+})
 it('takes a tester\'s build as its own channel, with no release or platform margins', () => {
   const phone = { surface: 'phone', release: '1.0.7', platform: 'ios', channel: 'testing' } as const
   expect(cleanUsageContext(phone)).toEqual(phone)

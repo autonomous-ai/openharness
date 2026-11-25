@@ -23,6 +23,9 @@
  *   3. the account's plan's daily voice seconds (lib/voiceQuota.ts), charged by the clip's length before
  *      Deepgram is called and given back when Deepgram fails. Only PCM WAV is taken, so that length is
  *      known from the bytes (wavDurationMs).
+ *
+ * WHAT IT COUNTS. Each transcribed clip adds to the day's voice totals (lib/voiceUsage.ts), the dial's apart: the
+ * devices' upload alone sends DIAL_VOICE_SURFACE_HEADER. Counts only, under the account's sharing choice.
  */
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
@@ -33,6 +36,9 @@ import { createRateLimiter } from '../lib/rateLimit.js'
 import { wavDurationMs } from '../lib/wav.js'
 import { releaseVoice, reserveVoice } from '../lib/voiceBudget.js'
 import { VoiceQuotaExceededError, voiceQuotaService } from '../lib/voiceQuota.js'
+import { voiceIncrements, voiceSurface } from '../lib/voiceUsage.js'
+import { recordVoiceUsage } from '../lib/productUsage.js'
+import { DIAL_VOICE_SURFACE_HEADER } from '../types/dialUsage.js'
 import { sendError, sendSuccess } from '../utils/response.js'
 import { logger } from '../utils/logger.js'
 
@@ -120,8 +126,11 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const uploadId = `stt-${randomUUID()}`
+    // One moment for the charge and its count: a clip answered after midnight counts on the day it was charged to.
+    const now = new Date()
+    let reservation
     try {
-      await voiceQuotaService.reserveForUser(userId, req.user?.autonomousEnv ?? 'prod', uploadId, durationMs)
+      reservation = await voiceQuotaService.reserveForUser(userId, req.user?.autonomousEnv ?? 'prod', uploadId, durationMs, now)
     } catch (err) {
       if (err instanceof VoiceQuotaExceededError) {
         sendError(reply, dailyLimitMessage(err), err.code, 429, {
@@ -138,11 +147,19 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
     const lang = pickLang((req.query as { lang?: unknown } | undefined)?.lang)
     try {
       // Always WAV: the bytes were checked as PCM WAV above, so the caller's own type never chooses a decoder.
+      const started = performance.now()
       const transcript = await transcribeWavWithDeepgram(audio, 'audio/wav', lang)
+      const transcribeMs = performance.now() - started
       await voiceQuotaService.commit(uploadId).catch((err) => {
         // Left pending, the cleanup worker would hand these seconds back: logged, never silent.
         logger.error('voice-stt: quota commit failed', { user: userId, error: err instanceof Error ? err.message : String(err) })
       })
+      // Only a clip charged by this request: one already charged counted when it was. Not awaited, and it never
+      // throws: counting never holds or fails the answer.
+      if (reservation.state === 'reserved') {
+        const surface = voiceSurface(req.headers[DIAL_VOICE_SURFACE_HEADER])
+        void recordVoiceUsage(userId, now, voiceIncrements(surface, reservation.usedMsBefore, durationMs, transcribeMs))
+      }
       // The user is logged, the words are not. A transcript is the most private thing this service sees,
       // and the useful diagnostics — did it arrive, how big, what language, did it come back empty — do
       // not require keeping it.

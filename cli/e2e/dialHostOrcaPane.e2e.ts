@@ -48,7 +48,7 @@ const lines = (d: IsolatedDaemon, prefix: string): string[] =>
 const said = (d: IsolatedDaemon, line: string) =>
   until(`"${line}" in the daemon's log`, () => lines(d, line).includes(line), 30_000, 50)
 /** The `terminal send` runs the fake `orca` was asked for. */
-const sends = (orca: FakeOrca): string[] => orca.runs().map((run) => run.args).filter((args) => args.startsWith('terminal send'))
+const sends = (orca: FakeOrca): string[] => orca.log().map((run) => run.argv.slice(1).join(' ')).filter((args) => args.startsWith('terminal send'))
 
 describe("the dial's words reach the agent's own pane, Orca", () => {
   let daemon: IsolatedDaemon | undefined

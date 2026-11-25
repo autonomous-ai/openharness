@@ -33,7 +33,7 @@ it('uses matured original working-day cohorts and refuses to interpret missing f
   const r = dailyProductReview([
     row('2026-10-11', 'working_installation_days', 10), row('2026-10-11', 'd1_returning_work_installations', 6),
     row('2026-10-12', 'working_installation_days', 8),
-    row('2026-10-04', 'working_installation_days', 12), row('2026-10-04', 'd7_returning_work_installations', 3),
+    row('2026-10-04', 'working_installation_days', 12), row('2026-10-11', 'd7_returning_work_installations', 3),
     row('2026-10-05', 'working_installation_days', 7),
   ], new Date('2026-10-13'))
   expect(r.retention[0].cohorts.at(-1)).toMatchObject({ day: '2026-10-11', workingInstallations: 10, returned: 6, percent: 60 })
@@ -96,6 +96,17 @@ it('does not turn old collector work into zero D28 retention during rollout', ()
   expect(cohort(rows)).toMatchObject({ measurementAvailable: false, returned: null, percent: null })
   expect(cohort([...rows, row('2026-09-14', 'measurement_v2_installation_days', 10)]))
     .toMatchObject({ measurementAvailable: true, returned: 0, percent: 0 })
+})
+
+it('reads a D7 and a D28 return on its return day, where the gateway counts it', () => {
+  // Dated on its cohort's day, a report 7 or 28 days old would be refused as expired.
+  const r = dailyProductReview([
+    row('2026-09-14', 'working_installation_days', 10), row('2026-09-14', 'measurement_v2_installation_days', 10),
+    row('2026-10-05', 'working_installation_days', 8), row('2026-10-12', 'working_installation_days', 9),
+    row('2026-10-12', 'd7_returning_work_installations', 2), row('2026-10-12', 'd28_returning_work_installations', 4),
+  ], new Date('2026-10-14'))
+  expect(r.retention[1].cohorts.find(c => c.day === '2026-10-05')).toMatchObject({ workingInstallations: 8, returned: 2, percent: 25 })
+  expect(r.retention[2].cohorts.find(c => c.day === '2026-09-14')).toMatchObject({ workingInstallations: 10, returned: 4, percent: 40 })
 })
 
 it('reports a read the apps make on their own as reliability only, even from clients that still send its reach', () => {

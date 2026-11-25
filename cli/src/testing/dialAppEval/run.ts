@@ -20,7 +20,8 @@ const VITEST = join(CLI_DIR, 'node_modules', 'vitest', 'vitest.mjs')
 const FILES: Record<Tier, string[]> = {
   a: ['src/testing/dialAppEval/dialAppEval.spec.ts'],
   b: ['--config', 'vitest.e2e.config.ts', 'e2e/dialAppEvalClaude.e2e.ts', 'e2e/dialAppEvalChatgpt.e2e.ts',
-    'e2e/dialAppEvalVscode.e2e.ts', 'e2e/dialAppEvalCursor.e2e.ts', 'e2e/dialAppEvalHeldOut.e2e.ts'],
+    'e2e/dialAppEvalVscode.e2e.ts', 'e2e/dialAppEvalCursor.e2e.ts', 'e2e/dialAppEvalOrca.e2e.ts', 'e2e/dialAppEvalIterm.e2e.ts',
+    'e2e/dialAppEvalHeldOut.e2e.ts'],
 }
 const NO_TIER_B_ON_WINDOWS = 'tier B is not run on Windows: its e2e files run on macOS and Linux only'
 const WRONG_SEND = 'a voice prompt reached another session: stop and ask the PM before a baseline is written'

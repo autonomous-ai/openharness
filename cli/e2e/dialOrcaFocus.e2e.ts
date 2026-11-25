@@ -23,6 +23,10 @@ const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : 
 const FILTER = { appFilter: 'v1' }
 const ORCA = 'com.stablyai.orca'
 const DIAL = 'E2E-A'
+/** Each run of the fake `orca`'s arguments, oldest first. */
+const asked = (orca: FakeOrca): string[] => orca.log().map((run) => run.argv.slice(1).join(' '))
+/** Its `terminal switch` and `terminal send` runs. */
+const runs = (orca: FakeOrca): string[] => asked(orca).filter((args) => /^terminal (switch|send) /.test(args))
 /** Every focus line the devices may say: an outcome, never a pane or an agent. */
 const FOCUS_LINE = /^\[device\] focus · (moved|skipped · (echo|unknown agent|no tile|not in front))$/
 
@@ -98,8 +102,8 @@ describe("the dial follows Orca's focus and tabs", () => {
   }
 
   /** Two sessions in Orca terminals, listed, and the dial turned to the first by hand, its rest over. The dial landed on
-   *  the first as it was listed, and a turn to it within 750 ms of the second's re-assert is taken as that focus's echo:
-   *  the turn is made again until it swipes. */
+   *  the first as it was listed, and a turn to it may fall in the repaint of a switch the daemon drives: the turn is
+   *  made again until it swipes. */
   const turnedToFirst = async (d: IsolatedDaemon, dial: FakeDial, first: InOrca, second: InOrca): Promise<void> => {
     await listed(dial, first, second)
     await dial.turnUntil(first.id, 'the swipe', () => (d.log().includes('[device] swipe · ok') || undefined))
@@ -141,9 +145,9 @@ describe("the dial follows Orca's focus and tabs", () => {
     since = dial.messages.length
     dial.send({ t: 'focus', agentId: b.claude.id })
     await said(d, '[device] swipe · ok')
-    expect(orca.runs().map((run) => run.args)).toEqual([`terminal switch --terminal ${b.handle} --json`])
+    expect(runs(orca)).toEqual([`terminal switch --terminal ${b.handle} --json`])
     // Its worktree, from the layout read, is activated first, as Orca's Back does.
-    expect(orca.asked().filter((args) => /^(worktree activate|terminal switch) /.test(args)))
+    expect(asked(orca).filter((args) => /^(worktree activate|terminal switch) /.test(args)))
       .toEqual(['worktree activate --worktree id:w0 --json', `terminal switch --terminal ${b.handle} --json`])
     orca.focus(b.handle)
     await said(d, '[device] focus · skipped · echo')
@@ -155,8 +159,8 @@ describe("the dial follows Orca's focus and tabs", () => {
     expect(dial.messages.slice(since).filter((m) => m.t === 'focus' && m.agentId === a.claude.id)).toEqual([])
 
     // 6. One probe of the CLI, one watch.
-    expect(orca.asked().filter((args) => args === 'terminal --help')).toHaveLength(1)
-    expect(orca.asked().filter((args) => args === 'terminal watch-focus --json')).toHaveLength(1)
+    expect(asked(orca).filter((args) => args === 'terminal --help')).toHaveLength(1)
+    expect(asked(orca).filter((args) => args === 'terminal watch-focus --json')).toHaveLength(1)
 
     // 7. The dial is unplugged: the watch ends with it.
     await desk!.unplug(DIAL)
@@ -197,7 +201,7 @@ describe("the dial follows Orca's focus and tabs", () => {
     for (const m of dial.messages.slice(since)) if (m.t === 'focus') expect(m.agentId).toBe(a.claude.id)
 
     // 5. The reorder switched nothing in Orca: A's one switch is all.
-    expect(orca.runs().map((run) => run.args)).toEqual([`terminal switch --terminal ${a.handle} --json`])
+    expect(runs(orca)).toEqual([`terminal switch --terminal ${a.handle} --json`])
 
     // 6. The tab the person renamed names C above its session's name (decided 8).
     expect(list.agents.find((m) => m.id === c.claude.id)?.name).toBe('PM')
@@ -220,6 +224,6 @@ describe("the dial follows Orca's focus and tabs", () => {
     // 4. None is run, and no focus line is said.
     expect(lines(d, '[device] orca watch · started')).toEqual([])
     expect(lines(d, '[device] focus ·')).toEqual([])
-    expect(orca.asked().filter((args) => args.startsWith('terminal watch-focus'))).toEqual([])
+    expect(asked(orca).filter((args) => args.startsWith('terminal watch-focus'))).toEqual([])
   })
 })

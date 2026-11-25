@@ -17,6 +17,8 @@ vi.mock('../../lib/paneEngineProcess.js', async (real) => ({
 vi.mock('../../lib/engineLaunch.js', async (real) => ({ ...await real<object>(), commandAvailableInInteractiveShell: vi.fn(async () => true) }))
 
 const pending = { agentId: 'a1', sessionId: '', engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%7' }] } as RegisteredSession
+/** The creation receipt that made a row: what a held first launch is rebuilt from (lib/restoreAgents.ts `guardHold`). */
+const CREATION = 'create-0123456789abcdef'
 const runtime = { backend: 'tmux' as const, paneId: '%7' }
 const spawned = { runtime } as never
 const identity = { pid: 99, startMarker: 'now', executable: 'claude' }
@@ -217,7 +219,7 @@ describe('watching a new pane', () => {
     expect(deps.announceSession).toHaveBeenCalledTimes(proof === 'same' ? 1 : 0)
   })
   it.each(['held', 'row removed', 'not held', 'unknown', 'no probe'] as const)('retains a post-rc native guard hold without failing or archiving: %s', async result => {
-    const entry = { ...pending, launch: { state: 'starting', nativeToken: 'fixture-native' } } as RegisteredSession
+    const entry = { ...pending, creationId: CREATION, launch: { state: 'starting', nativeToken: 'fixture-native' } } as RegisteredSession
     const waitingPane = vi.fn(async () => result === 'unknown' ? 'unknown' as const : result === 'held' || result === 'row removed')
     const { deps, rows, watch } = setup(result === 'no probe' ? {} : holding(waitingPane))
     rows.set('a1', entry)
@@ -246,7 +248,7 @@ describe('watching a new pane', () => {
 
   it('asks a ptyhost pane\'s own backend whether it holds the launch, never tmux', async () => {
     const pty = { backend: 'ptyhost' as const, instance: 'p1', paneId: '%7' }
-    const entry = { ...pending, runtimes: [pty], launch: { state: 'starting', nativeToken: 'fixture-native' } } as RegisteredSession
+    const entry = { ...pending, creationId: CREATION, runtimes: [pty], launch: { state: 'starting', nativeToken: 'fixture-native' } } as RegisteredSession
     const isHeld = vi.fn(async () => true as const)
     const ptyBackend = { ...backend, isHeld } as TerminalBackend
     const backendFor = vi.fn(() => ptyBackend)
@@ -256,6 +258,54 @@ describe('watching a new pane', () => {
     expect(backendFor).toHaveBeenCalledWith(pty)
     expect(isHeld).toHaveBeenCalledExactlyOnceWith(pty, 'fixture-native')
     expect(deps.registry.setLaunch).toHaveBeenCalledWith('a1', expect.objectContaining({ state: 'held', service: 'native', nativeToken: 'fixture-native' }))
+  })
+
+  describe('the guard held a new pane (2026-11-25)', () => {
+    const starting = (overrides: Partial<RegisteredSession>) =>
+      ({ ...pending, engine: 'codex', launch: { state: 'starting', nativeToken: 'fixture-native' }, ...overrides }) as RegisteredSession
+    const fork = (sessionId?: string) => ({ agentId: 'source', name: 'Source', ...(sessionId ? { sessionId } : {}) })
+
+    it.each([
+      ['a create', starting({ creationId: CREATION })],
+      ['a Codex fork of the session it forked', starting({ creationId: CREATION, forkedFrom: fork('source-session') })],
+    ])('a new pane the guard held starts again: startsAgain, "Starting again.", and the held passes are asked for it: %s', async (_name, entry) => {
+      const startAgain = vi.fn()
+      const { deps, rows, watch } = setup({ ...holding(vi.fn(async () => true as const)), startAgain })
+      rows.set('a1', entry)
+      await watch('codex', entry, spawned, ['codex'], undefined)
+      expect(deps.registry.setLaunch).toHaveBeenCalledExactlyOnceWith('a1',
+        { state: 'held', service: 'native', nativeToken: 'fixture-native', startsAgain: true, detail: 'Starting again.' })
+      expect(deps.announceSession).toHaveBeenCalledOnce()
+      expect(startAgain).toHaveBeenCalledExactlyOnceWith('a1')
+    })
+
+    it.each([
+      ['no creation id', starting({})],
+      ['a handoff fork', starting({ engine: 'opencode', creationId: CREATION, forkedFrom: fork('source-session') })],
+    ])('a held new pane with nothing to rebuild from fails with words that say what to do: %s', async (_name, entry) => {
+      const startAgain = vi.fn()
+      const { deps, rows, watch } = setup({ ...holding(vi.fn(async () => true as const)), startAgain })
+      rows.set('a1', entry)
+      await watch(entry.engine, entry, spawned, [entry.engine], undefined)
+      expect(deps.registry.setLaunch).toHaveBeenCalledExactlyOnceWith('a1',
+        { state: 'failed', error: 'ENGINE_DID_NOT_START', detail: 'This harness did not start. Close it and open a new one.' })
+      expect(deps.announceSession).toHaveBeenCalledOnce()
+      expect(console.warn).toHaveBeenCalledWith(`[agent] create failed · ${entry.engine} · ENGINE_DID_NOT_START`)
+      expect(startAgain).not.toHaveBeenCalled()
+    })
+
+    it('a watch that runs out is held as today, without startsAgain', async () => {
+      const startAgain = vi.fn()
+      const entry = starting({ creationId: CREATION })
+      const { deps, rows, watch } = setup({ ...holding(vi.fn(async () => false as const)), startAgain })
+      rows.set('a1', entry)
+      const watching = watch('codex', entry, spawned, ['codex'], undefined, 1)
+      await vi.advanceTimersByTimeAsync(50)
+      await watching
+      expect(deps.registry.setLaunch).toHaveBeenCalledExactlyOnceWith('a1', { state: 'held', service: 'native', nativeToken: 'fixture-native',
+        detail: 'Waiting to confirm the native engine process. The original launch and terminal are preserved.' })
+      expect(startAgain).not.toHaveBeenCalled()
+    })
   })
 
   it.each(['token', 'route', 'binding', 'removed', 'stopped', 'ready'] as const)('discards a delayed native hold after its %s changes', async change => {

@@ -1,7 +1,9 @@
 import { PRODUCT_USAGE_METRICS, PRODUCT_USAGE_SETUP_METRICS, PRODUCT_USAGE_ACTIONS } from '../types/productUsage.js'
 import { cleanUsageContext, type ProductUsageContext } from '../types/productHealthContract.js'
+import { DIAL_USAGE_MARGIN_METRICS } from '../types/dialUsage.js'
 
-const allowed = new Set<string>(PRODUCT_USAGE_METRICS)
+// The dial's who-uses flags only: its other names are event counts no release or platform split is read for.
+const allowed = new Set<string>([...PRODUCT_USAGE_METRICS, ...DIAL_USAGE_MARGIN_METRICS])
 // Read from the margins too, though not reported by the clients: the relay's count of the phone's opens by release
 // (lib/dailyTracking.ts mobileOpenMetrics), which shares the phone's release label and its coverage threshold.
 const readableMargins = new Set<string>([...PRODUCT_USAGE_METRICS, 'relay_mobile_opens'])

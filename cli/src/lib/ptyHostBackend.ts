@@ -766,7 +766,10 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     const withheld = options?.beforeEnter ? await options.beforeEnter() : null
     if (withheld) return terminalEnterWithheld(withheld)
     if (options?.allowed && !options.allowed()) return terminalEnterWithheld('terminal control revoked')
-    return actionOf(await client.call({ op: 'key', pane: runtime.paneId, key: 'Enter' }))
+    // The text is in the composer whatever the Enter's answer, as tmux's submit says (`legacyActionResult`): a refused
+    // Enter passed on as `not_started` or `rejected` let the lease dispatch, and then the input path, type it again.
+    const entered = actionOf(await client.call({ op: 'key', pane: runtime.paneId, key: 'Enter' }))
+    return entered.state === 'failed' ? terminalActionPossiblyExecuted(entered.reason) : entered
   }
 
   /** The host's raw `write`: the bytes a stream's input frame carries, sent as they are. */

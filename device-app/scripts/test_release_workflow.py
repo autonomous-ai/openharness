@@ -5,9 +5,13 @@ from pathlib import Path
 import re
 import unittest
 
-WORKFLOWS = Path(__file__).resolve().parents[2] / ".github" / "workflows"
+SCRIPTS = Path(__file__).resolve().parent
+WORKFLOWS = SCRIPTS.parents[1] / ".github" / "workflows"
 WINDOWS_JOBS = ("tauri-cli-windows", "build-windows", "sign-windows", "check-windows")
 SIGNING = "uses: ./.github/actions/windows-signing"
+# Tauri's object form, so each path is one argument and needs no quoting.
+SIGN_COMMAND = ('"signCommand":{"cmd":"pwsh","args":["-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass",'
+                '"-File","\'"$script"\'","\'"$folder"\'","%1"]}')
 
 
 def code(text):
@@ -128,7 +132,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def test_the_signing_job_compiles_and_installs_nothing(self):
         job = self.job("sign-windows")
         for text in ("cargo install", "cargo build", "npm", "release-setup.sh", "compile", "setup-node",
-                     "rust-toolchain"):
+                     "rust-toolchain", "Install-Module"):
             with self.subTest(text=text):
                 self.assertNotIn(text, job)
         # It runs the Tauri CLI tauri-cli-windows made, from its artifact, and build-windows's exes.
@@ -182,32 +186,65 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(set(re.findall(r"secrets\.(\w+)", step)),
                          {"TAURI_SIGNING_PRIVATE_KEY", "TAURI_SIGNING_PRIVATE_KEY_PASSWORD"})
 
-    def test_the_installer_is_signed_after_the_exe_and_before_the_update_signature(self):
+    def test_the_exes_are_signed_before_the_bundle_and_the_update_signature_last(self):
         job = self.job("sign-windows")
         named = steps(job)
         signing = [index for index, step in enumerate(named) if SIGNING in step]
-        self.assertEqual(len(signing), 2)
+        self.assertEqual(len(signing), 1)
         bundle = self.step(job, "release-build.sh bundle")
         update = self.step(job, "release-build.sh sign-update")
+        # Tauri's sign command signs through the module and the Azure session the signing step leaves in the job.
         self.assertLess(signing[0], bundle)
-        self.assertLess(bundle, signing[1])
-        self.assertLess(signing[1], update)
+        self.assertLess(bundle, update)
         # The sums publish trusts are taken here, by the job that made the files, before anything else touches them.
         sums = self.step(job, "device-manifest.py sums")
         self.assertLess(update, sums)
         self.assertLess(sums, self.step(job, "actions/upload-artifact@"))
-        # The update signature is made over the folder the second signing signed.
-        out = re.search(r"(?m)^          path: (\S+)$", named[signing[1]]).group(1)
-        self.assertIn(f'sign-update "$VERSION" {out}', named[update])
-        # release-desktop.yml's inputs, each time.
+        # The update signature is made over the installers Tauri's command signed inside the bundle.
+        self.assertIn("mv bundle/x64/* bundle/arm64/* out/", named[bundle])
+        self.assertIn('sign-update "$VERSION" out', named[update])
+        self.assertNotIn("name: Sign the installers\n", job)
+        # release-desktop.yml's inputs.
         block = re.search(r"uses: \./\.github/actions/windows-signing\n        with:\n((?:          .*\n)+)",
                           self.desktop).group(1)
         inputs = [line for line in block.splitlines(keepends=True) if not line.lstrip().startswith("path:")]
         self.assertEqual(len(inputs), 7)
-        for index in signing:
-            for line in inputs:
-                with self.subTest(step=index, input=line.strip()):
-                    self.assertIn(line, named[index])
+        for line in inputs:
+            with self.subTest(input=line.strip()):
+                self.assertIn(line, named[signing[0]])
+
+    def test_tauri_signs_inside_the_bundle_through_windows_sign(self):
+        job = self.job("sign-windows")
+        named = steps(job)
+        bundle = named[self.step(job, "release-build.sh bundle")]
+        # Forward slashes: makensis gets the command as Rust's Debug of it, which doubles backslashes.
+        self.assertIn('script="$(cygpath -m "$PWD/device-app/scripts/windows-sign.ps1")"', bundle)
+        self.assertIn('folder="$(cygpath -m "$PWD/$release")"', bundle)
+        self.assertIn("sign='" + '{"bundle":{"windows":{' + SIGN_COMMAND + "}}}'", bundle)
+        self.assertIn('release-build.sh bundle "$VERSION" "bundle/$arch" "$sign"', bundle)
+        # The identifiers windows-sign.ps1 reads, none a secret, with the publisher the signing step checks.
+        publisher = re.search(r"(?m)^          publisher: (.+)$", named[self.step(job, SIGNING)]).group(1)
+        env = re.search(r"(?m)^        env:\n((?:          .*\n)+)", bundle)
+        self.assertIsNotNone(env, "the Bundle step has no env")
+        env = dict(line.strip().split(": ", 1) for line in env.group(1).splitlines())
+        self.assertEqual(env, {"SIGNING_ENDPOINT": "${{ vars.SIGNING_ENDPOINT }}",
+                               "SIGNING_ACCOUNT": "${{ vars.SIGNING_ACCOUNT }}",
+                               "SIGNING_PROFILE": "${{ vars.SIGNING_PROFILE }}",
+                               "WINDOWS_SIGNING_PUBLISHER": publisher})
+        self.assertNotIn("secrets.", bundle)
+        script = code((SCRIPTS / "windows-sign.ps1").read_text())
+        self.assertEqual(set(env), set(re.findall(r"\$env:(\w+)", script)))
+
+    def test_the_sign_command_is_given_only_to_the_release_bundle(self):
+        # PR CI's and local bundles have no identity, so they stay unsigned.
+        job = self.job("sign-windows")
+        self.assertIn("signCommand", steps(job)[self.step(job, "release-build.sh bundle")])
+        self.assertEqual(code(self.text).count("signCommand"), 1)
+        configs = sorted((SCRIPTS.parent / "src-tauri").glob("tauri*.conf.json"))
+        self.assertTrue(configs, "no tauri*.conf.json")
+        for config in configs:
+            with self.subTest(config=config.name):
+                self.assertNotIn("signCommand", config.read_text())
 
     def test_windows_signing_has_no_switch(self):
         self.assertNotRegex(self.text, r"\bWINDOWS_SIGNING\b")

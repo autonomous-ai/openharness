@@ -29,7 +29,7 @@ import type { AgentOutputStats } from './agentOutputStats.js'
 import type { GridAssignment } from './gridAssignment.js'
 import type { GridWebSearchStatus } from './gridLaunchWire.js'
 import type { AgentGridTarget, GridAnnotation } from './gridAnnotation.js'
-import { isNameChosen, projectDisplayName, sessionDisplayTitle, type RegisteredSession } from './registry.js'
+import { guardHeld, isNameChosen, projectDisplayName, sessionDisplayTitle, type AgentLaunch, type RegisteredSession } from './registry.js'
 import { engineCanFork } from './forkAgent.js'
 import { resumeMode, type ResumeMode } from './resumeCapability.js'
 import type { DshVerdict } from '../dsh/verdict.js'
@@ -256,6 +256,19 @@ export async function lastActivityAt(s: RegisteredSession): Promise<number> {
     ?? (s.lastHookAt || s.boundAt || s.registeredAt)
 }
 
+/** The launch and the activity a client is shown for [row]: a launch the guard held (`guardHeld`) for `native`, which
+ *  starts again by itself, reads as a launch starting. One whose recovery waits for another service (models, the Store,
+ *  search) is that service's hold, as any launch held for it. The registry keeps the true hold, which the restore and
+ *  the held passes run on; `startsAgain` is the core's own word, which no client sees. */
+export function shownLaunch(row: Pick<RegisteredSession, 'launch' | 'active'>): { launch: AgentLaunch | undefined; active: boolean } {
+  const launch = row.launch
+  if (launch?.state !== 'held' || !launch.startsAgain) return { launch, active: row.active }
+  // A held row is inactive in the registry (setLaunch), which would read as offline; a launch starting is active.
+  if (launch.service === 'native' && guardHeld(row)) return { launch: { state: 'starting' }, active: true }
+  const { startsAgain: _, ...held } = launch
+  return { launch: held, active: row.active }
+}
+
 function frameTitle(s: RegisteredSession): string | null {
   const title = sessionDisplayTitle(s)
   return title && title !== projectDisplayName(s) ? title : null
@@ -281,6 +294,7 @@ export async function agentFrame(
   const gitContext: SessionGitContext = { state: folder ? 'workspace' : 'unavailable', current: folder,
     observedAt: null, locations: [], pullRequests: [], truncated: false, checkouts: [] }
   const updatedAt = await lastActivityAt(s)
+  const shown = shownLaunch(s)
   const frame: AgentFrame = {
     id: s.agentId,
     sessionId: s.sessionId,
@@ -288,11 +302,11 @@ export async function agentFrame(
     name: projectDisplayName(s),
     nameChosen: isNameChosen(s),
     title: frameTitle(s),
-    status: s.active ? 'active' : 'offline',
+    status: shown.active ? 'active' : 'offline',
     activity: contextActivity?.() ?? null,
     closePlan: s.closePlan ? { state: s.closePlan.state, ...(s.closePlan.detail ? { detail: s.closePlan.detail } : {}) } : null,
     closeSupported: true,
-    launch: s.launch ?? { state: 'ready' },
+    launch: shown.launch ?? { state: 'ready' },
     ...((s.identityHold || s.interpretationHold || s.admissionHold) ? { identityHold: s.identityHold || s.interpretationHold || s.admissionHold } : {}),
     ...(s.identityHold && (NAMED_STATES.has(s.identityHold) || isOpenclawLocalStopped(s.identityHold)) ? { namedState: s.identityHold } : {}),
     createdAt: new Date(s.registeredAt).toISOString(),

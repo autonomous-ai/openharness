@@ -569,3 +569,179 @@ describe('scrubbing the receipt of a deleted harness', () => {
     expect(fs.readdirSync(directory).filter(name => name.endsWith('.tmp'))).toEqual([])
   })
 })
+
+// A first launch the guard held is launched again with the task it was made with (core/agents/restoreLaunch.ts): the
+// receipt its row names keeps that task, a create's in its intent, a fork's beside its outcome. Only a receipt that
+// made this launch, or may have, answers.
+describe('the first task of the receipt that made a launch', () => {
+  const held = { service: 'native', detail: 'Waiting for the engine installation.' }
+  const intent = (input: Record<string, unknown> = { prompt: 'fix it' }, kind = 'native-create-v1') =>
+    ({ kind, input: { engine: 'codex', cwd: '/work', ...input }, label: 'harness-codex-1', local: true })
+  const forkOf = creationFingerprint({ operation: 'fork', agentId: 'source', name: null, prompt: 'fix it' })
+  const createdFor = (agentId: string) => ({ state: 'created' as const, agentId })
+  const saved = (directory: string, name = id) => JSON.parse(readFileSync(join(directory, `${name}.json`), 'utf8'))
+  type Fixture = ReturnType<typeof fixture>
+  type Answer = { task: string | null } | null
+  /** An effect that runs until the test finishes it, and a promise of its start. */
+  function running() {
+    let started!: () => void, finish!: (outcome: AgentCreationOutcome) => void
+    const start = new Promise<void>(resolve => { started = resolve })
+    const effect = () => { started(); return new Promise<AgentCreationOutcome>(resolve => { finish = resolve }) }
+    return { start, effect, finish: (outcome: AgentCreationOutcome) => finish(outcome) }
+  }
+
+  it('keeps a fork\'s first task with its reservation and its outcome, under the same fingerprint', async () => {
+    const { directory, receipts } = fixture()
+    const fork = running()
+    const forked = receipts.run(id, forkOf, fork.effect, undefined, 'fix it')
+    await fork.start
+    expect(saved(directory)).toEqual({ version: 1, fingerprint: forkOf, firstTask: 'fix it', outcome: { state: 'pending' } })
+    fork.finish(createdFor('agent-a'))
+    expect(await forked).toEqual(createdFor('agent-a'))
+    expect(saved(directory)).toEqual({ version: 1, fingerprint: forkOf, firstTask: 'fix it', outcome: createdFor('agent-a') })
+    const again = vi.fn()
+    expect(await new AgentCreationReceipts(directory).run(id, forkOf, again)).toEqual(createdFor('agent-a'))
+    expect(again).not.toHaveBeenCalled()
+    await receipts.run(`${id}-none`, forkOf, async () => createdFor('agent-a'))
+    expect(saved(directory, `${id}-none`)).toEqual({ version: 1, fingerprint: forkOf, outcome: createdFor('agent-a') })
+  })
+
+  it.each([7, '', null])('refuses a fork receipt whose first task is not text (%j)', firstTask => {
+    const { directory, receipts } = fixture()
+    mkdirSync(directory, { mode: 0o700 })
+    writeFileSync(join(directory, `${id}.json`), JSON.stringify({ version: 1, fingerprint: forkOf, firstTask, outcome: createdFor('agent-a') }), { mode: 0o600 })
+    expect(() => receipts.status(id)).toThrow('CREATION_STORAGE_FAILED')
+  })
+
+  const createReached: [string, (at: Fixture, input?: Record<string, unknown>) => Promise<Answer>][] = [
+    ['created for it', async ({ receipts }, input) => {
+      await receipts.runIntent(id, fingerprint, intent(input), held, async () => async () => createdFor('agent-a'))
+      return receipts.firstLaunchTask(id, 'agent-a', 'create')
+    }],
+    ['pending, its dispatch in flight', async ({ receipts }, input) => {
+      const dispatch = running()
+      const done = receipts.runIntent(id, fingerprint, intent(input), held, async () => dispatch.effect)
+      await dispatch.start
+      const answer = receipts.firstLaunchTask(id, 'agent-a', 'create')
+      dispatch.finish(createdFor('agent-a'))
+      await done
+      return answer
+    }],
+    ['unconfirmed, claimed with no result', async ({ directory, receipts }, input) => {
+      await receipts.runIntent(id, fingerprint, intent(input), held, async () => async () => {
+        vi.mocked(fs.linkSync).mockImplementationOnce(() => { throw new Error('disk disconnected') })
+        return createdFor('agent-a')
+      })
+      const restarted = new AgentCreationReceipts(directory)
+      expect(restarted.status(id)).toEqual({ state: 'unconfirmed' })
+      return restarted.firstLaunchTask(id, 'agent-a', 'create')
+    }],
+  ]
+  it.each(createReached)('answers a create\'s first task from its intent, %s', async (_state, reach) => {
+    expect(await reach(fixture())).toEqual({ task: 'fix it' })
+  })
+  it.each(createReached.flatMap(([state, reach]) =>
+    ([['empty', { prompt: '' }], ['null', { prompt: null }], ['absent', {}]] as const).map(([prompt, input]) => [state, prompt, reach, input] as const)))(
+    'answers no task for a create %s whose prompt is %s', async (_state, _prompt, reach, input) => {
+      expect(await reach(fixture(), input)).toEqual({ task: null })
+    })
+
+  it.each<[string, (at: Fixture) => Promise<unknown>]>([
+    ['created for another agent', ({ receipts }) => receipts.runIntent(id, fingerprint, intent(), held, async () => async () => createdFor('agent-b'))],
+    ['failed', ({ receipts }) => receipts.runIntent(id, fingerprint, intent(), held, async () => async () => ({ state: 'failed', error: 'ENGINE_FAILED' }))],
+    ['cancelled', async ({ receipts }) => { await receipts.runIntent(id, fingerprint, intent(), held, async () => null); receipts.cancelIntent(id) }],
+    ['scrubbed', async ({ receipts }) => {
+      await receipts.runIntent(id, fingerprint, intent(), held, async () => async () => createdFor('agent-a'))
+      expect(await receipts.scrubCreated('agent-a')).toBe(1)
+    }],
+    ['missing', async () => {}],
+    ['a model-create-v1 intent', ({ receipts }) => receipts.runIntent(id, fingerprint, intent(undefined, 'model-create-v1'), held, async () => async () => createdFor('agent-a'))],
+    ['an intent with no input', ({ receipts }) => receipts.runIntent(id, fingerprint, { kind: 'native-create-v1', input: null }, held, async () => async () => createdFor('agent-a'))],
+    ['a version 1 receipt', ({ receipts }) => receipts.run(id, fingerprint, async () => createdFor('agent-a'), undefined, 'fix it')],
+    ['a corrupt file', async ({ directory }) => {
+      mkdirSync(directory, { mode: 0o700 })
+      writeFileSync(join(directory, `${id}.json`), '{partial', { mode: 0o600 })
+    }],
+  ])('answers nothing for a create from %s', async (_case, reach) => {
+    const at = fixture()
+    await reach(at)
+    expect(at.receipts.firstLaunchTask(id, 'agent-a', 'create')).toBeNull()
+  })
+
+  const forkReached: [string, (at: Fixture, task?: string) => Promise<Answer>][] = [
+    ['created for it', async ({ receipts }, task) => {
+      await receipts.run(id, forkOf, async () => createdFor('agent-a'), undefined, task)
+      return receipts.firstLaunchTask(id, 'agent-a', 'fork')
+    }],
+    ['created for it, its outcome kept in memory only', async ({ root, directory, receipts }, task) => {
+      const moved = join(root, 'unavailable-disk')
+      await receipts.run(id, forkOf, async () => { renameSync(directory, moved); return createdFor('agent-a') }, undefined, task)
+      renameSync(moved, directory)
+      expect(receipts.status(id)).toEqual(createdFor('agent-a'))
+      return receipts.firstLaunchTask(id, 'agent-a', 'fork')
+    }],
+    ['pending, the fork in flight', async ({ receipts }, task) => {
+      const fork = running()
+      const done = receipts.run(id, forkOf, fork.effect, undefined, task)
+      await fork.start
+      const answer = receipts.firstLaunchTask(id, 'agent-a', 'fork')
+      fork.finish(createdFor('agent-a'))
+      await done
+      return answer
+    }],
+    ['unconfirmed, read by a core after the one that forked', async ({ directory, receipts }, task) => {
+      const fork = running()
+      const done = receipts.run(id, forkOf, fork.effect, undefined, task)
+      await fork.start
+      const restarted = new AgentCreationReceipts(directory)
+      expect(restarted.status(id)).toEqual({ state: 'unconfirmed' })
+      const answer = restarted.firstLaunchTask(id, 'agent-a', 'fork')
+      fork.finish(createdFor('agent-a'))
+      await done
+      return answer
+    }],
+  ]
+  it.each(forkReached)('answers a fork\'s first task from its receipt, %s', async (_state, reach) => {
+    expect(await reach(fixture(), 'fix it')).toEqual({ task: 'fix it' })
+  })
+  it.each(forkReached)('answers no task for a fork that had none, %s', async (_state, reach) => {
+    expect(await reach(fixture())).toEqual({ task: null })
+  })
+
+  it.each<[string, (at: Fixture) => Promise<unknown>]>([
+    ['failed', ({ receipts }) => receipts.run(id, forkOf, async () => ({ state: 'failed', error: 'SOURCE_NOT_FOUND' }), undefined, 'fix it')],
+    ['created for another agent', ({ receipts }) => receipts.run(id, forkOf, async () => createdFor('agent-b'), undefined, 'fix it')],
+    ['a version 2 intent', ({ receipts }) => receipts.runIntent(id, fingerprint, intent(), held, async () => async () => createdFor('agent-a'))],
+    ['missing', async () => {}],
+  ])('answers nothing for a fork from %s', async (_case, reach) => {
+    const at = fixture()
+    await reach(at)
+    expect(at.receipts.firstLaunchTask(id, 'agent-a', 'fork')).toBeNull()
+  })
+
+  it('scrubs a deleted fork\'s first task, and still answers its outcome', async () => {
+    const { directory, receipts } = fixture()
+    await receipts.run(id, forkOf, async () => createdFor('agent-a'), undefined, 'fix it')
+    await receipts.run(`${id}-other`, forkOf, async () => createdFor('agent-b'), undefined, 'fix it')
+    expect(await receipts.scrubCreated('agent-a')).toBe(1)
+    expect(readFileSync(join(directory, `${id}.json`), 'utf8')).not.toContain('fix it')
+    expect(saved(directory)).toEqual({ version: 1, fingerprint: forkOf, outcome: createdFor('agent-a') })
+    expect(new AgentCreationReceipts(directory).status(id)).toEqual(createdFor('agent-a'))
+    expect(receipts.firstLaunchTask(id, 'agent-a', 'fork')).toEqual({ task: null })
+    expect(saved(directory, `${id}-other`).firstTask).toBe('fix it')
+    expect(await receipts.scrubCreated('agent-a')).toBe(0)
+  })
+
+  // A fork whose outcome could not be written keeps it, task and all, in memory (`unsaved`): the scrub drops it there too.
+  it('scrubs the first task of a fork whose outcome was kept in memory only', async () => {
+    const { root, directory, receipts } = fixture()
+    const moved = join(root, 'unavailable-disk')
+    await receipts.run(id, forkOf, async () => { renameSync(directory, moved); return createdFor('agent-a') }, undefined, 'fix it')
+    renameSync(moved, directory)
+    expect(await receipts.scrubCreated('agent-a')).toBe(1)
+    expect(receipts.firstLaunchTask(id, 'agent-a', 'fork')).toEqual({ task: null })
+    expect(readFileSync(join(directory, `${id}.json`), 'utf8')).not.toContain('fix it')
+    expect(receipts.status(id)).toEqual(createdFor('agent-a'))
+    expect(await receipts.scrubCreated('agent-a')).toBe(0)
+  })
+})

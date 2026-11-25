@@ -38,6 +38,7 @@ import type { PetStore } from './pets/store.js'
 import { LANE_SESSION_OVER, LANE_TOKEN_UNAVAILABLE, type MachineFleet } from './machineFleet.js'
 import type { ReviewedAnswer, AnswerReceipt } from './questionInbox.js'
 import { isTier, type Tier } from '../lib/notifyTier.js'
+import { DIAL_VOICE_SURFACE, DIAL_VOICE_SURFACE_HEADER, type DialOpenEnd, type DialVoiceEnd } from '../lib/dialUsageContract.js'
 import { HarnessSource } from './hosts/harness.js'
 import { AppFilter, type AppCounts } from './hosts/appFilter.js'
 import { agentPlaceName, appDisplayName, hostDisplayName } from './hosts/hostDetect.js'
@@ -91,8 +92,9 @@ export interface CableHostWiring {
   /** For the devices' tests: the transcriber in place of the backend's, so a capture is turned to text with nothing posted. */
   transcribe?: (pcm: Buffer, sampleRate: number, lang: string, signal?: AbortSignal) => Promise<string>
   /** A dial is on the wire on this computer, or none is any more: the core streams the turn cards and
-   *  makes the recaps for it, as for a device watching through the backend. */
-  watching?: (on: boolean) => void
+   *  makes the recaps for it, as for a device watching through the backend. An attach's promise ends once the reads
+   *  it started have landed, which the greeting's push waits for (cableSession.ts). */
+  watching?: (on: boolean) => void | Promise<void>
   /** Deliver text into an agent. The SAME path the web and the WiFi device use — see cli.ts. */
   sendTurn: (agentId: string, text: string) => void
   stopTurn: (agentId: string) => void
@@ -122,18 +124,32 @@ export interface CableHostWiring {
    */
   opened?: (machineId: string, agentId: string, reason?: OpenReason) => void
   /** A person's tap opens an agent (an open with no reason), told as it is taken, before the open and whatever becomes
-   *  of it: the notice desk ends that agent's notice. Never a question screen that came up by itself. */
+   *  of it: the dial's usage counts. Never a question screen that came up by itself. */
   tapped?: (agentId: string) => void
   /** Who sent a notice, for an agent no list holds: `describe` asks it last, after the outside agents and the fleet. */
   noticeFrom?: (agentId: string) => { name: string; engine: string; machine: string } | undefined
+  /** A person's tap on an agent no list holds, which nothing here opens: the notice desk ends its card when its notice
+   *  found no list for it either (a router that has read none knows no machine of a listed agent), as the dial has no
+   *  face of that agent to ask on. Never a question screen that came up by itself. */
+  tappedUnlisted?: (agentId: string) => void
   /** The questions only the devices ask (an agent's notice, a prompt it waits on), as drawer rows: the dial keeps a
    *  question as a row of the drawer that what is unread replaces whole. */
   noticeRows?: () => UnreadNotification[]
+  /** Whether a window's finished-turn row of that agent stays in the drawer: Needs you keeps a failed turn's alone.
+   *  Absent, every row stays. */
+  newsKept?: (agentId: string) => boolean
   /** Brings Harness Desktop forward, starting it when it is not running: a tap on one of this computer's agents with no
    *  window. False when it could not. Absent where a tap cannot start it (off macOS): its agents then take no tap. */
   launchDesktop?: () => Promise<boolean>
   /** No window came for a waiting open in HARNESS_OPEN_WAIT_MS: the open has ended. */
   desktopTimedOut?: () => void
+  /** How a voice turn ended, once a turn: the dial's usage counts (docs/plans/2026-11-23-dial-usage-counts-design.md). */
+  voiceEnded?: (end: DialVoiceEnd) => void
+  /** How a person's tap ended, once a tap, for the same counts. A question screen that came up by itself is no tap. */
+  openEnded?: (agentId: string, end: DialOpenEnd) => void
+  /** The dial answered a Harness agent's question, told before the answer is routed, for the same counts: with the fleet
+   *  on, the answer goes through the fleet's router and never through `answer` or `answerReviewed` here. */
+  answered?: (agentId: string, requestId: string) => void
   notificationRead?: (machineId: string, agentId: string, readToken: string) => void
   /** A fork the dial asked for is open: the window puts it beside its source and focuses it. */
   forked?: (machineId: string, agentId: string, sourceAgentId: string) => void
@@ -165,6 +181,10 @@ export interface CableHostWiring {
   pets?: () => PetStore | null
   /** The app a dial that says `appFilter` shows changed from one app to another, and why: its dials are told at once. */
   appSwitched?: (cause: SwitchCause) => void
+  /** An app stayed in front for FRONT_SETTLE_MS, with or without a window, before the settle shows anything: a tab
+   *  report waiting on that app follows its agent's page here (`followPage`), so the settle shows that page directly,
+   *  never the app's first. */
+  appSettling?: (app: string) => void
   /** An app stayed in front for FRONT_SETTLE_MS, with or without a window, after any switch it caused: the Claude app's
    *  session and a tab report waiting on that app are followed then. */
   appSettled?: (app: string) => void
@@ -288,6 +308,7 @@ export class DaemonCableHost implements CableHost {
       // count as the last machine list left them: that read feeds their source (machineSnapshot).
       counts: () => this.counts(),
       switched: (cause) => wiring.appSwitched?.(cause),
+      settling: (app) => wiring.appSettling?.(app),
       settled: (app) => {
         this.viewOnSettle(app)
         wiring.appSettled?.(app)
@@ -407,12 +428,14 @@ export class DaemonCableHost implements CableHost {
    * follows — that push calls listAgents(), which for a remote machine is an RPC over exactly this lane.
    * Awaiting it here would block the greeting, so it is fired and the push retries on the next tick if
    * it loses the race; a failure marks the machine unreachable rather than pretending it has no agents.
+   * It returns the reads `watching` started, which the greeting does wait for, at most half a second.
    */
-  onDialAttached(): void {
-    this.wiring.watching?.(true)
+  onDialAttached(): void | Promise<void> {
+    const reads = this.wiring.watching?.(true)
     this.stopLaneRetry()
     this.laneTries = 0
     this.openLane(++this.plugIn, 'cable: dial on the wire — opening the cloud lane')
+    return reads
   }
 
   private openLane(plugIn: number, line: string): void {
@@ -597,7 +620,7 @@ export class DaemonCableHost implements CableHost {
     const waiting = this.waiting
     if (!waiting) return
     // The window a tap started is here: it is handed the tap, as a window that was open would have been.
-    this.endWaiting()
+    this.endWaiting({ outcome: 'ok' })
     this.wiring.log(`cable: open ${waiting.machineId}/${waiting.agentId} (notification)`)
     this.wiring.opened?.(waiting.machineId, waiting.agentId)
   }
@@ -673,9 +696,17 @@ export class DaemonCableHost implements CableHost {
    *  a time: the last tap on any agent wins (openAgent). In memory only. */
   private waiting: { machineId: string; agentId: string; cancel: () => void } | null = null
 
-  private endWaiting(): void {
-    this.waiting?.cancel()
+  /** The person's taps, on any agent, in turn: a source that waits before it acts asks whether its tap is still the
+   *  latest (openAgent). */
+  private taps = 0
+
+  /** [end] is how the waiting tap's open ended: every tap says one. */
+  private endWaiting(end: DialOpenEnd): void {
+    const waiting = this.waiting
+    if (!waiting) return
+    waiting.cancel()
     this.waiting = null
+    this.openEnded(waiting.agentId, end)
   }
 
   /** Every agent on this computer, by source; null when the devices have none. Read for the machine list, and on the
@@ -757,8 +788,11 @@ export class DaemonCableHost implements CableHost {
     return this.onMachine(agentId, opts)?.agent.host
   }
 
+  /** The page the agent is on, which a notice's pick turns the dial to: tmux's or herdr's for an agent nested there
+   *  (Diego, 2026-11-23), else its app's. The name stays `appOf`, as the session asks it. */
   appOf(agentId: string, opts: { apps?: boolean } = {}): string | undefined {
-    return this.onMachine(agentId, opts)?.agent.app
+    const on = this.onMachine(agentId, opts)
+    return on && pageOf(on.agent)
   }
 
   /** A pick from the dial's list of apps. With a window, on the tab another app with agents turns the dial to its ring;
@@ -805,8 +839,33 @@ export class DaemonCableHost implements CableHost {
     return this.filter.latestFront()
   }
 
+  /**
+   * A tab or prompt follow to this agent of the machine list: one in tmux or herdr inside the app settled in front turns
+   * the shown page to tmux's or herdr's and holds it (Diego's decision 4, 2026-11-23; `AppFilter.follow`). Told once per
+   * follow, before the dials are asked to follow it, so every dial's next read sees the page. With a window open the
+   * turn sets the view to the apps ring, as that app settling with agents does (`viewOnSettle`), unless Harness was
+   * picked over that app: the pick holds the tab, as a pick on the dial holds the filter.
+   */
+  followPage(agentId: string): void {
+    const agent = this.registry?.entries().find((e) => e.agent.id === agentId)?.agent
+    if (!agent || (this.swarms !== null && agent.app === this.pickedOver)) return
+    if (!this.filter.follow(agent.app, pageOf(agent)) || this.swarms === null) return
+    // Told from `appSettling`, before `viewOnSettle` ends it, a pick of Harness over the app settled before still holds.
+    this.pickedOver = undefined
+    this.setView('apps', 'front')
+  }
+
   localFollowed(cause: FollowCause, outcome: 'moved' | 'no-tile'): void {
     this.wiring.localFollowed?.(cause, outcome)
+  }
+
+  voiceEnded(end: DialVoiceEnd): void {
+    this.wiring.voiceEnded?.(end)
+  }
+
+  /** How a person's tap ended, for the dial's usage counts. A count never changes what the tap does. */
+  private openEnded(agentId: string, end: DialOpenEnd): void {
+    try { this.wiring.openEnded?.(agentId, end) } catch (error) { this.wiring.log(`cable: open end not counted (${errorKind(error)})`) }
   }
 
   /** The dial that reported last and what it shows. One report for all dials: a none from another dial is dropped, so
@@ -837,11 +896,13 @@ export class DaemonCableHost implements CableHost {
     this.unread = items
   }
 
-  /** What is unread, the devices' own questions first: a drawer carries one row an agent, the first the dial is sent. */
+  /** What is unread, the devices' own questions first: a drawer carries one row an agent, the first the dial is sent. A
+   *  window's question always stays; its finished turn only as `newsKept` says. */
   listUnread(): UnreadNotification[] {
     const asked = this.wiring.noticeRows?.() ?? []
     const agents = new Set(asked.map((row) => row.agentId))
-    return [...asked, ...this.unread.filter((row) => !agents.has(row.agentId))]
+    const kept = this.wiring.newsKept
+    return [...asked, ...this.unread.filter((row) => !agents.has(row.agentId) && (row.question || !kept || kept(row.agentId)))]
   }
 
   readNotification(agentId: string, readToken: string): void {
@@ -945,7 +1006,9 @@ export class DaemonCableHost implements CableHost {
     this.harness.update(flat.map((a) => bound.get(a.id) ? { ...a, sessionId: bound.get(a.id) } : a), local.id,
       await this.viaFleet((r) => r.activityTimes()))
     const waiting = this.waiting
-    if (waiting && !this.harness.list().some((a) => a.id === waiting.agentId)) this.endWaiting()
+    if (waiting && !this.harness.list().some((a) => a.id === waiting.agentId)) {
+      this.endWaiting({ outcome: 'failed', code: 'unknown_agent' })
+    }
     // Read once: each read merges every source's whole list.
     const entries = registry.entries()
     const sourceOf = new Map(entries.map((e) => [e.agent, e.source]))
@@ -1072,25 +1135,38 @@ export class DaemonCableHost implements CableHost {
     return this.viaFleet((r) => r.machineOf(agentId))
   }
 
-  openAgent(agentId: string, reason?: OpenReason): void | Promise<void | { ok: false; error: string }> {
+  openAgent(agentId: string, reason?: OpenReason): void | Promise<void | 'superseded' | { ok: false; error: string }> {
     // The last tap wins, whatever agent it is on: a tap still waiting for Desktop's window would open its agent over the
     // app this one brings forward. A question screen that came up by itself is no tap.
     if (!reason) {
-      this.endWaiting()
+      this.taps++
+      this.endWaiting({ outcome: 'failed', code: 'desktop_no_window' })
       this.wiring.tapped?.(agentId)
     }
     const outside = this.outsideEntry(agentId)
     if (outside) {
       // Only a person's tap switches the other app: a question screen that came up by itself never does.
       if (reason) return
-      return (outside.source.focus?.(outside.agent) ?? Promise.resolve(false))
-        .then((opened) => opened ? undefined : { ok: false as const, error: `${agentPlaceName(outside.agent)} did not open it.` })
+      const tap = this.taps
+      return (outside.source.focus?.(outside.agent, () => this.taps === tap) ?? Promise.resolve(false)).then((opened) => {
+        // A later tap replaced this one before it acted (eval I13, PM 2026-11-24): the later tap's end is the one counted.
+        if (opened === 'superseded') return opened
+        this.openEnded(agentId, opened ? { outcome: 'ok' } : { outcome: 'failed', code: 'not_opened' })
+        return opened ? undefined : { ok: false as const, error: `${agentPlaceName(outside.agent)} did not open it.` }
+      }, (error: unknown) => {
+        this.openEnded(agentId, { outcome: 'failed', code: 'not_opened' })
+        throw error
+      })
     }
     const machineId = this.machineOf(agentId)
     if (!machineId) {
       // Same rule as focus: an agent id without its machine is not routable, and guessing is how a
       // remote move used to land on a local agent.
       this.wiring.log(`cable: ignored open for unknown agent ${agentId}`)
+      if (!reason) {
+        this.wiring.tappedUnlisted?.(agentId)
+        this.openEnded(agentId, { outcome: 'failed', code: 'unknown_agent' })
+      }
       return
     }
     // With no window nothing could open a tap on one of this computer's agents: Desktop is started, and its window is
@@ -1100,6 +1176,8 @@ export class DaemonCableHost implements CableHost {
     }
     this.wiring.log(`cable: open ${machineId}/${agentId} (${reason ?? 'notification'})`)
     this.wiring.opened?.(machineId, agentId, reason)
+    // With no window, nothing hears the open.
+    if (!reason) this.openEnded(agentId, this.swarms ? { outcome: 'ok' } : { outcome: 'failed', code: 'desktop_no_window' })
   }
 
   /** The tap waits from now, before Desktop is asked: a window that connects while it is still being started finds it. */
@@ -1108,6 +1186,7 @@ export class DaemonCableHost implements CableHost {
       machineId, agentId,
       cancel: (this.wiring.appTimer ?? unrefAfter)(HARNESS_OPEN_WAIT_MS, () => {
         this.waiting = null
+        this.openEnded(agentId, { outcome: 'failed', code: 'desktop_no_window' })
         this.wiring.desktopTimedOut?.()
       }),
     }
@@ -1116,7 +1195,7 @@ export class DaemonCableHost implements CableHost {
     // `open -b` failed or ran out its time: only a tap still waiting failed. A window that came meanwhile has the open,
     // and a later tap answers for itself.
     if (this.waiting !== tap) return
-    this.endWaiting()
+    this.endWaiting({ outcome: 'failed', code: 'desktop_not_started' })
     return { ok: false, error: `${hostDisplayName('harness')} did not open it.` }
   }
 
@@ -1189,11 +1268,19 @@ export class DaemonCableHost implements CableHost {
 
   answerReviewed(answer: ReviewedAnswer): Promise<AnswerReceipt> {
     if (this.outside(answer.agentId)) return Promise.resolve({ ok: false, error: 'Use the terminal to answer this question.' })
+    this.answered(answer.agentId, answer.requestId)
     return this.viaFleet((r) => r.answerReviewed(answer))
   }
 
   answer(agentId: string, requestId: string, answers: Record<string, string>): void {
-    if (!this.outside(agentId)) this.viaFleet((r) => r.answer(agentId, requestId, answers))
+    if (this.outside(agentId)) return
+    this.answered(agentId, requestId)
+    this.viaFleet((r) => r.answer(agentId, requestId, answers))
+  }
+
+  /** An answer on the dial, for the dial's usage counts. A count never changes where the answer goes. */
+  private answered(agentId: string, requestId: string): void {
+    try { this.wiring.answered?.(agentId, requestId) } catch (error) { this.wiring.log(`cable: answer not counted (${errorKind(error)})`) }
   }
 
 
@@ -1428,6 +1515,8 @@ export class DaemonCableHost implements CableHost {
           authorization: `Bearer ${token}`,
           'x-autonomous-env': autonomousEnv,
           'content-type': `multipart/form-data; boundary=${boundary}`,
+          // How the backend counts the dial's voice apart from the rest (Decision 4): a fixed value, never an id.
+          [DIAL_VOICE_SURFACE_HEADER]: DIAL_VOICE_SURFACE,
         },
         body,
         signal,

@@ -51,7 +51,7 @@ function theme(name: 'light' | 'dark'): HTMLElement {
   const tray = document.createElement('img')
   tray.className = 'tray'
   tray.src = '../src-tauri/icons/tray.png'
-  tray.alt = 'Harness'
+  tray.alt = 'Harness Device'
   bar.append(tray)
 
   const grid = document.createElement('div')

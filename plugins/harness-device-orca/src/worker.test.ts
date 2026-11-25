@@ -301,15 +301,18 @@ test('deactivate stops the loop: nothing is posted or updated after it', async (
   assert.deepEqual([worker.posts.length, updates().length], seen)
 })
 
-test('the manifest asks for workspace:read and workspace.changed, at 0.2.0', () => {
+test('the manifest asks for workspace:read and workspace.changed, at 0.3.0', () => {
   const manifest = JSON.parse(readFileSync(new URL('../orca-plugin.json', import.meta.url), 'utf8'))
-  assert.equal(manifest.version, '0.2.0')
+  assert.equal(manifest.version, '0.3.0')
   assert.deepEqual(manifest.capabilities, [{ kind: 'workspace:read' }])
   assert.deepEqual(manifest.contributes.events, [{ on: 'workspace.changed' }])
   assert.equal(manifest.engines.orca, '>=1.4.248')
 })
 
-const front = (terminals: string[] | null) => JSON.stringify({ type: 'orcaFront', terminals })
+const front = (terminals: string[] | null, workspace: string | null = null) => JSON.stringify({ type: 'orcaFront', terminals, workspace })
+// Orca's two forms of a worktree's id: its identity, and, for a worktree with none, its own id, which holds its folder.
+const IDENTITY = 'identity:wt2:local:0f8e2c1a-3b4d-4e5f-8a9b-0c1d2e3f4a5b'
+const WORKTREE = '6a1c2e3f-4b5d-4c6e-9f70-8a9b0c1d2e3f::/Users/someone/secret-wt'
 
 // A bounded number of turns, for a post the worker makes or should not: the cases below never wait on a post that may
 // not come.
@@ -325,19 +328,41 @@ async function open(results: Record<string, unknown> = {}) {
   return m
 }
 
-test('each workspace.changed hands its terminal ids to the devices, and nothing else of it', async () => {
+test('each workspace.changed hands its terminal ids and its workspace id to the devices, and nothing else of it', async () => {
   const { worker, bodies } = await open()
   try {
     await worker.emit('workspace.changed', {
-      context: { workspaceId: '/Users/someone/secret-wt', branch: 'payroll', displayName: 'Payroll', terminals: [{ id: H(1), title: 'PM' }, { id: H(2) }] },
+      context: { workspaceId: IDENTITY, branch: 'payroll', displayName: 'Payroll', terminals: [{ id: H(1), title: 'PM' }, { id: H(2) }] },
     })
     await turns()
   } finally {
     await worker.deactivate()
   }
-  assert.equal(bodies.at(-1), front([H(1), H(2)]))
+  assert.equal(bodies.at(-1), front([H(1), H(2)], IDENTITY))
   const seen = [...bodies, ...worker.logs].join('\n')
-  for (const word of ['secret-wt', 'payroll', 'Payroll', 'PM']) assert.ok(!seen.includes(word), word)
+  for (const word of ['payroll', 'Payroll', 'PM']) assert.ok(!seen.includes(word), word)
+  assert.ok(!worker.logs.some((line) => line.includes('identity:')), worker.logs.join('\n'))
+  assert.deepEqual(worker.refusals, [])
+})
+
+test('workspace.changed hands the workspace id on; no context hands null', async () => {
+  const { worker, bodies } = await open()
+  try {
+    for (const context of [
+      { workspaceId: WORKTREE, branch: 'main', displayName: 'main', terminals: [] },
+      // An Orca that names no workspace in its context.
+      { branch: 'main', displayName: 'main', terminals: [{ id: H(1) }] },
+      { workspaceId: IDENTITY, branch: 'main', displayName: 'main', terminals: [{ id: H(1) }] },
+      null,
+    ]) {
+      await worker.emit('workspace.changed', { context })
+      await turns()
+    }
+  } finally {
+    await worker.deactivate()
+  }
+  assert.deepEqual(bodies.slice(-4), [front([], WORKTREE), front([H(1)]), front([H(1)], IDENTITY), front(null)])
+  assert.ok(!worker.logs.some((line) => line.includes('secret-wt') || line.includes('identity:')), worker.logs.join('\n'))
   assert.deepEqual(worker.refusals, [])
 })
 

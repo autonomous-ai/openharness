@@ -35,10 +35,10 @@ describe('notifyTier', () => {
     expect(await decide({ ...base, recap: '  ' })).toMatchObject({ tier: 'silent', by: 'rule:empty' })
   })
 
-  it('Needs you: an ordinary finished turn is a drawer row', async () => {
+  it('Needs you: an ordinary finished turn draws its tile alone, with no drawer row', async () => {
     const { decide, log } = make({ now: () => 0 })
-    expect(await decide({ ...base, needsYou: true })).toEqual({ tier: 'list', by: 'rule:needs-you', detail: 'needs-you', ms: 0 })
-    expect(log.mock.calls[0][0]).toBe('notify · list · rule:needs-you · needs-you · 0ms')
+    expect(await decide({ ...base, needsYou: true })).toEqual({ tier: 'silent', by: 'rule:needs-you', detail: 'needs-you', ms: 0 })
+    expect(log.mock.calls[0][0]).toBe('notify · silent · rule:needs-you · needs-you · 0ms')
   })
 
   it('Needs you lowers nothing else', async () => {

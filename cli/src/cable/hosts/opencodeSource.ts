@@ -176,20 +176,28 @@ export class OpencodeSource implements HostSource {
   private saidOver: number | undefined
   /** Sessions with words under way. */
   private readonly sending = new Set<string>()
+  /** Ends the promise of this start, once its first list landed or failed, no service was there or it stopped. */
+  private firstList: (() => void) | undefined
 
   constructor(private readonly deps: OpencodeSourceDeps) {}
 
-  start(): void {
-    if (this.running) return
+  /** Ends once this start's first list has: opencode's sessions taken, the list or the service failed, or the source
+   *  stopped meanwhile; with no service or one refused, at once. The dial's greeting waits for it (devices.ts
+   *  dialAttached), so its first list holds opencode's sessions. A start while it runs ends at once. */
+  start(): Promise<void> {
+    if (this.running) return Promise.resolve()
     this.running = true
+    const first = new Promise<void>((resolve) => { this.firstList = resolve })
     // Held from start to stop, live or not: a new service.json starts again at once.
     this.unwatch = this.deps.watch(() => this.changed())
     this.look(this.deps.client.registration())
+    return first
   }
 
   stop(): void {
     if (!this.running) return
     this.running = false
+    this.firstListEnded()
     this.unwatch?.()
     this.unwatch = undefined
     this.reset()
@@ -286,6 +294,7 @@ export class OpencodeSource implements HostSource {
   /** No service to follow: nothing listed, no timer, only the watch. A refusal is said once, until the registration
    *  changes. */
   private refuse(fault: OpencodeFault): void {
+    this.firstListEnded()
     this.close()
     this.clear()
     if (fault === 'no_service') {
@@ -300,6 +309,7 @@ export class OpencodeSource implements HostSource {
 
   /** The attempt failed: it ends, and the retries run. */
   private failed(said: 'closed' | 'list', fault: OpencodeFault | 'ended'): void {
+    this.firstListEnded()
     this.deps.log(`[opencode] ${said} · ${fault}`)
     const since = this.liveSince
     this.liveSince = undefined
@@ -319,6 +329,11 @@ export class OpencodeSource implements HostSource {
       this.retryTimer = undefined
       this.look(this.deps.client.registration())
     })
+  }
+
+  private firstListEnded(): void {
+    this.firstList?.()
+    this.firstList = undefined
   }
 
   /** Everything of the service in hand goes: its attempt, its rows, its retries and its refusal. */
@@ -393,6 +408,8 @@ export class OpencodeSource implements HostSource {
     const listed = await Promise.all(kept.slice(0, MAX_SESSIONS).map((entry) => this.read(entry)))
     if (epoch !== this.epoch) return
     this.heard = undefined
+    // A list begun before the last stop or close is dropped above, not this start's. Its waiters run once it is taken.
+    this.firstListEnded()
     this.land(listed, heard, Math.max(0, kept.length - MAX_SESSIONS))
     this.liveSince ??= this.deps.monotonic()
     if (!this.again) return

@@ -7,11 +7,13 @@
  * - the Notifications setting, asked over the pipe, is answered and kept in the data folder;
  * - the real `harness device vscode link` names the pipe, its token and its record, and a window's stream signed with
  *   that token is answered with the proof and stays open;
- * - a request with another token is refused, and an answer without the proof is dropped.
+ * - a request with another token is refused, and an answer without the proof is dropped;
+ * - signed in, the stand-in dial's attach reaches the gateway's report queue: the devices and the gateway, both inside
+ *   the core's process here, meet at the devices' dial-usage.json (docs/plans/2026-11-23-dial-usage-counts-design.md).
  * Windows only: the Linux and macOS e2e runs find this file and skip it.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, request, type IncomingMessage, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -21,6 +23,7 @@ import { askDevices } from '../src/devices/listenerClient.js'
 import { DEVICES_TOKEN_FILE, writeDevicesRecord } from '../src/devices/listenerPipe.js'
 import { ensureDaemonToken, newPipeNonce, newPipePath, PIPE_AUTH_HEADER, pipeAuthValue, pipeProven } from '../src/lib/windows/pipeAuth.js'
 import { until } from './harness/daemon.js'
+import { FakeBackend } from './harness/fakeBackend.js'
 import { PROFILE_NAME, startWindowsDaemon, type WindowsDaemon } from './harness/windowsDaemon.js'
 
 const LINE = 'Need you'
@@ -122,4 +125,35 @@ describe.runIf(process.platform === 'win32')('the dial on Windows', () => {
       rmSync(other, { recursive: true, force: true })
     }
   })
+
+  it('signed in, the stand-in dial\'s attach reaches the gateway\'s report queue', async () => {
+    const backend = await FakeBackend.start()
+    backend.productUsage = { enabled: true, revision: 0, reports: [] }
+    const machine = { machineId: 'd2'.repeat(16), computerId: 'e2e-dial-usage-windows', name: 'fixture', token: 'e2e-dial-usage-windows-token' }
+    backend.addMachine(machine)
+    let signedIn: WindowsDaemon | undefined
+    try {
+      signedIn = await startWindowsDaemon({
+        env: { BACKEND_WS_URL: backend.wsUrl, WEB_URL: backend.httpUrl, ADAPTER_COMPUTER_ID: machine.computerId },
+        prepare: ({ auth }) => writeFileSync(join(auth, 'session.json'), JSON.stringify({ version: 1, accessToken: machine.token,
+          autonomousEnv: 'prod', computerId: machine.computerId, machineId: machine.machineId,
+          expiresAt: Date.now() + 86_400_000, updatedAt: Date.now(), signInEpoch: 'e2e' })),
+      })
+      const daemon = signedIn
+      onTestFailed(() => { console.log(`---- signed-in daemon log\n${daemon.log().split('\n').slice(-200).join('\n')}`) })
+      const day = new Date().toISOString().slice(0, 10)
+      await daemon.dial.greet(90_000)
+      await daemon.dial.next((m) => m.t === 'agents.end', 45_000, 'the first list')
+      // The gateway's tick, at most a minute after its start and then 45 to 75 seconds apart (gateway/productUsage.ts),
+      // takes the day into its queue, a file per account: the report it goes in is the macOS run's to wait for.
+      const queues = join(daemon.dataDir, 'product-usage')
+      await until('the gateway to take the dial\'s attach', () => existsSync(queues) && readdirSync(queues)
+        .filter((name) => name.endsWith('.json'))
+        .some((name) => (JSON.parse(readFileSync(join(queues, name), 'utf8')) as { dial?: { sent?: Record<string, Record<string, number>> } })
+          .dial?.sent?.[day]?.dial_connected_installation_days === 1) || null, 150_000, 1_000)
+    } finally {
+      await signedIn?.close()
+      await backend.close()
+    }
+  }, 600_000)
 })

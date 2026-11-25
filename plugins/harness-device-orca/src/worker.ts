@@ -1,6 +1,6 @@
 // The plugin's worker: Orca starts it as the person running Orca. It runs the loop on Node's own inputs, tells the
-// panel and the status bar item each change of the dial's state, and hands the loop the focused worktree's terminals.
-// It is read only.
+// panel and the status bar item each change of the dial's state, and hands the loop the focused worktree's terminals
+// and Orca's id of it. It is read only.
 import type { OrcaWorkerApi } from 'orca/worker'
 import { startDial } from './dial'
 import { nodeInputs, type DialInputs } from './inputs'
@@ -52,9 +52,12 @@ export function wire(orca: OrcaWorkerApi, inputs: DialInputs): () => Promise<voi
     log: (line) => orca.log(line),
   })
   const handler = orca.panels.handle('dial.get', () => dial.state())
-  // Only the terminal ids leave the worker: no name, branch, title or path of the workspace.
+  // Only ids leave the worker: the terminals', so the dial's swipe stays among them, and Orca's id of the workspace, so
+  // the devices can tell which of Orca's chats are in it, as a chat has no terminal. That id holds the worktree's folder
+  // when the worktree has no identity, as the chats' worktreeId the devices read from Orca's CLI does. No name, branch
+  // or title goes. An Orca that names no workspace sends null for it.
   const workspace = orca.events.on('workspace.changed', ({ context }) => {
-    dial.front(context && context.terminals.map(({ id }) => id))
+    dial.front(context && context.terminals.map(({ id }) => id), context ? context.workspaceId : null)
   })
   showBar(dial.state())
 

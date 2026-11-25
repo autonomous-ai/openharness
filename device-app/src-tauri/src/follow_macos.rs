@@ -26,7 +26,7 @@ use std::thread;
 /// Seconds each Accessibility call waits for ChatGPT: a hung app answers an error, and never holds the thread for good.
 const TIMEOUT: f32 = 1.0;
 
-/// The macOS door: Accessibility for the ChatGPT window, and whether Harness may use it.
+/// The macOS door: Accessibility for the ChatGPT window, and whether Harness Device may use it.
 pub struct MacFollow {
     home: PathBuf,
 }
@@ -62,6 +62,10 @@ impl AxTrust for MacFollow {
         unsafe { AXIsProcessTrusted() }
     }
 
+    fn gated(&self) -> bool {
+        true
+    }
+
     fn prompt(&self) {
         // SAFETY: the framework's constant, set before any code runs.
         let key: &CFString = unsafe { kAXTrustedCheckOptionPrompt };
@@ -76,7 +80,8 @@ impl AxTrust for MacFollow {
         let context = Box::into_raw(Box::new(changed));
         let name = CFString::from_static_str("com.apple.accessibility.api");
         // SAFETY: `context` is never freed and `trust_changed` reads it as the box it is. Delivered immediately:
-        // AppKit holds distributed notifications back while the app is not active, and Harness almost never is.
+        // AppKit holds distributed notifications back while the app is not active, and Harness Device almost
+        // never is.
         unsafe {
             center.add_observer(
                 context.cast_const().cast(),
@@ -103,7 +108,7 @@ unsafe extern "C-unwind" fn trust_changed(
 }
 
 /// The app's CFBundleIdentifier, from its Info.plist read fresh: NSBundle would keep its first read for the process's
-/// life, and ChatGPT may be installed or removed while Harness runs.
+/// life, and ChatGPT may be installed or removed while Harness Device runs.
 fn bundle_id(app: &Path) -> Option<String> {
     let plist = app.join("Contents").join("Info.plist");
     autoreleasepool(|_| {
@@ -348,6 +353,11 @@ mod tests {
         fs::create_dir_all(folder.join("Contents").join("Info.plist")).unwrap();
         assert_eq!(bundle_id(&folder), None);
         assert_eq!(bundle_id(&root.path().join("Gone.app")), None);
+    }
+
+    #[test]
+    fn the_mac_door_asks_for_accessibility() {
+        assert!(MacFollow::new(PathBuf::from("/Users/someone")).gated());
     }
 
     #[test]

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { APP_BUNDLES, APP_IDS, appDisplayName, detectApp, detectHost, hostDisplayName, inCmux, inHerdr, ownHints, UNKNOWN_APP } from './hostDetect.js'
+import { APP_BUNDLES, APP_IDS, appDisplayName, detectApp, detectHost, EXTENSION_TAB, hostDisplayName, inCmux, inHerdr, otherProduct, ownHints, UNKNOWN_APP } from './hostDetect.js'
 
 describe('detectHost', () => {
   it.each([
@@ -147,6 +147,46 @@ describe('detectApp', () => {
     expect(detectApp({})).toBe('terminal')
     expect(detectApp({ ORCA_AGENT_SESSION_ID: 'x' })).toBe('orca')
     expect(detectApp({ WEZTERM_PANE: '0' })).toBe('wezterm')
+  })
+
+  // Orca sets TERM_PROGRAM=Orca in every terminal it spawns; off macOS no bundle id names it (Ken's Dell, Win11 x64,
+  // 2026-11-25: the agent sat on Other's page).
+  it.each([
+    ['an Orca agent off macOS', { TERM_PROGRAM: 'Orca', ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: 'term_1' }],
+    ['a claude typed by hand in an Orca terminal', { TERM_PROGRAM: 'Orca' }],
+    ['an Orca agent on macOS', { TERM_PROGRAM: 'Orca', ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: 'term_1',
+      __CFBundleIdentifier: 'com.stablyai.orca' }],
+  ])("%s is Orca's", (_name, hints) => {
+    expect(detectApp(hints)).toBe('orca')
+    expect(detectHost(hints)).toBe('orca')
+  })
+
+  it("a multiplexer in an Orca terminal is the nearer host, Orca the app", () => {
+    const herdr = { TERM_PROGRAM: 'Orca', HERDR_PANE_ID: '1' }
+    expect(detectApp(herdr)).toBe('orca')
+    expect(detectHost(herdr)).toBe('herdr')
+    expect(detectHost({ TERM_PROGRAM: 'Orca', ZELLIJ: '0' })).toBe('zellij')
+  })
+
+  // On Windows the hook sends the bundle id of the app it found (notify.mjs lookUpWindowsApp), while a program started
+  // from an Orca terminal that sets no TERM_PROGRAM of its own keeps Orca's: the bundle id names the app.
+  it("an app started from an Orca terminal with its own bundle id is that app's, not Orca's", () => {
+    expect(detectApp({ TERM_PROGRAM: 'Orca', __CFBundleIdentifier: 'org.alacritty' })).toBe(UNKNOWN_APP)
+    const cursor = { TERM_PROGRAM: 'Orca', __CFBundleIdentifier: APP_BUNDLES.cursor }
+    expect(detectApp(cursor)).toBe('cursor')
+    expect(detectHost(cursor)).toBe('cursor')
+    expect(detectHost({ TERM_PROGRAM: 'Orca', __CFBundleIdentifier: APP_BUNDLES.claude })).toBe('claude')
+    expect(detectHost({ TERM_PROGRAM: 'Orca', __CFBundleIdentifier: APP_BUNDLES.codex })).toBe('codex')
+  })
+
+  // VS Code or the Claude app started from an Orca terminal keeps its TERM_PROGRAM, and on macOS the editor's inherited
+  // bundle id is dropped (ownHints): the word the session gives of where it runs names no Orca terminal.
+  it("the extension's tab and the Claude app's sessions are never Orca's, though they inherit its TERM_PROGRAM", () => {
+    for (const entrypoint of [EXTENSION_TAB, 'claude-desktop']) {
+      const hints = { TERM_PROGRAM: 'Orca', CLAUDE_CODE_ENTRYPOINT: entrypoint }
+      expect(detectApp(hints)).toBe(UNKNOWN_APP)
+      expect(detectHost(hints)).toBe('terminal')
+    }
   })
 
   it("the Claude desktop app's bundle id is claude, read Claude", () => {
@@ -343,5 +383,49 @@ describe('ownHints', () => {
       expect(ownHints(hints)).toEqual(hints)
       expect(detectApp(hints)).toBe(editor)
     }
+  })
+})
+
+// The dial's counts name the app behind the Other page by product only: a raw hint never leaves otherProduct
+// (docs/plans/2026-11-23-dial-usage-counts-design.md).
+describe('otherProduct', () => {
+  it.each([
+    [{ __CFBundleIdentifier: 'dev.zed.Zed' }, 'zed'],
+    [{ __CFBundleIdentifier: 'dev.zed.Zed-Preview' }, 'zed'],
+    [{ TERM_PROGRAM: 'zed' }, 'zed'],
+    [{ __CFBundleIdentifier: 'org.alacritty' }, 'alacritty'],
+    [{ __CFBundleIdentifier: 'co.zeit.hyper' }, 'hyper'],
+    [{ TERM_PROGRAM: 'Hyper' }, 'hyper'],
+    [{ __CFBundleIdentifier: 'org.tabby' }, 'tabby'],
+    [{ TERM_PROGRAM: 'Tabby' }, 'tabby'],
+    [{ __CFBundleIdentifier: 'com.jetbrains.intellij' }, 'jetbrains'],
+    [{ __CFBundleIdentifier: 'com.jetbrains.pycharm' }, 'jetbrains'],
+    [{ __CFBundleIdentifier: 'com.raphaelamorim.rio' }, 'rio'],
+    [{ TERM_PROGRAM: 'rio' }, 'rio'],
+    [{ __CFBundleIdentifier: 'dev.commandline.waveterm' }, 'wave'],
+    [{ TERM_PROGRAM: 'waveterm' }, 'wave'],
+    [{ __CFBundleIdentifier: 'com.panic.Nova' }, 'nova'],
+    [{ __CFBundleIdentifier: 'com.exafunction.windsurf' }, 'windsurf'],
+  ])("names the Other page's app from its fixed list: %j -> %s", (hints, app) => {
+    expect(otherProduct(hints)).toBe(app)
+  })
+
+  it('the bundle id decides before TERM_PROGRAM', () => {
+    expect(otherProduct({ __CFBundleIdentifier: 'org.alacritty', TERM_PROGRAM: 'zed' })).toBe('alacritty')
+    expect(otherProduct({ __CFBundleIdentifier: 'com.example.term', TERM_PROGRAM: 'zed' })).toBe('unlisted')
+  })
+
+  it('any other value is unlisted, never itself; neither hint is unknown', () => {
+    expect(otherProduct({ __CFBundleIdentifier: 'com.example.term' })).toBe('unlisted')
+    expect(otherProduct({ TERM_PROGRAM: 'someterm' })).toBe('unlisted')
+    expect(otherProduct({ __CFBundleIdentifier: 'com.jetbrains' })).toBe('unlisted')
+    expect(otherProduct({})).toBe('unknown')
+    expect(otherProduct({ ZELLIJ: '0' })).toBe('unknown')
+  })
+
+  it("a hint naming an object's own key is unlisted: hint values are outside text", () => {
+    expect(otherProduct({ __CFBundleIdentifier: 'constructor' })).toBe('unlisted')
+    expect(otherProduct({ TERM_PROGRAM: 'constructor' })).toBe('unlisted')
+    expect(otherProduct({ TERM_PROGRAM: '__proto__' })).toBe('unlisted')
   })
 })

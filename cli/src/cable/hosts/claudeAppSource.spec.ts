@@ -4,6 +4,7 @@ import type { ClaudeStoreRoot } from './appPlaces.js'
 import { observedAgentId } from './observed.js'
 import { ClaudeAppSource, type ClaudeAppSourceDeps } from './claudeAppSource.js'
 import type { ClaudeAppSession, StoreFolders, StoreRead } from './claudeAppStore.js'
+import type { RingRank } from './select.js'
 import { capsLetters, type HostAgent, type PaneSwitch, type SendResult } from './types.js'
 
 const ROOT = '/h/Library/Application Support/Claude/claude-code-sessions'
@@ -50,11 +51,20 @@ const nth = (n: number, over: Partial<ClaudeAppSession> = {}) => session({
   cwd: `/work/p${n}`, title: `Task ${n}`, lastActivityAt: T - n * 1000, ...over,
 })
 const fileOf = (one: ClaudeAppSession) => `${one.localId}.json`
+/** The rank the store's order gives: each session's agent at its place. */
+const rankOf = (sessions: ClaudeAppSession[]): RingRank =>
+  new Map(sessions.map((one, at) => [observedAgentId('claude', one.sessionId), at]))
 const read = (sessions: ClaudeAppSession[], over: Partial<StoreRead> = {}): StoreRead => ({
   sessions, parsed: sessions.length, skipped: 0, over: 0, more: false, ...over,
 })
 /** Lets what the source was answered be taken in. */
 const turn = () => new Promise((resolve) => setImmediate(resolve))
+/** Whether a start's promise has ended, read as the test goes. */
+const ending = (start: Promise<void>) => {
+  const state = { ended: false }
+  void start.then(() => { state.ended = true })
+  return state
+}
 
 type Name = 'folders' | 'files' | 'touch' | 'read' | 'forget'
 interface Call { name: Name; args: unknown[]; resolve(value: unknown): void; reject(error: Error): void }
@@ -97,6 +107,7 @@ describe("the Claude app's source (docs/plans/2026-11-19-dial-claude-app-session
     const show = vi.fn(async (_localId: string, _agentId: string): Promise<PaneSwitch> => 'ok')
     const canLink = vi.fn((_localId: string) => true)
     const wake = { send: vi.fn(async (): Promise<SendResult> => ({ ok: true })), stop: vi.fn() }
+    const ranks: Array<RingRank | undefined> = []
     /** What the store answers when the test does not say: the one session, in one org folder. */
     const answers: { folders: StoreFolders | undefined; read: StoreRead } = { folders: FOLDERS, read: read([session()]) }
     const deps: ClaudeAppSourceDeps = {
@@ -123,6 +134,7 @@ describe("the Claude app's source (docs/plans/2026-11-19-dial-claude-app-session
       show,
       canLink,
       wake,
+      rank: (rank) => { ranks.push(rank) },
       monotonic: () => clock.mono,
       log: (line) => {
         log.push(line)
@@ -137,7 +149,7 @@ describe("the Claude app's source (docs/plans/2026-11-19-dial-claude-app-session
       await turn()
     }
     return {
-      source, answers, watches, timers, clock, log, focus, canShow, show, canLink, wake,
+      source, answers, watches, timers, clock, log, focus, canShow, show, canLink, wake, ranks,
       get changes() { return changes },
       /** The store's calls, in order. */
       calls: () => calls.map(({ name }) => name),
@@ -241,7 +253,9 @@ describe("the Claude app's source (docs/plans/2026-11-19-dial-claude-app-session
       s.answers.read = read([session({ title: 'Ship it' })])
       await after(s, () => s.fire(ORG, fileOf(session())))
       expect(await s.source.send(agent!, 'run the tests')).toEqual({ ok: true })
-      expect(s.wake.send.mock.calls).toEqual([[{ localId: LOCAL, sessionId: SESSION, agentId: ID, name: 'Ship it' }, 'run the tests']])
+      expect(s.wake.send.mock.calls).toEqual([
+        [{ app: 'claude', localId: LOCAL, sessionId: SESSION, agentId: ID, name: 'Ship it' }, 'run the tests'],
+      ])
       s.wake.send.mockResolvedValueOnce({ ok: false, reason: 'x' })
       expect(await s.source.send(agent!, 'and lint')).toEqual({ ok: false, reason: 'x' })
     })
@@ -256,12 +270,12 @@ describe("the Claude app's source (docs/plans/2026-11-19-dial-claude-app-session
       expect(s.focus).not.toHaveBeenCalled()
     })
 
-    it('stop() stops the wake once', async () => {
+    it('stop() stops the Claude app\'s wake once, never the ChatGPT one', async () => {
       const s = await started()
       s.source.stop()
-      expect(s.wake.stop).toHaveBeenCalledTimes(1)
+      expect(s.wake.stop.mock.calls).toEqual([['claude']])
       s.source.stop()
-      expect(s.wake.stop).toHaveBeenCalledTimes(1)
+      expect(s.wake.stop.mock.calls).toEqual([['claude']])
     })
 
     it('a tap, a rest and its look go to the session\'s local id', async () => {
@@ -656,6 +670,71 @@ describe("the Claude app's source (docs/plans/2026-11-19-dial-claude-app-session
     })
   })
 
+  describe('the rank', () => {
+    it('is the store\'s order, newest first, and is given again only for a new order', async () => {
+      const s = await started()
+      expect(s.ranks).toEqual([rankOf([session()])])
+      s.answers.read = read([session({ title: 'Fix the tests', lastActivityAt: T + 5000 })])
+      await after(s, () => s.fire(ORG, fileOf(session())))
+      expect(s.ranks).toHaveLength(1)
+      const newer = nth(1, { lastActivityAt: T + 9000 })
+      s.answers.read = read([newer, session()])
+      await after(s, () => s.fire(ORG, fileOf(newer)))
+      expect(s.ranks).toEqual([rankOf([session()]), rankOf([newer, session()])])
+    })
+
+    it('a new rank is set before the change is told, so the dial\'s next list has it', async () => {
+      const s = setup()
+      const ranked: number[] = []
+      s.source.onChange(() => { ranked.push(s.ranks.length) })
+      s.source.start()
+      await s.land()
+      s.gap()
+      s.answers.read = read([nth(1, { lastActivityAt: T + 9000 }), session()])
+      await after(s, () => s.fire(ORG, undefined))
+      expect(ranked).toEqual([1, 2])
+    })
+
+    it('stop drops it once', async () => {
+      const s = await started()
+      s.source.stop()
+      s.source.stop()
+      expect(s.ranks).toEqual([rankOf([session()]), undefined])
+    })
+
+    it('a read cut short keeps it, and the root removed drops it until the root is made again', async () => {
+      const s = await started()
+      s.answers.read = read([nth(1)], { more: true })
+      await after(s, () => s.fire(ORG, undefined))
+      expect(s.ranks).toEqual([rankOf([session()])])
+      // The read it asks for with no event, whole and in the same order.
+      s.answers.read = read([session()])
+      await s.land()
+      s.gap()
+      expect(s.ranks).toEqual([rankOf([session()])])
+      s.answers.folders = undefined
+      await after(s, () => s.fire(ROOT, 'acc'))
+      expect(s.ranks).toEqual([rankOf([session()]), undefined])
+      s.answers.folders = FOLDERS
+      s.answers.read = read([session()])
+      await after(s, () => s.fire(ROOT, 'claude-code-sessions'))
+      expect(s.ranks).toEqual([rankOf([session()]), undefined, rankOf([session()])])
+    })
+
+    // The dial unplugged and plugged in again: its page is ranked again, though the store's order did not change.
+    it('a pass that lands after a stop gives none, and the next start gives it again in the same order', async () => {
+      const s = await started()
+      s.fire(ORG, fileOf(nth(1)))
+      await s.reply()
+      s.source.stop()
+      await s.reply(read([nth(1), session()]))
+      expect(s.ranks).toEqual([rankOf([session()]), undefined])
+      s.source.start()
+      await s.land()
+      expect(s.ranks).toEqual([rankOf([session()]), undefined, rankOf([session()])])
+    })
+  })
+
   describe('start and stop', () => {
     it('a second start sets no second watch', () => {
       const s = setup()
@@ -716,6 +795,48 @@ describe("the Claude app's source (docs/plans/2026-11-19-dial-claude-app-session
       await s.land()
       expect(s.calls()).toEqual(['folders', 'forget', 'folders', 'files', 'read'])
       expect(s.source.list().map(({ id }) => id)).toEqual([ID])
+    })
+
+    // The dial's greeting waits for it (devices.ts dialAttached), so its first list holds the store's sessions.
+    it('a start ends once its first pass has landed, its rows listed', async () => {
+      const s = setup()
+      const start = ending(s.source.start())
+      await s.reply(FOLDERS)
+      await s.reply()
+      expect(start.ended).toBe(false)
+      await s.reply(read([session(), nth(1)]))
+      expect(start.ended).toBe(true)
+      expect(s.source.list().map(({ id }) => id)).toEqual([ID, observedAgentId('claude', nth(1).sessionId)])
+    })
+
+    it('a start whose first pass fails ends too', async () => {
+      const s = setup()
+      const start = ending(s.source.start())
+      await s.fail()
+      expect(start.ended).toBe(true)
+    })
+
+    it('a stop ends the start under way at once; the next start ends with its own pass, not the stopped one', async () => {
+      const s = setup()
+      const first = ending(s.source.start())
+      s.source.stop()
+      await turn()
+      expect(first.ended).toBe(true)
+      const second = ending(s.source.start())
+      // The stopped pass lands and takes nothing: the start's own pass runs after it.
+      await s.reply(FOLDERS)
+      expect(second.ended).toBe(false)
+      await s.land()
+      expect(second.ended).toBe(true)
+      expect(s.source.list().map(({ id }) => id)).toEqual([ID])
+    })
+
+    it('a start while it runs ends at once', async () => {
+      const s = setup()
+      s.source.start()
+      const again = ending(s.source.start())
+      await turn()
+      expect(again.ended).toBe(true)
     })
   })
 

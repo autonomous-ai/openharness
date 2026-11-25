@@ -10,7 +10,7 @@ import { commitRelaunchedEngine } from '../core/agents/restart.js'
 import { createAgentRetargeter, type RetargetDeps } from '../core/agents/retarget.js'
 import { createPaneWatcher } from '../core/agents/newPane.js'
 import { hostMoveDeps, type HostMoveWiring } from '../core/agents/hostMove.js'
-import { resolvePaneEngineProcess } from './paneEngineProcess.js'
+import { publishEngine, resolvePaneEngineProcess } from './paneEngineProcess.js'
 import { AgentRestartCoordinator } from './restartAgent.js'
 import { restoreAgents, type RestoreAgentsDeps } from './restoreAgents.js'
 import { createRetainExitedSession } from './retainExitedSession.js'
@@ -139,6 +139,24 @@ it('confirms one immutable launch candidate after a single lost directory sync',
   expect(publication).toMatchObject({ state: 'confirmed', entry: { processIdentity: newProcess, runtimes: [destination], launchArgs: ['--fixture'] } })
   expect(refresh).toHaveBeenCalledTimes(2)
   expect(persisted().find(entry => entry.agentId === row.agentId)).toMatchObject({ processIdentity: newProcess, runtimes: [destination] })
+})
+
+it('an engine that named itself before the refresh is durable under its new name after one re-write', async () => {
+  const started = { ...newProcess, executable: 'node' }, named = { ...newProcess, executable: 'claude' }
+  vi.mocked(resolvePaneEngineProcess).mockResolvedValue(named)
+  const confirm = vi.spyOn(registry, 'confirmLaunch')
+  const durable: unknown[] = []
+  const publication = await publishEngine(started, () => resolvePaneEngineProcess(terminal, runtime, 'claude'),
+    { gone: 'fixture engine gone', changed: 'fixture engine changed' }, (identity, refresh, expires) => {
+      durable.push(persisted().find(entry => entry.agentId === row.agentId)?.processIdentity)
+      return registry.confirmLaunch(row.agentId, { processIdentity: identity }, { current: () => true, refresh, expires })
+    })
+  expect(publication).toMatchObject({ state: 'confirmed', entry: { processIdentity: named, launch: { state: 'ready' } } })
+  // The refused write left nothing durable: the re-write began from the row the first one began from.
+  expect(durable).toEqual([oldProcess, oldProcess])
+  expect(confirm.mock.calls.map(call => call[1].processIdentity)).toEqual([started, named])
+  expect(confirm.mock.calls[1]![2]!.expires).toBe(confirm.mock.calls[0]![2]!.expires)
+  expect(persisted().find(entry => entry.agentId === row.agentId)).toMatchObject({ processIdentity: named, launch: { state: 'ready' } })
 })
 
 it.each(['owner', 'observation', 'cancel'] as const)('never converts uncertain launch publication into rollback after a later %s change', async change => {

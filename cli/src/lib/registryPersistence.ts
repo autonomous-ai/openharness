@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { AtomicWriteUnconfirmed, insideWindowsRoots, requireWindowsStateFile, syncStateDirectory, windowsStateRoots } from './secureState.js'
-import { lockStartMarker, processExists } from './processLiveness.js'
+import { lockStartMarker, processExists, processStartMarker } from './processLiveness.js'
 import { psEnv } from './childLocale.js'
 import { ownProcessGroup } from './windows/noWindow.js'
 import { errorKind } from './log.js'
@@ -236,7 +236,7 @@ async function startMarker(pid: number, budget: number): Promise<string | null> 
   }
   if (process.platform === 'win32' || budget <= 0) return null
   return new Promise(resolve => execFile('ps', ['-p', String(pid), '-o', 'lstart='], {
-    ...ownProcessGroup(), encoding: 'utf8', timeout: Math.max(1, Math.min(1_000, budget)), env: { ...psEnv(), TZ: 'UTC' },
+    ...ownProcessGroup(), encoding: 'utf8', timeout: Math.max(1, Math.min(1_000, Math.floor(budget))), env: { ...psEnv(), TZ: 'UTC' },
   }, (error, stdout) => resolve(!error && stdout.trim() ? `ps-c:${stdout.trim()}` : null)))
 }
 
@@ -346,11 +346,21 @@ async function removeTemporaryLock(folder: string): Promise<void> {
 export async function registryFileLock<T>(directory: string, deadline: RegistryWriteDeadline,
   apply: (checkOwner: () => void) => Promise<T>): Promise<T> {
   const started = performance.now()
-  const expires = Math.min(deadline.expires, started + LOCK_MS)
-  const check = () => { deadline.check(); if (performance.now() >= expires) throw new RegistryPersistenceUnavailable('registry lock is busy') }
+  // Busy is 2 s of busy turns, counted from the first; building this writer's own owner is bounded by its deadline
+  // alone. Counted from the call, a loaded Linux runner's owner fsync spent the 2 s and a lock nobody held was reported
+  // busy with 2 to 3 s of the deadline left (run 45396848621, its test failed 2,994 ms in). The 2 s once kept
+  // Atomics.wait from holding the core's loop; that wait is a timer since #4356.
+  let expires = deadline.expires, busy = false
+  const check = () => {
+    deadline.check()
+    if (busy && performance.now() >= expires) throw new RegistryPersistenceUnavailable('registry lock is busy')
+  }
   await privateRegistryDirectory(directory)
   check()
-  ownGeneration ||= await startMarker(process.pid, expires - performance.now())
+  // Read synchronously, once per process: an async `ps` is a child process inside the write's deadline, and a loop held
+  // while it runs (the e2e stall fault holds it at the next child) turned the core's first write into a missed deadline
+  // and safe mode. macOS only: Linux reads /proc, Windows has no marker.
+  ownGeneration ||= processStartMarker(process.pid)
   check()
   const lock = join(directory, 'registry.json.lock')
   const ownerFile = join(lock, 'owner.json')
@@ -420,6 +430,7 @@ export async function registryFileLock<T>(directory: string, deadline: RegistryW
       }
       // Busy: the lock is there, or the publish was refused for a moment. The ownerless rule below stays for the empty
       // folders older builds can still leave; this one never leaves its lock without its owner.
+      if (!busy) { busy = true; expires = Math.min(deadline.expires, performance.now() + LOCK_MS) }
       check()
       let owner: Owner | undefined
       let since = Date.now()

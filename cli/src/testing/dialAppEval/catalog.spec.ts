@@ -1,7 +1,10 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { HELD_OUT, MAIN, titleOf } from './catalog.js'
-import { STEP_KINDS, THRESHOLDS, type Check, type CheckKind, type Scenario, type SessionKey, type Step, type StepKind } from './types.js'
+import { evaluate } from './checks.js'
+import { runScenario } from './runner.js'
+import { agentIdOf, hookHandle, orcaTerminalHandle, pageId, sessionPage, STEP_KINDS, THRESHOLDS, type Check, type CheckKind, type EvalDriver, type Scenario, type Seen,
+  type SessionKey, type Step, type StepKind } from './types.js'
 
 const ALL = [...MAIN, ...HELD_OUT]
 const byId = (id: string): Scenario => ALL.find((s) => s.id === id)!
@@ -11,8 +14,11 @@ function stepKeys(step: Step): SessionKey[] {
   switch (step.kind) {
     case 'claude.write': return step.sessions
     case 'codex.write': return [...step.sessions, ...step.archived ?? [], ...Object.keys(step.names ?? {}), ...Object.keys(step.ages ?? {})]
-    case 'hook': case 'attach': case 'tap': case 'swipe': case 'editor.focus': case 'editor.closeTerminal': return [step.session]
+    case 'hook': case 'attach': case 'tap': case 'swipe': case 'editor.focus': case 'editor.closeTerminal':
+    case 'orca.focus': case 'orca.close': case 'tmux.detach': case 'tmux.attach': case 'tmux.selectPane': case 'herdr.focus':
+      return [step.session]
     case 'editor.window': return [...step.terminals ?? [], ...step.active === null ? [] : [step.active]]
+    case 'orca.layout': return Object.keys(step.renamed ?? {})
     case 'voice': return [step.target]
     default: return []
   }
@@ -21,29 +27,124 @@ function stepKeys(step: Step): SessionKey[] {
 function checkKeys(check: Check): SessionKey[] {
   switch (check.kind) {
     case 'ring': return [...check.expect, ...check.apart ?? []]
-    case 'focus': case 'open': case 'state': case 'voice': case 'recap': case 'scroll': return [check.session]
+    case 'focus': case 'open': case 'state': case 'voice': case 'refused': case 'recap': case 'scroll': return [check.session]
     default: return []
   }
 }
 
 describe('the catalog', () => {
-  it('the main ids are C1-C12, X1-X11, V1-V15 and U1-U14', () => {
+  it('the main ids are C1-C12, X1-X12, V1-V15, U1-U14, O1-O23 and I1-I21', () => {
     const range = (prefix: string, n: number) => Array.from({ length: n }, (_, i) => `${prefix}${i + 1}`)
-    expect(MAIN.map((s) => s.id)).toEqual([...range('C', 12), ...range('X', 11), ...range('V', 15), ...range('U', 14)])
+    expect(MAIN.map((s) => s.id)).toEqual([...range('C', 12), ...range('X', 12), ...range('V', 15), ...range('U', 14),
+      ...range('O', 23), ...range('I', 21)])
     expect(MAIN.every((s) => !s.heldOut)).toBe(true)
   })
 
-  it('the held out are CH1-CH3, XH1-XH3, VH1-VH4 and UH1-UH3: 13 of 65, VS Code 4 of 19, Cursor 3 of 17', () => {
-    expect(HELD_OUT.map((s) => s.id)).toEqual(['CH1', 'CH2', 'CH3', 'XH1', 'XH2', 'XH3', 'VH1', 'VH2', 'VH3', 'VH4', 'UH1', 'UH2', 'UH3'])
+  it('the held out are CH1-CH3, XH1-XH3, VH1-VH4, UH1-UH3, OH1-OH4 and IH1-IH5: 22 of 119, VS Code 4 of 19, Cursor 3 of 17, Orca 4 of 27, iTerm2 5 of 26', () => {
+    expect(HELD_OUT.map((s) => s.id)).toEqual(['CH1', 'CH2', 'CH3', 'XH1', 'XH2', 'XH3', 'VH1', 'VH2', 'VH3', 'VH4', 'UH1', 'UH2', 'UH3',
+      'OH1', 'OH2', 'OH3', 'OH4', 'IH1', 'IH2', 'IH3', 'IH4', 'IH5'])
     expect(HELD_OUT.every((s) => s.heldOut)).toBe(true)
-    expect(ALL).toHaveLength(65)
+    expect(ALL).toHaveLength(119)
     const of = (app: string) => [HELD_OUT.filter((s) => s.app === app).length, ALL.filter((s) => s.app === app).length]
-    expect([of('vscode'), of('cursor')]).toEqual([[4, 19], [3, 17]])
+    expect([of('vscode'), of('cursor'), of('orca'), of('iterm')]).toEqual([[4, 19], [3, 17], [4, 27], [5, 26]])
+  })
+
+  it('IH1 is D5 alone; IH3 tier A only', () => {
+    expect(byId('IH1').dims.filter((d) => d !== 'D8')).toEqual(['D5'])
+    expect(byId('IH3').tiers).toEqual(['a'])
+  })
+
+  it('IH4\'s herdr row gives no session', () => {
+    const agents = byId('IH4').sessions.filter((d) => !d.ghost)
+    expect(agents.map((d) => [d.key, d.place, d.herdrSession])).toEqual([['c', 'herdr', false]])
+  })
+
+  it('every iTerm2 ring, a check or a probe, counts the other pages exactly: its apart is every agent of the scenario on '
+    + 'another page, in start order', () => {
+    // A ring that mixed pages becomes one ring per page, each counting the rest exactly (the plan's Global Constraints).
+    for (const s of ALL.filter((s) => s.app === 'iterm')) {
+      const order = [...new Set(s.steps.flatMap((step) => (step.kind === 'hook' && step.event === 'start' ? [step.session] : [])))]
+      const pageOf = (key: SessionKey): string => sessionPage(s.sessions.find((d) => d.key === key)!)
+      for (const c of [...s.checks, ...s.probes]) {
+        if (c.kind === 'ring') expect(c.apart, `${s.id} ${c.id}`).toEqual(order.filter((key) => pageOf(key) !== pageId(c.page)))
+      }
+    }
+  })
+
+  it("every iTerm2 ring lists its rows in the order their agents started, as the dial's ring keeps them", () => {
+    // An agent keeps its place from when it entered (cable/hosts/select.ts DialRing): IH3's sixteen newest are s16 to s01.
+    for (const s of ALL.filter((s) => s.app === 'iterm')) {
+      const order = s.steps.flatMap((step) => (step.kind === 'hook' && step.event === 'start' ? [step.session] : []))
+      for (const c of s.checks) if (c.kind === 'ring') expect(c.expect, `${s.id} ${c.id}`).toEqual(order.filter((key) => c.expect.includes(key)))
+    }
+  })
+
+  it("IH4's ring on herdr's page counts no other page: an apps frame shown herdr with herdr 1 passes its apart, and iterm 1 "
+    + 'beside it fails', () => {
+    const ih4 = byId('IH4')
+    const ring = ih4.checks.find((c) => c.id === 'ring')!
+    const c = ih4.sessions.find((d) => d.key === 'c')!
+    const step = (at: number, label: string): Seen['steps'][number] => {
+      const index = ih4.steps.findIndex((s) => s.label === label)
+      return { at, index, kind: ih4.steps[index]!.kind, label }
+    }
+    const apart = (apps: Array<{ id: string; count: number }>): number | undefined => evaluate(ring, ih4, {
+      frames: [{ at: 2000, message: { t: 'apps', shown: 'herdr', apps } }, { at: 2000, message: { t: 'agents.begin' } },
+        { at: 2000, message: { t: 'agent', id: agentIdOf(c), name: c.title } }, { at: 2000, message: { t: 'agents.end', total: 1, tab: '' } }],
+      faces: [], commands: [], deliveries: [], steps: [step(1000, 'restart'), step(9000, 'tap')],
+    }, 'a', 'darwin').find((r) => r.check === 'ring.apart')?.score
+    expect(apart([{ id: 'herdr', count: 1 }])).toBe(1)
+    expect(apart([{ id: 'iterm', count: 1 }, { id: 'herdr', count: 1 }])).toBe(0)
+  })
+
+  it("IH4's session has a turn before its restart, so the scan finds its conversation on disk", () => {
+    const restarted = HELD_OUT.filter((s) => s.app === 'iterm' && s.steps.some((step) => step.kind === 'devices.restart'))
+    expect(restarted.map((s) => s.id)).toEqual(['IH4'])
+    for (const s of restarted) {
+      const restart = s.steps.findIndex((step) => step.kind === 'devices.restart')
+      for (const d of s.sessions.filter((d) => !d.ghost)) {
+        const turned = s.steps.slice(0, restart).some((step) => step.kind === 'hook' && step.event === 'turn-stop' && step.session === d.key)
+        expect(turned, `${s.id} ${d.key}`).toBe(true)
+      }
+    }
+  })
+
+  it('IH5\'s Codex runs in tmux under the daemon\'s CODEX_HOME', () => {
+    // No home of its own: the daemon's, which its transcript and its recap are read from.
+    const agents = byId('IH5').sessions.filter((d) => !d.ghost)
+    expect(agents.map((d) => [d.key, d.engine, d.place, d.codexHome])).toEqual([['b', 'codex', 'tmux', undefined]])
   })
 
   it('VH1 and UH3 are D5 alone, UH1 macOS only', () => {
     for (const id of ['VH1', 'UH3']) expect(byId(id).dims.filter((d) => d !== 'D8'), id).toEqual(['D5'])
     expect(byId('UH1').platforms).toEqual(['darwin'])
+  })
+
+  it('OH1 and OH2 are D5 alone, on Codex agents: OH1\'s focused a beside a Claude Code, OH2\'s two', () => {
+    // The plan's Decision 17: Codex's words are typed into its pane, so a send to the wrong pane is what they can catch.
+    for (const id of ['OH1', 'OH2']) expect(byId(id).dims.filter((d) => d !== 'D8'), id).toEqual(['D5'])
+    const engines = (id: string) => byId(id).sessions.filter((d) => !d.ghost).map((d) => [d.key, d.engine ?? 'claude'])
+    expect([engines('OH1'), engines('OH2')]).toEqual([[['a', 'codex'], ['b', 'claude']], [['a', 'codex'], ['b', 'codex']]])
+    // So their words are graded as typed: one that reached the agent another way is not what they ask.
+    for (const id of ['OH1', 'OH2']) expect(byId(id).checks.flatMap((c) => (c.kind === 'voice' ? [c.path] : [])), id).toEqual(['typed'])
+  })
+
+  it('OH2 is driven on macOS, Linux and Windows alike, with no gap of its own', async () => {
+    // PM, 2026-11-22: #4548 taught frontAppId Orca's Linux and Windows names, which OH2 waited for.
+    const calls: string[] = []
+    const note = (name: string) => async () => { calls.push(name) }
+    const driver: EvalDriver = { tier: 'a', start: note('start'), step: note('step'), settle: note('settle'), stop: note('stop'),
+      seen: () => ({ frames: [], faces: [], commands: [], deliveries: [], steps: [] }), gaps: () => [] }
+    for (const platform of ['darwin', 'linux', 'win32'] as const) {
+      calls.length = 0
+      const run = await runScenario(driver, byId('OH2'), platform)
+      expect([run.gaps, calls[0], calls.at(-1)], platform).toEqual([[], 'start', 'stop'])
+    }
+  })
+
+  it('OH4\'s b names no handle in its hooks, a beside it in the same worktree does', () => {
+    const agents = byId('OH4').sessions.filter((d) => !d.ghost)
+    expect(agents.map((d) => [d.key, d.worktree, hookHandle(d, 0)])).toEqual([['a', 'w1', orcaTerminalHandle('a')], ['b', 'w1', undefined]])
   })
 
   it('VH2\'s two windows both list a, the focused w2 last; UH2\'s agent has two folders, neither its cwd: a tap that opens the cwd fails', () => {
@@ -89,9 +190,11 @@ describe('the catalog', () => {
     expect(x10.probes).toContainEqual(expect.objectContaining({ id: 'apart', kind: 'ring', expect: ['t1'], apart: ['c1', 'z'] }))
   })
 
-  it('X3, V11 and UH1 are macOS only', () => {
+  it('X3, V11, UH1 and every iTerm2 scenario are macOS only', () => {
     const mac = ['X3', 'V11', 'UH1']
-    for (const s of ALL) expect(s.platforms, s.id).toEqual(mac.includes(s.id) ? ['darwin'] : ['darwin', 'win32', 'linux'])
+    for (const s of ALL) {
+      expect(s.platforms, s.id).toEqual(mac.includes(s.id) || s.app === 'iterm' ? ['darwin'] : ['darwin', 'win32', 'linux'])
+    }
   })
 
   it('X3 starts with another app in front, so its front step brings the ChatGPT app up, on a world with no Accessibility', () => {
@@ -172,7 +275,7 @@ describe('the catalog', () => {
     for (const s of ALL) {
       for (const c of s.checks.filter((c) => c.kind === 'state')) {
         const step = s.steps.findIndex((step) => step.label === c.after)
-        const listed = s.steps.slice(0, step).some((w) => w.kind === 'wait' && w.until?.expect.includes(c.session) === true)
+        const listed = s.steps.slice(0, step).some((w) => w.kind === 'wait' && w.until?.kind === 'ring' && w.until.expect.includes(c.session))
         expect(listed, `${s.id} ${c.id}`).toBe(true)
       }
       for (const [i, step] of s.steps.entries()) {
@@ -184,14 +287,19 @@ describe('the catalog', () => {
     }
   })
 
-  it('a voice speaks to a session with a running process, or to one its link resumes', () => {
+  it('a voice speaks to a session with a running process, to one its link resumes, to a resting ChatGPT thread Codex can queue to, or to a resting Orca chat whose refusal is checked', () => {
     // Words for a session with no process are refused before any send: the voice check and the gate then test nothing.
+    // A resting thread of the ChatGPT app is queued to, when Harness's Codex home is the app's (X12). A resting chat of
+    // Orca's is spoken to for its refusal alone (O22), which a refused check grades.
     for (const s of ALL) {
       for (const [i, step] of s.steps.entries()) {
         if (step.kind !== 'voice') continue
         const started = s.steps.slice(0, i).some((h) => h.kind === 'hook' && h.event === 'start' && h.session === step.target)
-        const resumable = s.sessions.find((d) => d.key === step.target)!.resumable === true
-        expect(started || resumable, `${s.id} voice ${step.target}`).toBe(true)
+        const target = s.sessions.find((d) => d.key === step.target)!
+        const queued = target.app === 'chatgpt' && s.world?.codexHome === 'app'
+        const refused = target.chat === 'resting'
+          && s.checks.some((c) => c.kind === 'refused' && c.session === step.target && c.after === step.label)
+        expect(started || target.resumable === true || queued || refused, `${s.id} voice ${step.target}`).toBe(true)
       }
     }
   })
@@ -209,8 +317,8 @@ describe('the catalog', () => {
     expect(byId('C8').steps.filter((s) => s.kind === 'tap' || s.kind === 'swipe')).toEqual([])
   })
 
-  it('C3, CH1, CH2, XH1 and V2 are tier A only, V12 tier B only, every other scenario (C10, C11, X7, C8, X9, CH3 and XH3 among them) runs in both', () => {
-    const onlyA = ['C3', 'CH1', 'CH2', 'XH1', 'V2']
+  it('C3, CH1, CH2, XH1, X12, V2, O16, O18-O23 and IH3 are tier A only, V12 tier B only, every other scenario (C10, C11, X7, C8, X9, CH3 and XH3 among them) runs in both', () => {
+    const onlyA = ['C3', 'CH1', 'CH2', 'XH1', 'X12', 'V2', 'O16', 'O18', 'O19', 'O20', 'O21', 'O22', 'O23', 'IH3']
     const onlyB = ['V12']
     for (const s of ALL) expect(s.tiers, s.id).toEqual(onlyA.includes(s.id) ? ['a'] : onlyB.includes(s.id) ? ['b'] : ['a', 'b'])
   })
@@ -265,13 +373,17 @@ describe('the catalog', () => {
   it('every scenario has a probe, and each step kind but wait is used by a scenario whose probe can see it', () => {
     const sees: Record<Exclude<StepKind, 'wait'>, CheckKind[]> = {
       'claude.write': ['ring'], 'codex.write': ['ring'], quit: ['ring'], relaunch: ['ring'],
-      unplug: ['ring', 'focus'], replug: ['ring', 'focus'],
+      unplug: ['ring', 'focus'], replug: ['ring', 'focus'], pick: ['ring'],
       hook: ['state', 'recap'],
       tap: ['open', 'focus'], swipe: ['open', 'focus'],
       front: ['focus', 'open'], thread: ['focus', 'open'], attach: ['focus', 'open'],
       voice: ['voice'],
       'editor.window': ['ring', 'open', 'scroll'], 'editor.focus': ['focus'], 'editor.closeTerminal': ['ring'],
       'editor.reload': ['ring', 'open'], 'editor.close': ['open', 'scroll'], stroke: ['scroll'],
+      'orca.layout': ['ring'], 'orca.focus': ['focus'], 'orca.front': ['ring'], 'orca.plugin': ['ring'], 'orca.close': ['ring'],
+      'iterm.tab': ['ring', 'open'], 'iterm.split': ['ring', 'open'], 'iterm.closeTab': ['ring'], 'iterm.select': ['focus'],
+      'iterm.relaunch': ['ring', 'open'], 'tmux.detach': ['ring', 'open'], 'tmux.attach': ['ring', 'open'],
+      'tmux.selectPane': ['focus'], 'herdr.focus': ['focus'], 'herdr.restart': ['ring'], 'devices.restart': ['ring', 'open'],
     }
     for (const s of ALL) expect(s.probes.length, s.id).toBeGreaterThan(0)
     // A stroke is left out: V11 and V13 alone stroke, and neither has a scroll probe that is caught. V11's row is filed
@@ -295,15 +407,39 @@ describe('the catalog', () => {
     // (started), so each V scenario has one wait fewer than its starts; then V7's turn and its wait on the person, V10's
     // pause after the reload, V11's rests between its tap, strokes and close, V13's rest before the stroke, V14's gap
     // between quit and relaunch, and V15's rest and its time unplugged; U8's turn, U12's pause after the close and U13's
-    // gap between quit and relaunch; VH1's rest on a and UH3's voice 200 ms after the prompt.
+    // gap between quit and relaunch; O4's rests after the focus, the tap and the swipe, O7's after the tap and the
+    // swipe, O8's two turns and the pause between them, O10's rest on b, O12's time quit, its time past the devices'
+    // next look after the relaunch and its rest after the focus, O16's agents a second apart, O17's rest and its time
+    // unplugged, and O20's after the tap and the swipe; iTerm2's agents a second apart (started), I3's and I15's turns
+    // (turned), I3's rests after each pick, I4's pause before and after the split and its rest after the first tap,
+    // I6's rest, I7's rest after the first tap, I9's rests on b and on a and its wait after the echo, I10's rest after
+    // the move to a's pane, I10's and I11's rests after the select, I13's rests after the detach and the attach, I14's
+    // time past the devices' next look after herdr starts again, I15's time after the relaunch and its rest after the
+    // first tap, I16's long turn, I17's turn, I20's rest on c and I21's rest and its time unplugged; VH1's rest on a,
+    // UH3's voice 200 ms after the prompt, OH1's rest on a and OH2's voice 200 ms after the focus; IH1's voice 200 ms
+    // after the select, IH2's rests after the attach and each select, its two turns and the pause between them, IH3's
+    // agents a second apart, IH4's turn (turned) and IH5's turn.
     const starts = (id: string, n: number): string[] => Array<string>(n - 1).fill(`${id} 1000`)
     expect(waits('own')).toEqual(['C6 5000', 'C9 1000', 'C9 3500', 'C10 2000', 'C11 1000', 'C11 3000', 'X3 5000', 'X8 2000',
       'X11 300', 'X11 300', ...starts('V1', 4), ...starts('V2', 20), ...starts('V3', 2), ...starts('V4', 2), ...starts('V5', 2),
       'V7 2000', 'V7 2000', ...starts('V10', 2), 'V10 2000', 'V11 1000', 'V11 1000', 'V11 1000', 'V13 1000',
       ...starts('V14', 3), 'V14 45000', ...starts('V15', 2), 'V15 1000', 'V15 3000',
       ...starts('U1', 4), ...starts('U2', 2), ...starts('U3', 2), ...starts('U4', 2), 'U8 2000', 'U12 2000', ...starts('U13', 3),
-      'U13 45000', ...starts('U14', 2), 'CH3 1000', 'XH3 200',
-      ...starts('VH1', 2), 'VH1 1000', ...starts('VH3', 3), ...starts('UH3', 2), 'UH3 200'])
+      'U13 45000', ...starts('U14', 2),
+      'O4 2000', 'O4 1000', 'O4 3000', 'O7 4000', 'O7 2000', 'O8 2000', 'O8 2000', 'O8 6000', 'O8 2000', 'O10 1000', 'O12 2000',
+      'O12 35000', 'O12 2000',
+      ...starts('O16', 40), 'O17 1000', 'O17 3000', 'O20 4000', 'O20 2000',
+      ...starts('I2', 4), ...starts('I3', 4), 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000',
+      'I4 1000', 'I4 1000', 'I4 4000', ...starts('I5', 2), ...starts('I6', 3), 'I6 2000', ...starts('I7', 3), 'I7 4000',
+      ...starts('I8', 2), ...starts('I9', 2), 'I9 1000', 'I9 500', 'I9 3000', ...starts('I10', 2), 'I10 1000', 'I10 2000', ...starts('I11', 2), 'I11 2000',
+      ...starts('I12', 2), ...starts('I13', 2), 'I13 2000', 'I13 2000', ...starts('I14', 3), 'I14 35000',
+      ...starts('I15', 3), 'I15 2000', 'I15 2000', 'I15 2000', 'I15 2000', 'I15 4000', 'I16 30000', 'I17 2000',
+      ...starts('I18', 2), ...starts('I19', 2), ...starts('I20', 2), 'I20 1000', ...starts('I21', 4), 'I21 1000', 'I21 3000',
+      'CH3 1000', 'XH3 200',
+      ...starts('VH1', 2), 'VH1 1000', ...starts('VH3', 3), ...starts('UH3', 2), 'UH3 200',
+      'OH1 1000', 'OH2 200',
+      ...starts('IH1', 2), 'IH1 200', ...starts('IH2', 2), 'IH2 1000', 'IH2 1000', 'IH2 2000', 'IH2 1000', 'IH2 1000', 'IH2 2000',
+      ...starts('IH3', 20), 'IH4 2000', 'IH5 2000'])
     expect(new Set(waits('condition').map((w) => w.split(' ')[1]))).toEqual(new Set(['10000']))
     // The person reading the face once the list is there.
     expect(new Set(waits('reading').map((w) => w.split(' ')[1]))).toEqual(new Set(['1000']))
@@ -313,10 +449,13 @@ describe('the catalog', () => {
   it('an input on the dial or the app comes at least 1 s after its listing, and any step at least 1 s after an input', () => {
     // Faster, it lands in the same instant the list arrives, inside the devices' echo window after a push, or inside a
     // swipe's rest, whose open makes the devices drop the next title as its echo: no person does either. X11's switches
-    // 300 ms apart and XH3's voice 200 ms after the follow are those scenarios' point: only the input right after one of
-    // their own short waits is let through.
-    const inputs = new Set<Step['kind']>(['tap', 'swipe', 'voice', 'attach', 'thread', 'stroke', 'editor.focus'])
-    const quick = new Set(['X11', 'XH3'])
+    // 300 ms apart, XH3's voice 200 ms after the follow, OH2's 200 ms after the focus, IH1's 200 ms after the select and
+    // I9's tab report 500 ms after the rest are those scenarios' point: only the input right after one of their own short
+    // waits is let through. The person's tab selection and pane moves in iTerm2 are inputs
+    // (docs/plans/2026-11-22-dial-eval-iterm2-plan.md, Decision 11).
+    const inputs = new Set<Step['kind']>(['tap', 'swipe', 'voice', 'attach', 'thread', 'stroke', 'pick', 'editor.focus',
+      'orca.focus', 'iterm.select', 'tmux.selectPane', 'herdr.focus'])
+    const quick = new Set(['X11', 'XH3', 'OH2', 'I9', 'IH1'])
     for (const s of ALL) {
       // Since the last listing, or the last input once there is one. A condition wait may end at once: it counts 0.
       let since: number | null = null
@@ -338,17 +477,35 @@ describe('the catalog', () => {
     }
   })
 
-  it('a step on a row of the dial comes after a wait until the dial lists that row', () => {
+  it('a step on a row of the dial comes after a wait until the dial lists that row, on the page the dial shows last', () => {
     for (const s of ALL) {
-      const listed = new Set<SessionKey>()
+      // The latest condition wait's rows: the dial shows one page, so a row another page lists is not under the person's
+      // hand (I15's tap on tmux's row while herdr's page is shown).
+      let listed: readonly SessionKey[] = []
       for (const step of s.steps) {
-        if (step.kind === 'wait' && step.until) for (const key of step.until.expect) listed.add(key)
+        // An apps wait lists no rows.
+        if (step.kind === 'wait' && step.until) listed = step.until.kind === 'ring' ? step.until.expect : []
         const row = step.kind === 'tap' || step.kind === 'swipe' || step.kind === 'attach' ? step.session
           : step.kind === 'voice' ? step.target
           : step.kind === 'thread' ? s.sessions.find((d) => d.title === step.title)!.key
           : undefined
-        // Otherwise the step outruns the first list, and the dial has no row to act on.
-        if (row !== undefined) expect(listed.has(row), `${s.id} ${step.kind} ${row}`).toBe(true)
+        // Otherwise the step outruns the list, and the dial has no row to act on.
+        if (row !== undefined) expect(listed.includes(row), `${s.id} ${step.kind} ${row}`).toBe(true)
+      }
+    }
+  })
+
+  it('a pick after the devices start again comes after a wait on the Apps screen since then that counts the picked page', () => {
+    // Until the devices' scan counts a page's agents, a pick of it is ignored (cable/hosts/appFilter.ts pick): a person
+    // picks what the Apps screen shows, not on a timer.
+    for (const s of ALL) {
+      let counted: ReadonlySet<string> | null = null
+      for (const step of s.steps) {
+        if (step.kind === 'devices.restart') counted = new Set()
+        if (step.kind === 'wait' && step.until?.kind === 'apps' && counted) {
+          counted = new Set(Object.entries(step.until.counts).flatMap(([page, n]) => (n > 0 ? [page] : [])))
+        }
+        if (step.kind === 'pick' && counted) expect(counted.has(step.page), `${s.id} pick ${step.page}`).toBe(true)
       }
     }
   })

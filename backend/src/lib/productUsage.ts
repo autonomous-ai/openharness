@@ -6,7 +6,9 @@ import type { Prisma, PrismaClient } from '@prisma/client'
 import { env } from '../config/env.js'
 import { prisma } from './prisma.js'
 import { ensureIndex } from './db/indexes.js'
-import { PRODUCT_USAGE_DAYS, type ProductUsageChoice, type ProductUsageReport } from '../types/productUsage.js'
+import { PRODUCT_USAGE_DAYS, type ProductUsageChoice, type ProductUsageMetric, type ProductUsageReport } from '../types/productUsage.js'
+import type { DialUsageMetric } from '../types/dialUsage.js'
+import type { VoiceUsageMetric } from './voiceUsage.js'
 import { ACTIVITY_DAYS, type ActivitySurface } from '../types/productUsageActivity.js'
 import { PRODUCT_USAGE_RECEIPT_DAYS, PRODUCT_USAGE_RECEIPT_EXPIRY_DAYS } from '../types/productUsageReceipt.js'
 import { incrementUsageTotals, type UsageIncrement } from './productUsageWrite.js'
@@ -56,8 +58,12 @@ async function productUsageChoices(userIds: string[], db: Db): Promise<Map<strin
   return choices
 }
 
+/** A signed-in report: product names and the dial's. Declared here, not in types/productUsage.ts, whose bytes the
+ * CLI's core shares and which knows nothing of the dial. */
+export type UsageReport = Omit<ProductUsageReport, 'counters'> & { counters: Partial<Record<ProductUsageMetric | DialUsageMetric, number>> }
+
 /** Identity is used for permission only. Neither it nor the report body reaches analytics storage. */
-export async function ingestProductUsage(userId: string, report: ProductUsageReport, now = new Date()) {
+export async function ingestProductUsage(userId: string, report: UsageReport, now = new Date()) {
   if (!validDay(report.day, now)) return { accepted: false, reason: 'EXPIRED' }
   return ingestCounters(report, userId, now)
 }
@@ -96,6 +102,17 @@ async function apartPrefixes(tx: Pick<Prisma.TransactionClient, 'user'>, reports
   return reports.map(r => r.context?.channel === 'testing' ? 'testing:' : r.userId && staffAccounts.get(r.userId) ? 'staff:' : '')
 }
 export function resetStaffAccountsForTests(): void { staffAccounts.clear() }
+
+/** [apartPrefixes]' answer for one account, outside a report: one read for an account not seen yet. */
+async function staffAccount(userId: string): Promise<boolean> {
+  const known = staffAccounts.get(userId)
+  if (known !== undefined) return known
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { email: true } })
+  if (staffAccounts.size >= STAFF_ACCOUNTS_MAX) staffAccounts.clear()
+  const staff = !!user?.email.toLowerCase().endsWith(STAFF_EMAIL)
+  staffAccounts.set(userId, staff)
+  return staff
+}
 
 interface QueuedReport { id: string; day: string; revision?: number; context?: ProductUsageContext; userId?: string
   increments: UsageIncrement[] }
@@ -270,6 +287,26 @@ export async function recordRelayUsage(userId: string, now: Date, metric: RelayU
     if (Date.now() - warnedAt >= 60_000) {
       warnedAt = Date.now()
       console.warn('[product-usage] Some aggregate counts are unavailable.')
+    }
+  }
+}
+
+let voiceWarnedAt = 0
+
+/** A transcribed clip's totals (lib/voiceUsage.ts), under the account's "Share product usage data" like a relay connect,
+ * the team's under `staff:`. No `testing:`: a clip carries no build channel. Counted in memory and written once a
+ * minute (`createRelayTotals`). Never throws, so the voice route need not wait for it. */
+export async function recordVoiceUsage(userId: string, now: Date, increments: Array<[VoiceUsageMetric, number]>): Promise<void> {
+  try {
+    if (!(await relayEnabled(userId))) return
+    const prefix = (await staffAccount(userId)) ? 'staff:' : ''
+    const dayUtc = new Date(Math.floor(now.getTime() / DAY) * DAY)
+    for (const [metric, value] of increments) if (value) relayTotals.add(dayUtc, prefix + metric, value)
+  } catch {
+    // The account and the database's error stay out of the log, as for relay connects.
+    if (Date.now() - voiceWarnedAt >= 60_000) {
+      voiceWarnedAt = Date.now()
+      console.warn('[product-usage] Some voice counts are unavailable.')
     }
   }
 }

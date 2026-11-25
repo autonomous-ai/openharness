@@ -66,6 +66,7 @@ export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedCon
     current?: () => boolean,
   ): RestartAgentDeps => {
     const target = { ...session, processIdentity: session.processIdentity && { ...session.processIdentity } }
+    const heldToken = launch.native?.token
     const identity = paneReadIdentity(target)
     const ownsOriginal = () => current?.() !== false && sameRestartTarget(target)
       && paneReadIdentity(byAgent(target.agentId)) === identity
@@ -157,12 +158,17 @@ export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedCon
             await new Promise((resolve) => setTimeout(resolve, ENGINE_SETTLE_MS))
             waited += ENGINE_SETTLE_MS
             const still = await resolvePaneEngineProcess(backend, runtime, session.engine)
-            if (sameProcessIdentity(still, found)) return found
+            // The later look: a Node engine started as `node` (Claude Code installed with npm) renames itself
+            // (process.title) while settling, which on Linux changes its `comm`, the row's executable, and the
+            // publication's refresh compares the executable.
+            if (sameProcessIdentity(still, found)) return still
           }
           delayMs = Math.min(delayMs * 2, 750)
         }
         return null
       },
+      // The held shell this swap's own launch runs under when the guard held it: only a native launch has a token.
+      ...(heldToken && backend.isHeld ? { heldShell: () => backend.isHeld!(runtime, heldToken) } : {}),
       buildArgv: (opts) => buildEngineLaunchArgv(session.engine, relaunchOptions(opts)),
       // The same command, built without its launch script (no file is written), before anything is stopped.
       launchRefusal: (opts) => {

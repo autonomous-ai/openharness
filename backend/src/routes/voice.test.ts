@@ -19,6 +19,10 @@ vi.mock('../lib/deepgramWav.js', async (importActual) => ({
   transcribeWavWithDeepgram,
 }))
 
+const recordVoiceUsage = vi.hoisted(() =>
+  vi.fn<(userId: string, now: Date, increments: Array<[string, number]>) => Promise<void>>(async () => {}))
+vi.mock('../lib/productUsage.js', () => ({ recordVoiceUsage }))
+
 // The voice usage tables and the plan rows, in memory: enough of Prisma for lib/voiceQuota.ts.
 interface MachineRow { userId: string; planId: string | null; deletedAt?: Date | null; billingStatus?: string | null; billingActivatedAt?: Date | null; autonomousEnv?: string }
 interface PlanRow { id: string; autonomousEnv: string; isDefault: boolean; dailyVoiceLimitSeconds: number | null }
@@ -95,6 +99,7 @@ import { errorHandler } from '../middlewares/errorHandler.js'
 import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
 import { env } from '../config/env.js'
 import { voiceInflightBytes } from '../lib/voiceBudget.js'
+import { logger } from '../utils/logger.js'
 
 const FREE: PlanRow = { id: 'plan-free', autonomousEnv: 'prod', isDefault: true, dailyVoiceLimitSeconds: 30 * 60 }
 const PRO: PlanRow = { id: 'plan-pro', autonomousEnv: 'prod', isDefault: false, dailyVoiceLimitSeconds: 30 * 60 }
@@ -141,15 +146,18 @@ async function build(): Promise<FastifyInstance> {
   return app
 }
 
-const send = (app: FastifyInstance, file: Buffer, user = 'user-1', contentType = 'audio/wav') => {
+const send = (app: FastifyInstance, file: Buffer, user = 'user-1', contentType = 'audio/wav', extra: Record<string, string | string[]> = {}) => {
   const { payload, headers } = multipart(file, contentType)
   return app.inject({
     method: 'POST',
     url: `${VOICE_STT_PATH}?lang=en`,
     payload,
-    headers: { ...headers, authorization: `Bearer token-of-${user}` },
+    headers: { ...headers, ...extra, authorization: `Bearer token-of-${user}` },
   })
 }
+
+/** What the devices' upload sends (cli/src/lib/dialUsageContract.ts), and only it. */
+const DIAL = { 'x-harness-voice-surface': 'dial' }
 
 const usedSeconds = (user: string) => {
   const row = [...store.usage.values()].find((r) => r.machineId === `user:${user}`)
@@ -285,6 +293,92 @@ describe('POST /api/voice/stt', () => {
       const res = await send(app, wav(30))
       expect(res.statusCode).toBe(502)
       expect(usedSeconds('user-1')).toBe(0)
+    })
+  })
+
+  describe('voice usage', () => {
+    // The transcription's time is read around the Deepgram call: a clock that moves only while it transcribes.
+    let clock = 0
+    beforeEach(() => {
+      clock = 0
+      vi.spyOn(performance, 'now').mockImplementation(() => clock)
+      transcribeWavWithDeepgram.mockImplementation(async () => {
+        clock += 1_500
+        return 'hello there'
+      })
+    })
+    afterEach(() => { vi.restoreAllMocks() })
+
+    it('a transcribed clip with the dial\'s header records dial increments once', async () => {
+      expect((await send(app, wav(3), 'user-1', 'audio/wav', DIAL)).statusCode).toBe(200)
+      expect(recordVoiceUsage).toHaveBeenCalledOnce()
+      expect(recordVoiceUsage).toHaveBeenCalledWith('user-1', expect.any(Date), [
+        ['voice_dial_clips', 1], ['voice_dial_audio_s', 3], ['voice_dial_transcribe_ms', 1_500], ['voice_account_days', 1],
+      ])
+    })
+
+    it('a clip with no header (the phone, an older CLI) records rest increments', async () => {
+      expect((await send(app, wav(2))).statusCode).toBe(200)
+      // The second clip starts where the account's day stood: 2 s in, so it is no new account-day and it crosses 1 min.
+      expect((await send(app, wav(59))).statusCode).toBe(200)
+      expect(recordVoiceUsage.mock.calls.map(([, , increments]) => increments)).toEqual([
+        [['voice_rest_clips', 1], ['voice_rest_audio_s', 2], ['voice_rest_transcribe_ms', 1_500], ['voice_account_days', 1]],
+        [['voice_rest_clips', 1], ['voice_rest_audio_s', 59], ['voice_rest_transcribe_ms', 1_500], ['voice_account_days_over_1m', 1]],
+      ])
+    })
+
+    it('counts a clip on the day its seconds were charged, though it is answered after midnight', async () => {
+      // The account-day buckets are read off the charged day's bucket: counted on the next day, its differences break.
+      vi.useFakeTimers({ toFake: ['Date'] })
+      try {
+        vi.setSystemTime(new Date('2026-11-23T23:59:59.000Z'))
+        transcribeWavWithDeepgram.mockImplementationOnce(async () => {
+          vi.setSystemTime(new Date('2026-11-24T00:00:02.000Z'))
+          return 'hello there'
+        })
+        expect((await send(app, wav(3), 'user-1', 'audio/wav', DIAL)).statusCode).toBe(200)
+        expect(recordVoiceUsage.mock.calls[0][1].toISOString().slice(0, 10)).toBe('2026-11-23')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('a clip Deepgram fails records nothing', async () => {
+      transcribeWavWithDeepgram.mockRejectedValueOnce(new Error('Deepgram HTTP 500'))
+      expect((await send(app, wav(3), 'user-1', 'audio/wav', DIAL)).statusCode).toBe(502)
+      expect(recordVoiceUsage).not.toHaveBeenCalled()
+      // Its seconds were given back, so the next clip is still the account's first of the day.
+      expect((await send(app, wav(3), 'user-1', 'audio/wav', DIAL)).statusCode).toBe(200)
+      expect(recordVoiceUsage).toHaveBeenCalledOnce()
+      expect(recordVoiceUsage.mock.calls[0][2]).toContainEqual(['voice_account_days', 1])
+    })
+
+    it('a refused clip (rate, quota, not WAV) records nothing', async () => {
+      expect((await send(app, wav(5, 16_000, 0x55), 'user-1', 'audio/wav', DIAL)).statusCode).toBe(415)
+      const day = new Date().toISOString().slice(0, 10)
+      store.usage.set(`user:user-1|${day}`, {
+        machineId: 'user:user-1', dayKey: day, usedMs: 1_800_000, expiresAt: new Date(Date.now() + 86_400_000),
+      })
+      expect((await send(app, wav(2), 'user-1', 'audio/wav', DIAL)).statusCode).toBe(429)
+      expect(recordVoiceUsage).not.toHaveBeenCalled()
+
+      store.machines = [{ userId: 'user-2', planId: MAX.id }]
+      for (let i = 0; i < 10; i++) expect((await send(app, wav(1), 'user-2', 'audio/wav', DIAL)).statusCode).toBe(200)
+      expect(recordVoiceUsage).toHaveBeenCalledTimes(10)
+      expect((await send(app, wav(1), 'user-2', 'audio/wav', DIAL)).statusCode).toBe(429)
+      expect(recordVoiceUsage).toHaveBeenCalledTimes(10)
+    })
+
+    it('the header\'s value is never logged', async () => {
+      const canary = 'CANARY-SURFACE-7f3a91'
+      const logged = (['debug', 'info', 'warn', 'error'] as const).map((level) => vi.spyOn(logger, level).mockImplementation(() => {}))
+      expect((await send(app, wav(2), 'user-1', 'audio/wav', { 'x-harness-voice-surface': canary })).statusCode).toBe(200)
+      transcribeWavWithDeepgram.mockRejectedValueOnce(new Error('Deepgram HTTP 500'))
+      expect((await send(app, wav(2), 'user-1', 'audio/wav', { 'x-harness-voice-surface': canary })).statusCode).toBe(502)
+      // It was read (the clip counted as the rest), and the route did log both clips: none of it holds the value.
+      expect(recordVoiceUsage.mock.calls.map(([, , increments]) => increments[0])).toEqual([['voice_rest_clips', 1]])
+      expect(logged.flatMap((spy) => spy.mock.calls)).toHaveLength(2)
+      expect(JSON.stringify(logged.map((spy) => spy.mock.calls))).not.toContain(canary)
     })
   })
 

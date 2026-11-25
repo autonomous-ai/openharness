@@ -291,7 +291,8 @@
         {
           "agentId": "fixture-agent",
           "name": "Fork",
-          "prompt": "Try another approach"
+          "prompt": "Try another approach",
+          "creationId": "fixture-creation-fork"
         }
       ]
     ],
@@ -749,7 +750,8 @@
         {
           "agentId": "fixture-agent",
           "name": "Fork",
-          "prompt": "Try another approach"
+          "prompt": "Try another approach",
+          "creationId": "fixture-creation-fork"
         }
       ]
     ],

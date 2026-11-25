@@ -53,7 +53,42 @@ const LINUX_APPS: [string, string][] = [
   [RECORDED_ORCA.linux.inProcess.makerComm, 'orca'],
 ]
 
+// Bundle ids known in front only: detectApp and open leave them as they are.
+const FRONT_BUNDLES: [string, string][] = [
+  // Alacritty's Info.plist: an agent there is in the unknown app.
+  ['org.alacritty', 'terminal'],
+  // Warp Preview (Homebrew cask warp@preview).
+  ['dev.warp.Warp-Preview', 'warp'],
+]
+
+// Alacritty's and Warp's processes: alacritty.exe and warp.exe on Windows, alacritty and warp on Linux, and Warp
+// Preview's warp-preview on Linux.
+const TERMINAL_EXES: [string, string][] = [
+  ['alacritty.exe', 'terminal'],
+  ['Alacritty.exe', 'terminal'],
+  ['alacritty', 'terminal'],
+  ['warp.exe', 'warp'],
+  ['Warp.exe', 'warp'],
+  ['warp', 'warp'],
+  ['warp-preview', 'warp'],
+]
+
 describe('frontAppId', () => {
+  it.each(FRONT_BUNDLES)('Alacritty and Warp Preview map by their bundle ids on macOS: %s', (bundle, id) => {
+    expect(frontAppId(bundle)).toBe(id)
+  })
+
+  // The front follows to the page their agents are on: Alacritty sets no TERM_PROGRAM, and Warp's is WarpTerminal.
+  it('an agent in Alacritty or Warp Preview is on the page their bundle id in front gives', () => {
+    expect(detectApp({ __CFBundleIdentifier: 'org.alacritty' })).toBe(frontAppId('org.alacritty'))
+    expect(detectApp({ __CFBundleIdentifier: 'dev.warp.Warp-Preview', TERM_PROGRAM: 'WarpTerminal' }))
+      .toBe(frontAppId('dev.warp.Warp-Preview'))
+  })
+
+  it.each(TERMINAL_EXES)('Alacritty and Warp map by their exe names on Windows and Linux: %s', (exe, id) => {
+    expect(frontAppId(exe)).toBe(id)
+  })
+
   it.each(BUNDLES)('every bundle id maps to the id detectApp gives for it: %s', (bundle, id) => {
     expect(frontAppId(bundle)).toBe(id)
     expect(detectApp({ __CFBundleIdentifier: bundle })).toBe(id)
@@ -72,11 +107,13 @@ describe('frontAppId', () => {
       expect(frontAppId(comm)).toBe('wezterm')
     })
 
-  it.each(['com.apple.Safari', 'org.alacritty', 'net.kovidgoyal.kitty-quick-access', 'alacritty', '', 'x'.repeat(128),
+  it.each(['com.apple.Safari', 'net.kovidgoyal.kitty-quick-access', '', 'x'.repeat(128),
     'constructor', '__proto__', 'toString', 'COM.MITCHELLH.GHOSTTY', 'com.openai.chat', 'codex', 'Codex.exe',
     'com.cmuxterm.app.nightly', 'cmux',
     // The Linux processes' names are Linux's alone, and the Claude app's claude.exe is Windows' alone.
     'claude-desktop.exe', 'claude', 'orca-ide.exe',
+    // Warp Preview's Windows name is unconfirmed.
+    'warp-preview.exe',
     // A bare orca on Linux is GNOME's screen reader (/usr/bin/orca), not the Orca app.
     'orca', 'Orca'])(
     'an unknown app, the empty string and a 128-character string are none: %j', (value) => {
@@ -88,11 +125,11 @@ describe('frontAppId', () => {
     expect(APP_IDS).not.toContain(FRONT_NONE)
     expect(frontAppId('other')).toBe(FRONT_NONE)
     expect(frontAppId('Other')).toBe(FRONT_NONE)
-    for (const [value] of [...BUNDLES, ...EXES, ...LINUX_APPS]) expect(frontAppId(value)).not.toMatch(/^other$/i)
+    for (const [value] of [...BUNDLES, ...FRONT_BUNDLES, ...EXES, ...TERMINAL_EXES, ...LINUX_APPS]) expect(frontAppId(value)).not.toMatch(/^other$/i)
   })
 
   it('every id the table can give is an app id or none', () => {
-    for (const [value] of [...BUNDLES, ...EXES, ...LINUX_APPS]) {
+    for (const [value] of [...BUNDLES, ...FRONT_BUNDLES, ...EXES, ...TERMINAL_EXES, ...LINUX_APPS]) {
       const id = frontAppId(value)
       expect(APP_IDS.includes(id) || id === FRONT_NONE).toBe(true)
     }

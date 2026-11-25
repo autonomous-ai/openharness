@@ -23,8 +23,9 @@ While Orca is in front, a swipe on the dial stays among the agents of the worktr
 
 - It types nothing, starts no agent and moves no dial.
 - Nothing leaves the computer, and nothing is kept. From the Harness daemon on this computer it reads only whether a
-  dial is attached and the name and app of the agent it shows. From Orca it reads only the terminal ids of the focused
-  worktree, and sends those ids to the Harness daemon on this computer: no name, title, branch or path.
+  dial is attached and the name and app of the agent it shows. From Orca it reads only the focused worktree's terminal
+  ids and Orca's id of that worktree, and sends those ids to the Harness daemon on this computer: no name, title or
+  branch. Orca's id of a worktree with no identity holds the worktree's folder. Neither is logged.
 
 ## Install
 
@@ -48,5 +49,5 @@ it back is dropped unread. The token is never logged or kept. While no dial is a
 daemon's data folder for `devices.json` to appear.
 
 It declares one capability, `workspace:read`, which Orca words as "Read your projects and workspaces (names, branches,
-paths and agent status) and the terminals in them, and get notified when they change". It uses only the terminal ids
-of the focused worktree.
+paths and agent status) and the terminals in them, and get notified when they change". It uses only the focused
+worktree's terminal ids and Orca's id of it.

@@ -1,9 +1,11 @@
 // Tier A's world (world.ts) with a recording start in place of the devices: what it hands them, and how it records
 // each command, raise and send they make. Every folder is a temp one, on virtual time.
 import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createCodexQueue } from '../../../cable/hosts/codexQueue.js'
-import type { CoreApi } from '../../../core/api.js'
+import { env } from '../../../config/env.js'
+import type { CoreApi, CorePorts, DevicesPort } from '../../../core/api.js'
 import type { DevicesDeps, startDevices } from '../../../services/devices.js'
 import { claudeSessions, scenario, threads } from '../catalog.js'
 import type { Platform, Scenario } from '../types.js'
@@ -66,6 +68,20 @@ describe("tier A's world", () => {
     vi.stubEnv('LANG', 'vi_VN.UTF-8')
     worldOn('darwin')
     expect(process.env.LANG).toBe('en_US.UTF-8')
+  })
+
+  it("a world whose codexHome is the app's runs the devices with CODEX_HOME at the app's Codex home, and puts it back at close", async () => {
+    const before = env.CODEX_HOME
+    let started: string | undefined
+    const start = (() => {
+      started = env.CODEX_HOME
+      return {}
+    }) as unknown as typeof startDevices
+    const world = new World({ ...S1, world: { codexHome: 'app' } }, 'darwin', start)
+    worlds.push(world)
+    expect([started, world.folders.codexSessions]).toEqual([world.codexHome.home, join(world.codexHome.home, 'sessions')])
+    await world.close()
+    expect(env.CODEX_HOME).toBe(before)
   })
 
   it("the core's turns.send reaches no session: tier A has no Harness agent, so a real core would refuse it", () => {
@@ -137,12 +153,55 @@ describe("tier A's world records every send, failing closed", () => {
     expect(world.gaps).toEqual(['a command tier A does not answer: osascript', 'a command tier A does not answer: codex'])
   })
 
+  it("tmux, herdr and the lsof and ps of herdr's client lookup are answered on iTerm2's machine alone: a Claude world's ps is a gap",
+    async () => {
+    const { world, deps } = worldOn('darwin', { ...S1, app: 'claude' })
+    await deps.orca!.run('/bin/ps', ['-o', 'pid=,tty=', '-p', '41000'], 1_000)
+    expect(world.gaps).toEqual(['a command tier A does not answer: ps'])
+  })
+
   it("Cursor's CLI is answered only on a folder, as Linux's folder row runs it: any other run is a gap", async () => {
     const { world, deps } = worldOn('linux')
     await deps.orca!.run('/opt/eval/bin/cursor', ['/work/eval-a'], 1_000)
     expect(world.gaps).toEqual([])
     await deps.orca!.run('/opt/eval/bin/cursor', ['agent', '-p', 'Eval words for one.'], 1_000)
     expect(world.gaps).toEqual(['a command tier A does not answer: cursor'])
+  })
+})
+
+describe("tier A's world across the devices' restart", () => {
+  it('restartDevices stops the devices and starts them on the same root, dial and sessions', async () => {
+    machine.reset()
+    const said: string[] = []
+    const handed: Array<{ core: CoreApi; deps: DevicesDeps }> = []
+    // Each start's devices open a listener of their own, and stop on virtual time.
+    const start = ((core: CoreApi, ports: CorePorts, deps: DevicesDeps) => {
+      const n = handed.push({ core, deps })
+      said.push(`start ${n}`)
+      if (n === 1) void deps.listen!({ front: { maxBytes: 64, perSecond: 1, handle: () => undefined } }, () => {})
+      ports.devices = { stop: async () => {
+        await new Promise((resolve) => { setTimeout(resolve, 1_000) })
+        said.push(`stop ${n}`)
+      } } as unknown as DevicesPort
+      return {}
+    }) as unknown as typeof startDevices
+    const world = new World(S1, 'darwin', start)
+    worlds.push(world)
+    // A session's process, which a restart of the devices leaves running.
+    machine.start({ pid: 41_000, ppid: 1, executable: 'claude' })
+    expect(Object.keys(world.listener)).toEqual(['front'])
+    const restarted = world.restartDevices()
+    await vi.advanceTimersByTimeAsync(1_000)
+    await restarted
+    expect(said).toEqual(['start 1', 'stop 1', 'start 2'])
+    const [first, second] = handed
+    expect(second!.core).toBe(first!.core)
+    // The same deps: the same root's folders, the same dial's cable.
+    expect(second!.deps).toBe(first!.deps)
+    expect(second!.deps.cable).toBe(world.dial.cable)
+    expect([...machine.processes.keys()]).toEqual([41_000])
+    // The stopped devices' listener went with them: the new devices opened none.
+    expect(world.listener).toEqual({})
   })
 })
 

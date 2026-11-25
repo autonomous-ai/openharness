@@ -1,6 +1,7 @@
 // Which app an agent runs in, from the few environment values the hook sends. Own variables of a
 // multiplexer or terminal come first: they name the nearest host, while TERM_PROGRAM names the outermost one.
 
+import type { DialOtherApp } from '../../lib/dialUsageContract.js'
 import { HC_TERMINAL } from './hcClient.js'
 
 /** Each host's macOS app by the bundle id its Info.plist gives it: how `__CFBundleIdentifier` names the app, and how a
@@ -124,6 +125,8 @@ export function inCmux(hints: Readonly<Record<string, string>>): boolean {
 
 /** The word Claude Code's extension gives the sessions of its tab, in VS Code and in its forks alike. */
 export const EXTENSION_TAB = 'claude-vscode'
+/** The word the Claude app gives the Claude Code it starts. */
+const CLAUDE_APP_ENTRYPOINT = 'claude-desktop'
 
 /** The hints of the app an agent's own terminal or tab is in. An editor started with `code .` or `cursor .` from another
  *  app inherits that app's bundle id, while its own terminals say TERM_PROGRAM=vscode and its extension's tab says
@@ -136,6 +139,19 @@ export function ownHints(hints: Record<string, string>): Record<string, string> 
   if (!inEditor || bundle === undefined || bundle === APP_BUNDLES.vscode || bundle === APP_BUNDLES.cursor) return hints
   const { __CFBundleIdentifier: _inherited, ...own } = hints
   return own
+}
+
+/** Orca named by its TERM_PROGRAM alone. Orca sets it in every terminal it spawns (stablyai/orca
+ *  src/main/daemon/pty-subprocess/spawn-environment.ts, local-pty-spawn-environment.ts), and off macOS no bundle id names
+ *  it: without it an Orca agent sat on Other's page (Ken's Dell, Win11 x64, 2026-11-25, chain claude.exe < powershell <
+ *  powershell < Orca.exe < Orca.exe). A program started there that sets no TERM_PROGRAM of its own keeps Orca's
+ *  (Alacritty, the Claude and ChatGPT apps): a bundle id, which the hook sends on Windows too (notify.mjs
+ *  lookUpWindowsApp), names that app instead, and on Linux the caller's parents do (observed.ts walked). So does the
+ *  word a session gives of where it runs: the extension's tab and the Claude app's sessions are in no terminal. */
+export function inOrca(hints: Readonly<Record<string, string>>): boolean {
+  const entrypoint = hints.CLAUDE_CODE_ENTRYPOINT
+  return hints.TERM_PROGRAM === 'Orca' && !hints.__CFBundleIdentifier && entrypoint !== EXTENSION_TAB
+    && entrypoint !== CLAUDE_APP_ENTRYPOINT
 }
 
 /** The outermost app an agent runs in. The bundle id and TERM_PROGRAM name it, unlike a multiplexer's own variables,
@@ -152,10 +168,49 @@ export function detectApp(hints: Record<string, string>): string {
   // Cursor is a VS Code fork and reports TERM_PROGRAM=vscode, so the bundle id decides first. A hint is outside text:
   // only a table's own key names an app, never one an object inherits (`constructor`).
   if (Object.hasOwn(BUNDLE_APPS, bundle)) return BUNDLE_APPS[bundle]
+  if (inOrca(hints)) return 'orca'
   if (Object.hasOwn(PROGRAM_APPS, program)) return PROGRAM_APPS[program]
   if (bundle || program) return UNKNOWN_APP
   if (hints.KITTY_WINDOW_ID) return 'kitty'
   return detectHost(hints)
+}
+
+// The apps behind the Other page the dial's counts name, each id from the app's own Info.plist, build config or source
+// (Nova's and Windsurf's from their Homebrew casks). Alacritty sets no TERM_PROGRAM; the hook names its bundle id on
+// Windows too (notify.mjs lookUpWindowsApp).
+const OTHER_BUNDLES: Readonly<Record<string, DialOtherApp>> = {
+  'dev.zed.Zed': 'zed',
+  'dev.zed.Zed-Preview': 'zed',
+  'org.alacritty': 'alacritty',
+  'co.zeit.hyper': 'hyper',
+  'org.tabby': 'tabby',
+  'com.raphaelamorim.rio': 'rio',
+  'dev.commandline.waveterm': 'wave',
+  'com.panic.Nova': 'nova',
+  'com.exafunction.windsurf': 'windsurf',
+}
+const OTHER_PROGRAMS: Readonly<Record<string, DialOtherApp>> = {
+  zed: 'zed',
+  Hyper: 'hyper',
+  Tabby: 'tabby',
+  rio: 'rio',
+  waveterm: 'wave',
+}
+/** Every JetBrains IDE's bundle id: one per product (com.jetbrains.intellij, com.jetbrains.pycharm, …). */
+const JETBRAINS_BUNDLE = 'com.jetbrains.'
+
+/** The product behind the Other page, for the dial's counts: the raw bundle id or TERM_PROGRAM stops here, as either
+ *  could name a person's own build, and only a name of the fixed list leaves (docs/plans/2026-11-23-dial-usage-counts-design.md).
+ *  A hint is outside text: only a table's own key names a product, never one an object inherits (`constructor`). */
+export function otherProduct(hints: Readonly<Record<string, string>>): DialOtherApp {
+  const bundle = Object.hasOwn(hints, '__CFBundleIdentifier') ? hints.__CFBundleIdentifier : ''
+  const program = Object.hasOwn(hints, 'TERM_PROGRAM') ? hints.TERM_PROGRAM : ''
+  if (bundle) {
+    if (Object.hasOwn(OTHER_BUNDLES, bundle)) return OTHER_BUNDLES[bundle]
+    return bundle.startsWith(JETBRAINS_BUNDLE) ? 'jetbrains' : 'unlisted'
+  }
+  if (program) return Object.hasOwn(OTHER_PROGRAMS, program) ? OTHER_PROGRAMS[program] : 'unlisted'
+  return 'unknown'
 }
 
 export function detectHost(hints: Record<string, string>): string {
@@ -170,7 +225,8 @@ export function detectHost(hints: Record<string, string>): string {
   if (inCmux(hints)) return 'cmux'
   if (has('KITTY_WINDOW_ID')) return 'kitty'
   if (has('WEZTERM_PANE')) return 'wezterm'
-  if (has('ORCA_AGENT_SESSION_ID') || bundle === APP_BUNDLES.orca) return 'orca'
+  // Orca's TERM_PROGRAM names it off macOS too, where a claude typed by hand has no agent session (inOrca).
+  if (has('ORCA_AGENT_SESSION_ID') || bundle === APP_BUNDLES.orca || inOrca(hints)) return 'orca'
   // Cursor is a VS Code fork and reports TERM_PROGRAM=vscode, so its bundle id decides first.
   if (bundle === APP_BUNDLES.cursor) return 'cursor'
   if (bundle === APP_BUNDLES.claude) return 'claude'

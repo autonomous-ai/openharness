@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { assertTestRoot, endRootProcesses, lsofFolders, ownFolders, rootProcesses, workingFolders } from './rootProcesses.js'
-import { alive, processTable, type ProcessRow } from './spawnedRuns.js'
+import { alive, commandLines, processTable, type NamedRow } from './spawnedRuns.js'
 
-const row = (pid: number, ppid: number, pgid: number, command: string): ProcessRow => ({ pid, ppid, pgid, command })
+const row = (pid: number, ppid: number, pgid: number, command: string): NamedRow => ({ pid, ppid, pgid, command })
 const ROOT = '/tmp/htmux-abc'
 /** The caller is 50, started by 41, in the group 40 leads. */
 const OWN = [row(40, 1, 40, 'node vitest'), row(41, 40, 40, 'node (vitest 1)'), row(50, 41, 40, 'node (vitest 2)')]
@@ -77,14 +77,14 @@ describe('a process whose working folder is in the root', () => {
   })
 
   it('is read for this process, on this machine', () => {
-    expect(workingFolders(processTable()).get(process.pid)).toBe(realpathSync(process.cwd()))
+    expect(workingFolders([process.pid]).get(process.pid)).toBe(realpathSync(process.cwd()))
   })
 
   it.runIf(process.platform === 'darwin')('is unknown, said once, when lsof cannot run: the sweep then goes by command line', () => {
     const said = vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.stubEnv('PATH', '/nowhere')
     try {
-      expect(workingFolders([])).toEqual(new Map())
+      expect(workingFolders([process.pid])).toEqual(new Map())
       expect(said.mock.calls).toEqual([[expect.stringMatching(/^\[e2e sweep\] no working folders read \(lsof: .+\): swept by command line alone$/)]])
     } finally { vi.unstubAllEnvs(); said.mockRestore() }
   })
@@ -146,12 +146,13 @@ describe('endRootProcesses', () => {
     started = [own, other]
     // Until each one runs its own command line: a process not yet past its exec still shows this worker's.
     const members = await until(() => {
-      const table = processTable()
-      const rows = table.filter((each) => each.pgid === group.pid)
-      const running = (pid: number | undefined, path: string) => table.some((each) => each.pid === pid && each.command.includes(path))
+      const rows = processTable().filter((each) => each.pgid === group.pid)
+      const commands = commandLines([own.pid!, other.pid!])
+      const running = (pid: number | undefined, path: string) => commands.get(pid!)?.includes(path)
       return rows.length === 2 && running(own.pid, join(dir, 'own')) && running(other.pid, `${dir}x/other`) ? rows.map((each) => each.pid) : null
     })
-    expect(await endRootProcesses(dir)).toEqual([])
+    // Each a child of this worker, in its tree: nothing needs to have been seen before.
+    expect(await endRootProcesses(dir, new Map())).toEqual([])
     expect([...members, own.pid!].filter(alive)).toEqual([])
     expect(alive(other.pid!)).toBe(true)
   })
@@ -162,13 +163,13 @@ describe('endRootProcesses', () => {
     mkdirSync(`${dir}x`)
     const inside = spawn('sleep', ['600'], { cwd: join(dir, 'projects'), stdio: 'ignore' }), beside = spawn('sleep', ['600'], { cwd: `${dir}x`, stdio: 'ignore' })
     started = [inside, beside]
-    await until(() => processTable().filter((each) => (each.pid === inside.pid || each.pid === beside.pid) && each.command === 'sleep 600').length === 2 || null)
+    await until(() => [...commandLines([inside.pid!, beside.pid!]).values()].filter((command) => command === 'sleep 600').length === 2 || null)
     try {
-      expect(await endRootProcesses(dir)).toEqual([])
+      expect(await endRootProcesses(dir, new Map())).toEqual([])
       expect([alive(inside.pid!), alive(beside.pid!)]).toEqual([false, true])
       // A second close of the same daemon: the root is gone, and nothing is left to end.
       rmSync(dir, { recursive: true, force: true })
-      expect(await endRootProcesses(dir)).toEqual([])
+      expect(await endRootProcesses(dir, new Map())).toEqual([])
     } finally { rmSync(`${dir}x`, { recursive: true, force: true }) }
   })
 
@@ -180,7 +181,7 @@ describe('endRootProcesses', () => {
     const kill = vi.spyOn(process, 'kill').mockImplementation(() => true)
     try {
       for (const path of ['/', realpathSync(tmpdir()), outer, join(outer, 'htmux-abc'), link]) {
-        await expect(endRootProcesses(path), path).rejects.toThrow(`not a test root (isolatedTmux's <tmp>/htmux-XXXXXX): ${path}`)
+        await expect(endRootProcesses(path, new Map()), path).rejects.toThrow(`not a test root (isolatedTmux's <tmp>/htmux-XXXXXX): ${path}`)
       }
       expect(kill).not.toHaveBeenCalled()
     } finally {

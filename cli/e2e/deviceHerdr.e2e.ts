@@ -15,6 +15,7 @@ import { execFileSync } from 'node:child_process'
 import { lstatSync, mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
+import { alive } from '../src/testing/spawnedRuns.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
@@ -228,14 +229,14 @@ describe.skipIf(!herdrBinary)("herdr's agents on the dial, from a private herdr 
     const cards = dial.messages.slice(turn).filter((m) => m.t === 'turn.started' || m.t === 'turn.done')
     expect(cards.map((m) => [m.t, m.agentId])).toEqual([['turn.started', id], ['turn.done', id]])
 
-    // 4. Its HERDR_PANE_ID sent the devices' herdr lookup to the table, which held the test's herdr alone: the
-    // developer's, there from start to end, were dropped from it.
+    // 4. Its HERDR_PANE_ID sent the devices' herdr lookup to the table, which held the test's herdr alone: none outside
+    // this worker's tree was kept, and each it dropped that still runs is outside it (othersNow tells the tree by pids
+    // and parents alone, never a process's name).
     const kept = hidden.kept()
     expect(kept).toContain(herdr.pid)
     const now = othersNow()
     for (const pid of [...others, ...now]) expect(kept).not.toContain(pid)
-    const dropped = hidden.dropped()
-    for (const pid of others.filter((pid) => now.includes(pid))) expect(dropped).toContain(pid)
+    expect(hidden.dropped().filter((pid) => alive(pid) && !others.includes(pid) && !now.includes(pid))).toEqual([])
   })
 })
 

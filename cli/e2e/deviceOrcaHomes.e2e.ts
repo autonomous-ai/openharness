@@ -20,7 +20,7 @@ import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { DIAL_PLUGIN_ID, DIAL_SKILL } from '../src/devices/dialSkill.js'
 import { orcaBinary } from '../src/devices/orcaHomes.js'
 import { resolveBinaryOnPath } from '../src/lib/binaryOnPath.js'
-import { IsolatedDaemon, SOURCES_CLI, until } from './harness/daemon.js'
+import { IsolatedDaemon, sourcesCli, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 import { FakeOrca } from './harness/fakeOrca.js'
@@ -32,7 +32,7 @@ const FOUND_ONE = /\[observed\] scan · 1 found · \d+ app known · \d+ named ·
 // The run's bundle when there is one (E2E_BUNDLE), as the daemon runs, as in deviceDialSkill.e2e.ts.
 const CLI_ENTRY = process.env.E2E_BUNDLE_PATH
   ? [process.env.E2E_BUNDLE_PATH]
-  : SOURCES_CLI
+  : sourcesCli()
 const INSTALL = `plugin install ${DIAL_PLUGIN_ID} --scope user`
 const ENABLE = `plugin enable ${DIAL_PLUGIN_ID} --scope user`
 
@@ -242,7 +242,7 @@ describe('Orca\'s account homes on the dial', () => {
     if (process.platform === 'darwin') {
       const skill = join(home, 'skills', 'dial', 'SKILL.md')
       await until('the skill in the Orca Codex home', () => existsSync(skill), 45_000, 100)
-      expect(orca!.asked()).toContain('account list --json')
+      expect(orca!.log().map((run) => run.argv.slice(1).join(' '))).toContain('account list --json')
     } else {
       await until('Orca not found', () => d.log().includes('[observed] orca homes · not read · no orca'), 45_000, 100)
     }

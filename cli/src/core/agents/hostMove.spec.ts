@@ -118,6 +118,41 @@ describe('the move, wired to the core', () => {
     }
   })
 
+  const STARTED: ProcessIdentity = { ...NEW_ID, executable: 'node' }
+  const refreshing = (w: HostMoveWiring) => {
+    const publish = vi.mocked(w.registry.confirmLaunch).getMockImplementation()!
+    vi.mocked(w.registry.confirmLaunch).mockImplementation(async (id, input, authority) => { await authority?.refresh?.(); return publish(id, input, authority) })
+  }
+
+  it('publishes a destination engine that named itself between the look and the refresh, under its new name', async () => {
+    const { w, row } = wiring()
+    refreshing(w) // probeProcess answers NEW_ID: `claude`
+    const deps = hostMoveDeps(row, () => true, w)
+    expect(await deps.swap('a1', NEW, STARTED)).toMatchObject({ state: 'confirmed', entry: { processIdentity: NEW_ID, runtimes: [NEW] } })
+    const calls = vi.mocked(w.registry.confirmLaunch).mock.calls
+    expect(calls.map(call => call[1].processIdentity)).toEqual([STARTED, NEW_ID])
+    expect(calls.map(call => call[1].runtimes)).toEqual([[NEW], [NEW]])
+    expect(calls[0]![2]!.expires).toEqual(expect.any(Number))
+    expect(calls[1]![2]!.expires).toBe(calls[0]![2]!.expires)
+    expect(w.restore.probeProcess).toHaveBeenCalledWith(NEW, 'claude')
+    expect(w.invalidateControl).toHaveBeenCalledExactlyOnceWith('a1')
+    expect(w.log).toHaveBeenCalledWith('[move] publication · engine renamed · a1')
+    deps.complete()
+    expect(w.announce).toHaveBeenCalledWith(expect.objectContaining({ processIdentity: NEW_ID }))
+  })
+
+  it.each([['pid', { pid: 99 }], ['start', { startMarker: 'other' }]] as const)('still refuses a destination Node runtime whose %s changed', async (_what, change) => {
+    const { w, row } = wiring()
+    refreshing(w)
+    vi.mocked(w.restore.probeProcess).mockResolvedValue({ ...NEW_ID, ...change })
+    const deps = hostMoveDeps(row, () => true, w)
+    await expect(deps.swap('a1', NEW, STARTED)).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+    expect(w.registry.confirmLaunch).toHaveBeenCalledTimes(1)
+    expect(row.runtimes).toEqual([OLD])
+    expect(w.invalidateControl).not.toHaveBeenCalled()
+    expect(w.log).not.toHaveBeenCalled()
+  })
+
   it('carries the original move and backend authority to a waiting pane kill', async () => {
     const { w, row, target } = wiring()
     let live = true

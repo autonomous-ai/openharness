@@ -141,4 +141,24 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.widget<Switch>(find.byType(Switch)).value, isFalse);
   });
+
+  testWidgets('See what’s shared names the dial and voice', (tester) async {
+    await show(
+      tester,
+      ({bool? enabled}) async => {'enabled': true, 'revision': 0},
+    );
+    await tester.tap(find.text('See what’s shared'));
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining(
+        'Dial use: days connected, used and returned to; time to first agent; '
+        'agents shown by engine, host and app (from a fixed list)',
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('seconds of voice turned into text'),
+      findsOneWidget,
+    );
+  });
 }

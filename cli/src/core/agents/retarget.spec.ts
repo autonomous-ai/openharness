@@ -15,7 +15,7 @@ import { createAgentRetargeter, type RetargetDeps } from './retarget.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
-vi.mock('../../lib/paneEngineProcess.js', () => ({ resolvePaneEngineProcess: vi.fn() }))
+vi.mock('../../lib/paneEngineProcess.js', async (real) => ({ ...await real<object>(), resolvePaneEngineProcess: vi.fn() }))
 
 vi.mock('../../engines/launchControl.js', async (real) => ({
   ...await real<object>(),
@@ -120,6 +120,40 @@ describe('retargeting an agent', () => {
     expect(result.ok).toBe(proof === 'same')
     expect(run.tmux.releaseHold).toHaveBeenCalledTimes(proof === 'same' ? 1 : 0)
     expect(run.deps.announceSession).toHaveBeenCalledTimes(proof === 'same' ? 1 : 0)
+  })
+  const named = { pid: 2, startMarker: 'new', executable: '/bin/claude' }, started = { ...named, executable: 'node' }
+  const refreshing = (run: ReturnType<typeof setup>) => {
+    const publish = vi.mocked(run.deps.registry.confirmLaunch).getMockImplementation()!
+    vi.mocked(run.deps.registry.confirmLaunch).mockImplementation(async (id, input, authority) => { await authority?.refresh?.(); return publish(id, input, authority) })
+  }
+
+  it('publishes a retargeted engine that named itself between the look and the refresh, under its new name', async () => {
+    const run = setup()
+    refreshing(run)
+    vi.mocked(restartAgent).mockResolvedValueOnce({ ok: true, resumed: true, processIdentity: started })
+    vi.mocked(resolvePaneEngineProcess).mockResolvedValue(named)
+    expect(await run.retarget({ agentId: 'a1', grid })).toEqual({ ok: true })
+    const calls = vi.mocked(run.deps.registry.confirmLaunch).mock.calls
+    expect(calls.map(call => call[1].processIdentity)).toEqual([started, named])
+    expect(calls[1]![1]).toMatchObject({ grid: { baseUrl: grid.baseUrl, model: grid.model }, gridLaunchRecord: { override: grid, webSearch: 'off' } })
+    expect(calls[0]![2]!.expires).toEqual(expect.any(Number))
+    expect(calls[1]![2]!.expires).toBe(calls[0]![2]!.expires)
+    expect(resolvePaneEngineProcess).toHaveBeenCalledWith(run.tmux, pane, 'claude')
+    expect(run.tmux.releaseHold).toHaveBeenCalledTimes(1)
+    expect(run.deps.announceSession).toHaveBeenCalledWith(expect.objectContaining({ processIdentity: named }))
+    expect(console.log).toHaveBeenCalledWith('[retarget] publication · engine renamed · a1')
+  })
+
+  it.each([['pid', { pid: 3 }], ['start', { startMarker: 'other' }]] as const)('still refuses a retargeted Node runtime whose %s changed', async (_what, change) => {
+    const run = setup()
+    refreshing(run)
+    vi.mocked(restartAgent).mockResolvedValueOnce({ ok: true, resumed: true, processIdentity: started })
+    vi.mocked(resolvePaneEngineProcess).mockResolvedValue({ ...named, ...change })
+    expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: false, error: 'RETARGET_FAILED' })
+    expect(run.deps.registry.confirmLaunch).toHaveBeenCalledTimes(1)
+    expect(run.tmux.releaseHold).not.toHaveBeenCalled()
+    expect(run.deps.announceSession).not.toHaveBeenCalled()
+    expect(vi.mocked(console.log).mock.calls.flat().some(line => String(line).includes('engine renamed'))).toBe(false)
   })
   beforeEach(() => {
     vi.spyOn(console, 'log').mockImplementation(() => {})

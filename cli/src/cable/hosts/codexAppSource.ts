@@ -3,9 +3,11 @@
  * (docs/plans/2026-11-19-dial-chatgpt-ring-and-follow-design.md): the newest 16 that codexAppThreads.ts reads from the
  * app's metadata, while a dial is attached. Each is an idle row on the ChatGPT page under the id the observed source
  * gives the same thread, so the hooked copy and this one are one row (registry.ts) and the row keeps its id as the
- * thread's process comes and goes. No process runs it, so it rests: no voice, and no weight in the dial's default app.
- * Every thread the read returns gets its place in the app's sidebar as the page's rank, so a running thread's hooked
- * copy is placed too.
+ * thread's process comes and goes. No process runs it, so it rests: no weight in the dial's default app. It takes voice
+ * where its link opens, a `codex queue` can run and Harness's Codex home is the app's, and its words wake the thread:
+ * they open it by that link, then go to its Codex queue (appWake.ts,
+ * docs/plans/2026-11-23-dial-chatgpt-voice-resting-design.md). Every thread the read returns gets its place in the
+ * app's sidebar as the page's rank, so a running thread's hooked copy is placed too.
  *
  * Pushed by one watch on the Codex home, never polled. Codex writes its WAL several times a second during any turn, the
  * app's or a terminal's, so one read runs at a time, and the changes during it give one more after it, at least 1 s
@@ -14,10 +16,11 @@
  * A log line says only fixed words, counts and a failure's kind: the app's metadata names people's folders and threads.
  */
 import { errorKind } from '../../lib/log.js'
+import type { AppWake } from './appWake.js'
 import type { CodexAppRead, CodexAppThread, CodexAppThreads } from './codexAppThreads.js'
 import { observedAgentId, type PaneName } from './observed.js'
 import type { RingRank } from './select.js'
-import type { Caps, HostAgent, HostSource, PaneSwitch } from './types.js'
+import type { Caps, HostAgent, HostSource, PaneSwitch, SendResult } from './types.js'
 
 /** The least time between the starts of two reads. */
 const GAP_MS = 1_000
@@ -39,6 +42,15 @@ export interface CodexAppSourceDeps {
   focus(threadId: string, agentId: string): Promise<boolean>
   canShow(threadId: string): boolean
   show(threadId: string, agentId: string): Promise<PaneSwitch>
+  /** Whether the thread's link opens on this computer (appLink.ts canLink). */
+  canLink(threadId: string): boolean
+  /** Whether a `codex queue` can run for the app's threads: the app's own CLI, or the `codex` a launch would run. */
+  canQueue(): boolean
+  /** Whether Harness's `CODEX_HOME`, which `codex queue` runs under, is the app's Codex home, computed once by
+   *  devices.ts. */
+  inAppHome: boolean
+  /** The devices' one wake, which every dial's words for a resting thread go through. */
+  wake: Pick<AppWake, 'send' | 'stop'>
   /** The ChatGPT page's rank: each agent's place in the sidebar's order, or none. */
   rank(rank: RingRank | undefined): void
   monotonic(): number
@@ -109,11 +121,16 @@ export class CodexAppSource implements HostSource {
   private said: string | undefined
   /** Whether the last read of this start failed, so a run of failures says one line. */
   private failed = false
+  /** Ends the promise of this start, once its first read ended or it stopped. */
+  private firstRead: (() => void) | undefined
 
   constructor(private readonly deps: CodexAppSourceDeps) {}
 
-  start(): void {
-    if (this.running) return
+  /** Ends once this start's first read has: its rows taken, the read failed, or the source stopped meanwhile; with no home,
+   *  at once. The dial's greeting waits for it (devices.ts dialAttached), so its first list holds the app's threads. A
+   *  start while it runs ends at once. */
+  start(): Promise<void> {
+    if (this.running) return Promise.resolve()
     this.running = true
     this.slowest = undefined
     this.failed = false
@@ -123,17 +140,23 @@ export class CodexAppSource implements HostSource {
       this.deps.log(`[codex-app] watch · ${there ? 'on' : 'none'}`)
     }
     // With no home, nothing is watched or read: the next attach looks again.
-    if (!there) return
+    if (!there) return Promise.resolve()
+    const first = new Promise<void>((resolve) => { this.firstRead = resolve })
     this.unwatch = this.deps.watch((file) => {
       if (file === undefined || WATCHED.has(file)) this.wake()
     })
     this.wake()
+    return first
   }
 
   stop(): void {
     if (!this.running) return
     this.running = false
     this.stops++
+    this.firstReadEnded()
+    // The dial detached, or the app was not found at an attach: a wake still opening answers that its thread did not
+    // answer. The ChatGPT app's only: the wake is the Claude app's too.
+    this.deps.wake.stop('codex')
     this.unwatch?.()
     this.unwatch = undefined
     this.again = false
@@ -165,9 +188,20 @@ export class CodexAppSource implements HostSource {
     return this.rows.map(({ agent }) => ({ ...agent }))
   }
 
-  /** Status, a tap, and a rest while the app is in front: no process runs the thread to take words or answer. */
-  capabilities(): Caps {
-    return { status: true, voice: false, focus: true, answer: false }
+  /** Status, a tap, a rest while the app is in front, and voice where its words can reach the thread: no process runs
+   *  the thread to answer. The home first: with another one nothing is asked on the dial's 1 s list. */
+  capabilities(agent: HostAgent): Caps {
+    const row = this.find(agent.id)
+    const voice = !!row && this.deps.inAppHome && this.deps.canLink(row.threadId) && this.deps.canQueue()
+    return { status: true, voice, focus: true, answer: false }
+  }
+
+  /** The words wake the row's thread, named by the row as they arrive. A row no longer listed opens nothing. */
+  async send(agent: HostAgent, text: string): Promise<SendResult> {
+    const row = this.find(agent.id)
+    if (!row) return { ok: false, reason: `${agent.name} did not answer.` }
+    const { threadId, agent: { id, name } } = row
+    return this.deps.wake.send({ app: 'codex', threadId, agentId: id, name }, text)
   }
 
   async focus(agent: HostAgent): Promise<boolean> {
@@ -255,8 +289,15 @@ export class CodexAppSource implements HostSource {
       this.fail(errorKind(error))
     } finally {
       pass.under = false
+      // A read begun before the last stop is not this start's: the start ends with its own.
+      if (this.stops === stops) this.firstReadEnded()
       this.next()
     }
+  }
+
+  private firstReadEnded(): void {
+    this.firstRead?.()
+    this.firstRead = undefined
   }
 
   private fail(kind: string): void {

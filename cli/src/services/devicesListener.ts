@@ -666,26 +666,51 @@ export function dialStream({ log, after, ended }: {
 
 /** Ten a second on a connection: the plugin sends one each time Orca's worktree on screen changes. */
 export const ORCA_FRONT_PER_SECOND = 10
-/** Its longest message, 50 handles, is 2234 bytes. */
-export const ORCA_FRONT_MAX_BYTES = 4096
+/** Its longest message is 50 handles and a workspace of 1024 three-byte letters, 5321 bytes; one of 1024 quotes and
+ *  backslashes, two bytes each once escaped, is 4297. 4096 refused the letters, so the bound is past both. */
+export const ORCA_FRONT_MAX_BYTES = 8192
 /** The most terminals of a workspace Orca tells a plugin (its PLUGIN_WORKSPACE_TERMINAL_LIMIT). */
 export const ORCA_FRONT_MAX_TERMINALS = 50
+/** The longest workspace id Orca gives a plugin: its plugin API holds the id to zod's `string().min(1).max(1024)`, which
+ *  counts UTF-16 units as `length` does here. */
+export const ORCA_FRONT_MAX_WORKSPACE = 1024
+
+// Every control character, C0, DEL and C1 (Unicode's Cc). No `g` flag: a test keeps no position between ids.
+const CONTROL_CHAR = /\p{Cc}/u
+
+/** None told (an older plugin), null, or an id of 1 to 1024 characters with no control character. */
+const isOrcaWorkspace = (workspace: unknown): workspace is string | null | undefined =>
+  workspace === undefined || workspace === null || (typeof workspace === 'string' && workspace !== ''
+    && workspace.length <= ORCA_FRONT_MAX_WORKSPACE && !CONTROL_CHAR.test(workspace))
 
 /**
- * The terminals of the worktree on Orca's screen, from Orca's Harness Device plugin
- * (docs/plans/2026-11-18-dial-orca-tab-scope-design.md): their handles in Orca's order, or null for none, handed on as
- * given. Taken only while the plugin's dial stream is open, as the devices drop them when that stream ends: one taken
- * with none open, a late retry, would leave a scope nobody clears. It keeps nothing and logs nothing.
+ * The worktree on Orca's screen, from Orca's Harness Device plugin (docs/plans/2026-11-18-dial-orca-tab-scope-design.md,
+ * docs/plans/2026-11-23-dial-orca-chats-design.md): its terminals' handles in Orca's order, or null for none, and its
+ * workspace id, each handed on as given. An older plugin sends no workspace, handed on as undefined.
+ *
+ * The id is Orca's own, never mapped here: `identity:<key>` for a worktree with an identity, else the worktree's `id`,
+ * its repo's uuid and its folder. That `id` is the `worktreeId` the devices already read from Orca's CLI, and a worktree
+ * with no identity has no other name: on the owner's Mac 6 of 17 chats were in such worktrees (2026-11-23). So it is
+ * taken as it is, held only to Orca's bounds. The plugin sends null for an id past them, so a workspace outside them
+ * did not come from it, and the whole message is refused.
+ *
+ * Taken only while the plugin's dial stream is open, as the devices drop them when that stream ends: one taken with none
+ * open, a late retry, would leave a scope nobody clears. It keeps nothing and logs nothing: a worktree's id holds its
+ * folder.
  */
-export function orcaFrontHandler(isOpen: () => boolean, front: (terminals: readonly string[] | null) => void): ListenerHandler {
+export function orcaFrontHandler(
+  isOpen: () => boolean,
+  front: (terminals: readonly string[] | null, workspace: string | null | undefined) => void,
+): ListenerHandler {
   return {
     maxBytes: ORCA_FRONT_MAX_BYTES,
     perSecond: ORCA_FRONT_PER_SECOND,
-    handle: ({ terminals }) => {
+    handle: ({ terminals, workspace }) => {
       if (!isOpen()) return REFUSED
       if (terminals !== null && !(Array.isArray(terminals) && terminals.length <= ORCA_FRONT_MAX_TERMINALS
         && terminals.every((handle): handle is string => typeof handle === 'string' && ORCA_HANDLE.test(handle)))) return REFUSED
-      front(terminals)
+      if (!isOrcaWorkspace(workspace)) return REFUSED
+      front(terminals, workspace)
     },
   }
 }

@@ -73,6 +73,7 @@ const STATE_MODULES: readonly string[] = [
   'dsh/viewerLedger.ts',
   'dsh/catalog.ts',
   'cable/noticeFile.ts',
+  'cable/dialUsageFile.ts',
   'cable/notifyMode.ts',
   'cable/dialPortVerdicts.ts',
   'cable/pets/store.ts',

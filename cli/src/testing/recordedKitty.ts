@@ -28,6 +28,19 @@
  * its `sh` 1431 and that one's `sleep` 1432, all one process group, the tty's foreground one. Before each focus
  * `focus-window --match id:2` made tab 2 active again. Whether window 1 and its tab became active was read from `ls`:
  * its `is_active` fields alone.
+ *
+ * The focused window by `get-colors --match` (`focusedMatch`, for the dial's focus follow:
+ * docs/plans/2026-11-23-dial-wezterm-kitty-focus-follow-plan.md, Task 1) was recorded 2026-11-23 in a disposable
+ * `ubuntu:24.04` container (`--platform linux/arm64`, Docker on macOS), with the same kitty, xvfb, libgl1-mesa-dri,
+ * fontconfig, fonts-dejavu-core and procps, and openbox 3.6.1-12build5 and xdotool 1:3.20160805.1-5build1 also
+ * installed. User `u` (uid 1001), `Xvfb :99 -screen 0 1280x800x24` with `openbox` on it, `DISPLAY=:99`,
+ * `LIBGL_ALWAYS_SOFTWARE=1`. `kitty -o allow_remote_control=socket-only --listen-on unix:/tmp/kitty sh -c 'sleep
+ * 100000'` made window 1; `kitten @ --to unix:/tmp/kitty launch --type=tab --title other sleep 100000` made window 2
+ * in tab 2, `launch --type=os-window --title osw sleep 100000` made window 3 in a second OS window, and `focus-window
+ * --match id:1` came last; `get-colors` was asked after each, from outside kitty. The two kittys were two such
+ * processes, on `unix:/tmp/kA` and `unix:/tmp/kB`, the second started 4 s after the first; then `xdotool
+ * windowactivate` gave the first one's OS window the X focus. Each password mode was a kitty of its own, asked under
+ * `timeout 10`: an exit within a second is a refusal, a wait to the timeout a prompt in kitty's window.
  */
 export const RECORDED_KITTY = {
   source: 'recorded',
@@ -257,5 +270,62 @@ export const RECORDED_KITTY = {
     args: ['kitten', '@', '--to', 'unix:/tmp/kitty', 'focus-window', '--match', 'id:99'],
     code: 1,
     stderr: 'Error: No matching windows for expression: id:99\n',
+  },
+  /** Which window is kitty's focused one (header, "The focused window by `get-colors --match`"). `focused`,
+   *  `notFocused`, `orFocused` and `orNone` were asked after `focus-window --match id:1`, window 2 in tab 2 and window 3
+   *  in the second OS window. A match prints kitty's colour table (277 lines, the same for each) and nothing on
+   *  stderr. */
+  focusedMatch: {
+    focused: {
+      args: ['kitten', '@', '--to', 'unix:/tmp/kitty', 'get-colors', '--match', 'id:1 and state:focused'],
+      code: 0,
+      stderr: '',
+      stdoutFirstLine: 'active_border_color     #00ff00',
+    },
+    notFocused: {
+      args: ['kitten', '@', '--to', 'unix:/tmp/kitty', 'get-colors', '--match', 'id:2 and state:focused'],
+      code: 1,
+      stderr: 'Error: No matching windows for expression: id:2 and state:focused\n',
+    },
+    /** kitty 0.32.2 takes parentheses in `--match`. */
+    orFocused: {
+      args: ['kitten', '@', '--to', 'unix:/tmp/kitty', 'get-colors', '--match', 'state:focused and (id:2 or id:1)'],
+      code: 0,
+      stderr: '',
+    },
+    orNone: {
+      args: ['kitten', '@', '--to', 'unix:/tmp/kitty', 'get-colors', '--match', 'state:focused and (id:2 or id:3)'],
+      code: 1,
+      stderr: 'Error: No matching windows for expression: state:focused and (id:2 or id:3)\n',
+    },
+    /** `state:focused` matched the new window and no longer the one before after `launch --type=tab` (2, not 1),
+     *  `launch --type=os-window` (3, not 2) and `focus-window --match id:1` (1, not 2 or 3). */
+    followed: { focusWindow: true, newTab: true, newOsWindow: true },
+    /** With window 2 focused in tab 2, `id:1 and state:active` matched (exit 0) as `id:2 and state:active` did:
+     *  `state:active` is each tab's active window, so it cannot say which one has the focus. */
+    activeOfEveryTab: true,
+    /** Two kitty processes: `id:1 and state:focused` matched in both (exit 0), whichever had the X focus, before and
+     *  after `xdotool windowactivate` moved it; `id:1 and state:focused_os_window`, alone or with `state:focused`,
+     *  matched in neither (exit 1, `No matching windows`). */
+    twoKittys: { bothFocused: true, focusedOsWindow: false },
+    /** `allow_remote_control=password` with no `remote_control_password`, the request sent with no password: refused
+     *  at once, with the stderr of `remoteControlOff`: no prompt waited for the person. */
+    password: {
+      args: ['kitten', '@', '--to', 'unix:/tmp/kitty-pw', 'get-colors', '--match', 'id:1 and state:focused'],
+      code: 1,
+      stderr: 'Error: Remote control is disabled. Add allow_remote_control to your kitty.conf\n',
+      ms: 29,
+      askedThePerson: false,
+    },
+    /** The same with `-o 'remote_control_password=pw get-colors'`: refused at once, the same way. */
+    passwordSet: {
+      args: ['kitten', '@', '--to', 'unix:/tmp/kitty-pw', 'get-colors', '--match', 'id:1 and state:focused'],
+      code: 1,
+      stderr: 'Error: Remote control is disabled. Add allow_remote_control to your kitty.conf\n',
+      ms: 24,
+      askedThePerson: false,
+    },
+    /** The mean of 20 `focused` calls one after another, in ms. */
+    callMs: 11.5,
   },
 } as const

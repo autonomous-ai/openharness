@@ -5,14 +5,19 @@
  * - an outside Claude Code session's and a Codex session's notice is a card on their own row, answered in their app;
  *   the same line again is limited; reading the card leaves it, and the agent's next prompt closes it;
  * - the turn that sent a notice ends silent, and its card stays;
- * - a Harness agent's notice is tied to the Harness agent, and a session nobody lists rings under its folder;
+ * - a Harness agent's notice is tied to the Harness agent, and a session nobody lists rings under its folder, and its
+ *   card goes at a tap, which opens nothing;
  * - a decision asked with `--suggest` and `--proceeding`, by a Harness agent or an outside session, rings once on its
  *   own card with the one line the command composed, its turn ends silent, and the answer in its app takes the card
  *   down; a plain finished turn rings no question (docs/plans/2026-11-22-needs-you-notify-design.md);
+ * - a tap on the card of a session in an Orca terminal switches Orca to it and keeps the card, so the dial's face of it
+ *   still asks, until its next prompt; a fake `orca` (harness/fakeOrca.ts) stands in for Orca, which never runs;
  * - it rings with a window open on its tab;
  * - with the dial unplugged, or no dial on this computer, it prints `no dial`, and the second starts nothing;
  * - a pending card comes back after the devices process restarts, as a silent row that opens to its line
- *   (docs/plans/2026-11-18-dial-notices-restart-design.md).
+ *   (docs/plans/2026-11-18-dial-notices-restart-design.md);
+ * - with the Notifications setting on Needs you, a plain finished turn draws its tile alone, and the dial's list holds the
+ *   notices and the window's questions but no finished turn, after a replug too.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -22,9 +27,12 @@ import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { observedAgentId } from '../src/cable/hosts/observed.js'
 import { LocalClient } from './harness/client.js'
 import { CodexOutside } from './harness/codexOutside.js'
-import { IsolatedDaemon, SOURCES_CLI, until } from './harness/daemon.js'
+import { IsolatedDaemon, sourcesCli, until } from './harness/daemon.js'
 import { Desk, devicesPids } from './harness/desk.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
+import { FakeOrca } from './harness/fakeOrca.js'
+import { InOrca } from './harness/inOrca.js'
+import { orcaHostCc } from './harness/orcaHost.js'
 import { Outside } from './harness/outsideAgent.js'
 
 const LINE = 'Connect the VPN so I can run the staging tests'
@@ -36,7 +44,7 @@ const COMPOSED = 'Proceeding · Which cache for the user lookup? · Doing: in-pr
 // `--import tsx` would not resolve: tsx and the sources by their paths.
 const CLI_ENTRY = process.env.E2E_BUNDLE_PATH
   ? [process.env.E2E_BUNDLE_PATH]
-  : SOURCES_CLI
+  : sourcesCli()
 
 const row = async (client: LocalClient, agentId: string) =>
   ((await client.request<{ agents: Array<Record<string, any>> }>('agents_list', { includeStopped: true }, 30_000)).agents)
@@ -67,7 +75,9 @@ describe('harness device notify', () => {
     daemon = undefined
     desk = undefined
   })
-  const fresh = async (env: Record<string, string> = {}): Promise<{ d: IsolatedDaemon; desk: Desk }> => {
+  /** [before] runs once the daemon's folders are made and before it starts: a setting in its data folder, or the fake
+   *  `orca` in its `bin`, goes in then. */
+  const fresh = async (env: Record<string, string> = {}, before?: (d: IsolatedDaemon) => void): Promise<{ d: IsolatedDaemon; desk: Desk }> => {
     const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false', ...env } })
     daemon = d
     const file = join(d.root, 'dials.json')
@@ -76,6 +86,7 @@ describe('harness device notify', () => {
     const theDesk = new Desk(file)
     desk = theDesk
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-200).join('\n')}`) })
+    before?.(d)
     await d.start()
     // Claude Code started by hand reads its hooks once, as it starts: they must be in by then.
     await d.hooksInstalled(['claude'])
@@ -234,6 +245,41 @@ describe('harness device notify', () => {
     expect(d.log().split('\n').filter((line) => line.includes(ASK[0]) || line.includes(ASK[2]))).toEqual([])
   })
 
+  // The dial draws its face of an agent as asking while that agent's question is open: a tap that only brought the agent
+  // forward must leave it open, or the face falls back to resting before the person has answered.
+  it.skipIf(!orcaHostCc)('a tap on the card of a session in an Orca terminal switches Orca to it and keeps the card, until its next prompt', async () => {
+    let orca: FakeOrca | undefined
+    const { d, desk } = await fresh({}, (made) => { orca = FakeOrca.install(made) })
+    const dial = await plugged(desk)
+    const handle = `term_${randomUUID()}`
+    const claude = new InOrca(d, 'fix-login', children, { ORCA_TERMINAL_HANDLE: handle, __CFBundleIdentifier: 'com.stablyai.orca' })
+    await claude.hook('SessionStart', { source: 'startup' })
+    await listed(dial, claude.id)
+    const waiting = ['Which cache for the user lookup?', '--suggest', 'in-process LRU', '--waiting']
+    expect(await notify(d, { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: claude.sessionId }, claude.cwd, waiting))
+      .toMatchObject({ code: 0, out: 'shown' })
+    const question = await dial.next((m) => m.t === 'question' && m.agentId === claude.id, 45_000, 'the notice')
+
+    // The person taps "In Orca": Orca switches to its terminal, and the dial turns to its face.
+    let since = dial.messages.length
+    dial.send({ t: 'agent.open', agentId: claude.id })
+    await dial.next((m) => m.t === 'focus' && m.agentId === claude.id, 45_000, 'its face', since)
+    expect(orca!.log().map((run) => run.argv.slice(1).join(' '))).toContain(`terminal switch --terminal ${handle} --json`)
+
+    // The list asked after the tap is the barrier: whatever the daemon sent for the tap is sent by the time the list's
+    // drawer is. The card is still one of its question rows, and nothing closed it.
+    since = dial.messages.length
+    dial.send({ t: 'agents.list' })
+    const drawer = await dial.next((m) => m.t === 'notif.replace', 45_000, 'the drawer sent with the list', since)
+    expect(drawer.items).toContainEqual(expect.objectContaining({ agentId: claude.id, question: true }))
+    expect(dial.messages.some((m) => m.t === 'question.close' && m.agentId === claude.id)).toBe(false)
+
+    // The person answers in Orca: its next turn starts, and the card goes.
+    const prompted = dial.messages.length
+    await claude.hook('UserPromptSubmit', { prompt: 'Use Redis' })
+    await dial.next((m) => m.t === 'question.close' && m.agentId === claude.id && m.id === question.id, 45_000, 'the card closed', prompted)
+  })
+
   // A guard for the skill's rule: a turn that only finished asks nothing, so the dial gets no question for it.
   it('a plain finished turn of a Harness agent or an outside session sends no question frame', async () => {
     const { d, desk } = await fresh()
@@ -282,16 +328,22 @@ describe('harness device notify', () => {
     client.close()
   })
 
-  it('a session nobody lists still rings, under its folder', async () => {
+  it('a session nobody lists still rings, under its folder, and its card goes at a tap', async () => {
     const { d, desk } = await fresh()
     const dial = await plugged(desk)
     const sessionId = randomUUID()
     const agentId = observedAgentId('claude', sessionId)
     expect(await notify(d, { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: sessionId }, join(d.projectsDir, 'scratch')))
       .toMatchObject({ code: 0, out: 'shown' })
-    expect(await dial.next((m) => m.t === 'question' && m.agentId === agentId, 45_000, 'the notice'))
-      .toMatchObject({ name: 'scratch', id: expect.stringMatching(/^shown:/), questions: rung() })
+    const question = await dial.next((m) => m.t === 'question' && m.agentId === agentId, 45_000, 'the notice')
+    expect(question).toMatchObject({ name: 'scratch', id: expect.stringMatching(/^shown:/), questions: rung() })
     expect(await opened(dial, agentId)).toMatchObject({ ok: true, questions: card('Terminal') })
+
+    // The person taps "In Terminal": nothing lists the session, so nothing opens and the dial has no face of it to ask
+    // on, and its next turn may never be heard. The tap is its card's end.
+    const tapped = dial.messages.length
+    dial.send({ t: 'agent.open', agentId })
+    await dial.next((m) => m.t === 'question.close' && m.agentId === agentId && m.id === question.id, 45_000, 'the card closed', tapped)
   })
 
   it('it rings with a window open on its tab', async () => {
@@ -309,6 +361,44 @@ describe('harness device notify', () => {
     expect(await notify(d, caller, join(d.projectsDir, 'fix-login'))).toMatchObject({ code: 0, out: 'shown' })
     expect(await dial.next((m) => m.t === 'question' && m.agentId === engine.id, 45_000, 'the notice', since))
       .toMatchObject({ questions: rung() })
+    window.close()
+  })
+
+  it('with Notifications on Needs you, a plain finished turn draws its tile alone and the list holds only what needs the person, after a replug too', async () => {
+    const { d, desk } = await fresh({}, (d) => {
+      mkdirSync(d.dataDir, { recursive: true })
+      writeFileSync(join(d.dataDir, 'dial-notify.json'), '{"mode":"you"}\n')
+    })
+    const dial = await plugged(desk)
+    const engine = await startOutside(d, 'fix-login')
+    await listed(dial, engine.id)
+    const since = dial.messages.length
+    engine.type('hello')
+    expect(await dial.next((m) => m.t === 'summary' && m.agentId === engine.id, 60_000, 'its answer', since)).toMatchObject({ tier: 'silent' })
+
+    // A notice of a session nobody lists, and a window whose unread list holds that turn's end and another agent's question.
+    const sessionId = randomUUID()
+    const noticed = observedAgentId('claude', sessionId)
+    expect(await notify(d, { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: sessionId }, join(d.projectsDir, 'scratch')))
+      .toMatchObject({ code: 0, out: 'shown' })
+    await dial.next((m) => m.t === 'question' && m.agentId === noticed, 45_000, 'the notice')
+    const window = await LocalClient.connect(d)
+    window.send('app_unread', { items: [
+      { agentId: engine.id, machineId: d.computerId, text: 'done' },
+      { agentId: 'asks-1', machineId: d.computerId, question: true, text: 'Ship it?' },
+    ] })
+    const items = (m: DialMessage) => (m.items ?? []) as Array<Record<string, unknown>>
+    const drawer = async (on: FakeDial, from: number) => items(await on.next((m) => m.t === 'notif.replace' &&
+      items(m).some((item) => item.agentId === 'asks-1'), 60_000, 'the window\'s list', from)).map((item) => item.agentId)
+    expect(await drawer(dial, since)).toEqual([noticed, 'asks-1'])
+
+    // Plugged in again: the drawer it is handed holds no finished turn either.
+    await desk.unplug('E2E-A')
+    const again = await plugged(desk)
+    expect(await drawer(again, 0)).toEqual([noticed, 'asks-1'])
+    for (const on of [dial, again]) {
+      expect(on.messages.filter((m) => m.t === 'notif.replace' && items(m).some((item) => item.agentId === engine.id))).toEqual([])
+    }
     window.close()
   })
 

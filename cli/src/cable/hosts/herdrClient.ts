@@ -118,7 +118,10 @@ export type HerdrAnswer = { ok: true; result: Record<string, unknown> } | ({ ok:
  *  holds another kind (`not_that_agent`). */
 export type HerdrPrompt = { outcome: 'sent' | 'busy' }
   | ({ outcome: 'failed' } & (HerdrFailure | { fault: 'bad_request' | 'not_that_agent' }))
-export type HerdrEntry = { type: 'pane.agent_detected' | 'pane.closed' | 'pane.exited' } | { type: 'pane.agent_status_changed'; pane_id: string }
+/** `pane.focused`'s event is `pane_focused`, its data `pane_id` and `workspace_id` (herdr 0.9.5: fakeHerdr.ts
+ *  RECORDED.focused). */
+export type HerdrEntry = { type: 'pane.agent_detected' | 'pane.closed' | 'pane.exited' | 'pane.focused' }
+  | { type: 'pane.agent_status_changed'; pane_id: string }
 export interface HerdrSubscriber {
   started(): void
   event(name: string, data: Record<string, unknown>): void
@@ -298,4 +301,19 @@ export function createHerdrClient(deps: HerdrClientDeps): HerdrClient {
   }
 
   return { request, subscribe, prompt, socketStamp, binary: () => look?.image }
+}
+
+/** A pane's shell as herdr names it, or why not: as a request's, or a pane id out of form (`bad_request`). */
+export type HerdrShell = { ok: true; shell: number } | ({ ok: false } & (HerdrFailure | { fault: 'bad_request' }))
+
+/** The shell herdr started in [paneId] (`pane.process_info`), within the request's timeout: the devices find the pane of
+ *  an agent herdr's row names no session for by it (services/devices.ts placeInHerdr). A function beside the client, so
+ *  every HerdrClient has it. */
+export async function herdrShellOf(client: Pick<HerdrClient, 'request'>, paneId: string): Promise<HerdrShell> {
+  if (!HERDR_PANE.test(paneId)) return { ok: false, fault: 'bad_request' }
+  const answer = await client.request('pane.process_info', { pane_id: paneId })
+  if (!answer.ok) return answer
+  const info = answer.result.process_info
+  const shell = isObject(info) ? info.shell_pid : undefined
+  return Number.isSafeInteger(shell) && (shell as number) > 0 ? { ok: true, shell: shell as number } : { ok: false, fault: 'bad_answer' }
 }

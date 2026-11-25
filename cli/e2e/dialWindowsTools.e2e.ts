@@ -3,10 +3,14 @@
  * platform: what they decide with nothing started. What they do on Windows is dialWindows.e2e.ts's and the hand
  * checks' (scripts/windows-dial-e2e/README.md).
  */
-import { execFile } from 'node:child_process'
+import { type ChildProcessByStdio, execFile, spawn } from 'node:child_process'
+import { EventEmitter } from 'node:events'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createInterface } from 'node:readline'
+import type { Readable, Writable } from 'node:stream'
+import { promisify } from 'node:util'
 import { afterAll, describe, expect, it } from 'vitest'
 import { CLI_ROOT } from './harness/daemon.js'
 import { besideEnvironment, endedWithin, ownHomes, sealedPath } from './harness/windowsDaemon.js'
@@ -26,6 +30,78 @@ function desk(args: string[]): Promise<{ code: number | null; stderr: string }> 
     execFile(process.execPath, ['--import', 'tsx', DESK, ...args], { cwd: CLI_ROOT, env, timeout: 60_000 }, (error, _stdout, stderr) =>
       resolve({ code: error ? (typeof error.code === 'number' ? error.code : null) : 0, stderr }))
   })
+}
+
+/** [promise], or a failure naming [what] once [ms] have passed. */
+function within<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined
+  const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`${what}: not within ${ms / 1000} s`)), ms) })
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer))
+}
+
+/**
+ * The desk as bundle.mjs builds it for a machine with no checkout, built into a folder outside this one, so no
+ * node_modules is up its tree, and started there with none of the variables that reach the checkout's modules or the
+ * run's (NODE_OPTIONS, NODE_PATH, E2E_*, VITEST*). [run] gets the desk, what it says, and its exit; the desk is ended
+ * and the folder deleted after it, whatever happens.
+ */
+async function bundledDesk(run: (desk: {
+  child: ChildProcessByStdio<Writable, Readable, Readable>
+  said: (test: (line: string) => boolean, ms: number, what: string) => Promise<void>
+  exited: Promise<number | null>
+  stderr: () => string
+}) => Promise<void>): Promise<void> {
+  const out = mkdtempSync(join(tmpdir(), 'desk-bundle-'))
+  let child: ChildProcessByStdio<Writable, Readable, Readable> | undefined
+  let exited: Promise<number | null> | undefined
+  let failed = true
+  try {
+    await promisify(execFile)(process.execPath, [join('scripts', 'windows-dial-e2e', 'bundle.mjs'), out], { cwd: CLI_ROOT, timeout: 240_000 })
+    const env: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(NODE_OPTIONS|NODE_PATH|E2E_.*|VITEST.*)$/i.test(name)))
+    env.E2E_ARTIFACTS_DIR = ARTIFACTS
+    const desk = spawn(process.execPath, [join(out, 'cli', 'scripts', 'windows-dial-e2e', 'desk.mjs')], { cwd: out, env, stdio: ['pipe', 'pipe', 'pipe'] })
+    child = desk
+    // A desk that ended takes no quit: its exit and what it said are the failure, not a write's EPIPE.
+    desk.stdin.on('error', () => {})
+    let stderr = ''
+    desk.stderr.setEncoding('utf8').on('data', (chunk: string) => { stderr += chunk })
+    const ended = new Promise<number | null>((resolve) => desk.once('close', (code) => resolve(code)))
+    exited = ended
+    const lines: string[] = []
+    const heard = new EventEmitter()
+    createInterface({ input: desk.stdout }).on('line', (line) => { lines.push(line); heard.emit('line') })
+    const said = (test: (line: string) => boolean, ms: number, what: string): Promise<void> => within(new Promise<void>((resolve, reject) => {
+      const check = (): void => { if (lines.some(test)) { heard.off('line', check); resolve() } }
+      heard.on('line', check)
+      void ended.then((code) => { heard.off('line', check); reject(new Error(`the desk ended (${code}) before ${what}`)) })
+      check()
+    }), ms, what).catch((error: Error) => {
+      // What the desk printed is all a run keeps of it: its daemon's log goes with the daemon's root.
+      throw new Error(`${error.message}\n${[...lines.slice(-20), stderr].join('\n')}`)
+    })
+    await run({ child: desk, said, exited: ended, stderr: () => stderr })
+    failed = false
+  } finally {
+    // A quit first, so the desk ends its daemon and the terminal host that outlives it, which a kill leaves running on
+    // Windows; a desk that does not end on it is killed, and its end awaited, since on Windows the folder it runs in
+    // cannot be deleted while it lives.
+    const running = child && child.exitCode === null && child.signalCode === null ? child : undefined
+    const end = exited
+    if (running && end) {
+      running.stdin.end('quit\n')
+      await within(end, 60_000, 'the desk\'s end').catch(() => {
+        running.kill()
+        return within(end, 10_000, 'the killed desk\'s end').catch(() => null)
+      })
+    }
+    // A folder left behind is not the failure of a run that failed: the run's own failure is.
+    try {
+      rmSync(out, { recursive: true, force: true, maxRetries: 5 })
+    } catch (error) {
+      if (!failed) throw error
+      console.warn(`the bundled desk's folder is left: ${(error as Error).message}`)
+    }
+  }
 }
 
 describe('the Windows dial tools', () => {
@@ -79,6 +155,27 @@ describe('the Windows dial tools', () => {
   it.runIf(process.platform !== 'win32')('the desk takes --own-account, and then stops where it is not Windows', async () => {
     expect(await desk(['--own-account'])).toEqual({ code: 1, stderr: 'the desk runs on Windows\n' })
   })
+
+  // The bundled desk, built to run where there is no checkout (scripts/windows-dial-e2e/README.md), stopped as it loaded
+  // three ways (2026-11-25): a vitest export its stub lacked, tsx resolved as daemon.ts was imported, and the firmware
+  // version fakeDial.ts reads from outside the bundle.
+  it.runIf(process.platform !== 'win32')('the bundled desk loads all it imports with no checkout, and then stops where it is not Windows', async () => {
+    await bundledDesk(async ({ exited, stderr }) => {
+      const code = await within(exited, 60_000, 'the desk\'s end')
+      expect({ code, stderr: stderr() }).toEqual({ code: 1, stderr: expect.stringContaining('the desk runs on Windows') })
+    })
+  }, 480_000)
+
+  // Its limit is past the sum of its steps' own, so the step that is late names itself.
+  it.runIf(process.platform === 'win32')('the bundled desk runs its stand-in with no checkout, to the dial\'s first list, and quits', async () => {
+    await bundledDesk(async ({ child, said, exited, stderr }) => {
+      await said((line) => line.startsWith('{"desk":'), 120_000, 'the desk\'s first line')
+      await said((line) => line.includes('"t":"agents.end"'), 45_000, 'the first list')
+      child.stdin.write('quit\n')
+      const code = await within(exited, 90_000, 'the desk\'s end after quit')
+      expect(code, stderr()).toBe(0)
+    })
+  }, 600_000)
 
   it('a program beside a desk names the desk\'s root by its whole path, and the program to run', async () => {
     expect(await desk(['--beside', 'root', '--run', 'C:\\h\\herdr.exe']))

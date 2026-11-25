@@ -214,9 +214,12 @@ def summary_contents(artifact, archive, run, name):
     if artifact.get("digest") != digest:
         raise ValueError("summary archive digest mismatch")
     with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
-        if bundle.namelist() != [name + ".json"] or bundle.infolist()[0].file_size > 8 * 1024 ** 2:
+        entry = bundle.infolist()[0] if bundle.namelist() == [name + ".json"] else None
+        if entry is None or entry.file_size > 8 * 1024 ** 2:
             raise ValueError("unexpected summary archive contents")
-        summary = json.loads(bundle.read(name + ".json"))
+        # The uploader writes file_size. read(n) inflates at most n bytes; read() inflates all of a lying member first.
+        with bundle.open(entry) as member:
+            summary = json.loads(member.read(entry.file_size))
     if not isinstance(summary, dict):
         raise ValueError("invalid summary object")
     return summary

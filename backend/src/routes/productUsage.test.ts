@@ -424,3 +424,31 @@ it('takes the Desktop\'s Team account removal outcomes, and keeps no outcome it 
   expect(methods.ingestProductUsage).toHaveBeenCalledExactlyOnceWith('account',
     { ...good, context, counters: { ui_desktop_team_account_removal_ok: 1, health_desktop_report_unknown_metric: 1 } })
 })
+
+// The dial's counts (docs/plans/2026-11-23-dial-usage-counts-design.md) travel in a report of their own from the CLI's gateway.
+const cli = { surface: 'cli', release: '0.6.82', platform: 'macos', channel: 'production' }
+it('takes a report of dial counts only and keeps each name', async () => {
+  const counters = { dial_used_installation_days: 1, dial_voice_delivered: 3 }
+  const response = await submit({ ...good, context: cli, counters })
+  expect(response.statusCode).toBe(200)
+  expect(response.json().data).toEqual({ accepted: true })
+  expect(methods.ingestProductUsage).toHaveBeenCalledExactlyOnceWith('account', { ...good, context: cli, counters })
+})
+it('takes the value from the dial: the counts, their flags and the period flags', async () => {
+  const counters = { dial_value_installation_days: 1, dial_value_ring_answered_2m: 2, dial_value_ring_answered_10m_installation_days: 1,
+    dial_value_ring_away_answered_10m: 1, dial_value_done_away_prompted_10m: 1, dial_value_week_installations: 1,
+    dial_value_28d_installations: 1 }
+  expect((await submit({ ...good, context: cli, counters })).statusCode).toBe(200)
+  expect(methods.ingestProductUsage).toHaveBeenCalledExactlyOnceWith('account', { ...good, context: cli, counters })
+})
+it('keeps dial names beside product names', async () => {
+  const counters = { turns_started: 2, dial_connected_installation_days: 1, dial_open_ok: 4 }
+  expect((await submit({ ...good, context: cli, counters })).statusCode).toBe(200)
+  expect(methods.ingestProductUsage).toHaveBeenCalledExactlyOnceWith('account', { ...good, context: cli, counters })
+})
+it('drops a dial name it does not know and keeps the rest', async () => {
+  const response = await submit({ ...good, context: cli, counters: { dial_used_installation_days: 1, dial_future_name: 1 } })
+  expect(response.statusCode).toBe(200)
+  expect(methods.ingestProductUsage).toHaveBeenCalledExactlyOnceWith('account',
+    { ...good, context: cli, counters: { dial_used_installation_days: 1, health_cli_report_unknown_metric: 1 } })
+})

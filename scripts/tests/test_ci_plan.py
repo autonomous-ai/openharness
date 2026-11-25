@@ -27,10 +27,13 @@ FOUR_BUILDS = [{"bundle": "appimage", "arch": "x64"}, {"bundle": "appimage", "ar
 NO_LINUX_E2E = {"linux_files": [], "linux_shards": 0, "linux_full": False}
 # The checkout the full-checkout tests read.
 REPOSITORY = Path(__file__).resolve().parents[2]
-# The dial app eval's tier B files, the held-out one last (docs/plans/2026-11-22-dial-eval-vscode-cursor-design.md).
+# The dial app eval's tier B files, the held-out one last (docs/plans/2026-11-22-dial-eval-vscode-cursor-design.md,
+# docs/plans/2026-11-22-dial-eval-orca-design.md).
 APP_EVAL_FILES = ("cli/e2e/dialAppEvalClaude.e2e.ts", "cli/e2e/dialAppEvalChatgpt.e2e.ts",
                   "cli/e2e/dialAppEvalVscode.e2e.ts", "cli/e2e/dialAppEvalCursor.e2e.ts",
-                  "cli/e2e/dialAppEvalHeldOut.e2e.ts")
+                  "cli/e2e/dialAppEvalOrca.e2e.ts", "cli/e2e/dialAppEvalHeldOut.e2e.ts")
+# The dial app eval's iTerm2 file: macOS only, run by the tester (docs/plans/2026-11-22-dial-eval-iterm2-design.md).
+ITERM_EVAL_FILE = "cli/e2e/dialAppEvalIterm.e2e.ts"
 # The e2e files that drive an Orca terminal through the stand-in but skip off macOS: no PR CI suite runs them.
 MACOS_ONLY_ORCA_E2E = ("cli/e2e/dialVscodeFollow.e2e.ts", "cli/e2e/deviceHerdrApp.e2e.ts",
                        "cli/e2e/dialHerdrTerminal.e2e.ts", "cli/e2e/dialTmuxTerminal.e2e.ts")
@@ -357,6 +360,15 @@ class SelectionTests(unittest.TestCase):
                 self.assertFalse(planner.windows_only(path))
                 self.assertFalse(planner.e2e_plan([path], {"windows-e2e"})["windows_arm64"])
 
+    def test_the_dial_desk_bundle_runs_windows_end_to_end_on_x64_alone(self):
+        # dialWindowsTools.e2e.ts builds the desk bundle and runs it; bundle.mjs runs on the Mac too.
+        for path in ("cli/scripts/windows-dial-e2e/bundle.mjs", "cli/scripts/windows-dial-e2e/desk.mts",
+                     "cli/scripts/windows-dial-e2e/console.ps1"):
+            with self.subTest(path=path):
+                self.assertIn("windows-e2e", planner.select([path])[0])
+                self.assertFalse(planner.e2e_plan([path], {"windows-e2e"})["windows_arm64"])
+        self.assertNotIn("windows-e2e", planner.select(["cli/scripts/windows-dial-e2e/README.md"])[0])
+
     def test_a_cross_platform_file_outside_the_lists_runs_no_end_to_end_suite(self):
         # The spec's negative: a typical CLI change pays for none of them.
         for path in ("cli/src/lib/tmuxBackend.ts", "cli/src/core/agents.ts", "cli/src/lib/engineLaunch.ts",
@@ -408,8 +420,10 @@ class SelectionTests(unittest.TestCase):
                 self.assertIn("dial-hosts", planner.select([path])[0])
                 self.assertEqual("linux-e2e" in planner.select([path])[0],
                                  planner.linux_e2e_canary_path(path) or planner.linux_e2e_app_eval_path(path))
-        # The stand-in outside agent is one the editors' eval files run too.
-        self.assertTrue(planner.linux_e2e_app_eval_path("cli/e2e/harness/outsideAgent.ts"))
+        # The stand-in outside agent is one the editors' eval files run too, and Orca's stand-ins the Orca one's.
+        for name in ("outsideAgent", "orcaHost", "inOrca", "fakeOrca"):
+            with self.subTest(name=name):
+                self.assertTrue(planner.linux_e2e_app_eval_path(f"cli/e2e/harness/{name}.ts"))
         # A name that only starts like one, or one in a folder below, is not a dial host's: Vitest's glob stays in e2e/.
         for path in ("cli/e2e/deviceHerdrApp.e2e.ts", "cli/e2e/sub/dialHostKitty.e2e.ts"):
             with self.subTest(path=path):
@@ -428,10 +442,10 @@ class SelectionTests(unittest.TestCase):
                 self.assertIn("dial-hosts", planner.select([path])[0])
 
     def test_some_files_never_run_on_linux(self):
-        # windows-e2e runs the dial and the apps' sessions on it on Windows, diskfull is macOS only, and the agent
-        # browser's Podman file runs by hand.
+        # windows-e2e runs the dial and the apps' sessions on it on Windows, diskfull and the dial app eval's iTerm2 file
+        # are macOS only, and the agent browser's Podman file runs by hand.
         for path in ("cli/e2e/dialWindows.e2e.ts", "cli/e2e/dialWindowsAppSessions.e2e.ts", "cli/e2e/diskfull.e2e.ts",
-                     "cli/e2e/agentBrowserPodman.e2e.ts"):
+                     "cli/e2e/agentBrowserPodman.e2e.ts", ITERM_EVAL_FILE):
             with self.subTest(path=path):
                 self.assertIn(path, planner.LINUX_E2E_NEVER)
                 self.assertFalse(planner.linux_e2e_file(path))
@@ -509,13 +523,25 @@ class SelectionTests(unittest.TestCase):
     def test_every_path_the_app_eval_covers_is_in_the_checkout(self):
         # A path renamed or deleted would leave its successor uncovered, the list still passing.
         root = REPOSITORY
-        full_checkout(self, "cli/src/cable/hosts", "cli/e2e/harness", "plugins/harness-device-vscode/src")
+        full_checkout(self, "cli/src/cable/hosts", "cli/e2e/harness", "plugins/harness-device-vscode/src",
+                      "plugins/harness-device-orca/src")
         for entry in planner.LINUX_E2E_APP_EVAL_PATHS:
             with self.subTest(entry=entry):
                 if "*" in entry:
                     self.assertTrue(list(root.glob(entry)))
                 else:
                     self.assertTrue((root / entry).is_dir() if entry.endswith("/") else (root / entry).is_file())
+
+    def test_the_harness_the_app_eval_files_run_runs_them(self):
+        # What the app eval's Linux files import from the harness (the driver, its apps' steps and what they start): a
+        # change to any of it runs them, or, for the harness every e2e file starts its daemons with, linux-e2e's canary,
+        # which imports it.
+        root = REPOSITORY
+        full_checkout(self, *planner.LINUX_E2E_APP_EVAL_FILES, "cli/e2e/harness")
+        within = ("cli/e2e/harness/",)
+        canary = imports_from(root, [planner.LINUX_E2E_CANARY], within)
+        run = imports_from(root, list(planner.LINUX_E2E_APP_EVAL_FILES), within) - set(planner.LINUX_E2E_APP_EVAL_FILES)
+        self.assertEqual(sorted(path for path in run if not planner.linux_e2e_app_eval_path(path) and path not in canary), [])
 
     def test_the_orca_e2e_files_are_every_linux_one_through_the_stand_in(self):
         root = REPOSITORY
@@ -566,10 +592,12 @@ class SelectionTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(planner.reads("cross-read-scan", path))
 
-    def test_either_release_workflow_runs_the_device_app_suite(self):
+    def test_either_release_workflow_or_the_signing_action_runs_the_device_app_suite(self):
         # Its test_release_workflow.py reads both through a path built from parts, which the scan cannot see: a change
-        # to either alone, Desktop's runners or signing inputs too, must run it.
-        for path in (".github/workflows/release-device.yml", ".github/workflows/release-desktop.yml"):
+        # to either alone, Desktop's runners or signing inputs too, must run it. So must one to the signing action,
+        # which test_windows_sign.py holds windows-sign.ps1's settings to through a path built from parts.
+        for path in (".github/workflows/release-device.yml", ".github/workflows/release-desktop.yml",
+                     ".github/actions/windows-signing/action.yml"):
             with self.subTest(path=path):
                 self.assertEqual(planner.select([path])[0], {"device-app"})
                 self.assertTrue(planner.reads("device-app", path))
@@ -678,11 +706,13 @@ class SelectionTests(unittest.TestCase):
         self.assertIsNotNone(planner.shared_input(look_alike))
 
     def test_the_orca_plugin_belongs_to_the_cli_suite(self):
-        # cli/build.mjs inlines it: a change to it changes cli.js.
-        for path in ("plugins/harness-device-orca/src/dial.ts", "plugins/harness-device-orca/orca-plugin.json"):
+        # cli/build.mjs inlines it: a change to it changes cli.js; linux-e2e runs the dial app eval's Orca file on its
+        # code, as on the VS Code extension's.
+        for path, e2e in (("plugins/harness-device-orca/src/dial.ts", {"windows-e2e", "linux-e2e"}),
+                          ("plugins/harness-device-orca/orca-plugin.json", {"windows-e2e"})):
             with self.subTest(path=path):
                 self.assertEqual(planner.owners(path), {"cli"})
-                self.assertEqual(planner.select([path])[0], {"cli", "cross-read-scan", "windows-e2e"})
+                self.assertEqual(planner.select([path])[0], {"cli", "cross-read-scan", *e2e})
                 self.assertTrue(planner.reads("cli", path))
                 self.assertIsNone(planner.shared_input(path))
         # A folder whose name only starts the same is not the plugin's.
@@ -998,22 +1028,27 @@ class GitPlanTests(unittest.TestCase):
             self.plan()
 
     def test_a_change_to_the_orca_stand_in_or_adapter_runs_the_orca_e2e_files(self):
-        adapter, stand_in = "cli/src/cable/hosts/orca.ts", "cli/e2e/harness/orcaHost.ts"
+        adapter = "cli/src/cable/hosts/orca.ts"
+        # The plugin's loop and its dial stream are what dialStream.e2e.ts drives.
+        stand_ins = tuple(f"cli/e2e/harness/{name}.ts" for name in ("orcaHost", "inOrca", "fakeOrca", "pluginLoop",
+                                                                    "pluginDial"))
         self.assertLessEqual({"linux-e2e", "dial-hosts"}, planner.select([adapter])[0])
         canary = planner.LINUX_E2E_CANARY.removeprefix("cli/")
         orca = sorted(path.removeprefix("cli/") for path in planner.LINUX_E2E_ORCA_FILES)
-        # The adapter is in the hosts' folder, which the dial app eval covers: it runs the eval's files too.
+        # The adapter is in the hosts' folder and the eval's Orca file runs on the stand-ins: the dial app eval covers
+        # them all, so they run the eval's files too.
         both = sorted([*orca, *(path.removeprefix("cli/") for path in APP_EVAL_FILES)])
         for path in (planner.LINUX_E2E_CANARY, *planner.LINUX_E2E_ORCA_FILES, *APP_EVAL_FILES,
-                     adapter, stand_in):
+                     adapter, *stand_ins):
             self.write(path)
         self.hints({})
         self.base = self.commit()
-        # The adapter alone runs them and no canary, as they are real files; beside the PR's own; the stand-in, a
+        # The adapter alone runs them and no canary, as they are real files; beside the PR's own; a stand-in, a
         # harness file, with the canary too; and the adapter's deletion still runs them.
-        for changed, deleted, files in (((adapter,), (), both),
-                                        ((adapter, "cli/e2e/a.e2e.ts"), (), sorted([*both, "e2e/a.e2e.ts"])),
-                                        ((stand_in,), (), sorted([*orca, canary])), ((), (adapter,), both)):
+        cases = [((adapter,), (), both), ((adapter, "cli/e2e/a.e2e.ts"), (), sorted([*both, "e2e/a.e2e.ts"])),
+                 ((), (adapter,), both)]
+        cases += [((stand_in,), (), sorted([*both, canary])) for stand_in in stand_ins]
+        for changed, deleted, files in cases:
             with self.subTest(changed=changed, deleted=deleted):
                 self.git("checkout", "-q", "--detach", self.base)
                 for path in changed:
@@ -1043,12 +1078,15 @@ class GitPlanTests(unittest.TestCase):
                    "cli/hook/notify.mjs", "plugins/harness-device-vscode/src/extension.ts",
                    "cli/src/devices/vscodeExtension.ts", "cli/src/cable/vscodeExtensionSetup.ts",
                    "cli/src/engines/cursor/adapter.ts", "cli/src/core/engines/cursorDiscovery.ts")
+        # What the Orca file runs on outside them: the Orca plugin's code and the devices' Orca reads it leans on.
+        orca = ("plugins/harness-device-orca/src/dial.ts", "cli/src/devices/orcaHomes.ts", "cli/src/testing/recordedOrca.ts")
+        # The plugin's loop and its stream run the Orca e2e files too: the Orca stand-in's test has them.
         harness = tuple(f"cli/e2e/harness/{name}.ts" for name in ("vscodeWindow", "outsideAgent", "codexOutside",
                                                                    "cursorOutside", "editorWindow"))
         canary = planner.LINUX_E2E_CANARY.removeprefix("cli/")
         evals = sorted(path.removeprefix("cli/") for path in APP_EVAL_FILES)
         for path in (planner.LINUX_E2E_CANARY, *APP_EVAL_FILES, hosts, catalog, carousel, driver, notes, *editors,
-                     *harness):
+                     *orca, *harness):
             self.write(path)
         self.hints({})
         self.base = self.commit()
@@ -1057,7 +1095,8 @@ class GitPlanTests(unittest.TestCase):
         # harness file whose name only starts as the driver's runs the canary alone.
         cases = [((hosts,), (), evals), ((catalog,), (), evals), ((carousel,), (), evals),
                  ((driver,), (), sorted([*evals, canary])), ((), (catalog,), evals), ((notes,), (), [canary])]
-        cases += [(changed, deleted, evals) for path in editors for changed, deleted in (((path,), ()), ((), (path,)))]
+        cases += [(changed, deleted, evals)
+                  for path in (*editors, *orca) for changed, deleted in (((path,), ()), ((), (path,)))]
         cases += [(changed, deleted, sorted([*evals, canary]))
                   for path in harness for changed, deleted in (((path,), ()), ((), (path,)))]
         for changed, deleted, files in cases:
@@ -1072,7 +1111,7 @@ class GitPlanTests(unittest.TestCase):
                 self.assertIn("linux-e2e", plan["reasons"][(changed or deleted)[0]])
                 self.assertEqual(plan["e2e"]["linux_files"], files)
         # A head without one of them fails the plan, naming it: a PR that renames or deletes one updates the list.
-        for missing in (APP_EVAL_FILES[-1], "cli/e2e/dialAppEvalCursor.e2e.ts"):
+        for missing in (APP_EVAL_FILES[-1], "cli/e2e/dialAppEvalCursor.e2e.ts", "cli/e2e/dialAppEvalOrca.e2e.ts"):
             with self.subTest(missing=missing):
                 self.git("checkout", "-q", "--detach", self.base)
                 self.write(carousel, "changed")
@@ -1080,6 +1119,27 @@ class GitPlanTests(unittest.TestCase):
                 self.commit()
                 with self.assertRaisesRegex(ValueError, re.escape(missing)):
                     self.plan()
+
+    def test_a_change_to_the_iterm2_file_selects_no_linux_e2e_file_of_its_own(self):
+        # It is macOS only: alone it runs no linux-e2e; its tier B driver, an appEval*.ts harness file, runs the app
+        # eval's Linux files and the canary, never the iTerm2 file.
+        driver = "cli/e2e/harness/appEvalIterm.ts"
+        canary = planner.LINUX_E2E_CANARY.removeprefix("cli/")
+        evals = sorted(path.removeprefix("cli/") for path in APP_EVAL_FILES)
+        for path in (planner.LINUX_E2E_CANARY, *APP_EVAL_FILES, ITERM_EVAL_FILE, driver):
+            self.write(path)
+        self.hints({})
+        self.base = self.commit()
+        for changed, files in (((ITERM_EVAL_FILE,), []), ((driver,), sorted([*evals, canary])),
+                               ((ITERM_EVAL_FILE, driver), sorted([*evals, canary]))):
+            with self.subTest(changed=changed):
+                self.git("checkout", "-q", "--detach", self.base)
+                for path in changed:
+                    self.write(path, "changed")
+                self.commit()
+                plan = self.plan()
+                self.assertEqual("linux-e2e" in plan["suites"], bool(files))
+                self.assertEqual(plan["e2e"]["linux_files"], files)
 
     def test_a_change_to_a_jobs_definition_in_ci_yml_runs_its_suite(self):
         # Answer P5: a job's block is part of what its suite tests. device-app-build serves the Device suites that
@@ -2078,6 +2138,7 @@ class FullCheckoutTests(unittest.TestCase):
              "SelectionTests.test_the_dial_host_files_are_the_ones_cli_e2e_leaves_out",
              "SelectionTests.test_the_orca_e2e_files_are_every_linux_one_through_the_stand_in",
              "SelectionTests.test_every_path_the_app_eval_covers_is_in_the_checkout",
+             "SelectionTests.test_the_harness_the_app_eval_files_run_runs_them",
              "SelectionTests.test_every_declared_input_exists",
              "CrossReadTests.test_every_cross_read_in_this_repository_is_declared")
 

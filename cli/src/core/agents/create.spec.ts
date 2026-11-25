@@ -617,6 +617,34 @@ describe('creating an agent', () => {
       expect(pane).toMatchObject({ engine: 'claude', sessionLabel: expect.any(String), grid: null, gridLaunchRecord: null, dsh: null, dshRuntime: null, defaultName: null })
     })
 
+    // The id a held first launch is rebuilt from (registry.ts `creationId`): the caller's intent names it, never the authority.
+    it('records the creation intent\'s id on the row it registers, as the caller names it', async () => {
+      const prepared = await setup().create.prepare(request(),
+        { id: 'harness-claude-fixture', label: 'harness-claude-fixture', current: () => true, hold: () => {} },
+        { local: true, creationId: 'intent-0123456789abcdef' })
+      expect(prepared.ok && await prepared.dispatch()).toMatchObject({ ok: true })
+      expect(vi.mocked(createAndRegisterPane).mock.calls[0][0].creationId).toBe('intent-0123456789abcdef')
+    })
+
+    it('records none for a create made without an intent, whatever its authority is called', async () => {
+      const run = setup()
+      expect(await run.create(request())).toMatchObject({ ok: true })
+      const prepared = await run.create.prepare(request(),
+        { id: 'intent-0123456789abcdef', label: 'harness-claude-fixture', current: () => true, hold: () => {} }, { local: true })
+      expect(prepared.ok && await prepared.dispatch()).toMatchObject({ ok: true })
+      for (const [pane] of vi.mocked(createAndRegisterPane).mock.calls) expect(pane).not.toHaveProperty('creationId')
+    })
+
+    // A terminal is ready at once, with no first launch to rebuild: a creation id on its row would outlive that.
+    it('records none for a terminal made through an intent', async () => {
+      vi.mocked(createAndRegisterPane).mockResolvedValueOnce({ ok: true, spawned: { runtime: { paneId: '%2' } }, pending: { ...pending, engine: 'terminal' } } as never)
+      const prepared = await setup().create.prepare(request({ engine: 'terminal' }),
+        { id: 'harness-terminal-fixture', label: 'harness-terminal-fixture', current: () => true, hold: () => {} },
+        { local: true, creationId: 'intent-0123456789abcdef' })
+      expect(prepared.ok && await prepared.dispatch()).toMatchObject({ ok: true, session: { launch: { state: 'ready' } } })
+      expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).not.toHaveProperty('creationId')
+    })
+
     it('builds a retry pane\'s launch again with the same options, as the first pane\'s shell removed its one-time file', async () => {
       expect(await setup().create(request())).toMatchObject({ ok: true })
       expect(vi.mocked(createAndRegisterPane).mock.calls[0][0].argv).toBe(vi.mocked(launchAttempts).mock.results.at(-1)!.value)

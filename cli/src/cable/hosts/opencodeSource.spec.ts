@@ -29,6 +29,12 @@ const routes = (server: FakeOpencode) => server.requests.map(({ method, path }) 
 const count = (server: FakeOpencode, route: string) => routes(server).filter((each) => each === route).length
 /** Every promise the source's work queued has run. */
 const turn = () => new Promise((resolve) => setImmediate(resolve))
+/** Whether a start's promise has ended, read as the test goes. */
+const ending = (start: Promise<void>) => {
+  const state = { ended: false }
+  void start.then(() => { state.ended = true })
+  return state
+}
 
 /** The real client, whose answers to the paths `hold` matches are read, then kept back until `release`. `calls` holds each
  *  path asked, as the source asks it. */
@@ -505,6 +511,78 @@ describe("the opencode source (docs/plans/2026-11-17-dial-opencode-design.md)", 
       expect(count(server, 'GET /api/info')).toBe(1)
       expect(count(server, 'GET /api/event')).toBe(1)
       expect(s.watchers.size).toBe(1)
+    })
+  })
+
+  // The dial's greeting waits for it (devices.ts dialAttached), so its first list holds opencode's sessions.
+  describe('the end of a start', () => {
+    it('a start ends once its first list has landed, its sessions listed', async () => {
+      server.session(API)
+      const s = setup()
+      await s.source.start()
+      expect(s.source.list().map(({ sessionId }) => sessionId)).toEqual(['ses_a1'])
+    })
+
+    it('a start whose first list fails ends too', async () => {
+      server.session(API)
+      server.answer(LIST, { status: 500 })
+      const s = setup()
+      await s.source.start()
+      expect(s.log).toEqual(['[opencode] list · http_500', '[opencode] retry · 1'])
+    })
+
+    it('a start with nothing listening ends once its look for the service failed', async () => {
+      server.session(API)
+      await server.crash()
+      const s = setup()
+      await s.source.start()
+      expect(s.log).toEqual(['[opencode] closed · refused', '[opencode] retry · 1'])
+    })
+
+    it('with no service file, or one refused, a start ends at once', async () => {
+      rmSync(server.servicePath)
+      const none = setup()
+      const start = ending(none.source.start())
+      await turn()
+      expect(start.ended).toBe(true)
+      server.register({ url: 'http://192.168.1.5:4096' })
+      const refused = setup()
+      const again = ending(refused.source.start())
+      await turn()
+      expect(again.ended).toBe(true)
+      expect(refused.log).toEqual(['[opencode] service · not_local'])
+    })
+
+    it('a stop ends the start under way at once; the next start ends with its own list', async () => {
+      server.session(API)
+      const gate = gated(opencode())
+      const s = setup({ client: gate.client })
+      const held = gate.hold((path) => path.startsWith('/api/session?'))
+      const first = ending(s.source.start())
+      await held
+      expect(first.ended).toBe(false)
+      s.source.stop()
+      await turn()
+      expect(first.ended).toBe(true)
+      const second = ending(s.source.start())
+      // The stopped list lands and takes nothing.
+      gate.release()
+      await s.until(() => s.timers.length === 1)
+      expect(second.ended).toBe(false)
+      expect(s.source.list()).toEqual([])
+      s.advance(1000)
+      await s.until(() => s.source.list().length === 1)
+      await turn()
+      expect(second.ended).toBe(true)
+    })
+
+    it('a start while it runs ends at once', async () => {
+      server.session(API)
+      const s = setup()
+      void s.source.start()
+      const again = ending(s.source.start())
+      await turn()
+      expect(again.ended).toBe(true)
     })
   })
 
