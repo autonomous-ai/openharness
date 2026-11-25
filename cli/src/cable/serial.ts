@@ -6,7 +6,7 @@
 // puts it in raw mode, and that is the whole of what this needs.
 // On Windows a COM port is neither, so harness-serial.exe (serial/) holds it and this file talks to its stdio
 // (windowsSerial.ts): still no native module.
-import { execFile } from 'node:child_process'
+import { execFile, type ChildProcess } from 'node:child_process'
 import { closeSync, constants, existsSync, lstatSync, openSync, readFileSync, readSync, readdirSync, watch } from 'node:fs'
 import { basename } from 'node:path'
 import type { Socket } from 'node:net'
@@ -100,13 +100,31 @@ export async function findDialPorts(): Promise<DialPort[]> {
 type WatchDir = (dir: string, options: { persistent: boolean }, listener: (event: string, name: string | null) => void) =>
   { on(event: 'error', listener: (error: Error) => void): unknown; close(): void }
 
+declare const __DARWIN_DEV_WATCH__: string | undefined
+
+/** Starts the macOS /dev watch helper; null at once when the build pins none. */
+export type SpawnDevWatch = () => Promise<ChildProcess> | null
+
+/** The /dev watch helper build-bundle.mjs pins. devWatch.ts is imported late, as windowsSerial.ts is: it brings the
+ * CLI's config with it, which the real-port fixtures bundled from this file never need. */
+export function spawnBundledDevWatch(): Promise<ChildProcess> | null {
+  if (typeof __DARWIN_DEV_WATCH__ !== 'string') return null
+  const source = __DARWIN_DEV_WATCH__
+  return import('./devWatch.js').then((devWatch) => devWatch.startDevWatch(source))
+}
+
+// The helper prints only its header and `dev`: a partial line longer than this is neither, and is dropped up to its
+// newline, so what the parser keeps stays bounded.
+const DEV_WATCH_MAX_LINE = 64
+
 /**
  * Calls `signal` when the OS says a serial device may have arrived, so the fleet scans at once rather than at its
  * next tick (a replug's slow ring, #4580). Returns the unsubscribe, or undefined where there is no cheap signal.
  * The tick stays on every OS: it finds the dial when a watch fails.
  */
 export function watchDialArrivals(signal: () => void, log: (line: string) => void,
-                                  deps: { platform: NodeJS.Platform; watch: WatchDir } = { platform: process.platform, watch }): (() => void) | undefined {
+                                  deps: { platform: NodeJS.Platform; watch: WatchDir; spawnDevWatch: SpawnDevWatch } =
+                                    { platform: process.platform, watch, spawnDevWatch: spawnBundledDevWatch }): (() => void) | undefined {
   if (deps.platform === 'linux') {
     // A dial is ttyACMn, one behind a USB-serial bridge ttyUSBn. Not persistent: the watch alone never keeps the daemon up.
     // Only a node made or removed ('rename'): before Linux 6.19 (fsnotify 635bc4de) every write to a device in /dev is
@@ -128,9 +146,47 @@ export function watchDialArrivals(signal: () => void, log: (line: string) => voi
     windows().then((win) => { if (!ended) off = win.windowsDialWatch().onChange(signal) }, () => {})
     return () => { ended = true; off?.() }
   }
-  // macOS: fs.watch('/dev') hears nothing when a /dev/cu.* node appears, so a cheap signal would need an IOKit helper;
-  // the tick, gated by createDarwinDialFinder's /dev fingerprint, finds the dial.
-  return undefined
+  // macOS: fs.watch('/dev') hears nothing on devfs, so a helper of our own (native/darwin-dev-watch.c) blocks in
+  // kevent() on /dev and prints `dev` each time a node there is made or removed. It only says when to look:
+  // createDarwinDialFinder's /dev fingerprint still decides whether ioreg runs. A build with no helper has the tick alone.
+  const started = deps.spawnDevWatch()
+  if (!started) return undefined
+  let child: ChildProcess | undefined
+  let stopped = false
+  let ended = false
+  // Said once, and not for the daemon's own kill: the tick finds a new dial from here on, and no respawn follows.
+  const end = (kind: string) => {
+    if (ended || stopped) return
+    ended = true
+    log(`cable: /dev watch ended (${kind}) — a new dial is found by the next scan`)
+  }
+  // Its stdin's end alone lets the helper exit 0; the kill makes sure.
+  const stop = (helper: ChildProcess) => { helper.stdin?.end(); helper.kill() }
+  started.then((helper) => {
+    child = helper
+    // Heard even when the unsubscribe came first: a failed spawn's 'error' comes after the child is handed back,
+    // and an 'error' nobody hears throws. Its stdin's EPIPE once it has gone is said by its exit.
+    helper.on('error', (error) => end(errorKind(error)))
+    helper.on('exit', (code, killedBy) => end(code !== null ? `exit ${code}` : String(killedBy)))
+    helper.stdin?.on('error', () => {})
+    if (stopped) { stop(helper); return }
+    let partial = ''
+    let dropping = false
+    helper.stdout?.setEncoding('utf8')
+    helper.stdout?.on('data', (chunk: string) => {
+      const lines = (partial + chunk).split('\n')
+      partial = lines.pop() ?? ''
+      for (const line of lines) {
+        if (dropping) dropping = false
+        else if (line === 'dev' && !ended && !stopped) signal()
+      }
+      if (partial.length > DEV_WATCH_MAX_LINE) { partial = ''; dropping = true }
+    })
+  }, (error) => end(errorKind(error)))
+  return () => {
+    stopped = true
+    if (child) stop(child)
+  }
 }
 
 /**
