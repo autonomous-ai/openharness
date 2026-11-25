@@ -8087,9 +8087,9 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
   })
 })
 
-// The dial's words typed into an agent's own iTerm2 or Ghostty tab, on the tabs stream a watch holds open, which Harness
-// Device writes and answers (docs/plans/2026-11-25-dial-voice-codex-terminals-design.md). ps, lsof and the watch are fakes.
-describe('the dial\'s words typed into an iTerm2 or Ghostty tab (docs/plans/2026-11-25-dial-voice-codex-terminals-design.md)', () => {
+// The dial's words typed into an agent's own Ghostty tab, on the tabs stream a watch holds open, which Harness Device
+// writes and answers (docs/plans/2026-11-25-dial-voice-codex-terminals-design.md). ps, lsof and the watch are fakes.
+describe('the dial\'s words typed into a Ghostty tab (docs/plans/2026-11-25-dial-voice-codex-terminals-design.md)', () => {
   const A = observedAgentId('claude', 'sess-1')
   const B = observedAgentId('claude', 'sess-2')
   /** Agent n's tty and its process: /dev/ttys003 and 4101 for A, /dev/ttys004 and 4102 for B. */
@@ -8098,6 +8098,7 @@ describe('the dial\'s words typed into an iTerm2 or Ghostty tab (docs/plans/2026
   const nOf = (pid: number) => pid - 4100
   /** When agent n's process started, as ps reads it (lib/lstart.ts). */
   const startOf = (n: number) => `ps:${1_764_064_800_000 + n}`
+  const GHOSTTY = { TERM_PROGRAM: 'ghostty' }
   const ITERM = { TERM_PROGRAM: 'iTerm.app' }
   /** Claude Code in a tab of its own, as its hook says: A in api, B in web. */
   const hook = (n: number, hostHints: Record<string, string>): ObservedHookEvent => ({
@@ -8142,10 +8143,10 @@ describe('the dial\'s words typed into an iTerm2 or Ghostty tab (docs/plans/2026
     return { lines, wrote }
   }
 
-  /** On macOS, `agents` of A and B in tabs of their own (iTerm2's unless `hostHints` say), their ttys and starts read,
+  /** On macOS, `agents` of A and B in tabs of their own (Ghostty's unless `hostHints` say), their ttys and starts read,
    *  each the lead of its tty's foreground group and with its shell alone on its stdin beside it, a dial on the cable
    *  with no window, and a watch's stream open. */
-  const inTabs = async ({ agents = 1, hostHints = ITERM, answers = true }: { agents?: number; hostHints?: Record<string, string>; answers?: boolean } = {}) => {
+  const inTabs = async ({ agents = 1, hostHints = GHOSTTY, answers = true }: { agents?: number; hostHints?: Record<string, string>; answers?: boolean } = {}) => {
     vi.useFakeTimers()
     readers.processes.mockResolvedValue(ROWS)
     const listener = fakeListener()
@@ -8173,25 +8174,33 @@ describe('the dial\'s words typed into an iTerm2 or Ghostty tab (docs/plans/2026
   const named = (lines: Typing[]) => lines.map(({ write, enter }) => (write ? ['write', write.tty, write.text] : ['enter', enter!.tty]))
   const ID = /^[0-9a-f]{16}$/
 
-  for (const [app, hostHints] of [['iterm', ITERM], ['ghostty', { TERM_PROGRAM: 'ghostty' }]] as const) {
-    it(`words for an agent in ${app}: its text written, the settle, its Enter written, and the dial is told sent`, async () => {
-      const { watch } = await inTabs({ hostHints, answers: false })
-      const sent = host().sendTurn(A, 'run the tests')
-      await vi.advanceTimersByTimeAsync(0)
-      expect(watch.lines).toEqual([{ write: { id: expect.stringMatching(ID), app, tty: ttyOf(1), text: 'run the tests' } }])
-      expect(watch.wrote(watch.lines[0].write!.id)).toBeUndefined()
-      await vi.advanceTimersByTimeAsync(settleMs('run the tests') - 1)
-      expect(watch.lines).toHaveLength(1)
-      await vi.advanceTimersByTimeAsync(1)
-      expect(watch.lines.slice(1)).toEqual([{ enter: { id: expect.stringMatching(ID), app, tty: ttyOf(1) } }])
-      expect(watch.lines[1].enter!.id).not.toBe(watch.lines[0].write!.id)
-      watch.wrote(watch.lines[1].enter!.id)
-      expect(await sent).toEqual({ ok: true })
-      expect(said()).toEqual(['[device] voice · tabs'])
-      const secrets = ['ttys', 'run the tests', 'tests', String(pidOf(1)), watch.lines[0].write!.id, watch.lines[1].enter!.id]
-      expect(logs.filter((line) => secrets.some((secret) => line.includes(secret)))).toEqual([])
-    })
-  }
+  it('words for an agent in Ghostty: its text written, the settle, its Enter written, and the dial is told sent', async () => {
+    const { watch } = await inTabs({ answers: false })
+    const sent = host().sendTurn(A, 'run the tests')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(watch.lines).toEqual([{ write: { id: expect.stringMatching(ID), app: 'ghostty', tty: ttyOf(1), text: 'run the tests' } }])
+    expect(watch.wrote(watch.lines[0].write!.id)).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(settleMs('run the tests') - 1)
+    expect(watch.lines).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(watch.lines.slice(1)).toEqual([{ enter: { id: expect.stringMatching(ID), app: 'ghostty', tty: ttyOf(1) } }])
+    expect(watch.lines[1].enter!.id).not.toBe(watch.lines[0].write!.id)
+    watch.wrote(watch.lines[1].enter!.id)
+    expect(await sent).toEqual({ ok: true })
+    expect(said()).toEqual(['[device] voice · tabs'])
+    const secrets = ['ttys', 'run the tests', 'tests', String(pidOf(1)), watch.lines[0].write!.id, watch.lines[1].enter!.id]
+    expect(logs.filter((line) => secrets.some((secret) => line.includes(secret)))).toEqual([])
+  })
+
+  // PM decision 2 (2026-11-25): iTerm2's write reaches every pane its Broadcast Input joins, where a shell would run the
+  // words, and nothing can see it on.
+  it('an agent in iTerm2 gets no line and no probe: refused, and the dial is told it did not answer', async () => {
+    const { watch, tabProcess, ttyReaders } = await inTabs({ hostHints: ITERM })
+    expect(await say(A, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
+    expect(watch.lines).toEqual([])
+    expect([tabProcess.mock.calls, ttyReaders.mock.calls]).toEqual([[], []])
+    expect(said()).toEqual(['[device] voice · no-answer'])
+  })
 
   it('the table the stdin check reads is /bin/ps\'s under psEnv, not a ps from the PATH', async () => {
     await inTabs()

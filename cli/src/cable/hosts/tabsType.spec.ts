@@ -13,8 +13,9 @@ import type { TypeResult } from './types.js'
 const START = 'Tue Nov 25 10:00:00 2026'
 const TTY = '/dev/ttys003'
 const AGENT = 4101
-const PANE: Pane = { adapter: 'tabs', id: `iterm:${TTY}`, proof: { pid: AGENT, start: 'ps:1' } }
-const GHOSTTY: Pane = { adapter: 'tabs', id: 'ghostty:/dev/ttys004', proof: { pid: 4301, start: 'ps:3' } }
+const PANE: Pane = { adapter: 'tabs', id: `ghostty:${TTY}`, proof: { pid: AGENT, start: 'ps:1' } }
+/** Another agent's Ghostty tab. */
+const OTHER: Pane = { adapter: 'tabs', id: 'ghostty:/dev/ttys004', proof: { pid: 4301, start: 'ps:3' } }
 /** The agent in front of its tty, as ps reads it. */
 const FRONT: TabProcess = { tty: TTY, pgid: AGENT, tpgid: AGENT, start: 'ps:1' }
 /** The agent under its shell and login, and a child of its own: an editor, a pager or a `!` command. */
@@ -92,7 +93,7 @@ function fakeLine(log: string[], answers: WroteAnswer[] = []) {
   }
 }
 
-/** An agent alone at its prompt in the foreground of its iTerm2 tab, its stream open: every probe passes. */
+/** An agent alone at its prompt in the foreground of its Ghostty tab, its stream open: every probe passes. */
 function world(over: Partial<TabsTypeDeps> = {}, answers?: WroteAnswer[]) {
   const log: string[] = []
   const stream = fakeLine(log, answers)
@@ -201,12 +202,13 @@ describe('readTtyReaders', () => {
 })
 
 describe('tabsTyping', () => {
-  it('can type only with a line open, into a pane with a proof, in iTerm2 or Ghostty', () => {
+  it('can type only with a line open, into a pane with a proof, in Ghostty', () => {
     const w = world()
     expect(w.typing.canType(PANE)).toBe(true)
-    expect(w.typing.canType(GHOSTTY)).toBe(true)
-    expect(w.typing.canType({ adapter: 'tabs', id: `iterm:${TTY}` })).toBe(false)
+    expect(w.typing.canType(OTHER)).toBe(true)
+    expect(w.typing.canType({ adapter: 'tabs', id: `ghostty:${TTY}` })).toBe(false)
     expect(w.typing.canType({ ...PANE, id: `terminal-app:${TTY}` })).toBe(false)
+    expect(w.typing.canType({ ...PANE, id: `iterm:${TTY}` })).toBe(false)
     w.replace(undefined)
     expect(w.typing.canType(PANE)).toBe(false)
   })
@@ -215,8 +217,8 @@ describe('tabsTyping', () => {
     const w = world()
     expect(await w.send(PANE, 'hello there')).toBe(true)
     expect(w.stream.sent).toEqual([
-      { write: { app: 'iterm', tty: TTY, text: 'hello there' } },
-      { enter: { app: 'iterm', tty: TTY } },
+      { write: { app: 'ghostty', tty: TTY, text: 'hello there' } },
+      { enter: { app: 'ghostty', tty: TTY } },
     ])
     expect(w.clock.asked).toEqual([settleMs('hello there')])
     const write = w.log.indexOf('write')
@@ -225,9 +227,9 @@ describe('tabsTyping', () => {
     expect(new Set(w.log.slice(write + 1, enter))).toEqual(new Set(PROBES))
   })
 
-  it('writes to a Ghostty tab by its own tty', async () => {
+  it('writes to another Ghostty tab by its own tty', async () => {
     const w = world()
-    expect(await w.send(GHOSTTY)).toBe(true)
+    expect(await w.send(OTHER)).toBe(true)
     expect(w.stream.sent).toEqual([
       { write: { app: 'ghostty', tty: '/dev/ttys004', text: 'hi' } },
       { enter: { app: 'ghostty', tty: '/dev/ttys004' } },
@@ -237,7 +239,7 @@ describe('tabsTyping', () => {
   it('types a control character as a space and a lone surrogate as the replacement character', async () => {
     const w = world()
     expect(await w.send(PANE, 'a\nb\u001b\ud800')).toBe(true)
-    expect(w.stream.sent[0]).toEqual({ write: { app: 'iterm', tty: TTY, text: 'a b �' } })
+    expect(w.stream.sent[0]).toEqual({ write: { app: 'ghostty', tty: TTY, text: 'a b �' } })
   })
 
   it('answers false for a text with no words, and asks nothing', async () => {
@@ -249,8 +251,10 @@ describe('tabsTyping', () => {
   describe('a check that fails before the words writes nothing, and says why', () => {
     const cases: Array<[string, Partial<TabsTypeDeps>, Pane, TypeResult]> = [
       ['no line', { line: () => undefined }, PANE, { notSent: 'no-stream' }],
-      ['a pane with no proof', {}, { adapter: 'tabs', id: `iterm:${TTY}` }, { notSent: 'nested' }],
+      ['a pane with no proof', {}, { adapter: 'tabs', id: `ghostty:${TTY}` }, { notSent: 'nested' }],
       ['Terminal.app', {}, { ...PANE, id: `terminal-app:${TTY}` }, { notSent: 'terminal-app' }],
+      // Its write reaches every pane its Broadcast Input joins, which nothing can see: no typing app, as Terminal.app.
+      ['iTerm2', {}, { ...PANE, id: `iterm:${TTY}` }, { notSent: 'terminal-app' }],
       ['another agent on the tty', { shared: () => true }, PANE, { notSent: 'shared' }],
       ['ps unreadable', { process: async () => undefined }, PANE, { notSent: 'process' }],
       ['another tty', { process: async () => ({ ...FRONT, tty: '/dev/ttys009' }) }, PANE, { notSent: 'process' }],
@@ -363,7 +367,7 @@ describe('tabsTyping', () => {
     it.each(cases)('%s', async (_name, over, atPrompt, why) => {
       const w = world(over)
       expect(await w.send(PANE, 'hi', atPrompt ?? w.atPrompt)).toEqual(why)
-      expect(w.stream.sent).toEqual([{ write: { app: 'iterm', tty: TTY, text: 'hi' } }])
+      expect(w.stream.sent).toEqual([{ write: { app: 'ghostty', tty: TTY, text: 'hi' } }])
     })
 
     it('a newer watch took the stream during the settle', async () => {
@@ -390,7 +394,7 @@ describe('tabsTyping', () => {
     expect(w.log).toHaveLength(asked)
     w.clock.flush()
     expect(await first).toBe(true)
-    expect(w.stream.sent.filter((line) => 'write' in line)).toEqual([{ write: { app: 'iterm', tty: TTY, text: 'one' } }])
+    expect(w.stream.sent.filter((line) => 'write' in line)).toEqual([{ write: { app: 'ghostty', tty: TTY, text: 'one' } }])
   })
 
   it('keeps the tty locked while a late answer may still come, and frees it once it settled', async () => {
@@ -399,14 +403,14 @@ describe('tabsTyping', () => {
     expect(await w.send(PANE, 'two')).toEqual({ notSent: 'busy' })
     expect(w.stream.sent).toHaveLength(1)
     // Another tab's tty is not held by it.
-    expect(await w.send(GHOSTTY, 'elsewhere')).toBe(true)
+    expect(await w.send(OTHER, 'elsewhere')).toBe(true)
     w.stream.settle()
     await drain()
     expect(await w.send(PANE, 'three')).toBe(true)
     expect(w.stream.sent.filter((line) => 'write' in line)).toEqual([
-      { write: { app: 'iterm', tty: TTY, text: 'one' } },
+      { write: { app: 'ghostty', tty: TTY, text: 'one' } },
       { write: { app: 'ghostty', tty: '/dev/ttys004', text: 'elsewhere' } },
-      { write: { app: 'iterm', tty: TTY, text: 'three' } },
+      { write: { app: 'ghostty', tty: TTY, text: 'three' } },
     ])
   })
 
@@ -492,7 +496,7 @@ describe('tabsTyping', () => {
       expect(w.stream.readyMs).toEqual([TYPE_ANSWER_MS, TYPE_ANSWER_MS])
       w.stream.wake(true)
       await drain()
-      expect(w.stream.sent).toEqual([{ write: { app: 'iterm', tty: TTY, text: 'hi' } }])
+      expect(w.stream.sent).toEqual([{ write: { app: 'ghostty', tty: TTY, text: 'hi' } }])
       expect(w.clock.asked).toEqual([TYPE_ANSWER_MS, settleMs('hi')])
       w.clock.flush()
       expect(await typed).toBe(true)
