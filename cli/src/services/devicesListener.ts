@@ -39,7 +39,7 @@ import { APP_IDS } from '../cable/hosts/hostDetect.js'
 import { FRONT_NONE } from '../cable/hosts/frontApp.js'
 import { ORCA_HANDLE } from '../cable/hosts/orca.js'
 import { REPLACED_LINE, tabOf, type Tab } from '../cable/hosts/tabs.js'
-import { TYPE_ANSWER_MS, typingLine, wroteOf, type TabsLine, type TabsTyping, type WroteAnswer } from '../cable/hosts/tabsLines.js'
+import { TYPE_ANSWER_MS, typingLine, typingOf, wroteOf, type TabsLine, type TabsTyping, type WroteAnswer } from '../cable/hosts/tabsLines.js'
 import { threadTitleOf } from '../cable/hosts/threadTitle.js'
 import { isNotifyMode, type NotifyMode } from '../cable/notifyMode.js'
 import { NOTICE_SESSION, noticeFolder, noticeLine, type NoticeAsk, type NoticeResult } from '../lib/dialNotice.js'
@@ -648,7 +648,8 @@ export function tabsStream({ id = () => randomBytes(8).toString('hex'), after = 
         const sent: TabsTyping = 'write' in typing
           ? { write: { id: key, app: typing.write.app, tty: typing.write.tty, text: typing.write.text } }
           : { enter: { id: key, app: typing.enter.app, tty: typing.enter.tty } }
-        if (typingLine(sent) === null || !put(sent)) return sentNothing('unanswered')
+        // One the watch would drop (typingOf, as it reads lines) gets no `wrote`: answered now, it holds no tty's lock.
+        if (typingOf(sent) === null || typingLine(sent) === null || !put(sent)) return sentNothing('unanswered')
         let answer!: (word: WroteAnswer) => void
         let settle!: () => void
         const result = {
