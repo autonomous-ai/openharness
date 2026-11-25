@@ -208,8 +208,9 @@ describe.skipIf(process.platform !== 'darwin')('the dial\'s words reach an agent
     // No route takes its words, so it is listed without voice and the dial's turn is refused before any route is asked.
     const refusal = 'This agent is in iTerm2. Type your reply in iTerm2.'
     expect(await speak(dial, relay, iterm, WORDS)).toMatchObject({ t: 'voice.error', message: refusal })
+    // The dial's session logs each line with its port's serial (cableFleet.ts).
     await until('the refusal in the daemon\'s log',
-      () => d.log().split('\n').some((line) => line.endsWith(`cable: voice → error "${refusal}"`)), 30_000, 50)
+      () => d.log().split('\n').some((line) => line.endsWith(`cable: voice → error "${refusal}" [usb E2E-A]`)), 30_000, 50)
     expect(run.typings()).toEqual([])
     expect(iterm.ran(d, 'UserPromptSubmit')).toBe(false)
     keptPrivate(d, run, iterm)
