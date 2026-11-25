@@ -104,6 +104,15 @@ describe('bundled native helper preparation', () => {
     expect(await prepareProcessImageHelper(artifact, root)).toBe(path)
   })
 
+  it('extracts each helper into its own folder, and never hands one folder\'s file out for the other', async () => {
+    const images = await prepareProcessImageHelper(artifact, root)
+    const watch = await prepareProcessImageHelper(artifact, root, 'dev-watch')
+    expect(images).toBe(join(root, 'process-images', artifact.sha256))
+    expect(watch).toBe(join(root, 'dev-watch', artifact.sha256))
+    expect((await lstat(join(root, 'dev-watch'))).mode & 0o777).toBe(0o700)
+    expect(await readFile(watch!)).toEqual(bytes)
+  })
+
   // Linux CI, #2358 at d618a08: the concurrent test above returned one path and one null.
   // A preparer found no target, then another linked it before this one's existence
   // check, which took the new, complete helper for a foreign file. Force that order.
