@@ -149,8 +149,8 @@ export async function waitForResumedAgent(saved: RegisteredSession, deps: Resume
     // `lastHookAt: 0` while every fresh launch beside them had hooked. Waiting for it turned a
     // working harness into ten minutes of "Starting" and then a permanent "Start failed" over a pane
     // the person could type in — with `active` cleared and the desk refusing to open it, the cost of
-    // the strict rule was never the resume, it was the harness. A resume that reopened the WRONG
-    // conversation is still caught, by `registry.register`'s mismatch guard, when the hook arrives.
+    // the strict rule was never the resume, it was the harness. A resume whose engine reports another
+    // conversation binds it as a rotation when its hook arrives (`registry.register`).
     //
     // Up means still up a settle time later. A launch the engine refuses (`codex resume` after an
     // update dropped it) runs for an instant, and a resume that saw it in that instant was confirmed

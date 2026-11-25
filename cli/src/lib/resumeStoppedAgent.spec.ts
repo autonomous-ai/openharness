@@ -253,7 +253,7 @@ describe('exact conversation readiness', () => {
     expect(deps.now()).toBe(250 + ENGINE_SETTLE_MS)
   })
   // A row whose bound conversation is no longer the one being resumed is still refused — that check
-  // is on the row, ahead of any proof, and is what `registry.register`'s mismatch guard feeds.
+  // is on the row, ahead of any proof, and is what a hook's rotation of the row (`registry.register`) feeds.
   it('still refuses a row that reports another conversation', async () => {
     const deps = readiness()
     deps.set({ sessionId: 'fresh-conversation' })
