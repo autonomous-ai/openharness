@@ -76,12 +76,10 @@ export class AgentNotifications {
   /** A question waits on the person in this session. */
   asking(sessionId: string): boolean { return this.questions.has(sessionId) }
 
+  /** The ask is closed, not the turn: a permission prompt or a question sits inside a turn that goes on, and that
+   * turn's end is decided as any turn's. */
   answered(sessionId: string, requestId: string): void {
-    if (this.questions.get(sessionId) !== requestId) return
-    this.questions.delete(sessionId)
-    // A stop caused by answering a prompt is not fresh news. A subsequent
-    // real turn_started re-arms completion; no arbitrary time window needed.
-    this.cancelled(sessionId)
+    if (this.questions.get(sessionId) === requestId) this.questions.delete(sessionId)
   }
 
   cancelled(sessionId: string): void {
