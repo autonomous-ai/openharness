@@ -15374,6 +15374,31 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
       expect(await values(port)).toEqual({})
     })
 
+    it('a summary held behind its done past the next turn\'s start announces nothing', async () => {
+      // The done holds its agent's cards for the turn's tokens, up to 2 s, and a message the person queued while the
+      // agent worked starts the next turn meanwhile: that start was the prompt after this end.
+      let finish!: (reading: null) => void
+      let reads = 0
+      const readUsage = vi.fn((_id: string) => (++reads === 2 ? new Promise<null>((resolve) => { finish = resolve }) : Promise.resolve(null)))
+      const { port } = start({ core: harnessAgent(), readUsage, faults: ['fleet'] })
+      await attach(port)
+      host().front('vscode')
+      const ev = (payload: Record<string, unknown>) => port.card({ type: 'commander_event', agentId: 'h1', payload })
+      ev({ kind: 'turn_started' })
+      ev({ kind: 'done', text: 'done' })
+      ev({ kind: 'summary', text: 'done', tier: 'alert' })
+      ev({ kind: 'turn_started' })
+      finish(null)
+      await vi.waitFor(() => expect(calls('summary')).toHaveLength(1))
+      // That next turn ends with Harness in front, not away: the voice after it follows no announced end.
+      host().front('harness')
+      ev({ kind: 'summary', text: 'done', tier: 'alert' })
+      await vi.waitFor(() => expect(calls('summary')).toHaveLength(2))
+      seen.host.voiceEnded!({ outcome: 'sent', agentId: 'h1', since: Date.now() })
+      ev({ kind: 'turn_started' })
+      expect(await values(port)).toEqual({})
+    })
+
     it('a hooked agent\'s next prompt is the person\'s when its hook says so, not another session\'s message', async () => {
       vi.useFakeTimers()
       readers.answer.mockResolvedValue('All 12 tests pass.')
