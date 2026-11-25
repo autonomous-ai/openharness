@@ -93,15 +93,24 @@ export function tabsTyping(deps: TabsTypeDeps): Required<Pick<HostAdapter, 'canT
   // a write behind a consent prompt, and a write it runs late must never meet another send's Enter.
   const twoStep = createTwoStep<string>(deps.after)
 
-  /** Whether the line takes a write within TYPE_ANSWER_MS. A drain wakes every waiter, and another's write may fill the
-   *  line again first: each wake asks again, within the one bound. */
-  const drained = async (line: TabsLine): Promise<boolean> => {
+  /** Why the line took no write within TYPE_ANSWER_MS, or none once it takes one and the checks hold then. A drain
+   *  wakes every waiter, and another's write may fill the line again first, or during the checks: each time it waits
+   *  again and checks again, within the one bound. */
+  const drained = async (
+    line: TabsLine, check: () => Promise<TabsReason | undefined>,
+  ): Promise<TabsReason | undefined> => {
     let cancel = (): void => {}
     const late = new Promise<false>((resolve) => { cancel = deps.after(TYPE_ANSWER_MS, () => resolve(false)) })
     try {
-      // The bound first: past it, a wake that came with it waits no more.
-      while (!line.writable()) if (!(await Promise.race([late, line.ready(TYPE_ANSWER_MS)]))) return false
-      return true
+      while (!line.writable()) {
+        // The bound first: past it, a wake that came with it waits no more.
+        const ready = await Promise.race([late, line.ready(TYPE_ANSWER_MS)])
+        if (!ready) return line.ended.aborted ? 'no-stream' : 'no-answer'
+        // The checks that let this line go are older than the wait.
+        const why = line.writable() ? await check() : undefined
+        if (why) return why
+      }
+      return undefined
     } finally {
       cancel()
     }
@@ -149,12 +158,8 @@ export function tabsTyping(deps: TabsTypeDeps): Required<Pick<HostAdapter, 'canT
         return atPrompt?.() ? undefined : 'busy'
       }
       const step = async (typing: TabsWrite): Promise<StepAnswer<TabsReason>> => {
-        if (!line.writable()) {
-          if (!(await drained(line))) return { ok: false, why: line.ended.aborted ? 'no-stream' : 'no-answer' }
-          // The checks that let this line go are older than the wait.
-          const why = await check()
-          if (why) return { ok: false, why }
-        }
+        const why = line.writable() ? undefined : await drained(line, check)
+        if (why) return { ok: false, why }
         const { answer, settled } = line.send(typing)
         // An answer lost may still come late: the tty stays held until the line settles.
         const wrote = await answer.catch(() => 'unanswered' as const)
