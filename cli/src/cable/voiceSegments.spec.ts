@@ -356,7 +356,7 @@ describe('VoiceSegments', () => {
     const { segments } = setup({ transcribe: answering() })
     pushIn(segments, pcm, 7_777, 4_001)
     const done = segments.finish()
-    const whole = new VoiceLevel()
+    const whole = new VoiceLevel(16_000)
     whole.add(pcm)
     expect(segments.level()).toEqual(whole.read())
     await done

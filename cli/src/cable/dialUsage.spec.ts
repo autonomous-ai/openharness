@@ -33,16 +33,19 @@ function fileSink() {
 
 function rig(agents: Record<string, DialAgent> = { a: tmuxClaude, b: orcaCodex }, { sink, added } = fileSink()) {
   const logs: string[] = []
+  // The agents at work: none unless a test says so.
+  const working = new Set<string>()
   const usage = createDialUsage({
     sink,
     now: Date.now,
     after: (ms, run) => { const timer = setTimeout(run, ms); return () => clearTimeout(timer) },
     describe: id => agents[id],
+    working: id => working.has(id),
     log: line => logs.push(line),
   })
   const count = (metric: string) => added.filter(m => m === metric).length
   const prefixed = (prefix: string) => added.filter(m => m.startsWith(prefix))
-  return { usage, added, count, prefixed, agents, logs }
+  return { usage, added, count, prefixed, agents, logs, working }
 }
 
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(T0) })
@@ -115,7 +118,7 @@ describe('createDialUsage', () => {
     expect(count('dial_used_installation_days')).toBe(1)
     expect(count('dial_first_use_installations')).toBe(1)
     usage.voiceEnded({ outcome: 'other' })
-    usage.voiceEnded({ outcome: 'sent', agentId: 'a' })
+    usage.voiceEnded({ outcome: 'sent', agentId: 'a', since: Date.now() })
     usage.opened('a', { outcome: 'ok' })
     usage.used()
     expect(count('dial_used_installation_days')).toBe(5)
@@ -291,7 +294,7 @@ describe('createDialUsage', () => {
   it('delivered within 10 s, else no_turn; at most 16 wait', () => {
     const { usage, count } = rig()
     usage.attached(true)
-    usage.voiceEnded({ outcome: 'sent', agentId: 'a' })
+    usage.voiceEnded({ outcome: 'sent', agentId: 'a', since: Date.now() })
     expect(count('dial_voice_installation_days')).toBe(1)
     expect(count('dial_voice_host_tmux_installation_days')).toBe(1)
     vi.advanceTimersByTime(9_999)
@@ -299,7 +302,7 @@ describe('createDialUsage', () => {
     expect(count('dial_voice_delivered')).toBe(1)
     expect(count('dial_voice_host_tmux_delivered')).toBe(1)
 
-    usage.voiceEnded({ outcome: 'sent', agentId: 'a' })
+    usage.voiceEnded({ outcome: 'sent', agentId: 'a', since: Date.now() })
     vi.advanceTimersByTime(10_000)
     usage.turnStarted('a')
     expect(count('dial_voice_delivered')).toBe(1)
@@ -307,9 +310,11 @@ describe('createDialUsage', () => {
     expect(count('dial_voice_failed_no_turn')).toBe(1)
     expect(count('dial_voice_host_tmux_failed')).toBe(1)
 
-    for (let i = 0; i < 16; i++) usage.voiceEnded({ outcome: 'sent', agentId: 'a' })
+    // The voices below begin after that turn started, so it is none of theirs.
+    vi.advanceTimersByTime(1)
+    for (let i = 0; i < 16; i++) usage.voiceEnded({ outcome: 'sent', agentId: 'a', since: Date.now() })
     expect(count('dial_voice_failed_no_turn')).toBe(1)
-    usage.voiceEnded({ outcome: 'sent', agentId: 'a' })
+    usage.voiceEnded({ outcome: 'sent', agentId: 'a', since: Date.now() })
     expect(count('dial_voice_failed_no_turn')).toBe(2)
     usage.turnStarted('a')
     expect(count('dial_voice_delivered')).toBe(2)
@@ -318,6 +323,142 @@ describe('createDialUsage', () => {
     usage.stop()
     vi.advanceTimersByTime(10_000)
     expect(count('dial_voice_failed_no_turn')).toBe(2)
+  })
+
+  // A working agent holds typed words until its turn ends (Claude Code) or takes them into the running turn (Codex 0.106+):
+  // no turn starts within 10 s, though the words reached it.
+  it('sent to a working agent with no turn in 10 s is queued; to an idle one, no_turn; a turn in 10 s, delivered', () => {
+    const { usage, count, working } = rig()
+    usage.attached(true)
+    working.add('a')
+    usage.voiceEnded({ outcome: 'sent', agentId: 'a', since: Date.now() })
+    // Read at the send: the agent idle by the time the 10 s run out was still working when the words went in.
+    working.delete('a')
+    vi.advanceTimersByTime(10_000)
+    expect(count('dial_voice_queued')).toBe(1)
+    expect(count('dial_voice_host_tmux_queued')).toBe(1)
+    expect(count('dial_voice_failed')).toBe(0)
+    expect(count('dial_voice_failed_no_turn')).toBe(0)
+
+    usage.voiceEnded({ outcome: 'sent', agentId: 'b', since: Date.now() })
+    vi.advanceTimersByTime(10_000)
+    expect(count('dial_voice_failed_no_turn')).toBe(1)
+    expect(count('dial_voice_host_orca_failed')).toBe(1)
+    expect(count('dial_voice_queued')).toBe(1)
+
+    working.add('a')
+    usage.voiceEnded({ outcome: 'sent', agentId: 'a', since: Date.now() })
+    vi.advanceTimersByTime(9_999)
+    usage.turnStarted('a')
+    expect(count('dial_voice_delivered')).toBe(1)
+    vi.advanceTimersByTime(10_000)
+    expect(count('dial_voice_queued')).toBe(1)
+  })
+
+  // `codex queue` exits only after an idle Codex started the queued turn: its start comes before the sent end is told.
+  it('a turn that starts while the words are on their way is delivered; one that started before them is not', () => {
+    const { usage, count, working } = rig()
+    usage.attached(true)
+    usage.turnStarted('a')
+    vi.advanceTimersByTime(1)
+    const since = Date.now()
+    vi.advanceTimersByTime(500)
+    // A newer start replaces the older.
+    usage.turnStarted('a')
+    // By the sent end the agent works on these very words.
+    working.add('a')
+    vi.advanceTimersByTime(500)
+    usage.voiceEnded({ outcome: 'sent', agentId: 'a', since })
+    expect(count('dial_voice_delivered')).toBe(1)
+    expect(count('dial_voice_host_tmux_delivered')).toBe(1)
+    vi.advanceTimersByTime(10_000)
+    expect(count('dial_voice_queued')).toBe(0)
+    expect(count('dial_voice_failed_no_turn')).toBe(0)
+
+    // That start is spent: another voice begun as early waits, and reads queued as before.
+    usage.voiceEnded({ outcome: 'sent', agentId: 'a', since })
+    vi.advanceTimersByTime(10_000)
+    expect(count('dial_voice_queued')).toBe(1)
+    expect(count('dial_voice_delivered')).toBe(1)
+
+    usage.turnStarted('b')
+    vi.advanceTimersByTime(1)
+    usage.voiceEnded({ outcome: 'sent', agentId: 'b', since: Date.now() })
+    vi.advanceTimersByTime(10_000)
+    expect(count('dial_voice_failed_no_turn')).toBe(1)
+    expect(count('dial_voice_delivered')).toBe(1)
+  })
+
+  // The window's send begins before a person picks the agent, up to a minute: a turn more than 10 s before the words
+  // went in is another input's.
+  it('a turn that started more than 10 s before the sent end is not the voice\'s', () => {
+    const { usage, count } = rig()
+    usage.attached(true)
+    const since = Date.now()
+    vi.advanceTimersByTime(20_000)
+    usage.turnStarted('a')
+    vi.advanceTimersByTime(10_000)
+    usage.voiceEnded({ outcome: 'sent', agentId: 'a', since })
+    expect(count('dial_voice_delivered')).toBe(0)
+    vi.advanceTimersByTime(10_000)
+    expect(count('dial_voice_failed_no_turn')).toBe(1)
+
+    const bSince = Date.now()
+    usage.turnStarted('b')
+    vi.advanceTimersByTime(9_999)
+    usage.voiceEnded({ outcome: 'sent', agentId: 'b', since: bSince })
+    expect(count('dial_voice_delivered')).toBe(1)
+  })
+
+  it('a voice delivered as it was sent is interrupted within 10 s of its turn\'s start, and redirected', () => {
+    const { usage, count } = rig()
+    usage.attached(true)
+    const since = Date.now()
+    usage.turnStarted('a')
+    vi.advanceTimersByTime(5_000)
+    usage.voiceEnded({ outcome: 'sent', agentId: 'a', since })
+    vi.advanceTimersByTime(4_999)
+    usage.turnAborted('a')
+    expect(count('dial_voice_interrupted_10s')).toBe(1)
+    expect(count('dial_voice_host_tmux_interrupted_10s')).toBe(1)
+
+    const bSince = Date.now()
+    usage.turnStarted('b')
+    vi.advanceTimersByTime(5_000)
+    usage.voiceEnded({ outcome: 'sent', agentId: 'b', since: bSince })
+    expect(count('dial_voice_redirected_30s')).toBe(1)
+    expect(count('dial_voice_host_tmux_redirected_30s')).toBe(1)
+    // 10 s from its turn's start, though 5 s from its sent end.
+    vi.advanceTimersByTime(5_000)
+    usage.turnAborted('b')
+    expect(count('dial_voice_interrupted_10s')).toBe(1)
+  })
+
+  it('at most 16 turns no voice waited for are kept, the oldest dropped first; a stop drops them', () => {
+    const ids = Array.from({ length: 17 }, (_, i) => `d${i}`)
+    const { usage, count } = rig(Object.fromEntries(ids.map(id => [id, tmuxClaude])))
+    usage.attached(true)
+    const since = Date.now()
+    for (const id of ids) usage.turnStarted(id)
+    usage.voiceEnded({ outcome: 'sent', agentId: 'd0', since })
+    expect(count('dial_voice_delivered')).toBe(0)
+    usage.voiceEnded({ outcome: 'sent', agentId: 'd1', since })
+    expect(count('dial_voice_delivered')).toBe(1)
+    usage.stop()
+    usage.attached(true)
+    usage.voiceEnded({ outcome: 'sent', agentId: 'd2', since })
+    expect(count('dial_voice_delivered')).toBe(1)
+  })
+
+  it('the oldest of 16 waiting, ended by a 17th, is queued if its agent was working', () => {
+    const { usage, count, working } = rig()
+    usage.attached(true)
+    working.add('a')
+    usage.voiceEnded({ outcome: 'sent', agentId: 'a', since: Date.now() })
+    working.delete('a')
+    for (let i = 0; i < 16; i++) usage.voiceEnded({ outcome: 'sent', agentId: 'b', since: Date.now() })
+    expect(count('dial_voice_queued')).toBe(1)
+    expect(count('dial_voice_failed_no_turn')).toBe(0)
   })
 
   it('refused to a held agent is held', () => {
@@ -353,29 +494,29 @@ describe('createDialUsage', () => {
   it('redirected within 30 s on the first voice\'s host', () => {
     const { usage, count } = rig()
     usage.attached(true)
-    usage.voiceEnded({ outcome: 'sent', agentId: 'a' })
+    usage.voiceEnded({ outcome: 'sent', agentId: 'a', since: Date.now() })
     vi.advanceTimersByTime(29_999)
-    usage.voiceEnded({ outcome: 'sent', agentId: 'b' })
+    usage.voiceEnded({ outcome: 'sent', agentId: 'b', since: Date.now() })
     expect(count('dial_voice_redirected_30s')).toBe(1)
     expect(count('dial_voice_host_tmux_redirected_30s')).toBe(1)
     expect(count('dial_voice_host_orca_redirected_30s')).toBe(0)
     vi.advanceTimersByTime(1_000)
-    usage.voiceEnded({ outcome: 'sent', agentId: 'b' })
+    usage.voiceEnded({ outcome: 'sent', agentId: 'b', since: Date.now() })
     vi.advanceTimersByTime(30_000)
-    usage.voiceEnded({ outcome: 'sent', agentId: 'a' })
+    usage.voiceEnded({ outcome: 'sent', agentId: 'a', since: Date.now() })
     expect(count('dial_voice_redirected_30s')).toBe(1)
   })
 
   it('interrupted within 10 s of a delivered turn', () => {
     const { usage, count } = rig()
     usage.attached(true)
-    usage.voiceEnded({ outcome: 'sent', agentId: 'a' })
+    usage.voiceEnded({ outcome: 'sent', agentId: 'a', since: Date.now() })
     usage.turnStarted('a')
     vi.advanceTimersByTime(9_999)
     usage.turnAborted('a')
     expect(count('dial_voice_interrupted_10s')).toBe(1)
     expect(count('dial_voice_host_tmux_interrupted_10s')).toBe(1)
-    usage.voiceEnded({ outcome: 'sent', agentId: 'a' })
+    usage.voiceEnded({ outcome: 'sent', agentId: 'a', since: Date.now() })
     usage.turnStarted('a')
     vi.advanceTimersByTime(10_000)
     usage.turnAborted('a')
@@ -389,7 +530,7 @@ describe('createDialUsage', () => {
     const { usage, count } = rig(Object.fromEntries(ids.map(id => [id, tmuxClaude])))
     usage.attached(true)
     for (const id of ids) {
-      usage.voiceEnded({ outcome: 'sent', agentId: id })
+      usage.voiceEnded({ outcome: 'sent', agentId: id, since: Date.now() })
       usage.turnStarted(id)
     }
     usage.turnAborted('d0')
@@ -401,7 +542,7 @@ describe('createDialUsage', () => {
   it('a turn no voice started, stopped, is no voice interrupted', () => {
     const { usage, count } = rig()
     usage.attached(true)
-    usage.voiceEnded({ outcome: 'sent', agentId: 'a' })
+    usage.voiceEnded({ outcome: 'sent', agentId: 'a', since: Date.now() })
     usage.turnStarted('a')
     vi.advanceTimersByTime(2_000)
     usage.turnStarted('a')
@@ -551,7 +692,7 @@ describe('createDialUsage', () => {
     usage.used()
     for (const id of ['a', 'b', 'secret-agent-id', 'missing']) {
       usage.shown(id)
-      usage.voiceEnded({ outcome: 'sent', agentId: id })
+      usage.voiceEnded({ outcome: 'sent', agentId: id, since: Date.now() })
       usage.turnStarted(id)
       usage.turnAborted(id)
       usage.voiceEnded({ outcome: 'failed', code: 'refused', agentId: id })
@@ -563,7 +704,7 @@ describe('createDialUsage', () => {
       usage.tapped(id)
       usage.waitEnded(id, 'answered')
     }
-    usage.voiceEnded({ outcome: 'sent', agentId: 'a' })
+    usage.voiceEnded({ outcome: 'sent', agentId: 'a', since: Date.now() })
     vi.advanceTimersByTime(DAY_MS)
     const known = new Set<string>(DIAL_FILE_METRICS)
     expect(added.length).toBeGreaterThan(30)

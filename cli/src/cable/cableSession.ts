@@ -2499,7 +2499,7 @@ export class CableSession {
       this.cancelSearchVoice()
       this.abortVoiceSegments()
       // Its voice.end is answered "Didn't catch that" with no turn left to say so.
-      this.dropRecording('no_speech')
+      this.dropRecording('too_long')
       this.voice = null
       return
     }
@@ -2613,7 +2613,7 @@ export class CableSession {
       return
     }
     if (!turn || turn.bytes === 0 || !segments) {
-      decide({ outcome: 'failed', code: 'no_speech', agentId: turn?.agentId })
+      decide({ outcome: 'failed', code: 'no_audio', agentId: turn?.agentId })
       this.cancelFormVoice()
       this.cancelSearchVoice()
       await reply({ t: 'voice.error', message: "Didn't catch that" })
@@ -2631,14 +2631,15 @@ export class CableSession {
     })
     // One line per turn, numbers only: whether an empty transcript was silence on the dial or words the
     // transcriber missed, and for which agent (OPENHARNES-18). No audio and no text.
-    const { peak, rms } = segments.level()
-    const heard = (transcript: string) => this.log(`cable: voice turn agent=${turn.agentId ?? 'none'} ` +
-      `cmd=${turn.cmd || 'none'} lang=${turn.lang} sr=${turn.rate} peak=${peak} rms=${rms} transcript=${transcript}`)
+    const level = segments.level()
+    const logTurn = (transcript: string) => this.log(`cable: voice turn agent=${turn.agentId ?? 'none'} ` +
+      `cmd=${turn.cmd || 'none'} lang=${turn.lang} sr=${turn.rate} peak=${level.peak} rms=${level.rms} ` +
+      `heard=${level.heard ? 1 : 0} transcript=${transcript}`)
     let transcript: string
     try {
       transcript = await finished
     } catch (err) {
-      heard('failed')
+      logTurn('failed')
       // An abort stops the uploads as well: that turn ends cancelled, not failed.
       if (current()) {
         decide({ outcome: 'failed', code: 'transcribe_failed', agentId: turn.agentId })
@@ -2647,10 +2648,12 @@ export class CableSession {
       await reply({ t: 'voice.error', message: (err as Error).message })
       return
     }
-    heard(String(transcript.length))
+    logTurn(String(transcript.length))
     if (!current()) return
     if (!transcript) {
-      decide({ outcome: 'failed', code: 'no_speech', agentId: turn.agentId })
+      // Speech by the dial's own gate with no word in the transcript is the transcriber's miss (language, noise,
+      // clipping), not a press with nothing said.
+      decide({ outcome: 'failed', code: level.heard ? 'no_words' : 'no_speech', agentId: turn.agentId })
       this.cancelFormVoice()
       this.cancelSearchVoice()
       await reply({ t: 'voice.error', message: "Didn't catch that" })
@@ -2723,11 +2726,13 @@ export class CableSession {
       //
       // The window DELIVERS what it picks, so there is nothing left to send here: a `sent` outcome is
       // already on its way to an agent, and calling sendTurn on it would deliver the sentence twice.
+      // Taken before: the window answers only after it delivered, by when the agent's turn may have started.
+      const since = Date.now()
       const inWindow = this.host.routeInWindow
         ? await this.host.routeInWindow(transcript, turn.cmd)
         : ({ t: 'unavailable' } as const)
       // Sent whatever happened here meanwhile: an abort or a newer recording does not take back what the window delivered.
-      if (inWindow.t === 'sent') decide({ outcome: 'sent', agentId: inWindow.agentId })
+      if (inWindow.t === 'sent') decide({ outcome: 'sent', agentId: inWindow.agentId, since })
       if (!current()) return
       if (inWindow.t === 'sent') {
         this.log(`cable: the window routed the spoken task → ${inWindow.agentId.slice(0, 8)}`)
@@ -2814,6 +2819,8 @@ export class CableSession {
     // line carries: only the app is logged. Decided before the words go: a window that opens or an entry that drops
     // while they are on their way leaves the list without the agent by the time it refuses.
     const refusedIn = this.outsideHarness(agentId) ? `(refused in ${this.hostName(agentId)})` : undefined
+    // Taken before: a send can return after its words started the turn (`codex queue` exits after an idle Codex began it).
+    const since = Date.now()
     try {
       const submitted = await this.host.sendTurn(agentId, text)
       if (submitted && !submitted.ok) {
@@ -2828,7 +2835,7 @@ export class CableSession {
       await reply({ t: 'voice.error', message: 'Could not send. Check the terminal before trying again.' })
       return
     }
-    decide({ outcome: 'sent', agentId })
+    decide({ outcome: 'sent', agentId, since })
     if (carried) {
       this.passageCarry.clear(carried.id)
       this.voiceCarryId = undefined

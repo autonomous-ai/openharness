@@ -14981,11 +14981,11 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
     vi.useFakeTimers()
     const { port } = start({ core: harnessAgent(), faults: ['fleet'] })
     await attach(port)
-    seen.host.voiceEnded!({ outcome: 'sent', agentId: 'h1' })
+    seen.host.voiceEnded!({ outcome: 'sent', agentId: 'h1', since: Date.now() })
     await vi.advanceTimersByTimeAsync(9_999)
     port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'turn_started' } })
     // The next one hears no turn.
-    seen.host.voiceEnded!({ outcome: 'sent', agentId: 'h1' })
+    seen.host.voiceEnded!({ outcome: 'sent', agentId: 'h1', since: Date.now() })
     await vi.advanceTimersByTimeAsync(10_000)
     expect(await counted(port)).toMatchObject({
       dial_voice_installation_days: 1, dial_voice_host_harness_installation_days: 1,
@@ -14994,11 +14994,24 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
     })
   })
 
+  // Claude Code holds typed words until the running turn ends: no turn starts within 10 s, though the words reached it.
+  it('a voice to a Harness agent whose turn runs is queued, not no_turn', async () => {
+    vi.useFakeTimers()
+    const { port } = start({ core: harnessAgent(), faults: ['fleet'] })
+    await attach(port)
+    port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'processing', text: 'Working' } })
+    seen.host.voiceEnded!({ outcome: 'sent', agentId: 'h1', since: Date.now() })
+    await vi.advanceTimersByTimeAsync(10_000)
+    const counts = await counted(port)
+    expect(counts).toMatchObject({ dial_voice_queued: 1, dial_voice_host_harness_queued: 1 })
+    expect(counts.dial_voice_failed_no_turn).toBeUndefined()
+  })
+
   it('a voice to an outside agent is delivered by its turn-start hook', async () => {
     const { port } = start({ faults: ['fleet'] })
     port.observed(hook('session-start'))
     await attach(port)
-    seen.host.voiceEnded!({ outcome: 'sent', agentId: ID })
+    seen.host.voiceEnded!({ outcome: 'sent', agentId: ID, since: Date.now() })
     port.observed(hook('turn-start'))
     expect(await counted(port)).toMatchObject({ dial_voice_delivered: 1, dial_voice_host_orca_delivered: 1 })
   })
@@ -15008,16 +15021,19 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
     const { port } = start({ core: harnessAgent() })
     seen.host.watching!(true)
     const card = (kind: 'processing' | 'done') => seen.fleet!.events!({ machineId: 'm2', kind, agentId: 'b1', text: '', recap: '' })
-    seen.host.voiceEnded!({ outcome: 'sent', agentId: 'b1' })
+    seen.host.voiceEnded!({ outcome: 'sent', agentId: 'b1', since: Date.now() })
     card('processing')
     // Sent while that turn runs: the turn's next card is not its delivery.
-    seen.host.voiceEnded!({ outcome: 'sent', agentId: 'b1' })
+    seen.host.voiceEnded!({ outcome: 'sent', agentId: 'b1', since: Date.now() })
     card('processing')
     await vi.advanceTimersByTimeAsync(10_000)
     card('done')
-    seen.host.voiceEnded!({ outcome: 'sent', agentId: 'b1' })
+    seen.host.voiceEnded!({ outcome: 'sent', agentId: 'b1', since: Date.now() })
     card('processing')
-    expect(await counted(port)).toMatchObject({ dial_voice_delivered: 2, dial_voice_failed: 1, dial_voice_failed_no_turn: 1 })
+    // The one sent while its turn ran was queued behind it.
+    const counts = await counted(port)
+    expect(counts).toMatchObject({ dial_voice_delivered: 2, dial_voice_queued: 1 })
+    expect(counts.dial_voice_failed_no_turn).toBeUndefined()
   })
 
   it('a refused voice to a held agent is held', async () => {
@@ -15098,7 +15114,7 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
     port.observed(hook('session-start', zed))
     await attach(port)
     port.swarms({ active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: [], panes: 0 }], tiles: [] })
-    seen.host.voiceEnded!({ outcome: 'sent', agentId: ID })
+    seen.host.voiceEnded!({ outcome: 'sent', agentId: ID, since: Date.now() })
     port.observed(hook('turn-start'))
     port.observed(hook('turn-start', zed))
     expect(await counted(port)).toMatchObject({
@@ -15129,7 +15145,7 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
     seen.host.dialStatus!({ attached: true, id: 'canary-serial', mac: 'canary-mac' })
     host().dialShows({}, { name: 'canary-name', app: 'harness' }, harness.agentId)
     host().dialShows({}, { name: 'canary-folder', app: 'Orca' }, outside)
-    seen.host.voiceEnded!({ outcome: 'sent', agentId: outside })
+    seen.host.voiceEnded!({ outcome: 'sent', agentId: outside, since: Date.now() })
     port.observed(hook('turn-start', canary))
     seen.host.openEnded!(harness.agentId, { outcome: 'ok' })
     await port.stop()
@@ -15282,7 +15298,7 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
       const { port } = start({ faults: ['fleet'] })
       port.observed(hook('session-start'))
       await attach(port)
-      seen.host.voiceEnded!({ outcome: 'sent', agentId: ID })
+      seen.host.voiceEnded!({ outcome: 'sent', agentId: ID, since: Date.now() })
       port.observed(hook('turn-start'))
       await vi.advanceTimersByTimeAsync(9_999)
       port.observed(hook('turn-aborted'))
