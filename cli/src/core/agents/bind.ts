@@ -644,8 +644,8 @@ export function createBinding({
       if (isRecentlyDeleted(id)) return false
       const owner = registry.bySession(id)
       if (!owner || owner.agentId === agent.agentId) return true
-      const observedStarted = Date.parse(observed.processIdentity.startMarker)
-      const ownerStarted = Date.parse(owner.processIdentity?.startMarker ?? '')
+      const observedStarted = startMarkerMs(observed.processIdentity.startMarker) ?? NaN
+      const ownerStarted = startMarkerMs(owner.processIdentity?.startMarker ?? '') ?? NaN
       return !Number.isFinite(ownerStarted) || (Number.isFinite(observedStarted) && observedStarted > ownerStarted)
     }
     await bindPass(observed, agent, { current, hold, commit, read, mayClaim })
@@ -972,7 +972,7 @@ export function createBinding({
       if (attempts >= REPAIR_EAGER_ATTEMPTS && Date.now() - lastAttempt < REPAIR_RETRY_MS) return
       lastRepairAttempt.set(agent.agentId, Date.now())
       repairAttempts.set(agent.agentId, attempts + 1)
-      const startedAtMs = Date.parse(observed.processIdentity.startMarker)
+      const startedAtMs = startMarkerMs(observed.processIdentity.startMarker) ?? NaN
       if (!Number.isFinite(startedAtMs)) return
       // agy cannot be found by directory — its repair reads the presence lock the process holds open.
       //
