@@ -9,7 +9,8 @@ is said once per change, one silent-card rule, an end-to-end case for #4620, and
 desk's imports.
 
 **Architecture:** Each cause is fixed where it lives: `store/tools/runtimes.sh` (then every copy by
-`sync-runtimes.mjs`); the question watcher and its answer check in `lib/questionController.ts`, with the core's open
+`sync-runtimes.mjs`) and the local AI packages' `store/tools/local-ai/toolchain/node.sh` (then its three copies by
+`npm run build` there); the question watcher and its answer check in `lib/questionController.ts`, with the core's open
 questions in `core/questions.ts` and `core/agents/cloud.ts`; one Windows engine lookup (`engineNearby`, generalised from
 `claudeNearby`) under every one-shot worker, started through `windowsProgram`; `startMarkerMs` at every start-marker
 read; the restore's held branch; the devices' Orca cache; `agentNotifications.ts`; `deviceNotify.e2e.ts`;
@@ -21,8 +22,11 @@ read; the restore's held branch; the devices' Orca cache; `agentNotifications.ts
 **Spec:** `docs/plans/2026-11-25-small-fixes-batch-1125-design.md` (read it with this plan). The orchestrator's decisions
 are final: one pull request with all nine items; item 5 small (only rows 0.6.86 or older saved, bounded as #4604);
 items 4 and 5 after `fix/win-hook-admission` merges, on a rebased branch; item 2 fixed at its cause in the module that
-owns questions, no client change, two identical approvals swapped with no gap ring once; the Windows VM only in phase 4
-on the orchestrator's turn, the Ubuntu VM off; no production backend or accounts anywhere.
+owns questions, no client change: a question keeps its id while its words, options and `multi` stay, a permission
+dialog only while its whole body (as `dialogSignature` reads it) does, so a changed body is a new ask that rings, and a
+volatile part found in an engine's dialog is normalized in the fingerprint; item 5 takes both old details; item 1's
+same cause in the local AI packages' `node.sh` is fixed here (Task 15); the Windows VM only in phase 4 on the
+orchestrator's turn, the Ubuntu VM off; no production backend or accounts anywhere.
 
 ## Global Constraints
 
@@ -34,8 +38,8 @@ on the orchestrator's turn, the Ubuntu VM off; no production backend or accounts
   `src/lib/captureResumeIdentity.ts` is 100% in `npm run test:resume`.
 - **Test first**, at the layer where the behavior lives; run only the tests of what changed (the command each task
   names); no full suites locally; no fixed sleeps (fake timers, `until`, `vi.waitFor`).
-- **Hands off `fix/win-hook-admission`'s area**: hook admission, resume binding, BOM reading. Tasks 1-10 never touch
-  `cli/src/core/agents/bind.ts`, `cli/src/core/agents/hermesTerminal.ts`, `cli/src/lib/restoreAgents.ts`. That branch
+- **Hands off `fix/win-hook-admission`'s area**: hook admission, resume binding, BOM reading. Tasks 1-10 and 15 never
+  touch `cli/src/core/agents/bind.ts`, `cli/src/core/agents/hermesTerminal.ts`, `cli/src/lib/restoreAgents.ts`. That branch
   also edits `cli/src/core/main.ts` (its import at line 175 and line 2088): Task 3's two lines are other hunks. No task
   edits `cli/e2e/harness/*` (that branch edits `daemon.ts` and `fakeEngine.mjs`).
 - **Windows** ([docs/windows-rules.md](../windows-rules.md)): a program starts through `cli/src/lib/windows/program.ts`
@@ -63,13 +67,23 @@ on the orchestrator's turn, the Ubuntu VM off; no production backend or accounts
 - **Item 1, the helper.** `_harness_node_dir RECORDED` (in `runtimes.sh`) prints the folder of the Node a
   `current-node` names, as this shell reads paths; both reads in `harness_node` (the "already Harness's own" comparison,
   line 107, and the PATH step, lines 108-113) use it, and the comparison accepts `$dir/node` and `$dir/node.exe`.
+- **Item 1, the local AI packages** (Task 15). `store/tools/local-ai/toolchain/node.sh` reads `current-node` with the
+  same `${x%/*}/node`. It is the one hand-written copy: `store/tools/local-ai/scripts/build-{ollama,mlx,vllm}.mjs`
+  (`npm run build` there) copy it into `store/agents/{ollama,mlx-lm,vllm}/toolchain/node.sh`, and
+  `store/tools/local-ai/test/packaging.test.mjs` fails when a copy differs (the build was checked to change nothing else
+  at `8c703aca14`). These packages carry no `runtimes.sh` and a package installs alone, so `node.sh` gets its own
+  `local_ai_node_dir RECORDED`, the same rule as `_harness_node_dir`, its comment naming that one. It is sourced by
+  `/bin/sh` (dash on Linux): POSIX only. Its red test is a case in Task 1's `gitBashNode.spec.ts`, the one CLI spec of
+  "Harness's Node from a Windows `current-node`", on PR CI (cli-tests) and windows-e2e alike.
 - **Item 2, where the answer check reaches the held id:** `AskQuestionDeps.heldRequestId(sessionId, view)`, which
   `core/questions.ts` wires to `QuestionWatcher.heldRequestId`. **Where the core drops a gone agent's question:**
   `core/questions.ts` `openQuestionFrames()`, used by both attach-time resends in `core/main.ts` (the dial's at
   1023-1030 and the window's `openQuestions` at 2474) and by `reannounceRemote`; it forgets only this module's own
   questions (the keys it put in `askedRemotely`), never a cloud agent's, which `cloud.ts` closes itself (Task 4).
-  "Same question" is the spec's: same session, same question text, same row labels, same `multi`, no confirmed miss.
-  The pre-turn baseline (`preTurn`) still compares whole fingerprints, on purpose: by words alone a new prompt that
+  "Same question" is the spec's: same session, same question text, same row labels, same `multi`, no confirmed miss,
+  and neither the announced dialog nor the live one a permission dialog (`isApprovalDialog`). A permission dialog is
+  the same ask only while its whole fingerprint is (`dialogSignature` included): its id stays `questionRequestId`'s and
+  `heldRequestId` gives nothing for it, so its answer check is today's. The pre-turn baseline (`preTurn`) still compares whole fingerprints, on purpose: by words alone a new prompt that
   shares its first line with the last turn's would never be announced.
 - **Item 3, the lookup reused:** `claudeNearby` (`devices/claudePlugin.ts`) becomes `engineNearby(engine)` in
   `lib/engineBin.ts`, and `claudePlugin.ts` calls it (the old function goes). It looks where `claudeNearby` looked:
@@ -90,7 +104,7 @@ on the orchestrator's turn, the Ubuntu VM off; no production backend or accounts
   changed. The original launch is held for recovery.'` (v0.6.86 `newPane.ts` and `restoreAgents.ts:1003`). The four
   other old-looking details (`Waiting to confirm the engine’s native hooks.`, Codex's profile hooks, the external
   conversation's hooks, the fork's configuration) are still written by `main` (`create.ts`, `externalPreflight.ts`,
-  `fork.ts`, `launchOverrides.ts`) and are not touched. See open question 2.
+  `fork.ts`, `launchOverrides.ts`) and are not touched. Both details are converted (orchestrator, 2026-11-25).
 - **Item 8, the file:** `cli/e2e/deviceNotify.e2e.ts`: it already drives a Harness agent's fake Claude Code turns from a
   window and a stand-in dial on a desk, and its cases are what rings and what does not. `linux_e2e_file` selects it
   when modified (not in `LINUX_E2E_NEVER`, not a dial host's).
@@ -105,9 +119,11 @@ on the orchestrator's turn, the Ubuntu VM off; no production backend or accounts
 
 ## Review Focus
 
-1. **A permission prompt whose command changes below its first line while it stays up** (open question 1): whatever
-   the answer, a test in Task 2 pins it, and the existing case `still refuses an answer once the command itself
-   changed` (`askQuestion.spec.ts:1145`) is changed only as that answer says.
+1. **A permission prompt whose body changes while it stays up** (`npm test && git push` becoming `npm test && rm -rf
+   ~/work`, the title unchanged): a new ask, announced under a new id and ringing, and an answer to the old id refused
+   as STALE_QUESTION, never typed into the new command. Task 2 pins it at the watcher (`heldRequestId` gives nothing
+   for a permission dialog) and keeps `still refuses an answer once the command itself changed`
+   (`askQuestion.spec.ts:1147`) unedited and green with `heldRequestId` wired.
 2. **`current-node` in its other Windows forms:** a lowercase drive (`c:\`), forward slashes (`C:/…`), a space in the
    profile folder (`C:\Users\abc def\…`), an LF only, a POSIX path with no CR: Task 1's spec has a case for each.
 3. **A cloud agent's question in the attach-time resend:** the registry never resolves a cloud agent, so the gone-agent
@@ -123,7 +139,7 @@ on the orchestrator's turn, the Ubuntu VM off; no production backend or accounts
 | # | Task | Item | Effort | Depends on | Gated |
 |---|---|---|---|---|---|
 | 1 | `harness_node` reads a Windows `current-node` | 1 | high | - | no |
-| 2 | The watcher keeps an unchanged dialog's id, the answer takes it, reset keeps what it must close | 2 | xhigh | - (waits for open question 1) | no |
+| 2 | A question keeps its id while its words stay, a permission dialog while its body does; reset keeps what it must close; a volatile dialog part, if found, normalized | 2 | xhigh | - | no |
 | 3 | The core asks the watcher, and forgets a gone agent's question | 2 | high | 2 | no |
 | 4 | A cloud harness gone from the list closes its question | 2 | medium | - | no |
 | 5 | One-shot workers start through `engineNearby` and `windowsProgram` | 3 | high | - | no |
@@ -131,14 +147,16 @@ on the orchestrator's turn, the Ubuntu VM off; no production backend or accounts
 | 7 | The silent-card rule in one place | 7 | medium | - | no |
 | 8 | End to end: a turn that goes on after an approved ask rings (#4620) | 8 | high | - | no |
 | 9 | windows-e2e for the Windows desk's imports | 9 | high | - | no |
-| 10 | Windows rules: Git Bash reads `current-node`; engines by their lookup | 1, 3 | medium | 1, 5 | no |
-| 11 | Rebase on `main` once `fix/win-hook-admission` has merged | 4, 5 | high | 1-10, and that merge | gate |
+| 10 | Windows rules: Git Bash reads `current-node`; engines by their lookup | 1, 3 | medium | 1, 5, 15 | no |
+| 11 | Rebase on `main` once `fix/win-hook-admission` has merged | 4, 5 | high | 1-10, 15, and that merge | gate |
 | 12 | Start markers through `startMarkerMs` in the core | 4 | xhigh | 11 | **GATED** |
 | 13 | Start markers through `startMarkerMs` in `lib/` | 4 | high | 11 | **GATED** |
 | 14 | Held rows saved by 0.6.86 or older | 5 | xhigh | 11 | **GATED** |
+| 15 | The local AI packages' `node.sh` reads a Windows `current-node` | 1 | high | 1 | no |
 
-Longest chain: four tasks (2 → 3 → 11 → 12; also 1 → 10 → 11 → 12, 5 → 10 → 11 → 13). Task 11 rewrites the whole
-branch, so it waits for every task before it. Files (each in one task):
+Longest chain: five tasks (1 → 15 → 10 → 11 → 12; also 1 → 15 → 10 → 11 → 13 and → 14). Without the gate: three
+(1 → 15 → 10). Task 11 rewrites the whole branch, so it waits for every task before it. Files (each in one task,
+except `cli/src/lib/windows/gitBashNode.spec.ts`, which Task 15 extends after Task 1):
 
 - 1: `store/tools/runtimes.sh`, the 57 copies `sync-runtimes.mjs` writes (`store/agents/*/toolchain/runtimes.sh`,
   `store/viewers/*/runtimes.sh`), `cli/src/lib/windows/gitBashNode.spec.ts` (new).
@@ -158,6 +176,8 @@ branch, so it waits for every task before it. Files (each in one task):
   `cli/src/lib/handoffDiscovery.ts`, `cli/src/lib/handoffDiscovery.spec.ts`,
   `cli/src/lib/sessionSearch/externals/support.ts`, `cli/src/lib/sessionSearch/externals/support.spec.ts`.
 - 14: `cli/src/lib/restoreAgents.ts`, `cli/src/lib/restoreAgents.spec.ts`.
+- 15: `store/tools/local-ai/toolchain/node.sh`, its three copies `store/agents/{ollama,mlx-lm,vllm}/toolchain/node.sh`
+  (written by `npm run build` in `store/tools/local-ai`), `cli/src/lib/windows/gitBashNode.spec.ts` (after Task 1).
 
 ---
 
@@ -218,13 +238,16 @@ first, by `cygpath -u` when `cygpath` is on PATH, else `/<drive in lower case>/<
   Expected: PASS.
 - [ ] **Step 5: Commit** `fix(store): harness_node reads a Windows current-node, in every package`.
 
-### Task 2: The watcher keeps an unchanged dialog's id, the answer takes it, reset keeps what it must close
-
-**Starts only after open question 1 is answered;** this task is written for answer (a), the spec as approved.
+### Task 2: A question keeps its id while its words stay, a permission dialog while its body does; reset keeps what it must close
 
 **Files:** Modify `cli/src/lib/questionController.ts` (`QuestionWatcher`: `tick` 806-834, `reset` 715-720, `noteGone`,
-`forget`, `stopAll`; `AskQuestionDeps` 170-181; `drive`'s id check 388-394); Test `cli/src/lib/askQuestion.spec.ts`
-(the `describe('the review\'s simulation: …')` block from line 1088), `cli/src/lib/askQuestion.polling.spec.ts`.
+`forget`, `stopAll`; `AskQuestionDeps` 170-181; `drive`'s id check 388-394; `dialogSignature` 896-913 and its regexes
+865-888 only if Step 1 finds a volatile part); Test `cli/src/lib/askQuestion.spec.ts` (the `describe('the review\'s
+simulation: …')` block from line 1085; for a found part, the `describe('a waiting dialog keeps one requestId')` block
+from line 986), `cli/src/lib/askQuestion.polling.spec.ts`. Read only (Step 1): the pane fixtures
+`cli/src/lib/__fixtures__/{permission,question}-*.txt`, the readers behind `parseEngineQuestionPane`
+(`cli/src/lib/questionPane.ts`, `cli/src/engines/screens.ts`, `cli/src/engines/*/screen.ts`,
+`cli/src/engines/*/askQuestion.ts`, `cli/src/engines/kit/questionPane.ts`) and their specs.
 
 **Depends on:** nothing. **Effort:** xhigh (an answer typed into a terminal; the consent check). **Failing test:** below.
 
@@ -233,27 +256,60 @@ first, by `cygpath -u` when `cygpath` is on PATH, else `/<drive in lower case>/<
   answer's `requestId` when, for one of `asked.owners`, `questionRequestId(owner, view)` or `heldRequestId(owner,
   view)` equals it.
 - `QuestionWatcher.heldRequestId(sessionId: string, view: QuestionView): string | undefined`: the id announced for that
-  session while it is still held (no confirmed miss) and the view's words equal the announced words; else undefined.
+  session while it is still held (no confirmed miss), when the announced dialog was a question, this view is one too
+  (`!isApprovalDialog(view)`), and this view's words equal the announced words; else undefined. A permission dialog
+  never gets one: its id is `questionRequestId`'s, as today.
 - A private `questionWords(view)`: `` `${question}|${row labels joined by |}|${multi}` ``, which `fingerprintOf` builds
   on. `questionRequestId` is unchanged.
 
-Rules: after `if (this.last.get(sessionId) === fingerprint) return` in `tick`, a session whose announced id is held and
-whose announced words equal this view's keeps that id: `last` takes the new fingerprint, and the dialog is announced
-again under the held id only when `last` was empty (a `reset()`, or a miss not yet confirmed: what today re-announces);
-otherwise nothing is announced. Words that differ are a new question, announced under `questionRequestId` as today.
-`reset()` clears `last` and `misses` only; the held ids and words stay until `stop()`, a confirmed miss or `stopAll()`.
+Rules (spec item 2, "An unchanged ask keeps its id"):
+- After `if (this.last.get(sessionId) === fingerprint) return` in `tick`: a session whose held id belongs to a question
+  announced with this view's words, the view itself not a permission dialog, keeps that id: `last` takes the new
+  fingerprint, and the dialog is announced again under the held id only when `last` was empty (a `reset()`, or a miss
+  not yet confirmed: what today re-announces); otherwise nothing is announced.
+- A permission dialog (`isApprovalDialog(view)`) whose fingerprint differs from the one announced is a new ask: it is
+  announced under `questionRequestId` (today's path), so it rings, and the old id's answer is refused (STALE_QUESTION).
+- Words that differ are a new question, announced under `questionRequestId` as today.
+- The announced words are kept (`lastWords`, beside `lastId`) only when the announced dialog is a question; a
+  permission dialog leaves none, so it can never keep an id.
+- `reset()` clears `last` and `misses` only; the held ids and words stay until `stop()`, a confirmed miss or
+  `stopAll()`.
 
-- [ ] **Step 1: Write the failing tests.** In the simulation block, a `world` variant whose `readQuestion` returns a
-  view built by the test, `{ kind: 'question', question: 'Which drink?', rows: [Tea, Coffee], multi: false, dialog:
-  'Which drink?\nrow <n>\n1. Tea\n2. Coffee' }` (`row <n>` is a line no rule of `dialogSignature` strips), its
-  controller given `heldRequestId: (s, v) => watcher.heldRequestId(s, v)`:
-  - `it('a dialog whose signature moves each poll while its words and options do not is announced once, and its answer is typed')`:
-    six polls with `n` = 1…6; `announced` has one id; `answer({ agentId: 'a1', requestId: announced[0], answers: { x:
-    'Coffee' } })` with `n` = 9 on screen → `{ ok: true }`, keys `['2']`. Today: six ids, then STALE_QUESTION.
-  - `it('a dialog whose words change is a new question, under its own id')`: the question becomes `'Which snack?'` →
+- [ ] **Step 1: Look for what moves the dialog each minute** (spec item 2, "What changed each minute"; no code). The log
+  shows the fingerprint changing every 60 s (±1 s), offset from the wall clock (an elapsed counter at minute grain, not
+  a clock), on an 18-char question. Check every fixture and reader above for a part painted inside `view.dialog` that
+  changes while the dialog waits and that `dialogSignature` does not strip: an elapsed time at minute grain outside
+  parentheses, a spinner glyph, a re-wrap at a new width. A part counts as found only when a fixture shows it or a
+  reader in the repo names its form; a form only guessed is reported as a lead, not normalized. Leads seen while
+  planning, not checked against `view.dialog`:
+  - `DURATION` (line 874) has no minute-only form: a bare `3m`, or `1m 5s` with a space, outside parentheses is
+    matched by neither `BARE_TIMER_LINE_RE` nor `TRAILING_TIMER_RE` (inside parentheses `TIMER_GROUP` takes `3m`).
+  - `tickTimers` (`askQuestion.spec.ts:907`) keeps each timer's form (`37s` → `98s`), so no case crosses the first
+    minute, where an engine may change form (`59s` → `1m`).
+  - Copilot's question pane paints a right-aligned elapsed `37s` on its `Asking user …` line
+    (`question-copilot.txt:280`); grok's question pane `4.2s` (`question-grok.txt:74`).
+  - Grok's permission pane has a right-aligned wall clock `2:31 PM` (`permission-grok.txt:370`): a clock, so not the
+    log's offset counter, but a volatile part if it reaches `view.dialog`.
+  Write down what was checked and what was found (or "none found"); it goes into the task's report for the pull
+  request body. Steps 7-10 run only for a part found.
+- [ ] **Step 2: Write the failing tests.** In the simulation block, the `world` helper's controller gets
+  `heldRequestId: (s, v) => watcher.heldRequestId(s, v)`; the case `still refuses an answer once the command itself
+  changed` (line 1147) is not edited and must pass with it. A `world` variant whose `readQuestion` returns a view built
+  by the test, with that same wiring:
+  - `it('a question whose signature moves each poll while its words and options do not is announced once, and its answer is typed')`:
+    `{ kind: 'question', question: 'Which drink?', rows: [Tea, Coffee], multi: false, dialog: 'Which drink?\nrow
+    <n>\n1. Tea\n2. Coffee' }` (`row <n>` is a line no rule of `dialogSignature` strips); six polls with `n` = 1…6;
+    `announced` has one id; `answer({ agentId: 'a1', requestId: announced[0], answers: { x: 'Coffee' } })` with `n` = 9
+    on screen → `{ ok: true }`, keys `['2']`. Today: six ids, then STALE_QUESTION.
+  - `it('a permission dialog whose body moves is a new ask each time: announced anew, and the old answer refused')`:
+    `{ kind: 'question', question: 'Run this command?', rows: [Yes, No], multi: false, permission: true, dialog: 'Run
+    this command?\n$ npm test <n>\n1. Yes\n2. No' }`, three polls with `n` = 1…3 → three ids;
+    `watcher.heldRequestId('s1', <the n = 3 view>)` is undefined; the first id's answer → `STALE_QUESTION`, nothing
+    typed. (Guards today's behavior under the new wiring.)
+  - `it('a question whose words change is a new question, under its own id')`: the question becomes `'Which snack?'` →
     two ids; the first id's answer → `STALE_QUESTION`, nothing typed.
-  - `it('a dialog that leaves for two polls and comes back is announced again, under the id its words give')`.
-  In `askQuestion.polling.spec.ts`:
+  - `it('a question that leaves for two polls and comes back is announced again, under the id its words give')`.
+  In `askQuestion.polling.spec.ts` (a question, not a permission dialog):
   - `it('after a reset, stopping the session closes the question it announced')`: announce, `reset()`, `stop('s1')` →
     `onQuestionGone('s1', <that id>)`. Today: never called.
   - `it('after a reset, the next poll announces the open question again under the id it holds, and a confirmed miss closes it')`:
@@ -261,19 +317,28 @@ otherwise nothing is announced. Words that differ are a new question, announced 
     polls → `onQuestionGone` with it.
   - `it('after a reset, a removed agent\'s question is closed at the next poll')`: announce; `reset()`; the session
     deleted from `sessions`; one poll → `onQuestionGone('s1', <that id>)`. Today: never called.
-- [ ] **Step 2: Run to see them fail.** `npx vitest run src/lib/askQuestion.spec.ts src/lib/askQuestion.polling.spec.ts`.
-  Expected: the first and the three reset cases fail as noted (the other two guard today's behavior). Commit (red).
-- [ ] **Step 3: Implement** the Interfaces and Rules above. A `lastWords` map beside `lastId`, kept and cleared with it;
-  announcing goes through one private method for both the new and the held id (the baseline cancel and `onQuestion`'s
-  payload as today, the raw `dialog` as read now). Update `fingerprintOf`'s and `reset`'s comments: the id moves when
-  the question's words do; a signature change alone keeps it (the customer case: one dialog re-announced every minute,
-  each answer refused). Under answer (a) the case `still refuses an answer once the command itself changed`
-  (`askQuestion.spec.ts:1145`) becomes `a command that changes below its first line while the prompt stays up keeps
-  the announced id, and its answer is typed (accepted, orchestrator 2026-11-25)`; under (b) or (c) see open question 1.
-- [ ] **Step 4: Run** `npx vitest run src/lib/askQuestion.spec.ts src/lib/askQuestion.polling.spec.ts
+- [ ] **Step 3: Run to see them fail.** `npx vitest run src/lib/askQuestion.spec.ts src/lib/askQuestion.polling.spec.ts`.
+  Expected: the first question case and the three reset cases fail as noted (the permission, new-words and come-back
+  cases and line 1147 guard today's behavior and pass). Commit (red).
+- [ ] **Step 4: Implement** the Interfaces and Rules above. Announcing goes through one private method for both the new
+  and the held id (the baseline cancel and `onQuestion`'s payload as today, the raw `dialog` as read now). Update
+  `fingerprintOf`'s and `reset`'s comments: a question's id moves when its words do, a signature change alone keeps it
+  (the customer case: one dialog re-announced every minute, each answer refused); a permission dialog's id moves with
+  its whole body, because an approval meant for one command must never be typed into another.
+- [ ] **Step 5: Run** `npx vitest run src/lib/askQuestion.spec.ts src/lib/askQuestion.polling.spec.ts
   src/lib/askQuestion.more.spec.ts src/lib/questionController.spec.ts src/cable/cableSession.spec.ts`. Expected: PASS
-  (`cableSession.spec.ts`'s new greeting still rings open questions).
-- [ ] **Step 5: Commit** `fix(questions): an unchanged dialog keeps its id, and its answer is taken`.
+  (line 1147 unedited and green; `cableSession.spec.ts`'s new greeting still rings open questions).
+- [ ] **Step 6: Commit** `fix(questions): a question keeps its id while its words stay, and its answer is taken`.
+- [ ] **Step 7 (only for a part Step 1 found): Write the failing test** in the `a waiting dialog keeps one requestId`
+  block: `it('<fixture>: its <part> moving keeps the id')`, the fixture with that part advanced in the engine's own form
+  (as `tickTimers` does for today's timers) keeps `idIn(file, pane)`. If the normalization could reach a command's
+  words, a case that a command's own text of the same form (for example `sleep 3m` on the command line) still moves a
+  permission dialog's id.
+- [ ] **Step 8: Run to see it fail.** `npx vitest run src/lib/askQuestion.spec.ts -t "keeps the id"`. Commit (red).
+- [ ] **Step 9: Implement:** normalize just that part in `dialogSignature`, a comment naming the engine and the form.
+  Nothing else in the signature changes.
+- [ ] **Step 10: Run** the Step 5 command; `two different commands are still two requestIds` and `every captured dialog keeps
+  its requestId` (line 1247, its id table) stay green. Commit `fix(questions): <the part> no longer moves a dialog's id`.
 
 ### Task 3: The core asks the watcher, and forgets a gone agent's question
 
@@ -282,7 +347,8 @@ otherwise nothing is announced. Words that differ are a new question, announced 
 
 **Depends on:** 2 (`heldRequestId`). **Effort:** high. **Failing test:** below. Core file: 100% in `npm run test:core`.
 
-**Interfaces:** Consumes `QuestionWatcher.heldRequestId` (Task 2). Produces on `createQuestions`' return:
+**Interfaces:** Consumes `QuestionWatcher.heldRequestId` (Task 2; it gives nothing for a permission dialog, so the
+wiring here is the same for both kinds: pass it through, decide nothing). Produces on `createQuestions`' return:
 `openQuestionFrames(): Record<string, unknown>[]`: the open questions to hand a dial or a window that attaches, after
 forgetting each of this module's own questions (a key in `askedRemotely`) whose agent `resolve` no longer finds
 (deleted from `openQuestions`, `askedRemotely` and `pending`, one log line `[question] <sid> forgotten · its agent is
@@ -475,14 +541,16 @@ suites").
 
 **Files:** Modify `docs/windows-rules.md`.
 
-**Depends on:** 1, 5 (the rules name their functions and tests). **Effort:** medium. **Failing test:** none (docs; one
-commit).
+**Depends on:** 1, 5, 15 (the rules name their functions and tests). **Effort:** medium. **Failing test:** none (docs;
+one commit).
 
 - [ ] **Step 1: Write** two rules, each what happened (no log content), the rule, the test:
   - §3 Files: **A file Windows writes is read in Git Bash as Windows wrote it.** `current-node` holds `C:\…\node.exe`
     and a CRLF; `${x%/*}` cuts nothing from it, so every store package's `harness_node` failed under `set -e` where
-    the computer's own Node was older (a customer's viewers, 2026-11). Read through `_harness_node_dir`
-    (`store/tools/runtimes.sh`). Test: `cli/src/lib/windows/gitBashNode.spec.ts`.
+    the computer's own Node was older (a customer's viewers, 2026-11), and the local AI packages' `node.sh` the same.
+    Read through `_harness_node_dir` (`store/tools/runtimes.sh`) and, in the local AI packages, which carry no
+    `runtimes.sh`, `local_ai_node_dir` (`store/tools/local-ai/toolchain/node.sh`). Test:
+    `cli/src/lib/windows/gitBashNode.spec.ts`.
   - §2 Starting processes: **An engine is started by the program its lookup finds, never by its bare name.** `spawn`
     with no shell finds neither an npm `.cmd` nor a `claude.exe` off PATH: every one-shot worker failed with ENOENT.
     `engineNearby` (`lib/engineBin.ts`), then `windowsProgram`. Tests: `lib/engineBin.nearby.spec.ts`,
@@ -491,7 +559,7 @@ commit).
 
 ### Task 11: Rebase on `main` once `fix/win-hook-admission` has merged
 
-**Files:** the branch. **Depends on:** Tasks 1-10, and `fix/win-hook-admission` merged to `main` (its worktree:
+**Files:** the branch. **Depends on:** Tasks 1-10 and 15, and `fix/win-hook-admission` merged to `main` (its worktree:
 `/Users/nqhieu84/orca/workspaces/openharness/win-hook-admission`). **Effort:** high. **Failing test:** none.
 
 - [ ] **Step 1:** `git fetch origin && git rebase origin/main`; resolve any conflict by keeping both changes (expected
@@ -564,8 +632,8 @@ starting-row branch (523-537) uses them.
 
 - [ ] **Step 1: Confirm the old shape** at the rebased head: `for t in $(git tag -l 'v0.6.*_cli'); do git grep -h -o
   "detail: '[^']*'" $t -- cli/src/lib/restoreAgents.ts 'cli/src/core/agents/*.ts' ':!*.spec.ts'; done | sort -u`
-  against the same at `HEAD`, each candidate checked with `git grep -F` at `HEAD`: the set is the two details (or what
-  open question 2 answers).
+  against the same at `HEAD`, each candidate checked with `git grep -F` at `HEAD`: the set is the two details (both
+  converted, orchestrator 2026-11-25).
 - [ ] **Step 2: Write the failing tests** in `restoreAgents.spec.ts`, a row held as 0.6.86 saved it (native token, no
   session, no `startsAgain`, one of the details), with a `creationId`:
   - `it.each(LEGACY_HELD_DETAILS)('a held row 0.6.86 saved, its waiting pane alive and its own, starts again: %s')`:
@@ -586,6 +654,58 @@ starting-row branch (523-537) uses them.
   src/core/agents/heldLaunches.spec.ts`. Expected: PASS.
 - [ ] **Step 6: Commit** `fix(restore): a held row 0.6.86 saved starts again or fails, bounded`.
 
+### Task 15: The local AI packages' `node.sh` reads a Windows `current-node`
+
+Not gated: it runs once Task 1 is done.
+
+**Files:** Modify `store/tools/local-ai/toolchain/node.sh` (the `else` branch that reads `current-node`); regenerate
+`store/agents/{ollama,mlx-lm,vllm}/toolchain/node.sh` with `npm run build` in `store/tools/local-ai`; Test
+`cli/src/lib/windows/gitBashNode.spec.ts` (Task 1's file: new cases in both of its `describe`s; its stand-in root may
+be hoisted into a helper both use).
+
+**Depends on:** 1 (its spec file and stand-in Git Bash). **Effort:** high. **Failing test:** the stand-in cases below,
+on every host but Windows.
+
+**Interfaces:** Consumes Task 1's stand-in root (`bin/` with `uname` printing `MINGW64_NT-10.0-26100`, an old `node`,
+`cygpath`, `cat`, `tr`; HOME `<root>/c/Users/abcdef`) and its `_harness_node_dir` table of `current-node` forms.
+Produces, in `node.sh`: `local_ai_node_dir RECORDED`, the same rule as `_harness_node_dir` (one trailing CR dropped; a
+drive-letter path through `cygpath -u` when it is on PATH, else `/<drive in lower case>/<rest, \ as />`; then the
+folder of the file it names), POSIX sh only, and calling no program for a path that is not drive-letter (the existing
+`packaging.test.mjs` cases put only `cat` and `uname` on PATH). `LOCAL_AI_NODE` is `$dir/node` when executable, else
+`$dir/node.exe`, through today's `>= 22` probe; the `miss Node.js 22 or newer …` line keeps its words.
+
+- [ ] **Step 1: Write the failing tests** in `gitBashNode.spec.ts`. `NODE_SH` is
+  `new URL('../../../../store/tools/local-ai/toolchain/node.sh', import.meta.url)`. In the stand-in `describe`, each
+  case runs `/bin/sh -c '. "$1" && printf "%s" "$LOCAL_AI_NODE"' sh <NODE_SH>` with `env: { PATH: bin, HOME }` only;
+  the old `node` answers any `-e` with exit 1; Harness's Node is a stub that answers any `-e` with exit 0, in
+  `<HOME>/.harness/runtime/node-v22.12.0-win-x64/`, and `<HOME>/.harness/runtime/current-node` holds
+  `C:\Users\abcdef\.harness\runtime\node-v22.12.0-win-x64\node.exe\r\n` (`uname` is not Linux, so `node.sh` reads
+  `$HOME/.harness/runtime`).
+  - `it('the local AI packages find Harness's Node through a CRLF backslash current-node when the node on PATH is too old')`:
+    the stub named `node`; expect exit 0 and stdout `<runtime>/node-v22.12.0-win-x64/node`. Today: exit 1 and stderr
+    contains `miss Node.js 22 or newer`.
+  - `it('the local AI packages take node.exe when that is the file there')`: the stub named `node.exe` only; stdout
+    `<…>/node-v22.12.0-win-x64/node.exe`.
+  - `it.each` of `local_ai_node_dir` over the same forms and expected folders as `_harness_node_dir`'s table, no
+    `cygpath` on PATH (one table, both functions).
+  In the real Git Bash `describe`: `it('the local AI packages find Harness's Node there too')`: the same throwaway
+  profile, runtime and older `node` first on PATH as Task 1's case; `findGitBash()`'s bash with `-c` `export
+  ADAPTER_RUNTIME_DIR="$(cygpath -u "$RUNTIME_WIN")"; . "$(cygpath -u "$NODE_SH_WIN")" && "$LOCAL_AI_NODE" -v`; expect
+  exit 0 and stdout `process.version`. 60 s timeout.
+- [ ] **Step 2: Run to see them fail.** `npx vitest run src/lib/windows/gitBashNode.spec.ts`. Expected: Task 1's cases
+  pass; the first new case fails with exit 1 and the `miss Node.js 22` line; the `local_ai_node_dir` cases fail (`not found`).
+  Commit (red): `test(store): the local AI packages find Harness's Node through a Windows current-node`.
+- [ ] **Step 3: Implement** `local_ai_node_dir` as the Interfaces block says and use it in the `current-node` branch.
+  Comment why: Windows writes `current-node` as `C:\…\node.exe` with a CRLF, which `${x%/*}` cannot cut, so Ollama's,
+  vLLM's and MLX-LM's viewer, setup and doctor stopped on a computer whose own Node is older (spec item 1); and why its
+  own copy of the rule (these packages install alone and carry no `runtimes.sh`; `_harness_node_dir` is the same
+  rule). Then `cd store/tools/local-ai && npm run build`; `git status --short store/agents/ollama store/agents/mlx-lm
+  store/agents/vllm` lists the three `toolchain/node.sh` and nothing else (anything else is reverted with `git checkout
+  --` and named in the task's report).
+- [ ] **Step 4: Run** `npx vitest run src/lib/windows/gitBashNode.spec.ts`; from the root `node --test
+  store/tools/local-ai/test/packaging.test.mjs` (the copies equal, the runtime-folder cases unchanged). Expected: PASS.
+- [ ] **Step 5: Commit** `fix(store): the local AI packages read a Windows current-node`.
+
 ---
 
 ## Verification
@@ -604,7 +724,8 @@ starting-row branch (523-537) uses them.
    `src/lib/windows/`), `cli/src/lib/engineBin.ts` (the module of `engineBin.pathEntries.spec.ts`),
    `cli/src/devices/claudePlugin.ts` and `cli/src/devices/orcaHomes.ts` (`cli/src/devices/`), `cli/src/cable/cableHost.ts`
    (`cli/src/cable/`). The arm64 leg is not selected (no Windows-only file: no file whose own name says `windows`, no
-   `pty/`, no `windows.yml`). It runs the Windows CLI specs (`gitBashNode.spec.ts`'s real Git Bash case;
+   `pty/`, no `windows.yml`). It runs the Windows CLI specs (`gitBashNode.spec.ts`'s real Git Bash cases, for
+   `harness_node` and for the local AI packages' `node.sh`;
    `devices/claudePlugin.windows.real.spec.ts`, which runs `engineNearby` on real Windows), `dialWindows.e2e.ts`,
    `dialWindowsTools.e2e.ts` and the install check. By hand only if needed: `ci.yml` `workflow_dispatch`, scope
    `windows-e2e`.
@@ -622,7 +743,9 @@ starting-row branch (523-537) uses them.
      `harness start`; an agent started (`harness new claude <folder>`, Claude Code from Anthropic's own installer, not
      signed in). Read the data folder's `harness.log`. On the release: `[dsh] autonomous/harness-monitor viewer exited 1 ·
      restarting in …`. On the branch: `[dsh] autonomous/harness-monitor viewer up on 127.0.0.1:<port>` and no
-     `viewer exited 1`; `harness dsh doctor <a package whose doctor calls harness_node>` prints no `miss node >= …`.
+     `viewer exited 1`; `harness dsh doctor <a package whose doctor calls harness_node>` prints no `miss node >= …`;
+     the Ollama package's doctor (`store/agents/ollama/toolchain/doctor.sh`, through `node.sh`; Task 15) prints no
+     `miss Node.js 22 or newer` (on the release it does).
    - **Item 3:** Claude Code from its own installer (`%USERPROFILE%\.local\bin\claude.exe`, off PATH); the branch's desk
      in `--own-account` mode on the stand-in dial ([cli/scripts/windows-dial-e2e/README.md](../../cli/scripts/windows-dial-e2e/README.md):
      `node scripts/windows-dial-e2e/bundle.mjs <out>` on the Mac, `<out>` copied over, run through `console.ps1` and
@@ -639,35 +762,22 @@ starting-row branch (523-537) uses them.
    fence into the pull request body before marking it ready (`process-checks` reads the receipts from the event).
    The store packages' own tests, which no PR check names, recorded in the pull request: `python3 -m unittest
    store/tools/test_runtimes.py`; `node store/tools/sync-runtimes.mjs --check` (no output); `node --test
-   store/tools/sync-runtimes.test.mjs`; in `store/agents/harness-monitor`, `node --import ./test/setup.mjs --test
+   store/tools/sync-runtimes.test.mjs`; `node --test store/tools/local-ai/test/packaging.test.mjs` (Task 15: the three
+   `node.sh` copies equal the source); in `store/agents/harness-monitor`, `node --import ./test/setup.mjs --test
    test/*.test.mjs`; each package test that sources its copy (`git grep -l "runtimes.sh" --
    'store/agents/*/toolchain/test_*.py'`, each with `python3 -m unittest`, and `node --test
    store/agents/marp/toolchain/test/scripts.test.mjs`). The planner: `python3 -m unittest scripts/tests/test_ci_plan.py`
    on this full checkout (`process-checks`' checkout is sparse; `cross-read-scan` runs the full-checkout tests on PR
    CI), and two independent security reviews of the `scripts/ci-plan.py` change before merge.
 6. **Proposal (not added here):** a PR check for `store/tools/` (`python3 -m unittest store/tools/test_runtimes.py`,
-   `node store/tools/sync-runtimes.mjs --check`, `node --test store/tools/*.test.mjs`) selected by changes there, so the
-   next `runtimes.sh` change is tested on PR CI without a CLI spec.
+   `node store/tools/sync-runtimes.mjs --check`, `node --test store/tools/*.test.mjs`, `node --test
+   store/tools/local-ai/test/packaging.test.mjs`) selected by changes there, so the next `runtimes.sh` or `node.sh`
+   change is tested on PR CI without a CLI spec.
 7. **No check needs the user themselves:** no client change, the VM checks use a temporary test user, and what the dial
    is sent is asserted on the stand-in's frames.
 
 ## Open questions
 
-1. **Item 2 and a permission prompt whose command changes below its first line** (blocks Task 2). The spec's rule (same
-   question text, rows and `multi` keep the id; the answer is taken under it) also covers a prompt titled by its
-   command's first line whose next lines change with no gap, for example `npm test &&` then `git push` becoming
-   `npm test &&` then `rm -rf ~/work` (the repo's own fixture, `askQuestion.spec.ts:1060-1086`). Today that is a new id
-   and the old answer is refused: `still refuses an answer once the command itself changed` (`askQuestion.spec.ts:1145`).
-   Under the spec, the dial rings once and an approval meant for the first command is typed into the second. Which?
-   (a) as the spec says: that case is rewritten as accepted; (b) approval dialogs (`isApprovalDialog`) keep today's
-   rule (a signature change is a new id and rings), the id-keeping applies to questions only; (c) every dialog rings
-   once, but an approval's answer is still checked against its live signature (after a change it is refused and is
-   answered at the computer). Task 2 is written for (a); (b) or (c) changes its Rules and the case at 1145 only.
-2. **Item 5, which old details** (Task 14). The spec names one (`Waiting to confirm the engine executable and native
-   hooks.`); its rule ("what 0.6.86 or older wrote and no current code writes") also covers v0.6.86's `The engine did
-   not start because its executable or native hooks changed. The original launch is held for recovery.`, which `main`
-   no longer writes. The plan takes both. Confirm, or one only.
-3. **Item 1, the same cause in `store/tools/local-ai/toolchain/node.sh`** (and its copies in `store/agents/ollama`,
-   `vllm`, `mlx-lm`, written by `store/tools/local-ai/scripts/build-*.mjs`): it reads `current-node` with the same
-   `${x%/*}/node`. In this pull request (a task of its own, after Task 1, with its own case in `gitBashNode.spec.ts`), or
-   not?
+None. The three earlier ones were answered by the orchestrator on 2026-11-25 (item 2: rule (b) plus the search for the
+volatile part, Task 2; item 5: both details, Task 14; item 1: the local AI packages' `node.sh` in this pull request,
+Task 15).

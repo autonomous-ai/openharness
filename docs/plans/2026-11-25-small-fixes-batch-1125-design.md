@@ -86,23 +86,33 @@ clears the announced ids, so a later `stop()` or confirmed miss finds no id and 
 harness removed from `publish` (`cli/src/core/agents/cloud.ts`) never drops its open question.
 
 **Fix (orchestrator's call: the cause, in the module that owns questions; no client change).**
-- **An unchanged dialog keeps its id.** While a session's dialog stays on the pane (no confirmed miss) and its
-  question, rows and `multi` are what was announced, a change in its dialog signature alone is the same question: the
-  watcher keeps the announced `requestId`, announces nothing, and remembers the new fingerprint. A dialog whose words
-  or options change, or that leaves and comes back, is a new question with a new id, as today.
-- **An answer to it is taken.** The answer's check accepts the id the watcher holds for that session's live dialog
-  when the live dialog's question, rows and `multi` match it, instead of only the id recomputed from the pane.
+- **An unchanged ask keeps its id (orchestrator's rule).**
+  - A *question* (an engine's own question, such as AskUserQuestion) keeps its announced `requestId` while it stays on
+    the pane (no confirmed miss) and its question, rows and `multi` are what was announced: a change in the rest of the
+    dialog alone is the same question. The watcher announces nothing and remembers the new fingerprint. Its answer is
+    taken under the kept id: the answer's check accepts the id the watcher holds for that session's live dialog when
+    the live dialog's question, rows and `multi` match it.
+  - A *permission* dialog (`isApprovalDialog`) keeps its id only while its whole body, as `dialogSignature` reads it,
+    is unchanged. A changed body is a new ask: it is announced under a new id and rings, and an answer to the old one
+    is refused as STALE_QUESTION, as today (`askQuestion.spec.ts` "still refuses an answer once the command itself
+    changed" keeps its guarantee). `npm test && git push` becoming `npm test && rm -rf ~/work` is a new request the
+    person is told about again.
+  - **What changed each minute.** The log shows the fingerprint changing every 60 s (±1 s), offset from the wall clock
+    (an elapsed counter at minute grain, not a clock), on a question of 18 characters, shorter than any permission
+    question Claude Code asks, so most likely a question, which the rule above covers. The builder checks the engines'
+    dialog fixtures and parsers for a volatile part that `dialogSignature` does not strip (an elapsed time at minute
+    grain, a spinner, a re-wrap at a new width); one found is normalized there, so a permission dialog with it keeps
+    its id too. None found: the spec's rule stands, and the pull request says so.
 - **A gone agent's question is closed and forgotten.** `reset()` lets the next poll announce an open question again
   without losing the id it must close; a removed agent (including a cloud harness) closes its question; the
   attach-time resend gives no question of an agent that is gone.
 - Unchanged: a new greeting (the dial lost its RAM) rings open questions again (`cableSession.spec.ts`); a question
   with other words or options rings.
-- Accepted (orchestrator): two approvals with the same words and options, swapped with no gap between them, read as
-  one question and ring once.
 
-**Tests.** Red first, in the watcher's and the core questions' specs: a dialog whose signature changes but whose words
-and options do not is announced once, with one id, and an answer under that id is typed; a dialog with other words is
-announced anew; after `reset()`, stopping the session closes its question; a removed cloud harness's question is
+**Tests.** Red first, in the watcher's and the core questions' specs: a question whose dialog signature changes but
+whose words and options do not is announced once, with one id, and an answer under that id is typed; a permission
+dialog whose body changes is announced anew and the old answer is refused; a question with other words is announced
+anew; after `reset()`, stopping the session closes its question; a removed cloud harness's question is
 closed; the attach-time resend skips a gone agent's question. Core files (`cli/src/core/`) at 100% in `test:core`.
 
 ### 3. One-shot workers start through the Windows program resolver
@@ -203,16 +213,22 @@ dial-hosts and the app eval. Red first: a test that a change to `cli/src/testing
 - Item 5 stays, small: only rows 0.6.86 or older saved, bounded as #4604; done with item 4.
 - Items 4 and 5 after `fix/win-hook-admission` merges, on a rebased branch. The pull request opens early (CI and the
   testers run on items 1-3 and 6-9); the merge waits until 4 and 5 land in the same pull request.
-- Item 2 is fixed at its cause in the module that owns questions, for every client; two identical approvals swapped
-  with no gap ring once.
+- Item 2 is fixed at its cause in the module that owns questions, for every client. A question keeps its id on its
+  words and options; a permission dialog only while its whole body is unchanged (a changed body is a new ask that
+  rings); a volatile part found in a dialog is normalized in the fingerprint.
 - Windows VM in phase 4, asked for first; the Ubuntu VM stays off.
 
 ## Calls made here (the builder may revisit with a reason)
 
 - Item 1: the fix is in the shared `runtimes.sh`, so all 18 packages that use `harness_node` are fixed, not only
   harness-monitor.
-- Item 2: "same question" is same session, same words, same options, still on screen; the drift's own source is not
-  chased.
+- Item 2: the log shows only that the fingerprint changed each minute; the builder looks for the volatile part in the
+  engines' fixtures and parsers.
+- Item 5: both held details that only 0.6.86 or older wrote are converted ("Waiting to confirm the engine executable
+  and native hooks." and "The engine did not start because its executable or native hooks changed. The original
+  launch is held for recovery.").
+- Item 1: `store/tools/local-ai/toolchain/node.sh` and its copies (ollama, vllm, mlx-lm) read `current-node` the same
+  broken way: fixed in this pull request (same cause).
 - Item 3: every one-shot engine, not only Claude (same cause).
 - Item 4: every `Date.parse` of a start marker, not only `bind.ts`.
 
