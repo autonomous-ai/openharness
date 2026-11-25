@@ -1,7 +1,7 @@
 //! The `harness hardware watch --json` child.
 
 use crate::cli::{Cli, Killer, StdinCloser, StdinWriter, Timeout, Unwritten};
-use crate::tabs::{TabApp, select_of};
+use crate::tabs::{TabApp, Typing, select_of, typing_of};
 use crate::types::{DialStatus, Event, Log, NotifyMode};
 use std::io;
 use std::sync::Arc;
@@ -42,6 +42,11 @@ impl Watch {
         self.write(line);
     }
 
+    /// The answer to one of this watch's typings (tabs.rs) on the child's stdin.
+    pub fn wrote(&self, line: &str) {
+        self.write(line);
+    }
+
     /// A change of the dial's sound on the child's stdin: one of two fixed lines, so nothing else can shape it.
     pub fn sound(&self, on: bool) {
         self.write(if on { r#"{"muted":false}"# } else { r#"{"muted":true}"# });
@@ -79,14 +84,16 @@ impl Drop for Watch {
 }
 
 /// Runs `hardware watch --json`: an `Event::WatchLine` for each status line it prints, then one `Event::WatchExit`.
-/// Each select line it prints goes to `select` with its app, tty and raise, and is no Event: a tty is never one.
+/// Each select line it prints goes to `select` with its app, tty and raise, and each write or Enter line to `typing`;
+/// neither is an Event: a tty and a spoken text never are.
 pub fn spawn_watch(
     cli: &dyn Cli,
     log: Arc<dyn Log>,
     send: impl Fn(Event) + Send + 'static,
     select: impl Fn(TabApp, String, bool) + Send + 'static,
+    typing: impl Fn(Typing) + Send + 'static,
 ) -> io::Result<Watch> {
-    spawn_watch_within(cli, log, send, select, FIRST_LINE, STOP_GRACE)
+    spawn_watch_within(cli, log, send, select, typing, FIRST_LINE, STOP_GRACE)
 }
 
 fn spawn_watch_within(
@@ -94,6 +101,7 @@ fn spawn_watch_within(
     log: Arc<dyn Log>,
     send: impl Fn(Event) + Send + 'static,
     select: impl Fn(TabApp, String, bool) + Send + 'static,
+    typing: impl Fn(Typing) + Send + 'static,
     first_line: Duration,
     grace: Duration,
 ) -> io::Result<Watch> {
@@ -106,9 +114,12 @@ fn spawn_watch_within(
         loop {
             match child.line(wait) {
                 Ok(Some(line)) => {
-                    // A line without a boolean `attached` (an `{"error":…}`, a select, anything else) is not a status.
+                    // A line without a boolean `attached` (an `{"error":…}`, a select, a typing, anything else) is not
+                    // a status.
                     if let Some((app, tty, raise)) = select_of(&line) {
                         select(app, tty, raise);
+                    } else if let Some(typed) = typing_of(&line) {
+                        typing(typed);
                     } else if let Ok(status) = serde_json::from_str::<DialStatus>(&line) {
                         send(Event::WatchLine(status));
                     }
