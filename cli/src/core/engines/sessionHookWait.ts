@@ -102,8 +102,8 @@ export function createSessionHookWait(bounds: Partial<SessionHookWaitBounds> = {
       const settle = () => {
         if (admission.requests || admission.job) return
         session.admissions.delete(deliveryId)
-        // On a later turn: the accept that settled this announces the bind synchronously (onPromptSubmitted, the start
-        // of onRegistered), and a replayed hook must find it announced.
+        // On a later turn: the accept that settled this announces the bind in onRegistered's synchronous start, and a
+        // replayed hook must find it announced.
         if (session.waiting.length) setImmediate(() => { void drain(key) })
         else prune(key, session)
       }
