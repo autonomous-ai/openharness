@@ -325,6 +325,15 @@ class SelectionTests(unittest.TestCase):
                 self.assertFalse(planner.windows_only(path))
                 self.assertFalse(planner.e2e_plan([path], {"windows-e2e"})["windows_arm64"])
 
+    def test_the_dial_desk_bundle_runs_windows_end_to_end_on_x64_alone(self):
+        # dialWindowsTools.e2e.ts builds the desk bundle and runs it; bundle.mjs runs on the Mac too.
+        for path in ("cli/scripts/windows-dial-e2e/bundle.mjs", "cli/scripts/windows-dial-e2e/desk.mts",
+                     "cli/scripts/windows-dial-e2e/console.ps1"):
+            with self.subTest(path=path):
+                self.assertIn("windows-e2e", planner.select([path])[0])
+                self.assertFalse(planner.e2e_plan([path], {"windows-e2e"})["windows_arm64"])
+        self.assertNotIn("windows-e2e", planner.select(["cli/scripts/windows-dial-e2e/README.md"])[0])
+
     def test_a_cross_platform_file_outside_the_lists_runs_no_end_to_end_suite(self):
         # The spec's negative: a typical CLI change pays for none of them.
         for path in ("cli/src/lib/tmuxBackend.ts", "cli/src/core/agents.ts", "cli/src/lib/engineLaunch.ts",
