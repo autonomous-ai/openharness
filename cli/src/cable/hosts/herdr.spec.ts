@@ -261,11 +261,12 @@ describe('the herdr adapter', () => {
       }
     })
 
-    // No maker is read on Windows (no `ps`): the pane stays the agent's own there.
-    it('Windows: the agent\'s own, as today', () => {
+    // The devices read the maker on Windows too, from the PTY host's process table: a pane is held there as elsewhere.
+    it('Windows: the agent\'s own only when herdr made it, as elsewhere', () => {
       const { logs, adapter } = logged('win32')
-      for (const owner of [undefined, null, 'herdr']) expect(adapter.paneOf(madeBy(owner)), String(owner)).toEqual(pane('w1:p2'))
-      expect(logs).toEqual([])
+      expect(adapter.paneOf(madeBy('herdr'))).toEqual(pane('w1:p2'))
+      for (const owner of [undefined, null, 'wezterm']) expect(adapter.paneOf(madeBy(owner)), String(owner)).toEqual(held)
+      expect(logs).toEqual(['[device] herdr · held'])
     })
 
     it('a held pane takes a tap alone: herdr agent focus runs on its bare id, a rest and words do nothing', async () => {

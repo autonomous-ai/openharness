@@ -1,12 +1,12 @@
 // Which app a session the open scan found runs in, from its parent processes' executables alone
 // (docs/specs/2026-11-14-dial-app-filter.md, "The scan learns the app where that is cheap"), and which host made the
-// pseudo-terminal a hook's caller runs on (ptyMaker). Nothing else of a process is read but the terminal it runs on: its
-// environment holds secrets, and its name is outside text (a process can write a prompt there), so a name is matched
-// against the tables and dropped, never kept, logged or sent.
+// pseudo-terminal a hook's caller runs on (ptyMaker; windowsPtyOwner on Windows, which names no terminal). Nothing else
+// of a process is read but the terminal it runs on: its environment holds secrets, and its name is outside text (a
+// process can write a prompt there), so a name is matched against the tables and dropped, never kept, logged or sent.
 
 import { execFile } from 'node:child_process'
 import { homedir } from 'node:os'
-import { basename } from 'node:path'
+import { basename, win32 } from 'node:path'
 import { patientExec } from '../../lib/patientExec.js'
 import type { RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { windowsStartTime } from '../../lib/windows/treeKill.js'
@@ -271,6 +271,63 @@ export async function readPtyOwner(
   pid: number, rows: readonly ProcessName[], tty: (pid: number) => Promise<string | undefined>,
 ): Promise<string | undefined> {
   return (await readPtyMaker(pid, rows, tty))?.host
+}
+
+/** A row of the PTY host's Windows table: its `w:<FILETIME>` start ends a walk at a reused pid (parentChain). */
+export type WindowsProcess = ProcessName & { startMarker?: string }
+
+/** The hosts whose panes the dial reaches on Windows, by the maker's image name (windowsName). Apart from PTY_HOSTS:
+ *  Orca's terminal host runs under the app's own image there (Electron run as Node keeps it), while on macOS the app's
+ *  `Orca` is not its terminal host, so one table for both would name a host macOS does not have. */
+const WINDOWS_PTY_HOSTS: Readonly<Record<string, string>> = {
+  orca: 'orca',
+  herdr: 'herdr',
+  'wezterm-gui': 'wezterm',
+  'wezterm-mux-server': 'wezterm',
+}
+
+/** The shells between a pane's maker and its agent, and an agent's tool's: Codex runs PowerShell, Claude Code bash. */
+const WINDOWS_SHELLS = new Set(['pwsh', 'powershell', 'bash', 'sh'])
+/** How a script is started: an npm shim runs Codex as `cmd` → `node` → `codex.exe`, Volta's `codex.exe` as `cmd /C`. */
+const WINDOWS_SCRIPT_SHELL = 'cmd'
+const WINDOWS_LAUNCHER = 'node'
+
+/** A Windows image name as the tables hold it: Windows matches names with no case, and `.exe` says nothing. */
+const windowsName = (executable: string): string => win32.basename(executable).replace(/\.exe$/i, '').toLowerCase()
+
+/**
+ * The host that made the pseudo-console a Windows process runs on. Windows names no terminal, but the program that makes
+ * a pseudo-console starts its shell as its own child (ConPTY), so the maker is the caller's nearest parent that is no
+ * shell, launcher or shim of the caller's own name (a Scoop or Volta `claude.exe` starting the real one). A shim or
+ * launcher starts the caller itself or through `cmd`: Node or one of the caller's name above any other shell is
+ * another agent that ran the caller from its own tool (Codex run by Codex, `claude -p` from Claude Code's shell tool,
+ * Claude Code from npm being Node), and the caller is on its terminal or pipes, not the pane's. That parent decides:
+ * none when WINDOWS_PTY_HOSTS does not list it, when the caller is not in [rows], or when the walk finds shells alone.
+ * Its name is matched and dropped, never kept.
+ */
+export function windowsPtyOwner(pid: number, rows: readonly WindowsProcess[]): string | undefined {
+  const [own, ...parents] = parentChain(pid, new Map(rows.map((p) => [p.pid, p])))
+  if (!own) return undefined
+  const ownName = windowsName(own.executable)
+  let shelled = false
+  for (const parent of parents) {
+    const name = windowsName(parent.executable)
+    if (name === WINDOWS_SCRIPT_SHELL || ((name === WINDOWS_LAUNCHER || name === ownName) && !shelled)) continue
+    if (WINDOWS_SHELLS.has(name)) {
+      shelled = true
+      continue
+    }
+    return Object.hasOwn(WINDOWS_PTY_HOSTS, name) ? WINDOWS_PTY_HOSTS[name] : undefined
+  }
+  return undefined
+}
+
+/** windowsPtyOwner over the table [list] reads. That reader answers an empty table for one it could not read, and a
+ *  table read lists its reader at the least, so no row is a failed read; the error names nothing. */
+export async function readWindowsPtyOwner(pid: number, list: () => Promise<readonly WindowsProcess[]>): Promise<string | undefined> {
+  const rows = await list()
+  if (!rows.length) throw new Error('process table not read')
+  return windowsPtyOwner(pid, rows)
 }
 
 /** A session a multiplexer made: its host as PTY_HOSTS names it, the maker's pid, and the session's own terminal

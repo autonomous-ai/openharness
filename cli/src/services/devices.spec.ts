@@ -214,6 +214,8 @@ const readers = vi.hoisted(() => ({
   bundleId: vi.fn(async (_bundle: string): Promise<string | undefined> => undefined),
   /** The pids whose process ended: every other one runs. */
   ended: new Set<number>(),
+  // Windows' process table, as the PTY host gives it: none unless a spec gives one.
+  listProcesses: vi.fn(async () => [] as Array<{ pid: number; ppid: number; executable: string; args: string }>),
 }))
 vi.mock('../lib/sessionSearch/external.js', async (real) => ({
   ...await real<typeof import('../lib/sessionSearch/external.js')>(),
@@ -234,7 +236,7 @@ vi.mock('../lib/sessionSearch/external.js', async (real) => ({
 }))
 vi.mock('../lib/sessionSearch/externals/support.js', async (real) => ({
   ...await real<typeof import('../lib/sessionSearch/externals/support.js')>(),
-  listProcesses: async () => [],
+  listProcesses: readers.listProcesses,
   processAlive: (pid: number) => !readers.ended.has(pid),
   fileStamp: async () => null,
 }))
@@ -616,6 +618,7 @@ beforeEach(() => {
   readers.record.mockResolvedValue({})
   readers.processes.mockResolvedValue([])
   readers.bundleId.mockResolvedValue(undefined)
+  readers.listProcesses.mockResolvedValue([])
   processTable.rows = []
   processTable.reads = 0
   processTable.held = false
@@ -3244,6 +3247,46 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       ['/opt/orca/bin/orca', ['terminal', 'switch', '--terminal', HANDLE, '--json'], 10_000],
     ])
     expect(said()).toEqual(['[device] voice · orca'])
+  })
+
+  // On Windows the maker is read from the PTY host's process table, past the shells between (scannedApp.ts
+  // windowsPtyOwner): the caller 4242 in a shell that [maker] made, none when the table was not read.
+  const onWindows = (maker?: string) => {
+    readers.listProcesses.mockResolvedValue(maker === undefined ? [] : [{ pid: 4242, ppid: 4000, executable: 'claude.exe', args: '' },
+      { pid: 4000, ppid: 3900, executable: 'pwsh.exe', args: '' }, { pid: 3900, ppid: 1, executable: maker, args: '' }])
+    const { port } = startHere({ orca: { ...orca, platform: 'win32' } })
+    port.observed(hook('session-start', { hostHints: { ORCA_TERMINAL_HANDLE: HANDLE } }))
+    attach(port)
+  }
+  const orcaSends = () => orcaRuns.filter(([, args]) => args[0] === 'terminal' && args[1] === 'send')
+
+  it('on Windows an agent in a shell Orca made takes its words', async () => {
+    onWindows('C:\\Users\\someone\\AppData\\Local\\Programs\\Orca\\Orca.exe')
+    await landed()
+    expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
+    expect(orcaSends()).toEqual([
+      ['/opt/orca/bin/orca', ['terminal', 'send', '--terminal', HANDLE, '--text=run the tests', '--enter', '--wait-submit', '5', '--json'], 10_000],
+    ])
+    expect(said()).toEqual(['[device] voice · orca'])
+    expect(readers.processes).not.toHaveBeenCalled()
+    expect(readers.tty).not.toHaveBeenCalled()
+  })
+
+  it('on Windows an agent in a terminal another program made inside Orca is held', async () => {
+    onWindows('Code.exe')
+    await landed()
+    expect(await host().sendTurn(ID, 'run the tests')).not.toEqual({ ok: true })
+    expect(orcaSends()).toEqual([])
+    expect(said().filter((line) => line === '[device] orca · held')).toEqual(['[device] orca · held'])
+    expect(logs.filter((line) => line.includes('Code.exe'))).toEqual([])
+  })
+
+  it('on Windows a table not read keeps the pane held and is logged', async () => {
+    onWindows()
+    await landed()
+    expect(await host().sendTurn(ID, 'run the tests')).not.toEqual({ ok: true })
+    expect(orcaSends()).toEqual([])
+    expect(logs.filter((line) => line.startsWith('[observed] pty · not read · '))).toEqual(['[observed] pty · not read · Error'])
   })
 
   // On macOS a tap brings the agent's app forward by its bundle id (cable/hosts/open.ts); every run here is recorded.
