@@ -86,6 +86,8 @@ describe('shared desktop/device notification policy', () => {
     policy.started('s'); policy.ended('s')
     const second = decided(policy, 's', 'Another result')
     vi.runAllTimers()
+    // The next live turn rings again, under its own id.
+    expect(second).toEqual([{ id: expect.any(String), kind: 'done' }])
     expect(second).not.toEqual(first)
 
     policy.started('history', true)
