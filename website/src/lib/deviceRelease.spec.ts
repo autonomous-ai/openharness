@@ -194,6 +194,14 @@ describe("pickBuild", () => {
     const r = builds({ ...LIVE, "device-windows-x64-msi": { url: msi } });
     expect(pickBuild(r, "windows")?.url).toBe(msi);
   });
+
+  it("offers Windows on ARM the ARM64 build and every other Windows the x64 one", () => {
+    const x64 = `${CDN}Harness-Device-windows-x64-setup.exe`;
+    const arm64 = `${CDN}Harness-Device-windows-arm64-setup.exe`;
+    const r = builds({ ...LIVE, "device-windows-x64-exe": { url: x64 }, "device-windows-arm64-exe": { url: arm64 } });
+    expect(pickBuild(r, "windows-arm64")?.url).toBe(arm64);
+    expect(pickBuild(r, "windows")?.url).toBe(x64);
+  });
 });
 
 describe("fetchDeviceRelease", () => {

@@ -68,8 +68,9 @@ export default function Page() {
               <p className={styles.description}>One workspace for all your agents and machines.</p>
               <div className={styles.downloads}>
                 {buildsFor(platform).map(({ id, name, detail, href }) => {
-                  // Any Mac marks macOS (both builds run on either CPU); a Linux CPU nobody named marks neither.
-                  const suggested = id === platform;
+                  // Any Mac marks macOS (both builds run on either CPU), any Windows the one installer for
+                  // both of its CPUs; a Linux CPU nobody named marks neither.
+                  const suggested = id === platform || (id === "windows" && platform === "windows-arm64");
                   return (
                     <a className={suggested ? `${styles.download} ${styles.suggested}` : styles.download} href={href} key={href}>
                       <span className={styles.platform}>{name}</span>

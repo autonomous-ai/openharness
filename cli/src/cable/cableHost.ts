@@ -38,6 +38,7 @@ import type { PetStore } from './pets/store.js'
 import { LANE_SESSION_OVER, LANE_TOKEN_UNAVAILABLE, type MachineFleet } from './machineFleet.js'
 import type { ReviewedAnswer, AnswerReceipt } from './questionInbox.js'
 import { isTier, type Tier } from '../lib/notifyTier.js'
+import { notNewsOf, type NotNews } from '../lib/agentNotifications.js'
 import { DIAL_VOICE_SURFACE, DIAL_VOICE_SURFACE_HEADER, type DialOpenEnd, type DialVoiceEnd } from '../lib/dialUsageContract.js'
 import { HarnessSource } from './hosts/harness.js'
 import { AppFilter, type AppCounts } from './hosts/appFilter.js'
@@ -1647,19 +1648,22 @@ export function cableStepFor(
  * kind reaches the cable the day it reaches the socket.
  */
 export function cableEventFor(
-  frame: { type?: string; agentId?: string; payload?: { kind?: string; text?: string; recap?: string; subagent?: unknown; restored?: unknown; update?: unknown; fullText?: unknown; failed?: unknown; tier?: unknown } },
-): { kind: 'processing' | 'done' | 'summary' | 'error'; agentId: string; text: string; recap: string; subagent: boolean; update?: string; fullText?: string; failed?: boolean; tier?: Tier } | null {
+  frame: { type?: string; agentId?: string; payload?: { kind?: string; text?: string; recap?: string; subagent?: unknown; restored?: unknown; notNews?: unknown; update?: unknown; fullText?: unknown; failed?: unknown; tier?: unknown } },
+): { kind: 'processing' | 'done' | 'summary' | 'error'; agentId: string; text: string; recap: string; subagent: boolean; notNews?: NotNews; update?: string; fullText?: string; failed?: boolean; tier?: Tier } | null {
   if (frame.type !== 'commander_event' || !frame.agentId) return null
   const kind = frame.payload?.kind
   if (kind !== 'processing' && kind !== 'done' && kind !== 'summary' && kind !== 'error') return null
   // `subagent`: a sub-agent's turn end — the tile redraws, nobody is told (CommanderMirrorOpts.isSubagent). A
   // `restored` recap (a turn that ended unseen, CommanderMirror.catchUp) is drawn the same way: history, not news.
   const silent = frame.payload?.subagent === true || frame.payload?.restored === true
+  // `notNews`: why a silent card is not news (lib/agentNotifications.ts), for the devices' log; a word that is not one is dropped.
+  const notNews = notNewsOf(frame.payload ?? {})
   const update = frame.payload?.update
   const fullText = frame.payload?.fullText
   // `tier`: how loudly the turn tells, decided once by the recaps (services/recaps.ts) for every screen.
   const tier = frame.payload?.tier
   return { kind, agentId: frame.agentId, text: frame.payload?.text ?? '', recap: frame.payload?.recap ?? '', subagent: silent,
+    ...(notNews ? { notNews } : {}),
     ...(kind === 'processing' && typeof update === 'string' ? { update } : {}),
     ...(kind === 'summary' && frame.payload?.failed === true ? { failed: true } : {}),
     ...(kind === 'summary' && typeof fullText === 'string' && fullText ? { fullText } : {}),
