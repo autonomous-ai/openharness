@@ -5,9 +5,10 @@ Nothing here was run, because the Mac stays quiet for the tier B eval.
 
 ## Goal
 
-An agent in a pane of the person's own herdr on Windows goes on the page of the desktop app that holds the herdr client
-they attached from (Windows Terminal, VS Code, Cursor, Orca, WezTerm, Alacritty). A tap focuses the herdr pane, then
-brings that app's window forward. That is what macOS and Linux already do (eval IH4, I13).
+An agent in a pane of the person's own herdr on Windows is known to be in the desktop app that holds the herdr client
+they attached from (Windows Terminal, VS Code, Cursor, Orca, WezTerm, Alacritty). It stays on herdr's page, as every
+agent inside a multiplexer does (`select.ts` `pageOf`, Diego 2026-11-23). A tap focuses the herdr pane, then brings
+that app's window forward. That is what macOS and Linux already do (eval IH4, I13).
 
 ## How macOS and Linux find it today
 
@@ -249,7 +250,7 @@ Record names, pids and parents only, never command lines.
 4. Bring another app forward, then `tap <row>`: herdr switches to the agent's pane, WT comes forward, and the log
    counts `[device] raise · window · raised` (or `refused`, the taskbar flash).
 5. Attach a second client from VS Code's integrated terminal, and send a prompt from the agent so its hook runs:
-   `list` now puts the agent on VS Code's page.
+   `list` keeps the agent on herdr's page, and the log says `[device] herdr client · found`.
 6. `tap <row>`: VS Code comes forward with the integrated terminal that holds herdr.
 7. Detach the VS Code client, and send a prompt again: the agent goes back to herdr's page, and a tap raises WT.
 8. In a named session (`herdr --session x`), an agent gets no pane row: as before.

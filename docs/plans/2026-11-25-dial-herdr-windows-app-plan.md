@@ -3,9 +3,9 @@
 > **For agentic workers:** REQUIRED: execute with devcrew phase 3, task by task: a red commit (the failing test), then
 > the code commit. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** An agent in a pane of the person's own herdr on Windows goes on the page of the app that holds the herdr
-client they attached from last, and a tap focuses the pane, then brings that app's window (or the terminal's window)
-forward.
+**Goal:** An agent in a pane of the person's own herdr on Windows is known to be in the app that holds the herdr
+client they attached from last (it stays on herdr's page, `select.ts` `pageOf`), and a tap focuses the pane, then
+brings that app's window (or the terminal's window) forward.
 
 **Architecture:** All in the devices process (`cli/src/cable/hosts/`, wired in `cli/src/services/devices.ts`).
 `herdrOuter.ts` gets a Windows branch that finds the server with `windowsPtyMaker` and the clients by the process
@@ -385,7 +385,7 @@ pid   ppid  image                k   role
   with an `args` field on every row and each row's `startMarker`, a hook from caller 8976 with
   `HERDR_PANE_ID: 'w1:p1'`, `fakeWindowsRaise()`). Widen the `readers.listProcesses` fake's type (~line 219) to
   `Array<RunningProcess & { startMarker?: string }>`, the real reader's, so rows with a start marker type-check:
-  - `on Windows an agent in herdr attached from VS Code is on VS Code's page, and a tap focuses the pane then raises
+  - `on Windows an agent in herdr attached from VS Code has app `vscode` on herdr's page, and a tap focuses the pane then raises
     Code`: the log has `[device] herdr client · found`; the apps list has `vscode`; `openAgent` runs
     `herdr agent focus <pane>` and the raise asks `app` for `com.microsoft.VSCode`.
   - `with client #2 gone, the agent is on herdr's page and a tap raises Windows Terminal's window` (the handoff
@@ -435,8 +435,8 @@ pid   ppid  image                k   role
    3. `list`: the agent's row is on herdr's page; the log has `[device] herdr client · none` (WT), never `not read`.
    4. Bring another app forward, `tap <row>`: herdr switches to the agent's pane, WT comes forward (or its taskbar
       flashes), the log counts `[device] raise · window · raised` or `refused`. **Needs Ken's eye.**
-   5. Attach a second client from VS Code's integrated terminal, send a prompt so the hook runs: `list` puts the agent
-      on VS Code's page, `[device] herdr client · found`.
+   5. Attach a second client from VS Code's integrated terminal, send a prompt so the hook runs: `list` keeps the agent
+      on herdr's page, `[device] herdr client · found`.
    6. `tap <row>`: VS Code comes forward with the integrated terminal holding herdr. **Needs Ken's eye.**
    7. Detach the VS Code client, prompt again: back on herdr's page, and a tap raises WT.
    8. A named session (`herdr --session x`): the agent gets no pane row, as before.
