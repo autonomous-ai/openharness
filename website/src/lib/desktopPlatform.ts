@@ -165,7 +165,7 @@ export async function detectVisitorPlatform(snapshot: NavigatorSnapshot): Promis
         // Anything short of a definite ARM answer keeps the build every Mac can run as before.
         return (await cpuFromClientHints(data)) === "arm64" ? "macos-arm64" : "macos";
       case "Windows":
-        // As on a Mac, only a definite ARM answer leaves the x64 build every Windows PC can run.
+        // As on a Mac, only a definite ARM answer leaves x64, the build every Windows 11 PC runs.
         return (await cpuFromClientHints(data)) === "arm64" ? "windows-arm64" : "windows";
       case "Android":
       case "iOS":
