@@ -120,7 +120,7 @@ export function createAgentCreator({
   prepareApiTools, hookPort, hooksDisabled, installOpencodePlugin, gridLaunchMachine, buildGridLaunch, terminalHintMachineName, blocksFolder,
   gridSetup, privateGridName, dshLaunch, syncProfileHome,
 }: CreateAgentDeps) {
-  const prepare = async (input: Parameters<CreateAgent>[0], authority: LaunchAuthority, context?: { local: boolean }): Promise<LaunchPreparation<Awaited<ReturnType<CreateAgent>>>> => {
+  const prepare = async (input: Parameters<CreateAgent>[0], authority: LaunchAuthority, context?: { local: boolean; creationId?: string }): Promise<LaunchPreparation<Awaited<ReturnType<CreateAgent>>>> => {
     if (input.resumeSessionId) return { ok: true, dispatch: () => externalResume(input) }
     const stale = () => ({ ok: false as const, error: 'LAUNCH_AUTHORITY_CHANGED', unavailable: 'launch', detail: 'Waiting for the original launch request’s authority.' })
     if (!authority.current()) return stale()
@@ -399,6 +399,8 @@ export function createAgentCreator({
     if (!current()) return stale()
     const result = await createAndRegisterPane({
       current, agentId, ...(native ? { nativeToken: native.token } : {}),
+      // Named by the caller's intent, never taken from the authority: a create without one has its session label there.
+      ...(context?.creationId ? { creationId: context.creationId } : {}),
       tmuxBackend: createBackend,
       registry,
       engine,
