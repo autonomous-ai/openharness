@@ -168,8 +168,8 @@ export async function waitForResumedAgent(saved: RegisteredSession, deps: Resume
     // Up means still up a settle time later. A launch the engine refuses (`codex resume` after an
     // update dropped it) runs for an instant, and a resume that saw it in that instant was confirmed
     // over a dead engine (`e2e/updates.e2e.ts`). The restart holds the same rule (`swap.ts`). Every
-    // check above runs on each probe in between, so a pane that exits or a row a hook fails wins
-    // over the confirmation; another process in the pane starts the settle time again.
+    // check above runs on each probe in between, so a pane that exits or a verdict another path puts
+    // on the row wins over the confirmation; another process in the pane starts the settle time again.
     if (process) {
       if (!seen || !sameProcessIdentity(seen.process, process)) seen = { process, at: now() }
       if (now() - seen.at >= ENGINE_SETTLE_MS) return { ok: true, session: { ...row, processIdentity: process }, resumed: resumesConversation(saved.engine, saved.sessionId) }
