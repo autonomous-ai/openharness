@@ -167,9 +167,8 @@ mod tests {
         assert!(gone, "the fake outlived its parent");
     }
 
-    /// Each turn of a wait forks a `sleep`: at 50 turns a second one waiting fake costs a twelfth of a CPU, and a
-    /// killed test run's fakes each cost that until they see their parent gone. Past its first second a wait turns
-    /// slowly.
+    /// Each turn of a wait forks a `sleep`: at 50 turns a second a waiting fake costs about a tenth of a CPU for as
+    /// long as it waits. Past its first second a wait turns slowly.
     #[test]
     fn a_waiting_fake_settles_into_slow_turns() {
         let fake = Fake::new();
@@ -191,8 +190,8 @@ mod tests {
         let program = fake.program();
         let invocation = find_cli(program.parent().unwrap(), Some(&path), Some(&program)).unwrap();
         let watch = HarnessCli::new(invocation, fake.log()).spawn(&["hardware", "watch", "--json"]).unwrap();
-        // The turns once there are more than `least`, and when that was asked, every 10 ms for 30 s at most: through the
-        // shim a short turn takes ~65 ms on a busy Mac, so the first 50 take seconds.
+        // The turns once there are more than `least`, and when that was asked, every 10 ms for 30 s at most: through
+        // the shim a short turn takes ~65 ms on a busy Mac, so the first 50 take seconds.
         let turns_past = |least: usize| {
             let end = Instant::now() + Duration::from_secs(30);
             loop {

@@ -34,9 +34,10 @@ end() {
   exit "$1"
 }
 
-# Waits until the file $1 is in the folder; with no name, for ever. `kill -0`, `[` and `$((...))` are builtins: a turn
-# forks only its sleep. The first 50 turns are short, so a test that touches the file soon goes on at once; then a turn
-# is 0.25 s, as 50 forks a second cost a waiting fake a twelfth of a CPU for as long as it waits.
+# Waits until the file $1 is in the folder; with no name, for ever. `kill -0` and `[` are builtins and the count is
+# the shell's own arithmetic: a turn forks only its sleep. The first 50 turns are short, so a test that touches the file
+# soon goes on at once; then a turn is 0.25 s, as 50 forks a second cost a waiting fake about a tenth of a CPU for as
+# long as it waits.
 wait_for() {
   turns=0
   while [ -z "$1" ] || [ ! -e "$dir/$1" ]; do
