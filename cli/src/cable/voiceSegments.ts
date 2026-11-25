@@ -98,10 +98,10 @@ export class VoiceSegments {
     if (!this.stopped) this.stop(new DOMException('Voice recording cancelled', 'AbortError'))
   }
 
-  /** Complete once finish() has been called: the whole recording's peak and RMS and whether the dial's gate heard
-   *  speech in it, as the dial sent it; its voice and floor over 20 ms frames (voiceGain.ts); and the largest gain a
-   *  segment went up with, in dB. */
-  level(): { peak: number; rms: number; heard: boolean; voice: number; floor: number; gain: number } {
+  /** Complete once finish() has been called: the whole recording's peak, RMS and share of samples at full scale and
+   *  whether the dial's gate heard speech in it, as the dial sent it; its voice and floor over 20 ms frames
+   *  (voiceGain.ts); and the largest gain a segment went up with, in dB. */
+  level(): { peak: number; rms: number; clip: number; heard: boolean; voice: number; floor: number; gain: number } {
     return { ...this.runningLevel.read(), ...voiceOf(this.frameLevels), gain: decibels(this.gain) }
   }
 

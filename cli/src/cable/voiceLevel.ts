@@ -1,10 +1,14 @@
 /**
- * How loud one capture was: the peak and RMS of 16-bit little-endian mono PCM, in sample units (0..32768), and whether
- * it held speech by the dial's own voice gate.
+ * How loud one capture was: the peak and RMS of 16-bit little-endian mono PCM, in sample units (0..32768), the share of
+ * its samples at full scale, per mille, and whether it held speech by the dial's own voice gate.
  *
  * Numbers only, so a log can say whether a turn the transcriber answered with nothing was silence, noise or
  * speech without keeping a sample of the audio (OPENHARNES-18: every turn spoken while the dial followed Hachi
  * came back empty, and nothing in the log said what the dial had actually recorded).
+ *
+ * The clip share is counted because the round dial's mic runs at the ES7210's top gain and loud speech saturates: a
+ * peak of 32767 cannot tell one touched sample from a flat-topped clip, and this share, from hosts in the field, shows
+ * whether a later firmware gain change worked.
  *
  * Summed piece by piece: a long recording is uploaded in segments while the person talks, so no single buffer holds
  * all of it.
@@ -13,6 +17,7 @@ export class VoiceLevel {
   private peak = 0
   private squares = 0
   private samples = 0
+  private clipped = 0
   // The gate is the firmware's voice_gate_feed (devices/harness-device/firmware/main/voice_buffer.c), so the daemon and
   // the dial name one recording speech by one rule: a 10 ms block is loud when its mean |sample| is over 600, and the
   // recording is heard once 320 ms of loud blocks run unbroken (2026-11-25: an empty transcript mixed a press with
@@ -38,14 +43,21 @@ export class VoiceLevel {
       const a = Math.abs(s)
       if (a > this.peak) this.peak = a
       this.squares += s * s
+      if (s >= 32767 || s <= -32768) this.clipped++
       if (!this.heard) this.gate(a)
     }
     this.samples += samples
   }
 
-  read(): { peak: number; rms: number; heard: boolean } {
-    if (this.samples === 0) return { peak: 0, rms: 0, heard: false }
-    return { peak: this.peak, rms: Math.round(Math.sqrt(this.squares / this.samples)), heard: this.heard }
+  /** [clip] is per mille, to two decimals. */
+  read(): { peak: number; rms: number; clip: number; heard: boolean } {
+    if (this.samples === 0) return { peak: 0, rms: 0, clip: 0, heard: false }
+    return {
+      peak: this.peak,
+      rms: Math.round(Math.sqrt(this.squares / this.samples)),
+      clip: Math.round(this.clipped * 100_000 / this.samples) / 100,
+      heard: this.heard,
+    }
   }
 
   private gate(a: number): void {
