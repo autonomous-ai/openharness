@@ -193,8 +193,8 @@ LINUX_E2E_ORCA_PATHS = ("cli/e2e/harness/orcaHost.ts", "cli/e2e/harness/inOrca.t
 # (its homes and the recorded app), the harness's loop that runs the plugin and its dial stream, Orca's fake CLI and
 # terminal-host stand-in, and InOrca; for every app, the rest of the harness the driver runs (its desk, dial, backend,
 # mod inbox, scheme apps and ChatGPT's Codex CLI; iTerm2's tmux and herdr with the recording wrapper and the herdr-only
-# process table: test_ci_plan walks the imports). A change to one runs them beside the PR's own files; its deletion too,
-# as the Orca paths' does.
+# process table: test_ci_plan walks the imports), and the clip its dial sends for the voice gate to hear. A change to
+# one runs them beside the PR's own files; its deletion too, as the Orca paths' does.
 LINUX_E2E_APP_EVAL_FILES = ("cli/e2e/dialAppEvalClaude.e2e.ts", "cli/e2e/dialAppEvalChatgpt.e2e.ts",
                             "cli/e2e/dialAppEvalVscode.e2e.ts", "cli/e2e/dialAppEvalCursor.e2e.ts",
                             "cli/e2e/dialAppEvalOrca.e2e.ts", "cli/e2e/dialAppEvalHeldOut.e2e.ts")
@@ -205,6 +205,7 @@ LINUX_E2E_APP_EVAL_PATHS = ("cli/src/cable/hosts/", "cli/src/testing/dialAppEval
                             "cli/src/cable/vscodeExtensionSetup.ts", "cli/src/engines/cursor/",
                             "cli/src/core/engines/cursorDiscovery.ts", "plugins/harness-device-orca/src/",
                             "cli/src/devices/orcaHomes.ts", "cli/src/testing/recordedOrca.ts",
+                            "cli/src/cable/__fixtures__/heardClip.ts",
                             *(f"cli/e2e/harness/{name}.ts" for name in ("vscodeWindow", "outsideAgent", "codexOutside",
                                                                          "cursorOutside", "editorWindow", "fakeOrca",
                                                                          "inOrca", "orcaHost", "pluginDial",
@@ -221,6 +222,7 @@ DIAL_HOST_FILES = ("cli/e2e/dialHost*.e2e.ts", "cli/e2e/deviceHerdr.e2e.ts")
 DIAL_HOST_PATHS = (
     "cli/e2e/harness/dialHosts.ts", "cli/vitest.e2e.dialHosts.config.ts", "cli/src/cable/hosts/",
     "cli/src/testing/dialCarousel.ts", *(f"cli/src/cable/{name}.ts" for name in ("cableFrame", "portAccess", "roundGlyphs")),
+    "cli/src/cable/__fixtures__/heardClip.ts",
     *(f"cli/e2e/harness/{name}.ts" for name in ("desk", "fakeBackend", "fakeDial", "fakeOrca", "herdrServer", "inOrca",
                                                  "kittyWindow", "orcaHost", "outsideAgent", "runLog", "swayDesk",
                                                  "weztermMux", "x11Desk", "zellijSession")),
