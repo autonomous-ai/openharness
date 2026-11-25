@@ -131,7 +131,9 @@ session first" step, `core/agents/hermesTerminal.ts:141`, if that is all it is f
 
 Every reader of an engine's JSON settings file the hooks install into (Claude Code's `settings.json`, Codex's
 `hooks.json` and the others `inspectHookFile` reads, and the review and folder-trust readers of the same files) takes
-a leading UTF-8 BOM. A file the hooks rewrite is written without one; Claude Code and Codex read both.
+a leading UTF-8 BOM. A file the hooks rewrite is written without one, and a file whose text equals Harness's after a
+BOM is rewritten once without it: Codex's JSON reader does not skip a BOM, so a `hooks.json` left with one would run no
+hooks while Harness reported them current (final review).
 
 ## Approaches
 
