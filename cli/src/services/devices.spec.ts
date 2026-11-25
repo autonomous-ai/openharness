@@ -28,6 +28,7 @@ import { ORCA_CHAT_TIMEOUT_MS } from '../cable/hosts/orcaChatSource.js'
 import type { RexPane, RexReads } from '../cable/hosts/rex.js'
 import { FRESH_WITHIN_MS } from '../cable/hosts/outer.js'
 import { AppRings } from '../cable/hosts/select.js'
+import type { TabTty } from '../cable/hosts/tabs.js'
 import { env } from '../config/env.js'
 import { cursorDataDir } from '../engines/cursor/contract.js'
 import { routeVoiceTask } from '../lib/voiceRouter.js'
@@ -3979,7 +3980,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       readers.apps.mockResolvedValueOnce(new Map([[5242, 'ghostty']]))
       found('sess-1', 4242)
       found('sess-2', 5242)
-      const tty = vi.fn(async (_pid: number) => 'ttys040')
+      const tty = vi.fn(async (_pid: number): Promise<TabTty> => ({ tty: 'ttys040' }))
       const { port } = startHere({ tty, orca: { ...mac, run: tmuxRun } })
       attach(port)
       await vi.waitFor(() => expect(scanLine()).toHaveLength(1))
@@ -4324,7 +4325,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
         onTestFinished(() => { readers.apps.mockImplementation(own) })
         const herdr = herdrRows([['w1:p1', 'sess-3'], ['w1:p2', 'sess-4']])
         const listener = fakeListener()
-        const { port } = startHere({ listen: listener.listen, herdr: herdr.client, tty: async (pid) => pid === 4101 ? '/dev/ttys001' : undefined,
+        const { port } = startHere({ listen: listener.listen, herdr: herdr.client, tty: async (pid) => pid === 4101 ? { tty: '/dev/ttys001' } : undefined,
           orca: { ...mac, onPath: (name: string) => `/opt/${name}/bin/${name}`, run } })
         if (how === 'hooked') {
           port.observed(hooked('sess-p', 4101, { TERM_PROGRAM: 'iTerm.app' }))
@@ -6539,7 +6540,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   /** The Claude Code agent in a Terminal tab, on macOS, its dial on the cable and its tty read. */
   const inTab = async (over: Parameters<typeof start>[0] = {}, hostHints: Record<string, string> = {}) => {
     const listener = fakeListener()
-    const tty = vi.fn(async (_pid: number): Promise<string | undefined> => TTY)
+    const tty = vi.fn(async (_pid: number): Promise<TabTty | undefined> => ({ tty: TTY }))
     const started = startHere({ orca: mac, listen: listener.listen, tty, ...over })
     started.port.observed(hook('session-start', { hostHints: { __CFBundleIdentifier: 'com.apple.Terminal', ...hostHints } }))
     attach(started.port)
@@ -7160,7 +7161,7 @@ describe('the session the Claude app shows turns the dial (docs/specs/2026-11-15
     vi.useFakeTimers()
     const listener = fakeListener()
     const started = start({ faults: ['fleet'], listen: listener.listen, orca: { ...orca, platform: 'darwin' }, now: () => Date.now(),
-      tty: async () => '/dev/ttys023' })
+      tty: async () => ({ tty: '/dev/ttys023' }) })
     const front = (to: string) => { expect(listener.front(to)).toBeUndefined() }
     const attach = (sessionId: string) => { expect(listener.attach(sessionId)).toBeUndefined() }
     started.port.observed(hook('session-start'))
@@ -7574,7 +7575,7 @@ describe('the session the Claude app shows turns the dial (docs/specs/2026-11-15
     vi.useFakeTimers()
     const listener = fakeListener()
     const { port } = start({ faults: ['fleet'], listen: listener.listen, orca: { ...orca, platform: 'darwin' }, now: () => Date.now(),
-      tty: async () => '/dev/ttys023' })
+      tty: async () => ({ tty: '/dev/ttys023' }) })
     readers.known.set(S, 'terminal')
     readers.owners.set(S, { engine: 'claude', pid: 4300, record: '/s/4300.json' })
     readers.rows.set(S, { cwd: '/work/api', transcriptPath: null })
@@ -7629,7 +7630,7 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
     vi.useFakeTimers()
     clock = 0
     const listener = fakeListener()
-    const tty = vi.fn(async (pid: number): Promise<string | undefined> => ttyOf(pid - 4241))
+    const tty = vi.fn(async (pid: number): Promise<TabTty | undefined> => ({ tty: ttyOf(pid - 4241) }))
     const started = start({ faults: ['fleet'], orca: { ...orca, platform: 'darwin', run: run ?? orca.run }, listen: listener.listen, tty, now: () => clock })
     for (let n = 1; n <= agents; n++) started.port.observed(hook(n))
     seen.host.watching!(true)
@@ -8061,7 +8062,7 @@ describe('selecting a tmux client\'s tab moves the dial on the terminal app\'s p
     clock = 0
     readers.processes.mockResolvedValue(TMUX_IN_ITERM)
     const listener = fakeListener()
-    const tty = vi.fn(async (pid: number): Promise<string | undefined> => (pid === 4101 ? PLAIN_TAB : undefined))
+    const tty = vi.fn(async (pid: number): Promise<TabTty | undefined> => (pid === 4101 ? { tty: PLAIN_TAB } : undefined))
     const started = start({ faults: ['fleet'], orca: { ...orca, platform: 'darwin', run: tmuxInItermRun }, listen: listener.listen, tty, now: () => clock })
     started.port.observed(hooked('sess-t', 4110, { __CFBundleIdentifier: 'com.apple.Terminal' }))
     if (plain) started.port.observed(hooked('sess-p', 4101, { TERM_PROGRAM: 'iTerm.app' }))

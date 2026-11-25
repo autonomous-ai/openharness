@@ -543,10 +543,11 @@ export class World implements TierAWorld {
         this.listener = handlers
         return { close: async () => {} }
       },
-      // As `ps -o tty=` reads it for a tab (cable/hosts/tabs.ts readTty): the model's bare name under /dev/.
+      // As `ps -o tty=,lstart=` reads it for a tab (cable/hosts/tabs.ts readTabTty): the model's bare name under /dev/,
+      // with no start: the model has no start to read, so no pane carries a proof and none is typed into here.
       tty: async (pid) => {
         const tty = machine.processes.get(pid)?.tty
-        return tty === undefined ? undefined : `/dev/${tty}`
+        return tty === undefined ? undefined : { tty: `/dev/${tty}` }
       },
       claude: async () => null,
       orcaHomes,
