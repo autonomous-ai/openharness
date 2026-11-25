@@ -265,9 +265,9 @@ export function droppedKeys(baseline: Baseline | null, results: RunResults, tier
   const subsets = replaced(results, tiers)
   const given = new Set(results.results.map(resultKey))
   const gapRuns = new Set(results.gaps.map(runKey))
-  // checks.ts alone decides which part is timed: grading on nothing seen gives every part, once a run.
+  // checks.ts alone decides which part is timed: grading on nothing seen gives each timed part, once a run.
   const timedChecks = new Map<string, Set<string>>()
-  const timedB = (key: string, scenario: Scenario, check: string): boolean => {
+  const timedPart = (key: string, scenario: Scenario, check: string): boolean => {
     const run = runOfKey(key)
     let timed = timedChecks.get(run)
     if (!timed) {
@@ -285,7 +285,7 @@ export function droppedKeys(baseline: Baseline | null, results: RunResults, tier
     const wait = /^wait\.(\d+)$/.exec(check)
     // An update never writes a tier B timed key (updateBaseline), and every wait is timed (runner.ts). A part the
     // grading above does not give is no timed one: it stays asked, so the update is refused naming it.
-    if (key.startsWith('b/') && (wait || timedB(key, scenario, check))) return false
+    if (key.startsWith('b/') && (wait || timedPart(key, scenario, check))) return false
     if (wait) {
       const step = scenario.steps[Number(wait[1])]
       return step?.kind === 'wait' && step.until !== undefined
