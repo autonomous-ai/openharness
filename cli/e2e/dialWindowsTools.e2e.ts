@@ -54,6 +54,7 @@ async function bundledDesk(run: (desk: {
   const out = mkdtempSync(join(tmpdir(), 'desk-bundle-'))
   let child: ChildProcessByStdio<Writable, Readable, Readable> | undefined
   let exited: Promise<number | null> | undefined
+  let failed = true
   try {
     await promisify(execFile)(process.execPath, [join('scripts', 'windows-dial-e2e', 'bundle.mjs'), out], { cwd: CLI_ROOT, timeout: 240_000 })
     const env: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(NODE_OPTIONS|NODE_PATH|E2E_.*|VITEST.*)$/i.test(name)))
@@ -79,15 +80,27 @@ async function bundledDesk(run: (desk: {
       throw new Error(`${error.message}\n${[...lines.slice(-20), stderr].join('\n')}`)
     })
     await run({ child: desk, said, exited: ended, stderr: () => stderr })
+    failed = false
   } finally {
     // A quit first, so the desk ends its daemon and the terminal host that outlives it, which a kill leaves running on
-    // Windows; a desk that does not end on it is killed.
+    // Windows; a desk that does not end on it is killed, and its end awaited, since on Windows the folder it runs in
+    // cannot be deleted while it lives.
     const running = child && child.exitCode === null && child.signalCode === null ? child : undefined
-    if (running && exited) {
+    const end = exited
+    if (running && end) {
       running.stdin.end('quit\n')
-      await within(exited, 60_000, 'the desk\'s end').catch(() => running.kill())
+      await within(end, 60_000, 'the desk\'s end').catch(() => {
+        running.kill()
+        return within(end, 10_000, 'the killed desk\'s end').catch(() => null)
+      })
     }
-    rmSync(out, { recursive: true, force: true, maxRetries: 5 })
+    // A folder left behind is not the failure of a run that failed: the run's own failure is.
+    try {
+      rmSync(out, { recursive: true, force: true, maxRetries: 5 })
+    } catch (error) {
+      if (!failed) throw error
+      console.warn(`the bundled desk's folder is left: ${(error as Error).message}`)
+    }
   }
 }
 
