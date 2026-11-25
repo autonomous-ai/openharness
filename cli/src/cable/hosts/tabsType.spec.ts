@@ -101,8 +101,8 @@ function world(over: Partial<TabsTypeDeps> = {}, answers?: WroteAnswer[]) {
   let current: TabsLine | undefined = stream.line
   const deps: TabsTypeDeps = {
     line: () => current,
-    shared: (tty, pid) => {
-      log.push(`shared ${tty} ${pid}`)
+    shared: (app, tty, pid) => {
+      log.push(`shared ${app} ${tty} ${pid}`)
       return false
     },
     process: async (pid) => {
@@ -143,7 +143,7 @@ function secondly<T>(first: T, then: T): () => Promise<T> {
   return async () => (++asked === 1 ? first : then)
 }
 
-const PROBES = ['process 4101', `readers ${TTY}`, 'processes', `shared ${TTY} 4101`, 'atPrompt']
+const PROBES = ['process 4101', `readers ${TTY}`, 'processes', `shared ghostty ${TTY} 4101`, 'atPrompt']
 
 describe('readTabProcess', () => {
   it('asks ps once for the tty, the groups and the start, with 1 s and 256 bytes', async () => {

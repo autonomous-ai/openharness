@@ -2115,6 +2115,7 @@ describe('ObservedSource actions', () => {
   describe('othersOnTty', () => {
     const TTY = '/dev/ttys003'
     const inIterm = { hostHints: { TERM_PROGRAM: 'iTerm.app' } }
+    const inGhostty = { hostHints: { TERM_PROGRAM: 'ghostty' } }
     /** A source whose every tty read answers [TTY], and whose tmux events sit in an iTerm2 tab of [TTY]. */
     const onTty = () => setup({
       tty: vi.fn(async (_pid: number): Promise<TabTty> => ({ tty: TTY })),
@@ -2126,11 +2127,11 @@ describe('ObservedSource actions', () => {
       const t = onTty()
       t.src.ingest(t.ev('session-start', { ...inIterm, sessionId: 'a', callerPid: 4101 }))
       await flushed()
-      expect(t.src.othersOnTty(TTY, 4101)).toBe(false)
+      expect(t.src.othersOnTty('iterm', TTY, 4101)).toBe(false)
       t.src.ingest(t.ev('session-start', { ...inIterm, sessionId: 'b', callerPid: 4102 }))
       await flushed()
-      expect(t.src.othersOnTty(TTY, 4101)).toBe(true)
-      expect(t.src.othersOnTty('/dev/ttys004', 4101)).toBe(false)
+      expect(t.src.othersOnTty('iterm', TTY, 4101)).toBe(true)
+      expect(t.src.othersOnTty('iterm', '/dev/ttys004', 4101)).toBe(false)
     })
 
     it('an ended one does not count', async () => {
@@ -2139,7 +2140,7 @@ describe('ObservedSource actions', () => {
       t.src.ingest(t.ev('session-start', { ...inIterm, sessionId: 'b', callerPid: 4102 }))
       await flushed()
       t.src.ingest(t.ev('session-end', { ...inIterm, sessionId: 'b', callerPid: 4102 }))
-      expect(t.src.othersOnTty(TTY, 4101)).toBe(false)
+      expect(t.src.othersOnTty('iterm', TTY, 4101)).toBe(false)
     })
 
     it('a nested one whose client\'s tab is that tty counts', async () => {
@@ -2148,18 +2149,32 @@ describe('ObservedSource actions', () => {
       t.src.ingest(t.ev('session-start', { sessionId: 'b', callerPid: 4102, hostHints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux' } }))
       await flushed()
       expect(t.src.tabTty(t.src.list().find((a) => a.sessionId === 'b')!.id)).toBe(TTY)
-      expect(t.src.othersOnTty(TTY, 4101)).toBe(true)
+      expect(t.src.othersOnTty('iterm', TTY, 4101)).toBe(true)
     })
 
     // A codex exec Claude Code runs reads Claude's tty: until Claude's own read answers, Claude may be on it.
-    it('one in a tab app whose tty read failed, or has not answered, may be on that tty', async () => {
+    it('one in the same tab app whose tty read failed, or has not answered, may be on that tty', async () => {
       const reads = [(): Promise<TabTty> => Promise.reject(new Error('ps')), (): Promise<TabTty> => new Promise(() => {})]
       for (const claudeRead of reads) {
         const t = setup({ tty: vi.fn((pid: number) => (pid === 4101 ? claudeRead() : Promise.resolve({ tty: TTY }))) })
-        t.src.ingest(t.ev('session-start', { ...inIterm, sessionId: 'a', callerPid: 4101 }))
-        t.src.ingest(t.ev('session-start', { ...inIterm, engine: 'codex', sessionId: 'b', callerPid: 4102 }))
+        t.src.ingest(t.ev('session-start', { ...inGhostty, sessionId: 'a', callerPid: 4101 }))
+        t.src.ingest(t.ev('session-start', { ...inGhostty, engine: 'codex', sessionId: 'b', callerPid: 4102 }))
         await flushed()
-        expect(t.src.othersOnTty(TTY, 4102)).toBe(true)
+        expect(t.src.othersOnTty('ghostty', TTY, 4102)).toBe(true)
+      }
+    })
+
+    // One read failed in another tab app is no reason to refuse every Ghostty tab: a codex exec gets its app from
+    // Claude's own environment, so the two are always in one app.
+    it('one in another tab app whose tty read failed, or has not answered, is on no tab of this app', async () => {
+      const reads = [(): Promise<TabTty> => Promise.reject(new Error('ps')), (): Promise<TabTty> => new Promise(() => {})]
+      for (const itermRead of reads) {
+        const t = setup({ tty: vi.fn((pid: number) => (pid === 4101 ? itermRead() : Promise.resolve({ tty: TTY }))) })
+        t.src.ingest(t.ev('session-start', { ...inIterm, sessionId: 'a', callerPid: 4101 }))
+        t.src.ingest(t.ev('session-start', { ...inGhostty, engine: 'codex', sessionId: 'b', callerPid: 4102 }))
+        await flushed()
+        expect(t.src.othersOnTty('ghostty', TTY, 4102)).toBe(false)
+        expect(t.src.othersOnTty('iterm', TTY, 4102)).toBe(true)
       }
     })
 
@@ -2168,7 +2183,7 @@ describe('ObservedSource actions', () => {
       t.src.ingest(t.ev('session-start', { ...inIterm, sessionId: 'a', callerPid: 4101 }))
       t.src.ingest(t.ev('session-start', { ...inIterm, engine: 'codex', sessionId: 'b', callerPid: 4102 }))
       await flushed()
-      expect(t.src.othersOnTty(TTY, 4102)).toBe(false)
+      expect(t.src.othersOnTty('iterm', TTY, 4102)).toBe(false)
     })
   })
 
