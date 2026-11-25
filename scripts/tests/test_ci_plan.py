@@ -76,8 +76,12 @@ def imports_from(root, sources, within):
 
 
 def config_list(config, key):
-    """The single-quoted entries of a vitest config's `key: [...]` list."""
-    return re.findall(r"'([^']+)'", re.search(rf"\b{key}: \[([^\]]*)\]", config).group(1))
+    """The single-quoted entries of a vitest config's `key: [...]` list. A list read in part drops entries silently, so
+    a second `key:`, or anything in the brackets besides those entries (a spread, a variable), fails instead."""
+    lists = re.findall(rf"\b{key}: \[([^\]]*)\]", re.sub(r"(?m)^\s*//.*$", "", config))
+    if len(lists) != 1 or re.sub(r"'[^']+'|[\s,]", "", lists[0]):
+        raise ValueError(f"{key}: not one list of single-quoted entries: {lists}")
+    return re.findall(r"'([^']+)'", lists[0])
 
 
 class SelectionTests(unittest.TestCase):
