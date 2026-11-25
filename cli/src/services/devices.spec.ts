@@ -16944,5 +16944,44 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
       expect(lines).toHaveLength(2)
       for (const line of lines) expect(line).toMatch(/^\[device\] herdr focus · skipped · (not in front|echo|unknown agent)$/)
     })
+
+    // Eval I14: herdr started again, each session resumed in a new pane (`claude --resume`), a new caller whose lookup
+    // takes a ps read or two. Under load both lookups ran at once, herdr's page emptied and the dial fell back to the app
+    // in front; one alone put its agent back at the ring's end.
+    it('herdr\'s page picked, two herdr agents resumed from new callers whose lookups are held: the dial keeps herdr\'s page and both rows in their order across the reads', async () => {
+      /** herdr's server started in the app in front: its panes' hints name it. */
+      const IN_PANE = (pane: string) => ({ HERDR_PANE_ID: pane, TERM_PROGRAM: 'Apple_Terminal' })
+      /** The resumed sessions' callers: 4252 in w1:p1's shell, 4253 in w1:p2's. */
+      const RESUMED = IN_TERMINAL.map((p) => (p.pid === 4242 ? { ...p, pid: 4252 } : p.pid === 4243 ? { ...p, pid: 4253 } : p))
+      // sess-3 in a plain Terminal tab: Terminal's page is not empty.
+      const { port, settle } = await herdrWith({ hooks: [hook(1, IN_PANE('w1:p1')), hook(2, IN_PANE('w1:p2')), hook(3, { TERM_PROGRAM: 'Apple_Terminal' })] })
+      await settle('terminal-app')
+      expect(host().pickApp('herdr')).toBe('switched')
+      const ring = async () => {
+        const { apps, agents } = await host().listAgentSnapshot({ apps: true })
+        return [apps?.shown, agents.map(({ id }) => id)]
+      }
+      const lookups = () => logs.filter((line) => line.startsWith('[device] herdr client ·'))
+      const before = await ring()
+      expect(before).toEqual(['herdr', expect.arrayContaining([agent(1), agent(2)])])
+      expect(before[1]).toHaveLength(2)
+      const held: Array<() => void> = []
+      readers.processes.mockImplementation(() => new Promise((resolve) => { held.push(() => resolve(RESUMED)) }))
+      port.observed(hook(1, IN_PANE('w1:p1'), { callerPid: 4252 }))
+      await settled()
+      expect(await ring()).toEqual(before)
+      port.observed(hook(2, IN_PANE('w1:p2'), { callerPid: 4253 }))
+      await settled()
+      expect(await ring()).toEqual(before)
+      // The lookups wait on their reads.
+      expect(held.length).toBeGreaterThan(0)
+      expect(lookups()).toHaveLength(2)
+      readers.processes.mockResolvedValue(RESUMED)
+      for (const land of held.splice(0)) land()
+      await vi.waitFor(() => expect(lookups()).toHaveLength(4))
+      await settled()
+      expect(await ring()).toEqual(before)
+      expect(await shown()).toBe('herdr')
+    })
   })
 })
