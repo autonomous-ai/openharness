@@ -12,7 +12,7 @@ import { RECORDED_ORCA } from '../../testing/recordedOrca.js'
 import { ObservedSource, type ObservedDeps } from './observed.js'
 import {
   appRoots, learnApps, parseProcessNames, ptyMaker, readBundleId, readMadeBy, readProcessNames, readPtyMaker,
-  readPtyOwner, readTtyName, readWindowsPtyOwner, scannedApps, windowsPtyOwner,
+  readPtyOwner, readTtyName, readWindowsProcesses, readWindowsPtyOwner, scannedApps, windowsPtyMaker, windowsPtyOwner,
   WALK_PARENTS, type ProcessName, type PtyProcess, type ScannedAppDeps, type WindowsProcess,
 } from './scannedApp.js'
 
@@ -598,6 +598,44 @@ describe('the host that made a Windows process\'s terminal', () => {
     expect(error).toEqual(new Error('process table not read'))
     expect(await readWindowsPtyOwner(10, async () => ORCA)).toBe('orca')
     expect(await readWindowsPtyOwner(10, async () => under('pwsh.exe', 'Code.exe'))).toBeUndefined()
+  })
+
+  it('windowsPtyMaker gives the herdr server\'s pid', () => {
+    // The spec's tree: a `w:<FILETIME>` start a row, so a larger pid started later.
+    const mark = (n: number): string => `w:${134080735400000000n + BigInt(n)}`
+    const tree = win([
+      [50, 0, 'explorer.exe', mark(50)], [100, 50, 'WindowsTerminal.exe', mark(100)], [110, 100, 'pwsh.exe', mark(110)],
+      [120, 110, 'herdr.exe', mark(120)], [130, 120, 'herdr.exe', mark(130)], [140, 130, 'pwsh.exe', mark(140)],
+      [150, 140, 'claude.exe', mark(150)],
+    ])
+    expect(windowsPtyMaker(150, tree)).toEqual({ pid: 130, host: 'herdr' })
+    // A maker no table lists is still the maker: its pid, and no host.
+    expect(windowsPtyMaker(10, under('pwsh.exe', 'Code.exe'))).toEqual({ pid: 12 })
+    expect(windowsPtyMaker(99, tree)).toBeUndefined()
+    expect(windowsPtyMaker(10, win([[10, 9, 'claude.exe'], [9, 1, 'pwsh.exe']]))).toBeUndefined()
+  })
+})
+
+describe('the Windows table a lookup reads', () => {
+  it('readWindowsProcesses keeps four columns', async () => {
+    // A command line is outside text and can carry a secret: no row a lookup reads holds one.
+    const listed = [
+      { pid: 1, ppid: 0, executable: 'herdr.exe', startMarker: 'w:1', args: 'herdr --secret', commandPath: 'x' },
+      { pid: 2, ppid: 1, executable: 'pwsh.exe', args: 'pwsh' },
+    ]
+    expect(await readWindowsProcesses(async () => listed)).toStrictEqual([
+      { pid: 1, ppid: 0, executable: 'herdr.exe', startMarker: 'w:1' }, { pid: 2, ppid: 1, executable: 'pwsh.exe' },
+    ])
+  })
+
+  it('readWindowsProcesses rejects on an empty table, naming nothing', async () => {
+    await expect(readWindowsProcesses(async () => [])).rejects.toThrow(new Error('process table not read'))
+  })
+
+  it('a Windows row carries no command line', () => {
+    const row: WindowsProcess = { pid: 1, ppid: 0, executable: 'a.exe' }
+    // @ts-expect-error the lookup's rows carry no command line
+    void row.args
   })
 })
 
