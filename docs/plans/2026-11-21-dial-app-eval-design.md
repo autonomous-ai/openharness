@@ -248,7 +248,9 @@ carousel.
 - **Baseline:** a committed JSON file beside the catalog: each check's score keyed by tier, platform, scenario and
   check, and the app scores. Tier B entries are kept per platform; a platform with no baseline entry is graded and
   reported, and only the gate is asserted for it. In this pull request tier B's baseline holds macOS only: Linux is
-  gate-only until a later item adds its entries (PM, 2026-11-21).
+  gate-only until a later item adds its entries (PM, 2026-11-21). Tier B entries hold its untimed results only, and its
+  app scores are made of those, as is the report's delta: a timed one scores the host's clock, which moves between runs
+  of the same commit. The headline still counts it (PM, 2026-11-25).
 - **Report** (printed, and written as JSON and Markdown to `DIAL_EVAL_OUT`, default a temp folder): the score table app ×
   dimension (main set), the held-out table, per-tier and per-platform rows, the gate result with each wrong-session send,
   each failing check with its evidence (the frames, commands, deliveries or log lines it saw), the ranked groups by

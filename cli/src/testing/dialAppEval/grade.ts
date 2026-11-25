@@ -2,10 +2,11 @@
 // verdicts the tier A spec and the tier B files assert (docs/plans/2026-11-21-dial-app-eval-design.md).
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { evaluate } from './checks.js'
 import {
   APPS, DIMENSIONS, WEIGHTS, resultKey,
   type App, type AppScores, type Baseline, type CheckResult, type CoverageGap, type Dimension, type Group,
-  type Platform, type Report, type RunResults, type Scenario, type Tier, type Verdict,
+  type Platform, type Report, type RunResults, type Scenario, type Seen, type Tier, type Verdict,
 } from './types.js'
 
 export const BASELINE_PATH = fileURLToPath(new URL('./baseline.json', import.meta.url))
@@ -41,10 +42,14 @@ function scoredResults(results: RunResults): CheckResult[] {
   return results.results.filter((r) => !gapRuns.has(runKey(r)))
 }
 
-/** What the scores are made of: a wait that held is the harness's own readiness, kept in the results only so the
- *  baseline sees one that stops holding; one that missed costs its dimension (runner.ts). */
+/** What the scores are made of: a wait that held is the harness's own readiness, kept in the results only so tier A's
+ *  exact baseline sees one that stops holding; one that missed costs its dimension (runner.ts). */
 const scoring = (results: readonly CheckResult[]): CheckResult[] =>
   results.filter((r) => !(r.check.startsWith('wait.') && r.score === 1))
+
+/** A tier B timed result scores the host's wall clock, which moves between runs of the same commit: it counts in the
+ *  headline, but nothing held or committed (the baseline, its app scores, the report's delta) is made of it. */
+const runnerTimed = (r: Pick<CheckResult, 'tier' | 'timed'>): boolean => r.tier === 'b' && r.timed
 
 function appScores(results: readonly CheckResult[], gaps: readonly CoverageGap[], app: App): AppScores {
   const rows = results.filter((r) => r.app === app)
@@ -66,7 +71,7 @@ function table(results: readonly CheckResult[], gaps: readonly CoverageGap[]): R
 
 /** Each subset's main-set app scores, for the subsets given. */
 function subsetScores(results: RunResults, subsets: Iterable<string>): Map<string, Record<App, number | null>> {
-  const main = scoring(scoredResults(results)).filter((r) => !r.heldOut)
+  const main = scoring(scoredResults(results)).filter((r) => !r.heldOut && !runnerTimed(r))
   const gaps = results.gaps.filter((g) => !g.heldOut)
   return new Map([...subsets].map((subset) => {
     const scores = table(main.filter((r) => subsetOf(r) === subset), gaps.filter((g) => subsetOf(g) === subset))
@@ -129,7 +134,10 @@ export function grade(results: RunResults, baseline: Baseline | null): Report {
   const before = baseline?.checks ?? {}
   // A baseline entry of a subset this run did not drive is not a change.
   const subsets = new Set([...results.results, ...results.gaps].map(subsetOf))
-  const keys = new Set([...after.keys(), ...Object.keys(before).filter((key) => subsets.has(subsetOfKey(key)))])
+  // A key the run marks tier B timed is left out on both sides, so an old baseline's entry of one is no line either.
+  const timedB = new Set(scored.filter(runnerTimed).map(resultKey))
+  const keys = new Set([...after.keys(), ...Object.keys(before).filter((key) => subsets.has(subsetOfKey(key)))]
+    .filter((key) => !timedB.has(key)))
   const changed = [...keys].sort()
     .map((key) => ({ key, before: before[key] ?? null, after: after.get(key) ?? null }))
     .filter((c) => c.before !== c.after)
@@ -235,7 +243,7 @@ export function updateBaseline(baseline: Baseline | null, results: RunResults, t
   const subsets = replaced(results, tiers)
   const kept = Object.entries(baseline?.checks ?? {}).filter(([key]) => !subsets.has(subsetOfKey(key)))
   const keptSubsets = new Set(kept.map(([key]) => subsetOfKey(key)))
-  const fresh = scoredResults(results).filter((r) => subsets.has(subsetOf(r)))
+  const fresh = scoredResults(results).filter((r) => subsets.has(subsetOf(r)) && !runnerTimed(r))
   const checks = [...kept, ...fresh.map((r) => [resultKey(r), r.score] as const)].sort(([a], [b]) => byText(a, b))
   const apps = [
     ...Object.entries(baseline?.apps ?? {}).filter(([subset]) => keptSubsets.has(subset)),
@@ -244,21 +252,40 @@ export function updateBaseline(baseline: Baseline | null, results: RunResults, t
   return { schema: 1, checks: Object.fromEntries(checks), apps: Object.fromEntries(apps) }
 }
 
+const NOTHING_SEEN: Seen = { frames: [], faces: [], commands: [], deliveries: [], steps: [] }
+
 /**
  * The baseline checks an update would drop with nothing to say why: each of a subset it replaces that the run no longer
  * gives, while its scenario had no gap and `catalog` (each tier/platform/scenario the catalog runs now, by its runKey)
- * still asks for it: a `wait.<i>` while its step i is a condition wait, any other while the scenario has its check.
+ * still asks for it: a `wait.<i>` while its step i is a condition wait, any other while the scenario has its check. A
+ * tier B timed key goes, as an update writes none: every wait, and each part `evaluate` marks timed.
  */
 export function droppedKeys(baseline: Baseline | null, results: RunResults, tiers: readonly Tier[],
   catalog: ReadonlyMap<string, Scenario>): string[] {
   const subsets = replaced(results, tiers)
   const given = new Set(results.results.map(resultKey))
   const gapRuns = new Set(results.gaps.map(runKey))
+  // checks.ts alone decides which part is timed: grading on nothing seen gives each timed part, once a run.
+  const timedChecks = new Map<string, Set<string>>()
+  const timedPart = (key: string, scenario: Scenario, check: string): boolean => {
+    const run = runOfKey(key)
+    let timed = timedChecks.get(run)
+    if (!timed) {
+      const platform = key.split('/', 2)[1] as Platform
+      timed = new Set(scenario.checks.flatMap((c) => evaluate(c, scenario, NOTHING_SEEN, 'b', platform))
+        .filter((r) => r.timed).map((r) => r.check))
+      timedChecks.set(run, timed)
+    }
+    return timed.has(check)
+  }
   const asked = (key: string): boolean => {
     const scenario = catalog.get(runOfKey(key))
     if (!scenario) return false
     const check = key.split('/').slice(3).join('/')
     const wait = /^wait\.(\d+)$/.exec(check)
+    // An update never writes a tier B timed key (updateBaseline), and every wait is timed (runner.ts). A part the
+    // grading above does not give is no timed one: it stays asked, so the update is refused naming it.
+    if (key.startsWith('b/') && (wait || timedPart(key, scenario, check))) return false
     if (wait) {
       const step = scenario.steps[Number(wait[1])]
       return step?.kind === 'wait' && step.until !== undefined

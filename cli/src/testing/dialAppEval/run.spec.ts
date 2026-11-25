@@ -282,6 +282,14 @@ it('and refuses to drop a check of a scenario the catalog still runs, with no ga
   expect(readBaseline().checks).toEqual({ 'a/darwin/C1/ring.recall': 1 })
 })
 
+it('--update-baseline lets go of the tier B timed keys a baseline holds, writing none', async () => {
+  // The real catalog: C1 measures its cost in tier B, C2 waits at step 1.
+  writeBaseline({ schema: 1, checks: { 'b/darwin/C1/ring.recall': 0.5, 'b/darwin/C1/cost.cpu': 1, 'b/darwin/C2/wait.1': 1 }, apps: {} })
+  const h = harness({ b: results('b', 1) })
+  expect(await main(['--tier', 'b', '--update-baseline'], h.deps)).toBe(0)
+  expect(readBaseline().checks).toEqual({ 'b/darwin/C1/ring.recall': 1 })
+})
+
 it('a wrong send exits 1 without --update-baseline too', async () => {
   const h = harness({ a: results('a', 1, [wrongSend]), b: results('b', 1) })
   expect(await main([], h.deps)).toBe(1)
