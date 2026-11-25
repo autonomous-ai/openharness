@@ -8,8 +8,9 @@ import { keyOfOrcaHandle } from './sessions.js'
 
 /** Enter, sent on its own after the words (kitty's send-text escape, WezTerm's key): no words. */
 const ENTER = new Set(['\\r', '\r'])
-/** The tmux commands that put words in a pane, or in the buffer a paste puts there. */
-const TMUX_PUTS = new Set(['send-keys', 'set-buffer', 'load-buffer', 'paste-buffer'])
+/** The tmux commands that put words in a pane, or in the buffer a paste puts there, each with its alias from tmux's
+ *  manual: words put by an alias must not pass the gate unseen. */
+const TMUX_PUTS = new Set(['send-keys', 'send', 'set-buffer', 'setb', 'load-buffer', 'loadb', 'paste-buffer', 'pasteb'])
 
 /** The words a command types into a terminal: Orca's `terminal send`, with the handle of the pane they go to, kitty's and
  *  WezTerm's `send-text`, Zellij's `write-chars` (cable/hosts/orca.ts, kitty.ts, wezterm.ts, zellij.ts), and tmux's runs
