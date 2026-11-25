@@ -10,7 +10,7 @@ import { ptyMaker } from '../../../../cable/hosts/scannedApp.js'
 import type { InboxAnswer, InboxPoll } from '../../../../core/deviceHookCalls.js'
 import type { ObservedEvent, ObservedHookEvent } from '../../../../core/observedHook.js'
 import { lastCursorTurnText } from '../../../../engines/cursor/normalizer.js'
-import { claudeSession, editorSession, itermSession, orcaSession, thread } from '../../catalog.js'
+import { claudeSession, editorSession, itermSession, orcaChat, orcaSession, thread } from '../../catalog.js'
 import { orcaPaneHandle, orcaTerminalHandle, type Delivery, type Platform, type Scenario, type SessionKey, type StepOf } from '../../types.js'
 import { machine } from '../machine.js'
 import type { TierAWorld } from '../world.js'
@@ -515,6 +515,49 @@ describe("tier A's Orca agents", () => {
       expect(toldOf(w.told, orcaAgents().sessions[4]!.id).hostHints).toEqual({ ORCA_AGENT_SESSION_ID: 'eval-orca-n',
         ...(platform === 'darwin' ? { __CFBundleIdentifier: ORCA_BUNDLE } : {}) })
     }
+  })
+
+  /** A pane's agent and two chats of Orca's in w1: c's Claude Code runs, r runs nothing. */
+  const chats = (): Scenario => ({ ...orcaAgents(), sessions: [orcaSession('a'), orcaChat('c', 'live'), orcaChat('r', 'resting')] })
+
+  it("a live chat's Claude Code runs under Orca's provider under its terminal host, on no terminal and in no shell, and its "
+    + 'hook names its Orca session, no handle, and the mod polls for it', async () => {
+    const hosts: Readonly<Record<Platform, string>> = { darwin: 'Orca Agents', linux: 'orca-agents', win32: 'Orca.exe' }
+    for (const platform of PLATFORMS) {
+      const w = fakeWorld(platform, chats())
+      await w.hook('a', 'start')
+      await w.hook('c', 'start')
+      const c = chats().sessions[1]!
+      expect(toldOf(w.told, c.id)).toMatchObject({ engine: 'claude', cwd: '/work/eval-w1', title: 'Eval Charlie' })
+      expect(toldOf(w.told, c.id).hostHints, platform).toEqual({ ORCA_AGENT_SESSION_ID: 'eval-orca-c',
+        ...(platform === 'darwin' ? { __CFBundleIdentifier: ORCA_BUNDLE } : {}) })
+      const agent = machine.processes.get(agentPid(w.world, 'c')!)!
+      const provider = machine.processes.get(agent.ppid)!
+      const host = machine.processes.get(provider.ppid)!
+      expect([agent.executable, agent.tty, provider.executable, provider.tty, basename(host.executable), host.ppid], platform)
+        .toEqual(['claude', undefined, 'orca-provider-exec', undefined, hosts[platform], 1])
+      // The same host as the pane's terminal's: Orca's one.
+      expect(host.pid, platform).toBe(chainOf(w.world, 'a').maker.pid)
+      // On no terminal: the devices' maker check finds none, and the world opens no pane of it.
+      expect(ptyMaker(agent.pid, [...machine.processes.values()]), platform).toBeUndefined()
+      expect([shellOf(w.world, 'c'), orcaHandleOf(w.world, 'c')], platform).toEqual([undefined, undefined])
+      // Harness's plugin loads in a chat's Claude Code too: the mod's route for its words (the chats plan's Task 0).
+      expect(w.open(), platform).toEqual([chats().sessions[0]!.id, c.id])
+    }
+  })
+
+  it("Orca's quit ends a chat's provider with its agent, and its host", async () => {
+    const w = fakeWorld('darwin', chats())
+    await w.hook('a', 'start')
+    await w.hook('c', 'start')
+    await sessionsSteps.quit(w.world, { kind: 'quit', app: 'orca' })
+    expect([...machine.processes.values()]).toEqual([])
+  })
+
+  it('a resting chat runs nothing: a hook naming it is the scenario\'s mistake', async () => {
+    const w = fakeWorld('darwin', chats())
+    await expect(w.hook('r', 'start')).rejects.toThrow(/r is a resting chat/)
+    expect([w.told, [...machine.processes.values()]]).toEqual([[], []])
   })
 
   it('under tmux its hook adds TMUX_PANE, and its agent runs under a tmux server', async () => {

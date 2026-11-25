@@ -82,6 +82,14 @@ export function orcaSession(key: SessionKey, more: Partial<SessionDef> = {}): Se
     cwd: `/work/eval-${worktree}`, ageMs: 0, ...(more.engine === 'codex' ? { codexHome: 'own' } : {}), ...more }
 }
 /**
+ * A chat of Orca's, Claude Code's in worktree w1 unless `more` says otherwise (docs/plans/2026-11-23-dial-orca-chats-design.md):
+ * Orca runs it on no terminal, so no layout has a pane, tab or handle of it, and its folder is its worktree's.
+ */
+export function orcaChat(key: SessionKey, chat: 'live' | 'resting', more: Partial<SessionDef> = {}): SessionDef {
+  const worktree = more.worktree ?? 'w1'
+  return { key, app: 'orca', id: uuid(key, '8c'), title: titleOf(key), worktree, cwd: `/work/eval-${worktree}`, ageMs: 0, chat, ...more }
+}
+/**
  * An iTerm2 session, Claude Code in its own plain tab, w1's first, unless `more` says otherwise
  * (docs/plans/2026-11-22-dial-eval-iterm2-plan.md, Decision 1). iTerm2 has no store: its age is its start's.
  */

@@ -55,6 +55,7 @@ import { cmuxEventLine, fakeCmux, fakeCmuxLog, touchStore } from '../testing/fak
 import { fakeCore } from '../testing/fakeCore.js'
 import { herdrAppStatus } from '../testing/herdrAppStatus.js'
 import { RECORDED_KITTY } from '../testing/recordedKitty.js'
+import { RECORDED_ORCA_AGENTS, RECORDED_ORCA_WORKTREES } from '../testing/recordedOrca.js'
 import { RECORDED_WEZTERM } from '../testing/recordedWezterm.js'
 import type { Fleet, FleetDeps } from './fleet.js'
 import type { DevicesDeps } from './devices.js'
@@ -735,8 +736,9 @@ const turnTo = (agentId: string): void => {
 /** The listener the devices process opens (devicesProcess.ts), stood in for: what it was handed, its close, a front
  *  through its handler as `harness hardware watch` sends one, an attach as the harness-device mod sends one, the
  *  Notifications setting as a watch sends it, an agent's notice as `harness device notify` sends it, the tabs stream a
- *  watch holds open, the dial stream Orca's Harness Device plugin holds open, the terminals of the worktree on Orca's
- *  screen as that plugin sends them, and a VS Code window's stream and state as Harness's own extension sends them. */
+ *  watch holds open, the dial stream Orca's Harness Device plugin holds open, the terminals and the workspace id of the
+ *  worktree on Orca's screen as that plugin sends them (no workspace from an older plugin), and a VS Code window's stream
+ *  and state as Harness's own extension sends them. */
 function fakeListener() {
   type Handlers = Readonly<Record<string, ListenerHandler | ListenerStreamHandler>>
   const given: Array<{ handlers: Handlers; log: (line: string) => void }> = []
@@ -749,7 +751,7 @@ function fakeListener() {
   const attach = (sessionId: unknown): unknown => (given[0].handlers.attach as ListenerHandler).handle({ type: 'attach', sessionId }, new AbortController().signal)
   const notify = (mode: unknown): unknown => (given[0].handlers.notify as ListenerHandler).handle({ type: 'notify', mode }, new AbortController().signal)
   const notice = (ask: Record<string, unknown>): unknown => (given[0].handlers.notice as ListenerHandler).handle({ type: 'notice', ...ask }, new AbortController().signal)
-  const orcaFront = (terminals: unknown): unknown => (given[0].handlers.orcaFront as ListenerHandler).handle({ type: 'orcaFront', terminals }, new AbortController().signal)
+  const orcaFront = (terminals: unknown, workspace?: unknown): unknown => (given[0].handlers.orcaFront as ListenerHandler).handle({ type: 'orcaFront', terminals, workspace }, new AbortController().signal)
   /** The lines the devices write on the stream, its end, and whether it takes a line: one not drained yet does not. */
   const tabs = () => {
     const lines: unknown[] = []
@@ -873,7 +875,7 @@ describe('the devices\' own listener (services/devicesListener.ts)', () => {
     expect(listener.listen).toHaveBeenCalledTimes(1)
     const [{ handlers, log }] = listener.given
     expect(Object.keys(handlers)).toEqual(['front', 'attach', 'tab', 'thread', 'tabs', 'dial', 'orcaFront', 'notify', 'notice', 'vscode', 'vscode-state'])
-    expect(handlers.orcaFront).toMatchObject({ maxBytes: 4096, perSecond: 10 })
+    expect(handlers.orcaFront).toMatchObject({ maxBytes: 8192, perSecond: 10 })
     expect(handlers.notice).toMatchObject({ maxBytes: NOTICE_MAX_BYTES, perSecond: NOTICE_PER_SECOND })
     expect(handlers.front).toMatchObject({ maxBytes: FRONT_MAX_BYTES, perSecond: FRONT_PER_SECOND })
     expect([FRONT_MAX_BYTES, FRONT_PER_SECOND]).toEqual([64, 10])
@@ -13769,6 +13771,445 @@ describe('Orca\'s ring is the worktree on screen (docs/plans/2026-11-18-dial-orc
     expect(logs).toContain('[devices] orca failed · Error')
     expect(() => stream.end('gone')).not.toThrow()
     expect(frontLines()).toEqual([])
+  })
+})
+
+describe('Orca\'s chats on the dial (docs/plans/2026-11-23-dial-orca-chats-design.md)', () => {
+  const H = (n: number) => `term_00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
+  const AGENTS = RECORDED_ORCA_AGENTS.result.agents
+  const WORKTREES = RECORDED_ORCA_WORKTREES.result.worktrees
+  /** The recording's chat n, counted from 1: chats 1 to 3 are in wt-5, 6 to 10 in wt-7, 13 to 17 in wt-8. */
+  const chat = (n: number) => AGENTS[n - 1]
+  /** A chat's row while no hook has named its session. */
+  const resting = (n: number) => observedAgentId('orca', chat(n).orcaSessionId)
+  /** The hooked copy of chat n: its Claude Code's own session. */
+  const hooked = (n: number) => observedAgentId('claude', `chat-sess-${n}`)
+  const WT5 = chat(1).worktreeId
+  const FOLDER5 = WT5.split('::')[1]
+  // What the plugin says for the worktree on Orca's screen: wt-5 and wt-7 by their identity, wt-8, which has none, by its
+  // own id (the design's Task 0).
+  const ON_WT5 = `identity:${WORKTREES[4].identity.key}`
+  const ON_WT7 = `identity:${WORKTREES[6].identity.key}`
+  const ON_WT8 = WORKTREES[7].id
+  const ORCA_BIN = '/opt/orca/bin/orca'
+  const activated = (worktreeId: string): [string, string[], number] => [ORCA_BIN, ['worktree', 'activate', '--worktree', `id:${worktreeId}`, '--json'], 10_000]
+  const ORCA_FORWARD: [string, string[], number] = ['/usr/bin/open', ['-b', 'com.stablyai.orca'], 10_000]
+  // Orca 1.4.271's `orca agent --help`, its Commands list cut to `list` (orcaChatSource.spec.ts holds it whole).
+  const HELP = 'Usage: orca agent <command> [options]\n\nCommands:\n  list               List agents, chats and terminals, with their Orca session IDs\n\n'
+  /** Claude Code in Orca terminal `n` in wt-5's folder, as its hook says: an agent in an Orca terminal names its Orca
+   *  session too. */
+  const inTerminal = (n: number, over: Partial<ObservedHookEvent> = {}): ObservedHookEvent => ({
+    engine: 'claude', sessionId: `sess-${n}`, event: 'session-start', cwd: FOLDER5, callerPid: 4240 + n,
+    transcriptPath: `/t/sess-${n}.jsonl`,
+    hostHints: { ORCA_AGENT_SESSION_ID: `orca-term-${n}`, ORCA_TERMINAL_HANDLE: H(n), __CFBundleIdentifier: 'com.stablyai.orca' }, ...over,
+  })
+  const agent = (n: number) => observedAgentId('claude', `sess-${n}`)
+  /** Chat n's own hook: Orca's session id and no terminal. */
+  const inChat = (n: number, event: ObservedHookEvent['event'] = 'session-start'): ObservedHookEvent => ({
+    engine: 'claude', sessionId: `chat-sess-${n}`, event, cwd: chat(n).worktreeId.split('::')[1], callerPid: 5000 + n,
+    transcriptPath: `/t/chat-sess-${n}.jsonl`,
+    hostHints: { ORCA_AGENT_SESSION_ID: chat(n).orcaSessionId, __CFBundleIdentifier: 'com.stablyai.orca' },
+  })
+  const host = () => seen.dial as unknown as DaemonCableHost
+  beforeEach(() => { readers.processes.mockResolvedValue(ORCA_CALLERS) })
+  /** Lets what a landing sets off run. */
+  const settled = () => new Promise((resolve) => setImmediate(resolve))
+  /** How many times the devices ran `orca` with these words. */
+  const runs = (words: string) => orcaRuns.filter(([, args]) => args.join(' ') === words).length
+  const ring = async () => (await host().listAgentSnapshot({ apps: true })).agents.map((a) => a.id)
+  const orcaCount = async () => (await host().listAgentSnapshot({ apps: true })).apps?.apps.find((app) => app.id === 'orca')?.count
+  /** The latest order read lands with these tabs and these terminals an agent runs in. */
+  const land = async (fake: ReturnType<typeof fakeOrcaReads>, tabs: string[], terminals: OrcaTerminal[] = []) => {
+    await settled()
+    const read = fake.orders.at(-1)
+    expect(read, 'a read asked').toBeTypeOf('function')
+    read!({ tabs: tabs.map((handle) => ({ handle })), terminals, worktrees: new Map() })
+    await settled()
+  }
+
+  /**
+   * The devices on an `orca` that lists the recorded chats: `agent --help` lists `list`, `agent list` answers `answer.agents`
+   * (waiting while `answer.held` until the spec lets each go), `worktree list` the recorded worktrees, and every other run
+   * (an activate, an `open -b`) answers 0, each recorded. No window, no dial, no stream and nothing settled in front yet.
+   * The timers are held; `setImmediate` is left to let a read land.
+   */
+  const withChats = async (over: { platform?: NodeJS.Platform; agents?: readonly unknown[] } = {}) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    const answer = { agents: (over.agents ?? AGENTS) as unknown, held: false, waiting: [] as Array<() => void> }
+    const deps = {
+      ...orca,
+      platform: over.platform ?? 'linux',
+      mtime: () => ({ realPath: ORCA_BIN, mtimeMs: 1 }),
+      run: async (file: string, args: string[], timeoutMs: number) => {
+        orcaRuns.push([file, args, timeoutMs])
+        const words = args.join(' ')
+        if (words === 'agent --help') return { code: 0, stdout: HELP }
+        if (words === 'agent list --json') {
+          if (answer.held) await new Promise<void>((resolve) => { answer.waiting.push(resolve) })
+          return { code: 0, stdout: JSON.stringify({ ...RECORDED_ORCA_AGENTS, result: { ...RECORDED_ORCA_AGENTS.result, agents: answer.agents } }) }
+        }
+        if (words === 'worktree list --json') return { code: 0, stdout: JSON.stringify(RECORDED_ORCA_WORKTREES) }
+        return { code: 0, stdout: '' }
+      },
+    }
+    const listener = fakeListener()
+    const fake = fakeOrcaReads()
+    const started = start({ orca: deps, orcaReads: fake.reads, listen: listener.listen, tty: async () => undefined, faults: ['fleet'] })
+    started.port.swarms(null)
+    const settle = async (app: string) => {
+      expect(listener.front(app)).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+      await settled()
+    }
+    /** The reads held so far, let go. */
+    const letGo = async () => {
+      for (const go of answer.waiting.splice(0)) go()
+      await settled()
+    }
+    return { ...started, answer, listener, fake, settle, letGo }
+  }
+  /** A dial attached and its read landed, the plugin's dial stream open, and Orca settled in front. */
+  const scoped = async (over: Parameters<typeof withChats>[0] = {}) => {
+    const started = await withChats(over)
+    seen.host.watching!(true)
+    await settled()
+    const stream = started.listener.dial()
+    await started.settle('orca')
+    return { ...started, stream }
+  }
+  // The dial's own rule for a follow (cableSession.ts followLocal): it moves only to an agent its ring holds.
+  const dialFollows = () => vi.spyOn(seen.cable as unknown as { followLocal: (agentId: string, cause: Parameters<DaemonCableHost['localFollowed']>[0]) => Promise<void> }, 'followLocal')
+    .mockImplementation(async (agentId, cause) => {
+      const { agents } = await host().listAgentSnapshot({ apps: true })
+      seen.host.localFollowed!(cause, agents.some((a) => a.id === agentId) ? 'moved' : 'no-tile')
+    })
+
+  it('with a dial attached, Orca\'s page lists its chats, and the APPS count holds them', async () => {
+    const { settle } = await withChats()
+    seen.host.watching!(true)
+    await settled()
+    await settle('orca')
+    const list = await host().listAgentSnapshot({ apps: true })
+    expect(list.apps?.shown).toBe('orca')
+    expect(list.apps?.apps.find((app) => app.id === 'orca')?.count).toBe(17)
+    expect(list.total).toBe(17)
+    // The ring holds 16 (select.ts RING_PLACES), each named by Orca's title, its status and a tap.
+    expect(list.agents).toHaveLength(16)
+    expect(list.agents.filter(({ name, caps }) => /^Chat \d+$/.test(name) && caps === 'sf')).toHaveLength(16)
+    // The one ring leaves resting rows to the app pages.
+    expect((await host().listAgentSnapshot()).agents).toEqual([])
+    expect(logs).toContain('[orca-chat] listed · 17 chats · 0 heard')
+    // One read at the attach and one at Orca's settle in front; `--help` once for this binary.
+    expect([runs('agent --help'), runs('agent list --json'), runs('worktree list --json')]).toEqual([1, 2, 0])
+  })
+
+  it('no dial, no read: a detach stops the source and empties its rows', async () => {
+    const { port, listener, settle } = await withChats()
+    // Every push of decided 3 with no dial attached: Orca settling in front, a worktree from the plugin, a chat's hook.
+    listener.dial()
+    await settle('orca')
+    expect(listener.orcaFront([], ON_WT5)).toBeUndefined()
+    port.observed(inChat(3))
+    await settled()
+    expect(orcaRuns.filter(([, args]) => args[0] === 'agent' || args[0] === 'worktree')).toEqual([])
+    seen.host.watching!(true)
+    await settled()
+    expect(await orcaCount()).toBe(17)
+    seen.host.watching!(false)
+    await settled()
+    // The hooked chat is the observed source's, which keeps it: the resting rows are gone.
+    expect(await orcaCount()).toBe(1)
+    await settle('ghostty')
+    await settle('orca')
+    listener.orcaFront([], ON_WT7)
+    port.observed(inChat(1))
+    await settled()
+    expect(runs('agent list --json')).toBe(1)
+  })
+
+  it('with Orca settled in front and the plugin\'s workspace, the ring is that worktree\'s terminals then its chats', async () => {
+    const { port, fake, listener, settle } = await withChats()
+    port.observed(inTerminal(1))
+    port.observed(inTerminal(2))
+    await settled()
+    seen.host.watching!(true)
+    await land(fake, [H(2), H(1)])
+    listener.dial()
+    await settle('orca')
+    expect(listener.orcaFront([H(1), H(2)], ON_WT5)).toBeUndefined()
+    await settled()
+    // Chats after every tab, in Orca's list's order, though chat 3 is the newest (decided 6).
+    expect(await ring()).toEqual([agent(2), agent(1), resting(1), resting(2), resting(3)])
+    expect(await orcaCount()).toBe(19)
+    // The identity was a miss: the worktree list was read with the chats, once.
+    expect(runs('worktree list --json')).toBe(1)
+    // Each change is still one line, with a count and no workspace.
+    expect(logs.filter((line) => line.startsWith('[device] orca front'))).toEqual(['[device] orca front · set · 2 terminals'])
+  })
+
+  it('a plugin without workspace leaves chats out of the scope, as before', async () => {
+    const { port, fake, listener, settle } = await withChats()
+    port.observed(inTerminal(1))
+    port.observed(inTerminal(2))
+    await settled()
+    seen.host.watching!(true)
+    await land(fake, [H(2), H(1)])
+    listener.dial()
+    await settle('orca')
+    expect(listener.orcaFront([H(1), H(2)])).toBeUndefined()
+    await settled()
+    expect(await ring()).toEqual([agent(2), agent(1)])
+    expect(await orcaCount()).toBe(19)
+    // The attach's read and the settle's alone.
+    expect([runs('agent list --json'), runs('worktree list --json')]).toEqual([2, 0])
+  })
+
+  it('a new workspace reads the worktree list once on a miss, and the ring changes', async () => {
+    const { listener } = await scoped()
+    expect(runs('agent list --json')).toBe(2)
+    listener.orcaFront([], ON_WT5)
+    await settled()
+    expect(await ring()).toEqual([resting(1), resting(2), resting(3)])
+    // Known now: the same terminals, none, and another worktree.
+    listener.orcaFront([], ON_WT7)
+    await settled()
+    expect(await ring()).toEqual([6, 7, 8, 9, 10].map(resting))
+    // A worktree with no identity is named by its id, which is the chats' worktree id as it is.
+    listener.orcaFront([], ON_WT8)
+    await settled()
+    expect(await ring()).toEqual([13, 14, 15, 16, 17].map(resting))
+    listener.orcaFront([], ON_WT5)
+    await settled()
+    expect(await ring()).toEqual([resting(1), resting(2), resting(3)])
+    expect([runs('agent list --json'), runs('worktree list --json')]).toEqual([6, 1])
+    // The same worktree told again asks nothing.
+    listener.orcaFront([], ON_WT5)
+    await settled()
+    expect(runs('agent list --json')).toBe(6)
+  })
+
+  // Review Focus 3.
+  it('a read that lands for an older worktree changes the map, never the scope: the ring is the latest worktree\'s', async () => {
+    const { listener, answer, letGo } = await scoped()
+    answer.held = true
+    listener.orcaFront([], ON_WT5)
+    await settled()
+    listener.orcaFront([], ON_WT8)
+    await settled()
+    answer.held = false
+    await letGo()
+    await settled()
+    expect(await ring()).toEqual([13, 14, 15, 16, 17].map(resting))
+    // The map the older read took holds wt-5 now.
+    listener.orcaFront([], ON_WT5)
+    await settled()
+    expect(await ring()).toEqual([resting(1), resting(2), resting(3)])
+    expect(runs('worktree list --json')).toBe(1)
+  })
+
+  it('a hook of an Orca chat not listed asks one read; a second chat\'s hook during it asks one more after it, never two at once', async () => {
+    const { port, answer, letGo } = await withChats({ agents: AGENTS.filter((_, at) => at !== 2 && at !== 16) })
+    seen.host.watching!(true)
+    await settled()
+    expect(runs('agent list --json')).toBe(1)
+    answer.held = true
+    port.observed(inChat(3))
+    port.observed(inChat(3, 'turn-start'))
+    port.observed(inChat(17))
+    await settled()
+    expect(runs('agent list --json')).toBe(2)
+    answer.agents = AGENTS
+    await letGo()
+    expect(runs('agent list --json')).toBe(3)
+    answer.held = false
+    await letGo()
+    expect(logs).toContain('[orca-chat] listed · 17 chats · 2 heard')
+    // Listed now: their hooks ask nothing.
+    port.observed(inChat(3, 'turn-stop'))
+    port.observed(inChat(17, 'turn-start'))
+    await settled()
+    expect(runs('agent list --json')).toBe(3)
+  })
+
+  it('a hooked chat Orca does not list asks one read a dial, not one at each hook; an agent in an Orca terminal asks none', async () => {
+    const { port } = await withChats({ agents: AGENTS.filter((_, at) => at !== 2) })
+    seen.host.watching!(true)
+    await settled()
+    port.observed(inTerminal(1))
+    await settled()
+    expect(runs('agent list --json')).toBe(1)
+    port.observed(inChat(3))
+    await settled()
+    port.observed(inChat(3, 'turn-start'))
+    port.observed(inChat(3, 'needs-input'))
+    await settled()
+    expect(runs('agent list --json')).toBe(2)
+    // The next dial asks again, at its attach and at the chat's next hook.
+    seen.host.watching!(false)
+    seen.host.watching!(true)
+    await settled()
+    port.observed(inChat(3, 'turn-start'))
+    await settled()
+    expect(runs('agent list --json')).toBe(4)
+  })
+
+  it('a chat in an agent\'s worktree takes no Orca terminal: the agent the attach scan found is still placed by elimination', async () => {
+    const { port, fake, listener, settle } = await withChats()
+    // Running in Orca terminal 1 before the dial came, as its parent processes say, idle since: no hook, so no pane.
+    readers.known.set('sess-1', 'terminal')
+    readers.owners.set('sess-1', { engine: 'claude', pid: 4241 })
+    readers.rows.set('sess-1', { cwd: FOLDER5, transcriptPath: null })
+    readers.working.set('sess-1', false)
+    readers.apps.mockResolvedValueOnce(new Map([[4241, 'orca']]))
+    port.observed(inTerminal(2))
+    await settled()
+    seen.host.watching!(true)
+    await settled()
+    // Chats 1 and 3 are Claude Code in that folder too: neither is a terminal's agent.
+    const terminals = [{ handle: H(1), worktreePath: FOLDER5, agentIdentity: 'claude' }, { handle: H(2), worktreePath: FOLDER5, agentIdentity: 'claude' }]
+    await land(fake, [H(1), H(2)], terminals)
+    await land(fake, [H(1), H(2)], terminals)
+    // A chat's hook is no member of Orca's tab order: it asks no read of Orca's layouts.
+    port.observed(inChat(3))
+    await settled()
+    expect(fake.orders).toHaveLength(2)
+    listener.dial()
+    await settle('orca')
+    listener.orcaFront([H(1)], ON_WT5)
+    await settled()
+    expect(await ring()).toEqual([agent(1), resting(1), resting(2), hooked(3)])
+  })
+
+  it('a prompt in a listed chat moves the dial while Orca is in front', async () => {
+    const { port, listener } = await scoped()
+    listener.orcaFront([], ON_WT5)
+    await settled()
+    port.observed(inChat(3))
+    await settled()
+    // One card: the hooked copy holds chat 3's place.
+    expect(await ring()).toEqual([resting(1), resting(2), hooked(3)])
+    dialFollows()
+    port.observed(inChat(3, 'turn-start'))
+    await vi.waitFor(() => expect(logs.filter((line) => line.startsWith('[device] prompt'))).toEqual(['[device] prompt · moved']))
+  })
+
+  it('a tap on a resting chat runs worktree activate with its id, then Orca comes forward', async () => {
+    await withChats({ platform: 'darwin' })
+    seen.host.watching!(true)
+    await settled()
+    orcaRuns.length = 0
+    expect(await host().openAgent(resting(1))).toBeUndefined()
+    expect(orcaRuns).toEqual([activated(WT5), ORCA_FORWARD])
+  })
+
+  // Decided 7: a rest brings the chat's worktree up too, and Orca stays where it is (found by the dial eval, O20).
+  it('a rest on a resting chat runs the same worktree activate, and brings nothing forward', async () => {
+    const { settle } = await withChats({ platform: 'darwin' })
+    seen.host.watching!(true)
+    await settled()
+    await settle('orca')
+    orcaRuns.length = 0
+    expect(host().swipeSwitches(resting(1))).toBe(true)
+    host().swipeEnded(resting(1), 'rest')
+    await settled()
+    expect(orcaRuns).toEqual([activated(WT5)])
+  })
+
+  it('a tap on a hooked chat goes through the chat adapter, and a rest with Orca in front runs the same activate', async () => {
+    const { port, settle } = await withChats({ platform: 'darwin' })
+    seen.host.watching!(true)
+    await settled()
+    port.observed(inChat(3))
+    await settled()
+    orcaRuns.length = 0
+    expect(await host().openAgent(hooked(3))).toBeUndefined()
+    expect(orcaRuns).toEqual([activated(WT5), ORCA_FORWARD])
+    await settle('orca')
+    orcaRuns.length = 0
+    expect(host().swipeSwitches(hooked(3))).toBe(true)
+    host().swipeEnded(hooked(3), 'rest')
+    await settled()
+    expect(orcaRuns).toEqual([activated(WT5)])
+  })
+
+  // Review Focus 5.
+  it('with no worktree known, Orca comes forward alone, said in one line', async () => {
+    const { port } = await withChats({ platform: 'darwin', agents: AGENTS.filter((_, at) => at !== 2) })
+    seen.host.watching!(true)
+    await settled()
+    // A chat made since: its hook asks a read, which does not list it yet.
+    port.observed(inChat(3))
+    await settled()
+    orcaRuns.length = 0
+    expect(await host().openAgent(hooked(3))).toBeUndefined()
+    expect(orcaRuns).toEqual([ORCA_FORWARD])
+    expect(logs.filter((line) => line.startsWith('[device] orca chat'))).toEqual(['[device] orca chat · no worktree'])
+  })
+
+  it('with the observed agents switched off a workspace is taken, puts no chat in scope and reads nothing', async () => {
+    const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
+    switched.HARNESS_DEVICE_OBSERVED = false
+    onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
+    const { listener } = await withChats()
+    const setScope = vi.spyOn(host(), 'setScope')
+    seen.host.watching!(true)
+    listener.dial()
+    expect(listener.orcaFront([], ON_WT8)).toBeUndefined()
+    await settled()
+    expect(setScope).toHaveBeenCalledTimes(1)
+    expect(setScope.mock.calls[0][1]?.inScope(resting(13))).toBe(false)
+    expect(orcaRuns.filter(([, args]) => args[0] === 'agent' || args[0] === 'worktree')).toEqual([])
+  })
+
+  // Task 0's c and d are not run yet (docs/plans/2026-11-23-dial-orca-chats-plan.md): this holds today's routes until they
+  // decide which stay, and changes with them.
+  it('words for a chat, as today pending Task 0: a live Claude chat whose mod polls takes them through the mod, and a resting chat says Type in Orca for chats.', async () => {
+    const { port } = await withChats()
+    seen.host.watching!(true)
+    await settled()
+    expect(host().capsOf(resting(1), { apps: true })).toBe('sf')
+    expect(host().voiceRefusal(resting(1), { apps: true })).toBe('Type in Orca for chats.')
+    port.observed(inChat(3))
+    await settled()
+    // Live, with no poll of its mod yet: no route.
+    expect(host().capsOf(hooked(3), { apps: true })).toBe('sf')
+    expect(host().voiceRefusal(hooked(3), { apps: true })).toBe('Type in Orca for chats.')
+    const poll = port.inboxPoll({ pollId: 'p1', sessionId: 'chat-sess-3' })
+    expect(host().capsOf(hooked(3), { apps: true })).toBe('svf')
+    expect(host().voiceRefusal(hooked(3), { apps: true })).toBeUndefined()
+    expect(await host().sendTurn(hooked(3), 'run the tests')).toEqual({ ok: true })
+    expect(await poll).toEqual({ text: 'run the tests' })
+    // Nothing typed anywhere in Orca.
+    expect(orcaRuns.filter(([, args]) => args[0] === 'terminal')).toEqual([])
+  })
+
+  it('no log line holds a title, folder, id or workspace', async () => {
+    const { port, listener, answer } = await scoped({ platform: 'darwin', agents: AGENTS.filter((_, at) => at !== 16) })
+    listener.orcaFront([], ON_WT5)
+    await settled()
+    listener.orcaFront([], ON_WT8)
+    await settled()
+    port.observed(inChat(3))
+    port.observed(inChat(17))
+    await settled()
+    await host().openAgent(resting(1))
+    await host().openAgent(hooked(17))
+    // A read that fails, then one that lands.
+    answer.agents = 'unreadable'
+    listener.orcaFront([], ON_WT7)
+    await settled()
+    answer.agents = AGENTS
+    listener.orcaFront([], ON_WT5)
+    await settled()
+    expect(logs).toEqual(expect.arrayContaining(['[orca-chat] listed · 16 chats · 1 heard', '[orca-chat] read · failed · unreadable',
+      '[device] orca chat · no worktree', '[device] orca front · set · 0 terminals']))
+    const PRIVATE = [
+      ...AGENTS.flatMap((row) => [row.orcaSessionId, row.worktreeId, row.worktreeId.split('::')[1], row.workspace, row.repo, row.paneKey, row.title,
+        row.lastAssistantMessage]),
+      ...WORKTREES.flatMap((row): string[] => [row.id, ...('identity' in row ? [row.identity.key] : [])]),
+      'someone', 'identity:',
+    ]
+    expect(logs.filter((line) => PRIVATE.some((word) => line.includes(word)))).toEqual([])
   })
 })
 

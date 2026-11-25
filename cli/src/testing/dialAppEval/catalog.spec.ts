@@ -27,26 +27,26 @@ function stepKeys(step: Step): SessionKey[] {
 function checkKeys(check: Check): SessionKey[] {
   switch (check.kind) {
     case 'ring': return [...check.expect, ...check.apart ?? []]
-    case 'focus': case 'open': case 'state': case 'voice': case 'recap': case 'scroll': return [check.session]
+    case 'focus': case 'open': case 'state': case 'voice': case 'refused': case 'recap': case 'scroll': return [check.session]
     default: return []
   }
 }
 
 describe('the catalog', () => {
-  it('the main ids are C1-C12, X1-X12, V1-V15, U1-U14, O1-O17 and I1-I21', () => {
+  it('the main ids are C1-C12, X1-X12, V1-V15, U1-U14, O1-O23 and I1-I21', () => {
     const range = (prefix: string, n: number) => Array.from({ length: n }, (_, i) => `${prefix}${i + 1}`)
     expect(MAIN.map((s) => s.id)).toEqual([...range('C', 12), ...range('X', 12), ...range('V', 15), ...range('U', 14),
-      ...range('O', 17), ...range('I', 21)])
+      ...range('O', 23), ...range('I', 21)])
     expect(MAIN.every((s) => !s.heldOut)).toBe(true)
   })
 
-  it('the held out are CH1-CH3, XH1-XH3, VH1-VH4, UH1-UH3, OH1-OH4 and IH1-IH5: 22 of 113, VS Code 4 of 19, Cursor 3 of 17, Orca 4 of 21, iTerm2 5 of 26', () => {
+  it('the held out are CH1-CH3, XH1-XH3, VH1-VH4, UH1-UH3, OH1-OH4 and IH1-IH5: 22 of 119, VS Code 4 of 19, Cursor 3 of 17, Orca 4 of 27, iTerm2 5 of 26', () => {
     expect(HELD_OUT.map((s) => s.id)).toEqual(['CH1', 'CH2', 'CH3', 'XH1', 'XH2', 'XH3', 'VH1', 'VH2', 'VH3', 'VH4', 'UH1', 'UH2', 'UH3',
       'OH1', 'OH2', 'OH3', 'OH4', 'IH1', 'IH2', 'IH3', 'IH4', 'IH5'])
     expect(HELD_OUT.every((s) => s.heldOut)).toBe(true)
-    expect(ALL).toHaveLength(113)
+    expect(ALL).toHaveLength(119)
     const of = (app: string) => [HELD_OUT.filter((s) => s.app === app).length, ALL.filter((s) => s.app === app).length]
-    expect([of('vscode'), of('cursor'), of('orca'), of('iterm')]).toEqual([[4, 19], [3, 17], [4, 21], [5, 26]])
+    expect([of('vscode'), of('cursor'), of('orca'), of('iterm')]).toEqual([[4, 19], [3, 17], [4, 27], [5, 26]])
   })
 
   it('IH1 is D5 alone; IH3 tier A only', () => {
@@ -287,16 +287,19 @@ describe('the catalog', () => {
     }
   })
 
-  it('a voice speaks to a session with a running process, to one its link resumes, or to a resting ChatGPT thread Codex can queue to', () => {
+  it('a voice speaks to a session with a running process, to one its link resumes, to a resting ChatGPT thread Codex can queue to, or to a resting Orca chat whose refusal is checked', () => {
     // Words for a session with no process are refused before any send: the voice check and the gate then test nothing.
-    // A resting thread of the ChatGPT app is queued to, when Harness's Codex home is the app's (X12).
+    // A resting thread of the ChatGPT app is queued to, when Harness's Codex home is the app's (X12). A resting chat of
+    // Orca's is spoken to for its refusal alone (O22), which a refused check grades.
     for (const s of ALL) {
       for (const [i, step] of s.steps.entries()) {
         if (step.kind !== 'voice') continue
         const started = s.steps.slice(0, i).some((h) => h.kind === 'hook' && h.event === 'start' && h.session === step.target)
         const target = s.sessions.find((d) => d.key === step.target)!
         const queued = target.app === 'chatgpt' && s.world?.codexHome === 'app'
-        expect(started || target.resumable === true || queued, `${s.id} voice ${step.target}`).toBe(true)
+        const refused = target.chat === 'resting'
+          && s.checks.some((c) => c.kind === 'refused' && c.session === step.target && c.after === step.label)
+        expect(started || target.resumable === true || queued || refused, `${s.id} voice ${step.target}`).toBe(true)
       }
     }
   })
@@ -314,8 +317,8 @@ describe('the catalog', () => {
     expect(byId('C8').steps.filter((s) => s.kind === 'tap' || s.kind === 'swipe')).toEqual([])
   })
 
-  it('C3, CH1, CH2, XH1, X12, V2, O16 and IH3 are tier A only, V12 tier B only, every other scenario (C10, C11, X7, C8, X9, CH3 and XH3 among them) runs in both', () => {
-    const onlyA = ['C3', 'CH1', 'CH2', 'XH1', 'X12', 'V2', 'O16', 'IH3']
+  it('C3, CH1, CH2, XH1, X12, V2, O16, O18-O23 and IH3 are tier A only, V12 tier B only, every other scenario (C10, C11, X7, C8, X9, CH3 and XH3 among them) runs in both', () => {
+    const onlyA = ['C3', 'CH1', 'CH2', 'XH1', 'X12', 'V2', 'O16', 'O18', 'O19', 'O20', 'O21', 'O22', 'O23', 'IH3']
     const onlyB = ['V12']
     for (const s of ALL) expect(s.tiers, s.id).toEqual(onlyA.includes(s.id) ? ['a'] : onlyB.includes(s.id) ? ['b'] : ['a', 'b'])
   })
@@ -406,15 +409,16 @@ describe('the catalog', () => {
     // between quit and relaunch, and V15's rest and its time unplugged; U8's turn, U12's pause after the close and U13's
     // gap between quit and relaunch; O4's rests after the focus, the tap and the swipe, O7's after the tap and the
     // swipe, O8's two turns and the pause between them, O10's rest on b, O12's time quit, its time past the devices'
-    // next look after the relaunch and its rest after the focus, O16's agents a second apart, and O17's rest and its
-    // time unplugged; iTerm2's agents a second apart (started), I3's and I15's turns (turned), I3's rests after each
-    // pick, I4's pause before and after the split and its rest after the first tap, I6's rest, I7's rest after the first tap, I9's rests on b and on
-    // a and its wait after the echo, I10's rest after the move to a's pane, I10's and I11's rests after the select, I13's
-    // rests after the detach and the attach, I14's time past the devices' next look after herdr starts again, I15's time
-    // after the relaunch and its rest after the first tap, I16's long turn, I17's turn, I20's rest on c and I21's rest
-    // and its time unplugged; VH1's rest on a, UH3's voice 200 ms after the prompt, OH1's rest on a and OH2's voice 200 ms
-    // after the focus; IH1's voice 200 ms after the select, IH2's rests after the attach and each select, its two turns
-    // and the pause between them, IH3's agents a second apart, IH4's turn (turned) and IH5's turn.
+    // next look after the relaunch and its rest after the focus, O16's agents a second apart, O17's rest and its time
+    // unplugged, and O20's after the tap and the swipe; iTerm2's agents a second apart (started), I3's and I15's turns
+    // (turned), I3's rests after each pick, I4's pause before and after the split and its rest after the first tap,
+    // I6's rest, I7's rest after the first tap, I9's rests on b and on a and its wait after the echo, I10's rest after
+    // the move to a's pane, I10's and I11's rests after the select, I13's rests after the detach and the attach, I14's
+    // time past the devices' next look after herdr starts again, I15's time after the relaunch and its rest after the
+    // first tap, I16's long turn, I17's turn, I20's rest on c and I21's rest and its time unplugged; VH1's rest on a,
+    // UH3's voice 200 ms after the prompt, OH1's rest on a and OH2's voice 200 ms after the focus; IH1's voice 200 ms
+    // after the select, IH2's rests after the attach and each select, its two turns and the pause between them, IH3's
+    // agents a second apart, IH4's turn (turned) and IH5's turn.
     const starts = (id: string, n: number): string[] => Array<string>(n - 1).fill(`${id} 1000`)
     expect(waits('own')).toEqual(['C6 5000', 'C9 1000', 'C9 3500', 'C10 2000', 'C11 1000', 'C11 3000', 'X3 5000', 'X8 2000',
       'X11 300', 'X11 300', ...starts('V1', 4), ...starts('V2', 20), ...starts('V3', 2), ...starts('V4', 2), ...starts('V5', 2),
@@ -424,7 +428,7 @@ describe('the catalog', () => {
       'U13 45000', ...starts('U14', 2),
       'O4 2000', 'O4 1000', 'O4 3000', 'O7 4000', 'O7 2000', 'O8 2000', 'O8 2000', 'O8 6000', 'O8 2000', 'O10 1000', 'O12 2000',
       'O12 35000', 'O12 2000',
-      ...starts('O16', 40), 'O17 1000', 'O17 3000',
+      ...starts('O16', 40), 'O17 1000', 'O17 3000', 'O20 4000', 'O20 2000',
       ...starts('I2', 4), ...starts('I3', 4), 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000',
       'I4 1000', 'I4 1000', 'I4 4000', ...starts('I5', 2), ...starts('I6', 3), 'I6 2000', ...starts('I7', 3), 'I7 4000',
       ...starts('I8', 2), ...starts('I9', 2), 'I9 1000', 'I9 500', 'I9 3000', ...starts('I10', 2), 'I10 1000', 'I10 2000', ...starts('I11', 2), 'I11 2000',

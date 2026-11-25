@@ -218,8 +218,11 @@ function titleOf(world: World, key: SessionKey, to: number): string {
  * layout, else Claude Code's own title, else its tab's title, else its folder's, as Orca lists no worktree but the
  * layout's. Its tab is the panes open there, as both tiers lay them out (orcaListing.ts orcaLayout): a pane opens at its
  * session's start and closes at `orca.close`, its end and Orca's quit; Orca's relaunch opens again those its quit closed.
+ * A chat is in no tab: Orca's list of chats names it by its title, the hooked copy's too
+ * (docs/plans/2026-11-23-dial-orca-chats-design.md).
  */
 function orcaTitle(world: World, session: SessionDef, to: number): string {
+  if (session.chat !== undefined) return session.title
   let layout: StepOf<'orca.layout'> | undefined
   const open = new Set<SessionKey>()
   let quit: SessionKey[] = []
@@ -236,7 +239,7 @@ function orcaTitle(world: World, session: SessionDef, to: number): string {
     }
   }
   const laid = session.worktree !== undefined && layout?.worktrees.includes(session.worktree) === true
-  const tab = laid ? world.scenario.sessions.filter((s) => s.app === 'orca' && s.worktree === session.worktree
+  const tab = laid ? world.scenario.sessions.filter((s) => s.app === 'orca' && s.chat === undefined && s.worktree === session.worktree
     && (s.tab ?? 0) === (session.tab ?? 0) && (s === session || open.has(s.key))).map((s) => ({ key: s.key, title: s.title, split: s.split ?? 0 })) : []
   const renamed = layout?.renamed ?? {}
   if (tab.some((p) => Object.hasOwn(renamed, p.key))) return tabTitle(tab, renamed)
@@ -488,6 +491,10 @@ const orcaRuns = (argv: string[], group: string, verb: string): boolean =>
  * worktree (none ran passes only when none does), a `terminal switch` to its handle at this launch succeeded, then a tap
  * brings Orca forward, timed, and a rest does not; with no switch no part passes. Tier B on Linux records no raise, so a
  * tap there has no raise part. Evidence says what each command was and, for a switch, whose handle it names.
+ *
+ * A chat has no terminal, and Orca's CLI opens no chat (docs/plans/2026-11-23-dial-orca-chats-design.md, "Dial to
+ * Orca"): its `worktree activate` of the chat's worktree that succeeded stands for the switch, and with none no part
+ * passes.
  */
 function orcaOpenParts(session: SessionDef, world: World, w: Window | undefined, tier: Tier, platform: Platform,
   commands: Seen['commands'], inputs: string[]): Part[] {
@@ -501,7 +508,11 @@ function orcaOpenParts(session: SessionDef, world: World, w: Window | undefined,
   const target = (c: Seen['commands'][number]): string | undefined =>
     orcaRuns(c.argv, 'terminal', 'switch') ? flagOf(c.argv, '--terminal') : undefined
   const raises = (c: Seen['commands'][number]): boolean => c.ok && fronts(c.argv, platform, 'orca', undefined)
-  const switched = commands.findIndex((c) => c.ok && target(c) === handle)
+  const activates = (c: Seen['commands'][number]): boolean => c.ok && orcaRuns(c.argv, 'worktree', 'activate')
+    && flagOf(c.argv, '--worktree') === `id:${orcaWorktreeId(session.worktree ?? '')}`
+  const chat = session.chat !== undefined
+  // A chat's opening is its worktree's activate: what a pane's switch is to a pane.
+  const switched = chat ? commands.findIndex(activates) : commands.findIndex((c) => c.ok && target(c) === handle)
   // Tier A's commands are in the order they ran. Tier B's fake Orca notes each run at its own time and the raise at its
   // read (Decision 14), so one at the switch's time counts on either side.
   const before = (i: number, j: number): boolean => i !== j && (tier === 'b' ? commands[i]!.at <= commands[j]!.at : i < j)
@@ -518,10 +529,10 @@ function orcaOpenParts(session: SessionDef, world: World, w: Window | undefined,
       : orcaRuns(c.argv, 'terminal', 'send') ? 'send' : raises(c) ? 'front' : undefined
     return `command at ${c.at}: ${[what, !c.ok && 'failed'].filter(Boolean).join(' ') || 'other'}`
   }), ...(inputs.length > 0 && commands.length === 0 ? ['no command'] : []),
-  ...(inputs.length > 0 && commands.length > 0 && switched < 0 ? ['no switch'] : [])])
+  ...(inputs.length > 0 && commands.length > 0 && switched < 0 ? [chat ? 'no activate' : 'no switch'] : [])])
   const activated = shown !== undefined && flagOf(shown.argv, '--worktree') === `id:${orcaWorktreeId(session.worktree ?? '')}`
   // With no switch the pane was never shown: a dead input passes neither its worktree nor a rest's no raise.
-  const parts: Part[] = [
+  const parts: Part[] = chat ? [{ part: 'worktree', score: switched < 0 ? 0 : 1, timed: false, evidence }] : [
     { part: 'worktree', score: switched >= 0 && (activated || (shown === undefined && !laid)) ? 1 : 0, timed: false, evidence },
     { part: 'switch', score: switched < 0 ? 0 : 1, timed: false, evidence },
   ]
@@ -758,6 +769,27 @@ function voiceParts(check: CheckOf<'voice'>, world: World, w: Window | undefined
   ]
 }
 
+/**
+ * Words the product takes no route for, spoken to the session on the face as the window opens: the dial is told the
+ * product's own sentence in a `voice.error` (said), and the words reach no session at all (kept). Words spoken to
+ * another session pass neither. Neither the spoken words nor the sentence is printed: only whether it matched.
+ */
+function refusedParts(check: CheckOf<'refused'>, world: World, w: Window | undefined): Part[] {
+  const id = agentIdOf(world.session(check.session))
+  const face = w ? world.seen.faces.filter((f) => f.at <= w.from).at(-1) : undefined
+  const spokenTo = face?.active === id
+  const told = w ? world.seen.frames.filter((f) => typeof f.message.t === 'string' && f.message.t.startsWith('voice.') && within(f.at, w)) : []
+  const errors = told.filter((f) => f.message.t === 'voice.error')
+  const deliveries = w ? world.seen.deliveries.filter((d) => within(d.at, w)) : []
+  const evidence = bounded([...(face ? [`face at ${face.at}: ${world.keyOf(face.active)}`] : []),
+    ...told.map((f) => `${String(f.message.t)} at ${f.at}${f.message.t === 'voice.error' ? `, text ${f.message.message === check.text ? 'exact' : 'differs'}` : ''}`),
+    ...deliveries.map((d) => `delivery at ${d.at} via ${d.path} to ${d.target ?? 'none'}`)])
+  return [
+    { part: 'said', score: spokenTo && errors.some((f) => f.message.message === check.text) ? 1 : 0, timed: false, evidence },
+    { part: 'kept', score: spokenTo && errors.length > 0 && deliveries.length === 0 ? 1 : 0, timed: false, evidence },
+  ]
+}
+
 function recapParts(check: CheckOf<'recap'>, world: World, w: Window | undefined): Part[] {
   const id = agentIdOf(world.session(check.session))
   // Every session's summaries in the window, so a probe on a session that never has one still says what was seen.
@@ -790,6 +822,7 @@ function partsOf(check: Check, scenario: Scenario, seen: Seen, tier: Tier, platf
     case 'open': return openParts(check, world, w, tier, platform)
     case 'state': return stateParts(check, world, w)
     case 'voice': return voiceParts(check, world, w)
+    case 'refused': return refusedParts(check, world, w)
     case 'recap': return recapParts(check, world, w)
     case 'cost': return costParts(seen)
     case 'scroll': return scrollParts(check, world, w)

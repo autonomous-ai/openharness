@@ -567,7 +567,9 @@ function postObserved(port, body) {
  * so a session with more than MAX_HINTS set loses the farthest. Zellij's names come before kitty's: a session in Zellij
  * inside kitty keeps Zellij's, the nearer host. HC_TERMINAL_ID comes after the multiplexers: one started
  * in an hc terminal keeps that terminal's address, and is the nearer host. cmux's ids come after them: a multiplexer
- * started in a cmux terminal keeps cmux's ids, and is the nearer host. CLAUDE_CODE_ENTRYPOINT is last, the first the
+ * started in a cmux terminal keeps cmux's ids, and is the nearer host. ORCA_TERMINAL_HANDLE comes before
+ * ORCA_AGENT_SESSION_ID: a session id with no handle is an Orca chat's (cable/hosts/orcaChat.ts orcaChatId), so the cap
+ * never makes an Orca terminal's agent look like a chat. CLAUDE_CODE_ENTRYPOINT is last, the first the
  * cap drops: without it a tap still brings the app forward.
  *
  * On Windows no app sets __CFBundleIdentifier, and Cursor and VS Code both set TERM_PROGRAM=vscode: the hook finds the
@@ -599,7 +601,7 @@ function postObserved(port, body) {
  */
 const HOST_HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'ZELLIJ_PANE_ID',
   'ZELLIJ_SESSION_NAME', 'TMUX_PANE', 'HC_TERMINAL_ID', 'CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID', 'KITTY_WINDOW_ID',
-  'KITTY_LISTEN_ON', 'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_TERMINAL_HANDLE', 'CLAUDE_CODE_HOST_SESSION_ID',
+  'KITTY_LISTEN_ON', 'WEZTERM_PANE', 'ORCA_TERMINAL_HANDLE', 'ORCA_AGENT_SESSION_ID', 'CLAUDE_CODE_HOST_SESSION_ID',
   'CLAUDE_CODE_ENTRYPOINT']
 /** The hints a cut would turn into another pane, session or socket (see HOST_HINTS): sent whole or not at all. */
 const WHOLE_HINTS = ['ZELLIJ_PANE_ID', 'ZELLIJ_SESSION_NAME', 'KITTY_LISTEN_ON',

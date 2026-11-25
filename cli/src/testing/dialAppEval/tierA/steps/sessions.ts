@@ -3,11 +3,12 @@
  * through `ports.devices.observed`, with the hints the session's app gives its agent (hook/notify.mjs hostHints). The
  * session's process is in the machine model: a base app's alone, an editor's agent under its terminal's shell, or for
  * the panel and Cursor's own agent under the editor, the editor under Terminal when it was started from there; an Orca
- * agent under its pane's shell, on that pane's terminal, which Orca's terminal host made (orcaPane); an iTerm2 agent
- * under its tab's shell, on that tab's terminal (iterm.ts tabShell); an agent under tmux, Orca's or iTerm2's, under its
- * tmux pane's shell (tmux.ts tmuxPane), and one under iTerm2's herdr under its herdr pane's (herdr.ts herdrPane), which
- * herdr hears of at each hook (herdrHeard). Its transcript is in Harness's own engine homes, a Codex with a home of its own
- * in that home, and Cursor's in Cursor's. What each sends is chosen by the session's engine and place, never by its app. For a Claude Code session the mod is
+ * agent under its pane's shell, on that pane's terminal, which Orca's terminal host made (orcaPane); an Orca chat under
+ * Orca's provider, on no terminal (orcaChatProcess); an iTerm2 agent under its tab's shell, on that tab's terminal
+ * (iterm.ts tabShell); an agent under tmux, Orca's or iTerm2's, under its tmux pane's shell (tmux.ts tmuxPane), and one
+ * under iTerm2's herdr under its herdr pane's (herdr.ts herdrPane), which herdr hears of at each hook (herdrHeard). Its
+ * transcript is in Harness's own engine homes, a Codex with a home of its own in that home, and Cursor's in Cursor's.
+ * What each sends is chosen by the session's engine and place, never by its app. For a Claude Code session the mod is
  * this file: a loop holding `ports.devices.inboxPoll` open, so the devices' `modReady` holds as with the real plugin,
  * and each text a poll is answered with is a `mod` delivery to that session.
  */
@@ -19,8 +20,8 @@ import type { DevicesPort } from '../../../../core/api.js'
 import type { InboxAnswer } from '../../../../core/deviceHookCalls.js'
 import { parseObservedHook, type ObservedEvent, type ObservedEventName } from '../../../../core/observedHook.js'
 import { RECORDED_ORCA } from '../../../recordedOrca.js'
-import { engineOf, HELD_MAKER, hookHandle, itermPlaceOf, orcaPaneHandle, placeOf, type App, type Editor, type Engine, type Platform,
-  type SessionDef, type SessionKey } from '../../types.js'
+import { engineOf, HELD_MAKER, hookHandle, itermPlaceOf, orcaAgentSessionId, orcaPaneHandle, placeOf, type App, type Editor, type Engine,
+  type Platform, type SessionDef, type SessionKey } from '../../types.js'
 import type { StepHandler, TierAWorld } from '../world.js'
 import { herdrHeard, herdrPane, herdrPaneId } from './herdr.js'
 import { tabShell } from './iterm.js'
@@ -54,6 +55,9 @@ const AGENTS: Readonly<Record<Engine, string>> = { claude: 'claude', codex: 'cod
 const ORCA_HOSTS: Readonly<Record<Platform, string>> = {
   darwin: RECORDED_ORCA.macos.chain.at(-1)!.comm, linux: RECORDED_ORCA.linux.deb.makerComm, win32: 'Orca.exe',
 }
+/** The process Orca drives a chat's agent from over stream-json, under that host (docs/plans/2026-11-23-dial-orca-chats-design.md,
+ *  "What we found"). */
+const ORCA_PROVIDER = 'orca-provider-exec'
 
 interface Live {
   pid: number
@@ -118,8 +122,8 @@ const fromTerminal = (world: TierAWorld): boolean => world.scenario.world?.launc
  * id. The panel's Claude Code adds the extension's entrypoint.
  *
  * An Orca agent (the plan's Decision 4): Orca's agent session everywhere, and its pane's handle unless its hooks name
- * none; macOS adds Orca's bundle id. Under tmux the hook adds tmux's pane, as a tmux started in the pane hands its agents
- * Orca's variables; the hook keeps no TMUX. No TERM_PROGRAM, as Orca sets none.
+ * none or it is a chat, which no terminal holds; macOS adds Orca's bundle id. Under tmux the hook adds tmux's pane, as a
+ * tmux started in the pane hands its agents Orca's variables; the hook keeps no TMUX. No TERM_PROGRAM, as Orca sets none.
  *
  * An iTerm2 tab's agent (docs/plans/2026-11-22-dial-eval-iterm2-plan.md, Decision 8): iTerm2's TERM_PROGRAM and its
  * bundle id, as iTerm2 gives every shell it starts. In tmux, tmux's TERM_PROGRAM and its pane, beside the bundle id the
@@ -137,7 +141,7 @@ function hintsOf(world: TierAWorld, s: SessionDef): Record<string, string> {
   if (s.app === 'orca') {
     const handle = hookHandle(s, stateOf(world).orcaLaunch)
     return {
-      ORCA_AGENT_SESSION_ID: `eval-orca-${s.key}`,
+      ORCA_AGENT_SESSION_ID: orcaAgentSessionId(s.key),
       ...(handle === undefined ? {} : { ORCA_TERMINAL_HANDLE: handle }),
       ...(platform === 'darwin' ? { __CFBundleIdentifier: APP_BUNDLES.orca } : {}),
       ...(s.tmux ? { TMUX_PANE: tmuxPaneId(world, s) } : {}),
@@ -236,6 +240,15 @@ function itermTab(world: TierAWorld, s: SessionDef): { shell: number; parent: nu
   }
   const { pid: shell } = tabShell(world, { window: s.window!, tab: s.tab!, split: s.split })
   return { shell, parent: shell, others: [world.machine.processes.get(shell)!.ppid] }
+}
+
+/** A live chat's process: Orca's provider under its terminal host, which drives the chat's agent over stream-json on no
+ *  terminal and in no shell, so the devices find no pane or maker of it. The provider ends with the chat; the host runs
+ *  on for Orca's panes. */
+function orcaChatProcess(world: TierAWorld): { parent: number; others: number[] } {
+  const state = stateOf(world)
+  const provider = startProcess(world, state.orcaHost ??= startProcess(world, 1, ORCA_HOSTS[world.platform]), ORCA_PROVIDER)
+  return { parent: provider, others: [provider] }
 }
 
 /** Codex's rollout of the session in a Codex home's sessions folder, as Codex names it. */
@@ -350,10 +363,10 @@ export function keyOfShell(world: TierAWorld, pid: number): SessionKey | undefin
   return undefined
 }
 
-/** The handle of the session's Orca pane while it is open: from its start to its end, at Orca's launch. */
+/** The handle of the session's Orca pane while it is open: from its start to its end, at Orca's launch. A chat has none. */
 export function orcaHandleOf(world: TierAWorld, key: SessionKey): string | undefined {
   const s = world.session(key)
-  return s.app === 'orca' && running(world, key) ? orcaPaneHandle(s, stateOf(world).orcaLaunch) : undefined
+  return s.app === 'orca' && s.chat === undefined && running(world, key) ? orcaPaneHandle(s, stateOf(world).orcaLaunch) : undefined
 }
 
 /** The live session whose open Orca pane has this handle and is its own terminal: a held one's is the terminal another
@@ -371,6 +384,7 @@ export async function startSession(world: TierAWorld, key: SessionKey): Promise<
   const state = stateOf(world)
   if (state.live.has(key)) return
   const s = world.session(key)
+  if (s.chat === 'resting') throw new Error(`scenario ${world.scenario.id}: ${key} is a resting chat, which no process runs`)
   const engine = engineOf(s)
   const transcriptPath = transcriptOf(world, s)
   mkdirSync(dirname(transcriptPath), { recursive: true })
@@ -380,7 +394,8 @@ export async function startSession(world: TierAWorld, key: SessionKey): Promise<
   let shell: number | undefined
   let parent: number
   let others: number[] = []
-  if (s.app === 'orca') ({ shell, parent, others } = orcaPane(world, s))
+  if (s.chat === 'live') ({ parent, others } = orcaChatProcess(world))
+  else if (s.app === 'orca') ({ shell, parent, others } = orcaPane(world, s))
   else if (s.app === 'iterm') ({ shell, parent, others } = itermTab(world, s))
   else {
     // placeOf names a place for an editor's session alone.

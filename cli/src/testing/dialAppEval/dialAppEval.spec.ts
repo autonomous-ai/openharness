@@ -378,6 +378,24 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
     expect(raisesOrca[platform](after[2]!)).toBe(true)
   })
 
+  /** O20: a in w1, c a chat in w2, d one in w1; its tap on c, then its rest on d. */
+  const o20 = MAIN.find((s) => s.id === 'O20')!
+
+  // On macOS alone: Linux raises Orca by its window's class, which the product has not confirmed (frontApp.ts
+  // WINDOW_CLASSES), or by the agent's process, which a resting chat has none of. O20 grades that raise as it is.
+  it("O20's tap on a chat in the other worktree runs worktree activate for that worktree, then brings Orca forward, and no terminal switch", async () => {
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, o20, 'darwin')
+    expect(run.error).toBeUndefined()
+    const { commands, steps } = driver.seen()
+    const tap = steps.find((s) => s.label === 'tap')!
+    const rest = steps.find((s) => s.label === 'rest')!
+    const after = commands.filter((c) => c.at >= tap.at && c.at < rest.at).map((c) => c.argv)
+    expect(after[0]?.slice(1)).toEqual(['worktree', 'activate', '--worktree', `id:${orcaWorktreeId('w2')}`, '--json'])
+    expect(after).toHaveLength(2)
+    expect(raisesOrca.darwin(after[1]!)).toBe(true)
+  })
+
   it("a ring of 40 agents in 40 worktrees reads Orca's layout at most once per change in its agents, and not once in a minute with no change", async () => {
     const agents = keys('k', 1, 40, 2)
     const worktreeOf = (key: string): string => key.replace('k', 'w')

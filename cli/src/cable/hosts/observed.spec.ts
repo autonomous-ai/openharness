@@ -10,7 +10,7 @@ import { createHerdrAdapter } from './herdr.js'
 import { createHerdrAppAdapter } from './herdrApp.js'
 import type { HerdrPrompt } from './herdrClient.js'
 import { type Delivery, Inbox } from './inbox.js'
-import { askedLine, countWord, observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps, OUTER_FRESH_WAIT_MS, type PromptSource } from './observed.js'
+import { askedLine, countWord, cutAnswer, observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps, OUTER_FRESH_WAIT_MS, type PromptSource } from './observed.js'
 import type { OpenTarget } from './open.js'
 import { createOrcaAdapter, MAX_TEXT, type OrcaDeps } from './orca.js'
 import { type Fresh, FRESH_WITHIN_MS, type Nested, type NestedPlace, type OuterLookup } from './outer.js'
@@ -6516,6 +6516,30 @@ describe('ObservedSource and a waiting prompt', () => {
       ['[observed] waiting prompt · shown'], ['[observed] waiting prompt · shown'], ['[observed] waiting prompt · cleared'],
       ['[observed] waiting prompt · shown'], ['[observed] waiting prompt · cleared'],
     ])
+  })
+})
+
+describe('ObservedSource and the Orca sessions its hooks named', () => {
+  it('maps each Orca session id a hook named to its session, keeps an ended copy, and skips a session that named none', () => {
+    const { src, ev } = setup()
+    expect(src.orcaSessions()).toEqual(new Map())
+    src.ingest(ev('session-start', { sessionId: 's1', hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1' } }))
+    src.ingest(ev('session-start', { engine: 'codex', sessionId: 't2', callerPid: 101, hostHints: { ORCA_AGENT_SESSION_ID: 'orca-2' } }))
+    src.ingest(ev('session-start', { sessionId: 's3', callerPid: 102, hostHints: { ORCA_TERMINAL_HANDLE: 'term_x' } }))
+    src.ingest(ev('session-start', { sessionId: 's4', callerPid: 103, hostHints: { ORCA_AGENT_SESSION_ID: '' } }))
+    const both = new Map([['orca-1', { engine: 'claude', sessionId: 's1' }], ['orca-2', { engine: 'codex', sessionId: 't2' }]])
+    expect(src.orcaSessions()).toEqual(both)
+    // Its end comes from the same process, with the same hints: Orca still holds the chat, so its row keeps this id.
+    src.ingest(ev('session-end', { sessionId: 's1', hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1' } }))
+    expect(src.list().find(({ sessionId }) => sessionId === 's1')?.ended).toBe(true)
+    expect(src.orcaSessions()).toEqual(both)
+  })
+
+  it('cuts an answer on a code point, as a card keeps it', () => {
+    expect(cutAnswer('short')).toBe('short')
+    const cut = cutAnswer('🙂'.repeat(500))
+    expect(cut.endsWith('…')).toBe(true)
+    expect(Array.from(cut).every((char) => char === '🙂' || char === '…')).toBe(true)
   })
 })
 

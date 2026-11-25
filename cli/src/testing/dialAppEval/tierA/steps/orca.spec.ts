@@ -4,13 +4,15 @@
 import { tmpdir } from 'node:os'
 import { join, win32 } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { observedAgentId } from '../../../../cable/hosts/observed.js'
 import { createOrcaAdapter, createOrcaReads } from '../../../../cable/hosts/orca.js'
+import { OrcaChatSource, type HeardChat } from '../../../../cable/hosts/orcaChatSource.js'
 import type { CorePorts } from '../../../../core/api.js'
 import { orcaBinary } from '../../../../devices/orcaHomes.js'
 import type { DevicesDeps, startDevices } from '../../../../services/devices.js'
 import { dialStream, orcaFrontHandler, type ListenerStream, type ListenerStreamHandler } from '../../../../services/devicesListener.js'
-import { orcaGhost, orcaSession, scenario } from '../../catalog.js'
-import { ORCA_ECHO_MS, orcaTerminalHandle, orcaWorktreeId, type Platform, type Scenario, type SessionKey } from '../../types.js'
+import { orcaChat, orcaGhost, orcaSession, scenario } from '../../catalog.js'
+import { agentIdOf, ORCA_ECHO_MS, orcaTerminalHandle, orcaWorktreeId, type Platform, type Scenario, type SessionKey } from '../../types.js'
 import { installClock } from '../clock.js'
 import { machine } from '../machine.js'
 import { World } from '../world.js'
@@ -63,19 +65,44 @@ const started = async (world: World, keys: SessionKey[]): Promise<void> => {
 const landed = (): Promise<void> => new Promise((resolve) => { setImmediate(resolve) })
 
 /** The devices' own dial stream and orcaFront handler on the world's listener, as the devices open them: each stream
- *  opened, with what it was told and the stream it was handed, and each front the devices took. */
+ *  opened, with what it was told and the stream it was handed, and each front the devices took, with its workspace. */
 async function pluginDoor(deps: DevicesDeps) {
   const dial = dialStream({ log: () => {}, after: () => () => {} })
   const opened: Array<{ message: Record<string, unknown>; lines: unknown[]; stream: ListenerStream }> = []
   const fronts: Array<readonly string[] | null> = []
+  const workspaces: Array<string | null | undefined> = []
   const handler: ListenerStreamHandler = { ...dial.handler, open: (message, stream) => {
     const lines: unknown[] = []
     opened.push({ message, lines, stream })
     return dial.handler.open(message, { ...stream, write: (line) => { lines.push(line); return stream.write(line) } })
   } }
-  await deps.listen!({ dial: handler, orcaFront: orcaFrontHandler(() => dial.isOpen(), (terminals) => { fronts.push(terminals) }) }, () => {})
-  return { dial, opened, fronts }
+  await deps.listen!({ dial: handler, orcaFront: orcaFrontHandler(() => dial.isOpen(), (terminals, workspace) => {
+    fronts.push(terminals)
+    workspaces.push(workspace)
+  }) }, () => {})
+  return { dial, opened, fronts, workspaces }
 }
+
+/** w1: a's pane, and c, a chat no process runs; w2: d, a chat whose Claude Code runs, and e, a Codex chat that rests. */
+const chats = (more: Partial<Scenario> = {}): Scenario => layout({
+  sessions: [orcaSession('a'), orcaChat('c', 'resting'), orcaChat('d', 'live', { worktree: 'w2' }),
+    orcaChat('e', 'resting', { worktree: 'w2', engine: 'codex' }), orcaGhost],
+  ...more,
+})
+/** The devices' own read of Orca's chats on the world's CLI, with the sessions the hooks named. A read is over once the
+ *  world's answers have landed: they come on the run's own turn. */
+function chatSource(deps: DevicesDeps, heard: ReadonlyMap<string, HeardChat> = new Map()) {
+  const source = new OrcaChatSource({ binary: () => orcaBinary(deps.orca!), run: deps.orca!.run, mtime: deps.orca!.mtime,
+    heard: () => heard, focus: async () => false, show: async () => 'failed', log: () => {}, now: () => Date.now() })
+  const read = async (opts?: { worktrees?: boolean }): Promise<void> => {
+    source.read(opts)
+    await landed()
+  }
+  return { source, read }
+}
+/** What Orca's CLI prints for that command, as JSON. */
+const answered = async (deps: DevicesDeps, args: string[]): Promise<Record<string, unknown>> =>
+  JSON.parse((await deps.orca!.run(orcaBinary(deps.orca!)!, args, 5_000)).stdout) as Record<string, unknown>
 const plugin = (world: World, open: boolean) => orcaModelSteps['orca.plugin'](world, { kind: 'orca.plugin', open })
 const front = (world: World, worktree: string) => orcaModelSteps['orca.front'](world, { kind: 'orca.front', worktree })
 
@@ -370,6 +397,76 @@ describe("tier A's Orca", () => {
     vi.advanceTimersByTime(ORCA_ECHO_MS)
     await landed()
     expect(heard).toEqual([])
+  })
+
+  it("agent --help lists list, and agent list answers each chat of the scenario in Orca's envelope, in the order declared, "
+    + 'from Orca\'s start on, resting or live, and no pane\'s agent', async () => {
+    const { deps } = worldOn('darwin', chats())
+    expect(await deps.orca!.run(orcaBinary(deps.orca!)!, ['agent', '--help'], 5_000)).toEqual({ code: 0, stdout: 'Commands:\n  list\n' })
+    // No layout yet: Orca's chats were there before the scenario began.
+    const answer = await answered(deps, ['agent', 'list', '--json'])
+    const row = (key: SessionKey, agent: string, worktree: string, title: string) => ({ orcaSessionId: `eval-orca-${key}`, kind: 'chat',
+      agent, state: 'done', worktreeId: orcaWorktreeId(worktree), workspace: `eval-${worktree}`, repo: 'eval-repo', hostId: 'local',
+      paneKey: expect.stringMatching(/^00000000-0000-4000-8f00-[0-9a-f]{12}$/), title, lastAssistantMessage: '', updatedAt: Date.now() })
+    expect(answer).toEqual({ id: 'eval', ok: true, result: {
+      agents: [row('c', 'claude', 'w1', 'Eval Charlie'), row('d', 'claude', 'w2', 'Eval Delta'), row('e', 'codex', 'w2', 'Eval Echo')],
+      truncated: false, hostScope: { hostIds: ['local'], omittedHostIds: [] } }, _meta: { runtimeId: 'eval' } })
+    // The devices' own read lists them so: a resting chat by its Orca session, a live one its hook named by its Claude
+    // Code's, each in its worktree's folder and by its title.
+    const d = chats().sessions[2]!
+    const { source, read } = chatSource(deps, new Map([['eval-orca-d', { engine: 'claude', sessionId: d.id }]]))
+    await read()
+    expect(source.list().map(({ id, name, cwd, engine }) => [id, name, cwd, engine])).toEqual([
+      [observedAgentId('orca', 'eval-orca-c'), 'Eval Charlie', '/work/eval-w1', 'claude'],
+      [agentIdOf(d), 'Eval Delta', '/work/eval-w2', 'claude'],
+      [observedAgentId('orca', 'eval-orca-e'), 'Eval Echo', '/work/eval-w2', 'codex'],
+    ])
+    expect(source.order()).toEqual(chats().sessions.slice(1, 4).map(agentIdOf))
+    // A scenario with no chat has none.
+    expect((await answered(worldOn('darwin', layout()).deps, ['agent', 'list', '--json'])).result).toMatchObject({ agents: [] })
+  })
+
+  it("worktree list answers the layout's worktrees, each with an identity unless the world gives it none, and the plugin "
+    + 'names the worktree on screen by that identity, else by its id, which the devices map to the chats\' worktree', async () => {
+    const { world, deps } = worldOn('darwin', chats({ world: { orca: { noIdentity: ['w2'] } } }))
+    const door = await pluginDoor(deps)
+    await started(world, ['a', 'd'])
+    await orcaModelSteps['orca.layout'](world, { kind: 'orca.layout', worktrees: ['w1', 'w2'] })
+    await plugin(world, true)
+    await front(world, 'w1')
+    await front(world, 'w2')
+    const [w1, w2] = door.workspaces
+    expect(w1).toMatch(/^identity:wt2:local:00000000-0000-4000-8e00-[0-9a-f]{12}$/)
+    expect(w2).toBe(orcaWorktreeId('w2'))
+    expect(await answered(deps, ['worktree', 'list', '--json'])).toEqual({ id: 'eval', ok: true, result: {
+      worktrees: [{ id: orcaWorktreeId('w1'), identity: { key: w1!.slice('identity:'.length) } }, { id: orcaWorktreeId('w2') }],
+      hostScope: { hostIds: ['local'], omittedHostIds: [] }, totalCount: 2, truncated: false }, _meta: { runtimeId: 'eval' } })
+    const { source, read } = chatSource(deps)
+    await read({ worktrees: true })
+    expect(source.worktreeFor(w1!)).toBe(orcaWorktreeId('w1'))
+    // Each worktree with an identity has its own.
+    const both = worldOn('darwin', chats())
+    const told = await pluginDoor(both.deps)
+    await orcaModelSteps['orca.layout'](both.world, { kind: 'orca.layout', worktrees: ['w1', 'w2'] })
+    await plugin(both.world, true)
+    await front(both.world, 'w1')
+    await front(both.world, 'w2')
+    const { source: other, read: readOther } = chatSource(both.deps)
+    await readOther({ worktrees: true })
+    expect(told.workspaces.map((w) => other.worktreeFor(w!))).toEqual([orcaWorktreeId('w1'), orcaWorktreeId('w2')])
+  })
+
+  it("a chat has no pane: Orca's terminal list, the worktree on screen's terminals and a focus line know none of it", async () => {
+    const { world, deps } = worldOn('darwin', chats())
+    const door = await pluginDoor(deps)
+    await orcaModelSteps['orca.layout'](world, { kind: 'orca.layout', worktrees: ['w1', 'w2'] })
+    await plugin(world, true)
+    await front(world, 'w2')
+    await started(world, ['d', 'a'])
+    expect((await createOrcaReads(deps.orca!).orcaTabs())!.terminals.map((t) => t.handle)).toEqual([orcaTerminalHandle('a')])
+    // w2 holds d's chat alone: its terminals were none, and they are none still.
+    expect(door.fronts).toEqual([[]])
+    await expect(orcaModelSteps['orca.focus'](world, { kind: 'orca.focus', session: 'd' })).rejects.toThrow(/d, whose pane is not open/)
   })
 
   it("a watch after Orca's relaunch prints no focus from before its quit: that terminal went with it", async () => {

@@ -67,6 +67,8 @@ import { createOpenActions } from '../cable/hosts/open.js'
 import { createOpencodeClient, opencodeClientDeps, opencodeMessageId, type OpencodeClient } from '../cable/hosts/opencodeClient.js'
 import { OpencodeSource } from '../cable/hosts/opencodeSource.js'
 import { createOrcaAdapter, createOrcaReads, orcaDeps, orcaHandle, type OrcaFocusWatch, type OrcaReadDeps, type OrcaReads, type OrcaTerminal } from '../cable/hosts/orca.js'
+import { createOrcaChatAdapter, ORCA_CHAT_ADAPTER } from '../cable/hosts/orcaChat.js'
+import { OrcaChatSource } from '../cable/hosts/orcaChatSource.js'
 import { firstOuter, type NestedLookup } from '../cable/hosts/outer.js'
 import { readRecord } from '../cable/hosts/record.js'
 import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
@@ -92,7 +94,7 @@ import { DialVerdicts, greetedAsDial } from '../cable/dialPortVerdicts.js'
 import { createDialSetup } from '../cable/dialSetup.js'
 import { claudeFound, type ClaudeRun } from '../devices/claudePlugin.js'
 import { readOrcaConnected, readRemoved, readSetup, SETUP_COUNTS } from '../devices/dialSkillFiles.js'
-import { createOrcaHomesCache, orcaHomesDeps, readOrcaHomes, type OrcaHomesCache } from '../devices/orcaHomes.js'
+import { createOrcaHomesCache, orcaBinary, orcaHomesDeps, readOrcaHomes, type OrcaHomesCache } from '../devices/orcaHomes.js'
 import { orcaPluginRun, type OrcaPluginRun } from '../devices/orcaPlugin.js'
 import { createOrcaPluginSetup, orcaPluginParts } from '../cable/orcaPluginSetup.js'
 import { harnessPath } from '../config/harnessHome.js'
@@ -258,6 +260,9 @@ const FOLLOWED: Record<FollowCause | 'settle', Record<'moved' | 'no-tile', strin
  *  passed must not pull the dial back, and at most ECHO_KEPT of them. */
 const TAB_ECHO_MS = 2_000
 const ECHO_KEPT = 8
+/** How Orca's plugin names a worktree that has an identity (docs/plans/2026-11-23-dial-orca-chats-design.md, decided 5):
+ *  its key follows, which Orca's worktree list maps to the worktree's id (orcaChatSource.ts worktreeFor). */
+const ORCA_IDENTITY = 'identity:'
 
 // The agents outside a pane: how often their processes are checked, the turns no hook moves are looked at, and, while a dial
 // is attached, the open sessions are scanned (docs/specs/2026-11-13-device-without-the-app.md, "ObservedSource").
@@ -729,6 +734,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // Kept as built: the focus poll reads them (below).
   const kitty = createKittyAdapter(kittyDeps)
   const wezterm = createWeztermAdapter(apps)
+  /** An Orca chat, by its Orca session id: a rest or a tap brings its worktree up, by the worktree id the chat source's
+   *  latest read gave (docs/plans/2026-11-23-dial-orca-chats-design.md, decided 7). After Orca's terminals: an agent in an
+   *  Orca terminal names its Orca session too, and is that terminal's (orcaChat.ts orcaChatId). A chat's pane comes from
+   *  the observed source or the chat source, which are built together below. */
+  const orcaChat = createOrcaChatAdapter({ ...apps, worktreeOf: (orcaId) => orcaChats!.worktreeOf(orcaId), log })
   const adapters: readonly HostAdapter[] = [herdrNoted, noting(createZellijAdapter({ run: apps.run, zellij: zellijAt, platform: apps.platform })),
     // A rest's or a tap's move of tmux's pane is the dial's own: the poll's read that sees it, a moment after it ends, is
     // its echo.
@@ -743,6 +753,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     { ...orca,
       show: (pane: Pane, agentId: string) => { orcaSwitches.note(orcaHandle(pane.id)); return orca.show(pane, agentId) },
       focus: (pane: Pane) => { orcaSwitches.note(orcaHandle(pane.id)); return orca.focus(pane) } },
+    orcaChat,
   ].map(noting), claudeNoted, codexNoted, ...[
     createVscodeAdapter('vscode', { ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'vscode', terminals: vscodeNoted, raise: raise && ((window) => raise.raise(window)), windows }),
     createVscodeAdapter('cursor', { ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'cursor', terminals: vscodeNoted, raise: raise && ((window) => raise.raise(window)), windows }),
@@ -882,6 +893,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     open: (agentId, target) => {
       noteMove()
       if (target.pane?.adapter === claude.id && opener.can(agentId, target)) noteLink(agentId)
+      // A chat Orca's last read did not list (a new chat, or a read that failed) has no worktree to bring up, so its
+      // pane is no tap's and Orca comes forward alone (orcaChat.ts): said in fixed words, never its id (Review Focus 5).
+      if (!target.pane && observed!.paneOf(agentId, ORCA_CHAT_ADAPTER) !== undefined) log('[device] orca chat · no worktree')
       return opener.open(agentId, target)
     },
     // Words for a ChatGPT thread the wake still opens would be queued ahead of the wake's: they are words not taken yet,
@@ -1108,6 +1122,31 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     rank: (rank) => cableHost.setRank('codex', rank),
     monotonic,
     log,
+  }) : null
+  /** Orca's chats, with or without a process, read from `orca agent list` (cable/hosts/orcaChatSource.ts,
+   *  docs/plans/2026-11-23-dial-orca-chats-design.md): Orca runs a chat itself, on no terminal, so no layout of Orca's and
+   *  no hook before its first names it. Behind the observed agents' switch, as a hooked chat is that source's copy; read
+   *  only on the pushes below while a dial is attached, never on a timer (decided 3). */
+  const orcaChats: OrcaChatSource | null = observed ? new OrcaChatSource({
+    binary: () => orcaBinary(apps),
+    run: apps.run,
+    mtime: apps.mtime,
+    heard: () => observed.orcaSessions(),
+    // Through the opener with the chat's pane, as a hooked chat's tap: the chat adapter brings its worktree up, then Orca
+    // comes forward (decided 7), one way for both copies. Every chat the source lists has its worktree and its Orca id.
+    // Noted before it, as the other sources' taps are.
+    focus: (agentId) => {
+      noteMove()
+      return opener.open(agentId, { bundle: APP_BUNDLES.orca, pane: { adapter: ORCA_CHAT_ADAPTER, id: orcaChats!.placed().get(agentId)! } })
+    },
+    // A rest through the same adapter, which brings the worktree up and leaves Orca where it is. Noted as the adapters'
+    // shows are.
+    show: (agentId) => {
+      noteMove()
+      return orcaChat.show({ adapter: ORCA_CHAT_ADAPTER, id: orcaChats!.placed().get(agentId)! }, agentId)
+    },
+    log,
+    now: monotonic,
   }) : null
   const bundleId = deps.bundleId ?? readBundleId
   /** Whether the ChatGPT app is installed: on macOS the first of its places whose bundle has the app's id; on Windows
@@ -1438,6 +1477,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     appSettled: (app) => {
       if (app === 'claude') part.call('dial', claudeSettled)
       if (app === 'orca' && observed) part.call('orca', () => orcaSettled(observed))
+      // Orca in front is where its chats matter, and where the person may just have made one (decided 3).
+      if (app === 'orca' && orcaChats) part.call('orca-chat', () => readChats(orcaChats))
       // Orca is often not running at the start or the attach: its coming to the front is the pass's next chance.
       if (app === 'orca' && orcaSetup) part.call('orcaPlugin', () => orcaSetup.pass())
       // Behind another app cmux's log was not read: the read as cmux comes forward catches up.
@@ -1488,7 +1529,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   })
   // What the dial lists with no window, or with one in the apps view: this computer's harness agents, and the ones outside
   // a pane unless switched off.
-  const registry = new HostRegistry([cableHost.harness, observed, herdr, hcSource, cmuxSource, opencode, claudeAppSource, codexAppSource].filter((source) => source !== null))
+  const registry = new HostRegistry([cableHost.harness, observed, herdr, hcSource, cmuxSource, opencode, claudeAppSource, codexAppSource, orcaChats].filter((source) => source !== null))
   cableHost.setRegistry(registry)
   // The dial's log lives with the app's, one file a day (dialLog.ts). The old unbounded `dial.log` in the
   // data folder is cut down to a pointer, for anyone with a bookmark.
@@ -1898,6 +1939,33 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (fresh.size) part.call('dial', () => check(fresh))
     count((usage) => usage.agentsPresent(outsideRunning(entries)))
   }
+  // ── Orca's chats ───────────────────────────────────────────────────────────────────────────────────
+  //
+  // Read on pushes alone, while a dial is attached (docs/plans/2026-11-23-dial-orca-chats-design.md, decided 3): its
+  // attach, Orca's settle in front, a new worktree from the plugin and a hook of a chat the source does not list, the
+  // moments a chat can appear or matter. Orca tells no change of its own, and a poll would run `orca` all day for a list
+  // that changes when the person works in Orca.
+  /** The Orca ids of hooked chats a read was asked for since the dial came, kept to those the observed source still names:
+   *  each asks once, so a chat Orca's list leaves out (a read that failed, an Orca too old to list chats) costs no
+   *  `orca agent list` at every hook of every agent. */
+  let chatsAsked: ReadonlySet<string> = new Set()
+  /** A read, only while a dial is attached: with none, nothing is read or kept. */
+  const readChats = (chats: OrcaChatSource, opts?: { worktrees?: boolean }): void => {
+    if (dialOn) chats.read(opts)
+  }
+  /** A hook that names a listed chat's session folds its row into the hooked copy now, before the dial's look, so the dial
+   *  never gets the chat twice; one that names a chat the source does not list asks for a read. A chat is a hooked agent
+   *  with a chat's pane: an agent in an Orca terminal names its Orca session too, and Orca lists it as a terminal. */
+  const heardChats = (source: ObservedSource, chats: OrcaChatSource): void => {
+    chats.refold()
+    if (!dialOn) return
+    const heard = [...source.orcaSessions()].flatMap(([orcaId, { engine, sessionId }]) =>
+      source.paneOf(observedAgentId(engine, sessionId), ORCA_CHAT_ADAPTER) === orcaId ? [orcaId] : [])
+    const asked = chatsAsked
+    chatsAsked = new Set(heard.filter((orcaId) => asked.has(orcaId) || chats.worktreeOf(orcaId) === undefined))
+    if (heard.some((orcaId) => !asked.has(orcaId) && chats.worktreeOf(orcaId) === undefined)) chats.read()
+  }
+  if (observed && orcaChats) observed.onChange(() => part.call('orca-chat', () => heardChats(observed, orcaChats)))
   observed?.onChange(() => part.call('dial', outsideTurn))
   herdr?.onChange(() => part.call('dial', outsideTurn))
   // Before the dial's look, which then sees each session the scan found in the terminal it runs in.
@@ -1910,6 +1978,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // change. No thread is placed at the app's pane: a terminal thread's tap stays its terminal's.
   codexAppSource?.onChange(() => part.call('codex-app', () => observed!.setPaneNames('codex', codexAppSource.paneNames(), new Map())))
   codexAppSource?.onChange(() => part.call('dial', outsideTurn))
+  // Before the dial's look, so a hooked copy of a listed chat is named as Orca names it; setPaneNames tells only a change.
+  orcaChats?.onChange(() => part.call('orca-chat', () => observed!.setPaneNames(ORCA_CHAT_ADAPTER, orcaChats.paneNames(), orcaChats.placed())))
+  // The chats' places in Orca's ring follow Orca's list (rankOrca, below).
+  orcaChats?.onChange(() => part.call('orca', () => rankOrca(orcaChats)))
+  orcaChats?.onChange(() => part.call('dial', outsideTurn))
   /** One of the observed source's timers, each run guarded as a notice is: one that throws is logged and the next runs. */
   const every = (ms: number, run: () => unknown): ReturnType<typeof setInterval> => {
     const timer = setInterval(() => part.call('observed', run), ms)
@@ -1960,9 +2033,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   let orcaRing: { members?: ReadonlySet<string>; again: boolean } = { again: false }
   /** A read runs: Orca's CLI is asked one at a time, across a detach too. */
   let ordering = false
-  /** The agents on Orca's ring: the merged list's, as the dials list them. */
-  const orcaAgents = (): HostAgent[] => registry.entries().filter(({ agent }) => agent.app === 'orca').map(({ agent }) => agent)
-  const orcaIds = (): string[] => orcaAgents().map(({ id }) => id)
+  /** The agents on Orca's ring in its terminals: the merged list's, as the dials list them. Not its chats, the chat
+   *  source's rows and the hooked copies with a chat's pane: a chat has no terminal, so it takes no tab's place, rank or
+   *  name, asks no read of Orca's layouts as it comes and goes, and is no candidate for a terminal by elimination, where
+   *  a chat in an agent's folder left that agent unplaced. */
+  const orcaAgents = (source: ObservedSource): HostAgent[] => registry.entries().map(({ agent }) => agent).filter(({ id, app }) =>
+    app === 'orca' && !orcaChats!.placed().has(id) && source.paneOf(id, ORCA_CHAT_ADAPTER) === undefined)
+  const orcaIds = (source: ObservedSource): string[] => orcaAgents(source).map(({ id }) => id)
   /**
    * The Orca terminal of each agent on Orca's ring with no Orca pane, by elimination (the design's decided 7): one the
    * attach scan found has none until its first hook, and an idle one sends none, while Orca's list names no terminal's
@@ -1979,7 +2056,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     }
     const held = new Set<string>()
     const unplaced = new Map<string, string[]>()
-    for (const { id, cwd, engine } of orcaAgents()) {
+    for (const { id, cwd, engine } of orcaAgents(source)) {
       const pane = source.paneOf(id, 'orca')
       if (pane !== undefined) held.add(pane)
       else if (cwd !== undefined) add(unplaced, cwd, engine, id)
@@ -1992,6 +2069,17 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       if (ids.length === 1 && handles?.length === 1) placed.set(ids[0], handles[0])
     }
     return placed
+  }
+  /** Orca's terminal agents at their tab places, from the last order read that landed, and how many tabs it held. */
+  let orcaTabRank: { rank: ReadonlyMap<string, number>; places: number } = { rank: new Map(), places: 0 }
+  /** Orca's rank: its terminals at their tab places, then its chats in Orca's list's order, each after every tab
+   *  (decided 6): Orca tells no order of its chat tabs, and a chat has no place among the terminals'. A new rank each
+   *  time, which the ring is put in order by (select.ts). Nothing is pushed: the dials read the reordered ring on their
+   *  next list, as any change of it. */
+  const rankOrca = (chats: OrcaChatSource): void => {
+    const rank = new Map(orcaTabRank.rank)
+    for (const [at, id] of chats.order().entries()) rank.set(id, orcaTabRank.places + at)
+    cableHost.setRank('orca', rank)
   }
   const readOrcaOrder = (source: ObservedSource): Promise<void> => {
     // Marked once asked: an ask that throws leaves the next change free to ask again.
@@ -2006,15 +2094,15 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       const place = new Map(listed.tabs.map(({ handle }, at) => [handle, at]))
       const placed = placeInOrca(source, listed.terminals)
       const rank = new Map<string, number>()
-      for (const id of orcaIds()) {
+      for (const id of orcaIds(source)) {
         // An agent in a multiplexer inside Orca has no Orca pane, and one Orca did not lay out has no place: both come
         // after the ranked (select.ts), unless placed by elimination.
         const handle = source.paneOf(id, 'orca') ?? placed.get(id)
         const at = handle === undefined ? undefined : place.get(handle)
         if (at !== undefined) rank.set(id, at)
       }
-      // Nothing is pushed: the dials read the reordered ring on their next list, as any change of it.
-      cableHost.setRank('orca', rank)
+      orcaTabRank = { rank, places: listed.tabs.length }
+      rankOrca(orcaChats!)
       // The same read names Orca's agents by their tabs (the design's section 4). After the rank: the rename's change
       // lists the ring already in tab order.
       source.setPaneNames('orca', new Map(listed.tabs.flatMap(({ handle, title, renamed }) =>
@@ -2031,7 +2119,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  none, the last order is kept. */
   const orcaMembers = (source: ObservedSource): Promise<void> | undefined => {
     if (!dialOn) return
-    const members = new Set(orcaIds().map((id) => `${id} ${source.paneOf(id, 'orca') ?? ''}`))
+    const members = new Set(orcaIds(source).map((id) => `${id} ${source.paneOf(id, 'orca') ?? ''}`))
     const was = orcaRing.members
     orcaRing.members = members
     if (members.size === 0 || (was?.size === members.size && [...was].every((id) => members.has(id)))) return
@@ -2152,26 +2240,50 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   //
   // Orca's Harness Device plugin tells the terminals of the worktree on Orca's screen while it holds the dial stream, and
   // while Orca is settled in front, Orca's ring for a dial that says appFilter is the agents in them
-  // (docs/plans/2026-11-18-dial-orca-tab-scope-design.md). In memory only, and dropped as the plugin's stream ends: stale
-  // handles never scope the ring. Each change is one line with a count, never a handle. The message and the stream's end
-  // come in inside the orca part: Node reports a throw in an abort listener as an uncaught exception.
+  // (docs/plans/2026-11-18-dial-orca-tab-scope-design.md), and that worktree's chats, by the workspace id the plugin
+  // names it by (docs/plans/2026-11-23-dial-orca-chats-design.md, decided 5). In memory only, and dropped as the plugin's
+  // stream ends: stale handles never scope the ring. Each change is one line with a count, never a handle or the
+  // workspace. The message and the stream's end come in inside the orca part: Node reports a throw in an abort listener
+  // as an uncaught exception.
   /** The handles of the worktree on Orca's screen; undefined while none is told. */
   let orcaFront: ReadonlySet<string> | undefined
-  /** The plugin's terminals, null for none. The same handles in another order change nothing. */
-  const orcaFronted = (terminals: readonly string[] | null): void => {
+  /** That worktree as Orca names it, the plugin's workspace id; undefined while none is told, and from an older plugin,
+   *  whose ring holds no chat (Review Focus 4). */
+  let orcaWorkspace: string | undefined
+  /** The worktree id the plugin's workspace names: an `identity:<key>` through Orca's worktree list, none until a read
+   *  gave it; any other is the worktree's own id, which a chat's `worktreeId` holds as it is. Asked at each look: a
+   *  worktree read that lands later fills the map, while the scope keeps the latest workspace (Review Focus 3). */
+  const worktreeOnScreen = (chats: OrcaChatSource, workspace: string): string | undefined =>
+    workspace.startsWith(ORCA_IDENTITY) ? chats.worktreeFor(workspace) : workspace
+  /** Whether that agent is a chat of the worktree the plugin names: none with the observed agents switched off. */
+  const chatOnScreen = (agentId: string, workspace: string): boolean => {
+    if (!orcaChats) return false
+    const worktreeId = orcaChats.worktreeOfAgent(agentId)
+    return worktreeId !== undefined && worktreeId === worktreeOnScreen(orcaChats, workspace)
+  }
+  /** The plugin's terminals, null for none, and its workspace. The same handles in another order change nothing. */
+  const orcaFronted = (terminals: readonly string[] | null, workspace?: string | null): void => {
     const kept = orcaFront
     const front = terminals === null ? undefined : new Set(terminals)
-    if (front && kept ? front.size === kept.size && [...front].every((handle) => kept.has(handle)) : front === kept) return
+    const named = workspace ?? undefined
+    const same = front && kept ? front.size === kept.size && [...front].every((handle) => kept.has(handle)) : front === kept
+    if (same && named === orcaWorkspace) return
+    const moved = named !== undefined && named !== orcaWorkspace
     orcaFront = front
+    orcaWorkspace = named
     log(terminals === null ? '[device] orca front · cleared' : `[device] orca front · set · ${terminals.length} terminals`)
     // Read when the dials list, never kept: an agent that starts in one of those terminals joins at the next list, and
     // one resumed elsewhere leaves. Its terminal is the one a rest and a tap read (observed.ts placeIn): its own Orca
     // pane, else where the last order read placed it, else the terminal that holds it. Without the held one, an agent
-    // placement could not find left the ring, and a prompt typed into it was skipped as no tile (2026-11-21).
+    // placement could not find left the ring, and a prompt typed into it was skipped as no tile (2026-11-21). A chat has
+    // no terminal: it is in scope by its worktree, as the latest read of Orca's list gave it.
     cableHost.setScope('orca', front && { inScope: (agentId) => {
       const pane = observed?.shownAt(agentId, 'orca')
-      return pane !== undefined && front.has(orcaHandle(pane))
+      return (pane !== undefined && front.has(orcaHandle(pane))) || (named !== undefined && chatOnScreen(agentId, named))
     } })
+    // Another worktree on screen is a push (decided 3): its chats, with Orca's worktree list when its identity is not in
+    // the map yet, as the worktree may be new since.
+    if (moved && orcaChats) readChats(orcaChats, { worktrees: worktreeOnScreen(orcaChats, named) === undefined })
   }
 
   // ── the pane focused in Orca ───────────────────────────────────────────────────────────────────────
@@ -2569,8 +2681,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     cmuxFocuses.clear()
   }
 
-  /** The scan, the reminders, herdr's and Herdr Core's sockets, opencode's service, the Claude app's store and the ChatGPT
-   *  app's metadata, for an attached dial alone. */
+  /** The scan, the reminders, herdr's and Herdr Core's sockets, opencode's service, the Claude app's store, the ChatGPT
+   *  app's metadata and Orca's chats, for an attached dial alone. */
   let attached: ReturnType<typeof setInterval>[] = []
   /** A part's work run as `part.call` runs it, and its end, which a throw or a rejection only ends: what waits on it never
    *  fails. */
@@ -2581,7 +2693,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }
   /** Its promise ends once the sources it started (herdr's, Herdr Core's, cmux's, opencode's, the Claude app's and the
    *  ChatGPT app's) have read once: the dial's greeting waits for it (cableSession.ts), as those sources hold no rows until
-   *  then. A source not started, or stopped, ends at once. */
+   *  then. A source not started, or stopped, ends at once. Orca's chats are not waited on: their read runs `orca`, which
+   *  may take ORCA_CHAT_TIMEOUT_MS, and its rows come to the dials with the change it tells. */
   const dialAttached = (on: boolean): Promise<void> => {
     dialOn = on
     for (const timer of attached) clearInterval(timer)
@@ -2596,7 +2709,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     part.call('notices', () => on ? notices.attached() : notices.detached())
     // With no dial, WezTerm's and kitty's focus is read no more: the devices' stop detaches too.
     part.call('pane', on ? checkPaneFocus : dropPaneFocus)
-    if (!observed || !herdr || !opencode || !claudeAppSource || !codexAppSource) return Promise.resolve()
+    if (!observed || !herdr || !opencode || !claudeAppSource || !codexAppSource || !orcaChats) return Promise.resolve()
     // Only with herdr installed, read at each attach, as a tap needs it (herdr.ts): with none, no folder is watched
     // (~/.config, or the home folder, recursive on macOS) for a socket that never comes. herdr's zip on Windows puts it on
     // no PATH, and its folder appears only when it first runs, which may be after the dial came (the VM notes, Final head
@@ -2626,6 +2739,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         if (look !== codexAppLooks) return
         return found ? codexAppSource.start() : codexAppSource.stop()
       })
+    })
+    // Orca's chats are read at each attach, and none is kept with no dial (decided 3). A hooked chat Orca's list left out
+    // may ask once again under the next dial.
+    part.call('orca-chat', () => {
+      chatsAsked = new Set()
+      return on ? orcaChats.read() : orcaChats.stop()
     })
     const reads = Promise.all([herdrRead, hcRead, cmuxListed, opencodeRead, claudeRead, codexRead]).then(() => {})
     if (!on) {
@@ -2706,7 +2825,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     thread: threadHandler((title) => part.call('dial', () => threadReported(title))),
     tabs: tabs.handler,
     dial: dial.handler,
-    orcaFront: orcaFrontHandler(() => dial.isOpen(), (terminals) => part.call('orca', () => orcaFronted(terminals))),
+    orcaFront: orcaFrontHandler(() => dial.isOpen(), (terminals, workspace) => part.call('orca', () => orcaFronted(terminals, workspace))),
     notify: notifyHandler((mode) => {
       let answer: { mode: NotifyMode } | { error: string } = { error: 'FAILED' }
       part.call('dial', () => { answer = setNotify(mode) })

@@ -2777,7 +2777,7 @@ describe('hook notify: a session outside a pane', () => {
   /** The environment names the hook may send as host hints, and nothing else (spec: The hook). */
   const HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'ZELLIJ_PANE_ID',
     'ZELLIJ_SESSION_NAME', 'TMUX_PANE', 'HC_TERMINAL_ID', 'CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID', 'KITTY_WINDOW_ID',
-    'KITTY_LISTEN_ON', 'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_TERMINAL_HANDLE', 'CLAUDE_CODE_HOST_SESSION_ID',
+    'KITTY_LISTEN_ON', 'WEZTERM_PANE', 'ORCA_TERMINAL_HANDLE', 'ORCA_AGENT_SESSION_ID', 'CLAUDE_CODE_HOST_SESSION_ID',
     'CLAUDE_CODE_ENTRYPOINT']
   /** The hints a cut would turn into another value: left out whole over 64 characters. The Claude app's session id
    *  may be longer (claudeApp.ts CLAUDE_SESSION), and cut, it would still pass as another session's. */
@@ -3127,6 +3127,18 @@ describe('hook notify: a session outside a pane', () => {
     await runHook({ port, env: { ...noHints, ...sent }, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
     await received(requests)
     expect(requests[0].body.hostHints).toEqual(sent)
+  })
+
+  // An Orca session id with no terminal handle is a chat's (cable/hosts/orcaChat.ts orcaChatId): the cap drops an Orca
+  // terminal's session id before its handle, so it is never taken for a chat.
+  it('an Orca terminal past nine other hints keeps its handle, and the cap drops its session id', async () => {
+    const { port, requests } = await collect()
+    const before = { TERM_PROGRAM: 't', __CFBundleIdentifier: 'b', REX_BLOCK: 'r', ZELLIJ: '0', ZELLIJ_PANE_ID: '3',
+      ZELLIJ_SESSION_NAME: 's1', KITTY_WINDOW_ID: '1', KITTY_LISTEN_ON: 'unix:/tmp/kitty-1', WEZTERM_PANE: '2' }
+    await runHook({ port, env: { ...noHints, ...before, ORCA_AGENT_SESSION_ID: 'orca-1', ORCA_TERMINAL_HANDLE: 'h-1' },
+      input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
+    await received(requests)
+    expect(requests[0].body.hostHints).toEqual({ ...before, ORCA_TERMINAL_HANDLE: 'h-1' })
   })
 
   // A cut pane id, session name or socket would name another pane, session or socket: such a value is left out instead,

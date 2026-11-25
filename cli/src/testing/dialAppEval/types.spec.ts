@@ -2,7 +2,7 @@ import { expect, it } from 'vitest'
 import { frontAppId, FRONT_NONE } from '../../cable/hosts/frontApp.js'
 import { observedAgentId } from '../../cable/hosts/observed.js'
 import { claudeSession, itermSession, orcaSession, vscode } from './catalog.js'
-import { APPS, DIMENSIONS, EDITORS, PAGE, WEIGHTS, agentIdOf, engineOf, frontName, hookHandle, itermPlaceOf, orcaPaneHandle,
+import { APPS, DIMENSIONS, EDITORS, PAGE, WEIGHTS, agentIdOf, engineOf, frontName, hookHandle, itermPlaceOf, orcaAgentSessionId, orcaPaneHandle,
   orcaTerminalHandle, orcaWorktreeId, pageId, placeOf, resultKey, sessionPage, type Platform } from './types.js'
 
 const id = '00000000-0000-4000-8000-0000000000e1'
@@ -15,6 +15,15 @@ it('agentIdOf follows the session\'s engine', () => {
   expect(agentIdOf({ app: 'cursor', id })).toBe(observedAgentId('claude', id))
   expect(agentIdOf({ app: 'claude', id })).toBe(observedAgentId('claude', id))
   expect(agentIdOf({ app: 'chatgpt', id })).toBe(observedAgentId('codex', id))
+})
+
+it("a resting Orca chat's row is Orca's own, by its Orca session; a live one's is its engine's, as the hooked copy's", () => {
+  expect(orcaAgentSessionId('c')).toBe('eval-orca-c')
+  expect(agentIdOf({ key: 'c', app: 'orca', id, chat: 'resting' })).toBe(observedAgentId('orca', 'eval-orca-c'))
+  expect(agentIdOf({ key: 'c', app: 'orca', id, chat: 'resting', engine: 'codex' })).toBe(observedAgentId('orca', 'eval-orca-c'))
+  expect(agentIdOf({ key: 'c', app: 'orca', id, chat: 'live' })).toBe(observedAgentId('claude', id))
+  expect(agentIdOf({ key: 'c', app: 'orca', id })).toBe(observedAgentId('claude', id))
+  expect(() => agentIdOf({ app: 'orca', id, chat: 'resting' })).toThrow('a resting Orca chat is named by its key')
 })
 
 it('an editor session runs in a terminal unless it says otherwise; the base apps have no place', () => {
@@ -92,6 +101,8 @@ it("orcaPaneHandle gives the session's handle at its first launch and 8d0n at it
   expect(orcaPaneHandle({ key: 'o1', handle: 'none' }, 1)).toBe('term_00000000-0000-4000-8d01-000000006f31')
   expect(hookHandle({ key: 'o1', handle: 'none' }, 0)).toBeUndefined()
   expect(hookHandle({ key: 'o1', handle: 'none' }, 1)).toBeUndefined()
+  // A chat's hooks name no handle: no terminal holds it.
+  expect(hookHandle({ key: 'o1', chat: 'live' }, 0)).toBeUndefined()
 })
 
 it('orcaWorktreeId is eval-repo::/work/eval-<key>', () => {
