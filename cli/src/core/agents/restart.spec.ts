@@ -62,6 +62,7 @@ function setup(row: RegisteredSession | null = agent(), over: Partial<RestartDep
           gridLaunchRecord === undefined ? {} : { gridLaunch: gridLaunchRecord?.override ?? null, gridWebSearch: gridLaunchRecord?.webSearch ?? null })
         return { state: 'confirmed', entry: structuredClone(refreshed) }
       }),
+      setLaunch: vi.fn<RestartDeps['registry']['setLaunch']>((_id, launch) => refreshed && Object.assign(refreshed, { launch })),
     } as unknown as RestartDeps['registry'],
     purgeBusy: vi.fn(() => false),
     stopJobs: new Map(),
@@ -395,6 +396,59 @@ describe('restarting an agent', () => {
     expect(respawn).toHaveBeenCalledExactlyOnceWith(['fixture-engine', 's1'])
     expect(keepAbandoned).not.toHaveBeenCalled()
     expect(run.deps.registry.confirmLaunch).not.toHaveBeenCalled()
+  })
+
+  describe('a swap the guard held', () => {
+    const native = { token: 'tok-1', current: () => true }
+    /** The real swap order (`restartAgent`) over a pane whose relaunch the guard held: no engine came up, and the pane is
+     *  the held shell under the inspected launch's token. */
+    const guardHeldSwap = async (row: RegisteredSession, heldShell = async () => true) => {
+      const actual = await vi.importActual<typeof import('../../lib/restartAgent.js')>('../../lib/restartAgent.js')
+      vi.mocked(restartAgent).mockImplementationOnce(actual.restartAgent)
+      const respawn = vi.fn(async () => ({ ok: true }))
+      const run = setup(row, {
+        native: (async () => ({ ok: true, launch: native })) as never,
+        relaunchOverrides: (async () => ({ ok: true, overrides: { native, env: {}, extraArgs: [], clearEnv: [] } })) as never,
+        paneSwapDeps: () => ({ holdOpen: async () => ({ ok: true }), terminate: async () => 'gone', respawn,
+          waitForProcess: async () => null, heldShell, buildArgv: () => ['codex'], keepAbandoned: vi.fn(), log: () => {} }),
+        startAgain: vi.fn(),
+      } as Partial<RestartDeps>)
+      return { ...run, respawn }
+    }
+
+    it('a restart of a conversation the guard held starts it again: the row held to start again, the held passes asked, success shown starting', async () => {
+      const run = await guardHeldSwap(agent())
+      const startsAgain = { state: 'held', service: 'native', nativeToken: 'tok-1', startsAgain: true, detail: 'Starting again.' }
+      const reply = await run.restart('a1')
+      expect(reply).toEqual({ ok: true, session: expect.objectContaining({ agentId: 'a1', sessionId: 's1', launch: startsAgain }), resumed: true })
+      expect(run.deps.registry.setLaunch).toHaveBeenCalledExactlyOnceWith('a1', startsAgain)
+      expect(run.deps.announceSession).toHaveBeenCalledExactlyOnceWith(reply.ok && reply.session)
+      expect(run.deps.startAgain).toHaveBeenCalledExactlyOnceWith('a1')
+      expect(console.log).toHaveBeenCalledWith('[restart] a1 claude · held by the native guard · starting again')
+      expect(run.deps.registry.confirmLaunch).not.toHaveBeenCalled()
+      expect(releaseHold).not.toHaveBeenCalled()
+      expect(run.respawn).toHaveBeenCalledOnce()
+    })
+
+    // Marked, a ready row with no conversation would become a held first launch, whose recovery sends its first task again.
+    it('a restart of a row with no conversation the guard held answers as today and marks nothing', async () => {
+      const run = await guardHeldSwap(agent({ sessionId: '' }))
+      expect(await run.restart('a1')).toEqual({ ok: false, error: 'RESTART_FAILED', detail: 'claude did not come back up after restart' })
+      expect(run.deps.registry.setLaunch).not.toHaveBeenCalled()
+      expect(run.deps.startAgain).not.toHaveBeenCalled()
+      expect(run.deps.announceSession).not.toHaveBeenCalled()
+      expect(run.respawn).toHaveBeenCalledOnce()
+    })
+
+    it('a held swap that changed under it marks nothing', async () => {
+      const row = agent()
+      const run: Awaited<ReturnType<typeof guardHeldSwap>> = await guardHeldSwap(row, async () => { run.state.live = false; return true })
+      expect(await run.restart('a1')).toEqual(changed)
+      expect(row.launch).toBeUndefined()
+      expect(run.deps.registry.setLaunch).not.toHaveBeenCalled()
+      expect(run.deps.startAgain).not.toHaveBeenCalled()
+      expect(run.deps.announceSession).not.toHaveBeenCalled()
+    })
   })
 
   describe('with new launch words', () => {

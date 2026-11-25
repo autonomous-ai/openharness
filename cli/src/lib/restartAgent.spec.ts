@@ -269,6 +269,47 @@ describe('restartAgent', () => {
     expect(d.calls).not.toContain('keepAbandoned')
   })
 
+  // The guard held the swap's launch: a respawn over its held shell runs on the same stale evidence and is held again.
+  it('never respawns over its own launch\'s held shell: a resume the guard held answers held, with no fresh fallback', async () => {
+    const logs: string[] = []
+    const heldShell = vi.fn(async () => true)
+    const d = deps({ waitForProcess: async () => null })
+    const outcome = await restartAgent({ engine: 'codex', sessionId: 's1' }, false, { ...d, heldShell, log: (message) => logs.push(message) })
+    expect(outcome).toEqual({ ok: false, held: true, detail: 'codex did not come back up after restart' })
+    expect(d.calls.filter((call) => call === 'respawn')).toHaveLength(1)
+    expect(heldShell).toHaveBeenCalledOnce()
+    expect(logs.join('\n')).not.toContain('retrying fresh')
+    expect(d.calls).not.toContain('keepAbandoned')
+  })
+
+  it.each([false, 'unknown'] as const)('falls back fresh as today when its pane is not its held shell (%s)', async (answer) => {
+    const d = deps({ waitForProcess: async () => null })
+    const outcome = await restartAgent({ engine: 'codex', sessionId: 's1' }, false, { ...d, heldShell: async () => answer })
+    expect(outcome).toEqual({ ok: false, detail: 'codex did not come back up after restart' })
+    expect(d.calls.filter((call) => call === 'respawn')).toHaveLength(2)
+  })
+
+  it('a fresh fallback the guard held answers held too', async () => {
+    let asked = 0
+    const d = deps({ waitForProcess: async () => null })
+    const outcome = await restartAgent({ engine: 'codex', sessionId: 's1' }, false, { ...d, heldShell: async () => ++asked === 2 })
+    expect(outcome).toEqual({ ok: false, held: true, detail: 'codex did not come back up after restart' })
+    expect(d.calls.filter((call) => call === 'respawn')).toHaveLength(2)
+  })
+
+  it('asks nothing when the engine came back up', async () => {
+    const heldShell = vi.fn(async () => true)
+    expect(await restartAgent({ engine: 'codex', sessionId: 's1' }, false, { ...deps(), heldShell })).toMatchObject({ ok: true, resumed: true })
+    expect(heldShell).not.toHaveBeenCalled()
+  })
+
+  it('a fresh start the guard held answers held, once', async () => {
+    const d = deps({ waitForProcess: async () => null })
+    expect(await restartAgent({ engine: 'codex', sessionId: '' }, false, { ...d, heldShell: async () => true }))
+      .toEqual({ ok: false, held: true, detail: 'codex did not come back up after restart' })
+    expect(d.calls.filter((call) => call === 'respawn')).toHaveLength(1)
+  })
+
   it('never retries a resume fallback for an engine with no session to resume in the first place', async () => {
     let respawnCalls = 0
     const d = deps({
