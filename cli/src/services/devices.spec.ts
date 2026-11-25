@@ -48,7 +48,7 @@ import { devicesListenerPath } from '../devices/listenerPath.js'
 import { STOP_HOOK_GRACE_MS } from '../core/turns/turnHooks.js'
 import type { FleetEvent } from '../cable/machineFleet.js'
 import { claudeProjectsRoots, codexHomeRoots } from '../lib/engineHomes.js'
-import type { ExternalProvider, ProcessView } from '../lib/sessionSearch/externals/types.js'
+import type { ExternalProvider, ProcessView, RunningProcess } from '../lib/sessionSearch/externals/types.js'
 import type { TierInput } from '../lib/notifyTier.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { claudeAppFixture } from '../testing/claudeAppFixture.js'
@@ -216,7 +216,7 @@ const readers = vi.hoisted(() => ({
   /** The pids whose process ended: every other one runs. */
   ended: new Set<number>(),
   // Windows' process table, as the PTY host gives it: none unless a spec gives one.
-  listProcesses: vi.fn(async () => [] as Array<{ pid: number; ppid: number; executable: string; args: string }>),
+  listProcesses: vi.fn(async () => [] as Array<RunningProcess & { startMarker?: string }>),
 }))
 vi.mock('../lib/sessionSearch/external.js', async (real) => ({
   ...await real<typeof import('../lib/sessionSearch/external.js')>(),
@@ -7978,6 +7978,85 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
     const [{ id }] = await listed()
     expect(await host().openAgent(id)).toBeUndefined()
     expect(orcaRuns).toEqual([['C:\\herdr\\herdr.exe', ['agent', 'focus', PANE], 10_000]])
+  })
+
+  // The tree Ken's VM recorded (docs/plans/2026-11-25-dial-herdr-windows-app-design.md, "What Part 1 showed"), as the
+  // PTY host's table gives it, a command line on every row: the lookup's own rules are herdrOuter.spec.ts's, the tap's
+  // open.spec.ts's and the app's observed.spec.ts's; here, that the devices wire them on Windows.
+  describe('on Windows, the app holding herdr\'s client', () => {
+    /** The k-th process to start: start order is not pid order. */
+    const mark = (k: number): string => `w:${134080735400000000n + BigInt(k * 1000)}`
+    const row = (pid: number, ppid: number, executable: string, k: number) =>
+      ({ pid, ppid, executable, args: `${executable} --token s3cret`, startMarker: mark(k) })
+    /** Client #1 (8412) in a Windows Terminal tab started the server (5992), whose pane runs the caller (8976); client #2
+     *  (9904) in VS Code's terminal; client #3 (3720, the newest) in the console Win+R's default-terminal handoff opened. */
+    const TREE = [
+      row(5616, 4900, 'explorer.exe', 1), row(7588, 5616, 'WindowsTerminal.exe', 2), row(4008, 7588, 'OpenConsole.exe', 3),
+      row(5512, 7588, 'powershell.exe', 4), row(8412, 5512, 'herdr.exe', 5), row(5992, 8412, 'herdr.exe', 6),
+      row(2264, 5992, 'OpenConsole.exe', 7), row(8928, 5992, 'powershell.exe', 8), row(8976, 8928, 'powershell.exe', 9),
+      row(5864, 5616, 'Code.exe', 10), row(6400, 5864, 'Code.exe', 11), row(6936, 6400, 'OpenConsole.exe', 12),
+      row(9264, 6400, 'powershell.exe', 13), row(9904, 9264, 'herdr.exe', 14), row(5604, 5616, 'powershell.exe', 15),
+      row(4168, 5604, 'conhost.exe', 16), row(3720, 5604, 'herdr.exe', 17),
+    ]
+    /** Client #2 and its shell ended. */
+    const SECOND_GONE = TREE.filter(({ pid }) => pid !== 9904 && pid !== 9264)
+    /** herdr's zip puts it on no PATH: the herdr that wrote the marker runs the tap's command. */
+    const win = { ...onMac, platform: 'win32' as const, onPath: (name: string) => (name === 'herdr' ? null : onMac.onPath(name)) }
+    const focused: [string, string[], number] = ['C:\\herdr\\herdr.exe', ['agent', 'focus', PANE], 10_000]
+    const focuses = () => orcaRuns.filter(([, args]) => args[0] === 'agent')
+    const lookups = () => said().filter((line) => line.startsWith('[device] herdr client ·'))
+    const pages = async () => (await host().listAgentSnapshot({ apps: true })).apps?.apps?.map(({ id }) => id)
+
+    /** The devices on Windows over [table], the agent's hook from the caller, once herdr's lookup said its line; its
+     *  agent as the observed source holds it, and the raise the spec reads. */
+    const inHerdr = async (table: typeof TREE) => {
+      readers.listProcesses.mockResolvedValue(table)
+      const raise = fakeWindowsRaise()
+      const ingest = vi.spyOn(ObservedSource.prototype, 'ingest')
+      const { port } = withHerdr({ orca: win, windowsRaise: raise.raise })
+      port.observed({ ...hook('session-start'), callerPid: 8976 })
+      attach(port)
+      await vi.waitFor(() => expect(lookups()).toHaveLength(1))
+      const agent = () => (ingest.mock.contexts[0] as ObservedSource).list().find(({ id }) => id === ID)
+      return { raise, agent }
+    }
+
+    it('an agent in herdr attached from VS Code is VS Code\'s, on herdr\'s page, and a tap focuses the pane then raises Code', async () => {
+      const { raise, agent } = await inHerdr(TREE)
+      expect(lookups()).toEqual(['[device] herdr client · found'])
+      expect(agent()).toMatchObject({ app: 'vscode', nest: 'herdr' })
+      expect(await pages()).toContain('herdr')
+      expect(await pages()).not.toContain('vscode')
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(focuses()).toEqual([focused])
+      expect(raise.apps).toEqual(['com.microsoft.VSCode'])
+      expect(raise.windows).toEqual([])
+    })
+
+    // Decision 5, end to end: the handoff's client #3 is newer, and in no window.
+    it('with client #2 gone, the agent is the unknown app\'s on herdr\'s page, and a tap raises Windows Terminal\'s window', async () => {
+      const { raise, agent } = await inHerdr(SECOND_GONE)
+      expect(lookups()).toEqual(['[device] herdr client · none'])
+      expect(agent()).toMatchObject({ app: 'terminal', nest: 'herdr' })
+      expect(await pages()).toContain('herdr')
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(focuses()).toEqual([focused])
+      expect(raise.windows).toEqual([7588])
+      expect(raise.apps).toEqual([])
+    })
+
+    it('the table not read is said', async () => {
+      await inHerdr([])
+      expect(lookups()).toEqual(['[device] herdr client · not read · processes'])
+    })
+
+    it('no log line holds a pid, an image name, a command line or the pane', async () => {
+      await inHerdr(TREE)
+      await host().openAgent(ID)
+      // The caller, the server, the clients and the window's owner, and every image name.
+      const secrets = ['8976', '5992', '8412', '9904', '3720', '7588', ...new Set(TREE.map(({ executable }) => executable)), 's3cret', PANE]
+      expect(logs.filter((line) => secrets.some((secret) => line.includes(secret)))).toEqual([])
+    })
   })
 
   it('with no socket, the folder herdr\'s socket goes in is watched, where the daemon\'s own environment puts it, while a dial is attached', () => {
