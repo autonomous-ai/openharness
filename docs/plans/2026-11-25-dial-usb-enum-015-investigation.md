@@ -91,15 +91,18 @@ Decisive test first: the ROM's download mode enumerates with no app code at all.
 Two boards ship (`board_table.c`): board A has the AXP2101 PMIC, a battery and two keys (PWR on the PMIC, BOOT on
 GPIO0); board B has no PMIC and one key (BOOT). On board B unplugging is a power cycle; on board A it is not.
 
-1. Unplug the dial. If it stays lit (board A), hold PWR until the screen goes dark (the AXP2101's own long-press;
-   firmware leaves REG 0x27 at its default), then press PWR to start it. Plug it in directly to the Mac with **a
+1. Unplug the dial. If it stays lit (board A), hold PWR until the screen goes dark: firmware leaves REG 0x27 at its
+   default, so the AXP2101's own long press power-cycles the chip and the dial restarts (`board/power.c`, `ptt.c`);
+   if it stays dark, press PWR to start it. Plug it in directly to the Mac with **a
    different cable known to carry data** (one that syncs a phone), and try the USB-C plug **both ways round at the
    dial end**. Check `ls /dev/cu.usbmodem*`.
    - Listed: the dial is fine; the old cable or its orientation was the fault. Nothing to flash.
 2. Still not listed: ROM download mode. The chip must start with BOOT (GPIO0) held low; GPIO46 is pulled down on the
-   board. Holding BOOT on a running dial only turns the screen off (`ptt.c`, 800 ms), so start from off:
+   board. Holding BOOT on a running dial only turns the screen off (`ptt.c`, 800 ms), so the chip has to start
+   while it is held:
    - board B: unplugged; hold BOOT, plug the cable into the Mac directly (no hub), release after 2 s;
-   - board A: off as in step 1; hold BOOT, press PWR (or plug in), release BOOT after 2 s.
+   - board A: hold BOOT and, still holding it, do step 1's long PWR press (and the short one if it stays dark), so
+     the restart starts with BOOT low; release BOOT 2 s after PWR.
    The screen stays dark or frozen; that is expected.
    - Run `ls /dev/cu.usbmodem*` and `ioreg -p IOUSB -l | grep -i -A2 "USB JTAG"`. A `303a:1001` "USB JTAG/serial
      debug unit" means the USB path works and the app image is at fault: go to step 3.
@@ -110,9 +113,9 @@ GPIO0); board B has no PMIC and one key (BOOT). On board B unplugging is a power
    board probe ends with `--after hard_reset` (`flash-circle.sh` line 317), so the chip leaves download mode and boots
    the app; if the app's USB is the part that is gone, the next esptool step finds no port. With GPIO0 held low,
    every reset lands back in download mode, so all three esptool calls (probe, erase otadata, write app) reach it.
-   After `flashed.`, release BOOT and power-cycle (board B: replug; board A: long PWR, then PWR). The script's
-   read-back of the version may warn while BOOT is held; that warning is not fatal. Then check the screen and
-   `ls /dev/cu.usbmodem*`.
+   After `flashed.`, release BOOT and power-cycle (board B: replug; board A: long PWR, then PWR only if it stays
+   dark). The script's read-back of the version may warn while BOOT is held; that warning is not fatal. Then check
+   the screen and `ls /dev/cu.usbmodem*`.
    - `harness flash` stops Harness first and starts it again after, so the daemon does not grab the port mid-write.
    - `--version 0.1.4` also works (`0.1.4.bin` is public, no published sha256 to check), but the daemon offers 0.1.5
      again within seconds of reconnecting (clean semver below published). Not useful: the two share every USB byte.
