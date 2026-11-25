@@ -8,7 +8,7 @@
 #
 #   harness_node 18                 node >= 18 on PATH, with npm: the machine's own, else the Node Harness
 #                                   itself runs on (current-node in Harness's runtime folder, laid down
-#                                   with the CLI)
+#                                   with the CLI; Windows' C:\…\node.exe and CRLF read too)
 #   harness_uv                      uv on PATH: the machine's own, else a pinned, checksummed release
 #                                   fetched into Harness's runtime folder
 #   harness_venv DIR 3.12 [MIN [BELOW]]
@@ -97,20 +97,36 @@ _harness_node_at_least() {
   ' "$1" >/dev/null 2>&1
 }
 
+# _harness_node_dir RECORDED — the folder of the Node a current-node names, as this shell reads paths. Windows writes
+# it as C:\…\node.exe with a CRLF (install.ps1, selfUpdate.ts), which ${x%/*} cannot cut: every package's setup,
+# doctor and viewer exited 1 under set -e in Git Bash on a computer whose own Node is older.
+_harness_node_dir() {
+  local path="${1%$'\r'}"
+  case "$path" in
+    [A-Za-z]:[\\/]*)
+      if command -v cygpath >/dev/null 2>&1; then path="$(cygpath -u "$path")"
+      else path="/$(printf %s "${path%%:*}" | tr '[:upper:]' '[:lower:]')${path#?:}"; path="${path//\\//}"; fi ;;
+  esac
+  echo "${path%/*}"
+}
+
 harness_node() {
-  local min="${1:-18}" recorded saved="$PATH" own=0
+  local min="${1:-18}" recorded dir="" saved="$PATH" own=0
   _harness_node_at_least "$min" && own=1
   # A node without npm beside it (a distro's nodejs package) cannot run a setup's `npm ci`.
   if [ "$own" = 1 ] && command -v npm >/dev/null 2>&1; then return 0; fi
   recorded="$(cat "$HARNESS_RUNTIME/current-node" 2>/dev/null || true)"
+  if [ -n "$recorded" ]; then dir="$(_harness_node_dir "$recorded")"; fi
   # Already Harness's own (a second call, or a wrapper calling a script that asks again): nothing to add.
-  if [ "$own" = 1 ] && [ -n "$recorded" ] && [ "$(command -v node)" = "${recorded%/*}/node" ]; then return 0; fi
-  if [ -n "$recorded" ] && [ -x "${recorded%/*}/node" ]; then
-    PATH="${recorded%/*}:$PATH"; export PATH; hash -r 2>/dev/null || true
+  if [ "$own" = 1 ] && [ -n "$dir" ]; then
+    case "$(command -v node)" in "$dir/node" | "$dir/node.exe") return 0 ;; esac
+  fi
+  if [ -n "$dir" ] && [ -x "$dir/node" ]; then
+    PATH="$dir:$PATH"; export PATH; hash -r 2>/dev/null || true
     _harness_node_at_least "$min" && return 0
     PATH="$saved"; export PATH; hash -r 2>/dev/null || true
     [ "$own" = 1 ] && return 0
-    echo "miss node >= $min — this machine's newest is $("${recorded%/*}/node" -v), Harness's own; update Harness"
+    echo "miss node >= $min — this machine's newest is $("$dir/node" -v), Harness's own; update Harness"
     return 1
   fi
   [ "$own" = 1 ] && return 0

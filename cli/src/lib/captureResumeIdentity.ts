@@ -12,6 +12,7 @@ import { controlTranscriptEvidence, savedTranscriptEvidence } from '../engines/t
 import { findLiveSession, findResumedTranscript, processSessionEvidence, type RepairedSession } from './sessionRepair.js'
 import { resumeSessionId } from './processTable.js'
 import { readProcessEvidence } from './processEvidence.js'
+import { startMarkerMs } from './processProof.js'
 import { NativeEvidenceBudget, nativeUnavailable } from '../engines/kit/nativeEvidence.js'
 import { IdentityReadUnavailable, ObservedConversationUnavailable } from '../engines/kit/identityScan.js'
 import { isTerminalEngine } from '../engines/types.js'
@@ -53,7 +54,7 @@ export async function captureResumeIdentity(session: RegisteredSession, platform
   if (!live) { await owner.verify(); return session }
   const explicit = resumeSessionId(session.engine, live.args, live.nativeArgv)
   // An engine whose process names its own session in a record (Claude Code's, removed at exit) is read now.
-  const claim = await processSessionEvidence(session.engine, expected.pid, session.cwd, Date.parse(expected.startMarker), budget)
+  const claim = await processSessionEvidence(session.engine, expected.pid, session.cwd, startMarkerMs(expected.startMarker) ?? NaN, budget)
   const native = claim.session
   // Once a conversation is seen (a native record, a resume on the command line, one found live), a failure to read it
   // holds it: a close of a harness still starting may stop one whose conversation was never seen, never this one.
@@ -62,7 +63,7 @@ export async function captureResumeIdentity(session: RegisteredSession, platform
   const capture = async (): Promise<RegisteredSession> => {
     const found: RepairedSession | null = native ?? (explicit
       ? { sessionId: explicit, transcriptPath: await findResumedTranscript(session.engine, explicit, options) ?? undefined }
-      : await findLiveSession(session.engine, cwd, Date.parse(expected.startMarker), {
+      : await findLiveSession(session.engine, cwd, startMarkerMs(expected.startMarker) ?? NaN, {
         ...options, hermesHome: session.hermesHome ?? undefined, pid: expected.pid, bornOnly: true,
         ...(session.forkedFrom?.sessionId ? { excludedSessionId: session.forkedFrom.sessionId } : {}),
         expectedProcess: expected, nativeBudget: budget,

@@ -4870,6 +4870,100 @@ describe('ObservedSource outer place', () => {
     expect(t.actions.tabSelect).not.toHaveBeenCalled()
   })
 
+  // Eval O11 (2026-11-25): Claude Code under tmux inside an Orca terminal. Its tap opened its tmux pane while Orca came
+  // forward on whichever tab it showed: the tab it was placed at is in an app that switches before its own open.
+  describe('a tap on a nested agent placed at a pane of an app that taps before its own', () => {
+    /** A source with two adapters that tap before their apps: `mux`, whose pane m1 is every place's, and `app`, which
+     *  holds the agent at a1 when [held], else has none of its own, so a pane there is only where it was [placed]. The
+     *  agent is nested once its lookup answers [answer]. */
+    function placedApp({ answer = { nest: 'tmux' }, held, placed = true, canOpen = true }:
+      { answer?: OuterAnswer; held?: true; placed?: boolean; canOpen?: boolean } = {}) {
+      const mux = { id: 'mux', tap: 'before' as const, paneOf: (): Pane | undefined => ({ adapter: 'mux', id: 'm1' }),
+        canFocus: () => true, focus: vi.fn(async (_pane: Pane) => true) }
+      const app = { id: 'app', tap: 'before' as const,
+        paneOf: (): Pane | undefined => (held ? { adapter: 'app', id: 'a1', held: true } : undefined),
+        canFocus: () => true, focus: vi.fn(async (_pane: Pane): Promise<boolean | 'refused'> => true) }
+      const t = nested({ canOpen: vi.fn((_agentId: string, _target: OpenTarget) => canOpen) }, () => [mux, app])
+      return {
+        ...t, mux, app,
+        async start() {
+          t.src.ingest(t.ev('session-start', inTmux()))
+          await t.asks[0].answer(answer)
+          if (placed) t.src.setPaneNames('app', new Map(), new Map([[t.agent().id, 'tab']]))
+        },
+      }
+    }
+
+    it('switches to its placed pane, then opens its multiplexer\'s pane, with or without its client\'s tab', async () => {
+      for (const answer of [{ nest: 'tmux' }, { ...CLIENT, nest: 'tmux' }] as const) {
+        const t = placedApp({ answer })
+        await t.start()
+        expect(t.agent().nest, JSON.stringify(answer)).toBe('tmux')
+        expect(await t.src.focus(t.agent(), latestTap), JSON.stringify(answer)).toBe(true)
+        expect(t.app.focus.mock.calls, JSON.stringify(answer)).toEqual([[{ adapter: 'app', id: 'tab' }]])
+        expect(t.actions.open.mock.calls[0][1].pane, JSON.stringify(answer)).toEqual({ adapter: 'mux', id: 'm1' })
+        expect(t.app.focus.mock.invocationCallOrder[0]).toBeLessThan(t.actions.open.mock.invocationCallOrder[0])
+        expect(t.mux.focus, JSON.stringify(answer)).not.toHaveBeenCalled()
+        expect(t.logs.filter((line) => line.includes('placed')), JSON.stringify(answer)).toEqual([])
+      }
+    })
+
+    // Failures are seen: the open still brings the app, on the tab it showed, and only this line says why.
+    it('a placed pane that did not come still opens, and the log names its adapter alone', async () => {
+      const t = placedApp()
+      t.app.focus.mockResolvedValueOnce(false)
+      await t.start()
+      expect(await t.src.focus(t.agent(), latestTap)).toBe(true)
+      expect(t.app.focus).toHaveBeenCalledTimes(1)
+      expect(t.actions.open).toHaveBeenCalledTimes(1)
+      expect(t.logs.filter((line) => line.includes('placed'))).toEqual(['[observed] open · app · placed pane not shown'])
+    })
+
+    it('a placed pane its adapter refused still opens, with no line of its own: the adapter said so', async () => {
+      const t = placedApp()
+      t.app.focus.mockResolvedValueOnce('refused')
+      await t.start()
+      expect(await t.src.focus(t.agent(), latestTap)).toBe(true)
+      expect(t.actions.open).toHaveBeenCalledTimes(1)
+      expect(t.logs.filter((line) => line.includes('placed'))).toEqual([])
+    })
+
+    it('an agent in no multiplexer opens alone, as before', async () => {
+      const t = placedApp({ answer: {} })
+      await t.start()
+      expect(t.agent()).not.toHaveProperty('nest')
+      expect(await t.src.focus(t.agent(), latestTap)).toBe(true)
+      expect(t.actions.open).toHaveBeenCalledTimes(1)
+      expect(t.app.focus).not.toHaveBeenCalled()
+    })
+
+    it('a held pane is never switched to first', async () => {
+      const t = placedApp({ held: true, placed: false })
+      await t.start()
+      expect(await t.src.focus(t.agent(), latestTap)).toBe(true)
+      expect(t.actions.open.mock.calls[0][1].pane).toEqual({ adapter: 'mux', id: 'm1' })
+      expect(t.app.focus).not.toHaveBeenCalled()
+    })
+
+    it('a tap that cannot open switches nothing', async () => {
+      const t = placedApp({ canOpen: false })
+      await t.start()
+      expect(await t.src.focus(t.agent(), latestTap)).toBe(false)
+      expect(t.app.focus).not.toHaveBeenCalled()
+      expect(t.actions.open).not.toHaveBeenCalled()
+    })
+
+    it('a later tap while it switched supersedes it, and nothing opens', async () => {
+      const t = placedApp()
+      let latest = true
+      t.app.focus.mockImplementationOnce(async () => { latest = false; return true })
+      await t.start()
+      expect(await t.src.focus(t.agent(), () => latest)).toBe('superseded')
+      expect(t.app.focus).toHaveBeenCalledTimes(1)
+      expect(t.actions.open).not.toHaveBeenCalled()
+    })
+  })
+
   it('needs-input and turn-stop keep it, and ask nothing', async () => {
     const t = nested()
     t.src.ingest(t.ev('session-start', inTmux()))

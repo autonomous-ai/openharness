@@ -514,7 +514,9 @@ describe('a launch the guard held starts again on attempts of its own', () => {
   })
 
   it('a held row without startsAgain keeps the shared schedule and its answers of today', async () => {
-    const detail = 'Waiting to confirm the engine executable and native hooks.'
+    // A hold current code keeps on purpose (newPane.ts). 0.6.86's held words are the guard's: the restore marks those
+    // (restoreAgents.ts legacyNativeHold), so they are no row of today.
+    const detail = 'Waiting to confirm the native engine process. The original launch and terminal are preserved.'
     const h = setup([row('a', { state: 'held', service: 'native', nativeToken: 'a-0', detail }, { sessionId: '' })], (only) => summary({ held: [...only] }))
     await h.held.boot(async () => {})
     // Not one the guard held: no attempts of its own.
@@ -734,6 +736,24 @@ describe('a launch the guard held starts again on attempts of its own', () => {
       await h.held.boot(async () => {})
       h.held.startAgain('a')
       expect(await h.held.restartHeld('a')).toMatchObject({ ok: true, session: { agentId: 'a', launch: { state } }, resumed: false })
+    })
+
+    // A row 0.6.86 saved: its restore gives it the guard's hold (lib/restoreAgents.ts `legacyNativeHold`), and from
+    // then on it starts by itself as any guard hold does. Its pane not read, it keeps its old words and still waits.
+    it.each([
+      ['was held again by changing evidence', true],
+      ['could not read its pane', false],
+    ] as const)('a held first launch 0.6.86 saved answers as a guard hold once its restore gave it one: %s', async (_, guarded) => {
+      const detail = 'Waiting to confirm the engine executable and native hooks.'
+      const h = setup([row('a', { state: 'held', service: 'native', nativeToken: 'a-0', detail }, { sessionId: '', engine: 'codex' })], (only) => {
+        if (!guarded) return summary({ unsurveyed: [...only] })
+        h.registry.get('a')!.launch = GUARD('a-1')
+        return summary({ held: [...only] })
+      })
+      await h.held.boot(async () => {})
+      expect(await h.held.restartHeld('a')).toEqual(guarded
+        ? { ok: true, session: h.registry.get('a'), resumed: false }
+        : { ok: false, error: 'SERVICE_UNAVAILABLE', detail })
     })
 
     // Its wait is that service's, not the guard's (design section 4): its restart answers as any row held for it.

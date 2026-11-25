@@ -133,6 +133,11 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
   a Windows 11 ARM64 VM, 2026-11-20). Read what a launcher does before you run it: Orca's is run as its `orca.exe`, and
   a `.cmd` of any other shape is refused, never run through `cmd.exe` (`cli/src/lib/windows/program.ts`). Test:
   `cli/src/lib/windows/program.spec.ts`, against the launchers as installed (`cli/src/lib/windows/fixtures/`).
+- **An engine is started by the program its lookup finds, never by its bare name.** `spawn` with no shell finds neither
+  an npm `.cmd` nor a `claude.exe` off PATH: every one-shot worker failed with ENOENT, and the voice router never had a
+  warm one. Find the engine as the daemon does (`engineNearby`, `cli/src/lib/engineBin.ts`), then start what it found
+  through `windowsProgram` (`oneShotProgram`, `cli/src/lib/oneshot.ts`). Tests: `cli/src/lib/engineBin.nearby.spec.ts`,
+  `cli/src/lib/oneshot.program.spec.ts`.
 - **A launcher's paths change with each update.** VS Code's script sits in a folder named by its build's commit
   (`8a14f0cc1b\resources\app\out\cli.js` in 1.147.0), so a path read once is wrong after the next update. Read the
   launcher at every start. Test: `program.spec.ts`, "reads the launcher at every start".
@@ -202,6 +207,11 @@ Claude Code's plugins on Windows (Claude Code 2.1.328 and 2.1.329, VM, 2026-11-2
 - **There is no `ps`.** Read the process table through `lib/windows/processTable.ts`. A check that treats a failed `ps` as "gone"
   quietly does nothing on Windows: viewers piled up for that reason (`dsh/viewerLedger.ts`).
 - **What Git Bash runs has a parent that has gone.** Walking Windows' parent links does not reach it (`lib/windows/gitBashTree.ts`).
+- **A file Windows writes is read in Git Bash as Windows wrote it.** `current-node` holds `C:\…\node.exe` and a CRLF,
+  and `${x%/*}` cuts nothing from it: every store package's `harness_node` failed under `set -e` on a computer whose
+  own Node was older (a customer's viewers, 2026-11), and the local AI packages' `node.sh` the same. Read it through
+  `_harness_node_dir` (`store/tools/runtimes.sh`) and, in the local AI packages, which carry no `runtimes.sh`,
+  `local_ai_node_dir` (`store/tools/local-ai/toolchain/node.sh`). Test: `cli/src/lib/windows/gitBashNode.spec.ts`.
 - **An unsigned program can be blocked outright.** Smart App Control (Windows 11) blocks an `.exe` or `.dll` without a valid
   signature, and a blocked `harness-launch.exe` means Harness cannot start, so cannot update itself either (2026-11-09,
   Code Integrity event 3077 at a customer). Nothing installs, updates to or promotes a terminal host unless every file is

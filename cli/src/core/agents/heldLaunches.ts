@@ -282,8 +282,9 @@ export function createHeldLaunches({ registry, restore, announce, log, now = () 
       const launch = after.launch
       if (launch?.state === 'failed') return { ok: false, error: launch.error, ...(launch.detail ? { detail: launch.detail } : {}) }
       // Held again before dispatch by changing evidence, or its pane not read: it starts by itself, as the person asked.
-      // Held for another service, its wait is that service's: answered as any row held for it.
-      if (guard && !(launch?.state === 'held' && launch.service !== 'native')) return { ok: true, session: after, resumed: !!after.sessionId }
+      // Held for another service, its wait is that service's: answered as any row held for it. A row 0.6.86 saved is
+      // given the guard's hold by this very restore (lib/restoreAgents.ts `legacyNativeHold`), and is on its schedule now.
+      if ((guard || guardHeld(after)) && !(launch?.state === 'held' && launch.service !== 'native')) return { ok: true, session: after, resumed: !!after.sessionId }
       if (launch?.state === 'held') return { ok: false, error: 'SERVICE_UNAVAILABLE', detail: launch.detail }
       return { ok: false, error: 'RESTART_FAILED', detail: summary.failed.find((row) => row.agentId === agentId)?.reason ?? 'The harness could not be launched.' }
     })

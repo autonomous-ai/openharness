@@ -21,6 +21,13 @@ export function notNewsOf(payload: { restored?: unknown; notNews?: unknown }): N
   return NOT_NEWS.find((reason) => reason === payload.notNews)
 }
 
+/** Whether a card redraws its tile and tells nobody: a sub-agent's turn end (CommanderMirrorOpts.isSubagent) or a recap
+ *  restored after its turn ended unseen (CommanderMirror.catchUp): history, not news. Only `true` counts, so a word sent
+ *  as text or a number never silences a card. Decided the same on the dial's two paths, as notNewsOf is. */
+export function silentCard(payload: { subagent?: unknown; restored?: unknown }): boolean {
+  return payload.subagent === true || payload.restored === true
+}
+
 type Tell = (notification: AgentNotification | null, notNews?: NotNews) => void
 type Turn = {
   id: string

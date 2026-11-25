@@ -118,6 +118,22 @@ WINDOWS_SPECS = (
     "cli/src/lib/windows/ptyInstall.windows.real.spec.ts", "cli/src/scripts/installPs1.spec.ts",
     "cli/src/testing/windowsPowerShell.spec.ts",
 )
+# windows-e2e: what windows.yml's e2e config (cli/vitest.e2e.windows.config.ts: its files, setup files and global setup)
+# and the dial desk bundle (cli/scripts/windows-dial-e2e/desk.mts, which dialWindowsTools.e2e.ts builds and runs on
+# Windows) import from the harness and the testing helpers, with the setup file outside them. test_ci_plan walks the
+# imports. Product code they carry selects windows-e2e only where its own folder rules say so.
+WINDOWS_E2E_HARNESS_PATHS = (
+    "cli/vitest.setup.ts",
+    *(f"cli/e2e/harness/{name}.ts" for name in ("artifacts", "artifactsSetup", "bundle", "client", "daemon", "desk",
+                                                 "fakeBackend", "fakeDial", "reaper")),
+    *(f"cli/src/testing/{name}.ts" for name in ("claudeAppFixture", "codexAppFixture", "daemonEnvironment",
+                                                 "dialCarousel", "executableFixture", "ghStub", "isolatedTmux",
+                                                 "placeNode", "removeRoot", "rootProcesses", "socketPathRoom",
+                                                 "spawnedRuns", "startEnvFile", "testNode", "testPath")),
+    # Run or read by a path the walk cannot see: bundle.ts and the desk's bundle.mjs build the daemon's CLI with
+    # build-bundle.mjs, fakeDial.ts greets with the firmware's version, reaper.ts starts reaperProcess.mjs.
+    "cli/build-bundle.mjs", "devices/harness-device/firmware/version.txt", "cli/e2e/harness/reaperProcess.mjs",
+)
 # A spec tests the module beside it named up to its first dot: secureState.spec.ts tests secureState.ts.
 WINDOWS_SPEC_MODULES = {str(PurePosixPath(spec).with_name(PurePosixPath(spec).name.split(".")[0] + ".ts"))
                         for spec in WINDOWS_SPECS if not spec.endswith("/")}
@@ -497,12 +513,14 @@ def windows_only(path):
 def windows_e2e(path):
     """What windows-e2e tests: Windows-only code, cross-platform code with win32 branches that broke only on Windows
     (#4513: the devices, the cable, the engines' hook scripts, the dial plugins), the TUI and the flasher windows.yml
-    runs, its specs with the modules they test, and the dial desk bundle dialWindowsTools.e2e.ts builds and runs."""
+    runs, its specs with the modules they test, and the dial desk bundle dialWindowsTools.e2e.ts builds and runs, with
+    the harness and the testing helpers it and windows.yml's e2e config run."""
     return windows_only(path) or not windows_docs(path) and (
         path.startswith(("cli/src/lib/windows/", "cli/src/devices/", "cli/src/cable/", "cli/hook/", "tui/",
                          "website/src/app/flash-circle.ps1/", "cli/scripts/windows-dial-e2e/"))
         or re.match(r"plugins/harness-device[^/]*/", path) is not None
-        or path in WINDOWS_SPEC_MODULES or any(covers(spec, path) for spec in WINDOWS_SPECS))
+        or path in WINDOWS_SPEC_MODULES or path in WINDOWS_E2E_HARNESS_PATHS
+        or any(covers(spec, path) for spec in WINDOWS_SPECS))
 
 
 def listed(entry, path):

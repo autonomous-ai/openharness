@@ -7,7 +7,7 @@ import type { ReviewedAnswer } from '../cable/questionInbox.js'
 // dial parked on the local machine — which is where it sits most of the time — holds no socket at all.
 import { isTerminalEngine } from '../engines/types.js'
 import { isTier } from '../lib/notifyTier.js'
-import { notNewsOf } from '../lib/agentNotifications.js'
+import { notNewsOf, silentCard } from '../lib/agentNotifications.js'
 import { errorKind } from '../lib/log.js'
 import { FleetError, type FleetEvent, type FleetMachine, type MachineFleet } from '../cable/machineFleet.js'
 import type { CableAgent } from '../cable/cableSession.js'
@@ -428,9 +428,9 @@ export class DeviceFleet implements MachineFleet {
         text: typeof payload.text === 'string' ? payload.text : '',
         recap: typeof payload.recap === 'string' ? payload.recap : '',
         ...(kind === 'processing' && typeof payload.update === 'string' ? { update: payload.update } : {}),
-        // A specialist on another Mac is as silent here as one on this one, and so is a recap of a turn that ended unseen
-        // there (CommanderMirror.catchUp), as cableEventFor draws this computer's: decided again here, it rang for history.
-        ...(payload.subagent === true || payload.restored === true ? { subagent: true } : {}),
+        // A card silent on another Mac is silent here, by this computer's rule (lib/agentNotifications.ts `silentCard`):
+        // decided again here, it rang for history.
+        ...(silentCard(payload) ? { subagent: true } : {}),
         // Why it is not news, for this dial's log, read as this computer's (lib/agentNotifications.ts `notNewsOf`).
         ...(notNews ? { notNews } : {}),
         // How loudly it ends, decided by that machine's recaps, which know its agents: this dial has no list of them, and

@@ -1027,7 +1027,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // through the backend is (onCommanderJoin): one whose devices' process restarted comes back to tiles
       // mid-turn, and to a question nobody has answered yet.
       // The working tiles are the recaps' to say: asked, and sent to the dial when they answer.
-      if (attached) for (const frame of openQuestions.values()) ports.devices?.card(frame)
+      if (attached) for (const frame of asking.openQuestionFrames()) ports.devices?.card(frame)
       if (attached) void mirror.liveCards().then((cards) => { for (const frame of cards) ports.devices?.card(frame) })
       if (attached) for (const frame of cloudAgents?.liveCards() ?? []) ports.devices?.card(frame)
     },
@@ -2470,7 +2470,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
      * holds, and that reaches the window as an ordinary `dial_status`.
      */
     onDialSettings: (id, patch) => ports.devices?.settings(id, patch),
-    openQuestions: () => [...openQuestions.values()],
+    openQuestions: () => asking.openQuestionFrames(),
     machineId: backend.machineId,
     backend,
     relayPool: gateway.windowRelay,

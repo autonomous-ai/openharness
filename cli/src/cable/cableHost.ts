@@ -38,7 +38,7 @@ import type { PetStore } from './pets/store.js'
 import { LANE_SESSION_OVER, LANE_TOKEN_UNAVAILABLE, type MachineFleet } from './machineFleet.js'
 import type { ReviewedAnswer, AnswerReceipt } from './questionInbox.js'
 import { isTier, type Tier } from '../lib/notifyTier.js'
-import { notNewsOf, type NotNews } from '../lib/agentNotifications.js'
+import { notNewsOf, silentCard, type NotNews } from '../lib/agentNotifications.js'
 import { DIAL_VOICE_SURFACE, DIAL_VOICE_SURFACE_HEADER, type DialOpenEnd, type DialVoiceEnd } from '../lib/dialUsageContract.js'
 import { HarnessSource } from './hosts/harness.js'
 import { AppFilter, type AppCounts } from './hosts/appFilter.js'
@@ -1653,9 +1653,8 @@ export function cableEventFor(
   if (frame.type !== 'commander_event' || !frame.agentId) return null
   const kind = frame.payload?.kind
   if (kind !== 'processing' && kind !== 'done' && kind !== 'summary' && kind !== 'error') return null
-  // `subagent`: a sub-agent's turn end — the tile redraws, nobody is told (CommanderMirrorOpts.isSubagent). A
-  // `restored` recap (a turn that ended unseen, CommanderMirror.catchUp) is drawn the same way: history, not news.
-  const silent = frame.payload?.subagent === true || frame.payload?.restored === true
+  // A sub-agent's turn end or a restored recap: the tile redraws, nobody is told (lib/agentNotifications.ts `silentCard`).
+  const silent = silentCard(frame.payload ?? {})
   // `notNews`: why a silent card is not news (lib/agentNotifications.ts), for the devices' log; a word that is not one is dropped.
   const notNews = notNewsOf(frame.payload ?? {})
   const update = frame.payload?.update

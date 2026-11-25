@@ -113,7 +113,13 @@ export function createCloudAgents({ port, clients, openQuestions, deviceInput, l
         sync(harness)
         cards(prior, harness)
       }
-      for (const agentId of before.keys()) if (!next.has(agentId)) { told.delete(agentId); gone(agentId) }
+      for (const agentId of before.keys()) {
+        if (next.has(agentId)) continue
+        told.delete(agentId)
+        // Its service will never close a question it can no longer answer: left open, the dial and windows show it.
+        for (const [requestId, owner] of asked) if (owner === agentId) doors.unask(agentId, requestId)
+        gone(agentId)
+      }
     },
     ask(agentId, requestId, question) {
       if (!harnesses.has(agentId) || typeof requestId !== 'string' || !requestId.startsWith('cloud_q_') || typeof question?.text !== 'string') return

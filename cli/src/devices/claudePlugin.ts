@@ -9,9 +9,7 @@
 import { type ChildProcess, execFile } from 'node:child_process'
 import { homedir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
-import { resolveBinaryOnPath } from '../lib/binaryOnPath.js'
-import { agentCommandOwnershipSnapshotAsync, ENGINE_CLI_ALIASES, enginePathOverride, executableFileIdentity, installedEngineBin } from '../lib/engineBin.js'
-import { ENGINE_INSTALL, engineInstallPaths } from '../lib/engineInstall.js'
+import { agentCommandOwnershipSnapshotAsync, engineNearby, installedEngineBin } from '../lib/engineBin.js'
 import { windowsProgram } from '../lib/windows/program.js'
 import { DIAL_PLUGIN_ID } from './dialSkill.js'
 
@@ -117,7 +115,7 @@ export function claudeRunIn(home: string): ClaudeRun | null {
 /** engineBin's lookup names a file as it is spelled, and on Windows `claude` is `claude.exe` or an npm `claude.cmd`:
  *  there the nearby lookup, which tries Windows' extensions, finds it on PATH and where the installers put it. */
 function claudeInstalled(): string | null {
-  return process.platform === 'win32' ? claudeNearby() : installedEngineBin('claude')
+  return process.platform === 'win32' ? engineNearby('claude') : installedEngineBin('claude')
 }
 
 /** [env] for a child pointed at [home]: ~/.claude is Claude Code's own default, which it reads with no CLAUDE_CONFIG_DIR. */
@@ -126,19 +124,6 @@ function pointedAt(home: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   if (home === join(homedir(), '.claude')) delete pointed.CLAUDE_CONFIG_DIR
   else pointed.CLAUDE_CONFIG_DIR = home
   return pointed
-}
-
-/**
- * Claude Code where the daemon's lookup looks with no shell started: its override, the devices' own PATH and the folders
- * its installer uses. Not engineBin's synchronous lookup: once its last read of the login shell failed, it starts the
- * shell again.
- */
-function claudeNearby(): string | null {
-  for (const command of [enginePathOverride('claude'), ...ENGINE_CLI_ALIASES.claude, ...engineInstallPaths(ENGINE_INSTALL.claude)]) {
-    const bin = command && resolveBinaryOnPath(command, process.env, (path) => executableFileIdentity(path) !== null)
-    if (bin) return bin
-  }
-  return null
 }
 
 /**
@@ -153,7 +138,7 @@ function claudeNearby(): string | null {
 export async function claudeFound(home: string, shell: boolean): Promise<ClaudeRun | null> {
   let bin: string | null
   try {
-    bin = shell && process.platform !== 'win32' ? installedEngineBin('claude', await agentCommandOwnershipSnapshotAsync()) : claudeNearby()
+    bin = shell && process.platform !== 'win32' ? installedEngineBin('claude', await agentCommandOwnershipSnapshotAsync()) : engineNearby('claude')
   } catch {
     return null
   }
