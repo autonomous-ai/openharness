@@ -6,7 +6,7 @@ import { MISSING_HELPER, REPLACED_PROGRAM } from '../engines/kit/identityScan.js
 import { OPENCLAW_STATES } from '../engines/openclaw/contract.js'
 import { agentFrame, agentStarting, openclawStartingUntil } from './agentFrame.js'
 import { agentProject } from './agentProject.js'
-import type { RegisteredSession } from './registry.js'
+import type { AgentLaunch, RegisteredSession } from './registry.js'
 
 function session(grid: RegisteredSession['grid'], codexHome: RegisteredSession['codexHome'] = null): RegisteredSession {
   return {
@@ -327,9 +327,12 @@ describe('agentFrame', () => {
     ['the guard held it, its recovery waits for models', { ...guardHeldLaunch, service: 'models', detail: 'Waiting for the models service.' }, ''],
     ['the guard held it, its recovery waits for the Store', { ...guardHeldLaunch, service: 'store', detail: 'Waiting for the Store.' }, 's1'],
     ['the guard held it, its recovery waits for search', { ...guardHeldLaunch, service: 'search', detail: 'Waiting for search.' }, 's1'],
-  ] as const)('sends every other held launch as it is: %s', async (_case, launch, sessionId) => {
+  ] as const)('sends every other held launch as it is, but the core\'s own startsAgain: %s', async (_case, launch, sessionId) => {
     const frame = await agentFrame({ ...session(null), sessionId, active: false, launch }, { selectedModel: null, terminalAvailable: true })
-    expect(frame.launch).toEqual(launch)
+    // No client ever sees `startsAgain` (design, Data 5): the held launch as a frame sent it before.
+    const { startsAgain: _, ...sent } = launch as AgentLaunch & { startsAgain?: true }
+    expect(frame.launch).toEqual(sent)
+    expect(JSON.stringify(frame)).not.toContain('startsAgain')
     expect(frame.status).toBe('offline')
   })
 

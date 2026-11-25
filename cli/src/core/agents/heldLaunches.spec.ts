@@ -736,6 +736,20 @@ describe('a launch the guard held starts again on attempts of its own', () => {
       expect(await h.held.restartHeld('a')).toMatchObject({ ok: true, session: { agentId: 'a', launch: { state } }, resumed: false })
     })
 
+    // Its wait is that service's, not the guard's (design section 4): its restart answers as any row held for it.
+    it.each([
+      ['before the attempt too', 'models'],
+      ['after a hold for native', 'native'],
+    ] as const)('answers a row the attempt left held for another service as any row held for it: %s', async (_, service) => {
+      const detail = 'Waiting for the models service.'
+      const h = setup([row('a', GUARD('a-0', service), { engine: 'codex' })], (only) => {
+        h.registry.get('a')!.launch = { state: 'held', service: 'models', nativeToken: 'a-0', startsAgain: true, detail }
+        return summary({ held: [...only] })
+      })
+      await h.held.boot(async () => {})
+      expect(await h.held.restartHeld('a')).toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE', detail })
+    })
+
     it('answers the failed state when the attempt or a bound failed the row', async () => {
       let offset = 0
       const h = setup([guardRow('a'), guardRow('b')], (only) => {
