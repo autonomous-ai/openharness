@@ -11,6 +11,7 @@
 #include "cable_json_guard.h"
 #include "cable_machines.h"
 #include "device_mac.h"
+#include "driver/usb_serial_jtag.h"
 #include "esp_app_desc.h"
 #include "esp_log.h"
 #include "audio_capture.h"   // audio_notify_done() — the completion beep
@@ -40,6 +41,9 @@ static const char *TAG = "cable_client";
 #define HELLO_ALONE_MS   2000    // no session: introduce myself often, the daemon cannot see me until I speak
 #define HELLO_SESSION_MS 15000   // session up: a keepalive, and a re-introduction if the daemon restarted
 #define SILENCE_MS       15000   // nothing of any kind for this long → the daemon is gone
+// A host with no daemon gets this long before the wordmark says "open the app": a booting dial or a
+// replugged cable is welcomed within a few greetings, and the hint must not flicker on for that.
+#define OPEN_APP_HINT_MS 5000
 
 typedef struct {
     char id[ID_MAX];
@@ -72,6 +76,11 @@ static bool              s_started; // boot owner; successful start is idempoten
 // Only the USB reader accesses this after start. A volatile 64-bit value is
 // not atomic on this 32-bit CPU; session expiry must share the reader's owner.
 static int64_t           s_last_rx_us;
+// The wordmark's hint, owned by the reader like s_last_rx_us. s_usb_host starts false so the first tick
+// reads the host (IDF reports one at boot) as appearing, which starts the OPEN_APP count at boot.
+static bool              s_usb_host;
+static int64_t           s_alone_since_us;   // the latest of: the host appearing, a tick with a session up
+static ui_link_hint_t    s_link_hint;
 static char              s_machine_name[CABLE_NAME_MAX];
 static uint32_t          s_bad, s_unknown;
 
@@ -1461,8 +1470,23 @@ static void session_tick(void *ctx)
 {
     (void)ctx;
     fw_update_tick();
-    if (s_session && esp_timer_get_time() - s_last_rx_us > (int64_t)SILENCE_MS * 1000) {
+    const int64_t now = esp_timer_get_time();
+    // usb_serial_jtag_is_connected() reads the host's start-of-frame packets, so it sees a computer, not a daemon.
+    const bool host = usb_serial_jtag_is_connected();
+    // Before the silence check, so a session that ends on this tick starts the count here.
+    if (s_session || (host && !s_usb_host)) s_alone_since_us = now;
+    s_usb_host = host;
+    if (s_session && now - s_last_rx_us > (int64_t)SILENCE_MS * 1000) {
         session_down("silence");
+    }
+    const ui_link_hint_t hint = s_session ? UI_LINK_HINT_NONE
+                              : !host ? UI_LINK_HINT_NO_COMPUTER
+                              : now - s_alone_since_us >= (int64_t)OPEN_APP_HINT_MS * 1000 ? UI_LINK_HINT_OPEN_APP
+                              : UI_LINK_HINT_NONE;
+    // Only on a change: this runs every read (<= 100 ms) and each call takes the display lock.
+    if (hint != s_link_hint) {
+        s_link_hint = hint;
+        ui_set_link_hint(hint);
     }
 }
 
