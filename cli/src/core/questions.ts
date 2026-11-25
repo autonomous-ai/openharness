@@ -52,6 +52,9 @@ export function createQuestions({
     sendText: submitTerminal,
     sendKey: keyTerminal,
     acquireControl: acquireTerminalControl,
+    // The watcher keeps a question's id while its words stay, so an answer is checked against that id too.
+    // Read when an answer comes, by when the watcher exists.
+    heldRequestId: (sessionId, view): string | undefined => questionWatcher.heldRequestId(sessionId, view),
   })
   // Command Code ENDS its turn in order to ask (its Stop hook fires, the dialog goes up, and the answer
   // opens a NEW turn). With the turn closed the device tile falls back to the PREVIOUS task's recap — so
@@ -164,12 +167,33 @@ export function createQuestions({
    * and each takes a question it already holds as the same wait continuing, never as news.
    */
   const reannounceRemote = (): void => {
+    forgetGone()
     for (const asked of askedRemotely.values()) clients.sendRemote(asked)
     const requestIds = [...askedRemotely.values()].map((asked) => (asked.payload as { requestId: string }).requestId)
     clients.sendRemote({ type: 'commander_questions_open', payload: { requestIds } })
   }
+  /**
+   * A question this module asked whose agent the registry no longer finds is never answered, and nothing
+   * else may close it: a `reset()` (a device joined) before the agent went left the watcher no id to close.
+   * Forgotten before a dial, a window or an app that attaches is handed it. A cloud agent's question, which
+   * the registry never knows, is not one of these: core/agents/cloud.ts closes it when its harness leaves.
+   */
+  const forgetGone = (): void => {
+    for (const [sessionId, asked] of askedRemotely) {
+      if (resolve(sessionId)) continue
+      openQuestions.delete(sessionId)
+      askedRemotely.delete(sessionId)
+      pending.delete(sessionId)
+      console.log(`[question] ${sid(sessionId)} forgotten · its agent is gone · req=${(asked.payload as { requestId: string }).requestId}`)
+    }
+  }
+  /** The questions still open, to hand a dial or a window on this computer that attaches. */
+  const openQuestionFrames = (): Record<string, unknown>[] => {
+    forgetGone()
+    return [...openQuestions.values()]
+  }
   const questionResponse = createQuestionResponse(answer)
-  return { questions, showAwaitingAnswer, answer, questionResponse, openQuestions, pendingQuestion, monitorActivity, hearQuestions, questionWatcher, reannounceRemote }
+  return { questions, showAwaitingAnswer, answer, questionResponse, openQuestions, openQuestionFrames, pendingQuestion, monitorActivity, hearQuestions, questionWatcher, reannounceRemote }
 }
 
 /**
