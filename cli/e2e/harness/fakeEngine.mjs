@@ -89,8 +89,8 @@
 // their records are kept back; the release creates the file with them and removes both files. Claude Code on Windows
 // announces SessionStart before its transcript exists (2-3 s measured, CLI 0.6.89). `lazySessionStart` (Codex) sends
 // no SessionStart as it starts: its first prompt runs it (`resume` for a resumed process, else `startup`) before its
-// UserPromptSubmit, and a `!clear` before any prompt runs only its own (`clear`), as Codex sends SessionStart at its
-// first prompt. `lostHooks` lists hooks, `<event>` or `<event>:<source>`, it never runs and notes as lost in its hook
+// UserPromptSubmit, and a `!clear` sends nothing, its next prompt running SessionStart (`clear`) the same way, as Codex
+// queues each new conversation's SessionStart and runs it only inside a turn (codex-rs core/src/hook_runtime.rs). `lostHooks` lists hooks, `<event>` or `<event>:<source>`, it never runs and notes as lost in its hook
 // log, as a hook killed at its timeout on a loaded machine never reaches the daemon. Claude Code reads its hook settings
 // past a leading BOM (one Windows PowerShell 5 writes); Codex loads no hooks from a hooks.json that starts with one and
 // notes so in its hook log, as Codex 0.169 warns and loads none. `root` is the
@@ -1060,9 +1060,10 @@ export async function run(engine, config = {}, { native = false } = {}) {
   process.stdout.write(`\x1b[?2004h${engine === 'claude' ? '✻ Welcome to Claude Code (fake)' : '>_ OpenAI Codex (fake)'}\r\n`)
   process.stdout.write(`  session ${sessionId}${resumed ? ' (resumed)' : ''}\r\n\r\n`)
   drawComposer()
-  // `lazySessionStart` (Codex): the source its first prompt's SessionStart names, until that prompt or a `!clear`.
-  let lazyStart = engine === 'codex' && config.lazySessionStart === true ? (resumed ? 'resume' : 'startup') : null
-  if (!lazyStart) {
+  // `lazySessionStart` (Codex): the source the next prompt's SessionStart names, until that prompt runs it.
+  const lazySessionStart = engine === 'codex' && config.lazySessionStart === true
+  let lazyStart = lazySessionStart ? (resumed ? 'resume' : 'startup') : null
+  if (!lazySessionStart) {
     if (config.firstHookDelayMs && !resumed) await new Promise((resolve) => setTimeout(resolve, config.firstHookDelayMs))
     await runHooks('SessionStart', { source: resumed ? 'resume' : 'startup' })
   }
@@ -1735,8 +1736,8 @@ export async function run(engine, config = {}, { native = false } = {}) {
       if (engine === 'codex') codex('session_meta', { id: sessionId, cli_version: version, cwd, source: 'cli' })
       announceProcess()
       say('(new conversation)\r\n')
-      lazyStart = null
-      await runHooks('SessionStart', { source: 'clear' })
+      if (lazySessionStart) lazyStart = 'clear'
+      else await runHooks('SessionStart', { source: 'clear' })
       return
     }
     if (config.submissionGate && /^!latestart\b/.test(prompt)) {

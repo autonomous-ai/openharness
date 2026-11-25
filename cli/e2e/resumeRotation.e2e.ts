@@ -1,7 +1,8 @@
 /**
  * A resumed agent whose engine starts a new conversation before any hook of the resumed one reached the daemon: Codex
- * sends SessionStart only at its first prompt, so a `/new` typed first is the first hook the resumed process sends; a
- * Claude Code whose resume hook was lost (killed at its timeout on a loaded machine) reaches `/clear` the same way. The
+ * runs a conversation's SessionStart only inside a turn, so after a `/new` typed first, the next prompt's SessionStart
+ * (`clear`), UserPromptSubmit and turn are the first hooks the resumed process sends; a Claude Code whose resume hook
+ * was lost (killed at its timeout on a loaded machine) reaches `/clear`'s SessionStart the same way. The
  * engine's own verified process reports the new conversation, so the agent follows it as a rotation instead of failing
  * with RESUME_SESSION_MISMATCH, and the resumed row's untimed binding orders nothing, so the new conversation's hook is
  * not held as HOOK_ORDER_AMBIGUOUS or refused as stale (registry.ts register, core/engines/admissionOrder.ts).
@@ -69,13 +70,17 @@ describe('a resumed agent takes a new conversation', () => {
 
     // Typed into the pane before any prompt, as a person starts a new conversation: no hook of the resumed one came.
     await d.tmux.run('send-keys', '-t', resumed.tmuxPane, '!clear', 'Enter')
-    const rotated = await until('the agent to bind the new conversation', async () => {
+    const bound = () => until('the agent to bind the new conversation', async () => {
       const now = await row(client, agentId)
       return now?.status === 'active' && now.sessionId && now.sessionId !== first.sessionId ? now : null
     }, 30_000, 250)
-    expect(rotated.launch?.state).not.toBe('failed')
+    // Claude Code announces the new conversation at once; Codex sends nothing until the next prompt, whose
+    // SessionStart, UserPromptSubmit and turn arrive together.
+    const announced = engine === 'claude' ? await bound() : null
     await turn(client, agentId, 'in the new conversation')
-    expect((await row(client, agentId))?.sessionId).toBe(rotated.sessionId)
+    const rotated = await bound()
+    if (announced) expect(rotated.sessionId).toBe(announced.sessionId)
+    expect(rotated.launch?.state).not.toBe('failed')
 
     // The words the old guard logged as it failed the row (registry.ts `traceLaunch`).
     const refused = d.log().split('\n').filter((line) => line.includes('resume conversation mismatch')
