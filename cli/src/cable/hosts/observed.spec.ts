@@ -2100,6 +2100,82 @@ describe('ObservedSource actions', () => {
     expect(countWord({ refused: orca })).toBe('refused (orca)')
   })
 
+  describe('a terminal tab\'s words not sent, by reason', () => {
+    /** An adapter by the tab typer's id, whose pane is its hint's, and whose `type` answers [typed]. */
+    const tabsTyper = (typed: unknown) => {
+      const type = vi.fn(async () => typed as TypeResult)
+      const adapter: HostAdapter = { id: 'tabs', tap: 'after', canFocus: () => false, focus: async () => false, type,
+        paneOf: (place) => (place.hints.TAB_PANE ? { adapter: 'tabs', id: place.hints.TAB_PANE } : undefined) }
+      const { actions } = fakeActions()
+      const t = setup({ actions: { ...actions, adapters: [adapter] } })
+      return { ...t, actions, type }
+    }
+    const inTab = { hostHints: { TAB_PANE: 'iterm:/dev/ttys003' } }
+
+    it('a reason of the list says did not answer, counted once as refused (tabs · <reason>), and its prompt record is forgotten', async () => {
+      const t = tabsTyper({ notSent: 'shared' })
+      t.src.ingest(t.ev('turn-stop', inTab))
+      expect(await t.src.send(t.src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+      expect(counted(t.actions.count)).toEqual(['refused (tabs · shared)'])
+      expect(t.src.ingest(t.ev('turn-start', inTab))).toBe('person')
+    })
+
+    it('a reason outside the list counts no-answer only: no word of an adapter\'s reaches the log', async () => {
+      const t = tabsTyper({ notSent: 'oops' })
+      t.src.ingest(t.ev('turn-stop', inTab))
+      expect(await t.src.send(t.src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+      expect(counted(t.actions.count)).toEqual(['no-answer'])
+    })
+
+    // Decision 4: an engine whose turn's end no hook tells is at its prompt only once a hook said so.
+    it('an engine other than Claude Code, Codex or cursor-agent heard at its turn-start, and nothing after, is busy: no typer is asked', async () => {
+      const t = tabsTyper(true)
+      t.src.ingest(t.ev('turn-start', { ...inTab, engine: 'opencode' }))
+      expect(await t.src.send(t.src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj is busy. Say it when it is done.' })
+      expect(t.type).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('othersOnTty', () => {
+    const TTY = '/dev/ttys003'
+    const inIterm = { hostHints: { TERM_PROGRAM: 'iTerm.app' } }
+    /** A source whose every tty read answers [TTY], and whose tmux events sit in an iTerm2 tab of [TTY]. */
+    const onTty = () => setup({
+      tty: vi.fn(async (_pid: number) => TTY),
+      outer: vi.fn((hints: Readonly<Record<string, string>>) =>
+        (hints.TMUX_PANE ? Promise.resolve<OuterAnswer>({ app: 'iterm', tty: TTY, pid: 4300 }) : undefined)),
+    })
+
+    it('another live agent on that tty is there; the agent alone is not', async () => {
+      const t = onTty()
+      t.src.ingest(t.ev('session-start', { ...inIterm, sessionId: 'a', callerPid: 4101 }))
+      await flushed()
+      expect(t.src.othersOnTty(TTY, 4101)).toBe(false)
+      t.src.ingest(t.ev('session-start', { ...inIterm, sessionId: 'b', callerPid: 4102 }))
+      await flushed()
+      expect(t.src.othersOnTty(TTY, 4101)).toBe(true)
+      expect(t.src.othersOnTty('/dev/ttys004', 4101)).toBe(false)
+    })
+
+    it('an ended one does not count', async () => {
+      const t = onTty()
+      t.src.ingest(t.ev('session-start', { ...inIterm, sessionId: 'a', callerPid: 4101 }))
+      t.src.ingest(t.ev('session-start', { ...inIterm, sessionId: 'b', callerPid: 4102 }))
+      await flushed()
+      t.src.ingest(t.ev('session-end', { ...inIterm, sessionId: 'b', callerPid: 4102 }))
+      expect(t.src.othersOnTty(TTY, 4101)).toBe(false)
+    })
+
+    it('a nested one whose client\'s tab is that tty counts', async () => {
+      const t = onTty()
+      t.src.ingest(t.ev('session-start', { ...inIterm, sessionId: 'a', callerPid: 4101 }))
+      t.src.ingest(t.ev('session-start', { sessionId: 'b', callerPid: 4102, hostHints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux' } }))
+      await flushed()
+      expect(t.src.tabTty(t.src.list().find((a) => a.sessionId === 'b')!.id)).toBe(TTY)
+      expect(t.src.othersOnTty(TTY, 4101)).toBe(true)
+    })
+  })
+
   it('a text over MAX_TEXT characters is refused before any route', async () => {
     const { actions, ready } = fakeActions()
     const { src, ev } = setup({ actions })
