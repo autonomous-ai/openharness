@@ -29,7 +29,7 @@ import type { AgentOutputStats } from './agentOutputStats.js'
 import type { GridAssignment } from './gridAssignment.js'
 import type { GridWebSearchStatus } from './gridLaunchWire.js'
 import type { AgentGridTarget, GridAnnotation } from './gridAnnotation.js'
-import { isNameChosen, projectDisplayName, sessionDisplayTitle, type RegisteredSession } from './registry.js'
+import { guardHeld, isNameChosen, projectDisplayName, sessionDisplayTitle, type AgentLaunch, type RegisteredSession } from './registry.js'
 import { engineCanFork } from './forkAgent.js'
 import { resumeMode, type ResumeMode } from './resumeCapability.js'
 import type { DshVerdict } from '../dsh/verdict.js'
@@ -256,6 +256,14 @@ export async function lastActivityAt(s: RegisteredSession): Promise<number> {
     ?? (s.lastHookAt || s.boundAt || s.registeredAt)
 }
 
+/** The launch and the activity a client is shown for [row]: a launch the guard held (`guardHeld`), which starts again
+ *  by itself, reads as a launch starting. The registry keeps the true hold, which the restore and the held passes run on. */
+export function shownLaunch(row: Pick<RegisteredSession, 'launch' | 'active' | 'sessionId'>): { launch: AgentLaunch; active: boolean } {
+  // A held row is inactive in the registry (setLaunch), which would read as offline; a launch starting is active.
+  if (guardHeld(row)) return { launch: { state: 'starting' }, active: true }
+  return { launch: row.launch ?? { state: 'ready' }, active: row.active }
+}
+
 function frameTitle(s: RegisteredSession): string | null {
   const title = sessionDisplayTitle(s)
   return title && title !== projectDisplayName(s) ? title : null
@@ -281,6 +289,7 @@ export async function agentFrame(
   const gitContext: SessionGitContext = { state: folder ? 'workspace' : 'unavailable', current: folder,
     observedAt: null, locations: [], pullRequests: [], truncated: false, checkouts: [] }
   const updatedAt = await lastActivityAt(s)
+  const shown = shownLaunch(s)
   const frame: AgentFrame = {
     id: s.agentId,
     sessionId: s.sessionId,
@@ -288,11 +297,11 @@ export async function agentFrame(
     name: projectDisplayName(s),
     nameChosen: isNameChosen(s),
     title: frameTitle(s),
-    status: s.active ? 'active' : 'offline',
+    status: shown.active ? 'active' : 'offline',
     activity: contextActivity?.() ?? null,
     closePlan: s.closePlan ? { state: s.closePlan.state, ...(s.closePlan.detail ? { detail: s.closePlan.detail } : {}) } : null,
     closeSupported: true,
-    launch: s.launch ?? { state: 'ready' },
+    launch: shown.launch,
     ...((s.identityHold || s.interpretationHold || s.admissionHold) ? { identityHold: s.identityHold || s.interpretationHold || s.admissionHold } : {}),
     ...(s.identityHold && (NAMED_STATES.has(s.identityHold) || isOpenclawLocalStopped(s.identityHold)) ? { namedState: s.identityHold } : {}),
     createdAt: new Date(s.registeredAt).toISOString(),
