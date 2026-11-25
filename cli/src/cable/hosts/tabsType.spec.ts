@@ -291,6 +291,22 @@ describe('tabsTyping', () => {
       expect(w.stream.sent).toEqual([])
     })
 
+    it('the source is asked after lsof: another agent on the tty or a turn begun while lsof ran gets no words', async () => {
+      let read = false
+      const readers = async (): Promise<readonly number[]> => {
+        read = true
+        return [AGENT, 4100]
+      }
+      const shared = world({ readers, shared: () => read })
+      expect(await shared.send()).toEqual({ notSent: 'shared' })
+      expect(shared.stream.sent).toEqual([])
+
+      read = false
+      const turn = world({ readers })
+      expect(await turn.send(PANE, 'hi', () => !read)).toEqual({ notSent: 'busy' })
+      expect(turn.stream.sent).toEqual([])
+    })
+
     it('a newer watch took the stream during the probes', async () => {
       const newer = fakeLine([])
       let replace = (): void => {}
