@@ -662,6 +662,18 @@ it('a second install writes nothing', async () => {
   expect([after.ino, after.mtimeNs]).toEqual([before.ino, before.mtimeNs])
 })
 
+// Codex reads hooks.json with serde_json, which refuses a BOM: Harness's own text after one ran no hooks while Harness
+// found them current.
+it('writes Codex\'s hooks.json again without the BOM a Windows tool saved before Harness\'s own text', async () => {
+  vi.spyOn(console, 'log').mockImplementation(() => {})
+  const home = join(root, 'codex'), file = join(home, codex.settings.fileName)
+  expect(await installHookSettings('codex', codex.settings, 19473, home)).toBe(true)
+  const written = readFileSync(file, 'utf8')
+  writeFileSync(file, `\uFEFF${written}`)
+  expect(await installHookSettings('codex', codex.settings, 19473, home)).toBe(true)
+  expect(readFileSync(file, 'utf8')).toBe(written)
+})
+
 it('leaves Agent Messages\' block where it is', async () => {
   const home = join(root, 'claude'), file = join(home, claude.settings.fileName)
   mkdirSync(home)
