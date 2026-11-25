@@ -2499,7 +2499,7 @@ export class CableSession {
       this.cancelSearchVoice()
       this.abortVoiceSegments()
       // Its voice.end is answered "Didn't catch that" with no turn left to say so.
-      this.dropRecording('no_speech')
+      this.dropRecording('too_long')
       this.voice = null
       return
     }
@@ -2613,7 +2613,7 @@ export class CableSession {
       return
     }
     if (!turn || turn.bytes === 0 || !segments) {
-      decide({ outcome: 'failed', code: 'no_speech', agentId: turn?.agentId })
+      decide({ outcome: 'failed', code: 'no_audio', agentId: turn?.agentId })
       this.cancelFormVoice()
       this.cancelSearchVoice()
       await reply({ t: 'voice.error', message: "Didn't catch that" })
@@ -2631,9 +2631,10 @@ export class CableSession {
     })
     // One line per turn, numbers only: whether an empty transcript was silence on the dial or words the
     // transcriber missed, and for which agent (OPENHARNES-18). No audio and no text.
-    const { peak, rms } = segments.level()
+    const level = segments.level()
     const heard = (transcript: string) => this.log(`cable: voice turn agent=${turn.agentId ?? 'none'} ` +
-      `cmd=${turn.cmd || 'none'} lang=${turn.lang} sr=${turn.rate} peak=${peak} rms=${rms} transcript=${transcript}`)
+      `cmd=${turn.cmd || 'none'} lang=${turn.lang} sr=${turn.rate} peak=${level.peak} rms=${level.rms} ` +
+      `heard=${level.heard ? 1 : 0} transcript=${transcript}`)
     let transcript: string
     try {
       transcript = await finished
@@ -2650,7 +2651,9 @@ export class CableSession {
     heard(String(transcript.length))
     if (!current()) return
     if (!transcript) {
-      decide({ outcome: 'failed', code: 'no_speech', agentId: turn.agentId })
+      // Speech by the dial's own gate with no word in the transcript is the transcriber's miss (language, noise,
+      // clipping), not a press with nothing said.
+      decide({ outcome: 'failed', code: level.heard ? 'no_words' : 'no_speech', agentId: turn.agentId })
       this.cancelFormVoice()
       this.cancelSearchVoice()
       await reply({ t: 'voice.error', message: "Didn't catch that" })

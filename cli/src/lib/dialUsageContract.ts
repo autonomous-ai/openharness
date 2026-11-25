@@ -13,9 +13,12 @@ export const DIAL_OTHER_APPS = ['zed', 'alacritty', 'hyper', 'tabby', 'jetbrains
   'unlisted', 'unknown'] as const
 /** How the dial shows a hooked agent, best first. */
 export const DIAL_RECOGNITION = ['placed', 'held', 'other', 'not_shown'] as const
-export const DIAL_VOICE_OUTCOMES = ['delivered', 'failed', 'held', 'cancelled'] as const
-export const DIAL_VOICE_FAILURES = ['no_speech', 'transcribe_failed', 'route_failed', 'no_agent', 'window_busy',
-  'refused', 'send_failed', 'no_turn', 'unlisted'] as const
+/** queued: sent to an agent at work, whose turn did not start within 10 s; it holds or steers the words in. */
+export const DIAL_VOICE_OUTCOMES = ['delivered', 'queued', 'failed', 'held', 'cancelled'] as const
+/** The empty voice by cause: no_audio (none came), too_long (past the cap), no_speech (the dial's voice gate heard none),
+ * no_words (it heard speech the transcript has no word of). */
+export const DIAL_VOICE_FAILURES = ['no_speech', 'no_audio', 'too_long', 'no_words', 'transcribe_failed', 'route_failed',
+  'no_agent', 'window_busy', 'refused', 'send_failed', 'no_turn', 'unlisted'] as const
 export const DIAL_OPEN_FAILURES = ['not_opened', 'desktop_not_started', 'desktop_no_window', 'unknown_agent',
   'unlisted'] as const
 export const DIAL_FIRST_AGENT_BUCKETS = ['under_1m', '1m_to_3m', '3m_to_10m', 'over_10m', 'none_1h'] as const

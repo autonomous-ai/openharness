@@ -36,7 +36,7 @@ export class VoiceSegments {
   private readonly lang: string
   private readonly transcribe: SegmentTranscriber
   private readonly timer: SegmentTimer
-  private readonly runningLevel = new VoiceLevel()
+  private readonly runningLevel: VoiceLevel
   private readonly count: SegmentCounts = { segments: 0, early: 0, retries: 0 }
   /** Audio not yet cut, kept as it came and joined once per cut: 8 KB chunks against a 1.92 MB segment. */
   private pending: Buffer[] = []
@@ -55,6 +55,7 @@ export class VoiceSegments {
     this.segmentSamples = 60 * rate
     this.windowStart = 55 * rate
     this.frameSamples = Math.floor(rate / 50)
+    this.runningLevel = new VoiceLevel(rate)
     this.lang = options.lang
     this.transcribe = options.transcribe
     this.timer = options.timer
@@ -93,7 +94,7 @@ export class VoiceSegments {
   }
 
   /** Complete once finish() has been called. */
-  level(): { peak: number; rms: number } {
+  level(): { peak: number; rms: number; heard: boolean } {
     return this.runningLevel.read()
   }
 

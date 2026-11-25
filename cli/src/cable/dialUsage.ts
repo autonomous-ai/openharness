@@ -3,7 +3,8 @@
 // a name: the sink's file is read and sent by the gateway.
 
 import {
-  DIAL_FIRST_AGENT_BUCKETS, DIAL_USAGE_AGENTS_MAX, DIAL_USAGE_ENGINES, DIAL_USAGE_HOSTS, DIAL_WAIT_BUCKETS,
+  DIAL_FIRST_AGENT_BUCKETS, DIAL_USAGE_AGENTS_MAX, DIAL_USAGE_ENGINES, DIAL_USAGE_HOSTS, DIAL_VOICE_OUTCOMES,
+  DIAL_WAIT_BUCKETS,
   type DialFileMetric, type DialOpenEnd, type DialOtherApp, type DialRecognition, type DialUsageEngine,
   type DialUsageHost, type DialUsageSink, type DialVoiceEnd, type DialVoiceFailure,
 } from '../lib/dialUsageContract.js'
@@ -19,6 +20,8 @@ export interface DialUsageDeps {
   now(): number // wall-clock ms
   after(ms: number, run: () => void): () => void
   describe(agentId: string): DialAgent | undefined
+  /** Whether the agent is at work or waits on the person now: words sent to it then wait for its turn's end. */
+  working(agentId: string): boolean
   /** Fixed lines only, never an id. */
   log(line: string): void
 }
@@ -41,7 +44,7 @@ export interface DialUsage {
 }
 
 type FirstAgentBucket = typeof DIAL_FIRST_AGENT_BUCKETS[number]
-type VoiceOutcome = 'delivered' | 'failed' | 'held' | 'cancelled'
+type VoiceOutcome = typeof DIAL_VOICE_OUTCOMES[number]
 
 const DAY_MS = 86_400_000
 // The spec's measures: delivered is a turn within 10 s, the wrong-agent proxies are 30 s and 10 s.
@@ -144,7 +147,7 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
     return true
   }
 
-  interface Voice { agentId: string; host?: DialUsageHost; stop: () => void }
+  interface Voice { agentId: string; host?: DialUsageHost; working: boolean; stop: () => void }
   const voices: Voice[] = [] // sent and waiting for their turn, oldest first
   let lastSent: { agentId: string; host?: DialUsageHost; at: number } | undefined
   const delivered = new Map<string, { host?: DialUsageHost; at: number }>() // agent → its delivered turn's start
@@ -156,10 +159,14 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
     outcome('failed', host)
     add(`dial_voice_failed_${code}`)
   }
+  // A working agent starts no turn for the words within 10 s, though they reached it: Claude Code holds them until its
+  // turn ends, Codex 0.106+ steers them into the running turn (2026-11-25: such a voice was counted no_turn, then ran
+  // 15 s later as its own turn).
   const noTurn = (voice: Voice) => {
     voices.splice(voices.indexOf(voice), 1)
     voice.stop()
-    failed('no_turn', voice.host)
+    if (voice.working) outcome('queued', voice.host)
+    else failed('no_turn', voice.host)
   }
 
   interface Wait { agentId: string; at: number; onDial: boolean }
@@ -238,7 +245,8 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
         }
         lastSent = { agentId: end.agentId, host, at }
         if (voices.length >= VOICES_WAITING_MAX) noTurn(voices[0])
-        const voice: Voice = { agentId: end.agentId, host, stop: () => {} }
+        // Read at the send: by the 10 s end the turn the words waited behind may be over.
+        const voice: Voice = { agentId: end.agentId, host, working: deps.working(end.agentId), stop: () => {} }
         voice.stop = after(DELIVERED_MS, () => noTurn(voice))
         voices.push(voice)
       }
