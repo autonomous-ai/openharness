@@ -18,6 +18,10 @@
  * architecture comes from User-Agent Client Hints; Firefox still writes the real one (`aarch64`) into
  * its user agent. When neither says, the answer is "Linux, architecture unknown" and the page offers
  * both builds instead of guessing.
+ *
+ * Windows has one desktop installer for both CPUs, but Harness Device ships x64 and ARM64 installers.
+ * Its user agent says "Win64; x64" on every PC, so only Client Hints (Chromium) can name an ARM one;
+ * every other Windows gets x64, which Windows 11 on ARM runs emulated.
  */
 
 import {
@@ -67,10 +71,12 @@ export const DESKTOP_BUILDS: readonly DesktopBuild[] = [
  * - a `DesktopBuildId`: that build suits this computer (`macos` also covers a Mac of unknown CPU);
  * - `linux`: Linux, but the browser did not say which CPU (or it is one with no build);
  * - `windows` is a `DesktopBuildId` too: one installer serves both of its CPUs;
+ * - `windows-arm64`: Windows whose browser said ARM, for Harness Device's ARM64 installer; the desktop
+ *   app's one Windows installer serves it as it does `windows`;
  * - `mobile`: no desktop build runs here (phones and tablets, iPad included);
  * - `unknown`: anything else, ChromeOS included. Pages treat it like no detection at all.
  */
-export type VisitorPlatform = DesktopBuildId | "linux" | "mobile" | "unknown";
+export type VisitorPlatform = DesktopBuildId | "windows-arm64" | "linux" | "mobile" | "unknown";
 
 /**
  * `DESKTOP_BUILDS` as this visitor should see them: on an ARM Mac, macOS's row (still named "macOS")
@@ -159,7 +165,8 @@ export async function detectVisitorPlatform(snapshot: NavigatorSnapshot): Promis
         // Anything short of a definite ARM answer keeps the build every Mac can run as before.
         return (await cpuFromClientHints(data)) === "arm64" ? "macos-arm64" : "macos";
       case "Windows":
-        return "windows";
+        // As on a Mac, only a definite ARM answer leaves the x64 build every Windows PC can run.
+        return (await cpuFromClientHints(data)) === "arm64" ? "windows-arm64" : "windows";
       case "Android":
       case "iOS":
         return "mobile";
