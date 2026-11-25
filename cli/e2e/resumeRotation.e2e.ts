@@ -77,7 +77,8 @@ describe('a resumed agent takes a new conversation', () => {
     await turn(client, agentId, 'in the new conversation')
     expect((await row(client, agentId))?.sessionId).toBe(rotated.sessionId)
 
-    const refused = d.log().split('\n').filter((line) => line.includes('RESUME_SESSION_MISMATCH')
+    // The words the old guard logged as it failed the row (registry.ts `traceLaunch`).
+    const refused = d.log().split('\n').filter((line) => line.includes('resume conversation mismatch')
       || (line.includes(sid(rotated.sessionId)) && /HOOK_ORDER_AMBIGUOUS|stale_hook/.test(line)))
     expect(refused).toEqual([])
     client.close()

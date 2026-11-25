@@ -184,7 +184,8 @@ it('follows a resumed Hermes through /new without failing it', async () => {
   await boundTo(c, a.agentId, next)
   const agent = await row(c, a.agentId)
   expect(agent?.launch?.state).not.toBe('failed')
-  expect(r.d.log()).not.toContain('RESUME_SESSION_MISMATCH')
+  // The words the old guard logged as it failed the row (registry.ts `traceLaunch`).
+  expect(r.d.log()).not.toContain('resume conversation mismatch')
   await until('the new conversation bound', () => (saved(r.d, a.agentId)?.lastHookAt ?? 0) > 0 || null, 10_000, 100)
   expect(saved(r.d, a.agentId)?.earlierSessionIds).toContain(a.started.session)
 })
