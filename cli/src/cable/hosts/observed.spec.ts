@@ -1558,9 +1558,10 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
     // Codex is there, and queues every message.
     codexQueue: {
       can: vi.fn((_isApp: boolean) => true),
-      send: vi.fn(async (_threadId: string, _text: string, _isApp: boolean): Promise<CodexQueueResult> => ({ outcome: 'queued' })),
+      send: vi.fn(async (_threadId: string, _text: string, _isApp: boolean, _home: string): Promise<CodexQueueResult> => ({ outcome: 'queued' })),
     },
-    codexHome: '/home/u/.codex',
+    // Harness trusts its own Codex home alone.
+    codexHomes: (): readonly string[] => ['/home/u/.codex'],
     count: vi.fn((_what: Parameters<ObservedActions['count']>[0]) => {}),
   }
   const fake = { ...fakes, ...over } as typeof fakes
@@ -2767,7 +2768,7 @@ describe('ObservedSource and codex queue', () => {
         const { src, actions } = given(session, state)
         expect(src.list()[0].state).toBe(state)
         expect(await src.send(src.list()[0], 'next')).toEqual({ ok: true })
-        expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', false]])
+        expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', false, '/home/u/.codex']])
         expect(actions.orcaSend).not.toHaveBeenCalled()
         expect(actions.toMod).not.toHaveBeenCalled()
         expect(actions.count.mock.calls).toEqual([['codex']])
@@ -2911,7 +2912,59 @@ describe('ObservedSource and codex queue', () => {
     await src.scanOpen()
     expect(src.capabilities(src.list()[0])).toMatchObject({ voice: true })
     expect(await src.send(src.list()[0], 'next')).toEqual({ ok: true })
-    expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', false]])
+    expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', false, '/home/u/.codex']])
+  })
+
+  // `codex queue` loads the home's config.toml: the home is one of Harness's own lists (devices.ts), and a hook's path
+  // only picks among them.
+  describe('the home the queue runs under', () => {
+    const rolloutIn = (home: string) => `${home}/sessions/2026/11/15/rollout-2026-11-15T16-07-59-${THREAD}.jsonl`
+    /** A Codex session in Ghostty whose rollout is [transcriptPath], with Harness trusting [homes]. */
+    const under = (homes: readonly string[], transcriptPath: string) => {
+      const { actions } = fakeActions({ codexHomes: () => homes })
+      const t = setup({ actions })
+      t.src.ingest(t.ev('session-start', { ...cx, transcriptPath }))
+      return { ...t, actions }
+    }
+    // The daemon's, an adopted one, a linked profile as listed and its real path.
+    const HOMES = ['/h/own', '/h/adopted', '/h/linked', '/real/linked']
+
+    it.each(['/h/own', '/h/adopted', '/h/linked', '/real/linked'])('a rollout under %s/sessions queues under that home', async (home) => {
+      const { src, actions } = under(HOMES, rolloutIn(home))
+      expect(src.capabilities(src.list()[0]).voice).toBe(true)
+      expect(await src.send(src.list()[0], 'next')).toEqual({ ok: true })
+      expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', false, home]])
+    })
+
+    it('a rollout in a home only its hook names is not queue-able: no queue run, and no voice with no pane that types', async () => {
+      const { src, actions } = under(HOMES, rolloutIn('/h/hooked'))
+      expect(src.capabilities(src.list()[0]).voice).toBe(false)
+      expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+      expect(actions.codexQueue.send).not.toHaveBeenCalled()
+      expect(actions.codexQueue.can).not.toHaveBeenCalled()
+    })
+
+    it('of two trusted homes holding the rollout, the deepest is the one it runs under, in either order', async () => {
+      for (const homes of [['/h/a', '/h/a/sessions/b'], ['/h/a/sessions/b', '/h/a']]) {
+        const { src, actions } = under(homes, rolloutIn('/h/a/sessions/b'))
+        expect(await src.send(src.list()[0], 'next')).toEqual({ ok: true })
+        expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', false, '/h/a/sessions/b']])
+      }
+    })
+
+    // An adopted home counts at once, and one no longer trusted stops at once.
+    it('the trusted homes are asked again at each look', async () => {
+      let homes: readonly string[] = []
+      const { actions } = fakeActions({ codexHomes: () => homes })
+      const { src, ev } = setup({ actions })
+      src.ingest(ev('session-start', { ...cx, transcriptPath: rolloutIn('/h/adopted') }))
+      expect(src.capabilities(src.list()[0]).voice).toBe(false)
+      homes = ['/h/adopted']
+      expect(src.capabilities(src.list()[0]).voice).toBe(true)
+      homes = []
+      expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+      expect(actions.codexQueue.send).not.toHaveBeenCalled()
+    })
   })
 
   it('a text over MAX_TEXT characters is refused before the queue', async () => {
@@ -2938,7 +2991,7 @@ describe('ObservedSource and codex queue', () => {
 
       const { src, actions } = given(cx)
       expect(await src.send(src.list()[0], text)).toEqual({ ok: true })
-      expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, text, false]])
+      expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, text, false, '/home/u/.codex']])
     }
   })
 })
@@ -3006,7 +3059,7 @@ describe('ObservedSource and the Codex app', () => {
       const agent = src.list()[0]
       expect(src.capabilities(agent)).toMatchObject({ voice: true })
       expect(await src.send(agent, 'next')).toEqual({ ok: true })
-      expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', true]])
+      expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', true, '/home/u/.codex']])
       expect(counted(actions.count).at(-1)).toBe('codex')
       expect(ran).not.toHaveBeenCalled()
     }
@@ -3022,7 +3075,7 @@ describe('ObservedSource and the Codex app', () => {
       expect(await src.send(agent, 'next')).toEqual({ ok: true })
       expect(actions.codexQueue.can.mock.calls.length).toBeGreaterThan(0)
       expect(new Set(actions.codexQueue.can.mock.calls.map(([asked]) => asked))).toEqual(new Set([isApp]))
-      expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', isApp]])
+      expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', isApp, '/home/u/.codex']])
     }
   })
 
@@ -3043,7 +3096,7 @@ describe('ObservedSource and the Codex app', () => {
     expect(await src.send(agent, 'next')).toEqual({ ok: true })
     expect(actions.codexQueue.can.mock.calls.length).toBeGreaterThan(0)
     expect(new Set(actions.codexQueue.can.mock.calls.map(([asked]) => asked))).toEqual(new Set([false]))
-    expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', false]])
+    expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', false, '/home/u/.codex']])
   })
 
   it('a Codex session in Ghostty has no Codex pane', async () => {

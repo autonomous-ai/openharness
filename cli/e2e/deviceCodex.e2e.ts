@@ -4,9 +4,10 @@
  * desk speaks to it while it works, and the suite's fake `codex` (harness/fakeEngine.mjs), the one the daemon launches,
  * notes the queue call the devices process runs. The words never reach a terminal. A session in the ChatGPT app takes them
  * through the app's own Codex CLI, a fake under the daemon's root (harness/codexAppCli.ts), and never the developer's app.
+ * A session in a Codex profile the person linked takes them under that profile; one in a home Harness never listed, none.
  */
 import type { ChildProcess } from 'node:child_process'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { appQueued, pathQueueRuns, writeAppCodex, writePathCodexWhoseQueueFails } from './harness/codexAppCli.js'
@@ -81,6 +82,21 @@ describe('the dial talks to Codex outside Harness through codex queue', () => {
   const queuedSaid = (d: IsolatedDaemon) => until('"[device] voice · codex" in the daemon\'s log',
     () => d.log().split('\n').some((line) => line.endsWith('[device] voice · codex')), 30_000, 50)
 
+  /** Each `codex queue` call the fake `codex` on PATH noted: its arguments and its CODEX_HOME. */
+  const queueCalls = (d: IsolatedDaemon): unknown[] => {
+    const ledger = join(d.root, 'codex-queue')
+    return existsSync(ledger) ? readFileSync(ledger, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as unknown) : []
+  }
+
+  /** The daemon's Codex hooks, once it installed them in its own home, copied into [home], as a Codex there holds them:
+   *  a session in that home tells of itself through them. */
+  const hooksIn = async (d: IsolatedDaemon, home: string) => {
+    const own = join(d.env.CODEX_HOME!, 'hooks.json')
+    await until('the Codex hooks in the daemon\'s home', () => existsSync(own) && readFileSync(own, 'utf8').includes('notify.mjs'), 30_000, 100)
+    mkdirSync(home, { recursive: true })
+    copyFileSync(own, join(home, 'hooks.json'))
+  }
+
   it("a working Codex in Ghostty takes the dial's spoken words: one codex queue call with its thread and the words, under the daemon's Codex home", async () => {
     const { d, dial, relay } = await fresh()
 
@@ -95,14 +111,61 @@ describe('the dial talks to Codex outside Harness through codex queue', () => {
 
     // 3. One queue call, for its thread, with the words joined to their flag, under the daemon's Codex home.
     await queuedSaid(d)
-    const queued = readFileSync(join(d.root, 'codex-queue'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as unknown)
-    expect(queued).toEqual([{ args: ['queue', '--thread', codex.sessionId, '--message=run the spoken tests'], codexHome: d.env.CODEX_HOME }])
+    expect(queueCalls(d)).toEqual([{ args: ['queue', '--thread', codex.sessionId, '--message=run the spoken tests'], codexHome: d.env.CODEX_HOME }])
 
     // 4. Never the thread, its rollout's path or the words.
     const log = d.log()
     expect(log).not.toContain(codex.sessionId)
     expect(log).not.toContain(codex.transcriptPath)
     expect(log.split('\n').filter((line) => line.includes('[device]') && line.includes('run the spoken tests'))).toEqual([])
+  })
+
+  // `codex queue` loads the home's config.toml: a profile the person linked is one of Harness's own records
+  // (lib/codexProfiles.ts), so its Codex takes the words under that profile.
+  it("a working Codex in a Codex profile the person linked takes the dial's spoken words: one codex queue call under that profile", async () => {
+    let linked = ''
+    const { d, dial, relay } = await fresh((d) => {
+      const folder = join(d.root, 'codex-linked')
+      mkdirSync(folder)
+      // As the linker keeps it: the profile by its real path, in the daemon's data folder, this account's alone.
+      linked = realpathSync(folder)
+      writeFileSync(join(d.dataDir, 'codex-profiles.json'), JSON.stringify([linked]), { mode: 0o600 })
+    })
+    await hooksIn(d, linked)
+
+    const codex = new CodexOutside(d, 'api', children, { TERM_PROGRAM: 'ghostty' }, { home: linked })
+    await codex.hook('SessionStart', { source: 'startup' })
+    const row = await dial.next((m) => m.t === 'agent' && m.id === codex.id, 45_000, 'the agent listed')
+    expect(row.caps).toContain('v')
+
+    await spoken(dial, relay, codex, 'run the spoken tests')
+    await queuedSaid(d)
+    expect(queueCalls(d)).toEqual([{ args: ['queue', '--thread', codex.sessionId, '--message=run the spoken tests'], codexHome: linked }])
+
+    const log = d.log()
+    for (const secret of [codex.sessionId, codex.transcriptPath, linked]) expect(log).not.toContain(secret)
+  })
+
+  // A hook's path never chooses the home: one no list of Harness's names would have its config.toml loaded.
+  it('a Codex in a home Harness neither adopted nor linked gets no codex queue call', async () => {
+    const { d, dial } = await fresh()
+    const unlisted = join(d.root, 'codex-unlisted')
+    await hooksIn(d, unlisted)
+
+    const codex = new CodexOutside(d, 'api', children, { TERM_PROGRAM: 'ghostty' }, { home: unlisted })
+    await codex.hook('SessionStart', { source: 'startup' })
+    const row = await dial.next((m) => m.t === 'agent' && m.id === codex.id, 45_000, 'the agent listed')
+    expect(row.caps).not.toContain('v')
+
+    // Spoken to all the same: refused, and no codex runs.
+    const since = dial.messages.length
+    dial.send({ t: 'voice.begin', agentId: codex.id, uploadId: 'spoken-1', sr: 16_000, lang: 'en' })
+    dial.audio(Buffer.alloc(3_200, 1))
+    dial.send({ t: 'voice.end', uploadId: 'spoken-1' })
+    const heard = await dial.next((m) => m.t === 'voice.transcript' || m.t === 'voice.error', 45_000, 'the answer to its words', since)
+    expect(heard).toMatchObject({ t: 'voice.error' })
+    expect(queueCalls(d)).toEqual([])
+    expect(d.log().split('\n').filter((line) => line.endsWith('[device] voice · codex'))).toEqual([])
   })
 
   // The `codex` on the daemon's PATH may be one that cannot queue (an npm shim with no node, exit 127): a session in the
