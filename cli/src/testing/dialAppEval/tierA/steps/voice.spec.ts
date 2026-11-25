@@ -156,6 +156,18 @@ describe("tier A's voice step", () => {
     expect(wrongSends(scenario, seen())).toHaveLength(4)
   })
 
+  it("a tmux run that puts words in a pane by the command's alias is typed into no session", () => {
+    const { world, deliveries, ran, seen } = worldOf(new LoopbackDial(() => Date.now()))
+    recordTyping(world)
+    const tmux = '/opt/eval/bin/tmux'
+    // tmux's manual names these the aliases of send-keys, set-buffer, load-buffer and paste-buffer.
+    const puts = [[tmux, 'send', '-t', '%2', '-l', 'Eval words.'], [tmux, 'setb', 'Eval words.'],
+      [tmux, 'loadb', '-'], [tmux, 'pasteb', '-t', '%2']]
+    for (const argv of puts) expect(ran(argv)).toBeUndefined()
+    expect(deliveries).toEqual(puts.map((argv) => ({ at: 600, path: 'typed', target: null, text: argv.at(-1) })))
+    expect(wrongSends(scenario, seen())).toHaveLength(4)
+  })
+
   it('words spoken to one session that reach another are reported as a wrong send', async () => {
     const dial = new LoopbackDial(() => Date.now())
     const { world, deliveries, seen } = worldOf(dial)
