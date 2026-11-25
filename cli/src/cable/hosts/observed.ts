@@ -554,8 +554,9 @@ export class ObservedSource implements HostSource {
     if (!actions.canOpen(e.agent.id, target)) return false
     const tab = this.placedTab(e, target)
     if (tab) {
-      // One that did not come still leaves the open its multiplexer's pane and the app.
-      await tab.adapter.focus(tab.pane)
+      // One that did not come still leaves the open its multiplexer's pane and the app, on the tab the app showed: the
+      // line says so, by the adapter's fixed id alone. A refusal its adapter has logged.
+      if ((await tab.adapter.focus(tab.pane)) === false) this.deps.log(`[observed] open · ${tab.adapter.id} · placed pane not shown`)
       if (!latest()) return 'superseded'
       if (!this.live(e)) return false
     }
