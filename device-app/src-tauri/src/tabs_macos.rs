@@ -415,7 +415,7 @@ fn flag(answer: &NSAppleEventDescriptor) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tabs::{CALL_TIMEOUT, NO_TTY};
+    use crate::tabs::{CALL_TIMEOUT, NO_TTY, Written};
     use std::process::Command;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
@@ -474,8 +474,22 @@ end focus_tty
 "#;
 
     /// Stands in for an app's script in the tty check's test alone: no other test compiles it.
-    const SENT: &str =
-        "on select_tty(t, in_front)\n\treturn true\nend select_tty\n\non focus_tty(t)\n\treturn true\nend focus_tty";
+    const SENT: &str = "on select_tty(t, in_front)\n\treturn true\nend select_tty\n\non focus_tty(t)\n\treturn true\nend focus_tty\n\non write_text(t, s)\n\treturn true\nend write_text\n\non send_enter(t)\n\treturn true\nend send_enter";
+
+    /// Stands in for iTerm2's and Ghostty's writes, with no event: whether each got the tty and the text it names.
+    const WRITES: &str = r#"
+on write_text(t, s)
+	return t is "/dev/ttys023" and s is "fix the build"
+end write_text
+
+on send_enter(t)
+	return t is "/dev/ttys023"
+end send_enter
+"#;
+
+    /// Stands in for every app's writes in Terminal's test alone, where it writes for any tty: no other test compiles it.
+    const WRITES_ANY: &str =
+        "on write_text(t, s)\n\treturn true\nend write_text\n\non send_enter(t)\n\treturn true\nend send_enter";
 
     /// Stands in for every app's script in the scripting check's tests alone: no other test compiles it.
     const CHECKED: &str = "on selected_tty()\n\treturn \"/dev/ttys023\"\nend selected_tty\n\non focus_tty(t)\n\treturn true\nend focus_tty";
@@ -537,6 +551,9 @@ end focus_tty
                     "class Trms",
                     "property Stty",
                     "event Itrmslct",
+                    "event Itrmsntx",
+                    "class Text",
+                    "class Wtnl",
                 ],
                 TabApp::Ghostty => &[
                     "class Gwnd",
@@ -547,6 +564,10 @@ end focus_tty
                     "class Gtrm",
                     "property Gtty",
                     "event GhstSlTb",
+                    "event GhstInTx",
+                    "class GItT",
+                    "event GhstSKey",
+                    "class GKeT",
                 ],
             };
             let terms: Vec<&str> =
@@ -561,10 +582,104 @@ end focus_tty
     #[test]
     fn every_source_compiles() {
         // With every term a code and the app named only at run time, compiling reads no dictionary and sends no event:
-        // it passes on a Mac without iTerm2 or Ghostty. On the script thread, as every compile is.
+        // it passes on a Mac without iTerm2 or Ghostty, the writes' parameters given by their codes too. On the script
+        // thread, as every compile is.
         for app in APPS {
             assert_eq!(on_script_thread(move |_| compile(source(app)).err()), Some(None), "{app:?}");
         }
+    }
+
+    #[test]
+    fn iterm_and_ghostty_have_the_write_handlers_and_terminal_none() {
+        for app in APPS {
+            for handler in ["on write_text(t, s)", "on send_enter(t)"] {
+                let count = source(app).lines().filter(|line| *line == handler).count();
+                assert_eq!(count, usize::from(app != T), "{app:?}: {handler}");
+            }
+        }
+        assert!(!TERMINAL.contains("write_text") && !TERMINAL.contains("send_enter"), "{TERMINAL}");
+    }
+
+    #[test]
+    fn the_write_handlers_search_every_window_and_write_to_exactly_one() {
+        for (app, windows, events) in [
+            (TabApp::Iterm, "repeat with w in (every «class cwin»)", &["«event Itrmsntx»"][..]),
+            (TabApp::Ghostty, "repeat with w in (every «class Gwnd»)", &["«event GhstInTx»", "«event GhstSKey»"][..]),
+        ] {
+            let mut written = 0;
+            for handler in source(app)
+                .split("\non ")
+                .skip(1)
+                .filter(|handler| handler.starts_with("write_text(") || handler.starts_with("send_enter("))
+            {
+                // A hidden window's session is still the agent's.
+                assert!(!handler.contains("«property pvis»"), "{app:?}: {handler}");
+                let lines: Vec<&str> = handler.lines().map(str::trim).collect();
+                let writes: Vec<usize> =
+                    (0..lines.len()).filter(|&at| events.iter().any(|event| lines[at].contains(event))).collect();
+                if writes.is_empty() {
+                    // iTerm2's Enter is its write of a carriage return, through the handler that searches.
+                    assert_eq!(lines.get(1), Some(&"return write_text(t, character id 13)"), "{app:?}: {handler}");
+                    continue;
+                }
+                assert_eq!(writes.len(), 1, "{app:?}: {handler}");
+                let write = writes[0];
+                let search = lines.iter().position(|line| *line == windows);
+                let one = lines.iter().position(|line| *line == "if length of held is not 1 then return false");
+                assert!(search.is_some() && search < one && one < Some(write), "{app:?}: {handler}");
+                assert!(lines[write].contains("(item 1 of held)"), "{app:?}: {}", lines[write]);
+                written += 1;
+            }
+            assert_eq!(written, if app == TabApp::Iterm { 1 } else { 2 }, "{app:?}");
+        }
+    }
+
+    #[test]
+    fn iterms_write_never_adds_a_newline() {
+        let writes: Vec<&str> = ITERM.lines().map(str::trim).filter(|line| line.contains("«event Itrmsntx»")).collect();
+        assert_eq!(writes.len(), 1, "{ITERM}");
+        for write in writes {
+            assert!(write.ends_with(" given «class Text»:s, «class Wtnl»:false"), "{write}");
+        }
+        assert!(!ITERM.contains("«class Wtnl»:true"), "{ITERM}");
+    }
+
+    #[test]
+    fn no_source_types_keys_or_runs_a_command() {
+        // Words reach a terminal only through a write to its one session: never as keystrokes, through System Events,
+        // or as a command an app runs.
+        for app in APPS {
+            let text = source(app).to_lowercase();
+            for word in ["dosc", "do script", "do shell script", "system events", "keystroke", "key code"] {
+                assert!(!text.contains(word), "{app:?}: {word}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_write_passes_its_tty_and_text_as_parameters() {
+        let tabs = MacTabs { source: |_| WRITES, ..scripted() };
+        for app in [TabApp::Iterm, TabApp::Ghostty] {
+            assert_eq!(tabs.write_text(app, TTY, "fix the build"), Ok(Written::Done), "{app:?}");
+            assert_eq!(tabs.write_text(app, TTY, "fix the tests"), Ok(Written::NoSession), "{app:?}");
+            assert_eq!(tabs.write_text(app, "/dev/ttys024", "fix the build"), Ok(Written::NoSession), "{app:?}");
+            assert_eq!(tabs.send_enter(app, TTY), Ok(Written::Done), "{app:?}");
+            assert_eq!(tabs.send_enter(app, "/dev/ttys024"), Ok(Written::NoSession), "{app:?}");
+        }
+        // Compiled once for every tty and text: neither is in what was compiled.
+        assert_eq!(compiled(WRITES).len(), 1);
+    }
+
+    #[test]
+    fn terminal_answers_no_session_with_no_event() {
+        let tabs = MacTabs { source: |_| WRITES_ANY, ..scripted() };
+        assert_eq!(tabs.write_text(T, TTY, "fix the build"), Ok(Written::NoSession));
+        assert_eq!(tabs.send_enter(T, TTY), Ok(Written::NoSession));
+        // No call reached the script thread: its script was not even compiled.
+        assert!(compiled(WRITES_ANY).is_empty());
+        // The same stand-in writes for iTerm2.
+        assert_eq!(tabs.write_text(TabApp::Iterm, TTY, "fix the build"), Ok(Written::Done));
+        assert_eq!(compiled(WRITES_ANY).len(), 1);
     }
 
     #[test]
@@ -582,7 +697,8 @@ end focus_tty
         // `tell application id` launches an app that is not running, and the app may have quit since the runner asked.
         for app in APPS {
             let handlers: Vec<&str> = source(app).split("\non ").skip(1).collect();
-            assert_eq!(handlers.len(), 3, "{app:?}");
+            // Terminal has no write handlers.
+            assert_eq!(handlers.len(), if app == T { 3 } else { 5 }, "{app:?}");
             for handler in handlers {
                 if !handler.contains("tell application") {
                     // It sends no event of its own: it calls one that checks.
@@ -607,6 +723,20 @@ end focus_tty
             assert!(tells > 0, "{app:?}");
             assert_eq!(text.matches("tell application id app_id").count(), tells, "{app:?}");
             assert_eq!(text.matches("with timeout of 2 seconds").count(), tells, "{app:?}");
+            // Every term goes to the app, a write's too, inside the timeout and the tell.
+            for handler in text.split("\non ").skip(1) {
+                let (mut timeout, mut tell) = (false, false);
+                for line in handler.lines().map(str::trim) {
+                    match line {
+                        "with timeout of 2 seconds" => timeout = true,
+                        "end timeout" => timeout = false,
+                        "tell application id app_id" => tell = timeout,
+                        "end tell" => tell = false,
+                        _ if line.contains('«') => assert!(tell, "{app:?}: {line}"),
+                        _ => {}
+                    }
+                }
+            }
         }
     }
 
@@ -637,12 +767,18 @@ end focus_tty
         for bad in ["/dev/ttys023; rm", "/dev/ttys023\n", "/dev/pts/3", "/dev/ttys12345", ""] {
             assert_eq!(tabs.select_tty(T, bad, true), Err(TabError::Failed), "{bad:?}");
             assert_eq!(tabs.focus_tty(T, bad), Err(TabError::Failed), "{bad:?}");
+            for app in [TabApp::Iterm, TabApp::Ghostty] {
+                assert_eq!(tabs.write_text(app, bad, "fix the build"), Err(TabError::Failed), "{app:?}: {bad:?}");
+                assert_eq!(tabs.send_enter(app, bad), Err(TabError::Failed), "{app:?}: {bad:?}");
+            }
         }
         // No call reached the script thread: its script was not even compiled.
         assert!(compiled(SENT).is_empty());
         // The same calls with a tty that passes are sent.
         assert_eq!(tabs.select_tty(T, TTY, true), Ok(Selected::Done));
         assert_eq!(tabs.focus_tty(T, TTY), Ok(Selected::Done));
+        assert_eq!(tabs.write_text(TabApp::Iterm, TTY, "fix the build"), Ok(Written::Done));
+        assert_eq!(tabs.send_enter(TabApp::Ghostty, TTY), Ok(Written::Done));
         assert_eq!(compiled(SENT).len(), 1);
     }
 
@@ -683,10 +819,13 @@ end focus_tty
         assert_eq!(tabs.selected_tty(TabApp::Ghostty), Err(TabError::NoScripting));
         assert_eq!(tabs.select_tty(TabApp::Ghostty, TTY, true), Err(TabError::NoScripting));
         assert_eq!(tabs.focus_tty(TabApp::Ghostty, TTY), Err(TabError::NoScripting));
+        assert_eq!(tabs.write_text(TabApp::Ghostty, TTY, "fix the build"), Err(TabError::NoScripting));
+        assert_eq!(tabs.send_enter(TabApp::Ghostty, TTY), Err(TabError::NoScripting));
         // One that quit as it was checked: the next tick tries again.
         let tabs = MacTabs { source: |_| UNASKED, scripting: |_| None, ..MacTabs::default() };
         assert_eq!(tabs.selected_tty(TabApp::Ghostty), Err(TabError::Failed));
         assert_eq!(tabs.focus_tty(TabApp::Ghostty, TTY), Err(TabError::Failed));
+        assert_eq!(tabs.write_text(TabApp::Ghostty, TTY, "fix the build"), Err(TabError::Failed));
         // No call reached the script thread.
         assert!(compiled(UNASKED).is_empty());
     }
