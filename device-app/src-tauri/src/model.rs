@@ -146,7 +146,7 @@ mod tests {
     use super::*;
     use crate::types::{
         AppState, AppUpdate, CliState, Daemon, DialStatus, ExportFailure, FollowState, LogsExport, MenuAction,
-        MenuItem, NotifyMode, Saved, Screen,
+        MenuItem, NotifyMode, Saved, Screen, VoiceLang,
     };
     use MenuItem::{Action, Check, Separator, Submenu, Text};
 
@@ -160,6 +160,7 @@ mod tests {
             problem: None,
             muted: None,
             notify: None,
+            voice_lang: None,
         }
     }
 
@@ -169,6 +170,21 @@ mod tests {
 
     fn notifying(mode: NotifyMode) -> DialStatus {
         DialStatus { notify: Some(mode), ..sound(Some(false)) }
+    }
+
+    fn voicing(lang: Option<Option<VoiceLang>>) -> DialStatus {
+        DialStatus { voice_lang: lang, ..notifying(NotifyMode::Full) }
+    }
+
+    /// The submenu with `held` alone checked, or none.
+    fn voices(held: Option<VoiceLang>) -> MenuItem {
+        Submenu(
+            "Voice language".into(),
+            VoiceLang::ALL
+                .into_iter()
+                .map(|lang| Check(MenuAction::Voice(lang), lang.name().into(), held == Some(lang)))
+                .collect(),
+        )
     }
 
     fn notifications(full: bool, you: bool) -> MenuItem {
@@ -225,10 +241,15 @@ mod tests {
         );
     }
 
-    /// Every CliState × Daemon × dial (none, attached, with Sound and Notifications) × signed_in × follow door (none,
-    /// macOS's without the permission, with it).
+    /// Every CliState × Daemon × dial (none, attached, with Sound and Notifications, with Voice language too) ×
+    /// signed_in × follow door (none, macOS's without the permission, with it).
     fn states() -> Vec<AppState> {
-        let dials = [None, Some(dial(true, Some("0.0.95"))), Some(notifying(NotifyMode::Full))];
+        let dials = [
+            None,
+            Some(dial(true, Some("0.0.95"))),
+            Some(notifying(NotifyMode::Full)),
+            Some(voicing(Some(Some(VoiceLang::Ja)))),
+        ];
         let follows = [FollowState::default(), following(false), following(true)];
         let mut states = Vec::new();
         for cli in [CliState::Found, CliState::Installing, CliState::InstallFailed, CliState::Removed] {
@@ -442,6 +463,60 @@ mod tests {
     }
 
     #[test]
+    fn the_voice_language_submenu() {
+        let with = |lang| menu(&AppState { dial: Some(voicing(lang)), ..state() });
+        assert_eq!(
+            with(Some(Some(VoiceLang::Vi))),
+            vec![
+                text("Device ready"),
+                text("Signed in"),
+                Check(MenuAction::SoundOff, "Sound".into(), true),
+                notifications(true, false),
+                voices(Some(VoiceLang::Vi)),
+                Separator,
+                act(MenuAction::OpenHarness, "Open Harness"),
+                act(MenuAction::ExportLogs, "Export logs"),
+                act(MenuAction::About, "About"),
+                act(MenuAction::Quit, "Quit"),
+            ]
+        );
+        for lang in VoiceLang::ALL {
+            assert_eq!(with(Some(Some(lang)))[4], voices(Some(lang)), "{lang:?}");
+        }
+        // A code outside the six: the six, none checked, and a click sets one.
+        assert_eq!(with(Some(None))[4], voices(None));
+        let alone = DialStatus { muted: None, notify: None, ..voicing(Some(Some(VoiceLang::Vi))) };
+        assert_eq!(menu(&AppState { dial: Some(alone), ..state() })[2], voices(Some(VoiceLang::Vi)));
+        let updating =
+            AppState { dial: Some(voicing(Some(Some(VoiceLang::Vi)))), app_update: AppUpdate::Installing, ..state() };
+        assert_eq!(menu(&updating)[4..7], [voices(Some(VoiceLang::Vi)), text(UPDATING_APP), Separator]);
+    }
+
+    #[test]
+    fn the_voice_language_submenu_is_absent_when_there_is_nothing_to_change() {
+        let english = || Some(voicing(Some(Some(VoiceLang::En))));
+        let mut absent = vec![
+            AppState { dial: None, ..state() },
+            AppState { dial: Some(voicing(None)), ..state() },
+            AppState { dial: Some(DialStatus { attached: false, ..voicing(Some(Some(VoiceLang::En))) }), ..state() },
+            AppState {
+                dial: Some(DialStatus { updating: Some("0.0.96".into()), ..voicing(Some(Some(VoiceLang::En))) }),
+                ..state()
+            },
+        ];
+        for daemon in [Daemon::Starting, Daemon::Stopped, Daemon::Updating] {
+            absent.push(AppState { daemon, dial: english(), ..state() });
+        }
+        for cli in [CliState::Removed, CliState::Installing, CliState::InstallFailed] {
+            absent.push(AppState { cli, dial: english(), ..state() });
+        }
+        for state in absent {
+            let voice = |item: &MenuItem| matches!(item, Submenu(label, _) if label == "Voice language");
+            assert!(!menu(&state).iter().any(voice), "{state:?}");
+        }
+    }
+
+    #[test]
     fn no_menu_has_a_follow_item() {
         for trusted in [false, true] {
             for gated in [false, true] {
@@ -556,6 +631,23 @@ mod tests {
         assert_eq!(
             menu_log(&menu(&AppState { dial: Some(notifying(NotifyMode::You)), ..state() })),
             "Device ready | Signed in | Sound ✓ | Notifications: Needs you | Open Harness | Export logs | About | Quit"
+        );
+        let voiced = |lang| menu_log(&menu(&AppState { dial: Some(voicing(lang)), ..state() }));
+        assert_eq!(
+            voiced(Some(Some(VoiceLang::Vi))),
+            "Device ready | Signed in | Sound ✓ | Notifications: All | Voice language: Tiếng Việt | Open Harness | \
+             Export logs | About | Quit"
+        );
+        assert_eq!(
+            voiced(Some(Some(VoiceLang::Ja))),
+            "Device ready | Signed in | Sound ✓ | Notifications: All | Voice language: 日本語 | Open Harness | \
+             Export logs | About | Quit"
+        );
+        // Shown with none checked: its label alone, so a support log tells it from absent.
+        assert_eq!(
+            voiced(Some(None)),
+            "Device ready | Signed in | Sound ✓ | Notifications: All | Voice language | Open Harness | Export logs | \
+             About | Quit"
         );
         // Following has no row, given or not.
         for trusted in [false, true] {

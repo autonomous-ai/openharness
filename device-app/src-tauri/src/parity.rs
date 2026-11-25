@@ -53,6 +53,7 @@ fn status(muted: bool) -> Event {
         problem: None,
         muted: Some(muted),
         notify: Some(NotifyMode::Full),
+        voice_lang: Some(Some(VoiceLang::En)),
     })
 }
 

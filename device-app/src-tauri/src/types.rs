@@ -451,6 +451,7 @@ mod tests {
                 problem: None,
                 muted: None,
                 notify: None,
+                voice_lang: None,
             }
         );
         for line in [r#"{}"#, r#"{"error":"x"}"#, r#"{"attached":"yes"}"#] {
@@ -479,6 +480,31 @@ mod tests {
             r#"{"attached":true,"notify":null}"#,
         ] {
             assert_eq!(notify(line).unwrap(), None, "{line}");
+        }
+    }
+
+    #[test]
+    fn a_status_line_carries_voice_lang() {
+        let voice = |line: &str| serde_json::from_str::<DialStatus>(line).map(|status| status.voice_lang);
+        assert_eq!(voice(r#"{"attached":true,"voiceLang":"vi"}"#).unwrap(), Some(Some(VoiceLang::Vi)));
+        for lang in VoiceLang::ALL {
+            let line = format!(r#"{{"attached":true,"voiceLang":"{}"}}"#, lang.code());
+            assert_eq!(voice(&line).unwrap(), Some(Some(lang)), "{line}");
+        }
+        // A code outside the six: the submenu shows, none checked.
+        for code in ["de", "en-US"] {
+            let line = format!(r#"{{"attached":true,"voiceLang":"{code}"}}"#);
+            assert_eq!(voice(&line).unwrap(), Some(None), "{line}");
+        }
+        assert_eq!(voice(r#"{"attached":true}"#).unwrap(), None);
+        // A value of another type is no language: the line is still a status.
+        for line in [
+            r#"{"attached":true,"voiceLang":7}"#,
+            r#"{"attached":true,"voiceLang":null}"#,
+            r#"{"attached":true,"voiceLang":["vi"]}"#,
+            r#"{"attached":true,"voiceLang":{}}"#,
+        ] {
+            assert_eq!(voice(line).unwrap(), None, "{line}");
         }
     }
 

@@ -189,6 +189,7 @@ mod tests {
             problem: None,
             muted: None,
             notify: None,
+            voice_lang: None,
         })
     }
 
@@ -196,7 +197,7 @@ mod tests {
     #[test]
     fn a_line_each_time_the_dial_changes() {
         let fake = Fake::new();
-        let attached = r#"{"attached":true,"fw":"0.0.95","hw":"cst816s","muted":true}"#;
+        let attached = r#"{"attached":true,"fw":"0.0.95","hw":"cst816s","muted":true,"voiceLang":"ja"}"#;
         fake.script("hardware watch --json", &[r#"{"attached":false}"#, "@wait next", attached, "@stdin"]);
         let (_watch, events) = start(&fake);
         assert_eq!(events.recv_timeout(WAIT), Ok(dial(false, None, None)));
@@ -210,6 +211,7 @@ mod tests {
             problem: None,
             muted: Some(true),
             notify: None,
+            voice_lang: Some(Some(VoiceLang::Ja)),
         };
         assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchLine(muted)));
         assert_eq!(fake.calls(), ["hardware watch --json"]);

@@ -1121,6 +1121,7 @@ mod tests {
                 problem: None,
                 muted: None,
                 notify: None,
+                voice_lang: None,
             })
         };
 
@@ -1156,6 +1157,7 @@ mod tests {
             problem: None,
             muted: None,
             notify: None,
+            voice_lang: None,
         };
         let menu = menu_of(&app.handle(Event::WatchLine(line)));
         // Twice over: a click remembers nothing, so the same click gives the same effects.
@@ -1178,6 +1180,7 @@ mod tests {
             problem: None,
             muted: None,
             notify: None,
+            voice_lang: None,
         };
         let menu = menu_of(&app.handle(Event::WatchLine(line)));
         // Twice over: a click remembers nothing, so the same click gives the same effects.
@@ -1204,6 +1207,7 @@ mod tests {
                 problem: None,
                 muted: Some(muted),
                 notify: None,
+                voice_lang: None,
             })
         };
         let checks = |effects: &[Effect]| -> Vec<MenuItem> {
@@ -1228,6 +1232,63 @@ mod tests {
         assert!(checks(&app.handle(Event::WatchExit(Some(3)))).is_empty());
     }
 
+    #[test]
+    fn the_voice_check_follows_the_dial_not_the_click() {
+        let mut app = found();
+        let line = |voice_lang| {
+            Event::WatchLine(DialStatus {
+                attached: true,
+                fw: Some("0.0.95".into()),
+                hw: None,
+                board: None,
+                updating: None,
+                problem: None,
+                muted: None,
+                notify: None,
+                voice_lang,
+            })
+        };
+        let submenus = |effects: &[Effect]| -> Vec<MenuItem> {
+            menu_of(effects).into_iter().filter(|item| matches!(item, MenuItem::Submenu(..))).collect()
+        };
+        let checked = |held: Option<VoiceLang>| {
+            let choices = VoiceLang::ALL
+                .into_iter()
+                .map(|lang| MenuItem::Check(MenuAction::Voice(lang), lang.name().into(), held == Some(lang)))
+                .collect();
+            MenuItem::Submenu("Voice language".into(), choices)
+        };
+        let menu_line = |effects: &[Effect]| {
+            effects.iter().any(|effect| matches!(effect, Effect::Log(text) if text.starts_with("menu:")))
+        };
+
+        let effects = app.handle(line(Some(Some(VoiceLang::En))));
+        assert_eq!(submenus(&effects), [checked(Some(VoiceLang::En))]);
+        assert!(has(
+            &effects,
+            &Effect::Log("menu: Device ready | Voice language: English | Export logs | About | Quit".into())
+        ));
+
+        // The click's own check flipped natively: the menu drawn again puts it back where the dial is.
+        let effects = app.handle(Event::Menu(MenuAction::Voice(VoiceLang::Vi)));
+        assert_eq!(submenus(&effects), [checked(Some(VoiceLang::En))]);
+        assert!(!menu_line(&effects));
+
+        let effects = app.handle(line(Some(Some(VoiceLang::Vi))));
+        assert_eq!(submenus(&effects), [checked(Some(VoiceLang::Vi))]);
+        assert!(has(
+            &effects,
+            &Effect::Log("menu: Device ready | Voice language: Tiếng Việt | Export logs | About | Quit".into())
+        ));
+
+        // The dial holds a code outside the six.
+        let effects = app.handle(line(Some(None)));
+        assert_eq!(submenus(&effects), [checked(None)]);
+        assert!(has(&effects, &Effect::Log("menu: Device ready | Voice language | Export logs | About | Quit".into())));
+
+        assert!(submenus(&app.handle(Event::WatchExit(Some(3)))).is_empty());
+    }
+
     fn notifying(mode: NotifyMode) -> Event {
         Event::WatchLine(DialStatus {
             attached: true,
@@ -1238,6 +1299,7 @@ mod tests {
             problem: None,
             muted: None,
             notify: Some(mode),
+            voice_lang: None,
         })
     }
 
@@ -1304,6 +1366,7 @@ mod tests {
             problem: None,
             muted: None,
             notify: None,
+            voice_lang: None,
         };
         let effects = app.handle(Event::WatchLine(line.clone()));
         assert_eq!(rows(&effects)[0], "Device ready");
@@ -2020,6 +2083,7 @@ mod tests {
             problem: None,
             muted: None,
             notify: None,
+            voice_lang: None,
         })
     }
 

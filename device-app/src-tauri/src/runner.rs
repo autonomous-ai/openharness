@@ -1163,6 +1163,7 @@ mod tests {
             problem: None,
             muted: None,
             notify: None,
+            voice_lang: None,
         })
     }
 
@@ -1176,6 +1177,7 @@ mod tests {
             problem: None,
             muted: None,
             notify: None,
+            voice_lang: None,
         })
     }
 
