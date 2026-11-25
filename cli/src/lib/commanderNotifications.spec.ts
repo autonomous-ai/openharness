@@ -75,7 +75,7 @@ describe('one completed-result decision for desktop and device', () => {
     mirror.ingest(turn.slice(1), 's', { replay: mode === 'replay' })
     await vi.runAllTimersAsync()
     expect(desktop[0].payload.notification).toBeNull()
-    expect(device.at(-1)?.payload.subagent).toBe(true)
+    expect(device.at(-1)?.payload).toMatchObject({ subagent: true, quiet: mode })
   })
 
   it('announces a turn that went on after its ask was answered, as any turn', async () => {
@@ -88,6 +88,7 @@ describe('one completed-result decision for desktop and device', () => {
     expect(desktop[0].payload.notification.kind).toBe('done')
     expect(device.at(-1)?.payload.notification).toEqual(desktop[0].payload.notification)
     expect(device.at(-1)?.payload).not.toHaveProperty('subagent')
+    expect(device.at(-1)?.payload).not.toHaveProperty('quiet')
   })
 
   it('ignores aborted, duplicate and superseded ends', async () => {
