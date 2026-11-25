@@ -453,8 +453,10 @@ export class HerdrSource implements HostSource {
       const row = rows.get(pane)
       if (!row || row.agent.sessionId !== undefined) this.bare.delete(pane)
     }
+    // One time for the whole list, so the rows it gave no session are due together and share each re-list.
+    const at = this.deps.monotonic()
     for (const [pane, { agent }] of rows) {
-      if (agent.sessionId === undefined && !this.bare.has(pane)) this.bare.set(pane, { at: this.deps.monotonic(), relists: 0 })
+      if (agent.sessionId === undefined && !this.bare.has(pane)) this.bare.set(pane, { at, relists: 0 })
     }
     if (rows.size !== this.said) {
       this.said = rows.size
