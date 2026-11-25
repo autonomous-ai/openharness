@@ -1959,9 +1959,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  each asks once, so a chat Orca's list leaves out (a read that failed, an Orca too old to list chats) costs no
    *  `orca agent list` at every hook of every agent. */
   let chatsAsked: ReadonlySet<string> = new Set()
-  /** A read, only while a dial is attached: with none, nothing is read or kept. */
-  const readChats = (chats: OrcaChatSource, opts?: { worktrees?: boolean }): void => {
-    if (dialOn) chats.read(opts)
+  /** A read, only while a dial is attached: with none, nothing is read or kept. Orca's worktree list comes with it while
+   *  the worktree the plugin names is not in the map: a detach empties the map, and the same worktree still on screen at
+   *  the next attach is no new worktree to ask for it (a dial plugged back in held that worktree's terminals alone,
+   *  2026-11-25). */
+  const readChats = (chats: OrcaChatSource): void => {
+    if (!dialOn) return
+    chats.read({ worktrees: orcaWorkspace !== undefined && worktreeOnScreen(chats, orcaWorkspace) === undefined })
   }
   /** A hook that names a listed chat's session folds its row into the hooked copy now, before the dial's look, so the dial
    *  never gets the chat twice; one that names a chat the source does not list asks for a read. A chat is a hooked agent
@@ -1973,7 +1977,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       source.paneOf(observedAgentId(engine, sessionId), ORCA_CHAT_ADAPTER) === orcaId ? [orcaId] : [])
     const asked = chatsAsked
     chatsAsked = new Set(heard.filter((orcaId) => asked.has(orcaId) || chats.worktreeOf(orcaId) === undefined))
-    if (heard.some((orcaId) => !asked.has(orcaId) && chats.worktreeOf(orcaId) === undefined)) chats.read()
+    if (heard.some((orcaId) => !asked.has(orcaId) && chats.worktreeOf(orcaId) === undefined)) readChats(chats)
   }
   if (observed && orcaChats) observed.onChange(() => part.call('orca-chat', () => heardChats(observed, orcaChats)))
   observed?.onChange(() => part.call('dial', outsideTurn))
@@ -2295,7 +2299,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     } })
     // Another worktree on screen is a push (decided 3): its chats, with Orca's worktree list when its identity is not in
     // the map yet, as the worktree may be new since.
-    if (moved && orcaChats) readChats(orcaChats, { worktrees: worktreeOnScreen(orcaChats, named) === undefined })
+    if (moved && orcaChats) readChats(orcaChats)
   }
 
   // ── the pane focused in Orca ───────────────────────────────────────────────────────────────────────
@@ -2756,7 +2760,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // may ask once again under the next dial.
     part.call('orca-chat', () => {
       chatsAsked = new Set()
-      return on ? orcaChats.read() : orcaChats.stop()
+      return on ? readChats(orcaChats) : orcaChats.stop()
     })
     const reads = Promise.all([herdrRead, hcRead, cmuxListed, opencodeRead, claudeRead, codexRead]).then(() => {})
     if (!on) {
