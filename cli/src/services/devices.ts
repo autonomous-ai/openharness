@@ -1539,11 +1539,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         part.call('dial', remind)
       })
     },
-    // Before the settle of the app in front shows anything: the tab report waiting on it is judged, and its agent's page
-    // shown, so the settle shows tmux's or herdr's page directly (Diego's decision 4, 2026-11-23).
-    appSettling: (app) => part.call('dial', () => tabSettling(app)),
     // The settle of the app in front: the Claude app's turns the dial to the session it last attached
-    // (docs/specs/2026-11-15-dial-claude-app-follow.md), and any app's follows the tab report its settling judged. Each
+    // (docs/specs/2026-11-15-dial-claude-app-follow.md), and any app's judges the tab report waiting on it. Each
     // guarded on its own: the filter drops what this answers, so a follow that rejects would go unseen, and one that throws
     // would cost the other its settle.
     appSettled: (app) => {
@@ -1555,7 +1552,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       if (app === 'orca' && orcaSetup) part.call('orcaPlugin', () => orcaSetup.pass())
       // Behind another app cmux's log was not read: the read as cmux comes forward catches up.
       if (app === 'cmux') part.call('cmux', () => cmuxRead(true))
-      part.call('dial', tabSettled)
+      part.call('dial', () => tabSettled(app))
       part.call('dial', () => threadSettled(app))
       part.call('dial', () => editorSettled(app))
       // Before the poll reads it: the person coming back to an app is on whichever tab its next report names.
@@ -2714,10 +2711,6 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (!agent) { log('[device] pane · skipped · unknown agent'); return }
     // tmux's front client is the tab reported as the read started: the person may have selected another since.
     if (!onTabInFront(source, focus.app, agent.id)) { log('[device] pane · skipped · not in front'); return }
-    // An agent in tmux is on tmux's page, as a selected tab's is (Diego's decision 4, 2026-11-23; cableHost.ts
-    // followPage). WezTerm's and kitty's turn back to their app's own page, which a tmux follow inside one of their
-    // panes held on tmux's (the PM's decision, 2026-11-24).
-    cableHost.followPage(agent.id)
     return cable.followLocal(agent.id, 'pane')
   }
   /** The poll's app left the front, its last agent went, or the dial went: the poll and the dial's taps its answers are
@@ -2766,8 +2759,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // (docs/plans/2026-11-24-dial-tmux-pane-focus-follow-design.md, "herdr: the `pane.focused` event"), so its follow needs
   // no poll. herdr has one focus a server, and its event names no client: the app settled in front and its tab say whether
   // the person is looking at it. Each line is an outcome, never the pane, the tab or the agent.
-  /** The dials turn to the one live agent at the pane herdr says took the focus, on herdr's page, as to a tmux pane's.
-   *  With no dial linked nothing is followed or said. */
+  /** The dials turn to the one live agent at the pane herdr says took the focus, as to a tmux pane's. With no dial linked
+   *  nothing is followed or said. */
   const herdrFocused = (source: ObservedSource, paneId: string): Promise<void> | undefined => {
     if (!cable.isConnected) return
     const key = herdrPaneKey(paneId)
@@ -2796,7 +2789,6 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       log('[device] herdr focus · skipped · not in front')
       return
     }
-    cableHost.followPage(agent.id)
     return cable.followLocal(agent.id, 'pane')
   }
 
@@ -2864,7 +2856,6 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       log('[device] cmux focus · skipped · not in front')
       return
     }
-    // No followPage: cmux's agents are on cmux's own page.
     return cable.followLocal(agent.id, 'pane')
   }
   /** cmux's source stopped (the dial went, or cmux was not found): what was read of the log is forgotten, a read under way
@@ -3155,8 +3146,6 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // Focus reaches an agent with an Orca pane; one in a multiplexer inside Orca has none, and its prompt still moves the
     // dial.
     if (focusWatch && observed?.paneOf(agentId, 'orca') !== undefined) { log('[device] prompt · skipped · focus followed'); return }
-    // Before the dials are asked: an agent in tmux or herdr turns them to that page (Diego's decision 4, 2026-11-23).
-    cableHost.followPage(agentId)
     if (orcaChats && observed?.paneOf(agentId, ORCA_CHAT_ADAPTER) !== undefined && orcaChats.worktreeOfAgent(agentId) === undefined) {
       chatPrompt = { agentId, source, at: monotonic(), moves: dialMoves }
     }
@@ -3234,17 +3223,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    * A tab selected in Terminal, iTerm2 or Ghostty turns the dials to its agent as a person's prompt does, once its app has
    * settled in front (docs/specs/2026-11-15-dial-terminal-follow.md, "2. Selecting a tab moves the dial"): Harness Device
    * reports as the app comes to the front, before it settles. The latest report waits for that settle, and another app
-   * settling drops it. An agent in tmux or herdr there turns the dials to tmux's or herdr's page first (Diego's decision
-   * 4, 2026-11-23; cableHost.ts followPage). Each line is an outcome, never the app, the tty or the agent.
+   * settling drops it. Each line is an outcome, never the app, the tty or the agent.
    */
   /** A tab report, when it came and how many moves the dial had made by then. */
   type TabReport = Tab & { at: number; moves: number }
   let tabReport: TabReport | undefined
-  /** The agent of the report its app's settling judged, followed once that settle has shown its page. */
-  let tabJudged: string | undefined
-  /** Uses up the report: its agent, the page shown turned to that agent's, or none. With no dial linked nothing is
-   *  followed or counted, as with a prompt. */
-  const tabAgent = (report: TabReport): string | undefined => {
+  /** Uses up the report: with no dial linked nothing is followed or counted, as with a prompt. */
+  const followTab = (report: TabReport): Promise<void> | undefined => {
     tabReport = undefined
     if (!cable.isConnected) return
     const { app, tty, at } = report
@@ -3256,12 +3241,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (selects.echo(tty, at)) { log('[device] tab · skipped · echo'); return }
     const agent = observed?.byTab(app, tty)
     if (!agent) { log('[device] tab · skipped · unknown agent'); return }
-    cableHost.followPage(agent.id)
-    return agent.id
-  }
-  const followTab = (report: TabReport): Promise<void> | undefined => {
-    const agentId = tabAgent(report)
-    return agentId === undefined ? undefined : cable.followLocal(agentId, 'tab')
+    return cable.followLocal(agent.id, 'tab')
   }
   const tabReported = (tab: Tab): Promise<void> | undefined => {
     // Every report, an echo's and one waiting for the settle too: it is the tab the person is on.
@@ -3270,18 +3250,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (cableHost.settledApp() === tab.app) return followTab(report)
     tabReport = report
   }
-  /** Before the settle shows anything, the report waiting on that app is judged: the settle then shows its agent's page
-   *  directly, never the app's first (the spec's "A follow turns the page"). */
-  const tabSettling = (app: string): void => {
-    tabJudged = tabReport?.app === app ? tabAgent(tabReport) : undefined
-  }
-  /** After the settle has shown its page and turned the view: the dials follow the agent its settling judged. A report
-   *  still waiting is another app's, and dropped. */
-  const tabSettled = (): Promise<void> | undefined => {
-    const agentId = tabJudged
-    tabJudged = undefined
-    if (agentId !== undefined) return cable.followLocal(agentId, 'tab')
+  /** After the settle has shown its page and turned the view: the report waiting on that app is judged, once, and its
+   *  agent followed on the page shown. One waiting on another app is dropped. */
+  const tabSettled = (app: string): Promise<void> | undefined => {
     if (!tabReport) return
+    if (tabReport.app === app) return followTab(tabReport)
     tabReport = undefined
     if (cable.isConnected) log('[device] tab · skipped · not in front')
   }
@@ -3505,7 +3478,6 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       for (const timer of [...endings.values(), ...leavings.values()]) clearTimeout(timer)
       for (const timer of pending) clearTimeout(timer)
       tabReport = undefined
-      tabJudged = undefined
       lastTabs.clear()
       selects.clear()
       threadReport = undefined

@@ -77,9 +77,9 @@ export type DialView = 'tabs' | 'apps'
  *  opening, the shown app left as Harness or no app. */
 export type ViewCause = 'front' | 'pick' | 'window' | 'empty'
 
-/** Why the shown app changed. `follow`: a tab or prompt follow to an agent of the app in front turned to the agent's
- *  own page, tmux's or herdr's (AppFilter.follow). */
-export type SwitchCause = 'front' | 'pick' | 'empty' | 'notice' | 'follow'
+/** Why the shown app changed. A follow is never why: it moves the dial on the page shown
+ *  (docs/plans/2026-11-26-dial-mux-host-pages-design.md §3). */
+export type SwitchCause = 'front' | 'pick' | 'empty' | 'notice'
 
 export interface Caps {
   status: boolean

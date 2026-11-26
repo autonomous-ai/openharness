@@ -91,16 +91,6 @@ interface AppRing {
 }
 
 /**
- * The page a tab or prompt follow turns the dial to: tmux's or herdr's for an agent nested there, except in Orca, else
- * its app's. Only `CableHost.followPage` reads it; the page turn goes with it
- * (docs/plans/2026-11-26-dial-mux-host-pages-plan.md Task 5).
- */
-export const pageOf = (a: HostAgent): string => {
-  if (a.nest && a.app !== 'orca') return a.nest
-  return APP_IDS.includes(a.app) ? a.app : UNKNOWN_APP
-}
-
-/**
  * The pages an agent is on, the one rule every reader of the page goes through: its app's, then, for an agent in tmux
  * or herdr, that multiplexer's (Diego, 2026-11-26, docs/plans/2026-11-26-dial-mux-host-pages-design.md §1). An app
  * outside the set is the unknown one, so there are never more pages than APP_IDS. A nested agent whose app is none of the set

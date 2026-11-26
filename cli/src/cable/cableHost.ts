@@ -44,7 +44,7 @@ import { HarnessSource } from './hosts/harness.js'
 import { AppFilter, type AppCounts } from './hosts/appFilter.js'
 import { agentPlaceName, appDisplayName, hostDisplayName } from './hosts/hostDetect.js'
 import type { HostEntry, HostRegistry } from './hosts/registry.js'
-import { APP_LIMIT, AppRings, DialRing, pageOf, pagesOf, type RingRank } from './hosts/select.js'
+import { APP_LIMIT, AppRings, DialRing, pagesOf, type RingRank } from './hosts/select.js'
 import { FRONT_NONE } from './hosts/frontApp.js'
 import { deriveAnswerCard } from '../lib/deviceRecap.js'
 import { capsLetters, type AppList, type AppPick, type DialView, type HostAgent, type PaneSwitch, type SwitchCause, type ViewCause } from './hosts/types.js'
@@ -183,10 +183,6 @@ export interface CableHostWiring {
   pets?: () => PetStore | null
   /** The app a dial that says `appFilter` shows changed from one app to another, and why: its dials are told at once. */
   appSwitched?: (cause: SwitchCause) => void
-  /** An app stayed in front for FRONT_SETTLE_MS, with or without a window, before the settle shows anything: a tab
-   *  report waiting on that app follows its agent's page here (`followPage`), so the settle shows that page directly,
-   *  never the app's first. */
-  appSettling?: (app: string) => void
   /** An app stayed in front for FRONT_SETTLE_MS, with or without a window, after any switch it caused: the Claude app's
    *  session and a tab report waiting on that app are followed then. */
   appSettled?: (app: string) => void
@@ -310,7 +306,6 @@ export class DaemonCableHost implements CableHost {
       // count as the last machine list left them: that read feeds their source (machineSnapshot).
       counts: () => this.counts(),
       switched: (cause) => wiring.appSwitched?.(cause),
-      settling: (app) => wiring.appSettling?.(app),
       settled: (app) => {
         this.viewOnSettle(app)
         wiring.appSettled?.(app)
@@ -839,22 +834,6 @@ export class DaemonCableHost implements CableHost {
   /** The app last reported in front, before it settles, with or without a window. */
   latestFront(): string | undefined {
     return this.filter.latestFront()
-  }
-
-  /**
-   * A tab or prompt follow to this agent of the machine list: one in tmux or herdr inside the app settled in front turns
-   * the shown page to tmux's or herdr's and holds it (Diego's decision 4, 2026-11-23; `AppFilter.follow`). Told once per
-   * follow, before the dials are asked to follow it, so every dial's next read sees the page. With a window open the
-   * turn sets the view to the apps ring, as that app settling with agents does (`viewOnSettle`), unless Harness was
-   * picked over that app: the pick holds the tab, as a pick on the dial holds the filter.
-   */
-  followPage(agentId: string): void {
-    const agent = this.registry?.entries().find((e) => e.agent.id === agentId)?.agent
-    if (!agent || (this.swarms !== null && agent.app === this.pickedOver)) return
-    if (!this.filter.follow(agent.app, pageOf(agent)) || this.swarms === null) return
-    // Told from `appSettling`, before `viewOnSettle` ends it, a pick of Harness over the app settled before still holds.
-    this.pickedOver = undefined
-    this.setView('apps', 'front')
   }
 
   localFollowed(cause: FollowCause, outcome: 'moved' | 'no-tile'): void {
