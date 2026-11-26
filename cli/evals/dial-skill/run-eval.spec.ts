@@ -412,6 +412,28 @@ ${agent('claude-opus-5-5')}`)
     expect(existsSync(join(flow, 'v1', 'results.jsonl'))).toBe(false)
     expect(runEval(['--variant', 'v1', ...args.slice(2), '--approve-harness']).status).toBe(0)
   })
+
+  it('refuses a variant whose SKILL.md is not the text dialSkill.ts holds, before any probe or case', () => {
+    mkdirSync(join(flow, 'v1'))
+    writeFileSync(join(flow, 'v1', 'SKILL.md'), DIAL_SKILL + 'x')
+
+    const out = runEval(['--variant', 'v1', '--agents', 'oracle,null', '--cases', 'board-unplugged', '--approve-harness'])
+
+    expect(out.status).toBe(2)
+    expect(out.stderr).toContain('v1/SKILL.md is not the text')
+    expect(callsMade()).toEqual([])
+    for (const file of ['results.jsonl', 'probes.jsonl', 'summary.json']) expect(existsSync(join(flow, 'v1', file)), file).toBe(false)
+  })
+
+  it('runs a variant whose SKILL.md is DIAL_SKILL', () => {
+    mkdirSync(join(flow, 'v1'))
+    writeFileSync(join(flow, 'v1', 'SKILL.md'), DIAL_SKILL)
+
+    const out = runEval(['--variant', 'v1', '--agents', 'oracle,null', '--cases', 'board-unplugged', '--approve-harness'])
+
+    expect(out.status, out.stderr).toBe(0)
+    expect(jsonl('v1', 'results.jsonl').map((r) => r.prompt_id).sort()).toEqual(['board-unplugged.null.clean', 'board-unplugged.oracle.clean'])
+  })
 })
 
 describe('run-eval.mjs conditions and probes', () => {
