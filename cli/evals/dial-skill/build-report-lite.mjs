@@ -354,7 +354,9 @@ function build(flowArg) {
         }).filter(Boolean),
       };
     }
-    return { id: pid, split: splitOf[pid] || '', tags, prompt: String(first.prompt ?? ''), per };
+    // A case id is <scenario>.<agent>.<condition>; _state.json lists splits by <scenario>.<agent>.
+    const split = splitOf[pid] || splitOf[pid.replace(/\.(clean|crowd|name-only)$/, '')] || '';
+    return { id: pid, split, tags, prompt: String(first.prompt ?? ''), per };
   });
 
   // Per-variant aggregate: mean over cases that have a value, per split.
