@@ -12718,6 +12718,20 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
       expect(orcaRuns).toEqual([continued(LOCAL)])
     })
 
+    // Its copy is listed at its SessionStart, before its mod's first poll: no route yet, but a restart is not what helps.
+    it('a voice start at its copy while the wake still waits for that session is not told to restart; its words wait behind the first', async () => {
+      const { port, live } = withStore()
+      await live()
+      const first = host().sendTurn(ID, 'first')
+      await flush()
+      port.observed(hook('session-start'))
+      expect(host().voiceRefusal(ID)).toBeUndefined()
+      expect(await host().sendTurn(ID, 'second')).toEqual(refused('api has not taken your last words yet.'))
+      expect(await poll(port, 'p1', SESSION)).toEqual({ text: 'first' })
+      expect(await first).toEqual({ ok: true })
+      expect(orcaRuns).toEqual([continued(LOCAL)])
+    })
+
     // Review Focus 2: two opens of one link do no harm.
     it('a tap while it opens runs the link again and the words still go once', async () => {
       const { port, live } = withStore()
