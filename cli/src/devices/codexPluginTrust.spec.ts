@@ -59,6 +59,13 @@ const write = (root: string, files: Readonly<Record<string, string>>): string =>
 }
 /** The fixture plugin as Codex installs it, with the bytecode the spike's tree held. */
 const tree = (extra: Readonly<Record<string, string>> = {}): string => write(join(temp(), 'local'), { ...FIXTURE, '__pycache__/x.pyc': 'skipped\n', ...extra })
+/** The fixture plugin with its hooks file replaced by [hooksFile], or removed (null). */
+const handEdited = (hooksFile: string | null): string => {
+  const folder = tree()
+  if (hooksFile === null) rmSync(join(folder, 'hooks', 'codex.json'))
+  else writeFileSync(join(folder, 'hooks', 'codex.json'), hooksFile)
+  return folder
+}
 const codexHome = (config?: string | Buffer): string => {
   const home = temp()
   if (config !== undefined) writeFileSync(join(home, 'config.toml'), config)
@@ -168,9 +175,10 @@ describe('writePluginTrust', () => {
     const installed = tree()
     expect(writePluginTrust(home, installed, FINGERPRINT)).toStrictEqual({ ok: true, changed: true })
     const before = configOf(home)
-    // One byte changed by hand after trust was written; a GitHub `main`, which holds its tests.
+    // One byte changed by hand after trust was written; a GitHub `main`, which holds its tests; a hooks file emptied,
+    // removed or broken by hand, which declares nothing to trust and must not read as trusted, nor as a broken plugin.
     writeFileSync(join(installed, 'README.md'), 'fixturE\n')
-    for (const folder of [installed, tree({ 'test/plugin.spec.mjs': 'test\n' })]) {
+    for (const folder of [installed, tree({ 'test/plugin.spec.mjs': 'test\n' }), handEdited('{"hooks":{}}\n'), handEdited(null), handEdited('{"hooks":')]) {
       const io = { read: vi.fn(readConfigText), replace: vi.fn(replaceConfigFile) }
       expect(writePluginTrust(home, folder, FINGERPRINT, io)).toStrictEqual({ ok: false, kind: 'differs' })
       expect(io.read).not.toHaveBeenCalled()
@@ -301,12 +309,11 @@ describe('writePluginTrust', () => {
     const home = codexHome('model = "gpt-5"\n')
     const failing = { read: readConfigText, replace: () => { throw new Error('denied') } }
     expect(writePluginTrust(home, tree(), FINGERPRINT, failing)).toStrictEqual({ ok: false, kind: 'write' })
-    // A plugin whose hooks file is gone or is not JSON: the folder is the expected one, but holds nothing to trust.
-    for (const hooksFile of [null, '{"hooks":']) {
-      const folder = tree()
-      if (hooksFile === null) rmSync(join(folder, 'hooks', 'codex.json'))
-      else writeFileSync(join(folder, 'hooks', 'codex.json'), hooksFile)
-      expect(writePluginTrust(home, folder, pluginContentHash(folder))).toStrictEqual({ ok: false, kind: 'plugin' })
+    // A plugin whose hooks file is gone, is not JSON or declares no hook: the folder is the expected one, but holds
+    // nothing to trust.
+    for (const hooksFile of [null, '{"hooks":', '{"hooks":{}}\n']) {
+      const folder = handEdited(hooksFile)
+      expect(writePluginTrust(home, folder, pluginContentHash(folder)), String(hooksFile)).toStrictEqual({ ok: false, kind: 'plugin' })
     }
     expect(configOf(home)).toBe('model = "gpt-5"\n')
   })
