@@ -35,8 +35,8 @@ export const MAX_CLIENTS = 16
 /** A hook's caller, or the process the open scan found holding a session, and the session's folder. */
 export interface ServedAsk { pid: number; cwd?: string }
 
-/** A session its caller's Codex server runs, and where the person sees it when that is known: the app holding its TUI,
- *  that TUI's tab and process, or the app whose own server it is. */
+/** A session the TUIs' Codex daemon runs, and where the person sees it when that is known: the app holding its TUI,
+ *  that TUI's tab and process. */
 export interface Served { client?: Outer }
 
 export interface CodexServedDeps {
@@ -56,10 +56,11 @@ export interface CodexServedDeps {
 }
 
 /**
- * For each ask: none when its caller is no Codex server (the nearest Codex among it and its parents serves no other
- * client), so its hints place it; else where the person sees the session. A server no Codex started whose parents name
- * an app is that app's own (the ChatGPT app's, an editor's); else it is the TUIs' daemon, and the client is the one Codex
- * TUI on a terminal in the session's folder, npm's node launcher and its native Codex being one.
+ * For each ask: none when its caller is not the TUIs' daemon, so its hints place it: no Codex server (the nearest Codex
+ * among it and its parents serves no other client), or an app's own, one no Codex started whose parents name an app
+ * (the ChatGPT app's, an editor's), which runs with that app's environment. Else where the person sees the session:
+ * the client is the one Codex TUI on a terminal in the session's folder, npm's node launcher and its native Codex being
+ * one.
  */
 export async function codexServed(asks: readonly ServedAsk[], deps: CodexServedDeps): Promise<(Served | undefined)[]> {
   const rows = await deps.processes()
@@ -80,10 +81,7 @@ export async function codexServed(asks: readonly ServedAsk[], deps: CodexServedD
   const clients = servers.some(daemon) ? await clientsIn(asks.filter((_, i) => daemon(servers[i])), rows, codex, deps) : new Map()
   const clientApps = clients.size ? await deps.apps([...new Set([...clients.values()].map(({ pid }) => pid))], names) : new Map()
   return asks.map((ask, i) => {
-    const server = servers[i]
-    if (!server) return undefined
-    const own = ownApps.get(server.pid)
-    if (own) return { client: { app: own, pid: server.pid } }
+    if (!daemon(servers[i])) return undefined
     const found = clients.get(ask)
     const app = found && clientApps.get(found.pid)
     if (!found || !app) return {}

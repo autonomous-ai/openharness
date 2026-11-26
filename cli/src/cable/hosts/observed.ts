@@ -142,10 +142,10 @@ export interface ObservedDeps {
   /** The hc terminal whose foreground is that pid, when exactly one is (hcSource.ts terminalOf). Absent, nothing is
    *  paired. */
   herdrTerminal?(pid: number): string | undefined
-  /** For each ask, whether its pid is a Codex server, and where the person sees the session it runs (codexServed.ts):
-   *  none for a pid no server is, whose hook its hints place; else its client's app, tab and process, when known. One
-   *  reading of the machine for every ask. Absent (Windows, where no process's folder can be read), every Codex hook is
-   *  placed by its hints. */
+  /** For each ask, whether its pid is the TUIs' Codex daemon, and where the person sees the session it runs
+   *  (codexServed.ts): none for a pid that is not (no server, or an app's own), whose hook its hints place; else its
+   *  client's app, tab and process, when known. One reading of the machine for every ask. Absent (Windows, where no
+   *  process's folder can be read), every Codex hook is placed by its hints. */
   served?(asks: readonly ServedAsk[]): Promise<readonly (Served | undefined)[]>
   /** The place of an agent nested in a multiplexer whose own pty is no tab (outer.ts firstOuter of herdrOuter.ts's,
    *  tmux.ts's and zellij.ts's lookups), by its event's hints and caller: undefined at once when it is not nested; else
