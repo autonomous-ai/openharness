@@ -3322,15 +3322,21 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** Bumped at each focus: a client's pane read that lands after a newer focus is dropped, as that one is where the
    *  person is now. */
   let editorFocuses = 0
-  /** The one live agent at the pane the multiplexer client of [agents] shows, in [app]: herdr's at the pane herdr
-   *  said took its focus last (herdrSource.ts focusedPane), as herdr's own follow checks it (herdrAgentAt), when it is
-   *  one of [agents]; tmux's from one read of its clients (tmuxFocused, which reads the client kept for [app]); none
-   *  when not one is. */
-  const clientShows = async (source: ObservedSource, agents: readonly HostAgent[], app: string): Promise<HostAgent | undefined> => {
+  /** The one live agent at the pane the herdr client of [agents] shows: at the pane herdr said took its focus last
+   *  (herdrSource.ts focusedPane), as herdr's own follow checks it (herdrAgentAt), when it is one of [agents]. */
+  const herdrShows = (source: ObservedSource, agents: readonly HostAgent[]): HostAgent | undefined => {
     const focused = herdr!.focusedPane()
-    const inHerdr = focused === undefined ? undefined : herdrAgentAt(source, focused)
-    if (inHerdr && agents.some(({ id }) => id === inHerdr.agent.id)) return inHerdr.agent
+    const at = focused === undefined ? undefined : herdrAgentAt(source, focused)
+    return at && agents.some(({ id }) => id === at.agent.id) ? at.agent : undefined
+  }
+  /** The one live agent at the pane tmux's client kept for [app] shows, from one read of its clients (tmuxFocused);
+   *  none when not one is, or when a focus newer than [focus] came while it read. */
+  const tmuxShows = async (source: ObservedSource, app: string, focus: number): Promise<HostAgent | undefined> => {
     const pane = await tmuxFocused(source, app)
+    if (focus !== editorFocuses) return
+    // As the running poll's last answer for tmux's place: its next read of the same pane changes nothing, so the focus
+    // is followed once, and a hand's turn after it stands.
+    if (pane !== undefined && paneFocus?.app === app) paneFocus.last = new Map(paneFocus.last).set(tmux.id, pane)
     return pane ? nestedAt(source, tmux.id, pane.id) : undefined
   }
   /** The person's latest focus replaces one waiting for the settle, a terminal no agent runs in too, and the client
@@ -3359,8 +3365,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       editorClients.set(app, observed.tabTty(held[0].id))
       // Behind no dial a read is for nothing; the client is kept all the same, for the poll once one links.
       if (!cable.isConnected) return
-      const shown = await clientShows(observed, held, app)
-      if (!shown || focus !== editorFocuses) return
+      // herdr's pane is known at once; tmux's is read, and a newer focus meanwhile wins (tmuxShows).
+      const shown = herdrShows(observed, held) ?? await tmuxShows(observed, app, focus)
+      if (!shown) return
       return editorReported({ ...report, agentId: shown.id, app })
     }
   }
