@@ -1791,6 +1791,38 @@ describe('the dial that shows one app at a time', () => {
         expect(swiped.mock.calls).toEqual([['superseded'], ['opened']])
       })
 
+      // A later rest or pick wins (spec §4): a rest that shows a pane, its app in front, and a tap are later too.
+      it('a later rest that shows a pane supersedes a rest\'s open still reading', async () => {
+        const { host, swiped, latests, focus, hasPane, showPane } = paged(tmuxed())
+        let read!: () => void
+        const reading = new Promise<void>((resolve) => { read = resolve })
+        focus.mockImplementation(async (_agent, latest) => { latests.push(latest); await reading; return latest() ? true : 'superseded' })
+        host.front('iterm')
+        host.pickApp('tmux')
+        host.swipeEnded('b1', 'rest', { apps: true })
+        hasPane.mockReturnValue(true)
+        host.swipeEnded('b2', 'rest', { apps: true })
+        expect(showPane.mock.calls.map(([a]) => a.id)).toEqual(['b2'])
+        expect(latests.map((latest) => latest())).toEqual([false])
+        read()
+        await vi.waitFor(() => expect(swiped).toHaveBeenCalledTimes(2))
+        expect(swiped.mock.calls).toEqual([['ok'], ['superseded']])
+      })
+
+      it('a tap supersedes a rest\'s open still reading', async () => {
+        const { host, swiped, latests, focus } = paged(tmuxed())
+        let read!: () => void
+        const reading = new Promise<void>((resolve) => { read = resolve })
+        focus.mockImplementation(async (_agent, latest) => { latests.push(latest); await reading; return latest() ? true : 'superseded' })
+        host.pickApp('tmux')
+        host.swipeEnded('b1', 'rest', { apps: true })
+        const tapping = host.openAgent('b2')
+        expect(latests.map((latest) => latest())).toEqual([false, true])
+        read()
+        await tapping
+        await vi.waitFor(() => expect(swiped).toHaveBeenCalledWith('superseded'))
+      })
+
       it('an open that did not bring the agent, or failed, tells failed', async () => {
         const { host, swiped, focus } = paged(tmuxed())
         host.pickApp('tmux')
@@ -1947,6 +1979,20 @@ describe('the dial that shows one app at a time', () => {
           expect(latests.map((latest) => latest())).toEqual([false, false, false, true])
           read()
           await vi.waitFor(() => expect(swiped).toHaveBeenCalledWith('opened'))
+          await settle()
+          expect(appPickBrought).not.toHaveBeenCalled()
+        })
+
+        it('a pick of iTerm2\'s page supersedes a pick of tmux\'s open still reading', async () => {
+          const { host, appPickBrought, latests, focus } = paged(tmuxed())
+          let read!: () => void
+          const reading = new Promise<void>((resolve) => { read = resolve })
+          focus.mockImplementation(async (_agent, latest) => { latests.push(latest); await reading; return latest() ? true : 'superseded' })
+          host.pickApp('tmux')
+          host.pickLanded('tmux', 'b1')
+          host.pickApp('iterm')
+          expect(latests.map((latest) => latest())).toEqual([false])
+          read()
           await settle()
           expect(appPickBrought).not.toHaveBeenCalled()
         })
