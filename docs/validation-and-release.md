@@ -253,7 +253,6 @@ A second failure is a real failure. A recorded flaky test is still a bug: its ow
 | --- | --- | --- | --- |
 | `hosts_started_together_serve_once` (`pty/tests/control.rs`): one of eight hosts started together exited with status 1 (`tests/control.rs:383`), on a PR that changed nothing under `pty/`; not seen in the 25 failed CI runs before it | `pty-checks` | 2026-11-24 | [45326642430](https://github.com/autonomous-ai/openharness/actions/runs/45326642430) |
 | `pause_holds_output_until_resume` (`pty/tests/stream.rs`): after Resume the output read missed `out-50` (`tests\stream.rs:581`, the ConPTY's last line), on a PR that changed nothing under `pty/` (#4599, the dial's observed source) | `windows-e2e / windows-pty` (x64) | 2026-11-25 | [45523372202](https://github.com/autonomous-ai/openharness/actions/runs/45523372202) |
-| `dialAppEval.spec.ts` "tier A > matches the baseline" (`cli/src/testing/dialAppEval/`): in held-out scenario IH4 (iTerm2 with herdr), whether the dial is on herdr's page or iTerm2's at step 7 depends on timing, so 8 IH4 checks differ under load; owner: #4649, where the race came in | `cli-tests (4)` | 2026-11-26 | [45829900431](https://github.com/autonomous-ai/openharness/actions/runs/45829900431/job/139943912457) |
 
 ### Suite details
 
