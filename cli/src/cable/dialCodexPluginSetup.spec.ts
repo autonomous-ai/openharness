@@ -477,6 +477,41 @@ describe('createDialCodexPluginSetup', () => {
     expect(r.counted).toEqual([['left removed']])
   })
 
+  it('the re-check leaves a plugin the person turned off alone: no trust written, no differs said', async () => {
+    const r = rig()
+    const home = codexHome()
+    r.state.homes = [home]
+    await r.setup.pass()
+    // Turned off in Codex, and its trust records dropped by another writer.
+    writeFileSync(configFile(home), configOf(home).replace(`[plugins."${PLUGIN}"]\nenabled = true\n`, `[plugins."${PLUGIN}"]\nenabled = false\n`))
+    withoutTrust(home)
+    const config = configOf(home)
+    r.trust.mockClear()
+    await r.setup.pass()
+    writeFileSync(join(installedRoot(home), 'README.md'), 'fixture, edited\n')
+    touch(home)
+    await r.setup.pass()
+    expect(configOf(home)).toBe(config)
+    expect(r.trust).not.toHaveBeenCalled()
+    expect(r.counted).toEqual([['set up']])
+  })
+
+  it('a config.toml removed with the installed folder left is no failure: nothing to trust there', async () => {
+    const r = rig()
+    const home = codexHome()
+    r.state.homes = [home]
+    await r.setup.pass()
+    rmSync(configFile(home))
+    r.trust.mockClear()
+    for (let at = 1; at <= 2; at++) {
+      r.state.now = at * HOUR
+      await r.setup.pass()
+    }
+    expect(r.trust).not.toHaveBeenCalled()
+    expect(r.counted).toEqual([['set up']])
+    expect(existsSync(configFile(home))).toBe(false)
+  })
+
   it('a disable that lands during the install takes it out again and records nothing', async () => {
     const r = rig()
     const home = codexHome()
