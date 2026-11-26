@@ -4,11 +4,11 @@
  * folders. The real `claude`, ~/.claude and Orca's profiles are never touched.
  */
 import * as fs from 'node:fs'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { ClaudeRun } from '../devices/claudePlugin.js'
+import type { ClaudePluginFiles, ClaudeRun } from '../devices/claudePlugin.js'
 import { MAX_HOMES, readPluginHomes, readRemoved, writePluginHomes, type Read, type SetupCount } from '../devices/dialSkillFiles.js'
 import { createDialPluginSetup, type DialPluginSetupDeps } from './dialPluginSetup.js'
 
@@ -16,12 +16,15 @@ import { createDialPluginSetup, type DialPluginSetupDeps } from './dialPluginSet
 vi.mock('node:fs', async (original) => ({ ...await original<object>() }))
 
 const folders: string[] = []
+/** Folders made read-only by a spec, made writable again before they are removed. */
+const readOnly: string[] = []
 afterEach(() => {
   vi.restoreAllMocks()
+  for (const dir of readOnly.splice(0)) chmodSync(dir, 0o700)
   for (const dir of folders.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
-const ADD = 'plugin marketplace add autonomous-ai/openharness --sparse .claude-plugin plugins'
+const ADD = 'plugin marketplace add ./claude-marketplace'
 const INSTALL = 'plugin install harness-device@openharness --scope user'
 const UNINSTALL = 'plugin uninstall harness-device@openharness --scope user'
 const PULL = 'plugin marketplace update openharness'
@@ -30,6 +33,11 @@ const ENABLE = 'plugin enable harness-device@openharness --scope user'
 const DISABLE = 'plugin disable harness-device@openharness --scope user'
 const PLUGIN_ON = JSON.stringify({ enabledPlugins: { 'harness-device@openharness': true } })
 const HOUR = 3_600_000
+/** What cli.js carries, cut to the marketplace's own file and the one executable. */
+const FILES: ClaudePluginFiles = {
+  files: { '.claude-plugin/marketplace.json': '{"name":"openharness"}\n', 'plugins/harness-device/hooks/asked': '#!/bin/sh\n' },
+  executable: ['plugins/harness-device/hooks/asked'],
+}
 
 function folder(): string {
   const dir = mkdtempSync(join(tmpdir(), 'dial-plugin-'))
@@ -44,10 +52,10 @@ const entry = (version: string): Entry => ({ id: 'harness-device@openharness', s
 
 /**
  * A `claude` whose user-scope entry is [installed] at first and changes as the calls it is given would change it: an
- * update brings [pulled]. A call in [fail] exits 1; [on] sees each call before it is answered.
+ * update brings [pulled]. A call in [fail] exits 1 and writes [stderr]; [on] sees each call before it is answered.
  */
-function fakeClaude({ version = '2.1.287', installed, pulled = '9f2c1d0e7a4b', fail = [], on }: {
-  version?: string; installed?: Entry; pulled?: string; fail?: string[]; on?: (call: string) => void
+function fakeClaude({ version = '2.1.287', installed, pulled = '9f2c1d0e7a4b', fail = [], stderr = 'Error: no network\n', on }: {
+  version?: string; installed?: Entry; pulled?: string; fail?: string[]; stderr?: string; on?: (call: string) => void
 } = {}) {
   const calls: string[] = []
   let plugin = installed
@@ -56,7 +64,7 @@ function fakeClaude({ version = '2.1.287', installed, pulled = '9f2c1d0e7a4b', f
     const call = args.join(' ')
     calls.push(call)
     on?.(call)
-    if (fail.includes(call)) return { code: 1, stdout: '', stderr: 'Error: no network\n' }
+    if (fail.includes(call)) return { code: 1, stdout: '', stderr }
     if (call === '--version') return answer(`${version} (Claude Code)\n`)
     if (call === 'plugin list --json') return answer(JSON.stringify(plugin ? [plugin] : []))
     if (call === 'plugin marketplace list --json') return answer('[]')
@@ -84,15 +92,16 @@ function fileCalls(): [string, unknown][] {
   return calls
 }
 
-/** A setup whose default home is a throwaway folder, its plugin on in its settings as the install leaves it, and Orca
- *  listing no home until a spec sets one. */
+/** A setup whose default home is a throwaway folder, its plugin on in its settings as the install leaves it, its
+ *  marketplace folder `<throwaway>/claude-marketplace`, and Orca listing no home until a spec sets one. */
 function rig(claude: ReturnType<typeof fakeClaude> | null = fakeClaude(), over: Partial<DialPluginSetupDeps> = {}) {
   const home = folder()
   writeFileSync(join(home, 'settings.json'), PLUGIN_ON)
+  const marketplace = join(folder(), 'claude-marketplace')
   const state = {
     wanted: true as boolean | undefined, recorded: undefined as string | undefined, saves: true, now: 0, lookups: 0, found: claude,
-    /** Whether git is on this computer, and how often it was looked for. */
-    git: true, gitLookups: 0,
+    /** What cli.js carries: null in a run from the sources. */
+    files: FILES as ClaudePluginFiles | null,
     /** Orca's last read: a new read is a new list. */
     orca: { homes: [] as readonly string[], answered: true },
     pluginHomes: [] as string[],
@@ -110,10 +119,7 @@ function rig(claude: ReturnType<typeof fakeClaude> | null = fakeClaude(), over: 
       return state.found?.run ?? null
     },
     claudeIn: async () => null,
-    git: async () => {
-      state.gitLookups++
-      return state.git ? '/usr/bin/git' : null
-    },
+    plugin: { folder: marketplace, files: () => state.files },
     orca: () => state.orca,
     pluginHomes: () => state.pluginHomes,
     recordPluginHomes: (homes) => {
@@ -131,7 +137,7 @@ function rig(claude: ReturnType<typeof fakeClaude> | null = fakeClaude(), over: 
     count: (kind, reason) => { counted.push(reason === undefined ? [kind] : [kind, reason]) },
     ...over,
   })
-  return { setup, state, counted, home }
+  return { setup, state, counted, home, marketplace }
 }
 
 /**
@@ -197,7 +203,7 @@ describe('createDialPluginSetup', () => {
     folders.push(dataDir)
     const { setup, state, counted } = rig(fakeClaude({ fail: [INSTALL] }), { wanted: () => readRemoved(dataDir).claude !== true })
     await setup.pass()
-    expect(counted).toEqual([['failed', 'install']])
+    expect(counted).toEqual([['failed', 'install · exit 1']])
     const calls = fileCalls()
 
     state.now = HOUR - 1
@@ -208,39 +214,6 @@ describe('createDialPluginSetup', () => {
     state.now = HOUR
     await setup.pass()
     expect(calls).toEqual([])
-  })
-
-  // Claude Code clones the marketplace with git: a computer without it (a Windows one, often) is told once a start, and
-  // asked for nothing but git until it is there.
-  it('no git counts failed once, and later passes only look for git, past the hour too', async () => {
-    const claude = fakeClaude()
-    const { setup, state, counted } = rig(claude)
-    state.git = false
-    expect(await setup.pass()).toBe(false)
-    expect(claude.writes()).toEqual([])
-    expect(counted).toEqual([['failed', 'no git']])
-    const asked = claude.calls.length
-    const looked = state.gitLookups
-    for (const now of [1, HOUR, 3 * HOUR]) {
-      state.now = now
-      expect(await setup.pass()).toBe(false)
-    }
-    expect(claude.calls).toHaveLength(asked)
-    expect(state.lookups).toBe(1)
-    expect(state.gitLookups).toBe(looked + 3)
-    expect(counted).toEqual([['failed', 'no git']])
-  })
-
-  it('the pass that finds git installs, within the hour of the failure too', async () => {
-    const claude = fakeClaude()
-    const { setup, state, counted } = rig(claude)
-    state.git = false
-    await setup.pass()
-    state.git = true
-    state.now = 1
-    expect(await setup.pass()).toBe(true)
-    expect(claude.writes()).toEqual([ADD, INSTALL])
-    expect(counted).toEqual([['failed', 'no git'], ['set up']])
   })
 
   it('a computer that never had a dial, or a removed Claude Code: no lookup', async () => {
@@ -353,7 +326,7 @@ describe('createDialPluginSetup', () => {
     expect(await setup.pass()).toBe(false)
     expect(claude.writes()).toEqual([])
     expect(state.recorded).toBe('0.6.58')
-    expect(counted).toEqual([['failed', 'list']])
+    expect(counted).toEqual([['failed', 'list · exit 1']])
     state.now = HOUR - 1
     await setup.pass()
     expect(state.lookups).toBe(1)
@@ -362,7 +335,7 @@ describe('createDialPluginSetup', () => {
     expect(await setup.pass()).toBe(true)
     expect(claude.writes()).toEqual([PULL, UPDATE])
     expect(state.recorded).toBe('0.6.59')
-    expect(counted).toEqual([['failed', 'list'], ['updated']])
+    expect(counted).toEqual([['failed', 'list · exit 1'], ['updated']])
   })
 
   it('a failed install is counted with its step and tried no sooner than an hour later', async () => {
@@ -370,7 +343,7 @@ describe('createDialPluginSetup', () => {
     const claude = fakeClaude({ fail })
     const { setup, state, counted } = rig(claude)
     expect(await setup.pass()).toBe(false)
-    expect(counted).toEqual([['failed', 'install']])
+    expect(counted).toEqual([['failed', 'install · exit 1']])
     expect(state.recorded).toBeUndefined()
     const before = claude.calls.length
     state.now = HOUR - 1
@@ -382,7 +355,48 @@ describe('createDialPluginSetup', () => {
     expect(await setup.pass()).toBe(true)
     expect(claude.writes()).toEqual([ADD, INSTALL, ADD, INSTALL])
     expect(state.recorded).toBe('0.6.59')
-    expect(counted).toEqual([['failed', 'install'], ['set up']])
+    expect(counted).toEqual([['failed', 'install · exit 1'], ['set up']])
+  })
+
+  // A fixed word for why, never Claude Code's own line, which can name a path.
+  it('a failed step counts its step and reason', async () => {
+    const add = rig(fakeClaude({ fail: [ADD], stderr: "fatal: unable to access 'https://github.com/a/b/': Could not resolve host: github.com\n" }))
+    await add.setup.pass()
+    expect(add.counted).toEqual([['failed', 'marketplace · network']])
+
+    const a = folder()
+    const enable = orcaRig([a], fakeHomes({ fail: [`${real(a)} ${ENABLE}`] }))
+    await enable.setup.pass()
+    expect(enable.counted).toEqual([['failed', 'enable · exit 1']])
+
+    const undo = rig(null)
+    undo.state.found = fakeClaude({ fail: [UNINSTALL], on: (call) => { if (call === INSTALL) undo.state.wanted = false } })
+    await undo.setup.pass()
+    expect(undo.counted).toEqual([['failed', 'uninstall · exit 1']])
+  })
+
+  // vitest and `npm run dev` run the sources, whose cli.js carries no plugin: nothing to install from.
+  it('from the sources a pass runs no claude, and counts and records nothing', async () => {
+    const { setup, state, counted, marketplace } = rig()
+    state.files = null
+    expect(await setup.pass()).toBe(false)
+    expect(state.lookups).toBe(0)
+    expect(counted).toEqual([])
+    expect(state.recorded).toBeUndefined()
+    expect(existsSync(marketplace)).toBe(false)
+  })
+
+  // A marketplace from GitHub never reads the folder: the update goes on, and the folder's failure is counted beside it.
+  it('an update whose folder cannot be written counts it and still updates and records', async () => {
+    const claude = fakeClaude({ installed: entry('16a92abfab3f') })
+    const { setup, state, counted, marketplace } = rig(claude)
+    state.recorded = '0.6.58'
+    chmodSync(dirname(marketplace), 0o500)
+    readOnly.push(dirname(marketplace))
+    expect(await setup.pass()).toBe(true)
+    expect(claude.writes()).toEqual([PULL, UPDATE])
+    expect(counted).toEqual([['failed', 'folder · EACCES'], ['updated']])
+    expect(state.recorded).toBe('0.6.59')
   })
 
   it('an old Claude Code: one --version, failed · unsupported', async () => {
@@ -463,7 +477,7 @@ describe('createDialPluginSetup', () => {
     const claude = fakeClaude({ fail, on: (call) => { if (call === INSTALL) state.wanted = false } })
     state.found = claude
     expect(await setup.pass()).toBe(false)
-    expect(counted).toEqual([['failed', 'uninstall']])
+    expect(counted).toEqual([['failed', 'uninstall · exit 1']])
     state.now = HOUR - 1
     await setup.pass()
     expect(state.lookups).toBe(1)
@@ -473,7 +487,7 @@ describe('createDialPluginSetup', () => {
     expect(await setup.pass()).toBe(false)
     expect(claude.writes()).toEqual([ADD, INSTALL, UNINSTALL, UNINSTALL])
     expect(state.recorded).toBeUndefined()
-    expect(counted).toEqual([['failed', 'uninstall']])
+    expect(counted).toEqual([['failed', 'uninstall · exit 1']])
 
     state.now = 3 * HOUR
     await setup.pass()
@@ -729,14 +743,14 @@ describe('the plugin in each Orca account\'s home', () => {
     const r = orcaRig([a, b], fake)
     await r.setup.pass()
     // A fixed word: Claude Code's own line named the home.
-    expect(r.counted).toEqual([['failed', 'enable']])
+    expect(r.counted).toEqual([['failed', 'enable · exit 1']])
     expect(r.state.pluginHomes).toEqual([real(b)])
 
     // c, listed half an hour later, fails on its own clock.
     r.state.now = HOUR / 2
     r.state.orca = { homes: [a, b, c], answered: true }
     await r.setup.pass()
-    expect(r.counted).toEqual([['failed', 'enable'], ['failed', 'enable']])
+    expect(r.counted).toEqual([['failed', 'enable · exit 1'], ['failed', 'enable · exit 1']])
 
     fake.fail.length = 0
     r.state.now = HOUR - 1
@@ -771,7 +785,7 @@ describe('the plugin in each Orca account\'s home', () => {
     const fake = fakeHomes({ fail: [`${real(a)} ${DISABLE}`], on: (_home, call) => { if (call === ENABLE) state.wanted = false } })
     const r = orcaRig([a], fake, { wanted: () => state.wanted })
     await r.setup.pass()
-    expect(r.counted).toEqual([['failed', 'disable']])
+    expect(r.counted).toEqual([['failed', 'disable · exit 1']])
     expect(r.state.pluginHomes).toEqual([])
   })
 
@@ -838,7 +852,7 @@ describe('the plugin in each Orca account\'s home', () => {
     expect(r.state.recorded).toBe('0.6.59')
     // The default home first: an Orca home's plugin is its files.
     expect(order.indexOf(`default ${UPDATE}`)).toBeLessThan(order.indexOf(`${real(a)} --version`))
-    expect(r.counted).toEqual([['updated'], ['failed', 'enable']])
+    expect(r.counted).toEqual([['updated'], ['failed', 'enable · exit 1']])
     expect(r.state.pluginHomes).toEqual([real(b)])
 
     // The next CLI update, within a's hour: the default home keeps its own clock.

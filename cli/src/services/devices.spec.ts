@@ -38,7 +38,7 @@ import { createDeviceHookCalls } from '../core/deviceHookCalls.js'
 import type { ObservedAsked, ObservedHookEvent } from '../core/observedHook.js'
 import { createServiceHost } from '../core/serviceHost.js'
 import * as claudePlugin from '../devices/claudePlugin.js'
-import type { ClaudeRun } from '../devices/claudePlugin.js'
+import type { ClaudePluginFiles, ClaudeRun } from '../devices/claudePlugin.js'
 import { DIAL_SKILL } from '../devices/dialSkill.js'
 import { readSetup, writeRemoved, writeSetup } from '../devices/dialSkillFiles.js'
 import type { OrcaHomes, OrcaHomesCache } from '../devices/orcaHomes.js'
@@ -653,7 +653,10 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; agentsRead?: DevicesDeps['agentsRead']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; cmuxEvents?: DevicesDeps['cmuxEvents']; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; storePackageFolder?: DevicesDeps['storePackageFolder']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; git?: DevicesDeps['git'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string; raise?: DevicesDeps['raise'] | null; windowsRaise?: DevicesDeps['windowsRaise'] | null; transcribe?: DevicesDeps['transcribe']; watchStore?: DevicesDeps['watchStore']; rexReads?: DevicesDeps['rexReads']; rex?: DevicesDeps['rex'] } = {}) {
+/** What cli.js carries for Claude Code's marketplace, cut to its own file. */
+const CLAUDE_PLUGIN: ClaudePluginFiles = { files: { '.claude-plugin/marketplace.json': '{"name":"openharness"}\n' }, executable: [] }
+
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; agentsRead?: DevicesDeps['agentsRead']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; cmuxEvents?: DevicesDeps['cmuxEvents']; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; storePackageFolder?: DevicesDeps['storePackageFolder']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; claudePlugin?: DevicesDeps['claudePlugin'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string; raise?: DevicesDeps['raise'] | null; windowsRaise?: DevicesDeps['windowsRaise'] | null; transcribe?: DevicesDeps['transcribe']; watchStore?: DevicesDeps['watchStore']; rexReads?: DevicesDeps['rexReads']; rex?: DevicesDeps['rex'] } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   const apps = over.orca ?? orca
   // None, and no read under way, unless the spec gives its own; null leaves the devices to read this computer's.
@@ -705,9 +708,9 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     tty: over.tty,
     // A `claude` that finds none unless the spec gives its own: no spec runs the developer's. null leaves it out.
     claude: over.claude === null ? undefined : over.claude ?? (async () => null),
-    // A git that is there unless the spec gives its own: no spec looks for the developer's, whose miss starts their login
-    // shell. null leaves it out.
-    git: over.git === null ? undefined : over.git ?? (async () => '/usr/bin/git'),
+    // Claude Code's marketplace in the throwaway data folder unless the spec gives its own: no spec writes the developer's.
+    // null leaves it out, as a run from the sources, which carries no plugin.
+    claudePlugin: over.claudePlugin === null ? undefined : over.claudePlugin ?? { folder: join(dataDir, 'claude-marketplace'), files: () => CLAUDE_PLUGIN },
     orcaHomes: over.orcaHomes === null ? undefined : orcaHomes.cache(),
     // A VS Code and a Cursor that are absent unless the spec gives its own: no spec runs the developer's. null leaves it
     // out.
@@ -13864,7 +13867,7 @@ describe('the dial setup, from the devices\' own process (cable/dialSetup.ts)', 
     dialOnce()
     const lookup = vi.spyOn(claudePlugin, 'claudeFound')
 
-    await start({ faults: ['fleet'], listen: fakeListener().listen, claude: null, git: null }).orcaHomes.landed()
+    await start({ faults: ['fleet'], listen: fakeListener().listen, claude: null }).orcaHomes.landed()
 
     expect(held(env.CODEX_HOME)).toBe(DIAL_SKILL)
     // The start's lookup, the process's first: the login shell's PATH is read with it.
@@ -13873,6 +13876,32 @@ describe('the dial setup, from the devices\' own process (cable/dialSetup.ts)', 
     await new Promise((resolve) => setImmediate(resolve))
     expect(readSetup(dataDir).plugin).toBeUndefined()
     expect(logs.filter((line) => line.startsWith('[device] dial setup · claude'))).toEqual([])
+  })
+
+  it('with no plugin source given, a run from the sources sets nothing up', async () => {
+    dialOnce()
+    const claude = fakeClaude()
+
+    await start({ faults: ['fleet'], listen: fakeListener().listen, claude: claude.found, claudePlugin: null }).orcaHomes.landed()
+    await new Promise((resolve) => setImmediate(resolve))
+
+    expect(held(env.CODEX_HOME)).toBe(DIAL_SKILL)
+    expect(claude.looked).toEqual([])
+    expect(claude.calls).toEqual([])
+    expect(readSetup(dataDir).plugin).toBeUndefined()
+    expect(logs.filter((line) => line.startsWith('[device] dial setup · claude'))).toEqual([])
+  })
+
+  it('a failed plugin step is logged with its reason, and no line of Claude Code\'s', async () => {
+    dialOnce()
+    const run: ClaudeRun = async (args) => args[0] === '--version' ? { code: 0, stdout: '2.1.287 (Claude Code)\n', stderr: '' }
+      : args.includes('add') ? { code: 128, stdout: '', stderr: "fatal: unable to access '/Users/x/claude-marketplace': Could not resolve host\n" }
+        : { code: 0, stdout: args.includes('--json') ? '[]' : '', stderr: '' }
+
+    start({ faults: ['fleet'], listen: fakeListener().listen, claude: async () => run })
+
+    await vi.waitFor(() => expect(logs).toContain('[device] dial setup · claude · failed · marketplace · network'))
+    expect(logs.filter((line) => line.includes('/Users/x'))).toEqual([])
   })
 
   it('a process with no uid writes the dial skill into no home', () => {

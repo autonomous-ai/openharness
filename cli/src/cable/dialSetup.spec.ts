@@ -7,17 +7,19 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { ClaudeRun } from '../devices/claudePlugin.js'
+import type { ClaudePluginFiles, ClaudeRun } from '../devices/claudePlugin.js'
 import { DIAL_PLUGIN_ID, DIAL_SKILL, removeSkill } from '../devices/dialSkill.js'
 import { DIAL_SETUP_FILE, readRemoved, readSetup, writePluginHomes, writeRemoved, writeSetup } from '../devices/dialSkillFiles.js'
 import type { RolloutOwner } from './codexRolloutHome.js'
 import { createDialSetup, type DialSetupDeps } from './dialSetup.js'
 
-const ADD = 'plugin marketplace add autonomous-ai/openharness --sparse .claude-plugin plugins'
+const ADD = 'plugin marketplace add ./claude-marketplace'
 const INSTALL = 'plugin install harness-device@openharness --scope user'
 const UNINSTALL = 'plugin uninstall harness-device@openharness --scope user'
 const ENABLE = 'plugin enable harness-device@openharness --scope user'
 const HOUR = 3_600_000
+/** What cli.js carries, cut to the marketplace's own file. */
+const FILES: ClaudePluginFiles = { files: { '.claude-plugin/marketplace.json': '{"name":"openharness"}\n' }, executable: [] }
 
 const folders: string[] = []
 afterEach(() => {
@@ -98,7 +100,7 @@ function rig() {
       return state.found ? fakeIn(home).run : null
     },
     orcaClaude: () => state.orca,
-    git: async () => '/usr/bin/git',
+    claudePlugin: { folder: join(dataDir, 'claude-marketplace'), files: () => FILES },
     version: '0.6.59',
   }
   return { dataDir, claudeHome, codexHome, fake, fakeIn, state, looked, shells, counted, clock, setup: createDialSetup(deps) }
@@ -112,6 +114,7 @@ describe('createDialSetup', () => {
 
     expect(hasSkill(r.codexHome)).toBe(true)
     expect(r.fake.writes()).toEqual([ADD, INSTALL])
+    expect(readFileSync(join(r.dataDir, 'claude-marketplace', '.claude-plugin', 'marketplace.json'), 'utf8')).toBe(FILES.files['.claude-plugin/marketplace.json'])
     expect(hasSkill(r.claudeHome)).toBe(true)
     expect(readSetup(r.dataDir)).toMatchObject({ dial: true, plugin: '0.6.59' })
     // The plugin goes into the Claude Code home whose settings the homes read.
@@ -208,7 +211,7 @@ describe('createDialSetup', () => {
     const r = rig()
     r.fake.fail.push(INSTALL)
     await r.setup.attached()
-    expect(r.counted).toContainEqual(['claude', 'failed', 'install'])
+    expect(r.counted).toContainEqual(['claude', 'failed', 'install · exit 1'])
     const calls = r.fake.calls.length
 
     // Neither an attach nor a scan within the hour runs `claude`.
