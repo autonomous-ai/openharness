@@ -137,6 +137,9 @@ function isLoopback(address: string | undefined): boolean {
 
 export function rejectUpgrade(socket: Socket, status: number, reason: string, retryAfter?: number): void {
   if (socket.destroyed) return
+  // A refused client that resets before the reply is flushed raised an uncaught ECONNRESET on Windows (fatal-guard).
+  // The refusal is the whole exchange, so its reset is no failure of ours.
+  socket.on('error', () => {})
   socket.end(
     `HTTP/1.1 ${status} ${reason}\r\n` +
     (retryAfter === undefined ? '' : `Retry-After: ${retryAfter}\r\n`) +
