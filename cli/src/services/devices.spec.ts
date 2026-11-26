@@ -7,7 +7,7 @@ import { delimiter, dirname, join, parse, posix, sep, win32 } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { CableHostWiring, DaemonCableHost } from '../cable/cableHost.js'
 import { DIAL_USAGE_WRITE_MS } from '../cable/dialUsageFile.js'
-import { AppFilter, FRONT_SETTLE_MS } from '../cable/hosts/appFilter.js'
+import { AppFilter, DIAL_BRINGS_MS, FRONT_SETTLE_MS } from '../cable/hosts/appFilter.js'
 import { claudeStoreRoots } from '../cable/hosts/appPlaces.js'
 import type { CodexRunEnd } from '../cable/hosts/codexQueue.js'
 import type { ClaudeAppSession } from '../cable/hosts/claudeAppStore.js'
@@ -4425,6 +4425,37 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       expect(orcaRuns.slice(runs)).toEqual([])
     })
 
+    // herdr's page has no app of its own: a rest there with Terminal behind brings Terminal on the agent's tab and pane, and
+    // Terminal's settle is the dial's, so the page holds (docs/plans/2026-11-26-dial-mux-host-pages-design.md §4, §6).
+    it('a rest on herdr\'s page with Ghostty in front brings Terminal on its tab and herdr pane, logs swipe · opened, and Terminal\'s settle keeps herdr\'s page', async () => {
+      vi.useFakeTimers()
+      const listener = fakeListener()
+      const { port } = startHere({ listen: listener.listen, now: still, orca: onMac })
+      port.observed(hook('session-start', { hostHints: { HERDR_PANE_ID: 'w1:p2' } }))
+      // Ghostty's two agents, in front: the pick of herdr's page switches to it, and Terminal is behind.
+      for (const [sessionId, callerPid] of [['g-1', 5001], ['g-2', 5002]] as const) {
+        port.observed(hook('session-start', { sessionId, callerPid, hostHints: { TERM_PROGRAM: 'ghostty' } }))
+      }
+      attach(port)
+      await vi.waitFor(() => expect(said()).toContain('[device] herdr client · found'))
+      await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+      const stream = listener.tabs()
+      expect(listener.front('ghostty')).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+      expect((await host().listAgentSnapshot({ apps: true })).apps?.shown).toBe('ghostty')
+      expect(host().pickApp('herdr')).toBe('switched')
+      expect(host().swipeSwitches(ID, { apps: true })).toBe(true)
+      const runs = orcaRuns.length
+      host().swipeEnded(ID, 'rest', { apps: true })
+      await swiped('opened')
+      expect(orcaRuns.slice(runs)).toEqual([focused, ['/usr/bin/open', ['-b', 'com.apple.Terminal'], 10_000]])
+      expect(stream.lines).toStrictEqual([{ app: 'terminal-app', tty: '/dev/ttys004', raise: true }])
+      expect(listener.front('terminal-app')).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+      expect(said()).toContain('[device] app filter: front · dial')
+      expect((await host().listAgentSnapshot({ apps: true })).apps?.shown).toBe('herdr')
+    })
+
     it('a tap on it focuses its herdr pane, brings Terminal forward, then raises its tab', async () => {
       const listener = fakeListener()
       const { port } = startHere({ listen: listener.listen, orca: onMac })
@@ -5327,11 +5358,12 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
        * On macOS, sess-1 in pane %3 and sess-2 in %4 of the person's tmux session `work`, whose one client (4300) is in
        * CLIENT_SHELL's terminal, and sess-3 in %5 of session `other`, whose one client (4310) is in SHELL_2's: both
        * terminals and PLAIN's in one window of the editor at [app], whose bundle id is [bundle], every chain read, a dial
-       * attached, no app settled in front and the devices' clock at 0. `focus` is the person focusing a terminal;
-       * `settle` keeps an app in front for the settle; `next` lets FOCUS_POLL_MS pass. The timers are held;
-       * `setImmediate` is left to let a read land.
+       * attached, no app settled in front and the devices' clock at 0; with [hooked] 2, sess-3 is never hooked, so VS
+       * Code's one client showing an agent's session is 4300. `focus` is the person focusing a terminal; `settle` keeps
+       * an app in front for the settle; `next` lets FOCUS_POLL_MS pass. The timers are held; `setImmediate` is left to
+       * let a read land.
        */
-      const clientsIn = async (app = code, bundle = VSCODE) => {
+      const clientsIn = async (app = code, bundle = VSCODE, hooked = 3) => {
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
         clock = 0
         const rows: ProcessRow[] = [
@@ -5355,12 +5387,12 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
         }
         const listener = fakeListener()
         const { port } = startHere({ listen: listener.listen, now: () => clock, tty: async () => undefined, orca: { ...mac, run } })
-        for (const n of [1, 2, 3]) {
+        for (const n of [1, 2, 3].slice(0, hooked)) {
           port.observed(hook('session-start', { sessionId: `sess-${n}`, callerPid: 4241 + n, transcriptPath: `/t/sess-${n}.jsonl`,
             hostHints: { TMUX_PANE: `%${n + 2}`, TERM_PROGRAM: 'tmux' } }))
         }
         attach(port)
-        await vi.waitFor(() => expect(said().filter((line) => line === '[device] tmux client · found')).toHaveLength(3))
+        await vi.waitFor(() => expect(said().filter((line) => line === '[device] tmux client · found')).toHaveLength(hooked))
         await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
         const window = listener.vscode(WINDOW_ID)
         const looks = calls('syncAgents').length
@@ -5422,6 +5454,18 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
         await focus(CLIENT_SHELL)
         expect(follows('vscode')).toEqual([[ID, 'vscode']])
         await next()
+        expect(follows('pane')).toEqual([[ID, 'pane']])
+        // The person switches to %4 inside that client.
+        tmuxSays.clients = '/dev/ttys004|%4\n/dev/ttys005|%5\n'
+        await next()
+        expect(follows('pane')).toEqual([[ID, 'pane'], [B, 'pane']])
+      })
+
+      // §7 only adds to the poll: without Harness's extension, or before any terminal is focused, VS Code's one client is
+      // the one the person looks at, as before it.
+      it('with no terminal focus told, the one tmux client in VS Code is still followed by the poll', async () => {
+        const { settle, next } = await clientsIn(code, VSCODE, 2)
+        await settle('vscode')
         expect(follows('pane')).toEqual([[ID, 'pane']])
         // The person switches to %4 inside that client.
         tmuxSays.clients = '/dev/ttys004|%4\n/dev/ttys005|%5\n'
@@ -7976,18 +8020,47 @@ describe('selecting a tmux client\'s tab moves the dial on the terminal app\'s p
     expect((await read()).apps?.shown).toBe('terminal-app')
   })
 
-  it('a pick of tmux\'s page brings no app', async () => {
-    const { settle } = await dialWith()
-    await settle('iterm')
-    const runs = orcaRuns.length
-    expect(host().pickApp('tmux')).toBe('switched')
-    expect((await read()).apps?.shown).toBe('tmux')
-    // tmux has no bundle: a pick of iTerm2 after it is the one that brings an app.
-    expect(host().pickApp('iterm')).toBe('switched')
+  // tmux's page is no app: its pick brings the app holding the client of the agent the dial lands on, on its tab and
+  // pane, and that app's settle is the dial's, so the page holds (docs/plans/2026-11-26-dial-mux-host-pages-design.md §5,
+  // §6).
+  describe('a pick of tmux\'s page', () => {
     const brought = () => logs.filter((line) => line.startsWith('[device] app filter: bring'))
-    await vi.waitFor(() => expect(brought()).toHaveLength(1))
-    expect(brought()).toEqual(['[device] app filter: bring · ok'])
-    expect(orcaRuns.slice(runs)).toEqual([['/usr/bin/open', ['-b', 'com.googlecode.iterm2'], 10_000]])
+    const selected: [string, string[], number] = ['tmux', ['select-window', '-t', '%3', ';', 'select-pane', '-t', '%3'], 10_000]
+    /** Terminal settled in front, tmux's page picked, and the dial landed on the tmux agent, as its session tells the
+     *  host; once its open has brought iTerm2. */
+    const picked = async () => {
+      const started = await dialWith()
+      await started.settle('terminal-app')
+      expect(host().pickApp('tmux')).toBe('switched')
+      const turned = switches()
+      const runs = orcaRuns.length
+      host().pickLanded('tmux', ID)
+      await vi.waitFor(() => expect(brought()).toEqual(['[device] app filter: bring · ok']))
+      return { ...started, turned, runs }
+    }
+
+    it('with another app in front brings iTerm2 on the agent\'s tab and pane, and iTerm2\'s settle keeps tmux\'s page', async () => {
+      const { settle, stream, turned, runs } = await picked()
+      // After the fresh read of its client, as a tap's.
+      expect(orcaRuns.slice(runs).slice(-2)).toEqual([selected, ['/usr/bin/open', ['-b', 'com.googlecode.iterm2'], 10_000]])
+      expect(stream.lines).toStrictEqual([{ app: 'iterm', tty: TMUX_TAB, raise: true }])
+      await settle('iterm')
+      expect(logs).toContain('[device] app filter: front · dial')
+      expect(switches()).toEqual(turned)
+      expect((await read()).apps?.shown).toBe('tmux')
+      // The person's own switch after it turns the page.
+      await settle('terminal-app')
+      expect((await read()).apps?.shown).toBe('terminal-app')
+    })
+
+    it('iTerm2 reported in front past DIAL_BRINGS_MS is the person\'s switch: its settle turns the page', async () => {
+      const { settle } = await picked()
+      await vi.advanceTimersByTimeAsync(DIAL_BRINGS_MS)
+      await settle('iterm')
+      expect(logs).not.toContain('[device] app filter: front · dial')
+      expect(switches().at(-1)).toBe('[device] app filter: switched · front')
+      expect((await read()).apps?.shown).toBe('iterm')
+    })
   })
 
   it('with a window open on its tab and iTerm2 holding only the tmux agent, its settle turns the view to apps, and the follow keeps its page', async () => {
@@ -9879,47 +9952,81 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
     ]))
   })
 
-  // The PM (2026-11-16): a pick of herdr brings Herdr while herdr's ring holds an agent in Herdr's window. herdr 0.8.0's
-  // agents have none of their own (#4366).
+  // A pick of herdr's page brings the app holding the client of the agent the dial lands on, by that agent's open:
+  // Herdr.app for a Herdr.app terminal, the terminal app for a herdr agent whose client runs there, and none for herdr
+  // 0.8.0's own rows, which have no app (docs/plans/2026-11-26-dial-mux-host-pages-design.md §5).
   describe('a pick of herdr', () => {
-    /** Ghostty's two agents keep herdr's ring from being the one shown: the pick switches to it. */
-    const pickHerdr = async (port: DevicesPort) => {
-      elsewhere(port, 'g-1', 'ghostty')
-      elsewhere(port, 'g-2', 'ghostty')
+    /** Ghostty's three agents keep herdr's page from being the one shown: the pick switches to it, and the dial lands on
+     *  [landed], as its session tells the host. */
+    const pickHerdr = async (port: DevicesPort, landed: string) => {
+      for (const sessionId of ['g-1', 'g-2', 'g-3']) elsewhere(port, sessionId, 'ghostty')
       expect((await host().listAgentSnapshot({ apps: true })).apps?.shown).toBe('ghostty')
       expect(host().pickApp('herdr')).toBe('switched')
+      host().pickLanded('herdr', landed)
     }
 
-    it('brings Herdr while hc lists an agent', async () => {
+    it('landing on a Herdr.app terminal hc lists brings Herdr.app on it', async () => {
       const { port, live } = withHc()
       live()
-      await pickHerdr(port)
+      const [{ id }] = await listed()
+      await pickHerdr(port, id)
       await vi.waitFor(() => expect(brings()).toEqual(['[device] app filter: bring · ok']))
-      expect(orcaRuns).toEqual([openHerdr])
+      expect(orcaRuns).toEqual([openHerdr, switchTo('t7')])
     })
 
-    it('brings Herdr while a hooked agent in an hc terminal is on herdr\'s ring', async () => {
+    it('landing on a hooked agent in an hc terminal brings Herdr.app', async () => {
       const { port, live } = withHc()
       port.observed(hook('session-start'))
       live([])
-      await pickHerdr(port)
+      await pickHerdr(port, ID)
       await vi.waitFor(() => expect(brings()).toEqual(['[device] app filter: bring · ok']))
       expect(orcaRuns).toEqual([openHerdr])
     })
 
-    // Its terminal holds a shell now: the pane key it keeps is the registry's alone.
-    it('brings nothing once that hooked agent\'s session ended', async () => {
+    // Its terminal holds a shell now: its open brings nothing.
+    it('landing on that hooked agent once its session ended runs nothing, and the bring failed', async () => {
       const { port, live } = withHc()
       port.observed(hook('session-start'))
       port.observed(hook('session-end'))
       live([])
-      await pickHerdr(port)
-      await vi.advanceTimersByTimeAsync(0)
+      await pickHerdr(port, ID)
+      await vi.waitFor(() => expect(brings()).toEqual(['[device] app filter: bring · failed']))
       expect(orcaRuns).toEqual([])
-      expect(brings()).toEqual([])
     })
 
-    it('brings nothing with herdr 0.8.0\'s agents alone on herdr\'s ring', async () => {
+    it('landing on a Herdr.app terminal brings Herdr.app; landing on c, whose herdr client is in a Terminal tab, brings Terminal on c\'s herdr pane', async () => {
+      const terminalApp = join(homedir(), 'Applications', 'Terminal.app')
+      // c (4242) in herdr pane w1:p2, under herdr's server (3900), and herdr's client (4300) in a Terminal tab.
+      readers.processes.mockResolvedValue([
+        { pid: 4242, ppid: 4000, tty: 'ttys030', executable: 'claude' }, { pid: 4000, ppid: 3900, tty: 'ttys030', executable: 'zsh' },
+        { pid: 3900, ppid: 1, executable: '/opt/homebrew/bin/herdr' },
+        { pid: 4300, ppid: 4298, executable: 'herdr' }, { pid: 4298, ppid: 1, executable: join(terminalApp, 'Contents', 'MacOS', 'Terminal') },
+      ])
+      readers.bundleId.mockImplementation(async (bundle) => bundle === terminalApp ? 'com.apple.Terminal' : undefined)
+      /** The server's client socket and the client connected to it, and the client's tty, as herdr's lookup reads them. */
+      const sockets = 'p3900\nf5\nd0x1111\nn/Users/u/.config/herdr/herdr-client.sock\np4300\nf3\nd0x2222\nn->0x1111\n'
+      const { port, live } = withHc({ orca: { ...onMac, run: async (file: string, args: string[], timeoutMs: number) => {
+        orcaRuns.push([file, args, timeoutMs])
+        return { code: 0, stdout: file === '/usr/sbin/lsof' ? sockets : file === '/bin/ps' ? '4300 ttys004\n' : '' }
+      } } })
+      live()
+      const [{ id: terminal }] = await listed()
+      port.observed({ engine: 'claude', sessionId: 'sess-c', event: 'session-start', cwd: '/work/c', callerPid: 4242,
+        transcriptPath: '/t/sess-c.jsonl', hostHints: { HERDR_PANE_ID: 'w1:p2' } })
+      await vi.waitFor(() => expect(said()).toContain('[device] herdr client · found'))
+      const lookups = orcaRuns.length
+      await pickHerdr(port, terminal)
+      await vi.waitFor(() => expect(brings()).toEqual(['[device] app filter: bring · ok']))
+      expect(orcaRuns.slice(lookups)).toEqual([openHerdr, switchTo('t7')])
+      const runs = orcaRuns.length
+      host().pickLanded('herdr', observedAgentId('claude', 'sess-c'))
+      await vi.waitFor(() => expect(brings()).toHaveLength(2))
+      expect(brings()[1]).toBe('[device] app filter: bring · ok')
+      expect(orcaRuns.slice(runs)).toEqual([['/opt/herdr/bin/herdr', ['agent', 'focus', 'w1:p2'], 10_000],
+        ['/usr/bin/open', ['-b', 'com.apple.Terminal'], 10_000]])
+    })
+
+    it('with herdr 0.8.0\'s agents alone on herdr\'s page, none has an app: nothing runs, and bring · none is logged', async () => {
       const herdrSubs: HerdrSubscriber[] = []
       const herdrListing: HerdrClient = {
         request: async () => ({ ok: true, result: { type: 'agent_list', agents: [{ pane_id: 'w1:p1', agent: 'claude', agent_status: 'idle', cwd: '/work/old' }] } }),
@@ -9932,10 +10039,10 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       live([])
       herdrSubs[0].started()
       await vi.waitFor(async () => expect(await listed()).toHaveLength(1))
-      await pickHerdr(port)
-      await vi.advanceTimersByTimeAsync(0)
+      const [{ id }] = await listed()
+      await pickHerdr(port, id)
+      await vi.waitFor(() => expect(brings()).toEqual(['[device] app filter: bring · none']))
       expect(orcaRuns).toEqual([])
-      expect(brings()).toEqual([])
     })
   })
 

@@ -30,13 +30,12 @@ interface Window { pid?: number; app?: string; outer?: true }
 /** herdr's socket, which no tap asks: a tap is `herdr agent focus`. */
 const herdrClient = { prompt: vi.fn(), socketStamp: vi.fn(), binary: vi.fn() }
 
-/** What a test may set: the runner and the binaries it finds, Orca's switch, the log, the opener's `open`, whether
- *  Herdr.app's window is herdr's ring's, Linux's raise with each agent's window, and Windows' raise. */
+/** What a test may set: the runner and the binaries it finds, Orca's switch, the log, the opener's `open`, Linux's raise
+ *  with each agent's window, and Windows' raise. */
 interface Over extends OrcaDeps {
   orcaSwitch(handle: string): Promise<boolean>
   log(line: string): void
   bin?: string
-  herdrApp?(): boolean
   raise?: LinuxRaise
   windowOf?(agentId: string): Window | undefined
   windows?: WindowsRaise
@@ -71,7 +70,7 @@ function recorder(over: Partial<Over> = {}, codes: Array<number | null> = [], mo
     ...more,
   ]
   const opener = createOpenActions({
-    run: deps.run, platform: deps.platform, adapters, log: deps.log, bin: deps.bin, herdrApp: deps.herdrApp, raise: deps.raise, windowOf: deps.windowOf,
+    run: deps.run, platform: deps.platform, adapters, log: deps.log, bin: deps.bin, raise: deps.raise, windowOf: deps.windowOf,
     windows: deps.windows,
   })
   return { calls, switched, logs, claude, opener }
@@ -339,13 +338,15 @@ describe('opening an agent outside Harness from the dial', () => {
     expect(recorder({ platform: 'linux' }).opener.desktop).toBeUndefined()
   })
 
-  it('one command at a time per agent; another agent\'s runs', async () => {
+  // PM decision 5 (docs/plans/2026-11-26-dial-mux-host-pages-plan.md): a tap while the agent's open (a rest's, a pick's
+  // or another tap's) still runs joins it, so a double tap answers what the one open did.
+  it('a tap on an agent whose open is still running joins it and answers its outcome, running nothing more; another agent\'s runs', async () => {
     const calls: string[][] = []
-    const waiting: Array<() => void> = []
+    const waiting: Array<(code: number) => void> = []
     const opener = createOpenActions({
       run: (_file, args) => {
         calls.push(args)
-        return new Promise((resolve) => waiting.push(() => resolve({ code: 0, stdout: '' })))
+        return new Promise((resolve) => waiting.push((code) => resolve({ code, stdout: '' })))
       },
       platform: 'darwin',
       adapters: [],
@@ -353,16 +354,30 @@ describe('opening an agent outside Harness from the dial', () => {
     })
     const warp = target({ TERM_PROGRAM: 'WarpTerminal' })
     const first = opener.open('a1', warp)
-    expect(await opener.open('a1', warp)).toBe(false)
+    const joined = opener.open('a1', warp)
     const other = opener.open('a2', warp)
     expect(calls).toHaveLength(2)
-    for (const done of waiting) done()
+    waiting[0](0)
+    waiting[1](1)
     expect(await first).toBe(true)
-    expect(await other).toBe(true)
-    // Once its command has ended, the agent takes the next one.
+    expect(await joined).toBe(true)
+    expect(await other).toBe(false)
+    expect(calls).toHaveLength(2)
+    // Once its open has ended, the agent's next tap runs one of its own.
     const next = opener.open('a1', warp)
-    waiting[2]()
-    expect(await next).toBe(true)
+    waiting[2](1)
+    expect(await next).toBe(false)
+  })
+
+  it('two taps in a row run one open and both answer its outcome', async () => {
+    let switchDone!: (shown: boolean) => void
+    const { calls, switched, opener } = recorder({ orcaSwitch: () => new Promise((resolve) => { switchDone = resolve }) })
+    const orca = target({ ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: HANDLE })
+    const taps = [opener.open('a1', orca), opener.open('a1', orca)]
+    switchDone(true)
+    expect(await Promise.all(taps)).toEqual([true, true])
+    expect(switched).toEqual([HANDLE])
+    expect(calls).toEqual([forward('com.stablyai.orca')])
   })
 })
 
@@ -856,14 +871,14 @@ describe('a pick on the dial brings its app forward', () => {
     expect(calls).toEqual([forward('com.superlogical.rex')])
   })
 
-  // herdr's ring holds Herdr.app's agents too (docs/plans/2026-11-16-herdr-app-design.md): their window is Herdr's.
-  it('bring of herdr runs open -b dev.herdr.app while Herdr.app is the ring\'s window, asked at each pick', async () => {
-    let herdrApp = true
-    const { calls, opener } = recorder({ herdrApp: () => herdrApp })
-    expect(await opener.bring!('herdr')).toBe('ok')
-    herdrApp = false
-    expect(await opener.bring!('herdr')).toBeUndefined()
-    expect(calls).toEqual([forward('dev.herdr.app')])
+  // A pick of herdr's page brings the app of the agent the dial lands on, Herdr.app's for a Herdr.app terminal, by that
+  // agent's open (docs/plans/2026-11-26-dial-mux-host-pages-design.md §5): herdr itself is no app to bring.
+  it('bring of herdr has no Herdr.app case: a caller still handing the old herdrApp gets nothing run', async () => {
+    const calls: string[][] = []
+    const deps = { run: async (_file: string, args: string[]) => { calls.push(args); return { code: 0, stdout: '' } },
+      platform: 'darwin' as const, adapters: [], log: () => {}, herdrApp: () => true }
+    expect(await createOpenActions(deps).bring!('herdr')).toBeUndefined()
+    expect(calls).toEqual([])
   })
 
   it('bring answers failed on exit 1, on a timeout (code null) and on a run that rejects, and runs once', async () => {
@@ -1030,7 +1045,7 @@ describe('a pick on the dial brings its app forward', () => {
       log: () => {},
     })
     await vi.waitFor(() => expect(raise.ready({ agent: false, app: 'vscode' })).toBe(true))
-    const { calls, opener } = recorder({ platform: 'linux', herdrApp: () => true, raise })
+    const { calls, opener } = recorder({ platform: 'linux', raise })
     expect(await opener.bring!('herdr')).toBeUndefined()
     expect(raised).toEqual([])
     expect(calls).toEqual([])

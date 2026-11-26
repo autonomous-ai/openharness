@@ -1667,6 +1667,22 @@ describe('the dial that shows one app at a time', () => {
       expect(hosts(read)).toEqual([['b1', 'iterm']])
     })
 
+    // The app the opener brings for the dial settles a second later (spec §6).
+    it('dialBrings tells the filter: the settle of the app the dial brought keeps tmux\'s page and tells appDialFront; the person\'s next settle turns it', async () => {
+      const settles: Array<() => void> = []
+      const appDialFront = vi.fn()
+      const host = setup([...iterm(), agent('g1', 'ghostty')], { appDialFront, appTimer: (_ms, run) => { settles.push(run); return () => {} } })
+      const settle = (app: string) => { host.front(app); settles.at(-1)!() }
+      expect(host.pickApp('tmux')).toBe('switched')
+      host.dialBrings()
+      settle('iterm')
+      expect(appDialFront).toHaveBeenCalledTimes(1)
+      expect(await shown(host)).toBe('tmux')
+      settle('ghostty')
+      expect(appDialFront).toHaveBeenCalledTimes(1)
+      expect(await shown(host)).toBe('ghostty')
+    })
+
     it('Orca\'s scope ring keeps tmux in Orca, its row on Orca\'s page', async () => {
       const { host, settle } = settling([agent('o1', 'orca'), agent('o2', 'orca', { nest: 'tmux', host: 'tmux' }), agent('g1', 'ghostty')])
       settle('orca')
@@ -1739,11 +1755,24 @@ describe('the dial that shows one app at a time', () => {
       it('a rest on tmux\'s page with its app in front shows its pane, as today', async () => {
         const { host, swiped, focus, hasPane, showPane } = paged(tmuxed())
         hasPane.mockReturnValue(true)
+        host.front('iterm')
         host.pickApp('tmux')
         host.swipeEnded('b1', 'rest', { apps: true })
         await vi.waitFor(() => expect(swiped).toHaveBeenCalledWith('ok'))
         expect(showPane.mock.calls.map(([a]) => a.id)).toEqual(['b1'])
         expect(focus).not.toHaveBeenCalled()
+      })
+
+      // A tab app's watch selects a tab behind too, so a pane its source can show says nothing of the app in front.
+      it('a rest on tmux\'s page with another app in front opens the agent, even with a pane its source could show', async () => {
+        const { host, swiped, focus, hasPane, showPane } = paged(tmuxed())
+        hasPane.mockReturnValue(true)
+        host.front('ghostty')
+        host.pickApp('tmux')
+        host.swipeEnded('b1', 'rest', { apps: true })
+        await vi.waitFor(() => expect(swiped).toHaveBeenCalledWith('opened'))
+        expect(focus.mock.calls.map(([a]) => a.id)).toEqual(['b1'])
+        expect(showPane).not.toHaveBeenCalled()
       })
 
       it('a later rest supersedes an open still reading: the first open\'s latest turns false and it tells superseded', async () => {
@@ -1819,11 +1848,13 @@ describe('the dial that shows one app at a time', () => {
         const { host, swiped, focus, hasPane, showPane } = paged([terminal, agent('c1', 'iterm', { nest: 'herdr', host: 'herdr' })])
         host.pickApp('herdr')
         hasPane.mockReturnValue(true)
+        host.front('herdr')
         host.swipeEnded('h1', 'rest', { apps: true })
         await vi.waitFor(() => expect(swiped).toHaveBeenCalledWith('ok'))
         expect(showPane).toHaveBeenCalledWith(terminal)
         expect(focus).not.toHaveBeenCalled()
         hasPane.mockReturnValue(false)
+        host.front('ghostty')
         host.swipeEnded('h1', 'rest', { apps: true })
         await vi.waitFor(() => expect(swiped).toHaveBeenCalledWith('opened'))
         expect(focus).toHaveBeenCalledWith(terminal, expect.any(Function))
