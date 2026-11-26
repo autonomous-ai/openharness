@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { AppFilter, FRONT_SETTLE_MS } from './appFilter.js'
+import { AppFilter, DIAL_BRINGS_MS, FRONT_SETTLE_MS } from './appFilter.js'
 import type { SwitchCause } from './types.js'
 
 /**
@@ -11,11 +11,13 @@ function setup(draws: number[] = []) {
   const counts = new Map<string, number>()
   let known: Map<string, number> | undefined
   let inFront: Map<string, number> | undefined
-  /** What the filter told, in order: a switch as its cause, a settle as `settling <app>` then `settled <app>`. */
+  /** What the filter told, in order: a switch as its cause, a settle as `settling <app>` then `settled <app>`, a settle
+   *  kept for the dial as `dial front`. */
   const told: string[] = []
   /** What a test runs while an app settles, as a waiting tab report's follow does (devices.ts). */
   let whileSettling: ((app: string) => void) | undefined
   const switched = vi.fn((cause: SwitchCause) => { told.push(cause) })
+  const dialFront = vi.fn(() => { told.push('dial front') })
   const random = vi.fn(() => {
     const r = draws.shift()
     if (r === undefined) throw new Error('a draw nobody scripted')
@@ -43,6 +45,7 @@ function setup(draws: number[] = []) {
       settled.push(app)
       told.push(`settled ${app}`)
     },
+    dialFront,
   })
   const agents = (next: Record<string, number>, knownNext?: Record<string, number>, inFrontNext?: Record<string, number>): void => {
     counts.clear()
@@ -54,7 +57,7 @@ function setup(draws: number[] = []) {
   const onSettling = (run: (app: string) => void): void => {
     whileSettling = run
   }
-  return { filter, agents, random, after, causes, told, settled, onSettling }
+  return { filter, agents, random, after, causes, told, settled, onSettling, dialFront }
 }
 
 const settle = (): void => {
@@ -869,6 +872,149 @@ describe('AppFilter', () => {
       none.agents({ ghostty: 2 })
       expect([none.filter.shown(), none.filter.shown()]).toEqual(['ghostty', 'ghostty'])
       expect(none.causes()).toEqual(['follow', 'empty'])
+    })
+  })
+
+  describe('an app the dial brought holds the page (docs/plans/2026-11-26-dial-mux-host-pages-design.md §6)', () => {
+    /** Ghostty settled in front and shown; then tmux, whose agent's client is in iTerm2, is picked on the dial. */
+    const tmuxPicked = () => {
+      const s = setup()
+      s.agents({ ghostty: 2, iterm: 1, tmux: 1 })
+      s.filter.front('ghostty')
+      settle()
+      expect(s.filter.shown()).toBe('ghostty')
+      expect(s.filter.pick('tmux')).toBe('switched')
+      return s
+    }
+
+    it("the first front report within 2 s of dialBrings settles and keeps tmux's page", () => {
+      const { filter, causes, dialFront, told } = tmuxPicked()
+      filter.dialBrings()
+      filter.front('iterm')
+      settle()
+      expect(filter.shown()).toBe('tmux')
+      expect(filter.settledApp()).toBe('iterm')
+      expect(causes()).toEqual(['pick'])
+      expect(dialFront).toHaveBeenCalledTimes(1)
+      expect(told).toEqual(['settling ghostty', 'settled ghostty', 'pick', 'settling iterm', 'dial front', 'settled iterm'])
+      // iTerm2's own agents in front do not turn the dial either: the page holds as a pick does.
+      expect([filter.shown(), filter.shown()]).toEqual(['tmux', 'tmux'])
+      expect(causes()).toEqual(['pick'])
+    })
+
+    it("… also tmux's page shown by the default", () => {
+      const { filter, agents, causes, dialFront } = setup()
+      agents({ tmux: 3, iterm: 1 })
+      expect(filter.shown()).toBe('tmux')
+      filter.dialBrings()
+      filter.front('iterm')
+      settle()
+      expect(filter.shown()).toBe('tmux')
+      expect(filter.settledApp()).toBe('iterm')
+      expect(dialFront).toHaveBeenCalledTimes(1)
+      expect([filter.shown(), filter.shown()]).toEqual(['tmux', 'tmux'])
+      expect(causes()).toEqual([])
+    })
+
+    it("… and herdr's page", () => {
+      const { filter, agents, causes, dialFront } = setup()
+      agents({ herdr: 2, iterm: 1 })
+      expect(filter.shown()).toBe('herdr')
+      filter.dialBrings()
+      filter.front('iterm')
+      settle()
+      expect(filter.shown()).toBe('herdr')
+      expect(dialFront).toHaveBeenCalledTimes(1)
+      expect(causes()).toEqual([])
+    })
+
+    it('a front report after DIAL_BRINGS_MS turns the page', () => {
+      const { filter, causes, dialFront } = tmuxPicked()
+      filter.dialBrings()
+      vi.advanceTimersByTime(DIAL_BRINGS_MS)
+      expect(vi.getTimerCount()).toBe(0)
+      filter.front('iterm')
+      settle()
+      expect(filter.shown()).toBe('iterm')
+      expect(filter.settledApp()).toBe('iterm')
+      expect(dialFront).not.toHaveBeenCalled()
+      expect(causes()).toEqual(['pick', 'front'])
+    })
+
+    it('dialBrings again re-arms the window: one timer, 2 s from the last', () => {
+      const { filter, dialFront } = tmuxPicked()
+      filter.dialBrings()
+      vi.advanceTimersByTime(DIAL_BRINGS_MS - 500)
+      filter.dialBrings()
+      expect(vi.getTimerCount()).toBe(1)
+      vi.advanceTimersByTime(DIAL_BRINGS_MS - 1)
+      filter.front('iterm')
+      settle()
+      expect(filter.shown()).toBe('tmux')
+      expect(dialFront).toHaveBeenCalledTimes(1)
+    })
+
+    it('the second front report turns it', () => {
+      // After the dial's settle: the person's own switch.
+      const after = tmuxPicked()
+      after.filter.dialBrings()
+      after.filter.front('iterm')
+      settle()
+      expect(after.filter.shown()).toBe('tmux')
+      after.filter.front('ghostty')
+      settle()
+      expect(after.filter.shown()).toBe('ghostty')
+      expect(after.filter.settledApp()).toBe('ghostty')
+      expect(after.dialFront).toHaveBeenCalledTimes(1)
+      expect(after.causes()).toEqual(['pick', 'front'])
+
+      // Before the dial's app settles: the one that settles is not the dial's.
+      const before = tmuxPicked()
+      before.filter.dialBrings()
+      before.filter.front('iterm')
+      vi.advanceTimersByTime(300)
+      before.filter.front('ghostty')
+      vi.advanceTimersByTime(300)
+      before.filter.front('iterm')
+      settle()
+      expect(before.filter.shown()).toBe('iterm')
+      expect(before.filter.settledApp()).toBe('iterm')
+      expect(before.dialFront).not.toHaveBeenCalled()
+      expect(before.causes()).toEqual(['pick', 'front'])
+    })
+
+    it("on any other page the dial's settle is today's", () => {
+      const { filter, agents, causes, dialFront } = setup()
+      agents({ ghostty: 2, iterm: 1, tmux: 1 })
+      filter.front('ghostty')
+      settle()
+      expect(filter.pick('iterm')).toBe('switched')
+      filter.dialBrings()
+      filter.front('iterm')
+      settle()
+      expect(filter.shown()).toBe('iterm')
+      expect(filter.settledApp()).toBe('iterm')
+      expect(dialFront).not.toHaveBeenCalled()
+      // Nothing kept: the next app the person brings forward turns the dial.
+      filter.front('ghostty')
+      settle()
+      expect(filter.shown()).toBe('ghostty')
+      expect(causes()).toEqual(['pick', 'front'])
+    })
+
+    it('showing() reads the page without switching', () => {
+      const { filter, agents, causes, random } = setup()
+      agents({ ghostty: 2, vscode: 2 })
+      expect(filter.showing()).toBeUndefined()
+      expect(random).not.toHaveBeenCalled()
+      agents({ ghostty: 3, vscode: 1 })
+      expect(filter.shown()).toBe('ghostty')
+      agents({ vscode: 2 })
+      expect(filter.showing()).toBe('ghostty')
+      expect(causes()).toEqual([])
+      expect(filter.shown()).toBe('vscode')
+      expect(filter.showing()).toBe('vscode')
+      expect(causes()).toEqual(['empty'])
     })
   })
 })
