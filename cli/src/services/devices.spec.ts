@@ -643,7 +643,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; agentsRead?: DevicesDeps['agentsRead']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; cmuxEvents?: DevicesDeps['cmuxEvents']; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; storePackageFolder?: DevicesDeps['storePackageFolder']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string; raise?: DevicesDeps['raise'] | null; windowsRaise?: DevicesDeps['windowsRaise'] | null; transcribe?: DevicesDeps['transcribe']; watchStore?: DevicesDeps['watchStore']; rexReads?: DevicesDeps['rexReads']; rex?: DevicesDeps['rex'] } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; agentsRead?: DevicesDeps['agentsRead']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; cmuxEvents?: DevicesDeps['cmuxEvents']; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; storePackageFolder?: DevicesDeps['storePackageFolder']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; git?: DevicesDeps['git'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string; raise?: DevicesDeps['raise'] | null; windowsRaise?: DevicesDeps['windowsRaise'] | null; transcribe?: DevicesDeps['transcribe']; watchStore?: DevicesDeps['watchStore']; rexReads?: DevicesDeps['rexReads']; rex?: DevicesDeps['rex'] } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   const apps = over.orca ?? orca
   // None, and no read under way, unless the spec gives its own; null leaves the devices to read this computer's.
@@ -695,6 +695,9 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     tty: over.tty,
     // A `claude` that finds none unless the spec gives its own: no spec runs the developer's. null leaves it out.
     claude: over.claude === null ? undefined : over.claude ?? (async () => null),
+    // A git that is there unless the spec gives its own: no spec looks for the developer's, whose miss starts their login
+    // shell. null leaves it out.
+    git: over.git === null ? undefined : over.git ?? (async () => '/usr/bin/git'),
     orcaHomes: over.orcaHomes === null ? undefined : orcaHomes.cache(),
     // A VS Code and a Cursor that are absent unless the spec gives its own: no spec runs the developer's. null leaves it
     // out.
@@ -12822,7 +12825,7 @@ describe('the dial setup, from the devices\' own process (cable/dialSetup.ts)', 
     dialOnce()
     const lookup = vi.spyOn(claudePlugin, 'claudeFound')
 
-    await start({ faults: ['fleet'], listen: fakeListener().listen, claude: null }).orcaHomes.landed()
+    await start({ faults: ['fleet'], listen: fakeListener().listen, claude: null, git: null }).orcaHomes.landed()
 
     expect(held(env.CODEX_HOME)).toBe(DIAL_SKILL)
     // The start's lookup, the process's first: the login shell's PATH is read with it.

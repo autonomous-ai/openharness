@@ -26,6 +26,9 @@ const USER_ON = { id: 'harness-device@openharness', scope: 'user', enabled: true
 const USER_OFF = { ...USER_ON, enabled: false }
 const MARKETPLACE = [{ name: 'openharness', source: 'github', repo: 'autonomous-ai/openharness' }]
 const UNLISTED = 'Claude Code did not list its plugins.'
+/** Where git is, as findGit answers; null: not on this computer. */
+const GIT = async () => '/usr/bin/git'
+const NO_GIT = async () => null
 
 /** A `claude` that answers by its arguments and records each call with the time it was given. */
 function fakeClaude(answers: Record<string, Answer>, version = '2.1.287 (Claude Code)') {
@@ -98,7 +101,7 @@ describe('claudeStatus', () => {
 describe('claudeEnable', () => {
   it('enable adds the marketplace, then installs', async () => {
     const claude = fakeClaude({})
-    expect(await claudeEnable({ run: claude.run, platform: 'darwin' })).toEqual({ ok: true })
+    expect(await claudeEnable({ run: claude.run, platform: 'darwin', git: GIT })).toEqual({ ok: true })
     expect(claude.writes()).toEqual([
       'plugin marketplace add autonomous-ai/openharness --sparse .claude-plugin plugins',
       'plugin install harness-device@openharness --scope user',
@@ -107,7 +110,7 @@ describe('claudeEnable', () => {
 
   it('enable with the marketplace there only installs', async () => {
     const claude = fakeClaude({ 'plugin marketplace list --json': list(...MARKETPLACE) })
-    expect(await claudeEnable({ run: claude.run, platform: 'linux' })).toEqual({ ok: true })
+    expect(await claudeEnable({ run: claude.run, platform: 'linux', git: GIT })).toEqual({ ok: true })
     expect(claude.writes()).toEqual(['plugin install harness-device@openharness --scope user'])
   })
 
@@ -122,7 +125,7 @@ describe('claudeEnable', () => {
       if (args.join(' ') === 'plugin marketplace update openharness') updated = true
       return args.join(' ') === install && updated ? { code: 0, stdout: '', stderr: '' } : answer
     }
-    expect(await claudeEnable({ run, platform: 'darwin' })).toEqual({ ok: true })
+    expect(await claudeEnable({ run, platform: 'darwin', git: GIT })).toEqual({ ok: true })
     expect(claude.writes()).toEqual([install, 'plugin marketplace update openharness', install])
     // It pulls from GitHub, as the add and the install fetch: the time a fetch gets.
     expect(claude.calls.find((call) => call.args === 'plugin marketplace update openharness')?.timeoutMs).toBe(60_000)
@@ -134,7 +137,7 @@ describe('claudeEnable', () => {
       'plugin marketplace list --json': list(...MARKETPLACE),
       [install]: { code: 1, stderr: 'Error: not found\n' },
     })
-    expect(await claudeEnable({ run: stale.run, platform: 'darwin' }))
+    expect(await claudeEnable({ run: stale.run, platform: 'darwin', git: GIT }))
       .toEqual({ ok: false, error: 'Error: not found', step: 'install' })
     expect(stale.writes()).toEqual([install, 'plugin marketplace update openharness', install])
 
@@ -143,7 +146,7 @@ describe('claudeEnable', () => {
       [install]: { code: 1, stderr: 'Error: not found\n' },
       'plugin marketplace update openharness': { code: 1, stderr: 'Error: no network\n' },
     })
-    expect(await claudeEnable({ run: offline.run, platform: 'darwin' }))
+    expect(await claudeEnable({ run: offline.run, platform: 'darwin', git: GIT }))
       .toEqual({ ok: false, error: 'Error: no network', step: 'marketplace' })
     expect(offline.writes()).toEqual([install, 'plugin marketplace update openharness'])
   })
@@ -151,14 +154,14 @@ describe('claudeEnable', () => {
   it('an install that fails just after the marketplace add is not tried again: the clone is new', async () => {
     const install = 'plugin install harness-device@openharness --scope user'
     const claude = fakeClaude({ [install]: { code: 1, stderr: 'Error: no network\n' } })
-    expect(await claudeEnable({ run: claude.run, platform: 'darwin' }))
+    expect(await claudeEnable({ run: claude.run, platform: 'darwin', git: GIT }))
       .toEqual({ ok: false, error: 'Error: no network', step: 'install' })
     expect(claude.writes()).toEqual(['plugin marketplace add autonomous-ai/openharness --sparse .claude-plugin plugins', install])
   })
 
   it('enable when installed but off runs plugin enable', async () => {
     const claude = fakeClaude({ 'plugin list --json': list(USER_OFF) })
-    expect(await claudeEnable({ run: claude.run, platform: 'darwin' })).toEqual({ ok: true })
+    expect(await claudeEnable({ run: claude.run, platform: 'darwin', git: GIT })).toEqual({ ok: true })
     expect(claude.writes()).toEqual(['plugin enable harness-device@openharness --scope user'])
   })
 
@@ -171,24 +174,43 @@ describe('claudeEnable', () => {
       if (args.join(' ') === 'plugin list --json' && installed) return { ...answer, stdout: JSON.stringify([USER_ON]) }
       return answer
     }
-    expect(await claudeEnable({ run, platform: 'darwin' })).toEqual({ ok: true })
+    expect(await claudeEnable({ run, platform: 'darwin', git: GIT })).toEqual({ ok: true })
     const first = claude.writes().length
-    expect(await claudeEnable({ run, platform: 'darwin' })).toEqual({ ok: true })
+    expect(await claudeEnable({ run, platform: 'darwin', git: GIT })).toEqual({ ok: true })
     expect(claude.writes().length).toBe(first)
   })
 
   it('enable when unsupported runs nothing and gives the sentence', async () => {
     const sentence = { ok: false, error: 'Claude Code 2.1.287 or later is needed.', step: 'unsupported' }
     const old = fakeClaude({}, '2.1.286 (Claude Code)')
-    expect(await claudeEnable({ run: old.run, platform: 'darwin' })).toEqual(sentence)
+    expect(await claudeEnable({ run: old.run, platform: 'darwin', git: GIT })).toEqual(sentence)
     expect(old.writes()).toEqual([])
-    expect(await claudeEnable({ run: null, platform: 'darwin' })).toEqual(sentence)
+    expect(await claudeEnable({ run: null, platform: 'darwin', git: GIT })).toEqual(sentence)
+  })
+
+  // Claude Code clones the marketplace with git: on a computer without it (a Windows one, often) the add only fails.
+  it('with no marketplace and no git, enable and setup add nothing and say to install Git', async () => {
+    const noGit = {
+      ok: false, step: 'git',
+      error: 'Git is not installed on this computer, and the dial\'s Claude Code plugin is installed with it. Install Git, then try again.',
+    }
+    for (const act of [claudeEnable, claudeSetUp]) {
+      const claude = fakeClaude({})
+      expect(await act({ run: claude.run, platform: 'win32', git: NO_GIT })).toEqual(noGit)
+      expect(claude.writes()).toEqual([])
+    }
+  })
+
+  it('with the marketplace there, no git is needed to install', async () => {
+    const claude = fakeClaude({ 'plugin marketplace list --json': list(...MARKETPLACE) })
+    expect(await claudeEnable({ run: claude.run, platform: 'win32', git: NO_GIT })).toEqual({ ok: true })
+    expect(claude.writes()).toEqual(['plugin install harness-device@openharness --scope user'])
   })
 
   // A Claude Code the devices find on their own, every hour at most: an old one is asked one thing, not three.
   it('enable with an old Claude Code asks its version and nothing else', async () => {
     const claude = fakeClaude({}, '2.1.286 (Claude Code)')
-    expect(await claudeEnable({ run: claude.run, platform: 'darwin' }))
+    expect(await claudeEnable({ run: claude.run, platform: 'darwin', git: GIT }))
       .toEqual({ ok: false, error: 'Claude Code 2.1.287 or later is needed.', step: 'unsupported' })
     expect(claude.calls.map((call) => call.args)).toEqual(['--version'])
   })
@@ -197,7 +219,7 @@ describe('claudeEnable', () => {
 describe('claudeSetUp', () => {
   it('a plugin not there yet is installed, as enable installs it', async () => {
     const claude = fakeClaude({})
-    expect(await claudeSetUp({ run: claude.run, platform: 'darwin' })).toEqual({ ok: true, outcome: 'installed' })
+    expect(await claudeSetUp({ run: claude.run, platform: 'darwin', git: GIT })).toEqual({ ok: true, outcome: 'installed' })
     expect(claude.writes()).toEqual([
       'plugin marketplace add autonomous-ai/openharness --sparse .claude-plugin plugins',
       'plugin install harness-device@openharness --scope user',
@@ -208,14 +230,14 @@ describe('claudeSetUp', () => {
   it('a plugin already on is current, and one turned off is absent, and nothing is run for either', async () => {
     for (const [entry, outcome] of [[USER_ON, 'current'], [USER_OFF, 'absent']] as const) {
       const claude = fakeClaude({ 'plugin list --json': list(entry) })
-      expect(await claudeSetUp({ run: claude.run, platform: 'darwin' })).toEqual({ ok: true, outcome })
+      expect(await claudeSetUp({ run: claude.run, platform: 'darwin', git: GIT })).toEqual({ ok: true, outcome })
       expect(claude.writes()).toEqual([])
     }
   })
 
   it('with an old Claude Code it asks its version and nothing else', async () => {
     const claude = fakeClaude({}, '2.1.286 (Claude Code)')
-    expect(await claudeSetUp({ run: claude.run, platform: 'darwin' }))
+    expect(await claudeSetUp({ run: claude.run, platform: 'darwin', git: GIT }))
       .toEqual({ ok: false, error: 'Claude Code 2.1.287 or later is needed.', step: 'unsupported' })
     expect(claude.calls.map((call) => call.args)).toEqual(['--version'])
   })
@@ -398,7 +420,7 @@ describe('a list that cannot be read', () => {
     for (const [answer, error] of unreadable) {
       for (const act of [claudeSetUp, claudeUpdate, claudeDisable, claudeEnable]) {
         const claude = fakeClaude({ 'plugin list --json': answer })
-        expect(await act({ run: claude.run, platform: 'darwin' })).toEqual({ ok: false, error, step: 'list' })
+        expect(await act({ run: claude.run, platform: 'darwin', git: GIT })).toEqual({ ok: false, error, step: 'list' })
         expect(claude.writes()).toEqual([])
       }
     }
@@ -417,7 +439,7 @@ describe('the Claude desktop app on Windows', () => {
     expect(status.calls.map((call) => call.args)).toEqual(['--version'])
     for (const step of [claudeEnable, claudeSetUp, claudeUpdate, claudeHomeEnable]) {
       const claude = app()
-      expect(await step({ run: claude.run, platform: 'win32' }))
+      expect(await step({ run: claude.run, platform: 'win32', git: GIT }))
         .toEqual({ ok: false, error: 'Claude Code 2.1.287 or later is needed.', step: 'unsupported' })
       expect(claude.calls.map((call) => call.args)).toEqual(['--version'])
     }
@@ -464,7 +486,7 @@ describe('a claude launcher Harness does not run', () => {
         asked.push(args.join(' '))
         return { code: null, stdout: '', stderr: '', refused: true }
       }
-      expect(await act({ run, platform: 'win32' })).toEqual({ ok: false, error: 'Harness cannot run this claude launcher.', step: 'launcher' })
+      expect(await act({ run, platform: 'win32', git: GIT })).toEqual({ ok: false, error: 'Harness cannot run this claude launcher.', step: 'launcher' })
       expect(asked).toEqual(['--version'])
     }
   })
@@ -473,7 +495,7 @@ describe('a claude launcher Harness does not run', () => {
 describe('calls to claude', () => {
   it('the install waits 60 s and the list 15 s', async () => {
     const claude = fakeClaude({ 'plugin list --json': list() })
-    await claudeEnable({ run: claude.run, platform: 'darwin' })
+    await claudeEnable({ run: claude.run, platform: 'darwin', git: GIT })
     const timeouts = Object.fromEntries(claude.calls.map((call) => [call.args, call.timeoutMs]))
     expect(timeouts).toEqual({
       '--version': 15_000,
@@ -483,7 +505,7 @@ describe('calls to claude', () => {
       'plugin install harness-device@openharness --scope user': 60_000,
     })
     const off = fakeClaude({ 'plugin list --json': list(USER_OFF) })
-    await claudeEnable({ run: off.run, platform: 'darwin' })
+    await claudeEnable({ run: off.run, platform: 'darwin', git: GIT })
     await claudeDisable({ run: off.run, platform: 'darwin' })
     expect(off.calls.filter((call) => /^plugin (enable|uninstall) /.test(call.args)).map((call) => call.timeoutMs))
       .toEqual([15_000, 15_000])
@@ -493,7 +515,7 @@ describe('calls to claude', () => {
     const failing = fakeClaude({
       'plugin install harness-device@openharness --scope user': { code: 1, stderr: '\nError: no network\n  at fetch\n' },
     })
-    expect(await claudeEnable({ run: failing.run, platform: 'darwin' }))
+    expect(await claudeEnable({ run: failing.run, platform: 'darwin', git: GIT }))
       .toEqual({ ok: false, error: 'Error: no network', step: 'install' })
 
     const silent = fakeClaude({ 'plugin list --json': list(USER_ON), 'plugin uninstall harness-device@openharness --scope user': { code: 2 } })
@@ -501,7 +523,7 @@ describe('calls to claude', () => {
       .toEqual({ ok: false, error: 'Claude Code did not answer.', step: 'uninstall' })
 
     const timedOut = fakeClaude({ 'plugin marketplace add autonomous-ai/openharness --sparse .claude-plugin plugins': { code: null, stderr: '' } })
-    expect(await claudeEnable({ run: timedOut.run, platform: 'darwin' }))
+    expect(await claudeEnable({ run: timedOut.run, platform: 'darwin', git: GIT }))
       .toEqual({ ok: false, error: 'Claude Code did not answer.', step: 'marketplace' })
     expect(timedOut.writes()).toEqual(['plugin marketplace add autonomous-ai/openharness --sparse .claude-plugin plugins'])
   })
@@ -510,7 +532,7 @@ describe('calls to claude', () => {
   it('a failure names its step', async () => {
     const failed = (stderr: string) => ({ code: 1, stderr })
     const step = async (answers: Record<string, Answer>, act: typeof claudeEnable | typeof claudeUpdate = claudeEnable) => {
-      const result = await act({ run: fakeClaude(answers).run, platform: 'darwin' })
+      const result = await act({ run: fakeClaude(answers).run, platform: 'darwin', git: GIT })
       return result.ok ? null : result.step
     }
     expect(await step({ 'plugin marketplace add autonomous-ai/openharness --sparse .claude-plugin plugins': failed('Error: a\n') }))

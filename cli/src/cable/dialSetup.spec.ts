@@ -98,6 +98,7 @@ function rig() {
       return state.found ? fakeIn(home).run : null
     },
     orcaClaude: () => state.orca,
+    git: async () => '/usr/bin/git',
     version: '0.6.59',
   }
   return { dataDir, claudeHome, codexHome, fake, fakeIn, state, looked, shells, counted, clock, setup: createDialSetup(deps) }
