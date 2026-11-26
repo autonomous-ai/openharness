@@ -1119,19 +1119,17 @@ export class ObservedSource implements HostSource {
 
   /** What [ask] learnt lands while it is the latest ask and the session lives: no server, and the hook that waited is
    *  placed by its hints; a server, and its client's app, tab and process place it, or none is known and it is on no
-   *  app's page. */
+   *  app's page. Named again, as a hook names it once placed: a pane its place gives may name it (nameOf). */
   private landServed(entry: Entry, ask: ServedState, answer: Served | undefined): void {
     if (entry.served !== ask || !this.live(entry)) return
-    if (!answer) {
-      ask.is = false
+    ask.is = answer !== undefined
+    if (answer) this.placeServed(entry, answer)
+    else {
       const nested = this.placeHooked(entry, ask.hook)
       this.locate(entry)
       if (!nested) this.learnTty(entry, ask.pid)
-      this.emit()
-      return
     }
-    ask.is = true
-    this.placeServed(entry, answer)
+    entry.agent.name = this.nameOf(entry)
     this.emit()
   }
 
