@@ -138,6 +138,14 @@ describe('readTurnSetting', () => {
       expect(settingIn(text)).toStrictEqual({ reviewer: 'user', mode: 'default' })
     })
 
+    // A turn_context line carries the turn's instructions, which can run past several chunks.
+    it('a line across three 64 KiB chunks', () => {
+      const long = edited(USER_LINE, (payload) => { payload.user_instructions = 'x'.repeat(3 * 64 * 1024) })
+      const text = HEAD + lines(long) + filler(4096)
+      expect(fromEnd(text, long)).toBeGreaterThan(3 * 64 * 1024)
+      expect(settingIn(text)).toStrictEqual({ reviewer: 'user', mode: 'default' })
+    })
+
     it('the last line without its newline', () => {
       expect(settingIn(HEAD + USER_LINE)).toStrictEqual({ reviewer: 'user', mode: 'default' })
     })
@@ -216,6 +224,13 @@ describe('readTurnSetting', () => {
       const link = join(fx.sessions, 'link.jsonl')
       symlinkSync(fx.write(VALID), link)
       expect(readTurnSetting(link, USER_TURN, fx.home)).toBeNull()
+    })
+
+    posix('a rollout under a linked folder of the home that leads out of it gives nothing', () => {
+      const fx = codexHome()
+      fx.write(VALID, fx.elsewhere)
+      symlinkSync(fx.elsewhere, join(fx.sessions, 'linked'))
+      expect(readTurnSetting(join(fx.sessions, 'linked', ROLLOUT), USER_TURN, fx.home)).toBeNull()
     })
 
     // Run from the throwaway folder, it names the valid rollout inside the home (there is no relative path between two

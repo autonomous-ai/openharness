@@ -67,9 +67,9 @@ function fakeLauncher(path: string, record: string, out = '', code = 0): void {
 }
 
 /** Runs the Codex hook's command as Codex does off Windows: through `shell`, with PLUGIN_ROOT in its environment. */
-function runCodexHook(shell: string, root: string, home: string) {
+function runCodexHook(shell: string, root: string, home: string, path = '/usr/bin:/bin') {
   return spawnSync(shell, ['-c', codexHook(root).command], {
-    input: CODEX_INPUT, env: { HOME: home, PATH: '/usr/bin:/bin', PLUGIN_ROOT: root }, encoding: 'utf8',
+    input: CODEX_INPUT, env: { HOME: home, PATH: path, PLUGIN_ROOT: root }, encoding: 'utf8',
   })
 }
 
@@ -267,6 +267,20 @@ describe('the harness-device plugin', () => {
     const result = runCodexHook(shell, root, home)
     expect(readFileSync(`${record}.argv`, 'utf8')).toBe('device\ncodex\nasked\n')
     expect(readFileSync(`${record}.stdin`, 'utf8')).toBe(CODEX_INPUT)
+    expect(result).toMatchObject({ status: 0, stdout: '', stderr: '' })
+  })
+
+  posix('with none in ~/.local/bin the Codex hook runs the one on PATH', () => {
+    const home = tempDir()
+    const bin = tempDir()
+    const onPath = join(home, 'rec-path')
+    // A file there that is not executable is no launcher.
+    mkdirSync(join(home, '.local', 'bin'), { recursive: true })
+    writeFileSync(join(home, '.local', 'bin', 'harness'), '#!/bin/sh\nexit 9\n')
+    fakeLauncher(join(bin, 'harness'), onPath, ALLOW, 2)
+    const result = runCodexHook('/bin/sh', pluginRoot, home, `${bin}:/usr/bin:/bin`)
+    expect(readFileSync(`${onPath}.argv`, 'utf8')).toBe('device\ncodex\nasked\n')
+    expect(readFileSync(`${onPath}.stdin`, 'utf8')).toBe(CODEX_INPUT)
     expect(result).toMatchObject({ status: 0, stdout: '', stderr: '' })
   })
 
