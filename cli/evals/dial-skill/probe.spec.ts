@@ -241,6 +241,19 @@ setTimeout(() => {}, 600_000)`
     expect(JSON.stringify(probe)).not.toContain('secret-project')
   })
 
+  it('records error, keeping the model and usage it was billed, when the saved transcript cannot be read', async () => {
+    // A folder where the transcript should be: reading it fails with EISDIR, whose message names the profile.
+    const tail = `fs.rmSync(path.join(folder, id + '.jsonl'))
+fs.mkdirSync(path.join(folder, id + '.jsonl'))
+${ANSWER}`
+
+    const probe = await probeListing(scenario(), 'crowd', { skill: true, crowd, base: join(root, 'runs') }, config(fakeClaude(tail)))
+
+    expect(probe).toMatchObject({ failure: 'error', model: 'claude-opus-5-5', usage: { input_tokens: 9, output_tokens: 4 } })
+    expect(sessionFolders()).toEqual([])
+    expect(JSON.stringify(probe)).not.toContain(root)
+  })
+
   it('throws account_limited with the usage at the account limit, and still removes the session folder', async () => {
     const tail = `emit({ type: 'result', subtype: 'success', is_error: true, result: "You've hit your limit · resets 6pm", usage: { input_tokens: 5, output_tokens: 1 } })
 process.exitCode = 1`
