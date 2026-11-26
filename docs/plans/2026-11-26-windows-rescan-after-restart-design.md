@@ -102,7 +102,9 @@ reader its `readWindowsProcesses`; this branch reuses both.)
      ran this one (`claude -p` from Claude Code's tool), so the answer is none. The walk is `parentChain` over the
      table, so a parent that started after its child ends it. The maker's image goes through `frontAppId` (`Code.exe`
      gives `vscode`, `Cursor.exe` gives `cursor`, `orca.exe` gives `orca`, `ChatGPT.exe` gives `codex`) and is kept
-     only when `listed`. Anything else is none, as today: the first hook decides.
+     only when `listed`, and never as the Claude app (`claude.exe` is Claude Code's image too) or Harness (`harness.exe`
+     is the CLI on Windows, which runs `harness api … run -- claude` on the caller's console; Harness Desktop is
+     `harness-desktop.exe`). Anything else is none, as today: the first hook decides.
    - The maker walk is main's `windowsPtyMaker` (#4629), which `windowsPtyOwner` and herdr's lookup use too (one way
      to walk). The nested-agent rule above is added there. It changes nothing for those two, whose host table names
      neither `node` nor an engine.
