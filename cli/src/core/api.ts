@@ -1548,7 +1548,7 @@ const UNSENT: SendResult = { ok: false, machine: '', reason: DEVICES_UNAVAILABLE
 /**
  * What the core gets when the devices fail: the dial and the window bridges hear nothing, ⌘K says so,
  * picking no agent and sending nothing, the Wi-Fi device finds no desk to walk, the mod's poll is
- * answered as with no dial, and a shutdown goes on.
+ * refused, so the mod asks again in a minute, and a shutdown goes on.
  */
 export const DEVICES_FALLBACKS: PortFallbacks<DevicesPort> = {
   card: undefined, desk: undefined, swarms: undefined, unread: undefined, appFocus: undefined, seen: undefined,

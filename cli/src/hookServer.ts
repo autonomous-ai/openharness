@@ -1135,7 +1135,7 @@ export function startHookServer(
         const answer = handlers.onInbox ? await handlers.onInbox(body, gone.signal) : 'off'
         if (gone.signal.aborted) return
         if (answer === 'invalid') { json(400, { error: 'invalid inbox body' }); return }
-        // No device is not an empty hold: the mod asks again in 60 s, not at once.
+        // A poll the devices could not hold, or one over the bound, is not an empty hold: the mod asks again in 60 s, not at once.
         if (answer === 'off') { json(503, { error: 'NO_DEVICE' }); return }
         json(200, answer)
         return

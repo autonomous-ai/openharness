@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { request, type IncomingMessage, type Server } from 'node:http'
 import type { Socket } from 'node:net'
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -13,6 +13,7 @@ import { ENGINES } from './engines/types.js'
 import { engineHooks } from './engines/hooks.js'
 import { pipeRequest } from './lib/windows/pipeClient.js'
 import type { DoorRequest } from './core/serviceRoutes.js'
+import { createDeviceHookCalls } from './core/deviceHookCalls.js'
 
 // The e2e harness's own reader, so this spec sees the daemon's output as the harness does (testing/daemonListeningPort.spec.ts).
 const { listeningPort } = await import('../e2e/harness/daemon.js' as string) as { listeningPort: (output: string) => number | null }
@@ -455,6 +456,26 @@ describe('process-owned hook server', () => {
       const response = await post(base, '/api/hook/inbox', headers, JSON.stringify({ sessionId: 'session-1' }))
       expect(response.status).toBe(503)
       expect(await response.json()).toEqual({ error: 'NO_DEVICE' })
+    })
+
+    // Answered 503 at once, the mod asked again only a minute later, and a dial plugged in meanwhile had no poll to take
+    // its words (core/deviceHookCalls.ts).
+    it('/api/hook/inbox holds a poll while no dial watches, and answers it 200 {} once one does', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+      onTestFinished(() => { vi.useRealTimers() })
+      let watching = false
+      const calls = createDeviceHookCalls({ ready: () => watching, devices: () => undefined, newId: () => 'p1' })
+      const { base, headers } = await start({ onInbox: calls.onInbox })
+      let answered = false
+      const response = post(base, INBOX, headers, JSON.stringify(POLL)).finally(() => { answered = true })
+      await vi.waitFor(() => expect(calls.open().polls).toBe(1))
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(answered).toBe(false)
+      watching = true
+      calls.watching()
+      await vi.advanceTimersByTimeAsync(0)
+      expect((await response).status).toBe(200)
+      expect(await (await response).json()).toEqual({})
     })
 
     it('/api/hook/inbox aborts its signal when the client goes before the answer', async () => {

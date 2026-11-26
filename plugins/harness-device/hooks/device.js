@@ -14,7 +14,8 @@ const FOLLOW = ['device', 'claude', 'inbox']
 const TELL = ['device', 'claude', 'attach']
 const ASKED = ['device', 'claude', 'asked']
 const SENT = '{"sent":true}'
-// No launcher, no daemon, no dial watching: the daemon answers at once, so ask again only this often.
+// No launcher, no daemon, or a poll the daemon refused (its devices failing, too many polls): asked again at once it
+// would fail the same way, so ask again only this often. With no dial watching the daemon holds the poll instead.
 const RETRY_MS = 60_000
 // A 404, or a launcher that exits non-zero, is a Harness older than the inbox: it does not change before an update. On
 // Windows `inbox`'s `{"off":true}` waits as long, and so does a sixth follower in a row that ended under RAN_MS.

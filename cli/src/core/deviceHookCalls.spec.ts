@@ -23,6 +23,13 @@ const live = () => new AbortController().signal
 /** Lets every settled promise run its callbacks, with no timer. */
 const flush = () => new Promise((resolve) => setImmediate(resolve))
 
+/** The promise's answer once it settles; `undefined` while it waits. */
+function track<T>(answer: Promise<T>) {
+  const state: { value?: T } = {}
+  void answer.then((value) => { state.value = value })
+  return state
+}
+
 describe('parseInboxPoll', () => {
   it('parses a poll, and keeps only its session', () => {
     expect(parseInboxPoll({ sessionId: 's1', text: 'x' })).toEqual({ sessionId: 's1' })
@@ -33,7 +40,7 @@ describe('parseInboxPoll', () => {
 describe('createDeviceHookCalls: no approvals', () => {
   it('has the inbox alone, and holds no approval', () => {
     const { calls } = setup()
-    expect(Object.keys(calls).sort()).toEqual(['onInbox', 'open'])
+    expect(Object.keys(calls).sort()).toEqual(['onInbox', 'open', 'watching'])
     expect(calls.open()).toStrictEqual({ polls: 0 })
   })
 })
@@ -44,17 +51,6 @@ describe('createDeviceHookCalls: inbox', () => {
     for (const body of [{}, { sessionId: '' }, { sessionId: 'x'.repeat(129) }, { sessionId: 's\n1' }, null, ['s1']]) {
       expect(await calls.onInbox(body, live())).toBe('invalid')
     }
-    expect(port.inboxPoll).not.toHaveBeenCalled()
-  })
-
-  it('off at once when not ready', async () => {
-    const { port } = fakeDevices()
-    const devices = vi.fn(() => port)
-    const notReady = createDeviceHookCalls({ ready: () => false, devices, newId: () => 'id' })
-    expect(await notReady.onInbox({ sessionId: 's1' }, live())).toBe('off')
-    expect(devices).not.toHaveBeenCalled()
-    const noPort = createDeviceHookCalls({ ready: () => true, devices: () => undefined, newId: () => 'id' })
-    expect(await noPort.onInbox({ sessionId: 's1' }, live())).toBe('off')
     expect(port.inboxPoll).not.toHaveBeenCalled()
   })
 
@@ -144,6 +140,117 @@ describe('createDeviceHookCalls: inbox', () => {
   })
 })
 
+// Answered 503 at once with no dial, the mod asked again only a minute later, so words said right after a dial was
+// plugged in waited 5 s for a poll that did not come (Diego, CLI 0.6.90).
+describe('createDeviceHookCalls: no dial watching', () => {
+  afterEach(() => { vi.useRealTimers() })
+
+  /** Calls whose dial starts watching at `watch`, as the devices tell the core (core/main.ts `dialWatching`). */
+  function unwatched() {
+    const devices = fakeDevices()
+    let ready = false
+    let n = 0
+    const calls = createDeviceHookCalls({ ready: () => ready, devices: () => devices.port, newId: () => `id-${++n}` })
+    return { ...devices, calls, watch: () => { ready = true; calls.watching() } }
+  }
+
+  it('holds the poll 25 s and answers {}, never asking for the devices', async () => {
+    vi.useFakeTimers()
+    const { port } = fakeDevices()
+    const devices = vi.fn(() => port)
+    const calls = createDeviceHookCalls({ ready: () => false, devices, newId: () => 'id' })
+    const poll = track(calls.onInbox({ sessionId: 's1' }, live()))
+    await vi.advanceTimersByTimeAsync(24_999)
+    expect(poll.value).toBeUndefined()
+    expect(calls.open()).toEqual({ polls: 1 })
+    await vi.advanceTimersByTimeAsync(1)
+    expect(poll.value).toEqual({})
+    expect(calls.open()).toEqual({ polls: 0 })
+    expect(devices).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('holds the poll as well when a dial watches and the devices are not there', async () => {
+    vi.useFakeTimers()
+    const calls = createDeviceHookCalls({ ready: () => true, devices: () => undefined, newId: () => 'id' })
+    const poll = track(calls.onInbox({ sessionId: 's1' }, live()))
+    await vi.advanceTimersByTimeAsync(24_999)
+    expect(poll.value).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(poll.value).toEqual({})
+  })
+
+  it('a dial that starts watching ends every held poll at once with {}, and the next poll reaches the devices', async () => {
+    vi.useFakeTimers()
+    const { calls, port, watch } = unwatched()
+    const s1 = track(calls.onInbox({ sessionId: 's1' }, live()))
+    const s2 = track(calls.onInbox({ sessionId: 's2' }, live()))
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(port.inboxPoll).not.toHaveBeenCalled()
+    watch()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(s1.value).toEqual({})
+    expect(s2.value).toEqual({})
+    expect(calls.open()).toEqual({ polls: 0 })
+    expect(vi.getTimerCount()).toBe(0)
+    void calls.onInbox({ sessionId: 's1' }, live())
+    expect(port.inboxPoll).toHaveBeenCalledWith({ pollId: 'id-1', sessionId: 's1' })
+  })
+
+  // The mod takes {} sooner than 1 s for no hold, and asks again only a minute later (harness-device's HELD_MS).
+  it('a poll under 1.5 s old when the dial starts watching ends once it is 1.5 s old', async () => {
+    vi.useFakeTimers()
+    const { calls, watch } = unwatched()
+    const poll = track(calls.onInbox({ sessionId: 's1' }, live()))
+    await vi.advanceTimersByTimeAsync(500)
+    watch()
+    await vi.advanceTimersByTimeAsync(999)
+    expect(poll.value).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(poll.value).toEqual({})
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('a client that goes ends its hold and its timer, before the dial watches or after, and tells the devices nothing', async () => {
+    vi.useFakeTimers()
+    const { calls, port, watch } = unwatched()
+    const before = new AbortController()
+    const first = calls.onInbox({ sessionId: 's1' }, before.signal)
+    before.abort()
+    expect(await first).toBe('off')
+    expect(vi.getTimerCount()).toBe(0)
+    const after = new AbortController()
+    const second = calls.onInbox({ sessionId: 's1' }, after.signal)
+    watch()
+    after.abort()
+    expect(await second).toBe('off')
+    expect(vi.getTimerCount()).toBe(0)
+    expect(calls.open()).toEqual({ polls: 0 })
+    expect(port.inboxGone).not.toHaveBeenCalled()
+  })
+
+  it('a newer poll for the session takes a held one\'s place: the older is off, and one timer is left', async () => {
+    vi.useFakeTimers()
+    const { calls } = unwatched()
+    const older = calls.onInbox({ sessionId: 's1' }, live())
+    const newer = track(calls.onInbox({ sessionId: 's1' }, live()))
+    expect(await older).toBe('off')
+    expect(calls.open()).toEqual({ polls: 1 })
+    expect(vi.getTimerCount()).toBe(1)
+    await vi.advanceTimersByTimeAsync(25_000)
+    expect(newer.value).toEqual({})
+  })
+
+  it('holds 64 polls at most, one timer each: the 65th is off', async () => {
+    vi.useFakeTimers()
+    const { calls } = unwatched()
+    for (let i = 0; i < 64; i += 1) void calls.onInbox({ sessionId: `s${i}` }, live())
+    expect(vi.getTimerCount()).toBe(64)
+    expect(await calls.onInbox({ sessionId: 's64' }, live())).toBe('off')
+    expect(calls.open()).toEqual({ polls: 64 })
+  })
+})
+
 describe('createDeviceHookCalls: counts', () => {
   afterEach(() => { vi.useRealTimers() })
 
@@ -151,14 +258,14 @@ describe('createDeviceHookCalls: counts', () => {
   const OVER = '[devices] a dial hook call was over the bound; more are counted once a minute'
 
   // Counts only, as the paneless events' lines (core/observedHook.ts): a forged or flooding hook is seen, and what it said is not.
-  it('says the first refused call and the first over the bound at once, the minute\'s count only if more came; no dial is not counted', async () => {
+  it('says the first refused call and the first over the bound at once, the minute\'s count only if more came; a poll held with no dial is not counted', async () => {
     vi.useFakeTimers()
     const log = vi.fn()
     const { port } = fakeDevices()
     let ready = false
     let n = 0
     const calls = createDeviceHookCalls({ ready: () => ready, devices: () => port, newId: () => `id-${++n}`, log })
-    expect(await calls.onInbox({ sessionId: 's1' }, live())).toBe('off')
+    void calls.onInbox({ sessionId: 's1' }, live())
     vi.advanceTimersByTime(60_000)
     expect(log).not.toHaveBeenCalled()
 
