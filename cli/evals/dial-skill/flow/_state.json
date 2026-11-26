@@ -26,7 +26,7 @@
     "long-task-progress.claude",
     "staging-db-host.claude",
     "signup-typo.claude",
-    "report-json-flag.claude"
+    "split-utils-module.claude"
   ],
   "val_ids": [
     "board-unplugged.claude",
@@ -41,7 +41,7 @@
     "old-exports-cleanup.claude",
     "logger-migration-publish.claude",
     "parse-duration-test.claude",
-    "split-utils-module.claude"
+    "report-json-flag.claude"
   ],
   "test_ids": [
     "sso-expired.claude",
