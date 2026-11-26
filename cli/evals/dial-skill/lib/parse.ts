@@ -15,9 +15,16 @@ export interface RunResult {
   model: string | null
   usage: Usage
   stop_reason: string | null
-  status: 'ok' | 'truncated'
+  // `unlisted`: the run started with other skills or another Claude Code than its condition's probe, so the dial's
+  // description may not have been given; the runner sets it.
+  status: 'ok' | 'truncated' | 'unlisted'
   tool_calls: number
   limited: boolean
+  // Cut before its result event (killed, or crashed): its usage is the messages' as they began, its output a floor.
+  cut?: true
+  // What the run started with, which the runner matches against its condition's probe. Left out when the stream has
+  // no init event, as a stand-in's does.
+  init?: { session_id: string | null; skills: string[]; claude_version: string | null }
 }
 
 /** The words Claude Code ends a run with when the account's subscription or rate limit stops it. */
@@ -39,6 +46,10 @@ export function parseClaudeStream(jsonl: string): RunResult {
   // run on another model by design. Claude Code gives its own messages (an API error, the account limit) the model
   // '<synthetic>': no model served them.
   const served = new Set<string>()
+  // A run killed before its result event was billed for what it did. Claude Code prints a message once per content
+  // block, each with the message's usage as it began streaming, so each message counts once and its output is a floor.
+  const messages = new Map<string, Usage>()
+  let hasResult = false
   // The report shows thinking folded into the turn it led to, so it waits for that turn.
   let thinking: string | undefined
   const push = (turn: Turn): void => {
@@ -48,9 +59,18 @@ export function parseClaudeStream(jsonl: string): RunResult {
   }
 
   for (const event of events(jsonl)) {
-    if (event.type === 'assistant' || event.type === 'user') {
-      const message = event.message as { content?: unknown; model?: unknown } | undefined
-      if (event.type === 'assistant' && event.parent_tool_use_id === null && typeof message?.model === 'string' && message.model !== SYNTHETIC) served.add(message.model)
+    if (event.type === 'system' && event.subtype === 'init') {
+      run.init ??= {
+        session_id: typeof event.session_id === 'string' ? event.session_id : null,
+        skills: Array.isArray(event.skills) ? event.skills.filter((s): s is string => typeof s === 'string') : [],
+        claude_version: typeof event.claude_code_version === 'string' ? event.claude_code_version : null,
+      }
+    } else if (event.type === 'assistant' || event.type === 'user') {
+      const message = event.message as { content?: unknown; model?: unknown; id?: unknown; usage?: unknown } | undefined
+      if (event.type === 'assistant' && event.parent_tool_use_id === null) {
+        if (typeof message?.model === 'string' && message.model !== SYNTHETIC) served.add(message.model)
+        if (typeof message?.id === 'string' && message.usage !== undefined) messages.set(message.id, usageOf(message.usage))
+      }
       const content = message?.content
       const blocks: Block[] = typeof content === 'string' ? [{ type: 'text', text: content }] : Array.isArray(content) ? content : []
       for (const block of blocks) {
@@ -65,6 +85,7 @@ export function parseClaudeStream(jsonl: string): RunResult {
         } else if (block.type === 'tool_result') push({ role: 'tool_result', name: toolNames.get(block.tool_use_id ?? '') ?? '', content: resultText(block.content) })
       }
     } else if (event.type === 'result') {
+      hasResult = true
       run.answer = typeof event.result === 'string' ? event.result : ''
       run.usage = usageOf(event.usage)
       run.stop_reason = typeof event.stop_reason === 'string' ? event.stop_reason : null
@@ -77,6 +98,10 @@ export function parseClaudeStream(jsonl: string): RunResult {
   }
   // Thinking with no turn after it still belongs in the transcript.
   if (thinking !== undefined) push({ role: 'assistant', content: '' })
+  if (!hasResult) {
+    run.usage = sumUsage([...messages.values()])
+    run.cut = true
+  }
   // More than one is named so that no check of the model's prefix accepts it.
   run.model = served.size > 1 ? `mixed: ${[...served].join(', ')}` : served.values().next().value ?? null
   return run

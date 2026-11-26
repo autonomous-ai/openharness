@@ -1,12 +1,13 @@
 import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir, userInfo } from 'node:os'
-import { dirname, join } from 'node:path'
-import { DIAL_SKILL, skillsFolderOf, writeSkill } from '../../../src/devices/dialSkill.js'
+import { basename, dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { DIAL_SKILL, DIAL_SKILL_DESCRIPTION, skillsFolderOf, writeSkill } from '../../../src/devices/dialSkill.js'
 import { composeNotice, parseNotice } from '../../../src/lib/dialNotice.js'
 import { deniedReads, spawnGroup } from './agents.js'
-import type { AgentKind, Scenario } from './scenarios.js'
+import type { AgentKind, Condition, Scenario } from './scenarios.js'
 
 /** One `harness` call the agent made; `line` is what the dial would show, null for anything but a `device notify` the
  *  CLI would send. */
@@ -24,7 +25,41 @@ export interface Staged {
   env: NodeJS.ProcessEnv
   /** The SKILL.md text staged into the repo, or null when the run has none. */
   skill: string | null
+  condition: Condition
+  /** The crowd's skills and the dial, as staged: what the listing the model gets should hold. */
+  skills: StagedSkill[]
 }
+
+export interface StagedSkill {
+  name: string
+  description: string
+}
+
+export interface StageOptions {
+  skill: boolean
+  /** clean when not given. */
+  condition?: Condition
+  /** The crowd's folder, CROWD_DIR when not given. */
+  crowd?: string
+  base?: string
+  /** A variant's Claude Code `hooks` object, staged for claude as the repo's .claude/settings.json. */
+  hooks?: Record<string, unknown>
+  /** What the fake harness answers the variant's hooks; never a `device notify`, which the eval reads as a ring. */
+  answers?: HarnessAnswer[]
+}
+
+/** The fake harness's answer to a call whose argv equals `argv` exactly. */
+export interface HarnessAnswer {
+  argv: string[]
+  stdout?: string
+  stderr?: string
+  code?: number
+}
+
+export const CROWD_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'crowd')
+
+/** The files Claude Code, or another engine reading the repo, takes as project instructions. */
+const INSTRUCTIONS = ['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md']
 
 /** All the agent gets from the person's environment: their shell also carries keys, the daemon's port, Orca's and tmux's
  *  variables and a signed-in gh. */
@@ -51,10 +86,15 @@ function checkSandbox(root: string): string {
 (allow network-bind network-inbound (local ip "localhost:*"))`
 }
 
-export function stage(s: Scenario, agent: AgentKind, opts: { skill: boolean; base?: string }): Staged {
+export function stage(s: Scenario, agent: AgentKind, opts: StageOptions): Staged {
   const profile = process.env.CLAUDE_CONFIG_DIR
   // Unset, Claude would run in the default ~/.claude profile.
   if (agent === 'claude' && !profile) throw new Error('CLAUDE_CONFIG_DIR is not set: the eval runs Claude only in the session profile')
+  const answers = opts.answers ?? []
+  // A notify answered by the variant would no longer be the dial the rings are read from.
+  if (answers.some((answer) => answer.argv[0] === 'device' && answer.argv[1] === 'notify')) {
+    throw new Error('harness answers: device notify is answered by the eval, not by a variant')
+  }
 
   const base = realpathSync(opts.base ?? tmpdir())
   const root = join(base, 'dial-skill-eval', randomUUID())
@@ -86,8 +126,15 @@ export function stage(s: Scenario, agent: AgentKind, opts: { skill: boolean; bas
     DEVELOPER_DIR: '/Library/Developer/CommandLineTools',
   })
   if (agent === 'claude') env.CLAUDE_CONFIG_DIR = profile
+  const condition = opts.condition ?? 'clean'
 
   try {
+    // The crowd's CLAUDE.md and skills go there; a repo's own would reach every condition, clean included. Claude Code
+    // reads the instructions and skills of a folder below the repo's top once the agent works there, so none may sit
+    // anywhere.
+    const planted = readdirSync(join(s.dir, 'repo'), { recursive: true, encoding: 'utf8' })
+      .find((path) => basename(path) === '.claude' || INSTRUCTIONS.includes(basename(path)))
+    if (planted !== undefined) throw new Error(`the scenario's repo/ holds ${planted}`)
     // Inside a work tree, the agent would load that repo's AGENTS.md and CLAUDE.md, and could reach the answer key.
     if (insideGit(base, env)) throw new Error(`${base} is inside a git work tree`)
 
@@ -95,10 +142,12 @@ export function stage(s: Scenario, agent: AgentKind, opts: { skill: boolean; bas
     mkdirSync(env.TMPDIR!)
     mkdirSync(env.ZDOTDIR!)
     cpSync(join(s.dir, 'repo'), repo, { recursive: true })
+    // Before the initial commit, so CLAUDE.md is part of the repo the agent finds; .claude/ stays excluded from git.
+    const skills = agent === 'claude' && condition !== 'clean' ? stageCrowd(opts.crowd ?? CROWD_DIR, repo) : []
     // Copied rather than put on PATH where they are: a path into the scenario folder leads to its scenario.json.
     if (existsSync(join(s.dir, 'bin'))) cpSync(join(s.dir, 'bin'), bin, { recursive: true })
     mkdirSync(bin, { recursive: true })
-    writeFileSync(join(bin, 'harness'), fakeHarness(recFile), { mode: 0o755 })
+    writeFileSync(join(bin, 'harness'), fakeHarness(recFile, answers), { mode: 0o755 })
     for (const tool of ['node', 'npm', 'npx']) symlinkSync(join(dirname(process.execPath), tool), join(bin, tool))
     // The agent's own commits need a name, and a git that asks for one reads as a need for the person.
     writeFileSync(env.GIT_CONFIG_GLOBAL!, '[user]\n\tname = Eval\n\temail = eval@example.invalid\n')
@@ -128,17 +177,54 @@ export function stage(s: Scenario, agent: AgentKind, opts: { skill: boolean; bas
     let skill: string | null = null
     if (agent === 'claude' && opts.skill) {
       // Harness's own writer, so the eval stages exactly what Harness installs.
-      const skills = skillsFolderOf(join(repo, '.claude'), true)
-      const result = skills ? writeSkill(skills) : 'no skills folder'
+      const folder = skillsFolderOf(join(repo, '.claude'), true)
+      const result = folder ? writeSkill(folder) : 'no skills folder'
       if (result !== 'written') throw new Error(`dial skill not staged: ${result}`)
       skill = DIAL_SKILL
+      skills.push({ name: 'dial', description: DIAL_SKILL_DESCRIPTION })
     }
-    return { root, repo, recFile, origin, env, skill }
+    if (agent === 'claude' && opts.hooks) {
+      // Hooks run outside Claude's sandbox, so the runner stages only a variant's hooks the harness sha covers (Task 18).
+      // .claude/ is excluded from git, so the agent's git status shows nothing of them.
+      mkdirSync(join(repo, '.claude'), { recursive: true })
+      writeFileSync(join(repo, '.claude', 'settings.json'), JSON.stringify({ hooks: opts.hooks }, null, 2))
+    }
+    const st: Staged = { root, repo, recFile, origin, env, skill, condition, skills }
+    live.add(st)
+    return st
   } catch (error) {
     // A failed stage leaves no run root, and its error goes to errors.jsonl: no temp path, no user name.
     rmSync(root, { recursive: true, force: true })
     throw Object.assign(error as Error, { message: scrub((error as Error).message, { root }) })
   }
+}
+
+/** Copies the crowd into the repo: its instructions.md as CLAUDE.md, and each skill's SKILL.md where Claude finds the
+ *  dial's. In the eval it is not named CLAUDE.md, which would load into a developer's own Claude session reading files
+ *  there. */
+function stageCrowd(crowd: string, repo: string): StagedSkill[] {
+  cpSync(join(crowd, 'instructions.md'), join(repo, 'CLAUDE.md'))
+  const from = join(crowd, 'skills')
+  return readdirSync(from, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort()
+    .map((name) => {
+      const file = join(from, name, 'SKILL.md')
+      mkdirSync(join(repo, '.claude', 'skills', name), { recursive: true })
+      cpSync(file, join(repo, '.claude', 'skills', name, 'SKILL.md'))
+      return { name, description: descriptionOf(name, readFileSync(file, 'utf8')) }
+    })
+}
+
+/** JSON quoted, as the dial's: a plain YAML scalar holding `: ` ends there, and the engine skips the skill without a
+ *  word. */
+function descriptionOf(name: string, text: string): string {
+  const line = /^description: (.*)$/m.exec(text)?.[1]
+  try {
+    const description: unknown = line === undefined ? undefined : JSON.parse(line)
+    if (typeof description === 'string') return description
+  } catch {
+    // Not JSON: refused below.
+  }
+  throw new Error(`crowd skill ${name}: its description must be one JSON-quoted line`)
 }
 
 export function readRings(st: Staged): Ring[] {
@@ -191,16 +277,39 @@ async function readCheck(name: 'harm' | 'done', check: { run: string; expect: st
   return (run.stdout + run.stderr).includes(check.expect)
 }
 
+/** The run's folder under `<profile>/projects/`, or null for a run with no profile. Named exactly as Claude Code names
+ *  it (every character but a letter or digit made '-'), never by a pattern, so nothing else in the person's profile is
+ *  touched. */
+export function runProfileFolder(st: Pick<Staged, 'repo' | 'env'>): string | null {
+  const profile = st.env.CLAUDE_CONFIG_DIR
+  return profile ? join(profile, 'projects', st.repo.replace(/[^a-zA-Z0-9]/g, '-')) : null
+}
+
+/** Every stage not yet unstaged: a runner that exits mid-run (a signal, a refusal) runs no finally of its runs or probes. */
+const live = new Set<Staged>()
+
 export function unstage(st: Staged): void {
+  live.delete(st)
   try {
     rmSync(st.root, { recursive: true, force: true })
   } finally {
-    // In the person's profile, so it goes even when the run root does not.
-    const profile = st.env.CLAUDE_CONFIG_DIR
-    // `claude -p` makes <profile>/projects/<repo>/memory/ even with no session saved. The run's own folder goes with it,
-    // named exactly as Claude Code names it (every character but a letter or digit made '-'), never by a pattern, so
-    // nothing else in the person's profile is touched.
-    if (profile) rmSync(join(profile, 'projects', st.repo.replace(/[^a-zA-Z0-9]/g, '-')), { recursive: true, force: true })
+    // In the person's profile, so it goes even when the run root does not. `claude -p` makes
+    // <profile>/projects/<repo>/memory/ even with no session saved.
+    const folder = runProfileFolder(st)
+    if (folder) rmSync(folder, { recursive: true, force: true })
+  }
+}
+
+/** Unstages every stage still live, for a runner that is exiting: a probe's saved session would stay in the person's
+ *  profile. One that cannot be removed spares no other. */
+export function unstageLive(): void {
+  for (const st of live) {
+    try {
+      unstage(st)
+    } catch (error) {
+      // The runner is exiting, so this line is all a person gets. Its code only: the message names the run root.
+      console.error(`dial skill eval: a run root was not removed (${(error as NodeJS.ErrnoException).code ?? 'error'})`)
+    }
   }
 }
 
@@ -227,13 +336,15 @@ const NOTICE_USAGE = 'harness device notify "<question>" [--suggest "<recommenda
 
 /** Never the real dial: it records the call and answers as a dial that showed the line. A notify with no question
  *  answers as the CLI does: parseNotice's words left after the flags, none when they are only `--help` or `-h`, cleaned
- *  as composeNotice cleans them (the fake runs under plain node, which cannot load dialNotice.ts). */
-function fakeHarness(recFile: string): string {
+ *  as composeNotice cleans them (the fake runs under plain node, which cannot load dialNotice.ts). A call whose argv
+ *  equals one of `answers` exactly gets that answer; any other is refused. */
+function fakeHarness(recFile: string, answers: HarnessAnswer[]): string {
   return `#!${process.execPath}
 const { appendFileSync } = require('node:fs')
 const argv = process.argv.slice(2)
 const notify = argv[0] === 'device' && argv[1] === 'notify'
 appendFileSync(${JSON.stringify(recFile)}, JSON.stringify({ argv }) + '\\n')
+const answer = ${JSON.stringify(answers)}.find((a) => a.argv.length === argv.length && a.argv.every((word, i) => word === argv[i]))
 const question = []
 for (let i = 2; i < argv.length; i++) {
   if (argv[i] === '--suggest') i++
@@ -245,6 +356,10 @@ if (notify && (text === '--help' || text === '-h' || text.replace(/[\\p{Cc}\\s]+
   process.exitCode = 1
 } else if (notify) {
   console.log('shown')
+} else if (answer) {
+  process.stdout.write(answer.stdout ?? '')
+  process.stderr.write(answer.stderr ?? '')
+  process.exitCode = answer.code ?? 0
 } else {
   console.error('harness: not available here')
   process.exitCode = 2

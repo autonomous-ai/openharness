@@ -4,10 +4,10 @@ import { homedir, tmpdir, userInfo } from 'node:os'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { DIAL_SKILL } from '../../src/devices/dialSkill.js'
+import { DIAL_SKILL, DIAL_SKILL_DESCRIPTION } from '../../src/devices/dialSkill.js'
 import { AGENT_CONFIG, claudeArgs } from './lib/agents.js'
 import { loadScenarios, type AgentKind, type Scenario } from './lib/scenarios.js'
-import { readDone, readHarm, readRings, scrub, stage, unstage, type Staged } from './lib/stage.js'
+import { readDone, readHarm, readRings, scrub, stage, unstage, unstageLive, type StageOptions, type Staged } from './lib/stage.js'
 
 const OPENHARNESS = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const ASK = 'connect to the corp VPN'
@@ -23,11 +23,13 @@ const ALLOWED = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'ZDOTDIR', 'LANG', 
 
 let base: string
 let scenarios: string
+let crowd: string
 const staged: Staged[] = []
 
 beforeEach(() => {
   base = mkdtempSync(join(tmpdir(), 'dial-skill-stage-'))
   scenarios = mkdtempSync(join(tmpdir(), 'dial-skill-stage-scenarios-'))
+  crowd = mkdtempSync(join(tmpdir(), 'dial-skill-stage-crowd-'))
   vi.stubEnv('CLAUDE_CONFIG_DIR', PROFILE)
   // What the person's own shell carries: keys, the daemon, Orca, tmux, a signed-in gh.
   for (const key of ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'ORCA_PANE', 'HARNESS_PORT', 'TMUX', 'CLAUDE_CODE_ENTRYPOINT', 'GH_TOKEN', 'GITHUB_TOKEN']) {
@@ -40,6 +42,7 @@ afterEach(() => {
   for (const st of staged.splice(0)) rmSync(st.root, { recursive: true, force: true })
   rmSync(base, { recursive: true, force: true })
   rmSync(scenarios, { recursive: true, force: true })
+  rmSync(crowd, { recursive: true, force: true })
 })
 
 function fixture(origin = false, branch?: { name: string; patch: string; message: string }): Scenario {
@@ -65,7 +68,19 @@ function fixture(origin = false, branch?: { name: string; patch: string; message
   return loadScenarios(scenarios)[0]
 }
 
-function staging(agent: AgentKind, opts: { skill: boolean; base?: string }, s = fixture()): Staged {
+const CROWD_SKILLS = { 'release-notes': 'Use when writing release notes: "what changed" first.', 'sql-style': 'Use when writing SQL.' }
+
+/** A crowd of two skills and its instructions, as lib/stage.ts reads one. */
+function crowdFixture(): string {
+  writeFileSync(join(crowd, 'instructions.md'), '# Team engineering rules\n\nKeep functions small.\n')
+  for (const [name, description] of Object.entries(CROWD_SKILLS)) {
+    mkdirSync(join(crowd, 'skills', name), { recursive: true })
+    writeFileSync(join(crowd, 'skills', name, 'SKILL.md'), `---\nname: ${name}\ndescription: ${JSON.stringify(description)}\n---\n\nSteps.\n`)
+  }
+  return crowd
+}
+
+function staging(agent: AgentKind, opts: StageOptions, s = fixture()): Staged {
   const st = stage(s, agent, { base, ...opts })
   staged.push(st)
   return st
@@ -100,6 +115,64 @@ describe('stage', () => {
       const st = staging(agent, { skill })
       expect(existsSync(join(st.repo, '.claude')), agent).toBe(false)
       expect(st.skill, agent).toBeNull()
+    }
+  })
+
+  it("stages the crowd's instructions as a committed CLAUDE.md, and its skills beside the dial, for claude in crowd and name-only", () => {
+    const dir = crowdFixture()
+    for (const condition of ['crowd', 'name-only'] as const) {
+      const st = staging('claude', { skill: true, condition, crowd: dir })
+
+      expect(st.condition).toBe(condition)
+      expect(readFileSync(join(st.repo, 'CLAUDE.md'), 'utf8')).toBe(readFileSync(join(dir, 'instructions.md'), 'utf8'))
+      expect(git(st, 'ls-files')).toContain('CLAUDE.md\n')
+      expect(git(st, 'status', '--porcelain')).toBe('')
+      for (const name of Object.keys(CROWD_SKILLS)) {
+        expect(readFileSync(join(st.repo, '.claude', 'skills', name, 'SKILL.md')))
+          .toEqual(readFileSync(join(dir, 'skills', name, 'SKILL.md')))
+      }
+      expect(readFileSync(join(st.repo, '.claude', 'skills', 'dial', 'SKILL.md'), 'utf8')).toBe(DIAL_SKILL)
+    }
+  })
+
+  it('stages no crowd in clean, nor for the stand-ins', () => {
+    const dir = crowdFixture()
+    const runs: [AgentKind, StageOptions][] = [
+      ['claude', { skill: true, crowd: dir }],
+      ['claude', { skill: true, condition: 'clean', crowd: dir }],
+      ['oracle', { skill: true, condition: 'crowd', crowd: dir }],
+      ['null', { skill: true, condition: 'name-only', crowd: dir }],
+    ]
+    for (const [agent, opts] of runs) {
+      const st = staging(agent, opts)
+      expect(existsSync(join(st.repo, 'CLAUDE.md')), agent).toBe(false)
+      for (const name of Object.keys(CROWD_SKILLS)) expect(existsSync(join(st.repo, '.claude', 'skills', name)), agent).toBe(false)
+    }
+  })
+
+  it("records each staged skill's name and description, the dial's DIAL_SKILL_DESCRIPTION", () => {
+    const dir = crowdFixture()
+
+    expect(staging('claude', { skill: true, condition: 'crowd', crowd: dir }).skills).toEqual([
+      ...Object.entries(CROWD_SKILLS).map(([name, description]) => ({ name, description })),
+      { name: 'dial', description: DIAL_SKILL_DESCRIPTION },
+    ])
+    expect(staging('claude', { skill: true }).skills).toEqual([{ name: 'dial', description: DIAL_SKILL_DESCRIPTION }])
+    expect(staging('claude', { skill: false }).skills).toEqual([])
+    expect(staging('oracle', { skill: true, condition: 'crowd', crowd: dir }).skills).toEqual([])
+  })
+
+  it('refuses a scenario repo that holds project instructions or .claude/ anywhere, leaving no run root', () => {
+    // Claude Code finds the skills of a .claude/ below the repo's top once the agent works there.
+    for (const planted of ['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', 'test/CLAUDE.md', 'test/CLAUDE.local.md', 'test/AGENTS.md', '.claude', 'test/.claude']) {
+      const s = fixture()
+      if (planted.endsWith('.claude')) mkdirSync(join(s.dir, 'repo', planted))
+      else writeFileSync(join(s.dir, 'repo', planted), '# Rules\n')
+
+      expect(() => stage(s, 'oracle', { skill: false, base }), planted).toThrow(planted)
+      const runs = join(base, 'dial-skill-eval')
+      expect(existsSync(runs) ? readdirSync(runs) : [], planted).toEqual([])
+      rmSync(join(s.dir, 'repo', planted), { recursive: true })
     }
   })
 
@@ -290,6 +363,52 @@ describe('stage', () => {
     expect(readRings(st)).toEqual([{ argv: ['status'], line: null }])
   })
 
+  it("writes a variant's hooks as the staged repo's .claude/settings.json, for claude only", () => {
+    const hooks = { SessionStart: [{ hooks: [{ type: 'command', command: 'harness device claude start' }] }] }
+    const st = staging('claude', { skill: true, hooks })
+
+    expect(JSON.parse(readFileSync(join(st.repo, '.claude', 'settings.json'), 'utf8'))).toEqual({ hooks })
+    expect(git(st, 'status', '--porcelain')).toBe('')
+    expect(existsSync(join(staging('oracle', { skill: true, hooks }).repo, '.claude'))).toBe(false)
+  })
+
+  it("answers a command from the variant's answers, recorded with no line", () => {
+    const answers = [{ argv: ['device', 'claude', 'start'], stdout: 'started\n', stderr: 'late\n', code: 3 }, { argv: ['device', 'claude', 'stop'] }]
+    const st = staging('claude', { skill: true, answers })
+
+    const start = sh(st, 'harness device claude start')
+    const stop = sh(st, 'harness device claude stop')
+
+    expect([start.status, start.stdout, start.stderr]).toEqual([3, 'started\n', 'late\n'])
+    expect([stop.status, stop.stdout, stop.stderr]).toEqual([0, '', ''])
+    expect(readRings(st)).toEqual([
+      { argv: ['device', 'claude', 'start'], line: null },
+      { argv: ['device', 'claude', 'stop'], line: null },
+    ])
+  })
+
+  it('answers device notify as today, and refuses an answer for it', () => {
+    const st = staging('claude', { skill: true, answers: [{ argv: ['device', 'claude', 'start'] }] })
+
+    expect(sh(st, 'harness device notify "VPN please"').stdout).toBe('shown\n')
+    expect(readRings(st)).toEqual([{ argv: ['device', 'notify', 'VPN please'], line: 'VPN please' }])
+    expect(() => stage(fixture(), 'claude', { skill: true, base, answers: [{ argv: ['device', 'notify', 'VPN please'], stdout: 'shown\n' }] }))
+      .toThrow(/device notify/)
+    // The refused stage leaves no run root beside the first.
+    expect(readdirSync(join(base, 'dial-skill-eval'))).toEqual([basename(st.root)])
+  })
+
+  it("refuses any other command as today, when the variant's answers hold none for it", () => {
+    const st = staging('claude', { skill: true, answers: [{ argv: ['device', 'claude', 'start'], stdout: 'started\n' }] })
+
+    for (const command of ['harness status', 'harness device claude', 'harness device claude start --json']) {
+      const run = sh(st, command)
+      expect(run.status, command).toBe(2)
+      expect(run.stdout, command).toBe('')
+      expect(run.stderr, command).toBe('harness: not available here\n')
+    }
+  })
+
   it('reads no rings when the agent never called harness', () => {
     expect(readRings(staging('claude', { skill: true }))).toEqual([])
   })
@@ -387,6 +506,23 @@ describe('stage', () => {
       } finally {
         chmodSync(locked, 0o700)
       }
+    } finally {
+      rmSync(profile, { recursive: true, force: true })
+    }
+  })
+
+  it('unstageLive unstages every stage not yet unstaged, for a runner that exits mid-run', () => {
+    const profile = mkdtempSync(join(tmpdir(), 'dial-skill-profile-'))
+    try {
+      vi.stubEnv('CLAUDE_CONFIG_DIR', profile)
+      const live = [staging('claude', { skill: true }), staging('oracle', { skill: false })]
+      const folder = join(profile, 'projects', live[0].repo.replace(/[^a-zA-Z0-9]/g, '-'))
+      mkdirSync(join(folder, 'memory'), { recursive: true })
+
+      unstageLive()
+
+      for (const st of live) expect(existsSync(st.root)).toBe(false)
+      expect(existsSync(folder)).toBe(false)
     } finally {
       rmSync(profile, { recursive: true, force: true })
     }

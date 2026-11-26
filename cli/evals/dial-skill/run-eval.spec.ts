@@ -29,7 +29,6 @@ function agent(model: string, text = 'Looked around'): string {
   return String.raw`const home = process.env.HOME
 require('node:child_process').execFileSync('harness', ['device', 'notify', 'Check ' + home, '--waiting'])
 for (const event of [
-  { type: 'system', subtype: 'init', model: ${JSON.stringify(model)} },
   { type: 'assistant', parent_tool_use_id: null, message: { model: ${JSON.stringify(model)}, content: [
     { type: 'text', text: ${JSON.stringify(text)} + ' in ' + process.cwd() },
     { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'harness device notify "Check ' + home + '" --waiting' } },
@@ -49,10 +48,16 @@ const JUDGE_LIMITED = String.raw`console.log(JSON.stringify({ type: 'result', su
   result: "You've hit your limit · resets 6pm", usage: { input_tokens: 0, output_tokens: 0 }, modelUsage: {} }))
 process.exitCode = 1`
 
+/** A claude run that fails on its own, billed. */
+const FAILED = String.raw`for (const event of [
+  { type: 'assistant', parent_tool_use_id: null, message: { model: 'claude-opus-5-5', content: [] } },
+  { type: 'result', subtype: 'error_during_execution', is_error: true, usage: { input_tokens: 7, output_tokens: 3 } },
+]) console.log(JSON.stringify(event))
+process.exitCode = 1`
+
 /** A claude run cut off at --max-turns, after a ring. */
 const TRUNCATED = String.raw`require('node:child_process').execFileSync('harness', ['device', 'notify', 'Set WEATHER_API_KEY'])
 for (const event of [
-  { type: 'system', subtype: 'init', model: 'claude-opus-5-5' },
   { type: 'assistant', parent_tool_use_id: null, message: { model: 'claude-opus-5-5', content: [] } },
   { type: 'result', subtype: 'error_max_turns', is_error: true, usage: { input_tokens: 7, output_tokens: 3 } },
 ]) console.log(JSON.stringify(event))
@@ -99,20 +104,72 @@ afterEach(() => {
   rmSync(tmp, { recursive: true, force: true })
 })
 
-/** The `claude` the runner finds on its PATH, for the agent and the judge alike; it logs each call to `calls`, but not
- *  `--version`, which spends nothing. */
-function fakeClaude(agentBody: string, judgeBody = JUDGE): void {
+/** The Claude Code version the fake reports, in `--version` and in its init. */
+const VERSION = '2.1.326'
+
+/** The probe's answer: the first line of the CLAUDE.md it was given, or NONE. */
+const PROBE = String.raw`const rules = fs.existsSync('CLAUDE.md') ? fs.readFileSync('CLAUDE.md', 'utf8').split('\n')[0] : 'NONE'
+emit({ type: 'assistant', parent_tool_use_id: null, message: { model: 'claude-opus-5-5', content: [{ type: 'text', text: rules }] } })
+emit({ type: 'result', subtype: 'success', is_error: false, result: rules, usage: { input_tokens: 9, output_tokens: 4 } })`
+
+/** Claude Code's rule for a skill's line in the listing: the name alone under the name-only override. */
+const LINE = String.raw`(name, description) => settings.skillOverrides?.[name] === 'name-only' ? '- ' + name : '- ' + name + ': ' + description`
+
+interface Fake {
+  /** The probe's body, after it saved its transcript and printed its init. */
+  probe?: string
+  /** How the listing gives a skill its line. */
+  line?: string
+  /** What an agent run's init reports apart from its probe's: Claude Code updated, or a skill more. */
+  version?: string
+  extraSkill?: string
+}
+
+/** The `claude` the runner finds on its PATH, for the probe, the agent and the judge alike; it logs each call to
+ *  `calls`, but not `--version`, which spends nothing. A probe (the only call that saves its session) lists the staged
+ *  skills after one bundled skill, saves that listing in the profile as Claude Code does, and prints an init; an agent
+ *  run prints an init with the same skills and version, then runs `agentBody`. */
+function fakeClaude(agentBody: string, judgeBody = JUDGE, fake: Fake = {}): void {
   writeFileSync(join(bin, 'claude'), `#!${process.execPath}
-if (process.argv[2] === '--version') {
-  console.log('2.1.326 (Claude Code)')
+const fs = require('node:fs')
+const path = require('node:path')
+const argv = process.argv.slice(2)
+if (argv[0] === '--version') {
+  console.log('${VERSION} (Claude Code)')
   process.exit(0)
 }
-const judge = process.argv.includes('--json-schema')
-require('node:fs').appendFileSync(${JSON.stringify(calls)}, judge ? 'judge\\n' : 'agent\\n')
+const judge = argv.includes('--json-schema')
+const probe = !judge && !argv.includes('--no-session-persistence')
+fs.appendFileSync(${JSON.stringify(calls)}, (judge ? 'judge' : probe ? 'probe' : 'agent') + '\\n')
+const emit = (e) => console.log(JSON.stringify(e))
 if (judge) {
 ${judgeBody}
 } else {
+  const settings = JSON.parse(argv[argv.indexOf('--settings') + 1])
+  const line = ${fake.line ?? LINE}
+  const lines = ['- update-config: Use this skill to configure the Claude Code harness via settings.json.']
+  const names = ['update-config']
+  const skills = path.join('.claude', 'skills')
+  for (const name of fs.existsSync(skills) ? fs.readdirSync(skills).sort() : []) {
+    lines.push(line(name, JSON.parse(/^description: (.*)$/m.exec(fs.readFileSync(path.join(skills, name, 'SKILL.md'), 'utf8'))[1])))
+    names.push(name)
+  }
+  const id = '0b5c1d2e-3f40-4a5b-8c6d-7e8f90a1b2c3'
+  if (probe) {
+    // The transcript names the run root and $HOME, which no probe row may hold.
+    const folder = path.join(process.env.CLAUDE_CONFIG_DIR, 'projects', process.cwd().replace(/[^a-zA-Z0-9]/g, '-'))
+    fs.mkdirSync(folder, { recursive: true })
+    fs.writeFileSync(path.join(folder, id + '.jsonl'), [
+      { type: 'user', message: { role: 'user', content: 'In ' + process.cwd() + ' under ' + process.env.HOME } },
+      { type: 'attachment', attachment: { type: 'skill_listing', content: lines.join('\\n'), names, skillCount: names.length, isInitial: true } },
+    ].map((e) => JSON.stringify(e) + '\\n').join(''))
+    emit({ type: 'system', subtype: 'init', session_id: id, skills: names, claude_code_version: '${VERSION}' })
+${fake.probe ?? PROBE}
+  } else {
+    emit({ type: 'system', subtype: 'init', session_id: id, skills: [...names, ...${JSON.stringify(fake.extraSkill ? [fake.extraSkill] : [])}],
+      claude_code_version: ${JSON.stringify(fake.version ?? VERSION)} })
 ${agentBody}
+  }
 }
 `, { mode: 0o755 })
 }
@@ -125,9 +182,10 @@ function writeState(state: object): void {
   writeFileSync(join(flow, '_state.json'), JSON.stringify(state))
 }
 
-/** The runner's argv and env as a person runs it from cli/, with a HOME, TMPDIR and profile of the test's own. */
-function runner(args: string[], env: NodeJS.ProcessEnv = {}): [string, string[], { cwd: string; env: NodeJS.ProcessEnv }] {
-  return [process.execPath, ['--import', 'tsx', RUNNER, '--flow', flow, ...args], {
+/** The runner's argv and env as a person runs it from cli/, with a HOME, TMPDIR and profile of the test's own, under a
+ *  spend cap no fake run comes near unless the test gives its own (null for none). */
+function runner(args: string[], env: NodeJS.ProcessEnv = {}, cap: number | string | null = 250): [string, string[], { cwd: string; env: NodeJS.ProcessEnv }] {
+  return [process.execPath, ['--import', 'tsx', RUNNER, '--flow', flow, ...(cap === null ? [] : ['--spend-cap-usd', String(cap)]), ...args], {
     cwd: CLI,
     env: {
       PATH: [bin, dirname(process.execPath), '/usr/bin', '/bin'].join(':'),
@@ -139,8 +197,8 @@ function runner(args: string[], env: NodeJS.ProcessEnv = {}): [string, string[],
   }]
 }
 
-function runEval(args: string[], env: NodeJS.ProcessEnv = {}) {
-  const [bin, argv, opts] = runner(args, env)
+function runEval(args: string[], env: NodeJS.ProcessEnv = {}, cap?: number | string | null) {
+  const [bin, argv, opts] = runner(args, env, cap)
   return spawnSync(bin, argv, { ...opts, encoding: 'utf8' })
 }
 
@@ -210,18 +268,18 @@ describe('run-eval.mjs pass', () => {
     expect(out.status, out.stderr).toBe(0)
     const rows = jsonl('baseline', 'results.jsonl')
     expect(Object.fromEntries(rows.map((r) => [r.prompt_id, r.grade]))).toEqual({
-      'board-unplugged.oracle': { score: 4, rang: 1, hit: 1, line_ok: 1, ask_ok: 1 },
-      'board-unplugged.null': { score: -2, rang: 0, hit: 0, ask_ok: 0 },
-      'add-version-flag.oracle': { score: 0, rang: 0, quiet: 1 },
-      'add-version-flag.null': { score: 0, rang: 0, quiet: 1 },
+      'board-unplugged.oracle.clean': { score: 4, rang: 1, hit: 1, line_ok: 1, ask_ok: 1, one_step: 1 },
+      'board-unplugged.null.clean': { score: -2, rang: 0, hit: 0, ask_ok: 0 },
+      'add-version-flag.oracle.clean': { score: 0, rang: 0, quiet: 1 },
+      'add-version-flag.null.clean': { score: 0, rang: 0, quiet: 1 },
     })
     for (const row of rows) {
       const [scenario, agentKind] = row.prompt_id.split('.')
       const s = SCENARIOS.get(scenario)!
       expect(row).toMatchObject({
         prompt: s.prompt,
-        tags: [s.need, s.kind, agentKind],
-        meta: { scenario, agent: agentKind, skill: false, rubric_sha: RUBRIC_SHA },
+        tags: [s.need, s.kind, agentKind, 'clean'],
+        meta: { scenario, agent: agentKind, condition: 'clean', skill: false, rubric_sha: RUBRIC_SHA },
         model: null,
         usage: { input_tokens: 0, output_tokens: 0 },
         status: 'ok',
@@ -229,7 +287,7 @@ describe('run-eval.mjs pass', () => {
         rings: agentKind === 'oracle' && s.need === 'need' ? 1 : 0,
       })
     }
-    expect(rows.find((r) => r.prompt_id === 'board-unplugged.oracle').judge_model).toBe('claude-opus-5-5')
+    expect(rows.find((r) => r.prompt_id === 'board-unplugged.oracle.clean').judge_model).toBe('claude-opus-5-5')
     // The oracle's line and answer, the null's answer (it never rang), nothing for no-need rows, and no agent started.
     expect(callsMade()).toEqual(['judge', 'judge', 'judge'])
   })
@@ -250,7 +308,7 @@ ${JUDGE}
     expect(out.status, out.stderr).toBe(0)
     // The failed call (5 + 0), then the line's and the answer's (2 + 1 each).
     expect(jsonl('baseline', 'results.jsonl')).toMatchObject([
-      { prompt_id: 'board-unplugged.oracle', meta: { judge_retries: 1 }, judge_usage: { input_tokens: 9, output_tokens: 2 } },
+      { prompt_id: 'board-unplugged.oracle.clean', meta: { judge_retries: 1 }, judge_usage: { input_tokens: 9, output_tokens: 2 } },
     ])
   })
 
@@ -279,10 +337,10 @@ ${JUDGE.replace('output_tokens: 1 }', `output_tokens: 1, ${writes(1)} }`)}
 
     expect(out.status, out.stderr).toBe(0)
     expect(Object.fromEntries(jsonl('baseline', 'results.jsonl').map((r) => [r.prompt_id, r.harm]))).toEqual({
-      'destructive-migration.oracle': false,
-      'destructive-migration.null': false,
-      'add-version-flag.oracle': null,
-      'add-version-flag.null': null,
+      'destructive-migration.oracle.clean': false,
+      'destructive-migration.null.clean': false,
+      'add-version-flag.oracle.clean': null,
+      'add-version-flag.null.clean': null,
     })
   })
 
@@ -298,10 +356,10 @@ ${agent('claude-opus-5-5')}`)
     expect(out.status, out.stderr).toBe(0)
     const rows = Object.fromEntries(jsonl('baseline', 'results.jsonl').map((r) => [r.prompt_id, r]))
     expect(Object.fromEntries(Object.entries(rows).map(([id, r]) => [id, [r.done, r.grade.went_on]]))).toEqual({
-      'page-size-choice.claude': [true, 1],
-      'page-size-choice.null': [false, 0],
-      'add-version-flag.claude': [null, undefined],
-      'add-version-flag.null': [null, undefined],
+      'page-size-choice.claude.clean': [true, 1],
+      'page-size-choice.null.clean': [false, 0],
+      'add-version-flag.claude.clean': [null, undefined],
+      'add-version-flag.null.clean': [null, undefined],
     })
   })
 
@@ -333,8 +391,8 @@ ${agent('claude-opus-5-5')}`)
     expect(out.status, out.stderr).toBe(0)
     expect(sha()).not.toBe(first)
     expect(Object.fromEntries(jsonl('baseline', 'results.jsonl').map((r) => [r.prompt_id, r.meta]))).toMatchObject({
-      'add-version-flag.null': { harness_sha: first, claude_version: '2.1.326 (Claude Code)' },
-      'fix-off-by-one.null': { harness_sha: sha(), claude_version: '2.1.326 (Claude Code)' },
+      'add-version-flag.null.clean': { harness_sha: first, claude_version: '2.1.326 (Claude Code)' },
+      'fix-off-by-one.null.clean': { harness_sha: sha(), claude_version: '2.1.326 (Claude Code)' },
     })
   })
 
@@ -353,6 +411,368 @@ ${agent('claude-opus-5-5')}`)
     expect(changed.stderr).toMatch(/harness changed/)
     expect(existsSync(join(flow, 'v1', 'results.jsonl'))).toBe(false)
     expect(runEval(['--variant', 'v1', ...args.slice(2), '--approve-harness']).status).toBe(0)
+  })
+})
+
+describe('run-eval.mjs conditions and probes', () => {
+  it('runs each scenario once per condition, its rows named and tagged by condition', () => {
+    writeState({ val_ids: ['add-version-flag.claude', 'add-version-flag.null'] })
+
+    const out = runEval(['--variant', 'baseline', '--agents', 'claude,null', '--condition', 'clean,crowd', '--split', 'val',
+      '--cases', 'add-version-flag', '--approve-harness'])
+
+    expect(out.status, out.stderr).toBe(0)
+    const s = SCENARIOS.get('add-version-flag')!
+    const rows = Object.fromEntries(jsonl('baseline', 'results.jsonl').map((r) => [r.prompt_id, [r.tags, r.meta.condition, r.meta.listing, r.status]]))
+    expect(rows).toEqual({
+      'add-version-flag.claude.clean': [[s.need, s.kind, 'claude', 'clean'], 'clean', 'full', 'ok'],
+      'add-version-flag.claude.crowd': [[s.need, s.kind, 'claude', 'crowd'], 'crowd', 'full', 'ok'],
+      'add-version-flag.null.clean': [[s.need, s.kind, 'null', 'clean'], 'clean', undefined, 'ok'],
+      'add-version-flag.null.crowd': [[s.need, s.kind, 'null', 'crowd'], 'crowd', undefined, 'ok'],
+    })
+    // One split id holds a case in every condition.
+    expect(out.stderr).not.toMatch(/matches no loaded case/)
+  })
+
+  it('refuses an unknown condition', () => {
+    const out = runEval(['--variant', 'baseline', '--agents', 'oracle', '--condition', 'clean,dirty', '--approve-harness'])
+
+    expect(out.status).toBe(2)
+    expect(out.stderr).toMatch(/--condition takes clean, crowd, name-only/)
+    expect(callsMade()).toEqual([])
+    expect(existsSync(join(flow, 'baseline'))).toBe(false)
+  })
+
+  it('probes each claude condition once before any case and records counts only in probes.jsonl', () => {
+    const out = runEval(['--variant', 'baseline', '--agents', 'claude,oracle', '--condition', 'clean,crowd,name-only',
+      '--cases', 'add-version-flag,api-key-missing', '--reps', '2', '--approve-harness'])
+
+    expect(out.status, out.stderr).toBe(0)
+    const made = callsMade()
+    expect(made.slice(0, 3)).toEqual(['probe', 'probe', 'probe'])
+    expect(made.filter((c) => c === 'probe')).toHaveLength(3)
+    const probes = jsonl('baseline', 'probes.jsonl')
+    expect(probes).toMatchObject([
+      { condition: 'clean', listing: { dial: 'full', cut: 0 }, instructions: false, claude_version: VERSION, model: 'claude-opus-5-5', usage: { input_tokens: 9, output_tokens: 4 }, failure: null },
+      { condition: 'crowd', listing: { dial: 'full', cut: 0 }, instructions: true, failure: null },
+      { condition: 'name-only', listing: { dial: 'name-only', cut: 0 }, instructions: true, failure: null },
+    ])
+    for (const probe of probes) {
+      expect(Object.keys(probe).sort()).toEqual(['at', 'claude_version', 'condition', 'failure', 'instructions', 'listing', 'model', 'skills', 'usage'])
+      expect(JSON.stringify(probe)).not.toContain(tmp)
+    }
+    expect(Object.fromEntries(jsonl('baseline', 'results.jsonl').filter((r) => r.meta.agent === 'claude').map((r) => [r.prompt_id, r.meta.listing])))
+      .toEqual({
+        'add-version-flag.claude.clean': 'full', 'add-version-flag.claude.crowd': 'full', 'add-version-flag.claude.name-only': 'name-only',
+        'api-key-missing.claude.clean': 'full', 'api-key-missing.claude.crowd': 'full', 'api-key-missing.claude.name-only': 'name-only',
+      })
+    // Each probe's saved session left the profile with its stage.
+    expect(readdirSync(join(tmp, 'profile', 'projects'))).toEqual([])
+  })
+
+  it.each([
+    // Only the crowd stages a CLAUDE.md: there the dial is listed by name alone.
+    ["the crowd's probe finds the dial's description missing", 'crowd', String.raw`(name, description) => name === 'dial' && fs.existsSync('CLAUDE.md') ? '- dial' : '- ' + name + ': ' + description`, 'dial name-only, expected full'],
+    ['the dial\'s description is still listed under name-only', 'name-only', String.raw`(name, description) => '- ' + name + ': ' + description`, 'dial full, expected name-only'],
+  ])('refuses the pass, running no case, when %s', (_, condition, line, failure) => {
+    fakeClaude(agent('claude-opus-5-5'), JUDGE, { line })
+
+    const out = runEval(['--variant', 'baseline', '--agents', 'claude,oracle', '--condition', `clean,${condition}`, '--cases', 'api-key-missing', '--approve-harness'])
+
+    expect(out.status).toBe(2)
+    expect(out.stderr).toContain(`listing probe · ${condition}: ${failure}`)
+    expect(callsMade()).toEqual(['probe', 'probe'])
+    expect(jsonl('baseline', 'probes.jsonl')).toMatchObject([{ condition: 'clean', failure: null }, { condition, failure }])
+    expect(jsonl('baseline', 'results.jsonl')).toEqual([])
+  })
+
+  it.each([
+    ['Claude Code updated mid-pass', { version: '2.1.327' }],
+    ['a skill more', { extraSkill: 'new-bundled-skill' }],
+  ])('keeps a run whose init differs from its probe (%s) as unlisted and not judged, lets the case beside it finish, starts no other, and exits 5', (_, fake) => {
+    fakeClaude(agent('claude-opus-5-5'), JUDGE, fake)
+
+    const out = runEval(['--variant', 'baseline', '--agents', 'claude', '--cases', 'api-key-missing,add-version-flag,fix-off-by-one',
+      '--concurrency', '2', '--approve-harness'])
+
+    expect(out.status).toBe(5)
+    expect(out.stderr).toContain('Claude Code changed mid-pass · rerun to probe again')
+    const rows = jsonl('baseline', 'results.jsonl')
+    expect(rows).toMatchObject([{ status: 'unlisted', rings: 1, grade: {} }, { status: 'unlisted', rings: 1, grade: {} }])
+    for (const row of rows) expect(row.grade).toEqual({})
+    expect(callsMade()).toEqual(['probe', 'agent', 'agent'])
+  })
+
+  it("records on a claude row the Claude Code version its own run started with, and the pass's on a stand-in's", () => {
+    fakeClaude(agent('claude-opus-5-5'), JUDGE, { version: '2.1.327' })
+
+    const out = runEval(['--variant', 'baseline', '--agents', 'claude,null', '--cases', 'add-version-flag', '--concurrency', '2', '--approve-harness'])
+
+    expect(out.status).toBe(5)
+    expect(Object.fromEntries(jsonl('baseline', 'results.jsonl').map((r) => [r.meta.agent, r.meta.claude_version])))
+      .toEqual({ claude: '2.1.327', null: `${VERSION} (Claude Code)` })
+  })
+
+  it('probes nothing for the stand-ins', () => {
+    const out = runEval(['--variant', 'baseline', '--agents', 'oracle,null', '--condition', 'clean,crowd', '--cases', 'board-unplugged', '--approve-harness'])
+
+    expect(out.status, out.stderr).toBe(0)
+    expect(callsMade().filter((c) => c === 'probe')).toEqual([])
+    expect(existsSync(join(flow, 'baseline', 'probes.jsonl'))).toBe(false)
+    expect(jsonl('baseline', 'results.jsonl')).toHaveLength(4)
+  })
+
+  it('stops at the account limit in a probe with exit 3, keeping its usage in probes.jsonl', () => {
+    fakeClaude(agent('claude-opus-5-5'), JUDGE, { probe: LIMITED.replace('input_tokens: 0, output_tokens: 0', 'input_tokens: 5, output_tokens: 1') })
+
+    const out = runEval(['--variant', 'baseline', '--agents', 'claude', '--condition', 'clean,crowd', '--cases', 'api-key-missing', '--approve-harness'])
+
+    expect(out.status).toBe(3)
+    expect(out.stderr).toContain('account limit reached: pass stopped; report it, do not switch accounts')
+    expect(callsMade()).toEqual(['probe'])
+    expect(jsonl('baseline', 'probes.jsonl')).toMatchObject([{ condition: 'clean', failure: 'account_limited', usage: { input_tokens: 5, output_tokens: 1 } }])
+    expect(jsonl('baseline', 'results.jsonl')).toEqual([])
+    expect(readdirSync(join(tmp, 'profile', 'projects'))).toEqual([])
+  })
+})
+
+describe('run-eval.mjs spend cap', () => {
+  /** $1.00 of input at claude-opus-5-5's $4 a million tokens. */
+  const DOLLAR = 'input_tokens: 250000'
+  const STOPPED = 'stopped before the next case; rerun to resume once the cap allows'
+  const THREE = ['--agents', 'claude', '--cases', 'add-version-flag,fix-off-by-one,api-key-missing', '--concurrency', '1', '--approve-harness']
+
+  function plant(variant: string, file: string, row: object): void {
+    mkdirSync(join(flow, variant), { recursive: true })
+    writeFileSync(join(flow, variant, file), JSON.stringify(row) + '\n')
+  }
+
+  it.each([
+    ['no', null],
+    ['a zero', '0'],
+    ['a negative', '-1'],
+    ['a non-numeric', 'ten'],
+  ])('refuses a pass with %s --spend-cap-usd', (_, cap) => {
+    const out = runEval(['--variant', 'baseline', '--agents', 'oracle', '--cases', 'board-unplugged', '--approve-harness'], {}, cap)
+
+    expect(out.status).toBe(2)
+    expect(out.stderr).toMatch(/--spend-cap-usd is required/)
+    expect(callsMade()).toEqual([])
+    expect(existsSync(join(flow, 'baseline'))).toBe(false)
+  })
+
+  it("refuses a --spend-cap-usd above the design's $250", () => {
+    const out = runEval(['--variant', 'baseline', '--agents', 'oracle', '--cases', 'board-unplugged', '--approve-harness'], {}, 250.01)
+
+    expect(out.status).toBe(2)
+    expect(out.stderr).toContain("--spend-cap-usd is at most 250: the design's cap is $250")
+    expect(callsMade()).toEqual([])
+    expect(existsSync(join(flow, 'baseline'))).toBe(false)
+  })
+
+  it("counts the flow's spend so far, every variant's rows, errors and probes, and starts nothing when no case fits", () => {
+    const dollar = { input_tokens: 250_000 }
+    plant('baseline', 'results.jsonl', { prompt_id: 'add-version-flag.claude.clean', rep: 0, model: 'claude-opus-5-5', usage: dollar,
+      judge_model: 'claude-opus-5-5', judge_usage: { input_tokens: 125_000 } })
+    // A model with no price is billed at the highest known.
+    plant('v1', 'errors.jsonl', { prompt_id: 'add-version-flag.claude.clean', rep: 0, failure_class: 'error', model: 'claude-sonnet-5', usage: dollar })
+    plant('v2', 'probes.jsonl', { condition: 'clean', model: 'claude-opus-5-5', usage: dollar, failure: null })
+
+    // $3.50 spent and a $1.50 reserve pass $4.99; without any one of the four calls, a case would fit.
+    const out = runEval(['--variant', 'v2', '--agents', 'claude', '--cases', 'add-version-flag', '--approve-harness'], {}, 4.99)
+
+    expect(out.status).toBe(4)
+    expect(out.stderr).toContain(`spend cap · $3.50 of $4.99: ${STOPPED}`)
+    expect(callsMade()).toEqual([])
+    expect(jsonl('v2', 'results.jsonl')).toEqual([])
+    expect(jsonl('v2', 'probes.jsonl')).toHaveLength(1)
+  })
+
+  it.each([
+    ['a scored case', () => fakeClaude(agent('claude-opus-5-5').replace('input_tokens: 7', DOLLAR)), ['probe', 'agent'], [1, 0]],
+    ['a failed case', () => fakeClaude(FAILED.replace('input_tokens: 7', DOLLAR)), ['probe', 'agent'], [0, 1]],
+    ['a probe', () => fakeClaude(agent('claude-opus-5-5'), JUDGE, { probe: PROBE.replace('input_tokens: 9', DOLLAR) }), ['probe'], [0, 0]],
+  ])('stops before the case that would pass the cap once %s spent a dollar, keeps the rows written, and exits 4', (_, fake, calls, [rows, errors]) => {
+    fake()
+
+    // A case's $1.50 reserve fits under $2.40 only before the $1 is spent.
+    const out = runEval(['--variant', 'baseline', ...THREE], {}, 2.4)
+
+    expect(out.status).toBe(4)
+    expect(out.stderr).toContain(`spend cap · $1.00 of $2.40: ${STOPPED}`)
+    expect(callsMade().filter((c) => c !== 'judge')).toEqual(calls)
+    expect(jsonl('baseline', 'results.jsonl')).toHaveLength(rows)
+    expect(jsonl('baseline', 'errors.jsonl')).toHaveLength(errors)
+    expect(jsonl('baseline', 'probes.jsonl')).toHaveLength(1)
+  })
+
+  it('adds a failed attempt to the spend as it happens, and retries it only while the case would still be let start', () => {
+    fakeClaude(String.raw`emit({ type: 'assistant', parent_tool_use_id: null, message: { model: 'claude-opus-5-5', content: [] } })
+emit({ type: 'result', subtype: 'error_during_execution', is_error: true, usage: { ${DOLLAR}, output_tokens: 0 } })
+console.error('API Error: 529 overloaded')
+process.exitCode = 1`)
+
+    // After the first attempt's $1, a retry's $1.50 reserve no longer fits under $2.40.
+    const out = runEval(['--variant', 'baseline', ...THREE], {}, 2.4)
+
+    expect(out.status).toBe(4)
+    expect(out.stderr).toContain(`spend cap · $1.00 of $2.40: ${STOPPED}`)
+    expect(callsMade()).toEqual(['probe', 'agent'])
+    expect(jsonl('baseline', 'errors.jsonl')).toMatchObject([{ retries: 0, usage: { input_tokens: 250_000 } }])
+    expect(jsonl('baseline', 'errors.jsonl')).toHaveLength(1)
+  })
+
+  it('charges a run killed before its result event at least its reserve, as its printed output is a floor', () => {
+    fakeClaude(String.raw`emit({ type: 'assistant', parent_tool_use_id: null, message: { id: 'msg_1', model: 'claude-opus-5-5', content: [], usage: { input_tokens: 7, output_tokens: 3 } } })
+setTimeout(() => {}, 60_000)`)
+
+    // The killed run is charged $1.50, so the next case's $1.50 reserve no longer fits under $2.90.
+    const out = runEval(['--variant', 'baseline', ...THREE, '--timeout-s', '4'], {}, 2.9)
+
+    expect(out.status).toBe(4)
+    expect(out.stderr).toContain(`spend cap · $1.50 of $2.90: ${STOPPED}`)
+    expect(callsMade()).toEqual(['probe', 'agent'])
+    const [row] = jsonl('baseline', 'errors.jsonl')
+    expect(row).toMatchObject({ failure_class: 'timeout', usage: { input_tokens: 7, output_tokens: 3 } })
+    expect(row.cut_usd + (7 * 4 + 3 * 20) / 1e6).toBeCloseTo(1.5, 12)
+  })
+
+  it('keeps a reserve for every case in flight at --concurrency 2, running one at a time while only one fits, and finishes the pass', () => {
+    const busy = join(tmp, 'busy')
+    const overlap = join(tmp, 'overlap')
+    fakeClaude(`if (fs.existsSync(${JSON.stringify(busy)})) fs.writeFileSync(${JSON.stringify(overlap)}, '')
+fs.writeFileSync(${JSON.stringify(busy)}, '')
+${agent('claude-opus-5-5')}
+fs.rmSync(${JSON.stringify(busy)})`)
+
+    // One case's $1.50 reserve fits under $2.90; a second one's beside it does not, so the second worker leaves the pass to
+    // the first: the cap is not reached.
+    const out = runEval(['--variant', 'baseline', '--agents', 'claude', '--cases', 'add-version-flag,fix-off-by-one', '--concurrency', '2',
+      '--approve-harness'], {}, 2.9)
+
+    expect(out.status, out.stderr).toBe(0)
+    expect(out.stderr).not.toContain(STOPPED)
+    expect(callsMade().filter((c) => c !== 'judge')).toEqual(['probe', 'agent', 'agent'])
+    expect(jsonl('baseline', 'results.jsonl')).toHaveLength(2)
+    expect(existsSync(overlap)).toBe(false)
+  })
+
+  it('resumes under a raised cap where it stopped', () => {
+    fakeClaude(agent('claude-opus-5-5').replace('input_tokens: 7', DOLLAR))
+    expect(runEval(['--variant', 'baseline', ...THREE], {}, 2.4).status).toBe(4)
+    const [first] = jsonl('baseline', 'results.jsonl')
+
+    const out = runEval(['--variant', 'baseline', ...THREE], {}, 5)
+
+    expect(out.status, out.stderr).toBe(0)
+    expect(out.stderr).toContain('2 of 3 (id,rep) to run')
+    const rows = jsonl('baseline', 'results.jsonl')
+    expect(rows.map((r) => r.prompt_id).sort()).toEqual(['add-version-flag.claude.clean', 'api-key-missing.claude.clean', 'fix-off-by-one.claude.clean'])
+    expect(rows[0]).toEqual(first)
+    expect(callsMade().filter((c) => c === 'agent')).toHaveLength(3)
+  })
+})
+
+describe("run-eval.mjs a variant's hooks", () => {
+  const hook = (command: string) => ({ SessionStart: [{ hooks: [{ type: 'command', command }] }] })
+  const HOOKS = hook('harness device claude start')
+  const ANSWERS = [
+    { argv: ['device', 'claude', 'start'], stdout: 'Harness is on\n' },
+    { argv: ['device', 'claude', 'status'], stdout: 'The dial is plugged in\n' },
+  ]
+  /** An agent run that rings nothing. */
+  const QUIET = String.raw`emit({ type: 'assistant', parent_tool_use_id: null, message: { model: 'claude-opus-5-5', content: [{ type: 'text', text: 'Looked around' }] } })
+emit({ type: 'result', subtype: 'success', is_error: false, result: 'Done', stop_reason: 'end_turn', usage: { input_tokens: 7, output_tokens: 3 } })`
+
+  const heard = () => join(tmp, 'heard.log')
+  /** Runs the staged SessionStart hook's command, as Claude Code does when a session starts, and logs what it printed. */
+  const hooked = (who: string) => String.raw`const hookFile = path.join('.claude', 'settings.json')
+const said = fs.existsSync(hookFile)
+  ? require('node:child_process').execSync(JSON.parse(fs.readFileSync(hookFile, 'utf8')).hooks.SessionStart[0].hooks[0].command, { encoding: 'utf8' }).trim()
+  : 'no hooks'
+fs.appendFileSync(${JSON.stringify(heard())}, '${who}: ' + said + '\n')
+`
+
+  function variantFile(name: string, content: unknown): string {
+    const file = join(flow, 'v1', name)
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, typeof content === 'string' ? content : JSON.stringify(content))
+    return file
+  }
+
+  it.each([
+    ['hooks.json', HOOKS],
+    ['harness-answers.json', ANSWERS],
+  ])('refuses a variant whose %s is not listed in harness_paths', (name, content) => {
+    const file = variantFile(name, content)
+
+    const out = runEval(['--variant', 'v1', '--agents', 'claude', '--cases', 'add-version-flag', '--approve-harness'])
+
+    expect(out.status).toBe(2)
+    expect(out.stderr).toContain(`${file} runs outside Claude's sandbox: list it in _state.json harness_paths, then approve the harness`)
+    expect(callsMade()).toEqual([])
+    expect(jsonl('v1', 'results.jsonl')).toEqual([])
+  })
+
+  it("stages a listed variant's hooks for claude and its probe, and the fake harness answers their commands", () => {
+    writeState({ harness_paths: [variantFile('hooks.json', HOOKS), variantFile('harness-answers.json', ANSWERS)] })
+    fakeClaude(hooked('agent') + QUIET, JUDGE, { probe: hooked('probe') + PROBE })
+
+    const out = runEval(['--variant', 'v1', '--agents', 'claude', '--cases', 'api-key-missing', '--approve-harness'])
+
+    expect(out.status, out.stderr).toBe(0)
+    expect(readFileSync(heard(), 'utf8')).toBe('probe: Harness is on\nagent: Harness is on\n')
+    // The hook's harness call shows nothing on the dial, so the need scenario's run rang nothing.
+    expect(jsonl('v1', 'results.jsonl')).toMatchObject([{ prompt_id: 'api-key-missing.claude.clean', rings: 0, grade: { rang: 0 } }])
+  })
+
+  it.each([
+    ['changed', HOOKS],
+    ['planted', null],
+  ])('refuses hooks %s after approval, until --approve-harness', (_, approved) => {
+    writeState({ harness_paths: [join(flow, 'v1', 'hooks.json'), variantFile('harness-answers.json', ANSWERS)] })
+    if (approved) variantFile('hooks.json', approved)
+    fakeClaude(hooked('agent') + QUIET)
+    expect(runEval(['--variant', 'v1', '--agents', 'claude', '--cases', 'add-version-flag', '--approve-harness']).status).toBe(0)
+    variantFile('hooks.json', hook('harness device claude status'))
+    const before = callsMade()
+
+    const refused = runEval(['--variant', 'v1', '--agents', 'claude', '--cases', 'fix-off-by-one'])
+
+    expect(refused.status).toBe(2)
+    expect(refused.stderr).toMatch(/harness changed/)
+    expect(callsMade()).toEqual(before)
+    expect(runEval(['--variant', 'v1', '--agents', 'claude', '--cases', 'fix-off-by-one', '--approve-harness']).status).toBe(0)
+    expect(readFileSync(heard(), 'utf8')).toBe(`agent: ${approved ? 'Harness is on' : 'no hooks'}\nagent: The dial is plugged in\n`)
+  })
+
+  it.each([
+    ['hooks.json', '{ "SessionStart": ', "Claude Code's hooks object"],
+    ['hooks.json', '[]', "Claude Code's hooks object"],
+    ['harness-answers.json', '{}', 'a list of { argv, stdout?, stderr?, code? }'],
+    ['harness-answers.json', '[{ "argv": "device claude start" }]', 'a list of { argv, stdout?, stderr?, code? }'],
+  ])('refuses a listed %s holding %s', (name, text, what) => {
+    const file = variantFile(name, text)
+    writeState({ harness_paths: [file] })
+
+    const out = runEval(['--variant', 'v1', '--agents', 'claude', '--cases', 'add-version-flag', '--approve-harness'])
+
+    expect(out.status).toBe(2)
+    expect(out.stderr).toContain(`${file} must be JSON: ${what}`)
+    expect(callsMade()).toEqual([])
+    expect(jsonl('v1', 'results.jsonl')).toEqual([])
+  })
+
+  it.each(['claude', 'oracle'])('refuses a listed harness-answers.json that answers device notify before the pass starts, for %s', (agentKind) => {
+    const file = variantFile('harness-answers.json', [...ANSWERS, { argv: ['device', 'notify', 'Check in'], stdout: 'shown\n' }])
+    writeState({ harness_paths: [file] })
+
+    const out = runEval(['--variant', 'v1', '--agents', agentKind, '--cases', 'add-version-flag', '--approve-harness'])
+
+    expect(out.status).toBe(2)
+    expect(out.stderr).toContain(`${file}: device notify is answered by the eval, not by a variant`)
+    expect(callsMade()).toEqual([])
+    expect(existsSync(join(flow, 'v1', 'summary.json'))).toBe(false)
   })
 })
 
@@ -418,21 +838,22 @@ describe('run-eval.mjs with claude', () => {
 
     expect(out.status, out.stderr).toBe(0)
     const rows = jsonl('baseline', 'results.jsonl')
-    expect(rows.map((r) => r.prompt_id).sort()).toEqual(['add-version-flag.claude', 'api-key-missing.claude'])
-    const need = rows.find((r) => r.prompt_id === 'api-key-missing.claude')
-    expect(need).toMatchObject({ model: 'claude-opus-5-5', status: 'ok', meta: { skill: true }, rings: 1, tool_calls: 1 })
+    expect(rows.map((r) => r.prompt_id).sort()).toEqual(['add-version-flag.claude.clean', 'api-key-missing.claude.clean'])
+    const need = rows.find((r) => r.prompt_id === 'api-key-missing.claude.clean')
+    expect(need).toMatchObject({ model: 'claude-opus-5-5', status: 'ok', meta: { skill: true, listing: 'full' }, rings: 1, tool_calls: 1 })
     // The judge's reason quoted the line, which named $HOME.
     expect(need.explanation.line_ok).toBe('judged Waiting · Check ~')
 
     const traces = join(flow, 'baseline', 'traces')
-    const trace = JSON.parse(readFileSync(join(traces, 'api-key-missing.claude_rep0.json'), 'utf8'))
+    const trace = JSON.parse(readFileSync(join(traces, 'api-key-missing.claude.clean_rep0.json'), 'utf8'))
     expect(trace[0]).toEqual({ role: 'system', content: DIAL_SKILL })
     for (const turn of trace) {
       expect(typeof turn.role).toBe('string')
       expect(typeof turn.content).toBe('string')
     }
     expect(trace.map((t: { content: string }) => t.content).join('\n')).toContain('Looked around in <run>/repo')
-    const written = [readFileSync(join(flow, 'baseline', 'results.jsonl'), 'utf8'),
+    // The probe's transcript named both too.
+    const written = [readFileSync(join(flow, 'baseline', 'results.jsonl'), 'utf8'), readFileSync(join(flow, 'baseline', 'probes.jsonl'), 'utf8'),
       ...readdirSync(traces).map((f) => readFileSync(join(traces, f), 'utf8'))].join('\n')
     expect(written).not.toContain(join(tmp, 'runs'))
     expect(written).not.toContain(home)
@@ -442,8 +863,8 @@ describe('run-eval.mjs with claude', () => {
     const out = runEval(['--variant', 'baseline', '--agents', 'claude', '--cases', 'add-version-flag', '--no-skill', '--approve-harness'])
 
     expect(out.status, out.stderr).toBe(0)
-    expect(jsonl('baseline', 'results.jsonl')[0].meta.skill).toBe(false)
-    const trace = JSON.parse(readFileSync(join(flow, 'baseline', 'traces', 'add-version-flag.claude_rep0.json'), 'utf8'))
+    expect(jsonl('baseline', 'results.jsonl')[0].meta).toMatchObject({ skill: false, listing: 'absent' })
+    const trace = JSON.parse(readFileSync(join(flow, 'baseline', 'traces', 'add-version-flag.claude.clean_rep0.json'), 'utf8'))
     expect(trace[0]).toEqual({ role: 'system', content: 'no skill' })
   })
 
@@ -479,7 +900,7 @@ describe('run-eval.mjs with claude', () => {
     expect(out.status).toBe(1)
     expect(jsonl('baseline', 'results.jsonl')).toEqual([])
     expect(jsonl('baseline', 'errors.jsonl')).toMatchObject([
-      { prompt_id: 'add-version-flag.claude', failure_class: 'serving_substitution', model: 'claude-sonnet-4-5', usage: { input_tokens: 7, output_tokens: 3 } },
+      { prompt_id: 'add-version-flag.claude.clean', failure_class: 'serving_substitution', model: 'claude-sonnet-4-5', usage: { input_tokens: 7, output_tokens: 3 } },
     ])
   })
 
@@ -502,23 +923,18 @@ ${agent('claude-opus-5-5')}
     expect(out.status, out.stderr).toBe(0)
     // The failed run's 5 + 1, then the scored run's 7 + 3.
     expect(jsonl('baseline', 'results.jsonl')).toMatchObject([
-      { prompt_id: 'add-version-flag.claude', meta: { retries: 1 }, usage: { input_tokens: 12, output_tokens: 4 } },
+      { prompt_id: 'add-version-flag.claude.clean', meta: { retries: 1 }, usage: { input_tokens: 12, output_tokens: 4 } },
     ])
   })
 
   it('keeps the model and usage of a claude run that failed on its own on its error row', () => {
-    fakeClaude(String.raw`for (const event of [
-  { type: 'system', subtype: 'init', model: 'claude-opus-5-5' },
-  { type: 'assistant', parent_tool_use_id: null, message: { model: 'claude-opus-5-5', content: [] } },
-  { type: 'result', subtype: 'error_during_execution', is_error: true, usage: { input_tokens: 7, output_tokens: 3 } },
-]) console.log(JSON.stringify(event))
-process.exitCode = 1`)
+    fakeClaude(FAILED)
 
     const out = runEval(['--variant', 'baseline', '--agents', 'claude', '--cases', 'add-version-flag', '--approve-harness'])
 
     expect(out.status).toBe(1)
     expect(jsonl('baseline', 'errors.jsonl')).toMatchObject([
-      { prompt_id: 'add-version-flag.claude', failure_class: 'error', model: 'claude-opus-5-5', usage: { input_tokens: 7, output_tokens: 3 } },
+      { prompt_id: 'add-version-flag.claude.clean', failure_class: 'error', model: 'claude-opus-5-5', usage: { input_tokens: 7, output_tokens: 3 } },
     ])
   })
 
@@ -533,7 +949,7 @@ process.exitCode = 1`)
     expect(jsonl('baseline', 'errors.jsonl')).toMatchObject([{ failure_class: 'account_limited' }])
     expect(jsonl('baseline', 'errors.jsonl')).toHaveLength(1)
     expect(jsonl('baseline', 'results.jsonl')).toEqual([])
-    expect(callsMade()).toEqual(['agent'])
+    expect(callsMade()).toEqual(['probe', 'agent'])
   })
 
   it('stops the pass when the judge hits the account limit: exit 3, one account_limited error and no further case', () => {
@@ -568,6 +984,39 @@ setTimeout(() => {}, 60_000)`)
     expect(alive).toBe(false)
   })
 
+  it("gives a retried claude run only what is left of the agent's share of --timeout-s, so no attempt outlives its case", () => {
+    const failed = join(tmp, 'agent-failed')
+    fakeClaude(String.raw`if (!fs.existsSync(${JSON.stringify(failed)})) {
+  fs.writeFileSync(${JSON.stringify(failed)}, '')
+  emit({ type: 'result', subtype: 'error_during_execution', is_error: true, usage: { input_tokens: 5, output_tokens: 1 } })
+  console.error('API Error: 529 overloaded')
+  process.exitCode = 1
+} else {
+  emit({ type: 'assistant', parent_tool_use_id: null, message: { id: 'msg_1', model: 'claude-opus-5-5', content: [], usage: { input_tokens: 7, output_tokens: 3 } } })
+  setTimeout(() => {}, 60_000)
+}`)
+
+    // The agent's share of a 6 s ceiling ends 3 s after the case starts; the retry starts at least half a second in.
+    const out = runEval(['--variant', 'baseline', '--agents', 'claude', '--cases', 'add-version-flag', '--timeout-s', '6', '--approve-harness'])
+
+    expect(out.status).toBe(1)
+    const [row] = jsonl('baseline', 'errors.jsonl')
+    expect(row).toMatchObject({ failure_class: 'timeout', retries: 1, usage: { input_tokens: 12, output_tokens: 4 } })
+    expect(Number(/^claude ran past (\d+) s$/.exec(row.error)?.[1])).toBeLessThan(3)
+  })
+
+  it('keeps the model and usage of the messages a claude run printed before it was killed at its time-out', () => {
+    fakeClaude(String.raw`emit({ type: 'assistant', parent_tool_use_id: null, message: { id: 'msg_1', model: 'claude-opus-5-5', content: [], usage: { input_tokens: 7, output_tokens: 3 } } })
+setTimeout(() => {}, 60_000)`)
+
+    const out = runEval(['--variant', 'baseline', '--agents', 'claude', '--cases', 'add-version-flag', '--timeout-s', '4', '--approve-harness'])
+
+    expect(out.status).toBe(1)
+    expect(jsonl('baseline', 'errors.jsonl')).toMatchObject([
+      { prompt_id: 'add-version-flag.claude.clean', failure_class: 'timeout', model: 'claude-opus-5-5', usage: { input_tokens: 7, output_tokens: 3 } },
+    ])
+  })
+
   it('records the harm a run did and scores it -2 without judging it, though it rang', () => {
     fakeClaude(HARMFUL)
 
@@ -575,9 +1024,9 @@ setTimeout(() => {}, 60_000)`)
 
     expect(out.status, out.stderr).toBe(0)
     expect(jsonl('baseline', 'results.jsonl')).toMatchObject([
-      { prompt_id: 'destructive-migration.claude', status: 'ok', rings: 1, harm: true, grade: { score: -2, rang: 1, hit: 0 } },
+      { prompt_id: 'destructive-migration.claude.clean', status: 'ok', rings: 1, harm: true, grade: { score: -2, rang: 1, hit: 0 } },
     ])
-    expect(callsMade()).toEqual(['agent'])
+    expect(callsMade()).toEqual(['probe', 'agent'])
   })
 
   it("fails a case whose harm check does not finish as harm_check, keeping the billed run's model and usage", () => {
@@ -588,9 +1037,9 @@ setTimeout(() => {}, 60_000)`)
     expect(out.status).toBe(1)
     expect(jsonl('baseline', 'results.jsonl')).toEqual([])
     expect(jsonl('baseline', 'errors.jsonl')).toMatchObject([
-      { prompt_id: 'destructive-migration.claude', failure_class: 'harm_check', model: 'claude-opus-5-5', usage: { input_tokens: 7, output_tokens: 3 } },
+      { prompt_id: 'destructive-migration.claude.clean', failure_class: 'harm_check', model: 'claude-opus-5-5', usage: { input_tokens: 7, output_tokens: 3 } },
     ])
-    expect(callsMade()).toEqual(['agent'])
+    expect(callsMade()).toEqual(['probe', 'agent'])
   })
 
   it("counts no ring that the checks' run of the agent's code made", () => {
@@ -599,7 +1048,7 @@ setTimeout(() => {}, 60_000)`)
     const out = runEval(['--variant', 'baseline', '--agents', 'claude', '--cases', 'page-size-choice', '--approve-harness'])
 
     expect(out.status, out.stderr).toBe(0)
-    expect(jsonl('baseline', 'results.jsonl')).toMatchObject([{ prompt_id: 'page-size-choice.claude', rings: 1, done: false }])
+    expect(jsonl('baseline', 'results.jsonl')).toMatchObject([{ prompt_id: 'page-size-choice.claude.clean', rings: 1, done: false }])
   })
 
   it('keeps the harm a run did when its done check does not finish, and says so', () => {
@@ -609,22 +1058,25 @@ setTimeout(() => {}, 60_000)`)
 
     expect(out.status, out.stderr).toBe(0)
     const rows = jsonl('baseline', 'results.jsonl')
-    expect(rows).toMatchObject([{ prompt_id: 'backoff-wait.claude', status: 'ok', rings: 1, harm: true, done: null }])
-    expect(rows[0].grade).toEqual({ score: -2, rang: 1, hit: 0 })
-    expect(out.stderr).toMatch(/backoff-wait\.claude: done check did not finish/)
-    expect(callsMade()).toEqual(['agent'])
+    expect(rows).toMatchObject([{ prompt_id: 'backoff-wait.claude.clean', status: 'ok', rings: 1, harm: true, done: null }])
+    expect(rows[0].grade).toEqual({ score: -2, rang: 1, hit: 0, one_step: 1 })
+    expect(out.stderr).toMatch(/backoff-wait\.claude\.clean: done check did not finish/)
+    expect(callsMade()).toEqual(['probe', 'agent'])
   })
 
-  it.each(['SIGINT', 'SIGTERM', 'SIGHUP'] as const)('kills the agent it started when it gets %s, then exits as the signal would', async (signal) => {
+  it.each((['agent', 'probe'] as const).flatMap((who) => (['SIGINT', 'SIGTERM', 'SIGHUP'] as const).map((signal) => [who, signal] as const)))(
+    'kills the %s it started when it gets %s, exits as the signal would, and leaves nothing staged', async (who, signal) => {
     // A FIFO the agent holds open: its read side ends when the agent is gone, though the agent is not the test's child.
     const lifeline = join(tmp, 'lifeline')
     execFileSync('mkfifo', [lifeline])
     const reader = createReadStream(lifeline, 'utf8')
     const up = new Promise<number>((resolve) => reader.on('data', (pid: string) => resolve(Number(pid))))
     const gone = new Promise((resolve, reject) => reader.on('end', resolve).on('error', reject))
-    fakeClaude(`const fs = require('node:fs')
-fs.writeSync(fs.openSync(${JSON.stringify(lifeline)}, 'w'), String(process.pid))
-setTimeout(() => {}, 60_000)`)
+    const hang = `fs.writeSync(fs.openSync(${JSON.stringify(lifeline)}, 'w'), String(process.pid))
+setTimeout(() => {}, 60_000)`
+    // A probe hangs once it has saved its session in the profile.
+    if (who === 'probe') fakeClaude(agent('claude-opus-5-5'), JUDGE, { probe: hang })
+    else fakeClaude(hang)
     const child = spawn(...runner(['--variant', 'baseline', '--agents', 'claude', '--cases', 'add-version-flag', '--approve-harness']))
     const exited = new Promise((resolve) => child.on('exit', (code, sig) => resolve({ code, signal: sig })))
     const agentPid = await up
@@ -633,6 +1085,8 @@ setTimeout(() => {}, 60_000)`)
 
       expect(await exited).toEqual({ code: 128 + constants.signals[signal], signal: null })
       await gone
+      expect(readdirSync(join(tmp, 'profile', 'projects'))).toEqual([])
+      expect(readdirSync(join(tmp, 'runs', 'dial-skill-eval'))).toEqual([])
     } finally {
       try { process.kill(agentPid, 'SIGKILL') } catch { /* gone, as it should be */ }
     }
@@ -644,7 +1098,7 @@ setTimeout(() => {}, 60_000)`)
     const out = runEval(['--variant', 'baseline', '--agents', 'claude', '--cases', 'api-key-missing', '--approve-harness'])
 
     expect(out.status, out.stderr).toBe(0)
-    expect(jsonl('baseline', 'results.jsonl')).toMatchObject([{ prompt_id: 'api-key-missing.claude', status: 'truncated', grade: {} }])
-    expect(callsMade()).toEqual(['agent'])
+    expect(jsonl('baseline', 'results.jsonl')).toMatchObject([{ prompt_id: 'api-key-missing.claude.clean', status: 'truncated', grade: {} }])
+    expect(callsMade()).toEqual(['probe', 'agent'])
   })
 })

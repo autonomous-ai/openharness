@@ -8,7 +8,7 @@ import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { parseClaudeStream, type RunResult } from './parse.js'
-import type { AgentKind, Scenario } from './scenarios.js'
+import type { AgentKind, Condition, Scenario } from './scenarios.js'
 import type { Staged } from './stage.js'
 
 /** `timeoutMs` 0 leaves the run unbounded. */
@@ -58,7 +58,13 @@ const KILL_GRACE_MS = 10_000
 // Listing every process's working folder takes well under a second; a stuck lsof fails the run rather than hold it.
 const LSOF_TIMEOUT_MS = 10_000
 
-export function claudeArgs(cfg: Omit<AgentConfig, 'timeoutMs'>, st: Pick<Staged, 'root' | 'origin'>, prompt: string): string[] {
+/** The run's own settings. name-only drops the dial's description here, in --settings, which the agent never sees: a
+ *  staged settings file would sit in the repo it reads. */
+export function settingsFor(condition: Condition): object {
+  return condition === 'name-only' ? { ...CLAUDE_SANDBOX, skillOverrides: { dial: 'name-only' } } : CLAUDE_SANDBOX
+}
+
+export function claudeArgs(cfg: Omit<AgentConfig, 'timeoutMs'>, st: Pick<Staged, 'root' | 'origin' | 'condition'>, prompt: string): string[] {
   return [
     '-p', prompt,
     '--output-format', 'stream-json', '--verbose',
@@ -71,7 +77,7 @@ export function claudeArgs(cfg: Omit<AgentConfig, 'timeoutMs'>, st: Pick<Staged,
     // The fake harness records rings in rec/, and TMPDIR (npm's cache with it) is tmp/: both outside the repo. A push
     // writes its objects into the origin before the origin's hooks run, so a read-only origin fails every push there.
     '--add-dir', join(st.root, 'rec'), join(st.root, 'tmp'), ...(st.origin ? [st.origin] : []),
-    '--settings', JSON.stringify(CLAUDE_SANDBOX),
+    '--settings', JSON.stringify(settingsFor(st.condition)),
   ]
 }
 
@@ -119,10 +125,11 @@ async function runClaude(s: Scenario, st: Staged, cfg: AgentConfig): Promise<Run
   if (!cfg.claudeBin) throw new Error('claude was not found on PATH when the eval started')
   const exit = await spawnGroup(cfg.claudeBin, claudeArgs(cfg, st, s.prompt), st, cfg.timeoutMs)
   const run = parseClaudeStream(exit.stdout)
-  // A failed run was billed for what it did: its error carries what the stream reported to the errors sidecar. A stream
-  // cut before its result event has the model, and zero usage, which only that event gives.
-  const spent = (error: Error): Error => Object.assign(error, { model: run.model, usage: run.usage })
-  if (exit.timedOut) throw spent(failure(`claude ran past ${cfg.timeoutMs / 1000} s`, 'timeout'))
+  // A failed run was billed for what it did: its error carries what the stream reported to the errors sidecar, the
+  // usage of the messages it printed when it was cut before its result event (lib/parse.ts), and that it was cut.
+  const spent = (error: Error): Error => Object.assign(error, { model: run.model, usage: run.usage, cut: run.cut })
+  // Whole seconds: an attempt's bound is what is left of the agent's share of its case, rarely a whole number.
+  if (exit.timedOut) throw spent(failure(`claude ran past ${Math.round(cfg.timeoutMs / 1000)} s`, 'timeout'))
   // Worded without "rate limit": the runner retries those, and an account limit lasts hours.
   if (run.limited) throw spent(failure('the Claude account limit is reached', 'account_limited'))
   // A run cut at --max-turns is a result; any other failed exit is an error, never a silent run.

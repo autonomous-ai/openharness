@@ -1,0 +1,6 @@
+{
+  "name": "@acme/geo",
+  "version": "0.7.2",
+  "type": "module",
+  "main": "src/index.js"
+}

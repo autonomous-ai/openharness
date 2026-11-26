@@ -1,0 +1,9 @@
+{
+  "name": "job-scheduler",
+  "version": "0.9.4",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

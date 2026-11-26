@@ -58,6 +58,22 @@ export function caseId(scenarioId: string, agent: AgentKind): string {
   return `${scenarioId}.${agent}`
 }
 
+/** What the agent's session holds beside the dial: nothing (`clean`), the crowd's skills and CLAUDE.md (`crowd`), or
+ *  the crowd with the dial listed by its name alone (`name-only`). */
+export type Condition = 'clean' | 'crowd' | 'name-only'
+
+export const CONDITIONS: readonly Condition[] = ['clean', 'crowd', 'name-only']
+
+export function runId(scenarioId: string, agent: AgentKind, condition: Condition): string {
+  return `${caseId(scenarioId, agent)}.${condition}`
+}
+
+/** The case id a run's split is kept under in _state.json: one split for a case in every condition. */
+export function splitIdOf(id: string): string {
+  const dot = id.lastIndexOf('.')
+  return dot !== -1 && (CONDITIONS as readonly string[]).includes(id.slice(dot + 1)) ? id.slice(0, dot) : id
+}
+
 function parse(id: string, dir: string): Scenario {
   if (!ID.test(id)) throw new Error(`id must match ${ID}`)
   const repo = join(dir, 'repo')

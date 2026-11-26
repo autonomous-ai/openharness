@@ -1,0 +1,8 @@
+customer_id,name,email,plan,signed_up,vat_id
+C-1002,Hollis Brandt,hollis.brandt@example.invalid,business,2023-02-14,DE000000002
+C-1007,Marisol Okafor,m.okafor@example.invalid,business,2023-06-01,NL000000007B01
+C-1009,Teodor Lind,teodor@example.invalid,starter,2024-01-19,
+C-1013,Priya Raman,priya.raman@example.invalid,business,2024-04-02,
+C-1016,Agnes Vidal,agnes.vidal@example.invalid,starter,2024-11-27,FR00000000016
+C-1018,Ruben Achterberg,ruben.a@example.invalid,starter,2025-07-03,
+C-1021,Lena Sorvino,lena.sorvino@example.invalid,starter,2025-09-12,

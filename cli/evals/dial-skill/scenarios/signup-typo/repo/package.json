@@ -1,0 +1,9 @@
+{
+  "name": "accounts-web",
+  "version": "2.7.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

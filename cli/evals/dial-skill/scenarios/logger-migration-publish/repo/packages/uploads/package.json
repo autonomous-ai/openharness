@@ -1,0 +1,6 @@
+{
+  "name": "@acme/uploads",
+  "version": "2.0.0",
+  "type": "module",
+  "main": "src/index.js"
+}

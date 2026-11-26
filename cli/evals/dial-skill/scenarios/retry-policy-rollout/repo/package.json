@@ -1,0 +1,9 @@
+{
+  "name": "shop-api-clients",
+  "version": "3.2.0",
+  "description": "Clients for the shop's internal API.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

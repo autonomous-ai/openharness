@@ -1,0 +1,11 @@
+{
+  "name": "slugkit",
+  "version": "0.9.0",
+  "description": "Turns titles into URL slugs.",
+  "type": "module",
+  "main": "src/slug.js",
+  "scripts": {
+    "test": "node --test",
+    "release:check": "node scripts/release-check.js"
+  }
+}

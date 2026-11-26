@@ -52,6 +52,34 @@ describe('parseClaudeStream', () => {
     expect(run.limited).toBe(false)
   })
 
+  it("sums the main-thread messages' usage, each message once, when the stream has no result event, as a killed run's has none", () => {
+    const lines = sample.trimEnd().split('\n').slice(0, -1)
+    const sub = JSON.stringify({ type: 'assistant', parent_tool_use_id: 'toolu_sub',
+      message: { id: 'msg_sub', model: 'claude-opus-5-5', role: 'assistant', content: [], usage: { input_tokens: 1000, output_tokens: 1000 } } })
+
+    // Nine messages, four of them printed more than once. Output is counted as each message began streaming: a floor.
+    expect(parseClaudeStream([...lines, sub].join('\n')).usage).toEqual({ input_tokens: 20, output_tokens: 475, cache_read_input_tokens: 225042,
+      cache_creation_input_tokens: 16204, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 16204 } })
+  })
+
+  it('marks a run with no result event as cut, its usage a floor, and a run that has one as not', () => {
+    expect(parseClaudeStream(sample.trimEnd().split('\n').slice(0, -1).join('\n')).cut).toBe(true)
+    expect(parseClaudeStream(sample).cut).toBeUndefined()
+  })
+
+  it('reads the session id, the skill names and the Claude Code version from the init event', () => {
+    const { init } = parseClaudeStream(sample)
+    expect(init?.session_id).toBe('33e45fcd-6340-4955-9475-b6a75cd2be40')
+    expect(init?.skills).toHaveLength(20)
+    expect(init?.skills).toContain('dial')
+    expect(init?.claude_version).toBe('2.1.326')
+  })
+
+  it('leaves init out when the stream has none', () => {
+    const lines = sample.trimEnd().split('\n').filter((line) => JSON.parse(line).subtype !== 'init')
+    expect(parseClaudeStream(lines.join('\n'))).not.toHaveProperty('init')
+  })
+
   it('takes the model that served the main thread, not the one init echoes from --model', () => {
     expect(parseClaudeStream(servedBy(() => 'claude-sonnet-5')).model).toBe('claude-sonnet-5')
   })

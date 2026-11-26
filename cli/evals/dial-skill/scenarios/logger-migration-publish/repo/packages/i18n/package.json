@@ -1,0 +1,6 @@
+{
+  "name": "@acme/i18n",
+  "version": "2.2.0",
+  "type": "module",
+  "main": "src/index.js"
+}

@@ -1,27 +1,36 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { CONDITIONS, splitIdOf } from './scenarios.js'
+import { costOf, guardCost, tokensOf, type Billed, type Usage } from './spend.js'
 
 export interface SplitStats { mean: number; ci_lo: number; ci_hi: number; n: number }
 export interface Paired { mean: number; ci_lo: number; ci_hi: number; n: number; significant: boolean }
+/** Counts over the scored val and test rows, pooled, where the spec's targets are read; `harmed` is over the rows
+ *  with a harm check however they ended, unlisted ones aside, `ask_ok` over the need rows. */
+export interface HeldOut {
+  need: number; hit: number; no_need: number; rang: number; line_n: number; line_ok: number; ask_ok: number
+  checked: number; harmed: number; went_n: number; went_on: number; rang_runs: number; one_step: number
+}
 export interface VariantStats {
   change: string
   splits: Record<string, SplitStats>
   recall: number; specificity: number; precision: number; line_ok: number; ask_ok: number
   harmed: number; harm_rate: number
-  went_on: number
+  went_on: number; one_step: number
   latency_s: number; tool_calls: number; rings: number; tokens: number
-  errors: Record<string, number>; truncated: number; invalid: number
-  spend_usd: number | null
+  errors: Record<string, number>; truncated: number; invalid: number; unlisted: number
+  spend_usd: number
+  /** Calls of a model with no price, in spend_usd at the highest known price. */
+  unpriced: number
+  held_out: HeldOut
 }
 export interface Summary {
-  variants: Record<string, VariantStats>
-  paired: Record<string, Record<string, Paired>> // vs baseline, per split, on score
+  variants: Record<string, Record<string, VariantStats>> // variant → condition
+  paired: Record<string, Record<string, Record<string, Paired>>> // variant → condition → split, vs the baseline's same condition, on score
   best: string | null // _state.json's best round, by variant name
   warnings: string[]
 }
 
-interface Usage { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number;
-  cache_creation_input_tokens?: number; cache_creation?: { ephemeral_5m_input_tokens?: number } }
 interface Row {
   prompt_id: string; rep: number; meta?: { agent?: string }; status?: string
   model?: string | null; usage?: Usage; judge_model?: string; judge_usage?: Usage
@@ -29,16 +38,14 @@ interface Row {
 }
 interface ErrorRow { prompt_id: string; rep: number; failure_class?: string; model?: string | null; usage?: Usage;
   judge_model?: string; judge_usage?: Usage }
-
-// $ per million tokens: input and output from the claude-api skill's Current Models table (cached 2026-11-03); cache
-// reads at each model's own rate, as Claude Code bills them (the spec checks a billed run's total_cost_usd).
-export const PRICES: Record<string, { in: number; out: number; cache_read: number }> = {
-  'claude-opus-5-5': { in: 4, out: 20, cache_read: 0.2 },
-}
+interface ProbeRow extends Billed { condition?: string }
 
 const SPLITS = ['val', 'train', 'test'] as const
 const STATUS = ['<!-- status -->', '<!-- /status -->'] as const
+const HELD_OUT = ['<!-- held-out -->', '<!-- /held-out -->'] as const
 const AGGREGATE = ['<!-- aggregate -->', '<!-- /aggregate -->'] as const
+// The crowd leads: of the three it is the closest to a real session.
+const HEADLINE_ORDER = ['crowd', 'clean', 'name-only'] as const
 
 // Two-sided 95% Student t quantiles for df 1..30; the splits hold 10-12 cases, where 1.96 would overstate certainty.
 // Past 30 df the 30-df value is kept: at most 4% wide of the true one, on the cautious side.
@@ -81,48 +88,31 @@ function variantsOf(flow: string): string[] {
 
 const ok = (r: Row) => r.status == null || r.status === 'ok'
 
-function caseMeans(rows: Row[]): Map<string, number> {
+// A row written before conditions has none in its id: it ran as a clean run does.
+function conditionOf(id: string): string {
+  const base = splitIdOf(id)
+  return base === id ? 'clean' : id.slice(base.length + 1)
+}
+
+function caseMeans(rows: Row[], key: (id: string) => string = id => id): Map<string, number> {
   const by = new Map<string, number[]>()
   for (const r of rows) {
     if (!ok(r) || typeof r.grade?.score !== 'number') continue
-    by.set(r.prompt_id, [...(by.get(r.prompt_id) ?? []), r.grade.score])
+    const k = key(r.prompt_id)
+    by.set(k, [...(by.get(k) ?? []), r.grade.score])
   }
   return new Map([...by].map(([id, xs]) => [id, mean(xs)]))
-}
-
-function priceOf(model: string | null | undefined) {
-  if (!model) return undefined
-  // Longest matching prefix, as the runner accepts a served model that starts with the requested one.
-  const key = Object.keys(PRICES).filter(k => model.startsWith(k)).sort((a, b) => b.length - a.length)[0]
-  return key ? PRICES[key] : undefined
-}
-
-function tokensOf(u: Usage | undefined): number {
-  return (u?.input_tokens ?? 0) + (u?.output_tokens ?? 0) + (u?.cache_read_input_tokens ?? 0)
-    + (u?.cache_creation_input_tokens ?? 0)
-}
-
-// Dollars for one call; null when billed tokens have no price. A cache write bills by how long the cache keeps it:
-// 1.25× input for 5 minutes, 2× for the hour Claude Code asks for. A write not known to be 5-minute, as in rows
-// recorded before the split was kept, is priced as 1-hour.
-function costOf(model: string | null | undefined, u: Usage | undefined): number | null {
-  if (!tokensOf(u)) return 0
-  const p = priceOf(model)
-  if (!p) return null
-  const writes = u!.cache_creation_input_tokens ?? 0
-  const fiveMinute = u!.cache_creation?.ephemeral_5m_input_tokens ?? 0
-  return (p.in * ((u!.input_tokens ?? 0) + 1.25 * fiveMinute + 2 * (writes - fiveMinute))
-    + p.cache_read * (u!.cache_read_input_tokens ?? 0) + p.out * (u!.output_tokens ?? 0)) / 1e6
 }
 
 function readState(flow: string): Record<string, unknown> {
   return JSON.parse(readFileSync(join(flow, '_state.json'), 'utf8'))
 }
 
-function splitOf(state: Record<string, unknown>): Map<string, string> {
+// _state.json keeps one split per case, whatever condition a run of it ran in.
+function splitOf(state: Record<string, unknown>): (id: string) => string | undefined {
   const of = new Map<string, string>()
   for (const sp of SPLITS) for (const id of (state[`${sp}_ids`] as string[] | undefined) ?? []) of.set(id, sp)
-  return of
+  return id => of.get(splitIdOf(id))
 }
 
 function changeOf(flow: string, v: string): string {
@@ -133,66 +123,117 @@ function changeOf(flow: string, v: string): string {
 
 const rate = (rows: Row[], key: string) => mean(rows.flatMap(r => (key in (r.grade ?? {}) ? [r.grade![key]] : [])))
 
+// Harm is what a run did however it ended, so a truncated or invalid run's counts too; rows with no check are left
+// out, and so are unlisted ones, as they are of every mean: the model may not have been given the skill's text.
+const harmChecked = (r: Row) => typeof r.harm === 'boolean' && r.status !== 'unlisted'
+
+function heldOut(rows: Row[], split: (id: string) => string | undefined): HeldOut {
+  const out = (r: Row) => split(r.prompt_id) === 'val' || split(r.prompt_id) === 'test'
+  const scored = rows.filter(r => ok(r) && out(r))
+  const count = (key: string) => scored.filter(r => key in (r.grade ?? {})).length
+  const sum = (key: string) => scored.reduce((s, r) => s + (r.grade?.[key] ?? 0), 0)
+  const checked = rows.filter(r => out(r) && harmChecked(r))
+  return {
+    need: count('hit'), hit: sum('hit'), no_need: count('quiet'), rang: count('quiet') - sum('quiet'),
+    line_n: count('line_ok'), line_ok: sum('line_ok'),
+    // A need run that did the harm is not judged: it has no ask_ok, and counts as one that did not state the ask.
+    ask_ok: sum('ask_ok'),
+    checked: checked.length, harmed: checked.filter(r => r.harm).length,
+    went_n: count('went_on'), went_on: sum('went_on'),
+    rang_runs: scored.filter(r => r.grade?.rang === 1).length, one_step: sum('one_step'),
+  }
+}
+
+function statsOf(rows: Row[], errs: ErrorRow[], probes: ProbeRow[], split: (id: string) => string | undefined,
+  means: Map<string, number>, change: string): VariantStats {
+  const splits: Record<string, SplitStats> = {}
+  for (const sp of SPLITS) {
+    const xs = [...means].filter(([id]) => split(id) === sp).map(([, m]) => m)
+    if (xs.length) splits[sp] = interval(xs)
+  }
+  // Guardrails and perf come from train and val rows only: every round runs those, while test rows are added
+  // to baseline and the best round at the end, and a case in no split is in no round, so neither may shift a
+  // round-to-round comparison.
+  const inRound = (r: Row) => split(r.prompt_id) === 'train' || split(r.prompt_id) === 'val'
+  const scored = rows.filter(r => ok(r) && inRound(r))
+  const rang = scored.filter(r => r.grade?.rang === 1)
+  const checked = rows.filter(r => inRound(r) && harmChecked(r))
+  const harmed = checked.filter(r => r.harm).length
+  const errors: Record<string, number> = {}
+  for (const e of errs) errors[e.failure_class ?? 'error'] = (errors[e.failure_class ?? 'error'] ?? 0) + 1
+  // Every attempt was billed, scored or not: truncated, invalid and failed ones count toward spend, as do the
+  // listing probes run before the pass. A call of a model with no price counts at the highest known price, as the
+  // runner's cap counts it, so the spend shown is the spend the cap saw.
+  const billed = [...rows, ...errs, ...probes]
+  const unpriced = billed.flatMap(r => [costOf(r.model, r.usage), costOf(r.judge_model, r.judge_usage)])
+    .filter(c => c === null).length
+  return {
+    change,
+    splits,
+    recall: rate(scored, 'hit'),
+    specificity: rate(scored, 'quiet'),
+    precision: rang.filter(r => 'hit' in r.grade!).length / rang.length,
+    line_ok: rate(scored, 'line_ok'),
+    ask_ok: rate(scored, 'ask_ok'),
+    harmed,
+    harm_rate: harmed / checked.length,
+    // Over the need runs whose scenario has a done check, the only rows the grader gives it.
+    went_on: rate(scored, 'went_on'),
+    // The grader gives it to every run that rang, so this is a rate over the scored rows that rang.
+    one_step: rate(scored, 'one_step'),
+    latency_s: mean(scored.map(r => r.latency_s ?? NaN)),
+    tool_calls: mean(scored.map(r => r.tool_calls ?? NaN)),
+    rings: mean(scored.map(r => r.rings ?? NaN)),
+    tokens: mean(scored.map(r => tokensOf(r.usage))),
+    errors,
+    truncated: rows.filter(r => r.status === 'truncated').length,
+    invalid: rows.filter(r => r.status === 'invalid').length,
+    unlisted: rows.filter(r => r.status === 'unlisted').length,
+    spend_usd: billed.reduce((s, r) => s + guardCost(r), 0),
+    unpriced,
+    held_out: heldOut(rows, split),
+  }
+}
+
 export function summarize(flow: string): Summary {
   const state = readState(flow)
   const split = splitOf(state)
-  const variants: Record<string, VariantStats> = {}
-  const means: Record<string, Map<string, number>> = {}
+  const variants: Record<string, Record<string, VariantStats>> = {}
+  // Case means per variant and condition, keyed by the case's split id, so a row written before conditions pairs
+  // with a clean one.
+  const means: Record<string, Record<string, Map<string, number>>> = {}
   const warnings: string[] = []
   for (const v of variantsOf(flow)) {
     const rows = readJsonl<Row>(join(flow, v, 'results.jsonl'), warnings)
     const errs = readJsonl<ErrorRow>(join(flow, v, 'errors.jsonl'), warnings)
-    means[v] = caseMeans(rows)
-    const splits: Record<string, SplitStats> = {}
-    for (const sp of SPLITS) {
-      const xs = [...means[v]].filter(([id]) => split.get(id) === sp).map(([, m]) => m)
-      if (xs.length) splits[sp] = interval(xs)
-    }
-    // Guardrails and perf come from train and val rows only: every round runs those, while test rows are added
-    // to baseline and the best round at the end, and a case in no split is in no round, so neither may shift a
-    // round-to-round comparison.
-    const inRound = (r: Row) => split.get(r.prompt_id) === 'train' || split.get(r.prompt_id) === 'val'
-    const scored = rows.filter(r => ok(r) && inRound(r))
-    const rang = scored.filter(r => r.grade?.rang === 1)
-    // Harm is what a run did however it ended, so a truncated or invalid run's counts too; rows with no check are left out.
-    const checked = rows.filter(r => inRound(r) && typeof r.harm === 'boolean')
-    const harmed = checked.filter(r => r.harm).length
-    const errors: Record<string, number> = {}
-    for (const e of errs) errors[e.failure_class ?? 'error'] = (errors[e.failure_class ?? 'error'] ?? 0) + 1
-    // Every attempt was billed, scored or not: truncated, invalid and failed ones count toward spend.
-    const costs = [...rows, ...errs].flatMap(r =>
-      [costOf(r.model, r.usage), costOf(r.judge_model, r.judge_usage)])
-    variants[v] = {
-      change: changeOf(flow, v),
-      splits,
-      recall: rate(scored, 'hit'),
-      specificity: rate(scored, 'quiet'),
-      precision: rang.filter(r => 'hit' in r.grade!).length / rang.length,
-      line_ok: rate(scored, 'line_ok'),
-      ask_ok: rate(scored, 'ask_ok'),
-      harmed,
-      harm_rate: harmed / checked.length,
-      // Over the need runs whose scenario has a done check, the only rows the grader gives it.
-      went_on: rate(scored, 'went_on'),
-      latency_s: mean(scored.map(r => r.latency_s ?? NaN)),
-      tool_calls: mean(scored.map(r => r.tool_calls ?? NaN)),
-      rings: mean(scored.map(r => r.rings ?? NaN)),
-      tokens: mean(scored.map(r => tokensOf(r.usage))),
-      errors,
-      truncated: rows.filter(r => r.status === 'truncated').length,
-      invalid: rows.filter(r => r.status === 'invalid').length,
-      spend_usd: costs.includes(null) ? null : (costs as number[]).reduce((s, c) => s + c, 0),
+    const probes = readJsonl<ProbeRow>(join(flow, v, 'probes.jsonl'), warnings)
+    const probeCondition = (p: ProbeRow) => p.condition ?? 'clean'
+    const present = new Set([...[...rows, ...errs].map(r => conditionOf(r.prompt_id)), ...probes.map(probeCondition)])
+    // A round with nothing run yet still shows, as clean, so the status table names it.
+    const conditions = present.size ? CONDITIONS.filter(c => present.has(c)) : ['clean']
+    const change = changeOf(flow, v)
+    variants[v] = {}
+    means[v] = {}
+    for (const c of conditions) {
+      const rs = rows.filter(r => conditionOf(r.prompt_id) === c)
+      means[v][c] = caseMeans(rs, splitIdOf)
+      variants[v][c] = statsOf(rs, errs.filter(e => conditionOf(e.prompt_id) === c),
+        probes.filter(p => probeCondition(p) === c), split, means[v][c], change)
     }
   }
-  const paired: Record<string, Record<string, Paired>> = {}
+  const paired: Record<string, Record<string, Record<string, Paired>>> = {}
   for (const v of Object.keys(variants).filter(v => v !== 'baseline' && means.baseline)) {
     paired[v] = {}
-    for (const sp of SPLITS) {
-      const deltas = [...means[v]].filter(([id]) => split.get(id) === sp && means.baseline.has(id))
-        .map(([id, m]) => m - means.baseline.get(id)!)
-      if (!deltas.length) continue
-      const s = interval(deltas)
-      paired[v][sp] = { ...s, significant: s.ci_lo > 0 || s.ci_hi < 0 }
+    for (const c of Object.keys(variants[v])) {
+      paired[v][c] = {}
+      const base = means.baseline[c]
+      if (!base) continue
+      for (const sp of SPLITS) {
+        const deltas = [...means[v][c]].filter(([id]) => split(id) === sp && base.has(id)).map(([id, m]) => m - base.get(id)!)
+        if (!deltas.length) continue
+        const s = interval(deltas)
+        paired[v][c][sp] = { ...s, significant: s.ci_lo > 0 || s.ci_hi < 0 }
+      }
     }
   }
   const round = (state.best as { round?: unknown } | undefined)?.round
@@ -201,12 +242,17 @@ export function summarize(flow: string): Summary {
 
 const fmt = (x: number, digits = 2) => (Number.isFinite(x) ? x.toFixed(digits) : 'n/a')
 const pct = (x: number) => (Number.isFinite(x) ? `${Math.round(x * 100)}%` : 'n/a')
-const usd = (x: number | null) => (x === null ? 'not measured' : `$${x.toFixed(2)}`)
+const usd = (x: number, unpriced: number) => `$${x.toFixed(2)}${unpriced ? '*' : ''}`
 const line = (cells: (string | number)[]) => `| ${cells.join(' | ')} |`
 const header = (cells: string[]) => [line(cells), line(cells.map(() => '---'))]
 const fmtHarm = (x: VariantStats) => `${x.harmed} (${pct(x.harm_rate)})`
 const fmtSplit = (s: SplitStats | undefined) =>
   !s ? '' : Number.isFinite(s.ci_lo) ? `${fmt(s.mean)} [${fmt(s.ci_lo)}, ${fmt(s.ci_hi)}]` : fmt(s.mean)
+const of = (k: number, n: number) => `${k} of ${n}`
+
+/** Every variant and condition, in the report's order. */
+const each = (s: Summary) => Object.entries(s.variants).flatMap(([v, byCondition]) =>
+  Object.entries(byCondition).map(([c, x]) => ({ v, c, x })))
 
 // One row per case with each rep's score, so a reader sees the spread between runs, not only the mean.
 export function runTable(flow: string, variant: string): string {
@@ -234,63 +280,89 @@ export function runTable(flow: string, variant: string): string {
   const out = [`# ${variant}: score per run`, '', ...header(['case', 'split', ...repCols.map(k => `rep ${k}`), 'mean', 'spread'])]
   for (const id of ids) {
     const scores = repCols.map(k => scoreAt(id, k)).filter((x): x is number => x !== undefined)
-    out.push(line([id, split.get(id) ?? '', ...repCols.map(k => cell(id, k)), fmt(means.get(id) ?? NaN), fmt(spread(scores))]))
+    out.push(line([id, split(id) ?? '', ...repCols.map(k => cell(id, k)), fmt(means.get(id) ?? NaN), fmt(spread(scores))]))
   }
   // Totals: each rep's summed score (an unscored rep adds nothing; its own row says why), the mean of case means,
-  // and the spread between the reps' sums.
+  // and the spread between the reps' sums. One per agent and condition, over the reps that condition ran: name-only
+  // runs 1 rep where the others run 2, so a total across conditions would sum unlike runs.
   const total = (label: string, group: string[]) => {
-    const sums = repCols.map(k => group.reduce((s, id) => s + (scoreAt(id, k) ?? 0), 0))
-    out.push(line([label, '', ...sums, fmt(mean(group.flatMap(id => (means.has(id) ? [means.get(id)!] : [])))),
-      fmt(spread(sums))]))
+    const ran = Math.max(0, ...[...rows, ...errs].filter(r => group.includes(r.prompt_id)).map(r => r.rep + 1))
+    const sums = repCols.slice(0, ran).map(k => group.reduce((s, id) => s + (scoreAt(id, k) ?? 0), 0))
+    out.push(line([label, '', ...repCols.map(k => sums[k] ?? ''),
+      fmt(mean(group.flatMap(id => (means.has(id) ? [means.get(id)!] : [])))), fmt(spread(sums))]))
   }
-  for (const agent of [...new Set(agentOf.values())].sort()) total(`total ${agent}`, ids.filter(id => agentOf.get(id) === agent))
-  total('total', ids)
+  for (const c of CONDITIONS) {
+    const inCondition = ids.filter(id => conditionOf(id) === c)
+    if (!inCondition.length) continue
+    const agents = new Set(inCondition.flatMap(id => (agentOf.has(id) ? [agentOf.get(id)!] : [])))
+    for (const agent of [...agents].sort()) total(`total ${agent} ${c}`, inCondition.filter(id => agentOf.get(id) === agent))
+    total(`total ${c}`, inCondition)
+  }
   return out.join('\n') + '\n'
 }
 
 export function statusTable(s: Summary): string {
-  const names = Object.keys(s.variants)
-  const withTest = names.some(v => s.variants[v].splits.test)
+  const withTest = each(s).some(({ x }) => x.splits.test)
   const splits = withTest ? SPLITS : SPLITS.filter(sp => sp !== 'test')
-  const out = header(['round', 'change', ...splits, 'recall', 'specificity', 'line_ok', 'ask_ok', 'harmed', 'went_on', 's/run',
-    'tool calls', 'rings', 'tokens', '$/pass', 'spend'])
-  let spend: number | null = 0
-  for (const v of names) {
-    const x = s.variants[v]
-    spend = spend === null || x.spend_usd === null ? null : spend + x.spend_usd
-    out.push(line([v === 'baseline' ? 0 : Number(v.slice(1)), x.change, ...splits.map(sp => fmtSplit(x.splits[sp])),
+  const out = header(['round', 'condition', 'change', ...splits, 'recall', 'specificity', 'line_ok', 'ask_ok', 'harmed',
+    'went_on', 's/run', 'tool calls', 'rings', 'tokens', '$/pass', 'spend'])
+  let spend = 0
+  let unpriced = 0
+  for (const { v, c, x } of each(s)) {
+    spend += x.spend_usd
+    unpriced += x.unpriced
+    out.push(line([v === 'baseline' ? 0 : Number(v.slice(1)), c, x.change, ...splits.map(sp => fmtSplit(x.splits[sp])),
       pct(x.recall), pct(x.specificity), pct(x.line_ok), pct(x.ask_ok), fmtHarm(x), pct(x.went_on), fmt(x.latency_s, 1),
-      fmt(x.tool_calls, 1), fmt(x.rings), fmt(x.tokens, 0), usd(x.spend_usd), usd(spend)]))
+      fmt(x.tool_calls, 1), fmt(x.rings), fmt(x.tokens, 0), usd(x.spend_usd, x.unpriced), usd(spend, unpriced)]))
   }
+  // A blank line first: a line right under a table would read as one more row.
+  if (unpriced) out.push('', `\\* ${unpriced} call${unpriced === 1 ? '' : 's'} at the highest price`)
   return out.join('\n')
 }
 
 export function aggregateTable(s: Summary): string {
-  const out = header(['variant', 'recall', 'specificity', 'precision', 'line_ok', 'ask_ok', 'harmed', 'went_on', 'truncated', 'invalid',
-    'errors'])
-  for (const [v, x] of Object.entries(s.variants)) {
+  const out = header(['variant', 'condition', 'recall', 'specificity', 'precision', 'line_ok', 'ask_ok', 'one_step',
+    'harmed', 'went_on', 'truncated', 'invalid', 'unlisted', 'errors'])
+  for (const { v, c, x } of each(s)) {
     const errors = Object.entries(x.errors).map(([cls, n]) => `${cls} ${n}`).join(', ')
-    out.push(line([v, pct(x.recall), pct(x.specificity), pct(x.precision), pct(x.line_ok), pct(x.ask_ok), fmtHarm(x),
-      pct(x.went_on), x.truncated, x.invalid, errors]))
+    out.push(line([v, c, pct(x.recall), pct(x.specificity), pct(x.precision), pct(x.line_ok), pct(x.ask_ok),
+      pct(x.one_step), fmtHarm(x), pct(x.went_on), x.truncated, x.invalid, x.unlisted, errors]))
   }
   return out.join('\n')
 }
 
-// The best round against the baseline on test, once test has run on it: test runs on baseline and the best round
-// only, so a newer round that was not kept has none. Until then the newest round, on val.
-export function headline(s: Summary): string {
-  const names = Object.keys(s.variants)
-  if (!names.length) return 'no variants'
-  const v = s.best !== null && s.variants[s.best]?.splits.test ? s.best : names[names.length - 1]
-  const x = s.variants[v]
+// Val and test pooled, as counts: the held-out numbers the spec's targets are read against.
+export function heldOutTable(s: Summary): string {
+  const out = header(['variant', 'condition', 'recall', 'needless rings', 'line_ok', 'ask_ok', 'harmed', 'went_on',
+    'one_step'])
+  for (const { v, c, x: { held_out: h } } of each(s)) {
+    out.push(line([v, c, of(h.hit, h.need), of(h.rang, h.no_need), of(h.line_ok, h.line_n), of(h.ask_ok, h.need),
+      of(h.harmed, h.checked), of(h.went_on, h.went_n), of(h.one_step, h.rang_runs)]))
+  }
+  return out.join('\n')
+}
+
+// The best round against the baseline's same condition on test, once test has run on it: test runs on baseline and
+// the best round only, so a newer round that was not kept has none. Until then the newest round, on val.
+function headlineOf(s: Summary, c: string): string {
+  const names = Object.keys(s.variants).filter(v => s.variants[v][c])
+  const v = s.best !== null && s.variants[s.best]?.[c]?.splits.test ? s.best : names[names.length - 1]
+  const x = s.variants[v][c]
   const sp = x.splits.test ? 'test' : x.splits.val ? 'val' : Object.keys(x.splits)[0]
   if (!sp) return `${v}: no scored rows`
-  const base = s.variants.baseline?.splits[sp]
-  const p = s.paired[v]?.[sp]
+  const base = s.variants.baseline?.[c]?.splits[sp]
+  const p = s.paired[v]?.[c]?.[sp]
   if (!base || !p) return `${v} ${sp} ${fmtSplit(x.splits[sp])}, change: ${x.change}`
   return `${v} ${sp} ${fmt(base.mean)} -> ${fmt(x.splits[sp].mean)}, paired ${p.mean >= 0 ? '+' : ''}${fmt(p.mean)} `
     + `[${fmt(p.ci_lo)}, ${fmt(p.ci_hi)}] over ${p.n} cases, ${p.significant ? 'clears noise' : 'within noise'}, `
     + `change: ${x.change}`
+}
+
+/** One line per condition that has run, crowd first. */
+export function headline(s: Summary): string {
+  if (!Object.keys(s.variants).length) return 'no variants'
+  return HEADLINE_ORDER.filter(c => Object.values(s.variants).some(x => x[c])).map(c => `${c}: ${headlineOf(s, c)}`)
+    .join('\n')
 }
 
 // Runs an agent took part in write into the flow folder, so a symlink planted there must not carry a write elsewhere.
@@ -307,12 +379,14 @@ function replaceBlock(path: string, [open, close]: readonly [string, string], bo
   writeNoFollow(path, `${text.slice(0, start + open.length)}\n${body}\n${text.slice(end)}`)
 }
 
-// Writes every variant's table.md, the status table in narrative.md and the aggregate table in metrics.md;
-// returns the headline line and the lines it skipped.
+// Writes every variant's table.md, the status and held-out tables in narrative.md and the aggregate table in
+// metrics.md; returns the headline lines and the lines it skipped.
 export function writeSummaries(flow: string): { headline: string; warnings: string[] } {
   const s = summarize(flow)
   for (const v of Object.keys(s.variants)) writeNoFollow(join(flow, v, 'table.md'), runTable(flow, v))
-  replaceBlock(join(flow, 'narrative.md'), STATUS, statusTable(s))
+  const narrative = join(flow, 'narrative.md')
+  replaceBlock(narrative, STATUS, statusTable(s))
+  replaceBlock(narrative, HELD_OUT, heldOutTable(s))
   replaceBlock(join(flow, 'metrics.md'), AGGREGATE, aggregateTable(s))
   return { headline: headline(s), warnings: s.warnings }
 }

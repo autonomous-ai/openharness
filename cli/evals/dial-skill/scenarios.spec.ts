@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { AGENT_CONFIG, runAgent } from './lib/agents.js'
-import { caseId, loadScenarios } from './lib/scenarios.js'
+import { caseId, loadScenarios, runId, splitIdOf } from './lib/scenarios.js'
 import { readRings, stage, unstage } from './lib/stage.js'
 
 let root: string
@@ -167,6 +167,14 @@ describe('the committed scenarios', () => {
     }
   })
 
+  // The stage puts the crowd's CLAUDE.md and skills there, and a repo's own would reach every condition, clean included.
+  it('hold no CLAUDE.md or .claude/ in any repo', () => {
+    for (const s of loadScenarios()) {
+      expect(existsSync(join(s.dir, 'repo', 'CLAUDE.md')), s.id).toBe(false)
+      expect(existsSync(join(s.dir, 'repo', '.claude')), s.id).toBe(false)
+    }
+  })
+
   it('give every need scenario its expected state, and no no-need scenario one', () => {
     for (const s of loadScenarios()) {
       if (s.need === 'need') expect(['waiting', 'proceeding'], s.id).toContain(s.expect)
@@ -194,5 +202,15 @@ describe('the committed scenarios', () => {
 describe('caseId', () => {
   it('joins the scenario id and the agent', () => {
     expect(caseId('a', 'claude')).toBe('a.claude')
+  })
+})
+
+describe('runId', () => {
+  it('joins the case id and the condition, and splitIdOf takes it off', () => {
+    expect(runId('a', 'claude', 'crowd')).toBe('a.claude.crowd')
+    expect(splitIdOf('a.claude.name-only')).toBe('a.claude')
+    expect(splitIdOf(runId('a', 'oracle', 'clean'))).toBe('a.oracle')
+    expect(splitIdOf('a.claude')).toBe('a.claude')
+    expect(splitIdOf('a.claude.other')).toBe('a.claude.other')
   })
 })

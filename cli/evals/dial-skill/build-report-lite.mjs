@@ -7,8 +7,9 @@
 // Reads the same on-disk layout as build-report.mjs (baseline/, v<N>/,
 // results.jsonl, errors.jsonl, change.md, summary.json, traces/, _state.json)
 // and derives the same numbers: per-variant mean of the primary metric over
-// status-ok rows, per-case means, split (train/val/test) from _state.json,
-// failed-attempt counts from errors.jsonl. It also writes
+// status-ok rows (here per condition too: clean, crowd, name-only), per-case
+// means, split (train/val/test) from _state.json, failed-attempt counts from
+// errors.jsonl. It also writes
 // trajectory/scores.tsv exactly as the full builder does, so hillclimb's
 // per-round bookkeeping is identical whichever builder ran.
 //
@@ -187,17 +188,24 @@ function loadRows(p, warnings, dir) {
   return byId;
 }
 
+// A case id is <scenario>.<agent>.<condition>; _state.json lists splits by
+// <scenario>.<agent>, and an id written before conditions ran as a clean run does.
+const CONDITIONS = ['clean', 'crowd', 'name-only'];
+const CONDITION = /\.(clean|crowd|name-only)$/;
+const conditionOf = pid => CONDITION.exec(pid)?.[1] ?? 'clean';
+
+// Per condition, as the variant table is.
 function countErrors(vdir) {
-  let total = 0;
-  const byClass = Object.create(null);
+  const byCondition = Object.create(null);
   for (const line of readText(join(vdir, 'errors.jsonl')).split('\n')) {
     if (!line.trim()) continue;
     let e; try { e = JSON.parse(line); } catch { continue; }
-    total++;
+    const n = (byCondition[conditionOf(String(e?.prompt_id ?? ''))] ||= { total: 0, byClass: Object.create(null) });
+    n.total++;
     const c = String(e?.failure_class ?? 'error');
-    byClass[c] = (byClass[c] || 0) + 1;
+    n.byClass[c] = (n.byClass[c] || 0) + 1;
   }
-  return { total, byClass };
+  return byCondition;
 }
 
 // Inferred metrics, mirroring the full builder's inferMetrics: any
@@ -354,17 +362,25 @@ function build(flowArg) {
         }).filter(Boolean),
       };
     }
-    return { id: pid, split: splitOf[pid] || '', tags, prompt: String(first.prompt ?? ''), per };
+    const split = splitOf[pid] || splitOf[pid.replace(CONDITION, '')] || '';
+    return { id: pid, split, condition: conditionOf(pid), tags, prompt: String(first.prompt ?? ''), per };
   });
 
-  // Per-variant aggregate: mean over cases that have a value, per split.
+  // Aggregate per variant and condition, each a mean over cases that have a
+  // value, per split: a crowd run is not a clean one, and name-only runs other
+  // cases at another rep count, so one mean across them would mix unlike runs.
   const agg = {};
+  const m = xs => (xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : null);
   for (const v of variants) {
-    const all = cases.map(c => c.per[v].mean).filter(isNum);
-    const test = cases.filter(c => c.split === 'test').map(c => c.per[v].mean).filter(isNum);
-    const m = xs => (xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : null);
-    agg[v] = { all: m(all), n: all.length, test: m(test), nTest: test.length,
-      truncated: cases.reduce((s, c) => s + c.per[v].truncated, 0) };
+    agg[v] = {};
+    for (const cond of CONDITIONS) {
+      const ran = cases.filter(c => c.condition === cond && rows[v][c.id]);
+      if (!ran.length && !header[v].errors[cond]) continue;
+      const all = ran.map(c => c.per[v].mean).filter(isNum);
+      const test = ran.filter(c => c.split === 'test').map(c => c.per[v].mean).filter(isNum);
+      agg[v][cond] = { all: m(all), n: all.length, test: m(test), nTest: test.length,
+        truncated: ran.reduce((s, c) => s + c.per[v].truncated, 0) };
+    }
   }
 
   // trajectory/scores.tsv - same shape as the full builder.
@@ -391,20 +407,20 @@ function build(flowArg) {
 
 function render({ flow, variants, header, agg, cases, primary, metrics, warnings, best }) {
   const hasSplit = cases.some(c => c.split);
-  const hasTest = variants.some(v => agg[v].nTest > 0);
+  const hasTest = variants.some(v => Object.values(agg[v]).some(a => a.nTest > 0));
   const th = (label, key) => '<th data-k="' + esc(key) + '">' + esc(label) + '</th>';
 
-  const variantRows = variants.map(v => {
-    const h = header[v], a = agg[v];
-    const err = h.errors.total
-      ? h.errors.total + ' (' + Object.entries(h.errors.byClass).map(([k, n]) => esc(k) + ' ' + n).join(', ') + ')'
+  const variantRows = variants.flatMap(v => Object.entries(agg[v]).map(([cond, a]) => {
+    const h = header[v], e = h.errors[cond];
+    const err = e
+      ? e.total + ' (' + Object.entries(e.byClass).map(([k, n]) => esc(k) + ' ' + n).join(', ') + ')'
       : '0';
     return '<tr' + (best === v ? ' class="best"' : '') + '><td>' + esc(v) + (best === v ? ' <span class="pill">best</span>' : '') + '</td>'
-      + '<td>' + esc(h.change) + '</td><td>' + esc(h.model) + '</td>'
+      + '<td>' + esc(cond) + '</td><td>' + esc(h.change) + '</td><td>' + esc(h.model) + '</td>'
       + '<td class="num">' + fmt(a.all) + '</td><td class="num">' + a.n + '</td>'
       + (hasTest ? '<td class="num">' + fmt(a.test) + '</td><td class="num">' + a.nTest + '</td>' : '')
       + '<td class="num">' + a.truncated + '</td><td>' + err + '</td></tr>';
-  }).join('\n');
+  })).join('\n');
 
   const caseRows = cases.map(c => {
     const cells = variants.map(v => {
@@ -436,7 +452,7 @@ function render({ flow, variants, header, agg, cases, primary, metrics, warnings
     + (metrics.length > 1 ? ' (also: ' + metrics.filter(m => m !== primary).map(esc).join(', ') + ')' : '')
     + ' &middot; generated ' + new Date().toISOString().slice(0, 19).replace('T', ' ') + ' UTC'
     + ' &middot; lite report (no transcripts inlined; click rep links)</p></header>'
-    + '<section><h2>Variants</h2><table><thead><tr>' + th('variant', 's') + th('change', 's') + th('model', 's')
+    + '<section><h2>Variants</h2><table><thead><tr>' + th('variant', 's') + th('condition', 's') + th('change', 's') + th('model', 's')
     + th('mean ' + primary, 'n') + th('cases', 'n')
     + (hasTest ? th('test mean', 'n') + th('test cases', 'n') : '')
     + th('truncated', 'n') + th('failed attempts', 's') + '</tr></thead><tbody>' + variantRows + '</tbody></table></section>'
