@@ -1,14 +1,15 @@
 # Harness Device plugin for Claude Code
 
-Shows Claude Code's waiting permission prompts on the Harness round dial, and takes a prompt said at the dial, with
-Claude Code running in Orca, Ghostty or any terminal on this computer.
+Shows Claude Code's waiting prompts on the Harness round dial (a permission ask, a question form and a plan approval),
+and takes a prompt said at the dial, with Claude Code running in Orca, Ghostty or any terminal on this computer.
 
 ## What it does
 
 When Claude Code is about to ask the person to allow a tool call, its `PermissionRequest` hook (`hooks/asked`) tells
 the Harness daemon on this computer, and decides nothing. While a dial is attached, the dial shows the agent waiting,
-with one line of what it asks: "npm test · answer in Orca". Answer the prompt where it is, in the terminal or the app;
-the line goes once the agent goes on.
+with one line of what it asks: "npm test · answer in Orca". A question form shows its first question (else its header,
+else "A question"), and a plan approval the words "Plan ready to approve". Answer the prompt where it is, in the
+terminal or the app; the line goes once the agent goes on.
 
 Voice: a prompt said at the dial goes to the session as yours, idle or working. The plugin's mod (`hooks/device.js`)
 keeps one request open to the daemon, and the prompt comes back as its answer; Claude Code starts it once its turn is
@@ -35,7 +36,9 @@ the session.
 
 - It never answers a prompt: the dial approves nothing, and each prompt is answered in its own app.
 - Nothing leaves the computer: the hook and the mod talk only to the daemon on it, and the dial attached to it. The
-  dial sees the tool's name and one line of its input; the rest stays in the hook. The mod sends only the session's id.
+  dial sees the tool's name and one line: a command or path for a permission ask, the first question for a form, fixed
+  words for a plan approval, whose plan never leaves the hook. The rest stays in the hook. The mod sends only the
+  session's id.
 
 ## Install and remove
 
