@@ -243,7 +243,8 @@ terminals must move the dial (Diego's point 1, VS Code named in the request).
 - Zellij: no `nest`, its app's page only, as today.
 - The dial's default page (the app with the most known agents, when nothing is in front or picked) counts a nested agent
   on each of its pages, so it leans to a terminal app over tmux's or herdr's page. Accepted: the terminal's page holds
-  every agent the multiplexer's would there.
+  every agent the multiplexer's would there. An exact tie goes to tmux's or herdr's page, drawn between the two when
+  both tie: the client's app is then not in front, and the multiplexer's page holds its agents whichever app it is.
 
 ### Firmware
 

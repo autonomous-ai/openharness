@@ -205,6 +205,12 @@ export class AppFilter {
         tied = [app]
       } else if (n === most && n > 0) tied.push(app)
     }
+    // A tie with tmux's or herdr's page in it goes to that page, drawn between the two when both are in it. The
+    // terminal app's page already won above when that app was in front at the last settle (a front that has not settled
+    // never decides, so a Cmd-Tab cannot land the dial on an app it passed): a tie here means the client's app is not in
+    // front, and the multiplexer's page holds its agents whichever app their client is in. #4649 drew among them all.
+    const nests = tied.filter((app) => NEST_PAGES.has(app))
+    if (nests.length) tied = nests
     if (tied.length < 2) return tied[0]
     if (this.tieBreak && sameCounts(this.tieBreak.counts, by)) return this.tieBreak.app
     const app = tied[Math.floor(this.deps.random() * tied.length)]
