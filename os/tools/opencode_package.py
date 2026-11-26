@@ -5,8 +5,8 @@ The image's Arch snapshot is fixed (lock.json `arch_snapshot`), and its OpenCode
 2026/10/01 while Arch had 2.2.5. An image took the newest OpenCode Arch had when it was built
 (owner, 2026-11-03), until 0.1.18 took 2.4.1 that way: its answers moved out of its messages and its
 pickers were drawn anew, and Chat UI showed no answer and switched no model (MSI, 2026-11-26). The
-version is pinned in lock.json `opencode` since, and raised by a change that runs the OS checks with it
-(tests/opencode_daemon_guest.mjs drives it as the phone does). It comes through the build's own
+version is pinned in lock.json `opencode` since, and raised only after the new version was tested by hand on a
+machine, from the phone's Chat UI as well (owner, 2026-11-26). It comes through the build's own
 repository, which pacman reads before the snapshot's (build.sh). Only an image: an OS update never
 changes OpenCode (installer.py `IgnorePkg`), so a computer keeps the one its image brought until it is
 installed again.
