@@ -96,6 +96,25 @@ describe('AppFilter', () => {
     expect(random).toHaveBeenCalledTimes(2)
   })
 
+  it("tmux's or herdr's page wins a tie and draws nothing", () => {
+    const herdr = setup([0])
+    herdr.agents({ iterm2: 1, herdr: 1 })
+    expect(herdr.filter.shown()).toBe('herdr')
+    expect(herdr.random).not.toHaveBeenCalled()
+
+    const tmux = setup([0])
+    tmux.agents({ ghostty: 1, tmux: 1 })
+    expect(tmux.filter.shown()).toBe('tmux')
+    expect(tmux.random).not.toHaveBeenCalled()
+  })
+
+  it('a tie between tmux and herdr is drawn', () => {
+    const { filter, agents, random } = setup([0.9])
+    agents({ tmux: 1, herdr: 1 })
+    expect(filter.shown()).toBe('herdr')
+    expect(random).toHaveBeenCalledTimes(1)
+  })
+
   it('the app in front is shown after 1 s, not before', () => {
     const { filter, agents, causes } = setup()
     agents({ ghostty: 3, vscode: 1 })
