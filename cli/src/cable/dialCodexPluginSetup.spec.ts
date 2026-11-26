@@ -253,6 +253,7 @@ describe('createDialCodexPluginSetup', () => {
     const home = codexHome()
     r.state.homes = [home]
     await r.setup.pass()
+    r.trust.mockClear()
     withoutTrust(home)
     expect(contentHashes(home)).toEqual([])
 
@@ -268,6 +269,7 @@ describe('createDialCodexPluginSetup', () => {
     const home = codexHome()
     r.state.homes = [home]
     await r.setup.pass()
+    r.trust.mockClear()
     rmSync(installedRoot(home), { recursive: true, force: true })
     cpSync(join(r.marketplace, 'plugins', 'harness-device'), installedRoot(home), { recursive: true })
     writeFileSync(configFile(home), configOf(home).replaceAll(EXPECTED, `sha256:${'0'.repeat(64)}`))
@@ -278,11 +280,69 @@ describe('createDialCodexPluginSetup', () => {
     expect(r.looked).toHaveLength(1)
   })
 
+  it('a change to config.toml right after an install\'s trust write is checked', async () => {
+    const r = rig()
+    const home = codexHome()
+    r.state.homes = [home]
+    // Another writer drops the records while the pass reads dial-skill.json after the install.
+    let added = false
+    r.options.set(home, { on: (call) => { if (call === ADD) added = true } })
+    r.wanted.mockImplementation(() => {
+      if (added) withoutTrust(home)
+      added = false
+      return r.state.wanted
+    })
+    await r.setup.pass()
+    await r.setup.pass()
+    expect(contentHashes(home)).toEqual([EXPECTED, EXPECTED])
+  })
+
+  /** A rig whose re-check runs [then] once, right after the trust write, while [racing]. */
+  function racing(then: (home: string, root: string) => void) {
+    const race = { on: false }
+    const trust = vi.fn<DialCodexPluginSetupDeps['trust']>((home, root, expected) => {
+      const wrote = writePluginTrust(home, root, expected)
+      if (race.on) then(home, root)
+      race.on = false
+      return wrote
+    })
+    return { ...rig({ trust }), race }
+  }
+
+  it('a change to config.toml right after a re-check\'s write is checked at the next pass', async () => {
+    const r = racing((home) => withoutTrust(home))
+    const home = codexHome()
+    r.state.homes = [home]
+    await r.setup.pass()
+    withoutTrust(home)
+    r.race.on = true
+    await r.setup.pass()
+    await r.setup.pass()
+    expect(contentHashes(home)).toEqual([EXPECTED, EXPECTED])
+  })
+
+  it('a change to the installed folder right after a re-check\'s fingerprint is checked at the next pass', async () => {
+    // Codex reinstalls another copy just after the folder was fingerprinted.
+    const r = racing((home, root) => {
+      writeFileSync(join(root, 'README.md'), 'fixture, edited\n')
+      touch(home)
+    })
+    const home = codexHome()
+    r.state.homes = [home]
+    await r.setup.pass()
+    touch(home)
+    r.race.on = true
+    await r.setup.pass()
+    await r.setup.pass()
+    expect(r.counted).toEqual([['set up'], ['untrusted', 'differs']])
+  })
+
   it('a folder that differs is never trusted, and said once', async () => {
     const r = rig()
     const home = codexHome()
     r.state.homes = [home]
     await r.setup.pass()
+    r.trust.mockClear()
     const config = configOf(home)
     const readme = join(installedRoot(home), 'README.md')
     writeFileSync(readme, 'fixture, edited\n')
@@ -319,6 +379,7 @@ describe('createDialCodexPluginSetup', () => {
     expect(contentHashes(home)).toEqual([])
     expect(r.state.recorded).toEqual({ [home]: VERSION })
     expect(r.counted).toEqual([['set up'], ['untrusted', 'differs']])
+    r.trust.mockClear()
 
     touch(home)
     await r.setup.pass()
@@ -339,7 +400,7 @@ describe('createDialCodexPluginSetup', () => {
     }
     expect(r.fake(own).calls).toEqual(['--version', '--version', '--version'])
     expect(r.records.filter(([home]) => home === own)).toEqual([])
-    expect(r.trust).not.toHaveBeenCalled()
+    expect(r.trust.mock.calls.filter(([home]) => home === own)).toEqual([])
     expect(configOf(own)).toBe(before)
     expect(statSync(configFile(own)).mtimeMs).toBe(mtime)
     expect(existsSync(join(own, 'plugins'))).toBe(false)
@@ -352,6 +413,7 @@ describe('createDialCodexPluginSetup', () => {
     const home = codexHome()
     r.state.homes = [home]
     await r.setup.pass()
+    r.trust.mockClear()
     // The person removed Harness's marketplace and added GitHub's.
     writeFileSync(configFile(home), configOf(home).replace(/\[marketplaces\.openharness\][^[]*/, OWN_GIT))
     const asked = vi.spyOn(codexPlugin, 'codexMarketplace')
@@ -430,6 +492,7 @@ describe('createDialCodexPluginSetup', () => {
     const home = codexHome()
     r.state.homes = [home]
     await r.setup.pass()
+    trust.mockClear()
     changing = true
     withoutTrust(home)
     await r.setup.pass()
@@ -683,6 +746,7 @@ describe('createDialCodexPluginSetup', () => {
     const home = codexHome()
     r.state.homes = [home]
     await r.setup.pass()
+    r.trust.mockClear()
     r.state.homes = []
     withoutTrust(home)
     await r.setup.pass()
@@ -813,6 +877,7 @@ describe('createDialCodexPluginSetup', () => {
     const current = codexHome(), older = codexHome()
     r.state.homes = [current, older]
     await r.setup.pass()
+    r.trust.mockClear()
     r.state.recorded = { ...r.state.recorded, [older]: '0.6.58' }
     rmSync(current, { recursive: true, force: true })
     rmSync(older, { recursive: true, force: true })
@@ -888,6 +953,7 @@ describe('createDialCodexPluginSetup', () => {
     const home = codexHome()
     r.state.homes = [home]
     await r.setup.pass()
+    r.trust.mockClear()
     chmodSync(join(home, 'plugins'), 0o000)
     locked.push(join(home, 'plugins'))
     await r.setup.pass()
