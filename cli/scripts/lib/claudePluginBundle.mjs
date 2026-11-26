@@ -10,14 +10,16 @@ const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url))
 const SEGMENT = /^[A-Za-z0-9._-]+$/
 const MARKETPLACE = '.claude-plugin/marketplace.json'
 const MANIFEST = '.claude-plugin/plugin.json'
-/** What Claude Code installs of each plugin, by path inside it; a trailing `/` is a folder carried whole. Never the
- *  device plugin's tests, Codex's and Cursor's manifests, or Cursor's `mcp.json` (Claude Code reads `.mcp.json`). */
+/** What Claude Code installs of each plugin, by path inside it; a trailing `/` is a folder carried whole. The device
+ *  plugin's folder serves Codex too, so it carries Codex's manifest unstamped (Codex installs it as `local`); Claude
+ *  Code ignores it and `hooks/codex.json`. Never the device plugin's tests, the harness plugin's Codex and Cursor
+ *  manifests, or Cursor's `mcp.json` (Claude Code reads `.mcp.json`). */
 const PLUGINS = {
-  'plugins/harness-device': [MANIFEST, 'hooks/', 'README.md'],
+  'plugins/harness-device': [MANIFEST, '.codex-plugin/plugin.json', 'hooks/', 'README.md'],
   'plugins/harness': [MANIFEST, '.mcp.json', 'skills/', 'assets/', 'README.md'],
 }
-/** Claude Code runs the device plugin's hook by its path, so the folder must write it executable. */
-const EXECUTABLE = ['plugins/harness-device/hooks/asked']
+/** Claude Code and Codex run the device plugin's hooks by their paths, so the folder must write them executable. */
+const EXECUTABLE = ['plugins/harness-device/hooks/asked', 'plugins/harness-device/hooks/codex-asked']
 /** Fatal, so a file that is not UTF-8 fails the build rather than ship mangled; the BOM kept, as `readFileSync`'s
  *  `utf8` keeps it. */
 const UTF8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
