@@ -78,7 +78,7 @@ describe('the dial skill', () => {
   it('the skill is the needs-you text, byte for byte', () => {
     expect(DIAL_SKILL).toBe(`---
 name: dial
-description: "Before you end a turn that leaves the person something to decide, answer or do, ring their Harness dial: harness device notify \\"<the ask, one line>\\" --suggest \\"<your pick>\\" --waiting (or --proceeding when you go on with your pick). Not for finished work or progress."
+description: "Before you end a turn that leaves the person something to decide, answer or do, ring their Harness dial: harness device notify \\"[the ask, one line]\\" --suggest \\"[your pick]\\" --waiting (or --proceeding when you go on with your pick). Not for finished work or progress."
 ${MARKER}
 ---
 
@@ -111,6 +111,11 @@ working.
     expect(DIAL_SKILL.split('\n')[2]).toBe(`description: ${JSON.stringify(DIAL_SKILL_DESCRIPTION)}`)
     expect(DIAL_SKILL_DESCRIPTION).not.toMatch(/[\r\n]/)
     expect(JSON.stringify(DIAL_SKILL_DESCRIPTION).length).toBeLessThanOrEqual(600)
+  })
+
+  // Claude Code 2.1.332 HTML-escapes these in its skill listing, so the model would read &lt; and &gt; for them.
+  it('the description holds no <, > or &', () => {
+    expect(DIAL_SKILL_DESCRIPTION).not.toMatch(/[<>&]/)
   })
 
   // An agent rings from the listing alone only if the moment and the command survive an engine shortening the line.
