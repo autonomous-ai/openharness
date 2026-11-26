@@ -1,7 +1,7 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { CONDITIONS, splitIdOf } from './scenarios.js'
-import { costOf, tokensOf, type Billed, type Usage } from './spend.js'
+import { costOf, guardCost, tokensOf, type Billed, type Usage } from './spend.js'
 
 export interface SplitStats { mean: number; ci_lo: number; ci_hi: number; n: number }
 export interface Paired { mean: number; ci_lo: number; ci_hi: number; n: number; significant: boolean }
@@ -19,7 +19,9 @@ export interface VariantStats {
   went_on: number; one_step: number
   latency_s: number; tool_calls: number; rings: number; tokens: number
   errors: Record<string, number>; truncated: number; invalid: number; unlisted: number
-  spend_usd: number | null
+  spend_usd: number
+  /** Calls of a model with no price, in spend_usd at the highest known price. */
+  unpriced: number
   held_out: HeldOut
 }
 export interface Summary {
@@ -160,9 +162,11 @@ function statsOf(rows: Row[], errs: ErrorRow[], probes: ProbeRow[], split: (id: 
   const errors: Record<string, number> = {}
   for (const e of errs) errors[e.failure_class ?? 'error'] = (errors[e.failure_class ?? 'error'] ?? 0) + 1
   // Every attempt was billed, scored or not: truncated, invalid and failed ones count toward spend, as do the
-  // listing probes run before the pass.
-  const costs = [...rows, ...errs, ...probes].flatMap(r =>
-    [costOf(r.model, r.usage), costOf(r.judge_model, r.judge_usage)])
+  // listing probes run before the pass. A call of a model with no price counts at the highest known price, as the
+  // runner's cap counts it, so the spend shown is the spend the cap saw.
+  const billed = [...rows, ...errs, ...probes]
+  const unpriced = billed.flatMap(r => [costOf(r.model, r.usage), costOf(r.judge_model, r.judge_usage)])
+    .filter(c => c === null).length
   return {
     change,
     splits,
@@ -185,7 +189,8 @@ function statsOf(rows: Row[], errs: ErrorRow[], probes: ProbeRow[], split: (id: 
     truncated: rows.filter(r => r.status === 'truncated').length,
     invalid: rows.filter(r => r.status === 'invalid').length,
     unlisted: rows.filter(r => r.status === 'unlisted').length,
-    spend_usd: costs.includes(null) ? null : (costs as number[]).reduce((s, c) => s + c, 0),
+    spend_usd: billed.reduce((s, r) => s + guardCost(r), 0),
+    unpriced,
     held_out: heldOut(rows, split),
   }
 }
@@ -237,7 +242,7 @@ export function summarize(flow: string): Summary {
 
 const fmt = (x: number, digits = 2) => (Number.isFinite(x) ? x.toFixed(digits) : 'n/a')
 const pct = (x: number) => (Number.isFinite(x) ? `${Math.round(x * 100)}%` : 'n/a')
-const usd = (x: number | null) => (x === null ? 'not measured' : `$${x.toFixed(2)}`)
+const usd = (x: number, unpriced: number) => `$${x.toFixed(2)}${unpriced ? '*' : ''}`
 const line = (cells: (string | number)[]) => `| ${cells.join(' | ')} |`
 const header = (cells: string[]) => [line(cells), line(cells.map(() => '---'))]
 const fmtHarm = (x: VariantStats) => `${x.harmed} (${pct(x.harm_rate)})`
@@ -301,13 +306,17 @@ export function statusTable(s: Summary): string {
   const splits = withTest ? SPLITS : SPLITS.filter(sp => sp !== 'test')
   const out = header(['round', 'condition', 'change', ...splits, 'recall', 'specificity', 'line_ok', 'ask_ok', 'harmed',
     'went_on', 's/run', 'tool calls', 'rings', 'tokens', '$/pass', 'spend'])
-  let spend: number | null = 0
+  let spend = 0
+  let unpriced = 0
   for (const { v, c, x } of each(s)) {
-    spend = spend === null || x.spend_usd === null ? null : spend + x.spend_usd
+    spend += x.spend_usd
+    unpriced += x.unpriced
     out.push(line([v === 'baseline' ? 0 : Number(v.slice(1)), c, x.change, ...splits.map(sp => fmtSplit(x.splits[sp])),
       pct(x.recall), pct(x.specificity), pct(x.line_ok), pct(x.ask_ok), fmtHarm(x), pct(x.went_on), fmt(x.latency_s, 1),
-      fmt(x.tool_calls, 1), fmt(x.rings), fmt(x.tokens, 0), usd(x.spend_usd), usd(spend)]))
+      fmt(x.tool_calls, 1), fmt(x.rings), fmt(x.tokens, 0), usd(x.spend_usd, x.unpriced), usd(spend, unpriced)]))
   }
+  // A blank line first: a line right under a table would read as one more row.
+  if (unpriced) out.push('', `\\* ${unpriced} call${unpriced === 1 ? '' : 's'} at the highest price`)
   return out.join('\n')
 }
 
