@@ -151,6 +151,9 @@ static const cJSON *cJSON_GetObjectItemCaseSensitive(const cJSON *v,const char *
     for(const cJSON *p=v?v->child:NULL;p;p=p->next) if(p->string && !strcmp(p->string,key)) return p;
     return NULL;
 }
+static const cJSON *cJSON_GetArrayItem(const cJSON *v,int index) {
+    const cJSON *p=v?v->child:NULL; while(p && index--) p=p->next; return p;
+}
 static action_t pressed_action;
 static int returns, form_actions;
 static ht_form_command_t form_command;
@@ -241,7 +244,7 @@ code += function('render_settings') + function('ui_visit_state')
 code += function('ui_project_known') + function('ui_focus_project') + function('ui_apply_pending_focus')
 code += function('focus_centred') + function('focus_spaced') + function('focus_header') + function('focus_switch') + function('focus_clipped') + function('tabs_move') + function('tab_split') + function('tab_fade') + function('tab_neighbour') + function('focus_carousel') + function('tab_label') + function('render_focus_tabs') + function('app_label') + function('app_under') + function('render_apps') + function('pane_label') + function('render_agents') + function('render_tabs') + function('page_controls') + function('css_line') + function('inbox_line') + function('inbox_page') + function('render_focus_inbox') + function('render_list')
 code += 'static void dispatch(action_t a);\n'
-for name in ['notice_drop', 'notice_remove', 'notice_remove_question', 'notice_sync_view', 'notice_selection', 'notice_restore_selection', 'notice_make_room', 'notice_add', 'notice_expire', 'on_face', 'notice_read_now', 'ui_notify_summary', 'ui_turn_error', 'ui_notif_seen', 'ui_notif_read', 'ui_notif_replace', 'ui_notif_open', 'ui_question_close', 'ui_answer_receipt']:
+for name in ['notice_drop', 'notice_remove', 'notice_remove_question', 'notice_sync_view', 'notice_selection', 'notice_restore_selection', 'notice_make_room', 'notice_add', 'notice_expire', 'notice_question_read', 'ui_question_show', 'ui_notify_summary', 'ui_turn_error', 'ui_notif_seen', 'ui_notif_read', 'ui_notif_replace', 'ui_notif_open', 'ui_question_close', 'ui_answer_receipt']:
     code += function(name)
 code += '#define ui_notify_task_done(a,b,c,d) ui_notify_summary(a,b,c,d,"alert",false,false)\n'
 for name in ['ui_project_set_host_caps', 'ui_fleet_set_view', 'ui_apps_replace', 'ui_apps_forget', 'event', 'ui_project_emit', 'ui_project_restore_event', 'ui_project_clear_event', 'ui_project_set_name', 'ui_project_remove', 'ui_project_clear_all', 'ui_project_apply_order']:
@@ -1217,7 +1220,8 @@ static void notification_read_checks(const char *dir) {
     puts("Notification read: post-DMA only, sleep/lock, stale/identical replacements, read/open idempotence, questions, hidden empty bell, reconnect snapshots and bounded receipt history PASS");
 
     // NOTIFICATION TIERS: only an alert beeps, wakes and celebrates; a list entry is a drawer row and
-    // nothing else; silent leaves no row. The pane on the face never beeps or wakes and its row is read.
+    // nothing else; silent leaves no row. The daemon decides whether the person is already with the agent, so an
+    // alert rings even for the pane on the face, and its row stays unread.
     reset(); fake_ms=5000; wakes=0;
     assert(ui_notify_summary("b","B","M2","Built.","alert",false,false) && s.notice_count==1 && wakes==1 && s.pet_pose==3);
     reset(); fake_ms=5000; wakes=0;
@@ -1235,10 +1239,16 @@ static void notification_read_checks(const char *dir) {
     assert(ui_notify_summary("d","D","M2","x",NULL,false,false) && s.notice_count==3 && wakes==1);
     // One news row per agent: the newest wins.
     assert(ui_notify_summary("d","D","M2","newer","alert",false,false) && s.notice_count==3 && !strcmp(s.notice[0].summary,"newer"));
-    // On the face: no beep, no wake, no celebration, and the row is read at once.
+    // On the face an alert still beeps and wakes, and the row stays unread.
     reset(); fake_ms=5000; wakes=0;
-    assert(!ui_notify_summary("a","A","M2","Done.","alert",false,false) && !wakes && !s.pet_pose);
-    assert(s.notice_count==1 && s.notice[0].read_on_dial && !notice_unread(NULL));
+    assert(ui_notify_summary("a","A","M2","Done.","alert",false,false) && wakes==1 && s.pet_pose==3);
+    assert(s.notice_count==1 && !s.notice[0].read_on_dial && notice_unread(NULL)==1);
+    // So does its question; filed again as a list row, it stays quiet and unread.
+    reset(); fake_ms=5000; wakes=0;
+    assert(ui_question_show("a","A","M2","q-a",NULL,false) && wakes==1);
+    assert(s.notice_count==1 && s.notice[0].question && !s.notice[0].read_on_dial);
+    wakes=0;
+    assert(!ui_question_show("a","A","M2","q-a",NULL,true) && !wakes && s.notice_count==1 && !s.notice[0].read_on_dial);
     // Rows expire 6 h after receipt, across the millisecond wrap too, but a question never does.
     for (int w = 0; w < 2; w++) {
         reset(); fake_ms = w ? UINT32_MAX - 1000 : 1000;
@@ -1257,7 +1267,7 @@ static void notification_read_checks(const char *dir) {
     fake_ms=16999; surface_tick(fake_ms); assert(s.view==MESSAGE);
     fake_ms=17000; surface_tick(fake_ms); assert(s.view==HOME && s.notice_count==1);
     reset(); fake_ms=9000; wakes=0;
-    assert(!ui_turn_error("a","The build crashed.") && s.view==MESSAGE && !wakes && s.notice[0].read_on_dial);
+    assert(ui_turn_error("a","The build crashed.") && s.view==MESSAGE && wakes==1 && !s.notice[0].read_on_dial);
     // The person's own question is never covered: the row is filed, the screen stays.
     reset(); fake_ms=9000; s.view=QUESTION; wakes=0;
     assert(ui_turn_error("b","The build crashed.") && s.view==QUESTION && !s.error_until && s.notice_count==1 && s.notice[0].failed);
