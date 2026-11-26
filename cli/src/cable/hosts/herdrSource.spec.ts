@@ -295,6 +295,30 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     expect(s.source.focusedPane()).toBeUndefined()
   })
 
+  // A focus herdr moves while no focus subscription runs is unheard: the last one heard is no longer herdr's.
+  it('focusedPane is none once the focus subscription alone ends, while the agents\' rows stay', async () => {
+    server.agents = [agent('w1:p1')]
+    const client = herdrClient()
+    let focusing: HerdrSubscriber | undefined
+    const s = setup({
+      client: {
+        ...client,
+        subscribe: (entries, to) => {
+          if (JSON.stringify(entries) !== JSON.stringify(FOCUS)) return client.subscribe(entries, to)
+          focusing = to
+          return { close: () => {} }
+        },
+      },
+    })
+    await live(s)
+    focusing!.started()
+    focusing!.event('pane_focused', { pane_id: 'w2:p1', type: 'pane_focused', workspace_id: 'w2' })
+    expect(s.source.focusedPane()).toBe('w2:p1')
+    focusing!.closed('ended')
+    expect(s.source.focusedPane()).toBeUndefined()
+    expect(row(s, 'w1:p1')).toBeDefined()
+  })
+
   it('the focus subscription stays while the next for agents replaces the first, and is not opened twice', async () => {
     server.agents = [agent('w1:p1')]
     const s = setup()
