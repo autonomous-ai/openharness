@@ -32,8 +32,12 @@ export interface AdoptionContract {
     id: { field: string; pattern: RegExp }
     /** An absolute folder: where it ran, and so where it resumes. */
     cwd: string
-    /** Who wrote it, by a field's value; one value may need a second field to say. No match is not a person's. */
-    origin: { field: string; values: Readonly<Record<string, ExternalOrigin | { field: string; is: string; then: ExternalOrigin; otherwise: ExternalOrigin }>> }
+    /** Who wrote it, by a field's value; one value may need a second field to say, by its own values, else `otherwise`.
+     *  No match is not a person's. */
+    origin: {
+      field: string
+      values: Readonly<Record<string, ExternalOrigin | { field: string; values: Readonly<Record<string, ExternalOrigin>>; otherwise: ExternalOrigin }>>
+    }
   }
   /** The engine's own names for its conversations: one `{id, title}` record a line, the last one winning. */
   titles?: { file: string; id: string; title: string }
