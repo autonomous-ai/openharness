@@ -5,9 +5,9 @@
  *   with `code .` from Terminal, the fake editor runs under a shell of a fake Terminal. Claude Code runs on the Claude
  *   app's own session code (appEvalClaude.ts) with the editor's hints, a panel session under the editor with the
  *   extension's entrypoint. A Codex is a process of its own in such a tab (codexOutside.ts inTab), one with a home of its
- *   own in a home in the root that is not the daemon's CODEX_HOME. V12's Claude Code runs in a tmux session of the
- *   person's on the daemon's private server (ownTmux.ts InOwnTmux), its client attached from a terminal of the editor
- *   (ownTmux.ts tabClient). cursor-agent is a shell's job in such a tab of a fake Cursor, and Cursor's own agent a process
+ *   own in a home in the root that is not the daemon's CODEX_HOME. V12's and V16's Claude Code runs in a tmux session of
+ *   the person's on the daemon's private server (ownTmux.ts InOwnTmux), started once its client is attached from a
+ *   terminal of the editor (ownTmux.ts tabClient). cursor-agent is a shell's job in such a tab of a fake Cursor, and Cursor's own agent a process
  *   of the fake Cursor's with no terminal (cursorOutside.ts), each telling the devices by Cursor's own hooks;
  * - each window is Harness's extension's own loop over a fake window (editorWindow.ts), reporting its shells on the real
  *   devices' socket. What the loop printed is the window's stream in tier A's shapes (the plan's Decision 1): the stream
@@ -213,9 +213,12 @@ async function endCursor(cursor: CursorOutside): Promise<void> {
 }
 
 /**
- * V12's Claude Code: in a tmux session of the person's on the daemon's private server (ownTmux.ts InOwnTmux), going on in
- * the session's own conversation, its client attached from a terminal of the editor. That terminal's shell, as the window
- * reports it, is the client's.
+ * V12's and V16's Claude Code: in a tmux session of the person's on the daemon's private server (ownTmux.ts InOwnTmux),
+ * going on in the session's own conversation, started once the session's client is attached from a terminal of the
+ * editor, as the person types `tmux` there and then `claude`. The devices ask tmux for the client at its start hook, and
+ * again only at a turn, a tap or a rest (docs/plans/2026-11-26-dial-mux-host-pages-design.md, "What stays the same"): a
+ * client attached after that hook left the agent on tmux's page alone, off VS Code's, until a tap. That terminal's shell,
+ * as the window reports it, is the client's.
  */
 async function inTmux(world: TierBWorld, state: State, s: SessionDef, folder: string): Promise<number> {
   const { d } = world
@@ -225,9 +228,8 @@ async function inTmux(world: TierBWorld, state: State, s: SessionDef, folder: st
     spawnSync('tmux', ['-S', d.tmux.socket, '-f', '/dev/null', 'kill-session', '-t', name], { env: d.tmux.env, timeout: KILL_MS })
   }
   state.tmux.set(s.key, { end: async () => killed(), kill: killed })
-  const own = await InOwnTmux.start(d, name, folder, { resume: s.id, env: { ...guardEnv(d), ...editorHints(world, s), FAKE_CLAUDE_SESSION_TITLE: s.title } })
-  // As in every process of the daemon: its hooks are its children.
-  guardLoaded(d.env[NET_GUARD_FILE_ENV]!, `${name} pane's Claude Code`, [own.pid], 'node')
+  // The session opens on a shell, as appEvalIterm.ts's: the client attaches to it before Claude Code starts.
+  const shell = await d.tmux.run('new-session', '-d', '-s', name, '-P', '-F', '#{pane_id}')
   const client = await tabClient(d, name, s.app as Editor)
   state.tmux.set(s.key, {
     end: async () => {
@@ -239,6 +241,11 @@ async function inTmux(world: TierBWorld, state: State, s: SessionDef, folder: st
       try { process.kill(client.pid, 'SIGKILL') } catch { /* already gone */ }
     },
   })
+  const own = await InOwnTmux.startIn(d, name, folder, { resume: s.id, env: { ...guardEnv(d), ...editorHints(world, s), FAKE_CLAUDE_SESSION_TITLE: s.title } })
+  // The shell goes once Claude Code runs, so the client shows Claude Code's pane, which tmux's focus reads (V16).
+  await d.tmux.run('kill-pane', '-t', shell)
+  // As in every process of the daemon: its hooks are its children.
+  guardLoaded(d.env[NET_GUARD_FILE_ENV]!, `${name} pane's Claude Code`, [own.pid], 'node')
   return client.pid
 }
 

@@ -44,7 +44,7 @@ import { HarnessSource } from './hosts/harness.js'
 import { AppFilter, type AppCounts } from './hosts/appFilter.js'
 import { agentPlaceName, appDisplayName, hostDisplayName } from './hosts/hostDetect.js'
 import type { HostEntry, HostRegistry } from './hosts/registry.js'
-import { APP_LIMIT, AppRings, DialRing, pageOf, type RingRank } from './hosts/select.js'
+import { APP_LIMIT, AppRings, DialRing, pagesOf, type RingRank } from './hosts/select.js'
 import { FRONT_NONE } from './hosts/frontApp.js'
 import { deriveAnswerCard } from '../lib/deviceRecap.js'
 import { capsLetters, type AppList, type AppPick, type DialView, type HostAgent, type PaneSwitch, type SwitchCause, type ViewCause } from './hosts/types.js'
@@ -111,8 +111,10 @@ export interface CableHostWiring {
   listModels?: (agentId: string) => Promise<Array<{ id: string }>>
   /** The dial moved to another agent — the desktop window should show that agent on its own machine. */
   focused?: (machineId: string, agentId: string) => void
-  /** What came of a swipe that rested on an agent of another app, or was superseded before it rested: for its count. */
-  swiped?: (outcome: PaneSwitch | 'superseded') => void
+  /** What came of a swipe that rested on an agent of another app, or was superseded before it rested: for its count.
+   *  `opened`: a rest on tmux's or herdr's page brought the agent's app; `ok` there when it only focused the pane of one
+   *  with no client app. */
+  swiped?: (outcome: PaneSwitch | 'superseded' | 'opened') => void
   /** A hand turned a dial to an agent, of any app or none, as it turned: a settle of the app in front then follows
    *  nothing the dial has left. */
   turned?: () => void
@@ -183,10 +185,6 @@ export interface CableHostWiring {
   pets?: () => PetStore | null
   /** The app a dial that says `appFilter` shows changed from one app to another, and why: its dials are told at once. */
   appSwitched?: (cause: SwitchCause) => void
-  /** An app stayed in front for FRONT_SETTLE_MS, with or without a window, before the settle shows anything: a tab
-   *  report waiting on that app follows its agent's page here (`followPage`), so the settle shows that page directly,
-   *  never the app's first. */
-  appSettling?: (app: string) => void
   /** An app stayed in front for FRONT_SETTLE_MS, with or without a window, after any switch it caused: the Claude app's
    *  session and a tab report waiting on that app are followed then. */
   appSettled?: (app: string) => void
@@ -198,6 +196,11 @@ export interface CableHostWiring {
   /** A pick on the dial switched the shown app, or with a window turned the view to Harness's tab: the devices bring
    *  that app to the front. Never for a notice, nor for Harness with no window. */
   appBrought?: (app: string) => void
+  /** What came of a pick of tmux's or herdr's page bringing the landed agent's app (pickLanded): `none` when no agent
+   *  there has a client in an app. Nothing for an open a later pick or rest superseded. */
+  appPickBrought?: (outcome: 'ok' | 'failed' | 'none') => void
+  /** The settle of an app the dial brought forward kept tmux's or herdr's page shown (dialBrings). */
+  appDialFront?: () => void
   /** The view was set, and why: told on each change and on each window opening, never an app. */
   appView?: (view: DialView, cause: ViewCause) => void
   /** Runs `run` once after `ms` and returns its cancel: the settle of the app in front, and the end of a waiting open
@@ -310,11 +313,11 @@ export class DaemonCableHost implements CableHost {
       // count as the last machine list left them: that read feeds their source (machineSnapshot).
       counts: () => this.counts(),
       switched: (cause) => wiring.appSwitched?.(cause),
-      settling: (app) => wiring.appSettling?.(app),
       settled: (app) => {
         this.viewOnSettle(app)
         wiring.appSettled?.(app)
       },
+      dialFront: () => wiring.appDialFront?.(),
     })
   }
 
@@ -702,6 +705,17 @@ export class DaemonCableHost implements CableHost {
    *  latest (openAgent). */
   private taps = 0
 
+  /** The person's rests, picks and taps, in turn: an open of a rest or a pick on tmux's or herdr's page still reading its
+   *  client asks whether a later one came (openOnPage), so the last wins (spec §4), a rest that only shows a pane too. A
+   *  tap's open asks `taps` alone: no rest or pick stops a tap. */
+  private brings = 0
+
+  /** Each agent's open under way, a tap's, a rest's or a pick's, and the `latest` of each that asked for it: a second
+   *  one of that agent joins it and answers its outcome, running nothing more (PM decision 5, 2026-11-26: the double
+   *  tap), as a second would read its client, switch its tab and bring its app forward again. It stops at its source's
+   *  check only once none of them is the latest. Every source's open is asked here alone (openThrough). */
+  private opening = new Map<string, { open: Promise<boolean | 'superseded'>; latest: Array<() => boolean> }>()
+
   /** [end] is how the waiting tap's open ended: every tap says one. */
   private endWaiting(end: DialOpenEnd): void {
     const waiting = this.waiting
@@ -790,22 +804,57 @@ export class DaemonCableHost implements CableHost {
     return this.onMachine(agentId, opts)?.agent.host
   }
 
-  /** The page the agent is on, which a notice's pick turns the dial to: tmux's or herdr's for an agent nested there
-   *  (Diego, 2026-11-23), else its app's. The name stays `appOf`, as the session asks it. */
+  /** The page a notice's pick turns the dial to: the agent's first page, its terminal app's for one nested in tmux or
+   *  herdr, the multiplexer's for one with no app (pagesOf). The name stays `appOf`, as the session asks it. */
   appOf(agentId: string, opts: { apps?: boolean } = {}): string | undefined {
     const on = this.onMachine(agentId, opts)
-    return on && pageOf(on.agent)
+    return on && pagesOf(on.agent)[0]
   }
 
   /** A pick from the dial's list of apps. With a window, on the tab another app with agents turns the dial to its ring;
    *  on an app's ring Harness is the window's tab, and any other app the filter's pick. */
   pickApp(app: string, cause: 'pick' | 'notice' = 'pick'): AppPick {
-    if (cause === 'pick') this.wiring.appPicked?.()
+    if (cause === 'pick') {
+      this.wiring.appPicked?.()
+      this.brings++
+    }
     const answer = this.answerPick(app, cause)
     if (cause === 'pick' && (answer === 'same' || answer === 'ignored')) this.wiring.appPickKept?.(answer)
-    // A notice brings its own app with its open. Harness with no window is only its ring: no Desktop to bring.
-    if (cause === 'pick' && (answer === 'tabs' || (answer === 'switched' && app !== 'harness'))) this.wiring.appBrought?.(app)
+    // A notice brings its own app with its open. Harness with no window is only its ring: no Desktop to bring. tmux's and
+    // herdr's pages are no app: their pick brings the landed agent's (pickLanded).
+    if (cause === 'pick' && (answer === 'tabs' || (answer === 'switched' && app !== 'harness' && app !== 'tmux' && app !== 'herdr'))) this.wiring.appBrought?.(app)
     return answer
+  }
+
+  /**
+   * A pick of tmux's or herdr's page brings the app holding the client of the agent the dial landed on, and selects its
+   * tab and pane there, also when that app is in front already (Diego's point 2, 2026-11-26). A landed agent with no
+   * client app, off the page, or none: the page's agent heard from last that has one. Its open is a rest's (openOnPage),
+   * on the same counter, so the last pick, rest or tap wins (Diego's point 3). Spec §5.
+   */
+  pickLanded(app: string, agentId: string | undefined): void {
+    if (app !== 'tmux' && app !== 'herdr') return
+    // One its source cannot open is never chosen: an ended agent stays listed 10 s after its end, heard from last.
+    const placed = (e: HostEntry) =>
+      pagesOf(e.agent).includes(app) && this.clientApp(e, app) && e.source.capabilities(e.agent).focus
+    const landed = agentId === undefined ? undefined : this.outsideEntry(agentId)
+    const entry = landed && placed(landed) ? landed : this.registry?.entries()
+      .filter((e) => e.source.id !== 'harness' && placed(e))
+      .reduce<HostEntry | undefined>((last, e) => !last || e.agent.lastActivityAt > last.agent.lastActivityAt ? e : last, undefined)
+    if (!entry) { this.wiring.appPickBrought?.('none'); return }
+    void this.openOnPage(entry, ++this.brings).catch(() => false).then((opened) => {
+      if (opened !== 'superseded') this.wiring.appPickBrought?.(opened ? 'ok' : 'failed')
+    })
+  }
+
+  /**
+   * Whether an agent on tmux's or herdr's page has a client in an app the dial can bring: a page of its own besides the
+   * multiplexer's, or a Herdr.app terminal (no nest) on herdr's. herdr's own rows that no hook or scan placed keep the
+   * herdr source (the registry gives a hooked copy to the observed one) and have none, as a detached tmux agent has none.
+   */
+  private clientApp(entry: HostEntry, page: 'tmux' | 'herdr'): boolean {
+    if (entry.source.id === 'herdr') return false
+    return pagesOf(entry.agent).some((p) => p !== page) || (page === 'herdr' && entry.agent.app === 'herdr' && !entry.agent.nest)
   }
 
   private answerPick(app: string, cause: 'pick' | 'notice'): AppPick {
@@ -831,6 +880,13 @@ export class DaemonCableHost implements CableHost {
     this.filter.front(app)
   }
 
+  /** The opener is about to bring an app forward for a pick, a rest or a tap: the next front report is the dial's, so
+   *  the app it brings from tmux's or herdr's page keeps that page at its settle (spec §6). A dial on the window's tab
+   *  shows no page to keep: there the app it brings settles as the person's would, and turns the view to its ring. */
+  dialBrings(): void {
+    if (this.swarms === null || this.view === 'apps') this.filter.dialBrings()
+  }
+
   /** The app that settled in front, with or without a window. Not the shown app: the person may have picked another. */
   settledApp(): string | undefined {
     return this.filter.settledApp()
@@ -839,22 +895,6 @@ export class DaemonCableHost implements CableHost {
   /** The app last reported in front, before it settles, with or without a window. */
   latestFront(): string | undefined {
     return this.filter.latestFront()
-  }
-
-  /**
-   * A tab or prompt follow to this agent of the machine list: one in tmux or herdr inside the app settled in front turns
-   * the shown page to tmux's or herdr's and holds it (Diego's decision 4, 2026-11-23; `AppFilter.follow`). Told once per
-   * follow, before the dials are asked to follow it, so every dial's next read sees the page. With a window open the
-   * turn sets the view to the apps ring, as that app settling with agents does (`viewOnSettle`), unless Harness was
-   * picked over that app: the pick holds the tab, as a pick on the dial holds the filter.
-   */
-  followPage(agentId: string): void {
-    const agent = this.registry?.entries().find((e) => e.agent.id === agentId)?.agent
-    if (!agent || (this.swarms !== null && agent.app === this.pickedOver)) return
-    if (!this.filter.follow(agent.app, pageOf(agent)) || this.swarms === null) return
-    // Told from `appSettling`, before `viewOnSettle` ends it, a pick of Harness over the app settled before still holds.
-    this.pickedOver = undefined
-    this.setView('apps', 'front')
   }
 
   localFollowed(cause: FollowCause, outcome: 'moved' | 'no-tile'): void {
@@ -1021,8 +1061,11 @@ export class DaemonCableHost implements CableHost {
     const agents = rows.map((a): CableAgent => {
       // A Harness agent keeps the row the window would show (its chips too); another app's is drawn from what was heard.
       const row = byId.get(a.id) ?? { id: a.id, name: a.name, engine: a.engine, machineId: local.id, machine: local.name }
-      // Every row is one of the entries.
-      return { ...row, host: a.host, caps: capsLetters(sourceOf.get(a)!.capabilities(a)) }
+      // Every row is one of the entries. A nested agent on its app's page says that app (spec §2,
+      // docs/plans/2026-11-26-dial-mux-host-pages-design.md): the round dial draws it under the name, and the Pro's room
+      // lists the rows whose host is the shown app. Its multiplexer's page, and the single ring, say tmux or herdr.
+      const host = list && a.nest && pagesOf(a)[0] === list.shown && list.shown !== a.nest ? list.shown : a.host
+      return { ...row, host, caps: capsLetters(sourceOf.get(a)!.capabilities(a)) }
     })
     return { agents, tab: '', total, view: 'machine', ...(list ? { apps: list } : {}) }
   }
@@ -1042,7 +1085,7 @@ export class DaemonCableHost implements CableHost {
   private appRing(agents: HostAgent[], app: string): { rows: HostAgent[]; total: number } {
     const scoped = this.filter.settledApp() === app ? this.scopes.get(app) : undefined
     if (!scoped) return this.rings.ring(app)
-    return scoped.ring.select(agents.filter((a) => pageOf(a) === app && scoped.scope.inScope(a.id)), this.ranks.get(app))
+    return scoped.ring.select(agents.filter((a) => pagesOf(a).includes(app) && scoped.scope.inScope(a.id)), this.ranks.get(app))
   }
 
   /** The apps of the machine list, in the order they appeared, and the one shown over these agents. */
@@ -1136,10 +1179,12 @@ export class DaemonCableHost implements CableHost {
   }
 
   openAgent(agentId: string, reason?: OpenReason): void | Promise<void | 'superseded' | { ok: false; error: string }> {
-    // The last tap wins, whatever agent it is on: a tap still waiting for Desktop's window would open its agent over the
-    // app this one brings forward. A question screen that came up by itself is no tap.
+    // The last tap wins, whatever agent it is on: a tap still waiting for Desktop's window, or a rest's or a pick's open
+    // still reading its client (brings), would open its agent over the app this one brings forward. A question screen
+    // that came up by itself is no tap.
     if (!reason) {
       this.taps++
+      this.brings++
       this.endWaiting({ outcome: 'failed', code: 'desktop_no_window' })
       this.wiring.tapped?.(agentId)
     }
@@ -1148,7 +1193,7 @@ export class DaemonCableHost implements CableHost {
       // Only a person's tap switches the other app: a question screen that came up by itself never does.
       if (reason) return
       const tap = this.taps
-      return (outside.source.focus?.(outside.agent, () => this.taps === tap) ?? Promise.resolve(false)).then((opened) => {
+      return this.openThrough(outside, () => this.taps === tap).then((opened) => {
         // A later tap replaced this one before it acted (eval I13, PM 2026-11-24): the later tap's end is the one counted.
         if (opened === 'superseded') return opened
         this.openEnded(agentId, opened ? { outcome: 'ok' } : { outcome: 'failed', code: 'not_opened' })
@@ -1311,25 +1356,73 @@ export class DaemonCableHost implements CableHost {
     this.wiring.focused?.(machineId, agentId)
   }
 
-  /** Whether a swipe that rests on the agent shows its pane: only one of another app, in a pane that app can show. */
-  swipeSwitches(agentId: string): boolean {
+  /** Whether a swipe that rests on the agent does anything: shows its pane, only for one of another app in a pane that
+   *  app can show now; or, on tmux's or herdr's page, brings its app when its source can open it (spec §4). */
+  swipeSwitches(agentId: string, opts: { apps?: boolean } = {}): boolean {
     const outside = this.outsideEntry(agentId)
-    return outside?.source.hasPane?.(outside.agent) ?? false
+    if (!outside) return false
+    return (outside.source.hasPane?.(outside.agent) ?? false)
+      || (this.muxPage(outside.agent, opts) !== undefined && outside.source.capabilities(outside.agent).focus)
   }
 
   turned(): void {
     this.wiring.turned?.()
   }
 
-  /** A swipe that rested shows the agent's pane, and its app stays where it is; one superseded runs nothing. */
-  swipeEnded(agentId: string, how: 'rest' | 'superseded'): void {
+  /** A swipe that rested shows the agent's pane, and its app stays where it is; on tmux's or herdr's page with its app
+   *  behind, it brings that app (spec §4). One superseded runs nothing. */
+  swipeEnded(agentId: string, how: 'rest' | 'superseded', opts: { apps?: boolean } = {}): void {
     if (how === 'superseded') { this.wiring.swiped?.('superseded'); return }
-    // The agent may have gone, or left its pane, since the dial turned to it: asked again here, so no source brings
-    // forward an app the person has left.
+    const mine = ++this.brings
+    // The agent may have gone, or left its pane, and the dial its page, since the dial turned to it: asked again here, so
+    // no source brings forward an app the person has left.
     const outside = this.outsideEntry(agentId)
-    const shown = (outside?.source.hasPane?.(outside.agent) && outside.source.showPane?.(outside.agent))
-      || Promise.resolve<PaneSwitch>('failed')
-    void shown.catch((): PaneSwitch => 'failed').then((outcome) => this.wiring.swiped?.(outcome))
+    const page = outside && this.muxPage(outside.agent, opts)
+    // A pane its source can show says nothing of its app on tmux's or herdr's page: a tab app's watch selects a tab
+    // behind too, so there its app must be the one in front (spec §4).
+    const shows = outside?.source.hasPane?.(outside.agent) && (!page || this.filter.latestFront() === pagesOf(outside.agent)[0])
+    let ended: Promise<PaneSwitch | 'superseded' | 'opened'> | undefined
+    if (shows) ended = outside?.source.showPane?.(outside.agent)
+    else if (outside && page) {
+      // `opened` counts an app brought: one with no client app (detached, herdr's own row) has only its pane focused.
+      const brings = this.clientApp(outside, page)
+      ended = this.openOnPage(outside, mine)
+        .then((opened) => opened === 'superseded' ? opened : !opened ? 'failed' : brings ? 'opened' : 'ok')
+    }
+    void (ended ?? Promise.resolve('failed' as const)).catch(() => 'failed' as const).then((outcome) => this.wiring.swiped?.(outcome))
+  }
+
+  /** tmux's or herdr's page, when this dial shows it and the agent is on it: a page with no app of its own to show a pane
+   *  in. Only a dial on an app's ring has one, never the window's tab. `showing()` reads the page without switching it. */
+  private muxPage(agent: HostAgent, opts: { apps?: boolean }): 'tmux' | 'herdr' | undefined {
+    const page = opts.apps && this.windowOf(opts) === null ? this.filter.showing() : undefined
+    return (page === 'tmux' || page === 'herdr') && pagesOf(agent).includes(page) ? page : undefined
+  }
+
+  /**
+   * Brings an agent of tmux's or herdr's page through its source's tap path (a fresh read of its client, its tab, its app
+   * or window, its pane), never `openAgent`, which counts a tap. A rest is a 400 ms pause (SWIPE_REST_MS), so browsing
+   * the page opens at each pause, each after that read (up to 700 ms, at most one a second per agent): `latest` is whether
+   * [mine], this open's turn in `brings`, is still the last, and one a later rest, pick or tap replaced stops at its check
+   * (spec §4 Cost).
+   */
+  private openOnPage(entry: HostEntry, mine: number): Promise<boolean | 'superseded'> {
+    return this.openThrough(entry, () => this.brings === mine)
+  }
+
+  /** The agent's open through its source's focus, or the one under way that this joins (opening). */
+  private openThrough(entry: HostEntry, latest: () => boolean): Promise<boolean | 'superseded'> {
+    const id = entry.agent.id
+    const under = this.opening.get(id)
+    if (under) {
+      under.latest.push(latest)
+      return under.open
+    }
+    const asked = [latest]
+    const open = (entry.source.focus?.(entry.agent, () => asked.some((one) => one())) ?? Promise.resolve(false))
+      .finally(() => this.opening.delete(id))
+    this.opening.set(id, { open, latest: asked })
+    return open
   }
 
   /**

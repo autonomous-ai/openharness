@@ -167,6 +167,12 @@ export async function scannedApps(pids: readonly number[], deps: ScannedAppDeps)
         of.push({ app: 'iterm' })
         break
       }
+      // Orca's terminal host is a helper bundle of its own under launchd (RECORDED_ORCA.macos): no Orca process is above
+      // it and no table lists its bundle id, so it names Orca itself, or a tmux client in an Orca terminal is in no app.
+      if (ptyHostOf(name) === 'orca') {
+        of.push({ app: 'orca' })
+        break
+      }
       const bundle = bundleOf(name, deps.roots)
       if (bundle) of.push({ bundle })
     }

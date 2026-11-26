@@ -232,8 +232,10 @@ export type Check = { id: string; dim: Dimension; after?: Label; at?: Label } & 
   | { kind: 'ring'; page: Page; expect: SessionKey[]; timed?: true; apart?: SessionKey[] }
   | { kind: 'focus'; session: SessionKey; noBounce?: true }
   | { kind: 'still'; ms: number }
-  /** tab: iTerm2 only, the label a select must name when the session's client moved to another tab (I13, IH2). */
-  | { kind: 'open'; session: SessionKey; link: boolean; tab?: string }
+  /** tab: iTerm2 only, the label a select must name when the session's client moved to another tab (I13, IH2).
+   *  brings: iTerm2 only, a rest on tmux's or herdr's page with the agent's app behind brings it, as a tap does, and is
+   *  graded as one (Diego 2026-11-26, docs/plans/2026-11-26-dial-mux-host-pages-design.md §4). */
+  | { kind: 'open'; session: SessionKey; link: boolean; tab?: string; brings?: true }
   | { kind: 'state'; session: SessionKey; state: 'working' | 'needs-you' | 'done' | 'idle' }
   /** path: the words must reach the session by it; one by another path does not reach it, and counts against once. */
   | { kind: 'voice'; session: SessionKey; text: string; path?: Delivery['path'] }
@@ -390,15 +392,15 @@ export function itermPlaceOf(s: Pick<SessionDef, 'app' | 'place'> & Pick<Partial
 }
 
 /**
- * The wire's name for the page the session's row is on: an iTerm2 session in tmux or herdr is on that multiplexer's
- * page, as one tmux page and one herdr page count their agents across every terminal app, and so is a Claude Code in the
- * person's tmux in an editor's terminal, while Orca's stays on Orca's (docs/plans/2026-11-23-dial-tmux-herdr-apps-design.md,
- * decisions 1 and 3); every other session is on its app's.
+ * The wire's names for the pages the session's row is on: its app's, and for an agent in tmux or herdr (an iTerm2
+ * session in that place, or a Claude Code in the person's tmux in an editor's terminal or an Orca pane) that
+ * multiplexer's too, as one tmux page and one herdr page count their agents across every terminal app (Diego's
+ * 2026-11-26 rule, docs/plans/2026-11-26-dial-mux-host-pages-design.md, §1).
  */
-export function sessionPage(s: SessionDef): string {
+export function sessionPages(s: SessionDef): string[] {
   const place = itermPlaceOf(s)
-  if (place === 'tmux' || place === 'herdr') return place
-  return s.tmux && s.app !== 'orca' ? 'tmux' : PAGE[s.app]
+  const nest = place === 'tmux' || place === 'herdr' ? place : s.tmux ? 'tmux' : undefined
+  return nest === undefined ? [PAGE[s.app]] : [PAGE[s.app], nest]
 }
 
 /** The agent id the daemon's observed sources give this session: its engine's. No hook names a resting Orca chat, so its

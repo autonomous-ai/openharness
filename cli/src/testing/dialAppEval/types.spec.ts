@@ -3,7 +3,7 @@ import { frontAppId, FRONT_NONE } from '../../cable/hosts/frontApp.js'
 import { observedAgentId } from '../../cable/hosts/observed.js'
 import { claudeSession, itermSession, orcaSession, vscode } from './catalog.js'
 import { APPS, DIMENSIONS, EDITORS, PAGE, WEIGHTS, agentIdOf, engineOf, frontName, hookHandle, itermPlaceOf, orcaAgentSessionId, orcaPaneHandle,
-  orcaTerminalHandle, orcaWorktreeId, pageId, placeOf, resultKey, sessionPage, type Platform } from './types.js'
+  orcaTerminalHandle, orcaWorktreeId, pageId, placeOf, resultKey, sessionPages, type Platform } from './types.js'
 
 const id = '00000000-0000-4000-8000-0000000000e1'
 
@@ -52,20 +52,23 @@ it("PAGE names iTerm2's page iterm", () => {
   expect(PAGE.iterm).toBe('iterm')
 })
 
-it("pageId names tmux and herdr as themselves and an app by PAGE; sessionPage puts an iTerm2 session in tmux or herdr on that page, and every other session on its app's", () => {
+it("pageId names tmux and herdr as themselves and an app by PAGE", () => {
   expect(pageId('tmux')).toBe('tmux')
   expect(pageId('herdr')).toBe('herdr')
   expect(pageId('chatgpt')).toBe('codex')
-  expect(sessionPage(itermSession('b', { place: 'tmux' }))).toBe('tmux')
-  expect(sessionPage(itermSession('c', { place: 'herdr' }))).toBe('herdr')
-  expect(sessionPage(itermSession('a'))).toBe('iterm')
-  expect(sessionPage(claudeSession('a', 0))).toBe('claude')
 })
 
-it("sessionPage puts Claude Code in the person's tmux on tmux's page, in an editor's terminal too, but keeps Orca's on Orca's (decision 3)", () => {
-  expect(sessionPage(vscode('a', { tmux: true }))).toBe('tmux')
-  expect(sessionPage(vscode('a'))).toBe('vscode')
-  expect(sessionPage(orcaSession('c', { tmux: true }))).toBe('orca')
+it("sessionPages: an iTerm2 session in tmux or herdr is on iTerm2's page and the multiplexer's; a plain one on its app's alone", () => {
+  expect(sessionPages(itermSession('b', { place: 'tmux' }))).toEqual(['iterm', 'tmux'])
+  expect(sessionPages(itermSession('c', { place: 'herdr' }))).toEqual(['iterm', 'herdr'])
+  expect(sessionPages(itermSession('a'))).toEqual(['iterm'])
+  expect(sessionPages(claudeSession('a', 0))).toEqual(['claude'])
+})
+
+it("sessionPages: Claude Code in the person's tmux in an editor's terminal or an Orca pane is on that app's page and tmux's", () => {
+  expect(sessionPages(vscode('a', { tmux: true }))).toEqual(['vscode', 'tmux'])
+  expect(sessionPages(vscode('a'))).toEqual(['vscode'])
+  expect(sessionPages(orcaSession('c', { tmux: true }))).toEqual(['orca', 'tmux'])
 })
 
 it('APPS is the six apps, iTerm2 last', () => {

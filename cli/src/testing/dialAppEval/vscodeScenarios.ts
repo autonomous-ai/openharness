@@ -191,18 +191,19 @@ export function vscodeScenarios(): Scenario[] {
       probes: [{ id: 'open', kind: 'open', dim: 'D3', session: 'z', link: false, after: 'tap' }],
     }),
     scenario({
-      id: 'V12', app: 'vscode', title: 'Claude Code under tmux in a VS Code terminal: its row is on tmux\'s page, and a tap shows that terminal',
+      id: 'V12', app: 'vscode', title: 'Claude Code under tmux in a VS Code terminal: its row is on VS Code\'s page and tmux\'s, and a tap shows that terminal',
       dims: ['D7', 'D1', 'D3'], tiers: ['b'], sessions: [vscode('a', { tmux: true }), ghost],
-      // tmux in VS Code's terminal is on tmux's page, VS Code's counting none (Diego's decision 3, 2026-11-23).
+      // tmux in VS Code's terminal is on VS Code's page and on tmux's, which the grader counts as a's other page
+      // (Diego's 2026-11-26 rule, docs/plans/2026-11-26-dial-mux-host-pages-design.md).
       steps: [
         ...started(['a']),
         { kind: 'editor.window', window: 'w1', active: 'a', focused: true },
-        ...listed('tmux', ['a']),
+        ...listed('vscode', ['a'], []),
         { label: 'tap', kind: 'tap', session: 'a' },
       ],
       checks: [
-        { id: 'ring', kind: 'ring', dim: 'D1', page: 'tmux', expect: ['a'], apart: [] },
-        { id: 'ringKept', kind: 'ring', dim: 'D7', page: 'tmux', expect: ['a'], apart: [] },
+        { id: 'ring', kind: 'ring', dim: 'D1', page: 'vscode', expect: ['a'], apart: [] },
+        { id: 'ringKept', kind: 'ring', dim: 'D7', page: 'vscode', expect: ['a'], apart: [] },
         { id: 'open', kind: 'open', dim: 'D3', session: 'a', link: false, after: 'tap' },
       ],
       probes: [{ id: 'open', kind: 'open', dim: 'D3', session: 'z', link: false, after: 'tap' }],
@@ -261,6 +262,24 @@ export function vscodeScenarios(): Scenario[] {
         { id: 'open', kind: 'open', dim: 'D3', session: 'b', link: false, after: 'tap' },
       ],
       probes: [{ id: 'open', kind: 'open', dim: 'D3', session: 'z', link: false, after: 'tap' }],
+    }),
+    scenario({
+      id: 'V16', app: 'vscode', title: 'Two VS Code terminals each holding a tmux client: focusing the other terminal moves the dial to its agent on VS Code\'s page',
+      // VS Code's terminal focus of a tmux client follows its pane's agent, on VS Code's page (Diego's 2026-11-26 rule,
+      // docs/plans/2026-11-26-dial-mux-host-pages-design.md). Tier B only, as V12: tier A has no tmux in an editor. Not on
+      // Windows, where tmux runs only inside WSL (as O11).
+      dims: ['D2', 'D1'], platforms: ['darwin', 'linux'], tiers: ['b'], sessions: [vscode('a', { tmux: true }), vscode('b', { tmux: true }), ghost],
+      steps: [
+        ...started(['a', 'b']),
+        { kind: 'editor.window', window: 'w1', active: 'a', focused: true },
+        ...listed('vscode', ['a', 'b']),
+        { label: 'focus', kind: 'editor.focus', session: 'b' },
+      ],
+      checks: [
+        { id: 'ring', kind: 'ring', dim: 'D1', page: 'vscode', expect: ['a', 'b'], apart: [] },
+        { id: 'focus', kind: 'focus', dim: 'D2', session: 'b', after: 'focus' },
+      ],
+      probes: [{ id: 'focus', kind: 'focus', dim: 'D2', session: 'z', after: 'focus' }],
     }),
   ]
 }

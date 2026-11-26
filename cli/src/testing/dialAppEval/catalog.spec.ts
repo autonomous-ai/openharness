@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { HELD_OUT, MAIN, titleOf } from './catalog.js'
 import { evaluate } from './checks.js'
 import { runScenario } from './runner.js'
-import { agentIdOf, hookHandle, orcaTerminalHandle, pageId, sessionPage, STEP_KINDS, THRESHOLDS, type Check, type CheckKind, type EvalDriver, type Scenario, type Seen,
+import { agentIdOf, hookHandle, orcaTerminalHandle, pageId, sessionPages, STEP_KINDS, THRESHOLDS, type Check, type CheckKind, type EvalDriver, type Scenario, type Seen,
   type SessionKey, type Step, type StepKind } from './types.js'
 
 const ALL = [...MAIN, ...HELD_OUT]
@@ -33,20 +33,20 @@ function checkKeys(check: Check): SessionKey[] {
 }
 
 describe('the catalog', () => {
-  it('the main ids are C1-C12, X1-X12, V1-V15, U1-U14, O1-O23 and I1-I21', () => {
+  it('the main ids are C1-C12, X1-X12, V1-V16, U1-U14, O1-O23 and I1-I24', () => {
     const range = (prefix: string, n: number) => Array.from({ length: n }, (_, i) => `${prefix}${i + 1}`)
-    expect(MAIN.map((s) => s.id)).toEqual([...range('C', 12), ...range('X', 12), ...range('V', 15), ...range('U', 14),
-      ...range('O', 23), ...range('I', 21)])
+    expect(MAIN.map((s) => s.id)).toEqual([...range('C', 12), ...range('X', 12), ...range('V', 16), ...range('U', 14),
+      ...range('O', 23), ...range('I', 24)])
     expect(MAIN.every((s) => !s.heldOut)).toBe(true)
   })
 
-  it('the held out are CH1-CH3, XH1-XH3, VH1-VH4, UH1-UH3, OH1-OH4 and IH1-IH5: 22 of 119, VS Code 4 of 19, Cursor 3 of 17, Orca 4 of 27, iTerm2 5 of 26', () => {
+  it('the held out are CH1-CH3, XH1-XH3, VH1-VH4, UH1-UH3, OH1-OH4 and IH1-IH5: 22 of 123, VS Code 4 of 20, Cursor 3 of 17, Orca 4 of 27, iTerm2 5 of 29', () => {
     expect(HELD_OUT.map((s) => s.id)).toEqual(['CH1', 'CH2', 'CH3', 'XH1', 'XH2', 'XH3', 'VH1', 'VH2', 'VH3', 'VH4', 'UH1', 'UH2', 'UH3',
       'OH1', 'OH2', 'OH3', 'OH4', 'IH1', 'IH2', 'IH3', 'IH4', 'IH5'])
     expect(HELD_OUT.every((s) => s.heldOut)).toBe(true)
-    expect(ALL).toHaveLength(119)
+    expect(ALL).toHaveLength(123)
     const of = (app: string) => [HELD_OUT.filter((s) => s.app === app).length, ALL.filter((s) => s.app === app).length]
-    expect([of('vscode'), of('cursor'), of('orca'), of('iterm')]).toEqual([[4, 19], [3, 17], [4, 27], [5, 26]])
+    expect([of('vscode'), of('cursor'), of('orca'), of('iterm')]).toEqual([[4, 20], [3, 17], [4, 27], [5, 29]])
   })
 
   it('IH1 is D5 alone; IH3 tier A only', () => {
@@ -59,14 +59,15 @@ describe('the catalog', () => {
     expect(agents.map((d) => [d.key, d.place, d.herdrSession])).toEqual([['c', 'herdr', false]])
   })
 
-  it('every iTerm2 ring, a check or a probe, counts the other pages exactly: its apart is every agent of the scenario on '
-    + 'another page, in start order', () => {
-    // A ring that mixed pages becomes one ring per page, each counting the rest exactly (the plan's Global Constraints).
+  it('every iTerm2 ring, a check or a probe, counts the other pages exactly: its apart is every agent of the scenario not '
+    + 'on its page, in start order', () => {
+    // An agent in tmux or herdr is on iTerm2's page and the multiplexer's (Diego's 2026-11-26 rule,
+    // docs/plans/2026-11-26-dial-mux-host-pages-design.md), so only the agents its page does not list are apart.
     for (const s of ALL.filter((s) => s.app === 'iterm')) {
       const order = [...new Set(s.steps.flatMap((step) => (step.kind === 'hook' && step.event === 'start' ? [step.session] : [])))]
-      const pageOf = (key: SessionKey): string => sessionPage(s.sessions.find((d) => d.key === key)!)
+      const pagesOf = (key: SessionKey): string[] => sessionPages(s.sessions.find((d) => d.key === key)!)
       for (const c of [...s.checks, ...s.probes]) {
-        if (c.kind === 'ring') expect(c.apart, `${s.id} ${c.id}`).toEqual(order.filter((key) => pageOf(key) !== pageId(c.page)))
+        if (c.kind === 'ring') expect(c.apart, `${s.id} ${c.id}`).toEqual(order.filter((key) => !pagesOf(key).includes(pageId(c.page))))
       }
     }
   })
@@ -79,8 +80,8 @@ describe('the catalog', () => {
     }
   })
 
-  it("IH4's ring on herdr's page counts no other page: an apps frame shown herdr with herdr 1 passes its apart, and iterm 1 "
-    + 'beside it fails', () => {
+  it("IH4's ring on herdr's page counts its agent on iTerm2's page too: an apps frame shown herdr with iterm 1 and herdr 1 "
+    + 'passes its apart, and herdr 1 alone fails', () => {
     const ih4 = byId('IH4')
     const ring = ih4.checks.find((c) => c.id === 'ring')!
     const c = ih4.sessions.find((d) => d.key === 'c')!
@@ -93,8 +94,9 @@ describe('the catalog', () => {
         { at: 2000, message: { t: 'agent', id: agentIdOf(c), name: c.title } }, { at: 2000, message: { t: 'agents.end', total: 1, tab: '' } }],
       faces: [], commands: [], deliveries: [], steps: [step(1000, 'restart'), step(9000, 'tap')],
     }, 'a', 'darwin').find((r) => r.check === 'ring.apart')?.score
-    expect(apart([{ id: 'herdr', count: 1 }])).toBe(1)
-    expect(apart([{ id: 'iterm', count: 1 }, { id: 'herdr', count: 1 }])).toBe(0)
+    // Diego's 2026-11-26 rule (docs/plans/2026-11-26-dial-mux-host-pages-design.md): c is on iTerm2's page and herdr's.
+    expect(apart([{ id: 'iterm', count: 1 }, { id: 'herdr', count: 1 }])).toBe(1)
+    expect(apart([{ id: 'herdr', count: 1 }])).toBe(0)
   })
 
   it("IH4's session has a turn before its restart, so the scan finds its conversation on disk", () => {
@@ -190,11 +192,18 @@ describe('the catalog', () => {
     expect(x10.probes).toContainEqual(expect.objectContaining({ id: 'apart', kind: 'ring', expect: ['t1'], apart: ['c1', 'z'] }))
   })
 
-  it('X3, V11, UH1 and every iTerm2 scenario are macOS only, O11 macOS and Linux', () => {
+  it('X3, V11, UH1 and every iTerm2 scenario are macOS only, O11 and V16 macOS and Linux', () => {
     const mac = ['X3', 'V11', 'UH1']
     for (const s of ALL) {
-      const platforms = mac.includes(s.id) || s.app === 'iterm' ? ['darwin'] : s.id === 'O11' ? ['darwin', 'linux'] : ['darwin', 'win32', 'linux']
+      const platforms = mac.includes(s.id) || s.app === 'iterm' ? ['darwin']
+        : ['O11', 'V16'].includes(s.id) ? ['darwin', 'linux'] : ['darwin', 'win32', 'linux']
       expect(s.platforms, s.id).toEqual(platforms)
+    }
+  })
+
+  it('an open check that brings is an iTerm2 scenario\'s, the one app it grades', () => {
+    for (const s of ALL) {
+      for (const c of s.checks) if (c.kind === 'open' && c.brings) expect(s.app, `${s.id} ${c.id}`).toBe('iterm')
     }
   })
 
@@ -318,9 +327,9 @@ describe('the catalog', () => {
     expect(byId('C8').steps.filter((s) => s.kind === 'tap' || s.kind === 'swipe')).toEqual([])
   })
 
-  it('C3, CH1, CH2, XH1, X12, V2, O11, O16, O18-O23 and IH3 are tier A only, V12 tier B only, every other scenario (C10, C11, X7, C8, X9, CH3 and XH3 among them) runs in both', () => {
+  it('C3, CH1, CH2, XH1, X12, V2, O11, O16, O18-O23 and IH3 are tier A only, V12 and V16 tier B only, every other scenario (C10, C11, X7, C8, X9, CH3 and XH3 among them) runs in both', () => {
     const onlyA = ['C3', 'CH1', 'CH2', 'XH1', 'X12', 'V2', 'O11', 'O16', 'O18', 'O19', 'O20', 'O21', 'O22', 'O23', 'IH3']
-    const onlyB = ['V12']
+    const onlyB = ['V12', 'V16']
     for (const s of ALL) expect(s.tiers, s.id).toEqual(onlyA.includes(s.id) ? ['a'] : onlyB.includes(s.id) ? ['b'] : ['a', 'b'])
   })
 
@@ -412,30 +421,33 @@ describe('the catalog', () => {
     // swipe, O8's two turns and the pause between them, O10's rest on b, O11's rests after the tap and the swipe, O12's
     // time quit, its time past the devices' next look after the relaunch and its rest after the focus, O16's agents a
     // second apart, O17's rest and its time unplugged, and O20's after the tap and the swipe; iTerm2's agents a second
-    // apart (started), I3's and I15's turns (turned), I3's rests after each pick, I4's pause before and after the split
-    // and its rest after the first tap, I6's rest, I7's rest after the first tap, I9's rests on b and on a and its wait
+    // apart (started), I2's rest after the select, I3's and I15's turns (turned), I3's rests after each pick, I4's pause before and after the split
+    // and its rest after the first tap, I6's rests after the pick and the swipe, I7's rest after the first tap, I9's rests on b and on a and its wait
     // after the echo, I10's rest after the move to a's pane, I10's and I11's rests after the select, I13's rests after
     // the detach and the attach, I14's time past the devices' next look after herdr starts again, I15's time after the
-    // relaunch and its rest after the first tap, I16's long turn, I17's turn, I20's rest on c and I21's rest and its
-    // time unplugged; VH1's rest on a, UH3's voice 200 ms after the prompt, OH1's rest on a and OH2's voice 200 ms
+    // relaunch and its rest after the first tap, I16's long turn, I17's turn, I19's rest after the select, I20's rest on c,
+    // I21's rest and its time unplugged, I22's and I23's rests before and after the front, I23's rests after the pick and
+    // on c, and I24's rest after the pick; VH1's rest on a, UH3's voice 200 ms after the prompt, OH1's rest on a and OH2's voice 200 ms
     // after the focus; IH1's voice 200 ms after the select, IH2's rests after the attach and each select, its two turns
     // and the pause between them, IH3's agents a second apart, IH4's turn (turned) and IH5's turn.
     const starts = (id: string, n: number): string[] => Array<string>(n - 1).fill(`${id} 1000`)
     expect(waits('own')).toEqual(['C6 5000', 'C9 1000', 'C9 3500', 'C10 2000', 'C11 1000', 'C11 3000', 'X3 5000', 'X8 2000',
       'X11 300', 'X11 300', ...starts('V1', 4), ...starts('V2', 20), ...starts('V3', 2), ...starts('V4', 2), ...starts('V5', 2),
       'V7 2000', 'V7 2000', ...starts('V10', 2), 'V10 2000', 'V11 1000', 'V11 1000', 'V11 1000', 'V13 1000',
-      ...starts('V14', 3), 'V14 45000', ...starts('V15', 2), 'V15 1000', 'V15 3000',
+      ...starts('V14', 3), 'V14 45000', ...starts('V15', 2), 'V15 1000', 'V15 3000', ...starts('V16', 2),
       ...starts('U1', 4), ...starts('U2', 2), ...starts('U3', 2), ...starts('U4', 2), 'U8 2000', 'U12 2000', ...starts('U13', 3),
       'U13 45000', ...starts('U14', 2),
       'O4 2000', 'O4 1000', 'O4 3000', 'O7 4000', 'O7 2000', 'O8 2000', 'O8 2000', 'O8 6000', 'O8 2000', 'O10 1000', 'O11 4000', 'O11 1000',
       'O12 2000', 'O12 35000', 'O12 2000',
       ...starts('O16', 40), 'O17 1000', 'O17 3000', 'O20 4000', 'O20 2000',
-      ...starts('I2', 4), ...starts('I3', 4), 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000',
-      'I4 1000', 'I4 1000', 'I4 4000', ...starts('I5', 2), ...starts('I6', 3), 'I6 2000', ...starts('I7', 3), 'I7 4000',
+      ...starts('I2', 4), 'I2 2000', ...starts('I3', 4), 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000',
+      'I4 1000', 'I4 1000', 'I4 4000', ...starts('I5', 2), ...starts('I6', 3), 'I6 2000', 'I6 2000', ...starts('I7', 3), 'I7 4000',
       ...starts('I8', 2), ...starts('I9', 2), 'I9 1000', 'I9 500', 'I9 3000', ...starts('I10', 2), 'I10 1000', 'I10 2000', ...starts('I11', 2), 'I11 2000',
       ...starts('I12', 2), ...starts('I13', 2), 'I13 2000', 'I13 2000', ...starts('I14', 3), 'I14 35000',
       ...starts('I15', 3), 'I15 2000', 'I15 2000', 'I15 2000', 'I15 2000', 'I15 4000', 'I16 30000', 'I17 2000',
-      ...starts('I18', 2), ...starts('I19', 2), ...starts('I20', 2), 'I20 1000', ...starts('I21', 4), 'I21 1000', 'I21 3000',
+      ...starts('I18', 2), ...starts('I19', 2), 'I19 3000', ...starts('I20', 2), 'I20 1000', ...starts('I21', 4), 'I21 1000', 'I21 3000',
+      ...starts('I22', 2), 'I22 1500', 'I22 2000', ...starts('I23', 3), 'I23 2000', 'I23 1500', 'I23 3000', 'I23 2000',
+      ...starts('I24', 2), 'I24 2000',
       'CH3 1000', 'XH3 200',
       ...starts('VH1', 2), 'VH1 1000', ...starts('VH3', 3), ...starts('UH3', 2), 'UH3 200',
       'OH1 1000', 'OH2 200',

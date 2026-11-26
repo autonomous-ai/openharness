@@ -267,8 +267,8 @@ interface Entry {
   ptyOwner?: string | null
   ptyFailedAt?: number
   /** The caller and hints its outer place was last asked for (ObservedDeps.outer), while it runs nested: only that ask's
-   *  answer lands. */
-  outerAsk?: { pid: number; hints: Readonly<Record<string, string>> }
+   *  answer lands. `landed` once the client's place did (landOuter). */
+  outerAsk?: { pid: number; hints: Readonly<Record<string, string>>; landed?: true }
   /** Its client's place read afresh for a tap or a rest (askAfresh): landing, or landed at `settledAt` (deps.now()). */
   fresh?: { landing: Promise<void>; settledAt?: number }
   /** The app and tab it is seen in, from that answer, while its caller and hints are those it was asked for; for a
@@ -984,7 +984,11 @@ export class ObservedSource implements HostSource {
     entry.scanPlaced = undefined
     entry.scanNested = undefined
     if (same && e.event !== 'session-start' && e.event !== 'turn-start') return true
-    const ask = { pid: e.callerPid, hints: e.hostHints }
+    // The same caller's new ask keeps what the last one landed, a client in no listed app too (placeApp): a detached
+    // agent asked again at its next turn stays off its hints' app's page until the answer.
+    const ask: NonNullable<Entry['outerAsk']> = same && last.landed
+      ? { pid: e.callerPid, hints: e.hostHints, landed: true }
+      : { pid: e.callerPid, hints: e.hostHints }
     // Its multiplexer lands as soon as the maker's read confirms it, before the client's steps end (OuterLookup's made).
     const answer = this.deps.outer?.(e.hostHints, e.callerPid, (nest) => this.landOuter(entry, ask, nest))
     if (!same && !(scanned && answer && e.callerPid === entry.pid)) {
@@ -1013,6 +1017,7 @@ export class ObservedSource implements HostSource {
   ): void {
     if (entry.outerAsk !== ask || !this.live(entry)) return
     if (place) {
+      ask.landed = true
       entry.outer = place.app ? { app: place.app, tty: place.tty, pid: place.pid } : undefined
       entry.outerPid = !place.app && clientPid(place.pid) ? place.pid : undefined
       entry.tty = entry.outer?.tty
@@ -1042,7 +1047,12 @@ export class ObservedSource implements HostSource {
     }
     const named = detectApp(hints)
     const walk = walked(hints, this.deps.platform)
-    entry.agent.app = entry.outer?.app ?? (walk && this.deps.apps ? this.learnApp(entry, pid, named) : named)
+    // A pane inherits the bundle id of the terminal that started its multiplexer's server: once its lookup landed with no
+    // client in a listed app (detached, or in a terminal with no page), it has no app, never the hint's, which holds no
+    // client of it (final review, 2026-11-26). While the lookup runs, the hint's app stands.
+    const clientless = entry.agent.nest && entry.outerAsk?.landed
+    entry.agent.app = entry.outer?.app
+      ?? (clientless ? UNKNOWN_APP : walk && this.deps.apps ? this.learnApp(entry, pid, named) : named)
     // An app named by a word another app says too (walked: VS Code's TERM_PROGRAM, which Cursor says) has the bundle of
     // the app its parents named, else a tap on Cursor started from Terminal (`cursor .`) opened VS Code. So has the
     // extension's tab, whose word names no app: a walk that names none leaves it none, never a guessed editor's.
@@ -1061,9 +1071,10 @@ export class ObservedSource implements HostSource {
     a.host = a.nest ?? detectHost(e.hostHints)
     this.placeApp(entry, e.hostHints, e.callerPid)
     // One nested with no multiplexer known stays pending until its lookup answers: its hints' bundle id is the one its
-    // multiplexer's server started with (iTerm2's for a tmux started there), and that app in front must not turn the dial
-    // to it, then back once the answer puts it on tmux's page. One the scan's maker read put on its multiplexer's page,
-    // kept there (askOuter), is placed: its first turn's prompt follow turns the dial to that page.
+    // multiplexer's server started with (iTerm2's for a tmux started there), which may hold no client of it, so that app
+    // in front must not show its page for it before the answer names the app holding its client, if any (placeApp). One
+    // the scan's maker read put on its multiplexer's page, kept there (askOuter), is placed: it counts on that page while
+    // its lookup runs.
     if (!nested || a.nest) delete a.appPending
     // Every event's own: a session resumed elsewhere must not be typed into the terminal it left.
     entry.hints = e.hostHints
@@ -1718,7 +1729,7 @@ export class ObservedSource implements HostSource {
       a.host = 'herdr'
       a.app = 'herdr'
       delete a.appPending
-      // On Herdr's page: a multiplexer would hold it on its own (pageOf).
+      // On Herdr's page alone: a multiplexer would add its own page (pagesOf).
       delete a.nest
       entry.bundle = APP_BUNDLES.herdr
     } else {

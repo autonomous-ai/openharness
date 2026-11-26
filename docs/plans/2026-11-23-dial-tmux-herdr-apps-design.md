@@ -1,5 +1,8 @@
 # Dial: tmux and herdr are their own apps on the Apps screen
 
+Replaced on 2026-11-26 by `docs/plans/2026-11-26-dial-mux-host-pages-design.md`: a tmux or herdr agent is on its
+terminal app's page and the multiplexer's, and a follow turns no page.
+
 Date: 2026-11-23. Branch: `feat/dial-tmux-herdr-apps`. Mockup approved by Diego (2026-11-23):
 `devices/harness-device/mockup/apps-tmux-herdr.html` in the main checkout (gitignored).
 

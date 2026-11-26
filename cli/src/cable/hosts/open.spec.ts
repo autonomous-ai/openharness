@@ -30,13 +30,12 @@ interface Window { pid?: number; app?: string; outer?: true }
 /** herdr's socket, which no tap asks: a tap is `herdr agent focus`. */
 const herdrClient = { prompt: vi.fn(), socketStamp: vi.fn(), binary: vi.fn() }
 
-/** What a test may set: the runner and the binaries it finds, Orca's switch, the log, the opener's `open`, whether
- *  Herdr.app's window is herdr's ring's, Linux's raise with each agent's window, and Windows' raise. */
+/** What a test may set: the runner and the binaries it finds, Orca's switch, the log, the opener's `open`, Linux's raise
+ *  with each agent's window, and Windows' raise. */
 interface Over extends OrcaDeps {
   orcaSwitch(handle: string): Promise<boolean>
   log(line: string): void
   bin?: string
-  herdrApp?(): boolean
   raise?: LinuxRaise
   windowOf?(agentId: string): Window | undefined
   windows?: WindowsRaise
@@ -71,7 +70,7 @@ function recorder(over: Partial<Over> = {}, codes: Array<number | null> = [], mo
     ...more,
   ]
   const opener = createOpenActions({
-    run: deps.run, platform: deps.platform, adapters, log: deps.log, bin: deps.bin, herdrApp: deps.herdrApp, raise: deps.raise, windowOf: deps.windowOf,
+    run: deps.run, platform: deps.platform, adapters, log: deps.log, bin: deps.bin, raise: deps.raise, windowOf: deps.windowOf,
     windows: deps.windows,
   })
   return { calls, switched, logs, claude, opener }
@@ -338,35 +337,10 @@ describe('opening an agent outside Harness from the dial', () => {
     expect(calls).toEqual([forward('ai.autonomous.harness'), forward('ai.autonomous.harness')])
     expect(recorder({ platform: 'linux' }).opener.desktop).toBeUndefined()
   })
-
-  it('one command at a time per agent; another agent\'s runs', async () => {
-    const calls: string[][] = []
-    const waiting: Array<() => void> = []
-    const opener = createOpenActions({
-      run: (_file, args) => {
-        calls.push(args)
-        return new Promise((resolve) => waiting.push(() => resolve({ code: 0, stdout: '' })))
-      },
-      platform: 'darwin',
-      adapters: [],
-      log: () => {},
-    })
-    const warp = target({ TERM_PROGRAM: 'WarpTerminal' })
-    const first = opener.open('a1', warp)
-    expect(await opener.open('a1', warp)).toBe(false)
-    const other = opener.open('a2', warp)
-    expect(calls).toHaveLength(2)
-    for (const done of waiting) done()
-    expect(await first).toBe(true)
-    expect(await other).toBe(true)
-    // Once its command has ended, the agent takes the next one.
-    const next = opener.open('a1', warp)
-    waiting[2]()
-    expect(await next).toBe(true)
-  })
 })
 
-// A rest's link is the Claude app adapter's own (claudeApp.spec.ts); a tap's one-at-a-time is the opener's.
+// A rest's link is the Claude app adapter's own (claudeApp.spec.ts); a tap's one at a time per agent is the host's
+// (cableHost.ts openThrough).
 describe('a rest on a Claude app session', () => {
   const link = (session: string): Call => run(OPEN, '-b', CLAUDE, `claude://code/continue?session=${session}`)
 
@@ -856,14 +830,14 @@ describe('a pick on the dial brings its app forward', () => {
     expect(calls).toEqual([forward('com.superlogical.rex')])
   })
 
-  // herdr's ring holds Herdr.app's agents too (docs/plans/2026-11-16-herdr-app-design.md): their window is Herdr's.
-  it('bring of herdr runs open -b dev.herdr.app while Herdr.app is the ring\'s window, asked at each pick', async () => {
-    let herdrApp = true
-    const { calls, opener } = recorder({ herdrApp: () => herdrApp })
-    expect(await opener.bring!('herdr')).toBe('ok')
-    herdrApp = false
-    expect(await opener.bring!('herdr')).toBeUndefined()
-    expect(calls).toEqual([forward('dev.herdr.app')])
+  // A pick of herdr's page brings the app of the agent the dial lands on, Herdr.app's for a Herdr.app terminal, by that
+  // agent's open (docs/plans/2026-11-26-dial-mux-host-pages-design.md §5): herdr itself is no app to bring.
+  it('bring of herdr has no Herdr.app case: nothing runs', async () => {
+    const calls: string[][] = []
+    const deps = { run: async (_file: string, args: string[]) => { calls.push(args); return { code: 0, stdout: '' } },
+      platform: 'darwin' as const, adapters: [], log: () => {} }
+    expect(await createOpenActions(deps).bring!('herdr')).toBeUndefined()
+    expect(calls).toEqual([])
   })
 
   it('bring answers failed on exit 1, on a timeout (code null) and on a run that rejects, and runs once', async () => {
@@ -1030,7 +1004,7 @@ describe('a pick on the dial brings its app forward', () => {
       log: () => {},
     })
     await vi.waitFor(() => expect(raise.ready({ agent: false, app: 'vscode' })).toBe(true))
-    const { calls, opener } = recorder({ platform: 'linux', herdrApp: () => true, raise })
+    const { calls, opener } = recorder({ platform: 'linux', raise })
     expect(await opener.bring!('herdr')).toBeUndefined()
     expect(raised).toEqual([])
     expect(calls).toEqual([])
@@ -1273,5 +1247,81 @@ describe('a tap on Windows brings the app forward through the raise', () => {
     expect(opener.desktop).toBeUndefined()
     expect(opener.bring).toBeUndefined()
     expect(calls).toEqual([])
+  })
+})
+
+// The filter takes the next front report after the dial brings an app as the dial's (docs/plans/2026-11-26-dial-mux-host-pages-design.md § 6).
+describe('the opener says just before it brings an app', () => {
+  const PANE: Pane = { adapter: 'made-up', id: 'p1' }
+  const TERMINAL = 'com.apple.Terminal'
+
+  /** The opener on [platform], each step in one sequence: `bringing`, every command run, each Linux and Windows raise,
+   *  and the focus of a made-up pane that taps before its app, or [o.tap]. Each agent's window is [o.window]. */
+  function sequenced(platform: NodeJS.Platform, o: { raise?: boolean; windows?: boolean; window?: Window; tap?: HostAdapter['tap'] } = {}) {
+    const seq: string[] = []
+    const noted = async (step: string) => { seq.push(step); return true }
+    const adapter: HostAdapter = { id: 'made-up', tap: o.tap ?? 'before', paneOf: () => PANE, canFocus: () => true, focus: () => noted('focus') }
+    const opener = createOpenActions({
+      run: async (file, args) => { seq.push([file, ...args].join(' ')); return { code: 0, stdout: '' } },
+      platform,
+      adapters: [adapter],
+      log: () => {},
+      bringing: () => { seq.push('bringing') },
+      raise: o.raise ? { ready: () => true, raise: (window) => noted(['raise', window.pid, window.app].filter((part) => part !== undefined).join(' ')) } : undefined,
+      windows: o.windows
+        ? {
+            app: (bundle) => noted(`app ${bundle}`),
+            link: (url) => noted(`link ${url}`),
+            cursorFolder: (folder) => noted(`cursorFolder ${folder}`),
+            desktop: () => noted('desktop'),
+            window: (pid) => noted(`window ${pid}`),
+          }
+        : undefined,
+      windowOf: () => o.window,
+    })
+    return { seq, opener }
+  }
+
+  it('bringing is told just before each open -b and raise, and never when nothing runs', async () => {
+    const mac = sequenced('darwin')
+    expect(await mac.opener.open('a1', { bundle: TERMINAL })).toBe(true)
+    expect(await mac.opener.open('a1', { bundle: TERMINAL, pane: PANE })).toBe(true)
+    expect(await mac.opener.bring!('iterm')).toBe('ok')
+    expect(await mac.opener.desktop!()).toBe(true)
+    expect(mac.seq).toEqual([
+      'bringing', `${OPEN} -b ${TERMINAL}`,
+      'focus', 'bringing', `${OPEN} -b ${TERMINAL}`,
+      'bringing', `${OPEN} -b com.googlecode.iterm2`,
+      'bringing', `${OPEN} -b ai.autonomous.harness`,
+    ])
+
+    const linux = sequenced('linux', { raise: true, window: { pid: 4242, app: 'wezterm' } })
+    expect(await linux.opener.open('a1', {})).toBe(true)
+    expect(await linux.opener.open('a1', { pane: PANE })).toBe(true)
+    expect(await linux.opener.bring!('iterm')).toBe('ok')
+    expect(linux.seq).toEqual([
+      'bringing', 'raise 4242 wezterm',
+      'focus', 'bringing', 'raise 4242 wezterm',
+      'bringing', 'raise iterm',
+    ])
+
+    const windows = sequenced('win32', { windows: true, window: { pid: 100, app: 'terminal', outer: true } })
+    expect(await windows.opener.open('a1', { pane: PANE })).toBe(true)
+    expect(await windows.opener.open('a1', { bundle: TERMINAL })).toBe(true)
+    expect(await windows.opener.desktop!()).toBe(true)
+    expect(windows.seq).toEqual(['focus', 'bringing', 'window 100', 'bringing', `app ${TERMINAL}`, 'bringing', 'desktop'])
+
+    // A pane with no bundle and no raise brings no app; a target with neither runs nothing.
+    const none = sequenced('darwin')
+    expect(await none.opener.open('a1', { pane: PANE })).toBe(true)
+    expect(await none.opener.open('a1', {})).toBe(false)
+    expect(none.seq).toEqual(['focus'])
+  })
+
+  // The Claude app's link, cursor-folder's `open -b` and Herdr.app's focus bring their app themselves.
+  it('bringing is told just before the focus of a pane that brings its app instead of the opener', async () => {
+    const mac = sequenced('darwin', { tap: 'instead' })
+    expect(await mac.opener.open('a1', { bundle: TERMINAL, pane: PANE })).toBe(true)
+    expect(mac.seq).toEqual(['bringing', 'focus'])
   })
 })

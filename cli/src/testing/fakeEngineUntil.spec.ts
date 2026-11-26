@@ -23,26 +23,31 @@ afterEach(() => {
   engine?.kill('SIGKILL')
   engine = undefined
   rmSync(root, { recursive: true, force: true })
+  root = ''
 })
 
-/** The fake Claude Code in a throwaway root, its home there too, typed into on its stdin as at its composer. */
-function start(env: Record<string, string> = {}): { hooks(): Array<Record<string, unknown>>; type(text: string): void; hooked(event: string, test?: (input: Record<string, unknown>) => boolean, timeout?: number): Promise<Record<string, unknown>> } {
-  root = mkdtempSync(join(tmpdir(), 'fake-until-'))
+/** The fake Claude Code in a throwaway root, its home there too, started with [args] and typed into on its stdin as at
+ *  its composer. A test's next start runs in the same root and home, so it can go on in a conversation of the first. */
+function start(env: Record<string, string> = {}, args: string[] = []): { hooks(): Array<Record<string, unknown>>; type(text: string): void; hooked(event: string, test?: (input: Record<string, unknown>) => boolean, timeout?: number): Promise<Record<string, unknown>> } {
+  const first = !root
+  if (first) root = mkdtempSync(join(tmpdir(), 'fake-until-'))
   const home = join(root, 'home')
   const ran = join(root, 'hooks')
-  mkdirSync(ran)
-  mkdirSync(join(home, '.claude'), { recursive: true })
-  const command = `cat > '${ran}'/$$.json`
-  writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({
-    hooks: Object.fromEntries(EVENTS.map((event) => [event, [{ hooks: [{ type: 'command', command }] }]])),
-  }))
   const bin = join(root, 'claude')
-  writeFileSync(bin, fakeEngineShim('claude', {
-    port: 1, dataDir: join(root, 'data'), claudeProjectsDir: join(home, '.claude', 'projects'), codexHome: join(root, 'codex'), root,
-    hookLog: join(root, 'hook-runs.log'),
-  }), { mode: 0o755 })
+  if (first) {
+    mkdirSync(ran)
+    mkdirSync(join(home, '.claude'), { recursive: true })
+    const command = `cat > '${ran}'/$$.json`
+    writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({
+      hooks: Object.fromEntries(EVENTS.map((event) => [event, [{ hooks: [{ type: 'command', command }] }]])),
+    }))
+    writeFileSync(bin, fakeEngineShim('claude', {
+      port: 1, dataDir: join(root, 'data'), claudeProjectsDir: join(home, '.claude', 'projects'), codexHome: join(root, 'codex'), root,
+      hookLog: join(root, 'hook-runs.log'),
+    }), { mode: 0o755 })
+  }
   // Only its own home: none of this machine's Claude Code settings reach it.
-  engine = spawn(bin, [], { cwd: root, env: { PATH: process.env.PATH, HOME: home, ...env }, stdio: ['pipe', 'ignore', 'ignore'] })
+  engine = spawn(bin, args, { cwd: root, env: { PATH: process.env.PATH, HOME: home, ...env }, stdio: ['pipe', 'ignore', 'ignore'] })
   const hooks = (): Array<Record<string, unknown>> => {
     const inputs: Array<Record<string, unknown>> = []
     // A hook still writing its file is read at the next look.
@@ -145,6 +150,20 @@ describe('the fake Claude Code\'s session title', () => {
     const record = await processRecord()
     expect(record).not.toHaveProperty('name')
     expect(record).not.toHaveProperty('nameSource')
+  }, 30_000)
+
+  // Claude Code keeps the name with the conversation and says it from any process that goes on in it: herdr 0.9.5 that
+  // starts again resumes its panes' conversations itself (`resume_agents_on_restore`), in shells no test gave the title
+  // (dial eval I14, whose rows then lost their names).
+  it('names the title its conversation was given when a process given none goes on in it', async () => {
+    const { session_id: sessionId } = await start({ FAKE_CLAUDE_SESSION_TITLE: 'Eval a' }).hooked('SessionStart')
+    // Gone with no hook, as herdr's server takes its panes' processes; its record with it, as Claude Code's at its exit.
+    engine!.kill('SIGKILL')
+    rmSync(join(root, 'home', '.claude', 'sessions'), { recursive: true, force: true })
+    const resumed = start({}, ['--resume', String(sessionId)])
+    expect(await resumed.hooked('SessionStart', (input) => input.source === 'resume'))
+      .toMatchObject({ session_id: sessionId, session_title: 'Eval a' })
+    expect(await processRecord()).toMatchObject({ sessionId, name: 'Eval a', nameSource: 'user' })
   }, 30_000)
 })
 

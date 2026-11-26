@@ -169,6 +169,20 @@ const CODEX_NATIVE = 'HARNESS_FAKE_CODEX_NATIVE'
 const CODEX_SHADE = '\x1b[48;2;51;51;51m'
 const heldHookUrl = new URL('./heldHook.mjs', import.meta.url).href
 
+/** The latest name a Claude Code transcript gives its conversation (a `custom-title` record); undefined when it gives
+ *  none or is not there yet. */
+function customTitleIn(transcript) {
+  let title
+  let text = ''
+  try { text = readFileSync(transcript, 'utf8') } catch { /* not created yet */ }
+  for (const line of text.split('\n')) {
+    let record
+    try { record = JSON.parse(line) } catch { continue }
+    if (record?.type === 'custom-title' && typeof record.customTitle === 'string') title = record.customTitle
+  }
+  return title
+}
+
 /**
  * `@openai/codex`'s bin/codex.js (0.160.0): it starts the native binary as its child with the same
  * terminal, process group and arguments, forwards SIGINT, SIGTERM and SIGHUP to it, and ends as the
@@ -673,6 +687,11 @@ export async function run(engine, config = {}, { native = false } = {}) {
   // A fork's conversation is a new one: its transcript is new too.
   if (lateTranscript && (!resumed || fork)) holdTranscript()
   else if (!existsSync(transcript)) writeFileSync(transcript, '')
+  // The person's name for the conversation, a test's by its environment. Claude Code keeps it in the conversation's
+  // transcript and says it from any process that goes on in it: herdr that starts again resumes its panes' conversations
+  // itself (`resume_agents_on_restore`), in shells no test gave the name (dial eval I14).
+  const savedTitle = engine === 'claude' && resumed ? customTitleIn(transcript) : undefined
+  const sessionTitle = engine === 'claude' ? process.env.FAKE_CLAUDE_SESSION_TITLE || savedTitle : undefined
   // What each CLI leaves for whoever needs to know which conversation this process is writing, as the
   // daemon does when the conversation's start-up hook was lost. Codex holds its rollout open for the
   // session; Claude Code keeps a record per process, `~/.claude/sessions/<pid>.json`.
@@ -693,11 +712,10 @@ export async function run(engine, config = {}, { native = false } = {}) {
       if (held !== null) closeSync(held)
       held = openSync(transcript, 'r')
     } else if (procStart) {
-      // The title a test gives the session is the person's name for it, which Claude Code keeps in its record: the
-      // devices name a session the scan found from there (cable/hosts/record.ts).
-      const title = process.env.FAKE_CLAUDE_SESSION_TITLE
+      // The person's name for the session, which Claude Code keeps in its record: the devices name a session the scan
+      // found from there (cable/hosts/record.ts).
       writeProcessRecord({ pid: process.pid, sessionId, cwd: process.cwd(), procStart, status: 'idle',
-        ...(title ? { name: title, nameSource: 'user' } : {}) })
+        ...(sessionTitle ? { name: sessionTitle, nameSource: 'user' } : {}) })
     }
   }
   // Claude Code's record says `busy` while a turn runs and `idle` between turns, and the devices' scan reads a
@@ -735,6 +753,8 @@ export async function run(engine, config = {}, { native = false } = {}) {
   if (engine === 'codex' && readFileSync(transcript, 'utf8') === '') {
     codex('session_meta', { id: sessionId, cli_version: version, cwd, source: 'cli' })
   }
+  // As Claude Code records a name the person gives the conversation.
+  if (sessionTitle && sessionTitle !== savedTitle) write({ type: 'custom-title', customTitle: sessionTitle, sessionId })
 
   // What the CLI says about its permission mode in an event, read off its own argv as it reads it.
   const permissionMode = engine === 'claude'
@@ -767,8 +787,8 @@ export async function run(engine, config = {}, { native = false } = {}) {
     cwd,
     hook_event_name: event,
     ...(engine === 'codex' ? { model: current.model, permission_mode: permissionMode } : {}),
-    // A Claude app session's Claude Code names the app's title for it; a test gives the fake one by its environment.
-    ...(engine === 'claude' && process.env.FAKE_CLAUDE_SESSION_TITLE ? { session_title: process.env.FAKE_CLAUDE_SESSION_TITLE } : {}),
+    // A Claude app session's Claude Code names the app's title for it, and any session the name the person gave it.
+    ...(sessionTitle ? { session_title: sessionTitle } : {}),
     ...fields,
   })
   /**

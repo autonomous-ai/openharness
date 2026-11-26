@@ -367,9 +367,11 @@ from before (`src/harnessd/services.spec.ts`, `e2e/messagesSkew.e2e.ts`).
 
   In the person's herdr the devices process runs `herdr agent focus <pane>` alone, for the pane a hook named in the
   default session, the pane herdr's own list gives the agent's session, or the pane whose shell, as herdr's
-  `pane.process_info` names it, is one of the agent's parents (`services/devices.ts` `placeInHerdr`), at a tap, and at a
-  rest only while the app holding that pane's client is in front (`cable/hosts/herdr.ts`), beside the dial's words over
-  herdr's socket; a pane found by its session or its shell takes no words. To find that client it reads only process
+  `pane.process_info` names it, is one of the agent's parents (`services/devices.ts` `placeInHerdr`): at a tap; at a rest
+  while the app holding that pane's client is in front (`cable/hosts/herdr.ts`); and on herdr's page, at a pick and at a
+  rest also when that app is behind, which it brings forward first, while a rest on herdr's own row with no client app
+  focuses its pane alone (`cable/cableHost.ts` `pickLanded`, `swipeEnded`). It runs beside the dial's words over herdr's
+  socket; a pane found by its session or its shell takes no words. To find that client it reads only process
   names, parents and ttys, the unix sockets of herdr's own processes (on macOS the rows `lsof` gives, on Linux the rows
   of `ss -xn src '*/herdr-client.sock'` and their `/proc/<pid>/fd` socket links) and a tty's access time, on Windows
   only each process's pid, parent, image name and start from the PTY host's table, never another process's environment

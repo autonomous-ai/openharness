@@ -1,7 +1,8 @@
 /**
- * Claude Code in a tmux session the person opened is on tmux's page, seen in the app that holds the tmux client attached
- * to it, and a swipe reaches it there (docs/plans/2026-11-19-dial-tmux-terminal-design.md,
- * docs/plans/2026-11-23-dial-tmux-herdr-apps-design.md), on the real daemon: the engine
+ * Claude Code in a tmux session the person opened is on the page of the app that holds the tmux client attached to it
+ * and on tmux's page, a swipe reaches it there, and a pick or a rest on tmux's page brings that app
+ * (docs/plans/2026-11-19-dial-tmux-terminal-design.md, docs/plans/2026-11-26-dial-mux-host-pages-design.md), on the
+ * real daemon: the engine
  * runs in a window of a session on the daemon's private tmux server (harness/ownTmux.ts), which a client attached from a
  * tab of a fake Terminal shows: a Node under `$HOME/Applications/Terminal.app` of the daemon's throwaway home, whose
  * Info.plist says `com.apple.Terminal`, running the pseudo-terminal helper that runs `tmux attach`
@@ -53,7 +54,7 @@ const EVERYDAY_PORT = '18473'
 const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : ['--import', 'tsx', 'src/cli.ts']
 const execFileAsync = promisify(execFile)
 
-describe.skipIf(process.platform !== 'darwin')("an agent in the person's tmux, on tmux's page, seen in the app that holds its client", () => {
+describe.skipIf(process.platform !== 'darwin')("an agent in the person's tmux, on the page of the app that holds its client and on tmux's", () => {
   let daemon: IsolatedDaemon | undefined
   let desk: Desk | undefined
   const children: ChildProcess[] = []
@@ -171,6 +172,20 @@ describe.skipIf(process.platform !== 'darwin')("an agent in the person's tmux, o
       meanwhile()
       return undefined
     }, 45_000, 100)
+  /** The list of [app]'s ring, as the dial was last sent it after a frame showing that page, once it holds [agent];
+   *  [meanwhile] runs at each look. */
+  const ringOn = (dial: FakeDial, app: string, agent: InOwnTmux, meanwhile = (): void => {}): Promise<DialMessage[]> =>
+    until(`${app}'s ring with the agent`, () => {
+      const kinds = dial.messages.map((m) => m.t)
+      const shown = kinds.lastIndexOf('apps')
+      const begin = kinds.lastIndexOf('agents.begin')
+      const end = kinds.lastIndexOf('agents.end')
+      const rows = shown >= 0 && dial.messages[shown].shown === app && begin > shown && end > begin
+        ? dial.messages.slice(begin, end).filter((m) => m.t === 'agent') : []
+      if (rows.some((m) => m.id === agent.id)) return rows
+      meanwhile()
+      return undefined
+    }, 45_000, 100)
   /** Neither the tab's tty, by its name alone too (`ttys012` names the tab as well), nor a pane, the person's session's
    *  name or a session id is in the daemon's log. */
   const unsaid = (d: IsolatedDaemon, tty: string, agent: InOwnTmux, ...others: Outside[]): void => {
@@ -195,28 +210,34 @@ describe.skipIf(process.platform !== 'darwin')("an agent in the person's tmux, o
   }
   const selectOf = (tty: string, app = 'terminal-app'): string => JSON.stringify({ select: { app, tty } })
 
-  it("an agent in the person's tmux is on tmux's page, one row, and Terminal's page holds B alone", async () => {
-    const { d, dial, agent } = await fresh()
-    const frame = await pageOf(dial, "tmux's page holding the agent", 'tmux', 1)
-    expect(appsOf(frame)).toContainEqual(expect.objectContaining({ id: 'terminal-app', count: 1 }))
+  it("an agent in the person's tmux is on Terminal's page beside B and on tmux's page, one row on each", async () => {
+    const { d, dial, b, agent } = await fresh()
+    const frame = await pageOf(dial, "Terminal's page holding B and the agent", 'terminal-app', 2)
+    expect(appsOf(frame)).toContainEqual(expect.objectContaining({ id: 'tmux', count: 1 }))
+    // Terminal is in front: its ring, where the agent's row names Terminal (spec §2).
+    const terminal = await ringOn(dial, 'terminal-app', agent)
+    expect(terminal.map((m) => m.id).sort()).toEqual([agent.id, b.id].sort())
+    expect(terminal.find((m) => m.id === agent.id)?.host).toBe('terminal-app')
     // Terminal settling in front ends a pick made before it (another app settled), so the pick is made again every 2 s
     // until tmux's ring is listed, as a person picks again.
     let picked = 0
-    const roster = await rosterWith(dial, agent, () => {
+    const tmux = await ringOn(dial, 'tmux', agent, () => {
       if (Date.now() - picked < 2_000) return
       dial.pick('tmux')
       picked = Date.now()
     })
-    expect(roster.filter((m) => m.id === agent.id)).toHaveLength(1)
+    expect(tmux.map((m) => m.id)).toEqual([agent.id])
+    expect(tmux[0].host).toBe('tmux')
     // Said once the lookups settled, which may be a moment after the place reached the dial.
     await until('the client line', () => d.log().includes('[device] tmux client · found'), 30_000, 50)
   })
 
-  it("found by the scan after the devices start, an agent in the person's tmux whose client is in an iTerm2 tab is on tmux's page, one row, with no iTerm2 or Other page", async () => {
+  it("found by the scan after the devices start, an agent in the person's tmux whose client is in an iTerm2 tab is on iTerm2's page and tmux's, one row, with no Other page", async () => {
     const { d, dial, client, agent } = await foundByScan()
-    const frame = await pageOf(dial, "tmux's page holding the agent", 'tmux', 1)
-    // iTerm2 holds no agent of its own (Diego's decision 2, 2026-11-23).
-    expect(appsOf(frame).map((a) => a.id)).not.toContain('iterm')
+    const frame = await until("iTerm2's and tmux's pages holding the agent", () => {
+      const last = dial.messages.filter((m) => m.t === 'apps').at(-1)
+      return last && ['iterm', 'tmux'].every((app) => appsOf(last).some((a) => a.id === app && a.count === 1)) ? last : undefined
+    }, 45_000, 100)
     expect(appsOf(frame).map((a) => a.id)).not.toContain(UNKNOWN_APP)
     expect((await rosterWith(dial, agent)).filter((m) => m.id === agent.id)).toHaveLength(1)
     // Said once the lookups settled, a moment after the place reached the dial.
@@ -248,17 +269,75 @@ describe.skipIf(process.platform !== 'darwin')("an agent in the person's tmux, o
     await until("the agent's pane active in the person's session", async () => (await active(d)) === agent.pane, 30_000, 50)
   })
 
-  it("selecting the client's tab while Terminal comes to the front, before it settles, turns the dial to tmux's page and its agent", async () => {
+  it("selecting the client's tab keeps Terminal's page and moves the dial to its agent", async () => {
     const { d, dial, b, client, agent, run } = await fresh()
-    // B is Terminal's own agent, so Terminal has a page to settle on.
     await dial.next((m) => m.t === 'apps' && m.shown === 'terminal-app', 45_000, "Terminal's page")
     const since = dial.messages.length
     const tty = await client.tty()
     run.tab(tty)
-    await dial.next((m) => m.t === 'apps' && m.shown === 'tmux', 30_000, "tmux's page", since)
     await dial.next((m) => m.t === 'focus' && m.agentId === agent.id, 30_000, "the agent's focus", since)
     await until('the tab line moved the dial', () => d.log().includes('[device] tab · moved'), 30_000, 50)
-    expect(d.log().split('\n').filter((line) => line.includes('[device] app filter: switched · follow'))).toHaveLength(1)
+    // A follow turns no page (spec §3).
+    expect(dial.messages.slice(since).filter((m) => m.t === 'apps').map((m) => m.shown)).not.toContain('tmux')
+    unsaid(d, tty, agent, b)
+  })
+
+  /** The person goes back to their session's shell window, then brings Orca forward: its ring, once Orca settled in front. */
+  const inOrca = async (d: IsolatedDaemon, dial: FakeDial, run: ReturnType<typeof watch>): Promise<void> => {
+    await d.tmux.run('select-window', '-t', `${SESSION}:0`)
+    const orca = new InOrca(d, 'o', children, { ORCA_TERMINAL_HANDLE: `term_${randomUUID()}`, __CFBundleIdentifier: ORCA })
+    await orca.hook('SessionStart', { source: 'startup' })
+    const since = dial.messages.length
+    run.front(ORCA)
+    await dial.next((m) => m.t === 'apps' && m.shown === 'orca', 45_000, "Orca's ring", since)
+  }
+  const bringsTerminal = (args: string[]): boolean => args.length === 2 && args[0] === '-b' && args[1] === TERMINAL
+  /**
+   * The dial brought Terminal, after [opensBefore] opens and [selectsBefore] select lines: its open, then Terminal in
+   * front, as it comes a moment after an open, within 2 s of it; the client's tab selected and the agent's pane active;
+   * and Terminal's settle keeps tmux's page (spec §6).
+   */
+  const terminalBrought = async (d: IsolatedDaemon, dial: FakeDial, run: ReturnType<typeof watch>, tty: string,
+    agent: InOwnTmux, opensBefore: number, selectsBefore: number): Promise<void> => {
+    await until('an open -b of Terminal', () => d.opens().slice(opensBefore).some(bringsTerminal), 30_000, 20)
+    const since = dial.messages.length
+    run.front(TERMINAL)
+    // The open's select raises the tab's window too, as a tap's does (tabs.ts).
+    const raised = JSON.stringify({ select: { app: 'terminal-app', tty, raise: true } })
+    await until("the client's tab selected", () => run.selects().slice(selectsBefore).includes(raised), 30_000, 50)
+    await until("the agent's pane active in the person's session", async () => (await active(d)) === agent.pane, 30_000, 50)
+    await until("Terminal's settle kept the page", () => d.log().includes('[device] app filter: front · dial'), 30_000, 50)
+    expect(dial.messages.slice(since).filter((m) => m.t === 'apps').map((m) => m.shown)).not.toContain('terminal-app')
+    expect(dial.messages.filter((m) => m.t === 'apps').at(-1)?.shown).toBe('tmux')
+  }
+
+  it("with Orca in front a pick of tmux's page brings Terminal on the client's tab and the agent's pane, and the dial stays on tmux's page", async () => {
+    const { d, dial, b, client, agent, run } = await fresh()
+    await inOrca(d, dial, run)
+    const tty = await client.tty()
+    const opensBefore = d.opens().length
+    const selectsBefore = run.selects().length
+    dial.pick('tmux')
+    await until('the pick brought', () => d.log().includes('[device] app filter: bring · ok'), 30_000, 50)
+    await terminalBrought(d, dial, run, tty, agent, opensBefore, selectsBefore)
+    unsaid(d, tty, agent, b)
+  })
+
+  it("with Orca in front a rest on tmux's page brings Terminal on the client's tab and the agent's pane, and the dial stays on tmux's page", async () => {
+    const { d, dial, b, client, agent, run } = await fresh()
+    await inOrca(d, dial, run)
+    const tty = await client.tty()
+    // The pick brings Terminal too, which never comes to the front here: Orca stays there, the pick holds tmux's page,
+    // and the person goes back to the shell's window.
+    dial.pick('tmux')
+    await until('the pick brought', () => d.log().includes('[device] app filter: bring · ok'), 30_000, 50)
+    await until("the agent's pane active in the person's session", async () => (await active(d)) === agent.pane, 30_000, 50)
+    await d.tmux.run('select-window', '-t', `${SESSION}:0`)
+    const opensBefore = d.opens().length
+    const selectsBefore = run.selects().length
+    // The dial is on the agent, the only row of tmux's ring: a rest on it, again every 2 s until one opened.
+    await dial.turnUntil(agent.id, 'a rest that opened', () => swipes(d).includes('[device] swipe · opened') || undefined)
+    await terminalBrought(d, dial, run, tty, agent, opensBefore, selectsBefore)
     unsaid(d, tty, agent, b)
   })
 
@@ -266,14 +345,8 @@ describe.skipIf(process.platform !== 'darwin')("an agent in the person's tmux, o
     const { d, dial, b, client, shell, agent, run } = await fresh()
     await swipedTo(dial, b, agent, run, selectOf(await client.tty()))
     await until("the agent's pane active in the person's session", async () => (await active(d)) === agent.pane, 30_000, 50)
-    // The person goes back to the shell's window, then brings Orca forward: its ring, once Orca settled in front.
-    await d.tmux.run('select-window', '-t', `${SESSION}:0`)
+    await inOrca(d, dial, run)
     expect(await active(d)).toBe(shell)
-    const orca = new InOrca(d, 'o', children, { ORCA_TERMINAL_HANDLE: `term_${randomUUID()}`, __CFBundleIdentifier: ORCA })
-    await orca.hook('SessionStart', { source: 'startup' })
-    const since = dial.messages.length
-    run.front(ORCA)
-    await dial.next((m) => m.t === 'apps' && m.shown === 'orca', 45_000, "Orca's ring", since)
     // The dial was on the agent: a turn to B, then back, each a swipe the daemon ends with a line.
     const before = swipes(d).length
     dial.send({ t: 'focus', agentId: b.id })

@@ -1,6 +1,6 @@
 /**
- * An agent in a herdr pane whose client runs in a kitty window is on herdr's page (Diego, 2026-11-23:
- * docs/plans/2026-11-23-dial-tmux-herdr-apps-design.md), and a rest while kitty is in front focuses the client's kitty
+ * An agent in a herdr pane whose client runs in a kitty window is on kitty's page and herdr's
+ * (docs/plans/2026-11-26-dial-mux-host-pages-design.md), and a rest while kitty is in front focuses the client's kitty
  * window, then the agent's herdr pane (docs/plans/2026-11-21-dial-linux-followups-design.md § 2), on the real daemon:
  * herdr's client attached to a herdr server of the test's own (harness/herdrServer.ts) runs in the first window of a
  * kitty of the test's own (harness/kittyWindow.ts), with remote control on for its socket alone, on an X11 desk of the
@@ -112,7 +112,7 @@ describe.skipIf(!herdrBinary || !kittyInstalled)("herdr's client in kitty", () =
     expect(tty).toMatch(/^pts\/[0-9]+$/)
     unsaid.push(join(d.projectsDir, 'api'), agent.sessionId, agent.pane, tty, client.listenOn!, join(d.env.HOME!, '.config', 'herdr'))
     await said(d, '[device] herdr client · found')
-    await dial.next((m) => m.t === 'agent' && m.id === agent.id && m.host === 'herdr', 45_000, 'the agent listed')
+    await dial.next((m) => m.t === 'agent' && m.id === agent.id, 45_000, 'the agent listed')
     // herdr focuses only an agent it has seen, and its detection lags the hook by a moment (herdr 0.9.5).
     await until('herdr to see the agent', async () => {
       const read = await server.rpc('agent.get', { target: agent.pane }).catch(() => undefined)
@@ -136,19 +136,32 @@ describe.skipIf(!herdrBinary || !kittyInstalled)("herdr's client in kitty", () =
   /** The daemon's rest lines, each from its `[device]` on. */
   const swipes = (d: IsolatedDaemon): string[] => lines(d, '[device] swipe ·')
 
-  it("lists the agent on herdr's page, one row, and on no other page", async () => {
+  it("lists the agent on kitty's page and herdr's, one row on each, and on no other page", async () => {
     const { dial, agent } = await fresh()
     const apps = (m: DialMessage) => m.apps as Array<{ id: string; count: number }>
-    const frame = await until("herdr's page holding the agent", () => {
+    const frame = await until("kitty's and herdr's pages holding the agent", () => {
       const last = dial.messages.filter((m) => m.t === 'apps').at(-1)
-      return last && apps(last).some((a) => a.id === 'herdr' && a.count === 1) ? last : undefined
+      return last && ['kitty', 'herdr'].every((app) => apps(last).some((a) => a.id === app && a.count === 1)) ? last : undefined
     }, 45_000, 100)
-    expect(apps(frame).filter((a) => a.count > 0)).toEqual([expect.objectContaining({ id: 'herdr', count: 1 })])
-    // Its ring's list, as the dial was last sent it: the agent once, and nothing else.
-    const begin = dial.messages.map((m) => m.t).lastIndexOf('agents.begin')
-    const end = dial.messages.map((m) => m.t).lastIndexOf('agents.end')
-    expect(end).toBeGreaterThan(begin)
-    expect(dial.messages.slice(begin, end).filter((m) => m.t === 'agent').map((m) => m.id)).toEqual([agent.id])
+    expect(apps(frame).filter((a) => a.count > 0).map((a) => a.id).sort()).toEqual(['herdr', 'kitty'])
+    // herdr's ring, as the dial was last sent it after a frame showing that page, picked again every 2 s until shown:
+    // the agent once, and nothing else, its row naming herdr (docs/plans/2026-11-26-dial-mux-host-pages-design.md §2).
+    let picked = 0
+    const rows = await until("herdr's ring", () => {
+      const kinds = dial.messages.map((m) => m.t)
+      const shown = kinds.lastIndexOf('apps')
+      const begin = kinds.lastIndexOf('agents.begin')
+      const end = kinds.lastIndexOf('agents.end')
+      if (dial.messages[shown]?.shown === 'herdr' && begin > shown && end > begin) {
+        return dial.messages.slice(begin, end).filter((m) => m.t === 'agent')
+      }
+      if (Date.now() - picked >= 2_000) {
+        dial.pick('herdr')
+        picked = Date.now()
+      }
+      return undefined
+    }, 45_000, 100)
+    expect(rows.map((m) => [m.id, m.host])).toEqual([[agent.id, 'herdr']])
   })
 
   it("with kitty in front a rest focuses the client's window, then the agent's herdr pane", async () => {
@@ -173,7 +186,7 @@ describe.skipIf(!herdrBinary || !kittyInstalled)("herdr's client in kitty", () =
 
   it('with another app in front a rest moves neither the window nor the herdr pane', async () => {
     const { d, dial, herdr, windows, client, agent } = await fresh()
-    // Orca in front, with an agent of its own: the dial, holding herdr's ring, turns to Orca's once Orca settled there,
+    // Orca in front, with an agent of its own: the dial, holding the agent's ring, turns to Orca's once Orca settled there,
     // so the front line has landed.
     const handle = `term_${randomUUID()}`
     unsaid.push(handle)

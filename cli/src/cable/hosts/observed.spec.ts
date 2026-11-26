@@ -24,7 +24,7 @@ import type { OpenTarget } from './open.js'
 import { createOrcaAdapter, MAX_TEXT, type OrcaDeps } from './orca.js'
 import { type Fresh, FRESH_WITHIN_MS, type Nested, type NestedPlace, type OuterLookup } from './outer.js'
 import { appRoots, learnApps, type ProcessName, scannedApps } from './scannedApp.js'
-import { pageOf } from './select.js'
+import { pagesOf } from './select.js'
 import { createTabsAdapter, type TabApp } from './tabs.js'
 import { createTmuxAdapter } from './tmux.js'
 import type { HostAgent, Nest, PaneSwitch, TypeResult } from './types.js'
@@ -2440,17 +2440,17 @@ describe('ObservedSource and the Herdr terminal a session the scan found runs in
     s.src.placeHerdr()
     expect(placeOf(a())).toEqual({ host: 'herdr', app: 'herdr', appPending: undefined, paneKeys: ['herdr-app:t7'] })
     expect(a()).not.toHaveProperty('nest')
-    expect(pageOf(a())).toBe('herdr')
+    expect(pagesOf(a())).toEqual(['herdr'])
     s.terminals.delete(11)
     s.src.placeHerdr()
     expect(a()).toMatchObject({ host: 'tmux', nest: 'tmux', app: 'terminal', appPending: true })
-    expect(pageOf(a())).toBe('tmux')
-    // Paired again, then its first hook, nested, from its own process: tmux's page while that hook's lookup runs.
+    expect(pagesOf(a())).toEqual(['tmux'])
+    // Paired again, then its first hook, nested, from its own process: its hints' app's page and tmux's while that hook's lookup runs.
     s.terminals.set(11, 't7')
     s.src.placeHerdr()
     s.src.ingest(s.ev('turn-start', { sessionId: 'a', callerPid: 11, cwd: '/x/a', hostHints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux', __CFBundleIdentifier: 'com.googlecode.iterm2' } }))
     expect(a()).toMatchObject({ host: 'tmux', nest: 'tmux' })
-    expect(pageOf(a())).toBe('tmux')
+    expect(pagesOf(a())).toEqual(['iterm', 'tmux'])
   })
 
   it('a hook heard after the pairing places it by its own hints, and no later placeHerdr pairs it again', async () => {
@@ -5517,7 +5517,7 @@ describe('ObservedSource outer place', () => {
     })
   })
 
-  // Diego, 2026-11-23: an agent in tmux or herdr is on that multiplexer's page, whatever terminal holds its client. Only
+  // Diego, 2026-11-23: an agent in tmux or herdr is on its terminal app's page and that multiplexer's (Diego, 2026-11-26). Only
   // the lookup that confirmed its pane says so (`nest`), never the hints alone.
   it('a hooked agent in tmux has nest and host tmux once its lookup says tmux: with a client\'s app and detached', async () => {
     const t = nested()
@@ -5525,12 +5525,38 @@ describe('ObservedSource outer place', () => {
     expect(t.agent()).not.toHaveProperty('nest')
     await t.asks[0].answer({ ...CLIENT, pid: 4300, nest: 'tmux' })
     expect(t.agent()).toMatchObject({ app: 'terminal-app', host: 'tmux', nest: 'tmux' })
-    expect(pageOf(t.agent())).toBe('tmux')
+    expect(pagesOf(t.agent())).toEqual(['terminal-app', 'tmux'])
     // Asked again at its next turn: it keeps its multiplexer until the answer, which finds the person detached.
     t.src.ingest(t.ev('turn-start', inTmux()))
     expect(t.agent()).toMatchObject({ host: 'tmux', nest: 'tmux' })
     await t.asks[1].answer({ nest: 'tmux' })
-    expect(t.agent()).toMatchObject({ app: 'tmux', host: 'tmux', nest: 'tmux' })
+    expect(t.agent()).toMatchObject({ app: 'terminal', host: 'tmux', nest: 'tmux' })
+    expect(pagesOf(t.agent())).toEqual(['tmux'])
+  })
+
+  // A pane inherits the bundle id of the terminal that started tmux's server: a detached agent's hints name iTerm2, which
+  // holds no client of it (final review, 2026-11-26).
+  it('a nested agent whose lookup landed with no client app is on its multiplexer\'s page alone, never its hints\' app\'s', async () => {
+    const hostHints = { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux', __CFBundleIdentifier: 'com.googlecode.iterm2' }
+    // Detached, and attached from a terminal with no page.
+    for (const answer of [{ nest: 'tmux' }, { pid: 4300, nest: 'tmux' }] as const) {
+      const t = nested()
+      const label = JSON.stringify(answer)
+      t.src.ingest(t.ev('session-start', { hostHints }))
+      await t.asks[0].answer(answer)
+      expect(pagesOf(t.agent()), label).toEqual(['tmux'])
+      // A later hook of the same caller asks nothing anew: the landed answer stands.
+      t.src.ingest(t.ev('turn-stop', { hostHints }))
+      expect(t.asks, label).toHaveLength(1)
+      expect(pagesOf(t.agent()), label).toEqual(['tmux'])
+      // Its next turn asks anew: while that runs it stays off iTerm2's page, as an attached one keeps its client's
+      // place until the answer (askOuter), and the answer moves it.
+      t.src.ingest(t.ev('turn-start', { hostHints }))
+      expect(t.asks, label).toHaveLength(2)
+      expect(pagesOf(t.agent()), label).toEqual(['tmux'])
+      await t.asks[1].answer({ ...CLIENT, nest: 'tmux' })
+      expect(pagesOf(t.agent()), label).toEqual(['terminal-app', 'tmux'])
+    }
   })
 
   it('a hooked agent in herdr has nest and host herdr', async () => {
@@ -5538,7 +5564,7 @@ describe('ObservedSource outer place', () => {
     t.src.ingest(t.ev('session-start', { hostHints: { HERDR_PANE_ID: 'w1:p2' } }))
     await t.asks[0].answer({ app: 'iterm', tty: '/dev/ttys005', pid: 4400, nest: 'herdr' })
     expect(t.agent()).toMatchObject({ app: 'iterm', host: 'herdr', nest: 'herdr' })
-    expect(pageOf(t.agent())).toBe('herdr')
+    expect(pagesOf(t.agent())).toEqual(['iterm', 'herdr'])
   })
 
   // herdr's server keeps the environment of the client that started it, and on Windows the hook names the app from the
@@ -5555,7 +5581,7 @@ describe('ObservedSource outer place', () => {
       await t.asks[0].answer({ pid: 100, nest: 'herdr' })
       const { id } = t.agent()
       expect(t.agent().app).toBe('terminal')
-      expect(pageOf(t.agent())).toBe('herdr')
+      expect(pagesOf(t.agent())).toEqual(['herdr'])
       expect(t.src.windowOf(id)).toEqual({ pid: 100, app: 'terminal', outer: true })
       expect(await t.src.focus(t.agent(), latestTap)).toBe(true)
       expect(t.actions.open.mock.calls[0][1]).not.toHaveProperty('bundle')
@@ -5575,7 +5601,7 @@ describe('ObservedSource outer place', () => {
       t.src.ingest(t.ev('session-start', { hostHints: STALE }))
       await t.asks[0].made('herdr')
       expect(t.agent().app).toBe('terminal')
-      expect(pageOf(t.agent())).toBe('herdr')
+      expect(pagesOf(t.agent())).toEqual(['herdr'])
       expect(await t.src.focus(t.agent(), latestTap)).toBe(true)
       expect(t.actions.open.mock.calls[0][1]).not.toHaveProperty('bundle')
     })
@@ -5590,15 +5616,15 @@ describe('ObservedSource outer place', () => {
       expect(t.actions.open.mock.calls[0][1]).not.toHaveProperty('bundle')
     })
 
-    // The server's first client was in Orca: Orca's page is its app's own (pageOf), so the hint's app would hold an
-    // agent attached from Windows Terminal there.
+    // The server's first client was in Orca: the hint's app would hold an
+    // agent attached from Windows Terminal on Orca's page (pagesOf).
     it('a stale Orca hint stays off Orca\'s page', async () => {
       const t = onWindows()
       const hostHints = { HERDR_PANE_ID: 'w1:p1', TERM_PROGRAM: 'Orca', ORCA_TERMINAL_HANDLE: HANDLE, ORCA_AGENT_SESSION_ID: 'x' }
       t.src.ingest(t.ev('session-start', { hostHints }))
       await t.asks[0].answer({ pid: 100, nest: 'herdr' })
       expect(t.agent().app).toBe('terminal')
-      expect(pageOf(t.agent())).toBe('herdr')
+      expect(pagesOf(t.agent())).toEqual(['herdr'])
     })
 
     // A terminal started from a herdr pane keeps HERDR_PANE_ID, while herdr did not make its terminal.
@@ -5650,7 +5676,7 @@ describe('ObservedSource outer place', () => {
     await t.asks[0].answer({})
     expect(t.agent()).toMatchObject({ app: 'vscode', host: 'tmux' })
     expect(t.agent()).not.toHaveProperty('nest')
-    expect(pageOf(t.agent())).toBe('vscode')
+    expect(pagesOf(t.agent())).toEqual(['vscode'])
   })
 
   // Mac eval IH4 (2026-11-24): a hooked agent in a herdr pane inside iTerm2 sat on iTerm2's page past a 10 s wait while
@@ -5671,13 +5697,13 @@ describe('ObservedSource outer place', () => {
       await t.asks[0].made(nest)
       expect(t.agent(), nest).toMatchObject({ app: 'iterm', host: nest, nest })
       expect(t.agent(), nest).not.toHaveProperty('appPending')
-      expect(pageOf(t.agent()), nest).toBe(nest)
+      expect(pagesOf(t.agent()), nest).toEqual(['iterm', nest])
       expect(t.changes, nest).toHaveBeenCalledTimes(told + 1)
       // The client's place lands when its steps end, on the same page.
       await t.asks[0].answer({ app: 'iterm', tty: '/dev/ttys005', pid: 4400, nest })
       expect(t.agent(), nest).toMatchObject({ app: 'iterm', host: nest, nest })
       expect(t.src.paneOf(t.agent().id, 'tabs'), nest).toBe('iterm:/dev/ttys005')
-      expect(pageOf(t.agent()), nest).toBe(nest)
+      expect(pagesOf(t.agent()), nest).toEqual(['iterm', nest])
     }
   })
 
@@ -5725,8 +5751,8 @@ describe('ObservedSource outer place', () => {
     ['herdr · another pane', HERDR_HINTS(), HERDR_HINTS({ HERDR_PANE_ID: 'w1:p3' }), 'herdr'],
   ])('%s: the multiplexer it was confirmed in stays while the new ask runs, its tab goes at once; that ask\'s answer decides', async (_name, hints, moved, nest) => {
     // Confirmed again: its page and the new client's tab. None (a terminal started from the pane): its hints' app.
-    const answers = [[{ ...CLIENT, nest }, nest, 'terminal-app:/dev/ttys004'], [{}, 'iterm', undefined]] as const
-    for (const [answer, page, tab] of answers) {
+    const answers = [[{ ...CLIENT, nest }, ['terminal-app', nest], 'terminal-app:/dev/ttys004'], [{}, ['iterm'], undefined]] as const
+    for (const [answer, pages, tab] of answers) {
       const t = nested()
       const label = JSON.stringify(answer)
       t.src.ingest(t.ev('session-start', hints))
@@ -5735,10 +5761,10 @@ describe('ObservedSource outer place', () => {
       expect(t.asks, label).toHaveLength(2)
       expect(t.agent(), label).toMatchObject({ nest, host: nest })
       expect(t.agent(), label).not.toHaveProperty('appPending')
-      expect(pageOf(t.agent()), label).toBe(nest)
+      expect(pagesOf(t.agent()), label).toEqual(['iterm', nest])
       expect(t.src.paneOf(t.agent().id, 'tabs'), label).toBeUndefined()
       await t.asks[1].answer(answer)
-      expect(pageOf(t.agent()), label).toBe(page)
+      expect(pagesOf(t.agent()), label).toEqual(pages)
       expect(t.src.paneOf(t.agent().id, 'tabs'), label).toBe(tab)
     }
   })
@@ -5764,7 +5790,7 @@ describe('ObservedSource outer place', () => {
     expect(t.asks).toHaveLength(3)
     await t.asks[1].answer({})
     expect(t.agent().nest).toBe('tmux')
-    expect(pageOf(t.agent())).toBe('tmux')
+    expect(pagesOf(t.agent())).toEqual(['iterm', 'tmux'])
     await t.asks[2].answer({ ...CLIENT, nest: 'tmux' })
     expect(t.src.paneOf(t.agent().id, 'tabs')).toBe('terminal-app:/dev/ttys004')
   })
@@ -5778,7 +5804,7 @@ describe('ObservedSource outer place', () => {
       await t.asks[0].answer({ ...CLIENT, nest })
       t.src.ingest(t.ev('needs-input', { ...TMUX_HINTS({ HERDR_PANE_ID: 'w1:p1' }), callerPid: 101 }))
       expect(t.agent(), nest).toMatchObject({ nest, host: nest })
-      expect(pageOf(t.agent()), nest).toBe(nest)
+      expect(pagesOf(t.agent()), nest).toEqual(['iterm', nest])
     }
   })
 
@@ -5792,7 +5818,7 @@ describe('ObservedSource outer place', () => {
     plain.src.ingest(plain.ev('needs-input', { hostHints: inZellij, callerPid: 101 }))
     expect(plain.outer).toHaveBeenCalledTimes(2)
     expect(plain.agent()).not.toHaveProperty('nest')
-    expect(pageOf(plain.agent())).toBe('iterm')
+    expect(pagesOf(plain.agent())).toEqual(['iterm'])
 
     // Resumed in herdr: the other multiplexer's variable only.
     const other = nested()
@@ -6146,7 +6172,7 @@ describe('ObservedSource and a nested session the scan found', () => {
     await look
     expect(t.agent('a')).toMatchObject({ app: 'iterm', nest: 'tmux', host: 'tmux' })
     expect(t.agent('b')).toMatchObject({ app: 'terminal', appPending: true, nest: 'herdr', host: 'herdr' })
-    expect([pageOf(t.agent('a')), pageOf(t.agent('b'))]).toEqual(['tmux', 'herdr'])
+    expect([pagesOf(t.agent('a')), pagesOf(t.agent('b'))]).toEqual([['iterm', 'tmux'], ['herdr']])
     expect(t.agent('c')).toMatchObject({ app: 'herdr', host: 'herdr' })
     expect(t.agent('c')).not.toHaveProperty('nest')
   })
@@ -6179,7 +6205,7 @@ describe('ObservedSource and a nested session the scan found', () => {
       t.src.ingest(t.ev('turn-start', { sessionId: 'a', hostHints }))
       expect(outer.mock.calls, made.host).toEqual([[hostHints, 100, expect.any(Function)]])
       expect(t.agent('a'), made.host).toMatchObject({ nest: made.host, host: made.host })
-      expect(pageOf(t.agent('a')), made.host).toBe(made.host)
+      expect(pagesOf(t.agent('a')), made.host).toEqual(['iterm', made.host])
     }
   })
 
@@ -6204,13 +6230,13 @@ describe('ObservedSource and a nested session the scan found', () => {
       t.src.ingest(t.ev('session-start', { sessionId: 'a', hostHints, callerPid: 101 }))
       expect(outer.mock.calls, made.host).toEqual([[hostHints, 101, expect.any(Function)]])
       expect(t.agent('a'), made.host).toMatchObject({ nest: made.host, host: made.host, app: 'iterm' })
-      expect(pageOf(t.agent('a')), made.host).toBe(made.host)
+      expect(pagesOf(t.agent('a')), made.host).toEqual(['iterm', made.host])
       expect(t.src.paneOf(id, 'tabs'), made.host).toBeUndefined()
       // Its new terminal is no pane of it (a terminal started from the pane): its hints' app.
       asks[0]({})
       await flushed()
       expect(t.agent('a'), made.host).not.toHaveProperty('nest')
-      expect(pageOf(t.agent('a')), made.host).toBe('iterm')
+      expect(pagesOf(t.agent('a')), made.host).toEqual(['iterm'])
     }
   })
 
@@ -6428,7 +6454,7 @@ describe('ObservedSource and a nested session the scan found', () => {
       t.src.ingest(t.ev('turn-start', { sessionId: 'a', hostHints: { TERM_PROGRAM: 'ghostty' } }))
       expect(t.a()).not.toHaveProperty('nest')
       expect(t.a()).toMatchObject({ app: 'ghostty', host: 'ghostty' })
-      expect(pageOf(t.a())).toBe('ghostty')
+      expect(pagesOf(t.a())).toEqual(['ghostty'])
     })
 
     // Eval I13 for an agent the scan placed (PM, 2026-11-24): no hook since the devices started again, so nothing asks
@@ -6612,7 +6638,7 @@ describe('ObservedSource and a Codex session its own server runs', () => {
     const { id } = t.agent()
     expect(t.agent().app).toBe('terminal-app')
     expect(t.agent().appPending).toBeUndefined()
-    expect(pageOf(t.agent())).toBe('terminal-app')
+    expect(pagesOf(t.agent())).toEqual(['terminal-app'])
     expect(t.src.tabTty(id)).toBe('/dev/ttys005')
     expect(t.src.paneOf(id, 'tabs')).toBe('terminal-app:/dev/ttys005')
     expect(t.src.windowOf(id)).toEqual({ pid: 500, app: 'terminal-app', outer: true })
@@ -6913,7 +6939,7 @@ describe('ObservedSource and a Codex session its own server runs', () => {
     const { id } = s.src.list()[0]
     const onTerminal = (): void => {
       const agent = s.src.list()[0]
-      expect(pageOf(agent)).toBe('terminal-app')
+      expect(pagesOf(agent)).toEqual(['terminal-app'])
       expect(s.src.tabTty(id)).toBe('/dev/ttys005')
       expect(s.src.paneOf(id, 'tabs')).toBe('terminal-app:/dev/ttys005')
       for (const adapter of ['tmux', 'vscode', 'orca', 'herdr', 'wezterm']) expect(s.src.paneOf(id, adapter)).toBeUndefined()

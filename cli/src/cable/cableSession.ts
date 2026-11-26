@@ -460,6 +460,9 @@ export interface CableHost {
   /** The dial picked an app, or a tapped notice turns it to its agent's app (`notice`). `ignored` on a window's tab;
    *  `tabs` when Harness was picked on an app's ring, and the dials hold the window's tab again. */
   pickApp?(app: string, cause?: 'pick' | 'notice'): AppPick
+  /** A pick switched the dial to that app's ring, which landed on that agent (undefined for an empty ring): on tmux's or
+   *  herdr's page the host brings the app holding its client. */
+  pickLanded?(app: string, agentId: string | undefined): void
   /** The app an agent of the machine view is in; undefined on a window's tab. */
   appOf?(agentId: string, opts?: { apps?: boolean }): string | undefined
   /** Every agent across the account — the overview's number. The dial gets the count, never the rows. */
@@ -495,10 +498,11 @@ export interface CableHost {
   hostOf?(agentId: string, opts?: { apps?: boolean }): string | undefined
   /** The dial is on that agent: its finished answer counts as seen. */
   markSeen?(agentId: string, opts?: { apps?: boolean }): void
-  /** A rest of the dial on that agent switches its app's pane: the session then times a hand's turn to it. */
-  swipeSwitches?(agentId: string): boolean
+  /** A rest of the dial on that agent switches its app's pane, or on tmux's or herdr's page brings its app: the session
+   *  then times a hand's turn to it. `opts` is the dial's own, as only a dial on an app's ring shows such a page. */
+  swipeSwitches?(agentId: string, opts?: { apps?: boolean }): boolean
   /** How a hand's turn to such an agent ended: the dial rested on it for SWIPE_REST_MS, or left it first. */
-  swipeEnded?(agentId: string, how: 'rest' | 'superseded'): void
+  swipeEnded?(agentId: string, how: 'rest' | 'superseded', opts?: { apps?: boolean }): void
   /** A hand turned the dial to an agent, whatever its pane or none, as it turned: never the dial's echo of a move the app
    *  asked for, which the focus guard drops first. */
   turned?(): void
@@ -1776,7 +1780,13 @@ export class CableSession {
         const app = str('app')
         if (!this.appFilter || !app || app.length > 16 || !this.host.pickApp) return
         const picked = this.host.pickApp(app)
-        if (picked === 'switched') await this.syncAgents(true)
+        if (picked === 'switched') {
+          await this.syncAgents(true)
+          // Where the dial lands on the new ring: the agent it showed, which the push steers it back to, when the ring
+          // holds it; else its first row, where the round dial and the Pro land after a pick (spec §5).
+          const focus = this.desiredFocus
+          this.host.pickLanded?.(app, this.lastRing.some((a) => a.id === focus) ? focus : this.lastRing[0]?.id)
+        }
         // The dial picked from a list that moved under it: it is told the list again, and keeps the ring it holds.
         else if (picked === 'ignored') await this.queued(() => this.syncAgentsNow(true, false))
         // `tabs` sends nothing here: the view's change sends every such dial its tabs before its list (viewChanged).
@@ -4007,12 +4017,12 @@ export class CableSession {
   private restOn(agentId: string): void {
     const pending = this.swipeRest
     this.endRest()
-    if (pending && pending.agentId !== agentId) this.host.swipeEnded?.(pending.agentId, 'superseded')
-    if (!this.host.swipeSwitches?.(agentId)) return
+    if (pending && pending.agentId !== agentId) this.host.swipeEnded?.(pending.agentId, 'superseded', this.asItself)
+    if (!this.host.swipeSwitches?.(agentId, this.asItself)) return
     const timer = setTimeout(() => {
       this.swipeRest = null
       // The app may have moved the dial since (a prompt, a tapped notice): the dial rests only on the agent it still shows.
-      try { this.host.swipeEnded?.(agentId, this.desiredFocus === agentId ? 'rest' : 'superseded') }
+      try { this.host.swipeEnded?.(agentId, this.desiredFocus === agentId ? 'rest' : 'superseded', this.asItself) }
       // Thrown out of a timer, it would end the whole devices process.
       catch (error) { this.fault(error) }
     }, SWIPE_REST_MS)

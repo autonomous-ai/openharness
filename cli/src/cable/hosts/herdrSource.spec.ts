@@ -269,6 +269,56 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     expect(s.onFocus.mock.calls).toEqual([['w2:p1']])
   })
 
+  // The devices read it when a VS Code terminal that holds a herdr client takes the focus (dial-mux-host-pages design §7).
+  it('focusedPane is the pane herdr said took the focus last, and none once the attempt ends', async () => {
+    server.agents = [agent('w1:p1')]
+    const s = setup()
+    await live(s)
+    await subscribed(1, true)
+    expect(s.source.focusedPane()).toBeUndefined()
+    // One write, read in one go (unixSocket.ts): the lines out of form after w2:p1 are read by the time it is told.
+    server.send(lines([focusedLine('w1:p1'), focusedLine('w2:p1'), focusedLine('w2:pI'), focusedLine('w2'),
+      JSON.stringify({ data: { pane_id: 7, type: 'pane_focused' }, event: 'pane_focused' })]))
+    await s.until(() => s.onFocus.mock.calls.length === 2)
+    expect(s.source.focusedPane()).toBe('w2:p1')
+    s.source.stop()
+    expect(s.source.focusedPane()).toBeUndefined()
+
+    // A closed subscription fails the attempt: its focus goes with it.
+    s.source.start()
+    s.advance(1000)
+    await listRead(3)
+    await focusHeard(s, 2)
+    expect(s.source.focusedPane()).toBe('w9:p9')
+    server.drop()
+    await s.until(() => s.log.at(-1) === '[herdr] retry · 1')
+    expect(s.source.focusedPane()).toBeUndefined()
+  })
+
+  // A focus herdr moves while no focus subscription runs is unheard: the last one heard is no longer herdr's.
+  it('focusedPane is none once the focus subscription alone ends, while the agents\' rows stay', async () => {
+    server.agents = [agent('w1:p1')]
+    const client = herdrClient()
+    let focusing: HerdrSubscriber | undefined
+    const s = setup({
+      client: {
+        ...client,
+        subscribe: (entries, to) => {
+          if (JSON.stringify(entries) !== JSON.stringify(FOCUS)) return client.subscribe(entries, to)
+          focusing = to
+          return { close: () => {} }
+        },
+      },
+    })
+    await live(s)
+    focusing!.started()
+    focusing!.event('pane_focused', { pane_id: 'w2:p1', type: 'pane_focused', workspace_id: 'w2' })
+    expect(s.source.focusedPane()).toBe('w2:p1')
+    focusing!.closed('ended')
+    expect(s.source.focusedPane()).toBeUndefined()
+    expect(row(s, 'w1:p1')).toBeDefined()
+  })
+
   it('the focus subscription stays while the next for agents replaces the first, and is not opened twice', async () => {
     server.agents = [agent('w1:p1')]
     const s = setup()

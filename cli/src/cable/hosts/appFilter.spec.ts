@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { AppFilter, FRONT_SETTLE_MS } from './appFilter.js'
+import { AppFilter, DIAL_BRINGS_MS, FRONT_SETTLE_MS } from './appFilter.js'
 import type { SwitchCause } from './types.js'
 
 /**
@@ -11,11 +11,11 @@ function setup(draws: number[] = []) {
   const counts = new Map<string, number>()
   let known: Map<string, number> | undefined
   let inFront: Map<string, number> | undefined
-  /** What the filter told, in order: a switch as its cause, a settle as `settling <app>` then `settled <app>`. */
+  /** What the filter told, in order: a switch as its cause, a settle as `settled <app>`, a settle kept for the dial as
+   *  `dial front`. */
   const told: string[] = []
-  /** What a test runs while an app settles, as a waiting tab report's follow does (devices.ts). */
-  let whileSettling: ((app: string) => void) | undefined
   const switched = vi.fn((cause: SwitchCause) => { told.push(cause) })
+  const dialFront = vi.fn(() => { told.push('dial front') })
   const random = vi.fn(() => {
     const r = draws.shift()
     if (r === undefined) throw new Error('a draw nobody scripted')
@@ -33,16 +33,12 @@ function setup(draws: number[] = []) {
     random,
     counts: () => ({ all: counts, known: known ?? counts, inFront: inFront ?? known ?? counts }),
     switched,
-    settling: (app) => {
-      expect(filter.settledApp()).toBe(app)
-      told.push(`settling ${app}`)
-      whileSettling?.(app)
-    },
     settled: (app) => {
       expect(filter.settledApp()).toBe(app)
       settled.push(app)
       told.push(`settled ${app}`)
     },
+    dialFront,
   })
   const agents = (next: Record<string, number>, knownNext?: Record<string, number>, inFrontNext?: Record<string, number>): void => {
     counts.clear()
@@ -51,10 +47,7 @@ function setup(draws: number[] = []) {
     inFront = inFrontNext && new Map(Object.entries(inFrontNext))
   }
   const causes = (): SwitchCause[] => switched.mock.calls.map(([cause]) => cause)
-  const onSettling = (run: (app: string) => void): void => {
-    whileSettling = run
-  }
-  return { filter, agents, random, after, causes, told, settled, onSettling }
+  return { filter, agents, random, after, causes, told, settled, dialFront }
 }
 
 const settle = (): void => {
@@ -456,7 +449,7 @@ describe('AppFilter', () => {
     expect(filter.shown()).toBe('ghostty')
     filter.front('vscode')
     settle()
-    expect(told).toEqual(['settling vscode', 'front', 'settled vscode'])
+    expect(told).toEqual(['front', 'settled vscode'])
     filter.front('none')
     settle()
     // An app with no agents settles all the same.
@@ -684,191 +677,146 @@ describe('AppFilter', () => {
     })
   })
 
-  describe('a follow to an agent in tmux or herdr (docs/plans/2026-11-23-dial-tmux-herdr-apps-design.md)', () => {
-    /** Ghostty, with the most agents, is shown by default; then iTerm2, holding a plain agent and the tmux client of
-     *  another, settles in front. */
-    const itermSettled = () => {
+  describe('an app the dial brought holds the page (docs/plans/2026-11-26-dial-mux-host-pages-design.md §6)', () => {
+    /** Ghostty settled in front and shown; then tmux, whose agent's client is in iTerm2, is picked on the dial. */
+    const tmuxPicked = () => {
       const s = setup()
       s.agents({ ghostty: 2, iterm: 1, tmux: 1 })
-      expect(s.filter.shown()).toBe('ghostty')
-      s.filter.front('iterm')
+      s.filter.front('ghostty')
       settle()
-      expect(s.filter.shown()).toBe('iterm')
+      expect(s.filter.shown()).toBe('ghostty')
+      expect(s.filter.pick('tmux')).toBe('switched')
       return s
     }
 
-    it('a follow to an agent of the app settled in front, on another page, shows that page and holds it while that app stays in front', () => {
-      const { filter, agents, causes } = itermSettled()
-      expect(filter.follow('iterm', 'tmux')).toBe(true)
-      expect(causes()).toEqual(['front', 'follow'])
-      expect([filter.shown(), filter.shown(), filter.shown()]).toEqual(['tmux', 'tmux', 'tmux'])
-      // iTerm2 getting another agent of its own, or told in front again, does not turn the dial back.
-      agents({ ghostty: 2, iterm: 2, tmux: 1 })
+    it("the first front report within 2 s of dialBrings settles and keeps tmux's page", () => {
+      const { filter, causes, dialFront, told } = tmuxPicked()
+      filter.dialBrings()
       filter.front('iterm')
+      settle()
       expect(filter.shown()).toBe('tmux')
-      // Followed again while shown and held: true, no switch.
-      expect(filter.follow('iterm', 'tmux')).toBe(true)
-      expect(causes()).toEqual(['front', 'follow'])
+      expect(filter.settledApp()).toBe('iterm')
+      expect(causes()).toEqual(['pick'])
+      expect(dialFront).toHaveBeenCalledTimes(1)
+      expect(told).toEqual(['settled ghostty', 'pick', 'dial front', 'settled iterm'])
+      // iTerm2's own agents in front do not turn the dial either: the page holds as a pick does.
+      expect([filter.shown(), filter.shown()]).toEqual(['tmux', 'tmux'])
+      expect(causes()).toEqual(['pick'])
     })
 
-    it('another app settling ends the hold; the same app settling again keeps it', () => {
-      const { filter, causes } = itermSettled()
-      expect(filter.follow('iterm', 'tmux')).toBe(true)
-      // Away and back inside a second: iTerm2 settles again.
-      filter.front('ghostty')
+    it("… also tmux's page shown by the default", () => {
+      const { filter, agents, causes, dialFront } = setup()
+      agents({ tmux: 3, iterm: 1 })
+      expect(filter.shown()).toBe('tmux')
+      filter.dialBrings()
+      filter.front('iterm')
+      settle()
+      expect(filter.shown()).toBe('tmux')
+      expect(filter.settledApp()).toBe('iterm')
+      expect(dialFront).toHaveBeenCalledTimes(1)
+      expect([filter.shown(), filter.shown()]).toEqual(['tmux', 'tmux'])
+      expect(causes()).toEqual([])
+    })
+
+    it("… and herdr's page", () => {
+      const { filter, agents, causes, dialFront } = setup()
+      agents({ herdr: 2, iterm: 1 })
+      expect(filter.shown()).toBe('herdr')
+      filter.dialBrings()
+      filter.front('iterm')
+      settle()
+      expect(filter.shown()).toBe('herdr')
+      expect(dialFront).toHaveBeenCalledTimes(1)
+      expect(causes()).toEqual([])
+    })
+
+    it('a front report after DIAL_BRINGS_MS turns the page', () => {
+      const { filter, causes, dialFront } = tmuxPicked()
+      filter.dialBrings()
+      vi.advanceTimersByTime(DIAL_BRINGS_MS)
+      expect(vi.getTimerCount()).toBe(0)
+      filter.front('iterm')
+      settle()
+      expect(filter.shown()).toBe('iterm')
+      expect(filter.settledApp()).toBe('iterm')
+      expect(dialFront).not.toHaveBeenCalled()
+      expect(causes()).toEqual(['pick', 'front'])
+    })
+
+    it('dialBrings again re-arms the window: one timer, 2 s from the last', () => {
+      const { filter, dialFront } = tmuxPicked()
+      filter.dialBrings()
+      vi.advanceTimersByTime(DIAL_BRINGS_MS - 500)
+      filter.dialBrings()
+      expect(vi.getTimerCount()).toBe(1)
+      vi.advanceTimersByTime(DIAL_BRINGS_MS - 1)
+      filter.front('iterm')
+      settle()
+      expect(filter.shown()).toBe('tmux')
+      expect(dialFront).toHaveBeenCalledTimes(1)
+    })
+
+    it('the second front report turns it', () => {
+      // After the dial's settle: the person's own switch.
+      const after = tmuxPicked()
+      after.filter.dialBrings()
+      after.filter.front('iterm')
+      settle()
+      expect(after.filter.shown()).toBe('tmux')
+      after.filter.front('ghostty')
+      settle()
+      expect(after.filter.shown()).toBe('ghostty')
+      expect(after.filter.settledApp()).toBe('ghostty')
+      expect(after.dialFront).toHaveBeenCalledTimes(1)
+      expect(after.causes()).toEqual(['pick', 'front'])
+
+      // Before the dial's app settles: the one that settles is not the dial's.
+      const before = tmuxPicked()
+      before.filter.dialBrings()
+      before.filter.front('iterm')
       vi.advanceTimersByTime(300)
+      before.filter.front('ghostty')
+      vi.advanceTimersByTime(300)
+      before.filter.front('iterm')
+      settle()
+      expect(before.filter.shown()).toBe('iterm')
+      expect(before.filter.settledApp()).toBe('iterm')
+      expect(before.dialFront).not.toHaveBeenCalled()
+      expect(before.causes()).toEqual(['pick', 'front'])
+    })
+
+    it("on any other page the dial's settle is today's", () => {
+      const { filter, agents, causes, dialFront } = setup()
+      agents({ ghostty: 2, iterm: 1, tmux: 1 })
+      filter.front('ghostty')
+      settle()
+      expect(filter.pick('iterm')).toBe('switched')
+      filter.dialBrings()
       filter.front('iterm')
       settle()
-      expect(filter.shown()).toBe('tmux')
-      expect(causes()).toEqual(['front', 'follow'])
+      expect(filter.shown()).toBe('iterm')
+      expect(filter.settledApp()).toBe('iterm')
+      expect(dialFront).not.toHaveBeenCalled()
+      // Nothing kept: the next app the person brings forward turns the dial.
       filter.front('ghostty')
       settle()
       expect(filter.shown()).toBe('ghostty')
-      filter.front('iterm')
-      settle()
-      expect(filter.shown()).toBe('iterm')
-      expect(causes()).toEqual(['front', 'follow', 'front', 'front'])
+      expect(causes()).toEqual(['pick', 'front'])
     })
 
-    it('a pick holds against a follow, and a pick or a notice that switches ends a hold', () => {
-      const { filter, agents, causes } = itermSettled()
-      expect(filter.pick('ghostty')).toBe('switched')
-      expect(filter.follow('iterm', 'tmux')).toBe(false)
+    it('showing() reads the page without switching', () => {
+      const { filter, agents, causes, random } = setup()
+      agents({ ghostty: 2, vscode: 2 })
+      expect(filter.showing()).toBeUndefined()
+      expect(random).not.toHaveBeenCalled()
+      agents({ ghostty: 3, vscode: 1 })
       expect(filter.shown()).toBe('ghostty')
-      // Another app settling ends the pick; iTerm2 settling then shows it.
-      filter.front('ghostty')
-      settle()
-      filter.front('iterm')
-      settle()
-      expect(filter.follow('iterm', 'tmux')).toBe(true)
-      // Done on the page held holds nothing new and keeps the follow's hold.
-      expect(filter.pick('tmux')).toBe('same')
-      agents({ ghostty: 2, iterm: 2, tmux: 1 })
-      expect(filter.shown()).toBe('tmux')
-      // Each ends the hold: once the picked app empties, the dial goes to iTerm2's page and stays there, not on tmux's.
-      // hold() is the pick a person makes off the app's own view (cableHost.ts).
-      const ends = [
-        (app: string) => filter.pick(app, 'notice') === 'switched',
-        (app: string) => filter.pick(app) === 'switched',
-        (app: string) => filter.hold(app),
-      ]
-      for (const end of ends) {
-        agents({ ghostty: 2, iterm: 2, tmux: 1 })
-        expect(filter.follow('iterm', 'tmux')).toBe(true)
-        expect(end('ghostty')).toBe(true)
-        agents({ iterm: 2, tmux: 1 })
-        expect([filter.shown(), filter.shown()]).toEqual(['iterm', 'iterm'])
-      }
-      expect(causes()).toEqual([
-        'front', 'pick', 'front', 'follow',
-        'notice', 'empty', 'follow', 'pick', 'empty', 'follow', 'pick', 'empty',
-      ])
-    })
-
-    it('a follow for an app not settled in front, or to a page with no agents, changes nothing and answers false', () => {
-      const { filter, agents, causes } = setup()
-      agents({ ghostty: 2, iterm: 1, tmux: 1 })
-      expect(filter.shown()).toBe('ghostty')
-      // Before any app settles, and for an app reported in front but not settled yet.
-      expect(filter.follow('iterm', 'tmux')).toBe(false)
-      filter.front('iterm')
-      vi.advanceTimersByTime(FRONT_SETTLE_MS - 1)
-      expect(filter.follow('iterm', 'tmux')).toBe(false)
-      expect(filter.shown()).toBe('ghostty')
-      vi.advanceTimersByTime(1)
-      expect(filter.shown()).toBe('iterm')
-      expect(filter.follow('ghostty', 'tmux')).toBe(false)
-      expect(filter.follow('iterm', 'herdr')).toBe(false)
-      expect(filter.shown()).toBe('iterm')
-      // Nor do they end a hold.
-      expect(filter.follow('iterm', 'tmux')).toBe(true)
-      expect(filter.follow('ghostty', 'ghostty')).toBe(false)
-      expect(filter.follow('iterm', 'herdr')).toBe(false)
-      expect(filter.shown()).toBe('tmux')
-      expect(causes()).toEqual(['front', 'follow'])
-    })
-
-    it('a follow to a page whose agents are none of them known changes nothing: the hold would end at the next read', () => {
-      const { filter, agents, causes } = itermSettled()
-      agents({ ghostty: 2, iterm: 1, tmux: 1 }, { ghostty: 2, iterm: 1 })
-      expect(filter.follow('iterm', 'tmux')).toBe(false)
-      expect([filter.shown(), filter.shown()]).toEqual(['iterm', 'iterm'])
-      expect(causes()).toEqual(['front'])
-    })
-
-    it("a later follow to an agent on its app's own page ends the hold: the next read shows the app, front", () => {
-      const { filter, causes } = itermSettled()
-      expect(filter.follow('iterm', 'tmux')).toBe(true)
-      expect(filter.follow('iterm', 'iterm')).toBe(false)
-      expect(causes()).toEqual(['front', 'follow'])
-      expect([filter.shown(), filter.shown()]).toEqual(['iterm', 'iterm'])
-      expect(causes()).toEqual(['front', 'follow', 'front'])
-    })
-
-    it("a follow made while its app settles shows its page in place of the app's: one switch, follow, before settled", () => {
-      const { filter, agents, told, onSettling } = setup()
-      agents({ ghostty: 2, iterm: 1, tmux: 1 })
-      expect(filter.shown()).toBe('ghostty')
-      const followed: boolean[] = []
-      onSettling((app) => {
-        followed.push(filter.follow(app, 'tmux'))
-      })
-      filter.front('iterm')
-      settle()
-      expect(followed).toEqual([true])
-      expect(told).toEqual(['settling iterm', 'follow', 'settled iterm'])
-      expect([filter.shown(), filter.shown()]).toEqual(['tmux', 'tmux'])
-      expect(told).toEqual(['settling iterm', 'follow', 'settled iterm'])
-    })
-
-    it('an app with no agents of its own settling, with a follow in settling: one switch, follow', () => {
-      const { filter, agents, told, onSettling } = setup()
-      agents({ ghostty: 2, tmux: 1 })
-      expect(filter.shown()).toBe('ghostty')
-      onSettling((app) => {
-        filter.follow(app, 'tmux')
-      })
-      filter.front('iterm')
-      settle()
-      expect(told).toEqual(['settling iterm', 'follow', 'settled iterm'])
-      expect([filter.shown(), filter.shown()]).toEqual(['tmux', 'tmux'])
-
-      // tmux's page already shown by default: the follow holds it with no switch, over iTerm2's own agent to come.
-      const shownAlready = setup()
-      shownAlready.agents({ tmux: 3, ghostty: 1 })
-      expect(shownAlready.filter.shown()).toBe('tmux')
-      shownAlready.onSettling((app) => {
-        expect(shownAlready.filter.follow(app, 'tmux')).toBe(true)
-      })
-      shownAlready.filter.front('iterm')
-      settle()
-      shownAlready.agents({ tmux: 3, ghostty: 1, iterm: 1 })
-      expect(shownAlready.filter.shown()).toBe('tmux')
-      expect(shownAlready.told).toEqual(['settling iterm', 'settled iterm'])
-    })
-
-    it('the held page empties: the hold ends and the app in front is shown, one switch', () => {
-      // Its agent ends, or its next hook is not nested: iTerm2 has agents of its own, and is shown.
-      const own = itermSettled()
-      expect(own.filter.follow('iterm', 'tmux')).toBe(true)
-      own.agents({ ghostty: 2, iterm: 2 })
-      expect([own.filter.shown(), own.filter.shown()]).toEqual(['iterm', 'iterm'])
-      expect(own.causes()).toEqual(['front', 'follow', 'front'])
-      // The hold has ended: an agent in tmux again turns nothing.
-      own.agents({ ghostty: 2, iterm: 2, tmux: 1 })
-      expect(own.filter.shown()).toBe('iterm')
-      expect(own.causes()).toEqual(['front', 'follow', 'front'])
-
-      // iTerm2 with no agents of its own: the default.
-      const none = setup()
-      none.agents({ ghostty: 2, tmux: 1 })
-      expect(none.filter.shown()).toBe('ghostty')
-      none.filter.front('iterm')
-      settle()
-      expect(none.filter.follow('iterm', 'tmux')).toBe(true)
-      none.agents({ ghostty: 2 })
-      expect([none.filter.shown(), none.filter.shown()]).toEqual(['ghostty', 'ghostty'])
-      expect(none.causes()).toEqual(['follow', 'empty'])
+      agents({ vscode: 2 })
+      expect(filter.showing()).toBe('ghostty')
+      expect(causes()).toEqual([])
+      expect(filter.shown()).toBe('vscode')
+      expect(filter.showing()).toBe('vscode')
+      expect(causes()).toEqual(['empty'])
     })
   })
 })

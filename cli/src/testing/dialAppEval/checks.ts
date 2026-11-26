@@ -10,7 +10,7 @@ import { CAROUSEL_TILES } from '../dialCarousel.js'
 import { flagOf, ORCA_PROGRAMS, programOf } from './argv.js'
 import { isTabLabel, sessionTab, TABS_STREAM } from './itermRecords.js'
 import { tabTitle } from './orcaListing.js'
-import { agentIdOf, EDITORS, engineOf, itermPlaceOf, orcaPaneHandle, orcaWorktreeId, PAGE, pageId, placeOf, sessionPage, SKIPPED_SCROLL,
+import { agentIdOf, EDITORS, engineOf, itermPlaceOf, orcaPaneHandle, orcaWorktreeId, PAGE, pageId, placeOf, sessionPages, SKIPPED_SCROLL,
   THRESHOLDS, type App, type Check, type CheckResult, type LinkedApp, type Page, type Platform, type Scenario, type Seen, type SessionDef,
   type SessionKey, type StepOf, type Tier, type Until, type WrongSend } from './types.js'
 
@@ -161,7 +161,7 @@ function ringParts(check: CheckOf<'ring'>, world: World, w: Window | undefined):
     ]
     for (const [part, score] of scored) parts.push({ part, score, timed: false, evidence })
   }
-  if (check.apart) parts.push(apartPart(check.apart, page, world, w))
+  if (check.apart) parts.push(apartPart(check, page, world, w))
   if (check.timed) {
     const lines = changed ? [`first right list at ${changed.at}`]
       : all.length > 0 ? [...evidence, 'no right list in the window'] : []
@@ -172,12 +172,15 @@ function ringParts(check: CheckOf<'ring'>, world: World, w: Window | undefined):
 
 /**
  * The last `apps` frame the dial holds as the window ends, which must show the ring's page as the ring's list must: its
- * other pages count exactly the sessions apart, no fewer (one merged into the ring) and no more (one shown twice). An
- * editor's session apart is counted on its own app's page, as U2's VS Code row is while Cursor's page is shown: one filed
- * under Terminal is not where the person looks for it. A base app's may be on any, as X10's Codex CLI is on its
- * terminal's. Counts name no session, so a check apart from no other is exact.
+ * other pages count exactly the ring's sessions and those apart, each on its pages but this one (an agent in tmux or
+ * herdr is on its terminal app's page and the multiplexer's, Diego's 2026-11-26 rule,
+ * docs/plans/2026-11-26-dial-mux-host-pages-design.md), no fewer (one merged into the ring) and no more (one shown
+ * twice). On an editor's page each of those pages must count its own, as U2's VS Code row is counted on VS Code's while
+ * Cursor's page is shown: one filed under Terminal is not where the person looks for it. Elsewhere only the sum is
+ * graded, as a base app's may be on any, as X10's Codex CLI is on its terminal's. Counts name no session, so a check
+ * apart from no other is exact.
  */
-function apartPart(apart: SessionKey[], page: string, world: World, w: Window | undefined): Part {
+function apartPart(check: CheckOf<'ring'>, page: string, world: World, w: Window | undefined): Part {
   const frame = w ? world.seen.frames.filter((f) => f.message.t === 'apps' && world.held(f.at, w.to)).at(-1) : undefined
   // With no apps frame nothing was counted, so it cannot pass. It says so only to a driver that saw frames.
   if (!frame) return { part: 'apart', score: 0, timed: false, evidence: world.seen.frames.length > 0 ? ['no apps frame'] : [] }
@@ -187,11 +190,20 @@ function apartPart(apart: SessionKey[], page: string, world: World, w: Window | 
   const counts = apps.map((a) => ({ id: String(a.id), count: typeof a.count === 'number' ? a.count : 0 }))
   // The ring's own page counts its rows: no session apart is counted there.
   const countedOn = (id: string): number => counts.filter((a) => a.id === id && id !== page).reduce((sum, a) => sum + a.count, 0)
-  const ownPage = (key: SessionKey): string => PAGE[world.session(key).app]
+  const elsewhere = (key: SessionKey, apart: boolean): string[] => {
+    const pages = sessionPages(world.session(key))
+    // An expected session the ring lists off its own pages is counted in the ring alone.
+    const rest = apart || pages.includes(page) ? pages.filter((p) => p !== page) : []
+    // A session apart whose only page is the ring's is still counted once: elsewhere only the sum is graded, as X10's
+    // Codex CLI is on its terminal's page; on an editor's page it must be under its own, the ring's, so it is nowhere it
+    // can be.
+    return apart && rest.length === 0 ? [pages[0]!] : rest
+  }
+  const others = [...check.expect.map((key) => elsewhere(key, false)), ...(check.apart ?? []).map((key) => elsewhere(key, true))]
   const exact = (EDITORS as readonly string[]).includes(page)
-    ? [...new Set([...counts.map((a) => a.id), ...apart.map(ownPage)])]
-      .every((id) => countedOn(id) === apart.filter((key) => ownPage(key) === id).length)
-    : counts.filter((a) => a.id !== page).reduce((sum, a) => sum + a.count, 0) === apart.length
+    ? [...new Set([...counts.map((a) => a.id), ...others.flat()])]
+      .every((id) => countedOn(id) === others.filter((pages) => pages.includes(id)).length)
+    : counts.filter((a) => a.id !== page).reduce((sum, a) => sum + a.count, 0) === others.flat().length
   return { part: 'apart', score: exact ? 1 : 0, timed: false,
     evidence: [`apps at ${frame.at}: ${counts.map((a) => `${a.id} ${a.count}`).join(', ')}`.trimEnd()] }
 }
@@ -600,13 +612,15 @@ function tmuxShows(argv: string[], world: World): string | undefined {
  * it in the window: a select on the watch's tabs stream naming its tab (check.tab when its client moved), with raise on a
  * tap and without on a rest, and none naming another tab; a tmux or herdr row also its own pane selected by its own
  * multiplexer, and no other session's; a tap brings iTerm2 forward, timed to the latest of those parts, and a rest raises
- * nothing. Order between them is not graded. With no select of its tab nothing was shown, so a dead rest passes no part.
+ * nothing, unless the check brings, when it is graded as a tap. Order between them is not graded. With no select of its
+ * tab nothing was shown, so a dead rest passes no part.
  */
 function itermOpenParts(check: CheckOf<'open'>, session: SessionDef, world: World, w: Window | undefined,
   commands: Seen['commands'], inputs: string[]): Part[] {
   const want = check.tab ?? sessionTab(session)
   const place = itermPlaceOf(session)
-  const rest = inputOn(world, w, session.key)?.kind === 'swipe'
+  // A rest that brings the agent's app (check.brings) is graded as the tap it stands for.
+  const rest = !check.brings && inputOn(world, w, session.key)?.kind === 'swipe'
   // The devices' selects alone: the stream's open, the person's tab reports and its end carry a type or no tab.
   const selects = w ? (world.seen.streams ?? [])
     .filter((l) => l.window === TABS_STREAM && l.line.type === undefined && l.line.tab !== undefined && within(l.at, w)) : []
@@ -746,7 +760,7 @@ const STATE_MARKS = { working: THRESHOLDS.working, 'needs-you': THRESHOLDS.needs
 function stateParts(check: CheckOf<'state'>, world: World, w: Window | undefined): Part[] {
   const session = world.session(check.session)
   const id = agentIdOf(session)
-  const page = sessionPage(session)
+  const pages = sessionPages(session)
   const lists = rings(world.seen)
   // Every session's changes, not only this one's: the evidence lists those in the window, so a probe on a session that
   // never changes still says what the driver saw.
@@ -760,14 +774,14 @@ function stateParts(check: CheckOf<'state'>, world: World, w: Window | undefined
     if (next !== undefined) all.push({ at, agentId: message.agentId, state: next })
   }
   const changes = all.filter((c) => c.agentId === id)
-  // Shown: at some moment in the window the row is in that state and in the last whole list, which is its page's: the
-  // dial holds no other, as the ring check reads it. A list from before an unplug since is gone, and one that lands at
-  // the moment is held from it on.
+  // Shown: at some moment in the window the row is in that state and in the last whole list, which is one of its pages':
+  // the dial holds no other, as the ring check reads it. A list from before an unplug since is gone, and one that lands
+  // at the moment is held from it on.
   const moments = w ? [w.from, ...changes.map((c) => c.at), ...lists.map((r) => r.at)].filter((at) => within(at, w)).sort((x, y) => x - y) : []
   const shownAt = moments.find((at) => {
     const now = changes.filter((c) => c.at <= at).at(-1)?.state ?? 'idle'
     const ring = lists.filter((r) => r.at <= at).at(-1)
-    return now === check.state && ring !== undefined && (ring.at === at || world.held(ring.at, at)) && ring.page === page
+    return now === check.state && ring !== undefined && (ring.at === at || world.held(ring.at, at)) && pages.includes(ring.page)
       && ring.rows.some((r) => r.id === id)
   })
   const seenChanges = w ? all.filter((c) => within(c.at, w)) : []

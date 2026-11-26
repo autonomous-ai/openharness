@@ -1,6 +1,6 @@
 /**
- * An agent in a herdr pane whose client runs in a terminal with no page of its own is on herdr's page (Diego,
- * 2026-11-23: docs/plans/2026-11-23-dial-tmux-herdr-apps-design.md), and a tap brings that terminal's window forward
+ * An agent in a herdr pane whose client runs in a terminal with no page of its own is on herdr's page alone
+ * (docs/plans/2026-11-26-dial-mux-host-pages-design.md), and a tap brings that terminal's window forward
  * (docs/plans/2026-11-21-dial-linux-followups-design.md § 2), on the real daemon:
  * herdr's client attached to a herdr server of the test's own (harness/herdrServer.ts) runs in an xterm on an X11
  * desktop of the test's own (harness/x11Desk.ts), another xterm in front of it, and the suite's hooked fake Claude Code
@@ -83,7 +83,7 @@ describe.skipIf(!herdrBinary || !x11Installed)("herdr's client in an xterm", () 
 
     // 2. The hooked agent in a herdr pane, started once the client is attached, so its first lookup finds it. xterm is
     // no app the dial lists: the client's place is its process alone. herdr made the agent's terminal, so it is herdr's
-    // all the same, on herdr's page whatever holds the client (select.ts pageOf, Diego's decision of 2026-11-23).
+    // all the same: xterm has no page, so herdr's is its only one (select.ts pagesOf).
     const agent = await server.hooked('api')
     await said(d, '[device] herdr client · found · window')
     const apps = (m: DialMessage) => m.apps as Array<{ id: string; count: number }>

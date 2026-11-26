@@ -6,16 +6,16 @@ const VSCODE = MAIN.filter((s) => s.app === 'vscode')
 const byId = (id: string): Scenario => VSCODE.find((s) => s.id === id)!
 
 describe("VS Code's scenarios", () => {
-  it("VS Code's main ids are V1-V15, none held out, 15", () => {
-    expect(VSCODE.map((s) => s.id)).toEqual(Array.from({ length: 15 }, (_, i) => `V${i + 1}`))
+  it("VS Code's main ids are V1-V16, none held out, 16", () => {
+    expect(VSCODE.map((s) => s.id)).toEqual(Array.from({ length: 16 }, (_, i) => `V${i + 1}`))
     expect(VSCODE.every((s) => !s.heldOut)).toBe(true)
     expect(HELD_OUT.filter((s) => s.id.startsWith('V') && !s.id.startsWith('VH'))).toEqual([])
   })
 
-  it('V11 is macOS only, V2 tier A only, V12 tier B only, every other on every platform in both tiers', () => {
+  it('V11 is macOS only, V16 macOS and Linux, V2 tier A only, V12 and V16 tier B only, every other on every platform in both tiers', () => {
     for (const s of VSCODE) {
-      expect(s.platforms, s.id).toEqual(s.id === 'V11' ? ['darwin'] : ['darwin', 'win32', 'linux'])
-      expect(s.tiers, s.id).toEqual(s.id === 'V2' ? ['a'] : s.id === 'V12' ? ['b'] : ['a', 'b'])
+      expect(s.platforms, s.id).toEqual(s.id === 'V11' ? ['darwin'] : s.id === 'V16' ? ['darwin', 'linux'] : ['darwin', 'win32', 'linux'])
+      expect(s.tiers, s.id).toEqual(s.id === 'V2' ? ['a'] : ['V12', 'V16'].includes(s.id) ? ['b'] : ['a', 'b'])
     }
   })
 
@@ -23,7 +23,7 @@ describe("VS Code's scenarios", () => {
     const dims: Record<string, Dimension[]> = {
       V1: ['D1'], V2: ['D1', 'D7'], V3: ['D2'], V4: ['D2'], V5: ['D3', 'D7'], V6: ['D3'], V7: ['D4', 'D6'], V8: ['D5'],
       V9: ['D5'], V10: ['D7', 'D3'], V11: ['D1', 'D3', 'D7'], V12: ['D7', 'D1', 'D3'], V13: ['D7', 'D3'], V14: ['D7', 'D1'],
-      V15: ['D7', 'D3'],
+      V15: ['D7', 'D3'], V16: ['D2', 'D1'],
     }
     for (const s of VSCODE) {
       const want = s.tiers.includes('b') ? [...dims[s.id]!, 'D8'] : dims[s.id]!
@@ -79,13 +79,28 @@ describe("VS Code's scenarios", () => {
     expect(v11.steps.filter((step) => step.kind === 'stroke').map((step) => step.label)).toEqual(['stroke', 'skip'])
   })
 
-  it("V12 runs its Claude Code in the person's tmux, so its row is on tmux's page, VS Code's counting none (decision 3)", () => {
+  it("V12 runs its Claude Code in the person's tmux, so its row is on VS Code's page and tmux's (Diego's 2026-11-26 rule)", () => {
     const v12 = byId('V12')
     expect(v12.sessions.find((d) => d.key === 'a')).toMatchObject({ tmux: true })
     expect(v12.steps.filter((step) => step.kind === 'wait' && step.until).map((step) => step.kind === 'wait' && step.until))
-      .toEqual([{ kind: 'ring', page: 'tmux', expect: ['a'] }])
-    expect(v12.checks.filter((c) => c.kind === 'ring').map((c) => c.kind === 'ring' && [c.id, c.page, c.apart]))
-      .toEqual([['ring', 'tmux', []], ['ringKept', 'tmux', []]])
+      .toEqual([{ kind: 'ring', page: 'vscode', expect: ['a'], apart: [] }])
+    // apart none: the grader counts a on tmux's page, its other page.
+    expect(v12.checks.filter((c) => c.kind === 'ring').map((c) => c.kind === 'ring' && [c.id, c.page, c.expect, c.apart]))
+      .toEqual([['ring', 'vscode', ['a'], []], ['ringKept', 'vscode', ['a'], []]])
+  })
+
+  it("V16's two terminals each hold a tmux client: focusing b's moves the dial to b on VS Code's page (Diego's 2026-11-26 rule)", () => {
+    // docs/plans/2026-11-26-dial-mux-host-pages-design.md: VS Code's terminal focus of a tmux client follows its pane's agent.
+    const v16 = byId('V16')
+    expect(v16.sessions.filter((d) => !d.ghost).map((d) => [d.key, d.place, d.window, d.tmux])).toEqual([
+      ['a', 'terminal', 'w1', true], ['b', 'terminal', 'w1', true]])
+    expect(v16.steps.filter((step) => step.kind === 'editor.window' || step.kind === 'editor.focus')).toEqual([
+      { kind: 'editor.window', window: 'w1', active: 'a', focused: true }, { label: 'focus', kind: 'editor.focus', session: 'b' }])
+    expect(v16.checks.filter((c) => c.kind !== 'cost')).toEqual([
+      { id: 'ring', kind: 'ring', dim: 'D1', page: 'vscode', expect: ['a', 'b'], apart: [] },
+      { id: 'focus', kind: 'focus', dim: 'D2', session: 'b', after: 'focus' },
+    ])
+    expect(v16.probes).toEqual([{ id: 'focus', kind: 'focus', dim: 'D2', session: 'z', after: 'focus' }])
   })
 
   it('a tap on a terminal row asks for no link, a tap on the panel for its link', () => {

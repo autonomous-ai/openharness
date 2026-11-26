@@ -91,14 +91,16 @@ interface AppRing {
 }
 
 /**
- * The page an agent is on, the one rule every reader of the page goes through. An agent in tmux or herdr is on that
- * multiplexer's page, whatever terminal holds its client (Diego, 2026-11-23), except in Orca: Orca's ring is its own tab
- * order and `devices.ts orcaAgents` takes `app === 'orca'`, so Orca's page stays its app's. Otherwise the app's page; an
- * app outside the set is the unknown one, so there are never more than APP_IDS.
+ * The pages an agent is on, the one rule every reader of the page goes through: its app's, then, for an agent in tmux
+ * or herdr, that multiplexer's (Diego, 2026-11-26, docs/plans/2026-11-26-dial-mux-host-pages-design.md §1). An app
+ * outside the set is the unknown one, so there are never more pages than APP_IDS. A nested agent whose app is none of the set
+ * (the unknown one, or still pending) has no app page: its client is in no app the dial can show. Orca's ring keeps its
+ * tab order with tmux in it: `devices.ts orcaAgents` takes `app === 'orca'`.
  */
-export const pageOf = (a: HostAgent): string => {
-  if (a.nest && a.app !== 'orca') return a.nest
-  return APP_IDS.includes(a.app) ? a.app : UNKNOWN_APP
+export const pagesOf = (a: HostAgent): string[] => {
+  const app = APP_IDS.includes(a.app) ? a.app : UNKNOWN_APP
+  if (!a.nest) return [app]
+  return app === UNKNOWN_APP || app === a.nest ? [a.nest] : [app, a.nest]
 }
 
 /**
@@ -117,10 +119,11 @@ export class AppRings {
   update(agents: HostAgent[], ranks?: ReadonlyMap<string, RingRank>): void {
     const byApp = new Map<string, HostAgent[]>()
     for (const a of agents) {
-      const app = pageOf(a)
-      const list = byApp.get(app)
-      if (list) list.push(a)
-      else byApp.set(app, [a])
+      for (const app of pagesOf(a)) {
+        const list = byApp.get(app)
+        if (list) list.push(a)
+        else byApp.set(app, [a])
+      }
     }
     for (const app of this.rings.keys()) if (!byApp.has(app)) this.rings.delete(app)
     for (const [app, list] of byApp) {
@@ -143,22 +146,24 @@ export class AppRings {
   }
 
   /** Each app's agents among these, of those the ones whose app is known (`inFront`), and of those the ones a process
-   *  runs (`known`), by the page each is on. Counted from the agents given, not the last update: the filter decides a
-   *  settle or a pick between two list reads on the agents there now. */
+   *  runs (`known`), on each page each is on: an app in front holding only tmux clients has agents in front. Counted
+   *  from the agents given, not the last update: the filter decides a settle or a pick between two list reads on the
+   *  agents there now. */
   counts(agents: readonly HostAgent[]): AppCounts {
     const all = new Map<string, number>()
     const known = new Map<string, number>()
     const inFront = new Map<string, number>()
     for (const a of agents) {
-      const app = pageOf(a)
-      all.set(app, (all.get(app) ?? 0) + 1)
-      // Where the scan learns few apps (Windows, where it never learns Windows Terminal, the default terminal) and
-      // nothing reports the app in front, most agents it found are placed by their first hook alone, which can be
-      // hours away: such an agent counts as known, or the few agents that hooked would decide the dial's default over
-      // the many the person runs.
-      if (a.appPending && this.scanLearnsApps) continue
-      inFront.set(app, (inFront.get(app) ?? 0) + 1)
-      if (!a.resting) known.set(app, (known.get(app) ?? 0) + 1)
+      for (const app of pagesOf(a)) {
+        all.set(app, (all.get(app) ?? 0) + 1)
+        // Where the scan learns few apps (Windows, where it never learns Windows Terminal, the default terminal) and
+        // nothing reports the app in front, most agents it found are placed by their first hook alone, which can be
+        // hours away: such an agent counts as known, or the few agents that hooked would decide the dial's default over
+        // the many the person runs.
+        if (a.appPending && this.scanLearnsApps) continue
+        inFront.set(app, (inFront.get(app) ?? 0) + 1)
+        if (!a.resting) known.set(app, (known.get(app) ?? 0) + 1)
+      }
     }
     return { all, known, inFront }
   }

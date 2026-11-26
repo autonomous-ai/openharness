@@ -77,7 +77,7 @@ export interface HerdrSourceDeps {
   held(paneKey: string, asker: { engine: string; sessionId?: string }): boolean
   /** A tap: the herdr adapter's focus, as the devices hold it. */
   focus(paneId: string): Promise<boolean>
-  /** A pane herdr says took the focus, its bare id in form: told as it arrives, nothing kept. */
+  /** A pane herdr says took the focus, its bare id in form: told as it arrives; only the last is kept (focusedPane). */
   onFocus(paneId: string): void
   /** A timer, as the devices' parts take theirs: its cancel is returned. */
   after(ms: number, run: () => void): () => void
@@ -132,6 +132,10 @@ export class HerdrSource implements HostSource {
   private focusing: { close(): void } | undefined
   /** Whether herdr refused this attempt's focus subscription. */
   private focusEnded = false
+  /** The pane herdr said took the focus last while its focus subscription runs: one per herdr server, as the source
+   *  follows one, for the devices to find the agent a herdr client shows when its VS Code terminal takes the focus
+   *  (dial-mux-host-pages design §7). */
+  private focused: string | undefined
   private openedAt: number | undefined
   private said: number | undefined
   /** The rows the last list dropped for a pane id out of form, as said. */
@@ -228,6 +232,11 @@ export class HerdrSource implements HostSource {
     return row ? this.deps.focus(row.pane) : false
   }
 
+  /** The bare id of the pane herdr said took the focus last, while its focus subscription runs. */
+  focusedPane(): string | undefined {
+    return this.focused
+  }
+
   /** The herdr pane of a row it lists, by the row's id: the devices place a scan-found agent at it (as cmux's). */
   paneAt(agentId: string): string | undefined {
     return this.find(agentId)?.pane
@@ -304,13 +313,17 @@ export class HerdrSource implements HostSource {
       started: () => {},
       event: (name, data) => {
         const pane = data.pane_id
-        if (name === FOCUSED && typeof pane === 'string' && HERDR_PANE.test(pane)) this.deps.onFocus(pane)
+        if (name !== FOCUSED || typeof pane !== 'string' || !HERDR_PANE.test(pane)) return
+        this.focused = pane
+        this.deps.onFocus(pane)
       },
       // Refused (a herdr that does not know the kind: the plan's probe, row 10): one line, and not asked for again in this
       // attempt, where that herdr would refuse it again. Any other end, unsaid as it may come before or after the agents'
       // own, opens it again with the next agents' list, which comes only as the agents change, at most one a second.
       closed: (reason) => {
         this.focusing = undefined
+        // A focus herdr moves until one opens again is unheard: the last one heard may be herdr's no longer.
+        this.focused = undefined
         this.focusEnded = reason === 'rejected' || reason === 'bad_answer'
         if (this.focusEnded) this.deps.log(`[herdr] focus · ${reason}`)
       },
@@ -346,6 +359,8 @@ export class HerdrSource implements HostSource {
     this.focusing = undefined
     // The next attempt asks again: a herdr that started again may know the kind.
     this.focusEnded = false
+    // A herdr that started again may have moved its focus unheard.
+    this.focused = undefined
     this.heard = undefined
     this.timer?.()
     this.timer = undefined

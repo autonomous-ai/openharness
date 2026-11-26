@@ -247,7 +247,16 @@ describe.skipIf(!MAC)('the dial eval, tier B: iTerm2', () => {
     },
     // The tap reads b's tmux client afresh (docs/plans/2026-11-24-dial-iterm2-tab-and-restart-design.md), not the tab
     // b's start looked up, so its select names the tab b's client was attached from last, as the scenario's open check.
+    // The pick of tmux's page before it opens b too (docs/plans/2026-11-26-dial-mux-host-pages-design.md §5), by the
+    // same fresh read: a tap that joins the pick's open still running selects once, one after it twice, b's tab each.
     I13: () => {
+      const selects = (driver.seen().streams ?? []).filter((l) => l.window === 'tabs' && l.line.type === undefined).map((l) => l.line)
+      expect([1, 2]).toContain(selects.length)
+      for (const select of selects) expect(select).toEqual({ app: 'iterm', tab: 'w1.2.0', raise: true })
+    },
+    // A pick of tmux's page reads b's tmux client afresh too (docs/plans/2026-11-26-dial-mux-host-pages-design.md): the
+    // client used last is the second tab's, so the one select brings that tab.
+    I24: () => {
       const selects = (driver.seen().streams ?? []).filter((l) => l.window === 'tabs' && l.line.type === undefined).map((l) => l.line)
       expect(selects).toEqual([{ app: 'iterm', tab: 'w1.2.0', raise: true }])
     },
