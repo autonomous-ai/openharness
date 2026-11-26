@@ -214,6 +214,9 @@ export function countWord(what: Parameters<ObservedActions['count']>[0]): string
   return 'refused' in what ? `refused (${what.refused.id})` : what.id
 }
 
+/** A Codex hook's served ask (Entry.served), which always holds the hook that asked. */
+type ServedState = { pid: number; is?: boolean; hook: ObservedHookEvent }
+
 /** One of an agent's panes, beside the adapter whose it is. */
 interface Located {
   adapter: HostAdapter
@@ -295,10 +298,11 @@ interface Entry {
   appWalking?: boolean
   /** The app a tap brings forward, from its last event: none for a session the scan found, until its first. */
   bundle?: string
-  /** The caller its latest Codex hook's served lookup was asked for (askServed), what it said (`is`: none while its first
-   *  ask runs, false for no server, true for one), and the latest hook of that caller, placed by its hints should the
-   *  lookup say no server. While `is` is not false, no hint, tty or process of that caller places it. */
-  served?: { pid: number; is?: boolean; hook: ObservedHookEvent }
+  /** The caller its latest Codex hook's served lookup was asked for (askServed), or the process the scan found holding it,
+   *  what it said (`is`: none while its first ask runs, false for no server, true for one), and the latest hook of that
+   *  caller, placed by its hints should the lookup say no server (none for the scan's). While `is` is not false, no hint,
+   *  tty or process of that caller places it. */
+  served?: { pid: number; is?: boolean; hook?: ObservedHookEvent }
   /** What the permission prompt it waits on asks, from its hook (deviceClaude/asked.ts): '' when it names nothing. */
   asked?: string
   /** The name the session gives itself, from its session-start or turn-start, or, for a session the scan found, the one
@@ -1083,7 +1087,7 @@ export class ObservedSource implements HostSource {
     const again = same && last.is === true && (e.event === 'session-start' || (e.event === 'turn-start' && !entry.outer))
     if (same && !again) last.hook = e
     else {
-      const ask: NonNullable<Entry['served']> = { pid: e.callerPid, ...(same ? { is: true } : {}), hook: e }
+      const ask: ServedState = { pid: e.callerPid, ...(same ? { is: true } : {}), hook: e }
       entry.served = ask
       void this.deps.served([{ pid: e.callerPid, cwd: e.cwd ?? entry.agent.cwd }]).then(([answer]) => answer, (error) => {
         // Its kind only: no error text, as a path in it holds the account's name.
@@ -1116,7 +1120,7 @@ export class ObservedSource implements HostSource {
   /** What [ask] learnt lands while it is the latest ask and the session lives: no server, and the hook that waited is
    *  placed by its hints; a server, and its client's app, tab and process place it, or none is known and it is on no
    *  app's page. */
-  private landServed(entry: Entry, ask: NonNullable<Entry['served']>, answer: Served | undefined): void {
+  private landServed(entry: Entry, ask: ServedState, answer: Served | undefined): void {
     if (entry.served !== ask || !this.live(entry)) return
     if (!answer) {
       ask.is = false
@@ -1127,14 +1131,18 @@ export class ObservedSource implements HostSource {
       return
     }
     ask.is = true
-    const { client } = answer
+    this.placeServed(entry, answer)
+    this.emit()
+  }
+
+  /** A Codex server's session at its client: that TUI's app, tab and process, or no app's page when none is known. */
+  private placeServed(entry: Entry, { client }: Served): void {
     entry.outer = client
     entry.tty = client?.tty
     entry.agent.app = client?.app ?? UNKNOWN_APP
     delete entry.agent.appPending
     entry.bundle = client && APP_BUNDLES[client.app]
     this.locate(entry)
-    this.emit()
   }
 
   /** Its latest hook's caller is a Codex server, or may be while its first ask runs (askServed). */
@@ -1526,6 +1534,7 @@ export class ObservedSource implements HostSource {
     const table = await this.tableOf(pids)
     const apps = table === null ? new Map<number, string>() : await this.appsOf(pids, table)
     const nests = table ? await this.nestsOf(pids, table) : new Map<number, Nested>()
+    const served = await this.servedOf(listing, owners, rows)
     const records = await this.recordsOf(listing, owners)
     const busy = await this.busyOf(listing, owners)
     const answers = await this.answersOf(listing, rows, busy, owners)
@@ -1552,8 +1561,10 @@ export class ObservedSource implements HostSource {
         entry.title = record.name
         named++
       }
-      // The app alone: its host and what a tap opens stay unknown until its first hook.
-      const app = apps.get(owner.pid)
+      // The app alone: its host and what a tap opens stay unknown until its first hook. A Codex server's session is at its
+      // client's, never where the server's parents are (askServed).
+      const serving = served.get(sessionId)
+      const app = serving ? serving.client?.app : apps.get(owner.pid)
       if (app) {
         entry.agent.app = app
         delete entry.agent.appPending
@@ -1563,9 +1574,12 @@ export class ObservedSource implements HostSource {
       if (record?.hostSession) entry.hostSession = record.hostSession
       if (this.pair(entry)) paired++
       const nest = nests.get(owner.pid)
+      if (serving) {
+        entry.served = { pid: owner.pid, is: true }
+        this.placeServed(entry, serving)
       // Its tty is the multiplexer pane's pty, which on macOS has a tab's form: never read, as askOuter never reads a
       // nested caller's. Paired, it is in an hc terminal, whose pane is its own.
-      if (nest && !entry.paired) {
+      } else if (nest && !entry.paired) {
         // The maker's read confirmed its own terminal is that multiplexer's pane: on its page from here, whatever the
         // lookup answers, as its first hook's lookup would put it (Diego, 2026-11-23), and kept there by a nested first
         // hook from this process while that hook's own lookup runs (askOuter). Zellij keeps its app's.
@@ -1747,6 +1761,25 @@ export class ObservedSource implements HostSource {
       if (answer) answers.set(sessionId, answer)
     }
     return answers
+  }
+
+  /** What the served lookup says of each Codex session a process on no terminal holds (a server, or a Codex on none), by
+   *  session id, in one ask: only those may be a server's. Those whose holder is no server are left out, as are all of
+   *  them with no lookup or when it failed: each is placed as before. */
+  private async servedOf(
+    listing: readonly [string, ExternalEngine][], owners: ReadonlyMap<string, SessionOwner>,
+    rows: ReadonlyMap<string, { cwd?: string }>,
+  ): Promise<ReadonlyMap<string, Served>> {
+    const asked = listing.filter(([sessionId, engine]) => engine === 'codex' && owners.get(sessionId)!.tty === null)
+    if (!this.deps.served || !asked.length) return new Map()
+    try {
+      const answers = await this.deps.served(asked.map(([sessionId]) => ({ pid: owners.get(sessionId)!.pid, cwd: rows.get(sessionId)!.cwd })))
+      return new Map(asked.flatMap(([sessionId], i) => (answers[i] ? [[sessionId, answers[i]!] as const] : [])))
+    } catch (error) {
+      // Its kind, no error text: a path in it holds the account's name.
+      this.deps.log(`[observed] scan · served not read · ${errorKind(error)}`)
+      return new Map()
+    }
   }
 
   /** What each Claude Code session's own record gives, by session id, read one at a time; none when there is no reader.
