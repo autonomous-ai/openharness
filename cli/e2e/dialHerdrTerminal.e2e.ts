@@ -1,7 +1,7 @@
 /**
- * Claude Code in a pane of the person's herdr is on herdr's page, seen in the app that holds the herdr client attached to
- * it, and a swipe reaches it there (docs/plans/2026-11-19-dial-herdr-in-terminal-app-design.md,
- * docs/plans/2026-11-23-dial-tmux-herdr-apps-design.md), on the real daemon: the
+ * Claude Code in a pane of the person's herdr is on the page of the app that holds the herdr client attached to it and
+ * on herdr's page, and a swipe reaches it there (docs/plans/2026-11-19-dial-herdr-in-terminal-app-design.md,
+ * docs/plans/2026-11-26-dial-mux-host-pages-design.md), on the real daemon: the
  * suite's fake Claude Code runs in panes of a herdr server of the test's own (harness/herdrServer.ts), whose hooks carry
  * herdr's HERDR_PANE_ID and no app, and a `herdr` client attached to that server runs in a tab of a fake Terminal: a Node
  * under `$HOME/Applications/Terminal.app` of the daemon's throwaway home, whose Info.plist says `com.apple.Terminal`,
@@ -45,7 +45,7 @@ const EVERYDAY_PORT = '18473'
 // How `harness hardware watch` is started: the run's bundle when there is one (E2E_BUNDLE), as the daemon runs.
 const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : ['--import', 'tsx', 'src/cli.ts']
 
-describe.skipIf(process.platform !== 'darwin' || !herdrBinary)("an agent in the person's herdr, on herdr's page, seen in the app that holds its client", () => {
+describe.skipIf(process.platform !== 'darwin' || !herdrBinary)("an agent in the person's herdr, on the page of the app that holds its client and on herdr's", () => {
   let daemon: IsolatedDaemon | undefined
   let desk: Desk | undefined
   let server: PrivateHerdr | undefined
@@ -146,16 +146,15 @@ describe.skipIf(process.platform !== 'darwin' || !herdrBinary)("an agent in the 
   }
   const selectOf = (tty: string): string => JSON.stringify({ select: { app: 'terminal-app', tty } })
 
-  it("agents in the person's herdr are on herdr's page, one row each, with no Terminal page", async () => {
+  it("agents in the person's herdr are on Terminal's page and herdr's, one row each", async () => {
     const { d, dial, client, b, agent, hidden, others, herdr } = await fresh()
     const apps = (m: DialMessage) => m.apps as Array<{ id: string; count: number }>
-    const frame = await until("herdr's page holding both agents", () => {
+    // Terminal holds the client, so its page holds both agents too (docs/plans/2026-11-26-dial-mux-host-pages-design.md).
+    await until("Terminal's and herdr's pages holding both agents", () => {
       const last = dial.messages.filter((m) => m.t === 'apps').at(-1)
-      return last && apps(last).some((a) => a.id === 'herdr' && a.count === 2) ? last : undefined
+      return last && ['terminal-app', 'herdr'].every((app) => apps(last).some((a) => a.id === app && a.count === 2)) ? last : undefined
     }, 45_000, 100)
-    // Both agents are in herdr, so Terminal holds no agent of its own (Diego's decision 2, 2026-11-23).
-    expect(apps(frame).map((a) => a.id)).not.toContain('terminal-app')
-    // Its ring's list, as the dial was last sent it: each agent once, and nothing else.
+    // Its ring's list, as the dial was last sent it, whichever of the two it shows: each agent once, and nothing else.
     const roster = await until('a list with both agents', () => {
       const begin = dial.messages.map((m) => m.t).lastIndexOf('agents.begin')
       const end = dial.messages.map((m) => m.t).lastIndexOf('agents.end')
@@ -202,27 +201,26 @@ describe.skipIf(process.platform !== 'darwin' || !herdrBinary)("an agent in the 
     expect(await focused(herdr, b.pane)).toBe(true)
   })
 
-  it("a tab line with the client's tty turns the dial to herdr's page and the agent heard from last", async () => {
+  it("a tab line with the client's tty keeps Terminal's page and moves the dial to the agent heard from last", async () => {
     const { d, dial, herdr, client, agent } = await fresh()
-    // The agent's turn: it is heard from after B. Before the watch, so no app is in front and its prompt turns no page:
-    // with Terminal settled, the prompt would hold herdr's page and the other agent below would never be listed.
+    // The agent's turn: it is heard from after B. Before the watch, so no app is in front and its prompt moves nothing.
     let since = dial.messages.length
     await herdr.type(agent.pane, 'hello')
     await dial.next((m) => m.t === 'turn.done' && m.agentId === agent.id, 45_000, "the agent's turn done", since)
     expect(d.log()).toContain('[device] prompt · skipped · not in front')
     const run = watch(d)
-    // Another agent in a Terminal tab of its own, the dial on it: Terminal, settled in front, has a page of its own, so
-    // the tab's follow is to an agent of the app in front.
+    // Another agent in a Terminal tab of its own, the dial on it on Terminal's page, settled in front.
     const other = await Outside.start(d, 'other', { __CFBundleIdentifier: TERMINAL })
     closing.unshift(() => other.close())
     await dial.next((m) => m.t === 'agent' && m.id === other.id, 45_000, 'the other listed')
+    await dial.next((m) => m.t === 'apps' && m.shown === 'terminal-app', 45_000, "Terminal's page")
     dial.send({ t: 'focus', agentId: other.id })
     since = dial.messages.length
     run.tab(client.tty)
     await dial.next((m) => m.t === 'focus' && m.agentId === agent.id, 30_000, "the agent's focus", since)
     await until('the tab line moved the dial', () => d.log().includes('[device] tab · moved'), 30_000, 50)
-    await dial.next((m) => m.t === 'apps' && m.shown === 'herdr', 30_000, "herdr's page", since)
-    expect(d.log().split('\n').filter((line) => line.includes('[device] app filter: switched · follow'))).toHaveLength(1)
+    // A follow turns no page (spec §3).
+    expect(dial.messages.slice(since).filter((m) => m.t === 'apps').map((m) => m.shown)).not.toContain('herdr')
   })
 
   it("the daemon's log has no tty, pane id, config path or session id", async () => {

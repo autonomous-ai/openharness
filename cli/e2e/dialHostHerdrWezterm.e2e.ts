@@ -1,6 +1,6 @@
 /**
- * An agent in a herdr pane whose client runs in a WezTerm pane is on herdr's page (Diego, 2026-11-23:
- * docs/plans/2026-11-23-dial-tmux-herdr-apps-design.md), and a rest while WezTerm is in front activates the client's
+ * An agent in a herdr pane whose client runs in a WezTerm pane is on WezTerm's page and herdr's
+ * (docs/plans/2026-11-26-dial-mux-host-pages-design.md), and a rest while WezTerm is in front activates the client's
  * WezTerm pane and tab, then focuses the agent's herdr pane (docs/plans/2026-11-21-dial-linux-followups-design.md § 2),
  * on the real daemon: herdr's client attached to a herdr server of the test's own (harness/herdrServer.ts) runs in a pane
  * of a WezTerm mux server of the test's own (harness/weztermMux.ts), another tab of its window active, and the suite's
@@ -8,7 +8,7 @@
  * stdin of the real `harness hardware watch --json`, as Harness Device does. No `herdr` or `wezterm` the daemon runs
  * reaches the developer's, and the daemon's process table hides every herdr outside the test's tree (ownHerdrsOnly).
  *
- * The same agent found by the open scan, idle since before the devices started, is on herdr's page too
+ * The same agent found by the open scan, idle since before the devices started, is on both pages too
  * (docs/plans/2026-11-22-dial-iterm2-tmux-herdr-design.md): its client found from herdr's server, and placed at its herdr
  * pane by herdr's own row of it, by its session when the row names one, else by the pane whose shell is its parent, so a
  * rest focuses that pane and herdr's row folds into it, one row.
@@ -128,7 +128,7 @@ describe.skipIf(!herdrBinary || !weztermBinary)("herdr's client in WezTerm", () 
       join(d.env.HOME!, 'wezterm', 'sock'), join(d.env.HOME!, '.config', 'herdr'))
     if (dial) {
       await said(d, '[device] herdr client · found')
-      await dial.next((m) => m.t === 'agent' && m.id === agent.id && m.host === 'herdr', 45_000, 'the agent listed')
+      await dial.next((m) => m.t === 'agent' && m.id === agent.id, 45_000, 'the agent listed')
     } else {
       // A turn, so its conversation is on disk: the scan lists only a session its transcript holds.
       await server.type(agent.pane, 'before the dial')
@@ -209,11 +209,29 @@ describe.skipIf(!herdrBinary || !weztermBinary)("herdr's client in WezTerm", () 
   const scanPlaced = (d: IsolatedDaemon) => until("the scan's lookup to place the agent",
     () => /\[observed\] scan · 1 found · .* · 1 nested placed/.test(d.log()), 45_000, 100)
 
-  it("lists the agent on herdr's page, one row, and on no other page", async () => {
+  it("lists the agent on WezTerm's page and herdr's, one row on each, and on no other page", async () => {
     const { dial, agent } = await fresh()
-    await pages(dial, 'herdr 1')
+    await pages(dial, 'herdr 1', 'wezterm 1')
     // The agent once, and nothing else.
     expect(ring(dial)).toEqual([agent.id])
+    // herdr's ring, as the dial was last sent it after a frame showing that page, picked again every 2 s until shown:
+    // the agent's row names herdr (docs/plans/2026-11-26-dial-mux-host-pages-design.md §2).
+    let picked = 0
+    const rows = await until("herdr's ring", () => {
+      const kinds = dial.messages.map((m) => m.t)
+      const shown = kinds.lastIndexOf('apps')
+      const begin = kinds.lastIndexOf('agents.begin')
+      const end = kinds.lastIndexOf('agents.end')
+      if (dial.messages[shown]?.shown === 'herdr' && begin > shown && end > begin) {
+        return dial.messages.slice(begin, end).filter((m) => m.t === 'agent')
+      }
+      if (Date.now() - picked >= 2_000) {
+        dial.pick('herdr')
+        picked = Date.now()
+      }
+      return undefined
+    }, 45_000, 100)
+    expect(rows.map((m) => [m.id, m.host])).toEqual([[agent.id, 'herdr']])
   })
 
   it("with WezTerm in front a rest activates the client's pane and tab, then focuses the agent's herdr pane", async () => {
@@ -224,31 +242,31 @@ describe.skipIf(!herdrBinary || !weztermBinary)("herdr's client in WezTerm", () 
     await until("the agent's pane focused in herdr", async () => await herdr.focused() === agent.pane, 30_000, 100)
   })
 
-  it("found by the scan, with herdr's row of its session: one row on herdr's page; a rest with WezTerm in front activates the client's pane and tab, then focuses the agent's herdr pane", async () => {
+  it("found by the scan, with herdr's row of its session: one row on WezTerm's page and herdr's; a rest with WezTerm in front activates the client's pane and tab, then focuses the agent's herdr pane", async () => {
     const { d, dial, herdr, mux, client, agent } = await fresh('session')
     await restUntil(d, dial, agent.id, "the agent's pane focused in herdr", async () => await herdr.focused() === agent.pane)
     expect(await mux.activeTab(client.pane)).toBe(true)
     expect(await mux.active(client.pane)).toBe(true)
     await scanPlaced(d)
     // herdr's row folds into the scan's copy by its session.
-    await pages(dial, 'herdr 1')
+    await pages(dial, 'herdr 1', 'wezterm 1')
     expect(ring(dial)).toEqual([agent.id])
   })
 
-  it("found by the scan, with no session in herdr's row: one row on herdr's page; a rest with WezTerm in front activates the client's pane and tab, then focuses the agent's herdr pane", async () => {
+  it("found by the scan, with no session in herdr's row: one row on WezTerm's page and herdr's; a rest with WezTerm in front activates the client's pane and tab, then focuses the agent's herdr pane", async () => {
     const { d, dial, herdr, mux, client, agent } = await fresh('no session')
     await restUntil(d, dial, agent.id, "the agent's pane focused in herdr", async () => await herdr.focused() === agent.pane)
     expect(await mux.activeTab(client.pane)).toBe(true)
     expect(await mux.active(client.pane)).toBe(true)
     await scanPlaced(d)
     // herdr's row folds into the scan's copy by the pane whose shell is the agent's parent.
-    await pages(dial, 'herdr 1')
+    await pages(dial, 'herdr 1', 'wezterm 1')
     expect(ring(dial)).toEqual([agent.id])
   })
 
   it('with another app in front a rest moves neither the tab nor the herdr pane', async () => {
     const { d, dial, herdr, mux, client, agent } = await fresh()
-    // Orca in front, with an agent of its own: the dial, holding herdr's ring, turns to Orca's once Orca settled
+    // Orca in front, with an agent of its own: the dial, holding the agent's ring, turns to Orca's once Orca settled
     // there, so the front line has landed.
     const handle = `term_${randomUUID()}`
     unsaid.push(handle)
