@@ -365,3 +365,234 @@ describe('the devices\' record of a dial\'s setup', () => {
     }
   })
 })
+
+describe('the Orca homes Claude Code\'s plugin was turned on in', () => {
+  const homesFile = (dataDir: string): Record<string, unknown> => JSON.parse(readFileSync(join(dataDir, DIAL_SKILL_FILE), 'utf8'))
+  const setupFile = (dataDir: string): Record<string, unknown> => JSON.parse(readFileSync(join(dataDir, DIAL_SETUP_FILE), 'utf8'))
+  /** [count] good, distinct Orca Claude Code homes. */
+  const orcaHomes = (count: number): string[] =>
+    Array.from({ length: count }, (_, i) => `/Users/someone/Library/Application Support/orca/${i}/claude`)
+
+  it('a record from #4399 reads with no plugin homes', () => {
+    const dataDir = aDataDir()
+    writeFileSync(join(dataDir, DIAL_SETUP_FILE), '{"dial":true,"plugin":"0.6.59","homes":{"claude":[],"codex":[]}}')
+    writeFileSync(join(dataDir, DIAL_SKILL_FILE), '{"removed":{"codex":true},"homes":{"claude":[],"codex":["/a/skills"]}}')
+
+    expect(readSetup(dataDir)).toEqual({ dial: true, plugin: '0.6.59', homes: { claude: [], codex: [] }, pluginHomes: [] })
+    expect(readPluginHomes(dataDir)).toEqual({ homes: [] })
+  })
+
+  it('plugin homes are written and read back', () => {
+    const dataDir = aDataDir()
+    const homes = orcaHomes(2)
+
+    expect(writeSetup(dataDir, { dial: true, plugin: '0.6.59', homes: { claude: [], codex: [] }, pluginHomes: homes })).toBeUndefined()
+    expect(writePluginHomes(dataDir, homes.slice(1))).toBeUndefined()
+
+    expect(readSetup(dataDir)).toEqual({ dial: true, plugin: '0.6.59', homes: { claude: [], codex: [] }, pluginHomes: homes })
+    expect(readPluginHomes(dataDir)).toEqual({ homes: homes.slice(1) })
+    expect(statSync(join(dataDir, DIAL_SKILL_FILE)).mode & 0o777).toBe(0o600)
+    // Emptied, the command's list leaves its file, as its skills folders do.
+    expect(writePluginHomes(dataDir, [])).toBeUndefined()
+    expect(homesFile(dataDir)).toEqual({})
+  })
+
+  it('a damaged plugin homes list keeps only what it may hold', () => {
+    const dataDir = aDataDir()
+    const good = orcaHomes(70)
+    const damaged = ['relative/claude', good[0], '/Users/some\u0007one/claude', 42, null, good[0], ...good.slice(1)]
+    const kept = good.slice(0, MAX_HOMES)
+    writeFileSync(join(dataDir, DIAL_SETUP_FILE), JSON.stringify({ dial: true, pluginHomes: damaged }))
+    writeFileSync(join(dataDir, DIAL_SKILL_FILE), JSON.stringify({ pluginHomes: damaged }))
+
+    expect(readSetup(dataDir).pluginHomes).toEqual(kept)
+    expect(readPluginHomes(dataDir)).toEqual({ homes: kept })
+
+    // Each file is written as a read keeps it.
+    const asGiven = damaged as string[]
+    expect(writeSetup(dataDir, { dial: true, homes: { claude: [], codex: [] }, pluginHomes: asGiven })).toBeUndefined()
+    expect(writePluginHomes(dataDir, asGiven)).toBeUndefined()
+    expect(setupFile(dataDir).pluginHomes).toEqual(kept)
+    expect(homesFile(dataDir).pluginHomes).toEqual(kept)
+
+    // One that is no list is none.
+    writeFileSync(join(dataDir, DIAL_SETUP_FILE), JSON.stringify({ dial: true, pluginHomes: good[0] }))
+    writeFileSync(join(dataDir, DIAL_SKILL_FILE), JSON.stringify({ pluginHomes: { claude: good } }))
+    expect(readSetup(dataDir).pluginHomes).toEqual([])
+    expect(readPluginHomes(dataDir)).toEqual({ homes: [] })
+  })
+
+  it('three full lists of the longest paths are written and read back: each file holds three', () => {
+    const dataDir = aDataDir()
+    const full = (list: number): string[] =>
+      Array.from({ length: MAX_HOMES }, (_, i) => `/${String(list * MAX_HOMES + i).padStart(3, '0')}${'a'.repeat(1020)}`)
+    const record = { dial: true, plugin: '0.6.59', homes: { claude: full(0), codex: full(1) }, pluginHomes: full(2) }
+
+    expect(writeSetup(dataDir, record)).toBeUndefined()
+    expect(writeRemoved(dataDir, 'claude', false, full(0))).toBeUndefined()
+    expect(writeRemoved(dataDir, 'codex', true, full(1))).toBeUndefined()
+    expect(writePluginHomes(dataDir, full(2))).toBeUndefined()
+
+    expect(readSetup(dataDir)).toEqual(record)
+    expect(readWritten(dataDir)).toEqual(record.homes)
+    expect(readPluginHomes(dataDir)).toEqual({ homes: record.pluginHomes })
+  })
+
+  it('the command\'s plugin homes are kept by every write of dial-skill.json', () => {
+    const dataDir = aDataDir()
+    const homes = orcaHomes(2)
+    expect(writePluginHomes(dataDir, homes)).toBeUndefined()
+
+    expect(writeRemoved(dataDir, 'claude', true)).toBeUndefined()
+    expect(writeRemoved(dataDir, 'codex', false, ['/a/skills'])).toBeUndefined()
+
+    expect(homesFile(dataDir)).toEqual({ removed: { claude: true }, homes: { claude: [], codex: ['/a/skills'] }, pluginHomes: homes })
+
+    // And the list's own write keeps the removal and the folders.
+    expect(writePluginHomes(dataDir, homes.slice(1))).toBeUndefined()
+    expect(homesFile(dataDir)).toEqual({ removed: { claude: true }, homes: { claude: [], codex: ['/a/skills'] }, pluginHomes: homes.slice(1) })
+  })
+
+  // Root reads a file whatever its mode.
+  it.skipIf(process.getuid?.() === 0)('an unreadable dial-skill.json reads as unread and is not written', () => {
+    const dataDir = aDataDir()
+    expect(writeRemoved(dataDir, 'codex', true)).toBeUndefined()
+    const file = join(dataDir, DIAL_SKILL_FILE)
+    const before = readFileSync(file, 'utf8')
+    // Stands for any read error: EACCES, EIO, EMFILE.
+    chmodSync(file, 0o000)
+
+    expect(readPluginHomes(dataDir)).toEqual({ homes: [], unread: true })
+    // Codex's removal would be lost.
+    expect(writePluginHomes(dataDir, orcaHomes(1))).toBe('EACCES')
+
+    chmodSync(file, 0o600)
+    expect(readFileSync(file, 'utf8')).toBe(before)
+  })
+})
+
+describe('that Orca was connected', () => {
+  const skillFile = (dataDir: string): Record<string, unknown> => JSON.parse(readFileSync(join(dataDir, DIAL_SKILL_FILE), 'utf8'))
+
+  it('a missing file reads not connected; once written it reads connected, 0600', () => {
+    const dataDir = aDataDir()
+    expect(readOrcaConnected(dataDir)).toEqual({ connected: false })
+
+    expect(writeOrcaConnected(dataDir)).toBeUndefined()
+
+    expect(readOrcaConnected(dataDir)).toEqual({ connected: true })
+    expect(skillFile(dataDir)).toEqual({ orcaConnected: true })
+    expect(statSync(join(dataDir, DIAL_SKILL_FILE)).mode & 0o777).toBe(0o600)
+  })
+
+  it('only true counts', () => {
+    const dataDir = aDataDir()
+    for (const orcaConnected of ['yes', 1, false]) {
+      writeFileSync(join(dataDir, DIAL_SKILL_FILE), JSON.stringify({ orcaConnected }))
+      expect(readOrcaConnected(dataDir), String(orcaConnected)).toEqual({ connected: false })
+    }
+  })
+
+  it('every other write of dial-skill.json keeps it', () => {
+    const dataDir = aDataDir()
+    const home = '/Users/someone/Library/Application Support/orca/0/claude'
+    expect(writeOrcaConnected(dataDir)).toBeUndefined()
+
+    expect(writeRemoved(dataDir, 'vscode', true)).toBeUndefined()
+    expect(readOrcaConnected(dataDir)).toEqual({ connected: true })
+    expect(writeRemoved(dataDir, 'claude', false, ['/a/skills'])).toBeUndefined()
+    expect(readOrcaConnected(dataDir)).toEqual({ connected: true })
+    expect(writePluginHomes(dataDir, [home])).toBeUndefined()
+    expect(readOrcaConnected(dataDir)).toEqual({ connected: true })
+
+    // And its own write keeps the removals, the folders and the plugin homes.
+    expect(writeOrcaConnected(dataDir)).toBeUndefined()
+    expect(skillFile(dataDir)).toEqual({ removed: { vscode: true }, homes: { claude: ['/a/skills'], codex: [] }, pluginHomes: [home], orcaConnected: true })
+  })
+
+  // Root reads a file whatever its mode.
+  it.skipIf(process.getuid?.() === 0)('a file that cannot be read says so, and is not written over', () => {
+    const dataDir = aDataDir()
+    expect(writeRemoved(dataDir, 'codex', true)).toBeUndefined()
+    const file = join(dataDir, DIAL_SKILL_FILE)
+    const before = readFileSync(file, 'utf8')
+    // Stands for any read error: EACCES, EIO, EMFILE.
+    chmodSync(file, 0o000)
+
+    // Read as never connected, Harness would offer Orca's plugin again to a person who removed it.
+    expect(readOrcaConnected(dataDir)).toEqual({ connected: false, unread: true })
+    // Codex's removal would be lost.
+    expect(writeOrcaConnected(dataDir)).toBe('EACCES')
+
+    chmodSync(file, 0o600)
+    expect(readFileSync(file, 'utf8')).toBe(before)
+  })
+})
+
+describe('a file that cannot be parsed', () => {
+  const empty = { dial: false, homes: { claude: [], codex: [] }, pluginHomes: [] }
+  const setAside = (base: string): string => `[state] ${base} could not be read (not valid JSON); kept as ${base}.unreadable, starting empty.`
+  const home = '/Users/someone/Library/Application Support/orca/0/claude'
+
+  it('a torn dial-skill.json is set aside, not written over', () => {
+    const dataDir = aDataDir()
+    const file = join(dataDir, DIAL_SKILL_FILE)
+    // What a reader saw while another process was writing it.
+    writeFileSync(file, '{"homes":')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    expect(writePluginHomes(dataDir, [home])).toBeUndefined()
+
+    expect(readFileSync(`${file}.unreadable`, 'utf8')).toBe('{"homes":')
+    expect(readPluginHomes(dataDir)).toEqual({ homes: [home] })
+    expect(warn).toHaveBeenCalledWith(setAside(DIAL_SKILL_FILE))
+  })
+
+  it('a torn dial-setup.json is set aside, not written over', () => {
+    const dataDir = aDataDir()
+    const file = join(dataDir, DIAL_SETUP_FILE)
+    writeFileSync(file, '{"dial":')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const record = { dial: true, plugin: '0.6.59', homes: { claude: [], codex: [] }, pluginHomes: [home] }
+
+    expect(readSetup(dataDir)).toEqual(empty)
+    expect(writeSetup(dataDir, record)).toBeUndefined()
+
+    expect(readFileSync(`${file}.unreadable`, 'utf8')).toBe('{"dial":')
+    expect(readSetup(dataDir)).toEqual(record)
+    expect(warn).toHaveBeenCalledWith(setAside(DIAL_SETUP_FILE))
+  })
+
+  // The first read saw a torn file, the read again failed (EMFILE): nothing says what the file holds now.
+  it('a torn dial-skill.json whose read again fails is left as it is', () => {
+    const dataDir = aDataDir()
+    const file = join(dataDir, DIAL_SKILL_FILE)
+    writeFileSync(file, '{"homes":')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const read = fs.readFileSync
+    const failing = vi.spyOn(fs, 'readFileSync').mockImplementation(((path: fs.PathOrFileDescriptor, ...rest: unknown[]) => {
+      if (path === file) throw Object.assign(new Error('EMFILE: fixture'), { code: 'EMFILE' })
+      return (read as (...args: unknown[]) => unknown)(path, ...rest)
+    }) as typeof fs.readFileSync)
+
+    expect(readPluginHomes(dataDir)).toEqual({ homes: [], unread: true })
+    expect(writePluginHomes(dataDir, [home])).toBe('EMFILE')
+
+    failing.mockRestore()
+    expect(readdirSync(dataDir)).toEqual([DIAL_SKILL_FILE])
+    expect(readFileSync(file, 'utf8')).toBe('{"homes":')
+  })
+
+  it('a file past the bound reads as today', () => {
+    const dataDir = aDataDir()
+    // Torn as well: past the bound it is not read, so not parsed either.
+    const torn = `{"pad":"${'x'.repeat(256 * 1024)}`
+    for (const name of [DIAL_SKILL_FILE, DIAL_SETUP_FILE]) writeFileSync(join(dataDir, name), torn)
+
+    expect(readPluginHomes(dataDir)).toEqual({ homes: [] })
+    expect(readSetup(dataDir)).toEqual(empty)
+
+    expect(readdirSync(dataDir).sort()).toEqual([DIAL_SETUP_FILE, DIAL_SKILL_FILE])
+    for (const name of [DIAL_SKILL_FILE, DIAL_SETUP_FILE]) expect(readFileSync(join(dataDir, name), 'utf8')).toBe(torn)
+  })
+})
