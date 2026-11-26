@@ -57,8 +57,8 @@ export type ClaudeStep = 'unsupported' | 'launcher' | 'list' | 'folder' | 'marke
 export type ClaudeResult = { ok: true } | { ok: false; error: string; step: ClaudeStep; reason?: string }
 export type ClaudeFailure = Extract<ClaudeResult, { ok: false }>
 /** What the devices' setup did: installed or updated the plugin; found it current, on as it should be; or found it absent,
- *  not on as the person left it, and ran nothing for it. [folderFailed]: the code of an update's folder write that
- *  failed and did not stop it. */
+ *  not on as the person left it, and ran nothing for it. [folderFailed]: the code of a folder write that failed and did
+ *  not stop it, as nothing was to be added or installed. */
 export type ClaudeSetup = ({ ok: true; outcome: 'installed' | 'updated' | 'current' | 'absent' } | ClaudeFailure) & { folderFailed?: string }
 
 /** The marketplace add, its update, the install and the plugin's update can fetch (a marketplace from GitHub, which
@@ -268,6 +268,8 @@ function writeFolder({ folder, files }: ClaudeInstallDeps): string | null {
   return typeof written === 'object' ? written.failed : null
 }
 
+const folderFailure = (code: string): ClaudeFailure => ({ ok: false, error: FOLDER_ERROR, step: 'folder', reason: code })
+
 /** A project-scope entry turns the plugin on for one repository only; the dial needs it in every session. */
 async function userEntry(run: ClaudeRun): Promise<{ ok: true; entry?: Record<string, unknown> } | ClaudeFailure> {
   const plugins = await jsonList(run, ['plugin', 'list', '--json'])
@@ -293,12 +295,11 @@ async function change(run: ClaudeRun, args: string[], timeoutMs: number, step: C
   return answer.code === 0 ? null : failure(answer, step)
 }
 
-/** Writes the marketplace folder, adds it when no `openharness` marketplace is there, then installs the plugin. One
- *  there already, from GitHub or from the folder, is kept: removing it would uninstall every plugin it gave. */
-async function install(run: ClaudeRun, deps: ClaudeInstallDeps): Promise<ClaudeFailure | null> {
-  // Nothing to add without the folder.
-  const unwritten = writeFolder(deps)
-  if (unwritten) return { ok: false, error: FOLDER_ERROR, step: 'folder', reason: unwritten }
+/** Adds the written marketplace folder when no `openharness` marketplace is there, then installs the plugin. One there
+ *  already, from GitHub or from the folder, is kept: removing it would uninstall every plugin it gave. [unwritten]: the
+ *  folder write's code, which stops it, as there is nothing to add. */
+async function install(run: ClaudeRun, deps: ClaudeInstallDeps, unwritten: string | null): Promise<ClaudeFailure | null> {
+  if (unwritten) return folderFailure(unwritten)
   // Marketplaces that cannot be read are taken as none: at worst the add runs again, and its own failure is counted.
   const marketplaces = await jsonList(run, ['plugin', 'marketplace', 'list', '--json'])
   const added = Array.isArray(marketplaces) && marketplaces.some((marketplace) => marketplace.name === MARKETPLACE)
@@ -315,14 +316,22 @@ async function install(run: ClaudeRun, deps: ClaudeInstallDeps): Promise<ClaudeF
   return failed
 }
 
+/*
+ * Enable and the first setup write the folder before Claude Code lists anything, not only for an install: Claude Code
+ * reads the plugin from it in place, and a plugin listed while it is gone (`harness uninstall` took Harness's data, or a
+ * hand removed it) has nothing to run until it is written again.
+ */
+
+/** The plugin installed, or turned on; a folder that could not be written fails it once the plugin is on. */
 export async function claudeEnable(deps: ClaudeInstallDeps): Promise<ClaudeResult> {
   const run = await supportedRun(deps)
   if (typeof run !== 'function') return run
+  const unwritten = writeFolder(deps)
   const listed = await userEntry(run)
   if (!listed.ok) return listed
-  if (!listed.entry) return await install(run, deps) ?? { ok: true }
-  if (listed.entry.enabled === true) return { ok: true }
-  return await change(run, ['plugin', 'enable', DIAL_PLUGIN_ID, '--scope', 'user'], LOCAL_MS, 'enable') ?? { ok: true }
+  if (!listed.entry) return await install(run, deps, unwritten) ?? { ok: true }
+  const failed = listed.entry.enabled === true ? null : await change(run, ['plugin', 'enable', DIAL_PLUGIN_ID, '--scope', 'user'], LOCAL_MS, 'enable')
+  return failed ?? (unwritten ? folderFailure(unwritten) : { ok: true })
 }
 
 /** The devices' first setup: the plugin installed as enable installs it, and one already there left as it is. One the
@@ -330,10 +339,12 @@ export async function claudeEnable(deps: ClaudeInstallDeps): Promise<ClaudeResul
 export async function claudeSetUp(deps: ClaudeInstallDeps): Promise<ClaudeSetup> {
   const run = await supportedRun(deps)
   if (typeof run !== 'function') return run
+  const unwritten = writeFolder(deps)
   const listed = await userEntry(run)
   if (!listed.ok) return listed
-  if (listed.entry) return { ok: true, outcome: listed.entry.enabled === true ? 'current' : 'absent' }
-  return await install(run, deps) ?? { ok: true, outcome: 'installed' }
+  if (!listed.entry) return await install(run, deps, unwritten) ?? { ok: true, outcome: 'installed' }
+  const outcome = listed.entry.enabled === true ? 'current' : 'absent'
+  return unwritten ? { ok: true, outcome, folderFailed: unwritten } : { ok: true, outcome }
 }
 
 /** Uninstalls the plugin and keeps the marketplace, which the harness plugin may come from too. */
