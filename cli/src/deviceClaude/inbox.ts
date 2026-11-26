@@ -33,7 +33,8 @@ import { CLAUDE_SESSION_ID, createRecordProof, WINDOWS_LIVENESS } from '../devic
 const MAX_TEXT = 20_000
 /** The core holds a poll 27 s (core/devicesLink.ts INBOX_CALL_MS); one with no answer by now is not coming. */
 const POLL_MS = 30_000
-/** No daemon, no proof, no dial: the daemon would answer at once, so the next poll waits this long, as the Mac mod does. */
+/** No daemon, no proof, or a poll the daemon refused: asked again at once it would fail the same way, so the next poll
+ *  waits this long, as the Mac mod does. With no dial watching the daemon holds the poll instead. */
 const RETRY_MS = 60_000
 /** A 200 with no text sooner than this was not held, and polling again at once would spin, as the Mac mod's HELD_MS. */
 const HELD_MS = 1_000
@@ -202,7 +203,7 @@ function callerIn(rows: readonly CallerRow[] | null, pid: number): CallerRow | n
   return (win32.basename(parent.executable).toLowerCase() === 'harness.exe' ? row(parent.parentPid) : parent) ?? null
 }
 
-/** One held poll: the line its answer prints, or null for none from a proven daemon (none there, no proof, no dial). */
+/** One held poll: the line its answer prints, or null for none from a proven daemon (none there, no proof, refused). */
 async function pollOnce(sessionId: string, send: typeof fetch, deps: InboxDeps, gone: AbortSignal): Promise<string | null> {
   let answer: Response
   let body: string

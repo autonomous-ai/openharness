@@ -178,20 +178,22 @@ handed out), then keeps one long poll open from a timer:
 - `POST /api/hook/inbox { sessionId }` over that socket (`$.http.fetch` with `socketPath`); the daemon holds it up to
   25 s and answers `{ text }` or nothing.
 - On `{ text }`: `$.prompt.submit({ text, asUser: true })`, not awaited inside the loop.
-- No launcher, no daemon, or no device (the core answers at once when the devices process is not running): try again in
-  60 s. A route this daemon does not know (an older Harness): try again in 10 minutes.
+- No launcher, no daemon, a poll the core refused (the devices failing, too many polls), or an empty answer sooner than
+  1 s (not held): try again in 60 s. A route this daemon does not know (an older Harness): try again in 10 minutes.
 - It registers no tool, command, interface or `classic.*` hook, and touches no settings.
 
 **The core route `/api/hook/inbox`** (in `hookServer.ts` beside `/api/hook/observed`, with the same authentication
 (`hookOk`); its checks and forwarding live in `core/deviceHookCalls.ts`, listed in `src/architecture.coreFiles.txt`;
-it first checks that the devices process is connected and a dial is watching, and otherwise answers 503 at once, so
-it never starts the devices process): `sessionId` ≤ 128, body ≤ 1 KB, one open poll per session (a newer one replaces
-it); each poll gets an id and goes to the devices process as a call with a 25 s deadline. When the client goes first, or
-a newer poll replaces it, the core sends `inbox.gone { pollId }`, so the devices process always knows which polls are
-open.
+it forwards a poll only while a dial is watching, so it never starts the devices process; until one does, it holds the
+poll itself, 25 s at most, and a dial that starts watching ends each poll it holds empty, one younger than 1.5 s once it
+is 1.5 s old, so each mod asks again at once and reaches the devices): `sessionId` ≤ 128, body ≤ 1 KB, one open poll
+per session (a newer one replaces it); each poll gets an id and goes to the devices process as a call with a 25 s
+deadline. When the client goes first, or a newer poll replaces it, the core sends `inbox.gone { pollId }`, so the
+devices process always knows which polls are open.
 
 **In the devices process.** An observed agent can take voice (`v`) when its session has a poll open, or one closed under
-35 s ago (the mod opens the next at once), or when it has an Orca terminal handle. A transcript for it goes:
+5 s ago (the mod opens the next at once; on Windows its follower may first read the process table, up to 3 s), or when
+it has an Orca terminal handle. A transcript for it goes:
 
 1. Refused when the session has ended ("<name> did not answer."). The mod's route delivers in every state:
    `$.prompt.submit` waits for the turn to end before it starts the next and types nothing. Typing through Orca goes
@@ -203,7 +205,8 @@ open.
    transcript check read it), for any other engine only after a hook said its turn ended (a turn-stop or turn-error,
    or a session-start after one). An agent of another engine the scan found, with no such hook yet, is told busy.
 2. To the mod when its session has a poll open, or opens one within 5 s: the text is the answer to that poll, and that is
-   "sent" (the mod sends no acknowledgement). No poll in 5 s: "<name> did not answer."
+   "sent" (the mod sends no acknowledgement). No poll in 5 s and no terminal to type into: "<name> is not listening
+   yet. Try again in a moment."
 3. Else to Orca (`orca terminal send … --enter --wait-submit 5`).
 
 **The dial's voice path.** Today a transcript for an agent goes through `CableHost.sendTurn` (synchronous) to the fleet
@@ -272,8 +275,8 @@ Windows.
   posted body never carries `ORCA_PAIRING_CODE`, `ORCA_AGENT_SESSION_SPAWN_TOKEN` or any other environment variable.
 - `notify.mjs`: `ORCA_TERMINAL_HANDLE` is posted; `ORCA_PAIRING_CODE` and `ORCA_AGENT_SESSION_SPAWN_TOKEN` are never
   posted, with both set; all 10 allowlisted hints set at once reach the devices uncut; the core takes 10 and refuses 11.
-- Core: `asked` with its bounded `tool` and `summary`; the inbox route's bounds, 503 at once with no device (the
-  process is not started), `inbox.gone`, the fallbacks; 100% per file (`npm run test:core`).
+- Core: `asked` with its bounded `tool` and `summary`; the inbox route's bounds, a poll held with no dial and ended once
+  one watches (the process is not started), `inbox.gone`, the fallbacks; 100% per file (`npm run test:core`).
 - Waiting: `asked` gives the agent `needs-you` and "<summary> · answer in {Host}" in place of wave 0's line; the next
   event of that session clears it, another session's does not; a display-only `question` frame (`shown:` id) is sent and
   closed with the wait, and no `answer` or `answer.reviewed` frame can approve anything; the summary reaches no backend request, router candidate or log line.
@@ -314,8 +317,8 @@ first. The voice checks 4-6 run against a daemon on the staging env file (`HARNE
   summary, command, path or transcript: counts and outcomes only.
 - **Measures** (daemon log lines, as the dial's notify tally). Waiting prompts shown and cleared;
   voice sends by route (mod, Orca) and refusals by reason. No content and no identifiers.
-- **Cost.** One short `harness` process per permission prompt (it exits once its post is written). With no dial the mod
-  polls once a minute per Claude Code session; with a dial, one held poll per session (25 s). Nothing polls Orca.
+- **Cost.** One short `harness` process per permission prompt (it exits once its post is written). One held poll per
+  Claude Code session (25 s): the core holds it with no dial, the devices with one. Nothing polls Orca.
 - **Failure.** The hook never decides, so any error leaves the prompt to its app, as it would be with no plugin.
 - **Security.** Nothing approves a command: the hook's client prints no decision and reads no answer, and no dial frame
   maps to one. The core takes typed, bounded fields; the tool input is cut to a summary outside the core. The hook's client reaches the daemon over its local, credential-checked transport, and the

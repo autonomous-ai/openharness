@@ -2963,7 +2963,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
 
   // ── the mod's polls ────────────────────────────────────────────────────────────────────────────────
   //
-  // Guarded as the fleet is: a part that throws, or did not start, answers as with no dial, so the mod waits a minute. One
+  // Guarded as the fleet is: a part that throws, or did not start, answers off, so the mod waits a minute. One
   // switched off ends what it holds: the `gone` that would have ended a poll is swallowed from then on.
   const { inboxPoll, inboxGone } = DEVICES_FALLBACKS
   const inboxCalls = part.start('inbox', (): Pick<DeviceHookPort, 'inboxPoll' | 'inboxGone'> & { stop(): void } => ({

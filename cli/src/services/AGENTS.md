@@ -223,9 +223,10 @@ master too old to run it starts it beside itself, still in its own process (`src
   The mod's inbox poll reaches the devices as a request with a deadline (src/core/deviceHookCalls.ts).
   The core asks only while a dial watches, so a poll never starts their process. Until one does, the core holds
   the poll itself, 25 s at most, and a dial that starts watching ends it with nothing, so the mod asks again at
-  once and that poll reaches the devices; a client that goes first is told as a notice. What a local tool tells the devices (first the app in front, from `harness hardware
-  watch`) goes to their own listener (src/services/devicesListener.ts), never through the core: a new message is a
-  handler registered there by its type, with its own body and rate limits, beside `front`, `tab`, `thread`, the
+  once and that poll reaches the devices; a client that goes first is told as a notice. What a local tool tells
+  the devices (first the app in front, from `harness hardware watch`) goes to their own listener
+  (src/services/devicesListener.ts), never through the core: a new message is a handler registered there by its
+  type, with its own body and rate limits, beside `front`, `tab`, `thread`, the
   title of the ChatGPT app's window, the mod's `attach`, the session the Claude app shows, `notice`, an agent's line
   from `harness device notify`, `notify`,
   the Notifications setting, and `orcaFront`, the terminals of the worktree on Orca's screen from Orca's Harness
