@@ -27,9 +27,10 @@ export const sessionStore: SessionStoreContract = {
   /**
    * Native Claude publishes a pid-to-conversation record (`<home>/sessions/<pid>.json`) even before a hook binds
    * it, removed at exit. `procStart` is UTC in current Claude and the host's local `ps` form in older builds: the
-   * exact second either way, never a recycled pid.
+   * exact second either way, never a recycled pid. On Windows Claude Code (2.1.332's bundle) writes no `procStart`
+   * but `procStartFt`, its process's creation time as a decimal FILETIME: the exact millisecond.
    */
-  live: { record: { folder: 'sessions', suffix: '.json', pid: 'pid', start: 'procStart', cwd: 'cwd', id: 'sessionId' } },
+  live: { record: { folder: 'sessions', suffix: '.json', pid: 'pid', start: 'procStart', startFiletime: 'procStartFt', cwd: 'cwd', id: 'sessionId' } },
   /**
    * Claude rolls a long conversation over to a new file on its own; the old file's last line names the next
    * session. The same marker is written for a background session, whose file holds two bookkeeping lines and

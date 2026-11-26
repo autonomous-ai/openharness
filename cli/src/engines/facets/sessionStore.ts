@@ -58,10 +58,12 @@ export interface SessionStoreContract {
   scan: { from: 'first' } | { from: 'head'; childFolder: string; sidechain: string }
   /**
    * How a live process names its own session. `record`: a file of its own, `<folder>/<pid><suffix>` beside each
-   * sessions folder, naming the pid, its start (UTC or the host's local form), the folder and the session. `open`:
-   * the session file it holds open, named like `file`; behind a Node launcher (`launcher`), its one native child's.
+   * sessions folder, naming the pid, its start, the folder and the session. The start is `startFiletime` when the
+   * record holds that field as text (a decimal FILETIME, read to the millisecond as the daemon reads a Windows
+   * process's start), else `start` (UTC or the host's local form). `open`: the session file it holds open, named
+   * like `file`; behind a Node launcher (`launcher`), its one native child's.
    */
-  live: { record: { folder: string; suffix: string; pid: string; start: string; cwd: string; id: string } }
+  live: { record: { folder: string; suffix: string; pid: string; start: string; startFiletime?: string; cwd: string; id: string } }
     | { open: { file: RegExp; launcher: RegExp } }
   /**
    * A conversation continued in another file: the last record of the transcript (within `tailBytes`) has type
