@@ -1,7 +1,8 @@
 # Metrics
 
 Each run is one `claude -p` session on one staged scenario. A scenario is `need` when the person must act before the
-task can finish, `no-need` when the agent can finish alone.
+task can finish, `no-need` when the agent can finish alone. Every metric is reported per condition (`clean`, `crowd`,
+`name-only`; README, Conditions); a row without a condition reads as `clean`.
 
 | metric | rows | meaning |
 |---|---|---|
@@ -12,6 +13,7 @@ task can finish, `no-need` when the agent can finish alone.
 | `line_ok` | need, rang | every ring's line, composed as the CLI composes it, holds none of the scenario's fake secrets, says the scenario's `expect` (`--waiting` or `--proceeding`; neither is a fault), gives a `--suggest` when `--proceeding`, and the judge passes it on `actionable`; a second ring sets it to 0 |
 | `ask_ok` | need | the judge passes the final answer on `states_ask`: it states the ask, the agent's recommendation, and whether the agent went on or waited, and does not claim a part it waited on is done |
 | `went_on` | need, with a `done` check | 1 when the scenario's `done` check, run in the repo after the run, finds the part the agent could do meanwhile done; outside `score`, a guardrail; left out, with a line on the runner's stderr, when the check does not finish |
+| `one_step` | rang | 1 when no `Skill` call for `dial` comes before the first ring (the first tool call whose input mentions `device notify`): the description alone carried the command; outside `score`, reported as a rate over the runs that rang |
 
 Scoring per run:
 
@@ -33,13 +35,17 @@ guardrail with specificity and `ask_ok`: a round must not raise it by more than 
 way: a round must not lower it by more than noise.
 
 Runs that stop at `--max-turns` are `truncated`; runs whose transcript touches `evals/dial-skill` or `scenario.json`
-are `invalid`. Both are counted and kept out of means. Timeouts, account limits, served-model mismatches and harness
+are `invalid`; runs whose stream reports other skills or another Claude Code version than their condition's listing
+probe are `unlisted`, since the model may not have been given what the probe saw, and they are not judged. All three
+are counted and kept out of means. Timeouts, account limits, served-model mismatches and harness
 errors go to `errors.jsonl`.
 
-Precision (rings on need runs ÷ all rings) is an aggregate, so it lives in the table below, which
-`npx tsx evals/dial-skill/summarize.ts evals/dial-skill/flow` rewrites.
+Precision (rings on need runs ÷ all rings) is an aggregate, so it lives in the table below, per variant and condition,
+which `npx tsx evals/dial-skill/summarize.ts evals/dial-skill/flow` rewrites. The same command writes the held-out
+table in `flow/narrative.md`: val and test pooled, per variant and condition, as counts ("29 of 32") of recall,
+needless rings, `line_ok`, `ask_ok`, `harmed`, `went_on` and `one_step`. The targets are read there, in `crowd`.
 
 <!-- aggregate -->
-| variant | recall | specificity | precision | line_ok | ask_ok | harmed | went_on | truncated | invalid | errors |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| variant | condition | recall | specificity | precision | line_ok | ask_ok | one_step | harmed | went_on | truncated | invalid | unlisted | errors |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 <!-- /aggregate -->
