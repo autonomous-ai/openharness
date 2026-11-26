@@ -192,11 +192,18 @@ describe('the catalog', () => {
     expect(x10.probes).toContainEqual(expect.objectContaining({ id: 'apart', kind: 'ring', expect: ['t1'], apart: ['c1', 'z'] }))
   })
 
-  it('X3, V11, UH1 and every iTerm2 scenario are macOS only, O11 macOS and Linux', () => {
+  it('X3, V11, UH1 and every iTerm2 scenario are macOS only, O11 and V16 macOS and Linux', () => {
     const mac = ['X3', 'V11', 'UH1']
     for (const s of ALL) {
-      const platforms = mac.includes(s.id) || s.app === 'iterm' ? ['darwin'] : s.id === 'O11' ? ['darwin', 'linux'] : ['darwin', 'win32', 'linux']
+      const platforms = mac.includes(s.id) || s.app === 'iterm' ? ['darwin']
+        : ['O11', 'V16'].includes(s.id) ? ['darwin', 'linux'] : ['darwin', 'win32', 'linux']
       expect(s.platforms, s.id).toEqual(platforms)
+    }
+  })
+
+  it('an open check that brings is an iTerm2 scenario\'s, the one app it grades', () => {
+    for (const s of ALL) {
+      for (const c of s.checks) if (c.kind === 'open' && c.brings) expect(s.app, `${s.id} ${c.id}`).toBe('iterm')
     }
   })
 
@@ -415,12 +422,12 @@ describe('the catalog', () => {
     // time quit, its time past the devices' next look after the relaunch and its rest after the focus, O16's agents a
     // second apart, O17's rest and its time unplugged, and O20's after the tap and the swipe; iTerm2's agents a second
     // apart (started), I2's rest after the select, I3's and I15's turns (turned), I3's rests after each pick, I4's pause before and after the split
-    // and its rest after the first tap, I6's rest, I7's rest after the first tap, I9's rests on b and on a and its wait
+    // and its rest after the first tap, I6's rests after the pick and the swipe, I7's rest after the first tap, I9's rests on b and on a and its wait
     // after the echo, I10's rest after the move to a's pane, I10's and I11's rests after the select, I13's rests after
     // the detach and the attach, I14's time past the devices' next look after herdr starts again, I15's time after the
     // relaunch and its rest after the first tap, I16's long turn, I17's turn, I19's rest after the select, I20's rest on c,
-    // I21's rest and its time unplugged, I22's and I23's rests before and after the front, I23's rest on c and I24's
-    // rest after the pick; VH1's rest on a, UH3's voice 200 ms after the prompt, OH1's rest on a and OH2's voice 200 ms
+    // I21's rest and its time unplugged, I22's and I23's rests before and after the front, I23's rests after the pick and
+    // on c, and I24's rest after the pick; VH1's rest on a, UH3's voice 200 ms after the prompt, OH1's rest on a and OH2's voice 200 ms
     // after the focus; IH1's voice 200 ms after the select, IH2's rests after the attach and each select, its two turns
     // and the pause between them, IH3's agents a second apart, IH4's turn (turned) and IH5's turn.
     const starts = (id: string, n: number): string[] => Array<string>(n - 1).fill(`${id} 1000`)
@@ -434,12 +441,12 @@ describe('the catalog', () => {
       'O12 2000', 'O12 35000', 'O12 2000',
       ...starts('O16', 40), 'O17 1000', 'O17 3000', 'O20 4000', 'O20 2000',
       ...starts('I2', 4), 'I2 2000', ...starts('I3', 4), 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000',
-      'I4 1000', 'I4 1000', 'I4 4000', ...starts('I5', 2), ...starts('I6', 3), 'I6 2000', ...starts('I7', 3), 'I7 4000',
+      'I4 1000', 'I4 1000', 'I4 4000', ...starts('I5', 2), ...starts('I6', 3), 'I6 2000', 'I6 2000', ...starts('I7', 3), 'I7 4000',
       ...starts('I8', 2), ...starts('I9', 2), 'I9 1000', 'I9 500', 'I9 3000', ...starts('I10', 2), 'I10 1000', 'I10 2000', ...starts('I11', 2), 'I11 2000',
       ...starts('I12', 2), ...starts('I13', 2), 'I13 2000', 'I13 2000', ...starts('I14', 3), 'I14 35000',
       ...starts('I15', 3), 'I15 2000', 'I15 2000', 'I15 2000', 'I15 2000', 'I15 4000', 'I16 30000', 'I17 2000',
-      ...starts('I18', 2), ...starts('I19', 2), 'I19 2000', ...starts('I20', 2), 'I20 1000', ...starts('I21', 4), 'I21 1000', 'I21 3000',
-      ...starts('I22', 2), 'I22 1000', 'I22 2000', ...starts('I23', 3), 'I23 1000', 'I23 3000', 'I23 2000',
+      ...starts('I18', 2), ...starts('I19', 2), 'I19 3000', ...starts('I20', 2), 'I20 1000', ...starts('I21', 4), 'I21 1000', 'I21 3000',
+      ...starts('I22', 2), 'I22 1500', 'I22 2000', ...starts('I23', 3), 'I23 2000', 'I23 1500', 'I23 3000', 'I23 2000',
       ...starts('I24', 2), 'I24 2000',
       'CH3 1000', 'XH3 200',
       ...starts('VH1', 2), 'VH1 1000', ...starts('VH3', 3), ...starts('UH3', 2), 'UH3 200',

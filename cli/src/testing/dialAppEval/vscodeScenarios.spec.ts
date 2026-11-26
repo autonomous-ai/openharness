@@ -12,9 +12,9 @@ describe("VS Code's scenarios", () => {
     expect(HELD_OUT.filter((s) => s.id.startsWith('V') && !s.id.startsWith('VH'))).toEqual([])
   })
 
-  it('V11 is macOS only, V2 tier A only, V12 and V16 tier B only, every other on every platform in both tiers', () => {
+  it('V11 is macOS only, V16 macOS and Linux, V2 tier A only, V12 and V16 tier B only, every other on every platform in both tiers', () => {
     for (const s of VSCODE) {
-      expect(s.platforms, s.id).toEqual(s.id === 'V11' ? ['darwin'] : ['darwin', 'win32', 'linux'])
+      expect(s.platforms, s.id).toEqual(s.id === 'V11' ? ['darwin'] : s.id === 'V16' ? ['darwin', 'linux'] : ['darwin', 'win32', 'linux'])
       expect(s.tiers, s.id).toEqual(s.id === 'V2' ? ['a'] : ['V12', 'V16'].includes(s.id) ? ['b'] : ['a', 'b'])
     }
   })

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { SWIPE_REST_MS } from '../../cable/cableSession.js'
 import { DIAL_BRINGS_MS } from '../../cable/hosts/appFilter.js'
+import { OUTER_FRESH_WAIT_MS } from '../../cable/hosts/observed.js'
 import { HELD_OUT, MAIN } from './catalog.js'
 import { evaluate } from './checks.js'
 import { tabLabel } from './itermRecords.js'
@@ -176,9 +178,11 @@ describe("iTerm2's scenarios", () => {
     for (const id of ['I22', 'I23', 'I24']) expect(byId(id).world, id).toEqual({ front: 'other' })
   })
 
-  it("I22 and I23 bring iTerm2 to the front themselves within 2 s of the dial's bring, as tier A's world moves no front "
-    + 'app, and grade the page held after it', () => {
-    for (const [id, bring, page] of [['I22', 'pick', 'tmux'], ['I23', 'rest', 'herdr']] as const) {
+  it("I22 and I23 bring iTerm2 to the front themselves after the dial's bring and within 2 s of it, as tier A's world "
+    + 'moves no front app, and grade the page held after it', () => {
+    // The bring comes after the client's fresh read, and a rest's after its pause too.
+    for (const [id, bring, page, before] of [['I22', 'pick', 'tmux', OUTER_FRESH_WAIT_MS],
+      ['I23', 'rest', 'herdr', SWIPE_REST_MS + OUTER_FRESH_WAIT_MS]] as const) {
       const s = byId(id)
       const from = s.steps.findIndex((step) => step.label === bring)
       const front = s.steps.findIndex((step) => step.label === 'front')
@@ -186,7 +190,9 @@ describe("iTerm2's scenarios", () => {
       expect(s.steps.filter((step) => step.kind === 'front'), id).toHaveLength(1)
       const between = s.steps.slice(from + 1, front)
       expect(between.every((step) => step.kind === 'wait' && step.until === undefined), id).toBe(true)
-      expect(between.reduce((ms, step) => ms + (step.kind === 'wait' ? step.ms : 0), 0), id).toBeLessThan(DIAL_BRINGS_MS)
+      const wait = between.reduce((ms, step) => ms + (step.kind === 'wait' ? step.ms : 0), 0)
+      expect(wait, id).toBeGreaterThan(before)
+      expect(wait, id).toBeLessThan(DIAL_BRINGS_MS)
       expect(s.checks.find((c) => c.kind === 'ring'), id).toMatchObject({ dim: 'D7', page, after: 'front' })
     }
   })

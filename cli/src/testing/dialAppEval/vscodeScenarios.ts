@@ -266,8 +266,9 @@ export function vscodeScenarios(): Scenario[] {
     scenario({
       id: 'V16', app: 'vscode', title: 'Two VS Code terminals each holding a tmux client: focusing the other terminal moves the dial to its agent on VS Code\'s page',
       // VS Code's terminal focus of a tmux client follows its pane's agent, on VS Code's page (Diego's 2026-11-26 rule,
-      // docs/plans/2026-11-26-dial-mux-host-pages-design.md). Tier B only, as V12: tier A has no tmux in an editor.
-      dims: ['D2', 'D1'], tiers: ['b'], sessions: [vscode('a', { tmux: true }), vscode('b', { tmux: true }), ghost],
+      // docs/plans/2026-11-26-dial-mux-host-pages-design.md). Tier B only, as V12: tier A has no tmux in an editor. Not on
+      // Windows, where tmux runs only inside WSL (as O11).
+      dims: ['D2', 'D1'], platforms: ['darwin', 'linux'], tiers: ['b'], sessions: [vscode('a', { tmux: true }), vscode('b', { tmux: true }), ghost],
       steps: [
         ...started(['a', 'b']),
         { kind: 'editor.window', window: 'w1', active: 'a', focused: true },

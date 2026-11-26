@@ -148,6 +148,8 @@ export function itermScenarios(): Scenario[] {
         ...listed('iterm', ['a', 'd', 'b'], []),
         { kind: 'pick', page: 'tmux' },
         ...listed('tmux', ['d', 'b'], ['a']),
+        // The pick opens d (spec §5): its open lands before the rest's window opens.
+        { kind: 'wait', ms: 2 * S },
         { label: 'rest', kind: 'swipe', session: 'b' },
         { kind: 'wait', ms: 2 * S },
       ],
@@ -394,7 +396,8 @@ export function itermScenarios(): Scenario[] {
         ...started(['a', 'b']),
         ...listed('iterm', ['a', 'b'], []),
         { kind: 'iterm.select', window: 'w1', tab: 1 },
-        { kind: 'wait', ms: 2 * S },
+        // Past a slow follow of the select (2-3 s), so the words go to b, not to a still on the face.
+        { kind: 'wait', ms: 3 * S },
         { label: 'voice', kind: 'voice', transcript: 'Eval words for bravo.', target: 'b' },
       ],
       checks: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 'b', text: 'Eval words for bravo.', after: 'voice' }],
@@ -457,7 +460,8 @@ export function itermScenarios(): Scenario[] {
         ...started(['a', 'b']),
         ...counted('iterm', { iterm: 2, tmux: 1 }),
         { label: 'pick', kind: 'pick', page: 'tmux' },
-        { kind: 'wait', ms: 1 * S },
+        // Past the bring, after b's client read afresh (up to 700 ms) and its pane, and within 2 s of it.
+        { kind: 'wait', ms: 1.5 * S },
         { label: 'front', kind: 'front', app: 'iterm' },
         { kind: 'wait', ms: 2 * S },
       ],
@@ -478,8 +482,12 @@ export function itermScenarios(): Scenario[] {
         ...counted('iterm', { iterm: 3, herdr: 2 }),
         { kind: 'pick', page: 'herdr' },
         ...listed('herdr', ['c', 'd'], ['a']),
+        // The pick opens c (spec §5): its open lands before the rest's window opens.
+        { kind: 'wait', ms: 2 * S },
         { label: 'rest', kind: 'swipe', session: 'd' },
-        { kind: 'wait', ms: 1 * S },
+        // Past the bring, after the rest's 400 ms pause, d's client read afresh (up to 700 ms) and its pane, and within
+        // 2 s of it.
+        { kind: 'wait', ms: 1.5 * S },
         { label: 'front', kind: 'front', app: 'iterm' },
         // Past the front's 1 s settle, and d's open window past the open's half mark.
         { kind: 'wait', ms: 3 * S },

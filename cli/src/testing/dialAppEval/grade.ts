@@ -208,10 +208,10 @@ export function tierAVerdict(results: RunResults, baseline: Baseline): Verdict {
 
 /**
  * Tier B pass/fail checks reported but not held, as a timed one is: each grades a race in the product that the run's
- * timing decides (the spec's CI rules, PM 2026-11-23). These were I3's and I15's ring order on iTerm2's page, and their
- * ringKept: the tmux row once reached that page only after its client lookup, so a list tick in the gap ordered it last.
- * Since tmux's and herdr's rows have pages of their own (docs/plans/2026-11-23-dial-tmux-herdr-apps-design.md), that
- * ring holds a alone and its order cannot race. The keys stay until a Mac tier B run's evidence prunes or replaces them.
+ * timing decides (the spec's CI rules, PM 2026-11-23): I3's and I15's ring order on iTerm2's page, and their ringKept.
+ * That ring holds the tmux and herdr agents again (docs/plans/2026-11-26-dial-mux-host-pages-design.md), and after the
+ * devices' restart each re-enters it in the order its client lookup lands, so a list tick between two lookups orders
+ * them by that race, not by their start.
  */
 export const RACED_B: ReadonlySet<string> =
   new Set(['b/darwin/I3/ring.order', 'b/darwin/I3/ringKept', 'b/darwin/I15/ring.order', 'b/darwin/I15/ringKept'])
