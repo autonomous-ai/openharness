@@ -5566,16 +5566,28 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     ]
     /** The server's client socket, and the client connected to it, as lsof gives them. */
     const SOCKETS = 'p3900\nf5\nd0x1111\nn/Users/u/.config/herdr/herdr-client.sock\np4300\nf3\nd0x2222\nn->0x1111\n'
+    /** The shell of the terminal holding a second herdr server's client (4310). */
+    const SHELL_2 = 4309
+    /** ROWS and sess-3 in pane w1:p3 of a second herdr server (3910), whose ids repeat the default server's, with that
+     *  server's one client (4310) in SHELL_2's terminal; herdr's source lists the default server's agents alone. */
+    const OTHER_SERVER: ProcessRow[] = [...ROWS,
+      { pid: 4244, ppid: 4002, tty: 'ttys032', executable: 'claude' }, { pid: 4002, ppid: 3910, tty: 'ttys032', executable: 'zsh' },
+      { pid: 3910, ppid: 1, executable: '/opt/homebrew/bin/herdr' },
+      { pid: 4310, ppid: SHELL_2, executable: 'herdr' }, { pid: SHELL_2, ppid: 4298, executable: 'zsh' },
+    ]
+    const OTHER_SOCKETS = `${SOCKETS}p3910\nf5\nd0x3333\nn/Users/u/.config/herdr/other/herdr-client.sock\np4310\nf3\nd0x4444\nn->0x3333\n`
     const settled = () => new Promise((resolve) => setImmediate(resolve))
     const follows = () => calls('followLocal').filter(([, why]) => why === 'vscode')
     const editorLines = () => logs.filter((line) => line.startsWith('[device] vscode ·'))
     /** On macOS, ROWS' agents, each one's client lookup landed, a herdr listing both, a dial attached with herdr's focus
-     *  subscription live, the window's chains read, and no app settled in front. `herdrFocus` is herdr telling a pane
-     *  took its focus; `focus` the person focusing a terminal; `settle` as clientsIn's. */
-    const herdrIn = async () => {
+     *  subscription live, the window's chains read, and no app settled in front; with [other], OTHER_SERVER's sess-3 too.
+     *  `herdrFocus` is herdr telling a pane took its focus; `focus` the person focusing a terminal; `settle` as
+     *  clientsIn's. */
+    const herdrIn = async (other = false) => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
-      readers.processes.mockResolvedValue(ROWS)
-      processTable.rows = ROWS
+      const rows = other ? OTHER_SERVER : ROWS
+      readers.processes.mockResolvedValue(rows)
+      processTable.rows = rows
       readers.bundleId.mockImplementation(async (at) => at === code ? VSCODE : undefined)
       const subs: Array<{ entries: readonly HerdrEntry[]; to: HerdrSubscriber }> = []
       let list: Promise<HerdrAnswer> | undefined
@@ -5589,16 +5601,17 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       }
       const run = async (file: string, args: string[], timeoutMs: number) => {
         orcaRuns.push([file, args, timeoutMs])
-        return { code: 0, stdout: file === '/usr/sbin/lsof' ? SOCKETS : file === '/bin/ps' ? '4300 ttys004\n' : '' }
+        return { code: 0, stdout: file === '/usr/sbin/lsof' ? (other ? OTHER_SOCKETS : SOCKETS) : file === '/bin/ps' ? '4300 ttys004\n4310 ttys005\n' : '' }
       }
       const listener = fakeListener()
       const { port } = startHere({ listen: listener.listen, now: still, tty: async () => undefined, herdr: client,
         orca: { ...mac, run, onPath: (name: string) => (name === 'herdr-app' ? null : `/opt/${name}/bin/${name}`) } })
-      for (const n of [1, 2]) {
+      const hooked = other ? [1, 2, 3] : [1, 2]
+      for (const n of hooked) {
         port.observed(hook('session-start', { sessionId: `sess-${n}`, callerPid: 4241 + n, transcriptPath: `/t/sess-${n}.jsonl`,
           hostHints: { HERDR_PANE_ID: `w1:p${n}` } }))
       }
-      await vi.waitFor(() => expect(said().filter((line) => line === '[device] herdr client · found')).toHaveLength(2))
+      await vi.waitFor(() => expect(said().filter((line) => line === '[device] herdr client · found')).toHaveLength(hooked.length))
       await settled()
       attach(port)
       await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
@@ -5608,14 +5621,15 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       focused.to.started()
       listener.vscode(WINDOW_ID)
       const looks = calls('syncAgents').length
-      expect(listener.vscodeState(WINDOW_ID, [PLAIN, CLIENT_SHELL])).toBeUndefined()
+      const shells = [PLAIN, CLIENT_SHELL, ...other ? [SHELL_2] : []]
+      expect(listener.vscodeState(WINDOW_ID, shells)).toBeUndefined()
       await vi.waitFor(() => expect(calls('syncAgents').length).toBeGreaterThan(looks))
       const herdrFocus = async (pane: string) => {
         focused.to.event('pane_focused', { pane_id: pane, type: 'pane_focused', workspace_id: 'w1' })
         await settled()
       }
       const focus = async (shell: number) => {
-        expect(listener.vscodeState(WINDOW_ID, [PLAIN, CLIENT_SHELL], shell)).toBeUndefined()
+        expect(listener.vscodeState(WINDOW_ID, shells, shell)).toBeUndefined()
         await settled()
       }
       const settle = async (front: string) => {
@@ -5643,6 +5657,16 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       expect(follows()).toEqual([[B, 'vscode']])
       await vi.waitFor(() => expect(editorLines()).toEqual(['[device] vscode · moved']))
       expect((await host().listAgentSnapshot({ apps: true })).apps?.shown).toBe('vscode')
+    })
+
+    // herdr's focus is the default server's, checked as herdr's own follow checks it: a second server's agent whose pane
+    // id repeats the one herdr focused is at no pane that server lists.
+    it('a second herdr server\'s client in another terminal: focusing it, with herdr\'s focus last on a pane id its agent repeats, moves nothing', async () => {
+      const { herdrFocus, focus, settle } = await herdrIn(true)
+      await settle('vscode')
+      await herdrFocus('w1:p3')
+      await focus(SHELL_2)
+      expect(follows()).toEqual([])
     })
   })
 
