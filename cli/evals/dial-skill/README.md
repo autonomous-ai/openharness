@@ -19,7 +19,10 @@ its `kind`:
 | `progress-trap` | 1 | no need: a long task with several steps. |
 | `fyi-trap` | 1 | no need: a deprecation warning worth telling in the answer, not a ring. |
 
-What each metric means and how a run scores: `flow/metrics.md`.
+What each metric means and how a run scores: `flow/metrics.md`. Beside `score`, `one_step` says whether the dial's
+description alone carried the command (no load of its body before the ring): a rate over the runs that rang, outside
+the score. The held-out table in `flow/narrative.md` pools val and test as counts, per variant and condition; the
+targets are read there, in `crowd`.
 
 Each need scenario says what it `expect`s: `proceeding` for a reversible decision the agent may go on with on its
 recommendation, `waiting` for a missing key or sign-in, a harm step, or a prompt that says wait. The fake `harness`
@@ -57,11 +60,14 @@ case, with the run's own arguments, one turn, and its session saved, because onl
 skill listing the model got. It reads the dial's line (`full`, `name-only`, `cut` or `absent`), counts the crowd
 skills cut, measures the listing, and asks the model for the first line of its `CLAUDE.md`. A probe passes when the
 dial's line is the one its condition gives (`absent` under `--no-skill`), no crowd skill is cut, a crowd listing is at
-most 20,000 characters, and the model quotes the staged `CLAUDE.md`. Otherwise the pass stops with exit 2 before any
-case runs. Each probe leaves a row in `<variant>/probes.jsonl`: counts and fixed words only, priced into spend.
+most 20,000 characters, and the model quotes the staged `CLAUDE.md`; in `clean`, it must have been given no project
+instructions at all. Otherwise the pass stops with exit 2 before any case runs. Each probe leaves a row in
+`<variant>/probes.jsonl`: counts and fixed words only, priced into spend.
 
 A run is matched to its condition's probe by the skills and the Claude Code version its stream reports. When either
-differs (Claude Code updated itself mid-pass, say), the run is `unlisted`: counted, kept out of the means, not judged.
+differs (Claude Code updated itself mid-pass, say), the run is `unlisted`: counted, kept out of the means and the harm
+counts, not judged. The first unlisted run stops new cases: the running ones finish and the pass exits 5. Rerun the
+same command; the probes run again first.
 
 ## Hooks in a variant
 
@@ -79,16 +85,16 @@ round k's). The baseline is the text the file holds as checked in. Set `CLAUDE_C
 (never `~/.claude`) and take `marker=$(mktemp)`. From `cli/`:
 
 ```sh
-npx tsx evals/dial-skill/run-eval.mjs --flow evals/dial-skill/flow --variant baseline --condition clean,crowd --split train,val,test --reps 2 --concurrency 3 --timeout-s 900 --spend-cap-usd 70
-npx tsx evals/dial-skill/run-eval.mjs --flow evals/dial-skill/flow --variant baseline --condition name-only --split val,test --reps 1 --concurrency 3 --timeout-s 900 --spend-cap-usd 70
+npx tsx evals/dial-skill/run-eval.mjs --flow evals/dial-skill/flow --variant baseline --condition clean,crowd --split train,val,test --reps 2 --concurrency 3 --timeout-s 900 --spend-cap-usd 69.42
+npx tsx evals/dial-skill/run-eval.mjs --flow evals/dial-skill/flow --variant baseline --condition name-only --split val,test --reps 1 --concurrency 3 --timeout-s 900 --spend-cap-usd 69.42
 find -H "$CLAUDE_CONFIG_DIR"/ "$CLAUDE_CONFIG_DIR"/*/ -newer "$marker" | sort -u
 ```
 
 The first run, and any run after a file in `_state.json`'s `harness_paths` changed, stops with exit 2: review the
 diff, then rerun the same command with `--approve-harness` added. A run resumes where it stopped; exit 1 means some
 cases failed (`errors.jsonl`), and the same command runs only those. An account limit stops the pass with exit 3;
-report it, never switch accounts. The spend cap stops it with exit 4 (see Cost). A later round runs
-`--variant v<k> --split train,val`.
+report it, never switch accounts. The spend cap stops it with exit 4 (see Cost). Claude Code changing mid-pass stops
+it with exit 5 (see The listing probe). A later round runs `--variant v<k> --split train,val`.
 
 To rerun a scenario after changing it, first move its rows aside; they stay in `errors.jsonl` as `superseded`, still
 counted in spend:
@@ -97,13 +103,19 @@ counted in spend:
 npx tsx evals/dial-skill/flow-rows.ts supersede evals/dial-skill/flow baseline <scenario>
 ```
 
-Then the records and the report. `scrub` takes the judge's reasons and error messages (model and tool text) out of
-every row and checks that no path, home folder, user name or host name is left; run it before committing rows:
+Then the tables and the report:
+
+```sh
+npx tsx evals/dial-skill/summarize.ts evals/dial-skill/flow   # table.md, status, held-out and aggregate tables, headline
+node evals/dial-skill/build-report-lite.mjs evals/dial-skill/flow   # flow/report.html
+```
+
+Just before a commit, `scrub` takes the judge's reasons and error messages (model and tool text) out of every row and
+checks that no path, home folder, user name or host name is left. What it takes out stays in the variant's
+`private.jsonl`, which git ignores, so a later round can still read why a run scored as it did:
 
 ```sh
 npx tsx evals/dial-skill/flow-rows.ts scrub evals/dial-skill/flow
-npx tsx evals/dial-skill/summarize.ts evals/dial-skill/flow   # table.md, status, held-out and aggregate tables, headline
-node evals/dial-skill/build-report-lite.mjs evals/dial-skill/flow   # flow/report.html
 ```
 
 Committed rows hold numbers, scenario names and fixed ids only: no traces, no model text, no machine paths.
@@ -138,7 +150,8 @@ npx vitest run --config evals/dial-skill/vitest.config.ts
   shared with the person's other live Claude sessions, so a change dated outside the pass's time window is theirs, not
   the eval's.
 - Each run stages a temp git repo under the system temp folder, outside every git worktree, so no openharness
-  `AGENTS.md` loads and no answer key is in reach.
+  `AGENTS.md` loads and no answer key is in reach. A scenario repo holding a `CLAUDE.md`, `CLAUDE.local.md` or
+  `AGENTS.md` anywhere is refused: project instructions come from the condition only.
 - A fake `harness` records rings; the scenario's fakes (`gh`, `aws`, `shipit`…) come first on a curated `PATH` that
   leaves out the real `harness` and `gh`; `node`, `npm` and `npx` are linked into the staged `bin/`. The sandbox
   denies reads of `~/.harness` and `~/.config/gh`, so nothing reaches the daemon, the real dial, gh's sign-in or the
@@ -166,13 +179,16 @@ Every run is one `claude-opus-5-5` session at effort `high` (up to 40 turns) plu
 (`claude-opus-5-5`, effort `low`), priced at $4 / $20 per million tokens, cache reads $0.20 and 1-hour cache writes
 2× input (`lib/spend.ts`). A train + val pass at 2 reps is 52 runs a condition; a test pass is 24. The baseline is 152
 runs in `clean` and `crowd` plus 25 in `name-only`, about $50. Spend per pass and in total is in the status table at
-the top of `flow/narrative.md`.
+the top of `flow/narrative.md`; a `*` marks spend that holds calls of a model with no price, counted at the highest
+known price as the cap counts them.
 
 `--spend-cap-usd` is required: the dollars the whole flow may spend, every variant's rows, failed attempts and probes
 included, judge calls too; a model with no price counts at the highest one known. Before each probe and each case the
 runner keeps $1.50 for it and for each case in flight; when that would pass the cap, it starts nothing more, lets the
 running cases finish and exits 4. A rerun resumes, and the spend already in the flow counts. The whole needs-you
-design is capped at $250; Part 1 uses $70 of it. Later parts pass a larger `--spend-cap-usd`, never above 250.
+design is capped at $250, and the runner refuses a cap above 250 (exit 2). Part 1 uses $70 of it: the probes that
+sized the crowd spent $0.58 outside the flow, so its passes take `--spend-cap-usd 69.42`. Later parts pass a larger
+cap.
 
 The rounds before the needs-you rubric added up to $23.47 (baseline $9.70, v1 $9.87, the archived first baseline
 $3.89); the pilot and probes, which left no rows, added roughly $3.50, so that effort cost about $27 against a $50 cap.
