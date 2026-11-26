@@ -9211,6 +9211,25 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       await rings(listener, OUTSIDE)
     })
 
+    // A session in a tmux pane whose lookup has not answered sits on the page of the app its hints name, iTerm2's, which
+    // started the tmux server, and is not known to be in it: that app in front is not the person with it.
+    it('rings: its app still to be told, though the front reads the one its hints name', async () => {
+      readers.processes.mockResolvedValue(TMUX_IN_ITERM)
+      let answer = (): void => {}
+      const answered = new Promise<void>((resolve) => { answer = resolve })
+      // Pane %3's lookup waits for the test.
+      const run = async (file: string, args: string[], timeoutMs: number) => {
+        if (args[0] === 'display-message') await answered
+        return tmuxInItermRun(file, args, timeoutMs)
+      }
+      const { port, listener } = devices({ orca: { ...orca, platform: 'darwin', run }, now: () => Date.now() })
+      host().front('iterm')
+      host().dialShows(DIAL, { name: 'api', app: 'iTerm2' }, ID)
+      port.observed(hook('turn-start', { hostHints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux', __CFBundleIdentifier: 'com.googlecode.iterm2' } }))
+      await rings(listener, OUTSIDE)
+      answer()
+    })
+
     it('quiet: a Harness agent whose turn began within 120 s, its tile on the window in front', async () => {
       const { port, listener } = devices({ core: bound(), now: () => Date.now() })
       processing(port)
