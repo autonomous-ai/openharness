@@ -4,6 +4,9 @@
  * and reads no answer, so nothing the daemon or anyone holding its socket sends can become a decision. The prompt is
  * answered in the app it is in (docs/specs/2026-11-13-device-claude-orca.md, after the dial check).
  *
+ * Every waiting prompt is told: a permission ask by what the tool acts on, a question form by its first question, and a
+ * plan approval by fixed words, its plan never read (docs/plans/2026-11-26-needs-you-right-design.md, Part 6).
+ *
  * What leaves this process is six typed fields. The tool input is cut to a one-line summary here, so the rest of it (a
  * file's content, a whole script) never reaches the daemon. No environment variable is sent: Orca puts
  * ORCA_PAIRING_CODE and ORCA_AGENT_SESSION_SPAWN_TOKEN in the same environment. This file runs only in the `harness`
@@ -34,8 +37,10 @@ const MAX_SUMMARY_BYTES = 200
 const MAX_CWD_CHARS = 1024
 /** Claude Code waits for this hook before the person's prompt can be answered: the post never holds it longer. */
 const WRITE_MS = 1_000
-/** These need the person at the terminal anyway: the dial shows them already as the agent waiting. */
-const PERSON_ONLY = new Set(['AskUserQuestion', 'ExitPlanMode'])
+/** A form with no words of its own still waits on the person, so it is told with these. */
+const NO_QUESTION = 'A question'
+/** A plan approval's line: the plan's text is the person's work in progress and never leaves this process. */
+const PLAN_READY = 'Plan ready to approve'
 const FILE_TOOLS = new Set(['Edit', 'Write', 'Read'])
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -63,13 +68,20 @@ function cutBytes(text: string, max: number): string {
 
 /** The prompt's one line: what the tool acts on, or its name when its input does not say. */
 export function askedSummary(tool: string, input: unknown): string {
-  const field = (name: string): string => {
-    const value = isRecord(input) ? input[name] : undefined
+  if (tool === 'ExitPlanMode') return PLAN_READY
+  const text = (record: unknown, name: string): string => {
+    const value = isRecord(record) ? record[name] : undefined
     return typeof value === 'string' ? value : ''
   }
+  const field = (name: string): string => text(input, name)
   const mcp = /^mcp__(.+?)__(.+)$/.exec(tool)
   let shown = ''
-  if (tool === 'Bash') {
+  if (tool === 'AskUserQuestion') {
+    // The dial has one line, so the first question stands for the whole form.
+    const questions = isRecord(input) ? input.questions : undefined
+    const first = Array.isArray(questions) ? questions[0] : undefined
+    shown = text(first, 'question').trim() || text(first, 'header').trim() || NO_QUESTION
+  } else if (tool === 'Bash') {
     // The first line with text: a command that opens with a blank line would otherwise show the tool's name.
     const lines = field('command').split(/[\r\n]/).map((line) => line.trim()).filter(Boolean)
     shown = lines.length > 1 ? `${lines[0]} …` : lines[0] ?? ''
@@ -81,7 +93,7 @@ export function askedSummary(tool: string, input: unknown): string {
   return cutBytes((shown.trim() || tool).replace(/\p{Cc}/gu, ' '), MAX_SUMMARY_BYTES)
 }
 
-/** The hook's input as the body to post, or null for nothing to send: too long, not JSON, or a tool that is the person's. */
+/** The hook's input as the body to post, or null for nothing to send: too long or not JSON. */
 async function askedBody(stdin: AsyncIterable<Buffer | string>): Promise<AskedBody | null> {
   const parts: Buffer[] = []
   let bytes = 0
@@ -99,7 +111,7 @@ async function askedBody(stdin: AsyncIterable<Buffer | string>): Promise<AskedBo
   }
   if (!isRecord(input)) return null
   const { session_id: sessionId, tool_name: tool, tool_input: toolInput, cwd } = input
-  if (typeof sessionId !== 'string' || !sessionId || typeof tool !== 'string' || !tool || PERSON_ONLY.has(tool)) return null
+  if (typeof sessionId !== 'string' || !sessionId || typeof tool !== 'string' || !tool) return null
   return {
     engine: 'claude', sessionId, event: 'asked', tool: tool.slice(0, MAX_TOOL_CHARS), summary: askedSummary(tool, toolInput),
     // The core refuses an event with a cwd it cannot hold: one it would refuse is not sent.
