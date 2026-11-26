@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, expect, it, vi } from 'vitest'
-import { admitHook, engineHooks, hookContracts, hooksFor } from './hooks.js'
+import { admitHook, engineHooks, hookContracts, hooksFor, startsNewConversation } from './hooks.js'
 import { engineFor } from './registry.js'
 import { liveFor } from './live.js'
 
@@ -31,6 +31,23 @@ it('declares Codex\'s events, and no subagent event', () => {
   expect(hookContracts.codex.settings.events).toEqual([
     { event: 'SessionStart', matcher: 'startup|resume|clear|compact' }, { event: 'UserPromptSubmit' }, { event: 'Stop' },
     { event: 'PermissionRequest' }, { event: 'PreToolUse', matcher: 'request_user_input' }, { event: 'Interrupt', timeout: 3 }])
+})
+
+// Only the engine's own word for a conversation that starts with no history replays its first turn after a rebind
+// (lib/firstTurnReplay.ts): a resume, a compaction or a fork carries history, and a hook with no source says nothing.
+it('names a new conversation only by the engine\'s own SessionStart source', () => {
+  for (const [engine, source] of [['claude', 'clear'], ['codex', 'startup'], ['codex', 'clear']]) {
+    expect(startsNewConversation(engine, 'SessionStart', source)).toBe(true)
+  }
+  expect(startsNewConversation('claude', 'SessionStart', 'startup')).toBe(false)
+  for (const engine of ['claude', 'codex']) {
+    for (const source of ['resume', 'compact', 'fork', undefined, null]) expect(startsNewConversation(engine, 'SessionStart', source)).toBe(false)
+    expect(startsNewConversation(engine, 'UserPromptSubmit', 'clear')).toBe(false)
+    expect(startsNewConversation(engine, undefined, 'clear')).toBe(false)
+  }
+  for (const engine of ['hermes', 'copilot', 'opencode', 'future', '__proto__']) {
+    expect(startsNewConversation(engine, 'SessionStart', 'clear')).toBe(false)
+  }
 })
 
 it('keeps every contract plain data: nothing in it runs', () => {

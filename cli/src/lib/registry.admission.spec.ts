@@ -3,9 +3,10 @@ import type { Server } from 'node:http'
 import type { HookServerHandlers } from '../hookServer.js'
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { noOtherStreams } from '../testing/otherStreams.js'
+import { startMarkerMs } from './processProof.js'
 import { REGISTRY_WRITE_DEADLINE_MS } from './registryPersistence.js'
 
 // These are ownership and injected-I/O outcomes, independent of host scheduling. Actual
@@ -599,6 +600,79 @@ it('does not let a delayed older ordinary hook replace a newer accepted conversa
   expect((await f.post({}, { firedAt: time })).body).toEqual({ ignored: true, reason: 'stale_hook' })
   expect(registry.byAgent(source)?.sessionId).toBe(B)
   expect(f.committed()).toEqual([B])
+})
+
+// A rebind replays the new transcript's first turn only on the engine's own new-conversation hook, born after the
+// binding it replaced (lib/firstTurnReplay.ts). Codex's threads that start with no history are `startup` and `clear`;
+// a resume (the retarget's fork comes back as `codex resume`), a compaction, a fork or a hook with no source carries
+// history, and says nothing.
+it.each([
+  ['SessionStart', 'startup', true], ['SessionStart', 'clear', true], ['SessionStart', 'resume', false],
+  ['SessionStart', 'compact', false], ['SessionStart', 'fork', false], ['UserPromptSubmit', undefined, false],
+] as const)('a Codex rebind on %s %s says when the binding it replaced began only for a new conversation', async (hookEvent, from, said) => {
+  const f = await httpFixture(), time = Date.now() + 10_000
+  expect((await f.post({ hookEvent: 'SessionStart', source: 'startup' }, { firedAt: time })).body).toEqual({ ok: true })
+  expect(f.registered.mock.calls[0]![1]).not.toHaveProperty('newConversationSince')
+  const since = registry.byAgent(source)!.boundAt
+  const other = join(home, 'sessions', `rollout-${B}.jsonl`); writeFileSync(other, header(B))
+  expect((await f.post({ sessionId: B, transcriptPath: other, hookEvent, source: from }, { firedAt: time + 1 })).body).toEqual({ ok: true })
+  const meta = f.registered.mock.calls[1]![1]
+  expect(meta.rebound).toBe(A)
+  if (said) expect(meta.newConversationSince).toBe(since)
+  else expect(meta).not.toHaveProperty('newConversationSince')
+})
+
+it.each([['clear', true], ['startup', false], ['resume', false], ['compact', false]] as const)(
+  'a Claude Code rebind on SessionStart %s says when the binding it replaced began only for a new conversation', async (from, said) => {
+    const agent = (await registry.openProcessAgent({ engine: 'claude', tmuxPane: '%3', cwd: root,
+      processIdentity: { pid: 5103, startMarker: 'fixture-start', executable: '<claude>' } }))!.entry
+    const conversation = (id: string) => {
+      const path = join(root, '.claude', 'projects', 'fixture', `${id}.jsonl`)
+      mkdirSync(dirname(path), { recursive: true })
+      writeFileSync(path, JSON.stringify({ type: 'user', cwd: root, sessionId: id, isSidechain: false }) + '\n')
+      return path
+    }
+    const f = await httpFixture(), time = Date.now() + 10_000
+    const post = (sessionId: string, value: string, firedAt: number) => f.post({ engine: 'claude', tmuxPane: '%3', sessionId,
+      transcriptPath: conversation(sessionId), hookEvent: 'SessionStart', source: value }, { firedAt })
+    expect((await post(A, 'startup', time)).body).toEqual({ ok: true })
+    const since = registry.byAgent(agent.agentId)!.boundAt
+    expect((await post(B, from, time + 1)).body).toEqual({ ok: true })
+    const meta = f.registered.mock.calls[1]![1]
+    expect(meta.rebound).toBe(A)
+    if (said) expect(meta.newConversationSince).toBe(since)
+    else expect(meta).not.toHaveProperty('newConversationSince')
+  })
+
+// An engine whose contract names no new-conversation hook never says one, whatever source its hook carries.
+it('a rebind of an engine with no new-conversation hook says nothing of when the binding it replaced began', async () => {
+  const agent = (await registry.openProcessAgent({ engine: 'grok', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 5103, startMarker: 'fixture-start', executable: '<grok>' } }))!.entry
+  const f = await httpFixture(), time = Date.now() + 10_000
+  const post = (sessionId: string, firedAt: number) => f.post({ engine: 'grok', tmuxPane: '%3', sessionId, transcriptPath: undefined,
+    hookEvent: 'SessionStart', source: 'clear' }, { firedAt })
+  expect((await post(A, time)).body).toEqual({ ok: true })
+  expect((await post(B, time + 1)).body).toEqual({ ok: true })
+  expect(registry.byAgent(agent.agentId)?.sessionId).toBe(B)
+  expect(f.registered.mock.calls[1]![1].rebound).toBe(A)
+  expect(f.registered.mock.calls[1]![1]).not.toHaveProperty('newConversationSince')
+})
+
+// #4622: a resumed row no hook has bound yet (`boundAt: null`) began with its engine's process, whose start it holds.
+it('a resumed Codex row that starts a new conversation says its engine process began the binding it replaced', async () => {
+  ;(await registry.register(input(A, transcript, '%2')))
+  const saved = structuredClone(registry.byAgent(source)!)
+  ;(await removeRegistryAgent(registry, source))
+  ;(await registry.resumePendingAgent(saved, [{ backend: 'tmux', paneId: '%2' }]))
+  const startMarker = 'w:134400000000000000'
+  ;(await registry.openProcessAgent({ engine: 'codex', tmuxPane: '%2', cwd: root,
+    processIdentity: { pid: 5102, startMarker, executable: '<codex>' } }))
+  expect(registry.byAgent(source)).toMatchObject({ sessionId: A, boundAt: null, processIdentity: { startMarker } })
+  const f = await httpFixture()
+  const other = join(home, 'sessions', `rollout-${B}.jsonl`); writeFileSync(other, header(B))
+  expect((await f.post({ sessionId: B, transcriptPath: other, hookEvent: 'SessionStart', source: 'startup' },
+    { firedAt: Date.now() + 10_000 })).body).toEqual({ ok: true })
+  expect(f.registered.mock.calls[0]![1]).toMatchObject({ rebound: A, newConversationSince: startMarkerMs(startMarker) })
 })
 
 it('acknowledges a repeated delivery both while held and after acceptance without announcing it twice', async () => {
