@@ -451,6 +451,106 @@ describe('Notices: a present caller', () => {
   })
 })
 
+// docs/plans/2026-11-26-needs-you-right-design.md, Part 2b: its turn ended and the person has gone, so the quiet card
+// rings once. The dial mutes an id it holds, so it is asked under a new one.
+describe('Notices: a quiet card at its turn\'s end (Part 2b)', () => {
+  const asked = [{ key: 'notice', q: VPN, options: ['In Orca'] }]
+  const quietly = (over: Parameters<typeof desk>[0] = {}) => {
+    const rig = desk(over)
+    rig.state.present.add('a1')
+    rig.notices.notify(notice(VPN))
+    rig.calls.length = 0
+    return rig
+  }
+
+  it('it is asked once, under a new id, and is no longer quiet', () => {
+    const { notices, state, calls } = quietly()
+    const changes = state.changes
+    expect(notices.rouse('a1')).toBe('plain')
+    expect(calls).toEqual([['close', 'a1', 'shown:u1'], ['ask', 'a1', 'shown:u2', asked]])
+    expect(notices.quiet('a1')).toBe(false)
+    expect(notices.pending('a1')).toBe(true)
+    expect(notices.stored()[0].id).toBe('shown:u2')
+    expect(state.changes).toBeGreaterThan(changes)
+    calls.length = 0
+    expect(notices.rouse('a1')).toBeUndefined()
+    expect(calls).toEqual([])
+  })
+
+  it.each(['waiting', 'proceeding', 'plain'] as const)('it answers the kind of a %s card', (kind) => {
+    const { notices, state } = desk()
+    state.present.add('a1')
+    notices.notify(notice(composeNotice('q', 's', kind === 'plain' ? undefined : kind)))
+    expect(notices.rouse('a1')).toBe(kind)
+  })
+
+  it('a rung card, a restored card and no card are left', () => {
+    const rung = desk()
+    rung.notices.notify(notice(VPN, 'a2'))
+    rung.calls.length = 0
+    expect(rung.notices.rouse('a2')).toBeUndefined()
+    expect(rung.notices.rouse('none')).toBeUndefined()
+    expect(rung.calls).toEqual([])
+    const NOW = 1_800_000_000_000
+    const back = desk({ clock: NOW, restored: [{ agentId: 'a1', keys: [], id: 'shown:k1', line: VPN, host: 'orca', at: NOW - 60_000 }] })
+    expect(back.notices.rouse('a1')).toBeUndefined()
+    expect(back.calls).toEqual([])
+  })
+
+  it('with no hour left it stays quiet', () => {
+    const { notices, state, calls } = desk()
+    for (let i = 1; i <= 20; i++) {
+      state.at = (i - 1) * 1_000
+      expect(notices.notify(notice(VPN, `a${i}`))).toBe('shown')
+    }
+    state.at = 20_000
+    state.present.add('p')
+    expect(notices.notify(notice(VPN, 'p'))).toBe('shown')
+    calls.length = 0
+    expect(notices.rouse('p')).toBeUndefined()
+    expect(calls).toEqual([])
+    expect(notices.quiet('p')).toBe(true)
+    state.at = 20_000 + 3_600_000
+    expect(notices.rouse('p')).toBe('plain')
+  })
+
+  // Decided by the PM (2026-11-26): a dial that attaches later holds it, as today.
+  it('with no dial it stays quiet', () => {
+    const { notices, state, calls } = quietly()
+    state.connected = false
+    expect(notices.rouse('a1')).toBeUndefined()
+    expect(calls).toEqual([])
+    expect(notices.quiet('a1')).toBe(true)
+  })
+
+  it('covered by another question of its agent, it is asked as that one closes', () => {
+    const { notices, state, calls } = desk()
+    state.held.add('a1')
+    state.present.add('a1')
+    notices.notify(notice(VPN))
+    expect(notices.rouse('a1')).toBe('plain')
+    expect(calls).toEqual([['close', 'a1', 'shown:u1']])
+    state.held.delete('a1')
+    notices.reask('a1')
+    expect(calls).toEqual([['close', 'a1', 'shown:u1'], ['ask', 'a1', 'shown:u2', asked]])
+    expect(state.redraws).toEqual([])
+  })
+
+  // Decided by the PM (2026-11-26): it loses quiet, so from then it is a rung card.
+  it('from then it is any rung card', () => {
+    const { notices, calls } = quietly()
+    notices.rouse('a1')
+    calls.length = 0
+    notices.attached()
+    expect(calls).toEqual([['ask', 'a1', 'shown:u2', asked]])
+    calls.length = 0
+    notices.working('a1')
+    expect(calls).toEqual([])
+    notices.ended('a1')
+    expect(calls).toEqual([['close', 'a1', 'shown:u2']])
+  })
+})
+
 describe('Notices after a restart', () => {
   const NOW = 1_800_000_000_000
   const DAY = 24 * 3_600_000

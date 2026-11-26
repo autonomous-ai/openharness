@@ -137,6 +137,7 @@ export function dailyDialReview(rows: Row[], breakdowns: Row[], now: Date) {
         ...line("Answered: the person's prompt within 10 min", noticed, sum('dial_notice_answered_10m')),
         ...line('Quiet: the person was with that agent', noticed, sum('dial_notice_present')),
         ...line("Quiet, answered: the person's prompt within 10 min", noticed, sum('dial_notice_present_answered_10m')),
+        ...line("Quiet, rung: the person had gone by its turn's end", noticed, sum('dial_notice_present_roused')),
       ] },
       { name: 'First agent on the dial, from a dial connected with an agent running', rows: [
         ...DIAL_FIRST_AGENT_BUCKETS.flatMap(b => line(`First connection ever: ${b}`, distinct(sum(`dial_first_agent_first_${b}_installations`)))),

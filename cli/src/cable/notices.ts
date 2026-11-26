@@ -99,8 +99,9 @@ interface Pending {
   id: string; line: string; questions: unknown; host: string; who?: NoticeCaller['who']; keys: readonly string[]; at: number
   /** Back from the file: a drawer row whose question is held, never asked, for it rang before the restart. */
   restored?: true
-  /** Its agent was present: a drawer row whose question is held, never asked, as the person is already there. Apart from
-   *  `restored`, since working() must not end it: it was shown in this turn. */
+  /** Its agent was present: a drawer row whose question is held, not asked, as the person is already there; its turn's end
+   *  with the person gone asks it once and drops this (rouse). Apart from `restored`, since working() must not end it: it
+   *  was shown in this turn. */
   quiet?: true
   /** Restored, and no row until its agent is listed: a card no list holds (`who`) never waits. */
   waiting?: true
@@ -210,6 +211,21 @@ export class Notices {
    *  it was shown in this turn. */
   working(agentId: string): void {
     if (this.cards.get(agentId)?.restored) this.ended(agentId)
+  }
+
+  /** That agent's turn ended and the person is no longer with it (services/devices.ts): its quiet card is asked once, under
+   *  a new id, while a dial is attached and the hour has one left. The kind of the card asked; undefined when none was. */
+  rouse(agentId: string): NoticeKind | undefined {
+    const card = this.cards.get(agentId)
+    if (!card?.quiet || !this.deps.connected() || !this.limits.takeHour()) return undefined
+    // A dial mutes a question under an id it holds, so the held one closes and the card rings under a new one, in the
+    // same place of the order.
+    this.deps.close(agentId, card.id)
+    card.id = SHOWN_ONLY_PREFIX + this.deps.uuid()
+    delete card.quiet
+    this.deps.changed()
+    this.send(agentId)
+    return noticeKind(card.line)
   }
 
   /** A card under its agent's new id, in the same place of the order. */

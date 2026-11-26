@@ -1717,6 +1717,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     } else if (event.kind === 'done') {
       const fields = stats.take(event.agentId)
       const at = began.get(event.agentId)
+      // Read while the turn's start is kept, which a Harness agent's presence reads. A sub-agent's or a given-up turn's
+      // end is not its agent's, and a failed turn rang as one.
+      const rouse = !event.subagent && !failedLast.has(event.agentId) && notices.quiet(event.agentId) && !present(event.agentId)
       began.delete(event.agentId)
       ended.set(event.agentId, { durationS: at === undefined ? null : Math.round((Date.now() - at) / 1000),
         stats: { testsPassed: fields.testsPassed, testsFailed: fields.testsFailed, commits: fields.commits } })
@@ -1726,6 +1729,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         const all = { ...fields, ...tokens }
         if (Object.keys(all).length) void cable.turnStats(event.agentId, all)
         void cable.turnDone(event.agentId)
+        // After the done, which may wait for its tokens: a next turn started meanwhile ended the card, and none is asked.
+        if (rouse) rouseNotice(event.agentId)
       }
       if (!start || !cable.wantsStats()) return finish({})
       return turnTokens(event.agentId, start).then(finish)
@@ -1987,6 +1992,16 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     usage.noticeShown(agentId, quiet)
     if (noticeKind(ask.text) === 'proceeding') usage.waitEnded(`notice:${agentId}`, 'answered')
     else if (!quiet) usage.waitOpened(`notice:${agentId}`, agentId)
+  })
+  /** Its turn ended with the person gone: its quiet card is asked (cable/notices.ts `rouse`), counted, and from then a
+   *  wait on the person as a rung notice is, unless it proceeds (docs/plans/2026-11-26-needs-you-right-design.md, Part 2b). */
+  const rouseNotice = (agentId: string): void => part.call('notices', () => {
+    const kind = notices.rouse(agentId)
+    if (!kind) return
+    count((usage) => {
+      usage.noticeRoused()
+      if (kind !== 'proceeding') usage.waitOpened(`notice:${agentId}`, agentId)
+    })
   })
   /** Another question of that agent closed: its notice, covered or held back by it, is asked again. */
   const reaskNotice = (agentId: string): void => part.call('notices', () => notices.reask(agentId))

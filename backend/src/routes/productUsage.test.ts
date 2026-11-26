@@ -451,7 +451,8 @@ it('takes the dial skill\'s names', async () => {
     'dial_notice_installation_days', 'dial_notice_claude', 'dial_notice_codex', 'dial_notice_other',
     'dial_notice_claude_installation_days', 'dial_notice_codex_installation_days', 'dial_notice_other_installation_days',
     'dial_notice_shown', 'dial_notice_no_dial', 'dial_notice_limited', 'dial_notice_proceeding', 'dial_notice_waiting',
-    'dial_notice_plain', 'dial_notice_answered_10m', 'dial_notice_present', 'dial_notice_present_answered_10m']
+    'dial_notice_plain', 'dial_notice_answered_10m', 'dial_notice_present', 'dial_notice_present_answered_10m',
+    'dial_notice_present_roused']
     .map((name) => [name, 1]))
   expect((await submit({ ...good, context: cli, counters })).statusCode).toBe(200)
   expect(methods.ingestProductUsage).toHaveBeenCalledExactlyOnceWith('account', { ...good, context: cli, counters })

@@ -9514,6 +9514,164 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     })
   })
 
+  // An ask made with the person there, early in a long turn, rings once at the turn's end if they have gone by then.
+  describe('a quiet card at its turn\'s end (docs/plans/2026-11-26-needs-you-right-design.md, Part 2b)', () => {
+    const PRESENT_MS = 120_000
+    type Listener = ReturnType<typeof fakeListener>
+    const tiers = () => calls('summary').map(([agentId, , , tier]) => [agentId, tier])
+    const shownAsks = () => calls('question').filter(([, id]) => String(id).startsWith('shown:'))
+    /** sess-1's Stop, past the grace in which its turn could go on. */
+    const stop = async (port: DevicesPort) => {
+      port.observed(hook('turn-stop'))
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+    }
+    const processing = (port: DevicesPort) =>
+      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'processing', text: 'Working' } })
+    const done = (port: DevicesPort, payload: Record<string, unknown> = {}) =>
+      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'done', text: 'done', ...payload } })
+    /** The notice of [sessionId]'s agent, shown and held quiet on the dial: the id it is held under. No wait: a wait on
+     *  fake timers moves the clock that presence reads. */
+    const quietly = (listener: Listener, sessionId: string): string => {
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId })).toEqual({ result: 'shown' })
+      const holds = calls('hold') as Array<[string, string]>
+      expect(holds).toHaveLength(1)
+      return holds[0][1]
+    }
+    /** h1's turn past PRESENT_MS, its tile on the window in front all along, and its notice held quiet: the held id. */
+    const harnessQuiet = async (port: DevicesPort, listener: Listener): Promise<string> => {
+      processing(port)
+      port.desk(['h1'], true)
+      const held = quietly(listener, 's-h1')
+      await vi.advanceTimersByTimeAsync(PRESENT_MS + 1)
+      return held
+    }
+    /** Asked once, under a new id, the held one closed: a dial mutes a question under an id it holds. */
+    const askedAgain = (agentId: string, held: string, app: string) => {
+      expect(calls('questionClose')).toEqual([[agentId, held]])
+      expect(shownAsks()).toEqual([[agentId, expect.stringMatching(/^shown:/), card(app)]])
+      expect(shownAsks()[0][1]).not.toBe(held)
+    }
+    const stillHeld = () => {
+      expect(shownAsks()).toEqual([])
+      expect(calls('questionClose')).toEqual([])
+    }
+    beforeEach(() => {
+      vi.useFakeTimers()
+      readers.answer.mockResolvedValue('Built.')
+    })
+
+    it('the person gone at its end: asked once, under a new id, and the summary stays silent under rule:notice', async () => {
+      const { port, listener } = devices({ decideTier: null, now: () => Date.now() })
+      there(port)
+      const held = quietly(listener, 'sess-1')
+      host().front('vscode')
+      await stop(port)
+      await vi.waitFor(() => expect(tiers()).toEqual([[ID, 'silent']]))
+      askedAgain(ID, held, 'Orca')
+      expect(logs).toContain('[cable] notify · silent · rule:notice · notice · 0ms')
+      // One ring a turn: the turn's done, then the ask, then its summary, silent.
+      expect(seen.cable.calls.map(([name]) => name).filter((name) => ['turnDone', 'questionClose', 'question', 'summary'].includes(name)))
+        .toEqual(['turnDone', 'questionClose', 'question', 'summary'])
+    })
+
+    it('the person still there: it stays held', async () => {
+      const { port, listener } = devices({ decideTier: null, now: () => Date.now() })
+      there(port)
+      quietly(listener, 'sess-1')
+      await stop(port)
+      await vi.waitFor(() => expect(tiers()).toEqual([[ID, 'silent']]))
+      stillHeld()
+      expect(logs).toContain('[cable] notify · silent · rule:notice · notice · 0ms')
+    })
+
+    // Who started a Harness agent's turn only the core knows: past PRESENT_MS from its start the person reads as gone,
+    // though they may have watched it all along.
+    it('a Harness agent past 120 s: asked', async () => {
+      const { port, listener } = devices({ core: bound(), decideTier: null, now: () => Date.now() })
+      const held = await harnessQuiet(port, listener)
+      done(port)
+      await vi.waitFor(() => expect(shownAsks()).toHaveLength(1))
+      askedAgain('h1', held, 'Harness')
+    })
+
+    it('a Harness agent within 120 s, its tile in front: held', async () => {
+      const { port, listener } = devices({ core: bound(), decideTier: null, now: () => Date.now() })
+      processing(port)
+      port.desk(['h1'], true)
+      quietly(listener, 's-h1')
+      await vi.advanceTimersByTimeAsync(PRESENT_MS)
+      done(port)
+      expect(calls('turnDone')).toEqual([['h1']])
+      stillHeld()
+    })
+
+    it('a failed turn rings as one and leaves it: an outside agent', async () => {
+      const { port, listener } = devices({ decideTier: null, now: () => Date.now() })
+      there(port)
+      quietly(listener, 'sess-1')
+      host().front('vscode')
+      port.observed(hook('turn-error'))
+      await vi.waitFor(() => expect(calls('turnError').map(([agentId]) => agentId)).toEqual([ID]))
+      stillHeld()
+    })
+
+    // A done after the error, in the same turn: one ring, the failed turn's.
+    it('a failed turn rings as one and leaves it: a Harness agent, its done after the error', async () => {
+      const { port, listener } = devices({ core: bound(), decideTier: null, now: () => Date.now() })
+      await harnessQuiet(port, listener)
+      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'error', text: 'The build broke.' } })
+      done(port)
+      expect(calls('turnDone')).toEqual([['h1']])
+      expect(calls('turnError')).toEqual([['h1', 'The build broke.']])
+      stillHeld()
+    })
+
+    // A sub-agent's turn end is not its agent's, and a turn the core gave up waiting on (lib/commander.ts `abandoned`,
+    // flagged the same way) is given up on, not done.
+    it('a silent turn end leaves it', async () => {
+      const { port, listener } = devices({ core: bound(), decideTier: null, now: () => Date.now() })
+      const held = await harnessQuiet(port, listener)
+      done(port, { subagent: true })
+      expect(calls('turnDone')).toEqual([['h1']])
+      stillHeld()
+      done(port)
+      await vi.waitFor(() => expect(shownAsks()).toHaveLength(1))
+      askedAgain('h1', held, 'Harness')
+    })
+
+    // A message sent while the agent worked starts its next turn while the done still waits for the turn's tokens: that
+    // start ends the card, and the done asks nothing after it.
+    it('its next turn starting while its done waits for the turn\'s tokens leaves nothing to ask', async () => {
+      let finish!: (reading: { input: number; cached: number; output: number }) => void
+      let n = 0
+      const readUsage = vi.fn((_id: string) => (++n === 2
+        ? new Promise<{ input: number; cached: number; output: number }>((resolve) => { finish = resolve })
+        : Promise.resolve({ input: 1, cached: 0, output: 1 })))
+      const { port, listener } = devices({ core: bound(), decideTier: null, readUsage, now: () => Date.now() })
+      const turnStarted = () => port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'turn_started' } })
+      turnStarted()
+      const held = await harnessQuiet(port, listener)
+      done(port)
+      turnStarted()
+      finish({ input: 2, cached: 0, output: 2 })
+      await vi.waitFor(() => expect(calls('questionClose')).toEqual([['h1', held]]))
+      expect(shownAsks()).toEqual([])
+      expect(seen.cable.calls.map(([name]) => name).filter((name) => name === 'turnDone' || name === 'questionClose'))
+        .toEqual(['turnDone', 'questionClose'])
+    })
+
+    it('with no dial at its end it stays held', async () => {
+      const { port, listener } = devices({ decideTier: null, now: () => Date.now() })
+      there(port)
+      quietly(listener, 'sess-1')
+      host().front('vscode')
+      ;(seen.cable as unknown as { connected: boolean }).connected = false
+      await stop(port)
+      await vi.waitFor(() => expect(tiers()).toEqual([[ID, 'silent']]))
+      stillHeld()
+    })
+  })
+
   // A Harness agent's turn_started is sent only while a dial is attached (services/recaps.ts): a turn during the unplug
   // would leave its card to ring again on the next plug-in.
   it('a Harness agent\'s card goes with the last dial, an outside agent\'s stays', () => {
@@ -16764,6 +16922,31 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
         .toEqual({ dial_wait_elsewhere_under_30s: 1 })
       expect(readFileSync(usageFile(), 'utf8')).not.toMatch(/sess-1|s-h1/)
     })
+
+    // From then a ring: the waits count it, as a rung notice's, unless it proceeds (docs/plans/2026-11-26-needs-you-right-
+    // design.md, Part 2b).
+    it.each([['Waiting · Connect the VPN', 1], ['Proceeding · Use Redis', 0]])(
+      'a quiet notice asked at its turn\'s end counts as roused and opens its wait: %s', async (text, waits) => {
+        vi.useFakeTimers()
+        readers.answer.mockResolvedValue('Built.')
+        const { port, listener } = withNotices()
+        await attach(port)
+        // The person with sess-1: their prompt to it in Orca, Orca in front, and the dial on it.
+        host().front('orca')
+        host().dialShows({}, { name: 'api', app: 'Orca' }, ID)
+        port.observed(hook('turn-start'))
+        outsideNotice(listener, text)
+        // Gone to another app by the turn's end.
+        host().front('vscode')
+        port.observed(hook('turn-stop'))
+        await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+        port.observed(hook('turn-start'))
+        const counts = await counted(port)
+        expect(counts).toMatchObject({ dial_notice_present: 1, dial_notice_present_roused: 1, dial_notice_present_answered_10m: 1 })
+        expect(Object.entries(counts).filter(([name]) => name.startsWith('dial_wait_')).reduce((sum, [, n]) => sum + n, 0))
+          .toBe(waits)
+        expect(readFileSync(usageFile(), 'utf8')).not.toMatch(/sess-1/)
+      })
   })
 })
 

@@ -61,13 +61,14 @@ describe('the dial usage vocabulary', () => {
   })
 
   // The names sent to the PM for the dial skill's use (docs/plans/2026-11-26-dial-skill-usage-design.md).
-  it('names the dial skill\'s use: eighteen names, six of them computer flags', () => {
+  it('names the dial skill\'s use: nineteen names, six of them computer flags', () => {
     expect(DIAL_DEVICE_METRICS.filter((m) => /^dial_(skill|notice)_/.test(m)).sort()).toEqual([
       'dial_skill_claude_installation_days', 'dial_skill_codex_installation_days', 'dial_notice_installation_days',
       'dial_notice_claude', 'dial_notice_codex', 'dial_notice_other', 'dial_notice_claude_installation_days',
       'dial_notice_codex_installation_days', 'dial_notice_other_installation_days', 'dial_notice_shown',
       'dial_notice_no_dial', 'dial_notice_limited', 'dial_notice_proceeding', 'dial_notice_waiting', 'dial_notice_plain',
       'dial_notice_answered_10m', 'dial_notice_present', 'dial_notice_present_answered_10m',
+      'dial_notice_present_roused',
     ].sort())
     expect(DIAL_FLAG_METRICS.filter((m) => /^dial_(skill|notice)_/.test(m)).sort()).toEqual([
       'dial_skill_claude_installation_days', 'dial_skill_codex_installation_days', 'dial_notice_installation_days',

@@ -88,7 +88,7 @@ export const DIAL_DEVICE_METRICS = [
   ...DIAL_NOTICE_ENGINES.map(e => `dial_notice_${e}_installation_days` as const),
   ...DIAL_NOTICE_RESULTS.map(r => `dial_notice_${r}` as const),
   ...DIAL_NOTICE_KINDS.map(k => `dial_notice_${k}` as const),
-  'dial_notice_answered_10m', 'dial_notice_present', 'dial_notice_present_answered_10m',
+  'dial_notice_answered_10m', 'dial_notice_present', 'dial_notice_present_answered_10m', 'dial_notice_present_roused',
 ] as const
 
 /** In the file only, never sent: the gateway turns them into the used-day and unused-day waits as a day closes. */

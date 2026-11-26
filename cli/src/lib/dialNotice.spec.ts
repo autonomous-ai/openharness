@@ -213,4 +213,32 @@ describe('NoticeLimits', () => {
     time.set(600_000)
     expect(limits.take('a', 'L')).toBe(true)
   })
+
+  // docs/plans/2026-11-26-needs-you-right-design.md, Part 2b: a quiet card asked at its turn's end rings, so it takes
+  // one of the hour's twenty then.
+  it('a rouse takes one of the hour\'s twenty', () => {
+    const limits = new NoticeLimits(clock().now)
+    for (let i = 0; i < 19; i++) expect(limits.take(`agent-${i}`, 'x')).toBe(true)
+    expect(limits.takeHour()).toBe(true)
+    expect(limits.take('agent-19', 'x')).toBe(false)
+  })
+
+  it('with the hour spent a rouse is refused and counts nothing', () => {
+    const time = clock()
+    const limits = new NoticeLimits(time.now)
+    for (let i = 0; i < 20; i++) expect(limits.take(`agent-${i}`, 'x')).toBe(true)
+    expect(limits.takeHour()).toBe(false)
+    time.set(NOTICE_HOUR_MS)
+    expect(limits.takeHour()).toBe(true)
+  })
+
+  // Its agent's own limits were taken when it was shown.
+  it('a rouse is read by no agent\'s own limits, and quiet takes leave it room', () => {
+    const limits = new NoticeLimits(clock().now)
+    expect(limits.takeHour()).toBe(true)
+    expect(limits.take('a', 'x')).toBe(true)
+    const quiet = new NoticeLimits(clock().now)
+    for (let i = 0; i < 25; i++) expect(quiet.take(`q-${i}`, 'x', false)).toBe(true)
+    expect(quiet.takeHour()).toBe(true)
+  })
 })

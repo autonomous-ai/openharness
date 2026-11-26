@@ -58,6 +58,8 @@ export interface DialUsage {
   /** That agent's notice was shown now: its person's next prompt within 10 min answers it. [present]: held quiet, as the
    *  person was with that agent. */
   noticeShown(agentId: string, present: boolean): void
+  /** A notice held quiet was asked at its turn's end, the person gone (cable/notices.ts `rouse`). */
+  noticeRoused(): void
   /** A dial setup pass ended: the skill is looked for now, and at each UTC midnight from the first; nothing after stop(). */
   setupPassed(): void
   stop(): void
@@ -471,6 +473,10 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
       notices.delete(agentId)
       notices.set(agentId, { at: now(), present })
       if (notices.size > NOTICES_PENDING_MAX) notices.delete(notices.keys().next().value as string)
+    },
+
+    noticeRoused() {
+      add('dial_notice_present_roused')
     },
 
     setupPassed() {
