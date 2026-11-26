@@ -379,16 +379,20 @@ function dialogAbove(lines: string[], start: number, footer: number): string {
 /**
  * A dialog that asks to RUN or CHANGE something (an approval), whichever parser read it: a framed
  * permission prompt, or a footer dialog whose first row approves, whose rows include a rejection, and
- * which names a command (`$ …`) or asks "would you like to run / make …". What the pair's floor treats as
- * a permission prompt (pair/classify.ts), the screen's `permission_open`, and a question's `permission`
- * notice. It misses an approval that boxes its command with neither (Hermes's, Copilot's): a rule that must
- * never miss one also asks offersApproval (lib/questionController.ts `keepsIdByWords`).
+ * which names a command (`$ …`), asks "would you like to run / make …", or carries the title Hermes or
+ * Copilot gives an approval that boxes its command with neither: Hermes's `Dangerous Command`, Copilot's
+ * `Copilot is attempting to access the following URL:` (words read from lib/__fixtures__/permission-hermes.txt
+ * and permission-copilot.txt). What the pair's floor treats as a permission prompt (pair/classify.ts), the
+ * screen's `permission_open`, and a question's `permission` notice. A title more than 12 lines above the rows
+ * is out of the dialog, so a rule that must never miss an approval also asks offersApproval
+ * (lib/questionController.ts `keepsIdByWords`).
  */
 export function isApprovalDialog(view: QuestionView): boolean {
   if (view.permission) return true
   if (!offersApproval(view.rows)) return false
   const text = view.dialog ?? view.question
   return /(^|\n)\s*\$ /.test(text) || /would you like to (run|make|apply|execute|edit|write)/i.test(text)
+    || /(^|\n)\W*Dangerous Command\b/.test(text) || /\bis attempting to [^:\n]{0,60}:/i.test(text)
 }
 
 /** Match an answer to a row. The device stores option labels in an 80-byte buffer, so a long label comes

@@ -145,6 +145,10 @@
    "sha256": "8e2959eeaddaf11c916b71fdaecd0109b8415859ed5d20aaa2d582b8548930f2"
   },
   {
+   "id": "lib/__fixtures__/takeoverScreens.ts#CLAUDE_MCP_SERVER_PROMPT",
+   "sha256": "ed074b0312e4b2ebdef97508791159e44b8ad92fdf5d72752185958de1e35cca"
+  },
+  {
    "id": "lib/__fixtures__/takeoverScreens.ts#CLAUDE_SIGN_IN",
    "sha256": "ae42c5c8b3cacdd12ded224aa93b41fcdeadd246345c89e2ce1d43c606af85f5"
   },
@@ -1196,7 +1200,7 @@
    "busy": false,
    "stoppedGoal": false
   },
-  "584c0bbd569f221e": {
+  "fba298f0b0f35254": {
    "pane": {
     "idle": false,
     "plan": false,
@@ -1232,13 +1236,13 @@
     "typeRow": null,
     "dialog": "Copilot is attempting to access the following URL:\n\n╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮\n│ https://example.com                                                                                                                                                                              │\n╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯\n\nDo you want to allow this access?\n\n❯ 1. Yes\n  2. Yes, and approve all URLs from \"https://example.com\" for the rest of the running session\n  3. Yes, and approve all URLs from \"https://example.com\" permanently\n  4. No, and tell Copilot what to do differently (Esc to stop)"
    },
-   "messageHold": "question_open",
+   "messageHold": "permission_open",
    "teamHold": "team_waiting_user",
    "activity": null,
    "busy": false,
    "stoppedGoal": false
   },
-  "7d9b7ab68f21392c": {
+  "bb4fda695c1fbe41": {
    "pane": {
     "idle": false,
     "plan": false,
@@ -1274,13 +1278,13 @@
     "typeRow": null,
     "dialog": "Copilot is attempting to access the following URL:\n\n╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮\n│ https://example.com                                                                                                                                                                              │\n╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯\n\nDo you want to allow this access?\n\n❯ 1. Yes\n  2. Yes, and approve all URLs from \"https://example.com\" for the rest of the running session\n  3. Yes, and approve all URLs from \"https://example.com\" permanently\n  4. No, and tell Copilot what to do differently (Esc to stop)"
    },
-   "messageHold": "question_open",
+   "messageHold": "permission_open",
    "teamHold": "team_waiting_user",
    "activity": null,
    "busy": false,
    "stoppedGoal": false
   },
-  "aa2c7b01effd326c": {
+  "abb193f78ac09597": {
    "pane": {
     "idle": false,
     "plan": false,
@@ -1316,7 +1320,7 @@
     "typeRow": null,
     "dialog": "Copilot is attempting to access the following URL:\n\n╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮\n│ https://example.com                                                                                                                                                                              │\n╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯\n\nDo you want to allow this access?\n\n❯ 1. Yes\n  2. Yes, and approve all URLs from \"https://example.com\" for the rest of the running session\n  3. Yes, and approve all URLs from \"https://example.com\" permanently\n  4. No, and tell Copilot what to do differently (Esc to stop)"
    },
-   "messageHold": "question_open",
+   "messageHold": "permission_open",
    "teamHold": "team_waiting_user",
    "activity": null,
    "busy": false,
@@ -1495,7 +1499,7 @@
    "busy": false,
    "stoppedGoal": false
   },
-  "5873726ebc026bb1": {
+  "8c160188d7d3f508": {
    "pane": {
     "idle": false,
     "plan": false,
@@ -1526,7 +1530,7 @@
     "typeRow": null,
     "dialog": "╭──────────────────────────────────────────────────────────────────╮\n⚠️  Dangerous Command\n\ncurl -s\nhttps://api.coingecko.com/api/v3/simple/price?ids=bitcoin\n\n❯ 1. Allow once\n  2. Allow for this session\n  3. Deny\n\nSecurity scan — [MEDIUM] Python package from non-PyPI source:\nPackage URL points to 'api.coingecko.com' instead of PyPI\n╰──────────────────────────────────────────────────────────────────╯\n\n  💻 curl -s https://api.coingecko.com/api/v3/simple/price?ids=bitcoin  (01m30s · ↓ 82 tok)"
    },
-   "messageHold": "question_open",
+   "messageHold": "permission_open",
    "teamHold": "team_waiting_user",
    "activity": null,
    "busy": false,
@@ -1546,7 +1550,7 @@
    "busy": false,
    "stoppedGoal": false
   },
-  "14f3dd3962417a7b": {
+  "f5fd5913ba3a6900": {
    "pane": {
     "idle": true,
     "plan": false,
@@ -1577,7 +1581,7 @@
     "typeRow": null,
     "dialog": "╭──────────────────────────────────────────────────────────────────╮\n⚠️  Dangerous Command\n\ncurl -s\nhttps://api.coingecko.com/api/v3/simple/price?ids=bitcoin\n\n❯ 1. Allow once\n  2. Allow for this session\n  3. Deny\n\nSecurity scan — [MEDIUM] Python package from non-PyPI source:\nPackage URL points to 'api.coingecko.com' instead of PyPI\n╰──────────────────────────────────────────────────────────────────╯\n\n  💻 curl -s https://api.coingecko.com/api/v3/simple/price?ids=bitcoin  (01m30s · ↓ 82 tok)"
    },
-   "messageHold": "question_open",
+   "messageHold": "permission_open",
    "teamHold": "team_waiting_user",
    "activity": null,
    "busy": false,
@@ -3710,8 +3714,8 @@
    "commandcode": "3447b884f24dd479",
    "muse": "3447b884f24dd479",
    "pi": "3447b884f24dd479",
-   "terminal": "3447b884f24dd479",
-   "openclaw": "3447b884f24dd479"
+   "openclaw": "3447b884f24dd479",
+   "terminal": "3447b884f24dd479"
   },
   "lib/__fixtures__/permission-agy.txt": {
    "opencode": "e1349eeb4c696d82",
@@ -3726,8 +3730,8 @@
    "commandcode": "be1de7c334b8b831",
    "muse": "be1de7c334b8b831",
    "pi": "2ce4499309b131f5",
-   "terminal": "be1de7c334b8b831",
-   "openclaw": "e1349eeb4c696d82"
+   "openclaw": "e1349eeb4c696d82",
+   "terminal": "be1de7c334b8b831"
   },
   "lib/__fixtures__/permission-claude-edit.txt": {
    "opencode": "9f6c882e0c0f8273",
@@ -3742,8 +3746,8 @@
    "commandcode": "51a6d8f05afd395b",
    "muse": "51a6d8f05afd395b",
    "pi": "9f6c882e0c0f8273",
-   "terminal": "51a6d8f05afd395b",
-   "openclaw": "9f6c882e0c0f8273"
+   "openclaw": "9f6c882e0c0f8273",
+   "terminal": "51a6d8f05afd395b"
   },
   "lib/__fixtures__/permission-claude-plan.txt": {
    "opencode": "6f3c20366e29a5e9",
@@ -3758,8 +3762,8 @@
    "commandcode": "6f3c20366e29a5e9",
    "muse": "6f3c20366e29a5e9",
    "pi": "5536a015b9ed9455",
-   "terminal": "6f3c20366e29a5e9",
-   "openclaw": "6f3c20366e29a5e9"
+   "openclaw": "6f3c20366e29a5e9",
+   "terminal": "6f3c20366e29a5e9"
   },
   "lib/__fixtures__/permission-claude.txt": {
    "opencode": "aa8af5b383e77380",
@@ -3774,8 +3778,8 @@
    "commandcode": "a47cc1211cb84f5a",
    "muse": "a47cc1211cb84f5a",
    "pi": "aa8af5b383e77380",
-   "terminal": "a47cc1211cb84f5a",
-   "openclaw": "aa8af5b383e77380"
+   "openclaw": "aa8af5b383e77380",
+   "terminal": "a47cc1211cb84f5a"
   },
   "lib/__fixtures__/permission-codex.txt": {
    "opencode": "f53e3d59db5fc285",
@@ -3790,8 +3794,8 @@
    "commandcode": "45b30080ead5a0a0",
    "muse": "45b30080ead5a0a0",
    "pi": "edf579f19f79e8c6",
-   "terminal": "45b30080ead5a0a0",
-   "openclaw": "f53e3d59db5fc285"
+   "openclaw": "f53e3d59db5fc285",
+   "terminal": "45b30080ead5a0a0"
   },
   "lib/__fixtures__/permission-commandcode.txt": {
    "opencode": "6531a98d32cd1d92",
@@ -3806,24 +3810,24 @@
    "commandcode": "76fac484b9675380",
    "muse": "76fac484b9675380",
    "pi": "6531a98d32cd1d92",
-   "terminal": "76fac484b9675380",
-   "openclaw": "6531a98d32cd1d92"
+   "openclaw": "6531a98d32cd1d92",
+   "terminal": "76fac484b9675380"
   },
   "lib/__fixtures__/permission-copilot.txt": {
-   "opencode": "584c0bbd569f221e",
+   "opencode": "fba298f0b0f35254",
    "cursor": "e334c9cf195dcaf9",
    "kilo": "00229f3eeefa0624",
    "devin": "00229f3eeefa0624",
-   "hermes": "7d9b7ab68f21392c",
+   "hermes": "bb4fda695c1fbe41",
    "amp": "00229f3eeefa0624",
    "agy": "00229f3eeefa0624",
    "grok": "00229f3eeefa0624",
-   "copilot": "aa2c7b01effd326c",
+   "copilot": "abb193f78ac09597",
    "commandcode": "00229f3eeefa0624",
    "muse": "00229f3eeefa0624",
    "pi": "2bbc170ce91fde48",
-   "terminal": "00229f3eeefa0624",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "00229f3eeefa0624"
   },
   "lib/__fixtures__/permission-cursor.txt": {
    "opencode": "e334c9cf195dcaf9",
@@ -3838,8 +3842,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/permission-devin-3000-11.txt": {
    "opencode": "e334c9cf195dcaf9",
@@ -3854,8 +3858,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/permission-devin.txt": {
    "opencode": "e334c9cf195dcaf9",
@@ -3870,8 +3874,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/permission-grok.txt": {
    "opencode": "00229f3eeefa0624",
@@ -3886,24 +3890,24 @@
    "commandcode": "00229f3eeefa0624",
    "muse": "00229f3eeefa0624",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "00229f3eeefa0624",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "00229f3eeefa0624"
   },
   "lib/__fixtures__/permission-hermes.txt": {
-   "opencode": "5873726ebc026bb1",
+   "opencode": "8c160188d7d3f508",
    "cursor": "e334c9cf195dcaf9",
    "kilo": "bfa57b6928e458f8",
    "devin": "bfa57b6928e458f8",
-   "hermes": "14f3dd3962417a7b",
+   "hermes": "f5fd5913ba3a6900",
    "amp": "bfa57b6928e458f8",
    "agy": "bfa57b6928e458f8",
    "grok": "00229f3eeefa0624",
-   "copilot": "5873726ebc026bb1",
+   "copilot": "8c160188d7d3f508",
    "commandcode": "bfa57b6928e458f8",
    "muse": "bfa57b6928e458f8",
    "pi": "00229f3eeefa0624",
-   "terminal": "bfa57b6928e458f8",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "bfa57b6928e458f8"
   },
   "lib/__fixtures__/permission-muse.txt": {
    "opencode": "0d0e97dabfab58f6",
@@ -3918,8 +3922,8 @@
    "commandcode": "f3d6d28b7333f403",
    "muse": "f3d6d28b7333f403",
    "pi": "0d0e97dabfab58f6",
-   "terminal": "f3d6d28b7333f403",
-   "openclaw": "0d0e97dabfab58f6"
+   "openclaw": "0d0e97dabfab58f6",
+   "terminal": "f3d6d28b7333f403"
   },
   "lib/__fixtures__/permission-opencode.txt": {
    "opencode": "a35a75988d749eb3",
@@ -3934,8 +3938,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "2bbc170ce91fde48",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "2bbc170ce91fde48"
   },
   "lib/__fixtures__/question-agy.txt": {
    "opencode": "e334c9cf195dcaf9",
@@ -3950,8 +3954,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "00229f3eeefa0624",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/question-codex.txt": {
    "opencode": "95023f0b012ec5c8",
@@ -3966,8 +3970,8 @@
    "commandcode": "5681eb7f47e7363f",
    "muse": "5681eb7f47e7363f",
    "pi": "5681eb7f47e7363f",
-   "terminal": "5681eb7f47e7363f",
-   "openclaw": "95023f0b012ec5c8"
+   "openclaw": "95023f0b012ec5c8",
+   "terminal": "5681eb7f47e7363f"
   },
   "lib/__fixtures__/question-commandcode-review.txt": {
    "opencode": "6b2305c5c3c557fb",
@@ -3982,8 +3986,8 @@
    "commandcode": "86f38fd15bc8a85d",
    "muse": "86f38fd15bc8a85d",
    "pi": "6b2305c5c3c557fb",
-   "terminal": "86f38fd15bc8a85d",
-   "openclaw": "6b2305c5c3c557fb"
+   "openclaw": "6b2305c5c3c557fb",
+   "terminal": "86f38fd15bc8a85d"
   },
   "lib/__fixtures__/question-commandcode.txt": {
    "opencode": "e042fb73a1562387",
@@ -3998,8 +4002,8 @@
    "commandcode": "e65ae54a6dc6feef",
    "muse": "e65ae54a6dc6feef",
    "pi": "e042fb73a1562387",
-   "terminal": "e65ae54a6dc6feef",
-   "openclaw": "e042fb73a1562387"
+   "openclaw": "e042fb73a1562387",
+   "terminal": "e65ae54a6dc6feef"
   },
   "lib/__fixtures__/question-copilot.txt": {
    "opencode": "11079d8ccac73f8a",
@@ -4014,8 +4018,8 @@
    "commandcode": "00229f3eeefa0624",
    "muse": "00229f3eeefa0624",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "00229f3eeefa0624",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "00229f3eeefa0624"
   },
   "lib/__fixtures__/question-devin-3000-11.txt": {
    "opencode": "e334c9cf195dcaf9",
@@ -4030,8 +4034,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/question-devin-multi-3000-11.txt": {
    "opencode": "e334c9cf195dcaf9",
@@ -4046,8 +4050,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/question-devin-multi.txt": {
    "opencode": "e334c9cf195dcaf9",
@@ -4062,8 +4066,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/question-devin.txt": {
    "opencode": "e334c9cf195dcaf9",
@@ -4078,8 +4082,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/question-grok.txt": {
    "opencode": "e334c9cf195dcaf9",
@@ -4094,8 +4098,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/question-hermes-lock.txt": {
    "opencode": "01776770672b569b",
@@ -4110,8 +4114,8 @@
    "commandcode": "bfa57b6928e458f8",
    "muse": "bfa57b6928e458f8",
    "pi": "00229f3eeefa0624",
-   "terminal": "bfa57b6928e458f8",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "bfa57b6928e458f8"
   },
   "lib/__fixtures__/question-hermes.txt": {
    "opencode": "951d1d78ad694f42",
@@ -4126,8 +4130,8 @@
    "commandcode": "bfa57b6928e458f8",
    "muse": "bfa57b6928e458f8",
    "pi": "00229f3eeefa0624",
-   "terminal": "bfa57b6928e458f8",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "bfa57b6928e458f8"
   },
   "lib/__fixtures__/question-kilo.txt": {
    "opencode": "a35a75988d749eb3",
@@ -4142,8 +4146,8 @@
    "commandcode": "6b3c330b3177f3e0",
    "muse": "6b3c330b3177f3e0",
    "pi": "71480d078ddf293d",
-   "terminal": "6b3c330b3177f3e0",
-   "openclaw": "71480d078ddf293d"
+   "openclaw": "71480d078ddf293d",
+   "terminal": "6b3c330b3177f3e0"
   },
   "lib/__fixtures__/question-multi.txt": {
    "opencode": "931077023c0ea78c",
@@ -4158,8 +4162,8 @@
    "commandcode": "c439ed066c82d5bb",
    "muse": "100dc3006825bbcd",
    "pi": "68a95df51a0c504a",
-   "terminal": "c439ed066c82d5bb",
-   "openclaw": "931077023c0ea78c"
+   "openclaw": "931077023c0ea78c",
+   "terminal": "c439ed066c82d5bb"
   },
   "lib/__fixtures__/question-muse.txt": {
    "opencode": "7cea8dcc96d8294a",
@@ -4174,8 +4178,8 @@
    "commandcode": "4d7c880e6114332b",
    "muse": "452af7e6b61eca27",
    "pi": "71caa1d09800838f",
-   "terminal": "4d7c880e6114332b",
-   "openclaw": "4d7c880e6114332b"
+   "openclaw": "4d7c880e6114332b",
+   "terminal": "4d7c880e6114332b"
   },
   "lib/__fixtures__/question-opencode-review.txt": {
    "opencode": "e55064c540690cf7",
@@ -4190,8 +4194,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/question-opencode.txt": {
    "opencode": "6c70d81f37296acd",
@@ -4206,8 +4210,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/question-review.txt": {
    "opencode": "6b2305c5c3c557fb",
@@ -4222,8 +4226,8 @@
    "commandcode": "86f38fd15bc8a85d",
    "muse": "86f38fd15bc8a85d",
    "pi": "6b2305c5c3c557fb",
-   "terminal": "86f38fd15bc8a85d",
-   "openclaw": "6b2305c5c3c557fb"
+   "openclaw": "6b2305c5c3c557fb",
+   "terminal": "86f38fd15bc8a85d"
   },
   "lib/__fixtures__/question-single.txt": {
    "opencode": "31c6bcb9c830ca1b",
@@ -4238,8 +4242,8 @@
    "commandcode": "c7051a5bf40e94d5",
    "muse": "5b82a2fa3c10ca31",
    "pi": "a3711a25fb1ad7bf",
-   "terminal": "c7051a5bf40e94d5",
-   "openclaw": "31c6bcb9c830ca1b"
+   "openclaw": "31c6bcb9c830ca1b",
+   "terminal": "c7051a5bf40e94d5"
   },
   "lib/__fixtures__/question-tabs.txt": {
    "opencode": "de7bf6b7ba248a36",
@@ -4254,8 +4258,8 @@
    "commandcode": "0bd41822c53291ea",
    "muse": "3383e2d5b1269832",
    "pi": "c2e1fbef360d85e4",
-   "terminal": "0bd41822c53291ea",
-   "openclaw": "de7bf6b7ba248a36"
+   "openclaw": "de7bf6b7ba248a36",
+   "terminal": "0bd41822c53291ea"
   },
   "lib/__fixtures__/takeoverScreens.ts#CLAUDE_HISTORY_SEARCH": {
    "opencode": "e334c9cf195dcaf9",
@@ -4270,8 +4274,8 @@
    "commandcode": "00229f3eeefa0624",
    "muse": "00229f3eeefa0624",
    "pi": "00229f3eeefa0624",
-   "terminal": "00229f3eeefa0624",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "00229f3eeefa0624"
   },
   "lib/__fixtures__/takeoverScreens.ts#CLAUDE_HISTORY_SEARCH_NO_MATCH": {
    "opencode": "e334c9cf195dcaf9",
@@ -4286,8 +4290,24 @@
    "commandcode": "00229f3eeefa0624",
    "muse": "00229f3eeefa0624",
    "pi": "00229f3eeefa0624",
-   "terminal": "00229f3eeefa0624",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "00229f3eeefa0624"
+  },
+  "lib/__fixtures__/takeoverScreens.ts#CLAUDE_MCP_SERVER_PROMPT": {
+   "opencode": "e334c9cf195dcaf9",
+   "cursor": "e334c9cf195dcaf9",
+   "kilo": "00229f3eeefa0624",
+   "devin": "00229f3eeefa0624",
+   "hermes": "00229f3eeefa0624",
+   "amp": "00229f3eeefa0624",
+   "agy": "00229f3eeefa0624",
+   "grok": "e334c9cf195dcaf9",
+   "copilot": "e334c9cf195dcaf9",
+   "commandcode": "00229f3eeefa0624",
+   "muse": "00229f3eeefa0624",
+   "pi": "e334c9cf195dcaf9",
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "00229f3eeefa0624"
   },
   "lib/__fixtures__/takeoverScreens.ts#CLAUDE_SIGN_IN": {
    "opencode": "e334c9cf195dcaf9",
@@ -4302,8 +4322,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/takeoverScreens.ts#CLAUDE_TRUST_PROMPT": {
    "opencode": "e334c9cf195dcaf9",
@@ -4318,8 +4338,8 @@
    "commandcode": "00229f3eeefa0624",
    "muse": "00229f3eeefa0624",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "00229f3eeefa0624",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "00229f3eeefa0624"
   },
   "lib/__fixtures__/takeoverScreens.ts#CODEX_HISTORY_SEARCH": {
    "opencode": "e334c9cf195dcaf9",
@@ -4334,8 +4354,8 @@
    "commandcode": "00229f3eeefa0624",
    "muse": "00229f3eeefa0624",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "00229f3eeefa0624",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "00229f3eeefa0624"
   },
   "lib/__fixtures__/takeoverScreens.ts#CODEX_MODEL_MIGRATION": {
    "opencode": "e334c9cf195dcaf9",
@@ -4350,8 +4370,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/takeoverScreens.ts#CODEX_SIGN_IN": {
    "opencode": "e334c9cf195dcaf9",
@@ -4366,8 +4386,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/takeoverScreens.ts#CODEX_TRANSCRIPT_FIND": {
    "opencode": "e334c9cf195dcaf9",
@@ -4382,8 +4402,8 @@
    "commandcode": "bfa57b6928e458f8",
    "muse": "bfa57b6928e458f8",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "bfa57b6928e458f8",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "bfa57b6928e458f8"
   },
   "lib/__fixtures__/takeoverScreens.ts#CODEX_TRANSCRIPT_OVERLAY": {
    "opencode": "e334c9cf195dcaf9",
@@ -4398,8 +4418,8 @@
    "commandcode": "00229f3eeefa0624",
    "muse": "00229f3eeefa0624",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "00229f3eeefa0624",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "00229f3eeefa0624"
   },
   "lib/__fixtures__/takeoverScreens.ts#CODEX_TRUST_PROMPT": {
    "opencode": "e334c9cf195dcaf9",
@@ -4414,8 +4434,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/takeoverScreens.ts#CODEX_TRUST_PROMPT_0147": {
    "opencode": "e334c9cf195dcaf9",
@@ -4430,8 +4450,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/takeoverScreens.ts#CODEX_UPDATE_PROMPT": {
    "opencode": "e334c9cf195dcaf9",
@@ -4446,8 +4466,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/rewindPickers.ts#CLAUDE_PROMPT": {
    "opencode": "e334c9cf195dcaf9",
@@ -4462,8 +4482,8 @@
    "commandcode": "bfa57b6928e458f8",
    "muse": "bfa57b6928e458f8",
    "pi": "00229f3eeefa0624",
-   "terminal": "bfa57b6928e458f8",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "bfa57b6928e458f8"
   },
   "lib/__fixtures__/rewindPickers.ts#CLAUDE_REWIND_CONFIRM": {
    "opencode": "e334c9cf195dcaf9",
@@ -4478,8 +4498,8 @@
    "commandcode": "00229f3eeefa0624",
    "muse": "00229f3eeefa0624",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "00229f3eeefa0624",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "00229f3eeefa0624"
   },
   "lib/__fixtures__/rewindPickers.ts#CLAUDE_REWIND_EMPTY": {
    "opencode": "e334c9cf195dcaf9",
@@ -4494,8 +4514,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/rewindPickers.ts#CLAUDE_REWIND_LIST": {
    "opencode": "e334c9cf195dcaf9",
@@ -4510,8 +4530,8 @@
    "commandcode": "983f17401bfec556",
    "muse": "983f17401bfec556",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "983f17401bfec556",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "983f17401bfec556"
   },
   "lib/__fixtures__/rewindPickers.ts#CLAUDE_REWIND_LIST_MESSAGE_FOCUSED": {
    "opencode": "e334c9cf195dcaf9",
@@ -4526,8 +4546,8 @@
    "commandcode": "00229f3eeefa0624",
    "muse": "00229f3eeefa0624",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "00229f3eeefa0624",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "00229f3eeefa0624"
   },
   "lib/__fixtures__/rewindPickers.ts#CODEX_BROWSING_FOOTER": {
    "opencode": "e334c9cf195dcaf9",
@@ -4542,8 +4562,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/__fixtures__/rewindPickers.ts#CODEX_BROWSING_FULLSCREEN": {
    "opencode": "e334c9cf195dcaf9",
@@ -4558,8 +4578,8 @@
    "commandcode": "bfa57b6928e458f8",
    "muse": "bfa57b6928e458f8",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "bfa57b6928e458f8",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "bfa57b6928e458f8"
   },
   "lib/__fixtures__/rewindPickers.ts#CODEX_BROWSING_SCROLLBACK": {
    "opencode": "e334c9cf195dcaf9",
@@ -4574,8 +4594,8 @@
    "commandcode": "00229f3eeefa0624",
    "muse": "00229f3eeefa0624",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "00229f3eeefa0624",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "00229f3eeefa0624"
   },
   "lib/__fixtures__/rewindPickers.ts#CODEX_PROMPT": {
    "opencode": "e334c9cf195dcaf9",
@@ -4590,8 +4610,8 @@
    "commandcode": "bfa57b6928e458f8",
    "muse": "bfa57b6928e458f8",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "bfa57b6928e458f8",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "bfa57b6928e458f8"
   },
   "engines/amp/askQuestion.spec.ts#0a0695be4aef": {
    "opencode": "00229f3eeefa0624",
@@ -4606,8 +4626,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "engines/amp/askQuestion.spec.ts#e5e66ea3cc85": {
    "opencode": "e334c9cf195dcaf9",
@@ -4622,8 +4642,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "engines/codex/askQuestion.spec.ts#f1b267ce5e28": {
    "opencode": "d39122b48dfc7c4d",
@@ -4638,8 +4658,8 @@
    "commandcode": "d39122b48dfc7c4d",
    "muse": "d39122b48dfc7c4d",
    "pi": "d39122b48dfc7c4d",
-   "terminal": "d39122b48dfc7c4d",
-   "openclaw": "d39122b48dfc7c4d"
+   "openclaw": "d39122b48dfc7c4d",
+   "terminal": "d39122b48dfc7c4d"
   },
   "engines/devin/askQuestion.spec.ts#a71a76b79a44": {
    "opencode": "e334c9cf195dcaf9",
@@ -4654,8 +4674,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "engines/devin/askQuestion.spec.ts#c03fd642fb52": {
    "opencode": "e334c9cf195dcaf9",
@@ -4670,8 +4690,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "engines/kilo/askQuestion.spec.ts#199fabd38e6c": {
    "opencode": "a35a75988d749eb3",
@@ -4686,8 +4706,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "2bbc170ce91fde48",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "2bbc170ce91fde48"
   },
   "engines/muse/askQuestion.spec.ts#795b45474794": {
    "opencode": "e334c9cf195dcaf9",
@@ -4702,8 +4722,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "engines/pi/runtimeProfile.spec.ts#7abe534ed8f8": {
    "opencode": "e334c9cf195dcaf9",
@@ -4718,8 +4738,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "engines/pi/runtimeProfile.spec.ts#ebead6d05e2d": {
    "opencode": "e334c9cf195dcaf9",
@@ -4734,8 +4754,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "2bbc170ce91fde48",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/askQuestion.more.spec.ts#223d5732fb90": {
    "opencode": "ce1375f92d079bd3",
@@ -4750,8 +4770,8 @@
    "commandcode": "ce1375f92d079bd3",
    "muse": "ce1375f92d079bd3",
    "pi": "ce1375f92d079bd3",
-   "terminal": "ce1375f92d079bd3",
-   "openclaw": "ce1375f92d079bd3"
+   "openclaw": "ce1375f92d079bd3",
+   "terminal": "ce1375f92d079bd3"
   },
   "lib/askQuestion.more.spec.ts#62864c6fcb38": {
    "opencode": "e334c9cf195dcaf9",
@@ -4766,8 +4786,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/askQuestion.more.spec.ts#6fb27fc09347": {
    "opencode": "7f101672e312a757",
@@ -4782,8 +4802,8 @@
    "commandcode": "7f101672e312a757",
    "muse": "7f101672e312a757",
    "pi": "7f101672e312a757",
-   "terminal": "7f101672e312a757",
-   "openclaw": "7f101672e312a757"
+   "openclaw": "7f101672e312a757",
+   "terminal": "7f101672e312a757"
   },
   "lib/askQuestion.more.spec.ts#78399f453155": {
    "opencode": "e334c9cf195dcaf9",
@@ -4798,8 +4818,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/askQuestion.more.spec.ts#791fb3e4daf6": {
    "opencode": "a7b4f2f8d9fcef56",
@@ -4814,8 +4834,8 @@
    "commandcode": "a7b4f2f8d9fcef56",
    "muse": "a7b4f2f8d9fcef56",
    "pi": "a7b4f2f8d9fcef56",
-   "terminal": "a7b4f2f8d9fcef56",
-   "openclaw": "a7b4f2f8d9fcef56"
+   "openclaw": "a7b4f2f8d9fcef56",
+   "terminal": "a7b4f2f8d9fcef56"
   },
   "lib/askQuestion.more.spec.ts#80ae905a0477": {
    "opencode": "a7b4f2f8d9fcef56",
@@ -4830,8 +4850,8 @@
    "commandcode": "a7b4f2f8d9fcef56",
    "muse": "a7b4f2f8d9fcef56",
    "pi": "a7b4f2f8d9fcef56",
-   "terminal": "a7b4f2f8d9fcef56",
-   "openclaw": "a7b4f2f8d9fcef56"
+   "openclaw": "a7b4f2f8d9fcef56",
+   "terminal": "a7b4f2f8d9fcef56"
   },
   "lib/askQuestion.more.spec.ts#8c267ec3d5b6": {
    "opencode": "e334c9cf195dcaf9",
@@ -4846,8 +4866,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "2bbc170ce91fde48",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "2bbc170ce91fde48"
   },
   "lib/askQuestion.more.spec.ts#cfa4ebb550b2": {
    "opencode": "e334c9cf195dcaf9",
@@ -4862,8 +4882,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/askQuestion.more.spec.ts#e5759e4f7807": {
    "opencode": "e334c9cf195dcaf9",
@@ -4878,8 +4898,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/askQuestion.spec.ts#1386d9b1bd52": {
    "opencode": "e334c9cf195dcaf9",
@@ -4894,8 +4914,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/askQuestion.spec.ts#4f9035fb3cd5": {
    "opencode": "362a5c13b7d08cfa",
@@ -4910,8 +4930,8 @@
    "commandcode": "362a5c13b7d08cfa",
    "muse": "2d4ed56e6a13afc4",
    "pi": "66714f2c1f955595",
-   "terminal": "362a5c13b7d08cfa",
-   "openclaw": "362a5c13b7d08cfa"
+   "openclaw": "362a5c13b7d08cfa",
+   "terminal": "362a5c13b7d08cfa"
   },
   "lib/askQuestion.spec.ts#5ff13b3bfd0d": {
    "opencode": "e334c9cf195dcaf9",
@@ -4926,8 +4946,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/askQuestion.spec.ts#753a24abb51c": {
    "opencode": "e334c9cf195dcaf9",
@@ -4942,8 +4962,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/askQuestion.spec.ts#95f6c924b7fe": {
    "opencode": "e334c9cf195dcaf9",
@@ -4958,8 +4978,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/askQuestion.spec.ts#a23f8570eb4f": {
    "opencode": "e334c9cf195dcaf9",
@@ -4974,8 +4994,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/askQuestion.spec.ts#cc12dc28c82d": {
    "opencode": "e334c9cf195dcaf9",
@@ -4990,8 +5010,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/askQuestion.spec.ts#fb7360465025": {
    "opencode": "d2dab38d1643954f",
@@ -5006,8 +5026,8 @@
    "commandcode": "d2dab38d1643954f",
    "muse": "6da8262f37162eeb",
    "pi": "f84d20d885617102",
-   "terminal": "d2dab38d1643954f",
-   "openclaw": "d2dab38d1643954f"
+   "openclaw": "d2dab38d1643954f",
+   "terminal": "d2dab38d1643954f"
   },
   "lib/askQuestion.whitespace.spec.ts#9b6198df9fdb": {
    "opencode": "e334c9cf195dcaf9",
@@ -5022,8 +5042,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/closeAgentService.spec.ts#01141dd0bb86": {
    "opencode": "e334c9cf195dcaf9",
@@ -5038,8 +5058,8 @@
    "commandcode": "bfa57b6928e458f8",
    "muse": "bfa57b6928e458f8",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "bfa57b6928e458f8",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "bfa57b6928e458f8"
   },
   "lib/closeAgentService.spec.ts#11d9849fad5f": {
    "opencode": "e334c9cf195dcaf9",
@@ -5054,8 +5074,8 @@
    "commandcode": "bfa57b6928e458f8",
    "muse": "bfa57b6928e458f8",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "bfa57b6928e458f8",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "bfa57b6928e458f8"
   },
   "lib/closeAgentService.spec.ts#4554f66f8d94": {
    "opencode": "e334c9cf195dcaf9",
@@ -5070,8 +5090,8 @@
    "commandcode": "00229f3eeefa0624",
    "muse": "00229f3eeefa0624",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "00229f3eeefa0624",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "00229f3eeefa0624"
   },
   "lib/closeAgentService.spec.ts#48db0d710f75": {
    "opencode": "e334c9cf195dcaf9",
@@ -5086,8 +5106,8 @@
    "commandcode": "bfa57b6928e458f8",
    "muse": "bfa57b6928e458f8",
    "pi": "00229f3eeefa0624",
-   "terminal": "bfa57b6928e458f8",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "bfa57b6928e458f8"
   },
   "lib/closeAgentService.spec.ts#894e8c6c1c83": {
    "opencode": "e334c9cf195dcaf9",
@@ -5102,8 +5122,8 @@
    "commandcode": "983f17401bfec556",
    "muse": "983f17401bfec556",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "983f17401bfec556",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "983f17401bfec556"
   },
   "lib/closeAgentService.spec.ts#acc581b4d226": {
    "opencode": "e334c9cf195dcaf9",
@@ -5118,8 +5138,8 @@
    "commandcode": "bfa57b6928e458f8",
    "muse": "bfa57b6928e458f8",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "bfa57b6928e458f8",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "bfa57b6928e458f8"
   },
   "lib/closeAgentService.spec.ts#b3481e864563": {
    "opencode": "e334c9cf195dcaf9",
@@ -5134,8 +5154,8 @@
    "commandcode": "bfa57b6928e458f8",
    "muse": "bfa57b6928e458f8",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "bfa57b6928e458f8",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "bfa57b6928e458f8"
   },
   "lib/runtimeActivity.spec.ts#15dc3fc72fb1": {
    "opencode": "e334c9cf195dcaf9",
@@ -5150,8 +5170,8 @@
    "commandcode": "bfa57b6928e458f8",
    "muse": "bfa57b6928e458f8",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "bfa57b6928e458f8",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "bfa57b6928e458f8"
   },
   "lib/runtimeActivity.spec.ts#24bc8c8cbc25": {
    "opencode": "e334c9cf195dcaf9",
@@ -5166,8 +5186,8 @@
    "commandcode": "00229f3eeefa0624",
    "muse": "00229f3eeefa0624",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "00229f3eeefa0624",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "00229f3eeefa0624"
   },
   "lib/runtimeActivity.spec.ts#7c28852bf442": {
    "opencode": "e334c9cf195dcaf9",
@@ -5182,8 +5202,8 @@
    "commandcode": "983f17401bfec556",
    "muse": "983f17401bfec556",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "983f17401bfec556",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "983f17401bfec556"
   },
   "lib/runtimeActivity.spec.ts#bac1b4a534fd": {
    "opencode": "e334c9cf195dcaf9",
@@ -5198,8 +5218,8 @@
    "commandcode": "983f17401bfec556",
    "muse": "983f17401bfec556",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "983f17401bfec556",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "983f17401bfec556"
   },
   "lib/runtimeProfileController.spec.ts#032948391497": {
    "opencode": "e334c9cf195dcaf9",
@@ -5214,8 +5234,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "2bbc170ce91fde48",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "2bbc170ce91fde48"
   },
   "lib/runtimeProfileController.spec.ts#0fd5b19019e2": {
    "opencode": "e334c9cf195dcaf9",
@@ -5230,8 +5250,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "bfa57b6928e458f8",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/runtimeProfileController.spec.ts#1be04a485484": {
    "opencode": "e334c9cf195dcaf9",
@@ -5246,8 +5266,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/runtimeProfileController.spec.ts#248fe99094e0": {
    "opencode": "e334c9cf195dcaf9",
@@ -5262,8 +5282,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "2bbc170ce91fde48",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "2bbc170ce91fde48"
   },
   "lib/runtimeProfileController.spec.ts#2f2761cbf226": {
    "opencode": "e334c9cf195dcaf9",
@@ -5278,8 +5298,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "2bbc170ce91fde48",
-   "terminal": "2bbc170ce91fde48",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "2bbc170ce91fde48"
   },
   "lib/runtimeProfileController.spec.ts#3c4d0a00306e": {
    "opencode": "e334c9cf195dcaf9",
@@ -5294,8 +5314,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/runtimeProfileController.spec.ts#3fb6a6adbd7c": {
    "opencode": "e334c9cf195dcaf9",
@@ -5310,8 +5330,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "2bbc170ce91fde48",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "2bbc170ce91fde48"
   },
   "lib/runtimeProfileController.spec.ts#47bfe6bc3164": {
    "opencode": "e334c9cf195dcaf9",
@@ -5326,8 +5346,8 @@
    "commandcode": "bfa57b6928e458f8",
    "muse": "bfa57b6928e458f8",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "bfa57b6928e458f8",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "bfa57b6928e458f8"
   },
   "lib/runtimeProfileController.spec.ts#4c1fce7e7d96": {
    "opencode": "e334c9cf195dcaf9",
@@ -5342,8 +5362,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "2bbc170ce91fde48",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "2bbc170ce91fde48"
   },
   "lib/runtimeProfileController.spec.ts#65846c5b0ccb": {
    "opencode": "e334c9cf195dcaf9",
@@ -5358,8 +5378,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "2bbc170ce91fde48",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "2bbc170ce91fde48"
   },
   "lib/runtimeProfileController.spec.ts#6ef12b2eed81": {
    "opencode": "e334c9cf195dcaf9",
@@ -5374,8 +5394,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "bfa57b6928e458f8",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/runtimeProfileController.spec.ts#72fc1b501f8c": {
    "opencode": "e334c9cf195dcaf9",
@@ -5390,8 +5410,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "2bbc170ce91fde48",
-   "terminal": "2bbc170ce91fde48",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "2bbc170ce91fde48"
   },
   "lib/runtimeProfileController.spec.ts#75a11da44c80": {
    "opencode": "e334c9cf195dcaf9",
@@ -5406,8 +5426,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/runtimeProfileController.spec.ts#7a207f4a14c5": {
    "opencode": "e334c9cf195dcaf9",
@@ -5422,8 +5442,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "2bbc170ce91fde48",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "2bbc170ce91fde48"
   },
   "lib/runtimeProfileController.spec.ts#847ec914db6c": {
    "opencode": "e334c9cf195dcaf9",
@@ -5438,8 +5458,8 @@
    "commandcode": "bfa57b6928e458f8",
    "muse": "bfa57b6928e458f8",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "bfa57b6928e458f8",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "bfa57b6928e458f8"
   },
   "lib/runtimeProfileController.spec.ts#8af412159237": {
    "opencode": "e334c9cf195dcaf9",
@@ -5454,8 +5474,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "2bbc170ce91fde48",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "2bbc170ce91fde48"
   },
   "lib/runtimeProfileController.spec.ts#a7de854a13db": {
    "opencode": "e334c9cf195dcaf9",
@@ -5470,8 +5490,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "2bbc170ce91fde48",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "2bbc170ce91fde48"
   },
   "lib/runtimeProfileController.spec.ts#b07a24fe6ad6": {
    "opencode": "e334c9cf195dcaf9",
@@ -5486,8 +5506,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "2bbc170ce91fde48",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "2bbc170ce91fde48"
   },
   "lib/runtimeProfileController.spec.ts#c8e73bc23d66": {
    "opencode": "e334c9cf195dcaf9",
@@ -5502,8 +5522,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "2bbc170ce91fde48",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "2bbc170ce91fde48"
   },
   "lib/runtimeProfileController.spec.ts#f335e452d1b6": {
    "opencode": "e334c9cf195dcaf9",
@@ -5518,8 +5538,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "2bbc170ce91fde48",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "2bbc170ce91fde48"
   },
   "lib/runtimeProfileController.spec.ts#fc1ee075885f": {
    "opencode": "e334c9cf195dcaf9",
@@ -5534,8 +5554,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "2bbc170ce91fde48",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "2bbc170ce91fde48"
   },
   "lib/runtimeProfileController.spec.ts#fc78556999f6": {
    "opencode": "e334c9cf195dcaf9",
@@ -5550,8 +5570,8 @@
    "commandcode": "2bbc170ce91fde48",
    "muse": "2bbc170ce91fde48",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "2bbc170ce91fde48",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "2bbc170ce91fde48"
   },
   "lib/sessionInput.spec.ts#1ae4a7d90a72": {
    "opencode": "e334c9cf195dcaf9",
@@ -5566,8 +5586,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/sessionInput.spec.ts#1e3179279294": {
    "opencode": "e334c9cf195dcaf9",
@@ -5582,8 +5602,8 @@
    "commandcode": "00229f3eeefa0624",
    "muse": "00229f3eeefa0624",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "00229f3eeefa0624",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "00229f3eeefa0624"
   },
   "lib/sessionInput.spec.ts#317238f7959e": {
    "opencode": "e334c9cf195dcaf9",
@@ -5598,8 +5618,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/sessionInput.spec.ts#56c1c5934848": {
    "opencode": "e334c9cf195dcaf9",
@@ -5614,8 +5634,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/sessionInput.spec.ts#5c1c6a3d9bdf": {
    "opencode": "e334c9cf195dcaf9",
@@ -5630,8 +5650,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/sessionInput.spec.ts#74ad262be4ef": {
    "opencode": "e334c9cf195dcaf9",
@@ -5646,8 +5666,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/sessionInput.spec.ts#8f1bdd00dc4a": {
    "opencode": "605fcef7133d0d65",
@@ -5662,8 +5682,8 @@
    "commandcode": "d68db75fbfadc8ad",
    "muse": "d68db75fbfadc8ad",
    "pi": "605fcef7133d0d65",
-   "terminal": "d68db75fbfadc8ad",
-   "openclaw": "605fcef7133d0d65"
+   "openclaw": "605fcef7133d0d65",
+   "terminal": "d68db75fbfadc8ad"
   },
   "lib/sessionInput.spec.ts#acbbb07bcd73": {
    "opencode": "e334c9cf195dcaf9",
@@ -5678,8 +5698,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/sessionInput.spec.ts#b342b760886a": {
    "opencode": "e334c9cf195dcaf9",
@@ -5694,8 +5714,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/sessionInput.spec.ts#bd47421d7826": {
    "opencode": "e334c9cf195dcaf9",
@@ -5710,8 +5730,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/sessionInput.spec.ts#bfcb683314be": {
    "opencode": "e334c9cf195dcaf9",
@@ -5726,8 +5746,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   },
   "lib/sessionInput.spec.ts#c164934b3503": {
    "opencode": "e334c9cf195dcaf9",
@@ -5742,8 +5762,8 @@
    "commandcode": "e334c9cf195dcaf9",
    "muse": "e334c9cf195dcaf9",
    "pi": "e334c9cf195dcaf9",
-   "terminal": "e334c9cf195dcaf9",
-   "openclaw": "e334c9cf195dcaf9"
+   "openclaw": "e334c9cf195dcaf9",
+   "terminal": "e334c9cf195dcaf9"
   }
  },
  "keys": {
@@ -5846,7 +5866,7 @@
      "4"
     ]
    ],
-   "terminal": [
+   "openclaw": [
     [
      "1"
     ],
@@ -5860,7 +5880,7 @@
      "4"
     ]
    ],
-   "openclaw": [
+   "terminal": [
     [
      "1"
     ],
@@ -5953,7 +5973,7 @@
      "3"
     ]
    ],
-   "terminal": [
+   "openclaw": [
     [
      "1"
     ],
@@ -5964,7 +5984,7 @@
      "3"
     ]
    ],
-   "openclaw": [
+   "terminal": [
     [
      "1"
     ],
@@ -6054,7 +6074,7 @@
      "3"
     ]
    ],
-   "terminal": [
+   "openclaw": [
     [
      "1"
     ],
@@ -6065,7 +6085,7 @@
      "3"
     ]
    ],
-   "openclaw": [
+   "terminal": [
     [
      "1"
     ],
@@ -6155,7 +6175,7 @@
      "3"
     ]
    ],
-   "terminal": [
+   "openclaw": [
     [
      "1"
     ],
@@ -6166,7 +6186,7 @@
      "3"
     ]
    ],
-   "openclaw": [
+   "terminal": [
     [
      "1"
     ],
@@ -6256,7 +6276,7 @@
      "3"
     ]
    ],
-   "terminal": [
+   "openclaw": [
     [
      "1"
     ],
@@ -6267,7 +6287,7 @@
      "3"
     ]
    ],
-   "openclaw": [
+   "terminal": [
     [
      "1"
     ],
@@ -6357,7 +6377,7 @@
      "3"
     ]
    ],
-   "terminal": [
+   "openclaw": [
     [
      "1"
     ],
@@ -6368,7 +6388,7 @@
      "3"
     ]
    ],
-   "openclaw": [
+   "terminal": [
     [
      "1"
     ],
@@ -6604,7 +6624,7 @@
      "3"
     ]
    ],
-   "terminal": [
+   "openclaw": [
     [
      "1"
     ],
@@ -6615,7 +6635,7 @@
      "3"
     ]
    ],
-   "openclaw": [
+   "terminal": [
     [
      "1"
     ],
@@ -6727,7 +6747,7 @@
      "2"
     ]
    ],
-   "terminal": [
+   "openclaw": [
     [
      "1"
     ],
@@ -6735,7 +6755,7 @@
      "2"
     ]
    ],
-   "openclaw": [
+   "terminal": [
     [
      "1"
     ],
@@ -6822,7 +6842,7 @@
      "3"
     ]
    ],
-   "terminal": [
+   "openclaw": [
     [
      "1"
     ],
@@ -6833,7 +6853,7 @@
      "3"
     ]
    ],
-   "openclaw": [
+   "terminal": [
     [
      "1"
     ],
@@ -7095,7 +7115,7 @@
      "3"
     ]
    ],
-   "terminal": [
+   "openclaw": [
     [
      "1"
     ],
@@ -7106,7 +7126,7 @@
      "3"
     ]
    ],
-   "openclaw": [
+   "terminal": [
     [
      "1"
     ],
@@ -7190,7 +7210,7 @@
      "3"
     ]
    ],
-   "terminal": [
+   "openclaw": [
     [
      "1"
     ],
@@ -7201,7 +7221,7 @@
      "3"
     ]
    ],
-   "openclaw": [
+   "terminal": [
     [
      "1"
     ],
@@ -7288,7 +7308,7 @@
      "3"
     ]
    ],
-   "terminal": [
+   "openclaw": [
     [
      "1"
     ],
@@ -7299,7 +7319,7 @@
      "3"
     ]
    ],
-   "openclaw": [
+   "terminal": [
     [
      "1"
     ],
@@ -7391,7 +7411,7 @@
      "2"
     ]
    ],
-   "terminal": [
+   "openclaw": [
     [
      "1"
     ],
@@ -7399,7 +7419,7 @@
      "2"
     ]
    ],
-   "openclaw": [
+   "terminal": [
     [
      "1"
     ],
@@ -7480,7 +7500,7 @@
      "3"
     ]
    ],
-   "terminal": [
+   "openclaw": [
     [
      "1"
     ],
@@ -7491,7 +7511,7 @@
      "3"
     ]
    ],
-   "openclaw": [
+   "terminal": [
     [
      "1"
     ],
@@ -7603,7 +7623,7 @@
      "5"
     ]
    ],
-   "terminal": [
+   "openclaw": [
     [
      "3"
     ],
@@ -7614,7 +7634,7 @@
      "5"
     ]
    ],
-   "openclaw": [
+   "terminal": [
     [
      "3"
     ],
@@ -7723,7 +7743,7 @@
      "2"
     ]
    ],
-   "terminal": [
+   "openclaw": [
     [
      "1"
     ],
@@ -7731,7 +7751,7 @@
      "2"
     ]
    ],
-   "openclaw": [
+   "terminal": [
     [
      "1"
     ],
@@ -7797,7 +7817,7 @@
      "2"
     ]
    ],
-   "terminal": [
+   "openclaw": [
     [
      "1"
     ],
@@ -7805,7 +7825,7 @@
      "2"
     ]
    ],
-   "openclaw": [
+   "terminal": [
     [
      "1"
     ],
@@ -7871,7 +7891,7 @@
      "4"
     ]
    ],
-   "terminal": [
+   "openclaw": [
     [
      "3"
     ],
@@ -7879,7 +7899,7 @@
      "4"
     ]
    ],
-   "openclaw": [
+   "terminal": [
     [
      "3"
     ],
@@ -7945,7 +7965,7 @@
      "4"
     ]
    ],
-   "terminal": [
+   "openclaw": [
     [
      "3"
     ],
@@ -7953,7 +7973,7 @@
      "4"
     ]
    ],
-   "openclaw": [
+   "terminal": [
     [
      "3"
     ],
@@ -8056,7 +8076,7 @@
      "3"
     ]
    ],
-   "terminal": [
+   "openclaw": [
     [
      "1"
     ],
@@ -8067,7 +8087,7 @@
      "3"
     ]
    ],
-   "openclaw": [
+   "terminal": [
     [
      "1"
     ],
@@ -8136,7 +8156,7 @@
      "2"
     ]
    ],
-   "terminal": [
+   "openclaw": [
     [
      "1"
     ],
@@ -8144,7 +8164,7 @@
      "2"
     ]
    ],
-   "openclaw": [
+   "terminal": [
     [
      "1"
     ],
@@ -8160,12 +8180,12 @@
   "permission-agy+permission-claude": "6846d1b2bf9b2532",
   "permission-agy+permission-codex": "a6bbd2c146d34b8b",
   "permission-agy+permission-commandcode": "01185194e4570b5c",
-  "permission-agy+permission-copilot": "2991ce0f2b1e6eb2",
+  "permission-agy+permission-copilot": "1aa999cbed7024e8",
   "permission-agy+permission-cursor": "4a9972257beabc5b",
   "permission-agy+permission-devin-3000-11": "8c2d7b4c0d702e9c",
   "permission-agy+permission-devin": "fde4178918bdb775",
   "permission-agy+permission-grok": "6c37940c860f32f4",
-  "permission-agy+permission-hermes": "938a938d6b76bdf7",
+  "permission-agy+permission-hermes": "3d4ae02706b20671",
   "permission-agy+permission-muse": "9fbabdc90b9e6b7a",
   "permission-agy+permission-opencode": "4f15ac3d8d9bb405",
   "permission-agy+question-agy": "32ee86913f1af228",
@@ -8193,12 +8213,12 @@
   "permission-claude-edit+permission-claude": "6846d1b2bf9b2532",
   "permission-claude-edit+permission-codex": "a6bbd2c146d34b8b",
   "permission-claude-edit+permission-commandcode": "c1e59accd1ec176a",
-  "permission-claude-edit+permission-copilot": "83b3eb8e2dae095f",
+  "permission-claude-edit+permission-copilot": "90703562c6ecb1fd",
   "permission-claude-edit+permission-cursor": "b2f47070df5c4c46",
   "permission-claude-edit+permission-devin-3000-11": "93b5787d0bd688fa",
   "permission-claude-edit+permission-devin": "fa49038e3554cfa1",
   "permission-claude-edit+permission-grok": "109ae6cf030599cb",
-  "permission-claude-edit+permission-hermes": "3289d64169eef765",
+  "permission-claude-edit+permission-hermes": "10d4fa6d5bb1e8f1",
   "permission-claude-edit+permission-muse": "5bdf5440eb585199",
   "permission-claude-edit+permission-opencode": "c48ca8a2d946f3a4",
   "permission-claude-edit+question-agy": "f3bdc60dad7d570e",
@@ -8226,12 +8246,12 @@
   "permission-claude-plan+permission-claude": "6846d1b2bf9b2532",
   "permission-claude-plan+permission-codex": "a6bbd2c146d34b8b",
   "permission-claude-plan+permission-commandcode": "c1e59accd1ec176a",
-  "permission-claude-plan+permission-copilot": "f3ce0abce1bcd6cd",
+  "permission-claude-plan+permission-copilot": "22a8ecf274a0c0ab",
   "permission-claude-plan+permission-cursor": "d3ce2bec6d526834",
   "permission-claude-plan+permission-devin-3000-11": "b73440fe0f69b7da",
   "permission-claude-plan+permission-devin": "12ed5a6beabc2773",
   "permission-claude-plan+permission-grok": "810be81d56928d24",
-  "permission-claude-plan+permission-hermes": "3289d64169eef765",
+  "permission-claude-plan+permission-hermes": "10d4fa6d5bb1e8f1",
   "permission-claude-plan+permission-muse": "9fbabdc90b9e6b7a",
   "permission-claude-plan+permission-opencode": "4f15ac3d8d9bb405",
   "permission-claude-plan+question-agy": "25645a7d9beeb6a8",
@@ -8259,12 +8279,12 @@
   "permission-claude+permission-claude-plan": "1c3b32f1349fa7ab",
   "permission-claude+permission-codex": "a6bbd2c146d34b8b",
   "permission-claude+permission-commandcode": "01185194e4570b5c",
-  "permission-claude+permission-copilot": "2016865b82639dc0",
+  "permission-claude+permission-copilot": "d2fb49b8a4fa78a2",
   "permission-claude+permission-cursor": "1a8181997fa3eefb",
   "permission-claude+permission-devin-3000-11": "e3797e827f1bc6e5",
   "permission-claude+permission-devin": "93c8cec96f37e894",
   "permission-claude+permission-grok": "f6615d28152cb1a3",
-  "permission-claude+permission-hermes": "938a938d6b76bdf7",
+  "permission-claude+permission-hermes": "3d4ae02706b20671",
   "permission-claude+permission-muse": "5bdf5440eb585199",
   "permission-claude+permission-opencode": "c48ca8a2d946f3a4",
   "permission-claude+question-agy": "29943acf69610b91",
@@ -8292,12 +8312,12 @@
   "permission-codex+permission-claude-plan": "affbf138ecdb686d",
   "permission-codex+permission-claude": "b5ee528a61e645b1",
   "permission-codex+permission-commandcode": "664c64f0409473e4",
-  "permission-codex+permission-copilot": "2991ce0f2b1e6eb2",
+  "permission-codex+permission-copilot": "1aa999cbed7024e8",
   "permission-codex+permission-cursor": "858438e6ca55b1f6",
   "permission-codex+permission-devin-3000-11": "5cd527d8274b90b4",
   "permission-codex+permission-devin": "b30cb55b4a944b43",
   "permission-codex+permission-grok": "14ce7a4d738cae98",
-  "permission-codex+permission-hermes": "938a938d6b76bdf7",
+  "permission-codex+permission-hermes": "3d4ae02706b20671",
   "permission-codex+permission-muse": "bc0d15a01f0ff627",
   "permission-codex+permission-opencode": "3adce05377f50a5a",
   "permission-codex+question-agy": "d36570c7b2f4e466",
@@ -8325,12 +8345,12 @@
   "permission-commandcode+permission-claude-plan": "66fec1ef58e7a7a4",
   "permission-commandcode+permission-claude": "6846d1b2bf9b2532",
   "permission-commandcode+permission-codex": "a6bbd2c146d34b8b",
-  "permission-commandcode+permission-copilot": "83b3eb8e2dae095f",
+  "permission-commandcode+permission-copilot": "90703562c6ecb1fd",
   "permission-commandcode+permission-cursor": "05ecd0e9d0f514fc",
   "permission-commandcode+permission-devin-3000-11": "0efddecbb300a357",
   "permission-commandcode+permission-devin": "fef2a7f67c85c434",
   "permission-commandcode+permission-grok": "916a72f11d2a0480",
-  "permission-commandcode+permission-hermes": "3289d64169eef765",
+  "permission-commandcode+permission-hermes": "10d4fa6d5bb1e8f1",
   "permission-commandcode+permission-muse": "5bdf5440eb585199",
   "permission-commandcode+permission-opencode": "c48ca8a2d946f3a4",
   "permission-commandcode+question-agy": "f3bdc60dad7d570e",
@@ -8359,23 +8379,23 @@
   "permission-copilot+permission-claude": "ff4d63f0487fa4ae",
   "permission-copilot+permission-codex": "38d45e9ccf5a4454",
   "permission-copilot+permission-commandcode": "96f86db52eb29d44",
-  "permission-copilot+permission-cursor": "4dd0e6e7617023df",
-  "permission-copilot+permission-devin-3000-11": "51f9777999d194fe",
-  "permission-copilot+permission-devin": "fb88fcd480520cf8",
-  "permission-copilot+permission-grok": "5391bfa40d5d11ad",
-  "permission-copilot+permission-hermes": "3964825c86b9a02d",
+  "permission-copilot+permission-cursor": "fad603d95bebf0b6",
+  "permission-copilot+permission-devin-3000-11": "8929f259bda1202e",
+  "permission-copilot+permission-devin": "1ff3ed6dd75d2c0b",
+  "permission-copilot+permission-grok": "fe82a0d80a1cdcc8",
+  "permission-copilot+permission-hermes": "a5f6d317c5d4f3f8",
   "permission-copilot+permission-muse": "2a472b13398563df",
   "permission-copilot+permission-opencode": "47965156e22bba48",
-  "permission-copilot+question-agy": "a6c51c8802db9bfa",
+  "permission-copilot+question-agy": "c5ccfa9fbb4c489e",
   "permission-copilot+question-codex": "5c3efc07fdaad27f",
   "permission-copilot+question-commandcode-review": "32628c48921f3613",
   "permission-copilot+question-commandcode": "afbe364bfa25fb73",
   "permission-copilot+question-copilot": "7ada59039843ba79",
-  "permission-copilot+question-devin-3000-11": "546c48d99bf0beba",
-  "permission-copilot+question-devin-multi-3000-11": "becc8d85280cfa34",
-  "permission-copilot+question-devin-multi": "2ca18fa3297f7678",
-  "permission-copilot+question-devin": "8def16015e74d970",
-  "permission-copilot+question-grok": "750a8501df8d9110",
+  "permission-copilot+question-devin-3000-11": "0e0006270cb60ed4",
+  "permission-copilot+question-devin-multi-3000-11": "43d3efcae8c502bc",
+  "permission-copilot+question-devin-multi": "4458b1fed0e90c3f",
+  "permission-copilot+question-devin": "4920f9c3ecddf524",
+  "permission-copilot+question-grok": "33bac346e12dd6f0",
   "permission-copilot+question-hermes-lock": "ce387f056398cc7d",
   "permission-copilot+question-hermes": "73d7337f61efc6e7",
   "permission-copilot+question-kilo": "885f3c8c9e749885",
@@ -8392,11 +8412,11 @@
   "permission-cursor+permission-claude": "add72eb12f7f74b7",
   "permission-cursor+permission-codex": "181ebadf9b5e8836",
   "permission-cursor+permission-commandcode": "05ecd0e9d0f514fc",
-  "permission-cursor+permission-copilot": "4dd0e6e7617023df",
+  "permission-cursor+permission-copilot": "fad603d95bebf0b6",
   "permission-cursor+permission-devin-3000-11": "d32ddbc4564819d1",
   "permission-cursor+permission-devin": "8735b647881d94bd",
   "permission-cursor+permission-grok": "ed5b211f7f6b935e",
-  "permission-cursor+permission-hermes": "2fcbc470799b66ee",
+  "permission-cursor+permission-hermes": "76d0231c3b754252",
   "permission-cursor+permission-muse": "2999b7c20e01e7d8",
   "permission-cursor+permission-opencode": "5a4c646a5598015a",
   "permission-cursor+question-agy": "5c8e8bb50bf182e7",
@@ -8425,11 +8445,11 @@
   "permission-devin-3000-11+permission-claude": "3a1b15032d3d3db7",
   "permission-devin-3000-11+permission-codex": "7445d6a7da693cab",
   "permission-devin-3000-11+permission-commandcode": "0efddecbb300a357",
-  "permission-devin-3000-11+permission-copilot": "51f9777999d194fe",
+  "permission-devin-3000-11+permission-copilot": "8929f259bda1202e",
   "permission-devin-3000-11+permission-cursor": "397c1ae4f1716426",
   "permission-devin-3000-11+permission-devin": "238ad1110abfae78",
   "permission-devin-3000-11+permission-grok": "31950c98b53afed1",
-  "permission-devin-3000-11+permission-hermes": "5ac5c3ce91267052",
+  "permission-devin-3000-11+permission-hermes": "06cdbc5a796c9271",
   "permission-devin-3000-11+permission-muse": "d3bd7e8b01beaaa8",
   "permission-devin-3000-11+permission-opencode": "ada96f8519c6be6b",
   "permission-devin-3000-11+question-agy": "4d3b89d6dd0cfc6f",
@@ -8458,11 +8478,11 @@
   "permission-devin+permission-claude": "6ae08345dc3ad0e0",
   "permission-devin+permission-codex": "9e5fabc0f6ac4a98",
   "permission-devin+permission-commandcode": "a1fb415e4f73fee1",
-  "permission-devin+permission-copilot": "fb88fcd480520cf8",
+  "permission-devin+permission-copilot": "1ff3ed6dd75d2c0b",
   "permission-devin+permission-cursor": "be763f65bcce1ddf",
   "permission-devin+permission-devin-3000-11": "d396da9d118877e7",
   "permission-devin+permission-grok": "1a6874c6286bab1d",
-  "permission-devin+permission-hermes": "a73d73371e5d9af6",
+  "permission-devin+permission-hermes": "c29ad854cdcc8476",
   "permission-devin+permission-muse": "2ceb4147eadcf4b9",
   "permission-devin+permission-opencode": "640f52ec8fdafd54",
   "permission-devin+question-agy": "ea71cfada548de06",
@@ -8491,11 +8511,11 @@
   "permission-grok+permission-claude": "d8dfd89dc1de89f7",
   "permission-grok+permission-codex": "207f6fdaf118b453",
   "permission-grok+permission-commandcode": "916a72f11d2a0480",
-  "permission-grok+permission-copilot": "5391bfa40d5d11ad",
+  "permission-grok+permission-copilot": "fe82a0d80a1cdcc8",
   "permission-grok+permission-cursor": "ed5b211f7f6b935e",
   "permission-grok+permission-devin-3000-11": "31950c98b53afed1",
   "permission-grok+permission-devin": "1a6874c6286bab1d",
-  "permission-grok+permission-hermes": "01ab9118053ee0a8",
+  "permission-grok+permission-hermes": "696f2fc0d9ab1f90",
   "permission-grok+permission-muse": "4ab49c76eb1f4035",
   "permission-grok+permission-opencode": "c5406730fa29eafc",
   "permission-grok+question-agy": "bba5105fd3c4f5ba",
@@ -8524,23 +8544,23 @@
   "permission-hermes+permission-claude": "b5ee528a61e645b1",
   "permission-hermes+permission-codex": "a6bbd2c146d34b8b",
   "permission-hermes+permission-commandcode": "d7867c565ed88efa",
-  "permission-hermes+permission-copilot": "f3ce0abce1bcd6cd",
-  "permission-hermes+permission-cursor": "dfef858983c11be2",
-  "permission-hermes+permission-devin-3000-11": "e0cc56781b2a5755",
-  "permission-hermes+permission-devin": "7fadabc02abd0df1",
-  "permission-hermes+permission-grok": "e4087005220ccaf7",
+  "permission-hermes+permission-copilot": "22a8ecf274a0c0ab",
+  "permission-hermes+permission-cursor": "e80540e1ea892922",
+  "permission-hermes+permission-devin-3000-11": "62943c3000c4def8",
+  "permission-hermes+permission-devin": "6fb0d7efd8ccd503",
+  "permission-hermes+permission-grok": "7f6467c1f2f7c2d8",
   "permission-hermes+permission-muse": "49f747042c2f1049",
   "permission-hermes+permission-opencode": "ecb173c10d9e0139",
-  "permission-hermes+question-agy": "b96e30379a6a6425",
+  "permission-hermes+question-agy": "18e02255b807fc71",
   "permission-hermes+question-codex": "83216491e3a0901c",
   "permission-hermes+question-commandcode-review": "153c86dfff19c15e",
   "permission-hermes+question-commandcode": "30420a6d88ff5317",
   "permission-hermes+question-copilot": "9e7ff3c7e8c8f0e8",
-  "permission-hermes+question-devin-3000-11": "606e98687d56bd6f",
-  "permission-hermes+question-devin-multi-3000-11": "d5b0795360eb6dda",
-  "permission-hermes+question-devin-multi": "6f1c2f9663fd5302",
-  "permission-hermes+question-devin": "bc0758d9497cf66f",
-  "permission-hermes+question-grok": "172993bb1c4ed84c",
+  "permission-hermes+question-devin-3000-11": "bd353062c6ecd0d3",
+  "permission-hermes+question-devin-multi-3000-11": "0f8717c56e1a7271",
+  "permission-hermes+question-devin-multi": "15096bec6fa2cad1",
+  "permission-hermes+question-devin": "bc329ad3530023a2",
+  "permission-hermes+question-grok": "a834dc966e3f1d3f",
   "permission-hermes+question-hermes-lock": "03be0f6ddf92206d",
   "permission-hermes+question-hermes": "544fac5a31e091fd",
   "permission-hermes+question-kilo": "86f8d2f9be739b2f",
@@ -8557,12 +8577,12 @@
   "permission-muse+permission-claude": "6846d1b2bf9b2532",
   "permission-muse+permission-codex": "a6bbd2c146d34b8b",
   "permission-muse+permission-commandcode": "01185194e4570b5c",
-  "permission-muse+permission-copilot": "2016865b82639dc0",
+  "permission-muse+permission-copilot": "d2fb49b8a4fa78a2",
   "permission-muse+permission-cursor": "bc37e3e8e033c287",
   "permission-muse+permission-devin-3000-11": "bb7ca3208005faf3",
   "permission-muse+permission-devin": "fd09fbc23c2f7ff2",
   "permission-muse+permission-grok": "513c819ee425fdc2",
-  "permission-muse+permission-hermes": "938a938d6b76bdf7",
+  "permission-muse+permission-hermes": "3d4ae02706b20671",
   "permission-muse+permission-opencode": "b832b83769777e5b",
   "permission-muse+question-agy": "f47951b39c20a8c8",
   "permission-muse+question-codex": "f0350362cd51b7b3",
@@ -8590,12 +8610,12 @@
   "permission-opencode+permission-claude": "002626a57b10bfab",
   "permission-opencode+permission-codex": "693695e95ec4504c",
   "permission-opencode+permission-commandcode": "3a4faeb5e90ca665",
-  "permission-opencode+permission-copilot": "2a54692fdeb385fb",
+  "permission-opencode+permission-copilot": "4c01cfd496475b92",
   "permission-opencode+permission-cursor": "a35ec3916cae2346",
   "permission-opencode+permission-devin-3000-11": "ee3b341b5086c09b",
   "permission-opencode+permission-devin": "80dce70ad6903110",
   "permission-opencode+permission-grok": "dd046c5655626df1",
-  "permission-opencode+permission-hermes": "aa7c675c598d5f93",
+  "permission-opencode+permission-hermes": "57e2b8082f5387d2",
   "permission-opencode+permission-muse": "c15c85b463dd32a2",
   "permission-opencode+question-agy": "15320db0bd6f7e01",
   "permission-opencode+question-codex": "684ea7902cfe4a3e",
@@ -8623,12 +8643,12 @@
   "question-agy+permission-claude": "6846d1b2bf9b2532",
   "question-agy+permission-codex": "a6bbd2c146d34b8b",
   "question-agy+permission-commandcode": "c1e59accd1ec176a",
-  "question-agy+permission-copilot": "a6c51c8802db9bfa",
+  "question-agy+permission-copilot": "c5ccfa9fbb4c489e",
   "question-agy+permission-cursor": "f494ac2063668946",
   "question-agy+permission-devin-3000-11": "4d3b89d6dd0cfc6f",
   "question-agy+permission-devin": "ea71cfada548de06",
   "question-agy+permission-grok": "bba5105fd3c4f5ba",
-  "question-agy+permission-hermes": "b3d7e834f5fd3f91",
+  "question-agy+permission-hermes": "bae4782e3761ccb0",
   "question-agy+permission-muse": "9fbabdc90b9e6b7a",
   "question-agy+permission-opencode": "15320db0bd6f7e01",
   "question-agy+question-codex": "c1f4b6916eef6bb6",
@@ -8656,12 +8676,12 @@
   "question-codex+permission-claude": "6846d1b2bf9b2532",
   "question-codex+permission-codex": "a6bbd2c146d34b8b",
   "question-codex+permission-commandcode": "c1e59accd1ec176a",
-  "question-codex+permission-copilot": "f3ce0abce1bcd6cd",
+  "question-codex+permission-copilot": "22a8ecf274a0c0ab",
   "question-codex+permission-cursor": "86e4d9a1921dd5b1",
   "question-codex+permission-devin-3000-11": "75dab8ddd2856a9a",
   "question-codex+permission-devin": "13eebf019453ed85",
   "question-codex+permission-grok": "6bd3449350f642e9",
-  "question-codex+permission-hermes": "3289d64169eef765",
+  "question-codex+permission-hermes": "10d4fa6d5bb1e8f1",
   "question-codex+permission-muse": "5bdf5440eb585199",
   "question-codex+permission-opencode": "95cf958ef62ef3ca",
   "question-codex+question-agy": "89ef7e1ce6cac40a",
@@ -8689,12 +8709,12 @@
   "question-commandcode-review+permission-claude": "35c6cc90a42b8399",
   "question-commandcode-review+permission-codex": "181ebadf9b5e8836",
   "question-commandcode-review+permission-commandcode": "e853ac3d5e785580",
-  "question-commandcode-review+permission-copilot": "f2549634edb2b985",
+  "question-commandcode-review+permission-copilot": "9a6ef96d8675078e",
   "question-commandcode-review+permission-cursor": "03cac003ff8da3b9",
   "question-commandcode-review+permission-devin-3000-11": "c849bc183879e3cd",
   "question-commandcode-review+permission-devin": "057ae12d8056e845",
   "question-commandcode-review+permission-grok": "d36b52102417f605",
-  "question-commandcode-review+permission-hermes": "2fcbc470799b66ee",
+  "question-commandcode-review+permission-hermes": "76d0231c3b754252",
   "question-commandcode-review+permission-muse": "d8fb5e29a0b9f470",
   "question-commandcode-review+permission-opencode": "52f4f9da92efdfe4",
   "question-commandcode-review+question-agy": "4cf868953f4a888f",
@@ -8722,12 +8742,12 @@
   "question-commandcode+permission-claude": "35c6cc90a42b8399",
   "question-commandcode+permission-codex": "181ebadf9b5e8836",
   "question-commandcode+permission-commandcode": "e853ac3d5e785580",
-  "question-commandcode+permission-copilot": "f2549634edb2b985",
+  "question-commandcode+permission-copilot": "9a6ef96d8675078e",
   "question-commandcode+permission-cursor": "d090e82f29726ec8",
   "question-commandcode+permission-devin-3000-11": "0334b21305d01ea1",
   "question-commandcode+permission-devin": "1d310bb8aa3074c9",
   "question-commandcode+permission-grok": "38f4dd5413297fb3",
-  "question-commandcode+permission-hermes": "2fcbc470799b66ee",
+  "question-commandcode+permission-hermes": "76d0231c3b754252",
   "question-commandcode+permission-muse": "d8fb5e29a0b9f470",
   "question-commandcode+permission-opencode": "52f4f9da92efdfe4",
   "question-commandcode+question-agy": "caa0cd848f92d9c6",
@@ -8755,12 +8775,12 @@
   "question-copilot+permission-claude": "d6100045716a43ce",
   "question-copilot+permission-codex": "a6bbd2c146d34b8b",
   "question-copilot+permission-commandcode": "8fc7af7d625dff12",
-  "question-copilot+permission-copilot": "83b3eb8e2dae095f",
+  "question-copilot+permission-copilot": "90703562c6ecb1fd",
   "question-copilot+permission-cursor": "59920eefc307f582",
   "question-copilot+permission-devin-3000-11": "810b74dd4de624be",
   "question-copilot+permission-devin": "1361be8c53b3805c",
   "question-copilot+permission-grok": "30625185467abafc",
-  "question-copilot+permission-hermes": "3289d64169eef765",
+  "question-copilot+permission-hermes": "10d4fa6d5bb1e8f1",
   "question-copilot+permission-muse": "b849934d082fa307",
   "question-copilot+permission-opencode": "5de99d1e7fac6e7f",
   "question-copilot+question-agy": "ef29e70d5076ad91",
@@ -8788,12 +8808,12 @@
   "question-devin-3000-11+permission-claude": "59b70db4f18090e1",
   "question-devin-3000-11+permission-codex": "5d7f730199a2a1a8",
   "question-devin-3000-11+permission-commandcode": "c1e59accd1ec176a",
-  "question-devin-3000-11+permission-copilot": "83b3eb8e2dae095f",
+  "question-devin-3000-11+permission-copilot": "90703562c6ecb1fd",
   "question-devin-3000-11+permission-cursor": "4cc515fc9a8e0409",
   "question-devin-3000-11+permission-devin-3000-11": "d396da9d118877e7",
   "question-devin-3000-11+permission-devin": "238ad1110abfae78",
   "question-devin-3000-11+permission-grok": "6a3d10bbc91c4e4b",
-  "question-devin-3000-11+permission-hermes": "882b6c02e3b08365",
+  "question-devin-3000-11+permission-hermes": "02e121b3aad9ea49",
   "question-devin-3000-11+permission-muse": "57cf7f2724b6be9b",
   "question-devin-3000-11+permission-opencode": "dcec46e3aee92ab3",
   "question-devin-3000-11+question-agy": "b4f4822b7a4ba6a7",
@@ -8821,12 +8841,12 @@
   "question-devin-multi-3000-11+permission-claude": "2ba617c39891953d",
   "question-devin-multi-3000-11+permission-codex": "2a90e95495817b45",
   "question-devin-multi-3000-11+permission-commandcode": "c1e59accd1ec176a",
-  "question-devin-multi-3000-11+permission-copilot": "83b3eb8e2dae095f",
+  "question-devin-multi-3000-11+permission-copilot": "90703562c6ecb1fd",
   "question-devin-multi-3000-11+permission-cursor": "ab6beb6e4966daec",
   "question-devin-multi-3000-11+permission-devin-3000-11": "d396da9d118877e7",
   "question-devin-multi-3000-11+permission-devin": "238ad1110abfae78",
   "question-devin-multi-3000-11+permission-grok": "cbefa4766654a19a",
-  "question-devin-multi-3000-11+permission-hermes": "e8e3b8b655098de5",
+  "question-devin-multi-3000-11+permission-hermes": "d1d5d4a2ae0d6c33",
   "question-devin-multi-3000-11+permission-muse": "32a394d6fb163183",
   "question-devin-multi-3000-11+permission-opencode": "1c6f0169ee571b98",
   "question-devin-multi-3000-11+question-agy": "b4f4822b7a4ba6a7",
@@ -8854,12 +8874,12 @@
   "question-devin-multi+permission-claude": "079e6822dedd0e9b",
   "question-devin-multi+permission-codex": "9520cfdd509433e7",
   "question-devin-multi+permission-commandcode": "c1e59accd1ec176a",
-  "question-devin-multi+permission-copilot": "83b3eb8e2dae095f",
+  "question-devin-multi+permission-copilot": "90703562c6ecb1fd",
   "question-devin-multi+permission-cursor": "71fe7940e486647f",
   "question-devin-multi+permission-devin-3000-11": "d396da9d118877e7",
   "question-devin-multi+permission-devin": "238ad1110abfae78",
   "question-devin-multi+permission-grok": "0366ca82575a6e06",
-  "question-devin-multi+permission-hermes": "ceea2002a6691d8c",
+  "question-devin-multi+permission-hermes": "077b0086746e18d8",
   "question-devin-multi+permission-muse": "601e13dd692531ce",
   "question-devin-multi+permission-opencode": "53937b0afa615f33",
   "question-devin-multi+question-agy": "b4f4822b7a4ba6a7",
@@ -8887,12 +8907,12 @@
   "question-devin+permission-claude": "a77209de9485f062",
   "question-devin+permission-codex": "3eba5a5eac575a14",
   "question-devin+permission-commandcode": "c1e59accd1ec176a",
-  "question-devin+permission-copilot": "83b3eb8e2dae095f",
+  "question-devin+permission-copilot": "90703562c6ecb1fd",
   "question-devin+permission-cursor": "a940104ba33acffc",
   "question-devin+permission-devin-3000-11": "d396da9d118877e7",
   "question-devin+permission-devin": "238ad1110abfae78",
   "question-devin+permission-grok": "c22f2d4656031118",
-  "question-devin+permission-hermes": "e8f2d51c5884b8fb",
+  "question-devin+permission-hermes": "ab555757c86f4deb",
   "question-devin+permission-muse": "859173cec48eec99",
   "question-devin+permission-opencode": "2ff0cfaf6b950321",
   "question-devin+question-agy": "b4f4822b7a4ba6a7",
@@ -8920,12 +8940,12 @@
   "question-grok+permission-claude": "b4adba57395ee92b",
   "question-grok+permission-codex": "788a16779b4071a9",
   "question-grok+permission-commandcode": "5e7b456472b4cb16",
-  "question-grok+permission-copilot": "750a8501df8d9110",
+  "question-grok+permission-copilot": "33bac346e12dd6f0",
   "question-grok+permission-cursor": "ca3e47b5ba713a10",
   "question-grok+permission-devin-3000-11": "0f5b8b70de49655f",
   "question-grok+permission-devin": "e7811dcac7c41482",
   "question-grok+permission-grok": "dc78b516f9868408",
-  "question-grok+permission-hermes": "172993bb1c4ed84c",
+  "question-grok+permission-hermes": "a834dc966e3f1d3f",
   "question-grok+permission-muse": "f42d921bb3242929",
   "question-grok+permission-opencode": "7320fdbc90044c1e",
   "question-grok+question-agy": "a1eb3f10657664d5",
@@ -8953,12 +8973,12 @@
   "question-hermes-lock+permission-claude": "6846d1b2bf9b2532",
   "question-hermes-lock+permission-codex": "a6bbd2c146d34b8b",
   "question-hermes-lock+permission-commandcode": "c1e59accd1ec176a",
-  "question-hermes-lock+permission-copilot": "f3ce0abce1bcd6cd",
+  "question-hermes-lock+permission-copilot": "22a8ecf274a0c0ab",
   "question-hermes-lock+permission-cursor": "580730111ec9e62b",
   "question-hermes-lock+permission-devin-3000-11": "22f816a8a3415966",
   "question-hermes-lock+permission-devin": "9cb737a4cc185d92",
   "question-hermes-lock+permission-grok": "2fac96b49730ab2c",
-  "question-hermes-lock+permission-hermes": "3289d64169eef765",
+  "question-hermes-lock+permission-hermes": "10d4fa6d5bb1e8f1",
   "question-hermes-lock+permission-muse": "9fbabdc90b9e6b7a",
   "question-hermes-lock+permission-opencode": "4f15ac3d8d9bb405",
   "question-hermes-lock+question-agy": "fb7bb03c23561498",
@@ -8986,12 +9006,12 @@
   "question-hermes+permission-claude": "35c6cc90a42b8399",
   "question-hermes+permission-codex": "181ebadf9b5e8836",
   "question-hermes+permission-commandcode": "e853ac3d5e785580",
-  "question-hermes+permission-copilot": "400267dfec56e2b2",
+  "question-hermes+permission-copilot": "9c7f2adc28844afd",
   "question-hermes+permission-cursor": "fa148f0e042ba072",
   "question-hermes+permission-devin-3000-11": "b65788cd04a0a6b3",
   "question-hermes+permission-devin": "afe9bf1bff1061b0",
   "question-hermes+permission-grok": "868a6480f1ae9e55",
-  "question-hermes+permission-hermes": "2fcbc470799b66ee",
+  "question-hermes+permission-hermes": "76d0231c3b754252",
   "question-hermes+permission-muse": "05a6084636d9b775",
   "question-hermes+permission-opencode": "659c80c0743605f6",
   "question-hermes+question-agy": "b0c9618565925643",
@@ -9019,12 +9039,12 @@
   "question-kilo+permission-claude": "d2ceb1cf59110296",
   "question-kilo+permission-codex": "1181f84420095799",
   "question-kilo+permission-commandcode": "10d5f0783579b21f",
-  "question-kilo+permission-copilot": "c9089d7d476840df",
+  "question-kilo+permission-copilot": "671a2f3eb570fe62",
   "question-kilo+permission-cursor": "2021a5099c0549a8",
   "question-kilo+permission-devin-3000-11": "3b464fa0a918ed72",
   "question-kilo+permission-devin": "9c077618eb241384",
   "question-kilo+permission-grok": "01fe857536c0fa0c",
-  "question-kilo+permission-hermes": "df352355ef685b7c",
+  "question-kilo+permission-hermes": "fb5008d1ccf9c5d5",
   "question-kilo+permission-muse": "50454864c066bacb",
   "question-kilo+permission-opencode": "86816c52ee47d65c",
   "question-kilo+question-agy": "ec1d1176f251060f",
@@ -9052,12 +9072,12 @@
   "question-multi+permission-claude": "b4aa7ac6c86bfb77",
   "question-multi+permission-codex": "38d45e9ccf5a4454",
   "question-multi+permission-commandcode": "215835e31c5e34f0",
-  "question-multi+permission-copilot": "f069abe92b18bf6f",
+  "question-multi+permission-copilot": "2910400bd7ac2b3e",
   "question-multi+permission-cursor": "72f69a7c44347a46",
   "question-multi+permission-devin-3000-11": "ed051efe91dd4721",
   "question-multi+permission-devin": "d190a60fd0589718",
   "question-multi+permission-grok": "9c11b796ee0313f2",
-  "question-multi+permission-hermes": "0f82d055b14475b3",
+  "question-multi+permission-hermes": "40543a0987c67029",
   "question-multi+permission-muse": "132e62ebaff3130f",
   "question-multi+permission-opencode": "36f157db38d0473f",
   "question-multi+question-agy": "c99af4271e6a3096",
@@ -9085,12 +9105,12 @@
   "question-muse+permission-claude": "b4aa7ac6c86bfb77",
   "question-muse+permission-codex": "38d45e9ccf5a4454",
   "question-muse+permission-commandcode": "f82b17ac6cc6957a",
-  "question-muse+permission-copilot": "83b3eb8e2dae095f",
+  "question-muse+permission-copilot": "90703562c6ecb1fd",
   "question-muse+permission-cursor": "11b8962180810d7d",
   "question-muse+permission-devin-3000-11": "0a576602f32956e2",
   "question-muse+permission-devin": "b41abb2fa371b301",
   "question-muse+permission-grok": "bdbb2e53f71ca981",
-  "question-muse+permission-hermes": "ce5be39da063ed6f",
+  "question-muse+permission-hermes": "58a6bcf19159930d",
   "question-muse+permission-muse": "e71f995b60c2c432",
   "question-muse+permission-opencode": "98a985b50c4fad4d",
   "question-muse+question-agy": "91e40e141c0e1067",
@@ -9118,12 +9138,12 @@
   "question-opencode-review+permission-claude": "b8bd6cf347d4453a",
   "question-opencode-review+permission-codex": "8bf8786b7a7b5db1",
   "question-opencode-review+permission-commandcode": "c9ffb5287597bbdd",
-  "question-opencode-review+permission-copilot": "fe0296fe5b2d847b",
+  "question-opencode-review+permission-copilot": "462a9bcecb4627a9",
   "question-opencode-review+permission-cursor": "6a7505c7129694c7",
   "question-opencode-review+permission-devin-3000-11": "7ea1838ad939cd27",
   "question-opencode-review+permission-devin": "e76f329e5a54872a",
   "question-opencode-review+permission-grok": "5a067fa0be322494",
-  "question-opencode-review+permission-hermes": "b0e67e0e288f7335",
+  "question-opencode-review+permission-hermes": "e9bef2238364653f",
   "question-opencode-review+permission-muse": "b071b530fb234160",
   "question-opencode-review+permission-opencode": "86816c52ee47d65c",
   "question-opencode-review+question-agy": "0f0d89e34ce82318",
@@ -9151,12 +9171,12 @@
   "question-opencode+permission-claude": "b8bd6cf347d4453a",
   "question-opencode+permission-codex": "8bf8786b7a7b5db1",
   "question-opencode+permission-commandcode": "c9ffb5287597bbdd",
-  "question-opencode+permission-copilot": "fe0296fe5b2d847b",
+  "question-opencode+permission-copilot": "462a9bcecb4627a9",
   "question-opencode+permission-cursor": "8920c504e67c562e",
   "question-opencode+permission-devin-3000-11": "db19d5de9dae3809",
   "question-opencode+permission-devin": "3c72d8c5ad140719",
   "question-opencode+permission-grok": "fac5242230879eac",
-  "question-opencode+permission-hermes": "b0e67e0e288f7335",
+  "question-opencode+permission-hermes": "e9bef2238364653f",
   "question-opencode+permission-muse": "b071b530fb234160",
   "question-opencode+permission-opencode": "86816c52ee47d65c",
   "question-opencode+question-agy": "55b372475a3f5824",
@@ -9184,12 +9204,12 @@
   "question-review+permission-claude": "35c6cc90a42b8399",
   "question-review+permission-codex": "181ebadf9b5e8836",
   "question-review+permission-commandcode": "e853ac3d5e785580",
-  "question-review+permission-copilot": "f2549634edb2b985",
+  "question-review+permission-copilot": "9a6ef96d8675078e",
   "question-review+permission-cursor": "03cac003ff8da3b9",
   "question-review+permission-devin-3000-11": "c849bc183879e3cd",
   "question-review+permission-devin": "057ae12d8056e845",
   "question-review+permission-grok": "d36b52102417f605",
-  "question-review+permission-hermes": "2fcbc470799b66ee",
+  "question-review+permission-hermes": "76d0231c3b754252",
   "question-review+permission-muse": "d8fb5e29a0b9f470",
   "question-review+permission-opencode": "52f4f9da92efdfe4",
   "question-review+question-agy": "4cf868953f4a888f",
@@ -9217,12 +9237,12 @@
   "question-single+permission-claude": "54459b1153bdbea9",
   "question-single+permission-codex": "a90384cf0debdc59",
   "question-single+permission-commandcode": "a0ba77ba72f56698",
-  "question-single+permission-copilot": "400267dfec56e2b2",
+  "question-single+permission-copilot": "9c7f2adc28844afd",
   "question-single+permission-cursor": "9d8b21a8a342facd",
   "question-single+permission-devin-3000-11": "371e8848f9ca3dbd",
   "question-single+permission-devin": "ff340438b94075af",
   "question-single+permission-grok": "ee27075f2192b9bc",
-  "question-single+permission-hermes": "2d0855b4b4062ed2",
+  "question-single+permission-hermes": "c1911e8e72b514f5",
   "question-single+permission-muse": "620ac5d1248dbb8e",
   "question-single+permission-opencode": "a383c5a4b85e8b14",
   "question-single+question-agy": "bf56b3372caae76d",
@@ -9250,12 +9270,12 @@
   "question-tabs+permission-claude": "b4aa7ac6c86bfb77",
   "question-tabs+permission-codex": "38d45e9ccf5a4454",
   "question-tabs+permission-commandcode": "215835e31c5e34f0",
-  "question-tabs+permission-copilot": "f069abe92b18bf6f",
+  "question-tabs+permission-copilot": "2910400bd7ac2b3e",
   "question-tabs+permission-cursor": "2acbfcf69dd96a3c",
   "question-tabs+permission-devin-3000-11": "b30ca57a2819f675",
   "question-tabs+permission-devin": "1d06e0e87661c742",
   "question-tabs+permission-grok": "7aa7b5e2e0934b2b",
-  "question-tabs+permission-hermes": "c7038ae61dbe1c5e",
+  "question-tabs+permission-hermes": "012c5968b08b3564",
   "question-tabs+permission-muse": "132e62ebaff3130f",
   "question-tabs+permission-opencode": "98d3ee542928254a",
   "question-tabs+question-agy": "79b0dc1445355c0e",

@@ -1164,10 +1164,10 @@ describe('the review\'s simulation: a real QuestionWatcher and AskQuestionContro
     expect(w.keys).toEqual([])
   })
 
-  // Hermes and Copilot box an approval's command with no `$ ` line, so isApprovalDialog does not see it as one: it must
-  // still never keep its id once its command changes under the same words. Hermes titles it by the URL line, not the
-  // command above it; Copilot folds the boxed value into the question cut at 120 characters, so a long one's tail is
-  // in the dialog alone.
+  // Hermes and Copilot box an approval's command with no `$ ` line, and a long one pushes the title isApprovalDialog
+  // reads out of the dialog: it must still never keep its id once its command changes under the same words. Hermes
+  // titles it by the URL line, not the command above it; Copilot folds the boxed value into the question cut at 120
+  // characters, so a long one's tail is in the dialog alone.
   const longSubject = (tail: string): string => `│ │ https://example.com/${'a'.repeat(110)}/${tail} `
   it.each([
     ['permission-hermes.txt', 'hermes', '│ curl -s ', '│ curl -s ', '│ rm -rf  ', 'Allow once'],
