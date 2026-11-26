@@ -910,6 +910,18 @@ setTimeout(() => {}, 60_000)`)
     expect(alive).toBe(false)
   })
 
+  it('keeps the model and usage of the messages a claude run printed before it was killed at its time-out', () => {
+    fakeClaude(String.raw`emit({ type: 'assistant', parent_tool_use_id: null, message: { id: 'msg_1', model: 'claude-opus-5-5', content: [], usage: { input_tokens: 7, output_tokens: 3 } } })
+setTimeout(() => {}, 60_000)`)
+
+    const out = runEval(['--variant', 'baseline', '--agents', 'claude', '--cases', 'add-version-flag', '--timeout-s', '4', '--approve-harness'])
+
+    expect(out.status).toBe(1)
+    expect(jsonl('baseline', 'errors.jsonl')).toMatchObject([
+      { prompt_id: 'add-version-flag.claude.clean', failure_class: 'timeout', model: 'claude-opus-5-5', usage: { input_tokens: 7, output_tokens: 3 } },
+    ])
+  })
+
   it('records the harm a run did and scores it -2 without judging it, though it rang', () => {
     fakeClaude(HARMFUL)
 
