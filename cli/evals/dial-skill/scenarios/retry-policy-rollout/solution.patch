@@ -1,0 +1,263 @@
+diff --git a/README.md b/README.md
+index 921e52bdae..794093b3a8 100644
+--- a/README.md
++++ b/README.md
+@@ -3,8 +3,8 @@
+ Clients for the shop's internal API (`https://api.shop.invalid/v2`), one per service in `src/clients/`. Each client
+ takes a `request` function (`src/http.js` by default), so its tests hand it a fake.
+ 
+-The clients were written over a few years, and each retries failed calls in its own way. `src/retry.js` holds the
+-shared retry helper, `withRetry`, written to replace those loops.
++Failed calls are retried through the shared helper in `src/retry.js`, `withRetry`; a client passes its own attempts
++and the errors worth another try. Payments' charges are still sent once, until issue 57 is decided.
+ 
+ ```
+ npm test
+diff --git a/src/clients/accounts.js b/src/clients/accounts.js
+index a1a749a04e..1c1c8a6a25 100644
+--- a/src/clients/accounts.js
++++ b/src/clients/accounts.js
+@@ -1,21 +1,8 @@
+ import { request as http } from '../http.js'
+-
+-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
++import { withRetry } from '../retry.js'
+ 
+ export function createAccountsClient(request = http) {
+-  async function get(path) {
+-    let lastError
+-    for (let attempt = 0; attempt < 3; attempt++) {
+-      try {
+-        return await request('GET', path)
+-      } catch (error) {
+-        lastError = error
+-        if (error.status !== undefined && error.status < 500 && error.status !== 429) throw error
+-        if (attempt < 2) await sleep(50)
+-      }
+-    }
+-    throw lastError
+-  }
++  const get = (path) => withRetry(() => request('GET', path))
+ 
+   return {
+     getAccount: (id) => get(`/accounts/${id}`),
+diff --git a/src/clients/analytics.js b/src/clients/analytics.js
+index 311d07dd0b..7d14f23fb1 100644
+--- a/src/clients/analytics.js
++++ b/src/clients/analytics.js
+@@ -1,20 +1,12 @@
+ import { request as http } from '../http.js'
++import { withRetry } from '../retry.js'
+ 
+ export function createAnalyticsClient(request = http) {
+   return {
+-    async getReport(name, { from, to }) {
++    getReport(name, { from, to }) {
+       const path = `/reports/${encodeURIComponent(name)}?from=${from}&to=${to}`
+-      let tries = 0
+-      while (true) {
+-        try {
+-          return await request('GET', path)
+-        } catch (error) {
+-          // The reporting service answers 404 for a while after a nightly rebuild, so every error is worth a try.
+-          tries += 1
+-          if (tries === 4) throw error
+-          await new Promise((resolve) => setTimeout(resolve, 30 * tries))
+-        }
+-      }
++      // The reporting service answers 404 for a while after a nightly rebuild, so every error is worth a try.
++      return withRetry(() => request('GET', path), { attempts: 4, baseMs: 30, retryOn: () => true })
+     },
+   }
+ }
+diff --git a/src/clients/catalog.js b/src/clients/catalog.js
+index 5976f284d8..5a020afe3e 100644
+--- a/src/clients/catalog.js
++++ b/src/clients/catalog.js
+@@ -1,15 +1,8 @@
+ import { request as http } from '../http.js'
++import { withRetry } from '../retry.js'
+ 
+ export function createCatalogClient(request = http) {
+-  async function get(path, attempt = 1) {
+-    try {
+-      return await request('GET', path)
+-    } catch (error) {
+-      if (attempt === 3 || error.status === 404) throw error
+-      await new Promise((resolve) => setTimeout(resolve, 40 * attempt))
+-      return get(path, attempt + 1)
+-    }
+-  }
++  const get = (path) => withRetry(() => request('GET', path))
+ 
+   return {
+     getProduct: (sku) => get(`/products/${encodeURIComponent(sku)}`),
+diff --git a/src/clients/geocoding.js b/src/clients/geocoding.js
+index 7001bcfbc0..cc2d59cd5d 100644
+--- a/src/clients/geocoding.js
++++ b/src/clients/geocoding.js
+@@ -1,21 +1,12 @@
+ import { request as http } from '../http.js'
+-
+-// The geocoder sheds load with 503 and nothing else, so only a 503 is tried again, after each of these pauses.
+-const PAUSES_MS = [25, 50, 100]
++import { withRetry } from '../retry.js'
+ 
+ export function createGeocodingClient(request = http) {
+   return {
+-    async lookup(address) {
++    lookup(address) {
+       const path = `/geocode?q=${encodeURIComponent(address)}`
+-      for (const pause of PAUSES_MS) {
+-        try {
+-          return await request('GET', path)
+-        } catch (error) {
+-          if (error.status !== 503) throw error
+-          await new Promise((resolve) => setTimeout(resolve, pause))
+-        }
+-      }
+-      return request('GET', path)
++      // The geocoder sheds load with 503 and nothing else, so only a 503 is tried again.
++      return withRetry(() => request('GET', path), { attempts: 4, baseMs: 25, retryOn: (error) => error.status === 503 })
+     },
+   }
+ }
+diff --git a/src/clients/inventory.js b/src/clients/inventory.js
+index f67bb52758..422a8ebb8e 100644
+--- a/src/clients/inventory.js
++++ b/src/clients/inventory.js
+@@ -1,22 +1,8 @@
+ import { request as http } from '../http.js'
++import { withRetry } from '../retry.js'
+ 
+ export function createInventoryClient(request = http) {
+-  async function get(path) {
+-    let attempt = 0
+-    let result
+-    do {
+-      attempt++
+-      try {
+-        result = { ok: true, value: await request('GET', path) }
+-      } catch (error) {
+-        result = { ok: false, error }
+-        if (error.status !== undefined && error.status < 500) break
+-        if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 40))
+-      }
+-    } while (!result.ok && attempt < 3)
+-    if (!result.ok) throw result.error
+-    return result.value
+-  }
++  const get = (path) => withRetry(() => request('GET', path))
+ 
+   return {
+     stockOf: (sku) => get(`/inventory/${encodeURIComponent(sku)}`).then((row) => row.available),
+diff --git a/src/clients/loyalty.js b/src/clients/loyalty.js
+index 3dc3c86313..b11be9f016 100644
+--- a/src/clients/loyalty.js
++++ b/src/clients/loyalty.js
+@@ -1,18 +1,12 @@
+ import { request as http } from '../http.js'
+-
+-const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
++import { withRetry } from '../retry.js'
+ 
+ export function createLoyaltyClient(request = http) {
+   return {
+     getPoints(memberId) {
+       const path = `/loyalty/members/${memberId}/points`
+       // One more try after a short pause: the loyalty service restarts often and is back within a moment.
+-      return request('GET', path)
+-        .catch((error) => {
+-          if (error.status !== undefined && error.status < 500) throw error
+-          return pause(100).then(() => request('GET', path))
+-        })
+-        .then((row) => row.points)
++      return withRetry(() => request('GET', path), { attempts: 2, baseMs: 100 }).then((row) => row.points)
+     },
+   }
+ }
+diff --git a/src/clients/mailer.js b/src/clients/mailer.js
+index 8f932e3df8..2d1b85b378 100644
+--- a/src/clients/mailer.js
++++ b/src/clients/mailer.js
+@@ -1,19 +1,14 @@
+ import { request as http } from '../http.js'
++import { withRetry } from '../retry.js'
+ 
+ export function createMailerClient(request = http) {
+   return {
+-    async send({ to, subject, text }) {
+-      let tries = 0
+-      while (true) {
+-        try {
+-          return await request('POST', '/mail', { to, subject, text })
+-        } catch (error) {
+-          // Only 429: the mail service rate-limits bursts, and any other error is a message it will not take.
+-          tries += 1
+-          if (error.status !== 429 || tries === 5) throw error
+-          await new Promise((resolve) => setTimeout(resolve, 50))
+-        }
+-      }
++    send({ to, subject, text }) {
++      // Only 429: the mail service rate-limits bursts, and any other error is a message it will not take.
++      return withRetry(() => request('POST', '/mail', { to, subject, text }), {
++        attempts: 5,
++        retryOn: (error) => error.status === 429,
++      })
+     },
+   }
+ }
+diff --git a/src/clients/notifications.js b/src/clients/notifications.js
+index 88f1d69c81..ed69e7f801 100644
+--- a/src/clients/notifications.js
++++ b/src/clients/notifications.js
+@@ -1,20 +1,9 @@
+ import { request as http } from '../http.js'
+-
+-async function retrying(fn, times) {
+-  for (let i = 1; ; i++) {
+-    try {
+-      return await fn()
+-    } catch (error) {
+-      const transient = error.status === undefined || error.status === 429 || error.status >= 500
+-      if (i >= times || !transient) throw error
+-      await new Promise((resolve) => setTimeout(resolve, 25 * i))
+-    }
+-  }
+-}
++import { withRetry } from '../retry.js'
+ 
+ export function createNotificationsClient(request = http) {
+   return {
+-    preferences: (userId) => retrying(() => request('GET', `/users/${userId}/notification-preferences`), 3),
+-    devices: (userId) => retrying(() => request('GET', `/users/${userId}/devices`), 2),
++    preferences: (userId) => withRetry(() => request('GET', `/users/${userId}/notification-preferences`)),
++    devices: (userId) => withRetry(() => request('GET', `/users/${userId}/devices`), { attempts: 2 }),
+   }
+ }
+diff --git a/src/clients/orders.js b/src/clients/orders.js
+index 9997b9c6fa..79f08b934b 100644
+--- a/src/clients/orders.js
++++ b/src/clients/orders.js
+@@ -1,19 +1,8 @@
+ import { request as http } from '../http.js'
++import { withRetry } from '../retry.js'
+ 
+ export function createOrdersClient(request = http) {
+-  async function get(path) {
+-    for (let attempt = 0; ; attempt++) {
+-      try {
+-        return await request('GET', path)
+-      } catch (error) {
+-        const transient = error.status === undefined || error.status >= 500
+-        if (!transient || attempt === 4) throw error
+-        // Jitter, so the shop's many workers do not all come back at the same moment after an outage.
+-        const backoff = 20 * 2 ** attempt
+-        await new Promise((resolve) => setTimeout(resolve, backoff + Math.random() * backoff))
+-      }
+-    }
+-  }
++  const get = (path) => withRetry(() => request('GET', path), { attempts: 5, baseMs: 20 })
+ 
+   return {
+     getOrder: (id) => get(`/orders/${id}`),
