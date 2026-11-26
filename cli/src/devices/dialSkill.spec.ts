@@ -111,7 +111,8 @@ When the task needs a decision or an action only the person can take, ring their
     expect(DIAL_SKILL_DESCRIPTION).not.toMatch(/[<>&]/)
   })
 
-  // Harness knows its own file by its size: one at 4096 bytes or more is the person's.
+  // Harness reads a file at the skill's path only up to 4096 bytes: a longer one is the person's. The spec keeps the
+  // text under that line.
   it('the skill is under 4096 bytes', () => {
     expect(Buffer.byteLength(DIAL_SKILL)).toBeLessThan(4096)
   })
