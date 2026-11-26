@@ -418,7 +418,7 @@ describe.skipIf(!hcBinary)("Herdr's agents on the dial, from a private Herdr Cor
     // stroke goes nowhere, and herdr-app scrolls nothing.
     shown('tbzzzz')
     await stroke([8, 8, 8])
-    await said(d, '[device] scroll · herdr-app · not on screen')
+    await said(d, '[device] scroll · skipped · not on screen')
 
     // 5. Orca in front: the stroke goes nowhere, and herdr-app is not asked.
     shown(TAB)
@@ -442,7 +442,7 @@ describe.skipIf(!hcBinary)("Herdr's agents on the dial, from a private Herdr Cor
     expect(tallies.every((tally) => tally.dropped === 0)).toBe(true)
     expect(sum(tallies.map((tally) => tally.lines))).toBe(3)
     const log = d.log()
-    expect(log.split('\n').filter((line) => line.endsWith('[device] scroll · herdr-app · not on screen'))).toHaveLength(1)
+    expect(log.split('\n').filter((line) => line.endsWith('[device] scroll · skipped · not on screen'))).toHaveLength(1)
     expect(log).not.toContain('[herdr-app] scroll · failed')
     expect(log).not.toContain('[herdr-app] status · failed')
     expect(log).not.toMatch(new RegExp(`(^|[^A-Za-z0-9_])${t}([^A-Za-z0-9_]|$)`, 'm'))
