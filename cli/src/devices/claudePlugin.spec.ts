@@ -301,13 +301,13 @@ describe('a plugin listed while its folder is gone', () => {
     }
   })
 
-  // Nothing is added or installed, so the call goes on: the setup gives the folder's code beside its outcome, and the
+  // The setup fails with the folder's code and runs nothing, as the update does: Claude Code would read nothing. The
   // enable turns the plugin on, then fails with the folder's.
-  it('a folder that cannot be written is the setup\'s code, and the enable\'s failure once it ran', async () => {
+  it('a folder that cannot be written fails the setup, and the enable once it ran', async () => {
     const unwritten = { ok: false, step: 'folder', reason: 'EACCES', error: "Harness could not write Claude Code's plugin folder." }
     for (const [entry, act, done, writes] of [
-      [USER_ON, claudeSetUp, { ok: true, outcome: 'current', folderFailed: 'EACCES' }, []],
-      [USER_OFF, claudeSetUp, { ok: true, outcome: 'absent', folderFailed: 'EACCES' }, []],
+      [USER_ON, claudeSetUp, unwritten, []],
+      [USER_OFF, claudeSetUp, unwritten, []],
       [USER_ON, claudeEnable, unwritten, []],
       [USER_OFF, claudeEnable, unwritten, [enable]],
     ] as const) {

@@ -247,8 +247,9 @@ describe('createDialPluginSetup', () => {
   })
 
   // Listed before the first setup with its folder gone (`harness uninstall` took Harness's data): the folder is written
-  // again, and one that cannot be is counted beside the plugin found as it is.
-  it('a first setup with the plugin listed writes the folder, and counts one it cannot write', async () => {
+  // again. One that cannot be fails the setup and waits its hour, as an update's does: recorded, the plugin would read
+  // nothing until the next CLI update.
+  it('a first setup with the plugin listed writes the folder, and one it cannot write is failed · folder, tried an hour later', async () => {
     const mended = rig(fakeClaude({ installed: entry('16a92abfab3f') }))
     expect(await mended.setup.pass()).toBe(false)
     expect(existsSync(join(mended.marketplace, '.claude-plugin', 'marketplace.json'))).toBe(true)
@@ -261,7 +262,10 @@ describe('createDialPluginSetup', () => {
     expect(await setup.pass()).toBe(false)
     expect(claude.writes()).toEqual([])
     expect(counted).toEqual([['failed', 'folder · EACCES']])
-    expect(state.recorded).toBe('0.6.59')
+    expect(state.recorded).toBeUndefined()
+    state.now = HOUR - 1
+    await setup.pass()
+    expect(state.lookups).toBe(1)
   })
 
   it('a plugin already on at the first setup is recorded and counts nothing', async () => {
