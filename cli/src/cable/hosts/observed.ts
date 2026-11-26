@@ -984,7 +984,11 @@ export class ObservedSource implements HostSource {
     entry.scanPlaced = undefined
     entry.scanNested = undefined
     if (same && e.event !== 'session-start' && e.event !== 'turn-start') return true
-    const ask = { pid: e.callerPid, hints: e.hostHints }
+    // The same caller's new ask keeps what the last one landed, a client in no listed app too (placeApp): a detached
+    // agent asked again at its next turn stays off its hints' app's page until the answer.
+    const ask: NonNullable<Entry['outerAsk']> = same && last.landed
+      ? { pid: e.callerPid, hints: e.hostHints, landed: true }
+      : { pid: e.callerPid, hints: e.hostHints }
     // Its multiplexer lands as soon as the maker's read confirms it, before the client's steps end (OuterLookup's made).
     const answer = this.deps.outer?.(e.hostHints, e.callerPid, (nest) => this.landOuter(entry, ask, nest))
     if (!same && !(scanned && answer && e.callerPid === entry.pid)) {
