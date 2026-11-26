@@ -84,6 +84,7 @@ const touch = (home: string): void => {
 }
 
 interface FakeOptions {
+  /** Read at each `--version`, so a spec can change it. */
   version?: string
   /** Calls that exit 1, with a line naming the home as Codex's own does. */
   fail?: string[]
@@ -98,7 +99,8 @@ interface FakeOptions {
  * `plugin add` copies the marketplace's plugin into the cache, turns it on and prints its JSON, `plugin remove` takes
  * both out again.
  */
-function fakeCodex(home: string, folder: string, { version = MIN_CODEX, fail = [], on, installed }: FakeOptions = {}) {
+function fakeCodex(home: string, folder: string, options: FakeOptions = {}) {
+  const { fail = [], on, installed } = options
   const calls: string[] = []
   const append = (text: string): void => writeFileSync(configFile(home), `${existsSync(configFile(home)) ? configOf(home) : ''}${text}`)
   const answer = (stdout = ''): ClaudeAnswer => ({ code: 0, stdout, stderr: '' })
@@ -107,7 +109,7 @@ function fakeCodex(home: string, folder: string, { version = MIN_CODEX, fail = [
     calls.push(call)
     on?.(call)
     if (fail.includes(call)) return { code: 1, stdout: '', stderr: `Error: ${home}/config.toml is read-only\n` }
-    if (call === '--version') return answer(`codex-cli ${version}\n`)
+    if (call === '--version') return answer(`codex-cli ${options.version ?? MIN_CODEX}\n`)
     if (call === `plugin marketplace add ${folder}`) {
       append(`[marketplaces.openharness]\nsource_type = "local"\nsource = ${JSON.stringify(realpathSync(folder))}\n`)
     }
@@ -656,6 +658,45 @@ describe('createDialCodexPluginSetup', () => {
     await r.setup.pass()
     expect(r.fake(home).calls).toEqual(['--version', '--version'])
     expect(r.counted).toEqual([])
+  })
+
+  it('below 0.172.0, one codex serves every home: asked once an hour, not once a home', async () => {
+    const r = rig()
+    const a = codexHome(), b = codexHome()
+    r.state.homes = [a, b]
+    for (const home of [a, b]) r.options.set(home, { version: '0.171.9' })
+    await r.setup.pass()
+    r.state.now = HOUR - 1
+    await r.setup.pass()
+    expect(r.looked).toEqual([a])
+    expect(r.fake(a).calls).toEqual(['--version'])
+
+    r.state.now = HOUR
+    await r.setup.pass()
+    expect(r.looked).toEqual([a, a])
+    expect(r.counted).toEqual([])
+    expect(r.records).toEqual([])
+  })
+
+  it('below 0.172.0, owed removals stop at the first home: one codex serves every home', async () => {
+    const r = rig()
+    const a = codexHome(), b = codexHome()
+    const codex: FakeOptions = { fail: [REMOVE], on: (call) => { if (call === ADD) r.state.wanted = false } }
+    for (const home of [a, b]) r.options.set(home, codex)
+    r.state.homes = [a]
+    await r.setup.pass()
+    // Within a's hour, b is set up, and its removal fails as well: both owed.
+    r.state.wanted = true
+    r.state.homes = [a, b]
+    r.state.now = 1
+    await r.setup.pass()
+    expect(r.counted).toEqual([['failed', 'remove'], ['failed', 'remove']])
+
+    codex.version = '0.171.9'
+    r.state.now = HOUR + 1
+    await r.setup.pass()
+    expect(r.looked).toEqual([a, b, a])
+    expect(r.fake(a).calls.at(-1)).toBe('--version')
   })
 
   // vitest and `npm run dev` run the sources, whose cli.js carries no plugin: nothing to install or trust from.
