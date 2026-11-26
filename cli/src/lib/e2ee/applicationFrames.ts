@@ -52,6 +52,8 @@ const MACHINE_REQUESTS = new Set([...SHELL_REQUESTS, 'agent_purge', 'agent_workt
   'agent_browser_start', 'agent_browser_stop', 'agent_browser_window',
   // A sign-in a phone caught for a page a harness's program opened (core/terminals/browser.ts): it holds the code.
   'browser_callback',
+  // An engine's sign-in from Chat UI (services/engineProbe.ts, lib/engineSignIn.ts): its page, its redirect and its code.
+  'engine_sign_in',
   // Another of the owner's machines following harnesses here (gateway/harnessWatch.ts): their ids and what they do.
   'harness_watch', ...ROUTE_COMMAND_TYPES])
 const MACHINE_RESULTS = new Set([...MACHINE_REQUESTS].map(type => `${type}_result`))

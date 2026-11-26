@@ -76,6 +76,9 @@ const Set<String> encryptedDownTypes = {
   // A sign-in this phone caught for a page a harness's program opened (`AppNotifier.browserCallback`): it
   // carries the code. A `MACHINE_REQUESTS` type in the CLI.
   'browser_callback',
+  // Claude Code or Codex signed in from Chat UI (`AppNotifier.engineSignIn`, CLI services/engineProbe.ts): its page,
+  // its redirect and its code. A `MACHINE_REQUESTS` type in the CLI.
+  'engine_sign_in',
   // A Harness OS computer managed from here (`AppNotifier.osDevice`, CLI services/osDevice.ts): its
   // update, and its Wi-Fi with the password. A `MACHINE_REQUESTS` type in the CLI.
   'os_device',

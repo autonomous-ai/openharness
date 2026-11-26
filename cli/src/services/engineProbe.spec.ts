@@ -77,6 +77,15 @@ describe('which engines this machine has, asked before a create', () => {
   })
 
   it('probes with the real probe unless given one', () => {
-    expect(Object.keys(startEngineProbe(fakeCore()))).toEqual(['engines_probe'])
+    expect(Object.keys(startEngineProbe(fakeCore()))).toEqual([...ENGINE_PROBE_REQUESTS])
+  })
+
+  // Chat UI's Sign in (Pixel, 2026-11-26): the engine's own login on this computer, asked by its owner alone.
+  it('signs an engine in for this computer\'s owner, and never for a guest', async () => {
+    const read = vi.fn(async (payload: Record<string, unknown>) => ({ ok: true, state: 'page', asked: payload.engine }))
+    const requests = startEngineProbe(fakeCore(), { signIns: { read } })
+    expect(await requests.engine_sign_in!({ operationId: 'op1', engine: 'claude' }, OWNER)).toEqual({ ok: true, state: 'page', asked: 'claude' })
+    expect(await requests.engine_sign_in!({ operationId: 'op1', engine: 'claude' }, GUEST)).toEqual({ error: 'OWNER_REQUIRED' })
+    expect(read).toHaveBeenCalledTimes(1)
   })
 })

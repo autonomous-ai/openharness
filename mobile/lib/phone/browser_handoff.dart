@@ -30,7 +30,14 @@ class BrowserHandoff {
   /// How long a sign-in may take before the phone stops listening for its redirect.
   static const listenFor = Duration(minutes: 10);
 
-  Future<void> open(String machineId, String url) async {
+  /// Opens [url] here and catches its redirect to this phone's own localhost. The redirect goes to the program that opened
+  /// the page (`browser_callback`), or, given [deliver], there: an engine's sign-in from Chat UI (`chat/engine_sign_in.dart`),
+  /// which says itself how it went.
+  Future<void> open(
+    String machineId,
+    String url, {
+    Future<void> Function(String caught)? deliver,
+  }) async {
     final page = Uri.tryParse(url);
     if (page == null || !(page.scheme == 'https' || page.scheme == 'http')) {
       return;
@@ -39,7 +46,7 @@ class BrowserHandoff {
     final redirect = Uri.tryParse(page.queryParameters['redirect_uri'] ?? '');
     await _stop();
     if (redirect != null && _loopback(redirect)) {
-      await _listen(machineId, redirect);
+      await _listen(machineId, redirect, deliver);
     }
     final opened = await launchUrl(
       page,
@@ -61,7 +68,11 @@ class BrowserHandoff {
       uri.hasPort;
 
   /// Both loopbacks: a browser may try `localhost` as ::1 before 127.0.0.1.
-  Future<void> _listen(String machineId, Uri redirect) async {
+  Future<void> _listen(
+    String machineId,
+    Uri redirect,
+    Future<void> Function(String caught)? deliver,
+  ) async {
     for (final address in [
       InternetAddress.loopbackIPv4,
       InternetAddress.loopbackIPv6,
@@ -70,7 +81,8 @@ class BrowserHandoff {
         final server = await HttpServer.bind(address, redirect.port);
         _servers.add(server);
         server.listen(
-          (request) => unawaited(_caught(machineId, redirect, request)),
+          (request) =>
+              unawaited(_caught(machineId, redirect, request, deliver)),
         );
         debugPrint('browser: listening on ${address.address}:${redirect.port}');
       } on SocketException {
@@ -85,6 +97,7 @@ class BrowserHandoff {
     String machineId,
     Uri redirect,
     HttpRequest request,
+    Future<void> Function(String caught)? deliver,
   ) async {
     if (request.uri.path != redirect.path) {
       request.response.statusCode = HttpStatus.notFound;
@@ -107,6 +120,10 @@ class BrowserHandoff {
     unawaited(closeInAppWebView().catchError((_) {}));
     final caught = redirect.replace(query: request.uri.query).toString();
     debugPrint('browser: caught the sign-in on port ${redirect.port}');
+    if (deliver != null) {
+      await deliver(caught);
+      return;
+    }
     // The line to the computer is often down while the browser covered the app: try until it is back.
     final deadline = DateTime.now().add(const Duration(minutes: 2));
     while (DateTime.now().isBefore(deadline)) {
