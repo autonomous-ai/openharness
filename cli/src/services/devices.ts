@@ -654,13 +654,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     return tab !== undefined && tab === source.tabTty(agentId)
   }
   /** The tab of the multiplexer client in the terminal VS Code or Cursor focused last, by that editor, none when the
-   *  client names no tab: tmux's pane poll reads that client there as a tab app's reported tab
-   *  (docs/plans/2026-11-26-dial-mux-host-pages-design.md §7). A focus on any other terminal drops it, as another
-   *  app's settle, or none's, does: one at most, as one window has the focus. */
+   *  client names no tab or that terminal is an agent's own: tmux's pane poll reads that client there as a tab app's
+   *  reported tab (docs/plans/2026-11-26-dial-mux-host-pages-design.md §7). A focus on any other terminal drops it, as
+   *  another app's settle, or none's, does: one at most, as one window has the focus. */
   const editorClients = new Map<string, string | undefined>()
   /** Of the multiplexer clients on [ttys] in [app], those the person may look at: where the app tells which, the one it
    *  told last (the tab a tab app reported selected, none before it reports one; the client in the terminal VS Code or
-   *  Cursor focused); an editor that told none (no Harness extension, or no terminal focused since it settled) its one
+   *  Cursor focused, none for an agent's own terminal); an editor that told none (no Harness extension, or no terminal focused since it settled) its one
    *  client, none of two, as before §7, which only adds to it; elsewhere every one. */
   const toldClients = (app: string, ttys: readonly string[]): readonly string[] => {
     if (reportsTabs(app)) return ttys.filter((tty) => tty === lastTabs.get(app))
@@ -3346,7 +3346,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const agents = observed.list()
     for (const app of ['vscode', 'cursor'] as const) {
       const own = agents.find(({ id }) => observed.paneOf(id, app) === `term:${pid}`)
-      if (own) return editorReported({ ...report, agentId: own.id, app })
+      if (own) {
+        // The editor told a terminal with no client: tmux's pane poll then follows none of its clients (toldClients).
+        editorClients.set(app, undefined)
+        return editorReported({ ...report, agentId: own.id, app })
+      }
       // A multiplexer client's terminal (vscodeTerminals.ts tells its pid): an agent's own parents never hold its
       // shell, the 23/11 known gap. Diego's point 1 named VS Code (docs/plans/2026-11-26-dial-mux-host-pages-design.md
       // §7).
