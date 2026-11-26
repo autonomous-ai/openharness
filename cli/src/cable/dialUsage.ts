@@ -55,8 +55,9 @@ export interface DialUsage {
   waitEnded(key: string, end: 'answered' | 'gone'): void
   /** Each notice the devices answer (cable/notices.ts `count`): `agent` is a notice naming no engine, counted `other`. */
   noticed(engine: 'claude' | 'codex' | 'agent', result: NoticeResult, kind: NoticeKind): void
-  /** That agent's notice was shown now: its person's next prompt within 10 min answers it. */
-  noticeShown(agentId: string): void
+  /** That agent's notice was shown now: its person's next prompt within 10 min answers it. [present]: held quiet, as the
+   *  person was with that agent. */
+  noticeShown(agentId: string, present: boolean): void
   /** A dial setup pass ended: the skill is looked for now, and at each UTC midnight from the first; nothing after stop(). */
   setupPassed(): void
   stop(): void
@@ -185,6 +186,7 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
     return true
   }
 
+  interface ShownNotice { at: number; present: boolean }
   interface Voice { agentId: string; host?: DialUsageHost; working: boolean; stop: () => void }
   const voices: Voice[] = [] // sent and waiting for their turn, oldest first
   let lastSent: { agentId: string; host?: DialUsageHost; at: number } | undefined
@@ -193,12 +195,15 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
   // started the turn: `codex queue` exits after an idle Codex started the queued turn, the window answers after it
   // delivered, a typing adapter finishes late. That turn belongs to the voice whose send began at or before it, and so
   // does the announced turn end before it, whose prompt the voice then was.
-  const unwaited = new Map<string, { at: number; announced?: number; notice?: number }>()
-  // agent → when its notice was shown, oldest first: one an agent, as the dial keeps one card an agent. Its next turn
-  // start spends it; an unplug keeps it, since the person's prompt is told by its hook with or without a dial.
-  const notices = new Map<string, number>()
-  const noticeAnswered = (shownAt: number | undefined, at: number) => {
-    if (shownAt !== undefined && at - shownAt < VALUE_MS) add('dial_notice_answered_10m')
+  const unwaited = new Map<string, { at: number; announced?: number; notice?: ShownNotice }>()
+  // agent → when its notice was shown and whether it was held quiet, oldest first: one an agent, as the dial keeps one
+  // card an agent. Its next turn start spends it; an unplug keeps it, since the person's prompt is told by its hook with
+  // or without a dial.
+  const notices = new Map<string, ShownNotice>()
+  const noticeAnswered = (notice: ShownNotice | undefined, at: number) => {
+    if (notice === undefined || at - notice.at >= VALUE_MS) return
+    add('dial_notice_answered_10m')
+    if (notice.present) add('dial_notice_present_answered_10m')
   }
   // agent → when the dial announced its turn end with its app not in front, oldest first; its next turn start spends it.
   const announced = new Map<string, number>()
@@ -349,24 +354,24 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
       ending.delete(agentId)
       const announcedAt = announced.get(agentId)
       announced.delete(agentId)
-      const noticeAt = notices.get(agentId)
+      const notice = notices.get(agentId)
       notices.delete(agentId)
       const voice = voices.find(v => v.agentId === agentId)
       if (!voice) {
         if (byPerson) {
           prompted(announcedAt, now())
-          noticeAnswered(noticeAt, now())
+          noticeAnswered(notice, now())
         }
         // Set after the delete above, so the map stays oldest first. Counted already, the announcement and the notice
         // are not kept.
-        unwaited.set(agentId, byPerson ? { at: now() } : { at: now(), announced: announcedAt, notice: noticeAt })
+        unwaited.set(agentId, byPerson ? { at: now() } : { at: now(), announced: announcedAt, notice })
         if (unwaited.size > UNWAITED_TURNS_MAX) unwaited.delete(unwaited.keys().next().value as string)
         return
       }
       voices.splice(voices.indexOf(voice), 1)
       voice.stop()
       prompted(announcedAt, now())
-      noticeAnswered(noticeAt, now())
+      noticeAnswered(notice, now())
       // Set after the delete above, so the map stays oldest first.
       deliver(agentId, voice.host, now())
     },
@@ -459,11 +464,12 @@ export function createDialUsage(deps: DialUsageDeps): DialUsage {
       add(`dial_notice_${kind}`)
     },
 
-    noticeShown(agentId) {
+    noticeShown(agentId, present) {
+      if (present) add('dial_notice_present')
       // A newer notice replaces the agent's older one, which ends uncounted. Set after the delete, so the map stays
       // oldest first.
       notices.delete(agentId)
-      notices.set(agentId, now())
+      notices.set(agentId, { at: now(), present })
       if (notices.size > NOTICES_PENDING_MAX) notices.delete(notices.keys().next().value as string)
     },
 
