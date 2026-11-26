@@ -356,10 +356,12 @@ class SelectionTests(unittest.TestCase):
                 self.assertNotIn("windows-e2e", planner.select([path])[0])
 
     def test_what_the_store_pipe_test_imports_is_listed(self):
-        # Walked from the test through store/ alone, so an import it gains selects windows-e2e and one it drops stops
-        # selecting it. Its one import outside store/ is the CLI's installed ws package, no code of the repository's.
-        full_checkout(self, "store/tools/windows-pipe.test.mjs", "store/agents")
-        run = imports_from(REPOSITORY, ["store/tools/windows-pipe.test.mjs"], ("store/",))
+        # Walked from the test, and from the pipe script check-install.ps1 runs, through store/ alone, so an import either
+        # gains selects windows-e2e and one both drop stops selecting it. The test's one import outside store/ is the
+        # CLI's installed ws package, no code of the repository's.
+        script = "store/tools/windows-ci/store-pipe.mjs"
+        full_checkout(self, "store/tools/windows-pipe.test.mjs", script, "store/agents")
+        run = imports_from(REPOSITORY, ["store/tools/windows-pipe.test.mjs", script], ("store/",)) - {script}
         self.assertEqual(sorted(path for path in run if not planner.windows_e2e(path) or planner.windows_only(path)), [])
         self.assertEqual(set(planner.WINDOWS_STORE_PIPE_PATHS), run)
 

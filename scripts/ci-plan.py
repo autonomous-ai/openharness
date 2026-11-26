@@ -149,8 +149,9 @@ WINDOWS_E2E_HARNESS_PATHS = (
 WINDOWS_SPEC_MODULES = {str(PurePosixPath(spec).with_name(PurePosixPath(spec).name.split(".")[0] + ".ts"))
                         for spec in WINDOWS_SPECS if not spec.endswith("/")}
 # windows-e2e: the Store's pipe test, cross-platform JS that storePackagesPipe.windows.spec.ts runs and no other job
-# does, and what it imports under store/: the pipe client, the agents' transports it drives (audit W1) with the copy of
-# the client each imports, and its temporary folders. test_ci_plan walks the imports.
+# does, and what it and the pipe script (store/tools/windows-ci/, windows_only) import under store/: the pipe client, the
+# agents' transports they drive (audit W1) with the copy of the client each imports, and the test's temporary folders.
+# test_ci_plan walks the imports.
 WINDOWS_STORE_PIPE_PATHS = (
     *(f"store/tools/{name}.mjs" for name in ("windows-pipe.test", "local-credential", "local-daemon", "test-folders")),
     *(f"store/agents/{transport}.mjs" for transport in ("autonomous-grid/lib/harness", "harness-monitor/lib/bridge",
