@@ -941,6 +941,16 @@ describe('editors', () => {
       apps: [{ id: 'cursor', count: 1 }, { id: 'vscode', count: 1 }] })] }))).apart).toBe(0)
   })
 
+  it('apart: a ring that expects a session off its own pages counts it in the ring alone, on none of its pages', () => {
+    const s = scenario([{ kind: 'hook', session: 'va', event: 'start', label: 'w' }], sessions)
+    const check: Check = { id: 'r', kind: 'ring', dim: 'D1', page: 'cursor', expect: ['va'], apart: [], after: 'w' }
+    const apart = (others: Array<[string, number]>): number => run(check, s, seen(s, [100], { frames: [frame(200, { t: 'apps', shown: 'cursor',
+      apps: [{ id: 'cursor', count: 1 }, ...others.map(([id, count]) => ({ id, count }))] }), ...list(200, 'cursor', [VA]).slice(1)] }))
+      .find((r) => r.check === 'r.apart')!.score
+    expect(apart([])).toBe(1)
+    expect(apart([['vscode', 1]])).toBe(0)
+  })
+
   it("apart: VS Code's ring of an agent in the person's tmux counts it on tmux's page too: tmux 1 passes, none or two fail", () => {
     // Diego's 2026-11-26 rule (docs/plans/2026-11-26-dial-mux-host-pages-design.md): on VS Code's page and tmux's.
     const VT = editor('vt', 28, 'vscode', { tmux: true })
