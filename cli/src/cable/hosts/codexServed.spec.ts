@@ -110,6 +110,13 @@ describe('codexServed', () => {
     expect(d.tty.mock.calls).toEqual([[500], [700]])
   })
 
+  it('reads each TUI\'s terminal once a lookup, for every ask in its folder: the scan asks for every session at once', async () => {
+    const d = deps([...TERMINAL_TUI, ...ITERM_TUI, row(900, 1, DAEMON_BIN, DAEMON_ARGS)],
+      { 500: { tty: 'ttys005', cwd: '/work/app' }, 600: { tty: 'ttys009', cwd: '/work/app' } })
+    expect(await codexServed([{ pid: 900, cwd: '/work/app' }, { pid: 900, cwd: '/work/app' }], d)).toEqual([{}, {}])
+    expect(d.tty.mock.calls).toEqual([[500], [600]])
+  })
+
   it('tells no client from one whose terminal could not be read, and gives no tab of a form no tab has', async () => {
     const d = deps([...TERMINAL_TUI, ...ITERM_TUI, row(900, 1, DAEMON_BIN, DAEMON_ARGS)],
       { 500: { tty: 'ttys005', cwd: '/work/app' }, 600: { tty: 'ttys009', cwd: '/work/app' } })
