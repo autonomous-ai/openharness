@@ -112,6 +112,13 @@ export function codexPluginState(home: string): 'on' | 'off' | 'absent' | 'unkno
   return config === 'unknown' ? config : stateIn(config)
 }
 
+/** codexMarketplace's and codexPluginState's answers from one parse of [home]'s config.toml, for a caller that needs
+ *  both. */
+export function codexHomeState(home: string, folder: string): { marketplace: 'harness' | 'own' | 'none'; plugin: 'on' | 'off' | 'absent' } | 'unknown' {
+  const config = readConfig(home)
+  return config === 'unknown' ? config : { marketplace: marketplaceIn(config, folder), plugin: stateIn(config) }
+}
+
 /** The Codex the daemon would run, pointed at [home]; its folder first on PATH, so an npm install's
  *  `#!/usr/bin/env node` finds the node beside it. [shell]: claudeFound's. */
 export async function codexFound(home: string, shell: boolean): Promise<ClaudeRun | null> {

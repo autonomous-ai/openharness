@@ -418,7 +418,7 @@ describe('createDialCodexPluginSetup', () => {
     r.trust.mockClear()
     // The person removed Harness's marketplace and added GitHub's.
     writeFileSync(configFile(home), configOf(home).replace(/\[marketplaces\.openharness\][^[]*/, OWN_GIT))
-    const asked = vi.spyOn(codexPlugin, 'codexMarketplace')
+    const asked = vi.spyOn(codexPlugin, 'codexHomeState')
 
     await r.setup.pass()
     expect(asked).toHaveBeenCalledWith(home, r.marketplace)

@@ -12,7 +12,7 @@
 import { existsSync, realpathSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ClaudePluginFiles, ClaudePluginSource, ClaudeRun } from '../devices/claudePlugin.js'
-import { carriedCodexHash, codexFailureWords, codexMarketplace, codexPluginState, codexRemove, codexSetUp, codexUpdate, installedRoot, type CodexFailure } from '../devices/codexPlugin.js'
+import { carriedCodexHash, codexFailureWords, codexHomeState, codexMarketplace, codexRemove, codexSetUp, codexUpdate, installedRoot, type CodexFailure } from '../devices/codexPlugin.js'
 import type { TrustWrite } from '../devices/codexPluginTrust.js'
 import { listable, MAX_HOMES, SETUP_COUNTS } from '../devices/dialSkillFiles.js'
 
@@ -276,14 +276,14 @@ export function createDialCodexPluginSetup(deps: DialCodexPluginSetupDeps): Dial
         else drop(home)
         continue
       }
-      const marketplace = codexMarketplace(home, deps.plugin.folder)
-      if (marketplace === 'own') {
+      const config = codexHomeState(home, deps.plugin.folder)
+      if (config !== 'unknown' && config.marketplace === 'own') {
         skipOwn(home)
         continue
       }
       // Only a plugin on is Harness's to trust: one the person turned off or removed, or a config.toml that cannot be
       // read, is left as it is until a stat changes again, and a folder said to differ is said again once it is back on.
-      if (marketplace === 'unknown' || codexPluginState(home) !== 'on') {
+      if (config === 'unknown' || config.plugin !== 'on') {
         differs.delete(home)
         stamps.set(home, stamp)
         continue
