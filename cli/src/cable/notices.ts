@@ -99,8 +99,9 @@ interface Pending {
   id: string; line: string; questions: unknown; host: string; who?: NoticeCaller['who']; keys: readonly string[]; at: number
   /** Back from the file: a drawer row whose question is held, never asked, for it rang before the restart. */
   restored?: true
-  /** Its agent was present: a drawer row whose question is held, never asked, as the person is already there. Apart from
-   *  `restored`, since working() must not end it: it was shown in this turn. */
+  /** Its agent was present: a drawer row whose question is held, not asked, as the person is already there; its turn's end
+   *  with the person gone asks it once and drops this (rouse). Apart from `restored`, since working() must not end it: it
+   *  was shown in this turn. */
   quiet?: true
   /** Restored, and no row until its agent is listed: a card no list holds (`who`) never waits. */
   waiting?: true
