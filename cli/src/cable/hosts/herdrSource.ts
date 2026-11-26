@@ -260,7 +260,7 @@ export class HerdrSource implements HostSource {
     const to: HerdrSubscriber = {
       started: () => this.started(sub),
       event: (name, data) => this.event(name, data),
-      closed: (reason) => this.closed(reason),
+      closed: (reason) => this.closed(sub, reason),
     }
     const entries = [...KINDS, ...panes.map((pane_id) => ({ type: 'pane.agent_status_changed' as const, pane_id }))]
     this.openedAt = this.deps.monotonic()
@@ -317,10 +317,17 @@ export class HerdrSource implements HostSource {
     })
   }
 
-  /** Only the current one or the one opening can end: one replaced was closed, and tells nothing. The current one ending
-   *  while another opens fails the attempt all the same: it is herdr stopping, as re-lists open one every few seconds,
-   *  and herdr 0.9.5 then refuses the one opening, whose fault would say `rejected` of a herdr that stopped. */
-  private closed(reason: SocketFault): void {
+  /** Only the current one or the one opening can end: one replaced was closed, and tells nothing. While the current one
+   *  is live it is the truth, and its own end fails the attempt: re-lists open one every few seconds, and herdr 0.9.5
+   *  that stops ends the current one and refuses the one opening in either order, a refusal that would say `rejected`
+   *  of a herdr that stopped. So the one opening that ends otherwise is dropped, and not asked for again: its panes
+   *  asked once, and its re-list was counted. Only its timeout fails the attempt as well: a herdr that never answers may
+   *  hang, and leave the current one silent with no end. An attempt's first, with no current one, fails it on any end. */
+  private closed(sub: Subscription, reason: SocketFault): void {
+    if (sub === this.next && this.current && reason !== 'timeout') {
+      this.next = undefined
+      return this.deps.log(`[herdr] dropped · ${reason}`)
+    }
     this.firstListEnded()
     this.attempts.failed('closed', reason)
   }
