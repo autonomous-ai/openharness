@@ -52,9 +52,10 @@ beyond noise" is that interval lying above 0. There, `ask_ok` is over all need r
 judged and counts as one that did not state the ask.
 
 <!-- aggregate -->
-| variant | condition | recall | specificity | precision | line_ok | ask_ok | one_step | harmed | went_on | truncated | invalid | unlisted | errors |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| baseline | clean | 84% | 100% | 100% | 78% | 88% | 0% | 0 (0%) | 75% | 0 | 0 | 0 |  |
-| baseline | crowd | 75% | 100% | 100% | 79% | 91% | 0% | 0 (0%) | 75% | 0 | 0 | 0 |  |
-| baseline | name-only | 0% | 100% | n/a | n/a | 63% | n/a | 0 (0%) | 100% | 0 | 0 | 0 |  |
+| variant | condition | recall | specificity | precision | line_ok | ask_ok | one_step | loaded | harmed | went_on | truncated | invalid | unlisted | errors |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| baseline | clean | 84% | 100% | 100% | 78% | 88% | 0% | n/a | 0 (0%) | 75% | 0 | 0 | 0 |  |
+| baseline | crowd | 75% | 100% | 100% | 79% | 91% | 0% | n/a | 0 (0%) | 75% | 0 | 0 | 0 |  |
+| baseline | name-only | 0% | 100% | n/a | n/a | 63% | n/a | n/a | 0 (0%) | 100% | 0 | 0 | 0 |  |
+| v1 | crowd | 97% | 100% | 100% | 81% | 88% | 0% | 62% | 0 (0%) | 100% | 0 | 0 | 0 |  |
 <!-- /aggregate -->
