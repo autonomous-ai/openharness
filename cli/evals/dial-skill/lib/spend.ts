@@ -1,5 +1,7 @@
-export interface Usage { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number;
-  cache_creation_input_tokens?: number; cache_creation?: { ephemeral_5m_input_tokens?: number } }
+import type { Usage } from './parse.js'
+
+// One Usage, the stream's: the summary takes it from here, beside the prices.
+export type { Usage }
 
 /** What a row, error row or probe row billed: the agent's call and, when it was judged, the judge's. */
 export interface Billed { model?: string | null; usage?: Usage; judge_model?: string | null; judge_usage?: Usage }
