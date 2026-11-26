@@ -602,6 +602,40 @@ mod tests {
     }
 
     #[test]
+    fn parses_files() {
+        assert_eq!(
+            parse(&args(&["files", "--json", "7", "8"])),
+            Ok(Command::Files { pids: vec![7, 8] })
+        );
+        // Each process once, in the order first named.
+        assert_eq!(
+            parse(&args(&["files", "--json", "8", "7", "8"])),
+            Ok(Command::Files { pids: vec![8, 7] })
+        );
+        let distinct = |n: u32| -> Vec<String> {
+            let pids = (1..=n).map(|pid| pid.to_string());
+            args(&["files", "--json"]).into_iter().chain(pids).collect()
+        };
+        assert_eq!(
+            parse(&distinct(32)),
+            Ok(Command::Files {
+                pids: (1..=32).collect()
+            })
+        );
+        assert!(parse(&distinct(33)).is_err());
+        for bad in [
+            &["files"][..],
+            &["files", "--json"],
+            &["files", "7"],
+            &["files", "--json", "0"],
+            &["files", "--json", "x"],
+            &["files", "--json", "7", "--x"],
+        ] {
+            assert!(parse(&args(bad)).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
     fn refuses_bad_raise_and_link_arguments() {
         let long_exe = format!("{}.exe", "a".repeat(252));
         let long_url = format!("claude://{}", "a".repeat(2_049 - "claude://".len()));

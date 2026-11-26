@@ -11,6 +11,7 @@ pub mod instance;
 pub mod job;
 pub mod launcher;
 pub mod logfile;
+pub mod open_files;
 pub mod pane;
 pub mod pane_ids;
 pub mod panes;
