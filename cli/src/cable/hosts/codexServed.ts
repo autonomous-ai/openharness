@@ -8,8 +8,8 @@
  * the one Codex on a terminal working in the session's folder. None, or two, is never guessed between.
  *
  * Of a process only its parents, its terminal and its folder are compared, and its arguments are read only to tell a
- * server (externals/codex.ts codexServer); none is kept. Never on Windows, where no process's folder can be read
- * (externals/support.ts processCwds): servedLookup gives none there.
+ * server (externals/codex.ts codexServer) and the daemon; none is kept. Never on Windows, where no process's folder can
+ * be read (externals/support.ts processCwds): servedLookup gives none there.
  *
  * What one lookup costs, on an M1 Pro (2026-11-26): the table with its arguments (externals/support.ts listProcesses,
  * 63 ms, lib/processTable.ts), 8 ms on the event loop to tell Codex's processes in a table of 900 (6.5 of them the
@@ -31,6 +31,13 @@ import { clientTtyForm } from './tabs.js'
 /** The Codex TUIs whose folders a lookup reads, at most: past this many, none is told apart, as a bound unread could
  *  hold a second one in the session's folder. */
 export const MAX_CLIENTS = 16
+
+/** The TUIs' daemon by its own arguments (rust-v0.172.0): `--managed-daemon`, or an app server on a unix socket, which a
+ *  TUI's `--remote` reaches as it reaches the daemon. Any other server (`codex mcp-server`, an editor's app server over
+ *  stdio) runs with its own client's environment, so its hints place its hooks. */
+const MANAGED_DAEMON = /(?:^|\s)--managed-daemon(?:\s|$)/
+const APP_SERVER = /(?:^|\s)app-server(?:\s|$)/
+const UNIX_LISTEN = /(?:^|\s)--listen(?:=|\s+)unix:\/\//
 
 /** A hook's caller, or the process the open scan found holding a session, and the session's folder. */
 export interface ServedAsk { pid: number; cwd?: string }
@@ -57,8 +64,8 @@ export interface CodexServedDeps {
 
 /**
  * For each ask: none when its caller is not the TUIs' daemon, so its hints place it: no Codex server (the nearest Codex
- * among it and its parents serves no other client), or an app's own, one no Codex started whose parents name an app
- * (the ChatGPT app's, an editor's), which runs with that app's environment. Else where the person sees the session:
+ * among it and its parents serves no other client), one whose arguments name no daemon, or an app's own, one no Codex
+ * started whose parents name an app (the ChatGPT app's, an editor's), which runs with that app's environment. Else where the person sees the session:
  * the client is the one Codex TUI on a terminal in the session's folder, npm's node launcher and its native Codex being
  * one. Fails when the table could not be read: nothing is told then.
  */
@@ -73,7 +80,7 @@ export async function codexServed(asks: readonly ServedAsk[], deps: CodexServedD
   // The hook's own shell, where it did not exec, is passed: its caller is the server still.
   const servers = asks.map(({ pid }) => {
     const nearest = parentChain(pid, byPid).find((row) => codex.has(row.pid))
-    return nearest && codexServer(nearest) ? nearest : undefined
+    return nearest && codexServer(nearest) && daemonArgs(nearest.args) ? nearest : undefined
   })
   if (!servers.some((server) => server)) return asks.map(() => undefined)
   const names = rows.map((row): ProcessName => ({ pid: row.pid, ppid: row.ppid, executable: commandOf(row) }))
@@ -91,6 +98,10 @@ export async function codexServed(asks: readonly ServedAsk[], deps: CodexServedD
     const tty = `/dev/${found.tty}`
     return { client: clientTtyForm(deps.platform)?.test(tty) ? { app, tty, pid: found.pid } : { app, pid: found.pid } }
   })
+}
+
+function daemonArgs(args: string): boolean {
+  return MANAGED_DAEMON.test(args) || (APP_SERVER.test(args) && UNIX_LISTEN.test(args))
 }
 
 /** Each ask's one Codex TUI on a terminal in its folder, with that terminal as ps names it; an ask with none, two, or one
