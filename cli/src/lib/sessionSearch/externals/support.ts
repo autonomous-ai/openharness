@@ -7,12 +7,13 @@ import { execFile } from 'node:child_process'
 import type { Dirent } from 'node:fs'
 import { open, readdir, readFile, readlink, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, win32 } from 'node:path'
 
 import { isHarnessSession, paneOwnerFormat } from '../../harnessSessionLabel.js'
 import { startMarkerMs } from '../../processProof.js'
 import { processRows } from '../../processTable.js'
 import { tmuxFeatures } from '../../tmuxVersion.js'
+import { WINDOWS_FILES_MAX_PIDS, windowsOpenFiles, type WindowsFilesRead, type WindowsOpenFiles } from '../../windows/openFiles.js'
 import { windowsStartTime } from '../../windows/treeKill.js'
 import { type ProcessView, type RunningProcess, type ScanContext, UNSETTLED } from './types.js'
 import { externalReadFailed } from '../evidence.js'
@@ -244,16 +245,24 @@ export async function listProcesses(
  * Each of [pids]' working folder. Linux says it in /proc; macOS only through lsof, asked once for every pid
  * (`-a -d cwd`: that one descriptor) under the same timeout and output bound as its open files. A pid whose
  * folder cannot be read (gone, another user's) is left out: unknown, which admission reads as "may hold any".
- * Windows has neither, so every folder there is unknown, without spawning.
+ * Windows has neither: harness-pty files says it there, for at most 32 pids. Past that, or when its run fails, every
+ * folder is unknown and the read is marked failed, so nobody takes the empty map for "no process works there".
  */
 export async function processCwds(
   pids: readonly number[],
   exec: Run = run,
   os: NodeJS.Platform = process.platform,
   link: (path: string) => Promise<string> = readlink,
+  files: WindowsFilesRead = windowsOpenFiles,
 ): Promise<Map<number, string>> {
   const cwds = new Map<number, string>()
-  if (!pids.length || os === 'win32') return cwds
+  if (!pids.length) return cwds
+  if (os === 'win32') {
+    const read = new Set(pids).size > WINDOWS_FILES_MAX_PIDS ? null : await files(pids)
+    if (!read) { externalReadFailed(new Error('process files unavailable'), 'process files'); return cwds }
+    for (const [pid, row] of read) if (row.cwd) cwds.set(pid, row.cwd)
+    return cwds
+  }
   if (os === 'linux') {
     await Promise.all(pids.map(async (pid) => {
       const cwd = await link(`/proc/${pid}/cwd`).catch(() => null)
@@ -315,26 +324,67 @@ export async function sameProject(a: string, b: string, stop?: string): Promise<
   return left !== null && left === right
 }
 
-/** The machine's processes, looked at once per view: the list is read on first use and kept. Open files are
- *  read through lsof, which Windows has not: there they are unknown, as when lsof fails, without spawning. */
+/** [files], each pid asked once: the pids not yet asked go in one run, and a failed run answers null for its pids. */
+function filesOnce(files: WindowsFilesRead): WindowsFilesRead {
+  const asked = new Map<number, Promise<WindowsOpenFiles | undefined | null>>()
+  return async (pids) => {
+    const fresh = [...new Set(pids)].filter((pid) => !asked.has(pid))
+    if (fresh.length) {
+      const read = files(fresh)
+      for (const pid of fresh) asked.set(pid, read.then((rows) => rows && rows.get(pid)))
+    }
+    const answers = await Promise.all(pids.map((pid) => asked.get(pid)!))
+    if (answers.includes(null)) return null
+    const rows = new Map<number, WindowsOpenFiles>()
+    pids.forEach((pid, index) => { if (answers[index]) rows.set(pid, answers[index]) })
+    return rows
+  }
+}
+
+/** A Windows image as `lsof -c` names a command: `C:\…\Codex.EXE` is `codex`. */
+const imageName = (executable: string): string => win32.basename(executable).replace(/\.exe$/i, '').toLowerCase()
+
+/**
+ * The machine's processes, looked at once per view: the list is read on first use and kept. Open files are read
+ * through lsof. Windows has no lsof: there `openFilesOf` asks harness-pty files, once a pid a view, for the table's
+ * processes whose image starts with a command, and keeps a row only when its start marker is the table's (a pid
+ * reused between the two reads holds another process's files). Past 32 such processes, or when the run fails, the
+ * read is marked failed: an empty map alone would say "nothing holds it" and let an adoption through.
+ * `openFiles` by pid stays unknown there, without spawning.
+ */
 export function processView(
   exec: Run = run,
   alive: (pid: number) => boolean = processAlive,
-  list: () => Promise<RunningProcess[]> = listProcesses,
-  cwds: (pids: readonly number[]) => Promise<Map<number, string>> = (pids) => processCwds(pids, exec, platform),
+  list: () => Promise<Array<RunningProcess & { startMarker?: string }>> = listProcesses,
+  cwds?: (pids: readonly number[]) => Promise<Map<number, string>>,
   platform: NodeJS.Platform = process.platform,
+  files: WindowsFilesRead = windowsOpenFiles,
 ): ProcessView {
-  let listed: Promise<RunningProcess[]> | null = null
-  const lsof = platform !== 'win32'
+  let listed: Promise<Array<RunningProcess & { startMarker?: string }>> | null = null
+  const listOnce = () => (listed ??= list())
+  const read = filesOnce(files)
+  const windows = platform === 'win32'
   return {
-    list: () => (listed ??= list()),
-    openFiles: async (pids) => pids.length && lsof
+    list: listOnce,
+    openFiles: async (pids) => pids.length && !windows
       ? parseLsof(await exec('lsof', ['-n', '-P', '-Fpn', '-a', '-p', pids.join(',')], 3_000) ?? '')
       : new Map(),
-    openFilesOf: async (commands) => commands.length && lsof
-      ? parseLsof(await exec('lsof', ['-n', '-P', '-Fpn', ...commands.flatMap((name) => ['-c', name])], 3_000) ?? '')
-      : new Map(),
-    cwds,
+    openFilesOf: async (commands) => {
+      if (!commands.length) return new Map()
+      if (!windows) return parseLsof(await exec('lsof', ['-n', '-P', '-Fpn', ...commands.flatMap((name) => ['-c', name])], 3_000) ?? '')
+      const prefixes = commands.map((name) => name.toLowerCase())
+      const rows = (await listOnce()).filter((row) => row.startMarker && prefixes.some((prefix) => imageName(row.executable).startsWith(prefix)))
+      const held = new Map<number, string[]>()
+      if (!rows.length) return held
+      const found = rows.length > WINDOWS_FILES_MAX_PIDS ? null : await read(rows.map((row) => row.pid))
+      if (!found) { externalReadFailed(new Error('process files unavailable'), 'process files'); return held }
+      for (const row of rows) {
+        const open = found.get(row.pid)
+        if (open && open.startMarker === row.startMarker) held.set(row.pid, open.files)
+      }
+      return held
+    },
+    cwds: cwds ?? ((pids) => processCwds(pids, exec, platform, readlink, read)),
     alive,
   }
 }
