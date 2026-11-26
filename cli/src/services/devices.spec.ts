@@ -2500,6 +2500,25 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     expect(calls('turnStarted')).toEqual([[ID, '', undefined], [ID, 'npm test · answer in Orca', undefined]])
   })
 
+  // The devices never read the tool: a question form and a plan approval wait as any prompt (Part 6 of
+  // docs/plans/2026-11-26-needs-you-right-design.md), with the lines deviceClaude/asked.ts gives them.
+  it.each([
+    ['AskUserQuestion', 'Which database should the export use?'],
+    ['ExitPlanMode', 'Plan ready to approve'],
+  ])('%s waits as a card "<line> · answer in Orca", rung once through its Notification, closed at the Stop', async (tool, summary) => {
+    vi.useFakeTimers()
+    const { port } = start({ faults: ['fleet'] })
+    port.observed(hook('turn-start'))
+    port.observed(asked({ tool, summary }))
+    port.observed(hook('needs-input'))
+    expect(calls('question')).toEqual([[ID, expect.stringMatching(/^shown:/), shownAs(`${summary} · answer in Orca`)]])
+    expect(await host().activityText(ID)).toBe(`${summary} · answer in Orca`)
+    const [[, id]] = calls('question') as [[string, string]]
+    port.observed(hook('turn-stop'))
+    await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+    expect(calls('questionClose')).toEqual([[ID, id]])
+  })
+
   it('the session\'s next event clears the line; another session\'s does not', async () => {
     vi.useFakeTimers()
     const { port } = start({ faults: ['fleet'] })
@@ -16440,6 +16459,18 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
       port.observed(asked())
       port.observed(hook('session-end'))
       expect(await waits(port)).toEqual({ dial_wait_elsewhere_2m_to_10m: 1, dial_wait_dial_under_30s: 1, dial_wait_none: 1 })
+    })
+
+    it.each(['AskUserQuestion', 'ExitPlanMode'])('%s is an outside agent\'s wait', async (tool) => {
+      vi.useFakeTimers()
+      const { port } = start({ faults: ['fleet'] })
+      port.observed(hook('session-start'))
+      await attach(port)
+      port.observed(hook('turn-start'))
+      port.observed(asked({ tool, summary: 'x' }))
+      port.observed(hook('turn-stop'))
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+      expect(await waits(port)).toEqual({ dial_wait_elsewhere_under_30s: 1 })
     })
 
     // Decision 2: hooked agents only; a Harness agent's aborted turn ends as a finished one does.
