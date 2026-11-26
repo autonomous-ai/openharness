@@ -100,6 +100,13 @@ describe('codexServed', () => {
       { pid: 900 }], d)).toEqual([{}, {}, {}, {}])
   })
 
+  it('never guesses past a TUI whose folder could not be read: it may be a second one in the session\'s', async () => {
+    // Another user's Codex, whose folder lsof may not read, beside the one in /work/app.
+    const d = deps([...TERMINAL_TUI, ...ITERM_TUI, row(900, 1, DAEMON_BIN, DAEMON_ARGS)],
+      { 500: { tty: 'ttys005', cwd: '/work/app' }, 600: { tty: 'ttys009' } })
+    expect(await codexServed([{ pid: 900, cwd: '/work/app' }], d)).toEqual([{}])
+  })
+
   it('counts only a TUI on a terminal: Harness\'s own `codex queue` runs on none', async () => {
     const d = deps([...TERMINAL_TUI, row(700, 1, BREW, `${BREW} queue --thread x`), row(900, 1, DAEMON_BIN, DAEMON_ARGS)],
       { 500: { tty: 'ttys005', cwd: '/work/app' }, 700: { cwd: '/work/app' } })
@@ -223,6 +230,12 @@ describe('codexServed on Windows', () => {
     const queue = winDeps([...vscodeTui(), daemon(421, 5), win(450, 1, 6, NATIVE, `${NATIVE} queue --thread x`)],
       { 420: 'C:\\work\\dial', 450: 'C:\\work\\dial' })
     expect(await codexServed([{ pid: 430, cwd: 'C:\\work\\dial' }], queue)).toEqual([{}])
+  })
+
+  it('a second TUI whose folder could not be read, an elevated one: none, never the one in the folder', async () => {
+    const elevated = [win(410, 401, 6, 'pwsh.exe'), win(440, 410, 7, NODE, `"${NODE}" ${NPM}\\bin\\codex.js`), win(441, 440, 8, NATIVE)]
+    const d = winDeps([...vscodeTui(), daemon(421, 5), ...elevated], { 420: 'C:\\work\\dial' })
+    expect(await codexServed([{ pid: 430, cwd: 'C:\\work\\dial' }], d)).toEqual([{}])
   })
 
   it('the daemon\'s parent is the first TUI, in Windows Terminal: the client in VS Code places it', async () => {
