@@ -175,7 +175,22 @@ mod tests {
     }
 
     fn among(os: &str, exe: &str) -> bool {
-        running_among(os, std::iter::once(exe.to_string()))
+        running_among(os, Some(1), std::iter::once((exe.to_string(), Some(1))))
+    }
+
+    #[test]
+    fn only_our_own_users_desktop_app_counts() {
+        // On a machine several people use, another person's desktop app must not keep this person's daemon from
+        // starting; a user that cannot be read, theirs or ours, is never taken for ours.
+        let with = |own: Option<u32>, user: Option<u32>| {
+            [("windows", r"C:\x\harness-desktop.exe"), ("linux", "/opt/harness/harness")]
+                .map(|(os, exe)| running_among(os, own, std::iter::once((exe.to_string(), user))))
+        };
+        assert_eq!(with(Some(1), Some(1)), [true; 2]);
+        assert_eq!(with(Some(1), Some(2)), [false; 2]);
+        assert_eq!(with(Some(1), None), [false; 2]);
+        assert_eq!(with(None, Some(1)), [false; 2]);
+        assert_eq!(with(None, None), [false; 2]);
     }
 
     #[test]
