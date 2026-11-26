@@ -115,6 +115,13 @@ describe('AppFilter', () => {
     expect(random).toHaveBeenCalledTimes(1)
   })
 
+  it('a tie of tmux, herdr and a terminal app is drawn between tmux and herdr', () => {
+    const { filter, agents, random } = setup([0])
+    agents({ ghostty: 1, tmux: 1, herdr: 1 })
+    expect(filter.shown()).toBe('tmux')
+    expect(random).toHaveBeenCalledTimes(1)
+  })
+
   it('the app in front is shown after 1 s, not before', () => {
     const { filter, agents, causes } = setup()
     agents({ ghostty: 3, vscode: 1 })
