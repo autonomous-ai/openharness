@@ -5297,6 +5297,309 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       expect(window.lines).toEqual([{ show: CLIENT_SHELL, raise: true }, { show: CLIENT_SHELL }])
       expect(orcaRuns.at(-1)).toEqual(selected)
     })
+
+    // Focusing the terminal that holds a tmux client moves the dial to the agent at the pane that client shows, on the
+    // editor's page (docs/plans/2026-11-26-dial-mux-host-pages-design.md §7, Diego's point 1; dial eval V16).
+    describe('focusing the terminal that holds its client', () => {
+      /** A terminal of the window with no agent and no client: the window's first state is on it. */
+      const PLAIN = 4400
+      /** The shell of the terminal holding the client (4310) of tmux's second session. */
+      const SHELL_2 = 4309
+      const B = observedAgentId('claude', 'sess-2')
+      const C = observedAgentId('claude', 'sess-3')
+      /** tmux's clients as a focus read lists them, `tty|pane` a line: client 4300 on session `work`'s pane %3, 4310 on
+       *  session `other`'s %5. While `held`, each such read waits until the spec lands it. */
+      const tmuxSays = { clients: '', held: false, land: [] as Array<() => void> }
+      beforeEach(() => { Object.assign(tmuxSays, { clients: '/dev/ttys004|%3\n/dev/ttys005|%5\n', held: false, land: [] }) })
+      let clock = 0
+      /** Lets what a landing sets off run. */
+      const settled = () => new Promise((resolve) => setImmediate(resolve))
+      const land = async () => {
+        for (const landing of tmuxSays.land.splice(0)) landing()
+        await settled()
+      }
+      /** The focus reads of tmux's clients: not a client lookup's `list-clients -t`. */
+      const clientReads = () => orcaRuns.filter(([, args]) => args[0] === 'list-clients' && args[1] === '-F')
+      const follows = (cause: string) => calls('followLocal').filter(([, why]) => why === cause)
+      const editorLines = () => logs.filter((line) => line.startsWith('[device] vscode ·'))
+      const shown = async () => (await host().listAgentSnapshot({ apps: true })).apps?.shown
+      /**
+       * On macOS, sess-1 in pane %3 and sess-2 in %4 of the person's tmux session `work`, whose one client (4300) is in
+       * CLIENT_SHELL's terminal, and sess-3 in %5 of session `other`, whose one client (4310) is in SHELL_2's: both
+       * terminals and PLAIN's in one window of the editor at [app], whose bundle id is [bundle], every chain read, a dial
+       * attached, no app settled in front and the devices' clock at 0. `focus` is the person focusing a terminal;
+       * `settle` keeps an app in front for the settle; `next` lets FOCUS_POLL_MS pass. The timers are held;
+       * `setImmediate` is left to let a read land.
+       */
+      const clientsIn = async (app = code, bundle = VSCODE) => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+        clock = 0
+        const rows: ProcessRow[] = [
+          ...[0, 1, 2].flatMap((n) => [{ pid: 4242 + n, ppid: 4000 + n, tty: `ttys03${n}`, executable: 'claude' },
+            { pid: 4000 + n, ppid: 3900, tty: `ttys03${n}`, executable: 'zsh' }]),
+          { pid: 3900, ppid: 1, executable: 'tmux' },
+          { pid: 4300, ppid: CLIENT_SHELL, executable: 'tmux' }, { pid: CLIENT_SHELL, ppid: 4298, executable: 'zsh' },
+          { pid: 4310, ppid: SHELL_2, executable: 'tmux' }, { pid: SHELL_2, ppid: 4298, executable: 'zsh' },
+          { pid: 4298, ppid: 1, executable: join(app, 'Contents', 'MacOS', 'Electron') },
+        ]
+        readers.processes.mockResolvedValue(rows)
+        processTable.rows = rows
+        readers.bundleId.mockImplementation(async (at) => at === app ? bundle : undefined)
+        const run = async (file: string, args: string[], timeoutMs: number) => {
+          orcaRuns.push([file, args, timeoutMs])
+          const other = args.includes('%5')
+          if (args[0] === 'display-message') return { code: 0, stdout: other ? '4002|other|\n' : args.includes('%4') ? '4001|work|\n' : '4000|work|\n' }
+          if (args[0] === 'list-clients' && args[1] === '-t') return { code: 0, stdout: other ? '1794700050|4310|/dev/ttys005\n' : '1794700050|4300|/dev/ttys004\n' }
+          if (args[0] === 'list-clients' && tmuxSays.held) await new Promise<void>((resolve) => { tmuxSays.land.push(resolve) })
+          return { code: 0, stdout: args[0] === 'list-clients' ? tmuxSays.clients : '' }
+        }
+        const listener = fakeListener()
+        const { port } = startHere({ listen: listener.listen, now: () => clock, tty: async () => undefined, orca: { ...mac, run } })
+        for (const n of [1, 2, 3]) {
+          port.observed(hook('session-start', { sessionId: `sess-${n}`, callerPid: 4241 + n, transcriptPath: `/t/sess-${n}.jsonl`,
+            hostHints: { TMUX_PANE: `%${n + 2}`, TERM_PROGRAM: 'tmux' } }))
+        }
+        attach(port)
+        await vi.waitFor(() => expect(said().filter((line) => line === '[device] tmux client · found')).toHaveLength(3))
+        await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+        const window = listener.vscode(WINDOW_ID)
+        const looks = calls('syncAgents').length
+        expect(listener.vscodeState(WINDOW_ID, [PLAIN, CLIENT_SHELL, SHELL_2])).toBeUndefined()
+        await vi.waitFor(() => expect(calls('syncAgents').length).toBeGreaterThan(looks))
+        const focus = async (shell: number) => {
+          expect(listener.vscodeState(WINDOW_ID, [PLAIN, CLIENT_SHELL, SHELL_2], shell)).toBeUndefined()
+          await settled()
+        }
+        const settle = async (front: string) => {
+          expect(listener.front(front)).toBeUndefined()
+          await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+          await settled()
+        }
+        const next = async () => {
+          await vi.advanceTimersByTimeAsync(FOCUS_POLL_MS)
+          await settled()
+        }
+        return { listener, window, focus, settle, next }
+      }
+
+      it.each([
+        ['VS Code', code, VSCODE, 'vscode'],
+        ['Cursor', join(homedir(), 'Applications', 'Cursor.app'), CURSOR, 'cursor'],
+      ])('focusing the %s terminal that holds a tmux client moves the dial to the agent at that client\'s pane, on its page', async (_, app, bundle, page) => {
+        tmuxSays.clients = '/dev/ttys004|%4\n/dev/ttys005|%5\n'
+        const { settle, focus } = await clientsIn(app, bundle)
+        await settle(page)
+        dialFollows()
+        await focus(CLIENT_SHELL)
+        // Of the two agents whose client it is, the one at the pane it shows, by one read of tmux's clients.
+        expect(follows('vscode')).toEqual([[B, 'vscode']])
+        expect(clientReads()).toHaveLength(1)
+        await vi.waitFor(() => expect(editorLines()).toEqual(['[device] vscode · moved']))
+        expect(await shown()).toBe(page)
+      })
+
+      it('two tmux clients in two terminals: focusing the other moves the dial to its agent', async () => {
+        const { settle, focus } = await clientsIn()
+        await settle('vscode')
+        await focus(CLIENT_SHELL)
+        await focus(SHELL_2)
+        expect(follows('vscode')).toEqual([[ID, 'vscode'], [C, 'vscode']])
+        // A terminal no client is in moves nothing.
+        await focus(PLAIN)
+        expect(follows('vscode')).toHaveLength(2)
+      })
+
+      it('with VS Code settled in front, tmux\'s pane poll reads the client of the terminal focused last: a pane switch inside it moves the dial', async () => {
+        const { settle, focus, next } = await clientsIn()
+        await settle('vscode')
+        // Two clients of VS Code show agents' sessions, and no terminal of them is focused: which the person looks at is
+        // not known, so tmux is asked nothing.
+        tmuxSays.clients = '/dev/ttys004|%4\n/dev/ttys005|%5\n'
+        await next()
+        expect(clientReads()).toEqual([])
+        expect(follows('pane')).toEqual([])
+        tmuxSays.clients = '/dev/ttys004|%3\n/dev/ttys005|%5\n'
+        await focus(CLIENT_SHELL)
+        expect(follows('vscode')).toEqual([[ID, 'vscode']])
+        await next()
+        expect(follows('pane')).toEqual([[ID, 'pane']])
+        // The person switches to %4 inside that client.
+        tmuxSays.clients = '/dev/ttys004|%4\n/dev/ttys005|%5\n'
+        await next()
+        expect(follows('pane')).toEqual([[ID, 'pane'], [B, 'pane']])
+      })
+
+      it('the client focused as VS Code comes forward is followed at its settle and kept through it; another app\'s settle drops it', async () => {
+        const { listener, settle, focus, next } = await clientsIn()
+        expect(listener.front('vscode')).toBeUndefined()
+        await focus(CLIENT_SHELL)
+        expect(follows('vscode')).toEqual([])
+        await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+        await settled()
+        expect(follows('vscode')).toEqual([[ID, 'vscode']])
+        // The poll's first read, as VS Code settled, is of that client.
+        expect(follows('pane')).toEqual([[ID, 'pane']])
+        await settle('ghostty')
+        await settle('vscode')
+        const reads = clientReads().length
+        tmuxSays.clients = '/dev/ttys004|%4\n/dev/ttys005|%5\n'
+        await next()
+        expect(clientReads()).toHaveLength(reads)
+        expect(follows('pane')).toHaveLength(1)
+      })
+
+      it('the dial\'s own show of a client\'s terminal is its echo for 2 s: that terminal\'s focus moves nothing', async () => {
+        const { settle, focus, window } = await clientsIn()
+        await settle('vscode')
+        expect(host().swipeSwitches(C)).toBe(true)
+        host().swipeEnded(C, 'rest')
+        await swiped('ok')
+        expect(window.lines).toEqual([{ show: SHELL_2 }])
+        clock = 1_999
+        await focus(SHELL_2)
+        expect(follows('vscode')).toEqual([])
+        expect(editorLines()).toEqual(['[device] vscode · skipped · echo'])
+        // The person's own focus after it moves the dial.
+        await focus(CLIENT_SHELL)
+        expect(follows('vscode')).toEqual([[ID, 'vscode']])
+      })
+
+      it('a focus elsewhere while a client\'s pane is read wins', async () => {
+        const { settle, focus } = await clientsIn()
+        await settle('vscode')
+        tmuxSays.held = true
+        await focus(CLIENT_SHELL)
+        await focus(SHELL_2)
+        expect(clientReads()).toHaveLength(2)
+        await land()
+        expect(follows('vscode')).toEqual([[C, 'vscode']])
+      })
+
+      it('a move of the dial while a client\'s pane is read sets that focus aside', async () => {
+        const { settle, focus } = await clientsIn()
+        await settle('vscode')
+        tmuxSays.held = true
+        await focus(CLIENT_SHELL)
+        turnTo(C)
+        await land()
+        expect(follows('vscode')).toEqual([])
+        expect(editorLines()).toEqual(['[device] vscode · skipped · echo'])
+      })
+
+      it('with no dial linked, a focus reads tmux nothing and moves nothing; its client is kept all the same', async () => {
+        const { settle, focus, next } = await clientsIn()
+        await settle('vscode')
+        const cable = seen.cable as unknown as { connected: boolean }
+        cable.connected = false
+        const reads = clientReads().length
+        await focus(CLIENT_SHELL)
+        expect(clientReads()).toHaveLength(reads)
+        expect(follows('vscode')).toEqual([])
+        // Linked again, the poll reads that client.
+        cable.connected = true
+        await next()
+        expect(follows('pane')).toEqual([[ID, 'pane']])
+      })
+    })
+  })
+
+  // herdr's client in a VS Code terminal: focusing that terminal moves the dial to the agent at the pane herdr said took
+  // its focus last (docs/plans/2026-11-26-dial-mux-host-pages-design.md §7).
+  describe('an agent in the person\'s herdr whose client is in a VS Code terminal', () => {
+    const code = join(homedir(), 'Applications', 'Visual Studio Code.app')
+    const CLIENT_SHELL = 4299
+    /** A terminal of the window with no agent and no client: the window's first state is on it. */
+    const PLAIN = 4400
+    const B = observedAgentId('claude', 'sess-2')
+    /** sess-1 in herdr pane w1:p1's shell (4000) and sess-2 in w1:p2's (4001), on terminals herdr's server (3900) made,
+     *  and herdr's one client (4300) in a VS Code terminal, under the home the devices read apps in. */
+    const ROWS: ProcessRow[] = [
+      { pid: 4242, ppid: 4000, tty: 'ttys030', executable: 'claude' }, { pid: 4000, ppid: 3900, tty: 'ttys030', executable: 'zsh' },
+      { pid: 4243, ppid: 4001, tty: 'ttys031', executable: 'claude' }, { pid: 4001, ppid: 3900, tty: 'ttys031', executable: 'zsh' },
+      { pid: 3900, ppid: 1, executable: '/opt/homebrew/bin/herdr' },
+      { pid: 4300, ppid: CLIENT_SHELL, executable: 'herdr' }, { pid: CLIENT_SHELL, ppid: 4298, executable: 'zsh' },
+      { pid: 4298, ppid: 1, executable: join(code, 'Contents', 'MacOS', 'Electron') },
+    ]
+    /** The server's client socket, and the client connected to it, as lsof gives them. */
+    const SOCKETS = 'p3900\nf5\nd0x1111\nn/Users/u/.config/herdr/herdr-client.sock\np4300\nf3\nd0x2222\nn->0x1111\n'
+    const settled = () => new Promise((resolve) => setImmediate(resolve))
+    const follows = () => calls('followLocal').filter(([, why]) => why === 'vscode')
+    const editorLines = () => logs.filter((line) => line.startsWith('[device] vscode ·'))
+    /** On macOS, ROWS' agents, each one's client lookup landed, a herdr listing both, a dial attached with herdr's focus
+     *  subscription live, the window's chains read, and no app settled in front. `herdrFocus` is herdr telling a pane
+     *  took its focus; `focus` the person focusing a terminal; `settle` as clientsIn's. */
+    const herdrIn = async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+      readers.processes.mockResolvedValue(ROWS)
+      processTable.rows = ROWS
+      readers.bundleId.mockImplementation(async (at) => at === code ? VSCODE : undefined)
+      const subs: Array<{ entries: readonly HerdrEntry[]; to: HerdrSubscriber }> = []
+      let list: Promise<HerdrAnswer> | undefined
+      const agents = ['w1:p1', 'w1:p2'].map((pane) => ({ pane_id: pane, agent: 'claude', agent_status: 'idle', cwd: '/work/api' }))
+      const client: HerdrClient = {
+        request: () => (list = Promise.resolve<HerdrAnswer>({ ok: true, result: { type: 'agent_list', agents } })),
+        subscribe: (entries, to) => { subs.push({ entries, to }); return { close: () => {} } },
+        prompt: async () => ({ outcome: 'sent' }),
+        socketStamp: () => '1:1',
+        binary: () => undefined,
+      }
+      const run = async (file: string, args: string[], timeoutMs: number) => {
+        orcaRuns.push([file, args, timeoutMs])
+        return { code: 0, stdout: file === '/usr/sbin/lsof' ? SOCKETS : file === '/bin/ps' ? '4300 ttys004\n' : '' }
+      }
+      const listener = fakeListener()
+      const { port } = startHere({ listen: listener.listen, now: still, tty: async () => undefined, herdr: client,
+        orca: { ...mac, run, onPath: (name: string) => (name === 'herdr-app' ? null : `/opt/${name}/bin/${name}`) } })
+      for (const n of [1, 2]) {
+        port.observed(hook('session-start', { sessionId: `sess-${n}`, callerPid: 4241 + n, transcriptPath: `/t/sess-${n}.jsonl`,
+          hostHints: { HERDR_PANE_ID: `w1:p${n}` } }))
+      }
+      await vi.waitFor(() => expect(said().filter((line) => line === '[device] herdr client · found')).toHaveLength(2))
+      await settled()
+      attach(port)
+      await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+      subs.at(-1)!.to.started()
+      await list
+      const focused = subs.filter(({ entries }) => entries.some(({ type }) => type === 'pane.focused')).at(-1)!
+      focused.to.started()
+      listener.vscode(WINDOW_ID)
+      const looks = calls('syncAgents').length
+      expect(listener.vscodeState(WINDOW_ID, [PLAIN, CLIENT_SHELL])).toBeUndefined()
+      await vi.waitFor(() => expect(calls('syncAgents').length).toBeGreaterThan(looks))
+      const herdrFocus = async (pane: string) => {
+        focused.to.event('pane_focused', { pane_id: pane, type: 'pane_focused', workspace_id: 'w1' })
+        await settled()
+      }
+      const focus = async (shell: number) => {
+        expect(listener.vscodeState(WINDOW_ID, [PLAIN, CLIENT_SHELL], shell)).toBeUndefined()
+        await settled()
+      }
+      const settle = async (front: string) => {
+        expect(listener.front(front)).toBeUndefined()
+        await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+        await settled()
+      }
+      return { herdrFocus, focus, settle }
+    }
+
+    it('focusing the terminal of herdr\'s client moves the dial to the agent at the pane herdr said took its focus last, on VS Code\'s page; with none said, nothing', async () => {
+      const { herdrFocus, focus, settle } = await herdrIn()
+      await settle('vscode')
+      dialFollows()
+      const runs = orcaRuns.length
+      await focus(CLIENT_SHELL)
+      expect(follows()).toEqual([])
+      expect(orcaRuns.slice(runs)).toEqual([])
+      // Told while the person is on another app: herdr's own follow skips it, as not in front.
+      await settle('ghostty')
+      await herdrFocus('w1:p2')
+      await settle('vscode')
+      await focus(PLAIN)
+      await focus(CLIENT_SHELL)
+      expect(follows()).toEqual([[B, 'vscode']])
+      await vi.waitFor(() => expect(editorLines()).toEqual(['[device] vscode · moved']))
+      expect((await host().listAgentSnapshot({ apps: true })).apps?.shown).toBe('vscode')
+    })
   })
 
   it('an agent that left has its chain dropped', async () => {
