@@ -1023,7 +1023,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // The command a hooked agent's tap runs (Q6): the dial's move is noted as every tap's is. Only a shown pane is true:
     // herdr's adapter never refuses one, though the noted copy is typed as any adapter's.
     focus: async (paneId) => (await herdrNoted.focus({ adapter: herdrAdapter.id, id: paneId })) === true,
-    // The pane herdr says took its focus turns the dials (herdrFocused, below).
+    // The pane herdr says took its focus moves the dial on the page shown (herdrFocused, below).
     onFocus: (paneId) => part.call('herdr', () => herdrFocused(observed, paneId)),
     after: timerIn('herdr'),
     now: Date.now,
@@ -2805,7 +2805,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const at = herdrAgentAt(source, paneId)
     // A pane with no agent is ordinary use, and says nothing.
     if (at === undefined) return
-    // One in herdr inside Orca is left to Orca's own focus, which follows its panes.
+    // One in herdr inside Orca is left to Orca's own focus, which follows its panes. The nest check skips none it could
+    // follow: only herdr's own lookup, which sets the nest, names an app in a herdr place (a Herdr.app terminal has none).
     if (at === null || at.agent.nest !== 'herdr' || at.agent.app === 'orca') {
       log('[device] herdr focus · skipped · unknown agent')
       return
@@ -3558,6 +3559,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       for (const timer of pending) clearTimeout(timer)
       tabReport = undefined
       lastTabs.clear()
+      editorClients.clear()
       selects.clear()
       threadReport = undefined
       codexSwitches.clear()

@@ -3776,7 +3776,8 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   })
 
   // Diego's Mac (2026-11-19): Claude Code in a pane of the tmux server the daemon started, so no bundle id, attached from
-  // a Terminal tab. The lookup's own runs are this spec's; the walk is tmux.spec.ts's. On tmux's page (Diego, 2026-11-23).
+  // a Terminal tab. The lookup's own runs are this spec's; the walk is tmux.spec.ts's. On Terminal's page and tmux's
+  // (docs/plans/2026-11-26-dial-mux-host-pages-design.md §1).
   it('an agent in the person\'s tmux is on the page of the app that holds its client and on tmux\'s, and a rest selects its tab, then its pane', async () => {
     const terminal = join(homedir(), 'Applications', 'Terminal.app')
     readers.processes.mockResolvedValue([
@@ -17227,7 +17228,7 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
       ['no dial attached', { attached: false }, 'iterm'],
       ['another app settled', {}, 'ghostty'],
       ['a pane whose client is in no listed app', { rows: IN_NO_APP }, 'iterm'],
-      // Its page is Orca's, whose own focus covers it (the spec's Out of scope).
+      // Its pages are Orca's and tmux's, skipped as Orca's own focus follows its panes.
       ['an agent in tmux inside an Orca terminal with Orca settled', { rows: IN_ORCA }, 'orca'],
       ['the observed agents off', { observed: false }, 'iterm'],
     ])('nothing runs with %s', async (_, over, app) => {
