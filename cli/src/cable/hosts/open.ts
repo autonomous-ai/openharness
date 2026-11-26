@@ -65,6 +65,9 @@ export interface OpenDeps {
    *  process is the outer lookup's answer (the agent's multiplexer client, or on Windows the terminal holding herdr's),
    *  not the agent's own. */
   windowOf?(agentId: string): { pid?: number; app?: string; outer?: true } | undefined
+  /** Called just before every `open -b`, Linux raise and Windows raise: the filter takes the next front report as the
+   *  dial's, so the app it brought keeps tmux's or herdr's page (docs/plans/2026-11-26-dial-mux-host-pages-design.md § 6). */
+  bringing?(): void
 }
 
 export function createOpenActions(deps: OpenDeps): {
@@ -115,9 +118,12 @@ export function createOpenActions(deps: OpenDeps): {
     !!paneOn(target) || (byBundle && !!target.bundle) || !!raise?.ready({ agent: true, app: windowFor(agentId, target)?.app })
   // Harness Desktop is started by its launcher on Windows, never raised: a running one takes the launch over and comes
   // forward itself (windowsRaise.ts).
-  const forward = async (bundle: string): Promise<boolean> => windows
-    ? bundle === HARNESS_BUNDLE ? windows.desktop() : windows.app(bundle)
-    : (await deps.run(openBin, ['-b', bundle], RUN_TIMEOUT_MS)).code === 0
+  const forward = async (bundle: string): Promise<boolean> => {
+    deps.bringing?.()
+    return windows
+      ? bundle === HARNESS_BUNDLE ? windows.desktop() : windows.app(bundle)
+      : (await deps.run(openBin, ['-b', bundle], RUN_TIMEOUT_MS)).code === 0
+  }
 
   // herdr 0.8.0's agents, whose terminal nobody knows (#4366), have no window of their own: herdr's ring brings Herdr
   // only while Herdr.app's window is the ring's.
@@ -130,7 +136,7 @@ export function createOpenActions(deps: OpenDeps): {
   // a pick has no process. With neither, nothing runs and nothing is logged (herdr, whose agents have no window of their
   // own there, has no class).
   const pickOf = (app: string): (() => Promise<boolean>) | undefined => {
-    if (raise) return raise.ready({ agent: false, app }) ? () => raise.raise({ app }) : undefined
+    if (raise) return raise.ready({ agent: false, app }) ? () => { deps.bringing?.(); return raise.raise({ app }) } : undefined
     const bundle = bundleFor(app)
     return bundle ? () => forward(bundle) : undefined
   }
@@ -140,13 +146,14 @@ export function createOpenActions(deps: OpenDeps): {
   const ownerWindow = (agentId: string): (() => Promise<boolean>) | undefined => {
     const window = windows && deps.windowOf?.(agentId)
     const pid = window?.outer ? window.pid : undefined
-    return windows && pid !== undefined ? () => windows.window(pid) : undefined
+    return windows && pid !== undefined ? () => { deps.bringing?.(); return windows.window(pid) } : undefined
   }
 
   // Linux's raise brings forward the agent's window, where macOS brings its app: the window of [pid] when the pane's app
   // named the process holding it (a multiplexer's client its focus switched), else of the agent's own process.
   const raiseWindow = (linux: LinuxRaise, agentId: string, target: OpenTarget, pid?: number): Promise<boolean> => {
     const window = windowFor(agentId, target)
+    deps.bringing?.()
     return linux.raise({ pid: pid ?? window?.pid, app: window?.app })
   }
 
