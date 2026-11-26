@@ -351,7 +351,7 @@ const imageName = (executable: string): string => win32.basename(executable).rep
  * reused between the two reads holds another process's files). Past 32 such processes, when the run fails, or when it
  * left out one that still runs, the read is marked failed: an empty map alone would say "nothing holds it" and let an
  * adoption through.
- * `openFiles` by pid stays unknown there, without spawning.
+ * `openFiles` by pid stays unknown there, without spawning: marked failed, so an empty map never reads as nothing open.
  */
 export function processView(
   exec: Run = run,
@@ -367,9 +367,12 @@ export function processView(
   const windows = platform === 'win32'
   return {
     list: listOnce,
-    openFiles: async (pids) => pids.length && !windows
-      ? parseLsof(await exec('lsof', ['-n', '-P', '-Fpn', '-a', '-p', pids.join(',')], 3_000) ?? '')
-      : new Map(),
+    openFiles: async (pids) => {
+      if (!pids.length) return new Map()
+      if (!windows) return parseLsof(await exec('lsof', ['-n', '-P', '-Fpn', '-a', '-p', pids.join(',')], 3_000) ?? '')
+      externalReadFailed(new Error('process files not read'), 'process files')
+      return new Map()
+    },
     openFilesOf: async (commands) => {
       if (!commands.length) return new Map()
       if (!windows) return parseLsof(await exec('lsof', ['-n', '-P', '-Fpn', ...commands.flatMap((name) => ['-c', name])], 3_000) ?? '')
