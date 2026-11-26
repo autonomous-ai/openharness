@@ -236,12 +236,15 @@ mod tests {
         let _ = SystemDesktopApp.running();
     }
 
-    // Unread, our own user would let no desktop app count, and the daemon would start beside the desktop app's own.
+    // Unread, our own user or a process's file would let no desktop app count, and the daemon would start beside the
+    // desktop app's own.
     #[cfg(not(target_os = "macos"))]
     #[test]
-    fn our_own_user_is_read() {
+    fn our_own_process_is_read() {
         let system = process_table().expect("the process table");
         assert!(own_user(&system).is_some());
+        let own = system.process(sysinfo::get_current_pid().expect("our own pid")).expect("our own process");
+        assert!(own.exe().is_some());
     }
 
     fn entry(exec: &str) -> String {
