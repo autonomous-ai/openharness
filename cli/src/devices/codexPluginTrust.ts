@@ -9,17 +9,18 @@
  * Codex computes the fingerprint again at every hook run and refuses a folder that changed since.
  *
  * config.toml has other writers (Codex, Harness's own hook review, the person): only the plugin's own tables change,
- * the way hookReview.ts edits the file (through a link, atomically, never a table defined twice), and a file that
+ * the way hookReview.ts edits the file (through a link, crash-safe, never a table defined twice), and a file that
  * changed since it was read is read again and redone, at most 3 times, so another writer's change is never dropped.
  * A failure is said by its kind alone.
  */
-import { createHash } from 'node:crypto'
-import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync } from 'node:fs'
-import { join, sep } from 'node:path'
+import { createHash, randomUUID } from 'node:crypto'
+import { closeSync, constants, fchmodSync, fstatSync, fsyncSync, lstatSync, openSync, readdirSync, readSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname, join, sep } from 'node:path'
 import { parse as parseToml } from 'smol-toml'
 import { hooks } from '../engines/codex/hookContract.js'
-import { replaceConfigFile } from '../engines/kit/folderTrust.js'
 import { reviewHash, withReviewRecords } from '../engines/kit/hookReview.js'
+import { hookFileVersion } from '../engines/kit/nativeHookFiles.js'
+import { pauseSync, RENAME_TRIES, RENAME_WAIT_MS, syncStateDirectory } from '../lib/secureState.js'
 import { settingsText } from '../lib/settingsText.js'
 import { DIAL_PLUGIN_ID } from './dialSkill.js'
 
@@ -198,6 +199,55 @@ export function readConfigText(file: string): string | null {
   }
 }
 
+/** Another writer changed config.toml after the text a write was made from was read: that write starts over. */
+class ConfigChanged extends Error {}
+
+/** What Windows answers, for a moment, to a rename onto a file another program holds open (windowsFiles.ts). */
+const HELD = new Set(['EPERM', 'EACCES', 'EBUSY'])
+
+/**
+ * [file]'s target, through a link, replaced by [text] while it still holds [read], crash-safe as nativeHookFiles.ts
+ * publishes Codex's config for hookReview.ts: the text goes into a file beside it, with its mode, and is flushed; the
+ * target's version is checked again right before the rename; its folder is flushed after. A failure leaves config.toml
+ * as it was and no file beside it. Throws ConfigChanged when another writer changed config.toml first.
+ *
+ * Synchronous, as writePluginTrust and its callers are, so a target held open on Windows is tried again the way
+ * secureState.ts's writer does: renameReplacing waits with promises.
+ */
+export function replaceConfigText(file: string, text: string, read: string): void {
+  const target = realpathSync(file)
+  const before = lstatSync(target, { bigint: true })
+  // Read after the version was taken: a change made after this read moves the version the rename is checked against.
+  if (readConfigText(target) !== read) throw new ConfigChanged()
+  const mode = Number(before.mode & 0o777n)
+  const temporary = join(dirname(target), `.harness-codex-${randomUUID()}.tmp`)
+  try {
+    const fd = openSync(temporary, 'wx', mode)
+    try {
+      // open's mode is narrowed by the umask: the file keeps exactly its own.
+      fchmodSync(fd, mode)
+      writeFileSync(fd, text)
+      fsyncSync(fd)
+    } finally {
+      closeSync(fd)
+    }
+    for (let tried = 1; ; tried++) {
+      if (hookFileVersion(lstatSync(target, { bigint: true })) !== hookFileVersion(before)) throw new ConfigChanged()
+      try {
+        renameSync(temporary, target)
+        break
+      } catch (error) {
+        if (process.platform !== 'win32' || tried >= RENAME_TRIES || !HELD.has((error as NodeJS.ErrnoException).code ?? '')) throw error
+        pauseSync(RENAME_WAIT_MS)
+      }
+    }
+  } catch (error) {
+    rmSync(temporary, { force: true })
+    throw error
+  }
+  syncStateDirectory(dirname(target))
+}
+
 export type TrustFailure = 'plugin' | 'differs' | 'missing' | 'unreadable' | 'unparsed' | 'unsafe' | 'changed' | 'write'
 export type TrustWrite = { ok: true; changed: boolean } | { ok: false; kind: TrustFailure }
 
@@ -222,10 +272,11 @@ function withTrust(text: string, records: readonly PluginTrustRecord[]): string 
 
 /**
  * Trust the plugin installed at [root] in [codexHome]'s config.toml, only when its fingerprint is [expected], the
- * carried copy's. A missing config.toml is left missing: Codex writes it when it installs the plugin.
+ * carried copy's. A missing config.toml is left missing: Codex writes it when it installs the plugin. [io]'s replace
+ * is handed the text the new one was made from, which it replaces only while the file still holds it.
  */
 export function writePluginTrust(codexHome: string, root: string, expected: string,
-  io: { read(file: string): string | null; replace(file: string, text: string): void } = { read: readConfigText, replace: replaceConfigFile }): TrustWrite {
+  io: { read(file: string): string | null; replace(file: string, text: string, read: string): void } = { read: readConfigText, replace: replaceConfigText }): TrustWrite {
   const failed = (kind: TrustFailure): TrustWrite => ({ ok: false, kind })
   let entries: Entry[]
   try {
@@ -265,8 +316,10 @@ export function writePluginTrust(codexHome: string, root: string, expected: stri
     // Another writer changed the file since it was read: its change is kept by starting over from it.
     if (now !== text) continue
     try {
-      io.replace(file, next)
-    } catch {
+      io.replace(file, next, text)
+    } catch (error) {
+      // Changed between that check and the rename: kept the same way.
+      if (error instanceof ConfigChanged) continue
       return failed('write')
     }
     return { ok: true, changed: true }

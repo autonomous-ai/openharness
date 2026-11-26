@@ -10,8 +10,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { parse as parseToml } from 'smol-toml'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { replaceConfigFile } from '../engines/kit/folderTrust.js'
-import { filesContentHash, pluginContentHash, pluginTrustRecords, readConfigText, writePluginTrust } from './codexPluginTrust.js'
+import { filesContentHash, pluginContentHash, pluginTrustRecords, readConfigText, replaceConfigText, writePluginTrust } from './codexPluginTrust.js'
 
 // A copy of the module, so a test can watch, or break, the file calls a write makes.
 vi.mock('node:fs', async (original) => ({ ...await original<object>() }))
@@ -184,7 +183,7 @@ describe('writePluginTrust', () => {
     // removed or broken by hand, which declares nothing to trust and must not read as trusted, nor as a broken plugin.
     writeFileSync(join(installed, 'README.md'), 'fixturE\n')
     for (const folder of [installed, tree({ 'test/plugin.spec.mjs': 'test\n' }), handEdited('{"hooks":{}}\n'), handEdited(null), handEdited('{"hooks":')]) {
-      const io = { read: vi.fn(readConfigText), replace: vi.fn(replaceConfigFile) }
+      const io = { read: vi.fn(readConfigText), replace: vi.fn(replaceConfigText) }
       expect(writePluginTrust(home, folder, FINGERPRINT, io)).toStrictEqual({ ok: false, kind: 'differs' })
       expect(io.read).not.toHaveBeenCalled()
       expect(io.replace).not.toHaveBeenCalled()
@@ -278,7 +277,7 @@ describe('writePluginTrust', () => {
       if (++reads === 1) writeFileSync(file, `model = "other"\n${text}`)
       return text
     }
-    expect(writePluginTrust(home, tree(), FINGERPRINT, { read, replace: replaceConfigFile })).toStrictEqual({ ok: true, changed: true })
+    expect(writePluginTrust(home, tree(), FINGERPRINT, { read, replace: replaceConfigText })).toStrictEqual({ ok: true, changed: true })
     expect(reads).toBe(4)
     expect(configOf(home).startsWith('model = "other"\n# mine\n')).toBe(true)
     expect(parseToml(configOf(home))).toEqual({ model: 'other', hooks: { state: OURS } })
