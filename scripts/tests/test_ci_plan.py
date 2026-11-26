@@ -341,6 +341,28 @@ class SelectionTests(unittest.TestCase):
         self.assertFalse(planner.windows_only(path))
         self.assertFalse(planner.e2e_plan([path], {"windows-e2e"})["windows_arm64"])
 
+    def test_what_the_store_pipe_test_imports_runs_windows_end_to_end_on_x64_alone(self):
+        # windows-pipe.test.mjs holds the pipe auth's regression cases (audit W1) on the pipe client and the agents'
+        # transports it imports, and only windows-e2e runs it (storePackagesPipe.windows.spec.ts): a change to that code
+        # ran no job that runs them. The code is cross-platform JS, which x64 tests as arm64 does.
+        for path in ("store/tools/local-daemon.mjs", "store/tools/local-credential.mjs",
+                     "store/agents/harness-monitor/lib/bridge.mjs", "store/agents/machine-monitor/lib/localDaemon.mjs"):
+            with self.subTest(path=path):
+                self.assertIn("windows-e2e", planner.select([path])[0])
+                self.assertFalse(planner.e2e_plan([path], {"windows-e2e"})["windows_arm64"])
+        # The Store's code the pipe test does not import selects none.
+        for path in ("store/tools/listing.mjs", "store/agents/harness-monitor/lib/panes.mjs"):
+            with self.subTest(path=path):
+                self.assertNotIn("windows-e2e", planner.select([path])[0])
+
+    def test_what_the_store_pipe_test_imports_is_listed(self):
+        # Walked from the test through store/ alone, so an import it gains selects windows-e2e and one it drops stops
+        # selecting it. Its one import outside store/ is the CLI's installed ws package, no code of the repository's.
+        full_checkout(self, "store/tools/windows-pipe.test.mjs", "store/agents")
+        run = imports_from(REPOSITORY, ["store/tools/windows-pipe.test.mjs"], ("store/",))
+        self.assertEqual(sorted(path for path in run if not planner.windows_e2e(path) or planner.windows_only(path)), [])
+        self.assertEqual(set(planner.WINDOWS_STORE_PIPE_PATHS), run)
+
     def test_windows_in_a_name_outside_the_cli_runs_no_arm64(self):
         # Answer 2: the names of files under cli/ only; a folder's name (cli/src/lib/windows/) is not the file's.
         for path in ("desktop/windows/runner/main.cpp", "device-app/src-tauri/src/front_windows.rs",
@@ -2253,6 +2275,7 @@ class FullCheckoutTests(unittest.TestCase):
              "SelectionTests.test_every_path_the_app_eval_covers_is_in_the_checkout",
              "SelectionTests.test_the_harness_the_app_eval_files_run_runs_them",
              "SelectionTests.test_what_the_windows_e2e_harness_imports_is_listed",
+             "SelectionTests.test_what_the_store_pipe_test_imports_is_listed",
              "SelectionTests.test_every_declared_input_exists",
              "SelectionTests.test_store_tools_files_are_its_own_exactly_when_store_checks_runs_or_reads_them",
              "CrossReadTests.test_every_cross_read_in_this_repository_is_declared")
