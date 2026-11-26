@@ -1696,6 +1696,56 @@ describe('the dial that shows one app at a time', () => {
     })
   })
 
+  describe('an agent in tmux or herdr on its terminal app\'s page and the multiplexer\'s (docs/plans/2026-11-26-dial-mux-host-pages-design.md)', () => {
+    /** iTerm2 holding a plain agent, one in tmux and one in herdr; tmux's page holds b1 alone. */
+    const iterm = (): HostAgent[] => [
+      agent('a1', 'iterm'), agent('b1', 'iterm', { nest: 'tmux', host: 'tmux' }), agent('c1', 'iterm', { nest: 'herdr', host: 'herdr' }),
+    ]
+    /** A host over these agents whose settles run when `settle` says. */
+    function settling(agents: HostAgent[]): { host: DaemonCableHost; settle: (app: string) => void } {
+      const settles: Array<() => void> = []
+      const host = setup(agents, { appTimer: (_ms, run) => { settles.push(run); return () => {} } })
+      return { host, settle: (app) => { host.front(app); settles.at(-1)!() } }
+    }
+    const hosts = (snapshot: { agents: CableAgent[] }): Array<[string, string | undefined]> => snapshot.agents.map((a) => [a.id, a.host])
+
+    it('rows carry the page shown as their host: b1 on iTerm2\'s page host iterm, on tmux\'s host tmux', async () => {
+      const host = setup(iterm())
+      const onIterm = await host.listAgentSnapshot({ apps: true })
+      expect(onIterm.apps?.shown).toBe('iterm')
+      expect(hosts(onIterm)).toEqual([['a1', 'iterm'], ['b1', 'iterm'], ['c1', 'iterm']])
+      expect(host.pickApp('tmux')).toBe('switched')
+      expect(hosts(await host.listAgentSnapshot({ apps: true }))).toEqual([['b1', 'tmux']])
+      expect(host.pickApp('herdr')).toBe('switched')
+      expect(hosts(await host.listAgentSnapshot({ apps: true }))).toEqual([['c1', 'herdr']])
+    })
+
+    it('the single ring and hostOf keep the agent\'s own host', async () => {
+      const host = setup(iterm())
+      expect(hosts(await host.listAgentSnapshot())).toEqual([['a1', 'iterm'], ['b1', 'tmux'], ['c1', 'herdr']])
+      await host.listAgentSnapshot({ apps: true })
+      expect(['b1', 'c1'].map((id) => host.hostOf(id))).toEqual(['tmux', 'herdr'])
+    })
+
+    it('an app in front holding only tmux clients shows its page', async () => {
+      const { host, settle } = settling([agent('b1', 'iterm', { nest: 'tmux', host: 'tmux' }), agent('g1', 'ghostty'), agent('g2', 'ghostty')])
+      expect(await shown(host)).toBe('ghostty')
+      settle('iterm')
+      const read = await host.listAgentSnapshot({ apps: true })
+      expect(read.apps?.shown).toBe('iterm')
+      expect(hosts(read)).toEqual([['b1', 'iterm']])
+    })
+
+    it('Orca\'s scope ring keeps tmux in Orca, its row on Orca\'s page', async () => {
+      const { host, settle } = settling([agent('o1', 'orca'), agent('o2', 'orca', { nest: 'tmux', host: 'tmux' }), agent('g1', 'ghostty')])
+      settle('orca')
+      host.setScope('orca', { inScope: () => true })
+      const read = await host.listAgentSnapshot({ apps: true })
+      expect(read.apps?.shown).toBe('orca')
+      expect(hosts(read)).toEqual([['o1', 'orca'], ['o2', 'orca']])
+    })
+  })
+
   describe('the agent the dial shows (docs/specs/2026-11-16-orca-device-plugin.md)', () => {
     const A = {}
     const B = {}
@@ -1850,15 +1900,15 @@ describe('the dial that shows one app at a time', () => {
     expect(['h1', 'g1'].map((id) => host.appOf(id))).toEqual([undefined, undefined])
   })
 
-  it('appOf is the page an agent is on: tmux\'s or herdr\'s for a nested agent, Orca\'s for one in Orca; a notice\'s pick of a nested agent turns the dial there', async () => {
+  it('a notice of a nested agent picks its terminal app\'s page; a detached one\'s, its multiplexer\'s', async () => {
     const host = setup([
       agent('a1', 'iterm'), agent('b1', 'iterm', { nest: 'tmux', host: 'tmux' }), agent('c1', 'ghostty', { nest: 'herdr', host: 'herdr' }),
-      agent('o1', 'orca', { nest: 'tmux' }), agent('g1', 'ghostty'),
+      agent('o1', 'orca', { nest: 'tmux' }), agent('g1', 'ghostty'), agent('d1', 'tmux', { nest: 'tmux' }),
     ], { sessions })
     await host.listAgentSnapshot({ apps: true })
-    expect(['a1', 'b1', 'c1', 'o1'].map((id) => host.appOf(id))).toEqual(['iterm', 'tmux', 'herdr', 'orca'])
-    expect(host.pickApp('tmux', 'notice')).toBe('switched')
-    expect((await host.listAgentSnapshot({ apps: true })).apps?.shown).toBe('tmux')
+    expect(['a1', 'b1', 'c1', 'o1', 'd1'].map((id) => host.appOf(id))).toEqual(['iterm', 'iterm', 'ghostty', 'orca', 'tmux'])
+    expect(host.pickApp(host.appOf('b1')!, 'notice')).toBe('switched')
+    expect((await host.listAgentSnapshot({ apps: true })).apps?.shown).toBe('iterm')
   })
 
   // Windows: the scan learns no agent's app (scannedApp.ts) and nothing reports the app in front, so an agent it found is

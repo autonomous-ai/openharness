@@ -17685,6 +17685,9 @@ describe('Rex\'s ring goes as Rex\'s sidebar, and the dial follows the block foc
     if (file === REX && args[0] === 'block' && args[1] === 'call' && args[6] === 'process') {
       return { code: 0, stdout: JSON.stringify({ foreground: { pid: 4241 + Number(args[5].slice(-12)) } }) }
     }
+    // tmux's facts of pane %3 (its shell 4000) and its session's one client (4300), in a Rex block on ttys015.
+    if (file === 'tmux' && args[0] === 'display-message') return { code: 0, stdout: '4000|work|\n' }
+    if (file === 'tmux' && args[0] === 'list-clients') return { code: 0, stdout: '1794700050|4300|/dev/ttys015\n' }
     if (file === REX && args[0] === 'client') {
       return { code: 0, stdout: JSON.stringify({ clients: [{ client_id: 'client:00000000-0000-4000-8000-0000000000aa',
         info: { kind: 'app', platform: 'macos' }, principal: { uid: process.getuid?.() } }] }) }
@@ -17860,6 +17863,26 @@ describe('Rex\'s ring goes as Rex\'s sidebar, and the dial follows the block foc
       await land([{ ...pane(5, 'Zed', 1), pid: 5000 }, pane(1, 'Alpha', 2)])
       await land([{ ...pane(5, 'Zed', 1), pid: 5000 }, pane(1, 'Alpha', 2)])
       expect(await ring()).toEqual([agent(5), agent(1)])
+    })
+
+    // An agent in tmux whose client is in a Rex block is on Rex's page and tmux's (select.ts pagesOf, Diego 2026-11-26).
+    it("tmux inside Rex is on Rex's ring", async () => {
+      const { port } = await dialWith([hook(1), hook(2)])
+      // rx-3's caller (4244) in pane %3's shell (4000) of a tmux server (3950) that made its terminal, and that session's
+      // one client (4300) in a Rex block's shell (4299), on that block's terminal.
+      readers.processes.mockResolvedValue([...REX_CALLERS.filter((p) => p.pid !== 4244),
+        { pid: 4244, ppid: 4000, tty: 'ttys030', executable: 'claude' }, { pid: 4000, ppid: 3950, tty: 'ttys030', executable: 'zsh' },
+        { pid: 3950, ppid: 1, executable: 'tmux' },
+        { pid: 4300, ppid: 4299, tty: 'ttys015', executable: 'tmux' }, { pid: 4299, ppid: 3900, tty: 'ttys015', executable: '-zsh' }])
+      // The client's walk reaches the Rex Server app, which names Rex.
+      readers.bundleId.mockImplementation(async (bundle) => (bundle.endsWith('/Rex Server.app') ? 'com.superlogical.rex' : undefined))
+      port.observed({ ...hook(3), hostHints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux' } })
+      await vi.waitFor(() => expect(logs).toContain('[device] tmux client · found'))
+      await settled()
+      const read = await host().listAgentSnapshot({ apps: true })
+      expect(read.apps?.shown).toBe('rex')
+      expect(read.apps?.apps.map(({ id, count }) => [id, count])).toEqual([['rex', 3], ['tmux', 1]])
+      expect(read.agents.map((a) => a.id)).toContain(agent(3))
     })
 
     // An older hook sends no REX_SESSION, so its agent has no block of its own: the block running its process places it,
