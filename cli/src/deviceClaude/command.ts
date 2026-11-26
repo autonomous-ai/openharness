@@ -4,11 +4,14 @@
  * runs that a person never types: `asked` (its PermissionRequest hook), `link` (its mod, for the daemon's socket and the
  * devices' listener's), and `inbox <session id>` and `attach <session id>` (its mod on Windows, whose runtime can
  * neither reach the daemon's pipe nor the devices' nor sign for either: this process holds the session's poll and
- * proves the daemon's token, inbox.ts, and tells the devices the Claude app shows a session). `disable` marks the
+ * proves the daemon's token, inbox.ts, and tells the devices the Claude app shows a session). `codex asked` is the
+ * plugin's Codex hooks' (hooks/codex.json, codexAsked.ts), never typed either. `disable` marks the
  * engine removed in dial-skill.json, which the devices service then leaves alone, and removes Harness's skill from the
  * engine's default home, from each folder an enable wrote and from each the service recorded in dial-setup.json.
  * `enable` clears the mark and writes the skill into the engine's default home and back into each folder the service
  * recorded; a folder an earlier enable wrote with another home is not written again.
+ * Codex's two also hold its harness-device plugin (devices/codexPlugin.ts) in the engine's default home and in each home
+ * the service recorded setting it up: `enable` sets it up there, and `disable` removes it only where it is Harness's.
  * Claude Code's two cover each Orca account's Claude Code home as well, and the default home when the command runs with
  * another (in an Orca terminal), all sharing the command's `plugins/`: there the plugin is only turned on or off.
  * `disable` turns those off first and never uninstalls there: an uninstall takes the files every home names, and another
@@ -33,7 +36,8 @@ import { connect, type Socket } from 'node:net'
 import { dirname, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { harnessPath } from '../config/harnessHome.js'
-import { claudeDisable, claudeEnable, claudeHomeDisable, claudeHomeEnable, claudeStatus, type ClaudePluginFiles, type ClaudeResult, type ClaudeRun } from '../devices/claudePlugin.js'
+import { claudeDisable, claudeEnable, claudeHomeDisable, claudeHomeEnable, claudeStatus, type ClaudePluginFiles, type ClaudeRun } from '../devices/claudePlugin.js'
+import { codexMarketplace, codexPluginState, codexRemove, codexSetUp, type CodexFailure } from '../devices/codexPlugin.js'
 import { claudePluginState, claudePluginTurnedOff, ownDirectory, removeSkill, skillsFolderOf, writeSkill } from '../devices/dialSkill.js'
 import { listable, MAX_HOMES, readRemoved, readSetup, readWritten, writeOrcaConnected, writePluginHomes, writeRemoved, type DialEngine } from '../devices/dialSkillFiles.js'
 import { tellDevices } from '../devices/listenerClient.js'
@@ -47,6 +51,7 @@ import { localSocketRoute, socketIsPrivate } from '../lib/localTransport.js'
 import { daemonPipe } from '../lib/windows/daemonPipe.js'
 import type { PipeTarget } from '../lib/windows/pipeClient.js'
 import { daemonPost, runAsked } from './asked.js'
+import { runCodexAsked } from './codexAsked.js'
 import { CALLER_LIVENESS, createDaemonProof, followInbox } from './inbox.js'
 import { claudePluginOn, claudeSettingsPath } from './plugin.js'
 
@@ -58,8 +63,8 @@ export const DEVICE_USAGE = `Harness device (with a dial plugged in, Claude Code
   harness device claude enable           set Claude Code up again: the plugin and the dial skill (Claude Code 2.1.287 or later), in each Orca account too
   harness device claude disable          remove the plugin and the dial skill, in each Orca account too; Harness leaves them removed
   harness device codex status [--json]   whether the dial is on for Codex
-  harness device codex enable            set Codex up again: the dial skill in its homes
-  harness device codex disable           remove the dial skill Harness wrote; Harness leaves it removed
+  harness device codex enable            set Codex up again: the plugin and the dial skill in its homes
+  harness device codex disable           remove the plugin and the dial skill; Harness leaves them removed
   harness device vscode enable           set VS Code up again: Harness's extension in it
   harness device vscode disable          remove Harness's extension; Harness leaves it removed
   harness device cursor enable           set Cursor up again: Harness's extension in it
@@ -91,6 +96,8 @@ export interface DeviceDeps {
   codexHome: string
   /** Whether Codex is on this computer: looked for only by `codex status` and `codex enable`. */
   codex(): boolean
+  /** Codex pointed at [home], on that child alone: run only by `codex enable` and `disable`, for the plugin. */
+  codexIn(home: string): ClaudeRun | null
   /** What an editor's words read and run: asked for only by `vscode|cursor status`, `enable` and `disable`. */
   vscode(editor: VscodeEditor): VscodeExtensionDeps
   /** Orca's CLI and the plugin's files cli.js carries: asked for only by `orca status`, `enable` and `disable`. */
@@ -205,13 +212,22 @@ async function codexCommand(verb: string, json: boolean, deps: DeviceDeps): Prom
     }
     case 'enable': {
       const refused = !supported ? 'The dial reaches Codex on macOS, Linux and Windows.' : !deps.codex() ? 'Codex is not on this computer.' : null
-      if (!refused) return turnOn('codex', deps.codexHome, deps)
-      deps.err(refused)
-      return 1
+      if (refused) {
+        deps.err(refused)
+        return 1
+      }
+      const code = turnOn('codex', deps.codexHome, deps)
+      return code === 0 ? codexPluginOn(deps) : code
     }
     case 'disable':
-      // Removing the skill looks for no Codex: it may be gone already.
-      return turnOff('codex', deps.codexHome, deps)
+      // Removing the skill looks for no Codex: it may be gone already. The plugin's removal looks for it in each home.
+      return turnOff('codex', deps.codexHome, deps, () => codexPluginOff(deps))
+    case 'asked': {
+      // A session started before `disable` still runs the hook: with Codex removed, its stdin is read and nothing told.
+      const post = readRemoved(deps.dataDir).codex !== true ? daemonPost(deps.dataDir, deps.port) : async () => {}
+      // Prints nothing, ever: what the hook prints, Codex reads as its decision.
+      return runCodexAsked({ stdin: deps.stdin, post, codexHome: deps.codexHome })
+    }
     default:
       deps.err(DEVICE_USAGE)
       return 1
@@ -307,6 +323,11 @@ const SETUP_UNREAD = 'Could not read the dial setup.'
 const PLUGIN_LEFT_ON = 'Claude Code was not found, so its harness-device plugin is still on; /plugin in Claude Code removes it.'
 /** A run from the sources: only a build carries the marketplace folder's files. */
 const NO_PLUGIN = 'This Harness build carries no Claude Code plugin.'
+const NO_CODEX_PLUGIN = 'This Harness build carries no Codex plugin.'
+/** Said once for each Codex home that failed, never its path: Codex's own line may name one. */
+const CODEX_SETUP_FAILED = 'Could not set up the Codex plugin.'
+const CODEX_REMOVE_FAILED = 'Could not remove the Codex plugin.'
+const CODEX_LEFT_ON = 'Codex was not found, so its harness-device plugin is still on; codex plugin remove harness-device@openharness removes it.'
 /** Said once for each Orca home that failed, never its path: Claude Code's own line names the account's folder. */
 const ORCA_ON_FAILED = 'Could not turn on Claude Code in one Orca account.'
 const ORCA_OFF_FAILED = 'Could not turn off Claude Code in one Orca account.'
@@ -420,6 +441,72 @@ function setUp(engine: DialEngine, dataDir: string): boolean {
 }
 
 /**
+ * The Codex homes the plugin is held in: the command's own and each the devices recorded setting it up, by real path,
+ * each once; one that does not resolve is not there to run in. [recorded]: the homes the devices recorded.
+ */
+function codexPluginHomes(deps: DeviceDeps): { homes: string[]; recorded: Set<string> } {
+  const recorded = new Set(Object.keys(readSetup(deps.dataDir).codexPlugin ?? {}))
+  const homes = new Set<string>()
+  for (const home of [deps.codexHome, ...recorded]) {
+    const real = realPath(home)
+    if (real !== null) homes.add(real)
+  }
+  return { homes: [...homes], recorded }
+}
+
+/** A failure in fixed words with its reason, as Codex's own line may name a path; an older Codex is said as such. */
+function codexFailure(failure: CodexFailure, words: string): string {
+  if (failure.step === 'unsupported') return failure.error
+  return failure.reason ? `${words} (${failure.reason})` : words
+}
+
+/**
+ * The plugin set up in each Codex home, from the folder and the carried files `claude enable` uses, one home after
+ * another. A home whose marketplace is the person's own, a plugin they turned off, and a copy Codex asks the person
+ * about are no failure.
+ */
+async function codexPluginOn(deps: DeviceDeps): Promise<number> {
+  const files = deps.claudeFiles()
+  if (!files) {
+    deps.err(NO_CODEX_PLUGIN)
+    return 1
+  }
+  const folder = harnessPath('claude-marketplace', deps.home)
+  let code = 0
+  for (const home of codexPluginHomes(deps).homes) {
+    const result = await codexSetUp({ run: deps.codexIn(home), home, platform: deps.platform, folder, files })
+    if (result.ok) continue
+    deps.err(codexFailure(result, CODEX_SETUP_FAILED))
+    code = 1
+  }
+  return code
+}
+
+/**
+ * The plugin removed from each Codex home where it is Harness's: its marketplace Harness's folder, or none left in a
+ * home the devices recorded setting it up. A home whose marketplace is the person's own holds their install, and one
+ * whose config.toml cannot be read is not known to be Harness's. With no `codex` there, a plugin on in its config.toml
+ * stays: the person is told. The first failure is the one said.
+ */
+async function codexPluginOff(deps: DeviceDeps): Promise<{ ok: true } | { ok: false; error: string }> {
+  const folder = harnessPath('claude-marketplace', deps.home)
+  const { homes, recorded } = codexPluginHomes(deps)
+  let error: string | undefined
+  for (const home of homes) {
+    const marketplace = codexMarketplace(home, folder)
+    if (marketplace !== 'harness' && !(marketplace === 'none' && recorded.has(home))) continue
+    const run = deps.codexIn(home)
+    if (!run) {
+      if (codexPluginState(home) === 'on') error ??= CODEX_LEFT_ON
+      continue
+    }
+    const result = await codexRemove({ run, home, platform: deps.platform })
+    if (!result.ok) error ??= codexFailure(result, CODEX_REMOVE_FAILED)
+  }
+  return error === undefined ? { ok: true } : { ok: false, error }
+}
+
+/**
  * The removal is cleared before anything is made: the devices service sets the engine up again from then on, and a
  * failed save leaves nothing behind. The default home's skills folder is then recorded before the skill is written, so
  * a disable run with another home still finds it; a folder the record cannot hold gets no skill. The default home is
@@ -475,7 +562,7 @@ function madeFolder(folder: string): boolean {
  * failed, for the next disable. The service's record is only read: its one writer is the devices service, which empties
  * that engine's folders once it reads the mark; one that cannot be read names no folder, and is said.
  */
-async function turnOff(engine: DialEngine, home: string, deps: DeviceDeps, plugin?: () => Promise<ClaudeResult | undefined>): Promise<number> {
+async function turnOff(engine: DialEngine, home: string, deps: DeviceDeps, plugin?: () => Promise<{ ok: true } | { ok: false; error: string } | undefined>): Promise<number> {
   let error = writeRemoved(deps.dataDir, engine, true) === undefined ? undefined : SAVE_FAILED
   const uninstalled = await plugin?.()
   if (uninstalled && !uninstalled.ok) error ??= uninstalled.error

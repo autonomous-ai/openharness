@@ -41,6 +41,9 @@ const EXES: [string, string][] = [
   // Orca's window on Windows is its Orca.exe's (dial-windows VM notes, "### 1. Window owners").
   ['Orca.exe', 'orca'],
   ['orca.exe', 'orca'],
+  // Harness Desktop's window on Windows is its harness-desktop.exe's (desktop/windows/CMakeLists.txt, BINARY_NAME).
+  ['harness-desktop.exe', 'harness'],
+  ['Harness-Desktop.exe', 'harness'],
 ]
 
 // The Claude, ChatGPT and Orca apps' Linux processes, by the comm their recording shows (ChatGPT's as recorded,
@@ -97,7 +100,7 @@ describe('frontAppId', () => {
     expect(detectApp({ __CFBundleIdentifier: bundle })).toBe(id)
   })
 
-  it.each(EXES)('Code.exe, Cursor.exe, WindowsTerminal.exe, ChatGPT.exe, Claude.exe, Orca.exe, wezterm-gui, kitty and ghostty map: %s', (exe, id) => {
+  it.each(EXES)('Code.exe, Cursor.exe, WindowsTerminal.exe, ChatGPT.exe, Claude.exe, Orca.exe, harness-desktop.exe (Harness Desktop), wezterm-gui, kitty and ghostty map: %s', (exe, id) => {
     expect(frontAppId(exe)).toBe(id)
   })
 
@@ -118,6 +121,8 @@ describe('frontAppId', () => {
     // harness.exe on Windows is the CLI (pty/src/command.rs), whose window is the terminal's; Harness Desktop is
     // harness-desktop.exe there.
     'harness.exe', 'Harness.exe',
+    // A bare harness-desktop is no app's elsewhere: Harness Desktop's Linux binary is harness.
+    'harness-desktop',
     // Warp Preview's Windows name is unconfirmed.
     'warp-preview.exe',
     // A bare orca on Linux is GNOME's screen reader (/usr/bin/orca), not the Orca app.

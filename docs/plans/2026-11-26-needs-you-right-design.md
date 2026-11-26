@@ -204,7 +204,8 @@ both hold. `PRESENT_MS` is 120 s, the usage counts' own edge (`WAIT_EDGES`, `VAL
   (`ui_habitat.c` `on_face`: a question, a turn end and a failed turn alike), and the display stays awake for 5 minutes
   after a touch, a voice press or a ring; following an agent does not wake it. With the display asleep everything
   rings. So an ask the devices mean to ring can stay silent in the minutes after the person last touched the dial, or
-  after another agent's ring. Two places decide today; Open points names the item that would leave one.
+  after another agent's ring. Two places decide today; the firmware's owners are taking the face rule out (Open
+  points, 3), and from their release the devices alone decide.
 
 **Where it applies.**
 
@@ -484,7 +485,8 @@ an outside wait, closed when the agent goes on. Nothing is answered on the dial.
 
 ## Part 7. A Codex session's waits outside a pane reach the dial
 
-Status: decided (the PM and the author, 2026-11-26; the maintainer left it to them). Found by Part 6's probe, from the
+Status: decided (the PM and the author, 2026-11-26; the maintainer left it to them; item 3 and the points marked
+2026-11-27 by the PM, from the final review). Found by Part 6's probe, from the
 code; its spike ran five isolated Codex 0.172.0 sessions against a local stub (2026-11-26). After Part 6. The CLI and
 the Harness Device plugin change; the native hook and the core's process do not.
 
@@ -536,11 +538,14 @@ The change:
    - **That file has other writers:** the core's own hook review, Codex itself, and the person. The write edits only
      the plugin's own tables, the way `hookReview.ts` and `folderTrust.ts` edit the file (through a symlink,
      atomically, never a table defined twice), and a write that finds the file changed since it read it reads it
-     again and starts over, at most 3 times, so it never drops another writer's change. Failed, it logs its kind
-     alone; Codex then asks the person to review the hook, as it would without the record.
+     again and starts over, at most 3 times, so it never drops another writer's change. It is crash-safe as
+     `hookReview.ts`'s write is: a crash mid-write leaves the old file or the new one, never half of one (the PM,
+     2026-11-27). Failed, it logs its kind alone; Codex then asks the person to review the hook, as it would without
+     the record.
    - Its line (the spike, 2026-11-26): for `Bash`, the command's first line; for `apply_patch`, the first file path it
-     names; for any other tool, the tool's name alone. Cut as Claude Code's summaries are (200 bytes, control
-     characters to spaces). Nothing else of the tool's input leaves that process.
+     names; for `request_user_input`, its first question's text, as Part 6's question form; for any other tool, the
+     tool's name alone. Cut as Claude Code's summaries are (200 bytes, control characters to spaces). Nothing else of
+     the tool's input leaves that process.
    - Not `notify.mjs`. It is not one of the core process's files, but every session of every engine runs it, the core
      installs it, and its rule is "the event and the tool's name only, never a tool's input or what is asked". The
      spike found the plugin can carry trusted hooks, so no fallback there is needed.
@@ -557,15 +562,31 @@ The change:
      always holds `approvals_reviewer`. It lay 4 to 10 KB from the end in short turns and 3.16 MB after 40 commands with
      large output; reading 16 MiB backwards took 28 ms.
    - `PermissionRequest`: `user` posts at once; `auto_review`, anything else, or not found within the bound posts
-     nothing.
+     nothing. One for a tool of Codex's apps (`mcp__codex_apps__*`) posts nothing (the PM, 2026-11-27).
    - `PreToolUse` (`request_user_input`): it also fires in Default mode, where Codex refuses the tool and shows no
      form. So it posts only when `collaboration_mode.mode` is `plan`. A Default mode with
-     `default_mode_request_user_input` on is missed, as today, rather than rung for nothing.
-3. Posted, it is the path a Claude Code permission ask takes today: a wait card with its line and `In <app>`, rung
-   once, counted as an outside wait, closed when the agent goes on. The devices add nothing for Codex.
+     `default_mode_request_user_input` on is missed, as today, rather than rung for nothing. An input with no first
+     question's text posts nothing (the PM, 2026-11-27).
+3. **Once per command in a session** (the PM, 2026-11-27, from Part 7's final review). When the person picks "Yes,
+   and don't ask again for this command in this session" (for `apply_patch`, "don't ask again for these files"),
+   Codex checks that choice only after the `PermissionRequest` hook has run. So the same command later in that session
+   runs the hook again, its turn's reviewer still `user`, and no dialog follows. Neither the hook's input nor the
+   record says the choice was made. So the devices take a Codex permission ask only the first time a session asks it:
+   a Codex `asked` whose tool and line that session already asked is dropped, with no card and no ring. A question
+   form (`request_user_input`) is never dropped, and nothing changes for Claude Code.
+   - Kept in the devices' memory alone, beside the agent outside a pane (`cable/hosts/observed.ts`): at most 64 lines
+     a session, the oldest going first, within that source's 50 sessions (the author's bound). A session's lines go
+     when its agent leaves. Nothing of it is written to a file or sent.
+   - What it costs: when the person picks plain "Yes" and Codex asks again for that very command in the same session,
+     the second ask is missed. After the devices restart, a remembered command rings once more for nothing, at most
+     once each.
+4. Posted, it is the path a Claude Code permission ask takes today: a wait card with its line and `In <app>`, rung
+   once, counted as an outside wait, closed when the agent goes on. The devices add only item 3 for Codex.
 
 What it gives up, on purpose: with automatic review on, a command the review passes to the person rings nothing, as
 today; so does a Default-mode question form where Codex's experimental setting turns it on. A ring at every command the review approves would be the anti-goal; a missed escalation is today's behavior.
+So, by item 3, does a second ask for a command the person allowed with plain "Yes": a ring at every command the
+person already allowed for the session would be the same anti-goal.
 And if Codex renames the field or the line, every Codex ask outside a pane goes quiet again, as today: the command's
 spec pins a record written by Codex 0.172, and the Codex release checks read it again.
 
@@ -584,9 +605,15 @@ Answered by the spike (2026-11-26), and used by Part 4 too:
   switch; the trust record written after each install and update, only the plugin's tables, a file changed meanwhile
   read again, another writer's change kept); the reviewer check (`user` posts; `auto_review` posts nothing; another
   turn's `turn_context` is not read as this one's; a line past the bound reads as not found; a missing, linked or
-  non-regular file posts nothing); `request_user_input` (posts in plan mode, nothing in Default mode); the line for
-  `Bash`, `apply_patch` and another tool; `services/devices.spec.ts` (a Codex `asked` waits and rings once, as Claude
-  Code's); an end-to-end case with the fake Codex engine, its record holding each reviewer and mode.
+  non-regular file posts nothing; an `mcp__codex_apps__*` tool posts nothing); `request_user_input` (posts in plan
+  mode, nothing in Default mode, nothing with no first question's text); the line for `Bash`, `apply_patch`,
+  `request_user_input` and another tool; the trust write left whole when it stops mid-write;
+  `services/devices.spec.ts` (a Codex `asked` waits and rings once, as Claude Code's; the same tool and line again in
+  that session drops, in another session rings; a question form asked twice rings twice; the 65th line pushes out
+  the first; a session's lines go with its agent); an end-to-end case with the fake Codex engine, its record holding
+  each reviewer and mode.
+- **Its time** (the PM, 2026-11-27). The hook runs before every Codex permission ask, so the pull request gives its
+  time from start to exit, in a short turn and with the record's line at the 16 MiB bound.
 - **Docs:** `plugins/harness-device/README.md`, the devices row of `cli/AGENTS.md`, and the hook-driven status plan's
   limit 4, which this narrows.
 
@@ -618,7 +645,9 @@ Part 7 stores a record and writes another program's config file.
 1. **Growth.** `dial-setup.json` gains `codexPlugin`: one CLI version per Codex home the setup installed into, at most
    64 homes; an entry leaves when its home folder is gone. A home's `config.toml` gains the plugin's two `hooks.state`
    tables, replaced in place at each install, update or changed fingerprint, never added twice; after `disable` they
-   stay, inert (Codex ignores a record with no hook), and the next install replaces them.
+   stay, inert (Codex ignores a record with no hook), and the next install replaces them. In the devices' memory, the
+   lines each Codex session already asked (Part 7, item 3): at most 64 a session within the observed source's 50
+   sessions, gone with the session's agent and at a restart.
 2. **Concurrency.** `dial-setup.json` keeps one writer, the devices process (the command only reads `codexPlugin`).
    `config.toml` has other writers (Codex, the core's `engines/kit/hookReview.ts`, the person): only the plugin's own
    tables are edited, through a link to its target, atomically, comparing what was read with what is on disk just
@@ -701,9 +730,10 @@ maintainer asked (2026-11-26): Part 7. None changes Parts 1 to 3 as written.
 
 1. **A quiet card, looked at again when its turn ends:** Part 2b.
 2. **An outside Claude Code session's question form and plan approval:** Part 6.
-3. **One place decides the ring.** The firmware's face rule (Part 2, "The dial's own rule") and the devices' `present`
-   overlap. Proposed to the firmware's owners: the frame says whether to ring, and both dial models obey it.
-   Built for the round dial (2026-11-26): its firmware dropped `on_face` and rings every alert it is sent.
+3. **One place decides the ring: taken by the firmware's owners** (2026-11-26). The firmware drops its face rule
+   (Part 2, "The dial's own rule") and rings as the frame the devices send says, its Sound setting the one thing it
+   still weighs. Their pull request and its release are theirs to schedule. Once it ships, a question, a permission
+   ask or a failed turn of the agent on the dial's face rings as anywhere else, which is this design's rule for them.
 4. **A Codex session outside a pane: no wait reaches the dial:** Part 7.
 
 ## Left to the builder

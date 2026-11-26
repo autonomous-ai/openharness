@@ -87,8 +87,9 @@ describe("Orca's chats on the dial", () => {
     }
   })
 
-  /** A source whose `orca` answers what the test holds, on a clock each `agent list` moves by `took`. */
-  function setup() {
+  /** A source whose `orca` answers what the test holds, on a clock each `agent list` moves by `took`. On a Mac unless a
+   *  test names another platform: the recorded folders are `/` ones, which a Windows test machine would drop. */
+  function setup(platform: NodeJS.Platform = 'darwin') {
     const state = {
       binary: ORCA as string | null,
       stamp: { realPath: ORCA, mtimeMs: 1 } as { realPath: string; mtimeMs: number } | null,
@@ -121,6 +122,7 @@ describe("Orca's chats on the dial", () => {
       show,
       log: (line) => { lines.push(line) },
       now: () => clock,
+      platform,
     }
     const src = new OrcaChatSource(deps)
     src.onChange(() => { changes++ })
@@ -201,6 +203,19 @@ describe("Orca's chats on the dial", () => {
     })
     expect(t.src.list().find(({ name }) => name === 'Chat 2')).toMatchObject({ engine: 'codex', state: 'idle' })
     expect(t.said()).toEqual(['[orca-chat] read · <0.5s', `[orca-chat] listed · ${AGENTS.length} chats · 0 heard`])
+  })
+
+  it("keeps a Windows chat's drive folder, never a share's, a device path's or a `/` one", async () => {
+    const t = setup('win32')
+    t.state.agents.stdout = agentsAnswer([
+      chat(1, { worktreeId: 'made-up::C:\\work\\p1' }),
+      chat(2, { worktreeId: 'made-up::C:/work/p2' }),
+      chat(3, { worktreeId: 'made-up::\\\\server\\share\\p3' }),
+      chat(4, { worktreeId: 'made-up::\\\\?\\C:\\work\\p4' }),
+      chat(5),
+    ])
+    await t.read()
+    expect(t.src.list().map(({ cwd }) => cwd)).toEqual(['C:\\work\\p1', 'C:/work/p2', undefined, undefined, undefined])
   })
 
   it('names an untitled chat by its workspace, else by its CLI, keeps no folder that is not a whole path, and cuts a preview by character', async () => {

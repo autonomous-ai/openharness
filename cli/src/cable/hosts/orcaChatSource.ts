@@ -22,6 +22,7 @@
  *
  * A log line says only fixed words and counts: Orca's lists name people's folders, chats and their words.
  */
+import { absoluteFolder } from '../../lib/sessionSearch/externals/support.js'
 import { cutAnswer, observedAgentId, type PaneName } from './observed.js'
 import { observedTitle } from './observedTitle.js'
 import type { OrcaDeps, OrcaReadDeps } from './orca.js'
@@ -71,6 +72,8 @@ export interface OrcaChatDeps {
   log(line: string): void
   /** A monotonic clock in ms, for the read's time. */
   now(): number
+  /** Whose folders the worktree ids hold: process.platform's unless a test names another. */
+  platform?: NodeJS.Platform
 }
 
 /** Why a read failed, in the log's fixed words. */
@@ -104,11 +107,13 @@ function stateOf(state: unknown): HostAgentState {
   return 'idle'
 }
 
-/** The folder after the worktree id's `::`, when it is a whole absolute path. */
-function folderOf(worktreeId: string): string | undefined {
+/** The folder after the worktree id's `::`, when it is a whole absolute path. On Windows Orca's ids hold a drive folder
+ *  (`<uuid>::C:\…`), so the rule is the transcript scans' (support.ts absoluteFolder): a drive folder there, never a
+ *  share or device path, and a `/` one elsewhere. */
+function folderOf(worktreeId: string, platform: NodeJS.Platform | undefined): string | undefined {
   const at = worktreeId.indexOf('::')
-  const folder = at === -1 ? '' : worktreeId.slice(at + 2)
-  return folder.startsWith('/') && folder.length <= MAX_PATH ? folder : undefined
+  const folder = at === -1 ? null : absoluteFolder(worktreeId.slice(at + 2), platform)
+  return folder !== null && folder.length <= MAX_PATH ? folder : undefined
 }
 
 /** Orca's preview of the last answer as a card keeps it: on one line, cut as a hooked agent's (observed.ts cutAnswer). */
@@ -121,13 +126,13 @@ function answerOf(text: unknown): string | undefined {
  *  terminal agent's row is the Orca adapter's (orca.ts), and a chat of another of Orca's hosts runs on another computer,
  *  which this one's `orca` neither shows nor activates (decided 2). A chat with no worktree id could be neither scoped
  *  nor brought up. */
-function chatOf(row: unknown, place: number): Chat | undefined {
+function chatOf(row: unknown, place: number, platform: NodeJS.Platform | undefined): Chat | undefined {
   if (!isObject(row) || row.kind !== 'chat' || row.hostId !== 'local') return undefined
   const { orcaSessionId: orcaId, agent, updatedAt, worktreeId } = row
   if (!bounded(orcaId, MAX_SESSION_ID) || !bounded(worktreeId, MAX_WORKTREE_ID)) return undefined
   if (typeof agent !== 'string' || !ENGINE.test(agent)) return undefined
   if (typeof updatedAt !== 'number' || !Number.isFinite(updatedAt)) return undefined
-  const cwd = folderOf(worktreeId)
+  const cwd = folderOf(worktreeId, platform)
   const answer = answerOf(row.lastAssistantMessage)
   return {
     orcaId,
@@ -158,12 +163,12 @@ function rowsOf(stdout: string, key: string): unknown[] | undefined {
 }
 
 /** The chats of `orca agent list --json`'s answer, the newest 64, each once. */
-function chatsOf(stdout: string): Chat[] | undefined {
+function chatsOf(stdout: string, platform: NodeJS.Platform | undefined): Chat[] | undefined {
   const rows = rowsOf(stdout, 'agents')
   if (rows === undefined) return undefined
   const chats = new Map<string, Chat>()
   for (const [place, row] of rows.entries()) {
-    const chat = chatOf(row, place)
+    const chat = chatOf(row, place, platform)
     if (chat && !chats.has(chat.orcaId)) chats.set(chat.orcaId, chat)
   }
   return [...chats.values()].sort((a, b) => b.at - a.at).slice(0, ORCA_CHATS_KEPT)
@@ -465,7 +470,7 @@ export class OrcaChatSource implements HostSource {
       withWorktrees ? this.ask(orca, WORKTREE_LIST) : undefined,
     ])
     if (this.stops !== stops) return
-    const chats = agents.code === 0 ? chatsOf(agents.stdout) : undefined
+    const chats = agents.code === 0 ? chatsOf(agents.stdout, this.deps.platform) : undefined
     if (chats === undefined) {
       // Orca not running, or an answer of another shape: its chats cannot be reached now.
       this.fail(failureOf(agents.code))

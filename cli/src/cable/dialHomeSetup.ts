@@ -71,6 +71,14 @@ export interface DialHomeSetup {
   recordOrca(version: string): boolean
   /** As recordOrca(), for the held version. */
   recordOrcaHeld(version: string): boolean
+  /** The Codex homes the last pass handled while Codex was on: the default, the adopted and Orca's, and each a scan
+   *  found; empty while Codex is removed. */
+  codexHomes(): readonly string[]
+  /** A Codex home's real path to the CLI version that last set Harness Device's plugin up there. */
+  codexPlugin(): Readonly<Record<string, string>>
+  /** [version] null removes [home]'s entry. false when the record could not be saved, or already holds MAX_HOMES homes
+   *  and not [home], and the record is as before. */
+  recordCodexPlugin(home: string, version: string | null): boolean
 }
 
 type Counts = Record<DialEngine, { wrote: number; removed: number; failed: number }>
@@ -582,6 +590,22 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
 
     recordOrcaHeld(version) {
       const next = { ...record, orcaHeld: version }
+      if (writeSetup(deps.dataDir, next) !== undefined) return false
+      record = next
+      return true
+    },
+
+    codexHomes: () => [...handled.codex],
+
+    codexPlugin: () => record.codexPlugin ?? {},
+
+    recordCodexPlugin(home, version) {
+      const codexPlugin = { ...record.codexPlugin }
+      // A save would drop a 65th home, so it would read as never set up.
+      if (version !== null && !Object.hasOwn(codexPlugin, home) && Object.keys(codexPlugin).length >= MAX_HOMES) return false
+      if (version === null) delete codexPlugin[home]
+      else codexPlugin[home] = version
+      const next = { ...record, codexPlugin }
       if (writeSetup(deps.dataDir, next) !== undefined) return false
       record = next
       return true

@@ -40,6 +40,10 @@ codex plugin marketplace add autonomous-ai/openharness --sparse .claude-plugin -
 codex plugin add harness@openharness
 ```
 
+In a Codex home with this marketplace, Harness sets up no
+[Harness Device plugin](../harness-device/README.md#codex): the marketplace is yours, so Codex's waits outside a
+Harness pane do not reach the dial there.
+
 The marketplace is [`.claude-plugin/marketplace.json`](../../.claude-plugin/marketplace.json) at the root of this
 repository; Codex reads the same file. `--sparse` checks out only the marketplace and this folder: on October 11,
 2026 that took 4 seconds and 3 MB for Claude Code, against 70 seconds and 670 MB for the whole repository, and

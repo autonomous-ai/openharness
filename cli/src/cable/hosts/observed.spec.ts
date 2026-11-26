@@ -7619,6 +7619,81 @@ describe('ObservedSource and a waiting prompt', () => {
   })
 })
 
+// Codex runs its PermissionRequest hook before it reads the session's "don't ask again" answers, and nothing it sends
+// says the person gave one: only the first ask of a command in a session rings (harness-pm, 2026-11-27).
+describe('ObservedSource and an ask Codex repeats in a session', () => {
+  const asked = (over: Partial<ObservedAsked> = {}): ObservedAsked => ({
+    engine: 'codex', sessionId: 's1', event: 'asked', tool: 'Bash', summary: 'npm test', ...over,
+  })
+  /** Whether the ask, made while its session's turn runs, turned it needs-you and was heard. */
+  const rings = (s: ReturnType<typeof setup>, ask: ObservedAsked): boolean => {
+    s.src.ingest(s.ev('turn-start', { engine: ask.engine, sessionId: ask.sessionId }))
+    s.changes.mockClear()
+    s.src.ingest(ask)
+    const state = s.src.list().find((a) => a.id === observedAgentId(ask.engine, ask.sessionId))?.state
+    return state === 'needs-you' && s.changes.mock.calls.length === 1
+  }
+
+  it('rings its first ask, and not the same tool and line again in that session, which changes and logs nothing', () => {
+    const log = vi.fn()
+    const s = setup({ log })
+    expect(rings(s, asked())).toBe(true)
+    s.src.ingest(s.ev('turn-start', { engine: 'codex' }))
+    log.mockClear()
+    expect(rings(s, asked())).toBe(false)
+    expect(s.src.list()[0].state).toBe('working')
+    expect(s.src.waitingOn(s.src.list()[0].id)).toBeUndefined()
+    expect(log).not.toHaveBeenCalled()
+  })
+
+  it('rings another line, another tool, and the same line in another session', () => {
+    const s = setup()
+    expect(rings(s, asked())).toBe(true)
+    expect(rings(s, asked({ summary: 'npm run build' }))).toBe(true)
+    expect(rings(s, asked({ tool: 'apply_patch' }))).toBe(true)
+    expect(rings(s, asked({ sessionId: 's2' }))).toBe(true)
+  })
+
+  it('keeps 64 asks a session: the 65th forgets the oldest, which rings again', () => {
+    const s = setup()
+    for (let i = 0; i <= 64; i++) expect(rings(s, asked({ summary: `step ${i}` }))).toBe(true)
+    expect(rings(s, asked({ summary: 'step 64' }))).toBe(false)
+    expect(rings(s, asked({ summary: 'step 1' }))).toBe(false)
+    expect(rings(s, asked({ summary: 'step 0' }))).toBe(true)
+  })
+
+  it('rings every repeat of a question form, which no answer stops Codex asking', () => {
+    const s = setup()
+    const form = asked({ tool: 'request_user_input', summary: 'Which database?' })
+    expect(rings(s, form)).toBe(true)
+    expect(rings(s, form)).toBe(true)
+  })
+
+  it('forgets a session\'s asks at its end: resumed, the same ask rings again', () => {
+    const s = setup()
+    expect(rings(s, asked())).toBe(true)
+    s.src.ingest(s.ev('session-end', { engine: 'codex' }))
+    s.src.ingest(s.ev('session-start', { engine: 'codex' }))
+    expect(rings(s, asked())).toBe(true)
+  })
+
+  it('forgets a session\'s asks once it leaves the list: heard of again, the same ask rings again', async () => {
+    const s = setup()
+    expect(rings(s, asked())).toBe(true)
+    s.gens.set(100, null)
+    await s.src.tick()
+    expect(s.src.list()).toEqual([])
+    s.src.ingest(s.ev('session-start', { engine: 'codex', callerPid: 200 }))
+    expect(rings(s, asked())).toBe(true)
+  })
+
+  it('rings every repeat of Claude Code\'s, which asks only when its dialog opens', () => {
+    const s = setup()
+    expect(rings(s, asked({ engine: 'claude' }))).toBe(true)
+    expect(rings(s, asked({ engine: 'claude' }))).toBe(true)
+  })
+})
+
 describe('ObservedSource and the Orca sessions its hooks named', () => {
   it('maps each Orca session id a hook named to its session, keeps an ended copy, and skips a session that named none', () => {
     const { src, ev } = setup()
