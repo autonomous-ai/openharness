@@ -10061,14 +10061,14 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       expect(orcaRuns).toEqual([openHerdr])
     })
 
-    // Its terminal holds a shell now: its open brings nothing.
-    it('landing on that hooked agent once its session ended runs nothing, and the bring failed', async () => {
+    // Its terminal holds a shell now: a pick opens only an agent its source can open, so the ended one is skipped.
+    it('landing on that hooked agent once its session ended runs nothing: with no other agent to open, nothing comes forward', async () => {
       const { port, live } = withHc()
       port.observed(hook('session-start'))
       port.observed(hook('session-end'))
       live([])
       await pickHerdr(port, ID)
-      await vi.waitFor(() => expect(brings()).toEqual(['[device] app filter: bring · failed']))
+      await vi.waitFor(() => expect(brings()).toEqual(['[device] app filter: bring · none']))
       expect(orcaRuns).toEqual([])
     })
 
