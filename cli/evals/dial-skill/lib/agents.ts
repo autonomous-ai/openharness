@@ -128,7 +128,8 @@ async function runClaude(s: Scenario, st: Staged, cfg: AgentConfig): Promise<Run
   // A failed run was billed for what it did: its error carries what the stream reported to the errors sidecar, the
   // usage of the messages it printed when it was cut before its result event (lib/parse.ts).
   const spent = (error: Error): Error => Object.assign(error, { model: run.model, usage: run.usage })
-  if (exit.timedOut) throw spent(failure(`claude ran past ${cfg.timeoutMs / 1000} s`, 'timeout'))
+  // Whole seconds: an attempt's bound is what is left of the agent's share of its case, rarely a whole number.
+  if (exit.timedOut) throw spent(failure(`claude ran past ${Math.round(cfg.timeoutMs / 1000)} s`, 'timeout'))
   // Worded without "rate limit": the runner retries those, and an account limit lasts hours.
   if (run.limited) throw spent(failure('the Claude account limit is reached', 'account_limited'))
   // A run cut at --max-turns is a result; any other failed exit is an error, never a silent run.

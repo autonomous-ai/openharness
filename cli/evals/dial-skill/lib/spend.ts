@@ -64,5 +64,11 @@ export class SpendGuard {
   constructor(capUsd: number, spentUsd: number) { this.#cap = capUsd; this.#spent = spentUsd }
   get spentUsd(): number { return this.#spent }
   mayStart(inFlight: number): boolean { return this.#spent + (inFlight + 1) * RUN_RESERVE_USD <= this.#cap }
-  add(b: Billed): void { this.#spent += guardCost(b) }
+  /** Adds what `b` cost less the `counted` dollars of it already added (a case's failed attempts, added as they happen,
+   *  so a retry is weighed against them), and returns what it added. */
+  add(b: Billed, counted = 0): number {
+    const usd = guardCost(b) - counted
+    this.#spent += usd
+    return usd
+  }
 }

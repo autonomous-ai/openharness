@@ -29,7 +29,9 @@
 //     (lib/probe.ts, rows in probes.jsonl); a failed probe refuses the pass
 //   - a probe or case starts only while all the flow has spent, a reserve for it
 //     and one for each case in flight fit under --spend-cap-usd (lib/spend.ts);
-//     else the pass starts nothing more and exits 4
+//     else the pass starts nothing more and exits 4; a retry of a failed run starts
+//     only while its case would, its failed attempts already added, and every
+//     attempt ends within the agent's share of --timeout-s
 //   - a variant's hooks.json and harness-answers.json are staged only when
 //     _state.json harness_paths lists them, so the harness sha covers what
 //     runs outside Claude's sandbox
@@ -345,14 +347,14 @@ async function probeConditions(ctx, tasks, probesPath) {
 /**
  * Stages the scenario, runs the agent and reads what it rang. The transcript and errors are written to disk, so the
  * run root and $HOME are scrubbed from them; the answer and the rings stay as the agent gave them, for the grader.
- * No `output`: nothing is graded pairwise against a frozen ref.
+ * No `output`: nothing is graded pairwise against a frozen ref. `timeoutMs` bounds the agent (0: unbounded).
  */
-async function runCase(input, ctx) {
+async function runCase(input, ctx, timeoutMs) {
   const { scenario, meta: { agent, condition } } = input;
   const st = stage(scenario, agent, { skill: ctx.skill, condition, hooks: ctx.hooks, answers: ctx.answers });
   const clean = text => scrub(text, st);
   try {
-    const run = await runAgent(agent, scenario, st, { ...AGENT_CONFIG, timeoutMs: agentTimeoutMs(ctx.timeoutS) });
+    const run = await runAgent(agent, scenario, st, { ...AGENT_CONFIG, timeoutMs });
     // Claude Code may update itself mid-pass: a run that started with other skills or another version than its
     // condition's probe may not have been given what the probe saw, so it is counted but never scored as listed.
     if (agent === 'claude' && !matchesProbe(run.init, ctx.probes.get(condition))) run.status = 'unlisted';
@@ -544,7 +546,8 @@ function checkHarness(statePath, st, approve) {
 // under rate limits and can turn one transient 429 into a torn-down batch.
 // The attempt count lands in the row's meta (or the errors sidecar) so retry
 // churn is visible in the data, not just the bill.
-async function withBackoff(fn, retry, deadline = Infinity, tries = 5) {
+// dial skill eval: `mayRetry` says whether the spend guard still lets the case start again.
+async function withBackoff(fn, retry, deadline = Infinity, tries = 5, mayRetry = () => true) {
   for (let attempt = 0; ; attempt++) {
     // Checked before every attempt, not just before sleeps: once the case's
     // ceiling has passed, an abandoned chain must not issue another call
@@ -558,7 +561,7 @@ async function withBackoff(fn, retry, deadline = Infinity, tries = 5) {
       const status = e?.status ?? e?.response?.status;
       const transient = status === 429 || status === 529 || (status >= 500 && status < 600)
         || /overloaded|rate.?limit/i.test(String(e?.message ?? ''));
-      if (!transient || attempt >= tries - 1) throw e;
+      if (!transient || attempt >= tries - 1 || !mayRetry()) throw e;
       const delay = Math.min(60_000, 1000 * 2 ** attempt) * (0.5 + Math.random());
       // Never start a retry that would outlive the case's wall-clock ceiling - 
       // otherwise an abandoned chain keeps issuing API calls after the case failed.
@@ -735,22 +738,29 @@ async function main() {
       let lastRun = null;    // survives into the catch - billed spend on a failed attempt
       let rowWritten = false; // set once the results row lands - the attempt is scored
       const deadline = args.timeoutS > 0 ? t0 + args.timeoutS * 1000 : Infinity;
+      // dial skill eval: every agent attempt ends by here, so none outlives its case or holds the judge's share.
+      const agentDeadline = args.timeoutS > 0 ? t0 + agentTimeoutMs(args.timeoutS) : Infinity;
+      let counted = 0; // dial skill eval: the dollars of this case the guard already holds
       const appRetry = { count: 0 }, judgeRetry = { count: 0 };
       try {
-        // One ceiling over the whole case - app call, identity check, and grading - 
+        // One ceiling over the whole case - app call, identity check, and grading -
         // so a hung judge stream can't hold the slot either.
         const { run, g, latency_s } = await withTimeout((async () => {
           let tAttempt = t0;
-          // dial skill eval: a failed agent run was billed too (lib/agents.ts), and a transient one is retried: its spend
-          // goes to the run that scores, or to the error row, as a retried grading attempt's does (gradeCase).
+          // dial skill eval: a failed agent run was billed too (lib/agents.ts): the guard adds it as it happens, and a
+          // transient one is retried only while the guard lets the case start again. Its spend goes to the run that
+          // scores, or to the error row, as a retried grading attempt's does (gradeCase).
           let appSpent;
           const run = await withBackoff(() => {
             tAttempt = Date.now();
-            return runCase(c, ctx).catch(e => {
+            // 0 leaves the agent unbounded, so a share already spent gives it 1 ms.
+            const timeoutMs = agentDeadline === Infinity ? 0 : Math.max(1, agentDeadline - tAttempt);
+            return runCase(c, ctx, timeoutMs).catch(e => {
+              counted += ctx.guard.add({ model: e?.model, usage: e?.usage });
               appSpent = addUsage(appSpent, e?.usage);
               throw Object.assign(e, { usage: appSpent });
             });
-          }, appRetry, deadline);
+          }, appRetry, agentDeadline, 5, () => ctx.guard.mayStart(inFlight - 1));
           run.usage = addUsage(appSpent, run.usage);
           lastRun = run;
           // latency_s = the final app attempt only; backoff sleeps, failed
@@ -810,7 +820,7 @@ async function main() {
         };
         appendFileNoFollow(resultsPath, JSON.stringify(row) + '\n');
         rowWritten = true; // past this point the attempt is scored - a later throw (trace write, ref freeze) must not also append an error row
-        ctx.guard.add(row); // dial skill eval
+        ctx.guard.add(row, counted); // dial skill eval
         if (run.transcript)
           writeFileNoFollow(join(vdir, 'traces', `${safeId}_rep${rep}.json`),
             JSON.stringify(run.transcript, null, 2));
@@ -848,7 +858,7 @@ async function main() {
           latency_s: (Date.now() - t0) / 1000,
         };
         appendFileNoFollow(errorsPath, JSON.stringify(errorRow) + '\n');
-        ctx.guard.add(errorRow); // dial skill eval
+        ctx.guard.add(errorRow, counted); // dial skill eval
         eprint(`  [${args.variant}] ${c.id} rep${rep} FAILED: ${e?.message || e}`);
       } finally {
         inFlight--; // dial skill eval: a reserve is released only once its spend is added
