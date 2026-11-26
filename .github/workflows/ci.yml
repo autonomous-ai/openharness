@@ -19,7 +19,7 @@ on:
       scope:
         description: 'Affected component; full for core suites, all for every component'
         type: choice
-        options: [full, cli, tui, backend, desktop, process, all, companions, website, os, provider, firmware, pro, mobile, daemons, pty, device-app, windows-e2e, linux-e2e, dial-hosts, device-app-e2e, device-app-update, device-app-desktop, device-app-install, cross-read-scan]
+        options: [full, cli, tui, backend, desktop, process, all, companions, website, os, provider, firmware, pro, mobile, daemons, pty, device-app, store, windows-e2e, linux-e2e, dial-hosts, device-app-e2e, device-app-update, device-app-desktop, device-app-install, cross-read-scan]
         default: full
       e2e_files:
         description: 'With scope linux-e2e: the cli/e2e files to run, separated by spaces'
@@ -83,6 +83,7 @@ jobs:
       daemons: ${{ steps.select.outputs.daemons }}
       pty: ${{ steps.select.outputs.pty }}
       device-app: ${{ steps.select.outputs.device-app }}
+      store: ${{ steps.select.outputs.store }}
       windows-e2e: ${{ steps.select.outputs.windows-e2e }}
       windows-e2e-arm64: ${{ steps.select.outputs.windows-e2e-arm64 }}
       linux-e2e: ${{ steps.select.outputs.linux-e2e }}
@@ -693,6 +694,33 @@ jobs:
         with:
           node-version: ${{ env.CLI_NODE_VERSION }}
       - run: node --test daemons/tools/card.test.mjs daemons/tools/generate.test.mjs
+
+  # store/tools/' fast offline checks: the runtime helpers, the packages' runtimes.sh copies, the tools' own Node tests and
+  # the local AI packages'. Browser and network suites stay in authoring-browser-checks.yml and experience-checks.yml.
+  # Selected by store/tools/ and the store/agents/ and store/viewers/ files they read (scripts/ci-plan.py ALSO, PR_READS).
+  store-checks:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-store-checks
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.store == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.CLI_NODE_VERSION }}
+      - run: python3 -m unittest store/tools/test_runtimes.py
+      - run: node store/tools/sync-runtimes.mjs --check
+      - run: >-
+          node --test store/tools/local-credential.test.mjs store/tools/local-daemon.test.mjs
+          store/tools/port-holder.test.mjs store/tools/sync-runtimes.test.mjs store/tools/test-folders.test.mjs
+      - run: npm --prefix store/tools/local-ai test
 
   # The Harness PTY host (pty/, on term/): its Rust tests, then the CLI's terminal contract for the
   # ptyhost backend against the host just built (tmux's half needs tmux and runs locally). Selected by
@@ -1361,7 +1389,7 @@ jobs:
     name: ci/required
     needs: [plan, process-checks, desktop-tests, companion-subsystems, cli-typecheck, cli-tests, tui-test,
             backend-desk, backend-integration, website-checks, os-checks, provider-checks, firmware-checks, pro-firmware-build, pro-golden,
-            mobile-checks, daemons-checks, pty-checks, device-app-checks, windows-e2e, linux-e2e, linux-e2e-summary,
+            mobile-checks, daemons-checks, store-checks, pty-checks, device-app-checks, windows-e2e, linux-e2e, linux-e2e-summary,
             dial-hosts, device-app-build,
             device-app-linux, device-app-windows, device-app-update, device-app-desktop, device-app-install,
             cross-read-scan]

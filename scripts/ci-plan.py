@@ -35,7 +35,7 @@ _local_spec.loader.exec_module(local_checks)
 
 
 CORE = {"cli", "desktop", "tui", "backend", "companions"}
-EXTRA = {"website", "os", "provider", "firmware", "mobile", "daemons", "pty", "device-app"}
+EXTRA = {"website", "os", "provider", "firmware", "mobile", "daemons", "pty", "device-app", "store"}
 # End to end on Windows and Linux, each selected by its own path list (below).
 E2E = {"windows-e2e", "linux-e2e", "dial-hosts", "device-app-e2e", "device-app-update", "device-app-desktop",
        "device-app-install"}
@@ -58,7 +58,8 @@ JOBS = {
 # its own scope.
 MANUAL = {"full": CORE, "all": SUITES - E2E, "process": set(), **{name: {name} for name in SUITES}}
 # Each component's own directory selects its suite. Everything else (docs, workflows,
-# scripts, store, fixtures) is covered by the plan's actionlint and process checks.
+# scripts, the rest of store/, fixtures) is covered by the plan's actionlint and process checks; store/tools/ has its own
+# suite (ALSO).
 COMPONENTS = {"cli": "cli", "tests": "cli", "desktop": "desktop", "tui": "tui", "backend": "backend",
               "companions": "companions", "website": "website", "os": "os", "provider": "provider",
               "devices": "firmware", "mobile": "mobile", "daemons": "daemons", "pty": "pty", "term": "pty",
@@ -80,6 +81,8 @@ ALSO.update({"desktop/test/support/real_fonts.dart": "mobile"})
 ALSO.update({"plugins/harness-device-vscode/": "cli"})
 # Orca's plugin: the CLI's build inlines the folder.
 ALSO.update({"plugins/harness-device-orca/": "cli"})
+# The Store's tools: store-checks runs their offline tests.
+ALSO.update({"store/tools/": "store"})
 # test_ci_plan's repository-wide scan and its other full-checkout tests skip in process-checks' sparse checkout, where
 # two undeclared reads slipped in: their own job runs them on a full checkout. They run for a change to the planner, its
 # test, the tables it reads (DEPENDS takes the desktop's from record-ci-validation.py) and the CLI's lists its tables
@@ -292,6 +295,10 @@ DEPENDS = {
     # term/ by hand: the update fixture copies `git ls-files -- tui term`, which the scan cannot see.
     "os": ("cli/", "devices/harness-device/firmware/README.md", "docs/naming-system.md", "docs/terminology.md", "term/", "tui/"),
     "pty": ("cli/", "desktop/windows/runner/resources/app_icon.ico"),
+    # store-checks: the local AI packages' packaging test compares their toolchain/node.sh copies, port-holder.test.mjs
+    # imports four agents' libs, and sync-runtimes.mjs --check compares every agent's and viewer's runtimes.sh copy
+    # (a path joined from parts, which the scan cannot see).
+    "store": ("store/agents/", "store/viewers/"),
     # THIRD_PARTY_NOTICES.md: tui/src/main.rs includes ../THIRD_PARTY_NOTICES.md, which names a root file too.
     "tui": ("THIRD_PARTY_NOTICES.md", "cli/package.json", "os/network.py", "os/onboarding.py", "os/root/usr/bin/hn",
             "tests/fixtures/shared-pane-layouts.json"),
@@ -406,6 +413,7 @@ PR_READS = {
     "os": ("cli/package.json", "cli/src/cable/serial.ts", "devices/harness-device/firmware/README.md", "docs/naming-system.md",
            "docs/terminology.md", "term/", "tui/"),
     "pty": ("cli/", "desktop/windows/runner/resources/app_icon.ico"),
+    "store": DEPENDS["store"],
     # THIRD_PARTY_NOTICES.md: tui/src/main.rs includes ../THIRD_PARTY_NOTICES.md, which names a root file too.
     "tui": ("THIRD_PARTY_NOTICES.md", "cli/package.json", "os/network.py", "os/onboarding.py", "os/root/usr/bin/hn",
             "tests/fixtures/shared-pane-layouts.json"),
@@ -420,6 +428,13 @@ PR_READS = {
 # tests cover src/ (end to end runs elsewhere). backend/integration is read: backend-integration runs it.
 # CrossReadTests fails when a file outside the folder refers into it.
 NOT_READ = {"cli": ("cli/e2e/",)}
+# store-checks runs the offline checks alone: the browser and network suites are authoring-browser-checks.yml's and
+# experience-checks.yml's, the pipe test windows-e2e's (storePackagesPipe.windows.spec.ts), and the rest is run by hand.
+NOT_READ["store"] = tuple(f"store/tools/{name}" for name in (
+    "README.md", "REAL-WORKFLOWS.md", "browser/", "build-experience-branding.mjs", "build-experiences.mjs", "catalog.mjs",
+    "dsh-delete.mjs", "dsh-discover.mjs", "dsh-e2e.mjs", "experience-tests/", "experiences/", "hands-on.mjs",
+    "listing.mjs", "presentation.mjs", "showcase.mjs", "studio_fetch.py", "studio_runtime.py", "sync-studios.mjs",
+    "test_studio_fetch.py", "try-hands-on.mjs", "windows-ci/", "windows-pipe.test.mjs"))
 # Strings in a suite's files that name another directory's path but are not read by its PR jobs:
 # test data, or a script run only by hand. {source: (why, {path the scan reports, or a folder "dir/" covering it})}.
 # A folder covers the paths under it named from the repository root. A relative read ("../../cli/x.ts") is always a
