@@ -218,17 +218,26 @@ export function carriedClaudePlugin(): ClaudePluginFiles | null {
   return typeof __CLAUDE_PLUGIN__ === 'string' ? JSON.parse(__CLAUDE_PLUGIN__) as ClaudePluginFiles : null
 }
 
-/** `git` as a word, not in `github` nor after a `.` as in `openharness.git`, which names a repository, not the program. */
-const GIT_WORD = /(?<!\.)\bgit\b/
-const NETWORK = /Could not resolve host|Failed to connect|Connection timed out|ETIMEDOUT|ENOTFOUND|ECONNREFUSED|ECONNRESET|SSL|TLS/i
+/** git as the program that did not run: a spawn's (Node's, and Bun's on Windows), a shell's or cmd.exe's not found. Only
+ *  where the name stands alone or ends a path, so a repository's `.git` (`openharness.git`) never counts. */
+const NO_GIT = new RegExp([
+  String.raw`\bspawn(?:Sync)? (?:\S*[\\/])?git(?:\.exe)?(?:\s|$)`,
+  String.raw`Command '(?:[^']*[\\/])?git(?:\.exe)?' not found`,
+  String.raw`(?<![.\w])git: (?:command )?not found`,
+  String.raw`command not found: git\b`,
+  String.raw`'git(?:\.exe)?' is not recognized`,
+].join('|'))
+const NETWORK = /Could not resolve host|Failed to connect|Connection timed out|ETIMEDOUT|ENOTFOUND|ECONNREFUSED|ECONNRESET|\bSSL\b|\bTLS\b/i
+/** Claude Code's refusal of a marketplace name it has, never a file's EEXIST. */
+const EXISTS = /already added from a different source|marketplace ['"][^'"\n]+['"] (?:is )?already exists/i
 
 /** Why a call failed, in a fixed word the devices can log: Claude Code's own line can name a path. The first that holds. */
 export function failureReason({ code, stderr, timedOut }: ClaudeAnswer): string {
   if (code === null) return timedOut ? 'timeout' : 'no answer'
   if (/xcrun: error|invalid active developer path|CommandLineTools/.test(stderr)) return 'no xcode tools'
-  if (GIT_WORD.test(stderr) && /not found|ENOENT|unsafe location|is not recognized/.test(stderr)) return 'no git'
+  if (NO_GIT.test(stderr)) return 'no git'
   if (NETWORK.test(stderr)) return 'network'
-  if (/already added from a different source|already exists/.test(stderr)) return 'exists'
+  if (EXISTS.test(stderr)) return 'exists'
   return `exit ${code}`
 }
 
@@ -245,13 +254,12 @@ function failure(answer: ClaudeAnswer, step: ClaudeStep, none = NO_ANSWER): Clau
 /** A list that failed, ran out of time or is not JSON says nothing of what is there: a failure, never an empty list. */
 async function jsonList(run: ClaudeRun, args: string[]): Promise<Record<string, unknown>[] | ClaudeFailure> {
   const answer = await run(args, LOCAL_MS)
-  if (answer.code === 0) {
-    try {
-      const value: unknown = JSON.parse(answer.stdout)
-      if (Array.isArray(value)) return value.filter((entry) => !!entry && typeof entry === 'object')
-    } catch { /* not JSON: the failure below */ }
-  }
-  return failure(answer, 'list', UNLISTED)
+  if (answer.code !== 0) return failure(answer, 'list', UNLISTED)
+  try {
+    const value: unknown = JSON.parse(answer.stdout)
+    if (Array.isArray(value)) return value.filter((entry) => !!entry && typeof entry === 'object')
+  } catch { /* not JSON: the failure below */ }
+  return { ...failure(answer, 'list', UNLISTED), reason: 'not json' }
 }
 
 /** Writes the marketplace folder; null when it holds the files now, else the write's error code. */
