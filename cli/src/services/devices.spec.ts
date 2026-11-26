@@ -5431,10 +5431,11 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
         const { settle, focus } = await clientsIn(app, bundle)
         await settle(page)
         dialFollows()
+        const reads = clientReads().length
         await focus(CLIENT_SHELL)
         // Of the two agents whose client it is, the one at the pane it shows, by one read of tmux's clients.
         expect(follows('vscode')).toEqual([[B, 'vscode']])
-        expect(clientReads()).toHaveLength(1)
+        expect(clientReads()).toHaveLength(reads + 1)
         await vi.waitFor(() => expect(editorLines()).toEqual(['[device] vscode · moved']))
         expect(await shown()).toBe(page)
       })
@@ -5453,11 +5454,10 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       it('with VS Code settled in front, tmux\'s pane poll reads the client of the terminal focused last: a pane switch inside it moves the dial', async () => {
         const { settle, focus, next } = await clientsIn()
         await settle('vscode')
-        // Two clients of VS Code show agents' sessions, and no terminal of them is focused: which the person looks at is
-        // not known, so tmux is asked nothing.
+        // tmux lists two clients of VS Code showing agents' sessions, and no terminal of them is focused: which the person
+        // looks at is not known.
         tmuxSays.clients = '/dev/ttys004|%4\n/dev/ttys005|%5\n'
         await next()
-        expect(clientReads()).toEqual([])
         expect(follows('pane')).toEqual([])
         tmuxSays.clients = '/dev/ttys004|%3\n/dev/ttys005|%5\n'
         await focus(CLIENT_SHELL)
@@ -5496,6 +5496,14 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
         expect(follows('pane')).toEqual([[ID, 'pane'], [B, 'pane']])
       })
 
+      // As before §7: in an editor that told no terminal, the clients tmux lists decide, one read a poll.
+      it('with no terminal focus told, of two agents\' clients in VS Code the one tmux still lists is followed by the poll', async () => {
+        tmuxSays.clients = '/dev/ttys004|%3\n'
+        const { settle } = await clientsIn()
+        await settle('vscode')
+        expect(follows('pane')).toEqual([[ID, 'pane']])
+      })
+
       // A terminal with no client told is told all the same: the person looks at it, not at VS Code's one tmux client.
       it('an agent\'s own terminal focused: tmux\'s pane poll follows none of VS Code\'s clients', async () => {
         const { settle, focus, next } = await clientsIn(code, VSCODE, 2, true)
@@ -5521,10 +5529,9 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
         expect(follows('pane')).toEqual([[ID, 'pane']])
         await settle('ghostty')
         await settle('vscode')
-        const reads = clientReads().length
+        // Dropped: tmux lists two clients of VS Code, and no terminal of them is focused since.
         tmuxSays.clients = '/dev/ttys004|%4\n/dev/ttys005|%5\n'
         await next()
-        expect(clientReads()).toHaveLength(reads)
         expect(follows('pane')).toHaveLength(1)
       })
 
@@ -5548,9 +5555,10 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
         const { settle, focus } = await clientsIn()
         await settle('vscode')
         tmuxSays.held = true
+        const reads = clientReads().length
         await focus(CLIENT_SHELL)
         await focus(SHELL_2)
-        expect(clientReads()).toHaveLength(2)
+        expect(clientReads()).toHaveLength(reads + 2)
         await land()
         expect(follows('vscode')).toEqual([[C, 'vscode']])
       })
