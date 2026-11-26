@@ -60,4 +60,5 @@ judged and counts as one that did not state the ask.
 | v1 | clean | 94% | 100% | 100% | 93% | 100% | 0% | 65% | 0 (0%) | 100% | 0 | 0 | 0 |  |
 | v1 | crowd | 95% | 100% | 100% | 82% | 90% | 0% | 60% | 0 (0%) | 100% | 0 | 0 | 0 | account_limited 3 |
 | v1 | name-only | 0% | 100% | n/a | n/a | 75% | n/a | 0% | 0 (0%) | 100% | 0 | 0 | 0 |  |
+| v2 | crowd | 100% | 80% | 89% | 81% | 91% | 11% | 65% | 0 (0%) | 100% | 0 | 0 | 0 |  |
 <!-- /aggregate -->

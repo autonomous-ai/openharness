@@ -13,7 +13,7 @@ import { insideWindowsRoots } from '../lib/secureState.js'
 import { settingsText } from '../lib/settingsText.js'
 import { readSetup, readWritten, type DialEngine } from './dialSkillFiles.js'
 
-export const DIAL_SKILL_DESCRIPTION = 'Before you end a turn that leaves the person something to decide, answer or do, ring their Harness dial: harness device notify "[the ask, one line]" --suggest "[your pick]" --waiting (or --proceeding when you go on with your pick). Not for finished work or progress.'
+export const DIAL_SKILL_DESCRIPTION = 'Before you end a turn that leaves the person something to decide, answer or do, ring their Harness dial: harness device notify "[the ask, one line]" --suggest "[your pick]" --waiting (or --proceeding when you went on with your pick). That includes a part you left undone, or settled your own way, because a choice is still open: theirs, or one they must get from someone else. Not for progress, or for work done with nothing left for them.'
 
 /** How every release's marker line opens, the one 0.6.58 wrote too: one rule knows them all, with no list of lines to
  *  keep. The period tells it from Harness's other files (`# Written by Harness,`, `:` or ` (`), none of which sits at a
@@ -37,7 +37,12 @@ Before you end a turn that leaves the person something to decide, answer or do, 
     harness device notify "<the ask, in one line>" --suggest "<your recommendation, a few words>" --waiting
 
 When a decision comes up mid-turn and you can go on with your recommendation, run it with --proceeding and keep
-working.
+working. A choice is open when their words or the repo say so (an issue's "not decided yet", an owner who has not
+picked). If you go on with your own pick for it, or leave that part undone, run it with --proceeding before you end
+the turn, even when the rest is done and another person owns the choice: the person gets it decided.
+
+A choice the code's own conventions settle (the flags it already has, the style around it) is yours, even when the
+person wondered which: make it, say why in your answer, and ring nothing.
 
 - Every such turn, a short one too, and also when the person has just written to you: Harness decides whether the
   dial sounds.
