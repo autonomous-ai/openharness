@@ -160,5 +160,12 @@ void main() {
       find.textContaining('seconds of voice turned into text'),
       findsOneWidget,
     );
+    expect(
+      find.textContaining(
+        'how long agents wait for you; agents\' notices to the dial and whether '
+        'the dial skill is installed; seconds of voice turned into text',
+      ),
+      findsOneWidget,
+    );
   });
 }

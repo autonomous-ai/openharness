@@ -206,6 +206,38 @@ describe('dailyDialReview', () => {
     expect(review.margins.platform).toEqual([{ day: '2026-11-22', bucket: 'macos', connected: 9, used: '<5', usedOutsideApp: 6 }])
   })
 
+  it('shows the dial skill per engine, installed beside rang, other without a denominator', () => {
+    const review = dailyDialReview([row(1, 'dial_skill_claude_installation_days', 6), row(1, 'dial_notice_claude_installation_days', 5),
+      row(1, 'dial_notice_claude', 12), row(1, 'dial_notice_other_installation_days', 5), row(1, 'dial_notice_other', 7)], [], now)
+    const installed = 'claude: skill installed (computer-days)', rang = 'claude: agents rang (computer-days; notices)'
+    expect(rowOf(review.outsideTeam, 'Dial skill', installed)?.computers.day).toBe(6)
+    expect(rowOf(review.outsideTeam, 'Dial skill', rang)).toMatchObject({ computers: { day: 5 }, events: { day: 12 } })
+    expect(rowOf(review.outsideTeam, 'Dial skill', 'other: agents rang (computer-days; notices)')).toBeDefined()
+    expect(rowOf(review.outsideTeam, 'Dial skill', 'other: skill installed (computer-days)')).toBeUndefined()
+    const names = review.outsideTeam.find(s => s.name === 'Dial skill')!.rows.map(r => r.name)
+    expect(names.indexOf(rang)).toBe(names.indexOf(installed) + 1)
+  })
+
+  it('reach, rules and answered are events against computers with a notice, under five hidden', () => {
+    const reach = (computers: number) => rowOf(dailyDialReview([row(1, 'dial_notice_installation_days', computers),
+      row(1, 'dial_notice_shown', 9)], [], now).outsideTeam, 'Dial skill', 'Reach: shown')
+    expect(reach(4)).toMatchObject({ computers: { day: '<5' }, events: { day: '<5' } })
+    expect(reach(6)).toMatchObject({ computers: { day: 6 }, events: { day: 9 } })
+  })
+
+  it('keeps the team\'s dial skill apart', () => {
+    const review = dailyDialReview([row(1, 'staff:dial_skill_codex_installation_days', 7)], [], now)
+    expect(rowOf(review.team, 'Dial skill', 'codex: skill installed (computer-days)')?.computers.day).toBe(7)
+    expect(rowOf(review.outsideTeam, 'Dial skill', 'codex: skill installed (computer-days)')).toBeUndefined()
+  })
+
+  it('states the notice and answered limits', () => {
+    expect(dailyDialReview([], [], now).limits).toEqual(expect.arrayContaining([
+      "Dial skill notices count only what reached the devices: with them not running the command prints no dial and nothing is counted, nor what the listener's own rate refuses.",
+      "Answered is the person's prompt to that agent within 10 min of a shown notice where its source can be told (a prompt hook, or the dial's voice): a prompt typed in the Harness app, a tap, Codex words steered into a running turn, a caller with no session and a card restored after a restart are not counted.",
+    ]))
+  })
+
   it('reads every dial and voice name, the team\'s too', () => {
     for (const name of [...DIAL_USAGE_METRICS, ...VOICE_USAGE_METRICS, 'health_cli_collector_days']) {
       expect(DIAL_REVIEW_METRICS).toEqual(expect.arrayContaining([name, `staff:${name}`, `testing:${name}`]))

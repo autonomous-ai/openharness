@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  DIAL_FILE_METRICS, DIAL_FLAG_METRICS, DIAL_USAGE_AGENTS_MAX, type DialFileMetric, type DialUsageSink,
+  DIAL_FILE_METRICS, DIAL_FLAG_METRICS, DIAL_USAGE_AGENTS_MAX, type DialFileMetric, type DialSkillEngine,
+  type DialUsageSink,
 } from '../lib/dialUsageContract.js'
 import { createDialUsage, dialEngine, dialHost, type DialAgent, type DialUsage, type HookedAgent } from './dialUsage.js'
 
@@ -36,6 +37,8 @@ function rig(agents: Record<string, DialAgent> = { a: tmuxClaude, b: orcaCodex }
   // The agents at work, and those whose own app is not in front: none unless a test says so.
   const working = new Set<string>()
   const away = new Set<string>()
+  // The engines whose skills folder holds Harness's skill file now.
+  const installed = new Set<DialSkillEngine>()
   const usage = createDialUsage({
     sink,
     now: Date.now,
@@ -44,10 +47,11 @@ function rig(agents: Record<string, DialAgent> = { a: tmuxClaude, b: orcaCodex }
     working: id => working.has(id),
     away: id => away.has(id),
     log: line => logs.push(line),
+    skills: () => [...installed],
   })
   const count = (metric: string) => added.filter(m => m === metric).length
   const prefixed = (prefix: string) => added.filter(m => m.startsWith(prefix))
-  return { usage, added, count, prefixed, agents, logs, working, away }
+  return { usage, added, count, prefixed, agents, logs, working, away, installed }
 }
 
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(T0) })
@@ -889,5 +893,153 @@ describe('the value from the dial', () => {
     usage.attached(true)
     usage.turnStarted('d2', true)
     expect(count('dial_value_done_away_prompted_10m')).toBe(1)
+  })
+})
+
+describe('the dial skill\'s use', () => {
+  const ANSWERED = 'dial_notice_answered_10m'
+
+  it('counts each notice by the engine it names, its answer and its kind, with the day\'s flags, dial or no dial', () => {
+    const { usage, count } = rig()
+    usage.noticed('claude', 'shown', 'waiting')
+    usage.noticed('claude', 'limited', 'waiting')
+    usage.attached(true)
+    usage.noticed('codex', 'shown', 'proceeding')
+    usage.attached(false)
+    usage.noticed('agent', 'no dial', 'plain')
+    expect(count('dial_notice_claude')).toBe(2)
+    expect(count('dial_notice_codex')).toBe(1)
+    expect(count('dial_notice_other')).toBe(1)
+    expect(count('dial_notice_shown')).toBe(2)
+    expect(count('dial_notice_limited')).toBe(1)
+    expect(count('dial_notice_no_dial')).toBe(1)
+    expect(count('dial_notice_waiting')).toBe(2)
+    expect(count('dial_notice_proceeding')).toBe(1)
+    expect(count('dial_notice_plain')).toBe(1)
+    // A flag is added at each notice; the sink holds it at 1 a day.
+    expect(count('dial_notice_installation_days')).toBe(4)
+    expect(count('dial_notice_claude_installation_days')).toBe(2)
+    expect(count('dial_notice_codex_installation_days')).toBe(1)
+    expect(count('dial_notice_other_installation_days')).toBe(1)
+    expect(count(ANSWERED)).toBe(0)
+  })
+
+  it('a person\'s prompt within 10 min of a shown notice answers it, once', () => {
+    const { usage, count } = rig()
+    usage.noticeShown('a')
+    vi.advanceTimersByTime(599_999)
+    usage.turnStarted('a', true)
+    expect(count(ANSWERED)).toBe(1)
+    usage.turnStarted('a', true)
+    expect(count(ANSWERED)).toBe(1)
+    usage.noticeShown('a')
+    vi.advanceTimersByTime(600_000)
+    usage.turnStarted('a', true)
+    expect(count(ANSWERED)).toBe(1)
+  })
+
+  // A Harness agent's turn_started, a listing's busy, a relayed prompt, a replayed or continued turn all arrive so.
+  it('a start whose source cannot be told spends it uncounted', () => {
+    const { usage, count } = rig()
+    usage.noticeShown('a')
+    usage.turnStarted('a')
+    usage.turnStarted('a', true)
+    expect(count(ANSWERED)).toBe(0)
+  })
+
+  it('the dial\'s voice answers it: waiting as the turn starts, or begun before a turn it started; a hook that says dial counts once', () => {
+    const { usage, count } = rig()
+    usage.attached(true)
+    usage.noticeShown('a')
+    usage.voiceEnded({ outcome: 'sent', agentId: 'a', since: Date.now() })
+    usage.turnStarted('a')
+    expect(count(ANSWERED)).toBe(1)
+
+    // The turn starts before the send returns: it is the voice's, and so is the notice's answer.
+    usage.noticeShown('b')
+    const since = Date.now()
+    usage.turnStarted('b')
+    vi.advanceTimersByTime(500)
+    usage.voiceEnded({ outcome: 'sent', agentId: 'b', since })
+    expect(count('dial_voice_delivered')).toBe(2)
+    expect(count(ANSWERED)).toBe(2)
+
+    // A turn the hook says the dial's words started counts once, though the voice's send returns after it.
+    usage.noticeShown('a')
+    const later = Date.now()
+    usage.turnStarted('a', true)
+    usage.voiceEnded({ outcome: 'sent', agentId: 'a', since: later })
+    expect(count('dial_voice_delivered')).toBe(3)
+    expect(count(ANSWERED)).toBe(3)
+  })
+
+  it('a voice whose turn never starts answers nothing', () => {
+    const { usage, count } = rig()
+    usage.attached(true)
+    usage.noticeShown('a')
+    usage.voiceEnded({ outcome: 'sent', agentId: 'a', since: Date.now() })
+    vi.advanceTimersByTime(10_000)
+    expect(count(ANSWERED)).toBe(0)
+  })
+
+  it('a newer notice of the agent replaces the older, which ends uncounted', () => {
+    const { usage, count } = rig()
+    usage.noticeShown('a')
+    vi.advanceTimersByTime(540_000)
+    usage.noticeShown('a')
+    vi.advanceTimersByTime(540_000)
+    usage.turnStarted('a', true)
+    expect(count(ANSWERED)).toBe(1)
+  })
+
+  it('at most 20 open, the oldest dropped first; an unplug keeps them; a stop drops them', () => {
+    const ids = Array.from({ length: 21 }, (_, i) => `d${i}`)
+    const { usage, count } = rig(Object.fromEntries(ids.map(id => [id, tmuxClaude])))
+    for (const id of ids) usage.noticeShown(id)
+    usage.turnStarted('d0', true)
+    expect(count(ANSWERED)).toBe(0)
+    usage.turnStarted('d1', true)
+    expect(count(ANSWERED)).toBe(1)
+    usage.attached(true)
+    usage.attached(false)
+    usage.turnStarted('d2', true)
+    expect(count(ANSWERED)).toBe(2)
+    usage.stop()
+    usage.turnStarted('d3', true)
+    expect(count(ANSWERED)).toBe(2)
+  })
+
+  it('the skill counts after each setup pass and at each UTC midnight from the first, by one timer', () => {
+    const { usage, prefixed, count, installed } = rig()
+    vi.advanceTimersByTime(2 * DAY_MS)
+    expect(prefixed('dial_skill_')).toEqual([])
+    installed.add('codex')
+    usage.setupPassed()
+    usage.setupPassed()
+    expect(vi.getTimerCount()).toBe(1)
+    expect(prefixed('dial_skill_')).toEqual(['dial_skill_codex_installation_days', 'dial_skill_codex_installation_days'])
+    installed.add('claude')
+    const toMidnight = DAY_MS - Date.now() % DAY_MS
+    vi.advanceTimersByTime(toMidnight - 1)
+    expect(count('dial_skill_claude_installation_days')).toBe(0)
+    vi.advanceTimersByTime(1)
+    expect(count('dial_skill_claude_installation_days')).toBe(1)
+    expect(count('dial_skill_codex_installation_days')).toBe(3)
+    vi.advanceTimersByTime(DAY_MS)
+    expect(count('dial_skill_claude_installation_days')).toBe(2)
+    expect(count('dial_skill_codex_installation_days')).toBe(4)
+    expect(vi.getTimerCount()).toBe(1)
+  })
+
+  // A pass can settle after the devices stopped: a `claude` run it waited on was still going.
+  it('nothing is armed after stop', () => {
+    const { usage, prefixed, installed } = rig()
+    installed.add('claude')
+    usage.setupPassed()
+    usage.stop()
+    usage.setupPassed()
+    vi.advanceTimersByTime(2 * DAY_MS)
+    expect(prefixed('dial_skill_')).toEqual(['dial_skill_claude_installation_days'])
+    expect(vi.getTimerCount()).toBe(0)
   })
 })

@@ -29,6 +29,14 @@ export const DIAL_WAIT_BUCKETS = ['under_30s', '30s_to_2m', '2m_to_10m', 'over_1
  * the person's next prompt within 10 min. Cumulative: within 2 min counts in 10 min too. */
 export const DIAL_VALUE_COUNTS = ['ring_answered_2m', 'ring_answered_10m', 'ring_away_answered_2m', 'ring_away_answered_10m',
   'done_away_prompted_10m'] as const
+/** The engines whose skills folders can hold Harness's dial skill (docs/plans/2026-11-26-dial-skill-usage-design.md). */
+export const DIAL_SKILL_ENGINES = ['claude', 'codex'] as const
+/** A notice's engine as its command named it; none named is `other`. */
+export const DIAL_NOTICE_ENGINES = ['claude', 'codex', 'other'] as const
+/** The devices' answers to a notice (NoticeResult of lib/dialNotice.ts), ` ` read as `_`. */
+export const DIAL_NOTICE_RESULTS = ['shown', 'no_dial', 'limited'] as const
+/** A notice's kind (NoticeKind of lib/dialNotice.ts). */
+export const DIAL_NOTICE_KINDS = ['proceeding', 'waiting', 'plain'] as const
 
 export const DIAL_USAGE_FILE = 'dial-usage.json'
 export const DIAL_USAGE_FILE_VERSION = 1
@@ -48,6 +56,7 @@ export type DialRecognition = typeof DIAL_RECOGNITION[number]
 export type DialVoiceFailure = typeof DIAL_VOICE_FAILURES[number]
 export type DialOpenFailure = typeof DIAL_OPEN_FAILURES[number]
 export type DialValueCount = typeof DIAL_VALUE_COUNTS[number]
+export type DialSkillEngine = typeof DIAL_SKILL_ENGINES[number]
 
 /** What the devices count; the gateway sends them as they come. */
 export const DIAL_DEVICE_METRICS = [
@@ -73,6 +82,13 @@ export const DIAL_DEVICE_METRICS = [
     `dial_open_host_${h}_failed`] as const),
   'dial_value_installation_days',
   ...DIAL_VALUE_COUNTS.flatMap(v => [`dial_value_${v}_installation_days`, `dial_value_${v}`] as const),
+  ...DIAL_SKILL_ENGINES.map(e => `dial_skill_${e}_installation_days` as const),
+  'dial_notice_installation_days',
+  ...DIAL_NOTICE_ENGINES.map(e => `dial_notice_${e}` as const),
+  ...DIAL_NOTICE_ENGINES.map(e => `dial_notice_${e}_installation_days` as const),
+  ...DIAL_NOTICE_RESULTS.map(r => `dial_notice_${r}` as const),
+  ...DIAL_NOTICE_KINDS.map(k => `dial_notice_${k}` as const),
+  'dial_notice_answered_10m',
 ] as const
 
 /** In the file only, never sent: the gateway turns them into the used-day and unused-day waits as a day closes. */
