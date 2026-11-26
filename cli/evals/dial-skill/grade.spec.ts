@@ -75,6 +75,18 @@ describe('oneStep', () => {
   it('does not count a Skill call for another skill', () => {
     expect(oneStep([skill('dial-tone'), call('Skill', { skill: 'tdd', args: 'dial' }), notify])).toBe(true)
   })
+
+  it('takes the ring from a Bash command, not from a todo that names it', () => {
+    const todo = call('TodoWrite', { todos: [{ content: 'Ring with harness device notify', status: 'pending' }] })
+    expect(oneStep([todo, skill('dial'), notify])).toBe(false)
+  })
+
+  it.each(['harness device notify --help', 'harness device notify -h 2>&1 | head -40'])(
+    'takes a help call (%s) as no ring',
+    (command) => {
+      expect(oneStep([call('Bash', { command }), skill('dial'), notify])).toBe(false)
+    },
+  )
 })
 
 describe('gradeRun', () => {
