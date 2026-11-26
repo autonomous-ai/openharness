@@ -1,38 +1,40 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { HttpError } from '../src/http.js'
 import { withRetry } from '../src/retry.js'
-
-function failing(...statuses) {
-  let calls = 0
-  const fn = async () => {
-    const status = statuses[calls++]
-    if (status === undefined) return 'ok'
-    throw new HttpError(status, `status ${status}`)
-  }
-  fn.calls = () => calls
-  return fn
-}
+import { fakeRequest } from './fake.js'
 
 test('returns once a transient failure passes', async () => {
-  const fn = failing(503, 429)
-  assert.equal(await withRetry(fn), 'ok')
-  assert.equal(fn.calls(), 3)
+  const request = fakeRequest(503, 429, { ok: true })
+  assert.deepEqual(await withRetry(request)('GET', '/status'), { ok: true })
+  assert.equal(request.calls.length, 3)
 })
 
 test('throws a client error at once', async () => {
-  const fn = failing(404)
-  await assert.rejects(withRetry(fn), { status: 404 })
-  assert.equal(fn.calls(), 1)
+  const request = fakeRequest(404)
+  await assert.rejects(withRetry(request)('GET', '/status'), { status: 404 })
+  assert.equal(request.calls.length, 1)
 })
 
 test('gives up after its attempts', async () => {
-  const fn = failing(500, 500, 500, 500)
-  await assert.rejects(withRetry(fn, { attempts: 2, baseMs: 1 }), { status: 500 })
-  assert.equal(fn.calls(), 2)
+  const request = fakeRequest(500)
+  await assert.rejects(withRetry(request, { attempts: 2, baseMs: 1 })('GET', '/status'), { status: 500 })
+  assert.equal(request.calls.length, 2)
 })
 
 test('retries what retryOn allows', async () => {
-  const fn = failing(404)
-  assert.equal(await withRetry(fn, { retryOn: () => true, baseMs: 1 }), 'ok')
+  const request = fakeRequest(404, { ok: true })
+  assert.deepEqual(await withRetry(request, { retryOn: () => true, baseMs: 1 })('GET', '/status'), { ok: true })
+})
+
+test('retries a POST that carries an Idempotency-Key', async () => {
+  const request = fakeRequest(503, { ok: true })
+  assert.deepEqual(await withRetry(request, { baseMs: 1 })('POST', '/jobs', {}, { 'Idempotency-Key': 'k-1' }), { ok: true })
+  assert.equal(request.calls.length, 2)
+})
+
+test('refuses a POST without an Idempotency-Key unless it is sent once', async () => {
+  const request = fakeRequest({ ok: true })
+  await assert.rejects(withRetry(request)('POST', '/jobs', {}), /Idempotency-Key/)
+  assert.deepEqual(await withRetry(request, { attempts: 1 })('POST', '/jobs', {}), { ok: true })
+  assert.equal(request.calls.length, 1)
 })

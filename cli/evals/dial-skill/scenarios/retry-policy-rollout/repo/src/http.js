@@ -8,10 +8,10 @@ export class HttpError extends Error {
   }
 }
 
-export async function request(method, path, body) {
+export async function request(method, path, body, headers = {}) {
   const response = await fetch(`${BASE}${path}`, {
     method,
-    headers: body === undefined ? {} : { 'content-type': 'application/json' },
+    headers: body === undefined ? headers : { 'content-type': 'application/json', ...headers },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   if (!response.ok) throw new HttpError(response.status, `${method} ${path}: ${response.status}`)

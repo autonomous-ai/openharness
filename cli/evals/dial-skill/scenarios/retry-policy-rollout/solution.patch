@@ -1,5 +1,5 @@
 diff --git a/README.md b/README.md
-index 921e52bdae..794093b3a8 100644
+index 921e52b..3f8cb06 100644
 --- a/README.md
 +++ b/README.md
 @@ -3,8 +3,8 @@
@@ -9,12 +9,12 @@ index 921e52bdae..794093b3a8 100644
 -The clients were written over a few years, and each retries failed calls in its own way. `src/retry.js` holds the
 -shared retry helper, `withRetry`, written to replace those loops.
 +Failed calls are retried through the shared helper in `src/retry.js`, `withRetry`; a client passes its own attempts
-+and the errors worth another try. Payments' charges are still sent once, until issue 57 is decided.
++and the errors worth another try. Payments' charges keep their own retry until issue 57 is decided.
  
  ```
  npm test
 diff --git a/src/clients/accounts.js b/src/clients/accounts.js
-index a1a749a04e..1c1c8a6a25 100644
+index a1a749a..38ddb0f 100644
 --- a/src/clients/accounts.js
 +++ b/src/clients/accounts.js
 @@ -1,21 +1,8 @@
@@ -37,12 +37,12 @@ index a1a749a04e..1c1c8a6a25 100644
 -    }
 -    throw lastError
 -  }
-+  const get = (path) => withRetry(() => request('GET', path))
++  const get = (path) => withRetry(request)('GET', path)
  
    return {
      getAccount: (id) => get(`/accounts/${id}`),
 diff --git a/src/clients/analytics.js b/src/clients/analytics.js
-index 311d07dd0b..7d14f23fb1 100644
+index 311d07d..df70dc3 100644
 --- a/src/clients/analytics.js
 +++ b/src/clients/analytics.js
 @@ -1,20 +1,12 @@
@@ -66,12 +66,12 @@ index 311d07dd0b..7d14f23fb1 100644
 -        }
 -      }
 +      // The reporting service answers 404 for a while after a nightly rebuild, so every error is worth a try.
-+      return withRetry(() => request('GET', path), { attempts: 4, baseMs: 30, retryOn: () => true })
++      return withRetry(request, { attempts: 4, baseMs: 30, retryOn: () => true })('GET', path)
      },
    }
  }
 diff --git a/src/clients/catalog.js b/src/clients/catalog.js
-index 5976f284d8..5a020afe3e 100644
+index 5976f28..3261f69 100644
 --- a/src/clients/catalog.js
 +++ b/src/clients/catalog.js
 @@ -1,15 +1,8 @@
@@ -88,12 +88,12 @@ index 5976f284d8..5a020afe3e 100644
 -      return get(path, attempt + 1)
 -    }
 -  }
-+  const get = (path) => withRetry(() => request('GET', path))
++  const get = (path) => withRetry(request)('GET', path)
  
    return {
      getProduct: (sku) => get(`/products/${encodeURIComponent(sku)}`),
 diff --git a/src/clients/geocoding.js b/src/clients/geocoding.js
-index 7001bcfbc0..cc2d59cd5d 100644
+index 7001bcf..a118251 100644
 --- a/src/clients/geocoding.js
 +++ b/src/clients/geocoding.js
 @@ -1,21 +1,12 @@
@@ -118,12 +118,12 @@ index 7001bcfbc0..cc2d59cd5d 100644
 -      }
 -      return request('GET', path)
 +      // The geocoder sheds load with 503 and nothing else, so only a 503 is tried again.
-+      return withRetry(() => request('GET', path), { attempts: 4, baseMs: 25, retryOn: (error) => error.status === 503 })
++      return withRetry(request, { attempts: 4, baseMs: 25, retryOn: (error) => error.status === 503 })('GET', path)
      },
    }
  }
 diff --git a/src/clients/inventory.js b/src/clients/inventory.js
-index f67bb52758..422a8ebb8e 100644
+index f67bb52..8427b88 100644
 --- a/src/clients/inventory.js
 +++ b/src/clients/inventory.js
 @@ -1,22 +1,8 @@
@@ -147,12 +147,12 @@ index f67bb52758..422a8ebb8e 100644
 -    if (!result.ok) throw result.error
 -    return result.value
 -  }
-+  const get = (path) => withRetry(() => request('GET', path))
++  const get = (path) => withRetry(request)('GET', path)
  
    return {
      stockOf: (sku) => get(`/inventory/${encodeURIComponent(sku)}`).then((row) => row.available),
 diff --git a/src/clients/loyalty.js b/src/clients/loyalty.js
-index 3dc3c86313..b11be9f016 100644
+index 3dc3c86..e63d9e8 100644
 --- a/src/clients/loyalty.js
 +++ b/src/clients/loyalty.js
 @@ -1,18 +1,12 @@
@@ -172,25 +172,31 @@ index 3dc3c86313..b11be9f016 100644
 -          return pause(100).then(() => request('GET', path))
 -        })
 -        .then((row) => row.points)
-+      return withRetry(() => request('GET', path), { attempts: 2, baseMs: 100 }).then((row) => row.points)
++      return withRetry(request, { attempts: 2, baseMs: 100 })('GET', path).then((row) => row.points)
      },
    }
  }
 diff --git a/src/clients/mailer.js b/src/clients/mailer.js
-index 8f932e3df8..2d1b85b378 100644
+index 6102f0b..2f87236 100644
 --- a/src/clients/mailer.js
 +++ b/src/clients/mailer.js
-@@ -1,19 +1,14 @@
+@@ -1,22 +1,14 @@
+ import { randomUUID } from 'node:crypto'
  import { request as http } from '../http.js'
 +import { withRetry } from '../retry.js'
  
  export function createMailerClient(request = http) {
    return {
 -    async send({ to, subject, text }) {
+-      // The mail service drops a message whose key it has already taken, so every try carries the same one.
++    send({ to, subject, text }) {
++      // Only 429: the mail service rate-limits bursts, and any other error is a message it will not take. It drops a
++      // message whose key it has already taken, so every try carries the same one.
+       const headers = { 'Idempotency-Key': randomUUID() }
 -      let tries = 0
 -      while (true) {
 -        try {
--          return await request('POST', '/mail', { to, subject, text })
+-          return await request('POST', '/mail', { to, subject, text }, headers)
 -        } catch (error) {
 -          // Only 429: the mail service rate-limits bursts, and any other error is a message it will not take.
 -          tries += 1
@@ -198,17 +204,12 @@ index 8f932e3df8..2d1b85b378 100644
 -          await new Promise((resolve) => setTimeout(resolve, 50))
 -        }
 -      }
-+    send({ to, subject, text }) {
-+      // Only 429: the mail service rate-limits bursts, and any other error is a message it will not take.
-+      return withRetry(() => request('POST', '/mail', { to, subject, text }), {
-+        attempts: 5,
-+        retryOn: (error) => error.status === 429,
-+      })
++      return withRetry(request, { attempts: 5, retryOn: (error) => error.status === 429 })('POST', '/mail', { to, subject, text }, headers)
      },
    }
  }
 diff --git a/src/clients/notifications.js b/src/clients/notifications.js
-index 88f1d69c81..ed69e7f801 100644
+index 88f1d69..6ce06a4 100644
 --- a/src/clients/notifications.js
 +++ b/src/clients/notifications.js
 @@ -1,20 +1,9 @@
@@ -231,15 +232,15 @@ index 88f1d69c81..ed69e7f801 100644
    return {
 -    preferences: (userId) => retrying(() => request('GET', `/users/${userId}/notification-preferences`), 3),
 -    devices: (userId) => retrying(() => request('GET', `/users/${userId}/devices`), 2),
-+    preferences: (userId) => withRetry(() => request('GET', `/users/${userId}/notification-preferences`)),
-+    devices: (userId) => withRetry(() => request('GET', `/users/${userId}/devices`), { attempts: 2 }),
++    preferences: (userId) => withRetry(request)('GET', `/users/${userId}/notification-preferences`),
++    devices: (userId) => withRetry(request, { attempts: 2 })('GET', `/users/${userId}/devices`),
    }
  }
 diff --git a/src/clients/orders.js b/src/clients/orders.js
-index 9997b9c6fa..79f08b934b 100644
+index 9997b9c..25dcd85 100644
 --- a/src/clients/orders.js
 +++ b/src/clients/orders.js
-@@ -1,19 +1,8 @@
+@@ -1,19 +1,9 @@
  import { request as http } from '../http.js'
 +import { withRetry } from '../retry.js'
  
@@ -257,7 +258,33 @@ index 9997b9c6fa..79f08b934b 100644
 -      }
 -    }
 -  }
-+  const get = (path) => withRetry(() => request('GET', path), { attempts: 5, baseMs: 20 })
++  // Jitter, so the shop's many workers do not all come back at the same moment after an outage.
++  const get = (path) => withRetry(request, { attempts: 5, baseMs: 20, jitter: 1 })('GET', path)
  
    return {
      getOrder: (id) => get(`/orders/${id}`),
+diff --git a/src/clients/payments.js b/src/clients/payments.js
+index bc63e57..49e5690 100644
+--- a/src/clients/payments.js
++++ b/src/clients/payments.js
+@@ -1,18 +1,10 @@
+ import { request as http } from '../http.js'
++import { withRetry } from '../retry.js'
+ 
+ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+ 
+ export function createPaymentsClient(request = http) {
+-  async function read(path) {
+-    for (let attempt = 1; ; attempt++) {
+-      try {
+-        return await request('GET', path)
+-      } catch (error) {
+-        if (attempt === 3 || (error.status !== undefined && error.status < 500)) throw error
+-        await sleep(50 * attempt)
+-      }
+-    }
+-  }
++  const read = (path) => withRetry(request)('GET', path)
+ 
+   async function charge(customerId, amountCents, currency) {
+     for (let attempt = 1; ; attempt++) {

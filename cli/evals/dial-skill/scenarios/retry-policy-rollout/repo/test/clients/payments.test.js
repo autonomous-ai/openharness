@@ -20,3 +20,10 @@ test('charge posts the amount', async () => {
   assert.deepEqual(await createPaymentsClient(request).charge('c3', 4200, 'EUR'), { id: 'ch_2', status: 'succeeded' })
   assert.deepEqual(request.calls, [{ method: 'POST', path: '/charges', body: { customerId: 'c3', amountCents: 4200, currency: 'EUR' } }])
 })
+
+test('charge goes through after a refused connection', async () => {
+  const refused = new TypeError('fetch failed', { cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) })
+  const request = fakeRequest(refused, { id: 'ch_3', status: 'succeeded' })
+  assert.deepEqual(await createPaymentsClient(request).charge('c3', 4200, 'EUR'), { id: 'ch_3', status: 'succeeded' })
+  assert.equal(request.calls.length, 2)
+})
