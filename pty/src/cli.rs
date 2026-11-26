@@ -1,5 +1,5 @@
-//! Command line: `serve`, `version`, `ps --json`, and the Windows helpers `peer-account`, `raise`
-//! and `open-link`.
+//! Command line: `serve`, `version`, `ps --json`, `files --json`, and the Windows helpers
+//! `peer-account`, `raise` and `open-link`.
 //!
 //! The protocol is fixed at build time (`protocol::PROTOCOL`); `version` prints it.
 
@@ -14,7 +14,7 @@ const PIPE_NAME_TRIES: usize = 3;
 /// tmux's default `history-limit`.
 const DEFAULT_HISTORY_LIMIT: usize = 2000;
 
-const USAGE: &str = "usage: harness-pty serve --home <dir> [--history-limit N] | version | ps --json [--ancestors <pid>]";
+const USAGE: &str = "usage: harness-pty serve --home <dir> [--history-limit N] | version | ps --json [--ancestors <pid>] | files --json <pid>…";
 
 /// The version this host reports. A release stamps it with the CLI's version (`HARNESS_PTY_VERSION`, set by
 /// windows.yml's release mode) instead of editing Cargo.toml, which would put the lockfile out of date for
@@ -50,6 +50,10 @@ pub enum Command {
     Ps {
         /// `--ancestors <pid>`: that process's row and its parents' alone (`ps::ancestors`), not every process.
         ancestors: Option<u32>,
+    },
+    Files {
+        /// Each process once, in the order first named, at most `open_files::MAX_PIDS`.
+        pids: Vec<u32>,
     },
     Raise {
         target: RaiseTarget,
@@ -100,6 +104,27 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
             },
             _ => Err("ps takes --json [--ancestors <pid>]".into()),
         },
+        Some("files") => {
+            if args.next() != Some("--json") {
+                return Err("files takes --json <pid>…".into());
+            }
+            let mut pids = Vec::new();
+            for pid in args {
+                let Ok(pid @ 1..) = pid.parse::<u32>() else {
+                    return Err("files: --json takes process ids".into());
+                };
+                if !pids.contains(&pid) {
+                    pids.push(pid);
+                }
+                if pids.len() > crate::open_files::MAX_PIDS {
+                    return Err("files: too many processes".into());
+                }
+            }
+            if pids.is_empty() {
+                return Err("files takes --json <pid>…".into());
+            }
+            Ok(Command::Files { pids })
+        }
         Some("raise") => {
             let target = match (args.next(), args.next(), args.next()) {
                 (Some("--pid"), Some(pid), None) => match pid.parse() {
@@ -176,6 +201,7 @@ pub fn main() {
     match parse(&args) {
         Ok(Command::Version) => println!("{}", version_line()),
         Ok(Command::Ps { ancestors }) => ps(ancestors),
+        Ok(Command::Files { pids }) => files(&pids),
         Ok(Command::Raise { target }) => raise(target),
         Ok(Command::OpenLink { url }) => open_link(&url),
         Ok(Command::PeerAccount {
@@ -265,6 +291,23 @@ fn ps(ancestors: Option<u32>) {
     #[cfg(not(windows))]
     {
         let _ = ancestors;
+        println!("{{\"unsupported\":true}}");
+        std::process::exit(3);
+    }
+}
+
+/// `files --json`: `{"rows":[…]}` on Windows, each process's open disk files and folder
+/// (open_files.rs); elsewhere `{"unsupported":true}`, exit 3 (the daemon reads `lsof` and `/proc`
+/// there).
+fn files(pids: &[u32]) {
+    #[cfg(windows)]
+    println!(
+        "{}",
+        serde_json::json!({ "rows": crate::open_files::read(pids) })
+    );
+    #[cfg(not(windows))]
+    {
+        let _ = pids;
         println!("{{\"unsupported\":true}}");
         std::process::exit(3);
     }

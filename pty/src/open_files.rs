@@ -1,5 +1,316 @@
+//! `harness-pty files --json <pid>…` (Windows): which disk files a few processes hold open, and the
+//! folder each works in, as `lsof -c` and `lsof -d cwd` tell the daemon on macOS. The open scan reads
+//! it to learn which Codex holds a rollout after a restart (docs/plans/2026-11-27-windows-codex-rescan-design.md).
+//!
+//! Each process is opened with `PROCESS_QUERY_INFORMATION | PROCESS_DUP_HANDLE | PROCESS_VM_READ` and
+//! nothing that writes. Its handles come from `NtQueryInformationProcess(ProcessHandleInformation)`,
+//! that process's alone; each is duplicated into this one with no access and no options (never
+//! `DUPLICATE_CLOSE_SOURCE`, which would close the process's own) and closed at once, never used for
+//! I/O. A handle is named only when `GetFileType` says disk and it is no folder: `NtQueryObject`,
+//! the call tools name handles by, hangs on a synchronous pipe with a read pending, and is never
+//! made. The folder is the handle the process keeps on it (its parameters' `CurrentDirectory`, read
+//! from its memory), named the same way, so it reads as Node's `realpath` names the session's
+//! folder, whatever spelling the process was given.
+//!
+//! A process it may not open, that has exited, or past a bound is left out: unknown, never "holds
+//! nothing". Nothing is logged; the paths go to stdout alone.
+
+use std::collections::BTreeSet;
+
+use serde::Serialize;
+
+/// The most processes one run reads.
+pub const MAX_PIDS: usize = 32;
+/// The most handles a process may hold to be read (a Codex holds hundreds).
+pub const MAX_HANDLES: usize = 65_536;
+/// The most distinct files listed for a process.
+pub const MAX_FILES: usize = 4096;
+/// The longest path named, in UTF-16 units: the longest Windows allows.
+pub const MAX_PATH_UNITS: usize = 32 * 1024;
+
+/// One process, in the daemon's field names (cli/src/lib/windows/openFiles.ts).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenFilesRow {
+    pub pid: u32,
+    /// `w:<creation FILETIME>`, as `ps --json` gives it: the daemon drops a row whose marker is not
+    /// its table's (a reused pid).
+    pub start_marker: String,
+    /// The folder it works in; absent when it could not be read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    /// Its open disk files, each once, sorted.
+    pub files: Vec<String>,
+}
+
+/// A path `GetFinalPathNameByHandleW` gave, as libuv's `realpath` (Node's) turns it: `\\?\UNC\` made
+/// `\\`, `\\?\` dropped. `None` for one that is not valid UTF-16.
+pub fn dos_path(final_path: &[u16]) -> Option<String> {
+    let path = String::from_utf16(final_path).ok()?;
+    Some(if let Some(share) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{share}")
+    } else if let Some(local) = path.strip_prefix(r"\\?\") {
+        local.to_owned()
+    } else {
+        path
+    })
+}
+
+/// [paths] each once, sorted; `None` past `MAX_FILES` distinct, as soon as it is passed.
+pub fn collect(paths: impl IntoIterator<Item = String>) -> Option<Vec<String>> {
+    let mut seen = BTreeSet::new();
+    for path in paths {
+        seen.insert(path);
+        if seen.len() > MAX_FILES {
+            return None;
+        }
+    }
+    Some(seen.into_iter().collect())
+}
+
+#[cfg(windows)]
+pub use windows::read;
+
 #[cfg(windows)]
 mod windows {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+
+    use windows_sys::Wdk::System::Threading::{
+        NtQueryInformationProcess, ProcessHandleInformation,
+    };
+    use windows_sys::Win32::Foundation::{DuplicateHandle, HANDLE, STATUS_INFO_LENGTH_MISMATCH};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_STANDARD_INFO, FILE_TYPE_DISK, FileStandardInfo, GetFileInformationByHandleEx,
+        GetFileType, GetFinalPathNameByHandleW, VOLUME_NAME_DOS,
+    };
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcess, OpenProcess, PROCESS_DUP_HANDLE, PROCESS_QUERY_INFORMATION,
+        PROCESS_VM_READ,
+    };
+
+    use super::{MAX_HANDLES, MAX_PATH_UNITS, OpenFilesRow, collect, dos_path};
+    use crate::ps::{process_exited, process_started};
+
+    /// The rows of [pids] that could be read, in the order asked.
+    pub fn read(pids: &[u32]) -> Vec<OpenFilesRow> {
+        let mut path = vec![0u16; MAX_PATH_UNITS + 1];
+        pids.iter().filter_map(|&pid| row(pid, &mut path)).collect()
+    }
+
+    /// [pid]'s row, or `None` when it cannot be opened (the idle process, System, another user's or
+    /// an elevated one), has exited (a handle elsewhere keeps it listed), or is past a bound.
+    fn row(pid: u32, path: &mut [u16]) -> Option<OpenFilesRow> {
+        let rights = PROCESS_QUERY_INFORMATION | PROCESS_DUP_HANDLE | PROCESS_VM_READ;
+        let process = unsafe { OpenProcess(rights, 0, pid) };
+        if process.is_null() {
+            return None;
+        }
+        // Held to the end: the pid cannot be reused meanwhile, so the marker and the files are
+        // the same process's.
+        let process = unsafe { OwnedHandle::from_raw_handle(process as _) };
+        let h = process.as_raw_handle() as HANDLE;
+        if process_exited(h, false) {
+            return None;
+        }
+        let created = process_started(h)?;
+        let files = files(h, path)?;
+        Some(OpenFilesRow {
+            pid,
+            start_marker: format!("w:{created}"),
+            cwd: folder(h, path),
+            files,
+        })
+    }
+
+    /// `PROCESS_HANDLE_TABLE_ENTRY_INFO`.
+    #[repr(C)]
+    struct HandleEntry {
+        value: HANDLE,
+        _count: usize,
+        _pointers: usize,
+        _access: u32,
+        _type_index: u32,
+        _attributes: u32,
+        _reserved: u32,
+    }
+
+    /// `PROCESS_HANDLE_SNAPSHOT_INFORMATION`'s header; the entries follow it.
+    #[repr(C)]
+    struct HandleSnapshot {
+        count: usize,
+        _reserved: usize,
+    }
+
+    /// The handles [process] holds, or `None` when they cannot be read or are more than
+    /// `MAX_HANDLES`.
+    fn handles(process: HANDLE) -> Option<Vec<HANDLE>> {
+        const HEADER: usize = size_of::<HandleSnapshot>();
+        const ENTRY: usize = size_of::<HandleEntry>();
+        const MOST: usize = HEADER + MAX_HANDLES * ENTRY;
+        let word = size_of::<usize>();
+        let mut size = HEADER + 1024 * ENTRY;
+        for _ in 0..3 {
+            // `usize` words, so the entries are aligned.
+            let mut buffer = vec![0usize; size.div_ceil(word)];
+            let size_given = buffer.len() * word;
+            let mut needed = 0u32;
+            let status = unsafe {
+                NtQueryInformationProcess(
+                    process,
+                    ProcessHandleInformation,
+                    buffer.as_mut_ptr().cast(),
+                    size_given as u32,
+                    &mut needed,
+                )
+            };
+            if status >= 0 {
+                let count = buffer[0];
+                if count > MAX_HANDLES || HEADER + count * ENTRY > size_given {
+                    return None;
+                }
+                let entries = unsafe {
+                    let first = buffer
+                        .as_ptr()
+                        .cast::<u8>()
+                        .add(HEADER)
+                        .cast::<HandleEntry>();
+                    std::slice::from_raw_parts(first, count)
+                };
+                return Some(entries.iter().map(|entry| entry.value).collect());
+            }
+            let needed = needed as usize;
+            if status != STATUS_INFO_LENGTH_MISMATCH || needed <= size_given || needed > MOST {
+                return None;
+            }
+            // Room for the handles it opens before the next call.
+            size = (needed + 64 * ENTRY).min(MOST);
+        }
+        None
+    }
+
+    /// The disk files [process] holds, or `None` past a bound.
+    fn files(process: HANDLE, path: &mut [u16]) -> Option<Vec<String>> {
+        let mut too_long = false;
+        // The first path too long to name ends the read: the row is left out.
+        let named = handles(process)?.into_iter().map_while(|handle| {
+            let file = name(process, handle, false, path);
+            too_long |= file.is_err();
+            file.ok()
+        });
+        let files = collect(named.flatten());
+        if too_long {
+            return None;
+        }
+        files
+    }
+
+    /// A path longer than `MAX_PATH_UNITS`.
+    struct TooLong;
+
+    /// [handle] of [process] as a path, when it is a disk folder ([folder]) or a disk file that is
+    /// none; `Ok(None)` for anything else or what cannot be told.
+    fn name(
+        process: HANDLE,
+        handle: HANDLE,
+        folder: bool,
+        path: &mut [u16],
+    ) -> Result<Option<String>, TooLong> {
+        let mut copy = std::ptr::null_mut();
+        // No access and no options: never DUPLICATE_CLOSE_SOURCE, which would close the process's
+        // own handle.
+        let copied =
+            unsafe { DuplicateHandle(process, handle, GetCurrentProcess(), &mut copy, 0, 0, 0) };
+        if copied == 0 {
+            return Ok(None);
+        }
+        let copy = unsafe { OwnedHandle::from_raw_handle(copy as _) };
+        let h = copy.as_raw_handle() as HANDLE;
+        // The I/O manager answers `GetFileType` without the file's own lock, so a pipe or a
+        // console with a read pending is told apart without waiting on it.
+        if unsafe { GetFileType(h) } != FILE_TYPE_DISK {
+            return Ok(None);
+        }
+        let mut info: FILE_STANDARD_INFO = unsafe { std::mem::zeroed() };
+        let told = unsafe {
+            GetFileInformationByHandleEx(
+                h,
+                FileStandardInfo,
+                (&mut info as *mut FILE_STANDARD_INFO).cast(),
+                size_of::<FILE_STANDARD_INFO>() as u32,
+            )
+        };
+        if told == 0 || (info.Directory != 0) != folder {
+            return Ok(None);
+        }
+        let len = unsafe {
+            GetFinalPathNameByHandleW(h, path.as_mut_ptr(), path.len() as u32, VOLUME_NAME_DOS)
+        } as usize;
+        match len {
+            0 => Ok(None),
+            // Too small: the length it needs.
+            len if len >= path.len() => Err(TooLong),
+            len => Ok(dos_path(&path[..len])),
+        }
+    }
+
+    /// The folder [process] works in: the handle its parameters keep on it (`CurrentDirectory`),
+    /// named. None for a 32-bit process, whose parameters are laid out otherwise, or when any step
+    /// fails.
+    #[cfg(target_pointer_width = "64")]
+    fn folder(process: HANDLE, path: &mut [u16]) -> Option<String> {
+        use std::mem::offset_of;
+        use windows_sys::Wdk::System::Threading::ProcessBasicInformation;
+        use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
+        use windows_sys::Win32::System::Threading::{
+            IsWow64Process, PEB, PROCESS_BASIC_INFORMATION,
+        };
+
+        /// `CurrentDirectory.Handle` in the 64-bit `RTL_USER_PROCESS_PARAMETERS`, past its
+        /// `DosPath`, which keeps the spelling the process was given.
+        const CURRENT_DIRECTORY_HANDLE: usize = 0x48;
+
+        let word_at = |address: usize| {
+            let (mut word, mut read) = (0usize, 0usize);
+            let ok = unsafe {
+                ReadProcessMemory(
+                    process,
+                    address as *const _,
+                    (&mut word as *mut usize).cast(),
+                    size_of::<usize>(),
+                    &mut read,
+                )
+            };
+            (ok != 0 && read == size_of::<usize>()).then_some(word)
+        };
+        let mut wow64 = 0;
+        if unsafe { IsWow64Process(process, &mut wow64) } == 0 || wow64 != 0 {
+            return None;
+        }
+        let mut info: PROCESS_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
+        let status = unsafe {
+            NtQueryInformationProcess(
+                process,
+                ProcessBasicInformation,
+                (&mut info as *mut PROCESS_BASIC_INFORMATION).cast(),
+                size_of::<PROCESS_BASIC_INFORMATION>() as u32,
+                std::ptr::null_mut(),
+            )
+        };
+        if status < 0 {
+            return None;
+        }
+        let parameters =
+            word_at(info.PebBaseAddress as usize + offset_of!(PEB, ProcessParameters))?;
+        let handle = word_at(parameters + CURRENT_DIRECTORY_HANDLE)?;
+        name(process, handle as HANDLE, true, path).ok().flatten()
+    }
+
+    /// harness-pty ships x64 and arm64 alone: a 32-bit build reads no folder.
+    #[cfg(not(target_pointer_width = "64"))]
+    fn folder(_: HANDLE, _: &mut [u16]) -> Option<String> {
+        None
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
