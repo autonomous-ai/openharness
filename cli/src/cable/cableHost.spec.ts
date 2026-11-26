@@ -1928,14 +1928,22 @@ describe('the dial that shows one app at a time', () => {
         expect(focus).not.toHaveBeenCalled()
       })
 
-      it('a rest on a detached tmux agent runs its source\'s focus, which focuses its pane alone', async () => {
+      // No app came forward: `opened` counts only a rest that brought one.
+      it('a rest on a detached tmux agent, or on herdr\'s own row, runs its source\'s focus, which focuses its pane alone, and tells ok', async () => {
         const detached = agent('t1', 'tmux', { nest: 'tmux' })
-        const { host, swiped, focus, showPane } = paged([detached])
+        const herdrFocus = vi.fn(async () => true)
+        const own: HostSource = { id: 'herdr', list: () => [agent('r1', 'herdr')], capabilities: () => CAN_OPEN, focus: herdrFocus }
+        const { host, swiped, focus, showPane } = paged([detached], [own])
         host.pickApp('tmux')
         expect(host.swipeSwitches('t1', { apps: true })).toBe(true)
         host.swipeEnded('t1', 'rest', { apps: true })
-        await vi.waitFor(() => expect(swiped).toHaveBeenCalledWith('opened'))
+        await vi.waitFor(() => expect(swiped).toHaveBeenCalledTimes(1))
+        host.pickApp('herdr')
+        host.swipeEnded('r1', 'rest', { apps: true })
+        await vi.waitFor(() => expect(swiped).toHaveBeenCalledTimes(2))
+        expect(swiped.mock.calls).toEqual([['ok'], ['ok']])
         expect(focus).toHaveBeenCalledWith(detached, expect.any(Function))
+        expect(herdrFocus).toHaveBeenCalledTimes(1)
         expect(showPane).not.toHaveBeenCalled()
       })
 
