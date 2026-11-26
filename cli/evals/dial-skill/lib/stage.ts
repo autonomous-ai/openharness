@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir, userInfo } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DIAL_SKILL, DIAL_SKILL_DESCRIPTION, skillsFolderOf, writeSkill } from '../../../src/devices/dialSkill.js'
 import { composeNotice, parseNotice } from '../../../src/lib/dialNotice.js'
@@ -57,6 +57,9 @@ export interface HarnessAnswer {
 }
 
 export const CROWD_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'crowd')
+
+/** The files Claude Code, or another engine reading the repo, takes as project instructions. */
+const INSTRUCTIONS = ['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md']
 
 /** All the agent gets from the person's environment: their shell also carries keys, the daemon's port, Orca's and tmux's
  *  variables and a signed-in gh. */
@@ -126,10 +129,11 @@ export function stage(s: Scenario, agent: AgentKind, opts: StageOptions): Staged
   const condition = opts.condition ?? 'clean'
 
   try {
-    // The crowd's CLAUDE.md and skills go there; a repo's own would reach every condition, clean included.
-    for (const name of ['CLAUDE.md', '.claude']) {
-      if (existsSync(join(s.dir, 'repo', name))) throw new Error(`the scenario's repo/ holds ${name}`)
-    }
+    // The crowd's CLAUDE.md and skills go there; a repo's own would reach every condition, clean included. Claude Code
+    // reads the instructions of a folder below the repo's top once the agent works there, so none may sit anywhere.
+    const planted = readdirSync(join(s.dir, 'repo'), { recursive: true, encoding: 'utf8' })
+      .find((path) => path === '.claude' || INSTRUCTIONS.includes(basename(path)))
+    if (planted !== undefined) throw new Error(`the scenario's repo/ holds ${planted}`)
     // Inside a work tree, the agent would load that repo's AGENTS.md and CLAUDE.md, and could reach the answer key.
     if (insideGit(base, env)) throw new Error(`${base} is inside a git work tree`)
 

@@ -1,7 +1,7 @@
 /**
  * Proves, before a pass, what Claude Code's skill listing gave the model in a condition: the dial's line, the crowd's
- * lines, the listing's length, and whether the staged CLAUDE.md reached it. Only Claude Code's saved transcript holds
- * the listing; the stream names the skills alone.
+ * lines, the listing's length, and whether project instructions reached it: the staged CLAUDE.md, and none in clean.
+ * Only Claude Code's saved transcript holds the listing; the stream names the skills alone.
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -25,7 +25,8 @@ export interface Probe {
   condition: Condition
   at: string
   listing: Listing | null
-  /** Whether the model quoted the staged CLAUDE.md's first line; null where none was staged. */
+  /** Whether the model was given project instructions: where a CLAUDE.md was staged, whether it quoted its first line;
+   *  in clean, where none was, whether it answered anything but NONE. Null when the probe got no answer. */
   instructions: boolean | null
   skills: string[]
   claude_version: string | null
@@ -70,7 +71,8 @@ export function probeFailure(p: Omit<Probe, 'failure'>, condition: Condition, sk
   if (p.listing.dial !== expected) return `dial ${p.listing.dial}, expected ${expected}`
   if (p.listing.cut > 0) return `${p.listing.cut} crowd skill${p.listing.cut === 1 ? '' : 's'} cut`
   if (condition !== 'clean' && p.listing.chars > CROWD_LISTING_MAX) return 'listing over 20,000 characters'
-  if (p.instructions === false) return 'CLAUDE.md not given'
+  if (condition === 'clean' && p.instructions === true) return 'project instructions given'
+  if (condition !== 'clean' && p.instructions === false) return 'CLAUDE.md not given'
   return null
 }
 
@@ -100,7 +102,7 @@ export async function probeListing(s: Scenario, condition: Condition, opts: Stag
     const p: Omit<Probe, 'failure'> = {
       ...base,
       listing: readListing(transcriptOf(st, run.init?.session_id ?? null), st.skills),
-      instructions: rules === null ? null : run.answer.includes(rules),
+      instructions: rules === null ? run.answer.trim() !== 'NONE' : run.answer.includes(rules),
       skills: run.init?.skills ?? [],
       claude_version: run.init?.claude_version ?? null,
       model: run.model,
