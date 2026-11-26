@@ -17,4 +17,5 @@ Packages log through `lib/`. The old logger is being replaced: see MIGRATION.md.
 
     pkgpub publish packages/<name>
 
-publishes one package at the version in its `package.json`.
+publishes one package at the version in its `package.json`. A change that keeps a package's API goes out as a patch
+release: bump the last number of its `version` before publishing.
