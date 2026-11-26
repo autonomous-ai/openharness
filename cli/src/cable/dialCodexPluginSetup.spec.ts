@@ -487,6 +487,33 @@ describe('createDialCodexPluginSetup', () => {
     expect(existsSync(installedRoot(home))).toBe(false)
   })
 
+  it('a disable that lands during one home\'s install ends the pass: no other home is run', async () => {
+    const r = rig()
+    const a = codexHome(), b = codexHome()
+    r.state.homes = [a, b]
+    r.options.set(a, { on: (call) => { if (call === ADD) r.state.wanted = false } })
+    await r.setup.pass()
+    expect(r.looked).toEqual([a])
+    expect(r.fake(a).calls).toEqual(['--version', `plugin marketplace add ${r.marketplace}`, ADD, '--version', REMOVE])
+    expect(r.state.recorded).toEqual({})
+  })
+
+  it('a dial-skill.json that cannot be read after an install ends the pass: no other home is run or re-checked', async () => {
+    const r = rig()
+    const current = codexHome()
+    r.state.homes = [current]
+    await r.setup.pass()
+    withoutTrust(current)
+    r.trust.mockClear()
+    const a = codexHome(), b = codexHome()
+    r.state.homes = [current, a, b]
+    r.options.set(a, { on: (call) => { if (call === ADD) r.state.wanted = undefined } })
+    await r.setup.pass()
+    expect(r.looked).toEqual([current, a])
+    expect(r.trust).not.toHaveBeenCalled()
+    expect(contentHashes(current)).toEqual([])
+  })
+
   /** A home whose `disable` landed during its install, and whose removal failed: owed, its hour started at 0. */
   async function owing() {
     const r = rig()
