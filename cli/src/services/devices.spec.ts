@@ -5336,8 +5336,11 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       const PLAIN = 4400
       /** The shell of the terminal holding the client (4310) of tmux's second session. */
       const SHELL_2 = 4309
+      /** The shell of the terminal sess-a runs in, with no multiplexer. */
+      const OWN = 4410
       const B = observedAgentId('claude', 'sess-2')
       const C = observedAgentId('claude', 'sess-3')
+      const A = observedAgentId('claude', 'sess-a')
       /** tmux's clients as a focus read lists them, `tty|pane` a line: client 4300 on session `work`'s pane %3, 4310 on
        *  session `other`'s %5. While `held`, each such read waits until the spec lands it. */
       const tmuxSays = { clients: '', held: false, land: [] as Array<() => void> }
@@ -5359,11 +5362,11 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
        * CLIENT_SHELL's terminal, and sess-3 in %5 of session `other`, whose one client (4310) is in SHELL_2's: both
        * terminals and PLAIN's in one window of the editor at [app], whose bundle id is [bundle], every chain read, a dial
        * attached, no app settled in front and the devices' clock at 0; with [hooked] 2, sess-3 is never hooked, so VS
-       * Code's one client showing an agent's session is 4300. `focus` is the person focusing a terminal; `settle` keeps
-       * an app in front for the settle; `next` lets FOCUS_POLL_MS pass. The timers are held; `setImmediate` is left to
-       * let a read land.
+       * Code's one client showing an agent's session is 4300; with [own], sess-a runs in OWN's terminal of that window,
+       * in no multiplexer. `focus` is the person focusing a terminal; `settle` keeps an app in front for the settle;
+       * `next` lets FOCUS_POLL_MS pass. The timers are held; `setImmediate` is left to let a read land.
        */
-      const clientsIn = async (app = code, bundle = VSCODE, hooked = 3) => {
+      const clientsIn = async (app = code, bundle = VSCODE, hooked = 3, own = false) => {
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
         clock = 0
         const rows: ProcessRow[] = [
@@ -5372,6 +5375,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
           { pid: 3900, ppid: 1, executable: 'tmux' },
           { pid: 4300, ppid: CLIENT_SHELL, executable: 'tmux' }, { pid: CLIENT_SHELL, ppid: 4298, executable: 'zsh' },
           { pid: 4310, ppid: SHELL_2, executable: 'tmux' }, { pid: SHELL_2, ppid: 4298, executable: 'zsh' },
+          ...own ? [{ pid: 4250, ppid: OWN, tty: 'ttys040', executable: 'claude' }, { pid: OWN, ppid: 4298, tty: 'ttys040', executable: 'zsh' }] : [],
           { pid: 4298, ppid: 1, executable: join(app, 'Contents', 'MacOS', 'Electron') },
         ]
         readers.processes.mockResolvedValue(rows)
@@ -5391,15 +5395,20 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
           port.observed(hook('session-start', { sessionId: `sess-${n}`, callerPid: 4241 + n, transcriptPath: `/t/sess-${n}.jsonl`,
             hostHints: { TMUX_PANE: `%${n + 2}`, TERM_PROGRAM: 'tmux' } }))
         }
+        if (own) {
+          port.observed(hook('session-start', { sessionId: 'sess-a', callerPid: 4250, transcriptPath: '/t/sess-a.jsonl',
+            hostHints: { TERM_PROGRAM: 'vscode', __CFBundleIdentifier: bundle } }))
+        }
         attach(port)
         await vi.waitFor(() => expect(said().filter((line) => line === '[device] tmux client · found')).toHaveLength(hooked))
         await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
         const window = listener.vscode(WINDOW_ID)
         const looks = calls('syncAgents').length
-        expect(listener.vscodeState(WINDOW_ID, [PLAIN, CLIENT_SHELL, SHELL_2])).toBeUndefined()
+        const shells = [PLAIN, CLIENT_SHELL, SHELL_2, ...own ? [OWN] : []]
+        expect(listener.vscodeState(WINDOW_ID, shells)).toBeUndefined()
         await vi.waitFor(() => expect(calls('syncAgents').length).toBeGreaterThan(looks))
         const focus = async (shell: number) => {
-          expect(listener.vscodeState(WINDOW_ID, [PLAIN, CLIENT_SHELL, SHELL_2], shell)).toBeUndefined()
+          expect(listener.vscodeState(WINDOW_ID, shells, shell)).toBeUndefined()
           await settled()
         }
         const settle = async (front: string) => {
@@ -5471,6 +5480,19 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
         tmuxSays.clients = '/dev/ttys004|%4\n/dev/ttys005|%5\n'
         await next()
         expect(follows('pane')).toEqual([[ID, 'pane'], [B, 'pane']])
+      })
+
+      // A terminal with no client told is told all the same: the person looks at it, not at VS Code's one tmux client.
+      it('an agent\'s own terminal focused: tmux\'s pane poll follows none of VS Code\'s clients', async () => {
+        const { settle, focus, next } = await clientsIn(code, VSCODE, 2, true)
+        await settle('vscode')
+        expect(follows('pane')).toEqual([[ID, 'pane']])
+        await focus(OWN)
+        expect(follows('vscode')).toEqual([[A, 'vscode']])
+        // The client in the other terminal switches to %4.
+        tmuxSays.clients = '/dev/ttys004|%4\n/dev/ttys005|%5\n'
+        await next()
+        expect(follows('pane')).toEqual([[ID, 'pane']])
       })
 
       it('the client focused as VS Code comes forward is followed at its settle and kept through it; another app\'s settle drops it', async () => {
