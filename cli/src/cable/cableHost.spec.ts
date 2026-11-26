@@ -1683,17 +1683,19 @@ describe('the dial that shows one app at a time', () => {
         agent('a1', 'iterm'), agent('b1', 'iterm', { nest: 'tmux', host: 'tmux' }), agent('b2', 'iterm', { nest: 'tmux', host: 'tmux' }),
       ]
       /** A source whose agents' app is behind (no pane to show) and which can open them; its opens record their `latest`. */
-      function paged(agents: HostAgent[]) {
+      function paged(agents: HostAgent[], more: HostSource[] = []) {
         const swiped = vi.fn()
         const tapped = vi.fn()
-        const host = new DaemonCableHost(wiring({ sessions: () => [], swiped, tapped }), fleetOf([]))
+        const appBrought = vi.fn()
+        const appPickBrought = vi.fn()
+        const host = new DaemonCableHost(wiring({ sessions: () => [], swiped, tapped, appBrought, appPickBrought }), fleetOf([]))
         const latests: Array<() => boolean> = []
         const focus = vi.fn(async (_agent: HostAgent, latest: () => boolean): Promise<boolean | 'superseded'> => { latests.push(latest); return true })
         const hasPane = vi.fn((_agent: HostAgent) => false)
         const showPane = vi.fn(async (_agent: HostAgent): Promise<PaneSwitch | 'superseded'> => 'ok')
         const capabilities = vi.fn((_agent: HostAgent) => CAN_OPEN)
-        host.setRegistry(new HostRegistry([host.harness, { id: 'observed', list: () => agents, capabilities, focus, hasPane, showPane }]))
-        return { host, swiped, tapped, latests, focus, hasPane, showPane, capabilities }
+        host.setRegistry(new HostRegistry([host.harness, { id: 'observed', list: () => agents, capabilities, focus, hasPane, showPane }, ...more]))
+        return { host, swiped, tapped, appBrought, appPickBrought, latests, focus, hasPane, showPane, capabilities }
       }
 
       it('swipeSwitches on tmux\'s page: true for an agent there whose app is behind and can be opened; false for one off the page, one no source opens, a dial without appFilter; on iTerm2\'s page as today', () => {
@@ -1825,6 +1827,134 @@ describe('the dial that shows one app at a time', () => {
         host.swipeEnded('h1', 'rest', { apps: true })
         await vi.waitFor(() => expect(swiped).toHaveBeenCalledWith('opened'))
         expect(focus).toHaveBeenCalledWith(terminal, expect.any(Function))
+      })
+
+      describe('a pick of tmux\'s or herdr\'s page brings the landed agent\'s app (spec §5)', () => {
+        const opened = (focus: ReturnType<typeof paged>['focus']) => focus.mock.calls.map(([a]) => a.id)
+        const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
+        /** herdr's own rows that no hook or scan placed: they have no client app. */
+        const herdrOwn = (agents: HostAgent[]): HostSource => ({ id: 'herdr', list: () => agents,
+          capabilities: () => CAN_OPEN, focus: async () => true })
+
+        it('a pick of tmux or herdr tells no appBrought; a pick of iTerm2 still does', () => {
+          const { host, appBrought } = paged([...tmuxed(), agent('c1', 'iterm', { nest: 'herdr', host: 'herdr' })])
+          expect([host.pickApp('tmux'), host.pickApp('herdr'), host.pickApp('iterm')]).toEqual(['switched', 'switched', 'switched'])
+          expect(appBrought.mock.calls).toEqual([['iterm']])
+        })
+
+        it('pickLanded opens the landed agent through its source\'s focus, also with its app in front, and tells appPickBrought ok', async () => {
+          const { host, appPickBrought, focus, hasPane, showPane, tapped } = paged(tmuxed())
+          hasPane.mockReturnValue(true)
+          host.pickApp('tmux')
+          host.pickLanded('tmux', 'b2')
+          await vi.waitFor(() => expect(appPickBrought).toHaveBeenCalledWith('ok'))
+          expect(opened(focus)).toEqual(['b2'])
+          expect(showPane).not.toHaveBeenCalled()
+          expect(tapped).not.toHaveBeenCalled()
+        })
+
+        it('an open that did not bring the landed agent, or failed, tells appPickBrought failed', async () => {
+          const { host, appPickBrought, focus } = paged(tmuxed())
+          host.pickApp('tmux')
+          focus.mockResolvedValueOnce(false)
+          host.pickLanded('tmux', 'b1')
+          await vi.waitFor(() => expect(appPickBrought).toHaveBeenCalledTimes(1))
+          focus.mockRejectedValueOnce(new Error('osascript failed'))
+          host.pickLanded('tmux', 'b1')
+          await vi.waitFor(() => expect(appPickBrought).toHaveBeenCalledTimes(2))
+          expect(appPickBrought.mock.calls).toEqual([['failed'], ['failed']])
+        })
+
+        it('a landed agent with no client app, off the page, or none: the page\'s agent heard from last with one is opened', async () => {
+          const { host, appPickBrought, focus } = paged([
+            agent('a1', 'iterm', { lastActivityAt: 30 }),
+            agent('b1', 'iterm', { nest: 'tmux', host: 'tmux', lastActivityAt: 5 }),
+            agent('b2', 'iterm', { nest: 'tmux', host: 'tmux', lastActivityAt: 9 }),
+            agent('t1', 'tmux', { nest: 'tmux', lastActivityAt: 20 }),
+          ])
+          host.pickApp('tmux')
+          host.pickLanded('tmux', 't1')
+          host.pickLanded('tmux', 'a1')
+          host.pickLanded('tmux', 'gone')
+          host.pickLanded('tmux', undefined)
+          await vi.waitFor(() => expect(appPickBrought).toHaveBeenCalledTimes(4))
+          expect(opened(focus)).toEqual(['b2', 'b2', 'b2', 'b2'])
+        })
+
+        it('herdr\'s own row landed on: the page\'s agent heard from last with a client app is opened', async () => {
+          const { host, appPickBrought, focus } = paged([
+            agent('c1', 'iterm', { nest: 'herdr', host: 'herdr', lastActivityAt: 3 }),
+          ], [herdrOwn([agent('r1', 'herdr', { lastActivityAt: 50 })])])
+          host.pickApp('herdr')
+          host.pickLanded('herdr', 'r1')
+          await vi.waitFor(() => expect(appPickBrought).toHaveBeenCalledWith('ok'))
+          expect(opened(focus)).toEqual(['c1'])
+        })
+
+        it('no agent there with a client app: nothing is opened, and appPickBrought tells none', async () => {
+          const { host, appPickBrought, focus } = paged([agent('t1', 'tmux', { nest: 'tmux' }), agent('a1', 'iterm')],
+            [herdrOwn([agent('r1', 'herdr')])])
+          host.pickApp('tmux')
+          host.pickLanded('tmux', 't1')
+          host.pickApp('herdr')
+          host.pickLanded('herdr', 'r1')
+          await vi.waitFor(() => expect(appPickBrought).toHaveBeenCalledTimes(2))
+          expect(appPickBrought.mock.calls).toEqual([['none'], ['none']])
+          expect(focus).not.toHaveBeenCalled()
+        })
+
+        it('a later pick or rest supersedes a pick\'s open still reading, and nothing is told for it', async () => {
+          const { host, appPickBrought, swiped, latests, focus } = paged(tmuxed())
+          let read!: () => void
+          const reading = new Promise<void>((resolve) => { read = resolve })
+          focus.mockImplementation(async (_agent, latest) => { latests.push(latest); await reading; return latest() ? true : 'superseded' })
+          host.pickApp('tmux')
+          host.pickLanded('tmux', 'b1')
+          host.pickLanded('tmux', 'b2')
+          host.pickLanded('tmux', 'b1')
+          host.swipeEnded('b2', 'rest', { apps: true })
+          expect(latests.map((latest) => latest())).toEqual([false, false, false, true])
+          read()
+          await vi.waitFor(() => expect(swiped).toHaveBeenCalledWith('opened'))
+          await settle()
+          expect(appPickBrought).not.toHaveBeenCalled()
+        })
+
+        it('a pick supersedes a rest\'s open still reading: the rest tells superseded', async () => {
+          const { host, appPickBrought, swiped, latests, focus } = paged(tmuxed())
+          let read!: () => void
+          const reading = new Promise<void>((resolve) => { read = resolve })
+          focus.mockImplementation(async (_agent, latest) => { latests.push(latest); await reading; return latest() ? true : 'superseded' })
+          host.pickApp('tmux')
+          host.swipeEnded('b1', 'rest', { apps: true })
+          host.pickLanded('tmux', 'b2')
+          expect(latests.map((latest) => latest())).toEqual([false, true])
+          read()
+          await vi.waitFor(() => expect(appPickBrought).toHaveBeenCalledWith('ok'))
+          await vi.waitFor(() => expect(swiped).toHaveBeenCalledWith('superseded'))
+        })
+
+        it('pickLanded of iTerm2\'s page does nothing', async () => {
+          const { host, appPickBrought, focus } = paged(tmuxed())
+          host.pickApp('tmux')
+          host.pickApp('iterm')
+          host.pickLanded('iterm', 'a1')
+          await settle()
+          expect(focus).not.toHaveBeenCalled()
+          expect(appPickBrought).not.toHaveBeenCalled()
+        })
+
+        it('a pick of herdr landing on a Herdr.app terminal opens it; landing on c, iTerm2\'s', async () => {
+          const terminal = agent('h1', 'herdr')
+          const { host, appPickBrought, focus } = paged([terminal, agent('c1', 'iterm', { nest: 'herdr', host: 'herdr', lastActivityAt: 9 })])
+          host.pickApp('herdr')
+          host.pickLanded('herdr', 'h1')
+          await vi.waitFor(() => expect(appPickBrought).toHaveBeenCalledTimes(1))
+          host.pickLanded('herdr', 'c1')
+          await vi.waitFor(() => expect(appPickBrought).toHaveBeenCalledTimes(2))
+          expect(opened(focus)).toEqual(['h1', 'c1'])
+          expect(appPickBrought.mock.calls).toEqual([['ok'], ['ok']])
+        })
       })
     })
   })

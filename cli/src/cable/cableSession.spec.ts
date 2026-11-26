@@ -6713,6 +6713,48 @@ describe('the app filter', () => {
     } finally { await session.stop(); vi.useRealTimers() }
   })
 
+  it('app.pick answered switched tells pickLanded with the recorded agent when the new ring holds it, else the ring\'s first row, after the ring is sent', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    const sentAtPick: unknown[][] = []
+    const { host, state } = appHost()
+    const pickLanded = vi.fn((_app: string, _agentId: string | undefined) => { sentAtPick.push(listTypes(port)) })
+    host.pickLanded = pickLanded
+    // g2 runs in tmux inside Ghostty: on Ghostty's page and on tmux's.
+    state.rings.tmux = [row('t1', 'tmux'), row('g2', 'tmux')]
+    const { session, port } = await greeted(host)
+    try {
+      port.say({ t: 'focus', agentId: 'g2' })
+      port.sent.length = 0
+      port.say({ t: 'app.pick', app: 'tmux' })
+      await vi.waitFor(() => expect(pickLanded).toHaveBeenCalledTimes(1))
+      expect(pickLanded.mock.calls[0]).toEqual(['tmux', 'g2'])
+      expect(sentAtPick[0]).toEqual(['apps', 'agents.begin', 'agent', 'agent', 'agents.end'])
+      port.say({ t: 'app.pick', app: 'ghostty' })
+      await vi.waitFor(() => expect(pickLanded).toHaveBeenCalledTimes(2))
+      port.say({ t: 'focus', agentId: 'g3' })
+      port.say({ t: 'app.pick', app: 'tmux' })
+      await vi.waitFor(() => expect(pickLanded).toHaveBeenCalledTimes(3))
+      expect(pickLanded.mock.calls[2]).toEqual(['tmux', 't1'])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  it('app.pick answered same, ignored or tabs tells pickLanded nothing', async () => {
+    const { host, pickApp } = appHost()
+    const pickLanded = vi.fn()
+    host.pickLanded = pickLanded
+    const { session, port } = await greeted(host)
+    try {
+      pickApp.mockReturnValueOnce('same').mockReturnValueOnce('ignored').mockReturnValueOnce('tabs')
+      port.say({ t: 'app.pick', app: 'ghostty' })
+      port.say({ t: 'app.pick', app: 'cursor' })
+      port.say({ t: 'app.pick', app: 'harness' })
+      await vi.waitFor(() => expect(pickApp).toHaveBeenCalledTimes(3))
+      await settle()
+      expect(pickApp.mock.results.map((r) => r.value)).toEqual(['same', 'ignored', 'tabs'])
+      expect(pickLanded).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
+
   it('app.pick of the shown app sends nothing', async () => {
     const { host, pickApp } = appHost()
     const { session, port } = await greeted(host)
