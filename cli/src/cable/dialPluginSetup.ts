@@ -106,9 +106,6 @@ export function createDialPluginSetup(deps: DialPluginSetupDeps): DialPluginSetu
     if (!files) return undo(claude)
     const install = { ...claude, folder: deps.plugin.folder, files }
     const done = deps.recorded() === undefined ? await claudeSetUp(install) : await claudeUpdate(install)
-    // A folder write that failed beside a plugin already listed did not stop the first setup, as nothing was to be added
-    // or installed: it is counted beside it, with no hour of its own, as the next CLI update writes it again.
-    if (done.folderFailed) deps.count('failed', `folder · ${done.folderFailed}`)
     if (!done.ok) return failed(failureWords(done))
     // A `disable` that landed while the install or the update ran found nothing to undo yet: it is undone here, and
     // nothing recorded. One not known is neither: a moment's read error never uninstalls a plugin the person keeps, and

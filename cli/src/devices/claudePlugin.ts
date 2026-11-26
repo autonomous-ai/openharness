@@ -57,9 +57,8 @@ export type ClaudeStep = 'unsupported' | 'launcher' | 'list' | 'folder' | 'marke
 export type ClaudeResult = { ok: true } | { ok: false; error: string; step: ClaudeStep; reason?: string }
 export type ClaudeFailure = Extract<ClaudeResult, { ok: false }>
 /** What the devices' setup did: installed or updated the plugin; found it current, on as it should be; or found it absent,
- *  not on as the person left it, and ran nothing for it. [folderFailed]: the code of the first setup's folder write that
- *  failed and did not stop it, as the plugin was listed and nothing was to be added or installed. */
-export type ClaudeSetup = ({ ok: true; outcome: 'installed' | 'updated' | 'current' | 'absent' } | ClaudeFailure) & { folderFailed?: string }
+ *  not on as the person left it, and ran nothing for it. */
+export type ClaudeSetup = { ok: true; outcome: 'installed' | 'updated' | 'current' | 'absent' } | ClaudeFailure
 
 /** The marketplace add, its update, the install and the plugin's update can fetch (a marketplace from GitHub, which
  *  people added before Harness carried its own); every other call only reads or writes local settings. */
@@ -296,10 +295,8 @@ async function change(run: ClaudeRun, args: string[], timeoutMs: number, step: C
 }
 
 /** Adds the written marketplace folder when no `openharness` marketplace is there, then installs the plugin. One there
- *  already, from GitHub or from the folder, is kept: removing it would uninstall every plugin it gave. [unwritten]: the
- *  folder write's code, which stops it, as there is nothing to add. */
-async function install(run: ClaudeRun, deps: ClaudeInstallDeps, unwritten: string | null): Promise<ClaudeFailure | null> {
-  if (unwritten) return folderFailure(unwritten)
+ *  already, from GitHub or from the folder, is kept: removing it would uninstall every plugin it gave. */
+async function install(run: ClaudeRun, deps: ClaudeInstallDeps): Promise<ClaudeFailure | null> {
   // Marketplaces that cannot be read are taken as none: at worst the add runs again, and its own failure is counted.
   const marketplaces = await jsonList(run, ['plugin', 'marketplace', 'list', '--json'])
   const added = Array.isArray(marketplaces) && marketplaces.some((marketplace) => marketplace.name === MARKETPLACE)
@@ -329,22 +326,25 @@ export async function claudeEnable(deps: ClaudeInstallDeps): Promise<ClaudeResul
   const unwritten = writeFolder(deps)
   const listed = await userEntry(run)
   if (!listed.ok) return listed
-  if (!listed.entry) return await install(run, deps, unwritten) ?? { ok: true }
+  // Nothing to add without the folder.
+  if (!listed.entry) return unwritten ? folderFailure(unwritten) : await install(run, deps) ?? { ok: true }
   const failed = listed.entry.enabled === true ? null : await change(run, ['plugin', 'enable', DIAL_PLUGIN_ID, '--scope', 'user'], LOCAL_MS, 'enable')
   return failed ?? (unwritten ? folderFailure(unwritten) : { ok: true })
 }
 
 /** The devices' first setup: the plugin installed as enable installs it, and one already there left as it is. One the
- *  person turned off is theirs: only `harness device claude enable` turns it back on. */
+ *  person turned off is theirs: only `harness device claude enable` turns it back on. A folder that could not be written
+ *  fails it, as it fails an update: the plugin listed would read nothing, and the version recorded over it would leave it
+ *  so until the next CLI update. */
 export async function claudeSetUp(deps: ClaudeInstallDeps): Promise<ClaudeSetup> {
   const run = await supportedRun(deps)
   if (typeof run !== 'function') return run
   const unwritten = writeFolder(deps)
+  if (unwritten) return folderFailure(unwritten)
   const listed = await userEntry(run)
   if (!listed.ok) return listed
-  if (!listed.entry) return await install(run, deps, unwritten) ?? { ok: true, outcome: 'installed' }
-  const outcome = listed.entry.enabled === true ? 'current' : 'absent'
-  return unwritten ? { ok: true, outcome, folderFailed: unwritten } : { ok: true, outcome }
+  if (!listed.entry) return await install(run, deps) ?? { ok: true, outcome: 'installed' }
+  return { ok: true, outcome: listed.entry.enabled === true ? 'current' : 'absent' }
 }
 
 /** Uninstalls the plugin and keeps the marketplace, which the harness plugin may come from too. */

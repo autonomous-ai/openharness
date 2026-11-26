@@ -98,10 +98,10 @@ From code.claude.com/docs/en/plugins: install, loading, cli-reference and troubl
     lost finds the folder holding its files, and is written.
   - A write that fails is the step `folder`, with its error's code.
     - It stops an install: there is nothing to add.
-    - It fails an update, and the pass waits its hour like any failure: Claude Code reads the plugin in place, so
-      recording the new version over the old files would keep them until the next CLI update.
-    - Beside a plugin already listed, the call goes on: the first setup gives the code, which the devices count, and
-      enable fails with it once the plugin is on.
+    - It fails an update and the first setup, and the pass waits its hour like any failure: Claude Code reads the
+      plugin in place, so recording the version over old files, or over none, would keep them until the next CLI
+      update.
+    - Beside a plugin already listed, enable goes on: it turns the plugin on, then fails with the code.
 - **The path Claude Code is given.** The folder's absolute path, `harnessPath`'s, on every OS: the docs take a local
   path starting with `/`, and on Windows the `C:\` form. A relative one risks being kept as it was given, and read
   against wherever Claude Code runs next. `claudeRunner` takes no folder to run in.
@@ -210,7 +210,7 @@ path `cableSession` already has for refusals.
 - `devices/claudePlugin.spec.ts`
   - The first install, with no `openharness`, writes the folder and runs `marketplace add <absolute folder>`. It never
     uses a GitHub source or `--sparse`, and asks for no git.
-  - A plugin listed and on while its folder is gone: setup and enable write it again.
+  - A plugin listed and on while its folder is gone: setup and enable write it again; a write that fails fails both.
   - A failed add reports `reason` (`no xcode tools`, `network`, `timeout`, `exit 1`).
   - The update writes the folder before `marketplace update`, after reading the version; a write that fails fails it.
 - `scripts/lib/claudePluginBundle` spec (beside `orcaPluginBundle.spec.ts`): the marketplace and plugin manifests,
