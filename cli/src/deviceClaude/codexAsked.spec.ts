@@ -136,6 +136,12 @@ describe('runCodexAsked', () => {
     expect(await posted(home, hookInput(outside))).toEqual([])
   })
 
+  // Codex reads an app tool's reviewer from config.toml's [apps], over the turn's: the rollout cannot say who reviews it.
+  it('posts nothing for an app tool of Codex\'s (mcp__codex_apps__…) in a turn the person reviews', async () => {
+    const { home, transcript } = codexHome()
+    expect(await posted(home, hookInput(transcript, { tool_name: 'mcp__codex_apps__github_create_issue', tool_input: {} }))).toEqual([])
+  })
+
   it('posts nothing for a request_user_input PreToolUse in Default mode', async () => {
     const { home, transcript } = codexHome()
     expect(await posted(home, hookInput(transcript, QUESTION))).toEqual([])
