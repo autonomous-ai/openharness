@@ -110,8 +110,8 @@ export function render(root: HTMLElement, view: View | null, act: (action: Actio
   text.forEach((node, i) => (node.id = `body-${i}`))
   screen.append(content)
 
-  // Return takes the primary answer, as a dialog's default button does. A screen without one focuses nothing: the window
-  // can come up while the person types elsewhere, and Return must not press Cancel.
+  // Return takes the primary answer, as a dialog's default button does. A screen without one focuses nothing: the
+  // window can come up while the person types elsewhere, and Return must not press Cancel.
   const focus = face.buttons.find((button) => button.primary)
   let focused: HTMLButtonElement | undefined
   if (face.buttons.length > 0) {
