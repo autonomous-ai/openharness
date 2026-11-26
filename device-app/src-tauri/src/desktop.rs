@@ -33,25 +33,35 @@ impl DesktopApp for SystemDesktopApp {
     }
 
     fn running(&self) -> bool {
-        use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
-        let Ok(mut system) = System::new() else {
+        let Some(system) = process_table() else {
             return false;
         };
-        // Processes, never their threads: a thread has its process's file and user, and on Linux reading a user costs
-        // one more file for each thread, every tick.
-        system.refresh_processes_specifics(
-            ProcessesToUpdate::All,
-            true,
-            ProcessRefreshKind::nothing().with_exe(UpdateKind::Always).with_user(UpdateKind::Always).without_tasks(),
-        );
-        // The process table holds every user's processes: our own user (uid on Linux, SID on Windows) picks ours.
-        let own = sysinfo::get_current_pid().ok().and_then(|pid| system.process(pid)).and_then(|own| own.user_id());
         let processes = system
             .processes()
             .values()
             .filter_map(|process| Some((process.exe()?.to_string_lossy().into_owned(), process.user_id())));
-        running_among(std::env::consts::OS, own, processes)
+        running_among(std::env::consts::OS, own_user(&system), processes)
     }
+}
+
+/// Every user's processes, each with its file and user. Processes, never their threads: a thread has its process's
+/// file and user, and on Linux reading a user costs one more file for each thread, every tick.
+#[cfg(not(target_os = "macos"))]
+fn process_table() -> Option<sysinfo::System> {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+    let mut system = System::new().ok()?;
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::nothing().with_exe(UpdateKind::Always).with_user(UpdateKind::Always).without_tasks(),
+    );
+    Some(system)
+}
+
+/// Our own process's user in that table: its uid on Linux, its SID on Windows.
+#[cfg(not(target_os = "macos"))]
+fn own_user(system: &sysinfo::System) -> Option<&sysinfo::Uid> {
+    system.process(sysinfo::get_current_pid().ok()?)?.user_id()
 }
 
 /// The program an entry's `Exec=` line starts: a quoted first word unescaped, else the text up to the first space.
@@ -224,6 +234,14 @@ mod tests {
         // Read-only lookups: either answer is right; the calls must return.
         let _ = SystemDesktopApp.installed();
         let _ = SystemDesktopApp.running();
+    }
+
+    // Unread, our own user would let no desktop app count, and the daemon would start beside the desktop app's own.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn our_own_user_is_read() {
+        let system = process_table().expect("the process table");
+        assert!(own_user(&system).is_some());
     }
 
     fn entry(exec: &str) -> String {
