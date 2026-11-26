@@ -1322,7 +1322,8 @@ static void handle_message(const cJSON *root)
         // THE TIER decides everything else (daemon, 2026-10-19): `alert` beeps, wakes and celebrates,
         // `list` only files a drawer row, `silent` files nothing. ui_notify_summary maps an old daemon's
         // `silent`/`quiet` flags when there is no tier, and says whether to beep: every alert, as the
-        // daemon already decided whether the person is with the agent. The beep itself coalesces to one per 30 s in audio_notify_done.
+        // daemon already decided whether the person is with the agent. The beep itself coalesces to one
+        // per 30 s in audio_notify_done.
         // WHO IT IS ABOUT rides on the frame: the dial holds one tab's agents, and this turn may have
         // finished on any of them.
         if (ui_notify_summary(agent_id, str_of(p, "name"), str_of(p, "machine"), str_of(p, "recap"),
