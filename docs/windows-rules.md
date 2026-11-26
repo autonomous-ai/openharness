@@ -209,6 +209,7 @@ Claude Code's plugins on Windows (Claude Code 2.1.328 and 2.1.329, VM, 2026-11-2
 - **There is no `lsof`.** A process's open files and folder come from `harness-pty files --json`
   (`lib/windows/openFiles.ts`). A read that could not run is unknown, never "nothing open": `processView` answered an
   empty map without spawning, so the open scan never found a running Codex after a restart (Ken's VM, 2026-11-26).
+  A process it left out that still runs (elevated, past a bound) is unknown too; one that exited holds nothing.
   Name a handle only when `GetFileType` says disk: `NtQueryObject` hangs on a synchronous pipe with a read pending.
   Tests: the "on Windows" cases of `cli/src/lib/sessionSearch/externals/support.spec.ts`, `pty/src/open_files.rs`.
 - **What Git Bash runs has a parent that has gone.** Walking Windows' parent links does not reach it (`lib/windows/gitBashTree.ts`).

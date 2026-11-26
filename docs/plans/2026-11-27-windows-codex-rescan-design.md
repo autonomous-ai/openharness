@@ -101,10 +101,13 @@ lookup, `patientExec`, 3 s timeout, 4 MiB output):
 - `openFilesOf(commands)` on win32: from the view's table, the pids whose image stem starts with one of `commands`
   (case-insensitive, as `lsof -c` matches a prefix), at most 32 (more: unknown, an empty map and one
   `externalReadFailed`, so admission holds rather than guesses). None: no spawn. Rows whose `startMarker` differs from
-  the table's are dropped.
+  the table's are dropped. A process left out that still runs (elevated, past a bound) is unknown, one
+  `externalReadFailed`; one that exited holds nothing.
 - `processCwds(pids)` on win32: the same reader's `cwd`. One spawn answers both when the view asks for both in one look
   (memoized per view).
-- `openFiles(pids)` stays unknown on win32: no caller needs it there.
+- `openFiles(pids)` stays unknown on win32, with no spawn: an empty map and one `externalReadFailed`. Antigravity's and
+  Cursor's owners read it, so there an adoption of theirs is held while one of their processes runs (Cursor's already
+  was: a live Cursor with no open store marks the read failed).
 
 From here the existing code does the rest on Windows: `openFileOwners` claims the session (the `open.id` regex and
 `contains: 'rollout-'` match a `C:\…\sessions\…\rollout-…-<uuid>.jsonl` path), `readAdoptedHead` takes the

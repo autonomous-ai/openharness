@@ -262,8 +262,9 @@ first:** the `support.spec.ts` cases below (today win32 answers empty maps witho
   `null` for its pids). `openFilesOf(commands)`: from `list()`, the rows with a start marker whose image name (win32
   basename, `.exe` dropped, lower-cased) starts with a command lower-cased; none → empty map, no run; more than 32 →
   empty map and `externalReadFailed`; else the memo, `null` → empty map and `externalReadFailed`, and only rows whose
-  `startMarker` equals the table row's. `cwds`: the given one, else `processCwds(pids, exec, platform, readlink, memo)`.
-  `openFiles` stays empty on win32. macOS and Linux unchanged.
+  `startMarker` equals the table row's; a row left out for a process `alive` still sees → `externalReadFailed`. `cwds`:
+  the given one, else `processCwds(pids, exec, platform, readlink, memo)`. `openFiles` on win32: an empty map, no run,
+  and `externalReadFailed`. macOS and Linux unchanged.
 
 - [ ] **Step 1: Write the failing tests** (fake table: `Code.exe` 400, `pwsh.exe` 409, `node.exe` 420, `codex.exe` 421
   (TUI), `codex.exe` 430 (daemon), each with a `w:` marker; a fake `files` spy; `exec` recording calls):
