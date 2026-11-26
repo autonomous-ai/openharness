@@ -6,9 +6,9 @@
 // setup: a dial attached here once, the CLI versions that last set Claude Code's plugin and Harness's extension in VS
 // Code and in Cursor up, the version of Orca's plugin that last set it up or found it removed (`orca`) and the one held
 // for asking more access than Harness approves (`orcaHeld`), the skills folders it wrote into, and the Orca homes it
-// turned Claude Code's plugin on in (`pluginHomes`); its one writer is that service. A `disable` finds every folder in
-// both. Each file keeps its own list of Orca homes, so neither has a second writer, and a home in either counts as
-// turned on once.
+// turned Claude Code's plugin on in (`pluginHomes`), and the CLI version that last set Harness Device's plugin up in
+// each Codex home (`codexPlugin`); its one writer is that service. A `disable` finds every folder in both. Each file
+// keeps its own list of Orca homes, so neither has a second writer, and a home in either counts as turned on once.
 import { randomUUID } from 'node:crypto'
 import { closeSync, fsyncSync, mkdirSync, openSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -38,8 +38,10 @@ export interface DialSkillHomes { claude: string[]; codex: string[] }
 export interface DialRemoved { claude?: true; codex?: true; vscode?: true; cursor?: true; orca?: true }
 
 /** [orca]: the version of Orca's plugin that last set it up or found it removed; [orcaHeld]: the one held for asking
- *  more access. [pluginHomes]: the Orca homes the devices turned Claude Code's plugin on in, by real path. */
-export interface DialSetupRecord { dial: boolean; plugin?: string; vscode?: string; cursor?: string; orca?: string; orcaHeld?: string; homes: DialSkillHomes; pluginHomes: string[] }
+ *  more access. [pluginHomes]: the Orca homes the devices turned Claude Code's plugin on in, by real path.
+ *  [codexPlugin]: a Codex home's real path to the CLI version that last set Harness Device's plugin up there; absent
+ *  when empty. */
+export interface DialSetupRecord { dial: boolean; plugin?: string; vscode?: string; cursor?: string; orca?: string; orcaHeld?: string; homes: DialSkillHomes; pluginHomes: string[]; codexPlugin?: Record<string, string> }
 
 /** A file read: [unread] when it is there but could not be read (EACCES, EIO, EMFILE), so it reads as empty, and
  *  nothing may be written from that read: it would lose what the file holds. */
@@ -134,6 +136,20 @@ const homesOf = (value: unknown): string[] => {
     if (typeof path === 'string' && listable(path)) kept.add(path)
   }
   return [...kept]
+}
+
+/** A map damaged or edited by hand keeps only the homes a list may hold, each with a version, at most MAX_HOMES:
+ *  `disable` removes the plugin from each home it names. */
+const codexPluginOf = (value: unknown): Record<string, string> => {
+  const kept: Record<string, string> = {}
+  let count = 0
+  for (const [home, version] of Object.entries(fields(value))) {
+    if (count === MAX_HOMES) break
+    if (!listable(home) || typeof version !== 'string' || !VERSION.test(version)) continue
+    kept[home] = version
+    count++
+  }
+  return kept
 }
 
 const settingOf = (dataDir: string): Record<string, unknown> => fields(readJson(join(dataDir, DIAL_SKILL_FILE), MAX_FILE_BYTES))
@@ -232,6 +248,7 @@ export function writeOrcaConnected(dataDir: string): string | undefined {
  *  never holds a folder a `disable` would not find. A record from before Orca's homes (#4399) holds none. */
 const setupOf = (value: unknown): DialSetupRecord => {
   const file = fields(value)
+  const codexPlugin = codexPluginOf(file.codexPlugin)
   return {
     dial: file.dial === true,
     ...(typeof file.plugin === 'string' && VERSION.test(file.plugin) ? { plugin: file.plugin } : {}),
@@ -241,6 +258,7 @@ const setupOf = (value: unknown): DialSetupRecord => {
     ...(typeof file.orcaHeld === 'string' && VERSION.test(file.orcaHeld) ? { orcaHeld: file.orcaHeld } : {}),
     homes: writtenOf(file),
     pluginHomes: homesOf(file.pluginHomes),
+    ...(Object.keys(codexPlugin).length ? { codexPlugin } : {}),
   }
 }
 
@@ -251,6 +269,7 @@ export function readSetup(dataDir: string): Read<DialSetupRecord> {
 /** undefined once saved; else the error's code: EINVAL for a version a read would drop, so the plugin or the extension
  *  would read as never set up, or Orca's plugin as never held. */
 export function writeSetup(dataDir: string, record: DialSetupRecord): string | undefined {
-  if ([record.plugin, record.vscode, record.cursor, record.orca, record.orcaHeld].some((version) => version !== undefined && !VERSION.test(version))) return 'EINVAL'
+  const versions = [record.plugin, record.vscode, record.cursor, record.orca, record.orcaHeld, ...Object.values(record.codexPlugin ?? {})]
+  if (versions.some((version) => version !== undefined && !VERSION.test(version))) return 'EINVAL'
   return writeJson(join(dataDir, DIAL_SETUP_FILE), setupOf(record))
 }
