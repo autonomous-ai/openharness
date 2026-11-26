@@ -299,6 +299,12 @@ const ATTACH_ECHO_MS = 2_000
 const FAILED_KEPT = 64
 /** herdr's panes with no session whose shell is asked or known at once (placeInHerdr): a bound on what one herdr costs. */
 const HERDR_SHELLS_MAX = 16
+/** The person is with an agent whose own prompt, or a Harness agent's turn, began at most this long ago: the usage counts'
+ *  own edge (docs/plans/2026-11-26-needs-you-right-design.md, Part 2). */
+const PRESENT_MS = 120_000
+/** The outside agents whose person's last prompt is kept: a bound on the ids hooks name, as a session a Harness agent
+ *  holds is on no outside row and never goes as it leaves. */
+const PROMPTED_MAX = 64
 
 /** Whether [path] is a file: false when nothing is there, it is a folder, or on any error. */
 function isFile(path: string): boolean {
@@ -1644,7 +1650,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   type Reading = { input?: number; cached?: number; output?: number } | null
   /** Each agent's reading from when its turn started, until the turn ends. */
   const starts = new Map<string, Promise<Reading>>()
-  /** When each agent's turn began (the first `processing`), for the summary's duration. */
+  /** When each agent's turn began (the first `processing`), for the summary's duration and whether the person is with it. */
   const began = new Map<string, number>()
   /** The turn that just ended, kept for the `summary` that follows its `done`. */
   const ended = new Map<string, { durationS: number | null; stats: TierInput['stats'] }>()
@@ -1669,6 +1675,27 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       const tokensIn = diff(fresh(from), fresh(to)), tokensOut = diff(from?.output, to?.output)
       return { ...(tokensIn === undefined ? {} : { tokensIn }), ...(tokensOut === undefined ? {} : { tokensOut }) }
     } finally { clearTimeout(timer) }
+  }
+
+  // ── whether the person is with an agent (docs/plans/2026-11-26-needs-you-right-design.md, Part 2) ────────────
+  //
+  // Read from what the devices already hold, with no wait. Anything unknown is not present, and rings as before.
+  /** Each outside agent's last prompt by the person, or by the dial for them, on the monotonic clock, oldest first. */
+  const prompted = new Map<string, number>()
+  /** At most PRESENT_MS before [now], and not after it: a wall clock set back since reads not present. */
+  const recent = (at: number | undefined, now: number): boolean => at !== undefined && at <= now && now - at <= PRESENT_MS
+  /** The person prompted it lately, its own app is known and is the one in front, and the dial that moved last shows it:
+   *  of five agents in one app, only the one the person is on. */
+  const outsidePresent = ({ agent }: HostEntry): boolean => recent(prompted.get(agent.id), monotonic())
+    && !agent.appPending && agent.app !== UNKNOWN_APP && cableHost.latestFront() === agent.app
+    && cableHost.shownAgentId() === agent.id
+  /** Its turn began lately and its tile is on the window in front: who started that turn only the core knows. */
+  const harnessPresent = (agentId: string): boolean => recent(began.get(agentId), Date.now()) && alreadyOnScreen(agentId)
+  /** Whether the person is with that agent now. An id no outside row holds takes the Harness rule, so a caller no list
+   *  holds, with no turn and no tile, never is. */
+  const present = (agentId: string): boolean => {
+    const entry = outside(agentId)
+    return entry ? outsidePresent(entry) : harnessPresent(agentId)
   }
 
   /** A finished turn the dial rang or listed, for the value counts: a silent one told the person nothing. */
@@ -1718,6 +1745,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       // Its notice rang for this turn: the dial keeps one drawer row an agent, so a summary that rang or listed would
       // replace the notice's line. A failed turn still rings (docs/plans/2026-11-17-dial-one-ring-per-turn-design.md).
       if (event.failed !== true && notice) { noted('silent', 'notice'); void cable.summary(agentId, recap, event.text, 'silent', event.fullText, false); return }
+      // The person watched an outside agent end: its tile alone, in Needs you too. A Harness agent's keeps `onScreen`.
+      const row = outside(agentId)
+      if (event.failed !== true && row && outsidePresent(row)) { noted('silent', 'present'); void cable.summary(agentId, recap, event.text, 'silent', event.fullText, false); return }
       const who = cableHost.describe(agentId)
       const needsYou = notifyMode.get() === 'you'
       // Needs you: an ordinary finished turn draws its tile alone, with no drawer row, however its tier was decided.
@@ -1923,9 +1953,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     now: monotonic,
     clock: Date.now,
     changed: () => noticeFile.changed(),
-    // The log's tally stays beside the usage counts: the end-to-end checks read its line.
-    count: (engine, result, kind) => {
-      noticeTally(engine, result, kind)
+    present,
+    // The log's tally stays beside the usage counts: the end-to-end checks read its line, whose last word says a card was
+    // held quiet.
+    count: (engine, result, kind, quiet) => {
+      noticeTally(engine, result, quiet ? `${kind} · present` : kind)
       count((usage) => usage.noticed(engine, result, kind))
     },
     restored: noticeFile.load(),
@@ -1945,14 +1977,16 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     part.call('notices', () => notices.ended(agentId))
     count((usage) => usage.waitEnded(`notice:${agentId}`, end))
   }
-  /** A notice shown is a wait on the person unless its agent says it proceeds (Decision 8). One that takes the place of
-   *  the agent's own: proceeding, the person most likely acted, so that wait is answered; waiting, it is the same wait.
-   *  Of every kind, the person's next prompt to that agent within 10 min answers it. */
+  /** A notice shown is a wait on the person unless its agent says it proceeds (Decision 8), or it was held quiet: the
+   *  waits count the dial's rings. One that takes the place of the agent's own: proceeding, the person most likely acted,
+   *  so that wait is answered; waiting, it is the same wait. Of every kind, the person's next prompt to that agent within
+   *  10 min answers it. */
   const noticeShown = (ask: NoticeAsk): void => count((usage) => {
     const { agentId } = noticeCaller(ask)
-    usage.noticeShown(agentId)
+    const quiet = notices.quiet(agentId)
+    usage.noticeShown(agentId, quiet)
     if (noticeKind(ask.text) === 'proceeding') usage.waitEnded(`notice:${agentId}`, 'answered')
-    else usage.waitOpened(`notice:${agentId}`, agentId)
+    else if (!quiet) usage.waitOpened(`notice:${agentId}`, agentId)
   })
   /** Another question of that agent closed: its notice, covered or held back by it, is asked again. */
   const reaskNotice = (agentId: string): void => part.call('notices', () => notices.reask(agentId))
@@ -2005,6 +2039,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     for (const id of told.keys()) {
       if (ids.has(id)) continue
       told.delete(id)
+      prompted.delete(id)
       endNotice(id, 'gone')
     }
     for (const entry of entries) {
@@ -3440,12 +3475,18 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         if (event.event === 'turn-aborted') count((usage) => usage.turnAborted(observedAgentId(event.engine, event.sessionId)))
         if (event.event === 'turn-start') {
           const agentId = observedAgentId(event.engine, event.sessionId)
+          // The person's prompt only where the hook can tell: another session's message is not, nor a turn with no prompt
+          // event (agy, commandcode).
+          const byPerson = source === 'person' || source === 'dial'
+          // Any other start drops its time: the turn under way is not the person's. Set after the delete, so the map stays
+          // oldest first.
+          prompted.delete(agentId)
+          if (byPerson) prompted.set(agentId, monotonic())
+          if (prompted.size > PROMPTED_MAX) prompted.delete(prompted.keys().next().value as string)
           // Its voice delivered, and once a day where the dial found it: on no list, held, on the Other page or placed. Only
           // a dial on counts where, so with none the registry is not merged for it.
           count((usage) => {
-            // The person's prompt only where the hook can tell: another session's message is not, nor a turn with no
-            // prompt event (agy, commandcode).
-            usage.turnStarted(agentId, source === 'person' || source === 'dial')
+            usage.turnStarted(agentId, byPerson)
             if (!dialOn) return
             const entries = registry.entries()
             // Its own row, or the row of the agent that holds its session: a Harness agent's, which the dial shows for it.
