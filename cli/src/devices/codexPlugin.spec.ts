@@ -166,6 +166,18 @@ describe('codexSetUp', () => {
     expect(await codexSetUp(deps(null, home, folder))).toMatchObject({ ok: false, step: 'unsupported' })
   })
 
+  it.each([
+    ['hangs', { code: null, timedOut: true }, 'timeout'],
+    ['fails', { code: 1, stderr: 'Error: broken install\n' }, 'exit 1'],
+  ] as const)('a codex whose --version %s is step launcher with its reason, never one too old', async (_, answer, reason) => {
+    const home = codexHome('model = "gpt-5"\n')
+    const folder = marketplaceFolder()
+    const codex = fakeCodex(home, folder, { '--version': answer })
+    expect(await codexSetUp(deps(codex.run, home, folder))).toMatchObject({ ok: false, step: 'launcher', reason })
+    expect(codex.calls).toEqual(['--version'])
+    expect(existsSync(folder)).toBe(false)
+  })
+
   it('below 0.172.0 a home with its own marketplace is unsupported too', async () => {
     const home = codexHome(OWN_GIT)
     const folder = marketplaceFolder()
