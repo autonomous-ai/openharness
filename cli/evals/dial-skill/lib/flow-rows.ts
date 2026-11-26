@@ -7,12 +7,19 @@ export interface Who { home: string; user: string; host: string }
 type Row = Record<string, unknown>
 
 const ROW_FILES = ['results.jsonl', 'errors.jsonl', 'probes.jsonl']
+const PRIVATE_FILE = 'private.jsonl'
 
 /** The row as it may leave the Mac. The judge's reasons and an error's message are model and tool text: scrub took the
  *  run root, $HOME and the user name out of them, but whatever else the agent or a tool printed is still in there. */
 export function publicRow(row: Row): Row {
   return Object.fromEntries(Object.entries(row).filter(([key]) => key !== 'error')
     .map(([key, value]) => [key, key === 'explanation' ? {} : value]))
+}
+
+/** What publicRow takes out of a row, with the file and ids that find the row again; null when it takes nothing. */
+export function privateRow(row: Row, file: string): Row | null {
+  const taken = Object.entries(row).filter(([key, value]) => (key === 'explanation' && !isEmptyObject(value)) || key === 'error')
+  return taken.length ? { file, prompt_id: row.prompt_id, rep: row.rep, ...Object.fromEntries(taken) } : null
 }
 
 // Only roots a machine's own folders sit under, so a route such as /health in a scenario's prompt is no path.
@@ -75,17 +82,24 @@ export function supersede(results: Row[], errors: Row[], scenario: string): { re
 }
 
 /** Rewrites every variant's row files through publicRow, then checks what is left: the rows read per file, as `<n>
- *  <variant>/<file>`, and each fault as `<variant>/<file>:<line> <fault>`. */
+ *  <variant>/<file>`, and each fault as `<variant>/<file>:<line> <fault>`. What publicRow takes out is added to the
+ *  variant's private.jsonl first, which git ignores, so a later round can still read why a run scored as it did. */
 export function scrubFlow(flow: string, who: Who): { read: string[]; faults: string[] } {
   const variants = readdirSync(flow, { withFileTypes: true }).filter((entry) => entry.isDirectory())
     .map((entry) => entry.name).sort()
   // Every file is read before any is written, so a refused one leaves the whole flow as it was.
-  const files = variants.flatMap((variant) => ROW_FILES.flatMap((file) => {
-    const rel = `${variant}/${file}`
-    const rows = readRows(flow, rel)
-    return rows ? [{ rel, rows: rows.map(publicRow) }] : []
+  const read = variants.flatMap((variant) => ROW_FILES.flatMap((file) => {
+    const rows = readRows(flow, `${variant}/${file}`)
+    return rows ? [{ variant, file, rows }] : []
   }))
-  for (const { rel, rows } of files) writeRows(join(flow, rel), rows)
+  const kept = variants.flatMap((variant) => {
+    const taken = read.filter((f) => f.variant === variant)
+      .flatMap(({ file, rows }) => rows.map((row) => privateRow(row, file)).filter((row): row is Row => row !== null))
+    const rel = `${variant}/${PRIVATE_FILE}`
+    return taken.length ? [{ rel, rows: [...(readRows(flow, rel) ?? []), ...taken] }] : []
+  })
+  const files = read.map(({ variant, file, rows }) => ({ rel: `${variant}/${file}`, rows: rows.map(publicRow) }))
+  for (const { rel, rows } of [...kept, ...files]) writeRows(join(flow, rel), rows)
   return {
     read: files.map(({ rel, rows }) => `${rows.length} ${rel}`),
     faults: files.flatMap(({ rel, rows }) => rows.flatMap((row, i) => {

@@ -1,5 +1,6 @@
 // npx tsx evals/dial-skill/flow-rows.ts scrub <flow>: rewrites every variant's results, errors and probes rows fit to
-// commit, then checks them; exit 1 lists what is left.
+// commit, keeping what it takes out in the variant's git-ignored private.jsonl, then checks them; exit 1 lists what is
+// left.
 // npx tsx evals/dial-skill/flow-rows.ts supersede <flow> <variant> <scenario>: moves a scenario's rows to errors.jsonl,
 // so the runner runs its cases again; exit 1 when it has none.
 import { homedir, hostname, userInfo } from 'node:os'
