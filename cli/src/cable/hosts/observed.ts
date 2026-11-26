@@ -1849,18 +1849,21 @@ export class ObservedSource implements HostSource {
     return new Map([...made].map(([pid, maker]) => [pid, { ...maker, pid, rows }]))
   }
 
-  /** Removals: ended sessions, dead or reused pids, and sessions with no generation silent for 12 h. Called every 30 s by the owner. */
+  /** Removals: ended sessions, dead or reused pids, and sessions with no generation silent for 12 h; and a Codex daemon's
+   *  session whose client exited leaves that client's tab, which holds a shell or another program now, for no page until
+   *  it is asked again (askServed), as the daemon runs on. Called every 30 s by the owner. */
   async tick(): Promise<void> {
     if (!this.entries.size) return
-    // Only the sessions known as the read begins, each in the process it ran in then: one first heard of, or brought
-    // back in a new process (ingest), while `ps` runs may have a process it did not see.
-    const judged = [...this.entries].map(([id, e]) => [id, e, e.pid] as const)
+    // Only the sessions known as the read begins, each in the process it ran in then, and at the client it had then: one
+    // first heard of, brought back in a new process (ingest) or at a client found while `ps` runs may have a process it
+    // did not see.
+    const judged = [...this.entries].map(([id, e]) => [id, e, e.pid, e.outer] as const)
     // One read of the machine's processes for every session: a `ps` each blocked the loop for seconds with 50 of them.
     // A table that cannot be read is empty: it always holds the process reading it.
     const table = new Map((await this.deps.processes()).map((p) => [p.pid, p.generation]))
     const now = this.deps.now()
     let changed = false
-    for (const [id, e, pid] of judged) {
+    for (const [id, e, pid, outer] of judged) {
       if (this.entries.get(id) !== e || e.pid !== pid) continue
       // Its process's generation, noted at the first look that sees it.
       const gen = table.get(e.pid)
@@ -1872,6 +1875,10 @@ export class ObservedSource implements HostSource {
       // No generation to tell a reused pid by: running, and heard from in the last 12 h.
       else gone = !this.deps.alive(e.pid) || now - e.agent.lastActivityAt >= NO_GENERATION_TTL_MS
       if (gone) { this.remove(e); changed = true }
+      else if (outer && e.outer === outer && this.servedBy(e) && table.size && !table.has(outer.pid)) {
+        this.placeServed(e, {})
+        changed = true
+      }
     }
     if (changed) this.emit()
   }
