@@ -225,7 +225,8 @@ export function createDialCodexPluginSetup(deps: DialCodexPluginSetupDeps): Dial
     }
     deps.count(COUNTED[done.outcome])
     if (done.outcome !== 'absent') trusted(home, done.trusted)
-    stamps.set(home, stampOf(home))
+    // Stats taken now could hold a change made since the install wrote: the re-check that follows checks it as it is.
+    stamps.delete(home)
     return 'go'
   }
 
@@ -261,6 +262,7 @@ export function createDialCodexPluginSetup(deps: DialCodexPluginSetupDeps): Dial
     const recorded = deps.recorded()
     for (const home of served) {
       if (recorded[home] !== deps.version || waiting(home)) continue
+      // Before the fingerprint: a change after it is a change the next pass sees.
       const stamp = stampOf(home)
       if (stamp === stamps.get(home)) continue
       const root = installedRoot(home)
@@ -290,8 +292,10 @@ export function createDialCodexPluginSetup(deps: DialCodexPluginSetupDeps): Dial
         continue
       }
       trusted(home, trust.ok)
-      // Taken again, as the write changed config.toml.
-      stamps.set(home, stampOf(home))
+      // A write changed config.toml since its stat, and a stat taken now could hold another writer's change too: the
+      // stamp is left, so the next pass checks the file as it is then.
+      if (trust.ok && trust.changed) continue
+      stamps.set(home, stamp)
     }
   }
 
