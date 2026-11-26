@@ -94,8 +94,16 @@ describe('the status file', () => {
     expect(existsSync(`${file}.42.tmp`)).toBe(false)
   })
 
+  it('is written on a first start, before anything has made the data folder', () => {
+    const file = join(dir, 'data', 'harnessd-status.json')
+    writeStatusFile(file, status({ state: 'starting' }))
+    expect(readStatusFile(file, 42)).toEqual(status({ state: 'starting' }))
+  })
+
   it('never stops the master over a disk it cannot write', () => {
-    expect(() => writeStatusFile(join(dir, 'missing', 'harnessd-status.json'), status())).not.toThrow()
+    // A file where the data folder should be: nothing can be written under it.
+    writeFileSync(join(dir, 'data'), '')
+    expect(() => writeStatusFile(join(dir, 'data', 'harnessd-status.json'), status())).not.toThrow()
   })
 
   it('says what the master knows when the core cannot answer', () => {
