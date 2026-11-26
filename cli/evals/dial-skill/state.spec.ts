@@ -84,6 +84,16 @@ describe('flow/_state.json', () => {
     expect(state.goal.hold).not.toContain('one_step')
   })
 
+  it('declares loaded, a rate outside the guardrails', () => {
+    expect(state.metrics.find((m) => m.id === 'loaded')).toEqual({
+      id: 'loaded',
+      label: 'Loaded',
+      kind: 'float',
+      scale: 1,
+    })
+    expect(state.goal.hold).not.toContain('loaded')
+  })
+
   it('lists every crowd file', () => {
     const listed = new Set(state.harness_paths)
     const crowd = filesUnder(join(evalDir, 'crowd')).map((path) => relative(cliDir, path))
