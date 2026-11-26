@@ -14,7 +14,8 @@ an `asked` event to `/api/hook/observed` only when a dialog follows, through the
 already uses. The devices' dial setup installs the plugin into each Codex home it serves with `codex plugin`, from the
 local marketplace folder #4648 writes from the copy cli.js carries, and writes the trust records into that home's
 `config.toml` only when the installed folder's fingerprint equals that carried copy's; each pass re-checks every home by
-a stat. The core, `cli/hook/notify.mjs` and the devices' wait path do not change.
+a stat. A Codex home whose `openharness` marketplace is the person's own gets nothing. The core, `cli/hook/notify.mjs`
+and the devices' wait path do not change.
 
 **Tech Stack:** TypeScript (Node 24), Vitest (unit and `cli/e2e`), `smol-toml`, POSIX sh and Windows PowerShell for the
 hook, the real Codex CLI 0.172.0 for the hand checks.
@@ -22,7 +23,9 @@ hook, the real Codex CLI 0.172.0 for the hand checks.
 **Spec:** [docs/plans/2026-11-26-needs-you-right-design.md](2026-11-26-needs-you-right-design.md), section "Part 7. A
 Codex session's waits outside a pane reach the dial" (with "Only content this CLI carries is trusted" and "Kept trusted
 between CLI updates"), and "Part 7's own data", "Platforms", "Release order", "Tests (red first)". Where the spec and the
-decisions below differ, the decisions win (the orchestrator, harness-pm, 2026-11-26).
+decisions below differ, the decisions win (the orchestrator, harness-pm, 2026-11-26): the spec's "A home whose
+`openharness` marketplace is the person's own from GitHub gets the trust only while its folder matches" is replaced by
+decision 13 (no install there at all).
 
 ## Decisions that bind this plan (harness-pm, 2026-11-26)
 
@@ -48,7 +51,8 @@ decisions below differ, the decisions win (the orchestrator, harness-pm, 2026-11
 8. **Trust only what this CLI carries** (replaces the draft's option C). Trust is written only when the installed
    folder's fingerprint equals the fingerprint of the plugin this CLI build carries; when it differs, nothing is
    written, the pass logs `untrusted · differs` once for that home, and Codex asks the person itself. Harness never
-   trusts a `main` Codex fetched by itself, nor files someone edited by hand. Every dial setup pass re-checks each
+   trusts files someone edited by hand (and, by decision 13, never installs from a marketplace that is not its own
+   folder, so no `main` Codex fetched by itself is ever in question). Every dial setup pass re-checks each
    recorded home it serves (option A): a stat of the installed folder and of `config.toml`, the fingerprint computed
    again only when one changed, and the records written again under the write rules (only the plugin's tables, links
    followed, atomic, recheck before write, at most 3 attempts, the failure's kind alone logged) when the folder matches
@@ -63,6 +67,23 @@ decisions below differ, the decisions win (the orchestrator, harness-pm, 2026-11
     Tasks 10, 11 and 12.
 11. Task 8 (the two Windows-sensitive specs in `.github/workflows/windows.yml` and `WINDOWS_SPECS`) stays.
 12. The periodic newest-Codex workflow stays a proposal (end of this plan); nothing is built.
+13. **A home whose `openharness` marketplace is the person's own gets nothing** (harness-pm, 2026-11-26; replaces the
+    draft's "install, no trust, `untrusted · differs`"). The person's own is any `[marketplaces.openharness]` in that
+    home's `config.toml` other than Harness's folder: `source_type = "local"` with `source` (Codex writes the canonical
+    path, `core-plugins/src/marketplace_add.rs`) equal, by real path, to `harnessPath('claude-marketplace', <home>)`.
+    GitHub (`plugins/harness/README.md`'s Codex line), any other git source, or another local folder (a clone) is the
+    person's own. There: no folder write for Codex, no `codex plugin` call after `--version`, nothing written to its
+    `config.toml`, no trust, no record; the dial setup pass logs `[device] codex plugin · codex · skipped · own
+    marketplace` once per home per process and stays silent after, as today; `disable` removes nothing there (a plugin
+    there is the person's own install). Pinned in Tasks 10, 11 and 13.
+14. **`dial-setup.json` holds four full lists** (harness-pm, 2026-11-26). Task 5 added `codexPlugin`, a fourth list of
+    up to 64 paths, to a file whose bound (`MAX_FILE_BYTES`, 256 KiB, shared with `dial-skill.json`) was sized for
+    three: four full lists of 1024-byte paths with 64-character versions come to about 268 KB, and the save fails with
+    `EFBIG`. The bound becomes per file: `dial-setup.json` gets `MAX_SETUP_BYTES = 320 * 1024`; `dial-skill.json`, which
+    still holds three lists, keeps 256 KiB. Every list keeps its bounds (64 entries, 1024-byte paths, 64-character
+    versions); capping the record's path length instead would make a long Codex home path unrecordable, so it is
+    reinstalled at every pass. And `recordCodexPlugin` refuses a 65th home (false, nothing written) instead of
+    answering true for a save that drops it; Task 11 installs into no 65th home. Task 15.
 
 ## Context: the spike (Codex 0.172.0, 2026-11-26), #4648, and the code read for this plan
 
@@ -89,8 +110,11 @@ decisions below differ, the decisions win (the orchestrator, harness-pm, 2026-11
   pipe on the hook's stdin.
 - Codex refreshes a configured git marketplace by itself at each start and reinstalls its plugins
   (`core-plugins/src/manager.rs` `maybe_start_plugin_startup_tasks_for_config`, `ForceReinstall`). From the local
-  folder that refresh changes nothing; from a GitHub `openharness` it installs that `main`, which decision 8 never
-  trusts.
+  folder that refresh changes nothing; a home with a GitHub `openharness` is the person's own, where Harness sets
+  nothing up (decision 13).
+- `codex plugin marketplace add <folder>` records `[marketplaces.<name>] source_type = "local"` and `source = <the
+  folder's canonical path>`, and refuses a second source under a name already added ("already added from a different
+  source", `core-plugins/src/marketplace_add.rs`). A git one is `source_type = "git"`, `source = <url>`.
 - **#4648** (`fix/dial-claude-plugin-install`, open): cli.js carries the `openharness` marketplace
   (`cli/scripts/lib/claudePluginBundle.mjs` `readClaudePluginBundle`, defined as `__CLAUDE_PLUGIN__` by `build.mjs` and
   `build-bundle.mjs`), each plugin's `.claude-plugin/plugin.json` stamped `<CLI version>+<hash>`; it writes it to
@@ -102,10 +126,13 @@ decisions below differ, the decisions win (the orchestrator, harness-pm, 2026-11
   already from GitHub keeps it. Its bundle carries `plugins/harness-device`'s `hooks/` folder whole but leaves out
   `.codex-plugin/` ("never Codex's and Cursor's manifests"), and marks only `hooks/asked` executable: Task 9 adds Codex's
   two files.
-- Consequence of decision 8 with #4648's stamp: a Codex home whose `openharness` marketplace is the person's own from
-  GitHub (`plugins/harness/README.md` tells Codex users to add it) installs a folder that holds the unstamped
-  `.claude-plugin/plugin.json` and `test/`, so it never matches the carried copy: Harness writes no trust there, logs
-  `untrusted · differs` once, and Codex asks the person (open question 1).
+- A Codex home whose `openharness` marketplace is the person's own (`plugins/harness/README.md` tells Codex users to add
+  it from GitHub) would install a folder holding the unstamped `.claude-plugin/plugin.json` and `test/`, which never
+  matches the carried copy. Decision 13: Harness installs nothing there, writes nothing, and logs `skipped · own
+  marketplace` once.
+- `dial-setup.json`'s size (decision 14): today `MAX_FILE_BYTES = 256 * 1024` bounds both files' reads and writes
+  (`readJson`, `writeJson` in `devices/dialSkillFiles.ts`); `recordCodexPlugin` (`cable/dialHomeSetup.ts`) adds any
+  home, and `writeSetup` writes `setupOf(record)`, which keeps the first 64, so a 65th is answered true and dropped.
 - The rollout's `turn_context` line is written before the turn's `PermissionRequest` and `PreToolUse` hooks run, always
   holds `approvals_reviewer` (`user` or `auto_review`) and `collaboration_mode.mode` (`default` or `plan`). It lay 4-10 KB
   from the end in short turns and 3.16 MB after 40 commands with large output; 16 MiB backwards took 28 ms on this Mac.
@@ -133,6 +160,10 @@ decisions below differ, the decisions win (the orchestrator, harness-pm, 2026-11
 - The line: at most 200 bytes of UTF-8 cut between characters, control characters to spaces; `tool` at most 64
   characters; `cwd` sent only within 1024 characters and with no control character (the core's bounds).
 - `MIN_CODEX = '0.172.0'`; an older Codex: nothing run after `--version`, nothing counted.
+- A home whose `openharness` marketplace is not Harness's folder (decision 13): nothing run after `--version`, nothing
+  written, no record; `skipped · own marketplace` once per home per process; `disable` leaves it alone.
+- `dial-setup.json`: at most `MAX_SETUP_BYTES` (320 KiB); `dial-skill.json`: `MAX_FILE_BYTES` (256 KiB), as today.
+  `codexPlugin` holds at most `MAX_HOMES` (64) homes, and no 65th is installed into.
 - The trust write touches only the plugin's own `hooks.state` tables; writes nothing unless the installed folder's
   fingerprint equals the carried one; follows a linked `config.toml` to its target; writes atomically; never defines a
   table twice; compares what it read with what is on disk just before the write and starts over when they differ, at
@@ -162,7 +193,9 @@ The spec's "Part 7's own data" holds these lines; the plan builds them:
    `MAX_HOMES` (64); an entry leaves when its home folder is gone. `config.toml` gains two tables per home, replaced in
    place at each install, update or changed matching fingerprint, never added again; after `disable` they stay, inert
    (Codex ignores a record with no hook), and the next install replaces them. In memory, per served home, one stamp
-   and one "differs logged" flag (at most 64).
+   and one "differs logged" or "own marketplace logged" flag (at most 64). The file's bound becomes its own,
+   `MAX_SETUP_BYTES` (320 KiB), for four full lists of 64 paths of 1024 bytes (about 268 KB with the longest versions);
+   `dial-skill.json` keeps 256 KiB. A home whose marketplace is the person's own adds nothing anywhere.
 2. **Concurrency.** `dial-setup.json`'s one writer stays the devices process (the command only reads `codexPlugin`).
    The marketplace folder's writers are #4648's (`ensurePluginFolder`, crash-safe, both processes). `config.toml` has
    other writers (Codex, `engines/kit/hookReview.ts`, the person): compare-before-write, 3 attempts.
@@ -175,7 +208,8 @@ The spec's "Part 7's own data" holds these lines; the plan builds them:
    installs again, which `codex plugin add` allows. An older CLI under the installed plugin answers `device codex asked`
    with its usage and exit 1, which the hook drops: nothing rings, as today. A Codex older than `MIN_CODEX` is set
    nothing up. Claude Code reads `.claude-plugin/` and `hooks/hooks.json`, unchanged; it ignores the Codex files the
-   shared folder now holds.
+   shared folder now holds. An older CLI reading a `dial-setup.json` between 256 and 320 KiB (only near-full lists of
+   near-1024-byte paths) reads no record and sets up again, as when it drops `codexPlugin`.
 6. **Migration and rollback.** None. A rollback leaves the plugin and its trust in place, silent (line 5); the person
    removes it with `codex plugin remove harness-device@openharness`.
 7. **Audience.** Nothing leaves the computer: the post goes to this account's daemon socket or pipe, as Claude Code's.
@@ -188,20 +222,26 @@ The spec's "Part 7's own data" holds these lines; the plan builds them:
 
 ## Open questions (for the main session)
 
-1. **A Codex home whose `openharness` marketplace is the person's own from GitHub is never trusted by Harness.** Its
-   installed folder holds the repository's unstamped `.claude-plugin/plugin.json` and `test/`, which #4648's carried
-   copy does not, so it never equals the carried fingerprint (decision 8): the pass installs the plugin there, writes no
-   trust, logs `untrusted · differs` once, and Codex asks the person to review the two hooks, again after each Codex
-   refresh of that `main`. The people who followed `plugins/harness/README.md`'s Codex line are in this group. The plan
-   builds exactly that. Confirm, or say what such a home should get instead (for instance no install there at all).
-   Blocks nothing before G; Tasks 10 and 11 read the answer.
+The draft's question 1 (a home with the person's own marketplace) is answered by decision 13. Two cases decision 13
+leaves open; the plan builds the default named in each, and Tasks 11 and 13 change if the answer differs. Neither
+blocks anything before G.
+
+1. **A home Harness set up from its folder, whose `openharness` marketplace later becomes the person's own** (they
+   removed Harness's and added GitHub's). Default built: from then on it is skipped as decision 13 says (no update, no
+   trust written again, `skipped · own marketplace` once), and its entry leaves `codexPlugin`, so `disable` no longer
+   runs `codex plugin remove` there (the plugin there is now from the person's marketplace). The other choice: keep the
+   entry, so `disable` still removes the plugin there. (Task 11.)
+2. **`harness device codex enable` in a home whose marketplace is the person's own.** Default built: it writes the
+   skill, sets nothing up in that home, prints nothing more and exits 0 (silent, as the pass). The other choice: one
+   line, for instance `Your own openharness marketplace is kept; Harness sets no Codex plugin up there.` (Task 13.)
 
 ## Review Focus
 
 1. **Two `turn_context` lines for one turn** (Codex writes it again after a compaction): the later one is the turn's
    setting. Pinned in Task 2 (`the later of two lines for a turn wins`).
-2. **An installed folder edited by hand, or refreshed to another `main`, after trust was written:** Harness never
-   writes trust for it again, and logs `untrusted · differs` once. Pinned in Tasks 4 and 11.
+2. **An installed folder edited by hand after trust was written:** Harness never writes trust for it again, and logs
+   `untrusted · differs` once. Pinned in Tasks 4 and 11. A home that switched to the person's own marketplace is
+   skipped (open question 1), pinned in Task 11.
 3. **The person turned our hook off in Codex** (`enabled = false` in our `hooks.state` table): kept when trust is
    written again. Pinned in Task 4.
 4. **A rollback to an older CLI under the installed plugin:** its `device codex asked` prints usage on stderr and exits
@@ -561,6 +601,53 @@ The spec's "Part 7's own data" holds these lines; the plan builds them:
 - [ ] **Step 2:** `python3 -m unittest scripts/tests/test_ci_plan.py`. Expected: PASS (the two lists match).
 - [ ] **Step 3: Commit.** One commit; no failing test of its own (CI selection).
 
+### Task 15: `dial-setup.json` holds four full lists, and no 65th Codex home is recorded
+
+Added after Tasks 1-8 landed (decision 14); numbered last so the done tasks keep their numbers. It may start now.
+
+**Effort:** high. **Depends on:** none (Task 5 is on the branch).
+
+**Files:**
+- Modify: `cli/src/devices/dialSkillFiles.ts` (`MAX_SETUP_BYTES`, `readJson` and `writeJson` given the file's bound,
+  `readSetup`, `writeSetup`, the bound's comment)
+- Modify: `cli/src/cable/dialHomeSetup.ts` (`recordCodexPlugin`, its doc comment on `DialHomeSetup`)
+- Test: `cli/src/devices/dialSkillFiles.spec.ts`, `cli/src/cable/dialHomeSetup.spec.ts`
+
+**Interfaces:**
+- Produces: `export const MAX_SETUP_BYTES = 320 * 1024` (dial-setup.json's read and write bound; `MAX_FILE_BYTES`
+  stays 256 KiB for dial-skill.json); `recordCodexPlugin(home, version)` returns false and writes nothing when `home`
+  is not in the record, `version` is not null and the record already holds `MAX_HOMES` homes. Task 11 relies on that
+  false.
+
+- [ ] **Step 1: Write the failing tests.**
+  - `dialSkillFiles.spec.ts`: `'four full lists of the longest paths, with the longest versions, are written and read
+    back from dial-setup.json'`: `full(list)` as the three-lists test's (1024-byte listable paths), `homes.claude`,
+    `homes.codex`, `pluginHomes` and `codexPlugin`'s keys four distinct full lists, every version field (`plugin`,
+    `vscode`, `cursor`, `orca`, `orcaHeld`) and every `codexPlugin` value `'0.'.padEnd(64, '9')`: `writeSetup` is
+    `undefined` (today `'EFBIG'`), `readSetup` equals the record, and the file is over 256 KiB.
+  - `dialSkillFiles.spec.ts`: `'dial-skill.json keeps its 256 KiB bound'`: a dial-skill.json padded to 256 KiB + 1
+    reads as `readPluginHomes` `{ homes: [] }` (passes today; it pins that only dial-setup.json's bound moved).
+  - `dialHomeSetup.spec.ts`: `'recordCodexPlugin refuses a 65th home: false, the record and the file as before'`: 64
+    homes recorded, a 65th → false, `codexPlugin()` and `dial-setup.json`'s bytes unchanged; a recorded home's version
+    still changes to another (true), and after one entry is removed (null) the 65th is recorded (true). Red today: the
+    65th answers true.
+  - Existing tests that pin 256 KiB for dial-setup.json move to `MAX_SETUP_BYTES`: `'a file at 256 KiB still reads'`
+    (now at 320 KiB, and 320 KiB + 1 reads as no record), `'a missing, damaged or oversized dial-setup.json'` (padded
+    past 320 KiB), `'a record past what a read takes is not written'` (three lists of the escaped paths, `pluginHomes`
+    the third, so it outgrows 320 KiB and is still `EFBIG`), and `'a file past the bound reads as today'` (dial-setup.json's
+    torn text past 320 KiB, dial-skill.json's past 256 KiB). `'three full lists … each file holds three'` is renamed
+    `'… dial-skill.json holds three'`, unchanged otherwise.
+- [ ] **Step 2: Run them and see them fail.** `cd cli && npx vitest run src/devices/dialSkillFiles.spec.ts
+  src/cable/dialHomeSetup.spec.ts`. Expected: FAIL: `'EFBIG'` where `undefined` is expected, and the 65th home answers
+  true.
+- [ ] **Step 3: Implement.** `writeJson(file, value, max)` and `readJson(file, max)` take the bound from their caller:
+  dial-skill.json's readers and `rewriteSetting` pass `MAX_FILE_BYTES`, `readSetup` and `writeSetup` pass
+  `MAX_SETUP_BYTES`. The comments say why: dial-skill.json holds three lists; dial-setup.json four (about 268 KB at
+  their longest), and paths JSON escapes can outgrow either, which is then not written. In `recordCodexPlugin`, the
+  full check before the write, comment: a save would drop the 65th, so the home would read as never set up.
+- [ ] **Step 4: Run them and see them pass.** Same command, then `npm run typecheck`. Expected: PASS.
+- [ ] **Step 5: Commit.** Red, then code.
+
 ## Gate G: #4648 merged, the branch rebased onto `main`
 
 Not a task. When #4648 is on `main`, the main session rebases this branch onto it (an implementer's rebase: Tasks 6 and
@@ -610,7 +697,12 @@ Tasks 9 to 14 follow the merged names (the Interfaces below name #4648's as of 2
   `export type CodexStep = 'unsupported' | 'launcher' | 'config' | 'folder' | 'marketplace' | 'install' | 'trust' |
   'remove'`;
   `export type CodexFailure = { ok: false; step: CodexStep; error: string; reason?: string }`;
-  `export type CodexSetup = { ok: true; outcome: 'installed' | 'updated' | 'absent'; trusted: boolean } | CodexFailure`;
+  `export type CodexSetup = { ok: true; outcome: 'installed' | 'updated' | 'absent' | 'own'; trusted: boolean } |
+  CodexFailure` (`own`: the home's `openharness` marketplace is the person's own, nothing done, `trusted: false`);
+  `export function codexMarketplace(home: string, folder: string): 'harness' | 'own' | 'none' | 'unknown'` (from one
+  parse of `<home>/config.toml`: `none` when it holds no `[marketplaces.openharness]` or is missing; `harness` when that
+  table's `source_type` is `"local"` and its `source`'s real path equals `folder`'s; `own` for any other table;
+  `unknown` when the file cannot be read or parsed; Tasks 11 and 13 call it);
   `export type CodexResult = { ok: true } | CodexFailure`;
   `export interface CodexPluginDeps { run: ClaudeRun | null; home: string; platform: NodeJS.Platform }`;
   `export interface CodexInstallDeps extends CodexPluginDeps { folder: string; files: ClaudePluginFiles }`;
@@ -628,8 +720,8 @@ Tasks 9 to 14 follow the merged names (the Interfaces below name #4648's as of 2
 - [ ] **Step 1: Write the failing tests** with a fake `run` that records each argv and answers as Codex 0.172.0, and a
   `files` holding Task 4's fixture tree under `plugins/harness-device/` plus a marketplace file: `--version` →
   `codex-cli 0.172.0`; `plugin marketplace add <folder>` → writes `[marketplaces.openharness]` with `source_type =
-  "local"` into `<home>/config.toml`; `plugin add harness-device@openharness --json` → copies the marketplace's
-  `plugins/harness-device` (or, for a `git` marketplace, a tree with an added `test/` file) to `installedRoot(home)`,
+  "local"` and `source = <realpath(folder)>` into `<home>/config.toml`; `plugin add harness-device@openharness --json`
+  → copies the marketplace's `plugins/harness-device` to `installedRoot(home)`,
   writes `[plugins."harness-device@openharness"] enabled = true`, prints `{ "pluginId": …, "version": "local",
   "installedPath": <that folder>, … }`.
   - `codexSetUp` with no marketplace in `config.toml`: the folder written with `files` (each file there, the hook
@@ -638,9 +730,18 @@ Tasks 9 to 14 follow the merged names (the Interfaces below name #4648's as of 2
     `config.toml` then holds both trust tables with `carriedCodexHash(files, platform)` as `trusted_content_hash`.
   - `'carriedCodexHash is the fingerprint of the copy Codex installs'`: equals `pluginContentHash(installedRoot(home))`
     after the fake's copy.
-  - `'the person's own marketplace from GitHub is kept, the plugin added from it, and its folder not trusted'`:
-    `[marketplaces.openharness] source_type = "git"` → no marketplace add, the add runs, `{ ok: true, outcome:
-    'installed', trusted: false }`, no `hooks.state` table of ours.
+  - `it.each` `'a home whose openharness marketplace is the person's own (%s) is skipped: nothing installed, nothing
+    written'` over `[marketplaces.openharness]` `source_type = "git"`, `source = "https://github.com/autonomous-ai/openharness.git"`;
+    `source_type = "local"` with `source` another folder; and `source_type = "local"` with no `source`: `codexSetUp` and
+    `codexUpdate` each → `{ ok: true, outcome: 'own', trusted: false }`; argv list `['--version']` only; the marketplace
+    folder not written by the call (its `ensurePluginFolder` spy never called); `<home>/config.toml` byte-identical and
+    same mtime; no `plugins/` folder made in the home. Red first: the module does not exist (and the draft installed
+    there).
+  - `'Harness's own folder through a link is Harness's'` (skip on win32): `source` the real path, `folder` a link to it →
+    `codexMarketplace` is `harness`, and `codexSetUp` installs.
+  - `codexMarketplace`: missing `config.toml` → `none`; no `openharness` table → `none`; not TOML → `unknown`.
+  - `'below 0.172.0 a home with its own marketplace logs nothing either'`: `codex-cli 0.171.9` and a git marketplace →
+    `unsupported`.
   - A plugin already on (installed before any record): added again, which Codex allows, and its trust written →
     `installed`.
   - `'below 0.172.0 nothing is set up'`: `codex-cli 0.171.9` → `unsupported`, nothing run after `--version`, no folder
@@ -663,11 +764,12 @@ Tasks 9 to 14 follow the merged names (the Interfaces below name #4648's as of 2
 - [ ] **Step 3: Implement**, mirroring #4648's `claudeSetUp` and `claudeUpdate`: 60 s for the marketplace add and the
   plugin add, 15 s for `--version` and remove; `codexPluginState` and the marketplace's presence read from one parse of
   `readConfigText(join(home, 'config.toml'))` (a missing file is `absent`, one that cannot be read or parsed `unknown`,
-  which fails `config`). The folder is written with `ensurePluginFolder(folder, files.files, files.executable)` before
-  any `codex plugin` call. `codexSetUp` and `codexUpdate` end with `writePluginTrust(home, installedPath,
-  carriedCodexHash(files, platform))`: `differs` is `trusted: false`, any other failure is `trust` with the kind as its
-  reason. No `codex plugin list` and no `marketplace upgrade`: the local folder is written by Harness, and a GitHub one
-  is Codex's own.
+  which fails `config`). The order: `--version` (below `MIN_CODEX`: `unsupported`), then that one parse (the
+  marketplace `own`: return `own` at once; `unknown`: `config`), then the folder written with `ensurePluginFolder(folder,
+  files.files, files.executable)`, then the `codex plugin` calls (the marketplace add only for `none`). `codexSetUp` and
+  `codexUpdate` end with `writePluginTrust(home, installedPath, carriedCodexHash(files, platform))`: `differs` is
+  `trusted: false`, any other failure is `trust` with the kind as its reason. No `codex plugin list` and no
+  `marketplace upgrade`: the local folder is written by Harness, and any other `openharness` is the person's.
 - [ ] **Step 4: Run them and see them pass.** Same command. Expected: PASS.
 - [ ] **Step 5: Commit.** Red, then code.
 
@@ -681,9 +783,11 @@ Tasks 9 to 14 follow the merged names (the Interfaces below name #4648's as of 2
 - Test: `cli/src/cable/dialCodexPluginSetup.spec.ts`
 
 **Interfaces:**
-- Consumes: Task 10's `codexSetUp`, `codexUpdate`, `codexRemove`, `installedRoot`, `carriedCodexHash`, `CodexSetup`;
-  Task 4's `writePluginTrust`, `TrustWrite`; `ClaudePluginSource` (#4648); `MAX_HOMES`, `listable`, `SETUP_COUNTS`.
-- Produces: `export const CODEX_SETUP_COUNTS = [...SETUP_COUNTS, 'untrusted'] as const`;
+- Consumes: Task 10's `codexSetUp`, `codexUpdate`, `codexRemove`, `installedRoot`, `carriedCodexHash`,
+  `codexMarketplace`, `CodexSetup`; Task 4's `writePluginTrust`, `TrustWrite`; `ClaudePluginSource` (#4648);
+  `MAX_HOMES`, `listable`, `SETUP_COUNTS`; the `record` dependency answers false for a 65th home (Task 15 makes the
+  real one do so; this task's tests use a fake).
+- Produces: `export const CODEX_SETUP_COUNTS = [...SETUP_COUNTS, 'untrusted', 'skipped'] as const`;
   `export interface DialCodexPluginSetupDeps { platform: NodeJS.Platform; version: string; codex(home: string, shell:
   boolean): Promise<ClaudeRun | null>; plugin: ClaudePluginSource; homes(): readonly string[]; wanted(): boolean |
   undefined; recorded(): Readonly<Record<string, string>>; record(home: string, version: string | null): boolean;
@@ -710,8 +814,19 @@ Tasks 9 to 14 follow the merged names (the Interfaces below name #4648's as of 2
   - `'a folder that differs is never trusted, and said once'`: one byte of the installed `README.md` changed by hand →
     no `hooks.state` change, `count('untrusted', 'differs')` once across three passes (each with a changed stat); put
     back to the carried bytes → trusted again; changed again → said once more.
-  - `'an install whose folder differs (the person's own GitHub marketplace) records the version and says untrusted
-    once'`: `count('set up')`, `count('untrusted', 'differs')`, no trust tables.
+  - `'a home whose openharness marketplace is the person's own is skipped: nothing installed, nothing written, said
+    once'`: a home whose `config.toml` holds `[marketplaces.openharness] source_type = "git"`: across three passes (each
+    past its hour), its argv lists only `['--version']`, `record` and `trust` never called, its `config.toml`
+    byte-identical, no `plugins/` folder in it, and `count('skipped', 'own marketplace')` exactly once; another home in
+    the same pass is set up as usual. Red first: the module does not exist (and the draft installed there).
+  - `'a recorded home whose marketplace became the person's own is skipped from then on and leaves the record'` (open
+    question 1's default): set up at this version, then its `[marketplaces.openharness]` replaced by a git one (the
+    stat of `config.toml` changes) → the re-check calls `codexMarketplace`, not `trust`; `record(home, null)`;
+    `count('skipped', 'own marketplace')` once; no `codex` run; later passes say nothing more.
+  - `'no 65th home is installed into'`: `recorded()` holding 64 homes and a 65th served → no `codex` run there,
+    `count('failed', 'full')` once a process, no `record`; once a recorded home is gone (its folder removed, its entry
+    dropped first) the 65th is set up. And `'a record that is not saved after an install'`: `record` answers false →
+    `count('failed', 'record')`, the home waits its hour, then is set up again (which `codex plugin add` allows).
   - `'a re-check whose write fails says its kind and waits its hour'`: a `config.toml` changed at each of the 3 attempts
     → `count('failed', 'trust changed')`, no path or text in any count or log line; tried again after its hour (until
     then Codex asks the person to review the hook, the accepted outcome).
@@ -726,8 +841,7 @@ Tasks 9 to 14 follow the merged names (the Interfaces below name #4648's as of 2
   - `'below 0.172.0: no plugin, no trust, no record, nothing counted; asked again after its hour'`.
   - `'a run from the sources (files() null): no codex run, no re-check, nothing counted'`.
   - `'a failed step waits its own hour, and another home goes on'`: `count('failed', step)` once per try.
-  - `'no codex: nothing run, nothing counted'`; `'a record full of 64 homes: failed full'`; `'a recorded home that is gone
-    leaves the record'`.
+  - `'no codex: nothing run, nothing counted'`; `'a recorded home that is gone leaves the record'`.
   - `'the login shell's PATH is read at an attach, else at most every 10 minutes'` (the `shell` argument).
 - [ ] **Step 2: Run them and see them fail.** `cd cli && npx vitest run src/cable/dialCodexPluginSetup.spec.ts`.
   Expected: FAIL, module not found.
@@ -738,9 +852,13 @@ Tasks 9 to 14 follow the merged names (the Interfaces below name #4648's as of 2
   is computed once per process. The re-check, for each home in `homes()` recorded at this version and not within its
   hour: a stamp of `stat(installedRoot(home))` and `stat(config.toml)` (`dev`, `ino`, `size`, `mtimeMs`; a missing one
   is part of the stamp); equal to the last stamp held for that home: nothing; else `trust(home, root, expected)` and the
-  stamp taken again after it. A folder edited in place without a stamp change is never trusted by this (Codex refuses
-  it itself). Counts: `installed` → `set up`, `updated` → `updated`, `absent` → `left removed`; `trusted: false` or a
-  `differs` re-check → `untrusted` with `differs`, once per home until a match; `unsupported` → nothing; a failure →
+  stamp taken again after it, unless `codexMarketplace(home, plugin.folder)` is `own` (then the skip below and
+  `record(home, null)`). A folder edited in place without a stamp change is never trusted by this (Codex refuses
+  it itself). Before an install into a home with no entry: gone homes leave the record first; still `MAX_HOMES`
+  entries → `failed` with `full`, once a process, nothing run. Counts: `installed` → `set up`, `updated` → `updated`,
+  `absent` → `left removed`; `own` → `skipped` with `own marketplace`, once per home per process, the home then asked
+  again only after its hour (no record, so no re-check); `trusted: false` or a `differs` re-check → `untrusted` with
+  `differs`, once per home until a match; `unsupported` → nothing; `record` false → `failed` with `record`; a failure →
   `failed` with its step, a `trust` failure with `trust <kind>` (`trust changed`, `trust unsafe`, …): fixed words only.
 - [ ] **Step 4: Run them and see them pass.** Same command. Expected: PASS.
 - [ ] **Step 5: Commit.** Red, then code.
@@ -793,7 +911,7 @@ Tasks 9 to 14 follow the merged names (the Interfaces below name #4648's as of 2
 - Test: `cli/src/deviceClaude/command.spec.ts`
 
 **Interfaces:**
-- Consumes: Task 10's `codexSetUp`, `codexRemove`, `codexPluginState`, `codexRunIn`; Task 5's
+- Consumes: Task 10's `codexSetUp`, `codexRemove`, `codexPluginState`, `codexMarketplace`, `codexRunIn`; Task 5's
   `readSetup(dataDir).codexPlugin`; #4648's `DeviceDeps.claudeFiles()`, `deps.home` and
   `harnessPath('claude-marketplace', deps.home)`; `readRemoved`.
 - Produces: `DeviceDeps.codexIn(home: string): ClaudeRun | null`. `enable` clears the removal and writes the skill (as
@@ -806,7 +924,13 @@ Tasks 9 to 14 follow the merged names (the Interfaces below name #4648's as of 2
   - `'codex enable sets the plugin up in its own Codex home and each home the devices recorded, with trust'`.
   - `'codex enable from a build that carries no plugin writes the skill and says This Harness build carries no Codex
     plugin.'` (exit 1), nothing run.
-  - `'codex enable over the person's own GitHub marketplace installs and exits 0, and writes no trust'`.
+  - `'codex enable over the person's own marketplace writes the skill, sets nothing up there and exits 0'` (open
+    question 2's default): a git `[marketplaces.openharness]` in `deps.codexHome` → argv list `['--version']` only,
+    `config.toml` byte-identical, no `plugins/` folder in the home, output as with no plugin step, exit 0. Red first:
+    today's `enable` does not call `--version` at all.
+  - `'codex disable leaves a home whose marketplace is the person's own alone'`: the same home, with
+    `[plugins."harness-device@openharness"] enabled = true` (the person's own install) → no `plugin remove` there,
+    `config.toml` byte-identical, exit 0.
   - `'codex disable removes the plugin in its own Codex home and each home the devices recorded'`; `'a failed removal
     says Could not remove the Codex plugin. and exits 1, the removal still saved'`; `'with no codex, a plugin its
     config.toml reads on is said left on'`.
@@ -821,7 +945,9 @@ Tasks 9 to 14 follow the merged names (the Interfaces below name #4648's as of 2
   not found, so its harness-device plugin is still on; codex plugin remove harness-device@openharness removes it.`,
   `Codex 0.172.0 or later is needed.` and `This Harness build carries no Codex plugin.` (as #4648's Claude Code
   sentence). A failure prints its reason word as #4648's `claude enable` does. Each failing home is said once, never by
-  its path. `trusted: false` is no failure and prints nothing more (Codex asks the person).
+  its path. `trusted: false` and `own` are no failure and print nothing more. `disable` asks
+  `codexMarketplace(home, folder)` before each removal and removes only where it is `harness`, or `none` with the home
+  in `codexPlugin`.
 - [ ] **Step 4: Run them and see them pass.** `cd cli && npx vitest run src/deviceClaude/command.spec.ts && npm run
   typecheck`. Expected: PASS.
 - [ ] **Step 5: Commit.** Red, then code.
@@ -834,15 +960,16 @@ Tasks 9 to 14 follow the merged names (the Interfaces below name #4648's as of 2
 - Modify: `plugins/harness-device/README.md` (a Codex section: the two hooks, the line per tool, posts only when the
   turn's reviewer is the person or the mode is Plan, the rollout read and its bound, what it misses on purpose; the
   install from Harness's own marketplace folder; trust written only when the installed folder matches the copy this
-  CLI carries, re-checked at each dial setup pass, and a GitHub-sourced or edited folder left to Codex's own review;
-  install and remove with `harness device codex enable|disable`)
-- Modify: `plugins/harness/README.md` (the Codex marketplace line: Harness's device plugin from that marketplace is not
-  trusted by Harness; Codex asks)
+  CLI carries, re-checked at each dial setup pass, and a folder edited by hand left to Codex's own review; a Codex home
+  whose `openharness` marketplace is the person's own (from GitHub or anywhere else) gets nothing from Harness; install
+  and remove with `harness device codex enable|disable`)
+- Modify: `plugins/harness/README.md` (under the Codex marketplace line: in a Codex home with this marketplace, Harness
+  sets up no `harness-device` plugin, so Codex's waits outside a pane do not reach the dial there)
 - Modify: `cli/AGENTS.md` (the devices row: Codex's harness-device plugin set up in each Codex home the dial setup
   serves through `codex plugin` from the `claude-marketplace` folder, recorded under `codexPlugin` in
   `dial-setup.json`, its trust records in that home's `config.toml` only for a folder matching the carried copy,
-  re-checked at each pass by a stat, and `harness device codex asked` reading the rollout's `turn_context` alone, at
-  most 16 MiB)
+  re-checked at each pass by a stat, none in a home whose `openharness` marketplace is the person's own, and `harness
+  device codex asked` reading the rollout's `turn_context` alone, at most 16 MiB)
 - Modify: `docs/cli.md` (the `harness device codex` row: enable and disable cover the plugin)
 - Modify: `docs/plans/2026-11-16-hook-driven-agent-status-plan.md` (Known gap 4: narrowed: outside a pane, a Codex wait
   now reaches the dial through Harness Device's plugin when the turn's reviewer is the person; a command the automatic
@@ -867,6 +994,7 @@ Tasks 9 to 14 follow the merged names (the Interfaces below name #4648's as of 2
 | 6 `device codex asked` | 3 | high | no |
 | 7 end to end | 6 | high | no |
 | 8 Windows spec lists | 2, 4 | medium | no |
+| 15 dial-setup.json bound, no 65th home | none | high | no |
 | G #4648 merged, branch rebased | #4648 | (gate) | yes |
 | 9 carried copy holds Codex's files | G, 1 | medium | yes |
 | 10 codex plugin from the local folder | G, 4 | high | yes |
@@ -881,8 +1009,8 @@ Longest chain: 4 → G → 10 → 11 → 12 → 14 (five tasks and the gate). Be
 
 - The remaining gap, in the PR text: "Between a change of a Codex home's installed plugin folder (Codex's own reinstall
   at its start, or a CLI update) and the next dial setup pass, Codex asks the person to review the hooks; and a home
-  whose `openharness` marketplace is the person's own from GitHub is never trusted by Harness, as its folder never
-  matches the copy this CLI carries."
+  whose `openharness` marketplace is the person's own (from GitHub or anywhere else) gets no `harness-device` plugin
+  from Harness, so its Codex waits outside a pane do not reach the dial, as today."
 - Depends on #4648 (merged before this pull request's Tasks 9-14) and Part 6; released after both.
 - The red-then-green commits per task, `test:core`'s receipts, and Verification 1, 2 and 4's evidence.
 
@@ -932,8 +1060,10 @@ green commits. Also `cd cli && npm run typecheck` and the specs each task names.
    isolated `HOME`s and `CODEX_HOME`s, from the branch's bundle: (a) a `dial-setup.json` recording an older version for
    a set-up home, and one pass of the isolated daemon: the folder rewritten, `codex plugin add` again, trust written
    again, `hooks/list` `trusted`. (b) A home where `codex plugin marketplace add autonomous-ai/openharness --sparse
-   .claude-plugin --sparse plugins` ran first, then `harness device codex enable`: exit 0, the plugin installed,
-   `hooks/list` says the hooks need review, no `hooks.state` table of ours.
+   .claude-plugin --sparse plugins` ran first, then `harness device codex enable`: exit 0, `config.toml` byte-identical
+   (no `[plugins."harness-device@openharness"]`, no `hooks.state` table of ours), no `plugins/cache/openharness/
+   harness-device` folder; then one pass of the isolated daemon serving that home: its log says `[device] codex plugin
+   · codex · skipped · own marketplace` once, and a second pass says nothing more.
 3. **Linux:** `linux-e2e` above. The hook is the same POSIX script as on macOS; no real-Codex run is needed.
 4. **Windows, by hand** (a tester, on a Windows 11 test machine; the only check of the `\`-path fingerprint and the
    local folder by its absolute Windows path against a real Codex): Codex 0.172.0 or later, an isolated `USERPROFILE`
