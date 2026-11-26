@@ -89,21 +89,32 @@ export async function gradeRun(s: Scenario, run: RunResult, rings: Ring[], judge
   }
 }
 
-/** True when the agent rang without loading the dial skill first: no Skill call for `dial` before the first tool call
- *  that mentions `device notify`, or none at all when no call mentions it. */
+// `device notify` with nothing after it but --help or -h asks for the help text: it reads, it does not ring.
+const RINGS = /device notify(?!(?:\s+(?:--help|-h))+\s*(?:$|\d*[|;&<>)\n]))/
+
+/** True when the agent rang without loading the dial skill first: no Skill call for `dial` before the first ring (the
+ *  first Bash call whose command runs `device notify`, a help call aside), or none at all when no call rings. */
 export function oneStep(transcript: Turn[]): boolean {
   const calls = transcript.filter((turn) => turn.role === 'tool_call')
-  const notify = calls.findIndex((turn) => turn.content.includes('device notify'))
-  return !calls.slice(0, notify === -1 ? undefined : notify).some(loadsDial)
+  const ring = calls.findIndex(rings)
+  return !calls.slice(0, ring === -1 ? undefined : ring).some(loadsDial)
 }
 
-// Read from the call's input, not its text, so a skill whose name or args merely contain "dial" does not count.
+function rings(turn: Turn): boolean {
+  const command = turn.name === 'Bash' ? inputOf(turn, 'command') : undefined
+  return typeof command === 'string' && RINGS.test(command)
+}
+
 function loadsDial(turn: Turn): boolean {
-  if (turn.name !== 'Skill') return false
+  return turn.name === 'Skill' && inputOf(turn, 'skill') === 'dial'
+}
+
+// Read from the call's input, not its text, so a skill whose args, or a todo whose words, merely name it does not count.
+function inputOf(turn: Turn, key: string): unknown {
   try {
-    return (JSON.parse(turn.content) as { skill?: unknown }).skill === 'dial'
+    return (JSON.parse(turn.content) as Record<string, unknown>)[key]
   } catch {
-    return false
+    return undefined
   }
 }
 
