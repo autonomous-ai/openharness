@@ -48,6 +48,13 @@ const JUDGE_LIMITED = String.raw`console.log(JSON.stringify({ type: 'result', su
   result: "You've hit your limit · resets 6pm", usage: { input_tokens: 0, output_tokens: 0 }, modelUsage: {} }))
 process.exitCode = 1`
 
+/** A claude run that fails on its own, billed. */
+const FAILED = String.raw`for (const event of [
+  { type: 'assistant', parent_tool_use_id: null, message: { model: 'claude-opus-5-5', content: [] } },
+  { type: 'result', subtype: 'error_during_execution', is_error: true, usage: { input_tokens: 7, output_tokens: 3 } },
+]) console.log(JSON.stringify(event))
+process.exitCode = 1`
+
 /** A claude run cut off at --max-turns, after a ring. */
 const TRUNCATED = String.raw`require('node:child_process').execFileSync('harness', ['device', 'notify', 'Set WEATHER_API_KEY'])
 for (const event of [
@@ -175,9 +182,10 @@ function writeState(state: object): void {
   writeFileSync(join(flow, '_state.json'), JSON.stringify(state))
 }
 
-/** The runner's argv and env as a person runs it from cli/, with a HOME, TMPDIR and profile of the test's own. */
-function runner(args: string[], env: NodeJS.ProcessEnv = {}): [string, string[], { cwd: string; env: NodeJS.ProcessEnv }] {
-  return [process.execPath, ['--import', 'tsx', RUNNER, '--flow', flow, ...args], {
+/** The runner's argv and env as a person runs it from cli/, with a HOME, TMPDIR and profile of the test's own, under a
+ *  spend cap no fake run comes near unless the test gives its own (null for none). */
+function runner(args: string[], env: NodeJS.ProcessEnv = {}, cap: number | string | null = 1000): [string, string[], { cwd: string; env: NodeJS.ProcessEnv }] {
+  return [process.execPath, ['--import', 'tsx', RUNNER, '--flow', flow, ...(cap === null ? [] : ['--spend-cap-usd', String(cap)]), ...args], {
     cwd: CLI,
     env: {
       PATH: [bin, dirname(process.execPath), '/usr/bin', '/bin'].join(':'),
@@ -189,8 +197,8 @@ function runner(args: string[], env: NodeJS.ProcessEnv = {}): [string, string[],
   }]
 }
 
-function runEval(args: string[], env: NodeJS.ProcessEnv = {}) {
-  const [bin, argv, opts] = runner(args, env)
+function runEval(args: string[], env: NodeJS.ProcessEnv = {}, cap?: number | string | null) {
+  const [bin, argv, opts] = runner(args, env, cap)
   return spawnSync(bin, argv, { ...opts, encoding: 'utf8' })
 }
 
@@ -515,6 +523,94 @@ describe('run-eval.mjs conditions and probes', () => {
   })
 })
 
+describe('run-eval.mjs spend cap', () => {
+  /** $1.00 of input at claude-opus-5-5's $4 a million tokens. */
+  const DOLLAR = 'input_tokens: 250000'
+  const STOPPED = 'stopped before the next case; rerun to resume once the cap allows'
+  const THREE = ['--agents', 'claude', '--cases', 'add-version-flag,fix-off-by-one,api-key-missing', '--concurrency', '1', '--approve-harness']
+
+  function plant(variant: string, file: string, row: object): void {
+    mkdirSync(join(flow, variant), { recursive: true })
+    writeFileSync(join(flow, variant, file), JSON.stringify(row) + '\n')
+  }
+
+  it.each([
+    ['no', null],
+    ['a zero', '0'],
+    ['a negative', '-1'],
+    ['a non-numeric', 'ten'],
+  ])('refuses a pass with %s --spend-cap-usd', (_, cap) => {
+    const out = runEval(['--variant', 'baseline', '--agents', 'oracle', '--cases', 'board-unplugged', '--approve-harness'], {}, cap)
+
+    expect(out.status).toBe(2)
+    expect(out.stderr).toMatch(/--spend-cap-usd is required/)
+    expect(callsMade()).toEqual([])
+    expect(existsSync(join(flow, 'baseline'))).toBe(false)
+  })
+
+  it("counts the flow's spend so far, every variant's rows, errors and probes, and starts nothing when no case fits", () => {
+    const dollar = { input_tokens: 250_000 }
+    plant('baseline', 'results.jsonl', { prompt_id: 'add-version-flag.claude.clean', rep: 0, model: 'claude-opus-5-5', usage: dollar,
+      judge_model: 'claude-opus-5-5', judge_usage: { input_tokens: 125_000 } })
+    // A model with no price is billed at the highest known.
+    plant('v1', 'errors.jsonl', { prompt_id: 'add-version-flag.claude.clean', rep: 0, failure_class: 'error', model: 'claude-sonnet-5', usage: dollar })
+    plant('v2', 'probes.jsonl', { condition: 'clean', model: 'claude-opus-5-5', usage: dollar, failure: null })
+
+    // $3.50 spent and a $1.50 reserve pass $4.99; without any one of the four calls, a case would fit.
+    const out = runEval(['--variant', 'v2', '--agents', 'claude', '--cases', 'add-version-flag', '--approve-harness'], {}, 4.99)
+
+    expect(out.status).toBe(4)
+    expect(out.stderr).toContain(`spend cap · $3.50 of $4.99: ${STOPPED}`)
+    expect(callsMade()).toEqual([])
+    expect(jsonl('v2', 'results.jsonl')).toEqual([])
+    expect(jsonl('v2', 'probes.jsonl')).toHaveLength(1)
+  })
+
+  it.each([
+    ['a scored case', () => fakeClaude(agent('claude-opus-5-5').replace('input_tokens: 7', DOLLAR)), ['probe', 'agent'], [1, 0]],
+    ['a failed case', () => fakeClaude(FAILED.replace('input_tokens: 7', DOLLAR)), ['probe', 'agent'], [0, 1]],
+    ['a probe', () => fakeClaude(agent('claude-opus-5-5'), JUDGE, { probe: PROBE.replace('input_tokens: 9', DOLLAR) }), ['probe'], [0, 0]],
+  ])('stops before the case that would pass the cap once %s spent a dollar, keeps the rows written, and exits 4', (_, fake, calls, [rows, errors]) => {
+    fake()
+
+    // A case's $1.50 reserve fits under $2.40 only before the $1 is spent.
+    const out = runEval(['--variant', 'baseline', ...THREE], {}, 2.4)
+
+    expect(out.status).toBe(4)
+    expect(out.stderr).toContain(`spend cap · $1.00 of $2.40: ${STOPPED}`)
+    expect(callsMade().filter((c) => c !== 'judge')).toEqual(calls)
+    expect(jsonl('baseline', 'results.jsonl')).toHaveLength(rows)
+    expect(jsonl('baseline', 'errors.jsonl')).toHaveLength(errors)
+    expect(jsonl('baseline', 'probes.jsonl')).toHaveLength(1)
+  })
+
+  it('keeps a reserve for every case in flight at --concurrency 2', () => {
+    // One case's $1.50 reserve fits under $2.90; a second one's beside it does not, so the second worker starts nothing.
+    const out = runEval(['--variant', 'baseline', '--agents', 'claude', '--cases', 'add-version-flag,fix-off-by-one', '--concurrency', '2',
+      '--approve-harness'], {}, 2.9)
+
+    expect(out.status).toBe(4)
+    expect(out.stderr).toContain(STOPPED)
+    expect(callsMade().filter((c) => c !== 'judge')).toEqual(['probe', 'agent'])
+    expect(jsonl('baseline', 'results.jsonl')).toHaveLength(1)
+  })
+
+  it('resumes under a raised cap where it stopped', () => {
+    fakeClaude(agent('claude-opus-5-5').replace('input_tokens: 7', DOLLAR))
+    expect(runEval(['--variant', 'baseline', ...THREE], {}, 2.4).status).toBe(4)
+    const [first] = jsonl('baseline', 'results.jsonl')
+
+    const out = runEval(['--variant', 'baseline', ...THREE], {}, 5)
+
+    expect(out.status, out.stderr).toBe(0)
+    expect(out.stderr).toContain('2 of 3 (id,rep) to run')
+    const rows = jsonl('baseline', 'results.jsonl')
+    expect(rows.map((r) => r.prompt_id).sort()).toEqual(['add-version-flag.claude.clean', 'api-key-missing.claude.clean', 'fix-off-by-one.claude.clean'])
+    expect(rows[0]).toEqual(first)
+    expect(callsMade().filter((c) => c === 'agent')).toHaveLength(3)
+  })
+})
+
 describe('run-eval.mjs summary.json', () => {
   const summary = (variant: string) => JSON.parse(readFileSync(join(flow, variant, 'summary.json'), 'utf8'))
 
@@ -667,11 +763,7 @@ ${agent('claude-opus-5-5')}
   })
 
   it('keeps the model and usage of a claude run that failed on its own on its error row', () => {
-    fakeClaude(String.raw`for (const event of [
-  { type: 'assistant', parent_tool_use_id: null, message: { model: 'claude-opus-5-5', content: [] } },
-  { type: 'result', subtype: 'error_during_execution', is_error: true, usage: { input_tokens: 7, output_tokens: 3 } },
-]) console.log(JSON.stringify(event))
-process.exitCode = 1`)
+    fakeClaude(FAILED)
 
     const out = runEval(['--variant', 'baseline', '--agents', 'claude', '--cases', 'add-version-flag', '--approve-harness'])
 
