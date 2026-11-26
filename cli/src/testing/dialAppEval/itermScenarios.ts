@@ -446,5 +446,67 @@ export function itermScenarios(): Scenario[] {
       ],
       probes: [ringKeptOn('tmux', ['d', 'b', 'z'], { apart: ['a', 'c'], after: 'replug', at: 'toIterm' })],
     }),
+    // I22-I24 (docs/plans/2026-11-26-dial-mux-host-pages-design.md, Testing, "New"): with another app in front, a pick or
+    // a rest on tmux's or herdr's page brings iTerm2 on the agent's tab and pane. Tier A's world records the bring but
+    // moves no front app, so I22 and I23 report iTerm2 in front themselves within 2 s of it (cable/hosts/appFilter.ts
+    // DIAL_BRINGS_MS): that settle is the dial's, and the page holds.
+    scenario({
+      id: 'I22', app: 'iterm', title: 'tmux\'s page picked with another app in front: iTerm2 comes forward on b\'s tab and pane, and the dial stays on tmux\'s page',
+      dims: ['D3', 'D7'], ...darwin, world: { front: 'other' }, sessions: [tab('a', 0), inTmux('b', 1), itermGhost],
+      steps: [
+        ...started(['a', 'b']),
+        ...counted('iterm', { iterm: 2, tmux: 1 }),
+        { label: 'pick', kind: 'pick', page: 'tmux' },
+        { kind: 'wait', ms: 1 * S },
+        { label: 'front', kind: 'front', app: 'iterm' },
+        { kind: 'wait', ms: 2 * S },
+      ],
+      // The open's window runs on past the front step: nothing after the pick opens another row, and a window closed at
+      // the front would be shorter than the open's half mark.
+      checks: [
+        { id: 'open', kind: 'open', dim: 'D3', session: 'b', link: false, after: 'pick' },
+        ringKeptOn('tmux', ['b'], { apart: ['a'], after: 'front' }),
+      ],
+      probes: [{ id: 'open', kind: 'open', dim: 'D3', session: 'z', link: false, after: 'pick' }],
+    }),
+    scenario({
+      id: 'I23', app: 'iterm', title: 'herdr\'s page with another app in front, a rest on d: iTerm2 comes forward on d\'s tab and pane, the dial stays on herdr\'s page, and a rest on c shows c\'s pane',
+      dims: ['D3', 'D7'], ...darwin, world: { front: 'other' }, sessions: [tab('a', 0), inHerdr('c', 2), inHerdr('d', 2, 1), itermGhost],
+      steps: [
+        ...started(['a', 'c', 'd']),
+        // The Apps screen's counts first, as a pick of a page the devices have not counted yet is ignored.
+        ...counted('iterm', { iterm: 3, herdr: 2 }),
+        { kind: 'pick', page: 'herdr' },
+        ...listed('herdr', ['c', 'd'], ['a']),
+        { label: 'rest', kind: 'swipe', session: 'd' },
+        { kind: 'wait', ms: 1 * S },
+        { label: 'front', kind: 'front', app: 'iterm' },
+        // Past the front's 1 s settle, and d's open window past the open's half mark.
+        { kind: 'wait', ms: 3 * S },
+        { label: 'restC', kind: 'swipe', session: 'c' },
+        { kind: 'wait', ms: 2 * S },
+      ],
+      checks: [
+        { id: 'open', kind: 'open', dim: 'D3', session: 'd', link: false, after: 'rest', at: 'restC' },
+        ringKeptOn('herdr', ['c', 'd'], { apart: ['a'], after: 'front', at: 'restC' }),
+        { id: 'openC', kind: 'open', dim: 'D3', session: 'c', link: false, after: 'restC' },
+      ],
+      probes: [{ id: 'open', kind: 'open', dim: 'D3', session: 'z', link: false, after: 'restC' }],
+    }),
+    scenario({
+      id: 'I24', app: 'iterm', title: 'The same tmux attached from two tabs, the second used last: a pick of tmux\'s page brings the second tab',
+      dims: ['D3'], ...darwin, world: { front: 'other' }, sessions: [tab('a', 0), inTmux('b', 1), itermGhost],
+      steps: [
+        ...started(['a', 'b']),
+        { kind: 'iterm.tab', window: 'w1', tab: 2 },
+        { kind: 'tmux.attach', session: 'b', window: 'w1', tab: 2 },
+        ...counted('iterm', { iterm: 2, tmux: 1 }),
+        { label: 'pick', kind: 'pick', page: 'tmux' },
+        { kind: 'wait', ms: 2 * S },
+      ],
+      // The client used last is the one the pick reads (tmux.ts client_activity), so its select names the new tab, as I13's.
+      checks: [{ id: 'open', kind: 'open', dim: 'D3', session: 'b', link: false, tab: 'w1.2.0', after: 'pick' }],
+      probes: [{ id: 'open', kind: 'open', dim: 'D3', session: 'z', link: false, after: 'pick' }],
+    }),
   ]
 }

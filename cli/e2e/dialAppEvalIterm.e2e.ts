@@ -251,6 +251,12 @@ describe.skipIf(!MAC)('the dial eval, tier B: iTerm2', () => {
       const selects = (driver.seen().streams ?? []).filter((l) => l.window === 'tabs' && l.line.type === undefined).map((l) => l.line)
       expect(selects).toEqual([{ app: 'iterm', tab: 'w1.2.0', raise: true }])
     },
+    // A pick of tmux's page reads b's tmux client afresh too (docs/plans/2026-11-26-dial-mux-host-pages-design.md): the
+    // client used last is the second tab's, so the one select brings that tab.
+    I24: () => {
+      const selects = (driver.seen().streams ?? []).filter((l) => l.window === 'tabs' && l.line.type === undefined).map((l) => l.line)
+      expect(selects).toEqual([{ app: 'iterm', tab: 'w1.2.0', raise: true }])
+    },
     // The Claude mod polled in tmux before the voice, so its words came by the mod, to b alone.
     I19: () => {
       expect(driver.seen().deliveries.filter((d) => d.path === 'mod').map(({ target, text }) => ({ target, text })))
