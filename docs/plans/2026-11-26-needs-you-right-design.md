@@ -22,7 +22,7 @@ Three kinds of signal feed this:
 
 | Signal | Who knows | Today |
 |---|---|---|
-| State: a permission ask, a question tool, a failed turn, a usage limit | code, for sure | rings in All and Needs you |
+| State: a permission ask, a question tool, a failed turn, a usage limit | code, for sure | rings in All and Needs you; not yet an outside Claude Code session's question form or plan approval (Part 6) |
 | Judgment: an ask written in the answer, a decision met mid-turn | only the agent | the dial skill and `harness device notify` |
 | Presence: whether the person looks at that agent now | code, for sure | used only for a Harness window's ordinary turn end |
 
@@ -200,6 +200,11 @@ both hold. `PRESENT_MS` is 120 s, the usage counts' own edge (`WAIT_EDGES`, `VAL
   so an ask from it within 120 s is quiet though the person may have moved to another agent there. A Harness agent's
   turn started by another agent's message, or first seen by a dial plugged in mid-turn, reads as recent; it is quiet
   only with its tile on screen in front.
+- **The dial's own rule, stated.** The firmware rings nothing for the agent on its face while its display is awake
+  (`ui_habitat.c` `on_face`: a question, a turn end and a failed turn alike), and the display stays awake for 5 minutes
+  after a touch, a voice press or a ring; following an agent does not wake it. With the display asleep everything
+  rings. So an ask the devices mean to ring can stay silent in the minutes after the person last touched the dial, or
+  after another agent's ring. Two places decide today; Open points names the item that would leave one.
 
 **Where it applies.**
 
@@ -210,7 +215,7 @@ both hold. `PRESENT_MS` is 120 s, the usage counts' own edge (`WAIT_EDGES`, `VAL
    - A quiet card ends as a live one does: its agent's next turn starts, or its agent leaves. It needs a flag of its
      own, apart from `restored`, since `working()` ends a restored card and must not end this one.
    - It stays quiet. If the person then leaves without answering, nothing rings later; the counts below say whether
-     that costs answers.
+     that costs answers. Part 2b adds one later look, when the turn ends.
    - `--waiting`, `--proceeding` and a plain notice alike.
    - **Limits.** A quiet card counts for its agent's own limits (one a minute, the same line within 10 minutes), which
      bound a loop. It does not count toward the computer's 20 an hour (`NOTICE_HOUR_MAX`), which bounds beeps: with
@@ -246,6 +251,33 @@ both hold. `PRESENT_MS` is 120 s, the usage counts' own edge (`WAIT_EDGES`, `VAL
 | A permission ask, a question tool, a failed turn | rings | rings |
 | An agent finishes and offers more work | nothing | nothing |
 
+## Part 2b. A quiet card is looked at again when its turn ends
+
+Status: decided (the PM, 2026-11-26; the maintainer left it to the PM). A small change in the devices, built on
+Part 2's code and released before Part 3 or with it.
+
+Today a card held quiet stays quiet, and its turn ends silent under `rule:notice`, as a turn whose notice rang does.
+So an ask made early in a long turn, with the person there, makes no sound at all once the person has gone: in All a
+long turn ends unheard, and in Needs you an agent can wait unseen.
+
+The change: when a turn ends (`dispatch`'s `done` card, read before that turn's start time is dropped), a pending
+quiet card whose agent is not `present` now is asked: it loses `quiet`, goes to every dial as a question, and rings
+once. A person still there keeps it quiet. A failed turn rings as a failed turn does and leaves the card as it is.
+
+- **One ring a turn holds.** The card rings at the turn's end, and the summary that follows stays silent under
+  `rule:notice`.
+- **Limits.** It takes one of the hour's twenty then (`NOTICE_HOUR_MAX`); with none left it stays quiet. Its agent's
+  own limits were taken when it was shown.
+- **Counts.** From then it is a ring: it opens the wait a rung notice opens (none for `--proceeding`), so
+  `dial_wait_*` and `dial_value_ring_*` count it. One name joins, `dial_notice_present_roused`, a quiet notice asked
+  at its turn's end, with a row in `usage:daily`. Backend first, as in Part 2.
+- **Unchanged:** a dial that attaches later and a restart hold the card, as today.
+- **Tests (red first):** `cable/notices.spec.ts` (a quiet card is asked once; a rung or a restored card is left; with
+  no hour left it stays quiet); `services/devices.spec.ts` (a turn end with the person gone asks the card and the
+  summary stays silent under `rule:notice`; with the person still there it stays held; a failed turn rings and leaves
+  it; a Harness agent past 120 s; the count and the wait); `cable/dialUsage.spec.ts`, the contract's two copies and the
+  backend's review test.
+
 ## Part 3. The skill's words
 
 `DIAL_SKILL` and `DIAL_SKILL_DESCRIPTION` in `cli/src/devices/dialSkill.ts`. The devices service rewrites Harness's own
@@ -262,7 +294,8 @@ What changes:
 
 What stays, from #4545: never block on a question form; `--proceeding` against `--waiting` and what must wait; never
 for done or progress; one notice per ask; no secret in the line; the answer carries the whole ask whatever the command
-prints.
+prints. The first of these matters more than it did: an outside Claude Code session's question form does not reach
+the dial today (Part 6), so an ask in such a form rings nothing, and the notice is the one path that does.
 
 Limits on the text:
 
@@ -306,10 +339,40 @@ working.
   prints, your answer carries the ask.
 ```
 
+**The baseline it starts from** (Part 1, 2026-11-26, 177 runs, commit 64fc59adaa of #4651; val and test pooled):
+
+| Condition | Recall | Needless rings | `line_ok` | `one_step` |
+|---|---|---|---|---|
+| `crowd` | 21 of 32 | 0 of 18 | 20 of 21 | 0 of 21 |
+| `clean` | 25 of 32 | 0 of 18 | 21 of 25 | 0 of 25 |
+| `name-only` | 0 of 16 | 0 of 9 | | |
+
+What the numbers say, and what the rounds aim at:
+
+- **An ask the agent can go on with never rang held out:** 0 of 4 in both conditions (`two-decisions`,
+  `retry-policy-rollout`), 2 of 4 on train. Today's description says "when the task stops", which an agent that goes on
+  with its pick does not meet. The new trigger ("leaves the person something to decide") and `--proceeding` in the
+  description are aimed at this.
+- **The crowd costs about four waiting asks** (28 runs: 25 rang in `clean`, 21 in `crowd`; `destructive-migration` and
+  `gh-signed-out` both runs). That is the dilution the new description must survive.
+- **No needless ring anywhere** (0 of 36), so the text has room to ring more before the traps push back.
+- **Every ring came after the agent loaded the skill's body** (`one_step` 0), and with no description nothing rang.
+  So the description decides whether the agent rings at all.
+- **Missed runs were longer:** 11.6 tool calls on average against 8.3 for runs that rang.
+
+How the rounds run, within $100 of the design's $250 (the PM, 2026-11-26):
+
+- **One field first:** `loaded`, on every run, 1 when the agent loaded the dial skill's body (a Skill call for `dial`
+  or a read of its `SKILL.md`). With it a miss reads as "never looked" (the description) or "looked and did not ring"
+  (the body). Each round keeps its runs' traces on the machine, git-ignored as today, so a miss can be read.
+- **Rounds in `crowd` only**, train and val, 2 reps: 52 runs, about $14 a round. The winner then runs val and test in
+  `crowd` and `clean` at 2 reps, and `name-only` at 1 rep, against the baseline's same rows.
+- **`name-only` is no gate here:** words cannot reach a model that never sees them. It is Part 4's measure.
+
 Shipping rule: the winner ships only if it meets Part 1's targets on Claude Code, or is above the baseline beyond
 noise with no more needless rings, and `harmed` and `went_on` are no worse. It ships to both engines, as one file.
-It ships with or after Part 2, never before: more rings without presence is the anti-goal. It waits for nothing
-else: no number of days of field baseline (the maintainer, 2026-11-26).
+It ships with or after Part 2 and Part 2b, never before: more rings without presence is the anti-goal. It waits for
+nothing else: no number of days of field baseline (the maintainer, 2026-11-26).
 
 ## Part 4. A standing line at session start
 
@@ -333,7 +396,10 @@ resume, clear, compact), beside its `PermissionRequest` hook and in the same two
 - Reach: sessions started, resumed or compacted after the plugin is current (the devices service brings it current
   after each CLI update). A Claude session with the skill and no plugin has the skill alone.
 
-**Codex.** Codex installs plugins from the same marketplace: the `harness` plugin has a Codex manifest
+**Codex.** Part 7's spike answered the question below (2026-11-26): a Codex plugin carries hooks, trusted without a
+prompt once Harness writes their `hooks.state` record. Part 4 reuses Part 7's Codex manifest and trust write.
+
+Codex installs plugins from the same marketplace: the `harness` plugin has a Codex manifest
 (`plugins/harness/.codex-plugin/plugin.json`, added with `codex plugin add harness@openharness`), with skills and an
 MCP server and no hook. Harness Device has no Codex manifest. A spike in this part answers, on Codex 0.172 or later:
 can a Codex plugin carry a `SessionStart` hook, and is that hook trusted without a prompt the person must answer?
@@ -379,6 +445,133 @@ The agent still judges and still writes the line. Harness only makes it look aga
 - **Measured** by an eval variant against the same text without it: recall, specificity on the trap scenarios, and
   the extra rounds per run.
 
+## Part 6. An outside Claude Code session's question form and plan approval reach the dial
+
+Status: decided (the PM, 2026-11-26; the maintainer left it to the PM). Built at once, ahead of Parts 4 and 5. The
+CLI alone changes.
+
+Today a waiting prompt of a Claude Code session outside a pane reaches the dial through the plugin's
+`PermissionRequest` hook (`harness device claude asked`, `cli/src/deviceClaude/asked.ts`): its line becomes the
+agent's wait (`cable/hosts/observed.ts` `asked`), and `showWaits` shows and rings it. That command leaves out
+`AskUserQuestion` and `ExitPlanMode` (`PERSON_ONLY`), on the reading that the dial already shows the agent waiting.
+At most its tile reads waiting: no card is asked, so nothing rings. Another team's trace (2026-11-26) found this on a
+dial in Needs you. It is the surest sign that an agent waits on the person, and it is silent outside Harness's panes.
+
+The change: `asked` tells these two as it tells any prompt, each with a line of its own.
+
+- `AskUserQuestion`: the first question's text (`tool_input.questions[0].question`, else its header, else
+  `A question`), as one line, cut as every summary is (200 bytes, control characters to spaces).
+- `ExitPlanMode`: the fixed words `Plan ready to approve`. The plan's text is never sent.
+
+The rest is the path a permission ask takes today: a wait card with that line and `In <app>`, rung once, counted as
+an outside wait, closed when the agent goes on. Nothing is answered on the dial.
+
+- **First task, with the real Claude Code** (2.1.332 or later) outside a pane: which hooks a question form and a plan
+  approval fire (`PermissionRequest`, `PreToolUse`, `Notification` and its type), in the default and the auto
+  permission modes, and on Windows, where the plugin's mod tells of a prompt before the hook
+  (`HARNESS_DEVICE_MOD_ASKS`). The change is made where the prompt is first heard. The same task checks Codex's
+  `request_user_input` outside a pane and reports; it is fixed here only if it is the same kind of skip.
+- **What shows.** The question's first line shows on the dial as a permission ask's line does, and as a Harness
+  agent's question already does.
+- **Counts.** No new name and no backend change: the wait counts hold it.
+- **Tests (red first):** `deviceClaude/asked.spec.ts` (each tool's line, its bounds, a form with no question);
+  `services/devices.spec.ts` (the wait card and its ring for each); an end-to-end case with the fake engine; the
+  real-CLI check recorded in the pull request.
+- **Docs:** `plugins/harness-device/README.md` and the devices row of `cli/AGENTS.md` where it names the skip.
+
+## Part 7. A Codex session's waits outside a pane reach the dial
+
+Status: decided (the PM and the author, 2026-11-26; the maintainer left it to them). Found by Part 6's probe, from the
+code; its spike ran five isolated Codex 0.172.0 sessions against a local stub (2026-11-26). After Part 6. The CLI and
+the Harness Device plugin change; the native hook and the core's process do not.
+
+Harness's native hook (`cli/hook/notify.mjs`, which the core installs into each engine's home) runs on Codex's
+`PermissionRequest` and `PreToolUse` (`request_user_input`), but outside a pane its `observedEvent` makes neither an
+event, and Codex has no Harness Device plugin to tell an `asked` line as Claude Code's does. So a
+Codex agent in a terminal, the ChatGPT app or Orca that waits on a permission ask or a question shows nothing on the
+dial; only Harness's panes hear it (`/api/hook/wait`). That is about 8 to 14 computers a day with a hooked Codex on the
+dial (`dial_hooked_codex_installation_days`, 2026-11-23 to 25).
+
+- **It reverses one line for waits only.** "Outside a pane none of the new events posts anything" (the maintainer,
+  2026-11-17, `docs/plans/2026-11-16-hook-driven-agent-status-plan.md`) kept the dial from sounding at every Codex
+  turn. A wait is the person's to answer, so it now posts; every other Codex event outside a pane stays as it is.
+- **The trap.** Codex's own automatic review fires `PermissionRequest` with no dialog for a command it approves itself
+  (that plan's limit 4). In a pane Harness reads the screen to tell them apart; outside one there is none. A ring at
+  every self-approved command is the anti-goal.
+
+The change:
+
+1. **Where the wait is heard: Harness Device's own hook, never the native one.** As Claude Code's is: the plugin's hook
+   runs `harness device claude asked` (`cli/src/deviceClaude/asked.ts`), which posts an `asked` event to
+   `/api/hook/observed`, which the core already takes for any engine (`core/observedHook.ts`). For Codex,
+   `plugins/harness-device/` gains a Codex manifest whose hooks, on `PermissionRequest` and `PreToolUse`
+   (`request_user_input`), run `harness device codex asked`: the same code made to take either engine, with
+   `engine: 'codex'`. It prints nothing and decides nothing, as Claude Code's. In a Harness pane it is dropped as
+   Claude Code's is: the observed source holds no such session (`cable/hosts/observed.ts` `asked`). The dial setup
+   installs the plugin as it installs Claude Code's (`cable/dialSetup.ts`), held by the same switch
+   (`harness device codex disable`).
+   - **Trusted without a prompt** (the spike): Codex asks a person to review a hook before it first runs. After each
+     install or update of the plugin, the dial setup writes the record Codex writes on "Trust": in the Codex home's
+     `config.toml`, the plugin's hooks under `hooks.state`, each with its `trusted_hash` (the hash `hookReview.ts`
+     computes for Harness's own hooks) and `trusted_content_hash`. Turning Codex on for the dial is the consent, as for
+     the skill.
+   - **That file has other writers:** the core's own hook review, Codex itself, and the person. The write edits only
+     the plugin's own tables, the way `hookReview.ts` and `folderTrust.ts` edit the file (through a symlink,
+     atomically, never a table defined twice), and a write that finds the file changed since it read it reads it
+     again and starts over, at most 3 times, so it never drops another writer's change. Failed, it logs its kind
+     alone; Codex then asks the person to review the hook, as it would without the record.
+   - Its line (the spike, 2026-11-26): for `Bash`, the command's first line; for `apply_patch`, the first file path it
+     names; for any other tool, the tool's name alone. Cut as Claude Code's summaries are (200 bytes, control
+     characters to spaces). Nothing else of the tool's input leaves that process.
+   - Not `notify.mjs`. It is not one of the core process's files, but every session of every engine runs it, the core
+     installs it, and its rule is "the event and the tool's name only, never a tool's input or what is asked". The
+     spike found the plugin can carry trusted hooks, so no fallback there is needed.
+2. **Who reviews it, read where the ask is heard** (the PM, 2026-11-26, from Codex 0.172.0's source). A
+   `PermissionRequest`'s input says nothing of whether a dialog follows; the hook runs before Codex's automatic review,
+   which is a model session of its own with hooks off; and the next event of a command it approves is `PostToolUse`,
+   only once the command has run, which the devices do not hear outside a pane. So no wait in the devices can tell
+   the two apart. Instead the command reads the turn's own setting from the session's record, in its own process:
+   - It reads the record (`transcript_path` in the hook's input) backwards from its end, at most
+     `CODEX_REVIEWER_READ_BYTES` (16 MiB), for the `turn_context` line of the hook's `turn_id`, and takes two fields
+     alone: `approvals_reviewer` and `collaboration_mode.mode`. Only a regular file under the session's Codex home is
+     read; nothing of it is kept, logged or sent.
+   - The spike's facts: that line is written before the turn's `PermissionRequest` and `PreToolUse` hooks run, and
+     always holds `approvals_reviewer`. It lay 4 to 10 KB from the end in short turns and 3.16 MB after 40 commands with
+     large output; reading 16 MiB backwards took 28 ms.
+   - `PermissionRequest`: `user` posts at once; `auto_review`, anything else, or not found within the bound posts
+     nothing.
+   - `PreToolUse` (`request_user_input`): it also fires in Default mode, where Codex refuses the tool and shows no
+     form. So it posts only when `collaboration_mode.mode` is `plan`. A Default mode with
+     `default_mode_request_user_input` on is missed, as today, rather than rung for nothing.
+3. Posted, it is the path a Claude Code permission ask takes today: a wait card with its line and `In <app>`, rung
+   once, counted as an outside wait, closed when the agent goes on. The devices add nothing for Codex.
+
+What it gives up, on purpose: with automatic review on, a command the review passes to the person rings nothing, as
+today; so does a Default-mode question form where Codex's experimental setting turns it on. A ring at every command the review approves would be the anti-goal; a missed escalation is today's behavior.
+And if Codex renames the field or the line, every Codex ask outside a pane goes quiet again, as today: the command's
+spec pins a record written by Codex 0.172, and the Codex release checks read it again.
+
+First tasks, before anything is built:
+
+Answered by the spike (2026-11-26), and used by Part 4 too:
+
+- **A Codex plugin carries these hooks**, trusted without a prompt once its `hooks.state` record is written (1).
+- **No field of the hook's input says whether a dialog follows** (Codex 0.172.0's source), hence the record's
+  `turn_context` (2), whose timing and distance the spike measured.
+- Its records, written by Codex with nothing of the person's, become the command's spec fixtures.
+
+- **Counts.** No new name: the wait counts hold it.
+- **Tests (red first):** the `asked` command's spec for Codex (both tools, their lines and bounds, a malformed input);
+  the plugin's test (the Codex manifest and its hooks); the dial setup's spec (installed with a dial, held by the
+  switch; the trust record written after each install and update, only the plugin's tables, a file changed meanwhile
+  read again, another writer's change kept); the reviewer check (`user` posts; `auto_review` posts nothing; another
+  turn's `turn_context` is not read as this one's; a line past the bound reads as not found; a missing, linked or
+  non-regular file posts nothing); `request_user_input` (posts in plan mode, nothing in Default mode); the line for
+  `Bash`, `apply_patch` and another tool; `services/devices.spec.ts` (a Codex `asked` waits and rings once, as Claude
+  Code's); an end-to-end case with the fake Codex engine, its record holding each reviewer and mode.
+- **Docs:** `plugins/harness-device/README.md`, the devices row of `cli/AGENTS.md`, and the hook-driven status plan's
+  limit 4, which this narrows.
+
 ## Design (docs/feature-design-rules.md)
 
 For the two new counts. Nothing else is stored, synced or exposed.
@@ -405,14 +598,17 @@ For the two new counts. Nothing else is stored, synced or exposed.
 0. #4642's counts: released on 2026-11-26 (backend 1.4.91, CLI 0.6.93). They are the field baseline for both engines.
 1. Part 1: nothing to release.
 2. Part 2: the backend with the two names, then the CLI.
-3. Part 3: the CLI, with or after Part 2.
-4. Part 4, if its variant gains: the plugin and the CLI.
-5. Part 5, if its gate opens.
+3. Part 2b: the backend with its one name, then the CLI, before Part 3 or with it.
+4. Part 3: the CLI, with or after Part 2 and Part 2b.
+5. Part 6: the CLI, as soon as it is done.
+6. Part 7: the plugin and the CLI, after Part 6.
+7. Part 4, if its variant gains: the plugin and the CLI.
+8. Part 5, if its gate opens.
 
-Each part is released as soon as it is done, not held for a batch or a date (the maintainer, 2026-11-26). The one
-order kept is Part 3 with or after Part 2.
+Each part is released as soon as it is done, not held for a batch or a date (the maintainer, 2026-11-26). The orders
+kept: Part 3 with or after Parts 2 and 2b, and Part 7 after Part 6.
 
-One task, one pull request: Parts 1, 2 and 3 are three pull requests; Parts 4 and 5 one each.
+One task, one pull request: Parts 1, 2 and 3 are three pull requests; Parts 2b, 4, 5, 6 and 7 one each.
 
 ## Platforms
 
@@ -447,6 +643,18 @@ runs under a POSIX shell, Git Bash and PowerShell.
 1. **The eval's spend.** A cap of $250 for Claude across this design.
 2. **The eval runs Claude Code only.** There is no Codex quota for it, so no Codex run, and no sign-in is copied.
 3. **Each part is released when it is done.** The new skill text does not wait 7 days for a field baseline.
+
+## Open points (found after Part 2's review, 2026-11-26)
+
+The maintainer left the first two to the PM, who decided to build both (2026-11-26): Part 2b and Part 6. The third
+is for the firmware's owners. The fourth was found later and decided by the PM and the author together, as the
+maintainer asked (2026-11-26): Part 7. None changes Parts 1 to 3 as written.
+
+1. **A quiet card, looked at again when its turn ends:** Part 2b.
+2. **An outside Claude Code session's question form and plan approval:** Part 6.
+3. **One place decides the ring.** The firmware's face rule (Part 2, "The dial's own rule") and the devices' `present`
+   overlap. Proposed to the firmware's owners: the frame says whether to ring, and both dial models obey it.
+4. **A Codex session outside a pane: no wait reaches the dial:** Part 7.
 
 ## Left to the builder
 
