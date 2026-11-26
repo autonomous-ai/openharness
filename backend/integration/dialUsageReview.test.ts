@@ -36,7 +36,8 @@ it('counts the dial outside the team and the team apart, a dial clip and a rest 
   // The return goes in yesterday's report, as the gateway sends it: one dated on its cohort's day would be EXPIRED.
   const report = (id: string, channel: 'production' | 'development' = 'production') => ({ schemaVersion: 1 as const, revision: 0, id, day,
     context: context(channel), counters: { dial_connected_installation_days: 1, dial_voice_installation_days: 1, dial_voice_delivered: 3,
-      dial_d28_returning_installations: 1 } })
+      dial_d28_returning_installations: 1, dial_skill_claude_installation_days: 1, dial_notice_installation_days: 1,
+      dial_notice_claude_installation_days: 1, dial_notice_claude: 2, dial_notice_shown: 2, dial_notice_answered_10m: 1 } })
   // Five computers outside the team, one of the team's, and a development build's report that is kept nowhere.
   for (const n of [1, 2, 3, 4, 5]) expect(await usage.ingestProductUsage(outside, report(`dial-outside-${n}`), now)).toMatchObject({ accepted: true })
   expect(await usage.ingestProductUsage(staff, report('dial-staff-1'), now)).toMatchObject({ accepted: true })
@@ -74,6 +75,12 @@ it('counts the dial outside the team and the team apart, a dial clip and a rest 
   const returns = section.outsideTeam.find(s => s.name.startsWith('Return'))!.rows
   expect(returns.find(r => r.name === 'Again on N+28')?.computers.day).toBe(5)
   expect(returns.find(r => r.name === 'Used on day N (N+28 complete)')?.computers.day).toBe(6)
+  const skill = (sections: typeof section.outsideTeam, name: string) => sections.find(s => s.name === 'Dial skill')?.rows
+    .find(r => r.name === name)
+  expect(skill(section.outsideTeam, 'claude: skill installed (computer-days)')?.computers.day).toBe(5)
+  expect(skill(section.outsideTeam, 'Reach: shown')?.events?.day).toBe(10)
+  expect(skill(section.outsideTeam, "Answered: the person's prompt within 10 min")?.events?.day).toBe(5)
+  expect(skill(section.team, 'claude: skill installed (computer-days)')?.computers.day).toBe('<5')
   expect(section.voice.outsideTeam.dial.clips.day).toBe(1)
   expect(section.voice.outsideTeam.rest.clips.day).toBe('<5')
 }, 60_000)
