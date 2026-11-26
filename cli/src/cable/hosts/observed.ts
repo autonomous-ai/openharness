@@ -1576,9 +1576,12 @@ export class ObservedSource implements HostSource {
       // The Claude app's id of it: with its app, it places it until its first hook (claudeApp.ts).
       if (record?.hostSession) entry.hostSession = record.hostSession
       if (this.pair(entry)) paired++
+      // What the lookup told, or a holder on a terminal, which the daemon never is, is kept for the first hook from that
+      // holder: one no daemon holds is placed by its hints at once, never off its page while it is asked again, as a
+      // prompt's follow reads its app as the hook lands (devices.ts followPrompt).
+      if (engine === 'codex' && this.deps.served && !unread) entry.served = { pid: owner.pid, is: serving !== undefined }
       const nest = nests.get(owner.pid)
       if (serving) {
-        entry.served = { pid: owner.pid, is: true }
         this.placeServed(entry, serving)
       // Its tty is the multiplexer pane's pty, which on macOS has a tab's form: never read, as askOuter never reads a
       // nested caller's. Paired, it is in an hc terminal, whose pane is its own.
