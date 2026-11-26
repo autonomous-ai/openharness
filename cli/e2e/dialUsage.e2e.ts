@@ -4,16 +4,22 @@
  * own dial-usage.json, the gateway reads it at its tick, and the signed-in report carries the dial's names, counts only:
  * no agent, folder, dial or machine in a report or in the file. A daemon restart between the gateway taking the day and
  * its report sends no flag twice: one wait for the report covers both.
+ *
+ * The dial skill's use rides the same report (docs/plans/2026-11-26-dial-skill-usage-design.md): an outside Claude Code
+ * session runs the real `harness device notify`, the dial shows it, and the person's prompt right after answers it; the
+ * attach's setup pass wrote the skill, which the devices then find.
  */
+import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import { DIAL_USAGE_FILE } from '../src/lib/dialUsageContract.js'
 import { LocalClient } from './harness/client.js'
-import { IsolatedDaemon, until } from './harness/daemon.js'
+import { IsolatedDaemon, sourcesCli, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import { FakeBackend } from './harness/fakeBackend.js'
 import type { FakeDial } from './harness/fakeDial.js'
+import { Outside } from './harness/outsideAgent.js'
 
 const SERIAL = 'E2E-A'
 const MAC = 'e2:e0:00:00:00:0a'
@@ -24,10 +30,15 @@ const REPORTED_MS = 420_000
 const TAKEN_MS = 150_000
 const machine = { machineId: 'd1'.repeat(16), computerId: 'e2e-dial-usage', name: 'PRIVATE_MACHINE_CANARY', token: 'e2e-dial-usage-token' }
 const today = (): string => new Date().toISOString().slice(0, 10)
+// The run's bundle when there is one (E2E_BUNDLE), as the daemon runs. Run from the caller's folder, where a bare
+// `--import tsx` would not resolve: tsx and the sources by their paths.
+const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : sourcesCli()
 
 describe('the dial\'s usage counts', () => {
   let backend: FakeBackend, d: IsolatedDaemon, desk: Desk, window: LocalClient | undefined
   let agentId = '', cwd = ''
+  let outside: Outside | undefined
+  const children: ChildProcess[] = []
   beforeAll(async () => {
     backend = await FakeBackend.start()
     backend.productUsage = { enabled: true, revision: 0, reports: [] }
@@ -43,7 +54,11 @@ describe('the dial\'s usage counts', () => {
       expiresAt: Date.now() + 86_400_000, updatedAt: Date.now(), signInEpoch: 'e2e' }), { mode: 0o600 })
     await d.start()
   }, 120_000)
-  afterAll(async () => { window?.close(); await desk?.close(); await d?.close(); await backend?.close() })
+  afterAll(async () => {
+    for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+    await outside?.close()
+    window?.close(); await desk?.close(); await d?.close(); await backend?.close()
+  })
   const showLog = (): void => onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-200).join('\n')}`) })
 
   /** The day's sum of [metric] over every report the backend took. */
@@ -76,6 +91,19 @@ describe('the dial\'s usage counts', () => {
     await until('the tap handed to the window', () => client.frames.filter((f) => f.type === 'dial_open').length > opens || null, 15_000)
     return dial
   }
+  /** The command as an agent's shell runs it (deviceNotify.e2e.ts): the daemon's environment, the caller's variables, in
+   *  its folder. */
+  const notify = async (caller: Record<string, string>, folder: string, words: string[]): Promise<{ code: number | null; out: string; err: string }> => {
+    const child = spawn(process.execPath, [...CLI_ENTRY, 'device', 'notify', ...words], {
+      cwd: folder, env: { ...d.env, TMUX_PANE: '', ...caller }, stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    children.push(child)
+    let out = '', err = ''
+    child.stdout!.on('data', (chunk: Buffer) => { out += chunk.toString('utf8') })
+    child.stderr!.on('data', (chunk: Buffer) => { err += chunk.toString('utf8') })
+    const code = await new Promise<number | null>((resolve) => child.once('close', resolve))
+    return { code, out: out.trim(), err }
+  }
 
   it('a dial plugged, turned and tapped, before and after a restart, reaches the report once, as counts only', async () => {
     showLog()
@@ -93,10 +121,26 @@ describe('the dial\'s usage counts', () => {
     window.close()
     window = await openWindow()
     const day = today()
-    await plugTurnTap(window)
+    const dial = await plugTurnTap(window)
+    // With a window on a tab the dial lists that tab alone: the outside session is on the dial's list once it is gone.
+    window.close()
+    window = undefined
 
+    // An outside session rings with the real command, the dial shows it, and the person prompts it in its own app: its
+    // UserPromptSubmit hook, the one source that answers a notice.
+    const engine = await Outside.start(d, 'PRIVATE_NOTICE_CANARY', { TERM_PROGRAM: 'ghostty' })
+    outside = engine
+    await dial.next((m) => m.t === 'agent' && m.id === engine.id, 45_000, 'the outside session listed')
+    expect(await notify({ CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: engine.sessionId }, join(d.projectsDir, engine.folder),
+      ['PRIVATE_LINE_CANARY needs the VPN', '--suggest', 'connect it', '--waiting'])).toMatchObject({ code: 0, out: 'shown' })
+    engine.type('connected')
+
+    // Claude Code's skill is written because the case's Harness Claude agent is listed (cable/dialHomeSetup.ts).
+    const skill = { dial_notice_installation_days: 1, dial_notice_claude_installation_days: 1,
+      dial_skill_claude_installation_days: 1, dial_skill_codex_installation_days: 1, dial_notice_claude: 1,
+      dial_notice_shown: 1, dial_notice_waiting: 1, dial_notice_answered_10m: 1 }
     const expected = { dial_connected_installation_days: 1, dial_used_installation_days: 1,
-      dial_engine_claude_installation_days: 1, dial_host_harness_installation_days: 1, dial_open_ok: 1 }
+      dial_engine_claude_installation_days: 1, dial_host_harness_installation_days: 1, dial_open_ok: 1, ...skill }
     await until('the devices to write the day', () => {
       if (!existsSync(usageFile())) return null
       const counts = (JSON.parse(readFileSync(usageFile(), 'utf8')) as { days: Record<string, Record<string, number>> }).days[day] ?? {}
@@ -105,8 +149,6 @@ describe('the dial\'s usage counts', () => {
     // The gateway's tick took the day into its queue, which the restart keeps.
     await until('the gateway to take the day', () => taken(day).dial_open_ok === 1 || null, TAKEN_MS, 1_000)
 
-    window.close()
-    window = undefined
     await desk.unplug(SERIAL)
     await d.restart()
     const client = await openWindow()
@@ -118,12 +160,13 @@ describe('the dial\'s usage counts', () => {
     await plugTurnTap(client)
     // The second tap is the restart's own news: once it is reported, the restarted gateway has sent the day.
     await until('the restart\'s tap reported', () => sum('dial_open_ok', day) === 2 || null, REPORTED_MS, 1_000)
-    for (const flag of ['dial_connected_installation_days', 'dial_used_installation_days', 'dial_first_use_installations',
-      'dial_engine_claude_installation_days', 'dial_host_harness_installation_days']) expect(sum(flag, day), flag).toBe(1)
+    for (const metric of ['dial_connected_installation_days', 'dial_used_installation_days', 'dial_first_use_installations',
+      'dial_engine_claude_installation_days', 'dial_host_harness_installation_days', ...Object.keys(skill)]) expect(sum(metric, day), metric).toBe(1)
 
     const wire = JSON.stringify(backend.productUsage!.reports)
     const file = readFileSync(usageFile(), 'utf8')
-    for (const secret of ['PRIVATE_', cwd, agentId, SERIAL, MAC, machine.name, machine.machineId, machine.computerId, machine.token]) {
+    for (const secret of ['PRIVATE_', cwd, agentId, SERIAL, MAC, machine.name, machine.machineId, machine.computerId, machine.token,
+      engine.sessionId]) {
       expect(wire).not.toContain(secret)
       expect(file).not.toContain(secret)
     }
