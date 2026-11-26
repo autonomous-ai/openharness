@@ -39,6 +39,7 @@ import type { ObservedAsked, ObservedHookEvent } from '../core/observedHook.js'
 import { createServiceHost } from '../core/serviceHost.js'
 import * as claudePlugin from '../devices/claudePlugin.js'
 import type { ClaudePluginFiles, ClaudeRun } from '../devices/claudePlugin.js'
+import * as codexPlugin from '../devices/codexPlugin.js'
 import { DIAL_SKILL } from '../devices/dialSkill.js'
 import { readSetup, writeRemoved, writeSetup } from '../devices/dialSkillFiles.js'
 import type { OrcaHomes, OrcaHomesCache } from '../devices/orcaHomes.js'
@@ -84,8 +85,9 @@ const seen = vi.hoisted(() => ({
   voice: { sessions: vi.fn(), connected: vi.fn(), shutdown: vi.fn() },
 }))
 
-// A copy of the module, so a spec can watch the daemon's own lookup of Claude Code run.
+// Copies of the modules, so a spec can watch the daemon's own lookups of Claude Code and Codex run.
 vi.mock('../devices/claudePlugin.js', async (real) => ({ ...await real<object>() }))
+vi.mock('../devices/codexPlugin.js', async (real) => ({ ...await real<object>() }))
 // A copy of the module, so a spec can watch the daemon's own VS Code deps be asked for, and answer with its fake.
 vi.mock('../devices/vscodeExtension.js', async (real) => ({ ...await real<object>() }))
 // Copies too, so a spec can watch the daemon's own Orca and the deps of Orca's plugin be asked for, and answer with its
@@ -656,7 +658,7 @@ afterEach(() => {
 /** What cli.js carries for Claude Code's marketplace, cut to its own file. */
 const CLAUDE_PLUGIN: ClaudePluginFiles = { files: { '.claude-plugin/marketplace.json': '{"name":"openharness"}\n' }, executable: [] }
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; agentsRead?: DevicesDeps['agentsRead']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; cmuxEvents?: DevicesDeps['cmuxEvents']; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; storePackageFolder?: DevicesDeps['storePackageFolder']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; claudePlugin?: DevicesDeps['claudePlugin'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string; raise?: DevicesDeps['raise'] | null; windowsRaise?: DevicesDeps['windowsRaise'] | null; transcribe?: DevicesDeps['transcribe']; watchStore?: DevicesDeps['watchStore']; rexReads?: DevicesDeps['rexReads']; rex?: DevicesDeps['rex'] } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; agentsRead?: DevicesDeps['agentsRead']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; cmuxEvents?: DevicesDeps['cmuxEvents']; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; storePackageFolder?: DevicesDeps['storePackageFolder']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; codexFound?: DevicesDeps['codexFound'] | null; claudePlugin?: DevicesDeps['claudePlugin'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string; raise?: DevicesDeps['raise'] | null; windowsRaise?: DevicesDeps['windowsRaise'] | null; transcribe?: DevicesDeps['transcribe']; watchStore?: DevicesDeps['watchStore']; rexReads?: DevicesDeps['rexReads']; rex?: DevicesDeps['rex'] } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   const apps = over.orca ?? orca
   // None, and no read under way, unless the spec gives its own; null leaves the devices to read this computer's.
@@ -708,6 +710,8 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     tty: over.tty,
     // A `claude` that finds none unless the spec gives its own: no spec runs the developer's. null leaves it out.
     claude: over.claude === null ? undefined : over.claude ?? (async () => null),
+    // A `codex` that finds none unless the spec gives its own: no spec runs the developer's. null leaves it out.
+    codexFound: over.codexFound === null ? undefined : over.codexFound ?? (async () => null),
     // Claude Code's marketplace in the throwaway data folder unless the spec gives its own: no spec writes the developer's.
     // null leaves it out, as a run from the sources, which carries no plugin.
     claudePlugin: over.claudePlugin === null ? undefined : over.claudePlugin ?? { folder: join(dataDir, 'claude-marketplace'), files: () => CLAUDE_PLUGIN },
@@ -13904,23 +13908,49 @@ describe('the dial setup, from the devices\' own process (cable/dialSetup.ts)', 
     await vi.waitFor(() => expect(held(other)).toBe(DIAL_SKILL))
   })
 
-  it('with no claude given, the daemon\'s own lookup is used and finds none', async () => {
-    // An empty PATH and home: no `claude` of the developer's is found, or run.
+  it('with no claude or codex given, the daemon\'s own lookups are used and find none', async () => {
+    // An empty PATH and home: no `claude` or `codex` of the developer's is found, or run.
     const empty = mkdtempSync(join(homes, 'path-'))
     vi.stubEnv('PATH', empty)
     vi.stubEnv('HOME', empty)
     dialOnce()
     const lookup = vi.spyOn(claudePlugin, 'claudeFound')
+    const codexLookup = vi.spyOn(codexPlugin, 'codexFound')
 
-    await start({ faults: ['fleet'], listen: fakeListener().listen, claude: null }).orcaHomes.landed()
+    await start({ faults: ['fleet'], listen: fakeListener().listen, claude: null, codexFound: null }).orcaHomes.landed()
 
     expect(held(env.CODEX_HOME)).toBe(DIAL_SKILL)
     // The start's lookup, the process's first: the login shell's PATH is read with it.
     expect(lookup.mock.calls).toEqual([[claudeHome(), true]])
     expect(await lookup.mock.results[0].value).toBeNull()
+    // Codex's after Claude Code's plugin, in the Codex home by its real path, with the login shell's PATH as well.
+    await vi.waitFor(() => expect(codexLookup.mock.calls).toEqual([[realpathSync(env.CODEX_HOME), true]]))
+    expect(await codexLookup.mock.results[0].value).toBeNull()
     await new Promise((resolve) => setImmediate(resolve))
     expect(readSetup(dataDir).plugin).toBeUndefined()
+    expect(readSetup(dataDir).codexPlugin).toBeUndefined()
     expect(logs.filter((line) => line.startsWith('[device] dial setup · claude'))).toEqual([])
+  })
+
+  it('a Codex older than 0.172.0 is set nothing up, and nothing is logged', async () => {
+    dialOnce()
+    const config = join(env.CODEX_HOME, 'config.toml')
+    writeFileSync(config, 'model = "gpt-5"\n')
+    const argv: string[][] = []
+    const run: ClaudeRun = async (args) => {
+      argv.push(args)
+      return { code: 0, stdout: 'codex-cli 0.171.9\n', stderr: '' }
+    }
+
+    await start({ faults: ['fleet'], listen: fakeListener().listen, codexFound: async () => run }).orcaHomes.landed()
+    await vi.waitFor(() => expect(argv).toEqual([['--version']]))
+    await new Promise((resolve) => setImmediate(resolve))
+
+    expect(argv).toEqual([['--version']])
+    expect(readSetup(dataDir).codexPlugin).toBeUndefined()
+    expect(logs.filter((line) => line.startsWith('[device] codex plugin'))).toEqual([])
+    expect(readFileSync(config, 'utf8')).toBe('model = "gpt-5"\n')
+    expect(existsSync(join(env.CODEX_HOME, 'plugins'))).toBe(false)
   })
 
   it('with no plugin source given, a run from the sources sets nothing up', async () => {
