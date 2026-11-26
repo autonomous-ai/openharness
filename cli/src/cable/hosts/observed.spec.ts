@@ -28,6 +28,8 @@ import { type Fresh, FRESH_WITHIN_MS, type Nested, type NestedPlace, type OuterL
 import { appRoots, learnApps, type ProcessName, scannedApps } from './scannedApp.js'
 import { pagesOf } from './select.js'
 import { createTabsAdapter, type TabApp, type TabTty } from './tabs.js'
+import type { TabsLine } from './tabsLines.js'
+import { tabsTyping } from './tabsType.js'
 import { createTmuxAdapter } from './tmux.js'
 import type { HostAgent, Nest, PaneSwitch, TypeResult } from './types.js'
 import { createVscodeAdapter } from './vscode.js'
@@ -7060,6 +7062,40 @@ describe('ObservedSource and a Codex session its own server runs', () => {
     expect(t.agent().app).toBe('vscode')
     for (const adapter of ['tmux', 'vscode', 'tabs']) expect(t.src.paneOf(id, adapter)).toBeUndefined()
     expect(t.src.capabilities(t.agent()).voice).toBe(false)
+  })
+
+  // A tab takes words only at a pane whose proof names the process whose tty it is (tabsType.ts). A daemon's session is
+  // placed by its folder, never by a process of its own: a tty and start read for the TUI that ran it before the daemon
+  // did prove nothing of the tab it is shown at now.
+  it('a session its daemon runs, shown at a Ghostty TUI\'s tab, gives no adapter a process or a proof, and no tab takes its words', async () => {
+    const TAB = '/dev/ttys005'
+    const places: Place[] = []
+    const send = vi.fn<TabsLine['send']>()
+    const line: TabsLine = { writable: () => true, ready: async () => true, send, ended: new AbortController().signal }
+    const tabs = createTabsAdapter({ isOpen: () => true, select: () => true })
+    const adapter: HostAdapter = {
+      ...tabs,
+      ...tabsTyping({ line: () => line, shared: () => false, process: async () => undefined, readers: async () => undefined,
+        processes: async () => [], after: (ms, run) => { const timer = setTimeout(run, ms); return () => { clearTimeout(timer) } } }),
+      paneOf: (place) => { places.push(place); return tabs.paneOf(place) },
+    }
+    const { actions } = fakeActions({ codexQueue: { can: vi.fn(() => false), send: vi.fn() } })
+    const t = served({}, { actions: { ...actions, adapters: [adapter] },
+      tty: vi.fn(async (_pid: number): Promise<TabTty> => ({ tty: TAB, start: 'ps:1' })) })
+    // Its own TUI in Ghostty ran it first, as no daemon's client: that process's tty and start were read.
+    t.src.ingest(t.codex('session-start', { callerPid: 600, hostHints: { TERM_PROGRAM: 'ghostty' } }))
+    await t.asks[0].answer([undefined])
+    expect(places.at(-1)).toMatchObject({ pid: 600, proof: { pid: 600, start: 'ps:1' } })
+    expect(t.src.capabilities(t.agent()).voice).toBe(true)
+    // Resumed under the daemon, and shown at the Ghostty TUI working in its folder, on that same tab.
+    t.src.ingest(t.codex('session-start'))
+    await t.asks[1].answer([{ client: { app: 'ghostty', tty: TAB, pid: 500 } }])
+    expect(t.src.paneOf(t.agent().id, 'tabs')).toBe(`ghostty:${TAB}`)
+    expect(places.at(-1)?.pid).toBeUndefined()
+    expect(places.at(-1)?.proof).toBeUndefined()
+    expect(t.src.capabilities(t.agent()).voice).toBe(false)
+    expect(await t.src.send(t.agent(), 'next')).toMatchObject({ ok: false })
+    expect(send).not.toHaveBeenCalled()
   })
 
   it('a caller that is no server is placed by its hints once the lookup says so, and is not asked again', async () => {
