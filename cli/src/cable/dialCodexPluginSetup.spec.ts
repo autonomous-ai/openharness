@@ -499,10 +499,10 @@ describe('createDialCodexPluginSetup', () => {
     withoutTrust(home)
     await r.setup.pass()
     expect(trust).toHaveBeenCalledTimes(1)
-    expect(r.counted).toEqual([['set up'], ['failed', 'trust changed']])
+    expect(r.counted).toEqual([['set up'], ['failed', 'trust · changed']])
     expect(contentHashes(home)).toEqual([])
     // Fixed words alone: no path, no text of the file.
-    for (const word of r.counted.flat()) expect(word).toMatch(/^[a-z ]+$/)
+    for (const word of r.counted.flat()) expect(word).toMatch(/^[a-z0-9 ·]+$/)
 
     touch(home)
     r.state.now = HOUR - 1
@@ -514,7 +514,7 @@ describe('createDialCodexPluginSetup', () => {
     await r.setup.pass()
     expect(trust).toHaveBeenCalledTimes(2)
     expect(contentHashes(home)).toEqual([EXPECTED, EXPECTED])
-    expect(r.counted).toEqual([['set up'], ['failed', 'trust changed']])
+    expect(r.counted).toEqual([['set up'], ['failed', 'trust · changed']])
     expect(r.looked).toHaveLength(1)
   })
 
@@ -637,7 +637,7 @@ describe('createDialCodexPluginSetup', () => {
     r.state.homes = [home]
     r.options.set(home, { fail, on: (call) => { if (call === ADD && adds++ === 0) r.state.wanted = false } })
     await r.setup.pass()
-    expect(r.counted).toEqual([['failed', 'remove']])
+    expect(r.counted).toEqual([['failed', 'remove · exit 1']])
     return { ...r, home, fail }
   }
 
@@ -656,7 +656,7 @@ describe('createDialCodexPluginSetup', () => {
     expect(r.fake(r.home).calls).toEqual([...tried, '--version', REMOVE])
     expect(existsSync(installedRoot(r.home))).toBe(false)
     expect(r.state.recorded).toEqual({})
-    expect(r.counted).toEqual([['failed', 'remove']])
+    expect(r.counted).toEqual([['failed', 'remove · exit 1']])
 
     // Nothing owed any more.
     r.state.now = 3 * HOUR
@@ -677,7 +677,7 @@ describe('createDialCodexPluginSetup', () => {
     await r.setup.pass()
     expect(r.fake(r.home).calls).toEqual(calls)
     expect(configOf(r.home)).toBe(config)
-    expect(r.counted).toEqual([['failed', 'remove'], ['skipped', 'own marketplace']])
+    expect(r.counted).toEqual([['failed', 'remove · exit 1'], ['skipped', 'own marketplace']])
   })
 
   it('an owed removal is owed no more once Codex is wanted again', async () => {
@@ -687,7 +687,7 @@ describe('createDialCodexPluginSetup', () => {
     r.state.now = HOUR
     await r.setup.pass()
     expect(r.state.recorded).toEqual({ [r.home]: VERSION })
-    expect(r.counted).toEqual([['failed', 'remove'], ['set up']])
+    expect(r.counted).toEqual([['failed', 'remove · exit 1'], ['set up']])
 
     // A later `disable` takes the plugin out of each recorded home itself.
     r.state.wanted = false
@@ -713,13 +713,13 @@ describe('createDialCodexPluginSetup', () => {
     r.state.found = false
     r.state.now = HOUR
     await r.setup.pass()
-    expect(r.counted).toEqual([['failed', 'remove']])
+    expect(r.counted).toEqual([['failed', 'remove · exit 1']])
 
     r.state.found = true
     r.state.now = HOUR + 1
     await r.setup.pass()
     expect(r.fake(r.home).calls).toEqual([...calls, '--version', REMOVE])
-    expect(r.counted).toEqual([['failed', 'remove']])
+    expect(r.counted).toEqual([['failed', 'remove · exit 1']])
   })
 
   it('not wanted: nothing installed or removed', async () => {
@@ -819,7 +819,7 @@ describe('createDialCodexPluginSetup', () => {
     r.state.homes = [a, b]
     r.state.now = 1
     await r.setup.pass()
-    expect(r.counted).toEqual([['failed', 'remove'], ['failed', 'remove']])
+    expect(r.counted).toEqual([['failed', 'remove · exit 1'], ['failed', 'remove · exit 1']])
 
     codex.version = '0.171.9'
     r.state.now = HOUR + 1
@@ -848,7 +848,7 @@ describe('createDialCodexPluginSetup', () => {
     r.state.homes = [a, b]
     r.options.set(a, { fail: [`plugin marketplace add ${r.marketplace}`] })
     await r.setup.pass()
-    expect(r.counted).toEqual([['failed', 'marketplace'], ['set up']])
+    expect(r.counted).toEqual([['failed', 'marketplace · exit 1'], ['set up']])
     expect(r.state.recorded).toEqual({ [b]: VERSION })
 
     r.state.now = HOUR - 1
@@ -858,27 +858,27 @@ describe('createDialCodexPluginSetup', () => {
     r.state.now = HOUR
     await r.setup.pass()
     expect(r.fake(a).calls).toEqual(['--version', `plugin marketplace add ${r.marketplace}`, '--version', `plugin marketplace add ${r.marketplace}`])
-    expect(r.counted).toEqual([['failed', 'marketplace'], ['set up'], ['failed', 'marketplace']])
+    expect(r.counted).toEqual([['failed', 'marketplace · exit 1'], ['set up'], ['failed', 'marketplace · exit 1']])
   })
 
-  it('a failed trust write at the install is failed · trust and its kind, and recorded: the re-check tries again after its hour, never the add', async () => {
+  it('a failed trust write at the install is failed · trust · its kind, and recorded: the re-check tries again after its hour, never the add', async () => {
     const r = rig()
     const home = codexHome()
     r.state.homes = [home]
     // The hooks.state table as an inline table: no edit of it is safe.
     r.options.set(home, { installed: () => writeFileSync(configFile(home), `${configOf(home)}[hooks]\nstate = {}\n`) })
     await r.setup.pass()
-    expect(r.counted).toEqual([['failed', 'trust unsafe']])
+    expect(r.counted).toEqual([['failed', 'trust · unsafe']])
     expect(r.state.recorded).toEqual({ [home]: VERSION })
 
     r.state.now = HOUR
     await r.setup.pass()
     expect(r.fake(home).calls).toEqual(['--version', `plugin marketplace add ${r.marketplace}`, ADD])
     expect(r.trust).toHaveBeenCalledTimes(1)
-    expect(r.counted).toEqual([['failed', 'trust unsafe'], ['failed', 'trust unsafe']])
+    expect(r.counted).toEqual([['failed', 'trust · unsafe'], ['failed', 'trust · unsafe']])
   })
 
-  it('a plugin add whose answer is not JSON is failed · install and recorded, never added again: the re-check trusts it after its hour', async () => {
+  it('a plugin add whose answer is not JSON is failed · install · not json and recorded, never added again: the re-check trusts it after its hour', async () => {
     const r = rig()
     const home = codexHome()
     r.state.homes = [home]
@@ -887,7 +887,7 @@ describe('createDialCodexPluginSetup', () => {
     const calls = ['--version', `plugin marketplace add ${r.marketplace}`, ADD]
     expect(r.fake(home).calls).toEqual(calls)
     expect(r.state.recorded).toEqual({ [home]: VERSION })
-    expect(r.counted).toEqual([['failed', 'install']])
+    expect(r.counted).toEqual([['failed', 'install · not json']])
     expect(contentHashes(home)).toEqual([])
 
     r.state.now = HOUR - 1
@@ -898,7 +898,7 @@ describe('createDialCodexPluginSetup', () => {
     await r.setup.pass()
     expect(r.fake(home).calls).toEqual(calls)
     expect(contentHashes(home)).toEqual([EXPECTED, EXPECTED])
-    expect(r.counted).toEqual([['failed', 'install']])
+    expect(r.counted).toEqual([['failed', 'install · not json']])
   })
 
   it('no codex: nothing run, nothing counted, and set up once it is there', async () => {
@@ -975,7 +975,7 @@ describe('createDialCodexPluginSetup', () => {
     r.options.set(failing, { fail: [ADD] })
     r.state.homes = [own, failing]
     await r.setup.pass()
-    expect(r.counted).toEqual([['skipped', 'own marketplace'], ['failed', 'install']])
+    expect(r.counted).toEqual([['skipped', 'own marketplace'], ['failed', 'install · exit 1']])
 
     r.state.homes = []
     r.state.now = 60_000
@@ -988,7 +988,7 @@ describe('createDialCodexPluginSetup', () => {
     r.state.now = HOUR
     await r.setup.pass()
     expect(r.looked).toEqual([own, failing, own, failing])
-    expect(r.counted).toEqual([['skipped', 'own marketplace'], ['failed', 'install'], ['failed', 'install']])
+    expect(r.counted).toEqual([['skipped', 'own marketplace'], ['failed', 'install · exit 1'], ['failed', 'install · exit 1']])
   })
 
   it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('an installed folder that cannot be looked at is no error', async () => {

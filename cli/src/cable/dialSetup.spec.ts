@@ -364,7 +364,7 @@ describe('createDialSetup', () => {
     // Each looked up by its real path once its skill is written and Claude Code's plugin is installed.
     expect(r.codexLooked).toEqual(served.map((home) => [home, true, 2]))
     for (const home of served) expect(r.codexIn(home).calls).toEqual(['--version', add(r.dataDir)])
-    expect(r.logs.filter((line) => line.startsWith('[device] codex plugin · codex'))).toEqual(served.map(() => '[device] codex plugin · codex · failed · marketplace'))
+    expect(r.logs.filter((line) => line.startsWith('[device] codex plugin · codex'))).toEqual(served.map(() => '[device] codex plugin · codex · failed · marketplace · exit 1'))
     expect(r.logs.at(-1)).toMatch(/^\[device\] codex plugin · day \d{4}-\d\d-\d\d · codex set up 0 updated 0 failed 3 left removed 0 untrusted 0 skipped 0$/)
     // The homes' own tally holds no line of the plugin's: the default and adopted homes, Claude Code's, then the scan's.
     expect(r.counted).toEqual([['codex', 'set up'], ['codex', 'set up'], ['claude', 'set up'], ['codex', 'set up']])
