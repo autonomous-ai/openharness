@@ -127,7 +127,7 @@ WINDOWS_SPECS = (
     "cli/src/harnessDevicePlugin.spec.ts", "plugins/harness-device-vscode/src/",
     "cli/src/lib/engineBin.pathEntries.spec.ts", "cli/src/hookServer.wait.spec.ts",
     "cli/src/core/engines/sessionHookWait.spec.ts", "cli/src/deviceClaude/codexTurn.spec.ts",
-    "cli/src/devices/codexPluginTrust.spec.ts",
+    "cli/src/devices/codexPluginTrust.spec.ts", "cli/src/devices/codexPlugin.spec.ts",
     # The two real builds.
     "cli/src/lib/hostMove/hostMove.real.spec.ts", "cli/src/lib/ptyHost/drain.spec.ts",
     "cli/src/lib/windows/ptyInstall.windows.real.spec.ts", "cli/src/scripts/installPs1.spec.ts",
