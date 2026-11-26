@@ -57,8 +57,8 @@ export type ClaudeStep = 'unsupported' | 'launcher' | 'list' | 'folder' | 'marke
 export type ClaudeResult = { ok: true } | { ok: false; error: string; step: ClaudeStep; reason?: string }
 export type ClaudeFailure = Extract<ClaudeResult, { ok: false }>
 /** What the devices' setup did: installed or updated the plugin; found it current, on as it should be; or found it absent,
- *  not on as the person left it, and ran nothing for it. [folderFailed]: the code of a folder write that failed and did
- *  not stop it, as nothing was to be added or installed. */
+ *  not on as the person left it, and ran nothing for it. [folderFailed]: the code of the first setup's folder write that
+ *  failed and did not stop it, as the plugin was listed and nothing was to be added or installed. */
 export type ClaudeSetup = ({ ok: true; outcome: 'installed' | 'updated' | 'current' | 'absent' } | ClaudeFailure) & { folderFailed?: string }
 
 /** The marketplace add, its update, the install and the plugin's update can fetch (a marketplace from GitHub, which
@@ -389,20 +389,18 @@ export async function claudeHomeDisable(deps: ClaudeDeps): Promise<ClaudeResult>
 /**
  * Brings the plugin to what the marketplace holds now: the folder written with this build's files, then the marketplace
  * read again. A new version in `plugin list` is an update. A plugin the person uninstalled or turned off is theirs,
- * and nothing is run for it. A marketplace from GitHub never reads the folder, so a write that failed does not stop the
- * update: its code rides on the result.
+ * and nothing is run for it; the folder is written still, as the harness plugin may come from it. A write that failed
+ * fails the update: Claude Code reads a plugin from the folder in place, and this version recorded over the old files
+ * would keep them until the next CLI update.
  */
 export async function claudeUpdate(deps: ClaudeInstallDeps): Promise<ClaudeSetup> {
   const run = await supportedRun(deps)
   if (typeof run !== 'function') return run
-  const folderFailed = writeFolder(deps)
-  const result = await update(run)
-  return folderFailed ? { ...result, folderFailed } : result
-}
-
-async function update(run: ClaudeRun): Promise<ClaudeSetup> {
+  // Before the folder is written: a plugin read in place lists the new version as soon as the folder holds it.
   const before = await userEntry(run)
   if (!before.ok) return before
+  const unwritten = writeFolder(deps)
+  if (unwritten) return folderFailure(unwritten)
   if (before.entry?.enabled !== true) return { ok: true, outcome: 'absent' }
   const failed = await change(run, ['plugin', 'marketplace', 'update', MARKETPLACE], FETCH_MS, 'marketplace')
     ?? await change(run, ['plugin', 'update', DIAL_PLUGIN_ID, '--scope', 'user'], FETCH_MS, 'update')
