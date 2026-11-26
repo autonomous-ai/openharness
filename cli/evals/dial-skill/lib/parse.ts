@@ -15,9 +15,14 @@ export interface RunResult {
   model: string | null
   usage: Usage
   stop_reason: string | null
-  status: 'ok' | 'truncated'
+  // `unlisted`: the run started with other skills or another Claude Code than its condition's probe, so the dial's
+  // description may not have been given; the runner sets it.
+  status: 'ok' | 'truncated' | 'unlisted'
   tool_calls: number
   limited: boolean
+  // What the run started with, which the runner matches against its condition's probe. Left out when the stream has
+  // no init event, as a stand-in's does.
+  init?: { session_id: string | null; skills: string[]; claude_version: string | null }
 }
 
 /** The words Claude Code ends a run with when the account's subscription or rate limit stops it. */
@@ -48,7 +53,13 @@ export function parseClaudeStream(jsonl: string): RunResult {
   }
 
   for (const event of events(jsonl)) {
-    if (event.type === 'assistant' || event.type === 'user') {
+    if (event.type === 'system' && event.subtype === 'init') {
+      run.init ??= {
+        session_id: typeof event.session_id === 'string' ? event.session_id : null,
+        skills: Array.isArray(event.skills) ? event.skills.filter((s): s is string => typeof s === 'string') : [],
+        claude_version: typeof event.claude_code_version === 'string' ? event.claude_code_version : null,
+      }
+    } else if (event.type === 'assistant' || event.type === 'user') {
       const message = event.message as { content?: unknown; model?: unknown } | undefined
       if (event.type === 'assistant' && event.parent_tool_use_id === null && typeof message?.model === 'string' && message.model !== SYNTHETIC) served.add(message.model)
       const content = message?.content
