@@ -478,13 +478,26 @@ describe('claudeUpdate', () => {
     holdsFiles(folder)
   })
 
-  // A marketplace from GitHub never reads the folder: its update goes on, and the write's failure is counted beside it.
-  it('an update whose folder cannot be written still updates, and gives the code', async () => {
+  // Claude Code reads the plugin from the folder in place: an update over the old files would be recorded as done.
+  it('an update whose folder cannot be written fails with its code, and runs no update', async () => {
     const claude = updating('16a92abfab3f', '9f2c1d0e7a4b')
     const deps = installing(claude.run)
     readOnlyParent(deps.folder)
-    expect(await claudeUpdate(deps)).toEqual({ ok: true, outcome: 'updated', folderFailed: 'EACCES' })
-    expect(claude.writes()).toEqual(['plugin marketplace update openharness', update])
+    expect(await claudeUpdate(deps))
+      .toEqual({ ok: false, step: 'folder', reason: 'EACCES', error: "Harness could not write Claude Code's plugin folder." })
+    expect(claude.writes()).toEqual([])
+  })
+
+  // Read in place, the plugin lists the new version once the folder holds it: the version before is read first.
+  it('a plugin read in place from the folder is updated', async () => {
+    const folder = marketplaceFolder()
+    const claude = fakeClaude({})
+    const run: ClaudeRun = async (args, timeoutMs) => {
+      if (args.join(' ') !== 'plugin list --json') return claude.run(args, timeoutMs)
+      const version = existsSync(join(folder, '.claude-plugin/marketplace.json')) ? '9f2c1d0e7a4b' : '16a92abfab3f'
+      return { code: 0, stdout: JSON.stringify([{ ...USER_ON, version }]), stderr: '' }
+    }
+    expect(await claudeUpdate(installing(run, 'darwin', folder))).toEqual({ ok: true, outcome: 'updated' })
   })
 
   // Counted updated only for a version seen to change: a plugin gone from the list after it changed nothing seen.

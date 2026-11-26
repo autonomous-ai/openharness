@@ -407,17 +407,21 @@ describe('createDialPluginSetup', () => {
     expect(existsSync(marketplace)).toBe(false)
   })
 
-  // A marketplace from GitHub never reads the folder: the update goes on, and the folder's failure is counted beside it.
-  it('an update whose folder cannot be written counts it and still updates and records', async () => {
+  // Claude Code reads the plugin from the folder in place: this version recorded over the old files would leave them
+  // until the next CLI update.
+  it('an update whose folder cannot be written is failed · folder, the old version kept, and tried an hour later', async () => {
     const claude = fakeClaude({ installed: entry('16a92abfab3f') })
     const { setup, state, counted, marketplace } = rig(claude)
     state.recorded = '0.6.58'
     chmodSync(dirname(marketplace), 0o500)
     readOnly.push(dirname(marketplace))
-    expect(await setup.pass()).toBe(true)
-    expect(claude.writes()).toEqual([PULL, UPDATE])
-    expect(counted).toEqual([['failed', 'folder · EACCES'], ['updated']])
-    expect(state.recorded).toBe('0.6.59')
+    expect(await setup.pass()).toBe(false)
+    expect(claude.writes()).toEqual([])
+    expect(counted).toEqual([['failed', 'folder · EACCES']])
+    expect(state.recorded).toBe('0.6.58')
+    state.now = HOUR - 1
+    await setup.pass()
+    expect(state.lookups).toBe(1)
   })
 
   it('an old Claude Code: one --version, failed · unsupported', async () => {
