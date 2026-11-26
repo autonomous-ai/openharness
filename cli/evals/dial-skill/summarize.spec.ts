@@ -157,6 +157,14 @@ describe('summarize', () => {
     expect(baseline.spend_usd).toBeCloseTo(0.372, 8)
     expect(v1.spend_usd).toBeNull()
   })
+
+  it('counts the probes\' spend in the variant\'s spend', () => {
+    writeFileSync(join(flow, 'baseline', 'probes.jsonl'), jsonl([
+      { condition: 'crowd', model: 'claude-opus-5-5', usage: { input_tokens: 1000, output_tokens: 100 }, failure: null },
+    ]))
+    // The 0.372 above plus the probe's $0.006.
+    expect(summarize(flow).variants.baseline.spend_usd).toBeCloseTo(0.378, 8)
+  })
 })
 
 describe('headline', () => {
