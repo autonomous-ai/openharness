@@ -1683,6 +1683,20 @@ describe('the dial that shows one app at a time', () => {
       expect(await shown(host)).toBe('ghostty')
     })
 
+    // On the window's tab the dial shows no page to keep: the app it brought is the person's front there.
+    it('dialBrings on the window\'s tab keeps no page: the settle of the app it brought turns the view to that app\'s ring', async () => {
+      const settles: Array<() => void> = []
+      const appDialFront = vi.fn()
+      const host = setup([...iterm(), agent('g1', 'ghostty')], { appDialFront, appTimer: (_ms, run) => { settles.push(run); return () => {} } })
+      expect(host.pickApp('tmux')).toBe('switched')
+      onTab(host, [])
+      host.dialBrings()
+      host.front('iterm')
+      settles.at(-1)!()
+      expect(appDialFront).not.toHaveBeenCalled()
+      expect(await shown(host)).toBe('iterm')
+    })
+
     it('Orca\'s scope ring keeps tmux in Orca, its row on Orca\'s page', async () => {
       const { host, settle } = settling([agent('o1', 'orca'), agent('o2', 'orca', { nest: 'tmux', host: 'tmux' }), agent('g1', 'ghostty')])
       settle('orca')
