@@ -304,7 +304,8 @@ describe('the harness-device plugin', () => {
     expect(readFileSync(hook, 'utf8').startsWith('#!/bin/sh\n')).toBe(true)
   })
 
-  // Codex runs the command in Windows PowerShell on Windows. Codex has no mod, so nothing skips the launcher there.
+  // Codex runs the command in PowerShell on Windows (pwsh or Windows PowerShell). Codex has no mod, so nothing skips the
+  // launcher there.
   it('the Codex Windows form turns module loading off, looks in the profile then each absolute PATH folder, runs device codex asked, and exits 0', () => {
     const windows = windowsForm(codexHook().command)
     expect(windows.trimStart().startsWith("> $null; $PSModuleAutoLoadingPreference = 'None';")).toBe(true)
@@ -406,7 +407,8 @@ describe.runIf(process.platform === 'win32')('the harness-device hook on Windows
     }, 30_000)
   }
 
-  // Codex runs the command as `powershell.exe -NoProfile -Command <command>`, with PLUGIN_ROOT in its environment.
+  // Codex runs the command as `<PowerShell> -NoProfile -Command <command>`, with PLUGIN_ROOT in its environment: pwsh when
+  // installed, else Windows PowerShell 5.1. These run 5.1, the one every Windows has; pwsh is not run here.
   const codexInput = JSON.stringify({ ...JSON.parse(CODEX_INPUT), tool_input: { command: 'echo "héllo" & dir %TEMP% | more' } })
   const runCodex = (options: object) => spawnSync(powershell, ['-NoProfile', '-Command', codexHook().command], options)
 

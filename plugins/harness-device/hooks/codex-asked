@@ -6,10 +6,12 @@
 # `device codex` prints its usage and exits 1, dropped the same way.
 # ~/.local/bin first: the installer puts the launcher there, and an app started from the Dock may not have it on PATH.
 #
-# codex.json's command is read by two shells. Off Windows Codex runs it with `<shell> -lc`: the first line execs this
-# script and the second is never read. On Windows Codex runs it in Windows PowerShell, which reads the first line up to
-# `<#` as an echo silenced on the second, and runs the rest of the second line: the same launcher lookup in the profile
-# and on PATH, its output dropped and exit 0. So this script never runs on Windows.
+# codex.json's command is read by two shells. Codex 0.172.0 runs a hook with the session's shell and `-c`, and with
+# `$SHELL -lc` only when the session has none. Off Windows the first line execs this script and the second is never
+# read. On Windows the session's shell is PowerShell (pwsh when installed, else Windows PowerShell 5.1), run with
+# `-NoProfile -Command`: it reads the first line up to `<#` as an echo silenced on the second, and runs the rest of the
+# second line: the same launcher lookup in the user's folder and on PATH, its output dropped and exit 0. So this script
+# never runs on Windows. With no session shell there Codex falls back to cmd.exe, where the command fails and tells nothing.
 if [ -x "$HOME/.local/bin/harness" ]; then
   "$HOME/.local/bin/harness" device codex asked >/dev/null 2>&1
 elif command -v harness >/dev/null 2>&1; then
