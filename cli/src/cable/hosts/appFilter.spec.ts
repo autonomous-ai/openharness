@@ -106,6 +106,11 @@ describe('AppFilter', () => {
     tmux.agents({ ghostty: 1, tmux: 1 })
     expect(tmux.filter.shown()).toBe('tmux')
     expect(tmux.random).not.toHaveBeenCalled()
+
+    const twoApps = setup([0])
+    twoApps.agents({ ghostty: 1, iterm2: 1, tmux: 1 })
+    expect(twoApps.filter.shown()).toBe('tmux')
+    expect(twoApps.random).not.toHaveBeenCalled()
   })
 
   it('a tie between tmux and herdr is drawn', () => {
