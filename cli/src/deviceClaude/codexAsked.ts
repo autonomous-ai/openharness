@@ -16,6 +16,8 @@ import { readTurnSetting } from './codexTurn.js'
 
 /** The first file a patch adds, updates or deletes. */
 const PATCH_FILE = /^[ \t]*\*\*\* (?:Add|Update|Delete) File: (.*)$/m
+/** Codex's own app tools: their reviewer comes from config.toml's [apps], over the turn's, so the rollout cannot say. */
+const APP_TOOL = 'mcp__codex_apps__'
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value)
@@ -40,7 +42,7 @@ export function codexAskedBody(input: Record<string, unknown>, codexHome: string
   const { session_id: sessionId, turn_id: turnId, transcript_path: transcript, hook_event_name: event, tool_name: tool } = input
   if (!nonEmpty(sessionId) || !nonEmpty(turnId) || !nonEmpty(transcript) || !nonEmpty(tool)) return null
   if (event === 'PermissionRequest') {
-    if (readTurnSetting(transcript, turnId, codexHome)?.reviewer !== 'user') return null
+    if (tool.startsWith(APP_TOOL) || readTurnSetting(transcript, turnId, codexHome)?.reviewer !== 'user') return null
   } else if (event === 'PreToolUse' && tool === 'request_user_input') {
     if (readTurnSetting(transcript, turnId, codexHome)?.mode !== 'plan') return null
   } else return null
