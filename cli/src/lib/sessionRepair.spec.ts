@@ -881,6 +881,42 @@ it.each(['bad pid', 'bad start', 'missing file', 'bad json', 'different pid', 'd
   } else await expect(result).resolves.toBeNull()
 })
 
+// Claude Code on Windows writes no `procStart`: its record names the process's creation time as a decimal FILETIME
+// (`procStartFt`, 100 ns ticks since 1601). Every such record was held as invalid, so no Windows Claude agent was
+// identified by its own record. It names this process only at this start, to the millisecond, and never another's.
+describe('Claude Code\'s Windows process record (procStartFt)', () => {
+  const id = '11111111-2222-4333-8444-555555555555'
+  const filetime = (ms: number, ticks = 0n) => String((BigInt(ms) + 11_644_473_600_000n) * 10_000n + ticks)
+  const FT = filetime(STARTED_AT, 4_321n)
+  async function find(fields: Record<string, unknown>, startedAt = STARTED_AT) {
+    const home = tempRoot(); const root = join(home, 'projects')
+    // A busy project: a scan by folder alone names neither, so only the record can.
+    writeTranscript(root, 'project', id, CWD, STARTED_AT)
+    writeTranscript(root, 'project', 'another-session', CWD, STARTED_AT)
+    mkdirSync(join(home, 'sessions'))
+    writeFileSync(join(home, 'sessions', '77.json'), JSON.stringify({ pid: 77, cwd: CWD, sessionId: id, ...fields }))
+    const { findLiveSession } = await load(root)
+    return findLiveSession('claude', CWD, startedAt, { pid: 77, bornOnly: true })
+  }
+
+  it('finds the session a record with only procStartFt names for this process', async () => {
+    await expect(find({ procStartFt: FT })).resolves.toMatchObject({ sessionId: id })
+  })
+
+  it('never binds a procStartFt record of another start or another pid', async () => {
+    await expect(find({ procStartFt: FT }, STARTED_AT + 1)).resolves.toBeNull()
+    await expect(find({ pid: 78, procStartFt: FT })).resolves.toBeNull()
+  })
+
+  it.each([['non-numeric', '12x'], ['overlong', '1'.repeat(21)], ['not text', 7]])('holds the identity on a %s procStartFt', async (_, value) => {
+    await expect(find({ procStartFt: value })).rejects.toThrow('Conversation identity is held')
+  })
+
+  it('reads procStartFt as the start when the record also has procStart', async () => {
+    await expect(find({ procStartFt: filetime(STARTED_AT + 1_000), procStart: new Date(STARTED_AT).toUTCString() })).resolves.toBeNull()
+  })
+})
+
 // Claude Code names its session in the record at once but writes the transcript only with the first prompt: a
 // harness opened and never used held its binding, and Change agent waited on it forever (2026-10-21). Its own
 // record is the whole answer: no conversation yet. A sibling's newer file in the same folder never stands in.
