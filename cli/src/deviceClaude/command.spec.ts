@@ -1,18 +1,19 @@
 /**
  * `harness device claude …`, `codex …`, `vscode …` and `orca …` as a person, the plugin's hook and its mod run them:
  * a fake `claude` (a ClaudeRun that answers from a table), Claude Code's settings in a throwaway CLAUDE_CONFIG_DIR,
- * Codex's home a throwaway folder, VS Code a fake one under a throwaway home, a fake `orca` (testing/fakeOrcaCli.ts)
+ * a fake `codex` (one that writes what codex-cli 0.172.0 writes) and Codex's homes throwaway folders, VS Code a fake one under a throwaway home, a fake `orca` (testing/fakeOrcaCli.ts)
  * holding the plugin's approvals, and a daemon and the devices' listener on sockets in a throwaway folder (on Windows
  * their pipes, stood in by sockets named as pipes are).
- * The real `claude`, `code`, `orca`, ~/.claude, ~/.codex, ~/.vscode and the daemon are never touched.
+ * The real `claude`, `codex`, `code`, `orca`, ~/.claude, ~/.codex, ~/.vscode and the daemon are never touched.
  */
 import { randomBytes } from 'node:crypto'
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { parse as parseToml } from 'smol-toml'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DIAL_SKILL } from '../devices/dialSkill.js'
 import { readOrcaConnected, readPluginHomes, readRemoved, writeRemoved, writeSetup } from '../devices/dialSkillFiles.js'
@@ -27,6 +28,7 @@ import { ensureDaemonToken } from '../lib/windows/pipeAuth.js'
 import { harnessPath } from '../config/harnessHome.js'
 import { DEVICE_USAGE, runDeviceCommand, takesConnect, type DeviceDeps } from './command.js'
 import type { ClaudePluginFiles, ClaudeRun } from '../devices/claudePlugin.js'
+import { carriedCodexHash, installedRoot } from '../devices/codexPlugin.js'
 import { VSCODE_EXTENSION_ID, type VscodeEditor, type VscodeExtensionDeps } from '../devices/vscodeExtension.js'
 import { orcaPluginRun, type OrcaPluginFiles, type OrcaPluginRun } from '../devices/orcaPlugin.js'
 import { fakeOrcaCli, type FakeOrcaCli } from '../testing/fakeOrcaCli.js'
@@ -107,10 +109,16 @@ async function devicesAt(dataDir: string): Promise<string> {
 
 type Answers = Record<string, { code: number; stdout?: string; stderr?: string }>
 
-/** The marketplace cli.js carries, cut to a manifest and the hook Claude Code runs. */
+/** The marketplace cli.js carries, cut to a manifest, the hook Claude Code runs, and Codex's manifest and hooks. */
 const FILES: ClaudePluginFiles = {
-  files: { '.claude-plugin/marketplace.json': '{"name":"openharness"}\n', 'plugins/harness-device/hooks/asked': '#!/bin/sh\n' },
-  executable: ['plugins/harness-device/hooks/asked'],
+  files: {
+    '.claude-plugin/marketplace.json': '{"name":"openharness"}\n',
+    'plugins/harness-device/hooks/asked': '#!/bin/sh\n',
+    'plugins/harness-device/.codex-plugin/plugin.json': '{"name":"harness-device","hooks":"./hooks/codex.json"}\n',
+    'plugins/harness-device/hooks/codex.json': '{"hooks":{"PermissionRequest":[{"matcher":"*","hooks":[{"type":"command","command":"fixture permission","onFailure":"continue","timeout":5}]}],"PreToolUse":[{"matcher":"request_user_input","hooks":[{"type":"command","command":"fixture question","onFailure":"continue","timeout":5}]}]}}\n',
+    'plugins/harness-device/hooks/codex-asked': '#!/bin/sh\nexit 0\n',
+  },
+  executable: ['plugins/harness-device/hooks/asked', 'plugins/harness-device/hooks/codex-asked'],
 }
 
 /** [run], each call kept. */
@@ -136,6 +144,52 @@ function fakeClaude(answers: Answers = {}): ClaudeRun {
   }
 }
 
+const CODEX_PLUGIN = 'harness-device@openharness'
+const CODEX_ADD = `plugin add ${CODEX_PLUGIN} --json`
+const CODEX_REMOVE = `plugin remove ${CODEX_PLUGIN}`
+const CODEX_PLUGIN_ON = `[plugins."${CODEX_PLUGIN}"]\nenabled = true\n`
+/** An `openharness` marketplace the person added from GitHub, as the harness plugin's README tells Codex users. */
+const OWN_MARKETPLACE = '[marketplaces.openharness]\nsource_type = "git"\nsource = "https://github.com/autonomous-ai/openharness.git"\n'
+
+/**
+ * A `codex` [version] pointed at [home], each call kept in [calls], answering as codex-cli 0.172.0: `marketplace add`
+ * records the folder by its real path, `plugin add` copies that marketplace's plugin into the cache, turns it on and
+ * prints where; [answers] replace a call's answer by its arguments.
+ */
+function fakeCodex(home: string, calls: string[] = [], version = '0.172.0', answers: Answers = {}): ClaudeRun {
+  const config = join(home, 'config.toml')
+  const text = (): string => existsSync(config) ? readFileSync(config, 'utf8') : ''
+  return async (args) => {
+    const call = args.join(' ')
+    calls.push(call)
+    const answer = answers[call]
+    if (answer) return { code: answer.code, stdout: answer.stdout ?? '', stderr: answer.stderr ?? '' }
+    if (call === '--version') return { code: 0, stdout: `codex-cli ${version}\n`, stderr: '' }
+    if (call.startsWith('plugin marketplace add ')) {
+      writeFileSync(config, `${text()}[marketplaces.openharness]\nsource_type = "local"\nsource = ${JSON.stringify(realpathSync(args[3]))}\n`)
+    }
+    if (call === CODEX_ADD) {
+      const { source } = (parseToml(text()) as { marketplaces: { openharness: { source: string } } }).marketplaces.openharness
+      cpSync(join(source, 'plugins', 'harness-device'), installedRoot(home), { recursive: true })
+      if (!text().includes(`[plugins."${CODEX_PLUGIN}"]`)) writeFileSync(config, `${text()}${CODEX_PLUGIN_ON}`)
+      return { code: 0, stdout: JSON.stringify({ pluginId: CODEX_PLUGIN, version: 'local', installedPath: installedRoot(home) }), stderr: '' }
+    }
+    return { code: 0, stdout: '', stderr: '' }
+  }
+}
+
+/** A fake `codex` for each Codex home the command runs in, the calls kept by home. */
+function codexes(version?: string, answers?: Answers) {
+  const calls: Record<string, string[]> = {}
+  return { calls, codexIn: (home: string) => fakeCodex(home, calls[home] ??= [], version, answers) }
+}
+
+/** Each trust record in [home]'s config.toml, by its key, with the fingerprint it trusts. */
+const trustOf = (home: string): Record<string, string | undefined> => {
+  const state = (parseToml(readFileSync(join(home, 'config.toml'), 'utf8')) as { hooks?: { state?: Record<string, { trusted_content_hash?: string }> } }).hooks?.state
+  return Object.fromEntries(Object.entries(state ?? {}).map(([key, record]) => [key, record.trusted_content_hash]))
+}
+
 async function* chunks(...parts: string[]): AsyncIterable<string> {
   yield* parts
 }
@@ -148,7 +202,7 @@ async function device(argv: string[], deps: Partial<DeviceDeps> = {}) {
     orcaHomes: async () => [], claudeIn: () => null, claudeFiles: () => FILES,
     // The command's own: CLAUDE_CONFIG_DIR stands for ~/.claude unless a spec runs it in an Orca terminal.
     defaultClaudeHome: claudeHome,
-    codexHome: folder(), codex: () => true, env: {}, cwd: '/',
+    codexHome: folder(), codex: () => true, codexIn: (home) => fakeCodex(home), env: {}, cwd: '/',
     vscode: () => { throw new Error('only the vscode words ask for VS Code') },
     orca: () => { throw new Error('only orca status, enable and disable ask for Orca') },
     write: async () => { throw new Error('only claude inbox and attach write their lines') },
@@ -390,8 +444,8 @@ describe('harness device claude', () => {
       'harness device claude enable           set Claude Code up again: the plugin and the dial skill (Claude Code 2.1.287 or later), in each Orca account too',
       'harness device claude disable          remove the plugin and the dial skill, in each Orca account too; Harness leaves them removed',
       'harness device codex status [--json]   whether the dial is on for Codex',
-      'harness device codex enable            set Codex up again: the dial skill in its homes',
-      'harness device codex disable           remove the dial skill Harness wrote; Harness leaves it removed',
+      'harness device codex enable            set Codex up again: the plugin and the dial skill in its homes',
+      'harness device codex disable           remove the plugin and the dial skill; Harness leaves them removed',
       'harness device vscode enable           set VS Code up again: Harness\'s extension in it',
       'harness device vscode disable          remove Harness\'s extension; Harness leaves it removed',
       'harness device cursor enable           set Cursor up again: Harness\'s extension in it',
@@ -1206,6 +1260,117 @@ describe('harness device codex', () => {
 
   it('enable prints its error on stderr and exits 1', async () => {
     expect(await device(['codex', 'enable'], { codex: () => false })).toEqual({ code: 1, out: [], err: ['Codex is not on this computer.'] })
+  })
+
+  /** dial-setup.json as the devices service leaves it once it set the plugin up in [homes]. */
+  const pluginRecorded = (dataDir: string, homes: string[]): void => {
+    expect(writeSetup(dataDir, { dial: true, homes: { claude: [], codex: [] }, pluginHomes: [], codexPlugin: Object.fromEntries(homes.map((home) => [home, '0.6.90'])) })).toBeUndefined()
+  }
+
+  it('codex enable sets the plugin up in its own Codex home and each home the devices recorded, with trust', async () => {
+    const dataDir = folder()
+    const home = folder()
+    const codexHome = folder()
+    const other = realpathSync(folder())
+    pluginRecorded(dataDir, [other])
+    const codex = codexes()
+    expect(await device(['codex', 'enable'], { dataDir, home, codexHome, codexIn: codex.codexIn })).toEqual({ code: 0, out: [], err: [] })
+    expect(readFileSync(skillAt(codexHome), 'utf8')).toBe(DIAL_SKILL)
+    const marketplace = harnessPath('claude-marketplace', home)
+    const hash = carriedCodexHash(FILES, 'darwin')
+    for (const at of [realpathSync(codexHome), other]) {
+      expect(codex.calls[at], at).toEqual(['--version', `plugin marketplace add ${marketplace}`, CODEX_ADD])
+      expect(trustOf(at), at).toEqual({
+        [`${CODEX_PLUGIN}:hooks/codex.json:permission_request:0:0`]: hash,
+        [`${CODEX_PLUGIN}:hooks/codex.json:pre_tool_use:0:0`]: hash,
+      })
+    }
+  })
+
+  it('codex enable from a build that carries no plugin writes the skill and says This Harness build carries no Codex plugin.', async () => {
+    const codexHome = folder()
+    const codexIn = () => { throw new Error('a build that carries no plugin runs no codex') }
+    expect(await device(['codex', 'enable'], { codexHome, claudeFiles: () => null, codexIn }))
+      .toEqual({ code: 1, out: [], err: ['This Harness build carries no Codex plugin.'] })
+    expect(readFileSync(skillAt(codexHome), 'utf8')).toBe(DIAL_SKILL)
+  })
+
+  it('codex enable over the person\'s own marketplace writes the skill, sets nothing up there and exits 0', async () => {
+    const codexHome = folder()
+    const config = join(codexHome, 'config.toml')
+    writeFileSync(config, OWN_MARKETPLACE)
+    const before = readFileSync(config)
+    const codex = codexes()
+    expect(await device(['codex', 'enable'], { codexHome, codexIn: codex.codexIn })).toEqual({ code: 0, out: [], err: [] })
+    expect(codex.calls[realpathSync(codexHome)]).toEqual(['--version'])
+    expect(readFileSync(config)).toEqual(before)
+    expect(existsSync(join(codexHome, 'plugins'))).toBe(false)
+    expect(readFileSync(skillAt(codexHome), 'utf8')).toBe(DIAL_SKILL)
+  })
+
+  it('codex enable with a Codex older than 0.172.0 writes the skill and says Codex 0.172.0 or later is needed.', async () => {
+    const home = folder()
+    const codexHome = folder()
+    const codex = codexes('0.171.9')
+    expect(await device(['codex', 'enable'], { home, codexHome, codexIn: codex.codexIn }))
+      .toEqual({ code: 1, out: [], err: ['Codex 0.172.0 or later is needed.'] })
+    expect(codex.calls[realpathSync(codexHome)]).toEqual(['--version'])
+    expect(existsSync(harnessPath('claude-marketplace', home))).toBe(false)
+    expect(readFileSync(skillAt(codexHome), 'utf8')).toBe(DIAL_SKILL)
+  })
+
+  it('codex disable leaves a home whose marketplace is the person\'s own alone', async () => {
+    const dataDir = folder()
+    const codexHome = folder()
+    const config = join(codexHome, 'config.toml')
+    // The person's own install, in a home the devices recorded once.
+    writeFileSync(config, `${OWN_MARKETPLACE}${CODEX_PLUGIN_ON}`)
+    pluginRecorded(dataDir, [realpathSync(codexHome)])
+    const before = readFileSync(config)
+    const codex = codexes()
+    expect(await device(['codex', 'disable'], { dataDir, codexHome, codexIn: codex.codexIn })).toEqual({ code: 0, out: [], err: [] })
+    expect(codex.calls[realpathSync(codexHome)] ?? []).not.toContain(CODEX_REMOVE)
+    expect(readFileSync(config)).toEqual(before)
+  })
+
+  it('codex disable removes the plugin in its own Codex home and each home the devices recorded', async () => {
+    const dataDir = folder()
+    const home = folder()
+    const codexHome = folder()
+    const harness = realpathSync(folder())
+    // On, with no openharness marketplace left: still Harness's, since the devices recorded it.
+    const bare = realpathSync(folder())
+    pluginRecorded(dataDir, [harness, bare])
+    expect((await device(['codex', 'enable'], { dataDir, home, codexHome })).code).toBe(0)
+    writeFileSync(join(bare, 'config.toml'), CODEX_PLUGIN_ON)
+    const codex = codexes()
+    expect(await device(['codex', 'disable'], { dataDir, home, codexHome, codexIn: codex.codexIn })).toEqual({ code: 0, out: [], err: [] })
+    for (const at of [realpathSync(codexHome), harness, bare]) expect(codex.calls[at], at).toEqual(['--version', CODEX_REMOVE])
+  })
+
+  it('a failed removal says Could not remove the Codex plugin. and exits 1, the removal still saved', async () => {
+    const dataDir = folder()
+    const home = folder()
+    const codexHome = folder()
+    expect((await device(['codex', 'enable'], { dataDir, home, codexHome })).code).toBe(0)
+    const { codexIn } = codexes(undefined, { [CODEX_REMOVE]: { code: 1, stderr: `Error: could not write ${codexHome}\n` } })
+    expect(await device(['codex', 'disable'], { dataDir, home, codexHome, codexIn }))
+      .toEqual({ code: 1, out: [], err: ['Could not remove the Codex plugin. (exit 1)'] })
+    expect(readRemoved(dataDir).codex).toBe(true)
+    expect(existsSync(skillAt(codexHome))).toBe(false)
+  })
+
+  it('with no codex, a plugin its config.toml reads on is said left on', async () => {
+    const dataDir = folder()
+    const home = folder()
+    const codexHome = folder()
+    expect((await device(['codex', 'enable'], { dataDir, home, codexHome })).code).toBe(0)
+    expect(await device(['codex', 'disable'], { dataDir, home, codexHome, codexIn: () => null })).toEqual({
+      code: 1, out: [],
+      err: ['Codex was not found, so its harness-device plugin is still on; codex plugin remove harness-device@openharness removes it.'],
+    })
+    expect(readRemoved(dataDir).codex).toBe(true)
+    expect(existsSync(skillAt(codexHome))).toBe(false)
   })
 
   it('on Windows, status says supported and enable writes the skill', async () => {
