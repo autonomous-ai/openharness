@@ -127,16 +127,6 @@
         "hookEvent": "UserPromptSubmit"
       }
     ],
-    "prompts": [
-      {
-        "agent": "claude",
-        "prompt": "healthy Claude prompt"
-      },
-      {
-        "agent": "codex",
-        "prompt": "healthy Codex prompt"
-      }
-    ],
     "promptHooks": [
       {
         "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
@@ -321,16 +311,6 @@
         "rebound": null,
         "orphaned": null,
         "hookEvent": "UserPromptSubmit"
-      }
-    ],
-    "prompts": [
-      {
-        "agent": "claude",
-        "prompt": "healthy Claude prompt"
-      },
-      {
-        "agent": "codex",
-        "prompt": "healthy Codex prompt"
       }
     ],
     "promptHooks": [

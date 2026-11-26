@@ -84,6 +84,41 @@ def config_list(config, key):
     return re.findall(r"'([^']+)'", lists[0])
 
 
+# The store/tools/ entries ci.yml's store-checks job names: the files it runs, and the folder whose package it tests.
+STORE_CHECKS_ENTRY = re.compile(r"store/tools/[\w./-]+")
+# How a file names another: a quoted path, beside it or from the repository root ('./x.mjs',
+# new URL('x.mjs', import.meta.url), 'store/tools/x.mjs'), or a Python module it imports.
+QUOTED_NAME = re.compile(r"""['"`]([^'"`\s]*[\w-][^'"`\s]*)['"`]""")
+PYTHON_IMPORT = re.compile(r"(?m)^\s*(?:from\s+\.?(\w+)\s+import|import\s+(\w+(?:\s*,\s*\w+)*))")
+
+
+def store_checks_files(root):
+    """store/tools/'s files, and those store-checks runs (a folder it names: every file in it) or reads by name, through
+    those files alone. The scan sees only `../` and root-quoted reads; this follows the reads beside a file too."""
+    tracked = {path for path in subprocess.check_output(["git", "ls-files", "-z", "--", "store/tools/"], cwd=root,
+                                                       text=True).split("\0") if path}
+
+    def named(name):
+        return {path for path in tracked if path == name or path.startswith(name.rstrip("/") + "/")}
+
+    job = planner.ci_jobs((root / ".github/workflows/ci.yml").read_text())["store-checks"]
+    todo = [path for entry in STORE_CHECKS_ENTRY.findall(job) for path in named(entry)]
+    read = set()
+    while todo:
+        source = todo.pop()
+        if source in read:
+            continue
+        read.add(source)
+        text = (root / source).read_bytes().decode(errors="replace")
+        names = QUOTED_NAME.findall(text) + [f"{module.strip()}.py" for found in PYTHON_IMPORT.findall(text)
+                                             for modules in found for module in modules.split(",") if module.strip()]
+        for name in names:
+            # From the repository root, a path names a folder as the planner's QUOTED_PATH does: a word alone is no path.
+            for target in (posixpath.join(posixpath.dirname(source), name), *(("/" in name) * [name])):
+                todo += named(posixpath.normpath(target))
+    return tracked, read
+
+
 class SelectionTests(unittest.TestCase):
     def test_backend_changes_run_the_integration_shards_and_nothing_else_does(self):
         # Task #2459: the Super Tab integration suite runs in PR CI for backend changes only.
@@ -296,6 +331,42 @@ class SelectionTests(unittest.TestCase):
                 self.assertTrue(planner.windows_only(path))
                 self.assertTrue(planner.e2e_plan([path], {"windows-e2e"})["windows_arm64"])
 
+    def test_the_store_pipe_checks_run_windows_end_to_end(self):
+        # check-install.ps1 runs store-pipe.mjs against the installed daemon on both legs. windows-pipe.test.mjs is
+        # cross-platform JS that storePackagesPipe.windows.spec.ts runs on x64 as on arm64: arm64 adds nothing for it.
+        path = "store/tools/windows-ci/store-pipe.mjs"
+        self.assertIn("windows-e2e", planner.select([path])[0])
+        self.assertTrue(planner.windows_only(path))
+        self.assertTrue(planner.e2e_plan([path], {"windows-e2e"})["windows_arm64"])
+        path = "store/tools/windows-pipe.test.mjs"
+        self.assertIn("windows-e2e", planner.select([path])[0])
+        self.assertFalse(planner.windows_only(path))
+        self.assertFalse(planner.e2e_plan([path], {"windows-e2e"})["windows_arm64"])
+
+    def test_what_the_store_pipe_test_imports_runs_windows_end_to_end_on_x64_alone(self):
+        # windows-pipe.test.mjs holds the pipe auth's regression cases (audit W1) on the pipe client and the agents'
+        # transports it imports, and only windows-e2e runs it (storePackagesPipe.windows.spec.ts): a change to that code
+        # ran no job that runs them. The code is cross-platform JS, which x64 tests as arm64 does.
+        for path in ("store/tools/local-daemon.mjs", "store/tools/local-credential.mjs",
+                     "store/agents/harness-monitor/lib/bridge.mjs", "store/agents/machine-monitor/lib/localDaemon.mjs"):
+            with self.subTest(path=path):
+                self.assertIn("windows-e2e", planner.select([path])[0])
+                self.assertFalse(planner.e2e_plan([path], {"windows-e2e"})["windows_arm64"])
+        # The Store's code the pipe test does not import selects none.
+        for path in ("store/tools/listing.mjs", "store/agents/harness-monitor/lib/panes.mjs"):
+            with self.subTest(path=path):
+                self.assertNotIn("windows-e2e", planner.select([path])[0])
+
+    def test_what_the_store_pipe_test_imports_is_listed(self):
+        # Walked from the test, and from the pipe script check-install.ps1 runs, through store/ alone, so an import either
+        # gains selects windows-e2e and one both drop stops selecting it. The test's one import outside store/ is the
+        # CLI's installed ws package, no code of the repository's.
+        script = "store/tools/windows-ci/store-pipe.mjs"
+        full_checkout(self, "store/tools/windows-pipe.test.mjs", script, "store/agents")
+        run = imports_from(REPOSITORY, ["store/tools/windows-pipe.test.mjs", script], ("store/",)) - {script}
+        self.assertEqual(sorted(path for path in run if not planner.windows_e2e(path) or planner.windows_only(path)), [])
+        self.assertEqual(set(planner.WINDOWS_STORE_PIPE_PATHS), run)
+
     def test_windows_in_a_name_outside_the_cli_runs_no_arm64(self):
         # Answer 2: the names of files under cli/ only; a folder's name (cli/src/lib/windows/) is not the file's.
         for path in ("desktop/windows/runner/main.cpp", "device-app/src-tauri/src/front_windows.rs",
@@ -418,6 +489,14 @@ class SelectionTests(unittest.TestCase):
             named.add(path if path.endswith(".ts") else path + "/")
         self.assertIn("plugins/harness-device-vscode/src/", named)
         self.assertEqual(set(planner.WINDOWS_SPECS), named)
+
+    def test_the_hook_wait_specs_run_on_windows(self):
+        # #4622's hook-wait specs run on Windows CI, so a change to them or to the modules they test runs windows-e2e.
+        for path in ["cli/src/hookServer.wait.spec.ts", "cli/src/core/engines/sessionHookWait.spec.ts",
+                     "cli/src/hookServer.ts", "cli/src/core/engines/sessionHookWait.ts"]:
+            with self.subTest(path=path):
+                self.assertIn("windows-e2e", planner.select([path])[0])
+                self.assertTrue(planner.windows_e2e(path))
 
     def test_every_spec_windows_yml_runs_selects_windows_end_to_end(self):
         # Vitest takes each name as a filter (filterFiles): a case-insensitive substring of a test file's path from cli/,
@@ -786,8 +865,58 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(planner.select(["desktop/lib/widgets/pane_grid.dart"])[0], {"cross-read-scan", "desktop"})
         self.assertEqual(planner.select(["desktop/lib/widgets/engine_identity.dart"])[0],
                          {"cross-read-scan", "desktop", "mobile"})
-        # Desktop's and the CLI's tests read the Store's agents and branding, which no component owns.
-        self.assertEqual(planner.select(["store/agents/blender/store.json"])[0], {"cli", "desktop"})
+        # Desktop's and the CLI's tests read the Store's agents and branding, which no component owns; store-checks the
+        # agents too.
+        self.assertEqual(planner.select(["store/agents/blender/store.json"])[0], {"cli", "desktop", "store"})
+
+    def test_store_tools_select_their_own_checks(self):
+        # No PR check ran the tests in store/tools/: a change there ran process checks only.
+        for path in ("store/tools/runtimes.sh", "store/tools/local-ai/test/packaging.test.mjs"):
+            with self.subTest(path=path):
+                self.assertLessEqual({"store", "cross-read-scan"}, planner.select([path])[0])
+        # The local AI packages' node.sh copies, the libs port-holder.test.mjs imports, and the runtimes.sh copies
+        # sync-runtimes.mjs --check compares, in the agents and the viewers.
+        for path in ("store/agents/ollama/toolchain/node.sh", "store/viewers/web-viewer/runtimes.sh"):
+            with self.subTest(path=path):
+                self.assertIn("store", planner.select([path])[0])
+        for path in ("store/catalog.json", "cli/src/lib/engineLaunch.ts", "docs/plans/x.md"):
+            with self.subTest(path=path):
+                self.assertNotIn("store", planner.select([path])[0])
+        self.assertEqual(planner.JOBS["store"], {"store-checks"})
+        self.assertIsNone(planner.shared_input("store/tools/runtimes.sh"))
+        # The browser and network suites are other workflows': in no component.
+        self.assertEqual(planner.shared_input("store/tools/browser/x.test.mjs"), "outside every component")
+
+    def test_store_checks_run_offline_with_a_read_only_token(self):
+        job = planner.ci_jobs((REPOSITORY / ".github/workflows/ci.yml").read_text())["store-checks"]
+        for text in ("python3 -m unittest store/tools/test_runtimes.py", "node store/tools/sync-runtimes.mjs --check",
+                     "npm --prefix store/tools/local-ai test"):
+            with self.subTest(text=text):
+                self.assertIn(text, job)
+        # The token reads the repository and nothing more, and no secret reaches the job in any form (secrets.X,
+        # secrets['X'], secrets: inherit).
+        permissions = planner.yaml_entries(planner.yaml_entries(job).get("permissions", ""))
+        self.assertEqual({key: value.strip() for key, value in permissions.items()}, {"contents": "read"})
+        self.assertNotIn("secrets", job)
+
+    def test_each_file_store_checks_runs_is_its_own(self):
+        # One added to the job but not to ALSO would be in no component: a change to it alone would not run the job.
+        job = planner.ci_jobs((REPOSITORY / ".github/workflows/ci.yml").read_text())["store-checks"]
+        entries = STORE_CHECKS_ENTRY.findall(job)
+        self.assertIn("store/tools/test_runtimes.py", entries)
+        for entry in entries:
+            with self.subTest(entry=entry):
+                self.assertIn("store", planner.owners(entry if posixpath.splitext(entry)[1] else entry + "/x"))
+
+    def test_store_tools_files_are_its_own_exactly_when_store_checks_runs_or_reads_them(self):
+        # The scan sees `../` and root-quoted reads only: a skipped file the job's files read beside them
+        # ('./listing.mjs') was no input of store-checks, and main's change to it reused a stale result after Update
+        # branch. The rest of store/tools/ is in no component, where a change on main reruns every suite.
+        full_checkout(self, "store/tools")
+        tracked, read = store_checks_files(REPOSITORY)
+        self.assertIn("store/tools/runtimes.sh", read)
+        self.assertEqual({path for path in tracked if "store" in planner.owners(path)}, read)
+        self.assertEqual({path for path in tracked - read if not planner.shared_input(path)}, set())
 
     def test_the_app_list_vectors_select_desktop_device_app_and_website(self):
         # Every writer of Harness Device's Linux app-list entry holds its bytes and rule to one shared file: the app,
@@ -1465,6 +1594,22 @@ class ReuseTests(ReuseFixture):
         self.assertEqual(plan["reuse"]["status"], "applied")
         self.assertEqual((plan["reuse"]["passed_head"], plan["reuse"]["main_parent"]), (passed, main))
 
+    def test_main_changing_a_store_tools_file_store_checks_does_not_read_reruns_every_suite(self):
+        # The scan cannot see a read beside a file ('./listing.mjs'): a store/tools/ file store-checks neither runs nor
+        # reads is in no component, so main's change to it reruns every suite rather than reuse a stale result.
+        _, main, head = self.scenario(["store/tools/runtimes.sh"], ["store/tools/listing.mjs"])
+        self.assertRerunsAll(self.plan(head, main), "store/tools/listing.mjs")
+
+    def test_main_changing_the_store_pipe_client_reruns_every_suite_that_tests_it(self):
+        # local-daemon.mjs is the Store packages' pipe client: the CLI's and Desktop's tests read the Store, windows-e2e
+        # runs the pipe test, store-checks the client's own tests.
+        _, main, head = self.scenario(["cli/src/devices/a.ts", "store/tools/runtimes.sh"], ["store/tools/local-daemon.mjs"])
+        rerun = self.plan(head, main)["reuse"]["rerun"]
+        for suite in ("cli", "desktop", "windows-e2e", "store"):
+            with self.subTest(suite=suite):
+                self.assertIn(suite, rerun)
+                self.assertIn("store/tools/local-daemon.mjs", rerun[suite])
+
     def test_docs_and_top_level_notes_on_main_do_not_force_a_rerun(self):
         _, main, head = self.scenario(["mobile/lib/app.dart"], ["docs/guide.md", "README.md"])
         self.assertEqual(list(self.plan(head, main)["reused"]), ["mobile"])
@@ -2134,7 +2279,9 @@ class FullCheckoutTests(unittest.TestCase):
              "SelectionTests.test_every_path_the_app_eval_covers_is_in_the_checkout",
              "SelectionTests.test_the_harness_the_app_eval_files_run_runs_them",
              "SelectionTests.test_what_the_windows_e2e_harness_imports_is_listed",
+             "SelectionTests.test_what_the_store_pipe_test_imports_is_listed",
              "SelectionTests.test_every_declared_input_exists",
+             "SelectionTests.test_store_tools_files_are_its_own_exactly_when_store_checks_runs_or_reads_them",
              "CrossReadTests.test_every_cross_read_in_this_repository_is_declared")
 
     def results_without_a_checkout(self, required):

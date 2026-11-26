@@ -907,9 +907,10 @@ function questionWords(view: QuestionView): string {
 /**
  * Whether a dialog may keep the id it was announced under while the rest of its body moves (heldRequestId): a
  * question may, an approval never, so an answer meant for one command is never typed into another. isApprovalDialog
- * alone misses Hermes's and Copilot's, which box their command with no `$ ` line, and Hermes titles its prompt by the
- * URL under the command: kept by its words, `curl -s` becoming `rm -rf` was not asked again, and the answer was taken.
- * Rows shaped as an approval's are enough to refuse, so a yes-or-no question moves its id with its body, as before.
+ * reads Hermes's and Copilot's by their title, which a long boxed command pushes out of the dialog, and Hermes titles
+ * its prompt by the URL under the command: kept by its words, `curl -s` becoming `rm -rf` was not asked again, and the
+ * answer was taken. Rows shaped as an approval's are enough to refuse, so a yes-or-no question moves its id with its
+ * body, as before.
  */
 function keepsIdByWords(view: QuestionView): boolean {
   return !isApprovalDialog(view) && !offersApproval(view.rows)

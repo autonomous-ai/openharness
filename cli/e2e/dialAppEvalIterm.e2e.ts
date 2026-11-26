@@ -134,7 +134,9 @@ describe.skipIf(!MAC)('the dial eval, tier B: the fake iTerm2 and herdr started 
     expect(gone(tab.pid)).toBe(true)
   })
 
-  describe.skipIf(!herdrBinary)('herdr', () => {
+  // Each case skips on its own: a skipped describe inside the skipped macOS block reports its cases `pending`, which
+  // the shard verifier refuses as unfinished (nightlies 45453447269, 45663585025).
+  describe('herdr', () => {
     /** A daemon whose table holds no herdr outside this worker's tree, with Claude Code's hooks in. */
     const started = async (): Promise<IsolatedDaemon> => {
       const d = await daemon()
@@ -157,7 +159,7 @@ describe.skipIf(!MAC)('the dial eval, tier B: the fake iTerm2 and herdr started 
     const agentPid = (d: IsolatedDaemon, sessionId: string, source = 'startup'): number =>
       Number(d.hookLog().match(new RegExp(`claude pid=(\\d+) SessionStart\\(${source}\\) session=${sessionId} ran`))![1])
 
-    it("herdr started from a fake iTerm2 tab runs its server under that client, and a hooked pane's agent's parents reach the fake iTerm2 and never this worker", async () => {
+    it.skipIf(!herdrBinary)("herdr started from a fake iTerm2 tab runs its server under that client, and a hooked pane's agent's parents reach the fake iTerm2 and never this worker", async () => {
       const d = await started()
       const herdr = await herdrIn(d)
       expect(inside(d.root, herdr.socket)).toBe(true)
@@ -177,7 +179,7 @@ describe.skipIf(!MAC)('the dial eval, tier B: the fake iTerm2 and herdr started 
       expect(chain.at(-2)).toMatchObject({ comm: iterm(d).server })
     })
 
-    it("a pane's session reported to herdr is in its agent.list row", async () => {
+    it.skipIf(!herdrBinary)("a pane's session reported to herdr is in its agent.list row", async () => {
       const d = await started()
       const herdr = await herdrIn(d)
       const agent = await herdr.hooked('reported')
@@ -189,7 +191,7 @@ describe.skipIf(!MAC)('the dial eval, tier B: the fake iTerm2 and herdr started 
 
     // herdr tells an agent by its process's argv[0] whole: `claude --resume <id>` there must still read `claude`. Its first
     // agent's pane it finds by another way, so this one is its second.
-    it("a pane's Claude Code going on in its conversation is herdr's agent, and its session reported is in its row", async () => {
+    it.skipIf(!herdrBinary)("a pane's Claude Code going on in its conversation is herdr's agent, and its session reported is in its row", async () => {
       const d = await started()
       const herdr = await herdrIn(d)
       await herdr.hooked('first')
@@ -199,7 +201,7 @@ describe.skipIf(!MAC)('the dial eval, tier B: the fake iTerm2 and herdr started 
       expect(agents.find((row) => row.pane_id === agent.pane)).toMatchObject({ agent: 'claude', agent_session: { value: CONVERSATION } })
     })
 
-    it("herdr started again in a new tab goes on in a pane's conversation, and stopped leaves no tab", async () => {
+    it.skipIf(!herdrBinary)("herdr started again in a new tab goes on in a pane's conversation, and stopped leaves no tab", async () => {
       const d = await started()
       const first = await herdrIn(d)
       const agent = await first.hooked('again')

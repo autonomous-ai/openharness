@@ -67,4 +67,6 @@ export const hooks: HookContract = {
   },
   sessionFile: { suffix: '.jsonl' },
   stopClosesTurns: true,
+  // `/clear`. A `resume` or a `compact` brings history back, and `startup` is its process's first conversation.
+  newConversation: { event: 'SessionStart', sources: ['clear'] },
 }

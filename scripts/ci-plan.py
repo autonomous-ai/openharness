@@ -35,7 +35,7 @@ _local_spec.loader.exec_module(local_checks)
 
 
 CORE = {"cli", "desktop", "tui", "backend", "companions"}
-EXTRA = {"website", "os", "provider", "firmware", "mobile", "daemons", "pty", "device-app"}
+EXTRA = {"website", "os", "provider", "firmware", "mobile", "daemons", "pty", "device-app", "store"}
 # End to end on Windows and Linux, each selected by its own path list (below).
 E2E = {"windows-e2e", "linux-e2e", "dial-hosts", "device-app-e2e", "device-app-update", "device-app-desktop",
        "device-app-install"}
@@ -58,7 +58,8 @@ JOBS = {
 # its own scope.
 MANUAL = {"full": CORE, "all": SUITES - E2E, "process": set(), **{name: {name} for name in SUITES}}
 # Each component's own directory selects its suite. Everything else (docs, workflows,
-# scripts, store, fixtures) is covered by the plan's actionlint and process checks.
+# scripts, store/ but the files store-checks runs or reads (ALSO), fixtures) is covered by the plan's actionlint and
+# process checks.
 COMPONENTS = {"cli": "cli", "tests": "cli", "desktop": "desktop", "tui": "tui", "backend": "backend",
               "companions": "companions", "website": "website", "os": "os", "provider": "provider",
               "devices": "firmware", "mobile": "mobile", "daemons": "daemons", "pty": "pty", "term": "pty",
@@ -80,6 +81,15 @@ ALSO.update({"desktop/test/support/real_fonts.dart": "mobile"})
 ALSO.update({"plugins/harness-device-vscode/": "cli"})
 # Orca's plugin: the CLI's build inlines the folder.
 ALSO.update({"plugins/harness-device-orca/": "cli"})
+# The Store's tools: the files store-checks runs (ci.yml) and those they read beside them, by name or by a path built
+# from parts (runtimes.sh), which the scan cannot see; test_ci_plan follows the names. The rest of store/tools/ (the
+# browser and network suites authoring-browser-checks.yml and experience-checks.yml run, the pipe checks windows-e2e
+# runs, the scripts run by hand) is in no component, as the rest of store/ is: a change to it on main reruns every suite
+# after Update branch, whatever reads it beside it.
+ALSO.update({f"store/tools/{name}": "store" for name in (
+    "local-ai/", "local-credential.mjs", "local-credential.test.mjs", "local-daemon.mjs", "local-daemon.test.mjs",
+    "port-holder.test.mjs", "runtimes.sh", "sync-runtimes.mjs", "sync-runtimes.test.mjs", "test-folders.mjs",
+    "test-folders.test.mjs", "test_runtimes.py")})
 # test_ci_plan's repository-wide scan and its other full-checkout tests skip in process-checks' sparse checkout, where
 # two undeclared reads slipped in: their own job runs them on a full checkout. They run for a change to the planner, its
 # test, the tables it reads (DEPENDS takes the desktop's from record-ci-validation.py) and the CLI's lists its tables
@@ -112,7 +122,8 @@ WINDOWS_SPECS = (
     "cli/src/devices/listenerPipe.windows.real.spec.ts", "cli/src/devices/claudePlugin.windows.real.spec.ts",
     "cli/src/deviceClaude/inbox.windows.real.spec.ts", "cli/src/hookCaller.windows.real.spec.ts",
     "cli/src/harnessDevicePlugin.spec.ts", "plugins/harness-device-vscode/src/",
-    "cli/src/lib/engineBin.pathEntries.spec.ts",
+    "cli/src/lib/engineBin.pathEntries.spec.ts", "cli/src/hookServer.wait.spec.ts",
+    "cli/src/core/engines/sessionHookWait.spec.ts",
     # The two real builds.
     "cli/src/lib/hostMove/hostMove.real.spec.ts", "cli/src/lib/ptyHost/drain.spec.ts",
     "cli/src/lib/windows/ptyInstall.windows.real.spec.ts", "cli/src/scripts/installPs1.spec.ts",
@@ -137,6 +148,17 @@ WINDOWS_E2E_HARNESS_PATHS = (
 # A spec tests the module beside it named up to its first dot: secureState.spec.ts tests secureState.ts.
 WINDOWS_SPEC_MODULES = {str(PurePosixPath(spec).with_name(PurePosixPath(spec).name.split(".")[0] + ".ts"))
                         for spec in WINDOWS_SPECS if not spec.endswith("/")}
+# windows-e2e: the Store's pipe test, cross-platform JS that storePackagesPipe.windows.spec.ts runs and no other job
+# does, and what it and the pipe script (store/tools/windows-ci/, windows_only) import under store/: the pipe client, the
+# agents' transports they drive (audit W1) with the copy of the client each imports, and the test's temporary folders.
+# test_ci_plan walks the imports.
+WINDOWS_STORE_PIPE_PATHS = (
+    *(f"store/tools/{name}.mjs" for name in ("windows-pipe.test", "local-credential", "local-daemon", "test-folders")),
+    *(f"store/agents/{transport}.mjs" for transport in ("autonomous-grid/lib/harness", "harness-monitor/lib/bridge",
+                                                         "machine-monitor/lib/daemon", "memories/lib/bridge")),
+    *(f"store/agents/{agent}/lib/localDaemon.mjs" for agent in ("autonomous-grid", "harness-monitor", "machine-monitor",
+                                                                "memories")),
+)
 # Harness Device's suites: what each of ci.yml's Device jobs tests. "dir/" is a folder; a "*" matches within the last
 # name. Each also selects on the jobs' setup action, as dial-hosts on its own: device-app-update's jobs and the
 # device-app-build packages the others install set up through it.
@@ -293,6 +315,12 @@ DEPENDS = {
     # term/ by hand: the update fixture copies `git ls-files -- tui term`, which the scan cannot see.
     "os": ("cli/", "devices/harness-device/firmware/README.md", "docs/naming-system.md", "docs/terminology.md", "term/", "tui/"),
     "pty": ("cli/", "desktop/windows/runner/resources/app_icon.ico"),
+    # store-checks: the local AI packages' packaging test compares their toolchain/node.sh copies, port-holder.test.mjs
+    # imports four agents' libs, and sync-runtimes.mjs --check compares every agent's and viewer's runtimes.sh copy
+    # (a path joined from parts, which the scan cannot see). store/tools/: local-ai's vllm.test.mjs hands its validator
+    # '../../file' as test data, which the scan reads as a path built into that folder; a change to a file there the
+    # job does not own is a shared input still (ALSO).
+    "store": ("store/agents/", "store/tools/", "store/viewers/"),
     # THIRD_PARTY_NOTICES.md: tui/src/main.rs includes ../THIRD_PARTY_NOTICES.md, which names a root file too.
     "tui": ("THIRD_PARTY_NOTICES.md", "cli/package.json", "os/network.py", "os/onboarding.py", "os/root/usr/bin/hn",
             "tests/fixtures/shared-pane-layouts.json"),
@@ -337,7 +365,7 @@ PR_READS = {
                 "desktop/lib/measurement/", "mobile/lib/measurement/",
                 "provider/reference-provider/", "tests/fixtures/"),
     # cli/scripts/connector-assets.mjs, which a spec imports, names the connector icons' desktop and phone copies it writes.
-    # store/: the dsh specs read its agents, viewers and starter (the scan skips it: a path outside every component).
+    # store/: the dsh specs read its agents, viewers and starter (the scan skips them: paths outside every component).
     # focus_faces.c: roundGlyphs.spec.ts holds the daemon's copy of the dial's glyph table to the firmware's.
     # version.txt: the e2e fake dial greets with the round firmware's version (fakeDial.spec.ts).
     "cli": ("backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts",
@@ -407,6 +435,7 @@ PR_READS = {
     "os": ("cli/package.json", "cli/src/cable/serial.ts", "devices/harness-device/firmware/README.md", "docs/naming-system.md",
            "docs/terminology.md", "term/", "tui/"),
     "pty": ("cli/", "desktop/windows/runner/resources/app_icon.ico"),
+    "store": DEPENDS["store"],
     # THIRD_PARTY_NOTICES.md: tui/src/main.rs includes ../THIRD_PARTY_NOTICES.md, which names a root file too.
     "tui": ("THIRD_PARTY_NOTICES.md", "cli/package.json", "os/network.py", "os/onboarding.py", "os/root/usr/bin/hn",
             "tests/fixtures/shared-pane-layouts.json"),
@@ -507,6 +536,8 @@ def windows_only(path):
         or PurePosixPath(path).name == "install.ps1"
         or path in {".github/workflows/windows.yml", "cli/vitest.e2e.windows.config.ts",
                     "cli/scripts/windows-install-manifest.mjs"}
+        # The Store's pipe script: check-install.ps1 runs it against the installed daemon.
+        or path.startswith("store/tools/windows-ci/")
         # A file's own name, not a folder's (cli/src/lib/windows/ runs x64 alone), in the code its specs and the dial's
         # end to end run: arm64 adds about 27 runner-minutes a run.
         or (path.startswith(("cli/src/", "cli/e2e/")) and re.search(r"[wW]indows", PurePosixPath(path).name) is not None))
@@ -515,13 +546,14 @@ def windows_only(path):
 def windows_e2e(path):
     """What windows-e2e tests: Windows-only code, cross-platform code with win32 branches that broke only on Windows
     (#4513: the devices, the cable, the engines' hook scripts, the dial plugins), the TUI and the flasher windows.yml
-    runs, its specs with the modules they test, and the dial desk bundle dialWindowsTools.e2e.ts builds and runs, with
-    the harness and the testing helpers it and windows.yml's e2e config run."""
+    runs, its specs with the modules they test, the Store's pipe test with what it imports, and the dial desk bundle
+    dialWindowsTools.e2e.ts builds and runs, with the harness and the testing helpers it and windows.yml's e2e config
+    run."""
     return windows_only(path) or not windows_docs(path) and (
         path.startswith(("cli/src/lib/windows/", "cli/src/devices/", "cli/src/cable/", "cli/hook/", "tui/",
                          "website/src/app/flash-circle.ps1/", "cli/scripts/windows-dial-e2e/"))
         or re.match(r"plugins/harness-device[^/]*/", path) is not None
-        or path in WINDOWS_SPEC_MODULES or path in WINDOWS_E2E_HARNESS_PATHS
+        or path in WINDOWS_SPEC_MODULES or path in WINDOWS_E2E_HARNESS_PATHS or path in WINDOWS_STORE_PIPE_PATHS
         or any(covers(spec, path) for spec in WINDOWS_SPECS))
 
 

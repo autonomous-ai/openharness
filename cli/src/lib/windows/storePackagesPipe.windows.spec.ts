@@ -1,8 +1,9 @@
 /**
  * The Store packages' Windows transport, on a real named pipe (task #2161, audit W1): no package sends anything to the daemon's
  * TCP port, and each reaches the daemon over its pipe with the pipe auth. The cases are node:test ones in
- * store/tools/windows-pipe.test.mjs, since a Store package stands alone and has no vitest. This runs them on the Windows jobs
- * (windows.yml runs every spec in src/lib/windows); elsewhere they run against a socket of the pipe's name, in the store checks.
+ * store/tools/windows-pipe.test.mjs, since a Store package stands alone and has no vitest. This spec is their only CI runner:
+ * the store checks never run them, so on a pull request windows-e2e runs this spec on Windows (windows.yml runs every spec in
+ * src/lib/windows), and scripts/ci-plan.py selects that job through WINDOWS_STORE_PIPE_PATHS for the test and the code it imports.
  */
 import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'

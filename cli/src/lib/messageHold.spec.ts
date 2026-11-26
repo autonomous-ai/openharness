@@ -36,7 +36,8 @@ const CODEX_MODEL_MENU = 'Select Model and Effort\n› 1. gpt-5.6-sol (current)\
 describe('what a message is not typed into', () => {
   it('is a permission prompt, in Claude Code, Codex and every engine whose prompt the daemon reads', () => {
     for (const [engine, name] of [['claude', 'permission-claude.txt'], ['claude', 'permission-claude-edit.txt'], ['claude', 'permission-claude-plan.txt'],
-      ['codex', 'permission-codex.txt'], ['commandcode', 'permission-commandcode.txt'], ['cursor', 'permission-cursor.txt']] as const) {
+      ['codex', 'permission-codex.txt'], ['commandcode', 'permission-commandcode.txt'], ['cursor', 'permission-cursor.txt'],
+      ['hermes', 'permission-hermes.txt'], ['copilot', 'permission-copilot.txt']] as const) {
       expect(messageHold(engine, fixture(name)), name).toBe('permission_open')
     }
   })

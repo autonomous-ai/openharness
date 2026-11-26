@@ -303,12 +303,6 @@ function readStdin() {
   })
 }
 
-function boundedPrompt(prompt) {
-  // An oversized/escape-heavy prompt must still announce its submission so the daemon
-  // clears earlier scope. Keep the serialized field within the hook receiver's bounds.
-  return Buffer.byteLength(JSON.stringify(prompt)) <= 128 * 1024 ? prompt : ''
-}
-
 /**
  * POST one hook event to the daemon. Resolves true when it answered 2xx, false when it could not be
  * reached, 'refused' when it answered anything else, 'held' for live admission backpressure, and 'late'
@@ -2630,7 +2624,6 @@ async function main() {
       engine,
       hookEvent: grokEventName,
       sessionId,
-      ...(grokEventName === 'UserPromptSubmit' && typeof input.prompt === 'string' ? { prompt: boundedPrompt(input.prompt) } : {}),
       transcriptPath,
       cwd,
       ...await terminalHookFields(tmuxPane),
@@ -2796,8 +2789,6 @@ async function main() {
     engine,
     hookEvent: event,
     sessionId: input.session_id || input.conversation_id,
-    ...(event === 'UserPromptSubmit' && (engine === 'claude' || engine === 'codex') && typeof input.prompt === 'string'
-      ? { prompt: boundedPrompt(input.prompt) } : {}),
     transcriptPath,
     // Devin's payload carries no cwd; the hook process inherits the session's working directory.
     cwd: Array.isArray(input.workspace_roots) ? input.workspace_roots[0] : (input.cwd || (engine === 'devin' ? process.cwd() : undefined)),

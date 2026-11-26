@@ -35,6 +35,7 @@ import { COPILOT_CWD } from '../engines/copilot/contract.js'
 import { recordCwd } from '../engines/kit/sessionLocation.js'
 import { sqliteReadAll, type SqliteParam } from './sqliteRead.js'
 import { sqlitePreflightMessage } from './sqliteAvailability.js'
+import { startMarkerMs } from './processProof.js'
 import { nativeSessionRoots } from './engineHomes.js'
 import { nativeOpenFileSession, type NativeConversationOptions } from './nativeConversation.js'
 import type { ProcessIdentity } from './terminalTypes.js'
@@ -759,22 +760,31 @@ export async function processSessionEvidence(engine: AgentEngine, pid: number, c
 
 type ProcessRecordRule = Extract<SessionStoreContract['live'], { record: unknown }>['record']
 
+/**
+ * When a process record says its process started, in ms since the epoch, each way it may be read; null when it says
+ * nothing that reads. Each is the exact second or millisecond, not the metadata file's modification time or a
+ * recycled PID. A FILETIME is the start whenever the record holds one as text: 64 bits, so at most 20 digits.
+ * Otherwise `start` is UTC in current Claude builds and the host's local ps format in older ones: both are tried.
+ */
+function recordStarts(rule: ProcessRecordRule, record: Record<string, unknown>): (number | null)[] | null {
+  const filetime = rule.startFiletime === undefined ? undefined : record[rule.startFiletime]
+  if (typeof filetime === 'string') return /^\d{1,20}$/.test(filetime) ? [startMarkerMs(`w:${filetime}`)] : null
+  const start = record[rule.start]
+  return typeof start === 'string' && Number.isFinite(Date.parse(start)) ? [Date.parse(start), Date.parse(`${start} UTC`)] : null
+}
+
 async function processRecord(engine: AgentEngine, rule: ProcessRecordRule, text: string, pid: number, cwd: string, startedAtMs: number): Promise<{ sessionId: string; transcriptPath: string | null } | null> {
   try {
     const record = JSON.parse(text)
-    if (!record || typeof record !== 'object' || Array.isArray(record)
-      || !Number.isSafeInteger(record[rule.pid]) || record[rule.pid] <= 0 || typeof record[rule.start] !== 'string'
-      || !Number.isFinite(Date.parse(record[rule.start]))
+    const starts = record && typeof record === 'object' && !Array.isArray(record) ? recordStarts(rule, record) : null
+    if (!starts || !Number.isSafeInteger(record[rule.pid]) || record[rule.pid] <= 0
       || typeof record[rule.cwd] !== 'string' || !isAbsolute(record[rule.cwd])
       || typeof record[rule.id] !== 'string' || !record[rule.id]) {
       throw new IdentityReadUnavailable('the process record is incomplete or invalid')
     }
-    const start = record[rule.start]
     const folder = record[rule.cwd]
     const sessionId = record[rule.id]
-    // Claude's procStart is UTC in current builds, while older builds used the host's local ps format.
-    // Both represent the exact second, not the metadata file's modification time or a recycled PID.
-    if (record[rule.pid] !== pid || ![Date.parse(start), Date.parse(`${start} UTC`)].includes(startedAtMs)) return null
+    if (record[rule.pid] !== pid || !starts.includes(startedAtMs)) return null
     if (!await sameDir(folder, cwd)) throw new IdentityReadUnavailable('the current process record names a different working directory')
     // Claude Code writes the transcript with the first prompt, so a harness opened and never used has none. Held, its
     // Change agent waited forever (2026-10-21). A lookup that cannot finish still throws; only a missing file is null.

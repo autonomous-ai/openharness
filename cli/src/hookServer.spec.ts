@@ -66,11 +66,7 @@ describe('process-owned hook server', () => {
     const agent = { engine: 'codex', agentId: 'parent', runtimes: [{ backend: 'tmux', paneId: '%41' }], primaryRuntimeKey: 'tmux\u0000%41', processIdentity: { pid: 4242, startMarker: 'fixture', executable: '<codex>' } } as RegisteredSession
     const byAgent = vi.spyOn(registry, 'byAgent').mockReturnValue(agent)
     try {
-      const onPromptSubmitted = vi.fn()
-      const { handlers, base, headers } = await start({
-        resolveHookAgent: async () => agent,
-        onPromptSubmitted,
-      })
+      const { handlers, base, headers } = await start({ resolveHookAgent: async () => agent })
       for (const reason of ['codex_subagent', 'engine_hook_failed']) {
         const response = await fetch(`${base}/api/hook/session-start`, {
           method: 'POST', headers,
@@ -79,7 +75,6 @@ describe('process-owned hook server', () => {
         expect(await response.json()).toEqual(reason === 'engine_hook_failed' ? { pending: true } : { ignored: true, reason })
       }
       expect(handlers.onRegistered).not.toHaveBeenCalled()
-      expect(onPromptSubmitted).not.toHaveBeenCalled()
     } finally { admit.mockRestore(); byAgent.mockRestore() }
   })
 

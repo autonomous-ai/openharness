@@ -186,6 +186,28 @@ describe('isApprovalDialog', () => {
     expect(isApprovalDialog(view({ dialog: '$ ls', rows: [{ number: '1', label: 'Red', checked: false }, { number: '2', label: 'No', checked: false }] }))).toBe(false)
     expect(isApprovalDialog(view({ dialog: '$ ls', rows: [{ number: '1', label: 'Yes', checked: false }, { number: '2', label: 'Maybe', checked: false }] }))).toBe(false)
   })
+
+  it('is Hermes\'s and Copilot\'s approval, which boxes its command with no `$ ` line', () => {
+    expect(isApprovalDialog(asQuestion(parseEngineQuestionPane('hermes', permission('hermes'))))).toBe(true)
+    expect(isApprovalDialog(asQuestion(parseEngineQuestionPane('copilot', permission('copilot'))))).toBe(true)
+  })
+
+  it('is not Hermes\'s or Copilot\'s question, nor a yes/no dialog that only asks to allow', () => {
+    expect(isApprovalDialog(asQuestion(parseEngineQuestionPane('hermes', fixture('hermes'))))).toBe(false)
+    expect(isApprovalDialog(asQuestion(parseEngineQuestionPane('hermes', fixture('hermes-lock'))))).toBe(false)
+    expect(isApprovalDialog(asQuestion(parseEngineQuestionPane('copilot', fixture('copilot'))))).toBe(false)
+    expect(isApprovalDialog(view({ dialog: 'Do you want to allow this?' }))).toBe(false)
+  })
+
+  it('is not Hermes\'s approval whose boxed command pushes its title out of the dialog: read as a question, as today', () => {
+    // The dialog reaches 12 lines above the rows (dialogAbove); a longer command leaves `Dangerous Command` above it.
+    const lines = permission('hermes').split('\n')
+    const at = lines.findIndex((line) => line.includes('curl -s    '))
+    lines.splice(at + 1, 0, ...Array<string>(12).fill(lines[at].replace('curl -s', '  -v   ')))
+    const long = asQuestion(parseEngineQuestionPane('hermes', lines.join('\n')))
+    expect(long.dialog).not.toContain('Dangerous Command')
+    expect(isApprovalDialog(long)).toBe(false)
+  })
 })
 
 describe('an answer whose key names no question (regression: a short or empty key matched every question)', () => {
@@ -712,6 +734,18 @@ describe('QuestionWatcher — what it announces', () => {
     expect(seen).toHaveLength(1)
     await tick()
     expect(seen[1].detail).toEqual({ permission: false, dialog: 'Which color should I report?' })
+  })
+
+  it('announces Copilot\'s approval as a permission ask', async () => {
+    const seen: Array<{ permission: boolean; dialog: string } | undefined> = []
+    const copilot = new QuestionWatcher({
+      getSession: () => ({ sessionId: 's1', engine: 'copilot' } as unknown as RegisteredSession),
+      capture: async () => permission('copilot'), hasDevice: () => true,
+      onQuestion: (_s, _id, _q, detail) => { seen.push(detail) },
+    })
+    await (copilot as unknown as { tick: (s: string) => Promise<void> }).tick('s1')
+    expect(seen).toHaveLength(1)
+    expect(seen[0]?.permission).toBe(true)
   })
 })
 

@@ -8,7 +8,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { admitHook, hooksFor } from './engines/hooks.js'
+import { admitHook, hooksFor, startsNewConversation } from './engines/hooks.js'
 import { HERMES_HOMES, HERMES_SESSION_PANE, HERMES_SOURCE } from './engines/hermes/contract.js'
 import { readStorePool } from './engines/kit/storePool.js'
 import { homeIsAbsolute } from './engines/kit/homeAdoption.js'
@@ -19,6 +19,7 @@ import { createSessionHookWait, sessionKey, type AdmissionTicket, type SessionHo
 import { paneReadIdentity } from './core/transcripts/readIdentity.js'
 import { processIdentityKey } from './lib/terminalRuntime.js'
 import { isRecentlyDeleted } from './lib/deletedSessions.js'
+import { startMarkerMs } from './lib/processProof.js'
 import { registry, type RegisterInput, type RegisteredSession } from './lib/registry.js'
 import { codeOrLength, errorKind, hashOf, sid } from './lib/log.js'
 import { VERSION } from './version.js'
@@ -86,6 +87,9 @@ export interface HookServerHandlers {
       /** An agent this bind left with no session and no process — see registry.register. */
       orphaned?: { agentId: string; sessionId: string } | null
       hookEvent?: string
+      /** When the binding this rebind replaced began, epoch ms: only on the engine's own new-conversation hook
+       *  (engines/hooks.ts `startsNewConversation`), and only when that start reads. */
+      newConversationSince?: number
     },
   ) => void | Promise<void>
 
@@ -117,7 +121,6 @@ export interface HookServerHandlers {
   onAdmissionStop?: (entry: RegisteredSession, unmatched: boolean) => boolean
   /** Captured before a same-conversation registration waits; Cancel or forget supersedes that Stop. */
   captureAdmissionStop?: (entry: RegisteredSession) => () => boolean
-  onPromptSubmitted?: (agentId: string, prompt: string) => void
   /** A session's UserPromptSubmit hook, and when its engine ran it (`X-Harness-Hook-Fired-At`): what a Stop
    *  that arrives late is told apart from the turn the prompt opened by (core/turns/turnHooks.ts). */
   onPromptHook?: (sessionId: string, firedAt: number) => void
@@ -219,6 +222,7 @@ export function hookFacts(req: Pick<http.IncomingMessage, 'headers'>, platform?:
 function validHookBody(value: unknown): value is BoundHookBody {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const body = value as Record<string, unknown>
+  // No hook of this build sends prompt; an older install's hook may during an update and is not refused for it. Nothing reads it.
   if (body.prompt !== undefined && (typeof body.prompt !== 'string' || Buffer.byteLength(body.prompt) > 128 * 1024)) return false
   if (Object.keys(body).some((field) => !HOOK_BODY_FIELDS.has(field))) return false
   if (body.engine !== undefined && (typeof body.engine !== 'string' || !ENGINES.includes(body.engine as AgentEngine))) return false
@@ -823,6 +827,8 @@ export function startHookServer(
         let committing = false, settled = false, stopRetained = false, stopUnmatched = false, stopInvocationClaimed = false
         const stopCurrent = processAgent.sessionId === body.sessionId && stopScope === scope ? stopWitness : undefined
         let followupFingerprint: string | undefined, committedIdentity: string | undefined
+        // When the binding this registration replaced began, kept for its announcement.
+        let replacedSince: number | undefined
         // A turn-stop answered pending before this settled, kept only until acceptance claims it or rejection drops it.
         let parkedStop: { stop: BoundHookBody; firedAt: number | undefined } | undefined
         // The agent's hold count when this began waiting on an earlier hook's write.
@@ -929,7 +935,10 @@ export function startHookServer(
           if (handlers.hookAdmissionBlocked?.(processAgent.agentId)) return { kind: 'hold', code: 'STOP_SETTLING', reason: 'Waiting for Stop to settle before admitting the hook.' }
           const prior = live()
           const before = prior && { sessionId: prior.sessionId, transcriptPath: prior.transcriptPath,
-            held: !!(prior.identityHold || prior.interpretationHold) }
+            held: !!(prior.identityHold || prior.interpretationHold),
+            // When the binding a rotation replaces began: its bind, or, for a resumed row no hook has bound yet
+            // (`boundAt: null`), its engine's start.
+            since: prior.boundAt ?? startMarkerMs(prior.processIdentity?.startMarker ?? '') ?? undefined }
           let verifySource: (() => void) | undefined, verifyPane: (() => void) | undefined
           if (waitedHolds !== undefined && waitedHolds !== history.holds) deferred = true
           committing = true
@@ -964,7 +973,10 @@ export function startHookServer(
             stopRetained = handlers.onAdmissionStop?.(committed.entry, stopUnmatched) ?? false
             if (stopUnmatched && !stopRetained) return { kind: 'hold', code: 'UNMATCHED_STOP', reason: 'Waiting for core ownership of the unmatched Stop.' }
           }
-          if (committed) committedIdentity = paneReadIdentity(committed.entry)
+          if (committed) {
+            committedIdentity = paneReadIdentity(committed.entry)
+            replacedSince = committed.rebound === before?.sessionId ? before?.since : undefined
+          }
           return committed ? { kind: 'accept', value: hermesHome } : { kind: 'reject', reason: 'invalid_session_registration' }
         }
         const notify = () => {
@@ -985,11 +997,13 @@ export function startHookServer(
           }
           // Native prompt credit follows the durable bind, never an attempted one.
           if (body.hookEvent === 'UserPromptSubmit') {
-            optional(() => handlers.onPromptSubmitted?.(result.entry.agentId, body.prompt ?? ''))
             if (admissionOrder.firedAt && body.sessionId) optional(() => handlers.onPromptHook?.(body.sessionId!, admissionOrder.firedAt!))
           }
+          // A rebind replays its first turn live only on the engine's own word that the conversation is new: a resume or a
+          // fork also rebinds to a transcript born late, and would send its whole history (lib/firstTurnReplay.ts).
+          const since = replacedSince !== undefined && startsNewConversation(engine, body.hookEvent, body.source) ? replacedSince : undefined
           optional(() => handlers.onRegistered(result.entry, { isNew: result.isNew, evicted: result.evicted, rebound: result.rebound,
-            orphaned: result.orphaned, hookEvent: body.hookEvent }))
+            orphaned: result.orphaned, hookEvent: body.hookEvent, ...(since === undefined ? {} : { newConversationSince: since }) }))
         }
         const enqueue = () => {
           saveReceipt(history.records, deliveryId, { fingerprint, status: 200, reply: { pending: true }, pending: true, bytes: retainedBytes,

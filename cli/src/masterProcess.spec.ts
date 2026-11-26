@@ -1,4 +1,4 @@
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync, writeSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -444,7 +444,6 @@ describe('the master on Windows', () => {
       expect(real.launch).toBe(launchDetached)
       expect(real.exists(process.execPath)).toBe(true)
       expect(real.currentCli(dir)).toBeNull()
-      mkdirSync(env.ADAPTER_DATA_DIR, { recursive: true })
       const opened = real.openLog()
       closeSync(opened)
       expect(existsSync(DAEMON_LOG_FILE)).toBe(true)
@@ -463,6 +462,17 @@ describe('the master on Windows', () => {
         expect(() => console.log('lost')).not.toThrow()
         expect(() => console.error('lost')).not.toThrow()
       } finally { Object.assign(console, saved) }
+    })
+
+    it('opens the daemon log on a first start, before anything has made the data folder', () => {
+      // A fresh install started with `harness start -f`: nothing made the data folder before the master opens its log.
+      rmSync(env.ADAPTER_DATA_DIR, { recursive: true, force: true })
+      try {
+        const opened = processWindowsMasterDeps().openLog()
+        writeSync(opened, 'first line\n')
+        closeSync(opened)
+        expect(readFileSync(DAEMON_LOG_FILE, 'utf8')).toBe('first line\n')
+      } finally { mkdirSync(env.ADAPTER_DATA_DIR, { recursive: true }) }
     })
 
     it('writes an error that ends the master to the log it opened, in the line every process of the daemon writes', () => {

@@ -35,6 +35,12 @@ export function hooksFor(name: string | null | undefined): EngineHooks | undefin
   return name && Object.hasOwn(engineHooks, name) ? engineHooks[name as keyof typeof engineHooks] : undefined
 }
 
+/** Whether a hook is its engine's own word for a conversation that starts with no history (HookContract.newConversation). */
+export function startsNewConversation(engine: string, hookEvent: string | undefined, source: string | null | undefined): boolean {
+  const signal = Object.hasOwn(hookContracts, engine) ? hookContracts[engine as keyof typeof hookContracts].newConversation : undefined
+  return !!signal && signal.event === hookEvent && !!source && signal.sources.includes(source)
+}
+
 /**
  * A broken admission check must never let a delegated session claim its parent's pane. The hook server asks
  * this before it credits a prompt or registers, and `registry.register` asks it again, so the two agree.

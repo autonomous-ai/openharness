@@ -85,11 +85,10 @@ it.each(['linux', 'darwin'])('preserves healthy native hook admission on %s', as
         processIdentity: { pid: 4100 + index, startMarker: 'fixture-start', executable: `<${engine}>` } }))!
       agents.set(engine, entry); labels.set(entry.agentId, engine)
     }
-    const registered: unknown[] = [], prompts: unknown[] = [], promptHooks: unknown[] = [], turns: unknown[] = [], ends: unknown[] = []
+    const registered: unknown[] = [], promptHooks: unknown[] = [], turns: unknown[] = [], ends: unknown[] = []
     const started = await startHookServer(0, {
       resolveHookAgent: async input => registry.byAgent(agents.get(input.engine)?.agentId ?? '') ?? null,
       onRegistered: (entry, meta) => { registered.push({ row: shape(entry), ...meta }) },
-      onPromptSubmitted: (agentId, prompt) => { prompts.push({ agent: labels.get(agentId), prompt }) },
       onPromptHook: (sessionId, firedAt) => { promptHooks.push({ sessionId, firedAt }) },
       onTurnStart: value => { turns.push({ start: value }) },
       onTurnStop: value => { turns.push({ stop: value }) },
@@ -118,7 +117,7 @@ it.each(['linux', 'darwin'])('preserves healthy native hook admission on %s', as
     check('bound-controls', [await send('turn-start', codexBody), await send('tool-start', { ...codexBody, toolUseId: 'tool-1', toolName: 'Read', input: { file: '<file>' } }),
       await send('turn-stop', { ...codexBody, status: 'completed' }), await send('session-end', { ...codexBody, reason: 'exit' })])
     check('unbound-control', await send('turn-stop', { ...codexBody, sessionId: CHILD }))
-    check('callbacks', { registered, prompts, promptHooks, turns, ends })
+    check('callbacks', { registered, promptHooks, turns, ends })
     check('bindings', registry.list().map(shape).sort((a, b) => a!.agent!.localeCompare(b!.agent!)))
   } finally {
     if (server) await new Promise<void>(resolve => server!.close(() => resolve()))

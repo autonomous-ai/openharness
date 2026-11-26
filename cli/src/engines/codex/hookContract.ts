@@ -91,4 +91,9 @@ export const hooks: HookContract = {
   // record names it a child (`source.subagent`). Registered, it would take the parent's pane and transcript,
   // and its prompt would be credited to the parent: refused before either (hookServer.ts, registry.register).
   children: { type: 'session_meta', child: ['payload', 'source', 'subagent'], reason: 'codex_subagent' },
+  // A thread that starts with no history: codex-rs picks the source from it (core/src/session/session.rs: new →
+  // `startup`, cleared → `clear`, resumed → `resume`, forked → `fork`), so these are `/new`, `/clear` and a resumed
+  // agent that starts another thread. Codex sends it inside the new thread's first turn (hook_runtime.rs), which is
+  // why that turn is in the file when the rebind lands.
+  newConversation: { event: 'SessionStart', sources: ['startup', 'clear'] },
 }
