@@ -58,6 +58,9 @@ const SHELL_MS = 600_000
  *  pass lists no scanned home until the next scan), so it is not what bounds them. */
 const MAX_SAID = 2 * MAX_HOMES
 const COUNTED = { installed: 'set up', updated: 'updated', absent: 'left removed' } as const
+/** What a home's step leaves its pass: the next home; the step stopped, as there is no `codex`; or the pass ended, as
+ *  Codex is no longer wanted or that is not known, so nothing more is installed or trusted. */
+type Next = 'go' | 'stop' | 'end'
 
 export function createDialCodexPluginSetup(deps: DialCodexPluginSetupDeps): DialCodexPluginSetup {
   let running = false
@@ -154,26 +157,26 @@ export function createDialCodexPluginSetup(deps: DialCodexPluginSetupDeps): Dial
     served = [...real]
   }
 
-  /** [work] with Codex pointed at [home]; false when there is no `codex`, which ends the step with nothing counted, so it
-   *  is asked again at the next pass. A throw fails that home alone. */
-  async function withCodex(home: string, lookup: (home: string) => Promise<ClaudeRun | null>, work: (run: ClaudeRun) => Promise<void>): Promise<boolean> {
+  /** [work] with Codex pointed at [home]; no `codex` stops the step with nothing counted, so it is asked again at the next
+   *  pass. A throw fails that home alone. */
+  async function withCodex(home: string, lookup: (home: string) => Promise<ClaudeRun | null>, work: (run: ClaudeRun) => Promise<Next>): Promise<Next> {
     try {
       const run = await lookup(home)
-      if (!run) return false
-      await work(run)
+      return run ? await work(run) : 'stop'
     } catch {
       failed(home, 'error')
+      return 'go'
     }
-    return true
   }
 
-  async function undo(home: string, run: ClaudeRun): Promise<void> {
+  async function undo(home: string, run: ClaudeRun): Promise<Next> {
     const removed = await codexRemove({ run, home, platform: deps.platform })
     if (removed.ok) owed.delete(home)
     else {
       owed.add(home)
       stepFailed(home, removed)
     }
+    return 'go'
   }
 
   async function undoStep(lookup: (home: string) => Promise<ClaudeRun | null>): Promise<void> {
@@ -183,30 +186,42 @@ export function createDialCodexPluginSetup(deps: DialCodexPluginSetupDeps): Dial
     // Wanted again: such a home is set up as any other, and nothing is owed.
     if (wanted === true) owed.clear()
     if (wanted !== false) return
-    for (const home of due) if (!await withCodex(home, lookup, (run) => undo(home, run))) return
+    for (const home of due) if (await withCodex(home, lookup, (run) => undo(home, run)) !== 'go') return
   }
 
-  async function setUp(home: string, run: ClaudeRun, files: ClaudePluginFiles): Promise<void> {
+  async function setUp(home: string, run: ClaudeRun, files: ClaudePluginFiles): Promise<Next> {
     const install = { run, home, platform: deps.platform, folder: deps.plugin.folder, files }
     const done = Object.hasOwn(deps.recorded(), home) ? await codexUpdate(install) : await codexSetUp(install)
-    if (!done.ok) return stepFailed(home, done)
-    if (done.outcome === 'own') return skipOwn(home)
+    if (!done.ok) {
+      stepFailed(home, done)
+      return 'go'
+    }
+    if (done.outcome === 'own') {
+      skipOwn(home)
+      return 'go'
+    }
     // A `disable` that landed while the install or the update ran found nothing to take out here yet: it is taken out
     // now, and nothing recorded. One not known is neither: a moment's read error never removes a plugin the person keeps.
+    // Either ends the pass, as the next home would be set up for a dial no longer known to want it.
     const still = deps.wanted()
-    if (still === false && done.outcome !== 'absent') return undo(home, run)
-    if (still !== true) return
-    if (!deps.record(home, deps.version)) return failed(home, 'record')
+    if (still === false && done.outcome !== 'absent') await undo(home, run)
+    if (still !== true) return 'end'
+    if (!deps.record(home, deps.version)) {
+      failed(home, 'record')
+      return 'go'
+    }
     deps.count(COUNTED[done.outcome])
     if (done.outcome !== 'absent') trusted(home, done.trusted)
     stamps.set(home, stampOf(home))
+    return 'go'
   }
 
-  async function setUpStep(lookup: (home: string) => Promise<ClaudeRun | null>): Promise<void> {
+  /** false when the pass ended there, and nothing is re-checked. */
+  async function setUpStep(lookup: (home: string) => Promise<ClaudeRun | null>): Promise<boolean> {
     // In memory first: wanted() reads dial-skill.json, which a scan with every home current never reads.
     const recorded = deps.recorded()
     const due = served.filter((home) => recorded[home] !== deps.version && !waiting(home))
-    if (!due.length || deps.wanted() !== true) return
+    if (!due.length || deps.wanted() !== true) return true
     // The carried copy's fingerprint was worked out from it, so this build carries it.
     const files = deps.plugin.files()!
     for (const home of due) {
@@ -221,8 +236,10 @@ export function createDialCodexPluginSetup(deps: DialCodexPluginSetupDeps): Dial
         wait(home)
         continue
       }
-      if (!await withCodex(home, lookup, (run) => setUp(home, run, files))) return
+      const next = await withCodex(home, lookup, (run) => setUp(home, run, files))
+      if (next !== 'go') return next === 'stop'
     }
+    return true
   }
 
   /** Each home set up at this version and out of its hour, re-checked by two stats, and trusted again only when one
@@ -274,8 +291,7 @@ export function createDialCodexPluginSetup(deps: DialCodexPluginSetupDeps): Dial
         }
         // A run from the sources carries no plugin: nothing is set up, trusted or counted.
         if (carried === null) return
-        await setUpStep(lookup)
-        recheck(carried)
+        if (await setUpStep(lookup)) recheck(carried)
       } catch {
         deps.count('failed', 'error')
       } finally {
