@@ -417,6 +417,14 @@ class SelectionTests(unittest.TestCase):
         self.assertIn("plugins/harness-device-vscode/src/", named)
         self.assertEqual(set(planner.WINDOWS_SPECS), named)
 
+    def test_the_hook_wait_specs_run_on_windows(self):
+        # #4622's hook-wait specs run on Windows CI, so a change to them or to the modules they test runs windows-e2e.
+        for path in ["cli/src/hookServer.wait.spec.ts", "cli/src/core/engines/sessionHookWait.spec.ts",
+                     "cli/src/hookServer.ts", "cli/src/core/engines/sessionHookWait.ts"]:
+            with self.subTest(path=path):
+                self.assertIn("windows-e2e", planner.select([path])[0])
+                self.assertTrue(planner.windows_e2e(path))
+
     def test_every_spec_windows_yml_runs_selects_windows_end_to_end(self):
         # Vitest takes each name as a filter (filterFiles): a case-insensitive substring of a test file's path from cli/,
         # so 'src/lib/windows' also ran src/lib/windowSurfaces.spec.ts, which windows-e2e does not run on. A folder ends
