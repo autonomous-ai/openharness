@@ -1006,6 +1006,18 @@ describe('the dial skill\'s use', () => {
       expect(count(PRESENT_ANSWERED)).toBe(1)
     })
 
+    it('a quiet notice asked at its turn\'s end is counted as roused', () => {
+      const { usage, count } = rig()
+      usage.noticeShown('a', true)
+      usage.noticeRoused()
+      expect(count('dial_notice_present_roused')).toBe(1)
+      expect(count(PRESENT)).toBe(1)
+      vi.advanceTimersByTime(599_999)
+      usage.turnStarted('a', true)
+      expect(count(ANSWERED)).toBe(1)
+      expect(count(PRESENT_ANSWERED)).toBe(1)
+    })
+
     it('a rung notice counts neither', () => {
       const { usage, count } = rig()
       usage.noticeShown('b', false)
