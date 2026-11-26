@@ -362,6 +362,52 @@ describe('stage', () => {
     expect(readRings(st)).toEqual([{ argv: ['status'], line: null }])
   })
 
+  it("writes a variant's hooks as the staged repo's .claude/settings.json, for claude only", () => {
+    const hooks = { SessionStart: [{ hooks: [{ type: 'command', command: 'harness device claude start' }] }] }
+    const st = staging('claude', { skill: true, hooks })
+
+    expect(JSON.parse(readFileSync(join(st.repo, '.claude', 'settings.json'), 'utf8'))).toEqual({ hooks })
+    expect(git(st, 'status', '--porcelain')).toBe('')
+    expect(existsSync(join(staging('oracle', { skill: true, hooks }).repo, '.claude'))).toBe(false)
+  })
+
+  it("answers a command from the variant's answers, recorded with no line", () => {
+    const answers = [{ argv: ['device', 'claude', 'start'], stdout: 'started\n', stderr: 'late\n', code: 3 }, { argv: ['device', 'claude', 'stop'] }]
+    const st = staging('claude', { skill: true, answers })
+
+    const start = sh(st, 'harness device claude start')
+    const stop = sh(st, 'harness device claude stop')
+
+    expect([start.status, start.stdout, start.stderr]).toEqual([3, 'started\n', 'late\n'])
+    expect([stop.status, stop.stdout, stop.stderr]).toEqual([0, '', ''])
+    expect(readRings(st)).toEqual([
+      { argv: ['device', 'claude', 'start'], line: null },
+      { argv: ['device', 'claude', 'stop'], line: null },
+    ])
+  })
+
+  it('answers device notify as today, and refuses an answer for it', () => {
+    const st = staging('claude', { skill: true, answers: [{ argv: ['device', 'claude', 'start'] }] })
+
+    expect(sh(st, 'harness device notify "VPN please"').stdout).toBe('shown\n')
+    expect(readRings(st)).toEqual([{ argv: ['device', 'notify', 'VPN please'], line: 'VPN please' }])
+    expect(() => stage(fixture(), 'claude', { skill: true, base, answers: [{ argv: ['device', 'notify', 'VPN please'], stdout: 'shown\n' }] }))
+      .toThrow(/device notify/)
+    // The refused stage leaves no run root beside the first.
+    expect(readdirSync(join(base, 'dial-skill-eval'))).toEqual([basename(st.root)])
+  })
+
+  it("refuses any other command as today, when the variant's answers hold none for it", () => {
+    const st = staging('claude', { skill: true, answers: [{ argv: ['device', 'claude', 'start'], stdout: 'started\n' }] })
+
+    for (const command of ['harness status', 'harness device claude', 'harness device claude start --json']) {
+      const run = sh(st, command)
+      expect(run.status, command).toBe(2)
+      expect(run.stdout, command).toBe('')
+      expect(run.stderr, command).toBe('harness: not available here\n')
+    }
+  })
+
   it('reads no rings when the agent never called harness', () => {
     expect(readRings(staging('claude', { skill: true }))).toEqual([])
   })
