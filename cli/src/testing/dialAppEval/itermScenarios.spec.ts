@@ -208,7 +208,7 @@ describe("iTerm2's scenarios", () => {
     expect(i23.steps.filter((step) => step.kind === 'pick' || step.kind === 'swipe'))
       .toEqual([{ kind: 'pick', page: 'herdr' }, { label: 'rest', kind: 'swipe', session: 'd' }, { label: 'restC', kind: 'swipe', session: 'c' }])
     expect(i23.checks.filter((c) => c.kind !== 'cost')).toEqual([
-      { id: 'open', kind: 'open', dim: 'D3', session: 'd', link: false, after: 'rest', at: 'restC' },
+      { id: 'open', kind: 'open', dim: 'D3', session: 'd', link: false, brings: true, after: 'rest', at: 'restC' },
       { id: 'ringKeptHerdr', kind: 'ring', dim: 'D7', page: 'herdr', expect: ['c', 'd'], apart: ['a'], after: 'front', at: 'restC' },
       { id: 'openC', kind: 'open', dim: 'D3', session: 'c', link: false, after: 'restC' },
     ])

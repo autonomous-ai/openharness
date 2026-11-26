@@ -1633,6 +1633,21 @@ describe('iTerm2', () => {
     expect(scores(tapped('ih', { commands: [focus(600, 'ih'), focus(650, 'other'), front(700)], streams: [tab] })).pane).toBe(0)
   })
 
+  it('an open check that brings grades a rest as a tap: front, tab and pane', () => {
+    const s = input('swipe', 'ih')
+    const brought = { commands: [focus(600, 'ih'), front(650)], streams: [select(700, 'w1.3.0')] }
+    const rest = run(open('ih', { brings: true }), s, listed(s, [500], brought))
+    expect(scores(rest)).toEqual({ tab: 1, pane: 1, front: 1, latency: 1 })
+    expect(ms(rest, 'latency')).toBe(200)
+    // A rest that brings nothing fails it, as a tap's would.
+    expect(scores(run(open('ih', { brings: true }), s, listed(s, [500], { commands: [focus(600, 'ih')], streams: [select(700, 'w1.3.0', false)] }))))
+      .toEqual({ tab: 0, pane: 1, front: 0, latency: 0 })
+    // Without it, a rest that raises still fails noRaise.
+    expect(scores(run(open('ih'), s, listed(s, [500], brought)))).toEqual({ tab: 0, pane: 1, noRaise: 0 })
+    expect(scores(run(open('ih'), s, listed(s, [500], { ...brought, streams: [select(700, 'w1.3.0', false)] }))))
+      .toEqual({ tab: 1, pane: 1, noRaise: 0 })
+  })
+
   it("with check.tab the select must name that tab, not the session's own", () => {
     const moved = open('im', { tab: 'w1.4.0' })
     const commands = [tmuxPane(600, 'im'), front(700)]
