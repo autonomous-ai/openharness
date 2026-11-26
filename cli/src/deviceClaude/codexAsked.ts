@@ -22,6 +22,15 @@ const APP_TOOL = 'mcp__codex_apps__'
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value)
 const nonEmpty = (value: unknown): value is string => typeof value === 'string' && value !== ''
+const someOf = (value: unknown, each: (entry: unknown) => boolean): boolean =>
+  Array.isArray(value) && value.length > 0 && value.every(each)
+const isOption = (value: unknown): boolean =>
+  isRecord(value) && typeof value.label === 'string' && typeof value.description === 'string'
+const isQuestion = (value: unknown): boolean => isRecord(value) && typeof value.id === 'string' &&
+  typeof value.header === 'string' && typeof value.question === 'string' && someOf(value.options, isOption)
+/** Whether [input] asks something in a form Codex shows: Codex refuses, with no form, a call whose questions do not
+ *  parse or lack options, and an empty list asks nothing. */
+const showsForm = (input: unknown): boolean => isRecord(input) && someOf(input.questions, isQuestion)
 
 /** The ask's one line: what the tool acts on, or its name when its input does not say. */
 export function codexAskedSummary(tool: string, input: unknown): string {
@@ -44,7 +53,7 @@ export function codexAskedBody(input: Record<string, unknown>, codexHome: string
   if (event === 'PermissionRequest') {
     if (tool.startsWith(APP_TOOL) || readTurnSetting(transcript, turnId, codexHome)?.reviewer !== 'user') return null
   } else if (event === 'PreToolUse' && tool === 'request_user_input') {
-    if (readTurnSetting(transcript, turnId, codexHome)?.mode !== 'plan') return null
+    if (!showsForm(input.tool_input) || readTurnSetting(transcript, turnId, codexHome)?.mode !== 'plan') return null
   } else return null
   return {
     engine: 'codex', sessionId, event: 'asked', tool: tool.slice(0, MAX_TOOL_CHARS),
