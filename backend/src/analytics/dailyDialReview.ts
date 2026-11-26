@@ -1,6 +1,6 @@
 import type { PrismaClient } from '@prisma/client'
-import { DIAL_FIRST_AGENT_BUCKETS, DIAL_OPEN_FAILURES, DIAL_OTHER_APPS, DIAL_RECOGNITION, DIAL_USAGE_ENGINES, DIAL_USAGE_HOSTS,
-  DIAL_USAGE_MARGIN_METRICS, DIAL_USAGE_METRICS, DIAL_VALUE_COUNTS, DIAL_VOICE_FAILURES, DIAL_VOICE_OUTCOMES,
+import { DIAL_FIRST_AGENT_BUCKETS, DIAL_NOTICE_ENGINES, DIAL_NOTICE_KINDS, DIAL_NOTICE_RESULTS, DIAL_OPEN_FAILURES, DIAL_OTHER_APPS,
+  DIAL_RECOGNITION, DIAL_SKILL_ENGINES, DIAL_USAGE_ENGINES, DIAL_USAGE_HOSTS, DIAL_USAGE_MARGIN_METRICS, DIAL_USAGE_METRICS, DIAL_VALUE_COUNTS, DIAL_VOICE_FAILURES, DIAL_VOICE_OUTCOMES,
   DIAL_WAIT_BUCKETS, type DialValueCount } from '../types/dialUsage.js'
 import { VOICE_USAGE_METRICS } from '../lib/voiceUsage.js'
 
@@ -105,6 +105,7 @@ export function dailyDialReview(rows: Row[], breakdowns: Row[], now: Date) {
       return [{ name, computers: shown(fewest, c), ...e ? { events: shown(fewest, e) } : {} }]
     }
     const voiced = computerDays('dial_voice_installation_days'), opened = computerDays('dial_open_installation_days')
+    const noticed = computerDays('dial_notice_installation_days')
     const used = 'dial_used_installation_days', usedOutside = 'dial_used_outside_app_installation_days'
     return [
       { name: 'Who uses a dial', rows: [
@@ -122,6 +123,19 @@ export function dailyDialReview(rows: Row[], breakdowns: Row[], now: Date) {
       ] },
       { name: 'Value from the dial (counts, not proof: glancing at the dial is not measured)', rows: DIAL_VALUE_COUNTS.flatMap(v =>
         line(VALUE_LABELS[v], computerDays(`dial_value_${v}_installation_days`), sum(`dial_value_${v}`))) },
+      // docs/plans/2026-11-26-dial-skill-usage-design.md, "The review": each engine's installed row beside its rang row so
+      // the share reads off them; `other` names no skill folder, so it rang without a denominator.
+      { name: 'Dial skill', rows: [
+        ...DIAL_NOTICE_ENGINES.flatMap(e => [
+          ...(DIAL_SKILL_ENGINES as readonly string[]).includes(e)
+            ? line(`${e}: skill installed (computer-days)`, computerDays(`dial_skill_${e}_installation_days`)) : [],
+          ...line(`${e}: agents rang (computer-days; notices)`, computerDays(`dial_notice_${e}_installation_days`), sum(`dial_notice_${e}`)),
+        ]),
+        ...line('Any notice (computer-days)', noticed),
+        ...DIAL_NOTICE_RESULTS.flatMap(r => line(`Reach: ${r.replace('_', ' ')}`, noticed, sum(`dial_notice_${r}`))),
+        ...DIAL_NOTICE_KINDS.flatMap(k => line(`Rule: ${k}`, noticed, sum(`dial_notice_${k}`))),
+        ...line("Answered: the person's prompt within 10 min", noticed, sum('dial_notice_answered_10m')),
+      ] },
       { name: 'First agent on the dial, from a dial connected with an agent running', rows: [
         ...DIAL_FIRST_AGENT_BUCKETS.flatMap(b => line(`First connection ever: ${b}`, distinct(sum(`dial_first_agent_first_${b}_installations`)))),
         ...DIAL_FIRST_AGENT_BUCKETS.flatMap(b => line(`Day's first connection: ${b}`, computerDays(`dial_first_agent_day_${b}_installations`))),
@@ -231,6 +245,8 @@ export function dailyDialReview(rows: Row[], breakdowns: Row[], now: Date) {
       "A clip carries no build, so a testing: build's dial clips count outside the team.",
       'Any cell under 5 computers, and the events beside it, shows "<5"; a 7- or 28-day column of computer-days goes by its largest day.',
       'day is the last complete UTC day; d7 and d28 the 7 and 28 complete days before today.',
+      "Dial skill notices count only what reached the devices: with them not running the command prints no dial and nothing is counted, nor what the listener's own rate refuses.",
+      "Answered is the person's prompt to that agent within 10 min of a shown notice where its source can be told (a prompt hook, or the dial's voice): a prompt typed in the Harness app, a tap, Codex words steered into a running turn, a caller with no session and a card restored after a restart are not counted.",
     ],
     coverage: outsideCells(of('health_cli_collector_days')),
     // Too large or misshapen, once a computer a day: while it is, that computer's dial counts are not sent.
