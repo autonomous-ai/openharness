@@ -3334,9 +3334,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const tmuxShows = async (source: ObservedSource, app: string, focus: number): Promise<HostAgent | undefined> => {
     const pane = await tmuxFocused(source, app)
     if (focus !== editorFocuses) return
+    if (pane === undefined) {
+      log('[device] vscode · skipped · not read')
+      return
+    }
     // As the running poll's last answer for tmux's place: its next read of the same pane changes nothing, so the focus
     // is followed once, and a hand's turn after it stands.
-    if (pane !== undefined && paneFocus?.app === app) paneFocus.last = new Map(paneFocus.last).set(tmux.id, pane)
+    if (paneFocus?.app === app) paneFocus.last = new Map(paneFocus.last).set(tmux.id, pane)
     return pane ? nestedAt(source, tmux.id, pane.id) : undefined
   }
   /** The person's latest focus replaces one waiting for the settle, a terminal no agent runs in too, and the client
