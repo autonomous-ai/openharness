@@ -32,6 +32,8 @@
 //     else the pass starts nothing more and exits 4; a retry of a failed run starts
 //     only while its case would, its failed attempts already added, and every
 //     attempt ends within the agent's share of --timeout-s
+//   - a claude run whose init differs from its probe's is kept as unlisted; the
+//     pass then starts no new case, lets those in flight finish, and exits 5
 //   - a variant's hooks.json and harness-answers.json are staged only when
 //     _state.json harness_paths lists them, so the harness sha covers what
 //     runs outside Claude's sandbox
@@ -727,8 +729,9 @@ async function main() {
   ctx.probes = await probeConditions(ctx, tasks, probesPath); // dial skill eval
   let inFlight = 0, capped = false;
   async function worker() {
-    // dial skill eval: after an account limit (runCase sets ctx.stop) every new case would fail the same way.
-    while (i < tasks.length && !ctx.stop && !capped) {
+    // dial skill eval: after an account limit (runCase sets ctx.stop) every new case would fail the same way; after an
+    // unlisted run, Claude Code changed since its probe and every new case would be unlisted too, until a rerun probes.
+    while (i < tasks.length && !ctx.stop && !ctx.unlisted && !capped) {
       // dial skill eval: a case's reserve is taken before its first await, so cases started together can never carry
       // the total past the cap. Once one does not fit, none starts: a rerun resumes.
       if (!ctx.guard.mayStart(inFlight)) { capped = true; break; }
@@ -822,6 +825,7 @@ async function main() {
         appendFileNoFollow(resultsPath, JSON.stringify(row) + '\n');
         rowWritten = true; // past this point the attempt is scored - a later throw (trace write, ref freeze) must not also append an error row
         ctx.guard.add(row, counted); // dial skill eval
+        if (row.status === 'unlisted') ctx.unlisted = true; // dial skill eval
         if (run.transcript)
           writeFileNoFollow(join(vdir, 'traces', `${safeId}_rep${rep}.json`),
             JSON.stringify(run.transcript, null, 2));
@@ -886,6 +890,7 @@ async function main() {
   clearInterval(tick); progress();
   if (ctx.stop) { eprint(ACCOUNT_LIMIT); process.exit(3); } // dial skill eval
   if (capped) { eprint(spendCapLine(ctx)); process.exit(4); } // dial skill eval
+  if (ctx.unlisted) { eprint('Claude Code changed mid-pass · rerun to probe again'); process.exit(5); } // dial skill eval
   eprint(`[${args.variant}] done - ${ok} ok, ${fail} failed -> ${resultsPath}`);
   process.exit(fail ? 1 : 0);
 }
