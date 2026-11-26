@@ -61,6 +61,14 @@ describe('flow/_state.json', () => {
     expect(counts).toEqual({ train: [8, 5], val: [8, 5], test: [8, 4] })
   })
 
+  // Targets are read on val and test: a trap only in train would never count against a needless ring there.
+  it('holds the fyi trap and an offer trap out of train', () => {
+    const kind = new Map(loadScenarios().map((s) => [caseId(s.id, 'claude'), s.kind]))
+    const heldOut = [...state.val_ids, ...state.test_ids].map((id) => kind.get(id))
+    expect(heldOut).toContain('fyi-trap')
+    expect(heldOut).toContain('offer-trap')
+  })
+
   it('headlines score and declares no binary metric', () => {
     expect(state.metrics[0].id).toBe('score')
     expect(state.metrics.filter((m) => m.kind === 'binary')).toEqual([])
