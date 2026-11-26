@@ -16,7 +16,8 @@ import { readTurnSetting } from './codexTurn.js'
 
 /** The first file a patch adds, updates or deletes. */
 const PATCH_FILE = /^[ \t]*\*\*\* (?:Add|Update|Delete) File: (.*)$/m
-/** Codex's own app tools: their reviewer comes from config.toml's [apps], over the turn's, so the rollout cannot say. */
+/** Codex's own app tools: their reviewer comes from config.toml's [apps], over the turn's, so the rollout cannot say
+ *  who reviews them. */
 const APP_TOOL = 'mcp__codex_apps__'
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>

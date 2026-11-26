@@ -1,7 +1,8 @@
 # Harness Device plugin for Claude Code and Codex
 
-Shows Claude Code's waiting prompts on the Harness round dial (a permission ask, a question form and a plan approval),
-and takes a prompt said at the dial, with Claude Code running in Orca, Ghostty or any terminal on this computer.
+Shows Claude Code's and Codex's waiting prompts on the Harness round dial (a permission ask, a question form and, in
+Claude Code, a plan approval), with the agent running in Orca, Ghostty or any terminal on this computer. In Claude Code
+it also takes a prompt said at the dial.
 
 ## What it does
 
@@ -50,9 +51,22 @@ The dial's line: for `Bash`, the command's first line; for `apply_patch`, the fi
 for `request_user_input`, its first question; for any other tool, the tool's name. In a Harness pane, Harness hears the
 wait itself, and this one is dropped.
 
-Missed on purpose: a command the automatic review hands to the person, and a question in Default mode with Codex's
-`default_mode_request_user_input` on. Both ring nothing, as before; a ring at every command the review approves would be
-worse.
+Missed on purpose:
+
+- A command the automatic review hands to the person, and a question in Default mode with Codex's
+  `default_mode_request_user_input` on: both ring nothing, as before; a ring at every command the review approves would
+  be worse.
+- A hook input over 256 KiB, such as a large `apply_patch`: the command reads no further and tells nothing.
+- Codex's own app tools (`mcp__codex_apps__…`): Codex takes their reviewer from `[apps]` in `config.toml`, over the
+  turn's, so the rollout cannot say who reviews them, and they ring nothing.
+- An organization's managed requirements for automatic review (`requirements.toml`): the command does not read them and
+  goes by the turn's own setting.
+- A `request_user_input` Codex refuses with no form (questions that do not parse, none, or one without options): it
+  rings nothing.
+- The same ask again: Codex checks a "don't ask again this session" approval after the hook has run, so the dial rings
+  only the first ask of a session for the same tool and line, until the session ends. After a plain "Yes", the very
+  same command asked again in that session is not rung again. After the Harness devices process restarts, a command
+  approved for the session can ring once more.
 
 ## What it never does
 
@@ -77,8 +91,9 @@ Harness's removal before they act, so the dial shows no more prompts and nothing
 
 Codex: with a dial plugged in, Harness sets the plugin up in each Codex home it serves, through Codex's own
 `codex plugin`, from `claude-marketplace` in Harness's data folder, which holds the copy this CLI carries. It adds that
-folder as the `openharness` marketplace and brings the plugin current after each CLI update. Removed or turned off in
-Codex, it stays so.
+folder as the `openharness` marketplace and brings the plugin current after each CLI update. Turned off in Codex, it
+stays off. Removed, it stays removed while Harness's record of that home (`dial-setup.json` in Harness's data folder)
+holds; an older CLI that rewrites that file drops the record, and the next pass sets the plugin up again.
 
 Codex asks a person to review a plugin's hooks before they first run. Harness writes the records Codex writes on
 "Trust" into the home's `config.toml`, only when the installed folder is the copy this CLI carries, and checks that

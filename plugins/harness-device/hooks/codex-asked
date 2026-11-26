@@ -11,7 +11,8 @@
 # read. On Windows the session's shell is PowerShell (pwsh when installed, else Windows PowerShell 5.1), run with
 # `-NoProfile -Command`: it reads the first line up to `<#` as an echo silenced on the second, and runs the rest of the
 # second line: the same launcher lookup in the user's folder and on PATH, its output dropped and exit 0. So this script
-# never runs on Windows. With no session shell there Codex falls back to cmd.exe, where the command fails and tells nothing.
+# never runs on Windows. With no session shell there Codex falls back to cmd.exe, where the command fails and tells
+# nothing.
 if [ -x "$HOME/.local/bin/harness" ]; then
   "$HOME/.local/bin/harness" device codex asked >/dev/null 2>&1
 elif command -v harness >/dev/null 2>&1; then
