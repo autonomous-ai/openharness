@@ -628,6 +628,15 @@ describe('the dial skill', () => {
     expect(answers(dataDir)).toEqual({ removed: { claude: true, codex: true } })
   })
 
+  it('an enable on a computer where the daemon never ran makes the data folder and saves its records', async () => {
+    for (const engine of ['claude', 'codex'] as const) {
+      const dataDir = join(folder(), 'harness', 'data')
+      expect(await device([engine, 'enable'], { dataDir }), engine).toEqual({ code: 0, out: [], err: [] })
+      expect(readRemoved(dataDir)[engine], engine).toBeUndefined()
+      expect(Object.keys(answers(dataDir) as object), engine).toEqual(['homes'])
+    }
+  })
+
   it('an enable whose setting cannot be saved makes nothing', async () => {
     for (const engine of ['claude', 'codex'] as const) {
       const dataDir = folder()
