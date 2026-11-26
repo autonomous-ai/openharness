@@ -901,7 +901,7 @@ class DaemonConnection(http.client.HTTPConnection):
     def connect(self):
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.sock.settimeout(self.timeout)
-        self.sock.connect(str(data_root() / 'cli/data/daemon-18473.sock'))
+        self.sock.connect(str(data_root() / 'cli' / 'data' / 'daemon-18473.sock'))
 
 
 def daemon_call(method, path, body=None, timeout=15):
