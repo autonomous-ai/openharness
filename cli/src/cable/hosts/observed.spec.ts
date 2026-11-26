@@ -6663,6 +6663,44 @@ describe('ObservedSource and a Codex session its own server runs', () => {
     expect(t.agent().app).toBe('terminal-app')
   })
 
+  it('a session whose client exited leaves that tab at the next tick, which holds a shell now: on no page until asked again', async () => {
+    const t = served()
+    t.src.ingest(t.codex('session-start'))
+    await t.asks[0].answer([{ client: CLIENT }])
+    const { id } = t.agent()
+    // Its TUI quit; the daemon runs on, and holds the session.
+    t.gens.set(500, null)
+    await t.src.tick()
+    expect(t.src.list()).toHaveLength(1)
+    expect(t.agent().app).toBe('terminal')
+    expect(t.agent().appPending).toBeUndefined()
+    expect(t.src.tabTty(id)).toBeUndefined()
+    expect(t.src.paneOf(id, 'tabs')).toBeUndefined()
+    expect(t.src.byTab('terminal-app', '/dev/ttys005')).toBeUndefined()
+    expect(t.src.windowOf(id)).toBeUndefined()
+    t.src.ingest(t.codex('turn-start'))
+    expect(t.lookup).toHaveBeenCalledTimes(2)
+  })
+
+  it('a client found while the tick read its table stays: that table is older than it', async () => {
+    const t = served()
+    t.src.ingest(t.codex('session-start'))
+    await t.asks[0].answer([{ client: CLIENT }])
+    let read!: () => void
+    t.procs.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => { read = resolve })
+      return [{ pid: 900, generation: 'g900' }]
+    })
+    const ticked = t.src.tick()
+    // Resumed meanwhile in a TUI in iTerm2, started after the table was read.
+    t.src.ingest(t.codex('session-start'))
+    await t.asks[1].answer([{ client: { app: 'iterm', tty: '/dev/ttys009', pid: 600 } }])
+    read()
+    await ticked
+    expect(t.agent().app).toBe('iterm')
+    expect(t.src.tabTty(t.agent().id)).toBe('/dev/ttys009')
+  })
+
   it('only the latest ask lands: another caller drops the place at once', async () => {
     const t = served()
     t.src.ingest(t.codex('session-start'))
