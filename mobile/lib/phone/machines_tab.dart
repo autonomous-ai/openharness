@@ -690,6 +690,16 @@ class _RefreshButtonState extends State<_RefreshButton>
   }
 }
 
+/// The harness Start opens among a computer's [agents]: OpenCode first, else any but a plain terminal, else none (and
+/// Start makes an OpenCode). Never a terminal: Harness OS's own screen starts one as it signs in, and Start opened that
+/// shell instead of the OpenCode it says it starts (MSI, 2026-11-26).
+Agent? startOpens(List<Agent> agents) {
+  bool opencode(Agent agent) =>
+      '${agent.name} ${agent.title ?? ''}'.toLowerCase().contains('opencode');
+  return agents.where(opencode).firstOrNull ??
+      agents.where((agent) => agent.engine != 'terminal').firstOrNull;
+}
+
 /// Start, on a computer just set up from this phone: its harness — OpenCode first — or, with none
 /// there yet, a new OpenCode in a fresh project of its own, opened as soon as it is up.
 class _StartButton extends StatefulWidget {
@@ -710,12 +720,9 @@ class _StartButtonState extends State<_StartButton> {
 
   AppNotifier get _app => widget.notifier;
 
-  Agent? _harness() {
-    final agents = _app.machineStates[widget.machineId]?.agents ?? const [];
-    bool opencode(Agent agent) =>
-        '${agent.name} ${agent.title ?? ''}'.toLowerCase().contains('opencode');
-    return agents.where(opencode).firstOrNull ?? agents.firstOrNull;
-  }
+  Agent? _harness() => startOpens(
+    _app.machineStates[widget.machineId]?.agents ?? const [],
+  );
 
   Future<void> _start() async {
     final messenger = ScaffoldMessenger.maybeOf(context);
