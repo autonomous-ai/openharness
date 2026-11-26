@@ -275,14 +275,21 @@ export function runTable(flow: string, variant: string): string {
     out.push(line([id, split(id) ?? '', ...repCols.map(k => cell(id, k)), fmt(means.get(id) ?? NaN), fmt(spread(scores))]))
   }
   // Totals: each rep's summed score (an unscored rep adds nothing; its own row says why), the mean of case means,
-  // and the spread between the reps' sums.
+  // and the spread between the reps' sums. One per agent and condition, over the reps that condition ran: name-only
+  // runs 1 rep where the others run 2, so a total across conditions would sum unlike runs.
   const total = (label: string, group: string[]) => {
-    const sums = repCols.map(k => group.reduce((s, id) => s + (scoreAt(id, k) ?? 0), 0))
-    out.push(line([label, '', ...sums, fmt(mean(group.flatMap(id => (means.has(id) ? [means.get(id)!] : [])))),
-      fmt(spread(sums))]))
+    const ran = Math.max(0, ...[...rows, ...errs].filter(r => group.includes(r.prompt_id)).map(r => r.rep + 1))
+    const sums = repCols.slice(0, ran).map(k => group.reduce((s, id) => s + (scoreAt(id, k) ?? 0), 0))
+    out.push(line([label, '', ...repCols.map(k => sums[k] ?? ''),
+      fmt(mean(group.flatMap(id => (means.has(id) ? [means.get(id)!] : [])))), fmt(spread(sums))]))
   }
-  for (const agent of [...new Set(agentOf.values())].sort()) total(`total ${agent}`, ids.filter(id => agentOf.get(id) === agent))
-  total('total', ids)
+  for (const c of CONDITIONS) {
+    const inCondition = ids.filter(id => conditionOf(id) === c)
+    if (!inCondition.length) continue
+    const agents = new Set(inCondition.flatMap(id => (agentOf.has(id) ? [agentOf.get(id)!] : [])))
+    for (const agent of [...agents].sort()) total(`total ${agent} ${c}`, inCondition.filter(id => agentOf.get(id) === agent))
+    total(`total ${c}`, inCondition)
+  }
   return out.join('\n') + '\n'
 }
 
