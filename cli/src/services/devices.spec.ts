@@ -250,6 +250,13 @@ vi.mock('../cable/hosts/scannedApp.js', async (real) => ({
   readTtyName: readers.tty,
   readBundleId: readers.bundleId,
 }))
+// Whether a Codex hook's caller is the TUIs' daemon (codexServed.ts): none is here, so a Codex hook is placed by its hints
+// once that answer lands, and no spec reads this machine's processes, their folders or their terminals.
+vi.mock('../cable/hosts/codexServed.js', async (real) => ({
+  ...await real<typeof import('../cable/hosts/codexServed.js')>(),
+  servedLookup: (platform: NodeJS.Platform) =>
+    (platform === 'win32' ? undefined : async (asks: readonly unknown[]) => asks.map(() => undefined)),
+}))
 // Where tmux is: on the PATH, so no spec asks the developer's login shell.
 vi.mock('../lib/tmuxOnPath.js', async (real) => ({
   ...await real<typeof import('../lib/tmuxOnPath.js')>(),
@@ -3396,6 +3403,8 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       const linux = fakeRaise()
       const { port } = startHere({ raise: linux.raise })
       port.observed(hook('session-start', { engine: 'codex', sessionId: 'cx-1', hostHints: { TERM_PROGRAM: 'WezTerm', WEZTERM_PANE: '3' } }))
+      // A Codex hook is placed once the served lookup says its caller is no server (observed.ts askServed).
+      await landed()
       attach(port)
       expect(await host().openAgent(CODEX)).toBeUndefined()
       expect(orcaRuns).toEqual([['/opt/orca/bin/orca', ['cli', '--no-auto-start', 'activate-pane', '--pane-id', '3'], 10_000]])
@@ -3587,6 +3596,8 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   it('the link and the app both fail: the dial is told so', async () => {
     const { port } = startHere({ orca: exiting(1, 1, 1) })
     port.observed(hook('session-start', inApp))
+    // A Codex hook is placed once the served lookup says its caller is no server (observed.ts askServed).
+    await landed()
     attach(port)
     expect(await host().openAgent(CX)).toEqual({ ok: false, error: 'ChatGPT did not open it.' })
     expect(orcaRuns).toEqual([threadLink, codexForward, codexForward])
@@ -6238,6 +6249,8 @@ describe('codex queue, for Codex outside a pane (docs/specs/2026-11-15-device-co
 
   it('a ChatGPT app session on macOS runs the app\'s own codex', async () => {
     started({ codex: { ...codex, platform: 'darwin', appBinary: () => APP }, orca: { ...orca, platform: 'darwin' } }, { hostHints: { __CFBundleIdentifier: 'com.openai.codex' } })
+    // Its app is known once the served lookup says its caller is no server (observed.ts askServed).
+    await landed()
     expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
     expect(codexRuns.map(([file]) => file)).toEqual([APP])
     expect(said()).toEqual(['[device] voice · codex'])
@@ -6295,6 +6308,8 @@ describe('codex queue, for Codex outside a pane (docs/specs/2026-11-15-device-co
   it('a ChatGPT app session whose app codex exits 127 is told to update ChatGPT, in one line that names no path', async () => {
     started({ codex: { ...ending(127), platform: 'darwin', appBinary: () => APP }, orca: { ...orca, platform: 'darwin' } },
       { hostHints: { __CFBundleIdentifier: 'com.openai.codex' } })
+    // Its app is known once the served lookup says its caller is no server (observed.ts askServed).
+    await landed()
     expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false, message: 'Update ChatGPT, then try again.' })
     expect(codexRuns.map(([file]) => file)).toEqual([APP])
     expect(said()).toEqual(['[device] voice · codex-failed (exit 127 · app)', '[device] voice · no-answer'])
@@ -12160,6 +12175,8 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
     const { port, live } = withThreads()
     await live()
     port.observed(hook('session-start'))
+    // Placed once the served lookup says its caller is no server (observed.ts askServed).
+    await flush()
     // The hook's copy, with caps of its own: named as the reader names the thread, never by its folder.
     expect((await listed()).map(({ id, name }) => ({ id, name }))).toEqual([{ id: ID, name: 'Fix the build' }])
   })
@@ -12336,6 +12353,8 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
       await flush()
       const transcriptPath = join(env.CODEX_HOME, 'sessions', '2026', '11', '23', `rollout-2026-11-23T10-00-00-${THREAD}.jsonl`)
       port.observed({ ...hook('session-start'), transcriptPath })
+      // Placed once the served lookup says its caller is no server (observed.ts askServed).
+      await flush()
       expect(await host().sendTurn(ID, 'second')).toEqual(refused('Fix the build has not taken your last words yet.'))
       expect(codexRuns).toEqual([])
       fake.linked.shift()!()
@@ -12365,6 +12384,8 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
       // Its turn started: its live copy, its rollout in Harness's Codex home, takes the row and its voice.
       const transcriptPath = join(env.CODEX_HOME, 'sessions', '2026', '11', '23', `rollout-2026-11-23T10-00-00-${THREAD}.jsonl`)
       port.observed({ ...hook('session-start'), transcriptPath })
+      // Placed once the served lookup says its caller is no server (observed.ts askServed).
+      await flush()
       expect(await host().sendTurn(ID, 'second')).toEqual(refused('Fix the build has not taken your last words yet.'))
       release()
       expect(await first).toEqual({ ok: true })

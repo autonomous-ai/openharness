@@ -55,6 +55,14 @@ describe('readCodexHead', () => {
     writeFileSync(endless, 'x'.repeat(1024 * 1024 + 10))
     expect(await readCodexHead(endless)).toBeNull()
   })
+
+  it('reads a terminal\'s Codex its daemon runs as a terminal\'s, not an editor\'s', async () => {
+    // Codex 0.167+ runs a `codex` typed in a terminal as a client of its daemon (`codex app-server`), which writes the
+    // rollout as an app server's: `vscode`, from the TUI's own originator (Diego, CLI 0.6.90).
+    const dir = home()
+    const path = write(join(dir, 'daemon.jsonl'), [meta(C, 'vscode', 'codex-tui'), event('x')])
+    expect(await readCodexHead(path)).toEqual({ sessionId: C, cwd: '/work/cohorts', origin: 'terminal' })
+  })
 })
 
 describe('the rest of a Codex home', () => {

@@ -42,7 +42,9 @@ function originOf(fields: Record<string, unknown>, origin: Head['origin']): Exte
   const value = fields[origin.field]
   if (typeof value !== 'string' || !Object.hasOwn(origin.values, value)) return null
   const rule = origin.values[value]
-  return typeof rule === 'string' ? rule : fields[rule.field] === rule.is ? rule.then : rule.otherwise
+  if (typeof rule === 'string') return rule
+  const second = fields[rule.field]
+  return typeof second === 'string' && Object.hasOwn(rule.values, second) ? rule.values[second] : rule.otherwise
 }
 
 /** What a head record says: its conversation, folder and author, or null when it is not a person's. */
