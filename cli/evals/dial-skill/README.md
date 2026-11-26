@@ -183,12 +183,13 @@ the top of `flow/narrative.md`; a `*` marks spend that holds calls of a model wi
 known price as the cap counts them.
 
 `--spend-cap-usd` is required: the dollars the whole flow may spend, every variant's rows, failed attempts and probes
-included, judge calls too; a model with no price counts at the highest one known. Before each probe and each case the
-runner keeps $1.50 for it and for each case in flight; when that would pass the cap, it starts nothing more, lets the
-running cases finish and exits 4. A rerun resumes, and the spend already in the flow counts. The whole needs-you
-design is capped at $250, and the runner refuses a cap above 250 (exit 2). Part 1 uses $70 of it: the probes that
-sized the crowd spent $0.58 outside the flow, so its passes take `--spend-cap-usd 69.42`. Later parts pass a larger
-cap.
+included, judge calls too; a model with no price counts at the highest one known. A run or probe killed before its
+result event printed only a floor of its output, so it counts at least $1.50 (`cut_usd` on its row). Before each probe
+and each case the runner keeps $1.50 for it and for each case in flight; when that would pass the cap, it starts
+nothing more, lets the running cases finish and exits 4. A rerun resumes, and the spend already in the flow counts.
+The whole needs-you design is capped at $250, and the runner refuses a cap above 250 (exit 2). Part 1 uses $70 of it:
+the probes that sized the crowd spent $0.58 outside the flow, so its passes take `--spend-cap-usd 69.42`. Later parts
+pass a larger cap.
 
 The rounds before the needs-you rubric added up to $23.47 (baseline $9.70, v1 $9.87, the archived first baseline
 $3.89); the pilot and probes, which left no rows, added roughly $3.50, so that effort cost about $27 against a $50 cap.
