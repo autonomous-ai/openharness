@@ -62,8 +62,9 @@ export interface OpenDeps {
    *  process is the outer lookup's answer (the agent's multiplexer client, or on Windows the terminal holding herdr's),
    *  not the agent's own. */
   windowOf?(agentId: string): { pid?: number; app?: string; outer?: true } | undefined
-  /** Called just before every `open -b`, Linux raise and Windows raise: the filter takes the next front report as the
-   *  dial's, so the app it brought keeps tmux's or herdr's page (docs/plans/2026-11-26-dial-mux-host-pages-design.md § 6). */
+  /** Called just before every `open -b`, Linux raise and Windows raise, and the focus of a pane that brings its app
+   *  itself (tap 'instead'): the filter takes the next front report as the dial's, so the app it brought keeps tmux's
+   *  or herdr's page (docs/plans/2026-11-26-dial-mux-host-pages-design.md § 6). */
   bringing?(): void
 }
 
@@ -183,6 +184,9 @@ export function createOpenActions(deps: OpenDeps): {
   async function open(agentId: string, target: OpenTarget): Promise<boolean> {
     const own = paneOn(target)
     const bundle = byBundle ? target.bundle : undefined
+    // A pane instead of its app brings the app itself (the Claude app's link, cursor-folder's `open -b`, Herdr.app's
+    // focus): the filter is told as before the opener's own.
+    if (own?.adapter.tap === 'instead') deps.bringing?.()
     const shown = own ? await own.adapter.focus(own.pane) : false
     if (own && shown === true) {
       // A pane that comes before its app still needs its app at the front; one instead of it (the Claude app's link)
