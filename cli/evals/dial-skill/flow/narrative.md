@@ -59,7 +59,7 @@ change the description. On crowd val alone v1 already meets every target (recall
 `line_ok` 14 of 16, 88%), which is the plan's case for not running round 2. What is left to gain sits in the line
 and the answer (`line_ok` 6 and `ask_ok` 4 of train and val), not in whether the agent rings.
 
-## Round 2: not run
+## Round 2: skipped at first
 
 v1 already meets every target on crowd val alone, so a round 2 has nothing to gain there: recall 16 of 16 (target at
 least 15 of 16), needless rings 0 of 10 (target none), `line_ok` 14 of 16, 88% (target at least 85%). The flow had
