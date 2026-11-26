@@ -3,8 +3,8 @@
  * (docs/plans/2026-11-21-dial-linux-followups-design.md § 1), on the real daemon: an agent whose hooks run on a pty of
  * Orca's terminal host stand-in (harness/orcaHost.ts) takes them through the fake `orca`; an agent started from that
  * terminal keeps its handle and Orca's variables, so its Orca terminal only holds it: in a WezTerm pane of the test's own
- * (harness/weztermMux.ts) WezTerm types them, and in a terminal tab where no app types nothing does. The real Orca never
- * runs, and no `orca` or `wezterm` the daemon runs reaches the developer's.
+ * (harness/weztermMux.ts) WezTerm types them, and in a terminal tab where no app types the dial is told how to reach it
+ * and nothing types them. The real Orca never runs, and no `orca` or `wezterm` the daemon runs reaches the developer's.
  *
  * The WezTerm case is skipped where WezTerm is not installed, the stand-in's where cc is not; CI's `e2e (dial hosts)` job
  * installs both, and there a missing one fails the file (harness/dialHosts.ts).
@@ -14,7 +14,6 @@ import { randomUUID } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
-import { heardClip } from '../src/cable/__fixtures__/heardClip.js'
 import { observedAgentId } from '../src/cable/hosts/observed.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
@@ -22,6 +21,7 @@ import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 import { FakeOrca } from './harness/fakeOrca.js'
 import { IN_ORCA, InOrca } from './harness/inOrca.js'
+import { speakOnce, spokenTo, UNREACHED } from './harness/modInbox.js'
 import { orcaHostCc } from './harness/orcaHost.js'
 import { Outside } from './harness/outsideAgent.js'
 import { PrivateWezterm, weztermBinary } from './harness/weztermMux.js'
@@ -106,15 +106,6 @@ describe("the dial's words reach the agent's own pane, Orca", () => {
     return { d, dial, orca }
   }
 
-  /** The dial speaks to [id]: the transcript or the refusal it is answered with. */
-  const speak = (dial: FakeDial, id: string, uploadId: string): Promise<DialMessage> => {
-    const since = dial.messages.length
-    dial.send({ t: 'voice.begin', agentId: id, uploadId, sr: 16_000, lang: 'en' })
-    for (const frame of heardClip()) dial.audio(frame)
-    dial.send({ t: 'voice.end', uploadId })
-    return dial.next((m) => m.t === 'voice.transcript' || m.t === 'voice.error', 45_000, 'the answer to its words', since)
-  }
-
   /** No folder, words, session, handle or terminal of the case's in the daemon's log. */
   const logNames = (d: IsolatedDaemon, ...secrets: string[]): void => {
     for (const secret of [WORDS, ...secrets]) expect(d.log()).not.toContain(secret)
@@ -125,14 +116,13 @@ describe("the dial's words reach the agent's own pane, Orca", () => {
     const handle = `term_${randomUUID()}`
     const claude = new InOrca(d, 'api', children, { ORCA_TERMINAL_HANDLE: handle })
 
-    // 1. Its hook runs on a pty of Orca's terminal host: once the devices read that maker, its row takes words.
+    // 1. Its hook runs on a pty of Orca's terminal host: once the devices read that maker, its words go there.
     await claude.hook('SessionStart', { source: 'startup' })
-    const row = (await showing(dial, 'the agent listed, taking words',
-      (rows) => rows.some((r) => r.id === claude.id && String(r.caps).includes('v')))).find((r) => r.id === claude.id)!
+    const row = (await showing(dial, 'the agent listed', (rows) => rows.some((r) => r.id === claude.id))).find((r) => r.id === claude.id)!
     expect(row.caps).toContain('v')
 
-    // 2. The dial's words go to its own terminal, by its handle.
-    expect(await speak(dial, claude.id, 'spoken-1')).toMatchObject({ t: 'voice.transcript', text: WORDS, agentId: claude.id })
+    // 2. The dial's words go to its own terminal, by its handle: spoken again while the maker is not read yet.
+    expect(await spokenTo(dial, claude.id, 'spoken')).toMatchObject({ t: 'voice.transcript', text: WORDS, agentId: claude.id })
     await said(d, '[device] voice · orca')
     expect(sends(orca)).toEqual([`terminal send --terminal ${handle} --text=${WORDS} --enter --wait-submit 5 --json`])
 
@@ -153,14 +143,14 @@ describe("the dial's words reach the agent's own pane, Orca", () => {
     const sessionId = await until('its SessionStart hook to run',
       () => d.hookLog().match(/claude pid=\d+ SessionStart\(startup\) session=(\S+) ran/)?.[1], 30_000, 100)
     const id = observedAgentId('claude', sessionId)
-    const row = (await showing(dial, 'the agent listed, taking words',
-      (rows) => rows.some((r) => r.id === id && String(r.caps).includes('v')))).find((r) => r.id === id)!
+    const row = (await showing(dial, 'the agent listed in WezTerm', (rows) => rows.some((r) => r.id === id && r.host === 'wezterm')))
+      .find((r) => r.id === id)!
     expect(row).toMatchObject({ engine: 'claude', host: 'wezterm' })
     // WezTerm's mux server made its pty, not Orca's host: the Orca terminal only holds it.
     await said(d, HELD)
 
-    // 2. The dial's words are typed into the WezTerm pane, and none through Orca.
-    expect(await speak(dial, id, 'spoken-1')).toMatchObject({ t: 'voice.transcript', text: WORDS, agentId: id })
+    // 2. The dial's words are typed into the WezTerm pane, and none through Orca: spoken again until its pane is read.
+    expect(await spokenTo(dial, id, 'spoken')).toMatchObject({ t: 'voice.transcript', text: WORDS, agentId: id })
     await until('the words in its pane', async () => (await mux.text(pane)).includes(WORDS), 30_000, 100)
     await said(d, '[device] voice · wezterm')
     expect(sends(orca)).toEqual([])
@@ -172,20 +162,23 @@ describe("the dial's words reach the agent's own pane, Orca", () => {
     logNames(d, join(d.projectsDir, 'api'), sessionId, handle, tty!)
   })
 
-  it('an agent in a terminal started from that terminal, where no app types, gets no words, and Orca none', async () => {
+  it('an agent in a terminal started from that terminal, where no app types, is told how to reach it, and Orca gets none', async () => {
     const { d, dial, orca } = await fresh()
     const handle = `term_${randomUUID()}`
     // A terminal app's tab opened from the Orca terminal: the handle and Orca's variables come along.
     const agent = await Outside.start(d, 'api', { ...IN_ORCA, ORCA_TERMINAL_HANDLE: handle }, 'terminal-app')
     outside = agent
 
-    // 1. Its maker read: the Orca terminal only holds it, and its row takes no words.
+    // 1. Its maker read: the Orca terminal only holds it. Its row has voice all the same: Claude Code's.
     await said(d, HELD)
     const row = (await showing(dial, 'the agent listed', (rows) => rows.some((r) => r.id === agent.id))).find((r) => r.id === agent.id)!
-    expect(row.caps ?? '').not.toContain('v')
+    expect(row.caps).toContain('v')
 
-    // 2. Words spoken to it anyway are refused before any route: none through Orca, and no turn in the engine.
-    expect(await speak(dial, agent.id, 'spoken-1')).toMatchObject({ t: 'voice.error' })
+    // 2. Words spoken to it are refused before any route with how to reach it: none through Orca, and no turn in the
+    // engine.
+    const refused = await speakOnce(dial, agent.id, 'spoken-1')
+    expect(refused).toMatchObject({ t: 'voice.error' })
+    expect(UNREACHED).toContain(refused.message)
     expect(lines(d, '[device] voice · ')).toEqual([])
     expect(sends(orca)).toEqual([])
     expect(agent.ran(d, 'UserPromptSubmit')).toBe(false)

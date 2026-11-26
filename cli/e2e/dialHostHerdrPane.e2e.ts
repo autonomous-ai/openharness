@@ -15,13 +15,13 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
-import { heardClip } from '../src/cable/__fixtures__/heardClip.js'
 import { observedAgentId } from '../src/cable/hosts/observed.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 import { herdrBinary, ownHerdrsOnly, PrivateHerdr } from './harness/herdrServer.js'
+import { spokenTo } from './harness/modInbox.js'
 import { PrivateWezterm, weztermBinary } from './harness/weztermMux.js'
 
 const execFileAsync = promisify(execFile)
@@ -115,14 +115,6 @@ describe.skipIf(!herdrBinary)("the dial's words reach the agent's own pane, herd
   }
 
   /** The dial speaks to [id]: the transcript or the refusal it is answered with. */
-  const speak = (dial: FakeDial, id: string, uploadId: string): Promise<DialMessage> => {
-    const since = dial.messages.length
-    dial.send({ t: 'voice.begin', agentId: id, uploadId, sr: 16_000, lang: 'en' })
-    for (const frame of heardClip()) dial.audio(frame)
-    dial.send({ t: 'voice.end', uploadId })
-    return dial.next((m) => m.t === 'voice.transcript' || m.t === 'voice.error', 45_000, 'the answer to its words', since)
-  }
-
   /** No folder, words, session, pane or terminal of the case's in the daemon's log. */
   const logNames = (d: IsolatedDaemon, ...secrets: string[]): void => {
     for (const secret of [WORDS, ...secrets]) expect(d.log()).not.toContain(secret)
@@ -134,8 +126,8 @@ describe.skipIf(!herdrBinary)("the dial's words reach the agent's own pane, herd
     // 1. The suite's fake Claude Code in a herdr pane: herdr's server made its terminal, so its row takes words once
     // the devices read that maker.
     const { pane, sessionId, id } = await herdr.hooked('api')
-    const row = (await showing(dial, 'the agent listed, taking words',
-      (rows) => rows.some((r) => r.id === id && String(r.caps).includes('v')))).find((r) => r.id === id)!
+    const row = (await showing(dial, 'the agent listed in herdr', (rows) => rows.some((r) => r.id === id && r.host === 'herdr')))
+      .find((r) => r.id === id)!
     expect(row).toMatchObject({ engine: 'claude', host: 'herdr' })
     // herdr types only into an agent it sees at its prompt, and its detection lags the hook by a moment (herdr 0.9.5).
     await until('herdr to see it at its prompt', async () => {
@@ -144,8 +136,8 @@ describe.skipIf(!herdrBinary)("the dial's words reach the agent's own pane, herd
       return (read?.agent as { agent_status?: string } | undefined)?.agent_status === 'idle'
     }, 30_000, 100)
 
-    // 2. The dial's words are typed into its own herdr pane.
-    expect(await speak(dial, id, 'spoken-1')).toMatchObject({ t: 'voice.transcript', text: WORDS, agentId: id })
+    // 2. The dial's words are typed into its own herdr pane: spoken again while the dial is told how to reach it.
+    expect(await spokenTo(dial, id, 'spoken')).toMatchObject({ t: 'voice.transcript', text: WORDS, agentId: id })
     await until('the words on its pane', async () => (await herdr.screen(pane)).includes(WORDS), 30_000, 100)
     await said(d, '[device] voice · herdr')
 
@@ -173,12 +165,13 @@ describe.skipIf(!herdrBinary)("the dial's words reach the agent's own pane, herd
     const sessionId = await until('its SessionStart hook to run',
       () => d.hookLog().slice(from).match(/claude pid=\d+ SessionStart\(startup\) session=(\S+) ran/)?.[1], 30_000, 100)
     const id = observedAgentId('claude', sessionId)
-    await showing(dial, 'the agent listed, taking words', (rows) => rows.some((r) => r.id === id && String(r.caps).includes('v')))
+    await showing(dial, 'the agent listed', (rows) => rows.some((r) => r.id === id))
     // WezTerm's mux server made its pty, not herdr's: the herdr pane only holds it.
     await said(d, HELD)
 
-    // 2. The dial's words are typed into the WezTerm pane, and none into the herdr pane.
-    expect(await speak(dial, id, 'spoken-1')).toMatchObject({ t: 'voice.transcript', text: WORDS, agentId: id })
+    // 2. The dial's words are typed into the WezTerm pane, and none into the herdr pane: spoken again until its pane is
+    //    read.
+    expect(await spokenTo(dial, id, 'spoken')).toMatchObject({ t: 'voice.transcript', text: WORDS, agentId: id })
     await until('the words in its pane', async () => (await mux.text(pane)).includes(WORDS), 30_000, 100)
     await said(d, '[device] voice · wezterm')
     expect(await herdr.screen(shell)).not.toContain(WORDS)

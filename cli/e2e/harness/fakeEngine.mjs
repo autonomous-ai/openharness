@@ -6,8 +6,9 @@
 //   - as `codex queue --thread <id> --message=<text>`, notes the call under the test's root, in `codex-queue` or the
 //     config's `queueLedger` (the ChatGPT app's own CLI notes apart), when that thread's rollout is in its CODEX_HOME,
 //     else exits 1 having noted nothing, as 0.167 does;
-//   - as `claude plugin …`, adds, installs, turns on and off, uninstalls and lists the harness-device plugin as 2.1.326
-//     does, noting each call in `claude-plugin-calls` under the test's root (`claudePlugin`);
+//   - as `claude plugin …`, adds Harness's local marketplace folder, and installs, turns on and off, uninstalls and lists
+//     the harness-device plugin as 2.1.326 does, noting each call in `claude-plugin-calls` under the test's root
+//     (`claudePlugin`);
 //   - as `claude -p … --input-format stream-json`, answers the `initialize` control request with its `/model` and `/`
 //     lists as 2.1.x does on a subscription, and ends when its stdin ends (`answerClaudeLists`);
 //   - runs the hooks its own settings carry, as the real CLIs run them: the commands the daemon
@@ -115,7 +116,7 @@
 // child in the same process group and terminal (`codexWrapper`).
 import { execFileSync, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, closeSync, constants, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, closeSync, constants, existsSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -258,20 +259,47 @@ function answerClaudeLists() {
 }
 
 /** The one marketplace the fake knows, and the plugin in it: what devices/claudePlugin.ts adds and installs. */
-const FAKE_MARKETPLACE = { name: 'openharness', source: 'github', repo: 'autonomous-ai/openharness' }
+const FAKE_MARKETPLACE = 'openharness'
 const FAKE_PLUGIN = 'harness-device@openharness'
-/** The marketplace's commit: its plugins carry no version of their own, so Claude Code lists this. */
-const FAKE_PLUGIN_VERSION = 'e2e0c0de1234'
+
+/**
+ * A local marketplace as Claude Code takes one: a path starting `./`, `../`, `/` or `~/`, read against the process's own
+ * folder, holding `.claude-plugin/marketplace.json` named FAKE_MARKETPLACE. Its absolute path, or Claude Code's failure
+ * line. Any other source, such as a GitHub repository, is refused: the product adds none, and the fake fetches nothing.
+ */
+function localMarketplace(config, source) {
+  if (!/^(\.\/|\.\.\/|\/|~\/)/.test(source ?? '')) return { error: `Failed to add marketplace: ${source} is not a local marketplace path` }
+  const path = source.startsWith('~/') ? join(homedir(), source.slice(2)) : resolve(process.cwd(), source)
+  const manifest = join(path, '.claude-plugin', 'marketplace.json')
+  if (!existsSync(manifest)) return { error: `Failed to add marketplace: Marketplace file not found at ${manifest}` }
+  // Real paths: on macOS the process's folder reads /private/var where the root may say /var.
+  if (!within(realpathSync(config.root), realpathSync(path))) throw new Error('fake claude plugin: a marketplace outside its throwaway root')
+  let name
+  try { name = JSON.parse(readFileSync(manifest, 'utf8')).name } catch { /* not JSON: refused below */ }
+  if (name !== FAKE_MARKETPLACE) return { error: `Failed to add marketplace: Invalid marketplace file at ${manifest}` }
+  return { path }
+}
+
+/** A plugin's version as Claude Code reads it in place from a local marketplace: its plugin.json's, else `unknown`. */
+function versionIn(marketplace, id) {
+  try {
+    const manifest = join(marketplace.path, 'plugins', id.split('@')[0], '.claude-plugin', 'plugin.json')
+    return JSON.parse(readFileSync(manifest, 'utf8')).version ?? 'unknown'
+  } catch {
+    return 'unknown'
+  }
+}
 
 /**
  * `claude plugin …` as Claude Code 2.1.326 answers the words devices/claudePlugin.ts runs: `list --json`, `marketplace
- * list --json`, `marketplace add`, `marketplace update`, `install`, `enable`, `disable`, `uninstall` and `update`. What
- * is added and installed is kept per Claude Code home, as the real one keeps it, in `plugins/` of CLAUDE_CONFIG_DIR, else
- * of ~/.claude: a plugin installed in one home is not in another, but one whose `plugins` links to another's shares it,
- * as Orca's account homes do. Whether a plugin is on is Claude Code's own record, `enabledPlugins` in that home's user
- * settings, which install, enable, disable and uninstall write: disable leaves the plugin installed and its entry
- * `false`, uninstall removes the entry. Each call is noted in `claude-plugin-calls` under the test's root, one line of its
- * words. A home outside the root throws: it would be the person's own Claude Code.
+ * list --json`, `marketplace add`, `marketplace update`, `install`, `enable`, `disable`, `uninstall` and `update`. The
+ * marketplace is a local folder (localMarketplace), recorded as `{ name, source: 'directory', path }`, its plugins read
+ * in place. What is added and installed is kept per Claude Code home, as the real one keeps it, in `plugins/` of
+ * CLAUDE_CONFIG_DIR, else of ~/.claude: a plugin installed in one home is not in another, but one whose `plugins` links
+ * to another's shares it, as Orca's account homes do. Whether a plugin is on is Claude Code's own record,
+ * `enabledPlugins` in that home's user settings, which install, enable, disable and uninstall write: disable leaves the
+ * plugin installed and its entry `false`, uninstall removes the entry. Each call is noted in `claude-plugin-calls` under
+ * the test's root, one line of its words. A home or a marketplace outside the root throws: it would be the person's own.
  */
 function claudePlugin(config, argv) {
   if (!config.root) throw new Error('fake claude plugin: the wrapper names no test root')
@@ -301,30 +329,34 @@ function claudePlugin(config, argv) {
   }
   const said = (line) => process.stdout.write(`✔ ${line}\n`)
   const id = args[1]
+  const marketplace = state.marketplaces.find((added) => added.name === FAKE_MARKETPLACE)
   const words = args.filter((arg) => !arg.startsWith('-')).slice(0, 2).join(' ')
   switch (words) {
     case 'list':
       process.stdout.write(`${JSON.stringify(state.installed.map((plugin) => ({
-        id: plugin, version: FAKE_PLUGIN_VERSION, scope: 'user', enabled: settings.enabledPlugins?.[plugin] === true,
+        id: plugin, version: versionIn(marketplace, plugin), scope: 'user', enabled: settings.enabledPlugins?.[plugin] === true,
       })), null, 2)}\n`)
       return
     case 'marketplace list':
-      process.stdout.write(`${JSON.stringify(state.marketplaces.map(() => FAKE_MARKETPLACE), null, 2)}\n`)
+      process.stdout.write(`${JSON.stringify(state.marketplaces, null, 2)}\n`)
       return
-    case 'marketplace add':
-      if (args[2] !== FAKE_MARKETPLACE.repo) fail(`Failed to add marketplace: ${args[2]} is not a marketplace`)
-      if (!state.marketplaces.includes(FAKE_MARKETPLACE.name)) state.marketplaces.push(FAKE_MARKETPLACE.name)
+    case 'marketplace add': {
+      const local = localMarketplace(config, args[2])
+      if (local.error) fail(local.error)
+      state.marketplaces = [...state.marketplaces.filter((added) => added.name !== FAKE_MARKETPLACE),
+        { name: FAKE_MARKETPLACE, source: 'directory', path: local.path }]
       saveState()
-      said(`Successfully added marketplace: ${FAKE_MARKETPLACE.name}`)
+      said(`Successfully added marketplace: ${FAKE_MARKETPLACE}`)
       return
+    }
     case 'marketplace update':
-      if (!state.marketplaces.includes(args[2])) fail(`Failed to update marketplace: Marketplace '${args[2]}' not found`)
+      if (!state.marketplaces.some((added) => added.name === args[2])) fail(`Failed to update marketplace: Marketplace '${args[2]}' not found`)
       said(`Successfully updated marketplace: ${args[2]}`)
       return
   }
   const verb = args[0]
   if (!['install', 'enable', 'disable', 'uninstall', 'update'].includes(verb)) fail(`error: unknown command '${verb}'`)
-  if (id !== FAKE_PLUGIN || !state.marketplaces.includes(FAKE_MARKETPLACE.name)) {
+  if (id !== FAKE_PLUGIN || !marketplace) {
     fail(`Failed to ${verb} plugin "${id}": Plugin "${id}" not found in any configured marketplace`)
   }
   const installed = state.installed.includes(id)
@@ -347,7 +379,7 @@ function claudePlugin(config, argv) {
     turn(id, undefined)
     said(`Successfully uninstalled plugin: ${id} (scope: user)`)
   } else {
-    said(`Plugin "${id}" is already at the latest version (${FAKE_PLUGIN_VERSION}).`)
+    said(`Plugin "${id}" is already at the latest version (${versionIn(marketplace, id)}).`)
   }
 }
 

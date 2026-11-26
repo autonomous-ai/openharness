@@ -18,7 +18,7 @@ import { randomUUID } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
-import { heardClip } from '../src/cable/__fixtures__/heardClip.js'
+import { ORCA_CHAT_REFUSAL } from '../src/cable/hosts/orcaChat.js'
 import { RECORDED_ORCA_AGENTS } from '../src/testing/recordedOrca.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk, devicesPids } from './harness/desk.js'
@@ -26,7 +26,7 @@ import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 import { FakeOrca } from './harness/fakeOrca.js'
 import { IN_ORCA, InOrca } from './harness/inOrca.js'
-import { inboxPoll } from './harness/modInbox.js'
+import { inboxPoll, spokenTo, UNREACHED } from './harness/modInbox.js'
 
 /** At once, not a held hook's seconds: room for the CLI's own start on a loaded machine. */
 const AT_ONCE_MS = 30_000
@@ -223,16 +223,12 @@ describe('the dial shows Claude Code waiting outside Harness', () => {
     await chat.hook('SessionStart', { source: 'startup' })
     // One card: the hooked copy, named as Orca names the chat.
     await dial.next((m) => m.t === 'agent' && m.id === chat.id && m.name === title, 45_000, 'the chat by its Orca title')
-    // Its mod polls: the dial may speak to it.
+    // Its mod polls: the dial's words reach it. Until the poll is held they are refused, the chat's sentence first, and
+    // the dial speaks again.
     const poll = inboxPoll(d, chat.sessionId)
-    await dial.next((m) => m.t === 'agent' && m.id === chat.id && String(m.caps ?? '').includes('v'), 45_000, 'voice once its mod polls')
     const words = 'run the chat tests'
     relay.speech = words
-    const since = dial.messages.length
-    dial.send({ t: 'voice.begin', agentId: chat.id, uploadId: 'spoken-chat', sr: 16_000, lang: 'en' })
-    for (const frame of heardClip()) dial.audio(frame)
-    dial.send({ t: 'voice.end', uploadId: 'spoken-chat' })
-    expect(await dial.next((m) => (m.t === 'voice.transcript' || m.t === 'voice.error') && m.uploadId === 'spoken-chat', 45_000, 'the answer to its words', since))
+    expect(await spokenTo(dial, chat.id, 'spoken-chat', [ORCA_CHAT_REFUSAL, ...UNREACHED]))
       .toMatchObject({ t: 'voice.transcript', agentId: chat.id, text: words })
     expect(await poll).toEqual({ status: 200, body: { text: words } })
     await until('the route said', () => d.log().includes('[device] voice · mod') || undefined, 30_000, 50)
