@@ -196,7 +196,29 @@ $3.89); the pilot and probes, which left no rows, added roughly $3.50, so that e
 
 ## Results
 
-No run yet under the needs-you rubric: the first is the baseline above.
+**Baseline, needs-you rubric** (2026-11-26; `flow/baseline/`): the skill text as checked in, Claude Code 2.1.332,
+`claude-opus-5-5`, every split at 2 reps in `clean` and `crowd`, val and test at 1 rep in `name-only`. 177 runs, no
+error, none truncated, invalid or unlisted. Each probe passed: `clean` 7,741 listing characters (16 skills), `crowd`
+18,966 (57), `name-only` 18,735 (57, the dial by name only).
+
+Held out, val and test pooled, as counts (where the targets are read, in `crowd`):
+
+| condition | recall | needless rings | line_ok | ask_ok | harmed | went_on | one_step |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| crowd | 21 of 32 | 0 of 18 | 20 of 21 | 28 of 32 | 0 of 8 | 6 of 8 | 0 of 21 |
+| clean | 25 of 32 | 0 of 18 | 21 of 25 | 27 of 32 | 0 of 8 | 6 of 8 | 0 of 25 |
+| name-only | 0 of 16 | 0 of 9 | none rang | 12 of 16 | 0 of 4 | 4 of 4 | none rang |
+
+- The crowd costs recall (21 of 32 against 25 of 32), and nothing rang needlessly in any condition. The target is 29 of
+  32 in `crowd`.
+- `one_step` is 0 wherever a run rang: every ring came after the skill's body was loaded. The description alone does
+  not carry the command.
+- With only the dial's name, nothing rings.
+- The late-need scenarios take 26 (`logger-migration-publish`) and 17 (`retry-policy-rollout`) tool calls at the
+  median, above the spec's 15.
+- Spend: `clean` $17.87, `crowd` $22.36, `name-only` $7.27, probes included: $47.49.
+
+The per-split scores and the paired tables: `flow/narrative.md` and `flow/metrics.md`.
 
 Archived, under the old rubric (no `expect`, no flags check, no `went_on`; 25 scenarios), in
 `archive/before-needs-you/`: Claude Code (`claude-opus-5-5`, effort `high`), 2 reps a case, baseline text vs v1 (the
