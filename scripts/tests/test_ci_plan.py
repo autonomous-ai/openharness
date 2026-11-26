@@ -84,6 +84,41 @@ def config_list(config, key):
     return re.findall(r"'([^']+)'", lists[0])
 
 
+# The store/tools/ entries ci.yml's store-checks job names: the files it runs, and the folder whose package it tests.
+STORE_CHECKS_ENTRY = re.compile(r"store/tools/[\w./-]+")
+# How a file names another: a quoted path, beside it or from the repository root ('./x.mjs',
+# new URL('x.mjs', import.meta.url), 'store/tools/x.mjs'), or a Python module it imports.
+QUOTED_NAME = re.compile(r"""['"`]([^'"`\s]*[\w-][^'"`\s]*)['"`]""")
+PYTHON_IMPORT = re.compile(r"(?m)^\s*(?:from\s+\.?(\w+)\s+import|import\s+(\w+(?:\s*,\s*\w+)*))")
+
+
+def store_checks_files(root):
+    """store/tools/'s files, and those store-checks runs (a folder it names: every file in it) or reads by name, through
+    those files alone. The scan sees only `../` and root-quoted reads; this follows the reads beside a file too."""
+    tracked = {path for path in subprocess.check_output(["git", "ls-files", "-z", "--", "store/tools/"], cwd=root,
+                                                       text=True).split("\0") if path}
+
+    def named(name):
+        return {path for path in tracked if path == name or path.startswith(name.rstrip("/") + "/")}
+
+    job = planner.ci_jobs((root / ".github/workflows/ci.yml").read_text())["store-checks"]
+    todo = [path for entry in STORE_CHECKS_ENTRY.findall(job) for path in named(entry)]
+    read = set()
+    while todo:
+        source = todo.pop()
+        if source in read:
+            continue
+        read.add(source)
+        text = (root / source).read_bytes().decode(errors="replace")
+        names = QUOTED_NAME.findall(text) + [f"{module.strip()}.py" for found in PYTHON_IMPORT.findall(text)
+                                             for modules in found for module in modules.split(",") if module.strip()]
+        for name in names:
+            # From the repository root, a path names a folder as the planner's QUOTED_PATH does: a word alone is no path.
+            for target in (posixpath.join(posixpath.dirname(source), name), *(("/" in name) * [name])):
+                todo += named(posixpath.normpath(target))
+    return tracked, read
+
+
 class SelectionTests(unittest.TestCase):
     def test_backend_changes_run_the_integration_shards_and_nothing_else_does(self):
         # Task #2459: the Super Tab integration suite runs in PR CI for backend changes only.
@@ -822,6 +857,25 @@ class SelectionTests(unittest.TestCase):
                 self.assertIn(text, job)
         self.assertNotIn("secrets.", job)
 
+    def test_each_file_store_checks_runs_is_its_own(self):
+        # One added to the job but not to ALSO would be in no component: a change to it alone would not run the job.
+        job = planner.ci_jobs((REPOSITORY / ".github/workflows/ci.yml").read_text())["store-checks"]
+        entries = STORE_CHECKS_ENTRY.findall(job)
+        self.assertIn("store/tools/test_runtimes.py", entries)
+        for entry in entries:
+            with self.subTest(entry=entry):
+                self.assertIn("store", planner.owners(entry if posixpath.splitext(entry)[1] else entry + "/x"))
+
+    def test_store_tools_files_are_its_own_exactly_when_store_checks_runs_or_reads_them(self):
+        # The scan sees `../` and root-quoted reads only: a skipped file the job's files read beside them
+        # ('./listing.mjs') was no input of store-checks, and main's change to it reused a stale result after Update
+        # branch. The rest of store/tools/ is in no component, where a change on main reruns every suite.
+        full_checkout(self, "store/tools")
+        tracked, read = store_checks_files(REPOSITORY)
+        self.assertIn("store/tools/runtimes.sh", read)
+        self.assertEqual({path for path in tracked if "store" in planner.owners(path)}, read)
+        self.assertEqual({path for path in tracked - read if not planner.shared_input(path)}, set())
+
     def test_the_app_list_vectors_select_desktop_device_app_and_website(self):
         # Every writer of Harness Device's Linux app-list entry holds its bytes and rule to one shared file: the app,
         # Desktop and the website's one-line installer. The CLI owns tests/ and the backend reads tests/fixtures/.
@@ -1498,6 +1552,12 @@ class ReuseTests(ReuseFixture):
         self.assertEqual(plan["reuse"]["status"], "applied")
         self.assertEqual((plan["reuse"]["passed_head"], plan["reuse"]["main_parent"]), (passed, main))
 
+    def test_main_changing_a_store_tools_file_store_checks_does_not_read_reruns_every_suite(self):
+        # The scan cannot see a read beside a file ('./listing.mjs'): a store/tools/ file store-checks neither runs nor
+        # reads is in no component, so main's change to it reruns every suite rather than reuse a stale result.
+        _, main, head = self.scenario(["store/tools/runtimes.sh"], ["store/tools/listing.mjs"])
+        self.assertRerunsAll(self.plan(head, main), "store/tools/listing.mjs")
+
     def test_docs_and_top_level_notes_on_main_do_not_force_a_rerun(self):
         _, main, head = self.scenario(["mobile/lib/app.dart"], ["docs/guide.md", "README.md"])
         self.assertEqual(list(self.plan(head, main)["reused"]), ["mobile"])
@@ -2168,6 +2228,7 @@ class FullCheckoutTests(unittest.TestCase):
              "SelectionTests.test_the_harness_the_app_eval_files_run_runs_them",
              "SelectionTests.test_what_the_windows_e2e_harness_imports_is_listed",
              "SelectionTests.test_every_declared_input_exists",
+             "SelectionTests.test_store_tools_files_are_its_own_exactly_when_store_checks_runs_or_reads_them",
              "CrossReadTests.test_every_cross_read_in_this_repository_is_declared")
 
     def results_without_a_checkout(self, required):
