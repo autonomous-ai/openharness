@@ -18,7 +18,7 @@ These rules apply to every change in this repository.
 ## Style
 
 - Run the formatter and the linter before committing. Do not disable a lint rule to silence it.
-- Follow the style of the file you are editing, even where you would choose differently.
+- Follow the style of the file you are editing, even where your own style differs.
 - Imports are sorted and unused ones removed.
 - Use the project's existing helpers before writing a new one.
 
