@@ -1,0 +1,11 @@
+{
+  "name": "orders-api",
+  "version": "2.7.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test",
+    "db:ping": "node scripts/db-ping.js"
+  }
+}
