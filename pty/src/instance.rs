@@ -131,6 +131,37 @@ mod tests {
         assert_eq!(current(), base);
     }
 
+    // The tag is process-global and every test thread reads it through `current()`: a test that wrote it renamed
+    // another test's lock file mid-run (run 45666492430), so tests give the tag to `instance_for` instead.
+    #[test]
+    fn no_test_writes_the_tag_variable() {
+        // Split so this test's own lines never match.
+        let writes = [concat!("set_", "var("), concat!("remove_", "var(")];
+        let names = [concat!("INSTANCE_", "TAG_VAR"), concat!("HARNESS_PTY_", "INSTANCE_TAG")];
+        let mut dirs = vec![
+            PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/src")),
+            PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests")),
+        ];
+        let mut found = Vec::new();
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    dirs.push(path);
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    for (index, line) in text.lines().enumerate() {
+                        if writes.iter().any(|w| line.contains(w)) && names.iter().any(|n| line.contains(n)) {
+                            let file = path.strip_prefix(env!("CARGO_MANIFEST_DIR")).unwrap();
+                            found.push(format!("{}:{}", file.display(), index + 1));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(found.is_empty(), "a test writes the instance tag: {found:?}");
+    }
+
     #[test]
     fn a_long_home_uses_the_hashed_socket_name() {
         let instance = "p2-0.4.20";
