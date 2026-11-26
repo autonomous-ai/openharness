@@ -847,13 +847,15 @@ export class ObservedSource implements HostSource {
   }
 
   /** Where it runs, as its adapters read it: a proof only where its own tty and its process's start were read. A Codex
-   *  server's session names no process: the server is under whichever TUI started it, and its client was found by its
-   *  folder, a place to show, never one whose words a process proves (askServed). */
+   *  server's session names no process, by pid or proof: the server is under whichever TUI started it, and its client
+   *  was found by its folder, a place to show, never one whose words a process proves (askServed). A start read for the
+   *  TUI that ran it before its daemon did is that TUI's. */
   private placeOf(entry: Entry): Place {
     const hints = entry.paired ? { HC_TERMINAL_ID: entry.paired.address } : entry.hints
-    const proof = entry.ttyStart === undefined ? undefined : { pid: entry.ttyPid!, start: entry.ttyStart }
+    const served = this.servedBy(entry)
+    const proof = entry.ttyStart === undefined || served ? undefined : { pid: entry.ttyPid!, start: entry.ttyStart }
     return { host: entry.agent.host, app: entry.agent.app, hints, tty: entry.tty, proof, hostSession: entry.hostSession,
-      pid: this.servedBy(entry) ? undefined : entry.caller ?? entry.pid, sessionId: entry.agent.sessionId,
+      pid: served ? undefined : entry.caller ?? entry.pid, sessionId: entry.agent.sessionId,
       engine: entry.agent.engine, cwd: entry.agent.cwd, outer: entry.outer, ptyOwner: entry.ptyOwner }
   }
 
