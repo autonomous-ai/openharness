@@ -206,10 +206,13 @@ function variantHooks(vdir, state) {
     if (!valid(value)) throw new Error(`${file} must be JSON: ${what}`);
     return value;
   };
-  return {
-    hooks: read('hooks.json', v => v !== null && typeof v === 'object' && !Array.isArray(v), "Claude Code's hooks object"),
-    answers: read('harness-answers.json', v => Array.isArray(v) && v.every(isAnswer), 'a list of { argv, stdout?, stderr?, code? }'),
-  };
+  const hooks = read('hooks.json', v => v !== null && typeof v === 'object' && !Array.isArray(v), "Claude Code's hooks object");
+  const answers = read('harness-answers.json', v => Array.isArray(v) && v.every(isAnswer), 'a list of { argv, stdout?, stderr?, code? }');
+  // Refused here, before anything runs, as well as at each stage (lib/stage.ts): a notify answered by the variant would no
+  // longer be the dial the rings are read from.
+  if (answers?.some(a => a.argv[0] === 'device' && a.argv[1] === 'notify'))
+    throw new Error(`${join(vdir, 'harness-answers.json')}: device notify is answered by the eval, not by a variant`);
+  return { hooks, answers };
 }
 
 // The agents run in process groups of their own (lib/agents.ts), which no signal to the runner reaches: however the
