@@ -24,6 +24,9 @@ export interface NoticesDeps {
   /** Whether another question of that agent is open on the dials. A dial, and its cable session, hold one question an
    *  agent: a notice asked over it would hide it and drop its close, so the notice waits until it closes. */
   held(agentId: string): boolean
+  /** Whether the person is with that agent now (services/devices.ts `present`): read once the notice is its agent's,
+   *  before the limits are taken. */
+  present(agentId: string): boolean
   /** A question to every dial, in its agent's order. */
   ask(agentId: string, id: string, questions: unknown): void
   close(agentId: string, id: string): void
@@ -34,8 +37,8 @@ export interface NoticesDeps {
   /** The pending set changed: its file is written again (noticeFile.ts). */
   changed(): void
   /** Each answer, by the caller's engine (`agent` when it names none), for the day's tally. Its kind is read from the
-   *  fixed opening the CLI writes (noticeKind), never from what the line says. */
-  count(engine: 'claude' | 'codex' | 'agent', result: NoticeResult, kind: NoticeKind): void
+   *  fixed opening the CLI writes (noticeKind), never from what the line says. [present]: shown as a quiet card. */
+  count(engine: 'claude' | 'codex' | 'agent', result: NoticeResult, kind: NoticeKind, present: boolean): void
   /** The file's cards at the start (noticeFile.ts). */
   restored: readonly StoredNotice[]
   log(line: string): void
@@ -96,6 +99,9 @@ interface Pending {
   id: string; line: string; questions: unknown; host: string; who?: NoticeCaller['who']; keys: readonly string[]; at: number
   /** Back from the file: a drawer row whose question is held, never asked, for it rang before the restart. */
   restored?: true
+  /** Its agent was present: a drawer row whose question is held, never asked, as the person is already there. Apart from
+   *  `restored`, since working() must not end it: it was shown in this turn. */
+  quiet?: true
   /** Restored, and no row until its agent is listed: a card no list holds (`who`) never waits. */
   waiting?: true
 }
@@ -120,14 +126,17 @@ export class Notices {
 
   notify(ask: NoticeAsk): NoticeResult {
     // Counted by the engine, the outcome and the line's kind only: the text, session and folder are the person's own.
-    const answer = (result: NoticeResult): NoticeResult => {
-      this.deps.count(ask.engine ?? 'agent', result, noticeKind(ask.text))
+    const answer = (result: NoticeResult, present = false): NoticeResult => {
+      this.deps.count(ask.engine ?? 'agent', result, noticeKind(ask.text), present)
       return result
     }
     // With no dial a notice is nobody's: it must not use up the agent's minute for when one attaches.
     if (!this.deps.connected()) return answer('no dial')
     const caller = this.deps.resolve(ask)
-    if (!this.limits.take(caller.agentId, ask.text)) return answer('limited')
+    // Read before the limits: a quiet card takes no part of the hour's twenty, so a later ask with the person away still
+    // rings.
+    const present = this.deps.present(caller.agentId)
+    if (!this.limits.take(caller.agentId, ask.text, !present)) return answer('limited')
     this.ended(caller.agentId)
     // Its restored card, still waiting under the id a listing source gave it before the restart: one card an agent, and
     // nothing found later moves onto the new one.
@@ -139,10 +148,11 @@ export class Notices {
     const line = fitBytes(roundDrawable(ask.text))
     this.cards.set(caller.agentId, {
       id, line, questions: noticeQuestions(line, caller.host), host: caller.host, who: caller.who, keys: caller.keys, at: this.deps.clock(),
+      ...(present && { quiet: true as const }),
     })
     this.deps.changed()
     this.reask(caller.agentId)
-    return answer('shown')
+    return answer('shown', present)
   }
 
   /** Its agent's next turn started, its agent left, or no list holds it and the person tapped it: its card goes. Nothing
@@ -156,13 +166,13 @@ export class Notices {
   }
 
   /** Another question of that agent closed, which took the card's place on the dial or held it back: the card is asked,
-   *  under its id, unless one is still open. Nothing for an agent with none. A restored row comes back by a drawer
-   *  replace, as no question frame carries it. */
+   *  under its id, unless one is still open. Nothing for an agent with none. A restored or quiet row comes back by a
+   *  drawer replace, as no question frame carries it. */
   reask(agentId: string): void {
     if (this.send(agentId)) this.deps.redraw([agentId])
   }
 
-  /** A dial attached: each pending card is sent again, under its id, a live one asked and a restored one held. No
+  /** A dial attached: each pending card is sent again, under its id, a live one asked, a restored or quiet one held. No
    *  redraw: the attach's greeting replaces the drawer after its carousel push, and a close still in an agent's order
    *  came with its own reask, whose redraw waits behind it. */
   attached(): void {
@@ -210,12 +220,12 @@ export class Notices {
     this.deps.changed()
   }
 
-  /** The card to every dial: a live one asked, a restored one held. Nothing for one waiting for its agent or covered by
-   *  another question of it. Whether a restored one was held. */
+  /** The card to every dial: a live one asked, a restored or quiet one held. Nothing for one waiting for its agent or
+   *  covered by another question of it. Whether one was held. */
   private send(agentId: string): boolean {
     const card = this.cards.get(agentId)
     if (!card || card.waiting || this.deps.held(agentId)) return false
-    if (card.restored) {
+    if (card.restored || card.quiet) {
       this.deps.hold(agentId, card.id, card.questions)
       return true
     }
@@ -234,6 +244,11 @@ export class Notices {
   rows(machineId: string): UnreadNotification[] {
     return [...this.cards].reverse().filter(([agentId, card]) => !card.waiting && !this.deps.held(agentId))
       .map(([agentId, card]) => ({ agentId, machineId, question: true, text: card.line }))
+  }
+
+  /** Whether that agent's pending card is held quiet. */
+  quiet(agentId: string): boolean {
+    return this.cards.get(agentId)?.quiet === true
   }
 
   /** Whether that agent's card is still pending, asked or held back. */

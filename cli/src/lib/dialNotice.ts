@@ -109,23 +109,26 @@ export const NOTICE_SAME_MS = 600_000
 export const NOTICE_HOUR_MS = 3_600_000
 export const NOTICE_HOUR_MAX = 20
 
-interface Counted { agent: string; line: string; at: number }
+interface Counted { agent: string; line: string; at: number; hour: boolean }
 
 export class NoticeLimits {
-  // What was counted in the last hour, oldest first: never more than NOTICE_HOUR_MAX, as a twenty-first is refused.
+  // What was counted, oldest first: an hour's entries for the last hour, never more than NOTICE_HOUR_MAX as a
+  // twenty-first is refused; a quiet one for NOTICE_SAME_MS, the longest its agent's own checks read it. A quiet entry
+  // needs its agent present, and an agent takes one a minute, so it keeps ten at most.
   private counted: Counted[] = []
 
   constructor(private readonly now: () => number) {}
 
-  /** True when [agent]'s [line] may ring now; it is then counted. A refusal counts nothing. */
-  take(agent: string, line: string): boolean {
+  /** True when [agent]'s [line] may show now; it is then counted. A refusal counts nothing. [hour] false is a quiet
+   *  card: the agent's own limits bound a loop and still apply, but the hour's twenty bound beeps, and it makes none. */
+  take(agent: string, line: string, hour = true): boolean {
     const at = this.now()
-    this.counted = this.counted.filter((c) => at - c.at < NOTICE_HOUR_MS)
-    if (this.counted.length >= NOTICE_HOUR_MAX) return false
+    this.counted = this.counted.filter((c) => at - c.at < (c.hour ? NOTICE_HOUR_MS : NOTICE_SAME_MS))
+    if (hour && this.counted.filter((c) => c.hour).length >= NOTICE_HOUR_MAX) return false
     const refused = this.counted.some((c) => c.agent === agent
       && (at - c.at < NOTICE_AGENT_MS || (c.line === line && at - c.at < NOTICE_SAME_MS)))
     if (refused) return false
-    this.counted.push({ agent, line, at })
+    this.counted.push({ agent, line, at, hour })
     return true
   }
 }
