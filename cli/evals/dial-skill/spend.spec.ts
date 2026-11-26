@@ -44,4 +44,17 @@ describe('SpendGuard', () => {
     expect(guard.spentUsd).toBeCloseTo(8.03, 12)
     expect(guard.mayStart(0)).toBe(false)
   })
+
+  it("adds a case's row less the dollars of it already added, as its failed attempts are when they happen", () => {
+    const guard = new SpendGuard(10, 0)
+    const attempt = { model: 'claude-opus-5-5', usage: { input_tokens: 250_000, output_tokens: 0 } }
+
+    // $1 at $4 a million input tokens.
+    const counted = guard.add(attempt)
+    expect(counted).toBeCloseTo(1, 12)
+    // The row holds the failed attempt and the one that scored, $1 each.
+    guard.add({ ...attempt, usage: { input_tokens: 500_000, output_tokens: 0 } }, counted)
+
+    expect(guard.spentUsd).toBeCloseTo(2, 12)
+  })
 })

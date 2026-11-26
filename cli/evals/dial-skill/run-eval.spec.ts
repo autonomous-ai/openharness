@@ -584,6 +584,22 @@ describe('run-eval.mjs spend cap', () => {
     expect(jsonl('baseline', 'probes.jsonl')).toHaveLength(1)
   })
 
+  it('adds a failed attempt to the spend as it happens, and retries it only while the case would still be let start', () => {
+    fakeClaude(String.raw`emit({ type: 'assistant', parent_tool_use_id: null, message: { model: 'claude-opus-5-5', content: [] } })
+emit({ type: 'result', subtype: 'error_during_execution', is_error: true, usage: { ${DOLLAR}, output_tokens: 0 } })
+console.error('API Error: 529 overloaded')
+process.exitCode = 1`)
+
+    // After the first attempt's $1, a retry's $1.50 reserve no longer fits under $2.40.
+    const out = runEval(['--variant', 'baseline', ...THREE], {}, 2.4)
+
+    expect(out.status).toBe(4)
+    expect(out.stderr).toContain(`spend cap · $1.00 of $2.40: ${STOPPED}`)
+    expect(callsMade()).toEqual(['probe', 'agent'])
+    expect(jsonl('baseline', 'errors.jsonl')).toMatchObject([{ retries: 0, usage: { input_tokens: 250_000 } }])
+    expect(jsonl('baseline', 'errors.jsonl')).toHaveLength(1)
+  })
+
   it('keeps a reserve for every case in flight at --concurrency 2', () => {
     // One case's $1.50 reserve fits under $2.90; a second one's beside it does not, so the second worker starts nothing.
     const out = runEval(['--variant', 'baseline', '--agents', 'claude', '--cases', 'add-version-flag,fix-off-by-one', '--concurrency', '2',
@@ -908,6 +924,27 @@ setTimeout(() => {}, 60_000)`)
     // Half of a 4 s ceiling: too short to hold the judge's two 120 s calls, so the judge keeps the other half.
     expect(jsonl('baseline', 'errors.jsonl')).toMatchObject([{ failure_class: 'timeout', error: 'claude ran past 2 s' }])
     expect(alive).toBe(false)
+  })
+
+  it("gives a retried claude run only what is left of the agent's share of --timeout-s, so no attempt outlives its case", () => {
+    const failed = join(tmp, 'agent-failed')
+    fakeClaude(String.raw`if (!fs.existsSync(${JSON.stringify(failed)})) {
+  fs.writeFileSync(${JSON.stringify(failed)}, '')
+  emit({ type: 'result', subtype: 'error_during_execution', is_error: true, usage: { input_tokens: 5, output_tokens: 1 } })
+  console.error('API Error: 529 overloaded')
+  process.exitCode = 1
+} else {
+  emit({ type: 'assistant', parent_tool_use_id: null, message: { id: 'msg_1', model: 'claude-opus-5-5', content: [], usage: { input_tokens: 7, output_tokens: 3 } } })
+  setTimeout(() => {}, 60_000)
+}`)
+
+    // The agent's share of a 6 s ceiling ends 3 s after the case starts; the retry starts at least half a second in.
+    const out = runEval(['--variant', 'baseline', '--agents', 'claude', '--cases', 'add-version-flag', '--timeout-s', '6', '--approve-harness'])
+
+    expect(out.status).toBe(1)
+    const [row] = jsonl('baseline', 'errors.jsonl')
+    expect(row).toMatchObject({ failure_class: 'timeout', retries: 1, usage: { input_tokens: 12, output_tokens: 4 } })
+    expect(Number(/^claude ran past (\d+) s$/.exec(row.error)?.[1])).toBeLessThan(3)
   })
 
   it('keeps the model and usage of the messages a claude run printed before it was killed at its time-out', () => {
