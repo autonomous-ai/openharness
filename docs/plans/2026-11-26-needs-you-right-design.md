@@ -703,6 +703,7 @@ maintainer asked (2026-11-26): Part 7. None changes Parts 1 to 3 as written.
 2. **An outside Claude Code session's question form and plan approval:** Part 6.
 3. **One place decides the ring.** The firmware's face rule (Part 2, "The dial's own rule") and the devices' `present`
    overlap. Proposed to the firmware's owners: the frame says whether to ring, and both dial models obey it.
+   Built for the round dial (2026-11-26): its firmware dropped `on_face` and rings every alert it is sent.
 4. **A Codex session outside a pane: no wait reaches the dial:** Part 7.
 
 ## Left to the builder
