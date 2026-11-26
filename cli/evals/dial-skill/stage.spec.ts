@@ -162,10 +162,11 @@ describe('stage', () => {
     expect(staging('oracle', { skill: true, condition: 'crowd', crowd: dir }).skills).toEqual([])
   })
 
-  it('refuses a scenario repo that holds project instructions anywhere, or .claude/ at its top, leaving no run root', () => {
-    for (const planted of ['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', 'test/CLAUDE.md', 'test/CLAUDE.local.md', 'test/AGENTS.md', '.claude']) {
+  it('refuses a scenario repo that holds project instructions or .claude/ anywhere, leaving no run root', () => {
+    // Claude Code finds the skills of a .claude/ below the repo's top once the agent works there.
+    for (const planted of ['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', 'test/CLAUDE.md', 'test/CLAUDE.local.md', 'test/AGENTS.md', '.claude', 'test/.claude']) {
       const s = fixture()
-      if (planted === '.claude') mkdirSync(join(s.dir, 'repo', planted))
+      if (planted.endsWith('.claude')) mkdirSync(join(s.dir, 'repo', planted))
       else writeFileSync(join(s.dir, 'repo', planted), '# Rules\n')
 
       expect(() => stage(s, 'oracle', { skill: false, base }), planted).toThrow(planted)
