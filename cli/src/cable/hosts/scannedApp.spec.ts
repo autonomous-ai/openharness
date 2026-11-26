@@ -348,6 +348,12 @@ describe('scannedApps on Windows', () => {
     expect(await appOf(under('claude.exe', 'pwsh.exe', 'WindowsTerminal.exe'))).toBeUndefined()
   })
 
+  it('an agent a Harness command ran names nothing, never Harness: harness.exe is the CLI, not Harness Desktop', async () => {
+    // `harness api <connection> run -- claude` in VS Code's terminal: the CLI's harness.exe starts Node, which starts
+    // the tool on the same console.
+    expect(await appOf(under('claude.exe', 'node.exe', 'harness.exe', 'pwsh.exe', 'Code.exe'))).toBeUndefined()
+  })
+
   it('learnApps reads the PTY host\'s table, and rejects when it could not be read', async () => {
     const rows: ProcessRow[] = under('claude.exe', 'pwsh.exe', 'Code.exe')
       .map(({ pid, ppid, executable, startMarker }) => ({ pid, parentPid: ppid, executable, startMarker: startMarker!, args: executable }))
