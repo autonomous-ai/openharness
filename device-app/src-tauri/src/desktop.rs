@@ -37,10 +37,12 @@ impl DesktopApp for SystemDesktopApp {
         let Ok(mut system) = System::new() else {
             return false;
         };
+        // Processes, never their threads: a thread has its process's file and user, and on Linux reading a user costs
+        // one more file for each thread, every tick.
         system.refresh_processes_specifics(
             ProcessesToUpdate::All,
             true,
-            ProcessRefreshKind::nothing().with_exe(UpdateKind::Always).with_user(UpdateKind::Always),
+            ProcessRefreshKind::nothing().with_exe(UpdateKind::Always).with_user(UpdateKind::Always).without_tasks(),
         );
         // The process table holds every user's processes: our own user (uid on Linux, SID on Windows) picks ours.
         let own = sysinfo::get_current_pid().ok().and_then(|pid| system.process(pid)).and_then(|own| own.user_id());
