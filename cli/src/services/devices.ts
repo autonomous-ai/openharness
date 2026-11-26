@@ -2780,29 +2780,37 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // (docs/plans/2026-11-24-dial-tmux-pane-focus-follow-design.md, "herdr: the `pane.focused` event"), so its follow needs
   // no poll. herdr has one focus a server, and its event names no client: the app settled in front and its tab say whether
   // the person is looking at it. Each line is an outcome, never the pane, the tab or the agent.
-  /** The dials turn to the one live agent at the pane herdr says took the focus, as to a tmux pane's. With no dial linked
-   *  nothing is followed or said. */
-  const herdrFocused = (source: ObservedSource, paneId: string): Promise<void> | undefined => {
-    if (!cable.isConnected) return
-    const key = herdrPaneKey(paneId)
-    // First: the dial's own `herdr agent focus` excuses its event whatever else of it holds, and that one event alone.
-    if (herdrFocuses.echo(key, monotonic())) { log('[device] herdr focus · skipped · echo'); return }
-    // Its own pane, or the one herdr's list placed it at (shownAt, as tmux's): the event names herdr's bare id.
+  /** The one live agent at herdr's pane [paneId], a bare id as herdr's focus names it, and the app its place names:
+   *  undefined when no agent is at a pane the herdr source's server lists, null when two are or the pane only holds its
+   *  agent. Read by herdr's own follow and by the focus of its client's terminal in VS Code or Cursor alike. */
+  const herdrAgentAt = (source: ObservedSource, paneId: string): { agent: HostAgent; app?: string } | null | undefined => {
+    // Its own pane, or the one herdr's list placed it at (shownAt, as tmux's).
     const at = source.list().flatMap((agent) => {
       const full = source.shownAt(agent.id, herdrAdapter.id)
       const parts = full !== undefined && herdrPaneParts({ adapter: herdrAdapter.id, id: full })
       return parts && parts.id === paneId ? [{ agent, parts }] : []
     })
-    // A pane with no agent is ordinary use, and says nothing. The event is the server's whose agents the herdr source
-    // lists (its own, which tells it): another server's agent, whose pane id repeats one of it, is at no pane listed.
-    if (at.length === 0 || !herdr!.list().some(({ paneKeys }) => paneKeys?.includes(key))) return
-    // Two there cannot say which one the person looks at; a held pane shows whatever runs in front of its agent; one in
-    // herdr inside Orca is left to Orca's own focus, which follows its panes.
-    if (at.length !== 1 || at[0].parts.held || at[0].agent.nest !== 'herdr' || at[0].agent.app === 'orca') {
+    // herdr's focus is the server's whose agents the herdr source lists (its own, which tells it): another server's agent,
+    // whose pane id repeats one of it, is at no pane listed.
+    if (at.length === 0 || !herdr!.list().some(({ paneKeys }) => paneKeys?.includes(herdrPaneKey(paneId)))) return undefined
+    // Two there cannot say which one the person looks at; a held pane shows whatever runs in front of its agent.
+    return at.length === 1 && !at[0].parts.held ? { agent: at[0].agent, app: at[0].parts.app } : null
+  }
+  /** The dials turn to the one live agent at the pane herdr says took the focus, as to a tmux pane's. With no dial linked
+   *  nothing is followed or said. */
+  const herdrFocused = (source: ObservedSource, paneId: string): Promise<void> | undefined => {
+    if (!cable.isConnected) return
+    // First: the dial's own `herdr agent focus` excuses its event whatever else of it holds, and that one event alone.
+    if (herdrFocuses.echo(herdrPaneKey(paneId), monotonic())) { log('[device] herdr focus · skipped · echo'); return }
+    const at = herdrAgentAt(source, paneId)
+    // A pane with no agent is ordinary use, and says nothing.
+    if (at === undefined) return
+    // One in herdr inside Orca is left to Orca's own focus, which follows its panes.
+    if (at === null || at.agent.nest !== 'herdr' || at.agent.app === 'orca') {
       log('[device] herdr focus · skipped · unknown agent')
       return
     }
-    const [{ agent, parts: { app } }] = at
+    const { agent, app } = at
     // The app the person went to settles FRONT_SETTLE_MS after the switch. herdr's focus can move while the person is on
     // another tab of that app (a pane closing hands it on, a second client moves it): where the app reports tabs, the
     // agent's must be the one it reported last.
@@ -3315,16 +3323,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  person is now. */
   let editorFocuses = 0
   /** The one live agent at the pane the multiplexer client of [agents] shows, in [app]: herdr's at the pane herdr
-   *  said took its focus last (herdrSource.ts focusedPane), tmux's from one read of its clients (tmuxFocused, which
-   *  reads the client kept for [app]); none when not one is. */
+   *  said took its focus last (herdrSource.ts focusedPane), as herdr's own follow checks it (herdrAgentAt), when it is
+   *  one of [agents]; tmux's from one read of its clients (tmuxFocused, which reads the client kept for [app]); none
+   *  when not one is. */
   const clientShows = async (source: ObservedSource, agents: readonly HostAgent[], app: string): Promise<HostAgent | undefined> => {
     const focused = herdr!.focusedPane()
-    const key = focused === undefined ? undefined : herdrPaneKey(focused)
-    const inHerdr = agents.filter(({ id }) => {
-      const full = source.shownAt(id, herdrAdapter.id)
-      return full !== undefined && herdrAdapter.paneKey({ adapter: herdrAdapter.id, id: full }) === key
-    })
-    if (inHerdr.length === 1) return inHerdr[0]
+    const inHerdr = focused === undefined ? undefined : herdrAgentAt(source, focused)
+    if (inHerdr && agents.some(({ id }) => id === inHerdr.agent.id)) return inHerdr.agent
     const pane = await tmuxFocused(source, app)
     return pane ? nestedAt(source, tmux.id, pane.id) : undefined
   }
