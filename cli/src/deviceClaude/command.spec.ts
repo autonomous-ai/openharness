@@ -113,19 +113,19 @@ const FILES: ClaudePluginFiles = {
   executable: ['plugins/harness-device/hooks/asked'],
 }
 
-/** [run], each call kept with the folder it ran in. */
+/** [run], each call kept. */
 function watched(run: ClaudeRun) {
-  const calls: Array<{ args: string; cwd?: string }> = []
-  const watching: ClaudeRun = async (args, timeoutMs, cwd) => {
-    calls.push({ args: args.join(' '), cwd })
-    return run(args, timeoutMs, cwd)
+  const calls: string[] = []
+  const watching: ClaudeRun = async (args, timeoutMs) => {
+    calls.push(args.join(' '))
+    return run(args, timeoutMs)
   }
   return { calls, run: watching }
 }
 
 /** The calls that change Claude Code: every one but the version and the lists. */
 const READS = new Set(['--version', 'plugin list --json', 'plugin marketplace list --json'])
-const writes = (calls: Array<{ args: string; cwd?: string }>) => calls.filter((call) => !READS.has(call.args))
+const writes = (calls: string[]) => calls.filter((call) => !READS.has(call))
 
 /** A `claude` 2.1.287 with nothing installed, whose calls answer from [answers] by their arguments. */
 function fakeClaude(answers: Answers = {}): ClaudeRun {
@@ -207,16 +207,14 @@ describe('harness device claude', () => {
     const { calls, run } = watched(fakeClaude())
     expect(await device(['claude', 'enable'], { home, claude: () => run })).toEqual({ code: 0, out: [], err: [] })
     const marketplace = harnessPath('claude-marketplace', home)
-    expect(writes(calls)).toEqual([
-      { args: 'plugin marketplace add ./claude-marketplace', cwd: dirname(marketplace) },
-      { args: 'plugin install harness-device@openharness --scope user' },
-    ])
+    expect(writes(calls)).toEqual([`plugin marketplace add ${marketplace}`, 'plugin install harness-device@openharness --scope user'])
     expect(readFileSync(join(marketplace, '.claude-plugin', 'marketplace.json'), 'utf8')).toBe(FILES.files['.claude-plugin/marketplace.json'])
   })
 
   it('enable that fails prints Claude Code\'s line and its reason', async () => {
-    const claude = fakeClaude({ 'plugin marketplace add ./claude-marketplace': { code: 1, stderr: 'xcrun: error: invalid active developer path\n' } })
-    expect(await device(['claude', 'enable'], { claude: () => claude }))
+    const home = folder()
+    const claude = fakeClaude({ [`plugin marketplace add ${harnessPath('claude-marketplace', home)}`]: { code: 1, stderr: 'xcrun: error: invalid active developer path\n' } })
+    expect(await device(['claude', 'enable'], { home, claude: () => claude }))
       .toEqual({ code: 1, out: [], err: ['xcrun: error: invalid active developer path (no xcode tools)'] })
   })
 

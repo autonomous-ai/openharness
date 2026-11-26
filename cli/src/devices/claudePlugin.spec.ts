@@ -26,7 +26,8 @@ const USER_ON = { id: 'harness-device@openharness', scope: 'user', enabled: true
 const USER_OFF = { ...USER_ON, enabled: false }
 const MARKETPLACE = [{ name: 'openharness', source: 'github', repo: 'autonomous-ai/openharness' }]
 const UNLISTED = 'Claude Code did not list its plugins.'
-const ADD = 'plugin marketplace add ./claude-marketplace'
+/** The add of the marketplace folder, by its absolute path, as Claude Code takes a local one on every OS. */
+const add = (folder: string): string => `plugin marketplace add ${folder}`
 const INSTALL = 'plugin install harness-device@openharness --scope user'
 /** What cli.js carries, cut to the marketplace's own file and the one executable. */
 const FILES: ClaudePluginFiles = {
@@ -34,17 +35,17 @@ const FILES: ClaudePluginFiles = {
   executable: ['plugins/harness-device/hooks/asked'],
 }
 
-/** A `claude` that answers by its arguments and records each call with the time and the folder it was given. */
+/** A `claude` that answers by its arguments and records each call with the time it was given. */
 function fakeClaude(answers: Record<string, Answer>, version = '2.1.287 (Claude Code)') {
-  const calls: Array<{ args: string; timeoutMs: number; cwd?: string }> = []
+  const calls: Array<{ args: string; timeoutMs: number }> = []
   const table: Record<string, Answer> = {
     '--version': { code: 0, stdout: `${version}\n` },
     'plugin list --json': { code: 0, stdout: '[]' },
     'plugin marketplace list --json': { code: 0, stdout: '[]' },
     ...answers,
   }
-  const run: ClaudeRun = async (args, timeoutMs, cwd) => {
-    calls.push({ args: args.join(' '), timeoutMs, cwd })
+  const run: ClaudeRun = async (args, timeoutMs) => {
+    calls.push({ args: args.join(' '), timeoutMs })
     const answer = table[args.join(' ')] ?? { code: 0 }
     return { code: answer.code, stdout: answer.stdout ?? '', stderr: answer.stderr ?? '' }
   }
@@ -127,15 +128,14 @@ function holdsFiles(folder: string): void {
 }
 
 describe('claudeEnable', () => {
-  // No git and no GitHub: Claude Code reads a local marketplace in place. Its path must start `./` on every OS, which
-  // Windows' `C:\...` does not, so the add runs in the folder's parent.
-  it('the first install writes the folder and adds it from its parent as ./claude-marketplace', async () => {
+  // No git and no GitHub: Claude Code reads a local marketplace in place. A path relative to where the call runs could
+  // be kept as it was given, so it is the folder's absolute path, on Windows too (`C:\...`).
+  it('the first install writes the folder and adds it by its absolute path', async () => {
     for (const [act, done] of [[claudeEnable, { ok: true }], [claudeSetUp, { ok: true, outcome: 'installed' }]] as const) {
       const claude = fakeClaude({})
       const deps = installing(claude.run)
       expect(await act(deps)).toEqual(done)
-      expect(claude.writes()).toEqual([ADD, INSTALL])
-      expect(claude.calls.find((call) => call.args === ADD)?.cwd).toBe(dirname(deps.folder))
+      expect(claude.writes()).toEqual([add(deps.folder), INSTALL])
       expect(claude.calls.some((call) => /autonomous-ai\/openharness|--sparse/.test(call.args))).toBe(false)
       holdsFiles(deps.folder)
     }
@@ -147,9 +147,9 @@ describe('claudeEnable', () => {
       const folder = marketplaceFolder()
       const claude = fakeClaude({ 'plugin marketplace list --json': list(marketplace) })
       let written = false
-      const run: ClaudeRun = async (args, timeoutMs, cwd) => {
+      const run: ClaudeRun = async (args, timeoutMs) => {
         if (args.join(' ') === INSTALL) written = existsSync(join(folder, '.claude-plugin/marketplace.json'))
-        return claude.run(args, timeoutMs, cwd)
+        return claude.run(args, timeoutMs)
       }
       expect(await claudeEnable(installing(run, 'darwin', folder))).toEqual({ ok: true })
       expect(claude.writes()).toEqual([INSTALL])
@@ -168,8 +168,9 @@ describe('claudeEnable', () => {
   })
 
   it('a failed add gives its first line and why, in a fixed word', async () => {
-    const claude = fakeClaude({ [ADD]: { code: 1, stderr: "\nMarketplace 'openharness' is already added from a different source\n  at add\n" } })
-    expect(await claudeEnable(installing(claude.run))).toEqual({
+    const folder = marketplaceFolder()
+    const claude = fakeClaude({ [add(folder)]: { code: 1, stderr: "\nMarketplace 'openharness' is already added from a different source\n  at add\n" } })
+    expect(await claudeEnable(installing(claude.run, 'darwin', folder))).toEqual({
       ok: false, step: 'marketplace', reason: 'exists', error: "Marketplace 'openharness' is already added from a different source",
     })
   })
@@ -219,9 +220,10 @@ describe('claudeEnable', () => {
 
   it('an install that fails just after the marketplace add is not tried again: the marketplace is new', async () => {
     const claude = fakeClaude({ [INSTALL]: { code: 1, stderr: 'Error: no network\n' } })
-    expect(await claudeEnable(installing(claude.run, 'darwin')))
+    const deps = installing(claude.run, 'darwin')
+    expect(await claudeEnable(deps))
       .toEqual({ ok: false, error: 'Error: no network', step: 'install', reason: 'exit 1' })
-    expect(claude.writes()).toEqual([ADD, INSTALL])
+    expect(claude.writes()).toEqual([add(deps.folder), INSTALL])
   })
 
   it('enable when installed but off runs plugin enable', async () => {
@@ -429,9 +431,9 @@ describe('claudeUpdate', () => {
     const folder = marketplaceFolder()
     const claude = updating('16a92abfab3f', '9f2c1d0e7a4b')
     let written = false
-    const run: ClaudeRun = async (args, timeoutMs, cwd) => {
+    const run: ClaudeRun = async (args, timeoutMs) => {
       if (args.join(' ') === 'plugin marketplace update openharness') written = existsSync(join(folder, '.claude-plugin/marketplace.json'))
-      return claude.run(args, timeoutMs, cwd)
+      return claude.run(args, timeoutMs)
     }
     expect(await claudeUpdate(installing(run, 'darwin', folder))).toEqual({ ok: true, outcome: 'updated' })
     expect(written).toBe(true)
@@ -557,13 +559,14 @@ describe('a claude launcher Harness does not run', () => {
 describe('calls to claude', () => {
   it('the install waits 60 s and the list 15 s', async () => {
     const claude = fakeClaude({ 'plugin list --json': list() })
-    await claudeEnable(installing(claude.run, 'darwin'))
+    const deps = installing(claude.run, 'darwin')
+    await claudeEnable(deps)
     const timeouts = Object.fromEntries(claude.calls.map((call) => [call.args, call.timeoutMs]))
     expect(timeouts).toEqual({
       '--version': 15_000,
       'plugin list --json': 15_000,
       'plugin marketplace list --json': 15_000,
-      [ADD]: 60_000,
+      [add(deps.folder)]: 60_000,
       [INSTALL]: 60_000,
     })
     const off = fakeClaude({ 'plugin list --json': list(USER_OFF) })
@@ -584,10 +587,11 @@ describe('calls to claude', () => {
     expect(await claudeDisable({ run: silent.run, platform: 'darwin' }))
       .toEqual({ ok: false, error: 'Claude Code did not answer.', step: 'uninstall', reason: 'exit 2' })
 
-    const unanswered = fakeClaude({ [ADD]: { code: null, stderr: '' } })
-    expect(await claudeEnable(installing(unanswered.run, 'darwin')))
+    const folder = marketplaceFolder()
+    const unanswered = fakeClaude({ [add(folder)]: { code: null, stderr: '' } })
+    expect(await claudeEnable(installing(unanswered.run, 'darwin', folder)))
       .toEqual({ ok: false, error: 'Claude Code did not answer.', step: 'marketplace', reason: 'no answer' })
-    expect(unanswered.writes()).toEqual([ADD])
+    expect(unanswered.writes()).toEqual([add(folder)])
   })
 
   // The devices log why a step failed in a fixed word, never in Claude Code's own line, which can name a path.
@@ -626,11 +630,12 @@ describe('calls to claude', () => {
   // The devices count a failure by its step, a fixed word, never by Claude Code's own line.
   it('a failure names its step', async () => {
     const failed = (stderr: string) => ({ code: 1, stderr })
-    const step = async (answers: Record<string, Answer>, act: typeof claudeEnable | typeof claudeUpdate = claudeEnable) => {
-      const result = await act(installing(fakeClaude(answers).run))
+    const step = async (answers: Record<string, Answer>, act: typeof claudeEnable | typeof claudeUpdate = claudeEnable, folder = marketplaceFolder()) => {
+      const result = await act(installing(fakeClaude(answers).run, 'darwin', folder))
       return result.ok ? null : result.step
     }
-    expect(await step({ [ADD]: failed('Error: a\n') })).toBe('marketplace')
+    const folder = marketplaceFolder()
+    expect(await step({ [add(folder)]: failed('Error: a\n') }, claudeEnable, folder)).toBe('marketplace')
     expect(await step({ 'plugin install harness-device@openharness --scope user': failed('Error: b\n') })).toBe('install')
     expect(await step({ 'plugin list --json': list(USER_OFF), 'plugin enable harness-device@openharness --scope user': failed('Error: c\n') }))
       .toBe('enable')

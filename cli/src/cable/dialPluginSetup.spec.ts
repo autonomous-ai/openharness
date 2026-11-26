@@ -24,7 +24,8 @@ afterEach(() => {
   for (const dir of folders.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
-const ADD = 'plugin marketplace add ./claude-marketplace'
+/** The add of [marketplace], the rig's folder, by its absolute path. */
+const addFrom = (marketplace: string): string => `plugin marketplace add ${marketplace}`
 const INSTALL = 'plugin install harness-device@openharness --scope user'
 const UNINSTALL = 'plugin uninstall harness-device@openharness --scope user'
 const PULL = 'plugin marketplace update openharness'
@@ -186,9 +187,9 @@ function orcaRig(listed: string[], fake = fakeHomes(), over: Partial<DialPluginS
 describe('createDialPluginSetup', () => {
   it('installs once, records this CLI\'s version and counts set up', async () => {
     const claude = fakeClaude()
-    const { setup, state, counted } = rig(claude)
+    const { setup, state, counted, marketplace } = rig(claude)
     expect(await setup.pass()).toBe(true)
-    expect(claude.writes()).toEqual([ADD, INSTALL])
+    expect(claude.writes()).toEqual([addFrom(marketplace), INSTALL])
     expect(state.recorded).toBe('0.6.59')
     expect(counted).toEqual([['set up']])
     const before = claude.calls.length
@@ -226,12 +227,12 @@ describe('createDialPluginSetup', () => {
 
   it('claude appearing later is set up at the next pass', async () => {
     const claude = fakeClaude()
-    const { setup, state, counted } = rig(null)
+    const { setup, state, counted, marketplace } = rig(null)
     expect(await setup.pass()).toBe(false)
     expect(counted).toEqual([])
     state.found = claude
     expect(await setup.pass()).toBe(true)
-    expect(claude.writes()).toEqual([ADD, INSTALL])
+    expect(claude.writes()).toEqual([addFrom(marketplace), INSTALL])
     expect(counted).toEqual([['set up']])
   })
 
@@ -341,7 +342,7 @@ describe('createDialPluginSetup', () => {
   it('a failed install is counted with its step and tried no sooner than an hour later', async () => {
     const fail = [INSTALL]
     const claude = fakeClaude({ fail })
-    const { setup, state, counted } = rig(claude)
+    const { setup, state, counted, marketplace } = rig(claude)
     expect(await setup.pass()).toBe(false)
     expect(counted).toEqual([['failed', 'install · exit 1']])
     expect(state.recorded).toBeUndefined()
@@ -353,14 +354,16 @@ describe('createDialPluginSetup', () => {
     fail.pop()
     state.now = HOUR
     expect(await setup.pass()).toBe(true)
-    expect(claude.writes()).toEqual([ADD, INSTALL, ADD, INSTALL])
+    expect(claude.writes()).toEqual([addFrom(marketplace), INSTALL, addFrom(marketplace), INSTALL])
     expect(state.recorded).toBe('0.6.59')
     expect(counted).toEqual([['failed', 'install · exit 1'], ['set up']])
   })
 
   // A fixed word for why, never Claude Code's own line, which can name a path.
   it('a failed step counts its step and reason', async () => {
-    const add = rig(fakeClaude({ fail: [ADD], stderr: "fatal: unable to access 'https://github.com/a/b/': Could not resolve host: github.com\n" }))
+    const fail: string[] = []
+    const add = rig(fakeClaude({ fail, stderr: "fatal: unable to access 'https://github.com/a/b/': Could not resolve host: github.com\n" }))
+    fail.push(addFrom(add.marketplace))
     await add.setup.pass()
     expect(add.counted).toEqual([['failed', 'marketplace · network']])
 
@@ -411,11 +414,11 @@ describe('createDialPluginSetup', () => {
   })
 
   it('disable landing while the install runs: the plugin is uninstalled again, nothing recorded', async () => {
-    const { setup, state, counted } = rig(null)
+    const { setup, state, counted, marketplace } = rig(null)
     const claude = fakeClaude({ on: (call) => { if (call === INSTALL) state.wanted = false } })
     state.found = claude
     expect(await setup.pass()).toBe(false)
-    expect(claude.writes()).toEqual([ADD, INSTALL, UNINSTALL])
+    expect(claude.writes()).toEqual([addFrom(marketplace), INSTALL, UNINSTALL])
     expect(state.recorded).toBeUndefined()
     expect(counted).toEqual([])
   })
@@ -450,11 +453,11 @@ describe('createDialPluginSetup', () => {
   })
 
   it('a dial-skill.json that cannot be read while the install runs leaves the plugin installed, and nothing recorded', async () => {
-    const { setup, state, counted } = rig(null)
+    const { setup, state, counted, marketplace } = rig(null)
     const claude = fakeClaude({ on: (call) => { if (call === INSTALL) state.wanted = undefined } })
     state.found = claude
     expect(await setup.pass()).toBe(false)
-    expect(claude.writes()).toEqual([ADD, INSTALL])
+    expect(claude.writes()).toEqual([addFrom(marketplace), INSTALL])
     expect(state.recorded).toBeUndefined()
     expect(counted).toEqual([])
   })
@@ -473,7 +476,7 @@ describe('createDialPluginSetup', () => {
 
   it('an undo that failed is tried again after the hour though Claude Code is not wanted, and not once it is done', async () => {
     const fail = [UNINSTALL]
-    const { setup, state, counted } = rig(null)
+    const { setup, state, counted, marketplace } = rig(null)
     const claude = fakeClaude({ fail, on: (call) => { if (call === INSTALL) state.wanted = false } })
     state.found = claude
     expect(await setup.pass()).toBe(false)
@@ -485,7 +488,7 @@ describe('createDialPluginSetup', () => {
     fail.pop()
     state.now = HOUR
     expect(await setup.pass()).toBe(false)
-    expect(claude.writes()).toEqual([ADD, INSTALL, UNINSTALL, UNINSTALL])
+    expect(claude.writes()).toEqual([addFrom(marketplace), INSTALL, UNINSTALL, UNINSTALL])
     expect(state.recorded).toBeUndefined()
     expect(counted).toEqual([['failed', 'uninstall · exit 1']])
 
@@ -496,9 +499,9 @@ describe('createDialPluginSetup', () => {
 
   it('two passes at once run one install', async () => {
     const claude = fakeClaude()
-    const { setup } = rig(claude)
+    const { setup, marketplace } = rig(claude)
     expect(await Promise.all([setup.pass(), setup.pass()])).toEqual([true, false])
-    expect(claude.writes()).toEqual([ADD, INSTALL])
+    expect(claude.writes()).toEqual([addFrom(marketplace), INSTALL])
   })
 
   it('a record that is not saved is failed · save', async () => {
@@ -521,9 +524,9 @@ describe('createDialPluginSetup', () => {
 
   it('a pass on Windows installs the plugin, as on a Mac', async () => {
     const claude = fakeClaude()
-    const { setup, state, counted } = rig(claude, { platform: 'win32' })
+    const { setup, state, counted, marketplace } = rig(claude, { platform: 'win32' })
     expect(await setup.pass()).toBe(true)
-    expect(claude.writes()).toEqual([ADD, INSTALL])
+    expect(claude.writes()).toEqual([addFrom(marketplace), INSTALL])
     expect(state.recorded).toBe('0.6.59')
     expect(counted).toEqual([['set up']])
   })
@@ -555,7 +558,7 @@ describe('the plugin in each Orca account\'s home', () => {
     const claude = fakeClaude()
     r.state.found = claude
     expect(await r.setup.pass()).toBe(true)
-    expect(claude.writes()).toEqual([ADD, INSTALL])
+    expect(claude.writes()).toEqual([addFrom(r.marketplace), INSTALL])
     expect(r.fake.writes(real(a))).toEqual([ENABLE])
     expect(r.state.pluginHomes).toEqual([real(a)])
   })
