@@ -413,10 +413,9 @@ async function httpFixture(blocked: (agentId: string) => boolean = () => false, 
   overrides: Partial<HookServerHandlers> = {}, admissionBytesCapacity?: number) {
   const { startHookServer } = await import('../hookServer.js')
   const { readHookCredential } = await import('./hookAuth.js')
-  const prompts: string[] = [], registered = vi.fn(), reasons: Array<string | undefined> = []
+  const registered = vi.fn<HookServerHandlers['onRegistered']>(), reasons: Array<string | undefined> = []
   const started = await startHookServer(0, { onRegistered: registered, onSessionEnd: () => {},
     hookAdmissionBlocked: blocked,
-    onPromptSubmitted: (_id, text) => prompts.push(text),
     onAdmissionHeld: (_id, reason) => reasons.push(reason),
     ...overrides,
   // The order of concurrent retries is what this file pins; each real lookup of who is calling takes its own time.
@@ -430,27 +429,28 @@ async function httpFixture(blocked: (agentId: string) => boolean = () => false, 
         ...(order.firedAt ? { 'x-harness-hook-fired-at': String(order.firedAt) } : {}),
       },
       body: JSON.stringify({ engine: 'codex', sessionId: A, transcriptPath: transcript,
-        tmuxPane: '%2', cwd: root, hookEvent: 'UserPromptSubmit', prompt: 'fixture prompt', ...override }),
+        tmuxPane: '%2', cwd: root, hookEvent: 'UserPromptSubmit', ...override }),
     })
     return { status: response.status, body: await response.json() }
   }
-  return { post, prompts, registered, reasons }
+  // Each committed UserPromptSubmit announces its binding once, in commit order.
+  const committed = () => registered.mock.calls.map(([entry]) => entry.sessionId)
+  return { post, registered, committed, reasons }
 }
 
-it('keeps each prompt through an HTTP registration write failure and credits it only after recovery', async () => {
+it('keeps each prompt through an HTTP registration write failure and announces it only after recovery', async () => {
   const f = await httpFixture()
   const before = readFileSync(file, 'utf8')
   fault.rename = true
-  expect(await f.post({ prompt: 'first prompt' })).toEqual({ status: 200, body: { pending: true } })
-  expect(await f.post({ prompt: 'second prompt' })).toEqual({ status: 200, body: { pending: true } })
-  expect(f.prompts).toEqual([])
+  // The model tells the two deliveries apart in the bindings they announce.
+  expect(await f.post({ model: 'first' })).toEqual({ status: 200, body: { pending: true } })
+  expect(await f.post({ model: 'second' })).toEqual({ status: 200, body: { pending: true } })
   expect(f.registered).not.toHaveBeenCalled()
   expect(registry.byAgent(source)?.sessionId).toBe('')
   expect(readFileSync(file, 'utf8')).toBe(before)
   expect(f.reasons.some(reason => reason?.includes('registry storage write failed'))).toBe(true)
   fault.rename = false
-  await vi.waitFor(() => expect(f.prompts).toEqual(['first prompt', 'second prompt']), { timeout: 4_000 })
-  expect(f.registered).toHaveBeenCalledTimes(2)
+  await vi.waitFor(() => expect(f.registered.mock.calls.map(([entry]) => entry.model)).toEqual(['first', 'second']), { timeout: 4_000 })
   expect(registry.bySession(A)?.agentId).toBe(source)
 })
 
@@ -458,9 +458,9 @@ it('holds a missing announced transcript on the actual HTTP path and retries com
   const f = await httpFixture()
   rmSync(transcript)
   expect(await f.post()).toEqual({ status: 200, body: { pending: true } })
-  expect(f.prompts).toEqual([])
+  expect(f.registered).not.toHaveBeenCalled()
   writeFileSync(transcript, header())
-  await vi.waitFor(() => expect(f.prompts).toEqual(['fixture prompt']), { timeout: 4_000 })
+  await vi.waitFor(() => expect(f.committed()).toEqual([A]), { timeout: 4_000 })
   expect(registry.bySession(A)?.agentId).toBe(source)
 })
 
@@ -468,12 +468,11 @@ it.each(['commandcode', 'grok', 'agy', 'copilot'] as const)('admits the %s Sessi
   const agent = (await registry.openProcessAgent({ engine, tmuxPane: '%3', cwd: root,
     processIdentity: { pid: 5103, startMarker: 'fixture-start', executable: `<${engine}>` } }))!.entry
   const f = await httpFixture()
-  expect(await f.post({ engine, tmuxPane: '%3', transcriptPath: undefined, hookEvent: 'SessionStart', prompt: undefined }))
+  expect(await f.post({ engine, tmuxPane: '%3', transcriptPath: undefined, hookEvent: 'SessionStart' }))
     .toEqual({ status: 200, body: { ok: true } })
   expect(registry.byAgent(agent.agentId)?.sessionId).toBe(A)
   expect(registry.byAgent(agent.agentId)?.transcriptPath).toContain(join(root, engine))
   expect(f.registered).toHaveBeenCalledOnce()
-  expect(f.prompts).toEqual([])
 })
 
 it('rechecks an unwritten derived locator proof under the lock and never grants it to a reported path', async () => {
@@ -510,7 +509,7 @@ it('the actual Stop job blocks hook admission before its first asynchronous step
   const stopping = stop(source)
   const refused = expect(stopping).rejects.toThrow('fixture Stop did not proceed')
   expect(await f.post()).toEqual({ status: 200, body: { pending: true } })
-  expect(f.prompts).toEqual([])
+  expect(f.registered).not.toHaveBeenCalled()
   expect(registry.byAgent(source)?.sessionId).toBe('')
   expect(f.reasons.some(reason => reason?.includes('Stop'))).toBe(true)
   expect(never).not.toHaveBeenCalled()
@@ -563,23 +562,23 @@ it('revokes a stale displaced-owner draft when a peer gave that owner another co
 it('does not let a newly healthy prompt bypass its already-held predecessor', async () => {
   const f = await httpFixture()
   fault.rename = true
-  expect((await f.post({ prompt: 'first' })).body).toEqual({ pending: true })
+  expect((await f.post({ model: 'first' })).body).toEqual({ pending: true })
   fault.rename = false
-  await f.post({ prompt: 'second' })
-  await vi.waitFor(() => expect(f.prompts).toEqual(['first', 'second']), { timeout: 4_000 })
+  await f.post({ model: 'second' })
+  await vi.waitFor(() => expect(f.registered.mock.calls.map(([entry]) => entry.model)).toEqual(['first', 'second']), { timeout: 4_000 })
 })
 
 it('keeps the older hold visible when a competing delegated delivery is refused', async () => {
   const f = await httpFixture(), firedAt = Date.now()
   fault.rename = true
-  await f.post({ prompt: 'parent' }, { firedAt })
+  await f.post({}, { firedAt })
   const child = join(home, 'sessions', `rollout-${B}.jsonl`); writeFileSync(child, '{\n')
-  await f.post({ sessionId: B, transcriptPath: child, prompt: 'child' }, { firedAt: firedAt + 1 })
+  await f.post({ sessionId: B, transcriptPath: child }, { firedAt: firedAt + 1 })
   writeFileSync(child, header(B, true))
   await vi.waitFor(() => expect(f.reasons.at(-1)).toContain('registry storage write failed'), { timeout: 3_000 })
-  expect(f.prompts).toEqual([])
+  expect(f.registered).not.toHaveBeenCalled()
   fault.rename = false
-  await vi.waitFor(() => expect(f.prompts).toEqual(['parent']), { timeout: 3_000 })
+  await vi.waitFor(() => expect(f.committed()).toEqual([A]), { timeout: 3_000 })
   expect(f.reasons.at(-1)).toBeUndefined()
 })
 
@@ -588,8 +587,7 @@ it('contains a failed status publisher without losing durable prompt notificatio
   fault.rename = true
   await f.post()
   fault.rename = false
-  await vi.waitFor(() => expect(f.prompts).toEqual(['fixture prompt']), { timeout: 3_000 })
-  expect(f.registered).toHaveBeenCalledOnce()
+  await vi.waitFor(() => expect(f.committed()).toEqual([A]), { timeout: 3_000 })
 })
 
 it('does not let a delayed older ordinary hook replace a newer accepted conversation', async () => {
@@ -597,13 +595,13 @@ it('does not let a delayed older ordinary hook replace a newer accepted conversa
   const f = await httpFixture()
   const other = join(home, 'sessions', `rollout-${B}.jsonl`); writeFileSync(other, header(B))
   const time = Date.now() + 10_000
-  expect((await f.post({ sessionId: B, transcriptPath: other, prompt: 'newer' }, { firedAt: time + 1 })).body).toEqual({ ok: true })
-  expect((await f.post({ prompt: 'older' }, { firedAt: time })).body).toEqual({ ignored: true, reason: 'stale_hook' })
+  expect((await f.post({ sessionId: B, transcriptPath: other }, { firedAt: time + 1 })).body).toEqual({ ok: true })
+  expect((await f.post({}, { firedAt: time })).body).toEqual({ ignored: true, reason: 'stale_hook' })
   expect(registry.byAgent(source)?.sessionId).toBe(B)
-  expect(f.prompts).toEqual(['newer'])
+  expect(f.committed()).toEqual([B])
 })
 
-it('acknowledges a repeated delivery both while held and after acceptance without crediting it twice', async () => {
+it('acknowledges a repeated delivery both while held and after acceptance without announcing it twice', async () => {
   const f = await httpFixture()
   const delivery = { id: 'fixture-delivery-0001' }
   fault.rename = true
@@ -611,10 +609,9 @@ it('acknowledges a repeated delivery both while held and after acceptance withou
   expect((await f.post({}, delivery)).body).toEqual({ pending: true })
   expect(await f.post({ prompt: 'conflicting prompt' }, delivery)).toEqual({ status: 409, body: { pending: false, error: 'HOOK_DELIVERY_CONFLICT' } })
   fault.rename = false
-  await vi.waitFor(() => expect(f.prompts).toHaveLength(1), { timeout: 4_000 })
+  await vi.waitFor(() => expect(f.registered).toHaveBeenCalledOnce(), { timeout: 4_000 })
   expect((await f.post({}, delivery)).body).toEqual({ ok: true })
-  expect(f.prompts).toEqual(['fixture prompt'])
-  expect(f.registered).toHaveBeenCalledOnce()
+  expect(f.committed()).toEqual([A])
 })
 
 it('holds new deliveries at receipt capacity without evicting completed acknowledgements', async () => {
@@ -623,7 +620,7 @@ it('holds new deliveries at receipt capacity without evicting completed acknowle
   expect((await f.post({}, original)).body).toEqual({ ok: true })
   expect((await f.post({}, { id: 'fixture-delivery-0002' })).status).toBe(429)
   expect((await f.post({}, original)).body).toEqual({ ok: true })
-  expect(f.prompts).toHaveLength(1)
+  expect(f.registered).toHaveBeenCalledOnce()
 })
 
 it('bounds retained native payload bytes without dropping an already-owned prompt', async () => {
@@ -634,7 +631,7 @@ it('bounds retained native payload bytes without dropping an already-owned promp
   expect((await f.post({ prompt }, delivery)).body).toEqual({ pending: true })
   expect((await f.post({ prompt }, { id: 'fixture-delivery-0002' })).status).toBe(429)
   fault.rename = false
-  await vi.waitFor(() => expect(f.prompts).toEqual([prompt]), { timeout: 3_000 })
+  await vi.waitFor(() => expect(f.committed()).toEqual([A]), { timeout: 3_000 })
   expect((await f.post({ prompt }, delivery)).body).toEqual({ ok: true })
   expect((await f.post({ prompt }, { id: 'fixture-delivery-0002' })).body).toEqual({ ok: true })
 })
@@ -647,8 +644,7 @@ it('keeps a completed delivery acknowledgement when the same process gains anoth
   row.runtimes.push({ backend: 'tmux', paneId: '%3' })
   row.primaryRuntimeKey = 'tmux\u0000%3'
   expect((await f.post({}, delivery)).body).toEqual({ ok: true })
-  expect(f.prompts).toEqual(['fixture prompt'])
-  expect(f.registered).toHaveBeenCalledOnce()
+  expect(f.committed()).toEqual([A])
 })
 
 it('refuses an HTTP hook whose matched process changed at the real core resolver continuation', async () => {
@@ -665,7 +661,6 @@ it('refuses an HTTP hook whose matched process changed at the real core resolver
   } }, agentReconciler: { triggerHint: vi.fn(async () => true), nudge: vi.fn() } as never })
   const f = await httpFixture(() => false, 65_536, { resolveHookAgent: hooks.resolveHookAgent })
   expect((await f.post({ callerPid: 6102 })).body).toEqual({ ignored: true, reason: 'stale_hook' })
-  expect(f.prompts).toEqual([])
   expect(f.registered).not.toHaveBeenCalled()
   expect(row.sessionId).toBe('')
 })
@@ -894,11 +889,11 @@ it.each([false, true])('keeps a held delivery through route changes and requires
     : [{ backend: 'tmux', paneId: '%2' }, { backend: 'tmux', paneId: '%3' }], 'tmux\u0000%3')
   if (removeHint) {
     await vi.waitFor(() => expect(f.reasons.some(reason => reason?.includes('original hook pane'))).toBe(true), { timeout: 3_000 })
-    expect(f.prompts).toEqual([])
+    expect(f.registered).not.toHaveBeenCalled()
     registry.updateRuntimes(source, [{ backend: 'tmux', paneId: '%2' }, { backend: 'tmux', paneId: '%3' }], 'tmux\u0000%3')
   }
   expect((await f.post({}, delivery)).body).toEqual({ pending: true })
-  await vi.waitFor(() => expect(f.prompts).toEqual(['fixture prompt']), { timeout: 3_000 })
+  await vi.waitFor(() => expect(f.committed()).toEqual([A]), { timeout: 3_000 })
   expect(registry.byAgent(source)?.primaryRuntimeKey).toBe('tmux\u0000%3')
   expect(registry.byAgent(source)?.runtimes).toEqual([{ backend: 'tmux', paneId: '%2' }, { backend: 'tmux', paneId: '%3' }])
   expect((await f.post({}, delivery)).body).toEqual({ ok: true })

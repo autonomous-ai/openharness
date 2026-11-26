@@ -117,7 +117,6 @@ export interface HookServerHandlers {
   onAdmissionStop?: (entry: RegisteredSession, unmatched: boolean) => boolean
   /** Captured before a same-conversation registration waits; Cancel or forget supersedes that Stop. */
   captureAdmissionStop?: (entry: RegisteredSession) => () => boolean
-  onPromptSubmitted?: (agentId: string, prompt: string) => void
   /** A session's UserPromptSubmit hook, and when its engine ran it (`X-Harness-Hook-Fired-At`): what a Stop
    *  that arrives late is told apart from the turn the prompt opened by (core/turns/turnHooks.ts). */
   onPromptHook?: (sessionId: string, firedAt: number) => void
@@ -219,6 +218,7 @@ export function hookFacts(req: Pick<http.IncomingMessage, 'headers'>, platform?:
 function validHookBody(value: unknown): value is BoundHookBody {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const body = value as Record<string, unknown>
+  // No hook of this build sends prompt; an older install's hook may during an update and is not refused for it. Nothing reads it.
   if (body.prompt !== undefined && (typeof body.prompt !== 'string' || Buffer.byteLength(body.prompt) > 128 * 1024)) return false
   if (Object.keys(body).some((field) => !HOOK_BODY_FIELDS.has(field))) return false
   if (body.engine !== undefined && (typeof body.engine !== 'string' || !ENGINES.includes(body.engine as AgentEngine))) return false
@@ -985,7 +985,6 @@ export function startHookServer(
           }
           // Native prompt credit follows the durable bind, never an attempted one.
           if (body.hookEvent === 'UserPromptSubmit') {
-            optional(() => handlers.onPromptSubmitted?.(result.entry.agentId, body.prompt ?? ''))
             if (admissionOrder.firedAt && body.sessionId) optional(() => handlers.onPromptHook?.(body.sessionId!, admissionOrder.firedAt!))
           }
           optional(() => handlers.onRegistered(result.entry, { isNew: result.isNew, evicted: result.evicted, rebound: result.rebound,

@@ -22,11 +22,13 @@ const deferred = () => {
 let root: string, server: Server | undefined, release: (() => void) | undefined
 let registry: typeof import('./registry.js')['registry'], source: string
 let started: Awaited<ReturnType<typeof import('../hookServer.js')['startHookServer']>>
-let prompts: string[], registered: ReturnType<typeof vi.fn<() => void>>
+let registered: ReturnType<typeof vi.fn<(entry: { sessionId: string }) => void>>
 const stopJobs = new Map<string, Promise<void>>()
 let timers: ReturnType<typeof deadline.holdRegistryDeadline>
 const file = () => join(root, 'registry.json')
 const disk = () => JSON.parse(readFileSync(file(), 'utf8'))
+// Each committed UserPromptSubmit announces its binding once, in commit order.
+const committed = () => registered.mock.calls.map(([entry]) => entry.sessionId)
 beforeEach(async () => {
   // The 250 ms reply grace and the 5 s write deadline fire only when a test fires them, so how fast
   // this machine writes the registry never changes the replies these tests pin.
@@ -40,10 +42,10 @@ beforeEach(async () => {
     processIdentity: { pid: 5101, startMarker: 'fixture-start', executable: '<claude>' } }))!.entry.agentId
   writeFileSync(join(root, 'conversation.jsonl'), '{}\n')
   await registry.flush()
-  prompts = []; registered = vi.fn(); stopJobs.clear()
+  registered = vi.fn(); stopJobs.clear()
   const { startHookServer } = await import('../hookServer.js')
   started = await startHookServer(0, { onRegistered: registered, onSessionEnd: () => {},
-    hookAdmissionBlocked: id => stopJobs.has(id), onPromptSubmitted: (_id, prompt) => { prompts.push(prompt) },
+    hookAdmissionBlocked: id => stopJobs.has(id),
   }, { peerAccount: async () => true })
   server = started.server
 })
@@ -62,7 +64,7 @@ async function post(id = 'fixture-delivery-0001') {
     method: 'POST', headers: { 'content-type': 'application/json', 'x-harness-hook-token': readHookCredential(root)!,
       'x-harness-hook-delivery-id': id },
     body: JSON.stringify({ engine: 'claude', sessionId: 'conversation', transcriptPath: join(root, 'conversation.jsonl'),
-      tmuxPane: '%1', cwd: root, hookEvent: 'UserPromptSubmit', prompt: id }),
+      tmuxPane: '%1', cwd: root, hookEvent: 'UserPromptSubmit' }),
   })
   return response.json()
 }
@@ -73,27 +75,27 @@ function hold() {
   return { entered: entered.promise, release: held.resolve }
 }
 
-it('answers ordinary durable commit success only after publication and credits its prompt once', async () => {
+it('answers ordinary durable commit success only after publication and announces its binding once', async () => {
   const held = hold(), response = post()
   await held.entered
   expect(disk()[0].sessionId).toBe('')
-  expect(prompts).toEqual([]); expect(registered).not.toHaveBeenCalled()
+  expect(committed()).toEqual([])
   held.release()
   expect(await response).toEqual({ ok: true })
   expect(disk()[0].sessionId).toBe('conversation')
-  expect(prompts).toEqual(['fixture-delivery-0001'])
+  expect(committed()).toEqual(['conversation'])
   expect(await post()).toEqual({ ok: true })
-  expect(prompts).toHaveLength(1)
+  expect(committed()).toHaveLength(1)
 })
 
 it('answers a queued hook pending while its predecessor retains the write', async () => {
   const held = hold(), first = post()
   await held.entered
   expect(await post('fixture-delivery-0002')).toEqual({ pending: true })
-  expect(prompts).toEqual([])
+  expect(committed()).toEqual([])
   held.release()
   expect(await first).toEqual({ ok: true })
-  await vi.waitFor(() => expect(prompts).toEqual(['fixture-delivery-0001', 'fixture-delivery-0002']))
+  await vi.waitFor(() => expect(committed()).toEqual(['conversation', 'conversation']))
 })
 
 it('answers a slow commit pending at the reply grace without granting durability', async () => {
@@ -101,9 +103,9 @@ it('answers a slow commit pending at the reply grace without granting durability
   await held.entered
   timers.fire(250)
   expect(await response).toEqual({ pending: true })
-  expect(disk()[0].sessionId).toBe(''); expect(prompts).toEqual([])
+  expect(disk()[0].sessionId).toBe(''); expect(committed()).toEqual([])
   held.release()
-  await vi.waitFor(() => expect(prompts).toEqual(['fixture-delivery-0001']))
+  await vi.waitFor(() => expect(committed()).toEqual(['conversation']))
 })
 
 it('answers an expired commit pending and revokes publication even when I/O later settles', async () => {
@@ -111,10 +113,10 @@ it('answers an expired commit pending and revokes publication even when I/O late
   await held.entered
   timers.expire()
   expect(await response).toEqual({ pending: true })
-  expect(disk()[0].sessionId).toBe(''); expect(prompts).toEqual([])
+  expect(disk()[0].sessionId).toBe(''); expect(committed()).toEqual([])
   held.release()
   await registry.flush()
-  expect(disk()[0].sessionId).toBe(''); expect(prompts).toEqual([])
+  expect(disk()[0].sessionId).toBe(''); expect(committed()).toEqual([])
 })
 
 it('keeps a hook pending when Stop begins while its durable commit is held', async () => {
@@ -133,7 +135,7 @@ it('keeps a hook pending when Stop begins while its durable commit is held', asy
   const stopping = stop(source), stopped = expect(stopping).rejects.toThrow('fixture Stop held')
   held.release()
   expect(await response).toEqual({ pending: true })
-  expect(disk()[0].sessionId).toBe(''); expect(prompts).toEqual([])
+  expect(disk()[0].sessionId).toBe(''); expect(committed()).toEqual([])
   expect(never).not.toHaveBeenCalled()
   fail(new Error('fixture Stop held')); await stopped
 })
