@@ -4,8 +4,8 @@
 // for the edits marked "dial skill eval"; the fill-ins above it call lib/*.ts, where the eval's logic is tested.
 //
 //   cd cli && npx tsx evals/dial-skill/run-eval.mjs --flow evals/dial-skill/flow --variant <baseline|vN> --reps 2 \
-//     --split train,val --concurrency 4 --timeout-s 900 [--agents claude] [--condition clean,crowd,name-only] \
-//     [--cases id,id] [--no-skill] [--approve-harness]
+//     --split train,val --concurrency 4 --timeout-s 900 --spend-cap-usd 70 [--agents claude] \
+//     [--condition clean,crowd,name-only] [--cases id,id] [--no-skill] [--approve-harness]
 //
 // Structural properties this encodes (so you don't have to remember them):
 //   - parameterized by --variant / --reps (no hardcoded A/B pair; the model is fixed in lib/agents.ts)
@@ -27,10 +27,13 @@
 //     (original id kept in meta.original_id when sanitization changed it)
 //   - before any case, one listing probe per condition a claude case runs in
 //     (lib/probe.ts, rows in probes.jsonl); a failed probe refuses the pass
+//   - a probe or case starts only while all the flow has spent, a reserve for it
+//     and one for each case in flight fit under --spend-cap-usd (lib/spend.ts);
+//     else the pass starts nothing more and exits 4
 
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { closeSync, constants as FS, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, constants as FS, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, writeFileSync, writeSync } from 'node:fs';
 import { constants as OS } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,6 +43,7 @@ import { claudeJudge, JUDGE_EFFORT, JUDGE_MODEL, RUBRIC_SHA } from './lib/judge.
 import { sumUsage } from './lib/parse.ts';
 import { matchesProbe, probeListing } from './lib/probe.ts';
 import { CONDITIONS, loadScenarios, runId, splitIdOf } from './lib/scenarios.ts';
+import { guardCost, SpendGuard } from './lib/spend.ts';
 import { readDone, readHarm, readRings, scrub, stage, unstage } from './lib/stage.ts';
 
 // Every output write refuses symlinks: the flow dir is model-influenced, and a
@@ -152,6 +156,23 @@ const SPLITS = ['train', 'val', 'test'];
 const JUDGE_TIMEOUT_MS = 120_000;
 // A stopped pass is reported to a person; switching accounts to finish it is not the runner's call.
 const ACCOUNT_LIMIT = 'account limit reached: pass stopped; report it, do not switch accounts';
+const spendCapLine = ctx => `spend cap · $${ctx.guard.spentUsd.toFixed(2)} of $${ctx.spendCapUsd.toFixed(2)}: `
+  + 'stopped before the next case; rerun to resume once the cap allows';
+
+/** All the flow has spent: every variant's rows, failed attempts and probes, the variants the summary reads. The cap
+ *  holds across passes, so a rerun after a stop starts from this, not from zero. A line that is not JSON is skipped,
+ *  as the summary skips it. */
+function flowSpend(flow) {
+  let spent = 0;
+  for (const variant of readdirSync(flow).filter(name => /^(baseline|v\d+)$/.test(name)))
+    for (const file of ['results.jsonl', 'errors.jsonl', 'probes.jsonl'])
+      for (const ln of (readIfPresent(join(flow, variant, file)) ?? '').split('\n')) {
+        let row;
+        try { row = JSON.parse(ln); } catch { continue; }
+        spent += guardCost(row);
+      }
+  return spent;
+}
 
 // The agents run in process groups of their own (lib/agents.ts), which no signal to the runner reaches: however the
 // runner ends, it kills them first. A signal ends it through exit, with the code the signal would have left.
@@ -267,6 +288,8 @@ async function probeConditions(ctx, tasks, probesPath) {
   for (const { c } of tasks) {
     const { agent, condition } = c.meta;
     if (agent !== 'claude' || probes.has(condition)) continue;
+    // A probe is billed as a case is, and none runs beside it.
+    if (!ctx.guard.mayStart(0)) { eprint(spendCapLine(ctx)); process.exit(4); }
     let probe;
     try {
       probe = await probeListing(c.scenario, condition, { skill: ctx.skill }, { ...AGENT_CONFIG, timeoutMs: agentTimeoutMs(ctx.timeoutS) });
@@ -278,6 +301,7 @@ async function probeConditions(ctx, tasks, probesPath) {
       process.exit(3);
     }
     appendFileNoFollow(probesPath, JSON.stringify(probe) + '\n');
+    ctx.guard.add(probe);
     if (probe.failure) { eprint(`listing probe · ${condition}: ${probe.failure}`); process.exit(2); }
     probes.set(condition, probe);
   }
@@ -370,7 +394,7 @@ function parseArgs(argv) {
               model: undefined, reps: 1, concurrency: 4, timeoutS: 1800,
               approveHarness: false,
               // dial skill eval: which agents run on which scenarios, with or without the skill staged.
-              agents: ['claude'], conditions: ['clean'], split: null, cases: null, skill: true };
+              agents: ['claude'], conditions: ['clean'], split: null, cases: null, skill: true, spendCapUsd: null };
   // A flag at the end of argv would otherwise consume undefined - which for
   // --model equals the default and silently disables the served-model check.
   const val = (i) => { if (argv[i] === undefined) { eprint(`missing value for ${argv[i - 1]}`); usage(); process.exit(2); } return argv[i]; };
@@ -385,6 +409,7 @@ function parseArgs(argv) {
     else if (k === '--split') a.split = val(++i).split(',');
     else if (k === '--cases') a.cases = val(++i).split(',');
     else if (k === '--no-skill') a.skill = false;
+    else if (k === '--spend-cap-usd') a.spendCapUsd = +val(++i);
     else if (k === '--reps') a.reps = +val(++i);
     else if (k === '--concurrency') a.concurrency = +val(++i);
     else if (k === '--timeout-s') a.timeoutS = +val(++i);
@@ -404,6 +429,10 @@ function parseArgs(argv) {
     const bad = given.find(x => !known.includes(x));
     if (bad !== undefined) { eprint(`${flag} takes ${known.join(', ')}; got '${bad}'`); usage(); process.exit(2); }
   }
+  // dial skill eval: no pass spends without a bound a person chose.
+  if (!(a.spendCapUsd > 0 && Number.isFinite(a.spendCapUsd))) {
+    eprint('--spend-cap-usd is required: the dollars the whole flow may spend, above 0'); usage(); process.exit(2);
+  }
   if (!Number.isFinite(a.timeoutS) || a.timeoutS < 0
       || a.timeoutS * 1000 > 2147483647 // setTimeout clamps >2^31-1 ms to 1 ms - the ceiling would fire instantly
       || !Number.isInteger(a.reps) || a.reps < 1
@@ -411,7 +440,7 @@ function parseArgs(argv) {
   return a;
 }
 function usage() {
-  eprint('usage: npx tsx evals/dial-skill/run-eval.mjs --flow DIR --variant ID [--reps N] [--concurrency N] [--timeout-s N (0 = no ceiling)] [--agents claude,oracle,null,always] [--condition clean,crowd,name-only] [--split train,val,test] [--cases id,id] [--no-skill] [--approve-harness]');
+  eprint('usage: npx tsx evals/dial-skill/run-eval.mjs --flow DIR --variant ID --spend-cap-usd USD [--reps N] [--concurrency N] [--timeout-s N (0 = no ceiling)] [--agents claude,oracle,null,always] [--condition clean,crowd,name-only] [--split train,val,test] [--cases id,id] [--no-skill] [--approve-harness]');
 }
 
 // Harness integrity gate. The hillclimb loop gets this runner command
@@ -656,10 +685,17 @@ async function main() {
     const tail = readIfPresent(p);
     if (tail && !tail.endsWith('\n')) appendFileNoFollow(p, '\n');
   }
+  // dial skill eval: the cap is on the flow's total, so the guard starts from what every pass before this one spent.
+  ctx.guard = new SpendGuard(args.spendCapUsd, flowSpend(args.flow));
   ctx.probes = await probeConditions(ctx, tasks, probesPath); // dial skill eval
+  let inFlight = 0, capped = false;
   async function worker() {
     // dial skill eval: after an account limit (runCase sets ctx.stop) every new case would fail the same way.
-    while (i < tasks.length && !ctx.stop) {
+    while (i < tasks.length && !ctx.stop && !capped) {
+      // dial skill eval: a case's reserve is taken before its first await, so cases started together can never carry
+      // the total past the cap. Once one does not fit, none starts: a rerun resumes.
+      if (!ctx.guard.mayStart(inFlight)) { capped = true; break; }
+      inFlight++;
       const { c, rep } = tasks[i++];
       const safeId = pathSafeId(c.id);
       const t0 = Date.now();
@@ -741,6 +777,7 @@ async function main() {
         };
         appendFileNoFollow(resultsPath, JSON.stringify(row) + '\n');
         rowWritten = true; // past this point the attempt is scored - a later throw (trace write, ref freeze) must not also append an error row
+        ctx.guard.add(row); // dial skill eval
         if (run.transcript)
           writeFileNoFollow(join(vdir, 'traces', `${safeId}_rep${rep}.json`),
             JSON.stringify(run.transcript, null, 2));
@@ -762,7 +799,7 @@ async function main() {
         }
         // Failed attempts are data too - but they must not occupy the (case, rep)
         // slot in results.jsonl, or resume would never re-run them.
-        appendFileNoFollow(errorsPath, JSON.stringify({
+        const errorRow = {
           prompt_id: safeId, rep,
           ...(safeId !== String(c.id) ? { original_id: String(c.id) } : {}),
           failure_class: e?.failure_class ?? 'error',
@@ -776,8 +813,12 @@ async function main() {
           judge_model: e?.judge_model ?? lastRun?.judge_model,
           judge_usage: e?.judge_usage ?? lastRun?.judge_usage,
           latency_s: (Date.now() - t0) / 1000,
-        }) + '\n');
+        };
+        appendFileNoFollow(errorsPath, JSON.stringify(errorRow) + '\n');
+        ctx.guard.add(errorRow); // dial skill eval
         eprint(`  [${args.variant}] ${c.id} rep${rep} FAILED: ${e?.message || e}`);
+      } finally {
+        inFlight--; // dial skill eval: a reserve is released only once its spend is added
       }
     }
   }
@@ -800,6 +841,7 @@ async function main() {
   await Promise.all(Array.from({ length: Math.max(1, args.concurrency) }, worker));
   clearInterval(tick); progress();
   if (ctx.stop) { eprint(ACCOUNT_LIMIT); process.exit(3); } // dial skill eval
+  if (capped) { eprint(spendCapLine(ctx)); process.exit(4); } // dial skill eval
   eprint(`[${args.variant}] done - ${ok} ok, ${fail} failed -> ${resultsPath}`);
   process.exit(fail ? 1 : 0);
 }
