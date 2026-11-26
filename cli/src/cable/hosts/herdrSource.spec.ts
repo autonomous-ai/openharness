@@ -961,6 +961,52 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     expect(s.log.at(-1)).toBe('[herdr] socket · none')
   })
 
+  // The other order (CI run 45724079684): herdr 0.9.5 that stops refuses the re-list's subscription before the current
+  // one's end reaches the source. The attempt failed as `closed · rejected`, by a subscription that never started.
+  it('herdr stopping refuses a re-list subscription before the current one ends: it is dropped, and the current one fails the attempt', async () => {
+    const client = herdrClient()
+    let hold = false
+    let opening: HerdrSubscriber | undefined
+    let endCurrent: (() => void) | undefined
+    let currentEnded!: () => void
+    const ended = new Promise<void>((resolve) => { currentEnded = resolve })
+    const s = setup({
+      client: {
+        ...client,
+        subscribe: (entries, to) => {
+          if (JSON.stringify(entries) === JSON.stringify(FOCUS)) return client.subscribe(entries, to)
+          if (!hold) {
+            // The current one's end is held, so the refusal reaches the source first.
+            return client.subscribe(entries, { ...to, closed: (reason) => {
+              endCurrent = () => to.closed(reason)
+              currentEnded()
+            } })
+          }
+          // The re-list's subscription, unanswered until the test says.
+          opening = to
+          return { close: () => {} }
+        },
+      },
+    })
+    await listedBare(s)
+    hold = true
+    s.advance(1000)
+    expect(opening).toBeDefined()
+    const said = s.log.length
+    await server.stop()
+    await ended
+    opening!.closed('rejected')
+    expect(s.log.slice(said)).toEqual(['[herdr] dropped · rejected'])
+    endCurrent!()
+    expect(s.log.slice(said)).toEqual(['[herdr] dropped · rejected', '[herdr] closed · ended', '[herdr] retry · 1'])
+    // Only the retry is due: the dropped re-list asks for no other.
+    expect(s.timers.map(({ ms }) => ms)).toEqual([1000])
+    s.advance(1000)
+    expect(s.source.list()).toEqual([])
+    expect(s.timers).toEqual([])
+    expect(s.log.at(-1)).toBe('[herdr] socket · none')
+  })
+
   it('the id is kept across a reconnect while the pane stays listed, and is another once it left', async () => {
     server.agents = [agent('w1:p1')]
     const s = setup()
