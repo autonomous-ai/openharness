@@ -215,7 +215,7 @@ export function countWord(what: Parameters<ObservedActions['count']>[0]): string
 }
 
 /** A Codex hook's served ask (Entry.served), which always holds the hook that asked. */
-type ServedState = { pid: number; is?: boolean; hook: ObservedHookEvent }
+type ServedState = { pid: number; is?: boolean | null; hook: ObservedHookEvent }
 
 /** One of an agent's panes, beside the adapter whose it is. */
 interface Located {
@@ -299,10 +299,10 @@ interface Entry {
   /** The app a tap brings forward, from its last event: none for a session the scan found, until its first. */
   bundle?: string
   /** The caller its latest Codex hook's served lookup was asked for (askServed), or the process the scan found holding it,
-   *  what it said (`is`: none while its first ask runs, false for no server, true for one), and the latest hook of that
-   *  caller, placed by its hints should the lookup say no server (none for the scan's). While `is` is not false, no hint,
-   *  tty or process of that caller places it. */
-  served?: { pid: number; is?: boolean; hook?: ObservedHookEvent }
+   *  what it said (`is`: none while its first ask runs, null when that ask could not read the machine, false for no
+   *  daemon, true for one), and the latest hook of that caller, placed by its hints should the lookup say no daemon (none
+   *  for the scan's). While `is` is not false, no hint, tty or process of that caller places it. */
+  served?: { pid: number; is?: boolean | null; hook?: ObservedHookEvent }
   /** What the permission prompt it waits on asks, from its hook (deviceClaude/asked.ts): '' when it names nothing. */
   asked?: string
   /** The name the session gives itself, from its session-start or turn-start, or, for a session the scan found, the one
@@ -1077,23 +1077,26 @@ export class ObservedSource implements HostSource {
    * Terminal on no page). Asked once a caller, before any hint is read: until the answer the session is on no app's page,
    * as a guess could be the wrong one. A caller that is no server is placed by its hints then, and from then on at once.
    * A server's session is asked again at its start, as it may have been resumed in another TUI, and at a turn's while no
-   * client is known; it keeps its place until the answer. Only the latest ask's answer lands.
+   * client is known; it keeps its place until the answer. Only the latest ask's answer lands. An ask that could not read
+   * the machine says nothing: a server's session keeps its place, and any other stays on no page until its next hook
+   * asks again, as the hints of a daemon's hook are another session's, its tmux pane or Orca terminal among them.
    */
   private askServed(entry: Entry, e: ObservedHookEvent): boolean {
     if (!this.deps.served || e.engine !== 'codex') return false
     const last = entry.served
     const same = last?.pid === e.callerPid
     if (same && last.is === false) return false
-    const again = same && last.is === true && (e.event === 'session-start' || (e.event === 'turn-start' && !entry.outer))
+    const again = same && (last.is === null
+      || (last.is === true && (e.event === 'session-start' || (e.event === 'turn-start' && !entry.outer))))
     if (same && !again) last.hook = e
     else {
-      const ask: ServedState = { pid: e.callerPid, ...(same ? { is: true } : {}), hook: e }
+      const ask: ServedState = { pid: e.callerPid, ...(same && last.is ? { is: true } : {}), hook: e }
       entry.served = ask
-      void this.deps.served([{ pid: e.callerPid, cwd: e.cwd ?? entry.agent.cwd }]).then(([answer]) => answer, (error) => {
+      void this.deps.served([{ pid: e.callerPid, cwd: e.cwd ?? entry.agent.cwd }]).then(([answer]) => { this.landServed(entry, ask, answer) }, (error) => {
         // Its kind only: no error text, as a path in it holds the account's name.
         this.deps.log(`[observed] served · not read · ${errorKind(error)}`)
-        return undefined
-      }).then((answer) => { this.landServed(entry, ask, answer) })
+        if (entry.served === ask && ask.is === undefined) ask.is = null
+      })
     }
     // Its hints and its tty are the first TUI's, and its multiplexer that TUI's: none is kept, nor what the scan's nested
     // lookup placed.
@@ -1559,10 +1562,12 @@ export class ObservedSource implements HostSource {
         entry.title = record.name
         named++
       }
-      // The app alone: its host and what a tap opens stay unknown until its first hook. A Codex server's session is at its
-      // client's, never where the server's parents are (askServed).
-      const serving = served.get(sessionId)
-      const app = serving ? serving.client?.app : apps.get(owner.pid)
+      // The app alone: its host and what a tap opens stay unknown until its first hook. A Codex daemon's session is at its
+      // client's, never where the daemon's parents are (askServed), and one that may be the daemon's, its lookup unread,
+      // at none.
+      const serving = served?.get(sessionId)
+      const unread = served === null && engine === 'codex' && owner.tty === null
+      const app = serving ? serving.client?.app : unread ? undefined : apps.get(owner.pid)
       if (app) {
         entry.agent.app = app
         delete entry.agent.appPending
@@ -1761,13 +1766,13 @@ export class ObservedSource implements HostSource {
     return answers
   }
 
-  /** What the served lookup says of each Codex session a process on no terminal holds (a server, or a Codex on none), by
-   *  session id, in one ask: only those may be a server's. Those whose holder is no server are left out, as are all of
-   *  them with no lookup or when it failed: each is placed as before. */
+  /** What the served lookup says of each Codex session a process on no terminal holds (a daemon, or a Codex on none), by
+   *  session id, in one ask: only those may be the daemon's. Those whose holder is no daemon are left out, as are all of
+   *  them with no lookup: each is placed as before. Null when the lookup failed: none of them is told apart. */
   private async servedOf(
     listing: readonly [string, ExternalEngine][], owners: ReadonlyMap<string, SessionOwner>,
     rows: ReadonlyMap<string, { cwd?: string }>,
-  ): Promise<ReadonlyMap<string, Served>> {
+  ): Promise<ReadonlyMap<string, Served> | null> {
     const asked = listing.filter(([sessionId, engine]) => engine === 'codex' && owners.get(sessionId)!.tty === null)
     if (!this.deps.served || !asked.length) return new Map()
     try {
@@ -1776,7 +1781,7 @@ export class ObservedSource implements HostSource {
     } catch (error) {
       // Its kind, no error text: a path in it holds the account's name.
       this.deps.log(`[observed] scan · served not read · ${errorKind(error)}`)
-      return new Map()
+      return null
     }
   }
 

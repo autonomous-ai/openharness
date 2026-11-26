@@ -250,6 +250,13 @@ vi.mock('../cable/hosts/scannedApp.js', async (real) => ({
   readTtyName: readers.tty,
   readBundleId: readers.bundleId,
 }))
+// Whether a Codex hook's caller is the TUIs' daemon (codexServed.ts): none is here, so a Codex hook is placed by its hints
+// once that answer lands, and no spec reads this machine's processes, their folders or their terminals.
+vi.mock('../cable/hosts/codexServed.js', async (real) => ({
+  ...await real<typeof import('../cable/hosts/codexServed.js')>(),
+  servedLookup: (platform: NodeJS.Platform) =>
+    (platform === 'win32' ? undefined : async (asks: readonly unknown[]) => asks.map(() => undefined)),
+}))
 // Where tmux is: on the PATH, so no spec asks the developer's login shell.
 vi.mock('../lib/tmuxOnPath.js', async (real) => ({
   ...await real<typeof import('../lib/tmuxOnPath.js')>(),

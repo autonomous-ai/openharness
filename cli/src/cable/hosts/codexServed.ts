@@ -60,10 +60,13 @@ export interface CodexServedDeps {
  * among it and its parents serves no other client), or an app's own, one no Codex started whose parents name an app
  * (the ChatGPT app's, an editor's), which runs with that app's environment. Else where the person sees the session:
  * the client is the one Codex TUI on a terminal in the session's folder, npm's node launcher and its native Codex being
- * one.
+ * one. Fails when the table could not be read: nothing is told then.
  */
 export async function codexServed(asks: readonly ServedAsk[], deps: CodexServedDeps): Promise<(Served | undefined)[]> {
   const rows = await deps.processes()
+  // A table that could not be read is empty, as it always holds the process reading it: taken for an answer, every
+  // caller would be no server, and the daemon's hooks placed by the first TUI's hints.
+  if (!rows.length) throw new Error('process table not read')
   const byPid = new Map(rows.map((row) => [row.pid, row]))
   const ownership = agentCommandOwnershipSnapshot()
   const codex = new Set(rows.filter((row) => engineProcessMatch(row, 'codex', ownership).score > 0).map((row) => row.pid))
