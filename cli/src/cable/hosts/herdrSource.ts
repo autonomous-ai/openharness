@@ -1,6 +1,10 @@
 /**
  * herdr's agents on the dial, hook or no hook (docs/specs/2026-11-16-device-herdr.md): listed and followed over herdr's
- * socket while a dial is attached, pushed and never polled.
+ * socket while a dial is attached, pushed and never polled, but for one case: a row listed with no session is listed
+ * again 1, 2 and 4 s after it first was, at most three times. herdr's integration reports a session apart from the
+ * list, often after it, and herdr tells no event when it does (herdr 0.9.5, measured 2026-11-26); a row left with no
+ * session joins its hooked copy by its pane alone, and shows as one more agent when that copy holds another pane. An
+ * agent with no integration reports none, and costs those three lists and nothing more.
  *
  * The list follows the subscription, never the other way round: once a subscription has started every change is told
  * on it, so one made while `agent.list` is in flight still arrives, and wins over that list, which herdr may have made
@@ -38,6 +42,8 @@ const MAX_NAME = 64
 export const MAX_CWD = 4096
 /** The least time between two subscriptions' starts. */
 const SUBSCRIBE_EVERY_MS = 1000
+/** When a row listed with no session is listed again, from when it first was. */
+const RELIST_MS = [1000, 2000, 4000]
 /** A session id as herdr's own integrations report one; anything else is not taken for one. */
 const SESSION_ID = /^[A-Za-z0-9._:-]{1,128}$/
 const KINDS: readonly HerdrEntry[] = [{ type: 'pane.agent_detected' }, { type: 'pane.closed' }, { type: 'pane.exited' }]
@@ -118,6 +124,10 @@ export class HerdrSource implements HostSource {
   private heard: Heard | undefined
   /** The next subscription's timer. */
   private timer: (() => void) | undefined
+  /** Each listed row with no session, by pane: when it first was listed so, and how many re-lists it asked for. */
+  private readonly bare = new Map<string, { at: number; relists: number }>()
+  /** The next re-list's timer. */
+  private relistTimer: (() => void) | undefined
   /** The focus subscription, while one is open. */
   private focusing: { close(): void } | undefined
   /** Whether herdr refused this attempt's focus subscription. */
@@ -281,6 +291,7 @@ export class HerdrSource implements HostSource {
       return this.attempts.failed('list', answer.ok ? 'bad_answer' : answer.fault)
     }
     this.read(agents, heard)
+    this.relist()
     this.attempts.listed()
     if (!this.focusing && !this.focusEnded) this.watchFocus()
     if ([...this.rows.keys()].some((pane) => !sub.panes.has(pane))) this.soon()
@@ -306,9 +317,17 @@ export class HerdrSource implements HostSource {
     })
   }
 
+  /** Only the current one or the one opening can end: one replaced was closed, and tells nothing. While the current one
+   *  is live it is the truth, and its own end fails the attempt: re-lists open one every few seconds, and herdr 0.9.5
+   *  that stops ends the current one and refuses the one opening in either order, a refusal that would say `rejected`
+   *  of a herdr that stopped. So the one opening that ends otherwise is dropped, and not asked for again: its panes
+   *  asked once, and its re-list was counted. Only its timeout fails the attempt as well: a herdr that never answers may
+   *  hang, and leave the current one silent with no end. An attempt's first, with no current one, fails it on any end. */
   private closed(sub: Subscription, reason: SocketFault): void {
-    // An old one that ends while the new one opens missed nothing the new one's list will not say.
-    if (sub !== (this.next ?? this.current)) return
+    if (sub === this.next && this.current && reason !== 'timeout') {
+      this.next = undefined
+      return this.deps.log(`[herdr] dropped · ${reason}`)
+    }
     this.firstListEnded()
     this.attempts.failed('closed', reason)
   }
@@ -330,10 +349,14 @@ export class HerdrSource implements HostSource {
     this.heard = undefined
     this.timer?.()
     this.timer = undefined
+    // A re-list waits for the next attempt's list, which asks for it again.
+    this.relistTimer?.()
+    this.relistTimer = undefined
   }
 
   private clear(): void {
     this.asked.clear()
+    this.bare.clear()
     // The next list is said again, even with as many agents as before.
     this.said = undefined
     this.skipped = 0
@@ -371,7 +394,27 @@ export class HerdrSource implements HostSource {
     const dropped = this.heard?.dropped
     if (dropped && dropped.size < MAX_AGENTS) dropped.add(pane)
     for (const [key, of] of this.asked) if (of === pane) this.asked.delete(key)
+    if (this.bare.delete(pane)) this.relist()
     if (this.rows.delete(pane)) this.emit()
+  }
+
+  /** Sets the timer of the next re-list a row with no session is due, if any. A re-list is a new subscription through
+   *  `soon`, as every list follows a start: what is told meanwhile still wins over it, rows due together share one,
+   *  and lists keep their pace. */
+  private relist(): void {
+    this.relistTimer?.()
+    this.relistTimer = undefined
+    const dueAt = ({ at, relists }: { at: number; relists: number }) => at + (RELIST_MS[relists] ?? Infinity)
+    const due = Math.min(...[...this.bare.values()].map(dueAt))
+    if (due === Infinity) return
+    this.relistTimer = this.deps.after(Math.max(0, due - this.deps.monotonic()), () => {
+      this.relistTimer = undefined
+      // Node counts a timer in whole ms and performance.now() does not, so this can run up to 1 ms before `due`: the rows
+      // due then count all the same, or this list would count for none and the same re-list would follow it at once.
+      const now = Math.max(this.deps.monotonic(), due)
+      for (const row of this.bare.values()) if (dueAt(row) <= now) row.relists++
+      this.soon()
+    })
   }
 
   /** Sets the list from `agent.list`'s agents, each checked: a pane listed again with the same kind keeps its id. What
@@ -413,6 +456,16 @@ export class HerdrSource implements HostSource {
       this.asked.delete(`${pane}/${kind}`)
     }
     this.rows = rows
+    // A row keeps its re-lists while it is listed with no session, so a list for another reason starts none afresh.
+    for (const pane of this.bare.keys()) {
+      const row = rows.get(pane)
+      if (!row || row.agent.sessionId !== undefined) this.bare.delete(pane)
+    }
+    // One time for the whole list, so the rows it gave no session are due together and share each re-list.
+    const at = this.deps.monotonic()
+    for (const [pane, { agent }] of rows) {
+      if (agent.sessionId === undefined && !this.bare.has(pane)) this.bare.set(pane, { at, relists: 0 })
+    }
     if (rows.size !== this.said) {
       this.said = rows.size
       this.deps.log(`[herdr] listed · ${rows.size} agents`)

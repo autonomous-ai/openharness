@@ -2,7 +2,7 @@ import { dirname } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fakeHerdr, RECORDED, type FakeHerdr, type FakeHerdrRequest } from '../../testing/fakeHerdr.js'
 import { createHerdrAdapter } from './herdr.js'
-import { createHerdrClient, type HerdrPrompt } from './herdrClient.js'
+import { createHerdrClient, type HerdrPrompt, type HerdrSubscriber } from './herdrClient.js'
 import { HerdrSource, type HerdrSourceDeps } from './herdrSource.js'
 import { MAX_TEXT } from './orca.js'
 import type { HostAgent } from './types.js'
@@ -18,8 +18,13 @@ const WALL = 1_700_000_000_000
  *  after WALL, so it is never young. */
 const stampAt = (ms: number) => `7:${BigInt(ms) * 1_000_000n}`
 
-const agent = (pane: string, status = 'idle', more: Record<string, unknown> = {}) =>
-  ({ pane_id: pane, agent: 'claude', agent_status: status, cwd: '/work/api', ...more })
+/** An agent as herdr lists it once its integration reported the session: a row listed with none is listed again. */
+const agent = (pane: string, status = 'idle', more: Record<string, unknown> = {}) => ({
+  pane_id: pane, agent: 'claude', agent_status: status, cwd: '/work/api',
+  agent_session: { source: 'herdr:claude', agent: 'claude', kind: 'id', value: `s-${pane}` }, ...more,
+})
+/** An agent herdr lists before its session is reported, or with no integration to report one. */
+const NO_SESSION = { agent_session: undefined }
 const lines = (recorded: string[]) => `${recorded.join('\n')}\n`
 const statusLine = (pane: string, status: string) =>
   JSON.stringify({ data: { agent: 'claude', agent_status: status, pane_id: pane, workspace_id: pane.split(':')[0] }, event: 'pane.agent_status_changed' })
@@ -67,6 +72,8 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
       front: () => undefined, log: () => {},
     })
     let mono = 0
+    // How far each read of the monotonic clock moves it on, as performance.now() does between two reads.
+    let step = 0
     let wall = WALL
     const timers: Array<{ at: number; ms: number; run: () => void }> = []
     const watchers = new Set<() => void>()
@@ -102,7 +109,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
         }
       },
       now: () => wall,
-      monotonic: () => mono,
+      monotonic: () => (mono += step),
       uuid: () => `u${++ids}`,
       log: (line) => {
         log.push(line)
@@ -123,6 +130,8 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     return {
       source, client, prompt, focus, onFocus, timers, watchers, log, counts,
       get changes() { return changes },
+      /** Each read of the monotonic clock from here on moves it on by [ms]. */
+      tick: (ms: number) => { step = ms },
       until: (check: () => boolean) => new Promise<void>((resolve) => {
         const done = () => {
           if (!check()) return false
@@ -766,6 +775,238 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     expect(s.source.list().map(({ sessionId }) => sessionId)).toEqual(['abc-123', undefined, undefined, undefined, undefined])
   })
 
+  /** Live with w1:p1, then w2:p1 detected and listed by the third list with no session: its re-lists are the next ones. */
+  async function listedBare(s: Setup): Promise<void> {
+    server.agents = [agent('w1:p1')]
+    await live(s)
+    server.event('pane_agent_detected', detected('w2:p1'))
+    await s.until(() => s.timers.length === 1)
+    server.agents = [agent('w1:p1'), agent('w2:p1', 'idle', NO_SESSION)]
+    s.advance(1000)
+    await listRead(3)
+    expect(row(s, 'w2:p1')?.sessionId).toBeUndefined()
+  }
+  const lists = () => server.requests.filter(({ request }) => method(request) === 'agent.list').length
+
+  it('a row listed with no session is listed again 1 s later, and takes the session herdr reported with no event', async () => {
+    const s = setup()
+    await listedBare(s)
+    expect(s.timers.map(({ ms }) => ms)).toEqual([1000])
+    // herdr's integration reports the session now, and tells no subscription (herdr 0.9.5).
+    server.agents = [agent('w1:p1'), agent('w2:p1')]
+    const changes = s.changes
+    s.advance(1000)
+    await listRead(4)
+    expect(row(s, 'w2:p1')?.sessionId).toBe('s-w2:p1')
+    expect(s.changes).toBe(changes + 1)
+    expect(s.timers).toEqual([])
+  })
+
+  it('a row whose session never comes is listed again 3 times, 1, 2 and 4 s after it was first, then never', async () => {
+    const s = setup()
+    await listedBare(s)
+    expect(s.timers.map(({ ms }) => ms)).toEqual([1000])
+    s.advance(1000)
+    await listRead(4)
+    expect(s.timers.map(({ ms }) => ms)).toEqual([1000])
+    s.advance(1000)
+    await listRead(5)
+    expect(s.timers.map(({ ms }) => ms)).toEqual([2000])
+    s.advance(2000)
+    await listRead(6)
+    expect(s.timers).toEqual([])
+    s.advance(600_000)
+    await heard(s, 'w1:p1')
+    expect(lists()).toBe(6)
+    expect(row(s, 'w2:p1')?.sessionId).toBeUndefined()
+  })
+
+  // Node counts a timer in whole ms, and performance.now() does not: a timer can run up to 1 ms before its time there.
+  it('a re-list whose timer runs a little before its time counts all the same: the next one is the second', async () => {
+    const s = setup()
+    await listedBare(s)
+    expect(s.timers.map(({ ms }) => ms)).toEqual([1000])
+    s.advance(999)
+    s.timers.splice(0, 1)[0].run()
+    s.advance(1)
+    await listRead(4)
+    expect(s.timers.map(({ ms }) => ms)).toEqual([1000])
+  })
+
+  // performance.now() moves on between two reads: rows one list gave no session are due a few µs apart.
+  it('rows one list gave no session share each re-list, whose timer runs a little before its time', async () => {
+    server.agents = [agent('w1:p1')]
+    const s = setup()
+    await live(s)
+    server.event('pane_agent_detected', detected('w2:p1'))
+    server.event('pane_agent_detected', detected('w3:p1'))
+    await s.until(() => s.timers.length === 1)
+    server.agents = [agent('w1:p1'), agent('w2:p1', 'idle', NO_SESSION), agent('w3:p1', 'idle', NO_SESSION)]
+    s.advance(1000)
+    s.tick(0.001)
+    await listRead(3)
+    s.tick(0)
+    expect(s.timers.map(({ ms }) => Math.round(ms))).toEqual([1000])
+    s.advance(999)
+    s.timers.splice(0, 1)[0].run()
+    s.advance(1)
+    await listRead(4)
+    expect(s.timers.map(({ ms }) => Math.round(ms))).toEqual([1000])
+  })
+
+  it('a pane that closes before its re-list is due is not listed again', async () => {
+    const s = setup()
+    await listedBare(s)
+    server.event('pane_closed', { pane_id: 'w2:p1', type: 'pane_closed', workspace_id: 'w2' })
+    await s.until(() => row(s, 'w2:p1') === undefined)
+    expect(s.timers).toEqual([])
+    s.advance(600_000)
+    await heard(s, 'w1:p1')
+    expect(lists()).toBe(3)
+  })
+
+  it('a stop with a re-list due leaves no timer, and lists nothing more', async () => {
+    const s = setup()
+    await listedBare(s)
+    s.source.stop()
+    expect(s.timers).toEqual([])
+    s.advance(600_000)
+    expect(lists()).toBe(3)
+  })
+
+  it('a drop with a re-list due leaves the retry alone, and the retry\'s list asks for the re-list again', async () => {
+    const s = setup()
+    await listedBare(s)
+    server.drop()
+    await s.until(() => s.log.at(-1) === '[herdr] retry · 1')
+    expect(s.timers.map(({ ms }) => ms)).toEqual([1000])
+    s.advance(1000)
+    await listRead(4)
+    expect(row(s, 'w2:p1')?.sessionId).toBeUndefined()
+    // The first re-list fell due as the retry listed: it is the next list.
+    expect(s.timers.map(({ ms }) => ms)).toEqual([0])
+    server.agents = [agent('w1:p1'), agent('w2:p1')]
+    s.advance(1000)
+    await listRead(5)
+    expect(row(s, 'w2:p1')?.sessionId).toBe('s-w2:p1')
+    expect(s.timers).toEqual([])
+  })
+
+  // After herdr starts again each session runs twice, in the pane herdr restored and a new one (dial eval I14), and its
+  // panes are numbered afresh: a pane id seen before is another agent, whose session is not reported yet either.
+  it('a herdr that starts again gives a row with no session its three re-lists anew, at a pane id whose ran out', async () => {
+    const s = setup()
+    await listedBare(s)
+    for (const [ms, n] of [[1000, 4], [1000, 5], [2000, 6]]) {
+      s.advance(ms)
+      await listRead(n)
+    }
+    expect(s.timers).toEqual([])
+    await server.stop()
+    await server.start()
+    await s.until(() => s.log.at(-1) === '[herdr] retry · 1')
+    s.advance(1000)
+    await listRead(7)
+    expect(row(s, 'w2:p1')?.sessionId).toBeUndefined()
+    // Its first re-list, and the subscription that names the panes listed.
+    expect(s.timers.map(({ ms }) => ms)).toEqual([1000, 1000])
+    for (const [ms, n, next] of [[1000, 8, [1000]], [1000, 9, [2000]], [2000, 10, []]] as const) {
+      s.advance(ms)
+      await listRead(n)
+      expect(s.timers.map(({ ms }) => ms)).toEqual(next)
+    }
+  })
+
+  // herdr 0.9.5 that stops while a re-list's subscription opens ends the current one, then refuses the new one (CI run
+  // 45721544951): the attempt failed as `closed · rejected`, a word that says nothing of a herdr that stopped.
+  it('herdr stopping while a re-list subscription opens fails the attempt as the current one ended, and its rows go', async () => {
+    const client = herdrClient()
+    let hold = false
+    let opening: { to: HerdrSubscriber; closed: boolean } | undefined
+    let currentEnded!: () => void
+    const ended = new Promise<void>((resolve) => { currentEnded = resolve })
+    const s = setup({
+      client: {
+        ...client,
+        subscribe: (entries, to) => {
+          if (JSON.stringify(entries) === JSON.stringify(FOCUS)) return client.subscribe(entries, to)
+          if (!hold) {
+            return client.subscribe(entries, { ...to, closed: (reason) => {
+              to.closed(reason)
+              currentEnded()
+            } })
+          }
+          // The re-list's subscription, unanswered until the test says.
+          const held = { to, closed: false }
+          opening = held
+          return { close: () => { held.closed = true } }
+        },
+      },
+    })
+    await listedBare(s)
+    hold = true
+    s.advance(1000)
+    expect(opening).toBeDefined()
+    const said = s.log.length
+    await server.stop()
+    await ended
+    // As the real client does, a subscription the source closed tells nothing.
+    if (!opening!.closed) opening!.to.closed('rejected')
+    expect(s.log.slice(said)).toEqual(['[herdr] closed · ended', '[herdr] retry · 1'])
+    // Only the retry is due: no re-list opens a subscription to a herdr that stopped.
+    expect(s.timers.map(({ ms }) => ms)).toEqual([1000])
+    s.advance(1000)
+    expect(s.source.list()).toEqual([])
+    expect(s.timers).toEqual([])
+    expect(s.log.at(-1)).toBe('[herdr] socket · none')
+  })
+
+  // The other order (CI run 45724079684): herdr 0.9.5 that stops refuses the re-list's subscription before the current
+  // one's end reaches the source. The attempt failed as `closed · rejected`, by a subscription that never started.
+  it('herdr stopping refuses a re-list subscription before the current one ends: it is dropped, and the current one fails the attempt', async () => {
+    const client = herdrClient()
+    let hold = false
+    let opening: HerdrSubscriber | undefined
+    let endCurrent: (() => void) | undefined
+    let currentEnded!: () => void
+    const ended = new Promise<void>((resolve) => { currentEnded = resolve })
+    const s = setup({
+      client: {
+        ...client,
+        subscribe: (entries, to) => {
+          if (JSON.stringify(entries) === JSON.stringify(FOCUS)) return client.subscribe(entries, to)
+          if (!hold) {
+            // The current one's end is held, so the refusal reaches the source first.
+            return client.subscribe(entries, { ...to, closed: (reason) => {
+              endCurrent = () => to.closed(reason)
+              currentEnded()
+            } })
+          }
+          // The re-list's subscription, unanswered until the test says.
+          opening = to
+          return { close: () => {} }
+        },
+      },
+    })
+    await listedBare(s)
+    hold = true
+    s.advance(1000)
+    expect(opening).toBeDefined()
+    const said = s.log.length
+    await server.stop()
+    await ended
+    opening!.closed('rejected')
+    expect(s.log.slice(said)).toEqual(['[herdr] dropped · rejected'])
+    endCurrent!()
+    expect(s.log.slice(said)).toEqual(['[herdr] dropped · rejected', '[herdr] closed · ended', '[herdr] retry · 1'])
+    // Only the retry is due: the dropped re-list asks for no other.
+    expect(s.timers.map(({ ms }) => ms)).toEqual([1000])
+    s.advance(1000)
+    expect(s.source.list()).toEqual([])
+    expect(s.timers).toEqual([])
+    expect(s.log.at(-1)).toBe('[herdr] socket · none')
+  })
+
   it('the id is kept across a reconnect while the pane stays listed, and is another once it left', async () => {
     server.agents = [agent('w1:p1')]
     const s = setup()
@@ -1370,7 +1611,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     const s = setup({ held })
     await live(s)
     expect(await s.source.send(row(s, 'w1:p1')!, 'run the tests')).toEqual({ ok: true })
-    expect(held.mock.calls).toEqual([['herdr:w1:p1', { engine: 'claude' }]])
+    expect(held.mock.calls).toEqual([['herdr:w1:p1', { engine: 'claude', sessionId: 's-w1:p1' }]])
     expect(s.prompt.mock.calls).toEqual([['w1:p1', 'claude', 'run the tests']])
   })
 
