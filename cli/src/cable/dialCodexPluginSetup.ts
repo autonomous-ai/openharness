@@ -194,7 +194,15 @@ export function createDialCodexPluginSetup(deps: DialCodexPluginSetupDeps): Dial
     // Wanted again: such a home is set up as any other, and nothing is owed.
     if (wanted === true) owed.clear()
     if (wanted !== false) return
-    for (const home of due) if (await withCodex(home, lookup, (run) => undo(home, run)) !== 'go') return
+    for (const home of due) {
+      // Its marketplace became the person's own since: a plugin there is theirs, and nothing is owed.
+      if (codexMarketplace(home, deps.plugin.folder) === 'own') {
+        owed.delete(home)
+        skipOwn(home)
+        continue
+      }
+      if (await withCodex(home, lookup, (run) => undo(home, run)) !== 'go') return
+    }
   }
 
   async function setUp(home: string, run: ClaudeRun, files: ClaudePluginFiles): Promise<Next> {
