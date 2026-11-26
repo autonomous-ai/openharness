@@ -152,9 +152,10 @@ export class AppRings {
     for (const a of agents) {
       const app = pageOf(a)
       all.set(app, (all.get(app) ?? 0) + 1)
-      // Where the scan learns no app (Windows) and nothing reports the app in front, an agent it found is placed by its
-      // first hook alone, which can be hours away: it counts as known, or the few agents that hooked would decide the
-      // dial's default over the many the person runs.
+      // Where the scan learns few apps (Windows, where it never learns Windows Terminal, the default terminal) and
+      // nothing reports the app in front, most agents it found are placed by their first hook alone, which can be
+      // hours away: such an agent counts as known, or the few agents that hooked would decide the dial's default over
+      // the many the person runs.
       if (a.appPending && this.scanLearnsApps) continue
       inFront.set(app, (inFront.get(app) ?? 0) + 1)
       if (!a.resting) known.set(app, (known.get(app) ?? 0) + 1)

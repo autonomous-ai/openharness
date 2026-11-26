@@ -133,7 +133,9 @@ const listed = (app: string): boolean => app !== UNKNOWN_APP && APP_IDS.includes
  *  app alone (windowsPtyMaker), and an agent in a multiplexer waits for its first hook. */
 export const scanLearnsApps = (platform: NodeJS.Platform): boolean => platform === 'darwin' || platform === 'linux'
 
-/** Each pid's app, from the nearest of it and its parents that names one; a pid nothing named is left out. */
+/** Each pid's app, from the nearest of it and its parents that names one; on Windows from its pseudo-console's maker
+ *  alone (windowsPtyMaker), since a parent past it is not the app the agent's terminal is in. A pid nothing named is
+ *  left out. */
 export async function scannedApps(pids: readonly number[], deps: ScannedAppDeps): Promise<Map<number, string>> {
   const apps = new Map<number, string>()
   if ((!scanLearnsApps(deps.platform) && deps.platform !== 'win32') || !pids.length) return apps

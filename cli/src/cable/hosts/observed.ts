@@ -160,8 +160,9 @@ const NEST_VARIABLE: Readonly<Record<Nest, string>> = { tmux: 'TMUX_PANE', herdr
  *  Cursor's terminal says too. Only a bundle id tells the two apart: Linux has none, and an editor started from another
  *  app has none once the one it inherited is dropped (hostDetect.ts ownHints). So for Orca by TERM_PROGRAM alone, which
  *  every program started from an Orca terminal keeps unless it sets its own (kitty, the ChatGPT app): Orca stands when
- *  the parents name none. Not on Windows, where they never do (scannedApp.ts scanLearnsApps): a walk would only hold
- *  the agent on Other's page until it answered. */
+ *  the parents name none. Not on Windows (scannedApp.ts scanLearnsApps): there the hook itself names an app started
+ *  from an Orca terminal (notify.mjs lookUpWindowsApp), so a walk would only hold the agent on Other's page until it
+ *  answered. */
 function walked(hints: Readonly<Record<string, string>>, platform: NodeJS.Platform): boolean {
   const named = detectApp(hints)
   return named === UNKNOWN_APP || (named === 'vscode' && !hints.__CFBundleIdentifier) || (inOrca(hints) && scanLearnsApps(platform))
