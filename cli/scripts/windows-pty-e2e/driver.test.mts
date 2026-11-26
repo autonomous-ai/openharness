@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { WebSocket, WebSocketServer } from 'ws'
-import { loadOrCreateHookCredential } from '../../src/lib/hookAuth.ts'
+import { listenLocalSocket, unixSocketPath } from '../../src/lib/localSocket.ts'
+import { NOT_RUNNING } from '../../src/lib/unreachable.ts'
 import { Client, machineId } from './driver.mts'
 
 function captureOpen() {
@@ -56,43 +57,63 @@ test('an ordinary open still requests control for typing', async () => {
   })
 })
 
-test('the local E2E socket presents this user\'s daemon credential', async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'harness-pty-driver-'))
-  const credential = loadOrCreateHookCredential(dataDir)
-  const oldDataDir = process.env.ADAPTER_DATA_DIR
-  const oldMachineId = process.env.E2E_MACHINE_ID
-  process.env.ADAPTER_DATA_DIR = dataDir
-  process.env.E2E_MACHINE_ID = 'test-machine'
-
-  const server = createServer()
-  const sockets = new WebSocketServer({ noServer: true })
-  server.on('upgrade', (request, socket, head) => {
-    if (request.headers['x-harness-local'] !== credential) {
-      socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
-      return
+/** Sets [values] for [run], then puts each variable back as it was. */
+async function withEnv(values: Record<string, string>, run: () => Promise<void>): Promise<void> {
+  const saved = Object.fromEntries(Object.keys(values).map((name) => [name, process.env[name]]))
+  Object.assign(process.env, values)
+  try {
+    await run()
+  } finally {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
     }
-    sockets.handleUpgrade(request, socket, head, (ws) => sockets.emit('connection', ws))
-  })
-  sockets.on('connection', (ws) => {
-    ws.on('message', () => ws.send(JSON.stringify({ type: 'connected', payload: {} })))
-  })
-  server.listen(0, '127.0.0.1')
-  await once(server, 'listening')
-  const address = server.address()
+  }
+}
+
+test('a Windows driver opens no loopback port: with no pipe it says Harness is not running', async () => {
+  const loopback = createServer()
+  let reached = 0
+  loopback.on('connection', (socket) => { reached++; socket.destroy() })
+  loopback.listen(0, '127.0.0.1')
+  await once(loopback, 'listening')
+  const address = loopback.address()
   assert.ok(address && typeof address !== 'string')
+  try {
+    await withEnv({ E2E_PORT: String(address.port), E2E_MACHINE_ID: 'test-machine' }, async () => {
+      await assert.rejects(new Client().connect({ platform: 'win32', pipe: () => null }), { message: NOT_RUNNING })
+    })
+    assert.equal(reached, 0)
+  } finally {
+    await new Promise<void>((resolve) => loopback.close(() => resolve()))
+  }
+})
+
+test('a macOS or Linux driver reaches the daemon over its socket', { skip: process.platform === 'win32' }, async () => {
+  // A short folder, so the socket fits beside the data, as the daemon's own does.
+  const dataDir = mkdtempSync('/tmp/hpd-')
+  const port = 18473
+  const socketPath = unixSocketPath(dataDir, port)
+  assert.ok(socketPath)
+  const daemon = await listenLocalSocket((_req, res) => { res.statusCode = 404; res.end() }, socketPath)
+  const sockets = new WebSocketServer({ noServer: true })
+  daemon.server.on('upgrade', (request, socket, head) => sockets.handleUpgrade(request, socket, head, (ws) => sockets.emit('connection', ws)))
+  sockets.on('connection', (ws) => {
+    ws.on('message', (data) => {
+      if (JSON.parse(String(data)).type === 'machine_select') ws.send(JSON.stringify({ type: 'connected', payload: {} }))
+    })
+  })
   const client = new Client()
   try {
-    await client.connect(`ws://127.0.0.1:${address.port}/api/local-ws`)
+    await withEnv({ ADAPTER_DATA_DIR: dataDir, E2E_PORT: String(port), E2E_MACHINE_ID: 'test-machine' }, async () => {
+      await client.connect()
+    })
     assert.equal(client.frames[0]?.type, 'connected')
   } finally {
     if (client.ws) client.end()
     for (const ws of sockets.clients) ws.terminate()
     sockets.close()
-    await new Promise<void>((resolve) => server.close(() => resolve()))
-    if (oldDataDir === undefined) delete process.env.ADAPTER_DATA_DIR
-    else process.env.ADAPTER_DATA_DIR = oldDataDir
-    if (oldMachineId === undefined) delete process.env.E2E_MACHINE_ID
-    else process.env.E2E_MACHINE_ID = oldMachineId
+    await daemon.close()
     rmSync(dataDir, { recursive: true, force: true })
   }
 })
