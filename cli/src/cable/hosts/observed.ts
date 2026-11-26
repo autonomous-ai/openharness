@@ -56,8 +56,9 @@ const TTY_RETRY_MS = 10_000
  *  p95 156 ms on macOS (docs/plans/2026-11-24-dial-iterm2-tab-and-restart-plan.md, Measured). */
 export const OUTER_FRESH_WAIT_MS = 700
 
-/** Voice at a Claude Code session no route reaches, while Harness's plugin is not on in the session's own home. */
-export const CLAUDE_PLUGIN_OFF = 'Voice needs Harness in Claude Code. Run: harness device claude enable'
+/** Voice at a Claude Code session no route reaches, while Harness's plugin is not on in the session's own home. It fits
+ *  the Pro dial's 600 px line, which cuts a longer one. */
+export const CLAUDE_PLUGIN_OFF = 'For voice, run: harness device claude enable'
 /** The same with the plugin on: the session's mod does not poll, as in a session started before the plugin was. */
 export const CLAUDE_RESTART = 'Restart Claude Code for voice.'
 
@@ -407,6 +408,9 @@ export class ObservedSource implements HostSource {
    * one. "Restart" also shows while a mod waits out its 60 s retry after a refused poll, or right after the devices
    * restarted: accepted, as a restart fixes those too and nothing here tells them from a session older than the plugin.
    * The settings are read here alone, at a voice start.
+   *
+   * Limit: the sentence is decided from the home's user settings.json alone. A project's or the managed settings that
+   * turn the plugin off are not seen (it says "Restart"), nor is a user file past 1 MiB (it says to enable).
    */
   voiceRefusal(agent: HostAgent): string | undefined {
     const e = this.entries.get(agent.id)

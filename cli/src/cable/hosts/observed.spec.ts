@@ -2318,7 +2318,7 @@ describe('ObservedSource actions', () => {
     const IN_HOME = join(HOME, 'projects', '-work-proj', 's1.jsonl')
 
     it('the two sentences, word for word', () => {
-      expect(CLAUDE_PLUGIN_OFF).toBe('Voice needs Harness in Claude Code. Run: harness device claude enable')
+      expect(CLAUDE_PLUGIN_OFF).toBe('For voice, run: harness device claude enable')
       expect(CLAUDE_RESTART).toBe('Restart Claude Code for voice.')
     })
 

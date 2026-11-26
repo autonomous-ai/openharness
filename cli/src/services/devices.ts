@@ -550,8 +550,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const row = registry.entries().find(({ agent }) => agent.id === agentId)?.agent
     return front !== undefined && row !== undefined && !row.appPending && row.app !== UNKNOWN_APP && row.app !== front
   }
+  /** Claude Code's default home, the devices' own: the renderer's, the dial setup's and the voice refusal's. */
+  const claudeHome = dirname(env.CLAUDE_PROJECTS_DIR)
   /** The engines' default homes, the dial setup's own: the dial skill is looked for where the setup writes it. */
-  const skillHomes = { claude: dirname(env.CLAUDE_PROJECTS_DIR), codex: env.CODEX_HOME }
+  const skillHomes = { claude: claudeHome, codex: env.CODEX_HOME }
   const dialUsage = createDialUsage({ sink: usageFile, now: wallClock, after: timerIn('dialUsage'), describe: usageAgent,
     working: usageWorking, away: usageAway, log, skills: () => installedSkills(core.dataDir, skillHomes) })
   /** A count is the devices' own part: one that throws never reaches the dial. */
@@ -629,7 +631,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // editor they are: a window reports shells by pid, and an agent's pid is placed in one editor alone by its hook's bundle
   // id (vscode.ts paneOf), so each editor's adapter finds only its own agents' terminals in the one pool.
   const renderer = {
-    defaultHome: dirname(env.CLAUDE_PROJECTS_DIR), managed: deps.claudeManagedSettings ?? MANAGED_SETTINGS[apps.platform],
+    defaultHome: claudeHome, managed: deps.claudeManagedSettings ?? MANAGED_SETTINGS[apps.platform],
   }
   /** Whether Claude Code's settings draw a session fullscreen: VS Code's terminals and Rex's blocks page it alike. */
   const claudeFullscreen = deps.claudeFullscreen ?? ((cwd: string, transcriptPath: string | undefined) => readFullscreen(cwd, transcriptPath, renderer))
@@ -980,7 +982,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         appWake!.waitsFor(threadId) ? Promise.resolve({ outcome: 'busy' as const }) : codexQueue.send(threadId, text, isApp),
     },
     codexHome: env.CODEX_HOME,
-    claudeHome: dirname(env.CLAUDE_PROJECTS_DIR),
+    claudeHome,
     claudePluginState,
     count: (what) => voiced(countWord(what)),
   }, ttyOf, skill ? (owners) => part.call('skill', () => skill.scanned(owners.values())) : undefined,
