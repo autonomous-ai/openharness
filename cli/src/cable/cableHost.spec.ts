@@ -1837,6 +1837,56 @@ describe('the dial that shows one app at a time', () => {
         await vi.waitFor(() => expect(swiped).toHaveBeenCalledWith('superseded'))
       })
 
+      // PM decision 5 (docs/plans/2026-11-26-dial-mux-host-pages-plan.md): a tap, a rest or a pick on an agent whose open
+      // still runs joins it and answers its outcome, running nothing more (the source's fresh read, placed tab and raise).
+      describe('an open of an agent still running is joined', () => {
+        /** paged() over tmuxed(), each open of the source reading until `read`, then still the open asked for if any of
+         *  those who asked for it is still the latest. */
+        function reading() {
+          const p = paged(tmuxed())
+          let read!: () => void
+          const held = new Promise<void>((resolve) => { read = resolve })
+          p.focus.mockImplementation(async (_agent, latest) => { p.latests.push(latest); await held; return latest() ? true : 'superseded' })
+          return { ...p, read }
+        }
+
+        it('a tap while a rest\'s open of the same agent is reading joins it: one open, and both answer its outcome', async () => {
+          const { host, swiped, focus, read } = reading()
+          host.pickApp('tmux')
+          host.swipeEnded('b1', 'rest', { apps: true })
+          const tapping = host.openAgent('b1')
+          expect(focus).toHaveBeenCalledTimes(1)
+          read()
+          expect(await tapping).toBeUndefined()
+          await vi.waitFor(() => expect(swiped).toHaveBeenCalledWith('opened'))
+          expect(focus).toHaveBeenCalledTimes(1)
+        })
+
+        it('a rest or a pick while a tap\'s open of the same agent is reading joins it: one open, and each answers its outcome', async () => {
+          const { host, swiped, appPickBrought, focus, read } = reading()
+          host.pickApp('tmux')
+          const tapping = host.openAgent('b1')
+          host.swipeEnded('b1', 'rest', { apps: true })
+          host.pickLanded('tmux', 'b1')
+          expect(focus).toHaveBeenCalledTimes(1)
+          read()
+          expect(await tapping).toBeUndefined()
+          await vi.waitFor(() => expect(swiped).toHaveBeenCalledWith('opened'))
+          await vi.waitFor(() => expect(appPickBrought).toHaveBeenCalledWith('ok'))
+          expect(focus).toHaveBeenCalledTimes(1)
+        })
+
+        it('two taps in a row run one open and both answer its outcome; once it ended, the next tap runs its own', async () => {
+          const { host, focus, read } = reading()
+          const taps = [host.openAgent('b1'), host.openAgent('b1')]
+          expect(focus).toHaveBeenCalledTimes(1)
+          read()
+          expect(await Promise.all(taps)).toEqual([undefined, undefined])
+          expect(await host.openAgent('b1')).toBeUndefined()
+          expect(focus).toHaveBeenCalledTimes(2)
+        })
+      })
+
       it('an open that did not bring the agent, or failed, tells failed', async () => {
         const { host, swiped, focus } = paged(tmuxed())
         host.pickApp('tmux')
