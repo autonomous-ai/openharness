@@ -2,7 +2,7 @@
 // processes, their terminals or their folders.
 import { describe, expect, it, vi } from 'vitest'
 import type { RunningProcess } from '../../lib/sessionSearch/externals/types.js'
-import { codexServed, type CodexServedDeps, MAX_CLIENTS } from './codexServed.js'
+import { codexServed, type CodexServedDeps, MAX_CLIENTS, servedLookup } from './codexServed.js'
 import { appRoots, type ProcessName, scannedApps } from './scannedApp.js'
 
 const HOME = '/Users/someone'
@@ -145,5 +145,14 @@ describe('codexServed', () => {
     expect(await codexServed([{ pid: 900, cwd: '/work/app' }], crowded)).toEqual([{}])
     expect(crowded.cwds).not.toHaveBeenCalled()
     expect(crowded.tty).not.toHaveBeenCalled()
+  })
+})
+
+describe('servedLookup', () => {
+  // Only whether there is one: calling it would read this machine's processes.
+  it('reads this machine on macOS and Linux, and asks nothing on Windows, where no process\'s folder can be read', () => {
+    expect(servedLookup('darwin')).toBeTypeOf('function')
+    expect(servedLookup('linux')).toBeTypeOf('function')
+    expect(servedLookup('win32')).toBeUndefined()
   })
 })
