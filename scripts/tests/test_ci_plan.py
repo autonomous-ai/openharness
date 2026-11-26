@@ -792,8 +792,35 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(planner.select(["desktop/lib/widgets/pane_grid.dart"])[0], {"cross-read-scan", "desktop"})
         self.assertEqual(planner.select(["desktop/lib/widgets/engine_identity.dart"])[0],
                          {"cross-read-scan", "desktop", "mobile"})
-        # Desktop's and the CLI's tests read the Store's agents and branding, which no component owns.
-        self.assertEqual(planner.select(["store/agents/blender/store.json"])[0], {"cli", "desktop"})
+        # Desktop's and the CLI's tests read the Store's agents and branding, which no component owns; store-checks the
+        # agents too.
+        self.assertEqual(planner.select(["store/agents/blender/store.json"])[0], {"cli", "desktop", "store"})
+
+    def test_store_tools_select_their_own_checks(self):
+        # No PR check ran store/tools/' tests: a change there ran process checks only.
+        for path in ("store/tools/runtimes.sh", "store/tools/local-ai/test/packaging.test.mjs"):
+            with self.subTest(path=path):
+                self.assertLessEqual({"store", "cross-read-scan"}, planner.select([path])[0])
+        # The local AI packages' node.sh copies, the libs port-holder.test.mjs imports, and the runtimes.sh copies
+        # sync-runtimes.mjs --check compares, in the agents and the viewers.
+        for path in ("store/agents/ollama/toolchain/node.sh", "store/viewers/web-viewer/runtimes.sh"):
+            with self.subTest(path=path):
+                self.assertIn("store", planner.select([path])[0])
+        for path in ("store/catalog.json", "cli/src/lib/engineLaunch.ts", "docs/plans/x.md"):
+            with self.subTest(path=path):
+                self.assertNotIn("store", planner.select([path])[0])
+        self.assertEqual(planner.JOBS["store"], {"store-checks"})
+        self.assertIsNone(planner.shared_input("store/tools/runtimes.sh"))
+        # The browser and network suites are other workflows'.
+        self.assertFalse(planner.reads("store", "store/tools/browser/x.test.mjs"))
+
+    def test_store_checks_run_offline_with_a_read_only_token(self):
+        job = planner.ci_jobs((REPOSITORY / ".github/workflows/ci.yml").read_text())["store-checks"]
+        for text in ("    permissions:\n      contents: read\n", "python3 -m unittest store/tools/test_runtimes.py",
+                     "node store/tools/sync-runtimes.mjs --check", "npm --prefix store/tools/local-ai test"):
+            with self.subTest(text=text):
+                self.assertIn(text, job)
+        self.assertNotIn("secrets.", job)
 
     def test_the_app_list_vectors_select_desktop_device_app_and_website(self):
         # Every writer of Harness Device's Linux app-list entry holds its bytes and rule to one shared file: the app,
