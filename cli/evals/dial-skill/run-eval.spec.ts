@@ -737,6 +737,18 @@ fs.appendFileSync(${JSON.stringify(heard())}, '${who}: ' + said + '\n')
     expect(callsMade()).toEqual([])
     expect(jsonl('v1', 'results.jsonl')).toEqual([])
   })
+
+  it.each(['claude', 'oracle'])('refuses a listed harness-answers.json that answers device notify before the pass starts, for %s', (agentKind) => {
+    const file = variantFile('harness-answers.json', [...ANSWERS, { argv: ['device', 'notify', 'Check in'], stdout: 'shown\n' }])
+    writeState({ harness_paths: [file] })
+
+    const out = runEval(['--variant', 'v1', '--agents', agentKind, '--cases', 'add-version-flag', '--approve-harness'])
+
+    expect(out.status).toBe(2)
+    expect(out.stderr).toContain(`${file}: device notify is answered by the eval, not by a variant`)
+    expect(callsMade()).toEqual([])
+    expect(existsSync(join(flow, 'v1', 'summary.json'))).toBe(false)
+  })
 })
 
 describe('run-eval.mjs summary.json', () => {
