@@ -107,3 +107,14 @@ it('keeps none of the rows the round firmware holds fixed, brightness whole and 
 
   expect(state).toEqual({ t: 'settings.state', ok: true, settings: { ...held, brightness: 42, voiceLang: 'abcdefg', focusFace: true, scrollReversed: true } })
 })
+
+// The firmware cuts Voice language to 7 bytes, not 7 characters (snprintf into CFG_VLANG_MAX), and reads an empty one
+// back as English (config_load_voicelang).
+it('cuts Voice language by bytes and reads an empty one back as English, as the firmware does', async () => {
+  const held = { brightness: 60, muted: false, voiceLang: 'en' }
+  const cut = await setOnce('bytes', held, { voiceLang: 'tiếngViệt' })
+  const empty = await setOnce('empty', { ...held, voiceLang: 'vi' }, { voiceLang: '' })
+
+  expect(cut.state).toEqual({ t: 'settings.state', ok: true, settings: { ...held, voiceLang: 'tiếng' } })
+  expect(empty.state).toEqual({ t: 'settings.state', ok: true, settings: { ...held, voiceLang: 'en' } })
+})
