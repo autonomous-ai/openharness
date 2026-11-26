@@ -1944,6 +1944,20 @@ describe('the dial that shows one app at a time', () => {
           expect(opened(focus)).toEqual(['b2', 'b2', 'b2', 'b2'])
         })
 
+        // An ended agent stays listed 10 s after its end, heard from last: no source opens it.
+        it('an agent its source cannot open is never the one opened, landed on or heard from last', async () => {
+          const { host, appPickBrought, focus, capabilities } = paged([
+            agent('b1', 'iterm', { nest: 'tmux', host: 'tmux', lastActivityAt: 5 }),
+            agent('b2', 'iterm', { nest: 'tmux', host: 'tmux', lastActivityAt: 9 }),
+          ])
+          capabilities.mockImplementation((a) => a.id === 'b2' ? { ...CAN_OPEN, focus: false } : CAN_OPEN)
+          host.pickApp('tmux')
+          host.pickLanded('tmux', 'b2')
+          host.pickLanded('tmux', undefined)
+          await vi.waitFor(() => expect(appPickBrought).toHaveBeenCalledTimes(2))
+          expect(opened(focus)).toEqual(['b1', 'b1'])
+        })
+
         it('herdr\'s own row landed on: the page\'s agent heard from last with a client app is opened', async () => {
           const { host, appPickBrought, focus } = paged([
             agent('c1', 'iterm', { nest: 'herdr', host: 'herdr', lastActivityAt: 3 }),
