@@ -19,9 +19,10 @@ import { createHerdrAppAdapter } from './herdrApp.js'
 import type { HerdrPrompt } from './herdrClient.js'
 import { APP_BUNDLES } from './hostDetect.js'
 import { type Delivery, Inbox } from './inbox.js'
-import { askedLine, countWord, cutAnswer, observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps, OUTER_FRESH_WAIT_MS, type PromptSource } from './observed.js'
+import { askedLine, CLAUDE_PLUGIN_OFF, CLAUDE_RESTART, countWord, cutAnswer, observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps, OUTER_FRESH_WAIT_MS, type PromptSource } from './observed.js'
 import type { OpenTarget } from './open.js'
 import { createOrcaAdapter, MAX_TEXT, type OrcaDeps } from './orca.js'
+import { createOrcaChatAdapter } from './orcaChat.js'
 import { type Fresh, FRESH_WITHIN_MS, type Nested, type NestedPlace, type OuterLookup } from './outer.js'
 import { appRoots, learnApps, type ProcessName, scannedApps } from './scannedApp.js'
 import { pagesOf } from './select.js'
@@ -1539,6 +1540,8 @@ const counted = (count: { mock: { calls: Array<Parameters<ObservedActions['count
  *  verbs the fakes, and any command of their own goes to an inert runner. */
 function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'darwin') {
   const ready = new Set<string>()
+  // The plugin's state in each settings file, as claudePluginState reads it: a file not set here says nothing.
+  const plugin = new Map<string, 'on' | 'off' | 'unknown'>()
   const fakes = {
     modReady: vi.fn((sessionId: string) => ready.has(sessionId)),
     toMod: vi.fn(async (_sessionId: string, _text: string): Promise<Delivery> => 'taken'),
@@ -1570,6 +1573,8 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
       send: vi.fn(async (_threadId: string, _text: string, _isApp: boolean): Promise<CodexQueueResult> => ({ outcome: 'queued' })),
     },
     codexHome: '/home/u/.codex',
+    claudeHome: '/home/u/.claude',
+    claudePluginState: vi.fn((settingsPath: string) => plugin.get(settingsPath) ?? 'unknown'),
     count: vi.fn((_what: Parameters<ObservedActions['count']>[0]) => {}),
   }
   const fake = { ...fakes, ...over } as typeof fakes
@@ -1607,7 +1612,7 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
       canType: () => false, type: async () => 'failed' as const } }),
     createTabsAdapter({ isOpen: () => fake.tabsOpen(), select: (tab, raise) => fake.tabSelect(tab.app, tab.tty, raise) === 'ok' }),
   ]
-  return { actions: { ...fake, adapters }, ready, ran }
+  return { actions: { ...fake, adapters }, ready, ran, plugin }
 }
 
 describe('ObservedSource actions', () => {
@@ -1644,8 +1649,11 @@ describe('ObservedSource actions', () => {
     const { src, ev } = setup({ actions })
     src.ingest(ev('session-start', withHandle))
     expect(src.capabilities(src.list()[0])).toMatchObject({ voice: true, focus: true })
+    expect(src.voiceRefusal(src.list()[0])).toBeUndefined()
     src.ingest(ev('turn-stop', { hostHints: { ORCA_TERMINAL_HANDLE: `${HANDLE}; rm -rf /` } }))
-    expect(src.capabilities(src.list()[0])).toMatchObject({ voice: false, focus: false })
+    // No route: Claude Code still takes voice, and its start is told how to reach it.
+    expect(src.capabilities(src.list()[0])).toMatchObject({ voice: true, focus: false })
+    expect(src.voiceRefusal(src.list()[0])).toBe(CLAUDE_PLUGIN_OFF)
   })
 
   it('an event whose hints carry no handle clears it: a tap opens the app it runs in now', async () => {
@@ -1655,7 +1663,8 @@ describe('ObservedSource actions', () => {
     // Resumed in another terminal: the old handle now holds something else.
     src.ingest(ev('session-start', { hostHints: { TERM_PROGRAM: 'ghostty' } }))
     const agent = src.list()[0]
-    expect(src.capabilities(agent)).toMatchObject({ voice: false, focus: true })
+    expect(src.capabilities(agent)).toMatchObject({ voice: true, focus: true })
+    expect(src.voiceRefusal(agent)).toBe(CLAUDE_PLUGIN_OFF)
     expect(await src.focus(agent, latestTap)).toBe(true)
     expect(actions.open.mock.calls).toEqual([[agent.id, { bundle: 'com.mitchellh.ghostty' }]])
   })
@@ -1666,8 +1675,8 @@ describe('ObservedSource actions', () => {
     src.ingest(ev('session-start', { sessionId: 'warp', hostHints: { TERM_PROGRAM: 'WarpTerminal' } }))
     src.ingest(ev('session-start', { sessionId: 'app', hostHints: { __CFBundleIdentifier: 'org.alacritty' } }))
     const caps = (sessionId: string) => src.capabilities(src.list().find((a) => a.sessionId === sessionId)!)
-    expect(caps('warp')).toEqual({ status: true, voice: false, focus: true, answer: false })
-    expect(caps('app')).toEqual({ status: true, voice: false, focus: true, answer: false })
+    expect(caps('warp')).toEqual({ status: true, voice: true, focus: true, answer: false })
+    expect(caps('app')).toEqual({ status: true, voice: true, focus: true, answer: false })
     const id = (sessionId: string) => src.list().find((a) => a.sessionId === sessionId)!.id
     expect(actions.canOpen.mock.calls).toEqual([[id('warp'), { bundle: 'dev.warp.Warp-Stable' }], [id('app'), { bundle: 'org.alacritty' }]])
     // What cannot open it (Linux, with no pane) gives no f.
@@ -1682,9 +1691,11 @@ describe('ObservedSource actions', () => {
     owners.set('s1', { pid: 100, engine: 'claude' })
     externals.set('s1', { cwd: '/work/proj', transcriptPath: '/t/s1.jsonl' })
     await src.scanOpen()
-    expect(src.capabilities(src.list()[0])).toMatchObject({ voice: false, focus: false })
+    expect(src.capabilities(src.list()[0])).toMatchObject({ voice: true, focus: false })
+    expect(src.voiceRefusal(src.list()[0])).toBe(CLAUDE_PLUGIN_OFF)
     src.ingest(ev('session-start', withHandle))
     expect(src.list()[0].host).toBe('orca')
+    expect(src.voiceRefusal(src.list()[0])).toBeUndefined()
     expect(src.capabilities(src.list()[0])).toMatchObject({ voice: true, focus: true })
   })
 
@@ -2202,11 +2213,12 @@ describe('ObservedSource actions', () => {
     const sessionId = '8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
     src.ingest(ev('session-start', { sessionId, hostHints: { __CFBundleIdentifier: 'com.microsoft.VSCode', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' } }))
     const [agent] = src.list()
-    expect(src.capabilities(agent).voice).toBe(false)
+    expect(src.voiceRefusal(agent)).toBe(CLAUDE_PLUGIN_OFF)
     expect(await src.send(agent, 'run the tests')).toMatchObject({ ok: false })
     expect(actions.toMod).not.toHaveBeenCalled()
     ready.add(sessionId)
     expect(src.capabilities(agent).voice).toBe(true)
+    expect(src.voiceRefusal(agent)).toBeUndefined()
     expect(await src.send(agent, 'run the tests')).toEqual({ ok: true })
     expect(actions.toMod.mock.calls).toEqual([[sessionId, 'run the tests']])
     expect(actions.orcaSend).not.toHaveBeenCalled()
@@ -2272,8 +2284,9 @@ describe('ObservedSource actions', () => {
     })
   })
 
-  // U10: the app's own adapter says why no route reaches its agent; the source names no app.
-  it('an agent with no voice says its first adapter\'s sentence; one with voice, an ended one, or one whose adapters have none, says none', () => {
+  // U10: the app's own adapter says why no route reaches its agent; the source names no app. Codex's here: Claude Code's
+  // agent with none of theirs is told how to reach it (below).
+  it('an agent with no route says its first adapter\'s sentence; one with a route, an ended one, or one whose adapters have none, says none', () => {
     const silent: HostAdapter = { id: 'silent', tap: 'instead', canFocus: () => false, focus: async () => false,
       paneOf: () => undefined }
     const saying = (id: string): HostAdapter => ({ ...silent, id,
@@ -2281,19 +2294,124 @@ describe('ObservedSource actions', () => {
     const { actions } = fakeActions()
     const { src, ev } = setup({ actions: { ...actions, adapters: [...actions.adapters, silent, saying('first'), saying('second')] } })
     const agent = (sessionId: string) => src.list().find((a) => a.sessionId === sessionId)!
-    src.ingest(ev('session-start', { sessionId: 'mute', callerPid: 101, hostHints: { OWN_AGENT: '1' } }))
+    const codex = { engine: 'codex' as const }
+    src.ingest(ev('session-start', { ...codex, sessionId: 'mute', callerPid: 101, hostHints: { OWN_AGENT: '1' } }))
     expect(src.voiceRefusal(agent('mute'))).toBe('first says no.')
-    src.ingest(ev('session-start', { sessionId: 'plain', callerPid: 102 }))
+    src.ingest(ev('session-start', { ...codex, sessionId: 'plain', callerPid: 102 }))
     expect(src.voiceRefusal(agent('plain'))).toBeUndefined()
-    src.ingest(ev('session-start', { sessionId: 'voiced', callerPid: 103, hostHints: { ...withHandle.hostHints, OWN_AGENT: '1' } }))
+    src.ingest(ev('session-start', { ...codex, sessionId: 'voiced', callerPid: 103, hostHints: { ...withHandle.hostHints, OWN_AGENT: '1' } }))
     expect(src.capabilities(agent('voiced')).voice).toBe(true)
     expect(src.voiceRefusal(agent('voiced'))).toBeUndefined()
-    src.ingest(ev('session-end', { sessionId: 'mute', callerPid: 101, hostHints: { OWN_AGENT: '1' } }))
+    src.ingest(ev('session-end', { ...codex, sessionId: 'mute', callerPid: 101, hostHints: { OWN_AGENT: '1' } }))
     expect(src.voiceRefusal(agent('mute'))).toBeUndefined()
 
     const none = setup({ actions: { ...actions, adapters: [silent] } })
-    none.src.ingest(none.ev('session-start', { hostHints: { OWN_AGENT: '1' } }))
+    none.src.ingest(none.ev('session-start', { ...codex, hostHints: { OWN_AGENT: '1' } }))
     expect(none.src.voiceRefusal(none.src.list()[0])).toBeUndefined()
+  })
+
+  // The dial shows only "See it in <host>" for an agent with no v, and the daemon never hears of it: Claude Code with no
+  // route takes voice, and its start is refused with how to reach it (docs/plans/2026-11-26-dial-claude-plugin-install-design.md, 3).
+  describe('Claude Code with no route', () => {
+    const HOME = '/home/u/.claude-work'
+    const SETTINGS = join(HOME, 'settings.json')
+    const IN_HOME = join(HOME, 'projects', '-work-proj', 's1.jsonl')
+
+    it('the two sentences, word for word', () => {
+      expect(CLAUDE_PLUGIN_OFF).toBe('Voice needs Harness in Claude Code. Run: harness device claude enable')
+      expect(CLAUDE_RESTART).toBe('Restart Claude Code for voice.')
+    })
+
+    it('a live Claude Code agent with no route takes voice; an ended one, or another engine, does not', () => {
+      const { actions } = fakeActions()
+      const { src, ev } = setup({ actions })
+      const agent = (sessionId: string) => src.list().find((a) => a.sessionId === sessionId)!
+      src.ingest(ev('session-start', { sessionId: 'live', callerPid: 101 }))
+      src.ingest(ev('session-start', { sessionId: 'ended', callerPid: 102 }))
+      src.ingest(ev('session-end', { sessionId: 'ended', callerPid: 102 }))
+      src.ingest(ev('session-start', { sessionId: 'cx', callerPid: 103, engine: 'codex' }))
+      expect(src.capabilities(agent('live')).voice).toBe(true)
+      expect(src.capabilities(agent('ended')).voice).toBe(false)
+      expect(src.capabilities(agent('cx')).voice).toBe(false)
+      expect(src.voiceRefusal(agent('ended'))).toBeUndefined()
+      expect(src.voiceRefusal(agent('cx'))).toBeUndefined()
+    })
+
+    it('with no route and the plugin not on in its own home, the enable sentence', () => {
+      for (const state of ['off', 'unknown'] as const) {
+        const { actions, plugin } = fakeActions()
+        plugin.set(SETTINGS, state)
+        // The default home's is never asked for a session whose transcript names its own.
+        plugin.set(join(actions.claudeHome, 'settings.json'), 'on')
+        const { src, ev } = setup({ actions })
+        src.ingest(ev('session-start', { transcriptPath: IN_HOME }))
+        expect(src.voiceRefusal(src.list()[0]), state).toBe(CLAUDE_PLUGIN_OFF)
+        expect(actions.claudePluginState.mock.calls, state).toEqual([[SETTINGS]])
+      }
+    })
+
+    // "Restart" also shows while a mod waits out its retry, or right after the devices restarted: a restart fixes it too.
+    it('with the plugin on and no mod polling, the restart sentence', () => {
+      const { actions, plugin, ready } = fakeActions()
+      plugin.set(SETTINGS, 'on')
+      const { src, ev } = setup({ actions })
+      src.ingest(ev('session-start', { transcriptPath: IN_HOME }))
+      const [agent] = src.list()
+      expect(src.voiceRefusal(agent)).toBe(CLAUDE_RESTART)
+      expect(actions.claudePluginState.mock.calls).toEqual([[SETTINGS]])
+      // Its mod has a poll open, or closed one in the last 5 s: the words go to it.
+      ready.add('s1')
+      expect(src.voiceRefusal(agent)).toBeUndefined()
+      expect(actions.claudePluginState).toHaveBeenCalledTimes(1)
+    })
+
+    // A hook gives the path: only one plainly shaped <home>/projects/<slug>/<id>.jsonl names a home to read in.
+    it('with no transcript path, or one of another shape, the default home decides', () => {
+      for (const transcriptPath of [undefined, 'projects/p/s.jsonl', `${HOME}/projects/../x/s.jsonl`, join(HOME, 'projects', 'p', 's.txt')]) {
+        const { actions, plugin } = fakeActions()
+        plugin.set(join(actions.claudeHome, 'settings.json'), 'on')
+        const { src, ev } = setup({ actions })
+        src.ingest(ev('session-start', { transcriptPath }))
+        expect(src.voiceRefusal(src.list()[0]), transcriptPath).toBe(CLAUDE_RESTART)
+        expect(actions.claudePluginState.mock.calls, transcriptPath).toEqual([[join(actions.claudeHome, 'settings.json')]])
+      }
+    })
+
+    it('an agent with a route gives no sentence and reads no settings', () => {
+      const { actions, ready } = fakeActions()
+      const { src, ev } = setup({ actions })
+      const agent = (sessionId: string) => src.list().find((a) => a.sessionId === sessionId)!
+      src.ingest(ev('session-start', { sessionId: 'mod', callerPid: 101 }))
+      ready.add('mod')
+      src.ingest(ev('session-start', { sessionId: 'pane', callerPid: 102, ...withHandle }))
+      src.ingest(ev('session-start', { sessionId: THREAD, callerPid: 103, engine: 'codex', hostHints: { TERM_PROGRAM: 'ghostty' },
+        transcriptPath: `/home/u/.codex/sessions/2026/11/15/rollout-2026-11-15T16-07-59-${THREAD}.jsonl` }))
+      for (const sessionId of ['mod', 'pane', THREAD]) {
+        expect(src.capabilities(agent(sessionId)).voice, sessionId).toBe(true)
+        expect(src.voiceRefusal(agent(sessionId)), sessionId).toBeUndefined()
+      }
+      expect(actions.claudePluginState).not.toHaveBeenCalled()
+    })
+
+    it('an adapter\'s sentence comes first', () => {
+      const { actions } = fakeActions()
+      const chats = createOrcaChatAdapter({ run: async () => ({ code: 0, stdout: '' }), onPath: () => null, exists: () => false,
+        platform: 'darwin', worktreeOf: () => undefined, log: () => {} })
+      const { src, ev } = setup({ actions: { ...actions, adapters: [...actions.adapters, chats] } })
+      src.ingest(ev('session-start', { hostHints: { ORCA_AGENT_SESSION_ID: '6f1d2c3b-4a5e-4f60-8172-93a4b5c6d7e8' } }))
+      expect(src.capabilities(src.list()[0]).voice).toBe(true)
+      expect(src.voiceRefusal(src.list()[0])).toBe('Type in Orca for chats.')
+      expect(actions.claudePluginState).not.toHaveBeenCalled()
+    })
+
+    // Caps are worked out for every list the dial is sent: the settings are read at a voice start alone.
+    it('caps read no settings', () => {
+      const { actions } = fakeActions()
+      const { src, ev } = setup({ actions })
+      src.ingest(ev('session-start', { transcriptPath: IN_HOME }))
+      expect(src.capabilities(src.list()[0]).voice).toBe(true)
+      expect(actions.claudePluginState).not.toHaveBeenCalled()
+    })
   })
 })
 
@@ -2359,8 +2477,8 @@ describe('ObservedSource and the Herdr terminal a session the scan found runs in
     const [agent] = s.src.list()
     expect(agent.paneKeys).toEqual(['herdr-app:t7'])
     const h = hooked(inT7, quiet)
-    expect(s.src.capabilities(agent).voice).toBe(false)
-    expect(h.src.capabilities(h.src.list()[0]).voice).toBe(false)
+    expect(s.src.voiceRefusal(agent)).toBe(CLAUDE_PLUGIN_OFF)
+    expect(h.src.voiceRefusal(h.src.list()[0])).toBe(CLAUDE_PLUGIN_OFF)
     expect(await s.src.send(agent, 'next')).toEqual({ ok: false, reason: 'a did not answer.' })
     expect(await h.src.send(h.src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
     expect(s.actions.hcPrompt).not.toHaveBeenCalled()
@@ -2417,7 +2535,8 @@ describe('ObservedSource and the Herdr terminal a session the scan found runs in
     expect(s.changes).toHaveBeenCalledTimes(3)
     expect(placeOf(row('a'))).toEqual({ host: 'terminal', app: 'vscode', appPending: undefined, paneKeys: undefined })
     expect(herdrLines(s.logs)).toHaveLength(2)
-    expect(s.src.capabilities(row('a'))).toMatchObject({ voice: false, focus: false })
+    expect(s.src.capabilities(row('a'))).toMatchObject({ voice: true, focus: false })
+    expect(s.src.voiceRefusal(row('a'))).toBe(CLAUDE_PLUGIN_OFF)
     expect(await s.src.focus(row('a'), latestTap)).toBe(false)
     expect(s.actions.canOpen).toHaveBeenLastCalledWith(row('a').id, {})
     expect(await s.src.send(row('a'), 'next')).toEqual({ ok: false, reason: 'a did not answer.' })
@@ -2668,8 +2787,9 @@ describe('ObservedSource and codex queue', () => {
     expect(src.capabilities(src.list()[0])).toEqual({ status: true, voice: true, focus: true, answer: false })
   })
 
-  it('not queue-able: each lists no voice, and its words never reach the queue', async () => {
+  it('not queue-able: each lists no voice but Claude Code, and its words never reach the queue', async () => {
     const cases: Array<{ session: Partial<ObservedHookEvent>; ended?: boolean; can?: boolean }> = [
+      // Claude Code takes voice with no route: its start is told how to reach it.
       { session: { ...cx, engine: 'claude' } },
       { session: cx, ended: true },
       // No hook named its transcript yet.
@@ -2687,7 +2807,7 @@ describe('ObservedSource and codex queue', () => {
       const { src, ev, actions } = given(session)
       if (ended) src.ingest(ev('session-end', session))
       if (can === false) actions.codexQueue.can.mockReturnValue(false)
-      expect(src.capabilities(src.list()[0]).voice).toBe(false)
+      expect(src.capabilities(src.list()[0]).voice).toBe(session.engine === 'claude')
       expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
       expect(actions.codexQueue.send).not.toHaveBeenCalled()
     }
@@ -3438,11 +3558,13 @@ describe('ObservedSource and the host that owns its caller\'s terminal', () => {
     const s = owned()
     s.src.ingest(s.ev('session-start', { hostHints: ZELLIJ }))
     expect(s.zellijPane()).toBeUndefined()
-    expect(s.src.capabilities(s.agent())).toMatchObject({ voice: false, focus: true })
+    expect(s.src.capabilities(s.agent())).toMatchObject({ voice: true, focus: true })
+    expect(s.src.voiceRefusal(s.agent())).toBe(CLAUDE_PLUGIN_OFF)
     s.changes.mockClear()
     await s.reads[0].answer('zellij')
     expect(s.zellijPane()).toBe('s1:1')
     expect(s.src.capabilities(s.agent())).toMatchObject({ voice: true, focus: true })
+    expect(s.src.voiceRefusal(s.agent())).toBeUndefined()
     expect(s.changes).toHaveBeenCalledTimes(1)
     expect(await s.src.send(s.agent(), 'next')).toEqual({ ok: true })
     expect(s.run.mock.calls.map(([, args]) => args[3])).toEqual(['list-panes', 'write-chars', 'send-keys'])
@@ -3527,7 +3649,7 @@ describe('ObservedSource and the host that owns its caller\'s terminal', () => {
     await s.reads[0].answer('tmux')
     expect(await s.src.focus(s.agent(), latestTap)).toBe(true)
     expect(s.actions.open.mock.calls.map(([, target]) => target.pane)).toEqual([{ adapter: 'tmux', id: '%3:100' }])
-    expect(s.src.capabilities(s.agent())).toMatchObject({ voice: false })
+    expect(s.src.voiceRefusal(s.agent())).toBe(CLAUDE_PLUGIN_OFF)
   })
 
   it('with no read of it (Windows), every pane of a terminal or a multiplexer only holds the agent', () => {
@@ -3535,7 +3657,8 @@ describe('ObservedSource and the host that owns its caller\'s terminal', () => {
     const s = setup({ actions: { ...actions, adapters: [createZellijAdapter({ run: vi.fn(), zellij: async () => ({ state: 'present' }), platform: 'linux' })] } })
     s.src.ingest(s.ev('session-start', { hostHints: ZELLIJ }))
     expect(s.src.paneOf(s.src.list()[0].id, 'zellij')).toBeUndefined()
-    expect(s.src.capabilities(s.src.list()[0])).toMatchObject({ voice: false, focus: true })
+    expect(s.src.capabilities(s.src.list()[0])).toMatchObject({ voice: true, focus: true })
+    expect(s.src.voiceRefusal(s.src.list()[0])).toBe(CLAUDE_PLUGIN_OFF)
   })
 })
 
@@ -3606,7 +3729,8 @@ describe('ObservedSource and a pane that only holds the agent', () => {
 
     const only = holding([fake('h', () => true).adapter])
     only.src.ingest(only.ev('turn-stop', { hostHints: HINTS }))
-    expect(only.src.capabilities(only.agent())).toMatchObject({ voice: false, focus: true })
+    expect(only.src.capabilities(only.agent())).toMatchObject({ voice: true, focus: true })
+    expect(only.src.voiceRefusal(only.agent())).toBe(CLAUDE_PLUGIN_OFF)
     expect(only.src.hasPane(only.agent())).toBe(false)
     expect(await only.src.send(only.agent(), 'next')).toMatchObject({ ok: false })
   })
@@ -3819,7 +3943,7 @@ describe('ObservedSource and an Orca terminal or a herdr pane that only holds th
     s.src.ingest(s.ev('turn-stop', { hostHints: ORCA }))
     await s.reads[0].fail()
     expect(s.src.paneOf(s.agent().id, 'orca')).toBeUndefined()
-    expect(s.src.capabilities(s.agent())).toMatchObject({ voice: false, focus: true })
+    expect(s.src.capabilities(s.agent())).toMatchObject({ voice: true, focus: true })
     expect(await s.src.send(s.agent(), 'next')).toMatchObject({ ok: false })
     s.clock.t += 9_999
     s.src.ingest(s.ev('turn-stop', { hostHints: ORCA }))
@@ -3928,7 +4052,8 @@ describe('ObservedSource panes', () => {
     const { src, ev } = setup({ actions })
     src.ingest(ev('turn-stop', { hostHints: { ...hints, ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: HANDLE, __CFBundleIdentifier: 'com.stablyai.orca' } }))
     const agent = src.list()[0]
-    expect(src.capabilities(agent)).toMatchObject({ voice: herdrSocket, focus: true })
+    expect(src.capabilities(agent)).toMatchObject({ voice: true, focus: true })
+    expect(src.voiceRefusal(agent)).toBe(herdrSocket ? undefined : CLAUDE_PLUGIN_OFF)
     expect(src.hasPane(agent)).toBe(false)
     expect(await src.showPane(agent)).toBe('failed')
     expect(await src.send(agent, 'next')).toEqual(herdrSocket ? { ok: true } : { ok: false, reason: 'proj did not answer.' })
@@ -3974,7 +4099,7 @@ describe('ObservedSource panes', () => {
     src.ingest(ev('turn-stop', { sessionId: 'in-ghostty', hostHints: { HERDR_PANE_ID: 'w1:p3', __CFBundleIdentifier: 'com.mitchellh.ghostty' } }))
     for (const sessionId of ['in-orca', 'in-ghostty']) {
       const agent = src.list().find((a) => a.sessionId === sessionId)!
-      expect(src.capabilities(agent), sessionId).toMatchObject({ voice: false, focus: true })
+      expect(src.capabilities(agent), sessionId).toMatchObject({ voice: true, focus: true })
       expect(await src.send(agent, 'next'), sessionId).toEqual({ ok: false, reason: 'proj did not answer.' })
     }
     expect(actions.herdrPrompt).not.toHaveBeenCalled()
@@ -4096,7 +4221,7 @@ describe('ObservedSource panes', () => {
     expect(unseen.src.hasPane(unseen.agent)).toBe(false)
     expect(await unseen.src.showPane(unseen.agent)).toBe('failed')
     const alone = first({ ...madeUp(), type: undefined }, { MADE_UP: 'p1' })
-    expect(alone.src.capabilities(alone.agent)).toMatchObject({ voice: false })
+    expect(alone.src.voiceRefusal(alone.agent)).toBe(CLAUDE_PLUGIN_OFF)
     expect(await alone.src.send(alone.agent, 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
 
     // A tap hands its pane to the opener, which brings it forward: the source runs none of its own.
@@ -4419,7 +4544,8 @@ describe('ObservedSource panes', () => {
     expect(s.src.hasPane(agent)).toBe(true)
     expect(await s.src.showPane(agent)).toBe('ok')
     expect(actions.orcaSwitch.mock.calls).toEqual([[HANDLE]])
-    expect(s.src.capabilities(agent)).toMatchObject({ focus: true, voice: false })
+    expect(s.src.capabilities(agent)).toMatchObject({ focus: true, voice: true })
+    expect(s.src.voiceRefusal(agent)).toBe(CLAUDE_PLUGIN_OFF)
     expect(await s.src.focus(agent, latestTap)).toBe(true)
     // No hook named its app: the app of the adapter it was placed in comes forward.
     expect(actions.open.mock.calls).toEqual([[id, { bundle: 'com.stablyai.orca', pane: { adapter: 'orca', id: HANDLE } }]])
@@ -6325,7 +6451,7 @@ describe('ObservedSource and a nested session the scan found', () => {
       expect(t.src.shownAt(t.id, 'tmux')).toBe('%3:100:iterm')
       expect(t.src.shownAt(b.id, 'herdr')).toBe('w1:p2:iterm')
       for (const agent of [t.a(), b]) {
-        expect(t.src.capabilities(agent).voice, agent.sessionId).toBe(false)
+        expect(t.src.voiceRefusal(agent), agent.sessionId).toBe(CLAUDE_PLUGIN_OFF)
         expect(await t.src.send(agent, 'hello'), agent.sessionId).toMatchObject({ ok: false })
       }
       expect(typed).not.toHaveBeenCalled()

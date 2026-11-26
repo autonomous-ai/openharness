@@ -20,7 +20,7 @@ import { HerdrSource } from '../cable/hosts/herdrSource.js'
 import { UNKNOWN_APP } from '../cable/hosts/hostDetect.js'
 import type { LinuxRaise } from '../cable/hosts/linuxRaise.js'
 import type { WindowsRaise } from '../cable/hosts/windowsRaise.js'
-import { observedAgentId, ObservedSource } from '../cable/hosts/observed.js'
+import { CLAUDE_PLUGIN_OFF, CLAUDE_RESTART, observedAgentId, ObservedSource } from '../cable/hosts/observed.js'
 import { OPENCODE_MESSAGE, opencodeClientDeps, type OpencodeAnswer, type OpencodeClient, type OpencodeEvent, type OpencodeFault, type OpencodePrompt } from '../cable/hosts/opencodeClient.js'
 import { OpencodeSource } from '../cable/hosts/opencodeSource.js'
 import { MAX_TEXT, type OrcaChild, type OrcaReads, type OrcaTabs, type OrcaTerminal } from '../cable/hosts/orca.js'
@@ -1996,7 +1996,7 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     const { port } = start({ faults: ['fleet'] })
     port.observed(hook('session-start'))
     expect(await machineList(port)).toMatchObject({ view: 'machine', tab: '', total: 1,
-      agents: [{ id: ID, name: 'api', engine: 'claude', host: 'orca', caps: 's' }] })
+      agents: [{ id: ID, name: 'api', engine: 'claude', host: 'orca', caps: 'sv' }] })
     // This machine's own readers, every engine's, with Harness's data folder left out as search leaves it.
     expect(readers.external).toMatchObject({ providers: expect.any(Array), excluded: [dataDir] })
     expect(readers.open).toMatchObject({ providers: readers.external!.providers })
@@ -2312,7 +2312,7 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
       logsDir: join(dataDir, 'logs'), cableDisabled: true, faults: new Set(['fleet']), log: () => {}, onExit: vi.fn(), orca, orcaReads: inertOrcaReads, codex,
     }), fakeCore({ dataDir }), DEVICES_FALLBACKS, DEVICES_REQUESTS)
     ports.devices!.observed(hook('session-start'))
-    expect(await machineList(ports.devices!)).toMatchObject({ view: 'machine', agents: [{ id: ID, host: 'orca', caps: 's' }] })
+    expect(await machineList(ports.devices!)).toMatchObject({ view: 'machine', agents: [{ id: ID, host: 'orca', caps: 'sv' }] })
     // The mod's poll too, past the guard's fallbacks: held until its client goes.
     const poll = ports.devices!.inboxPoll({ pollId: 'p1', sessionId: 'sess-1' })
     ports.devices!.inboxGone('p1')
@@ -2417,7 +2417,7 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     expect(await host().activityText(ID)).toBe('npm test · answer in Orca')
     expect(await host().activitySnapshot(ID)).toEqual({ text: 'npm test · answer in Orca' })
     // Nothing to answer with.
-    expect(await machineList(port)).toMatchObject({ agents: [{ id: ID, caps: 's' }] })
+    expect(await machineList(port)).toMatchObject({ agents: [{ id: ID, caps: 'sv' }] })
     expect(core.agents.activityText).not.toHaveBeenCalled()
   })
 
@@ -3287,7 +3287,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(core.questions.answer).not.toHaveBeenCalled()
     expect(core.questions.answerReviewed).not.toHaveBeenCalled()
     expect(calls('question')).toEqual([])
-    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 's' }])
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sv' }])
   })
 
   it('a core that goes ends its poll with {}', async () => {
@@ -3300,14 +3300,16 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(await poll).toEqual({})
   })
 
-  it('a held poll takes the transcript for its idle agent, and the agent lists v', async () => {
+  it('a held poll takes the transcript for its idle agent, and the agent\'s voice is its mod\'s', async () => {
     vi.useFakeTimers()
     const { port } = startHere()
     port.observed(hook('session-start'))
     attach(port)
-    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 's' }])
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sv' }])
+    expect(host().voiceRefusal(ID)).toBe(CLAUDE_PLUGIN_OFF)
     const held = port.inboxPoll({ pollId: 'p1', sessionId: 'sess-1' })
     expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sv' }])
+    expect(host().voiceRefusal(ID)).toBeUndefined()
     // Held 25 s, then empty: the mod asks again at once.
     await vi.advanceTimersByTimeAsync(25_000)
     expect(await held).toEqual({})
@@ -3316,6 +3318,20 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(await next).toEqual({ text: 'run the tests' })
     expect(said()).toEqual(['[device] voice · mod'])
     expect(orcaRuns).toEqual([])
+  })
+
+  // In Terminal, say: no route but its mod, and the dial would show only "See it in Terminal" for an agent with no v.
+  it('Claude Code outside Harness with no route lists v, and its refusal names the fix', async () => {
+    const settings = join(dirname(env.CLAUDE_PROJECTS_DIR), 'settings.json')
+    mkdirSync(dirname(settings), { recursive: true })
+    onTestFinished(() => rmSync(settings, { force: true }))
+    const { port } = startHere()
+    port.observed(hook('session-start', { hostHints: { TERM_PROGRAM: 'Apple_Terminal' } }))
+    attach(port)
+    expect((await listed())[0].caps).toContain('v')
+    expect(host().voiceRefusal(ID)).toBe(CLAUDE_PLUGIN_OFF)
+    writeFileSync(settings, '{"enabledPlugins":{"harness-device@openharness":true}}')
+    expect(host().voiceRefusal(ID)).toBe(CLAUDE_RESTART)
   })
 
   /** Claude Code's mod (plugins/harness-device/hooks/device.js) on the core's route: a {} held 1 s or more asks again at
@@ -3443,7 +3459,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     const { port } = startHere({ orca: mac })
     port.observed(hook('session-start', { hostHints: { TERM_PROGRAM: 'WarpTerminal' } }))
     attach(port)
-    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
     expect(await host().openAgent(ID)).toBeUndefined()
     expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', 'dev.warp.Warp-Stable'], 10_000]])
     expect(await host().openAgent(ID, 'question')).toBeUndefined()
@@ -3508,9 +3524,9 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       const { port } = startHere({ raise: linux.raise })
       port.observed(hook('session-start', { hostHints: { TERM_PROGRAM: 'ghostty' } }))
       attach(port)
-      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 's' }])
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sv' }])
       linux.found = true
-      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
       expect(await host().openAgent(ID)).toBeUndefined()
       linux.answer = false
       expect(await host().openAgent(ID)).toEqual({ ok: false, error: 'Ghostty did not open it.' })
@@ -3558,7 +3574,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       const { port } = startHere({ orca: win, windowsRaise: windows.raise })
       port.observed(hook('session-start', { hostHints: { TERM_PROGRAM: 'vscode', __CFBundleIdentifier: VSCODE_BUNDLE } }))
       attach(port)
-      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
       expect(await host().openAgent(ID)).toBeUndefined()
       expect(windows.apps).toEqual([VSCODE_BUNDLE])
       expect(orcaRuns).toEqual([])
@@ -3591,7 +3607,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       const { port } = startHere({ orca: { ...win, run }, windowsRaise: null, cursorExtension: cursor })
       port.observed(hook('session-start', { cwd: folder, hostHints: { __CFBundleIdentifier: CURSOR_BUNDLE } }))
       attach(port)
-      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
       expect(await host().openAgent(ID)).toBeUndefined()
       expect(orcaRuns).toEqual([[cli, [folder], 10_000], [pty, ['raise', '--exe', 'Cursor.exe'], 10_000]])
       expect(raiseLines()).toEqual(['[device] raise · window · refused',
@@ -3607,7 +3623,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       const { port } = startHere({ orca: win, windowsRaise: windows.raise })
       port.observed(hook('session-start', { hostHints: { __CFBundleIdentifier: CLAUDE_BUNDLE, CLAUDE_CODE_HOST_SESSION_ID: SESSION } }))
       attach(port)
-      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
       expect((await host().listAgentSnapshot({ apps: true })).apps?.shown).toBe('claude')
       expect(await host().openAgent(ID)).toBeUndefined()
       expect(windows.links).toEqual([[`claude://code/continue?session=${SESSION}`, CLAUDE_BUNDLE]])
@@ -3646,7 +3662,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     } } })
     port.observed(hook('session-start', { hostHints: { __CFBundleIdentifier: 'com.anthropic.claudefordesktop', CLAUDE_CODE_HOST_SESSION_ID: SESSION } }))
     attach(port)
-    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
     expect(await host().openAgent(ID)).toBeUndefined()
     const link: [string, string[], number] = ['/usr/bin/open', ['-b', 'com.anthropic.claudefordesktop', `claude://code/continue?session=${SESSION}`], 10_000]
     expect(orcaRuns).toEqual([link, ['/usr/bin/open', ['-b', 'com.anthropic.claudefordesktop'], 10_000]])
@@ -3757,7 +3773,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     port.observed(hook('session-start', { hostHints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux', __CFBundleIdentifier: 'dev.warp.Warp-Stable' } }))
     attach(port)
     await vi.waitFor(() => expect(said()).toEqual(['[device] tmux client · none']))
-    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
     expect(await host().openAgent(ID)).toBeUndefined()
     const asked: [string, string[], number] = ['tmux', ['display-message', '-p', '-t', '%3', '#{pane_pid}|#{session_name}|#{@harness_daemon}#{?#{m:/usr/bin/env HARNESS_DAEMON=*,#{pane_start_command}},#{=44:pane_start_command},#{?#{m:harness-*,#{session_name}},#{@harness_daemon},}}'], 10_000]
     const placesAsked: [string, string[], number] = ['tmux', ['list-clients', '-t', '%3', '-F', '#{client_activity}|#{client_pid}|#{client_tty}'], 10_000]
@@ -4089,8 +4105,8 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
         expect(await host().openAgent(ID)).toBeUndefined()
         expect(orcaRuns.slice(-2)).toEqual([focus('w1:p2'), ['/usr/bin/open', ['-b', 'com.googlecode.iterm2'], 10_000]])
         expect(stream.lines.at(-1)).toStrictEqual({ app: 'iterm', tty: '/dev/ttys004', raise: true })
-        // A placed pane takes no words: the dial's voice never reaches herdr's prompt.
-        expect((await listed())[0].caps).not.toContain('v')
+        // A placed pane takes no words: the dial's voice never reaches herdr's prompt, and its start is told how to reach it.
+        expect(host().voiceRefusal(ID)).toBe(CLAUDE_PLUGIN_OFF)
         expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false })
         expect(prompts).toEqual([])
       })
@@ -4110,7 +4126,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
         await swiped('ok')
         expect(stream.lines).toStrictEqual([{ app: 'iterm', tty: '/dev/ttys004' }])
         expect(orcaRuns.at(-1)).toEqual(focus('w1:p2'))
-        expect(rows.find(({ id }) => id === ID)!.caps).not.toContain('v')
+        expect(host().voiceRefusal(ID)).toBe(CLAUDE_PLUGIN_OFF)
         expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false })
         expect(prompts).toEqual([])
         subs[0].event('pane_closed', { pane_id: 'w1:p1' })
@@ -4500,7 +4516,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       attach(port)
       await vi.waitFor(() => expect(said()).toEqual(['[device] herdr client · found']))
       expect(orcaRuns.filter(([file]) => file === 'tmux')).toEqual([])
-      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
       expect((await host().listAgentSnapshot({ apps: true })).apps?.apps).toContainEqual(expect.objectContaining({ id: 'herdr', count: 1 }))
       port.observed(hook('session-start', { sessionId: 'sess-2', callerPid: 5242, hostHints: { HERDR_PANE_ID: 'w1:p2', TMUX_PANE: '%3' } }))
       // No herdr made its terminal: the herdr pane its hints name only holds it, said once.
@@ -4591,7 +4607,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       port.observed(hook('session-start', { hostHints: { ...ZELLIJ, TERM_PROGRAM: 'ghostty' } }))
       attach(port)
       await settled()
-      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
       expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false })
       expect(orcaRuns).toEqual([])
       noOther()
@@ -4681,7 +4697,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       const { port } = startHere({ raise: linux.raise })
       port.observed(hook('session-start', { hostHints: KITTY }))
       attach(port)
-      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
       expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false })
       expect(await host().openAgent(ID)).toBeUndefined()
       expect(orcaRuns).toEqual([kittyAsked('unix:@kitty-1', 'focus-window', '--match', 'id:5')])
@@ -4790,7 +4806,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       const { port } = startHere({ orca: mac })
       port.observed(hook('session-start', { hostHints: { KITTY_WINDOW_ID: '5', __CFBundleIdentifier: 'net.kovidgoyal.kitty' } }))
       attach(port)
-      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
       expect(await host().openAgent(ID)).toBeUndefined()
       expect(await host().openAgent(ID)).toBeUndefined()
       expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', 'net.kovidgoyal.kitty'], 10_000], ['/usr/bin/open', ['-b', 'net.kovidgoyal.kitty'], 10_000]])
@@ -5007,7 +5023,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     await vi.waitFor(() => expect(host().swipeSwitches(ID)).toBe(true))
     host().swipeEnded(ID, 'rest')
     await swiped('ok')
-    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
     expect(await host().openAgent(ID)).toBeUndefined()
     // The scheme's app is read once, at the first look.
     expect(orcaRuns).toEqual([xdgMime('claude'), xdgOpen(claudeLink), xdgOpen(claudeLink)])
@@ -5021,7 +5037,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     host().swipeEnded(ID, 'rest')
     await swiped('failed')
     // No f: the dial asks for no tap.
-    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 's' }])
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sv' }])
     expect(orcaRuns).toEqual([xdgMime('claude')])
     expect(logs.filter((line) => [SESSION, 'sess-1', ID, claudeLink].some((secret) => line.includes(secret)))).toEqual([])
   })
@@ -5187,7 +5203,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     await vi.waitFor(() => expect(host().swipeSwitches(V1)).toBe(true))
     host().swipeEnded(V1, 'rest')
     await swiped('ok')
-    expect(await listed()).toEqual([{ id: V1, name: 'api', caps: 'sf' }])
+    expect(await listed()).toEqual([{ id: V1, name: 'api', caps: 'svf' }])
     expect(await host().openAgent(V1)).toBeUndefined()
     expect(orcaRuns).toEqual([xdgMime('vscode'), xdgOpen(vscodeLink(UUID)), xdgOpen(vscodeLink(UUID))])
     expect(logs.filter((line) => [UUID, V1, vscodeLink(UUID)].some((secret) => line.includes(secret)))).toEqual([])
@@ -5200,7 +5216,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     host().swipeEnded(V1, 'rest')
     await swiped('failed')
     // No f: the dial asks for no tap.
-    expect(await listed()).toEqual([{ id: V1, name: 'api', caps: 's' }])
+    expect(await listed()).toEqual([{ id: V1, name: 'api', caps: 'sv' }])
     expect(orcaRuns).toEqual([xdgMime('vscode')])
     expect(logs.filter((line) => [UUID, V1, vscodeLink(UUID)].some((secret) => line.includes(secret)))).toEqual([])
   })
@@ -5255,10 +5271,10 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
 
   it('an agent in VS Code\'s terminal gets its terminal once its window reports the shell, and the dials are told to look', async () => {
     const { reported } = await inVscodeTerminal()
-    expect(await caps()).toEqual([{ id: ID, caps: 's' }])
+    expect(await caps()).toEqual([{ id: ID, caps: 'sv' }])
     await reported()
     expect(processTable.reads).toBe(1)
-    expect(await caps()).toEqual([{ id: ID, caps: 'sf' }])
+    expect(await caps()).toEqual([{ id: ID, caps: 'svf' }])
   })
 
   it('a tap writes the show to its window, asking it to raise that window, then brings VS Code forward', async () => {
@@ -5759,7 +5775,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     const { port } = startHere()
     port.observed(hook('session-start', { hostHints: { TERM_PROGRAM: 'vscode' } }))
     attach(port)
-    expect(await caps()).toEqual([{ id: ID, caps: 's' }])
+    expect(await caps()).toEqual([{ id: ID, caps: 'sv' }])
     expect(processTable.reads).toBe(0)
   })
 
@@ -5779,7 +5795,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     const window = started.listener.vscode(WINDOW_ID)
     expect(started.listener.vscodeState(WINDOW_ID, [SHELL, SHELL_B])).toBeUndefined()
     // Each agent's terminal found: a tap on it now reaches its window.
-    await vi.waitFor(async () => expect(await caps()).toEqual([{ id: ID, caps: 'sf' }, { id: B, caps: 'sf' }]))
+    await vi.waitFor(async () => expect(await caps()).toEqual([{ id: ID, caps: 'svf' }, { id: B, caps: 'svf' }]))
     const settle = async (app: string) => {
       started.front(app)
       await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
@@ -5977,7 +5993,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     const { port } = startHere({ faults: ['vscode'] })
     port.observed(hook('session-start', { hostHints: { TERM_PROGRAM: 'vscode' } }))
     attach(port)
-    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 's' }])
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sv' }])
     expect(logs).toContain('[devices] vscode failed · Error')
   })
 
@@ -6377,7 +6393,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     const looks = calls('syncAgents').length
     expect(listener.vscodeState(WINDOW_ID, [SHELL, CURSOR_SHELL])).toBeUndefined()
     await vi.waitFor(() => expect(calls('syncAgents')).toHaveLength(looks + 1))
-    expect(await caps()).toEqual(expect.arrayContaining([{ id: ID, caps: 'sf' }, { id: observedAgentId('claude', 'sess-2'), caps: 'sf' }]))
+    expect(await caps()).toEqual(expect.arrayContaining([{ id: ID, caps: 'svf' }, { id: observedAgentId('claude', 'sess-2'), caps: 'svf' }]))
     expect(await caps()).toHaveLength(2)
     expect(processTable.reads).toBe(1)
   })
@@ -6621,7 +6637,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     port.observed(hook('turn-stop', { hostHints: { HERDR_PANE_ID: 'w1:p2', ORCA_TERMINAL_HANDLE: HANDLE } }))
     attach(port)
     await landed()
-    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
     expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
     expect(said().at(-1)).toBe('[device] voice · no-answer')
     stamp = '1:1'
@@ -10272,7 +10288,7 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
     const { port, live } = withHc()
     port.observed(hook('session-start'))
     live([terminal('t7', { status: undefined, kind: undefined })])
-    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
   })
 
   it('a hooked agent\'s words go through Herdr Core, counted herdr-app', async () => {
@@ -10623,7 +10639,7 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
     attach(port)
     expect(hc.subs).toEqual([])
     expect(logs).toContain('[devices] herdr-app failed · Error')
-    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
   })
 
   it('no log line holds an address, a name, a folder or the words', async () => {
@@ -12506,7 +12522,7 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
     await live()
     port.observed(hook('session-start'))
     // The hook's: named by its folder, as its record gives no name.
-    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
     port.observed(hook('session-end'))
     expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps: 'svf' }])
     expect(await host().openAgent(ID)).toBeUndefined()
@@ -12651,8 +12667,8 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
       expect(await host().sendTurn(ID, 'second')).toEqual(refused('Still opening Fix the build. Try again in a moment.'))
       await flush()
       port.observed(hook('session-start'))
-      // The hooked copy holds the row, with no voice until its mod polls.
-      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+      // The hooked copy holds the row: its voice is its mod's once it polls.
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
       expect(await poll(port, 'p1', SESSION)).toEqual({ text: 'first' })
       expect(await first).toEqual({ ok: true })
       const third = host().sendTurn(ID, 'third')
@@ -15580,7 +15596,7 @@ describe('Orca\'s chats on the dial (docs/plans/2026-11-23-dial-orca-chats-desig
     port.observed(inChat(3))
     await settled()
     // Live, with no poll of its mod yet: no route.
-    expect(host().capsOf(hooked(3), { apps: true })).toBe('sf')
+    expect(host().capsOf(hooked(3), { apps: true })).toBe('svf')
     expect(host().voiceRefusal(hooked(3), { apps: true })).toBe('Type in Orca for chats.')
     const poll = port.inboxPoll({ pollId: 'p1', sessionId: 'chat-sess-3' })
     expect(host().capsOf(hooked(3), { apps: true })).toBe('svf')
