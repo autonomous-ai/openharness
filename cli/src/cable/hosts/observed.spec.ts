@@ -3338,7 +3338,13 @@ describe('ObservedSource and an editor started from Terminal', () => {
 // (docs/plans/2026-11-26-windows-rescan-after-restart-design.md).
 describe('ObservedSource on Windows after a restart', () => {
   const homes: string[] = []
-  afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }) })
+  const platform = process.platform
+  // The transcript's head is judged by this machine's rules: a `C:\...` folder is a folder on Windows only.
+  beforeEach(() => { Object.defineProperty(process, 'platform', { value: 'win32', configurable: true }) })
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true })
+    for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true })
+  })
 
   it('a Claude Code the scan found in VS Code\'s terminal is on VS Code\'s page, known, at its terminal', async () => {
     const SESSION = '8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
@@ -3346,9 +3352,9 @@ describe('ObservedSource on Windows after a restart', () => {
     // A Claude home of its own: the transcript, and the record the running Claude Code keeps of its pid.
     const home = mkdtempSync(join(tmpdir(), 'observed-windows-'))
     homes.push(home)
-    mkdirSync(join(home, 'projects', '-work-dial'), { recursive: true })
-    writeFileSync(join(home, 'projects', '-work-dial', `${SESSION}.jsonl`), `${JSON.stringify({
-      type: 'user', sessionId: SESSION, cwd: '/work/dial', entrypoint: 'cli', timestamp: '2026-11-26T09:00:01Z',
+    mkdirSync(join(home, 'projects', 'C--work-dial'), { recursive: true })
+    writeFileSync(join(home, 'projects', 'C--work-dial', `${SESSION}.jsonl`), `${JSON.stringify({
+      type: 'user', sessionId: SESSION, cwd: 'C:\\work\\dial', entrypoint: 'cli', timestamp: '2026-11-26T09:00:01Z',
       message: { role: 'user', content: 'fix the dial scroll' },
     })}\n`)
     mkdirSync(join(home, 'sessions'))
