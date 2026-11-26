@@ -155,6 +155,32 @@ fn shows_the_row(effects: &[Effect]) -> bool {
     effects.iter().any(|effect| matches!(effect, Effect::Menu(items) if items.contains(&row)))
 }
 
+/// A first run, signed out: Sign in, then Later. Nothing shows after it, no menu item follows, nothing says `chatgpt:`.
+#[test]
+fn a_first_run_shows_nothing_after_sign_in_on_any_os() {
+    for (trusted, gated) in [(false, true), (true, true), (true, false), (false, false)] {
+        let seen = Saved { cli_seen: true, login_item: true, ..Saved::default() };
+        let (mut app, mut effects) = App::new(seen, true, false, B, false);
+        for event in [Event::StartDone { ok: true }, Event::Auth(Some(false)), Event::Follow { trusted, gated }] {
+            effects.extend(app.handle(event));
+        }
+        assert_eq!(app.view().map(|view| view.screen), Some(Screen::SignIn), "{trusted} {gated}");
+        effects.extend(app.handle(Event::Act(Action::Later)));
+        assert_eq!(app.view(), None, "{trusted} {gated}");
+        let follows = |item: &MenuItem| match item {
+            MenuItem::Action(_, label) | MenuItem::Check(_, label, _) => label.to_lowercase().contains("follow"),
+            _ => false,
+        };
+        for effect in &effects {
+            match effect {
+                Effect::Menu(items) => assert!(!items.iter().any(follows), "{trusted} {gated}: {items:?}"),
+                Effect::Log(line) => assert!(!line.starts_with("chatgpt:"), "{trusted} {gated}: {line}"),
+                _ => {}
+            }
+        }
+    }
+}
+
 /// Whether the menu's last version has a follow item and whether the Follow ChatGPT screen shows, signed in with no
 /// dial, once the runner has told what the door answers at start.
 fn follow_shown(trusted: bool, gated: bool) -> (bool, bool) {

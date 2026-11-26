@@ -199,8 +199,9 @@ mod tests {
     }
 
     #[test]
-    fn an_old_file_that_turned_follow_off_loads_and_follows() {
-        // An app before this one saved its Follow ChatGPT switch: the key is ignored, and following is on.
+    fn an_old_file_with_the_follow_keys_loads_and_saves_without_them() {
+        // 0.1.14 and before saved whether Follow ChatGPT and macOS's Accessibility prompt were asked; older still, a
+        // switch.
         let dir = tempfile::tempdir().unwrap();
         fs::write(
             dir.path().join("state.json"),
@@ -212,20 +213,14 @@ mod tests {
         .unwrap();
         let log = Arc::new(MemoryLog::default());
         let file = JsonStateFile::new(dir.path().to_path_buf(), log.clone());
-        let kept = Saved {
-            cli_seen: true,
-            asked_sign_in: true,
-            login_item: true,
-            asked_follow: true,
-            asked_ax: true,
-            ..Saved::default()
-        };
+        let kept = Saved { cli_seen: true, asked_sign_in: true, login_item: true, ..Saved::default() };
         assert_eq!(file.load(), kept);
         assert!(log.lines().is_empty());
-        // Saved again, the key is gone.
         file.save(&file.load()).unwrap();
         let written = fs::read_to_string(dir.path().join("state.json")).unwrap();
-        assert!(!written.contains("followOff"), "{written}");
+        for key in ["askedFollow", "askedAx", "followOff"] {
+            assert!(!written.contains(key), "{written}");
+        }
     }
 
     #[test]
