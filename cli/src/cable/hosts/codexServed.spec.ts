@@ -3,7 +3,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { codexServed, type CodexServedDeps, MAX_CLIENTS, servedLookup } from './codexServed.js'
-import { appRoots, type ProcessName, scannedApps } from './scannedApp.js'
+import { appRoots, type ProcessName, scannedApps, type WindowsProcess } from './scannedApp.js'
 
 const HOME = '/Users/someone'
 const TERMINAL = '/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal'
@@ -175,11 +175,74 @@ describe('codexServed', () => {
   })
 })
 
+// Windows names no terminal: a Codex TUI there has a console and no tty, and harness-pty reads its folder
+// (docs/plans/2026-11-27-windows-codex-rescan-design.md).
+describe('codexServed on Windows', () => {
+  const NPM = 'C:\\Users\\someone\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex'
+  const NATIVE = `${NPM}\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\codex\\codex.exe`
+  const NODE = 'C:\\Program Files\\nodejs\\node.exe'
+  /** A row as the PTY host's table gives it, each started at [at] (`w:<FILETIME>`): a child after its parent. */
+  const win = (pid: number, ppid: number, at: number, executable: string, args: string = executable) =>
+    ({ pid, ppid, executable, args, startMarker: `w:${134087000000000000 + at * 10_000}` })
+  /** VS Code's terminal: npm's launcher (420) and its native Codex (421), which started the daemon (430). */
+  const vscodeTui = (first = 0) => [win(400, 1, first, 'Code.exe'), win(401, 400, first + 1, 'Code.exe'),
+    win(409, 401, first + 2, 'pwsh.exe'), win(420, 409, first + 3, NODE, `"${NODE}" ${NPM}\\bin\\codex.js`),
+    win(421, 420, first + 4, NATIVE)]
+  const daemon = (ppid: number, at: number) =>
+    win(430, ppid, at, NATIVE, `${NATIVE} app-server --listen unix:// --analytics-default-enabled`)
+
+  function winDeps(rows: readonly ReturnType<typeof win>[], cwds: Record<number, string>) {
+    const tty = vi.fn(async (_pid: number) => undefined)
+    return {
+      platform: 'win32' as const,
+      processes: vi.fn(async () => rows),
+      cwds: vi.fn(async (pids: readonly number[]) => new Map(pids.flatMap((pid) => (cwds[pid] ? [[pid, cwds[pid]] as const] : [])))),
+      tty,
+      apps: vi.fn((pids: readonly number[], names: readonly WindowsProcess[]) => scannedApps(pids, {
+        platform: 'win32', roots: [], processes: async () => names, bundleId: async () => undefined,
+      })),
+      folder: vi.fn(async (path: string) => path),
+    } satisfies CodexServedDeps
+  }
+
+  it('the one TUI in the session\'s folder is the client, with no terminal read: Windows names none', async () => {
+    const d = winDeps([...vscodeTui(), daemon(421, 5)], { 420: 'C:\\work\\dial' })
+    expect(await codexServed([{ pid: 430, cwd: 'C:\\work\\dial' }], d)).toEqual([{ client: { app: 'vscode', pid: 420 } }])
+    expect(d.tty).not.toHaveBeenCalled()
+    // npm's launcher and its native Codex are one TUI: the launcher's folder alone is read.
+    expect(d.cwds.mock.calls).toEqual([[[420]]])
+  })
+
+  it('its folder unread, none; two TUIs there, none, a `codex queue` among them', async () => {
+    const unread = winDeps([...vscodeTui(), daemon(421, 5)], {})
+    expect(await codexServed([{ pid: 430, cwd: 'C:\\work\\dial' }], unread)).toEqual([{}])
+    const second = [win(410, 401, 6, 'pwsh.exe'), win(440, 410, 7, NODE, `"${NODE}" ${NPM}\\bin\\codex.js`), win(441, 440, 8, NATIVE)]
+    const two = winDeps([...vscodeTui(), daemon(421, 5), ...second], { 420: 'C:\\work\\dial', 440: 'C:\\work\\dial' })
+    expect(await codexServed([{ pid: 430, cwd: 'C:\\work\\dial' }], two)).toEqual([{}])
+    // Harness's own `codex queue` has no terminal to tell it from a TUI on Windows: never a guess between them.
+    const queue = winDeps([...vscodeTui(), daemon(421, 5), win(450, 1, 6, NATIVE, `${NATIVE} queue --thread x`)],
+      { 420: 'C:\\work\\dial', 450: 'C:\\work\\dial' })
+    expect(await codexServed([{ pid: 430, cwd: 'C:\\work\\dial' }], queue)).toEqual([{}])
+  })
+
+  it('the daemon\'s parent is the first TUI, in Windows Terminal: the client in VS Code places it', async () => {
+    const terminal = [win(500, 1, 0, 'WindowsTerminal.exe'), win(509, 500, 1, 'pwsh.exe'),
+      win(520, 509, 2, NODE, `"${NODE}" ${NPM}\\bin\\codex.js`), win(521, 520, 3, NATIVE)]
+    const d = winDeps([...terminal, ...vscodeTui(4), daemon(521, 9)], { 420: 'C:\\work\\dial', 520: 'C:\\work\\other' })
+    expect(await codexServed([{ pid: 430, cwd: 'C:\\work\\dial' }], d)).toEqual([{ client: { app: 'vscode', pid: 420 } }])
+  })
+
+  it('the first TUI gone, its pid taken by a later VS Code: the daemon is still the daemon', async () => {
+    const d = winDeps([...vscodeTui(), daemon(405, 5), win(405, 1, 6, 'Code.exe')], { 420: 'C:\\work\\dial' })
+    expect(await codexServed([{ pid: 430, cwd: 'C:\\work\\dial' }], d)).toEqual([{ client: { app: 'vscode', pid: 420 } }])
+  })
+})
+
 describe('servedLookup', () => {
   // Only whether there is one: calling it would read this machine's processes.
-  it('reads this machine on macOS and Linux, and asks nothing on Windows, where no process\'s folder can be read', () => {
+  it('reads this machine on every platform', () => {
     expect(servedLookup('darwin')).toBeTypeOf('function')
     expect(servedLookup('linux')).toBeTypeOf('function')
-    expect(servedLookup('win32')).toBeUndefined()
+    expect(servedLookup('win32')).toBeTypeOf('function')
   })
 })
