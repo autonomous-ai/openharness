@@ -611,6 +611,97 @@ describe('run-eval.mjs spend cap', () => {
   })
 })
 
+describe("run-eval.mjs a variant's hooks", () => {
+  const hook = (command: string) => ({ SessionStart: [{ hooks: [{ type: 'command', command }] }] })
+  const HOOKS = hook('harness device claude start')
+  const ANSWERS = [
+    { argv: ['device', 'claude', 'start'], stdout: 'Harness is on\n' },
+    { argv: ['device', 'claude', 'status'], stdout: 'The dial is plugged in\n' },
+  ]
+  /** An agent run that rings nothing. */
+  const QUIET = String.raw`emit({ type: 'assistant', parent_tool_use_id: null, message: { model: 'claude-opus-5-5', content: [{ type: 'text', text: 'Looked around' }] } })
+emit({ type: 'result', subtype: 'success', is_error: false, result: 'Done', stop_reason: 'end_turn', usage: { input_tokens: 7, output_tokens: 3 } })`
+
+  const heard = () => join(tmp, 'heard.log')
+  /** Runs the staged SessionStart hook's command, as Claude Code does when a session starts, and logs what it printed. */
+  const hooked = (who: string) => String.raw`const hookFile = path.join('.claude', 'settings.json')
+const said = fs.existsSync(hookFile)
+  ? require('node:child_process').execSync(JSON.parse(fs.readFileSync(hookFile, 'utf8')).hooks.SessionStart[0].hooks[0].command, { encoding: 'utf8' }).trim()
+  : 'no hooks'
+fs.appendFileSync(${JSON.stringify(heard())}, '${who}: ' + said + '\n')
+`
+
+  function variantFile(name: string, content: unknown): string {
+    const file = join(flow, 'v1', name)
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, typeof content === 'string' ? content : JSON.stringify(content))
+    return file
+  }
+
+  it.each([
+    ['hooks.json', HOOKS],
+    ['harness-answers.json', ANSWERS],
+  ])('refuses a variant whose %s is not listed in harness_paths', (name, content) => {
+    const file = variantFile(name, content)
+
+    const out = runEval(['--variant', 'v1', '--agents', 'claude', '--cases', 'add-version-flag', '--approve-harness'])
+
+    expect(out.status).toBe(2)
+    expect(out.stderr).toContain(`${file} runs outside Claude's sandbox: list it in _state.json harness_paths, then approve the harness`)
+    expect(callsMade()).toEqual([])
+    expect(jsonl('v1', 'results.jsonl')).toEqual([])
+  })
+
+  it("stages a listed variant's hooks for claude and its probe, and the fake harness answers their commands", () => {
+    writeState({ harness_paths: [variantFile('hooks.json', HOOKS), variantFile('harness-answers.json', ANSWERS)] })
+    fakeClaude(hooked('agent') + QUIET, JUDGE, { probe: hooked('probe') + PROBE })
+
+    const out = runEval(['--variant', 'v1', '--agents', 'claude', '--cases', 'api-key-missing', '--approve-harness'])
+
+    expect(out.status, out.stderr).toBe(0)
+    expect(readFileSync(heard(), 'utf8')).toBe('probe: Harness is on\nagent: Harness is on\n')
+    // The hook's harness call shows nothing on the dial, so the need scenario's run rang nothing.
+    expect(jsonl('v1', 'results.jsonl')).toMatchObject([{ prompt_id: 'api-key-missing.claude.clean', rings: 0, grade: { rang: 0 } }])
+  })
+
+  it.each([
+    ['changed', HOOKS],
+    ['planted', null],
+  ])('refuses hooks %s after approval, until --approve-harness', (_, approved) => {
+    writeState({ harness_paths: [join(flow, 'v1', 'hooks.json'), variantFile('harness-answers.json', ANSWERS)] })
+    if (approved) variantFile('hooks.json', approved)
+    fakeClaude(hooked('agent') + QUIET)
+    expect(runEval(['--variant', 'v1', '--agents', 'claude', '--cases', 'add-version-flag', '--approve-harness']).status).toBe(0)
+    variantFile('hooks.json', hook('harness device claude status'))
+    const before = callsMade()
+
+    const refused = runEval(['--variant', 'v1', '--agents', 'claude', '--cases', 'fix-off-by-one'])
+
+    expect(refused.status).toBe(2)
+    expect(refused.stderr).toMatch(/harness changed/)
+    expect(callsMade()).toEqual(before)
+    expect(runEval(['--variant', 'v1', '--agents', 'claude', '--cases', 'fix-off-by-one', '--approve-harness']).status).toBe(0)
+    expect(readFileSync(heard(), 'utf8')).toBe(`agent: ${approved ? 'Harness is on' : 'no hooks'}\nagent: The dial is plugged in\n`)
+  })
+
+  it.each([
+    ['hooks.json', '{ "SessionStart": ', "Claude Code's hooks object"],
+    ['hooks.json', '[]', "Claude Code's hooks object"],
+    ['harness-answers.json', '{}', 'a list of { argv, stdout?, stderr?, code? }'],
+    ['harness-answers.json', '[{ "argv": "device claude start" }]', 'a list of { argv, stdout?, stderr?, code? }'],
+  ])('refuses a listed %s holding %s', (name, text, what) => {
+    const file = variantFile(name, text)
+    writeState({ harness_paths: [file] })
+
+    const out = runEval(['--variant', 'v1', '--agents', 'claude', '--cases', 'add-version-flag', '--approve-harness'])
+
+    expect(out.status).toBe(2)
+    expect(out.stderr).toContain(`${file} must be JSON: ${what}`)
+    expect(callsMade()).toEqual([])
+    expect(jsonl('v1', 'results.jsonl')).toEqual([])
+  })
+})
+
 describe('run-eval.mjs summary.json', () => {
   const summary = (variant: string) => JSON.parse(readFileSync(join(flow, variant, 'summary.json'), 'utf8'))
 
