@@ -31,6 +31,7 @@ import { env } from '../config/env.js'
 import { cursorDataDir } from '../engines/cursor/contract.js'
 import { routeVoiceTask } from '../lib/voiceRouter.js'
 import { DIAL_FILE_METRICS, DIAL_USAGE_FILE } from '../lib/dialUsageContract.js'
+import { NOTICE_AGENT_MS } from '../lib/dialNotice.js'
 import { DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, ServiceUnavailableError, type CoreApi, type CorePorts, type DevicesPort } from '../core/api.js'
 import type { ObservedAsked, ObservedHookEvent } from '../core/observedHook.js'
 import { createServiceHost } from '../core/serviceHost.js'
@@ -12868,6 +12869,64 @@ describe('the dial setup, from the devices\' own process (cable/dialSetup.ts)', 
     await vi.waitFor(() => expect(readers.apps.mock.calls.map(([pids]) => pids)).toEqual([[77]]))
   })
 
+  describe('the dial skill counted (docs/plans/2026-11-26-dial-skill-usage-design.md)', () => {
+    const usageFile = () => join(dataDir, DIAL_USAGE_FILE)
+    const usageDays = () => (JSON.parse(readFileSync(usageFile(), 'utf8')) as { days: Record<string, Record<string, number>> }).days
+    /** Each day's dial skill names, once the devices' stop wrote what waited. */
+    const skillDays = async (port: DevicesPort): Promise<Record<string, string[]>> => {
+      await port.stop()
+      return Object.fromEntries(Object.entries(usageDays()).map(([day, counts]) =>
+        [day, Object.keys(counts).filter((name) => name.startsWith('dial_skill_'))]))
+    }
+
+    it('the skill counts after the start pass, after an attach\'s pass, and at each UTC midnight', async () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2026-11-26T23:59:00Z'))
+      const { port, orcaHomes } = start({ faults: ['fleet'], listen: fakeListener().listen })
+      // A computer that never had a dial: the start pass wrote no skill, so it counted none.
+      await orcaHomes.landed()
+      await vi.advanceTimersByTimeAsync(DIAL_USAGE_WRITE_MS)
+      expect(existsSync(usageFile())).toBe(false)
+      // The attach's pass wrote Codex's skill and counted it, before the day's end.
+      seen.host.watching!(true)
+      await vi.advanceTimersByTimeAsync(DIAL_USAGE_WRITE_MS)
+      expect(usageDays()['2026-11-26']).toMatchObject({ dial_skill_codex_installation_days: 1 })
+      // The 27th counts it at its midnight.
+      await vi.advanceTimersByTimeAsync(60_000)
+      rmSync(join(env.CODEX_HOME, 'skills', 'dial', 'SKILL.md'))
+      // The person deleted it: the 28th's midnight finds none.
+      await vi.advanceTimersByTimeAsync(86_400_000)
+      const days = await skillDays(port)
+      expect(days).toEqual({
+        '2026-11-26': ['dial_skill_codex_installation_days'],
+        '2026-11-27': ['dial_skill_codex_installation_days'],
+        '2026-11-28': [],
+      })
+    })
+
+    it('once a dial attached, the start pass counts the skill', async () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2026-11-26T12:00:00Z'))
+      dialOnce()
+      const { port, orcaHomes } = start({ faults: ['fleet'], listen: fakeListener().listen })
+      await orcaHomes.landed()
+      await vi.advanceTimersByTimeAsync(DIAL_USAGE_WRITE_MS)
+      expect(await skillDays(port)).toEqual({ '2026-11-26': ['dial_skill_codex_installation_days'] })
+    })
+
+    it('with no listener, no skill is looked for', async () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2026-11-26T23:59:00Z'))
+      mkdirSync(join(env.CODEX_HOME, 'skills', 'dial'), { recursive: true })
+      writeFileSync(join(env.CODEX_HOME, 'skills', 'dial', 'SKILL.md'), DIAL_SKILL)
+      const { port } = start({ faults: ['fleet'] })
+      seen.host.watching!(true)
+      // Past a midnight.
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(Object.values(await skillDays(port)).flat()).toEqual([])
+    })
+  })
+
   describe('Claude Code\'s skill while Harness runs a Claude agent, with its plugin never on', () => {
     beforeEach(() => mkdirSync(claudeHome()))
     /** A core that lists one agent of Harness's, of [engine]. */
@@ -15108,6 +15167,16 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
     await host().listAgentSnapshot()
     seen.host.watching!(true)
   }
+  /** Harness agents h1-h3, each with the engine session the core bound to it, and the listener a notice comes through.
+   *  The devices' clock is the faked wall clock: a notice an agent a minute. */
+  const withNotices = () => {
+    const listener = fakeListener()
+    const sessions = ['h1', 'h2', 'h3'].map((agentId) => ({ agentId, registeredAt: 1, engine: 'claude', sessionId: `s-${agentId}` }))
+    const core = fakeCore({ dataDir, agents: { advertised: vi.fn(() => sessions as RegisteredSession[]) } })
+    return { ...start({ core, faults: ['fleet'], listen: listener.listen, now: () => Date.now() }), listener }
+  }
+  const notice = (listener: ReturnType<typeof fakeListener>, agentId: string, text: string) =>
+    expect(listener.notice({ text, engine: 'claude', sessionId: `s-${agentId}` })).toEqual({ result: 'shown' })
 
   it('writes the dial\'s day to dial-usage.json: connected on attach, used on a turn', async () => {
     vi.useFakeTimers()
@@ -15424,16 +15493,6 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
       Object.fromEntries(Object.entries(await counted(port)).filter(([name]) => name.startsWith('dial_wait_')))
     const question = (requestId: string) => ({ type: 'commander_question', agentId: 'h1', payload: { requestId, questions: [] } })
     const closed = (requestId: string) => ({ type: 'commander_question_close', agentId: 'h1', payload: { requestId } })
-    /** Harness agents h1-h3, each with the engine session the core bound to it, and the listener a notice comes through.
-     *  The devices' clock is the faked wall clock: a notice an agent a minute. */
-    const withNotices = () => {
-      const listener = fakeListener()
-      const sessions = ['h1', 'h2', 'h3'].map((agentId) => ({ agentId, registeredAt: 1, engine: 'claude', sessionId: `s-${agentId}` }))
-      const core = fakeCore({ dataDir, agents: { advertised: vi.fn(() => sessions as RegisteredSession[]) } })
-      return { ...start({ core, faults: ['fleet'], listen: listener.listen, now: () => Date.now() }), listener }
-    }
-    const notice = (listener: ReturnType<typeof fakeListener>, agentId: string, text: string) =>
-      expect(listener.notice({ text, engine: 'claude', sessionId: `s-${agentId}` })).toEqual({ result: 'shown' })
     const asked = (over: Partial<ObservedAsked> = {}): ObservedAsked => ({
       engine: 'claude', sessionId: 'sess-1', event: 'asked', tool: 'Bash', summary: 'npm test', cwd: '/work/api', ...over,
     })
@@ -15680,6 +15739,146 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
       port.observed(hook('turn-start'))
       expect(await values(port)).toEqual({ dial_value_done_away_prompted_10m: 1,
         dial_value_done_away_prompted_10m_installation_days: 1, dial_value_installation_days: 1 })
+    })
+  })
+
+  describe('the dial skill\'s use (docs/plans/2026-11-26-dial-skill-usage-design.md)', () => {
+    /** How many shown notices the person's prompt answered within 10 min. */
+    const answered = async (port: DevicesPort): Promise<number> => (await counted(port)).dial_notice_answered_10m ?? 0
+    /** The outside agent sess-1's notice, as its session's `harness device notify` sends it. */
+    const outsideNotice = (listener: ReturnType<typeof fakeListener>, text: string) =>
+      expect(listener.notice({ text, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+
+    it('counts each notice the devices answer, by engine, answer and kind, beside the [device] notify line', async () => {
+      const { port, listener } = withNotices()
+      notice(listener, 'h1', 'Waiting · Connect the VPN')
+      // Within the agent's minute.
+      expect(listener.notice({ text: 'Waiting · Sign in to the registry', engine: 'claude', sessionId: 's-h1' }))
+        .toEqual({ result: 'limited' })
+      ;(seen.cable as unknown as { connected: boolean }).connected = false
+      expect(listener.notice({ text: 'Connect the VPN', folder: 'canary-folder' })).toEqual({ result: 'no dial' })
+      const counts = await counted(port)
+      expect(Object.fromEntries(Object.entries(counts).filter(([name]) => name.startsWith('dial_notice_')))).toEqual({
+        dial_notice_installation_days: 1,
+        dial_notice_claude: 2, dial_notice_claude_installation_days: 1,
+        dial_notice_other: 1, dial_notice_other_installation_days: 1,
+        dial_notice_shown: 1, dial_notice_limited: 1, dial_notice_no_dial: 1,
+        dial_notice_waiting: 2, dial_notice_plain: 1,
+      })
+      expect(logs).toContain('[device] notify · claude · shown · waiting')
+      expect(readFileSync(usageFile(), 'utf8')).not.toMatch(/notify|VPN|registry|s-h1|canary-folder/)
+    })
+
+    it('an outside agent\'s person prompt answers its notice, once', async () => {
+      const { port, listener } = withNotices()
+      port.observed(hook('session-start'))
+      await attach(port)
+      outsideNotice(listener, 'Waiting · Connect the VPN')
+      port.observed(hook('turn-start'))
+      port.observed(hook('turn-start'))
+      expect(await answered(port)).toBe(1)
+    })
+
+    it('another session\'s message spends it uncounted', async () => {
+      vi.useFakeTimers()
+      const { port, listener } = withNotices()
+      port.observed(hook('session-start'))
+      await attach(port)
+      outsideNotice(listener, 'Waiting · Connect the VPN')
+      port.observed(hook('turn-start', { relayed: true }))
+      port.observed(hook('turn-start'))
+      // The agent's next notice, a minute on: the person's prompt answers that one alone.
+      await vi.advanceTimersByTimeAsync(NOTICE_AGENT_MS)
+      outsideNotice(listener, 'Waiting · Sign in to the registry')
+      port.observed(hook('turn-start'))
+      expect(await answered(port)).toBe(1)
+    })
+
+    it('a resumed session\'s session-start neither answers nor spends it', async () => {
+      const { port, listener } = withNotices()
+      port.observed(hook('session-start'))
+      await attach(port)
+      outsideNotice(listener, 'Waiting · Connect the VPN')
+      port.observed(hook('session-start'))
+      port.observed(hook('turn-start'))
+      expect(await answered(port)).toBe(1)
+    })
+
+    it('a Harness agent\'s own turn_started spends it; the dial\'s voice to it answers it', async () => {
+      vi.useFakeTimers()
+      const { port, listener } = withNotices()
+      await attach(port)
+      const turnStarted = () => port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'turn_started' } })
+      const voice = (since = Date.now()) => seen.host.voiceEnded!({ outcome: 'sent', agentId: 'h1', since })
+      notice(listener, 'h1', 'Waiting · Connect the VPN')
+      turnStarted()
+      // Spent: a voice begun after that turn started answers nothing.
+      await vi.advanceTimersByTimeAsync(1_000)
+      voice()
+      turnStarted()
+      // A voice waiting as its turn starts.
+      await vi.advanceTimersByTimeAsync(NOTICE_AGENT_MS)
+      notice(listener, 'h1', 'Waiting · Sign in to the registry')
+      voice()
+      turnStarted()
+      // A send that returns after the turn its words started.
+      await vi.advanceTimersByTimeAsync(NOTICE_AGENT_MS)
+      notice(listener, 'h1', 'Waiting · Approve the deploy')
+      const since = Date.now()
+      turnStarted()
+      voice(since)
+      expect(await answered(port)).toBe(2)
+    })
+
+    it('an agent a listing shows busy spends it uncounted', async () => {
+      vi.useFakeTimers()
+      const subs: HerdrSubscriber[] = []
+      let list: Promise<HerdrAnswer> | undefined
+      const agent = { pane_id: 'w1:p1', agent: 'claude', agent_status: 'idle', cwd: '/work/api', agent_session: { kind: 'id', agent: 'claude', value: 'sess-h' } }
+      const client: HerdrClient = {
+        request: () => (list = Promise.resolve<HerdrAnswer>({ ok: true, result: { type: 'agent_list', agents: [agent] } })),
+        subscribe: (_entries, to) => { subs.push(to); return { close: () => {} } },
+        prompt: async () => ({ outcome: 'sent' }),
+        socketStamp: () => '1:1',
+        binary: () => undefined,
+      }
+      const onMac = { ...orca, platform: 'darwin' as const, onPath: (name: string) => `/opt/${name}/bin/${name}` }
+      const listener = fakeListener()
+      const { port } = start({ faults: ['fleet'], herdr: client, orca: onMac, tty: async () => undefined, listen: listener.listen, now: () => Date.now() })
+      seen.host.watching!(true)
+      port.swarms(null)
+      subs[0].started()
+      await list
+      const [{ id }] = (await host().listAgentSnapshot()).agents
+      /** A turn, as herdr's status tells it: idle, then at work. */
+      const turn = () => {
+        for (const status of ['idle', 'working']) {
+          subs[0].event('pane.agent_status_changed', { agent: 'claude', agent_status: status, pane_id: 'w1:p1', workspace_id: 'w1' })
+        }
+      }
+      const shown = (text: string) => expect(listener.notice({ text, engine: 'claude', sessionId: 'sess-h' })).toEqual({ result: 'shown' })
+      shown('Waiting · Connect the VPN')
+      turn()
+      // Spent: a voice begun after that turn started answers nothing.
+      await vi.advanceTimersByTimeAsync(1_000)
+      seen.host.voiceEnded!({ outcome: 'sent', agentId: id, since: Date.now() })
+      turn()
+      // The next notice, a minute on, which the dial's voice answers.
+      await vi.advanceTimersByTimeAsync(NOTICE_AGENT_MS)
+      shown('Waiting · Sign in to the registry')
+      seen.host.voiceEnded!({ outcome: 'sent', agentId: id, since: Date.now() })
+      turn()
+      expect(await answered(port)).toBe(1)
+    })
+
+    it('a dial unplugged keeps it: the prompt hook answers it', async () => {
+      const { port, listener } = withNotices()
+      port.observed(hook('session-start'))
+      await attach(port)
+      outsideNotice(listener, 'Waiting · Connect the VPN')
+      seen.host.watching!(false)
+      port.observed(hook('turn-start'))
+      expect(await answered(port)).toBe(1)
     })
   })
 })
