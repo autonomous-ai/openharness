@@ -33,6 +33,7 @@ function onWindows(answers: boolean[] = [], link: AppLink = FAKE, over: Partial<
     link: async (url, bundle) => { links.push([url, bundle]); return answers.length ? answers.shift()! : true },
     cursorFolder: async () => { throw new Error('no folder') },
     desktop: async () => { throw new Error('no desktop') },
+    window: async () => { throw new Error('no window') },
   }
   return { ...recorder({ platform: 'win32', windows, ...over }, [], link), links }
 }

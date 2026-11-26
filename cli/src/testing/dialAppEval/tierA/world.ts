@@ -566,6 +566,7 @@ export class World implements TierAWorld {
         link: async (url, bundle) => this.ran(['harness-pty', 'open-link', url, ...(bundle ? [bundle] : [])]).code === 0,
         cursorFolder: async (folder) => this.ran(['harness-pty', 'cursor-folder', folder]).code === 0,
         desktop: async () => this.ran(['harness-pty', 'desktop']).code === 0,
+        window: async (pid) => this.ran(['harness-pty', 'raise', '--pid', String(pid)]).code === 0,
       } : undefined,
     }
   }

@@ -579,6 +579,7 @@ describe('a tap on Windows raises its editor', () => {
       link: (url, bundle) => note(['link', url, String(bundle)]),
       cursorFolder: (folder) => note(['cursorFolder', folder]),
       desktop: () => note(['desktop']),
+      window: (pid) => note(['window', String(pid)]),
     }
     const r = recorder({ platform: 'win32', windows }, [], editor)
     r.windows.held = HELD

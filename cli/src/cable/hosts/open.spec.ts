@@ -23,8 +23,9 @@ const OPEN = '/usr/bin/open'
 const APP_WEZTERM = '/Applications/WezTerm.app/Contents/MacOS/wezterm'
 
 interface Call { file: string; args: string[]; timeoutMs: number }
-/** A window a raise is asked for: a process and an app. */
-interface Window { pid?: number; app?: string }
+/** A window a raise is asked for: a process and an app, and on Windows whether the process is the one herdr's lookup
+ *  found holding the agent's client. */
+interface Window { pid?: number; app?: string; outer?: true }
 
 /** herdr's socket, which no tap asks: a tap is `herdr agent focus`. */
 const herdrClient = { prompt: vi.fn(), socketStamp: vi.fn(), binary: vi.fn() }
@@ -1054,8 +1055,9 @@ describe('a tap on Windows brings the app forward through the raise', () => {
   const ORCA = target({ ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: HANDLE })
 
   /** The recorder on Windows, its opener holding a raise that notes each call, beside Orca's switch, in [asked], and
-   *  answers the next of [answers] (true: raised or refused; false: none), then true. */
-  function onWindows(answers: boolean[] = []) {
+   *  answers the next of [answers] (true: raised or refused; false: none), then true. Each command answers the next of
+   *  [o.codes]; each agent's window is [o.windowOf]'s. */
+  function onWindows(answers: boolean[] = [], o: { codes?: Array<number | null>; windowOf?: Over['windowOf']; more?: readonly HostAdapter[] } = {}) {
     const asked: string[][] = []
     const answer = async (call: string[]) => { asked.push(call); return answers.length ? answers.shift()! : true }
     const windows: WindowsRaise = {
@@ -1063,9 +1065,10 @@ describe('a tap on Windows brings the app forward through the raise', () => {
       link: (url, bundle) => answer(['link', url, String(bundle)]),
       cursorFolder: (folder) => answer(['cursorFolder', folder]),
       desktop: () => answer(['desktop']),
+      window: (pid) => answer(['window', String(pid)]),
     }
     const orcaSwitch = async (handle: string) => { asked.push(['switch', handle]); return true }
-    return { ...recorder({ platform: 'win32', windows, orcaSwitch }), asked }
+    return { ...recorder({ platform: 'win32', windows, orcaSwitch, windowOf: o.windowOf }, o.codes, o.more), asked }
   }
 
   /** The opener on Windows, each raise held until it is let go with its answer. */
@@ -1083,6 +1086,7 @@ describe('a tap on Windows brings the app forward through the raise', () => {
         link: (url) => answer(['link', url]),
         cursorFolder: (folder) => answer(['cursorFolder', folder]),
         desktop: () => answer(['desktop']),
+        window: (pid) => answer(['window', String(pid)]),
       },
     })
     return { asked, pending, opener }
@@ -1128,6 +1132,89 @@ describe('a tap on Windows brings the app forward through the raise', () => {
     expect(await r.opener.open('a1', herdr)).toBe(true)
     expect(r.calls).toEqual([run('/fake/bin/herdr', 'agent', 'focus', 'w1:p2')])
     expect(r.asked).toEqual([['app', bundle]])
+  })
+
+  describe('a herdr pane whose client herdr\'s lookup found in a window of no listed app', () => {
+    const PANE: Pane = { adapter: 'herdr', id: 'w1:p1' }
+    const FOCUS = run('/fake/bin/herdr', 'agent', 'focus', 'w1:p1')
+    const TERMINAL: Window = { pid: 100, app: 'terminal', outer: true }
+    // The agent's own process: its window is herdr's server's console, never the client's.
+    const OWN: Window = { pid: 150, app: 'terminal' }
+    const REFUSING: HostAdapter = {
+      id: 'made-up',
+      tap: 'before',
+      paneOf: () => undefined,
+      canFocus: () => true,
+      focus: async () => 'refused',
+    }
+
+    it('the pane, then raise --pid of the window owner', async () => {
+      const r = onWindows([], { windowOf: () => TERMINAL })
+      expect(r.opener.can('a1', { pane: PANE })).toBe(true)
+      expect(await r.opener.open('a1', { pane: PANE })).toBe(true)
+      expect(r.calls).toEqual([FOCUS])
+      expect(r.asked).toEqual([['window', '100']])
+      expect(r.logs).toEqual([])
+    })
+
+    it('a pid that is not the outer answer\'s is never raised', async () => {
+      const r = onWindows([], { windowOf: () => OWN })
+      expect(await r.opener.open('a1', { pane: PANE })).toBe(true)
+      expect(r.asked).toEqual([])
+    })
+
+    it('with a bundle the app comes as before', async () => {
+      const r = onWindows([], { windowOf: () => TERMINAL })
+      expect(await r.opener.open('a1', { pane: PANE, bundle: VSCODE })).toBe(true)
+      expect(r.asked).toEqual([['app', VSCODE]])
+    })
+
+    // Windows' default-terminal handoff: the client's console has no window anyone can raise.
+    it('the handoff console: no window, nothing raised', async () => {
+      const r = onWindows([], { windowOf: () => undefined })
+      expect(await r.opener.open('a1', { pane: PANE })).toBe(true)
+      expect(r.calls).toEqual([FOCUS])
+      expect(r.asked).toEqual([])
+    })
+
+    // Linux's fallback raises the window after a failed focus too (PM 2026-11-26, decision 6).
+    it('a failed focus still raises the outer window owner, answering what the raise did', async () => {
+      const r = onWindows([], { codes: [1], windowOf: () => TERMINAL })
+      expect(await r.opener.open('a1', { pane: PANE })).toBe(true)
+      expect(r.calls).toEqual([FOCUS])
+      expect(r.asked).toEqual([['window', '100']])
+      expect(r.logs).toEqual(['[device] open · herdr · fallback'])
+      const none = onWindows([false], { codes: [1], windowOf: () => TERMINAL })
+      expect(await none.opener.open('a1', { pane: PANE })).toBe(false)
+      expect(none.asked).toEqual([['window', '100']])
+    })
+
+    it('a refused focus raises it with no line', async () => {
+      const r = onWindows([], { windowOf: () => TERMINAL, more: [REFUSING] })
+      expect(await r.opener.open('a1', { pane: { adapter: 'made-up', id: 'p1' } })).toBe(true)
+      expect(r.asked).toEqual([['window', '100']])
+      expect(r.logs).toEqual([])
+    })
+
+    it('a failed focus with no window owner and no bundle: nothing', async () => {
+      const r = onWindows([], { codes: [1], windowOf: () => undefined })
+      expect(await r.opener.open('a1', { pane: PANE })).toBe(false)
+      expect(r.asked).toEqual([])
+      expect(r.logs).toEqual([])
+    })
+
+    it('a failed focus never raises a pid that is not the outer answer\'s', async () => {
+      const r = onWindows([], { codes: [1], windowOf: () => OWN })
+      expect(await r.opener.open('a1', { pane: PANE })).toBe(false)
+      expect(r.asked).toEqual([])
+    })
+
+    it('a failed focus with a bundle brings the app as before', async () => {
+      const r = onWindows([], { codes: [1], windowOf: () => TERMINAL })
+      expect(await r.opener.open('a1', { pane: PANE, bundle: VSCODE })).toBe(true)
+      expect(r.asked).toEqual([['app', VSCODE]])
+      expect(r.logs).toEqual(['[device] open · herdr · fallback'])
+    })
   })
 
   it('a pick brings its app through the raise: ok for raised or refused, failed for none', async () => {
