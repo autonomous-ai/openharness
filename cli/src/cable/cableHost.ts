@@ -206,8 +206,8 @@ export interface CableHostWiring {
   appTimer?: (ms: number, run: () => void) => () => void
   /** In [0, 1): the draw between apps tied for the most agents. Absent, Math.random. */
   appRandom?: () => number
-  /** Whether the open scan learns the app of an agent it found (scannedApp.ts `scanLearnsApps`); where it does not, such an
-   *  agent counts in the default app (select.ts `AppRings.counts`). Absent, true. */
+  /** Whether the open scan learns the app of nearly every agent it found (scannedApp.ts `scanLearnsApps`); where it
+   *  does not, an agent it found with no app counts in the default app (select.ts `AppRings.counts`). Absent, true. */
   scanLearnsApps?: boolean
 }
 

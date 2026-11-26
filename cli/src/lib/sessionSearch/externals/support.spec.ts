@@ -82,6 +82,18 @@ describe('reading values', () => {
     expect(absoluteFolder(3)).toBeNull()
   })
 
+  // Ken's VM, 2026-11-26: Claude Code on Windows writes its cwd as `C:\...`, so every Windows session was dropped.
+  it('takes a Windows drive folder on Windows only, never a share, a device path or a drive-relative one', () => {
+    for (const folder of ['C:\\work\\dial', 'c:/work', 'D:\\']) expect(absoluteFolder(folder, 'win32')).toBe(folder)
+    for (const folder of ['\\\\server\\share\\x', '\\\\?\\C:\\x', '\\\\.\\pipe\\x', '//server/share', 'C:work', 'work', '/work']) {
+      expect(absoluteFolder(folder, 'win32')).toBeNull()
+    }
+    for (const platform of ['linux', 'darwin'] as const) {
+      expect(absoluteFolder('C:\\work', platform)).toBeNull()
+      expect(absoluteFolder('/work', platform)).toBe('/work')
+    }
+  })
+
   it('reads a time in every unit the engines write', () => {
     const ms = Date.parse('2026-09-27T10:00:00Z')
     expect(epochMs(ms / 1000)).toBe(ms)

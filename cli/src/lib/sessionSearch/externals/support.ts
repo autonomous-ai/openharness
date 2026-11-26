@@ -102,9 +102,15 @@ export function record(value: unknown): Record<string, unknown> | null {
 
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-/** An absolute folder, as a session records it. */
-export function absoluteFolder(value: unknown): string | null {
-  return typeof value === 'string' && value.startsWith('/') ? value : null
+/**
+ * An absolute folder, as a session records it. On Windows a drive folder (`C:\`, `C:/`): Claude Code writes its cwd
+ * so there, and a `/`-only rule dropped every Windows session (Ken's VM, 2026-11-26). Never a share or a device path
+ * (`\\server`, `\\?\`, `\\.\`, `//server`): the folder is later resolved and walked, and opening a share can reach
+ * another machine.
+ */
+export function absoluteFolder(value: unknown, platform: NodeJS.Platform = process.platform): string | null {
+  if (typeof value !== 'string') return null
+  return (platform === 'win32' ? /^[A-Za-z]:[\\/]/.test(value) : value.startsWith('/')) ? value : null
 }
 
 /** Epoch ms from seconds, milliseconds, microseconds or an ISO string; null for anything else. */
