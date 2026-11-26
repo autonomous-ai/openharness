@@ -3,9 +3,10 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { APP_IDS, UNKNOWN_APP } from '../cable/hosts/hostDetect.js'
 import { ENGINES } from '../engines/types.js'
+import { composeNotice, isNoticeResult, noticeKind } from './dialNotice.js'
 import {
-  DIAL_DERIVED_METRICS, DIAL_DEVICE_METRICS, DIAL_FILE_METRICS, DIAL_FLAG_METRICS, DIAL_USAGE_ENGINES,
-  DIAL_USAGE_HOSTS, DIAL_USAGE_MARGIN_METRICS, DIAL_USAGE_MAX_COUNT, DIAL_USAGE_METRICS, DIAL_VOICE_SURFACE,
+  DIAL_DERIVED_METRICS, DIAL_DEVICE_METRICS, DIAL_FILE_METRICS, DIAL_FLAG_METRICS, DIAL_NOTICE_KINDS,
+  DIAL_NOTICE_RESULTS, DIAL_USAGE_ENGINES, DIAL_USAGE_HOSTS, DIAL_USAGE_MARGIN_METRICS, DIAL_USAGE_MAX_COUNT, DIAL_USAGE_METRICS, DIAL_VOICE_SURFACE,
   DIAL_VOICE_SURFACE_HEADER, DIAL_WAIT_RAW_METRICS,
 } from './dialUsageContract.js'
 import { PRODUCT_USAGE_METRICS } from './productUsageContract.js'
@@ -57,6 +58,31 @@ describe('the dial usage vocabulary', () => {
       expect(device.has(`dial_value_${count}_installation_days`), count).toBe(true)
     }
     expect(DIAL_DERIVED_METRICS).toEqual(expect.arrayContaining(['dial_value_week_installations', 'dial_value_28d_installations']))
+  })
+
+  // The names sent to the PM for the dial skill's use (docs/plans/2026-11-26-dial-skill-usage-design.md).
+  it('names the dial skill\'s use: sixteen names, six of them computer flags', () => {
+    expect(DIAL_DEVICE_METRICS.filter((m) => /^dial_(skill|notice)_/.test(m)).sort()).toEqual([
+      'dial_skill_claude_installation_days', 'dial_skill_codex_installation_days', 'dial_notice_installation_days',
+      'dial_notice_claude', 'dial_notice_codex', 'dial_notice_other', 'dial_notice_claude_installation_days',
+      'dial_notice_codex_installation_days', 'dial_notice_other_installation_days', 'dial_notice_shown',
+      'dial_notice_no_dial', 'dial_notice_limited', 'dial_notice_proceeding', 'dial_notice_waiting', 'dial_notice_plain',
+      'dial_notice_answered_10m',
+    ].sort())
+    expect(DIAL_FLAG_METRICS.filter((m) => /^dial_(skill|notice)_/.test(m)).sort()).toEqual([
+      'dial_skill_claude_installation_days', 'dial_skill_codex_installation_days', 'dial_notice_installation_days',
+      'dial_notice_claude_installation_days', 'dial_notice_codex_installation_days', 'dial_notice_other_installation_days',
+    ].sort())
+  })
+
+  // The contract imports nothing, so this pins its words to the devices' own.
+  it('names a notice\'s answers and kinds as lib/dialNotice.ts does', () => {
+    expect(DIAL_NOTICE_RESULTS).toHaveLength(3)
+    for (const result of DIAL_NOTICE_RESULTS) expect(isNoticeResult(result.replaceAll('_', ' ')), result).toBe(true)
+    expect(DIAL_NOTICE_KINDS).toHaveLength(3)
+    for (const kind of DIAL_NOTICE_KINDS) {
+      expect(noticeKind(composeNotice('q', 's', kind === 'plain' ? undefined : kind)), kind).toBe(kind)
+    }
   })
 
   it('a report of the 64 longest names at DIAL_USAGE_MAX_COUNT fits the backend\'s 8 KiB body', () => {

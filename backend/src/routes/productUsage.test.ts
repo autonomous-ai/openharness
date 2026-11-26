@@ -446,6 +446,15 @@ it('keeps dial names beside product names', async () => {
   expect((await submit({ ...good, context: cli, counters })).statusCode).toBe(200)
   expect(methods.ingestProductUsage).toHaveBeenCalledExactlyOnceWith('account', { ...good, context: cli, counters })
 })
+it('takes the dial skill\'s names', async () => {
+  const counters = Object.fromEntries(['dial_skill_claude_installation_days', 'dial_skill_codex_installation_days',
+    'dial_notice_installation_days', 'dial_notice_claude', 'dial_notice_codex', 'dial_notice_other',
+    'dial_notice_claude_installation_days', 'dial_notice_codex_installation_days', 'dial_notice_other_installation_days',
+    'dial_notice_shown', 'dial_notice_no_dial', 'dial_notice_limited', 'dial_notice_proceeding', 'dial_notice_waiting',
+    'dial_notice_plain', 'dial_notice_answered_10m'].map((name) => [name, 1]))
+  expect((await submit({ ...good, context: cli, counters })).statusCode).toBe(200)
+  expect(methods.ingestProductUsage).toHaveBeenCalledExactlyOnceWith('account', { ...good, context: cli, counters })
+})
 it('drops a dial name it does not know and keeps the rest', async () => {
   const response = await submit({ ...good, context: cli, counters: { dial_used_installation_days: 1, dial_future_name: 1 } })
   expect(response.statusCode).toBe(200)
