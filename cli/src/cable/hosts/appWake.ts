@@ -9,7 +9,7 @@
  * shows, and would turn a failed link into a 30 s wait. Nothing but the session id binds: the observed copy whose id
  * and Claude Code session id are the row's, and a poll of that session id, never the dial's current row, the app's
  * front session or its last attach. The mod's inbox is keyed by that id, so the words can only reach the process that
- * runs that session. `Inbox.ready()` is not read: it stays true for 35 s after the last run's last poll, so only a poll
+ * runs that session. `Inbox.ready()` is not read: it stays true for 2 s after the last run's last poll, so only a poll
  * heard after the words arrived counts.
  *
  * ChatGPT app (docs/plans/2026-11-23-dial-chatgpt-voice-resting-design.md, § 3): once the thread's link opened, the
@@ -194,7 +194,7 @@ export class AppWake {
   /**
    * Whether a wake still opens or waits for that session, its words not handed on: a Claude Code session id, or a
    * ChatGPT thread's id, which is its Codex session id. Its copy can be listed meanwhile, and the dial's next words then
-   * take the copy's own path: a mod the inbox counts ready (a poll held while the link runs, or the last run's, 35 s)
+   * take the copy's own path: a mod the inbox counts ready (a poll held while the link runs, or the last run's, 2 s)
    * would hand them the first poll, and the copy's own `codex queue` would queue them, ahead of these. They are refused
    * instead (Decision 3). A Claude wake's own words ask this as they go, once it no longer waits.
    */
