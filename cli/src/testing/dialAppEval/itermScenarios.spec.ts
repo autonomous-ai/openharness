@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { HELD_OUT, MAIN } from './catalog.js'
 import { evaluate } from './checks.js'
 import { tabLabel } from './itermRecords.js'
-import { agentIdOf, itermPlaceOf, sessionPage, type Dimension, type Scenario, type Seen, type SessionDef } from './types.js'
+import { agentIdOf, itermPlaceOf, sessionPages, type Dimension, type Scenario, type Seen, type SessionDef } from './types.js'
 
 const ITERM = MAIN.filter((s) => s.app === 'iterm')
 const byId = (id: string): Scenario => ITERM.find((s) => s.id === id)!
@@ -33,7 +33,7 @@ describe("iTerm2's scenarios", () => {
 
   it("each I scenario's checks cover exactly the spec's dims, and D8 in tier B", () => {
     const dims: Record<string, Dimension[]> = {
-      I1: ['D1'], I2: ['D1'], I3: ['D1', 'D7'], I4: ['D1', 'D3'], I5: ['D3'], I6: ['D3'], I7: ['D3'], I8: ['D2'], I9: ['D2', 'D7'],
+      I1: ['D1'], I2: ['D1', 'D2'], I3: ['D1', 'D7'], I4: ['D1', 'D3'], I5: ['D3'], I6: ['D3'], I7: ['D3'], I8: ['D2'], I9: ['D2', 'D7'],
       I10: ['D2'], I11: ['D2'], I12: ['D1', 'D7'], I13: ['D7', 'D3'], I14: ['D7', 'D1'], I15: ['D7', 'D1'], I16: ['D4', 'D6'],
       I17: ['D4'], I18: ['D5'], I19: ['D5'], I20: ['D5'], I21: ['D7'],
     }
@@ -111,7 +111,7 @@ describe("iTerm2's scenarios", () => {
 
   it("I6 and I21 start d before b in b's tmux, so the pick lands on d and the swipe must move the dial to b", () => {
     for (const s of [byId('I6'), byId('I21')]) {
-      const tmux = agents(s).filter((d) => sessionPage(d) === 'tmux')
+      const tmux = agents(s).filter((d) => sessionPages(d).includes('tmux'))
       // One tmux, whose client runs in b's tab.
       expect(new Set(tmux.map((d) => d.tab)).size, s.id).toBe(1)
       const starts = s.steps.flatMap((step) => (step.kind === 'hook' && step.event === 'start' ? [step.session] : []))
@@ -137,5 +137,42 @@ describe("iTerm2's scenarios", () => {
     expect(graded(faces)).toEqual([['echo.lands', 1], ['echo.latency', 1], ['echo.noBounce', 1], ['still', 1]])
     expect(graded([...faces, face(at('echo') + 300, b!)]))
       .toEqual([['echo.lands', 0], ['echo.latency', 1], ['echo.noBounce', 0], ['still', 0]])
+  })
+
+  // Diego's 2026-11-26 rule (docs/plans/2026-11-26-dial-mux-host-pages-design.md): an agent in tmux or herdr is on
+  // iTerm2's page and the multiplexer's.
+  it("I2, I3 and I15 list every agent on iTerm2's page, count each nested one on its multiplexer's too, and grade "
+    + "tmux's and herdr's rings after a pick of each", () => {
+    for (const s of [byId('I2'), byId('I3'), byId('I15')]) {
+      const keys = agents(s).map((d) => d.key)
+      for (const id of ['ring', 'ringKept']) {
+        const ring = s.checks.find((c) => c.id === id)
+        if (ring) expect(ring, `${s.id} ${id}`).toMatchObject({ page: 'iterm', expect: keys, apart: [] })
+      }
+      for (const c of s.checks) {
+        if (c.kind !== 'ring' || c.page === 'iterm') continue
+        expect(s.steps.find((step) => step.label === c.after), `${s.id} ${c.id}`).toMatchObject({ kind: 'pick', page: c.page })
+      }
+    }
+    const counts = (id: string) => byId(id).steps.flatMap((step) => (step.kind === 'wait' && step.until?.kind === 'apps' ? [step.until.counts] : []))
+    expect([counts('I3'), counts('I15')]).toEqual([[{ iterm: 4, tmux: 1, herdr: 2 }], [{ iterm: 3, tmux: 1, herdr: 1 }]])
+  })
+
+  it("I2's select of b's tab keeps iTerm2's page and moves the dial to b; I19's select moves it from a to b before the voice", () => {
+    const i2 = byId('I2')
+    expect(i2.steps.find((step) => step.label === 'select')).toMatchObject({ kind: 'iterm.select', window: 'w1', tab: 1 })
+    expect(i2.checks.find((c) => c.kind === 'focus')).toEqual({ id: 'focus', kind: 'focus', dim: 'D2', session: 'b', after: 'select', at: 'toTmux' })
+    // The ring the dial holds once the select has run is still iTerm2's.
+    expect(i2.checks.find((c) => c.id === 'ring')).toMatchObject({ page: 'iterm', at: 'toTmux' })
+    const i19 = byId('I19')
+    expect(i19.steps.flatMap((step) => (step.kind === 'hook' && step.event === 'start' ? [step.session] : []))).toEqual(['a', 'b'])
+    expect(i19.steps.filter((step) => step.kind === 'iterm.select')).toEqual([{ kind: 'iterm.select', window: 'w1', tab: 1 }])
+  })
+
+  it("I10, I11, I17 and I20 wait for their agents on iTerm2's page, which holds them though iTerm2 runs no agent of its own", () => {
+    for (const id of ['I10', 'I11', 'I17', 'I20']) {
+      const pages = byId(id).steps.flatMap((step) => (step.kind === 'wait' && step.until?.kind === 'ring' ? [step.until.page] : []))
+      expect(pages, id).toEqual(['iterm'])
+    }
   })
 })

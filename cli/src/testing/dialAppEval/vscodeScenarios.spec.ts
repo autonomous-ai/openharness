@@ -79,13 +79,14 @@ describe("VS Code's scenarios", () => {
     expect(v11.steps.filter((step) => step.kind === 'stroke').map((step) => step.label)).toEqual(['stroke', 'skip'])
   })
 
-  it("V12 runs its Claude Code in the person's tmux, so its row is on tmux's page, VS Code's counting none (decision 3)", () => {
+  it("V12 runs its Claude Code in the person's tmux, so its row is on VS Code's page and tmux's (Diego's 2026-11-26 rule)", () => {
     const v12 = byId('V12')
     expect(v12.sessions.find((d) => d.key === 'a')).toMatchObject({ tmux: true })
     expect(v12.steps.filter((step) => step.kind === 'wait' && step.until).map((step) => step.kind === 'wait' && step.until))
-      .toEqual([{ kind: 'ring', page: 'tmux', expect: ['a'] }])
-    expect(v12.checks.filter((c) => c.kind === 'ring').map((c) => c.kind === 'ring' && [c.id, c.page, c.apart]))
-      .toEqual([['ring', 'tmux', []], ['ringKept', 'tmux', []]])
+      .toEqual([{ kind: 'ring', page: 'vscode', expect: ['a'], apart: [] }])
+    // apart none: the grader counts a on tmux's page, its other page.
+    expect(v12.checks.filter((c) => c.kind === 'ring').map((c) => c.kind === 'ring' && [c.id, c.page, c.expect, c.apart]))
+      .toEqual([['ring', 'vscode', ['a'], []], ['ringKept', 'vscode', ['a'], []]])
   })
 
   it('a tap on a terminal row asks for no link, a tap on the panel for its link', () => {

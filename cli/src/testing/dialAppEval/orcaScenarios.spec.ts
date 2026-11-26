@@ -131,7 +131,8 @@ describe("Orca's scenarios", () => {
     const o11 = byId('O11')
     const c = o11.sessions.find((d) => d.key === 'c')!
     expect([c.tmux, c.tab]).toEqual([true, 2])
-    expect(o11.checks.flatMap((x) => (x.kind === 'ring' ? [x.expect] : []))).toEqual([['a', 'b', 'c']])
+    // apart none: the grader counts c on tmux's page too (Diego's 2026-11-26 rule).
+    expect(o11.checks.flatMap((x) => (x.kind === 'ring' ? [[x.expect, x.apart]] : []))).toEqual([[['a', 'b', 'c'], []]])
     expect(o11.checks.flatMap((x) => (x.kind === 'open' ? [[x.session, x.after, x.at]] : []))).toEqual([['c', 'tap', 'face']])
     expect(o11.checks.flatMap((x) => (x.kind === 'voice' ? [[x.session, x.path, x.text]] : []))).toEqual([['c', 'mod', 'Eval words for charlie.']])
   })

@@ -941,6 +941,19 @@ describe('editors', () => {
       apps: [{ id: 'cursor', count: 1 }, { id: 'vscode', count: 1 }] })] }))).apart).toBe(0)
   })
 
+  it("apart: VS Code's ring of an agent in the person's tmux counts it on tmux's page too: tmux 1 passes, none or two fail", () => {
+    // Diego's 2026-11-26 rule (docs/plans/2026-11-26-dial-mux-host-pages-design.md): on VS Code's page and tmux's.
+    const VT = editor('vt', 28, 'vscode', { tmux: true })
+    const s = scenario([{ kind: 'hook', session: 'vt', event: 'start', label: 'w' }], [...sessions, VT])
+    const check: Check = { id: 'r', kind: 'ring', dim: 'D1', page: 'vscode', expect: ['vt'], apart: [], after: 'w' }
+    const apart = (others: Array<[string, number]>): number => run(check, s, seen(s, [100], { frames: [frame(200, { t: 'apps', shown: 'vscode',
+      apps: [{ id: 'vscode', count: 1 }, ...others.map(([id, count]) => ({ id, count }))] }), ...list(200, 'vscode', [VT]).slice(1)] }))
+      .find((r) => r.check === 'r.apart')!.score
+    expect(apart([['tmux', 1]])).toBe(1)
+    expect(apart([])).toBe(0)
+    expect(apart([['tmux', 2]])).toBe(0)
+  })
+
   it('apart with no apps frame held scores 0 on every page, saying so', () => {
     const s = scenario([{ kind: 'hook', session: 'va', event: 'start', label: 'w' }], sessions)
     const ring = (page: 'vscode' | 'cursor', expect: string[]): Check => ({ id: 'r', kind: 'ring', dim: 'D1', page, expect, apart: [], after: 'w' })
@@ -1503,12 +1516,38 @@ describe('iTerm2', () => {
       .toEqual({ holds: false, evidence: ['apps at 1600 on iterm: iterm 1, tmux 1, herdr 1'] })
   })
 
-  it("an iTerm2 session in tmux is shown in its state on tmux's page; the same frames with the list on iTerm2's page fail it", () => {
+  it("an iTerm2 session in tmux is shown in its state on tmux's page and on iTerm2's; the same frames with the list on herdr's page fail it", () => {
+    // Diego's 2026-11-26 rule (docs/plans/2026-11-26-dial-mux-host-pages-design.md): it is on both pages.
     const s = scenario([{ kind: 'hook', session: 'im', event: 'turn-start', label: 'go' }], sessions)
     const state: Check = { id: 'st', kind: 'state', dim: 'D4', session: 'im', state: 'working', after: 'go' }
     const turn = frame(800, { t: 'turn.started', agentId: id(IM), text: '' })
     expect(scores(run(state, s, seen(s, [500], { frames: [...list(100, 'tmux', [IM, IN]), turn] })))).toEqual({ shown: 1, latency: 1 })
-    expect(scores(run(state, s, seen(s, [500], { frames: [...list(100, 'iterm', [IM, IN]), turn] }))).shown).toBe(0)
+    expect(scores(run(state, s, seen(s, [500], { frames: [...list(100, 'iterm', [IA, IM, IN]), turn] })))).toEqual({ shown: 1, latency: 1 })
+    expect(scores(run(state, s, seen(s, [500], { frames: [...list(100, 'herdr', [IM, IN]), turn] }))).shown).toBe(0)
+  })
+
+  /** An apps frame shown on `page` counting these pages, then a whole ring of `rows` there. */
+  const countedOn = (page: string, counts: Record<string, number>, rows: SessionDef[]): Seen['frames'] => [frame(200, { t: 'apps', shown: page,
+    apps: Object.entries(counts).map(([id, count]) => ({ id, name: id, count, waiting: 0 })) }), ...list(200, page, rows).slice(1)]
+  const apartOf = (check: Check, frames: Seen['frames']): number => {
+    const s = scenario([{ kind: 'hook', session: 'ia', event: 'start', label: 'w' }], sessions)
+    return run(check, s, seen(s, [100], { frames })).find((r) => r.check === 'r.apart')!.score
+  }
+
+  it("apart: iTerm2's ring a, b, c, d with apart none passes on iterm 4, tmux 1, herdr 2 and fails on tmux 0", () => {
+    // Every listed session counts on its other pages too (Diego's 2026-11-26 rule).
+    const ring: Check = { id: 'r', kind: 'ring', dim: 'D1', page: 'iterm', expect: ['ia', 'im', 'ih', 'ik'], apart: [], after: 'w' }
+    const rows = [IA, IM, IH, IK]
+    expect(apartOf(ring, countedOn('iterm', { iterm: 4, tmux: 1, herdr: 2 }, rows))).toBe(1)
+    expect(apartOf(ring, countedOn('iterm', { iterm: 4, tmux: 0, herdr: 2 }, rows))).toBe(0)
+    expect(apartOf(ring, countedOn('iterm', { iterm: 4 }, rows))).toBe(0)
+  })
+
+  it("apart: tmux's ring b with apart a, c, d passes on iterm 4, herdr 2", () => {
+    const ring: Check = { id: 'r', kind: 'ring', dim: 'D1', page: 'tmux', expect: ['im'], apart: ['ia', 'ih', 'ik'], after: 'w' }
+    expect(apartOf(ring, countedOn('tmux', { iterm: 4, tmux: 1, herdr: 2 }, [IM]))).toBe(1)
+    // The 23/11 rule's counts, each agent on one page, are one page short now.
+    expect(apartOf(ring, countedOn('tmux', { iterm: 1, tmux: 1, herdr: 2 }, [IM]))).toBe(0)
   })
 
   it("a tap on a tab row passes on iTerm2 brought forward and its tab's select with raise", () => {

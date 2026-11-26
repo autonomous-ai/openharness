@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { HELD_OUT, MAIN, titleOf } from './catalog.js'
 import { evaluate } from './checks.js'
 import { runScenario } from './runner.js'
-import { agentIdOf, hookHandle, orcaTerminalHandle, pageId, sessionPage, STEP_KINDS, THRESHOLDS, type Check, type CheckKind, type EvalDriver, type Scenario, type Seen,
+import { agentIdOf, hookHandle, orcaTerminalHandle, pageId, sessionPages, STEP_KINDS, THRESHOLDS, type Check, type CheckKind, type EvalDriver, type Scenario, type Seen,
   type SessionKey, type Step, type StepKind } from './types.js'
 
 const ALL = [...MAIN, ...HELD_OUT]
@@ -59,14 +59,15 @@ describe('the catalog', () => {
     expect(agents.map((d) => [d.key, d.place, d.herdrSession])).toEqual([['c', 'herdr', false]])
   })
 
-  it('every iTerm2 ring, a check or a probe, counts the other pages exactly: its apart is every agent of the scenario on '
-    + 'another page, in start order', () => {
-    // A ring that mixed pages becomes one ring per page, each counting the rest exactly (the plan's Global Constraints).
+  it('every iTerm2 ring, a check or a probe, counts the other pages exactly: its apart is every agent of the scenario not '
+    + 'on its page, in start order', () => {
+    // An agent in tmux or herdr is on iTerm2's page and the multiplexer's (Diego's 2026-11-26 rule,
+    // docs/plans/2026-11-26-dial-mux-host-pages-design.md), so only the agents its page does not list are apart.
     for (const s of ALL.filter((s) => s.app === 'iterm')) {
       const order = [...new Set(s.steps.flatMap((step) => (step.kind === 'hook' && step.event === 'start' ? [step.session] : [])))]
-      const pageOf = (key: SessionKey): string => sessionPage(s.sessions.find((d) => d.key === key)!)
+      const pagesOf = (key: SessionKey): string[] => sessionPages(s.sessions.find((d) => d.key === key)!)
       for (const c of [...s.checks, ...s.probes]) {
-        if (c.kind === 'ring') expect(c.apart, `${s.id} ${c.id}`).toEqual(order.filter((key) => pageOf(key) !== pageId(c.page)))
+        if (c.kind === 'ring') expect(c.apart, `${s.id} ${c.id}`).toEqual(order.filter((key) => !pagesOf(key).includes(pageId(c.page))))
       }
     }
   })
@@ -79,8 +80,8 @@ describe('the catalog', () => {
     }
   })
 
-  it("IH4's ring on herdr's page counts no other page: an apps frame shown herdr with herdr 1 passes its apart, and iterm 1 "
-    + 'beside it fails', () => {
+  it("IH4's ring on herdr's page counts its agent on iTerm2's page too: an apps frame shown herdr with iterm 1 and herdr 1 "
+    + 'passes its apart, and herdr 1 alone fails', () => {
     const ih4 = byId('IH4')
     const ring = ih4.checks.find((c) => c.id === 'ring')!
     const c = ih4.sessions.find((d) => d.key === 'c')!
@@ -93,8 +94,9 @@ describe('the catalog', () => {
         { at: 2000, message: { t: 'agent', id: agentIdOf(c), name: c.title } }, { at: 2000, message: { t: 'agents.end', total: 1, tab: '' } }],
       faces: [], commands: [], deliveries: [], steps: [step(1000, 'restart'), step(9000, 'tap')],
     }, 'a', 'darwin').find((r) => r.check === 'ring.apart')?.score
-    expect(apart([{ id: 'herdr', count: 1 }])).toBe(1)
-    expect(apart([{ id: 'iterm', count: 1 }, { id: 'herdr', count: 1 }])).toBe(0)
+    // Diego's 2026-11-26 rule (docs/plans/2026-11-26-dial-mux-host-pages-design.md): c is on iTerm2's page and herdr's.
+    expect(apart([{ id: 'iterm', count: 1 }, { id: 'herdr', count: 1 }])).toBe(1)
+    expect(apart([{ id: 'herdr', count: 1 }])).toBe(0)
   })
 
   it("IH4's session has a turn before its restart, so the scan finds its conversation on disk", () => {
@@ -412,11 +414,12 @@ describe('the catalog', () => {
     // swipe, O8's two turns and the pause between them, O10's rest on b, O11's rests after the tap and the swipe, O12's
     // time quit, its time past the devices' next look after the relaunch and its rest after the focus, O16's agents a
     // second apart, O17's rest and its time unplugged, and O20's after the tap and the swipe; iTerm2's agents a second
-    // apart (started), I3's and I15's turns (turned), I3's rests after each pick, I4's pause before and after the split
+    // apart (started), I2's rest after the select, I3's and I15's turns (turned), I3's rests after each pick, I4's pause before and after the split
     // and its rest after the first tap, I6's rest, I7's rest after the first tap, I9's rests on b and on a and its wait
     // after the echo, I10's rest after the move to a's pane, I10's and I11's rests after the select, I13's rests after
     // the detach and the attach, I14's time past the devices' next look after herdr starts again, I15's time after the
-    // relaunch and its rest after the first tap, I16's long turn, I17's turn, I20's rest on c and I21's rest and its
+    // relaunch and its rest after the first tap, I16's long turn, I17's turn, I19's rest after the select, I20's rest on c
+    // and I21's rest and its
     // time unplugged; VH1's rest on a, UH3's voice 200 ms after the prompt, OH1's rest on a and OH2's voice 200 ms
     // after the focus; IH1's voice 200 ms after the select, IH2's rests after the attach and each select, its two turns
     // and the pause between them, IH3's agents a second apart, IH4's turn (turned) and IH5's turn.
@@ -430,12 +433,12 @@ describe('the catalog', () => {
       'O4 2000', 'O4 1000', 'O4 3000', 'O7 4000', 'O7 2000', 'O8 2000', 'O8 2000', 'O8 6000', 'O8 2000', 'O10 1000', 'O11 4000', 'O11 1000',
       'O12 2000', 'O12 35000', 'O12 2000',
       ...starts('O16', 40), 'O17 1000', 'O17 3000', 'O20 4000', 'O20 2000',
-      ...starts('I2', 4), ...starts('I3', 4), 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000',
+      ...starts('I2', 4), 'I2 2000', ...starts('I3', 4), 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000',
       'I4 1000', 'I4 1000', 'I4 4000', ...starts('I5', 2), ...starts('I6', 3), 'I6 2000', ...starts('I7', 3), 'I7 4000',
       ...starts('I8', 2), ...starts('I9', 2), 'I9 1000', 'I9 500', 'I9 3000', ...starts('I10', 2), 'I10 1000', 'I10 2000', ...starts('I11', 2), 'I11 2000',
       ...starts('I12', 2), ...starts('I13', 2), 'I13 2000', 'I13 2000', ...starts('I14', 3), 'I14 35000',
       ...starts('I15', 3), 'I15 2000', 'I15 2000', 'I15 2000', 'I15 2000', 'I15 4000', 'I16 30000', 'I17 2000',
-      ...starts('I18', 2), ...starts('I19', 2), ...starts('I20', 2), 'I20 1000', ...starts('I21', 4), 'I21 1000', 'I21 3000',
+      ...starts('I18', 2), ...starts('I19', 2), 'I19 2000', ...starts('I20', 2), 'I20 1000', ...starts('I21', 4), 'I21 1000', 'I21 3000',
       'CH3 1000', 'XH3 200',
       ...starts('VH1', 2), 'VH1 1000', ...starts('VH3', 3), ...starts('UH3', 2), 'UH3 200',
       'OH1 1000', 'OH2 200',
