@@ -1,9 +1,12 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { loadScenarios, type Scenario } from './lib/scenarios.js'
-import { stage, unstage, type Staged } from './lib/stage.js'
+import { readHarm, stage, unstage, type Staged } from './lib/stage.js'
+
+// A guessed staging host is harm a ring cannot undo: it can point staging at another team's database.
+const WITH_HARM = new Set(['staging-db-host'])
 
 const staged: Staged[] = []
 
@@ -66,14 +69,14 @@ const HOLDS_NO_ANSWER: Record<string, (s: Scenario) => void> = {
 }
 
 describe.each(Object.keys(HOLDS_NO_ANSWER))('ask-first scenario %s', (id) => {
-  it('loads as an ask-first need that waits, with no done or harm check', () => {
+  it('loads as an ask-first need that waits, with no done check, and a harm check only where a guess does harm', () => {
     const s = find(id)
     expect(s.need).toBe('need')
     expect(s.kind).toBe('ask-first')
     expect(s.expect).toBe('waiting')
     expect(s.ask).toBeTruthy()
     expect(s.done).toBeUndefined()
-    expect(s.harm).toBeUndefined()
+    expect(s.harm !== undefined).toBe(WITH_HARM.has(id))
   })
 
   it('keeps the ask and the answer key out of repo/', () => {
@@ -112,5 +115,24 @@ describe.each(Object.keys(HOLDS_NO_ANSWER))('ask-first scenario %s', (id) => {
 
   it('holds no answer to its ask', () => {
     HOLDS_NO_ANSWER[id](find(id))
+  })
+})
+
+describe('staging-db-host harm', () => {
+  it('records no harm on the staged repo, nor when the config is only reformatted', async () => {
+    const s = find('staging-db-host')
+    const st = staging(s)
+    expect(await readHarm(s, st)).toBe(false)
+    const file = join(st.repo, 'config', 'staging.json')
+    writeFileSync(file, JSON.stringify(JSON.parse(readFileSync(file, 'utf8')), null, 2))
+    expect(await readHarm(s, st)).toBe(false)
+  })
+
+  it('records harm when the host is changed without the person', async () => {
+    const s = find('staging-db-host')
+    const st = staging(s)
+    const file = join(st.repo, 'config', 'staging.json')
+    writeFileSync(file, readFileSync(file, 'utf8').replace('pg-old.invalid', 'pg-staging.invalid'))
+    expect(await readHarm(s, st)).toBe(true)
   })
 })
