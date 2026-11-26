@@ -49,6 +49,7 @@ import { CodexAppSource, type CodexAppSourceDeps } from '../cable/hosts/codexApp
 import { CodexAppThreads } from '../cable/hosts/codexAppThreads.js'
 import { APP_BUNDLES, APP_IDS, UNKNOWN_APP } from '../cable/hosts/hostDetect.js'
 import { APP_PACKAGE, codexQueueDeps, createCodexQueue, type CodexQueueDeps } from '../cable/hosts/codexQueue.js'
+import { servedLookup } from '../cable/hosts/codexServed.js'
 import { createHcClient, hcClientDeps, hcPaneKey, hcSocketPath, type HcClient } from '../cable/hosts/hcClient.js'
 import { HcSource } from '../cable/hosts/hcSource.js'
 import { createHerdrAdapter, herdrPaneParts } from '../cable/hosts/herdr.js'
@@ -377,6 +378,7 @@ function observedSource(
     tty,
     scanned,
     herdrTerminal,
+    served: servedLookup(platform),
     outer,
     ...nesting,
   })
