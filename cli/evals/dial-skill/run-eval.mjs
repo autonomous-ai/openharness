@@ -4,7 +4,8 @@
 // for the edits marked "dial skill eval"; the fill-ins above it call lib/*.ts, where the eval's logic is tested.
 //
 //   cd cli && npx tsx evals/dial-skill/run-eval.mjs --flow evals/dial-skill/flow --variant <baseline|vN> --reps 2 \
-//     --split train,val --concurrency 4 --timeout-s 900 [--agents claude] [--cases id,id] [--no-skill] [--approve-harness]
+//     --split train,val --concurrency 4 --timeout-s 900 [--agents claude] [--condition clean,crowd,name-only] \
+//     [--cases id,id] [--no-skill] [--approve-harness]
 //
 // Structural properties this encodes (so you don't have to remember them):
 //   - parameterized by --variant / --reps (no hardcoded A/B pair; the model is fixed in lib/agents.ts)
@@ -24,6 +25,8 @@
 //     completed, the billed model/usage (never in results.jsonl)
 //   - row ids, trace filenames, and frozen refs share one path-safe id
 //     (original id kept in meta.original_id when sanitization changed it)
+//   - before any case, one listing probe per condition a claude case runs in
+//     (lib/probe.ts, rows in probes.jsonl); a failed probe refuses the pass
 
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -35,7 +38,8 @@ import { AGENT_CONFIG, claudeArgs, isDefaultProfile, killAgents, runAgent } from
 import { gradeRun } from './lib/grade.ts';
 import { claudeJudge, JUDGE_EFFORT, JUDGE_MODEL, RUBRIC_SHA } from './lib/judge.ts';
 import { sumUsage } from './lib/parse.ts';
-import { caseId, loadScenarios } from './lib/scenarios.ts';
+import { matchesProbe, probeListing } from './lib/probe.ts';
+import { CONDITIONS, loadScenarios, runId, splitIdOf } from './lib/scenarios.ts';
 import { readDone, readHarm, readRings, scrub, stage, unstage } from './lib/stage.ts';
 
 // Every output write refuses symlinks: the flow dir is model-influenced, and a
@@ -146,6 +150,8 @@ const REF_EXTS = ['', '.html', '.txt', '.json'];
 const AGENTS = ['claude', 'oracle', 'null', 'always'];
 const SPLITS = ['train', 'val', 'test'];
 const JUDGE_TIMEOUT_MS = 120_000;
+// A stopped pass is reported to a person; switching accounts to finish it is not the runner's call.
+const ACCOUNT_LIMIT = 'account limit reached: pass stopped; report it, do not switch accounts';
 
 // The agents run in process groups of their own (lib/agents.ts), which no signal to the runner reaches: however the
 // runner ends, it kills them first. A signal ends it through exit, with the code the signal would have left.
@@ -176,8 +182,8 @@ function judgeEnv(profile) {
   return env;
 }
 
-/** Every scenario under each --agents kind, kept to the --split and --cases scenarios when given. Split and case ids
- *  match on their scenario part, so the stand-ins run their scenario's split. */
+/** Every scenario under each --agents kind in each --condition, kept to the --split and --cases scenarios when given.
+ *  Split and case ids match on their scenario part, so the stand-ins run their scenario's split. */
 async function loadCases(ctx) {
   const env = judgeEnv(sessionProfile());
   ctx.judge = claudeJudge({ claudeBin: AGENT_CONFIG.claudeBin, env, timeoutMs: JUDGE_TIMEOUT_MS });
@@ -205,14 +211,14 @@ async function loadCases(ctx) {
   }
   const claudeVersion = execFileSync(AGENT_CONFIG.claudeBin, ['--version'], { env, encoding: 'utf8', timeout: JUDGE_TIMEOUT_MS }).trim();
   writeSummary(ctx, claudeVersion);
-  return scenarios.filter(s => filters.every(f => f.has(s.id))).flatMap(s => ctx.agents.map(agent => ({
-    id: caseId(s.id, agent), prompt: s.prompt, tags: [s.need, s.kind, agent],
+  return scenarios.filter(s => filters.every(f => f.has(s.id))).flatMap(s => ctx.agents.flatMap(agent => ctx.conditions.map(condition => ({
+    id: runId(s.id, agent, condition), prompt: s.prompt, tags: [s.need, s.kind, agent, condition],
     // Only claude gets the skill staged (lib/stage.ts). A resumed pass may run under another harness or claude than the
     // rows before it, so each row records its own.
-    meta: { scenario: s.id, agent, skill: agent === 'claude' && ctx.skill, rubric_sha: RUBRIC_SHA,
+    meta: { scenario: s.id, agent, condition, skill: agent === 'claude' && ctx.skill, rubric_sha: RUBRIC_SHA,
       harness_sha: ctx.state.harness_sha, claude_version: claudeVersion },
     scenario: s,
-  })));
+  }))));
 }
 
 /**
@@ -225,7 +231,7 @@ function writeSummary(ctx, claudeVersion) {
   const path = join(ctx.flow, ctx.variant, 'summary.json');
   const lockfile = fileURLToPath(new URL('../../package-lock.json', import.meta.url));
   const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
-  const argv = claudeArgs(AGENT_CONFIG, { root: '' }, '');
+  const argv = claudeArgs(AGENT_CONFIG, { root: '', condition: 'clean' }, '');
   const summary = {
     description: ctx.variant, label: ctx.variant, target: 'skill',
     ...JSON.parse(readIfPresent(path) ?? '{}'),
@@ -251,16 +257,48 @@ function writeSummary(ctx, claudeVersion) {
 }
 
 /**
+ * Probes, one after another, each condition a claude case of this pass runs in, staged as that condition's first case,
+ * and gives each such case the dial's state its probe found. A probe that finds the listing other than the condition
+ * gives refuses the pass (exit 2) before any case runs; one at the account limit stops it (exit 3). Each probe leaves a
+ * row in probes.jsonl, counts only, as its spend counts.
+ */
+async function probeConditions(ctx, tasks, probesPath) {
+  const probes = new Map();
+  for (const { c } of tasks) {
+    const { agent, condition } = c.meta;
+    if (agent !== 'claude' || probes.has(condition)) continue;
+    let probe;
+    try {
+      probe = await probeListing(c.scenario, condition, { skill: ctx.skill }, { ...AGENT_CONFIG, timeoutMs: agentTimeoutMs(ctx.timeoutS) });
+    } catch (e) {
+      if (e?.failure_class !== 'account_limited') throw e;
+      appendFileNoFollow(probesPath, JSON.stringify({ condition, at: new Date().toISOString(), listing: null, instructions: null,
+        skills: [], claude_version: null, model: e.model ?? null, usage: e.usage, failure: 'account_limited' }) + '\n');
+      eprint(ACCOUNT_LIMIT);
+      process.exit(3);
+    }
+    appendFileNoFollow(probesPath, JSON.stringify(probe) + '\n');
+    if (probe.failure) { eprint(`listing probe · ${condition}: ${probe.failure}`); process.exit(2); }
+    probes.set(condition, probe);
+  }
+  for (const { c } of tasks) if (c.meta.agent === 'claude') c.meta.listing = probes.get(c.meta.condition).listing.dial;
+  return probes;
+}
+
+/**
  * Stages the scenario, runs the agent and reads what it rang. The transcript and errors are written to disk, so the
  * run root and $HOME are scrubbed from them; the answer and the rings stay as the agent gave them, for the grader.
  * No `output`: nothing is graded pairwise against a frozen ref.
  */
 async function runCase(input, ctx) {
-  const { scenario, meta: { agent } } = input;
-  const st = stage(scenario, agent, { skill: ctx.skill });
+  const { scenario, meta: { agent, condition } } = input;
+  const st = stage(scenario, agent, { skill: ctx.skill, condition });
   const clean = text => scrub(text, st);
   try {
     const run = await runAgent(agent, scenario, st, { ...AGENT_CONFIG, timeoutMs: agentTimeoutMs(ctx.timeoutS) });
+    // Claude Code may update itself mid-pass: a run that started with other skills or another version than its
+    // condition's probe may not have been given what the probe saw, so it is counted but never scored as listed.
+    if (agent === 'claude' && !matchesProbe(run.init, ctx.probes.get(condition))) run.status = 'unlisted';
     // The skill the agent had leads the trace, so a trace reads on its own.
     const transcript = [{ role: 'system', content: st.skill ?? 'no skill' }, ...run.transcript]
       .map(turn => Object.fromEntries(Object.entries(turn).map(([key, value]) => [key, clean(value)])));
@@ -332,7 +370,7 @@ function parseArgs(argv) {
               model: undefined, reps: 1, concurrency: 4, timeoutS: 1800,
               approveHarness: false,
               // dial skill eval: which agents run on which scenarios, with or without the skill staged.
-              agents: ['claude'], split: null, cases: null, skill: true };
+              agents: ['claude'], conditions: ['clean'], split: null, cases: null, skill: true };
   // A flag at the end of argv would otherwise consume undefined - which for
   // --model equals the default and silently disables the served-model check.
   const val = (i) => { if (argv[i] === undefined) { eprint(`missing value for ${argv[i - 1]}`); usage(); process.exit(2); } return argv[i]; };
@@ -343,6 +381,7 @@ function parseArgs(argv) {
     // dial skill eval: the model is fixed in lib/agents.ts AGENT_CONFIG, where the harness sha covers it.
     else if (k === '--model') { eprint('--model is not taken: the model is fixed in lib/agents.ts'); usage(); process.exit(2); }
     else if (k === '--agents') a.agents = val(++i).split(',');
+    else if (k === '--condition') a.conditions = val(++i).split(',');
     else if (k === '--split') a.split = val(++i).split(',');
     else if (k === '--cases') a.cases = val(++i).split(',');
     else if (k === '--no-skill') a.skill = false;
@@ -360,8 +399,8 @@ function parseArgs(argv) {
     eprint(`--variant must be 'baseline' or 'v<N>', got '${a.variant}'`);
     usage(); process.exit(2);
   }
-  // dial skill eval: an agent or split outside the lists would spend a pass on nothing the report reads.
-  for (const [flag, given, known] of [['--agents', a.agents, AGENTS], ['--split', a.split ?? [], SPLITS]]) {
+  // dial skill eval: an agent, condition or split outside the lists would spend a pass on nothing the report reads.
+  for (const [flag, given, known] of [['--agents', a.agents, AGENTS], ['--condition', a.conditions, CONDITIONS], ['--split', a.split ?? [], SPLITS]]) {
     const bad = given.find(x => !known.includes(x));
     if (bad !== undefined) { eprint(`${flag} takes ${known.join(', ')}; got '${bad}'`); usage(); process.exit(2); }
   }
@@ -372,7 +411,7 @@ function parseArgs(argv) {
   return a;
 }
 function usage() {
-  eprint('usage: npx tsx evals/dial-skill/run-eval.mjs --flow DIR --variant ID [--reps N] [--concurrency N] [--timeout-s N (0 = no ceiling)] [--agents claude,oracle,null,always] [--split train,val,test] [--cases id,id] [--no-skill] [--approve-harness]');
+  eprint('usage: npx tsx evals/dial-skill/run-eval.mjs --flow DIR --variant ID [--reps N] [--concurrency N] [--timeout-s N (0 = no ceiling)] [--agents claude,oracle,null,always] [--condition clean,crowd,name-only] [--split train,val,test] [--cases id,id] [--no-skill] [--approve-harness]');
 }
 
 // Harness integrity gate. The hillclimb loop gets this runner command
@@ -521,7 +560,7 @@ async function main() {
   // Preflight every output path before the first model call: a planted
   // symlink would otherwise fail each case after its (billed) run.
   for (const p of [args.flow, join(args.flow, 'baseline'), vdir, join(vdir, 'traces'),
-                   join(vdir, 'results.jsonl'), join(vdir, 'errors.jsonl'),
+                   join(vdir, 'results.jsonl'), join(vdir, 'errors.jsonl'), join(vdir, 'probes.jsonl'),
                    join(vdir, 'progress.txt'), join(args.flow, 'baseline', 'ref'), join(args.flow, '_state.json')])
     if (isSymlink(p)) { eprint(`refusing to run: ${p} is a symlink (the flow dir must hold regular files)`); process.exit(2); }
   // A relative --flow (the documented `.claude/hillclimb/<name>` layout) is
@@ -583,7 +622,8 @@ async function main() {
     }
     seen.set(k, c.id);
   }
-  const safeIds = new Set(cases.map(c => pathSafeId(c.id)));
+  // dial skill eval: a split id names a case in every condition.
+  const safeIds = new Set(cases.map(c => splitIdOf(pathSafeId(c.id))));
   for (const k of ['train_ids', 'val_ids', 'test_ids'])
     if (st[k] != null && !Array.isArray(st[k])) { eprint(`_state.json ${k} must be a list of ids`); process.exit(2); }
   for (const sid of [...(st.train_ids ?? []), ...(st.val_ids ?? []), ...(st.test_ids ?? [])]) {
@@ -592,7 +632,7 @@ async function main() {
     if (s !== pathSafeId(s)) {
       // Can never match a row: rows key on path-safe ids. This is the silent
       // shrunken-denominator bug - fail before anything is spent.
-      eprint(`_state.json split id '${s}' is not a path-safe id - record split ids exactly as they appear in results.jsonl's prompt_id`);
+      eprint(`_state.json split id '${s}' is not a path-safe id - record split ids exactly as results.jsonl's prompt_id, without its condition`);
       process.exit(2);
     }
     // Well-formed but absent is legitimate (a trimmed top-K subset run) - note it, don't fail.
@@ -608,13 +648,15 @@ async function main() {
 
   let i = 0, ok = 0, fail = 0;
   const errorsPath = join(vdir, 'errors.jsonl');
+  const probesPath = join(vdir, 'probes.jsonl');
   // A hard crash (power loss, ENOSPC) can leave a torn final line with no
   // trailing newline; the next append would merge two rows into one permanently
   // unparseable line. Isolate any fragment before appending anything.
-  for (const p of [resultsPath, errorsPath]) {
+  for (const p of [resultsPath, errorsPath, probesPath]) {
     const tail = readIfPresent(p);
     if (tail && !tail.endsWith('\n')) appendFileNoFollow(p, '\n');
   }
+  ctx.probes = await probeConditions(ctx, tasks, probesPath); // dial skill eval
   async function worker() {
     // dial skill eval: after an account limit (runCase sets ctx.stop) every new case would fail the same way.
     while (i < tasks.length && !ctx.stop) {
@@ -757,8 +799,7 @@ async function main() {
   workersStarted = true;
   await Promise.all(Array.from({ length: Math.max(1, args.concurrency) }, worker));
   clearInterval(tick); progress();
-  // dial skill eval: a stopped pass is reported to a person; switching accounts to finish it is not the runner's call.
-  if (ctx.stop) { eprint('account limit reached: pass stopped; report it, do not switch accounts'); process.exit(3); }
+  if (ctx.stop) { eprint(ACCOUNT_LIMIT); process.exit(3); } // dial skill eval
   eprint(`[${args.variant}] done - ${ok} ok, ${fail} failed -> ${resultsPath}`);
   process.exit(fail ? 1 : 0);
 }
