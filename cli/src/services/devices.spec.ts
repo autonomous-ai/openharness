@@ -3331,6 +3331,21 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(said()).toEqual(['[device] voice · mod'])
   })
 
+  it('words the mod does not ask for within 5 s tell the dial it is not listening yet', async () => {
+    vi.useFakeTimers()
+    const { port } = startHere()
+    port.observed(hook('session-start'))
+    attach(port)
+    // Its poll just closed, and the next does not come.
+    const closed = port.inboxPoll({ pollId: 'p1', sessionId: 'sess-1' })
+    port.inboxGone('p1')
+    expect(await closed).toEqual({})
+    const words = host().sendTurn(ID, 'run the tests')
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(await words).toMatchObject({ ok: false, message: 'api is not listening yet. Try again in a moment.' })
+    expect(said()).toEqual(['[device] voice · no-answer'])
+  })
+
   it('an agent with an Orca handle lists v and f; its transcript runs orca terminal send, its tap orca terminal switch', async () => {
     madeBy('orca-agents')
     const { port } = startHere()
@@ -6235,7 +6250,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     const words = host().sendTurn(waiting, 'run the tests')
     await port.stop()
     expect(await poll).toEqual({})
-    expect(await words).toMatchObject({ ok: false, message: 'api did not answer.' })
+    expect(await words).toMatchObject({ ok: false, message: 'api is not listening yet. Try again in a moment.' })
     expect(vi.getTimerCount()).toBe(0)
   })
 })

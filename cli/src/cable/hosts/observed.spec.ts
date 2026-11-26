@@ -2011,12 +2011,21 @@ describe('ObservedSource actions', () => {
   })
 
   it('did not answer with neither', async () => {
-    const { actions, ready } = fakeActions({ toMod: vi.fn(async (): Promise<Delivery> => 'missed') })
+    const { actions } = fakeActions({ toMod: vi.fn(async (): Promise<Delivery> => 'missed') })
     const { src, ev } = setup({ actions })
     src.ingest(ev('session-start'))
     expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+    expect(actions.orcaSend).not.toHaveBeenCalled()
+  })
+
+  // "Did not answer" named nothing to do, though the mod asks again within moments of a poll closing.
+  it('a mod that missed its 5 s, with no terminal to type into, is not listening yet', async () => {
+    const { actions, ready } = fakeActions({ toMod: vi.fn(async (): Promise<Delivery> => 'missed') })
+    const { src, ev } = setup({ actions })
     ready.add('s1')
-    expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+    src.ingest(ev('session-start'))
+    expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj is not listening yet. Try again in a moment.' })
+    expect(actions.count).toHaveBeenLastCalledWith('no-answer')
     expect(actions.orcaSend).not.toHaveBeenCalled()
   })
 
