@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { basename, join } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 // Types only: the devices process must not load core code.
 import type { ObservedAsked, ObservedEvent, ObservedHookEvent } from '../../core/observedHook.js'
 import { truncateUtf8 } from '../../lib/deviceRecentTrim.js'
@@ -137,8 +137,9 @@ export interface ObservedDeps {
   /** What a Claude Code session's own process record gives (record.ts): the name the person gave it, and the Claude
    *  app's id of it; one that rejects gives nothing. Absent, the scan names by folder and places by its app alone. */
   record?(owner: Pick<SessionOwner, 'pid' | 'record'> & { sessionId: string }): Promise<SessionRecord>
-  /** Claude Code's own projects folders, the devices' and Orca's account homes' (observedPlaces.ts), asked at a voice
-   *  start alone: a hook's transcript path names a session's home only inside one. Absent, none does. */
+  /** Claude Code's own projects folders, the devices' and each Orca account home's by the name Orca gives it, asked at a
+   *  voice start alone: a hook's transcript path names a session's home only when its projects folder is one. Absent,
+   *  none does. */
   claudeRoots?(): readonly string[]
   /** The tty of a process in a tab app (tabs.ts readTty), rejecting when `ps` could not be read; absent (off macOS), no
    *  agent has a tab. */
@@ -430,14 +431,16 @@ export class ObservedSource implements HostSource {
   }
 
   /**
-   * The session's Claude Code home: the one its transcript path plainly names, when that path lies in one of Claude
-   * Code's own folders (deps.claudeRoots), else the default. A hook can name any path, and its settings are read
-   * synchronously: one on a network share (/net/<host>/..., \\host\share\...) would hold the devices, and every dial.
+   * The session's Claude Code home: the one its transcript path plainly names, when that path's projects folder is one
+   * of Claude Code's own (deps.claudeRoots), by name, else the default. A hook can name any path, and its settings are
+   * read synchronously: one on a network share (/net/<host>/..., \\host\share\...) would hold the devices, and every
+   * dial. Not merely inside one: a `projects` folder deeper in it names a home that could be a link to such a share.
    */
   private claudeHomeOf(e: Entry, actions: ObservedActions): string {
     const home = homeOf(e.transcriptPath)
-    if (home === undefined || !this.deps.claudeRoots?.().some((root) => within(root, e.transcriptPath!))) return actions.claudeHome
-    return home
+    if (home === undefined) return actions.claudeHome
+    const projects = dirname(dirname(e.transcriptPath!))
+    return this.deps.claudeRoots?.().some((root) => resolve(root) === projects) ? home : actions.claudeHome
   }
 
   /** Whether a route takes the agent's words: a pane whose app types, its mod, or Codex's queue. */

@@ -381,8 +381,10 @@ function observedSource(
     ptyOwner: ptyOwnerOf,
     // Asked for Claude Code's sessions alone (observed.ts), and read only inside its own records folders.
     record: (owner) => readRecord(owner, { records: places.claude.records() }),
-    // A hook's transcript path names the home whose settings a voice start reads only inside these (observed.ts).
-    claudeRoots: () => places.claude.roots(),
+    // A hook's transcript path names the home whose settings a voice start reads only when its projects folder is one of
+    // these (observed.ts). By name, not places.claude.roots(): Orca links an account's `projects` to another home's, and
+    // the scan's list keeps one name of each real folder, which would drop that account.
+    claudeRoots: () => [...claudeProjectsRoots(env.CLAUDE_PROJECTS_DIR), ...orcaHomes.get().claude.map((home) => join(home, 'projects'))],
     tty,
     scanned,
     herdrTerminal,
