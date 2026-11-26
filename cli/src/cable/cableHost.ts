@@ -704,8 +704,9 @@ export class DaemonCableHost implements CableHost {
    *  latest (openAgent). */
   private taps = 0
 
-  /** The opens of rests and picks on tmux's or herdr's page, in turn, apart from `taps`, as neither is a tap: an open still
-   *  reading its client asks whether a later one came (openOnPage). */
+  /** The person's rests, picks and taps, in turn: an open of a rest or a pick on tmux's or herdr's page still reading its
+   *  client asks whether a later one came (openOnPage), so the last wins (spec §4), a rest that only shows a pane too. A
+   *  tap's open asks `taps` alone: no rest or pick stops a tap. */
   private brings = 0
 
   /** [end] is how the waiting tap's open ended: every tap says one. */
@@ -806,7 +807,10 @@ export class DaemonCableHost implements CableHost {
   /** A pick from the dial's list of apps. With a window, on the tab another app with agents turns the dial to its ring;
    *  on an app's ring Harness is the window's tab, and any other app the filter's pick. */
   pickApp(app: string, cause: 'pick' | 'notice' = 'pick'): AppPick {
-    if (cause === 'pick') this.wiring.appPicked?.()
+    if (cause === 'pick') {
+      this.wiring.appPicked?.()
+      this.brings++
+    }
     const answer = this.answerPick(app, cause)
     if (cause === 'pick' && (answer === 'same' || answer === 'ignored')) this.wiring.appPickKept?.(answer)
     // A notice brings its own app with its open. Harness with no window is only its ring: no Desktop to bring. tmux's and
@@ -819,7 +823,7 @@ export class DaemonCableHost implements CableHost {
    * A pick of tmux's or herdr's page brings the app holding the client of the agent the dial landed on, and selects its
    * tab and pane there, also when that app is in front already (Diego's point 2, 2026-11-26). A landed agent with no
    * client app, off the page, or none: the page's agent heard from last that has one. Its open is a rest's (openOnPage),
-   * on the same counter, so the last pick or rest wins (Diego's point 3). Spec §5.
+   * on the same counter, so the last pick, rest or tap wins (Diego's point 3). Spec §5.
    */
   pickLanded(app: string, agentId: string | undefined): void {
     if (app !== 'tmux' && app !== 'herdr') return
@@ -829,7 +833,7 @@ export class DaemonCableHost implements CableHost {
       .filter((e) => e.source.id !== 'harness' && placed(e))
       .reduce<HostEntry | undefined>((last, e) => !last || e.agent.lastActivityAt > last.agent.lastActivityAt ? e : last, undefined)
     if (!entry) { this.wiring.appPickBrought?.('none'); return }
-    void this.openOnPage(entry).catch(() => false).then((opened) => {
+    void this.openOnPage(entry, ++this.brings).catch(() => false).then((opened) => {
       if (opened !== 'superseded') this.wiring.appPickBrought?.(opened ? 'ok' : 'failed')
     })
   }
@@ -1165,10 +1169,12 @@ export class DaemonCableHost implements CableHost {
   }
 
   openAgent(agentId: string, reason?: OpenReason): void | Promise<void | 'superseded' | { ok: false; error: string }> {
-    // The last tap wins, whatever agent it is on: a tap still waiting for Desktop's window would open its agent over the
-    // app this one brings forward. A question screen that came up by itself is no tap.
+    // The last tap wins, whatever agent it is on: a tap still waiting for Desktop's window, or a rest's or a pick's open
+    // still reading its client (brings), would open its agent over the app this one brings forward. A question screen
+    // that came up by itself is no tap.
     if (!reason) {
       this.taps++
+      this.brings++
       this.endWaiting({ outcome: 'failed', code: 'desktop_no_window' })
       this.wiring.tapped?.(agentId)
     }
@@ -1357,6 +1363,7 @@ export class DaemonCableHost implements CableHost {
    *  behind, it brings that app (spec §4). One superseded runs nothing. */
   swipeEnded(agentId: string, how: 'rest' | 'superseded', opts: { apps?: boolean } = {}): void {
     if (how === 'superseded') { this.wiring.swiped?.('superseded'); return }
+    const mine = ++this.brings
     // The agent may have gone, or left its pane, and the dial its page, since the dial turned to it: asked again here, so
     // no source brings forward an app the person has left.
     const outside = this.outsideEntry(agentId)
@@ -1366,7 +1373,7 @@ export class DaemonCableHost implements CableHost {
     const shows = outside?.source.hasPane?.(outside.agent) && (!mux || this.filter.latestFront() === pagesOf(outside.agent)[0])
     let ended: Promise<PaneSwitch | 'superseded' | 'opened'> | undefined
     if (shows) ended = outside?.source.showPane?.(outside.agent)
-    else if (mux) ended = this.openOnPage(outside).then((opened) => opened === 'superseded' ? opened : opened ? 'opened' : 'failed')
+    else if (mux) ended = this.openOnPage(outside, mine).then((opened) => opened === 'superseded' ? opened : opened ? 'opened' : 'failed')
     void (ended ?? Promise.resolve('failed' as const)).catch(() => 'failed' as const).then((outcome) => this.wiring.swiped?.(outcome))
   }
 
@@ -1380,11 +1387,11 @@ export class DaemonCableHost implements CableHost {
   /**
    * Brings an agent of tmux's or herdr's page through its source's tap path (a fresh read of its client, its tab, its app
    * or window, its pane), never `openAgent`, which counts a tap. A rest is a 400 ms pause (SWIPE_REST_MS), so browsing
-   * the page opens at each pause, each after that read (up to 700 ms, at most one a second per agent): `latest` is this
-   * open's turn among them, and one a later open replaced stops at its check (spec §4 Cost).
+   * the page opens at each pause, each after that read (up to 700 ms, at most one a second per agent): `latest` is whether
+   * [mine], this open's turn in `brings`, is still the last, and one a later rest, pick or tap replaced stops at its check
+   * (spec §4 Cost).
    */
-  private openOnPage(entry: HostEntry): Promise<boolean | 'superseded'> {
-    const mine = ++this.brings
+  private openOnPage(entry: HostEntry, mine: number): Promise<boolean | 'superseded'> {
     return entry.source.focus?.(entry.agent, () => this.brings === mine) ?? Promise.resolve(false)
   }
 
