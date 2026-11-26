@@ -32,7 +32,7 @@ const MODES = process.platform !== 'win32'
 const hasMode = (info: Stats, mode: number): boolean => !MODES || (info.mode & 0o777) === mode
 
 /** A key's segment: a plain name, so no key reaches outside the folder. The build holds the plugin's names to the same
- *  pattern (scripts/lib/orcaPluginBundle.mjs). */
+ *  pattern (scripts/lib/orcaPluginBundle.mjs, claudePluginBundle.mjs). */
 const SEGMENT = /^[A-Za-z0-9._-]+$/
 /** What a process leaves beside the folder, after `<folder>.`: its staging folder, or the folder its swap moved aside,
  *  by its pid. */

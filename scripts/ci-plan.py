@@ -81,6 +81,8 @@ ALSO.update({"desktop/test/support/real_fonts.dart": "mobile"})
 ALSO.update({"plugins/harness-device-vscode/": "cli"})
 # Orca's plugin: the CLI's build inlines the folder.
 ALSO.update({"plugins/harness-device-orca/": "cli"})
+# Claude Code's two plugins: the CLI's build inlines both as Claude Code's marketplace.
+ALSO.update({"plugins/harness-device/": "cli", "plugins/harness/": "cli"})
 # The Store's tools: the files store-checks runs (ci.yml) and those they read beside them, by name or by a path built
 # from parts (runtimes.sh), which the scan cannot see; test_ci_plan follows the names. The rest of store/tools/ (the
 # browser and network suites authoring-browser-checks.yml and experience-checks.yml run, the pipe checks windows-e2e

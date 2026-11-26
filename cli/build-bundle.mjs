@@ -14,6 +14,7 @@ import * as esbuild from 'esbuild'
 import { createHash } from 'node:crypto'
 import { appendFileSync, readFileSync, copyFileSync, rmSync, writeFileSync } from 'fs'
 import { readDshRegistry } from './scripts/lib/dshRegistry.mjs'
+import { readClaudePluginBundle } from './scripts/lib/claudePluginBundle.mjs'
 import { readOrcaPluginBundle } from './scripts/lib/orcaPluginBundle.mjs'
 import { readVscodeExtensionBundle } from './scripts/lib/vscodeExtensionBundle.mjs'
 import { readBuiltinBundle, readHachiBundle, readHarnessMonitorBundle, readMemoriesBundle, readModelManagerBundle } from './scripts/lib/modelManagerBundle.mjs'
@@ -96,6 +97,9 @@ const options = {
     __VSCODE_EXTENSION__: JSON.stringify(await readVscodeExtensionBundle(version)),
     // Harness's Orca plugin, at this CLI's version: `harness device orca` installs it from the data folder.
     __ORCA_PLUGIN__: JSON.stringify(readOrcaPluginBundle(version)),
+    // Claude Code's marketplace with Harness's two plugins, at this CLI's version: Claude Code installs them from the
+    // data folder, with no git.
+    __CLAUDE_PLUGIN__: JSON.stringify(readClaudePluginBundle(version)),
     __BUILTIN_REVISIONS__: JSON.stringify(builtinRevisions),
     __DARWIN_PROCESS_IMAGES__: processImages ? JSON.stringify(processImages) : 'undefined',
     __DARWIN_DEV_WATCH__: devWatch ? JSON.stringify(devWatch) : 'undefined',
