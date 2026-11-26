@@ -1,0 +1,18 @@
+#!/bin/sh
+# Codex runs this when a permission ask or a question may wait on the person. The launcher reads the turn from the
+# hook's input, tells the Harness daemon when a dialog follows, so the dial shows it; the ask itself is answered in its
+# own app. With no launcher nothing is told. Not exec'd, and the launcher's output and exit code are dropped: what this
+# hook prints is a decision to Codex and its exit 2 a block, and it decides nothing. An older launcher with no
+# `device codex` prints its usage and exits 1, dropped the same way.
+# ~/.local/bin first: the installer puts the launcher there, and an app started from the Dock may not have it on PATH.
+#
+# codex.json's command is read by two shells. Off Windows Codex runs it with `<shell> -lc`: the first line execs this
+# script and the second is never read. On Windows Codex runs it in Windows PowerShell, which reads the first line up to
+# `<#` as an echo silenced on the second, and runs the rest of the second line: the same launcher lookup in the profile
+# and on PATH, its output dropped and exit 0. So this script never runs on Windows.
+if [ -x "$HOME/.local/bin/harness" ]; then
+  "$HOME/.local/bin/harness" device codex asked >/dev/null 2>&1
+elif command -v harness >/dev/null 2>&1; then
+  harness device codex asked >/dev/null 2>&1
+fi
+exit 0

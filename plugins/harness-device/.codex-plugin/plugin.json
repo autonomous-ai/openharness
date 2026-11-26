@@ -1,0 +1,17 @@
+{
+  "name": "harness-device",
+  "description": "Shows Codex's waiting permission asks and questions on the Harness round dial. Uses the Harness CLI.",
+  "author": {
+    "name": "Autonomous",
+    "url": "https://harness.autonomous.ai"
+  },
+  "homepage": "https://harness.autonomous.ai/agents",
+  "repository": "https://github.com/autonomous-ai/openharness",
+  "license": "MIT",
+  "hooks": "./hooks/codex.json",
+  "interface": {
+    "displayName": "Harness Device",
+    "developerName": "Autonomous",
+    "websiteURL": "https://harness.autonomous.ai/agents"
+  }
+}
