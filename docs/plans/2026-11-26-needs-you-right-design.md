@@ -304,6 +304,9 @@ Limits on the text:
 - The description is one JSON-quoted line of at most 600 characters, with the moment and the command in its first
   300: Claude Code caps a listing entry at 1,536 characters and drops the descriptions of the least-used skills first
   when its listing passes 1% of the context window; Codex shortens descriptions first when its listing passes 2%.
+- No `<` or `>` in the description: Claude Code 2.1.332 escapes them in its listing, so the model reads `&lt;` and
+  `&gt;` (found by Part 3's first probe, 2026-11-26). Its placeholders take square brackets. The body is read whole, not
+  through the listing, and keeps `<…>`.
 
 The starting text. The builder tightens it by rounds on train and val, as the eval's README describes, and the eval
 decides:
@@ -311,7 +314,7 @@ decides:
 ```
 ---
 name: dial
-description: "Before you end a turn that leaves the person something to decide, answer or do, ring their Harness dial: harness device notify \"<the ask, one line>\" --suggest \"<your pick>\" --waiting (or --proceeding when you go on with your pick). Not for finished work or progress."
+description: "Before you end a turn that leaves the person something to decide, answer or do, ring their Harness dial: harness device notify \"[the ask, one line]\" --suggest \"[your pick]\" --waiting (or --proceeding when you go on with your pick). Not for finished work or progress."
 # Written by Harness. Remove it with harness device claude disable or harness device codex disable.
 ---
 
@@ -382,7 +385,7 @@ ships only if that variant gains recall on at least one engine with specificity 
 **The line** (at most 300 characters, the same rule as the description, so the two never disagree):
 
 > The person has a Harness dial. Before you end a turn that leaves them something to decide, answer or do, run
-> `harness device notify "<the ask>" --suggest "<your pick>" --waiting` (or `--proceeding` when you go on). Not for
+> `harness device notify "[the ask]" --suggest "[your pick]" --waiting` (or `--proceeding` when you go on). Not for
 > finished work or progress. The dial skill has the rest.
 
 **Claude Code.** The plugin (`plugins/harness-device/`) gains a `SessionStart` command hook for every source (startup,
@@ -513,8 +516,20 @@ The change:
    - **Trusted without a prompt** (the spike): Codex asks a person to review a hook before it first runs. After each
      install or update of the plugin, the dial setup writes the record Codex writes on "Trust": in the Codex home's
      `config.toml`, the plugin's hooks under `hooks.state`, each with its `trusted_hash` (the hash `hookReview.ts`
-     computes for Harness's own hooks) and `trusted_content_hash`. Turning Codex on for the dial is the consent, as for
-     the skill.
+     computes for Harness's own hooks) and `trusted_content_hash` (the fingerprint of the installed folder). Turning
+     Codex on for the dial is the consent, as for the skill. Codex 0.172.0 is the floor (`MIN_CODEX`).
+   - **Only content this CLI carries is trusted** (the author, 2026-11-26). The record tells Codex to run what is in
+     the installed folder without asking anyone, so it is written only when that folder's fingerprint equals the
+     fingerprint of the plugin this CLI build carries. A folder that differs (a newer `main` fetched by Codex's own
+     marketplace refresh, a file changed by hand) is never trusted by Harness: Codex asks the person to review it, as
+     it would without Harness. So the CLI carries the plugin and installs it from a local marketplace folder it writes,
+     as #4648 does for Claude Code; that copy changes only with the CLI, Codex's refresh of it changes nothing, and no
+     git is needed.
+   - **Kept trusted between CLI updates** (the PM, 2026-11-26): each dial setup pass checks every home it serves (a
+     stat of the installed folder and of `config.toml`, the fingerprint computed only when one changed) and writes the
+     record again when the folder matches the CLI's copy and the record does not. A home whose `openharness`
+     marketplace is the person's own from GitHub gets the trust only while its folder matches; after Codex fetches a
+     different `main`, the person is asked, and the pass logs `untrusted · differs` once.
    - **That file has other writers:** the core's own hook review, Codex itself, and the person. The write edits only
      the plugin's own tables, the way `hookReview.ts` and `folderTrust.ts` edit the file (through a symlink,
      atomically, never a table defined twice), and a write that finds the file changed since it read it reads it
@@ -593,6 +608,36 @@ For the two new counts. Nothing else is stored, synced or exposed.
 9. **Failure.** Presence unknown: the notice rings, as today. A hook that fails or times out prints nothing and the
    session goes on. A `nudge` with no answer in 300 ms is a no.
 
+### Part 7's own data (from its plan, 2026-11-26)
+
+Part 7 stores a record and writes another program's config file.
+
+1. **Growth.** `dial-setup.json` gains `codexPlugin`: one CLI version per Codex home the setup installed into, at most
+   64 homes; an entry leaves when its home folder is gone. A home's `config.toml` gains the plugin's two `hooks.state`
+   tables, replaced in place at each install, update or changed fingerprint, never added twice; after `disable` they
+   stay, inert (Codex ignores a record with no hook), and the next install replaces them.
+2. **Concurrency.** `dial-setup.json` keeps one writer, the devices process (the command only reads `codexPlugin`).
+   `config.toml` has other writers (Codex, the core's `engines/kit/hookReview.ts`, the person): only the plugin's own
+   tables are edited, through a link to its target, atomically, comparing what was read with what is on disk just
+   before the write and starting over when they differ, at most 3 attempts.
+3. **Read cost.** A setup pass with every home current runs no `codex`; its check of each home is a stat of the
+   installed folder and of `config.toml`, the fingerprint computed again only when one changed. The hook reads at most
+   16 MiB of a session's record backwards, under 10 KB in a short turn.
+4. **Scale.** At 10× homes the record stops at 64; installs run one home at a time, and a failed home waits an hour.
+   The `[device] codex plugin` tally's `failed` count warns first.
+5. **Compatibility.** An older CLI that rewrites `dial-setup.json` drops `codexPlugin`, and the next pass installs
+   again. An older CLI under the installed plugin answers `device codex asked` with its usage and exit 1, which the
+   hook drops: nothing rings, as today. A Codex older than 0.172.0 is set nothing up. Claude Code reads
+   `.claude-plugin/` and `hooks/hooks.json`, unchanged.
+6. **Migration and rollback.** None. A rollback leaves the plugin and its trust in place and silent; the person removes
+   it with `codex plugin remove harness-device@openharness`.
+7. **Audience.** Nothing leaves the computer: the post goes to this account's daemon, as Claude Code's does. Of the
+   session's record, two fields are read and none is kept, logged or sent.
+8. **Identity.** `codex plugin` runs as the computer's own account in its own Codex home. No Codex or ChatGPT sign-in
+   is used.
+9. **Failure.** Install, update, trust and remove failures are counted by step and kind and retried after an hour. A
+   trust write that fails leaves Codex asking the person to review the hook. A record not read rings nothing.
+
 ## Release order
 
 0. #4642's counts: released on 2026-11-26 (backend 1.4.91, CLI 0.6.93). They are the field baseline for both engines.
@@ -601,12 +646,13 @@ For the two new counts. Nothing else is stored, synced or exposed.
 3. Part 2b: the backend with its one name, then the CLI, before Part 3 or with it.
 4. Part 3: the CLI, with or after Part 2 and Part 2b.
 5. Part 6: the CLI, as soon as it is done.
-6. Part 7: the plugin and the CLI, after Part 6.
+6. Part 7: the plugin and the CLI, after Part 6 and after #4648, whose local marketplace it shares (the PM,
+   2026-11-26).
 7. Part 4, if its variant gains: the plugin and the CLI.
 8. Part 5, if its gate opens.
 
 Each part is released as soon as it is done, not held for a batch or a date (the maintainer, 2026-11-26). The orders
-kept: Part 3 with or after Parts 2 and 2b, and Part 7 after Part 6.
+kept: Part 3 with or after Parts 2 and 2b, and Part 7 after Part 6 and #4648.
 
 One task, one pull request: Parts 1, 2 and 3 are three pull requests; Parts 2b, 4, 5, 6 and 7 one each.
 
