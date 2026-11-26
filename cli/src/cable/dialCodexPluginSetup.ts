@@ -12,7 +12,7 @@
 import { existsSync, realpathSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ClaudePluginFiles, ClaudePluginSource, ClaudeRun } from '../devices/claudePlugin.js'
-import { carriedCodexHash, codexMarketplace, codexRemove, codexSetUp, codexUpdate, installedRoot, type CodexFailure } from '../devices/codexPlugin.js'
+import { carriedCodexHash, codexMarketplace, codexPluginState, codexRemove, codexSetUp, codexUpdate, installedRoot, type CodexFailure } from '../devices/codexPlugin.js'
 import type { TrustWrite } from '../devices/codexPluginTrust.js'
 import { listable, MAX_HOMES, SETUP_COUNTS } from '../devices/dialSkillFiles.js'
 
@@ -270,8 +270,16 @@ export function createDialCodexPluginSetup(deps: DialCodexPluginSetupDeps): Dial
         else drop(home)
         continue
       }
-      if (codexMarketplace(home, deps.plugin.folder) === 'own') {
+      const marketplace = codexMarketplace(home, deps.plugin.folder)
+      if (marketplace === 'own') {
         skipOwn(home)
+        continue
+      }
+      // Only a plugin on is Harness's to trust: one the person turned off or removed, or a config.toml that cannot be
+      // read, is left as it is until a stat changes again, and a folder said to differ is said again once it is back on.
+      if (marketplace === 'unknown' || codexPluginState(home) !== 'on') {
+        differs.delete(home)
+        stamps.set(home, stamp)
         continue
       }
       const trust = deps.trust(home, root, expected)
