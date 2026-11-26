@@ -148,9 +148,8 @@ The cap is $115 (the PM, 2026-11-26), about $67.5 for Part 3. Two rounds plus th
 | 8 | Docs: results, narrative, `docs/cli.md` | 7 | medium | main checkout |
 
 Tasks 1, 2 and 3 share `run-eval.spec.ts`, `summarize.ts` or the README, so devcrew runs them one at a time. Task 4
-shares no file with them. Tasks 5 to 8 run in the main checkout,
-`/Users/nqhieu84/orca/workspaces/openharness/needs-you-right-skill-words`, on the branch that holds Tasks 1 to 4. They
-run there and not in a task worktree because each round's git-ignored traces must outlive the task for the next
+shares no file with them. Tasks 5 to 8 run in the main checkout, on the branch that holds Tasks 1 to 4.
+They run there and not in a task worktree because each round's git-ignored traces must outlive the task for the next
 round to read.
 
 ---
