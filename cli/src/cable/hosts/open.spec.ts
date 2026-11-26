@@ -832,10 +832,10 @@ describe('a pick on the dial brings its app forward', () => {
 
   // A pick of herdr's page brings the app of the agent the dial lands on, Herdr.app's for a Herdr.app terminal, by that
   // agent's open (docs/plans/2026-11-26-dial-mux-host-pages-design.md §5): herdr itself is no app to bring.
-  it('bring of herdr has no Herdr.app case: a caller still handing the old herdrApp gets nothing run', async () => {
+  it('bring of herdr has no Herdr.app case: nothing runs', async () => {
     const calls: string[][] = []
     const deps = { run: async (_file: string, args: string[]) => { calls.push(args); return { code: 0, stdout: '' } },
-      platform: 'darwin' as const, adapters: [], log: () => {}, herdrApp: () => true }
+      platform: 'darwin' as const, adapters: [], log: () => {} }
     expect(await createOpenActions(deps).bring!('herdr')).toBeUndefined()
     expect(calls).toEqual([])
   })

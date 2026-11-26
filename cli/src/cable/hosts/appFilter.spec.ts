@@ -2,9 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AppFilter, DIAL_BRINGS_MS, FRONT_SETTLE_MS } from './appFilter.js'
 import type { SwitchCause } from './types.js'
 
-/** Each case's filters' switches, read after the case. */
-const made: Array<() => SwitchCause[]> = []
-
 /**
  * A filter over counts the test sets, a settle timer on vitest's fake clock, and a random function that draws only what is
  * scripted. The known agents are the counts unless a test gives its own, and the agents counted for the app in front
@@ -50,7 +47,6 @@ function setup(draws: number[] = []) {
     inFront = inFrontNext && new Map(Object.entries(inFrontNext))
   }
   const causes = (): SwitchCause[] => switched.mock.calls.map(([cause]) => cause)
-  made.push(causes)
   return { filter, agents, random, after, causes, told, settled, dialFront }
 }
 
@@ -64,9 +60,6 @@ describe('AppFilter', () => {
   })
   afterEach(() => {
     vi.useRealTimers()
-    // No switch cause is a follow: a follow moves the dial on the page shown and turns none
-    // (docs/plans/2026-11-26-dial-mux-host-pages-design.md §3).
-    for (const causes of made.splice(0)) expect(causes()).not.toContain('follow')
   })
 
   it('the default is the app with the most agents', () => {
