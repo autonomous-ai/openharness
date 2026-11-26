@@ -109,6 +109,7 @@ import { MachineListCache } from '../device/machineList.js'
 import { noticeKind, type NoticeAsk, type NoticeResult } from '../lib/dialNotice.js'
 import { DIAL_USAGE_FILE } from '../lib/dialUsageContract.js'
 import { claudeProjectsRoots, codexHomeRoots, movedEngineHomes } from '../lib/engineHomes.js'
+import { findGit } from '../lib/gitOnPath.js'
 import { harnessDevicesRequest } from '../lib/harnessDevices.js'
 import { codeOrLength, errorKind } from '../lib/log.js'
 import { pidAlive } from '../lib/processProof.js'
@@ -853,6 +854,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     log,
     claude: deps.claude ?? claudeFound,
     orcaClaude: () => ({ homes: orcaHomes.get().claude, answered: orcaHomes.answered() }),
+    git: () => findGit(),
     version: VERSION,
   }) : null
   /** The dial setup's start pass, after a read of Orca's homes: the first, and each that changes them. A read that lands

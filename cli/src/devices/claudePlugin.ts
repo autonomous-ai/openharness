@@ -26,6 +26,12 @@ export interface ClaudeDeps {
   platform: NodeJS.Platform
 }
 
+/** What an install needs as well: Claude Code clones the marketplace with git. */
+export interface ClaudeInstallDeps extends ClaudeDeps {
+  /** Where git is (lib/gitOnPath.ts findGit); null: not on this computer. */
+  git(): Promise<string | null>
+}
+
 export interface ClaudeStatus {
   supported: boolean
   installed: boolean
@@ -34,7 +40,7 @@ export interface ClaudeStatus {
 }
 
 /** Which call failed: a fixed word the devices count, where Claude Code's own line could name a path. */
-export type ClaudeStep = 'unsupported' | 'launcher' | 'list' | 'marketplace' | 'install' | 'enable' | 'disable' | 'uninstall' | 'update'
+export type ClaudeStep = 'unsupported' | 'launcher' | 'list' | 'git' | 'marketplace' | 'install' | 'enable' | 'disable' | 'uninstall' | 'update'
 export type ClaudeResult = { ok: true } | { ok: false; error: string; step: ClaudeStep }
 /** What the devices' setup did: installed or updated the plugin; found it current, on as it should be; or found it absent,
  *  not on as the person left it, and ran nothing for it. */
@@ -49,6 +55,11 @@ const LOCAL_MS = 15_000
 const MAX_OUTPUT_BYTES = 1024 * 1024
 const UNSUPPORTED: ClaudeFailure = { ok: false, error: `Claude Code ${MIN_CLAUDE} or later is needed.`, step: 'unsupported' }
 const LAUNCHER: ClaudeFailure = { ok: false, error: 'Harness cannot run this claude launcher.', step: 'launcher' }
+const NO_GIT: ClaudeFailure = {
+  ok: false,
+  error: "Git is not installed on this computer, and the dial's Claude Code plugin is installed with it. Install Git, then try again.",
+  step: 'git',
+}
 const NO_ANSWER = 'Claude Code did not answer.'
 const UNLISTED = 'Claude Code did not list its plugins.'
 
@@ -235,11 +246,13 @@ async function change(run: ClaudeRun, args: string[], timeoutMs: number, step: C
 }
 
 /** Adds the marketplace when it is not there, then installs the plugin. */
-async function install(run: ClaudeRun): Promise<ClaudeFailure | null> {
+async function install(run: ClaudeRun, git: ClaudeInstallDeps['git']): Promise<ClaudeFailure | null> {
   // Marketplaces that cannot be read are taken as none: at worst the add runs again, and its own failure is counted.
   const marketplaces = await jsonList(run, ['plugin', 'marketplace', 'list', '--json'])
   const cloned = Array.isArray(marketplaces) && marketplaces.some((marketplace) => marketplace.name === MARKETPLACE)
   if (!cloned) {
+    // Without git the add only fails, with a line that does not say why: Windows has none of its own.
+    if (!await git()) return NO_GIT
     // Only the two folders the plugin lives in: the rest of the repository is never cloned onto the person's computer.
     const failed = await change(run, ['plugin', 'marketplace', 'add', 'autonomous-ai/openharness', '--sparse', '.claude-plugin', 'plugins'], FETCH_MS, 'marketplace')
     if (failed) return failed
@@ -251,25 +264,25 @@ async function install(run: ClaudeRun): Promise<ClaudeFailure | null> {
   return failed
 }
 
-export async function claudeEnable(deps: ClaudeDeps): Promise<ClaudeResult> {
+export async function claudeEnable(deps: ClaudeInstallDeps): Promise<ClaudeResult> {
   const run = await supportedRun(deps)
   if (typeof run !== 'function') return run
   const listed = await userEntry(run)
   if (!listed.ok) return listed
-  if (!listed.entry) return await install(run) ?? { ok: true }
+  if (!listed.entry) return await install(run, deps.git) ?? { ok: true }
   if (listed.entry.enabled === true) return { ok: true }
   return await change(run, ['plugin', 'enable', DIAL_PLUGIN_ID, '--scope', 'user'], LOCAL_MS, 'enable') ?? { ok: true }
 }
 
 /** The devices' first setup: the plugin installed as enable installs it, and one already there left as it is. One the
  *  person turned off is theirs: only `harness device claude enable` turns it back on. */
-export async function claudeSetUp(deps: ClaudeDeps): Promise<ClaudeSetup> {
+export async function claudeSetUp(deps: ClaudeInstallDeps): Promise<ClaudeSetup> {
   const run = await supportedRun(deps)
   if (typeof run !== 'function') return run
   const listed = await userEntry(run)
   if (!listed.ok) return listed
   if (listed.entry) return { ok: true, outcome: listed.entry.enabled === true ? 'current' : 'absent' }
-  return await install(run) ?? { ok: true, outcome: 'installed' }
+  return await install(run, deps.git) ?? { ok: true, outcome: 'installed' }
 }
 
 /** Uninstalls the plugin and keeps the marketplace, which the harness plugin may come from too. */

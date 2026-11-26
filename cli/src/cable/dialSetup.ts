@@ -3,7 +3,7 @@
 // record whether a dial attached here once, the version that last set it up and the Orca homes it turned on. Harness's
 // extension (vscodeExtensionSetup.ts), in VS Code and in Cursor, reads and saves each editor's version through it too,
 // and Orca's own plugin its versions, so the record has one writer.
-import type { ClaudeRun } from '../devices/claudePlugin.js'
+import type { ClaudeInstallDeps, ClaudeRun } from '../devices/claudePlugin.js'
 import { readPluginHomes } from '../devices/dialSkillFiles.js'
 import type { RolloutOwner } from './codexRolloutHome.js'
 import { createDialHomeSetup, type DialHomeSetup, type DialHomeSetupDeps } from './dialHomeSetup.js'
@@ -16,6 +16,8 @@ export interface DialSetupDeps extends DialHomeSetupDeps {
   claude(home: string, shell: boolean): Promise<ClaudeRun | null>
   /** Orca's Claude Code homes from its last read (devices/orcaHomes.ts); answered: that read gave Orca's answer. */
   orcaClaude(): { homes: readonly string[]; answered: boolean }
+  /** Where git is: the plugin's install needs it. */
+  git: ClaudeInstallDeps['git']
   /** This CLI's version. */
   version: string
 }
@@ -42,6 +44,7 @@ export function createDialSetup(deps: DialSetupDeps): DialSetup {
     claude: (shell) => deps.claude(deps.claudeHome, shell),
     claudeIn: deps.claude,
     orca: deps.orcaClaude,
+    git: deps.git,
     pluginHomes: () => homes.pluginHomes(),
     recordPluginHomes: (list) => homes.recordPluginHomes(list),
     enabledByCommand: () => readPluginHomes(deps.dataDir),

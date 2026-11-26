@@ -33,7 +33,7 @@ import { connect, type Socket } from 'node:net'
 import { dirname, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { harnessPath } from '../config/harnessHome.js'
-import { claudeDisable, claudeEnable, claudeHomeDisable, claudeHomeEnable, claudeStatus, type ClaudeResult, type ClaudeRun } from '../devices/claudePlugin.js'
+import { claudeDisable, claudeEnable, claudeHomeDisable, claudeHomeEnable, claudeStatus, type ClaudeInstallDeps, type ClaudeResult, type ClaudeRun } from '../devices/claudePlugin.js'
 import { claudePluginState, claudePluginTurnedOff, ownDirectory, removeSkill, skillsFolderOf, writeSkill } from '../devices/dialSkill.js'
 import { listable, MAX_HOMES, readRemoved, readSetup, readWritten, writeOrcaConnected, writePluginHomes, writeRemoved, type DialEngine } from '../devices/dialSkillFiles.js'
 import { tellDevices } from '../devices/listenerClient.js'
@@ -81,6 +81,8 @@ export interface DeviceDeps {
   orcaHomes(): Promise<string[]>
   /** Claude Code pointed at [home], on that child alone. */
   claudeIn(home: string): ClaudeRun | null
+  /** Where git is: asked only by claude enable, whose install needs it. */
+  git: ClaudeInstallDeps['git']
   /** Claude Code's default home, dirname(env.CLAUDE_PROJECTS_DIR): the command's own, unless it runs with another
    *  CLAUDE_CONFIG_DIR (an Orca terminal's). */
   defaultClaudeHome: string
@@ -136,7 +138,7 @@ export async function runDeviceCommand(argv: string[], deps: DeviceDeps): Promis
       return 0
     }
     case 'enable': {
-      const result = await claudeEnable({ run: deps.claude(), platform: deps.platform })
+      const result = await claudeEnable({ run: deps.claude(), platform: deps.platform, git: deps.git })
       if (!result.ok) {
         deps.err(result.error)
         return 1
