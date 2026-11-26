@@ -11,6 +11,7 @@ import { errorKind } from '../../lib/log.js'
 import { roundDrawable } from '../roundGlyphs.js'
 import type { HostAdapter, Outer, Pane, Place } from './adapter.js'
 import { CODEX_THREAD, type CodexQueue, type CodexQueueFailure, type CodexRan } from './codexQueue.js'
+import type { Served, ServedAsk } from './codexServed.js'
 import { agentPlaceName, APP_BUNDLES, detectApp, detectHost, EXTENSION_TAB, inOrca, otherProduct, ownHints, UNKNOWN_APP } from './hostDetect.js'
 import type { Delivery } from './inbox.js'
 import { answerEngine, type AnswerEngine } from './lastAnswer.js'
@@ -141,6 +142,11 @@ export interface ObservedDeps {
   /** The hc terminal whose foreground is that pid, when exactly one is (hcSource.ts terminalOf). Absent, nothing is
    *  paired. */
   herdrTerminal?(pid: number): string | undefined
+  /** For each ask, whether its pid is a Codex server, and where the person sees the session it runs (codexServed.ts):
+   *  none for a pid no server is, whose hook its hints place; else its client's app, tab and process, when known. One
+   *  reading of the machine for every ask. Absent (Windows, where no process's folder can be read), every Codex hook is
+   *  placed by its hints. */
+  served?(asks: readonly ServedAsk[]): Promise<readonly (Served | undefined)[]>
   /** The place of an agent nested in a multiplexer whose own pty is no tab (outer.ts firstOuter of herdrOuter.ts's,
    *  tmux.ts's and zellij.ts's lookups), by its event's hints and caller: undefined at once when it is not nested; else
    *  the app holding that multiplexer's client, the client's tty and its process, `{}` when none was found, never
@@ -289,6 +295,10 @@ interface Entry {
   appWalking?: boolean
   /** The app a tap brings forward, from its last event: none for a session the scan found, until its first. */
   bundle?: string
+  /** The caller its latest Codex hook's served lookup was asked for (askServed), what it said (`is`: none while its first
+   *  ask runs, false for no server, true for one), and the latest hook of that caller, placed by its hints should the
+   *  lookup say no server. While `is` is not false, no hint, tty or process of that caller places it. */
+  served?: { pid: number; is?: boolean; hook: ObservedHookEvent }
   /** What the permission prompt it waits on asks, from its hook (deviceClaude/asked.ts): '' when it names nothing. */
   asked?: string
   /** The name the session gives itself, from its session-start or turn-start, or, for a session the scan found, the one
@@ -749,12 +759,14 @@ export class ObservedSource implements HostSource {
     })
   }
 
-  /** Where it runs, as its adapters read it. */
+  /** Where it runs, as its adapters read it. A Codex server's session names no process: the server is under whichever
+   *  TUI started it, and its client was found by its folder, a place to show, never one whose words a process proves
+   *  (askServed). */
   private placeOf(entry: Entry): Place {
     const hints = entry.paired ? { HC_TERMINAL_ID: entry.paired.address } : entry.hints
     return { host: entry.agent.host, app: entry.agent.app, hints, tty: entry.tty, hostSession: entry.hostSession,
-      pid: entry.caller ?? entry.pid, sessionId: entry.agent.sessionId, engine: entry.agent.engine, cwd: entry.agent.cwd,
-      outer: entry.outer, ptyOwner: entry.ptyOwner }
+      pid: this.servedBy(entry) ? undefined : entry.caller ?? entry.pid, sessionId: entry.agent.sessionId,
+      engine: entry.agent.engine, cwd: entry.agent.cwd, outer: entry.outer, ptyOwner: entry.ptyOwner }
   }
 
   /** The live agent in that app's tab: of two that read the same tty, the one heard from last. */
@@ -816,7 +828,9 @@ export class ObservedSource implements HostSource {
     const e = this.entries.get(agentId)
     if (!e || !this.live(e)) return undefined
     const client = e.outer?.pid ?? e.outerPid
-    return client !== undefined ? { pid: client, app: e.agent.app, outer: true } : { pid: e.caller ?? e.pid, app: e.agent.app }
+    if (client !== undefined) return { pid: client, app: e.agent.app, outer: true }
+    // A Codex server's window is whichever TUI's started it, or none: never its session's.
+    return this.servedBy(e) ? undefined : { pid: e.caller ?? e.pid, app: e.agent.app }
   }
 
   /** A live agent's tab, the tty byTab reads: its own in a tab app, its multiplexer client's when nested (a hook's
@@ -882,8 +896,9 @@ export class ObservedSource implements HostSource {
       entry.appWalking = false
       entry.callerApp = app
       // Its latest hook named its app, or it is seen in the app holding its multiplexer's client (askOuter), which a walk
-      // that ends at the multiplexer's server cannot name: that stands. An ended one is on no app's page.
-      if (!walked(entry.hints, this.deps.platform) || entry.outer || !this.live(entry)) return
+      // that ends at the multiplexer's server cannot name: that stands. An ended one is on no app's page, and a Codex
+      // server's session on its client's (askServed).
+      if (!walked(entry.hints, this.deps.platform) || entry.outer || !this.live(entry) || this.servedBy(entry)) return
       // It moved to another process during the walk: that one is walked now.
       if (entry.caller !== pid) {
         this.learnApp(entry, entry.caller!, detectApp(entry.hints))
@@ -1028,6 +1043,105 @@ export class ObservedSource implements HostSource {
     entry.bundle = entry.outer ? APP_BUNDLES[entry.outer.app] : bundleOf(byApp ? entry.agent.app : entry.agent.host, hints)
   }
 
+  /** Its place from a hook's hints and its caller, and that hook's hints, caller and pane maker kept. Whether it is
+   *  nested. */
+  private placeHooked(entry: Entry, e: ObservedHookEvent): boolean {
+    const a = entry.agent
+    // A hook says where a session runs: one the open scan found is not known yet until its first, unless its parent
+    // processes named its app. A hook whose hints name no app (the Codex app's own Codex) learns it from its caller's
+    // parents. Its host is the multiplexer askOuter keeps, else the nearest its hints name.
+    const nested = this.askOuter(entry, e)
+    a.host = a.nest ?? detectHost(e.hostHints)
+    this.placeApp(entry, e.hostHints, e.callerPid)
+    // One nested with no multiplexer known stays pending until its lookup answers: its hints' bundle id is the one its
+    // multiplexer's server started with (iTerm2's for a tmux started there), and that app in front must not turn the dial
+    // to it, then back once the answer puts it on tmux's page. One the scan's maker read put on its multiplexer's page,
+    // kept there (askOuter), is placed: its first turn's prompt follow turns the dial to that page.
+    if (!nested || a.nest) delete a.appPending
+    // Every event's own: a session resumed elsewhere must not be typed into the terminal it left.
+    entry.hints = e.hostHints
+    entry.otherApp = otherProduct(e.hostHints)
+    entry.caller = e.callerPid
+    this.learnPtyOwner(entry, e.callerPid)
+    return nested
+  }
+
+  /**
+   * Whether a Codex hook is placed by its served lookup (ObservedDeps.served) rather than its hints: Codex 0.167+ runs a
+   * `codex` typed in a terminal as a client of one daemon, which runs every hook with the first TUI's environment and no
+   * terminal, so its hints, its tty and its parents are another tab's (Diego, CLI 0.6.90, 2026-11-26: a Codex in
+   * Terminal on no page). Asked once a caller, before any hint is read: until the answer the session is on no app's page,
+   * as a guess could be the wrong one. A caller that is no server is placed by its hints then, and from then on at once.
+   * A server's session is asked again at its start, as it may have been resumed in another TUI, and at a turn's while no
+   * client is known; it keeps its place until the answer. Only the latest ask's answer lands.
+   */
+  private askServed(entry: Entry, e: ObservedHookEvent): boolean {
+    if (!this.deps.served || e.engine !== 'codex') return false
+    const last = entry.served
+    const same = last?.pid === e.callerPid
+    if (same && last.is === false) return false
+    const again = same && last.is === true && (e.event === 'session-start' || (e.event === 'turn-start' && !entry.outer))
+    if (same && !again) last.hook = e
+    else {
+      const ask: NonNullable<Entry['served']> = { pid: e.callerPid, ...(same ? { is: true } : {}), hook: e }
+      entry.served = ask
+      void this.deps.served([{ pid: e.callerPid, cwd: e.cwd ?? entry.agent.cwd }]).then(([answer]) => answer, (error) => {
+        // Its kind only: no error text, as a path in it holds the account's name.
+        this.deps.log(`[observed] served · not read · ${errorKind(error)}`)
+        return undefined
+      }).then((answer) => { this.landServed(entry, ask, answer) })
+    }
+    // Its hints and its tty are the first TUI's, and its multiplexer that TUI's: none is kept, nor what the scan's nested
+    // lookup placed.
+    const a = entry.agent
+    entry.scanPlaced = undefined
+    entry.scanNested = undefined
+    entry.outerAsk = undefined
+    entry.outerPid = undefined
+    entry.ttyPid = undefined
+    delete a.nest
+    entry.hints = {}
+    entry.otherApp = undefined
+    entry.caller = e.callerPid
+    a.host = detectHost(entry.hints)
+    if (entry.served!.is) return true
+    entry.outer = undefined
+    entry.tty = undefined
+    entry.bundle = undefined
+    a.app = UNKNOWN_APP
+    a.appPending = true
+    return true
+  }
+
+  /** What [ask] learnt lands while it is the latest ask and the session lives: no server, and the hook that waited is
+   *  placed by its hints; a server, and its client's app, tab and process place it, or none is known and it is on no
+   *  app's page. */
+  private landServed(entry: Entry, ask: NonNullable<Entry['served']>, answer: Served | undefined): void {
+    if (entry.served !== ask || !this.live(entry)) return
+    if (!answer) {
+      ask.is = false
+      const nested = this.placeHooked(entry, ask.hook)
+      this.locate(entry)
+      if (!nested) this.learnTty(entry, ask.pid)
+      this.emit()
+      return
+    }
+    ask.is = true
+    const { client } = answer
+    entry.outer = client
+    entry.tty = client?.tty
+    entry.agent.app = client?.app ?? UNKNOWN_APP
+    delete entry.agent.appPending
+    entry.bundle = client && APP_BUNDLES[client.app]
+    this.locate(entry)
+    this.emit()
+  }
+
+  /** Its latest hook's caller is a Codex server, or may be while its first ask runs (askServed). */
+  private servedBy(entry: Entry): boolean {
+    return entry.served !== undefined && entry.served.is !== false
+  }
+
   private emit(): void {
     for (const l of [...this.listeners]) l()
   }
@@ -1144,22 +1258,8 @@ export class ObservedSource implements HostSource {
     entry.hostSession = undefined
     // From its first hook, its panes are the hook's: the scan's pane goes, as the hook names the pane it runs in.
     entry.placed = undefined
-    // A hook says where a session runs: one the open scan found is not known yet until its first, unless its parent
-    // processes named its app. A hook whose hints name no app (the Codex app's own Codex) learns it from its caller's
-    // parents. Its host is the multiplexer askOuter keeps, else the nearest its hints name.
-    const nested = this.askOuter(entry, e)
-    a.host = a.nest ?? detectHost(e.hostHints)
-    this.placeApp(entry, e.hostHints, e.callerPid)
-    // One nested with no multiplexer known stays pending until its lookup answers: its hints' bundle id is the one its
-    // multiplexer's server started with (iTerm2's for a tmux started there), and that app in front must not turn the dial
-    // to it, then back once the answer puts it on tmux's page. One the scan's maker read put on its multiplexer's page,
-    // kept there (askOuter), is placed: its first turn's prompt follow turns the dial to that page.
-    if (!nested || a.nest) delete a.appPending
-    // Every event's own: a session resumed elsewhere must not be typed into the terminal it left.
-    entry.hints = e.hostHints
-    entry.otherApp = otherProduct(e.hostHints)
-    entry.caller = e.callerPid
-    this.learnPtyOwner(entry, e.callerPid)
+    const served = this.askServed(entry, e)
+    const nested = !served && this.placeHooked(entry, e)
     // Before locate: learnTty returns early for a caller it already read, so nothing places the session again at this
     // hook, and a pane by folder must see the one this hook names.
     if (e.cwd) {
@@ -1196,7 +1296,7 @@ export class ObservedSource implements HostSource {
       entry.pid = e.callerPid
       entry.generation = undefined
     }
-    if (!nested) this.learnTty(entry, e.callerPid)
+    if (!served && !nested) this.learnTty(entry, e.callerPid)
     let source: PromptSource | undefined
     switch (e.event) {
       case 'session-start':
