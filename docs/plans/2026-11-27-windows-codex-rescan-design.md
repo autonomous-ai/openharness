@@ -121,7 +121,8 @@ From here the existing code does the rest on Windows: `openFileOwners` claims th
   #4634).
 - A Codex TUI on Windows has a console but no tty. On win32 every TUI candidate counts as "on a terminal" with no tty
   name; the client is `{ app, pid }` (`clientTtyForm('win32')` is already undefined). Still exactly one TUI in the
-  session's folder, else none; a folder that could not be read is "nothing told".
+  session's folder, else none; any TUI's folder that could not be read is "nothing told" for every session, as it may
+  be a second one in the folder (macOS too).
 - The VS Code client adapter (`cable/hosts/vscode.ts`, `client:<pid>` from `place.outer.pid`) then shows that TUI's
   terminal, view-only, as on macOS. Voice keeps going through `codex queue`.
 
@@ -163,7 +164,7 @@ TypeScript, at the layer where each behavior lives (all run on macOS through the
    - the daemon's parent is a TUI in Windows Terminal, the client is in VS Code → VS Code's page (the daemon's
      parents are never the place).
    **Red today: 0 found.**
-3. `cable/hosts/codexServed.spec.ts`: on win32 a TUI with no tty counts as the client; its folder unread → none.
+3. `cable/hosts/codexServed.spec.ts`: on win32 a TUI with no tty counts as the client; its folder, or a second TUI's, unread → none.
 4. `lib/windows/*.spec.ts`: the reader parses `harness-pty files` output, drops malformed rows and a row past a bound,
    and treats a failed run as unknown (null), never as "nothing open".
 

@@ -110,7 +110,8 @@ function daemonArgs(args: string): boolean {
 }
 
 /** Each ask's one Codex TUI on a terminal in its folder, with that terminal as ps names it (none on Windows); an ask
- *  with none, two, or one whose terminal could not be read is left out. */
+ *  with none, two, or one whose terminal could not be read is left out, and every ask when a TUI's folder could not
+ *  be read. */
 async function clientsIn(
   asks: readonly ServedAsk[], rows: readonly RunningProcess[], codex: ReadonlySet<number>, deps: CodexServedDeps,
 ): Promise<Map<ServedAsk, { pid: number; tty?: string }>> {
@@ -119,6 +120,9 @@ async function clientsIn(
   const candidates = rows.filter((row) => tuis.has(row.pid) && !tuis.has(row.ppid)).map((row) => row.pid)
   if (!candidates.length || candidates.length > MAX_CLIENTS) return found
   const cwds = await deps.cwds(candidates)
+  // A TUI whose folder could not be read (another user's, an elevated one on Windows) may be a second one in any
+  // session's folder: no ask is told then.
+  if (candidates.some((pid) => !cwds.has(pid))) return found
   // Each TUI's terminal once, whatever the asks in its folder: the scan asks for each of its sessions at once.
   const ttys = new Map<number, Promise<{ pid: number; tty: string | undefined | null }>>()
   const ttyOf = (pid: number) =>
