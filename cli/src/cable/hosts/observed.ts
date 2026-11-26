@@ -267,8 +267,8 @@ interface Entry {
   ptyOwner?: string | null
   ptyFailedAt?: number
   /** The caller and hints its outer place was last asked for (ObservedDeps.outer), while it runs nested: only that ask's
-   *  answer lands. */
-  outerAsk?: { pid: number; hints: Readonly<Record<string, string>> }
+   *  answer lands. `landed` once the client's place did (landOuter). */
+  outerAsk?: { pid: number; hints: Readonly<Record<string, string>>; landed?: true }
   /** Its client's place read afresh for a tap or a rest (askAfresh): landing, or landed at `settledAt` (deps.now()). */
   fresh?: { landing: Promise<void>; settledAt?: number }
   /** The app and tab it is seen in, from that answer, while its caller and hints are those it was asked for; for a
@@ -1013,6 +1013,7 @@ export class ObservedSource implements HostSource {
   ): void {
     if (entry.outerAsk !== ask || !this.live(entry)) return
     if (place) {
+      ask.landed = true
       entry.outer = place.app ? { app: place.app, tty: place.tty, pid: place.pid } : undefined
       entry.outerPid = !place.app && clientPid(place.pid) ? place.pid : undefined
       entry.tty = entry.outer?.tty
@@ -1042,7 +1043,12 @@ export class ObservedSource implements HostSource {
     }
     const named = detectApp(hints)
     const walk = walked(hints, this.deps.platform)
-    entry.agent.app = entry.outer?.app ?? (walk && this.deps.apps ? this.learnApp(entry, pid, named) : named)
+    // A pane inherits the bundle id of the terminal that started its multiplexer's server: once its lookup landed with no
+    // client in a listed app (detached, or in a terminal with no page), it has no app, never the hint's, which holds no
+    // client of it (final review, 2026-11-26). While the lookup runs, the hint's app stands.
+    const clientless = entry.agent.nest && entry.outerAsk?.landed
+    entry.agent.app = entry.outer?.app
+      ?? (clientless ? UNKNOWN_APP : walk && this.deps.apps ? this.learnApp(entry, pid, named) : named)
     // An app named by a word another app says too (walked: VS Code's TERM_PROGRAM, which Cursor says) has the bundle of
     // the app its parents named, else a tap on Cursor started from Terminal (`cursor .`) opened VS Code. So has the
     // extension's tab, whose word names no app: a walk that names none leaves it none, never a guessed editor's.
