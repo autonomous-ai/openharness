@@ -1574,6 +1574,16 @@ class ReuseTests(ReuseFixture):
         _, main, head = self.scenario(["store/tools/runtimes.sh"], ["store/tools/listing.mjs"])
         self.assertRerunsAll(self.plan(head, main), "store/tools/listing.mjs")
 
+    def test_main_changing_the_store_pipe_client_reruns_every_suite_that_tests_it(self):
+        # local-daemon.mjs is the Store packages' pipe client: the CLI's and Desktop's tests read the Store, windows-e2e
+        # runs the pipe test, store-checks the client's own tests.
+        _, main, head = self.scenario(["cli/src/devices/a.ts", "store/tools/runtimes.sh"], ["store/tools/local-daemon.mjs"])
+        rerun = self.plan(head, main)["reuse"]["rerun"]
+        for suite in ("cli", "desktop", "windows-e2e", "store"):
+            with self.subTest(suite=suite):
+                self.assertIn(suite, rerun)
+                self.assertIn("store/tools/local-daemon.mjs", rerun[suite])
+
     def test_docs_and_top_level_notes_on_main_do_not_force_a_rerun(self):
         _, main, head = self.scenario(["mobile/lib/app.dart"], ["docs/guide.md", "README.md"])
         self.assertEqual(list(self.plan(head, main)["reused"]), ["mobile"])
