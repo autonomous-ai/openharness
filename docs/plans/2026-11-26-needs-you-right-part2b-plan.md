@@ -18,9 +18,7 @@ the real daemon with a fake dial and the in-memory backend). Backend: Fastify, V
 
 **Spec:** `docs/plans/2026-11-26-needs-you-right-design.md`, "Part 2b. A quiet card is looked at again when its turn
 ends", with what it pulls from Design, Release order and Tests (decided by the PM, 2026-11-26). Part 2b reaches that
-file through another pull request: on this branch read the PM's copy,
-`/private/tmp/claude-502/-Users-nqhieu84-orca-workspaces-openharness-needs-you-right-rouse/aca618a7-ce99-48c1-8656-0bd52e3b5b8c/scratchpad/spec.md`
-(read-only). Never copy it into the repo, never edit the design file here. Part 2 (#4650) is the base:
+file through another pull request (Part 6's), so this branch does not edit the design file. Part 2 (#4650) is the base:
 `feat/needs-you-right-rouse` at `bc217791f2`; line numbers below are on it.
 
 **Commit 0 (before Task 1):** this plan alone:
