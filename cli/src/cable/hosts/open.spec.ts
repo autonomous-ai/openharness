@@ -1275,3 +1275,72 @@ describe('a tap on Windows brings the app forward through the raise', () => {
     expect(calls).toEqual([])
   })
 })
+
+// The filter takes the next front report after the dial brings an app as the dial's (docs/plans/2026-11-26-dial-mux-host-pages-design.md § 6).
+describe('the opener says just before it brings an app', () => {
+  const PANE: Pane = { adapter: 'made-up', id: 'p1' }
+  const TERMINAL = 'com.apple.Terminal'
+
+  /** The opener on [platform], each step in one sequence: `bringing`, every command run, each Linux and Windows raise,
+   *  and the focus of a made-up pane that taps before its app. Each agent's window is [o.window]. */
+  function sequenced(platform: NodeJS.Platform, o: { raise?: boolean; windows?: boolean; window?: Window } = {}) {
+    const seq: string[] = []
+    const noted = async (step: string) => { seq.push(step); return true }
+    const adapter: HostAdapter = { id: 'made-up', tap: 'before', paneOf: () => PANE, canFocus: () => true, focus: () => noted('focus') }
+    const opener = createOpenActions({
+      run: async (file, args) => { seq.push([file, ...args].join(' ')); return { code: 0, stdout: '' } },
+      platform,
+      adapters: [adapter],
+      log: () => {},
+      bringing: () => { seq.push('bringing') },
+      raise: o.raise ? { ready: () => true, raise: (window) => noted(['raise', window.pid, window.app].filter((part) => part !== undefined).join(' ')) } : undefined,
+      windows: o.windows
+        ? {
+            app: (bundle) => noted(`app ${bundle}`),
+            link: (url) => noted(`link ${url}`),
+            cursorFolder: (folder) => noted(`cursorFolder ${folder}`),
+            desktop: () => noted('desktop'),
+            window: (pid) => noted(`window ${pid}`),
+          }
+        : undefined,
+      windowOf: () => o.window,
+    })
+    return { seq, opener }
+  }
+
+  it('bringing is told just before each open -b and raise, and never when nothing runs', async () => {
+    const mac = sequenced('darwin')
+    expect(await mac.opener.open('a1', { bundle: TERMINAL })).toBe(true)
+    expect(await mac.opener.open('a1', { bundle: TERMINAL, pane: PANE })).toBe(true)
+    expect(await mac.opener.bring!('iterm')).toBe('ok')
+    expect(await mac.opener.desktop!()).toBe(true)
+    expect(mac.seq).toEqual([
+      'bringing', `${OPEN} -b ${TERMINAL}`,
+      'focus', 'bringing', `${OPEN} -b ${TERMINAL}`,
+      'bringing', `${OPEN} -b com.googlecode.iterm2`,
+      'bringing', `${OPEN} -b ai.autonomous.harness`,
+    ])
+
+    const linux = sequenced('linux', { raise: true, window: { pid: 4242, app: 'wezterm' } })
+    expect(await linux.opener.open('a1', {})).toBe(true)
+    expect(await linux.opener.open('a1', { pane: PANE })).toBe(true)
+    expect(await linux.opener.bring!('iterm')).toBe('ok')
+    expect(linux.seq).toEqual([
+      'bringing', 'raise 4242 wezterm',
+      'focus', 'bringing', 'raise 4242 wezterm',
+      'bringing', 'raise iterm',
+    ])
+
+    const windows = sequenced('win32', { windows: true, window: { pid: 100, app: 'terminal', outer: true } })
+    expect(await windows.opener.open('a1', { pane: PANE })).toBe(true)
+    expect(await windows.opener.open('a1', { bundle: TERMINAL })).toBe(true)
+    expect(await windows.opener.desktop!()).toBe(true)
+    expect(windows.seq).toEqual(['focus', 'bringing', 'window 100', 'bringing', `app ${TERMINAL}`, 'bringing', 'desktop'])
+
+    // A pane with no bundle and no raise brings no app; a target with neither runs nothing.
+    const none = sequenced('darwin')
+    expect(await none.opener.open('a1', { pane: PANE })).toBe(true)
+    expect(await none.opener.open('a1', {})).toBe(false)
+    expect(none.seq).toEqual(['focus'])
+  })
+})
