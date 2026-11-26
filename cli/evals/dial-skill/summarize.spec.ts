@@ -151,11 +151,14 @@ describe('summarize', () => {
     expect(paired.v1.clean.test).toBeUndefined()
   })
 
-  it('prices agent, judge and failed-attempt usage, and leaves a model with no price unmeasured', () => {
+  it('prices agent, judge and failed-attempt usage, and a model with no price at the highest known one, as the guard does', () => {
     const { baseline: { clean: baseline }, v1: { clean: v1 } } = summarize(flow).variants
     // 14 runs × $0.024 + 10 judged runs × $0.003 + the timed-out attempt's $0.006.
     expect(baseline.spend_usd).toBeCloseTo(0.372, 8)
-    expect(v1.spend_usd).toBeNull()
+    expect(baseline.unpriced).toBe(0)
+    // 11 runs × $0.024 + 9 judged runs × $0.003 + the substituted attempt's $0.006 at claude-opus-5-5's price.
+    expect(v1.spend_usd).toBeCloseTo(0.297, 8)
+    expect(v1.unpriced).toBe(1)
   })
 
   it('counts a probe\'s spend in its condition\'s spend', () => {
@@ -376,7 +379,8 @@ describe('writeSummaries', () => {
     expect(narrative.match(/<!-- status -->/g)).toHaveLength(1)
     expect(narrative).toContain('| round | condition | change | val | train | test | recall | specificity | line_ok | ask_ok | harmed | went_on | s/run | tool calls | rings | tokens | $/pass | spend |')
     expect(narrative).toContain('| 0 | clean | baseline | 1.00 [-5.57, 7.57] | 1.50 [-2.98, 5.98] | 4.00 | 83% | 75% | 60% | 67% | 1 (33%) | 50% | 10.0 | 5.0 | 0.60 | 13100 | $0.37 | $0.37 |')
-    expect(narrative).toMatch(/\| 1 \| clean \| Ask before waiting on a person \| 2\.63 \[-0\.77, 6\.02\] \| 2\.33 \[-2\.84, 7\.50\] \| {2}\| .* \| not measured \| not measured \|/)
+    // v1 holds a call of a model with no price: its spend, and the total from it on, are marked and the mark explained.
+    expect(narrative).toMatch(/\| 1 \| clean \| Ask before waiting on a person \| 2\.63 \[-0\.77, 6\.02\] \| 2\.33 \[-2\.84, 7\.50\] \| {2}\| .* \| \$0\.30\* \| \$0\.67\* \|\n\n\\\* 1 call at the highest price\n<!-- \/status -->/)
 
     const metrics = readFileSync(join(flow, 'metrics.md'), 'utf8')
     expect(metrics.startsWith('# Metrics\n\nscore: the objective.\n\n<!-- aggregate -->\n')).toBe(true)
