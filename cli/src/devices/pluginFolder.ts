@@ -125,17 +125,20 @@ function holds(path: string, tree: Tree): boolean {
 }
 
 /** [tree] whole into this process's staging folder, then the swap. A step that fails removes the staging folder and
- *  puts the moved folder back, or removes it when another process put a folder in its place meanwhile. */
+ *  puts the moved folder back, or removes it when another process put a folder in its place meanwhile. A last rename
+ *  that lost to another process writing the same files is no failure: the folder holds them. */
 function write(folder: string, tree: Tree): void {
   const staging = `${folder}.new.${process.pid}`
   const old = `${folder}.old.${process.pid}`
   let moved = false
+  let staged = false
   try {
     put(staging, tree)
     if (lstatSync(folder, { throwIfNoEntry: false })) {
       renameSync(folder, old)
       moved = true
     }
+    staged = true
     renameSync(staging, folder)
   } catch (error) {
     try {
@@ -143,6 +146,7 @@ function write(folder: string, tree: Tree): void {
     } finally {
       rmSync(staging, { recursive: true, force: true })
     }
+    if (staged && same(folder, tree)) return
     throw error
   }
   rmSync(old, { recursive: true, force: true })
