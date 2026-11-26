@@ -495,10 +495,11 @@ export interface CableHost {
   hostOf?(agentId: string, opts?: { apps?: boolean }): string | undefined
   /** The dial is on that agent: its finished answer counts as seen. */
   markSeen?(agentId: string, opts?: { apps?: boolean }): void
-  /** A rest of the dial on that agent switches its app's pane: the session then times a hand's turn to it. */
-  swipeSwitches?(agentId: string): boolean
+  /** A rest of the dial on that agent switches its app's pane, or on tmux's or herdr's page brings its app: the session
+   *  then times a hand's turn to it. `opts` is the dial's own, as only a dial on an app's ring shows such a page. */
+  swipeSwitches?(agentId: string, opts?: { apps?: boolean }): boolean
   /** How a hand's turn to such an agent ended: the dial rested on it for SWIPE_REST_MS, or left it first. */
-  swipeEnded?(agentId: string, how: 'rest' | 'superseded'): void
+  swipeEnded?(agentId: string, how: 'rest' | 'superseded', opts?: { apps?: boolean }): void
   /** A hand turned the dial to an agent, whatever its pane or none, as it turned: never the dial's echo of a move the app
    *  asked for, which the focus guard drops first. */
   turned?(): void
@@ -4007,12 +4008,12 @@ export class CableSession {
   private restOn(agentId: string): void {
     const pending = this.swipeRest
     this.endRest()
-    if (pending && pending.agentId !== agentId) this.host.swipeEnded?.(pending.agentId, 'superseded')
-    if (!this.host.swipeSwitches?.(agentId)) return
+    if (pending && pending.agentId !== agentId) this.host.swipeEnded?.(pending.agentId, 'superseded', this.asItself)
+    if (!this.host.swipeSwitches?.(agentId, this.asItself)) return
     const timer = setTimeout(() => {
       this.swipeRest = null
       // The app may have moved the dial since (a prompt, a tapped notice): the dial rests only on the agent it still shows.
-      try { this.host.swipeEnded?.(agentId, this.desiredFocus === agentId ? 'rest' : 'superseded') }
+      try { this.host.swipeEnded?.(agentId, this.desiredFocus === agentId ? 'rest' : 'superseded', this.asItself) }
       // Thrown out of a timer, it would end the whole devices process.
       catch (error) { this.fault(error) }
     }, SWIPE_REST_MS)

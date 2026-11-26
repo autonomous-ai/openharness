@@ -111,8 +111,9 @@ export interface CableHostWiring {
   listModels?: (agentId: string) => Promise<Array<{ id: string }>>
   /** The dial moved to another agent — the desktop window should show that agent on its own machine. */
   focused?: (machineId: string, agentId: string) => void
-  /** What came of a swipe that rested on an agent of another app, or was superseded before it rested: for its count. */
-  swiped?: (outcome: PaneSwitch | 'superseded') => void
+  /** What came of a swipe that rested on an agent of another app, or was superseded before it rested: for its count.
+   *  `opened`: a rest on tmux's or herdr's page brought the agent's app. */
+  swiped?: (outcome: PaneSwitch | 'superseded' | 'opened') => void
   /** A hand turned a dial to an agent, of any app or none, as it turned: a settle of the app in front then follows
    *  nothing the dial has left. */
   turned?: () => void
@@ -696,6 +697,10 @@ export class DaemonCableHost implements CableHost {
   /** The person's taps, on any agent, in turn: a source that waits before it acts asks whether its tap is still the
    *  latest (openAgent). */
   private taps = 0
+
+  /** The opens of rests on tmux's or herdr's page, in turn, apart from `taps`, as a rest is no tap: an open still reading
+   *  its client asks whether a later one came (openOnPage). */
+  private brings = 0
 
   /** [end] is how the waiting tap's open ended: every tap says one. */
   private endWaiting(end: DialOpenEnd): void {
@@ -1293,25 +1298,50 @@ export class DaemonCableHost implements CableHost {
     this.wiring.focused?.(machineId, agentId)
   }
 
-  /** Whether a swipe that rests on the agent shows its pane: only one of another app, in a pane that app can show. */
-  swipeSwitches(agentId: string): boolean {
+  /** Whether a swipe that rests on the agent does anything: shows its pane, only for one of another app in a pane that
+   *  app can show now; or, on tmux's or herdr's page, brings its app when its source can open it (spec §4). */
+  swipeSwitches(agentId: string, opts: { apps?: boolean } = {}): boolean {
     const outside = this.outsideEntry(agentId)
-    return outside?.source.hasPane?.(outside.agent) ?? false
+    if (!outside) return false
+    return (outside.source.hasPane?.(outside.agent) ?? false)
+      || (this.onMuxPage(outside.agent, opts) && outside.source.capabilities(outside.agent).focus)
   }
 
   turned(): void {
     this.wiring.turned?.()
   }
 
-  /** A swipe that rested shows the agent's pane, and its app stays where it is; one superseded runs nothing. */
-  swipeEnded(agentId: string, how: 'rest' | 'superseded'): void {
+  /** A swipe that rested shows the agent's pane, and its app stays where it is; on tmux's or herdr's page with its app
+   *  behind, it brings that app (spec §4). One superseded runs nothing. */
+  swipeEnded(agentId: string, how: 'rest' | 'superseded', opts: { apps?: boolean } = {}): void {
     if (how === 'superseded') { this.wiring.swiped?.('superseded'); return }
-    // The agent may have gone, or left its pane, since the dial turned to it: asked again here, so no source brings
-    // forward an app the person has left.
+    // The agent may have gone, or left its pane, and the dial its page, since the dial turned to it: asked again here, so
+    // no source brings forward an app the person has left.
     const outside = this.outsideEntry(agentId)
-    const shown = (outside?.source.hasPane?.(outside.agent) && outside.source.showPane?.(outside.agent))
-      || Promise.resolve<PaneSwitch>('failed')
-    void shown.catch((): PaneSwitch => 'failed').then((outcome) => this.wiring.swiped?.(outcome))
+    let ended: Promise<PaneSwitch | 'superseded' | 'opened'> | undefined
+    if (outside?.source.hasPane?.(outside.agent)) ended = outside.source.showPane?.(outside.agent)
+    else if (outside && this.onMuxPage(outside.agent, opts)) {
+      ended = this.openOnPage(outside).then((opened) => opened === 'superseded' ? opened : opened ? 'opened' : 'failed')
+    }
+    void (ended ?? Promise.resolve('failed' as const)).catch(() => 'failed' as const).then((outcome) => this.wiring.swiped?.(outcome))
+  }
+
+  /** Whether this dial shows tmux's or herdr's page and the agent is on it: a page with no app of its own to show a pane
+   *  in. Only a dial on an app's ring has one, never the window's tab. `showing()` reads the page without switching it. */
+  private onMuxPage(agent: HostAgent, opts: { apps?: boolean }): boolean {
+    const page = opts.apps && this.windowOf(opts) === null ? this.filter.showing() : undefined
+    return (page === 'tmux' || page === 'herdr') && pagesOf(agent).includes(page)
+  }
+
+  /**
+   * Brings an agent of tmux's or herdr's page through its source's tap path (a fresh read of its client, its tab, its app
+   * or window, its pane), never `openAgent`, which counts a tap. A rest is a 400 ms pause (SWIPE_REST_MS), so browsing
+   * the page opens at each pause, each after that read (up to 700 ms, at most one a second per agent): `latest` is this
+   * open's turn among them, and one a later open replaced stops at its check (spec §4 Cost).
+   */
+  private openOnPage(entry: HostEntry): Promise<boolean | 'superseded'> {
+    const mine = ++this.brings
+    return entry.source.focus?.(entry.agent, () => this.brings === mine) ?? Promise.resolve(false)
   }
 
   /**
