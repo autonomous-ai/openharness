@@ -10,6 +10,7 @@ import type { ExternalEngine, RunningProcess } from '../../lib/sessionSearch/ext
 import { errorKind } from '../../lib/log.js'
 import { roundDrawable } from '../roundGlyphs.js'
 import type { HostAdapter, Outer, Pane, Place } from './adapter.js'
+import { homeOf } from './claudeRenderer.js'
 import { CODEX_THREAD, type CodexQueue, type CodexQueueFailure, type CodexRan } from './codexQueue.js'
 import type { Served, ServedAsk } from './codexServed.js'
 import { agentPlaceName, APP_BUNDLES, detectApp, detectHost, EXTENSION_TAB, inOrca, otherProduct, ownHints, UNKNOWN_APP } from './hostDetect.js'
@@ -54,6 +55,11 @@ const TTY_RETRY_MS = 10_000
  *  on what it holds: the open keeps 300 ms of the eval's full-score 1 s (PM, 2026-11-24). tmux's fresh lookup took
  *  p95 156 ms on macOS (docs/plans/2026-11-24-dial-iterm2-tab-and-restart-plan.md, Measured). */
 export const OUTER_FRESH_WAIT_MS = 700
+
+/** Voice at a Claude Code session no route reaches, while Harness's plugin is not on in the session's own home. */
+export const CLAUDE_PLUGIN_OFF = 'Voice needs Harness in Claude Code. Run: harness device claude enable'
+/** The same with the plugin on: the session's mod does not poll, as in a session started before the plugin was. */
+export const CLAUDE_RESTART = 'Restart Claude Code for voice.'
 
 /** What a turn's start was: a prompt a person typed, one another session sent, or the dial's own words. */
 export type PromptSource = 'person' | 'relayed' | 'dial'
@@ -200,6 +206,10 @@ export interface ObservedActions {
   codexQueue: Pick<CodexQueue, 'can' | 'send'>
   /** The Codex home Harness reads (env.CODEX_HOME): `codex queue` loads its config, so a hook's path never chooses it. */
   codexHome: string
+  /** dirname(CLAUDE_PROJECTS_DIR): the home of a session whose transcript path names none. */
+  claudeHome: string
+  /** devices/dialSkill.ts claudePluginState: read only at a voice start, never for caps. */
+  claudePluginState(settingsPath: string): 'on' | 'off' | 'unknown'
   /** The route (`codex`, `mod`, or the adapter that typed, said by its fixed id) or the refusal, the adapter that
    *  refused in its own sentence, and a failed queue's reason and which `codex` ran. Fixed words or an adapter only: a
    *  string from a hook, a pane's id, a binary's path, cannot reach the log line. */
@@ -380,25 +390,41 @@ export class ObservedSource implements HostSource {
     const live = this.live(e)
     return {
       status: true,
-      voice: live && (!!this.first(e, words) || this.modReady(e, actions) || this.queueable(e, actions)),
+      // Claude Code takes voice with no route too: with no v the dial says only "See it in <host>" and the daemon never
+      // hears of it, so the start is taken and refused with how to reach the session (voiceRefusal). Nothing is read here:
+      // caps are worked out for every list.
+      voice: live && (e.agent.engine === 'claude' || this.routed(e, actions)),
       focus: live && actions.canOpen(e.agent.id, this.target(e)),
       // Its prompts are answered in its own app: the dial only shows them.
       answer: false,
     }
   }
 
-  /** The first sentence its adapters give, in their order, for a live agent no route of theirs takes words for: the
-   *  sentence is the app's, so this source names none. */
+  /**
+   * For a live agent no route takes words for: the first sentence its adapters give, in their order, as the sentence is
+   * the app's; then, for Claude Code, how to reach it. Harness's plugin not on in the session's own home (the one its
+   * transcript path plainly names, else the default) says to enable it; on, its mod does not poll, so a restart starts
+   * one. "Restart" also shows while a mod waits out its 60 s retry after a refused poll, or right after the devices
+   * restarted: accepted, as a restart fixes those too and nothing here tells them from a session older than the plugin.
+   * The settings are read here alone, at a voice start.
+   */
   voiceRefusal(agent: HostAgent): string | undefined {
     const e = this.entries.get(agent.id)
     const actions = this.deps.actions
-    if (!e || !actions || !this.live(e) || this.capabilities(agent).voice) return undefined
+    if (!e || !actions || !this.live(e) || this.routed(e, actions)) return undefined
     const place = this.placeOf(e)
     for (const adapter of actions.adapters) {
       const sentence = adapter.voiceRefusal?.(place)
       if (sentence) return sentence
     }
-    return undefined
+    if (e.agent.engine !== 'claude') return undefined
+    const settings = join(homeOf(e.transcriptPath) ?? actions.claudeHome, 'settings.json')
+    return actions.claudePluginState(settings) !== 'on' ? CLAUDE_PLUGIN_OFF : CLAUDE_RESTART
+  }
+
+  /** Whether a route takes the agent's words: a pane whose app types, its mod, or Codex's queue. */
+  private routed(e: Entry, actions: ObservedActions): boolean {
+    return !!this.first(e, words) || this.modReady(e, actions) || this.queueable(e, actions)
   }
 
   /** Only Claude Code runs the mod; another engine's session id is no poll. */

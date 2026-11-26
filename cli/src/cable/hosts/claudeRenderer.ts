@@ -42,7 +42,7 @@ export interface RendererOptions {
 
 /** `<home>` of a transcript path `<home>/projects/<slug>/<id>.jsonl`, from its shape alone. A path spelled any other
  *  way (relative, `..`, a doubled `/`) names none, so it never points the read at a folder it does not plainly name. */
-function homeOf(transcriptPath: string | undefined): string | undefined {
+export function homeOf(transcriptPath: string | undefined): string | undefined {
   if (!transcriptPath || !isAbsolute(transcriptPath) || normalize(transcriptPath) !== transcriptPath) return undefined
   if (extname(transcriptPath) !== '.jsonl') return undefined
   const projects = dirname(dirname(transcriptPath))

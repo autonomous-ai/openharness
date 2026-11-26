@@ -96,7 +96,7 @@ import { DialLog } from '../cable/dialLog.js'
 import { DialVerdicts, greetedAsDial } from '../cable/dialPortVerdicts.js'
 import { createDialSetup } from '../cable/dialSetup.js'
 import { claudeFound, type ClaudeInstallDeps, type ClaudeRun } from '../devices/claudePlugin.js'
-import { installedSkills } from '../devices/dialSkill.js'
+import { claudePluginState, installedSkills } from '../devices/dialSkill.js'
 import { readOrcaConnected, readRemoved, readSetup, SETUP_COUNTS } from '../devices/dialSkillFiles.js'
 import { createOrcaHomesCache, orcaBinary, orcaHomesDeps, readOrcaHomes, type OrcaHomesCache } from '../devices/orcaHomes.js'
 import { orcaPluginRun, type OrcaPluginRun } from '../devices/orcaPlugin.js'
@@ -981,6 +981,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         appWake!.waitsFor(threadId) ? Promise.resolve({ outcome: 'busy' as const }) : codexQueue.send(threadId, text, isApp),
     },
     codexHome: env.CODEX_HOME,
+    claudeHome: dirname(env.CLAUDE_PROJECTS_DIR),
+    claudePluginState,
     count: (what) => voiced(countWord(what)),
   }, ttyOf, skill ? (owners) => part.call('skill', () => skill.scanned(owners.values())) : undefined,
   // Only where a hook's address is taken: following another hc session, Herdr's adapter gives its terminals no pane, so

@@ -3306,7 +3306,8 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     port.observed(hook('session-start'))
     attach(port)
     expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sv' }])
-    expect(host().voiceRefusal(ID)).toBe(CLAUDE_PLUGIN_OFF)
+    // No route yet. An Orca session with no terminal of its own is a chat, whose sentence comes first (orcaChat.ts).
+    expect(host().voiceRefusal(ID)).toBe('Type in Orca for chats.')
     const held = port.inboxPoll({ pollId: 'p1', sessionId: 'sess-1' })
     expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sv' }])
     expect(host().voiceRefusal(ID)).toBeUndefined()
