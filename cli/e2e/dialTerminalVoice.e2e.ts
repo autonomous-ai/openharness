@@ -15,13 +15,14 @@ import { writeFileSync } from 'node:fs'
 import { join, sep } from 'node:path'
 import { createInterface } from 'node:readline'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
-import { heardClip } from '../src/cable/__fixtures__/heardClip.js'
+import { CLAUDE_PLUGIN_OFF } from '../src/cable/hosts/observed.js'
 import { devicesListenerPath } from '../src/devices/listenerPath.js'
 import { INJECT_PASTE_DELAY_BASE_MS } from '../src/lib/submitTiming.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
+import { speakOnce, spokenTo } from './harness/modInbox.js'
 import { Outside } from './harness/outsideAgent.js'
 
 /** The machine a daemon signs in as, to hear its dial's words: the daemon asks its backend for each transcript. */
@@ -105,7 +106,8 @@ describe.skipIf(process.platform !== 'darwin')('the dial\'s words reach an agent
   /**
    * A daemon signed in as ME, a dial on the desk shown its first list, Claude Code without its mod in a Ghostty tab
    * (with a shell in it when [shell]), and the watch answering each write [written]. Resolves once the dial lists the
-   * agent with voice: its only way in is the tab, which types only while the watch holds the tabs stream.
+   * agent with voice, which Claude Code has at once (#4648): its only way in is the tab, which types only once the watch
+   * holds the tabs stream and the tab's tty is read, so `speak` speaks again until then.
    */
   const fresh = async ({ shell = false, written = true }: { shell?: boolean; written?: boolean } = {}) => {
     const relay = await FakeBackend.start()
@@ -142,14 +144,11 @@ describe.skipIf(process.platform !== 'darwin')('the dial\'s words reach an agent
     return { d, dial, relay, engine, run, name: String(row.name) }
   }
 
-  /** [words] spoken at the agent: the fake backend transcribes them. The dial's answer, sent or not. */
-  const speak = async (dial: FakeDial, relay: FakeBackend, engine: Outside, words: string): Promise<DialMessage> => {
+  /** [words] spoken at the agent: the fake backend transcribes them. Spoken again while the dial is told how to reach
+   *  it, as before the tab's way in is there. The dial's answer, sent or not. */
+  const speak = (dial: FakeDial, relay: FakeBackend, engine: Outside, words: string): Promise<DialMessage> => {
     relay.speech = words
-    const since = dial.messages.length
-    dial.send({ t: 'voice.begin', agentId: engine.id, uploadId: 'spoken-1', sr: 16_000, lang: 'en' })
-    for (const frame of heardClip()) dial.audio(frame)
-    dial.send({ t: 'voice.end', uploadId: 'spoken-1' })
-    return dial.next((m) => m.t === 'voice.transcript' || m.t === 'voice.error', 45_000, 'the answer to its words', since)
+    return spokenTo(dial, engine.id, 'spoken', [CLAUDE_PLUGIN_OFF])
   }
 
   /** Whether the devices logged [what] as a voice's outcome. */
@@ -199,16 +198,16 @@ describe.skipIf(process.platform !== 'darwin')('the dial\'s words reach an agent
   })
 
   // PM decision 2 (2026-11-25): with Broadcast Input on, iTerm2's write would reach a shell pane of the group too.
-  it('an agent in a plain iTerm2 tab gets no write line, and the dial says to type the reply in iTerm2', async () => {
-    // Ghostty's agent listed with voice: the watch holds the tabs stream.
-    const { d, dial, relay, run } = await fresh()
+  it('an agent in a plain iTerm2 tab gets no write line, and the dial says how to reach it', async () => {
+    const { d, dial, run } = await fresh()
     const iterm = await Outside.start(d, 'in-iterm', IN_ITERM)
     outside.push(iterm)
     await dial.next((m) => m.t === 'agent' && m.id === iterm.id, 45_000, 'the iTerm2 agent listed')
 
-    // No route takes its words, so it is listed without voice and the dial's turn is refused before any route is asked.
-    const refusal = 'This agent is in iTerm2. Type your reply in iTerm2.'
-    expect(await speak(dial, relay, iterm, WORDS)).toMatchObject({ t: 'voice.error', message: refusal })
+    // No route takes its words: Claude Code's voice start is refused with how to reach it, before any route is asked
+    // (#4648). Another engine's says to type the reply in iTerm2 (cableSession.spec.ts).
+    const refusal = CLAUDE_PLUGIN_OFF
+    expect(await speakOnce(dial, iterm.id, 'spoken-iterm')).toMatchObject({ t: 'voice.error', message: refusal })
     // The dial's session logs each line with its port's serial (cableFleet.ts).
     await until('the refusal in the daemon\'s log',
       () => d.log().split('\n').some((line) => line.endsWith(`cable: voice → error "${refusal}" [usb E2E-A]`)), 30_000, 50)

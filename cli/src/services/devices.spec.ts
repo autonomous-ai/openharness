@@ -8197,10 +8197,12 @@ describe('the dial\'s words typed into a Ghostty tab (docs/plans/2026-11-25-dial
   })
 
   // PM decision 3 (2026-11-25): Harness Device 0.1.x drops write and enter lines unanswered, and never tells its watch
-  // writes, so the watch does not say it.
-  it('a watch whose stream did not say writes offers no voice: no line, no probe, and the dial is told it did not answer', async () => {
+  // writes, so the watch does not say it. Claude Code lists voice with no route all the same (#4648): its voice start is
+  // refused with how to reach it.
+  it('a watch whose stream did not say writes gives no route: no line, no probe, and the dial is told how to reach it', async () => {
     const { watch, tabProcess, ttyReaders } = await inTabs({ writes: false })
-    expect(await caps(A)).not.toContain('v')
+    expect(await caps(A)).toContain('v')
+    expect(host().voiceRefusal(A)).toBe(CLAUDE_PLUGIN_OFF)
     expect(await say(A, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
     expect(watch.lines).toEqual([])
     expect([tabProcess.mock.calls, ttyReaders.mock.calls]).toEqual([[], []])
