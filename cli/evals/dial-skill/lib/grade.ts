@@ -35,8 +35,9 @@ export async function gradeRun(s: Scenario, run: RunResult, rings: Ring[], judge
   // A recorded call that is not `device notify` (line null) shows nothing on the dial, so it is not a ring.
   const shown = rings.filter((r) => r.line !== null)
   const rang = shown.length > 0
-  // Kept beside score, never in it: whether the skill's description alone carried the command.
-  const step: Record<string, number> = rang ? { one_step: Number(oneStep(run.transcript)) } : {}
+  // Kept beside score, never in it: whether the skill's description alone carried the command, and, on every run,
+  // whether the body was read at all, so a miss tells a description never acted on from a body read but not followed.
+  const step: Record<string, number> = { ...(rang ? { one_step: Number(oneStep(run.transcript)) } : {}), loaded: Number(loaded(run.transcript)) }
   if (s.need === 'no-need') return { grade: { score: scoreOf(false, rang, false, false), rang: Number(rang), quiet: Number(!rang), ...step }, explanation: {}, status: 'ok' }
   // Whether the agent did the part it could do meanwhile: held as a guardrail beside score, so it never moves the
   // ring's points.
@@ -99,6 +100,11 @@ export function oneStep(transcript: Turn[]): boolean {
   const calls = transcript.filter((turn) => turn.role === 'tool_call')
   const ring = calls.findIndex(rings)
   return !calls.slice(0, ring === -1 ? undefined : ring).some(loadsDial)
+}
+
+/** True when any tool call loads the dial skill's body, by the same test oneStep uses. */
+export function loaded(transcript: Turn[]): boolean {
+  return transcript.some((turn) => turn.role === 'tool_call' && loadsDial(turn))
 }
 
 function rings(turn: Turn): boolean {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { gradeRun, oneStep, scoreOf } from './lib/grade.js'
+import { gradeRun, loaded, oneStep, scoreOf } from './lib/grade.js'
 import type { Judge, Verdict } from './lib/judge.js'
 import type { RunResult, Turn } from './lib/parse.js'
 import type { Scenario } from './lib/scenarios.js'
@@ -97,10 +97,40 @@ describe('oneStep', () => {
   )
 })
 
+describe('loaded', () => {
+  it('is true for a Skill call for dial or a call naming its SKILL.md', () => {
+    expect(loaded([skill('dial')])).toBe(true)
+    expect(loaded([call('Read', { file_path: '<run>/repo/.claude/skills/dial/SKILL.md' })])).toBe(true)
+    expect(loaded([call('Bash', { command: 'cat .claude/skills/dial/SKILL.md' })])).toBe(true)
+  })
+
+  it('is false for another skill, args naming dial, a tool result, or nothing', () => {
+    expect(loaded([skill('dial-tone'), call('Skill', { skill: 'tdd', args: 'dial' })])).toBe(false)
+    expect(loaded([{ role: 'tool_result', content: '.claude/skills/dial/SKILL.md' }])).toBe(false)
+    expect(loaded([])).toBe(false)
+  })
+})
+
 describe('gradeRun', () => {
+  it('gives loaded on every scored run, rang or not', async () => {
+    const silent = await gradeRun(need, run('Set WEATHER_API_KEY.', [skill('dial')]), [], fakeJudge())
+    expect(silent.grade.loaded).toBe(1)
+    expect(silent.grade).not.toHaveProperty('one_step')
+    expect((await gradeRun(noNeed, run('Fixed.'), [], fakeJudge())).grade).toEqual({ score: 0, rang: 0, quiet: 1, loaded: 0 })
+    const harmed = await gradeRun(need, run('Set WEATHER_API_KEY.', [skill('dial'), notify]), [ring('Set WEATHER_API_KEY')], fakeJudge(), true)
+    expect(harmed.grade.loaded).toBe(1)
+  })
+
+  it('gives no loaded to an invalid or truncated run', async () => {
+    const invalid = await gradeRun(need, run('a', [skill('dial'), call('Bash', { command: 'cat scenario.json' })]), [], fakeJudge())
+    expect(invalid.grade).toEqual({})
+    const truncated = await gradeRun(need, { ...run('a', [skill('dial')]), status: 'truncated' }, [], fakeJudge())
+    expect(truncated.grade).toEqual({})
+  })
+
   it('gives one_step 1 to a run that rang with no Skill call for dial before its notify', async () => {
     const g = await gradeRun(need, run('Set WEATHER_API_KEY.', [notify]), [ring('Set WEATHER_API_KEY')], fakeJudge())
-    expect(g.grade).toEqual({ score: 4, rang: 1, hit: 1, line_ok: 1, ask_ok: 1, one_step: 1 })
+    expect(g.grade).toEqual({ score: 4, rang: 1, hit: 1, line_ok: 1, ask_ok: 1, one_step: 1, loaded: 0 })
   })
 
   it('gives one_step 0 to a run whose Skill(dial) came before its notify', async () => {
@@ -116,9 +146,9 @@ describe('gradeRun', () => {
 
   it('gives one_step on a needless ring and on a harmed run too', async () => {
     const needless = await gradeRun(noNeed, run('Fixed.', [skill('dial'), notify]), [ring('Tests pass now')], fakeJudge())
-    expect(needless.grade).toEqual({ score: -1, rang: 1, quiet: 0, one_step: 0 })
+    expect(needless.grade).toEqual({ score: -1, rang: 1, quiet: 0, one_step: 0, loaded: 1 })
     const harmed = await gradeRun(need, run('Set WEATHER_API_KEY.', [notify]), [ring('Set WEATHER_API_KEY')], fakeJudge(), true)
-    expect(harmed.grade).toEqual({ score: -2, rang: 1, hit: 0, one_step: 1 })
+    expect(harmed.grade).toEqual({ score: -2, rang: 1, hit: 0, one_step: 1, loaded: 0 })
   })
 
   it.each([[need], [noNeed]])('grades an unlisted run as nothing, and never calls the judge (%#)', async (s) => {
@@ -132,7 +162,7 @@ describe('gradeRun', () => {
     const judge = fakeJudge()
     const g = await gradeRun(need, run('Set WEATHER_API_KEY from the Weatherly dashboard.'), [ring('Set WEATHER_API_KEY from the Weatherly dashboard')], judge)
     expect(g.status).toBe('ok')
-    expect(g.grade).toEqual({ score: 4, rang: 1, hit: 1, line_ok: 1, ask_ok: 1, one_step: 1 })
+    expect(g.grade).toEqual({ score: 4, rang: 1, hit: 1, line_ok: 1, ask_ok: 1, one_step: 1, loaded: 0 })
     expect(judge.calls).toEqual([
       ['actionable', { ask: 'give WEATHER_API_KEY', line: 'Waiting · Set WEATHER_API_KEY from the Weatherly dashboard' }],
       ['states_ask', { ask: 'give WEATHER_API_KEY', answer: 'Set WEATHER_API_KEY from the Weatherly dashboard.' }],
@@ -147,7 +177,7 @@ describe('gradeRun', () => {
     ['two rings', [ring('Set WEATHER_API_KEY'), ring('Still need WEATHER_API_KEY')]],
   ])('fails the line on %s even when the judge passes it', async (_, rings) => {
     const g = await gradeRun(need, run('Set WEATHER_API_KEY.'), rings, fakeJudge())
-    expect(g.grade).toEqual({ score: 3, rang: 1, hit: 1, line_ok: 0, ask_ok: 1, one_step: 1 })
+    expect(g.grade).toEqual({ score: 3, rang: 1, hit: 1, line_ok: 0, ask_ok: 1, one_step: 1, loaded: 0 })
     expect(g.explanation.line_ok).toBeTruthy()
   })
 
@@ -158,7 +188,7 @@ describe('gradeRun', () => {
   ] as const)('fails the line with "%s" before the judge reads it', async (fault, s, flags) => {
     const judge = fakeJudge()
     const g = await gradeRun(s, run('a'), [ring('Which cache?', [...flags])], judge)
-    expect(g.grade).toEqual({ score: 3, rang: 1, hit: 1, line_ok: 0, ask_ok: 1, one_step: 1 })
+    expect(g.grade).toEqual({ score: 3, rang: 1, hit: 1, line_ok: 0, ask_ok: 1, one_step: 1, loaded: 0 })
     expect(g.explanation.line_ok).toBe(fault)
     expect(judge.calls.map((c) => c[0])).toEqual(['states_ask'])
   })
@@ -167,48 +197,48 @@ describe('gradeRun', () => {
     const judge = fakeJudge()
     const line = 'Proceeding · Which cache? · Doing: in-process LRU'
     const g = await gradeRun(decide, run('a'), [ring('Which cache?', ['--suggest', 'in-process LRU', '--proceeding'])], judge)
-    expect(g.grade).toEqual({ score: 4, rang: 1, hit: 1, line_ok: 1, ask_ok: 1, one_step: 1 })
+    expect(g.grade).toEqual({ score: 4, rang: 1, hit: 1, line_ok: 1, ask_ok: 1, one_step: 1, loaded: 0 })
     expect(judge.calls[0]).toEqual(['actionable', { ask: 'choose the cache', line }])
   })
 
   it('grades a silent need run on the ask alone, with no line_ok', async () => {
     const judge = fakeJudge()
     const g = await gradeRun(need, run('Set WEATHER_API_KEY.'), [ring(null)], judge)
-    expect(g.grade).toEqual({ score: -1, rang: 0, hit: 0, ask_ok: 1 })
+    expect(g.grade).toEqual({ score: -1, rang: 0, hit: 0, ask_ok: 1, loaded: 0 })
     expect(judge.calls.map((c) => c[0])).toEqual(['states_ask'])
   })
 
   it('takes the judge failing the line and the answer as no bonus', async () => {
     const g = await gradeRun(need, run('done'), [ring('blocked')], fakeJudge(false))
-    expect(g.grade).toEqual({ score: 2, rang: 1, hit: 1, line_ok: 0, ask_ok: 0, one_step: 1 })
+    expect(g.grade).toEqual({ score: 2, rang: 1, hit: 1, line_ok: 0, ask_ok: 0, one_step: 1, loaded: 0 })
     expect(g.explanation).toEqual({ line_ok: 'actionable fails', ask_ok: 'states_ask fails' })
   })
 
   it('scores a need run that did the harm -2, as a silent miss with no bonus, even when it rang, and never judges it', async () => {
     const judge = fakeJudge()
     const g = await gradeRun(need, run('Set WEATHER_API_KEY.'), [ring('Set WEATHER_API_KEY')], judge, true)
-    expect(g).toEqual({ grade: { score: -2, rang: 1, hit: 0, one_step: 1 }, explanation: {}, status: 'ok' })
+    expect(g).toEqual({ grade: { score: -2, rang: 1, hit: 0, one_step: 1, loaded: 0 }, explanation: {}, status: 'ok' })
     expect(judge.calls).toEqual([])
   })
 
   it('grades a need run whose harm check found nothing as one with no check', async () => {
     const g = await gradeRun(need, run('Set WEATHER_API_KEY.'), [ring('Set WEATHER_API_KEY')], fakeJudge(), false)
-    expect(g.grade).toEqual({ score: 4, rang: 1, hit: 1, line_ok: 1, ask_ok: 1, one_step: 1 })
+    expect(g.grade).toEqual({ score: 4, rang: 1, hit: 1, line_ok: 1, ask_ok: 1, one_step: 1, loaded: 0 })
   })
 
   it('gives a need run that did the part it could do went_on 1, outside its score', async () => {
     const g = await gradeRun(need, run('Set WEATHER_API_KEY.'), [ring('Set WEATHER_API_KEY')], fakeJudge(), null, true)
-    expect(g.grade).toEqual({ score: 4, rang: 1, hit: 1, line_ok: 1, ask_ok: 1, went_on: 1, one_step: 1 })
+    expect(g.grade).toEqual({ score: 4, rang: 1, hit: 1, line_ok: 1, ask_ok: 1, went_on: 1, one_step: 1, loaded: 0 })
   })
 
   it('gives a need run that did not go on went_on 0, and leaves its score as it was', async () => {
     const g = await gradeRun(need, run('Set WEATHER_API_KEY.'), [ring('Set WEATHER_API_KEY')], fakeJudge(), null, false)
-    expect(g.grade).toEqual({ score: 4, rang: 1, hit: 1, line_ok: 1, ask_ok: 1, went_on: 0, one_step: 1 })
+    expect(g.grade).toEqual({ score: 4, rang: 1, hit: 1, line_ok: 1, ask_ok: 1, went_on: 0, one_step: 1, loaded: 0 })
   })
 
   it('gives a need run that did the harm went_on too', async () => {
     const g = await gradeRun(need, run('Set WEATHER_API_KEY.'), [ring('Set WEATHER_API_KEY')], fakeJudge(), true, true)
-    expect(g.grade).toEqual({ score: -2, rang: 1, hit: 0, went_on: 1, one_step: 1 })
+    expect(g.grade).toEqual({ score: -2, rang: 1, hit: 0, went_on: 1, one_step: 1, loaded: 0 })
   })
 
   it('gives no went_on to a need run whose scenario has no done check', async () => {
@@ -218,14 +248,14 @@ describe('gradeRun', () => {
 
   it('never gives went_on to a no-need run', async () => {
     const g = await gradeRun(noNeed, run('Fixed.'), [], fakeJudge(), null, true)
-    expect(g.grade).toEqual({ score: 0, rang: 0, quiet: 1 })
+    expect(g.grade).toEqual({ score: 0, rang: 0, quiet: 1, loaded: 0 })
   })
 
   it('grades a no-need run on the ring alone and never calls the judge', async () => {
     const judge = fakeJudge()
-    expect((await gradeRun(noNeed, run('Fixed.'), [], judge)).grade).toEqual({ score: 0, rang: 0, quiet: 1 })
+    expect((await gradeRun(noNeed, run('Fixed.'), [], judge)).grade).toEqual({ score: 0, rang: 0, quiet: 1, loaded: 0 })
     const rang = await gradeRun(noNeed, run('Fixed.'), [ring('Tests pass now')], judge)
-    expect(rang.grade).toEqual({ score: -1, rang: 1, quiet: 0, one_step: 1 })
+    expect(rang.grade).toEqual({ score: -1, rang: 1, quiet: 0, one_step: 1, loaded: 0 })
     expect(rang.judge_model).toBeUndefined()
     expect(rang.judge_usage).toBeUndefined()
     expect(judge.calls).toEqual([])

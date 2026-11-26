@@ -10,13 +10,14 @@ export interface Paired { mean: number; ci_lo: number; ci_hi: number; n: number;
 export interface HeldOut {
   need: number; hit: number; no_need: number; rang: number; line_n: number; line_ok: number; ask_ok: number
   checked: number; harmed: number; went_n: number; went_on: number; rang_runs: number; one_step: number
+  loaded: number; loaded_n: number
 }
 export interface VariantStats {
   change: string
   splits: Record<string, SplitStats>
   recall: number; specificity: number; precision: number; line_ok: number; ask_ok: number
   harmed: number; harm_rate: number
-  went_on: number; one_step: number
+  went_on: number; one_step: number; loaded: number
   latency_s: number; tool_calls: number; rings: number; tokens: number
   errors: Record<string, number>; truncated: number; invalid: number; unlisted: number
   spend_usd: number
@@ -27,6 +28,9 @@ export interface VariantStats {
 export interface Summary {
   variants: Record<string, Record<string, VariantStats>> // variant → condition
   paired: Record<string, Record<string, Record<string, Paired>>> // variant → condition → split, vs the baseline's same condition, on score
+  /** Variant → condition: as `paired`, over the val and test cases pooled, where "above the baseline beyond noise" is
+   *  read; one split alone holds too few cases for its interval to clear 0. */
+  held_out_paired: Record<string, Record<string, Paired>>
   best: string | null // _state.json's best round, by variant name
   warnings: string[]
 }
@@ -141,6 +145,8 @@ function heldOut(rows: Row[], split: (id: string) => string | undefined): HeldOu
     checked: checked.length, harmed: checked.filter(r => r.harm).length,
     went_n: count('went_on'), went_on: sum('went_on'),
     rang_runs: scored.filter(r => r.grade?.rang === 1).length, one_step: sum('one_step'),
+    // Rows graded before loaded existed have none, so its own count is the denominator.
+    loaded: sum('loaded'), loaded_n: count('loaded'),
   }
 }
 
@@ -181,6 +187,8 @@ function statsOf(rows: Row[], errs: ErrorRow[], probes: ProbeRow[], split: (id: 
     went_on: rate(scored, 'went_on'),
     // The grader gives it to every run that rang, so this is a rate over the scored rows that rang.
     one_step: rate(scored, 'one_step'),
+    // The grader gives it to every scored run; rows graded before it existed have none and are left out.
+    loaded: rate(scored, 'loaded'),
     latency_s: mean(scored.map(r => r.latency_s ?? NaN)),
     tool_calls: mean(scored.map(r => r.tool_calls ?? NaN)),
     rings: mean(scored.map(r => r.rings ?? NaN)),
@@ -222,22 +230,31 @@ export function summarize(flow: string): Summary {
     }
   }
   const paired: Record<string, Record<string, Record<string, Paired>>> = {}
+  const heldOutPaired: Record<string, Record<string, Paired>> = {}
   for (const v of Object.keys(variants).filter(v => v !== 'baseline' && means.baseline)) {
     paired[v] = {}
+    heldOutPaired[v] = {}
     for (const c of Object.keys(variants[v])) {
       paired[v][c] = {}
       const base = means.baseline[c]
       if (!base) continue
-      for (const sp of SPLITS) {
-        const deltas = [...means[v][c]].filter(([id]) => split(id) === sp && base.has(id)).map(([id, m]) => m - base.get(id)!)
-        if (!deltas.length) continue
+      const pair = (inSplit: (sp: string | undefined) => boolean): Paired | undefined => {
+        const deltas = [...means[v][c]].filter(([id]) => inSplit(split(id)) && base.has(id)).map(([id, m]) => m - base.get(id)!)
+        if (!deltas.length) return undefined
         const s = interval(deltas)
-        paired[v][c][sp] = { ...s, significant: s.ci_lo > 0 || s.ci_hi < 0 }
+        return { ...s, significant: s.ci_lo > 0 || s.ci_hi < 0 }
       }
+      for (const sp of SPLITS) {
+        const p = pair(x => x === sp)
+        if (p) paired[v][c][sp] = p
+      }
+      const p = pair(x => x === 'val' || x === 'test')
+      if (p) heldOutPaired[v][c] = p
     }
   }
   const round = (state.best as { round?: unknown } | undefined)?.round
-  return { variants, paired, best: typeof round === 'number' ? (round === 0 ? 'baseline' : `v${round}`) : null, warnings }
+  return { variants, paired, held_out_paired: heldOutPaired,
+    best: typeof round === 'number' ? (round === 0 ? 'baseline' : `v${round}`) : null, warnings }
 }
 
 const fmt = (x: number, digits = 2) => (Number.isFinite(x) ? x.toFixed(digits) : 'n/a')
@@ -249,6 +266,8 @@ const fmtHarm = (x: VariantStats) => `${x.harmed} (${pct(x.harm_rate)})`
 const fmtSplit = (s: SplitStats | undefined) =>
   !s ? '' : Number.isFinite(s.ci_lo) ? `${fmt(s.mean)} [${fmt(s.ci_lo)}, ${fmt(s.ci_hi)}]` : fmt(s.mean)
 const of = (k: number, n: number) => `${k} of ${n}`
+const fmtPaired = (p: Paired) => `${p.mean >= 0 ? '+' : ''}${fmt(p.mean)}`
+  + (Number.isFinite(p.ci_lo) ? ` [${fmt(p.ci_lo)}, ${fmt(p.ci_hi)}]` : '')
 
 /** Every variant and condition, in the report's order. */
 const each = (s: Summary) => Object.entries(s.variants).flatMap(([v, byCondition]) =>
@@ -322,11 +341,11 @@ export function statusTable(s: Summary): string {
 
 export function aggregateTable(s: Summary): string {
   const out = header(['variant', 'condition', 'recall', 'specificity', 'precision', 'line_ok', 'ask_ok', 'one_step',
-    'harmed', 'went_on', 'truncated', 'invalid', 'unlisted', 'errors'])
+    'loaded', 'harmed', 'went_on', 'truncated', 'invalid', 'unlisted', 'errors'])
   for (const { v, c, x } of each(s)) {
     const errors = Object.entries(x.errors).map(([cls, n]) => `${cls} ${n}`).join(', ')
     out.push(line([v, c, pct(x.recall), pct(x.specificity), pct(x.precision), pct(x.line_ok), pct(x.ask_ok),
-      pct(x.one_step), fmtHarm(x), pct(x.went_on), x.truncated, x.invalid, x.unlisted, errors]))
+      pct(x.one_step), pct(x.loaded), fmtHarm(x), pct(x.went_on), x.truncated, x.invalid, x.unlisted, errors]))
   }
   return out.join('\n')
 }
@@ -334,10 +353,12 @@ export function aggregateTable(s: Summary): string {
 // Val and test pooled, as counts: the held-out numbers the spec's targets are read against.
 export function heldOutTable(s: Summary): string {
   const out = header(['variant', 'condition', 'recall', 'needless rings', 'line_ok', 'ask_ok', 'harmed', 'went_on',
-    'one_step'])
+    'one_step', 'loaded', 'score vs baseline'])
   for (const { v, c, x: { held_out: h } } of each(s)) {
+    const p = s.held_out_paired[v]?.[c]
     out.push(line([v, c, of(h.hit, h.need), of(h.rang, h.no_need), of(h.line_ok, h.line_n), of(h.ask_ok, h.need),
-      of(h.harmed, h.checked), of(h.went_on, h.went_n), of(h.one_step, h.rang_runs)]))
+      of(h.harmed, h.checked), of(h.went_on, h.went_n), of(h.one_step, h.rang_runs),
+      of(h.loaded, h.loaded_n), v === 'baseline' ? '' : p ? fmtPaired(p) : 'n/a']))
   }
   return out.join('\n')
 }

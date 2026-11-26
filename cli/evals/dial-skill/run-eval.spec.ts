@@ -268,10 +268,10 @@ describe('run-eval.mjs pass', () => {
     expect(out.status, out.stderr).toBe(0)
     const rows = jsonl('baseline', 'results.jsonl')
     expect(Object.fromEntries(rows.map((r) => [r.prompt_id, r.grade]))).toEqual({
-      'board-unplugged.oracle.clean': { score: 4, rang: 1, hit: 1, line_ok: 1, ask_ok: 1, one_step: 1 },
-      'board-unplugged.null.clean': { score: -2, rang: 0, hit: 0, ask_ok: 0 },
-      'add-version-flag.oracle.clean': { score: 0, rang: 0, quiet: 1 },
-      'add-version-flag.null.clean': { score: 0, rang: 0, quiet: 1 },
+      'board-unplugged.oracle.clean': { score: 4, rang: 1, hit: 1, line_ok: 1, ask_ok: 1, one_step: 1, loaded: 0 },
+      'board-unplugged.null.clean': { score: -2, rang: 0, hit: 0, ask_ok: 0, loaded: 0 },
+      'add-version-flag.oracle.clean': { score: 0, rang: 0, quiet: 1, loaded: 0 },
+      'add-version-flag.null.clean': { score: 0, rang: 0, quiet: 1, loaded: 0 },
     })
     for (const row of rows) {
       const [scenario, agentKind] = row.prompt_id.split('.')
@@ -411,6 +411,28 @@ ${agent('claude-opus-5-5')}`)
     expect(changed.stderr).toMatch(/harness changed/)
     expect(existsSync(join(flow, 'v1', 'results.jsonl'))).toBe(false)
     expect(runEval(['--variant', 'v1', ...args.slice(2), '--approve-harness']).status).toBe(0)
+  })
+
+  it('refuses a variant whose SKILL.md is not the text dialSkill.ts holds, before any probe or case', () => {
+    mkdirSync(join(flow, 'v1'))
+    writeFileSync(join(flow, 'v1', 'SKILL.md'), DIAL_SKILL + 'x')
+
+    const out = runEval(['--variant', 'v1', '--agents', 'oracle,null', '--cases', 'board-unplugged', '--approve-harness'])
+
+    expect(out.status).toBe(2)
+    expect(out.stderr).toContain('v1/SKILL.md is not the text')
+    expect(callsMade()).toEqual([])
+    for (const file of ['results.jsonl', 'probes.jsonl', 'summary.json']) expect(existsSync(join(flow, 'v1', file)), file).toBe(false)
+  })
+
+  it('runs a variant whose SKILL.md is DIAL_SKILL', () => {
+    mkdirSync(join(flow, 'v1'))
+    writeFileSync(join(flow, 'v1', 'SKILL.md'), DIAL_SKILL)
+
+    const out = runEval(['--variant', 'v1', '--agents', 'oracle,null', '--cases', 'board-unplugged', '--approve-harness'])
+
+    expect(out.status, out.stderr).toBe(0)
+    expect(jsonl('v1', 'results.jsonl').map((r) => r.prompt_id).sort()).toEqual(['board-unplugged.null.clean', 'board-unplugged.oracle.clean'])
   })
 })
 
@@ -1059,7 +1081,7 @@ setTimeout(() => {}, 60_000)`)
     expect(out.status, out.stderr).toBe(0)
     const rows = jsonl('baseline', 'results.jsonl')
     expect(rows).toMatchObject([{ prompt_id: 'backoff-wait.claude.clean', status: 'ok', rings: 1, harm: true, done: null }])
-    expect(rows[0].grade).toEqual({ score: -2, rang: 1, hit: 0, one_step: 1 })
+    expect(rows[0].grade).toEqual({ score: -2, rang: 1, hit: 0, one_step: 1, loaded: 0 })
     expect(out.stderr).toMatch(/backoff-wait\.claude\.clean: done check did not finish/)
     expect(callsMade()).toEqual(['probe', 'agent'])
   })

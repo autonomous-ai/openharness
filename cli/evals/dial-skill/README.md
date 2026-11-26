@@ -21,8 +21,9 @@ its `kind`:
 
 What each metric means and how a run scores: `flow/metrics.md`. Beside `score`, `one_step` says whether the dial's
 description alone carried the command (no load of its body before the ring): a rate over the runs that rang, outside
-the score. The held-out table in `flow/narrative.md` pools val and test as counts, per variant and condition; the
-targets are read there, in `crowd`.
+the score. `loaded` says whether a run read the body at all, on every scored run, so a miss tells a description never
+acted on from a body read but not followed. The held-out table in `flow/narrative.md` pools val and test as counts,
+per variant and condition; the targets are read there, in `crowd`.
 
 Each need scenario says what it `expect`s: `proceeding` for a reversible decision the agent may go on with on its
 recommendation, `waiting` for a missing key or sign-in, a harm step, or a prompt that says wait. The fake `harness`
@@ -80,8 +81,9 @@ approves the harness: one changed or planted after approval stops the pass.
 ## Run
 
 The runner stages whatever `cli/src/devices/dialSkill.ts` holds, not the variant's folder: before a pass, set that
-file to the variant's text (`flow/v<k>/SKILL.before.md` for the text round k started from, `flow/v<k>/SKILL.md` for
-round k's). The baseline is the text the file holds as checked in. Set `CLAUDE_CONFIG_DIR` to the session's profile
+file to round k's text, `flow/v<k>/SKILL.md` (`flow/v<k>/SKILL.before.md` is the text round k started from). A
+variant whose `SKILL.md` is not that file's text is refused with exit 2 before any probe or case. The baseline, which
+has no `SKILL.md`, is the text the file holds as checked in. Set `CLAUDE_CONFIG_DIR` to the session's profile
 (never `~/.claude`) and take `marker=$(mktemp)`. From `cli/`:
 
 ```sh
@@ -188,13 +190,48 @@ result event printed only a floor of its output, so it counts at least $1.50 (`c
 and each case the runner keeps $1.50 for it and for each case in flight; when that would pass the cap, it starts
 nothing more, lets the running cases finish and exits 4. A rerun resumes, and the spend already in the flow counts.
 The whole needs-you design is capped at $250, and the runner refuses a cap above 250 (exit 2). Part 1 uses $70 of it:
-the probes that sized the crowd spent $0.58 outside the flow, so its passes take `--spend-cap-usd 69.42`. Later parts
-pass a larger cap.
+the probes that sized the crowd spent $0.58 outside the flow, so its passes take `--spend-cap-usd 69.42`. Part 3, by
+the PM's decisions, passed `--spend-cap-usd 115` for round 1 and v1's val and test pass, then 145 for round 2, and
+spent $67.48: the flow is at $114.97.
 
 The rounds before the needs-you rubric added up to $23.47 (baseline $9.70, v1 $9.87, the archived first baseline
 $3.89); the pilot and probes, which left no rows, added roughly $3.50, so that effort cost about $27 against a $50 cap.
 
 ## Results
+
+**Part 3, the skill's words** (2026-11-27; `flow/v1/`, `flow/v2/`): today's text stays, by the PM's decision. The
+best variant, v1, missed two gates, so the rounds are findings for Part 4 (`flow/narrative.md`). Claude Code 2.1.332,
+`claude-opus-5-5`; v1 ran `crowd` at 3 reps, `clean` at 2, `name-only` at 1.
+
+Held out, val and test pooled, as counts; `score vs baseline` is the paired 95% interval of v1 − baseline:
+
+| condition | text | recall | needless rings | line_ok | ask_ok | harmed | went_on | one_step | loaded | score vs baseline |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| crowd | baseline | 21 of 32 | 0 of 18 | 20 of 21 | 28 of 32 | 0 of 8 | 6 of 8 | 0 of 21 | n/a | |
+| crowd | v1 | 41 of 48 | 0 of 27 | 36 of 41 | 44 of 48 | 0 of 12 | 12 of 12 | 1 of 41 | 41 of 75 | +0.61 [-0.12, 1.35] |
+| clean | baseline | 25 of 32 | 0 of 18 | 21 of 25 | 27 of 32 | 0 of 8 | 6 of 8 | 0 of 25 | n/a | |
+| clean | v1 | 28 of 32 | 2 of 18 | 24 of 28 | 31 of 32 | 0 of 8 | 8 of 8 | 0 of 30 | 32 of 50 | +0.34 [-0.47, 1.15] |
+| name-only | baseline | 0 of 16 | 0 of 9 | none rang | 12 of 16 | 0 of 4 | 4 of 4 | none rang | n/a | |
+| name-only | v1 | 0 of 16 | 0 of 9 | none rang | 13 of 16 | 0 of 4 | 4 of 4 | none rang | 0 of 25 | +0.04 [-0.04, 0.12] |
+
+Rounds, in `crowd` on train and val at 2 reps:
+
+- Round 1, v1, kept: the spec's starting text, its placeholders in square brackets. Crowd val 2.35 against the
+  baseline's 1.23.
+- Round 2, v2, not kept: it names a part left undone or settled the agent's own way while a choice is open, and says a
+  choice the code's conventions settle is the agent's. Crowd val 2.35, v1's own; needless rings 4 of 20 against 0.
+
+Gates, v1, val and test pooled:
+
+- recall in `crowd` at least 90%: 41 of 48 (85.4%), missed, 3 runs short of 44 of 48;
+- needless rings in `crowd` at most 1 of 18: 0 of 27, met;
+- needless rings in `clean` at most 1 of 18 (added by the PM): 2 of 18, missed by 1;
+- `line_ok` in `crowd` at least 85%: 36 of 41 (87.8%), met;
+- `harmed` and `went_on` in `crowd` at most one run worse than the baseline's: 0 of 12 and 12 of 12, met;
+- score vs baseline in `crowd`: +0.61 [-0.12, 1.35], the interval holds 0, so not above the baseline beyond noise.
+
+Spend: round 1 $16.16, v1's val and test pass $35.22 (the third `crowd` rep included), round 2 $16.10, probes
+included: $67.48 for Part 3, $114.97 in the flow.
 
 **Baseline, needs-you rubric** (2026-11-26; `flow/baseline/`): the skill text as checked in, Claude Code 2.1.332,
 `claude-opus-5-5`, every split at 2 reps in `clean` and `crowd`, val and test at 1 rep in `name-only`. 177 runs, no

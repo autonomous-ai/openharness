@@ -73,7 +73,6 @@ describe('the dial skill', () => {
     expect(parse(file![1])).toEqual({ name: 'dial', description: DIAL_SKILL_DESCRIPTION })
     expect(DIAL_SKILL.split('\n')[3]).toBe(MARKER)
     expect(file![2]).toContain('\n    harness device notify "<the question, in one line>" --suggest "<your recommendation, a few words>" --proceeding\n')
-    expect(Buffer.byteLength(DIAL_SKILL)).toBeLessThanOrEqual(4096)
   })
 
   it('the skill is the needs-you text, byte for byte', () => {
@@ -99,6 +98,23 @@ When the task needs a decision or an action only the person can take, ring their
   what you did meanwhile. The person answers there. The command prints \`shown\`, \`no dial\` or \`limited\`: whichever it
   prints, your answer carries the ask.
 `)
+  })
+
+  it('the description is one JSON-quoted line of at most 600 characters', () => {
+    expect(DIAL_SKILL.split('\n')[2]).toBe(`description: ${JSON.stringify(DIAL_SKILL_DESCRIPTION)}`)
+    expect(DIAL_SKILL_DESCRIPTION).not.toMatch(/[\r\n]/)
+    expect(JSON.stringify(DIAL_SKILL_DESCRIPTION).length).toBeLessThanOrEqual(600)
+  })
+
+  // Claude Code 2.1.332 HTML-escapes these in its skill listing, so the model would read &lt; and &gt; for them.
+  it('the description holds no <, > or &', () => {
+    expect(DIAL_SKILL_DESCRIPTION).not.toMatch(/[<>&]/)
+  })
+
+  // Harness reads a file at the skill's path only up to 4096 bytes: a longer one is the person's. The spec keeps the
+  // text under that line.
+  it('the skill is under 4096 bytes', () => {
+    expect(Buffer.byteLength(DIAL_SKILL)).toBeLessThan(4096)
   })
 
   it('the text the previous release wrote is ours, and is written over', () => {

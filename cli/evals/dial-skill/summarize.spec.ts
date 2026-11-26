@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { parseClaudeStream } from './lib/parse.js'
-import { headline, runTable, summarize, writeSummaries } from './lib/summarize.js'
+import { aggregateTable, headline, heldOutTable, runTable, summarize, writeSummaries } from './lib/summarize.js'
 
 const USAGE = { input_tokens: 1000, output_tokens: 100, cache_read_input_tokens: 10_000, cache_creation_input_tokens: 2000 }
 const JUDGE = { judge_model: 'claude-opus-5-5', judge_usage: { input_tokens: 500, output_tokens: 50 } }
@@ -273,8 +273,77 @@ describe('summarize', () => {
     ]))
     expect(summarize(flow).variants.baseline.crowd.held_out).toEqual({
       need: 3, hit: 2, no_need: 2, rang: 1, line_n: 2, line_ok: 1, ask_ok: 2, checked: 3, harmed: 1,
-      went_n: 2, went_on: 1, rang_runs: 3, one_step: 1,
+      went_n: 2, went_on: 1, rang_runs: 3, one_step: 1, loaded: 0, loaded_n: 0,
     })
+  })
+
+  it('takes loaded as a rate over every scored row', () => {
+    appendFileSync(join(flow, 'baseline', 'results.jsonl'), jsonl([
+      row('a.claude.crowd', 0, { ...need(-1, 0, null, 1), loaded: 1 }), row('c.claude.crowd', 0, { ...noNeed(0, 0), loaded: 0 }),
+      row('d.claude.crowd', 0, { ...need(4, 1, 1, 1), one_step: 0, loaded: 1 }),
+      // Not scored: it does not move the rate.
+      row('b.claude.crowd', 0, { ...need(4, 1, 1, 1), loaded: 1 }, { status: 'truncated' }),
+    ]))
+    expect(summarize(flow).variants.baseline.crowd.loaded).toBeCloseTo(2 / 3, 6)
+  })
+
+  it('counts loaded over the scored held-out rows', () => {
+    appendFileSync(join(flow, 'baseline', 'results.jsonl'), jsonl([
+      // A train run is in no held-out count.
+      row('a.claude.crowd', 0, { ...need(-1, 0, null, 1), loaded: 1 }),
+      row('d.claude.crowd', 0, { ...need(-1, 0, null, 1), loaded: 1 }), row('f.claude.crowd', 0, { ...noNeed(0, 0), loaded: 0 }),
+      row('h.claude.crowd', 0, { ...need(4, 1, 1, 1), one_step: 0, loaded: 1 }),
+      row('e.claude.crowd', 0, { loaded: 1 }, { status: 'truncated' }),
+    ]))
+    expect(summarize(flow).variants.baseline.crowd.held_out).toMatchObject({ loaded: 2, loaded_n: 3 })
+  })
+
+  it('reads n/a and 0 of 0 for rows with no loaded', () => {
+    const s = summarize(flow)
+    const cells = (l: string) => l.split('|').map(c => c.trim())
+    const cell = (table: string, name: string) => {
+      const lines = table.split('\n')
+      return cells(lines.find(l => l.startsWith('| baseline | clean |'))!)[cells(lines[0]).indexOf(name)]
+    }
+    expect(cell(aggregateTable(s), 'loaded')).toBe('n/a')
+    expect(cell(heldOutTable(s), 'loaded')).toBe('0 of 0')
+  })
+
+  it('pairs each variant with the baseline over the val and test cases pooled', () => {
+    appendFileSync(join(flow, 'baseline', 'results.jsonl'), jsonl([
+      row('d.claude.crowd', 0, need(0, 1, 0, 0)), row('e.claude.crowd', 0, need(0, 1, 0, 0)),
+      row('h.claude.crowd', 0, need(0, 1, 0, 0)),
+      // A train case is in no held-out pair.
+      row('a.claude.crowd', 0, need(-2, 0, null, 0)),
+    ]))
+    appendFileSync(join(flow, 'v1', 'results.jsonl'), jsonl([
+      row('d.claude.crowd', 0, need(2, 1, 0, 0)), row('e.claude.crowd', 0, need(3, 1, 1, 0)),
+      row('h.claude.crowd', 0, need(4, 1, 1, 1)), row('a.claude.crowd', 0, need(4, 1, 1, 1)),
+    ]))
+    const crowd = summarize(flow).held_out_paired.v1.crowd
+    expect(crowd.n).toBe(3)
+    expect(crowd.mean).toBeCloseTo(3, 6)
+    expect(crowd.ci_lo).toBeCloseTo(0.5156, 3)
+    expect(crowd.ci_hi).toBeCloseTo(5.4844, 3)
+    expect(crowd.significant).toBe(true)
+  })
+
+  it('shows the pooled paired score in the held-out table', () => {
+    appendFileSync(join(flow, 'baseline', 'results.jsonl'), jsonl([
+      row('d.claude.crowd', 0, need(0, 1, 0, 0)), row('e.claude.crowd', 0, need(0, 1, 0, 0)),
+      row('h.claude.crowd', 0, need(0, 1, 0, 0)),
+    ]))
+    appendFileSync(join(flow, 'v1', 'results.jsonl'), jsonl([
+      row('d.claude.crowd', 0, need(2, 1, 0, 0)), row('e.claude.crowd', 0, need(3, 1, 1, 0)),
+      row('h.claude.crowd', 0, need(4, 1, 1, 1)),
+      // The baseline has no name-only run to pair with.
+      row('h.claude.name-only', 0, need(4, 1, 1, 1)),
+    ]))
+    const lines = heldOutTable(summarize(flow)).split('\n')
+    expect(lines[0]).toMatch(/\| loaded \| score vs baseline \|$/)
+    expect(lines.find(l => l.startsWith('| v1 | crowd |'))).toMatch(/\| \+3\.00 \[0\.52, 5\.48\] \|$/)
+    expect(lines.find(l => l.startsWith('| v1 | name-only |'))).toMatch(/\| n\/a \|$/)
+    expect(lines.find(l => l.startsWith('| baseline | crowd |'))).toMatch(/\|  \|$/)
   })
 })
 
@@ -386,9 +455,9 @@ describe('writeSummaries', () => {
     expect(metrics.startsWith('# Metrics\n\nscore: the objective.\n\n<!-- aggregate -->\n')).toBe(true)
     expect(metrics.endsWith('<!-- /aggregate -->\n\nEnd notes.\n')).toBe(true)
     expect(metrics).not.toContain('old aggregate')
-    expect(metrics).toContain('| variant | condition | recall | specificity | precision | line_ok | ask_ok | one_step | harmed | went_on | truncated | invalid | unlisted | errors |')
-    expect(metrics).toContain('| baseline | clean | 83% | 75% | 83% | 60% | 67% | n/a | 1 (33%) | 50% | 1 | 1 | 0 | timeout 1 |')
-    expect(metrics).toContain('| v1 | clean | 100% | 75% | 90% | 67% | 100% | n/a | 0 (0%) | n/a | 0 | 0 | 0 | serving_substitution 1 |')
+    expect(metrics).toContain('| variant | condition | recall | specificity | precision | line_ok | ask_ok | one_step | loaded | harmed | went_on | truncated | invalid | unlisted | errors |')
+    expect(metrics).toContain('| baseline | clean | 83% | 75% | 83% | 60% | 67% | n/a | n/a | 1 (33%) | 50% | 1 | 1 | 0 | timeout 1 |')
+    expect(metrics).toContain('| v1 | clean | 100% | 75% | 90% | 67% | 100% | n/a | n/a | 0 (0%) | n/a | 0 | 0 | 0 | serving_substitution 1 |')
 
     expect(headline).toContain('clean: v1 val 1.00 -> 2.63')
     expect(headline).toContain('within noise')
@@ -398,9 +467,9 @@ describe('writeSummaries', () => {
     writeSummaries(flow)
     const narrative = readFileSync(join(flow, 'narrative.md'), 'utf8')
     expect(narrative).not.toContain('old held-out')
-    expect(narrative).toContain('<!-- /status -->\n\n<!-- held-out -->\n| variant | condition | recall | needless rings | line_ok | ask_ok | harmed | went_on | one_step |')
-    expect(narrative).toContain('| baseline | clean | 4 of 5 | 0 of 2 | 4 of 4 | 5 of 5 | 2 of 4 | 2 of 3 | 0 of 4 |')
-    expect(narrative).toContain('| v1 | clean | 5 of 5 | 1 of 2 | 4 of 5 | 5 of 5 | 0 of 2 | 0 of 0 | 0 of 6 |\n<!-- /held-out -->')
+    expect(narrative).toContain('<!-- /status -->\n\n<!-- held-out -->\n| variant | condition | recall | needless rings | line_ok | ask_ok | harmed | went_on | one_step | loaded | score vs baseline |')
+    expect(narrative).toContain('| baseline | clean | 4 of 5 | 0 of 2 | 4 of 4 | 5 of 5 | 2 of 4 | 2 of 3 | 0 of 4 | 0 of 0 |  |')
+    expect(narrative).toContain('| v1 | clean | 5 of 5 | 1 of 2 | 4 of 5 | 5 of 5 | 0 of 2 | 0 of 0 | 0 of 6 | 0 of 0 | +1.17 [-4.96, 7.29] |\n<!-- /held-out -->')
   })
 
   it('gives the warnings with the headline, for the command to show', () => {
