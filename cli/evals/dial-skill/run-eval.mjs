@@ -30,6 +30,9 @@
 //   - a probe or case starts only while all the flow has spent, a reserve for it
 //     and one for each case in flight fit under --spend-cap-usd (lib/spend.ts);
 //     else the pass starts nothing more and exits 4
+//   - a variant's hooks.json and harness-answers.json are staged only when
+//     _state.json harness_paths lists them, so the harness sha covers what
+//     runs outside Claude's sandbox
 
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -174,6 +177,35 @@ function flowSpend(flow) {
   return spent;
 }
 
+/** What the fake harness can answer (lib/stage.ts HarnessAnswer). */
+const isAnswer = a => a !== null && typeof a === 'object' && Array.isArray(a.argv) && a.argv.every(w => typeof w === 'string')
+  && [a.stdout, a.stderr].every(s => s === undefined || typeof s === 'string') && (a.code === undefined || Number.isInteger(a.code));
+
+/**
+ * The variant's hooks.json (Claude Code's `hooks`, staged as the repo's .claude/settings.json) and harness-answers.json
+ * (what the fake harness answers them), each left out when absent. Claude Code runs hooks outside its sandbox, so a file
+ * is taken only when _state.json harness_paths lists it: the harness sha then covers it, and one changed or planted after
+ * approval refuses the pass (checkHarness) until a person approves it again.
+ */
+function variantHooks(vdir, state) {
+  const listed = new Set((Array.isArray(state.harness_paths) ? state.harness_paths : []).map(p => resolve(String(p))));
+  const read = (name, valid, what) => {
+    const file = join(vdir, name);
+    const text = readIfPresent(file);
+    if (text == null) return undefined;
+    if (!listed.has(resolve(file)))
+      throw new Error(`${file} runs outside Claude's sandbox: list it in _state.json harness_paths, then approve the harness`);
+    let value;
+    try { value = JSON.parse(text); } catch { /* refused below, without the parse message, which can quote the file */ }
+    if (!valid(value)) throw new Error(`${file} must be JSON: ${what}`);
+    return value;
+  };
+  return {
+    hooks: read('hooks.json', v => v !== null && typeof v === 'object' && !Array.isArray(v), "Claude Code's hooks object"),
+    answers: read('harness-answers.json', v => Array.isArray(v) && v.every(isAnswer), 'a list of { argv, stdout?, stderr?, code? }'),
+  };
+}
+
 // The agents run in process groups of their own (lib/agents.ts), which no signal to the runner reaches: however the
 // runner ends, it kills them first. A signal ends it through exit, with the code the signal would have left.
 process.on('exit', killAgents);
@@ -292,7 +324,8 @@ async function probeConditions(ctx, tasks, probesPath) {
     if (!ctx.guard.mayStart(0)) { eprint(spendCapLine(ctx)); process.exit(4); }
     let probe;
     try {
-      probe = await probeListing(c.scenario, condition, { skill: ctx.skill }, { ...AGENT_CONFIG, timeoutMs: agentTimeoutMs(ctx.timeoutS) });
+      probe = await probeListing(c.scenario, condition, { skill: ctx.skill, hooks: ctx.hooks, answers: ctx.answers },
+        { ...AGENT_CONFIG, timeoutMs: agentTimeoutMs(ctx.timeoutS) });
     } catch (e) {
       if (e?.failure_class !== 'account_limited') throw e;
       appendFileNoFollow(probesPath, JSON.stringify({ condition, at: new Date().toISOString(), listing: null, instructions: null,
@@ -316,7 +349,7 @@ async function probeConditions(ctx, tasks, probesPath) {
  */
 async function runCase(input, ctx) {
   const { scenario, meta: { agent, condition } } = input;
-  const st = stage(scenario, agent, { skill: ctx.skill, condition });
+  const st = stage(scenario, agent, { skill: ctx.skill, condition, hooks: ctx.hooks, answers: ctx.answers });
   const clean = text => scrub(text, st);
   try {
     const run = await runAgent(agent, scenario, st, { ...AGENT_CONFIG, timeoutMs: agentTimeoutMs(ctx.timeoutS) });
@@ -626,7 +659,7 @@ async function main() {
     catch { eprint(`${statePath} exists but is not valid JSON - fix it before spending a pass`); process.exit(2); }
   }
   checkHarness(statePath, st, args.approveHarness);
-  const ctx = { ...args, state: st };
+  const ctx = { ...args, state: st, ...variantHooks(vdir, st) }; // dial skill eval: read once, after the gate
 
   // Resume: which (id, rep) pairs already have a row?
   const resultsPath = join(vdir, 'results.jsonl');
