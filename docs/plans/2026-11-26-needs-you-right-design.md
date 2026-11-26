@@ -527,9 +527,12 @@ The change:
      git is needed.
    - **Kept trusted between CLI updates** (the PM, 2026-11-26): each dial setup pass checks every home it serves (a
      stat of the installed folder and of `config.toml`, the fingerprint computed only when one changed) and writes the
-     record again when the folder matches the CLI's copy and the record does not. A home whose `openharness`
-     marketplace is the person's own from GitHub gets the trust only while its folder matches; after Codex fetches a
-     different `main`, the person is asked, and the pass logs `untrusted · differs` once.
+     record again when the folder matches the CLI's copy and the record does not; a folder that differs is left
+     untrusted, logged `untrusted · differs` once.
+   - **A home with the person's own `openharness` marketplace** (added from GitHub, as `plugins/harness/README.md`
+     shows; the PM, 2026-11-26): its copy follows GitHub's `main`, never the CLI's, so it could never be trusted, and
+     installing there would only bring the person a hook review they did not ask for. The setup installs nothing in
+     that home and logs `skipped · own marketplace` once; its Codex waits stay off the dial, as today.
    - **That file has other writers:** the core's own hook review, Codex itself, and the person. The write edits only
      the plugin's own tables, the way `hookReview.ts` and `folderTrust.ts` edit the file (through a symlink,
      atomically, never a table defined twice), and a write that finds the file changed since it read it reads it
