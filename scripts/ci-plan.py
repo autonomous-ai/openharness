@@ -523,6 +523,8 @@ def windows_only(path):
         or PurePosixPath(path).name == "install.ps1"
         or path in {".github/workflows/windows.yml", "cli/vitest.e2e.windows.config.ts",
                     "cli/scripts/windows-install-manifest.mjs"}
+        # The Store's pipe checks: storePackagesPipe.windows.spec.ts runs the test, check-install.ps1 the folder's script.
+        or path == "store/tools/windows-pipe.test.mjs" or path.startswith("store/tools/windows-ci/")
         # A file's own name, not a folder's (cli/src/lib/windows/ runs x64 alone), in the code its specs and the dial's
         # end to end run: arm64 adds about 27 runner-minutes a run.
         or (path.startswith(("cli/src/", "cli/e2e/")) and re.search(r"[wW]indows", PurePosixPath(path).name) is not None))
