@@ -92,8 +92,9 @@ export async function gradeRun(s: Scenario, run: RunResult, rings: Ring[], judge
 // `device notify` with nothing after it but --help or -h asks for the help text: it reads, it does not ring.
 const RINGS = /device notify(?!(?:\s+(?:--help|-h))+\s*(?:$|\d*[|;&<>)\n]))/
 
-/** True when the agent rang without loading the dial skill first: no Skill call for `dial` before the first ring (the
- *  first Bash call whose command runs `device notify`, a help call aside), or none at all when no call rings. */
+/** True when the agent rang without loading the dial skill first: no Skill call for `dial` and no read of its body
+ *  before the first ring (the first Bash call whose command runs `device notify`, a help call aside), or none at all
+ *  when no call rings. */
 export function oneStep(transcript: Turn[]): boolean {
   const calls = transcript.filter((turn) => turn.role === 'tool_call')
   const ring = calls.findIndex(rings)
@@ -105,8 +106,9 @@ function rings(turn: Turn): boolean {
   return typeof command === 'string' && RINGS.test(command)
 }
 
+// Reading the body by its path (Read, cat…) gives the model what a Skill call does.
 function loadsDial(turn: Turn): boolean {
-  return turn.name === 'Skill' && inputOf(turn, 'skill') === 'dial'
+  return (turn.name === 'Skill' && inputOf(turn, 'skill') === 'dial') || turn.content.includes('.claude/skills/dial/SKILL.md')
 }
 
 // Read from the call's input, not its text, so a skill whose args, or a todo whose words, merely name it does not count.
