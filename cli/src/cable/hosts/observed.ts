@@ -46,6 +46,10 @@ const TURN_SETTLE_MS = 2_000
 /** The tool call's line reaches the transcript just after its permission hook ran, and nobody answers a prompt sooner than
  *  this: a write that soon after the prompt is the asking's own, not the app's answer. */
 const ASK_SETTLE_MS = 1_000
+/** Codex runs its PermissionRequest hook before it reads the session's "don't ask again" answers, and nothing it sends
+ *  says the person gave one: the same tool and line asked again in the session rings no dial that opened no dialog
+ *  (harness-pm, 2026-11-27). At most this many a session, the oldest forgotten first. */
+const CODEX_ASKS_KEPT = 64
 /** The firmware's activity line, `activity[100]` (ui_habitat.c), less its terminating zero: it cuts a longer one there. */
 const LINE_BYTES = 99
 /** A tty read that failed (`ps` timed out under load, or did not run) is tried again on a later event, no sooner than this:
@@ -320,6 +324,8 @@ interface Entry {
   served?: { pid: number; is?: boolean | null; hook?: ObservedHookEvent }
   /** What the permission prompt it waits on asks, from its hook (deviceClaude/asked.ts): '' when it names nothing. */
   asked?: string
+  /** Each permission ask Codex hooked in this session, by its tool and line, oldest first (CODEX_ASKS_KEPT). */
+  codexAsks?: Set<string>
   /** The name the session gives itself, from its session-start or turn-start, or, for a session the scan found, the one
    *  the person gave it in its own process record until then. Only Claude Code's event with none clears it: its hook
    *  says the name on each of these while the session has one, while Command Code's turn-start is every tool call and
@@ -1354,6 +1360,7 @@ export class ObservedSource implements HostSource {
       if (entry.agent.state === 'working' || entry.agent.state === 'needs-you') this.setState(entry, 'idle', now)
       this.dropStop(entry)
       this.clearAsked(entry)
+      entry.codexAsks = undefined
       this.emit()
       return
     }
@@ -1468,6 +1475,7 @@ export class ObservedSource implements HostSource {
   private asked(e: ObservedAsked): void {
     const entry = this.entries.get(observedAgentId(e.engine, e.sessionId))
     if (!entry || !this.live(entry)) return
+    if (this.codexAskedBefore(entry, e)) return
     const now = this.deps.now()
     this.dropStop(entry)
     this.setState(entry, 'needs-you', now)
@@ -1478,6 +1486,18 @@ export class ObservedSource implements HostSource {
     // Counts only: never the prompt, the tool or the session.
     this.deps.log('[observed] waiting prompt · shown')
     this.emit()
+  }
+
+  /** Whether Codex hooked this permission ask in the session before; kept for the next time if not. A question form is
+   *  asked anew each time, as no answer stops Codex asking it. */
+  private codexAskedBefore(entry: Entry, e: ObservedAsked): boolean {
+    if (e.engine !== 'codex' || e.tool === 'request_user_input') return false
+    const ask = `${e.tool ?? ''}\n${e.summary ?? ''}`
+    entry.codexAsks ??= new Set()
+    if (entry.codexAsks.has(ask)) return true
+    entry.codexAsks.add(ask)
+    if (entry.codexAsks.size > CODEX_ASKS_KEPT) entry.codexAsks.delete(entry.codexAsks.values().next().value!)
+    return false
   }
 
   /** The prompt it waited on is over. */
