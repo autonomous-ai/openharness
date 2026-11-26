@@ -653,6 +653,19 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const tab = lastTabs.get(app)
     return tab !== undefined && tab === source.tabTty(agentId)
   }
+  /** The tab of the multiplexer client in the terminal VS Code or Cursor focused last, by that editor, none when the
+   *  client names no tab: tmux's pane poll reads that client there as a tab app's reported tab
+   *  (docs/plans/2026-11-26-dial-mux-host-pages-design.md §7). A focus on any other terminal drops it, as another
+   *  app's settle, or none's, does: one at most, as one window has the focus. */
+  const editorClients = new Map<string, string | undefined>()
+  /** Whether the person may look at the multiplexer client on [tty] in [app]: where the app tells which, the one it
+   *  told last (the tab a tab app reported selected, the client in the terminal VS Code or Cursor focused), none before
+   *  it tells one; elsewhere any. */
+  const onToldClient = (app: string, tty: string): boolean => {
+    if (reportsTabs(app)) return tty === lastTabs.get(app)
+    if (app === 'vscode' || app === 'cursor') return tty === editorClients.get(app)
+    return true
+  }
   /** Where the dial moved an app lately, a rest's and a tap's alike, each as it started: the echoes an app's report is
    *  checked against, each excusing one. */
   const dialMovesTo = () => {
@@ -1555,8 +1568,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       part.call('dial', () => tabSettled(app))
       part.call('dial', () => threadSettled(app))
       part.call('dial', () => editorSettled(app))
-      // Before the poll reads it: the person coming back to an app is on whichever tab its next report names.
-      part.call('dial', () => { for (const tabApp of lastTabs.keys()) if (tabApp !== app) lastTabs.delete(tabApp) })
+      // Before the poll reads it: the person coming back to an app is on whichever tab its next report names, or
+      // terminal its next focus does.
+      part.call('dial', () => {
+        for (const tabApp of lastTabs.keys()) if (tabApp !== app) lastTabs.delete(tabApp)
+        for (const editor of editorClients.keys()) if (editor !== app) editorClients.delete(editor)
+      })
       part.call('pane', () => {
         paneFocusFailing = false
         placeFails.clear()
@@ -2611,15 +2628,16 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /**
    * tmux's place, with [app] settled in front: the full pane id of the one live agent at the pane its front client shows,
    * on that client's tab, else null; undefined when its clients' listing failed. The front client is the one on the tab
-   * [app] reported selected last, where it reports tabs: one with no tab reported yet has none, as the person may be on a
-   * plain tab of it, and its next report names theirs. Elsewhere it is the one client there showing an agent's session:
-   * with two, which the person looks at is not known. The agent's tab must be the client's too: a second tmux server's
-   * `%N` repeats, and its client is on another tab. With no agent's tab that could be the front client's, tmux is not
-   * asked: the person on a plain iTerm2 tab costs no run every FOCUS_POLL_MS.
+   * [app] reported selected last, where it reports tabs, or in the terminal VS Code or Cursor focused last
+   * (onToldClient): one that told none yet has none, as the person may be on a plain tab or terminal of it, and its next
+   * report or focus names theirs. Elsewhere it is the one client there showing an agent's session: with two, which the
+   * person looks at is not known. The agent's tab must be the client's too: a second tmux server's `%N` repeats, and its
+   * client is on another tab. With no agent's tab that could be the front client's, tmux is not asked: the person on a
+   * plain iTerm2 tab costs no run every FOCUS_POLL_MS.
    */
   const tmuxFocused = async (source: ObservedSource, app: string): Promise<FocusedPane | null | undefined> => {
     const panes = tmuxPanes(source, app)
-    const ttys = [...new Set(panes.flatMap(({ tty }) => tty !== undefined && (!reportsTabs(app) || tty === lastTabs.get(app)) ? [tty] : []))]
+    const ttys = [...new Set(panes.flatMap(({ tty }) => tty !== undefined && onToldClient(app, tty) ? [tty] : []))]
     if (!ttys.length) return null
     const clients = await tmux.clientPanes()
     if (clients === undefined) return undefined
@@ -3260,8 +3278,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }
   /**
    * A terminal focused in VS Code or Cursor turns the dials to its agent as a selected tab does, once that editor has
-   * settled in front (docs/plans/2026-11-17-dial-vscode-extension-design.md, "PR B, decided now" 3). Each line is an
-   * outcome, never the editor, the window, the shell or the agent.
+   * settled in front (docs/plans/2026-11-17-dial-vscode-extension-design.md, "PR B, decided now" 3); one holding a tmux
+   * or herdr client, to the agent at the pane that client shows
+   * (docs/plans/2026-11-26-dial-mux-host-pages-design.md §7). Each line is an outcome, never the editor, the window, the
+   * shell or the agent.
    */
   /** A focus report: the agent, its editor and terminal, when its window's state came, whether that window came into
    *  focus on the terminal it had, and how many moves the dial had made by the time it was told. */
@@ -3283,17 +3303,53 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     }
     return cable.followLocal(report.agentId, 'vscode')
   }
-  /** The person's latest focus replaces one waiting for the settle, a terminal no agent runs in too. */
-  const editorFocused = (pid: number | undefined, { window, shell }: VscodeTerminal, at: number, regained: boolean): Promise<void> | undefined => {
+  /** Followed once its editor has settled in front; till then it waits for that settle. */
+  const editorReported = (report: EditorReport): Promise<void> | undefined => {
+    if (cableHost.settledApp() === report.app) return followEditor(report)
+    editorReport = report
+  }
+  /** Bumped at each focus: a client's pane read that lands after a newer focus is dropped, as that one is where the
+   *  person is now. */
+  let editorFocuses = 0
+  /** The one live agent at the pane the multiplexer client of [agents] shows, in [app]: herdr's at the pane herdr
+   *  said took its focus last (herdrSource.ts focusedPane), tmux's from one read of its clients (tmuxFocused, which
+   *  reads the client kept for [app]); none when not one is. */
+  const clientShows = async (source: ObservedSource, agents: readonly HostAgent[], app: string): Promise<HostAgent | undefined> => {
+    const focused = herdr!.focusedPane()
+    const key = focused === undefined ? undefined : herdrPaneKey(focused)
+    const inHerdr = agents.filter(({ id }) => {
+      const full = source.shownAt(id, herdrAdapter.id)
+      return full !== undefined && herdrAdapter.paneKey({ adapter: herdrAdapter.id, id: full }) === key
+    })
+    if (inHerdr.length === 1) return inHerdr[0]
+    const pane = await tmuxFocused(source, app)
+    return pane ? nestedAt(source, tmux.id, pane.id) : undefined
+  }
+  /** The person's latest focus replaces one waiting for the settle, a terminal no agent runs in too, and the client
+   *  kept for the last. */
+  const editorFocused = async (pid: number | undefined, { window, shell }: VscodeTerminal, at: number, regained: boolean): Promise<void> => {
     editorReport = undefined
+    editorClients.clear()
+    const focus = ++editorFocuses
     if (!observed || pid === undefined) return
-    for (const { id } of observed.list()) {
-      const app = (['vscode', 'cursor'] as const).find((editor) => observed.paneOf(id, editor) === `term:${pid}`)
-      if (!app) continue
-      const report = { agentId: id, app, terminal: `${window} ${shell}`, at, regained, moves: dialMoves }
-      if (cableHost.settledApp() === app) return followEditor(report)
-      editorReport = report
-      return
+    // As the state came, before any read: a move of the dial while a client's pane is read sets it aside
+    // (followEditor).
+    const report = { terminal: `${window} ${shell}`, at, regained, moves: dialMoves }
+    const agents = observed.list()
+    for (const app of ['vscode', 'cursor'] as const) {
+      const own = agents.find(({ id }) => observed.paneOf(id, app) === `term:${pid}`)
+      if (own) return editorReported({ ...report, agentId: own.id, app })
+      // A multiplexer client's terminal (vscodeTerminals.ts tells its pid): an agent's own parents never hold its
+      // shell, the 23/11 known gap. Diego's point 1 named VS Code (docs/plans/2026-11-26-dial-mux-host-pages-design.md
+      // §7).
+      const held = agents.filter(({ id }) => observed.paneOf(id, `${app}-tab`) === `client:${pid}`)
+      if (!held.length) continue
+      editorClients.set(app, observed.tabTty(held[0].id))
+      // Behind no dial a read is for nothing; the client is kept all the same, for the poll once one links.
+      if (!cable.isConnected) return
+      const shown = await clientShows(observed, held, app)
+      if (!shown || focus !== editorFocuses) return
+      return editorReported({ ...report, agentId: shown.id, app })
     }
   }
   const editorSettled = (app: string): Promise<void> | undefined => {
