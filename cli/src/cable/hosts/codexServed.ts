@@ -19,9 +19,10 @@
 import { agentCommandOwnershipSnapshot } from '../../lib/engineBin.js'
 import { commandOf, engineProcessMatch } from '../../lib/processTable.js'
 import { codexServer } from '../../lib/sessionSearch/externals/codex.js'
+import { folderKey, listProcesses, processCwds } from '../../lib/sessionSearch/externals/support.js'
 import type { RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import type { Outer } from './adapter.js'
-import { parentChain, type ProcessName } from './scannedApp.js'
+import { learnApps, parentChain, type ProcessName, readTtyName } from './scannedApp.js'
 import { clientTtyForm } from './tabs.js'
 
 /** The Codex TUIs whose folders a lookup reads, at most: past this many, none is told apart, as a bound unread could
@@ -109,4 +110,14 @@ async function clientsIn(
     if (onTerminal.length === 1) found.set(ask, onTerminal[0])
   }
   return found
+}
+
+/** The lookup over this machine (ObservedDeps.served); none on Windows, where no process's folder can be read, so every
+ *  Codex hook there is placed by its hints, as before. */
+export function servedLookup(platform: NodeJS.Platform): ((asks: readonly ServedAsk[]) => Promise<(Served | undefined)[]>) | undefined {
+  if (platform === 'win32') return undefined
+  const deps: CodexServedDeps = {
+    platform, processes: listProcesses, cwds: processCwds, tty: readTtyName, apps: learnApps, folder: folderKey,
+  }
+  return (asks) => codexServed(asks, deps)
 }
