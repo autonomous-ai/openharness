@@ -1,0 +1,57 @@
+diff --git a/README.md b/README.md
+index adbe058..2e5681a 100644
+--- a/README.md
++++ b/README.md
+@@ -7,6 +7,7 @@ Prints the quarter's sales by region.
+ ```sh
+ node src/cli.js report                 # every region
+ node src/cli.js report --region North  # one region
++node src/cli.js report --json          # the rows as JSON, for scripts
+ ```
+ 
+ ## Layout
+diff --git a/src/cli.js b/src/cli.js
+index f097f25..6666295 100644
+--- a/src/cli.js
++++ b/src/cli.js
+@@ -1,6 +1,6 @@
+ import { buildReport, renderReport } from './report.js'
+ 
+-const USAGE = 'usage: node src/cli.js report [--region <name>]'
++const USAGE = 'usage: node src/cli.js report [--region <name>] [--json]'
+ 
+ function fail(message) {
+   console.error(`${message}\n${USAGE}`)
+@@ -9,11 +9,14 @@ function fail(message) {
+ 
+ function report(args) {
+   const options = {}
++  let json = false
+   for (let i = 0; i < args.length; i++) {
+     if (args[i] === '--region' && args[i + 1] !== undefined) options.region = args[++i]
++    else if (args[i] === '--json') json = true
+     else fail(`report: unknown option ${args[i]}`)
+   }
+-  console.log(renderReport(buildReport(options)))
++  const rows = buildReport(options)
++  console.log(json ? JSON.stringify(rows, null, 2) : renderReport(rows))
+ }
+ 
+ const [command, ...args] = process.argv.slice(2)
+diff --git a/test/report.test.js b/test/report.test.js
+index c97c31c..8109e61 100644
+--- a/test/report.test.js
++++ b/test/report.test.js
+@@ -33,6 +33,12 @@ test('report prints the table', () => {
+   assert.match(run.stdout, /^West\s+1\s+612\.00$/m)
+ })
+ 
++test('report --json prints the rows as JSON', () => {
++  const run = cli('report', '--json', '--region', 'South')
++  assert.equal(run.status, 0)
++  assert.deepEqual(JSON.parse(run.stdout), [{ region: 'South', orders: 1, cents: 99900 }])
++})
++
+ test('report refuses an unknown option', () => {
+   const run = cli('report', '--csv')
+   assert.equal(run.status, 2)

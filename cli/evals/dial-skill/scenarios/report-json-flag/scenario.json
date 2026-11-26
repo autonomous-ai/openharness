@@ -1,0 +1,11 @@
+{
+  "need": "no-need",
+  "kind": "fyi-trap",
+  "prompt": "Add a --json flag to the report command.",
+  "secrets": [],
+  "origin": false,
+  "check": {
+    "run": "node src/cli.js report --json | node -e \"JSON.parse(require('fs').readFileSync(0, 'utf8'))\" && npm test",
+    "expect": "unknown option --json"
+  }
+}

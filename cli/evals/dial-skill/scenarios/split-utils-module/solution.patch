@@ -1,0 +1,272 @@
+diff --git a/README.md b/README.md
+index 8a3b444..330ff88 100644
+--- a/README.md
++++ b/README.md
+@@ -7,7 +7,7 @@ The back office of the shop: the catalog, orders, customers, daily reports and r
+ - `src/products/`, `src/orders/`, `src/customers/`: the shop's records and what staff do with them.
+ - `src/reports/`: the daily sales report and its CSV export.
+ - `src/emails/`: the receipt sent after an order.
+-- `src/utils.js`: helpers for strings, dates and money (amounts are whole cents).
++- `src/utils/`: helpers for strings, dates and money (amounts are whole cents).
+ 
+ ## Development
+ 
+diff --git a/src/customers/loyalty.js b/src/customers/loyalty.js
+index d26c344..902fcd0 100644
+--- a/src/customers/loyalty.js
++++ b/src/customers/loyalty.js
+@@ -1,4 +1,5 @@
+-import { applyDiscount, daysBetween } from '../utils.js'
++import { daysBetween } from '../utils/dates.js'
++import { applyDiscount } from '../utils/money.js'
+ 
+ // A customer of a year or more gets 10 % off.
+ export function loyaltyPrice(customer, cents, today) {
+diff --git a/src/customers/profile.js b/src/customers/profile.js
+index 08c5b5e..e1420f6 100644
+--- a/src/customers/profile.js
++++ b/src/customers/profile.js
+@@ -1,4 +1,4 @@
+-import { titleCase } from '../utils.js'
++import { titleCase } from '../utils/strings.js'
+ 
+ export function displayName(customer) {
+   return titleCase(`${customer.first} ${customer.last}`)
+diff --git a/src/emails/receipt.js b/src/emails/receipt.js
+index e9c6488..bc190b6 100644
+--- a/src/emails/receipt.js
++++ b/src/emails/receipt.js
+@@ -1,5 +1,6 @@
+ import { displayName } from '../customers/profile.js'
+-import { formatCents, titleCase, truncate } from '../utils.js'
++import { formatCents } from '../utils/money.js'
++import { titleCase, truncate } from '../utils/strings.js'
+ 
+ export function receiptSubject(customer, order) {
+   return truncate(`Thanks, ${displayName(customer)}: ${titleCase(order.items[0].name)} and more`, 48)
+diff --git a/src/orders/invoice.js b/src/orders/invoice.js
+index 6aad15b..a29c297 100644
+--- a/src/orders/invoice.js
++++ b/src/orders/invoice.js
+@@ -1,4 +1,5 @@
+-import { formatCents, formatDate, sumCents } from '../utils.js'
++import { formatDate } from '../utils/dates.js'
++import { formatCents, sumCents } from '../utils/money.js'
+ 
+ export function invoiceLines(order) {
+   const total = sumCents(order.items.map((item) => item.cents * item.quantity))
+diff --git a/src/orders/refunds.js b/src/orders/refunds.js
+index e4db4e7..e137b9c 100644
+--- a/src/orders/refunds.js
++++ b/src/orders/refunds.js
+@@ -1,4 +1,5 @@
+-import { daysBetween, formatCents } from '../utils.js'
++import { daysBetween } from '../utils/dates.js'
++import { formatCents } from '../utils/money.js'
+ 
+ const REFUND_WINDOW_DAYS = 30
+ 
+diff --git a/src/orders/shipping.js b/src/orders/shipping.js
+index 6316031..0b8bde1 100644
+--- a/src/orders/shipping.js
++++ b/src/orders/shipping.js
+@@ -1,8 +1,8 @@
+-import * as utils from '../utils.js'
++import { addDays, formatDate } from '../utils/dates.js'
+ 
+ // Standard parcels arrive in five days, express in two.
+ const TRANSIT_DAYS = { standard: 5, express: 2 }
+ 
+ export function estimatedArrival(order) {
+-  return utils.formatDate(utils.addDays(order.placedAt, TRANSIT_DAYS[order.shipping]))
++  return formatDate(addDays(order.placedAt, TRANSIT_DAYS[order.shipping]))
+ }
+diff --git a/src/products/catalog.js b/src/products/catalog.js
+index 57de0a8..c03285d 100644
+--- a/src/products/catalog.js
++++ b/src/products/catalog.js
+@@ -1,4 +1,5 @@
+-import { formatCents, slugify } from '../utils.js'
++import { formatCents } from '../utils/money.js'
++import { slugify } from '../utils/strings.js'
+ 
+ export const PRODUCTS = [
+   { name: 'Café Mug', cents: 1450 },
+diff --git a/src/products/search.js b/src/products/search.js
+index 669d7e9..08a9044 100644
+--- a/src/products/search.js
++++ b/src/products/search.js
+@@ -1,4 +1,4 @@
+-import { titleCase, truncate } from '../utils.js'
++import { titleCase, truncate } from '../utils/strings.js'
+ import { PRODUCTS } from './catalog.js'
+ 
+ export function searchProducts(query) {
+diff --git a/src/reports/daily.js b/src/reports/daily.js
+index 3fdbf4f..2e2c8ca 100644
+--- a/src/reports/daily.js
++++ b/src/reports/daily.js
+@@ -1,8 +1,5 @@
+-import {
+-  formatCents,
+-  formatDate,
+-  sumCents,
+-} from '../utils.js'
++import { formatDate } from '../utils/dates.js'
++import { formatCents, sumCents } from '../utils/money.js'
+ 
+ export function dailySummary(day, orders) {
+   const total = sumCents(orders.map((order) => order.paidCents))
+diff --git a/src/reports/export.js b/src/reports/export.js
+index dcdc5d3..7f7de06 100644
+--- a/src/reports/export.js
++++ b/src/reports/export.js
+@@ -1,4 +1,5 @@
+-import { formatDate, slugify } from '../utils.js'
++import { formatDate } from '../utils/dates.js'
++import { slugify } from '../utils/strings.js'
+ 
+ export function exportFileName(day, title) {
+   return `${formatDate(day)}-${slugify(title)}.csv`
+diff --git a/src/utils.js b/src/utils.js
+deleted file mode 100644
+index 99ad8bb..0000000
+--- a/src/utils.js
++++ /dev/null
+@@ -1,54 +0,0 @@
+-// Strings
+-
+-export function slugify(text) {
+-  return text
+-    .toLowerCase()
+-    .normalize('NFKD')
+-    .replace(/[̀-ͯ]/g, '')
+-    .replace(/[^a-z0-9]+/g, '-')
+-    .replace(/^-+|-+$/g, '')
+-}
+-
+-export function titleCase(text) {
+-  return text
+-    .split(/\s+/)
+-    .filter(Boolean)
+-    .map((word) => word[0].toUpperCase() + word.slice(1).toLowerCase())
+-    .join(' ')
+-}
+-
+-export function truncate(text, max) {
+-  return text.length <= max ? text : `${text.slice(0, max - 1)}…`
+-}
+-
+-// Dates, always in UTC so a report reads the same on every machine.
+-
+-const DAY_MS = 24 * 60 * 60 * 1000
+-
+-export function formatDate(date) {
+-  return date.toISOString().slice(0, 10)
+-}
+-
+-export function addDays(date, days) {
+-  return new Date(date.getTime() + days * DAY_MS)
+-}
+-
+-export function daysBetween(from, to) {
+-  return Math.round((to.getTime() - from.getTime()) / DAY_MS)
+-}
+-
+-// Money, in whole cents so sums never drift.
+-
+-export function formatCents(cents) {
+-  const sign = cents < 0 ? '-' : ''
+-  const abs = Math.abs(cents)
+-  return `${sign}$${Math.floor(abs / 100)}.${String(abs % 100).padStart(2, '0')}`
+-}
+-
+-export function sumCents(amounts) {
+-  return amounts.reduce((total, cents) => total + cents, 0)
+-}
+-
+-export function applyDiscount(cents, percent) {
+-  return Math.round((cents * (100 - percent)) / 100)
+-}
+diff --git a/src/utils/dates.js b/src/utils/dates.js
+new file mode 100644
+index 0000000..e3840e8
+--- /dev/null
++++ b/src/utils/dates.js
+@@ -0,0 +1,15 @@
++// Always in UTC so a report reads the same on every machine.
++
++const DAY_MS = 24 * 60 * 60 * 1000
++
++export function formatDate(date) {
++  return date.toISOString().slice(0, 10)
++}
++
++export function addDays(date, days) {
++  return new Date(date.getTime() + days * DAY_MS)
++}
++
++export function daysBetween(from, to) {
++  return Math.round((to.getTime() - from.getTime()) / DAY_MS)
++}
+diff --git a/src/utils/money.js b/src/utils/money.js
+new file mode 100644
+index 0000000..57fbe7f
+--- /dev/null
++++ b/src/utils/money.js
+@@ -0,0 +1,15 @@
++// In whole cents so sums never drift.
++
++export function formatCents(cents) {
++  const sign = cents < 0 ? '-' : ''
++  const abs = Math.abs(cents)
++  return `${sign}$${Math.floor(abs / 100)}.${String(abs % 100).padStart(2, '0')}`
++}
++
++export function sumCents(amounts) {
++  return amounts.reduce((total, cents) => total + cents, 0)
++}
++
++export function applyDiscount(cents, percent) {
++  return Math.round((cents * (100 - percent)) / 100)
++}
+diff --git a/src/utils/strings.js b/src/utils/strings.js
+new file mode 100644
+index 0000000..f53e4c3
+--- /dev/null
++++ b/src/utils/strings.js
+@@ -0,0 +1,20 @@
++export function slugify(text) {
++  return text
++    .toLowerCase()
++    .normalize('NFKD')
++    .replace(/[̀-ͯ]/g, '')
++    .replace(/[^a-z0-9]+/g, '-')
++    .replace(/^-+|-+$/g, '')
++}
++
++export function titleCase(text) {
++  return text
++    .split(/\s+/)
++    .filter(Boolean)
++    .map((word) => word[0].toUpperCase() + word.slice(1).toLowerCase())
++    .join(' ')
++}
++
++export function truncate(text, max) {
++  return text.length <= max ? text : `${text.slice(0, max - 1)}…`
++}
+diff --git a/test/utils.test.js b/test/utils.test.js
+index 8d31fdb..c8d321b 100644
+--- a/test/utils.test.js
++++ b/test/utils.test.js
+@@ -1,6 +1,8 @@
+ import assert from 'node:assert/strict'
+ import { test } from 'node:test'
+-import { addDays, applyDiscount, daysBetween, formatCents, formatDate, slugify, sumCents, titleCase, truncate } from '../src/utils.js'
++import { addDays, daysBetween, formatDate } from '../src/utils/dates.js'
++import { applyDiscount, formatCents, sumCents } from '../src/utils/money.js'
++import { slugify, titleCase, truncate } from '../src/utils/strings.js'
+ 
+ test('slugify drops accents and punctuation', () => {
+   assert.equal(slugify('  Café Mug, Large! '), 'cafe-mug-large')

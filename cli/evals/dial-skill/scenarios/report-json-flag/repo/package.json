@@ -1,0 +1,10 @@
+{
+  "name": "sales-cli",
+  "version": "0.9.2",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "report": "node src/cli.js report",
+    "test": "node --test"
+  }
+}
