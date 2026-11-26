@@ -5,7 +5,8 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { errorKind, ignoreLogWriteErrors, trimLogFile, ts } from '../lib/log.js'
 import { folderFingerprint } from './leanBundle.js'
@@ -190,6 +191,9 @@ export function coreExecArgv(execArgv: readonly string[], heapLimitMiB: number):
 export function writeStatusFile(file: string, status: MasterStatusFile): void {
   const temp = `${file}.${status.masterPid}.tmp`
   try {
+    // Its folder first: the master's first status comes before its core has made the data folder on a fresh install,
+    // and a core that never gets that far would leave `harness status` nothing to say why.
+    mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
     // not a state file: the master imports no helper (follow-up)
     writeFileSync(temp, `${JSON.stringify(status)}\n`)
     renameSync(temp, file)
