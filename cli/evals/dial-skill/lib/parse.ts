@@ -20,6 +20,8 @@ export interface RunResult {
   status: 'ok' | 'truncated' | 'unlisted'
   tool_calls: number
   limited: boolean
+  // Cut before its result event (killed, or crashed): its usage is the messages' as they began, its output a floor.
+  cut?: true
   // What the run started with, which the runner matches against its condition's probe. Left out when the stream has
   // no init event, as a stand-in's does.
   init?: { session_id: string | null; skills: string[]; claude_version: string | null }
@@ -96,7 +98,10 @@ export function parseClaudeStream(jsonl: string): RunResult {
   }
   // Thinking with no turn after it still belongs in the transcript.
   if (thinking !== undefined) push({ role: 'assistant', content: '' })
-  if (!hasResult) run.usage = sumUsage([...messages.values()])
+  if (!hasResult) {
+    run.usage = sumUsage([...messages.values()])
+    run.cut = true
+  }
   // More than one is named so that no check of the model's prefix accepts it.
   run.model = served.size > 1 ? `mixed: ${[...served].join(', ')}` : served.values().next().value ?? null
   return run

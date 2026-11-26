@@ -9,6 +9,7 @@ import { DIAL_SKILL_DESCRIPTION } from '../../../src/devices/dialSkill.js'
 import { claudeArgs, isDefaultProfile, spawnGroup, type AgentConfig, type Exit } from './agents.js'
 import { parseClaudeStream, type RunResult, type Usage } from './parse.js'
 import type { Condition, Scenario } from './scenarios.js'
+import { cutUsd } from './spend.js'
 import { runProfileFolder, stage, unstage, type StagedSkill, type StageOptions, type Staged } from './stage.js'
 
 export type DialListing = 'full' | 'name-only' | 'cut' | 'absent'
@@ -32,6 +33,8 @@ export interface Probe {
   claude_version: string | null
   model: string | null
   usage: Usage
+  /** What the probe is charged beyond its usage when it was cut before its result event (lib/spend.ts cutUsd). */
+  cut_usd?: number
   failure: string | null
 }
 
@@ -114,11 +117,12 @@ export async function probeListing(s: Scenario, condition: Condition, opts: Stag
       claude_version: run.init?.claude_version ?? null,
       model: run.model,
       usage: run.usage,
+      ...(run.cut ? { cut_usd: cutUsd(run) } : {}),
     }
     if (exit.timedOut) return { ...p, failure: 'timeout' }
     // As a run's: the account limit stops the pass, and the probe was billed for what it did.
     if (run.limited) {
-      throw Object.assign(new Error('the Claude account limit is reached'), { failure_class: 'account_limited', model: run.model, usage: run.usage })
+      throw Object.assign(new Error('the Claude account limit is reached'), { failure_class: 'account_limited', model: run.model, usage: run.usage, cut_usd: p.cut_usd })
     }
     // Its class only, for the transcript too: the read error's message names the profile.
     if ((exit.code !== 0 && run.status !== 'truncated') || transcript === null) return { ...p, failure: 'error' }

@@ -3,8 +3,9 @@ import type { Usage } from './parse.js'
 // One Usage, the stream's: the summary takes it from here, beside the prices.
 export type { Usage }
 
-/** What a row, error row or probe row billed: the agent's call and, when it was judged, the judge's. */
-export interface Billed { model?: string | null; usage?: Usage; judge_model?: string | null; judge_usage?: Usage }
+/** What a row, error row or probe row billed: the agent's call and, when it was judged, the judge's, and what its runs
+ *  cut before their result event are charged beyond their printed usage (cutUsd). */
+export interface Billed { model?: string | null; usage?: Usage; judge_model?: string | null; judge_usage?: Usage; cut_usd?: number }
 
 type Price = { in: number; out: number; cache_read: number }
 
@@ -56,7 +57,14 @@ export function costOf(model: string | null | undefined, u: Usage | undefined): 
 /** Dollars for a row's agent and judge calls, an unpriced one at the highest known price. */
 export function guardCost(b: Billed): number {
   const one = (model: string | null | undefined, u: Usage | undefined) => costOf(model, u) ?? priced(HIGHEST, u!)
-  return one(b.model, b.usage) + one(b.judge_model, b.judge_usage)
+  return one(b.model, b.usage) + one(b.judge_model, b.judge_usage) + (b.cut_usd ?? 0)
+}
+
+/** What a run cut before its result event is charged beyond its printed usage. Claude Code prints a message's usage as
+ *  it begins, so the output it then wrote, and a message it never printed, are not in it: the run is charged at least
+ *  the reserve the guard kept for it, the most a run is taken to cost. */
+export function cutUsd(r: { model?: string | null; usage?: Usage; cut?: boolean }): number {
+  return r.cut ? Math.max(0, RUN_RESERVE_USD - guardCost({ model: r.model, usage: r.usage })) : 0
 }
 
 /** Keeps a pass under its cap: a case or probe starts only while a reserve for it and for each one in flight fits. */

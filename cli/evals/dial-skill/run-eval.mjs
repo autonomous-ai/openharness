@@ -53,7 +53,7 @@ import { claudeJudge, JUDGE_EFFORT, JUDGE_MODEL, RUBRIC_SHA } from './lib/judge.
 import { sumUsage } from './lib/parse.ts';
 import { matchesProbe, probeListing } from './lib/probe.ts';
 import { CONDITIONS, loadScenarios, runId, splitIdOf } from './lib/scenarios.ts';
-import { guardCost, SpendGuard } from './lib/spend.ts';
+import { cutUsd, guardCost, SpendGuard } from './lib/spend.ts';
 import { readDone, readHarm, readRings, scrub, stage, unstage, unstageLive } from './lib/stage.ts';
 
 // Every output write refuses symlinks: the flow dir is model-influenced, and a
@@ -341,7 +341,8 @@ async function probeConditions(ctx, tasks, probesPath) {
     } catch (e) {
       if (e?.failure_class !== 'account_limited') throw e;
       appendFileNoFollow(probesPath, JSON.stringify({ condition, at: new Date().toISOString(), listing: null, instructions: null,
-        skills: [], claude_version: null, model: e.model ?? null, usage: e.usage, failure: 'account_limited' }) + '\n');
+        skills: [], claude_version: null, model: e.model ?? null, usage: e.usage,
+        ...(e.cut_usd ? { cut_usd: e.cut_usd } : {}), failure: 'account_limited' }) + '\n');
       eprint(ACCOUNT_LIMIT);
       process.exit(3);
     }
@@ -757,6 +758,7 @@ async function main() {
       // dial skill eval: every agent attempt ends by here, so none outlives its case or holds the judge's share.
       const agentDeadline = args.timeoutS > 0 ? t0 + agentTimeoutMs(args.timeoutS) : Infinity;
       let counted = 0; // dial skill eval: the dollars of this case the guard already holds
+      let cut = 0; // dial skill eval: what its attempts cut before their result event are charged beyond their usage
       const appRetry = { count: 0 }, judgeRetry = { count: 0 };
       try {
         // One ceiling over the whole case - app call, identity check, and grading - 
@@ -772,11 +774,14 @@ async function main() {
             // 0 leaves the agent unbounded, so a share already spent gives it 1 ms.
             const timeoutMs = agentDeadline === Infinity ? 0 : Math.max(1, agentDeadline - tAttempt);
             return runCase(c, ctx, timeoutMs).catch(e => {
-              counted += ctx.guard.add({ model: e?.model, usage: e?.usage });
+              const cutAttempt = cutUsd(e ?? {});
+              counted += ctx.guard.add({ model: e?.model, usage: e?.usage, cut_usd: cutAttempt });
+              cut += cutAttempt;
               appSpent = addUsage(appSpent, e?.usage);
               throw Object.assign(e, { usage: appSpent });
             });
           }, appRetry, agentDeadline, 5, () => ctx.guard.mayStart(inFlight - 1));
+          cut += cutUsd(run);
           run.usage = addUsage(appSpent, run.usage);
           lastRun = run;
           // latency_s = the final app attempt only; backoff sleeps, failed
@@ -827,7 +832,7 @@ async function main() {
                 ...(appRetry.count ? { retries: appRetry.count } : {}),
                 ...(judgeRetry.count ? { judge_retries: judgeRetry.count } : {}) }
             : meta,
-          model: run.model, usage: run.usage, stop_reason: run.stop_reason,
+          model: run.model, usage: run.usage, ...(cut ? { cut_usd: cut } : {}), stop_reason: run.stop_reason,
           // The report keys on `status`, not stop_reason: a clipped answer is
           // counted and shown but kept out of the means. runCase may set
           // run.status to override the max_tokens rule.
@@ -872,7 +877,7 @@ async function main() {
           // before the failure (e.g. a served-model mismatch, a judge-stage
           // ceiling), carry its identity and usage on the error row.
           // dial skill eval: a run that failed itself carries its own (lib/agents.ts).
-          model: e?.model ?? lastRun?.model, usage: e?.usage ?? lastRun?.usage,
+          model: e?.model ?? lastRun?.model, usage: e?.usage ?? lastRun?.usage, ...(cut ? { cut_usd: cut } : {}),
           judge_model: e?.judge_model ?? lastRun?.judge_model,
           judge_usage: e?.judge_usage ?? lastRun?.judge_usage,
           latency_s: (Date.now() - t0) / 1000,
