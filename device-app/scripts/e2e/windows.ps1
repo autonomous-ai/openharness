@@ -1421,8 +1421,11 @@ try {
   Stop-Process -Id $shown.Id -Force
   Ok "the console watcher traces a console window to the process that opened it: $(@(& $traced)[0])"
 
-  # --- 1: the silent install, per user, over the key 0.1.14 and older left under the old publisher
+  # --- 1: the silent install, per user, over the key 0.1.14 and older left under the old publisher, and the key a newer
+  # version's uninstall left under the new one before 0.1.14 was installed again elsewhere: the last install's wins.
 
+  $stale = Join-Path $work 'stale'
+  New-Item -Path $productKey -Value $stale -Force | Out-Null
   New-Item -Path $oldProductKey -Value $installDir -Force | Out-Null
   Install-Silently
   # What the install must add and the uninstall must remove.
@@ -1443,7 +1446,8 @@ try {
   $folder = (Get-ItemProperty -LiteralPath $productKey -ErrorAction SilentlyContinue).'(default)'
   if ($folder -ne $installDir) { Fail "$productKey holds $installDir, not $folder" }
   if (Test-Path -LiteralPath $oldProductKey) { Fail "the install removes $oldProductKey" }
-  Ok "the install moves the folder from $oldProductKey to $productKey"
+  if (Test-Path -LiteralPath $stale) { Fail "the install leaves no folder at $stale, the folder $productKey held" }
+  Ok "the install moves the folder from $oldProductKey to $productKey, over the one there, and leaves no other folder"
   foreach ($name in $desktopApp.Keys) {
     if ((Test-Path -LiteralPath $desktopApp[$name]) -ne $desktopBefore[$name]) { Fail "the desktop app's $name is as before the install" }
   }
