@@ -473,19 +473,33 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
   const patience = { left: true }
   /** `alive`: a held agent's waiting pane, which its launch goes into rather than a new one. */
   const missing: MissingPane[] = []
-  /** [entry]'s pane is seen to be the guard's held shell under [nativeToken]: it starts again there, or fails with words
-   *  that say what to do. */
-  const heldByGuard = (entry: RegisteredSession, runtime: TerminalRuntimeRef, nativeToken: string): void => {
+  /** The guard's hold on [entry] under [nativeToken], and the held passes asked to try it again; or the failed state,
+   *  whose words say what to do, and null. */
+  const markGuarded = (entry: RegisteredSession, nativeToken: string): RegisteredSession | null => {
     const launch = guardHold(entry, nativeToken)
     const row = deps.registry.setLaunch(entry.agentId, launch)!
     if (launch.state === 'failed') {
       summary.failed.push({ agentId: entry.agentId, code: launch.error, reason: launch.detail })
       deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · failed · ${launch.error}`)
-      return
+      return null
     }
     deps.startAgain?.(entry.agentId)
+    return row
+  }
+  /** [entry]'s pane is seen to be the guard's held shell under [nativeToken]: it starts again there, or fails. */
+  const heldByGuard = (entry: RegisteredSession, runtime: TerminalRuntimeRef, nativeToken: string): void => {
+    const row = markGuarded(entry, nativeToken)
+    if (!row) return
     const copy = { ...row }
     missing.push({ entry: copy, runtime, alive: true, current: restoreOwner(deps, copy) })
+  }
+  /** [entry], still this pass's, whose pane could not be read. A row 0.6.86 or older held for the guard gets the guard's
+   *  hold all the same: no pass would try it again otherwise (`legacyNativeHold`), and its held passes never relaunch
+   *  into a pane they cannot read. */
+  const unread = (entry: RegisteredSession): void => {
+    const launch = entry.launch
+    if (legacyNativeHold(entry) && launch?.state === 'held' && !markGuarded(entry, launch.nativeToken!)) return
+    summary.unsurveyed.push(entry.agentId)
   }
 
   // Per row, because a survey that gives up on the first bad one gives up on every row behind it —
@@ -513,8 +527,9 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
       // A first launch/fork has no conversation to resume yet. Without the guard's proof (`startsAgain`) nothing says
       // its original prompt or fork argv never reached an engine: keep the explicit hold; a fresh launch is different work.
       // One 0.6.86 or older held for the guard has that proof in its words (`legacyNativeHold`), but no `startsAgain`:
-      // every pass skipped it, and it stayed held for good. Seen in its held shell again, it gets the guard's hold, and
-      // from then on #4604's bounds (core/agents/heldLaunches.ts: 10 holds or 15 minutes, then DID_NOT_START).
+      // every pass skipped it, and it stayed held for good. It gets the guard's hold on its first pass, its pane read
+      // or not, and from then on #4604's bounds (core/agents/heldLaunches.ts: 10 holds or 15 minutes, then
+      // DID_NOT_START).
       const legacy = legacyNativeHold(entry)
       const first = heldFirstLaunch(entry) || legacy
       if (entry.launch.nativeToken && !entry.sessionId && !first) {
@@ -533,7 +548,7 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
         continue
       }
       if (alive && entry.launch.nativeToken && waiting !== true) {
-        if (current()) summary.unsurveyed.push(entry.agentId)
+        if (current()) unread(entry)
         continue
       }
       if (!current()) continue
@@ -664,8 +679,10 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
     missing.push({ entry, runtime, current })
    } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
-    if (error instanceof Unsurveyed) summary.unsurveyed.push(entry.agentId)
-    else summary.failed.push({ agentId: entry.agentId, code: 'SURVEY_FAILED', reason })
+    if (error instanceof Unsurveyed) {
+      if (current()) unread(entry)
+      else summary.unsurveyed.push(entry.agentId)
+    } else summary.failed.push({ agentId: entry.agentId, code: 'SURVEY_FAILED', reason })
     deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · could not be surveyed · ${errorKind(error)}`)
    }
   }
