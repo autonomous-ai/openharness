@@ -130,9 +130,10 @@ export function stage(s: Scenario, agent: AgentKind, opts: StageOptions): Staged
 
   try {
     // The crowd's CLAUDE.md and skills go there; a repo's own would reach every condition, clean included. Claude Code
-    // reads the instructions of a folder below the repo's top once the agent works there, so none may sit anywhere.
+    // reads the instructions and skills of a folder below the repo's top once the agent works there, so none may sit
+    // anywhere.
     const planted = readdirSync(join(s.dir, 'repo'), { recursive: true, encoding: 'utf8' })
-      .find((path) => path === '.claude' || INSTRUCTIONS.includes(basename(path)))
+      .find((path) => basename(path) === '.claude' || INSTRUCTIONS.includes(basename(path)))
     if (planted !== undefined) throw new Error(`the scenario's repo/ holds ${planted}`)
     // Inside a work tree, the agent would load that repo's AGENTS.md and CLAUDE.md, and could reach the answer key.
     if (insideGit(base, env)) throw new Error(`${base} is inside a git work tree`)
