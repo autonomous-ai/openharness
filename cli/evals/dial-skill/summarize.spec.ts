@@ -332,9 +332,22 @@ describe('writeSummaries', () => {
     expect(baseline).toContain('| b.claude | train | 2 | truncated | 2.00 | n/a |')
     const v1 = readFileSync(join(flow, 'v1', 'table.md'), 'utf8')
     expect(v1).toContain('| e.claude | val | 3 | error: serving_substitution | 3.00 | n/a |')
-    expect(v1).toContain('| total claude |  | 14 | 10 | 2.25 | 4.00 |')
-    expect(v1).toContain('| total oracle |  | 4 | 4 | 4.00 | 0.00 |')
-    expect(v1).toContain('| total |  | 18 | 14 | 2.50 | 4.00 |')
+    expect(v1).toContain('| total claude clean |  | 14 | 10 | 2.25 | 4.00 |')
+    expect(v1).toContain('| total oracle clean |  | 4 | 4 | 4.00 | 0.00 |')
+    expect(v1).toContain('| total clean |  | 18 | 14 | 2.50 | 4.00 |')
+  })
+
+  it('totals each agent in each condition apart, over the reps that condition ran', () => {
+    appendFileSync(join(flow, 'v1', 'results.jsonl'), jsonl([
+      row('d.claude.name-only', 0, need(4, 1, 1, 1)), row('e.claude.name-only', 0, need(-2, 0, null, 0)),
+    ]))
+    const table = runTable(flow, 'v1')
+    // name-only ran 1 rep: its rep 1 is blank, not a sum of 0, and one sum has no spread.
+    expect(table).toContain('| total claude name-only |  | 2 |  | 1.00 | n/a |')
+    expect(table).toContain('| total name-only |  | 2 |  | 1.00 | n/a |')
+    expect(table).toContain('| total claude clean |  | 14 | 10 | 2.25 | 4.00 |')
+    expect(table).toContain('| total clean |  | 18 | 14 | 2.50 | 4.00 |')
+    expect(table).not.toMatch(/^\| total (claude |oracle )?\|/m)
   })
 
   it('lists a case whose every attempt failed', () => {
