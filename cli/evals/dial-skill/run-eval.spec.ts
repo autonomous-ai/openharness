@@ -489,15 +489,18 @@ describe('run-eval.mjs conditions and probes', () => {
   it.each([
     ['Claude Code updated mid-pass', { version: '2.1.327' }],
     ['a skill more', { extraSkill: 'new-bundled-skill' }],
-  ])('marks a run whose init differs from its probe (%s) unlisted, kept out of the means and not judged', (_, fake) => {
+  ])('keeps a run whose init differs from its probe (%s) as unlisted and not judged, lets the case beside it finish, starts no other, and exits 5', (_, fake) => {
     fakeClaude(agent('claude-opus-5-5'), JUDGE, fake)
 
-    const out = runEval(['--variant', 'baseline', '--agents', 'claude', '--cases', 'api-key-missing', '--approve-harness'])
+    const out = runEval(['--variant', 'baseline', '--agents', 'claude', '--cases', 'api-key-missing,add-version-flag,fix-off-by-one',
+      '--concurrency', '2', '--approve-harness'])
 
-    expect(out.status, out.stderr).toBe(0)
-    expect(jsonl('baseline', 'results.jsonl')).toMatchObject([{ prompt_id: 'api-key-missing.claude.clean', status: 'unlisted', rings: 1, grade: {} }])
-    expect(jsonl('baseline', 'results.jsonl')[0].grade).toEqual({})
-    expect(callsMade()).toEqual(['probe', 'agent'])
+    expect(out.status).toBe(5)
+    expect(out.stderr).toContain('Claude Code changed mid-pass · rerun to probe again')
+    const rows = jsonl('baseline', 'results.jsonl')
+    expect(rows).toMatchObject([{ status: 'unlisted', rings: 1, grade: {} }, { status: 'unlisted', rings: 1, grade: {} }])
+    for (const row of rows) expect(row.grade).toEqual({})
+    expect(callsMade()).toEqual(['probe', 'agent', 'agent'])
   })
 
   it('probes nothing for the stand-ins', () => {
