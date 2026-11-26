@@ -6,13 +6,18 @@
  * Every scenario runs on macOS alone (the spec's decision 2). An agent keeps its place in the ring from when it entered
  * (cable/hosts/select.ts DialRing), so every ring here lists its agents in the order they started, and the face is on the
  * first: a check that the dial moves to a row starts that row's agent later, so the dial must move for it to pass.
+ *
+ * An agent in tmux or herdr is on iTerm2's page and on the multiplexer's (Diego's 2026-11-26 rule,
+ * docs/plans/2026-11-26-dial-mux-host-pages-design.md): iTerm2's page lists every agent here, a follow in iTerm2 moves
+ * the dial there, and tmux's and herdr's pages are reached by a pick.
  */
 import type { Nest } from '../../cable/hosts/types.js'
 import { counted, itermGhost, itermSession, listed, S, scenario, started, turned, withGhost } from './catalog.js'
 import type { Check, Scenario, SessionDef, SessionKey } from './types.js'
 
 type Ring = Extract<Check, { kind: 'ring' }>
-/** On iTerm2's page, with `apart` the agents counted on tmux's and herdr's pages: one also counted on iTerm2's fails. */
+/** On iTerm2's page, with `apart` the agents it does not list; the grader counts each listed one on its multiplexer's
+ *  page too. */
 const ring = (expect: SessionKey[], more: Partial<Ring> = {}): Ring =>
   ({ id: 'ring', kind: 'ring', dim: 'D1', page: 'iterm', expect, apart: [], ...more })
 const ringKept = (expect: SessionKey[], more: Partial<Ring> = {}): Ring => ring(expect, { id: 'ringKept', dim: 'D7', ...more })
@@ -42,8 +47,9 @@ export function itermScenarios(): Scenario[] {
    */
   const pastLook = 35 * S
   const i1Ring = ring(['a'])
-  const i2Ring = ring(['a'], { apart: ['b', 'c', 'd'], at: 'toTmux' })
-  const i3Ring = ring(['a'], { apart: ['b', 'c', 'd'], after: 'restart', at: 'toTmux' })
+  // Held as the select's window ends: the select keeps iTerm2's page.
+  const i2Ring = ring(['a', 'b', 'c', 'd'], { at: 'toTmux' })
+  const i3Ring = ring(['a', 'b', 'c', 'd'], { after: 'restart', at: 'toTmux' })
   return [
     scenario({
       id: 'I1', app: 'iterm', title: 'One tab running Claude Code: one row on iTerm2\'s page, by its name',
@@ -53,37 +59,41 @@ export function itermScenarios(): Scenario[] {
       probes: [withGhost(i1Ring)],
     }),
     scenario({
-      id: 'I2', app: 'iterm', title: 'A plain tab, tmux in a tab and herdr with two panes in a tab: iTerm2 1, tmux 1, herdr 2',
-      dims: ['D1'], ...darwin, sessions: [tab('a', 0), inTmux('b', 1), inHerdr('c', 2), inHerdr('d', 2, 1), itermGhost],
-      // Selecting the client's tab is how Diego reaches tmux's and herdr's pages (his decision 4, 2026-11-23), so the
-      // eval grades that follow too.
+      id: 'I2', app: 'iterm', title: 'A plain tab, tmux in a tab and herdr with two panes in a tab: iTerm2 4, tmux 1, herdr 2',
+      dims: ['D1', 'D2'], ...darwin, sessions: [tab('a', 0), inTmux('b', 1), inHerdr('c', 2), inHerdr('d', 2, 1), itermGhost],
+      // Selecting b's tab keeps iTerm2's page and moves the dial to b; tmux's and herdr's pages are reached by a pick
+      // (Diego's 2026-11-26 rule, docs/plans/2026-11-26-dial-mux-host-pages-design.md).
       steps: [
         ...started(['a', 'b', 'c', 'd']),
-        ...listed('iterm', ['a'], ['b', 'c', 'd']),
-        { label: 'toTmux', kind: 'iterm.select', window: 'w1', tab: 1 },
+        ...listed('iterm', ['a', 'b', 'c', 'd'], []),
+        { label: 'select', kind: 'iterm.select', window: 'w1', tab: 1 },
+        { kind: 'wait', ms: 2 * S },
+        { label: 'toTmux', kind: 'pick', page: 'tmux' },
         ...listed('tmux', ['b'], ['a', 'c', 'd']),
-        { label: 'toHerdr', kind: 'iterm.select', window: 'w1', tab: 2 },
+        { label: 'toHerdr', kind: 'pick', page: 'herdr' },
         ...listed('herdr', ['c', 'd'], ['a', 'b']),
       ],
       checks: [
         i2Ring,
+        { id: 'focus', kind: 'focus', dim: 'D2', session: 'b', after: 'select', at: 'toTmux' },
         ringOn('tmux', ['b'], { apart: ['a', 'c', 'd'], after: 'toTmux', at: 'toHerdr' }),
         ringOn('herdr', ['c', 'd'], { apart: ['a', 'b'], after: 'toHerdr' }),
       ],
       probes: [withGhost(i2Ring)],
     }),
     scenario({
-      id: 'I3', app: 'iterm', title: 'The same four, idle, and the devices start again: iTerm2 1, tmux 1, herdr 2 come back before any hook',
+      id: 'I3', app: 'iterm', title: 'The same four, idle, and the devices start again: iTerm2 4, tmux 1, herdr 2 come back before any hook',
       dims: ['D1', 'D7'], ...darwin, sessions: [tab('a', 0), inTmux('b', 1), inHerdr('c', 2), inHerdr('d', 2, 1), itermGhost],
       steps: [
         ...started(['a', 'b', 'c', 'd']),
         ...turned(['a', 'b', 'c', 'd']),
-        // d's prompt, the last, turns the dial to herdr's page.
-        ...listed('herdr', ['c', 'd'], ['a', 'b']),
+        // d's prompt, the last, moves the dial to d on iTerm2's page, which lists every agent here (Diego's 2026-11-26
+        // rule, docs/plans/2026-11-26-dial-mux-host-pages-design.md).
+        ...listed('iterm', ['a', 'b', 'c', 'd'], []),
         { label: 'restart', kind: 'devices.restart' },
         // The Apps screen's counts before the picks, as a pick of a page the devices have not counted yet is ignored; the
         // rows the scan finds keep their names, read from Claude Code's process record, and the checks grade them.
-        ...counted('iterm', { iterm: 1, tmux: 1, herdr: 2 }),
+        ...counted('iterm', { iterm: 4, tmux: 1, herdr: 2 }),
         { label: 'toTmux', kind: 'pick', page: 'tmux' },
         { kind: 'wait', ms: 2 * S },
         { label: 'toHerdr', kind: 'pick', page: 'herdr' },
@@ -91,7 +101,7 @@ export function itermScenarios(): Scenario[] {
       ],
       checks: [
         i3Ring,
-        ringKept(['a'], { apart: ['b', 'c', 'd'], after: 'restart', at: 'toTmux' }),
+        ringKept(['a', 'b', 'c', 'd'], { after: 'restart', at: 'toTmux' }),
         ringOn('tmux', ['b'], { apart: ['a', 'c', 'd'], after: 'toTmux', at: 'toHerdr' }),
         ringKeptOn('tmux', ['b'], { apart: ['a', 'c', 'd'], after: 'toTmux', at: 'toHerdr' }),
         ringOn('herdr', ['c', 'd'], { apart: ['a', 'b'], after: 'toHerdr' }),
@@ -134,7 +144,8 @@ export function itermScenarios(): Scenario[] {
       dims: ['D3'], ...darwin, sessions: [tab('a', 0), inTmux('d', 1), inTmux('b', 1, 1), itermGhost],
       steps: [
         ...started(['a', 'd', 'b']),
-        ...listed('iterm', ['a'], ['d', 'b']),
+        // iTerm2's page lists the tmux agents too (Diego's 2026-11-26 rule, docs/plans/2026-11-26-dial-mux-host-pages-design.md).
+        ...listed('iterm', ['a', 'd', 'b'], []),
         { kind: 'pick', page: 'tmux' },
         ...listed('tmux', ['d', 'b'], ['a']),
         { label: 'rest', kind: 'swipe', session: 'b' },
@@ -148,7 +159,8 @@ export function itermScenarios(): Scenario[] {
       dims: ['D3'], ...darwin, sessions: [tab('a', 0), inHerdr('c', 1), inHerdr('d', 1, 1), itermGhost],
       steps: [
         ...started(['a', 'c', 'd']),
-        ...listed('iterm', ['a'], ['c', 'd']),
+        // iTerm2's page lists the herdr agents too (Diego's 2026-11-26 rule, docs/plans/2026-11-26-dial-mux-host-pages-design.md).
+        ...listed('iterm', ['a', 'c', 'd'], []),
         { kind: 'pick', page: 'herdr' },
         ...listed('herdr', ['c', 'd'], ['a']),
         { label: 'tapC', kind: 'tap', session: 'c' },
@@ -197,8 +209,9 @@ export function itermScenarios(): Scenario[] {
       dims: ['D2'], ...darwin, sessions: [inTmux('a', 0), inTmux('b', 0, 1), itermGhost],
       steps: [
         ...started(['b', 'a']),
-        // iTerm2 holds no agent of its own, so it has no row on the Apps screen (Diego's decision 2, 2026-11-23).
-        ...listed('tmux', ['b', 'a']),
+        // iTerm2 holds no agent of its own, but its page lists the agents whose tmux client runs in it, and the dial
+        // follows the pane switch there (Diego's 2026-11-26 rule, docs/plans/2026-11-26-dial-mux-host-pages-design.md).
+        ...listed('iterm', ['b', 'a']),
         { kind: 'tmux.selectPane', session: 'a' },
         { kind: 'wait', ms: 1 * S },
         { label: 'select', kind: 'iterm.select', window: 'w1', tab: 0 },
@@ -210,11 +223,12 @@ export function itermScenarios(): Scenario[] {
     }),
     scenario({
       id: 'I11', app: 'iterm', title: 'The person moves to the other herdr pane in the selected tab: the dial follows to its agent',
-      // As I10's: the select moves the dial to c, the pane move must bring it to d.
+      // As I10's: the select moves the dial to c, the pane move must bring it to d, on iTerm2's page (Diego's 2026-11-26
+      // rule, docs/plans/2026-11-26-dial-mux-host-pages-design.md).
       dims: ['D2'], ...darwin, sessions: [inHerdr('c', 0), inHerdr('d', 0, 1), itermGhost],
       steps: [
         ...started(['d', 'c']),
-        ...listed('herdr', ['d', 'c']),
+        ...listed('iterm', ['d', 'c']),
         { label: 'select', kind: 'iterm.select', window: 'w1', tab: 0 },
         { kind: 'wait', ms: 2 * S },
         { label: 'pane', kind: 'herdr.focus', session: 'd' },
@@ -246,7 +260,9 @@ export function itermScenarios(): Scenario[] {
       dims: ['D7', 'D3'], ...darwin, sessions: [tab('a', 0), inTmux('b', 1), itermGhost],
       steps: [
         ...started(['a', 'b']),
-        ...listed('iterm', ['a'], ['b']),
+        // b is on iTerm2's page while a client of its tmux runs in iTerm2, and on tmux's (Diego's 2026-11-26 rule,
+        // docs/plans/2026-11-26-dial-mux-host-pages-design.md).
+        ...listed('iterm', ['a', 'b'], []),
         { label: 'detach', kind: 'tmux.detach', session: 'b' },
         { kind: 'wait', ms: 2 * S },
         { kind: 'iterm.tab', window: 'w1', tab: 2 },
@@ -257,7 +273,7 @@ export function itermScenarios(): Scenario[] {
         { label: 'tap', kind: 'tap', session: 'b' },
       ],
       checks: [
-        ringKept(['a'], { apart: ['b'], after: 'attach', at: 'toTmux' }),
+        ringKept(['a', 'b'], { after: 'attach', at: 'toTmux' }),
         ringKeptOn('tmux', ['b'], { apart: ['a'], after: 'toTmux', at: 'tap' }),
         { id: 'open', kind: 'open', dim: 'D3', session: 'b', link: false, tab: 'w1.2.0', after: 'tap' },
       ],
@@ -268,38 +284,41 @@ export function itermScenarios(): Scenario[] {
       dims: ['D7', 'D1'], ...darwin, sessions: [tab('a', 0), inHerdr('c', 1), inHerdr('d', 1, 1), itermGhost],
       steps: [
         ...started(['a', 'c', 'd']),
-        ...listed('iterm', ['a'], ['c', 'd']),
+        // iTerm2's page lists the herdr agents too (Diego's 2026-11-26 rule, docs/plans/2026-11-26-dial-mux-host-pages-design.md).
+        ...listed('iterm', ['a', 'c', 'd'], []),
         { kind: 'pick', page: 'herdr' },
         ...listed('herdr', ['c', 'd'], ['a']),
         { label: 'restart', kind: 'herdr.restart' },
         ...listed('herdr', ['c', 'd'], ['a']),
         { kind: 'wait', ms: pastLook },
         { label: 'toIterm', kind: 'pick', page: 'iterm' },
-        ...listed('iterm', ['a'], ['c', 'd']),
+        ...listed('iterm', ['a', 'c', 'd'], []),
       ],
       checks: [
         ringOn('herdr', ['c', 'd'], { apart: ['a'], after: 'restart', at: 'toIterm' }),
         ringKeptOn('herdr', ['c', 'd'], { apart: ['a'], after: 'restart', at: 'toIterm' }),
-        ring(['a'], { apart: ['c', 'd'], after: 'toIterm' }),
-        ringKept(['a'], { apart: ['c', 'd'], after: 'toIterm' }),
+        ring(['a', 'c', 'd'], { after: 'toIterm' }),
+        ringKept(['a', 'c', 'd'], { after: 'toIterm' }),
       ],
       probes: [ringOn('herdr', ['c', 'd', 'z'], { apart: ['a'], after: 'restart', at: 'toIterm' })],
     }),
     scenario({
-      id: 'I15', app: 'iterm', title: 'iTerm2 relaunched keeping its sessions, then the devices start again: tmux\'s and herdr\'s rows come back on their pages, with their tabs',
+      id: 'I15', app: 'iterm', title: 'iTerm2 relaunched keeping its sessions, then the devices start again: tmux\'s and herdr\'s rows come back on iTerm2\'s page and theirs, with their tabs',
       dims: ['D7', 'D1'], ...darwin, sessions: [tab('a', 0), inTmux('b', 1), inHerdr('c', 2), itermGhost],
+      // b and c are on iTerm2's page and on their multiplexer's (Diego's 2026-11-26 rule,
+      // docs/plans/2026-11-26-dial-mux-host-pages-design.md).
       steps: [
         ...started(['a', 'b', 'c']),
         ...turned(['a', 'b', 'c']),
-        // c's prompt, the last, turns the dial to herdr's page.
-        ...listed('herdr', ['c'], ['a', 'b']),
+        // c's prompt, the last, moves the dial to c on iTerm2's page.
+        ...listed('iterm', ['a', 'b', 'c'], []),
         { label: 'relaunch', kind: 'iterm.relaunch' },
         { kind: 'wait', ms: 2 * S },
         { label: 'restart', kind: 'devices.restart' },
         // Listed waits, as the taps need their rows listed; each tap on the page that lists its row. The pick waits for
         // the Apps screen's counts too, as a pick of a page the devices have not counted yet is ignored.
-        ...listed('iterm', ['a'], ['b', 'c']),
-        ...counted('iterm', { iterm: 1, tmux: 1, herdr: 1 }),
+        ...listed('iterm', ['a', 'b', 'c'], []),
+        ...counted('iterm', { iterm: 3, tmux: 1, herdr: 1 }),
         { label: 'toTmux', kind: 'pick', page: 'tmux' },
         ...listed('tmux', ['b'], ['a', 'c']),
         { label: 'tapB', kind: 'tap', session: 'b' },
@@ -309,8 +328,8 @@ export function itermScenarios(): Scenario[] {
         { label: 'tapC', kind: 'tap', session: 'c' },
       ],
       checks: [
-        ring(['a'], { apart: ['b', 'c'], after: 'restart', at: 'toTmux' }),
-        ringKept(['a'], { apart: ['b', 'c'], after: 'restart', at: 'toTmux' }),
+        ring(['a', 'b', 'c'], { after: 'restart', at: 'toTmux' }),
+        ringKept(['a', 'b', 'c'], { after: 'restart', at: 'toTmux' }),
         ringOn('tmux', ['b'], { apart: ['a', 'c'], after: 'toTmux', at: 'tapB' }),
         ringKeptOn('tmux', ['b'], { apart: ['a', 'c'], after: 'toTmux', at: 'tapB' }),
         ringOn('herdr', ['c'], { apart: ['a', 'b'], after: 'toHerdr', at: 'tapC' }),
@@ -318,7 +337,7 @@ export function itermScenarios(): Scenario[] {
         { id: 'openKeptB', kind: 'open', dim: 'D7', session: 'b', link: false, after: 'tapB', at: 'toHerdr' },
         { id: 'openKeptC', kind: 'open', dim: 'D7', session: 'c', link: false, after: 'tapC' },
       ],
-      probes: [ring(['a', 'z'], { apart: ['b', 'c'], after: 'restart', at: 'toTmux' })],
+      probes: [ring(['a', 'b', 'c', 'z'], { after: 'restart', at: 'toTmux' })],
     }),
     scenario({
       id: 'I16', app: 'iterm', title: 'A long turn in a plain tab: working, then done, and the last answer is the recap',
@@ -343,7 +362,9 @@ export function itermScenarios(): Scenario[] {
       dims: ['D4'], ...darwin, sessions: [inTmux('b', 0), itermGhost],
       steps: [
         ...started(['b']),
-        ...listed('tmux', ['b']),
+        // With iTerm2 in front the dial shows iTerm2's page, which lists b too (Diego's 2026-11-26 rule,
+        // docs/plans/2026-11-26-dial-mux-host-pages-design.md).
+        ...listed('iterm', ['b']),
         { label: 'turn', kind: 'hook', session: 'b', event: 'turn-start' },
         { kind: 'wait', ms: 2 * S },
         { label: 'ask', kind: 'hook', session: 'b', event: 'needs-input', asks: 'permission' },
@@ -365,14 +386,15 @@ export function itermScenarios(): Scenario[] {
     }),
     scenario({
       id: 'I19', app: 'iterm', title: 'Voice on the tmux agent: the exact words reach it, once',
-      // The person selects b's tab, which turns the dial to tmux's page with b on the face, and speaks: words that reach a,
-      // on iTerm2's page, are a wrong send.
+      // a first, so the face is on a: the person selects b's tab, which moves the dial to b on iTerm2's page (Diego's
+      // 2026-11-26 rule, docs/plans/2026-11-26-dial-mux-host-pages-design.md), and speaks: words that reach a are a
+      // wrong send.
       dims: ['D5'], ...darwin, sessions: [tab('a', 0), inTmux('b', 1), itermGhost],
       steps: [
-        ...started(['b', 'a']),
-        ...listed('iterm', ['a'], ['b']),
+        ...started(['a', 'b']),
+        ...listed('iterm', ['a', 'b'], []),
         { kind: 'iterm.select', window: 'w1', tab: 1 },
-        ...listed('tmux', ['b'], ['a']),
+        { kind: 'wait', ms: 2 * S },
         { label: 'voice', kind: 'voice', transcript: 'Eval words for bravo.', target: 'b' },
       ],
       checks: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 'b', text: 'Eval words for bravo.', after: 'voice' }],
@@ -382,9 +404,11 @@ export function itermScenarios(): Scenario[] {
       id: 'I20', app: 'iterm', title: 'Voice on one herdr pane\'s agent beside another, idle: only the target gets the words',
       dims: ['D5'], ...darwin, sessions: [inHerdr('c', 0), inHerdr('d', 0, 1), itermGhost],
       steps: [
-        // d first, so the face is on d: the person turns to c, and words for c reaching d are a wrong send.
+        // d first, so the face is on d: the person turns to c, and words for c reaching d are a wrong send. With iTerm2 in
+        // front the dial shows iTerm2's page, which lists them (Diego's 2026-11-26 rule,
+        // docs/plans/2026-11-26-dial-mux-host-pages-design.md).
         ...started(['d', 'c']),
-        ...listed('herdr', ['d', 'c']),
+        ...listed('iterm', ['d', 'c']),
         { kind: 'swipe', session: 'c' },
         { kind: 'wait', ms: 1 * S },
         { label: 'voice', kind: 'voice', transcript: 'Eval words for charlie.', target: 'c' },
@@ -398,7 +422,8 @@ export function itermScenarios(): Scenario[] {
       dims: ['D7'], ...darwin, sessions: [tab('a', 0), inTmux('d', 1), inTmux('b', 1, 1), inHerdr('c', 2), itermGhost],
       steps: [
         ...started(['a', 'd', 'b', 'c']),
-        ...listed('iterm', ['a'], ['d', 'b', 'c']),
+        // iTerm2's page lists every agent here (Diego's 2026-11-26 rule, docs/plans/2026-11-26-dial-mux-host-pages-design.md).
+        ...listed('iterm', ['a', 'd', 'b', 'c'], []),
         { kind: 'pick', page: 'tmux' },
         // The swipe needs b's row, or the replug has no focus to keep.
         ...listed('tmux', ['d', 'b'], ['a', 'c']),
@@ -409,14 +434,14 @@ export function itermScenarios(): Scenario[] {
         { label: 'replug', kind: 'replug' },
         ...listed('tmux', ['d', 'b'], ['a', 'c']),
         { label: 'toIterm', kind: 'pick', page: 'iterm' },
-        ...listed('iterm', ['a'], ['d', 'b', 'c']),
+        ...listed('iterm', ['a', 'd', 'b', 'c'], []),
         { label: 'toHerdr', kind: 'pick', page: 'herdr' },
         ...listed('herdr', ['c'], ['a', 'd', 'b']),
       ],
       checks: [
         ringKeptOn('tmux', ['d', 'b'], { apart: ['a', 'c'], after: 'replug', at: 'toIterm' }),
         { id: 'focusKept', kind: 'focus', dim: 'D7', session: 'b', after: 'replug', at: 'toIterm' },
-        ringKept(['a'], { apart: ['d', 'b', 'c'], after: 'toIterm', at: 'toHerdr' }),
+        ringKept(['a', 'd', 'b', 'c'], { after: 'toIterm', at: 'toHerdr' }),
         ringKeptOn('herdr', ['c'], { apart: ['a', 'd', 'b'], after: 'toHerdr' }),
       ],
       probes: [ringKeptOn('tmux', ['d', 'b', 'z'], { apart: ['a', 'c'], after: 'replug', at: 'toIterm' })],

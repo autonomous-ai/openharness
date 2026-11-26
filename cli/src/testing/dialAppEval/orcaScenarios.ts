@@ -216,7 +216,8 @@ export function orcaScenarios(): Scenario[] {
      * its tab and its tmux pane opened (the eval spec's decision 3): the tap switches Orca to c's tab first (observed.ts
      * placedTab), then tmux shows its pane and Orca comes forward. Tier A alone: tier B's c runs in no tmux pane and
      * Orca's rig records no tmux run. Not on Windows: tmux runs only inside WSL there, whose agents never reach the
-     * Windows devices.
+     * Windows devices. tmux's page lists c too, which the grader counts as c's other page (Diego's 2026-11-26 rule,
+     * docs/plans/2026-11-26-dial-mux-host-pages-design.md).
      */
     scenario({
       id: 'O11', app: 'orca', title: 'Claude Code under tmux in an Orca pane is an Orca row at its tab: a tap opens its tab and pane, and voice reaches it by its mod',
@@ -232,7 +233,7 @@ export function orcaScenarios(): Scenario[] {
         { label: 'voice', kind: 'voice', transcript: 'Eval words for charlie.', target: 'c' },
       ],
       checks: [
-        ring(['a', 'b', 'c']),
+        ring(['a', 'b', 'c'], { apart: [] }),
         { id: 'open', kind: 'open', dim: 'D3', session: 'c', link: false, after: 'tap', at: 'face' },
         { id: 'voice', kind: 'voice', dim: 'D5', session: 'c', text: 'Eval words for charlie.', path: 'mod', after: 'voice' },
       ],

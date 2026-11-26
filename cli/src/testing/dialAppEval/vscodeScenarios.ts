@@ -191,18 +191,19 @@ export function vscodeScenarios(): Scenario[] {
       probes: [{ id: 'open', kind: 'open', dim: 'D3', session: 'z', link: false, after: 'tap' }],
     }),
     scenario({
-      id: 'V12', app: 'vscode', title: 'Claude Code under tmux in a VS Code terminal: its row is on tmux\'s page, and a tap shows that terminal',
+      id: 'V12', app: 'vscode', title: 'Claude Code under tmux in a VS Code terminal: its row is on VS Code\'s page and tmux\'s, and a tap shows that terminal',
       dims: ['D7', 'D1', 'D3'], tiers: ['b'], sessions: [vscode('a', { tmux: true }), ghost],
-      // tmux in VS Code's terminal is on tmux's page, VS Code's counting none (Diego's decision 3, 2026-11-23).
+      // tmux in VS Code's terminal is on VS Code's page and on tmux's, which the grader counts as a's other page
+      // (Diego's 2026-11-26 rule, docs/plans/2026-11-26-dial-mux-host-pages-design.md).
       steps: [
         ...started(['a']),
         { kind: 'editor.window', window: 'w1', active: 'a', focused: true },
-        ...listed('tmux', ['a']),
+        ...listed('vscode', ['a'], []),
         { label: 'tap', kind: 'tap', session: 'a' },
       ],
       checks: [
-        { id: 'ring', kind: 'ring', dim: 'D1', page: 'tmux', expect: ['a'], apart: [] },
-        { id: 'ringKept', kind: 'ring', dim: 'D7', page: 'tmux', expect: ['a'], apart: [] },
+        { id: 'ring', kind: 'ring', dim: 'D1', page: 'vscode', expect: ['a'], apart: [] },
+        { id: 'ringKept', kind: 'ring', dim: 'D7', page: 'vscode', expect: ['a'], apart: [] },
         { id: 'open', kind: 'open', dim: 'D3', session: 'a', link: false, after: 'tap' },
       ],
       probes: [{ id: 'open', kind: 'open', dim: 'D3', session: 'z', link: false, after: 'tap' }],
