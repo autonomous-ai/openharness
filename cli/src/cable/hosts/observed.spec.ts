@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ObservedAsked, ObservedHookEvent } from '../../core/observedHook.js'
+import type { RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { STOP_HOOK_GRACE_MS } from '../../core/turns/turnHooks.js'
 import type { ProcessRow } from '../../lib/processTable.js'
 import { OpenSessions, SessionRows } from '../../lib/sessionSearch/external.js'
@@ -11,7 +12,7 @@ import { type HostAdapter, oncePerCaller, type Pane, type Place } from './adapte
 import { createClaudeAppAdapter } from './claudeApp.js'
 import { createCodexAppAdapter } from './codexApp.js'
 import type { CodexQueueResult } from './codexQueue.js'
-import type { Served, ServedAsk } from './codexServed.js'
+import { codexServed, type CodexServedDeps, type Served, type ServedAsk } from './codexServed.js'
 import type { HcPrompt } from './hcClient.js'
 import { createHerdrAdapter } from './herdr.js'
 import { createHerdrAppAdapter } from './herdrApp.js'
@@ -22,7 +23,7 @@ import { askedLine, countWord, cutAnswer, observedAgentId, type ObservedActions,
 import type { OpenTarget } from './open.js'
 import { createOrcaAdapter, MAX_TEXT, type OrcaDeps } from './orca.js'
 import { type Fresh, FRESH_WITHIN_MS, type Nested, type NestedPlace, type OuterLookup } from './outer.js'
-import { learnApps, type ProcessName } from './scannedApp.js'
+import { appRoots, learnApps, type ProcessName, scannedApps } from './scannedApp.js'
 import { pageOf } from './select.js'
 import { createTabsAdapter, type TabApp } from './tabs.js'
 import { createTmuxAdapter } from './tmux.js'
@@ -39,8 +40,8 @@ function setup(over: Partial<ObservedDeps> = {}) {
     .filter((pid) => gens.get(pid) !== null).map((pid) => ({ pid, generation: gens.get(pid) ?? `g${pid}` })))
   const alive = vi.fn((_pid: number) => true)
   const open = new Map<string, 'terminal' | 'app' | 'harness' | 'maybe'>()
-  // An owner's record path is its session id unless one is given.
-  const owners = new Map<string, { pid: number; engine: string; record?: string }>()
+  // An owner's record path is its session id unless one is given, and it runs on no terminal unless one is given.
+  const owners = new Map<string, { pid: number; engine: string; record?: string; tty?: string | null }>()
   const working = new Map<string, boolean | null>()
   const externals = new Map<string, { cwd?: string; transcriptPath?: string | null }>()
   const answers = new Map<string, string>()
@@ -67,7 +68,7 @@ function setup(over: Partial<ObservedDeps> = {}) {
         await look()
         return new Map([...open].flatMap(([id, openIn]) => {
           const owner = owners.get(id)
-          return owner ? [[id, { record: id, ...owner, tty: null, ...(openIn === 'harness' ? { harness: true } : {}) }] as const] : []
+          return owner ? [[id, { record: id, tty: null, ...owner, ...(openIn === 'harness' ? { harness: true } : {}) }] as const] : []
         }))
       },
       // As OpenSessions says: busy unless the owner's record reads idle.
@@ -6575,14 +6576,14 @@ describe('ObservedSource and a Codex session its own server runs', () => {
 
   /** A source whose served lookups the test answers by hand, in the order they were asked, and a Codex hook from the
    *  daemon (900) with iTerm2's hints. */
-  function served(over: Partial<Fakes> = {}) {
+  function served(over: Partial<Fakes> = {}, deps: Partial<ObservedDeps> = {}) {
     const asks: Array<{ answer(answers: readonly (Served | undefined)[]): Promise<void>; fail(): Promise<void> }> = []
     const lookup = vi.fn((_asks: readonly ServedAsk[]) => new Promise<readonly (Served | undefined)[]>((resolve, reject) => {
       asks.push({ answer: (answers) => { resolve(answers); return flushed() }, fail: () => { reject(new Error('ps failed')); return flushed() } })
     }))
     const tty = vi.fn(async (_pid: number): Promise<string | undefined> => '/dev/ttys031')
     const { actions } = fakeActions(over)
-    const s = setup({ actions, tty, served: lookup })
+    const s = setup({ actions, tty, served: lookup, ...deps })
     const agent = () => s.src.list()[0]
     const codex = (event: ObservedHookEvent['event'], more: Partial<ObservedHookEvent> = {}) => s.ev(event, {
       engine: 'codex', sessionId: THREAD, callerPid: 900, hostHints: { ...ITERM2 },
@@ -6688,6 +6689,133 @@ describe('ObservedSource and a Codex session its own server runs', () => {
     await t.asks[0].fail()
     expect(t.agent().app).toBe('iterm')
     expect(t.logs).toContain('[observed] served · not read · Error')
+  })
+
+  /** A Codex session the open scan finds held by [pid], on no terminal unless [tty] says, in /work/app. */
+  const foundCodex = (t: ReturnType<typeof served>, sessionId: string, pid: number, tty: string | null = null): void => {
+    t.open.set(sessionId, 'app')
+    t.owners.set(sessionId, { pid, engine: 'codex', tty })
+    t.externals.set(sessionId, { cwd: '/work/app', transcriptPath: `/home/u/.codex/sessions/2026/11/26/rollout-${sessionId}.jsonl` })
+  }
+
+  it('the scan places a session a Codex server holds by its client, never by the server\'s parents', async () => {
+    // The daemon is still the child of the first TUI, in iTerm2: its parents name iTerm2.
+    const t = served({}, { apps: async () => new Map([[900, 'iterm']]) })
+    foundCodex(t, THREAD, 900)
+    const scanned = t.src.scanOpen()
+    await vi.waitFor(() => { expect(t.asks).toHaveLength(1) })
+    expect(t.lookup.mock.calls).toEqual([[[{ pid: 900, cwd: '/work/app' }]]])
+    await t.asks[0].answer([{ client: CLIENT }])
+    await scanned
+    const agent = t.src.list()[0]
+    expect(agent).toMatchObject({ app: 'terminal-app' })
+    expect(agent.appPending).toBeUndefined()
+    expect(t.src.tabTty(agent.id)).toBe('/dev/ttys005')
+    expect(t.src.paneOf(agent.id, 'tabs')).toBe('terminal-app:/dev/ttys005')
+    expect(t.src.windowOf(agent.id)).toEqual({ pid: 500, app: 'terminal-app', outer: true })
+    expect(t.tty).not.toHaveBeenCalled()
+    expect(t.logs[0]).toMatch(/^\[observed\] scan · 1 found · 1 app known · /)
+  })
+
+  it('the scan asks only for Codex sessions on no terminal, all in one ask, and places the others as before', async () => {
+    const t = served({}, { apps: async () => new Map([[11, 'ghostty'], [12, 'ghostty']]) })
+    foundCodex(t, THREAD, 900)
+    foundCodex(t, 'b', 901)
+    foundCodex(t, 'tui', 12, '/dev/ttys003')
+    t.open.set('cc', 'terminal')
+    t.owners.set('cc', { pid: 11, engine: 'claude' })
+    t.externals.set('cc', { cwd: '/work/app', transcriptPath: '/t/cc.jsonl' })
+    const scanned = t.src.scanOpen()
+    await vi.waitFor(() => { expect(t.asks).toHaveLength(1) })
+    expect(t.lookup.mock.calls).toEqual([[[{ pid: 900, cwd: '/work/app' }, { pid: 901, cwd: '/work/app' }]]])
+    // The second's caller is no server: it is placed as before.
+    await t.asks[0].answer([{}, undefined])
+    await scanned
+    const bySession = (sessionId: string) => t.src.list().find((a) => a.sessionId === sessionId)!
+    expect(bySession(THREAD).app).toBe('terminal')
+    expect(bySession(THREAD).appPending).toBeUndefined()
+    expect(t.src.windowOf(bySession(THREAD).id)).toBeUndefined()
+    expect(bySession('b')).toMatchObject({ app: 'terminal', appPending: true })
+    expect(bySession('tui').app).toBe('ghostty')
+    expect(bySession('cc').app).toBe('ghostty')
+  })
+
+  it('the first hook from the server the scan found it held keeps its place: asked again only at a start', async () => {
+    const t = served()
+    foundCodex(t, THREAD, 900)
+    const scanned = t.src.scanOpen()
+    await vi.waitFor(() => { expect(t.asks).toHaveLength(1) })
+    await t.asks[0].answer([{ client: CLIENT }])
+    await scanned
+    const apps: string[] = []
+    t.src.onChange(() => { apps.push(t.agent().app) })
+    t.src.ingest(t.codex('turn-start', { cwd: '/work/app' }))
+    t.src.ingest(t.codex('turn-stop', { cwd: '/work/app' }))
+    expect(t.lookup).toHaveBeenCalledTimes(1)
+    expect(apps).toEqual(['terminal-app', 'terminal-app'])
+    expect(t.src.tabTty(t.agent().id)).toBe('/dev/ttys005')
+    t.src.ingest(t.codex('session-start', { cwd: '/work/app' }))
+    expect(t.lookup).toHaveBeenCalledTimes(2)
+    expect(t.agent().app).toBe('terminal-app')
+  })
+
+  it('Diego\'s Codex in Terminal: the scan and every hook put it on Terminal\'s page at its TUI\'s tab, never iTerm2\'s, with no pane to type into', async () => {
+    // Codex 0.172 in Terminal on ttys005, a client of the daemon under launchd, which holds the rollout; another TUI in
+    // iTerm2 works in another folder, and the daemon's environment, which every hook carries, is the iTerm2 tab's that
+    // started it, inside tmux.
+    const HOME = '/Users/someone'
+    const DAEMON = `${HOME}/.codex/packages/app-server-daemon/current/bin/codex`
+    const row = (pid: number, ppid: number, command: string, args: string = command): RunningProcess =>
+      ({ pid, ppid, executable: command.slice(0, 16), commandPath: command, args })
+    const rows = [
+      row(10, 1, '/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal'), row(11, 10, 'login'), row(12, 11, '-zsh'),
+      row(500, 12, '/opt/homebrew/bin/codex', 'codex'),
+      row(20, 1, '/Applications/iTerm.app/Contents/MacOS/iTerm2'), row(21, 20, '-zsh'), row(600, 21, '/opt/homebrew/bin/codex', 'codex'),
+      row(900, 1, DAEMON, `${DAEMON} app-server --remote-control --listen unix:// --analytics-default-enabled --managed-daemon`),
+    ]
+    const places: Record<number, { tty: string; cwd: string }> = {
+      500: { tty: 'ttys005', cwd: '/work/app' }, 600: { tty: 'ttys009', cwd: '/work/other' },
+    }
+    const bundles: Record<string, string> = {
+      '/System/Applications/Utilities/Terminal.app': 'com.apple.Terminal', '/Applications/iTerm.app': 'com.googlecode.iterm2',
+    }
+    const walk = (pids: readonly number[], names: readonly ProcessName[] = rows) => scannedApps(pids, {
+      platform: 'darwin', roots: appRoots(HOME), processes: async () => names, bundleId: async (bundle) => bundles[bundle], home: HOME,
+    })
+    const lookup: CodexServedDeps = {
+      platform: 'darwin', processes: async () => rows,
+      cwds: async (pids) => new Map(pids.flatMap((pid) => (places[pid] ? [[pid, places[pid].cwd] as const] : []))),
+      tty: async (pid) => places[pid]?.tty, apps: walk, folder: async (path) => path,
+    }
+    const { actions } = fakeActions({ codexQueue: { can: vi.fn(() => false), send: vi.fn() } })
+    const tty = vi.fn(async (_pid: number): Promise<string | undefined> => undefined)
+    const s = setup({ actions, tty, apps: (pids) => walk(pids), served: (asks) => codexServed(asks, lookup) })
+    const apps: string[] = []
+    s.src.onChange(() => { apps.push(s.src.list()[0].app) })
+    s.open.set(THREAD, 'app')
+    s.owners.set(THREAD, { pid: 900, engine: 'codex' })
+    s.externals.set(THREAD, { cwd: '/work/app', transcriptPath: `/home/u/.codex/sessions/2026/11/26/rollout-${THREAD}.jsonl` })
+    await s.src.scanOpen()
+    const { id } = s.src.list()[0]
+    const onTerminal = (): void => {
+      const agent = s.src.list()[0]
+      expect(pageOf(agent)).toBe('terminal-app')
+      expect(s.src.tabTty(id)).toBe('/dev/ttys005')
+      expect(s.src.paneOf(id, 'tabs')).toBe('terminal-app:/dev/ttys005')
+      for (const adapter of ['tmux', 'vscode', 'orca', 'herdr', 'wezterm']) expect(s.src.paneOf(id, adapter)).toBeUndefined()
+      expect(s.src.capabilities(agent).voice).toBe(false)
+    }
+    onTerminal()
+    expect(s.logs[0]).toMatch(/^\[observed\] scan · 1 found · 1 app known · /)
+    const hints = { TERM_PROGRAM: 'iTerm.app', __CFBundleIdentifier: 'com.googlecode.iterm2', TERM_SESSION_ID: 'w0t0p0:5B1C', TMUX_PANE: '%3' }
+    for (const event of ['session-start', 'turn-start', 'turn-stop'] as const) {
+      s.src.ingest(s.ev(event, { engine: 'codex', sessionId: THREAD, callerPid: 900, cwd: '/work/app', hostHints: hints }))
+      await flushed()
+      onTerminal()
+    }
+    expect(apps.length).toBeGreaterThan(0)
+    expect(apps).not.toContain('iterm')
+    expect(tty).not.toHaveBeenCalled()
   })
 })
 
