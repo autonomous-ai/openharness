@@ -348,12 +348,17 @@ export function windowsPtyOwner(pid: number, rows: readonly WindowsProcess[]): s
   return windowsPtyMaker(pid, rows)?.host
 }
 
-/** The listed app a Windows maker's image names (frontAppId, which takes Orca's `orca.exe` only with its `.exe`). Never
- *  the Claude app: its window's `claude.exe` is Claude Code's own image too, so such a maker is an agent that ran this
- *  one from its shell tool (Codex from Claude Code's), not the app. */
+/** The apps a Windows maker's image never names. The Claude app: its window's `claude.exe` is Claude Code's own image
+ *  too, so such a maker is an agent that ran this one from its shell tool (Codex from Claude Code's), not the app.
+ *  Harness: `harness.exe` is the CLI there (pty/src/command.rs), which runs a tool on the caller's console
+ *  (`harness api <connection> run`), and Harness Desktop is `harness-desktop.exe`. */
+const NOT_WINDOWS_MAKERS = new Set(['claude', 'harness'])
+
+/** The listed app a Windows maker's image names (frontAppId, which takes Orca's `orca.exe` only with its `.exe`), never
+ *  one of NOT_WINDOWS_MAKERS. */
 function windowsAppOf(executable: string): string | undefined {
   const app = frontAppId(`${windowsName(executable)}.exe`)
-  return listed(app) && app !== 'claude' ? app : undefined
+  return listed(app) && !NOT_WINDOWS_MAKERS.has(app) ? app : undefined
 }
 
 /** The table [list] reads, each row cut to its pid, parent, image name and start: the PTY host's rows carry the
