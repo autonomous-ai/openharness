@@ -492,7 +492,7 @@ export interface CableHost {
    *  window's tab, an agent it does not list) means everything, as before. */
   capsOf?(agentId: string, opts?: { apps?: boolean }): string | undefined
   /** A sentence of the agent's own app for words no route reaches, said in place of the generic one; undefined keeps
-   *  that. */
+   *  that. Asked at every dictation start, for an agent with `v` too: a sentence then refuses the words. */
   voiceRefusal?(agentId: string, opts?: { apps?: boolean }): string | undefined
   /** The app or terminal that agent runs in (`orca`, `ghostty`, …), for the words of a refusal. */
   hostOf?(agentId: string, opts?: { apps?: boolean }): string | undefined
@@ -2047,13 +2047,15 @@ export class CableSession {
         const plain = str('agentId') && !formVoice && !searchVoice && !draftVoice && !questionVoice && !carryVoice && !('selectionId' in msg)
         const focused = plain ? this.host.appFocus?.(this.asItself) : undefined
         const agentId = focused?.agentId ?? str('agentId')
-        // Words for an agent's terminal that the dial cannot type into (an agent outside Harness): no audio is kept and
-        // nothing goes to the transcriber. A form, a search, a draft or a question is not its terminal.
-        if (agentId && !formVoice && !searchVoice && !draftVoice && !questionVoice && this.lacks(agentId, 'v')) {
+        // Words for an agent's terminal that the dial cannot type into (an agent outside Harness, or a Claude Code
+        // session whose plugin or mod is not there yet): no audio is kept and nothing goes to the transcriber. A form,
+        // a search, a draft or a question is not its terminal.
+        const terminal = !formVoice && !searchVoice && !draftVoice && !questionVoice
+        const sentence = agentId && terminal ? this.host.voiceRefusal?.(agentId, this.asItself) : undefined
+        if (agentId && terminal && (sentence || this.lacks(agentId, 'v'))) {
           this.voice = null
           this.voiceRefusal = { generation: this.voiceGeneration, agentId,
-            message: this.host.voiceRefusal?.(agentId, this.asItself)
-              ?? `This agent is in ${this.hostName(agentId)}. Talking to it from the device comes in an update.` }
+            message: sentence ?? `This agent is in ${this.hostName(agentId)}. Talking to it from the device comes in an update.` }
           return
         }
         this.voice = {
