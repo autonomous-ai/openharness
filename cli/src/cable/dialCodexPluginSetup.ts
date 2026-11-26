@@ -58,8 +58,8 @@ const SHELL_MS = 600_000
  *  pass lists no scanned home until the next scan), so it is not what bounds them. */
 const MAX_SAID = 2 * MAX_HOMES
 const COUNTED = { installed: 'set up', updated: 'updated', absent: 'left removed' } as const
-/** What a home's step leaves its pass: the next home; the step stopped, as there is no `codex`; or the pass ended, as
- *  Codex is no longer wanted or that is not known, so nothing more is installed or trusted. */
+/** What a home's step leaves its pass: the next home; the step stopped, as there is no `codex` or it is too old; or the
+ *  pass ended, as Codex is no longer wanted or that is not known, so nothing more is installed or trusted. */
 type Next = 'go' | 'stop' | 'end'
 
 export function createDialCodexPluginSetup(deps: DialCodexPluginSetupDeps): DialCodexPluginSetup {
@@ -70,8 +70,10 @@ export function createDialCodexPluginSetup(deps: DialCodexPluginSetupDeps): Dial
   let served: string[] = []
   /** The carried copy's fingerprint, worked out once a process; null in a run from the sources, which carries none. */
   let carried: string | null | undefined
-  /** When each home last failed, or was found gone, the person's own or with a Codex too old: each waits its own hour. */
+  /** When each home last failed, or was found gone or the person's own: each waits its own hour. */
   const waitFrom = new Map<string, number>()
+  /** When `codex` last answered older than MIN_CODEX: one binary serves every home, so none runs it within that hour. */
+  let tooOldAt = -Infinity
   /** Each recorded home's installed folder and config.toml as last checked; it leaves with the home's entry. */
   const stamps = new Map<string, string>()
   /** Recorded homes whose folder was said to differ from the carried copy, until it matches again. */
@@ -97,11 +99,17 @@ export function createDialCodexPluginSetup(deps: DialCodexPluginSetupDeps): Dial
     deps.count('failed', reason)
     wait(home)
   }
-  /** A Codex older than MIN_CODEX is no failure: nothing is counted for it, and it is asked again after its hour. */
-  const stepFailed = (home: string, failure: CodexFailure): void => {
-    if (failure.step === 'unsupported') wait(home)
-    else failed(home, failure.step === 'trust' ? `trust ${failure.reason}` : failure.step)
+  /** A Codex older than MIN_CODEX is no failure: nothing is counted for it, and it stops the step, asked again after its
+   *  hour. */
+  const stepFailed = (home: string, failure: CodexFailure): Next => {
+    if (failure.step === 'unsupported') {
+      tooOldAt = deps.now()
+      return 'stop'
+    }
+    failed(home, failure.step === 'trust' ? `trust ${failure.reason}` : failure.step)
+    return 'go'
   }
+  const tooOld = (): boolean => deps.now() - tooOldAt < RETRY_MS
 
   const trusted = (home: string, matched: boolean): void => {
     if (matched) differs.delete(home)
@@ -171,17 +179,17 @@ export function createDialCodexPluginSetup(deps: DialCodexPluginSetupDeps): Dial
 
   async function undo(home: string, run: ClaudeRun): Promise<Next> {
     const removed = await codexRemove({ run, home, platform: deps.platform })
-    if (removed.ok) owed.delete(home)
-    else {
-      owed.add(home)
-      stepFailed(home, removed)
+    if (removed.ok) {
+      owed.delete(home)
+      return 'go'
     }
-    return 'go'
+    owed.add(home)
+    return stepFailed(home, removed)
   }
 
   async function undoStep(lookup: (home: string) => Promise<ClaudeRun | null>): Promise<void> {
     const due = [...owed].filter((home) => !waiting(home))
-    if (!due.length) return
+    if (!due.length || tooOld()) return
     const wanted = deps.wanted()
     // Wanted again: such a home is set up as any other, and nothing is owed.
     if (wanted === true) owed.clear()
@@ -192,10 +200,7 @@ export function createDialCodexPluginSetup(deps: DialCodexPluginSetupDeps): Dial
   async function setUp(home: string, run: ClaudeRun, files: ClaudePluginFiles): Promise<Next> {
     const install = { run, home, platform: deps.platform, folder: deps.plugin.folder, files }
     const done = Object.hasOwn(deps.recorded(), home) ? await codexUpdate(install) : await codexSetUp(install)
-    if (!done.ok) {
-      stepFailed(home, done)
-      return 'go'
-    }
+    if (!done.ok) return stepFailed(home, done)
     if (done.outcome === 'own') {
       skipOwn(home)
       return 'go'
@@ -221,7 +226,7 @@ export function createDialCodexPluginSetup(deps: DialCodexPluginSetupDeps): Dial
     // In memory first: wanted() reads dial-skill.json, which a scan with every home current never reads.
     const recorded = deps.recorded()
     const due = served.filter((home) => recorded[home] !== deps.version && !waiting(home))
-    if (!due.length || deps.wanted() !== true) return true
+    if (!due.length || tooOld() || deps.wanted() !== true) return true
     // The carried copy's fingerprint was worked out from it, so this build carries it.
     const files = deps.plugin.files()!
     for (const home of due) {
