@@ -867,7 +867,8 @@ static void handle_question(const cJSON *p, const char *agent_id)
     // The name rides on the frame for the same reason as on `summary`: the asker may be off this tab.
     if (agent_id && questions) {
         // A question is an alert: pinned row, wake and a (coalesced) beep, all but the beep inside
-        // ui_question_show, which stays quiet for the pane already on the glass and for a list row.
+        // ui_question_show, which stays quiet for a list row. The daemon decides whether the person is
+        // already with the agent, so the dial rings every alert it is sent.
         if (ui_question_show(agent_id, str_of(p, "name"), str_of(p, "machine"), str_of(p, "id"), questions,
                              cable_client_supports(CABLE_FEATURE_QUESTION_TIER) && tier && !strcmp(tier, "list")))
             audio_notify_done();
@@ -1281,7 +1282,7 @@ static void handle_message(const cJSON *root)
     // One line per turn-state message. This is the seam where "the daemon sent it" and "the tile moved"
     // stop being the same question, and it cost an afternoon of guessing to notice that nothing here said
     // which of the two had failed.
-    if (strncmp(t, "turn.", 5) == 0 || strcmp(t, "summary") == 0) {
+    if (strncmp(t, "turn.", 5) == 0 || strcmp(t, "summary") == 0 || strcmp(t, "question") == 0) {
         ESP_LOGI(TAG, "%s %s", t, agent_id ? agent_id : "(no agentId)");
     }
     if (strcmp(t, "turn.started") == 0) {
@@ -1320,8 +1321,8 @@ static void handle_message(const cJSON *root)
         //
         // THE TIER decides everything else (daemon, 2026-10-19): `alert` beeps, wakes and celebrates,
         // `list` only files a drawer row, `silent` files nothing. ui_notify_summary maps an old daemon's
-        // `silent`/`quiet` flags when there is no tier, and says whether to beep: an alert, and not for
-        // the pane already on the glass. The beep itself coalesces to one per 30 s in audio_notify_done.
+        // `silent`/`quiet` flags when there is no tier, and says whether to beep: every alert, as the
+        // daemon already decided whether the person is with the agent. The beep itself coalesces to one per 30 s in audio_notify_done.
         // WHO IT IS ABOUT rides on the frame: the dial holds one tab's agents, and this turn may have
         // finished on any of them.
         if (ui_notify_summary(agent_id, str_of(p, "name"), str_of(p, "machine"), str_of(p, "recap"),
@@ -1346,7 +1347,7 @@ static void handle_message(const cJSON *root)
     }
     if (strcmp(t, "turn.error") == 0) {
         if (agent_id) ui_project_emit(agent_id, "", "done", "", NULL);
-        // A failure is an alert: it beeps (coalesced) unless its pane is on the glass or the drawer refused it.
+        // A failure is an alert: it beeps (coalesced) unless the drawer refused it; the daemon decides presence.
         if (agent_id ? ui_turn_error(agent_id, str_of(p, "message")) : (ui_cable_toast(str_of(p, "message")), false))
             audio_notify_done();
         return;

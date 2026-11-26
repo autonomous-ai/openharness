@@ -4020,17 +4020,6 @@ static void notice_expire(uint32_t now)
         }
     if (gone) { notice_sync_view(); change(); }
 }
-// The pane whose face is on the glass already shows its own news.
-static bool on_face(const char *id)
-{
-    const agent_t *a = active();
-    return a && !strcmp(a->id, id) && (s.view == HOME || s.view == AGENT) && !s.nap && !display_is_asleep();
-}
-static void notice_read_now(const char *id)
-{
-    for (int i = 0; i < s.notice_count; i++)
-        if (!strcmp(s.notice[i].agent_id, id)) notice_mark_read(&s.notice[i]);
-}
 bool ui_notify_summary(const char *id, const char *name, const char *machine, const char *recap,
                        const char *tier, bool quiet, bool silent)
 {
@@ -4040,12 +4029,11 @@ bool ui_notify_summary(const char *id, const char *name, const char *machine, co
         tier && !strcmp(tier, "alert") ? 2 : silent ? 0 : quiet ? 1 : 2;
     if (!level) return false;
     display_lock();
-    bool face = on_face(id);
     notice_forget_read(id, false); // A fresh completion is new even if its words repeat.
     // A full inbox of open questions refuses the row: with nothing to read, nothing rings, wakes or celebrates.
     bool filed = notice_add(id, name, machine, recap, false, false) != NULL;
-    if (face) notice_read_now(id);
-    bool alert = filed && level == 2 && !face;
+    // The daemon decides whether the person is already with the agent: every alert it sends rings.
+    bool alert = filed && level == 2;
     uint32_t now = ms();
     if (alert && !waiting() && !s.nap && !s.quiet && (!s.last_celebration || now - s.last_celebration >= 20000)) {
         s.pet_pose = 3;
@@ -4062,12 +4050,10 @@ bool ui_turn_error(const char *id, const char *message)
     if (!id || !*id || strnlen(id, ID_MAX) >= ID_MAX) { ui_cable_toast(message); return false; }
     if (!message || !*message) message = "The turn failed";
     display_lock();
-    bool face = on_face(id);
     int known = find(id);
     notice_forget_read(id, false);
     // A row refused by a full inbox of open questions leaves the toast, as an error about no agent has, and no ring.
-    bool ring = notice_add(id, known >= 0 ? s.agents[known].name : NULL, NULL, message, false, true) && !face;
-    if (face) notice_read_now(id);
+    bool ring = notice_add(id, known >= 0 ? s.agents[known].name : NULL, NULL, message, false, true);
     // Like any toast, never over a live recording or the person's own question; the drawer row still keeps the failure.
     if (!s.voice_open && !question_view(s.view)) {
         COPY(s.title, "Harness");
@@ -4189,14 +4175,12 @@ bool ui_question_show(const char *id, const char *name, const char *machine, con
 {
     if (!id || !request) return false;
     display_lock();
-    bool face = on_face(id);
     const cJSON *first=cJSON_GetArrayItem(questions,0);
     const cJSON *prompt=cJSON_GetObjectItemCaseSensitive(first,"q");
     // A list row was rung before: its receipt is kept, so a question already read here stays read.
     if (!list) notice_forget_read(id, true);
     cable_notif_t *n = notice_add(id,name,machine,cJSON_IsString(prompt) ? prompt->valuestring : "Needs your answer",true,false);
     if (list && n && notice_question_read(n)) n->read_on_dial = true;
-    if (face) notice_read_now(id);   // already on the glass: shown in place, read at once
     // A different agent's alert cannot replace the question being read.
     if (s.q.valid && !strcmp(s.q.agent,id) && strcmp(s.q.request,request)) {
         s.q.valid=false; s.q.pending=false; s.q.revision++;
@@ -4205,7 +4189,7 @@ bool ui_question_show(const char *id, const char *name, const char *machine, con
     // The question is shown on the home face, in the recap's place (render_home): no screen opens
     // for it. The display wakes so a person glancing over sees it; a list row does not, as it rang before.
     change();
-    bool ring = !face && !list;
+    bool ring = !list;
     if (ring) display_wake();
     display_unlock();
     return ring;

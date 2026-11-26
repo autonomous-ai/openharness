@@ -67,10 +67,7 @@ static int gesture;
 static void ht_gesture_guard(int *g,uint32_t time) { (void)g;(void)time; }
 static bool congested,transport_ok=true,pending_receipt;
 static action_t queued;
-static int queued_answers,sent_answers,removed,notices,reads,read_now;
-static const char *face_agent="";
-static bool on_face(const char *id) { return !strcmp(id,face_agent); }
-static void notice_read_now(const char *id) { assert(id && *id);read_now++; }
+static int queued_answers,sent_answers,removed,notices,reads;
 static uint8_t sent_choices[4];
 static char sent_draft[48];
 static agent_t *active(void) { return &agents[s.active]; }
@@ -265,19 +262,19 @@ int main(int argc,char **argv) {
     // A question does NOT change the screen — the home face shows it in the recap's place — but it
     // does wake the display, and it still counts in the bell until it is answered.
     reset(false);view(HOME);wakes=0;notices=0;
-    assert(ui_question_show("b","Other","M2","q-b2",NULL,false) && s.view==HOME && wakes==1 && notices==1 && !read_now);
+    assert(ui_question_show("b","Other","M2","q-b2",NULL,false) && s.view==HOME && wakes==1 && notices==1);
     // The pane on the face rings too: the daemon decides whether the person is already with it.
-    wakes=0;notices=0;face_agent="b";s.active=1;
-    assert(ui_question_show("b","Other","M2","q-b3",NULL,false) && wakes==1 && notices==1 && !read_now);
-    face_agent="";s.active=0;
+    wakes=0;notices=0;s.active=1;
+    assert(ui_question_show("b","Other","M2","q-b3",NULL,false) && wakes==1 && notices==1 && !filed.read_on_dial);
+    s.active=0;
     // Filed again with no ring (tier list: a question the dial was told, back on its drawer): no wake, no beep, the
     // receipts kept, and the row read when a receipt holds that agent's question with the same words, whatever its token.
     {
         cJSON fields[]={{.string="key",.type=JSTRING,.valuestring=""},
             {.string="q",.type=JSTRING,.valuestring="Deploy now?"}};
         cJSON question=object(fields,2),questions={.type=JARRAY,.child=&question};
-        reset(false);view(HOME);wakes=0;notices=0;forgets=0;read_now=0;
-        assert(!ui_question_show("b","Other","M2","q-b4",&questions,true) && s.view==HOME && !wakes && notices==1 && !forgets && !read_now);
+        reset(false);view(HOME);wakes=0;notices=0;forgets=0;
+        assert(!ui_question_show("b","Other","M2","q-b4",&questions,true) && s.view==HOME && !wakes && notices==1 && !forgets);
         assert(!filed.read_on_dial);                          // never read: it comes back unread
         notice_receipt_t *r=&s.notice_reads[3];
         strcpy(r->id,"b");strcpy(r->summary,"Deploy now?");strcpy(r->token,"turn-7");r->question=true;
@@ -292,9 +289,9 @@ int main(int argc,char **argv) {
         strcpy(r->id,"b");wakes=0;
         assert(ui_question_show("b","Other","M2","q-b4",&questions,false) && wakes==1 && forgets==1 && !filed.read_on_dial);
         // The pane on the face: a list row is not read at once and does not wake.
-        face_agent="b";s.active=1;read_now=0;wakes=0;r->question=false;
-        assert(!ui_question_show("b","Other","M2","q-b4",&questions,true) && !read_now && !wakes && !filed.read_on_dial);
-        face_agent="";s.active=0;
+        s.active=1;wakes=0;r->question=false;
+        assert(!ui_question_show("b","Other","M2","q-b4",&questions,true) && !wakes && !filed.read_on_dial);
+        s.active=0;
         // The question being read on screen is left as it is.
         reset(false);wakes=0;
         assert(!ui_question_show("a","Research","M2","q-a",&questions,true) && s.view==QUESTION && s.q.valid && !s.q.error[0] && !wakes);
