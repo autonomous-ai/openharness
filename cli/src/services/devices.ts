@@ -94,7 +94,7 @@ import { PetStore } from '../cable/pets/store.js'
 import { DialLog } from '../cable/dialLog.js'
 import { DialVerdicts, greetedAsDial } from '../cable/dialPortVerdicts.js'
 import { createDialSetup } from '../cable/dialSetup.js'
-import { claudeFound, type ClaudeRun } from '../devices/claudePlugin.js'
+import { claudeFound, type ClaudeInstallDeps, type ClaudeRun } from '../devices/claudePlugin.js'
 import { readOrcaConnected, readRemoved, readSetup, SETUP_COUNTS } from '../devices/dialSkillFiles.js'
 import { createOrcaHomesCache, orcaBinary, orcaHomesDeps, readOrcaHomes, type OrcaHomesCache } from '../devices/orcaHomes.js'
 import { orcaPluginRun, type OrcaPluginRun } from '../devices/orcaPlugin.js'
@@ -223,6 +223,9 @@ export interface DevicesDeps {
   /** For this service's tests: how Claude Code is found for a Claude Code home; the daemon's own lookup by default
    *  (devices/claudePlugin.ts claudeFound). */
   claude?: (home: string, shell: boolean) => Promise<ClaudeRun | null>
+  /** For this service's tests: where git is, which the plugin's install clones with; this computer's by default
+   *  (lib/gitOnPath.ts findGit), whose miss starts the login shell. */
+  git?: ClaudeInstallDeps['git']
   /** For this service's tests: Orca's account homes (devices/orcaHomes.ts); read with this computer's `orca` when unset. */
   orcaHomes?: OrcaHomesCache
   /** For this service's tests: how VS Code and Harness's extension in it are found and `code` is run; the real ones by
@@ -854,7 +857,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     log,
     claude: deps.claude ?? claudeFound,
     orcaClaude: () => ({ homes: orcaHomes.get().claude, answered: orcaHomes.answered() }),
-    git: () => findGit(),
+    git: deps.git ?? findGit,
     version: VERSION,
   }) : null
   /** The dial setup's start pass, after a read of Orca's homes: the first, and each that changes them. A read that lands
