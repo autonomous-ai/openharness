@@ -1,6 +1,4 @@
 #!/usr/bin/env node
-// Fake pkgpub: the registry account has two-factor auth on, so a publish needs a code only the person's authenticator
-// app holds. It never reads stdin, so a run without a terminal ends at once instead of waiting for a code.
 const { readFileSync } = require('node:fs')
 const { join } = require('node:path')
 
