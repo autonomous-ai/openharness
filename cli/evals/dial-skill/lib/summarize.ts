@@ -1,5 +1,6 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { costOf, tokensOf, type Billed, type Usage } from './spend.js'
 
 export interface SplitStats { mean: number; ci_lo: number; ci_hi: number; n: number }
 export interface Paired { mean: number; ci_lo: number; ci_hi: number; n: number; significant: boolean }
@@ -20,8 +21,6 @@ export interface Summary {
   warnings: string[]
 }
 
-interface Usage { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number;
-  cache_creation_input_tokens?: number; cache_creation?: { ephemeral_5m_input_tokens?: number } }
 interface Row {
   prompt_id: string; rep: number; meta?: { agent?: string }; status?: string
   model?: string | null; usage?: Usage; judge_model?: string; judge_usage?: Usage
@@ -29,12 +28,6 @@ interface Row {
 }
 interface ErrorRow { prompt_id: string; rep: number; failure_class?: string; model?: string | null; usage?: Usage;
   judge_model?: string; judge_usage?: Usage }
-
-// $ per million tokens: input and output from the claude-api skill's Current Models table (cached 2026-11-03); cache
-// reads at each model's own rate, as Claude Code bills them (the spec checks a billed run's total_cost_usd).
-export const PRICES: Record<string, { in: number; out: number; cache_read: number }> = {
-  'claude-opus-5-5': { in: 4, out: 20, cache_read: 0.2 },
-}
 
 const SPLITS = ['val', 'train', 'test'] as const
 const STATUS = ['<!-- status -->', '<!-- /status -->'] as const
@@ -90,31 +83,6 @@ function caseMeans(rows: Row[]): Map<string, number> {
   return new Map([...by].map(([id, xs]) => [id, mean(xs)]))
 }
 
-function priceOf(model: string | null | undefined) {
-  if (!model) return undefined
-  // Longest matching prefix, as the runner accepts a served model that starts with the requested one.
-  const key = Object.keys(PRICES).filter(k => model.startsWith(k)).sort((a, b) => b.length - a.length)[0]
-  return key ? PRICES[key] : undefined
-}
-
-function tokensOf(u: Usage | undefined): number {
-  return (u?.input_tokens ?? 0) + (u?.output_tokens ?? 0) + (u?.cache_read_input_tokens ?? 0)
-    + (u?.cache_creation_input_tokens ?? 0)
-}
-
-// Dollars for one call; null when billed tokens have no price. A cache write bills by how long the cache keeps it:
-// 1.25× input for 5 minutes, 2× for the hour Claude Code asks for. A write not known to be 5-minute, as in rows
-// recorded before the split was kept, is priced as 1-hour.
-function costOf(model: string | null | undefined, u: Usage | undefined): number | null {
-  if (!tokensOf(u)) return 0
-  const p = priceOf(model)
-  if (!p) return null
-  const writes = u!.cache_creation_input_tokens ?? 0
-  const fiveMinute = u!.cache_creation?.ephemeral_5m_input_tokens ?? 0
-  return (p.in * ((u!.input_tokens ?? 0) + 1.25 * fiveMinute + 2 * (writes - fiveMinute))
-    + p.cache_read * (u!.cache_read_input_tokens ?? 0) + p.out * (u!.output_tokens ?? 0)) / 1e6
-}
-
 function readState(flow: string): Record<string, unknown> {
   return JSON.parse(readFileSync(join(flow, '_state.json'), 'utf8'))
 }
@@ -159,8 +127,10 @@ export function summarize(flow: string): Summary {
     const harmed = checked.filter(r => r.harm).length
     const errors: Record<string, number> = {}
     for (const e of errs) errors[e.failure_class ?? 'error'] = (errors[e.failure_class ?? 'error'] ?? 0) + 1
-    // Every attempt was billed, scored or not: truncated, invalid and failed ones count toward spend.
-    const costs = [...rows, ...errs].flatMap(r =>
+    // Every attempt was billed, scored or not: truncated, invalid and failed ones count toward spend, as do the
+    // listing probes run before the pass.
+    const probes = readJsonl<Billed>(join(flow, v, 'probes.jsonl'), warnings)
+    const costs = [...rows, ...errs, ...probes].flatMap(r =>
       [costOf(r.model, r.usage), costOf(r.judge_model, r.judge_usage)])
     variants[v] = {
       change: changeOf(flow, v),
