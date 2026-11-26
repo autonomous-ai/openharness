@@ -5342,9 +5342,9 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       const C = observedAgentId('claude', 'sess-3')
       const A = observedAgentId('claude', 'sess-a')
       /** tmux's clients as a focus read lists them, `tty|pane` a line: client 4300 on session `work`'s pane %3, 4310 on
-       *  session `other`'s %5. While `held`, each such read waits until the spec lands it. */
-      const tmuxSays = { clients: '', held: false, land: [] as Array<() => void> }
-      beforeEach(() => { Object.assign(tmuxSays, { clients: '/dev/ttys004|%3\n/dev/ttys005|%5\n', held: false, land: [] }) })
+       *  session `other`'s %5, and the read's exit code. While `held`, each such read waits until the spec lands it. */
+      const tmuxSays = { clients: '', code: 0, held: false, land: [] as Array<() => void> }
+      beforeEach(() => { Object.assign(tmuxSays, { clients: '/dev/ttys004|%3\n/dev/ttys005|%5\n', code: 0, held: false, land: [] }) })
       let clock = 0
       /** Lets what a landing sets off run. */
       const settled = () => new Promise((resolve) => setImmediate(resolve))
@@ -5387,7 +5387,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
           if (args[0] === 'display-message') return { code: 0, stdout: other ? '4002|other|\n' : args.includes('%4') ? '4001|work|\n' : '4000|work|\n' }
           if (args[0] === 'list-clients' && args[1] === '-t') return { code: 0, stdout: other ? '1794700050|4310|/dev/ttys005\n' : '1794700050|4300|/dev/ttys004\n' }
           if (args[0] === 'list-clients' && tmuxSays.held) await new Promise<void>((resolve) => { tmuxSays.land.push(resolve) })
-          return { code: 0, stdout: args[0] === 'list-clients' ? tmuxSays.clients : '' }
+          return args[0] === 'list-clients' ? { code: tmuxSays.code, stdout: tmuxSays.clients } : { code: 0, stdout: '' }
         }
         const listener = fakeListener()
         const { port } = startHere({ listen: listener.listen, now: () => clock, tty: async () => undefined, orca: { ...mac, run } })
@@ -5572,6 +5572,15 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
         await land()
         expect(follows('vscode')).toEqual([])
         expect(editorLines()).toEqual(['[device] vscode · skipped · echo'])
+      })
+
+      it('a focus whose read of tmux\'s clients fails moves nothing, and says so in fixed words', async () => {
+        const { settle, focus } = await clientsIn()
+        await settle('vscode')
+        tmuxSays.code = 1
+        await focus(CLIENT_SHELL)
+        expect(follows('vscode')).toEqual([])
+        expect(editorLines()).toEqual(['[device] vscode · skipped · not read'])
       })
 
       it('with no dial linked, a focus reads tmux nothing and moves nothing; its client is kept all the same', async () => {
