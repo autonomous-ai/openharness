@@ -42,6 +42,18 @@ export interface StageOptions {
   /** The crowd's folder, CROWD_DIR when not given. */
   crowd?: string
   base?: string
+  /** A variant's Claude Code `hooks` object, staged for claude as the repo's .claude/settings.json. */
+  hooks?: Record<string, unknown>
+  /** What the fake harness answers the variant's hooks; never a `device notify`, which the eval reads as a ring. */
+  answers?: HarnessAnswer[]
+}
+
+/** The fake harness's answer to a call whose argv equals `argv` exactly. */
+export interface HarnessAnswer {
+  argv: string[]
+  stdout?: string
+  stderr?: string
+  code?: number
 }
 
 export const CROWD_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'crowd')
@@ -75,6 +87,11 @@ export function stage(s: Scenario, agent: AgentKind, opts: StageOptions): Staged
   const profile = process.env.CLAUDE_CONFIG_DIR
   // Unset, Claude would run in the default ~/.claude profile.
   if (agent === 'claude' && !profile) throw new Error('CLAUDE_CONFIG_DIR is not set: the eval runs Claude only in the session profile')
+  const answers = opts.answers ?? []
+  // A notify answered by the variant would no longer be the dial the rings are read from.
+  if (answers.some((answer) => answer.argv[0] === 'device' && answer.argv[1] === 'notify')) {
+    throw new Error('harness answers: device notify is answered by the eval, not by a variant')
+  }
 
   const base = realpathSync(opts.base ?? tmpdir())
   const root = join(base, 'dial-skill-eval', randomUUID())
@@ -125,7 +142,7 @@ export function stage(s: Scenario, agent: AgentKind, opts: StageOptions): Staged
     // Copied rather than put on PATH where they are: a path into the scenario folder leads to its scenario.json.
     if (existsSync(join(s.dir, 'bin'))) cpSync(join(s.dir, 'bin'), bin, { recursive: true })
     mkdirSync(bin, { recursive: true })
-    writeFileSync(join(bin, 'harness'), fakeHarness(recFile), { mode: 0o755 })
+    writeFileSync(join(bin, 'harness'), fakeHarness(recFile, answers), { mode: 0o755 })
     for (const tool of ['node', 'npm', 'npx']) symlinkSync(join(dirname(process.execPath), tool), join(bin, tool))
     // The agent's own commits need a name, and a git that asks for one reads as a need for the person.
     writeFileSync(env.GIT_CONFIG_GLOBAL!, '[user]\n\tname = Eval\n\temail = eval@example.invalid\n')
@@ -160,6 +177,12 @@ export function stage(s: Scenario, agent: AgentKind, opts: StageOptions): Staged
       if (result !== 'written') throw new Error(`dial skill not staged: ${result}`)
       skill = DIAL_SKILL
       skills.push({ name: 'dial', description: DIAL_SKILL_DESCRIPTION })
+    }
+    if (agent === 'claude' && opts.hooks) {
+      // Hooks run outside Claude's sandbox, so the runner stages only a variant's hooks the harness sha covers (Task 18).
+      // .claude/ is excluded from git, so the agent's git status shows nothing of them.
+      mkdirSync(join(repo, '.claude'), { recursive: true })
+      writeFileSync(join(repo, '.claude', 'settings.json'), JSON.stringify({ hooks: opts.hooks }, null, 2))
     }
     return { root, repo, recFile, origin, env, skill, condition, skills }
   } catch (error) {
@@ -289,13 +312,15 @@ const NOTICE_USAGE = 'harness device notify "<question>" [--suggest "<recommenda
 
 /** Never the real dial: it records the call and answers as a dial that showed the line. A notify with no question
  *  answers as the CLI does: parseNotice's words left after the flags, none when they are only `--help` or `-h`, cleaned
- *  as composeNotice cleans them (the fake runs under plain node, which cannot load dialNotice.ts). */
-function fakeHarness(recFile: string): string {
+ *  as composeNotice cleans them (the fake runs under plain node, which cannot load dialNotice.ts). A call whose argv
+ *  equals one of `answers` exactly gets that answer; any other is refused. */
+function fakeHarness(recFile: string, answers: HarnessAnswer[]): string {
   return `#!${process.execPath}
 const { appendFileSync } = require('node:fs')
 const argv = process.argv.slice(2)
 const notify = argv[0] === 'device' && argv[1] === 'notify'
 appendFileSync(${JSON.stringify(recFile)}, JSON.stringify({ argv }) + '\\n')
+const answer = ${JSON.stringify(answers)}.find((a) => a.argv.length === argv.length && a.argv.every((word, i) => word === argv[i]))
 const question = []
 for (let i = 2; i < argv.length; i++) {
   if (argv[i] === '--suggest') i++
@@ -307,6 +332,10 @@ if (notify && (text === '--help' || text === '-h' || text.replace(/[\\p{Cc}\\s]+
   process.exitCode = 1
 } else if (notify) {
   console.log('shown')
+} else if (answer) {
+  process.stdout.write(answer.stdout ?? '')
+  process.stderr.write(answer.stderr ?? '')
+  process.exitCode = answer.code ?? 0
 } else {
   console.error('harness: not available here')
   process.exitCode = 2
