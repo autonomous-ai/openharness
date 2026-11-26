@@ -4,7 +4,6 @@
 use harness_device::app::App;
 use harness_device::cli::cli_override;
 use harness_device::desktop::{DesktopApp, SystemDesktopApp};
-use harness_device::follow;
 use harness_device::front;
 use harness_device::install::system_shell;
 use harness_device::instance::Instance;
@@ -57,7 +56,7 @@ fn view(shared: tauri::State<Shared>) -> Option<View> {
     shared.view.lock().unwrap().clone()
 }
 
-/// An action that is not one of the five never gets here: its JSON does not parse.
+/// An action that is not one of the four never gets here: its JSON does not parse.
 #[tauri::command]
 fn act(action: Action, shared: tauri::State<Shared>) {
     let _ = shared.events.send(Event::Act(action));
@@ -124,7 +123,6 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
         front: front::system(log.clone()),
         tabs: tabs::system(),
         updater: harness_device::update::system(handle),
-        follow: follow::system(paths.home_dir()?),
     };
 
     // A watch or a sign-in hands its events over holding a lock that stopping or cancelling it takes: `send` only

@@ -1,11 +1,9 @@
 //! The menu is the same on every OS: the model and the app read no OS. main.rs hands them the one answer that differs,
 //! whether installing an update ends the app (Windows). The one refresh that differs, Linux's tick telling what a
 //! click tells elsewhere, is tick.rs's test; main.rs hands `tick::menu_opened` to the tray's click and `tick::tick` to
-//! the timer (`ticked`). Whether the Follow ChatGPT screen asks comes from the door main.rs hands the runner
-//! (`follow::system`), always trusted off macOS: the rules read only its answers.
+//! the timer (`ticked`).
 
 use crate::app::App;
-use crate::follow::{AxTrust, NoFollow, Ungated};
 use crate::install::DOWNLOADING_HARNESS;
 use crate::model::UPDATING_APP;
 use crate::tick::menu_opened;
@@ -86,9 +84,6 @@ fn the_one_os_property_of_the_rules_is_install_exits_app() {
         Event::Login(LoginEvent::Waiting("Waiting".into())),
         Event::Login(LoginEvent::Done(Ok(()))),
         Event::Auth(Some(true)),
-        Event::Follow { trusted: false, gated: true },
-        Event::Act(Action::Allow),
-        Event::Follow { trusted: true, gated: true },
         menu_opened(B + 70, true),
         Event::Menu(MenuAction::SoundOff),
         status(true),
@@ -115,7 +110,7 @@ fn the_one_os_property_of_the_rules_is_install_exits_app() {
 
     // An update: the row shows from the install on, `update: installing` is said instead of `update: installed`, and
     // the install itself ends the app, so the watch is not stopped and nothing relaunches.
-    let found = Saved { version: 1, cli_seen: true, asked_sign_in: true, login_item: true, ..Saved::default() };
+    let found = Saved { version: 1, cli_seen: true, asked_sign_in: true, login_item: true };
     let (mut apart, mut app) = both(found, true);
     let update = [
         ticked(B + 5, false),
@@ -158,69 +153,23 @@ fn shows_the_row(effects: &[Effect]) -> bool {
 /// A first run, signed out: Sign in, then Later. Nothing shows after it, no menu item follows, nothing says `chatgpt:`.
 #[test]
 fn a_first_run_shows_nothing_after_sign_in_on_any_os() {
-    for (trusted, gated) in [(false, true), (true, true), (true, false), (false, false)] {
-        let seen = Saved { cli_seen: true, login_item: true, ..Saved::default() };
-        let (mut app, mut effects) = App::new(seen, true, false, B, false);
-        for event in [Event::StartDone { ok: true }, Event::Auth(Some(false)), Event::Follow { trusted, gated }] {
-            effects.extend(app.handle(event));
-        }
-        assert_eq!(app.view().map(|view| view.screen), Some(Screen::SignIn), "{trusted} {gated}");
-        effects.extend(app.handle(Event::Act(Action::Later)));
-        assert_eq!(app.view(), None, "{trusted} {gated}");
-        let follows = |item: &MenuItem| match item {
-            MenuItem::Action(_, label) | MenuItem::Check(_, label, _) => label.to_lowercase().contains("follow"),
-            _ => false,
-        };
-        for effect in &effects {
-            match effect {
-                Effect::Menu(items) => assert!(!items.iter().any(follows), "{trusted} {gated}: {items:?}"),
-                Effect::Log(line) => assert!(!line.starts_with("chatgpt:"), "{trusted} {gated}: {line}"),
-                _ => {}
-            }
-        }
-    }
-}
-
-/// Whether the menu's last version has a follow item and whether the Follow ChatGPT screen shows, signed in with no
-/// dial, once the runner has told what the door answers at start.
-fn follow_shown(trusted: bool, gated: bool) -> (bool, bool) {
-    let seen = Saved { cli_seen: true, asked_sign_in: true, login_item: true, ..Saved::default() };
+    let seen = Saved { cli_seen: true, login_item: true, ..Saved::default() };
     let (mut app, mut effects) = App::new(seen, true, false, B, false);
-    for event in [Event::StartDone { ok: true }, Event::Auth(Some(true)), Event::Follow { trusted, gated }] {
+    for event in [Event::StartDone { ok: true }, Event::Auth(Some(false))] {
         effects.extend(app.handle(event));
     }
-    let menu = effects.iter().rev().find_map(|effect| match effect {
-        Effect::Menu(items) => Some(items),
-        _ => None,
-    });
-    let item = menu.is_some_and(|items| {
-        items.iter().any(|item| match item {
-            MenuItem::Action(_, label) | MenuItem::Check(_, label, _) => label.to_lowercase().contains("follow"),
-            _ => false,
-        })
-    });
-    (item, app.view().is_some_and(|view| view.screen == Screen::Follow))
-}
-
-#[test]
-fn only_macos_without_the_permission_asks_and_no_menu_has_a_follow_item() {
-    // macOS's door and no permission yet: the screen, at start, whatever is plugged in or installed.
-    assert_eq!(follow_shown(false, true), (false, true));
-    // macOS's door with the permission: neither.
-    assert_eq!(follow_shown(true, true), (false, false));
-    // Every door off macOS, which is always trusted and asks nothing: neither.
-    let ungated = Ungated(NoFollow);
-    assert_eq!(follow_shown(ungated.trusted(), ungated.gated()), (false, false));
-    // A desktop with no door (GNOME or KDE on Wayland): neither.
-    assert_eq!(follow_shown(NoFollow.trusted(), NoFollow.gated()), (false, false));
-}
-
-/// Windows always has its door. On Linux the door is the session's (NoFollow on CI, with no window system): follow's
-/// door_kind test and its off_macos_a_door_is_always_trusted_and_nothing_is_asked hold it.
-#[cfg(windows)]
-#[test]
-fn on_windows_the_door_is_always_trusted_and_asks_nothing() {
-    let door = crate::follow::system(std::env::temp_dir());
-    assert!(door.trusted());
-    assert!(!door.gated());
+    assert_eq!(app.view().map(|view| view.screen), Some(Screen::SignIn));
+    effects.extend(app.handle(Event::Act(Action::Later)));
+    assert_eq!(app.view(), None);
+    let follows = |item: &MenuItem| match item {
+        MenuItem::Action(_, label) | MenuItem::Check(_, label, _) => label.to_lowercase().contains("follow"),
+        _ => false,
+    };
+    for effect in &effects {
+        match effect {
+            Effect::Menu(items) => assert!(!items.iter().any(follows), "{items:?}"),
+            Effect::Log(line) => assert!(!line.starts_with("chatgpt:"), "{line}"),
+            _ => {}
+        }
+    }
 }

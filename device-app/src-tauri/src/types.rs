@@ -110,9 +110,9 @@ pub enum CliState {
     Removed,
 }
 
-/// state.json: `{ "version": 1, "cliSeen", "askedSignIn", "loginItem", "askedFollow", "askedAx" }`.
-/// Default: version 1, all false. The keys of the Claude Code and Codex offers and of the Follow ChatGPT switch
-/// (`followOff`) an older app wrote are ignored.
+/// state.json: `{ "version": 1, "cliSeen", "askedSignIn", "loginItem" }`.
+/// Default: version 1, all false. The keys of the Claude Code and Codex offers and of Follow ChatGPT (`askedFollow`,
+/// `askedAx`, `followOff`) an older app wrote are ignored.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Saved {
@@ -120,24 +120,11 @@ pub struct Saved {
     pub cli_seen: bool,
     pub asked_sign_in: bool,
     pub login_item: bool,
-    /// The Follow ChatGPT screen showed: it is asked once. Default: a file from an app before it loads as it was.
-    #[serde(default)]
-    pub asked_follow: bool,
-    /// macOS's Accessibility prompt was called: it shows its dialog only the first time.
-    #[serde(default)]
-    pub asked_ax: bool,
 }
 
 impl Default for Saved {
     fn default() -> Self {
-        Saved {
-            version: 1,
-            cli_seen: false,
-            asked_sign_in: false,
-            login_item: false,
-            asked_follow: false,
-            asked_ax: false,
-        }
+        Saved { version: 1, cli_seen: false, asked_sign_in: false, login_item: false }
     }
 }
 
@@ -146,7 +133,6 @@ impl Default for Saved {
 pub enum Screen {
     Install,
     SignIn,
-    Follow,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -166,7 +152,7 @@ pub struct View {
     pub lines: Vec<String>,
 }
 
-/// What the window may ask: `"retry" | "sign_in" | "later" | "cancel" | "allow"`. Anything else is refused.
+/// What the window may ask: `"retry" | "sign_in" | "later" | "cancel"`. Anything else is refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Action {
@@ -174,7 +160,6 @@ pub enum Action {
     SignIn,
     Later,
     Cancel,
-    Allow,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -236,16 +221,6 @@ pub struct AppState {
     /// What `harness --version` printed, for the About panel.
     pub cli_version: Option<String>,
     pub logs: LogsExport,
-    pub follow: FollowState,
-}
-
-/// Following the ChatGPT window, as the window shows it: the Follow ChatGPT screen asks for the permission where it
-/// gates the title (macOS) and is missing. Off macOS nothing gates it: always trusted. The default is no door (GNOME
-/// or KDE on Wayland): untrusted, and nothing to ask for.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct FollowState {
-    pub trusted: bool,
-    pub gated: bool,
 }
 
 /// AuthorizeUrl holds an `https:` URL only (account.rs lets no other through).
@@ -261,20 +236,12 @@ pub enum LoginEvent {
 /// `'static`, so only the step table's fixed copy can be one, never a line of the script's.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
-    Tick {
-        now: u64,
-        desktop_running: bool,
-    },
-    MenuOpened {
-        now: u64,
-        desktop_installed: bool,
-    },
+    Tick { now: u64, desktop_running: bool },
+    MenuOpened { now: u64, desktop_installed: bool },
     Cli(bool),
     WatchLine(DialStatus),
     WatchExit(Option<i32>),
-    StartDone {
-        ok: bool,
-    },
+    StartDone { ok: bool },
     InstallStep(&'static str),
     InstallDone(Result<(), Vec<String>>),
     Auth(Option<bool>),
@@ -289,12 +256,6 @@ pub enum Event {
     UpdateInstalled,
     UpdateFailed(UpdateFailure),
     LogsExported(Result<Exported, ExportFailure>),
-    /// Whether Harness Device may follow the ChatGPT window and whether a permission gates it (macOS's
-    /// Accessibility): at start, then at each change. Never told with no door.
-    Follow {
-        trusted: bool,
-        gated: bool,
-    },
 }
 
 /// What to do about it. Show(None) hides the window. ShowAbout: the About panel, with its credits line. AboutCredits:
@@ -332,10 +293,6 @@ pub enum Effect {
     ExportLogs,
     /// Shows the zip an export wrote.
     Reveal(std::path::PathBuf),
-    /// macOS's Accessibility prompt.
-    AskAx,
-    /// System Settings' Accessibility list.
-    OpenAxSettings,
 }
 
 /// A finished run.
@@ -540,23 +497,23 @@ mod tests {
             json!({"screen":"sign_in","phase":"browser","lines":["Waiting"]})
         );
         assert_eq!(serde_json::to_value(Screen::Install).unwrap(), json!("install"));
-        assert_eq!(serde_json::to_value(Screen::Follow).unwrap(), json!("follow"));
     }
 
     #[test]
-    fn the_window_may_ask_five_things() {
+    fn the_window_may_ask_four_things() {
         let asks = [
             ("retry", Action::Retry),
             ("sign_in", Action::SignIn),
             ("later", Action::Later),
             ("cancel", Action::Cancel),
-            ("allow", Action::Allow),
         ];
         for (name, action) in asks {
             assert_eq!(serde_json::from_value::<Action>(json!(name)).unwrap(), action);
         }
         // The offers of Claude Code, Codex and Orca are gone, and their buttons with them.
         let others = [
+            // Follow ChatGPT's Allow, gone with its screen.
+            json!("allow"),
             json!("turn_on"),
             json!("not_now"),
             json!("connect_orca"),
@@ -576,9 +533,7 @@ mod tests {
             "version": 1,
             "cliSeen": false,
             "askedSignIn": false,
-            "loginItem": false,
-            "askedFollow": false,
-            "askedAx": false
+            "loginItem": false
         });
         assert_eq!(serde_json::to_value(Saved::default()).unwrap(), keys);
         assert_eq!(serde_json::from_value::<Saved>(keys).unwrap(), Saved::default());

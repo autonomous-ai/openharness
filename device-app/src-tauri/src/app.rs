@@ -5,8 +5,8 @@ use crate::keepalive::{Keep, KeepAlive};
 use crate::logs::reason;
 use crate::model::{about_credits, due, menu, menu_log};
 use crate::types::{
-    Action, AppState, AppUpdate, CliState, Daemon, Effect, Event, FollowState, LoginEvent, LogsExport, MenuAction,
-    MenuItem, NotifyMode, Phase, Saved, Screen, UpdateFailure, View,
+    Action, AppState, AppUpdate, CliState, Daemon, Effect, Event, LoginEvent, LogsExport, MenuAction, MenuItem,
+    NotifyMode, Phase, Saved, Screen, UpdateFailure, View,
 };
 
 /// The menu reads the account and the CLI's version again at most this often.
@@ -39,8 +39,6 @@ pub struct App {
     step: &'static str,
     /// The CLI was found and the account has not answered since: its first answer chooses the first screen.
     awaiting_account: bool,
-    /// The follow state the log said last: None until a door is told.
-    follow_said: Option<bool>,
     /// The last time an event told, for the keep-alive.
     now: u64,
     last_read: u64,
@@ -88,7 +86,6 @@ impl App {
             app_update: AppUpdate::None,
             cli_version: None,
             logs: LogsExport::Idle,
-            follow: FollowState::default(),
         };
         let mut app = App {
             state,
@@ -99,7 +96,6 @@ impl App {
             login: None,
             step: GETTING_READY,
             awaiting_account: false,
-            follow_said: None,
             now,
             last_read: now,
             read_when_up: false,
@@ -310,34 +306,14 @@ impl App {
             Event::Act(action) => self.act(action, effects),
             // Decision 2: closing answers an offer, and never stops what runs.
             Event::WindowClosed => {
-                // Closing Sign in is its Later: the Follow screen waiting behind it shows.
+                // Closing Sign in is its Later.
                 if self.showing(Screen::SignIn) {
                     self.remember(|saved| saved.asked_sign_in = true, effects);
                     self.next(effects);
                     return;
                 }
-                // Closing the Follow screen is Not now.
+                // Any other screen closes.
                 self.show(None, effects);
-            }
-            Event::Follow { trusted, gated } => {
-                // Said at start, so a Mac that starts without the permission says so, then at each change. No door
-                // has nothing to say: it is no missing permission.
-                if (trusted || gated) && self.follow_said != Some(trusted) {
-                    let word = if trusted { "on" } else { "off · no permission" };
-                    effects.push(Effect::Log(format!("chatgpt: follow {word}")));
-                    self.follow_said = Some(trusted);
-                }
-                self.state.follow = FollowState { trusted, gated };
-                // The permission is what the screen asked for: it closes, and only it.
-                if trusted && self.showing(Screen::Follow) {
-                    self.show(None, effects);
-                }
-                // Asked once by itself, remembered once it shows (`show`), and only when it is the screen due and
-                // nothing shows: before the first screen is chosen, or with Install or Sign in due, it waits, and
-                // first_screen or next() shows it after them.
-                if self.window.is_none() && !self.awaiting_account && due(&self.state) == Some(Screen::Follow) {
-                    self.show(Some(self.view_of(Screen::Follow)), effects);
-                }
             }
             // Nothing newer: a row that offered a version goes, as this app is at least as new.
             Event::UpdateChecked(None) => {
@@ -450,10 +426,9 @@ impl App {
         self.running() || self.keep.starting()
     }
 
-    /// The process ends with the window open, its screen never answered, so the new process asks again: the Follow
-    /// screen counts as asked once it shows, and Sign in opened from the menu was asked before. Sign in that shows
-    /// though this computer signed in elsewhere is no question left. A first CLI install that failed runs again at the
-    /// start by itself.
+    /// The process ends with the window open, its screen never answered, so the new process asks again: Sign in opened
+    /// from the menu was asked before. Sign in that shows though this computer signed in elsewhere is no question left.
+    /// A first CLI install that failed runs again at the start by itself.
     fn forget_unanswered(&mut self, effects: &mut Vec<Effect>) {
         let Some(screen) = self.window.as_ref().map(|shown| shown.screen) else { return };
         let signed_in = self.state.signed_in == Some(true);
@@ -461,7 +436,6 @@ impl App {
             |saved| match screen {
                 Screen::SignIn if !signed_in => saved.asked_sign_in = false,
                 Screen::SignIn => {}
-                Screen::Follow => saved.asked_follow = false,
                 Screen::Install => {}
             },
             effects,
@@ -488,18 +462,6 @@ impl App {
                 effects.push(Effect::CancelLogin);
                 self.show(Some(screen_at(Screen::SignIn, Phase::Offer, Vec::new())), effects);
             }
-            // macOS shows its dialog only the first time it is asked: after that, the Accessibility list opens too. The
-            // window closes at once, out of the way of either.
-            (Screen::Follow, Phase::Offer, Action::Allow) => {
-                effects.push(Effect::AskAx);
-                if self.state.saved.asked_ax {
-                    effects.push(Effect::OpenAxSettings);
-                }
-                self.remember(|saved| saved.asked_ax = true, effects);
-                effects.push(Effect::Log("chatgpt: asked".into()));
-                self.show(None, effects);
-            }
-            (Screen::Follow, Phase::Offer, Action::Later) => self.show(None, effects),
             _ => {}
         }
     }
@@ -605,7 +567,6 @@ impl App {
         match screen {
             Screen::Install => screen_at(screen, Phase::Working, vec![self.step.to_string()]),
             Screen::SignIn => self.login.clone().unwrap_or_else(|| screen_at(screen, Phase::Offer, Vec::new())),
-            Screen::Follow => screen_at(screen, Phase::Offer, Vec::new()),
         }
     }
 
@@ -621,11 +582,6 @@ impl App {
     }
 
     fn show(&mut self, view: Option<View>, effects: &mut Vec<Effect>) {
-        // The Follow screen counts as asked once it shows: one the app quit before is asked at the next start. And
-        // again as it goes: a held install that failed leaves it open, saved as not asked (`forget_unanswered`).
-        if view.as_ref().is_some_and(|shown| shown.screen == Screen::Follow) || self.showing(Screen::Follow) {
-            self.remember(|saved| saved.asked_follow = true, effects);
-        }
         self.window = view.clone();
         effects.push(Effect::Show(view));
     }
@@ -686,14 +642,7 @@ mod tests {
     const M1: u64 = 60;
 
     /// A CLI seen before and a login item registered: only what each test does is saved.
-    const SEEN: Saved = Saved {
-        version: 1,
-        cli_seen: true,
-        asked_sign_in: false,
-        login_item: true,
-        asked_follow: false,
-        asked_ax: false,
-    };
+    const SEEN: Saved = Saved { version: 1, cli_seen: true, asked_sign_in: false, login_item: true };
 
     fn found() -> App {
         found_where(false)
@@ -1687,42 +1636,6 @@ mod tests {
     }
 
     #[test]
-    fn a_follow_screen_open_at_the_relaunch_is_asked_again_by_the_new_process() {
-        let mut app = on_follow();
-        installed(&mut app);
-        assert_eq!(app.handle(tick(B + 10)), [Effect::Save(SEEN), Effect::StopWatch, Effect::Relaunch]);
-        let mut new = relaunched(&app);
-        answer(&mut new, true);
-        assert_eq!(shows(&new.handle(follow(false, true))), [follow_offer()]);
-
-        // Where installing ends the app, the install ends it too.
-        let mut app = found_where(true);
-        answer(&mut app, true);
-        assert_eq!(shows(&app.handle(follow(false, true))), [follow_offer()]);
-        assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
-        held(&mut app);
-        let effects = app.handle(tick(B + 10));
-        assert_eq!(effects[0], Effect::Save(SEEN), "{effects:?}");
-        starts_the_held_install(&effects[1..]);
-    }
-
-    #[test]
-    fn a_follow_screen_answered_after_a_held_install_that_failed_is_not_asked_again() {
-        // The install that would end the app fails: the app goes on with the Follow screen open, saved as not asked.
-        for answered in [Event::WindowClosed, Event::Act(Action::Later)] {
-            let mut app = found_where(true);
-            answer(&mut app, true);
-            app.handle(follow(false, true));
-            assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
-            held(&mut app);
-            assert_eq!(app.handle(tick(B + 10))[0], Effect::Save(SEEN));
-            app.handle(Event::UpdateFailed(UpdateFailure::Install));
-            let effects = app.handle(answered);
-            assert_eq!(effects[..2], [Effect::Save(Saved { asked_follow: true, ..SEEN }), Effect::Show(None)]);
-        }
-    }
-
-    #[test]
     fn an_install_waiting_to_relaunch_checks_no_more() {
         let mut app = found();
         app.handle(Event::WatchExit(Some(3)));
@@ -2061,210 +1974,5 @@ mod tests {
             ["Harness removed", "Install", "Export failed: Harness did not answer", "About", "Quit"]
         );
         assert_eq!(logs(&effects), ["logs: export failed: Harness did not answer"]);
-    }
-
-    fn follow_offer() -> Option<View> {
-        shown(Screen::Follow, Phase::Offer, &[])
-    }
-
-    /// What the runner tells of the follow door: macOS's asks for the permission (`gated`), every door off macOS is
-    /// trusted and asks nothing, and no door (GNOME or KDE on Wayland) is neither.
-    fn follow(trusted: bool, gated: bool) -> Event {
-        Event::Follow { trusted, gated }
-    }
-
-    fn attached() -> Event {
-        Event::WatchLine(DialStatus {
-            attached: true,
-            fw: Some("0.0.95".into()),
-            hw: None,
-            board: None,
-            updating: None,
-            problem: None,
-            muted: None,
-            notify: None,
-            voice_lang: None,
-        })
-    }
-
-    /// Found and signed in: nothing shows.
-    fn signed_in() -> App {
-        let mut app = found();
-        answer(&mut app, true);
-        assert_eq!(app.view(), None);
-        app
-    }
-
-    fn saves(effects: &[Effect]) -> bool {
-        effects.iter().any(|effect| matches!(effect, Effect::Save(_)))
-    }
-
-    /// Found and signed in, then this Mac's door told without the permission: the Follow screen shows.
-    fn on_follow() -> App {
-        let mut app = signed_in();
-        assert_eq!(shows(&app.handle(follow(false, true))), [follow_offer()]);
-        app
-    }
-
-    #[test]
-    fn the_follow_screen_shows_at_the_first_launch_on_macos_without_the_permission_and_is_remembered() {
-        // No dial and no ChatGPT app: neither is waited for.
-        let mut app = signed_in();
-        let effects = app.handle(follow(false, true));
-        assert_eq!(shows(&effects), [follow_offer()]);
-        assert!(has(&effects, &Effect::Save(Saved { asked_follow: true, ..SEEN })));
-        assert_eq!(app.view(), follow_offer());
-
-        // Asked at an earlier start: never again.
-        let mut app = App::new(Saved { asked_follow: true, ..SEEN }, true, false, B, false).0;
-        answer(&mut app, true);
-        let effects = app.handle(follow(false, true));
-        assert!(shows(&effects).is_empty());
-        assert!(!saves(&effects));
-    }
-
-    #[test]
-    fn the_follow_screen_never_shows_with_the_permission_off_macos_or_with_no_door() {
-        for door in [follow(true, true), follow(true, false), follow(false, false)] {
-            let mut app = signed_in();
-            assert!(shows(&app.handle(door.clone())).is_empty(), "{door:?}");
-            assert!(!app.state.saved.asked_follow, "{door:?}");
-        }
-        // macOS's permission taken back later: asked then.
-        let mut app = signed_in();
-        app.handle(follow(true, true));
-        assert_eq!(shows(&app.handle(follow(false, true))), [follow_offer()]);
-    }
-
-    #[test]
-    fn the_follow_screen_comes_after_install_and_sign_in() {
-        let mut app = on_sign_in();
-        assert!(shows(&app.handle(follow(false, true))).is_empty());
-        assert_eq!(app.view(), shown(Screen::SignIn, Phase::Offer, &[]));
-        assert_eq!(shows(&app.handle(Event::Act(Action::Later))), [follow_offer()]);
-
-        // Closing Sign in is its Later.
-        let mut app = on_sign_in();
-        assert!(!saves(&app.handle(follow(false, true))));
-        let effects = app.handle(Event::WindowClosed);
-        assert!(has(&effects, &Effect::Save(Saved { asked_sign_in: true, asked_follow: true, ..SEEN })));
-        assert_eq!(shows(&effects), [follow_offer()]);
-
-        let mut app = fresh();
-        assert!(shows(&app.handle(follow(false, true))).is_empty());
-        assert_eq!(app.view(), shown(Screen::Install, Phase::Working, &[GETTING_READY]));
-        app.handle(Event::InstallDone(Ok(())));
-        assert_eq!(shows(&answer(&mut app, true)), [follow_offer()]);
-    }
-
-    #[test]
-    fn the_follow_screen_found_before_the_first_screen_waits_for_it() {
-        let mut app = found();
-        assert!(shows(&app.handle(follow(false, true))).is_empty());
-        assert_eq!(shows(&answer(&mut app, false)), [shown(Screen::SignIn, Phase::Offer, &[])]);
-        assert_eq!(shows(&app.handle(Event::Act(Action::Later))), [follow_offer()]);
-
-        let mut app = found();
-        app.handle(follow(false, true));
-        assert_eq!(shows(&answer(&mut app, true)), [follow_offer()]);
-    }
-
-    #[test]
-    fn a_follow_screen_never_shown_is_asked_at_the_next_start() {
-        let mut app = on_sign_in();
-        app.handle(follow(false, true));
-        assert!(!saves(&app.handle(Event::Menu(MenuAction::Quit))));
-        assert!(!app.state.saved.asked_follow);
-    }
-
-    #[test]
-    fn not_now_and_closing_decline_for_good() {
-        for decline in [Event::Act(Action::Later), Event::WindowClosed] {
-            let mut app = on_follow();
-            let effects = app.handle(decline.clone());
-            assert_eq!(shows(&effects), [None], "{decline:?}");
-            assert!(!saves(&effects), "{decline:?}");
-            // The permission given and taken back: nothing asks again.
-            for event in [follow(true, true), follow(false, true)] {
-                assert!(shows(&app.handle(event)).is_empty(), "{decline:?}");
-            }
-            assert_eq!(app.view(), None);
-        }
-    }
-
-    #[test]
-    fn allow_asks_macos_and_opens_the_settings_once_asked_before() {
-        let mut app = on_follow();
-        let effects = app.handle(Event::Act(Action::Allow));
-        assert!(has(&effects, &Effect::AskAx));
-        assert!(!has(&effects, &Effect::OpenAxSettings));
-        assert!(has(&effects, &Effect::Save(Saved { asked_follow: true, asked_ax: true, ..SEEN })));
-        assert_eq!(logs(&effects), ["chatgpt: asked"]);
-        assert_eq!(shows(&effects), [None]);
-        assert_eq!(app.view(), None);
-
-        // An app before this one asked macOS already, which shows its dialog only the first time: the settings open.
-        let mut app = App::new(Saved { asked_ax: true, ..SEEN }, true, false, B, false).0;
-        answer(&mut app, true);
-        assert_eq!(shows(&app.handle(follow(false, true))), [follow_offer()]);
-        let effects = app.handle(Event::Act(Action::Allow));
-        assert!(has(&effects, &Effect::AskAx));
-        assert!(has(&effects, &Effect::OpenAxSettings));
-        assert_eq!(logs(&effects), ["chatgpt: asked"]);
-    }
-
-    #[test]
-    fn the_permission_given_closes_the_follow_screen() {
-        let mut app = on_follow();
-        assert_eq!(shows(&app.handle(follow(true, true))), [None]);
-        assert_eq!(app.view(), None);
-
-        // Another screen stays.
-        let mut app = on_sign_in();
-        app.handle(follow(false, true));
-        assert!(shows(&app.handle(follow(true, true))).is_empty());
-        assert_eq!(app.view(), shown(Screen::SignIn, Phase::Offer, &[]));
-    }
-
-    #[test]
-    fn no_menu_has_a_follow_item() {
-        let mut app = signed_in();
-        app.handle(attached());
-        let plain = rows_now(&app);
-        for event in [follow(false, true), follow(true, true), follow(false, false), follow(true, false)] {
-            app.handle(event.clone());
-            assert_eq!(rows_now(&app), plain, "{event:?}");
-        }
-    }
-
-    #[test]
-    fn the_follow_state_is_said_at_start_then_at_each_change() {
-        // A Mac that starts without the permission says so, with no dial and no ChatGPT app.
-        let mut app = signed_in();
-        assert_eq!(logs(&app.handle(follow(false, true))), ["chatgpt: follow off · no permission"]);
-        assert!(logs(&app.handle(follow(false, true))).is_empty());
-        assert_eq!(logs(&app.handle(follow(true, true))), ["chatgpt: follow on"]);
-        assert!(logs(&app.handle(follow(true, true))).is_empty());
-        assert_eq!(logs(&app.handle(follow(false, true))), ["chatgpt: follow off · no permission"]);
-
-        // A Mac with the permission, and every door off macOS, always trusted.
-        for door in [follow(true, true), follow(true, false)] {
-            let mut app = signed_in();
-            assert_eq!(logs(&app.handle(door.clone())), ["chatgpt: follow on"], "{door:?}");
-        }
-
-        // No door (GNOME or KDE on Wayland): nothing is said, never `no permission`.
-        let mut app = signed_in();
-        assert!(logs(&app.handle(follow(false, false))).is_empty());
-        assert!(logs(&app.handle(attached())).iter().all(|line| !line.starts_with("chatgpt:")));
-    }
-
-    #[test]
-    fn only_allow_and_not_now_act_on_the_follow_screen() {
-        let mut app = on_follow();
-        for action in [Action::Retry, Action::SignIn, Action::Cancel] {
-            assert!(app.handle(Event::Act(action)).is_empty(), "{action:?}");
-        }
-        assert_eq!(app.view(), follow_offer());
     }
 }
