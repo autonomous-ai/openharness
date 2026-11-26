@@ -828,6 +828,13 @@ class SelectionTests(unittest.TestCase):
         # A folder whose name only starts the same is not the plugin's.
         self.assertEqual(planner.select(["plugins/harness-device-orca-x/a.ts"])[0], {"cross-read-scan", "windows-e2e"})
 
+    def test_the_claude_code_plugins_belong_to_the_cli_suite(self):
+        # cli/build.mjs inlines both into cli.js as Claude Code's marketplace: a change to them changes cli.js.
+        for path in ("plugins/harness-device/hooks/device.js", "plugins/harness/skills/harness/SKILL.md"):
+            with self.subTest(path=path):
+                self.assertEqual(planner.owners(path), {"cli"})
+                self.assertIn("cli", planner.select([path])[0])
+
     def test_the_windows_installer_selects_the_pty_suite(self):
         # installer/'s model and steps are plain Rust that tests on Linux; pty-checks runs them (installer spec §4.1).
         for path in ("installer/src/model.rs", "installer/tests/entry-vectors.json", "installer/Cargo.lock"):
