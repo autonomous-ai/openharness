@@ -503,6 +503,16 @@ describe('run-eval.mjs conditions and probes', () => {
     expect(callsMade()).toEqual(['probe', 'agent', 'agent'])
   })
 
+  it("records on a claude row the Claude Code version its own run started with, and the pass's on a stand-in's", () => {
+    fakeClaude(agent('claude-opus-5-5'), JUDGE, { version: '2.1.327' })
+
+    const out = runEval(['--variant', 'baseline', '--agents', 'claude,null', '--cases', 'add-version-flag', '--concurrency', '2', '--approve-harness'])
+
+    expect(out.status).toBe(5)
+    expect(Object.fromEntries(jsonl('baseline', 'results.jsonl').map((r) => [r.meta.agent, r.meta.claude_version])))
+      .toEqual({ claude: '2.1.327', null: `${VERSION} (Claude Code)` })
+  })
+
   it('probes nothing for the stand-ins', () => {
     const out = runEval(['--variant', 'baseline', '--agents', 'oracle,null', '--condition', 'clean,crowd', '--cases', 'board-unplugged', '--approve-harness'])
 
