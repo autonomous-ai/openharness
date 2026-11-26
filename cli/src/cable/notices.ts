@@ -212,6 +212,21 @@ export class Notices {
     if (this.cards.get(agentId)?.restored) this.ended(agentId)
   }
 
+  /** That agent's turn ended and the person is no longer with it (services/devices.ts): its quiet card is asked once, under
+   *  a new id, while a dial is attached and the hour has one left. The kind of the card asked; undefined when none was. */
+  rouse(agentId: string): NoticeKind | undefined {
+    const card = this.cards.get(agentId)
+    if (!card?.quiet || !this.deps.connected() || !this.limits.takeHour()) return undefined
+    // A dial mutes a question under an id it holds, so the held one closes and the card rings under a new one, in the
+    // same place of the order.
+    this.deps.close(agentId, card.id)
+    card.id = SHOWN_ONLY_PREFIX + this.deps.uuid()
+    delete card.quiet
+    this.deps.changed()
+    this.send(agentId)
+    return noticeKind(card.line)
+  }
+
   /** A card under its agent's new id, in the same place of the order. */
   private rename(from: string, to: string): void {
     const cards = [...this.cards]

@@ -109,7 +109,8 @@ export const NOTICE_SAME_MS = 600_000
 export const NOTICE_HOUR_MS = 3_600_000
 export const NOTICE_HOUR_MAX = 20
 
-interface Counted { agent: string; line: string; at: number; hour: boolean }
+/** No [agent]: a rouse's entry, counted for the hour alone. */
+interface Counted { agent?: string; line?: string; at: number; hour: boolean }
 
 export class NoticeLimits {
   // What was counted, oldest first: an hour's entries for the last hour, never more than NOTICE_HOUR_MAX as a
@@ -123,12 +124,27 @@ export class NoticeLimits {
    *  card: the agent's own limits bound a loop and still apply, but the hour's twenty bound beeps, and it makes none. */
   take(agent: string, line: string, hour = true): boolean {
     const at = this.now()
-    this.counted = this.counted.filter((c) => at - c.at < (c.hour ? NOTICE_HOUR_MS : NOTICE_SAME_MS))
-    if (hour && this.counted.filter((c) => c.hour).length >= NOTICE_HOUR_MAX) return false
+    if (!this.hourLeft(at) && hour) return false
     const refused = this.counted.some((c) => c.agent === agent
       && (at - c.at < NOTICE_AGENT_MS || (c.line === line && at - c.at < NOTICE_SAME_MS)))
     if (refused) return false
     this.counted.push({ agent, line, at, hour })
     return true
+  }
+
+  /** One of the hour's NOTICE_HOUR_MAX for a quiet card asked at its turn's end (Notices.rouse): true when one is left,
+   *  and it is then counted for the hour alone, read by no agent's own checks, as its agent's were taken when it was
+   *  shown. A refusal counts nothing. */
+  takeHour(): boolean {
+    const at = this.now()
+    if (!this.hourLeft(at)) return false
+    this.counted.push({ at, hour: true })
+    return true
+  }
+
+  /** Drops what no check reads any more; whether the hour has one left. */
+  private hourLeft(at: number): boolean {
+    this.counted = this.counted.filter((c) => at - c.at < (c.hour ? NOTICE_HOUR_MS : NOTICE_SAME_MS))
+    return this.counted.filter((c) => c.hour).length < NOTICE_HOUR_MAX
   }
 }
