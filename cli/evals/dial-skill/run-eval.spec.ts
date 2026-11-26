@@ -184,7 +184,7 @@ function writeState(state: object): void {
 
 /** The runner's argv and env as a person runs it from cli/, with a HOME, TMPDIR and profile of the test's own, under a
  *  spend cap no fake run comes near unless the test gives its own (null for none). */
-function runner(args: string[], env: NodeJS.ProcessEnv = {}, cap: number | string | null = 1000): [string, string[], { cwd: string; env: NodeJS.ProcessEnv }] {
+function runner(args: string[], env: NodeJS.ProcessEnv = {}, cap: number | string | null = 250): [string, string[], { cwd: string; env: NodeJS.ProcessEnv }] {
   return [process.execPath, ['--import', 'tsx', RUNNER, '--flow', flow, ...(cap === null ? [] : ['--spend-cap-usd', String(cap)]), ...args], {
     cwd: CLI,
     env: {
@@ -547,6 +547,15 @@ describe('run-eval.mjs spend cap', () => {
 
     expect(out.status).toBe(2)
     expect(out.stderr).toMatch(/--spend-cap-usd is required/)
+    expect(callsMade()).toEqual([])
+    expect(existsSync(join(flow, 'baseline'))).toBe(false)
+  })
+
+  it("refuses a --spend-cap-usd above the design's $250", () => {
+    const out = runEval(['--variant', 'baseline', '--agents', 'oracle', '--cases', 'board-unplugged', '--approve-harness'], {}, 250.01)
+
+    expect(out.status).toBe(2)
+    expect(out.stderr).toContain("--spend-cap-usd is at most 250: the design's cap is $250")
     expect(callsMade()).toEqual([])
     expect(existsSync(join(flow, 'baseline'))).toBe(false)
   })
