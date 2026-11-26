@@ -337,51 +337,10 @@ describe('opening an agent outside Harness from the dial', () => {
     expect(calls).toEqual([forward('ai.autonomous.harness'), forward('ai.autonomous.harness')])
     expect(recorder({ platform: 'linux' }).opener.desktop).toBeUndefined()
   })
-
-  // PM decision 5 (docs/plans/2026-11-26-dial-mux-host-pages-plan.md): a tap while the agent's open (a rest's, a pick's
-  // or another tap's) still runs joins it, so a double tap answers what the one open did.
-  it('a tap on an agent whose open is still running joins it and answers its outcome, running nothing more; another agent\'s runs', async () => {
-    const calls: string[][] = []
-    const waiting: Array<(code: number) => void> = []
-    const opener = createOpenActions({
-      run: (_file, args) => {
-        calls.push(args)
-        return new Promise((resolve) => waiting.push((code) => resolve({ code, stdout: '' })))
-      },
-      platform: 'darwin',
-      adapters: [],
-      log: () => {},
-    })
-    const warp = target({ TERM_PROGRAM: 'WarpTerminal' })
-    const first = opener.open('a1', warp)
-    const joined = opener.open('a1', warp)
-    const other = opener.open('a2', warp)
-    expect(calls).toHaveLength(2)
-    waiting[0](0)
-    waiting[1](1)
-    expect(await first).toBe(true)
-    expect(await joined).toBe(true)
-    expect(await other).toBe(false)
-    expect(calls).toHaveLength(2)
-    // Once its open has ended, the agent's next tap runs one of its own.
-    const next = opener.open('a1', warp)
-    waiting[2](1)
-    expect(await next).toBe(false)
-  })
-
-  it('two taps in a row run one open and both answer its outcome', async () => {
-    let switchDone!: (shown: boolean) => void
-    const { calls, switched, opener } = recorder({ orcaSwitch: () => new Promise((resolve) => { switchDone = resolve }) })
-    const orca = target({ ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: HANDLE })
-    const taps = [opener.open('a1', orca), opener.open('a1', orca)]
-    switchDone(true)
-    expect(await Promise.all(taps)).toEqual([true, true])
-    expect(switched).toEqual([HANDLE])
-    expect(calls).toEqual([forward('com.stablyai.orca')])
-  })
 })
 
-// A rest's link is the Claude app adapter's own (claudeApp.spec.ts); a tap's one-at-a-time is the opener's.
+// A rest's link is the Claude app adapter's own (claudeApp.spec.ts); a tap's one at a time per agent is the host's
+// (cableHost.ts openThrough).
 describe('a rest on a Claude app session', () => {
   const link = (session: string): Call => run(OPEN, '-b', CLAUDE, `claude://code/continue?session=${session}`)
 

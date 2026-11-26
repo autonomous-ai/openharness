@@ -81,10 +81,6 @@ export function createOpenActions(deps: OpenDeps): {
   // Windows brings an app forward by its bundle, as macOS does: every path that takes a bundle takes it there too.
   const byBundle = deps.platform === 'darwin' || !!windows
   const raise = deps.raise
-  // One open at a time per agent, the one under way: a tap while it runs (a rest's, a pick's or another tap's) joins it
-  // and answers what it answers, as a second would only bring the same app forward twice (PM decision 5, 2026-11-26:
-  // the double tap).
-  const running = new Map<string, Promise<boolean>>()
   const openBin = openPath(deps.bin)
   // The last pick wins, so the front app ends matching the dial's ring (spec decision 4): one bring runs at a time for
   // any app, and a later one takes the single waiting place, answering the one it replaces at once.
@@ -213,12 +209,10 @@ export function createOpenActions(deps: OpenDeps): {
     async open(agentId, target) {
       // A tapped notice turns the dial to its own app: a pick waiting would turn it away again.
       dropWaiting()
+      // One open at a time per agent is the host's: a tap, rest or pick on an agent whose open runs joins it before its
+      // source reads anything (cableHost.ts openThrough).
       if (!can(agentId, target)) return false
-      const under = running.get(agentId)
-      if (under) return under
-      const opening = open(agentId, target).finally(() => running.delete(agentId))
-      running.set(agentId, opening)
-      return opening
+      return open(agentId, target)
     },
     // A tap on a Harness agent with no window, which turns the dial to Harness's ring: it drops a pick waiting, as `open`.
     desktop: byBundle ? () => { dropWaiting(); return forward(HARNESS_BUNDLE) } : undefined,

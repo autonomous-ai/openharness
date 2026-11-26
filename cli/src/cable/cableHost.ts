@@ -709,6 +709,12 @@ export class DaemonCableHost implements CableHost {
    *  tap's open asks `taps` alone: no rest or pick stops a tap. */
   private brings = 0
 
+  /** Each agent's open under way, a tap's, a rest's or a pick's, and the `latest` of each that asked for it: a second
+   *  one of that agent joins it and answers its outcome, running nothing more (PM decision 5, 2026-11-26: the double
+   *  tap), as a second would read its client, switch its tab and bring its app forward again. It stops at its source's
+   *  check only once none of them is the latest. Every source's open is asked here alone (openThrough). */
+  private opening = new Map<string, { open: Promise<boolean | 'superseded'>; latest: Array<() => boolean> }>()
+
   /** [end] is how the waiting tap's open ended: every tap says one. */
   private endWaiting(end: DialOpenEnd): void {
     const waiting = this.waiting
@@ -1186,7 +1192,7 @@ export class DaemonCableHost implements CableHost {
       // Only a person's tap switches the other app: a question screen that came up by itself never does.
       if (reason) return
       const tap = this.taps
-      return (outside.source.focus?.(outside.agent, () => this.taps === tap) ?? Promise.resolve(false)).then((opened) => {
+      return this.openThrough(outside, () => this.taps === tap).then((opened) => {
         // A later tap replaced this one before it acted (eval I13, PM 2026-11-24): the later tap's end is the one counted.
         if (opened === 'superseded') return opened
         this.openEnded(agentId, opened ? { outcome: 'ok' } : { outcome: 'failed', code: 'not_opened' })
@@ -1395,7 +1401,22 @@ export class DaemonCableHost implements CableHost {
    * (spec §4 Cost).
    */
   private openOnPage(entry: HostEntry, mine: number): Promise<boolean | 'superseded'> {
-    return entry.source.focus?.(entry.agent, () => this.brings === mine) ?? Promise.resolve(false)
+    return this.openThrough(entry, () => this.brings === mine)
+  }
+
+  /** The agent's open through its source's focus, or the one under way that this joins (opening). */
+  private openThrough(entry: HostEntry, latest: () => boolean): Promise<boolean | 'superseded'> {
+    const id = entry.agent.id
+    const under = this.opening.get(id)
+    if (under) {
+      under.latest.push(latest)
+      return under.open
+    }
+    const asked = [latest]
+    const open = (entry.source.focus?.(entry.agent, () => asked.some((one) => one())) ?? Promise.resolve(false))
+      .finally(() => this.opening.delete(id))
+    this.opening.set(id, { open, latest: asked })
+    return open
   }
 
   /**

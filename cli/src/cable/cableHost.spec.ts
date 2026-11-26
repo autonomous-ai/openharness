@@ -2000,11 +2000,11 @@ describe('the dial that shows one app at a time', () => {
             agent('t1', 'tmux', { nest: 'tmux', lastActivityAt: 20 }),
           ])
           host.pickApp('tmux')
-          host.pickLanded('tmux', 't1')
-          host.pickLanded('tmux', 'a1')
-          host.pickLanded('tmux', 'gone')
-          host.pickLanded('tmux', undefined)
-          await vi.waitFor(() => expect(appPickBrought).toHaveBeenCalledTimes(4))
+          // Each once the one before ended: a pick while the agent's open runs joins it.
+          for (const [n, landed] of ['t1', 'a1', 'gone', undefined].entries()) {
+            host.pickLanded('tmux', landed)
+            await vi.waitFor(() => expect(appPickBrought).toHaveBeenCalledTimes(n + 1))
+          }
           expect(opened(focus)).toEqual(['b2', 'b2', 'b2', 'b2'])
         })
 
@@ -2017,6 +2017,7 @@ describe('the dial that shows one app at a time', () => {
           capabilities.mockImplementation((a) => a.id === 'b2' ? { ...CAN_OPEN, focus: false } : CAN_OPEN)
           host.pickApp('tmux')
           host.pickLanded('tmux', 'b2')
+          await vi.waitFor(() => expect(appPickBrought).toHaveBeenCalledTimes(1))
           host.pickLanded('tmux', undefined)
           await vi.waitFor(() => expect(appPickBrought).toHaveBeenCalledTimes(2))
           expect(opened(focus)).toEqual(['b1', 'b1'])
@@ -2045,16 +2046,15 @@ describe('the dial that shows one app at a time', () => {
         })
 
         it('a later pick or rest supersedes a pick\'s open still reading, and nothing is told for it', async () => {
-          const { host, appPickBrought, swiped, latests, focus } = paged(tmuxed())
+          const { host, appPickBrought, swiped, latests, focus } = paged([...tmuxed(), agent('b3', 'iterm', { nest: 'tmux', host: 'tmux' })])
           let read!: () => void
           const reading = new Promise<void>((resolve) => { read = resolve })
           focus.mockImplementation(async (_agent, latest) => { latests.push(latest); await reading; return latest() ? true : 'superseded' })
           host.pickApp('tmux')
           host.pickLanded('tmux', 'b1')
           host.pickLanded('tmux', 'b2')
-          host.pickLanded('tmux', 'b1')
-          host.swipeEnded('b2', 'rest', { apps: true })
-          expect(latests.map((latest) => latest())).toEqual([false, false, false, true])
+          host.swipeEnded('b3', 'rest', { apps: true })
+          expect(latests.map((latest) => latest())).toEqual([false, false, true])
           read()
           await vi.waitFor(() => expect(swiped).toHaveBeenCalledWith('opened'))
           await settle()
