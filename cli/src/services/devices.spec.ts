@@ -5462,12 +5462,26 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
         tmuxSays.clients = '/dev/ttys004|%3\n/dev/ttys005|%5\n'
         await focus(CLIENT_SHELL)
         expect(follows('vscode')).toEqual([[ID, 'vscode']])
+        // The focus was followed: the poll's read of the same pane moves nothing.
         await next()
-        expect(follows('pane')).toEqual([[ID, 'pane']])
+        expect(follows('pane')).toEqual([])
         // The person switches to %4 inside that client.
         tmuxSays.clients = '/dev/ttys004|%4\n/dev/ttys005|%5\n'
         await next()
-        expect(follows('pane')).toEqual([[ID, 'pane'], [B, 'pane']])
+        expect(follows('pane')).toEqual([[B, 'pane']])
+      })
+
+      it('a hand turn after a terminal\'s focus is not undone by the poll\'s next read: one focus, one move', async () => {
+        const { settle, focus, next } = await clientsIn()
+        await settle('vscode')
+        dialFollows()
+        await focus(CLIENT_SHELL)
+        expect(follows('vscode')).toEqual([[ID, 'vscode']])
+        await vi.waitFor(() => expect(editorLines()).toEqual(['[device] vscode · moved']))
+        turnTo(C)
+        await next()
+        expect(follows('pane')).toEqual([])
+        expect(logs.filter((line) => line.endsWith(' · moved'))).toEqual(['[device] vscode · moved'])
       })
 
       // §7 only adds to the poll: without Harness's extension, or before any terminal is focused, VS Code's one client is
