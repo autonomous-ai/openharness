@@ -146,6 +146,12 @@ function failure(answer: ClaudeAnswer, step: CodexStep): CodexFailure {
   return { ok: false, step, error: answer.stderr.split('\n').map((line) => line.trim()).find(Boolean) ?? NO_ANSWER, reason: failureReason(answer) }
 }
 
+/** A failure as the devices count it, as Claude Code's are (failureWords): `<step> · <reason>`, or the step alone when it
+ *  has no reason. */
+export function codexFailureWords({ step, reason }: Pick<CodexFailure, 'step' | 'reason'>): string {
+  return reason ? `${step} · ${reason}` : step
+}
+
 async function change(run: ClaudeRun, args: string[], timeoutMs: number, step: CodexStep): Promise<CodexFailure | null> {
   const answer = await run(args, timeoutMs)
   return answer.code === 0 ? null : failure(answer, step)

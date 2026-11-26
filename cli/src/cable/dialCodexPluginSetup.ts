@@ -12,7 +12,7 @@
 import { existsSync, realpathSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ClaudePluginFiles, ClaudePluginSource, ClaudeRun } from '../devices/claudePlugin.js'
-import { carriedCodexHash, codexMarketplace, codexPluginState, codexRemove, codexSetUp, codexUpdate, installedRoot, type CodexFailure } from '../devices/codexPlugin.js'
+import { carriedCodexHash, codexFailureWords, codexMarketplace, codexPluginState, codexRemove, codexSetUp, codexUpdate, installedRoot, type CodexFailure } from '../devices/codexPlugin.js'
 import type { TrustWrite } from '../devices/codexPluginTrust.js'
 import { listable, MAX_HOMES, SETUP_COUNTS } from '../devices/dialSkillFiles.js'
 
@@ -94,7 +94,7 @@ export function createDialCodexPluginSetup(deps: DialCodexPluginSetupDeps): Dial
     const at = waitFrom.get(home)
     return at !== undefined && deps.now() - at < RETRY_MS
   }
-  /** A fixed word, never Codex's own line, which can name the home's folder. */
+  /** Fixed words, never Codex's own line, which can name the home's folder. */
   const failed = (home: string, reason: string): void => {
     deps.count('failed', reason)
     wait(home)
@@ -106,7 +106,7 @@ export function createDialCodexPluginSetup(deps: DialCodexPluginSetupDeps): Dial
       tooOldAt = deps.now()
       return 'stop'
     }
-    failed(home, failure.step === 'trust' ? `trust ${failure.reason}` : failure.step)
+    failed(home, codexFailureWords(failure))
     return 'go'
   }
   const tooOld = (): boolean => deps.now() - tooOldAt < RETRY_MS
@@ -292,7 +292,7 @@ export function createDialCodexPluginSetup(deps: DialCodexPluginSetupDeps): Dial
       if (!trust.ok && trust.kind !== 'differs') {
         // Checked again after its hour, whatever the stats say then.
         stamps.delete(home)
-        failed(home, `trust ${trust.kind}`)
+        failed(home, codexFailureWords({ step: 'trust', reason: trust.kind }))
         continue
       }
       trusted(home, trust.ok)
