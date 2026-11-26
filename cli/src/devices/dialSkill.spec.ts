@@ -6,26 +6,28 @@
 import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parse } from 'yaml'
-import { DIAL_SKILL, DIAL_SKILL_DESCRIPTION, claudePluginState, ownDirectory, ownWindowsPath, readClaudePlugin, refreshSkill, removeSkill, skillsFolderOf, writeSkill } from './dialSkill.js'
+import { DIAL_SKILL, DIAL_SKILL_DESCRIPTION, claudePluginState, installedSkills, ownDirectory, ownWindowsPath, readClaudePlugin, refreshSkill, removeSkill, skillsFolderOf, writeSkill } from './dialSkill.js'
+import { DIAL_SETUP_FILE, DIAL_SKILL_FILE, writeRemoved, writeSetup } from './dialSkillFiles.js'
 
 const MARKER = '# Written by Harness. Remove it with harness device claude disable or harness device codex disable.'
 /** The line 0.6.58 wrote: files in people's homes still hold it. */
 const OLD_MARKER = '# Written by Harness. Turn off the agent in Harness Device to remove it.'
 const uid = process.getuid!()
 
-/** A step run just before the named file call: another remover taking the file first, or a write that fails. */
-const before = vi.hoisted(() => new Map<string, () => void>())
+/** A step run just before the named file call, given its arguments: another remover taking the file first, a write that
+ *  fails, or a count of the folders a check looks at. */
+const before = vi.hoisted(() => new Map<string, (...args: unknown[]) => void>())
 vi.mock('node:fs', async (importOriginal) => {
   const fs = await importOriginal<typeof import('node:fs')>()
   const hooked = <T extends (...args: never[]) => unknown>(name: string, call: T): T =>
     ((...args: Parameters<T>) => {
-      before.get(name)?.()
+      before.get(name)?.(...args)
       return call(...args)
     }) as T
-  return { ...fs, renameSync: hooked('renameSync', fs.renameSync), unlinkSync: hooked('unlinkSync', fs.unlinkSync) }
+  return { ...fs, lstatSync: hooked('lstatSync', fs.lstatSync), renameSync: hooked('renameSync', fs.renameSync), unlinkSync: hooked('unlinkSync', fs.unlinkSync) }
 })
 
 const cleanup: string[] = []
@@ -543,5 +545,136 @@ When the task stops on a step only the person can take, ring their dial before y
     }
     visit(new URL('./dialSkill.ts', import.meta.url))
     expect(nodeModules.length).toBeGreaterThan(0)
+  })
+})
+
+describe('installedSkills', () => {
+  /** Default homes with nothing in them, as the dial setup's own homes are before a first pass. */
+  const emptyHomes = (): { claude: string; codex: string } => ({ claude: folder(), codex: folder() })
+
+  const record = (dataDir: string, homes: { claude?: string[]; codex?: string[] }): void => {
+    expect(writeSetup(dataDir, { dial: true, homes: { claude: homes.claude ?? [], codex: homes.codex ?? [] }, pluginHomes: [] })).toBeUndefined()
+  }
+
+  it('finds Harness\'s skill in a folder dial-setup.json records', () => {
+    const dataDir = folder()
+    const skills = skillsAt()
+    expect(writeSkill(skills)).toBe('written')
+    record(dataDir, { codex: [skills] })
+    expect(installedSkills(dataDir, emptyHomes())).toEqual(['codex'])
+  })
+
+  it('in a folder the command recorded in dial-skill.json', () => {
+    const dataDir = folder()
+    const skills = skillsAt()
+    // An older release's text is Harness's too.
+    skillOf(skills, `---\nname: dial\n${OLD_MARKER}\n---\n`)
+    expect(writeRemoved(dataDir, 'claude', false, [skills])).toBeUndefined()
+    expect(installedSkills(dataDir, emptyHomes())).toEqual(['claude'])
+  })
+
+  it('in the default home\'s skills, through its link', () => {
+    const shared = folder()
+    writeSkill(realpathSync(shared))
+    const homes = emptyHomes()
+    symlinkSync(shared, join(homes.claude, 'skills'))
+    expect(installedSkills(folder(), homes)).toEqual(['claude'])
+    // Both engines' homes may point at one folder.
+    symlinkSync(shared, join(homes.codex, 'skills'))
+    expect(installedSkills(folder(), homes)).toEqual(['claude', 'codex'])
+  })
+
+  it('not the person\'s file, a CRLF copy, a link at dial or at SKILL.md, nor a file past 4 KiB', () => {
+    const cases: Array<[string, (skills: string) => void]> = [
+      ['no marker', (skills) => skillOf(skills, '---\nname: dial\ndescription: mine\n---\n\nMine.\n')],
+      ['a CRLF copy', (skills) => skillOf(skills, DIAL_SKILL.replaceAll('\n', '\r\n'))],
+      ['a link at dial', (skills) => {
+        const elsewhere = skillsAt()
+        writeSkill(elsewhere)
+        symlinkSync(join(elsewhere, 'dial'), join(skills, 'dial'))
+      }],
+      ['a link at SKILL.md', (skills) => {
+        const target = join(folder(), 'SKILL.md')
+        writeFileSync(target, DIAL_SKILL)
+        mkdirSync(join(skills, 'dial'))
+        symlinkSync(target, join(skills, 'dial', 'SKILL.md'))
+      }],
+      ['a marked file past 4 KiB', (skills) => skillOf(skills, DIAL_SKILL + 'x'.repeat(4096))],
+    ]
+    for (const [what, place] of cases) {
+      // Recorded for Claude Code, in the default home for Codex.
+      const dataDir = folder()
+      const recorded = skillsAt()
+      place(recorded)
+      record(dataDir, { claude: [recorded] })
+      const homes = emptyHomes()
+      place(skillsAt(homes.codex))
+      expect(installedSkills(dataDir, homes), what).toEqual([])
+    }
+  })
+
+  it('not a skill deleted by hand from a recorded folder', () => {
+    const dataDir = folder()
+    const skills = skillsAt()
+    writeSkill(skills)
+    record(dataDir, { claude: [skills] })
+    expect(writeRemoved(dataDir, 'codex', false, [skills])).toBeUndefined()
+    expect(installedSkills(dataDir, emptyHomes())).toEqual(['claude', 'codex'])
+    rmSync(join(skills, 'dial'), { recursive: true })
+    expect(installedSkills(dataDir, emptyHomes())).toEqual([])
+  })
+
+  it('a record that cannot be read reads as none, and the default home is still read', () => {
+    const dataDir = folder()
+    const recorded = skillsAt()
+    writeSkill(recorded)
+    record(dataDir, { claude: [recorded] })
+    const homes = emptyHomes()
+    writeSkill(skillsAt(homes.codex))
+    expect(installedSkills(dataDir, homes)).toEqual(['claude', 'codex'])
+    chmodSync(join(dataDir, DIAL_SETUP_FILE), 0o000)
+    expect(installedSkills(dataDir, homes)).toEqual(['codex'])
+  })
+
+  it('a default home not this user\'s is not read', () => {
+    const homes = emptyHomes()
+    writeSkill(skillsAt(homes.claude))
+    writeSkill(skillsAt(homes.codex))
+    expect(installedSkills(folder(), homes)).toEqual(['claude', 'codex'])
+    expect(installedSkills(folder(), homes, uid + 1)).toEqual([])
+    // On Windows: outside the profile.
+    expect(installedSkills(folder(), homes, -1, [realpathSync(folder())])).toEqual([])
+    expect(installedSkills(folder(), homes, -1, [realpathSync(homes.codex)])).toEqual(['codex'])
+  })
+
+  it('stops at the first folder that holds it', () => {
+    const dataDir = folder()
+    const [first, second, third] = [skillsAt(), skillsAt(), skillsAt()]
+    writeSkill(first)
+    writeSkill(third)
+    record(dataDir, { claude: [first, second, third] })
+    const looked: unknown[] = []
+    before.set('lstatSync', (path) => {
+      if (typeof path === 'string' && basename(path) === 'dial') looked.push(path)
+    })
+    expect(installedSkills(dataDir, emptyHomes())).toEqual(['claude'])
+    expect(looked).toEqual([join(first, 'dial')])
+  })
+
+  it('writes nothing', () => {
+    const dataDir = folder()
+    const recorded = skillsAt()
+    record(dataDir, { claude: [recorded] })
+    expect(writeRemoved(dataDir, 'codex', false, [recorded])).toBeUndefined()
+    const records = [readFileSync(join(dataDir, DIAL_SETUP_FILE)), readFileSync(join(dataDir, DIAL_SKILL_FILE))]
+    const homes = emptyHomes()
+    // Codex's home has its skills folder, Claude Code's has none.
+    const skills = skillsAt(homes.codex)
+    expect(installedSkills(dataDir, homes)).toEqual([])
+    expect(readdirSync(homes.claude)).toEqual([])
+    expect(readdirSync(skills)).toEqual([])
+    expect(readdirSync(recorded)).toEqual([])
+    expect(readdirSync(dataDir).sort()).toEqual([DIAL_SETUP_FILE, DIAL_SKILL_FILE].sort())
+    expect([readFileSync(join(dataDir, DIAL_SETUP_FILE)), readFileSync(join(dataDir, DIAL_SKILL_FILE))]).toEqual(records)
   })
 })
