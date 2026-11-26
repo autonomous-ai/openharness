@@ -5530,7 +5530,26 @@ describe('ObservedSource outer place', () => {
     t.src.ingest(t.ev('turn-start', inTmux()))
     expect(t.agent()).toMatchObject({ host: 'tmux', nest: 'tmux' })
     await t.asks[1].answer({ nest: 'tmux' })
-    expect(t.agent()).toMatchObject({ app: 'tmux', host: 'tmux', nest: 'tmux' })
+    expect(t.agent()).toMatchObject({ app: 'terminal', host: 'tmux', nest: 'tmux' })
+    expect(pagesOf(t.agent())).toEqual(['tmux'])
+  })
+
+  // A pane inherits the bundle id of the terminal that started tmux's server: a detached agent's hints name iTerm2, which
+  // holds no client of it (final review, 2026-11-26).
+  it('a nested agent whose lookup landed with no client app is on its multiplexer\'s page alone, never its hints\' app\'s', async () => {
+    const hostHints = { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux', __CFBundleIdentifier: 'com.googlecode.iterm2' }
+    // Detached, and attached from a terminal with no page.
+    for (const answer of [{ nest: 'tmux' }, { pid: 4300, nest: 'tmux' }] as const) {
+      const t = nested()
+      const label = JSON.stringify(answer)
+      t.src.ingest(t.ev('session-start', { hostHints }))
+      await t.asks[0].answer(answer)
+      expect(pagesOf(t.agent()), label).toEqual(['tmux'])
+      // A later hook of the same caller asks nothing anew: the landed answer stands.
+      t.src.ingest(t.ev('turn-stop', { hostHints }))
+      expect(t.asks, label).toHaveLength(1)
+      expect(pagesOf(t.agent()), label).toEqual(['tmux'])
+    }
   })
 
   it('a hooked agent in herdr has nest and host herdr', async () => {
