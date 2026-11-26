@@ -48,11 +48,11 @@ const ERROR_ROW = {
   model: 'claude-opus-5-5', usage: USAGE, latency_s: 900.7,
 }
 
-/** A probe row: counts and fixed words only. */
+/** A probe row as run-eval.mjs writes it (lib/probe.ts's Probe): counts, skill names and fixed words only. */
 const PROBE_ROW = {
-  condition: 'crowd', time: '2026-11-26T10:00:00.000Z', listing_chars: 19_234, dial: 'full', cut: 0, claude_md: true,
-  skill_count: 31, claude_version: '2.1.332', model: 'claude-opus-5-5', usage: { input_tokens: 9, output_tokens: 3 },
-  failure: null,
+  condition: 'crowd', at: '2026-11-26T10:00:00.000Z', listing: { dial: 'full', skills: 48, cut: 0, chars: 19_234 },
+  instructions: true, skills: ['api-docs', 'background-jobs', 'dial', 'update-config'], claude_version: '2.1.332',
+  model: 'claude-opus-5-5', usage: { input_tokens: 9, output_tokens: 3 }, failure: null,
 }
 
 const jsonl = (rows: object[]) => rows.map((r) => JSON.stringify(r) + '\n').join('')
