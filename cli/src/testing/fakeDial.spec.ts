@@ -50,16 +50,17 @@ it('greets as a round dial on the current firmware, which echoes no code moves a
   expect(shouldOffer(fw, '9.9.9')).toBe(false)
 })
 
-// The Windows desk's stand-in must keep what the daemon sets, as the round firmware does (handle_settings_set), or a
-// setting such as Voice language cannot be checked with it: it would greet with what it started with.
-it('keeps a settings.set as the firmware does: named fields of the same type, brightness clamped, read back and greeted with', async () => {
+/** A daemon's end on a stand-in that keeps settings: it sends one `settings.set`, then waits for the answer and the
+ *  greeting after it. */
+async function setOnce(name: string, settings: Record<string, unknown>, set: Record<string, unknown>): Promise<{ state: unknown; hello: unknown }> {
   const dir = mkdtempSync(join(tmpdir(), 'fakedial-'))
   dirs.push(dir)
-  const endpoint = process.platform === 'win32' ? `\\\\.\\pipe\\fakedial-set-${process.pid}` : join(dir, 'dial.sock')
-  const dial = await FakeDial.listen(endpoint, { settings: { brightness: 80, muted: false, voiceLang: 'en' }, keepsSettings: true })
+  const endpoint = process.platform === 'win32' ? `\\\\.\\pipe\\fakedial-${name}-${process.pid}` : join(dir, 'dial.sock')
+  const dial = await FakeDial.listen(endpoint, { settings, keepsSettings: true })
   const daemon = connect(endpoint)
   const hellos: Record<string, unknown>[] = []
-  let state: Record<string, unknown> | undefined
+  let answered: (state: Record<string, unknown>) => void = () => {}
+  const answer = new Promise<Record<string, unknown>>((resolve) => { answered = resolve })
   const send = (message: object): void => {
     daemon.write(encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify(message), 'utf8')))
   }
@@ -69,21 +70,40 @@ it('keeps a settings.set as the firmware does: named fields of the same type, br
       if (frame.type !== CableType.Json) return
       const message = JSON.parse(Buffer.from(frame.payload).toString('utf8')) as Record<string, unknown>
       if (message.t === 'hello') { hellos.push(message); send({ t: 'welcome' }) }
-      if (message.t === 'settings.state') state = message
+      if (message.t === 'settings.state') answered(message)
     }))
     await dial.greet(10_000)
-    send({ t: 'settings.set', voiceLang: 'vi', brightness: 150, muted: 'yes', quiet: true })
-    const deadline = Date.now() + 10_000
-    while (!state && Date.now() < deadline) await new Promise((done) => setTimeout(done, 20))
+    send({ t: 'settings.set', ...set })
+    let timer: NodeJS.Timeout | undefined
+    const state = await Promise.race([answer, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('the stand-in did not answer the settings.set')), 10_000)
+    })]).finally(() => clearTimeout(timer))
     const greeted = hellos.length
     await dial.greet(10_000, dial.messages.length)
     expect(hellos.length).toBeGreaterThan(greeted)
+    return { state, hello: hellos.at(-1) }
   } finally {
     daemon.destroy()
     await dial.close()
   }
+}
+
+// The Windows desk's stand-in must keep what the daemon sets, as the round firmware does (handle_settings_set), or a
+// setting such as Voice language cannot be checked with it: it would greet with what it started with.
+it('keeps a settings.set as the firmware does: named fields of the same type, brightness clamped, read back and greeted with', async () => {
+  const { state, hello } = await setOnce('set', { brightness: 80, muted: false, voiceLang: 'en' }, { voiceLang: 'vi', brightness: 150, muted: 'yes', quiet: true })
 
   const kept = { brightness: 100, muted: false, voiceLang: 'vi' }
   expect(state).toEqual({ t: 'settings.state', ok: true, settings: kept })
-  expect(hellos.at(-1)?.settings).toEqual(kept)
+  expect((hello as { settings?: unknown }).settings).toEqual(kept)
+})
+
+// The round firmware holds Focus as its only face, drawn straight across (ui_settings_apply drops character and
+// straightTitle), never changes its glass (face, round), stores brightness as a whole number and Voice language in 7
+// bytes. A stand-in that took more would show the desk a setting no real dial keeps.
+it('keeps none of the rows the round firmware holds fixed, brightness whole and Voice language in 7 bytes', async () => {
+  const held = { brightness: 60, character: 0, face: 466, muted: false, quiet: false, straightTitle: false, focusFace: false, scrollReversed: false, round: true, voiceLang: 'en' }
+  const { state } = await setOnce('fixed', held, { character: 3, straightTitle: true, face: 100, round: false, brightness: 42.9, voiceLang: 'abcdefghij', focusFace: true, scrollReversed: true })
+
+  expect(state).toEqual({ t: 'settings.state', ok: true, settings: { ...held, brightness: 42, voiceLang: 'abcdefg', focusFace: true, scrollReversed: true } })
 })
