@@ -225,6 +225,18 @@ describe('dailyDialReview', () => {
     expect(reach(6)).toMatchObject({ computers: { day: 6 }, events: { day: 9 } })
   })
 
+  it('shows notices held quiet and their answers after Answered', () => {
+    const review = dailyDialReview([row(1, 'dial_notice_installation_days', 6), row(1, 'dial_notice_shown', 9),
+      row(1, 'dial_notice_answered_10m', 4), row(1, 'dial_notice_present', 5), row(1, 'dial_notice_present_answered_10m', 2)], [], now)
+    const answered = "Answered: the person's prompt within 10 min", quiet = 'Quiet: the person was with that agent'
+    const quietAnswered = "Quiet, answered: the person's prompt within 10 min"
+    expect(rowOf(review.outsideTeam, 'Dial skill', quiet)).toMatchObject({ computers: { day: 6 }, events: { day: 5 } })
+    expect(rowOf(review.outsideTeam, 'Dial skill', quietAnswered)).toMatchObject({ computers: { day: 6 }, events: { day: 2 } })
+    const names = review.outsideTeam.find(s => s.name === 'Dial skill')!.rows.map(r => r.name)
+    expect(names.slice(names.indexOf(answered), names.indexOf(answered) + 3)).toEqual([answered, quiet, quietAnswered])
+    expect(DIAL_REVIEW_METRICS).toEqual(expect.arrayContaining(['dial_notice_present', 'dial_notice_present_answered_10m']))
+  })
+
   it('keeps the team\'s dial skill apart', () => {
     const review = dailyDialReview([row(1, 'staff:dial_skill_codex_installation_days', 7)], [], now)
     expect(rowOf(review.team, 'Dial skill', 'codex: skill installed (computer-days)')?.computers.day).toBe(7)

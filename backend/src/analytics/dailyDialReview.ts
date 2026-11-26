@@ -135,6 +135,8 @@ export function dailyDialReview(rows: Row[], breakdowns: Row[], now: Date) {
         ...DIAL_NOTICE_RESULTS.flatMap(r => line(`Reach: ${r.replace('_', ' ')}`, noticed, sum(`dial_notice_${r}`))),
         ...DIAL_NOTICE_KINDS.flatMap(k => line(`Rule: ${k}`, noticed, sum(`dial_notice_${k}`))),
         ...line("Answered: the person's prompt within 10 min", noticed, sum('dial_notice_answered_10m')),
+        ...line('Quiet: the person was with that agent', noticed, sum('dial_notice_present')),
+        ...line("Quiet, answered: the person's prompt within 10 min", noticed, sum('dial_notice_present_answered_10m')),
       ] },
       { name: 'First agent on the dial, from a dial connected with an agent running', rows: [
         ...DIAL_FIRST_AGENT_BUCKETS.flatMap(b => line(`First connection ever: ${b}`, distinct(sum(`dial_first_agent_first_${b}_installations`)))),

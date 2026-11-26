@@ -181,4 +181,36 @@ describe('NoticeLimits', () => {
     time.set(60_000)
     expect(limits.take('a', 'y')).toBe(true)
   })
+
+  // A quiet card makes no beep: the hour bounds beeps, the agent's own limits bound a loop.
+  it('a quiet take counts for its agent and never for the hour', () => {
+    const time = clock()
+    const limits = new NoticeLimits(time.now)
+    for (let i = 0; i < 20; i++) expect(limits.take(`agent-${i}`, 'x')).toBe(true)
+    expect(limits.take('q', 'x', false)).toBe(true)
+    expect(limits.take('agent-20', 'x')).toBe(false)
+    time.set(59_999)
+    expect(limits.take('q', 'y', false)).toBe(false)
+    expect(limits.take('q', 'y')).toBe(false)
+    time.set(60_000)
+    expect(limits.take('q', 'y')).toBe(false)
+    expect(limits.take('q', 'y', false)).toBe(true)
+  })
+
+  it('quiet takes leave the hour\'s twenty for rings', () => {
+    const limits = new NoticeLimits(clock().now)
+    for (let i = 0; i < 25; i++) expect(limits.take(`quiet-${i}`, 'x', false)).toBe(true)
+    for (let i = 0; i < 20; i++) expect(limits.take(`agent-${i}`, 'x')).toBe(true)
+    expect(limits.take('agent-20', 'x')).toBe(false)
+  })
+
+  it('a quiet take holds its line for ten minutes', () => {
+    const time = clock()
+    const limits = new NoticeLimits(time.now)
+    expect(limits.take('a', 'L', false)).toBe(true)
+    time.set(599_999)
+    expect(limits.take('a', 'L')).toBe(false)
+    time.set(600_000)
+    expect(limits.take('a', 'L')).toBe(true)
+  })
 })

@@ -17,6 +17,7 @@ import { FOCUS_FAILS_MAX, FOCUS_POLL_MS } from '../cable/hosts/focusPoll.js'
 import { hcClientDeps, type HcClient, type HcPrompt, type HcSubscriber, type HcTerminal } from '../cable/hosts/hcClient.js'
 import { herdrClientDeps, type HerdrAnswer, type HerdrClient, type HerdrEntry, type HerdrPrompt, type HerdrSubscriber } from '../cable/hosts/herdrClient.js'
 import { HerdrSource } from '../cable/hosts/herdrSource.js'
+import { UNKNOWN_APP } from '../cable/hosts/hostDetect.js'
 import type { LinuxRaise } from '../cable/hosts/linuxRaise.js'
 import type { WindowsRaise } from '../cable/hosts/windowsRaise.js'
 import { observedAgentId, ObservedSource } from '../cable/hosts/observed.js'
@@ -8893,12 +8894,20 @@ describe('the Notifications setting (docs/plans/2026-11-16-dial-agent-notify-des
 describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)', () => {
   const LINE = 'Connect the VPN so I can run the staging tests'
   const ID = observedAgentId('claude', 'sess-1')
-  const hook = (event: ObservedHookEvent['event']): ObservedHookEvent => ({
+  const hook = (event: ObservedHookEvent['event'], over: Partial<ObservedHookEvent> = {}): ObservedHookEvent => ({
     engine: 'claude', sessionId: 'sess-1', event, cwd: '/work/api', callerPid: 4242, transcriptPath: '/t/sess-1.jsonl',
-    hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1' },
+    hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1' }, ...over,
   })
   const card = (app: string) => [{ key: 'notice', q: LINE, options: [`In ${app}`] }]
   const host = () => seen.dial as unknown as DaemonCableHost
+  /** The dial the person turned last. */
+  const DIAL = {}
+  /** The person with sess-1: their prompt to it in Orca, Orca in front, and the dial on it. */
+  const there = (port: DevicesPort): void => {
+    host().front('orca')
+    host().dialShows(DIAL, { name: 'api', app: 'Orca' }, ID)
+    port.observed(hook('turn-start'))
+  }
   /** A core with one Harness agent, h1, whose engine session the core bound as `s-h1`. */
   const bound = () => fakeCore({ dataDir, agents: { advertised: vi.fn(() => [{ agentId: 'h1', registeredAt: 1, engine: 'claude', sessionId: 's-h1' }] as RegisteredSession[]) } })
   /** The devices with their listener, and no fleet: the router has no agent of these. */
@@ -9086,6 +9095,187 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     expect(calls('question')).toEqual([first, first])
   })
 
+  // A notice from an agent the person is with is a drawer row, held on the dial: no beep, no wake. Anything unknown is not
+  // present, and rings as before.
+  describe('the person is there (docs/plans/2026-11-26-needs-you-right-design.md, Part 2)', () => {
+    /** Who sends the notice: sess-1 in Orca, or the Harness agent h1 by the session the core bound to it. */
+    type Caller = { agentId: string; sessionId: string; app: string }
+    const OUTSIDE: Caller = { agentId: ID, sessionId: 'sess-1', app: 'Orca' }
+    const HARNESS: Caller = { agentId: 'h1', sessionId: 's-h1', app: 'Harness' }
+    const PRESENT_MS = 120_000
+    const SESS_2 = { sessionId: 'sess-2', callerPid: 4343, transcriptPath: '/t/sess-2.jsonl' }
+    type Listener = ReturnType<typeof fakeListener>
+    const shownAsks = () => calls('question').filter(([, id]) => String(id).startsWith('shown:'))
+    const notify = (listener: Listener, { sessionId }: Caller) =>
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId })).toEqual({ result: 'shown' })
+    /** Shown all the same, as a drawer row held on the dial and never asked. */
+    const quiet = async (listener: Listener, caller: Caller) => {
+      notify(listener, caller)
+      await vi.waitFor(() => expect(calls('replaceNotifications').at(-1))
+        .toEqual([[{ agentId: caller.agentId, machineId: 'machine-1', question: true, text: LINE }]]))
+      expect(calls('hold')).toEqual([[caller.agentId, expect.stringMatching(/^shown:/), card(caller.app)]])
+      expect(shownAsks()).toEqual([])
+      expect(logs).toContain('[device] notify · claude · shown · plain · present')
+    }
+    /** Asked, as every notice was before. */
+    const rings = async (listener: Listener, caller: Caller) => {
+      notify(listener, caller)
+      await vi.waitFor(() => expect(shownAsks().map(([agentId]) => agentId)).toEqual([caller.agentId]))
+      expect(calls('hold')).toEqual([])
+      expect(logs).toContain('[device] notify · claude · shown · plain')
+      expect(logs.filter((line) => line.endsWith('· present'))).toEqual([])
+    }
+    const processing = (port: DevicesPort) =>
+      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'processing', text: 'Working' } })
+    beforeEach(() => { vi.useFakeTimers() })
+
+    it.each<[string, (port: DevicesPort) => void | Promise<void>]>([
+      ['the person\'s prompt within 120 s, its app in front, the dial on it', (port) => there(port)],
+      ['a prompt exactly 120 000 ms old', async (port) => {
+        there(port)
+        await vi.advanceTimersByTimeAsync(PRESENT_MS)
+      }],
+      ['a second dial\'s none leaves it quiet', (port) => {
+        const other = {}
+        host().dialShows(other, { name: 'web', app: 'Orca' }, observedAgentId('claude', 'sess-2'))
+        there(port)
+        host().dialShows(other, null, null)
+      }],
+    ])('quiet: %s', async (_, setup) => {
+      const { port, listener } = devices({ now: () => Date.now() })
+      await setup(port)
+      await quiet(listener, OUTSIDE)
+    })
+
+    it.each<[string, (port: DevicesPort) => void | Promise<void>]>([
+      ['a prompt 120 001 ms old', async (port) => {
+        there(port)
+        await vi.advanceTimersByTimeAsync(PRESENT_MS + 1)
+      }],
+      ['another session\'s message started its turn after the person\'s prompt', (port) => {
+        there(port)
+        port.observed(hook('turn-start', { relayed: true }))
+      }],
+      ['another app in front', (port) => {
+        there(port)
+        host().front('vscode')
+      }],
+      ['none in front', (port) => {
+        there(port)
+        host().front('none')
+      }],
+      ['nothing in front reported', (port) => {
+        host().dialShows(DIAL, { name: 'api', app: 'Orca' }, ID)
+        port.observed(hook('turn-start'))
+      }],
+      ['the dial on another agent of the same app', (port) => {
+        there(port)
+        port.observed(hook('turn-start', SESS_2))
+        host().dialShows(DIAL, { name: 'api', app: 'Orca' }, observedAgentId('claude', 'sess-2'))
+      }],
+      ['the dial that moved last shows none', (port) => {
+        there(port)
+        host().dialShows(DIAL, null, null)
+      }],
+      ['its app not known, though the front reads the same', (port) => {
+        host().front(UNKNOWN_APP)
+        host().dialShows(DIAL, { name: 'api', app: 'Terminal' }, ID)
+        port.observed(hook('turn-start', { hostHints: { __CFBundleIdentifier: 'dev.zed.Zed' } }))
+      }],
+      ['its time gone as it left', async (port) => {
+        there(port)
+        port.observed(hook('session-end'))
+        await vi.advanceTimersByTimeAsync(11_000)
+        port.observed(hook('session-start'))
+      }],
+    ])('rings: %s', async (_, setup) => {
+      const { port, listener } = devices({ now: () => Date.now() })
+      await setup(port)
+      await rings(listener, OUTSIDE)
+    })
+
+    it('rings: 64 other agents prompted since', async () => {
+      // Sessions Harness agents hold: no outside row lists them, so their prompt times do not go as they leave, and only
+      // the bound drops the oldest.
+      const sessions = Array.from({ length: 64 }, (_, i) => ({ agentId: `hx${i}`, registeredAt: 1, engine: 'claude', sessionId: `sess-x${i}` }))
+      const core = fakeCore({ dataDir, agents: { advertised: vi.fn(() => sessions as RegisteredSession[]) } })
+      const { port, listener } = devices({ core, now: () => Date.now() })
+      await host().listAgentSnapshot()
+      there(port)
+      for (const [i, { sessionId }] of sessions.entries()) {
+        const other = { sessionId, callerPid: 5000 + i, transcriptPath: `/t/${sessionId}.jsonl` }
+        port.observed(hook('turn-start', other))
+        // Ended, so the observed source, which keeps 50 sessions, makes room for the next.
+        port.observed(hook('session-end', other))
+      }
+      await rings(listener, OUTSIDE)
+    })
+
+    // A session in a tmux pane whose lookup has not answered sits on the page of the app its hints name, iTerm2's, which
+    // started the tmux server, and is not known to be in it: that app in front is not the person with it.
+    it('rings: its app still to be told, though the front reads the one its hints name', async () => {
+      readers.processes.mockResolvedValue(TMUX_IN_ITERM)
+      let answer = (): void => {}
+      const answered = new Promise<void>((resolve) => { answer = resolve })
+      // Pane %3's lookup waits for the test.
+      const run = async (file: string, args: string[], timeoutMs: number) => {
+        if (args[0] === 'display-message') await answered
+        return tmuxInItermRun(file, args, timeoutMs)
+      }
+      const { port, listener } = devices({ orca: { ...orca, platform: 'darwin', run }, now: () => Date.now() })
+      host().front('iterm')
+      host().dialShows(DIAL, { name: 'api', app: 'iTerm2' }, ID)
+      port.observed(hook('turn-start', { hostHints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux', __CFBundleIdentifier: 'com.googlecode.iterm2' } }))
+      await rings(listener, OUTSIDE)
+      answer()
+    })
+
+    it('quiet: a Harness agent whose turn began within 120 s, its tile on the window in front', async () => {
+      const { port, listener } = devices({ core: bound(), now: () => Date.now() })
+      processing(port)
+      port.desk(['h1'], true)
+      await vi.advanceTimersByTimeAsync(PRESENT_MS)
+      await quiet(listener, HARNESS)
+    })
+
+    it.each<[string, (port: DevicesPort) => void | Promise<void>]>([
+      ['its window behind', (port) => {
+        processing(port)
+        port.desk(['h1'], false)
+      }],
+      ['its tile not on the tab', (port) => {
+        processing(port)
+        port.desk(['h2'], true)
+      }],
+      ['its turn began 120 001 ms ago', async (port) => {
+        processing(port)
+        port.desk(['h1'], true)
+        await vi.advanceTimersByTimeAsync(PRESENT_MS + 1)
+      }],
+      ['its turn over', (port) => {
+        processing(port)
+        port.desk(['h1'], true)
+        port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'done', text: 'done' } })
+      }],
+      ['the wall clock set back since its turn began', (port) => {
+        processing(port)
+        port.desk(['h1'], true)
+        vi.setSystemTime(Date.now() - 3_600_000)
+      }],
+      // One agent known by two ids: a Harness agent takes the Harness rule, whatever an outside hook says of its session.
+      ['an outside hook\'s prompt for the session h1 holds makes it no more present', (port) => {
+        host().front('orca')
+        host().dialShows(DIAL, { name: 'api', app: 'Harness' }, 'h1')
+        port.desk(['h1'], true)
+        port.observed(hook('turn-start', { sessionId: 's-h1' }))
+      }],
+    ])('rings: a Harness agent, %s', async (_, setup) => {
+      const { port, listener } = devices({ core: bound(), now: () => Date.now() })
+      await setup(port)
+      await rings(listener, HARNESS)
+    })
+  })
+
   // The dial and its cable session hold one question an agent: one asked over another takes its place.
   describe('another question of its agent', () => {
     const QUESTIONS = [{ key: 'go', q: 'Deploy now?', options: ['Yes', 'No'] }]
@@ -9235,6 +9425,73 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       summary(port, ID)
       await vi.waitFor(() => expect(tiers()).toHaveLength(2))
       expect(tiers()).toEqual(expect.arrayContaining([['h1', 'alert'], [ID, 'silent']]))
+    })
+  })
+
+  // The person watched it end: its tile updates and nothing sounds (docs/plans/2026-11-26-needs-you-right-design.md,
+  // Part 2).
+  describe('an outside agent\'s turn end, the person there', () => {
+    const tiers = () => calls('summary').map(([agentId, , , tier]) => [agentId, tier])
+    /** sess-1's Stop, past the grace in which its turn could go on. */
+    const stop = async (port: DevicesPort) => {
+      port.observed(hook('turn-stop'))
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+    }
+    beforeEach(() => {
+      vi.useFakeTimers()
+      readers.answer.mockResolvedValue('Built.')
+    })
+
+    it('is silent in All, logged rule:present', async () => {
+      const { port } = devices({ decideTier: null, now: () => Date.now() })
+      seen.host.watching!(true)
+      there(port)
+      await stop(port)
+      await vi.waitFor(() => expect(tiers()).toEqual([[ID, 'silent']]))
+      expect(logs).toContain('[cable] notify · silent · rule:present · present · 0ms')
+      expect(logs.filter((line) => line.includes(ID))).toEqual([])
+      // Not announced: the person's next prompt follows no turn end the dial told them of.
+      port.observed(hook('turn-start'))
+      await port.stop()
+      const days = (JSON.parse(readFileSync(join(dataDir, DIAL_USAGE_FILE), 'utf8')) as { days: Record<string, Record<string, number>> }).days
+      expect(Object.values(days).flatMap((counts) => Object.keys(counts))).not.toContain('dial_value_done_away_prompted_10m')
+    })
+
+    it('rings with another app in front', async () => {
+      const { port } = devices({ decideTier: null, now: () => Date.now() })
+      there(port)
+      host().front('vscode')
+      await stop(port)
+      await vi.waitFor(() => expect(tiers()).toEqual([[ID, 'alert']]))
+      expect(logs.filter((line) => line.includes('rule:present'))).toEqual([])
+    })
+
+    it('is silent in Needs you, under rule:present', async () => {
+      const { port, listener } = devices({ decideTier: null, now: () => Date.now() })
+      expect(listener.notify('you')).toEqual({ mode: 'you' })
+      there(port)
+      await stop(port)
+      await vi.waitFor(() => expect(tiers()).toEqual([[ID, 'silent']]))
+      expect(logs).toContain('[cable] notify · silent · rule:present · present · 0ms')
+    })
+
+    it('a pending notice keeps rule:notice', async () => {
+      const { port, listener } = devices({ decideTier: null, now: () => Date.now() })
+      there(port)
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+      await stop(port)
+      await vi.waitFor(() => expect(tiers()).toEqual([[ID, 'silent']]))
+      expect(logs).toContain('[cable] notify · silent · rule:notice · notice · 0ms')
+      expect(logs.filter((line) => line.includes('rule:present'))).toEqual([])
+    })
+
+    it('a failed turn still rings', async () => {
+      const { port } = devices({ decideTier: null, now: () => Date.now() })
+      there(port)
+      port.observed(hook('turn-error'))
+      await vi.waitFor(() => expect(calls('turnError').map(([agentId]) => agentId)).toEqual([ID]))
+      port.card({ type: 'commander_event', agentId: ID, payload: { kind: 'summary', text: 'done', recap: 'The build broke.', failed: true } })
+      await vi.waitFor(() => expect(tiers()).toEqual([[ID, 'alert']]))
     })
   })
 
@@ -16453,6 +16710,28 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
       seen.host.watching!(false)
       port.observed(hook('turn-start'))
       expect(await answered(port)).toBe(1)
+    })
+
+    // Not a ring: the waits keep meaning the dial rang (docs/plans/2026-11-26-needs-you-right-design.md, Part 2).
+    it('a notice held quiet counts as such, opens no wait, and its answer counts', async () => {
+      const { port, listener } = withNotices()
+      await attach(port)
+      // The person with sess-1: their prompt to it in Orca, Orca in front, and the dial on it.
+      host().front('orca')
+      host().dialShows({}, { name: 'api', app: 'Orca' }, ID)
+      port.observed(hook('turn-start'))
+      outsideNotice(listener, 'Waiting · Connect the VPN')
+      // Another agent's, the person not with it: rung, and a wait on the person as before.
+      notice(listener, 'h1', 'Waiting · Connect the VPN')
+      port.observed(hook('turn-start'))
+      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'turn_started' } })
+      const counts = await counted(port)
+      expect(counts).toMatchObject({
+        dial_notice_shown: 2, dial_notice_present: 1, dial_notice_answered_10m: 1, dial_notice_present_answered_10m: 1,
+      })
+      expect(Object.fromEntries(Object.entries(counts).filter(([name]) => name.startsWith('dial_wait_'))))
+        .toEqual({ dial_wait_elsewhere_under_30s: 1 })
+      expect(readFileSync(usageFile(), 'utf8')).not.toMatch(/sess-1|s-h1/)
     })
   })
 })
