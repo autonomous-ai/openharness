@@ -91,6 +91,8 @@ function rig(claude: ReturnType<typeof fakeClaude> | null = fakeClaude(), over: 
   writeFileSync(join(home, 'settings.json'), PLUGIN_ON)
   const state = {
     wanted: true as boolean | undefined, recorded: undefined as string | undefined, saves: true, now: 0, lookups: 0, found: claude,
+    /** Whether git is on this computer, and how often it was looked for. */
+    git: true, gitLookups: 0,
     /** Orca's last read: a new read is a new list. */
     orca: { homes: [] as readonly string[], answered: true },
     pluginHomes: [] as string[],
@@ -108,6 +110,10 @@ function rig(claude: ReturnType<typeof fakeClaude> | null = fakeClaude(), over: 
       return state.found?.run ?? null
     },
     claudeIn: async () => null,
+    git: async () => {
+      state.gitLookups++
+      return state.git ? '/usr/bin/git' : null
+    },
     orca: () => state.orca,
     pluginHomes: () => state.pluginHomes,
     recordPluginHomes: (homes) => {
@@ -202,6 +208,39 @@ describe('createDialPluginSetup', () => {
     state.now = HOUR
     await setup.pass()
     expect(calls).toEqual([])
+  })
+
+  // Claude Code clones the marketplace with git: a computer without it (a Windows one, often) is told once a start, and
+  // asked for nothing but git until it is there.
+  it('no git counts failed once, and later passes only look for git, past the hour too', async () => {
+    const claude = fakeClaude()
+    const { setup, state, counted } = rig(claude)
+    state.git = false
+    expect(await setup.pass()).toBe(false)
+    expect(claude.writes()).toEqual([])
+    expect(counted).toEqual([['failed', 'no git']])
+    const asked = claude.calls.length
+    const looked = state.gitLookups
+    for (const now of [1, HOUR, 3 * HOUR]) {
+      state.now = now
+      expect(await setup.pass()).toBe(false)
+    }
+    expect(claude.calls).toHaveLength(asked)
+    expect(state.lookups).toBe(1)
+    expect(state.gitLookups).toBe(looked + 3)
+    expect(counted).toEqual([['failed', 'no git']])
+  })
+
+  it('the pass that finds git installs, within the hour of the failure too', async () => {
+    const claude = fakeClaude()
+    const { setup, state, counted } = rig(claude)
+    state.git = false
+    await setup.pass()
+    state.git = true
+    state.now = 1
+    expect(await setup.pass()).toBe(true)
+    expect(claude.writes()).toEqual([ADD, INSTALL])
+    expect(counted).toEqual([['failed', 'no git'], ['set up']])
   })
 
   it('a computer that never had a dial, or a removed Claude Code: no lookup', async () => {

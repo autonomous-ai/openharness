@@ -125,7 +125,7 @@ async function device(argv: string[], deps: Partial<DeviceDeps> = {}) {
   const err: string[] = []
   const code = await runDeviceCommand(argv, {
     dataDir: folder(), home: folder(), port: PORT, platform: 'darwin', stdin: chunks(), claude: () => fakeClaude(),
-    orcaHomes: async () => [], claudeIn: () => null,
+    orcaHomes: async () => [], claudeIn: () => null, git: async () => '/usr/bin/git',
     // The command's own: CLAUDE_CONFIG_DIR stands for ~/.claude unless a spec runs it in an Orca terminal.
     defaultClaudeHome: claudeHome,
     codexHome: folder(), codex: () => true, env: {}, cwd: '/',
@@ -180,6 +180,13 @@ describe('harness device claude', () => {
     expect(await device(['claude', 'enable'], { claude: () => claude })).toEqual({ code: 1, out: [], err: ['Plugin not found'] })
     expect(await device(['claude', 'enable'], { claude: () => null }))
       .toEqual({ code: 1, out: [], err: ['Claude Code 2.1.287 or later is needed.'] })
+  })
+
+  it('enable with no git says to install it', async () => {
+    expect(await device(['claude', 'enable'], { git: async () => null })).toEqual({
+      code: 1, out: [],
+      err: ['Git is not installed on this computer, and the dial\'s Claude Code plugin is installed with it. Install Git, then try again.'],
+    })
   })
 
   it('disable exits 0', async () => {
