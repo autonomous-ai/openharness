@@ -1092,11 +1092,14 @@ export class ObservedSource implements HostSource {
     else {
       const ask: ServedState = { pid: e.callerPid, ...(same && last.is ? { is: true } : {}), hook: e }
       entry.served = ask
-      void this.deps.served([{ pid: e.callerPid, cwd: e.cwd ?? entry.agent.cwd }]).then(([answer]) => { this.landServed(entry, ask, answer) }, (error) => {
-        // Its kind only: no error text, as a path in it holds the account's name.
-        this.deps.log(`[observed] served · not read · ${errorKind(error)}`)
-        if (entry.served === ask && ask.is === undefined) ask.is = null
-      })
+      void this.deps.served([{ pid: e.callerPid, cwd: e.cwd ?? entry.agent.cwd }]).then(
+        ([answer]) => { this.landServed(entry, ask, answer) },
+        (error: unknown) => {
+          // Its kind only: no error text, as a path in it holds the account's name.
+          this.deps.log(`[observed] served · not read · ${errorKind(error)}`)
+          if (entry.served === ask && ask.is === undefined) ask.is = null
+        },
+      )
     }
     // Its hints and its tty are the first TUI's, and its multiplexer that TUI's: none is kept, nor what the scan's nested
     // lookup placed.
