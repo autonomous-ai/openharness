@@ -170,37 +170,15 @@ mod tests {
         .unwrap();
         let log = Arc::new(MemoryLog::default());
         let file = JsonStateFile::new(dir.path().to_path_buf(), log.clone());
-        let before = Saved { version: 1, cli_seen: true, asked_sign_in: true, login_item: true, ..Saved::default() };
+        let before = Saved { version: 1, cli_seen: true, asked_sign_in: true, login_item: true };
         assert_eq!(file.load(), before);
         assert!(log.lines().is_empty());
     }
 
     #[test]
-    fn an_old_file_without_the_follow_keys_keeps_asked_sign_in() {
-        let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("state.json"), r#"{"version":1,"cliSeen":true,"askedSignIn":true,"loginItem":true}"#)
-            .unwrap();
-        let log = Arc::new(MemoryLog::default());
-        let file = JsonStateFile::new(dir.path().to_path_buf(), log.clone());
-        assert_eq!(file.load(), Saved { cli_seen: true, asked_sign_in: true, login_item: true, ..Saved::default() });
-        assert!(!file.load().asked_follow && !file.load().asked_ax);
-        assert!(log.lines().is_empty());
-    }
-
-    #[test]
-    fn the_follow_keys_read_back() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = JsonStateFile::new(dir.path().to_path_buf(), Arc::new(MemoryLog::default()));
-        for (asked_follow, asked_ax) in [(true, false), (false, true), (true, true)] {
-            let saved = Saved { cli_seen: true, asked_follow, asked_ax, ..Saved::default() };
-            file.save(&saved).unwrap();
-            assert_eq!(file.load(), saved);
-        }
-    }
-
-    #[test]
-    fn an_old_file_that_turned_follow_off_loads_and_follows() {
-        // An app before this one saved its Follow ChatGPT switch: the key is ignored, and following is on.
+    fn an_old_file_with_the_follow_keys_loads_and_saves_without_them() {
+        // 0.1.14 and before saved whether Follow ChatGPT and macOS's Accessibility prompt were asked; older still, a
+        // switch.
         let dir = tempfile::tempdir().unwrap();
         fs::write(
             dir.path().join("state.json"),
@@ -212,20 +190,14 @@ mod tests {
         .unwrap();
         let log = Arc::new(MemoryLog::default());
         let file = JsonStateFile::new(dir.path().to_path_buf(), log.clone());
-        let kept = Saved {
-            cli_seen: true,
-            asked_sign_in: true,
-            login_item: true,
-            asked_follow: true,
-            asked_ax: true,
-            ..Saved::default()
-        };
+        let kept = Saved { cli_seen: true, asked_sign_in: true, login_item: true, ..Saved::default() };
         assert_eq!(file.load(), kept);
         assert!(log.lines().is_empty());
-        // Saved again, the key is gone.
         file.save(&file.load()).unwrap();
         let written = fs::read_to_string(dir.path().join("state.json")).unwrap();
-        assert!(!written.contains("followOff"), "{written}");
+        for key in ["askedFollow", "askedAx", "followOff"] {
+            assert!(!written.contains(key), "{written}");
+        }
     }
 
     #[test]

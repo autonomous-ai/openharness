@@ -1,4 +1,4 @@
-// The three screens, Install, Sign in and Follow ChatGPT, drawn from one View. Every word is the plan's approved copy.
+// The two screens, Install and Sign in, drawn from one View. Every word is the plan's approved copy.
 // Lines come from outside (a script's output, an error), so they reach the page through textContent only.
 import type { Action, Phase, Screen, View } from './api'
 
@@ -17,8 +17,6 @@ interface Button {
   label: string
   action: Action
   primary?: boolean
-  // Takes the focus in place of the primary one.
-  focused?: boolean
 }
 
 interface Face {
@@ -48,20 +46,6 @@ const FACES: Partial<Record<`${Screen}.${Phase}`, Face>> = {
   'sign_in.working': { heading: 'Sign in', body: SPINNER, buttons: [CANCEL] },
   'sign_in.browser': { heading: 'Finish in your browser', body: { kind: 'note' }, buttons: [CANCEL] },
   'sign_in.failed': { heading: 'Sign in', body: { kind: 'error' }, buttons: [RETRY] },
-  'follow.offer': {
-    heading: 'Follow ChatGPT',
-    body: {
-      kind: 'sentences',
-      text: [
-        "Your dial moves to the thread you open in ChatGPT. Harness Device reads only the ChatGPT window's title, while ChatGPT is in front.",
-      ],
-    },
-    // It opens by itself: a Return typed for another app must not press Allow.
-    buttons: [
-      { label: 'Not now', action: 'later', focused: true },
-      { label: 'Allow', action: 'allow', primary: true },
-    ],
-  },
 }
 
 // The contract's "at most 4": the script's last lines say why it failed.
@@ -126,10 +110,9 @@ export function render(root: HTMLElement, view: View | null, act: (action: Actio
   text.forEach((node, i) => (node.id = `body-${i}`))
   screen.append(content)
 
-  // Return takes the primary answer, as a dialog's default button does, unless another button takes the focus. A screen
-  // without either focuses nothing: the window can come up while the person types elsewhere, and Return must not press
-  // Cancel.
-  const focus = face.buttons.find((button) => button.focused) ?? face.buttons.find((button) => button.primary)
+  // Return takes the primary answer, as a dialog's default button does. A screen without one focuses nothing: the
+  // window can come up while the person types elsewhere, and Return must not press Cancel.
+  const focus = face.buttons.find((button) => button.primary)
   let focused: HTMLButtonElement | undefined
   if (face.buttons.length > 0) {
     const row = element('div', 'buttons')

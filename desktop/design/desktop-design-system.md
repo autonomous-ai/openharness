@@ -776,13 +776,13 @@ Off (Settings ▸ Experimental ▸ Hachi), none of them is drawn and ⇧⌘H is 
 Harness Device is the menu-bar app for the dial (`device-app/`), on macOS,
 Windows and Linux, named **Harness Device** wherever a person sees it.
 It sets up
-Harness, keeps it running and shows the dial's state; it offers sign-in and,
-with the ChatGPT app, follows its window. Claude Code, Codex and Orca
+Harness, keeps it running and shows the dial's state; it offers sign-in.
+Claude Code, Codex and Orca
 need no setting: Harness sets them up once a dial is plugged in. The desktop
 app offers and installs it ([Surface families](#surface-families), Menu-bar app offer).
 
 Its menu is the native menu; a row with nothing to say is absent. Its window
-has three screens, Install, Sign in and Follow ChatGPT,
+has two screens, Install and Sign in,
 at 420 × 320, in plain HTML and CSS (`device-app/ui/src/styles.css`)
 with this document's tokens and type. Hover and press fills are precomputed per
 theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
@@ -809,14 +809,8 @@ theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
 - Geometry: dialog content inset 24; group / control gap 16 / 8; buttons are
   capsules, 32 high at least, trailing: secondary first, primary last, as the
   desktop's dialogs. The spinner stands still under Reduce Motion.
-- Focus: Return takes the primary button, as a dialog's default. Follow ChatGPT
-  focuses `Not now`, `Allow` still primary: it opens by itself, where a Return
-  typed for another app must not allow. A screen with only `Cancel` focuses
-  nothing.
-- Follow ChatGPT asks once, on macOS only: at the first launch, after Install
-  and Sign in, while Harness Device lacks Accessibility, whatever is plugged in
-  or installed. `Not now` or closing declines for good. The menu has no follow
-  item on any OS.
+- Focus: Return takes the primary button, as a dialog's default. A screen with
+  only `Cancel` focuses nothing.
 - The menu-bar icon is the Pixel H drawn 8x8 pixels, a template image 18 points
   square (`device-app/src-tauri/icons/tray.png`): black on a light bar, white on
   a dark one. The app icon is the Pixel H, a black H of 7x7 square pixels on the
@@ -850,9 +844,6 @@ differences, each an OS limit:
   version and the same credits line: macOS's standard panel is AppKit's.
 - **Export logs** selects the zip in Explorer on Windows; on Linux it opens the
   zip's folder, as the file manager cannot select a file.
-- ChatGPT is always followed, with no screen: nothing gates reading a
-  window's title, so the permission is macOS's only. GNOME and KDE on Wayland
-  never follow it, as they give no other program the window in front.
 - The window has no taskbar button, as it has no Dock icon on macOS.
 
 The menu, top to bottom:

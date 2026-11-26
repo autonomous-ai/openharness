@@ -107,18 +107,12 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
     items
 }
 
-/// The screen the window should show next, in the order they chain: install, sign-in, then Follow ChatGPT, asked
-/// once on macOS without the permission, whatever is plugged in or installed. Off macOS, where nothing gates the
-/// title, and with no door, it is never due.
+/// The screen the window should show next, in the order they chain: install, then sign-in.
 pub fn due(state: &AppState) -> Option<Screen> {
     if matches!(state.cli, CliState::Installing | CliState::InstallFailed) {
         return Some(Screen::Install);
     }
-    if state.signed_in == Some(false) && !state.saved.asked_sign_in {
-        return Some(Screen::SignIn);
-    }
-    let follow = state.follow;
-    (follow.gated && !follow.trusted && !state.saved.asked_follow).then_some(Screen::Follow)
+    (state.signed_in == Some(false) && !state.saved.asked_sign_in).then_some(Screen::SignIn)
 }
 
 /// The menu as one log line: its labels joined by ` | `, without separators. A submenu is its label and its checked
@@ -160,8 +154,8 @@ fn settable(state: &AppState) -> Option<&DialStatus> {
 mod tests {
     use super::*;
     use crate::types::{
-        AppState, AppUpdate, CliState, Daemon, DialStatus, ExportFailure, FollowState, LogsExport, MenuAction,
-        MenuItem, NotifyMode, Saved, Screen, VoiceLang,
+        AppState, AppUpdate, CliState, Daemon, DialStatus, ExportFailure, LogsExport, MenuAction, MenuItem, NotifyMode,
+        Saved, Screen, VoiceLang,
     };
     use MenuItem::{Action, Check, Separator, Submenu, Text};
 
@@ -219,17 +213,11 @@ mod tests {
             dial: Some(dial(true, Some("0.0.95"))),
             signed_in: Some(true),
             desktop_installed: true,
-            saved: Saved { version: 1, cli_seen: true, asked_sign_in: true, login_item: true, ..Saved::default() },
+            saved: Saved { version: 1, cli_seen: true, asked_sign_in: true, login_item: true },
             app_update: AppUpdate::None,
             cli_version: None,
             logs: LogsExport::Idle,
-            follow: FollowState::default(),
         }
-    }
-
-    /// macOS's door, which asks for Accessibility, Harness Device trusted or not.
-    fn following(trusted: bool) -> FollowState {
-        FollowState { trusted, gated: true }
     }
 
     fn text(label: &str) -> MenuItem {
@@ -257,7 +245,7 @@ mod tests {
     }
 
     /// Every CliState × Daemon × dial (none, attached, with Sound and Notifications, with Voice language too) ×
-    /// signed_in × follow door (none, macOS's without the permission, with it).
+    /// signed_in.
     fn states() -> Vec<AppState> {
         let dials = [
             None,
@@ -265,15 +253,12 @@ mod tests {
             Some(notifying(NotifyMode::Full)),
             Some(voicing(Some(Some(VoiceLang::Ja)))),
         ];
-        let follows = [FollowState::default(), following(false), following(true)];
         let mut states = Vec::new();
         for cli in [CliState::Found, CliState::Installing, CliState::InstallFailed, CliState::Removed] {
             for daemon in [Daemon::Starting, Daemon::Up, Daemon::Stopped, Daemon::Updating] {
                 for dial in &dials {
                     for signed_in in [Some(true), Some(false), None] {
-                        for follow in follows {
-                            states.push(AppState { cli, daemon, dial: dial.clone(), signed_in, follow, ..state() });
-                        }
+                        states.push(AppState { cli, daemon, dial: dial.clone(), signed_in, ..state() });
                     }
                 }
             }
@@ -532,42 +517,6 @@ mod tests {
     }
 
     #[test]
-    fn no_menu_has_a_follow_item() {
-        for trusted in [false, true] {
-            for gated in [false, true] {
-                let follow = FollowState { trusted, gated };
-                for dial in [notifying(NotifyMode::Full), dial(true, Some("0.0.95"))] {
-                    let with = AppState { follow, dial: Some(dial.clone()), ..state() };
-                    let without = AppState { follow: FollowState::default(), ..with.clone() };
-                    assert_eq!(menu(&with), menu(&without), "{follow:?} {dial:?}");
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn the_follow_screen_is_due_after_install_and_sign_in_once_on_macos_without_the_permission() {
-        // At start, whatever is plugged in or installed: nothing needs a dial or the ChatGPT app.
-        let untrusted = following(false);
-        assert_eq!(due(&AppState { follow: untrusted, ..state() }), Some(Screen::Follow));
-        for cli in [CliState::Installing, CliState::InstallFailed] {
-            assert_eq!(due(&AppState { cli, follow: untrusted, ..state() }), Some(Screen::Install), "{cli:?}");
-        }
-        let not_asked = Saved { asked_sign_in: false, ..state().saved };
-        let sign_in = AppState { signed_in: Some(false), saved: not_asked, follow: untrusted, ..state() };
-        assert_eq!(due(&sign_in), Some(Screen::SignIn));
-        // Asked once: never again.
-        let asked = Saved { asked_follow: true, ..state().saved };
-        assert_eq!(due(&AppState { saved: asked, follow: untrusted, ..state() }), None);
-        // The permission given.
-        assert_eq!(due(&AppState { follow: following(true), ..state() }), None);
-        // Every door off macOS, which asks nothing and is always trusted.
-        assert_eq!(due(&AppState { follow: FollowState { trusted: true, gated: false }, ..state() }), None);
-        // No door (GNOME or KDE on Wayland): nothing to ask for.
-        assert_eq!(due(&AppState { follow: FollowState::default(), ..state() }), None);
-    }
-
-    #[test]
     fn open_harness_needs_the_desktop_app() {
         let items = menu(&AppState { desktop_installed: false, ..state() });
         assert_eq!(
@@ -664,14 +613,6 @@ mod tests {
             "Device ready | Signed in | Sound ✓ | Notifications: All | Voice language | Open Harness | Export logs | \
              About | Quit"
         );
-        // Following has no row, given or not.
-        for trusted in [false, true] {
-            let followed = AppState { dial: Some(notifying(NotifyMode::Full)), follow: following(trusted), ..state() };
-            assert_eq!(
-                menu_log(&menu(&followed)),
-                "Device ready | Signed in | Sound ✓ | Notifications: All | Open Harness | Export logs | About | Quit"
-            );
-        }
     }
 
     const SAVED: &str = "~/Desktop/harness-logs-20261118-1030.zip";
