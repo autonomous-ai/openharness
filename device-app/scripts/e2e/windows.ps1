@@ -96,7 +96,7 @@ if ($Update) {
 if (-not (Test-Path -LiteralPath $Installer -PathType Leaf)) { Stop-Before "no installer at $Installer" }
 $Installer = (Resolve-Path -LiteralPath $Installer).Path
 if (-not (Test-Path -LiteralPath $fakeCli -PathType Leaf)) { Stop-Before "no fake CLI at $fakeCli" }
-foreach ($there in @($installDir, $data, $appLocal, $shortcut, $desktopShortcut, $uninstallKey, $oldProductKey)) {
+foreach ($there in @($installDir, $data, $appLocal, $shortcut, $desktopShortcut, $uninstallKey, $productKey, $oldProductKey)) {
   if (Test-Path -LiteralPath $there) { Stop-Before "$there is there: this account has a Harness Device already" }
 }
 foreach ($key in @($runKey, $approvedKey)) {
@@ -123,7 +123,6 @@ $desktopApp = [ordered]@{
 $desktopBefore = @{}
 foreach ($name in $desktopApp.Keys) { $desktopBefore[$name] = Test-Path -LiteralPath $desktopApp[$name] }
 $hadVendorKey = Test-Path -LiteralPath $vendorKey
-$hadProductKey = Test-Path -LiteralPath $productKey
 $hadOldVendorKey = Test-Path -LiteralPath $oldVendorKey
 $hadApprovedKey = Test-Path -LiteralPath $approvedKey
 
@@ -742,9 +741,8 @@ function Clean-Up {
     Remove-Item -LiteralPath $approvedKey -ErrorAction SilentlyContinue
   }
   foreach ($folder in @($data, $appLocal)) { Remove-Item -LiteralPath $folder -Recurse -Force -ErrorAction SilentlyContinue }
-  if (-not $hadProductKey) { Remove-Item -LiteralPath $productKey -Recurse -ErrorAction SilentlyContinue }
-  # The preflight stops on an old product key, so one here is the run's seed.
-  Remove-Item -LiteralPath $oldProductKey -Recurse -ErrorAction SilentlyContinue
+  # The preflight stops on either product key, so one here is the run's.
+  foreach ($key in @($productKey, $oldProductKey)) { Remove-Item -LiteralPath $key -Recurse -ErrorAction SilentlyContinue }
   if (-not $hadVendorKey -and (Test-Path -LiteralPath $vendorKey) -and -not (Get-ChildItem -LiteralPath $vendorKey)) {
     Remove-Item -LiteralPath $vendorKey -ErrorAction SilentlyContinue
   }
