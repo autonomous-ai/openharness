@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { DIAL_BRINGS_MS } from '../../cable/hosts/appFilter.js'
 import { HELD_OUT, MAIN } from './catalog.js'
 import { evaluate } from './checks.js'
 import { tabLabel } from './itermRecords.js'
@@ -21,8 +22,8 @@ function timeline(s: Scenario): Seen['steps'] {
 }
 
 describe("iTerm2's scenarios", () => {
-  it("iTerm2's main ids are I1-I21, none held out, 21", () => {
-    expect(ITERM.map((s) => s.id)).toEqual(Array.from({ length: 21 }, (_, i) => `I${i + 1}`))
+  it("iTerm2's main ids are I1-I24, none held out, 24", () => {
+    expect(ITERM.map((s) => s.id)).toEqual(Array.from({ length: 24 }, (_, i) => `I${i + 1}`))
     expect(ITERM.every((s) => !s.heldOut)).toBe(true)
     expect(HELD_OUT.filter((s) => s.id.startsWith('I') && !s.id.startsWith('IH'))).toEqual([])
   })
@@ -35,7 +36,7 @@ describe("iTerm2's scenarios", () => {
     const dims: Record<string, Dimension[]> = {
       I1: ['D1'], I2: ['D1', 'D2'], I3: ['D1', 'D7'], I4: ['D1', 'D3'], I5: ['D3'], I6: ['D3'], I7: ['D3'], I8: ['D2'], I9: ['D2', 'D7'],
       I10: ['D2'], I11: ['D2'], I12: ['D1', 'D7'], I13: ['D7', 'D3'], I14: ['D7', 'D1'], I15: ['D7', 'D1'], I16: ['D4', 'D6'],
-      I17: ['D4'], I18: ['D5'], I19: ['D5'], I20: ['D5'], I21: ['D7'],
+      I17: ['D4'], I18: ['D5'], I19: ['D5'], I20: ['D5'], I21: ['D7'], I22: ['D3', 'D7'], I23: ['D3', 'D7'], I24: ['D3'],
     }
     for (const s of ITERM) {
       const want = [...dims[s.id]!, 'D8'].sort()
@@ -167,6 +168,61 @@ describe("iTerm2's scenarios", () => {
     const i19 = byId('I19')
     expect(i19.steps.flatMap((step) => (step.kind === 'hook' && step.event === 'start' ? [step.session] : []))).toEqual(['a', 'b'])
     expect(i19.steps.filter((step) => step.kind === 'iterm.select')).toEqual([{ kind: 'iterm.select', window: 'w1', tab: 1 }])
+  })
+
+  // Diego's 2026-11-26 rule (docs/plans/2026-11-26-dial-mux-host-pages-design.md): a pick or a rest on tmux's or herdr's
+  // page brings the app holding the agent's client, and the first app in front within 2 s of that bring keeps the page.
+  it("I22, I23 and I24 start with another app in front, so the dial's bring is what an open grades", () => {
+    for (const id of ['I22', 'I23', 'I24']) expect(byId(id).world, id).toEqual({ front: 'other' })
+  })
+
+  it("I22 and I23 bring iTerm2 to the front themselves within 2 s of the dial's bring, as tier A's world moves no front "
+    + 'app, and grade the page held after it', () => {
+    for (const [id, bring, page] of [['I22', 'pick', 'tmux'], ['I23', 'rest', 'herdr']] as const) {
+      const s = byId(id)
+      const from = s.steps.findIndex((step) => step.label === bring)
+      const front = s.steps.findIndex((step) => step.label === 'front')
+      expect(s.steps[front], id).toEqual({ label: 'front', kind: 'front', app: 'iterm' })
+      expect(s.steps.filter((step) => step.kind === 'front'), id).toHaveLength(1)
+      const between = s.steps.slice(from + 1, front)
+      expect(between.every((step) => step.kind === 'wait' && step.until === undefined), id).toBe(true)
+      expect(between.reduce((ms, step) => ms + (step.kind === 'wait' ? step.ms : 0), 0), id).toBeLessThan(DIAL_BRINGS_MS)
+      expect(s.checks.find((c) => c.kind === 'ring'), id).toMatchObject({ dim: 'D7', page, after: 'front' })
+    }
+  })
+
+  it("I22 picks tmux's page: b's tab and pane come forward, and tmux's page holds once iTerm2 is in front", () => {
+    const i22 = byId('I22')
+    expect(agents(i22).map((d) => [d.key, itermPlaceOf(d), d.tab])).toEqual([['a', 'tab', 0], ['b', 'tmux', 1]])
+    expect(i22.steps.find((step) => step.label === 'pick')).toEqual({ label: 'pick', kind: 'pick', page: 'tmux' })
+    expect(i22.checks.filter((c) => c.kind !== 'cost')).toEqual([
+      { id: 'open', kind: 'open', dim: 'D3', session: 'b', link: false, after: 'pick' },
+      { id: 'ringKeptTmux', kind: 'ring', dim: 'D7', page: 'tmux', expect: ['b'], apart: ['a'], after: 'front' },
+    ])
+  })
+
+  it("I23 rests on d on herdr's page: d's tab and pane come forward, herdr's page holds, and a rest on c shows c's pane", () => {
+    const i23 = byId('I23')
+    expect(agents(i23).map((d) => [d.key, itermPlaceOf(d), d.tab, d.split]))
+      .toEqual([['a', 'tab', 0, 0], ['c', 'herdr', 2, 0], ['d', 'herdr', 2, 1]])
+    expect(i23.steps.filter((step) => step.kind === 'pick' || step.kind === 'swipe'))
+      .toEqual([{ kind: 'pick', page: 'herdr' }, { label: 'rest', kind: 'swipe', session: 'd' }, { label: 'restC', kind: 'swipe', session: 'c' }])
+    expect(i23.checks.filter((c) => c.kind !== 'cost')).toEqual([
+      { id: 'open', kind: 'open', dim: 'D3', session: 'd', link: false, after: 'rest', at: 'restC' },
+      { id: 'ringKeptHerdr', kind: 'ring', dim: 'D7', page: 'herdr', expect: ['c', 'd'], apart: ['a'], after: 'front', at: 'restC' },
+      { id: 'openC', kind: 'open', dim: 'D3', session: 'c', link: false, after: 'restC' },
+    ])
+  })
+
+  it("I24's tmux is attached from a second tab, used last: a pick of tmux's page brings that tab", () => {
+    const i24 = byId('I24')
+    expect(agents(i24).map((d) => [d.key, itermPlaceOf(d), d.tab])).toEqual([['a', 'tab', 0], ['b', 'tmux', 1]])
+    const attach = i24.steps.findIndex((step) => step.kind === 'tmux.attach')
+    expect(i24.steps.slice(attach - 1, attach + 1)).toEqual([{ kind: 'iterm.tab', window: 'w1', tab: 2 },
+      { kind: 'tmux.attach', session: 'b', window: 'w1', tab: 2 }])
+    expect(i24.steps.filter((step) => step.kind === 'tap' || step.kind === 'swipe')).toEqual([])
+    expect(i24.checks.filter((c) => c.kind !== 'cost'))
+      .toEqual([{ id: 'open', kind: 'open', dim: 'D3', session: 'b', link: false, tab: 'w1.2.0', after: 'pick' }])
   })
 
   it("I10, I11, I17 and I20 wait for their agents on iTerm2's page, which holds them though iTerm2 runs no agent of its own", () => {

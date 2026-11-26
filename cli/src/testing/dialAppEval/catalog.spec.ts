@@ -33,20 +33,20 @@ function checkKeys(check: Check): SessionKey[] {
 }
 
 describe('the catalog', () => {
-  it('the main ids are C1-C12, X1-X12, V1-V15, U1-U14, O1-O23 and I1-I21', () => {
+  it('the main ids are C1-C12, X1-X12, V1-V16, U1-U14, O1-O23 and I1-I24', () => {
     const range = (prefix: string, n: number) => Array.from({ length: n }, (_, i) => `${prefix}${i + 1}`)
-    expect(MAIN.map((s) => s.id)).toEqual([...range('C', 12), ...range('X', 12), ...range('V', 15), ...range('U', 14),
-      ...range('O', 23), ...range('I', 21)])
+    expect(MAIN.map((s) => s.id)).toEqual([...range('C', 12), ...range('X', 12), ...range('V', 16), ...range('U', 14),
+      ...range('O', 23), ...range('I', 24)])
     expect(MAIN.every((s) => !s.heldOut)).toBe(true)
   })
 
-  it('the held out are CH1-CH3, XH1-XH3, VH1-VH4, UH1-UH3, OH1-OH4 and IH1-IH5: 22 of 119, VS Code 4 of 19, Cursor 3 of 17, Orca 4 of 27, iTerm2 5 of 26', () => {
+  it('the held out are CH1-CH3, XH1-XH3, VH1-VH4, UH1-UH3, OH1-OH4 and IH1-IH5: 22 of 123, VS Code 4 of 20, Cursor 3 of 17, Orca 4 of 27, iTerm2 5 of 29', () => {
     expect(HELD_OUT.map((s) => s.id)).toEqual(['CH1', 'CH2', 'CH3', 'XH1', 'XH2', 'XH3', 'VH1', 'VH2', 'VH3', 'VH4', 'UH1', 'UH2', 'UH3',
       'OH1', 'OH2', 'OH3', 'OH4', 'IH1', 'IH2', 'IH3', 'IH4', 'IH5'])
     expect(HELD_OUT.every((s) => s.heldOut)).toBe(true)
-    expect(ALL).toHaveLength(119)
+    expect(ALL).toHaveLength(123)
     const of = (app: string) => [HELD_OUT.filter((s) => s.app === app).length, ALL.filter((s) => s.app === app).length]
-    expect([of('vscode'), of('cursor'), of('orca'), of('iterm')]).toEqual([[4, 19], [3, 17], [4, 27], [5, 26]])
+    expect([of('vscode'), of('cursor'), of('orca'), of('iterm')]).toEqual([[4, 20], [3, 17], [4, 27], [5, 29]])
   })
 
   it('IH1 is D5 alone; IH3 tier A only', () => {
@@ -320,9 +320,9 @@ describe('the catalog', () => {
     expect(byId('C8').steps.filter((s) => s.kind === 'tap' || s.kind === 'swipe')).toEqual([])
   })
 
-  it('C3, CH1, CH2, XH1, X12, V2, O11, O16, O18-O23 and IH3 are tier A only, V12 tier B only, every other scenario (C10, C11, X7, C8, X9, CH3 and XH3 among them) runs in both', () => {
+  it('C3, CH1, CH2, XH1, X12, V2, O11, O16, O18-O23 and IH3 are tier A only, V12 and V16 tier B only, every other scenario (C10, C11, X7, C8, X9, CH3 and XH3 among them) runs in both', () => {
     const onlyA = ['C3', 'CH1', 'CH2', 'XH1', 'X12', 'V2', 'O11', 'O16', 'O18', 'O19', 'O20', 'O21', 'O22', 'O23', 'IH3']
-    const onlyB = ['V12']
+    const onlyB = ['V12', 'V16']
     for (const s of ALL) expect(s.tiers, s.id).toEqual(onlyA.includes(s.id) ? ['a'] : onlyB.includes(s.id) ? ['b'] : ['a', 'b'])
   })
 
@@ -418,16 +418,16 @@ describe('the catalog', () => {
     // and its rest after the first tap, I6's rest, I7's rest after the first tap, I9's rests on b and on a and its wait
     // after the echo, I10's rest after the move to a's pane, I10's and I11's rests after the select, I13's rests after
     // the detach and the attach, I14's time past the devices' next look after herdr starts again, I15's time after the
-    // relaunch and its rest after the first tap, I16's long turn, I17's turn, I19's rest after the select, I20's rest on c
-    // and I21's rest and its
-    // time unplugged; VH1's rest on a, UH3's voice 200 ms after the prompt, OH1's rest on a and OH2's voice 200 ms
+    // relaunch and its rest after the first tap, I16's long turn, I17's turn, I19's rest after the select, I20's rest on c,
+    // I21's rest and its time unplugged, I22's and I23's rests before and after the front, I23's rest on c and I24's
+    // rest after the pick; VH1's rest on a, UH3's voice 200 ms after the prompt, OH1's rest on a and OH2's voice 200 ms
     // after the focus; IH1's voice 200 ms after the select, IH2's rests after the attach and each select, its two turns
     // and the pause between them, IH3's agents a second apart, IH4's turn (turned) and IH5's turn.
     const starts = (id: string, n: number): string[] => Array<string>(n - 1).fill(`${id} 1000`)
     expect(waits('own')).toEqual(['C6 5000', 'C9 1000', 'C9 3500', 'C10 2000', 'C11 1000', 'C11 3000', 'X3 5000', 'X8 2000',
       'X11 300', 'X11 300', ...starts('V1', 4), ...starts('V2', 20), ...starts('V3', 2), ...starts('V4', 2), ...starts('V5', 2),
       'V7 2000', 'V7 2000', ...starts('V10', 2), 'V10 2000', 'V11 1000', 'V11 1000', 'V11 1000', 'V13 1000',
-      ...starts('V14', 3), 'V14 45000', ...starts('V15', 2), 'V15 1000', 'V15 3000',
+      ...starts('V14', 3), 'V14 45000', ...starts('V15', 2), 'V15 1000', 'V15 3000', ...starts('V16', 2),
       ...starts('U1', 4), ...starts('U2', 2), ...starts('U3', 2), ...starts('U4', 2), 'U8 2000', 'U12 2000', ...starts('U13', 3),
       'U13 45000', ...starts('U14', 2),
       'O4 2000', 'O4 1000', 'O4 3000', 'O7 4000', 'O7 2000', 'O8 2000', 'O8 2000', 'O8 6000', 'O8 2000', 'O10 1000', 'O11 4000', 'O11 1000',
@@ -439,6 +439,8 @@ describe('the catalog', () => {
       ...starts('I12', 2), ...starts('I13', 2), 'I13 2000', 'I13 2000', ...starts('I14', 3), 'I14 35000',
       ...starts('I15', 3), 'I15 2000', 'I15 2000', 'I15 2000', 'I15 2000', 'I15 4000', 'I16 30000', 'I17 2000',
       ...starts('I18', 2), ...starts('I19', 2), 'I19 2000', ...starts('I20', 2), 'I20 1000', ...starts('I21', 4), 'I21 1000', 'I21 3000',
+      ...starts('I22', 2), 'I22 1000', 'I22 2000', ...starts('I23', 3), 'I23 1000', 'I23 3000', 'I23 2000',
+      ...starts('I24', 2), 'I24 2000',
       'CH3 1000', 'XH3 200',
       ...starts('VH1', 2), 'VH1 1000', ...starts('VH3', 3), ...starts('UH3', 2), 'UH3 200',
       'OH1 1000', 'OH2 200',
