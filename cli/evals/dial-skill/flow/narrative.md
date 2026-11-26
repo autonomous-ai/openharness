@@ -1,5 +1,12 @@
 # Dial skill hill-climb
 
+Part 3's result: today's text stays, by the PM's decision (2026-11-27); the rounds are findings for Part 4 (below).
+v1, the best variant, against the baseline on test:
+
+- crowd: v1 test 1.50 -> 1.69, paired +0.19 [-0.75, 1.14] over 12 cases, within noise
+- clean: v1 test 1.67 -> 1.79, paired +0.13 [-1.33, 1.58] over 12 cases, within noise
+- name-only: v1 test -0.75 -> -0.75, paired +0.00 [0.00, 0.00] over 12 cases, within noise
+
 <!-- status -->
 | round | condition | change | val | train | test | recall | specificity | line_ok | ask_ok | harmed | went_on | s/run | tool calls | rings | tokens | $/pass | spend |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -96,3 +103,54 @@ The 4 needless rings (`fix-off-by-one` 2, `signup-typo` 1, `report-json-flag` 1)
 alone (`loaded` 0, `one_step` 1), for a call the agent had made itself or for an offer of more work. The new
 description's "settled your own way" reaches such calls, and the body's limits on it do not travel with it. Not
 kept: the val score is v1's, and needless rings rose by 4. v1 stays the winner.
+
+## Findings for Part 4
+
+Today's text stays, by the PM's decision (2026-11-27): v1, the best variant, missed two gates, and round 2 was not
+kept. The pull request carries the eval's changes and these numbers. v1's text, verbatim, is `flow/v1/SKILL.md`; its
+description line:
+
+```
+description: "Before you end a turn that leaves the person something to decide, answer or do, ring their Harness dial: harness device notify \"[the ask, one line]\" --suggest \"[your pick]\" --waiting (or --proceeding when you go on with your pick). Not for finished work or progress."
+```
+
+Gates missed, v1, val and test pooled:
+
+- recall in `crowd`: 41 of 48 (85.4%, 3 reps) against at least 90%, 3 runs short of 44 of 48;
+- needless rings in `clean` (the gate the PM added): 2 of 18 against at most 1 of 18, 1 over (`minor-choice`, both
+  reps);
+- score vs baseline in `crowd`: +0.61 [-0.12, 1.35]; the interval holds 0, so v1 is not above the baseline beyond
+  noise.
+
+Met: needless rings in `crowd` 0 of 27, `line_ok` 36 of 41 (87.8%), harmed 0 of 12, `went_on` 12 of 12.
+
+Miss kinds:
+
+- Every held-out need miss of v1 had `loaded` 0, the description: in `crowd` 7 (`retry-policy-rollout` 3,
+  `tax-rate-unknown` 2, `security-key-touch` 1, `xcode-license-sudo` 1), in `clean` 4 (`sso-expired` 2,
+  `gh-signed-out` 1, `retry-policy-rollout` 1). Train's one miss too (`api-key-missing`). No run loaded the body and
+  then stayed silent.
+- v1's 2 needless rings in `clean` (`minor-choice`) had `loaded` 1: the body's line on a decision mid-turn.
+- v2's 4 needless rings in `crowd` (`fix-off-by-one` 2, `signup-typo` 1, `report-json-flag` 1) came from the
+  description alone: `loaded` 0, `one_step` 1. Its recall rose to 32 of 32 on train and val, and its val score stayed
+  v1's.
+- Claude Code 2.1.332 HTML-escapes `<` and `>` in its skill listing, so a description must hold none: the spec's
+  angle-bracket placeholders made the first listing probe read the dial's line as `cut`.
+
+**Held-out numbers not clean.** The traces of six cases were read to write v2: `security-key-touch` (val),
+`tax-rate-unknown`, `xcode-license-sudo`, `retry-policy-rollout`, `minor-choice` and `sso-expired` (test). They were
+read because v1 missed or rang needlessly there, so any later text's held-out numbers for those six are not clean.
+v1 against the baseline, val and test pooled, split into those six and the rest:
+
+| condition | cases | text | recall | needless rings | line_ok | harmed | went_on |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| crowd | the six read | baseline | 7 of 10 | 0 of 2 | 6 of 7 | 0 of 2 | 2 of 2 |
+| crowd | the six read | v1 | 8 of 15 | 0 of 3 | 8 of 8 | 0 of 3 | 3 of 3 |
+| crowd | the rest | baseline | 14 of 22 | 0 of 16 | 14 of 14 | 0 of 6 | 4 of 6 |
+| crowd | the rest | v1 | 33 of 33 | 0 of 24 | 28 of 33 | 0 of 9 | 9 of 9 |
+| clean | the six read | baseline | 8 of 10 | 0 of 2 | 7 of 8 | 0 of 2 | 2 of 2 |
+| clean | the six read | v1 | 7 of 10 | 2 of 2 | 6 of 7 | 0 of 2 | 2 of 2 |
+| clean | the rest | baseline | 17 of 22 | 0 of 16 | 14 of 17 | 0 of 6 | 4 of 6 |
+| clean | the rest | v1 | 21 of 22 | 0 of 16 | 18 of 21 | 0 of 6 | 6 of 6 |
+
+v1 ran `crowd` at 3 reps and `clean` at 2, the baseline both at 2.
