@@ -76,7 +76,7 @@ import { readRecord } from '../cable/hosts/record.js'
 import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
 import { appRoots, learnApps, readBundleId, readMadeBy, readProcessNames, readPtyOwner, readTtyName, readWindowsProcesses, readWindowsPtyOwner, scanLearnsApps } from '../cable/hosts/scannedApp.js'
 import { createScrollLines } from '../cable/hosts/scrollLines.js'
-import { pageOf } from '../cable/hosts/select.js'
+import { pagesOf } from '../cable/hosts/select.js'
 import { createTabsAdapter, isTabApp, readTty, type Tab, type TabApp } from '../cable/hosts/tabs.js'
 import { createTmuxAdapter, createTmuxNested, createTmuxOuter, tmuxPaneParts } from '../cable/hosts/tmux.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
@@ -521,14 +521,15 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     hadDial: () => readSetup(core.dataDir).dial || greetedAsDial(dialPorts),
     log,
   })
-  /** Where the dial would place an agent with no window: its own page for one outside a pane (`pageOf`: tmux's or herdr's
-   *  for one nested there), Harness for the rest. Read from the registry itself, as the cable host answers none while a
-   *  window holds the dial on its tab: [entries] when the caller merged it already. */
+  /** Where the dial would place an agent with no window: its first page for one outside a pane (`pagesOf`: its terminal
+   *  app's for one nested in tmux or herdr, the multiplexer's when it has no app), Harness for the rest. Read from the
+   *  registry itself, as the cable host answers none while a window holds the dial on its tab: [entries] when the
+   *  caller merged it already. */
   const usageAgent = (agentId: string, entries: HostEntry[] = registry.entries()): DialAgent | undefined => {
     const who = cableHost.describe(agentId)
     if (!who) return undefined
     const row = entries.find((e) => e.agent.id === agentId)?.agent
-    return { engine: who.engine, host: row?.host ?? 'harness', page: row ? pageOf(row) : 'harness', held: observed?.heldOnly(agentId) ?? false }
+    return { engine: who.engine, host: row?.host ?? 'harness', page: row ? pagesOf(row)[0] : 'harness', held: observed?.heldOnly(agentId) ?? false }
   }
   /** Whether a voice's words wait for the agent's turn to end: its row at work or waiting on the person (a Harness agent's
    *  from its cards), or another machine's turn running. Called only at a voice's end, which a dial's frame brings once
@@ -968,9 +969,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // a session paired there would be listed twice on Herdr's page.
   hookIds ? (pid): string | undefined => hcSource?.terminalOf(pid) : undefined,
   // An agent in a pane of the person's herdr, tmux or Zellij is seen in the app holding the client that shows it, the
-  // app a tap brings forward: on herdr's or tmux's page (in Orca, on Orca's), on that app's page in Zellij (select.ts
-  // pageOf, Diego 2026-11-23). Each lookup answers nothing at once for an agent in none of its panes, and
-  // places only one on a terminal its host made, so at most one names an app. herdr's first: with its client in a
+  // app a tap brings forward: on that app's page, and on herdr's or tmux's too (select.ts pagesOf, Diego 2026-11-26).
+  // Each lookup answers nothing at once for an agent in none of its panes, and places only one on a terminal its host
+  // made, so at most one names an app. herdr's first: with its client in a
   // terminal with no page, a process is kept for the raise when neither other names an app: on Linux the client's own,
   // whose raise finds the window above it; on Windows the terminal's, which owns that window.
   firstOuter(createHerdrOuter({ ...outerDeps, atime: ttyAtime, tty: readTtyName, onPath: apps.onPath, sockets: procSockets,
@@ -2238,8 +2239,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** Rex's ring as the attached dial has it, as orcaRing. */
   let rexRing: { members?: ReadonlySet<string>; again: boolean } = { again: false }
   let rexOrdering = false
-  /** The agents on Rex's page: an agent in tmux inside a Rex block is on tmux's (select.ts pageOf). */
-  const rexAgents = (): HostAgent[] => registry.entries().filter(({ agent }) => pageOf(agent) === 'rex').map(({ agent }) => agent)
+  /** The agents on Rex's page: an agent in tmux inside a Rex block is on it too (select.ts pagesOf). */
+  const rexAgents = (): HostAgent[] => registry.entries().filter(({ agent }) => pagesOf(agent).includes('rex')).map(({ agent }) => agent)
   const readRexOrder = (source: ObservedSource): Promise<void> => {
     const read = rexReads.layout()
     rexOrdering = true
@@ -2560,13 +2561,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  more till then, as a poll that stopped itself is not started (a tmux that hangs beside WezTerm's good reads would
    *  cost a run to its timeout every read). */
   const placeFails = new Map<string, number>()
-  /** The live agents on tmux's page whose tmux pane, their own or the one the scan placed them at (shownAt: paneOf reads
+  /** The live agents in tmux whose tmux pane, their own or the one the scan placed them at (shownAt: paneOf reads
    *  their own alone), names [app]: the app holding the client that shows its session, on the tab [tty]. One in tmux
-   *  inside Orca is on Orca's page, whose own focus covers it. */
+   *  inside Orca is left to Orca's own focus, which follows its panes: a second follow there would fight it. */
   const tmuxPanes = (source: ObservedSource, app: string): Array<{ agent: HostAgent; full: string; pane: string; tty: string | undefined }> =>
     source.list().flatMap((agent) => {
       const full = source.shownAt(agent.id, tmux.id)
-      if (full === undefined || pageOf(agent) !== 'tmux') return []
+      if (full === undefined || agent.nest !== 'tmux' || agent.app === 'orca') return []
       const parts = tmuxPaneParts({ adapter: tmux.id, id: full })
       return parts?.app === app ? [{ agent, full, pane: parts.id, tty: source.tabTty(agent.id) }] : []
     })
@@ -2587,7 +2588,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** The live agents on Rex's page with a block there, their own or the one Rex's layout placed them at (shownAt), and
    *  that block's session. */
   const rexPanes = (source: ObservedSource): Array<{ agent: HostAgent; id: string; session: string; block: string }> =>
-    source.list().filter((agent) => pageOf(agent) === 'rex').flatMap((agent) => {
+    source.list().filter((agent) => pagesOf(agent).includes('rex')).flatMap((agent) => {
       const id = source.shownAt(agent.id, rex.id) ?? ''
       const parts = rexPaneParts(id)
       return parts && !parts.held ? [{ agent, id, session: parts.session, block: parts.block }] : []
@@ -2782,8 +2783,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // lists (its own, which tells it): another server's agent, whose pane id repeats one of it, is at no pane listed.
     if (at.length === 0 || !herdr!.list().some(({ paneKeys }) => paneKeys?.includes(key))) return
     // Two there cannot say which one the person looks at; a held pane shows whatever runs in front of its agent; one in
-    // herdr inside Orca is on Orca's page, which Orca's own focus covers.
-    if (at.length !== 1 || at[0].parts.held || pageOf(at[0].agent) !== 'herdr') {
+    // herdr inside Orca is left to Orca's own focus, which follows its panes.
+    if (at.length !== 1 || at[0].parts.held || at[0].agent.nest !== 'herdr' || at[0].agent.app === 'orca') {
       log('[device] herdr focus · skipped · unknown agent')
       return
     }

@@ -1628,9 +1628,10 @@ describe('the dial that shows one app at a time', () => {
   })
 
   describe('a follow to an agent in tmux or herdr (docs/plans/2026-11-23-dial-tmux-herdr-apps-design.md)', () => {
-    /** iTerm2 holding a plain agent and one in tmux, Ghostty two: Ghostty is the default. */
+    /** iTerm2 holding a plain agent and one in tmux, Ghostty three: Ghostty is the default. */
     const iterm = (): HostAgent[] => [
       agent('a1', 'iterm'), agent('b1', 'iterm', { nest: 'tmux', host: 'tmux' }), agent('g1', 'ghostty'), agent('g2', 'ghostty'),
+      agent('g3', 'ghostty'),
     ]
     /** A host over these agents whose settles run when `settle` says. */
     function following(agents: HostAgent[], over: Partial<CableHostWiring> = {}): { host: DaemonCableHost; settle: (app: string) => void } {
@@ -2383,12 +2384,13 @@ describe('the dial that shows one app at a time', () => {
       expect(told).toEqual(['front', 'apps front', 'settled vscode'])
     })
 
-    it('a follow turns the view to apps, on tmux\'s page', async () => {
-      // iTerm2 holds only the tmux agent: its settle turns no view, so the turn is the follow's.
+    it('iTerm2 holding only a tmux agent turns the view to apps as it settles, on its page; a follow then turns tmux\'s', async () => {
+      // The tmux agent is on iTerm2's page too (pagesOf): iTerm2 settling has agents in front.
       const { host, views } = viewed([agent('b1', 'iterm', { nest: 'tmux', host: 'tmux' }), ...five()])
       onTab(host, ['h1'])
       settle(host, 'iterm')
-      expect(views).toEqual(['tabs window'])
+      expect(views).toEqual(['tabs window', 'apps front'])
+      expect(await shown(host)).toBe('iterm')
       host.followPage('b1')
       expect(views).toEqual(['tabs window', 'apps front'])
       expect(host.holdsTab()).toBe(false)

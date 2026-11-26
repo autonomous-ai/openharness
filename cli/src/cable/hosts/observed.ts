@@ -1718,7 +1718,7 @@ export class ObservedSource implements HostSource {
       a.host = 'herdr'
       a.app = 'herdr'
       delete a.appPending
-      // On Herdr's page: a multiplexer would hold it on its own (pageOf).
+      // On Herdr's page alone: a multiplexer would add its own page (pagesOf).
       delete a.nest
       entry.bundle = APP_BUNDLES.herdr
     } else {

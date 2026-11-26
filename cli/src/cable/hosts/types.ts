@@ -18,12 +18,12 @@ export interface HostAgent {
   /** 'harness' | 'orca' | 'herdr' | 'ghostty' | 'iterm' | 'vscode' | 'terminal' | ... */
   host: string
   /** The outermost app the person sees, one of `APP_IDS`: what a tap brings and the tab it raises, and the app a
-   *  prompt's follow compares with the front. The page is `pageOf`'s (`select.ts`). The unknown app's while
+   *  prompt's follow compares with the front. Its pages are `pagesOf`'s (`select.ts`). The unknown app's while
    *  `appPending` for the scan. */
   app: string
   /** The nearest multiplexer whose pane is the agent's own terminal, as its lookup or the scan's maker read confirmed
-   *  (`observed.ts`); tmux and herdr only (Diego, 2026-11-23). Its page is that multiplexer's unless its app is Orca
-   *  (`select.ts` `pageOf`). */
+   *  (`observed.ts`); tmux and herdr only (Diego, 2026-11-23). It is on that multiplexer's page as well as its app's
+   *  (`select.ts` `pagesOf`, Diego 2026-11-26). */
   nest?: Nest
   /**
    * Nothing has said where it runs yet: the open scan found it and no hook has told of it, or its hook came from a

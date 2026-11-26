@@ -44,7 +44,7 @@ import { HarnessSource } from './hosts/harness.js'
 import { AppFilter, type AppCounts } from './hosts/appFilter.js'
 import { agentPlaceName, appDisplayName, hostDisplayName } from './hosts/hostDetect.js'
 import type { HostEntry, HostRegistry } from './hosts/registry.js'
-import { APP_LIMIT, AppRings, DialRing, pageOf, type RingRank } from './hosts/select.js'
+import { APP_LIMIT, AppRings, DialRing, pageOf, pagesOf, type RingRank } from './hosts/select.js'
 import { FRONT_NONE } from './hosts/frontApp.js'
 import { deriveAnswerCard } from '../lib/deviceRecap.js'
 import { capsLetters, type AppList, type AppPick, type DialView, type HostAgent, type PaneSwitch, type SwitchCause, type ViewCause } from './hosts/types.js'
@@ -790,11 +790,11 @@ export class DaemonCableHost implements CableHost {
     return this.onMachine(agentId, opts)?.agent.host
   }
 
-  /** The page the agent is on, which a notice's pick turns the dial to: tmux's or herdr's for an agent nested there
-   *  (Diego, 2026-11-23), else its app's. The name stays `appOf`, as the session asks it. */
+  /** The page a notice's pick turns the dial to: the agent's first page, its terminal app's for one nested in tmux or
+   *  herdr, the multiplexer's for one with no app (pagesOf). The name stays `appOf`, as the session asks it. */
   appOf(agentId: string, opts: { apps?: boolean } = {}): string | undefined {
     const on = this.onMachine(agentId, opts)
-    return on && pageOf(on.agent)
+    return on && pagesOf(on.agent)[0]
   }
 
   /** A pick from the dial's list of apps. With a window, on the tab another app with agents turns the dial to its ring;
@@ -1021,8 +1021,11 @@ export class DaemonCableHost implements CableHost {
     const agents = rows.map((a): CableAgent => {
       // A Harness agent keeps the row the window would show (its chips too); another app's is drawn from what was heard.
       const row = byId.get(a.id) ?? { id: a.id, name: a.name, engine: a.engine, machineId: local.id, machine: local.name }
-      // Every row is one of the entries.
-      return { ...row, host: a.host, caps: capsLetters(sourceOf.get(a)!.capabilities(a)) }
+      // Every row is one of the entries. A nested agent on its app's page says that app (spec §2,
+      // docs/plans/2026-11-26-dial-mux-host-pages-design.md): the round dial draws it under the name, and the Pro's room
+      // lists the rows whose host is the shown app. Its multiplexer's page, and the single ring, say tmux or herdr.
+      const host = list && a.nest && pagesOf(a)[0] === list.shown && list.shown !== a.nest ? list.shown : a.host
+      return { ...row, host, caps: capsLetters(sourceOf.get(a)!.capabilities(a)) }
     })
     return { agents, tab: '', total, view: 'machine', ...(list ? { apps: list } : {}) }
   }
@@ -1042,7 +1045,7 @@ export class DaemonCableHost implements CableHost {
   private appRing(agents: HostAgent[], app: string): { rows: HostAgent[]; total: number } {
     const scoped = this.filter.settledApp() === app ? this.scopes.get(app) : undefined
     if (!scoped) return this.rings.ring(app)
-    return scoped.ring.select(agents.filter((a) => pageOf(a) === app && scoped.scope.inScope(a.id)), this.ranks.get(app))
+    return scoped.ring.select(agents.filter((a) => pagesOf(a).includes(app) && scoped.scope.inScope(a.id)), this.ranks.get(app))
   }
 
   /** The apps of the machine list, in the order they appeared, and the one shown over these agents. */
