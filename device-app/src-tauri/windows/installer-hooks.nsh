@@ -26,9 +26,15 @@ Function HarnessMoveInstallFolder
   !insertmacro HARNESS_MOVE_INSTALL_FOLDER
 FunctionEnd
 
-; A silent (/S) install runs no .onGUIInit. The section has already set the output folder from $INSTDIR, so it is set
-; again in case the move changed it.
+; A silent (/S) install runs no .onGUIInit. The section has already made the output folder from $INSTDIR: when the move
+; changes it, the output folder follows and the one made, still empty, goes (RMDir removes no folder with files).
 !macro NSIS_HOOK_PREINSTALL
+  Push $0
+  StrCpy $0 $INSTDIR
   !insertmacro HARNESS_MOVE_INSTALL_FOLDER
-  SetOutPath $INSTDIR
+  ${If} $0 != $INSTDIR
+    SetOutPath $INSTDIR
+    RMDir $0
+  ${EndIf}
+  Pop $0
 !macroend
