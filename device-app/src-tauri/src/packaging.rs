@@ -41,6 +41,19 @@ fn windows_installs_per_user_as_harness_device() {
     assert_eq!(windows["windows"]["nsis"]["installMode"], "currentUser");
 }
 
+/// The publisher is what Windows shows in Settings > Apps and in the exe's details. Up to 0.1.14 it was "autonomous",
+/// the identifier's second part; the identifier stays, so installed apps keep updating. Tauri keeps the install folder
+/// under the publisher's key, so the hooks move it from the old key, and an install over an older one finds it.
+#[test]
+fn windows_shows_autonomous_inc_as_the_publisher() {
+    let main = config("tauri.conf.json");
+    assert_eq!(main["bundle"]["publisher"], "Autonomous Inc.");
+    assert_eq!(main["identifier"], "ai.autonomous.harness.device");
+    let nsis = &config("tauri.windows.conf.json")["bundle"]["windows"]["nsis"];
+    assert_eq!(nsis["installerHooks"], "windows/installer-hooks.nsh");
+    assert!(file("windows/installer-hooks.nsh").contains(r"Software\autonomous\Harness Device"));
+}
+
 #[test]
 fn linux_is_an_appimage() {
     let linux = &config("tauri.linux.conf.json")["bundle"];
