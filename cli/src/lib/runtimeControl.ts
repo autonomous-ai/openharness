@@ -392,7 +392,7 @@ export class RuntimeProfileController {
       : onScreen(await this.deps.capture(session.agentId, 100) ?? '')?.effort
     if (variantOpen || effortNow !== target.effort) {
       if (target.effort !== 'auto' && !entry.efforts?.includes(target.effort)) throw new RuntimeProfileControlError('EFFORT_UNSUPPORTED')
-      await this.pickOpencodeVariant(session, target.effort === 'auto' ? 'Default' : target.effort, variantOpen)
+      await this.pickOpencodeVariant(session, target.effort === 'auto' ? 'Default' : target.effort, variantOpen, ['Default', ...entry.efforts ?? []])
     }
     const taken = bound ? await this.waitObservedProfile(session, target)
       : !!await this.waitPane(session.agentId, (v) => shows(v, true), COMMAND_CONFIRM_MS)
@@ -426,9 +426,10 @@ export class RuntimeProfileController {
    * takes. Anything else closes the picker and refuses.
    *
    * OpenCode 2.4's has no filter and a cursor instead (`OpencodeVariantRow.cursor`): it is walked there one arrow at a
-   * time, the cursor read again after each, as Pi's ladder is.
+   * time, the cursor read again after each, as Pi's ladder is. [order] is the model's variants in the picker's order,
+   * `Default` first.
    */
-  private async pickOpencodeVariant(session: RegisteredSession, variant: string, open: boolean): Promise<void> {
+  private async pickOpencodeVariant(session: RegisteredSession, variant: string, open: boolean, order: string[]): Promise<void> {
     const opencode = this.engine('opencode')
     if (!open) {
       const before = opencode.countOpencodeVariantPickers(stripAnsi(await this.deps.capture(session.agentId, 100) ?? ''))
@@ -436,7 +437,7 @@ export class RuntimeProfileController {
     }
     const drawn = await this.waitPane(session.agentId, (v) => !!opencode.parseOpencodeVariantRows(stripAnsi(v))?.length, PICKER_STEP_MS)
     const rows = drawn ? opencode.parseOpencodeVariantRows(stripAnsi(drawn)) : null
-    if (rows?.some((row) => row.cursor)) return this.walkOpencodeVariant(session, variant, rows)
+    if (rows?.some((row) => row.cursor)) return this.walkOpencodeVariant(session, variant, rows, order)
     if (!await this.deps.sendLiteral(session.agentId, variant)) throw new RuntimeProfileControlError('TMUX_FAILED')
     const first = (v: string) => opencode.parseOpencodeVariantRows(stripAnsi(v))?.[0]?.name.toLowerCase()
     if (!await this.waitPane(session.agentId, (v) => first(v) === variant.toLowerCase(), PICKER_STEP_MS)) {
@@ -446,29 +447,35 @@ export class RuntimeProfileController {
     if (!await this.deps.sendKey(session.agentId, 'Enter')) throw new RuntimeProfileControlError('TMUX_FAILED')
   }
 
-  /** OpenCode 2.4's variant picker: the cursor moved to [variant] one arrow at a time, then Enter. */
-  private async walkOpencodeVariant(session: RegisteredSession, variant: string, first: OpencodeVariantRow[]): Promise<void> {
+  /**
+   * OpenCode 2.4's variant picker: the cursor moved to [variant] one arrow at a time, then Enter. The way is told by
+   * [order] and each step by the name under the cursor: on a phone's 20 rows the list shows four and scrolls with the
+   * cursor, which then stays on the same line of the screen (MSI, 2026-11-26).
+   */
+  private async walkOpencodeVariant(session: RegisteredSession, variant: string, first: OpencodeVariantRow[], order: string[]): Promise<void> {
     const opencode = this.engine('opencode')
     const refuse = async (): Promise<never> => {
       await this.deps.sendKey(session.agentId, 'Escape')
       throw new RuntimeProfileControlError('EFFORT_UNSUPPORTED')
     }
-    let rows = first
-    for (let guard = 0; guard <= first.length; guard++) {
-      const target = rows.findIndex((row) => row.name.toLowerCase() === variant.toLowerCase())
-      const cursor = rows.findIndex((row) => row.cursor)
+    const place = (name: string | undefined) => order.findIndex((entry) => entry.toLowerCase() === name?.toLowerCase())
+    const target = place(variant)
+    let at = first.find((row) => row.cursor)?.name
+    for (let guard = 0; guard <= order.length; guard++) {
+      const cursor = place(at)
       if (target < 0 || cursor < 0) return refuse()
       if (target === cursor) {
         if (!await this.deps.sendKey(session.agentId, 'Enter')) throw new RuntimeProfileControlError('TMUX_FAILED')
         return
       }
       if (!await this.deps.sendKey(session.agentId, target > cursor ? 'Down' : 'Up')) throw new RuntimeProfileControlError('TMUX_FAILED')
+      const was = at
       const moved = await this.waitPane(session.agentId, (v) => {
-        const next = opencode.parseOpencodeVariantRows(stripAnsi(v))
-        return !!next && next.findIndex((row) => row.cursor) !== cursor
+        const name = opencode.parseOpencodeVariantRows(stripAnsi(v))?.find((row) => row.cursor)?.name
+        return !!name && name !== was
       }, PICKER_STEP_MS)
       if (!moved) return refuse()
-      rows = opencode.parseOpencodeVariantRows(stripAnsi(moved)) ?? []
+      at = opencode.parseOpencodeVariantRows(stripAnsi(moved))?.find((row) => row.cursor)?.name
     }
     return refuse()
   }

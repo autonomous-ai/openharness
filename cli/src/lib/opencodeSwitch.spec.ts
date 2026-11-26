@@ -31,7 +31,8 @@ class FakeOpencode {
    * cell a row, the cursor's row edged `┃` and the current one marked `▪`, and `Select variant` with no filter at all:
    * what is typed there goes nowhere, and only the arrows move.
    */
-  constructor(readonly v24 = false) {}
+  /** [shown]: the rows a picker has room for, as on a phone's 20 rows, scrolled to keep the cursor in view. */
+  constructor(readonly v24 = false, readonly shown = Infinity) {}
 
   private rows(): string[] {
     const all = this.picker === 'model' ? CATALOG.map((m) => m.name!) : ['Default', ...CATALOG.find((m) => m.name === this.model)!.efforts!]
@@ -45,7 +46,9 @@ class FakeOpencode {
 
   private screen24(): string[] {
     const over = (right: string) => `${'     A long answer, drawn on under the picker'.padEnd(76)}${right}`
+    const top = Math.max(0, this.cursor - this.shown + 1)
     const rows = this.rows().map((row, index) => over(`${index === this.cursor ? '┃' : ' '} ${row === this.current() ? '▪' : ' '} ${row}`))
+      .slice(top, top + this.shown)
     if (this.picker === 'variant') return [over('    Select variant                                   esc'), over(''), ...rows, over('')]
     return [over('    Free models                                      esc'), over('    Connect a provider for access to more models'), over(''),
       over(`    ${this.filter || 'Search'}`), over(''), ...(rows.length ? rows : [over('    No results found')]), over(''),
@@ -118,9 +121,9 @@ function fresh(): RegisteredSession {
 }
 
 describe('switching OpenCode through its own pickers', () => {
-  function setup(v24 = false) {
+  function setup(v24 = false, shown = Infinity) {
     const value = fresh()
-    const oc = new FakeOpencode(v24)
+    const oc = new FakeOpencode(v24, shown)
     const manager = new RuntimeProfileManager()
     const options = CATALOG.flatMap((m) => ['auto', ...m.efforts!].map((effort) => ({
       id: encodeRuntimeProfile({ sessionId: 'oc', engine: 'opencode', model: m.id, effort }), displayName: m.name!,
@@ -169,6 +172,15 @@ describe('switching OpenCode through its own pickers', () => {
     expect([oc.model, oc.variant, oc.picker]).toEqual(['DeepSeek V4.1 Flash Free', 'low', null])
     await pick('opencode/big-pickle', 'auto')
     expect([oc.model, oc.variant, oc.picker]).toEqual(['Big Pickle', null, null])
+  })
+
+  // The phone's 50×20: the variant list shows a few rows and scrolls, the cursor staying on the same line of the screen.
+  it('walks OpenCode 2.4\'s variant picker when it scrolls', async () => {
+    const { oc, pick } = setup(true, 2)
+    await pick('opencode/deepseek-v4.1-flash-free', 'max')
+    expect([oc.model, oc.variant, oc.picker]).toEqual(['DeepSeek V4.1 Flash Free', 'max', null])
+    await pick('opencode/deepseek-v4.1-flash-free', 'low')
+    expect([oc.model, oc.variant, oc.picker]).toEqual(['DeepSeek V4.1 Flash Free', 'low', null])
   })
 
   it('refuses a variant the model does not have, before any key', async () => {

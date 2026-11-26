@@ -110,9 +110,10 @@ const pane = (await until('OpenCode to start', async () => {
   const agent = await row()
   return agent?.status === 'active' && agent.launch?.state === 'ready' && agent.tmuxPane ? agent : null
 }, 90_000)).tmuxPane
-// The size of a screen someone watches it on. Nobody watches this one, and in tmux's 80×13 OpenCode 2.4 had no room
-// for the row a filter leaves under its picker's title (MSI, 2026-11-26).
-execFileSync('tmux', ['resize-window', '-t', pane, '-x', '120', '-y', '40'])
+// The phone's own size, which Chat UI's model sheet gives the terminal: there OpenCode 2.4 wraps and scrolls its pickers,
+// and every switch from the phone timed out (MSI, 2026-11-26). Nobody watches this one, and tmux's own 80×13 had no room
+// for a filtered row at all.
+execFileSync('tmux', ['resize-window', '-t', pane, '-x', '50', '-y', '20'])
 const screen = () => execFileSync('tmux', ['capture-pane', '-p', '-t', pane], { encoding: 'utf8' })
 const footer = () => screen().split('\n').map((line) => line.trim()).reverse().find((line) => /\b(Build|Plan)\b[^·]* · /.test(line)) ?? ''
 await until('OpenCode to draw its composer', () => footer(), 60_000)

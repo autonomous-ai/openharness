@@ -260,6 +260,55 @@ describe('opencode 2 pickers', () => {
     expect(opencodeRowNamesModel(flint, rows[0])).toBe(true)
   })
 
+  // The phone's own size, 50×20, as Chat UI's model sheet sets it: the note wraps, the last line is wrapped or not drawn
+  // at all, and the composer's edge is in the picker's column. Every switch from the phone timed out (MSI, 2026-11-26).
+  it('reads OpenCode 2.4\'s free model picker on a phone\'s 50×20', () => {
+    const open = [
+      '   Greeting                      +',
+      '  ┃',
+      '  ┃  hello there',
+      '  ┃',
+      '',
+      '',
+      '     Free models                          esc',
+      '     Connect a provider for access to more',
+      '     models',
+      '',
+      '     Search',
+      '',
+      ' ┃ ▪ Flint 40B Free',
+      '     DeepSeek V4.1 Flash Free',
+      '     Big Pickle',
+      '',
+      '     Text · 262K · Reasoning',
+      '',
+    ].map((line) => line.padEnd(50)).join('\n') // tmux pads each line to the pane's width
+    expect(countOpencodePickers(open)).toBe(1)
+    expect(parseOpencodePickerRows(open)).toEqual([
+      { display: 'Flint 40B Free', provider: '', current: true },
+      { display: 'DeepSeek V4.1 Flash Free', provider: '', current: false },
+      { display: 'Big Pickle', provider: '', current: false },
+    ])
+    const filtered = [
+      '   Greeting                      +',
+      '  ┃  hello there',
+      '',
+      '     Free models                          esc',
+      '     Connect a provider for access to more',
+      '     models',
+      '',
+      '     beam free',
+      '',
+      ' ┃   Beam Free',
+      '',
+      '     Text · 1M · Reasoning',
+      '',
+      '     connect provider         favorite ctrl+f',
+      '     ctrl+a',
+    ].map((line) => line.padEnd(50)).join('\n')
+    expect(parseOpencodePickerRows(filtered)).toEqual([{ display: 'Beam Free', provider: '', current: false }])
+  })
+
   it('reads OpenCode 2.4\'s model picker with a provider connected, whose title is its filter box', () => {
     // MSI, 2.4.1, 2026-11-26, a project whose opencode.json adds a provider: headings, and a model's name and its
     // provider's on one row.
