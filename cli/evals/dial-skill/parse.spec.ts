@@ -52,6 +52,19 @@ describe('parseClaudeStream', () => {
     expect(run.limited).toBe(false)
   })
 
+  it('reads the session id, the skill names and the Claude Code version from the init event', () => {
+    const { init } = parseClaudeStream(sample)
+    expect(init?.session_id).toBe('33e45fcd-6340-4955-9475-b6a75cd2be40')
+    expect(init?.skills).toHaveLength(20)
+    expect(init?.skills).toContain('dial')
+    expect(init?.claude_version).toBe('2.1.326')
+  })
+
+  it('leaves init out when the stream has none', () => {
+    const lines = sample.trimEnd().split('\n').filter((line) => JSON.parse(line).subtype !== 'init')
+    expect(parseClaudeStream(lines.join('\n'))).not.toHaveProperty('init')
+  })
+
   it('takes the model that served the main thread, not the one init echoes from --model', () => {
     expect(parseClaudeStream(servedBy(() => 'claude-sonnet-5')).model).toBe('claude-sonnet-5')
   })
