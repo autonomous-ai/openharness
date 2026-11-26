@@ -1,12 +1,14 @@
-// Windows PTY E2E driver (docs/testing/windows-pty-e2e.md): runs ON the Windows machine against its daemon's
-// loopback WebSocket, so no account is needed. Bundled by build.sh into one .mjs.
+// Windows PTY E2E driver (docs/testing/windows-pty-e2e.md): runs ON the Windows machine and reaches its daemon as
+// every other local client does, over its pipe (its socket on macOS and Linux), never the loopback port, which
+// answers it 401. No account is needed. Bundled by build.sh into one .mjs.
 import { randomUUID } from 'node:crypto'
 import { inflateSync } from 'node:zlib'
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { WebSocket } from 'ws'
-import { localCredentialHeaders } from '../../src/lib/localCredential.ts'
+import { openLocalWs } from '../../src/lib/localTransport.ts'
+import type { PipeTarget } from '../../src/lib/windows/pipeClient.ts'
 import { encodeTerminalLocal, decodeTerminalLocal, TerminalBinaryKind } from '../../src/lib/terminalBinary.ts'
 
 export const ts = () => new Date().toISOString().slice(11, 23)
@@ -56,9 +58,11 @@ export class Client {
   closed = false
   timer?: NodeJS.Timeout
 
-  async connect(url = `ws://127.0.0.1:${process.env.E2E_PORT ?? '18473'}/api/local-ws`): Promise<this> {
+  /** [via] stands in for this computer's platform and the daemon's pipe, for a test. */
+  async connect(via: { platform?: NodeJS.Platform; pipe?: (dataDir: string, port: number) => PipeTarget | null } = {}): Promise<this> {
     const dataDir = process.env.ADAPTER_DATA_DIR?.trim() || join(homedir(), '.harness', 'cli', 'data')
-    this.ws = new WebSocket(url, { headers: localCredentialHeaders(dataDir) })
+    const port = Number(process.env.E2E_PORT ?? '18473')
+    this.ws = openLocalWs(dataDir, port, (url, headers) => new WebSocket(url, { headers }), via.platform, via.pipe)
     this.ws.binaryType = 'arraybuffer'
     this.ws.onclose = (e) => { this.closed = true; if (process.env.E2E_VERBOSE) log(`ws closed ${e.code} ${e.reason}`) }
     this.ws.onmessage = (e) => {
