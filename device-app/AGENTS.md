@@ -4,11 +4,9 @@ A menu-bar and tray app for the round dial, for people who do not use the Harnes
 Linux. It is named **Harness Device** everywhere a person sees it, since the desktop app is Harness and two apps
 named Harness sat side by side in Accessibility. The bundle id, binary, release files and update path never change,
 so installed apps keep updating. It installs the `harness` CLI, keeps the daemon running, shows the dial's state in
-its menu, offers sign-in once and, with the ChatGPT app, follows its window whenever it can: on macOS once Harness
-Device has Accessibility, asked once at the first launch, whatever is plugged in or installed (the Follow ChatGPT
-screen, no menu item), always elsewhere, never on GNOME or KDE on Wayland. It also exports the logs
-(`Export logs`), through the CLI. It has no row for Claude Code, Codex or Orca: the devices service sets them up. Rust
-and Tauri 2 in `src-tauri/`; the window's three screens are plain TypeScript in `ui/`.
+its menu and offers sign-in once. It also exports the logs (`Export logs`), through the CLI. It has no row for Claude
+Code, Codex or Orca: the devices service sets them up. Rust and Tauri 2 in `src-tauri/`; the window's two screens are
+plain TypeScript in `ui/`.
 
 ## Toolchain
 
@@ -53,8 +51,7 @@ and Tauri 2 in `src-tauri/`; the window's three screens are plain TypeScript in 
 - **Thin over the CLI.** The app owns no daemon logic: it runs the `harness` CLI and reads its NDJSON. It also
   fetches its own update manifest (`update.rs`), with nothing from the webview in the request.
 - **Fixed arguments.** The app runs only what is listed here, each with arguments fixed in Rust. Nothing from the
-  webview becomes a command line: it sends one of five action names (`retry`, `sign_in`, `later`, `cancel`,
-  `allow`).
+  webview becomes a command line: it sends one of four action names (`retry`, `sign_in`, `later`, `cancel`).
   - The CLI it found; `logs export --json` is among its commands.
   - The two install lines, `install.sh --host` and `--desktop`, through `/bin/sh -c` (`install.rs`). On Linux the
     `--host` line runs in a terminal the person sees, so `sudo` can ask for a password: the first of
@@ -66,8 +63,6 @@ and Tauri 2 in `src-tauri/`; the window's three screens are plain TypeScript in 
     and the fixed line that runs `install.ps1 -Desktop` (`install.rs`).
   - To open a page: `/usr/bin/open` on macOS, `xdg-open` on Linux, and Windows' shell `open` on an `https:` URL with
     no quote, space or control character (`open.rs`).
-  - On macOS, System Settings' Accessibility list:
-    `open x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility`.
   - To show the logs' zip: `open -R` on macOS, the shell's `SHOpenFolderAndSelectItems` on Windows (on a thread of its
     own, COM set up first; no program run), `xdg-open` with the zip's folder on Linux.
   - To open the desktop app: `open -b ai.autonomous.harness` on macOS; elsewhere its own file, run with no argument
@@ -92,28 +87,12 @@ and Tauri 2 in `src-tauri/`; the window's three screens are plain TypeScript in 
 - **The app in front is private.** It is written to the watch's stdin and nowhere else (`front.rs`), and never logged.
   Its sources: AppKit on macOS, a WinEvent hook on Windows, and on Linux X11, sway or Hyprland, whichever the session
   is; GNOME and KDE on Wayland give it to no other program, so there it is not followed.
-  The one thing derived from it is the fixed log line `chatgpt: skipped · no permission`, each time ChatGPT comes
-  to the front, the dial attached, while macOS has not given Harness Device Accessibility.
-- **The ChatGPT window's title is private as a tty.** It is written to the watch's stdin and nowhere else
-  (`follow.rs`), from whichever door the session has: Accessibility on macOS (`follow_macos.rs`), a WinEvent hook on
-  Windows (`follow_windows.rs`), and on Linux X11, sway or Hyprland (`follow_x11.rs`, `follow_sway.rs`,
-  `follow_hyprland.rs`), the same window system the app in front comes from. GNOME and KDE on Wayland have no door.
-  A `chatgpt:` log line is fixed words, never a title.
-- **What Accessibility reads.** Only ChatGPT's focused window's `AXTitle`, and only while ChatGPT is in front, a watch
-  runs, the dial is attached and Harness Device is trusted. It sets nothing and performs no action; `follow.rs`'s test
-  holds `follow_macos.rs` to it.
-- **What the other doors read.** Only the title of ChatGPT's window in front, under the same conditions but the
-  permission: no other OS gates reading a window's title, so nothing does here. Windows reads the window's native text
-  (`GetWindowTextW`) at a foreground or name change, for a process whose program is under
-  `\WindowsApps\OpenAI.Codex_`; X11 its `_NET_WM_NAME`, else `WM_NAME`; sway the focused container's `name`; Hyprland
-  the active window's `title`. On Linux the window's process must run `/usr/lib/chatgpt/ChatGPT`. Each sets nothing and
-  performs no action.
 - **Fixed scripts.** Every AppleScript is fixed text in `tabs_macos.rs`, for an app from its own list of three. A tty
   passes the tty check and reaches a script only as a handler parameter, never in its text.
 - **A tab's tty is private.** It is written to the watch's stdin and nowhere else. A `tabs:` log line names Terminal,
   iTerm2 or Ghostty, never a tty.
 - **One entitlement.** `src-tauri/Entitlements.plist` holds `com.apple.security.automation.apple-events` and no other
-  key: without it a build signed with the hardened runtime sends no Apple Event. Accessibility needs none.
+  key: without it a build signed with the hardened runtime sends no Apple Event.
 - **One plugin.** `tauri-plugin-updater`, called from Rust only; the capability gives the webview none of it.
 - **One log, redacted.** Every line passes `log::redact`; no email, token, URL query or path of the person's. An
   install logs its step lines (`▸`, `✓`, `✗`, on Windows install.ps1's own; at most 200 a run, each redacted, then
