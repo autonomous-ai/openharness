@@ -1692,4 +1692,27 @@ describe('the Codex homes Harness Device\'s plugin is set up in', () => {
     expect(r.writer.codexPlugin()).toEqual({ [r.codexHome]: '0.6.95' })
     expect(readFileSync(file, 'utf8')).toBe(saved)
   })
+
+  it('recordCodexPlugin refuses a 65th home: false, the record and the file as before', () => {
+    const r = rig()
+    r.writer.started()
+    const homes = Array.from({ length: MAX_HOMES + 1 }, (_, i) => `/Users/someone/codex ${i}`)
+    for (const home of homes.slice(0, MAX_HOMES)) expect(r.writer.recordCodexPlugin(home, '0.6.95')).toBe(true)
+    const file = join(r.dataDir, DIAL_SETUP_FILE)
+    const saved = readFileSync(file, 'utf8')
+    const recorded = { ...r.writer.codexPlugin() }
+
+    expect(r.writer.recordCodexPlugin(homes[MAX_HOMES], '0.6.95')).toBe(false)
+
+    expect(r.writer.codexPlugin()).toEqual(recorded)
+    expect(readFileSync(file, 'utf8')).toBe(saved)
+    // A recorded home's version still changes.
+    expect(r.writer.recordCodexPlugin(homes[0], '0.6.96')).toBe(true)
+    expect(readSetup(r.dataDir).codexPlugin?.[homes[0]]).toBe('0.6.96')
+    // One removed makes room for it.
+    expect(r.writer.recordCodexPlugin(homes[1], null)).toBe(true)
+    expect(r.writer.recordCodexPlugin(homes[MAX_HOMES], '0.6.95')).toBe(true)
+    expect(readSetup(r.dataDir).codexPlugin?.[homes[MAX_HOMES]]).toBe('0.6.95')
+    expect(Object.keys(r.writer.codexPlugin())).toHaveLength(MAX_HOMES)
+  })
 })
