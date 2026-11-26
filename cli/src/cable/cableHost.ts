@@ -827,7 +827,9 @@ export class DaemonCableHost implements CableHost {
    */
   pickLanded(app: string, agentId: string | undefined): void {
     if (app !== 'tmux' && app !== 'herdr') return
-    const placed = (e: HostEntry) => pagesOf(e.agent).includes(app) && this.clientApp(e, app)
+    // One its source cannot open is never chosen: an ended agent stays listed 10 s after its end, heard from last.
+    const placed = (e: HostEntry) =>
+      pagesOf(e.agent).includes(app) && this.clientApp(e, app) && e.source.capabilities(e.agent).focus
     const landed = agentId === undefined ? undefined : this.outsideEntry(agentId)
     const entry = landed && placed(landed) ? landed : this.registry?.entries()
       .filter((e) => e.source.id !== 'harness' && placed(e))
