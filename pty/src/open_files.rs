@@ -7,8 +7,9 @@
 //! that process's alone; each is duplicated into this one with no access and no options (never
 //! `DUPLICATE_CLOSE_SOURCE`, which would close the process's own) and closed at once, never used for
 //! I/O. A handle is named only when `GetFileType` says disk and it is no folder: `NtQueryObject`,
-//! the call tools name handles by, hangs on a synchronous pipe with a read pending, and is never
-//! made. The folder is the handle the process keeps on it (its parameters' `CurrentDirectory`, read
+//! the call tools name handles by, hangs on a synchronous pipe with a read pending. It is never
+//! made here, and `GetFinalPathNameByHandleW`, which may make it inside, is asked only after that
+//! check. The folder is the handle the process keeps on it (its parameters' `CurrentDirectory`, read
 //! from its memory), named the same way, so it reads as Node's `realpath` names the session's
 //! folder, whatever spelling the process was given.
 //!
