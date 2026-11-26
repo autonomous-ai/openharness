@@ -6,7 +6,7 @@
  * - the client prints nothing and exits at once, and with no dial nothing more happens: no devices process is started;
  * - with a dial, the agent waits with "<summary> · answer in Orca", also as a question the dial only shows (every answer
  *   to it refused, and a row of the drawer of a dial plugged in again), and the session's Stop ends the wait and closes it;
- * - the mod's inbox poll is refused with no dial and held with one;
+ * - the mod's inbox poll is held by the core with no dial, ended {} once one is plugged in, and the next held with it;
  * - the dial reads the agent by its folder, then by the name its hook says, renamed by a later prompt, and no log holds it;
  * - words to a live Orca chat take today's route, its mod's poll, until the owner's hand test (Task 0 c of
  *   docs/plans/2026-11-23-dial-orca-chats-plan.md) keeps it or turns it off for chats.
@@ -154,11 +154,13 @@ describe('the dial shows Claude Code waiting outside Harness', () => {
     expect(d.log()).not.toContain('7f3a91c2')
   })
 
-  it('the inbox route answers 503 with no dial, and holds a poll with one', async () => {
+  it('the inbox route holds a poll with no dial and ends it {} once one is plugged in, then holds the next', async () => {
     const { d, desk } = await fresh()
     const sessionId = randomUUID()
-    expect((await inboxPoll(d, sessionId)).status).toBe(503)
+    // Not refused: refused, the mod would ask again only a minute later, and words said meanwhile would find no poll.
+    const first = inboxPoll(d, sessionId)
     await plugged(desk)
+    expect(await first).toEqual({ status: 200, body: {} })
     // Held: no answer within a second; the devices would end it only after 25 s.
     await expect(inboxPoll(d, sessionId, AbortSignal.timeout(1_000))).rejects.toThrow(/abort/i)
   })

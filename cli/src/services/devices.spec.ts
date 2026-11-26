@@ -32,6 +32,7 @@ import { cursorDataDir } from '../engines/cursor/contract.js'
 import { routeVoiceTask } from '../lib/voiceRouter.js'
 import { DIAL_FILE_METRICS, DIAL_USAGE_FILE } from '../lib/dialUsageContract.js'
 import { DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, ServiceUnavailableError, type CoreApi, type CorePorts, type DevicesPort } from '../core/api.js'
+import { createDeviceHookCalls } from '../core/deviceHookCalls.js'
 import type { ObservedAsked, ObservedHookEvent } from '../core/observedHook.js'
 import { createServiceHost } from '../core/serviceHost.js'
 import * as claudePlugin from '../devices/claudePlugin.js'
@@ -3284,6 +3285,50 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(await next).toEqual({ text: 'run the tests' })
     expect(said()).toEqual(['[device] voice · mod'])
     expect(orcaRuns).toEqual([])
+  })
+
+  /** Claude Code's mod (plugins/harness-device/hooks/device.js) on the core's route: a {} held 1 s or more asks again at
+   *  once; a refusal, the route's 503, or a {} sooner asks again a minute later. What it submitted, in order. */
+  const fakeMod = (calls: ReturnType<typeof createDeviceHookCalls>, sessionId: string): string[] => {
+    const submitted: string[] = []
+    const client = new AbortController()
+    onTestFinished(() => client.abort())
+    void (async () => {
+      for (;;) {
+        const sentAt = Date.now()
+        const answer = await calls.onInbox({ sessionId }, client.signal)
+        if (client.signal.aborted) return
+        if (answer !== 'off' && answer !== 'invalid' && answer.text) submitted.push(answer.text)
+        else if (answer === 'off' || answer === 'invalid' || Date.now() - sentAt < 1_000) await new Promise((resolve) => setTimeout(resolve, 60_000))
+      }
+    })()
+    return submitted
+  }
+
+  // Diego, CLI 0.6.90: words said right after the dial was plugged in waited 5 s and were lost, twice. With no dial the
+  // core had refused the mod's poll, and the mod asked again only a minute later.
+  it('a mod that polled before the dial was plugged in takes the first words said once it is', async () => {
+    vi.useFakeTimers()
+    const { core, port } = startHere()
+    let watching = false
+    let n = 0
+    const calls = createDeviceHookCalls({ ready: () => watching, devices: () => port, newId: () => `p${++n}` })
+    // The core hears the devices say a dial watches (core/main.ts `dialWatching`).
+    vi.mocked(core.clients.dialWatching).mockImplementation((on) => {
+      const attached = on && !watching
+      watching = on
+      if (attached) calls.watching()
+    })
+    port.observed(hook('session-start'))
+    const submitted = fakeMod(calls, 'sess-1')
+    await vi.advanceTimersByTimeAsync(10_000)
+    attach(port)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sv' }])
+    expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(submitted).toEqual(['run the tests'])
+    expect(said()).toEqual(['[device] voice · mod'])
   })
 
   it('an agent with an Orca handle lists v and f; its transcript runs orca terminal send, its tap orca terminal switch', async () => {
