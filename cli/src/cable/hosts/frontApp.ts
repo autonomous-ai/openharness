@@ -44,8 +44,6 @@ const EXE_APPS: Readonly<Record<string, string>> = {
   // too, so with it in front the dial shows Warp's agents. The row stays, unlike a bare `orca`: Warp has no other name
   // on Linux, and that app runs no shell, so the scan places no agent in it.
   warp: 'warp',
-  // Harness Desktop's Linux binary (desktop/linux/CMakeLists.txt, BINARY_NAME).
-  harness: 'harness',
 }
 
 // The apps' Linux processes, lower-cased: never with `.exe`, since each name is Linux's alone.
@@ -58,6 +56,10 @@ const LINUX_APPS: Readonly<Record<string, string>> = {
   // Warp Preview's /opt/warpdotdev/warp-terminal-preview/warp-preview (Warp's rpm filelists); its Windows name is
   // unconfirmed.
   'warp-preview': 'warp',
+  // Harness Desktop's Linux binary (desktop/linux/CMakeLists.txt, BINARY_NAME). Never with `.exe`: harness.exe is the
+  // CLI on Windows (pty/src/command.rs), which runs a tool on the caller's console (`harness api <connection> run`),
+  // and Harness Desktop is harness-desktop.exe there.
+  harness: 'harness',
 }
 
 // The apps' Windows processes, each the owner of its app's window (docs/plans/2026-11-19-dial-windows-vm-notes.md),
