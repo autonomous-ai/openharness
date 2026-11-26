@@ -476,26 +476,32 @@ esac''')
         (box.bin / "cp").symlink_to("/bin/cp")
 
     def system_python(self, box: Box):
-        """A venv whose python is Apple's 3.9 — a wrapper, since /usr/bin/python3 picks its tool by the name it is run as."""
+        """A venv whose python is the machine's /usr/bin/python3 — a wrapper, since Apple's picks its tool by the name it
+        is run as. Returns its (major, minor): the range check must run on the machine's own Python, whichever it is
+        (Apple's 3.9, Ubuntu's 3.12), so the tests build their ranges from it."""
         py = box.root / ".venv" / "bin" / "python"
         py.parent.mkdir(parents=True)
         py.write_text('#!/bin/bash\nexec /usr/bin/python3 "$@"\n')
         py.chmod(0o755)
+        major, minor = subprocess.run(["/usr/bin/python3", "-c", "import sys; print(*sys.version_info[:2])"],
+                                      capture_output=True, text=True, check=True).stdout.split()
+        return int(major), int(minor)
 
     def test_a_venv_in_range_is_kept(self):
         box = Box(self)
         self.uv(box)
-        self.system_python(box)
-        r = box.run('harness_venv .venv 3.12 3.9 3.10')
+        major, minor = self.system_python(box)
+        r = box.run(f'harness_venv .venv 3.12 {major}.{minor} {major}.{minor + 1}')
         self.assertEqual((r.returncode, lines(r)), (0, [f"ok   {subprocess.run(['/usr/bin/python3', '--version'], capture_output=True, text=True).stdout.strip()} in .venv"]), r.stderr)
         self.assertEqual(box.logged(), [])
 
     def test_a_venv_out_of_range_is_replaced(self):
-        for low, below in (("3.10", ""), ("3.8", "3.9")):
-            with self.subTest(low=low, below=below):
+        for side in ("too old", "too new"):
+            with self.subTest(side):
                 box = Box(self)
                 self.uv(box)
-                self.system_python(box)
+                major, minor = self.system_python(box)
+                low, below = (f"{major}.{minor + 1}", "") if side == "too old" else ("3.8", f"{major}.{minor}")
                 r = box.run(f'harness_venv .venv 3.12 {low} {below}')
                 self.assertEqual(lines(r), ["     python 3.12 in .venv (uv downloads it when this machine has none)",
                                             "ok   Python 3.12.7 in .venv"], r.stderr)
