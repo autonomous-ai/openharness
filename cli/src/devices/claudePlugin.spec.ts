@@ -4,7 +4,7 @@
  * `claude` and ~/.claude are never touched.
  */
 import * as childProcess from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
@@ -674,15 +674,6 @@ describe('claudeRun', () => {
     writeFileSync(script, '#!/bin/sh\nexec /bin/sleep 30\n')
     chmodSync(script, 0o755)
     expect(await claudeRun()!(['--version'], 200)).toMatchObject({ code: null, timedOut: true })
-  })
-
-  // The marketplace is added by a path Claude Code takes on every OS (`./claude-marketplace`), so from its parent.
-  it('a call given a folder runs in it', async () => {
-    const dir = throwawayPath()
-    writeExecutable(join(dir, 'claude'), '#!/bin/sh\npwd -P\n')
-    const folder = join(dir, 'data')
-    mkdirSync(folder)
-    expect(await claudeRun()!(['--version'], 15_000, folder)).toEqual({ code: 0, stdout: `${realpathSync(folder)}\n`, stderr: '' })
   })
 
   // A `claude` that does not end on TERM (a shell trapping it, a node stuck in a synchronous call) ends at its time too.

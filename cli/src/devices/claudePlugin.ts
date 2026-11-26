@@ -9,7 +9,7 @@
  */
 import { type ChildProcess, execFile } from 'node:child_process'
 import { homedir } from 'node:os'
-import { basename, delimiter, dirname, join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
 import { agentCommandOwnershipSnapshotAsync, engineNearby, installedEngineBin } from '../lib/engineBin.js'
 import { windowsProgram } from '../lib/windows/program.js'
 import { DIAL_PLUGIN_ID } from './dialSkill.js'
@@ -23,8 +23,7 @@ export const MIN_CLAUDE = '2.1.287'
 /** A call's exit code (null: it did not exit, as at a kill) and what it wrote. [refused]: on Windows a batch file
  *  Harness does not run (claudeRunner), so nothing ran. [timedOut]: it ran out its time and was ended. */
 export interface ClaudeAnswer { code: number | null; stdout: string; stderr: string; refused?: true; timedOut?: true }
-/** [cwd]: the folder the call runs in, the process's own by default. */
-export type ClaudeRun = (args: string[], timeoutMs: number, cwd?: string) => Promise<ClaudeAnswer>
+export type ClaudeRun = (args: string[], timeoutMs: number) => Promise<ClaudeAnswer>
 
 export interface ClaudeDeps {
   run: ClaudeRun | null
@@ -38,7 +37,8 @@ export interface ClaudePluginFiles { files: Readonly<Record<string, string>>; ex
 /** The folder and what cli.js carries for it; files() is null in a run from the sources. */
 export interface ClaudePluginSource { folder: string; files(): ClaudePluginFiles | null }
 
-/** What an install or an update needs as well: the marketplace folder Claude Code reads the plugin from, and its files. */
+/** What an install or an update needs as well: the marketplace folder Claude Code reads the plugin from, by its absolute
+ *  path (harnessPath's), and its files. */
 export interface ClaudeInstallDeps extends ClaudeDeps {
   folder: string
   files: ClaudePluginFiles
@@ -78,7 +78,7 @@ const UNLISTED = 'Claude Code did not list its plugins.'
  *  Windows an npm install's `claude.cmd` is started as the program it runs, hidden; a batch file that is not such a
  *  shim only cmd.exe could run, and is refused. */
 export function claudeRunner(bin: string, env?: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform): ClaudeRun {
-  return (args, timeoutMs, cwd) => new Promise((resolve) => {
+  return (args, timeoutMs) => new Promise((resolve) => {
     let program
     try {
       program = windowsProgram(bin, args, { platform, environment: env ?? process.env })
@@ -97,7 +97,7 @@ export function claudeRunner(bin: string, env?: NodeJS.ProcessEnv, platform: Nod
     let child: ChildProcess
     try {
       child = execFile(program.file, program.args,
-        { cwd, encoding: 'utf8', killSignal: 'SIGKILL', maxBuffer: MAX_OUTPUT_BYTES, env: program.env ?? env, windowsHide: true },
+        { encoding: 'utf8', killSignal: 'SIGKILL', maxBuffer: MAX_OUTPUT_BYTES, env: program.env ?? env, windowsHide: true },
         (error, stdout, stderr) => {
           // A missing file or output past the bound has no exit code: it is no answer.
           const code = !error ? 0 : typeof error.code === 'number' ? error.code : null
@@ -288,8 +288,8 @@ export async function claudeStatus({ run, platform }: ClaudeDeps): Promise<Claud
 }
 
 /** Runs one call that changes something; a failure is the first line Claude Code wrote about it, and the call's step. */
-async function change(run: ClaudeRun, args: string[], timeoutMs: number, step: ClaudeStep, cwd?: string): Promise<ClaudeFailure | null> {
-  const answer = await run(args, timeoutMs, cwd)
+async function change(run: ClaudeRun, args: string[], timeoutMs: number, step: ClaudeStep): Promise<ClaudeFailure | null> {
+  const answer = await run(args, timeoutMs)
   return answer.code === 0 ? null : failure(answer, step)
 }
 
@@ -303,9 +303,9 @@ async function install(run: ClaudeRun, deps: ClaudeInstallDeps): Promise<ClaudeF
   const marketplaces = await jsonList(run, ['plugin', 'marketplace', 'list', '--json'])
   const added = Array.isArray(marketplaces) && marketplaces.some((marketplace) => marketplace.name === MARKETPLACE)
   if (!added) {
-    // Claude Code takes a local marketplace only by a path starting `./`, `../`, `/` or `~/`, and Windows' `C:\...`
-    // starts with none: run in the folder's parent, the path is the same on every OS.
-    const failed = await change(run, ['plugin', 'marketplace', 'add', `./${basename(deps.folder)}`], FETCH_MS, 'marketplace', dirname(deps.folder))
+    // The absolute path, on Windows too (`C:\...`, which Claude Code takes as a local path): a relative one could be
+    // kept as it was given, and read against wherever Claude Code runs next.
+    const failed = await change(run, ['plugin', 'marketplace', 'add', deps.folder], FETCH_MS, 'marketplace')
     if (failed) return failed
   }
   const tryInstall = () => change(run, ['plugin', 'install', DIAL_PLUGIN_ID, '--scope', 'user'], FETCH_MS, 'install')
