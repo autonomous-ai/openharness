@@ -16,7 +16,7 @@ import { request } from 'node:http'
 import { daemonFetch, localSocketRoute } from '../lib/localTransport.js'
 
 export interface AskedBody {
-  engine: 'claude'
+  engine: 'claude' | 'codex'
   sessionId: string
   event: 'asked'
   tool: string
@@ -32,7 +32,7 @@ export interface AskedDeps {
 
 const MAX_STDIN_BYTES = 256 * 1024
 /** The core's bounds (core/observedHook.ts): an event with a longer field is refused whole. */
-const MAX_TOOL_CHARS = 64
+export const MAX_TOOL_CHARS = 64
 const MAX_SUMMARY_BYTES = 200
 const MAX_CWD_CHARS = 1024
 /** Claude Code waits for this hook before the person's prompt can be answered: the post never holds it longer. */
@@ -98,11 +98,31 @@ export function askedSummary(tool: string, input: unknown): string {
   else if (tool === 'NotebookEdit') shown = field('notebook_path')
   else if (tool === 'WebFetch') shown = hostOf(field('url'))
   else if (mcp) shown = `${mcp[1]}: ${mcp[2]}`
+  return askedLine(shown, tool)
+}
+
+/** [shown] as the prompt's one line, or the tool's name when it says nothing, within the core's bounds. */
+export function askedLine(shown: string, tool: string): string {
   return cutBytes(oneLine(shown) || oneLine(tool), MAX_SUMMARY_BYTES)
 }
 
-/** The hook's input as the body to post, or null for nothing to send: too long or not JSON. */
-async function askedBody(stdin: AsyncIterable<Buffer | string>): Promise<AskedBody | null> {
+/** The cwd field, left out when the core would refuse the event for it (core/observedHook.ts). */
+export function cwdField(cwd: unknown): { cwd?: string } {
+  return typeof cwd === 'string' && cwd.length <= MAX_CWD_CHARS && !/\p{Cc}/u.test(cwd) ? { cwd } : {}
+}
+
+/** Claude Code's hook input as the body to post, or null when it names no session or tool. */
+function claudeBody(input: Record<string, unknown>): AskedBody | null {
+  const { session_id: sessionId, tool_name: tool, tool_input: toolInput, cwd } = input
+  if (typeof sessionId !== 'string' || !sessionId || typeof tool !== 'string' || !tool) return null
+  return {
+    engine: 'claude', sessionId, event: 'asked', tool: tool.slice(0, MAX_TOOL_CHARS), summary: askedSummary(tool, toolInput),
+    ...cwdField(cwd),
+  }
+}
+
+/** The hook's input as an object, or null when it is too long or not a JSON object. */
+async function hookInput(stdin: AsyncIterable<Buffer | string>): Promise<Record<string, unknown> | null> {
   const parts: Buffer[] = []
   let bytes = 0
   for await (const chunk of stdin) {
@@ -117,25 +137,30 @@ async function askedBody(stdin: AsyncIterable<Buffer | string>): Promise<AskedBo
   } catch {
     return null
   }
-  if (!isRecord(input)) return null
-  const { session_id: sessionId, tool_name: tool, tool_input: toolInput, cwd } = input
-  if (typeof sessionId !== 'string' || !sessionId || typeof tool !== 'string' || !tool) return null
-  return {
-    engine: 'claude', sessionId, event: 'asked', tool: tool.slice(0, MAX_TOOL_CHARS), summary: askedSummary(tool, toolInput),
-    // The core refuses an event with a cwd it cannot hold: one it would refuse is not sent.
-    ...(typeof cwd === 'string' && cwd.length <= MAX_CWD_CHARS && !/\p{Cc}/u.test(cwd) ? { cwd } : {}),
-  }
+  return isRecord(input) ? input : null
 }
 
-/** Tells the daemon once and exits 0 whatever happens: a failure here must never block or decide the tool call. */
-export async function runAsked(deps: AskedDeps): Promise<0> {
+/**
+ * Reads the hook's input, makes it the [body] to post, tells the daemon once and exits 0 whatever happens: a failure
+ * here must never block or decide the tool call.
+ */
+export async function tellAsked(
+  stdin: AsyncIterable<Buffer | string>, post: (body: AskedBody) => Promise<void>,
+  body: (input: Record<string, unknown>) => AskedBody | null,
+): Promise<0> {
   try {
-    const body = await askedBody(deps.stdin)
-    if (body) await deps.post(body)
+    const input = await hookInput(stdin)
+    const made = input && body(input)
+    if (made) await post(made)
   } catch {
     // Nothing shown on the dial: the prompt is still there.
   }
   return 0
+}
+
+/** Claude Code's PermissionRequest hook. */
+export function runAsked(deps: AskedDeps): Promise<0> {
+  return tellAsked(deps.stdin, deps.post, claudeBody)
 }
 
 /**

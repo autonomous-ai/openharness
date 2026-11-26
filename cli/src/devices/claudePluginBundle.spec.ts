@@ -60,6 +60,7 @@ describe('Claude Code\'s marketplace inside cli.js', () => {
     const expected = [
       '.claude-plugin/marketplace.json',
       'plugins/harness-device/.claude-plugin/plugin.json',
+      'plugins/harness-device/.codex-plugin/plugin.json',
       ...listing(REPO, 'plugins/harness-device/hooks'),
       'plugins/harness-device/README.md',
       'plugins/harness/.claude-plugin/plugin.json',
@@ -72,7 +73,7 @@ describe('Claude Code\'s marketplace inside cli.js', () => {
     expect(keys).toEqual(expected)
     for (const key of keys) {
       expect(key.startsWith('plugins/harness-device/test/')).toBe(false)
-      expect(key).not.toMatch(/\/\.(codex|cursor)-plugin\//)
+      expect(key).not.toMatch(/\/\.cursor-plugin\//)
     }
   })
 
@@ -122,9 +123,20 @@ describe('Claude Code\'s marketplace inside cli.js', () => {
     expect(Object.keys(files)).not.toContain('plugins/harness/mcp.json')
   })
 
-  it('hooks/asked alone is executable, as in the checkout', () => {
+  // The device plugin's folder serves Codex too: Claude Code ignores `.codex-plugin/` and `hooks/codex.json`.
+  it('the device plugin carries Codex\'s manifest unchanged', () => {
+    const root = aRoot()
+    const own = `${JSON.stringify({ name: 'harness-device', hooks: './hooks/codex.json', note: 'own text' }, null, 4)}\n`
+    put(root, 'plugins/harness-device/.codex-plugin/plugin.json', own)
+    const { files } = bundle('1.2.3', root)
+    // Unstamped: Codex installs it as `local`.
+    expect(files['plugins/harness-device/.codex-plugin/plugin.json']).toBe(own)
+    expect(files['plugins/harness-device/hooks/codex.json']).toBe(readFileSync(join(root, 'plugins/harness-device/hooks/codex.json'), 'utf8'))
+  })
+
+  it('hooks/asked and hooks/codex-asked alone are executable, as in the checkout', () => {
     const { files, executable } = bundle('1.2.3')
-    expect(executable).toEqual(['plugins/harness-device/hooks/asked'])
+    expect(executable).toEqual(['plugins/harness-device/hooks/asked', 'plugins/harness-device/hooks/codex-asked'])
     if (process.platform === 'win32') return
     for (const key of Object.keys(files).filter((key) => key !== '.claude-plugin/marketplace.json')) {
       expect((statSync(join(REPO, key)).mode & 0o100) !== 0, key).toBe(executable.includes(key))

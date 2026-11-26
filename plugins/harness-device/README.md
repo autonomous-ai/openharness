@@ -1,7 +1,8 @@
-# Harness Device plugin for Claude Code
+# Harness Device plugin for Claude Code and Codex
 
-Shows Claude Code's waiting prompts on the Harness round dial (a permission ask, a question form and a plan approval),
-and takes a prompt said at the dial, with Claude Code running in Orca, Ghostty or any terminal on this computer.
+Shows Claude Code's and Codex's waiting prompts on the Harness round dial (a permission ask, a question form and, in
+Claude Code, a plan approval), with the agent running in Orca, Ghostty or any terminal on this computer. In Claude Code
+it also takes a prompt said at the dial.
 
 ## What it does
 
@@ -32,6 +33,41 @@ the prompt as soon as the mod has told it. Where an organization manages Claude 
 hook tells, and a PowerShell slower than the hook's 5 s rings nothing at the dial for that prompt, which still waits in
 the session.
 
+## Codex
+
+The same folder is a Codex plugin too (`.codex-plugin/plugin.json`, Codex 0.172.0 or later). Its hooks are in
+`hooks/codex.json`: `PermissionRequest`, on every tool, and `PreToolUse`, on `request_user_input`. Both run
+`harness device codex asked` (off Windows through `hooks/codex-asked`), which tells the daemon and decides nothing.
+Claude Code's `hooks/hooks.json` and its mod stay Claude Code's.
+
+Codex runs these hooks before its own automatic review, and their input does not say whether the person is asked. So
+the command reads the turn's setting from the session's rollout (`transcript_path` in the hook's input): backwards from
+its end, at most 16 MiB, the `turn_context` line of the hook's turn, and of it only `approvals_reviewer` and
+`collaboration_mode.mode`. It reads only a regular file inside the session's Codex home. A permission ask is told when
+the reviewer is `user`, a question when the mode is `plan`. Anything else, a file it may not read, or no such line
+within the bound tells nothing. Nothing of the rollout is kept or sent.
+
+The dial's line: for `Bash`, the command's first line; for `apply_patch`, the first file it adds, updates or deletes;
+for `request_user_input`, its first question; for any other tool, the tool's name. In a Harness pane, Harness hears the
+wait itself, and this one is dropped.
+
+Missed on purpose:
+
+- A command the automatic review hands to the person, and a question in Default mode with Codex's
+  `default_mode_request_user_input` on: both ring nothing, as before; a ring at every command the review approves would
+  be worse.
+- A hook input over 256 KiB, such as a large `apply_patch`: the command reads no further and tells nothing.
+- Codex's own app tools (`mcp__codex_apps__…`): Codex takes their reviewer from `[apps]` in `config.toml`, over the
+  turn's, so the rollout cannot say who reviews them, and they ring nothing.
+- An organization's managed requirements for automatic review (`requirements.toml`): the command does not read them and
+  goes by the turn's own setting.
+- A `request_user_input` Codex refuses with no form (questions that do not parse, none, or one without options): it
+  rings nothing.
+- The same ask again: Codex checks a "don't ask again this session" approval after the hook has run, so the dial rings
+  only the first ask of a session for the same tool and line, until the session ends. After a plain "Yes", the very
+  same command asked again in that session is not rung again. After the Harness devices process restarts, a command
+  approved for the session can ring once more.
+
 ## What it never does
 
 - It never answers a prompt: the dial approves nothing, and each prompt is answered in its own app.
@@ -52,3 +88,22 @@ harness device claude disable
 
 It takes effect at once, also in a session already running: the hook and the mod check Claude Code's settings and
 Harness's removal before they act, so the dial shows no more prompts and nothing said at it reaches the session.
+
+Codex: with a dial plugged in, Harness sets the plugin up in each Codex home it serves, through Codex's own
+`codex plugin`, from `claude-marketplace` in Harness's data folder, which holds the copy this CLI carries. It adds that
+folder as the `openharness` marketplace and brings the plugin current after each CLI update. Turned off in Codex, it
+stays off. Removed, it stays removed while Harness's record of that home (`dial-setup.json` in Harness's data folder)
+holds; an older CLI that rewrites that file drops the record, and the next pass sets the plugin up again.
+
+Codex asks a person to review a plugin's hooks before they first run. Harness writes the records Codex writes on
+"Trust" into the home's `config.toml`, only when the installed folder is the copy this CLI carries, and checks that
+again at each dial setup pass. A folder that differs, such as one edited by hand, gets no trust from Harness: Codex asks
+the person to review it, and Harness logs `untrusted · differs` once.
+
+A Codex home whose `openharness` marketplace is the person's own (added from GitHub, as
+[the harness plugin](../harness/README.md) shows, or from anywhere else) gets nothing from Harness, so its Codex waits
+outside a pane do not reach the dial.
+
+`harness device codex enable` sets the plugin up again, and `harness device codex disable` removes it where Harness set
+it up; the marketplace stays, as Claude Code's plugin comes from it too. A session already running still runs the hook
+after `disable`, which then tells nothing.

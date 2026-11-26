@@ -96,6 +96,7 @@ import { DialLog } from '../cable/dialLog.js'
 import { DialVerdicts, greetedAsDial } from '../cable/dialPortVerdicts.js'
 import { createDialSetup } from '../cable/dialSetup.js'
 import { carriedClaudePlugin, claudeFound, type ClaudePluginSource, type ClaudeRun } from '../devices/claudePlugin.js'
+import { codexFound } from '../devices/codexPlugin.js'
 import { claudePluginState, installedSkills } from '../devices/dialSkill.js'
 import { readOrcaConnected, readRemoved, readSetup, SETUP_COUNTS } from '../devices/dialSkillFiles.js'
 import { createOrcaHomesCache, orcaBinary, orcaHomesDeps, readOrcaHomes, type OrcaHomesCache } from '../devices/orcaHomes.js'
@@ -224,6 +225,9 @@ export interface DevicesDeps {
   /** For this service's tests: how Claude Code is found for a Claude Code home; the daemon's own lookup by default
    *  (devices/claudePlugin.ts claudeFound). */
   claude?: (home: string, shell: boolean) => Promise<ClaudeRun | null>
+  /** For this service's tests: how Codex is found for a Codex home; the daemon's own lookup by default
+   *  (devices/codexPlugin.ts codexFound). */
+  codexFound?: (home: string, shell: boolean) => Promise<ClaudeRun | null>
   /** For this service's tests: Claude Code's marketplace folder and what cli.js carries for it;
    *  `harnessPath('claude-marketplace', homedir())` and this build's when unset (devices/claudePlugin.ts). */
   claudePlugin?: ClaudePluginSource
@@ -858,12 +862,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** The Claude Code and Codex homes Orca's accounts run in, which Harness has not adopted: the open scan and the dial
    *  skill reach them too (docs/plans/2026-11-17-new-user-onboarding-design.md, "C. Orca homes"). */
   const orcaHomes = deps.orcaHomes ?? orcaHomesCache(monotonic, log)
-  // The dial skill in each home an engine's sessions use and Claude Code's plugin, set up once a dial has attached on this
-  // computer (cable/dialSetup.ts), wherever the devices have their listener: their own process, and on Windows the
-  // core's, until Windows services run in their own process (services/inline.ts). Elsewhere inside the core's
-  // (`HARNESSD_SERVICES=none`) there is none, so a skill would name a `harness device notify` that cannot ring. A part
-  // of its own, so a throw in a person's home is never the dial's, nor the core's; each `claude` it runs has its time
-  // (devices/claudePlugin.ts).
+  // The dial skill in each home an engine's sessions use and the plugins of Claude Code and Codex, set up once a dial has
+  // attached on this computer (cable/dialSetup.ts), wherever the devices have their listener: their own process, and on
+  // Windows the core's, until Windows services run in their own process (services/inline.ts). Elsewhere inside the
+  // core's (`HARNESSD_SERVICES=none`) there is none, so a skill would name a `harness device notify` that cannot ring. A
+  // part of its own, so a throw in a person's home is never the dial's, nor the core's; each `claude` and `codex` it runs
+  // has its time (devices/claudePlugin.ts, devices/codexPlugin.ts).
   const skill = deps.listen ? createDialSetup({
     dataDir: core.dataDir,
     platform: apps.platform,
@@ -885,6 +889,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     count: createEngineTally('[device] dial setup', ['claude', 'codex'], SETUP_COUNTS, log),
     log,
     claude: deps.claude ?? claudeFound,
+    codex: deps.codexFound ?? codexFound,
     orcaClaude: () => ({ homes: orcaHomes.get().claude, answered: orcaHomes.answered() }),
     claudePlugin: deps.claudePlugin ?? { folder: harnessPath('claude-marketplace', homedir()), files: carriedClaudePlugin },
     version: VERSION,

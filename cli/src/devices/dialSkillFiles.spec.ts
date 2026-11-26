@@ -9,7 +9,7 @@ import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, wr
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { DIAL_SETUP_FILE, DIAL_SKILL_FILE, MAX_HOMES, listable, readOrcaConnected, readPluginHomes, readRemoved, readSetup, readWritten, writeOrcaConnected, writePluginHomes, writeRemoved, writeSetup } from './dialSkillFiles.js'
+import { DIAL_SETUP_FILE, DIAL_SKILL_FILE, MAX_HOMES, MAX_SETUP_BYTES, listable, readOrcaConnected, readPluginHomes, readRemoved, readSetup, readWritten, writeOrcaConnected, writePluginHomes, writeRemoved, writeSetup } from './dialSkillFiles.js'
 
 // A copy of the module, so a test can watch the file calls a write makes.
 vi.mock('node:fs', async (original) => ({ ...await original<object>() }))
@@ -66,12 +66,13 @@ describe('the skills folders Harness wrote into', () => {
     expect(readSetup(dataDir).homes).toEqual({ claude: [], codex: [longest] })
   })
 
-  it('a file at 256 KiB still reads: two full lists of the longest paths fit under it', () => {
+  it('a file at 320 KiB still reads: four full lists of the longest paths fit under it', () => {
+    expect(MAX_SETUP_BYTES).toBe(320 * 1024)
     const dataDir = aDataDir()
     const record = '{"dial":true,"pad":""}'
-    writeFileSync(join(dataDir, DIAL_SETUP_FILE), record.replace('""', `"${'x'.repeat(256 * 1024 - record.length)}"`))
+    writeFileSync(join(dataDir, DIAL_SETUP_FILE), record.replace('""', `"${'x'.repeat(MAX_SETUP_BYTES - record.length)}"`))
     expect(readSetup(dataDir).dial).toBe(true)
-    writeFileSync(join(dataDir, DIAL_SETUP_FILE), record.replace('""', `"${'x'.repeat(256 * 1024 + 1 - record.length)}"`))
+    writeFileSync(join(dataDir, DIAL_SETUP_FILE), record.replace('""', `"${'x'.repeat(MAX_SETUP_BYTES + 1 - record.length)}"`))
     expect(readSetup(dataDir).dial).toBe(false)
   })
 
@@ -186,8 +187,8 @@ describe('the devices\' record of a dial\'s setup', () => {
       writeFileSync(join(dataDir, DIAL_SETUP_FILE), text)
       expect(readSetup(dataDir), text).toEqual(empty)
     }
-    // A good record, padded past 256 KiB.
-    writeFileSync(join(dataDir, DIAL_SETUP_FILE), JSON.stringify({ dial: true, plugin: '0.6.59', homes: { claude: goodHomes(1), codex: [] }, pad: 'x'.repeat(256 * 1024) }))
+    // A good record, padded past 320 KiB.
+    writeFileSync(join(dataDir, DIAL_SETUP_FILE), JSON.stringify({ dial: true, plugin: '0.6.59', homes: { claude: goodHomes(1), codex: [] }, pad: 'x'.repeat(MAX_SETUP_BYTES) }))
     expect(readSetup(dataDir)).toEqual(empty)
   })
 
@@ -321,11 +322,11 @@ describe('the devices\' record of a dial\'s setup', () => {
     const dataDir = aDataDir()
     writeSetup(dataDir, { dial: true, plugin: '0.6.59', homes: { claude: [], codex: [] }, pluginHomes: [] })
     const record = readFileSync(join(dataDir, DIAL_SETUP_FILE), 'utf8')
-    // Listable, 1024 bytes, and every byte but the first one JSON escapes: two full lists outgrow 256 KiB.
-    const escaped = Array.from({ length: 2 * MAX_HOMES }, (_, i) => `/${'\\'.repeat(i)}${'"'.repeat(1023 - i)}`)
+    // Listable, 1024 bytes, and every byte but the first one JSON escapes: three full lists outgrow 320 KiB.
+    const escaped = Array.from({ length: 3 * MAX_HOMES }, (_, i) => `/${'\\'.repeat(i)}${'"'.repeat(1023 - i)}`)
     for (const path of escaped) expect(listable(path)).toBe(true)
 
-    expect(writeSetup(dataDir, { dial: true, homes: { claude: escaped.slice(0, MAX_HOMES), codex: escaped.slice(MAX_HOMES) }, pluginHomes: [] })).toBe('EFBIG')
+    expect(writeSetup(dataDir, { dial: true, homes: { claude: escaped.slice(0, MAX_HOMES), codex: escaped.slice(MAX_HOMES, 2 * MAX_HOMES) }, pluginHomes: escaped.slice(2 * MAX_HOMES) })).toBe('EFBIG')
 
     expect(readFileSync(join(dataDir, DIAL_SETUP_FILE), 'utf8')).toBe(record)
     expect(readdirSync(dataDir)).toEqual([DIAL_SETUP_FILE])
@@ -422,7 +423,7 @@ describe('the Orca homes Claude Code\'s plugin was turned on in', () => {
     expect(readPluginHomes(dataDir)).toEqual({ homes: [] })
   })
 
-  it('three full lists of the longest paths are written and read back: each file holds three', () => {
+  it('three full lists of the longest paths are written and read back: dial-skill.json holds three in its 256 KiB', () => {
     const dataDir = aDataDir()
     const full = (list: number): string[] =>
       Array.from({ length: MAX_HOMES }, (_, i) => `/${String(list * MAX_HOMES + i).padStart(3, '0')}${'a'.repeat(1020)}`)
@@ -583,16 +584,127 @@ describe('a file that cannot be parsed', () => {
     expect(readFileSync(file, 'utf8')).toBe('{"homes":')
   })
 
-  it('a file past the bound reads as today', () => {
+  it('a file past its bound reads as today', () => {
     const dataDir = aDataDir()
-    // Torn as well: past the bound it is not read, so not parsed either.
-    const torn = `{"pad":"${'x'.repeat(256 * 1024)}`
-    for (const name of [DIAL_SKILL_FILE, DIAL_SETUP_FILE]) writeFileSync(join(dataDir, name), torn)
+    // Torn as well: past its bound a file is not read, so not parsed either.
+    const torn = { [DIAL_SKILL_FILE]: `{"pad":"${'x'.repeat(256 * 1024)}`, [DIAL_SETUP_FILE]: `{"pad":"${'x'.repeat(MAX_SETUP_BYTES)}` }
+    for (const [name, text] of Object.entries(torn)) writeFileSync(join(dataDir, name), text)
 
     expect(readPluginHomes(dataDir)).toEqual({ homes: [] })
     expect(readSetup(dataDir)).toEqual(empty)
 
     expect(readdirSync(dataDir).sort()).toEqual([DIAL_SETUP_FILE, DIAL_SKILL_FILE])
-    for (const name of [DIAL_SKILL_FILE, DIAL_SETUP_FILE]) expect(readFileSync(join(dataDir, name), 'utf8')).toBe(torn)
+    for (const [name, text] of Object.entries(torn)) expect(readFileSync(join(dataDir, name), 'utf8')).toBe(text)
+  })
+})
+
+describe('the Codex homes the devices set Harness Device\'s plugin up in (codexPlugin)', () => {
+  const homes = { claude: [], codex: [] }
+  const setupFile = (dataDir: string): Record<string, unknown> => JSON.parse(readFileSync(join(dataDir, DIAL_SETUP_FILE), 'utf8'))
+  /** [count] good, distinct Codex homes. */
+  const codexHomes = (count: number): string[] => Array.from({ length: count }, (_, i) => `/Users/someone/codex ${i}`)
+
+  it('codexPlugin round-trips', () => {
+    const dataDir = aDataDir()
+    const codexPlugin = { '/Users/someone/.codex': '0.6.95', '/Users/someone/work codex': '0.6.96-dev.3+1a2b' }
+
+    expect(writeSetup(dataDir, { dial: true, plugin: '0.6.59', homes, pluginHomes: [], codexPlugin })).toBeUndefined()
+
+    expect(readSetup(dataDir)).toEqual({ dial: true, plugin: '0.6.59', homes, pluginHomes: [], codexPlugin })
+    expect(setupFile(dataDir).codexPlugin).toEqual(codexPlugin)
+  })
+
+  it('a codexPlugin entry with a path a list may not hold or a version that is not one is dropped', () => {
+    const dataDir = aDataDir()
+    const codexPlugin = {
+      'relative/codex': '0.6.95',
+      '/Users/someone/../codex': '0.6.95',
+      '/Users/someone/codex/': '0.6.95',
+      '/Users/some\u0007one/codex': '0.6.95',
+      [`/${'a'.repeat(1024)}`]: '0.6.95',
+      '/Users/someone/no version': '',
+      '/Users/someone/a beta': '0.6.95 beta',
+      '/Users/someone/too long': 'v'.repeat(65),
+      '/Users/someone/a number': 695,
+      '/Users/someone/a list': ['0.6.95'],
+      '/Users/someone/.codex': '0.6.95',
+    }
+    writeFileSync(join(dataDir, DIAL_SETUP_FILE), JSON.stringify({ dial: true, codexPlugin }))
+
+    expect(readSetup(dataDir).codexPlugin).toEqual({ '/Users/someone/.codex': '0.6.95' })
+
+    // One that is no object is none, and nothing kept is none too.
+    for (const value of [['/Users/someone/.codex'], '/Users/someone/.codex', null, 1, { 'relative/codex': '0.6.95' }]) {
+      writeFileSync(join(dataDir, DIAL_SETUP_FILE), JSON.stringify({ dial: true, codexPlugin: value }))
+      expect(readSetup(dataDir), JSON.stringify(value)).toEqual({ dial: true, homes, pluginHomes: [] })
+    }
+  })
+
+  it('at most 64 entries are kept', () => {
+    const dataDir = aDataDir()
+    const all = codexHomes(70)
+    writeFileSync(join(dataDir, DIAL_SETUP_FILE), JSON.stringify({ dial: true, codexPlugin: Object.fromEntries(all.map((home) => [home, '0.6.95'])) }))
+
+    expect(Object.keys(readSetup(dataDir).codexPlugin ?? {})).toEqual(all.slice(0, MAX_HOMES))
+
+    // Written as a read keeps it.
+    expect(writeSetup(dataDir, { dial: true, homes, pluginHomes: [], codexPlugin: Object.fromEntries(all.map((home) => [home, '0.6.95'])) })).toBeUndefined()
+    expect(Object.keys(setupFile(dataDir).codexPlugin as object)).toEqual(all.slice(0, MAX_HOMES))
+  })
+
+  it('writeSetup refuses a codexPlugin version that is not one (EINVAL)', () => {
+    const dataDir = aDataDir()
+    writeSetup(dataDir, { dial: true, homes, pluginHomes: [], codexPlugin: { '/Users/someone/.codex': '0.6.95' } })
+    const saved = readFileSync(join(dataDir, DIAL_SETUP_FILE), 'utf8')
+
+    // A read would drop it: the plugin there would read as never set up, and be set up again at every pass.
+    expect(writeSetup(dataDir, { dial: true, homes, pluginHomes: [], codexPlugin: { '/Users/someone/.codex': '0.6.96 beta' } })).toBe('EINVAL')
+
+    expect(readFileSync(join(dataDir, DIAL_SETUP_FILE), 'utf8')).toBe(saved)
+  })
+
+  it('a record without codexPlugin reads and writes as before', () => {
+    const dataDir = aDataDir()
+    writeFileSync(join(dataDir, DIAL_SETUP_FILE), '{"dial":true,"plugin":"0.6.59","homes":{"claude":[],"codex":[]},"pluginHomes":[]}')
+
+    expect(readSetup(dataDir)).toEqual({ dial: true, plugin: '0.6.59', homes, pluginHomes: [] })
+    expect(readSetup(dataDir)).not.toHaveProperty('codexPlugin')
+
+    // Empty, it leaves the file.
+    for (const record of [{ dial: true, homes, pluginHomes: [] }, { dial: true, homes, pluginHomes: [], codexPlugin: {} }]) {
+      expect(writeSetup(dataDir, record)).toBeUndefined()
+      expect(setupFile(dataDir)).toEqual({ dial: true, homes, pluginHomes: [] })
+    }
+  })
+})
+
+describe('each file\'s bound', () => {
+  /** The [list]th full list of the longest listable paths, each distinct from every other list's. */
+  const full = (list: number): string[] =>
+    Array.from({ length: MAX_HOMES }, (_, i) => `/${String(list * MAX_HOMES + i).padStart(3, '0')}${'a'.repeat(1020)}`)
+
+  it('four full lists of the longest paths, with the longest versions, are written and read back from dial-setup.json', () => {
+    const dataDir = aDataDir()
+    const version = '0.'.padEnd(64, '9')
+    const record = {
+      dial: true, plugin: version, vscode: version, cursor: version, orca: version, orcaHeld: version,
+      homes: { claude: full(0), codex: full(1) }, pluginHomes: full(2),
+      codexPlugin: Object.fromEntries(full(3).map((home) => [home, version])),
+    }
+
+    expect(writeSetup(dataDir, record)).toBeUndefined()
+
+    expect(readSetup(dataDir)).toEqual(record)
+    expect(statSync(join(dataDir, DIAL_SETUP_FILE)).size).toBeGreaterThan(256 * 1024)
+  })
+
+  it('dial-skill.json keeps its 256 KiB bound', () => {
+    const dataDir = aDataDir()
+    const home = '/Users/someone/Library/Application Support/orca/0/claude'
+    const setting = `{"pluginHomes":["${home}"],"pad":""}`
+    writeFileSync(join(dataDir, DIAL_SKILL_FILE), setting.replace('""', `"${'x'.repeat(256 * 1024 - setting.length)}"`))
+    expect(readPluginHomes(dataDir)).toEqual({ homes: [home] })
+    writeFileSync(join(dataDir, DIAL_SKILL_FILE), setting.replace('""', `"${'x'.repeat(256 * 1024 + 1 - setting.length)}"`))
+    expect(readPluginHomes(dataDir)).toEqual({ homes: [] })
   })
 })

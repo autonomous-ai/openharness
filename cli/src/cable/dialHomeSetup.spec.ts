@@ -1609,3 +1609,110 @@ describe('the record the plugin\'s setup reads', () => {
     expect(r.writer.wanted('codex')).toBe(true)
   })
 })
+
+describe('the Codex homes Harness Device\'s plugin is set up in', () => {
+  it('codexHomes lists the default, adopted and scanned Codex homes handled while Codex is on', () => {
+    const [adopted, scanned] = [folder(), folder()]
+    const r = rig({ adopted: () => ({ claude: [], codex: [adopted] }) })
+    expect(r.writer.codexHomes()).toEqual([])
+
+    r.writer.started()
+    expect(sorted([...r.writer.codexHomes()])).toEqual(sorted([r.codexHome, adopted]))
+
+    r.writer.scanned([ownerIn(scanned)])
+    expect(sorted([...r.writer.codexHomes()])).toEqual(sorted([r.codexHome, adopted, scanned]))
+  })
+
+  it('codexHomes is empty once Codex is removed', () => {
+    let removed: DialRemoved = {}
+    const r = rig({ removed: () => removed })
+    r.writer.started()
+    r.writer.scanned([ownerIn(folder())])
+    expect(r.writer.codexHomes()).not.toEqual([])
+
+    removed = { codex: true }
+    r.writer.started()
+
+    expect(r.writer.codexHomes()).toEqual([])
+    // A scan while removed adds none.
+    r.writer.scanned([ownerIn(folder())])
+    expect(r.writer.codexHomes()).toEqual([])
+  })
+
+  it('recordCodexPlugin saves the whole record, and a new setup reads it back', () => {
+    const other = folder()
+    const r = rig()
+    r.writer.started()
+    expect(r.writer.recordPlugin('0.6.59')).toBe(true)
+    expect(r.writer.codexPlugin()).toEqual({})
+
+    expect(r.writer.recordCodexPlugin(r.codexHome, '0.6.95')).toBe(true)
+
+    expect(r.writer.codexPlugin()).toEqual({ [r.codexHome]: '0.6.95' })
+    expect(readSetup(r.dataDir)).toEqual({ dial: true, plugin: '0.6.59', homes: { claude: [], codex: [skillsOf(r.codexHome)] }, pluginHomes: [], codexPlugin: { [r.codexHome]: '0.6.95' } })
+    // The skill's own save keeps it.
+    r.writer.scanned([ownerIn(other)])
+    expect(readSetup(r.dataDir).codexPlugin).toEqual({ [r.codexHome]: '0.6.95' })
+    // The next start reads it back.
+    const again = rig({ dataDir: r.dataDir, codexHome: r.codexHome })
+    again.writer.started()
+    expect(again.writer.codexPlugin()).toEqual({ [r.codexHome]: '0.6.95' })
+  })
+
+  it('recordCodexPlugin(home, null) removes the entry', () => {
+    const other = folder()
+    const r = rig()
+    r.writer.started()
+    expect(r.writer.recordCodexPlugin(r.codexHome, '0.6.95')).toBe(true)
+    expect(r.writer.recordCodexPlugin(other, '0.6.95')).toBe(true)
+
+    expect(r.writer.recordCodexPlugin(r.codexHome, null)).toBe(true)
+
+    expect(r.writer.codexPlugin()).toEqual({ [other]: '0.6.95' })
+    expect(readSetup(r.dataDir).codexPlugin).toEqual({ [other]: '0.6.95' })
+    // The last one gone, the record holds none.
+    expect(r.writer.recordCodexPlugin(other, null)).toBe(true)
+    expect(r.writer.codexPlugin()).toEqual({})
+    expect(JSON.parse(readFileSync(join(r.dataDir, DIAL_SETUP_FILE), 'utf8'))).not.toHaveProperty('codexPlugin')
+  })
+
+  it('a record that could not be saved leaves codexPlugin as it was', () => {
+    const r = rig()
+    r.writer.started()
+    expect(r.writer.recordCodexPlugin(r.codexHome, '0.6.95')).toBe(true)
+    const file = join(r.dataDir, DIAL_SETUP_FILE)
+    const saved = readFileSync(file, 'utf8')
+
+    // A version a read would drop is not saved.
+    expect(r.writer.recordCodexPlugin(r.codexHome, '0.6.96 beta')).toBe(false)
+    chmodSync(r.dataDir, 0o500)
+    expect(r.writer.recordCodexPlugin(r.codexHome, '0.6.96')).toBe(false)
+    expect(r.writer.recordCodexPlugin(r.codexHome, null)).toBe(false)
+
+    expect(r.writer.codexPlugin()).toEqual({ [r.codexHome]: '0.6.95' })
+    expect(readFileSync(file, 'utf8')).toBe(saved)
+  })
+
+  it('recordCodexPlugin refuses a 65th home: false, the record and the file as before', () => {
+    const r = rig()
+    r.writer.started()
+    const homes = Array.from({ length: MAX_HOMES + 1 }, (_, i) => `/Users/someone/codex ${i}`)
+    for (const home of homes.slice(0, MAX_HOMES)) expect(r.writer.recordCodexPlugin(home, '0.6.95')).toBe(true)
+    const file = join(r.dataDir, DIAL_SETUP_FILE)
+    const saved = readFileSync(file, 'utf8')
+    const recorded = { ...r.writer.codexPlugin() }
+
+    expect(r.writer.recordCodexPlugin(homes[MAX_HOMES], '0.6.95')).toBe(false)
+
+    expect(r.writer.codexPlugin()).toEqual(recorded)
+    expect(readFileSync(file, 'utf8')).toBe(saved)
+    // A recorded home's version still changes.
+    expect(r.writer.recordCodexPlugin(homes[0], '0.6.96')).toBe(true)
+    expect(readSetup(r.dataDir).codexPlugin?.[homes[0]]).toBe('0.6.96')
+    // One removed makes room for it.
+    expect(r.writer.recordCodexPlugin(homes[1], null)).toBe(true)
+    expect(r.writer.recordCodexPlugin(homes[MAX_HOMES], '0.6.95')).toBe(true)
+    expect(readSetup(r.dataDir).codexPlugin?.[homes[MAX_HOMES]]).toBe('0.6.95')
+    expect(Object.keys(r.writer.codexPlugin())).toHaveLength(MAX_HOMES)
+  })
+})

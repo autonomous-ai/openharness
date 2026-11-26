@@ -6,9 +6,9 @@
 // setup: a dial attached here once, the CLI versions that last set Claude Code's plugin and Harness's extension in VS
 // Code and in Cursor up, the version of Orca's plugin that last set it up or found it removed (`orca`) and the one held
 // for asking more access than Harness approves (`orcaHeld`), the skills folders it wrote into, and the Orca homes it
-// turned Claude Code's plugin on in (`pluginHomes`); its one writer is that service. A `disable` finds every folder in
-// both. Each file keeps its own list of Orca homes, so neither has a second writer, and a home in either counts as
-// turned on once.
+// turned Claude Code's plugin on in (`pluginHomes`), and the CLI version that last set Harness Device's plugin up in
+// each Codex home (`codexPlugin`); its one writer is that service. A `disable` finds every folder in both. Each file
+// keeps its own list of Orca homes, so neither has a second writer, and a home in either counts as turned on once.
 import { randomUUID } from 'node:crypto'
 import { closeSync, fsyncSync, mkdirSync, openSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -24,9 +24,12 @@ export const MAX_HOMES = 64
 export const SETUP_COUNTS = ['set up', 'updated', 'failed', 'left removed'] as const
 export type SetupCount = typeof SETUP_COUNTS[number]
 
-/** Three full lists of the longest paths, with room for JSON's quotes: each file holds three lists. Paths whose
- *  characters JSON escapes can outgrow it, and such a file is not written. */
+/** dial-skill.json's bound: three full lists of the longest paths, with room for JSON's quotes. Paths whose characters
+ *  JSON escapes can outgrow it, and such a file is not written. */
 const MAX_FILE_BYTES = 256 * 1024
+/** dial-setup.json's bound: it holds four lists (codexPlugin's homes the fourth), about 268 KB at their longest with
+ *  the longest versions, past dial-skill.json's. Escaped paths can outgrow it too, and such a file is not written. */
+export const MAX_SETUP_BYTES = 320 * 1024
 const MAX_PATH_BYTES = 1024
 const CONTROL = /\p{Cc}/u
 /** A CLI version: a value edited by hand is compared with this CLI's own, so nothing but a version is kept. */
@@ -38,8 +41,10 @@ export interface DialSkillHomes { claude: string[]; codex: string[] }
 export interface DialRemoved { claude?: true; codex?: true; vscode?: true; cursor?: true; orca?: true }
 
 /** [orca]: the version of Orca's plugin that last set it up or found it removed; [orcaHeld]: the one held for asking
- *  more access. [pluginHomes]: the Orca homes the devices turned Claude Code's plugin on in, by real path. */
-export interface DialSetupRecord { dial: boolean; plugin?: string; vscode?: string; cursor?: string; orca?: string; orcaHeld?: string; homes: DialSkillHomes; pluginHomes: string[] }
+ *  more access. [pluginHomes]: the Orca homes the devices turned Claude Code's plugin on in, by real path.
+ *  [codexPlugin]: a Codex home's real path to the CLI version that last set Harness Device's plugin up there; absent
+ *  when empty. */
+export interface DialSetupRecord { dial: boolean; plugin?: string; vscode?: string; cursor?: string; orca?: string; orcaHeld?: string; homes: DialSkillHomes; pluginHomes: string[]; codexPlugin?: Record<string, string> }
 
 /** A file read: [unread] when it is there but could not be read (EACCES, EIO, EMFILE), so it reads as empty, and
  *  nothing may be written from that read: it would lose what the file holds. */
@@ -91,10 +96,10 @@ const orUnread = <T extends object>(read: () => T, empty: T): Read<T> => {
 }
 
 /** Written whole and on disk before it is renamed into place, so a reader, or a crash, never sees half a file. One a
- *  read would drop as too long is not written: EFBIG. */
-const writeJson = (file: string, value: unknown): string | undefined => {
+ *  read would drop as longer than [max] bytes is not written: EFBIG. */
+const writeJson = (file: string, value: unknown, max: number): string | undefined => {
   const text = `${JSON.stringify(value)}\n`
-  if (Buffer.byteLength(text) > MAX_FILE_BYTES) return 'EFBIG'
+  if (Buffer.byteLength(text) > max) return 'EFBIG'
   const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
   try {
     // An enable on a computer where the daemon never ran comes before anything made the data folder.
@@ -134,6 +139,20 @@ const homesOf = (value: unknown): string[] => {
     if (typeof path === 'string' && listable(path)) kept.add(path)
   }
   return [...kept]
+}
+
+/** A map damaged or edited by hand keeps only the homes a list may hold, each with a version, at most MAX_HOMES:
+ *  `disable` removes the plugin from each home it names. */
+const codexPluginOf = (value: unknown): Record<string, string> => {
+  const kept: Record<string, string> = {}
+  let count = 0
+  for (const [home, version] of Object.entries(fields(value))) {
+    if (count === MAX_HOMES) break
+    if (!listable(home) || typeof version !== 'string' || !VERSION.test(version)) continue
+    kept[home] = version
+    count++
+  }
+  return kept
 }
 
 const settingOf = (dataDir: string): Record<string, unknown> => fields(readJson(join(dataDir, DIAL_SKILL_FILE), MAX_FILE_BYTES))
@@ -192,7 +211,7 @@ const rewriteSetting = (dataDir: string, change: (setting: DialSetting) => void)
     ...(homes.claude.length || homes.codex.length ? { homes } : {}),
     ...(pluginHomes.length ? { pluginHomes } : {}),
     ...(orcaConnected ? { orcaConnected } : {}),
-  })
+  }, MAX_FILE_BYTES)
 }
 
 /** undefined once saved, else the error's code. [written], when given, becomes the folders the command wrote into for
@@ -232,6 +251,7 @@ export function writeOrcaConnected(dataDir: string): string | undefined {
  *  never holds a folder a `disable` would not find. A record from before Orca's homes (#4399) holds none. */
 const setupOf = (value: unknown): DialSetupRecord => {
   const file = fields(value)
+  const codexPlugin = codexPluginOf(file.codexPlugin)
   return {
     dial: file.dial === true,
     ...(typeof file.plugin === 'string' && VERSION.test(file.plugin) ? { plugin: file.plugin } : {}),
@@ -241,16 +261,18 @@ const setupOf = (value: unknown): DialSetupRecord => {
     ...(typeof file.orcaHeld === 'string' && VERSION.test(file.orcaHeld) ? { orcaHeld: file.orcaHeld } : {}),
     homes: writtenOf(file),
     pluginHomes: homesOf(file.pluginHomes),
+    ...(Object.keys(codexPlugin).length ? { codexPlugin } : {}),
   }
 }
 
 export function readSetup(dataDir: string): Read<DialSetupRecord> {
-  return orUnread(() => setupOf(readJson(join(dataDir, DIAL_SETUP_FILE), MAX_FILE_BYTES)), setupOf(undefined))
+  return orUnread(() => setupOf(readJson(join(dataDir, DIAL_SETUP_FILE), MAX_SETUP_BYTES)), setupOf(undefined))
 }
 
 /** undefined once saved; else the error's code: EINVAL for a version a read would drop, so the plugin or the extension
  *  would read as never set up, or Orca's plugin as never held. */
 export function writeSetup(dataDir: string, record: DialSetupRecord): string | undefined {
-  if ([record.plugin, record.vscode, record.cursor, record.orca, record.orcaHeld].some((version) => version !== undefined && !VERSION.test(version))) return 'EINVAL'
-  return writeJson(join(dataDir, DIAL_SETUP_FILE), setupOf(record))
+  const versions = [record.plugin, record.vscode, record.cursor, record.orca, record.orcaHeld, ...Object.values(record.codexPlugin ?? {})]
+  if (versions.some((version) => version !== undefined && !VERSION.test(version))) return 'EINVAL'
+  return writeJson(join(dataDir, DIAL_SETUP_FILE), setupOf(record), MAX_SETUP_BYTES)
 }
