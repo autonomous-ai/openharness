@@ -13,7 +13,7 @@ import { insideWindowsRoots } from '../lib/secureState.js'
 import { settingsText } from '../lib/settingsText.js'
 import { readSetup, readWritten, type DialEngine } from './dialSkillFiles.js'
 
-export const DIAL_SKILL_DESCRIPTION = 'Before you end a turn that leaves the person something to decide, answer or do, ring their Harness dial: harness device notify "<the ask, one line>" --suggest "<your pick>" --waiting (or --proceeding when you go on with your pick). Not for finished work or progress.'
+export const DIAL_SKILL_DESCRIPTION = 'Before you end a turn that leaves the person something to decide, answer or do, ring their Harness dial: harness device notify "[the ask, one line]" --suggest "[your pick]" --waiting (or --proceeding when you go on with your pick). Not for finished work or progress.'
 
 /** How every release's marker line opens, the one 0.6.58 wrote too: one rule knows them all, with no list of lines to
  *  keep. The period tells it from Harness's other files (`# Written by Harness,`, `:` or ` (`), none of which sits at a

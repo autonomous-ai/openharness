@@ -1,6 +1,6 @@
 ---
 name: dial
-description: "Before you end a turn that leaves the person something to decide, answer or do, ring their Harness dial: harness device notify \"<the ask, one line>\" --suggest \"<your pick>\" --waiting (or --proceeding when you go on with your pick). Not for finished work or progress."
+description: "Before you end a turn that leaves the person something to decide, answer or do, ring their Harness dial: harness device notify \"[the ask, one line]\" --suggest \"[your pick]\" --waiting (or --proceeding when you go on with your pick). Not for finished work or progress."
 # Written by Harness. Remove it with harness device claude disable or harness device codex disable.
 ---
 
