@@ -132,9 +132,9 @@ export class HerdrSource implements HostSource {
   private focusing: { close(): void } | undefined
   /** Whether herdr refused this attempt's focus subscription. */
   private focusEnded = false
-  /** The pane herdr said took the focus last this attempt: one per herdr server, as the source follows one, for the
-   *  devices to find the agent a herdr client shows when its VS Code terminal takes the focus (dial-mux-host-pages
-   *  design §7). */
+  /** The pane herdr said took the focus last while its focus subscription runs: one per herdr server, as the source
+   *  follows one, for the devices to find the agent a herdr client shows when its VS Code terminal takes the focus
+   *  (dial-mux-host-pages design §7). */
   private focused: string | undefined
   private openedAt: number | undefined
   private said: number | undefined
@@ -232,7 +232,7 @@ export class HerdrSource implements HostSource {
     return row ? this.deps.focus(row.pane) : false
   }
 
-  /** The bare id of the pane herdr said took the focus last, while this attempt lasts. */
+  /** The bare id of the pane herdr said took the focus last, while its focus subscription runs. */
   focusedPane(): string | undefined {
     return this.focused
   }
@@ -322,6 +322,8 @@ export class HerdrSource implements HostSource {
       // own, opens it again with the next agents' list, which comes only as the agents change, at most one a second.
       closed: (reason) => {
         this.focusing = undefined
+        // A focus herdr moves until one opens again is unheard: the last one heard may be herdr's no longer.
+        this.focused = undefined
         this.focusEnded = reason === 'rejected' || reason === 'bad_answer'
         if (this.focusEnded) this.deps.log(`[herdr] focus · ${reason}`)
       },
