@@ -39,6 +39,9 @@ vi.mock('fs/promises', counted)
 const counting = vi.hoisted(() => async (real: () => Promise<object>) => ({ ...await real(), randomUUID: () => machine.uuid() }))
 vi.mock('node:crypto', counting)
 vi.mock('crypto', counting)
+// Every draw pinned too, like the UUIDs, so a run is reproducible: a tie between apps (AppFilter.fallback) falls the same
+// way each run.
+vi.spyOn(Math, 'random').mockReturnValue(0.5)
 // The machine's processes, and whether one still runs, from the model. A session's transcript has no stamp there: one
 // waiting on the person stays so until its next hook.
 vi.mock('../../lib/sessionSearch/externals/support.js', async (real) => ({
