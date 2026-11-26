@@ -112,7 +112,8 @@ export interface CableHostWiring {
   /** The dial moved to another agent — the desktop window should show that agent on its own machine. */
   focused?: (machineId: string, agentId: string) => void
   /** What came of a swipe that rested on an agent of another app, or was superseded before it rested: for its count.
-   *  `opened`: a rest on tmux's or herdr's page brought the agent's app. */
+   *  `opened`: a rest on tmux's or herdr's page brought the agent's app; `ok` there when it only focused the pane of one
+   *  with no client app. */
   swiped?: (outcome: PaneSwitch | 'superseded' | 'opened') => void
   /** A hand turned a dial to an agent, of any app or none, as it turned: a settle of the app in front then follows
    *  nothing the dial has left. */
@@ -1361,7 +1362,7 @@ export class DaemonCableHost implements CableHost {
     const outside = this.outsideEntry(agentId)
     if (!outside) return false
     return (outside.source.hasPane?.(outside.agent) ?? false)
-      || (this.onMuxPage(outside.agent, opts) && outside.source.capabilities(outside.agent).focus)
+      || (this.muxPage(outside.agent, opts) !== undefined && outside.source.capabilities(outside.agent).focus)
   }
 
   turned(): void {
@@ -1376,21 +1377,26 @@ export class DaemonCableHost implements CableHost {
     // The agent may have gone, or left its pane, and the dial its page, since the dial turned to it: asked again here, so
     // no source brings forward an app the person has left.
     const outside = this.outsideEntry(agentId)
-    const mux = outside !== undefined && this.onMuxPage(outside.agent, opts)
+    const page = outside && this.muxPage(outside.agent, opts)
     // A pane its source can show says nothing of its app on tmux's or herdr's page: a tab app's watch selects a tab
     // behind too, so there its app must be the one in front (spec §4).
-    const shows = outside?.source.hasPane?.(outside.agent) && (!mux || this.filter.latestFront() === pagesOf(outside.agent)[0])
+    const shows = outside?.source.hasPane?.(outside.agent) && (!page || this.filter.latestFront() === pagesOf(outside.agent)[0])
     let ended: Promise<PaneSwitch | 'superseded' | 'opened'> | undefined
     if (shows) ended = outside?.source.showPane?.(outside.agent)
-    else if (mux) ended = this.openOnPage(outside, mine).then((opened) => opened === 'superseded' ? opened : opened ? 'opened' : 'failed')
+    else if (outside && page) {
+      // `opened` counts an app brought: one with no client app (detached, herdr's own row) has only its pane focused.
+      const brings = this.clientApp(outside, page)
+      ended = this.openOnPage(outside, mine)
+        .then((opened) => opened === 'superseded' ? opened : !opened ? 'failed' : brings ? 'opened' : 'ok')
+    }
     void (ended ?? Promise.resolve('failed' as const)).catch(() => 'failed' as const).then((outcome) => this.wiring.swiped?.(outcome))
   }
 
-  /** Whether this dial shows tmux's or herdr's page and the agent is on it: a page with no app of its own to show a pane
+  /** tmux's or herdr's page, when this dial shows it and the agent is on it: a page with no app of its own to show a pane
    *  in. Only a dial on an app's ring has one, never the window's tab. `showing()` reads the page without switching it. */
-  private onMuxPage(agent: HostAgent, opts: { apps?: boolean }): boolean {
+  private muxPage(agent: HostAgent, opts: { apps?: boolean }): 'tmux' | 'herdr' | undefined {
     const page = opts.apps && this.windowOf(opts) === null ? this.filter.showing() : undefined
-    return (page === 'tmux' || page === 'herdr') && pagesOf(agent).includes(page)
+    return (page === 'tmux' || page === 'herdr') && pagesOf(agent).includes(page) ? page : undefined
   }
 
   /**
