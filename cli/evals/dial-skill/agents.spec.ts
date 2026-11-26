@@ -7,7 +7,7 @@ import { AGENT_CONFIG, CLAUDE_SANDBOX, claudeArgs, killAgents, runAgent, spawnGr
 import { gradeRun } from './lib/grade.js'
 import type { Judge } from './lib/judge.js'
 import { parseClaudeStream } from './lib/parse.js'
-import { loadScenarios, type Scenario } from './lib/scenarios.js'
+import { loadScenarios, type Condition, type Scenario } from './lib/scenarios.js'
 import { readRings, stage, type Staged } from './lib/stage.js'
 
 const SAMPLE = join(import.meta.dirname, 'test-data', 'claude-stream.jsonl')
@@ -47,6 +47,8 @@ function staged(env: NodeJS.ProcessEnv = {}): Staged {
     origin: null,
     env: { PATH: '/usr/bin:/bin', CLAUDE_CONFIG_DIR: join(root, 'profile'), ...env },
     skill: null,
+    condition: 'clean',
+    skills: [],
   }
 }
 
@@ -128,7 +130,18 @@ describe('claudeArgs', () => {
     ]))
   })
 
-  it('never skips permissions', () => {
+  it("drops only the dial's description under name-only, in the run's own settings", () => {
+    const settings = (condition: Condition) => {
+      const argv = claudeArgs(AGENT_CONFIG, { ...staged(), condition }, 'Fix it.')
+      return JSON.parse(argv[argv.indexOf('--settings') + 1])
+    }
+
+    expect(settings('name-only')).toEqual({ ...CLAUDE_SANDBOX, skillOverrides: { dial: 'name-only' } })
+    expect(settings('crowd')).toEqual(CLAUDE_SANDBOX)
+    expect(settings('clean')).toEqual(CLAUDE_SANDBOX)
+  })
+
+    it('never skips permissions', () => {
     const argv = claudeArgs(AGENT_CONFIG, staged(), 'Fix it.').join(' ')
     for (const flag of ['--dangerously-skip-permissions', 'bypassPermissions', '--bare']) expect(argv).not.toContain(flag)
   })

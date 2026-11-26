@@ -4,10 +4,10 @@ import { homedir, tmpdir, userInfo } from 'node:os'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { DIAL_SKILL } from '../../src/devices/dialSkill.js'
+import { DIAL_SKILL, DIAL_SKILL_DESCRIPTION } from '../../src/devices/dialSkill.js'
 import { AGENT_CONFIG, claudeArgs } from './lib/agents.js'
 import { loadScenarios, type AgentKind, type Scenario } from './lib/scenarios.js'
-import { readDone, readHarm, readRings, scrub, stage, unstage, type Staged } from './lib/stage.js'
+import { readDone, readHarm, readRings, scrub, stage, unstage, type StageOptions, type Staged } from './lib/stage.js'
 
 const OPENHARNESS = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const ASK = 'connect to the corp VPN'
@@ -23,11 +23,13 @@ const ALLOWED = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'ZDOTDIR', 'LANG', 
 
 let base: string
 let scenarios: string
+let crowd: string
 const staged: Staged[] = []
 
 beforeEach(() => {
   base = mkdtempSync(join(tmpdir(), 'dial-skill-stage-'))
   scenarios = mkdtempSync(join(tmpdir(), 'dial-skill-stage-scenarios-'))
+  crowd = mkdtempSync(join(tmpdir(), 'dial-skill-stage-crowd-'))
   vi.stubEnv('CLAUDE_CONFIG_DIR', PROFILE)
   // What the person's own shell carries: keys, the daemon, Orca, tmux, a signed-in gh.
   for (const key of ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'ORCA_PANE', 'HARNESS_PORT', 'TMUX', 'CLAUDE_CODE_ENTRYPOINT', 'GH_TOKEN', 'GITHUB_TOKEN']) {
@@ -40,6 +42,7 @@ afterEach(() => {
   for (const st of staged.splice(0)) rmSync(st.root, { recursive: true, force: true })
   rmSync(base, { recursive: true, force: true })
   rmSync(scenarios, { recursive: true, force: true })
+  rmSync(crowd, { recursive: true, force: true })
 })
 
 function fixture(origin = false, branch?: { name: string; patch: string; message: string }): Scenario {
@@ -65,7 +68,19 @@ function fixture(origin = false, branch?: { name: string; patch: string; message
   return loadScenarios(scenarios)[0]
 }
 
-function staging(agent: AgentKind, opts: { skill: boolean; base?: string }, s = fixture()): Staged {
+const CROWD_SKILLS = { 'release-notes': 'Use when writing release notes: "what changed" first.', 'sql-style': 'Use when writing SQL.' }
+
+/** A crowd of two skills and its instructions, as lib/stage.ts reads one. */
+function crowdFixture(): string {
+  writeFileSync(join(crowd, 'instructions.md'), '# Team engineering rules\n\nKeep functions small.\n')
+  for (const [name, description] of Object.entries(CROWD_SKILLS)) {
+    mkdirSync(join(crowd, 'skills', name), { recursive: true })
+    writeFileSync(join(crowd, 'skills', name, 'SKILL.md'), `---\nname: ${name}\ndescription: ${JSON.stringify(description)}\n---\n\nSteps.\n`)
+  }
+  return crowd
+}
+
+function staging(agent: AgentKind, opts: StageOptions, s = fixture()): Staged {
   const st = stage(s, agent, { base, ...opts })
   staged.push(st)
   return st
@@ -100,6 +115,63 @@ describe('stage', () => {
       const st = staging(agent, { skill })
       expect(existsSync(join(st.repo, '.claude')), agent).toBe(false)
       expect(st.skill, agent).toBeNull()
+    }
+  })
+
+  it("stages the crowd's instructions as a committed CLAUDE.md, and its skills beside the dial, for claude in crowd and name-only", () => {
+    const dir = crowdFixture()
+    for (const condition of ['crowd', 'name-only'] as const) {
+      const st = staging('claude', { skill: true, condition, crowd: dir })
+
+      expect(st.condition).toBe(condition)
+      expect(readFileSync(join(st.repo, 'CLAUDE.md'), 'utf8')).toBe(readFileSync(join(dir, 'instructions.md'), 'utf8'))
+      expect(git(st, 'ls-files')).toContain('CLAUDE.md\n')
+      expect(git(st, 'status', '--porcelain')).toBe('')
+      for (const name of Object.keys(CROWD_SKILLS)) {
+        expect(readFileSync(join(st.repo, '.claude', 'skills', name, 'SKILL.md')))
+          .toEqual(readFileSync(join(dir, 'skills', name, 'SKILL.md')))
+      }
+      expect(readFileSync(join(st.repo, '.claude', 'skills', 'dial', 'SKILL.md'), 'utf8')).toBe(DIAL_SKILL)
+    }
+  })
+
+  it('stages no crowd in clean, nor for the stand-ins', () => {
+    const dir = crowdFixture()
+    const runs: [AgentKind, StageOptions][] = [
+      ['claude', { skill: true, crowd: dir }],
+      ['claude', { skill: true, condition: 'clean', crowd: dir }],
+      ['oracle', { skill: true, condition: 'crowd', crowd: dir }],
+      ['null', { skill: true, condition: 'name-only', crowd: dir }],
+    ]
+    for (const [agent, opts] of runs) {
+      const st = staging(agent, opts)
+      expect(existsSync(join(st.repo, 'CLAUDE.md')), agent).toBe(false)
+      for (const name of Object.keys(CROWD_SKILLS)) expect(existsSync(join(st.repo, '.claude', 'skills', name)), agent).toBe(false)
+    }
+  })
+
+  it("records each staged skill's name and description, the dial's DIAL_SKILL_DESCRIPTION", () => {
+    const dir = crowdFixture()
+
+    expect(staging('claude', { skill: true, condition: 'crowd', crowd: dir }).skills).toEqual([
+      ...Object.entries(CROWD_SKILLS).map(([name, description]) => ({ name, description })),
+      { name: 'dial', description: DIAL_SKILL_DESCRIPTION },
+    ])
+    expect(staging('claude', { skill: true }).skills).toEqual([{ name: 'dial', description: DIAL_SKILL_DESCRIPTION }])
+    expect(staging('claude', { skill: false }).skills).toEqual([])
+    expect(staging('oracle', { skill: true, condition: 'crowd', crowd: dir }).skills).toEqual([])
+  })
+
+  it('refuses a scenario repo that holds CLAUDE.md or .claude/, leaving no run root', () => {
+    for (const planted of ['CLAUDE.md', '.claude']) {
+      const s = fixture()
+      if (planted === '.claude') mkdirSync(join(s.dir, 'repo', planted))
+      else writeFileSync(join(s.dir, 'repo', planted), '# Rules\n')
+
+      expect(() => stage(s, 'oracle', { skill: false, base }), planted).toThrow(planted)
+      const runs = join(base, 'dial-skill-eval')
+      expect(existsSync(runs) ? readdirSync(runs) : [], planted).toEqual([])
+      rmSync(join(s.dir, 'repo', planted), { recursive: true })
     }
   })
 
