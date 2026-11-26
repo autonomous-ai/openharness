@@ -116,6 +116,11 @@ export type RegisteredMeta = {
   rebound: string | null
   orphaned?: { agentId: string; sessionId: string } | null
   hookEvent?: string
+  /**
+   * When the binding a rebind replaced began, epoch ms. Set by the hook door only, on the engine's own
+   * new-conversation hook (Claude Code's `/clear`, Codex's `/new`).
+   */
+  newConversationSince?: number
   /** A saved binding's evidence recovered; rebuild even an inline parser of the old file. */
   recovered?: boolean
 }
@@ -410,6 +415,9 @@ export function createBinding({
     // And only while the file is new (`transcriptIsFirstTurn`): a long session's transcript was born after
     // its agent too, and after a daemon restart its next SessionStart replayed the whole history live.
     //
+    // On a rebind, only on the engine's own new-conversation hook, for a transcript born after the binding
+    // it replaced: a fork or a resume is born late too (the rule and its reasons: `firstTurnReplay.ts`).
+    //
     // And never for the conversation a resume put back: its transcript existed before the row did,
     // whatever its birth says against the row's ORIGINAL `registeredAt`, which a resume keeps. Replaying
     // it sent the whole first turn out again as live, and a turn the stopped process had left open was
@@ -419,7 +427,7 @@ export function createBinding({
     const bornAfterAgent = !meta.recovered && !resumedConversation && transcriptIsFirstTurn(
       entry,
       entry.transcriptPath ? await statBirthMs(entry.transcriptPath) : 0,
-      { rebound: !!meta.rebound, now: Date.now() },
+      { rebound: !!meta.rebound, newConversationSince: meta.newConversationSince, now: Date.now() },
     )
     if (!current() || entry.identityHold) return
     const attached = await attachSession(entry, reset, entry.engine === 'cursor', bornAfterAgent)
