@@ -125,6 +125,12 @@ describe('codexServed', () => {
       .toEqual([{ client: { app: 'terminal-app', tty: '/dev/ttys005', pid: 500 } }])
   })
 
+  it('fails on a table that could not be read, as every caller would read as no server', async () => {
+    // externals/support.ts listProcesses gives none when ps failed: it always lists itself.
+    const d = deps([])
+    await expect(codexServed([{ pid: 900, cwd: '/work/app' }], d)).rejects.toThrow()
+  })
+
   it('says nothing of an app\'s own server, reading no TUI: it runs with its app\'s environment, so its hints place it', async () => {
     const d = deps([...TERMINAL_TUI, row(40, 1, CHATGPT), row(41, 40, CHATGPT_CODEX, `${CHATGPT_CODEX} app-server --analytics-default-enabled`)],
       { 500: { tty: 'ttys005', cwd: '/work/app' } })

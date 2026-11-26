@@ -6694,12 +6694,32 @@ describe('ObservedSource and a Codex session its own server runs', () => {
     expect(t.agent()).toMatchObject({ app: 'codex', name: 'Fix the build' })
   })
 
-  it('a lookup that fails leaves it to its hints, and says only its kind', async () => {
+  it('a lookup that fails places nothing by the hints: no page and no pane until its next hook asks again, and says only its kind', async () => {
+    const t = served({ codexQueue: { can: vi.fn(() => false), send: vi.fn() } })
+    // The daemon's hints may be the first TUI's tmux pane, another session's prompt.
+    t.src.ingest(t.codex('session-start', { hostHints: { ...ITERM2, TMUX_PANE: '%3' } }))
+    await t.asks[0].fail()
+    const { id } = t.agent()
+    expect(t.agent()).toMatchObject({ app: 'terminal', appPending: true })
+    expect(t.src.paneOf(id, 'tmux')).toBeUndefined()
+    expect(t.src.capabilities(t.agent()).voice).toBe(false)
+    expect(t.logs).toContain('[observed] served · not read · Error')
+    t.src.ingest(t.codex('turn-start', { hostHints: { ...ITERM2, TMUX_PANE: '%3' } }))
+    expect(t.lookup).toHaveBeenCalledTimes(2)
+    await t.asks[1].answer([{ client: CLIENT }])
+    expect(t.agent().app).toBe('terminal-app')
+  })
+
+  it('a server\'s ask that fails keeps its client\'s place: an unread machine is never no server', async () => {
     const t = served()
     t.src.ingest(t.codex('session-start'))
-    await t.asks[0].fail()
-    expect(t.agent().app).toBe('iterm')
-    expect(t.logs).toContain('[observed] served · not read · Error')
+    await t.asks[0].answer([{ client: CLIENT }])
+    const { id } = t.agent()
+    t.src.ingest(t.codex('session-start'))
+    await t.asks[1].fail()
+    expect(t.agent().app).toBe('terminal-app')
+    expect(t.src.tabTty(id)).toBe('/dev/ttys005')
+    expect(t.tty).not.toHaveBeenCalled()
   })
 
   /** A Codex session the open scan finds held by [pid], on no terminal unless [tty] says, in /work/app. */
@@ -6749,6 +6769,21 @@ describe('ObservedSource and a Codex session its own server runs', () => {
     expect(bySession('b')).toMatchObject({ app: 'terminal', appPending: true })
     expect(bySession('tui').app).toBe('ghostty')
     expect(bySession('cc').app).toBe('ghostty')
+  })
+
+  it('a scan whose lookup fails leaves a Codex session on no terminal on no page, never at its holder\'s parents\' app', async () => {
+    // The daemon is still the child of the first TUI, in iTerm2: its parents name iTerm2.
+    const t = served({}, { apps: async () => new Map([[900, 'iterm']]) })
+    foundCodex(t, THREAD, 900)
+    const scanned = t.src.scanOpen()
+    await vi.waitFor(() => { expect(t.asks).toHaveLength(1) })
+    await t.asks[0].fail()
+    await scanned
+    expect(t.agent()).toMatchObject({ app: 'terminal', appPending: true })
+    expect(t.logs).toContain('[observed] scan · served not read · Error')
+    // Its first hook asks again.
+    t.src.ingest(t.codex('turn-start', { cwd: '/work/app' }))
+    expect(t.lookup).toHaveBeenCalledTimes(2)
   })
 
   it('the first hook from the server the scan found it held keeps its place: asked again only at a start', async () => {
