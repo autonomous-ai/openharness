@@ -184,7 +184,9 @@ export function stage(s: Scenario, agent: AgentKind, opts: StageOptions): Staged
       mkdirSync(join(repo, '.claude'), { recursive: true })
       writeFileSync(join(repo, '.claude', 'settings.json'), JSON.stringify({ hooks: opts.hooks }, null, 2))
     }
-    return { root, repo, recFile, origin, env, skill, condition, skills }
+    const st: Staged = { root, repo, recFile, origin, env, skill, condition, skills }
+    live.add(st)
+    return st
   } catch (error) {
     // A failed stage leaves no run root, and its error goes to errors.jsonl: no temp path, no user name.
     rmSync(root, { recursive: true, force: true })
@@ -278,7 +280,11 @@ export function runProfileFolder(st: Pick<Staged, 'repo' | 'env'>): string | nul
   return profile ? join(profile, 'projects', st.repo.replace(/[^a-zA-Z0-9]/g, '-')) : null
 }
 
+/** Every stage not yet unstaged: a runner that exits mid-run (a signal, a refusal) runs no finally of its runs or probes. */
+const live = new Set<Staged>()
+
 export function unstage(st: Staged): void {
+  live.delete(st)
   try {
     rmSync(st.root, { recursive: true, force: true })
   } finally {
@@ -286,6 +292,19 @@ export function unstage(st: Staged): void {
     // <profile>/projects/<repo>/memory/ even with no session saved.
     const folder = runProfileFolder(st)
     if (folder) rmSync(folder, { recursive: true, force: true })
+  }
+}
+
+/** Unstages every stage still live, for a runner that is exiting: a probe's saved session would stay in the person's
+ *  profile. One that cannot be removed spares no other. */
+export function unstageLive(): void {
+  for (const st of live) {
+    try {
+      unstage(st)
+    } catch (error) {
+      // The runner is exiting, so this line is all a person gets. Its code only: the message names the run root.
+      console.error(`dial skill eval: a run root was not removed (${(error as NodeJS.ErrnoException).code ?? 'error'})`)
+    }
   }
 }
 

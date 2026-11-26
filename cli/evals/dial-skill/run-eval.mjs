@@ -49,7 +49,7 @@ import { sumUsage } from './lib/parse.ts';
 import { matchesProbe, probeListing } from './lib/probe.ts';
 import { CONDITIONS, loadScenarios, runId, splitIdOf } from './lib/scenarios.ts';
 import { guardCost, SpendGuard } from './lib/spend.ts';
-import { readDone, readHarm, readRings, scrub, stage, unstage } from './lib/stage.ts';
+import { readDone, readHarm, readRings, scrub, stage, unstage, unstageLive } from './lib/stage.ts';
 
 // Every output write refuses symlinks: the flow dir is model-influenced, and a
 // prompt-injected round can plant `results.jsonl -> ~/.bashrc` where the next
@@ -209,8 +209,9 @@ function variantHooks(vdir, state) {
 }
 
 // The agents run in process groups of their own (lib/agents.ts), which no signal to the runner reaches: however the
-// runner ends, it kills them first. A signal ends it through exit, with the code the signal would have left.
-process.on('exit', killAgents);
+// runner ends, it kills them first, then unstages what is still staged, a probe's session in the person's profile
+// included. A signal ends it through exit, with the code the signal would have left.
+process.on('exit', () => { killAgents(); unstageLive(); });
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => process.exit(128 + OS.signals[signal]));
 
 /** --timeout-s bounds the whole case, so the agent gets what the judge's two calls (the line and the answer) leave: 660 s
