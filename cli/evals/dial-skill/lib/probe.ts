@@ -99,9 +99,16 @@ export async function probeListing(s: Scenario, condition: Condition, opts: Stag
       // Its class only: the message may name the run root or quote the model.
       return { ...base, failure: 'error' }
     }
+    // A transcript that cannot be read fails the probe below, which keeps what the stream says it was billed.
+    let transcript: string | null
+    try {
+      transcript = transcriptOf(st, run.init?.session_id ?? null)
+    } catch {
+      transcript = null
+    }
     const p: Omit<Probe, 'failure'> = {
       ...base,
-      listing: readListing(transcriptOf(st, run.init?.session_id ?? null), st.skills),
+      listing: transcript === null ? null : readListing(transcript, st.skills),
       instructions: rules === null ? run.answer.trim() !== 'NONE' : run.answer.includes(rules),
       skills: run.init?.skills ?? [],
       claude_version: run.init?.claude_version ?? null,
@@ -113,7 +120,8 @@ export async function probeListing(s: Scenario, condition: Condition, opts: Stag
     if (run.limited) {
       throw Object.assign(new Error('the Claude account limit is reached'), { failure_class: 'account_limited', model: run.model, usage: run.usage })
     }
-    if (exit.code !== 0 && run.status !== 'truncated') return { ...p, failure: 'error' }
+    // Its class only, for the transcript too: the read error's message names the profile.
+    if ((exit.code !== 0 && run.status !== 'truncated') || transcript === null) return { ...p, failure: 'error' }
     return { ...p, failure: probeFailure(p, condition, opts.skill) }
   } finally {
     unstage(st)
