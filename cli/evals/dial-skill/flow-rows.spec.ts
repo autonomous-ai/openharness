@@ -156,6 +156,43 @@ describe('flow-rows.ts', () => {
     expect(rows(join(flow, 'v1', 'results.jsonl'))[0].explanation).toEqual({})
   })
 
+  it("scrub keeps what it takes out in each variant's private.jsonl, which git ignores, and the rows hold none of it", () => {
+    writeFileSync(join(flow, 'baseline', 'results.jsonl'), jsonl([resultRow('staging-db-host', 0), quietRow('signup-typo', 0)]))
+    writeFileSync(join(flow, 'baseline', 'errors.jsonl'), jsonl([ERROR_ROW]))
+    writeFileSync(join(flow, 'v1', 'results.jsonl'), jsonl([resultRow('staging-db-host', 1)]))
+
+    expect(flowRows('scrub', flow).status).toBe(0)
+    // A second scrub, before the next commit, finds nothing more to keep.
+    expect(flowRows('scrub', flow).status).toBe(0)
+
+    const { explanation } = resultRow('staging-db-host', 0)
+    expect(rows(join(flow, 'baseline', 'private.jsonl'))).toEqual([
+      { file: 'results.jsonl', prompt_id: 'staging-db-host.claude.clean', rep: 0, explanation },
+      { file: 'errors.jsonl', prompt_id: 'staging-db-host.claude.crowd', rep: 1, error: ERROR_ROW.error },
+    ])
+    expect(rows(join(flow, 'v1', 'private.jsonl'))).toEqual([
+      { file: 'results.jsonl', prompt_id: 'staging-db-host.claude.clean', rep: 1, explanation },
+    ])
+    expect(rows(join(flow, 'baseline', 'results.jsonl'))[0].explanation).toEqual({})
+    expect(rows(join(flow, 'baseline', 'errors.jsonl'))[0]).not.toHaveProperty('error')
+    const ignored = spawnSync('git', ['check-ignore', '-q', 'evals/dial-skill/flow/baseline/private.jsonl'], { cwd: CLI })
+    expect(ignored.status).toBe(0)
+  })
+
+  it('refuses a symlinked private.jsonl, writing nothing', () => {
+    const outside = join(tmp, 'outside.jsonl')
+    writeFileSync(outside, '')
+    writeFileSync(join(flow, 'baseline', 'results.jsonl'), jsonl([resultRow('staging-db-host', 0)]))
+    symlinkSync(outside, join(flow, 'baseline', 'private.jsonl'))
+
+    const out = flowRows('scrub', flow)
+
+    expect(out.status).toBe(2)
+    expect(out.stderr).toContain('baseline/private.jsonl')
+    expect(readFileSync(outside, 'utf8')).toBe('')
+    expect(readFileSync(join(flow, 'baseline', 'results.jsonl'), 'utf8')).toBe(jsonl([resultRow('staging-db-host', 0)]))
+  })
+
   it('scrub exits 1 naming the file, line and key when a path is left', () => {
     const left = { ...quietRow('signup-typo', 1), tags: ['no-need', 'offer-trap', '/private/var/folders/xy/T/run'] }
     writeFileSync(join(flow, 'baseline', 'results.jsonl'), jsonl([resultRow('staging-db-host', 0), left]))
