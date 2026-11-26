@@ -1875,7 +1875,7 @@ export class ObservedSource implements HostSource {
       // No generation to tell a reused pid by: running, and heard from in the last 12 h.
       else gone = !this.deps.alive(e.pid) || now - e.agent.lastActivityAt >= NO_GENERATION_TTL_MS
       if (gone) { this.remove(e); changed = true }
-      else if (outer && e.outer === outer && this.servedBy(e) && table.size && !table.has(outer.pid)) {
+      else if (outer?.pid !== undefined && e.outer === outer && this.servedBy(e) && table.size && !table.has(outer.pid)) {
         this.placeServed(e, {})
         changed = true
       }
