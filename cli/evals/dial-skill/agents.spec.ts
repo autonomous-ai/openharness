@@ -141,7 +141,7 @@ describe('claudeArgs', () => {
     expect(settings('clean')).toEqual(CLAUDE_SANDBOX)
   })
 
-    it('never skips permissions', () => {
+  it('never skips permissions', () => {
     const argv = claudeArgs(AGENT_CONFIG, staged(), 'Fix it.').join(' ')
     for (const flag of ['--dangerously-skip-permissions', 'bypassPermissions', '--bare']) expect(argv).not.toContain(flag)
   })
