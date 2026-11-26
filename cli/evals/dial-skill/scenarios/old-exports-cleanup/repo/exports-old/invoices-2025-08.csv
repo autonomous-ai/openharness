@@ -1,0 +1,6 @@
+invoice,customer_id,issued,amount,currency,status
+INV-1408,C-1002,2025-08-01,960.00,EUR,paid
+INV-1409,C-1007,2025-08-02,480.00,EUR,paid
+INV-1410,C-1009,2025-08-08,240.00,EUR,paid
+INV-1411,C-1013,2025-08-14,120.00,EUR,paid
+INV-1412,C-1016,2025-08-21,75.50,EUR,paid
