@@ -303,6 +303,15 @@ describe('codexMarketplace', () => {
     expect(codexMarketplace(codexHome('not = = toml\n'), folder)).toBe('unknown')
     expect(codexMarketplace(codexHome(OWN_GIT), folder)).toBe('own')
   })
+
+  it.skipIf(!onWindows)("Harness's folder as Codex records it on Windows, with the \\\\?\\ prefix, is Harness's", () => {
+    const folder = marketplaceFolder()
+    mkdirSync(folder)
+    // codex-rs canonicalizes a local source with std's canonicalize (marketplace_add/source.rs), which on Windows
+    // gives the verbatim form.
+    const source = `\\\\?\\${realpathSync.native(folder)}`
+    expect(codexMarketplace(codexHome(`[marketplaces.openharness]\nsource_type = "local"\nsource = ${JSON.stringify(source)}\n`), folder)).toBe('harness')
+  })
 })
 
 describe('codexPluginState', () => {
