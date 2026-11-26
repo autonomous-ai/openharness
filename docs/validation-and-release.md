@@ -69,7 +69,7 @@ PR CI is deliberately fast. Each changed component runs its own Linux suite, and
 tests read, ran the CLI's suite only, and turned main's Desktop CI red. The table lists each directory's own check; the
 broad reads on top: `companions` and `pty` import the CLI's code, so a `cli/` change runs them (about a minute each,
 beside the CLI's own suite); the CLI reads `pty/`, `tui/` and `store/`, Desktop reads `store/` and `docs/images/`, `os-checks` reads
-`term/` and `tui/`, and `store-checks` reads `store/agents/` and `store/viewers/`:
+`term/` and `tui/`, and `store-checks` reads `store/agents/`, `store/viewers/` and the rest of `store/tools/`:
 
 | Changed directory | PR check | Typical time |
 | --- | --- | --- |
@@ -80,7 +80,7 @@ beside the CLI's own suite); the CLI reads `pty/`, `tui/` and `store/`, Desktop 
 | `device-app/`, and `release-device.yml`, `release-desktop.yml` or the Windows signing action (its release tests read all three) | `device-app-checks` (the release scripts' tests against temp Git repositories and fake `gcloud`, `curl` and `gh`, then the UI's typecheck, Vitest and bundle, then `cargo test` with Tauri's Linux packages, then the X11 source of the app in front, live under Xvfb; on Windows, `cargo test --lib`; the macOS code is not compiled) | a few minutes |
 | `backend/` | `backend-desk` (the backend unit suite, `npm test` in `backend/`) and `backend-integration` (the backend integration suite, `npm run test:integration`, four shards) | unit about 1–2 min; integration about 5 min |
 | `companions/`, `website/`, `os/`, `provider/`, `mobile/`, `daemons/` | that component's one check | 1–4 min |
-| `store/tools/` | `store-checks` (the runtime helpers' tests, the check that every package's `runtimes.sh` copy matches, the tools' offline Node tests, the local AI packages' tests; the browser and network suites stay in their own workflows) | about 1 min |
+| `store/tools/` | `store-checks` (the runtime helpers' tests, the check that every package's `runtimes.sh` copy matches, the tools' offline Node tests, the local AI packages' tests; the browser and network suites stay in their own workflows). Only the files it runs and those they read beside them are its own (`ALSO` in `scripts/ci-plan.py`); the rest of `store/tools/` is outside every component | about 1 min |
 | `devices/`, `.github/assets/apps/` (the Pro's host tests check its baked app icons against this art) | `firmware-checks` | 1–2 min |
 | `devices/harness-pro/` | also `pro-firmware-build` (ESP-IDF v5.5.4 build of `harness_pro.bin`, which must fit `ota_0`) and `pro-golden` (`test/golden.sh --check` with Liberation Sans, on macOS arm64 where the baseline is recorded: float maths in the code-drawn shapes differs on Linux x86-64) | build ~4 min, golden ~1 min |
 | anything else (docs, workflows, scripts) | `process-checks` only, but for the workflows, actions and scripts an end-to-end suite or `cross-read-scan` runs on (below), and an edit to a job's block in `ci.yml`, or to what it takes from the rest of the file (an `env` variable it names, the `permissions`, `defaults` and `concurrency`, an anchor it names), which selects that job's suite (`device-app-build`'s: the Device suites that install its packages) | about 1.5 min |
@@ -159,7 +159,9 @@ A component's result is reused only when all of these hold; otherwise it runs as
 - No changed path is a shared input: `.github/`, `scripts/` (the planner and the merge
   helper; apart from the two style allowlists above), `Makefile`, `.gitattributes`, `.gitignore`, `.gitmodules`, any lockfile or
   toolchain pin, or any path outside a component other than `docs/` (but `docs/images/`
-  counts) and top-level `.md` files. A shared change reruns every component.
+  counts) and top-level `.md` files. The `store/tools/` files `store-checks` neither runs nor reads beside them are
+  outside every component: the scan below cannot see a read of a file beside its reader. A shared change reruns every
+  component.
 - The PR itself changes no workflow, script, `Makefile` or Git setting: PR CI runs the
   PR's own planner.
 - Every GitHub read succeeded within a minute. The plan job has read-only `actions`

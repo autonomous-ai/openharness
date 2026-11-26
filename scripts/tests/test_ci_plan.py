@@ -846,8 +846,8 @@ class SelectionTests(unittest.TestCase):
                 self.assertNotIn("store", planner.select([path])[0])
         self.assertEqual(planner.JOBS["store"], {"store-checks"})
         self.assertIsNone(planner.shared_input("store/tools/runtimes.sh"))
-        # The browser and network suites are other workflows'.
-        self.assertFalse(planner.reads("store", "store/tools/browser/x.test.mjs"))
+        # The browser and network suites are other workflows': in no component.
+        self.assertEqual(planner.shared_input("store/tools/browser/x.test.mjs"), "outside every component")
 
     def test_store_checks_run_offline_with_a_read_only_token(self):
         job = planner.ci_jobs((REPOSITORY / ".github/workflows/ci.yml").read_text())["store-checks"]

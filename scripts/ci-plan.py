@@ -58,8 +58,8 @@ JOBS = {
 # its own scope.
 MANUAL = {"full": CORE, "all": SUITES - E2E, "process": set(), **{name: {name} for name in SUITES}}
 # Each component's own directory selects its suite. Everything else (docs, workflows,
-# scripts, the rest of store/, fixtures) is covered by the plan's actionlint and process checks; store/tools/ has its own
-# suite (ALSO).
+# scripts, store/ but the files store-checks runs or reads (ALSO), fixtures) is covered by the plan's actionlint and
+# process checks.
 COMPONENTS = {"cli": "cli", "tests": "cli", "desktop": "desktop", "tui": "tui", "backend": "backend",
               "companions": "companions", "website": "website", "os": "os", "provider": "provider",
               "devices": "firmware", "mobile": "mobile", "daemons": "daemons", "pty": "pty", "term": "pty",
@@ -81,8 +81,15 @@ ALSO.update({"desktop/test/support/real_fonts.dart": "mobile"})
 ALSO.update({"plugins/harness-device-vscode/": "cli"})
 # Orca's plugin: the CLI's build inlines the folder.
 ALSO.update({"plugins/harness-device-orca/": "cli"})
-# The Store's tools: store-checks runs their offline tests.
-ALSO.update({"store/tools/": "store"})
+# The Store's tools: the files store-checks runs (ci.yml) and those they read beside them, by name or by a path built
+# from parts (runtimes.sh), which the scan cannot see; test_ci_plan follows the names. The rest of store/tools/ (the
+# browser and network suites authoring-browser-checks.yml and experience-checks.yml run, the pipe checks windows-e2e
+# runs, the scripts run by hand) is in no component, as the rest of store/ is: a change to it on main reruns every suite
+# after Update branch, whatever reads it beside it.
+ALSO.update({f"store/tools/{name}": "store" for name in (
+    "local-ai/", "local-credential.mjs", "local-credential.test.mjs", "local-daemon.mjs", "local-daemon.test.mjs",
+    "port-holder.test.mjs", "runtimes.sh", "sync-runtimes.mjs", "sync-runtimes.test.mjs", "test-folders.mjs",
+    "test-folders.test.mjs", "test_runtimes.py")})
 # test_ci_plan's repository-wide scan and its other full-checkout tests skip in process-checks' sparse checkout, where
 # two undeclared reads slipped in: their own job runs them on a full checkout. They run for a change to the planner, its
 # test, the tables it reads (DEPENDS takes the desktop's from record-ci-validation.py) and the CLI's lists its tables
@@ -297,8 +304,10 @@ DEPENDS = {
     "pty": ("cli/", "desktop/windows/runner/resources/app_icon.ico"),
     # store-checks: the local AI packages' packaging test compares their toolchain/node.sh copies, port-holder.test.mjs
     # imports four agents' libs, and sync-runtimes.mjs --check compares every agent's and viewer's runtimes.sh copy
-    # (a path joined from parts, which the scan cannot see).
-    "store": ("store/agents/", "store/viewers/"),
+    # (a path joined from parts, which the scan cannot see). store/tools/: local-ai's vllm.test.mjs hands its validator
+    # '../../file' as test data, which the scan reads as a path built into that folder; a change to a file there the
+    # job does not own is a shared input still (ALSO).
+    "store": ("store/agents/", "store/tools/", "store/viewers/"),
     # THIRD_PARTY_NOTICES.md: tui/src/main.rs includes ../THIRD_PARTY_NOTICES.md, which names a root file too.
     "tui": ("THIRD_PARTY_NOTICES.md", "cli/package.json", "os/network.py", "os/onboarding.py", "os/root/usr/bin/hn",
             "tests/fixtures/shared-pane-layouts.json"),
@@ -343,7 +352,7 @@ PR_READS = {
                 "desktop/lib/measurement/", "mobile/lib/measurement/",
                 "provider/reference-provider/", "tests/fixtures/"),
     # cli/scripts/connector-assets.mjs, which a spec imports, names the connector icons' desktop and phone copies it writes.
-    # store/: the dsh specs read its agents, viewers and starter (the scan skips it: a path outside every component).
+    # store/: the dsh specs read its agents, viewers and starter (the scan skips them: paths outside every component).
     # focus_faces.c: roundGlyphs.spec.ts holds the daemon's copy of the dial's glyph table to the firmware's.
     # version.txt: the e2e fake dial greets with the round firmware's version (fakeDial.spec.ts).
     "cli": ("backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts",
@@ -428,13 +437,6 @@ PR_READS = {
 # tests cover src/ (end to end runs elsewhere). backend/integration is read: backend-integration runs it.
 # CrossReadTests fails when a file outside the folder refers into it.
 NOT_READ = {"cli": ("cli/e2e/",)}
-# store-checks runs the offline checks alone: the browser and network suites are authoring-browser-checks.yml's and
-# experience-checks.yml's, the pipe test windows-e2e's (storePackagesPipe.windows.spec.ts), and the rest is run by hand.
-NOT_READ["store"] = tuple(f"store/tools/{name}" for name in (
-    "README.md", "REAL-WORKFLOWS.md", "browser/", "build-experience-branding.mjs", "build-experiences.mjs", "catalog.mjs",
-    "dsh-delete.mjs", "dsh-discover.mjs", "dsh-e2e.mjs", "experience-tests/", "experiences/", "hands-on.mjs",
-    "listing.mjs", "presentation.mjs", "showcase.mjs", "studio_fetch.py", "studio_runtime.py", "sync-studios.mjs",
-    "test_studio_fetch.py", "try-hands-on.mjs", "windows-ci/", "windows-pipe.test.mjs"))
 # Strings in a suite's files that name another directory's path but are not read by its PR jobs:
 # test data, or a script run only by hand. {source: (why, {path the scan reports, or a folder "dir/" covering it})}.
 # A folder covers the paths under it named from the repository root. A relative read ("../../cli/x.ts") is always a
