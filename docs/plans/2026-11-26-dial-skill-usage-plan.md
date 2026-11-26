@@ -11,11 +11,11 @@ proceed-or-wait rule, and how often the person prompts that agent within 10 minu
 sends them with no change. The devices count each answer at the `count` dependency of `Notices`, keep one open notice
 per agent for "answered", and look for Harness's skill file in the recorded folders after each dial setup pass and at
 each UTC midnight (`cable/dialUsage.ts`, fed by `services/devices.ts`, the file check in `devices/dialSkill.ts`).
-`usage:daily` gains a "Dial skill" section.
+`usage:daily` gains a "Dial skill" section. Desktop's and the phone's "See what's shared" name the new counts.
 
 **Tech Stack:** TypeScript (Node 24). CLI: Vitest (unit; `npm run test:core` 100% per file for `src/services/`; e2e
 on the real daemon with a fake dial and the in-memory backend). Backend: Fastify, Zod, Prisma on MongoDB, Vitest (unit
-and the integration suite on a loopback Mongo).
+and the integration suite on a loopback Mongo). Desktop and phone: Flutter widget tests.
 
 **Spec:** `docs/plans/2026-11-26-dial-skill-usage-design.md` (Ken approved the design, harness-pm approved the spec and
 the "answered" signal, 2026-11-26). Base: `feat/dial-skill-usage` at `5f87560981`; line numbers below are on it.
@@ -36,10 +36,11 @@ Paths: `DC` `cli/src/lib/dialUsageContract.ts`, `BT` `backend/src/types/dialUsag
 | 5 | The review's Dial skill section | `BR`, `BRT`, `BI` | 1 | high | `BRT` "Dial skill" cases; `BI` section assertions |
 | 6 | End to end: a notice and the skill reach the report | `E2E` | 4 | high | none: a check of Tasks 3-4, no behavior of its own; one commit |
 | 7 | Docs | `docs/product-measurement.md` | none | medium | none: docs, one commit |
+| 8 | Desktop and phone copy | `desktop/lib/settings/sections/privacy_section.dart`, `desktop/test/privacy_section_test.dart`, `mobile/lib/phone/privacy_shared_fields.dart`, `mobile/test/privacy_page_test.dart` | none | medium | the two "names the dial and voice" widget tests' new expected text |
 
 **Shared files:** none; no two tasks touch the same file.
 
-**Longest chain:** four tasks, 1 → 3 → 4 → 6. Ready at once: 1, 2, 7.
+**Longest chain:** four tasks, 1 → 3 → 4 → 6. Ready at once: 1, 2, 7, 8.
 
 ## Global Constraints
 
@@ -58,8 +59,9 @@ Paths: `DC` `cli/src/lib/dialUsageContract.ts`, `BT` `backend/src/types/dialUsag
 - **Answered** is the person's prompt only: the signal `prompted` uses (`DU` 183-185, 285-291, 312-333):
   `turnStarted(agentId, byPerson)` with `byPerson`, a voice waiting as the turn starts, or the `unwaited` match in
   `voiceEnded`. Never a relayed prompt, a Harness `turn_started`, a listing's busy, another machine's turn, a resume.
-- **Release order:** backend first, then CLI; the PR body says so. **Platforms:** macOS, Linux, Windows, no
-  platform-specific code. Comments say why.
+- **Release order:** backend first, then CLI; the PR body says so. Desktop and the phone carry Task 8's copy in their
+  own next release; the counts do not wait for it. **Platforms:** macOS, Linux, Windows (CLI, Desktop), iOS and
+  Android (the phone's copy); no platform-specific code. Comments say why.
 - **No fixed sleeps** (fake timers, `vi.waitFor`, `until`); no full suites locally while building (PR CI runs them);
   no CPU-hog loops on this Mac.
 
@@ -93,6 +95,11 @@ Paths: `DC` `cli/src/lib/dialUsageContract.ts`, `BT` `backend/src/types/dialUsag
   unknown name, keeps the rest and counts `health_cli_report_unknown_metric`, and refuses only a report left with no
   known name (`backend/src/routes/productUsage.ts` 84-100, test "drops a dial name it does not know and keeps the
   rest"). Backend first still, or the new names are lost.
+- **"See what's shared"** (Task 8; spec "What the person is told is shared", harness-pm 2026-11-26, as #4561): the
+  words `agents' notices to the dial and whether the dial skill is installed` go into Desktop's "Dial use: …" bullet
+  and the phone's "Dial and voice" line, in each line's `;` list, after `how long agents wait for you` and before
+  `seconds of voice turned into text` (beside the other agent counts). The apostrophe is ASCII, escaped in the files'
+  single-quoted strings (`agents\'`, as the phone's `this phone\'s`).
 
 ## Review Focus
 
@@ -356,6 +363,46 @@ on the branch with Task 4 in.
   Harness's panes and listing-only agents count only through voice; the `[device] notify` log line stays a debug line.
 - [ ] **Step 2: Commit** (`docs: the dial skill's usage counts`).
 
+### Task 8: Desktop and phone copy
+
+**Files:** Modify `desktop/lib/settings/sections/privacy_section.dart` (the "Shared fields" text, the `• Dial use:`
+bullet at 211), `desktop/test/privacy_section_test.dart` (`'See what’s shared names the dial and voice'`, 145-164),
+`mobile/lib/phone/privacy_shared_fields.dart` (`_sent`, the `Dial and voice` entry at 57-62),
+`mobile/test/privacy_page_test.dart` (`'See what’s shared names the dial and voice'`, 79-104). Depends on nothing.
+Effort medium: a few words in one existing line on each screen.
+
+**No design doc or gallery change, and why:** the root rule ("the doc and its gallery change in the same pull request")
+is for a new or changed element (`desktop/design/desktop-design-system.md` "Elements gallery": "A new or changed
+element updates this document and the gallery"). This task adds words inside an existing text of an existing element:
+the doc names neither the privacy section nor its copy, the gallery (`desktop/test/elements_gallery_test.dart`) has no
+privacy section and leaves words out of its image comparison, and #4561 changed the same two lines with no doc change.
+The copy follows the doc's "All copy is sharp" rules (a few words, in the line's own `;` list). `mobile/` has no
+AGENTS.md and no design doc of its own; `desktop/AGENTS.md` adds nothing for copy.
+
+**A person's click-through already exists:** both widget tests pump the real widget (`ProductUsagePreference`;
+`PrivacyPage`), tap `See what’s shared` as a person does and read the opened list; the task adds one expectation to
+each, no new test.
+
+- [ ] **Step 1: Write the failing expectations.** In each of the two tests, after the existing ones:
+
+```dart
+expect(
+  find.textContaining(
+    'how long agents wait for you; agents\' notices to the dial and whether '
+    'the dial skill is installed; seconds of voice turned into text',
+  ),
+  findsOneWidget,
+);
+```
+
+- [ ] **Step 2: Run** `cd desktop && flutter test test/privacy_section_test.dart` and
+  `cd mobile && flutter test test/privacy_page_test.dart`. Expected: FAIL, each on the new expectation only.
+- [ ] **Step 3: Implement** the words of "What this plan decides" in the two lines: Desktop's bullet stays one string
+  literal ending `\n`; the phone's entry keeps its adjacent literals and its final `.`.
+- [ ] **Step 4: Run** the same two commands and `flutter analyze` on the two changed files in each app. Expected: PASS,
+  no new issue.
+- [ ] **Step 5: Commit** (`feat(desktop, mobile): See what's shared names the dial skill's counts`).
+
 ## Verification
 
 **Local gates PR CI does not run** (the tester, from a clean tree at the final head, on the Mac; receipts in the PR
@@ -368,10 +415,16 @@ body before it is marked ready):
   src/analytics/dailyDialReview.test.ts`.
 - `cmp cli/src/lib/dialUsageContract.ts backend/src/types/dialUsage.ts` and `git diff --stat 5f87560981 -- cli/src/core
   cli/src/architecture.coreFiles.txt` print nothing.
+- `cd desktop && flutter test test/privacy_section_test.dart` and `cd mobile && flutter test
+  test/privacy_page_test.dart` (Task 8). The Flutter files add no local gate: `python3 scripts/local-checks.py --list`
+  on Task 8's four paths names none (the `desktop-macos` receipt is only for macOS-specific Desktop paths), so no
+  Desktop or phone receipt goes in the PR body.
 
 **PR CI, selected by the paths:** `cli-typecheck`, `cli-tests`, `backend-desk`, `backend-integration` (with `BI`),
 `linux-e2e` (it runs `E2E`, modified), `windows-e2e` x64 (`cli/src/cable/` changed: the devices inside the core's
-process on Windows, existing cases), `process-checks`. Nothing dispatched by hand.
+process on Windows, existing cases), `desktop-tests` (six Linux shards; `desktop/` changed), `mobile-checks`
+(`mobile/` changed), `cross-read-scan`, `process-checks`. `scripts/ci-plan.py`'s `select` on Task 8's four paths gives
+`desktop`, `mobile` and `cross-read-scan`. Nothing dispatched by hand.
 
 **End-to-end checks:**
 1. **A notice, its answer and the skill reach the signed-in report as counts only** (`E2E`, Task 6). Runs on Linux in
@@ -383,7 +436,11 @@ process on Windows, existing cases), `process-checks`. Nothing dispatched by han
    A person sees the case pass; the file and every report hold the names and numbers only.
 2. **Ingest to review on a real Mongo** (`BI`, Task 5): `backend-integration` on PR CI, on a fresh loopback replica set
    with made-up accounts; the longer `$in` still reads by the (day, name) index, and the section reads the new rows.
-3. **A real dial (optional, not needed for the merge; needs harness-pm's approval and the user's own dial and eye).**
+3. **"See what's shared" names the new counts on Desktop and the phone** (Task 8): the two widget tests, in PR CI's
+   `desktop-tests` and `mobile-checks` (Linux) and locally with the commands above. Each pumps the real widget with a
+   made-up preference request (no backend, no account), taps `See what’s shared` as a person does and finds the new
+   words in the opened list. No device run: the change is words in an existing text, with no platform code.
+4. **A real dial (optional, not needed for the merge; needs harness-pm's approval and the user's own dial and eye).**
    On the Mac, a second daemon with its own `ADAPTER_DATA_DIR`, `HARNESS_AUTH_DIR`, `ADAPTER_COMPUTER_ID_FILE` and port,
    signed in with a test account to the disposable stack of `make terminal-local-manual`; an agent runs
    `harness device notify … --waiting`, the person sees the card and prompts the agent; `cd backend && npm run
@@ -399,7 +456,10 @@ and a midnight; the notice counts are a few adds per notice.
 - Backend rule 5 (as #4561): growth from the vocabulary, no production read: at most 16 names × 3 prefixes = 48 new
   `product_usage_totals` rows a day, kept 396 days by the existing TTL (at most 19,008 rows), whatever the number of
   computers.
-- Platforms: macOS, Linux, Windows; no platform-specific code (the skill check uses `dialSkill.ts`'s own ownership
-  rule: the uid, or the Windows profile root).
+- Desktop and the phone carry the "See what's shared" words in their own next release; the counts do not wait for it.
+  No design doc or gallery change: words in an existing text, not a new or changed element (Task 8).
+- Platforms: macOS, Linux, Windows (CLI and Desktop), iOS and Android (the phone's copy); no platform-specific code
+  (the skill check uses `dialSkill.ts`'s own ownership rule: the uid, or the Windows profile root). The copy is tested
+  by the two widget tests on Linux CI.
 
 **Production:** no check runs against it.
