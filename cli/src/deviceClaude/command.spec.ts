@@ -1139,6 +1139,66 @@ describe('Orca\'s Claude Code homes', () => {
 })
 
 describe('harness device codex', () => {
+  const FIXTURE = readFileSync(new URL('./__fixtures__/codex-turn-context.jsonl', import.meta.url), 'utf8').split(/\r?\n/).filter(Boolean)
+  /** Line 6: the person reviews the turn's asks. */
+  const USER_TURN = '01a21862-356c-7481-bf3a-ea92e3fd707a'
+  /** Line 2: Codex's automatic review approves the turn's asks by itself. */
+  const AUTO_REVIEW_TURN = '01a21860-3b56-7292-b32b-e04f386c56d4'
+
+  /** A Codex home whose session rollout holds Codex 0.172.0's own turn_context lines, and the rollout's path. */
+  function codexRollout(): { codexHome: string; transcript: string } {
+    const codexHome = folder()
+    const sessions = join(codexHome, 'sessions', '2026', '11', '26')
+    mkdirSync(sessions, { recursive: true })
+    const transcript = join(sessions, 'rollout-2026-11-26T14-59-40-019abc00-0000-7000-8000-000000000001.jsonl')
+    writeFileSync(transcript, FIXTURE.map((line) => `${line}\n`).join(''))
+    return { codexHome, transcript }
+  }
+
+  /** Codex's PermissionRequest hook input for [turn] of [transcript]. */
+  const permissionRequest = (transcript: string, turn: string, session = '019abc00-0000-7000-8000-000000000001') => chunks(JSON.stringify({
+    session_id: session, turn_id: turn, transcript_path: transcript, cwd: '/repo', hook_event_name: 'PermissionRequest',
+    model: 'gpt-5.5', permission_mode: 'default', tool_name: 'Bash', tool_input: { command: 'touch /tmp/probe' },
+  }))
+
+  it('codex asked tells the daemon of a user-reviewed escalation, prints nothing and exits 0', async () => {
+    const dataDir = folder()
+    const bodies = await daemonAt(dataDir)
+    const { codexHome, transcript } = codexRollout()
+    expect(await device(['codex', 'asked'], { dataDir, codexHome, stdin: permissionRequest(transcript, USER_TURN), codex: () => { throw new Error('asked never looks for codex') } }))
+      .toEqual({ code: 0, out: [], err: [] })
+    await vi.waitFor(() => expect(bodies.map((body) => JSON.parse(body))).toEqual([
+      { engine: 'codex', sessionId: '019abc00-0000-7000-8000-000000000001', event: 'asked', tool: 'Bash', summary: 'touch /tmp/probe', cwd: '/repo' },
+    ]))
+  })
+
+  // A session started before disable keeps the plugin's hook: it still runs `asked`, which reads Codex is removed.
+  it('codex asked after codex disable tells the daemon nothing, and after enable tells it again', async () => {
+    const dataDir = folder()
+    const bodies = await daemonAt(dataDir)
+    const { codexHome, transcript } = codexRollout()
+    const asked = (session: string) => device(['codex', 'asked'], { dataDir, codexHome, stdin: permissionRequest(transcript, USER_TURN, session) })
+    expect(await device(['codex', 'disable'], { dataDir, codexHome })).toEqual({ code: 0, out: [], err: [] })
+    expect(await asked('sess-off')).toEqual({ code: 0, out: [], err: [] })
+    expect(await device(['codex', 'enable'], { dataDir, codexHome })).toEqual({ code: 0, out: [], err: [] })
+    expect(await asked('sess-on')).toEqual({ code: 0, out: [], err: [] })
+    await vi.waitFor(() => expect(bodies).toHaveLength(1))
+    expect(JSON.parse(bodies[0]).sessionId).toBe('sess-on')
+  })
+
+  it('codex asked with an auto_review turn tells the daemon nothing and exits 0', async () => {
+    const dataDir = folder()
+    const bodies = await daemonAt(dataDir)
+    const { codexHome, transcript } = codexRollout()
+    expect(await device(['codex', 'asked'], { dataDir, codexHome, stdin: permissionRequest(transcript, AUTO_REVIEW_TURN) }))
+      .toEqual({ code: 0, out: [], err: [] })
+    // The same command for the person's turn is heard, so the first was dropped, not still on its way.
+    expect(await device(['codex', 'asked'], { dataDir, codexHome, stdin: permissionRequest(transcript, USER_TURN, 'sess-user') }))
+      .toEqual({ code: 0, out: [], err: [] })
+    await vi.waitFor(() => expect(bodies).toHaveLength(1))
+    expect(JSON.parse(bodies[0]).sessionId).toBe('sess-user')
+  })
+
   it('status without --json prints the same fields, indented', async () => {
     expect(await device(['codex', 'status'], { codex: () => false }))
       .toEqual({ code: 0, err: [], out: [JSON.stringify({ supported: true, installed: false, enabled: false }, null, 2)] })
