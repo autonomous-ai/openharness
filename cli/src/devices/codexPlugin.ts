@@ -37,7 +37,9 @@ export interface CodexInstallDeps extends CodexPluginDeps { folder: string; file
 
 const PLUGIN_NAME = DIAL_PLUGIN_ID.split('@')[0]
 const PLUGIN_PREFIX = `plugins/${PLUGIN_NAME}/`
-/** A local marketplace add and plugin add copy files; the version and a remove only read or write config.toml. */
+/** `plugin add` copies the plugin into Codex's cache. A local `marketplace add` copies nothing, it only records the
+ *  folder in config.toml (marketplace_add.rs), yet keeps the copy's bound, which costs nothing when it answers; the
+ *  version and a remove only read or write config.toml. */
 const COPY_MS = 60_000
 const LOCAL_MS = 15_000
 const UNSUPPORTED: CodexFailure = { ok: false, step: 'unsupported', error: `Codex ${MIN_CODEX} or later is needed.` }
