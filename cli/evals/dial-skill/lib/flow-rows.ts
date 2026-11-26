@@ -122,12 +122,13 @@ export function supersedeFlow(flow: string, variant: string, scenario: string): 
 }
 
 /** A row file's rows, null when there is none. The flow folder is model-influenced, as the runner treats it: a planted
- *  link would carry a rewrite elsewhere, or read a file from elsewhere into a commit. */
+ *  link would carry a rewrite elsewhere, or read a file from elsewhere into a commit. A hard link is a second name lstat
+ *  cannot tell from the file, and nothing in a flow needs one. */
 function readRows(flow: string, rel: string): Row[] | null {
   const path = join(flow, rel)
   const stat = lstatSync(path, { throwIfNoEntry: false })
   if (!stat) return null
-  if (!stat.isFile()) throw new Error(`${rel} is a symlink or not a file: nothing written`)
+  if (!stat.isFile() || stat.nlink > 1) throw new Error(`${rel} is a symlink, a hard link or not a file: nothing written`)
   return readFileSync(path, 'utf8').split('\n').flatMap((line, i) => {
     if (!line.trim()) return []
     let row: unknown
