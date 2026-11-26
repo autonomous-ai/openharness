@@ -7,6 +7,7 @@ import { DIAL_SKILL_DESCRIPTION } from '../../src/devices/dialSkill.js'
 import { AGENT_CONFIG, claudeArgs, type AgentConfig } from './lib/agents.js'
 import { matchesProbe, PROBE_PROMPT, probeArgs, probeFailure, probeListing, readListing, type Listing, type Probe } from './lib/probe.js'
 import { loadScenarios, type Condition } from './lib/scenarios.js'
+import { RUN_RESERVE_USD } from './lib/spend.js'
 import type { StagedSkill } from './lib/stage.js'
 
 const CROWD_SKILLS = { 'release-notes': 'Use when writing release notes: "what changed" first.', 'sql-style': 'Use when writing SQL.' }
@@ -236,6 +237,8 @@ setTimeout(() => {}, 600_000)`
     const probe = await probeListing(scenario(), 'crowd', { skill: true, crowd, base: join(root, 'runs') }, config(fakeClaude(tail), 3_000))
 
     expect(probe.failure).toBe('timeout')
+    // Cut before its result event, its output is a floor: it is charged its reserve.
+    expect(probe.cut_usd).toBe(RUN_RESERVE_USD)
     expect(existsSync(marker())).toBe(true)
     expect(sessionFolders()).toEqual([])
     expect(JSON.stringify(probe)).not.toContain('secret-project')

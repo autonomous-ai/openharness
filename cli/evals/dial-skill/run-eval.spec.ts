@@ -622,6 +622,21 @@ process.exitCode = 1`)
     expect(jsonl('baseline', 'errors.jsonl')).toHaveLength(1)
   })
 
+  it('charges a run killed before its result event at least its reserve, as its printed output is a floor', () => {
+    fakeClaude(String.raw`emit({ type: 'assistant', parent_tool_use_id: null, message: { id: 'msg_1', model: 'claude-opus-5-5', content: [], usage: { input_tokens: 7, output_tokens: 3 } } })
+setTimeout(() => {}, 60_000)`)
+
+    // The killed run is charged $1.50, so the next case's $1.50 reserve no longer fits under $2.90.
+    const out = runEval(['--variant', 'baseline', ...THREE, '--timeout-s', '4'], {}, 2.9)
+
+    expect(out.status).toBe(4)
+    expect(out.stderr).toContain(`spend cap · $1.50 of $2.90: ${STOPPED}`)
+    expect(callsMade()).toEqual(['probe', 'agent'])
+    const [row] = jsonl('baseline', 'errors.jsonl')
+    expect(row).toMatchObject({ failure_class: 'timeout', usage: { input_tokens: 7, output_tokens: 3 } })
+    expect(row.cut_usd + (7 * 4 + 3 * 20) / 1e6).toBeCloseTo(1.5, 12)
+  })
+
   it('keeps a reserve for every case in flight at --concurrency 2, running one at a time while only one fits, and finishes the pass', () => {
     const busy = join(tmp, 'busy')
     const overlap = join(tmp, 'overlap')

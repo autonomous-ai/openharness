@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { costOf, guardCost, RUN_RESERVE_USD, SpendGuard } from './lib/spend.js'
+import { costOf, cutUsd, guardCost, RUN_RESERVE_USD, SpendGuard } from './lib/spend.js'
 
 const USAGE = { input_tokens: 1000, output_tokens: 100, cache_read_input_tokens: 10_000, cache_creation_input_tokens: 2000 }
 const JUDGE_USAGE = { input_tokens: 500, output_tokens: 50 }
@@ -17,6 +17,23 @@ describe('guardCost', () => {
     expect(costOf('claude-sonnet-5', usage)).toBeNull()
     // claude-opus-5-5's $4 in and $20 out are the highest known: $0.006 for each unpriced call.
     expect(guardCost({ model: 'claude-sonnet-5', usage, judge_model: null, judge_usage: usage })).toBeCloseTo(0.012, 12)
+  })
+
+  it('adds what a row charges its cut runs beyond their printed usage', () => {
+    expect(guardCost({ model: 'claude-opus-5-5', usage: USAGE, cut_usd: 1.2 })).toBeCloseTo(0.024 + 1.2, 12)
+  })
+})
+
+describe('cutUsd', () => {
+  it("charges a run cut before its result event up to its reserve, as its output is a floor", () => {
+    // $0.024 printed: the rest of the $1.50 reserve is charged beside it.
+    expect(cutUsd({ model: 'claude-opus-5-5', usage: USAGE, cut: true })).toBeCloseTo(RUN_RESERVE_USD - 0.024, 12)
+    // $2 printed already passes the reserve: nothing beside it.
+    expect(cutUsd({ model: 'claude-opus-5-5', usage: { input_tokens: 500_000, output_tokens: 0 }, cut: true })).toBe(0)
+  })
+
+  it('charges nothing beside a run that printed its result event', () => {
+    expect(cutUsd({ model: 'claude-opus-5-5', usage: USAGE })).toBe(0)
   })
 })
 

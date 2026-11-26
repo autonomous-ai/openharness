@@ -62,6 +62,11 @@ describe('parseClaudeStream', () => {
       cache_creation_input_tokens: 16204, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 16204 } })
   })
 
+  it('marks a run with no result event as cut, its usage a floor, and a run that has one as not', () => {
+    expect(parseClaudeStream(sample.trimEnd().split('\n').slice(0, -1).join('\n')).cut).toBe(true)
+    expect(parseClaudeStream(sample).cut).toBeUndefined()
+  })
+
   it('reads the session id, the skill names and the Claude Code version from the init event', () => {
     const { init } = parseClaudeStream(sample)
     expect(init?.session_id).toBe('33e45fcd-6340-4955-9475-b6a75cd2be40')
