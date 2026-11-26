@@ -92,11 +92,11 @@ describe('the device without the app', () => {
     desk = undefined
     backend = undefined
   })
-  /** A daemon of its own and a desk; with [relay], signed in to it as ME, for the dial's words; its fake Claude Code
-   *  [claudeVersion], by default recent enough for Harness's plugin. */
-  const fresh = async (env: Record<string, string> = {}, relay?: FakeBackend, claudeVersion?: string): Promise<{ d: IsolatedDaemon; desk: Desk }> => {
+  /** A daemon of its own and a desk; with [relay], signed in to it as ME, for the dial's words. Its fake Claude Code is
+   *  the suite's, older than Harness's plugin needs: the dial's setup installs nothing, so the plugin is on only where a test turns it on. */
+  const fresh = async (env: Record<string, string> = {}, relay?: FakeBackend): Promise<{ d: IsolatedDaemon; desk: Desk }> => {
     const signIn = relay ? { BACKEND_WS_URL: relay.wsUrl, WEB_URL: relay.httpUrl, ADAPTER_COMPUTER_ID: ME.computerId } : {}
-    const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false', ...signIn, ...env }, claudeVersion })
+    const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false', ...signIn, ...env } })
     daemon = d
     const file = join(d.root, 'dials.json')
     d.env.HARNESSD_TEST_DIAL_PORT = file
@@ -328,8 +328,8 @@ describe('the device without the app', () => {
   })
 
   it('voice at Claude Code in Ghostty, with no route, says how to reach it', async () => {
-    // Below the plugin's least Claude Code: the dial's setup installs nothing, so the plugin's entry is the test's alone.
-    const { d, desk } = await fresh({}, undefined, '2.1.200')
+    // The dial's setup installs nothing (fresh): the plugin's entry is the test's alone.
+    const { d, desk } = await fresh()
     const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
     await heard(dial, (m) => m.t === 'agents.end', 'the first list')
     const engine = await startOutside(d, 'in-ghostty', { TERM_PROGRAM: 'ghostty' })
@@ -404,8 +404,8 @@ describe('the device without the app', () => {
     const words = `${'word '.repeat(2_000).trim()}.`
     expect(words).toHaveLength(10_000)
     relay.speech = words
-    // Spoken again while the dial is told to restart Claude Code: until its mod's poll is held.
-    const answer = await spokenTo(dial, engine.id, 'e2e-long')
+    // Spoken again while the dial is told to enable Harness's plugin: until its mod's poll is held.
+    const answer = await spokenTo(dial, engine.id, 'e2e-long', [CLAUDE_PLUGIN_OFF])
     // Sent, with no text: the dial's frame cannot hold 10,000 characters, and it has nothing to confirm.
     expect(answer).toMatchObject({ t: 'voice.transcript', agentId: engine.id, needsConfirm: false })
     expect(answer).not.toHaveProperty('text')
@@ -433,8 +433,8 @@ describe('the device without the app', () => {
     const poll = inboxPoll(d, panel.sessionId)
     const words = 'run the panel tests'
     relay.speech = words
-    // Spoken again while the dial is told to restart Claude Code: until its mod's poll is held.
-    const answer = await spokenTo(dial, panel.id, 'e2e-panel')
+    // Spoken again while the dial is told to enable Harness's plugin: until its mod's poll is held.
+    const answer = await spokenTo(dial, panel.id, 'e2e-panel', [CLAUDE_PLUGIN_OFF])
     expect(answer).toMatchObject({ t: 'voice.transcript', text: words, agentId: panel.id })
     expect(await poll).toEqual({ status: 200, body: { text: words } })
     expect(d.log()).not.toContain(words)

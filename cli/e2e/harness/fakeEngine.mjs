@@ -263,13 +263,16 @@ const FAKE_MARKETPLACE = 'openharness'
 const FAKE_PLUGIN = 'harness-device@openharness'
 
 /**
- * A local marketplace as Claude Code takes one: a path starting `./`, `../`, `/` or `~/`, read against the process's own
- * folder, holding `.claude-plugin/marketplace.json` named FAKE_MARKETPLACE. Its absolute path, or Claude Code's failure
- * line. Any other source, such as a GitHub repository, is refused: the product adds none, and the fake fetches nothing.
+ * A local marketplace as Claude Code takes one: an absolute path (Windows' `C:\...` there) or one starting `./`, `../` or
+ * `~/`, read against the process's own folder, holding `.claude-plugin/marketplace.json` named FAKE_MARKETPLACE. Its
+ * absolute path, or Claude Code's failure line. Any other source, such as a GitHub repository, is refused: the product
+ * adds none, and the fake fetches nothing.
  */
 function localMarketplace(config, source) {
-  if (!/^(\.\/|\.\.\/|\/|~\/)/.test(source ?? '')) return { error: `Failed to add marketplace: ${source} is not a local marketplace path` }
-  const path = source.startsWith('~/') ? join(homedir(), source.slice(2)) : resolve(process.cwd(), source)
+  if (!source || !(isAbsolute(source) || /^(\.\.?|~)[\\/]/.test(source))) {
+    return { error: `Failed to add marketplace: ${source} is not a local marketplace path` }
+  }
+  const path = /^~[\\/]/.test(source) ? join(homedir(), source.slice(2)) : resolve(process.cwd(), source)
   const manifest = join(path, '.claude-plugin', 'marketplace.json')
   if (!existsSync(manifest)) return { error: `Failed to add marketplace: Marketplace file not found at ${manifest}` }
   // Real paths: on macOS the process's folder reads /private/var where the root may say /var.
@@ -278,6 +281,23 @@ function localMarketplace(config, source) {
   try { name = JSON.parse(readFileSync(manifest, 'utf8')).name } catch { /* not JSON: refused below */ }
   if (name !== FAKE_MARKETPLACE) return { error: `Failed to add marketplace: Invalid marketplace file at ${manifest}` }
   return { path }
+}
+
+/**
+ * Why Claude Code would not install [id] from a local marketplace: its marketplace.json does not list it, or the folder
+ * it names holds no `.claude-plugin/plugin.json`. Undefined when it would.
+ */
+function notInstallable(marketplace, id) {
+  const name = id.split('@')[0]
+  let listed = false
+  try {
+    listed = JSON.parse(readFileSync(join(marketplace.path, '.claude-plugin', 'marketplace.json'), 'utf8')).plugins
+      ?.some((plugin) => plugin?.name === name) === true
+  } catch { /* unreadable: not listed */ }
+  if (!listed) return `Plugin "${name}" not found in marketplace "${FAKE_MARKETPLACE}"`
+  const manifest = join(marketplace.path, 'plugins', name, '.claude-plugin', 'plugin.json')
+  if (!existsSync(manifest)) return `Plugin manifest not found at ${manifest}`
+  return undefined
 }
 
 /** A plugin's version as Claude Code reads it in place from a local marketplace: its plugin.json's, else `unknown`. */
@@ -361,6 +381,8 @@ function claudePlugin(config, argv) {
   }
   const installed = state.installed.includes(id)
   if (verb === 'install') {
+    const refused = notInstallable(marketplace, id)
+    if (refused) fail(`Failed to install plugin "${id}": ${refused}`)
     if (!installed) state.installed.push(id)
     saveState()
     turn(id, true)

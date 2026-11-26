@@ -26,7 +26,7 @@ import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 import { FakeOrca } from './harness/fakeOrca.js'
 import { IN_ORCA, InOrca } from './harness/inOrca.js'
-import { inboxPoll, spokenTo, UNREACHED } from './harness/modInbox.js'
+import { inboxPoll, spokenTo } from './harness/modInbox.js'
 
 /** At once, not a held hook's seconds: room for the CLI's own start on a loaded machine. */
 const AT_ONCE_MS = 30_000
@@ -228,7 +228,7 @@ describe('the dial shows Claude Code waiting outside Harness', () => {
     const poll = inboxPoll(d, chat.sessionId)
     const words = 'run the chat tests'
     relay.speech = words
-    expect(await spokenTo(dial, chat.id, 'spoken-chat', [ORCA_CHAT_REFUSAL, ...UNREACHED]))
+    expect(await spokenTo(dial, chat.id, 'spoken-chat', [ORCA_CHAT_REFUSAL]))
       .toMatchObject({ t: 'voice.transcript', agentId: chat.id, text: words })
     expect(await poll).toEqual({ status: 200, body: { text: words } })
     await until('the route said', () => d.log().includes('[device] voice · mod') || undefined, 30_000, 50)

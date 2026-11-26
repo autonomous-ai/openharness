@@ -14,14 +14,14 @@ import { randomUUID } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
-import { observedAgentId } from '../src/cable/hosts/observed.js'
+import { CLAUDE_PLUGIN_OFF, observedAgentId } from '../src/cable/hosts/observed.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 import { FakeOrca } from './harness/fakeOrca.js'
 import { IN_ORCA, InOrca } from './harness/inOrca.js'
-import { speakOnce, spokenTo, UNREACHED } from './harness/modInbox.js'
+import { speakOnce, spokenTo } from './harness/modInbox.js'
 import { orcaHostCc } from './harness/orcaHost.js'
 import { Outside } from './harness/outsideAgent.js'
 import { PrivateWezterm, weztermBinary } from './harness/weztermMux.js'
@@ -122,7 +122,7 @@ describe("the dial's words reach the agent's own pane, Orca", () => {
     expect(row.caps).toContain('v')
 
     // 2. The dial's words go to its own terminal, by its handle: spoken again while the maker is not read yet.
-    expect(await spokenTo(dial, claude.id, 'spoken')).toMatchObject({ t: 'voice.transcript', text: WORDS, agentId: claude.id })
+    expect(await spokenTo(dial, claude.id, 'spoken', [CLAUDE_PLUGIN_OFF])).toMatchObject({ t: 'voice.transcript', text: WORDS, agentId: claude.id })
     await said(d, '[device] voice · orca')
     expect(sends(orca)).toEqual([`terminal send --terminal ${handle} --text=${WORDS} --enter --wait-submit 5 --json`])
 
@@ -150,7 +150,7 @@ describe("the dial's words reach the agent's own pane, Orca", () => {
     await said(d, HELD)
 
     // 2. The dial's words are typed into the WezTerm pane, and none through Orca: spoken again until its pane is read.
-    expect(await spokenTo(dial, id, 'spoken')).toMatchObject({ t: 'voice.transcript', text: WORDS, agentId: id })
+    expect(await spokenTo(dial, id, 'spoken', [CLAUDE_PLUGIN_OFF])).toMatchObject({ t: 'voice.transcript', text: WORDS, agentId: id })
     await until('the words in its pane', async () => (await mux.text(pane)).includes(WORDS), 30_000, 100)
     await said(d, '[device] voice · wezterm')
     expect(sends(orca)).toEqual([])
@@ -176,9 +176,7 @@ describe("the dial's words reach the agent's own pane, Orca", () => {
 
     // 2. Words spoken to it are refused before any route with how to reach it: none through Orca, and no turn in the
     // engine.
-    const refused = await speakOnce(dial, agent.id, 'spoken-1')
-    expect(refused).toMatchObject({ t: 'voice.error' })
-    expect(UNREACHED).toContain(refused.message)
+    expect(await speakOnce(dial, agent.id, 'spoken-1')).toMatchObject({ t: 'voice.error', message: CLAUDE_PLUGIN_OFF })
     expect(lines(d, '[device] voice · ')).toEqual([])
     expect(sends(orca)).toEqual([])
     expect(agent.ran(d, 'UserPromptSubmit')).toBe(false)

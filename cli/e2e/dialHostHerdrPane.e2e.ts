@@ -15,7 +15,7 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
-import { observedAgentId } from '../src/cable/hosts/observed.js'
+import { CLAUDE_PLUGIN_OFF, observedAgentId } from '../src/cable/hosts/observed.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
@@ -114,7 +114,6 @@ describe.skipIf(!herdrBinary)("the dial's words reach the agent's own pane, herd
     return { d, dial, herdr: server }
   }
 
-  /** The dial speaks to [id]: the transcript or the refusal it is answered with. */
   /** No folder, words, session, pane or terminal of the case's in the daemon's log. */
   const logNames = (d: IsolatedDaemon, ...secrets: string[]): void => {
     for (const secret of [WORDS, ...secrets]) expect(d.log()).not.toContain(secret)
@@ -137,7 +136,7 @@ describe.skipIf(!herdrBinary)("the dial's words reach the agent's own pane, herd
     }, 30_000, 100)
 
     // 2. The dial's words are typed into its own herdr pane: spoken again while the dial is told how to reach it.
-    expect(await spokenTo(dial, id, 'spoken')).toMatchObject({ t: 'voice.transcript', text: WORDS, agentId: id })
+    expect(await spokenTo(dial, id, 'spoken', [CLAUDE_PLUGIN_OFF])).toMatchObject({ t: 'voice.transcript', text: WORDS, agentId: id })
     await until('the words on its pane', async () => (await herdr.screen(pane)).includes(WORDS), 30_000, 100)
     await said(d, '[device] voice · herdr')
 
@@ -171,7 +170,7 @@ describe.skipIf(!herdrBinary)("the dial's words reach the agent's own pane, herd
 
     // 2. The dial's words are typed into the WezTerm pane, and none into the herdr pane: spoken again until its pane is
     //    read.
-    expect(await spokenTo(dial, id, 'spoken')).toMatchObject({ t: 'voice.transcript', text: WORDS, agentId: id })
+    expect(await spokenTo(dial, id, 'spoken', [CLAUDE_PLUGIN_OFF])).toMatchObject({ t: 'voice.transcript', text: WORDS, agentId: id })
     await until('the words in its pane', async () => (await mux.text(pane)).includes(WORDS), 30_000, 100)
     await said(d, '[device] voice · wezterm')
     expect(await herdr.screen(shell)).not.toContain(WORDS)

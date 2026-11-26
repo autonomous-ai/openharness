@@ -11,13 +11,13 @@
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
-import { observedAgentId } from '../src/cable/hosts/observed.js'
+import { CLAUDE_PLUGIN_OFF, observedAgentId } from '../src/cable/hosts/observed.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 import { KittyWindows, kittyInstalled } from './harness/kittyWindow.js'
-import { speakOnce, spokenTo, UNREACHED } from './harness/modInbox.js'
+import { speakOnce, spokenTo } from './harness/modInbox.js'
 import { X11Desk } from './harness/x11Desk.js'
 
 /** The machine a daemon signs in as, to hear its dial's words: the daemon asks its backend for each transcript. */
@@ -113,7 +113,7 @@ describe.skipIf(!kittyInstalled)('the dial reaches an agent in a kitty window', 
     // again while the dial is told how to reach it.
     relay.speech = 'run the spoken tests'
     const since = dial.messages.length
-    expect(await spokenTo(dial, id, 'spoken')).toMatchObject({ t: 'voice.transcript', text: 'run the spoken tests', agentId: id })
+    expect(await spokenTo(dial, id, 'spoken', [CLAUDE_PLUGIN_OFF])).toMatchObject({ t: 'voice.transcript', text: 'run the spoken tests', agentId: id })
     await until('the words in its window', async () => (await windows.text(agent)).includes('run the spoken tests'), 30_000, 100)
     await until('its turn in the engine', () => d.hookLog().includes(`UserPromptSubmit session=${agent.sessionId} ran`), 30_000, 100)
     await dial.next((m) => m.t === 'turn.done' && m.agentId === id, 45_000, 'its turn done', since)
@@ -139,9 +139,7 @@ describe.skipIf(!kittyInstalled)('the dial reaches an agent in a kitty window', 
     // Claude Code's: voice, refused with how to reach it, as nothing types into these windows.
     for (const [i, id] of ids.entries()) {
       expect(rows.find((r) => r.id === id)!.caps).toContain('v')
-      const refused = await speakOnce(dial, id, `refused-${i}`)
-      expect(refused).toMatchObject({ t: 'voice.error' })
-      expect(UNREACHED).toContain(refused.message)
+      expect(await speakOnce(dial, id, `refused-${i}`)).toMatchObject({ t: 'voice.error', message: CLAUDE_PLUGIN_OFF })
     }
     expect(logged(d, OFF)).toBe(1)
   })

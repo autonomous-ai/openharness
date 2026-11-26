@@ -1,6 +1,7 @@
 import { request } from 'node:http'
+import { setTimeout as delay } from 'node:timers/promises'
 import { heardClip } from '../../src/cable/__fixtures__/heardClip.js'
-import { CLAUDE_PLUGIN_OFF, CLAUDE_RESTART } from '../../src/cable/hosts/observed.js'
+import { CLAUDE_RESTART } from '../../src/cable/hosts/observed.js'
 import { until, type IsolatedDaemon } from './daemon.js'
 import type { DialMessage, FakeDial } from './fakeDial.js'
 
@@ -24,10 +25,8 @@ export function inboxPoll(d: Pick<IsolatedDaemon, 'socketPath'>, sessionId: stri
   })
 }
 
-/** What the dial is told of a Claude Code session no route reaches yet (cable/hosts/observed.ts voiceRefusal): Harness's
- *  plugin not on in its home yet, or on and its mod not polling yet. */
-export const UNREACHED: readonly string[] = [CLAUDE_PLUGIN_OFF, CLAUDE_RESTART]
-/** How often typed words go again while no poll took them: the dial hears nothing of a turn.send no route took. */
+/** How often the dial speaks or types again while no route took its words: the dial hears nothing of a turn.send no
+ *  route took, and a person speaks again only once they heard the refusal. */
 const SEND_AGAIN_MS = 1_000
 
 /** The dial speaks to [agentId] once, as a person does, on upload [uploadId]: the transcript or the refusal it is
@@ -43,22 +42,30 @@ export function speakOnce(dial: FakeDial, agentId: string, uploadId: string, ms 
 
 /**
  * The dial speaks to [agentId] until a route takes its words. A Claude Code session has `v` before any does (its mod's
- * first poll held, its pane's maker read), and until then the dial is refused with one of [unreached]. The daemon gives
- * no other sign that a route is there (PM decision 6, 2026-11-26), so the dial speaks again as a person would at that
- * sentence, each time on a new upload once the last was answered. The first other answer; at [ms] in all, the last
- * refusal, for the test to read.
+ * first poll held, its pane's maker read), and until then the dial is refused with the one sentence of [unreached] the
+ * case can get (cable/hosts/observed.ts voiceRefusal): by default that its mod does not poll yet. The daemon gives no
+ * other sign that a route is there (PM decision 6, 2026-11-26), so the dial speaks again as a person would at that
+ * sentence, on a new upload once the last was answered and no sooner than SEND_AGAIN_MS after the last start. The first
+ * other answer; at [ms] in all, the last refusal, for the test to read.
  */
-export async function spokenTo(dial: FakeDial, agentId: string, uploadId: string, unreached = UNREACHED, ms = 45_000): Promise<DialMessage> {
+export async function spokenTo(dial: FakeDial, agentId: string, uploadId: string, unreached: readonly string[] = [CLAUDE_RESTART],
+  ms = 45_000): Promise<DialMessage> {
   const deadline = Date.now() + ms
-  let last: DialMessage | undefined
+  let refused: DialMessage | undefined
   for (let tries = 1; ; tries++) {
+    const begun = Date.now()
+    let answer: DialMessage
     try {
-      last = await speakOnce(dial, agentId, `${uploadId}-${tries}`, Math.max(deadline - Date.now(), 0))
+      answer = await speakOnce(dial, agentId, `${uploadId}-${tries}`, Math.max(deadline - begun, 0))
     } catch (error) {
-      if (last) return last
-      throw error
+      if (!refused) throw error
+      throw new Error(`no answer to try ${tries}; try ${tries - 1} was refused with "${String(refused.message)}"`, { cause: error })
     }
-    if (last.t !== 'voice.error' || !unreached.includes(String(last.message)) || Date.now() >= deadline) return last
+    if (answer.t !== 'voice.error' || !unreached.includes(String(answer.message))) return answer
+    refused = answer
+    const next = begun + SEND_AGAIN_MS
+    if (next >= deadline) return refused
+    await delay(Math.max(next - Date.now(), 0))
   }
 }
 
