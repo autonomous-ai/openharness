@@ -145,6 +145,19 @@ describe('Claude Code\'s marketplace inside cli.js', () => {
     expect(() => readClaudePluginBundle('1.2.3', binary)).toThrow(/text/)
   })
 
+  // Claude Code installs each plugin from where the marketplace says: one from anywhere but a folder the build carries
+  // would not be in Harness's folder.
+  it('a marketplace that lists a plugin the build does not carry fails the build', () => {
+    for (const source of ['./plugins/other', '../plugins/harness', { source: 'github', repo: 'autonomous-ai/openharness' }]) {
+      const root = aRoot()
+      const path = join(root, '.claude-plugin/marketplace.json')
+      const marketplace = JSON.parse(readFileSync(path, 'utf8')) as { plugins: object[] }
+      marketplace.plugins.push({ name: 'other', source })
+      writeFileSync(path, JSON.stringify(marketplace))
+      expect(() => readClaudePluginBundle('1.2.3', root), JSON.stringify(source)).toThrow(/carries/)
+    }
+  })
+
   it('a build run from another folder is the same bytes', () => {
     const script = `const { readClaudePluginBundle } = await import(${JSON.stringify(new URL('../../scripts/lib/claudePluginBundle.mjs', import.meta.url).href)})
 process.stdout.write(readClaudePluginBundle('1.2.3'))`
