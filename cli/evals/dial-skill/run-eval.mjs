@@ -35,6 +35,8 @@
 //   - a failed run's spend is added as it happens, its retry starts only while
 //     its case would, and every attempt ends within the agent's share of
 //     --timeout-s, so no case ends while its agent still spends
+//   - a run or probe cut before its result event printed only a floor of its
+//     output, so it is charged at least its reserve (cut_usd on its row)
 //   - a claude run whose init differs from its probe's is kept as unlisted; the
 //     pass then starts no new case, lets those in flight finish, and exits 5
 //   - a variant's hooks.json and harness-answers.json are staged only when
