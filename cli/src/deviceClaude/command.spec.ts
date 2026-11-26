@@ -26,7 +26,7 @@ import { daemonPipe } from '../lib/windows/daemonPipe.js'
 import { ensureDaemonToken } from '../lib/windows/pipeAuth.js'
 import { harnessPath } from '../config/harnessHome.js'
 import { DEVICE_USAGE, runDeviceCommand, takesConnect, type DeviceDeps } from './command.js'
-import type { ClaudeRun } from '../devices/claudePlugin.js'
+import type { ClaudePluginFiles, ClaudeRun } from '../devices/claudePlugin.js'
 import { VSCODE_EXTENSION_ID, type VscodeEditor, type VscodeExtensionDeps } from '../devices/vscodeExtension.js'
 import { orcaPluginRun, type OrcaPluginFiles, type OrcaPluginRun } from '../devices/orcaPlugin.js'
 import { fakeOrcaCli, type FakeOrcaCli } from '../testing/fakeOrcaCli.js'
@@ -107,6 +107,26 @@ async function devicesAt(dataDir: string): Promise<string> {
 
 type Answers = Record<string, { code: number; stdout?: string; stderr?: string }>
 
+/** The marketplace cli.js carries, cut to a manifest and the hook Claude Code runs. */
+const FILES: ClaudePluginFiles = {
+  files: { '.claude-plugin/marketplace.json': '{"name":"openharness"}\n', 'plugins/harness-device/hooks/asked': '#!/bin/sh\n' },
+  executable: ['plugins/harness-device/hooks/asked'],
+}
+
+/** [run], each call kept with the folder it ran in. */
+function watched(run: ClaudeRun) {
+  const calls: Array<{ args: string; cwd?: string }> = []
+  const watching: ClaudeRun = async (args, timeoutMs, cwd) => {
+    calls.push({ args: args.join(' '), cwd })
+    return run(args, timeoutMs, cwd)
+  }
+  return { calls, run: watching }
+}
+
+/** The calls that change Claude Code: every one but the version and the lists. */
+const READS = new Set(['--version', 'plugin list --json', 'plugin marketplace list --json'])
+const writes = (calls: Array<{ args: string; cwd?: string }>) => calls.filter((call) => !READS.has(call.args))
+
 /** A `claude` 2.1.287 with nothing installed, whose calls answer from [answers] by their arguments. */
 function fakeClaude(answers: Answers = {}): ClaudeRun {
   const table: typeof answers = { '--version': { code: 0, stdout: '2.1.287 (Claude Code)\n' }, 'plugin list --json': { code: 0, stdout: '[]' }, ...answers }
@@ -125,7 +145,7 @@ async function device(argv: string[], deps: Partial<DeviceDeps> = {}) {
   const err: string[] = []
   const code = await runDeviceCommand(argv, {
     dataDir: folder(), home: folder(), port: PORT, platform: 'darwin', stdin: chunks(), claude: () => fakeClaude(),
-    orcaHomes: async () => [], claudeIn: () => null, git: async () => '/usr/bin/git',
+    orcaHomes: async () => [], claudeIn: () => null, claudeFiles: () => FILES,
     // The command's own: CLAUDE_CONFIG_DIR stands for ~/.claude unless a spec runs it in an Orca terminal.
     defaultClaudeHome: claudeHome,
     codexHome: folder(), codex: () => true, env: {}, cwd: '/',
@@ -177,16 +197,42 @@ describe('harness device claude', () => {
 
   it('enable prints its error on stderr and exits 1', async () => {
     const claude = fakeClaude({ 'plugin install harness-device@openharness --scope user': { code: 1, stderr: 'Plugin not found\nmore' } })
-    expect(await device(['claude', 'enable'], { claude: () => claude })).toEqual({ code: 1, out: [], err: ['Plugin not found'] })
+    expect(await device(['claude', 'enable'], { claude: () => claude })).toEqual({ code: 1, out: [], err: ['Plugin not found (exit 1)'] })
     expect(await device(['claude', 'enable'], { claude: () => null }))
       .toEqual({ code: 1, out: [], err: ['Claude Code 2.1.287 or later is needed.'] })
   })
 
-  it('enable with no git says to install it', async () => {
-    expect(await device(['claude', 'enable'], { git: async () => null })).toEqual({
-      code: 1, out: [],
-      err: ['Git is not installed on this computer, and the dial\'s Claude Code plugin is installed with it. Install Git, then try again.'],
-    })
+  it('enable writes the folder and adds it, with no git', async () => {
+    const home = folder()
+    const { calls, run } = watched(fakeClaude())
+    expect(await device(['claude', 'enable'], { home, claude: () => run })).toEqual({ code: 0, out: [], err: [] })
+    const marketplace = harnessPath('claude-marketplace', home)
+    expect(writes(calls)).toEqual([
+      { args: 'plugin marketplace add ./claude-marketplace', cwd: dirname(marketplace) },
+      { args: 'plugin install harness-device@openharness --scope user' },
+    ])
+    expect(readFileSync(join(marketplace, '.claude-plugin', 'marketplace.json'), 'utf8')).toBe(FILES.files['.claude-plugin/marketplace.json'])
+  })
+
+  it('enable that fails prints Claude Code\'s line and its reason', async () => {
+    const claude = fakeClaude({ 'plugin marketplace add ./claude-marketplace': { code: 1, stderr: 'xcrun: error: invalid active developer path\n' } })
+    expect(await device(['claude', 'enable'], { claude: () => claude }))
+      .toEqual({ code: 1, out: [], err: ['xcrun: error: invalid active developer path (no xcode tools)'] })
+  })
+
+  it('enable from the sources runs no claude', async () => {
+    const claude = () => { throw new Error('a build that carries no plugin looks for no claude') }
+    expect(await device(['claude', 'enable'], { claude, claudeFiles: () => null }))
+      .toEqual({ code: 1, out: [], err: ['This Harness build carries no Claude Code plugin.'] })
+  })
+
+  it('enable that cannot write the folder says so, with its code', async () => {
+    const home = folder()
+    readOnly(home)
+    const { calls, run } = watched(fakeClaude())
+    expect(await device(['claude', 'enable'], { home, claude: () => run }))
+      .toEqual({ code: 1, out: [], err: ["Harness could not write Claude Code's plugin folder. (EACCES)"] })
+    expect(writes(calls)).toEqual([])
   })
 
   it('disable exits 0', async () => {
@@ -921,7 +967,7 @@ describe('Orca\'s Claude Code homes', () => {
       orcaHomes: async () => { asked++; return [folder()] },
       claudeIn: () => { asked++; return fakeClaude(listed(false)) },
     }
-    expect(await device(['claude', 'enable'], { claude: () => failedInstall, ...orca })).toEqual({ code: 1, out: [], err: ['Plugin not found'] })
+    expect(await device(['claude', 'enable'], { claude: () => failedInstall, ...orca })).toEqual({ code: 1, out: [], err: ['Plugin not found (exit 1)'] })
     const locked = folder()
     readOnly(locked)
     expect(await device(['claude', 'enable'], { dataDir: locked, ...orca })).toEqual({ code: 1, out: [], err: ['Could not save the dial setting.'] })
