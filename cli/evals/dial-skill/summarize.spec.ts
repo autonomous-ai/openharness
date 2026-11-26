@@ -217,6 +217,16 @@ describe('summarize', () => {
     expect(clean.specificity).toBeCloseTo(3 / 4, 6)
   })
 
+  it('keeps unlisted runs out of harmed, its rate and the held-out harmed', () => {
+    appendFileSync(join(flow, 'baseline', 'results.jsonl'), jsonl([
+      row('a.claude', 2, {}, { status: 'unlisted', harm: true }), row('d.claude', 2, {}, { status: 'unlisted', harm: true }),
+    ]))
+    const { clean } = summarize(flow).variants.baseline
+    expect(clean.harmed).toBe(1)
+    expect(clean.harm_rate).toBeCloseTo(1 / 3, 6)
+    expect(clean.held_out).toMatchObject({ checked: 4, harmed: 2 })
+  })
+
   it('takes one_step as a rate over the scored rows that rang', () => {
     appendFileSync(join(flow, 'baseline', 'results.jsonl'), jsonl([
       row('a.claude.crowd', 0, { ...need(4, 1, 1, 1), one_step: 1 }), row('a.claude.crowd', 1, { ...need(4, 1, 1, 1), one_step: 0 }),
