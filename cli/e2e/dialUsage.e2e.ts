@@ -14,6 +14,10 @@
  * drawer row with no question frame, counted as held quiet and opening no wait. A second session, the same but for
  * another app in front, rings: a second notice of the first session within its minute would be limited, and waiting the
  * minute out is a fixed sleep.
+ *
+ * A third session's notice is held quiet the same way, mid-turn, and is asked once its turn ends with the person gone to
+ * another app (Part 2b): a question frame under a new id, as the dial mutes the id it holds, the turn's end silent, and
+ * the rouse counted.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -133,14 +137,17 @@ describe('the dial\'s usage counts', () => {
     window.close()
     window = undefined
 
-    // Two outside sessions in Ghostty, each prompted by the person in its own app: its UserPromptSubmit hook, the one
+    // Three outside sessions in Ghostty, each prompted by the person in its own app: its UserPromptSubmit hook, the one
     // source that answers a notice and that says the person is there.
     const there = await Outside.start(d, 'PRIVATE_NOTICE_CANARY', { TERM_PROGRAM: 'ghostty' })
     outsides.push(there)
     const away = await Outside.start(d, 'PRIVATE_AWAY_CANARY', { TERM_PROGRAM: 'ghostty' })
     outsides.push(away)
+    const left = await Outside.start(d, 'PRIVATE_LEFT_CANARY', { TERM_PROGRAM: 'ghostty' })
+    outsides.push(left)
     await dial.next((m) => m.t === 'agent' && m.id === there.id, 45_000, 'the first outside session listed')
     await dial.next((m) => m.t === 'agent' && m.id === away.id, 45_000, 'the second outside session listed')
+    await dial.next((m) => m.t === 'agent' && m.id === left.id, 45_000, 'the third outside session listed')
     const caller = (session: Outside): Record<string, string> => ({ CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: session.sessionId })
     /** The app in front, as `harness hardware watch` tells the devices' listener; the dial turned to [session], and the
      *  list it asks after as the barrier: the turn is taken once the list's end comes back. */
@@ -195,19 +202,44 @@ describe('the dial\'s usage counts', () => {
       .toMatchObject({ id: expect.stringMatching(/^shown:/) })
     away.type('connected')
 
+    // The person there mid-turn: the notice is held quiet. Once they go to another app, its turn's end asks it, and the
+    // end itself makes no second sound.
+    await withFront('ghostty', left)
+    const held = dial.messages.length
+    left.type('!until left-turn')
+    await dial.next((m) => m.t === 'turn.started' && m.agentId === left.id, 45_000, 'its turn started', held)
+    expect(await notify(caller(left), join(d.projectsDir, left.folder), ['PRIVATE_LEFT_CANARY needs the VPN', '--waiting']))
+      .toMatchObject({ code: 0, out: 'shown' })
+    const row = await dial.next((m) => m.t === 'notif.replace' && items(m).some((item) => item.agentId === left.id), 45_000, 'its row', held)
+    expect(items(row).find((item) => item.agentId === left.id)).toMatchObject({ question: true })
+    // The list asked after the turn to another app is the barrier: the hold, a turn of the loop behind the row, is in.
+    await withFront('kitty', left)
+    expect(dial.messages.slice(held).filter((m) => m.t === 'question' && m.agentId === left.id)).toEqual([])
+    const silentEnds = (): number => d.log().split('\n').filter((entry) => entry.includes('[cable] notify · silent · rule:notice · notice · 0ms')).length
+    const before = silentEnds()
+    const released = dial.messages.length
+    writeFileSync(join(d.engineConfig.root, 'left-turn.release'), '')
+    expect(await dial.next((m) => m.t === 'question' && m.agentId === left.id, 60_000, 'the rouse', released))
+      .toMatchObject({ id: expect.stringMatching(/^shown:/) })
+    expect(await dial.next((m) => m.t === 'summary' && m.agentId === left.id, 60_000, 'its answer', released))
+      .toMatchObject({ tier: 'silent' })
+    await until('the silent end in the daemon\'s log', () => silentEnds() > before || null, 30_000, 50)
+    await left.idle(d)
+    await turn(left, 'connected', 2)
+
     // Claude Code's skill is written because the case's Harness Claude agent is listed (cable/dialHomeSetup.ts).
     const skill = { dial_notice_installation_days: 1, dial_notice_claude_installation_days: 1,
-      dial_skill_claude_installation_days: 1, dial_skill_codex_installation_days: 1, dial_notice_claude: 2,
-      dial_notice_shown: 2, dial_notice_waiting: 2, dial_notice_answered_10m: 2, dial_notice_present: 1,
-      dial_notice_present_answered_10m: 1 }
+      dial_skill_claude_installation_days: 1, dial_skill_codex_installation_days: 1, dial_notice_claude: 3,
+      dial_notice_shown: 3, dial_notice_waiting: 3, dial_notice_answered_10m: 3, dial_notice_present: 2,
+      dial_notice_present_answered_10m: 2, dial_notice_present_roused: 1 }
     const expected = { dial_connected_installation_days: 1, dial_used_installation_days: 1,
       dial_engine_claude_installation_days: 1, dial_host_harness_installation_days: 1, dial_open_ok: 1, ...skill }
     await until('the devices to write the day', () => {
       if (!existsSync(usageFile())) return null
       const counts = (JSON.parse(readFileSync(usageFile(), 'utf8')) as { days: Record<string, Record<string, number>> }).days[day] ?? {}
-      // One wait, the rung notice's: the quiet one opened none.
+      // Two waits, the rung notice's and the roused one's: the quiet one never asked opened none.
       const waits = Object.entries(counts).filter(([metric]) => metric.startsWith('dial_wait_')).reduce((n, [, value]) => n + value, 0)
-      return (Object.entries(expected).every(([metric, value]) => counts[metric] === value) && waits === 1) || null
+      return (Object.entries(expected).every(([metric, value]) => counts[metric] === value) && waits === 2) || null
     }, 30_000, 500)
     // The gateway's tick took the day into its queue, which the restart keeps.
     await until('the gateway to take the day', () => taken(day).dial_open_ok === 1 || null, TAKEN_MS, 1_000)
@@ -230,7 +262,7 @@ describe('the dial\'s usage counts', () => {
     const wire = JSON.stringify(backend.productUsage!.reports)
     const file = readFileSync(usageFile(), 'utf8')
     for (const secret of ['PRIVATE_', cwd, agentId, SERIAL, MAC, machine.name, machine.machineId, machine.computerId, machine.token,
-      there.sessionId, away.sessionId]) {
+      there.sessionId, away.sessionId, left.sessionId]) {
       expect(wire).not.toContain(secret)
       expect(file).not.toContain(secret)
     }
