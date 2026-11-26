@@ -1297,11 +1297,11 @@ describe('the opener says just before it brings an app', () => {
   const TERMINAL = 'com.apple.Terminal'
 
   /** The opener on [platform], each step in one sequence: `bringing`, every command run, each Linux and Windows raise,
-   *  and the focus of a made-up pane that taps before its app. Each agent's window is [o.window]. */
-  function sequenced(platform: NodeJS.Platform, o: { raise?: boolean; windows?: boolean; window?: Window } = {}) {
+   *  and the focus of a made-up pane that taps before its app, or [o.tap]. Each agent's window is [o.window]. */
+  function sequenced(platform: NodeJS.Platform, o: { raise?: boolean; windows?: boolean; window?: Window; tap?: HostAdapter['tap'] } = {}) {
     const seq: string[] = []
     const noted = async (step: string) => { seq.push(step); return true }
-    const adapter: HostAdapter = { id: 'made-up', tap: 'before', paneOf: () => PANE, canFocus: () => true, focus: () => noted('focus') }
+    const adapter: HostAdapter = { id: 'made-up', tap: o.tap ?? 'before', paneOf: () => PANE, canFocus: () => true, focus: () => noted('focus') }
     const opener = createOpenActions({
       run: async (file, args) => { seq.push([file, ...args].join(' ')); return { code: 0, stdout: '' } },
       platform,
@@ -1357,5 +1357,12 @@ describe('the opener says just before it brings an app', () => {
     expect(await none.opener.open('a1', { pane: PANE })).toBe(true)
     expect(await none.opener.open('a1', {})).toBe(false)
     expect(none.seq).toEqual(['focus'])
+  })
+
+  // The Claude app's link, cursor-folder's `open -b` and Herdr.app's focus bring their app themselves.
+  it('bringing is told just before the focus of a pane that brings its app instead of the opener', async () => {
+    const mac = sequenced('darwin', { tap: 'instead' })
+    expect(await mac.opener.open('a1', { bundle: TERMINAL, pane: PANE })).toBe(true)
+    expect(mac.seq).toEqual(['bringing', 'focus'])
   })
 })
