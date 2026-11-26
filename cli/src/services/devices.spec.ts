@@ -2138,6 +2138,23 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
         { roots: [join(env.CODEX_HOME, 'sessions'), join(codexHome, 'sessions')], maxBytes: 262_144, deadlineMs: 1000 })
     })
 
+    // A hook names the transcript's path, and the plugin's settings are read synchronously at a voice start: a home outside
+    // Claude Code's own folders, such as one on a network share, is never read.
+    it('a voice start reads Harness\'s plugin in the Orca home a transcript lies in, and the default home\'s for a home outside Claude Code\'s folders', async () => {
+      const account = orcaHome('claude-1', 'projects')
+      const elsewhere = orcaHome('elsewhere', 'projects')
+      for (const home of [account, elsewhere]) {
+        writeFileSync(join(home, 'settings.json'), JSON.stringify({ enabledPlugins: { 'harness-device@openharness': true } }))
+      }
+      const { port } = start({ faults: ['fleet'], orcaHomes: fakeOrcaHomes({ claude: [account], codex: [] }) })
+      const inTerminal = { hostHints: { TERM_PROGRAM: 'Apple_Terminal' } }
+      port.observed(hook('session-start', { ...inTerminal, transcriptPath: join(account, 'projects', '-work-api', 'sess-1.jsonl') }))
+      await machineList(port)
+      expect(host().voiceRefusal(ID)).toBe(CLAUDE_RESTART)
+      port.observed(hook('turn-start', { ...inTerminal, transcriptPath: join(elsewhere, 'projects', '-work-api', 'sess-1.jsonl') }))
+      expect(host().voiceRefusal(ID)).toBe(CLAUDE_PLUGIN_OFF)
+    })
+
     it('a scan reads Orca\'s homes again when the list is old, and waits for it', async () => {
       vi.useFakeTimers()
       const orca = fakeOrcaHomes()

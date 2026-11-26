@@ -2316,6 +2316,8 @@ describe('ObservedSource actions', () => {
     const HOME = '/home/u/.claude-work'
     const SETTINGS = join(HOME, 'settings.json')
     const IN_HOME = join(HOME, 'projects', '-work-proj', 's1.jsonl')
+    /** Claude Code's own folders, as devices.ts gives them: HOME's is one. */
+    const claudeRoots = () => ['/home/u/.claude/projects', join(HOME, 'projects')]
 
     it('the two sentences, word for word', () => {
       expect(CLAUDE_PLUGIN_OFF).toBe('For voice, run: harness device claude enable')
@@ -2343,7 +2345,7 @@ describe('ObservedSource actions', () => {
         plugin.set(SETTINGS, state)
         // The default home's is never asked for a session whose transcript names its own.
         plugin.set(join(actions.claudeHome, 'settings.json'), 'on')
-        const { src, ev } = setup({ actions })
+        const { src, ev } = setup({ actions, claudeRoots })
         src.ingest(ev('session-start', { transcriptPath: IN_HOME }))
         expect(src.voiceRefusal(src.list()[0]), state).toBe(CLAUDE_PLUGIN_OFF)
         expect(actions.claudePluginState.mock.calls, state).toEqual([[SETTINGS]])
@@ -2354,7 +2356,7 @@ describe('ObservedSource actions', () => {
     it('with the plugin on and no mod polling, the restart sentence', () => {
       const { actions, plugin, ready } = fakeActions()
       plugin.set(SETTINGS, 'on')
-      const { src, ev } = setup({ actions })
+      const { src, ev } = setup({ actions, claudeRoots })
       src.ingest(ev('session-start', { transcriptPath: IN_HOME }))
       const [agent] = src.list()
       expect(src.voiceRefusal(agent)).toBe(CLAUDE_RESTART)
@@ -2370,7 +2372,23 @@ describe('ObservedSource actions', () => {
       for (const transcriptPath of [undefined, 'projects/p/s.jsonl', `${HOME}/projects/../x/s.jsonl`, join(HOME, 'projects', 'p', 's.txt')]) {
         const { actions, plugin } = fakeActions()
         plugin.set(join(actions.claudeHome, 'settings.json'), 'on')
-        const { src, ev } = setup({ actions })
+        const { src, ev } = setup({ actions, claudeRoots })
+        src.ingest(ev('session-start', { transcriptPath }))
+        expect(src.voiceRefusal(src.list()[0]), transcriptPath).toBe(CLAUDE_RESTART)
+        expect(actions.claudePluginState.mock.calls, transcriptPath).toEqual([[join(actions.claudeHome, 'settings.json')]])
+      }
+    })
+
+    // The read is synchronous: a home on a network share (/net/<host>/..., \\host\share\...) would hold the devices, and
+    // every dial, at a voice start. A home is taken from a hook's path only inside Claude Code's own folders.
+    it('a transcript path outside Claude Code\'s own folders names no home: the default home decides', () => {
+      // With no folders given, none is Claude Code's.
+      for (const [home, roots] of [['/net/host', claudeRoots], [HOME, undefined]] as const) {
+        const transcriptPath = join(home, 'projects', '-work-proj', 's1.jsonl')
+        const { actions, plugin } = fakeActions()
+        plugin.set(join(actions.claudeHome, 'settings.json'), 'on')
+        plugin.set(join(home, 'settings.json'), 'off')
+        const { src, ev } = setup({ actions, ...(roots ? { claudeRoots: roots } : {}) })
         src.ingest(ev('session-start', { transcriptPath }))
         expect(src.voiceRefusal(src.list()[0]), transcriptPath).toBe(CLAUDE_RESTART)
         expect(actions.claudePluginState.mock.calls, transcriptPath).toEqual([[join(actions.claudeHome, 'settings.json')]])
