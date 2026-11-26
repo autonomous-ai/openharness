@@ -125,10 +125,10 @@ describe('codexServed', () => {
       .toEqual([{ client: { app: 'terminal-app', tty: '/dev/ttys005', pid: 500 } }])
   })
 
-  it('places an app\'s own server by its app, reading no TUI', async () => {
+  it('says nothing of an app\'s own server, reading no TUI: it runs with its app\'s environment, so its hints place it', async () => {
     const d = deps([...TERMINAL_TUI, row(40, 1, CHATGPT), row(41, 40, CHATGPT_CODEX, `${CHATGPT_CODEX} app-server --analytics-default-enabled`)],
       { 500: { tty: 'ttys005', cwd: '/work/app' } })
-    expect(await codexServed([{ pid: 41, cwd: '/work/app' }], d)).toEqual([{ client: { app: 'codex', pid: 41 } }])
+    expect(await codexServed([{ pid: 41, cwd: '/work/app' }], d)).toEqual([undefined])
     expect(d.tty).not.toHaveBeenCalled()
     expect(d.cwds).not.toHaveBeenCalled()
   })
