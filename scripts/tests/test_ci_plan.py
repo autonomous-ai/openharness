@@ -829,11 +829,16 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(planner.select(["plugins/harness-device-orca-x/a.ts"])[0], {"cross-read-scan", "windows-e2e"})
 
     def test_the_claude_code_plugins_belong_to_the_cli_suite(self):
-        # cli/build.mjs inlines both into cli.js as Claude Code's marketplace: a change to them changes cli.js.
-        for path in ("plugins/harness-device/hooks/device.js", "plugins/harness/skills/harness/SKILL.md"):
+        # cli/build.mjs inlines both and the repository's marketplace into cli.js as Claude Code's marketplace: a change
+        # to them changes cli.js, which linux-e2e and dial-hosts run, as they do the Orca and VS Code plugins'.
+        for path in ("plugins/harness-device/hooks/device.js", "plugins/harness/skills/harness/SKILL.md",
+                     ".claude-plugin/marketplace.json"):
             with self.subTest(path=path):
                 self.assertEqual(planner.owners(path), {"cli"})
                 self.assertIn("cli", planner.select([path])[0])
+                self.assertIsNone(planner.shared_input(path))
+                for e2e in ("linux-e2e", "dial-hosts"):
+                    self.assertTrue(planner.reads(e2e, path), e2e)
 
     def test_the_windows_installer_selects_the_pty_suite(self):
         # installer/'s model and steps are plain Rust that tests on Linux; pty-checks runs them (installer spec §4.1).
