@@ -90,8 +90,8 @@ single task, and 5 follows it.
   (stdout of a child, then the claim), as on macOS.
 - **Spawning:** `execFile` through `patientExec`, `windowsHide: true`, never `detached` (`docs/windows-rules.md` §1).
   Test children (`ping.exe`) the same.
-- **No protocol change**; `serve` gains nothing; nothing under `cli/src/core/` or `cli/src/services/`, so
-  `npm run test:core` does not apply.
+- **No protocol change**; `serve` gains nothing; no code under `cli/src/core/` or `cli/src/services/`. One spec there
+  changes (`services/devices.spec.ts`, its served lookup's mock), so `npm run test:core` is required.
 - Every behavior task: a red commit (the failing tests), then a green commit. `npm run typecheck` when a TS type or
   signature changes. Comments say why and name the spec. Names follow `docs/naming-system.md`.
 - **This Mac is shared:** a task runs only its own specs, `npm run typecheck` and `cargo test --locked` in `pty/`; any
@@ -434,9 +434,9 @@ one commit.
 3. **Rust on the Mac:** `cd pty && cargo test --locked`. Expected: pass (pure helpers, parse). The Windows code compiles
    only in `windows.yml`.
 4. **The repo's local check for `pty/*`** (PR CI does not run it): `python3 scripts/local-checks.py --run` from a clean
-   tree at the final commit selects `cli-pty` (`npm run test:terminal-contract`, macOS); paste its receipt into the PR
-   body. Wait for the PM's go (shared Mac, never beside an eval). `npm run test:core`: not needed, no task touches
-   `cli/src/core/` or `cli/src/services/`.
+   tree at the final commit selects `cli-pty` (`npm run test:terminal-contract`, macOS) and `cli-core`
+   (`npm run test:core`, since `services/devices.spec.ts` changed); paste its receipt into the PR body. Wait for the
+   PM's go (shared Mac, never beside an eval).
 5. **PR CI (automatic, GitHub):** `pty-checks` (Linux `cargo test`: the pure helpers and the `unsupported` path);
    the CLI's Linux unit checks (`src/architecture.spec.ts` among them: the core's process loads no new file);
    `windows-e2e` → `.github/workflows/windows.yml` on x64 and arm64 (`pty/` is Windows-only code to
