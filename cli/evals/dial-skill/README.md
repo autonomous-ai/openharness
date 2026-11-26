@@ -82,7 +82,8 @@ approves the harness: one changed or planted after approval stops the pass.
 
 The runner stages whatever `cli/src/devices/dialSkill.ts` holds, not the variant's folder: before a pass, set that
 file to the variant's text (`flow/v<k>/SKILL.before.md` for the text round k started from, `flow/v<k>/SKILL.md` for
-round k's). The baseline is the text the file holds as checked in. Set `CLAUDE_CONFIG_DIR` to the session's profile
+round k's). The baseline is the text the file holds as checked in. A variant whose `SKILL.md` is not that file's text
+is refused with exit 2 before anything runs. Set `CLAUDE_CONFIG_DIR` to the session's profile
 (never `~/.claude`) and take `marker=$(mktemp)`. From `cli/`:
 
 ```sh

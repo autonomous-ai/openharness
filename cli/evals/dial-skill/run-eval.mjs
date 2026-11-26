@@ -49,6 +49,7 @@ import { closeSync, constants as FS, existsSync, fstatSync, ftruncateSync, lstat
 import { constants as OS } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DIAL_SKILL } from '../../src/devices/dialSkill.ts';
 import { AGENT_CONFIG, claudeArgs, isDefaultProfile, killAgents, runAgent } from './lib/agents.ts';
 import { gradeRun } from './lib/grade.ts';
 import { claudeJudge, JUDGE_EFFORT, JUDGE_MODEL, RUBRIC_SHA } from './lib/judge.ts';
@@ -679,6 +680,13 @@ async function main() {
     catch { eprint(`${statePath} exists but is not valid JSON - fix it before spending a pass`); process.exit(2); }
   }
   checkHarness(statePath, st, args.approveHarness);
+  // The runner stages whatever dialSkill.ts holds, not the variant's SKILL.md: a round run under another text would
+  // spend a pass on false numbers.
+  const variantSkill = readIfPresent(join(vdir, 'SKILL.md'));
+  if (variantSkill != null && variantSkill !== DIAL_SKILL) {
+    eprint(`${args.variant}/SKILL.md is not the text cli/src/devices/dialSkill.ts holds: set the file to it, then rerun`);
+    process.exit(2);
+  }
   const ctx = { ...args, state: st, ...variantHooks(vdir, st) }; // dial skill eval: read once, after the gate
 
   // Resume: which (id, rep) pairs already have a row?
