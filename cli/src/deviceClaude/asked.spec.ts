@@ -151,6 +151,14 @@ describe('askedSummary', () => {
   it('a tab or a newline in the summary becomes a space, as does every other control character', () => {
     expect(askedSummary('Read', { file_path: '/repo/a\tb\nc\u0007d\u007fe\u0085f' })).toBe('/repo/a b c d e f')
   })
+
+  it('text of control characters alone says nothing, and none is left as a space at either end', () => {
+    expect(askedSummary('AskUserQuestion', { questions: [{ question: '\u0007\u0000', header: 'Database' }] })).toBe('Database')
+    expect(askedSummary('AskUserQuestion', { questions: [{ question: '\u0085', header: '\u0007' }] })).toBe('A question')
+    expect(askedSummary('AskUserQuestion', { questions: [{ question: 'Which?\u0085' }] })).toBe('Which?')
+    expect(askedSummary('Bash', { command: '\u0007\nnpm test' })).toBe('npm test')
+    expect(askedSummary('Read', { file_path: '\u0007' })).toBe('Read')
+  })
 })
 
 describe('runAsked', () => {
