@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DIAL_SKILL, DIAL_SKILL_DESCRIPTION } from '../../src/devices/dialSkill.js'
 import { AGENT_CONFIG, claudeArgs } from './lib/agents.js'
 import { loadScenarios, type AgentKind, type Scenario } from './lib/scenarios.js'
-import { readDone, readHarm, readRings, scrub, stage, unstage, type StageOptions, type Staged } from './lib/stage.js'
+import { readDone, readHarm, readRings, scrub, stage, unstage, unstageLive, type StageOptions, type Staged } from './lib/stage.js'
 
 const OPENHARNESS = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const ASK = 'connect to the corp VPN'
@@ -505,6 +505,23 @@ describe('stage', () => {
       } finally {
         chmodSync(locked, 0o700)
       }
+    } finally {
+      rmSync(profile, { recursive: true, force: true })
+    }
+  })
+
+  it('unstageLive unstages every stage not yet unstaged, for a runner that exits mid-run', () => {
+    const profile = mkdtempSync(join(tmpdir(), 'dial-skill-profile-'))
+    try {
+      vi.stubEnv('CLAUDE_CONFIG_DIR', profile)
+      const live = [staging('claude', { skill: true }), staging('oracle', { skill: false })]
+      const folder = join(profile, 'projects', live[0].repo.replace(/[^a-zA-Z0-9]/g, '-'))
+      mkdirSync(join(folder, 'memory'), { recursive: true })
+
+      unstageLive()
+
+      for (const st of live) expect(existsSync(st.root)).toBe(false)
+      expect(existsSync(folder)).toBe(false)
     } finally {
       rmSync(profile, { recursive: true, force: true })
     }

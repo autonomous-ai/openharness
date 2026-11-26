@@ -1006,16 +1006,19 @@ setTimeout(() => {}, 60_000)`)
     expect(callsMade()).toEqual(['probe', 'agent'])
   })
 
-  it.each(['SIGINT', 'SIGTERM', 'SIGHUP'] as const)('kills the agent it started when it gets %s, then exits as the signal would', async (signal) => {
+  it.each((['agent', 'probe'] as const).flatMap((who) => (['SIGINT', 'SIGTERM', 'SIGHUP'] as const).map((signal) => [who, signal] as const)))(
+    'kills the %s it started when it gets %s, exits as the signal would, and leaves nothing staged', async (who, signal) => {
     // A FIFO the agent holds open: its read side ends when the agent is gone, though the agent is not the test's child.
     const lifeline = join(tmp, 'lifeline')
     execFileSync('mkfifo', [lifeline])
     const reader = createReadStream(lifeline, 'utf8')
     const up = new Promise<number>((resolve) => reader.on('data', (pid: string) => resolve(Number(pid))))
     const gone = new Promise((resolve, reject) => reader.on('end', resolve).on('error', reject))
-    fakeClaude(`const fs = require('node:fs')
-fs.writeSync(fs.openSync(${JSON.stringify(lifeline)}, 'w'), String(process.pid))
-setTimeout(() => {}, 60_000)`)
+    const hang = `fs.writeSync(fs.openSync(${JSON.stringify(lifeline)}, 'w'), String(process.pid))
+setTimeout(() => {}, 60_000)`
+    // A probe hangs once it has saved its session in the profile.
+    if (who === 'probe') fakeClaude(agent('claude-opus-5-5'), JUDGE, { probe: hang })
+    else fakeClaude(hang)
     const child = spawn(...runner(['--variant', 'baseline', '--agents', 'claude', '--cases', 'add-version-flag', '--approve-harness']))
     const exited = new Promise((resolve) => child.on('exit', (code, sig) => resolve({ code, signal: sig })))
     const agentPid = await up
@@ -1024,6 +1027,8 @@ setTimeout(() => {}, 60_000)`)
 
       expect(await exited).toEqual({ code: 128 + constants.signals[signal], signal: null })
       await gone
+      expect(readdirSync(join(tmp, 'profile', 'projects'))).toEqual([])
+      expect(readdirSync(join(tmp, 'runs', 'dial-skill-eval'))).toEqual([])
     } finally {
       try { process.kill(agentPid, 'SIGKILL') } catch { /* gone, as it should be */ }
     }
