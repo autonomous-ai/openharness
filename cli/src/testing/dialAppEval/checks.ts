@@ -610,13 +610,15 @@ function tmuxShows(argv: string[], world: World): string | undefined {
  * it in the window: a select on the watch's tabs stream naming its tab (check.tab when its client moved), with raise on a
  * tap and without on a rest, and none naming another tab; a tmux or herdr row also its own pane selected by its own
  * multiplexer, and no other session's; a tap brings iTerm2 forward, timed to the latest of those parts, and a rest raises
- * nothing. Order between them is not graded. With no select of its tab nothing was shown, so a dead rest passes no part.
+ * nothing, unless the check brings, when it is graded as a tap. Order between them is not graded. With no select of its
+ * tab nothing was shown, so a dead rest passes no part.
  */
 function itermOpenParts(check: CheckOf<'open'>, session: SessionDef, world: World, w: Window | undefined,
   commands: Seen['commands'], inputs: string[]): Part[] {
   const want = check.tab ?? sessionTab(session)
   const place = itermPlaceOf(session)
-  const rest = inputOn(world, w, session.key)?.kind === 'swipe'
+  // A rest that brings the agent's app (check.brings) is graded as the tap it stands for.
+  const rest = !check.brings && inputOn(world, w, session.key)?.kind === 'swipe'
   // The devices' selects alone: the stream's open, the person's tab reports and its end carry a type or no tab.
   const selects = w ? (world.seen.streams ?? [])
     .filter((l) => l.window === TABS_STREAM && l.line.type === undefined && l.line.tab !== undefined && within(l.at, w)) : []

@@ -232,8 +232,10 @@ export type Check = { id: string; dim: Dimension; after?: Label; at?: Label } & 
   | { kind: 'ring'; page: Page; expect: SessionKey[]; timed?: true; apart?: SessionKey[] }
   | { kind: 'focus'; session: SessionKey; noBounce?: true }
   | { kind: 'still'; ms: number }
-  /** tab: iTerm2 only, the label a select must name when the session's client moved to another tab (I13, IH2). */
-  | { kind: 'open'; session: SessionKey; link: boolean; tab?: string }
+  /** tab: iTerm2 only, the label a select must name when the session's client moved to another tab (I13, IH2).
+   *  brings: iTerm2 only, a rest on tmux's or herdr's page with the agent's app behind brings it, as a tap does, and is
+   *  graded as one (Diego 2026-11-26, docs/plans/2026-11-26-dial-mux-host-pages-design.md §4). */
+  | { kind: 'open'; session: SessionKey; link: boolean; tab?: string; brings?: true }
   | { kind: 'state'; session: SessionKey; state: 'working' | 'needs-you' | 'done' | 'idle' }
   /** path: the words must reach the session by it; one by another path does not reach it, and counts against once. */
   | { kind: 'voice'; session: SessionKey; text: string; path?: Delivery['path'] }

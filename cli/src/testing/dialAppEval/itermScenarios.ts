@@ -487,7 +487,7 @@ export function itermScenarios(): Scenario[] {
         { kind: 'wait', ms: 2 * S },
       ],
       checks: [
-        { id: 'open', kind: 'open', dim: 'D3', session: 'd', link: false, after: 'rest', at: 'restC' },
+        { id: 'open', kind: 'open', dim: 'D3', session: 'd', link: false, brings: true, after: 'rest', at: 'restC' },
         ringKeptOn('herdr', ['c', 'd'], { apart: ['a'], after: 'front', at: 'restC' }),
         { id: 'openC', kind: 'open', dim: 'D3', session: 'c', link: false, after: 'restC' },
       ],
