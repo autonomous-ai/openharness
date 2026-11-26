@@ -348,8 +348,9 @@ const imageName = (executable: string): string => win32.basename(executable).rep
  * The machine's processes, looked at once per view: the list is read on first use and kept. Open files are read
  * through lsof. Windows has no lsof: there `openFilesOf` asks harness-pty files, once a pid a view, for the table's
  * processes whose image starts with a command, and keeps a row only when its start marker is the table's (a pid
- * reused between the two reads holds another process's files). Past 32 such processes, or when the run fails, the
- * read is marked failed: an empty map alone would say "nothing holds it" and let an adoption through.
+ * reused between the two reads holds another process's files). Past 32 such processes, when the run fails, or when it
+ * left out one that still runs, the read is marked failed: an empty map alone would say "nothing holds it" and let an
+ * adoption through.
  * `openFiles` by pid stays unknown there, without spawning.
  */
 export function processView(
@@ -378,10 +379,15 @@ export function processView(
       if (!rows.length) return held
       const found = rows.length > WINDOWS_FILES_MAX_PIDS ? null : await read(rows.map((row) => row.pid))
       if (!found) { externalReadFailed(new Error('process files unavailable'), 'process files'); return held }
+      // A process left out while it still runs (elevated, another user's, past a bound) may hold the rollout: unknown.
+      // One that exited holds nothing, nor does one whose pid was reused between the reads.
+      let unread = false
       for (const row of rows) {
         const open = found.get(row.pid)
-        if (open && open.startMarker === row.startMarker) held.set(row.pid, open.files)
+        if (!open) unread ||= alive(row.pid)
+        else if (open.startMarker === row.startMarker) held.set(row.pid, open.files)
       }
+      if (unread) externalReadFailed(new Error('process files not read'), 'process files')
       return held
     },
     cwds: cwds ?? ((pids) => processCwds(pids, exec, platform, readlink, read)),
