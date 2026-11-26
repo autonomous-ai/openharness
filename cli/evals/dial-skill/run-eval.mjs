@@ -29,7 +29,8 @@
 //     (lib/probe.ts, rows in probes.jsonl); a failed probe refuses the pass
 //   - a probe or case starts only while all the flow has spent, a reserve for it
 //     and one for each case in flight fit under --spend-cap-usd (lib/spend.ts);
-//     else the pass starts nothing more and exits 4; a retry of a failed run starts
+//     a worker whose case does not fit beside those in flight stops; once one
+//     does not fit alone, the pass starts nothing more and exits 4; a retry of a failed run starts
 //     only while its case would, its failed attempts already added, and every
 //     attempt ends within the agent's share of --timeout-s
 //   - a claude run whose init differs from its probe's is kept as unlisted; the
@@ -733,8 +734,9 @@ async function main() {
     // unlisted run, Claude Code changed since its probe and every new case would be unlisted too, until a rerun probes.
     while (i < tasks.length && !ctx.stop && !ctx.unlisted && !capped) {
       // dial skill eval: a case's reserve is taken before its first await, so cases started together can never carry
-      // the total past the cap. Once one does not fit, none starts: a rerun resumes.
-      if (!ctx.guard.mayStart(inFlight)) { capped = true; break; }
+      // the total past the cap. A worker whose case does not fit beside those in flight leaves the pass to their
+      // workers; once one does not fit alone, the cap is reached, none starts, and a rerun resumes.
+      if (!ctx.guard.mayStart(inFlight)) { if (!ctx.guard.mayStart(0)) capped = true; break; }
       inFlight++;
       const { c, rep } = tasks[i++];
       const safeId = pathSafeId(c.id);
