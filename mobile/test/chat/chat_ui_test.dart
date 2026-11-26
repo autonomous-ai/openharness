@@ -110,10 +110,16 @@ void main() {
 
       await tester.tap(find.text('1. Yes'));
       expect(pressed, '1');
+      expect(find.byType(TypingDots), findsNothing);
 
       conversation.ingest('turn_started', {'userMessage': 'Deploy it'});
       await tester.pump();
       expect(find.textContaining('Working'), findsOneWidget);
+      expect(find.byType(TypingDots), findsOneWidget);
+
+      conversation.ingest('turn_ended', {});
+      await tester.pump();
+      expect(find.byType(TypingDots), findsNothing);
       await tester.pumpWidget(const SizedBox());
     },
   );

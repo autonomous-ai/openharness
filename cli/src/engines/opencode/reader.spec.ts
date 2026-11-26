@@ -279,6 +279,41 @@ d('OpencodeReader (OpenCode 2 session_message)', () => {
     expect(lastOpencodeTurnText(messages)).toEqual({ userMessage: 'list the files', assistantText: 'Two files.' })
   })
 
+  // OpenCode 2.4.1 (Harness OS, 2026-11-26): a step's text, reasoning and tools are rows of `session_part`, and its
+  // `content` is empty. Read as before, Chat UI showed the question and never the answer.
+  it('reads a 2.4 step from its session_part rows, and streams them as they grow', async () => {
+    run(db, 'CREATE TABLE session_part (message_id TEXT NOT NULL, session_id TEXT NOT NULL, ordinal INTEGER NOT NULL, type TEXT NOT NULL, call_id TEXT, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (message_id, ordinal));')
+    const part = (message: string, ordinal: number, data: Record<string, unknown>): void =>
+      run(db, `INSERT INTO session_part VALUES ('${message}','${SID}',${ordinal},'${data.type}',NULL,${ordinal},${ordinal},'${esc(data)}');`)
+    user(1, 'list the files')
+    assistant(2, [], 'stop')
+    part('msg_002', 0, tool('call_1', 'shell', 'completed', { command: 'ls' }, 'a.txt'))
+    part('msg_002', 1, { type: 'text', text: 'One file.' })
+    idle(3, 'succeeded')
+
+    const messages = await readOpencodeMessages(db, SID)
+    expect(messages[1].parts.map((p) => p.type)).toEqual(['tool', 'text', 'step-finish'])
+    expect(opencodeMessagesToEvents(messages).map((e) => e.type)).toEqual(['user_message', 'tool_start', 'tool_end', 'text_delta', 'done'])
+    expect(lastOpencodeTurnText(messages)).toEqual({ userMessage: 'list the files', assistantText: 'One file.' })
+
+    const events: LiveEvent[] = []
+    const reader = new OpencodeReader({ dbPath: db, sessionId: SID, onEvents: (e) => events.push(...e), pollMs: 30 })
+    await reader.start()
+    user(4, 'hi')
+    assistant(5, [])
+    part('msg_005', 0, { type: 'text', text: 'Hel' })
+    await wait(150)
+    run(db, `UPDATE session_part SET data='${esc({ type: 'text', text: 'Hello!' })}' WHERE message_id='msg_005';`)
+    run(db, `UPDATE session_message SET data='${esc({ content: [], finish: 'stop', time: { created: 5 } })}' WHERE id='msg_005';`)
+    idle(6, 'succeeded')
+    await wait(150)
+    reader.stop()
+
+    const text = events.filter((e) => e.type === 'text_delta').map((e) => (e as { payload: { content: string } }).payload.content).join('')
+    expect(text).toBe('Hello!')
+    expect(events.map((e) => e.type)).toEqual(expect.arrayContaining(['turn_started', 'text_delta', 'turn_ended']))
+  })
+
   it('orders by time_created, then seq — not by seq alone, which can disagree with real time in a real store', async () => {
     user(1, 'first', { id: 'msg_z', tc: 100 })
     assistant(2, [{ type: 'text', text: 'second' }], 'stop', { id: 'msg_a', tc: 100 })

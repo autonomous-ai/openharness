@@ -101,8 +101,10 @@ def inspect(iso):
         names = set(inventory)
         assert 'labwc' not in names, 'Fresh image contains a duplicate compositor'
         assert set(compositor['runtime_dependencies']) <= names, 'A compositor library is missing'
-        version = json.loads(read('usr/share/harness-os/lock.json'))['version']
+        lock = json.loads(read('usr/share/harness-os/lock.json'))
+        version = lock['version']
         assert version == manifest['version'], 'Image version differs from the build manifest'
+        assert inventory['opencode'] == lock['opencode'], 'The image carries an OpenCode other than lock.json pins'
         package_version = inventory['harness-os']
         expected_version = re.escape(version.replace('-preview.', 'pre')) + r'\.r\d+\.g' + manifest['source_commit'][:10] + '-1'
         assert re.fullmatch(expected_version, package_version), 'OS package version differs from the image source'

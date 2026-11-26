@@ -6,7 +6,7 @@ import { stripAnsi } from '../engines/kit/pane.js'
 export type { PaneInspection, PaneTakeover } from '../engines/facets/screen.js'
 import { parseRuntimeProfile } from './runtimeProfileWire.js'
 import type { RegisteredSession } from './registry.js'
-import type { OpencodeModelTarget, OpencodePickerRow } from '../engines/opencode/runtimeProfile.js'
+import type { OpencodeModelTarget, OpencodePickerRow, OpencodeVariantRow } from '../engines/opencode/runtimeProfile.js'
 import { engineNow, isOtherEngine, loadEngine, type InProcessModules, type OtherEngine } from '../engines/inProcess.js'
 import {
   type CursorModelTarget,
@@ -424,6 +424,9 @@ export class RuntimeProfileController {
    * OpenCode 2's `/effort`: a `Select variant` picker with a typed filter, as `/models` is. Enter only once the row the
    * filter puts first is the variant itself: `high` also leaves `xhigh` in the list, and the first row is the one Enter
    * takes. Anything else closes the picker and refuses.
+   *
+   * OpenCode 2.4's has no filter and a cursor instead (`OpencodeVariantRow.cursor`): it is walked there one arrow at a
+   * time, the cursor read again after each, as Pi's ladder is.
    */
   private async pickOpencodeVariant(session: RegisteredSession, variant: string, open: boolean): Promise<void> {
     const opencode = this.engine('opencode')
@@ -431,6 +434,9 @@ export class RuntimeProfileController {
       const before = opencode.countOpencodeVariantPickers(stripAnsi(await this.deps.capture(session.agentId, 100) ?? ''))
       await this.openOpencodePicker(session, '/effort', (v) => opencode.countOpencodeVariantPickers(v) > before)
     }
+    const drawn = await this.waitPane(session.agentId, (v) => !!opencode.parseOpencodeVariantRows(stripAnsi(v))?.length, PICKER_STEP_MS)
+    const rows = drawn ? opencode.parseOpencodeVariantRows(stripAnsi(drawn)) : null
+    if (rows?.some((row) => row.cursor)) return this.walkOpencodeVariant(session, variant, rows)
     if (!await this.deps.sendLiteral(session.agentId, variant)) throw new RuntimeProfileControlError('TMUX_FAILED')
     const first = (v: string) => opencode.parseOpencodeVariantRows(stripAnsi(v))?.[0]?.name.toLowerCase()
     if (!await this.waitPane(session.agentId, (v) => first(v) === variant.toLowerCase(), PICKER_STEP_MS)) {
@@ -438,6 +444,33 @@ export class RuntimeProfileController {
       throw new RuntimeProfileControlError('EFFORT_UNSUPPORTED')
     }
     if (!await this.deps.sendKey(session.agentId, 'Enter')) throw new RuntimeProfileControlError('TMUX_FAILED')
+  }
+
+  /** OpenCode 2.4's variant picker: the cursor moved to [variant] one arrow at a time, then Enter. */
+  private async walkOpencodeVariant(session: RegisteredSession, variant: string, first: OpencodeVariantRow[]): Promise<void> {
+    const opencode = this.engine('opencode')
+    const refuse = async (): Promise<never> => {
+      await this.deps.sendKey(session.agentId, 'Escape')
+      throw new RuntimeProfileControlError('EFFORT_UNSUPPORTED')
+    }
+    let rows = first
+    for (let guard = 0; guard <= first.length; guard++) {
+      const target = rows.findIndex((row) => row.name.toLowerCase() === variant.toLowerCase())
+      const cursor = rows.findIndex((row) => row.cursor)
+      if (target < 0 || cursor < 0) return refuse()
+      if (target === cursor) {
+        if (!await this.deps.sendKey(session.agentId, 'Enter')) throw new RuntimeProfileControlError('TMUX_FAILED')
+        return
+      }
+      if (!await this.deps.sendKey(session.agentId, target > cursor ? 'Down' : 'Up')) throw new RuntimeProfileControlError('TMUX_FAILED')
+      const moved = await this.waitPane(session.agentId, (v) => {
+        const next = opencode.parseOpencodeVariantRows(stripAnsi(v))
+        return !!next && next.findIndex((row) => row.cursor) !== cursor
+      }, PICKER_STEP_MS)
+      if (!moved) return refuse()
+      rows = opencode.parseOpencodeVariantRows(stripAnsi(moved)) ?? []
+    }
+    return refuse()
   }
 
   /**
