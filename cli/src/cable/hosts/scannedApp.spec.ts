@@ -77,6 +77,28 @@ describe('scannedApps on macOS', () => {
     expect(await scannedApps([500], d)).toEqual(new Map([[500, 'orca']]))
   })
 
+  // Orca's terminal host is a helper bundle of its own, copied under Orca's folder and run by launchd (RECORDED_ORCA.macos):
+  // no Orca process is above it, and its bundle id is not recorded, so no table lists it. Eval O11 found a tmux client in
+  // an Orca terminal in no app on macOS, its agent off Orca's page (2026-11-26).
+  it("a session and a tmux client in Orca's terminals are in Orca by its terminal host, whatever bundle id the helper reads", async () => {
+    const [agent, shell, login, host] = RECORDED_ORCA.macos.chain.map(({ comm }) => comm)
+    const mine = host.replace('/Users/u/', `${HOME}/`)
+    const cases: Array<[string, Record<string, string>]> = [
+      // At its recorded path, outside the roots read: no id is read.
+      [host, {}],
+      // In the person's home, where its id is read: one no table lists, or none.
+      [mine, { [mine.slice(0, mine.indexOf('/Contents/'))]: 'com.example.helper' }],
+      [mine, {}],
+    ]
+    for (const [top, bundles] of cases) {
+      const d = deps([
+        [500, 499, agent], [499, 498, shell], [498, 497, login],
+        [600, 599, 'tmux'], [599, 598, shell], [598, 497, login], [497, 1, top],
+      ], bundles)
+      expect(await scannedApps([500, 600], d), top).toEqual(new Map([[500, 'orca'], [600, 'orca']]))
+    }
+  })
+
   it('the outermost .app of a helper\'s path is the app', async () => {
     const d = deps([
       [700, 690, 'claude'], [690, 680, '/bin/zsh'],

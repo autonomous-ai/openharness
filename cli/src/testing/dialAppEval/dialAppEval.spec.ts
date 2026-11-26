@@ -402,11 +402,11 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
   const o11 = MAIN.find((s) => s.id === 'O11')!
   const orcaTerminal = (argv: string[], verb: string): boolean =>
     ORCA_PROGRAMS.includes(programOf(argv)) && argv[1] === 'terminal' && argv[2] === verb
-  /** A tmux run that shows c's pane: Linux's `select-window ; select-pane`, as the client's app is Orca there, or macOS's
-   *  `switch-client`, as tier A finds no app for the client there (docs/plans/2026-11-25-dial-orca-tmux-o11-plan.md,
-   *  "What this plan decides"; checks.ts tmuxShows). */
+  /** A tmux run that shows c's pane, `select-window ; select-pane` on its own session, as tmux's lookup finds the client
+   *  in Orca: by Orca's main process on Linux, by Orca's terminal host on macOS (scannedApp.ts scannedApps). Eval O11
+   *  found macOS's client in no app, c off Orca's page and its tap switching no Orca terminal (2026-11-26). */
   const showsC = (argv: string[]): boolean => {
-    const verb = argv.findIndex((arg) => arg === 'select-pane' || arg === 'switch-client')
+    const verb = argv.indexOf('select-pane')
     return programOf(argv) === 'tmux' && verb > 0 && flagOf(argv.slice(verb), '-t') === 'pane:c'
   }
 
