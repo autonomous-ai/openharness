@@ -4,7 +4,9 @@ import { dirname, join } from 'node:path'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { UNSETTLED } from './types.js'
+import { externalEvidence } from '../evidence.js'
+import type { WindowsFilesRead } from '../../windows/openFiles.js'
+import { type RunningProcess, UNSETTLED } from './types.js'
 import {
   absoluteFolder, entries, epochMs, fileStamp, firstLine, folderKey, gitCommonDir, harnessTtys, listProcesses, parseLine, parseLsof, parseTtys,
   processAlive, processCwds, processTtys, processView, readHead, readJson, readTail, readText, record, run, sameProject, scanMemo, text, UUID,
@@ -243,18 +245,89 @@ describe('processes', () => {
     expect(calls).toHaveLength(1)
   })
 
-  it('reads no tty, cwd or open file on Windows, and runs neither ps nor lsof', async () => {
+  // Windows has no lsof and no /proc: harness-pty files says which disk files a process holds and its folder
+  // (docs/plans/2026-11-27-windows-codex-rescan-design.md).
+  const ROLLOUT = 'C:\\Users\\me\\.codex\\sessions\\2026\\11\\27\\rollout-x.jsonl'
+  const windowsTable = (): Array<RunningProcess & { startMarker?: string }> => [
+    { pid: 400, ppid: 1, executable: 'Code.exe', args: '', startMarker: 'w:1' },
+    { pid: 409, ppid: 400, executable: 'pwsh.exe', args: '', startMarker: 'w:2' },
+    { pid: 420, ppid: 409, executable: 'node.exe', args: '', startMarker: 'w:3' },
+    { pid: 421, ppid: 420, executable: 'C:\\Users\\me\\codex.exe', args: '', startMarker: 'w:4' },
+    { pid: 430, ppid: 1, executable: 'codex.exe', args: '', startMarker: 'w:5' },
+  ]
+  const windowsExec = () => {
     const calls: string[] = []
-    const exec = async (command: string, args: readonly string[]) => {
-      calls.push(`${command} ${args.join(' ')}`)
-      return command === 'lsof' ? 'p7\nn/f\n' : '  7 ttys001\n'
-    }
+    const exec = async (command: string, args: readonly string[]) => { calls.push(`${command} ${args.join(' ')}`); return '' }
+    return { calls, exec }
+  }
+
+  it('on Windows asks harness-pty files for the Codex processes alone, once a view, and keeps what the table vouches for', async () => {
+    const { calls, exec } = windowsExec()
+    const files = vi.fn<WindowsFilesRead>(async (pids) => new Map(pids.map((pid) => [pid, pid === 430
+      ? { startMarker: 'w:5', files: [ROLLOUT] }
+      : pid === 421 ? { startMarker: 'w:4', cwd: 'C:\\work\\dial', files: [] }
+        : { startMarker: 'w:3', cwd: 'C:\\work', files: [] }])))
+    const view = processView(exec, () => true, async () => windowsTable(), undefined, 'win32', files)
+    expect(await view.openFilesOf(['codex', 'Codex'])).toEqual(new Map([[421, []], [430, [ROLLOUT]]]))
+    expect(files.mock.calls).toEqual([[[421, 430]]])
+    expect(await view.cwds([421])).toEqual(new Map([[421, 'C:\\work\\dial']]))
+    expect(files).toHaveBeenCalledTimes(1)
+    expect(await view.cwds([420])).toEqual(new Map([[420, 'C:\\work']]))
+    expect(files.mock.calls.slice(1)).toEqual([[[420]]])
+    expect(await view.openFiles([421])).toEqual(new Map())
+    expect(files).toHaveBeenCalledTimes(2)
+    expect(calls).toEqual([])
+  })
+
+  it("on Windows drops a row whose start marker is not the table's: its pid was reused between the reads", async () => {
+    const files = vi.fn<WindowsFilesRead>(async () => new Map([
+      [421, { startMarker: 'w:4', files: [] }],
+      [430, { startMarker: 'w:9', files: [ROLLOUT] }],
+    ]))
+    const view = processView(windowsExec().exec, () => true, async () => windowsTable(), undefined, 'win32', files)
+    expect(await view.openFilesOf(['codex'])).toEqual(new Map([[421, []]]))
+  })
+
+  it('on Windows spawns nothing with no Codex running, and past 32 Codex processes or a failed read says unknown, never nothing open', async () => {
+    const unknown = { ok: false, detail: "The conversation's process files could not be verified." }
+    const none = vi.fn<WindowsFilesRead>(async () => new Map())
+    const idle = processView(windowsExec().exec, () => true, async () => windowsTable().filter((row) => row.pid < 421), undefined, 'win32', none)
+    expect(await externalEvidence(() => idle.openFilesOf(['codex']))).toEqual({ ok: true, value: new Map() })
+    expect(none).not.toHaveBeenCalled()
+    const many = Array.from({ length: 33 }, (_, index) => ({ pid: 500 + index, ppid: 1, executable: 'codex.exe', args: '', startMarker: `w:${index + 10}` }))
+    const crowded = processView(windowsExec().exec, () => true, async () => many, undefined, 'win32', none)
+    expect(await externalEvidence(() => crowded.openFilesOf(['codex']))).toEqual(unknown)
+    expect(none).not.toHaveBeenCalled()
+    const failed = vi.fn<WindowsFilesRead>(async () => null)
+    const broken = processView(windowsExec().exec, () => true, async () => windowsTable(), undefined, 'win32', failed)
+    expect(await externalEvidence(() => broken.openFilesOf(['codex']))).toEqual(unknown)
+    expect(failed).toHaveBeenCalledTimes(1)
+  })
+
+  it('on Windows matches a command as a prefix of the image name, in any case, as lsof -c does', async () => {
+    const files = vi.fn<WindowsFilesRead>(async (pids) => new Map(pids.map((pid) => [pid, { startMarker: `w:${pid}`, files: [] }])))
+    const table = ['Codex.EXE', 'codex-acp.exe', 'node.exe', 'xcodex.exe']
+      .map((executable, index) => ({ pid: index + 1, ppid: 0, executable, args: '', startMarker: `w:${index + 1}` }))
+    const view = processView(windowsExec().exec, () => true, async () => table, undefined, 'win32', files)
+    expect([...(await view.openFilesOf(['codex'])).keys()]).toEqual([1, 2])
+    expect(files.mock.calls).toEqual([[[1, 2]]])
+  })
+
+  it('on Windows reads each folder from harness-pty files, never ps or lsof, and reads no tty', async () => {
+    const unknown = { ok: false, detail: "The conversation's process files could not be verified." }
+    const { calls, exec } = windowsExec()
+    const files = vi.fn<WindowsFilesRead>(async () => new Map([
+      [7, { startMarker: 'w:7', cwd: 'C:\\work\\dial', files: [] }],
+      [8, { startMarker: 'w:8', files: [] }],
+    ]))
+    expect(await processCwds([7, 8], exec, 'win32', undefined, files)).toEqual(new Map([[7, 'C:\\work\\dial']]))
+    expect(files.mock.calls).toEqual([[[7, 8]]])
+    expect(await processCwds([], exec, 'win32', undefined, files)).toEqual(new Map())
+    const many = Array.from({ length: 33 }, (_, index) => index + 1)
+    expect(await externalEvidence(() => processCwds(many, exec, 'win32', undefined, files))).toEqual(unknown)
+    expect(files).toHaveBeenCalledTimes(1)
+    expect(await externalEvidence(() => processCwds([7], exec, 'win32', undefined, async () => null))).toEqual(unknown)
     expect(await processTtys([7], exec, 'win32')).toEqual(new Map())
-    expect(await processCwds([7], exec, 'win32')).toEqual(new Map())
-    const view = processView(exec, undefined, undefined, undefined, 'win32')
-    expect(await view.openFiles([7])).toEqual(new Map())
-    expect(await view.openFilesOf(['codex'])).toEqual(new Map())
-    expect(await view.cwds([7])).toEqual(new Map())
     expect(calls).toEqual([])
   })
 
