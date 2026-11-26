@@ -4,7 +4,8 @@
     "icon": ["icons/icon.ico", "icons/icon.png"],
     "windows": {
       "nsis": {
-        "installMode": "currentUser"
+        "installMode": "currentUser",
+        "installerHooks": "windows/installer-hooks.nsh"
       }
     }
   }

@@ -145,24 +145,26 @@ DEVICE_APP_PATHS = {
     # The app end to end on Linux and on Windows: any change to it.
     "device-app-e2e": ("device-app/", DEVICE_APP_SETUP),
     # One build updating to the next: the updater, the pair of builds, each driver's update path, how a release builds,
-    # and the app's configuration and dependencies.
+    # the app's configuration and dependencies, and the Windows installer's hooks, which run in the updater's install.
     "device-app-update": (DEVICE_APP_SETUP, "device-app/src-tauri/src/update.rs",
                           "device-app/scripts/e2e/update-pair.sh",
                           "device-app/scripts/e2e/linux.sh", "device-app/scripts/e2e/windows.ps1",
                           "device-app/scripts/release-build.sh", "device-app/scripts/release-check.sh",
                           "device-app/scripts/release-setup.sh", "device-app/src-tauri/tauri*.conf.json",
-                          "device-app/src-tauri/Cargo.toml", "device-app/src-tauri/Cargo.lock"),
+                          "device-app/src-tauri/Cargo.toml", "device-app/src-tauri/Cargo.lock",
+                          "device-app/src-tauri/windows/"),
     # Desktop installs the app: Desktop's half, the Linux signature check it runs (with the update check that one
     # extends), the end-to-end install test and the test signer it signs the Device package with, so a change to how
     # that package's signature is made or checked runs it; the Flutter its jobs set up on each arch, and the app's
-    # install, packaging and instance code.
+    # install, packaging and instance code and the Windows installer's hooks.
     "device-app-desktop": (DEVICE_APP_SETUP, ".github/actions/desktop-flutter/", ".github/actions/desktop-flutter-arm64/",
                            "desktop/lib/devices/", "desktop/lib/update/tauri_signature.dart",
                            "desktop/lib/update/update_signature.dart",
                            "desktop/integration_test/device_app_install_windows_linux_native_test.dart",
                            "desktop/test/support/tauri_test_signer.dart",
                            "device-app/src-tauri/src/install.rs", "device-app/src-tauri/src/packaging.rs",
-                           "device-app/src-tauri/src/instance.rs", "device-app/src-tauri/tauri*.conf.json"),
+                           "device-app/src-tauri/src/instance.rs", "device-app/src-tauri/tauri*.conf.json",
+                           "device-app/src-tauri/windows/"),
     # The one-line install on each Ubuntu: the website's script, its stand-in CDN, and how the AppImage starts.
     "device-app-install": (DEVICE_APP_SETUP, "website/scripts/device-install.sh",
                            "device-app/scripts/e2e/linux-install.sh",

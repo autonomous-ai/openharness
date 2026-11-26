@@ -129,9 +129,10 @@ PR CI compiles and tests the app on Linux and Windows (`device-app-checks`), and
 for the paths `DEVICE_APP_PATHS` in `scripts/ci-plan.py` gives it, and each for the jobs' setup action
 (`.github/actions/device-app-setup/`): `device-app-e2e` (`linux.sh` and `windows.ps1`, for any change but Markdown and
 the release scripts' Python tests), `device-app-update` (`update-pair.sh` and each driver's update path, for the
-updater, the Linux and Windows drivers, the release build scripts, `tauri*.conf.json` and the Cargo files),
-`device-app-desktop` (Desktop installs the app, for `desktop/lib/devices/`, `tauri_signature.dart` and
-`update_signature.dart` in `desktop/lib/update/`, its test and `desktop/test/support/tauri_test_signer.dart`, the
-Flutter actions, `install.rs`, `packaging.rs`, `instance.rs` and `tauri*.conf.json`) and `device-app-install`
+updater, the Linux and Windows drivers, the release build scripts, `tauri*.conf.json`, the Cargo files and the
+Windows installer's hooks in `src-tauri/windows/`), `device-app-desktop` (Desktop installs the app, for
+`desktop/lib/devices/`, `tauri_signature.dart` and `update_signature.dart` in `desktop/lib/update/`, its test and
+`desktop/test/support/tauri_test_signer.dart`, the Flutter actions, `install.rs`, `packaging.rs`, `instance.rs`,
+`tauri*.conf.json` and the installer's hooks) and `device-app-install`
 (`linux-install.sh`, for the website's installer, its stand-in CDN, `appimage_env.rs`, `packaging.rs` and
 `tauri*.conf.json`). macOS is built and tested by hand (`macos.sh`). All three are released by `make release-device`.

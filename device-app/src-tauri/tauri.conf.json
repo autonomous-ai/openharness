@@ -25,6 +25,7 @@
   },
   "bundle": {
     "active": true,
+    "publisher": "Autonomous Inc.",
     "targets": ["app"],
     "icon": ["icons/icon.png", "icons/icon.icns"],
     "macOS": {

@@ -199,6 +199,8 @@ class SelectionTests(unittest.TestCase):
             cases["device-app/src-tauri/" + name] = app | {"device-app-update", "device-app-desktop", "device-app-install"}
         cases["device-app/src-tauri/tauri.conf.json"] = app | {"device-app-update", "device-app-desktop",
                                                                "device-app-install", "desktop"}
+        # The Windows installer's hooks run in the updater's install and in Desktop's.
+        cases["device-app/src-tauri/windows/installer-hooks.nsh"] = app | {"device-app-update", "device-app-desktop"}
         for name in ("install.rs", "instance.rs"):
             cases["device-app/src-tauri/src/" + name] = app | {"device-app-desktop"}
         cases["device-app/src-tauri/src/packaging.rs"] = app | {"device-app-desktop", "device-app-install"}
