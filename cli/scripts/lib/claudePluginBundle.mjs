@@ -35,13 +35,24 @@ function readText(root, key) {
   }
 }
 
+/** The marketplace's text; throws when it lists a plugin from anywhere but a folder the build carries, as Claude Code
+ *  installs each from where the marketplace says, and would find nothing of it in Harness's folder. */
+function marketplaceText(root) {
+  const text = readText(root, MARKETPLACE)
+  const carried = Object.keys(PLUGINS).map((plugin) => `./${plugin}`)
+  for (const { name, source } of JSON.parse(text).plugins) {
+    if (!carried.includes(source)) throw new Error(`${MARKETPLACE}: ${name} is not from a folder this build carries (${carried.join(', ')})`)
+  }
+  return text
+}
+
 /** JSON of { files: { [path in the marketplace folder]: text }, executable: string[] }: the repository's marketplace,
  *  and of each plugin the files Claude Code installs, its `plugin.json` at the build's version plus a hash of the
  *  plugin's files, so Claude Code sees a new version whenever they change, even between two builds of one version.
- *  [root] is the repository's root; a test hands its own. Throws on a name the folder writer would not take, or a file
- *  that is not UTF-8 text. */
+ *  [root] is the repository's root; a test hands its own. Throws on a name the folder writer would not take, a file
+ *  that is not UTF-8 text, or a marketplace plugin the build does not carry. */
 export function readClaudePluginBundle(version, root = REPO_ROOT) {
-  const files = { [MARKETPLACE]: readText(root, MARKETPLACE) }
+  const files = { [MARKETPLACE]: marketplaceText(root) }
   for (const [plugin, include] of Object.entries(PLUGINS)) {
     const paths = include.flatMap((entry) => !entry.endsWith('/') ? [entry]
       : readdirSync(join(root, plugin, entry), { recursive: true, withFileTypes: true })
