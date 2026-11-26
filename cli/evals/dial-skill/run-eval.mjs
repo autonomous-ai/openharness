@@ -162,6 +162,7 @@ const REF_EXTS = ['', '.html', '.txt', '.json'];
 const AGENTS = ['claude', 'oracle', 'null', 'always'];
 const SPLITS = ['train', 'val', 'test'];
 const JUDGE_TIMEOUT_MS = 120_000;
+const DESIGN_CAP_USD = 250;
 // A stopped pass is reported to a person; switching accounts to finish it is not the runner's call.
 const ACCOUNT_LIMIT = 'account limit reached: pass stopped; report it, do not switch accounts';
 const spendCapLine = ctx => `spend cap · $${ctx.guard.spentUsd.toFixed(2)} of $${ctx.spendCapUsd.toFixed(2)}: `
@@ -471,6 +472,10 @@ function parseArgs(argv) {
   // dial skill eval: no pass spends without a bound a person chose.
   if (!(a.spendCapUsd > 0 && Number.isFinite(a.spendCapUsd))) {
     eprint('--spend-cap-usd is required: the dollars the whole flow may spend, above 0'); usage(); process.exit(2);
+  }
+  // dial skill eval: the maintainer capped the whole design at $250 (2026-11-26); no pass may be allowed more.
+  if (a.spendCapUsd > DESIGN_CAP_USD) {
+    eprint(`--spend-cap-usd is at most ${DESIGN_CAP_USD}: the design's cap is $${DESIGN_CAP_USD}`); usage(); process.exit(2);
   }
   if (!Number.isFinite(a.timeoutS) || a.timeoutS < 0
       || a.timeoutS * 1000 > 2147483647 // setTimeout clamps >2^31-1 ms to 1 ms - the ceiling would fire instantly
