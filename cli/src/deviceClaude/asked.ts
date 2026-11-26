@@ -66,7 +66,16 @@ function cutBytes(text: string, max: number): string {
   return cut
 }
 
-/** The prompt's one line: what the tool acts on, or its name when its input does not say. */
+/**
+ * [text] as one line: each control character a space, since the core refuses one in any field (core/observedHook.ts),
+ * which would lose the whole event. Trimmed after, so text of control characters alone says nothing.
+ */
+const oneLine = (text: string): string => text.replace(/\p{Cc}/gu, ' ').trim()
+
+/**
+ * The prompt's one line: what the tool acts on, a form's first question or a plan approval's fixed words, or the tool's
+ * name when its input does not say.
+ */
 export function askedSummary(tool: string, input: unknown): string {
   if (tool === 'ExitPlanMode') return PLAN_READY
   const text = (record: unknown, name: string): string => {
@@ -80,17 +89,16 @@ export function askedSummary(tool: string, input: unknown): string {
     // The dial has one line, so the first question stands for the whole form.
     const questions = isRecord(input) ? input.questions : undefined
     const first = Array.isArray(questions) ? questions[0] : undefined
-    shown = text(first, 'question').trim() || text(first, 'header').trim() || NO_QUESTION
+    shown = oneLine(text(first, 'question')) || oneLine(text(first, 'header')) || NO_QUESTION
   } else if (tool === 'Bash') {
     // The first line with text: a command that opens with a blank line would otherwise show the tool's name.
-    const lines = field('command').split(/[\r\n]/).map((line) => line.trim()).filter(Boolean)
+    const lines = field('command').split(/[\r\n]/).map(oneLine).filter(Boolean)
     shown = lines.length > 1 ? `${lines[0]} …` : lines[0] ?? ''
   } else if (FILE_TOOLS.has(tool)) shown = field('file_path')
   else if (tool === 'NotebookEdit') shown = field('notebook_path')
   else if (tool === 'WebFetch') shown = hostOf(field('url'))
   else if (mcp) shown = `${mcp[1]}: ${mcp[2]}`
-  // The core refuses a control character in any field (core/observedHook.ts), which would lose the whole event.
-  return cutBytes((shown.trim() || tool).replace(/\p{Cc}/gu, ' '), MAX_SUMMARY_BYTES)
+  return cutBytes(oneLine(shown) || oneLine(tool), MAX_SUMMARY_BYTES)
 }
 
 /** The hook's input as the body to post, or null for nothing to send: too long or not JSON. */
