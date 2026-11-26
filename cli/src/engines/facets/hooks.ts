@@ -191,6 +191,11 @@ export interface HookContract {
   sessionFile?: { suffix: string }
   /** The engine's Stop and StopFailure hooks close its turns (kit/stopHook.ts). */
   stopClosesTurns?: boolean
+  /**
+   * The hook, and its `source`, the engine sends for a conversation that starts with no history. A rebind on it replays
+   * the new transcript's first turn live (lib/firstTurnReplay.ts); any other rebind (a resume, a fork) carries history.
+   */
+  newConversation?: { event: string; sources: readonly string[] }
 }
 
 /** What core calls, composed from an engine's contract and the kit's mechanics (engines/hooks.ts). */
