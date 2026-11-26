@@ -804,6 +804,10 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
     expect(second).toEqual(first)
   })
 
+  it('draws Math.random the same each time, so a tie between apps falls the same way each run', () => {
+    expect(Math.random()).toBe(Math.random())
+  })
+
   it("ttyAtime answers the model's access time, never this machine's", async () => {
     machine.reset()
     machine.atimes.set('ttys9998', 1_234)
