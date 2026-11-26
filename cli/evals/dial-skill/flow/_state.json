@@ -2,7 +2,8 @@
   "current_round": 1,
   "best": {
     "round": 1,
-    "val_score": 2.35
+    "val_score": 2.35,
+    "test_score": 1.69
   },
   "reps": 2,
   "goal": {

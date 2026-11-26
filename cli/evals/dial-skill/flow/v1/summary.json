@@ -3,7 +3,7 @@
   "label": "v1",
   "target": "skill",
   "environment": {
-    "commit": "c24a6761d2841fa83ca8fcaee15c33ca751ab5b3",
+    "commit": "48b0269efa3c60ae8a65bea0e95f225d68032741",
     "lockfile": "cli/package-lock.json",
     "lockfile_sha256": "a578fb81a3757cfd14de2c687dfe9b7f687d56f8c0112082edf640245995ea61",
     "claude_version": "2.1.332 (Claude Code)",
