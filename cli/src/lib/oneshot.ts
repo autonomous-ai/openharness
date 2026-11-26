@@ -9,7 +9,8 @@ import { homedir, tmpdir, userInfo } from 'os'
 import { env } from '../config/env.js'
 import { findCursorTranscript } from '../engines/cursor/discovery.js'
 import { cursorConfigDir, cursorDataDir } from '../engines/cursor/home.js'
-import { cursorRuntimeBin, opencodeBinAsync } from './engineBin.js'
+import type { ProcessEngine } from '../engines/types.js'
+import { cursorRuntimeBin, ENGINE_CLI_COMMANDS, engineNearby, opencodeBinAsync } from './engineBin.js'
 import {
   DisposableOneShotPool,
   type ActiveEngineCounts,
@@ -22,6 +23,23 @@ import { scrubTerminalContext } from './terminalEnvironment.js'
 // running on the person's computer, one more set per crash.
 import { spawnTied } from './tied.js'
 import { ownProcessGroup } from './windows/noWindow.js'
+import { type Program, windowsProgram } from './windows/program.js'
+
+/**
+ * What a one-shot worker of [engine] starts. On Windows `spawn` with no shell finds neither an npm `.cmd` nor a
+ * `claude.exe` off PATH, so every one-shot engine failed there with ENOENT and the voice router never had a warm
+ * worker: there the engine is found as the daemon finds it (engineNearby) and started through windowsProgram, and
+ * [command] is not read. A failure has a kind: ENGINE_NOT_INSTALLED, or WindowsProgramRefused for a batch file Harness
+ * does not run. Elsewhere [command] is started as it is.
+ */
+export function oneShotProgram(engine: ProcessEngine, command: () => string, args: readonly string[],
+  options: { platform?: NodeJS.Platform; environment?: NodeJS.ProcessEnv; home?: string } = {}): Program {
+  const { platform = process.platform, environment = process.env } = options
+  if (platform !== 'win32') return { file: command(), args: [...args] }
+  const found = engineNearby(engine, options)
+  if (!found) throw Object.assign(new Error(`${engine} is not installed on this computer`), { code: 'ENGINE_NOT_INSTALLED' })
+  return windowsProgram(found, args, { platform, environment })
+}
 
 function claudeBin(): string {
   return env.CLAUDE_PATH || 'claude'
@@ -33,8 +51,26 @@ function cursorBin(): string {
   throw new Error('Cursor CLI command is ambiguous or unavailable; install cursor-agent or set CURSOR_PATH to its absolute path')
 }
 
+/**
+ * Windows' own variables a program there needs: without SystemRoot it cannot open a socket, so Claude's warm worker
+ * spawned but failed its first prompt; without TEMP or the profile folders it has no temp or settings folder. Not
+ * startEnvironment's WINDOWS_ONLY: that names only what a start drops off Windows (on Windows a start keeps the whole
+ * environment), and Claude's child is built from a short list, so the list names what it needs itself. The other
+ * one-shots start from oneShotParentEnv, the whole daemon environment, so they have these already.
+ */
+const WINDOWS_SYSTEM_VARIABLES = [
+  'SystemRoot', 'windir', 'ComSpec', 'PATHEXT', 'SystemDrive', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP',
+  'ProgramData', 'ProgramFiles', 'ProgramFiles(x86)', 'HOMEDRIVE', 'HOMEPATH', 'USERNAME', 'USERDOMAIN', 'COMPUTERNAME',
+] as const
+
+function windowsSystemEnv(): NodeJS.ProcessEnv {
+  if (process.platform !== 'win32') return {}
+  return Object.fromEntries(WINDOWS_SYSTEM_VARIABLES.flatMap((name) => process.env[name] ? [[name, process.env[name]]] : []))
+}
+
 function buildEnv(): NodeJS.ProcessEnv {
   return {
+    ...windowsSystemEnv(),
     PATH: process.env.PATH || '',
     HOME: process.env.HOME || homedir(),
     USER: process.env.USER || userInfo().username,
@@ -160,8 +196,10 @@ class ClaudeWorker extends ProcessWorker {
       ...(model ? ['--model', model] : []),
       ...(effort ? ['--effort', effort] : []),
     ]
-    const child = spawnTied(claudeBin(), args, {
-      cwd, env: buildEnv(), ...ownProcessGroup(), stdio: ['pipe', 'pipe', 'pipe'],
+    const processEnv = buildEnv()
+    const program = oneShotProgram('claude', claudeBin, args, { environment: processEnv })
+    const child = spawnTied(program.file, program.args, {
+      cwd, env: program.env ?? processEnv, ...ownProcessGroup(), stdio: ['pipe', 'pipe', 'pipe'],
     })
     super(child)
     child.stdout?.on('data', (chunk: Buffer) => this.onStdout(chunk.toString()))
@@ -270,8 +308,9 @@ class CodexWorker extends ProcessWorker {
     ]
     const processEnv = scrubTerminalContext({ ...oneShotParentEnv() })
     if (codexHome) processEnv.CODEX_HOME = codexHome
-    const child = spawnTied(process.env.CODEX_PATH || 'codex', args, {
-      cwd, env: processEnv, ...ownProcessGroup(), stdio: ['pipe', 'ignore', 'pipe'],
+    const program = oneShotProgram('codex', () => process.env.CODEX_PATH || 'codex', args, { environment: processEnv })
+    const child = spawnTied(program.file, program.args, {
+      cwd, env: program.env ?? processEnv, ...ownProcessGroup(), stdio: ['pipe', 'ignore', 'pipe'],
     })
     super(child)
     this.output = output
@@ -359,8 +398,9 @@ class CursorWorker extends ProcessWorker {
       ...(model ? ['--model', model] : []),
     ]
     const processEnv = scrubTerminalContext({ ...oneShotParentEnv() })
-    const child = spawnTied(cursorBin(), args, {
-      cwd, env: processEnv, ...ownProcessGroup(), stdio: ['pipe', 'pipe', 'pipe'],
+    const program = oneShotProgram('cursor', cursorBin, args, { environment: processEnv })
+    const child = spawnTied(program.file, program.args, {
+      cwd, env: program.env ?? processEnv, ...ownProcessGroup(), stdio: ['pipe', 'pipe', 'pipe'],
     })
     super(child)
     child.stdout?.on('data', (chunk: Buffer) => this.onStdout(chunk.toString()))
@@ -488,8 +528,9 @@ class OpencodeWorker extends ProcessWorker {
     // self-registers this ephemeral recap session). `--format json` streams `{type:'text',part:{text}}`.
     mkdirSync(OPENCODE_RECAP_DATA_DIR, { recursive: true, mode: 0o700 })
     const { args, env: processEnv } = opencodeOneShotSpawn(model, oneShotParentEnv(), OPENCODE_RECAP_DATA_DIR)
-    const child = spawnTied(binary, args, {
-      cwd: OPENCODE_RECAP_DATA_DIR, env: processEnv, ...ownProcessGroup(), stdio: ['pipe', 'pipe', 'pipe'],
+    const program = oneShotProgram('opencode', () => binary, args, { environment: processEnv })
+    const child = spawnTied(program.file, program.args, {
+      cwd: OPENCODE_RECAP_DATA_DIR, env: program.env ?? processEnv, ...ownProcessGroup(), stdio: ['pipe', 'pipe', 'pipe'],
     })
     super(child)
     child.stdout?.on('data', (chunk: Buffer) => this.onStdout(chunk.toString()))
@@ -638,8 +679,9 @@ class KiloWorker extends ProcessWorker {
     // empty scratch dir. It then hung indexing and gathering context until the 60s timeout, so no
     // `turn_summary` was ever emitted and the device tile stayed on `processing` forever.
     const { args, env: processEnv } = kiloOneShotSpawn(model, oneShotParentEnv())
-    const child = spawnTied(kiloBin(), args, {
-      cwd: KILO_RECAP_DATA_DIR, env: processEnv, ...ownProcessGroup(), stdio: ['pipe', 'pipe', 'pipe'],
+    const program = oneShotProgram('kilo', kiloBin, args, { environment: processEnv })
+    const child = spawnTied(program.file, program.args, {
+      cwd: KILO_RECAP_DATA_DIR, env: program.env ?? processEnv, ...ownProcessGroup(), stdio: ['pipe', 'pipe', 'pipe'],
     })
     super(child)
     child.stdout?.on('data', (chunk: Buffer) => this.onStdout(chunk.toString()))
@@ -734,8 +776,9 @@ class PiWorker extends ProcessWorker {
     // user's session store; `--no-extensions` stops the machine discovery extension from registering it.
     const args = ['-p', '--no-session', '--no-extensions', ...(model ? ['--model', model] : [])]
     const processEnv = scrubTerminalContext({ ...oneShotParentEnv() })
-    const child = spawnTied(piBin(), args, {
-      cwd, env: processEnv, ...ownProcessGroup(), stdio: ['pipe', 'pipe', 'pipe'],
+    const program = oneShotProgram('pi', piBin, args, { environment: processEnv })
+    const child = spawnTied(program.file, program.args, {
+      cwd, env: program.env ?? processEnv, ...ownProcessGroup(), stdio: ['pipe', 'pipe', 'pipe'],
     })
     super(child)
     child.stdout?.on('data', (chunk: Buffer) => { this.stdout += chunk.toString() })
@@ -812,8 +855,9 @@ class CommandCodeWorker extends ProcessWorker {
     // stops our own SessionStart hook registering this process.
     const args = ['-p', '--no-session', ...(model ? ['-m', model] : [])]
     const processEnv = scrubTerminalContext({ ...oneShotParentEnv() })
-    const child = spawnTied(commandCodeBin(), args, {
-      cwd, env: processEnv, ...ownProcessGroup(), stdio: ['pipe', 'pipe', 'pipe'],
+    const program = oneShotProgram('commandcode', commandCodeBin, args, { environment: processEnv })
+    const child = spawnTied(program.file, program.args, {
+      cwd, env: program.env ?? processEnv, ...ownProcessGroup(), stdio: ['pipe', 'pipe', 'pipe'],
     })
     super(child)
     child.stdout?.on('data', (chunk: Buffer) => { this.stdout += chunk.toString() })
@@ -869,7 +913,7 @@ class CommandCodeWorker extends ProcessWorker {
 
 /** Spawn ONE worker for an engine. Shared by the cold path and both warm pools so a pooled worker can
  *  never be started differently from a direct one. */
-function createOneShotWorker(
+async function createOneShotWorker(
   engine: OneShotEngine,
   cwd: string,
   model?: string,
@@ -888,7 +932,10 @@ function createOneShotWorker(
             ? new CommandCodeWorker(cwd, model).ready()
             : engine === 'kilo'
               ? new KiloWorker(model).ready()
-              : opencodeBinAsync().then(binary => new OpencodeWorker(binary, model).ready())
+              // On Windows oneShotProgram finds OpenCode itself and would not read this lookup's answer.
+              : process.platform === 'win32'
+                ? new OpencodeWorker(ENGINE_CLI_COMMANDS.opencode, model).ready()
+                : opencodeBinAsync().then(binary => new OpencodeWorker(binary, model).ready())
 }
 
 /** The measured Grok 1.0.0 headless invocation. A fresh GROK_HOME contains every persisted session. */
@@ -942,8 +989,9 @@ export async function runGrokOneShot(opts: OneShotOptions): Promise<OneShotResul
     const { args, env: processEnv } = grokOneShotSpawn(opts, scratchHome)
     const timeoutMs = opts.timeoutMs ?? 60_000
     return await new Promise<OneShotResult>((resolve, reject) => {
-      const child = spawnTied(env.GROK_PATH || 'grok', args, {
-        cwd: opts.cwd, env: processEnv, ...ownProcessGroup(), stdio: ['ignore', 'pipe', 'pipe'],
+      const program = oneShotProgram('grok', () => env.GROK_PATH || 'grok', args, { environment: processEnv })
+      const child = spawnTied(program.file, program.args, {
+        cwd: opts.cwd, env: program.env ?? processEnv, ...ownProcessGroup(), stdio: ['ignore', 'pipe', 'pipe'],
       })
       let stdout = ''
       let stderr = ''

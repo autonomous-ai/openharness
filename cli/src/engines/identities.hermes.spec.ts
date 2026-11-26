@@ -17,7 +17,7 @@ vi.mock('../lib/processHeldFiles.js', async (real) => ({ ...await real<object>()
 const processView = vi.hoisted(() => vi.fn())
 vi.mock('../lib/processMounts.js', async (real) => ({ ...await real<object>(), processView }))
 
-const { probeHermesHome, probeHermesSandbox, hermesSessionKind, hermesSessionEndedSince, hermesStoreStamp, hermesTerminalNames, hermesTerminalStamp, readHermesTerminal } = await import('./identities.js')
+const { probeHermesHome, probeHermesSandbox, hermesSessionKind, hermesStoreStamp, hermesTerminalNames, hermesTerminalStamp, readHermesTerminal } = await import('./identities.js')
 
 const { DatabaseSync } = process.getBuiltinModule('node:sqlite') as {
   DatabaseSync: new (path: string) => { exec(sql: string): void; prepare(sql: string): { run(...args: (string | number | null)[]): void }; close(): void }
@@ -34,10 +34,10 @@ mkdirSync(env.HERMES_HOME, { recursive: true })
 symlinkSync(env.HERMES_HOME, linkToDefault)
 afterAll(() => rmSync(root, { recursive: true, force: true }))
 
-function insert(id: string, source: string, created: string | null, ended: string | number | null = null): void {
+function insert(id: string, source: string, created: string | null): void {
   const db = new DatabaseSync(join(home, 'state.db'))
-  db.prepare('INSERT INTO sessions (id, source, created_source, cwd, started_at, ended_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(id, source, created, '/work', '1762941600', ended)
+  db.prepare('INSERT INTO sessions (id, source, created_source, cwd, started_at) VALUES (?, ?, ?, ?, ?)')
+    .run(id, source, created, '/work', '1762941600')
   db.close()
 }
 
@@ -149,27 +149,6 @@ describe('what a Hermes home\'s store is now', () => {
     expect(await hermesStoreStamp(empty)).toBe(none)
     writeFileSync(join(empty, 'state.db'), '')
     expect(await hermesStoreStamp(empty)).not.toBe(none)
-  })
-})
-
-describe('whether a Hermes session was left since a moment', () => {
-  const since = Date.parse('2026-11-12T10:00:00Z')
-  it.each([
-    ['ended at that moment', since / 1000, true],
-    ['ended after it', since / 1000 + 3.5, true],
-    ['ended before it', since / 1000 - 0.5, false],
-    ['still open', null, false],
-    ['ended at a time that is not a number', 'soon', false],
-  ] as const)('reads a session %s', async (_name, ended, left) => {
-    insert('20261112_100000_aaaaaa', 'cli', null, ended)
-    expect(await hermesSessionEndedSince(home, '20261112_100000_aaaaaa', since)).toBe(left)
-  })
-
-  it('has no session that is not there, and refuses to judge a store it cannot read', async () => {
-    expect(await hermesSessionEndedSince(home, '20261112_100009_cccccc', since)).toBe(false)
-    expect(await hermesSessionEndedSince(home, 'not an id', since)).toBe(false)
-    writeFileSync(join(broken, 'state.db'), 'not a database')
-    await expect(hermesSessionEndedSince(broken, '20261112_100009_cccccc', since)).rejects.toBeInstanceOf(IdentityReadUnavailable)
   })
 })
 

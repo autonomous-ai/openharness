@@ -213,6 +213,46 @@ describe('questions', () => {
     asking.reannounceRemote()
     expect(vi.mocked(deps.clients.sendRemote).mock.calls).toEqual([[{ type: 'commander_questions_open', payload: { requestIds: [] } }]])
   })
+
+  it('checks an answer against the id the watcher holds', () => {
+    const { asking } = setup()
+    const view = { kind: 'question' as const, question: 'Which drink?', rows: [], multi: false, dialog: 'Which drink?' }
+    const held = vi.spyOn(asking.questionWatcher, 'heldRequestId').mockReturnValue('r1')
+    expect(given(asking.questions).heldRequestId('s1', view)).toBe('r1')
+    expect(held).toHaveBeenCalledWith('s1', view)
+  })
+
+  it('hands a dial or window that attaches no question of an agent that is gone, and forgets it', () => {
+    const { asking } = setup()
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    given(asking.questionWatcher).onQuestion('s1', 'r1', [{ q: 'Ship it?', options: [] }])
+    given(asking.questionWatcher).onQuestion('s9', 'r9', [{ q: 'Which branch?', options: [] }])
+    const asked = asking.openQuestions.get('s1')
+    expect(asking.openQuestionFrames()).toEqual([asked])
+    expect(asking.openQuestions.has('s9')).toBe(false)
+    expect(asking.pendingQuestion('s9')).toBeNull()
+    expect(asking.monitorActivity('s9')).not.toBe('needsInput')
+    expect(log.mock.calls.at(-1)?.[0]).toContain('s9 forgotten · its agent is gone · req=r9')
+  })
+
+  it('keeps a cloud agent\'s question, which the registry never knows', () => {
+    const { asking } = setup()
+    const cloud = { type: 'commander_question', agentId: 'cloud-a', payload: { requestId: 'cloud_q_1' } }
+    asking.openQuestions.set('cloud-a', cloud)
+    expect(asking.openQuestionFrames()).toEqual([cloud])
+  })
+
+  it('tells an app that connects no question of an agent that is gone', () => {
+    const { deps, asking } = setup()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    given(asking.questionWatcher).onQuestion('s1', 'r1', [{ q: 'Ship it?', options: [] }])
+    given(asking.questionWatcher).onQuestion('s9', 'r9', [{ q: 'Which branch?', options: [] }])
+    const asked = asking.openQuestions.get('s1')
+    const remote = vi.mocked(deps.clients.sendRemote)
+    remote.mockClear()
+    asking.reannounceRemote()
+    expect(remote.mock.calls).toEqual([[asked], [{ type: 'commander_questions_open', payload: { requestIds: ['r1'] } }]])
+  })
 })
 
 describe('question_response', () => {

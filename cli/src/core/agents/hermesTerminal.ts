@@ -7,6 +7,7 @@
 import { HERMES_TERMINAL_SAID } from '../../engines/hermes/contract.js'
 import type { Terminal, TerminalRecordRead } from '../../engines/kit/terminalRecord.js'
 import { sid } from '../../lib/log.js'
+import { startMarkerMs } from '../../lib/processProof.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 import { START_SLACK_MS } from '../../lib/sessionRepair.js'
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
@@ -27,8 +28,6 @@ export interface HermesTerminalDeps {
   read: (home: string, names: readonly string[], sinceMs: number) => Promise<TerminalRecordRead>
   /** Throws when the store cannot be read. */
   kind: (home: string, sessionId: string) => Promise<'own' | 'waiting' | 'other'>
-  /** Whether the session was ended at or after a moment. Throws when the store cannot be read. */
-  endedSince: (home: string, sessionId: string, sinceMs: number) => Promise<boolean>
   /** What the home's store is now: changed by every write to it. */
   storeStamp: (home: string) => Promise<string>
   /** Told each time an agent's process is first seen keeping a record in a home. */
@@ -86,7 +85,7 @@ export function createHermesTerminal(deps: HermesTerminalDeps) {
     const entry = entryOf(agent.agentId)
     const { pid, startMarker } = observed.processIdentity
     const process = `${pid}:${startMarker}`
-    const startedAtMs = Date.parse(startMarker)
+    const startedAtMs = startMarkerMs(startMarker) ?? NaN
     if (entry.run?.process !== process) entry.run = { process, recordSeen: false }
     const run = entry.run
     let names = run.names
@@ -120,8 +119,8 @@ export function createHermesTerminal(deps: HermesTerminalDeps) {
       if (observed.sandboxed) say(agent.agentId, entry, HERMES_TERMINAL_SAID.sandbox)
     }
     if (sessionId === agent.sessionId) {
-      // The registry fails a resumed row that reports another conversation until something confirms its own; with no
-      // hook, the record does, once (the commit stamps `lastHookAt`).
+      // With no hook, the record confirms a resumed row's own conversation, once: the commit binds the row (`boundAt`,
+      // `lastHookAt`) and the attach the resume started follows it.
       if (agent.resumeOnly && agent.lastHookAt === 0) return { sessionId }
       run.known = { stamp, settled: 'wait' }
       return 'wait'
@@ -134,30 +133,14 @@ export function createHermesTerminal(deps: HermesTerminalDeps) {
     // asked again in the repair's minute too.
     const store = await deps.storeStamp(home)
     if (known.asked?.store === store && (known.asked.until === undefined || deps.now() < known.asked.until)) return 'wait'
-    const failed = (): 'wait' => {
-      known.asked = { store, until: deps.now() + REPAIR_RETRY_MS }
-      return 'wait'
-    }
-    // A resume not yet confirmed is failed by any other session (registry.ts RESUME_SESSION_MISMATCH), and a `/new` typed
-    // before a pass read the record leaves it naming only the new one. Hermes ends the session a terminal leaves: the
-    // resumed one ended since this process started was open in it, and is confirmed first; the next pass follows.
-    if (agent.resumeOnly && agent.lastHookAt === 0 && agent.sessionId) {
-      let left: boolean
-      try {
-        left = await deps.endedSince(home, agent.sessionId, startedAtMs - START_SLACK_MS)
-      } catch {
-        return failed()
-      }
-      if (!pass.current()) return 'wait'
-      if (left) return { sessionId: agent.sessionId }
-    }
     let kind: Awaited<ReturnType<HermesTerminalDeps['kind']>>
     try {
       kind = await deps.kind(home, sessionId)
     } catch (error) {
       // A bound agent keeps the session it is on; an unbound one is held, as the repair's unreadable store holds it.
       if (!agent.sessionId) pass.hold(error)
-      return failed()
+      known.asked = { store, until: deps.now() + REPAIR_RETRY_MS }
+      return 'wait'
     }
     if (!pass.current()) return 'wait'
     // A fresh record never falls back: the repair could only bind a session this terminal is not on. Waiting for the

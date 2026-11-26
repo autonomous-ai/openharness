@@ -9,7 +9,7 @@ import styles from "./page.module.css";
 /** The computer's OS, or null where it is not a computer we can name. */
 function visitorOs(platform: VisitorPlatform | null): DeviceOs | null {
   if (platform === "macos" || platform === "macos-arm64") return "macos";
-  if (platform === "windows") return "windows";
+  if (platform === "windows" || platform === "windows-arm64") return "windows";
   if (platform === "linux" || platform === "linux-x64" || platform === "linux-arm64") return "linux";
   return null;
 }

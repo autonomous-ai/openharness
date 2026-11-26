@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -597,11 +597,13 @@ describe('binding a running process to its session', () => {
   it.each(['copilot-process', 'copilot-transcript', 'continuation', 'cursor-resume', 'grok-resume',
     'agy-resume', 'copilot-resume', 'claude-resume', 'codex-resume'] as const)(
     'isolates %s failure from readiness and retries the same live binding', async kind => {
-      const run = setup()
+      const run = setup(), dir = mkdtempSync(join(tmpdir(), 'core-bind-')); dirs.push(dir)
       const engine = kind === 'continuation' ? 'claude' : kind.split('-')[0] as DiscoveredTerminalAgent['engine']
       const alreadyBound = kind === 'continuation' || kind === 'copilot-process' || kind === 'copilot-transcript'
+      // Its own file, written once its process runs: a rollover marker in it is the process's own (bind.ts).
+      const previous = join(dir, 'previous.jsonl'); writeFileSync(previous, '{}\n')
       const rows = [agent({ engine, agentId: 'held', sessionId: alreadyBound ? 'previous' : '',
-        transcriptPath: alreadyBound ? '/t/previous.jsonl' : undefined, runtimes: [], active: true,
+        transcriptPath: alreadyBound ? previous : undefined, runtimes: [], active: true,
         processIdentity: { pid: 42, executable: engine, startMarker: '2026-10-09T00:00:00Z' } }),
       agent({ engine: 'codex', agentId: 'next', sessionId: '', runtimes: [], active: true,
         processIdentity: { pid: 43, executable: 'codex', startMarker: '2026-10-09T00:00:00Z' } })]
@@ -693,8 +695,10 @@ describe('binding a running process to its session', () => {
   })
 
   it.each(['copilot', 'claude'] as const)('rejects a delayed %s continuation after the receiving binding changes', async engine => {
-    const run = setup()
-    const entry = agent({ engine, transcriptPath: '/t/s1.jsonl' })
+    const run = setup(), dir = mkdtempSync(join(tmpdir(), 'core-bind-')); dirs.push(dir)
+    // A file written once its process runs: the rollover is the process's own, and only the change refuses it.
+    const transcript = join(dir, 's1.jsonl'); writeFileSync(transcript, '{}\n')
+    const entry = agent({ engine, transcriptPath: transcript })
     vi.mocked(run.deps.registry.byProcess).mockReturnValue(entry)
     let answer!: () => void
     if (engine === 'copilot') vi.mocked(processSessionOf).mockResolvedValue('s2').mockReturnValueOnce(new Promise(resolve => { answer = () => resolve('s2') }))
@@ -758,8 +762,9 @@ describe('binding a running process to its session', () => {
     })
 
     it('follows Claude Code to the file its transcript rolled over to, when that is new', async () => {
-      const run = setup()
-      vi.mocked(run.deps.registry.byProcess).mockReturnValue(agent({ transcriptPath: '/t/s1.jsonl' }))
+      const run = setup(), dir = mkdtempSync(join(tmpdir(), 'core-bind-')); dirs.push(dir)
+      const transcript = join(dir, 's1.jsonl'); writeFileSync(transcript, '{}\n')
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(agent({ transcriptPath: transcript }))
       await run.binding.bindObservedAgent(observed())
       for (const continuation of [{ sessionId: 's1' }, { sessionId: 'known' }, { sessionId: 'deleted' }]) {
         vi.mocked(continuationOf).mockResolvedValueOnce({ ...continuation, transcriptPath: '/t/x.jsonl' } as never)
@@ -772,11 +777,34 @@ describe('binding a running process to its session', () => {
       vi.mocked(run.deps.registry.register).mockResolvedValueOnce({ entry: agent({ sessionId: 's2' }), ...meta({ isNew: true }) } as never)
       await run.binding.bindObservedAgent(observed())
       expect(vi.mocked(run.deps.registry.register).mock.calls[0][0]).toMatchObject({ engine: 'claude', sessionId: 's2', source: 'claude-continuation', hookEvent: 'ClaudeContinuation' })
-      expect(continuationOf).toHaveBeenCalledWith('claude', '/t/s1.jsonl')
+      expect(continuationOf).toHaveBeenCalledWith('claude', transcript)
       expect(run.deps.attachSession).toHaveBeenCalledTimes(1)
       vi.mocked(run.deps.registry.register).mockResolvedValueOnce(null)
       await run.binding.bindObservedAgent(observed())
       expect(run.deps.attachSession).toHaveBeenCalledTimes(1)
+    })
+
+    // Evidence newer than the state it contradicts (core rule 6): a marker already at the end of the transcript when its
+    // process started (a resume of a conversation that had continued elsewhere) is no rollover of this process. Taken
+    // for one, it moved a resumed agent onto the other file while its process wrote this one, until its next hook moved
+    // it back.
+    it('does not follow a rollover marker its transcript held before its process started', async () => {
+      const run = setup(), dir = mkdtempSync(join(tmpdir(), 'core-bind-')); dirs.push(dir)
+      const transcript = join(dir, 's1.jsonl'); writeFileSync(transcript, '{}\n')
+      const started = Date.parse('2026-10-04T10:00:00Z')
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(agent({ transcriptPath: transcript, resumeOnly: true, lastHookAt: 0 }))
+      vi.mocked(continuationOf).mockResolvedValue({ sessionId: 's2', transcriptPath: join(dir, 's2.jsonl') })
+      utimesSync(transcript, new Date(started - 60_000), new Date(started - 60_000))
+      await run.binding.bindObservedAgent(observed())
+      // Nor is one whose file, or whose process's start, cannot be read.
+      vi.mocked(run.deps.registry.byProcess).mockReturnValueOnce(agent({ transcriptPath: join(dir, 'gone.jsonl') }))
+      await run.binding.bindObservedAgent(observed())
+      await run.binding.bindObservedAgent(observed({ processIdentity: { pid: 42, startMarker: 'unreadable' } as DiscoveredTerminalAgent['processIdentity'] }))
+      expect(run.deps.registry.register).not.toHaveBeenCalled()
+      // Written once the process runs, it is the process's own rollover.
+      utimesSync(transcript, new Date(started + 60_000), new Date(started + 60_000))
+      await run.binding.bindObservedAgent(observed())
+      expect(vi.mocked(run.deps.registry.register).mock.calls[0]?.[0]).toMatchObject({ sessionId: 's2', source: 'claude-continuation' })
     })
 
     it('leaves any other engine, or Claude Code without a transcript, as it is', async () => {
@@ -871,6 +899,25 @@ describe('binding a running process to its session', () => {
       expect(run.deps.registry.register).toHaveBeenCalledTimes(3)
     })
 
+    // A Windows start marker is a FILETIME; these two are 10 s apart.
+    const windowsEarlier = 'w:133700000000000000', windowsLater = 'w:133700000100000000'
+
+    it('a later Windows process may claim a session an earlier one holds', async () => {
+      const run = setup()
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(agent({ sessionId: '' }))
+      run.bySession.set('r', agent({ agentId: 'older', processIdentity: { pid: 1, startMarker: windowsEarlier } } as Partial<RegisteredSession>))
+      await run.binding.bindObservedAgent(observed({ resumeSessionId: 'r', processIdentity: { pid: 42, startMarker: windowsLater } } as Partial<DiscoveredTerminalAgent>))
+      expect(run.deps.registry.register).toHaveBeenCalledOnce()
+    })
+
+    it('an earlier Windows process may not claim a session a later one holds', async () => {
+      const run = setup()
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(agent({ sessionId: '' }))
+      run.bySession.set('r', agent({ agentId: 'newer', processIdentity: { pid: 1, startMarker: windowsLater } } as Partial<RegisteredSession>))
+      await run.binding.bindObservedAgent(observed({ resumeSessionId: 'r', processIdentity: { pid: 42, startMarker: windowsEarlier } } as Partial<DiscoveredTerminalAgent>))
+      expect(run.deps.registry.register).not.toHaveBeenCalled()
+    })
+
     it('moves a session from the agent that had it, telling everything that held it for that agent', async () => {
       const run = setup()
       vi.mocked(run.deps.registry.byProcess).mockReturnValue(agent({ sessionId: '' }))
@@ -926,6 +973,14 @@ describe('binding a running process to its session', () => {
       await run.binding.bindObservedAgent(observed())
       expect(findLiveSession).toHaveBeenCalledTimes(25)
       expect(findLiveSession).toHaveBeenLastCalledWith('claude', '/work', Date.parse('2026-10-04T10:00:00Z'), { bornOnly: true, pid: 42, codexHome: undefined, hermesHome: undefined, expectedProcess: observed().processIdentity })
+    })
+
+    it('repairs a Windows process from its start', async () => {
+      const run = setup()
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(agent({ sessionId: '' }))
+      // The FILETIME of 2024-09-05T08:53:20Z.
+      await run.binding.bindObservedAgent(observed({ processIdentity: { pid: 42, startMarker: 'w:133700000000000000' } } as Partial<DiscoveredTerminalAgent>))
+      expect(findLiveSession).toHaveBeenCalledWith('claude', '/work', Date.parse('2024-09-05T08:53:20Z'), expect.objectContaining({ pid: 42 }))
     })
 
     it('binds what it finds, with the Hermes home it was found in, and starts the count over', async () => {

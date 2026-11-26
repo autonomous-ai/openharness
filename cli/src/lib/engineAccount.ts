@@ -28,6 +28,7 @@ import type { AgentEngine } from '../engines/types.js'
 import { resolveBinaryOnPath } from './binaryOnPath.js'
 import { engineBin } from './engineBin.js'
 import { warmLoginShellEnvironment } from './loginShellEnv.js'
+import { settingsText } from './settingsText.js'
 import { windowsEngineArgv } from './windows/launch.js'
 
 export interface EngineAccount {
@@ -54,7 +55,7 @@ export interface EngineAccountDeps {
 const STATUS_TIMEOUT_MS = 5_000
 
 const mtime = (path: string) => stat(path).then(info => info.mtimeMs, () => null)
-const readJson = (path: string) => readFile(path, 'utf8').then(text => JSON.parse(text) as Record<string, unknown>).catch(() => null)
+const readJson = (path: string) => readFile(path).then(bytes => JSON.parse(settingsText(bytes)) as Record<string, unknown>).catch(() => null)
 
 /** The engine's own CLI, found on [env]'s PATH (or its *_PATH override), run without a window and killed at the timeout. */
 const runEngineStatus: EngineStatusRun = (engine, args, env) => new Promise(resolve => {

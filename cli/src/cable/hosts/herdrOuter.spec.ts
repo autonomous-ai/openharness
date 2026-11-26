@@ -5,9 +5,10 @@ import { describe, expect, it, vi } from 'vitest'
 import { RECORDED_HERDR } from '../../testing/recordedHerdr.js'
 import {
   createHerdrNested, createHerdrOuter, FDS_A_PROCESS, HERDR_CLIENTS_A_LOOKUP, procSockets, SKIPPED_IDS_KEPT, ttyAtime, type HerdrOuterDeps,
+  type HerdrWindowsDeps,
 } from './herdrOuter.js'
 import { FRESH_WITHIN_MS, type Fresh } from './outer.js'
-import { parseProcessNames, type PtyProcess } from './scannedApp.js'
+import { parseProcessNames, type PtyProcess, type WindowsProcess } from './scannedApp.js'
 
 interface Call { file: string; args: string[]; timeoutMs: number }
 /** What the fake lsof, ps and ss print, each tty's access time, and the socket inodes each process's descriptors hold
@@ -50,6 +51,8 @@ const IN_TERMINAL = { app: 'terminal-app', tty: '/dev/ttys004', pid: 4300 }
 /** A hooked lookup's answer once herdr's server made the caller's terminal: [place] on herdr's page. */
 const herdrs = (place: object = {}) => ({ ...place, nest: 'herdr' })
 const found = ['[device] herdr client · found']
+/** A client found in no app: the window to raise is its process's, or on Windows its window owner's. */
+const foundWindow = ['[device] herdr client · found · window']
 const none = ['[device] herdr client · none']
 /** The lookup's line when no herdr server made the caller's terminal: no client was looked for. */
 const outside = ['[device] herdr client · outside']
@@ -135,7 +138,7 @@ describe('the outer place of an agent in the person\'s herdr', () => {
     expect([calls, reads(), stats]).toEqual([[], 0, []])
   })
 
-  it('Windows: undefined at once and nothing runs', () => {
+  it('Windows with no Windows table to read: undefined at once and nothing runs', () => {
     const { calls, held, logs, reads, stats, ttys, outer } = lookup({ platform: 'win32' }, [], ONE)
     expect(outer(PANE, 100)).toBeUndefined()
     expect([calls, reads(), stats, ttys, held, logs]).toEqual([[], 0, [], [], [], []])
@@ -201,7 +204,7 @@ describe('the outer place of an agent in the person\'s herdr', () => {
     ]
     const cases: Array<[string, ReturnType<typeof lookup>, Record<string, unknown>, string[]]> = [
       ['a client in an app', lookup({}, [], ONE), { ...IN_TERMINAL, nest: 'herdr' }, found],
-      ['a client in no app', lookup({ bundleId: async () => 'com.example.other' }, [], ONE), { pid: 4300, nest: 'herdr' }, none],
+      ['a client in no app', lookup({ bundleId: async () => 'com.example.other' }, [], ONE), { pid: 4300, nest: 'herdr' }, foundWindow],
       ['no client', lookup({ processes: async () => TABLE.filter((p) => p.pid !== 4300) }, [], { ps: '80 ??\n' }), { nest: 'herdr' }, none],
       ['a client inside the person\'s tmux', lookup({ processes: async () => inTmux }, [], {
         lsof: sockets({ 80: SERVER, 4400: [['0xb4', '->0xa1']] }), ps: '4400 ttys009\n',
@@ -406,11 +409,11 @@ describe('the outer place of an agent in the person\'s herdr', () => {
     const atime = { '/dev/ttys004': 1000, '/dev/ttys007': 2000 }
     const { logs, outer } = lookup({ processes }, [], { ...TWO, atime })
     expect(await outer(PANE, 100)).toStrictEqual(herdrs({ pid: 4310 }))
-    expect(logs).toEqual(none)
+    expect(logs).toEqual(foundWindow)
     // Linux: the recorded clients, each in a terminal the dial lists no page for.
     const linux = onLinux(scene(), { ps: recordedTtys(P.clientA, P.clientB), atime: { '/dev/pts/0': 2000, '/dev/pts/2': 1000 } })
     expect(await linux.outer(LINUX_PANE, P.agent)).toStrictEqual(herdrs({ pid: P.clientA }))
-    expect(linux.logs).toEqual(none)
+    expect(linux.logs).toEqual(foundWindow)
   })
 
   it('a client gone before ps is dropped', async () => {
@@ -441,7 +444,7 @@ describe('the outer place of an agent in the person\'s herdr', () => {
   it('a client whose parents name no listed app: the client\'s process alone', async () => {
     const { logs, outer } = lookup({ bundleId: async () => 'com.example.other' }, [], ONE)
     expect(await outer(PANE, 100)).toStrictEqual(herdrs({ pid: 4300 }))
-    expect(logs).toEqual(none)
+    expect(logs).toEqual(foundWindow)
   })
 
   it('herdr in Herdr\'s terminal: the holder is under no root the scan reads, the client\'s process alone', async () => {
@@ -451,7 +454,7 @@ describe('the outer place of an agent in the person\'s herdr', () => {
     ]
     const { logs, outer } = lookup({ processes }, [], ONE)
     expect(await outer(PANE, 100)).toStrictEqual(herdrs({ pid: 4300 }))
-    expect(logs).toEqual(none)
+    expect(logs).toEqual(foundWindow)
   })
 
   // herdr before 0.9.0 (#4500's macOS tests ran 0.8.0): `--no-session` ran the panes under the client itself, on ptys
@@ -577,12 +580,13 @@ describe('the outer place of an agent in the person\'s herdr', () => {
     const asks: Array<[ReturnType<typeof lookup>, number]> = [
       [lookup({}, [], ONE), 100], [lookup({}, [], { lsof: sockets({ 80: SERVER }), ps: '80 ??\n' }), 100],
       [lookup({}, [], { ...ONE, ps: '' }), 100], [lookup({}, [], ONE), 4299],
+      [lookup({ bundleId: async () => 'com.example.other' }, [], ONE), 100],
     ]
     for (const [{ logs, outer }, pid] of asks) {
       await outer(PANE, pid)
       lines.push(...logs)
     }
-    expect(lines).toEqual([...found, ...none, ...notRead('ttys'), ...outside])
+    expect(lines).toEqual([...found, ...none, ...notRead('ttys'), ...outside, ...foundWindow])
     for (const line of lines) {
       for (const id of ['w1:p2', '80', '4300', '100', 'ttys004', CONFIG, 'herdr-client.sock', 'com.apple.Terminal', 'Terminal', 'terminal-app']) {
         expect(line).not.toContain(id)
@@ -742,6 +746,179 @@ describe('herdr\'s clients on Linux', () => {
         expect(line).not.toContain(id)
       }
     }
+  })
+})
+
+/** The start marker (`w:<FILETIME>`) of the k-th process to start in Part 1's tree, so start order is not pid order; a
+ *  fractional k starts between two. */
+const mark = (k: number): string => `w:${134080735400000000n + BigInt(Math.round(k * 1000))}`
+/** A row as the Windows lookup reads it: four columns, no command line. */
+const winRow = (pid: number, ppid: number, executable: string, k: number): WindowsProcess => ({ pid, ppid, executable, startMarker: mark(k) })
+/** The tree Part 1 recorded on Ken's VM (docs/plans/2026-11-25-dial-herdr-windows-app-design.md, "What Part 1 showed"),
+ *  with its pids: the server (5992) a child of client #1 (8412) in a Windows Terminal tab, the caller (8976) in its
+ *  pane, client #2 (9904) in VS Code's terminal, and client #3 (3720, the newest) in the console Win+R's default-terminal
+ *  handoff opened. Part 1 gave no pid for #3: one lower than #2's pins that the newest is by start marker. */
+const RECORDED_WINDOWS: readonly WindowsProcess[] = [
+  winRow(5616, 4900, 'explorer.exe', 1),
+  winRow(7588, 5616, 'WindowsTerminal.exe', 2),
+  winRow(4008, 7588, 'OpenConsole.exe', 3),
+  winRow(5512, 7588, 'powershell.exe', 4),
+  winRow(8412, 5512, 'herdr.exe', 5),
+  winRow(5992, 8412, 'herdr.exe', 6),
+  winRow(2264, 5992, 'OpenConsole.exe', 7),
+  winRow(8928, 5992, 'powershell.exe', 8),
+  winRow(8976, 8928, 'powershell.exe', 9),
+  winRow(5864, 5616, 'Code.exe', 10),
+  winRow(6400, 5864, 'Code.exe', 11),
+  winRow(6936, 6400, 'OpenConsole.exe', 12),
+  winRow(9264, 6400, 'powershell.exe', 13),
+  winRow(9904, 9264, 'herdr.exe', 14),
+  winRow(5604, 5616, 'powershell.exe', 15),
+  winRow(4168, 5604, 'conhost.exe', 16),
+  winRow(3720, 5604, 'herdr.exe', 17),
+]
+const WIN_CALLER = 8976
+const WIN_PANE = { HERDR_PANE_ID: 'w1:p1' }
+/** Client #2 and its shell ended. */
+const SECOND_GONE = [9904, 9264]
+/** Client #1 and its tab's shell ended; the server's parent pid still names 8412. */
+const FIRST_GONE = [8412, 5512]
+/** The recorded tree less [gone], with [added]. */
+const recorded = (gone: readonly number[] = [], added: readonly WindowsProcess[] = []): WindowsProcess[] =>
+  [...RECORDED_WINDOWS.filter((p) => !gone.includes(p.pid)), ...added]
+const IN_VSCODE = herdrs({ app: 'vscode', pid: 9904 })
+const IN_WINDOWS_TERMINAL = herdrs({ pid: 7588 })
+
+/** The lookup on Windows over [table]: herdr's marker names no server unless [over] says, and the table each marker
+ *  check was given is kept. */
+function onWindows(table: readonly WindowsProcess[], over: Partial<HerdrWindowsDeps> = {}) {
+  let tables = 0
+  const servers: Array<readonly WindowsProcess[]> = []
+  const windows: HerdrWindowsDeps = {
+    processes: async () => { tables++; return table },
+    server: async (rows) => { servers.push(rows); return undefined },
+    ...over,
+  }
+  return { ...lookup({ platform: 'win32', windows }), tables: () => tables, servers }
+}
+/** The Windows lookup's answer for the caller over [table]. */
+const windowsPlace = (table: readonly WindowsProcess[]) => onWindows(table).outer(WIN_PANE, WIN_CALLER)
+
+describe('herdr\'s clients on Windows', () => {
+  it('the client in VS Code places the agent, before the newer one with no window', async () => {
+    const { calls, logs, reads, servers, stats, tables, ttys, outer } = onWindows(RECORDED_WINDOWS)
+    const made = vi.fn()
+    expect(await outer(WIN_PANE, WIN_CALLER, made)).toStrictEqual(IN_VSCODE)
+    await vi.waitFor(() => expect(made.mock.calls).toEqual([['herdr']]))
+    // One read of the PTY host's table serves the server, the marker's check and every walk: nothing runs, and no
+    // terminal is read, which Windows names none of.
+    expect([tables(), servers, reads(), calls, ttys, stats]).toEqual([1, [RECORDED_WINDOWS], 0, [], [], []])
+    expect(logs).toEqual(found)
+  })
+
+  // Decision 5: a client in a window beats a newer one in none, as a client in an app beats one in none.
+  it('with client #2 gone, Windows Terminal\'s window beats the newer handoff client', async () => {
+    const { logs, outer } = onWindows(recorded(SECOND_GONE))
+    expect(await outer(WIN_PANE, WIN_CALLER)).toStrictEqual(IN_WINDOWS_TERMINAL)
+    expect(logs).toEqual(foundWindow)
+  })
+
+  // Part 1 step 5: nothing in the tree links the handoff's console to a window.
+  it('with client #1 gone too, no window', async () => {
+    const { logs, outer } = onWindows(recorded([...SECOND_GONE, ...FIRST_GONE]))
+    const made = vi.fn()
+    expect(await outer(WIN_PANE, WIN_CALLER, made)).toStrictEqual(herdrs())
+    await vi.waitFor(() => expect(made.mock.calls).toEqual([['herdr']]))
+    expect(logs).toEqual(none)
+  })
+
+  // Part 1 step 4: the server keeps its first client's pid as its parent after that client ends, and Windows may hand
+  // that pid to a newer process, which is never the server's client.
+  it('a reused pid of the first client changes nothing', async () => {
+    const reused = winRow(8412, 5616, 'Code.exe', 18)
+    expect(await windowsPlace(recorded([...SECOND_GONE, ...FIRST_GONE], [reused]))).toStrictEqual(herdrs())
+    expect(await windowsPlace(recorded(FIRST_GONE, [reused]))).toStrictEqual(IN_VSCODE)
+  })
+
+  it('an app beats a newer client in a terminal', async () => {
+    const newer = [winRow(7700, 7588, 'powershell.exe', 18), winRow(7710, 7700, 'herdr.exe', 19)]
+    expect(await windowsPlace(recorded([], newer))).toStrictEqual(IN_VSCODE)
+  })
+
+  it('a tie on the start marker goes to the higher pid', async () => {
+    expect(await windowsPlace(recorded([], [winRow(9950, 9264, 'herdr.exe', 14)]))).toStrictEqual(herdrs({ app: 'vscode', pid: 9950 }))
+  })
+
+  // A pane's `herdr agent …` command, or a herdr client nested in a pane: as many as fill the bound, each newer than every
+  // client, so taken as clients they would leave only Windows Terminal's window, the server's first client's.
+  it('a herdr under the server is no client', async () => {
+    const commands = Array.from({ length: HERDR_CLIENTS_A_LOOKUP }, (_, at) => winRow(9990 + at, 8928, 'herdr.exe', 18 + at / 100))
+    expect(await windowsPlace(recorded([], commands))).toStrictEqual(IN_VSCODE)
+  })
+
+  // `herdr --session x` runs a server of its own under its client, in VS Code here: neither is ours.
+  it('a named session\'s client is no client', async () => {
+    const session = [
+      winRow(7100, 6400, 'powershell.exe', 18), winRow(7110, 7100, 'herdr.exe', 19), winRow(7120, 7110, 'herdr.exe', 20),
+    ]
+    expect(await windowsPlace(recorded([], session))).toStrictEqual(IN_VSCODE)
+  })
+
+  // Started before client #2: its parent pid named another process, so it is no named session's server under #2.
+  it('a herdr whose parent pid was reused is no child of it', async () => {
+    expect(await windowsPlace(recorded([], [winRow(300, 9904, 'herdr.exe', 13)]))).toStrictEqual(IN_VSCODE)
+  })
+
+  it('a reused parent pid ends the walk', async () => {
+    // Client #2's shell ended and a Code.exe took its pid: #2 is in no app.
+    expect(await windowsPlace(recorded([9264], [winRow(9264, 5616, 'Code.exe', 20)]))).toStrictEqual(IN_WINDOWS_TERMINAL)
+  })
+
+  // The PTY host leaves the marker empty on a process it could not open: another account's.
+  it('a row with no start marker is left out', async () => {
+    for (const startMarker of [undefined, '']) {
+      const table = RECORDED_WINDOWS.map((p) => (p.pid === 9904 ? { pid: 9904, ppid: 9264, executable: 'herdr.exe', startMarker } : p))
+      expect(await windowsPlace(table), String(startMarker)).toStrictEqual(IN_WINDOWS_TERMINAL)
+    }
+  })
+
+  it('at most 16 candidates, the newest', async () => {
+    const twenty = (k: (i: number) => number) => Array.from({ length: 20 }, (_, at) => winRow(20001 + at, 5604, 'herdr.exe', k(at + 1)))
+    // Newer than every client, in no window: #1 and #2 fall out of the bound.
+    expect(await windowsPlace(recorded([], twenty((i) => 100 + i)))).toStrictEqual(herdrs())
+    // Started before #2: #2 stays inside the bound, and its app places the agent.
+    expect(await windowsPlace(recorded([], twenty((i) => 13 + i / 100)))).toStrictEqual(IN_VSCODE)
+  })
+
+  it('the table not read: {}, said, and herdr\'s page not told', async () => {
+    const { logs, outer, servers } = onWindows([], { processes: async () => { throw new Error('process table not read') } })
+    const made = vi.fn()
+    expect(await outer(WIN_PANE, WIN_CALLER, made)).toStrictEqual({})
+    expect(made).not.toHaveBeenCalled()
+    expect(servers).toEqual([])
+    expect(logs).toEqual(notRead('processes'))
+  })
+
+  // A powershell started in a Windows Terminal tab, the pane's variables kept: no herdr made its console.
+  it('a maker that is not herdr: {} and outside', async () => {
+    const { logs, outer, servers } = onWindows(recorded([], [winRow(6000, 5512, 'powershell.exe', 18)]))
+    const made = vi.fn()
+    expect(await outer(WIN_PANE, 6000, made)).toStrictEqual({})
+    expect(made).not.toHaveBeenCalled()
+    expect(servers).toEqual([])
+    expect(logs).toEqual(outside)
+  })
+
+  // The hook sends no pane id for a named session: a second guard.
+  it('the marker names another server: herdr\'s page with no client; ours: the client', async () => {
+    const other = onWindows(RECORDED_WINDOWS, { server: async () => 1234 })
+    const made = vi.fn()
+    expect(await other.outer(WIN_PANE, WIN_CALLER, made)).toStrictEqual(herdrs())
+    await vi.waitFor(() => expect(made.mock.calls).toEqual([['herdr']]))
+    expect(other.logs).toEqual(none)
+    const ours = onWindows(RECORDED_WINDOWS, { server: async () => 5992 })
+    expect(await ours.outer(WIN_PANE, WIN_CALLER)).toStrictEqual(IN_VSCODE)
+    expect(ours.logs).toEqual(found)
   })
 })
 

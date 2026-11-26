@@ -175,7 +175,7 @@ import { createRelaunchMarks, transcriptSize } from './transcripts/relaunch.js'
 import { createForgetSession } from './agents/forget.js'
 import { createBinding } from './agents/bind.js'
 import { createHermesTerminal } from './agents/hermesTerminal.js'
-import { hermesSessionEndedSince, hermesSessionKind, hermesStoreStamp, hermesTerminalNames, hermesTerminalStamp, readHermesTerminal } from '../engines/identities.js'
+import { hermesSessionKind, hermesStoreStamp, hermesTerminalNames, hermesTerminalStamp, readHermesTerminal } from '../engines/identities.js'
 import { hermesRecordSeen } from '../engines/nativeHooks.js'
 import { createDiscoveryHandlers } from './agents/discovery.js'
 import { createLaunchHelpers, gridLaunchThrough } from './agents/launch.js'
@@ -1027,7 +1027,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // through the backend is (onCommanderJoin): one whose devices' process restarted comes back to tiles
       // mid-turn, and to a question nobody has answered yet.
       // The working tiles are the recaps' to say: asked, and sent to the dial when they answer.
-      if (attached) for (const frame of openQuestions.values()) ports.devices?.card(frame)
+      if (attached) for (const frame of asking.openQuestionFrames()) ports.devices?.card(frame)
       if (attached) void mirror.liveCards().then((cards) => { for (const frame of cards) ports.devices?.card(frame) })
       if (attached) for (const frame of cloudAgents?.liveCards() ?? []) ports.devices?.card(frame)
     },
@@ -2088,7 +2088,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       stamp: hermesTerminalStamp,
       read: readHermesTerminal,
       kind: hermesSessionKind,
-      endedSince: hermesSessionEndedSince,
       storeStamp: hermesStoreStamp,
       recordSeen: (home) => { void hermesRecordSeen(home) },
       now: Date.now,
@@ -2471,7 +2470,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
      * holds, and that reaches the window as an ordinary `dial_status`.
      */
     onDialSettings: (id, patch) => ports.devices?.settings(id, patch),
-    openQuestions: () => [...openQuestions.values()],
+    openQuestions: () => asking.openQuestionFrames(),
     machineId: backend.machineId,
     backend,
     relayPool: gateway.windowRelay,

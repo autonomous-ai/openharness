@@ -862,6 +862,7 @@ The menu, top to bottom:
   Signed in
 ✓ Sound
   Notifications ▸
+  Voice language ▸
 ──────────
   Open Harness
   Export logs

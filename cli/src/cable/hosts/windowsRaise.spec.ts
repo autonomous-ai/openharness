@@ -93,6 +93,48 @@ describe('createWindowsRaise app', () => {
   })
 })
 
+// The window of the process herdr's lookup found holding the agent's client (herdrOuter.ts): Windows Terminal's, say.
+describe('createWindowsRaise window', () => {
+  it('raises the window of a process by its pid through the helper', async () => {
+    const { raise, runs } = raiseWith(says('raised\n'))
+    expect(await raise.window(4242)).toBe(true)
+    expect(runs).toEqual([{ file: PTY, args: ['raise', '--pid', '4242'], timeoutMs: RUN_TIMEOUT_MS }])
+  })
+
+  it.each(['raised', 'refused'] as const)('takes %s as a tap done, and counts it as itself', async (word) => {
+    const { raise, counts } = raiseWith(says(`${word}\n`))
+    expect(await raise.window(4242)).toBe(true)
+    expect(counts).toEqual([word])
+  })
+
+  it.each([
+    ['the helper finds no window', says('none\n')],
+    ['an older helper does not know the command', says('', 2)],
+    ['the helper does not answer in time', says('', null)],
+    ['the helper answers another word', says('raisedx\n')],
+    ['a refused word comes with a failed exit', says('refused\n', 1)],
+    ['the run fails to start', () => Promise.reject(new Error('spawn EACCES'))],
+  ])('fails the tap and counts none when %s', async (_, answer) => {
+    const { raise, counts } = raiseWith(answer)
+    expect(await raise.window(4242)).toBe(false)
+    expect(counts).toEqual(['none'])
+  })
+
+  it.each([0, -1, 1.5, 2 ** 40, Number.NaN])('fails a tap on pid %s, which no process has, running nothing', async (pid) => {
+    const { raise, runs, counts } = raiseWith(says('raised\n'))
+    expect(await raise.window(pid)).toBe(false)
+    expect(runs).toEqual([])
+    expect(counts).toEqual(['none'])
+  })
+
+  it('fails the tap with no helper, running nothing', async () => {
+    const { raise, runs, counts } = raiseWith(says('raised\n'), { binary: () => null })
+    expect(await raise.window(4242)).toBe(false)
+    expect(runs).toEqual([])
+    expect(counts).toEqual(['none'])
+  })
+})
+
 describe('createWindowsRaise link', () => {
   const URL = 'vscode://anthropic.claude-code/open?session=0c5f3e9a-7f7b-4f1c-9a52-2f8d3a1b6c4e'
 
@@ -202,7 +244,9 @@ describe('createWindowsRaise counts', () => {
     await raise.link('codex://threads/abc', APP_BUNDLES.codex)
     await raise.cursorFolder('C:\\src')
     await raise.desktop()
-    expect(counts.length).toBe(Object.keys(WINDOWS_APPS).length + 3)
+    await raise.window(4242)
+    await raise.window(0)
+    expect(counts.length).toBe(Object.keys(WINDOWS_APPS).length + 5)
     for (const outcome of counts) expect(['raised', 'refused', 'none']).toContain(outcome)
   })
 })

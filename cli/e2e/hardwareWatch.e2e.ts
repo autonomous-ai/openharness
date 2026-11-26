@@ -2,8 +2,8 @@
  * `harness hardware watch` on the real daemon, as the menu-bar app runs it: a stdin pipe held open and stdout read
  * line by line. The first daemons run with CABLE_DISABLE (no dial and no devices' process), so their status is "not
  * attached"; the exit codes are the app's probe of the daemon: 3 it cannot be reached, 0 the app closed the pipe. The
- * last two run a fake dial (harness/desk.ts): the watch changes its sound, and this computer's Notifications setting,
- * from a line on its stdin.
+ * last two run a fake dial (harness/desk.ts): the watch changes its sound and its voice language, and this computer's
+ * Notifications setting, from a line on its stdin.
  */
 import { spawn } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
@@ -85,6 +85,8 @@ describe('harness hardware watch on the real daemon', () => {
 
 /** `muted` on a line the watch printed. */
 const mutedOf = (line: string | undefined): unknown => (line === undefined ? undefined : (JSON.parse(line) as { muted?: unknown }).muted)
+/** `voiceLang` on a line the watch printed. */
+const voiceLangOf = (line: string | undefined): unknown => (line === undefined ? undefined : (JSON.parse(line) as { voiceLang?: unknown }).voiceLang)
 
 describe('harness hardware watch with a dial: Sound', () => {
   let daemon: IsolatedDaemon | undefined
@@ -152,6 +154,53 @@ describe('harness hardware watch with a dial: Sound', () => {
     await until('the watch to say it has no dial to change', () => run.errors.includes('sound: NO_DIAL'), 30_000)
     // The first change was answered ok before the second went out: no NO_ANSWER, nor any other sound line.
     expect(run.errors.filter((line) => line.startsWith('sound: '))).toEqual(['sound: NO_DIAL'])
+  })
+
+  it('a voiceLang line reaches the dial, and the line and Desktop\'s dial_status follow only what the dial says', async () => {
+    const { d, desk } = await fresh()
+    const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
+    const run = watch(d)
+    onTestFailed(() => { console.log(`---- the watch's stdout\n${run.lines.join('\n')}\n---- its stderr\n${run.errors.join('\n')}`) })
+    // Desktop's stand-in, there before any change: it hears every dial_status from now on.
+    const window = await LocalClient.connect(d)
+    windows.push(window)
+    await until('the watch to say English', () => voiceLangOf(run.lines.at(-1)) === 'en', 60_000)
+
+    let since = dial.messages.length
+    run.child.stdin!.write('{"voiceLang":"vi"}\n')
+    expect(await dial.next((m) => m.t === 'settings.set', 30_000, 'settings.set', since)).toEqual({ t: 'settings.set', voiceLang: 'vi' })
+    // Sent is not done: the line moves only when the dial says so.
+    expect(voiceLangOf(run.lines.at(-1))).toBe('en')
+
+    // Any line since, not only the last: the dial greets again every 15 s with the settings it was plugged in with
+    // (English), which can turn the line back between two looks.
+    const from = run.lines.length
+    const framesBefore = window.frames.length
+    dial.send({ t: 'settings.state', ok: true, settings: { ...SETTINGS, voiceLang: 'vi' } })
+    await until('the watch to say Tiếng Việt', () => run.lines.slice(from).some((line) => voiceLangOf(line) === 'vi'), 30_000)
+    // The same status Desktop reads carries the language the dial took.
+    await window.waitFor((f) => f.type === 'dial_status' && f.payload?.settings?.voiceLang === 'vi', 30_000, 'Desktop\'s dial_status to say vi', framesBefore)
+
+    // Desktop's row: the watch follows the dial whoever changed it.
+    since = dial.messages.length
+    expect(await window.request('harness_device_settings', { id: 'E2E-A', patch: { voiceLang: 'en' } })).toMatchObject({ ok: true })
+    expect(await dial.next((m) => m.t === 'settings.set', 30_000, 'a second settings.set', since)).toEqual({ t: 'settings.set', voiceLang: 'en' })
+    dial.send({ t: 'settings.state', ok: true, settings: SETTINGS })
+    await until('the watch to say English again', () => voiceLangOf(run.lines.at(-1)) === 'en', 30_000)
+
+    // The daemon's answer on the watch's own socket, under its request id, which no unit test reaches: a second change
+    // goes out at once only if the first was answered. One never answered holds the slot 12 s, then says
+    // `voice: NO_ANSWER`, which the last check reads, and only then sends the second.
+    since = dial.messages.length
+    run.child.stdin!.write('{"voiceLang":"fr"}\n')
+    expect(await dial.next((m) => m.t === 'settings.set', 30_000, 'the watch\'s second settings.set', since)).toEqual({ t: 'settings.set', voiceLang: 'fr' })
+
+    await desk.unplug('E2E-A')
+    await until('the watch to say no dial', () => run.lines.at(-1) === '{"attached":false}', 60_000)
+    run.child.stdin!.write('{"voiceLang":"vi"}\n')
+    await until('the watch to say it has no dial to change', () => run.errors.includes('voice: NO_DIAL'), 30_000)
+    // The first change was answered ok before the second went out: no NO_ANSWER, nor any other voice line.
+    expect(run.errors.filter((line) => line.startsWith('voice: '))).toEqual(['voice: NO_DIAL'])
   })
 })
 

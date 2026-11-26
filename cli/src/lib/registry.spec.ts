@@ -2445,7 +2445,10 @@ describe('registry across a reboot and pane loss', () => {
     })
   })
 
-  it('lets process discovery start a resumed row, and still refuses the wrong conversation', async () => {
+  // A resumed row whose verified engine reports another conversation (a `/clear`, a `/new`, Codex's first prompt
+  // naming a new thread) follows it, as any rotation does: the running engine is the truth, and a row failed over an
+  // engine the person types into stayed failed for hours (docs/plans/2026-11-25-win-hook-admission-design.md, A).
+  it('lets process discovery start a resumed row, and binds another conversation its process reports as a rotation', async () => {
     const transcriptPath = join(dataDir, 'resume-target.jsonl')
     writeFileSync(transcriptPath, '{}\n')
     const { registry } = await loadRegistryModule()
@@ -2457,16 +2460,18 @@ describe('registry across a reboot and pane loss', () => {
     // hook a resume may never send. What it has NOT yet been told is which conversation reopened.
     expect(registry.byAgent(original.agentId)?.launch?.state).toBe('ready')
     expect(registry.byAgent(original.agentId)?.lastHookAt).toBe(0)
-    expect((await registry.register({ engine: 'claude', sessionId: 'unexpected-new-session', transcriptPath, tmuxPane: '%22', processIdentity: processIdentity(122) }))).toBeNull()
-    expect(registry.byAgent(original.agentId)).toMatchObject({ sessionId: 'resume-target', launch: { state: 'failed', error: 'RESUME_SESSION_MISMATCH' } })
-    const confirmed = (await registry.register({ engine: 'claude', sessionId: 'resume-target', transcriptPath, tmuxPane: '%22', processIdentity: processIdentity(122) }))
-    expect(confirmed?.entry).toMatchObject({ agentId: original.agentId, sessionId: 'resume-target', launch: { state: 'ready' } })
+    const otherPath = join(dataDir, 'unexpected-new-session.jsonl')
+    writeFileSync(otherPath, '{}\n')
+    const rotated = (await registry.register({ engine: 'claude', sessionId: 'unexpected-new-session', transcriptPath: otherPath, tmuxPane: '%22', processIdentity: processIdentity(122) }))
+    expect(rotated).toMatchObject({ isNew: true, rebound: 'resume-target', entry: { agentId: original.agentId,
+      sessionId: 'unexpected-new-session', active: true, resumeOnly: true, launch: { state: 'ready' } } })
+    expect(rotated!.entry.earlierSessionIds).toContain('resume-target')
+    expect(existsSync(transcriptPath)).toBe(true) // the old conversation stays on disk
   })
 
-  // The guard reads `lastHookAt`, not `launch`. A resume is now confirmed by its own live engine
-  // process (`resumeStoppedAgent.ts`), which marks the row ready BEFORE any hook arrives — and a
-  // guard keyed on `launch` would have been disarmed for exactly the resumes it protects.
-  it('still refuses another conversation on the first hook after the row was marked ready', async () => {
+  // A resume is confirmed by its own live engine process (`resumeStoppedAgent.ts`), which marks the row
+  // ready BEFORE any hook arrives: the first hook after that may already name another conversation.
+  it('binds another conversation on the first hook after the row was marked ready, as a rotation', async () => {
     const transcriptPath = join(dataDir, 'ready-first.jsonl')
     writeFileSync(transcriptPath, '{}\n')
     const { registry } = await loadRegistryModule()
@@ -2477,8 +2482,78 @@ describe('registry across a reboot and pane loss', () => {
     registry.setLaunch(original.agentId, { state: 'ready' })
     expect(registry.byAgent(original.agentId)?.lastHookAt).toBe(0)
 
-    expect((await registry.register({ engine: 'claude', sessionId: 'somebody-elses-session', transcriptPath, tmuxPane: '%32', processIdentity: processIdentity(132) }))).toBeNull()
-    expect(registry.byAgent(original.agentId)).toMatchObject({ sessionId: 'ready-first', launch: { state: 'failed', error: 'RESUME_SESSION_MISMATCH' } })
+    const otherPath = join(dataDir, 'somebody-elses-session.jsonl')
+    writeFileSync(otherPath, '{}\n')
+    const rotated = (await registry.register({ engine: 'claude', sessionId: 'somebody-elses-session', transcriptPath: otherPath, tmuxPane: '%32', processIdentity: processIdentity(132) }))
+    expect(rotated).toMatchObject({ isNew: true, rebound: 'ready-first', entry: { agentId: original.agentId,
+      sessionId: 'somebody-elses-session', active: true, resumeOnly: true, launch: { state: 'ready' } } })
+    expect(rotated!.entry.earlierSessionIds).toContain('ready-first')
+  })
+
+  it('binds another conversation as a rotation after a reload', async () => {
+    const transcriptPath = join(dataDir, 'before-reload.jsonl')
+    writeFileSync(transcriptPath, '{}\n')
+    const { registry } = await loadRegistryModule()
+    const original = (await registerProcess(registry, { engine: 'claude', sessionId: 'before-reload', transcriptPath, tmuxPane: '%21' }))!.entry
+    ;(await removeRegistryAgent(registry, original.agentId))
+    ;(await registry.resumePendingAgent(original, [{ backend: 'tmux', paneId: '%22' }]))
+    expect((await registry.confirmLaunch(original.agentId, { processIdentity: processIdentity(122) })).state).toBe('confirmed')
+    await registry.flush()
+    const { registry: reloaded } = await loadRegistryModule()
+    reloaded.load()
+    expect(reloaded.byAgent(original.agentId)).toMatchObject({ sessionId: 'before-reload', lastHookAt: 0, resumeOnly: true, launch: { state: 'ready' } })
+
+    const otherPath = join(dataDir, 'after-reload.jsonl')
+    writeFileSync(otherPath, '{}\n')
+    const rotated = (await reloaded.register({ engine: 'claude', sessionId: 'after-reload', transcriptPath: otherPath, tmuxPane: '%22', processIdentity: processIdentity(122) }))
+    expect(rotated).toMatchObject({ isNew: true, rebound: 'before-reload', entry: { agentId: original.agentId,
+      sessionId: 'after-reload', active: true, resumeOnly: true, launch: { state: 'ready' } } })
+    expect(rotated!.entry.earlierSessionIds).toContain('before-reload')
+    // The rotation is saved: the next daemon reads the new conversation, not a failed row.
+    await reloaded.flush()
+    const { registry: again } = await loadRegistryModule()
+    again.load()
+    expect(again.byAgent(original.agentId)).toMatchObject({ sessionId: 'after-reload', active: true, launch: { state: 'ready' },
+      earlierSessionIds: ['before-reload'] })
+  })
+
+  // A hook with no verified process cannot speak for the resumed engine: it may be another process in the pane.
+  it('still binds no hook without a valid process identity on a never-hooked resumed row', async () => {
+    const transcriptPath = join(dataDir, 'unverified-target.jsonl')
+    writeFileSync(transcriptPath, '{}\n')
+    const { registry } = await loadRegistryModule()
+    const original = (await registerProcess(registry, { engine: 'claude', sessionId: 'unverified-target', transcriptPath, tmuxPane: '%41' }))!.entry
+    ;(await removeRegistryAgent(registry, original.agentId))
+    ;(await registry.resumePendingAgent(original, [{ backend: 'tmux', paneId: '%42' }]))
+    ;(await registry.openProcessAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%42' }], processIdentity: processIdentity(142) }))
+    const before = registry.byAgent(original.agentId)!
+    const otherPath = join(dataDir, 'unverified-other.jsonl')
+    writeFileSync(otherPath, '{}\n')
+    expect((await registry.register({ engine: 'claude', sessionId: 'unverified-other', transcriptPath: otherPath, tmuxPane: '%42' }))).toBeNull()
+    expect(registry.byAgent(original.agentId)).toMatchObject({ sessionId: 'unverified-target', active: before.active, launch: before.launch })
+  })
+
+  // Review Focus 1: a build before this one saved such a row failed. Once discovery confirms its engine again, the next
+  // hook of another conversation rotates it, and nobody has to act.
+  it('recovers a row an older build failed with RESUME_SESSION_MISMATCH once its engine is confirmed', async () => {
+    const transcriptPath = join(dataDir, 'session-a.jsonl')
+    writeFileSync(transcriptPath, '{}\n')
+    chmodSync(dataDir, 0o755)
+    writeLegacyStateFile(join(dataDir, 'registry.json'), JSON.stringify([persistedRow(transcriptPath, {
+      active: false, resumeOnly: true, lastHookAt: 0, launch: { state: 'failed', error: 'RESUME_SESSION_MISMATCH',
+        detail: 'The agent reported a different conversation. The requested conversation is still saved.' } })]))
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    expect(registry.byAgent('agent-a')).toMatchObject({ active: false, launch: { state: 'failed', error: 'RESUME_SESSION_MISMATCH' } })
+    // What discovery does for a launch that is not ready, over the engine still running in the pane.
+    expect((await registry.confirmLaunch('agent-a', { processIdentity: processIdentity(4242) })).state).toBe('confirmed')
+
+    const otherPath = join(dataDir, 'session-b.jsonl')
+    writeFileSync(otherPath, '{}\n')
+    const rotated = (await registry.register({ engine: 'claude', sessionId: 'session-b', transcriptPath: otherPath, tmuxPane: '%3', processIdentity: processIdentity(4242) }))
+    expect(rotated).toMatchObject({ isNew: true, rebound: 'session-a', entry: { agentId: 'agent-a', sessionId: 'session-b',
+      active: true, launch: { state: 'ready' } } })
+    expect(registry.byAgent('agent-a')).toMatchObject({ sessionId: 'session-b', active: true, launch: { state: 'ready' } })
   })
 
   it('drops any launch state on the hook that proves the engine is up', async () => {

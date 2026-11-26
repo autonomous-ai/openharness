@@ -44,6 +44,7 @@ import type { TerminalDispatchControl, TerminalRuntimeRef } from './terminalType
 import type { WindowsPaneLaunch } from './windows/engineStart.js'
 import { processAmong, sameProcessIdentity, sameTerminalPlacement, terminalInstanceId, terminalRouteKey } from './terminalRuntime.js'
 import { resumesConversation } from './resumeCapability.js'
+import { holdsResumedConversation } from './resumeStoppedAgent.js'
 import { codeOrLength, errorKind, sid } from './log.js'
 import { publishEngine } from './paneEngineProcess.js'
 import { STARTING_AGAIN, supportsNativeFork } from './engineLaunch.js'
@@ -106,6 +107,21 @@ export function firstLaunchRebuildable<T extends Pick<RegisteredSession, 'creati
 export function guardHold(row: RegisteredSession, nativeToken: string): Extract<AgentLaunch, { state: 'held' }> | { state: 'failed' } & typeof DID_NOT_START {
   return row.sessionId || firstLaunchRebuildable(row)
     ? { state: 'held', service: 'native', nativeToken, startsAgain: true, detail: STARTING_AGAIN } : { state: 'failed', ...DID_NOT_START }
+}
+
+/** What 0.6.86 and older saved on a launch the guard held, each once its pane was seen to be the held shell, before
+ *  `startsAgain` marked such a hold. No current code writes them. */
+const LEGACY_HELD_DETAILS: ReadonlySet<string> = new Set([
+  'Waiting to confirm the engine executable and native hooks.',
+  'The engine did not start because its executable or native hooks changed. The original launch is held for recovery.',
+])
+
+/** A first launch 0.6.86 or older held for the guard. By its words, not its shape: current code still holds a first
+ *  launch with a native token and no mark on purpose (newPane.ts), and that one stays held. */
+export function legacyNativeHold(row: RegisteredSession): boolean {
+  const launch = row.launch
+  return launch?.state === 'held' && launch.service === 'native' && !!launch.nativeToken && !launch.startsAgain
+    && !row.sessionId && LEGACY_HELD_DETAILS.has(launch.detail)
 }
 
 export interface RestoreAgentsDeps {
@@ -457,6 +473,20 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
   const patience = { left: true }
   /** `alive`: a held agent's waiting pane, which its launch goes into rather than a new one. */
   const missing: MissingPane[] = []
+  /** [entry]'s pane is seen to be the guard's held shell under [nativeToken]: it starts again there, or fails with words
+   *  that say what to do. */
+  const heldByGuard = (entry: RegisteredSession, runtime: TerminalRuntimeRef, nativeToken: string): void => {
+    const launch = guardHold(entry, nativeToken)
+    const row = deps.registry.setLaunch(entry.agentId, launch)!
+    if (launch.state === 'failed') {
+      summary.failed.push({ agentId: entry.agentId, code: launch.error, reason: launch.detail })
+      deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · failed · ${launch.error}`)
+      return
+    }
+    deps.startAgain?.(entry.agentId)
+    const copy = { ...row }
+    missing.push({ entry: copy, runtime, alive: true, current: restoreOwner(deps, copy) })
+  }
 
   // Per row, because a survey that gives up on the first bad one gives up on every row behind it —
   // one pane whose `tmux list-panes` timed out, or one archive that could not be written, and the
@@ -482,7 +512,11 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
     if (entry.launch?.state === 'held') {
       // A first launch/fork has no conversation to resume yet. Without the guard's proof (`startsAgain`) nothing says
       // its original prompt or fork argv never reached an engine: keep the explicit hold; a fresh launch is different work.
-      const first = heldFirstLaunch(entry)
+      // One 0.6.86 or older held for the guard has that proof in its words (`legacyNativeHold`), but no `startsAgain`:
+      // every pass skipped it, and it stayed held for good. Seen in its held shell again, it gets the guard's hold, and
+      // from then on #4604's bounds (core/agents/heldLaunches.ts: 10 holds or 15 minutes, then DID_NOT_START).
+      const legacy = legacyNativeHold(entry)
+      const first = heldFirstLaunch(entry) || legacy
       if (entry.launch.nativeToken && !entry.sessionId && !first) {
         summary.skipped.push({ agentId: entry.agentId, reason: 'original native launch awaits recovery' })
         continue
@@ -502,7 +536,9 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
         if (current()) summary.unsurveyed.push(entry.agentId)
         continue
       }
-      if (current()) missing.push({ entry, runtime, current, ...(alive ? { alive: true as const } : {}) })
+      if (!current()) continue
+      if (legacy) heldByGuard(entry, runtime, entry.launch.nativeToken!)
+      else missing.push({ entry, runtime, current, ...(alive ? { alive: true as const } : {}) })
       continue
     }
     // A pane is alive as long as tmux has it, whatever runs in it: every pane is a shell with the
@@ -523,19 +559,9 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
       } else if (entry.launch?.state === 'starting' && entry.launch.nativeToken) {
         const waiting = await deps.waitingPane?.(runtime, entry.launch.nativeToken)
         if (!current()) continue
-        if (waiting === true) {
-          // The guard held it before this core saw its pane: it starts again, or fails with words that say what to do.
-          const launch = guardHold(entry, entry.launch.nativeToken)
-          const row = deps.registry.setLaunch(entry.agentId, launch)!
-          if (launch.state === 'failed') {
-            summary.failed.push({ agentId: entry.agentId, code: launch.error, reason: launch.detail })
-            deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · failed · ${launch.error}`)
-            continue
-          }
-          deps.startAgain?.(entry.agentId)
-          const copy = { ...row }
-          missing.push({ entry: copy, runtime, alive: true, current: restoreOwner(deps, copy) })
-        } else {
+        // The guard held it before this core saw its pane.
+        if (waiting === true) heldByGuard(entry, runtime, entry.launch.nativeToken)
+        else {
           const route = terminalRouteKey(runtime)
           const release = deps.holdRoute(route, (deps.budgetMs ?? DEFAULT_BUDGET_MS) + HOLD_SLACK_MS) ?? (() => deps.releaseRoute(route))
           void watchRestoredPane(deps, entry, runtime, !!entry.sessionId, deps.budgetMs ?? DEFAULT_BUDGET_MS, current, release,
@@ -1030,8 +1056,16 @@ async function watchRestoredPane(
         const ready = publication.state === 'confirmed' ? publication.entry : null
         if (!lifecycle() || !ready || !matchesLaunchReceipt(deps.registry.byAgent(agentId), ready)) return
         // From here the watch follows the row it published by its receipt, not `restoreOwner`: a reopened
-        // conversation's own hook stamps `boundAt` in the window, and the watch then ended with the pane held.
-        current = () => lifecycle() && matchesLaunchReceipt(deps.registry.byAgent(agentId), ready)
+        // conversation's own hook stamps `boundAt` in the window, and the watch then ended with the pane held. So did
+        // its engine moving it onto another conversation (a `/clear`, Codex's first prompt naming a new thread): the
+        // receipt is followed there, its conversation and the evidence of it being all that moved.
+        current = () => {
+          const row = deps.registry.byAgent(agentId)
+          return lifecycle() && (matchesLaunchReceipt(row, ready) || !!row && row.sessionId !== ready.sessionId
+            && holdsResumedConversation(row, ready.sessionId, ready.processIdentity)
+            && matchesLaunchReceipt({ ...row, sessionId: ready.sessionId, transcriptPath: ready.transcriptPath,
+              evidenceRevision: ready.evidenceRevision }, ready))
+        }
         // A resume the engine rejects does not fail to start — it starts, prints why, and exits a
         // few seconds later. Keep the pane (and the fallback) for a settling window before handing
         // it over; a pane let go at first sight of the process vanished with the engine and took

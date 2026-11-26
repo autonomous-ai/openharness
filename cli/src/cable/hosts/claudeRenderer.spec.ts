@@ -96,6 +96,14 @@ describe('readFullscreen', () => {
     writeFileSync(join(project, '.claude', 'settings.local.json'), '{"tui":"default"}')
     expect(await readFullscreen(project, undefined, local)).toBe(false)
   })
+
+  it('a settings file saved with a BOM decides', async () => {
+    // Windows PowerShell 5's `Set-Content -Encoding utf8` starts the file with one; Claude Code reads it either way.
+    const project = join(dir, 'api')
+    mkdirSync(join(project, '.claude'), { recursive: true })
+    writeFileSync(join(project, '.claude', 'settings.json'), '﻿{"tui":"fullscreen"}')
+    expect(await readFullscreen(project, undefined, { defaultHome: join(dir, 'home'), managed: undefined })).toBe(true)
+  })
 })
 
 describe('readSettings', () => {

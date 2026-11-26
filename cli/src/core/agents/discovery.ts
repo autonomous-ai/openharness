@@ -287,8 +287,8 @@ export function createDiscoveryHandlers({
     // of them sat at "Starting" for 19 hours over a pane its owner could type in — re-attached and
     // re-announced every 5s for the whole time, because `wasLaunching` stays true for a row that
     // nothing will ever mark ready (openharness#189). And nothing was actually protected by the
-    // wait: the wrong-conversation guard in `registry.register` keys on `lastHookAt`, not on this
-    // launch state, so it stays armed until the first hook whatever is written here.
+    // wait: a hook of the resumed process that names another conversation binds it as a rotation
+    // (`registry.register`), whatever is written here.
     await bindObservedAgent(observed)
     if (wasDormant || wasLaunching || adopted) {
       const active = registry.byAgent(current.agentId)

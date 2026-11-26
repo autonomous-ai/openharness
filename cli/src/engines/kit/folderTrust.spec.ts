@@ -246,6 +246,47 @@ describe('whether a source repo is already trusted (a worktree inherits only tha
   })
 })
 
+// Windows PowerShell 5's `Set-Content -Encoding utf8` starts a file with a BOM (docs/plans/2026-11-25-win-hook-admission-design.md, D).
+describe('a settings file saved with a BOM', () => {
+  const bom = '﻿'
+  const codexConfig = (text: string | Buffer): string => {
+    const home = mkdtempSync(join(tmpdir(), 'trust-'))
+    writeFileSync(join(home, 'config.toml'), text)
+    return home
+  }
+
+  it('reads and records trust in a .claude.json and a config.toml that start with a BOM', () => {
+    const trusted = mkdtempSync(join(tmpdir(), 'trust-'))
+    writeFileSync(join(trusted, '.claude.json'), `${bom}${JSON.stringify({ projects: { '/work/repo': { hasTrustDialogAccepted: true } } })}`)
+    expect(claudeTrusts('/work/repo', trusted)).toBe(true)
+    const untrusted = mkdtempSync(join(tmpdir(), 'trust-'))
+    writeFileSync(join(untrusted, '.claude.json'), `${bom}{"numStartups":1}`)
+    expect(preTrustClaudeProject('/w', untrusted)).toBe('trusted')
+    const claudeWritten = readFileSync(join(untrusted, '.claude.json'), 'utf8')
+    expect(claudeWritten.startsWith('{')).toBe(true)
+    expect(JSON.parse(claudeWritten).projects['/w'].hasTrustDialogAccepted).toBe(true)
+
+    expect(codexTrusts('/work/repo', codexConfig(`${bom}[projects."/work/repo"]\ntrust_level = "trusted"\n`))).toBe(true)
+    const codexHome = codexConfig(`${bom}model = "gpt-5"\n`)
+    expect(preTrustCodexProject('/w', codexHome)).toBe('trusted')
+    expect(readFileSync(join(codexHome, 'config.toml'), 'utf8')).toBe('model = "gpt-5"\n\n[projects."/w"]\ntrust_level = "trusted"\n')
+  })
+
+  it('reads a file that is not UTF-8 as no trust, and records nothing in it', () => {
+    const utf16 = Buffer.from([0xff, 0xfe, 0x7b, 0x00])
+    const claudeHome = mkdtempSync(join(tmpdir(), 'trust-'))
+    writeFileSync(join(claudeHome, '.claude.json'), utf16)
+    expect(claudeTrusts('/w', claudeHome)).toBe(false)
+    expect(preTrustClaudeProject('/w', claudeHome)).toBe('skipped')
+    expect(readFileSync(join(claudeHome, '.claude.json')).equals(utf16)).toBe(true)
+    const invalid = Buffer.concat([Buffer.from('[projects."/w"]\ntrust_level = "trusted"\n'), Buffer.from([0xff])])
+    const codexHome = codexConfig(invalid)
+    expect(codexTrusts('/w', codexHome)).toBe(false)
+    expect(preTrustCodexProject('/v', codexHome)).toBe('skipped')
+    expect(readFileSync(join(codexHome, 'config.toml')).equals(invalid)).toBe(true)
+  })
+})
+
 // The trust an engine reads is in ITS config: Codex's in `<CODEX_HOME>/config.toml`, Claude Code's in
 // `<CLAUDE_CONFIG_DIR or home>/.claude.json`. Both used to be read and written in the default places
 // alone, so a Codex agent on its own profile, or a person who moved either home in their shell profile,

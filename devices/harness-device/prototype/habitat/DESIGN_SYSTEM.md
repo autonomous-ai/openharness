@@ -65,6 +65,10 @@ glyph atlas. No runtime font engine, extra font family, gradients, or shadows.
 - Lists use ordinary primary text and one flat lilac selection. Back remains
   readable and neutral. Disabled choices use secondary text.
 - Quiet mode stops motion without adding another layer of dimming.
+- Not connected, the "Harness" wordmark has one hint under it in secondary text,
+  centred, at most two lines: "No computer found. Check the USB cable." with no
+  USB host, or "Open Harness Device on your computer." after 5 s on a host with
+  no daemon. While loading or updating, the wordmark stands alone.
 
 ## Behavior belongs to the same system
 

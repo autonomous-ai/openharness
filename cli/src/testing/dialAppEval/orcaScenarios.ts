@@ -210,12 +210,37 @@ export function orcaScenarios(): Scenario[] {
       checks: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 'b', text: 'Eval words for bravo.', path: 'typed', after: 'voice' }],
       probes: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 'z', text: 'Eval words for bravo.', after: 'voice' }],
     }),
+    /**
+     * tmux inside Orca stays as today (Diego, 2026-11-23; option A of docs/plans/2026-11-25-dial-orca-tmux-o11-design.md):
+     * c is an Orca row at its tab's place, and voice reaches it by its mod. Its tap is graded on what the person expects,
+     * its tab and its tmux pane opened (the eval spec's decision 3): the tap switches Orca to c's tab first (observed.ts
+     * placedTab), then tmux shows its pane and Orca comes forward. Tier A alone: tier B's c runs in no tmux pane and
+     * Orca's rig records no tmux run. Not on Windows: tmux runs only inside WSL there, whose agents never reach the
+     * Windows devices.
+     */
     scenario({
-      id: 'O11', app: 'orca', title: 'Claude Code under tmux in an Orca pane is not an Orca row; the two beside it are, in order',
-      dims: ['D1'], sessions: [pane('a', 'w1', 0), pane('b', 'w1', 1), pane('c', 'w1', 2, 0, { tmux: true }), orcaGhost],
-      steps: [...orcaOpening(['w1']), ...orcaStarted(['c', 'b', 'a']), ...listed('orca', ['a', 'b'])],
-      checks: [ring(['a', 'b'])],
-      probes: [ring(['a', 'b', 'z'])],
+      id: 'O11', app: 'orca', title: 'Claude Code under tmux in an Orca pane is an Orca row at its tab: a tap opens its tab and pane, and voice reaches it by its mod',
+      dims: ['D1', 'D3', 'D5'], platforms: ['darwin', 'linux'], tiers: ['a'],
+      sessions: [pane('a', 'w1', 0), pane('b', 'w1', 1), pane('c', 'w1', 2, 0, { tmux: true }), orcaGhost],
+      steps: [
+        ...orcaOpening(['w1']), ...orcaStarted(['c', 'b', 'a']), ...listed('orca', ['a', 'b', 'c']),
+        { label: 'tap', kind: 'tap', session: 'c' },
+        { kind: 'wait', ms: 4 * S },
+        // A tap does not move the face: the person turns to c before speaking, which also ends the tap's window.
+        { label: 'face', kind: 'swipe', session: 'c' },
+        { kind: 'wait', ms: 1 * S },
+        { label: 'voice', kind: 'voice', transcript: 'Eval words for charlie.', target: 'c' },
+      ],
+      checks: [
+        ring(['a', 'b', 'c']),
+        { id: 'open', kind: 'open', dim: 'D3', session: 'c', link: false, after: 'tap', at: 'face' },
+        { id: 'voice', kind: 'voice', dim: 'D5', session: 'c', text: 'Eval words for charlie.', path: 'mod', after: 'voice' },
+      ],
+      probes: [
+        ring(['a', 'b', 'c', 'z']),
+        { id: 'open', kind: 'open', dim: 'D3', session: 'z', link: false, after: 'tap' },
+        { id: 'voice', kind: 'voice', dim: 'D5', session: 'z', text: 'Eval words for charlie.', after: 'voice' },
+      ],
     }),
     scenario({
       id: 'O12', app: 'orca', title: 'Orca quit and relaunched: the ring comes back right with no duplicate rows and stays so, and a focus is followed',

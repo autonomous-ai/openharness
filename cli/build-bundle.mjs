@@ -1,7 +1,7 @@
 /**
  * Release build: bundle the whole CLI into ONE self-contained `dist/cli.js`
  * that runs on every OS under the user's Node, plus the standalone hook script.
- * The optional macOS image probe is embedded as pinned bytes in that same JS.
+ * The optional macOS image probe and /dev watch helper are embedded as pinned bytes in that same JS.
  *
  * Version is baked in via esbuild `define(__ADAPTER_VERSION__)`, sourced from `ADAPTER_VERSION`
  * (set by scripts/upload-cli.sh) else package.json — so the running binary's version EXACTLY
@@ -17,7 +17,7 @@ import { readDshRegistry } from './scripts/lib/dshRegistry.mjs'
 import { readOrcaPluginBundle } from './scripts/lib/orcaPluginBundle.mjs'
 import { readVscodeExtensionBundle } from './scripts/lib/vscodeExtensionBundle.mjs'
 import { readBuiltinBundle, readHachiBundle, readHarnessMonitorBundle, readMemoriesBundle, readModelManagerBundle } from './scripts/lib/modelManagerBundle.mjs'
-import { readProcessImageBundle } from './scripts/lib/processImageBundle.mjs'
+import { readDevWatchBundle, readProcessImageBundle } from './scripts/lib/processImageBundle.mjs'
 import { leanBlock } from './scripts/lib/leanBlock.mjs'
 import { asciiOnly } from './scripts/lib/asciiOnly.mjs'
 import { copyPtyPayload } from './scripts/lib/ptyPayload.mjs'
@@ -45,6 +45,10 @@ const version =
 // The bundled registry (the store/ folders and store/registry at the repo root) — see src/dsh/registry.ts.
 const dshRegistry = JSON.stringify(readDshRegistry(new URL('../store', import.meta.url)))
 const processImages = readProcessImageBundle({
+  path: process.env.HARNESS_PROCESS_IMAGES_ARTIFACT,
+  required: process.env.HARNESS_REQUIRE_PROCESS_IMAGES === '1',
+})
+const devWatch = readDevWatchBundle({
   path: process.env.HARNESS_PROCESS_IMAGES_ARTIFACT,
   required: process.env.HARNESS_REQUIRE_PROCESS_IMAGES === '1',
 })
@@ -94,6 +98,7 @@ const options = {
     __ORCA_PLUGIN__: JSON.stringify(readOrcaPluginBundle(version)),
     __BUILTIN_REVISIONS__: JSON.stringify(builtinRevisions),
     __DARWIN_PROCESS_IMAGES__: processImages ? JSON.stringify(processImages) : 'undefined',
+    __DARWIN_DEV_WATCH__: devWatch ? JSON.stringify(devWatch) : 'undefined',
   },
   // The copyright line is MIT's one condition — it has to travel with the copy the user actually
   // receives, and the published bundle IS that copy (upload-cli.sh ships `cli.js` and `notify.mjs`,

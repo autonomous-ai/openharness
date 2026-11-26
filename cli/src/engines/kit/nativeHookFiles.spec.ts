@@ -63,6 +63,14 @@ it('publishes complete bytes durably, preserves private permissions and leaves n
   await prepared(file).replace('new')
 })
 
+// PowerShell 5's `Set-Content -Encoding utf8` starts the file with a BOM; kept in the text, JSON.parse failed and every
+// create waited on the engine's hooks for good (docs/plans/2026-11-25-win-hook-admission-design.md, D).
+it('reads a settings file that starts with a BOM as its text alone', () => {
+  const { file } = fixture()
+  writeFileSync(file, '﻿{"a":1}\n')
+  expect(inspectHookFile(file).content).toBe('{"a":1}\n')
+})
+
 it('never turns a peer edit during final proof capture into a confirmed output', async () => {
   const { file } = fixture()
   writeFileSync(file, 'prepared hooks')

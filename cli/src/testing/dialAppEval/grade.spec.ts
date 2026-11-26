@@ -418,6 +418,47 @@ describe('updateBaseline', () => {
   })
 })
 
+describe('tier B timed results', () => {
+  // Two runs that differ only in tier B timed results: I17's needs-you latency and its step-4 wait.
+  const tierB = (check: string, score: number, timed: boolean): CheckResult =>
+    result({ tier: 'b', app: 'iterm', scenario: 'I17', check, dim: 'D4', score, timed })
+  const runOf = (latency: number, wait: number): RunResults => run([
+    result({ check: 'open.latency', dim: 'D3', score: 0.5, timed: true }), // tier A timed: still written
+    tierB('needsYou.shown', 1, false),
+    tierB('needsYou.latency', latency, true),
+    tierB('wait.4', wait, true),
+  ])
+
+  it('two runs that differ only in a tier B timed result give the same baseline, checks and app scores, and no delta for them', () => {
+    const fast = updateBaseline(null, runOf(1, 1), ['a', 'b'])
+    const slow = updateBaseline(null, runOf(0.5, 0), ['a', 'b'])
+    expect(slow).toEqual(fast)
+    expect(fast.checks).toEqual({ 'a/darwin/C1/open.latency': 0.5, 'b/darwin/I17/needsYou.shown': 1 })
+    expect(fast.apps['b/darwin']!.iterm).toBe(100)
+    const report = grade(runOf(0.5, 0), fast)
+    expect(report.delta.checks).toEqual([])
+    expect(report.delta.apps['b/darwin']!.iterm).toEqual({ before: 100, after: 100 })
+  })
+
+  it('the headline, byTier and byPlatform still count a tier B timed result', () => {
+    const fast = grade(runOf(1, 1), null)
+    const slow = grade(runOf(0.5, 0), null)
+    expect(slow.apps.iterm.score).toBeLessThan(fast.apps.iterm.score!)
+    expect(slow.byTier.b.iterm.score).toBeLessThan(fast.byTier.b.iterm.score!)
+    expect(slow.byPlatform['b/darwin']!.iterm.score).toBeLessThan(fast.byPlatform['b/darwin']!.iterm.score!)
+    expect(slow.failing.map((r) => r.check)).toEqual(expect.arrayContaining(['needsYou.latency', 'wait.4']))
+  })
+
+  it('the delta leaves out a tier B timed key the old baseline holds, keeps a tier A one, and counts no held-out one', () => {
+    const old = baseline({ 'a/darwin/C1/open.latency': 1, 'b/darwin/I17/needsYou.shown': 1, 'b/darwin/I17/needsYou.latency': 1,
+      'b/darwin/I17/wait.4': 1, 'b/darwin/XH1/open.latency': 1 })
+    const held = result({ tier: 'b', app: 'iterm', scenario: 'XH1', heldOut: true, check: 'open.latency', dim: 'D3', score: 0, timed: true })
+    const report = grade(run([...runOf(0.5, 0).results, held]), old)
+    expect(report.delta.checks).toEqual([{ key: 'a/darwin/C1/open.latency', before: 1, after: 0.5 }])
+    expect(report.delta.heldOutChanged).toBe(0)
+  })
+})
+
 describe('droppedKeys', () => {
   const before = baseline({
     'a/darwin/C1/ring.recall': 1, 'a/darwin/C1/ring.order': 1, 'a/linux/C1/ring.order': 1, 'a/darwin/X2/ring.recall': 1,
@@ -448,6 +489,23 @@ describe('droppedKeys', () => {
     })
     expect(droppedKeys(was, ran, ['a'], new Map([['a/darwin/C1', c1]])))
       .toEqual(['a/darwin/C1/ring.order', 'a/darwin/C1/wait.1'])
+  })
+
+  it('lets go of a tier B timed key the run did not give: an update no longer writes one', () => {
+    // C1 in tier B: its cost check's cpu and loopP99 are timed, and its step-1 condition wait.
+    const b1 = { ...c1, tiers: ['b' as const], checks: [...c1.checks, { id: 'cost', kind: 'cost' as const, dim: 'D8' as const }] }
+    const was = baseline({ 'b/darwin/C1/ring.recall': 1, 'b/darwin/C1/ring.order': 1, 'b/darwin/C1/wait.1': 1,
+      'b/darwin/C1/cost.cpu': 1, 'b/darwin/C1/cost.loopP99': 1 })
+    const ranB = run([result({ tier: 'b', check: 'ring.recall', dim: 'D1', score: 1 })])
+    expect(droppedKeys(was, ranB, ['b'], new Map([['b/darwin/C1', b1]]))).toEqual(['b/darwin/C1/ring.order'])
+  })
+
+  it('grades every main tier B scenario on nothing seen to tell its timed keys, without throwing', () => {
+    const on = MAIN.filter((s) => s.tiers.includes('b') && s.platforms.includes('darwin'))
+    const was = baseline(Object.fromEntries(on.map((s) => [`b/darwin/${s.id}/cost.cpu`, 1])))
+    // A gap of a scenario outside the catalog given: tier B on darwin was driven, so its subset is replaced.
+    const driven = run([], { gaps: [{ tier: 'b', platform: 'darwin', scenario: 'Z1', app: 'claude', heldOut: false, reason: 'none' }] })
+    expect(droppedKeys(was, driven, ['b'], new Map(on.map((s) => [`b/darwin/${s.id}`, s])))).toEqual([])
   })
 })
 

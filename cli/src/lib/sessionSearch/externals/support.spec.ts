@@ -325,13 +325,19 @@ describe('processes', () => {
   it('keeps a Windows start marker, and adds none to any other row', async () => {
     const row = { pid: 5, parentPid: 1, executable: 'claude.exe', args: 'claude', startMarker: 'w:133456789012345678' }
     expect(await listProcesses(async () => [row])).toEqual([
-      { pid: 5, ppid: 1, executable: 'claude.exe', args: 'claude', startMarker: 'w:133456789012345678' },
+      { pid: 5, ppid: 1, executable: 'claude.exe', args: 'claude', started: 1_701_205_301_234, startMarker: 'w:133456789012345678',
+        generation: 'ps:1701205301234' },
     ])
     const result = await listProcesses(async () => [
       { ...row, startMarker: 'Sun Sep 27 09:05:03 2026' }, { ...row, pid: 6, startMarker: 'soon' },
     ])
     expect(result[0]).not.toHaveProperty('startMarker')
     expect(result[1]).not.toHaveProperty('startMarker')
+  })
+
+  it('gives a process with a Windows start marker its start', async () => {
+    const row = { pid: 5, parentPid: 1, executable: 'claude.exe', args: 'claude', startMarker: 'w:133700000000000000' }
+    expect((await listProcesses(async () => [row]))[0].started).toBe(1_725_526_400_000)
   })
 
   it('carries the whole command path where ps cut it, and adds none of its own', async () => {

@@ -82,11 +82,15 @@ mod tests {
         fn start() -> Bus {
             use std::io::{BufRead, BufReader};
             use std::process::{Command, Stdio};
-            let mut daemon = Command::new("dbus-daemon")
-                .args(["--session", "--nofork", "--print-address=1"])
-                .stdout(Stdio::piped())
-                .spawn()
-                .expect("dbus-daemon starts");
+            let mut daemon = {
+                // As around every spawn (cli::spawn_lock).
+                let _spawning = crate::cli::spawn_lock();
+                Command::new("dbus-daemon")
+                    .args(["--session", "--nofork", "--print-address=1"])
+                    .stdout(Stdio::piped())
+                    .spawn()
+                    .expect("dbus-daemon starts")
+            };
             // The daemon prints its address once it listens: the read ends on that line, no sleep.
             let mut address = String::new();
             BufReader::new(daemon.stdout.take().unwrap()).read_line(&mut address).unwrap();

@@ -14,6 +14,7 @@
 import { existsSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
 import { posix, win32 } from 'node:path'
 import type { TrustContract } from '../facets/launch.js'
+import { settingsText } from '../../lib/settingsText.js'
 
 type JsonTrust = Extract<TrustContract, { format: 'json' }>
 type TomlTrust = Extract<TrustContract, { format: 'toml' }>
@@ -71,7 +72,7 @@ function recordJson(trust: JsonTrust, file: string, cwd: string): 'trusted' | 'a
   if (!existsSync(file)) return 'skipped'
   let config: unknown
   try {
-    config = JSON.parse(readFileSync(file, 'utf8'))
+    config = JSON.parse(settingsText(readFileSync(file)))
   } catch {
     return 'skipped'
   }
@@ -94,7 +95,7 @@ function recordJson(trust: JsonTrust, file: string, cwd: string): 'trusted' | 'a
 function jsonTrusts(trust: JsonTrust, file: string, path: string): boolean {
   if (!existsSync(file)) return false
   let config: unknown
-  try { config = JSON.parse(readFileSync(file, 'utf8')) } catch { return false }
+  try { config = JSON.parse(settingsText(readFileSync(file))) } catch { return false }
   if (!isPlainObject(config) || !isPlainObject(config[trust.projects])) return false
   const root = repositoryRoot(path)
   for (const [key, entry] of Object.entries(config[trust.projects] as Record<string, unknown>)) {
@@ -118,10 +119,18 @@ function tomlKey(quoted: string): string | null {
   try { return JSON.parse(quoted) as string } catch { return null }
 }
 
+/** The config's text, or null for a missing file or one that is not UTF-8: no trust is read from, or appended to, text
+ *  that could be mojibake. */
+function tomlText(file: string): string | null {
+  if (!existsSync(file)) return null
+  const bytes = readFileSync(file)
+  try { return settingsText(bytes) } catch { return null }
+}
+
 /** Exactly `path`, by its own table's value, which runs to the next header. */
 function tomlTrusts(trust: TomlTrust, file: string, path: string): boolean {
-  if (!existsSync(file)) return false
-  const text = readFileSync(file, 'utf8')
+  const text = tomlText(file)
+  if (text === null) return false
   for (const match of text.matchAll(headerPattern(trust))) {
     const key = tomlKey(match[1])
     if (key === null || !sameFolder(key, path)) continue
@@ -139,8 +148,8 @@ function tomlTrusts(trust: TomlTrust, file: string, path: string): boolean {
  * Those are left alone.
  */
 function recordToml(trust: TomlTrust, file: string, cwd: string): 'trusted' | 'already' | 'skipped' {
-  if (!existsSync(file)) return 'skipped'
-  const text = readFileSync(file, 'utf8')
+  const text = tomlText(file)
+  if (text === null) return 'skipped'
   const keys = [...text.matchAll(headerPattern(trust))].map((match) => tomlKey(match[1]))
   if (keys.includes(cwd)) return 'already'
   // A key this cannot read might be this folder spelled another way: not safe to append after.

@@ -16,7 +16,9 @@ use harness_device::state::{JsonStateFile, StateFile};
 use harness_device::tabs;
 use harness_device::tick;
 use harness_device::tray::{TrayIcon, tray_icon};
-use harness_device::types::{APP_NAME, Action, Clock, Effect, Event, Log, MenuAction, MenuItem, SystemClock, View};
+use harness_device::types::{
+    APP_NAME, Action, Clock, Effect, Event, Log, MenuAction, MenuItem, SystemClock, View, VoiceLang,
+};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -434,6 +436,12 @@ fn menu_id(action: MenuAction) -> &'static str {
         MenuAction::SoundOff => "sound_off",
         MenuAction::NotifyFull => "notify_full",
         MenuAction::NotifyYou => "notify_you",
+        MenuAction::Voice(VoiceLang::En) => "voice_en",
+        MenuAction::Voice(VoiceLang::Vi) => "voice_vi",
+        MenuAction::Voice(VoiceLang::Es) => "voice_es",
+        MenuAction::Voice(VoiceLang::Fr) => "voice_fr",
+        MenuAction::Voice(VoiceLang::Ja) => "voice_ja",
+        MenuAction::Voice(VoiceLang::It) => "voice_it",
         MenuAction::Update => "update",
         MenuAction::OpenHarness => "open_harness",
         MenuAction::About => "about",
@@ -446,6 +454,7 @@ fn menu_action(id: &str) -> Option<MenuAction> {
     use MenuAction::*;
     [Install, SignIn, SoundOn, SoundOff, NotifyFull, NotifyYou, Update, OpenHarness, About, Quit, ExportLogs]
         .into_iter()
+        .chain(VoiceLang::ALL.map(Voice))
         .find(|action| menu_id(*action) == id)
 }
 
@@ -463,17 +472,22 @@ mod tests {
         use MenuAction::*;
         let actions =
             [Install, SignIn, SoundOn, SoundOff, NotifyFull, NotifyYou, Update, OpenHarness, About, Quit, ExportLogs];
-        for action in actions {
+        let actions: Vec<_> = actions.into_iter().chain(VoiceLang::ALL.map(Voice)).collect();
+        for &action in &actions {
             assert_eq!(menu_action(menu_id(action)), Some(action));
         }
         let ids: std::collections::HashSet<_> = actions.into_iter().map(menu_id).collect();
-        assert_eq!(ids.len(), 11);
+        assert_eq!(ids.len(), 17);
         assert_eq!(menu_id(About), "about");
         assert_eq!(menu_id(ExportLogs), "export_logs");
         assert_eq!(menu_id(NotifyFull), "notify_full");
         assert_eq!(menu_id(NotifyYou), "notify_you");
         assert_eq!(menu_action("sound"), None);
         assert_eq!(menu_action("notify"), None);
+        assert_eq!(menu_id(Voice(VoiceLang::Vi)), "voice_vi");
+        assert_eq!(menu_id(Voice(VoiceLang::Ja)), "voice_ja");
+        assert_eq!(menu_action("voice"), None);
+        assert_eq!(menu_action("voice_de"), None);
     }
 
     #[test]

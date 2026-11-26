@@ -20,7 +20,7 @@ import type { DevicesPort } from '../../../../core/api.js'
 import type { InboxAnswer } from '../../../../core/deviceHookCalls.js'
 import { parseObservedHook, type ObservedEvent, type ObservedEventName } from '../../../../core/observedHook.js'
 import { RECORDED_ORCA } from '../../../recordedOrca.js'
-import { engineOf, HELD_MAKER, hookHandle, itermPlaceOf, orcaAgentSessionId, orcaPaneHandle, placeOf, type App, type Editor, type Engine,
+import { engineOf, FRONT_NAMES, HELD_MAKER, hookHandle, itermPlaceOf, orcaAgentSessionId, orcaPaneHandle, placeOf, type App, type Editor, type Engine,
   type Platform, type SessionDef, type SessionKey } from '../../types.js'
 import type { StepHandler, TierAWorld } from '../world.js'
 import { herdrHeard, herdrPane, herdrPaneId } from './herdr.js'
@@ -84,6 +84,8 @@ interface State {
   terminalApp?: number
   /** Orca's terminal host, once an Orca pane runs, until Orca quits: one per launch. */
   orcaHost?: number
+  /** Orca's main process on Linux, the host's parent, started and ended with it. */
+  orcaMain?: number
   /** The terminals made in this world: an Orca pane's, an iTerm2 tab's or split's, or a tmux pane's in either. */
   ttys: number
   /** Poll ids are never reused in a world: the inbox keeps a gone id that came before its poll. */
@@ -219,19 +221,33 @@ export function nextTty(world: TierAWorld): string | undefined {
 }
 
 /**
- * The session's Orca pane (the plan's Decision 5): a shell on a terminal of its own, made by Orca's terminal host (on no
- * terminal, launchd's or init's child), or a held pane's by a maker of its own that is not Orca's. Under tmux the pane's
- * shell runs tmux's client, and the agent runs in a tmux pane (tmux.ts tmuxPane), on another terminal. The devices'
- * maker check reads each chain as the machine's `ps` would show it (scannedApp.ts ptyMaker). Gives the pane's shell, the
- * shell the agent runs under, and the pane's other processes, which end with it: Orca's host runs on for its other panes.
+ * The session's Orca pane (the plan's Decision 5): a shell on a terminal of its own, made by Orca's terminal host (on
+ * no terminal: a child of launchd or init, or on Linux of Orca's main process; orcaHostOf), or a held pane's by a maker
+ * of its own that is not Orca's. Under tmux the pane's shell runs tmux's client, and the agent runs in a tmux pane
+ * (tmux.ts tmuxPane), on another terminal. The devices' maker check reads each chain as the machine's `ps` would show
+ * it (scannedApp.ts ptyMaker). Gives the pane's shell, the shell the agent runs under, and the pane's other processes,
+ * which end with it: Orca's host runs on for its other panes.
  */
 function orcaPane(world: TierAWorld, s: SessionDef): { shell: number; parent: number; others: number[] } {
   const state = stateOf(world)
   const others: number[] = []
-  const maker = s.held ? startProcess(world, 1, HELD_MAKER) : state.orcaHost ??= startProcess(world, 1, ORCA_HOSTS[world.platform])
+  const maker = s.held ? startProcess(world, 1, HELD_MAKER) : orcaHostOf(world)
   if (s.held) others.push(maker)
   const shell = startProcess(world, maker, SHELLS[world.platform], nextTty(world))
   return { shell, parent: s.tmux ? tmuxPane(world, s, shell) : shell, others }
+}
+
+/**
+ * Orca's terminal host, started at its first pane or chat of the launch. On Linux it is "a child of the main process
+ * (comm `orca-ide`)" (RECORDED_ORCA.linux.deb.how), so the main runs above it: tmux's client lookup walks a client's
+ * parents to name its app, and only the main is Orca there (docs/plans/2026-11-25-dial-orca-tmux-o11-design.md). macOS
+ * records the host under launchd, and Windows reads no chain: there it runs under init.
+ */
+function orcaHostOf(world: TierAWorld): number {
+  const state = stateOf(world)
+  if (state.orcaHost !== undefined) return state.orcaHost
+  if (world.platform === 'linux') state.orcaMain = startProcess(world, 1, FRONT_NAMES.linux.orca!)
+  return state.orcaHost = startProcess(world, state.orcaMain ?? 1, ORCA_HOSTS[world.platform])
 }
 
 /** The session's iTerm2 tab or split (the plan's Decision 4): its shell, opened when none is, and the tab's login, which
@@ -250,8 +266,7 @@ function itermTab(world: TierAWorld, s: SessionDef): { shell: number; parent: nu
  *  terminal and in no shell, so the devices find no pane or maker of it. The provider ends with the chat; the host runs
  *  on for Orca's panes. */
 function orcaChatProcess(world: TierAWorld): { parent: number; others: number[] } {
-  const state = stateOf(world)
-  const provider = startProcess(world, state.orcaHost ??= startProcess(world, 1, ORCA_HOSTS[world.platform]), ORCA_PROVIDER)
+  const provider = startProcess(world, orcaHostOf(world), ORCA_PROVIDER)
   return { parent: provider, others: [provider] }
 }
 
@@ -508,9 +523,9 @@ export const sessionsSteps: { hook: StepHandler<'hook'>; quit: StepHandler<'quit
     const editor = state.editors.get(step.app)
     if (editor !== undefined) world.machine.end(editor)
     state.editors.delete(step.app)
-    if (step.app === 'orca' && state.orcaHost !== undefined) {
-      world.machine.end(state.orcaHost)
-      state.orcaHost = undefined
+    if (step.app === 'orca') {
+      for (const pid of [state.orcaHost, state.orcaMain]) if (pid !== undefined) world.machine.end(pid)
+      state.orcaHost = state.orcaMain = undefined
     }
     state.quit.set(step.app, ended.map(([key]) => key))
   },

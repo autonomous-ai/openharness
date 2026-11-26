@@ -14,10 +14,10 @@ describe("Orca's scenarios", () => {
     expect(HELD_OUT.filter((s) => s.id.startsWith('O') && !s.id.startsWith('OH'))).toEqual([])
   })
 
-  it("every O scenario runs on every platform in both tiers, but O16 in tier A alone, for its time in tier B, and the chats' O18-O23, which tier B's fake Orca does not list", () => {
-    const onlyA = ['O16', 'O18', 'O19', 'O20', 'O21', 'O22', 'O23']
+  it("every O scenario runs on every platform in both tiers, but O16 in tier A alone, for its time in tier B, the chats' O18-O23, which tier B's fake Orca does not list, and O11 in tier A on macOS and Linux alone, for its tmux", () => {
+    const onlyA = ['O11', 'O16', 'O18', 'O19', 'O20', 'O21', 'O22', 'O23']
     for (const s of ORCA) {
-      expect(s.platforms, s.id).toEqual(['darwin', 'win32', 'linux'])
+      expect(s.platforms, s.id).toEqual(s.id === 'O11' ? ['darwin', 'linux'] : ['darwin', 'win32', 'linux'])
       expect(s.tiers, s.id).toEqual(onlyA.includes(s.id) ? ['a'] : ['a', 'b'])
     }
   })
@@ -25,7 +25,7 @@ describe("Orca's scenarios", () => {
   it("each O scenario's checks cover exactly the spec's dims, and D8 in tier B", () => {
     const dims: Record<string, Dimension[]> = {
       O1: ['D1'], O2: ['D1', 'D7'], O3: ['D1', 'D7'], O4: ['D2'], O5: ['D2'], O6: ['D2', 'D1'], O7: ['D3'], O8: ['D4', 'D6'],
-      O9: ['D5'], O10: ['D5'], O11: ['D1'], O12: ['D7', 'D1', 'D2'], O13: ['D7', 'D1', 'D3'], O14: ['D7', 'D1'],
+      O9: ['D5'], O10: ['D5'], O11: ['D1', 'D3', 'D5'], O12: ['D7', 'D1', 'D2'], O13: ['D7', 'D1', 'D3'], O14: ['D7', 'D1'],
       O15: ['D7', 'D1'], O16: ['D1', 'D7'], O17: ['D7', 'D3'], O18: ['D1', 'D7'], O19: ['D1', 'D7'], O20: ['D3'], O21: ['D2'],
       O22: ['D5'], O23: ['D5'],
     }
@@ -125,6 +125,15 @@ describe("Orca's scenarios", () => {
   it("O9's words reach its Claude Code through the mod, O10's are typed into its Codex's pane", () => {
     const paths = (id: string) => byId(id).checks.flatMap((c) => (c.kind === 'voice' ? [c.path] : []))
     expect([paths('O9'), paths('O10')]).toEqual([['mod'], ['typed']])
+  })
+
+  it('O11: c under tmux at its tab is the third row, tapped, then spoken to by its mod', () => {
+    const o11 = byId('O11')
+    const c = o11.sessions.find((d) => d.key === 'c')!
+    expect([c.tmux, c.tab]).toEqual([true, 2])
+    expect(o11.checks.flatMap((x) => (x.kind === 'ring' ? [x.expect] : []))).toEqual([['a', 'b', 'c']])
+    expect(o11.checks.flatMap((x) => (x.kind === 'open' ? [[x.session, x.after, x.at]] : []))).toEqual([['c', 'tap', 'face']])
+    expect(o11.checks.flatMap((x) => (x.kind === 'voice' ? [[x.session, x.path, x.text]] : []))).toEqual([['c', 'mod', 'Eval words for charlie.']])
   })
 
   it("O2's c is in w2 with w1's folder", () => {

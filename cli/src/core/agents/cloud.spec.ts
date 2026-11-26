@@ -186,6 +186,23 @@ describe('agents a service owns', () => {
     expect(deviceInput.setUserAction).toHaveBeenLastCalledWith('cloud_1', false)
   })
 
+  it('closes the question of a harness that leaves the list, on the dial and the window, and forgets it', () => {
+    const { cloud, clients, openQuestions, deviceInput } = setup(port())
+    cloud.doors.publish([harness(), harness({ agentId: 'cloud_2' })])
+    cloud.doors.ask('cloud_1', 'cloud_q_1', { text: 'Which one?', choices: ['A', 'B'] })
+    cloud.doors.ask('cloud_2', 'cloud_q_2', { text: 'Sure?', choices: [] })
+    cloud.doors.publish([harness({ agentId: 'cloud_2' })])
+    const closed = { type: 'commander_question_close', agentId: 'cloud_1', dbSessionId: 'cloud_1', payload: { requestId: 'cloud_q_1' } }
+    expect(clients.sendCommander).toHaveBeenCalledWith(closed)
+    expect(clients.sendLocal).toHaveBeenLastCalledWith(closed)
+    expect(openQuestions.has('cloud_1')).toBe(false)
+    expect(deviceInput.setUserAction).toHaveBeenLastCalledWith('cloud_1', false)
+    expect(cloud.answer({ requestId: 'cloud_q_1', answers: { answer: 'A' } })).toBeNull()
+    // The one still on the list keeps its question.
+    expect(openQuestions.has('cloud_2')).toBe(true)
+    expect(cloud.answer({ requestId: 'cloud_q_2', answers: { answer: 'yes' } })).not.toBeNull()
+  })
+
   it('hands New Harness, words, an answer and Stop for its agents to the service, and nothing else', async () => {
     const service = port()
     const { cloud } = setup(service)

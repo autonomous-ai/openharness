@@ -141,8 +141,8 @@ export function parseDeviceRelease(manifest: unknown): DeviceRelease | null {
 
 /**
  * The one build to offer this visitor, or null when none fits or the CPU decides and is unknown. A Mac
- * of unknown CPU gets the build every Mac runs (the rule in `desktopPlatform.ts`); Windows never says its
- * CPU, so it gets the x64 build; Linux of unknown CPU gets no guess.
+ * of unknown CPU gets the build every Mac runs (the rule in `desktopPlatform.ts`); Windows gets the x64
+ * build unless its browser named an ARM CPU (Client Hints, Chromium only); Linux of unknown CPU gets no guess.
  */
 export function pickBuild(builds: readonly DeviceBuild[], platform: VisitorPlatform | null): DeviceBuild | null {
   const find = (os: DeviceOs, arch: DeviceArch | null) => builds.find((b) => b.os === os && b.arch === arch) ?? null;
@@ -155,6 +155,8 @@ export function pickBuild(builds: readonly DeviceBuild[], platform: VisitorPlatf
       return find("macos", null) ?? find("macos", "x64") ?? builds.find((b) => b.os === "macos") ?? null;
     case "windows":
       return find("windows", null) ?? find("windows", "x64");
+    case "windows-arm64":
+      return find("windows", "arm64") ?? find("windows", null);
     case "linux-x64":
       return find("linux", "x64") ?? find("linux", null);
     case "linux-arm64":

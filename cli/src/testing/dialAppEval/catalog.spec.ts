@@ -190,10 +190,11 @@ describe('the catalog', () => {
     expect(x10.probes).toContainEqual(expect.objectContaining({ id: 'apart', kind: 'ring', expect: ['t1'], apart: ['c1', 'z'] }))
   })
 
-  it('X3, V11, UH1 and every iTerm2 scenario are macOS only', () => {
+  it('X3, V11, UH1 and every iTerm2 scenario are macOS only, O11 macOS and Linux', () => {
     const mac = ['X3', 'V11', 'UH1']
     for (const s of ALL) {
-      expect(s.platforms, s.id).toEqual(mac.includes(s.id) || s.app === 'iterm' ? ['darwin'] : ['darwin', 'win32', 'linux'])
+      const platforms = mac.includes(s.id) || s.app === 'iterm' ? ['darwin'] : s.id === 'O11' ? ['darwin', 'linux'] : ['darwin', 'win32', 'linux']
+      expect(s.platforms, s.id).toEqual(platforms)
     }
   })
 
@@ -317,8 +318,8 @@ describe('the catalog', () => {
     expect(byId('C8').steps.filter((s) => s.kind === 'tap' || s.kind === 'swipe')).toEqual([])
   })
 
-  it('C3, CH1, CH2, XH1, X12, V2, O16, O18-O23 and IH3 are tier A only, V12 tier B only, every other scenario (C10, C11, X7, C8, X9, CH3 and XH3 among them) runs in both', () => {
-    const onlyA = ['C3', 'CH1', 'CH2', 'XH1', 'X12', 'V2', 'O16', 'O18', 'O19', 'O20', 'O21', 'O22', 'O23', 'IH3']
+  it('C3, CH1, CH2, XH1, X12, V2, O11, O16, O18-O23 and IH3 are tier A only, V12 tier B only, every other scenario (C10, C11, X7, C8, X9, CH3 and XH3 among them) runs in both', () => {
+    const onlyA = ['C3', 'CH1', 'CH2', 'XH1', 'X12', 'V2', 'O11', 'O16', 'O18', 'O19', 'O20', 'O21', 'O22', 'O23', 'IH3']
     const onlyB = ['V12']
     for (const s of ALL) expect(s.tiers, s.id).toEqual(onlyA.includes(s.id) ? ['a'] : onlyB.includes(s.id) ? ['b'] : ['a', 'b'])
   })
@@ -408,17 +409,17 @@ describe('the catalog', () => {
     // pause after the reload, V11's rests between its tap, strokes and close, V13's rest before the stroke, V14's gap
     // between quit and relaunch, and V15's rest and its time unplugged; U8's turn, U12's pause after the close and U13's
     // gap between quit and relaunch; O4's rests after the focus, the tap and the swipe, O7's after the tap and the
-    // swipe, O8's two turns and the pause between them, O10's rest on b, O12's time quit, its time past the devices'
-    // next look after the relaunch and its rest after the focus, O16's agents a second apart, O17's rest and its time
-    // unplugged, and O20's after the tap and the swipe; iTerm2's agents a second apart (started), I3's and I15's turns
-    // (turned), I3's rests after each pick, I4's pause before and after the split and its rest after the first tap,
-    // I6's rest, I7's rest after the first tap, I9's rests on b and on a and its wait after the echo, I10's rest after
-    // the move to a's pane, I10's and I11's rests after the select, I13's rests after the detach and the attach, I14's
-    // time past the devices' next look after herdr starts again, I15's time after the relaunch and its rest after the
-    // first tap, I16's long turn, I17's turn, I20's rest on c and I21's rest and its time unplugged; VH1's rest on a,
-    // UH3's voice 200 ms after the prompt, OH1's rest on a and OH2's voice 200 ms after the focus; IH1's voice 200 ms
-    // after the select, IH2's rests after the attach and each select, its two turns and the pause between them, IH3's
-    // agents a second apart, IH4's turn (turned) and IH5's turn.
+    // swipe, O8's two turns and the pause between them, O10's rest on b, O11's rests after the tap and the swipe, O12's
+    // time quit, its time past the devices' next look after the relaunch and its rest after the focus, O16's agents a
+    // second apart, O17's rest and its time unplugged, and O20's after the tap and the swipe; iTerm2's agents a second
+    // apart (started), I3's and I15's turns (turned), I3's rests after each pick, I4's pause before and after the split
+    // and its rest after the first tap, I6's rest, I7's rest after the first tap, I9's rests on b and on a and its wait
+    // after the echo, I10's rest after the move to a's pane, I10's and I11's rests after the select, I13's rests after
+    // the detach and the attach, I14's time past the devices' next look after herdr starts again, I15's time after the
+    // relaunch and its rest after the first tap, I16's long turn, I17's turn, I20's rest on c and I21's rest and its
+    // time unplugged; VH1's rest on a, UH3's voice 200 ms after the prompt, OH1's rest on a and OH2's voice 200 ms
+    // after the focus; IH1's voice 200 ms after the select, IH2's rests after the attach and each select, its two turns
+    // and the pause between them, IH3's agents a second apart, IH4's turn (turned) and IH5's turn.
     const starts = (id: string, n: number): string[] => Array<string>(n - 1).fill(`${id} 1000`)
     expect(waits('own')).toEqual(['C6 5000', 'C9 1000', 'C9 3500', 'C10 2000', 'C11 1000', 'C11 3000', 'X3 5000', 'X8 2000',
       'X11 300', 'X11 300', ...starts('V1', 4), ...starts('V2', 20), ...starts('V3', 2), ...starts('V4', 2), ...starts('V5', 2),
@@ -426,8 +427,8 @@ describe('the catalog', () => {
       ...starts('V14', 3), 'V14 45000', ...starts('V15', 2), 'V15 1000', 'V15 3000',
       ...starts('U1', 4), ...starts('U2', 2), ...starts('U3', 2), ...starts('U4', 2), 'U8 2000', 'U12 2000', ...starts('U13', 3),
       'U13 45000', ...starts('U14', 2),
-      'O4 2000', 'O4 1000', 'O4 3000', 'O7 4000', 'O7 2000', 'O8 2000', 'O8 2000', 'O8 6000', 'O8 2000', 'O10 1000', 'O12 2000',
-      'O12 35000', 'O12 2000',
+      'O4 2000', 'O4 1000', 'O4 3000', 'O7 4000', 'O7 2000', 'O8 2000', 'O8 2000', 'O8 6000', 'O8 2000', 'O10 1000', 'O11 4000', 'O11 1000',
+      'O12 2000', 'O12 35000', 'O12 2000',
       ...starts('O16', 40), 'O17 1000', 'O17 3000', 'O20 4000', 'O20 2000',
       ...starts('I2', 4), ...starts('I3', 4), 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000',
       'I4 1000', 'I4 1000', 'I4 4000', ...starts('I5', 2), ...starts('I6', 3), 'I6 2000', ...starts('I7', 3), 'I7 4000',

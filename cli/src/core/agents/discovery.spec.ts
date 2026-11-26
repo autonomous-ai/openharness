@@ -649,6 +649,18 @@ describe('discovery', () => {
       expect(run.deps.registry.confirmLaunch).toHaveBeenCalledTimes(2)
     })
 
+    // An older build failed a resumed row RESUME_SESSION_MISMATCH when a hook of its own process named another
+    // conversation, and nothing sets that verdict any more: its running engine confirms it as any launch.
+    it('confirms a resumed row an older build failed for another conversation while its engine runs', async () => {
+      const run = setup()
+      const failed = row({ active: false, resumeOnly: true, lastHookAt: 0, processIdentity: seen().processIdentity,
+        launch: { state: 'failed', error: 'RESUME_SESSION_MISMATCH', detail: 'fixture' } } as Partial<RegisteredSession>)
+      run.rows.set('a1', structuredClone(failed))
+      await run.handlers.onObserved(seen(), failed)
+      expect(run.deps.registry.confirmLaunch).toHaveBeenCalledExactlyOnceWith('a1', expect.objectContaining({ processIdentity: seen().processIdentity }), expect.any(Object))
+      expect(run.rows.get('a1')).toMatchObject({ active: true, launch: { state: 'ready' } })
+    })
+
     it('a start that went dormant and wakes, and a launch that turns ready, are told too', async () => {
       const run = setup()
       const awake = row({ browser: true })

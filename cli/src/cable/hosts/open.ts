@@ -2,7 +2,8 @@
  * A tap on an agent outside Harness brings it forward (docs/specs/2026-11-13-device-claude-orca.md): its own pane, where
  * its app has a way in that asks for no new permission, and on macOS the app itself, by its bundle id; on Linux its window,
  * through the raise (linuxRaise.ts, docs/plans/2026-11-19-dial-linux-design.md § 2.1); on Windows the app by its bundle,
- * through Windows' raise (windowsRaise.ts, docs/plans/2026-11-19-dial-windows-design.md, part C). Here is only what every
+ * through Windows' raise (windowsRaise.ts, docs/plans/2026-11-19-dial-windows-design.md, part C), or a herdr client's
+ * window by its process (docs/plans/2026-11-25-dial-herdr-windows-app-design.md). Here is only what every
  * app shares: each pane, and whether it comes before its app, instead of it or after it, is its adapter's (adapter.ts). Every
  * value of a tap came from a hook: a bundle is one of the apps below, a pane is checked by its adapter, and each command
  * runs with no shell, every value one argument. A pick in the dial's list of apps brings that app forward too
@@ -60,8 +61,10 @@ export interface OpenDeps {
   raise?: LinuxRaise
   /** Windows' way to bring an app forward by its bundle, where macOS runs `open -b`; none elsewhere. */
   windows?: WindowsRaise
-  /** An agent's window as the observed source knows it: its process and app (observed.ts windowOf). */
-  windowOf?(agentId: string): { pid?: number; app?: string } | undefined
+  /** An agent's window as the observed source knows it: its process and app (observed.ts windowOf), and `outer` when the
+   *  process is the outer lookup's answer (the agent's multiplexer client, or on Windows the terminal holding herdr's),
+   *  not the agent's own. */
+  windowOf?(agentId: string): { pid?: number; app?: string; outer?: true } | undefined
 }
 
 export function createOpenActions(deps: OpenDeps): {
@@ -132,6 +135,14 @@ export function createOpenActions(deps: OpenDeps): {
     return bundle ? () => forward(bundle) : undefined
   }
 
+  // On Windows the window of the process herdr's lookup found holding the agent's client, in a terminal no bundle names
+  // (Windows Terminal, Alacritty): only that answer's pid, never the agent's own, whose window is herdr's server's console.
+  const ownerWindow = (agentId: string): (() => Promise<boolean>) | undefined => {
+    const window = windows && deps.windowOf?.(agentId)
+    const pid = window?.outer ? window.pid : undefined
+    return windows && pid !== undefined ? () => windows.window(pid) : undefined
+  }
+
   // Linux's raise brings forward the agent's window, where macOS brings its app: the window of [pid] when the pane's app
   // named the process holding it (a multiplexer's client its focus switched), else of the agent's own process.
   const raiseWindow = (linux: LinuxRaise, agentId: string, target: OpenTarget, pid?: number): Promise<boolean> => {
@@ -173,10 +184,13 @@ export function createOpenActions(deps: OpenDeps): {
       if (own.adapter.tap === 'before') {
         if (bundle) await forward(bundle)
         else if (raise) await raiseWindow(raise, agentId, target, own.adapter.windowPid?.(own.pane))
+        else await ownerWindow(agentId)?.()
       }
       return true
     }
-    const app = bundle ? () => forward(bundle) : raise && (() => raiseWindow(raise, agentId, target))
+    // A failed or refused focus still raises the client's window on Windows, as Linux's fallback raises the agent's (PM
+    // 2026-11-26).
+    const app = bundle ? () => forward(bundle) : raise ? () => raiseWindow(raise, agentId, target) : ownerWindow(agentId)
     if (!app) return false
     // The Claude app's link is undocumented and may change with any release: the app still comes forward. Which app
     // only, never its session, pane or handle. A pane refused has said so already.

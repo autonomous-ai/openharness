@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { PageAgent, Place } from './adapter.js'
 import { detectApp, detectHost } from './hostDetect.js'
 import { bundleOf, createOpenActions, type OpenTarget } from './open.js'
-import { createVscodeAdapter, termPid } from './vscode.js'
+import { createVscodeAdapter, createVscodeClientAdapter, termPid } from './vscode.js'
 import type { VscodeTyped } from './vscodeTerminals.js'
 import type { WindowsRaise } from './windowsRaise.js'
 
@@ -579,6 +579,7 @@ describe('a tap on Windows raises its editor', () => {
       link: (url, bundle) => note(['link', url, String(bundle)]),
       cursorFolder: (folder) => note(['cursorFolder', folder]),
       desktop: () => note(['desktop']),
+      window: (pid) => note(['window', String(pid)]),
     }
     const r = recorder({ platform: 'win32', windows }, [], editor)
     r.windows.held = HELD
@@ -676,5 +677,100 @@ describe('the extension\'s tab on Linux', () => {
       run('/fake/bin/xdg-open', `${url}${UUID}`),
     ])
     expect(adapter.canFocus(pane)).toBe(true)
+  })
+})
+
+// Claude Code in the person's tmux, whose client is attached from an integrated terminal (dial eval V12): the agent's
+// chain runs through the tmux server, never a window's shell, so the client's is the one a window reports.
+describe('the terminal holding a multiplexer\'s client in VS Code or Cursor', () => {
+  const CLIENT = 4300
+  const HELD: Terminal = { window: 'win-0001abcd', shell: 4299 }
+  /** A tmux agent whose client the outer lookup found in [app]'s terminal, by the client's process. */
+  const nested = (app: string): Place =>
+    ({ host: 'tmux', app: 'tmux', hints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux' }, engine: 'claude', pid: 4242,
+      outer: { app, tty: '/dev/ttys004', pid: CLIENT } })
+  /** The adapter for [editor], over windows that hold the client's shell once a test sets `held`. */
+  const client = (editor: 'vscode' | 'cursor' = 'vscode') => {
+    const windows = { held: undefined as Terminal | undefined, writes: true, front: true, asked: [] as number[],
+      shows: [] as Array<{ terminal: Terminal; tap: boolean }> }
+    const adapter = createVscodeClientAdapter(editor, {
+      inFront: () => windows.front,
+      terminals: {
+        terminalOf: (pid) => { windows.asked.push(pid); return windows.held },
+        show: (terminal, tap) => { windows.shows.push({ terminal, tap }); return windows.writes },
+      },
+    })
+    return { adapter, windows }
+  }
+  const pane = (id = `client:${CLIENT}`, adapter = 'vscode-tab') => ({ adapter, id })
+
+  it('its pane is the client\'s process in its own editor alone, and it comes after the app', () => {
+    const { adapter } = client()
+    expect(adapter.id).toBe('vscode-tab')
+    expect(adapter.tap).toBe('after')
+    expect(adapter.paneOf(nested('vscode'))).toEqual(pane())
+    expect(adapter.paneOf(nested('cursor'))).toBeUndefined()
+    expect(client('cursor').adapter.id).toBe('cursor-tab')
+    expect(client('cursor').adapter.paneOf(nested('cursor'))).toEqual(pane(`client:${CLIENT}`, 'cursor-tab'))
+    expect(client('cursor').adapter.paneOf(nested('vscode'))).toBeUndefined()
+    for (const pid of [undefined, 1, 0, -5, 4300.5, 2 ** 31, '4300']) {
+      expect(adapter.paneOf({ ...nested('vscode'), outer: { app: 'vscode', pid: pid as number } }), String(pid)).toBeUndefined()
+    }
+    const { outer: _, ...plain } = nested('vscode')
+    expect(adapter.paneOf(plain)).toBeUndefined()
+  })
+
+  it('a tap shows the window\'s shell that holds the client, with the raise', async () => {
+    const { adapter, windows } = client()
+    windows.held = HELD
+    expect(adapter.canFocus(pane())).toBe(true)
+    expect(await adapter.focus(pane())).toBe(true)
+    expect(windows.asked).toEqual([CLIENT, CLIENT])
+    expect(windows.shows).toEqual([{ terminal: HELD, tap: true }])
+  })
+
+  it('with no window listing a shell on the client\'s chain, it can do nothing and shows no terminal', async () => {
+    const { adapter, windows } = client()
+    expect(adapter.canFocus(pane())).toBe(false)
+    expect(await adapter.focus(pane())).toBe(false)
+    expect(adapter.canShow(pane())).toBe(false)
+    expect(await adapter.show(pane(), 'a1')).toBe('failed')
+    expect(windows.shows).toEqual([])
+  })
+
+  it('a show that cannot be written is a failed tap and a failed rest', async () => {
+    const { adapter, windows } = client()
+    windows.held = HELD
+    windows.writes = false
+    expect(await adapter.focus(pane())).toBe(false)
+    expect(await adapter.show(pane(), 'a1')).toBe('failed')
+  })
+
+  it('a rest shows the shell only while the editor is in front', async () => {
+    const { adapter, windows } = client()
+    windows.held = HELD
+    windows.front = false
+    expect(adapter.canShow(pane())).toBe(false)
+    expect(windows.asked).toEqual([])
+    windows.front = true
+    expect(adapter.canShow(pane())).toBe(true)
+    expect(await adapter.show(pane(), 'a1')).toBe('ok')
+    expect(windows.shows).toEqual([{ terminal: HELD, tap: false }])
+  })
+
+  it('an id out of form is no pane: nothing is asked or shown, and the client\'s terminal never scrolls or takes words', async () => {
+    const { adapter, windows } = client()
+    windows.held = HELD
+    for (const id of ['client:1', 'client:04300', `term:${CLIENT}`, 'client:4300:x', '4300']) {
+      expect(adapter.canFocus(pane(id)), id).toBe(false)
+      expect(await adapter.focus(pane(id)), id).toBe(false)
+      expect(adapter.canShow(pane(id)), id).toBe(false)
+      expect(await adapter.show(pane(id), 'a1'), id).toBe('failed')
+    }
+    expect(windows.asked).toEqual([])
+    expect(windows.shows).toEqual([])
+    expect(adapter.scroll).toBeUndefined()
+    expect(adapter.type).toBeUndefined()
+    expect(adapter.pageKeys).toBeUndefined()
   })
 })

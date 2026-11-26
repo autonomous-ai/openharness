@@ -37,15 +37,19 @@ const LINES_QUEUED: usize = 16;
 /// How long a child's end waits for its stderr to end too, so the log has its last line. The stream ends with the child
 /// unless something it left behind holds it open.
 const STDERR_GRACE: Duration = Duration::from_secs(1);
-/// The three shapes of a child's stderr its log carries as it comes (`logged_stderr`), as the watch says only there that
-/// a newer one took its tabs stream and goes on, or that a sound or Notifications change failed: this line exactly,
-/// SOUND_STDERR and a code, and NOTIFY_STDERR and a code. Every other line of stderr is outside text and stays out of
-/// the log but for a failure's last line.
+/// The four shapes of a child's stderr its log carries as it comes (`logged_stderr`), as the watch says only there that
+/// a newer one took its tabs stream and goes on, or that a sound, Notifications or Voice language change failed: this
+/// line exactly, or one of CODED_STDERR and a code. Every other line of stderr is outside text and stays out of the log
+/// but for a failure's last line.
 const LOGGED_STDERR: &str = "tabs stream replaced";
 /// A failed sound change, then its code: one of the watch's own words or the daemon's error code, never a message.
 const SOUND_STDERR: &str = "sound: ";
 /// A failed Notifications change, then its code, of the same kind as a sound change's.
 const NOTIFY_STDERR: &str = "notify: ";
+/// A failed Voice language change, then its code, of the same kind as a sound change's.
+const VOICE_STDERR: &str = "voice: ";
+/// The prefixes a code follows, one list so the check and the line's bound cannot disagree.
+const CODED_STDERR: [&str; 3] = [SOUND_STDERR, NOTIFY_STDERR, VOICE_STDERR];
 const CODE_MAX: usize = 32;
 /// The longest version the About panel shows: what the CLI prints is outside text.
 const VERSION_MAX: usize = 32;
@@ -221,8 +225,9 @@ fn child_env_for(
 
 /// Held around every spawn. macOS has no pipe2: a child's pipes are made, then marked close-on-exec, and a child
 /// another thread starts between the two keeps them, holding the first child's output open after it has ended. Linux
-/// (pipe2) and Windows (std's own lock around a child's inheritable pipes and CreateProcess) do not need it, and take
-/// it so every OS spawns one way.
+/// (pipe2) and Windows (std's own lock around a child's inheritable pipes and CreateProcess) do not need it for that,
+/// and take it so every OS spawns one way. On unix a child also holds a copy of every descriptor until it execs: the
+/// instance test holds this lock too, so the file lock it lets go of is free at once, Linux's included.
 pub(crate) fn spawn_lock() -> MutexGuard<'static, ()> {
     static SPAWNING: Mutex<()> = Mutex::new(());
     SPAWNING.lock().unwrap_or_else(PoisonError::into_inner)
@@ -497,8 +502,8 @@ impl StdinWriter {
 
 type Tail = Arc<Mutex<VecDeque<u8>>>;
 
-/// True for the lines of stderr a log carries as they come: LOGGED_STDERR exactly, or SOUND_STDERR or NOTIFY_STDERR and
-/// a code of 1 to CODE_MAX of `A-Z`, `0-9` and `_`, starting with a letter. Nothing else, so no path, address or message.
+/// True for the lines of stderr a log carries as they come: LOGGED_STDERR exactly, or one of CODED_STDERR and a code of
+/// 1 to CODE_MAX of `A-Z`, `0-9` and `_`, starting with a letter. Nothing else, so no path, address or message.
 fn logged_stderr(line: &[u8]) -> bool {
     let is_code = |code: &[u8]| match code {
         [first, rest @ ..] => {
@@ -509,7 +514,7 @@ fn logged_stderr(line: &[u8]) -> bool {
         [] => false,
     };
     line == LOGGED_STDERR.as_bytes()
-        || [SOUND_STDERR, NOTIFY_STDERR].iter().any(|prefix| line.strip_prefix(prefix.as_bytes()).is_some_and(is_code))
+        || CODED_STDERR.iter().any(|prefix| line.strip_prefix(prefix.as_bytes()).is_some_and(is_code))
 }
 
 /// Reads `stream` to its end on a thread, keeping its last TAIL_MAX bytes, then says so on `done`. `logged` is handed
@@ -524,7 +529,7 @@ fn tail(
     thread::spawn(move || {
         let mut chunk = [0; 8192];
         // The line so far, held only to one byte past the longest logged line: a longer line is not one.
-        let longest = LOGGED_STDERR.len().max(SOUND_STDERR.len().max(NOTIFY_STDERR.len()) + CODE_MAX);
+        let longest = CODED_STDERR.iter().map(|prefix| prefix.len() + CODE_MAX).fold(LOGGED_STDERR.len(), usize::max);
         let mut line = Vec::with_capacity(longest + 1);
         loop {
             match stream.read(&mut chunk) {
@@ -1292,9 +1297,10 @@ mod tests {
     }
 
     #[test]
-    fn only_three_shapes_of_stderr_are_logged_as_they_come() {
+    fn only_four_shapes_of_stderr_are_logged_as_they_come() {
         let longest = format!("sound: {}", "A".repeat(32));
         let longest_notify = format!("notify: {}", "A".repeat(32));
+        let longest_voice = format!("voice: {}", "A".repeat(32));
         for line in [
             "tabs stream replaced",
             "sound: DEVICE_OFFLINE",
@@ -1306,11 +1312,18 @@ mod tests {
             "notify: WRITE_FAILED",
             "notify: A",
             &longest_notify,
+            "voice: DEVICE_OFFLINE",
+            "voice: NO_DIAL",
+            "voice: NO_ANSWER",
+            "voice: FAILED",
+            "voice: A",
+            &longest_voice,
         ] {
             assert!(logged_stderr(line.as_bytes()), "{line}");
         }
         let too_long = format!("sound: {}", "A".repeat(33));
         let too_long_notify = format!("notify: {}", "A".repeat(33));
+        let too_long_voice = format!("voice: {}", "A".repeat(33));
         let refused = [
             "",
             "sound: ",
@@ -1333,11 +1346,24 @@ mod tests {
             "notify: /Users/person",
             "notify: person@example.com",
             &too_long_notify,
+            "voice: ",
+            "voice:NO_DIAL",
+            " voice: NO_DIAL",
+            "voice: NO_DIAL ",
+            "voice: no dial",
+            "Voice: NO_DIAL",
+            "voices: NO_DIAL",
+            "voice: vi",
+            "voice: Tiếng Việt",
+            "voice: /Users/person",
+            "voice: person@example.com",
+            &too_long_voice,
         ];
         for line in refused {
             assert!(!logged_stderr(line.as_bytes()), "{line}");
         }
         assert!(!logged_stderr(b"sound: \xff"));
+        assert!(!logged_stderr(b"voice: \xff"));
     }
 
     #[cfg(unix)]
@@ -1384,6 +1410,31 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_watch_logs_a_voice_code_as_it_comes_and_no_other_stderr() {
+        let fake = Fake::new();
+        fake.script(
+            "hardware watch --json",
+            &[
+                "@err voice: DEVICE_OFFLINE",
+                "@err voice: /Users/person/x",
+                "@err voice: Connect the VPN",
+                "started",
+                "@hang",
+            ],
+        );
+        let mut child = fake.cli().spawn(&WATCH).unwrap();
+        assert_eq!(child.line(WAIT), Ok(Some("started".into())));
+        // Its end waits for stderr's, so the line, logged as it is read, comes first.
+        child.killer().kill();
+        assert_eq!(child.exit(WAIT), Ok(None));
+        assert_eq!(
+            fake.log().lines(),
+            ["harness hardware watch --json: voice: DEVICE_OFFLINE", "harness hardware watch --json: killed"]
+        );
+    }
+
     /// A stream that hands on each chunk it is sent, as one read, and ends once its sender is gone.
     struct Chunks(mpsc::Receiver<Vec<u8>>);
 
@@ -1411,6 +1462,9 @@ mod tests {
         send.send(b"notify: NO_".to_vec()).unwrap();
         send.send(b"ANSWER\n".to_vec()).unwrap();
         assert_eq!(said.recv_timeout(WAIT), Ok("notify: NO_ANSWER".into()));
+        send.send(b"voice: NO_".to_vec()).unwrap();
+        send.send(b"DIAL\n".to_vec()).unwrap();
+        assert_eq!(said.recv_timeout(WAIT), Ok("voice: NO_DIAL".into()));
         // A line that starts or ends with it, or holds it far into a long one, is not it.
         send.send(b"tabs stream replaced!\nx tabs stream replaced\n".to_vec()).unwrap();
         let long = [b"tabs stream replaced".repeat(400), b"\n".to_vec()].concat();

@@ -742,6 +742,15 @@ describe('a close of a harness still starting', () => {
     expect(await service.request(request('now'))).toEqual({ closed: true })
     expect(deps.sleep).toHaveBeenCalledOnce()
   })
+  it('a harness whose engine started after its row, by a Windows start marker, is young by that start', async () => {
+    time = row.registeredAt + 5 * 60_000
+    // A FILETIME: 100 ns intervals since 1601, two seconds before now.
+    row.processIdentity!.startMarker = `w:${(BigInt(time - 2_000) + 11_644_473_600_000n) * 10_000n}`
+    vi.mocked(deps.stop).mockImplementationOnce(async () => { throw held() })
+    vi.mocked(deps.sleep!).mockImplementationOnce(async ms => { time += ms; bind() })
+    expect(await service.request(request('now'))).toEqual({ closed: true })
+    expect(deps.sleep).toHaveBeenCalledOnce()
+  })
   it('a close asked of it before its first conversation bound still names it', async () => {
     const asked = request('now')
     bind()

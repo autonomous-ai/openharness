@@ -80,6 +80,23 @@ describe("the /device download offer", () => {
     expect(screen.getByRole("link", { name: "Windows · x64" })).toBeInTheDocument();
   });
 
+  it("gives a Windows on ARM visitor the ARM64 installer, with the x64 one as a link", () => {
+    platform = "windows-arm64";
+    const x64 = `${CDN}Harness-Device-windows-x64-setup.exe`;
+    const arm64 = `${CDN}Harness-Device-windows-arm64-setup.exe`;
+    const { container } = render(
+      <DeviceDownload
+        builds={builds({ "device-windows-x64-exe": { url: x64, size: 1 }, "device-windows-arm64-exe": { url: arm64, size: 1 } })}
+        version="0.1.10"
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: "Download" })).toHaveAttribute("href", arm64);
+    expect(container).toHaveTextContent("For Windows · ARM64 · version 0.1.10");
+    expect(screen.getByRole("link", { name: "Windows · x64" })).toHaveAttribute("href", x64);
+    expect(screen.getByRole("link", { name: "Mac · Apple silicon and Intel" })).toHaveAttribute("href", DMG);
+  });
+
   it("sends a phone to a computer and lists every build", () => {
     platform = "mobile";
     render(<DeviceDownload builds={builds()} version="0.1.10" />);

@@ -28,6 +28,13 @@
  * foreground job and the source says it is still at its prompt (vscodeTerminals.ts `type`,
  * docs/plans/2026-11-22-dial-vscode-cursor-voice-design.md). Cursor's terminals are typed into as VS Code's (U11);
  * Cursor's own agent takes no words, and its adapter's `voiceRefusal` says so (U10).
+ *
+ * The terminal holding a multiplexer's client (dial eval V12): an agent in the person's tmux runs under tmux's server,
+ * whose chain reaches no window's shell, while the client the person attached from an integrated terminal does. Each
+ * editor has a second adapter for it, as kitty and WezTerm have for theirs (createVscodeClientAdapter): its pane is the
+ * client's process, and its window shows the shell on that client's chain, after the app came on a tap and before the
+ * multiplexer's pane on a rest. A client under no shell a window lists has no terminal: never another one. Words and
+ * strokes go to the multiplexer's pane, never here.
  */
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { createAppLink, type AppLinkDeps } from './appLink.js'
@@ -47,6 +54,8 @@ const EDITORS = {
 const VSCODE_SESSION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 /** A terminal pane's id: one form for each pid, so a pane's id and its pid read back the same. */
 const TERM_PANE = /^term:([1-9][0-9]{0,9})$/
+/** A multiplexer client's pane id, in the same one form for each pid. */
+const CLIENT_PANE = /^client:([1-9][0-9]{0,9})$/
 
 /** cursor-agent in a terminal, which sets TERM_PROGRAM. Cursor's own agent has the same engine but carries none, and its
  *  hook's pid may be a short-lived process: a pane for it would have the window stream's chain read it with `ps` every
@@ -180,5 +189,45 @@ export function createVscodeAdapter(
     ...(editor === 'cursor' && {
       voiceRefusal: (place: Place) => (cursorsOwnAgent(place) ? 'Voice can\'t reach Cursor\'s agent. Type in Cursor.' : undefined),
     }),
+  }
+}
+
+/** The client's pid a client pane names (`client:<pid>`, 2..2^31-1); none for any other id. */
+export function clientPid(paneId: string): number | undefined {
+  const pid = Number(CLIENT_PANE.exec(paneId)?.[1])
+  return isPid(pid) ? pid : undefined
+}
+
+/** The integrated terminal holding a multiplexer's client, in [editor]'s windows: no `open -b` or raise of its own, as
+ *  the tap's opener already brought the editor by the agent's bundle, the client's app's (observed.ts placeApp), or on
+ *  Linux by the raise of the client's window (open.ts raiseWindow). */
+export function createVscodeClientAdapter(
+  editor: keyof typeof EDITORS,
+  deps: { inFront(): boolean; terminals: Pick<VscodeTerminals, 'terminalOf' | 'show'> },
+): HostAdapter & Required<Pick<HostAdapter, 'canShow' | 'show'>> {
+  const id = `${editor}-tab`
+  /** Asked again at each verb, as a window comes and goes between looks. */
+  const terminalOf = (pane: Pane) => {
+    const pid = clientPid(pane.id)
+    return pid === undefined ? undefined : deps.terminals.terminalOf(pid)
+  }
+  return {
+    id,
+    tap: 'after',
+    paneOf(place: Place): Pane | undefined {
+      const pid = place.outer?.app === editor ? place.outer.pid : undefined
+      return isPid(pid) ? { adapter: id, id: `client:${pid}` } : undefined
+    },
+    canFocus: (pane) => !!terminalOf(pane),
+    async focus(pane) {
+      const terminal = terminalOf(pane)
+      return !!terminal && deps.terminals.show(terminal, true)
+    },
+    // The editor in front first: with it behind, no window is asked.
+    canShow: (pane) => deps.inFront() && !!terminalOf(pane),
+    async show(pane) {
+      const terminal = terminalOf(pane)
+      return terminal && deps.terminals.show(terminal, false) ? 'ok' : 'failed'
+    },
   }
 }

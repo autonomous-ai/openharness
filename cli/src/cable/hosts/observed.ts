@@ -100,7 +100,7 @@ export interface ObservedDeps {
   platform: NodeJS.Platform
   /** The machine's processes, read once for every session (externals/support.ts listProcesses); none when unreadable. */
   processes(): Promise<readonly Pick<RunningProcess, 'pid' | 'generation'>[]>
-  /** Whether a pid is running: for a session whose process has no generation to read (Windows has no `ps` here), and
+  /** Whether a pid is running: for a session whose process has no generation to read (a start the table could not give), and
    *  for a session's process when a hook other than its session-start comes from another (ingest). */
   alive(pid: number): boolean
   openSessions: Pick<OpenSessions, 'owners' | 'busy'>
@@ -552,15 +552,34 @@ export class ObservedSource implements HostSource {
     }
     const target = this.target(e)
     if (!actions.canOpen(e.agent.id, target)) return false
+    const tab = this.placedTab(e, target)
+    if (tab) {
+      // One that did not come still leaves the open its multiplexer's pane and the app, on the tab the app showed: the
+      // line says so, by the adapter's fixed id alone. A refusal its adapter has logged.
+      if ((await tab.adapter.focus(tab.pane)) === false) this.deps.log(`[observed] open · ${tab.adapter.id} · placed pane not shown`)
+      if (!latest()) return 'superseded'
+      if (!this.live(e)) return false
+    }
     const opened = await actions.open(e.agent.id, target)
     if (opened) await this.raiseAfter(agent)
     return opened
   }
 
+  /** The pane a nested agent was placed at in an app that switches before its own open, other than the tapped pane's:
+   *  the tab its multiplexer's client runs in, which the open never brings, as it names one pane (eval O11, 2026-11-25:
+   *  the app came forward on the tab it showed). Never one of its own panes nor a held one, and only a focus: a place
+   *  is a guess, shown wrong it costs a look (shownOnly). */
+  private placedTab(e: Entry, target: OpenTarget): Located | undefined {
+    if (!e.agent.nest) return undefined
+    return this.shownOnly(e).find(({ adapter, pane }) => adapter.tap === 'before' && adapter.id !== target.pane?.adapter
+      && !pane.held && !e.panes.some((own) => own.pane === pane) && adapter.canFocus(pane))
+  }
+
   /** `open -b` brings the app forward on whichever tab it had: a pane that comes after its app (a tab) is raised once it
    *  came, also when the tapped pane was the multiplexer's inside that tab. Read after the open, as an agent that ended
    *  or moved meanwhile has no such pane to raise. A nested agent's is raised without asking whether a rest could show
-   *  it: one shown only while its app is in front would be skipped while the front report lags the open. */
+   *  it: one shown only while its app is in front would be skipped while the front report lags the open. Its placed tab
+   *  in an app that switches before its own was switched to before the open (placedTab). */
   private async raiseAfter(agent: HostAgent): Promise<void> {
     const e = this.entries.get(agent.id)
     if (e?.outer && this.live(e)) {
@@ -681,7 +700,9 @@ export class ObservedSource implements HostSource {
   }
 
   /** What a tap opens: its app, and the first of its panes the opener brings forward. Asked at each look, as a rest's.
-   *  An agent placed by its caller, or found by the scan, has had no hook to name its app: its pane's adapter names it. */
+   *  An agent placed by its caller, or found by the scan, has had no hook to name its app: its pane's adapter names it.
+   *  A nested agent's placed tab in another app that switches first is not the target: focus switches to it before the
+   *  open (placedTab). */
   private target(e: Entry): OpenTarget {
     const panes = this.shownOnly(e)
     // The pane of the host that made its terminal is where it is: one before it in the adapters' order only holds it
@@ -787,10 +808,14 @@ export class ObservedSource implements HostSource {
   /** A live agent's latest process, the one whose window a raise brings forward, and its app; none once its session
    *  ended, as its window holds something else now. Nested in a multiplexer, the process is the client its app holds:
    *  the agent's own is under the multiplexer's server, which owns no window. A client in a terminal with no page is
-   *  that client too (Entry.outerPid). */
-  windowOf(agentId: string): { pid: number; app: string } | undefined {
+   *  that client too (Entry.outerPid), or on Windows the terminal whose window holds it (herdrOuter.ts). `outer` says
+   *  the pid is the outer answer's: only such a pid is raised on Windows (open.ts), as the agent's own process there is
+   *  under herdr's server. */
+  windowOf(agentId: string): { pid: number; app: string; outer?: true } | undefined {
     const e = this.entries.get(agentId)
-    return e && this.live(e) ? { pid: e.outer?.pid ?? e.outerPid ?? e.caller ?? e.pid, app: e.agent.app } : undefined
+    if (!e || !this.live(e)) return undefined
+    const client = e.outer?.pid ?? e.outerPid
+    return client !== undefined ? { pid: client, app: e.agent.app, outer: true } : { pid: e.caller ?? e.pid, app: e.agent.app }
   }
 
   /** A live agent's tab, the tty byTab reads: its own in a tab app, its multiplexer client's when nested (a hook's
@@ -982,6 +1007,16 @@ export class ObservedSource implements HostSource {
   /** Its app, and the one a tap brings forward: the app it is seen in when nested, else the one its hints name; hints
    *  that name none, or only a word Cursor says too (walked), learn it from the caller's parents. */
   private placeApp(entry: Entry, hints: Readonly<Record<string, string>>, pid: number): void {
+    // On Windows a herdr pane's hints are those of the client that started herdr's server: the hook names its app from
+    // its own environment (notify.mjs lookUpWindowsApp), which the pane inherits from the server, and the server from
+    // that first client (spec 2026-11-25-dial-herdr-windows-app-design.md, "What Windows does today"). Once herdr's
+    // lookup confirmed the pane, only its answer names the app, and a client in no listed app is the unknown one, never
+    // the hint's (decision 4, PM 2026-11-26). No walk either: the caller's parents end at herdr's server.
+    if (this.deps.platform === 'win32' && entry.agent.nest === 'herdr') {
+      entry.agent.app = entry.outer?.app ?? UNKNOWN_APP
+      entry.bundle = entry.outer ? APP_BUNDLES[entry.outer.app] : undefined
+      return
+    }
     const named = detectApp(hints)
     const walk = walked(hints, this.deps.platform)
     entry.agent.app = entry.outer?.app ?? (walk && this.deps.apps ? this.learnApp(entry, pid, named) : named)

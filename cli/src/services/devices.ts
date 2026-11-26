@@ -54,8 +54,8 @@ import { createHcClient, hcClientDeps, hcPaneKey, hcSocketPath, type HcClient } 
 import { HcSource } from '../cable/hosts/hcSource.js'
 import { createHerdrAdapter, herdrPaneParts } from '../cable/hosts/herdr.js'
 import { createHerdrAppAdapter } from '../cable/hosts/herdrApp.js'
-import { createHerdrClient, herdrClientDeps, herdrPaneKey, herdrShellOf, type HerdrClient } from '../cable/hosts/herdrClient.js'
-import { createHerdrNested, createHerdrOuter, procSockets, ttyAtime } from '../cable/hosts/herdrOuter.js'
+import { createHerdrClient, herdrClientDeps, herdrMarkerServer, herdrPaneKey, herdrShellOf, type HerdrClient } from '../cable/hosts/herdrClient.js'
+import { createHerdrNested, createHerdrOuter, procSockets, ttyAtime, type HerdrWindowsDeps } from '../cable/hosts/herdrOuter.js'
 import { HerdrSource } from '../cable/hosts/herdrSource.js'
 import { createKittyAdapter, createKittyTabAdapter, kittyFinder } from '../cable/hosts/kitty.js'
 import { Inbox } from '../cable/hosts/inbox.js'
@@ -74,14 +74,14 @@ import { ORCA_CHAT_TIMEOUT_MS, OrcaChatSource } from '../cable/hosts/orcaChatSou
 import { firstOuter, type NestedLookup } from '../cable/hosts/outer.js'
 import { readRecord } from '../cable/hosts/record.js'
 import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
-import { appRoots, learnApps, readBundleId, readMadeBy, readProcessNames, readPtyOwner, readTtyName, readWindowsPtyOwner, scanLearnsApps } from '../cable/hosts/scannedApp.js'
+import { appRoots, learnApps, readBundleId, readMadeBy, readProcessNames, readPtyOwner, readTtyName, readWindowsProcesses, readWindowsPtyOwner, scanLearnsApps } from '../cable/hosts/scannedApp.js'
 import { createScrollLines } from '../cable/hosts/scrollLines.js'
 import { pageOf } from '../cable/hosts/select.js'
 import { createTabsAdapter, isTabApp, readTty, type Tab, type TabApp } from '../cable/hosts/tabs.js'
 import { createTmuxAdapter, createTmuxNested, createTmuxOuter, tmuxPaneParts } from '../cable/hosts/tmux.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { watchSocket } from '../cable/hosts/unixSocket.js'
-import { createVscodeAdapter, termPid } from '../cable/hosts/vscode.js'
+import { clientPid, createVscodeAdapter, createVscodeClientAdapter, termPid } from '../cable/hosts/vscode.js'
 import { readForeground, readProcessParents, vscodeStreams, type VscodeTerminal, type VscodeTerminalsDeps } from '../cable/hosts/vscodeTerminals.js'
 import { createWeztermAdapter, createWeztermTabAdapter } from '../cable/hosts/wezterm.js'
 import { createRexAdapter, createRexReads, rexBlocksRunning, rexFinder, rexPaneIds, rexPaneParts, type RexReads } from '../cable/hosts/rex.js'
@@ -801,6 +801,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   ].map(noting), claudeNoted, codexNoted, ...[
     createVscodeAdapter('vscode', { ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'vscode', terminals: vscodeNoted, raise: raise && ((window) => raise.raise(window)), windows }),
     createVscodeAdapter('cursor', { ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'cursor', terminals: vscodeNoted, raise: raise && ((window) => raise.raise(window)), windows }),
+    // The VS Code and Cursor terminal holding a multiplexer's client, as the kitty and WezTerm tabs below.
+    createVscodeClientAdapter('vscode', { inFront: () => cableHost.latestFront() === 'vscode', terminals: vscodeNoted }),
+    createVscodeClientAdapter('cursor', { inFront: () => cableHost.latestFront() === 'cursor', terminals: vscodeNoted }),
     // After Cursor's terminals and tabs: whatever agent in Cursor they do not reach opens its folder's window.
     createCursorFolderAdapter({ run: apps.run, platform: apps.platform, bin: openBin, isFolder, cli: () => cursorFolderCli(cursorExtension), windows }),
     // The WezTerm pane and the kitty window holding a multiplexer's client, as the tabs adapter's tab of Terminal,
@@ -909,6 +912,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  ids. */
   const outerDeps = { run: apps.run, processes: readProcessNames, log, now: monotonic, platform: apps.platform,
     roots: appRoots(homedir()), bundleId: readBundleId }
+  /** What herdr's client lookup reads on Windows, which has no `ps` and no ttys: the PTY host's table the maker is read
+   *  from, cut to four columns, and the server herdr's marker names, checked against that same table. */
+  const herdrWindows: HerdrWindowsDeps | undefined = apps.platform === 'win32' ? {
+    processes: () => readWindowsProcesses(listProcesses),
+    server: (rows) => herdrMarkerServer(herdrAt.socketPath, rows),
+  } : undefined
   /** How the open scan places a session it found in a pane of the person's tmux or herdr, before its first hook: Diego's
    *  idle agents in tmux inside iTerm2 sat on Other's page after the devices started again (2026-11-22). None where the
    *  scan learns no app (Windows has no `ps`): there it lists them as before. */
@@ -955,11 +964,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // Only where a hook's address is taken: following another hc session, Herdr's adapter gives its terminals no pane, so
   // a session paired there would be listed twice on Herdr's page.
   hookIds ? (pid): string | undefined => hcSource?.terminalOf(pid) : undefined,
-  // An agent in a pane of the person's herdr, tmux or Zellij is on the page of the app holding the client that shows
-  // it: each lookup answers nothing at once for an agent in none of its panes, and places only one on a terminal its
-  // host made, so at most one names an app. herdr's first: its client's process alone, in a terminal with no page, is
-  // kept for Linux's raise when neither other names an app.
-  firstOuter(createHerdrOuter({ ...outerDeps, atime: ttyAtime, tty: readTtyName, onPath: apps.onPath, sockets: procSockets }),
+  // An agent in a pane of the person's herdr, tmux or Zellij is seen in the app holding the client that shows it, the
+  // app a tap brings forward: on herdr's or tmux's page (in Orca, on Orca's), on that app's page in Zellij (select.ts
+  // pageOf, Diego 2026-11-23). Each lookup answers nothing at once for an agent in none of its panes, and
+  // places only one on a terminal its host made, so at most one names an app. herdr's first: with its client in a
+  // terminal with no page, a process is kept for the raise when neither other names an app: on Linux the client's own,
+  // whose raise finds the window above it; on Windows the terminal's, which owns that window.
+  firstOuter(createHerdrOuter({ ...outerDeps, atime: ttyAtime, tty: readTtyName, onPath: apps.onPath, sockets: procSockets,
+    windows: herdrWindows }),
     firstOuter(createTmuxOuter({ ...outerDeps, tmux: tmuxAt, tty: readTtyName }),
       createZellijOuter({ ...outerDeps, zellij: zellijAt, tty: readTtyName }))),
   // Windows has no `ps` and no ttys: the PTY host's process table, which the open scan reads too, gives the maker as the
@@ -1692,7 +1704,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       const recap = event.recap || event.text
       const onScreen = alreadyOnScreen(agentId)
       const noted = (tier: Tier, rule: string): void => tally(tier, `rule:${rule}`, rule, 0)
-      if (onScreen || event.subagent) { noted('silent', event.subagent ? 'subagent' : 'onScreen'); void cable.summary(agentId, recap, event.text, 'silent', event.fullText, event.subagent); return }
+      if (onScreen || event.subagent) { noted('silent', event.subagent ? event.notNews ?? 'subagent' : 'onScreen'); void cable.summary(agentId, recap, event.text, 'silent', event.fullText, event.subagent); return }
       // No device attached (or the serial side disabled): nobody to tell, so the recap never leaves the machine.
       if (!cable.isConnected) { ended.delete(agentId); void cable.summary(agentId, recap, event.text, 'silent', event.fullText, false); return }
       const turn = ended.get(agentId) // a sub-agent's summary leaves the main turn's numbers alone
@@ -2289,13 +2301,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     return readRexOrder(source)
   }
   if (observed) observed.onChange(() => part.call('rex', () => rexMembers(observed)))
-  // Each change tells VS Code's and Cursor's windows which agents run in one of their terminals, by their panes: only
-  // theirs may cost a read of the process table. A part of its own, so a throw there is never the dial's.
+  // Each change tells VS Code's and Cursor's windows which agents run in one of their terminals, by their panes, and the
+  // multiplexer clients they hold: only theirs may cost a read of the process table. An agent has at most one of each,
+  // so the list stays within twice the source's bound. A part of its own, so a throw there is never the dial's.
   if (observed) observed.onChange(() => part.call('vscode', () => vscode.agents(observed.list().flatMap(({ id }) =>
-    (['vscode', 'cursor'] as const).flatMap((editor) => {
-      const pid = termPid(observed.paneOf(id, editor) ?? '')
-      return pid === undefined ? [] : [pid]
-    })))))
+    (['vscode', 'cursor'] as const).flatMap((editor) => [termPid(observed.paneOf(id, editor) ?? ''),
+      clientPid(observed.paneOf(id, `${editor}-tab`) ?? '')].filter((pid) => pid !== undefined))))))
 
   /**
    * The open scan's copy of a session cmux lists, placed at that row's cmux pane

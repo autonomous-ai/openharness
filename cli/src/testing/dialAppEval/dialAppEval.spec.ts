@@ -13,6 +13,7 @@
 import { homedir, tmpdir } from 'node:os'
 import { basename } from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { flagOf, ORCA_PROGRAMS, programOf } from './argv.js'
 import { claudeGhost, claudeSessions, editorGhost, editorSession, itermGhost, itermSession, keys, listed, MAIN, orcaGhost, orcaOpening,
   orcaSession, orcaStarted, scenario, scenariosFor, started, turned } from './catalog.js'
 import { rings } from './checks.js'
@@ -116,8 +117,9 @@ vi.mock('../../cable/hosts/herdrOuter.js', async (real) => ({
   ...await real<typeof import('../../cable/hosts/herdrOuter.js')>(),
   ttyAtime: async (tty: string) => machine.atimes.get(tty.replace(/^\/dev\//, '')),
 }))
-// The model's machine has no Zellij or kitty, and tmux only where the world installed it (an iTerm2 scenario's): no login
-// shell is asked where they are. A tmux found runs through the world's `run`, answered from its model (tierA/steps/tmux.ts).
+// The model's machine has no Zellij or kitty, and tmux only where the world installed it (an iTerm2 scenario's, or one
+// whose Orca agent runs under tmux, never on Windows): no login shell is asked where they are. A tmux found runs
+// through the world's `run`, answered from its model (tierA/steps/tmux.ts).
 vi.mock('../../lib/tmuxOnPath.js', async (real) => ({
   ...await real<typeof import('../../lib/tmuxOnPath.js')>(),
   ensureTmuxOnPath: async () => {
@@ -396,6 +398,40 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
     expect(raisesOrca.darwin(after[1]!)).toBe(true)
   })
 
+  /** O11: a, b and c in w1, c under tmux in its tab; its tap on c, then the person turns to c. */
+  const o11 = MAIN.find((s) => s.id === 'O11')!
+  const orcaTerminal = (argv: string[], verb: string): boolean =>
+    ORCA_PROGRAMS.includes(programOf(argv)) && argv[1] === 'terminal' && argv[2] === verb
+  /** A tmux run that shows c's pane: Linux's `select-window ; select-pane`, as the client's app is Orca there, or macOS's
+   *  `switch-client`, as tier A finds no app for the client there (docs/plans/2026-11-25-dial-orca-tmux-o11-plan.md,
+   *  "What this plan decides"; checks.ts tmuxShows). */
+  const showsC = (argv: string[]): boolean => {
+    const verb = argv.findIndex((arg) => arg === 'select-pane' || arg === 'switch-client')
+    return programOf(argv) === 'tmux' && verb > 0 && flagOf(argv.slice(verb), '-t') === 'pane:c'
+  }
+
+  // Eval O11 found tmux's pane alone came forward, inside whichever tab Orca showed (2026-11-25).
+  it.for(['darwin', 'linux'] as const)("O11's tap on c under tmux switches Orca to c's terminal before tmux shows its pane and Orca comes forward, and types nothing, on %s", async (platform) => {
+    const driver = new TierADriver({ startDevices })
+    const run = await runScenario(driver, o11, platform)
+    expect(run.error).toBeUndefined()
+    const { commands, steps } = driver.seen()
+    const tap = steps.find((s) => s.label === 'tap')!
+    const face = steps.find((s) => s.label === 'face')!
+    const after = commands.filter((c) => c.at >= tap.at && c.at < face.at)
+    const switched = after.findIndex((c) => c.ok && orcaTerminal(c.argv, 'switch')
+      && flagOf(c.argv, '--terminal') === orcaTerminalHandle('c'))
+    const shown = after.findIndex((c) => c.ok && showsC(c.argv))
+    const raised = after.findIndex((c) => raisesOrca[platform](c.argv))
+    expect(switched).toBeGreaterThanOrEqual(0)
+    expect(shown).toBeGreaterThan(switched)
+    expect(raised).toBeGreaterThan(switched)
+    expect(after.filter((c) => orcaTerminal(c.argv, 'send'))).toEqual([])
+    expect(run.wrongSends).toEqual([])
+    const open = Object.fromEntries(run.results.filter((r) => r.check.startsWith('open.')).map((r) => [r.check, r.score]))
+    expect(open).toMatchObject({ 'open.worktree': 1, 'open.switch': 1, 'open.pane': 1 })
+  })
+
   it("a ring of 40 agents in 40 worktrees reads Orca's layout at most once per change in its agents, and not once in a minute with no change", async () => {
     const agents = keys('k', 1, 40, 2)
     const worktreeOf = (key: string): string => key.replace('k', 'w')
@@ -544,10 +580,18 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
     checks: [], probes: [],
   })
 
-  it("tmux is found on an iTerm2 scenario's machine alone", async () => {
-    const found = async (of: Scenario) => {
+  /** Claude Code a in w1's tab 0 and c under tmux in its tab 1, started c then a and listed on Orca's page. */
+  const orcaTmux = scenario({
+    id: 'S8', app: 'orca', title: 'Eval an Orca agent under tmux', dims: ['D1'], tiers: ['a'],
+    sessions: [orcaSession('a', { worktree: 'w1', tab: 0 }), orcaSession('c', { worktree: 'w1', tab: 1, tmux: true }), orcaGhost],
+    steps: [...orcaOpening(['w1']), ...orcaStarted(['c', 'a']), ...listed('orca', ['a', 'c'])],
+    checks: [], probes: [],
+  })
+
+  it("tmux is found on an iTerm2 scenario's machine and on one whose Orca agent runs under tmux, never on Windows", async () => {
+    const found = async (of: Scenario, platform: Platform = 'darwin') => {
       const driver = new TierADriver({ startDevices })
-      await driver.start(of, 'darwin')
+      await driver.start(of, platform)
       try {
         return await ensureTmuxOnPath()
       } finally {
@@ -555,14 +599,29 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
       }
     }
     const c1 = MAIN.find((s) => s.id === 'C1')!
-    expect(await found(tmuxTab('S7', 'Eval tmux is installed', []))).toEqual({ state: 'adopted', path: '/opt/eval/bin/tmux',
-      from: 'standard install location' })
+    const adopted = { state: 'adopted', path: '/opt/eval/bin/tmux', from: 'standard install location' }
+    expect(await found(tmuxTab('S7', 'Eval tmux is installed', []))).toEqual(adopted)
+    for (const platform of ['darwin', 'linux'] as const) expect(await found(orcaTmux, platform), platform).toEqual(adopted)
+    expect((await found(orcaTmux, 'win32')).state).toBe('absent')
     expect((await found(c1)).state).toBe('absent')
     // C1's devices run no tmux.
     const driver = new TierADriver({ startDevices })
     expect((await runScenario(driver, c1, 'darwin')).error).toBeUndefined()
     expect(driver.seen().commands.filter((c) => basename(c.argv[0]!) === 'tmux')).toEqual([])
   })
+
+  it.for([['linux', 'found'], ['darwin', 'none']] as const)(
+    "an Orca agent under tmux: tmux's lookup runs on the world's tmux and finds its client in Orca on Linux, none on macOS (%s)",
+    async ([platform, client]) => {
+      const driver = new TierADriver({ startDevices })
+      const run = await runScenario(driver, orcaTmux, platform)
+      expect(run.error).toBeUndefined()
+      expect(run.gaps).toEqual([])
+      const { commands, logs = [] } = driver.seen()
+      expect(commands.filter((c) => c.argv[1] === 'list-clients').map(({ argv, ok }) => ({ argv: argv.slice(0, 4), ok })))
+        .toContainEqual({ argv: ['/opt/eval/bin/tmux', 'list-clients', '-t', 'pane:c'], ok: true })
+      expect(logs.map((l) => l.line)).toContain(`[device] tmux client · ${client}`)
+    })
 
   it("I6 inline: a rest on the tmux row with iTerm2 in front writes its client's tab select without raise and runs "
     + 'select-window ; select-pane for its pane', async () => {

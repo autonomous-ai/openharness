@@ -10,6 +10,7 @@
  * - a decision asked with `--suggest` and `--proceeding`, by a Harness agent or an outside session, rings once on its
  *   own card with the one line the command composed, its turn ends silent, and the answer in its app takes the card
  *   down; a plain finished turn rings no question (docs/plans/2026-11-22-needs-you-notify-design.md);
+ * - a Harness agent's turn that asks permission, is allowed on the dial and goes on rings when it ends (#4620);
  * - a tap on the card of a session in an Orca terminal switches Orca to it and keeps the card, so the dial's face of it
  *   still asks, until its next prompt; a fake `orca` (harness/fakeOrca.ts) stands in for Orca, which never runs;
  * - it rings with a window open on its tab;
@@ -298,6 +299,26 @@ describe('harness device notify', () => {
     await dial.next((m) => m.t === 'summary' && m.agentId === engine.id, 60_000, 'its answer', since)
     expect(questions(dial, engine.id)).toEqual([])
     client.close()
+  })
+
+  // Answering an ask closes the ask, not the turn (#4620): the turn goes on after it, and its end is news as any turn's.
+  it('a Harness agent\'s turn that asks permission, is allowed on the dial and goes on rings when it ends', async () => {
+    const { d, desk } = await fresh()
+    const window = await LocalClient.connect(d)
+    const { id } = await create(d, window, 'permit-rings')
+    const dial = await plugged(desk)
+    await listed(dial, id)
+    const since = dial.messages.length
+    window.send('message', { agentId: id, content: '!permit printf hi' })
+    const question = await dial.next((m) => m.t === 'question' && m.agentId === id, 45_000, 'the permission asked', since)
+    const { q } = (question.questions as Array<{ q: string }>)[0]
+    dial.send({ t: 'answer', agentId: id, requestId: question.id, answers: { [q]: 'Yes' } })
+    await dial.next((m) => m.t === 'question.close' && m.agentId === id, 45_000, 'the ask closed', since)
+    const summary = await dial.next((m) => m.t === 'summary' && m.agentId === id, 60_000, 'its answer', since)
+    expect(summary).toMatchObject({ tier: 'alert' })
+    expect(summary.silent).toBeUndefined()
+    expect(await d.capture(String((await row(window, id))?.tmuxPane))).toContain('ran printf hi')
+    window.close()
   })
 
   it('a Codex session\'s notice is its own card', async () => {

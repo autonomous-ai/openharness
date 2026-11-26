@@ -11,7 +11,7 @@ use crate::model::UPDATING_APP;
 use crate::tick::menu_opened;
 use crate::types::{
     Action, DialStatus, Effect, Event, Exported, LoginEvent, MenuAction, MenuItem, NotifyMode, Saved, Screen,
-    UpdateFailure,
+    UpdateFailure, VoiceLang,
 };
 
 /// Second 0 of a minute.
@@ -53,6 +53,7 @@ fn status(muted: bool) -> Event {
         problem: None,
         muted: Some(muted),
         notify: Some(NotifyMode::Full),
+        voice_lang: Some(Some(VoiceLang::En)),
     })
 }
 
@@ -92,6 +93,7 @@ fn the_one_os_property_of_the_rules_is_install_exits_app() {
         Event::Menu(MenuAction::SoundOff),
         status(true),
         Event::Menu(MenuAction::NotifyYou),
+        Event::Menu(MenuAction::Voice(VoiceLang::Vi)),
         Event::Menu(MenuAction::ExportLogs),
         Event::LogsExported(Ok(Exported { zip: "/h/harness-logs.zip".into(), shown: "~/harness-logs.zip".into() })),
         ticked(B + 75, true),

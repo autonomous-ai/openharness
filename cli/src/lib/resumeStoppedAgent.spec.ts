@@ -253,7 +253,7 @@ describe('exact conversation readiness', () => {
     expect(deps.now()).toBe(250 + ENGINE_SETTLE_MS)
   })
   // A row whose bound conversation is no longer the one being resumed is still refused — that check
-  // is on the row, ahead of any proof, and is what `registry.register`'s mismatch guard feeds.
+  // is on the row, ahead of any proof, and is what a hook's rotation of the row (`registry.register`) feeds.
   it('still refuses a row that reports another conversation', async () => {
     const deps = readiness()
     deps.set({ sessionId: 'fresh-conversation' })
@@ -338,9 +338,11 @@ describe('resume refusal and readiness edge cases', () => {
     }
     expect(await resumeStoppedAgent(deps)).toMatchObject({ error: 'AGENT_CHANGED' }); expect(deps.launch).not.toHaveBeenCalled()
   })
-  it('asks a live but unconfirmed process for confirmation again instead of repeating the verdict', async () => {
+  // RESUME_SESSION_MISMATCH too: an older build's verdict for a hook of its own process naming another conversation,
+  // which nothing sets any more. Pressed before discovery heals the row, Resume repeated it over a running engine.
+  it.each(['RESUME_UNCONFIRMED', 'RESUME_SESSION_MISMATCH'])('asks a live process failed %s for confirmation again instead of repeating the verdict', async error => {
     const deps = fixture()
-    const existing: RegisteredSession = { ...saved, resumeOnly: true, launch: { state: 'failed', error: 'RESUME_UNCONFIRMED' } }
+    const existing: RegisteredSession = { ...saved, resumeOnly: true, launch: { state: 'failed', error } }
     deps.live.mockReturnValue(existing)
     expect(await resumeStoppedAgent(deps)).toMatchObject({ ok: true, resumed: true })
     expect(deps.waitForReady).toHaveBeenCalledWith(existing)
@@ -348,9 +350,9 @@ describe('resume refusal and readiness edge cases', () => {
   })
   // Reported as itself, not as "not confirmed yet": the verdict is the only thing that explains the
   // pane the person is looking at, and relabelling it sent them to check a terminal that is fine.
-  it('repeats the real verdict of a live process that reported another conversation', async () => {
-    const deps = fixture(); deps.live.mockReturnValue({ ...saved, resumeOnly: true, launch: { state: 'failed', error: 'RESUME_SESSION_MISMATCH', detail: 'fixture detail' } })
-    expect(await resumeStoppedAgent(deps)).toMatchObject({ ok: false, error: 'RESUME_SESSION_MISMATCH', detail: 'fixture detail' })
+  it('repeats the real verdict of a live process', async () => {
+    const deps = fixture(); deps.live.mockReturnValue({ ...saved, resumeOnly: true, launch: { state: 'failed', error: 'RESUME_FAILED', detail: 'fixture detail' } })
+    expect(await resumeStoppedAgent(deps)).toMatchObject({ ok: false, error: 'RESUME_FAILED', detail: 'fixture detail' })
     expect(deps.waitForReady).not.toHaveBeenCalled(); expect(deps.launch).not.toHaveBeenCalled()
   })
   it.each(['cancelled', 'removed', 'failed', 'different engine', 'no process', 'different start', 'missing launch'] as const)('handles readiness: %s', async mode => {

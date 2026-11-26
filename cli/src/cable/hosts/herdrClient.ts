@@ -83,12 +83,8 @@ const MARKER_MAX_BYTES = 64
 /** The Unix epoch as a FILETIME: 100 ns since 1601. */
 const UNIX_EPOCH_FILETIME = 116_444_736_000_000_000n
 
-/**
- * The herdr that wrote the marker at [path], while it runs: the process it names is a herdr.exe this account may open
- * (the table lists another account's with no start marker, pty/src/ps.rs), started before the marker's time (a later
- * one took the pid of a herdr that exited). Never rejects.
- */
-async function markerHerdr(path: string, rows: () => Promise<ProcessRow[] | null>): Promise<ProcessRow | undefined> {
+/** The server pid in the marker at [path], and when the marker was written as a FILETIME. Never rejects. */
+async function readMarker(path: string): Promise<{ pid: number; written: bigint } | undefined> {
   let text: string
   try {
     const file = await open(path, 'r')
@@ -102,12 +98,33 @@ async function markerHerdr(path: string, rows: () => Promise<ProcessRow[] | null
     return undefined
   }
   const marker = MARKER.exec(text)
-  if (!marker) return undefined
-  const pid = Number(marker[1])
-  const written = BigInt(marker[2]!) / 100n + UNIX_EPOCH_FILETIME
-  const row = (await rows().catch(() => null))?.find((row) => row.pid === pid)
-  const started = row ? windowsStartTime(row.startMarker) : null
-  return row?.executable.toLowerCase() === 'herdr.exe' && started !== null && started < written ? row : undefined
+  return marker ? { pid: Number(marker[1]), written: BigInt(marker[2]!) / 100n + UNIX_EPOCH_FILETIME } : undefined
+}
+
+type MarkerRow = { pid: number; executable: string; startMarker?: string }
+
+/**
+ * The row of the herdr that wrote [marker], while it runs: the process it names is a herdr.exe this account may open
+ * (the table lists another account's with no start marker, pty/src/ps.rs), started before the marker's time (a later
+ * one took the pid of a herdr that exited).
+ */
+function markerRow<R extends MarkerRow>(marker: { pid: number; written: bigint }, rows: readonly R[] | null): R | undefined {
+  const row = rows?.find((row) => row.pid === marker.pid)
+  const started = row?.startMarker ? windowsStartTime(row.startMarker) : null
+  return row?.executable.toLowerCase() === 'herdr.exe' && started !== null && started < marker.written ? row : undefined
+}
+
+/** The herdr that wrote the marker at [path], while it runs (markerRow). Never rejects. */
+async function markerHerdr(path: string, rows: () => Promise<ProcessRow[] | null>): Promise<ProcessRow | undefined> {
+  const marker = await readMarker(path)
+  return marker && markerRow(marker, await rows().catch(() => null))
+}
+
+/** The pid of the herdr server that wrote the marker at [path], while [rows] show it running (markerRow): the lookup of
+ *  herdr's clients passes the table it already read, so no second one is read. Never rejects. */
+export async function herdrMarkerServer(path: string, rows: readonly MarkerRow[]): Promise<number | undefined> {
+  const marker = await readMarker(path)
+  return marker && markerRow(marker, rows)?.pid
 }
 
 /** Why a request has no result: the client's own word, or herdr's refusal (`rejected`) with herdr's code beside it.

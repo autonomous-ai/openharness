@@ -1,11 +1,13 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { QuestionWatcher } from './askQuestion.js'
+import { parseEngineQuestionPane, QuestionWatcher, questionRequestId, type QuestionView } from './askQuestion.js'
 import type { RegisteredSession } from './registry.js'
 
 const QUESTION = readFileSync(join(__dirname, '__fixtures__/question-single.txt'), 'utf8')
 const NEXT = readFileSync(join(__dirname, '__fixtures__/question-multi.txt'), 'utf8')
+// The same question with a line of its dialog moved: its words and options as they were, its signature not.
+const MOVED = QUESTION.replace('Lighter, steeped leaves.', 'Lighter, steeped leaves, freshly.')
 const watchers: QuestionWatcher[] = []
 
 function deferred<T>() {
@@ -170,5 +172,49 @@ describe('question polling resources and capture lifetime', () => {
     slow.resolve(QUESTION)
     await vi.advanceTimersByTimeAsync(1_500)
     expect(h.onQuestion).toHaveBeenCalledOnce()
+  })
+})
+
+describe('a reset (a device joined) keeps the question it must close', () => {
+  async function announced(h: ReturnType<typeof harness>): Promise<string> {
+    h.watcher.start('s1')
+    await vi.advanceTimersByTimeAsync(1_500)
+    expect(h.onQuestion).toHaveBeenCalledOnce()
+    return h.onQuestion.mock.calls[0][1] as string
+  }
+
+  it('after a reset, stopping the session closes the question it announced', async () => {
+    const h = harness()
+    const id = await announced(h)
+    h.watcher.reset()
+    h.watcher.stop('s1')
+    expect(h.onQuestionGone.mock.calls).toEqual([['s1', id]])
+  })
+
+  it('after a reset, the next poll announces the open question again under the id it holds, and a confirmed miss closes it', async () => {
+    const view = (pane: string) => parseEngineQuestionPane('claude', pane) as QuestionView
+    const words = (pane: string) => [view(pane).question, view(pane).rows.map((row) => row.label), view(pane).multi]
+    expect(words(MOVED)).toEqual(words(QUESTION))
+    expect(questionRequestId('s1', view(MOVED))).not.toBe(questionRequestId('s1', view(QUESTION)))
+    const h = harness()
+    const id = await announced(h)
+    h.capture.mockResolvedValue(MOVED)
+    await vi.advanceTimersByTimeAsync(1_500)
+    h.watcher.reset()
+    await vi.advanceTimersByTimeAsync(1_500)
+    expect(h.onQuestion.mock.calls.map(([, requestId]) => requestId)).toEqual([id, id])
+
+    h.capture.mockResolvedValue('')
+    await vi.advanceTimersByTimeAsync(3_000)
+    expect(h.onQuestionGone.mock.calls).toEqual([['s1', id]])
+  })
+
+  it('after a reset, a removed agent\'s question is closed at the next poll', async () => {
+    const h = harness()
+    const id = await announced(h)
+    h.watcher.reset()
+    h.sessions.delete('s1')
+    await vi.advanceTimersByTimeAsync(1_500)
+    expect(h.onQuestionGone.mock.calls).toEqual([['s1', id]])
   })
 })

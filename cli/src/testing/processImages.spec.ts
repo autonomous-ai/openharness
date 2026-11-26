@@ -15,6 +15,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // The end-to-end harness is outside tsconfig's rootDir (src), so it is loaded untyped, as testNode.spec.ts loads its setup.
 const { default: setup, bundledProcessImages } = await import('../../e2e/harness/processImages.js' as string) as {
   default: () => (() => void) | undefined, bundledProcessImages: (bundle: string) => string | undefined }
+const { readDevWatchBundle } = await import('../../scripts/lib/processImageBundle.mjs' as string) as {
+  readDevWatchBundle: (options: { path: string }) => string }
 
 const CLI_ROOT = fileURLToPath(new URL('../..', import.meta.url))
 const sha256 = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex')
@@ -78,6 +80,26 @@ describe('the helper a bundle carries', () => {
   it('is the one embedded, whichever it is', () => {
     const embedded = JSON.stringify({ schema: 1, size: HELPER.length, sha256: sha256(HELPER), base64: HELPER.toString('base64') })
     expect(bundledProcessImages(bundle(JSON.stringify(embedded)))).toBe(sha256(HELPER))
+  })
+
+  // A release defines both helpers in one bundle (build-bundle.mjs); the report names the process helper's hash.
+  it('is the process helper, not the /dev watch helper beside it', () => {
+    const watchBytes = Buffer.alloc(64, 9)
+    const base = mkdtempSync(join(tmpdir(), 'dev-watch-bundle-'))
+    try {
+      const path = join(base, 'artifact.json')
+      writeFileSync(path, artifact({ devWatch: {
+        sourceSha256: sha256(readFileSync(join(CLI_ROOT, 'native/darwin-dev-watch.c'))),
+        sha256: sha256(watchBytes), size: watchBytes.length, base64: watchBytes.toString('base64') } }))
+      const watch = readDevWatchBundle({ path })
+      const embedded = JSON.stringify({ schema: 1, size: HELPER.length, sha256: sha256(HELPER), base64: HELPER.toString('base64') })
+      const code = transformSync('export const watch = __DARWIN_DEV_WATCH__; export const images = __DARWIN_PROCESS_IMAGES__',
+        { define: { __DARWIN_DEV_WATCH__: JSON.stringify(watch), __DARWIN_PROCESS_IMAGES__: JSON.stringify(embedded) },
+          format: 'esm', minify: true }).code
+      expect(bundledProcessImages(code)).toBe(sha256(HELPER))
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
   })
 
   it('is none in a bundle built without one', () => {

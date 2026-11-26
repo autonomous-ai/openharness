@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { AgentNotifications, DONE_QUIET_MS, type AgentNotification } from './agentNotifications.js'
+import { AgentNotifications, DONE_QUIET_MS, silentCard, type AgentNotification, type NotNews } from './agentNotifications.js'
 
 beforeEach(() => { vi.useFakeTimers() })
 afterEach(() => { vi.useRealTimers() })
 
-/** Decide a session's ended turn and return what it was told so far. */
-function decided(policy: AgentNotifications, sessionId: string, result: string, silent = false): AgentNotification[] {
-  const told: AgentNotification[] = []
-  policy.decide(sessionId, result, silent, (n) => { told.push(n as AgentNotification) })
+/** Decide a session's ended turn and return what it was told so far: its notification, or why it has none. */
+function decided(policy: AgentNotifications, sessionId: string, result: string, silent = false): (AgentNotification | NotNews | undefined)[] {
+  const told: (AgentNotification | NotNews | undefined)[] = []
+  policy.decide(sessionId, result, silent, (n, notNews) => { told.push(n ?? notNews) })
   return told
 }
 
@@ -49,7 +49,7 @@ describe('shared desktop/device notification policy', () => {
     policy.started('s'); policy.ended('s'); policy.decide('s', 'Pass one done.', false, tell)
     vi.advanceTimersByTime(DONE_QUIET_MS - 1)
     policy.started('s')
-    expect(tell).toHaveBeenCalledExactlyOnceWith(null)
+    expect(tell).toHaveBeenCalledExactlyOnceWith(null, 'next-turn')
     vi.runAllTimers()
     expect(tell).toHaveBeenCalledTimes(1)
   })
@@ -59,7 +59,7 @@ describe('shared desktop/device notification policy', () => {
     policy.started('s'); policy.ended('s'); policy.decide('s', 'Please choose.', false, tell)
     expect(policy.asked('s', 'q')).toEqual({ id: 'q', kind: 'needsYou' })
     vi.runAllTimers()
-    expect(tell).toHaveBeenCalledExactlyOnceWith(null)
+    expect(tell).toHaveBeenCalledExactlyOnceWith(null, 'question')
   })
 
   it('a cancelled turn tells null; a forgotten session tells nothing', () => {
@@ -69,34 +69,48 @@ describe('shared desktop/device notification policy', () => {
     policy.decide('forgotten', 'Gone', false, forgotten)
     policy.cancelled('cancelled')
     policy.forget('forgotten')
-    expect(cancelled).toHaveBeenCalledExactlyOnceWith(null)
+    expect(cancelled).toHaveBeenCalledExactlyOnceWith(null, 'replay')
     vi.runAllTimers()
     expect(cancelled).toHaveBeenCalledTimes(1)
     expect(forgotten).not.toHaveBeenCalled()
   })
 
-  it("once a live turn; a replay, an empty result and a subagent's tell null", () => {
+  it("once a live turn; a replay, an empty result and a subagent's tell null, each with why", () => {
     const policy = new AgentNotifications()
-    expect(decided(policy, 's', 'Old answer')).toEqual([null])
+    expect(decided(policy, 's', 'Old answer')).toEqual(['gone'])
     policy.started('s'); policy.ended('s')
     const first = decided(policy, 's', 'Finished the change.')
     vi.runAllTimers()
     expect(first).toEqual([{ id: expect.any(String), kind: 'done' }])
-    expect(decided(policy, 's', 'Finished the change.')).toEqual([null])
+    expect(decided(policy, 's', 'Finished the change.')).toEqual(['replay'])
     policy.started('s'); policy.ended('s')
     const second = decided(policy, 's', 'Another result')
     vi.runAllTimers()
-    expect(second[0]?.id).not.toBe(first[0]?.id)
+    // The next live turn rings again, under its own id.
+    expect(second).toEqual([{ id: expect.any(String), kind: 'done' }])
+    expect(second).not.toEqual(first)
 
     policy.started('history', true)
     policy.started('empty')
     policy.started('worker')
     policy.started('aborted')
     policy.cancelled('aborted')
-    for (const [id, text, silent] of [
-      ['history', 'Historical answer', false], ['empty', '  ', false],
-      ['worker', 'Child finished', true], ['aborted', 'Partial work', false],
-    ] as const) { policy.ended(id); expect(decided(policy, id, text, silent)).toEqual([null]) }
+    for (const [id, text, silent, notNews] of [
+      ['history', 'Historical answer', false, 'replay'], ['empty', '  ', false, 'empty'],
+      ['worker', 'Child finished', true, 'subagent'], ['aborted', 'Partial work', false, 'replay'],
+    ] as const) { policy.ended(id); expect(decided(policy, id, text, silent)).toEqual([notNews]) }
+  })
+
+  it('a turn that goes on after its ask is answered is announced done when it ends', () => {
+    const policy = new AgentNotifications()
+    policy.started('s')
+    policy.asked('s', 'q')
+    policy.answered('s', 'q')
+    policy.ended('s')
+    const told = decided(policy, 's', 'Applied the approved change.')
+    expect(told).toEqual([])
+    vi.advanceTimersByTime(DONE_QUIET_MS)
+    expect(told).toEqual([{ id: expect.any(String), kind: 'done' }])
   })
 
   it('keeps questions actionable and does not announce their answer as done', () => {
@@ -107,12 +121,22 @@ describe('shared desktop/device notification policy', () => {
     policy.ended('s')
     const asked = decided(policy, 's', 'Please choose.')
     vi.runAllTimers()
-    expect(asked).toEqual([null])
+    expect(asked).toEqual(['question'])
     policy.answered('s', 'q')
-    expect(decided(policy, 's', 'Please choose.')).toEqual([null])
+    expect(decided(policy, 's', 'Please choose.')).toEqual(['replay'])
     policy.started('s'); policy.ended('s')
     const implemented = decided(policy, 's', 'Implemented your choice.')
     vi.runAllTimers()
-    expect(implemented[0]?.kind).toBe('done')
+    expect(implemented).toEqual([{ id: expect.any(String), kind: 'done' }])
+  })
+})
+
+describe('silentCard', () => {
+  it("a card is silent for a sub-agent's turn end or a restored recap, never for a word that is not true", () => {
+    expect(silentCard({ subagent: true })).toBe(true)
+    expect(silentCard({ restored: true })).toBe(true)
+    expect(silentCard({})).toBe(false)
+    expect(silentCard({ subagent: 'true' })).toBe(false)
+    expect(silentCard({ restored: 1 })).toBe(false)
   })
 })

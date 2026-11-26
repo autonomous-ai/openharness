@@ -116,10 +116,10 @@ describe("tier A's voice step", () => {
     heard.length = 0
     await voiceSteps.voice(world, { kind: 'voice', transcript: 'Eval words for alpha.', target: 'a' })
     expect(world.speech).toBe('Eval words for alpha.')
-    expect(heard.map((f) => f.type)).toEqual([CableType.Json, CableType.Pcm, CableType.Json])
-    const [begin, audio, end] = heard
+    expect(heard.map((f) => f.type)).toEqual([CableType.Json, CableType.Pcm, CableType.Pcm, CableType.Json])
+    const [begin, first, second, end] = heard
     expect(begin!.json).toMatchObject({ t: 'voice.begin', agentId: world.agentId('a'), sr: 16_000 })
-    expect(audio!.bytes).toBeGreaterThan(0)
+    expect(first!.bytes + second!.bytes).toBeGreaterThan(0)
     expect(end!.json).toEqual({ t: 'voice.end', uploadId: begin!.json!.uploadId })
   })
 
@@ -139,6 +139,50 @@ describe("tier A's voice step", () => {
     expect(deliveries).toEqual(Array.from({ length: 4 }, () => ({ at: 600, path: 'typed', target: null, text: 'Eval words for alpha.' })))
     expect(wrongSends(scenario, seen())).toHaveLength(4)
     expect(wrongSends(scenario, seen())[0]).toEqual({ scenario: 'S1', target: 'a', got: null, path: 'typed', at: 600 })
+  })
+
+  it('a tmux run that puts words in a pane is typed into no session', () => {
+    const { world, deliveries, ran, seen } = worldOf(new LoopbackDial(() => Date.now()))
+    recordTyping(world)
+    const tmux = '/opt/eval/bin/tmux'
+    const puts = [[tmux, 'send-keys', '-t', '%2', '-l', 'Eval words.'], [tmux, 'set-buffer', 'Eval words.'],
+      [tmux, 'load-buffer', '-'], [tmux, 'paste-buffer', '-t', '%2']]
+    // The rule answers nothing: the tmux model answers the run.
+    for (const argv of puts) expect(ran(argv)).toBeUndefined()
+    // A tmux run that puts no words in a pane is no delivery.
+    ran([tmux, 'list-clients', '-F', '#{client_tty}'])
+    ran([tmux, 'select-pane', '-t', '%2'])
+    expect(deliveries).toEqual(puts.map((argv) => ({ at: 600, path: 'typed', target: null, text: argv.at(-1) })))
+    expect(wrongSends(scenario, seen())).toHaveLength(4)
+  })
+
+  it("a tmux run that puts words in a pane by the command's alias is typed into no session", () => {
+    const { world, deliveries, ran, seen } = worldOf(new LoopbackDial(() => Date.now()))
+    recordTyping(world)
+    const tmux = '/opt/eval/bin/tmux'
+    // tmux's manual names these the aliases of send-keys, set-buffer, load-buffer and paste-buffer.
+    const puts = [[tmux, 'send', '-t', '%2', '-l', 'Eval words.'], [tmux, 'setb', 'Eval words.'],
+      [tmux, 'loadb', '-'], [tmux, 'pasteb', '-t', '%2']]
+    for (const argv of puts) expect(ran(argv)).toBeUndefined()
+    expect(deliveries).toEqual(puts.map((argv) => ({ at: 600, path: 'typed', target: null, text: argv.at(-1) })))
+    expect(wrongSends(scenario, seen())).toHaveLength(4)
+  })
+
+  it("a tmux run that puts words in a pane by a short form of the command's name, or by pipe-pane -I, is typed into no session", () => {
+    const { world, deliveries, ran, seen } = worldOf(new LoopbackDial(() => Date.now()))
+    recordTyping(world)
+    const tmux = '/opt/eval/bin/tmux'
+    // tmux(1) accepts the shortest unambiguous form of a command's name; pipe-pane -I types what its command prints.
+    const puts = [[tmux, 'send-k', '-t', '%2', '-l', 'Eval words.'], [tmux, 'set-b', 'Eval words.'],
+      [tmux, 'loa', '-'], [tmux, 'pa', '-t', '%2'], [tmux, 'pipep', '-I', '-t', '%2', 'Eval words.']]
+    for (const argv of puts) expect(ran(argv)).toBeUndefined()
+    // pipe-pane without -I only reads the pane, and these put nothing in it.
+    ran([tmux, 'pipe-pane', '-O', '-t', '%2', 'cat'])
+    ran([tmux, 'select-pane', '-t', '%2'])
+    ran([tmux, 'list-clients', '-F', '#{client_tty}'])
+    ran([tmux, 'set-option', '-g', 'status', 'off'])
+    expect(deliveries).toEqual(puts.map((argv) => ({ at: 600, path: 'typed', target: null, text: argv.at(-1) })))
+    expect(wrongSends(scenario, seen())).toHaveLength(5)
   })
 
   it('words spoken to one session that reach another are reported as a wrong send', async () => {

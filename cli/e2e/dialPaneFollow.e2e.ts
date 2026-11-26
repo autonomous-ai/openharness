@@ -15,6 +15,7 @@ import { randomUUID } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
+import { heardClip } from '../src/cable/__fixtures__/heardClip.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
@@ -333,7 +334,7 @@ describe('the dial and the apps follow each other', () => {
     // 3. The dial speaks to A: the fake backend transcribes, the fake orca types it at A's prompt.
     since = dial.messages.length
     dial.send({ t: 'voice.begin', agentId: a.claude.id, uploadId: 'spoken-1', sr: 16_000, lang: 'en' })
-    dial.audio(Buffer.alloc(3_200, 1))
+    for (const frame of heardClip()) dial.audio(frame)
     dial.send({ t: 'voice.end', uploadId: 'spoken-1' })
     const heard = await dial.next((m) => m.t === 'voice.transcript' || m.t === 'voice.error', 45_000, 'the transcript', since)
     expect(heard).toMatchObject({ t: 'voice.transcript', text: 'run the spoken tests', agentId: a.claude.id })

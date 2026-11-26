@@ -78,7 +78,7 @@ export function tmuxPane(world: TierAWorld, s: SessionDef, client?: number): num
   }
   const split = (p: Pane): number => world.session(p.key).split ?? 0
   session.panes = [...session.panes, pane].sort((a, b) => split(a) - split(b))
-  // A tmux run names the pane only where the devices found tmux: an iTerm2 scenario's machine (world.ts).
+  // A tmux run names the pane only where the devices found tmux: a machine that installed it (world.ts deps).
   if (world.machine.installed.has('tmux')) world.panes.set(pane.id, s.key)
   return pane.shell
 }
