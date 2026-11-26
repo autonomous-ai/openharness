@@ -660,13 +660,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const editorClients = new Map<string, string | undefined>()
   /** Of the multiplexer clients on [ttys] in [app], those the person may look at: where the app tells which, the one it
    *  told last (the tab a tab app reported selected, none before it reports one; the client in the terminal VS Code or
-   *  Cursor focused, none for an agent's own terminal); an editor that told none (no Harness extension, or no terminal focused since it settled) its one
-   *  client, none of two, as before §7, which only adds to it; elsewhere every one. */
+   *  Cursor focused, none for an agent's own terminal); elsewhere, and in an editor that told none (no Harness
+   *  extension, or no terminal focused since it settled), every one, as before §7, which only adds to it: tmuxFocused
+   *  follows the one of them tmux lists, none of two. */
   const toldClients = (app: string, ttys: readonly string[]): readonly string[] => {
     if (reportsTabs(app)) return ttys.filter((tty) => tty === lastTabs.get(app))
-    if (app !== 'vscode' && app !== 'cursor') return ttys
     if (editorClients.has(app)) return ttys.filter((tty) => tty === editorClients.get(app))
-    return ttys.length === 1 ? ttys : []
+    return ttys
   }
   /** Where the dial moved an app lately, a rest's and a tap's alike, each as it started: the echoes an app's report is
    *  checked against, each excusing one. */
