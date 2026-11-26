@@ -695,8 +695,9 @@ jobs:
           node-version: ${{ env.CLI_NODE_VERSION }}
       - run: node --test daemons/tools/card.test.mjs daemons/tools/generate.test.mjs
 
-  # store/tools/' fast offline checks: the runtime helpers, the packages' runtimes.sh copies, the tools' own Node tests and
-  # the local AI packages'. Browser and network suites stay in authoring-browser-checks.yml and experience-checks.yml.
+  # The fast offline checks of store/tools/: the runtime helpers, the packages' runtimes.sh copies, the tools' own Node
+  # tests and the local AI packages'. Browser and network suites stay in authoring-browser-checks.yml and
+  # experience-checks.yml.
   # Selected by store/tools/ and the store/agents/ and store/viewers/ files they read (scripts/ci-plan.py ALSO, PR_READS).
   store-checks:
     concurrency:

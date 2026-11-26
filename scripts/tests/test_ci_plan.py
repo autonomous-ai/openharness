@@ -797,7 +797,7 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(planner.select(["store/agents/blender/store.json"])[0], {"cli", "desktop", "store"})
 
     def test_store_tools_select_their_own_checks(self):
-        # No PR check ran store/tools/' tests: a change there ran process checks only.
+        # No PR check ran the tests in store/tools/: a change there ran process checks only.
         for path in ("store/tools/runtimes.sh", "store/tools/local-ai/test/packaging.test.mjs"):
             with self.subTest(path=path):
                 self.assertLessEqual({"store", "cross-read-scan"}, planner.select([path])[0])
