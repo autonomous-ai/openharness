@@ -44,7 +44,8 @@ Claude Code not answering within 60 s. The log cannot tell these apart.
 From code.claude.com/docs/en/plugins: install, loading, cli-reference and troubleshooting.
 
 - `claude plugin marketplace add <path>` takes a directory holding `.claude-plugin/marketplace.json`. The path must
-  start with `/`, `./`, `../` or `~/`. A local source is read in place and not cloned, so no git is involved.
+  start with `/`, `./`, `../` or `~/`, and on Windows `.\`, `..\` and `C:\` forms work too. A local source is read in
+  place and not cloned, so no git is involved.
 - A relative-path plugin in a local-directory marketplace loads in place from that directory. Changed files take
   effect at the next session start, or at `/reload-plugins`.
 - A plugin's version comes from `plugin.json`'s `version` first. A non-git local directory with no version is
@@ -64,7 +65,7 @@ From code.claude.com/docs/en/plugins: install, loading, cli-reference and troubl
 
   It produces:
   - `.claude-plugin/marketplace.json`: the repository's own (name `openharness`, both plugins, each with its
-    `./plugins/<name>` source).
+    `./plugins/<name>` source). A plugin listed from any other source fails the build: it would not be in the folder.
     - Both plugins, because the name is shared. The README and the website tell people to add
       `autonomous-ai/openharness` and install `harness@openharness`. Once our local `openharness` exists, that add is
       refused, so `harness@openharness` has to install from ours.
@@ -80,26 +81,33 @@ From code.claude.com/docs/en/plugins: install, loading, cli-reference and troubl
   the install and the update, counting nothing (`devices/orcaPlugin.ts:193`). Every daemon people run is a built
   `cli.js`.
 - **CI.**
-  - `scripts/ci-plan.py` maps `plugins/harness-device/` and `plugins/harness/` to `cli`, as it maps the Orca plugin.
+  - `scripts/ci-plan.py` maps `plugins/harness-device/`, `plugins/harness/` and `.claude-plugin/marketplace.json` to
+    `cli`, as it maps the Orca plugin, and linux-e2e, dial-hosts and windows-e2e read them.
   - A spec asserts both builds define `__CLAUDE_PLUGIN__`, as `orcaPluginBundle.spec.ts` does for `__ORCA_PLUGIN__`.
 - **Folder.** Each run writes the folder to `harnessPath('claude-marketplace')`, a `data` entry in
-  `config/harnessHome.ts`, before any `claude plugin` call that adds, updates or installs.
+  `config/harnessHome.ts`. Enable and the first setup write it before Claude Code lists anything, also for a plugin
+  already listed: one listed while its folder is gone (`harness uninstall` took Harness's data, or a hand removed it)
+  is read from nothing until it is written again. The update writes it once it has read the listed version.
   - It uses the Orca plugin's crash-safe writer (`devices/orcaPluginFolder.ts`), generalised and renamed
     `devices/pluginFolder.ts` with one export `ensurePluginFolder(folder, files, executable)`. Folders are 0700,
     files 0600, and listed executables 0700.
   - A folder with the same bytes and modes is not written.
   - Windows has no mode bits, so modes are neither set nor compared there, and the folder is not rewritten at every
     run.
-  - A write that fails is the step `folder`, counted with its error's code.
+  - Two writers of the same bytes at once (the devices' pass and a person's `enable`): the one whose last rename
+    lost finds the folder holding its files, and is written.
+  - A write that fails is the step `folder`, with its error's code.
     - It stops an install: there is nothing to add.
-    - On an update it is counted and the update goes on, since a marketplace from GitHub never reads the folder.
-- **The path Claude Code is given.** The docs take a local source only when it starts with `/`, `./`, `../` or `~/`,
-  and Windows' `C:\...` starts with none.
-  - So on every OS the add runs in the folder's parent (`claudeRunner` gains a `cwd`), with the argument
-    `./claude-marketplace`. Claude Code records the absolute path.
+    - It fails an update, and the pass waits its hour like any failure: Claude Code reads the plugin in place, so
+      recording the new version over the old files would keep them until the next CLI update.
+    - Beside a plugin already listed, the call goes on: the first setup gives the code, which the devices count, and
+      enable fails with it once the plugin is on.
+- **The path Claude Code is given.** The folder's absolute path, `harnessPath`'s, on every OS: the docs take a local
+  path starting with `/`, and on Windows the `C:\` form. A relative one risks being kept as it was given, and read
+  against wherever Claude Code runs next. `claudeRunner` takes no folder to run in.
   - It is proven on the Windows VM (Platforms).
 - **Install.**
-  - When `marketplace list --json` has no `openharness`, run `claude plugin marketplace add ./claude-marketplace`, then
+  - When `marketplace list --json` has no `openharness`, run `claude plugin marketplace add <folder>`, then
     `claude plugin install harness-device@openharness --scope user`.
   - When `openharness` is there (from GitHub, or our folder), keep today's flow: install, and when that fails, run
     `marketplace update openharness` once and install again.
@@ -110,14 +118,15 @@ From code.claude.com/docs/en/plugins: install, loading, cli-reference and troubl
     `services/devices.ts` (the dep and its wiring) and their specs.
   - It also drops the stale "Its manifest carries no version" comment in `claudeUpdate`.
   - Nothing on this path needs git now, so (c), the Command Line Tools check, is not built.
-- **Update** (`claudeUpdate`, after each CLI update): write the folder first, then today's
-  `marketplace update openharness` and `plugin update`. For our folder the update re-reads it, and the new `version`
-  shows as `updated`.
+- **Update** (`claudeUpdate`, after each CLI update): read the listed version, write the folder, then today's
+  `marketplace update openharness` and `plugin update`. The version is read first: a plugin read in place lists the
+  new one as soon as the folder holds it, and its update shows as `updated`. A plugin the person removed or turned
+  off gets the folder written still, as the harness plugin may come from it, and nothing run.
 - `harness device claude enable` writes the folder too, so it works on a computer where the devices never ran.
   - In a build that carries no plugin it runs no `claude`, prints `This Harness build carries no Claude Code plugin.`
     and exits 1.
   - When it cannot write the folder it prints `Harness could not write Claude Code's plugin folder. (<code>)`, e.g.
-    `(EACCES)`, and exits 1.
+    `(EACCES)`, and exits 1, after turning on a plugin already installed.
 
 ### 2. The reason a step failed (goal 2)
 
@@ -132,9 +141,10 @@ The reason is read in this order:
 | `timeout` | `code === null` and the call ran out its time (the runner's deadline) |
 | `no answer` | `code === null` otherwise (failed to start, output past its bound) |
 | `no xcode tools` | stderr has `xcrun: error` or `invalid active developer path` or `CommandLineTools` |
-| `no git` | stderr has the word `git` (`(?<!\.)\bgit\b`, so not `github` nor `openharness.git`) with `not found`, `ENOENT`, `unsafe location` or `is not recognized` |
-| `network` | stderr has `Could not resolve host`, `Failed to connect`, `Connection timed out`, `ETIMEDOUT`, `ENOTFOUND`, `ECONNREFUSED`, `ECONNRESET`, `SSL`, `TLS` (case-insensitive) |
-| `exists` | stderr has `already added from a different source` / `already exists` |
+| `no git` | stderr names git as a program that did not run: `spawn git` (or a path ending `/git`), Bun's `Command 'git' not found`, `git: command not found`, `command not found: git`, `'git' is not recognized`. A `.git` (`openharness.git`) never counts |
+| `network` | stderr has `Could not resolve host`, `Failed to connect`, `Connection timed out`, `ETIMEDOUT`, `ENOTFOUND`, `ECONNREFUSED`, `ECONNRESET`, or `SSL` or `TLS` as words (case-insensitive) |
+| `exists` | stderr has Claude Code's marketplace sentence: `already added from a different source`, or `Marketplace '<name>' already exists`; never a file's `EEXIST` |
+| `not json` | a list that exits 0 with no JSON list |
 | `exit <n>` | anything else, with the exit code |
 
 - The devices count it as `[device] dial setup · claude · failed · <step> · <reason>`.
@@ -198,10 +208,11 @@ path `cableSession` already has for refusals.
 ## Tests (red first, at the layer of the behaviour)
 
 - `devices/claudePlugin.spec.ts`
-  - The first install, with no `openharness`, writes the folder and runs `marketplace add ./claude-marketplace` in its
-    parent folder. It never uses a GitHub source or `--sparse`, and asks for no git.
+  - The first install, with no `openharness`, writes the folder and runs `marketplace add <absolute folder>`. It never
+    uses a GitHub source or `--sparse`, and asks for no git.
+  - A plugin listed and on while its folder is gone: setup and enable write it again.
   - A failed add reports `reason` (`no xcode tools`, `network`, `timeout`, `exit 1`).
-  - The update writes the folder before `marketplace update`.
+  - The update writes the folder before `marketplace update`, after reading the version; a write that fails fails it.
 - `scripts/lib/claudePluginBundle` spec (beside `orcaPluginBundle.spec.ts`): the marketplace and plugin manifests,
   the version, no `test/`, `hooks/asked` executable.
 - `devices/pluginFolder.spec.ts`, from `orcaPluginFolder.spec.ts`: executable modes written, and a mode change
@@ -227,7 +238,7 @@ path `cableSession` already has for refusals.
 - The folder path is `harnessPath`'s, which ignores `ADAPTER_DATA_DIR`, as the Orca plugin's does. So a dev CLI
   writes the same folder the person's Claude Code reads.
 - Tested by the unit specs on each OS's CI.
-- Tested once on the Windows VM: `marketplace add ./claude-marketplace` run from the parent folder, then the plugin
+- Tested once on the Windows VM: `marketplace add C:\Users\<u>\...\claude-marketplace`, then the plugin
   installs and its hook runs. This check is held for the PM's machine slot.
 
 ## Diagnostics for the affected Mac (read-only)

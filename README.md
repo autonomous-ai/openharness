@@ -147,6 +147,9 @@ claude plugin marketplace add autonomous-ai/openharness --sparse .claude-plugin 
 claude plugin install harness@openharness
 ```
 
+Where Harness Device already set up Claude Code, `openharness` is there: run only
+`claude plugin install harness@openharness`.
+
 <details>
 <summary><b>Build from source</b></summary>
 
