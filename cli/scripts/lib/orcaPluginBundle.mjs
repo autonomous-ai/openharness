@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { extensionVersion } from './vscodeExtensionBundle.mjs'
 
 const ROOT = fileURLToPath(new URL('../../../plugins/harness-device-orca/', import.meta.url))
-/** orcaPluginFolder.ts's SEGMENT: the folder writer takes no other name, so a build that carried one would never
+/** pluginFolder.ts's SEGMENT: the folder writer takes no other name, so a build that carried one would never
  *  connect. */
 const SEGMENT = /^[A-Za-z0-9._-]+$/
 
