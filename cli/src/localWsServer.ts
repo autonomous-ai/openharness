@@ -135,7 +135,7 @@ function isLoopback(address: string | undefined): boolean {
   return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1'
 }
 
-function rejectUpgrade(socket: Socket, status: number, reason: string, retryAfter?: number): void {
+export function rejectUpgrade(socket: Socket, status: number, reason: string, retryAfter?: number): void {
   if (socket.destroyed) return
   socket.end(
     `HTTP/1.1 ${status} ${reason}\r\n` +

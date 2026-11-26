@@ -1,10 +1,11 @@
+import { EventEmitter } from 'node:events'
 import type { Socket } from 'node:net'
 import http from 'node:http'
 import net, { type AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { WebSocket } from 'ws'
 import type { Frame, LocalClientSink } from './backendSocket.js'
-import { attachLocalWsServer, LOCAL_WS_CLOSE_GRACE_MS, type LocalWsBackend, type LocalWsServer, type LocalWsServerOptions } from './localWsServer.js'
+import { attachLocalWsServer, LOCAL_WS_CLOSE_GRACE_MS, rejectUpgrade, type LocalWsBackend, type LocalWsServer, type LocalWsServerOptions } from './localWsServer.js'
 import { encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } from './lib/terminalBinary.js'
 import { listenLocalSocket } from './lib/localSocket.js'
 import { RelayConnectError } from './lib/relayFrames.js'
@@ -336,6 +337,22 @@ describe('local CLI WebSocket', () => {
     release(true)
     await new Promise(resolve => setTimeout(resolve, 20))
     expect(ws.readyState).not.toBe(WebSocket.OPEN)
+  })
+
+  it('a refused upgrade\'s client that resets raises nothing', () => {
+    const socket = Object.assign(new EventEmitter(), { destroyed: false, end: vi.fn() })
+    rejectUpgrade(socket as unknown as Socket, 403, 'Forbidden')
+    expect(socket.end).toHaveBeenCalled()
+    expect(() => socket.emit('error', Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }))).not.toThrow()
+  })
+
+  it('the caller lookup\'s refusal keeps a listener on the socket', async () => {
+    let held: Socket | undefined
+    const url = await start(new FakeBackend(), { localCredential: 'c'.repeat(43), peerAccount: async (socket) => { held = socket; return false } })
+    const ws = new WebSocket(url, { headers: { 'x-harness-local': 'c'.repeat(43) } })
+    ws.on('error', () => {})
+    expect(await new Promise<number>((resolve) => ws.once('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0)))).toBe(401)
+    expect(held!.listenerCount('error')).toBeGreaterThan(0)
   })
 
   it('takes an upgrade over the daemon\'s socket with no credential, the TCP port still wanting one', async () => {
