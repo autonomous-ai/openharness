@@ -223,15 +223,15 @@ describe('codexSetUp', () => {
   it.each([
     ['its JSON malformed', { stdout: 'installed\n' }],
     ['installed elsewhere', { stdout: JSON.stringify({ pluginId: PLUGIN, installedPath: join(tmpdir(), 'elsewhere') }) }],
-  ])('a plugin add with %s is step install, and no trust is written', async (_, answer) => {
+  ])('a plugin add with %s is step install, said to have added it, and no trust is written', async (_, answer) => {
     const home = codexHome()
     const folder = marketplaceFolder()
     const codex = fakeCodex(home, folder, { [ADD]: answer })
-    expect(await codexSetUp(deps(codex.run, home, folder))).toMatchObject({ ok: false, step: 'install' })
+    expect(await codexSetUp(deps(codex.run, home, folder))).toMatchObject({ ok: false, step: 'install', added: true })
     expect(trusted(home)).toEqual({})
   })
 
-  it('a config.toml that does not parse after the add fails step trust, with the kind as its reason', async () => {
+  it('a config.toml that does not parse after the add fails step trust, with the kind as its reason, said to have added it', async () => {
     const home = codexHome()
     const folder = marketplaceFolder()
     const codex = fakeCodex(home, folder, {
@@ -241,7 +241,7 @@ describe('codexSetUp', () => {
         return { stdout: JSON.stringify({ installedPath: installedRoot(home) }) }
       },
     })
-    expect(await codexSetUp(deps(codex.run, home, folder))).toMatchObject({ ok: false, step: 'trust', reason: 'unparsed' })
+    expect(await codexSetUp(deps(codex.run, home, folder))).toMatchObject({ ok: false, step: 'trust', reason: 'unparsed', added: true })
   })
 
   it('an installed copy that differs from the carried one is installed, and not trusted', async () => {

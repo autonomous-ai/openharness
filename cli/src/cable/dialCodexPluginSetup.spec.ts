@@ -92,6 +92,8 @@ interface FakeOptions {
   on?: (call: string) => void
   /** Changes the copy `plugin add` made, as a marketplace that is not the carried copy would. */
   installed?: (root: string) => void
+  /** What `plugin add` prints in place of its JSON, its copy made. */
+  printed?: string
 }
 
 /**
@@ -100,7 +102,7 @@ interface FakeOptions {
  * both out again.
  */
 function fakeCodex(home: string, folder: string, options: FakeOptions = {}) {
-  const { fail = [], on, installed } = options
+  const { fail = [], on, installed, printed } = options
   const calls: string[] = []
   const append = (text: string): void => writeFileSync(configFile(home), `${existsSync(configFile(home)) ? configOf(home) : ''}${text}`)
   const answer = (stdout = ''): ClaudeAnswer => ({ code: 0, stdout, stderr: '' })
@@ -118,7 +120,7 @@ function fakeCodex(home: string, folder: string, options: FakeOptions = {}) {
       cpSync(join(folder, 'plugins', 'harness-device'), installedRoot(home), { recursive: true })
       installed?.(installedRoot(home))
       if (!configOf(home).includes(`[plugins."${PLUGIN}"]`)) append(`[plugins."${PLUGIN}"]\nenabled = true\n`)
-      return answer(JSON.stringify({ pluginId: PLUGIN, version: 'local', installedPath: installedRoot(home) }))
+      return answer(printed ?? JSON.stringify({ pluginId: PLUGIN, version: 'local', installedPath: installedRoot(home) }))
     }
     if (call === REMOVE) {
       rmSync(installedRoot(home), { recursive: true, force: true })
@@ -587,6 +589,18 @@ describe('createDialCodexPluginSetup', () => {
     expect(existsSync(installedRoot(home))).toBe(false)
   })
 
+  it('a disable that lands during an install whose check then fails takes it out again and records nothing', async () => {
+    const r = rig()
+    const home = codexHome()
+    r.state.homes = [home]
+    r.options.set(home, { printed: 'installed\n', on: (call) => { if (call === ADD) r.state.wanted = false } })
+    await r.setup.pass()
+    expect(r.fake(home).calls).toEqual(['--version', `plugin marketplace add ${r.marketplace}`, ADD, '--version', REMOVE])
+    expect(r.state.recorded).toEqual({})
+    expect(r.counted).toEqual([])
+    expect(existsSync(installedRoot(home))).toBe(false)
+  })
+
   it('a disable that lands during one home\'s install ends the pass: no other home is run', async () => {
     const r = rig()
     const a = codexHome(), b = codexHome()
@@ -847,7 +861,7 @@ describe('createDialCodexPluginSetup', () => {
     expect(r.counted).toEqual([['failed', 'marketplace'], ['set up'], ['failed', 'marketplace']])
   })
 
-  it('a failed trust write at the install is failed · trust and its kind', async () => {
+  it('a failed trust write at the install is failed · trust and its kind, and recorded: the re-check tries again after its hour, never the add', async () => {
     const r = rig()
     const home = codexHome()
     r.state.homes = [home]
@@ -855,7 +869,36 @@ describe('createDialCodexPluginSetup', () => {
     r.options.set(home, { installed: () => writeFileSync(configFile(home), `${configOf(home)}[hooks]\nstate = {}\n`) })
     await r.setup.pass()
     expect(r.counted).toEqual([['failed', 'trust unsafe']])
-    expect(r.state.recorded).toEqual({})
+    expect(r.state.recorded).toEqual({ [home]: VERSION })
+
+    r.state.now = HOUR
+    await r.setup.pass()
+    expect(r.fake(home).calls).toEqual(['--version', `plugin marketplace add ${r.marketplace}`, ADD])
+    expect(r.trust).toHaveBeenCalledTimes(1)
+    expect(r.counted).toEqual([['failed', 'trust unsafe'], ['failed', 'trust unsafe']])
+  })
+
+  it('a plugin add whose answer is not JSON is failed · install and recorded, never added again: the re-check trusts it after its hour', async () => {
+    const r = rig()
+    const home = codexHome()
+    r.state.homes = [home]
+    r.options.set(home, { printed: 'installed\n' })
+    await r.setup.pass()
+    const calls = ['--version', `plugin marketplace add ${r.marketplace}`, ADD]
+    expect(r.fake(home).calls).toEqual(calls)
+    expect(r.state.recorded).toEqual({ [home]: VERSION })
+    expect(r.counted).toEqual([['failed', 'install']])
+    expect(contentHashes(home)).toEqual([])
+
+    r.state.now = HOUR - 1
+    await r.setup.pass()
+    expect(r.trust).not.toHaveBeenCalled()
+
+    r.state.now = HOUR
+    await r.setup.pass()
+    expect(r.fake(home).calls).toEqual(calls)
+    expect(contentHashes(home)).toEqual([EXPECTED, EXPECTED])
+    expect(r.counted).toEqual([['failed', 'install']])
   })
 
   it('no codex: nothing run, nothing counted, and set up once it is there', async () => {
