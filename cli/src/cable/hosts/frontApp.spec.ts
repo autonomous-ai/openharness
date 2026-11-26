@@ -35,8 +35,6 @@ const EXES: [string, string][] = [
   ['wezterm-gui', 'wezterm'],
   ['kitty', 'kitty'],
   ['ghostty', 'ghostty'],
-  ['harness', 'harness'],
-  ['Harness', 'harness'],
   // The Claude app's window on Windows is its claude.exe's (dial-windows VM notes, Task 37 §1).
   ['Claude.exe', 'claude'],
   ['claude.exe', 'claude'],
@@ -51,6 +49,9 @@ const LINUX_APPS: [string, string][] = [
   [RECORDED_LINUX_APPS.claude.comm, 'claude'],
   [RECORDED_LINUX_APPS.chatgpt.comm, 'codex'],
   [RECORDED_ORCA.linux.inProcess.makerComm, 'orca'],
+  // Harness Desktop's Linux binary (desktop/linux/CMakeLists.txt, BINARY_NAME).
+  ['harness', 'harness'],
+  ['Harness', 'harness'],
 ]
 
 // Bundle ids known in front only: detectApp and open leave them as they are.
@@ -96,11 +97,11 @@ describe('frontAppId', () => {
     expect(detectApp({ __CFBundleIdentifier: bundle })).toBe(id)
   })
 
-  it.each(EXES)('Code.exe, Cursor.exe, WindowsTerminal.exe, ChatGPT.exe, Claude.exe, Orca.exe, wezterm-gui, kitty, ghostty and harness map: %s', (exe, id) => {
+  it.each(EXES)('Code.exe, Cursor.exe, WindowsTerminal.exe, ChatGPT.exe, Claude.exe, Orca.exe, wezterm-gui, kitty and ghostty map: %s', (exe, id) => {
     expect(frontAppId(exe)).toBe(id)
   })
 
-  it.each(LINUX_APPS)('the Claude, ChatGPT and Orca apps on Linux map by their recorded comm: %s', (comm, id) => {
+  it.each(LINUX_APPS)('the Claude, ChatGPT, Orca and Harness apps on Linux map by their process name: %s', (comm, id) => {
     expect(frontAppId(comm)).toBe(id)
   })
 
@@ -114,6 +115,9 @@ describe('frontAppId', () => {
     'com.cmuxterm.app.nightly', 'cmux',
     // The Linux processes' names are Linux's alone, and the Claude app's claude.exe is Windows' alone.
     'claude-desktop.exe', 'claude', 'orca-ide.exe',
+    // harness.exe on Windows is the CLI (pty/src/command.rs), whose window is the terminal's; Harness Desktop is
+    // harness-desktop.exe there.
+    'harness.exe', 'Harness.exe',
     // Warp Preview's Windows name is unconfirmed.
     'warp-preview.exe',
     // A bare orca on Linux is GNOME's screen reader (/usr/bin/orca), not the Orca app.

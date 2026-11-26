@@ -840,6 +840,13 @@ describe('herdr\'s clients on Windows', () => {
     expect(await windowsPlace(recorded(FIRST_GONE, [reused]))).toStrictEqual(IN_VSCODE)
   })
 
+  // `harness api <connection> run -- herdr` in VS Code's terminal: harness.exe is the CLI on Windows, which starts Node
+  // on the same console, never Harness Desktop (harness-desktop.exe).
+  it('a client a Harness command ran is in the app past it, never Harness', async () => {
+    const run = [winRow(9300, 9264, 'harness.exe', 13.2), winRow(9310, 9300, 'node.exe', 13.4), winRow(9904, 9310, 'herdr.exe', 14)]
+    expect(await windowsPlace(recorded([9904], run))).toStrictEqual(IN_VSCODE)
+  })
+
   it('an app beats a newer client in a terminal', async () => {
     const newer = [winRow(7700, 7588, 'powershell.exe', 18), winRow(7710, 7700, 'herdr.exe', 19)]
     expect(await windowsPlace(recorded([], newer))).toStrictEqual(IN_VSCODE)
