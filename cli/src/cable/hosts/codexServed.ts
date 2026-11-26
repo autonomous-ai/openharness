@@ -9,12 +9,15 @@
  *
  * Of a process only its parents, its terminal and its folder are compared, and its arguments are read only to tell a
  * server (externals/codex.ts codexServer); none is kept. Never on Windows, where no process's folder can be read
- * (externals/support.ts processCwds): devices.ts asks nothing there.
+ * (externals/support.ts processCwds): servedLookup gives none there.
  *
  * What one lookup costs, on an M1 Pro (2026-11-26): the table with its arguments (externals/support.ts listProcesses,
- * 63 ms, lib/processTable.ts), one `lsof -a -d cwd` for every Codex TUI (39 ms for 1 and for 16), one `ps -o tty=` for
- * each in the session's folder (3.5 ms for one; one for 16 took 57 ms, so each is asked alone) and the walk of the one
- * found (scannedApp.ts). Asked only for a Codex session whose caller is a server (observed.ts).
+ * 63 ms, lib/processTable.ts), 8 ms on the event loop to tell Codex's processes in a table of 900 (6.5 of them the
+ * engines' ownership snapshot, which each open scan reads too), one `lsof -a -d cwd` for every Codex TUI (39 ms for 1 and
+ * for 16), one `ps -o tty=` for each in the session's folder (3.5 ms for one; one for 16 took 57 ms, so each is asked
+ * alone) and the walk of the one found (scannedApp.ts). Asked only for a Codex hook from a caller not yet asked, a
+ * server's session's start, a turn's while it has no client, and a Codex session the scan finds on no terminal
+ * (observed.ts).
  */
 import { agentCommandOwnershipSnapshot } from '../../lib/engineBin.js'
 import { commandOf, engineProcessMatch } from '../../lib/processTable.js'
