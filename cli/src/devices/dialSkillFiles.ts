@@ -24,9 +24,12 @@ export const MAX_HOMES = 64
 export const SETUP_COUNTS = ['set up', 'updated', 'failed', 'left removed'] as const
 export type SetupCount = typeof SETUP_COUNTS[number]
 
-/** Three full lists of the longest paths, with room for JSON's quotes: each file holds three lists. Paths whose
- *  characters JSON escapes can outgrow it, and such a file is not written. */
+/** dial-skill.json's bound: three full lists of the longest paths, with room for JSON's quotes. Paths whose characters
+ *  JSON escapes can outgrow it, and such a file is not written. */
 const MAX_FILE_BYTES = 256 * 1024
+/** dial-setup.json's bound: it holds four lists (codexPlugin's homes the fourth), about 268 KB at their longest with
+ *  the longest versions, past dial-skill.json's. Escaped paths can outgrow it too, and such a file is not written. */
+export const MAX_SETUP_BYTES = 320 * 1024
 const MAX_PATH_BYTES = 1024
 const CONTROL = /\p{Cc}/u
 /** A CLI version: a value edited by hand is compared with this CLI's own, so nothing but a version is kept. */
@@ -93,10 +96,10 @@ const orUnread = <T extends object>(read: () => T, empty: T): Read<T> => {
 }
 
 /** Written whole and on disk before it is renamed into place, so a reader, or a crash, never sees half a file. One a
- *  read would drop as too long is not written: EFBIG. */
-const writeJson = (file: string, value: unknown): string | undefined => {
+ *  read would drop as longer than [max] bytes is not written: EFBIG. */
+const writeJson = (file: string, value: unknown, max: number): string | undefined => {
   const text = `${JSON.stringify(value)}\n`
-  if (Buffer.byteLength(text) > MAX_FILE_BYTES) return 'EFBIG'
+  if (Buffer.byteLength(text) > max) return 'EFBIG'
   const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
   try {
     // An enable on a computer where the daemon never ran comes before anything made the data folder.
@@ -208,7 +211,7 @@ const rewriteSetting = (dataDir: string, change: (setting: DialSetting) => void)
     ...(homes.claude.length || homes.codex.length ? { homes } : {}),
     ...(pluginHomes.length ? { pluginHomes } : {}),
     ...(orcaConnected ? { orcaConnected } : {}),
-  })
+  }, MAX_FILE_BYTES)
 }
 
 /** undefined once saved, else the error's code. [written], when given, becomes the folders the command wrote into for
@@ -263,7 +266,7 @@ const setupOf = (value: unknown): DialSetupRecord => {
 }
 
 export function readSetup(dataDir: string): Read<DialSetupRecord> {
-  return orUnread(() => setupOf(readJson(join(dataDir, DIAL_SETUP_FILE), MAX_FILE_BYTES)), setupOf(undefined))
+  return orUnread(() => setupOf(readJson(join(dataDir, DIAL_SETUP_FILE), MAX_SETUP_BYTES)), setupOf(undefined))
 }
 
 /** undefined once saved; else the error's code: EINVAL for a version a read would drop, so the plugin or the extension
@@ -271,5 +274,5 @@ export function readSetup(dataDir: string): Read<DialSetupRecord> {
 export function writeSetup(dataDir: string, record: DialSetupRecord): string | undefined {
   const versions = [record.plugin, record.vscode, record.cursor, record.orca, record.orcaHeld, ...Object.values(record.codexPlugin ?? {})]
   if (versions.some((version) => version !== undefined && !VERSION.test(version))) return 'EINVAL'
-  return writeJson(join(dataDir, DIAL_SETUP_FILE), setupOf(record))
+  return writeJson(join(dataDir, DIAL_SETUP_FILE), setupOf(record), MAX_SETUP_BYTES)
 }

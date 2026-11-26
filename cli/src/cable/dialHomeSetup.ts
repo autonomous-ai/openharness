@@ -76,7 +76,8 @@ export interface DialHomeSetup {
   codexHomes(): readonly string[]
   /** A Codex home's real path to the CLI version that last set Harness Device's plugin up there. */
   codexPlugin(): Readonly<Record<string, string>>
-  /** [version] null removes [home]'s entry. false when the record could not be saved, and the record is as before. */
+  /** [version] null removes [home]'s entry. false when the record could not be saved, or already holds MAX_HOMES homes
+   *  and not [home], and the record is as before. */
   recordCodexPlugin(home: string, version: string | null): boolean
 }
 
@@ -600,6 +601,8 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
 
     recordCodexPlugin(home, version) {
       const codexPlugin = { ...record.codexPlugin }
+      // A save would drop a 65th home, so it would read as never set up.
+      if (version !== null && !Object.hasOwn(codexPlugin, home) && Object.keys(codexPlugin).length >= MAX_HOMES) return false
       if (version === null) delete codexPlugin[home]
       else codexPlugin[home] = version
       const next = { ...record, codexPlugin }
