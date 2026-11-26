@@ -28,6 +28,7 @@ import ctypes
 import ctypes.util
 import fcntl
 import hmac
+import http.client
 import http.server
 import importlib.util
 import json
@@ -44,7 +45,6 @@ import tempfile
 import threading
 import time
 import urllib.parse
-import urllib.request
 import uuid
 
 STATE = Path('/var/lib/harness-os')
@@ -783,6 +783,11 @@ def watch():
                     # Asked for by hand: leave the current Wi-Fi so the radio can host the hotspot.
                     nmcli('device', 'disconnect', device)
                 setup_mode(device, asked=forced)
+                # An ask made while that hotspot was up was answered by it. MSI, 2026-11-26: a factory reset signs
+                # out first, so the hotspot came up by itself before the reset's own ask (open_hotspot) at its end;
+                # read only once the phone had set it up, that ask took it off the Wi-Fi just given, for a second
+                # hotspot.
+                asked_now()
                 waiting_since = None
         time.sleep(5)
 
@@ -825,8 +830,6 @@ def change(request):
 
 
 HN = '/usr/lib/harness/harness-tui'
-# The account's daemon on this computer (cli hookServer), for the desk.
-DAEMON = 'http://127.0.0.1:18473'
 RESET_UNIT = 'harness-factory-reset'
 # The recovery partition and its GRUB entry (installer.py RECOVERY_*), on a computer installed with one.
 RECOVERY_CONF = Path('/etc/harness-os/recovery.conf')
@@ -886,17 +889,42 @@ def wipe(folder, keep):
             path.unlink(missing_ok=True)
 
 
+class DaemonConnection(http.client.HTTPConnection):
+    """HTTP to the account's daemon on this computer (cli hookServer) over its own socket. Its TCP port wants the
+    person's local credential, sent by the person's own process; this root process is neither, and was refused 401
+    there: a factory reset left the computer in its account and its tabs on the desk, and the next setup opened
+    them again (MSI, 2026-11-26). Over the socket the filesystem says who this is."""
+
+    def __init__(self, timeout):
+        super().__init__('localhost', timeout=timeout)
+
+    def connect(self):
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.settimeout(self.timeout)
+        self.sock.connect(str(data_root() / 'cli' / 'data' / 'daemon-18473.sock'))
+
+
+def daemon_call(method, path, body=None, timeout=15):
+    """[method] [path] of the local daemon: the answer's body. Raises OSError when it is not 2xx."""
+    connection = DaemonConnection(timeout)
+    try:
+        connection.request(method, path, body=json.dumps(body).encode() if body is not None else None,
+                           headers={'Content-Type': 'application/json', 'X-Adapter-Local': '1'})
+        response = connection.getresponse()
+        answer = response.read()
+        if not 200 <= response.status < 300:
+            raise OSError(f'HTTP {response.status}')
+        return answer
+    finally:
+        connection.close()
+
+
 def desk_ops(ops=None):
     """The account's desk through the local daemon (its /api/desk proxy, signed in as this computer):
     read it, or with [ops] write them. The answer's tabs, or None."""
-    request = urllib.request.Request(DAEMON + ('/api/desk/ops' if ops else '/api/desk'),
-                                     data=json.dumps({'ops': ops}).encode() if ops else None,
-                                     headers={'Content-Type': 'application/json', 'X-Adapter-Local': '1'},
-                                     method='POST' if ops else 'GET')
     try:
-        with urllib.request.urlopen(request, timeout=15) as response:
-            body = json.loads(response.read())
-    except (OSError, ValueError):
+        body = json.loads(daemon_call('POST', '/api/desk/ops', {'ops': ops}) if ops else daemon_call('GET', '/api/desk'))
+    except (OSError, ValueError, http.client.HTTPException):
         return None
     body = body.get('data', body) if isinstance(body, dict) else None
     return body.get('tabs') if isinstance(body, dict) and isinstance(body.get('tabs'), list) else None
@@ -936,12 +964,10 @@ def remove_from_account():
     machine = this_machine()
     if not machine:
         return
-    request = urllib.request.Request(DAEMON + '/api/machines/' + urllib.parse.quote(machine, safe=''),
-                                     headers={'X-Adapter-Local': '1'}, method='DELETE')
     try:
-        with urllib.request.urlopen(request, timeout=20):
-            log('removed from its account')
-    except (OSError, ValueError) as error:
+        daemon_call('DELETE', '/api/machines/' + urllib.parse.quote(machine, safe=''), timeout=20)
+        log('removed from its account')
+    except (OSError, http.client.HTTPException) as error:
         log(f'factory reset: could not remove this computer from its account ({error})')
 
 

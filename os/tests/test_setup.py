@@ -492,6 +492,55 @@ class FactoryReset(unittest.TestCase):
         self.assertEqual(written[-1], [{'op': 'tab.close', 'id': 'own'},
                                        {'op': 'pane.remove', 'tabId': 'shared', 'machineId': 'me', 'agentId': 'b'}])
 
+    def test_the_desk_and_the_account_are_asked_over_the_daemons_own_socket(self):
+        # MSI, 2026-11-26: the daemon's TCP port wants the person's local credential from the person's own process, and
+        # this root process asked it with the old header alone: 401, so a factory reset left the computer in its account
+        # and its tabs on the desk, and the next setup reopened them.
+        import http.server
+        import socketserver
+        import threading
+        asked = []
+
+        class Daemon(http.server.BaseHTTPRequestHandler):
+            def answer(self):
+                length = int(self.headers.get('Content-Length') or 0)
+                asked.append((self.command, self.path, self.rfile.read(length) if length else b''))
+                body = json.dumps({'data': {'tabs': [{'id': 't', 'panes': []}]}}).encode()
+                self.send_response(200)
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            do_GET = do_POST = do_DELETE = answer
+
+            def log_message(self, *args):
+                pass
+
+        class Server(socketserver.UnixStreamServer):
+            def get_request(self):
+                request, _ = super().get_request()
+                return request, ('local', 0)
+
+        # Short: a Unix socket's path is bounded (104 bytes on macOS), and a test runner's own temp folder can be past it.
+        with tempfile.TemporaryDirectory(dir='/tmp') as folder:
+            home = Path(folder) / 'me'
+            socket_path = home / '.local/share/harness/cli/data/daemon-18473.sock'
+            socket_path.parent.mkdir(parents=True)
+            server = Server(str(socket_path), Daemon)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            try:
+                with patch.object(setup, 'HOME', home), \
+                     patch.object(setup, 'as_user', return_value=result(output='{"machineId": "m1"}')), \
+                     patch.object(setup, 'log'):
+                    self.assertEqual(setup.desk_ops(), [{'id': 't', 'panes': []}])
+                    setup.desk_ops([{'op': 'tab.close', 'id': 't'}])
+                    setup.remove_from_account()
+            finally:
+                server.shutdown()
+                server.server_close()
+        self.assertEqual([(method, path) for method, path, _ in asked],
+                         [('GET', '/api/desk'), ('POST', '/api/desk/ops'), ('DELETE', '/api/machines/m1')])
+        self.assertEqual(json.loads(asked[1][2]), {'ops': [{'op': 'tab.close', 'id': 't'}]})
+
     def test_the_commands_run_in_units_of_their_own(self):
         for argv, unit, tail in [(['reset', '--keep-wifi'], 'harness-factory-reset', ['reset', '--here', '--keep-wifi']),
                                  (['sign-out'], 'harness-sign-out', ['sign-out', '--here'])]:
@@ -759,6 +808,39 @@ class Machine(unittest.TestCase):
                  patch.object(setup, 'screen_here', return_value=screen):
                 self.assertEqual(setup.hotspot_wait(1000 + since, 1000), expected,
                                  (signed, headless, online, screen, since))
+
+    def test_an_ask_made_while_the_hotspot_was_up_does_not_take_the_wifi_the_phone_gave(self):
+        # MSI, 2026-11-26: the factory reset signed out, the hotspot came up by itself, and the reset's own ask came
+        # at its end; once the phone had set the computer up, that ask took it off its new Wi-Fi for a second hotspot.
+        with tempfile.TemporaryDirectory() as folder:
+            now = Path(folder) / 'setup-now'
+            signed = [False]
+
+            def phone_sets_up(device, asked=False):
+                now.touch()  # the reset's ask, while this hotspot is up
+                signed[0] = True
+                return True
+
+            loops = iter(range(3))
+
+            def sleep(_):
+                if next(loops, None) is None:
+                    raise StopIteration
+
+            with patch.object(setup, 'NOW', now), \
+                 patch.object(setup, 'signed_in', side_effect=lambda: signed[0]), \
+                 patch.object(setup, 'screen_here', return_value=False), \
+                 patch.object(setup, 'online', return_value=True), \
+                 patch.object(setup, 'headless', return_value=True), \
+                 patch.object(setup, 'wifi_device', return_value='wlo1'), \
+                 patch.object(setup, 'setup_mode', side_effect=phone_sets_up) as mode, \
+                 patch.object(setup, 'nmcli') as nmcli, \
+                 patch.object(setup.time, 'sleep', side_effect=sleep):
+                with self.assertRaises(StopIteration):
+                    setup.watch()
+            self.assertEqual(mode.call_count, 1)
+            nmcli.assert_not_called()
+            self.assertFalse(now.exists())
 
     def test_the_screen_holds_the_radio_until_signed_in(self):
         with tempfile.TemporaryDirectory() as folder:
