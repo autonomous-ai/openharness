@@ -148,6 +148,16 @@ WINDOWS_E2E_HARNESS_PATHS = (
 # A spec tests the module beside it named up to its first dot: secureState.spec.ts tests secureState.ts.
 WINDOWS_SPEC_MODULES = {str(PurePosixPath(spec).with_name(PurePosixPath(spec).name.split(".")[0] + ".ts"))
                         for spec in WINDOWS_SPECS if not spec.endswith("/")}
+# windows-e2e: the Store's pipe test, cross-platform JS that storePackagesPipe.windows.spec.ts runs and no other job
+# does, and what it imports under store/: the pipe client, the agents' transports it drives (audit W1) with the copy of
+# the client each imports, and its temporary folders. test_ci_plan walks the imports.
+WINDOWS_STORE_PIPE_PATHS = (
+    *(f"store/tools/{name}.mjs" for name in ("windows-pipe.test", "local-credential", "local-daemon", "test-folders")),
+    *(f"store/agents/{transport}.mjs" for transport in ("autonomous-grid/lib/harness", "harness-monitor/lib/bridge",
+                                                         "machine-monitor/lib/daemon", "memories/lib/bridge")),
+    *(f"store/agents/{agent}/lib/localDaemon.mjs" for agent in ("autonomous-grid", "harness-monitor", "machine-monitor",
+                                                                "memories")),
+)
 # Harness Device's suites: what each of ci.yml's Device jobs tests. "dir/" is a folder; a "*" matches within the last
 # name. Each also selects on the jobs' setup action, as dial-hosts on its own: device-app-update's jobs and the
 # device-app-build packages the others install set up through it.
@@ -533,15 +543,14 @@ def windows_only(path):
 def windows_e2e(path):
     """What windows-e2e tests: Windows-only code, cross-platform code with win32 branches that broke only on Windows
     (#4513: the devices, the cable, the engines' hook scripts, the dial plugins), the TUI and the flasher windows.yml
-    runs, its specs with the modules they test, and the dial desk bundle dialWindowsTools.e2e.ts builds and runs, with
-    the harness and the testing helpers it and windows.yml's e2e config run."""
+    runs, its specs with the modules they test, the Store's pipe test with what it imports, and the dial desk bundle
+    dialWindowsTools.e2e.ts builds and runs, with the harness and the testing helpers it and windows.yml's e2e config
+    run."""
     return windows_only(path) or not windows_docs(path) and (
         path.startswith(("cli/src/lib/windows/", "cli/src/devices/", "cli/src/cable/", "cli/hook/", "tui/",
                          "website/src/app/flash-circle.ps1/", "cli/scripts/windows-dial-e2e/"))
         or re.match(r"plugins/harness-device[^/]*/", path) is not None
-        or path in WINDOWS_SPEC_MODULES or path in WINDOWS_E2E_HARNESS_PATHS
-        # The Store's pipe test: cross-platform JS that storePackagesPipe.windows.spec.ts runs.
-        or path == "store/tools/windows-pipe.test.mjs"
+        or path in WINDOWS_SPEC_MODULES or path in WINDOWS_E2E_HARNESS_PATHS or path in WINDOWS_STORE_PIPE_PATHS
         or any(covers(spec, path) for spec in WINDOWS_SPECS))
 
 
