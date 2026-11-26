@@ -81,6 +81,14 @@ describe('oneStep', () => {
     expect(oneStep([todo, skill('dial'), notify])).toBe(false)
   })
 
+  it.each([
+    call('Read', { file_path: '<run>/repo/.claude/skills/dial/SKILL.md' }),
+    call('Bash', { command: 'cat .claude/skills/dial/SKILL.md' }),
+  ])('counts a read of the dial\'s body before the ring as loading it (%#)', (read) => {
+    expect(oneStep([read, notify])).toBe(false)
+    expect(oneStep([read])).toBe(false)
+  })
+
   it.each(['harness device notify --help', 'harness device notify -h 2>&1 | head -40'])(
     'takes a help call (%s) as no ring',
     (command) => {
