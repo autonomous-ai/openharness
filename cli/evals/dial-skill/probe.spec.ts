@@ -104,19 +104,20 @@ describe('probeFailure', () => {
   })
 
   it.each([
-    ['clean, the dial full', 'clean', true, listing({ chars: 25_000 }), null, null],
+    ['clean, the dial full, no project instructions given', 'clean', true, listing({ chars: 25_000 }), false, null],
     ['crowd, the dial full, CLAUDE.md given', 'crowd', true, listing(), true, null],
     ['crowd at 20,000 characters', 'crowd', true, listing({ chars: 20_000 }), true, null],
     ['name-only, the dial by name', 'name-only', true, listing({ dial: 'name-only' }), true, null],
     ['--no-skill, no dial', 'crowd', false, listing({ dial: 'absent' }), true, null],
-    ['clean, the dial by name', 'clean', true, listing({ dial: 'name-only' }), null, 'dial name-only, expected full'],
+    ['clean, the dial by name', 'clean', true, listing({ dial: 'name-only' }), false, 'dial name-only, expected full'],
     ['crowd, the dial cut', 'crowd', true, listing({ dial: 'cut' }), true, 'dial cut, expected full'],
     ['name-only, the dial full', 'name-only', true, listing(), true, 'dial full, expected name-only'],
-    ['--no-skill, the dial listed', 'clean', false, listing(), null, 'dial full, expected absent'],
+    ['--no-skill, the dial listed', 'clean', false, listing(), false, 'dial full, expected absent'],
     ['crowd skills cut', 'crowd', true, listing({ cut: 3 }), true, '3 crowd skills cut'],
     ['one crowd skill cut', 'crowd', true, listing({ cut: 1 }), true, '1 crowd skill cut'],
     ['a crowd listing over 20,000', 'name-only', true, listing({ dial: 'name-only', chars: 20_001 }), true, 'listing over 20,000 characters'],
     ['CLAUDE.md not given', 'crowd', true, listing(), false, 'CLAUDE.md not given'],
+    ['project instructions given in clean', 'clean', true, listing(), true, 'project instructions given'],
     ['no listing', 'clean', true, null, null, 'no skill listing'],
   ] as const)('%s', (_, condition, skill, l, instructions, failure) => {
     expect(probeFailure(probe(l, instructions), condition, skill)).toBe(failure)
@@ -185,7 +186,7 @@ emit({ type: 'result', subtype: 'success', is_error: false, result: rules, usage
   const sessionFolders = () => readdirSync(join(profile, 'projects'))
 
   it.each([
-    ['clean', { dial: 'full', skills: 2 }, null],
+    ['clean', { dial: 'full', skills: 2 }, false],
     ['crowd', { dial: 'full', skills: 4, cut: 0 }, true],
     ['name-only', { dial: 'name-only', skills: 4, cut: 0 }, true],
   ] as const)('%s: returns the listing, the CLAUDE.md answer and the init, and leaves no session folder in the profile', async (condition, listing, instructions) => {
@@ -206,6 +207,14 @@ emit({ type: 'result', subtype: 'success', is_error: false, result: rules, usage
     const probe = await probeListing(scenario(), 'crowd', { skill: true, crowd, base: join(root, 'runs') }, config(fakeClaude(tail)))
 
     expect(probe).toMatchObject({ instructions: false, failure: 'CLAUDE.md not given' })
+  })
+
+  it('fails a clean probe whose model answers anything but NONE, as it was given project instructions from elsewhere', async () => {
+    const tail = ANSWER.replaceAll('text: rules', "text: '# My own rules'").replace('result: rules', "result: '# My own rules'")
+
+    const probe = await probeListing(scenario(), 'clean', { skill: true, crowd, base: join(root, 'runs') }, config(fakeClaude(tail)))
+
+    expect(probe).toMatchObject({ instructions: true, failure: 'project instructions given' })
   })
 
   it('removes the session folder when claude fails after writing it, and records error, never the message', async () => {

@@ -453,7 +453,7 @@ describe('run-eval.mjs conditions and probes', () => {
     expect(made.filter((c) => c === 'probe')).toHaveLength(3)
     const probes = jsonl('baseline', 'probes.jsonl')
     expect(probes).toMatchObject([
-      { condition: 'clean', listing: { dial: 'full', cut: 0 }, instructions: null, claude_version: VERSION, model: 'claude-opus-5-5', usage: { input_tokens: 9, output_tokens: 4 }, failure: null },
+      { condition: 'clean', listing: { dial: 'full', cut: 0 }, instructions: false, claude_version: VERSION, model: 'claude-opus-5-5', usage: { input_tokens: 9, output_tokens: 4 }, failure: null },
       { condition: 'crowd', listing: { dial: 'full', cut: 0 }, instructions: true, failure: null },
       { condition: 'name-only', listing: { dial: 'name-only', cut: 0 }, instructions: true, failure: null },
     ])
