@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -177,6 +177,23 @@ describe('flow-rows.ts', () => {
     expect(rows(join(flow, 'baseline', 'errors.jsonl'))[0]).not.toHaveProperty('error')
     const ignored = spawnSync('git', ['check-ignore', '-q', 'evals/dial-skill/flow/baseline/private.jsonl'], { cwd: CLI })
     expect(ignored.status).toBe(0)
+  })
+
+  it('refuses a hard-linked row file, a second name for a file from elsewhere, writing nothing', () => {
+    const outside = join(tmp, 'outside.jsonl')
+    writeFileSync(outside, jsonl([resultRow('staging-db-host', 0)]))
+    writeFileSync(join(flow, 'baseline', 'errors.jsonl'), jsonl([ERROR_ROW]))
+    linkSync(outside, join(flow, 'v1', 'results.jsonl'))
+
+    const scrub = flowRows('scrub', flow)
+    const supersede = flowRows('supersede', flow, 'v1', 'staging-db-host')
+
+    for (const out of [scrub, supersede]) {
+      expect(out.status).toBe(2)
+      expect(out.stderr).toContain('v1/results.jsonl')
+    }
+    expect(readFileSync(join(flow, 'baseline', 'errors.jsonl'), 'utf8')).toBe(jsonl([ERROR_ROW]))
+    expect(readFileSync(join(flow, 'v1', 'results.jsonl'), 'utf8')).toBe(jsonl([resultRow('staging-db-host', 0)]))
   })
 
   it('refuses a symlinked private.jsonl, writing nothing', () => {
