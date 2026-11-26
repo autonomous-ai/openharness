@@ -4,13 +4,17 @@
  * tables, in a file Codex, Harness's own hook review and the person write too. Each in a throwaway folder.
  */
 import { execFileSync } from 'node:child_process'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import * as fs from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { parse as parseToml } from 'smol-toml'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { replaceConfigFile } from '../engines/kit/folderTrust.js'
 import { filesContentHash, pluginContentHash, pluginTrustRecords, readConfigText, writePluginTrust } from './codexPluginTrust.js'
+
+// A copy of the module, so a test can watch, or break, the file calls a write makes.
+vi.mock('node:fs', async (original) => ({ ...await original<object>() }))
 
 const onWindows = process.platform === 'win32'
 
@@ -42,6 +46,7 @@ const NAMES_WINDOWS = 'sha256:d52212edd7f47d45f1eade6f6ca9e7367b823ebea9182ab506
 
 const roots: string[] = []
 afterEach(() => {
+  vi.restoreAllMocks()
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
 })
 const temp = (): string => {
@@ -277,6 +282,65 @@ describe('writePluginTrust', () => {
     expect(reads).toBe(4)
     expect(configOf(home).startsWith('model = "other"\n# mine\n')).toBe(true)
     expect(parseToml(configOf(home))).toEqual({ model: 'other', hooks: { state: OURS } })
+  })
+
+  it('checks config.toml right before the rename: a change another writer makes while the new text is written survives', () => {
+    const home = codexHome('# mine\n'), file = join(home, 'config.toml'), installed = tree()
+    const write = fs.writeFileSync
+    // Another writer changes the file while this one writes its new text beside it.
+    vi.spyOn(fs, 'writeFileSync').mockImplementationOnce((...args) => {
+      write(file, `model = "other"\n${readFileSync(file, 'utf8')}`)
+      write(...args)
+    })
+    expect(writePluginTrust(home, installed, FINGERPRINT)).toStrictEqual({ ok: true, changed: true })
+    expect(configOf(home).startsWith('model = "other"\n# mine\n')).toBe(true)
+    expect(parseToml(configOf(home))).toEqual({ model: 'other', hooks: { state: OURS } })
+    expect(readdirSync(home)).toEqual(['config.toml'])
+  })
+
+  it.each(['fsyncSync', 'renameSync'] as const)('a write stopped at its %s leaves config.toml byte for byte, and no file beside it', (call) => {
+    const config = '# mine\nmodel = "gpt-5"\n'
+    const home = codexHome(config)
+    vi.spyOn(fs, call).mockImplementationOnce(() => {
+      throw Object.assign(new Error('EIO: fixture'), { code: 'EIO' })
+    })
+    expect(writePluginTrust(home, tree(), FINGERPRINT)).toStrictEqual({ ok: false, kind: 'write' })
+    expect(readFileSync(join(home, 'config.toml'))).toStrictEqual(Buffer.from(config))
+    expect(readdirSync(home)).toEqual(['config.toml'])
+  })
+
+  it('flushes the new text before the rename, and its folder after it where a folder can be flushed', () => {
+    const home = codexHome('model = "gpt-5"\n')
+    const calls: string[] = []
+    const flush = fs.fsyncSync, rename = fs.renameSync
+    vi.spyOn(fs, 'fsyncSync').mockImplementation((fd) => {
+      calls.push('flush')
+      flush(fd)
+    })
+    vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      calls.push('rename')
+      rename(from, to)
+    })
+    expect(writePluginTrust(home, tree(), FINGERPRINT)).toStrictEqual({ ok: true, changed: true })
+    // Windows cannot flush a folder; NTFS journals the rename.
+    expect(calls).toEqual(onWindows ? ['flush', 'rename'] : ['flush', 'rename', 'flush'])
+  })
+
+  it.skipIf(onWindows)("keeps config.toml's own mode", () => {
+    const home = codexHome('model = "gpt-5"\n')
+    chmodSync(join(home, 'config.toml'), 0o640)
+    expect(writePluginTrust(home, tree(), FINGERPRINT)).toStrictEqual({ ok: true, changed: true })
+    expect(statSync(join(home, 'config.toml')).mode & 0o777).toBe(0o640)
+  })
+
+  it.skipIf(!onWindows)('tries a rename onto a config.toml another program holds open again', () => {
+    const home = codexHome('model = "gpt-5"\n')
+    vi.spyOn(fs, 'renameSync').mockImplementationOnce(() => {
+      throw Object.assign(new Error('EPERM: fixture'), { code: 'EPERM' })
+    })
+    expect(writePluginTrust(home, tree(), FINGERPRINT)).toStrictEqual({ ok: true, changed: true })
+    expect(parseToml(configOf(home))).toEqual({ model: 'gpt-5', hooks: { state: OURS } })
+    expect(readdirSync(home)).toEqual(['config.toml'])
   })
 
   it('gives up after 3 attempts on a file changed at every one, writing nothing', () => {
