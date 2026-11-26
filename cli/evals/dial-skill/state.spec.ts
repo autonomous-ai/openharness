@@ -11,6 +11,7 @@ const state = JSON.parse(readFileSync(join(evalDir, 'flow', '_state.json'), 'utf
   train_ids: string[]
   val_ids: string[]
   test_ids: string[]
+  goal: { hold: string[] }
   metrics: { id: string; kind: string }[]
   harness_paths: string[]
 }
@@ -44,7 +45,12 @@ describe('flow/_state.json', () => {
     expect(all).toHaveLength(loadScenarios().length)
   })
 
-  it('splits need and no-need cases 7/3, 6/3, 5/4', () => {
+  it('holds 38 scenarios, 13 / 13 / 12', () => {
+    expect(loadScenarios()).toHaveLength(38)
+    expect(Object.values(splits).map((ids) => ids.length)).toEqual([13, 13, 12])
+  })
+
+  it('splits need and no-need cases 8/5, 8/5, 8/4', () => {
     const need = new Map(loadScenarios().map((s) => [caseId(s.id, 'claude'), s.need]))
     const counts = Object.fromEntries(
       Object.entries(splits).map(([name, ids]) => [
@@ -52,12 +58,41 @@ describe('flow/_state.json', () => {
         [ids.filter((id) => need.get(id) === 'need').length, ids.filter((id) => need.get(id) === 'no-need').length],
       ]),
     )
-    expect(counts).toEqual({ train: [7, 3], val: [6, 3], test: [5, 4] })
+    expect(counts).toEqual({ train: [8, 5], val: [8, 5], test: [8, 4] })
   })
 
   it('headlines score and declares no binary metric', () => {
     expect(state.metrics[0].id).toBe('score')
     expect(state.metrics.filter((m) => m.kind === 'binary')).toEqual([])
+  })
+
+  it('declares one_step, a rate outside the guardrails', () => {
+    expect(state.metrics.find((m) => m.id === 'one_step')).toEqual({
+      id: 'one_step',
+      label: 'One step',
+      kind: 'float',
+      scale: 1,
+    })
+    expect(state.goal.hold).not.toContain('one_step')
+  })
+
+  it('lists every crowd file', () => {
+    const listed = new Set(state.harness_paths)
+    const crowd = filesUnder(join(evalDir, 'crowd')).map((path) => relative(cliDir, path))
+    expect(crowd.length).toBeGreaterThan(0)
+    expect(crowd.filter((path) => !listed.has(path))).toEqual([])
+  })
+
+  // The runner refuses an unlisted hooks.json or harness-answers.json, since hooks run outside Claude's sandbox.
+  it("lists every variant's hooks.json and harness-answers.json", () => {
+    const listed = new Set(state.harness_paths)
+    const flowDir = join(evalDir, 'flow')
+    const variantFiles = readdirSync(flowDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .flatMap((entry) => ['hooks.json', 'harness-answers.json'].map((name) => join(flowDir, entry.name, name)))
+      .filter((path) => existsSync(path))
+      .map((path) => relative(cliDir, path))
+    expect(variantFiles.filter((path) => !listed.has(path))).toEqual([])
   })
 
   it('lists every scenario file and every lib file the runner imports, and never the skill', () => {
