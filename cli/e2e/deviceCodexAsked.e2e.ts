@@ -11,7 +11,7 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { CodexOutside } from './harness/codexOutside.js'
@@ -63,9 +63,9 @@ describe('the dial shows a Codex session waiting outside Harness', () => {
   }
 
   /** A new turn of [turn]'s setting in [codex]'s rollout, then the real `device codex asked` for [event] in it, as the
-   *  plugin's hook runs it: under the session's environment, Codex's hook input on stdin. */
+   *  plugin's hook runs it: under the session's environment and [env], Codex's hook input on stdin. */
   const asked = async (codex: CodexOutside, turn: Turn, event: 'PermissionRequest' | 'PreToolUse', tool: string,
-    toolInput: Record<string, unknown>): Promise<{ stdout: string; stderr: string; code: number | null }> => {
+    toolInput: Record<string, unknown>, env: NodeJS.ProcessEnv = {}): Promise<{ stdout: string; stderr: string; code: number | null }> => {
     const turnId = randomUUID()
     const line = { ...TURN_CONTEXT, payload: { ...TURN_CONTEXT.payload, turn_id: turnId, root_turn_id: turnId,
       approvals_reviewer: turn.reviewer, collaboration_mode: { ...TURN_CONTEXT.payload.collaboration_mode, mode: turn.mode } } }
@@ -73,7 +73,7 @@ describe('the dial shows a Codex session waiting outside Harness', () => {
     const input = { session_id: codex.sessionId, turn_id: turnId, transcript_path: codex.transcriptPath, cwd: codex.cwd,
       hook_event_name: event, model: 'probe-model', permission_mode: 'default', tool_name: tool, tool_input: toolInput,
       ...(event === 'PreToolUse' ? { tool_use_id: `call_${randomUUID()}` } : {}) }
-    const child = spawn(process.execPath, [...CLI_ENTRY, 'device', 'codex', 'asked'], { cwd: codex.cwd, env: codex.env, stdio: ['pipe', 'pipe', 'pipe'] })
+    const child = spawn(process.execPath, [...CLI_ENTRY, 'device', 'codex', 'asked'], { cwd: codex.cwd, env: { ...codex.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'] })
     children.push(child)
     let stdout = '', stderr = ''
     child.stdout!.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8') })
@@ -108,6 +108,18 @@ describe('the dial shows a Codex session waiting outside Harness', () => {
     expect(shownLogged(d)).toBe(1)
     // The command's description never left the hook.
     expect(JSON.stringify(dial.messages)).not.toContain('Make the probe')
+  })
+
+  // Codex takes an empty CODEX_HOME for none: its home is then ~/.codex, here a link to the session's.
+  it('with CODEX_HOME empty, the rollout in ~/.codex is read', async () => {
+    const { d, dial, codex } = await fresh()
+    const home = join(d.root, 'person')
+    mkdirSync(home)
+    symlinkSync(d.env.CODEX_HOME!, join(home, '.codex'))
+    const since = dial.messages.length
+    expect(await asked(codex, USER, 'PermissionRequest', 'Bash', { command: 'touch /tmp/probe' }, { CODEX_HOME: '', HOME: home })).toEqual(quiet)
+    await line(dial, codex.id, 'touch /tmp/probe · answer in Ghostty', 'the waiting line', since)
+    expect(shownLogged(d)).toBe(1)
   })
 
   it('an auto_review escalation shows nothing', async () => {
