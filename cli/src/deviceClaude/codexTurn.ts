@@ -55,8 +55,9 @@ function openRollout(path: string, home: string): { fd: number; size: number } |
     named = lstatSync(path)
     // A link, a folder or a FIFO is never opened.
     if (!named.isFile()) return null
-    real = realpathSync(path)
-    const inHome = relative(realpathSync(home), real)
+    // The native form on both sides: it spells a Windows 8.3 short name or a subst drive as the long, real path.
+    real = realpathSync.native(path)
+    const inHome = relative(realpathSync.native(home), real)
     if (inHome === '' || inHome.startsWith('..') || isAbsolute(inHome)) return null
   } catch {
     return null

@@ -3119,7 +3119,8 @@ switch (cmd) {
       claudeIn: claudeRunIn,
       claudeFiles: carriedClaudePlugin,
       defaultClaudeHome: dirname(env.CLAUDE_PROJECTS_DIR),
-      codexHome: env.CODEX_HOME,
+      // Codex takes an empty CODEX_HOME for none (utils/home-dir find_codex_home), so its home is then ~/.codex.
+      codexHome: env.CODEX_HOME || join(homedir(), '.codex'),
       codex: () => installedEngineBin('codex') !== null,
       codexIn: codexRunIn,
       vscode: vscodeExtensionDeps,
