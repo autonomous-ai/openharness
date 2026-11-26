@@ -961,7 +961,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }
   const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, apps.platform, log, orcaHomes, {
     adapters,
-    modReady: (sessionId) => inbox.ready(sessionId),
+    // A session the Claude app's wake still waits for is its mod's too: its copy is listed at its SessionStart, before its
+    // mod's first poll, and a voice start then is no "Restart" (observed.ts voiceRefusal); its words wait for the wake's.
+    modReady: (sessionId) => inbox.ready(sessionId) || appWake!.waitsFor(sessionId),
     // Words for a session the Claude app's wake still waits for would take its first poll ahead of the wake's: they are
     // words not taken yet (cable/hosts/appWake.ts waitsFor). The wake is built whenever this source is.
     toMod: (sessionId, text) => appWake!.waitsFor(sessionId) ? Promise.resolve('busy' as const) : inbox.deliver(sessionId, text),

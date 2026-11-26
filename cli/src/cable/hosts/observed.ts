@@ -198,7 +198,7 @@ function sameHints(a: Readonly<Record<string, string>>, b: Readonly<Record<strin
 export interface ObservedActions {
   /** The apps an agent may run in, in the order its panes are kept: each verb uses the first pane whose adapter can do it. */
   adapters: readonly HostAdapter[]
-  /** The session's mod has a poll open, or closed one moments ago. */
+  /** The session's mod has a poll open, or closed one moments ago, or the Claude app's wake waits for its first. */
   modReady(sessionId: string): boolean
   toMod(sessionId: string, text: string): Promise<Delivery>
   /** Whether a tap can open the target here (open.ts can): a pane its adapter brings forward, its app by bundle on macOS
