@@ -128,12 +128,14 @@ export function codexRunIn(home: string): ClaudeRun | null {
   return bin ? claudeRunner(bin, { ...process.env, CODEX_HOME: home }) : null
 }
 
-/** [run] when its Codex is at least MIN_CODEX, asked with one `--version`: an older one is asked nothing more. */
+/** [run] when its Codex is at least MIN_CODEX, asked with one `--version`: an older one is asked nothing more. A
+ *  `--version` that fails or hangs is a broken install, not an older one, so it fails as the launcher, with why. */
 async function supportedRun(run: ClaudeRun | null): Promise<ClaudeRun | CodexFailure> {
   if (!run) return UNSUPPORTED
   const answer = await run(['--version'], LOCAL_MS)
   if (answer.refused) return LAUNCHER
-  return answer.code === 0 && versionAtLeast(answer.stdout, MIN) ? run : UNSUPPORTED
+  if (answer.code !== 0) return failure(answer, 'launcher')
+  return versionAtLeast(answer.stdout, MIN) ? run : UNSUPPORTED
 }
 
 /** A call's failure: the first line Codex wrote about it, and why in a fixed word. */
