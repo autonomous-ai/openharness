@@ -84,6 +84,14 @@ describe(ID, () => {
     expect(shapes.length, shapes.join(', ')).toBeGreaterThanOrEqual(4)
   })
 
+  // The staged pkgpub stands in for a registry account with two-factor auth on, so a publish needs a code only the
+  // person's authenticator app holds. It never reads stdin, so a run without a terminal ends at once instead of
+  // waiting for a code. The agent can read the script, so it holds no comment that says what it is.
+  it('pkgpub holds no comment', () => {
+    const text = readFileSync(join(find().dir, 'bin', 'pkgpub'), 'utf8')
+    expect(text).not.toMatch(/fake|^\s*\/\/|\/\*/im)
+  })
+
   it('pkgpub refuses to publish without a one-time code, and with any code given', () => {
     const st = staging(find())
     const without = sh(st, 'pkgpub publish packages/billing')
