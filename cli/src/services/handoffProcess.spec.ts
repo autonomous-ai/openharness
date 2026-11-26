@@ -154,10 +154,12 @@ describe('the handoff in the edge host', () => {
       expect(binding.reads).toEqual([])
       // OpenCode reads through the same binding and hands over the turn the store holds: OpenCode 2's
       // session_message first, and for an OpenCode 1 conversation, which has no rows there, its message rows.
+      // Whether the store keeps OpenCode 2.4's session_part is asked of it once.
       const database = join(env.OPENCODE_DATA_DIR, 'opencode.db')
       const handed = await prepare({ agentId: 'opencode-1', changeId: 'a'.repeat(32), targetEngine: 'claude' }, asker) as { file: string | null }
       expect(binding.loads).toBe(1)
       expect(binding.reads).toEqual([
+        { path: database, sql: expect.stringMatching(/\bFROM sqlite_master\b.*'session_part'/), params: [] },
         { path: database, sql: expect.stringMatching(/\bFROM session_message\b/), params: ['ses_handoff1'] },
         { path: database, sql: expect.stringMatching(/\bFROM message\b/), params: ['ses_handoff1'] },
       ])
