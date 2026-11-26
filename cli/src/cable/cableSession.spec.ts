@@ -7289,7 +7289,7 @@ describe('the app filter', () => {
       await vi.advanceTimersByTimeAsync(751)
       port.say({ t: 'focus', agentId: 'g2' })
       await vi.advanceTimersByTimeAsync(SWIPE_REST_MS)
-      expect(swipeEnded.mock.calls).toEqual([['g2', 'rest']])
+      expect(swipeEnded.mock.calls).toEqual([['g2', 'rest', { apps: true }]])
       const pushedAt = port.sent.length
       state.rings.ghostty = [row('g3', 'ghostty'), row('g1', 'ghostty'), row('g2', 'ghostty')]
       await session.syncAgents(true)
@@ -8071,10 +8071,26 @@ describe('what the dial cannot do for an agent', () => {
       await vi.advanceTimersByTimeAsync(399)
       expect(swipeEnded).not.toHaveBeenCalled()
       await vi.advanceTimersByTimeAsync(1)
-      expect(swipeEnded.mock.calls).toEqual([['a1', 'rest']])
+      expect(swipeEnded.mock.calls).toEqual([['a1', 'rest', { apps: false }]])
       await vi.advanceTimersByTimeAsync(SWIPE_REST_MS)
       expect(swipeEnded).toHaveBeenCalledTimes(1)
     } finally { vi.useRealTimers(); await session.stop() }
+  })
+
+  // The host brings an agent's app at a rest only on tmux's or herdr's page of a dial that shows apps (spec §4).
+  it("restOn passes the dial's own options to swipeSwitches and swipeEnded", async () => {
+    for (const appFilter of [true, false]) {
+      const { session, port, swipeSwitches, swipeEnded } = await resting({}, appFilter ? { appFilter: 'v1' } : {})
+      try {
+        port.say({ t: 'focus', agentId: 'a1' })
+        await vi.advanceTimersByTimeAsync(100)
+        port.say({ t: 'focus', agentId: 'a3' })
+        await vi.advanceTimersByTimeAsync(SWIPE_REST_MS)
+        const opts = { apps: appFilter }
+        expect(swipeSwitches.mock.calls, `appFilter ${appFilter}`).toEqual([['a1', opts], ['a3', opts]])
+        expect(swipeEnded.mock.calls, `appFilter ${appFilter}`).toEqual([['a1', 'superseded', opts], ['a3', 'rest', opts]])
+      } finally { vi.useRealTimers(); await session.stop() }
+    }
   })
 
   it('three turns within 400 ms: one rest, for the last agent', async () => {
@@ -8086,7 +8102,7 @@ describe('what the dial cannot do for an agent', () => {
       await vi.advanceTimersByTimeAsync(150)
       port.say({ t: 'focus', agentId: 'a1' })
       await vi.advanceTimersByTimeAsync(SWIPE_REST_MS)
-      expect(swipeEnded.mock.calls).toEqual([['a1', 'superseded'], ['a3', 'superseded'], ['a1', 'rest']])
+      expect(swipeEnded.mock.calls).toEqual([['a1', 'superseded', { apps: false }], ['a3', 'superseded', { apps: false }], ['a1', 'rest', { apps: false }]])
     } finally { vi.useRealTimers(); await session.stop() }
   })
 
@@ -8096,7 +8112,7 @@ describe('what the dial cannot do for an agent', () => {
       port.say({ t: 'focus', agentId: 'a1' })
       await vi.advanceTimersByTimeAsync(100)
       port.say({ t: 'focus', agentId: 'a2' })
-      expect(swipeEnded.mock.calls).toEqual([['a1', 'superseded']])
+      expect(swipeEnded.mock.calls).toEqual([['a1', 'superseded', { apps: false }]])
       expect(vi.getTimerCount()).toBe(0)
       await vi.advanceTimersByTimeAsync(SWIPE_REST_MS)
       expect(swipeEnded).toHaveBeenCalledTimes(1)
@@ -8112,7 +8128,7 @@ describe('what the dial cannot do for an agent', () => {
       await vi.advanceTimersByTimeAsync(399)
       expect(swipeEnded).not.toHaveBeenCalled()
       await vi.advanceTimersByTimeAsync(1)
-      expect(swipeEnded.mock.calls).toEqual([['a1', 'rest']])
+      expect(swipeEnded.mock.calls).toEqual([['a1', 'rest', { apps: false }]])
     } finally { vi.useRealTimers(); await session.stop() }
   })
 
@@ -8120,7 +8136,7 @@ describe('what the dial cannot do for an agent', () => {
     const { session, port, swipeSwitches, swipeEnded } = await resting()
     try {
       port.say({ t: 'focus', agentId: 'a2' })
-      expect(swipeSwitches).toHaveBeenCalledWith('a2')
+      expect(swipeSwitches).toHaveBeenCalledWith('a2', { apps: false })
       expect(vi.getTimerCount()).toBe(0)
       await vi.advanceTimersByTimeAsync(SWIPE_REST_MS)
       expect(swipeEnded).not.toHaveBeenCalled()
@@ -8184,7 +8200,7 @@ describe('what the dial cannot do for an agent', () => {
       expect(vi.getTimerCount()).toBe(0)
       // The hand's next turn is the dial's own again.
       port.say({ t: 'focus', agentId: 'a3' })
-      expect(swipeSwitches.mock.calls).toEqual([['a3']])
+      expect(swipeSwitches.mock.calls).toEqual([['a3', { apps: false }]])
     } finally { vi.useRealTimers(); await session.stop() }
   })
 
@@ -8196,7 +8212,7 @@ describe('what the dial cannot do for an agent', () => {
       await session.followApp('', 'a2')
       port.say({ t: 'focus', agentId: 'a2' })   // the dial's echo of the move
       await vi.advanceTimersByTimeAsync(SWIPE_REST_MS)
-      expect(swipeEnded.mock.calls).toEqual([['a1', 'superseded']])
+      expect(swipeEnded.mock.calls).toEqual([['a1', 'superseded', { apps: false }]])
     } finally { vi.useRealTimers(); await session.stop() }
   })
 
@@ -8519,7 +8535,7 @@ describe('a prompt in the app in front', () => {
       expect(swipeSwitches).not.toHaveBeenCalled()
       // The hand's next turn is the dial's own again.
       port.say({ t: 'focus', agentId: 'a1' })
-      expect(swipeSwitches.mock.calls).toEqual([['a1']])
+      expect(swipeSwitches.mock.calls).toEqual([['a1', { apps: false }]])
     } finally { await session.stop() }
   })
 
