@@ -329,6 +329,15 @@ class SelectionTests(unittest.TestCase):
                 self.assertTrue(planner.windows_only(path))
                 self.assertTrue(planner.e2e_plan([path], {"windows-e2e"})["windows_arm64"])
 
+    def test_the_store_pipe_checks_run_windows_end_to_end_on_both_architectures(self):
+        # windows.yml alone runs them, on Windows alone: storePackagesPipe.windows.spec.ts runs windows-pipe.test.mjs and
+        # check-install.ps1 runs store-pipe.mjs. A change to either selected no suite that runs it.
+        for path in ("store/tools/windows-pipe.test.mjs", "store/tools/windows-ci/store-pipe.mjs"):
+            with self.subTest(path=path):
+                self.assertIn("windows-e2e", planner.select([path])[0])
+                self.assertTrue(planner.windows_only(path))
+                self.assertTrue(planner.e2e_plan([path], {"windows-e2e"})["windows_arm64"])
+
     def test_windows_in_a_name_outside_the_cli_runs_no_arm64(self):
         # Answer 2: the names of files under cli/ only; a folder's name (cli/src/lib/windows/) is not the file's.
         for path in ("desktop/windows/runner/main.cpp", "device-app/src-tauri/src/front_windows.rs",
