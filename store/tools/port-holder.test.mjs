@@ -39,6 +39,10 @@ const envFor = (dir, port) => ({ ...process.env, ADAPTER_DATA_DIR: dir, HPS_BRID
   MEMORIES_BRIDGE_URL: `ws://127.0.0.1:${port}/api/local-ws`, HARNESS_GRID_BRIDGE_URL: `ws://127.0.0.1:${port}/api/local-ws`,
   HARNESS_MACHINES_DAEMON: `http://127.0.0.1:${port}/` })
 
+/** A data folder too long for a socket, under [home], whose short socket is under <home>/.harness/s: without the runner's own
+ *  XDG_RUNTIME_DIR, which would hold it on Linux (local-daemon.test.mjs covers that rule). */
+const longEnv = (dir, port, home) => { const { XDG_RUNTIME_DIR: _runtime, ...env } = envFor(dir, port); return { ...env, HOME: home } }
+
 const text = (value) => {
   const body = Buffer.from(value)
   const head = body.length < 126 ? Buffer.from([0x81, body.length]) : Buffer.from([0x81, 126, body.length >> 8, body.length & 255])
@@ -125,7 +129,7 @@ for (const [name, run] of Object.entries(clients)) {
     const daemon = await daemonOn(folder, hold.port)
     // A kept session from an earlier test would answer instead.
     closeBridges(); closeMemories(); closeSessions()
-    await run({ ...envFor(dir, hold.port), HOME: home }).catch(() => null)
+    await run(longEnv(dir, hold.port, home)).catch(() => null)
     assert.equal(hold.heard.length, 0, 'nothing reaches the port')
     assert.ok(daemon.got.length > 0, 'the daemon was reached over its short socket')
     assert.ok(daemon.got.every(g => !g.headers?.['x-harness-local']), 'and shown no credential')
@@ -136,7 +140,7 @@ for (const [name, run] of Object.entries(clients)) {
     mkdirSync(dir, { mode: 0o700 })
     writeFileSync(join(dir, 'hook-credential'), `${CREDENTIAL}\n`, { mode: 0o600 })
     const hold = await holder()
-    await run({ ...envFor(dir, hold.port), HOME: home }).catch(() => null)
+    await run(longEnv(dir, hold.port, home)).catch(() => null)
     assert.equal(hold.heard.length, 0)
   })
 }
