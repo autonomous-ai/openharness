@@ -11,6 +11,7 @@ import { type HostAdapter, oncePerCaller, type Pane, type Place } from './adapte
 import { createClaudeAppAdapter } from './claudeApp.js'
 import { createCodexAppAdapter } from './codexApp.js'
 import type { CodexQueueResult } from './codexQueue.js'
+import type { Served, ServedAsk } from './codexServed.js'
 import type { HcPrompt } from './hcClient.js'
 import { createHerdrAdapter } from './herdr.js'
 import { createHerdrAppAdapter } from './herdrApp.js'
@@ -6562,6 +6563,131 @@ describe('ObservedSource and a nested session the scan found', () => {
         expect(t.table).toHaveBeenCalledTimes(2)
       })
     })
+  })
+})
+
+// Codex 0.167+ runs a `codex` typed in a terminal as a client of its daemon, which runs every hook with the first TUI's
+// environment and no terminal: its hints, its tty and its parents are another tab's (Diego, CLI 0.6.90, 2026-11-26).
+describe('ObservedSource and a Codex session its own server runs', () => {
+  const CLIENT = { app: 'terminal-app', tty: '/dev/ttys005', pid: 500 }
+  /** The hints of the first TUI's iTerm2 tab, which the daemon's environment keeps and every hook of its carries. */
+  const ITERM2 = { TERM_PROGRAM: 'iTerm.app', __CFBundleIdentifier: 'com.googlecode.iterm2', TERM_SESSION_ID: 'w0t0p0:5B1C' }
+
+  /** A source whose served lookups the test answers by hand, in the order they were asked, and a Codex hook from the
+   *  daemon (900) with iTerm2's hints. */
+  function served(over: Partial<Fakes> = {}) {
+    const asks: Array<{ answer(answers: readonly (Served | undefined)[]): Promise<void>; fail(): Promise<void> }> = []
+    const lookup = vi.fn((_asks: readonly ServedAsk[]) => new Promise<readonly (Served | undefined)[]>((resolve, reject) => {
+      asks.push({ answer: (answers) => { resolve(answers); return flushed() }, fail: () => { reject(new Error('ps failed')); return flushed() } })
+    }))
+    const tty = vi.fn(async (_pid: number): Promise<string | undefined> => '/dev/ttys031')
+    const { actions } = fakeActions(over)
+    const s = setup({ actions, tty, served: lookup })
+    const agent = () => s.src.list()[0]
+    const codex = (event: ObservedHookEvent['event'], more: Partial<ObservedHookEvent> = {}) => s.ev(event, {
+      engine: 'codex', sessionId: THREAD, callerPid: 900, hostHints: { ...ITERM2 },
+      transcriptPath: `/home/u/.codex/sessions/2026/11/26/rollout-2026-11-26T09-00-00-${THREAD}.jsonl`, ...more,
+    })
+    return { ...s, actions, lookup, asks, tty, agent, codex }
+  }
+
+  it('a hook from its daemon is on no page while its client is asked, then on its client\'s, with that TUI\'s tab', async () => {
+    const t = served()
+    const apps: string[] = []
+    t.src.onChange(() => { apps.push(t.agent().app) })
+    t.src.ingest(t.codex('session-start'))
+    expect(t.lookup.mock.calls).toEqual([[[{ pid: 900, cwd: '/work/proj' }]]])
+    expect(t.agent()).toMatchObject({ app: 'terminal', appPending: true })
+    await t.asks[0].answer([{ client: CLIENT }])
+    const { id } = t.agent()
+    expect(t.agent().app).toBe('terminal-app')
+    expect(t.agent().appPending).toBeUndefined()
+    expect(pageOf(t.agent())).toBe('terminal-app')
+    expect(t.src.tabTty(id)).toBe('/dev/ttys005')
+    expect(t.src.paneOf(id, 'tabs')).toBe('terminal-app:/dev/ttys005')
+    expect(t.src.windowOf(id)).toEqual({ pid: 500, app: 'terminal-app', outer: true })
+    expect(await t.src.focus(t.agent(), latestTap)).toBe(true)
+    expect(t.actions.open.mock.calls[0][1].bundle).toBe('com.apple.Terminal')
+    // The daemon's own tty is none, and never read.
+    expect(t.tty).not.toHaveBeenCalled()
+    expect(apps).not.toContain('iterm')
+  })
+
+  it('no pane of its hints or its caller takes its words: a place learnt by its folder only shows it', async () => {
+    const t = served({ codexQueue: { can: vi.fn(() => false), send: vi.fn() } })
+    // The first TUI ran in tmux, and the session's own TUI runs in VS Code's terminal.
+    t.src.ingest(t.codex('session-start', { hostHints: { ...ITERM2, TMUX_PANE: '%3' } }))
+    expect(t.src.paneOf(t.agent().id, 'tmux')).toBeUndefined()
+    await t.asks[0].answer([{ client: { app: 'vscode', tty: '/dev/ttys005', pid: 500 } }])
+    const { id } = t.agent()
+    expect(t.agent().app).toBe('vscode')
+    for (const adapter of ['tmux', 'vscode', 'tabs']) expect(t.src.paneOf(id, adapter)).toBeUndefined()
+    expect(t.src.capabilities(t.agent()).voice).toBe(false)
+  })
+
+  it('a caller that is no server is placed by its hints once the lookup says so, and is not asked again', async () => {
+    const t = served()
+    t.src.ingest(t.codex('session-start'))
+    expect(t.agent().app).toBe('terminal')
+    await t.asks[0].answer([undefined])
+    expect(t.agent().app).toBe('iterm')
+    expect(t.agent().appPending).toBeUndefined()
+    expect(t.tty.mock.calls).toEqual([[900]])
+    t.src.ingest(t.codex('turn-start', { hostHints: { TERM_PROGRAM: 'ghostty' } }))
+    expect(t.agent().app).toBe('ghostty')
+    expect(t.lookup).toHaveBeenCalledTimes(1)
+  })
+
+  it('asks again at a session\'s start, and at a turn\'s while no client is known, keeping its place until the answer', async () => {
+    const t = served()
+    t.src.ingest(t.codex('session-start'))
+    await t.asks[0].answer([{ client: CLIENT }])
+    const { id } = t.agent()
+    t.src.ingest(t.codex('turn-start'))
+    t.src.ingest(t.codex('turn-stop'))
+    expect(t.lookup).toHaveBeenCalledTimes(1)
+    // Resumed in another TUI, in another folder.
+    t.src.ingest(t.codex('session-start', { cwd: '/work/two' }))
+    expect(t.lookup.mock.calls[1]).toEqual([[{ pid: 900, cwd: '/work/two' }]])
+    expect(t.agent().app).toBe('terminal-app')
+    await t.asks[1].answer([{}])
+    expect(t.agent().app).toBe('terminal')
+    expect(t.agent().appPending).toBeUndefined()
+    expect(t.src.tabTty(id)).toBeUndefined()
+    // The daemon's window is none of the session's.
+    expect(t.src.windowOf(id)).toBeUndefined()
+    t.src.ingest(t.codex('turn-start', { cwd: '/work/two' }))
+    expect(t.lookup).toHaveBeenCalledTimes(3)
+    await t.asks[2].answer([{ client: CLIENT }])
+    expect(t.agent().app).toBe('terminal-app')
+  })
+
+  it('only the latest ask lands: another caller drops the place at once', async () => {
+    const t = served()
+    t.src.ingest(t.codex('session-start'))
+    await t.asks[0].answer([{ client: CLIENT }])
+    t.src.ingest(t.codex('session-start', { callerPid: 901 }))
+    expect(t.agent()).toMatchObject({ app: 'terminal', appPending: true })
+    t.src.ingest(t.codex('session-start', { callerPid: 902 }))
+    await t.asks[1].answer([{ client: CLIENT }])
+    expect(t.agent()).toMatchObject({ app: 'terminal', appPending: true })
+    await t.asks[2].answer([{ client: { app: 'ghostty', tty: '/dev/ttys007', pid: 501 } }])
+    expect(t.agent().app).toBe('ghostty')
+  })
+
+  it('Claude Code\'s hooks are placed by their hints at once, with no lookup', () => {
+    const t = served()
+    t.src.ingest(t.ev('session-start', { hostHints: { ...ITERM2 } }))
+    expect(t.agent().app).toBe('iterm')
+    expect(t.lookup).not.toHaveBeenCalled()
+  })
+
+  it('a lookup that fails leaves it to its hints, and says only its kind', async () => {
+    const t = served()
+    t.src.ingest(t.codex('session-start'))
+    await t.asks[0].fail()
+    expect(t.agent().app).toBe('iterm')
+    expect(t.logs).toContain('[observed] served · not read · Error')
   })
 })
 
