@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
@@ -97,6 +98,7 @@ class _ChatTranscriptViewState extends State<ChatTranscriptView> {
           onAnswer: widget.onAnswer,
           onAnswerInTerminal: widget.onAnswerInTerminal,
         ),
+      if (conversation.working) const TypingDots(),
       _TurnStatus(conversation: conversation),
     ];
     final top = conversation.hasMore || conversation.loadingOlder ? 1 : 0;
@@ -338,6 +340,73 @@ class _TurnStatusState extends State<_TurnStatus> {
     return Padding(
       padding: const EdgeInsets.only(top: AppSpace.m),
       child: Text(line, style: AppType.caption(color: AppPalette.textFaint)),
+    );
+  }
+}
+
+/// Three dots that rise in turn under the newest row, while the agent is answering: a turn shows it is alive between
+/// its rows, which can be seconds apart.
+class TypingDots extends StatefulWidget {
+  const TypingDots({super.key});
+
+  @override
+  State<TypingDots> createState() => _TypingDotsState();
+}
+
+class _TypingDotsState extends State<TypingDots>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _wave = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1200),
+  )..repeat();
+
+  @override
+  void dispose() {
+    _wave.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(top: AppSpace.m),
+    child: Align(
+      alignment: Alignment.centerLeft,
+      child: Semantics(
+        label: 'Typing',
+        child: AnimatedBuilder(
+          animation: _wave,
+          builder: (context, _) => Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (var i = 0; i < 3; i++) _dot(i),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+
+  /// Dot [i] is brightest and highest a third of a beat after the one before it.
+  Widget _dot(int i) {
+    final phase = (_wave.value - i / 3) % 1;
+    final lift = phase < 0.5 ? math.sin(phase * 2 * math.pi) : 0.0;
+    return Padding(
+      padding: const EdgeInsets.only(right: 5),
+      child: Transform.translate(
+        offset: Offset(0, -3 * lift),
+        child: Container(
+          width: 7,
+          height: 7,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: Color.lerp(
+              AppPalette.textFaint,
+              AppPalette.textSecondary,
+              lift,
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

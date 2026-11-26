@@ -137,13 +137,16 @@ export function parseOpencodePickerRows(capture: string): OpencodePickerRow[] | 
   const lines = capture.split('\n').map((line) => line.replace(/\s+$/, ''))
   // LAST header, not the first: a capture carries scrollback, so an earlier opening of the same picker is
   // usually still up there — reading from it parsed a stale, differently-filtered row set.
-  const header = lines.findLastIndex((line) => /\bSelect model\b/.test(line))
+  const header = lines.findLastIndex((line) => SELECT_MODEL.test(line))
+  const titled = lines.findLastIndex((line) => PICKER_TITLE.test(line) && !SELECT_MODEL.test(line) && !VARIANT_PICKER.test(line))
+  if (titled > header) return opencode24Rows(lines, titled)
   if (header < 0) return null
   // OpenCode 2.2 ends the list with `View all integrations ctrl+a`, and draws its composer and the project's
   // `~/path   7.1K (4%)` column under it, which read as a second row (MSI, 2026-11-17).
-  const end = lines.findIndex((line, index) => index > header && /Connect provider|View all integrations|^\s*[┃╹]/i.test(line))
+  const below = lines.slice(header + 1)
+  const last = below.findIndex((line) => /Connect provider|View all integrations|^\s*[┃╹]/i.test(line))
   const rows: OpencodePickerRow[] = []
-  for (const line of lines.slice(header + 1, end < 0 ? lines.length : end)) {
+  for (const line of below.slice(0, last < 0 ? below.length : last)) {
     const text = line.trim()
     if (!text) continue
     const current = text.startsWith('●')
@@ -157,13 +160,89 @@ export function parseOpencodePickerRows(capture: string): OpencodePickerRow[] | 
   return rows
 }
 
+/** OpenCode 2.2's `/models` picker, by its title. */
+const SELECT_MODEL = /\bSelect model\s{2,}esc\b/
+/**
+ * OpenCode 2.4's, by its title, a line that ends in `esc`: `Free models` while only the free ones are there, and with a
+ * provider connected the filter box itself, `Search models` until something is typed and then what was typed. Its last
+ * line (`connect provider ctrl+a  favorite ctrl+f`) is no mark: on a phone's 50×20 it is wrapped or not drawn at all
+ * (MSI, 2026-11-26).
+ */
+const PICKER_TITLE = /\S\s{2,}esc$/
+const OPENED_24 = /\b(?:Free|Search) models\s{2,}esc\b/
+/** The cursor's row of a 2.4 picker, edged `┃`, then the current one's `▪` or a space, then its name. */
+const CURSOR_ROW = /┃ [▪● ] \S/
+
+/**
+ * A picker's lines under its title, from its own column on: OpenCode 2.4 draws its pickers over the conversation,
+ * whose words share their lines (MSI, 2.4.1, 2026-11-26). The column starts where the cursor's `┃` edge is drawn,
+ * four before the title.
+ */
+function pickerLines(lines: string[], header: number, title: RegExp): string[] {
+  const column = Math.max(0, lines[header].search(title) - 4)
+  return lines.slice(header + 1).map((line) => line.slice(column).replace(/\s+$/, ''))
+}
+
+/**
+ * One row of an OpenCode 2.4 picker: the cursor's row is edged `┃` and the current one marked `▪` (2.2: `●`). Null for
+ * the composer's own edge under a list, a bare `┃` or its `┃  Build · …` footer.
+ */
+function pickerRow(text: string): { text: string; current: boolean; cursor: boolean } | null {
+  const edged = text.startsWith('┃')
+  // The composer's edge, `┃  words`, is not the cursor's `┃ ▪ name` / `┃   name`.
+  if (edged && !CURSOR_ROW.test(text)) return null
+  const rest = text.replace(/^┃/, '').trim()
+  const current = /^[▪●]/.test(rest)
+  const name = rest.replace(/^[▪●]\s*/, '').trim()
+  if (!name || (edged && name.includes('·'))) return null
+  return { text: name, current, cursor: edged }
+}
+
+/**
+ * The rows of OpenCode 2.4's `/models` picker titled at line [header], measured on MSI (2.4.1, 2026-11-26), its parts
+ * apart by empty lines:
+ *
+ *   - only the free models: `Free models`, a note to connect a provider (two lines on a phone), the filter box, one
+ *     model a row by its name, then the details of the row under the cursor (`Text · 262K · Reasoning`);
+ *   - with a provider connected: the filter box as the title, rows of a model's name and its provider's
+ *     (`Check Stub Harness Check`), under headings (`Recent`, the providers', `Free`) while nothing is typed.
+ *
+ * A row's provider is in `display` then, and `provider` is empty.
+ */
+function opencode24Rows(lines: string[], header: number): OpencodePickerRow[] {
+  const after = lines.slice(header + 1)
+  // Its column is the cursor's edge, four before its words; the title's line can carry the conversation's words before
+  // it, and on a narrow screen the composer's edge is in the picker's own column.
+  const cursor = after.map((line) => line.search(CURSOR_ROW)).find((at) => at >= 0)
+  const title = lines[header].search(/\b(?:Free|Search) models\b/)
+  const column = Math.max(0, cursor ?? (title >= 0 ? title : lines[header].search(/\S/)) - 4)
+  const body = after.map((line) => line.slice(column).trim())
+  let at = 0
+  const skipEmpty = () => { while (at < body.length && !body[at]) at++ }
+  if (/\bFree models\s{2,}esc$/.test(lines[header])) {
+    skipEmpty()
+    while (at < body.length && body[at]) at++ // the note, over one line or two
+    skipEmpty()
+    at++ // the filter box
+  }
+  skipEmpty()
+  const rows: OpencodePickerRow[] = []
+  for (const text of body.slice(at)) {
+    if (!text || /^No results/i.test(text) || text.includes(' · ') || /\bconnect (?:integration|provider)\b|\bfavorite ctrl\+f/.test(text)) break
+    const row = pickerRow(text)
+    if (!row) break
+    rows.push({ display: row.text, provider: '', current: row.current })
+  }
+  return rows
+}
+
 /**
  * How many times the `/models` picker appears in a capture. A tmux capture includes scrollback, so the
  * only way to tell "the picker I just opened" from "a picker I opened a minute ago" is that the count went
  * up — see setOpencode.
  */
 export function countOpencodePickers(capture: string): number {
-  return capture.split('\n').filter((line) => /\bSelect model\b/.test(line)).length
+  return capture.split('\n').filter((line) => SELECT_MODEL.test(line) || OPENED_24.test(line)).length
 }
 
 /**
@@ -175,30 +254,45 @@ export function countOpencodePickers(capture: string): number {
  *     low
  *     high
  *
+ * OpenCode 2.4 draws it with no filter box: what is typed goes nowhere, and the arrows move a cursor, the row edged `┃`
+ * (MSI, 2.4.1, 2026-11-26).
+ *
  * Null when none is open. Bounded below by the composer's `┃`/`╹` edge.
  */
-export function parseOpencodeVariantRows(capture: string): Array<{ name: string; current: boolean }> | null {
-  const lines = capture.split('\n').map((line) => line.trim())
-  const header = lines.findLastIndex((line) => /^Select variant\b/.test(line))
+export function parseOpencodeVariantRows(capture: string): OpencodeVariantRow[] | null {
+  const lines = capture.split('\n')
+  const header = lines.findLastIndex((line) => VARIANT_PICKER.test(line))
   if (header < 0) return null
-  const rows: Array<{ name: string; current: boolean }> = []
-  for (const line of lines.slice(header + 2)) {
-    if (/^[┃╹]/.test(line)) break
-    if (!line || /^No results/i.test(line)) continue
-    rows.push({ name: line.replace(/^●\s*/, ''), current: line.startsWith('●') })
+  const rows: OpencodeVariantRow[] = []
+  // The first line under the title is the filter box. 2.4 draws the conversation on past the list, and the list has
+  // no line between its last row and that: the first empty line ends it.
+  for (const line of pickerLines(lines, header, /Select variant/).slice(1)) {
+    const text = line.trim()
+    if (/^╹/.test(text)) break
+    if (!text) { if (rows.length) break; continue }
+    if (/^No results/i.test(text)) continue
+    const row = pickerRow(text)
+    if (!row) break
+    rows.push({ name: row.text, current: row.current, cursor: row.cursor })
   }
   return rows
 }
 
+/** A row of the `/effort` picker. `cursor`: the row under OpenCode 2.4's cursor, which Enter takes. */
+export interface OpencodeVariantRow { name: string; current: boolean; cursor: boolean }
+
+const VARIANT_PICKER = /\bSelect variant\s{2,}esc\b/
+
 /** How many times the `/effort` picker appears in a capture: see [countOpencodePickers]. */
 export function countOpencodeVariantPickers(capture: string): number {
-  return capture.split('\n').filter((line) => /^\s*Select variant\b/.test(line)).length
+  return capture.split('\n').filter((line) => VARIANT_PICKER.test(line)).length
 }
 
 /** True when a picker row NAMES the target's model, whatever provider it is listed under. */
 export function opencodeRowNamesModel(target: OpencodeModelTarget, row: OpencodePickerRow): boolean {
   const leaf = target.model.slice(target.model.lastIndexOf('/') + 1)
-  return squash(row.display).startsWith(squash(leaf))
+  // By its id's words or by its name: a provider's own model can be named apart from its id (`stub`, `Check Stub`).
+  return [leaf, target.name].some((key) => !!key && squash(row.display).startsWith(squash(key)))
 }
 
 /** True when a picker row is the catalog entry we are trying to select. */

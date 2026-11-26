@@ -22,7 +22,17 @@ class FakeOpencode {
   listed = false
   picker: 'model' | 'variant' | null = null
   filter = ''
+  /** The row under the cursor, in OpenCode 2.4's pickers. */
+  cursor = 0
   readonly keys: string[] = []
+
+  /**
+   * OpenCode 2.4.1 instead, as measured on MSI (2026-11-26): its pickers drawn over the conversation, `Free models` one
+   * cell a row, the cursor's row edged `┃` and the current one marked `▪`, and `Select variant` with no filter at all:
+   * what is typed there goes nowhere, and only the arrows move.
+   */
+  /** [shown]: the rows a picker has room for, as on a phone's 20 rows, scrolled to keep the cursor in view. */
+  constructor(readonly v24 = false, readonly shown = Infinity) {}
 
   private rows(): string[] {
     const all = this.picker === 'model' ? CATALOG.map((m) => m.name!) : ['Default', ...CATALOG.find((m) => m.name === this.model)!.efforts!]
@@ -30,9 +40,25 @@ class FakeOpencode {
     return all.filter((row) => words.every((w) => row.toLowerCase().includes(w)))
   }
 
+  private current(): string {
+    return this.picker === 'model' ? this.model : this.variant ?? 'Default'
+  }
+
+  private screen24(): string[] {
+    const over = (right: string) => `${'     A long answer, drawn on under the picker'.padEnd(76)}${right}`
+    const top = Math.max(0, this.cursor - this.shown + 1)
+    const rows = this.rows().map((row, index) => over(`${index === this.cursor ? '┃' : ' '} ${row === this.current() ? '▪' : ' '} ${row}`))
+      .slice(top, top + this.shown)
+    if (this.picker === 'variant') return [over('    Select variant                                   esc'), over(''), ...rows, over('')]
+    return [over('    Free models                                      esc'), over('    Connect a provider for access to more models'), over(''),
+      over(`    ${this.filter || 'Search'}`), over(''), ...(rows.length ? rows : [over('    No results found')]), over(''),
+      over('    Text · 262K · Reasoning'), over(''), over('    connect provider ctrl+a              favorite ctrl+f')]
+  }
+
   screen(): string {
     const lines = ['     Bạn cần tôi hỗ trợ gì hôm nay?']
-    if (this.picker) {
+    if (this.picker && this.v24) lines.push(...this.screen24())
+    else if (this.picker) {
       lines.push(`     ${this.picker === 'model' ? 'Select model' : 'Select variant'}                         esc`, `     ${this.filter || 'Search'}`)
       const rows = this.rows()
       if (!rows.length) lines.push('     No results found')
@@ -46,7 +72,8 @@ class FakeOpencode {
   }
 
   literal(text: string): void {
-    if (this.picker) { this.filter += text; return }
+    if (this.picker === 'variant' && this.v24) return
+    if (this.picker) { this.filter += text; this.cursor = 0; return }
     this.composer += text
     // OpenCode lists the command a moment later, on its next frame: an Enter in the same frame finds no list.
     this.listed = false
@@ -57,20 +84,26 @@ class FakeOpencode {
     this.keys.push(key)
     if (key === 'Escape') { this.picker = null; this.filter = ''; return }
     if (key === 'BSpace') { this.composer = this.composer.slice(0, -1); return }
+    if (this.v24 && this.picker && (key === 'Down' || key === 'Up')) {
+      this.cursor = Math.max(0, Math.min(this.rows().length - 1, this.cursor + (key === 'Down' ? 1 : -1)))
+      return
+    }
     if (key !== 'Enter') return
     if (!this.picker) {
       if (this.listed) this.picker = this.composer === '/models' ? 'model' : 'variant'
       this.composer = ''
       this.listed = false
+      this.cursor = this.picker ? Math.max(0, this.rows().indexOf(this.current())) : 0
       return
     }
-    const row = this.rows()[0]
+    const row = this.rows()[this.v24 ? this.cursor : 0]
     if (!row) return
     this.filter = ''
     if (this.picker === 'model') {
       this.model = row
       this.variant = null
       this.picker = CATALOG.find((m) => m.name === row)!.efforts!.length ? 'variant' : null
+      this.cursor = 0
     } else {
       this.variant = row === 'Default' ? null : row
       this.picker = null
@@ -88,9 +121,9 @@ function fresh(): RegisteredSession {
 }
 
 describe('switching OpenCode through its own pickers', () => {
-  function setup() {
+  function setup(v24 = false, shown = Infinity) {
     const value = fresh()
-    const oc = new FakeOpencode()
+    const oc = new FakeOpencode(v24, shown)
     const manager = new RuntimeProfileManager()
     const options = CATALOG.flatMap((m) => ['auto', ...m.efforts!].map((effort) => ({
       id: encodeRuntimeProfile({ sessionId: 'oc', engine: 'opencode', model: m.id, effort }), displayName: m.name!,
@@ -126,6 +159,28 @@ describe('switching OpenCode through its own pickers', () => {
     const { oc, pick } = setup()
     await pick('opencode/deepseek-v4.1-flash-free', 'auto')
     expect([oc.model, oc.variant, oc.picker]).toEqual(['DeepSeek V4.1 Flash Free', null, null])
+  })
+
+  // MSI, 2026-11-26: on 2.4.1 every switch from the phone said "Couldn't change the model".
+  it('switches OpenCode 2.4, its model by its name alone and its variant by the arrows', async () => {
+    const { oc, pick } = setup(true)
+    await pick('opencode/deepseek-v4.1-flash-free', 'high')
+    expect([oc.model, oc.variant, oc.picker]).toEqual(['DeepSeek V4.1 Flash Free', 'high', null])
+    expect(oc.keys.filter((key) => key === 'Down')).toHaveLength(2)
+
+    await pick('opencode/deepseek-v4.1-flash-free', 'low')
+    expect([oc.model, oc.variant, oc.picker]).toEqual(['DeepSeek V4.1 Flash Free', 'low', null])
+    await pick('opencode/big-pickle', 'auto')
+    expect([oc.model, oc.variant, oc.picker]).toEqual(['Big Pickle', null, null])
+  })
+
+  // The phone's 50×20: the variant list shows a few rows and scrolls, the cursor staying on the same line of the screen.
+  it('walks OpenCode 2.4\'s variant picker when it scrolls', async () => {
+    const { oc, pick } = setup(true, 2)
+    await pick('opencode/deepseek-v4.1-flash-free', 'max')
+    expect([oc.model, oc.variant, oc.picker]).toEqual(['DeepSeek V4.1 Flash Free', 'max', null])
+    await pick('opencode/deepseek-v4.1-flash-free', 'low')
+    expect([oc.model, oc.variant, oc.picker]).toEqual(['DeepSeek V4.1 Flash Free', 'low', null])
   })
 
   it('refuses a variant the model does not have, before any key', async () => {

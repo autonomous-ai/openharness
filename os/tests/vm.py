@@ -308,6 +308,15 @@ class VM:
             raise RuntimeError(f'Guest file transfer is incomplete: {path}')
         return base64.b64decode(''.join(match.group(1).splitlines()), validate=True)
 
+    def write_file(self, path, data):
+        """Write exact bytes to a guest file, in pieces a serial command line takes."""
+        encoded = base64.b64encode(data).decode()
+        scratch = shlex.quote(str(path) + '.base64')
+        self.command(': > ' + scratch)
+        for start in range(0, len(encoded), 1800):
+            self.command('printf %s ' + encoded[start:start + 1800] + ' >> ' + scratch)
+        self.command('base64 -d ' + scratch + ' > ' + shlex.quote(str(path)) + ' && rm ' + scratch)
+
     def login_installed(self, config, unlock_delay=0, wait_workspace=True):
         if config['encrypt']:
             self.unlock_count += 1
@@ -944,6 +953,20 @@ def check_first_use(vm, user, folder, installed=False):
     return trial_project
 
 
+def check_opencode_through_daemon(vm, folder):
+    """The bundled OpenCode as the phone's Chat UI drives it, through the running daemon: a model and a variant switched
+    through its own pickers, a message sent, and its answer heard live and read back from its history. Its own provider
+    on loopback answers, so no model call leaves the machine (opencode_daemon_guest.mjs). OpenCode 2.4.1 came with
+    0.1.18 and broke both unseen: nothing here exercised them (MSI, 2026-11-26)."""
+    vm.write_file('/tmp/opencode_daemon_guest.mjs', Path(__file__).with_name('opencode_daemon_guest.mjs').read_bytes())
+    _, status = vm.command('timeout 300 node /tmp/opencode_daemon_guest.mjs /tmp/opencode-daemon.json', timeout=320, check=False)
+    report = vm.read_file('/tmp/opencode-daemon.json')
+    (folder / 'opencode-daemon.json').write_bytes(report)
+    result = json.loads(report)
+    assert status == 0 and not result.get('error'), 'Bundled OpenCode through the daemon: ' + str(result.get('error'))
+    return result['checks']
+
+
 def install_interactively(vm, config, folder, direct=False):
     # Drive the actual graphical form. The sole installer addition is serial boot
     # output so the following installed boot remains observable to this fixture.
@@ -1267,6 +1290,7 @@ def main():
         assert 'local_machine' in installed_bar and '%H:%M' in installed_bar and 'Install Harness' not in installed_bar, installed_bar
         vm.command("! pgrep -f '[/]usr/lib/harness-os/network[.]py'")
         result['checks'].append('Fresh installed first boot opens the same three real panes and records onboarding only once')
+        result['checks'].extend(check_opencode_through_daemon(vm, folder))
         result['checks'].append('Installed first use preserves hn’s full status bar and never reopens networking after the connection succeeds')
         if not direct:
             saved_trial = vm.read_file(trial_project)

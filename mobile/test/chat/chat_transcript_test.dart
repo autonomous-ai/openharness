@@ -200,8 +200,37 @@ void main() {
 
       final first = conversations.open('m1', 'a1', 's1');
       await Future<void>.delayed(Duration.zero);
-      expect(identical(first, empty), isFalse);
-      expect(read, ['s1']);
+      expect(identical(first, empty), isTrue);
+      expect(read, isEmpty);
+    });
+
+    test('the first answer reaches the empty chat it was asked from, though the page names the session only after it', () async {
+      // Pixel, 2026-11-26: "hi" from Chat UI to a new OpenCode agent got no answer there, though the terminal had one.
+      // The daemon sends the session (agent_synced) just before the turn, and the page opens that session's chat a
+      // frame later: the turn had already gone by, and the read, made while OpenCode was answering, held only "hi".
+      final conversations = ChatConversations(
+        reader: (machineId, sessionId) => (_) async => _page([
+          _event('user_message', {'content': 'hi'}),
+        ]),
+      );
+      final empty = conversations.open('m1', 'a1', null);
+      await Future<void>.delayed(Duration.zero);
+
+      conversations
+        ..ingest('m1', 'a1', 's1', 'turn_started', {'userMessage': 'hi'})
+        ..ingest('m1', 'a1', 's1', 'text_delta', {'content': 'Hello!'});
+      final chat = conversations.open('m1', 'a1', 's1');
+      await Future<void>.delayed(Duration.zero);
+      expect(chat.working, isTrue);
+      conversations.ingest('m1', 'a1', 's1', 'turn_ended', {});
+
+      expect(identical(chat, empty), isTrue);
+      expect(chat.items.map((i) => (i.role, i.text)), [
+        (ChatRole.user, 'hi'),
+        (ChatRole.assistant, 'Hello!'),
+      ]);
+      expect(chat.working, isFalse);
+      expect(chat.lastTurn, isNotNull);
     });
   });
 

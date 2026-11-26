@@ -331,7 +331,9 @@ class ChatConversations {
   /// [agentId]'s conversation [sessionId], opened (and its history read) if it is not already.
   ///
   /// A null [sessionId] is an agent nobody has talked to yet — OpenCode makes its session at the first message: an
-  /// empty chat, read from nowhere. Its first message gives the agent a session, and the page opens that one instead.
+  /// empty chat, read from nowhere. Its first message gives the agent a session, and that empty chat becomes the
+  /// session's, unread: it heard the turn live ([ingest]), and the page names the session only a frame after the daemon
+  /// does, once the turn has begun. A chat of its own read then held the question alone (Pixel, 2026-11-26).
   ChatConversation open(
     String machineId,
     String agentId,
@@ -341,7 +343,11 @@ class ChatConversations {
     final key = _key(machineId, agentId, sessionId ?? '');
     // Asked on every build of the page showing it: only a conversation not yet held reads anything.
     // A failed read is asked again from its Retry, never by a rebuild.
-    final held = _open.remove(key);
+    final held =
+        _open.remove(key) ??
+        (sessionId == null
+            ? null
+            : _open.remove(_key(machineId, agentId, '')));
     final conversation =
         held ??
         ChatConversation(
@@ -364,7 +370,8 @@ class ChatConversations {
     return conversation;
   }
 
-  /// A live event for [agentId]'s session — nothing when it is not open as chat.
+  /// A live event for [agentId]'s session — nothing when it is not open as chat. The empty chat of an agent with no
+  /// session yet hears whichever session it begins ([open]).
   void ingest(
     String machineId,
     String agentId,
@@ -375,7 +382,9 @@ class ChatConversations {
     for (final entry in _open.entries) {
       final parts = entry.key.split('\u0000');
       if (parts[0] != machineId || parts[1] != agentId) continue;
-      if (sessionId != null && parts[2] != sessionId) continue;
+      if (sessionId != null && parts[2] != sessionId && parts[2] != '') {
+        continue;
+      }
       entry.value.ingest(type, payload);
     }
   }

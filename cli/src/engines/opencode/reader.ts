@@ -17,11 +17,12 @@
 
 import type { LiveEvent } from '../../lib/normalize.js'
 import { oversizeRow, readStorePages, type StorePage } from '../../lib/sqlitePage.js'
+import { sqliteReadAll } from '../../lib/sqliteRead.js'
 import {
   MAX_OUTPUT, MAX_THINKING, OC_V2_TURN_TYPES, clip, object, str, ocMessageFromV2,
   opencodeToolName, toolOutputText, toolSummary, userMessageText,
   isTaskPart, taskStartEvent, taskEndEvent,
-  type OcMessage, type OcPart, type ChildStats,
+  type OcMessage, type OcPart, type OcV2Row, type ChildStats,
 } from './normalizer.js'
 
 const ID_RE = /^[A-Za-z0-9_]+$/
@@ -73,6 +74,28 @@ async function loadOpencodeMessages(
   return readLegacyMessages(dbPath, sessionId, after ?? null)
 }
 
+const V2_PARTS: NonNullable<StorePage['parts']> = {
+  table: 'session_part', on: 'p.message_id = t.id', order: ['pord'],
+  columns: [{ as: 'pord', sql: 'p.ordinal' }, { as: 'pdata', sql: 'p.data' }],
+}
+/** Each store's answer about `session_part`: true once it has the table, else when it was last found without it. */
+const v2PartStores = new Map<string, true | number>()
+const PARTS_RECHECK_MS = 60_000
+
+/** Whether the store keeps OpenCode 2.4's `session_part`; null when it did not answer. */
+async function hasV2Parts(dbPath: string): Promise<boolean | null> {
+  const known = v2PartStores.get(dbPath)
+  if (known === true) return true
+  if (known !== undefined && Date.now() - known < PARTS_RECHECK_MS) return false
+  const read = await sqliteReadAll(dbPath, "SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = 'session_part';")
+  if (!read.ok) {
+    if (read.reason === 'missing') throw new OpencodeSqliteMissing()
+    return null
+  }
+  v2PartStores.set(dbPath, read.rows.length > 0 ? true : Date.now())
+  return read.rows.length > 0
+}
+
 /**
  * The user, assistant and idle rows of an OpenCode 2 session after `afterSeq`, in order. Empty for a v1 session, null
  * when the store did not answer.
@@ -84,19 +107,34 @@ async function readV2Messages(dbPath: string, sessionId: string, afterSeq: numbe
     key: [{ as: 'mtc', sql: 't.time_created' }, { as: 'mseq', sql: 't.seq' }],
     columns: [{ as: 'mid', sql: 't.id' }, { as: 'mtype', sql: 't.type' }, { as: 'mdata', sql: 't.data' }],
   }
-  const result = await readStorePages(dbPath, page, afterTimeCreated !== undefined ? [afterTimeCreated, afterSeq] : null)
+  const cursor = afterTimeCreated !== undefined ? [afterTimeCreated, afterSeq] : null
+  // OpenCode 2.4 keeps an assistant step's text, reasoning and tools in `session_part`, one row each, and leaves the
+  // step's own `content` empty (measured on 2.4.1, Harness OS, 2026-11-26: Chat UI showed the question and no answer).
+  // 1.x and 2.0 have no such table, which a store is asked once for, and again a while after it said no: an OpenCode
+  // update adds it while we run. Unanswered, the read waits for the next poll: a step read without its parts would be
+  // passed by the cursor with its answer left out.
+  const parts = await hasV2Parts(dbPath)
+  if (parts === null) return null
+  const result = await readStorePages(dbPath, parts ? { ...page, parts: V2_PARTS } : page, cursor)
   if (!result.ok) {
     if (result.reason === 'missing') throw new OpencodeSqliteMissing()
     // A store with no `session_message` table (OpenCode 1) reads from the legacy tables; anything else is retried.
     return /no such table/.test(String(result.error?.message)) ? [] : null
   }
-  const messages: OcMessage[] = []
+  const rows: Array<{ row: OcV2Row; parts: unknown[] }> = []
   for (const row of result.rows) {
     // A row past the row cap comes back without its data: left out, said once, and the read goes on past it.
     if (Number(row.page_big)) { oversizeRow('opencode', sessionId, `seq ${row.mseq}`); continue }
-    const message = ocMessageFromV2({
-      id: str(row.mid), type: str(row.mtype), seq: Number(row.mseq) || 0, timeCreated: Number(row.mtc) || 0, data: parseJson(row.mdata),
+    if (Number(row.page_part)) { rows.at(-1)?.parts.push(parseJson(row.pdata)); continue }
+    rows.push({
+      row: { id: str(row.mid), type: str(row.mtype), seq: Number(row.mseq) || 0, timeCreated: Number(row.mtc) || 0, data: parseJson(row.mdata) },
+      parts: [],
     })
+  }
+  const messages: OcMessage[] = []
+  for (const { row, parts } of rows) {
+    const content = Array.isArray(row.data.content) && row.data.content.length > 0 ? row.data.content : parts
+    const message = ocMessageFromV2({ ...row, data: { ...row.data, content } })
     if (message && message.id) messages.push(message)
   }
   return messages
