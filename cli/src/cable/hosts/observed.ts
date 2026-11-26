@@ -137,6 +137,9 @@ export interface ObservedDeps {
   /** What a Claude Code session's own process record gives (record.ts): the name the person gave it, and the Claude
    *  app's id of it; one that rejects gives nothing. Absent, the scan names by folder and places by its app alone. */
   record?(owner: Pick<SessionOwner, 'pid' | 'record'> & { sessionId: string }): Promise<SessionRecord>
+  /** Claude Code's own projects folders, the devices' and Orca's account homes' (observedPlaces.ts), asked at a voice
+   *  start alone: a hook's transcript path names a session's home only inside one. Absent, none does. */
+  claudeRoots?(): readonly string[]
   /** The tty of a process in a tab app (tabs.ts readTty), rejecting when `ps` could not be read; absent (off macOS), no
    *  agent has a tab. */
   tty?(pid: number): Promise<string | undefined>
@@ -207,7 +210,7 @@ export interface ObservedActions {
   codexQueue: Pick<CodexQueue, 'can' | 'send'>
   /** The Codex home Harness reads (env.CODEX_HOME): `codex queue` loads its config, so a hook's path never chooses it. */
   codexHome: string
-  /** dirname(CLAUDE_PROJECTS_DIR): the home of a session whose transcript path names none. */
+  /** dirname(CLAUDE_PROJECTS_DIR): the home of a session whose transcript path names none in Claude Code's own folders. */
   claudeHome: string
   /** devices/dialSkill.ts claudePluginState: read only at a voice start, never for caps. */
   claudePluginState(settingsPath: string): 'on' | 'off' | 'unknown'
@@ -403,8 +406,8 @@ export class ObservedSource implements HostSource {
 
   /**
    * For a live agent no route takes words for: the first sentence its adapters give, in their order, as the sentence is
-   * the app's; then, for Claude Code, how to reach it. Harness's plugin not on in the session's own home (the one its
-   * transcript path plainly names, else the default) says to enable it; on, its mod does not poll, so a restart starts
+   * the app's; then, for Claude Code, how to reach it. Harness's plugin not on in the session's own home (claudeHomeOf)
+   * says to enable it; on, its mod does not poll, so a restart starts
    * one. "Restart" also shows while a mod waits out its 60 s retry after a refused poll, or right after the devices
    * restarted: accepted, as a restart fixes those too and nothing here tells them from a session older than the plugin.
    * The settings are read here alone, at a voice start.
@@ -422,8 +425,19 @@ export class ObservedSource implements HostSource {
       if (sentence) return sentence
     }
     if (e.agent.engine !== 'claude') return undefined
-    const settings = join(homeOf(e.transcriptPath) ?? actions.claudeHome, 'settings.json')
+    const settings = join(this.claudeHomeOf(e, actions), 'settings.json')
     return actions.claudePluginState(settings) !== 'on' ? CLAUDE_PLUGIN_OFF : CLAUDE_RESTART
+  }
+
+  /**
+   * The session's Claude Code home: the one its transcript path plainly names, when that path lies in one of Claude
+   * Code's own folders (deps.claudeRoots), else the default. A hook can name any path, and its settings are read
+   * synchronously: one on a network share (/net/<host>/..., \\host\share\...) would hold the devices, and every dial.
+   */
+  private claudeHomeOf(e: Entry, actions: ObservedActions): string {
+    const home = homeOf(e.transcriptPath)
+    if (home === undefined || !this.deps.claudeRoots?.().some((root) => within(root, e.transcriptPath!))) return actions.claudeHome
+    return home
   }
 
   /** Whether a route takes the agent's words: a pane whose app types, its mod, or Codex's queue. */

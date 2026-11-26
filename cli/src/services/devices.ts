@@ -381,6 +381,8 @@ function observedSource(
     ptyOwner: ptyOwnerOf,
     // Asked for Claude Code's sessions alone (observed.ts), and read only inside its own records folders.
     record: (owner) => readRecord(owner, { records: places.claude.records() }),
+    // A hook's transcript path names the home whose settings a voice start reads only inside these (observed.ts).
+    claudeRoots: () => places.claude.roots(),
     tty,
     scanned,
     herdrTerminal,
