@@ -79,6 +79,7 @@ import { connectionsCommand, connectionsUsage } from './lib/connectors/command.j
 import { DEVICE_USAGE, runDeviceCommand } from './deviceClaude/command.js'
 import { vscodeExtensionDeps } from './devices/vscodeExtension.js'
 import { carriedClaudePlugin, claudeRun, claudeRunIn } from './devices/claudePlugin.js'
+import { codexRunIn } from './devices/codexPlugin.js'
 import { orcaHomesDeps, readOrcaHomes } from './devices/orcaHomes.js'
 import { orcaPluginRun } from './devices/orcaPlugin.js'
 import { remoteCommand } from './remoteCommand.js'
@@ -3120,6 +3121,7 @@ switch (cmd) {
       defaultClaudeHome: dirname(env.CLAUDE_PROJECTS_DIR),
       codexHome: env.CODEX_HOME,
       codex: () => installedEngineBin('codex') !== null,
+      codexIn: codexRunIn,
       vscode: vscodeExtensionDeps,
       orca: orcaPluginRun,
       env: process.env,
