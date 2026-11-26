@@ -4,7 +4,8 @@
  * runs that a person never types: `asked` (its PermissionRequest hook), `link` (its mod, for the daemon's socket and the
  * devices' listener's), and `inbox <session id>` and `attach <session id>` (its mod on Windows, whose runtime can
  * neither reach the daemon's pipe nor the devices' nor sign for either: this process holds the session's poll and
- * proves the daemon's token, inbox.ts, and tells the devices the Claude app shows a session). `disable` marks the
+ * proves the daemon's token, inbox.ts, and tells the devices the Claude app shows a session). `codex asked` is the
+ * plugin's Codex hooks' (hooks/codex.json, codexAsked.ts), never typed either. `disable` marks the
  * engine removed in dial-skill.json, which the devices service then leaves alone, and removes Harness's skill from the
  * engine's default home, from each folder an enable wrote and from each the service recorded in dial-setup.json.
  * `enable` clears the mark and writes the skill into the engine's default home and back into each folder the service
@@ -47,6 +48,7 @@ import { localSocketRoute, socketIsPrivate } from '../lib/localTransport.js'
 import { daemonPipe } from '../lib/windows/daemonPipe.js'
 import type { PipeTarget } from '../lib/windows/pipeClient.js'
 import { daemonPost, runAsked } from './asked.js'
+import { runCodexAsked } from './codexAsked.js'
 import { CALLER_LIVENESS, createDaemonProof, followInbox } from './inbox.js'
 import { claudePluginOn, claudeSettingsPath } from './plugin.js'
 
@@ -212,6 +214,12 @@ async function codexCommand(verb: string, json: boolean, deps: DeviceDeps): Prom
     case 'disable':
       // Removing the skill looks for no Codex: it may be gone already.
       return turnOff('codex', deps.codexHome, deps)
+    case 'asked': {
+      // A session started before `disable` still runs the hook: with Codex removed, its stdin is read and nothing told.
+      const post = readRemoved(deps.dataDir).codex !== true ? daemonPost(deps.dataDir, deps.port) : async () => {}
+      // Prints nothing, ever: what the hook prints, Codex reads as its decision.
+      return runCodexAsked({ stdin: deps.stdin, post, codexHome: deps.codexHome })
+    }
     default:
       deps.err(DEVICE_USAGE)
       return 1
