@@ -8,7 +8,7 @@ import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { parseClaudeStream, type RunResult } from './parse.js'
-import type { AgentKind, Scenario } from './scenarios.js'
+import type { AgentKind, Condition, Scenario } from './scenarios.js'
 import type { Staged } from './stage.js'
 
 /** `timeoutMs` 0 leaves the run unbounded. */
@@ -58,7 +58,13 @@ const KILL_GRACE_MS = 10_000
 // Listing every process's working folder takes well under a second; a stuck lsof fails the run rather than hold it.
 const LSOF_TIMEOUT_MS = 10_000
 
-export function claudeArgs(cfg: Omit<AgentConfig, 'timeoutMs'>, st: Pick<Staged, 'root' | 'origin'>, prompt: string): string[] {
+/** The run's own settings. name-only drops the dial's description here, in --settings, which the agent never sees: a
+ *  staged settings file would sit in the repo it reads. */
+export function settingsFor(condition: Condition): object {
+  return condition === 'name-only' ? { ...CLAUDE_SANDBOX, skillOverrides: { dial: 'name-only' } } : CLAUDE_SANDBOX
+}
+
+export function claudeArgs(cfg: Omit<AgentConfig, 'timeoutMs'>, st: Pick<Staged, 'root' | 'origin' | 'condition'>, prompt: string): string[] {
   return [
     '-p', prompt,
     '--output-format', 'stream-json', '--verbose',
@@ -71,7 +77,7 @@ export function claudeArgs(cfg: Omit<AgentConfig, 'timeoutMs'>, st: Pick<Staged,
     // The fake harness records rings in rec/, and TMPDIR (npm's cache with it) is tmp/: both outside the repo. A push
     // writes its objects into the origin before the origin's hooks run, so a read-only origin fails every push there.
     '--add-dir', join(st.root, 'rec'), join(st.root, 'tmp'), ...(st.origin ? [st.origin] : []),
-    '--settings', JSON.stringify(CLAUDE_SANDBOX),
+    '--settings', JSON.stringify(settingsFor(st.condition)),
   ]
 }
 

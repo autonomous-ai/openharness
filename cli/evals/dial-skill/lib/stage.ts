@@ -1,12 +1,13 @@
 import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir, userInfo } from 'node:os'
 import { dirname, join } from 'node:path'
-import { DIAL_SKILL, skillsFolderOf, writeSkill } from '../../../src/devices/dialSkill.js'
+import { fileURLToPath } from 'node:url'
+import { DIAL_SKILL, DIAL_SKILL_DESCRIPTION, skillsFolderOf, writeSkill } from '../../../src/devices/dialSkill.js'
 import { composeNotice, parseNotice } from '../../../src/lib/dialNotice.js'
 import { deniedReads, spawnGroup } from './agents.js'
-import type { AgentKind, Scenario } from './scenarios.js'
+import type { AgentKind, Condition, Scenario } from './scenarios.js'
 
 /** One `harness` call the agent made; `line` is what the dial would show, null for anything but a `device notify` the
  *  CLI would send. */
@@ -24,7 +25,26 @@ export interface Staged {
   env: NodeJS.ProcessEnv
   /** The SKILL.md text staged into the repo, or null when the run has none. */
   skill: string | null
+  condition: Condition
+  /** The crowd's skills and the dial, as staged: what the listing the model gets should hold. */
+  skills: StagedSkill[]
 }
+
+export interface StagedSkill {
+  name: string
+  description: string
+}
+
+export interface StageOptions {
+  skill: boolean
+  /** clean when not given. */
+  condition?: Condition
+  /** The crowd's folder, CROWD_DIR when not given. */
+  crowd?: string
+  base?: string
+}
+
+export const CROWD_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'crowd')
 
 /** All the agent gets from the person's environment: their shell also carries keys, the daemon's port, Orca's and tmux's
  *  variables and a signed-in gh. */
@@ -51,7 +71,7 @@ function checkSandbox(root: string): string {
 (allow network-bind network-inbound (local ip "localhost:*"))`
 }
 
-export function stage(s: Scenario, agent: AgentKind, opts: { skill: boolean; base?: string }): Staged {
+export function stage(s: Scenario, agent: AgentKind, opts: StageOptions): Staged {
   const profile = process.env.CLAUDE_CONFIG_DIR
   // Unset, Claude would run in the default ~/.claude profile.
   if (agent === 'claude' && !profile) throw new Error('CLAUDE_CONFIG_DIR is not set: the eval runs Claude only in the session profile')
@@ -86,8 +106,13 @@ export function stage(s: Scenario, agent: AgentKind, opts: { skill: boolean; bas
     DEVELOPER_DIR: '/Library/Developer/CommandLineTools',
   })
   if (agent === 'claude') env.CLAUDE_CONFIG_DIR = profile
+  const condition = opts.condition ?? 'clean'
 
   try {
+    // The crowd's CLAUDE.md and skills go there; a repo's own would reach every condition, clean included.
+    for (const name of ['CLAUDE.md', '.claude']) {
+      if (existsSync(join(s.dir, 'repo', name))) throw new Error(`the scenario's repo/ holds ${name}`)
+    }
     // Inside a work tree, the agent would load that repo's AGENTS.md and CLAUDE.md, and could reach the answer key.
     if (insideGit(base, env)) throw new Error(`${base} is inside a git work tree`)
 
@@ -95,6 +120,8 @@ export function stage(s: Scenario, agent: AgentKind, opts: { skill: boolean; bas
     mkdirSync(env.TMPDIR!)
     mkdirSync(env.ZDOTDIR!)
     cpSync(join(s.dir, 'repo'), repo, { recursive: true })
+    // Before the initial commit, so CLAUDE.md is part of the repo the agent finds; .claude/ stays excluded from git.
+    const skills = agent === 'claude' && condition !== 'clean' ? stageCrowd(opts.crowd ?? CROWD_DIR, repo) : []
     // Copied rather than put on PATH where they are: a path into the scenario folder leads to its scenario.json.
     if (existsSync(join(s.dir, 'bin'))) cpSync(join(s.dir, 'bin'), bin, { recursive: true })
     mkdirSync(bin, { recursive: true })
@@ -128,17 +155,46 @@ export function stage(s: Scenario, agent: AgentKind, opts: { skill: boolean; bas
     let skill: string | null = null
     if (agent === 'claude' && opts.skill) {
       // Harness's own writer, so the eval stages exactly what Harness installs.
-      const skills = skillsFolderOf(join(repo, '.claude'), true)
-      const result = skills ? writeSkill(skills) : 'no skills folder'
+      const folder = skillsFolderOf(join(repo, '.claude'), true)
+      const result = folder ? writeSkill(folder) : 'no skills folder'
       if (result !== 'written') throw new Error(`dial skill not staged: ${result}`)
       skill = DIAL_SKILL
+      skills.push({ name: 'dial', description: DIAL_SKILL_DESCRIPTION })
     }
-    return { root, repo, recFile, origin, env, skill }
+    return { root, repo, recFile, origin, env, skill, condition, skills }
   } catch (error) {
     // A failed stage leaves no run root, and its error goes to errors.jsonl: no temp path, no user name.
     rmSync(root, { recursive: true, force: true })
     throw Object.assign(error as Error, { message: scrub((error as Error).message, { root }) })
   }
+}
+
+/** Copies the crowd into the repo: its instructions.md as CLAUDE.md, and each skill's SKILL.md where Claude finds the
+ *  dial's. In the eval it is not named CLAUDE.md, which would load into a developer's own Claude session reading files
+ *  there. */
+function stageCrowd(crowd: string, repo: string): StagedSkill[] {
+  cpSync(join(crowd, 'instructions.md'), join(repo, 'CLAUDE.md'))
+  const from = join(crowd, 'skills')
+  return readdirSync(from, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort()
+    .map((name) => {
+      const file = join(from, name, 'SKILL.md')
+      mkdirSync(join(repo, '.claude', 'skills', name), { recursive: true })
+      cpSync(file, join(repo, '.claude', 'skills', name, 'SKILL.md'))
+      return { name, description: descriptionOf(name, readFileSync(file, 'utf8')) }
+    })
+}
+
+/** JSON quoted, as the dial's: a plain YAML scalar holding `: ` ends there, and the engine skips the skill without a
+ *  word. */
+function descriptionOf(name: string, text: string): string {
+  const line = /^description: (.*)$/m.exec(text)?.[1]
+  try {
+    const description: unknown = line === undefined ? undefined : JSON.parse(line)
+    if (typeof description === 'string') return description
+  } catch {
+    // Not JSON: refused below.
+  }
+  throw new Error(`crowd skill ${name}: its description must be one JSON-quoted line`)
 }
 
 export function readRings(st: Staged): Ring[] {
@@ -191,16 +247,22 @@ async function readCheck(name: 'harm' | 'done', check: { run: string; expect: st
   return (run.stdout + run.stderr).includes(check.expect)
 }
 
+/** The run's folder under `<profile>/projects/`, or null for a run with no profile. Named exactly as Claude Code names
+ *  it (every character but a letter or digit made '-'), never by a pattern, so nothing else in the person's profile is
+ *  touched. */
+export function runProfileFolder(st: Pick<Staged, 'repo' | 'env'>): string | null {
+  const profile = st.env.CLAUDE_CONFIG_DIR
+  return profile ? join(profile, 'projects', st.repo.replace(/[^a-zA-Z0-9]/g, '-')) : null
+}
+
 export function unstage(st: Staged): void {
   try {
     rmSync(st.root, { recursive: true, force: true })
   } finally {
-    // In the person's profile, so it goes even when the run root does not.
-    const profile = st.env.CLAUDE_CONFIG_DIR
-    // `claude -p` makes <profile>/projects/<repo>/memory/ even with no session saved. The run's own folder goes with it,
-    // named exactly as Claude Code names it (every character but a letter or digit made '-'), never by a pattern, so
-    // nothing else in the person's profile is touched.
-    if (profile) rmSync(join(profile, 'projects', st.repo.replace(/[^a-zA-Z0-9]/g, '-')), { recursive: true, force: true })
+    // In the person's profile, so it goes even when the run root does not. `claude -p` makes
+    // <profile>/projects/<repo>/memory/ even with no session saved.
+    const folder = runProfileFolder(st)
+    if (folder) rmSync(folder, { recursive: true, force: true })
   }
 }
 
