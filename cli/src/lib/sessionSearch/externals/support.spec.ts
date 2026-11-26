@@ -288,6 +288,25 @@ describe('processes', () => {
     expect(await view.openFilesOf(['codex'])).toEqual(new Map([[421, []]]))
   })
 
+  it('on Windows a Codex process harness-pty left out while it runs is unknown, never nothing open; one that exited holds nothing', async () => {
+    const unknown = { ok: false, detail: "The conversation's process files could not be verified." }
+    // 430 is not read: elevated, another user's, or past a bound. It may hold the rollout an adoption asks about.
+    const files = vi.fn<WindowsFilesRead>(async () => new Map([[421, { startMarker: 'w:4', files: [] }]]))
+    const unread = processView(windowsExec().exec, () => true, async () => windowsTable(), undefined, 'win32', files)
+    expect(await externalEvidence(() => unread.openFilesOf(['codex']))).toEqual(unknown)
+    // What was read is still answered for the list.
+    expect(await unread.openFilesOf(['codex'])).toEqual(new Map([[421, []]]))
+    const exited = processView(windowsExec().exec, (pid) => pid !== 430, async () => windowsTable(), undefined, 'win32', files)
+    expect(await externalEvidence(() => exited.openFilesOf(['codex']))).toEqual({ ok: true, value: new Map([[421, []]]) })
+    // A pid reused between the reads: the table's process is gone, so it holds nothing.
+    const reused = vi.fn<WindowsFilesRead>(async () => new Map([
+      [421, { startMarker: 'w:4', files: [] }],
+      [430, { startMarker: 'w:9', files: [ROLLOUT] }],
+    ]))
+    const view = processView(windowsExec().exec, () => true, async () => windowsTable(), undefined, 'win32', reused)
+    expect(await externalEvidence(() => view.openFilesOf(['codex']))).toEqual({ ok: true, value: new Map([[421, []]]) })
+  })
+
   it('on Windows spawns nothing with no Codex running, and past 32 Codex processes or a failed read says unknown, never nothing open', async () => {
     const unknown = { ok: false, detail: "The conversation's process files could not be verified." }
     const none = vi.fn<WindowsFilesRead>(async () => new Map())
