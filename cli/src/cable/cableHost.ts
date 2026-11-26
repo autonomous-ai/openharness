@@ -874,9 +874,10 @@ export class DaemonCableHost implements CableHost {
   }
 
   /** The opener is about to bring an app forward for a pick, a rest or a tap: the next front report is the dial's, so
-   *  the app it brings from tmux's or herdr's page keeps that page at its settle (spec §6). */
+   *  the app it brings from tmux's or herdr's page keeps that page at its settle (spec §6). A dial on the window's tab
+   *  shows no page to keep: there the app it brings settles as the person's would, and turns the view to its ring. */
   dialBrings(): void {
-    this.filter.dialBrings()
+    if (this.swarms === null || this.view === 'apps') this.filter.dialBrings()
   }
 
   /** The app that settled in front, with or without a window. Not the shown app: the person may have picked another. */
