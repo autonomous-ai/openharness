@@ -208,8 +208,10 @@ export function createDialCodexPluginSetup(deps: DialCodexPluginSetupDeps): Dial
   async function setUp(home: string, run: ClaudeRun, files: ClaudePluginFiles): Promise<Next> {
     const install = { run, home, platform: deps.platform, folder: deps.plugin.folder, files }
     const done = Object.hasOwn(deps.recorded(), home) ? await codexUpdate(install) : await codexSetUp(install)
-    if (!done.ok) return stepFailed(home, done)
-    if (done.outcome === 'own') {
+    // A step that failed after the add left the plugin in the home: it is recorded or undone as one set up, so the add
+    // does not run again each hour, and `disable` finds it.
+    if (!done.ok && !done.added) return stepFailed(home, done)
+    if (done.ok && done.outcome === 'own') {
       skipOwn(home)
       return 'go'
     }
@@ -217,16 +219,18 @@ export function createDialCodexPluginSetup(deps: DialCodexPluginSetupDeps): Dial
     // now, and nothing recorded. One not known is neither: a moment's read error never removes a plugin the person keeps.
     // Either ends the pass, as the next home would be set up for a dial no longer known to want it.
     const still = deps.wanted()
-    if (still === false && done.outcome !== 'absent') await undo(home, run)
+    if (still === false && (!done.ok || done.outcome !== 'absent')) await undo(home, run)
     if (still !== true) return 'end'
     if (!deps.record(home, deps.version)) {
       failed(home, 'record')
       return 'go'
     }
+    // Stats taken now could hold a change made since the install wrote: the re-check checks it as it is, after its hour
+    // for a step that failed.
+    stamps.delete(home)
+    if (!done.ok) return stepFailed(home, done)
     deps.count(COUNTED[done.outcome])
     if (done.outcome !== 'absent') trusted(home, done.trusted)
-    // Stats taken now could hold a change made since the install wrote: the re-check that follows checks it as it is.
-    stamps.delete(home)
     return 'go'
   }
 

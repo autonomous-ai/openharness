@@ -25,10 +25,11 @@ const MIN = parseVersion(MIN_CODEX)!
 
 /** Which step failed: a fixed word the devices count, where Codex's own line could name a path. */
 export type CodexStep = 'unsupported' | 'launcher' | 'config' | 'folder' | 'marketplace' | 'install' | 'trust' | 'remove'
-export type CodexFailure = { ok: false; step: CodexStep; error: string; reason?: string }
+/** [added]: the step failed after `plugin add` succeeded, so the home holds the plugin all the same. */
+export type CodexFailure = { ok: false; step: CodexStep; error: string; reason?: string; added?: true }
 /** What a setup did: installed or updated the plugin, [trusted] when its records were written; found it absent, as the
  *  person left it; or found the home's marketplace the person's own, and did nothing. */
-export type CodexSetup = { ok: true; outcome: 'installed' | 'updated' | 'absent' | 'own'; trusted: boolean } | CodexFailure
+export type CodexSetup = { ok: true; outcome: 'installed' | 'updated' | 'absent'; trusted: boolean } | { ok: true; outcome: 'own'; trusted: false } | CodexFailure
 export type CodexResult = { ok: true } | CodexFailure
 
 export interface CodexPluginDeps { run: ClaudeRun | null; home: string; platform: NodeJS.Platform }
@@ -192,13 +193,13 @@ async function bringCurrent(deps: CodexInstallDeps, update: boolean): Promise<Co
   if (added.code !== 0) return failure(added, 'install')
   const root = installedRoot(deps.home)
   const at = installedAt(added.stdout, root)
-  if (at !== true) return { ok: false, step: 'install', error: INSTALL_ERROR, reason: at || 'path' }
+  if (at !== true) return { ok: false, step: 'install', error: INSTALL_ERROR, reason: at || 'path', added: true }
   const outcome = update ? 'updated' : 'installed'
   const trust = writePluginTrust(deps.home, root, carriedCodexHash(deps.files, deps.platform))
   if (trust.ok) return { ok: true, outcome, trusted: true }
   // A copy that is not the carried one is left for Codex to ask the person about.
   if (trust.kind === 'differs') return { ok: true, outcome, trusted: false }
-  return { ok: false, step: 'trust', error: TRUST_ERROR, reason: trust.kind }
+  return { ok: false, step: 'trust', error: TRUST_ERROR, reason: trust.kind, added: true }
 }
 
 export function codexSetUp(deps: CodexInstallDeps): Promise<CodexSetup> {
