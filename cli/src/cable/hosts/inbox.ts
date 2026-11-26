@@ -1,8 +1,9 @@
 /** The core waits 27 s, so a hold that runs out is answered here, as an empty hold the mod follows at once. */
 const HOLD_MS = 25_000
-/** The mod opens its next poll at once after one closes, within milliseconds (harness-device's poll loop); this long
- *  after, it is not coming soon, and words for it would wait their 5 s for nothing. */
-const READY_MS = 2_000
+/** The mod opens its next poll at once after one closes: within milliseconds on the socket, and on Windows once a minute
+ *  only after its follower read the process table, up to 3 s (deviceClaude/inbox.ts). This long after, it is not coming
+ *  soon, and words for it would wait their 5 s for nothing. */
+const READY_MS = 5_000
 /** A transcript waits this long for the mod's next poll, then the dial says the agent is not listening yet. */
 const WAIT_MS = 5_000
 /** Sessions whose last poll closed recently; past this many the oldest goes. */
@@ -136,7 +137,7 @@ export class Inbox {
     return this.closed.has(sessionId)
   }
 
-  /** From the oldest: each closed 2 s ago or more, and any past the 256 kept. */
+  /** From the oldest: each closed 5 s ago or more, and any past the 256 kept. */
   private drop(): void {
     const now = this.deps.now()
     for (const [sessionId, at] of this.closed) {

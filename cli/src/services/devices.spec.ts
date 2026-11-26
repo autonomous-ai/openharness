@@ -11723,7 +11723,7 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
     it('words its own path takes while it still waits never go ahead of the first: refused, though its last run left its mod ready', async () => {
       const { port, live } = withStore()
       await live()
-      // Its last run: its mod polled, then the app ended it. The inbox counts its mod ready for 2 s after that poll.
+      // Its last run: its mod polled, then the app ended it. The inbox counts its mod ready for 5 s after that poll.
       port.observed(hook('session-start'))
       const last = poll(port, 'p0', SESSION)
       port.observed(hook('session-end'))
