@@ -8,17 +8,24 @@
  * The dial skill's use rides the same report (docs/plans/2026-11-26-dial-skill-usage-design.md): an outside Claude Code
  * session runs the real `harness device notify`, the dial shows it, and the person's prompt right after answers it; the
  * attach's setup pass wrote the skill, which the devices then find.
+ *
+ * With the person there the notice is held quiet (docs/plans/2026-11-26-needs-you-right-design.md, Part 2): the person
+ * just prompted the session, its app is in front and the dial shows it, so its turn end is silent and its notice is a
+ * drawer row with no question frame, counted as held quiet and opening no wait. A second session, the same but for
+ * another app in front, rings: a second notice of the first session within its minute would be limited, and waiting the
+ * minute out is a fixed sleep.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
+import { tellDevices } from '../src/devices/listenerClient.js'
 import { DIAL_USAGE_FILE } from '../src/lib/dialUsageContract.js'
 import { LocalClient } from './harness/client.js'
 import { IsolatedDaemon, sourcesCli, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import { FakeBackend } from './harness/fakeBackend.js'
-import type { FakeDial } from './harness/fakeDial.js'
+import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 import { Outside } from './harness/outsideAgent.js'
 
 const SERIAL = 'E2E-A'
@@ -37,7 +44,7 @@ const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : 
 describe('the dial\'s usage counts', () => {
   let backend: FakeBackend, d: IsolatedDaemon, desk: Desk, window: LocalClient | undefined
   let agentId = '', cwd = ''
-  let outside: Outside | undefined
+  const outsides: Outside[] = []
   const children: ChildProcess[] = []
   beforeAll(async () => {
     backend = await FakeBackend.start()
@@ -56,7 +63,7 @@ describe('the dial\'s usage counts', () => {
   }, 120_000)
   afterAll(async () => {
     for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
-    await outside?.close()
+    for (const session of outsides) await session.close()
     window?.close(); await desk?.close(); await d?.close(); await backend?.close()
   })
   const showLog = (): void => onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-200).join('\n')}`) })
@@ -126,25 +133,81 @@ describe('the dial\'s usage counts', () => {
     window.close()
     window = undefined
 
-    // An outside session rings with the real command, the dial shows it, and the person prompts it in its own app: its
-    // UserPromptSubmit hook, the one source that answers a notice.
-    const engine = await Outside.start(d, 'PRIVATE_NOTICE_CANARY', { TERM_PROGRAM: 'ghostty' })
-    outside = engine
-    await dial.next((m) => m.t === 'agent' && m.id === engine.id, 45_000, 'the outside session listed')
-    expect(await notify({ CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: engine.sessionId }, join(d.projectsDir, engine.folder),
+    // Two outside sessions in Ghostty, each prompted by the person in its own app: its UserPromptSubmit hook, the one
+    // source that answers a notice and that says the person is there.
+    const there = await Outside.start(d, 'PRIVATE_NOTICE_CANARY', { TERM_PROGRAM: 'ghostty' })
+    outsides.push(there)
+    const away = await Outside.start(d, 'PRIVATE_AWAY_CANARY', { TERM_PROGRAM: 'ghostty' })
+    outsides.push(away)
+    await dial.next((m) => m.t === 'agent' && m.id === there.id, 45_000, 'the first outside session listed')
+    await dial.next((m) => m.t === 'agent' && m.id === away.id, 45_000, 'the second outside session listed')
+    const caller = (session: Outside): Record<string, string> => ({ CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: session.sessionId })
+    /** The app in front, as `harness hardware watch` tells the devices' listener; the dial turned to [session], and the
+     *  list it asks after as the barrier: the turn is taken once the list's end comes back. */
+    const withFront = async (app: string, session: Outside): Promise<void> => {
+      expect(await tellDevices(d.dataDir, { type: 'front', app })).toBe(true)
+      dial.send({ t: 'focus', agentId: session.id })
+      const since = dial.messages.length
+      dial.send({ t: 'agents.list' })
+      await dial.next((m) => m.t === 'agents.end', 45_000, 'the list after the turn', since)
+    }
+    /** The person types [text] to [session] and its turn runs to its end: the summary the dial got for it. */
+    const turn = async (session: Outside, text: string, stops: number): Promise<DialMessage> => {
+      const started = dial.messages.length
+      session.type(text)
+      await dial.next((m) => m.t === 'turn.started' && m.agentId === session.id, 45_000, 'its turn started', started)
+      await until('its Stop hook', () => session.ran(d, 'Stop', stops) || null, 60_000, 100)
+      await session.idle(d)
+      return dial.next((m) => m.t === 'summary' && m.agentId === session.id, 60_000, 'its answer', started)
+    }
+    const items = (m: DialMessage) => (m.items ?? []) as Array<Record<string, unknown>>
+
+    // The person there: the turn end draws the tile alone, and the notice is a drawer row, never asked.
+    await withFront('ghostty', there)
+    expect(await turn(there, 'first', 1)).toMatchObject({ tier: 'silent' })
+    await until('the silent end in the daemon\'s log', () => d.log().includes('[cable] notify · silent · rule:present · present · 0ms'), 30_000, 50)
+    const quiet = dial.messages.length
+    const line = 'Waiting · PRIVATE_LINE_CANARY needs the VPN · Suggest: connect it'
+    expect(await notify(caller(there), join(d.projectsDir, there.folder),
       ['PRIVATE_LINE_CANARY needs the VPN', '--suggest', 'connect it', '--waiting'])).toMatchObject({ code: 0, out: 'shown' })
-    engine.type('connected')
+    const drawer = await dial.next((m) => m.t === 'notif.replace' && items(m).some((item) => item.agentId === there.id), 45_000, 'the row', quiet)
+    expect(items(drawer).find((item) => item.agentId === there.id)).toMatchObject({ question: true, summary: line })
+    // The hold goes in its agent's order, a turn of the loop behind the drawer replace: the list asked first is the
+    // barrier before the row is opened.
+    let since = dial.messages.length
+    dial.send({ t: 'agents.list' })
+    await dial.next((m) => m.t === 'agents.end', 45_000, 'the list', since)
+    since = dial.messages.length
+    dial.send({ t: 'question.read', agentId: there.id, requestId: 'read-quiet' })
+    expect(await dial.next((m) => m.t === 'question.state' && m.requestId === 'read-quiet', 45_000, 'the row read', since))
+      .toMatchObject({ ok: true, questions: [{ key: 'notice', q: line, options: ['In Ghostty'] }] })
+    expect(dial.messages.slice(quiet).filter((m) => m.t === 'question' && m.agentId === there.id)).toEqual([])
+    await until('the quiet notice in the daemon\'s log', () => d.log().includes('[device] notify · claude · shown · waiting · present'), 30_000, 50)
+    await turn(there, 'connected', 2)
+
+    // Another app in front: the same notice rings.
+    await withFront('kitty', away)
+    await turn(away, 'first', 1)
+    const rung = dial.messages.length
+    expect(await notify(caller(away), join(d.projectsDir, away.folder), ['PRIVATE_RING_CANARY needs a key', '--waiting']))
+      .toMatchObject({ code: 0, out: 'shown' })
+    expect(await dial.next((m) => m.t === 'question' && m.agentId === away.id, 45_000, 'the ring', rung))
+      .toMatchObject({ id: expect.stringMatching(/^shown:/) })
+    away.type('connected')
 
     // Claude Code's skill is written because the case's Harness Claude agent is listed (cable/dialHomeSetup.ts).
     const skill = { dial_notice_installation_days: 1, dial_notice_claude_installation_days: 1,
-      dial_skill_claude_installation_days: 1, dial_skill_codex_installation_days: 1, dial_notice_claude: 1,
-      dial_notice_shown: 1, dial_notice_waiting: 1, dial_notice_answered_10m: 1 }
+      dial_skill_claude_installation_days: 1, dial_skill_codex_installation_days: 1, dial_notice_claude: 2,
+      dial_notice_shown: 2, dial_notice_waiting: 2, dial_notice_answered_10m: 2, dial_notice_present: 1,
+      dial_notice_present_answered_10m: 1 }
     const expected = { dial_connected_installation_days: 1, dial_used_installation_days: 1,
       dial_engine_claude_installation_days: 1, dial_host_harness_installation_days: 1, dial_open_ok: 1, ...skill }
     await until('the devices to write the day', () => {
       if (!existsSync(usageFile())) return null
       const counts = (JSON.parse(readFileSync(usageFile(), 'utf8')) as { days: Record<string, Record<string, number>> }).days[day] ?? {}
-      return Object.entries(expected).every(([metric, value]) => counts[metric] === value) || null
+      // One wait, the rung notice's: the quiet one opened none.
+      const waits = Object.entries(counts).filter(([metric]) => metric.startsWith('dial_wait_')).reduce((n, [, value]) => n + value, 0)
+      return (Object.entries(expected).every(([metric, value]) => counts[metric] === value) && waits === 1) || null
     }, 30_000, 500)
     // The gateway's tick took the day into its queue, which the restart keeps.
     await until('the gateway to take the day', () => taken(day).dial_open_ok === 1 || null, TAKEN_MS, 1_000)
@@ -161,12 +224,13 @@ describe('the dial\'s usage counts', () => {
     // The second tap is the restart's own news: once it is reported, the restarted gateway has sent the day.
     await until('the restart\'s tap reported', () => sum('dial_open_ok', day) === 2 || null, REPORTED_MS, 1_000)
     for (const metric of ['dial_connected_installation_days', 'dial_used_installation_days', 'dial_first_use_installations',
-      'dial_engine_claude_installation_days', 'dial_host_harness_installation_days', ...Object.keys(skill)]) expect(sum(metric, day), metric).toBe(1)
+      'dial_engine_claude_installation_days', 'dial_host_harness_installation_days']) expect(sum(metric, day), metric).toBe(1)
+    for (const [metric, value] of Object.entries(skill)) expect(sum(metric, day), metric).toBe(value)
 
     const wire = JSON.stringify(backend.productUsage!.reports)
     const file = readFileSync(usageFile(), 'utf8')
     for (const secret of ['PRIVATE_', cwd, agentId, SERIAL, MAC, machine.name, machine.machineId, machine.computerId, machine.token,
-      engine.sessionId]) {
+      there.sessionId, away.sessionId]) {
       expect(wire).not.toContain(secret)
       expect(file).not.toContain(secret)
     }
