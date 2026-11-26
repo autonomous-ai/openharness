@@ -28,11 +28,13 @@
 //   - before any case, one listing probe per condition a claude case runs in
 //     (lib/probe.ts, rows in probes.jsonl); a failed probe refuses the pass
 //   - a probe or case starts only while all the flow has spent, a reserve for it
-//     and one for each case in flight fit under --spend-cap-usd (lib/spend.ts);
-//     a worker whose case does not fit beside those in flight stops; once one
-//     does not fit alone, the pass starts nothing more and exits 4; a retry of a failed run starts
-//     only while its case would, its failed attempts already added, and every
-//     attempt ends within the agent's share of --timeout-s
+//     and one for each case in flight fit under --spend-cap-usd, at most the
+//     design's $250 (lib/spend.ts); a worker whose case does not fit beside
+//     those in flight stops; once one does not fit alone, the pass starts
+//     nothing more and exits 4
+//   - a failed run's spend is added as it happens, its retry starts only while
+//     its case would, and every attempt ends within the agent's share of
+//     --timeout-s, so no case ends while its agent still spends
 //   - a claude run whose init differs from its probe's is kept as unlisted; the
 //     pass then starts no new case, lets those in flight finish, and exits 5
 //   - a variant's hooks.json and harness-answers.json are staged only when
@@ -757,7 +759,7 @@ async function main() {
       let counted = 0; // dial skill eval: the dollars of this case the guard already holds
       const appRetry = { count: 0 }, judgeRetry = { count: 0 };
       try {
-        // One ceiling over the whole case - app call, identity check, and grading -
+        // One ceiling over the whole case - app call, identity check, and grading - 
         // so a hung judge stream can't hold the slot either.
         const { run, g, latency_s } = await withTimeout((async () => {
           let tAttempt = t0;
