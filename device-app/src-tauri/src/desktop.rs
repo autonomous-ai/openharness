@@ -40,14 +40,15 @@ impl DesktopApp for SystemDesktopApp {
         system.refresh_processes_specifics(
             ProcessesToUpdate::All,
             true,
-            ProcessRefreshKind::nothing().with_exe(UpdateKind::Always),
+            ProcessRefreshKind::nothing().with_exe(UpdateKind::Always).with_user(UpdateKind::Always),
         );
-        let executables = system
+        // The process table holds every user's processes: our own user (uid on Linux, SID on Windows) picks ours.
+        let own = sysinfo::get_current_pid().ok().and_then(|pid| system.process(pid)).and_then(|own| own.user_id());
+        let processes = system
             .processes()
             .values()
-            .filter_map(|process| process.exe())
-            .map(|exe| exe.to_string_lossy().into_owned());
-        running_among(std::env::consts::OS, executables)
+            .filter_map(|process| Some((process.exe()?.to_string_lossy().into_owned(), process.user_id())));
+        running_among(std::env::consts::OS, own, processes)
     }
 }
 
@@ -152,12 +153,24 @@ pub fn process_names(os: &str) -> &'static [&'static str] {
     }
 }
 
-/// Whether one of these executables is the desktop app: its file name, whole.
-pub fn running_among(os: &str, mut executables: impl Iterator<Item = String>) -> bool {
+/// Whether one of these executables, each with its user, is the desktop app of our own user: its file name, whole.
+/// Another person's desktop app on the same machine is not ours. A user that cannot be read (Windows hides another
+/// person's) is never taken for ours, and when ours cannot be read nothing counts, so the daemon starts.
+pub fn running_among<T: PartialEq>(
+    os: &str,
+    own: Option<T>,
+    mut processes: impl Iterator<Item = (String, Option<T>)>,
+) -> bool {
+    let Some(own) = own else {
+        return false;
+    };
     let names = process_names(os);
     // Windows paths may use either separator, and its file names ignore case.
     let windows = os == "windows";
-    executables.any(|exe| {
+    processes.any(|(exe, user)| {
+        if user.as_ref() != Some(&own) {
+            return false;
+        }
         let file = if windows { exe.rsplit(['/', '\\']).next() } else { exe.rsplit('/').next() }.unwrap_or_default();
         names.iter().any(|name| if windows { name.eq_ignore_ascii_case(file) } else { *name == file })
     })
