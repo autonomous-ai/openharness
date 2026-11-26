@@ -21,18 +21,24 @@ afterEach(() => {
   for (const dir of profiles.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
+/** A throwaway profile with the stand-in claude.exe in its .local\bin, and this process pointed at it. */
+function profileWithClaude(): { profile: string; exe: string } {
+  const profile = realpathSync(mkdtempSync(join(tmpdir(), 'harness-profile-')))
+  profiles.push(profile)
+  const exe = join(profile, '.local', 'bin', 'claude.exe')
+  mkdirSync(dirname(exe), { recursive: true })
+  copyFileSync(process.execPath, exe)
+  vi.stubEnv('USERPROFILE', profile)
+  vi.stubEnv('HOME', profile)
+  vi.stubEnv('LOCALAPPDATA', join(profile, 'AppData', 'Local'))
+  // System32 alone: Windows' own programs, and no claude.
+  vi.stubEnv('PATH', join(process.env.SystemRoot ?? 'C:\\Windows', 'System32'))
+  return { profile, exe }
+}
+
 describe.runIf(process.platform === 'win32')('Claude Code on Windows', () => {
   it('finds claude.exe in the profile\'s .local\\bin, off PATH', async () => {
-    const profile = realpathSync(mkdtempSync(join(tmpdir(), 'harness-profile-')))
-    profiles.push(profile)
-    const exe = join(profile, '.local', 'bin', 'claude.exe')
-    mkdirSync(dirname(exe), { recursive: true })
-    copyFileSync(process.execPath, exe)
-    vi.stubEnv('USERPROFILE', profile)
-    vi.stubEnv('HOME', profile)
-    vi.stubEnv('LOCALAPPDATA', join(profile, 'AppData', 'Local'))
-    // System32 alone: Windows' own programs, and no claude.
-    vi.stubEnv('PATH', join(process.env.SystemRoot ?? 'C:\\Windows', 'System32'))
+    const { profile, exe } = profileWithClaude()
     const started = vi.spyOn(childProcess, 'execFile')
 
     const runs = [await claudeFound(join(profile, '.claude'), false), await claudeFound(join(profile, '.claude'), true), claudeRun()]
@@ -45,5 +51,14 @@ describe.runIf(process.platform === 'win32')('Claude Code on Windows', () => {
     }
     // Every process started was that claude.exe: no shell, for the lookup or a run.
     expect(started.mock.calls.map(([file]) => realpathSync(String(file)))).toEqual(runs.map(() => realpathSync(exe)))
+  })
+
+  // Claude Code takes a local marketplace only by a path starting `./`, which `C:\...` does not: the add runs in the
+  // folder's parent.
+  it('a call given a folder runs in it', async () => {
+    const { profile } = profileWithClaude()
+    const { code, stdout } = await claudeRun()!(['-e', 'process.stdout.write(process.cwd())'], 15_000, profile)
+    expect(code).toBe(0)
+    expect(stdout).toBe(profile)
   })
 })

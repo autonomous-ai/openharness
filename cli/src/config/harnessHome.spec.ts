@@ -26,6 +26,7 @@ const TABLE: Record<string, 'data' | 'state'> = {
   'grid-fleet': 'data',
   community: 'data',
   'orca-plugin': 'data',
+  'claude-marketplace': 'data',
   memory: 'data',
   logs: 'state',
   runtime: 'state',
