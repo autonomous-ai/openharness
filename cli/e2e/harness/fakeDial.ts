@@ -40,6 +40,13 @@ function roundFirmwareVersion(): string {
   return version
 }
 
+/** The rows a `settings.set` changes on the round firmware, and their type. It takes `character` and `straightTitle`
+ *  and drops them (ui_settings_apply: Focus is its only face, drawn straight across), and never takes `face` or `round`,
+ *  its glass. Voice language is held in 8 bytes, its end included (CFG_VLANG_MAX). */
+const KEPT_SETTINGS: Record<string, 'boolean' | 'number' | 'string'> = {
+  brightness: 'number', muted: 'boolean', quiet: 'boolean', focusFace: 'boolean', scrollReversed: 'boolean', voiceLang: 'string',
+}
+
 export interface FakeDialOptions {
   /** What it calls itself in its greeting; two dials on one desk differ by it. */
   mac?: string
@@ -100,13 +107,15 @@ export class FakeDial {
     })
   }
 
-  /** As the firmware: only the fields it holds, only with a value of their type, brightness clamped, then the values
-   *  it now holds read back. */
+  /** As the firmware: only the rows it changes and holds, only with a value of their type, brightness clamped to a
+   *  whole number, Voice language cut to 7 bytes, then the values it now holds read back. */
   private keep(message: DialMessage): void {
     const settings = this.settings!
-    for (const [key, value] of Object.entries(message)) {
-      if (key === 't' || !(key in settings) || typeof value !== typeof settings[key]) continue
-      settings[key] = key === 'brightness' ? Math.min(100, Math.max(0, value as number)) : value
+    for (const [key, type] of Object.entries(KEPT_SETTINGS)) {
+      const value = message[key]
+      if (!(key in settings) || typeof value !== type) continue
+      settings[key] = key === 'brightness' ? Math.trunc(Math.min(100, Math.max(0, value as number)))
+        : key === 'voiceLang' ? (value as string).slice(0, 7) : value
     }
     this.send({ t: 'settings.state', ok: true, settings: { ...settings } })
   }
