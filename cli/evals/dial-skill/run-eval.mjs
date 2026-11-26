@@ -813,15 +813,18 @@ async function main() {
           const g = await withBackoff(() => gradeCase(c, run, ref, ctx), judgeRetry, deadline);
           return { run, g, latency_s };
         })(), args.timeoutS, `${c.id} rep${rep}`);
+        // dial skill eval: Claude Code may update itself mid-pass, so a claude row names the version its own run started
+        // with; a stand-in's keeps the pass's.
+        const meta = run.init?.claude_version ? { ...c.meta, claude_version: run.init.claude_version } : c.meta;
         const row = {
           prompt_id: safeId, rep, prompt: c.prompt ?? c.input ?? c.id,
           tags: c.tags, attachments: c.attachments,
           meta: safeId !== String(c.id) || appRetry.count || judgeRetry.count
-            ? { ...(c.meta ?? {}),
+            ? { ...(meta ?? {}),
                 ...(safeId !== String(c.id) ? { original_id: String(c.id) } : {}),
                 ...(appRetry.count ? { retries: appRetry.count } : {}),
                 ...(judgeRetry.count ? { judge_retries: judgeRetry.count } : {}) }
-            : c.meta,
+            : meta,
           model: run.model, usage: run.usage, stop_reason: run.stop_reason,
           // The report keys on `status`, not stop_reason: a clipped answer is
           // counted and shown but kept out of the means. runCase may set
