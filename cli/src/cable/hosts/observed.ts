@@ -437,7 +437,8 @@ export class ObservedSource implements HostSource {
    * Orca terminal), only at its prompt. A queue whose codex failed, for a session with no such pane, says what helps: a
    * session in the ChatGPT app is told `Update ChatGPT, then try again.` (an older app's codex has no queue), another
    * `Codex could not take it. Try again.`; "did not answer" names nothing a person can do
-   * (docs/plans/2026-11-18-dial-chatgpt-pick-and-voice-design.md, cause 2).
+   * (docs/plans/2026-11-18-dial-chatgpt-pick-and-voice-design.md, cause 2). Words its mod did not ask for in 5 s, for a
+   * session with no such pane, are told `<name> is not listening yet. Try again in a moment.`
    */
   async send(agent: HostAgent, text: string): Promise<SendResult> {
     const e = this.entries.get(agent.id)
@@ -485,6 +486,8 @@ export class ObservedSource implements HostSource {
       }
       // One before it still waits for the mod's next poll: typed into Orca now, this one would land before it.
       if (delivery === 'busy') return refuse('pending', `${name} has not taken your last words yet.`)
+      // Its mod did not ask in 5 s, and no terminal takes them: a mod asks again within moments of a poll closing.
+      if (!typer) return refuse('no-answer', `${name} is not listening yet. Try again in a moment.`)
     }
     // In that wait the session may also have ended, moved to another terminal or gone: the old one holds something else.
     // Each event names its panes afresh, so the same pane is known by its adapter and id.

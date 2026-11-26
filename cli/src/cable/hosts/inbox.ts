@@ -3,7 +3,7 @@ const HOLD_MS = 25_000
 /** The mod opens its next poll at once after one closes, within milliseconds (harness-device's poll loop); this long
  *  after, it is not coming soon, and words for it would wait their 5 s for nothing. */
 const READY_MS = 2_000
-/** A transcript waits this long for the mod's next poll, then the dial says the agent did not answer. */
+/** A transcript waits this long for the mod's next poll, then the dial says the agent is not listening yet. */
 const WAIT_MS = 5_000
 /** Sessions whose last poll closed recently; past this many the oldest goes. */
 const MAX_CLOSED = 256
