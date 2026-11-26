@@ -28,6 +28,21 @@ const SHELLS = ['/bin/sh', '/bin/bash', '/bin/zsh', '/bin/dash'].filter((shell) 
 type Hook = { type: string; command: string; args?: string[]; onFailure?: string; timeout?: number }
 const permissionHook = (root = pluginRoot): Hook =>
   (json(root, 'hooks', 'hooks.json') as { hooks: { PermissionRequest: { hooks: Hook[] }[] } }).hooks.PermissionRequest[0].hooks[0]
+// Codex's PermissionRequest input, as Codex 0.172.0 writes it.
+const CODEX_INPUT = JSON.stringify({
+  session_id: 's-1',
+  turn_id: 't-1',
+  transcript_path: '/home/person/.codex/sessions/2026/11/26/rollout-s-1.jsonl',
+  cwd: '/home/person/work',
+  hook_event_name: 'PermissionRequest',
+  model: 'gpt-5.5',
+  permission_mode: 'default',
+  tool_name: 'Bash',
+  tool_input: { command: 'ls' },
+})
+type HookBlock = { matcher: string; hooks: Hook[] }
+const codexHooks = (root = pluginRoot) => (json(root, 'hooks', 'codex.json') as { hooks: Record<string, HookBlock[]> }).hooks
+const codexHook = (root = pluginRoot): Hook => codexHooks(root).PermissionRequest[0].hooks[0]
 // What PowerShell runs of the command: what follows the end of the block comment that hides the sh line from it.
 const windowsForm = (command: string): string => command.slice(command.indexOf('#>') + 2)
 
@@ -49,6 +64,13 @@ function fakeLauncher(path: string, record: string, out = '', code = 0): void {
   mkdirSync(join(path, '..'), { recursive: true })
   writeFileSync(path, `#!/bin/sh\nprintf '%s\\n' "$@" > '${record}.argv'\ncat > '${record}.stdin'\nprintf '%s' '${out}'\nexit ${code}\n`)
   chmodSync(path, 0o755)
+}
+
+/** Runs the Codex hook's command as Codex does off Windows: through `shell`, with PLUGIN_ROOT in its environment. */
+function runCodexHook(shell: string, root: string, home: string) {
+  return spawnSync(shell, ['-c', codexHook(root).command], {
+    input: CODEX_INPUT, env: { HOME: home, PATH: '/usr/bin:/bin', PLUGIN_ROOT: root }, encoding: 'utf8',
+  })
 }
 
 function runHook(home: string, path: string, env: NodeJS.ProcessEnv = {}) {
@@ -211,6 +233,79 @@ describe('the harness-device plugin', () => {
     expect(result).toMatchObject({ status: 0, stdout: '', stderr: '' })
   })
 
+  // Codex reads .codex-plugin/ before .claude-plugin/, and a manifest's hooks path in place of hooks/hooks.json, so
+  // Claude Code's hooks and mod stay Claude Code's. With no version, Codex installs the plugin as `local`.
+  it('the Codex manifest is named harness-device, names hooks/codex.json, has no version, and promises no answer', () => {
+    const manifest = json(pluginRoot, '.codex-plugin', 'plugin.json')
+    expect(manifest.name).toBe('harness-device')
+    expect(manifest.hooks).toBe('./hooks/codex.json')
+    expect(manifest).not.toHaveProperty('version')
+    expect(manifest.description).toMatch(/waiting/i)
+    expect(manifest.description).not.toMatch(/allow|deny|approv|answers/i)
+  })
+
+  it('hooks/codex.json holds one PermissionRequest hook for every tool and one PreToolUse hook for request_user_input, the same command, 5 s, onFailure continue, and no mod', () => {
+    expect(json(pluginRoot, 'hooks', 'codex.json')).not.toHaveProperty('modules')
+    const hooks = codexHooks()
+    expect(Object.keys(hooks)).toEqual(['PermissionRequest', 'PreToolUse'])
+    expect(hooks.PermissionRequest.map((block) => block.matcher)).toEqual(['*'])
+    expect(hooks.PreToolUse.map((block) => block.matcher)).toEqual(['request_user_input'])
+    const command = codexHook().command
+    for (const event of ['PermissionRequest', 'PreToolUse']) {
+      expect(hooks[event][0].hooks, event).toEqual([{ type: 'command', command, onFailure: 'continue', timeout: 5 }])
+    }
+  })
+
+  // Codex runs the command through a shell with PLUGIN_ROOT in its environment: the shell expands it, so no character
+  // of the folder's name can break the line.
+  posix.each(SHELLS)('the Codex hook runs hooks/codex-asked under %s, from a folder named with a space, a quote and a dollar sign', (shell) => {
+    const root = join(tempDir(), 'Harness "Device" $x')
+    cpSync(pluginRoot, root, { recursive: true })
+    const home = tempDir()
+    const record = join(home, 'rec')
+    fakeLauncher(join(home, '.local', 'bin', 'harness'), record, ALLOW, 2)
+    const result = runCodexHook(shell, root, home)
+    expect(readFileSync(`${record}.argv`, 'utf8')).toBe('device\ncodex\nasked\n')
+    expect(readFileSync(`${record}.stdin`, 'utf8')).toBe(CODEX_INPUT)
+    expect(result).toMatchObject({ status: 0, stdout: '', stderr: '' })
+  })
+
+  // An older CLI under the installed plugin has no `device codex`: it prints its usage and exits 1.
+  posix('the Codex hook drops a launcher that prints its usage on stderr and exits 1 (an older CLI)', () => {
+    const home = tempDir()
+    const launcher = join(home, '.local', 'bin', 'harness')
+    mkdirSync(join(launcher, '..'), { recursive: true })
+    writeFileSync(launcher, '#!/bin/sh\ncat >/dev/null\necho "usage: harness device claude <command>" >&2\nexit 1\n')
+    chmodSync(launcher, 0o755)
+    expect(runCodexHook('/bin/sh', pluginRoot, home)).toMatchObject({ status: 0, stdout: '', stderr: '' })
+  })
+
+  posix('with no launcher, the Codex hook prints nothing and exits 0', () => {
+    expect(runCodexHook('/bin/sh', pluginRoot, tempDir())).toMatchObject({ status: 0, stdout: '', stderr: '' })
+  })
+
+  posix('hooks/codex-asked is executable and starts with #!/bin/sh', () => {
+    const hook = join(pluginRoot, 'hooks', 'codex-asked')
+    expect(statSync(hook).mode & 0o111).toBe(0o111)
+    expect(readFileSync(hook, 'utf8').startsWith('#!/bin/sh\n')).toBe(true)
+  })
+
+  // Codex runs the command in Windows PowerShell on Windows. Codex has no mod, so nothing skips the launcher there.
+  it('the Codex Windows form turns module loading off, looks in the profile then each absolute PATH folder, runs device codex asked, and exits 0', () => {
+    const windows = windowsForm(codexHook().command)
+    expect(windows.trimStart().startsWith("> $null; $PSModuleAutoLoadingPreference = 'None';")).toBe(true)
+    expect(windows).not.toMatch(/\b[A-Z][a-z]+-[A-Z][A-Za-z]+\b/)
+    expect(windows).not.toContain('HARNESS_DEVICE_MOD_ASKS')
+    const profile = windows.indexOf('$env:USERPROFILE\\.harness\\bin\\harness.exe')
+    const onPath = windows.indexOf("foreach ($d in $env:PATH -split ';') { if ($d -match '^([a-z]:\\\\|\\\\\\\\)' -and [IO.File]::Exists(\"$d\\harness.exe\"))")
+    expect(profile).toBeGreaterThan(-1)
+    expect(onPath).toBeGreaterThan(profile)
+    const calls = windows.match(/device codex asked[^;}]*/g)
+    expect(calls).toHaveLength(1)
+    expect(calls![0].trim()).toBe('device codex asked *> $null')
+    expect(windows.trimEnd().endsWith('; exit 0')).toBe(true)
+  })
+
   it('the README names harness device claude disable, and says the dial never answers a prompt or approves anything', () => {
     const readme = readFileSync(join(pluginRoot, 'README.md'), 'utf8')
     expect(readme).toContain('harness device claude disable')
@@ -250,7 +345,7 @@ describe.runIf(process.platform === 'win32')('the harness-device hook on Windows
     const profile = tempDir()
     const cwd = tempDir()
     const own = Object.entries(process.env)
-      .filter(([key]) => !['path', 'home', 'userprofile', 'claude_plugin_root'].includes(key.toLowerCase()))
+      .filter(([key]) => !['path', 'home', 'userprofile', 'claude_plugin_root', 'plugin_root'].includes(key.toLowerCase()))
     return { profile, cwd, env: { ...Object.fromEntries(own), USERPROFILE: profile, PATH: `${system};${join(system, 'WindowsPowerShell', 'v1.0')}` } }
   }
 
@@ -296,4 +391,25 @@ describe.runIf(process.platform === 'win32')('the harness-device hook on Windows
       expect(result).toMatchObject({ status: 0, stdout: '', stderr: '' })
     }, 30_000)
   }
+
+  // Codex runs the command as `powershell.exe -NoProfile -Command <command>`, with PLUGIN_ROOT in its environment.
+  const codexInput = JSON.stringify({ ...JSON.parse(CODEX_INPUT), tool_input: { command: 'echo "héllo" & dir %TEMP% | more' } })
+  const runCodex = (options: object) => spawnSync(powershell, ['-NoProfile', '-Command', codexHook().command], options)
+
+  it("Codex: runs the profile's launcher with device codex asked and its stdin, prints nothing and exits 0", () => {
+    for (const code of [0, 2]) {
+      const { profile, cwd, env } = place()
+      standIn(profile, cwd, code)
+      const result = runCodex({ cwd, input: codexInput, encoding: 'utf8', env: { ...env, PLUGIN_ROOT: pluginRoot } })
+      expect(JSON.parse(readFileSync(join(cwd, 'argv.json'), 'utf8')), `exit ${code}`).toEqual(['codex', 'asked'])
+      expect(readFileSync(join(cwd, 'stdin'), 'utf8'), `exit ${code}`).toBe(codexInput)
+      expect(result, `exit ${code}`).toMatchObject({ status: 0, stdout: '', stderr: '' })
+    }
+  }, 60_000)
+
+  it('Codex: with no launcher, prints nothing and exits 0', () => {
+    const { cwd, env } = place()
+    const result = runCodex({ cwd, input: codexInput, encoding: 'utf8', env: { ...env, PLUGIN_ROOT: pluginRoot } })
+    expect(result).toMatchObject({ status: 0, stdout: '', stderr: '' })
+  }, 30_000)
 })
