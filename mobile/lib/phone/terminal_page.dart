@@ -25,6 +25,7 @@ import 'package:harness_mobile/chat/chat_composer.dart';
 import 'package:harness_mobile/chat/chat_mic_button.dart';
 import 'package:harness_mobile/chat/chat_view.dart';
 import 'package:harness_mobile/chat/chat_view_store.dart';
+import 'package:harness_mobile/chat/engine_sign_in.dart';
 import 'package:harness_mobile/logging/app_log.dart';
 import 'package:harness_mobile/logging/typing_trace.dart';
 import 'package:harness_mobile/core/models.dart'
@@ -45,6 +46,7 @@ import 'package:harness_mobile/terminal/key_hints.dart';
 import 'package:harness_mobile/terminal/claude_permission.dart';
 import 'package:harness_mobile/terminal/codex_permission.dart';
 import 'package:harness_mobile/terminal/opencode_footer.dart';
+import 'package:harness_mobile/terminal/claude_first_run.dart';
 import 'package:harness_mobile/terminal/question_pane.dart';
 import 'package:harness_mobile/terminal/question_pane_watcher.dart';
 import 'package:harness_mobile/terminal/terminal_find.dart';
@@ -292,6 +294,9 @@ typedef _PageFacts = ({
   bool imagePaste,
   String? machineName,
   String? asking,
+  bool? engineSignedIn,
+  bool? engineInstalled,
+  bool enginesChecking,
 });
 
 class _TerminalPageState extends State<TerminalPage>
@@ -831,6 +836,11 @@ class _TerminalPageState extends State<TerminalPage>
       // one signal the title carries about the rest of the fleet, missing until something
       // unrelated happened to rebuild the page.
       asking: _askingElsewhere(),
+      // Chat UI's Sign in, Continue and "Checking…" read these. Left out, "Checking…" stayed for minutes after the
+      // machine answered in under a second, and Sign in after the engine was signed in (Pixel, 2026-11-26).
+      engineSignedIn: machine?.engines[agent?.engine ?? '']?.signedIn,
+      engineInstalled: machine?.engines[agent?.engine ?? '']?.installed,
+      enginesChecking: machine?.engines.inFlight != null,
     );
   }
 
@@ -887,8 +897,20 @@ class _TerminalPageState extends State<TerminalPage>
     // After the first frame: the probe notifies as it starts, and a page built inside another
     // widget's build would mark that one dirty mid-build.
     if (listed != null && AppNotifier.changeAgentTarget(listed) != null) {
+      // Asked again unless its engine is already known signed in there: Chat UI's Sign in reads it too, and a report
+      // from before the engine was installed (a new computer, its first harness) would hide that it is signed out.
+      final known = widget.notifier
+          .stateOf(widget.machineId)
+          ?.engines[listed.engine ?? ''];
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) unawaited(widget.notifier.probeEngines(widget.machineId));
+        if (mounted) {
+          unawaited(
+            widget.notifier.probeEngines(
+              widget.machineId,
+              force: known?.signedIn != true,
+            ),
+          );
+        }
       });
     }
     _lifecycle =
@@ -945,8 +967,26 @@ class _TerminalPageState extends State<TerminalPage>
     }
   }
 
+  /// Chat UI's Sign in while this agent's engine is signed out on its machine ([AppNotifier.engineSignedOut]): one a
+  /// page, for the engine it was made for.
+  EngineSignIn? _engineSignIn;
+
+  EngineSignIn _signInFor(Agent agent) {
+    final held = _engineSignIn;
+    if (held != null && held.engine == agent.engine) return held;
+    held?.dispose();
+    return _engineSignIn = EngineSignIn.of(
+      widget.notifier,
+      machineId: widget.machineId,
+      agentId: widget.agentId,
+      engine: agent.engine ?? 'claude',
+      folder: agent.project?.cwd,
+    );
+  }
+
   @override
   void dispose() {
+    _engineSignIn?.dispose();
     chatViewStore.removeListener(_onChatView);
     _endCardTimer?.cancel();
     // A take started here must not come back to a page that is gone.
@@ -2734,6 +2774,50 @@ class _TerminalPageState extends State<TerminalPage>
             streamsText: agent.engine == 'opencode' || agent.engine == 'kilo',
           )
         : null;
+    // Signed out there, the agent waits on its engine's first-run screens, which a chat cannot show: Sign in instead,
+    // with the composer and the chip off (Pixel, 2026-11-26).
+    // Read live, by the builders below as well: the page is not built again when the engines are read again, and once
+    // Codex was signed in, Sign in stayed until the page was opened again (Pixel, 2026-11-26).
+    bool signedOutNow() =>
+        chat != null &&
+        agent != null &&
+        widget.notifier.engineSignedOut(widget.machineId, agent);
+    final signedOut = signedOutNow();
+    // Signed in, a new Claude harness can still wait on the first-run screens it opened on before (MSI, 2026-11-26: the
+    // app gone before it started the harness again): read off its screen, only while its chat is empty, so a chat under
+    // way never redraws for the terminal's output.
+    final firstRunSession =
+        !signedOut &&
+            chat != null &&
+            chat.items.isEmpty &&
+            agent?.engine == 'claude'
+        ? session
+        : null;
+    bool waitsOnFirstRun() =>
+        firstRunSession != null &&
+        claudeFirstRunOnScreen(firstRunSession.terminal);
+    EngineSignIn? signInNow() =>
+        agent != null && (signedOutNow() || waitsOnFirstRun())
+        ? _signInFor(agent)
+        : null;
+    final signIn = signInNow();
+    // Its engines read again as the page came, not answered yet: a report from before the engine was installed (the New
+    // dialog's, on a new computer) says neither signed in nor out, and Continue showed for ten seconds before Sign in
+    // (Pixel, 2026-11-26). Neither is offered until the machine answers.
+    bool checkingNow() =>
+        widget.notifier.stateOf(widget.machineId)?.engines.inFlight != null;
+    // Continue only where the machine said signed in: one that could not say (its answer timed out) is asked to sign in,
+    // which is right either way, never told a setup is all that is left.
+    bool signedInNow() =>
+        widget.notifier
+            .stateOf(widget.machineId)
+            ?.engines[agent?.engine ?? '']
+            ?.signedIn ==
+        true;
+    // What the panel and the composer listen to while a sign-in is shown: the sign-in tells them once it is done, after
+    // the engines were read again.
+    Listenable withSignIn(Listenable listenable) =>
+        signIn == null ? listenable : Listenable.merge([listenable, signIn]);
     // The chip's sheet opens on a list already here: asked once per agent, as its chat first shows.
     if (chat != null) {
       widget.notifier.prefetchAgentModelChoices(
@@ -3076,7 +3160,49 @@ class _TerminalPageState extends State<TerminalPage>
                                   else if (session != null &&
                                       !session.hasScreen)
                                     Positioned.fill(child: placeholder),
-                                  if (chat != null)
+                                  if (chat != null &&
+                                      (signIn != null ||
+                                          firstRunSession != null))
+                                    Positioned.fill(
+                                      child: ListenableBuilder(
+                                        listenable: withSignIn(
+                                          firstRunSession?.outputTicks ?? chat,
+                                        ),
+                                        builder: (context, _) {
+                                          final now = signInNow();
+                                          if (now == null) {
+                                            return ChatTranscriptView(
+                                              conversation: chat,
+                                              topInset: 72,
+                                              question:
+                                                  _questionWatcher?.view,
+                                              onAnswer: (view, number) =>
+                                                  _tapAnswer(view, (
+                                                    label: '',
+                                                    number: number,
+                                                  )),
+                                              onAnswerInTerminal: () =>
+                                                  _setShowsChat(false),
+                                            );
+                                          }
+                                          return EngineSignInPanel(
+                                            signIn: now,
+                                            setup: signedInNow(),
+                                            checking: checkingNow(),
+                                            engineName:
+                                                agent?.engine == 'codex'
+                                                ? 'Codex'
+                                                : 'Claude Code',
+                                            machineName:
+                                                machine
+                                                    ?.machine
+                                                    .displayName ??
+                                                'this computer',
+                                          );
+                                        },
+                                      ),
+                                    )
+                                  else if (chat != null)
                                     Positioned.fill(
                                       child: ChatTranscriptView(
                                         conversation: chat,
@@ -3137,24 +3263,33 @@ class _TerminalPageState extends State<TerminalPage>
                             ListenableBuilder(
                               // The terminal's redraws too only while the chip reads OpenCode's footer: a rebuild of
                               // the composer per chunk drawn is a cost no other agent pays.
-                              listenable:
-                                  session != null && agent?.engine == 'opencode'
-                                  ? Listenable.merge([
-                                      chat,
-                                      session.outputTicks,
-                                    ])
-                                  : chat,
-                              builder: (context, _) => ChatComposer(
+                              // And while a new Claude harness may be on its first-run screens.
+                              listenable: withSignIn(
+                                session != null &&
+                                        (agent?.engine == 'opencode' ||
+                                            firstRunSession != null)
+                                    ? Listenable.merge([
+                                        chat,
+                                        session.outputTicks,
+                                      ])
+                                    : chat,
+                              ),
+                              builder: (context, _) {
+                                // Off while the engine is signed out or its first-run screens are up: words
+                                // would go into them.
+                                final blocked = signInNow() != null;
+                                return ChatComposer(
                                 working: chat.working,
+                                enabled: !blocked,
                                 // A terminal another app holds is taken back by the send
                                 // itself ([_sendChat]), as a tap on it would be.
                                 onSend: _sendChat,
                                 onStop: () => unawaited(_stopChat()),
-                                onAttach: session != null
+                                onAttach: session != null && !blocked
                                     ? () => _attachToChat(session, machine)
                                     : null,
                                 model: _chatModelOnScreen(agent),
-                                onModel: () => unawaited(
+                                onModel: blocked ? null : () => unawaited(
                                   showAgentSettingsSheet(
                                     context,
                                     widget.notifier,
@@ -3173,7 +3308,7 @@ class _TerminalPageState extends State<TerminalPage>
                                   ),
                                 ),
                                 // The phone's own voice input, as the terminal's mic.
-                                mic: session == null
+                                mic: session == null || blocked
                                     ? null
                                     : ChatMicButton(
                                         voice: widget.voice,
@@ -3185,7 +3320,8 @@ class _TerminalPageState extends State<TerminalPage>
                                 ),
                                 sheetCommands:
                                     _sheetCommands[agent?.engine] ?? const {},
-                              ),
+                              );
+                              },
                             )
                           else if (session != null)
                             TerminalInputDock(

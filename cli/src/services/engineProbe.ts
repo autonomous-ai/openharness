@@ -13,12 +13,15 @@ import { ENGINES, type AgentEngine } from '../engines/types.js'
 import { engineInstallLine, engineInstallRecipe } from '../lib/engineInstall.js'
 import { supportsFirstPrompt } from '../lib/engineLaunch.js'
 import { probeEngines } from '../lib/engineProbe.js'
+import { EngineSignIns } from '../lib/engineSignIn.js'
 
 export { ENGINE_PROBE_REQUESTS }
 
 export interface EngineProbeDeps {
   /** Swapped in tests for one that starts no shell. */
   probe?: typeof probeEngines
+  /** Swapped in tests for one that starts no login. */
+  signIns?: Pick<EngineSignIns, 'read'>
 }
 
 /** The line Desktop shows before installing an engine here. */
@@ -29,6 +32,7 @@ const installRecipeLine = (engine: AgentEngine): string | undefined => {
 
 export function startEngineProbe(_core: CoreApi, deps: EngineProbeDeps = {}): ServiceRequests {
   const probe = deps.probe ?? probeEngines
+  const signIns = deps.signIns ?? new EngineSignIns()
   return {
     engines_probe: async (payload, asker) => {
       // `engines` narrows the probe to what the caller is showing; an absent or malformed list means "all of them",
@@ -63,6 +67,12 @@ export function startEngineProbe(_core: CoreApi, deps: EngineProbeDeps = {}): Se
           waitsForDownload: true,
         })),
       }
+    },
+    // Claude Code or Codex signed in from the phone's Chat UI (lib/engineSignIn.ts): the engine's own login, on this
+    // computer's owner's account. Only the owner: a guest's harness runs on the guest's own sign-in.
+    engine_sign_in: async (payload, asker) => {
+      if (!asker.owner) return { error: 'OWNER_REQUIRED' }
+      return signIns.read(payload)
     },
   }
 }

@@ -6296,6 +6296,40 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// Whether [agent]'s engine is signed out on [machineId], as the machine last reported (`engines_probe`): Claude Code
+  /// or Codex there, installed and not signed in, on this person's own machine. Its harness then waits on the engine's
+  /// own first-run screens, which Chat UI cannot show, so Chat UI asks for a sign-in instead (Pixel, 2026-11-26).
+  bool engineSignedOut(String machineId, Agent agent) {
+    final machine = machineStates[machineId];
+    if (machine == null || machine.machine.shared) return false;
+    final engine = agent.engine;
+    if (engine != 'claude' && engine != 'codex') return false;
+    final found = machine.engines[engine!];
+    return found != null && found.installed && found.signedIn == false;
+  }
+
+  /// One question to [machineId]'s sign-in of an engine (CLI lib/engineSignIn.ts): `{operationId, engine}`, and a
+  /// `callback` this phone caught or a `code` Claude's page showed. Its answer, `{error, detail}` when refused, or
+  /// `{error: 'UNAVAILABLE'}` when the machine did not answer.
+  Future<Map<String, dynamic>> engineSignIn(
+    String machineId,
+    Map<String, dynamic> payload,
+  ) async {
+    final machine = machineStates[machineId];
+    if (machine == null || machine.needsLink) return {'error': 'UNAVAILABLE'};
+    try {
+      return await _conn(machineId).request(
+        'engine_sign_in',
+        payload: payload,
+        timeout: const Duration(seconds: 40),
+      );
+    } on WsRequestFailure catch (failure) {
+      return {'error': failure.code, 'detail': ?failure.detail};
+    } catch (_) {
+      return {'error': 'UNAVAILABLE'};
+    }
+  }
+
   /// A Harness OS computer, managed from here (CLI services/osDevice.ts): `status`, `update`,
   /// `wifi_scan`, `wifi_join` {ssid, password}, `wifi_result`. `{error: 'UNAVAILABLE'}` while it
   /// cannot be reached — as it is for a while after `update` and `wifi_join`.
