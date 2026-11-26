@@ -2,7 +2,8 @@
 // pass finds Claude Code, then brought current once after each CLI update, and never installed again. A plugin the
 // person uninstalled or turned off through /plugin is theirs, before the first pass or after it: the record says it was
 // set up, so it is left removed. A pass that fails is tried again an hour later at the soonest, so a computer with no
-// network does not run `claude` at every scan.
+// network does not run `claude` at every scan. The plugin comes from the marketplace folder written from what cli.js
+// carries, so a run from the sources, which carries none, sets nothing up.
 //
 // Orca runs Claude Code under its own account homes, whose `plugins/` is linked to the default home's: the files are
 // there already, so only each home's entry is turned on, once, and the home recorded by its real path. One the person
@@ -10,7 +11,7 @@
 // off or removed there said no for every home, and a removal takes the files they all name.
 import { realpathSync } from 'node:fs'
 import { join } from 'node:path'
-import { claudeDisable, claudeHomeDisable, claudeHomeEnable, claudeSetUp, claudeUpdate, type ClaudeDeps, type ClaudeInstallDeps, type ClaudeRun, type ClaudeSetup } from '../devices/claudePlugin.js'
+import { claudeDisable, claudeHomeDisable, claudeHomeEnable, claudeSetUp, claudeUpdate, failureWords, type ClaudeDeps, type ClaudePluginFiles, type ClaudePluginSource, type ClaudeRun, type ClaudeSetup } from '../devices/claudePlugin.js'
 import { claudePluginState, claudePluginTurnedOff } from '../devices/dialSkill.js'
 import { listable, MAX_HOMES, type Read, type SetupCount } from '../devices/dialSkillFiles.js'
 
@@ -24,8 +25,8 @@ export interface DialPluginSetupDeps {
   claude(shell: boolean): Promise<ClaudeRun | null>
   /** Claude Code found as claude() is, pointed at [home]. */
   claudeIn(home: string, shell: boolean): Promise<ClaudeRun | null>
-  /** Where git is: the default home's install clones the marketplace with it. */
-  git: ClaudeInstallDeps['git']
+  /** The marketplace folder the default home's install and update write, and what cli.js carries for it. */
+  plugin: ClaudePluginSource
   /** Orca's Claude Code homes from its last read, a new list at each read; answered: that read gave Orca's answer. */
   orca(): { homes: readonly string[]; answered: boolean }
   /** dial-setup.json's Orca homes, by real path, and its writer: false when it could not be saved. */
@@ -61,9 +62,6 @@ export function createDialPluginSetup(deps: DialPluginSetupDeps): DialPluginSetu
   /** An undo that failed: tried again at the passes after its hour while Claude Code is not wanted, as nothing else
    *  would take out what this setup put in. */
   let undoOwed = false
-  /** The last setup found no git: until a pass finds it, git is all a pass looks for, so a computer without it runs no
-   *  `claude` and logs nothing each hour. Kept in memory: a start tries once, and logs once. */
-  let noGit = false
   /** Orca's list as last worked out, and its homes by real path. */
   let orcaList: readonly string[] | undefined
   let orcaHomes: string[] = []
@@ -89,7 +87,7 @@ export function createDialPluginSetup(deps: DialPluginSetupDeps): DialPluginSetu
   const undo = async (claude: ClaudeDeps): Promise<false> => {
     const disabled = await claudeDisable(claude)
     undoOwed = !disabled.ok
-    return disabled.ok ? false : failed(disabled.step)
+    return disabled.ok ? false : failed(failureWords(disabled))
   }
 
   /** Whether a lookup reads the login shell's PATH: at once at an attach, else at most every SHELL_MS. */
@@ -99,17 +97,19 @@ export function createDialPluginSetup(deps: DialPluginSetupDeps): DialPluginSetu
     return shell
   }
 
-  async function run(wanted: boolean, shell: () => boolean): Promise<boolean> {
+  /** The plugin set up from [files], or with none what this setup put in taken out. */
+  async function run(files: ClaudePluginFiles | null, shell: () => boolean): Promise<boolean> {
     const found = await deps.claude(shell())
     // Not on this computer yet: asked again at the next pass, with nothing counted.
     if (!found) return false
-    const claude = { run: found, platform: deps.platform, git: deps.git }
-    if (!wanted) return undo(claude)
-    const done = deps.recorded() === undefined ? await claudeSetUp(claude) : await claudeUpdate(claude)
-    if (!done.ok) {
-      noGit = done.step === 'git'
-      return failed(noGit ? 'no git' : done.step)
-    }
+    const claude = { run: found, platform: deps.platform }
+    if (!files) return undo(claude)
+    const install = { ...claude, folder: deps.plugin.folder, files }
+    const done = deps.recorded() === undefined ? await claudeSetUp(install) : await claudeUpdate(install)
+    // A marketplace from GitHub never reads the folder, so the update went on: the write is counted beside it, with no
+    // hour of its own, as the next CLI update writes it again.
+    if (done.folderFailed) deps.count('failed', `folder · ${done.folderFailed}`)
+    if (!done.ok) return failed(failureWords(done))
     // A `disable` that landed while the install or the update ran found nothing to undo yet: it is undone here, and
     // nothing recorded. One not known is neither: a moment's read error never uninstalls a plugin the person keeps, and
     // the next pass finds it current and records it.
@@ -122,17 +122,14 @@ export function createDialPluginSetup(deps: DialPluginSetupDeps): DialPluginSetu
 
   /** The default home's own step, passed while its version is current or within its hour. */
   async function defaultStep(shell: () => boolean): Promise<boolean> {
-    if (noGit) {
-      if (!await deps.git()) return false
-      // Installed since: this pass sets the plugin up, the failure's hour not waited out.
-      noGit = false
-      retryAt = -Infinity
-    }
     // The in-memory checks first: wanted() reads dial-skill.json, which a scan with the plugin set up never reads.
     if (deps.recorded() === deps.version || deps.now() < retryAt) return false
     const wanted = deps.wanted()
     if (wanted === undefined) return false
-    return wanted || undoOwed ? await run(wanted, shell) : false
+    if (!wanted) return undoOwed ? await run(null, shell) : false
+    // A run from the sources carries no plugin to set up: no `claude` is run, and nothing counted or recorded.
+    const files = deps.plugin.files()
+    return files ? await run(files, shell) : false
   }
 
   /** Orca's homes by real path: each once, the default home left out, and only what a record may hold, so a home turned
@@ -199,7 +196,7 @@ export function createDialPluginSetup(deps: DialPluginSetupDeps): DialPluginSetu
       const claude = { run: found, platform: deps.platform }
       const done = await claudeHomeEnable(claude)
       if (!done.ok) {
-        homeFailed(home, done.step)
+        homeFailed(home, failureWords(done))
         continue
       }
       // A `disable` that landed during the enable found this home still off: it is turned off here, and nothing
@@ -208,7 +205,7 @@ export function createDialPluginSetup(deps: DialPluginSetupDeps): DialPluginSetu
       const still = deps.wanted()
       if (still === false) {
         const off = await claudeHomeDisable(claude)
-        if (!off.ok) deps.count('failed', off.step)
+        if (!off.ok) deps.count('failed', failureWords(off))
       }
       if (still !== true) return
       if (!deps.recordPluginHomes([...deps.pluginHomes(), home])) homeFailed(home, 'save')
