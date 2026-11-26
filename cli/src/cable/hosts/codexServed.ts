@@ -14,9 +14,9 @@
  * What one lookup costs, on an M1 Pro (2026-11-26): the table with its arguments (externals/support.ts listProcesses,
  * 63 ms, lib/processTable.ts), 8 ms on the event loop to tell Codex's processes in a table of 900 (6.5 of them the
  * engines' ownership snapshot, which each open scan reads too), one `lsof -a -d cwd` for every Codex TUI (39 ms for 1 and
- * for 16), one `ps -o tty=` for each in the session's folder (3.5 ms for one; one for 16 took 57 ms, so each is asked
- * alone) and the walk of the one found (scannedApp.ts). Asked only for a Codex hook from a caller not yet asked, a
- * server's session's start, a turn's while it has no client, and a Codex session the scan finds on no terminal
+ * for 16), one `ps -o tty=` for each in a session's folder, once a lookup (3.5 ms for one; one for 16 took 57 ms, so
+ * each is asked alone) and the walk of the one found (scannedApp.ts). Asked only for a Codex hook from a caller not yet
+ * told, a daemon's session's start, a turn's while it has no client, and a Codex session the scan finds on no terminal
  * (observed.ts).
  */
 import { agentCommandOwnershipSnapshot } from '../../lib/engineBin.js'
@@ -103,11 +103,14 @@ async function clientsIn(
   const candidates = rows.filter((row) => tuis.has(row.pid) && !tuis.has(row.ppid)).map((row) => row.pid)
   if (!candidates.length || candidates.length > MAX_CLIENTS) return found
   const cwds = await deps.cwds(candidates)
+  // Each TUI's terminal once, whatever the asks in its folder: the scan asks for each of its sessions at once.
+  const ttys = new Map<number, Promise<{ pid: number; tty: string | undefined | null }>>()
+  const ttyOf = (pid: number) =>
+    ttys.get(pid) ?? ttys.set(pid, deps.tty(pid).then((tty) => ({ pid, tty }), () => ({ pid, tty: null }))).get(pid)!
   for (const ask of asks) {
     if (ask.cwd === undefined) continue
     const folder = await deps.folder(ask.cwd)
-    const terminals = await Promise.all(candidates.filter((pid) => cwds.get(pid) === folder)
-      .map((pid) => deps.tty(pid).then((tty) => ({ pid, tty }), () => ({ pid, tty: null }))))
+    const terminals = await Promise.all(candidates.filter((pid) => cwds.get(pid) === folder).map(ttyOf))
     // A terminal that could not be read may be a second client's: nothing is told then.
     if (terminals.some(({ tty }) => tty === null)) continue
     const onTerminal = terminals.filter((t): t is { pid: number; tty: string } => typeof t.tty === 'string')
