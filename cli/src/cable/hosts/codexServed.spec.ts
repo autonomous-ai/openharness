@@ -146,6 +146,20 @@ describe('codexServed', () => {
     expect(d.cwds).not.toHaveBeenCalled()
   })
 
+  it('takes only the daemon\'s own arguments for the daemon: any other server, in no app, is placed by its hints', async () => {
+    // `codex mcp-server` under the person's tmux, an app server over stdio under an editor no app root names, and one
+    // started by hand on a unix socket, which a TUI's `--remote` reaches as it reaches the daemon.
+    const tmux = [row(30, 1, '/opt/homebrew/bin/tmux'), row(31, 30, '-zsh'), row(800, 31, BREW, `${BREW} mcp-server`)]
+    const editor = [row(50, 1, '/opt/idea/bin/idea'), row(51, 50, BREW, `${BREW} app-server --analytics-default-enabled`)]
+    const d = deps([...TERMINAL_TUI, ...tmux, ...editor, row(900, 1, BREW, `${BREW} app-server --listen unix:///tmp/codex.sock`)],
+      { 500: { tty: 'ttys005', cwd: '/work/app' } })
+    expect(await codexServed([{ pid: 800, cwd: '/work/app' }, { pid: 51, cwd: '/work/app' }], d)).toEqual([undefined, undefined])
+    expect(d.tty).not.toHaveBeenCalled()
+    expect(d.cwds).not.toHaveBeenCalled()
+    expect(await codexServed([{ pid: 900, cwd: '/work/app' }], d))
+      .toEqual([{ client: { app: 'terminal-app', tty: '/dev/ttys005', pid: 500 } }])
+  })
+
   it('reads each thing once for every ask, and past MAX_CLIENTS TUIs tells none apart', async () => {
     const d = deps([...TERMINAL_TUI, ...ITERM_TUI, row(900, 1, DAEMON_BIN, DAEMON_ARGS)],
       { 500: { tty: 'ttys005', cwd: '/work/app' }, 600: { tty: 'ttys009', cwd: '/work/other' } })
