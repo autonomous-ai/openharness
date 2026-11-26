@@ -198,6 +198,8 @@ export interface CableHostWiring {
   /** What came of a pick of tmux's or herdr's page bringing the landed agent's app (pickLanded): `none` when no agent
    *  there has a client in an app. Nothing for an open a later pick or rest superseded. */
   appPickBrought?: (outcome: 'ok' | 'failed' | 'none') => void
+  /** The settle of an app the dial brought forward kept tmux's or herdr's page shown (dialBrings). */
+  appDialFront?: () => void
   /** The view was set, and why: told on each change and on each window opening, never an app. */
   appView?: (view: DialView, cause: ViewCause) => void
   /** Runs `run` once after `ms` and returns its cancel: the settle of the app in front, and the end of a waiting open
@@ -314,6 +316,7 @@ export class DaemonCableHost implements CableHost {
         this.viewOnSettle(app)
         wiring.appSettled?.(app)
       },
+      dialFront: () => wiring.appDialFront?.(),
     })
   }
 
@@ -864,6 +867,12 @@ export class DaemonCableHost implements CableHost {
     this.filter.front(app)
   }
 
+  /** The opener is about to bring an app forward for a pick, a rest or a tap: the next front report is the dial's, so
+   *  the app it brings from tmux's or herdr's page keeps that page at its settle (spec §6). */
+  dialBrings(): void {
+    this.filter.dialBrings()
+  }
+
   /** The app that settled in front, with or without a window. Not the shown app: the person may have picked another. */
   settledApp(): string | undefined {
     return this.filter.settledApp()
@@ -1351,11 +1360,13 @@ export class DaemonCableHost implements CableHost {
     // The agent may have gone, or left its pane, and the dial its page, since the dial turned to it: asked again here, so
     // no source brings forward an app the person has left.
     const outside = this.outsideEntry(agentId)
+    const mux = outside !== undefined && this.onMuxPage(outside.agent, opts)
+    // A pane its source can show says nothing of its app on tmux's or herdr's page: a tab app's watch selects a tab
+    // behind too, so there its app must be the one in front (spec §4).
+    const shows = outside?.source.hasPane?.(outside.agent) && (!mux || this.filter.latestFront() === pagesOf(outside.agent)[0])
     let ended: Promise<PaneSwitch | 'superseded' | 'opened'> | undefined
-    if (outside?.source.hasPane?.(outside.agent)) ended = outside.source.showPane?.(outside.agent)
-    else if (outside && this.onMuxPage(outside.agent, opts)) {
-      ended = this.openOnPage(outside).then((opened) => opened === 'superseded' ? opened : opened ? 'opened' : 'failed')
-    }
+    if (shows) ended = outside?.source.showPane?.(outside.agent)
+    else if (mux) ended = this.openOnPage(outside).then((opened) => opened === 'superseded' ? opened : opened ? 'opened' : 'failed')
     void (ended ?? Promise.resolve('failed' as const)).catch(() => 'failed' as const).then((outcome) => this.wiring.swiped?.(outcome))
   }
 

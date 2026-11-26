@@ -54,9 +54,6 @@ export interface OpenDeps {
   log(line: string): void
   /** The raw `HARNESS_OPEN_BIN` (openPath). */
   bin?: string
-  /** Herdr.app's window is herdr's ring's: the ring holds an agent in Herdr (hostDetect.ts inHerdr, or one the hc source
-   *  lists). Asked at each pick. None: herdr's ring is herdr 0.8.0's alone. */
-  herdrApp?(): boolean
   /** Linux's way to bring a window forward, where macOS runs `open -b`; none on macOS. */
   raise?: LinuxRaise
   /** Windows' way to bring an app forward by its bundle, where macOS runs `open -b`; none elsewhere. */
@@ -83,8 +80,10 @@ export function createOpenActions(deps: OpenDeps): {
   // Windows brings an app forward by its bundle, as macOS does: every path that takes a bundle takes it there too.
   const byBundle = deps.platform === 'darwin' || !!windows
   const raise = deps.raise
-  // One command at a time per agent: a second tap while the first runs would only bring the same app forward twice.
-  const running = new Set<string>()
+  // One open at a time per agent, the one under way: a tap while it runs (a rest's, a pick's or another tap's) joins it
+  // and answers what it answers, as a second would only bring the same app forward twice (PM decision 5, 2026-11-26:
+  // the double tap).
+  const running = new Map<string, Promise<boolean>>()
   const openBin = openPath(deps.bin)
   // The last pick wins, so the front app ends matching the dial's ring (spec decision 4): one bring runs at a time for
   // any app, and a later one takes the single waiting place, answering the one it replaces at once.
@@ -125,11 +124,11 @@ export function createOpenActions(deps: OpenDeps): {
       : (await deps.run(openBin, ['-b', bundle], RUN_TIMEOUT_MS)).code === 0
   }
 
-  // herdr 0.8.0's agents, whose terminal nobody knows (#4366), have no window of their own: herdr's ring brings Herdr
-  // only while Herdr.app's window is the ring's.
+  // herdr is no app: a pick of its page brings the app of the agent the dial lands on, Herdr.app's for a Herdr.app
+  // terminal, by that agent's open (cableHost.ts pickLanded, docs/plans/2026-11-26-dial-mux-host-pages-design.md §5).
   const bundleFor = (app: string): string | undefined => {
     if (app === 'harness') return HARNESS_BUNDLE
-    if (app === 'herdr') return deps.herdrApp?.() ? APP_BUNDLES.herdr : undefined
+    if (app === 'herdr') return undefined
     return Object.hasOwn(APP_BUNDLES, app) ? APP_BUNDLES[app] : undefined
   }
   // On Linux a pick raises its app's window by the app's class, which only a desktop found and the app's own row give:
@@ -210,13 +209,12 @@ export function createOpenActions(deps: OpenDeps): {
     async open(agentId, target) {
       // A tapped notice turns the dial to its own app: a pick waiting would turn it away again.
       dropWaiting()
-      if (!can(agentId, target) || running.has(agentId)) return false
-      running.add(agentId)
-      try {
-        return await open(agentId, target)
-      } finally {
-        running.delete(agentId)
-      }
+      if (!can(agentId, target)) return false
+      const under = running.get(agentId)
+      if (under) return under
+      const opening = open(agentId, target).finally(() => running.delete(agentId))
+      running.set(agentId, opening)
+      return opening
     },
     // A tap on a Harness agent with no window, which turns the dial to Harness's ring: it drops a pick waiting, as `open`.
     desktop: byBundle ? () => { dropWaiting(); return forward(HARNESS_BUNDLE) } : undefined,

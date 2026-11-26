@@ -50,7 +50,7 @@ import { CodexAppThreads } from '../cable/hosts/codexAppThreads.js'
 import { APP_BUNDLES, APP_IDS, UNKNOWN_APP } from '../cable/hosts/hostDetect.js'
 import { APP_PACKAGE, codexQueueDeps, createCodexQueue, type CodexQueueDeps } from '../cable/hosts/codexQueue.js'
 import { servedLookup } from '../cable/hosts/codexServed.js'
-import { createHcClient, hcClientDeps, hcPaneKey, hcSocketPath, type HcClient } from '../cable/hosts/hcClient.js'
+import { createHcClient, hcClientDeps, hcSocketPath, type HcClient } from '../cable/hosts/hcClient.js'
 import { HcSource } from '../cable/hosts/hcSource.js'
 import { createHerdrAdapter, herdrPaneParts } from '../cable/hosts/herdr.js'
 import { createHerdrAppAdapter } from '../cable/hosts/herdrApp.js'
@@ -658,13 +658,15 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  (docs/plans/2026-11-26-dial-mux-host-pages-design.md §7). A focus on any other terminal drops it, as another
    *  app's settle, or none's, does: one at most, as one window has the focus. */
   const editorClients = new Map<string, string | undefined>()
-  /** Whether the person may look at the multiplexer client on [tty] in [app]: where the app tells which, the one it
-   *  told last (the tab a tab app reported selected, the client in the terminal VS Code or Cursor focused), none before
-   *  it tells one; elsewhere any. */
-  const onToldClient = (app: string, tty: string): boolean => {
-    if (reportsTabs(app)) return tty === lastTabs.get(app)
-    if (app === 'vscode' || app === 'cursor') return tty === editorClients.get(app)
-    return true
+  /** Of the multiplexer clients on [ttys] in [app], those the person may look at: where the app tells which, the one it
+   *  told last (the tab a tab app reported selected, none before it reports one; the client in the terminal VS Code or
+   *  Cursor focused); an editor that told none (no Harness extension, or no terminal focused since it settled) its one
+   *  client, none of two, as before §7, which only adds to it; elsewhere every one. */
+  const toldClients = (app: string, ttys: readonly string[]): readonly string[] => {
+    if (reportsTabs(app)) return ttys.filter((tty) => tty === lastTabs.get(app))
+    if (app !== 'vscode' && app !== 'cursor') return ttys
+    if (editorClients.has(app)) return ttys.filter((tty) => tty === editorClients.get(app))
+    return ttys.length === 1 ? ttys : []
   }
   /** Where the dial moved an app lately, a rest's and a tap's alike, each as it started: the echoes an app's report is
    *  checked against, each excusing one. */
@@ -835,12 +837,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   ].map(noting)]
   const opener = createOpenActions({ run: apps.run, platform: apps.platform, adapters, log, bin: openBin, raise, windows,
     windowOf: (agentId) => observed?.windowOf(agentId),
-    // herdr's ring is Herdr.app's window's while it holds an agent there: one hc lists, or a live hooked agent with a pane
-    // of Herdr's (herdrApp.ts paneOf); an ended one's terminal holds a shell now. herdr 0.8.0's agents have none. Only
-    // this process's own lists are read, which the pick read a moment before: it never throws, and a pick's bring has no
-    // catch.
-    herdrApp: () => !!hcSource?.list().length
-      || !!observed?.list().some(({ paneKeys, ended }) => !ended && paneKeys?.some((key) => key.startsWith(hcPaneKey('')))) })
+    // The app a pick, rest or tap brings from tmux's or herdr's page settles a second later: told first, that settle
+    // keeps the page (docs/plans/2026-11-26-dial-mux-host-pages-design.md §6).
+    bringing: () => cableHost.dialBrings() })
   const bring = opener.bring
   /** The route or the refusal of the dial's words, and why a queue failed: never the words, the session, the terminal or a
    *  path. */
@@ -1592,6 +1591,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     appBrought: bring && ((app) => {
       void bring(app).then((outcome) => { if (outcome) log(`[device] app filter: bring · ${outcome}`) })
     }),
+    // A pick of tmux's or herdr's page brings the landed agent's app: the same measure, with `none` when no agent there
+    // has one (docs/plans/2026-11-26-dial-mux-host-pages-design.md, Measures).
+    appPickBrought: (outcome) => log(`[device] app filter: bring · ${outcome}`),
+    appDialFront: () => log('[device] app filter: front · dial'),
     // A tap on a Harness agent with no window starts Desktop, on macOS and, through its launcher, on Windows
     // (docs/specs/2026-11-15-device-wave1-checks.md, F2).
     launchDesktop: opener.desktop,
@@ -2629,15 +2632,15 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    * tmux's place, with [app] settled in front: the full pane id of the one live agent at the pane its front client shows,
    * on that client's tab, else null; undefined when its clients' listing failed. The front client is the one on the tab
    * [app] reported selected last, where it reports tabs, or in the terminal VS Code or Cursor focused last
-   * (onToldClient): one that told none yet has none, as the person may be on a plain tab or terminal of it, and its next
-   * report or focus names theirs. Elsewhere it is the one client there showing an agent's session: with two, which the
-   * person looks at is not known. The agent's tab must be the client's too: a second tmux server's `%N` repeats, and its
-   * client is on another tab. With no agent's tab that could be the front client's, tmux is not asked: the person on a
-   * plain iTerm2 tab costs no run every FOCUS_POLL_MS.
+   * (toldClients): a tab app that reported none yet has none, as the person may be on a plain tab of it, and its next
+   * report names theirs. Elsewhere, and in an editor that told none, it is the one client there showing an agent's
+   * session: with two, which the person looks at is not known. The agent's tab must be the client's too: a second tmux
+   * server's `%N` repeats, and its client is on another tab. With no agent's tab that could be the front client's, tmux
+   * is not asked: the person on a plain iTerm2 tab costs no run every FOCUS_POLL_MS.
    */
   const tmuxFocused = async (source: ObservedSource, app: string): Promise<FocusedPane | null | undefined> => {
     const panes = tmuxPanes(source, app)
-    const ttys = [...new Set(panes.flatMap(({ tty }) => tty !== undefined && onToldClient(app, tty) ? [tty] : []))]
+    const ttys = toldClients(app, [...new Set(panes.map(({ tty }) => tty).filter((tty) => tty !== undefined))])
     if (!ttys.length) return null
     const clients = await tmux.clientPanes()
     if (clients === undefined) return undefined
