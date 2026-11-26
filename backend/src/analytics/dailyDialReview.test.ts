@@ -237,6 +237,16 @@ describe('dailyDialReview', () => {
     expect(DIAL_REVIEW_METRICS).toEqual(expect.arrayContaining(['dial_notice_present', 'dial_notice_present_answered_10m']))
   })
 
+  it('shows quiet notices rung at their turn\'s end after Quiet, answered', () => {
+    const review = dailyDialReview([row(1, 'dial_notice_installation_days', 6), row(1, 'dial_notice_shown', 9),
+      row(1, 'dial_notice_present', 5), row(1, 'dial_notice_present_answered_10m', 2), row(1, 'dial_notice_present_roused', 3)], [], now)
+    const quietAnswered = "Quiet, answered: the person's prompt within 10 min", roused = "Quiet, rung: the person had gone by its turn's end"
+    expect(rowOf(review.outsideTeam, 'Dial skill', roused)).toMatchObject({ computers: { day: 6 }, events: { day: 3 } })
+    const names = review.outsideTeam.find(s => s.name === 'Dial skill')!.rows.map(r => r.name)
+    expect(names.indexOf(roused)).toBe(names.indexOf(quietAnswered) + 1)
+    expect(DIAL_REVIEW_METRICS).toContain('dial_notice_present_roused')
+  })
+
   it('keeps the team\'s dial skill apart', () => {
     const review = dailyDialReview([row(1, 'staff:dial_skill_codex_installation_days', 7)], [], now)
     expect(rowOf(review.team, 'Dial skill', 'codex: skill installed (computer-days)')?.computers.day).toBe(7)
