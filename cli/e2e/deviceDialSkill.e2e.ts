@@ -2,8 +2,9 @@
  * Claude Code and Codex set up to ring the dial from its first attach (docs/plans/2026-11-17-dial-agents-always-on-design.md),
  * on the real daemon with a fake dial on the desk (harness/desk.ts), homes of the test's own and a fake Claude Code
  * recent enough for its plugin, whose `claude plugin` notes each call (harness/fakeEngine.mjs):
- * - a computer with no dial gets nothing; the first attach, with no command run, installs Claude Code's plugin and
- *   writes the skill in both default homes;
+ * - a computer with no dial gets nothing; the first attach, with no command run, installs Claude Code's plugin from
+ *   Harness's own marketplace folder and writes the skill in both default homes;
+ * - a CLI update writes the folder at its own version, and Claude Code's update is counted;
  * - a Codex in another home gets the skill once the open scan sees the rollout it holds, and a file 0.6.58 wrote in the
  *   default home is brought current; a skill the person deletes stays deleted, `disable` removes every copy Harness
  *   wrote and leaves a person's own, and `enable` brings it back with no restart;
@@ -18,22 +19,22 @@
  */
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
+import { harnessPath, thisComputer } from '../src/config/harnessHome.js'
 import { DIAL_PLUGIN_ID, DIAL_SKILL } from '../src/devices/dialSkill.js'
+import { readSetup, writeSetup } from '../src/devices/dialSkillFiles.js'
 import { copyNode } from '../src/testing/placeNode.js'
 import { VERSION } from '../src/version.js'
 import { LocalClient } from './harness/client.js'
-import { IsolatedDaemon, sourcesCli, until } from './harness/daemon.js'
+import { IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import type { FakeDial } from './harness/fakeDial.js'
+import { fileBundle } from './harness/fileBundle.js'
 
-// The run's bundle when there is one (E2E_BUNDLE), as the daemon runs. Run from the caller's folder, where a bare
-// `--import tsx` would not resolve: tsx and the sources by their paths.
-const CLI_ENTRY = process.env.E2E_BUNDLE_PATH
-  ? [process.env.E2E_BUNDLE_PATH]
-  : sourcesCli()
+// The daemons and the commands on a build: from the sources the CLI carries no plugin to set up.
+const bundle = fileBundle()
 
 /**
  * Codex 0.167.1's app-server as the scan sees it: a process named `codex`, with no terminal, holding one rollout open.
@@ -64,6 +65,8 @@ const setupRecord = (d: IsolatedDaemon): { dial?: boolean; plugin?: string; home
 /** Whether the plugin is on in [claudeHome]'s user settings, Claude Code's own record. */
 const pluginOn = (claudeHome: string): boolean =>
   JSON.parse(read(join(claudeHome, 'settings.json')) ?? '{}').enabledPlugins?.[DIAL_PLUGIN_ID] === true
+/** Harness's folder Claude Code adds as its marketplace, where the paths rule puts it for the daemon's home. */
+const marketplaceFolder = (d: IsolatedDaemon): string => harnessPath('claude-marketplace', d.env.HOME!, process.platform, thisComputer(d.env))
 /** The log's lines that hold [text]. */
 const logLines = (d: IsolatedDaemon, text: string): string[] => d.log().split('\n').filter((line) => line.includes(text))
 /** The setup's lines and the tally's say counts and fixed words, never a path. */
@@ -107,7 +110,7 @@ describe('the dial set up from its first attach', () => {
   /** A daemon with a fake dial's port, started, whose fake Claude Code is [claudeVersion]: by default recent enough for
    *  its plugin. */
   const fresh = async (claudeVersion = '2.1.287'): Promise<{ d: IsolatedDaemon; desk: Desk }> => {
-    const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false' }, claudeVersion })
+    const d = await IsolatedDaemon.create({ scriptPath: bundle.path, env: { CABLE_DISABLE: 'false' }, claudeVersion })
     daemon = d
     const file = join(d.root, 'dials.json')
     d.env.HARNESSD_TEST_DIAL_PORT = file
@@ -124,9 +127,9 @@ describe('the dial set up from its first attach', () => {
     return dial
   }
 
-  /** The real command from source, with the daemon's environment, or [env] beside it. */
+  /** The real command from the file's bundle, with the daemon's environment, or [env] beside it. */
   async function device(d: IsolatedDaemon, words: string[], env: Record<string, string> = {}): Promise<{ code: number | null; err: string }> {
-    const child = spawn(process.execPath, [...CLI_ENTRY, 'device', ...words], { cwd: d.root, env: { ...d.env, ...env }, stdio: ['ignore', 'ignore', 'pipe'] })
+    const child = spawn(process.execPath, [bundle.path, 'device', ...words], { cwd: d.root, env: { ...d.env, ...env }, stdio: ['ignore', 'ignore', 'pipe'] })
     children.push(child)
     let err = ''
     child.stderr!.on('data', (chunk: Buffer) => { err += chunk.toString('utf8') })
@@ -167,8 +170,45 @@ describe('the dial set up from its first attach', () => {
     // Written once the plugin is on: Claude Code's own settings say so.
     await until('Claude Code\'s skill', () => read(skillOf(claudeHome)) === DIAL_SKILL, 45_000, 100)
     expect(pluginCalls(d)).toContain(INSTALL)
+    // Added from Harness's own folder, by its absolute path: no git, no GitHub.
+    const folder = marketplaceFolder(d)
+    expect(pluginCalls(d)).toContain(`plugin marketplace add ${folder}`)
+    expect(pluginCalls(d).filter((call) => call.includes('--sparse') || call.includes('autonomous-ai/openharness'))).toEqual([])
+    expect(existsSync(join(folder, '.claude-plugin', 'marketplace.json'))).toBe(true)
+    // The hook Claude Code runs; Windows has no mode bits.
+    if (process.platform !== 'win32') expect(statSync(join(folder, 'plugins', 'harness-device', 'hooks', 'asked')).mode & 0o777).toBe(0o700)
     expect(setupRecord(d)).toMatchObject({ dial: true, plugin: VERSION })
     await until('the day\'s tally', () => logLines(d, '[device] dial setup · day ').length > 0, 30_000, 50)
+    noPathLogged(d)
+  })
+
+  it('a CLI update writes the plugin\'s folder at its version, and Claude Code\'s update is counted', async () => {
+    const { d, desk } = await fresh()
+    await plugged(desk)
+    await until('the plugin recorded', () => setupRecord(d)?.plugin === VERSION, 45_000, 50)
+    const manifest = join(marketplaceFolder(d), 'plugins', 'harness-device', '.claude-plugin', 'plugin.json')
+    const built = JSON.parse(readFileSync(manifest, 'utf8')) as { version: string }
+
+    // As an older CLI left them: its version in the record and in the folder, which Claude Code reads its plugin from.
+    await desk.unplug('E2E-A')
+    await d.stop()
+    const older = '0.0.0+00000000'
+    expect(built.version).not.toBe(older)
+    writeFileSync(manifest, `${JSON.stringify({ ...built, version: older }, null, 2)}\n`)
+    const { unread, ...setup } = readSetup(d.dataDir)
+    expect(unread).toBeUndefined()
+    expect(writeSetup(d.dataDir, { ...setup, plugin: '0.0.0' })).toBeUndefined()
+    const calls = pluginCalls(d).length
+    await d.start()
+    await plugged(desk)
+
+    await until('the update counted', () => logLines(d, '[device] dial setup · claude · updated').length > 0, 45_000, 50)
+    expect(JSON.parse(readFileSync(manifest, 'utf8'))).toEqual(built)
+    expect(setupRecord(d)).toMatchObject({ plugin: VERSION })
+    const since = pluginCalls(d).slice(calls)
+    expect(since).toContain('plugin marketplace update openharness')
+    expect(since).toContain(`plugin update ${DIAL_PLUGIN_ID} --scope user`)
+    expect(since.filter((call) => call.startsWith('plugin marketplace add') || call === INSTALL)).toEqual([])
     noPathLogged(d)
   })
 

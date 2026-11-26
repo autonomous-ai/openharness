@@ -1,7 +1,7 @@
 /**
  * The dial's words reach an agent in a WezTerm pane (docs/plans/2026-11-19-dial-linux-design.md § 1.5), on the real
  * daemon: a WezTerm mux server of the test's own (harness/weztermMux.ts) runs the suite's hooked fake Claude Code in a
- * pane, and a fake dial on the desk lists it as able to take words, speaks to it, and taps it.
+ * pane, and a fake dial on the desk lists it in its pane, speaks to it until a route takes its words, and taps it.
  *
  * Skipped where WezTerm is not installed. CI's `e2e (dial hosts)` job installs it, and there a missing one fails the
  * file (harness/dialHosts.ts). No `wezterm` the daemon runs reaches any other server.
@@ -9,12 +9,12 @@
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
-import { heardClip } from '../src/cable/__fixtures__/heardClip.js'
-import { observedAgentId } from '../src/cable/hosts/observed.js'
+import { CLAUDE_PLUGIN_OFF, observedAgentId } from '../src/cable/hosts/observed.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
+import { spokenTo } from './harness/modInbox.js'
 import { PrivateWezterm, weztermBinary } from './harness/weztermMux.js'
 
 /** The machine a daemon signs in as, to hear its dial's words: the daemon asks its backend for each transcript. */
@@ -88,19 +88,17 @@ describe.skipIf(!weztermBinary)("an agent in a WezTerm pane takes the dial's wor
       () => d.hookLog().match(/claude pid=\d+ SessionStart\(startup\) session=(\S+) ran/)?.[1], 30_000, 100)
     const id = observedAgentId('claude', sessionId)
     // It takes words once the devices read that WezTerm's mux server made its terminal: until then its pane only holds it.
-    const row = (await showing(dial, 'the hooked agent listed, taking words',
-      (rows) => rows.some((r) => r.id === id && String(r.caps).includes('v')))).find((r) => r.id === id)!
+    // Claude Code has voice before that, so the row is waited for by its host read.
+    const row = (await showing(dial, 'the hooked agent listed in WezTerm',
+      (rows) => rows.some((r) => r.id === id && r.host === 'wezterm'))).find((r) => r.id === id)!
     expect(row).toMatchObject({ engine: 'claude', host: 'wezterm' })
     expect(row.caps).toContain('v')
 
-    // 2. The dial's words are its next prompt, typed by `wezterm cli send-text`.
-    relay.speech = 'run the spoken tests'
+    // 2. The dial's words are its next prompt, typed by `wezterm cli send-text`. Spoken again while the dial is told how
+    //    to reach it.
     const since = dial.messages.length
-    dial.send({ t: 'voice.begin', agentId: id, uploadId: 'spoken-1', sr: 16_000, lang: 'en' })
-    for (const frame of heardClip()) dial.audio(frame)
-    dial.send({ t: 'voice.end', uploadId: 'spoken-1' })
-    expect(await dial.next((m) => m.t === 'voice.transcript' || m.t === 'voice.error', 45_000, 'the answer to its words', since))
-      .toMatchObject({ t: 'voice.transcript', text: 'run the spoken tests', agentId: id })
+    relay.speech = 'run the spoken tests'
+    expect(await spokenTo(dial, id, 'spoken', [CLAUDE_PLUGIN_OFF])).toMatchObject({ t: 'voice.transcript', text: 'run the spoken tests', agentId: id })
     await until('the words in its pane', async () => (await mux.text(pane)).includes('run the spoken tests'), 30_000, 100)
     await until('its turn in the engine', () => d.hookLog().includes(`UserPromptSubmit session=${sessionId} ran`), 30_000, 100)
     await dial.next((m) => m.t === 'turn.done' && m.agentId === id, 45_000, 'its turn done', since)

@@ -236,13 +236,16 @@ const UNKNOWN = Symbol('unknown')
 /**
  * The plugin's entry as Claude Code's user settings hold it, undefined when they have none; UNKNOWN when the file says
  * nothing: missing, not a regular file, past 1 MiB, not UTF-8, not JSON or not an object. One read, sized by the file:
- * the plugin's hook and mod read it on every call.
+ * the plugin's hook and mod read it on every call. The devices read it at a hook-given path too (cable/hosts/observed.ts),
+ * so only a regular file is opened.
  */
 function pluginEntry(settingsPath: string): unknown {
   let settings: unknown
   try {
-    // No wait on a FIFO left at the path.
-    const fd = openSync(settingsPath, constants.O_RDONLY | constants.O_NONBLOCK)
+    // Before it is opened: opening a device has effects of its own, such as a serial port's DTR.
+    if (!statSync(settingsPath).isFile()) return UNKNOWN
+    // No wait on a FIFO swapped in after the stat, and no tty becomes this process's controlling terminal.
+    const fd = openSync(settingsPath, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOCTTY)
     try {
       const info = fstatSync(fd)
       if (!info.isFile() || info.size > MAX_SETTINGS_BYTES) return UNKNOWN

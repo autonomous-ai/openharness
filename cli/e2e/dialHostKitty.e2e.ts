@@ -2,7 +2,8 @@
  * The dial reaches an agent in a kitty window (docs/plans/2026-11-19-dial-linux-design.md § 3.3), on the real daemon:
  * kitty draws on an X11 desk of the test's own (harness/x11Desk.ts) and runs the suite's hooked fake Claude Code
  * (harness/kittyWindow.ts), and a fake dial on the desk lists it, speaks to it and taps it. kitty's remote control is
- * on for its socket alone, as docs/cli.md tells a person to set it; a kitty with it off, kitty's default, only says so.
+ * on for its socket alone, as docs/cli.md tells a person to set it; a kitty with it off, kitty's default, only says so,
+ * and the dial is told how to reach its agents.
  *
  * Skipped where kitty or the X11 programs are not installed, and off Linux: it would open a real window. CI's
  * `e2e (dial hosts)` job installs them, and there a missing one fails the file (harness/dialHosts.ts).
@@ -10,13 +11,13 @@
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
-import { heardClip } from '../src/cable/__fixtures__/heardClip.js'
-import { observedAgentId } from '../src/cable/hosts/observed.js'
+import { CLAUDE_PLUGIN_OFF, observedAgentId } from '../src/cable/hosts/observed.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 import { KittyWindows, kittyInstalled } from './harness/kittyWindow.js'
+import { speakOnce, spokenTo } from './harness/modInbox.js'
 import { X11Desk } from './harness/x11Desk.js'
 
 /** The machine a daemon signs in as, to hear its dial's words: the daemon asks its backend for each transcript. */
@@ -100,21 +101,19 @@ describe.skipIf(!kittyInstalled)('the dial reaches an agent in a kitty window', 
     const agent = await windows.agent('api', true)
     const shell = await windows.beside(agent)
     const id = observedAgentId('claude', agent.sessionId)
-    // It takes words once the devices read that kitty made its terminal: until then its window only holds it.
-    const row = (await showing(dial, 'the hooked agent listed, taking words',
-      (rows) => rows.some((r) => r.id === id && String(r.caps).includes('v')))).find((r) => r.id === id)!
+    // It takes words once the devices read that kitty made its terminal: until then its window only holds it. Claude
+    // Code has voice before that, so the row is waited for by its window found.
+    const row = (await showing(dial, 'the hooked agent listed, its window found',
+      (rows) => rows.some((r) => r.id === id && String(r.caps).includes('f')))).find((r) => r.id === id)!
     expect(row).toMatchObject({ engine: 'claude', host: 'kitty' })
     expect(row.caps).toContain('v')
     expect(row.caps).toContain('f')
 
-    // 2. The dial's words are its next prompt, typed by `kitten @ send-text`, then Enter as `send-text` `\r`.
+    // 2. The dial's words are its next prompt, typed by `kitten @ send-text`, then Enter as `send-text` `\r`: spoken
+    // again while the dial is told how to reach it.
     relay.speech = 'run the spoken tests'
     const since = dial.messages.length
-    dial.send({ t: 'voice.begin', agentId: id, uploadId: 'spoken-1', sr: 16_000, lang: 'en' })
-    for (const frame of heardClip()) dial.audio(frame)
-    dial.send({ t: 'voice.end', uploadId: 'spoken-1' })
-    expect(await dial.next((m) => m.t === 'voice.transcript' || m.t === 'voice.error', 45_000, 'the answer to its words', since))
-      .toMatchObject({ t: 'voice.transcript', text: 'run the spoken tests', agentId: id })
+    expect(await spokenTo(dial, id, 'spoken', [CLAUDE_PLUGIN_OFF])).toMatchObject({ t: 'voice.transcript', text: 'run the spoken tests', agentId: id })
     await until('the words in its window', async () => (await windows.text(agent)).includes('run the spoken tests'), 30_000, 100)
     await until('its turn in the engine', () => d.hookLog().includes(`UserPromptSubmit session=${agent.sessionId} ran`), 30_000, 100)
     await dial.next((m) => m.t === 'turn.done' && m.agentId === id, 45_000, 'its turn done', since)
@@ -130,14 +129,18 @@ describe.skipIf(!kittyInstalled)('the dial reaches an agent in a kitty window', 
     for (const secret of [join(d.projectsDir, 'api'), agent.listenOn!, 'run the spoken tests']) expect(d.log()).not.toContain(secret)
   })
 
-  it('a kitty with remote control off says so once, and its agents take no words', async () => {
+  it('a kitty with remote control off says so once, and words to its agents are told how to reach them', async () => {
     const { d, windows, dial } = await started()
 
     // Two kitties, neither listening: each agent's hooks run with KITTY_WINDOW_ID alone.
     const ids = [(await windows.agent('api', false)).sessionId, (await windows.agent('web', false)).sessionId]
       .map((sessionId) => observedAgentId('claude', sessionId))
     const rows = await showing(dial, 'both agents listed', (listed) => ids.every((id) => listed.some((r) => r.id === id)))
-    for (const id of ids) expect(rows.find((r) => r.id === id)!.caps).not.toContain('v')
+    // Claude Code's: voice, refused with how to reach it, as nothing types into these windows.
+    for (const [i, id] of ids.entries()) {
+      expect(rows.find((r) => r.id === id)!.caps).toContain('v')
+      expect(await speakOnce(dial, id, `refused-${i}`)).toMatchObject({ t: 'voice.error', message: CLAUDE_PLUGIN_OFF })
+    }
     expect(logged(d, OFF)).toBe(1)
   })
 })

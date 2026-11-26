@@ -10,8 +10,8 @@
 // both. Each file keeps its own list of Orca homes, so neither has a second writer, and a home in either counts as
 // turned on once.
 import { randomUUID } from 'node:crypto'
-import { closeSync, fsyncSync, openSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { closeSync, fsyncSync, mkdirSync, openSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 import { jsonObject, requireState, StateFileUnreadable } from '../lib/secureState.js'
 
 export type DialEngine = 'claude' | 'codex'
@@ -97,6 +97,8 @@ const writeJson = (file: string, value: unknown): string | undefined => {
   if (Buffer.byteLength(text) > MAX_FILE_BYTES) return 'EFBIG'
   const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
   try {
+    // An enable on a computer where the daemon never ran comes before anything made the data folder.
+    mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
     const fd = openSync(temporary, 'wx', 0o600)
     try {
       writeFileSync(fd, text)

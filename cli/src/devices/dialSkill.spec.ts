@@ -18,7 +18,7 @@ const OLD_MARKER = '# Written by Harness. Turn off the agent in Harness Device t
 const uid = process.getuid!()
 
 /** A step run just before the named file call, given its arguments: another remover taking the file first, a write that
- *  fails, or a count of the folders a check looks at. */
+ *  fails, a count of the folders a check looks at, or a record of what was opened. */
 const before = vi.hoisted(() => new Map<string, (...args: unknown[]) => void>())
 vi.mock('node:fs', async (importOriginal) => {
   const fs = await importOriginal<typeof import('node:fs')>()
@@ -27,7 +27,8 @@ vi.mock('node:fs', async (importOriginal) => {
       before.get(name)?.(...args)
       return call(...args)
     }) as T
-  return { ...fs, lstatSync: hooked('lstatSync', fs.lstatSync), renameSync: hooked('renameSync', fs.renameSync), unlinkSync: hooked('unlinkSync', fs.unlinkSync) }
+  return { ...fs, lstatSync: hooked('lstatSync', fs.lstatSync), renameSync: hooked('renameSync', fs.renameSync),
+    unlinkSync: hooked('unlinkSync', fs.unlinkSync), openSync: hooked('openSync', fs.openSync) }
 })
 
 const cleanup: string[] = []
@@ -528,6 +529,21 @@ When the task stops on a step only the person can take, ring their dial before y
       ['a FIFO', join(dir, 'fifo.json')],
     ]
     for (const [what, path] of unknown) expect(claudePluginState(path), what).toBe('unknown')
+  })
+
+  // The path is a hook's to give (cable/hosts/observed.ts): opening a device has effects of its own, such as a serial
+  // port's DTR, and a FIFO's open may wait for a writer.
+  it('claudePluginState opens no FIFO, folder or device: it looks first', () => {
+    const dir = folder()
+    mkdirSync(join(dir, 'folder.json'))
+    execFileSync('mkfifo', [join(dir, 'fifo.json')])
+    writeFileSync(join(dir, 'on.json'), '{"enabledPlugins":{"harness-device@openharness":true}}')
+    const opened: unknown[] = []
+    before.set('openSync', (path) => { opened.push(path) })
+    for (const path of [join(dir, 'fifo.json'), join(dir, 'folder.json'), '/dev/null']) expect(claudePluginState(path), path).toBe('unknown')
+    expect(opened).toEqual([])
+    expect(claudePluginState(join(dir, 'on.json'))).toBe('on')
+    expect(opened).toEqual([join(dir, 'on.json')])
   })
 
   it('readClaudePlugin: the person\'s off told from an entry gone, in one read', () => {

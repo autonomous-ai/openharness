@@ -2,7 +2,7 @@
  * What Harness Device's plugin for Orca (plugins/harness-device-orca) is in Orca, from Orca's own CLI: `orca status`,
  * `orca plugin inspect` and `orca plugin list`, each with `--json`; and its setup and removal there
  * (`orca plugin install|update|enable|uninstall`). Orca installs the plugin from a folder in Harness's data root that
- * holds the files cli.js carries (orcaPluginFolder.ts), written before Orca is asked about it; a folder that cannot be
+ * holds the files cli.js carries (pluginFolder.ts), written before Orca is asked about it; a folder that cannot be
  * written is said through `err` by its error's code. It runs in the `harness` command's process (`harness device orca`)
  * and in the devices' process (cable/orcaPluginSetup.ts): on Windows the core's, where the devices run through the
  * inline door (services/inline.ts `startDevices`) until Windows services run in their own process; elsewhere never the
@@ -12,7 +12,7 @@
 import { realpathSync } from 'node:fs'
 import { readOrcaConnected, readRemoved, readSetup } from './dialSkillFiles.js'
 import { orcaBinary, orcaHomesDeps } from './orcaHomes.js'
-import { ensureOrcaPluginFolder } from './orcaPluginFolder.js'
+import { ensurePluginFolder } from './pluginFolder.js'
 
 declare const __ORCA_PLUGIN__: string | undefined
 
@@ -131,7 +131,7 @@ async function reach(deps: OrcaPluginDeps): Promise<Asking | Unasked> {
   const runtime = (await ask(deps, orca, ['status', '--json'], ORCA_STATUS_MS))?.runtime
   if (!isObject(runtime) || runtime.reachable !== true || typeof runtime.appVersion !== 'string') return { why: 'not-running' }
   if (!meets(runtime.appVersion, carried.engines.orca)) return { why: 'old' }
-  const written = ensureOrcaPluginFolder(deps.folder, files)
+  const written = ensurePluginFolder(deps.folder, files, [])
   if (typeof written === 'object') {
     // Not Orca's absence: the person would be told Orca is not running.
     deps.err(`orca plugin folder: ${written.failed}`)

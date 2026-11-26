@@ -70,7 +70,6 @@ import { passThroughToGridLogout } from './lib/gridLogout.js'
 import { warnIfGridSignInRemains } from './lib/gridCredentials.js'
 import { gridExec } from './lib/gridExec.js'
 import { ENGINE_CLI_COMMANDS, PROCESS_ENGINES, installedEngineBin } from './lib/engineBin.js'
-import { findGit } from './lib/gitOnPath.js'
 import { SESSION_SEARCH_FILE, searchCommand } from './lib/sessionSearch/command.js'
 import { dshCommand, dshUsage } from './dsh/command.js'
 import { ApiConnections } from './lib/apiConnections.js'
@@ -79,7 +78,7 @@ import { connectionsCommand, connectionsUsage } from './lib/connectors/command.j
 // Static, not import(): --help prints DEVICE_USAGE, so the module loads at start anyway, and the core and services never load cli.ts.
 import { DEVICE_USAGE, runDeviceCommand } from './deviceClaude/command.js'
 import { vscodeExtensionDeps } from './devices/vscodeExtension.js'
-import { claudeRun, claudeRunIn } from './devices/claudePlugin.js'
+import { carriedClaudePlugin, claudeRun, claudeRunIn } from './devices/claudePlugin.js'
 import { orcaHomesDeps, readOrcaHomes } from './devices/orcaHomes.js'
 import { orcaPluginRun } from './devices/orcaPlugin.js'
 import { remoteCommand } from './remoteCommand.js'
@@ -3117,7 +3116,7 @@ switch (cmd) {
       claude: claudeRun,
       orcaHomes: () => readOrcaHomes(orcaHomesDeps()).then((read) => read.homes.claude),
       claudeIn: claudeRunIn,
-      git: () => findGit(),
+      claudeFiles: carriedClaudePlugin,
       defaultClaudeHome: dirname(env.CLAUDE_PROJECTS_DIR),
       codexHome: env.CODEX_HOME,
       codex: () => installedEngineBin('codex') !== null,

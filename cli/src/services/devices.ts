@@ -95,8 +95,8 @@ import { PetStore } from '../cable/pets/store.js'
 import { DialLog } from '../cable/dialLog.js'
 import { DialVerdicts, greetedAsDial } from '../cable/dialPortVerdicts.js'
 import { createDialSetup } from '../cable/dialSetup.js'
-import { claudeFound, type ClaudeInstallDeps, type ClaudeRun } from '../devices/claudePlugin.js'
-import { installedSkills } from '../devices/dialSkill.js'
+import { carriedClaudePlugin, claudeFound, type ClaudePluginSource, type ClaudeRun } from '../devices/claudePlugin.js'
+import { claudePluginState, installedSkills } from '../devices/dialSkill.js'
 import { readOrcaConnected, readRemoved, readSetup, SETUP_COUNTS } from '../devices/dialSkillFiles.js'
 import { createOrcaHomesCache, orcaBinary, orcaHomesDeps, readOrcaHomes, type OrcaHomesCache } from '../devices/orcaHomes.js'
 import { orcaPluginRun, type OrcaPluginRun } from '../devices/orcaPlugin.js'
@@ -111,7 +111,6 @@ import { MachineListCache } from '../device/machineList.js'
 import { noticeKind, type NoticeAsk, type NoticeResult } from '../lib/dialNotice.js'
 import { DIAL_USAGE_FILE } from '../lib/dialUsageContract.js'
 import { claudeProjectsRoots, codexHomeRoots, movedEngineHomes } from '../lib/engineHomes.js'
-import { findGit } from '../lib/gitOnPath.js'
 import { harnessDevicesRequest } from '../lib/harnessDevices.js'
 import { codeOrLength, errorKind } from '../lib/log.js'
 import { pidAlive } from '../lib/processProof.js'
@@ -225,9 +224,9 @@ export interface DevicesDeps {
   /** For this service's tests: how Claude Code is found for a Claude Code home; the daemon's own lookup by default
    *  (devices/claudePlugin.ts claudeFound). */
   claude?: (home: string, shell: boolean) => Promise<ClaudeRun | null>
-  /** For this service's tests: where git is, which the plugin's install clones with; this computer's by default
-   *  (lib/gitOnPath.ts findGit), whose miss starts the login shell. */
-  git?: ClaudeInstallDeps['git']
+  /** For this service's tests: Claude Code's marketplace folder and what cli.js carries for it;
+   *  `harnessPath('claude-marketplace', homedir())` and this build's when unset (devices/claudePlugin.ts). */
+  claudePlugin?: ClaudePluginSource
   /** For this service's tests: Orca's account homes (devices/orcaHomes.ts); read with this computer's `orca` when unset. */
   orcaHomes?: OrcaHomesCache
   /** For this service's tests: how VS Code and Harness's extension in it are found and `code` is run; the real ones by
@@ -382,6 +381,10 @@ function observedSource(
     ptyOwner: ptyOwnerOf,
     // Asked for Claude Code's sessions alone (observed.ts), and read only inside its own records folders.
     record: (owner) => readRecord(owner, { records: places.claude.records() }),
+    // A hook's transcript path names the home whose settings a voice start reads only when its projects folder is one of
+    // these (observed.ts). By name, not places.claude.roots(): Orca links an account's `projects` to another home's, and
+    // the scan's list keeps one name of each real folder, which would drop that account.
+    claudeRoots: () => [...claudeProjectsRoots(env.CLAUDE_PROJECTS_DIR), ...orcaHomes.get().claude.map((home) => join(home, 'projects'))],
     tty,
     scanned,
     herdrTerminal,
@@ -551,8 +554,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const row = registry.entries().find(({ agent }) => agent.id === agentId)?.agent
     return front !== undefined && row !== undefined && !row.appPending && row.app !== UNKNOWN_APP && row.app !== front
   }
+  /** Claude Code's default home, the devices' own: the renderer's, the dial setup's and the voice refusal's. */
+  const claudeHome = dirname(env.CLAUDE_PROJECTS_DIR)
   /** The engines' default homes, the dial setup's own: the dial skill is looked for where the setup writes it. */
-  const skillHomes = { claude: dirname(env.CLAUDE_PROJECTS_DIR), codex: env.CODEX_HOME }
+  const skillHomes = { claude: claudeHome, codex: env.CODEX_HOME }
   const dialUsage = createDialUsage({ sink: usageFile, now: wallClock, after: timerIn('dialUsage'), describe: usageAgent,
     working: usageWorking, away: usageAway, log, skills: () => installedSkills(core.dataDir, skillHomes) })
   /** A count is the devices' own part: one that throws never reaches the dial. */
@@ -630,7 +635,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // editor they are: a window reports shells by pid, and an agent's pid is placed in one editor alone by its hook's bundle
   // id (vscode.ts paneOf), so each editor's adapter finds only its own agents' terminals in the one pool.
   const renderer = {
-    defaultHome: dirname(env.CLAUDE_PROJECTS_DIR), managed: deps.claudeManagedSettings ?? MANAGED_SETTINGS[apps.platform],
+    defaultHome: claudeHome, managed: deps.claudeManagedSettings ?? MANAGED_SETTINGS[apps.platform],
   }
   /** Whether Claude Code's settings draw a session fullscreen: VS Code's terminals and Rex's blocks page it alike. */
   const claudeFullscreen = deps.claudeFullscreen ?? ((cwd: string, transcriptPath: string | undefined) => readFullscreen(cwd, transcriptPath, renderer))
@@ -881,7 +886,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     log,
     claude: deps.claude ?? claudeFound,
     orcaClaude: () => ({ homes: orcaHomes.get().claude, answered: orcaHomes.answered() }),
-    git: deps.git ?? findGit,
+    claudePlugin: deps.claudePlugin ?? { folder: harnessPath('claude-marketplace', homedir()), files: carriedClaudePlugin },
     version: VERSION,
   }) : null
   /** The dial setup's start pass, after a read of Orca's homes: the first, and each that changes them. A read that lands
@@ -958,7 +963,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }
   const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, apps.platform, log, orcaHomes, {
     adapters,
-    modReady: (sessionId) => inbox.ready(sessionId),
+    // A session the Claude app's wake still waits for is its mod's too: its copy is listed at its SessionStart, before its
+    // mod's first poll, and a voice start then is no "Restart" (observed.ts voiceRefusal); its words wait for the wake's.
+    modReady: (sessionId) => inbox.ready(sessionId) || appWake!.waitsFor(sessionId),
     // Words for a session the Claude app's wake still waits for would take its first poll ahead of the wake's: they are
     // words not taken yet (cable/hosts/appWake.ts waitsFor). The wake is built whenever this source is.
     toMod: (sessionId, text) => appWake!.waitsFor(sessionId) ? Promise.resolve('busy' as const) : inbox.deliver(sessionId, text),
@@ -981,6 +988,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         appWake!.waitsFor(threadId) ? Promise.resolve({ outcome: 'busy' as const }) : codexQueue.send(threadId, text, isApp),
     },
     codexHome: env.CODEX_HOME,
+    claudeHome,
+    claudePluginState,
     count: (what) => voiced(countWord(what)),
   }, ttyOf, skill ? (owners) => part.call('skill', () => skill.scanned(owners.values())) : undefined,
   // Only where a hook's address is taken: following another hc session, Herdr's adapter gives its terminals no pane, so

@@ -33,7 +33,7 @@ import { connect, type Socket } from 'node:net'
 import { dirname, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { harnessPath } from '../config/harnessHome.js'
-import { claudeDisable, claudeEnable, claudeHomeDisable, claudeHomeEnable, claudeStatus, type ClaudeInstallDeps, type ClaudeResult, type ClaudeRun } from '../devices/claudePlugin.js'
+import { claudeDisable, claudeEnable, claudeHomeDisable, claudeHomeEnable, claudeStatus, type ClaudePluginFiles, type ClaudeResult, type ClaudeRun } from '../devices/claudePlugin.js'
 import { claudePluginState, claudePluginTurnedOff, ownDirectory, removeSkill, skillsFolderOf, writeSkill } from '../devices/dialSkill.js'
 import { listable, MAX_HOMES, readRemoved, readSetup, readWritten, writeOrcaConnected, writePluginHomes, writeRemoved, type DialEngine } from '../devices/dialSkillFiles.js'
 import { tellDevices } from '../devices/listenerClient.js'
@@ -70,7 +70,8 @@ export const DEVICE_USAGE = `Harness device (with a dial plugged in, Claude Code
 
 export interface DeviceDeps {
   dataDir: string
-  /** The account's home, by which the paths rule finds the Orca plugin's folder in Harness's data root. */
+  /** The account's home, by which the paths rule finds Orca's plugin folder and Claude Code's marketplace folder in
+   *  Harness's data root. */
   home: string
   port: number
   platform: NodeJS.Platform
@@ -81,8 +82,8 @@ export interface DeviceDeps {
   orcaHomes(): Promise<string[]>
   /** Claude Code pointed at [home], on that child alone. */
   claudeIn(home: string): ClaudeRun | null
-  /** Where git is: asked only by claude enable, whose install needs it. */
-  git: ClaudeInstallDeps['git']
+  /** The marketplace cli.js carries, null in a run from the sources: asked only by claude enable, which writes it. */
+  claudeFiles(): ClaudePluginFiles | null
   /** Claude Code's default home, dirname(env.CLAUDE_PROJECTS_DIR): the command's own, unless it runs with another
    *  CLAUDE_CONFIG_DIR (an Orca terminal's). */
   defaultClaudeHome: string
@@ -138,9 +139,16 @@ export async function runDeviceCommand(argv: string[], deps: DeviceDeps): Promis
       return 0
     }
     case 'enable': {
-      const result = await claudeEnable({ run: deps.claude(), platform: deps.platform, git: deps.git })
+      const files = deps.claudeFiles()
+      // Before Claude Code is looked for: with nothing to add, an install could only fail.
+      if (!files) {
+        deps.err(NO_PLUGIN)
+        return 1
+      }
+      const folder = harnessPath('claude-marketplace', deps.home)
+      const result = await claudeEnable({ run: deps.claude(), platform: deps.platform, folder, files })
       if (!result.ok) {
-        deps.err(result.error)
+        deps.err(result.reason ? `${result.error} (${result.reason})` : result.error)
         return 1
       }
       // The command's own home whole before the others: their plugin is its files, and their skills folder links to its.
@@ -297,6 +305,8 @@ const SAVE_FAILED = 'Could not save the dial setting.'
 /** dial-setup.json is there but could not be read: the homes the devices service set up were passed by. */
 const SETUP_UNREAD = 'Could not read the dial setup.'
 const PLUGIN_LEFT_ON = 'Claude Code was not found, so its harness-device plugin is still on; /plugin in Claude Code removes it.'
+/** A run from the sources: only a build carries the marketplace folder's files. */
+const NO_PLUGIN = 'This Harness build carries no Claude Code plugin.'
 /** Said once for each Orca home that failed, never its path: Claude Code's own line names the account's folder. */
 const ORCA_ON_FAILED = 'Could not turn on Claude Code in one Orca account.'
 const ORCA_OFF_FAILED = 'Could not turn off Claude Code in one Orca account.'

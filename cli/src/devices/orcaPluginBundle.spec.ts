@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
-import { ensureOrcaPluginFolder } from './orcaPluginFolder.js'
+import { ensurePluginFolder } from './pluginFolder.js'
 
 // @ts-expect-error — plain ESM with no declaration file
 const { readOrcaPluginBundle } = await import('../../scripts/lib/orcaPluginBundle.mjs') as {
@@ -70,7 +70,7 @@ describe('Orca\'s plugin inside cli.js', () => {
 
   it('a name the plugin\'s folder would not take fails the build', () => {
     for (const name of ['my worker.ts', 'wörker.ts', 'a+b.ts', 'panel (copy)/view.ts']) {
-      expect(ensureOrcaPluginFolder(join(aTemp(), 'orca-plugin'), { [`src/${name}`]: '' }), name).toEqual({ failed: 'EINVAL' })
+      expect(ensurePluginFolder(join(aTemp(), 'orca-plugin'), { [`src/${name}`]: '' }, []), name).toEqual({ failed: 'EINVAL' })
       const root = aPlugin([name])
       expect(() => readOrcaPluginBundle('1.2.3', root), name).toThrow(/takes/)
     }
@@ -78,7 +78,7 @@ describe('Orca\'s plugin inside cli.js', () => {
   })
 
   it('the plugin\'s folder takes every key the build carries', () => {
-    expect(ensureOrcaPluginFolder(join(aTemp(), 'orca-plugin'), files('1.2.3'))).toBe('written')
+    expect(ensurePluginFolder(join(aTemp(), 'orca-plugin'), files('1.2.3'), [])).toBe('written')
   })
 
   it('each source is the file\'s own text', () => {

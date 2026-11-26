@@ -14,16 +14,16 @@
  * test a throwaway home and data folder, and its launcher, first on PATH and the Orca app's own (HARNESS_ORCA_APP_BIN),
  * is the fake, so neither PATH nor /Applications reaches the real Orca every session here runs inside.
  */
-import { execFileSync, spawn } from 'node:child_process'
-import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { spawn } from 'node:child_process'
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
-import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
+import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { harnessPath, thisComputer } from '../src/config/harnessHome.js'
 import { readSetup, writeSetup } from '../src/devices/dialSkillFiles.js'
 import { fakeOrcaCli, type FakeOrcaCli } from '../src/testing/fakeOrcaCli.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
+import { fileBundle } from './harness/fileBundle.js'
 
 const { extensionVersion } = await import('../scripts/lib/vscodeExtensionBundle.mjs') as { extensionVersion: (version: string) => string }
 
@@ -39,16 +39,7 @@ const PINNED = {
 }
 const PLUGIN_ROOT = join(CLI_ROOT, '..', 'plugins', 'harness-device-orca')
 
-let bundleDir: string | null = null
-let bundle = ''
-beforeAll(() => {
-  // The run's bundle when there is one (E2E_BUNDLE=1), else one built for this file, as it ships.
-  if (process.env.E2E_BUNDLE_PATH) { bundle = process.env.E2E_BUNDLE_PATH; return }
-  bundleDir = mkdtempSync(join(tmpdir(), 'harness-orca-e2e-'))
-  execFileSync(process.execPath, ['build-bundle.mjs'], { cwd: CLI_ROOT, env: { ...process.env, BUNDLE_OUT_DIR: bundleDir }, stdio: 'pipe' })
-  bundle = join(bundleDir, 'cli.js')
-}, 180_000)
-afterAll(() => { if (bundleDir) rmSync(bundleDir, { recursive: true, force: true }) })
+const bundle = fileBundle()
 
 /** Every file and folder under [folder], relative to it, with its permission bits. */
 function modes(folder: string): Record<string, number> {
@@ -74,7 +65,7 @@ describe('harness device orca, from the built CLI', () => {
     daemon = d
     const orca = fakeOrcaCli(join(d.root, 'orca-cli'), join(dirname(d.env.CLAUDE_PATH!), 'orca'))
     const harness = (...words: string[]) => new Promise<{ code: number | null; out: string; err: string }>((resolve) => {
-      const child = spawn(process.execPath, [bundle, ...words], { cwd: d.root, env: d.env, stdio: ['ignore', 'pipe', 'pipe'] })
+      const child = spawn(process.execPath, [bundle.path, ...words], { cwd: d.root, env: d.env, stdio: ['ignore', 'pipe', 'pipe'] })
       let out = ''
       let err = ''
       child.stdout.on('data', (chunk: Buffer) => { out += chunk.toString() })
@@ -171,7 +162,7 @@ describe('the devices process sets the plugin up', () => {
 
   it("a dial's attach installs and approves the plugin with no command; after a disable a CLI update's start and a replug ask Orca nothing; enable brings it back", async () => {
     // A daemon on the file's bundle, its dials on a desk, as devicesProcess.e2e.ts starts one.
-    const d = await IsolatedDaemon.create({ scriptPath: bundle, env: {
+    const d = await IsolatedDaemon.create({ scriptPath: bundle.path, env: {
       CABLE_DISABLE: 'false',
       HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200',
       HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000',
@@ -185,7 +176,7 @@ describe('the devices process sets the plugin up', () => {
     // The fake written through the daemon's `bin/orca` link into its launcher, which the devices find as Orca's own.
     const orca = fakeOrcaCli(join(d.root, 'orca-cli'), join(dirname(d.env.CLAUDE_PATH!), 'orca'))
     const harness = (...words: string[]) => new Promise<{ code: number | null; out: string; err: string }>((resolve) => {
-      const child = spawn(process.execPath, [bundle, ...words], { cwd: d.root, env: d.env, stdio: ['ignore', 'pipe', 'pipe'] })
+      const child = spawn(process.execPath, [bundle.path, ...words], { cwd: d.root, env: d.env, stdio: ['ignore', 'pipe', 'pipe'] })
       let out = ''
       let err = ''
       child.stdout.on('data', (chunk: Buffer) => { out += chunk.toString() })

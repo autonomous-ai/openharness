@@ -1,9 +1,11 @@
 /**
- * The folder Orca installs Harness Device's plugin from (`orca plugin install <folder>`) and copies again at each
- * `orca plugin update`: the plugin's files `cli.js` carries, written in Harness's data root by the `harness device orca`
- * command's process and by the devices' process (cable/orcaPluginSetup.ts). Orca must never read half a folder, after a
- * crash or with two writers at once (the devices' pass beside a person's `enable`), so a write goes whole into a folder
- * beside it and is renamed into place.
+ * A plugin's folder in Harness's data root, holding the files `cli.js` carries. Two use it: the folder Orca installs
+ * Harness Device's plugin from (`orca plugin install <folder>`) and copies again at each `orca plugin update`
+ * (orcaPlugin.ts), and Claude Code's marketplace, which Claude Code installs and updates its two plugins from
+ * (claudePlugin.ts). Each is written by the `harness device` command's process and by the devices' process
+ * (cable/orcaPluginSetup.ts, cable/dialPluginSetup.ts). An app must never read half a folder, after a crash or with two
+ * writers at once (the devices' pass beside a person's `enable`), so a write goes whole into a folder beside it and is
+ * renamed into place.
  *
  * Each process writes into its own staging folder and moves the folder it replaces aside into its own, both named by
  * its pid (`<folder>.new.<pid>`, `<folder>.old.<pid>`), never into ones named for all: a process that cleared a shared
@@ -11,25 +13,38 @@
  * again half full for the other to rename; one that put a shared `<folder>.old` back as a leftover could do it while
  * another swapped, and the other's rename then failed. What a process left is put back or removed only once it is gone.
  */
-import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, fchmodSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, type Stats, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { pidAlive } from '../lib/processProof.js'
 
-/** A folder's entries by name: a folder's own, or a file's bytes. */
-type Tree = Map<string, Tree | Buffer>
+/** A folder's entries by name: a folder's own, or a file's bytes and the mode it is written with. */
+type Tree = Map<string, Tree | { bytes: Buffer; mode: number }>
+
+/** This account's alone. A file Claude Code runs by its path (the device plugin's `hooks/asked`) needs its owner's
+ *  execute bit as well. */
+const FOLDER = 0o700
+const FILE = 0o600
+const EXECUTABLE = 0o700
+/** Windows has no mode bits: Node makes a file's up from its read-only flag, so comparing them would write the folder
+ *  anew at every run. Off Windows they are set and compared, so no umask makes a folder differ at every run. */
+const MODES = process.platform !== 'win32'
+/** Whether [info]'s mode is [mode], off Windows. */
+const hasMode = (info: Stats, mode: number): boolean => !MODES || (info.mode & 0o777) === mode
 
 /** A key's segment: a plain name, so no key reaches outside the folder. The build holds the plugin's names to the same
- *  pattern (scripts/lib/orcaPluginBundle.mjs). */
+ *  pattern (scripts/lib/orcaPluginBundle.mjs, claudePluginBundle.mjs). */
 const SEGMENT = /^[A-Za-z0-9._-]+$/
 /** What a process leaves beside the folder, after `<folder>.`: its staging folder, or the folder its swap moved aside,
  *  by its pid. */
 const LEFT = /^(new|old)\.([0-9]+)$/
 
-/** Makes [folder] hold exactly [files], writing only when it differs. Never throws: a failure is its error's code
- *  (`EACCES`), never its message, which names a path; a key off the pattern is `EINVAL`, as Node names a bad argument. */
-export function ensureOrcaPluginFolder(folder: string, files: Readonly<Record<string, string>>): 'same' | 'written' | { failed: string } {
+/** Makes [folder] hold exactly [files], [executable] (keys of files) 0700, other files 0600, folders 0700; writes only
+ *  when bytes or, off Windows, modes differ. Never throws: a failure is its error's code (`EACCES`), never its message,
+ *  which names a path; a key off the pattern, or an executable that names no file, is `EINVAL`, as Node names a bad
+ *  argument. */
+export function ensurePluginFolder(folder: string, files: Readonly<Record<string, string>>, executable: readonly string[]): 'same' | 'written' | { failed: string } {
   try {
-    const tree = treeOf(files)
+    const tree = treeOf(files, executable)
     if (!tree) return { failed: 'EINVAL' }
     // Harness's data root, which a CLI run with its own data folder (ADAPTER_DATA_DIR) may not have made yet.
     mkdirSync(dirname(folder), { recursive: true, mode: 0o700 })
@@ -42,9 +57,10 @@ export function ensureOrcaPluginFolder(folder: string, files: Readonly<Record<st
   }
 }
 
-/** [files] as folders and bytes; undefined when a key is not a relative path of plain segments, or names a file and a
- *  folder at once. */
-function treeOf(files: Readonly<Record<string, string>>): Tree | undefined {
+/** [files] as folders, and bytes with their modes; undefined when a key is not a relative path of plain segments, or
+ *  names a file and a folder at once, or an executable is not a key. */
+function treeOf(files: Readonly<Record<string, string>>, executable: readonly string[]): Tree | undefined {
+  if (!executable.every((key) => Object.hasOwn(files, key))) return undefined
   const root: Tree = new Map()
   for (const [key, text] of Object.entries(files)) {
     const segments = key.split('/')
@@ -58,7 +74,7 @@ function treeOf(files: Readonly<Record<string, string>>): Tree | undefined {
     }
     const name = segments[segments.length - 1]
     if (folder.has(name)) return undefined
-    folder.set(name, Buffer.from(text))
+    folder.set(name, { bytes: Buffer.from(text), mode: executable.includes(key) ? EXECUTABLE : FILE })
   }
   return root
 }
@@ -84,14 +100,15 @@ function settle(old: string, folder: string): void {
 /** Whether [folder] is a real folder holding exactly [tree]. One that cannot be read differs: writing it anew mends it. */
 function same(folder: string, tree: Tree): boolean {
   try {
-    return lstatSync(folder, { throwIfNoEntry: false })?.isDirectory() === true && holds(folder, tree)
+    const info = lstatSync(folder, { throwIfNoEntry: false })
+    return info?.isDirectory() === true && hasMode(info, FOLDER) && holds(folder, tree)
   } catch {
     return false
   }
 }
 
 /** Each entry of [path] is in [tree], a folder where it has a folder and a regular file with its bytes where it has a
- *  file, and none is missing. Stops at the first difference. */
+ *  file, each with its mode, and none is missing. Stops at the first difference. */
 function holds(path: string, tree: Tree): boolean {
   const names = readdirSync(path)
   if (names.length !== tree.size) return false
@@ -100,25 +117,28 @@ function holds(path: string, tree: Tree): boolean {
     const inner = join(path, name)
     const info = lstatSync(inner)
     const kept = want instanceof Map
-      ? info.isDirectory() && holds(inner, want)
-      : want !== undefined && info.isFile() && info.size === want.length && readFileSync(inner).equals(want)
+      ? info.isDirectory() && hasMode(info, FOLDER) && holds(inner, want)
+      : want !== undefined && info.isFile() && hasMode(info, want.mode) && info.size === want.bytes.length && readFileSync(inner).equals(want.bytes)
     if (!kept) return false
   }
   return true
 }
 
 /** [tree] whole into this process's staging folder, then the swap. A step that fails removes the staging folder and
- *  puts the moved folder back, or removes it when another process put a folder in its place meanwhile. */
+ *  puts the moved folder back, or removes it when another process put a folder in its place meanwhile. A last rename
+ *  that lost to another process writing the same files is no failure: the folder holds them. */
 function write(folder: string, tree: Tree): void {
   const staging = `${folder}.new.${process.pid}`
   const old = `${folder}.old.${process.pid}`
   let moved = false
+  let staged = false
   try {
     put(staging, tree)
     if (lstatSync(folder, { throwIfNoEntry: false })) {
       renameSync(folder, old)
       moved = true
     }
+    staged = true
     renameSync(staging, folder)
   } catch (error) {
     try {
@@ -126,23 +146,27 @@ function write(folder: string, tree: Tree): void {
     } finally {
       rmSync(staging, { recursive: true, force: true })
     }
+    if (staged && same(folder, tree)) return
     throw error
   }
   rmSync(old, { recursive: true, force: true })
 }
 
-/** This account's alone: folders 0700, files 0600, each file on disk before the swap. */
+/** Folders and files with their modes, each file on disk before the swap. A mode is set after the umask narrowed it,
+ *  so one that strips the owner's bits still gives the folder the modes it is compared with. */
 function put(path: string, tree: Tree): void {
-  mkdirSync(path, { mode: 0o700 })
+  mkdirSync(path, { mode: FOLDER })
+  if (MODES) chmodSync(path, FOLDER)
   for (const [name, want] of tree) {
     const inner = join(path, name)
     if (want instanceof Map) {
       put(inner, want)
       continue
     }
-    const fd = openSync(inner, 'wx', 0o600)
+    const fd = openSync(inner, 'wx', want.mode)
     try {
-      writeFileSync(fd, want)
+      if (MODES) fchmodSync(fd, want.mode)
+      writeFileSync(fd, want.bytes)
       fsyncSync(fd)
     } finally {
       closeSync(fd)

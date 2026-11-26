@@ -110,7 +110,8 @@ export interface HostSource {
   markSeen?(agentId: string): void
   /** The dial's words for one of its agents, answered once they are delivered or refused. A source without it takes none. */
   send?(agent: HostAgent, text: string): Promise<SendResult>
-  /** A sentence of the agent's own app for words no route reaches, said in place of the generic one; none keeps that. */
+  /** A sentence that refuses the dial's words at every dictation's start, for an agent with `v` too (cableSession.ts),
+   *  said in place of the generic one: so a source gives one only for an agent no route reaches; none lets them go. */
   voiceRefusal?(agent: HostAgent): string | undefined
   /** A tap: bring the agent's terminal forward; false when it did not come, `superseded` when a later tap replaced it
    *  before it acted (eval I13, PM 2026-11-24). [latest] says whether it is still the dial's latest tap, on any agent of

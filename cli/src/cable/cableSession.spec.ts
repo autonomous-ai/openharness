@@ -7712,6 +7712,40 @@ describe('what the dial cannot do for an agent', () => {
     } finally { await session.stop() }
   })
 
+  // A Claude Code session with `v` whose plugin or mod is not there yet: its host's sentence stops the words at the start.
+  it("dictation to an agent with voice whose host refuses it is refused in the host's words", async () => {
+    const transcribe = vi.fn(async () => 'run the tests')
+    const host = caps({ transcribe, voiceRefusal: (id) => (id === 'a2' ? 'Restart Claude Code for voice.' : undefined) })
+    const { session, port } = await greeted(host)
+    try {
+      speak(port, 'a2', 'u1')
+      port.say({ t: 'voice.end', uploadId: 'u1' })
+      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'voice.error', uploadId: 'u1',
+        message: 'Restart Claude Code for voice.' }))
+      expect(transcribe).not.toHaveBeenCalled()
+      expect(host.sendTurn).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
+
+  it('a question voice at such an agent is not refused', async () => {
+    const transcribe = vi.fn(async () => 'Only the parser, please.')
+    const host = caps({ transcribe, canSpeakQuestion: () => true,
+      voiceRefusal: (id) => (id === 'a2' ? 'Restart Claude Code for voice.' : undefined) })
+    const { session, port } = await greeted(host)
+    try {
+      await session.question('a2', 'q-speak', [{ key: 'scope', q: 'Which scope?', options: ['File', 'Project'], multi: false, canText: true }])
+      port.say({ t: 'question.read', agentId: 'a2', requestId: 'read' })
+      await vi.waitFor(() => expect(port.types()).toContain('question.state'))
+      const { token } = port.sent.find((m) => m.t === 'question.state')!
+      port.say({ t: 'voice.begin', agentId: 'a2', questionToken: token, questionIndex: 0, uploadId: 'speech-q' })
+      for (const frame of heardClip()) port.pcm(frame)
+      port.say({ t: 'voice.end', uploadId: 'speech-q' })
+      await vi.waitFor(() => expect(port.types()).toContain('voice.question'))
+      expect(transcribe).toHaveBeenCalled()
+      expect(port.sent.some((m) => m.t === 'voice.error' && m.message === 'Restart Claude Code for voice.')).toBe(false)
+    } finally { await session.stop() }
+  })
+
   it('words that name no agent are routed only among the agents the dial may talk to', async () => {
     const route = vi.fn(async () => ({ agentId: 'a2', confidence: 0.9, reason: 'name matched' }))
     const host = caps({ route })

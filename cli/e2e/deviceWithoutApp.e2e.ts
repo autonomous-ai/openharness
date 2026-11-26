@@ -11,6 +11,7 @@
  *   for a name Claude Code made up;
  * - a window brings back its tab's list, and closing it the machine's;
  * - talking to it is refused kindly, and `HARNESS_DEVICE_OBSERVED=off` leaves only the Harness agent;
+ * - voice at Claude Code with no route says how to reach it: enable Harness's plugin, or restart Claude Code;
  * - Claude Code in a tmux session the person opened (harness/ownTmux.ts) is listed with host tmux, takes the dial's words
  *   through its mod, and a tap moves the person's own tmux client to its pane, never one on a session Harness made;
  * - a ten-minute transcript, 10,000 characters, reaches Claude Code's mod whole in VS Code's terminal, and the dial hears
@@ -18,17 +19,18 @@
  * - Claude Code in VS Code's extension panel, with no terminal, takes the dial's spoken words through its mod alone.
  */
 import type { ChildProcess } from 'node:child_process'
-import { mkdirSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
-import { heardClip } from '../src/cable/__fixtures__/heardClip.js'
+import { CLAUDE_PLUGIN_OFF, CLAUDE_RESTART } from '../src/cable/hosts/observed.js'
+import { DIAL_PLUGIN_ID } from '../src/devices/dialSkill.js'
 import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 import { InOrca } from './harness/inOrca.js'
-import { inboxPoll } from './harness/modInbox.js'
+import { inboxPoll, sentThroughMod, speakOnce, spokenTo } from './harness/modInbox.js'
 import { Outside } from './harness/outsideAgent.js'
 import { controlClient, InOwnTmux, type ControlClient } from './harness/ownTmux.js'
 
@@ -90,7 +92,8 @@ describe('the device without the app', () => {
     desk = undefined
     backend = undefined
   })
-  /** A daemon of its own and a desk; with [relay], signed in to it as ME, for the dial's words. */
+  /** A daemon of its own and a desk; with [relay], signed in to it as ME, for the dial's words. Its fake Claude Code is
+   *  the suite's, older than Harness's plugin needs: the dial's setup installs nothing, so the plugin is on only where a test turns it on. */
   const fresh = async (env: Record<string, string> = {}, relay?: FakeBackend): Promise<{ d: IsolatedDaemon; desk: Desk }> => {
     const signIn = relay ? { BACKEND_WS_URL: relay.wsUrl, WEB_URL: relay.httpUrl, ADAPTER_COMPUTER_ID: ME.computerId } : {}
     const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false', ...signIn, ...env } })
@@ -138,8 +141,9 @@ describe('the device without the app', () => {
     expect(roster.end).toMatchObject({ tab: '', view: 'machine', total: 2 })
     // On macOS a tap would start Harness Desktop: no test here taps it, as that would start the developer's own.
     expect(roster.rows.find((r) => r.id === harness)).toMatchObject({ host: 'harness', caps: process.platform === 'darwin' ? 'svfa' : 'sva' })
-    // On macOS a tap brings Ghostty forward by its bundle id (cable/hosts/open.ts); elsewhere it has no way in.
-    const caps = process.platform === 'darwin' ? 'sf' : 's'
+    // On macOS a tap brings Ghostty forward by its bundle id (cable/hosts/open.ts); elsewhere it has no way in. Voice
+    // with no route: the dial takes it, and is told how to reach the session.
+    const caps = process.platform === 'darwin' ? 'svf' : 'sv'
     expect(roster.rows.find((r) => r.id === engine.id)).toMatchObject({ name: 'in-ghostty', engine: 'claude', host: 'ghostty', caps })
     client.close()
   })
@@ -232,7 +236,7 @@ describe('the device without the app', () => {
     // Found by the scan the dial's attach runs (4-6 s after the plug here), not the next one a minute later.
     const roster = await showing(dial, 'the agent already running listed', (r) => ids(r).includes(engine.id), 0, 15_000)
     // Named by its folder, read from its transcript as a terminal's Claude Code writes it.
-    expect(roster.rows.find((r) => r.id === engine.id)).toMatchObject({ name: 'in-ghostty', engine: 'claude', host: 'terminal', caps: 's' })
+    expect(roster.rows.find((r) => r.id === engine.id)).toMatchObject({ name: 'in-ghostty', engine: 'claude', host: 'terminal', caps: 'sv' })
   })
 
   it('an agent answered before the dial connects is restored with its last answer, and nothing is told as done', async () => {
@@ -323,6 +327,26 @@ describe('the device without the app', () => {
     })
   })
 
+  it('voice at Claude Code in Ghostty, with no route, says how to reach it', async () => {
+    // The dial's setup installs nothing (fresh): the plugin's entry is the test's alone.
+    const { d, desk } = await fresh()
+    const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
+    await heard(dial, (m) => m.t === 'agents.end', 'the first list')
+    const engine = await startOutside(d, 'in-ghostty', { TERM_PROGRAM: 'ghostty' })
+    const roster = await showing(dial, 'the agent listed', (r) => ids(r).includes(engine.id))
+    expect(roster.rows.find((r) => r.id === engine.id)?.caps).toContain('v')
+    // The user settings of the home its transcript is in, which name no plugin.
+    const settings = join(dirname(d.env.CLAUDE_PROJECTS_DIR!), 'settings.json')
+    expect(await speakOnce(dial, engine.id, 'e2e-off')).toMatchObject({ t: 'voice.error', message: CLAUDE_PLUGIN_OFF })
+    // On, as `claude plugin install` leaves it, and its mod never polls: a session started before the plugin.
+    const current = (existsSync(settings) ? JSON.parse(readFileSync(settings, 'utf8')) : {}) as { enabledPlugins?: Record<string, boolean> }
+    writeFileSync(settings, JSON.stringify({ ...current, enabledPlugins: { ...current.enabledPlugins, [DIAL_PLUGIN_ID]: true } }))
+    expect(await speakOnce(dial, engine.id, 'e2e-restart')).toMatchObject({ t: 'voice.error', message: CLAUDE_RESTART })
+    // No path: the settings read is said nowhere.
+    expect(d.log()).not.toContain(settings)
+    expect(d.log().split('\n').filter((line) => line.includes('voice') && line.includes(d.root))).toEqual([])
+  })
+
   it('HARNESS_DEVICE_OBSERVED=off lists only the harness agent', async () => {
     const { d, desk } = await fresh({ HARNESS_DEVICE_OBSERVED: 'off' })
     const client = await LocalClient.connect(d)
@@ -352,7 +376,7 @@ describe('the device without the app', () => {
     const engine = await InOwnTmux.start(d, 'own-claude', 'in-tmux')
     const roster = await showing(dial, 'the agent listed', (r) => r.rows.find((row) => row.id === engine.id)?.host === 'tmux')
     // No bundle id: a tap switches its pane and brings no app forward.
-    expect(roster.rows.find((r) => r.id === engine.id)).toMatchObject({ name: 'in-tmux', engine: 'claude', host: 'tmux', caps: 'sf' })
+    expect(roster.rows.find((r) => r.id === engine.id)).toMatchObject({ name: 'in-tmux', engine: 'claude', host: 'tmux', caps: 'svf' })
     // Nothing was registered for the pane.
     const client = await LocalClient.connect(d)
     expect(((await client.request('agents_list', { includeStopped: true }, 30_000)).agents as Array<{ tmuxPane?: string }>)
@@ -363,9 +387,7 @@ describe('the device without the app', () => {
     await heard(dial, (m) => m.t === 'turn.started' && m.agentId === engine.id, 'its turn started', since)
     await heard(dial, (m) => m.t === 'turn.done' && m.agentId === engine.id, 'its turn done', since)
     const poll = inboxPoll(d, engine.sessionId)
-    await showing(dial, 'voice once its mod polls', (r) => r.rows.find((row) => row.id === engine.id)?.caps === 'svf')
-    dial.send({ t: 'turn.send', agentId: engine.id, text: 'from the dial' })
-    expect(await poll).toEqual({ status: 200, body: { text: 'from the dial' } })
+    expect(await sentThroughMod(dial, engine.id, 'from the dial', poll)).toEqual({ status: 200, body: { text: 'from the dial' } })
   })
 
   it('a ten-minute transcript, 10,000 characters, reaches Claude Code\'s mod whole, and the dial hears it was sent', async () => {
@@ -378,17 +400,12 @@ describe('the device without the app', () => {
     const engine = await startOutside(d, 'in-vscode', { TERM_PROGRAM: 'vscode' })
     await showing(dial, 'the agent listed', (r) => ids(r).includes(engine.id))
     const poll = inboxPoll(d, engine.sessionId)
-    await showing(dial, 'voice once its mod polls', (r) => String(r.rows.find((row) => row.id === engine.id)?.caps ?? '').includes('v'))
     // About what ten minutes of speech transcribes to.
     const words = `${'word '.repeat(2_000).trim()}.`
     expect(words).toHaveLength(10_000)
     relay.speech = words
-    const since = dial.messages.length
-    dial.send({ t: 'voice.begin', agentId: engine.id, uploadId: 'e2e-long-1', sr: 16_000, lang: 'en' })
-    for (const frame of heardClip()) dial.audio(frame)
-    dial.send({ t: 'voice.end', uploadId: 'e2e-long-1' })
-    const answer = await heard(dial, (m) => (m.t === 'voice.transcript' || m.t === 'voice.error') && m.uploadId === 'e2e-long-1',
-      'the answer to its words', since)
+    // Spoken again while the dial is told to enable Harness's plugin: until its mod's poll is held.
+    const answer = await spokenTo(dial, engine.id, 'e2e-long', [CLAUDE_PLUGIN_OFF])
     // Sent, with no text: the dial's frame cannot hold 10,000 characters, and it has nothing to confirm.
     expect(answer).toMatchObject({ t: 'voice.transcript', agentId: engine.id, needsConfirm: false })
     expect(answer).not.toHaveProperty('text')
@@ -409,20 +426,15 @@ describe('the device without the app', () => {
       { __CFBundleIdentifier: 'com.microsoft.VSCode', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode', ORCA_AGENT_SESSION_ID: '' })
     await panel.hook('SessionStart', { source: 'startup' })
     const listed = await showing(dial, 'the panel session listed', (r) => ids(r).includes(panel.id))
-    // Seen as VS Code's, from its hints alone, with nothing to type into until its mod polls.
+    // Seen as VS Code's, from its hints alone, with nothing to type into until its mod polls: voice, all the same.
     const first = listed.rows.find((row) => row.id === panel.id)
     expect(first).toMatchObject({ name: 'in-vscode-panel', engine: 'claude', host: 'vscode', caps: expect.any(String) })
-    expect(first?.caps).not.toContain('v')
+    expect(first?.caps).toContain('v')
     const poll = inboxPoll(d, panel.sessionId)
-    await showing(dial, 'voice once its mod polls', (r) => String(r.rows.find((row) => row.id === panel.id)?.caps ?? '').includes('v'))
     const words = 'run the panel tests'
     relay.speech = words
-    const since = dial.messages.length
-    dial.send({ t: 'voice.begin', agentId: panel.id, uploadId: 'e2e-panel-1', sr: 16_000, lang: 'en' })
-    for (const frame of heardClip()) dial.audio(frame)
-    dial.send({ t: 'voice.end', uploadId: 'e2e-panel-1' })
-    const answer = await heard(dial, (m) => (m.t === 'voice.transcript' || m.t === 'voice.error') && m.uploadId === 'e2e-panel-1',
-      'the answer to its words', since)
+    // Spoken again while the dial is told to enable Harness's plugin: until its mod's poll is held.
+    const answer = await spokenTo(dial, panel.id, 'e2e-panel', [CLAUDE_PLUGIN_OFF])
     expect(answer).toMatchObject({ t: 'voice.transcript', text: words, agentId: panel.id })
     expect(await poll).toEqual({ status: 200, body: { text: words } })
     expect(d.log()).not.toContain(words)
@@ -438,7 +450,7 @@ describe('the device without the app', () => {
     await showing(dial, 'the harness agent listed', (r) => ids(r).includes(harness))
     const engine = await InOwnTmux.start(d, 'own-claude', 'in-tmux')
     await d.tmux.run('new-session', '-d', '-s', 'own-other', 'sleep 600')
-    await showing(dial, 'the agent listed', (r) => r.rows.find((row) => row.id === engine.id)?.caps === 'sf')
+    await showing(dial, 'the agent listed', (r) => r.rows.find((row) => row.id === engine.id)?.caps === 'svf')
     // Every session is made; now the clients. The person's first, then one as Desktop's terminal on the Harness agent is:
     // it attached later, so it is the client used last, the one a bare switch-client moves.
     const person = await controlClient(d, 'own-other')

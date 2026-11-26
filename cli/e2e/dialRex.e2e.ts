@@ -14,11 +14,12 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { heardClip } from '../src/cable/__fixtures__/heardClip.js'
-import { observedAgentId } from '../src/cable/hosts/observed.js'
+import { CLAUDE_PLUGIN_OFF, observedAgentId } from '../src/cable/hosts/observed.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
+import { spokenTo } from './harness/modInbox.js'
 import { PrivateRex, rexBinary } from './harness/rexSession.js'
 
 /** The machine a daemon signs in as, to hear its dial's words: the daemon asks its backend for each transcript. */
@@ -101,8 +102,9 @@ describe.skipIf(!rexBinary)('an agent in a Rex block is on the dial', () => {
       () => d.hookLog().match(/claude pid=\d+ SessionStart\(startup\) session=(\S+) ran/)?.[1], 30_000, 100)
     const id = observedAgentId('claude', sessionId)
     // It takes words once the devices read that Rex's server made its terminal: until then its block only holds it.
-    const row = (await showing(dial, 'the hooked agent listed, taking words',
-      (rows) => rows.some((r) => r.id === id && String(r.caps).includes('v')))).find((r) => r.id === id)!
+    // Claude Code has voice before that, so the row is waited for by its block found.
+    const row = (await showing(dial, 'the hooked agent listed, its block found',
+      (rows) => rows.some((r) => r.id === id && String(r.caps).includes('f')))).find((r) => r.id === id)!
     expect(row).toMatchObject({ engine: 'claude', host: 'rex' })
     expect(row.caps).toContain('f')
     // Rex's page, no longer Other's.
@@ -110,9 +112,11 @@ describe.skipIf(!rexBinary)('an agent in a Rex block is on the dial', () => {
       && (m.apps as Array<{ id: string }>).some((a) => a.id === 'rex'), 45_000, "Rex's page")
     expect((apps.apps as Array<{ id: string; name: string }>).find((a) => a.id === 'rex')).toMatchObject({ name: 'Rex' })
 
-    // 2. The dial's words are its next prompt, typed by `rex send`, then Enter after the settle.
+    // 2. The dial's words are its next prompt, typed by `rex send`, then Enter after the settle: spoken again while the
+    //    dial is told how to reach it.
     const since = dial.messages.length
-    expect(await speak(dial, relay, id, 'run the tests', 'spoken-1')).toMatchObject({ t: 'voice.transcript', text: 'run the tests', agentId: id })
+    relay.speech = 'run the tests'
+    expect(await spokenTo(dial, id, 'spoken', [CLAUDE_PLUGIN_OFF])).toMatchObject({ t: 'voice.transcript', text: 'run the tests', agentId: id })
     await until('the words in its block', async () => (await session.screen(block)).includes('run the tests'), 30_000, 100)
     await until('its turn in the engine', () => d.hookLog().includes(`UserPromptSubmit session=${sessionId} ran`), 30_000, 100)
     await dial.next((m) => m.t === 'turn.done' && m.agentId === id, 45_000, 'its turn done', since)

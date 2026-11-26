@@ -20,19 +20,18 @@ import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { DIAL_PLUGIN_ID, DIAL_SKILL } from '../src/devices/dialSkill.js'
 import { orcaBinary } from '../src/devices/orcaHomes.js'
 import { resolveBinaryOnPath } from '../src/lib/binaryOnPath.js'
-import { IsolatedDaemon, sourcesCli, until } from './harness/daemon.js'
+import { IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 import { FakeOrca } from './harness/fakeOrca.js'
+import { fileBundle } from './harness/fileBundle.js'
 import { Outside } from './harness/outsideAgent.js'
 
 /** The open scan's report of the one session it found: counts and its time, nothing else. */
 const FOUND_ONE = /\[observed\] scan · 1 found · \d+ app known · \d+ named · \d+ answered · \d+ ms/
 
-// The run's bundle when there is one (E2E_BUNDLE), as the daemon runs, as in deviceDialSkill.e2e.ts.
-const CLI_ENTRY = process.env.E2E_BUNDLE_PATH
-  ? [process.env.E2E_BUNDLE_PATH]
-  : sourcesCli()
+// The daemons and the commands on a build: from the sources the CLI carries no plugin to set up.
+const bundle = fileBundle()
 const INSTALL = `plugin install ${DIAL_PLUGIN_ID} --scope user`
 const ENABLE = `plugin enable ${DIAL_PLUGIN_ID} --scope user`
 
@@ -95,7 +94,7 @@ describe('Orca\'s account homes on the dial', () => {
 
   /** A daemon with a dial port on the desk. [claudeVersion]: its fake Claude Code's, one recent enough for the plugin. */
   const fresh = async (before: (d: IsolatedDaemon) => void = () => {}, claudeVersion?: string): Promise<{ d: IsolatedDaemon; desk: Desk }> => {
-    const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false' }, claudeVersion })
+    const d = await IsolatedDaemon.create({ scriptPath: bundle.path, env: { CABLE_DISABLE: 'false' }, claudeVersion })
     daemon = d
     const file = join(d.root, 'dials.json')
     d.env.HARNESSD_TEST_DIAL_PORT = file
@@ -117,7 +116,7 @@ describe('Orca\'s account homes on the dial', () => {
   /** The real command, with the daemon's environment and its Claude Code home, as the person would run it. */
   async function device(d: IsolatedDaemon, words: string[]): Promise<{ code: number | null; err: string }> {
     const env = { ...d.env, CLAUDE_CONFIG_DIR: dirname(d.env.CLAUDE_PROJECTS_DIR!) }
-    const child = spawn(process.execPath, [...CLI_ENTRY, 'device', ...words], { cwd: d.root, env, stdio: ['ignore', 'ignore', 'pipe'] })
+    const child = spawn(process.execPath, [bundle.path, 'device', ...words], { cwd: d.root, env, stdio: ['ignore', 'ignore', 'pipe'] })
     children.push(child)
     let err = ''
     child.stderr!.on('data', (chunk: Buffer) => { err += chunk.toString('utf8') })
