@@ -16,6 +16,11 @@
  *
  * The first turn's announcement arrives while the file is new; a transcript that has existed for
  * longer than {@link FIRST_TURN_WINDOW_MS} is history, whatever the daemon remembers.
+ *
+ * A rebind (a pane's agent moving to another transcript) replays live only on the engine's own
+ * "new conversation" signal, for a transcript born at or after the binding it replaced began, within the
+ * same window. A fork or a resume is a rebind to a transcript born late too, and replaying it would send
+ * its whole history live.
  */
 
 /** How new a transcript must be for its content to count as the agent's first turn. */
@@ -32,9 +37,16 @@ export function transcriptIsFirstTurn(
   entry: FirstTurnCandidate,
   /** When the transcript file was created, epoch ms; 0 when it could not be read. */
   birthMs: number,
-  options: { rebound: boolean; now: number },
+  /**
+   * `newConversationSince`: set only on the engine's new-conversation signal, when the replaced binding
+   * began, epoch ms.
+   */
+  options: { rebound: boolean; newConversationSince?: number; now: number },
 ): boolean {
-  if (options.rebound || entry.boundAt === null || !entry.transcriptPath) return false
+  if (entry.boundAt === null || !entry.transcriptPath) return false
+  if (options.rebound && (options.newConversationSince === undefined || birthMs < options.newConversationSince)) {
+    return false
+  }
   if (entry.boundAt - entry.registeredAt <= 0) return false
   if (birthMs < entry.registeredAt) return false
   return options.now - birthMs < FIRST_TURN_WINDOW_MS
