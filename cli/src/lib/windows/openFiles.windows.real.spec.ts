@@ -9,22 +9,13 @@ import { once } from 'node:events'
 import { closeSync, mkdtempSync, openSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { folderKey } from '../sessionSearch/externals/support.js'
-import { windowsOpenFiles, type WindowsOpenFiles } from './openFiles.js'
+import { windowsOpenFiles } from './openFiles.js'
 import { windowsProcessRows } from './processTable.js'
 
 const enabled = process.platform === 'win32' && !!process.env.HARNESS_PTY_BIN
 const CASE_TIMEOUT_MS = 60_000
-
-async function until<T>(read: () => Promise<T>, ok: (value: T) => boolean, ms = 15_000): Promise<T> {
-  const end = Date.now() + ms
-  for (;;) {
-    const value = await read()
-    if (ok(value) || Date.now() > end) return value
-    await new Promise((resolve) => setTimeout(resolve, 100))
-  }
-}
 
 // mkdtemp under the runner's TEMP, which may be spelled with an 8.3 name (RUNNER~1): the host must name it long.
 const tempFolder = () => mkdtempSync(join(tmpdir(), 'open-files-'))
@@ -65,11 +56,12 @@ const tempFolder = () => mkdtempSync(join(tmpdir(), 'open-files-'))
       await once(child, 'spawn')
       const pid = child.pid!
       // The folder's handle is set as the process starts: wait for it, bounded.
-      const read = await until(
-        () => windowsOpenFiles([pid]),
-        (rows: Map<number, WindowsOpenFiles> | null) => rows?.get(pid)?.cwd !== undefined,
-      )
-      expect(read?.get(pid)?.cwd).toBe(await folderKey(dir))
+      const cwd = await vi.waitFor(async () => {
+        const read = (await windowsOpenFiles([pid]))?.get(pid)?.cwd
+        expect(read).toBeDefined()
+        return read
+      }, { timeout: 15_000, interval: 100 })
+      expect(cwd).toBe(await folderKey(dir))
 
       const exited = once(child, 'exit')
       child.kill()
