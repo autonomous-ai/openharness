@@ -192,9 +192,11 @@ function apartPart(check: CheckOf<'ring'>, page: string, world: World, w: Window
   const countedOn = (id: string): number => counts.filter((a) => a.id === id && id !== page).reduce((sum, a) => sum + a.count, 0)
   const elsewhere = (key: SessionKey, apart: boolean): string[] => {
     const pages = sessionPages(world.session(key))
-    const rest = pages.filter((p) => p !== page)
-    // A session apart is on another page even when none of its own is, as X10's Codex CLI is on its terminal's: once,
-    // under its app's page, which on an editor's page is where it must be.
+    // An expected session the ring lists off its own pages is counted in the ring alone.
+    const rest = apart || pages.includes(page) ? pages.filter((p) => p !== page) : []
+    // A session apart whose only page is the ring's is still counted once: elsewhere only the sum is graded, as X10's
+    // Codex CLI is on its terminal's page; on an editor's page it must be under its own, the ring's, so it is nowhere it
+    // can be.
     return apart && rest.length === 0 ? [pages[0]!] : rest
   }
   const others = [...check.expect.map((key) => elsewhere(key, false)), ...(check.apart ?? []).map((key) => elsewhere(key, true))]
