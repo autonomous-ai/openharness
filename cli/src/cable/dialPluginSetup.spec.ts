@@ -246,6 +246,24 @@ describe('createDialPluginSetup', () => {
     expect(counted).toEqual([['left removed']])
   })
 
+  // Listed before the first setup with its folder gone (`harness uninstall` took Harness's data): the folder is written
+  // again, and one that cannot be is counted beside the plugin found as it is.
+  it('a first setup with the plugin listed writes the folder, and counts one it cannot write', async () => {
+    const mended = rig(fakeClaude({ installed: entry('16a92abfab3f') }))
+    expect(await mended.setup.pass()).toBe(false)
+    expect(existsSync(join(mended.marketplace, '.claude-plugin', 'marketplace.json'))).toBe(true)
+    expect(mended.counted).toEqual([])
+
+    const claude = fakeClaude({ installed: entry('16a92abfab3f') })
+    const { setup, state, counted, marketplace } = rig(claude)
+    chmodSync(dirname(marketplace), 0o500)
+    readOnly.push(dirname(marketplace))
+    expect(await setup.pass()).toBe(false)
+    expect(claude.writes()).toEqual([])
+    expect(counted).toEqual([['failed', 'folder · EACCES']])
+    expect(state.recorded).toBe('0.6.59')
+  })
+
   it('a plugin already on at the first setup is recorded and counts nothing', async () => {
     const claude = fakeClaude({ installed: entry('16a92abfab3f') })
     const { setup, state, counted } = rig(claude)

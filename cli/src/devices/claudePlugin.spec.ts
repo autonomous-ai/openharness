@@ -282,6 +282,44 @@ describe('claudeSetUp', () => {
   })
 })
 
+// `harness uninstall` takes Harness's data, the folder with it, and leaves the plugin listed; a hand can remove it too.
+// Claude Code reads the plugin from the folder in place, so a listed plugin with none does nothing.
+describe('a plugin listed while its folder is gone', () => {
+  const enable = 'plugin enable harness-device@openharness --scope user'
+
+  it('setup and enable write the folder again', async () => {
+    for (const [entry, act, done, writes] of [
+      [USER_ON, claudeSetUp, { ok: true, outcome: 'current' }, []],
+      [USER_ON, claudeEnable, { ok: true }, []],
+      [USER_OFF, claudeEnable, { ok: true }, [enable]],
+    ] as const) {
+      const claude = fakeClaude({ 'plugin list --json': list(entry) })
+      const deps = installing(claude.run)
+      expect(await act(deps)).toEqual(done)
+      expect(claude.writes()).toEqual(writes)
+      holdsFiles(deps.folder)
+    }
+  })
+
+  // Nothing is added or installed, so the call goes on: the setup gives the folder's code beside its outcome, and the
+  // enable turns the plugin on, then fails with the folder's.
+  it('a folder that cannot be written is the setup\'s code, and the enable\'s failure once it ran', async () => {
+    const unwritten = { ok: false, step: 'folder', reason: 'EACCES', error: "Harness could not write Claude Code's plugin folder." }
+    for (const [entry, act, done, writes] of [
+      [USER_ON, claudeSetUp, { ok: true, outcome: 'current', folderFailed: 'EACCES' }, []],
+      [USER_OFF, claudeSetUp, { ok: true, outcome: 'absent', folderFailed: 'EACCES' }, []],
+      [USER_ON, claudeEnable, unwritten, []],
+      [USER_OFF, claudeEnable, unwritten, [enable]],
+    ] as const) {
+      const claude = fakeClaude({ 'plugin list --json': list(entry) })
+      const deps = installing(claude.run)
+      readOnlyParent(deps.folder)
+      expect(await act(deps)).toEqual(done)
+      expect(claude.writes()).toEqual(writes)
+    }
+  })
+})
+
 describe('claudeDisable', () => {
   it('disable uninstalls and leaves the marketplace', async () => {
     const claude = fakeClaude({ 'plugin list --json': list(USER_OFF) })
