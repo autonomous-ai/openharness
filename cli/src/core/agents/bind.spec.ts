@@ -405,6 +405,44 @@ describe('binding a registered session to its agent', () => {
     await registered(run, resumed, meta())
     expect(vi.mocked(run.deps.attachSession).mock.calls.map((call) => call[3])).toEqual([false, true, true])
   })
+
+  describe('a new conversation after a rebind', () => {
+    /** The row a rotation leaves: its agent registered a minute ago, bound again now to a transcript born now. */
+    function rotated(over: Partial<RegisteredSession> = {}): RegisteredSession {
+      const dir = mkdtempSync(join(tmpdir(), 'core-bind-'))
+      dirs.push(dir)
+      const born = join(dir, 'session.jsonl')
+      writeFileSync(born, '{}\n')
+      return agent({ sessionId: 's2', registeredAt: Date.now() - 60_000, boundAt: Date.now(), transcriptPath: born, ...over })
+    }
+    const rebind = (over: Partial<RegisteredMeta> = {}) => meta({ rebound: 's1', isNew: true, hookEvent: 'SessionStart', ...over })
+    const replayed = (run: ReturnType<typeof setup>) => vi.mocked(run.deps.attachSession).mock.calls.map((call) => call[3])
+
+    it('replays its first turn live on the engine\'s own signal, born after the binding it replaced', async () => {
+      const run = setup()
+      await registered(run, rotated(), rebind({ newConversationSince: Date.now() - 30_000 }))
+      expect(replayed(run)).toEqual([true])
+    })
+
+    it('folds a rebind with no new conversation signal (a fork, a resume)', async () => {
+      const run = setup()
+      await registered(run, rotated(), rebind())
+      expect(replayed(run)).toEqual([false])
+    })
+
+    it('folds a transcript born before the binding it replaced began', async () => {
+      const run = setup()
+      await registered(run, rotated(), rebind({ newConversationSince: Date.now() + 60_000 }))
+      expect(replayed(run)).toEqual([false])
+    })
+
+    it('folds the conversation a resume put back, even with a new conversation signal', async () => {
+      const run = setup()
+      vi.mocked(run.deps.stoppedAgents.get).mockReturnValue(agent({ sessionId: 's2' }))
+      await registered(run, rotated({ resumeOnly: true }), rebind({ newConversationSince: Date.now() - 30_000 }))
+      expect(replayed(run)).toEqual([false])
+    })
+  })
 })
 
 describe('binding a running process to its session', () => {
