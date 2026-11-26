@@ -1030,6 +1030,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (attached) for (const frame of asking.openQuestionFrames()) ports.devices?.card(frame)
       if (attached) void mirror.liveCards().then((cards) => { for (const frame of cards) ports.devices?.card(frame) })
       if (attached) for (const frame of cloudAgents?.liveCards() ?? []) ports.devices?.card(frame)
+      // The mods' polls held while no dial watched end now, so each mod's next poll reaches the devices.
+      if (attached) deviceHookCalls.watching()
     },
     // What a device or another machine asks of an agent here: the SAME handlers the backend socket
     // drives, called directly — the slash-command adaptation and the turn and question plumbing live there.
@@ -2289,7 +2291,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     now: () => performance.now(),
     forward: (observed) => ports.devices?.observed(observed) ?? false,
   })
-  // Asked only while a dial is watching: a call to a devices process that is not running would start it.
+  // Asked only while a dial is watching: a call to a devices process that is not running would start it. Until then the
+  // poll is held here, and ended as a dial starts watching (`dialWatching` above).
   const deviceHookCalls = createDeviceHookCalls({ ready: cableWatchingLocal, devices: () => ports.devices ?? undefined, newId: randomUUID })
   const { server: hookServer, port: hookPort, localSocket } = await startHookServer(daemonPort(), {
     // The routes services answer (core/api.ts `SERVICE_HTTP_ROUTES`): the Wi-Fi device's, its service's and the machine
