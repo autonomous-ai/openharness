@@ -5549,6 +5549,13 @@ describe('ObservedSource outer place', () => {
       t.src.ingest(t.ev('turn-stop', { hostHints }))
       expect(t.asks, label).toHaveLength(1)
       expect(pagesOf(t.agent()), label).toEqual(['tmux'])
+      // Its next turn asks anew: while that runs it stays off iTerm2's page, as an attached one keeps its client's
+      // place until the answer (askOuter), and the answer moves it.
+      t.src.ingest(t.ev('turn-start', { hostHints }))
+      expect(t.asks, label).toHaveLength(2)
+      expect(pagesOf(t.agent()), label).toEqual(['tmux'])
+      await t.asks[1].answer({ ...CLIENT, nest: 'tmux' })
+      expect(pagesOf(t.agent()), label).toEqual(['terminal-app', 'tmux'])
     }
   })
 
