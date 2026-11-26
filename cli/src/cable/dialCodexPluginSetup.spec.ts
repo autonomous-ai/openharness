@@ -552,6 +552,22 @@ describe('createDialCodexPluginSetup', () => {
     expect(r.fake(r.home).calls).toEqual([...tried, '--version', REMOVE])
   })
 
+  it('an owed removal in a home whose marketplace became the person\'s own removes nothing there, and is owed no more', async () => {
+    const r = await owing()
+    const calls = [...r.fake(r.home).calls]
+    // The person removed Harness's marketplace and added GitHub's; the plugin there is theirs now.
+    writeFileSync(configFile(r.home), configOf(r.home).replace(/\[marketplaces\.openharness\][^[]*/, OWN_GIT))
+    const config = configOf(r.home)
+    r.fail.pop()
+    r.state.now = HOUR
+    await r.setup.pass()
+    r.state.now = 3 * HOUR
+    await r.setup.pass()
+    expect(r.fake(r.home).calls).toEqual(calls)
+    expect(configOf(r.home)).toBe(config)
+    expect(r.counted).toEqual([['failed', 'remove'], ['skipped', 'own marketplace']])
+  })
+
   it('an owed removal is owed no more once Codex is wanted again', async () => {
     const r = await owing()
     // `enable` ran: the home is set up as any other.
