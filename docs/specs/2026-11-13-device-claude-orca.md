@@ -132,11 +132,12 @@ Claude Code or Codex in an Orca terminal (hint ORCA_TERMINAL_HANDLE from the wav
 **The hook's client, `harness device claude asked`** (hidden from `--help`; CLI only, never in the daemon):
 
 - Reads the hook's stdin JSON, at most 256 KB; anything else is nothing sent.
-- Skips the tools that are the person's anyway (`AskUserQuestion`, `ExitPlanMode`): nothing sent.
 - Builds a summary of one line, at most 200 bytes of UTF-8, cut on a character boundary: Bash → the command's first
   non-blank line, with " …" when there is more; Edit, Write, NotebookEdit, Read → the file path; WebFetch → the URL's
-  host; an MCP tool → its server and tool name; anything else → the tool's name. The rest of `tool_input` stays in the
-  hook.
+  host; an MCP tool → its server and tool name; AskUserQuestion → the first question, else its header, else
+  `A question`; ExitPlanMode → `Plan ready to approve`, its plan never read; anything else → the tool's name. The rest
+  of `tool_input` stays in the hook. (Until 2026-11-26 those two were skipped, nothing sent:
+  [Part 6](../plans/2026-11-26-needs-you-right-design.md).)
 - Posts `{ engine: "claude", sessionId, event: "asked", tool, summary, cwd }` to `/api/hook/observed` over the daemon's
   Unix socket only (no socket, nothing sent), fire and forget: it waits only until the request is written, 1 s at most.
 - **Prints nothing and exits 0, always.** It reads no answer from the daemon, so nothing the daemon or anyone else sends
@@ -270,9 +271,10 @@ Windows.
 
 **Tests**
 
-- `harness device claude asked`: the summary per tool; nothing sent for `AskUserQuestion` and `ExitPlanMode`; prints
-  nothing and exits 0 whatever the daemon answers, `{"decision":"allow"}` included; nothing sent with no socket; the
-  posted body never carries `ORCA_PAIRING_CODE`, `ORCA_AGENT_SESSION_SPAWN_TOKEN` or any other environment variable.
+- `harness device claude asked`: the summary per tool, a question form's and a plan approval's included, never the
+  plan; prints nothing and exits 0 whatever the daemon answers, `{"decision":"allow"}` included; nothing sent with no
+  socket; the posted body never carries `ORCA_PAIRING_CODE`, `ORCA_AGENT_SESSION_SPAWN_TOKEN` or any other environment
+  variable.
 - `notify.mjs`: `ORCA_TERMINAL_HANDLE` is posted; `ORCA_PAIRING_CODE` and `ORCA_AGENT_SESSION_SPAWN_TOKEN` are never
   posted, with both set; all 10 allowlisted hints set at once reach the devices uncut; the core takes 10 and refuses 11.
 - Core: `asked` with its bounded `tool` and `summary`; the inbox route's bounds, a poll held with no dial and ended once

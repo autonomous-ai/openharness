@@ -36,9 +36,9 @@ the session.
 
 - It never answers a prompt: the dial approves nothing, and each prompt is answered in its own app.
 - Nothing leaves the computer: the hook and the mod talk only to the daemon on it, and the dial attached to it. The
-  dial sees the tool's name and one line: a command or path for a permission ask, the first question for a form, fixed
-  words for a plan approval, whose plan never leaves the hook. The rest stays in the hook. The mod sends only the
-  session's id.
+  dial sees the tool's name and one line: what a permission ask acts on (a command, a file, a site's host, an MCP
+  server and tool), the first question for a form, fixed words for a plan approval, whose plan never leaves the hook.
+  The rest stays in the hook. The mod sends only the session's id.
 
 ## Install and remove
 
