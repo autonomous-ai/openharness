@@ -13,7 +13,8 @@ import { DIAL_SETUP_FILE, readRemoved, readSetup, writePluginHomes, writeRemoved
 import type { RolloutOwner } from './codexRolloutHome.js'
 import { createDialSetup, type DialSetupDeps } from './dialSetup.js'
 
-const ADD = 'plugin marketplace add ./claude-marketplace'
+/** The marketplace is added by its absolute folder, the one the rig passes. */
+const add = (dataDir: string) => `plugin marketplace add ${join(dataDir, 'claude-marketplace')}`
 const INSTALL = 'plugin install harness-device@openharness --scope user'
 const UNINSTALL = 'plugin uninstall harness-device@openharness --scope user'
 const ENABLE = 'plugin enable harness-device@openharness --scope user'
@@ -113,7 +114,7 @@ describe('createDialSetup', () => {
     await r.setup.attached()
 
     expect(hasSkill(r.codexHome)).toBe(true)
-    expect(r.fake.writes()).toEqual([ADD, INSTALL])
+    expect(r.fake.writes()).toEqual([add(r.dataDir), INSTALL])
     expect(readFileSync(join(r.dataDir, 'claude-marketplace', '.claude-plugin', 'marketplace.json'), 'utf8')).toBe(FILES.files['.claude-plugin/marketplace.json'])
     expect(hasSkill(r.claudeHome)).toBe(true)
     expect(readSetup(r.dataDir)).toMatchObject({ dial: true, plugin: '0.6.59' })
@@ -145,7 +146,7 @@ describe('createDialSetup', () => {
     r.state.found = true
     await r.setup.scanned([])
 
-    expect(r.fake.writes()).toEqual([ADD, INSTALL])
+    expect(r.fake.writes()).toEqual([add(r.dataDir), INSTALL])
     expect(hasSkill(r.claudeHome)).toBe(true)
     expect(readSetup(r.dataDir).plugin).toBe('0.6.59')
   })
@@ -163,7 +164,7 @@ describe('createDialSetup', () => {
     await r.setup.started()
 
     expect(existsSync(skillFile(r.claudeHome))).toBe(false)
-    expect(r.fake.writes()).toEqual([ADD, INSTALL])
+    expect(r.fake.writes()).toEqual([add(r.dataDir), INSTALL])
     expect(hasSkill(r.codexHome)).toBe(true)
   })
 

@@ -267,7 +267,7 @@ DIAL_HOST_PATHS = (
     "cli/src/testing/dialCarousel.ts", *(f"cli/src/cable/{name}.ts" for name in ("cableFrame", "portAccess", "roundGlyphs")),
     "cli/src/cable/__fixtures__/heardClip.ts",
     *(f"cli/e2e/harness/{name}.ts" for name in ("desk", "fakeBackend", "fakeDial", "fakeOrca", "herdrServer", "inOrca",
-                                                 "kittyWindow", "orcaHost", "outsideAgent", "runLog", "swayDesk",
+                                                 "kittyWindow", "modInbox", "orcaHost", "outsideAgent", "runLog", "swayDesk",
                                                  "weztermMux", "x11Desk", "zellijSession")),
     ".github/workflows/cli-e2e-dial-hosts.yml", ".github/actions/cli-e2e-setup/",
 )

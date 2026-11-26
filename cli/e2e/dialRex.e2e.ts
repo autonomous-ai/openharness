@@ -14,7 +14,7 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { heardClip } from '../src/cable/__fixtures__/heardClip.js'
-import { observedAgentId } from '../src/cable/hosts/observed.js'
+import { CLAUDE_PLUGIN_OFF, observedAgentId } from '../src/cable/hosts/observed.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
@@ -116,7 +116,7 @@ describe.skipIf(!rexBinary)('an agent in a Rex block is on the dial', () => {
     //    dial is told how to reach it.
     const since = dial.messages.length
     relay.speech = 'run the tests'
-    expect(await spokenTo(dial, id, 'spoken')).toMatchObject({ t: 'voice.transcript', text: 'run the tests', agentId: id })
+    expect(await spokenTo(dial, id, 'spoken', [CLAUDE_PLUGIN_OFF])).toMatchObject({ t: 'voice.transcript', text: 'run the tests', agentId: id })
     await until('the words in its block', async () => (await session.screen(block)).includes('run the tests'), 30_000, 100)
     await until('its turn in the engine', () => d.hookLog().includes(`UserPromptSubmit session=${sessionId} ran`), 30_000, 100)
     await dial.next((m) => m.t === 'turn.done' && m.agentId === id, 45_000, 'its turn done', since)
