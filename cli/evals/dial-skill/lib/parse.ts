@@ -44,6 +44,10 @@ export function parseClaudeStream(jsonl: string): RunResult {
   // run on another model by design. Claude Code gives its own messages (an API error, the account limit) the model
   // '<synthetic>': no model served them.
   const served = new Set<string>()
+  // A run killed before its result event was billed for what it did. Claude Code prints a message once per content
+  // block, each with the message's usage as it began streaming, so each message counts once and its output is a floor.
+  const messages = new Map<string, Usage>()
+  let hasResult = false
   // The report shows thinking folded into the turn it led to, so it waits for that turn.
   let thinking: string | undefined
   const push = (turn: Turn): void => {
@@ -60,8 +64,11 @@ export function parseClaudeStream(jsonl: string): RunResult {
         claude_version: typeof event.claude_code_version === 'string' ? event.claude_code_version : null,
       }
     } else if (event.type === 'assistant' || event.type === 'user') {
-      const message = event.message as { content?: unknown; model?: unknown } | undefined
-      if (event.type === 'assistant' && event.parent_tool_use_id === null && typeof message?.model === 'string' && message.model !== SYNTHETIC) served.add(message.model)
+      const message = event.message as { content?: unknown; model?: unknown; id?: unknown; usage?: unknown } | undefined
+      if (event.type === 'assistant' && event.parent_tool_use_id === null) {
+        if (typeof message?.model === 'string' && message.model !== SYNTHETIC) served.add(message.model)
+        if (typeof message?.id === 'string' && message.usage !== undefined) messages.set(message.id, usageOf(message.usage))
+      }
       const content = message?.content
       const blocks: Block[] = typeof content === 'string' ? [{ type: 'text', text: content }] : Array.isArray(content) ? content : []
       for (const block of blocks) {
@@ -76,6 +83,7 @@ export function parseClaudeStream(jsonl: string): RunResult {
         } else if (block.type === 'tool_result') push({ role: 'tool_result', name: toolNames.get(block.tool_use_id ?? '') ?? '', content: resultText(block.content) })
       }
     } else if (event.type === 'result') {
+      hasResult = true
       run.answer = typeof event.result === 'string' ? event.result : ''
       run.usage = usageOf(event.usage)
       run.stop_reason = typeof event.stop_reason === 'string' ? event.stop_reason : null
@@ -88,6 +96,7 @@ export function parseClaudeStream(jsonl: string): RunResult {
   }
   // Thinking with no turn after it still belongs in the transcript.
   if (thinking !== undefined) push({ role: 'assistant', content: '' })
+  if (!hasResult) run.usage = sumUsage([...messages.values()])
   // More than one is named so that no check of the model's prefix accepts it.
   run.model = served.size > 1 ? `mixed: ${[...served].join(', ')}` : served.values().next().value ?? null
   return run
