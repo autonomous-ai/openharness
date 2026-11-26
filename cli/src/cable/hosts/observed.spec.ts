@@ -6683,6 +6683,21 @@ describe('ObservedSource and a Codex session its own server runs', () => {
     expect(t.lookup).not.toHaveBeenCalled()
   })
 
+  it('a place its lookup lands names it as a hook\'s own does: a ChatGPT thread by its name there', async () => {
+    const t = served()
+    t.src.setPaneNames('codex', new Map([[THREAD, { title: 'Fix the build', renamed: false }]]), new Map())
+    const inApp = { hostHints: { __CFBundleIdentifier: 'com.openai.codex' } }
+    t.src.ingest(t.codex('session-start', inApp))
+    expect(t.agent().name).toBe('proj')
+    await t.asks[0].answer([undefined])
+    expect(t.agent()).toMatchObject({ app: 'codex', name: 'Fix the build' })
+    // The app's own server: placed by the lookup.
+    t.src.ingest(t.codex('session-start', { ...inApp, callerPid: 41 }))
+    expect(t.agent().name).toBe('proj')
+    await t.asks[1].answer([{ client: { app: 'codex', pid: 41 } }])
+    expect(t.agent()).toMatchObject({ app: 'codex', name: 'Fix the build' })
+  })
+
   it('a lookup that fails leaves it to its hints, and says only its kind', async () => {
     const t = served()
     t.src.ingest(t.codex('session-start'))
