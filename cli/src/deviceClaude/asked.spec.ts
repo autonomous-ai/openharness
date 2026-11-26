@@ -1,7 +1,7 @@
 /**
- * The permission hook's client: it tells the daemon that a prompt waits, in six typed fields, and decides nothing. What it
- * cannot read is nothing sent, and nothing the daemon answers is read. Every daemon here is a listener on a throwaway
- * socket or port.
+ * The permission hook's client: it tells the daemon that a prompt waits (a permission ask, a question form, a plan
+ * approval), in six typed fields, and decides nothing. What it cannot read is nothing sent, a plan's text is never sent,
+ * and nothing the daemon answers is read. Every daemon here is a listener on a throwaway socket or port.
  */
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { createServer, type IncomingHttpHeaders, type ServerResponse } from 'node:http'
@@ -82,6 +82,14 @@ const answers = (status: number, body: string) => (res: ServerResponse) => {
 
 const BODY: AskedBody = { engine: 'claude', sessionId: 'sess-1', event: 'asked', tool: 'Bash', summary: 'npm test', cwd: '/repo' }
 
+/** AskUserQuestion's input, as Claude Code 2.1.332 hands it to the PermissionRequest hook. */
+const FORM = {
+  questions: [{
+    question: 'Which database should the export use?', header: 'Database', multiSelect: false,
+    options: [{ label: 'Postgres', description: 'The main one' }, { label: 'SQLite', description: 'A local file' }],
+  }],
+}
+
 describe('askedSummary', () => {
   it.each([
     ['Bash', { command: 'npm test', description: 'Run the tests' }, 'npm test'],
@@ -104,6 +112,21 @@ describe('askedSummary', () => {
     ['WebFetch', { url: 'file:///etc/passwd' }, 'WebFetch'],
     ['Read', null, 'Read'],
     ['Read', 'a string', 'Read'],
+    ['AskUserQuestion', FORM, 'Which database should the export use?'],
+    ['AskUserQuestion', { questions: [{ question: 'First?' }, { question: 'Second?' }] }, 'First?'],
+    ['AskUserQuestion', { questions: [{ header: 'Database' }] }, 'Database'],
+    ['AskUserQuestion', { questions: [{ question: ' \n ', header: 'Database' }] }, 'Database'],
+    ['AskUserQuestion', { questions: [{ question: 7, header: 'Database' }] }, 'Database'],
+    ['AskUserQuestion', { questions: [{ options: [] }] }, 'A question'],
+    ['AskUserQuestion', { questions: [] }, 'A question'],
+    ['AskUserQuestion', { questions: [null] }, 'A question'],
+    ['AskUserQuestion', { questions: ['Which?'] }, 'A question'],
+    ['AskUserQuestion', { questions: 'Which?' }, 'A question'],
+    ['AskUserQuestion', {}, 'A question'],
+    ['AskUserQuestion', null, 'A question'],
+    ['ExitPlanMode', {}, 'Plan ready to approve'],
+    ['ExitPlanMode', { plan: '# Plan\n\n1. Secret plan text.' }, 'Plan ready to approve'],
+    ['ExitPlanMode', null, 'Plan ready to approve'],
   ])('the summary per tool: %s %j is %j', (tool, input, summary) => {
     expect(askedSummary(tool, input)).toBe(summary)
   })
@@ -116,16 +139,33 @@ describe('askedSummary', () => {
     expect(Buffer.byteLength(emoji)).toBeLessThanOrEqual(200)
   })
 
+  it('cuts a question, or a header with no question, as every summary', () => {
+    expect(askedSummary('AskUserQuestion', { questions: [{ question: '日'.repeat(100) }] })).toBe('日'.repeat(66))
+    expect(askedSummary('AskUserQuestion', { questions: [{ header: '日'.repeat(100) }] })).toBe('日'.repeat(66))
+  })
+
+  it('a multi-line question is one line: each control character a space', () => {
+    expect(askedSummary('AskUserQuestion', { questions: [{ question: 'Pick one:\n\tA or B?' }] })).toBe('Pick one:  A or B?')
+  })
+
   it('a tab or a newline in the summary becomes a space, as does every other control character', () => {
     expect(askedSummary('Read', { file_path: '/repo/a\tb\nc\u0007d\u007fe\u0085f' })).toBe('/repo/a b c d e f')
   })
 })
 
 describe('runAsked', () => {
-  it.each(['AskUserQuestion', 'ExitPlanMode'])('sends nothing for %s', async (tool) => {
+  it('sends a question form with its first question', async () => {
     const daemon = recording()
-    expect(await runAsked({ stdin: chunks(hookInput({ tool_name: tool, tool_input: {} })), post: daemon.post })).toBe(0)
-    expect(daemon.bodies).toEqual([])
+    expect(await runAsked({ stdin: chunks(hookInput({ tool_name: 'AskUserQuestion', tool_input: FORM })), post: daemon.post })).toBe(0)
+    expect(daemon.bodies).toStrictEqual([{ ...BODY, tool: 'AskUserQuestion', summary: 'Which database should the export use?' }])
+  })
+
+  it('sends a plan approval with fixed words, and never its plan', async () => {
+    const daemon = recording()
+    const stdin = hookInput({ tool_name: 'ExitPlanMode', permission_mode: 'plan', tool_input: { plan: '# Plan\n\n1. Secret plan text.' } })
+    expect(await runAsked({ stdin: chunks(stdin), post: daemon.post })).toBe(0)
+    expect(daemon.bodies).toStrictEqual([{ ...BODY, tool: 'ExitPlanMode', summary: 'Plan ready to approve' }])
+    expect(JSON.stringify(daemon.bodies)).not.toContain('Secret plan')
   })
 
   it('sends nothing for 256 KB + 1 of stdin, and sends 256 KB', async () => {
@@ -206,7 +246,9 @@ describe('runAsked', () => {
     await runAsked({ stdin: chunks(hookInput({ tool_name: `mcp__s__${'t'.repeat(80)}`, tool_input: {}, cwd: `/${'d'.repeat(1023)}` })), post: daemon.post })
     await runAsked({ stdin: chunks(hookInput({ tool_input: { command: `${'日'.repeat(100)}\nls` } })), post: daemon.post })
     await runAsked({ stdin: chunks(hookInput({ tool_name: 'Read', tool_input: { file_path: '/a\tb\u0085c' }, cwd: undefined })), post: daemon.post })
-    expect(daemon.bodies).toHaveLength(3)
+    await runAsked({ stdin: chunks(hookInput({ tool_name: 'AskUserQuestion', tool_input: { questions: [{ question: `${'日'.repeat(100)}\nmore` }] } })), post: daemon.post })
+    await runAsked({ stdin: chunks(hookInput({ tool_name: 'ExitPlanMode', tool_input: {} })), post: daemon.post })
+    expect(daemon.bodies).toHaveLength(5)
     for (const body of daemon.bodies) expect(parseObservedHook(body)).toStrictEqual(body)
   })
 
