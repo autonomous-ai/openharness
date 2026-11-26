@@ -2382,8 +2382,9 @@ describe('ObservedSource actions', () => {
     // The read is synchronous: a home on a network share (/net/<host>/..., \\host\share\...) would hold the devices, and
     // every dial, at a voice start. A home is taken from a hook's path only inside Claude Code's own folders.
     it('a transcript path outside Claude Code\'s own folders names no home: the default home decides', () => {
-      // With no folders given, none is Claude Code's.
-      for (const [home, roots] of [['/net/host', claudeRoots], [HOME, undefined]] as const) {
+      // With no folders given, none is Claude Code's. A `projects` folder inside one of them is no home: only the folder
+      // a transcript's own projects folder is names one, and one inside could be a link to a share.
+      for (const [home, roots] of [['/net/host', claudeRoots], [HOME, undefined], [join(HOME, 'projects', 'x'), claudeRoots]] as const) {
         const transcriptPath = join(home, 'projects', '-work-proj', 's1.jsonl')
         const { actions, plugin } = fakeActions()
         plugin.set(join(actions.claudeHome, 'settings.json'), 'on')

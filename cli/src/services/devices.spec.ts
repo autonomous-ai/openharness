@@ -1,6 +1,6 @@
 // The devices (services/devices.ts): what the core tells them reaches the dial and the window bridges, what
 // they say reaches the core through its API alone, and the fleet failing costs the dial nothing.
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
 import { delimiter, dirname, join, parse, posix, sep, win32 } from 'node:path'
@@ -2153,6 +2153,20 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
       expect(host().voiceRefusal(ID)).toBe(CLAUDE_RESTART)
       port.observed(hook('turn-start', { ...inTerminal, transcriptPath: join(elsewhere, 'projects', '-work-api', 'sess-1.jsonl') }))
       expect(host().voiceRefusal(ID)).toBe(CLAUDE_PLUGIN_OFF)
+    })
+
+    // Orca links an account's `projects` to another home's, so the open scan reads that real folder once, under its first
+    // name: the account's own home still decides for its sessions.
+    it('a voice start reads Harness\'s plugin in an Orca home whose projects folder is a link to another\'s', async () => {
+      const account = orcaHome('claude-1', 'projects')
+      const linked = orcaHome('claude-2')
+      symlinkSync(join(account, 'projects'), join(linked, 'projects'), 'junction')
+      writeFileSync(join(linked, 'settings.json'), JSON.stringify({ enabledPlugins: { 'harness-device@openharness': true } }))
+      const { port } = start({ faults: ['fleet'], orcaHomes: fakeOrcaHomes({ claude: [account, linked], codex: [] }) })
+      const inTerminal = { hostHints: { TERM_PROGRAM: 'Apple_Terminal' } }
+      port.observed(hook('session-start', { ...inTerminal, transcriptPath: join(linked, 'projects', '-work-api', 'sess-1.jsonl') }))
+      await machineList(port)
+      expect(host().voiceRefusal(ID)).toBe(CLAUDE_RESTART)
     })
 
     it('a scan reads Orca\'s homes again when the list is old, and waits for it', async () => {
