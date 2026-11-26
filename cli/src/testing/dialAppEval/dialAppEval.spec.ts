@@ -610,9 +610,9 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
     expect(driver.seen().commands.filter((c) => basename(c.argv[0]!) === 'tmux')).toEqual([])
   })
 
-  it.for([['linux', 'found'], ['darwin', 'none']] as const)(
-    "an Orca agent under tmux: tmux's lookup runs on the world's tmux and finds its client in Orca on Linux, none on macOS (%s)",
-    async ([platform, client]) => {
+  it.for(['linux', 'darwin'] as const)(
+    "an Orca agent under tmux: tmux's lookup runs on the world's tmux and finds its client in Orca on Linux and macOS (%s)",
+    async (platform) => {
       const driver = new TierADriver({ startDevices })
       const run = await runScenario(driver, orcaTmux, platform)
       expect(run.error).toBeUndefined()
@@ -620,7 +620,7 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
       const { commands, logs = [] } = driver.seen()
       expect(commands.filter((c) => c.argv[1] === 'list-clients').map(({ argv, ok }) => ({ argv: argv.slice(0, 4), ok })))
         .toContainEqual({ argv: ['/opt/eval/bin/tmux', 'list-clients', '-t', 'pane:c'], ok: true })
-      expect(logs.map((l) => l.line)).toContain(`[device] tmux client · ${client}`)
+      expect(logs.map((l) => l.line)).toContain('[device] tmux client · found')
     })
 
   it("I6 inline: a rest on the tmux row with iTerm2 in front writes its client's tab select without raise and runs "
