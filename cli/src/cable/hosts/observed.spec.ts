@@ -8,6 +8,9 @@ import { STOP_HOOK_GRACE_MS } from '../../core/turns/turnHooks.js'
 import type { ProcessRow } from '../../lib/processTable.js'
 import { OpenSessions, SessionRows } from '../../lib/sessionSearch/external.js'
 import { claudeProvider } from '../../lib/sessionSearch/externals/claude.js'
+import { codexProvider } from '../../lib/sessionSearch/externals/codex.js'
+import { processCwds, processView } from '../../lib/sessionSearch/externals/support.js'
+import type { WindowsFilesRead } from '../../lib/windows/openFiles.js'
 import { type HostAdapter, oncePerCaller, type Pane, type Place } from './adapter.js'
 import { createClaudeAppAdapter } from './claudeApp.js'
 import { createCodexAppAdapter } from './codexApp.js'
@@ -29,7 +32,7 @@ import { pagesOf } from './select.js'
 import { createTabsAdapter, type TabApp } from './tabs.js'
 import { createTmuxAdapter } from './tmux.js'
 import type { HostAgent, Nest, PaneSwitch, TypeResult } from './types.js'
-import { createVscodeAdapter } from './vscode.js'
+import { createVscodeAdapter, createVscodeClientAdapter } from './vscode.js'
 import { createWeztermAdapter } from './wezterm.js'
 import { createZellijAdapter } from './zellij.js'
 
@@ -3539,6 +3542,180 @@ describe('ObservedSource on Windows after a restart', () => {
     expect(agent).toMatchObject({ sessionId: SESSION, app: 'vscode' })
     expect(agent).not.toHaveProperty('appPending')
     expect(s.src.paneOf(agent.id, 'vscode')).toBe('term:410')
+  })
+})
+
+// Found during #4634 (Ken's VM, 2026-11-26): after the daemon restarted, a Codex in VS Code's terminal came back only at
+// its next hook, as Windows read no process's open files or folder (docs/plans/2026-11-27-windows-codex-rescan-design.md).
+describe('ObservedSource and a Codex on Windows after a restart', () => {
+  const homes: string[] = []
+  const platform = process.platform
+  // The rollout's head is judged by this machine's rules: a `C:\...` folder is a folder on Windows only.
+  beforeEach(() => { Object.defineProperty(process, 'platform', { value: 'win32', configurable: true }) })
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true })
+    for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true })
+  })
+
+  const NPM = 'C:\\Users\\someone\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex'
+  const NATIVE = `${NPM}\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\codex\\codex.exe`
+  const NODE = 'C:\\Program Files\\nodejs\\node.exe'
+  const DIAL = 'C:\\work\\dial'
+  const OTHER = 'C:\\work\\other'
+  /** A row as the PTY host's table gives it, started at [at] (`w:<FILETIME>`): a child after its parent. */
+  const win = (pid: number, ppid: number, at: number, executable: string, args: string = executable) =>
+    ({ pid, ppid, executable, args, startMarker: `w:${134087000000000000 + at * 10_000}` })
+  type Row = ReturnType<typeof win>
+  /** VS Code's terminal: npm's launcher (420) and its native Codex (421). */
+  const vscodeTui = (first = 0): Row[] => [win(400, 1, first, 'Code.exe'), win(401, 400, first + 1, 'Code.exe'),
+    win(409, 401, first + 2, 'pwsh.exe'), win(420, 409, first + 3, NODE, `"${NODE}" ${NPM}\\bin\\codex.js`),
+    win(421, 420, first + 4, NATIVE)]
+  /** Codex's daemon, started by the TUI [ppid]. */
+  const daemon = (ppid: number, at: number): Row =>
+    win(430, ppid, at, NATIVE, `${NATIVE} app-server --listen unix:// --analytics-default-enabled`)
+  /** A TUI in Windows Terminal (520, 521), working in another folder. */
+  const terminalTui: Row[] = [win(500, 1, 0, 'WindowsTerminal.exe'), win(509, 500, 1, 'pwsh.exe'),
+    win(520, 509, 2, NODE, `"${NODE}" ${NPM}\\bin\\codex.js`), win(521, 520, 3, NATIVE)]
+  /** The first TUI in Windows Terminal, the session's in VS Code, the daemon the first one's child. */
+  const startedInTerminal = (): Row[] => [...terminalTui, ...vscodeTui(4), daemon(521, 9)]
+  const startedInTerminalFolders = { 420: DIAL, 421: DIAL, 520: OTHER, 521: OTHER }
+
+  /**
+   * The open scan and the served lookup as devices.ts wires them on Windows, over the table [rows] and a Codex home
+   * whose one rollout [holder] holds, harness-pty files naming each process's folder from [folders]. Each lookup waits
+   * for [before] first.
+   */
+  function windows(rows: Row[], folders: Record<number, string>, holder: number, before: Promise<void> = Promise.resolve()) {
+    const home = mkdtempSync(join(tmpdir(), 'observed-windows-codex-'))
+    homes.push(home)
+    const day = join(home, 'sessions', '2026', '11', '27')
+    mkdirSync(day, { recursive: true })
+    const rollout = join(day, `rollout-2026-11-27T09-00-00-${THREAD}.jsonl`)
+    writeFileSync(rollout, [
+      { timestamp: '2026-11-27T09:00:00Z', type: 'session_meta', payload: { id: THREAD, cwd: DIAL, originator: 'codex-tui', source: 'vscode' } },
+      { type: 'event_msg', payload: { type: 'task_complete' } },
+    ].map((line) => `${JSON.stringify(line)}\n`).join(''))
+    // What harness-pty files says of each process asked: its start as the table's, its folder, and its open files.
+    const files = vi.fn<WindowsFilesRead>(async (pids) => new Map(pids.flatMap((pid) => {
+      const row = rows.find((r) => r.pid === pid)
+      return row ? [[pid, { startMarker: row.startMarker, ...(folders[pid] ? { cwd: folders[pid] } : {}), files: pid === holder ? [rollout] : [] }] as const] : []
+    })))
+    const providers = [codexProvider({ home })]
+    const openSessions = new OpenSessions({
+      providers,
+      view: () => processView(undefined, (pid) => rows.some((row) => row.pid === pid), async () => rows, undefined, 'win32', files),
+      // Windows names no terminal (processTtys).
+      ttys: async (pids) => new Map(pids.map((pid) => [pid, null])),
+      harnessTtys: async () => new Set(),
+    })
+    const tree: ProcessRow[] = rows.map(({ pid, ppid, executable, args, startMarker }) => ({ pid, parentPid: ppid, executable, args, startMarker }))
+    const tty = vi.fn(async (_pid: number): Promise<string | undefined> => undefined)
+    const lookup: CodexServedDeps = {
+      platform: 'win32', processes: async () => rows,
+      cwds: (pids) => processCwds(pids, undefined, 'win32', undefined, files),
+      tty, apps: (pids, names) => learnApps(pids, names, undefined, 'win32'), folder: async (path) => path,
+    }
+    const lookups: Promise<unknown>[] = []
+    const terminals = { terminalOf: () => undefined, show: () => false, scroll: () => false, pageKeys: () => false as const,
+      canType: () => false, type: async () => 'failed' as const }
+    const run = vi.fn(async (_file: string, _args: string[], _timeoutMs: number) => ({ code: 0, stdout: '' }))
+    const s = setup({
+      platform: 'win32', openSessions, sessionRows: new SessionRows({ providers, excluded: ['/data/harness'] }),
+      actions: { ...fakeActions({}, 'win32').actions, adapters: [
+        createVscodeAdapter('vscode', { run, onPath: (name) => `/fake/bin/${name}`, platform: 'win32', inFront: () => true, terminals }),
+        createVscodeClientAdapter('vscode', { inFront: () => true, terminals }),
+      ] },
+      // No look's table, so the walk reads the PTY host's own.
+      apps: (pids, names) => learnApps(pids, names, undefined, 'win32', async () => tree),
+      served: (asks) => {
+        const asked = before.then(() => codexServed(asks, lookup))
+        lookups.push(asked)
+        return asked
+      },
+    })
+    /** Every lookup asked so far has landed. */
+    const settled = async (): Promise<void> => { await Promise.allSettled(lookups); await flushed() }
+    /** A hook from the daemon, with the first TUI's Windows Terminal in its environment. */
+    const hook = (event: ObservedHookEvent['event']) => s.ev(event, {
+      engine: 'codex', sessionId: THREAD, callerPid: 430, cwd: DIAL, transcriptPath: rollout,
+      hostHints: { WT_SESSION: '0b5f6c1e-2d3a-4b5c-8d9e-0f1a2b3c4d5e' },
+    })
+    return { ...s, tty, files, lookups, settled, hook }
+  }
+
+  it('the daemon holds the rollout: on VS Code\'s page at its TUI\'s terminal', async () => {
+    const t = windows([...vscodeTui(), daemon(421, 5)], { 420: DIAL, 421: DIAL }, 430)
+    await t.src.scanOpen()
+    expect(t.src.list()).toHaveLength(1)
+    const agent = t.src.list()[0]
+    expect(agent).toMatchObject({ sessionId: THREAD, app: 'vscode' })
+    expect(agent).not.toHaveProperty('appPending')
+    // npm's launcher is the TUI: its terminal is the one VS Code shows.
+    expect(t.src.windowOf(agent.id)).toEqual({ pid: 420, app: 'vscode', outer: true })
+    expect(t.src.paneOf(agent.id, 'vscode-tab')).toBe('client:420')
+    expect(t.src.paneOf(agent.id, 'vscode')).toBeUndefined()
+    expect(t.logs[0]).toMatch(/^\[observed\] scan · 1 found · 1 app known · /)
+    expect(t.tty).not.toHaveBeenCalled()
+  })
+
+  it('the TUI holds it itself: on VS Code\'s page at its terminal', async () => {
+    const t = windows(vscodeTui(), { 420: DIAL, 421: DIAL }, 421)
+    await t.src.scanOpen()
+    const agent = t.src.list()[0]
+    expect(agent).toMatchObject({ sessionId: THREAD, app: 'vscode' })
+    expect(agent).not.toHaveProperty('appPending')
+    expect(t.src.paneOf(agent.id, 'vscode')).toBe('term:421')
+  })
+
+  it('two TUIs in its folder: on no app\'s page, never a guess', async () => {
+    const second = [win(410, 401, 6, 'pwsh.exe'), win(440, 410, 7, NODE, `"${NODE}" ${NPM}\\bin\\codex.js`), win(441, 440, 8, NATIVE)]
+    const t = windows([...vscodeTui(), daemon(421, 5), ...second], { 420: DIAL, 421: DIAL, 440: DIAL, 441: DIAL }, 430)
+    await t.src.scanOpen()
+    const agent = t.src.list()[0]
+    expect(agent).toMatchObject({ sessionId: THREAD, app: 'terminal' })
+    expect(agent.appPending).toBeUndefined()
+    expect(t.src.paneOf(agent.id, 'vscode-tab')).toBeUndefined()
+    expect(t.src.paneOf(agent.id, 'vscode')).toBeUndefined()
+  })
+
+  it('the daemon\'s parent is a TUI in Windows Terminal: VS Code\'s page, never the daemon\'s parents\'', async () => {
+    const t = windows(startedInTerminal(), startedInTerminalFolders, 430)
+    await t.src.scanOpen()
+    const agent = t.src.list()[0]
+    expect(agent).toMatchObject({ sessionId: THREAD, app: 'vscode' })
+    expect(t.src.paneOf(agent.id, 'vscode-tab')).toBe('client:420')
+  })
+
+  it('the daemon\'s hooks keep it at its client, whatever the first TUI\'s hints say', async () => {
+    const t = windows(startedInTerminal(), startedInTerminalFolders, 430)
+    await t.src.scanOpen()
+    const { id } = t.src.list()[0]
+    const apps: string[] = []
+    t.src.onChange(() => { apps.push(t.src.list()[0].app) })
+    for (const event of ['session-start', 'turn-start', 'turn-stop'] as const) {
+      t.src.ingest(t.hook(event))
+      await t.settled()
+      expect(t.src.list()[0].app).toBe('vscode')
+      expect(t.src.paneOf(id, 'vscode-tab')).toBe('client:420')
+    }
+    // A session's start asks its client again.
+    expect(t.lookups).toHaveLength(2)
+    expect(apps.length).toBeGreaterThan(0)
+    expect(new Set(apps)).toEqual(new Set(['vscode']))
+    expect(t.tty).not.toHaveBeenCalled()
+  })
+
+  it('a daemon\'s first hook, the scan not run: on no page while asked, then VS Code\'s', async () => {
+    let ask!: () => void
+    const t = windows(startedInTerminal(), startedInTerminalFolders, 430, new Promise<void>((resolve) => { ask = resolve }))
+    t.src.ingest(t.hook('session-start'))
+    expect(t.src.list()[0]).toMatchObject({ app: 'terminal', appPending: true })
+    ask()
+    await t.settled()
+    const agent = t.src.list()[0]
+    expect(agent.app).toBe('vscode')
+    expect(agent.appPending).toBeUndefined()
+    expect(t.src.paneOf(agent.id, 'vscode-tab')).toBe('client:420')
   })
 })
 
