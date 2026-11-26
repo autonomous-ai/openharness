@@ -1217,7 +1217,8 @@ static void notification_read_checks(const char *dir) {
     puts("Notification read: post-DMA only, sleep/lock, stale/identical replacements, read/open idempotence, questions, hidden empty bell, reconnect snapshots and bounded receipt history PASS");
 
     // NOTIFICATION TIERS: only an alert beeps, wakes and celebrates; a list entry is a drawer row and
-    // nothing else; silent leaves no row. The pane on the face never beeps or wakes and its row is read.
+    // nothing else; silent leaves no row. The daemon decides whether the person is already with the agent, so an
+    // alert rings even for the pane on the face, and its row stays unread.
     reset(); fake_ms=5000; wakes=0;
     assert(ui_notify_summary("b","B","M2","Built.","alert",false,false) && s.notice_count==1 && wakes==1 && s.pet_pose==3);
     reset(); fake_ms=5000; wakes=0;
@@ -1235,10 +1236,10 @@ static void notification_read_checks(const char *dir) {
     assert(ui_notify_summary("d","D","M2","x",NULL,false,false) && s.notice_count==3 && wakes==1);
     // One news row per agent: the newest wins.
     assert(ui_notify_summary("d","D","M2","newer","alert",false,false) && s.notice_count==3 && !strcmp(s.notice[0].summary,"newer"));
-    // On the face: no beep, no wake, no celebration, and the row is read at once.
+    // On the face an alert still beeps and wakes, and the row stays unread.
     reset(); fake_ms=5000; wakes=0;
-    assert(!ui_notify_summary("a","A","M2","Done.","alert",false,false) && !wakes && !s.pet_pose);
-    assert(s.notice_count==1 && s.notice[0].read_on_dial && !notice_unread(NULL));
+    assert(ui_notify_summary("a","A","M2","Done.","alert",false,false) && wakes==1);
+    assert(s.notice_count==1 && !s.notice[0].read_on_dial && notice_unread(NULL)==1);
     // Rows expire 6 h after receipt, across the millisecond wrap too, but a question never does.
     for (int w = 0; w < 2; w++) {
         reset(); fake_ms = w ? UINT32_MAX - 1000 : 1000;
@@ -1257,7 +1258,7 @@ static void notification_read_checks(const char *dir) {
     fake_ms=16999; surface_tick(fake_ms); assert(s.view==MESSAGE);
     fake_ms=17000; surface_tick(fake_ms); assert(s.view==HOME && s.notice_count==1);
     reset(); fake_ms=9000; wakes=0;
-    assert(!ui_turn_error("a","The build crashed.") && s.view==MESSAGE && !wakes && s.notice[0].read_on_dial);
+    assert(ui_turn_error("a","The build crashed.") && s.view==MESSAGE && wakes==1 && !s.notice[0].read_on_dial);
     // The person's own question is never covered: the row is filed, the screen stays.
     reset(); fake_ms=9000; s.view=QUESTION; wakes=0;
     assert(ui_turn_error("b","The build crashed.") && s.view==QUESTION && !s.error_until && s.notice_count==1 && s.notice[0].failed);

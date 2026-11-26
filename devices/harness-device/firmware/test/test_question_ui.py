@@ -266,10 +266,10 @@ int main(int argc,char **argv) {
     // does wake the display, and it still counts in the bell until it is answered.
     reset(false);view(HOME);wakes=0;notices=0;
     assert(ui_question_show("b","Other","M2","q-b2",NULL,false) && s.view==HOME && wakes==1 && notices==1 && !read_now);
-    // The pane on the face already shows its question: still filed, but read at once, no wake, no beep.
-    wakes=0;notices=0;face_agent="b";
-    assert(!ui_question_show("b","Other","M2","q-b3",NULL,false) && wakes==0 && notices==1 && read_now==1);
-    face_agent="";
+    // The pane on the face rings too: the daemon decides whether the person is already with it.
+    wakes=0;notices=0;face_agent="b";s.active=1;
+    assert(ui_question_show("b","Other","M2","q-b3",NULL,false) && wakes==1 && notices==1 && !read_now);
+    face_agent="";s.active=0;
     // Filed again with no ring (tier list: a question the dial was told, back on its drawer): no wake, no beep, the
     // receipts kept, and the row read when a receipt holds that agent's question with the same words, whatever its token.
     {
@@ -291,10 +291,10 @@ int main(int argc,char **argv) {
         // An alert still forgets the read, wakes and asks for the beep.
         strcpy(r->id,"b");wakes=0;
         assert(ui_question_show("b","Other","M2","q-b4",&questions,false) && wakes==1 && forgets==1 && !filed.read_on_dial);
-        // The pane on the face: read at once, as an alert's is.
-        face_agent="b";read_now=0;
-        assert(!ui_question_show("b","Other","M2","q-b4",&questions,true) && read_now==1);
-        face_agent="";
+        // The pane on the face: a list row is not read at once and does not wake.
+        face_agent="b";s.active=1;read_now=0;wakes=0;r->question=false;
+        assert(!ui_question_show("b","Other","M2","q-b4",&questions,true) && !read_now && !wakes && !filed.read_on_dial);
+        face_agent="";s.active=0;
         // The question being read on screen is left as it is.
         reset(false);wakes=0;
         assert(!ui_question_show("a","Research","M2","q-a",&questions,true) && s.view==QUESTION && s.q.valid && !s.q.error[0] && !wakes);
