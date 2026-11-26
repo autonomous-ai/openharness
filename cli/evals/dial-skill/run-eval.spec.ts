@@ -603,15 +603,24 @@ process.exitCode = 1`)
     expect(jsonl('baseline', 'errors.jsonl')).toHaveLength(1)
   })
 
-  it('keeps a reserve for every case in flight at --concurrency 2', () => {
-    // One case's $1.50 reserve fits under $2.90; a second one's beside it does not, so the second worker starts nothing.
+  it('keeps a reserve for every case in flight at --concurrency 2, running one at a time while only one fits, and finishes the pass', () => {
+    const busy = join(tmp, 'busy')
+    const overlap = join(tmp, 'overlap')
+    fakeClaude(`if (fs.existsSync(${JSON.stringify(busy)})) fs.writeFileSync(${JSON.stringify(overlap)}, '')
+fs.writeFileSync(${JSON.stringify(busy)}, '')
+${agent('claude-opus-5-5')}
+fs.rmSync(${JSON.stringify(busy)})`)
+
+    // One case's $1.50 reserve fits under $2.90; a second one's beside it does not, so the second worker leaves the pass to
+    // the first: the cap is not reached.
     const out = runEval(['--variant', 'baseline', '--agents', 'claude', '--cases', 'add-version-flag,fix-off-by-one', '--concurrency', '2',
       '--approve-harness'], {}, 2.9)
 
-    expect(out.status).toBe(4)
-    expect(out.stderr).toContain(STOPPED)
-    expect(callsMade().filter((c) => c !== 'judge')).toEqual(['probe', 'agent'])
-    expect(jsonl('baseline', 'results.jsonl')).toHaveLength(1)
+    expect(out.status, out.stderr).toBe(0)
+    expect(out.stderr).not.toContain(STOPPED)
+    expect(callsMade().filter((c) => c !== 'judge')).toEqual(['probe', 'agent', 'agent'])
+    expect(jsonl('baseline', 'results.jsonl')).toHaveLength(2)
+    expect(existsSync(overlap)).toBe(false)
   })
 
   it('resumes under a raised cap where it stopped', () => {
