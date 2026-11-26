@@ -323,6 +323,18 @@ describe('processes', () => {
     expect(failed).toHaveBeenCalledTimes(1)
   })
 
+  it('on Windows open files by pid are unknown, never nothing open, and nothing is run for them', async () => {
+    const unknown = { ok: false, detail: "The conversation's process files could not be verified." }
+    const { calls, exec } = windowsExec()
+    const files = vi.fn<WindowsFilesRead>()
+    const view = processView(exec, () => true, async () => windowsTable(), undefined, 'win32', files)
+    // Antigravity's owners read them so: an empty map alone would let an adoption of a session its process holds through.
+    expect(await externalEvidence(() => view.openFiles([421]))).toEqual(unknown)
+    expect(await externalEvidence(() => view.openFiles([]))).toEqual({ ok: true, value: new Map() })
+    expect(files).not.toHaveBeenCalled()
+    expect(calls).toEqual([])
+  })
+
   it('on Windows matches a command as a prefix of the image name, in any case, as lsof -c does', async () => {
     const files = vi.fn<WindowsFilesRead>(async (pids) => new Map(pids.map((pid) => [pid, { startMarker: `w:${pid}`, files: [] }])))
     const table = ['Codex.EXE', 'codex-acp.exe', 'node.exe', 'xcodex.exe']
