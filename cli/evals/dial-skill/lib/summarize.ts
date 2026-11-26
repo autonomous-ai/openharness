@@ -10,13 +10,14 @@ export interface Paired { mean: number; ci_lo: number; ci_hi: number; n: number;
 export interface HeldOut {
   need: number; hit: number; no_need: number; rang: number; line_n: number; line_ok: number; ask_ok: number
   checked: number; harmed: number; went_n: number; went_on: number; rang_runs: number; one_step: number
+  loaded: number; loaded_n: number
 }
 export interface VariantStats {
   change: string
   splits: Record<string, SplitStats>
   recall: number; specificity: number; precision: number; line_ok: number; ask_ok: number
   harmed: number; harm_rate: number
-  went_on: number; one_step: number
+  went_on: number; one_step: number; loaded: number
   latency_s: number; tool_calls: number; rings: number; tokens: number
   errors: Record<string, number>; truncated: number; invalid: number; unlisted: number
   spend_usd: number
@@ -141,6 +142,8 @@ function heldOut(rows: Row[], split: (id: string) => string | undefined): HeldOu
     checked: checked.length, harmed: checked.filter(r => r.harm).length,
     went_n: count('went_on'), went_on: sum('went_on'),
     rang_runs: scored.filter(r => r.grade?.rang === 1).length, one_step: sum('one_step'),
+    // Rows graded before loaded existed have none, so its own count is the denominator.
+    loaded: sum('loaded'), loaded_n: count('loaded'),
   }
 }
 
@@ -181,6 +184,8 @@ function statsOf(rows: Row[], errs: ErrorRow[], probes: ProbeRow[], split: (id: 
     went_on: rate(scored, 'went_on'),
     // The grader gives it to every run that rang, so this is a rate over the scored rows that rang.
     one_step: rate(scored, 'one_step'),
+    // The grader gives it to every scored run; rows graded before it existed have none and are left out.
+    loaded: rate(scored, 'loaded'),
     latency_s: mean(scored.map(r => r.latency_s ?? NaN)),
     tool_calls: mean(scored.map(r => r.tool_calls ?? NaN)),
     rings: mean(scored.map(r => r.rings ?? NaN)),
@@ -322,11 +327,11 @@ export function statusTable(s: Summary): string {
 
 export function aggregateTable(s: Summary): string {
   const out = header(['variant', 'condition', 'recall', 'specificity', 'precision', 'line_ok', 'ask_ok', 'one_step',
-    'harmed', 'went_on', 'truncated', 'invalid', 'unlisted', 'errors'])
+    'loaded', 'harmed', 'went_on', 'truncated', 'invalid', 'unlisted', 'errors'])
   for (const { v, c, x } of each(s)) {
     const errors = Object.entries(x.errors).map(([cls, n]) => `${cls} ${n}`).join(', ')
     out.push(line([v, c, pct(x.recall), pct(x.specificity), pct(x.precision), pct(x.line_ok), pct(x.ask_ok),
-      pct(x.one_step), fmtHarm(x), pct(x.went_on), x.truncated, x.invalid, x.unlisted, errors]))
+      pct(x.one_step), pct(x.loaded), fmtHarm(x), pct(x.went_on), x.truncated, x.invalid, x.unlisted, errors]))
   }
   return out.join('\n')
 }
@@ -334,10 +339,11 @@ export function aggregateTable(s: Summary): string {
 // Val and test pooled, as counts: the held-out numbers the spec's targets are read against.
 export function heldOutTable(s: Summary): string {
   const out = header(['variant', 'condition', 'recall', 'needless rings', 'line_ok', 'ask_ok', 'harmed', 'went_on',
-    'one_step'])
+    'one_step', 'loaded'])
   for (const { v, c, x: { held_out: h } } of each(s)) {
     out.push(line([v, c, of(h.hit, h.need), of(h.rang, h.no_need), of(h.line_ok, h.line_n), of(h.ask_ok, h.need),
-      of(h.harmed, h.checked), of(h.went_on, h.went_n), of(h.one_step, h.rang_runs)]))
+      of(h.harmed, h.checked), of(h.went_on, h.went_n), of(h.one_step, h.rang_runs),
+      of(h.loaded, h.loaded_n)]))
   }
   return out.join('\n')
 }

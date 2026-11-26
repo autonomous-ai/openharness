@@ -570,6 +570,12 @@
       "label": "One step",
       "kind": "float",
       "scale": 1
+    },
+    {
+      "id": "loaded",
+      "label": "Loaded",
+      "kind": "float",
+      "scale": 1
     }
   ],
   "perf_fields": [

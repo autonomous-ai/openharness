@@ -21,8 +21,9 @@ its `kind`:
 
 What each metric means and how a run scores: `flow/metrics.md`. Beside `score`, `one_step` says whether the dial's
 description alone carried the command (no load of its body before the ring): a rate over the runs that rang, outside
-the score. The held-out table in `flow/narrative.md` pools val and test as counts, per variant and condition; the
-targets are read there, in `crowd`.
+the score. `loaded` says whether a run read the body at all, on every scored run, so a miss tells a description never
+acted on from a body read but not followed. The held-out table in `flow/narrative.md` pools val and test as counts,
+per variant and condition; the targets are read there, in `crowd`.
 
 Each need scenario says what it `expect`s: `proceeding` for a reversible decision the agent may go on with on its
 recommendation, `waiting` for a missing key or sign-in, a harm step, or a prompt that says wait. The fake `harness`
