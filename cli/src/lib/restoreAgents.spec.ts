@@ -2197,11 +2197,13 @@ describe('the guard\'s hold: a launch it held starts again, first launch or conv
       expect(entry.launch).toEqual({ state: 'ready' })
     })
 
-    /** Its pane alive and read as [waiting], or gone: the row fails with DID_NOT_START, nothing launched or closed. */
-    async function failsAsDidNotStart(entry: RegisteredSession, alivePanes: string[], waiting: boolean) {
+    /** Its pane alive and read as [waiting], gone, or not read ([unread] answers 'unknown'): the row fails with
+     *  DID_NOT_START, nothing launched or closed. */
+    async function failsAsDidNotStart(entry: RegisteredSession, alivePanes: string[], waiting: boolean, unread?: 'livePane' | 'waitingPane') {
       const h = harness([entry], { alivePanes })
       const startAgain = h.deps.startAgain = vi.fn()
-      h.deps.waitingPane = vi.fn(async (_runtime, token) => waiting && token === 'original')
+      h.deps.waitingPane = vi.fn(async (_runtime, token) => unread === 'waitingPane' ? 'unknown' as const : waiting && token === 'original')
+      if (unread === 'livePane') h.deps.livePane = async () => 'unknown'
       const killPane = h.deps.killPane = vi.fn()
       const log = h.deps.log = vi.fn()
       expect(await restoreAgents(h.deps)).toEqual({ restored: [], skipped: [], held: [], unsurveyed: [],
@@ -2214,8 +2216,10 @@ describe('the guard\'s hold: a launch it held starts again, first launch or conv
       expect(killPane).not.toHaveBeenCalled()
     }
 
-    it('one with no creationId fails: DID_NOT_START', async () => {
-      for (const detail of OLD_DETAILS) await failsAsDidNotStart(saved(detail, { creationId: undefined }), ['%3'], true)
+    it('one with no creationId fails: DID_NOT_START, its pane read or not', async () => {
+      for (const detail of OLD_DETAILS) for (const unread of [undefined, 'livePane', 'waitingPane'] as const) {
+        await failsAsDidNotStart(saved(detail, { creationId: undefined }), ['%3'], true, unread)
+      }
     })
 
     it('one whose pane is gone, or not its held shell, fails: DID_NOT_START', async () => {
@@ -2225,7 +2229,7 @@ describe('the guard\'s hold: a launch it held starts again, first launch or conv
       }
     })
 
-    it('one whose pane cannot be read waits for the next pass', async () => {
+    it('one whose pane cannot be read gets the guard\'s hold and waits for its next attempt', async () => {
       for (const detail of OLD_DETAILS) for (const unread of ['livePane', 'waitingPane'] as const) {
         const entry = saved(detail), before = structuredClone(entry)
         const h = harness([entry], { alivePanes: ['%3'] })
@@ -2233,9 +2237,38 @@ describe('the guard\'s hold: a launch it held starts again, first launch or conv
         h.deps.waitingPane = vi.fn(async () => unread === 'waitingPane' ? 'unknown' as const : true)
         if (unread === 'livePane') h.deps.livePane = async () => 'unknown'
         expect(await restoreAgents(h.deps)).toEqual({ restored: [], skipped: [], failed: [], held: [], unsurveyed: ['agent-a'] })
-        expect(entry).toEqual(before)
-        expect(startAgain).not.toHaveBeenCalled()
+        expect(entry).toEqual({ ...before, launch: startsAgain('original') })
+        expect(startAgain.mock.calls).toEqual([['agent-a']])
         expect(h.launches.length + h.paneCreates + h.respawns).toBe(0)
+      }
+    })
+
+    it('one whose pane stays unreadable fails DID_NOT_START 15 minutes after its mark', async () => {
+      vi.useFakeTimers()
+      const entry = saved(OLD_DETAILS[0])
+      const h = harness([entry], { alivePanes: ['%3'] })
+      h.deps.waitingPane = vi.fn(async () => 'unknown' as const)
+      const announce = vi.fn(), log = vi.fn(), start = performance.now(), passes: number[] = []
+      const held = createHeldLaunches({ registry: h.deps.registry, announce, log,
+        restore: only => { passes.push(performance.now() - start); return restoreAgents({ ...h.deps, only }) } })
+      try {
+        h.deps.startAgain = held.startAgain
+        await held.boot(() => restoreAgents(h.deps))
+        await vi.advanceTimersByTimeAsync(15 * 60_000 - 1)
+        expect(entry.launch).toEqual(startsAgain('original'))
+        expect(announce).not.toHaveBeenCalled()
+        await vi.advanceTimersByTimeAsync(1)
+        expect(entry.launch).toEqual(didNotStart)
+        expect(announce.mock.calls).toEqual([[entry]])
+        expect(log).toHaveBeenCalledWith('[restore] codex · agent agent-a · first launch held 15 minutes · NATIVE_EVIDENCE_UNSETTLED')
+        // The guard's schedule from the mark (heldRetryMs): 2 s, backing off to 30 s, the last at 15 minutes.
+        expect(passes).toEqual([2_000, 6_000, 14_000, 30_000, ...Array.from({ length: 29 }, (_, i) => 60_000 + i * 30_000)])
+        // Never relaunched into a pane it could not read, and nothing left to try it again.
+        expect(h.launches.length + h.paneCreates + h.respawns).toBe(0)
+        expect(vi.getTimerCount()).toBe(0)
+      } finally {
+        held.close()
+        vi.useRealTimers()
       }
     })
 
