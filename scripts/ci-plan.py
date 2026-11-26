@@ -523,8 +523,8 @@ def windows_only(path):
         or PurePosixPath(path).name == "install.ps1"
         or path in {".github/workflows/windows.yml", "cli/vitest.e2e.windows.config.ts",
                     "cli/scripts/windows-install-manifest.mjs"}
-        # The Store's pipe checks: storePackagesPipe.windows.spec.ts runs the test, check-install.ps1 the folder's script.
-        or path == "store/tools/windows-pipe.test.mjs" or path.startswith("store/tools/windows-ci/")
+        # The Store's pipe script: check-install.ps1 runs it against the installed daemon.
+        or path.startswith("store/tools/windows-ci/")
         # A file's own name, not a folder's (cli/src/lib/windows/ runs x64 alone), in the code its specs and the dial's
         # end to end run: arm64 adds about 27 runner-minutes a run.
         or (path.startswith(("cli/src/", "cli/e2e/")) and re.search(r"[wW]indows", PurePosixPath(path).name) is not None))
@@ -540,6 +540,8 @@ def windows_e2e(path):
                          "website/src/app/flash-circle.ps1/", "cli/scripts/windows-dial-e2e/"))
         or re.match(r"plugins/harness-device[^/]*/", path) is not None
         or path in WINDOWS_SPEC_MODULES or path in WINDOWS_E2E_HARNESS_PATHS
+        # The Store's pipe test: cross-platform JS that storePackagesPipe.windows.spec.ts runs.
+        or path == "store/tools/windows-pipe.test.mjs"
         or any(covers(spec, path) for spec in WINDOWS_SPECS))
 
 
