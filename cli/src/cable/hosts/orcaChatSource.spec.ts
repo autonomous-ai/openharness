@@ -87,8 +87,9 @@ describe("Orca's chats on the dial", () => {
     }
   })
 
-  /** A source whose `orca` answers what the test holds, on a clock each `agent list` moves by `took`. */
-  function setup(platform?: NodeJS.Platform) {
+  /** A source whose `orca` answers what the test holds, on a clock each `agent list` moves by `took`. On a Mac unless a
+   *  test names another platform: the recorded folders are `/` ones, which a Windows test machine would drop. */
+  function setup(platform: NodeJS.Platform = 'darwin') {
     const state = {
       binary: ORCA as string | null,
       stamp: { realPath: ORCA, mtimeMs: 1 } as { realPath: string; mtimeMs: number } | null,
@@ -121,7 +122,7 @@ describe("Orca's chats on the dial", () => {
       show,
       log: (line) => { lines.push(line) },
       now: () => clock,
-      ...(platform && { platform }),
+      platform,
     }
     const src = new OrcaChatSource(deps)
     src.onChange(() => { changes++ })
