@@ -152,12 +152,15 @@ interface Hook { type?: unknown; command?: unknown; timeout?: number; async?: bo
 /**
  * The records the plugin at [root] needs, one per command hook its own hooks file declares for an event Codex reviews,
  * keyed as Codex keys a plugin's hook: the plugin, the file from its root, the event's label, the group's and the
- * hook's place. The declarations are read from the bytes that were fingerprinted. Throws when the folder cannot be
- * walked or its hooks file read or parsed.
+ * hook's place. Throws when the folder cannot be walked or its hooks file read or parsed.
  */
 export function pluginTrustRecords(root: string): PluginTrustRecord[] {
   const entries = folderEntries(root)
-  const contentHash = fingerprint(entries)
+  return trustRecords(entries, fingerprint(entries))
+}
+
+/** pluginTrustRecords of a folder walked once: the declarations are read from the bytes that were fingerprinted. */
+function trustRecords(entries: readonly Entry[], contentHash: string): PluginTrustRecord[] {
   const file = entries.find((entry) => entry.path === CODEX_HOOKS_FILE.split('/').join(sep))
   if (!file?.bytes) throw new Error('the plugin has no hooks file')
   const declared = (JSON.parse(settingsText(file.bytes)) as { hooks?: Record<string, unknown> }).hooks
@@ -224,14 +227,23 @@ function withTrust(text: string, records: readonly PluginTrustRecord[]): string 
 export function writePluginTrust(codexHome: string, root: string, expected: string,
   io: { read(file: string): string | null; replace(file: string, text: string): void } = { read: readConfigText, replace: replaceConfigFile }): TrustWrite {
   const failed = (kind: TrustFailure): TrustWrite => ({ ok: false, kind })
-  let records: PluginTrustRecord[]
+  let entries: Entry[]
   try {
-    records = pluginTrustRecords(root)
+    entries = folderEntries(root)
   } catch {
     return failed('plugin')
   }
-  // Each record holds the folder's fingerprint, computed once with the declarations.
-  if (records.some((record) => record.contentHash !== expected)) return failed('differs')
+  // The fingerprint first: a folder edited by hand, its hooks file emptied, removed or broken among the edits, differs
+  // from the carried copy, whatever it declares.
+  if (fingerprint(entries) !== expected) return failed('differs')
+  let records: PluginTrustRecord[]
+  try {
+    records = trustRecords(entries, expected)
+  } catch {
+    return failed('plugin')
+  }
+  // The carried copy itself declaring no hook would leave nothing trusted while saying it is.
+  if (records.length === 0) return failed('plugin')
   const file = join(codexHome, REVIEWED.fileName)
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
     let text: string | null, now: string | null
