@@ -1,0 +1,6 @@
+{
+  "name": "@acme/auth",
+  "version": "3.0.2",
+  "type": "module",
+  "main": "src/index.js"
+}
