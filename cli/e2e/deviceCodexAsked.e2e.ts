@@ -126,12 +126,12 @@ describe('the dial shows a Codex session waiting outside Harness', () => {
     const { d, dial, codex } = await fresh()
     const since = dial.messages.length
     const ask = (question: string) => ({ questions: [{ id: 'q1', header: 'Probe', question, options: [{ label: 'Red', description: 'Warm' }] },
-      { id: 'q2', header: 'Second', question: 'Which size?', options: [] }] })
+      { id: 'q2', header: 'Second', question: 'Which size?', options: [{ label: 'Small', description: 'Fits' }] }] })
     expect(await asked(codex, { reviewer: 'user', mode: 'default' }, 'PreToolUse', 'request_user_input', ask('Which shape?'))).toEqual(quiet)
     expect(await asked(codex, { reviewer: 'user', mode: 'plan' }, 'PreToolUse', 'request_user_input', ask('Which color?'))).toEqual(quiet)
     await line(dial, codex.id, 'Which color? · answer in Ghostty', 'the waiting line', since)
     const shown = JSON.stringify(dial.messages)
-    for (const absent of ['Which shape?', 'Which size?', 'Warm']) expect(shown).not.toContain(absent)
+    for (const absent of ['Which shape?', 'Which size?', 'Warm', 'Fits']) expect(shown).not.toContain(absent)
     expect(questions(dial, codex.id)).toHaveLength(1)
     expect(shownLogged(d)).toBe(1)
   })

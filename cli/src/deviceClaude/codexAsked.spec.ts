@@ -88,7 +88,7 @@ describe('codexAskedSummary', () => {
     ['apply_patch', { command: '*** Begin Patch\r\n*** Delete File: c.ts\r\n*** End Patch' }, 'c.ts'],
     ['apply_patch', { command: '*** Begin Patch\n*** End Patch' }, 'apply_patch'],
     ['apply_patch', {}, 'apply_patch'],
-    ['request_user_input', { questions: [{ id: 'q1', header: 'Probe', question: 'Which color?', options: [] }] }, 'Which color?'],
+    ['request_user_input', { questions: [{ id: 'q1', header: 'Probe', question: 'Which color?', options: [{ label: 'Red', description: 'Warm' }] }] }, 'Which color?'],
     ['request_user_input', { questions: [] }, 'request_user_input'],
     ['request_user_input', { questions: [{ id: 'q1', question: 7 }] }, 'request_user_input'],
     ['request_user_input', null, 'request_user_input'],
@@ -140,6 +140,29 @@ describe('runCodexAsked', () => {
   it('posts nothing for an app tool of Codex\'s (mcp__codex_apps__…) in a turn the person reviews', async () => {
     const { home, transcript } = codexHome()
     expect(await posted(home, hookInput(transcript, { tool_name: 'mcp__codex_apps__github_create_issue', tool_input: {} }))).toEqual([])
+  })
+
+  // Codex refuses these calls with no form shown (protocol/src/request_user_input.rs, normalize_request_user_input_tool_args).
+  const OPTION = { label: 'Red', description: 'Warm' }
+  const ASKED = { id: 'q1', header: 'Probe', question: 'Which color?', options: [OPTION] }
+  it.each([
+    ['no questions', {}],
+    ['questions that are not a list', { questions: ASKED }],
+    ['an empty list of questions', { questions: [] }],
+    ['a question that is not a record', { questions: ['Which color?'] }],
+    ['a second question that is not a record', { questions: [ASKED, null] }],
+    ['a question with no id', { questions: [{ ...ASKED, id: undefined }] }],
+    ['a question whose header is not text', { questions: [{ ...ASKED, header: 7 }] }],
+    ['a question with no question', { questions: [{ ...ASKED, question: undefined }] }],
+    ['a question with no options', { questions: [{ ...ASKED, options: undefined }] }],
+    ['a question with an empty list of options', { questions: [{ ...ASKED, options: [] }] }],
+    ['a second question with an empty list of options', { questions: [ASKED, { ...ASKED, id: 'q2', options: [] }] }],
+    ['options that are not a list', { questions: [{ ...ASKED, options: OPTION }] }],
+    ['an option that is not a record', { questions: [{ ...ASKED, options: ['Red'] }] }],
+    ['an option with no description', { questions: [{ ...ASKED, options: [{ label: 'Red' }] }] }],
+  ])('posts nothing for a request_user_input in Plan mode with %s', async (_case, toolInput) => {
+    const { home, transcript } = codexHome([PLAN_LINE])
+    expect(await posted(home, hookInput(transcript, { ...QUESTION, tool_input: toolInput }))).toEqual([])
   })
 
   it('posts nothing for a request_user_input PreToolUse in Default mode', async () => {
@@ -204,7 +227,7 @@ describe('runCodexAsked', () => {
     expect(mcp).toHaveLength(70)
     const bodies = [
       ...await posted(home, hookInput(transcript, { tool_name: mcp, tool_input: {}, cwd: `/${'d'.repeat(1023)}` })),
-      ...await posted(plan.home, hookInput(plan.transcript, { ...QUESTION, tool_input: { questions: [{ question: '日'.repeat(100) }] } })),
+      ...await posted(plan.home, hookInput(plan.transcript, { ...QUESTION, tool_input: { questions: [{ ...QUESTION.tool_input.questions[0], question: '日'.repeat(100) }] } })),
     ]
     expect(bodies.map((body) => [body.tool, body.summary])).toEqual([[mcp.slice(0, 64), mcp], ['request_user_input', '日'.repeat(66)]])
     for (const body of bodies) expect(parseObservedHook(body)).toStrictEqual(body)
