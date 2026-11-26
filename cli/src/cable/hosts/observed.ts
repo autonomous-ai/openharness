@@ -155,8 +155,8 @@ export interface ObservedDeps {
   herdrTerminal?(pid: number): string | undefined
   /** For each ask, whether its pid is the TUIs' Codex daemon, and where the person sees the session it runs
    *  (codexServed.ts): none for a pid that is not (no server, any other, or an app's own), whose hook its hints place;
-   *  else its client's app, tab and process, when known. One reading of the machine for every ask. Absent (Windows, where no
-   *  process's folder can be read), every Codex hook is placed by its hints. */
+   *  else its client's app, tab and process, when known. One reading of the machine for every ask. Absent, every Codex
+   *  hook is placed by its hints. */
   served?(asks: readonly ServedAsk[]): Promise<readonly (Served | undefined)[]>
   /** The place of an agent nested in a multiplexer whose own pty is no tab (outer.ts firstOuter of herdrOuter.ts's,
    *  tmux.ts's and zellij.ts's lookups), by its event's hints and caller: undefined at once when it is not nested; else
