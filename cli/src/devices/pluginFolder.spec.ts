@@ -442,4 +442,21 @@ describe('the plugin\'s folder', () => {
     expect(other).toBe('written')
     holdsOnly(folder, FILES)
   })
+
+  // The devices' pass and a person's `enable` write the same build's files: the one whose rename lost finds them there.
+  it('a command whose folder another command swapped meanwhile with the same files is written', () => {
+    const folder = aFolder()
+    ensurePluginFolder(folder, EARLIER, [])
+    const real = watched.renameSync
+    let other: string | undefined
+    vi.spyOn(watched, 'renameSync').mockImplementation((from, to) => {
+      if (other === undefined && String(from).startsWith(`${folder}.new`)) other = anotherCommand(folder, FILES)
+      return real(from, to)
+    })
+
+    expect(ensurePluginFolder(folder, FILES, [])).toBe('written')
+
+    expect(other).toBe('written')
+    holdsOnly(folder, FILES)
+  })
 })
