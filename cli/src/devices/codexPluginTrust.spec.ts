@@ -138,6 +138,22 @@ describe("the plugin's trust records", () => {
       { key: QUESTION_KEY, trustedHash: QUESTION, contentHash: FINGERPRINT },
     ])
   })
+
+  it("hash a matcher where Codex does: SessionStart and PostToolUse too, as PermissionRequest and PreToolUse, never Stop's", () => {
+    const hooksFile = JSON.stringify({ hooks: {
+      SessionStart: [{ matcher: 'startup|resume', hooks: [{ type: 'command', command: 'fixture start', timeout: 5 }] }],
+      PostToolUse: [{ matcher: 'Edit|Write', hooks: [{ type: 'command', command: 'fixture after', timeout: 5 }] }],
+      Stop: [{ matcher: 'ignored', hooks: [{ type: 'command', command: 'fixture stop', timeout: 5 }] }],
+    } })
+    const folder = handEdited(hooksFile)
+    // Codex's identity of each hook hashed by Python (sorted keys, compact JSON, sha256), with the matcher only for the
+    // events codex-rs `matcher_pattern_for_event` keeps one for (hooks/src/events/common.rs, 0.172.0).
+    expect(pluginTrustRecords(folder).map(({ key, trustedHash }) => [key.split(':').slice(2).join(':'), trustedHash])).toStrictEqual([
+      ['session_start:0:0', 'sha256:018d7918a1b18b5396763220c034f5a18bb6f43a2af8c44c791108d4b477c2a8'],
+      ['stop:0:0', 'sha256:f0a5037f5c103124b923a3908564612f2f006fb26f54e3102e304fbe57d3d4d1'],
+      ['post_tool_use:0:0', 'sha256:b938a9471c973339ca748a29f112df3a8fa6ccc1c7d2155b6823164c52c46bdd'],
+    ])
+  })
 })
 
 describe('readConfigText', () => {
