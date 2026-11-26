@@ -26,9 +26,10 @@ import { DIAL_PLUGIN_ID } from './dialSkill.js'
 
 export const CODEX_HOOKS_FILE = 'hooks/codex.json'
 
-/** Codex's record of a reviewed hook. A plugin's PermissionRequest matcher is part of its hash, unlike the native
- *  hook's, which has none (the spike: `hooks/list`'s hash of a plugin hook with `matcher: "*"`). */
-const REVIEWED = { ...hooks.settings.reviewed!, matcherEvents: ['PermissionRequest', 'PreToolUse'] }
+/** Codex's record of a reviewed hook. A plugin hook's matcher is part of its hash for each event Codex keeps one for
+ *  (codex-rs `matcher_pattern_for_event`, hooks/src/events/common.rs, 0.172.0), PermissionRequest among them, which
+ *  Harness's native hooks give none (the spike: `hooks/list`'s hash of a plugin hook with `matcher: "*"`). */
+const REVIEWED = { ...hooks.settings.reviewed!, matcherEvents: ['PreToolUse', 'PermissionRequest', 'PostToolUse', 'SessionStart'] }
 const CONTENT = { ...REVIEWED, key: 'trusted_content_hash' }
 
 /** Bounds of what is read: the plugin is a few files of a few KB. */
