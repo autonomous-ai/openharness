@@ -47,6 +47,12 @@ const KEPT_SETTINGS: Record<string, 'boolean' | 'number' | 'string'> = {
   brightness: 'number', muted: 'boolean', quiet: 'boolean', focusFace: 'boolean', scrollReversed: 'boolean', voiceLang: 'string',
 }
 
+/** Voice language as the firmware reads it back: cut to 7 bytes, not characters (snprintf into CFG_VLANG_MAX), and an
+ *  empty one read as English (config_load_voicelang). A cut through a character decodes as the daemon would decode it. */
+function voiceLangHeld(value: string): string {
+  return Buffer.from(value, 'utf8').subarray(0, 7).toString('utf8') || 'en'
+}
+
 export interface FakeDialOptions {
   /** What it calls itself in its greeting; two dials on one desk differ by it. */
   mac?: string
@@ -108,14 +114,14 @@ export class FakeDial {
   }
 
   /** As the firmware: only the rows it changes and holds, only with a value of their type, brightness clamped to a
-   *  whole number, Voice language cut to 7 bytes, then the values it now holds read back. */
+   *  whole number, Voice language as it reads it back, then the values it now holds read back. */
   private keep(message: DialMessage): void {
     const settings = this.settings!
     for (const [key, type] of Object.entries(KEPT_SETTINGS)) {
       const value = message[key]
       if (!(key in settings) || typeof value !== type) continue
       settings[key] = key === 'brightness' ? Math.trunc(Math.min(100, Math.max(0, value as number)))
-        : key === 'voiceLang' ? (value as string).slice(0, 7) : value
+        : key === 'voiceLang' ? voiceLangHeld(value as string) : value
     }
     this.send({ t: 'settings.state', ok: true, settings: { ...settings } })
   }
