@@ -78,8 +78,9 @@ export class InOrca {
     expect(run.code, run.stderr).toBe(0)
   }
 
-  /** The plugin's PermissionRequest hook: the real CLI, from the run's bundle or the sources as the daemon is started. */
-  asked(command: string) {
+  /** The plugin's PermissionRequest hook: the real CLI, from the run's bundle or the sources as the daemon is started.
+   *  [prompt] is a Bash command, or the tool fields of the input as Claude Code writes them. */
+  asked(prompt: string | { tool_name: string; tool_input: Record<string, unknown>; permission_mode?: string }) {
     // The plugin as `claude plugin install` leaves it: its entry in the user settings, which `asked` reads before it tells
     // (`harness device claude disable` drops it). Beside the hooks the daemon installed there.
     const settings = join(this.d.env.HOME!, '.claude', 'settings.json')
@@ -88,8 +89,9 @@ export class InOrca {
     const bundle = process.env.E2E_BUNDLE_PATH
     const script = bundle ? [bundle] : ['--import', 'tsx', 'src/cli.ts']
     // From the CLI's folder, where tsx resolves; the session's folder is the input's.
+    const tool = typeof prompt === 'string' ? { tool_name: 'Bash', tool_input: { command: prompt, description: 'Say hi' } } : prompt
     return this.run(process.execPath, [...script, 'device', 'claude', 'asked'], {
-      hook_event_name: 'PermissionRequest', permission_mode: 'default', tool_name: 'Bash', tool_input: { command, description: 'Say hi' },
+      hook_event_name: 'PermissionRequest', permission_mode: 'default', ...tool,
     }, CLI_ROOT)
   }
 }

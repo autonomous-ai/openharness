@@ -6,6 +6,8 @@
  * - the client prints nothing and exits at once, and with no dial nothing more happens: no devices process is started;
  * - with a dial, the agent waits with "<summary> · answer in Orca", also as a question the dial only shows (every answer
  *   to it refused, and a row of the drawer of a dial plugged in again), and the session's Stop ends the wait and closes it;
+ * - a question form waits with its first question and a plan approval with "Plan ready to approve", each one card though
+ *   its Notification follows, closed at the Stop, and neither the form's question in a log nor the plan anywhere;
  * - the mod's inbox poll is held by the core with no dial, ended {} once one is plugged in, and the next held with it;
  * - the dial reads the agent by its folder, then by the name its hook says, renamed by a later prompt, and no log holds it;
  * - words to a live Orca chat take today's route, its mod's poll, until the owner's hand test (Task 0 c of
@@ -134,6 +136,42 @@ describe('the dial shows Claude Code waiting outside Harness', () => {
     // The dial was landed on the agent, so its line is read again as the shown agent's until the Stop clears it: never
     // after.
     expect(dial.messages.slice(dial.messages.indexOf(closed)).some((m) => m.agentId === claude.id && m.text === 'printf hi · answer in Orca')).toBe(false)
+  })
+
+  it('a question form and a plan approval each wait on the dial with their own line, rung once, and their Stop closes them', async () => {
+    const { d, desk } = await fresh()
+    const dial = await plugged(desk)
+    const claude = new InOrca(d, 'in-orca', children)
+    await claude.hook('SessionStart', { source: 'startup' })
+    await dial.next((m) => m.t === 'agent' && m.id === claude.id, 45_000, 'the agent listed')
+    // A turn that waits on [prompt] as Claude Code asks it: its PermissionRequest hook, then ~6 s later its Notification.
+    const waitsOn = async (permission_mode: string, prompt: Parameters<InOrca['asked']>[0], notification: string, text: string) => {
+      let since = dial.messages.length
+      await claude.hook('UserPromptSubmit', { prompt: 'go on', permission_mode })
+      await line(dial, claude.id, '', 'its turn started', since)
+      since = dial.messages.length
+      expect(await claude.asked(prompt)).toMatchObject({ stdout: '', stderr: '', code: 0 })
+      await claude.hook('Notification', { message: notification, notification_type: 'permission_prompt', permission_mode })
+      await line(dial, claude.id, text, 'the waiting line', since)
+      const question = await dial.next((m) => m.t === 'question' && m.agentId === claude.id, 45_000, 'the question', since)
+      expect(question).toEqual({ t: 'question', agentId: claude.id, name: 'in-orca', machine: expect.any(String),
+        id: expect.stringMatching(/^shown:/), questions: [{ key: '', q: text, options: [] }] })
+      await claude.hook('Stop', { stop_hook_active: false })
+      const closed = await dial.next((m) => m.t === 'question.close' && m.agentId === claude.id && m.id === question.id, 45_000, 'the question closed', since)
+      await dial.next((m) => m.t === 'turn.done' && m.agentId === claude.id, 45_000, 'its turn done', since)
+      // One card: the Notification, told after the prompt, asked no second.
+      expect(dial.messages.slice(since, dial.messages.indexOf(closed)).filter((m) => m.t === 'question' && m.agentId === claude.id)).toEqual([question])
+    }
+    await waitsOn('default', { tool_name: 'AskUserQuestion', tool_input: { questions: [{ question: 'Which database should the export use?',
+      header: 'Database', multiSelect: false, options: [{ label: 'Postgres', description: 'The main one' }, { label: 'SQLite', description: 'A local file' }] }] } },
+    'Claude needs your permission', 'Which database should the export use? · answer in Orca')
+    await waitsOn('plan', { tool_name: 'ExitPlanMode', permission_mode: 'plan', tool_input: { plan: '# Plan\n\n1. Secret plan text.' } },
+      'Claude Code needs your approval for the plan', 'Plan ready to approve · answer in Orca')
+    const shown = () => d.log().split('[observed] waiting prompt · shown').length - 1
+    await until('both prompts logged', () => shown() >= 2 || undefined, 30_000, 50)
+    expect(shown()).toBe(2)
+    expect(d.log()).not.toContain('Which database')
+    for (const said of [d.log(), JSON.stringify(dial.messages)]) expect(said).not.toContain('Secret plan')
   })
 
   it('the dial reads a session by its folder, then by the name its hook says, and no log holds the name', async () => {
