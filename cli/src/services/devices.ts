@@ -95,6 +95,7 @@ import { DialLog } from '../cable/dialLog.js'
 import { DialVerdicts, greetedAsDial } from '../cable/dialPortVerdicts.js'
 import { createDialSetup } from '../cable/dialSetup.js'
 import { claudeFound, type ClaudeInstallDeps, type ClaudeRun } from '../devices/claudePlugin.js'
+import { installedSkills } from '../devices/dialSkill.js'
 import { readOrcaConnected, readRemoved, readSetup, SETUP_COUNTS } from '../devices/dialSkillFiles.js'
 import { createOrcaHomesCache, orcaBinary, orcaHomesDeps, readOrcaHomes, type OrcaHomesCache } from '../devices/orcaHomes.js'
 import { orcaPluginRun, type OrcaPluginRun } from '../devices/orcaPlugin.js'
@@ -541,8 +542,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const row = registry.entries().find(({ agent }) => agent.id === agentId)?.agent
     return front !== undefined && row !== undefined && !row.appPending && row.app !== UNKNOWN_APP && row.app !== front
   }
+  /** The engines' default homes, the dial setup's own: the dial skill is looked for where the setup writes it. */
+  const skillHomes = { claude: dirname(env.CLAUDE_PROJECTS_DIR), codex: env.CODEX_HOME }
   const dialUsage = createDialUsage({ sink: usageFile, now: wallClock, after: timerIn('dialUsage'), describe: usageAgent,
-    working: usageWorking, away: usageAway, log })
+    working: usageWorking, away: usageAway, log, skills: () => installedSkills(core.dataDir, skillHomes) })
   /** A count is the devices' own part: one that throws never reaches the dial. */
   const count = (run: (usage: DialUsage) => void): void => part.call('dialUsage', () => run(dialUsage))
   /** A Harness agent's question, as the dial's wait on the person: by its request, as an agent can hold two. */
@@ -839,8 +842,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     dataDir: core.dataDir,
     platform: apps.platform,
     uid: process.getuid?.() ?? -1,
-    claudeHome: dirname(env.CLAUDE_PROJECTS_DIR),
-    codexHome: env.CODEX_HOME,
+    claudeHome: skillHomes.claude,
+    codexHome: skillHomes.codex,
     // Read at each start pass: the adopted homes, and Orca's as its last read gave them.
     adopted: () => {
       const moved = movedEngineHomes()
@@ -863,8 +866,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** The dial setup's start pass, after a read of Orca's homes: the first, and each that changes them. A read that lands
    *  once the devices stopped starts none. */
   const skillPass = (): void => {
-    if (skill && !stopped) part.call('skill', () => skill.started())
+    if (skill && !stopped) part.call('skill', () => skillPassed(skill.started()))
   }
+  /** A setup pass settled, done or failed: the dial skill is looked for as that pass left the homes. */
+  const skillPassed = (pass: Promise<void>): Promise<void> => pass.finally(() => count((usage) => usage.setupPassed()))
   // Harness's VS Code extension, set up once a computer in VS Code and once in Cursor through the dial setup's record
   // (cable/vscodeExtensionSetup.ts), where the dial setup runs: on Windows the core's process runs the editor's `code`
   // or `cursor` then, each run in its time (devices/vscodeExtension.ts VSCODE_RUN_MS). Each editor's setup a part of
@@ -1412,7 +1417,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       core.clients.dialWatching(on)
       // Before the scan the attach starts, so that scan finds the dial recorded; and before each editor's pass, which
       // reads it.
-      if (on && skill) part.call('skill', () => skill.attached())
+      if (on && skill) part.call('skill', () => skillPassed(skill.attached()))
       if (on && vscodeSetup) part.call('vscodeExtension', () => vscodeSetup.pass())
       if (on && cursorSetup) part.call('cursorExtension', () => cursorSetup.pass())
       if (on && orcaSetup) part.call('orcaPlugin', () => orcaSetup.pass())
@@ -1884,6 +1889,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (entry) return { agentId: entry.agent.id, keys: noticeKeys(entry.agent), host: entry.agent.host }
     return { agentId: observedAgentId(engine, sessionId), keys: [], host: '', who: { ...who, engine } }
   }
+  const noticeTally = createEngineTally('[device] notify', ['claude', 'codex', 'agent'], ['shown', 'no dial', 'limited'], log)
   const noticeFile = new NoticeFile({ file: join(core.dataDir, NOTICES_FILE), cards: () => notices.stored(), after: timerIn('notices'), log })
   // Typed, or its type would be read from itself: the cable host's wiring reads it, and it reads the cable built on that host.
   const notices: Notices = new Notices({
@@ -1897,7 +1903,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     now: monotonic,
     clock: Date.now,
     changed: () => noticeFile.changed(),
-    count: createEngineTally('[device] notify', ['claude', 'codex', 'agent'], ['shown', 'no dial', 'limited'], log),
+    // The log's tally stays beside the usage counts: the end-to-end checks read its line.
+    count: (engine, result, kind) => {
+      noticeTally(engine, result, kind)
+      count((usage) => usage.noticed(engine, result, kind))
+    },
     restored: noticeFile.load(),
     log,
     // Behind every send those agents' order holds, their holds among them: a close that came after would drop the row.
@@ -1916,9 +1926,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     count((usage) => usage.waitEnded(`notice:${agentId}`, end))
   }
   /** A notice shown is a wait on the person unless its agent says it proceeds (Decision 8). One that takes the place of
-   *  the agent's own: proceeding, the person most likely acted, so that wait is answered; waiting, it is the same wait. */
+   *  the agent's own: proceeding, the person most likely acted, so that wait is answered; waiting, it is the same wait.
+   *  Of every kind, the person's next prompt to that agent within 10 min answers it. */
   const noticeShown = (ask: NoticeAsk): void => count((usage) => {
     const { agentId } = noticeCaller(ask)
+    usage.noticeShown(agentId)
     if (noticeKind(ask.text) === 'proceeding') usage.waitEnded(`notice:${agentId}`, 'answered')
     else usage.waitOpened(`notice:${agentId}`, agentId)
   })
