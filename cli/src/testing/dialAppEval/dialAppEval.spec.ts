@@ -684,13 +684,14 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
   })
 
   /** The #4544 case (the spec's I2): a plain tab a in w1's tab 0, Claude Code in tmux t, whose client runs in tab 1, and
-   *  Claude Code in herdr h and g, whose client runs in tab 2, started a, t, h, then g, and listed on iTerm2's page, a
-   *  alone with the other three counted on tmux's and herdr's, then `more`. */
+   *  Claude Code in herdr h and g, whose client runs in tab 2, started a, t, h, then g, and listed on iTerm2's page, all
+   *  four, as tmux's and herdr's pages list t, h and g too (docs/plans/2026-11-26-dial-mux-host-pages-design.md), then
+   *  `more`. */
   const case4544 = (id: string, title: string, more: Step[]): Scenario => scenario({
     id, app: 'iterm', title, dims: ['D1'], platforms: ['darwin'], tiers: ['a'],
     sessions: [itermSession('a', { tab: 0 }), itermSession('t', { place: 'tmux', tab: 1 }), itermSession('h', { place: 'herdr', tab: 2 }),
       itermSession('g', { place: 'herdr', tab: 2, split: 1 }), itermGhost],
-    steps: [...started(['a', 't', 'h', 'g']), ...listed('iterm', ['a'], ['t', 'h', 'g']), ...more],
+    steps: [...started(['a', 't', 'h', 'g']), ...listed('iterm', ['a', 't', 'h', 'g'], []), ...more],
     checks: [], probes: [],
   })
   const i2 = case4544('I2', 'Eval the #4544 case, hooked', [])
@@ -698,8 +699,8 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
   const i3 = case4544('I3', 'Eval the #4544 case, found by the scan after the devices start again',
     [...turned(['a', 't', 'h', 'g']), { label: 'restart', kind: 'devices.restart' }, { kind: 'wait', ms: 10_000 }])
 
-  it("I3: after the devices start again, before any hook, a is on iTerm2's page and t, h and g on tmux's and herdr's: the "
-    + 'apps frame counts iTerm2 1, tmux 1, herdr 2, and no Other page', async () => {
+  it("I3: after the devices start again, before any hook, iTerm2's page lists a, t, h and g, and tmux's and herdr's t, h "
+    + 'and g too: the apps frame counts iTerm2 4, tmux 1, herdr 2, and no Other page', async () => {
     const driver = new TierADriver({ startDevices })
     const run = await runScenario(driver, i3, 'darwin')
     expect(run.error).toBeUndefined()
@@ -714,11 +715,12 @@ describe.skipIf(WINDOWS_HOST)('tier A', () => {
     const frames = seen.frames.slice(welcome)
     const after = rings({ frames })
     expect(after.at(-1)?.page).toBe('iterm')
-    expect(after.at(-1)!.rows.map((r) => r.id)).toEqual([a])
-    // One tmux page and one herdr page count their agents across every terminal app (the spec's decision 1).
+    expect(after.at(-1)!.rows.map((r) => r.id)).toEqual([a, ...nested])
+    // A tmux or herdr agent is counted on its terminal app's page and on the multiplexer's (Diego's 2026-11-26 rule,
+    // docs/plans/2026-11-26-dial-mux-host-pages-design.md).
     const apps = frames.filter((f) => f.message.t === 'apps').at(-1)?.message.apps as Array<{ id: string; count: number }> | undefined
-    expect((apps ?? []).filter((p) => p.count > 0).map((p) => `${p.id} ${p.count}`).sort()).toEqual(['herdr 2', 'iterm 1', 'tmux 1'])
-    expect(after.filter((r) => r.rows.some((row) => (r.page === 'iterm' ? nested.includes(row.id) : row.id === a)))).toEqual([])
+    expect((apps ?? []).filter((p) => p.count > 0).map((p) => `${p.id} ${p.count}`).sort()).toEqual(['herdr 2', 'iterm 4', 'tmux 1'])
+    expect(after.filter((r) => r.page !== 'iterm' && r.rows.some((row) => row.id === a))).toEqual([])
   })
 
   it('after the devices start again the mod polls the new devices: a voice reaches its session', async () => {
