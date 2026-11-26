@@ -596,3 +596,83 @@ describe('a file that cannot be parsed', () => {
     for (const name of [DIAL_SKILL_FILE, DIAL_SETUP_FILE]) expect(readFileSync(join(dataDir, name), 'utf8')).toBe(torn)
   })
 })
+
+describe('the Codex homes the devices set Harness Device\'s plugin up in (codexPlugin)', () => {
+  const homes = { claude: [], codex: [] }
+  const setupFile = (dataDir: string): Record<string, unknown> => JSON.parse(readFileSync(join(dataDir, DIAL_SETUP_FILE), 'utf8'))
+  /** [count] good, distinct Codex homes. */
+  const codexHomes = (count: number): string[] => Array.from({ length: count }, (_, i) => `/Users/someone/codex ${i}`)
+
+  it('codexPlugin round-trips', () => {
+    const dataDir = aDataDir()
+    const codexPlugin = { '/Users/someone/.codex': '0.6.95', '/Users/someone/work codex': '0.6.96-dev.3+1a2b' }
+
+    expect(writeSetup(dataDir, { dial: true, plugin: '0.6.59', homes, pluginHomes: [], codexPlugin })).toBeUndefined()
+
+    expect(readSetup(dataDir)).toEqual({ dial: true, plugin: '0.6.59', homes, pluginHomes: [], codexPlugin })
+    expect(setupFile(dataDir).codexPlugin).toEqual(codexPlugin)
+  })
+
+  it('a codexPlugin entry with a path a list may not hold or a version that is not one is dropped', () => {
+    const dataDir = aDataDir()
+    const codexPlugin = {
+      'relative/codex': '0.6.95',
+      '/Users/someone/../codex': '0.6.95',
+      '/Users/someone/codex/': '0.6.95',
+      '/Users/some\u0007one/codex': '0.6.95',
+      [`/${'a'.repeat(1024)}`]: '0.6.95',
+      '/Users/someone/no version': '',
+      '/Users/someone/a beta': '0.6.95 beta',
+      '/Users/someone/too long': 'v'.repeat(65),
+      '/Users/someone/a number': 695,
+      '/Users/someone/a list': ['0.6.95'],
+      '/Users/someone/.codex': '0.6.95',
+    }
+    writeFileSync(join(dataDir, DIAL_SETUP_FILE), JSON.stringify({ dial: true, codexPlugin }))
+
+    expect(readSetup(dataDir).codexPlugin).toEqual({ '/Users/someone/.codex': '0.6.95' })
+
+    // One that is no object is none, and nothing kept is none too.
+    for (const value of [['/Users/someone/.codex'], '/Users/someone/.codex', null, 1, { 'relative/codex': '0.6.95' }]) {
+      writeFileSync(join(dataDir, DIAL_SETUP_FILE), JSON.stringify({ dial: true, codexPlugin: value }))
+      expect(readSetup(dataDir), JSON.stringify(value)).toEqual({ dial: true, homes, pluginHomes: [] })
+    }
+  })
+
+  it('at most 64 entries are kept', () => {
+    const dataDir = aDataDir()
+    const all = codexHomes(70)
+    writeFileSync(join(dataDir, DIAL_SETUP_FILE), JSON.stringify({ dial: true, codexPlugin: Object.fromEntries(all.map((home) => [home, '0.6.95'])) }))
+
+    expect(Object.keys(readSetup(dataDir).codexPlugin ?? {})).toEqual(all.slice(0, MAX_HOMES))
+
+    // Written as a read keeps it.
+    expect(writeSetup(dataDir, { dial: true, homes, pluginHomes: [], codexPlugin: Object.fromEntries(all.map((home) => [home, '0.6.95'])) })).toBeUndefined()
+    expect(Object.keys(setupFile(dataDir).codexPlugin as object)).toEqual(all.slice(0, MAX_HOMES))
+  })
+
+  it('writeSetup refuses a codexPlugin version that is not one (EINVAL)', () => {
+    const dataDir = aDataDir()
+    writeSetup(dataDir, { dial: true, homes, pluginHomes: [], codexPlugin: { '/Users/someone/.codex': '0.6.95' } })
+    const saved = readFileSync(join(dataDir, DIAL_SETUP_FILE), 'utf8')
+
+    // A read would drop it: the plugin there would read as never set up, and be set up again at every pass.
+    expect(writeSetup(dataDir, { dial: true, homes, pluginHomes: [], codexPlugin: { '/Users/someone/.codex': '0.6.96 beta' } })).toBe('EINVAL')
+
+    expect(readFileSync(join(dataDir, DIAL_SETUP_FILE), 'utf8')).toBe(saved)
+  })
+
+  it('a record without codexPlugin reads and writes as before', () => {
+    const dataDir = aDataDir()
+    writeFileSync(join(dataDir, DIAL_SETUP_FILE), '{"dial":true,"plugin":"0.6.59","homes":{"claude":[],"codex":[]},"pluginHomes":[]}')
+
+    expect(readSetup(dataDir)).toEqual({ dial: true, plugin: '0.6.59', homes, pluginHomes: [] })
+    expect(readSetup(dataDir)).not.toHaveProperty('codexPlugin')
+
+    // Empty, it leaves the file.
+    for (const record of [{ dial: true, homes, pluginHomes: [] }, { dial: true, homes, pluginHomes: [], codexPlugin: {} }]) {
+      expect(writeSetup(dataDir, record)).toBeUndefined()
+      expect(setupFile(dataDir)).toEqual({ dial: true, homes, pluginHomes: [] })
+    }
+  })
+})
