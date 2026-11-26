@@ -61,6 +61,23 @@ const FORBIDDEN = [
   /\bcheck in with\b/i,
 ]
 
+// The choices the need scenarios leave to the person, and their options. A crowd that tells the model to make them, or
+// names the options, would settle a scenario's ask in the person's stead.
+const SETTLES_AN_ASK = [
+  /\b(pick|decid|decision|choos|chose|choice)\w*/i,
+  /\bback ?off/i,
+  /exponential/i,
+  /jitter/i,
+  /\bTTL\b/,
+  /\bLRU\b/,
+  /invalidat/i,
+  /--json/,
+  /\brate[ -]limit/i,
+  /page size/i,
+  /delimiter|semicolon/i,
+  /\b(MIT|ISC|Apache|[AL]?GPL|BSD|MPL|Unlicense)\b/,
+]
+
 function claimsPriority(description: string): boolean {
   return /MUST/.test(description) || /any conversation|before any|always use/i.test(description)
 }
@@ -87,6 +104,16 @@ describe('the crowd', () => {
   it('no file names the dial or Harness, or asks, notifies or messages anyone', () => {
     const files = [{ file: 'instructions.md', text: instructions() }, ...skills().map((s) => ({ file: s.folder, text: s.text }))]
     const hits = files.flatMap(({ file, text }) => FORBIDDEN.filter((word) => word.test(text)).map((word) => `${file}: ${word}`))
+    expect(hits).toEqual([])
+  })
+
+  // A skill's name stays as it is: renaming one would change the listing the crowd is sized by.
+  it('no description, body or rule makes a choice a need scenario leaves to the person', () => {
+    const texts = [
+      { file: 'instructions.md', text: instructions() },
+      ...skills().flatMap((s) => [{ file: `${s.folder} description`, text: s.description ?? '' }, { file: `${s.folder} body`, text: s.body }]),
+    ]
+    const hits = texts.flatMap(({ file, text }) => SETTLES_AN_ASK.filter((word) => word.test(text)).map((word) => `${file}: ${word}`))
     expect(hits).toEqual([])
   })
 
