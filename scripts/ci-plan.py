@@ -81,8 +81,8 @@ ALSO.update({"desktop/test/support/real_fonts.dart": "mobile"})
 ALSO.update({"plugins/harness-device-vscode/": "cli"})
 # Orca's plugin: the CLI's build inlines the folder.
 ALSO.update({"plugins/harness-device-orca/": "cli"})
-# Claude Code's two plugins: the CLI's build inlines both as Claude Code's marketplace.
-ALSO.update({"plugins/harness-device/": "cli", "plugins/harness/": "cli"})
+# Claude Code's two plugins and the repository's marketplace: the CLI's build inlines them as Claude Code's marketplace.
+ALSO.update({"plugins/harness-device/": "cli", "plugins/harness/": "cli", ".claude-plugin/marketplace.json": "cli"})
 # The Store's tools: the files store-checks runs (ci.yml) and those they read beside them, by name or by a path built
 # from parts (runtimes.sh), which the scan cannot see; test_ci_plan follows the names. The rest of store/tools/ (the
 # browser and network suites authoring-browser-checks.yml and experience-checks.yml run, the pipe checks windows-e2e
@@ -336,16 +336,19 @@ DEPENDS = {
 # An end-to-end suite reads what the unit suites of the code it runs read, and all of that code: windows.yml builds the
 # PTY host, the serial bridge and the TUI, and runs the CLI's specs, the dial plugins' and the website's flasher; the
 # Device jobs run the app, Desktop's install of it and the website's one-line installer. linux-e2e and dial-hosts run the
-# CLI's e2e files on its build, which inlines the dial plugins; linux-e2e also starts the real backend.
+# CLI's e2e files on its build, which inlines the dial plugins and Claude Code's marketplace; linux-e2e also starts the
+# real backend.
 DEPENDS.update({
     "windows-e2e": DEPENDS["cli"] + DEPENDS["pty"] + DEPENDS["tui"] + (
-        "cli/", "tests/", "plugins/", "pty/", "serial/", "term/", "tui/", "website/"),
+        "cli/", "tests/", "plugins/", ".claude-plugin/marketplace.json", "pty/", "serial/", "term/", "tui/", "website/"),
     # device-app/src-tauri/: dialAppFilterOnDial.e2e.ts starts the Device app's debug build (with a dial, by hand).
     # .github/actions/, in both: their setup action's folder (a shared input), where the scan also places the action's
     # `../backend`.
     "linux-e2e": DEPENDS["cli"] + ("cli/", "tests/", "plugins/harness-device-orca/", "plugins/harness-device-vscode/",
+                                   "plugins/harness-device/", "plugins/harness/", ".claude-plugin/marketplace.json",
                                    "backend/", "device-app/src-tauri/", ".github/actions/"),
     "dial-hosts": DEPENDS["cli"] + ("cli/", "tests/", "plugins/harness-device-orca/", "plugins/harness-device-vscode/",
+                                    "plugins/harness-device/", "plugins/harness/", ".claude-plugin/marketplace.json",
                                     ".github/actions/"),
     "device-app-e2e": DEPENDS["device-app"] + ("device-app/",),
     "device-app-update": DEPENDS["device-app"] + ("device-app/",),
