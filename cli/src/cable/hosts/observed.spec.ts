@@ -6771,6 +6771,27 @@ describe('ObservedSource and a Codex session its own server runs', () => {
     expect(bySession('cc').app).toBe('ghostty')
   })
 
+  it('the scan keeps what it learnt of a Codex session no daemon holds: the first hook from its holder is placed at once, never off its page', async () => {
+    const t = served({}, { apps: async () => new Map([[12, 'iterm'], [901, 'iterm']]) })
+    // One on a terminal, which the daemon never is, and one on none that the lookup says no daemon holds.
+    foundCodex(t, 'tui', 12, '/dev/ttys003')
+    foundCodex(t, 'b', 901)
+    const scanned = t.src.scanOpen()
+    await vi.waitFor(() => { expect(t.asks).toHaveLength(1) })
+    await t.asks[0].answer([undefined])
+    await scanned
+    const bySession = (sessionId: string) => t.src.list().find((a) => a.sessionId === sessionId)!
+    const apps: string[] = []
+    t.src.onChange(() => { apps.push(bySession('tui').app) })
+    // Its first hook is a prompt typed in its tab: devices.ts followPrompt reads its app as the hook lands.
+    t.src.ingest(t.codex('turn-start', { sessionId: 'tui', callerPid: 12 }))
+    expect(bySession('tui').app).toBe('iterm')
+    t.src.ingest(t.codex('turn-start', { sessionId: 'b', callerPid: 901 }))
+    expect(bySession('b').app).toBe('iterm')
+    expect(apps).not.toContain('terminal')
+    expect(t.lookup).toHaveBeenCalledTimes(1)
+  })
+
   it('a scan whose lookup fails leaves a Codex session on no terminal on no page, never at its holder\'s parents\' app', async () => {
     // The daemon is still the child of the first TUI, in iTerm2: its parents name iTerm2.
     const t = served({}, { apps: async () => new Map([[900, 'iterm']]) })
