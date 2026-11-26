@@ -460,6 +460,9 @@ export interface CableHost {
   /** The dial picked an app, or a tapped notice turns it to its agent's app (`notice`). `ignored` on a window's tab;
    *  `tabs` when Harness was picked on an app's ring, and the dials hold the window's tab again. */
   pickApp?(app: string, cause?: 'pick' | 'notice'): AppPick
+  /** A pick switched the dial to that app's ring, which landed on that agent (undefined for an empty ring): on tmux's or
+   *  herdr's page the host brings the app holding its client. */
+  pickLanded?(app: string, agentId: string | undefined): void
   /** The app an agent of the machine view is in; undefined on a window's tab. */
   appOf?(agentId: string, opts?: { apps?: boolean }): string | undefined
   /** Every agent across the account — the overview's number. The dial gets the count, never the rows. */
@@ -1777,7 +1780,13 @@ export class CableSession {
         const app = str('app')
         if (!this.appFilter || !app || app.length > 16 || !this.host.pickApp) return
         const picked = this.host.pickApp(app)
-        if (picked === 'switched') await this.syncAgents(true)
+        if (picked === 'switched') {
+          await this.syncAgents(true)
+          // Where the dial lands on the new ring: the agent it showed, which the push steers it back to, when the ring
+          // holds it; else its first row, where the round dial and the Pro land after a pick (spec §5).
+          const focus = this.desiredFocus
+          this.host.pickLanded?.(app, this.lastRing.some((a) => a.id === focus) ? focus : this.lastRing[0]?.id)
+        }
         // The dial picked from a list that moved under it: it is told the list again, and keeps the ring it holds.
         else if (picked === 'ignored') await this.queued(() => this.syncAgentsNow(true, false))
         // `tabs` sends nothing here: the view's change sends every such dial its tabs before its list (viewChanged).

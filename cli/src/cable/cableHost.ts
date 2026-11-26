@@ -195,6 +195,9 @@ export interface CableHostWiring {
   /** A pick on the dial switched the shown app, or with a window turned the view to Harness's tab: the devices bring
    *  that app to the front. Never for a notice, nor for Harness with no window. */
   appBrought?: (app: string) => void
+  /** What came of a pick of tmux's or herdr's page bringing the landed agent's app (pickLanded): `none` when no agent
+   *  there has a client in an app. Nothing for an open a later pick or rest superseded. */
+  appPickBrought?: (outcome: 'ok' | 'failed' | 'none') => void
   /** The view was set, and why: told on each change and on each window opening, never an app. */
   appView?: (view: DialView, cause: ViewCause) => void
   /** Runs `run` once after `ms` and returns its cancel: the settle of the app in front, and the end of a waiting open
@@ -698,8 +701,8 @@ export class DaemonCableHost implements CableHost {
    *  latest (openAgent). */
   private taps = 0
 
-  /** The opens of rests on tmux's or herdr's page, in turn, apart from `taps`, as a rest is no tap: an open still reading
-   *  its client asks whether a later one came (openOnPage). */
+  /** The opens of rests and picks on tmux's or herdr's page, in turn, apart from `taps`, as neither is a tap: an open still
+   *  reading its client asks whether a later one came (openOnPage). */
   private brings = 0
 
   /** [end] is how the waiting tap's open ended: every tap says one. */
@@ -803,9 +806,39 @@ export class DaemonCableHost implements CableHost {
     if (cause === 'pick') this.wiring.appPicked?.()
     const answer = this.answerPick(app, cause)
     if (cause === 'pick' && (answer === 'same' || answer === 'ignored')) this.wiring.appPickKept?.(answer)
-    // A notice brings its own app with its open. Harness with no window is only its ring: no Desktop to bring.
-    if (cause === 'pick' && (answer === 'tabs' || (answer === 'switched' && app !== 'harness'))) this.wiring.appBrought?.(app)
+    // A notice brings its own app with its open. Harness with no window is only its ring: no Desktop to bring. tmux's and
+    // herdr's pages are no app: their pick brings the landed agent's (pickLanded).
+    if (cause === 'pick' && (answer === 'tabs' || (answer === 'switched' && app !== 'harness' && app !== 'tmux' && app !== 'herdr'))) this.wiring.appBrought?.(app)
     return answer
+  }
+
+  /**
+   * A pick of tmux's or herdr's page brings the app holding the client of the agent the dial landed on, and selects its
+   * tab and pane there, also when that app is in front already (Diego's point 2, 2026-11-26). A landed agent with no
+   * client app, off the page, or none: the page's agent heard from last that has one. Its open is a rest's (openOnPage),
+   * on the same counter, so the last pick or rest wins (Diego's point 3). Spec §5.
+   */
+  pickLanded(app: string, agentId: string | undefined): void {
+    if (app !== 'tmux' && app !== 'herdr') return
+    const placed = (e: HostEntry) => pagesOf(e.agent).includes(app) && this.clientApp(e, app)
+    const landed = agentId === undefined ? undefined : this.outsideEntry(agentId)
+    const entry = landed && placed(landed) ? landed : this.registry?.entries()
+      .filter((e) => e.source.id !== 'harness' && placed(e))
+      .reduce<HostEntry | undefined>((last, e) => !last || e.agent.lastActivityAt > last.agent.lastActivityAt ? e : last, undefined)
+    if (!entry) { this.wiring.appPickBrought?.('none'); return }
+    void this.openOnPage(entry).catch(() => false).then((opened) => {
+      if (opened !== 'superseded') this.wiring.appPickBrought?.(opened ? 'ok' : 'failed')
+    })
+  }
+
+  /**
+   * Whether an agent on tmux's or herdr's page has a client in an app the dial can bring: a page of its own besides the
+   * multiplexer's, or a Herdr.app terminal (no nest) on herdr's. herdr's own rows that no hook or scan placed keep the
+   * herdr source (the registry gives a hooked copy to the observed one) and have none, as a detached tmux agent has none.
+   */
+  private clientApp(entry: HostEntry, page: 'tmux' | 'herdr'): boolean {
+    if (entry.source.id === 'herdr') return false
+    return pagesOf(entry.agent).some((p) => p !== page) || (page === 'herdr' && entry.agent.app === 'herdr' && !entry.agent.nest)
   }
 
   private answerPick(app: string, cause: 'pick' | 'notice'): AppPick {
