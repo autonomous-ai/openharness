@@ -153,10 +153,11 @@ export const processWindowsMasterDeps = (): WindowsMasterDeps => ({
   cliDir: env.ADAPTER_CLI_DIR,
   currentCli: (root) => currentCli(root),
   exists: existsSync,
-  // not a state file: the daemon's log, appended. Its folder first: `harness start -f` on a fresh install opens the log
-  // before anything has made the data folder, and that first run's lines would be lost.
+  // The log's folder first: `harness start -f` on a fresh install opens the log before anything has made the data
+  // folder, and that first run's lines would be lost.
   openLog: () => {
     mkdirSync(dirname(DAEMON_LOG_FILE), { recursive: true, mode: 0o700 })
+    // not a state file: the daemon's log, appended
     return openSync(DAEMON_LOG_FILE, 'a')
   },
   redirect: (fd) => {
