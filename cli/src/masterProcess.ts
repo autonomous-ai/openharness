@@ -11,7 +11,7 @@
  */
 import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { existsSync, openSync, readFileSync, writeSync } from 'node:fs'
+import { existsSync, mkdirSync, openSync, readFileSync, writeSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { format } from 'node:util'
 import { env } from './config/env.js'
@@ -153,8 +153,12 @@ export const processWindowsMasterDeps = (): WindowsMasterDeps => ({
   cliDir: env.ADAPTER_CLI_DIR,
   currentCli: (root) => currentCli(root),
   exists: existsSync,
-  // not a state file: the daemon's log, appended
-  openLog: () => openSync(DAEMON_LOG_FILE, 'a'),
+  // not a state file: the daemon's log, appended. Its folder first: `harness start -f` on a fresh install opens the log
+  // before anything has made the data folder, and that first run's lines would be lost.
+  openLog: () => {
+    mkdirSync(dirname(DAEMON_LOG_FILE), { recursive: true, mode: 0o700 })
+    return openSync(DAEMON_LOG_FILE, 'a')
+  },
   redirect: (fd) => {
     for (const name of ['log', 'info', 'warn', 'error'] as const) {
       // not a state file: each console line, appended to the daemon's log
