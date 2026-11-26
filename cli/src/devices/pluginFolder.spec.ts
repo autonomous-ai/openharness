@@ -1,7 +1,8 @@
 /**
- * The folder Orca installs Harness Device's plugin from, in a throwaway data folder each. Orca reads it at an install
- * and copies it again at each update, so it is never half written: not by a crash, and not by two writers at once
- * (the devices' pass beside a person's `enable`).
+ * A plugin's folder (the one Orca installs Harness Device's plugin from, and Claude Code's marketplace), in a throwaway
+ * data folder each. Each app reads it at an install and copies it again at each update, so it is never half written:
+ * not by a crash, and not by two writers at once (the devices' pass beside a person's `enable`). Its modes are this
+ * account's alone, and a hook Claude Code runs by its path is executable.
  */
 import { spawn, spawnSync } from 'node:child_process'
 import * as fs from 'node:fs'
@@ -10,7 +11,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ensureOrcaPluginFolder } from './orcaPluginFolder.js'
+import { ensurePluginFolder } from './pluginFolder.js'
 
 // A copy of the module, so a test can watch, or break, the file calls a write makes.
 vi.mock('node:fs', async (original) => ({ ...await original<object>() }))
@@ -25,8 +26,14 @@ const EARLIER = {
   'orca-plugin.json': '{\n  "id": "harness-device",\n  "version": "0.0.1"\n}\n',
   'src/old.ts': 'export const old = true\n',
 }
+/** A plugin with a hook Claude Code runs by its path, and the hook's settings. */
+const HOOKS = { 'hooks/asked': '#!/bin/sh\n', 'hooks/hooks.json': '{}' }
+const EXECUTABLE = ['hooks/asked']
 
-const MODULE = pathToFileURL(fileURLToPath(new URL('./orcaPluginFolder.ts', import.meta.url))).href
+/** [path]'s permission bits. */
+const mode = (path: string): number => statSync(path).mode & 0o777
+
+const MODULE = pathToFileURL(fileURLToPath(new URL('./pluginFolder.ts', import.meta.url))).href
 const LOADER = fileURLToPath(new URL('../../node_modules/tsx/dist/loader.mjs', import.meta.url))
 
 const folders: string[] = []
@@ -74,8 +81,8 @@ function holdsOnly(folder: string, files: Record<string, string>): void {
 
 /** The ensure of another `harness device orca` command, in a process of its own: what it answered. */
 function anotherCommand(folder: string, files: Record<string, string>): string {
-  const script = `import { ensureOrcaPluginFolder } from ${JSON.stringify(MODULE)}
-process.stdout.write(ensureOrcaPluginFolder(${JSON.stringify(folder)}, ${JSON.stringify(files)}))`
+  const script = `import { ensurePluginFolder } from ${JSON.stringify(MODULE)}
+process.stdout.write(ensurePluginFolder(${JSON.stringify(folder)}, ${JSON.stringify(files)}, []))`
   const run = spawnSync(process.execPath, ['--import', LOADER, '--input-type=module', '-e', script], { encoding: 'utf8', timeout: 20_000 })
   return run.stdout
 }
@@ -119,8 +126,8 @@ fs.fsyncSync = (...args) => {
   waitFor(${JSON.stringify(resumed)})
 }
 syncBuiltinESMExports()
-const { ensureOrcaPluginFolder } = await import(${JSON.stringify(MODULE)})
-process.stdout.write(ensureOrcaPluginFolder(${JSON.stringify(folder)}, ${JSON.stringify(files)}))`
+const { ensurePluginFolder } = await import(${JSON.stringify(MODULE)})
+process.stdout.write(ensurePluginFolder(${JSON.stringify(folder)}, ${JSON.stringify(files)}, []))`
   const child = spawn(process.execPath, ['--import', LOADER, '--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'inherit'] })
   let out = ''
   child.stdout.on('data', (chunk: Buffer) => { out += chunk.toString() })
@@ -134,26 +141,86 @@ const gonePid = (): number => spawnSync(process.execPath, ['-e', '']).pid!
 
 const watched = fs as unknown as Record<string, (...args: unknown[]) => unknown>
 
-describe('the Orca plugin\'s folder', () => {
+describe('the plugin\'s folder', () => {
   it('a missing folder is written, 0700 and 0600, with nothing left beside it', () => {
     const folder = aFolder()
 
-    expect(ensureOrcaPluginFolder(folder, FILES)).toBe('written')
+    expect(ensurePluginFolder(folder, FILES, [])).toBe('written')
 
     holdsOnly(folder, FILES)
-    for (const path of [folder, join(folder, 'src'), join(folder, 'src/panel')]) expect(statSync(path).mode & 0o777, path).toBe(0o700)
-    for (const key of Object.keys(FILES)) expect(statSync(join(folder, key)).mode & 0o777, key).toBe(0o600)
+    for (const path of [folder, join(folder, 'src'), join(folder, 'src/panel')]) expect(mode(path), path).toBe(0o700)
+    for (const key of Object.keys(FILES)) expect(mode(join(folder, key)), key).toBe(0o600)
   })
 
   it('the same content writes nothing: the folder and each file keep their inodes', () => {
     const folder = aFolder()
-    ensureOrcaPluginFolder(folder, FILES)
+    ensurePluginFolder(folder, FILES, [])
     const inodes = (): number[] => [folder, ...Object.keys(FILES).map((key) => join(folder, key))].map((path) => lstatSync(path).ino)
     const before = inodes()
 
-    expect(ensureOrcaPluginFolder(folder, FILES)).toBe('same')
+    expect(ensurePluginFolder(folder, FILES, [])).toBe('same')
 
     expect(inodes()).toEqual(before)
+  })
+
+  it('an executable is written 0700, beside files 0600 and folders 0700', () => {
+    const folder = aFolder()
+
+    expect(ensurePluginFolder(folder, HOOKS, EXECUTABLE)).toBe('written')
+
+    holdsOnly(folder, HOOKS)
+    for (const path of [folder, join(folder, 'hooks'), join(folder, 'hooks/asked')]) expect(mode(path), path).toBe(0o700)
+    expect(mode(join(folder, 'hooks/hooks.json'))).toBe(0o600)
+  })
+
+  it('a mode changed on disk is written anew; the same bytes and modes write nothing', () => {
+    const folder = aFolder()
+    ensurePluginFolder(folder, HOOKS, EXECUTABLE)
+    const changes: [path: string, changed: number, wanted: number][] = [
+      [join(folder, 'hooks/asked'), 0o600, 0o700],
+      [join(folder, 'hooks/hooks.json'), 0o644, 0o600],
+      [join(folder, 'hooks'), 0o755, 0o700],
+      [folder, 0o755, 0o700],
+    ]
+    for (const [path, changed, wanted] of changes) {
+      chmodSync(path, changed)
+
+      expect(ensurePluginFolder(folder, HOOKS, EXECUTABLE), path).toBe('written')
+
+      expect(mode(path), path).toBe(wanted)
+    }
+    const inodes = (): number[] => [folder, ...Object.keys(HOOKS).map((key) => join(folder, key))].map((path) => lstatSync(path).ino)
+    const before = inodes()
+
+    expect(ensurePluginFolder(folder, HOOKS, EXECUTABLE)).toBe('same')
+
+    expect(inodes()).toEqual(before)
+  })
+
+  it('an executable that names no file writes nothing', () => {
+    const folder = aFolder()
+
+    // A key that is not there, and one that is a folder.
+    for (const executable of [['hooks/other'], ['hooks']]) {
+      expect(ensurePluginFolder(folder, HOOKS, executable), executable[0]).toEqual({ failed: 'EINVAL' })
+    }
+
+    expect(readdirSync(dirname(folder))).toEqual([])
+  })
+
+  it('a umask that strips owner bits still writes 0700 and 0600, and a second run is same', () => {
+    // Made before the umask, which would leave it a folder no one can enter.
+    const folder = aFolder()
+    const umask = process.umask(0o177)
+    try {
+      expect(ensurePluginFolder(folder, HOOKS, EXECUTABLE)).toBe('written')
+
+      for (const path of [folder, join(folder, 'hooks'), join(folder, 'hooks/asked')]) expect(mode(path), path).toBe(0o700)
+      expect(mode(join(folder, 'hooks/hooks.json'))).toBe(0o600)
+      expect(ensurePluginFolder(folder, HOOKS, EXECUTABLE)).toBe('same')
+    } finally {
+      process.umask(umask)
+    }
   })
 
   it('a changed, extra, missing or unreadable file, a link, or a file where a folder belongs is written anew, and the extra is gone', () => {
@@ -184,11 +251,11 @@ describe('the Orca plugin\'s folder', () => {
     for (const [change, make] of Object.entries(changes)) {
       const folder = aFolder()
       const elsewhere = aDataDir()
-      ensureOrcaPluginFolder(folder, FILES)
+      ensurePluginFolder(folder, FILES, [])
       make(folder, elsewhere)
       const outside = contents(elsewhere)
 
-      expect(ensureOrcaPluginFolder(folder, FILES), change).toBe('written')
+      expect(ensurePluginFolder(folder, FILES, []), change).toBe('written')
 
       holdsOnly(folder, FILES)
       // What a link pointed at is not the plugin's: it is left as it was.
@@ -198,7 +265,7 @@ describe('the Orca plugin\'s folder', () => {
 
   it('every file is on disk before the swap', () => {
     const folder = aFolder()
-    ensureOrcaPluginFolder(folder, EARLIER)
+    ensurePluginFolder(folder, EARLIER, [])
     const calls: string[] = []
     for (const name of ['fsyncSync', 'renameSync']) {
       const real = watched[name]
@@ -208,18 +275,18 @@ describe('the Orca plugin\'s folder', () => {
       })
     }
 
-    expect(ensureOrcaPluginFolder(folder, FILES)).toBe('written')
+    expect(ensurePluginFolder(folder, FILES, [])).toBe('written')
 
     expect(calls).toEqual([...Object.keys(FILES).map(() => 'fsyncSync'), 'renameSync', 'renameSync'])
   })
 
   it('a folder a crashed swap moved aside, with no folder, is put back first', () => {
     const folder = aFolder()
-    ensureOrcaPluginFolder(folder, FILES)
+    ensurePluginFolder(folder, FILES, [])
     const inode = lstatSync(folder).ino
     renameSync(folder, `${folder}.old.${gonePid()}`)
 
-    expect(ensureOrcaPluginFolder(folder, FILES)).toBe('same')
+    expect(ensurePluginFolder(folder, FILES, [])).toBe('same')
 
     expect(lstatSync(folder).ino).toBe(inode)
     holdsOnly(folder, FILES)
@@ -227,23 +294,23 @@ describe('the Orca plugin\'s folder', () => {
 
   it('a folder a crashed swap moved aside, beside a whole one, is removed', () => {
     const folder = aFolder()
-    ensureOrcaPluginFolder(folder, FILES)
+    ensurePluginFolder(folder, FILES, [])
     const old = `${folder}.old.${gonePid()}`
     mkdirSync(old)
     writeFileSync(join(old, 'orca-plugin.json'), EARLIER['orca-plugin.json'])
 
-    expect(ensureOrcaPluginFolder(folder, FILES)).toBe('same')
+    expect(ensurePluginFolder(folder, FILES, [])).toBe('same')
 
     holdsOnly(folder, FILES)
   })
 
   it('a folder a running command moved aside is left alone', () => {
     const folder = aFolder()
-    ensureOrcaPluginFolder(folder, FILES)
+    ensurePluginFolder(folder, FILES, [])
     const running = `orca-plugin.old.${process.ppid}`
     mkdirSync(join(dirname(folder), running))
 
-    expect(ensureOrcaPluginFolder(folder, FILES)).toBe('same')
+    expect(ensurePluginFolder(folder, FILES, [])).toBe('same')
 
     expect(readdirSync(dirname(folder)).sort()).toEqual(['orca-plugin', running])
   })
@@ -257,7 +324,7 @@ describe('the Orca plugin\'s folder', () => {
       writeFileSync(join(`${folder}.new.${pid}`, 'orca-plugin.json'), '{')
     }
 
-    expect(ensureOrcaPluginFolder(folder, FILES)).toBe('written')
+    expect(ensurePluginFolder(folder, FILES, [])).toBe('written')
 
     expect(contents(folder)).toEqual(FILES)
     expect(readdirSync(dirname(folder)).sort()).toEqual(['orca-plugin', `orca-plugin.new.${running}`])
@@ -265,7 +332,7 @@ describe('the Orca plugin\'s folder', () => {
 
   it('a swap whose second rename fails answers its code and puts the earlier folder back whole', () => {
     const folder = aFolder()
-    ensureOrcaPluginFolder(folder, EARLIER)
+    ensurePluginFolder(folder, EARLIER, [])
     const inode = lstatSync(folder).ino
     const real = watched.renameSync
     let failed = false
@@ -277,7 +344,7 @@ describe('the Orca plugin\'s folder', () => {
       return real(from, to)
     })
 
-    expect(ensureOrcaPluginFolder(folder, FILES)).toEqual({ failed: 'EIO' })
+    expect(ensurePluginFolder(folder, FILES, [])).toEqual({ failed: 'EIO' })
 
     expect(failed).toBe(true)
     expect(lstatSync(folder).ino).toBe(inode)
@@ -286,11 +353,11 @@ describe('the Orca plugin\'s folder', () => {
 
   it('a parent that cannot be written answers EACCES and leaves the folder as it was', () => {
     const folder = aFolder()
-    ensureOrcaPluginFolder(folder, EARLIER)
+    ensurePluginFolder(folder, EARLIER, [])
     const inode = lstatSync(folder).ino
     chmodSync(dirname(folder), 0o500)
 
-    expect(ensureOrcaPluginFolder(folder, FILES)).toEqual({ failed: 'EACCES' })
+    expect(ensurePluginFolder(folder, FILES, [])).toEqual({ failed: 'EACCES' })
 
     chmodSync(dirname(folder), 0o700)
     expect(lstatSync(folder).ino).toBe(inode)
@@ -304,7 +371,7 @@ describe('the Orca plugin\'s folder', () => {
     mkdirSync(join(dirname(folder), left))
 
     for (const key of ['../x', '/abs', 'a//b', 'src/../x', 'src/.', '', 'src/', 'a\\b']) {
-      expect(ensureOrcaPluginFolder(folder, { ...FILES, [key]: 'x' }), key).toEqual({ failed: 'EINVAL' })
+      expect(ensurePluginFolder(folder, { ...FILES, [key]: 'x' }, []), key).toEqual({ failed: 'EINVAL' })
     }
 
     expect(readdirSync(dirname(folder))).toEqual([left])
@@ -313,8 +380,8 @@ describe('the Orca plugin\'s folder', () => {
   it('a key that names a file and a folder at once writes nothing', () => {
     const folder = aFolder()
 
-    expect(ensureOrcaPluginFolder(folder, { src: 'x', 'src/a.ts': 'y' })).toEqual({ failed: 'EINVAL' })
-    expect(ensureOrcaPluginFolder(folder, { 'src/a.ts': 'y', src: 'x' })).toEqual({ failed: 'EINVAL' })
+    expect(ensurePluginFolder(folder, { src: 'x', 'src/a.ts': 'y' }, [])).toEqual({ failed: 'EINVAL' })
+    expect(ensurePluginFolder(folder, { 'src/a.ts': 'y', src: 'x' }, [])).toEqual({ failed: 'EINVAL' })
 
     expect(readdirSync(dirname(folder))).toEqual([])
   })
@@ -329,7 +396,7 @@ describe('the Orca plugin\'s folder', () => {
       other ??= anotherCommand(folder, EARLIER)
     })
 
-    expect(ensureOrcaPluginFolder(folder, FILES)).toBe('written')
+    expect(ensurePluginFolder(folder, FILES, [])).toBe('written')
 
     expect(other).toBe('written')
     holdsOnly(folder, FILES)
@@ -337,7 +404,7 @@ describe('the Orca plugin\'s folder', () => {
 
   it('a command that looks for what an earlier run left while another swaps: the swap is left alone, and both finish', async () => {
     const folder = aFolder()
-    ensureOrcaPluginFolder(folder, EARLIER)
+    ensurePluginFolder(folder, EARLIER, [])
     const real = watched.renameSync
     let other: ReturnType<typeof pausedCommand> | undefined
     // The other command starts once this one moved the folder aside, and stops at its own first file, having looked
@@ -352,7 +419,7 @@ describe('the Orca plugin\'s folder', () => {
       }
     })
 
-    const answered = ensureOrcaPluginFolder(folder, FILES)
+    const answered = ensurePluginFolder(folder, FILES, [])
 
     expect({ answered, other: await other!.done }).toEqual({ answered: 'written', other: 'written' })
     holdsOnly(folder, FILES)
@@ -360,7 +427,7 @@ describe('the Orca plugin\'s folder', () => {
 
   it('a command whose folder another command swapped meanwhile fails whole', () => {
     const folder = aFolder()
-    ensureOrcaPluginFolder(folder, EARLIER)
+    ensurePluginFolder(folder, EARLIER, [])
     const real = watched.renameSync
     let other: string | undefined
     // The other command runs whole after this one moved the folder aside, before it renames its own into place.
@@ -370,7 +437,7 @@ describe('the Orca plugin\'s folder', () => {
     })
 
     // A code, never a message: the message names the folder's path.
-    expect(ensureOrcaPluginFolder(folder, { ...FILES, 'src/plugin.ts': 'export const answer = 2\n' })).toEqual({ failed: expect.stringMatching(/^E[A-Z]+$/) })
+    expect(ensurePluginFolder(folder, { ...FILES, 'src/plugin.ts': 'export const answer = 2\n' }, [])).toEqual({ failed: expect.stringMatching(/^E[A-Z]+$/) })
 
     expect(other).toBe('written')
     holdsOnly(folder, FILES)

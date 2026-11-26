@@ -1600,10 +1600,10 @@ describe('harness device orca status, enable and disable', () => {
     expect(DEVICE_USAGE).not.toMatch(/orca (status|connect)|--approve/)
   })
 
-  it('no file under core/ imports devices/orcaPlugin or devices/orcaPluginFolder: the core never asks Orca', () => {
-    const importsOrca = /(?:from|import\s*\()\s*['"][^'"]*devices\/orcaPlugin(?:Folder)?\.js['"]/
+  it('no file under core/ imports devices/orcaPlugin or devices/pluginFolder: the core never asks Orca nor writes a plugin\'s folder', () => {
+    const importsOrca = /(?:from|import\s*\()\s*['"][^'"]*devices\/(?:orcaPlugin|pluginFolder)\.js['"]/
     // The pattern catches a static and a dynamic import of each, or an empty list would prove nothing.
-    expect(["import { orcaStatus } from '../devices/orcaPlugin.js'", "await import('../../devices/orcaPluginFolder.js')"]
+    expect(["import { orcaStatus } from '../devices/orcaPlugin.js'", "await import('../../devices/pluginFolder.js')"]
       .every((line) => importsOrca.test(line))).toBe(true)
     const importers = readdirSync(join(SRC, 'core'), { recursive: true, encoding: 'utf8' })
       .filter((name) => name.endsWith('.ts'))
@@ -1614,7 +1614,7 @@ describe('harness device orca status, enable and disable', () => {
 
   it('neither module names the home folder', () => {
     // The folder is joined apart from each name: scripts/ci-plan.py reads a quoted `devices/…` as the top-level devices/.
-    for (const name of ['orcaPlugin.ts', 'orcaPluginFolder.ts']) {
+    for (const name of ['orcaPlugin.ts', 'pluginFolder.ts']) {
       expect(readFileSync(join(SRC, 'devices', name), 'utf8'), name).not.toMatch(/homedir/)
     }
   })

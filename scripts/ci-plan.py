@@ -120,6 +120,7 @@ WINDOWS_SPECS = (
     "cli/src/lib/tied.spec.ts", "cli/src/lib/connectors/call.spec.ts", "cli/src/lib/secureState.spec.ts",
     "cli/src/lib/registryLock.publish.spec.ts", "cli/src/lib/pidFileSettle.spec.ts",
     "cli/src/devices/listenerPipe.windows.real.spec.ts", "cli/src/devices/claudePlugin.windows.real.spec.ts",
+    "cli/src/devices/pluginFolder.windows.real.spec.ts",
     "cli/src/deviceClaude/inbox.windows.real.spec.ts", "cli/src/hookCaller.windows.real.spec.ts",
     "cli/src/harnessDevicePlugin.spec.ts", "plugins/harness-device-vscode/src/",
     "cli/src/lib/engineBin.pathEntries.spec.ts", "cli/src/hookServer.wait.spec.ts",
