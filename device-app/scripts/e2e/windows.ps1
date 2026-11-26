@@ -65,9 +65,12 @@ $ifeoKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execut
 $consoleHostKey = 'HKCU:\Console\%%Startup'
 $CONSOLE_HOST_VALUES = @('DelegationConsole', 'DelegationTerminal')
 $CONHOST = '{B23D10C0-E52E-411E-9D5B-C09FDF709C7D}'
-# The installer's own key, named by the publisher Tauri takes from the identifier.
-$vendorKey = 'HKCU:\Software\autonomous'
-$productKey = 'HKCU:\Software\autonomous\Harness Device'
+# The installer's own key, named by the publisher. Up to 0.1.14 the publisher was "autonomous": the installer moves the
+# folder an older install wrote there to the new key.
+$vendorKey = 'HKCU:\Software\Autonomous Inc.'
+$productKey = 'HKCU:\Software\Autonomous Inc.\Harness Device'
+$oldVendorKey = 'HKCU:\Software\autonomous'
+$oldProductKey = 'HKCU:\Software\autonomous\Harness Device'
 $fakeCli = Join-Path (Split-Path (Split-Path $PSScriptRoot)) 'src-tauri\tests\fake-harness.cmd'
 $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 
@@ -93,7 +96,7 @@ if ($Update) {
 if (-not (Test-Path -LiteralPath $Installer -PathType Leaf)) { Stop-Before "no installer at $Installer" }
 $Installer = (Resolve-Path -LiteralPath $Installer).Path
 if (-not (Test-Path -LiteralPath $fakeCli -PathType Leaf)) { Stop-Before "no fake CLI at $fakeCli" }
-foreach ($there in @($installDir, $data, $appLocal, $shortcut, $desktopShortcut, $uninstallKey)) {
+foreach ($there in @($installDir, $data, $appLocal, $shortcut, $desktopShortcut, $uninstallKey, $oldProductKey)) {
   if (Test-Path -LiteralPath $there) { Stop-Before "$there is there: this account has a Harness Device already" }
 }
 foreach ($key in @($runKey, $approvedKey)) {
@@ -121,6 +124,7 @@ $desktopBefore = @{}
 foreach ($name in $desktopApp.Keys) { $desktopBefore[$name] = Test-Path -LiteralPath $desktopApp[$name] }
 $hadVendorKey = Test-Path -LiteralPath $vendorKey
 $hadProductKey = Test-Path -LiteralPath $productKey
+$hadOldVendorKey = Test-Path -LiteralPath $oldVendorKey
 $hadApprovedKey = Test-Path -LiteralPath $approvedKey
 
 $work = Join-Path ([IO.Path]::GetTempPath()) ('harness-device-e2e-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -739,8 +743,13 @@ function Clean-Up {
   }
   foreach ($folder in @($data, $appLocal)) { Remove-Item -LiteralPath $folder -Recurse -Force -ErrorAction SilentlyContinue }
   if (-not $hadProductKey) { Remove-Item -LiteralPath $productKey -Recurse -ErrorAction SilentlyContinue }
+  # The preflight stops on an old product key, so one here is the run's seed.
+  Remove-Item -LiteralPath $oldProductKey -Recurse -ErrorAction SilentlyContinue
   if (-not $hadVendorKey -and (Test-Path -LiteralPath $vendorKey) -and -not (Get-ChildItem -LiteralPath $vendorKey)) {
     Remove-Item -LiteralPath $vendorKey -ErrorAction SilentlyContinue
+  }
+  if (-not $hadOldVendorKey -and (Test-Path -LiteralPath $oldVendorKey) -and -not (Get-ChildItem -LiteralPath $oldVendorKey)) {
+    Remove-Item -LiteralPath $oldVendorKey -ErrorAction SilentlyContinue
   }
   if ($Screens) { Screens-Clean }
   Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
@@ -1414,8 +1423,9 @@ try {
   Stop-Process -Id $shown.Id -Force
   Ok "the console watcher traces a console window to the process that opened it: $(@(& $traced)[0])"
 
-  # --- 1: the silent install, per user
+  # --- 1: the silent install, per user, over the key 0.1.14 and older left under the old publisher
 
+  New-Item -Path $oldProductKey -Value $installDir -Force | Out-Null
   Install-Silently
   # What the install must add and the uninstall must remove.
   $installedItems = @($installDir, $shortcut, $desktopShortcut, $uninstallKey)
@@ -1427,6 +1437,15 @@ try {
     if ($target -ne $exe) { Fail "$lnk points at $exe, not $target" }
   }
   Ok '/S installs Harness Device per user: %LOCALAPPDATA%\Harness Device\harness-device.exe, Harness Device.lnk in the Start Menu and on the Desktop, both pointing at it, and the Harness Device uninstall entry'
+  $publisher = (Get-ItemProperty -LiteralPath $uninstallKey).Publisher
+  if ($publisher -ne 'Autonomous Inc.') { Fail "the uninstall entry's publisher is Autonomous Inc., not $publisher" }
+  $company = (Get-Item -LiteralPath $exe).VersionInfo.CompanyName
+  if ($company -ne 'Autonomous Inc.') { Fail "harness-device.exe's company is Autonomous Inc., not $company" }
+  Ok 'Settings > Apps and harness-device.exe name Autonomous Inc. as the publisher'
+  $folder = (Get-ItemProperty -LiteralPath $productKey -ErrorAction SilentlyContinue).'(default)'
+  if ($folder -ne $installDir) { Fail "$productKey holds $installDir, not $folder" }
+  if (Test-Path -LiteralPath $oldProductKey) { Fail "the install removes $oldProductKey" }
+  Ok "the install moves the folder from $oldProductKey to $productKey"
   foreach ($name in $desktopApp.Keys) {
     if ((Test-Path -LiteralPath $desktopApp[$name]) -ne $desktopBefore[$name]) { Fail "the desktop app's $name is as before the install" }
   }
