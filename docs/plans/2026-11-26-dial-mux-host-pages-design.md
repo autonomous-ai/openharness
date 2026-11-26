@@ -61,8 +61,10 @@ used last (tmux: `client_activity`, a tie going to the one listed later, which a
 client's tty access time, `herdrOuter.ts`; Windows: the newest herdr client in a listed app, #4629). That rule stays;
 a tap and a rest read it afresh (#4592), so the app is the one the person used last. A Herdr.app terminal's app is
 Herdr.app. Never none while a client runs in a listed app: an agent with no such client (detached, or its client in a
-terminal with no page) is only on the multiplexer's page, and a pick, rest or tap there focuses its pane alone, as a tap
-does today.
+terminal with no page) is only on the multiplexer's page, and a pick, rest or tap there does what a tap does today: it
+focuses its pane, and on macOS also brings the app whose bundle id its hints carry (the terminal that started the
+multiplexer's server), as #4629's decision 2 keeps (PM, 2026-11-26: kept as today). Such a rest reports `ok`, not
+`opened`, as the agent has no client app.
 
 ### A pick of tmux's or herdr's page
 
