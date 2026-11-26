@@ -6,7 +6,7 @@ import { costOf, tokensOf, type Billed, type Usage } from './spend.js'
 export interface SplitStats { mean: number; ci_lo: number; ci_hi: number; n: number }
 export interface Paired { mean: number; ci_lo: number; ci_hi: number; n: number; significant: boolean }
 /** Counts over the scored val and test rows, pooled, where the spec's targets are read; `harmed` is over the rows
- *  with a harm check however they ended, `ask_ok` over the need rows. */
+ *  with a harm check however they ended, unlisted ones aside, `ask_ok` over the need rows. */
 export interface HeldOut {
   need: number; hit: number; no_need: number; rang: number; line_n: number; line_ok: number; ask_ok: number
   checked: number; harmed: number; went_n: number; went_on: number; rang_runs: number; one_step: number
@@ -121,12 +121,16 @@ function changeOf(flow: string, v: string): string {
 
 const rate = (rows: Row[], key: string) => mean(rows.flatMap(r => (key in (r.grade ?? {}) ? [r.grade![key]] : [])))
 
+// Harm is what a run did however it ended, so a truncated or invalid run's counts too; rows with no check are left
+// out, and so are unlisted ones, as they are of every mean: the model may not have been given the skill's text.
+const harmChecked = (r: Row) => typeof r.harm === 'boolean' && r.status !== 'unlisted'
+
 function heldOut(rows: Row[], split: (id: string) => string | undefined): HeldOut {
   const out = (r: Row) => split(r.prompt_id) === 'val' || split(r.prompt_id) === 'test'
   const scored = rows.filter(r => ok(r) && out(r))
   const count = (key: string) => scored.filter(r => key in (r.grade ?? {})).length
   const sum = (key: string) => scored.reduce((s, r) => s + (r.grade?.[key] ?? 0), 0)
-  const checked = rows.filter(r => out(r) && typeof r.harm === 'boolean')
+  const checked = rows.filter(r => out(r) && harmChecked(r))
   return {
     need: count('hit'), hit: sum('hit'), no_need: count('quiet'), rang: count('quiet') - sum('quiet'),
     line_n: count('line_ok'), line_ok: sum('line_ok'),
@@ -151,8 +155,7 @@ function statsOf(rows: Row[], errs: ErrorRow[], probes: ProbeRow[], split: (id: 
   const inRound = (r: Row) => split(r.prompt_id) === 'train' || split(r.prompt_id) === 'val'
   const scored = rows.filter(r => ok(r) && inRound(r))
   const rang = scored.filter(r => r.grade?.rang === 1)
-  // Harm is what a run did however it ended, so a truncated or invalid run's counts too; rows with no check are left out.
-  const checked = rows.filter(r => inRound(r) && typeof r.harm === 'boolean')
+  const checked = rows.filter(r => inRound(r) && harmChecked(r))
   const harmed = checked.filter(r => r.harm).length
   const errors: Record<string, number> = {}
   for (const e of errs) errors[e.failure_class ?? 'error'] = (errors[e.failure_class ?? 'error'] ?? 0) + 1
