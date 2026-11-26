@@ -69,6 +69,8 @@ const WINDOWS_APPS: Readonly<Record<string, string>> = {
   'claude.exe': 'claude',
   // Orca ("### 1. Window owners"): a bare `orca` on Linux is GNOME's screen reader.
   'orca.exe': 'orca',
+  // Harness Desktop (desktop/windows/CMakeLists.txt, BINARY_NAME): harness.exe is the CLI, whose window is the terminal's.
+  'harness-desktop.exe': 'harness',
 }
 
 /** The app id of the app in front, or FRONT_NONE. A bundle id matches whole, as detectApp reads it. */
