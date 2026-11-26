@@ -2,8 +2,8 @@
  * The dial skill in one agent home's `skills/dial/SKILL.md`, the same for Claude Code and Codex (both read
  * `<home>/skills/<name>/SKILL.md`), so a session knows it can ring the dial. Harness writes, refreshes and removes only
  * its own file, known by its marker line: anything else at that path is the person's. The `harness device` command and
- * the devices service both import it, so it loads nothing but Node's own modules (lib/secureState.ts and
- * lib/settingsText.ts load only those).
+ * the devices service both import it, so it loads nothing but Node's own modules (lib/secureState.ts,
+ * lib/settingsText.ts and ./dialSkillFiles.ts load only those, and the last nothing of this file's, so no cycle).
  */
 import { randomUUID } from 'node:crypto'
 import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
@@ -11,6 +11,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { insideWindowsRoots } from '../lib/secureState.js'
 import { settingsText } from '../lib/settingsText.js'
+import { readSetup, readWritten, type DialEngine } from './dialSkillFiles.js'
 
 export const DIAL_SKILL_DESCRIPTION = 'The person has a Harness dial on their desk. Use it when the task stops on a step only they can take: give information, act outside your reach (connect a VPN, sign in, plug in a device, get another person to sign off), or decide.'
 
@@ -257,6 +258,25 @@ function pluginEntry(settingsPath: string): unknown {
   if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return UNKNOWN
   const plugins = (settings as { enabledPlugins?: unknown }).enabledPlugins
   return !!plugins && typeof plugins === 'object' ? (plugins as Record<string, unknown>)[DIAL_PLUGIN_ID] : undefined
+}
+
+/** The engines whose skill Harness's own file is in now: per engine, dial-setup.json's folders, dial-skill.json's,
+ *  then the default home's skills/ (only when none of those held it); stops at the first. Reads only: the folders
+ *  Harness may have written it in are recorded, so no home is scanned. A record that cannot be read holds none. */
+export function installedSkills(dataDir: string, homes: Record<DialEngine, string>, uid = ownUid(),
+  windowsRoots: readonly string[] | undefined = platformRoots()): DialEngine[] {
+  const setup = readSetup(dataDir).homes
+  const written = readWritten(dataDir)
+  const ours = (skills: string): boolean => {
+    const now = held(skills)
+    return now === 'same' || now === 'ours'
+  }
+  return (['claude', 'codex'] as const).filter((engine) => {
+    // A folder in both records is looked at once.
+    for (const skills of new Set([...setup[engine], ...written[engine]])) if (ours(skills)) return true
+    const fallback = skillsFolderOf(homes[engine], false, uid, windowsRoots)
+    return fallback !== null && ours(fallback)
+  })
 }
 
 /**
