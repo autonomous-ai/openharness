@@ -147,16 +147,28 @@ describe('Inbox', () => {
     expect(forgotten.value).toBeUndefined()
   })
 
-  it('ready: open, closed 34 s ago, not closed 36 s ago, never polled', () => {
+  // The mod opens its next poll at once after one closes. Counted ready for 35 s, a mod waiting out its minute after a
+  // refused poll was offered words that then waited 5 s and were lost (Diego, CLI 0.6.90).
+  it('ready: open, closed 1,999 ms ago, not closed 2 s ago, never polled', () => {
     const t = setup()
     void t.inbox.poll('p1', 's1')
     expect(t.inbox.ready('s1')).toBe(true)
     t.advance(25_000)
-    t.advance(34_000)
+    t.advance(1_999)
     expect(t.inbox.ready('s1')).toBe(true)
-    t.advance(2_000)
+    t.advance(1)
     expect(t.inbox.ready('s1')).toBe(false)
     expect(t.inbox.ready('never')).toBe(false)
+  })
+
+  it('a transcript for a session whose poll closed 2 s ago is missed at once, without waiting', async () => {
+    const t = setup()
+    polledOnce(t, 's1')
+    t.advance(2_000)
+    const sent = track(t.inbox.deliver('s1', 'hello'))
+    await settle()
+    expect(sent.value).toBe('missed')
+    expect(t.pending()).toBe(0)
   })
 
   it('a session never polled is missed at once, without waiting', async () => {
@@ -180,7 +192,7 @@ describe('Inbox', () => {
     expect(first.value).toBe('taken')
   })
 
-  it('keeps at most 256 closed-poll times and drops those older than 35 s', () => {
+  it('keeps at most 256 closed-poll times and drops those 2 s old', () => {
     const t = setup()
     const closeSession = (i: number): void => {
       void t.inbox.poll(`p${i}`, `s${i}`)
@@ -195,7 +207,7 @@ describe('Inbox', () => {
     expect(t.inbox.ready('s1')).toBe(false)
     expect(t.inbox.ready('s2')).toBe(true)
     expect(t.inbox.ready('s256')).toBe(true)
-    t.advance(36_000)
+    t.advance(2_000)
     expect(t.inbox.ready('s256')).toBe(false)
   })
 
