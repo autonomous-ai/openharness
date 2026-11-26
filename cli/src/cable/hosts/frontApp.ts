@@ -69,7 +69,9 @@ const WINDOWS_APPS: Readonly<Record<string, string>> = {
   'claude.exe': 'claude',
   // Orca ("### 1. Window owners"): a bare `orca` on Linux is GNOME's screen reader.
   'orca.exe': 'orca',
-  // Harness Desktop (desktop/windows/CMakeLists.txt, BINARY_NAME): harness.exe is the CLI, whose window is the terminal's.
+  // Harness Desktop: harness-desktop.exe owns its window (desktop/windows/CMakeLists.txt BINARY_NAME, and
+  // pty/src/desktop/win.rs finds it by that process). harness.exe is the CLI, whose window is the terminal's, and
+  // Harness.exe the launcher, which starts harness-desktop.exe and exits (pty/src/desktop/mod.rs).
   'harness-desktop.exe': 'harness',
 }
 
