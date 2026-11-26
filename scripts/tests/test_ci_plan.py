@@ -860,11 +860,15 @@ class SelectionTests(unittest.TestCase):
 
     def test_store_checks_run_offline_with_a_read_only_token(self):
         job = planner.ci_jobs((REPOSITORY / ".github/workflows/ci.yml").read_text())["store-checks"]
-        for text in ("    permissions:\n      contents: read\n", "python3 -m unittest store/tools/test_runtimes.py",
-                     "node store/tools/sync-runtimes.mjs --check", "npm --prefix store/tools/local-ai test"):
+        for text in ("python3 -m unittest store/tools/test_runtimes.py", "node store/tools/sync-runtimes.mjs --check",
+                     "npm --prefix store/tools/local-ai test"):
             with self.subTest(text=text):
                 self.assertIn(text, job)
-        self.assertNotIn("secrets.", job)
+        # The token reads the repository and nothing more, and no secret reaches the job in any form (secrets.X,
+        # secrets['X'], secrets: inherit).
+        permissions = planner.yaml_entries(planner.yaml_entries(job).get("permissions", ""))
+        self.assertEqual({key: value.strip() for key, value in permissions.items()}, {"contents": "read"})
+        self.assertNotIn("secrets", job)
 
     def test_each_file_store_checks_runs_is_its_own(self):
         # One added to the job but not to ALSO would be in no component: a change to it alone would not run the job.
