@@ -473,7 +473,7 @@ describe('a list that cannot be read', () => {
   const unreadable: Array<[Answer, string, string]> = [
     [{ code: 1, stderr: 'Error: settings locked\n' }, 'Error: settings locked', 'exit 1'],
     [{ code: null }, UNLISTED, 'no answer'],
-    [{ code: 0, stdout: 'Loading plugins…\n[' }, UNLISTED, 'exit 0'],
+    [{ code: 0, stdout: 'Loading plugins…\n[' }, UNLISTED, 'not json'],
   ]
 
   it('setup, update, disable and enable fail with step list, and change nothing', async () => {
@@ -595,12 +595,26 @@ describe('calls to claude', () => {
     const reason = (stderr: string, code: number | null = 1) => failureReason({ code, stdout: '', stderr })
     expect(reason('xcrun: error: invalid active developer path (/Library/Developer/CommandLineTools), missing xcrun at: /Library/Developer/CommandLineTools/usr/bin/xcrun\n'))
       .toBe('no xcode tools')
-    expect(reason('Error: spawn git ENOENT\n')).toBe('no git')
-    expect(reason("'git' is not recognized as an internal or external command,\r\noperable program or batch file.\r\n")).toBe('no git')
-    // `openharness.git` names the repository, not git itself.
+    // git only as the program that did not run: a spawn's, a shell's, cmd.exe's and Bun's on Windows.
+    for (const line of [
+      'Error: spawn git ENOENT\n', 'Error: spawn /usr/bin/git ENOENT\n', "'git' is not recognized as an internal or external command,\r\noperable program or batch file.\r\n",
+      'bash: git: command not found\n', 'zsh: command not found: git\n', "ENOENT: Command 'git' not found or is in an unsafe location\n",
+    ]) expect(reason(line), line).toBe('no git')
+    // `openharness.git` names the repository, not git itself, and a line that only says git and not found names no git
+    // that failed to run.
     expect(reason("fatal: repository 'https://github.com/autonomous-ai/openharness.git/' not found\n", 128)).toBe('exit 128')
+    expect(reason("Error: ENOENT: no such file or directory, open '/x/openharness/.git/HEAD'\n")).toBe('exit 1')
+    expect(reason('Plugin "harness-device" not found in marketplace "openharness" (git source)\n')).toBe('exit 1')
     expect(reason("fatal: unable to access 'https://github.com/a/b/': Could not resolve host: github.com\n")).toBe('network')
+    // SSL and TLS as words, not inside one.
+    expect(reason('SSL certificate problem: unable to get local issuer certificate\n')).toBe('network')
+    expect(reason('Error: TLS connection was closed\n')).toBe('network')
+    expect(reason("Error: cannot read '/Users/x/classless/plugin.json'\n")).toBe('exit 1')
     expect(reason("Marketplace 'openharness' is already added from a different source\n")).toBe('exists')
+    expect(reason("Marketplace 'openharness' already exists\n")).toBe('exists')
+    // A file that already exists is no marketplace that does.
+    expect(reason("Error: EEXIST: file already exists, mkdir '/Users/x/.claude/plugins/marketplaces/openharness'\n")).toBe('exit 1')
+    expect(reason("Failed to add marketplace: EEXIST: file already exists, mkdir '/x'\n")).toBe('exit 1')
     expect(reason('Error: github.com not found\n')).toBe('exit 1')
     expect(failureReason({ code: null, stdout: '', stderr: '', timedOut: true })).toBe('timeout')
     expect(failureReason({ code: null, stdout: '', stderr: '' })).toBe('no answer')
