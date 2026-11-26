@@ -49,7 +49,9 @@ The same helper reads the folder of Devin, Cursor, OpenClaw, opencode and Hermes
 serves ⌘P and the welcome page (`search` service). So on Windows none of them ever listed a session from outside
 Harness. Fixing it there, as the fix below does, makes ⌘P and the welcome page on Windows start listing those
 sessions too (PM, 2026-11-26: accepted; the PR says so). A Windows owner has no tty (`processTtys`), so it reads as an
-app's (`OpenIn` `app`) and a take-over never stops its process.
+app's (`OpenIn` `app`) and a take-over never stops its process. For the same reason no Windows owner is marked
+Harness's own (`harnessTtys` reads tmux): the open scan now lists Harness's own running Claude Code too, which the
+dial's merged list shows once, as Harness's (`registry.ts`, by engine and session), and ⌘P leaves out by session.
 
 ### Gate 2: the scan learns no app on Windows
 
@@ -69,8 +71,10 @@ process's there" (Windows reuses pids and never reparents). #4525 (2026-11-21) t
 at a parent whose `w:<FILETIME>` start is after its child's (`startedAfter`). The reason for turning the walk off is
 gone. The walk itself was never written for Windows: `learnApps` reads `ps`, which Windows does not have.
 
-The same cause hides every app on Windows from the scan until its next hook: Codex as well as Claude Code, Cursor as
-well as VS Code, and an agent in an Orca terminal (`orca.exe`), WezTerm or the ChatGPT app. The fix covers them all.
+The same cause hides every app on Windows from the scan until its next hook: Cursor as well as VS Code, and an agent
+in an Orca terminal (`orca.exe`) or WezTerm. The fix covers them all. Not Codex, nor the ChatGPT app's threads: the
+scan finds no Codex owner on Windows at all, since it reads one from the process that holds its rollout open (`lsof`,
+which Windows has not, `processView`), so a Codex there still comes back at its next hook. That is a gap of its own.
 
 The owner side was ruled out on the VM and in the scratch run: the record is there, and `recordOwners` accepts it with
 a live `claude.exe` (`engineProcessMatch` scores it 3, `lib/windows/engineProcessMatch.spec.ts`).
@@ -103,7 +107,9 @@ reader its `readWindowsProcesses`; this branch reuses both.)
      to walk). The nested-agent rule above is added there. It changes nothing for those two, whose host table names
      neither `node` nor an engine.
    - `scanLearnsApps` stays `darwin || linux`. It also gates the tmux, herdr and Zellij lookups (`ps`, `lsof`,
-     `devices.ts:910`, `:2371`), which have no Windows form. Only its comment changes.
+     `devices.ts:910`, `:2371`), which have no Windows form, the walk of an Orca hook (`observed.ts` `walked`) and the
+     dial's count of agents with no app (`select.ts` `AppRings.counts`): Windows Terminal, the default terminal there,
+     is never learnt, so its agents still wait for their first hook. Only the comments change.
 2. `learnApps` (`cable/hosts/scannedApp.ts`) on `win32` reads the table through `processRows()` (harness-pty's, the one
    `readProcessParents` uses) and keeps pid, parent, image and start marker, never arguments. A failed read rejects, so
    `appsOf` logs `[observed] scan · apps not read · <kind>` and lists the session not known yet, as on Unix.
@@ -111,8 +117,11 @@ reader its `readWindowsProcesses`; this branch reuses both.)
    the rest on every OS (step 5).
 
 Cost: one more read of the process table per scan, only when the scan lists a new session (it is skipped when `listing`
-is empty) and only on Windows. It is the read `readProcessParents` already makes per new VS Code agent. No new state,
-no new log content (`scan · N found · M app known` already counts it), no core file.
+is empty) and only on Windows. It is the read `readProcessParents` already makes per new VS Code agent. The hook path
+shares the walk (`observed.ts` `learnApp`): a hook whose hints name no app (Windows Terminal), or VS Code by
+`TERM_PROGRAM` alone (an editor the hook could not name), is walked once per caller process, which on Windows is now one
+table read too, where the walk answered nothing at once before. No new state, no new log content
+(`scan · N found · M app known` already counts it), no core file.
 
 Platforms: Windows changes. macOS and Linux run the same code paths as before; their specs stay green.
 
@@ -167,11 +176,14 @@ before the fix.
    Before the fix: no line and no row (gate 1, as Ken saw).
 4. With the fix: repeat 1 and 3 (restart with `harness start -f` while the stand-in dial is used). Expected: one
    `[observed] scan · 1 found · 1 app known · …` line within 70 s, and the agent on VS Code's page before any hook.
-   `1 found · 0 app known` means gate 1 is fixed and gate 2 is not; no line means gate 1 is not fixed.
+   `1 found · 0 app known` means gate 1 is fixed and gate 2 is not; no line means gate 1 is not fixed. Run no Harness
+   agent meanwhile: Windows names no terminal, so the scan cannot tell Harness's own Claude Code from the person's, and
+   counts it too (its row stays one, Harness's, in the dial's merged list).
 5. Tap it on the dial. VS Code comes forward and shows that terminal. Turn the dial: the terminal scrolls.
 6. Say a short prompt to it on the dial. It is typed into that terminal and submitted.
-7. Repeat 3 to 5 with Codex in a VS Code terminal (`codex`), and once with Claude Code in Windows Terminal. Windows
-   Terminal's agent is now listed after the restart (gate 1), on Other's page, since no app is learned for it.
+7. Repeat 3 to 5 once with Claude Code in Windows Terminal. Windows Terminal's agent is now listed after the restart
+   (gate 1), on Other's page, since no app is learned for it. With Codex in a VS Code terminal (`codex`), step 3 still
+   shows no row until its next hook: the scan finds no Codex owner on Windows (gate 2 above).
 8. ⌘P in Harness on the VM (if the app is installed there) now lists that outside Claude Code session. This is new on
    Windows and expected.
 
