@@ -8101,6 +8101,24 @@ describe('ObservedSource and a Codex session its own server runs', () => {
     expect(t.lookup).toHaveBeenCalledTimes(2)
   })
 
+  it('at its client\'s app with no tab, it leaves that app at the next tick once one of its TUIs exited, as either may have been its client', async () => {
+    const t = served()
+    t.src.ingest(t.codex('session-start'))
+    await t.asks[0].answer([{ client: { app: 'terminal-app' }, clients: [500, 501] }])
+    // Both run: the app is still certain.
+    await t.src.tick()
+    expect(t.agent().app).toBe('terminal-app')
+    // One quit, the daemon runs on: had it been the session's, the session is in no app now.
+    t.gens.set(501, null)
+    await t.src.tick()
+    expect(t.src.list()).toHaveLength(1)
+    expect(t.agent().app).toBe('terminal')
+    expect(t.agent().appPending).toBeUndefined()
+    // Its next turn asks again, which finds the one left if it is its own.
+    t.src.ingest(t.codex('turn-start'))
+    expect(t.lookup).toHaveBeenCalledTimes(2)
+  })
+
   it('a session whose client exited leaves that tab at the next tick, which holds a shell now: on no page until asked again', async () => {
     const t = served()
     t.src.ingest(t.codex('session-start'))
