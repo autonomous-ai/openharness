@@ -524,7 +524,9 @@
     "evals/dial-skill/scenarios/xcode-license-sudo/repo/ios/Pocket/ContentView.swift",
     "evals/dial-skill/scenarios/xcode-license-sudo/repo/ios/Pocket/PocketApp.swift",
     "evals/dial-skill/scenarios/xcode-license-sudo/repo/ios/Secrets.xcconfig",
-    "evals/dial-skill/scenarios/xcode-license-sudo/scenario.json"
+    "evals/dial-skill/scenarios/xcode-license-sudo/scenario.json",
+    "evals/dial-skill/flow/v3/hooks.json",
+    "evals/dial-skill/flow/v3/harness-answers.json"
   ],
   "metrics": [
     {
