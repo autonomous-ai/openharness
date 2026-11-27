@@ -440,7 +440,7 @@ interface FakeCard {
  *  `--list` or a `--done`. */
 function fakeHarness(recFile: string, answers: HarnessAnswer[], noDial: boolean): string {
   return `#!${process.execPath}
-const { appendFileSync, readFileSync, writeFileSync } = require('node:fs')
+const { appendFileSync, readFileSync, renameSync, writeFileSync } = require('node:fs')
 const { dirname, join } = require('node:path')
 const { randomBytes } = require('node:crypto')
 const REC = ${JSON.stringify(recFile)}
@@ -499,7 +499,13 @@ function cards() {
     throw error
   }
 }
-const keep = (open) => writeFileSync(CARDS, JSON.stringify(open))
+// Written whole, then renamed over the old: an agent may run two calls at once, and one reading while another writes
+// must never find a half-written file.
+function keep(open) {
+  const temp = CARDS + '.' + process.pid
+  writeFileSync(temp, JSON.stringify(open))
+  renameSync(temp, CARDS)
+}
 const age = (s) => s < 60 ? s + 's' : s < 3600 ? Math.floor(s / 60) + 'm' : Math.floor(s / 3600) + 'h'
 /** The Stop rules: no second look, a string answer whose last 400 code points hold a question mark, and no ring yet. */
 function blocks() {
