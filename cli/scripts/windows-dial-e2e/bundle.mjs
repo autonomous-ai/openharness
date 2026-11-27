@@ -8,7 +8,8 @@
  * writes, into an empty <out>, the monorepo's shape, so the files the desk's harness reads by their place beside its
  * own (e2e/harness/daemon.ts CLI_ROOT, e2e/harness/fakeDial.ts) are where it looks:
  *   cli/scripts/windows-dial-e2e/desk.mjs              the desk and every module it imports
- *   cli/scripts/windows-dial-e2e/cli.js, notify.mjs    the CLI, as e2e/harness/bundle.ts builds it; the desk names it
+ *   cli/scripts/windows-dial-e2e/cli.js, notify.mjs,   the CLI, as e2e/harness/bundle.ts builds it; the desk names it
+ *     inbox.mjs                                        (inbox.mjs, the Windows follower: build-bundle.mjs writes it)
  *   cli/scripts/windows-dial-e2e/console.ps1
  *   cli/src/cable/__fixtures__/fakeHarnessSerial.mjs   the serial stand-in of the stand-in desk
  *   devices/harness-device/firmware/version.txt        the firmware version the stand-in dial greets with

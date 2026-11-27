@@ -79,10 +79,12 @@ stage() {
   [ "$("$node_bin" "$build/cli.js" version)" = "$version" ] || { echo "error: the bundle does not answer $version" >&2; exit 1; }
   place "$build/cli.js" "$L_cli_cli_js_object"
   place "$build/notify.mjs" "$L_cli_notify_mjs_object"
+  place "$build/inbox.mjs" "$L_cli_inbox_mjs_object"
   # The cli entry as upload-cli.sh writes it (merge-manifest.mjs), keyed `cli` as release.yml's staging step merges it.
   "$node_bin" "$cli/scripts/merge-manifest.mjs" /dev/null "$build/cli-metadata.json" cli "$version" \
     "$L_cli_cli_js_url" "$(sha "$build/cli.js")" "$(size "$build/cli.js")" \
-    "$L_cli_notify_mjs_url" "$(sha "$build/notify.mjs")" "$(size "$build/notify.mjs")"
+    "$L_cli_notify_mjs_url" "$(sha "$build/notify.mjs")" "$(size "$build/notify.mjs")" \
+    "$L_cli_inbox_mjs_url" "$(sha "$build/inbox.mjs")" "$(size "$build/inbox.mjs")"
   place "$build/cli-metadata.json" "$L_manifests_cli"
 
   echo ">> terminal host $pty_version: publish-pty-payload.sh, dry run"
