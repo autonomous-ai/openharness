@@ -4,7 +4,7 @@
  * throwaway Codex home. One real script on a throwaway PATH and HOME stands in for the binary `codexFound` and
  * `codexRunIn` find. The real `codex` and ~/.codex are never touched.
  */
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { parse as parseToml } from 'smol-toml'
@@ -15,7 +15,7 @@ import * as pluginFolder from './pluginFolder.js'
 import { writeExecutable } from '../testing/executableFixture.js'
 import {
   carriedCodexHash, codexFound, codexMarketplace, codexPluginState, codexRemove, codexRunIn, codexSetUp, codexUpdate,
-  installedRoot, MIN_CODEX, type CodexInstallDeps,
+  installedRoot, MIN_CODEX, type CodexInstallDeps, type CodexRun,
 } from './codexPlugin.js'
 
 // A copy of the module, so a test can watch whether the marketplace folder was written.
@@ -260,6 +260,56 @@ describe('codexSetUp', () => {
   })
 })
 
+describe('the --version, asked once per binary', () => {
+  /** A file standing in for the `codex` binary: only its path and time are read. */
+  const binary = (): string => {
+    const bin = join(temp(), 'codex')
+    writeFileSync(bin, '')
+    return bin
+  }
+  /** [run] as codexFound hands it, carrying the binary it runs. */
+  const carrying = (run: ClaudeRun, bin: string): CodexRun => Object.assign((args: string[], timeoutMs: number) => run(args, timeoutMs), { bin })
+  /** A new home set up with a codex that runs [bin]: what the setup gave, and what it asked. */
+  async function setUpWith(bin: string, answers: Record<string, Answer> = {}) {
+    const home = codexHome()
+    const folder = marketplaceFolder()
+    const codex = fakeCodex(home, folder, answers)
+    return { result: await codexSetUp(deps(carrying(codex.run, bin), home, folder)), calls: codex.calls }
+  }
+
+  it('two homes whose codex is one binary ask it once, and once more after the binary changes', async () => {
+    const bin = binary()
+    expect((await setUpWith(bin)).calls[0]).toBe('--version')
+    const second = await setUpWith(bin)
+    expect(second.result).toEqual({ ok: true, outcome: 'installed', trusted: true })
+    expect(second.calls).not.toContain('--version')
+
+    const at = new Date(Date.UTC(2020, 0, 1))
+    utimesSync(bin, at, at)
+    expect((await setUpWith(bin)).calls[0]).toBe('--version')
+  })
+
+  it('a --version that hung is kept: the next home asks nothing and fails launcher with the same reason', async () => {
+    const bin = binary()
+    const hung = await setUpWith(bin, { '--version': { code: null, timedOut: true } })
+    expect(hung.result).toMatchObject({ ok: false, step: 'launcher', reason: 'timeout' })
+    const next = await setUpWith(bin)
+    expect(next.result).toMatchObject({ ok: false, step: 'launcher', reason: 'timeout' })
+    expect(next.calls).toEqual([])
+  })
+
+  it('a binary that cannot be found is asked each time', async () => {
+    const bin = join(temp(), 'gone')
+    for (let at = 0; at < 2; at++) expect((await setUpWith(bin)).calls[0]).toBe('--version')
+  })
+
+  it('two setups started together ask once', async () => {
+    const bin = binary()
+    const both = await Promise.all([setUpWith(bin), setUpWith(bin)])
+    expect(both.flatMap(({ calls }) => calls).filter((call) => call === '--version')).toEqual(['--version'])
+  })
+})
+
 describe("a home whose openharness marketplace is the person's own", () => {
   it.each([
     ['from GitHub', OWN_GIT],
@@ -401,6 +451,7 @@ describe('the codex binary', () => {
     for (const shell of [true, false]) {
       const run = await codexFound(home, shell)
       expect(await run!(['--version'], 15_000)).toEqual({ code: 0, stdout: `home: ${home}\nfirst: ${bin}\n`, stderr: '' })
+      expect(run!.bin && realpathSync(run!.bin)).toBe(realpathSync(join(bin, 'codex')))
     }
   })
 
@@ -408,7 +459,9 @@ describe('the codex binary', () => {
     const { dir } = codexOnPath()
     vi.stubEnv('CODEX_HOME', join(dir, 'other-home'))
     const home = join(dir, 'profile-a')
-    expect(await codexRunIn(home)!(['--version'], 15_000)).toMatchObject({ code: 0, stdout: expect.stringContaining(`home: ${home}\n`) })
+    const run = codexRunIn(home)
+    expect(await run!(['--version'], 15_000)).toMatchObject({ code: 0, stdout: expect.stringContaining(`home: ${home}\n`) })
+    expect(run!.bin && realpathSync(run!.bin)).toBe(realpathSync(join(dir, 'bin', 'codex')))
     expect(process.env.CODEX_HOME).toBe(join(dir, 'other-home'))
   })
 

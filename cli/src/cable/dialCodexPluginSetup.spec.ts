@@ -10,7 +10,7 @@ import { parse as parseToml } from 'smol-toml'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ClaudeAnswer, ClaudePluginFiles, ClaudeRun } from '../devices/claudePlugin.js'
 import * as codexPlugin from '../devices/codexPlugin.js'
-import { carriedCodexHash, installedRoot, MIN_CODEX } from '../devices/codexPlugin.js'
+import { carriedCodexHash, type CodexRun, installedRoot, MIN_CODEX } from '../devices/codexPlugin.js'
 import { readConfigText, writePluginTrust } from '../devices/codexPluginTrust.js'
 import { MAX_HOMES } from '../devices/dialSkillFiles.js'
 import { CODEX_SETUP_COUNTS, createDialCodexPluginSetup, type DialCodexPluginSetupDeps } from './dialCodexPluginSetup.js'
@@ -46,6 +46,7 @@ const folders: string[] = []
 /** Folders a spec made unreadable, made readable again before they are removed. */
 const locked: string[] = []
 afterEach(() => {
+  vi.useRealTimers()
   vi.restoreAllMocks()
   for (const dir of locked.splice(0)) chmodSync(dir, 0o700)
   for (const dir of folders.splice(0)) rmSync(dir, { recursive: true, force: true })
@@ -1039,6 +1040,26 @@ describe('createDialCodexPluginSetup', () => {
     r.state.homes = [home]
     await Promise.all([r.setup.pass(), r.setup.pass()])
     expect(r.fake(home).calls).toEqual(['--version', `plugin marketplace add ${r.marketplace}`, ADD])
+  })
+
+  // One pass asked each due home's --version with its 15 s bound: 16 minutes with 64 homes on a hanging Codex.
+  it('64 homes with a --version that never answers end the pass after one bound', async () => {
+    vi.useFakeTimers()
+    const bin = join(temp(), 'codex')
+    writeFileSync(bin, '')
+    const calls: string[] = []
+    const hanging: CodexRun = Object.assign((args: string[], timeoutMs: number) => {
+      calls.push(args.join(' '))
+      return new Promise<ClaudeAnswer>((resolve) => setTimeout(() => resolve({ code: null, stdout: '', stderr: '', timedOut: true }), timeoutMs))
+    }, { bin })
+    const r = rig({ codex: async () => hanging })
+    r.state.homes = Array.from({ length: MAX_HOMES }, () => codexHome())
+    let settled = false
+    void r.setup.pass().then(() => { settled = true })
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(settled).toBe(true)
+    expect(calls).toEqual(['--version'])
+    expect(r.counted).toEqual(Array.from({ length: MAX_HOMES }, () => ['failed', 'launcher · timeout']))
   })
 
   it('a lookup that throws is failed · error for that home alone, which waits its hour', async () => {
