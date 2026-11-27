@@ -6,9 +6,10 @@
  * `inbox <session id>` and `attach <session id>` (its mod on Windows, whose runtime can
  * neither reach the daemon's pipe nor the devices' nor sign for either: this process holds the session's poll and
  * proves the daemon's token, inbox.ts, and tells the devices the Claude app shows a session). `codex asked` is the
- * plugin's Codex hooks' (hooks/codex.json, codexAsked.ts), never typed either. `disable` marks the
- * engine removed in dial-skill.json, which the devices service then leaves alone, and removes Harness's skill from the
- * engine's default home, from each folder an enable wrote and from each the service recorded in dial-setup.json.
+ * plugin's Codex hooks' (hooks/codex.json, codexAsked.ts), and `codex start` its SessionStart hook's, never typed
+ * either. `disable` marks the engine removed in dial-skill.json, which the devices service then leaves alone, and
+ * removes Harness's skill from the engine's default home, from each folder an enable wrote and from each the service
+ * recorded in dial-setup.json.
  * `enable` clears the mark and writes the skill into the engine's default home and back into each folder the service
  * recorded; a folder an earlier enable wrote with another home is not written again.
  * Codex's two also hold its harness-device plugin (devices/codexPlugin.ts) in the engine's default home and in each home
@@ -232,6 +233,12 @@ async function codexCommand(verb: string, json: boolean, deps: DeviceDeps): Prom
       // Prints nothing, ever: what the hook prints, Codex reads as its decision.
       return runCodexAsked({ stdin: deps.stdin, post, codexHome: deps.codexHome })
     }
+    case 'start':
+      // A config.toml that does not parse is not on: Codex cannot start a session on it.
+      return runStart({
+        stdin: deps.stdin, dataDir: deps.dataDir, out: deps.out,
+        acts: () => readRemoved(deps.dataDir).codex !== true && codexPluginState(deps.codexHome) === 'on' && ownSkillIn(deps.codexHome),
+      })
     default:
       deps.err(DEVICE_USAGE)
       return 1
