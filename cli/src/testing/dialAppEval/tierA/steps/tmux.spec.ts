@@ -7,14 +7,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ptyMaker } from '../../../../cable/hosts/scannedApp.js'
 import type { ObservedEvent } from '../../../../core/observedHook.js'
 import { HARNESS_OWNER_OPTION, paneOwnerFormat } from '../../../../lib/harnessSessionLabel.js'
-import { itermSession } from '../../catalog.js'
+import { itermSession, orcaSession } from '../../catalog.js'
 import { namedPanes } from '../../itermRecords.js'
 import type { Scenario, SessionKey, StepOf } from '../../types.js'
 import { machine } from '../machine.js'
 import type { TierAWorld } from '../world.js'
 import { itermSteps, tabShell } from './iterm.js'
-import { agentPid, running, sessionsSteps } from './sessions.js'
-import { answerTmux, tmuxSteps } from './tmux.js'
+import { agentPid, running, sessionsSteps, shellOf } from './sessions.js'
+import { answerTmux, tmuxShown, tmuxSteps } from './tmux.js'
 
 const roots: string[] = []
 afterEach(() => {
@@ -38,8 +38,13 @@ const sessions = (): Scenario => ({
     itermSession('u', { place: 'tmux', tab: 1, split: 1 }), itermSession('v', { place: 'tmux', tab: 2 })],
 })
 
+/** a in w1's Orca tab 0; c and d under tmux in tab 1, its splits 0 and 1, d a Codex; e under tmux in tab 2. Pane ids by
+ *  index: %1, %2, %3. */
+const orcaTabs = (): Scenario => ({ ...sessions(), id: 'T4', app: 'orca', sessions: [orcaSession('a'), orcaSession('c', { tmux: true, tab: 1 }),
+  orcaSession('d', { tmux: true, tab: 1, split: 1, engine: 'codex' }), orcaSession('e', { tmux: true, tab: 2 })] })
+
 /** A world on darwin whose devices are told hooks, whose listener takes tab reports, and whose rules answer each command. */
-function fakeWorld() {
+function fakeWorld(of: Scenario = sessions()) {
   vi.useFakeTimers({ toFake: ['Date'] })
   vi.setSystemTime(T0)
   const root = mkdtempSync(join(tmpdir(), 'dial-eval-tmux-'))
@@ -47,7 +52,6 @@ function fakeWorld() {
   machine.reset()
   machine.itermHome = root
   machine.installed.set('tmux', TMUX)
-  const of = sessions()
   const told: ObservedEvent[] = []
   const gaps: string[] = []
   const rules: Array<(argv: readonly string[]) => { code: number; stdout?: string } | undefined> = []
@@ -206,5 +210,21 @@ describe("tier A's tmux", () => {
     expect(places()).toBe(`${(T0 + 7_000) / 1000}|${client.pid}|/dev/${client.tty!}\n`)
     expect(machine.atimes.get(client.tty!)).toBe(T0 + 7_000)
     expect(w.told.filter((e) => e.event === 'turn-start')).toHaveLength(3)
+  })
+
+  it("Orca sessions under tmux in one worktree and tab are panes of one tmux session eval-orca-<worktree>-<tab>, in split "
+    + "order, the first started selected, with one client under that tab's Orca shell; another tab's is a session of its own", async () => {
+    const w = fakeWorld(orcaTabs())
+    await w.start('d', 'c', 'e')
+    expect(w.run('list-panes', '-a', '-F', '#{pane_id}|#{session_name}|#{pane_active}')!.stdout)
+      .toBe('%1|eval-orca-w1-1|0\n%2|eval-orca-w1-1|1\n%3|eval-orca-w1-2|1\n')
+    // A client a tmux session, under its tab's one Orca shell on that shell's tty: c's and d's is the same.
+    const shells = ['c', 'e'].map((key) => w.at(shellOf(w.world, key)!))
+    expect(w.clients().map((c) => ({ ppid: c.ppid, tty: c.tty }))).toEqual(shells.map(({ pid, tty }) => ({ ppid: pid, tty })))
+    expect(shellOf(w.world, 'd')).toBe(shells[0]!.pid)
+    // tmux shows the pane first started, d's, until the person selects another.
+    expect(['c', 'd', 'e', 'a'].map((key) => tmuxShown(w.world, key))).toEqual(['d', 'd', 'e', undefined])
+    await w.step('tmux.selectPane', { session: 'c' })
+    expect(['c', 'd', 'e'].map((key) => tmuxShown(w.world, key))).toEqual(['c', 'c', 'e'])
   })
 })

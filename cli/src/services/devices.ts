@@ -673,8 +673,15 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  app comes back (docs/plans/2026-11-24-dial-tmux-pane-focus-follow-design.md, "The front client"). */
   const lastTabs = new Map<TabApp, string>()
   /** Whether the agent's tab (its multiplexer client's) is the one [app] reported selected last, where it reports tabs:
-   *  with none reported yet, the person may be on a plain tab of it. */
+   *  with none reported yet, the person may be on a plain tab of it. In Orca, whose watch tells the terminal in front:
+   *  the agent's client is still Orca's told client, and the agent still placed at that terminal, as the person's focus
+   *  and the agent's client can each move while tmux is read (docs/plans/2026-11-27-orca-tmux-follow-focus-design.md
+   *  §3). */
   const onTabInFront = (source: ObservedSource, app: string, agentId: string): boolean => {
+    if (app === 'orca') {
+      const told = orcaClient()
+      return told !== undefined && source.tabTty(agentId) === told && orcaTmux.agents.get(agentId) === focusWatch?.pane
+    }
     if (!reportsTabs(app)) return true
     const tab = lastTabs.get(app)
     return tab !== undefined && tab === source.tabTty(agentId)
@@ -686,10 +693,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const editorClients = new Map<string, string | undefined>()
   /** Of the multiplexer clients on [ttys] in [app], those the person may look at: where the app tells which, the one it
    *  told last (the tab a tab app reported selected, none before it reports one; the client in the terminal VS Code or
-   *  Cursor focused, none for an agent's own terminal); elsewhere, and in an editor that told none (no Harness
-   *  extension, or no terminal focused since it settled), every one, as before §7, which only adds to it: tmuxFocused
-   *  follows the one of them tmux lists, none of two. */
+   *  Cursor focused, none for an agent's own terminal; Orca's told client, none before its watch tells a terminal with
+   *  one); elsewhere, and in an editor that told none (no Harness extension, or no terminal focused since it settled),
+   *  every one, as before §7, which only adds to it: tmuxFocused follows the one of them tmux lists, none of two. */
   const toldClients = (app: string, ttys: readonly string[]): readonly string[] => {
+    if (app === 'orca') return ttys.filter((tty) => tty === orcaClient())
     if (reportsTabs(app)) return ttys.filter((tty) => tty === lastTabs.get(app))
     if (editorClients.has(app)) return ttys.filter((tty) => tty === editorClients.get(app))
     return ttys
@@ -2252,31 +2260,57 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    * holds, when it is the only one such and the agent the only one with none there; anything else places nobody. For its
    * order, its tab's name, and the terminal a rest or a tap switches to: never its pane, so no words reach it and no focus
    * line finds it.
+   * Agents under tmux are placed by their client (docs/plans/2026-11-27-orca-tmux-follow-focus-design.md §1): two panes
+   * of one engine under one tmux in one Orca tab are two candidates for its terminal, which the rule above leaves both
+   * unplaced, so off the ring of the worktree on screen. When every candidate of that only terminal runs under tmux on one
+   * client, the client is placed there, and with it every agent of that client in that folder, whatever its engine. A
+   * candidate with no client or another one, or a client two terminals would take, places nobody: the dial never guesses
+   * a session (decision 2). The clients placed, by handle, are returned beside the agents.
    */
-  const placeInOrca = (source: ObservedSource, terminals: readonly OrcaTerminal[]): Map<string, string> => {
+  const placeInOrca = (source: ObservedSource, terminals: readonly OrcaTerminal[]): { placed: Map<string, string>; clients: Map<string, string> } => {
+    const add = <T>(to: Map<string, T[]>, key: string, value: T): void => { to.set(key, [...to.get(key) ?? [], value]) }
     // By folder and engine: the agent's, and the terminal's worktree and the agent Orca saw there, compared as they are.
-    const add = (to: Map<string, string[]>, folder: string, engine: string, value: string): void => {
-      const at = JSON.stringify([folder, engine])
-      to.set(at, [...to.get(at) ?? [], value])
-    }
+    const at = (folder: string, engine: string): string => JSON.stringify([folder, engine])
     const held = new Set<string>()
-    const unplaced = new Map<string, string[]>()
-    for (const { id, cwd, engine } of orcaAgents(source)) {
+    /** Each agent with no Orca pane, by folder and engine, with the tty of its tmux client when it runs under tmux. */
+    const unplaced = new Map<string, Array<{ id: string; client?: string }>>()
+    /** The agents with no Orca pane under each tmux client, by its tty. */
+    const onClient = new Map<string, Array<{ id: string; cwd: string }>>()
+    for (const { id, cwd, engine, nest } of orcaAgents(source)) {
       const pane = source.paneOf(id, 'orca')
       if (pane !== undefined) held.add(pane)
-      else if (cwd !== undefined) add(unplaced, cwd, engine, id)
+      else if (cwd !== undefined) {
+        const client = nest === 'tmux' ? source.tabTty(id) : undefined
+        add(unplaced, at(cwd, engine), { id, client })
+        if (client !== undefined) add(onClient, client, { id, cwd })
+      }
     }
-    const free = new Map<string, string[]>()
-    for (const { handle, worktreePath, agentIdentity } of terminals) if (!held.has(handle)) add(free, worktreePath, agentIdentity, handle)
+    const free = new Map<string, OrcaTerminal[]>()
+    for (const terminal of terminals) if (!held.has(terminal.handle)) add(free, at(terminal.worktreePath, terminal.agentIdentity), terminal)
     const placed = new Map<string, string>()
-    for (const [at, ids] of unplaced) {
-      const handles = free.get(at)
-      if (ids.length === 1 && handles?.length === 1) placed.set(ids[0], handles[0])
+    /** The terminals each client would be placed at. */
+    const wanted = new Map<string, OrcaTerminal[]>()
+    for (const [key, agents] of unplaced) {
+      const terminal = free.get(key)
+      if (terminal?.length !== 1) continue
+      const ttys = new Set(agents.map(({ client }) => client))
+      const [client] = ttys
+      if (agents.length === 1 && client === undefined) placed.set(agents[0].id, terminal[0].handle)
+      else if (ttys.size === 1 && client !== undefined) add(wanted, client, terminal[0])
     }
-    return placed
+    const clients = new Map<string, string>()
+    for (const [client, [terminal, ...more]] of wanted) {
+      if (more.length) continue
+      clients.set(terminal.handle, client)
+      for (const { id, cwd } of onClient.get(client)!) if (cwd === terminal.worktreePath) placed.set(id, terminal.handle)
+    }
+    return { placed, clients }
   }
   /** Orca's terminal agents at their tab places, from the last order read that landed, and how many tabs it held. */
   let orcaTabRank: { rank: ReadonlyMap<string, number>; places: number } = { rank: new Map(), places: 0 }
+  /** From the last order read that landed: the tmux client placed at each Orca terminal, by handle, and each agent placed
+   *  there by that client (agent id → handle). Orca's told client and the tmux pane poll read it (the spec's §2 and §3). */
+  let orcaTmux: { clients: ReadonlyMap<string, string>; agents: ReadonlyMap<string, string> } = { clients: new Map(), agents: new Map() }
   /** Orca's rank: its terminals at their tab places, then its chats in Orca's list's order, each after every tab
    *  (decided 6): Orca tells no order of its chat tabs, and a chat has no place among the terminals'. A new rank each
    *  time, which the ring is put in order by (select.ts). Nothing is pushed: the dials read the reordered ring on their
@@ -2297,7 +2331,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       log('[device] orca order · read')
       orcaWorktrees = listed.worktrees
       const place = new Map(listed.tabs.map(({ handle }, at) => [handle, at]))
-      const placed = placeInOrca(source, listed.terminals)
+      const { placed, clients } = placeInOrca(source, listed.terminals)
       const rank = new Map<string, number>()
       for (const id of orcaIds(source)) {
         // An agent in a multiplexer inside Orca has no Orca pane, and one Orca did not lay out has no place: both come
@@ -2308,10 +2342,20 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       }
       orcaTabRank = { rank, places: listed.tabs.length }
       rankOrca(orcaChats!)
+      // Before the names: their change can start the tmux pane poll, which reads it (the spec's §3).
+      orcaTmux = { clients, agents: new Map([...placed].filter(([, handle]) => clients.has(handle))) }
+      // A terminal two or more agents are placed at names none of them: each keeps its session's name, else its folder's,
+      // so one tab's name is not given to several rows (the spec's §1, decision 3).
+      const once = new Set<string>()
+      const shared = new Set<string>()
+      for (const handle of placed.values()) (once.has(handle) ? shared : once).add(handle)
       // The same read names Orca's agents by their tabs (the design's section 4). After the rank: the rename's change
       // lists the ring already in tab order.
       source.setPaneNames('orca', new Map(listed.tabs.flatMap(({ handle, title, renamed }) =>
-        title === undefined ? [] : [[handle, { title, renamed: renamed === true }]])), placed)
+        title === undefined || shared.has(handle) ? [] : [[handle, { title, renamed: renamed === true }]])), placed)
+      // The names change nothing when a client lands for an agent elimination had placed at that terminal before its
+      // lookup landed, so no change starts the poll: it is checked here too (the spec's §3).
+      part.call('pane', checkPaneFocus)
     }).finally(() => {
       ordering = false
       if (!orcaRing.again) return
@@ -2319,12 +2363,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       part.call('orca', () => readOrcaOrder(source))
     })
   }
-  /** Asks for a read when Orca's ring has other members, or a member another Orca pane, than at the last check: one the
-   *  attach scan found learns its pane at its first hook, and a session resumed in another Orca terminal keeps its id. With
-   *  none, the last order is kept. */
+  /** Asks for a read when Orca's ring has other members, or a member another Orca pane or tmux client, than at the last
+   *  check: one the attach scan found learns its pane at its first hook, a session resumed in another Orca terminal keeps
+   *  its id, and tmux's lookup of a client can land after the read its agent's start asked for, while an agent under tmux
+   *  is placed by its client (placeInOrca). With none, the last order is kept. */
   const orcaMembers = (source: ObservedSource): Promise<void> | undefined => {
     if (!dialOn) return
-    const members = new Set(orcaIds(source).map((id) => `${id} ${source.paneOf(id, 'orca') ?? ''}`))
+    const members = new Set(orcaIds(source).map((id) => `${id} ${source.paneOf(id, 'orca') ?? ''} ${source.tabTty(id) ?? ''}`))
     const was = orcaRing.members
     orcaRing.members = members
     if (members.size === 0 || (was?.size === members.size && [...was].every((id) => members.has(id)))) return
@@ -2570,6 +2615,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** The watch while one runs: the latest pane it told (null for none in focus), kept for Orca's next settle, and whether
    *  its first line is still to come. That one is the focus as Orca settled, followed as the settle. */
   let focusWatch: { running: OrcaFocusWatch; pane?: string | null; first: boolean } | undefined
+  /** Orca's told client: the tmux client placed at the terminal the watch told last (orcaTmux.clients); none before a
+   *  line, for any other terminal, and once the watch ends or the dial goes, as each drops the watch. Orca reports no tabs
+   *  to the tmux pane poll, so its watch tells it which client is in front, as VS Code's terminal focus does
+   *  (docs/plans/2026-11-27-orca-tmux-follow-focus-design.md §2). Worked out from the watch and the last placement at
+   *  each read, so a focus line, Orca's settle and a placement landing after the line each tell it at once. */
+  const orcaClient = (): string | undefined => focusWatch?.pane ? orcaTmux.clients.get(focusWatch.pane) : undefined
   /** Orca's CLI is asked whether it watches focus: a settle meanwhile asks nothing more, so at most one watch starts. */
   let probing = false
   /** Turns the dials to the agent in a pane Orca says has focus; `settle` for the focus as Orca settled. With no dial
@@ -2590,6 +2641,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const settle = watch.first
     watch.first = false
     watch.pane = pane
+    // A terminal with a placed client moves the dial through the tmux pane poll alone, which reads that client
+    // (orcaClient). Its next read is a change, also after the person was away from that tab for less than one read; and
+    // the watch's first line is the focus as Orca settled, whose read must not turn back a dial turned as Orca came
+    // forward (#4311): the poll's own first answer came before the line, with no client told.
+    if (orcaClient() !== undefined && paneFocus?.app === 'orca') {
+      paneFocus.last = new Map(paneFocus.last).set(tmux.id, null)
+      if (settle) paneFocus.first = true
+    }
     if (pane === null) return
     if (cableHost.settledApp() !== 'orca') {
       if (cable.isConnected) log('[device] focus · skipped · not in front')
@@ -2652,6 +2711,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // either changes (from what it found, when only the adapters did). A read asks each adapter at once, and one whose read
   // failed keeps its places' last answer: a tmux that fails, or hangs to its timeout, costs WezTerm's and kitty's follow
   // nothing but that wait, and after FOCUS_FAILS_MAX in a row not even that until the next settle.
+  //
+  // In Orca, tmux's place reads the client placed at the Orca terminal Orca's watch told last (orcaClient): Orca's tab
+  // switch and a tmux pane switch in that tab each change the pane that client shows, which the watch alone cannot see
+  // (docs/plans/2026-11-27-orca-tmux-follow-focus-design.md §2 and §3). With no client told, a read runs no tmux: Orca
+  // on a plain tab costs nothing.
   /** A pane focused in a place: the adapter whose pane it is, and the agent's pane id there (tmux's in full, `%3:100:iterm`). */
   type FocusedPane = { adapter: string; id: string }
   /** A read's answer: per place with a focus of its own (`wezterm`, each kitty's socket, `tmux`), the agent's pane focused
@@ -2669,11 +2733,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const placeFails = new Map<string, number>()
   /** The live agents in tmux whose tmux pane, their own or the one the scan placed them at (shownAt: paneOf reads
    *  their own alone), names [app]: the app holding the client that shows its session, on the tab [tty]. One in tmux
-   *  inside Orca is left to Orca's own focus, which follows its panes: a second follow there would fight it. */
+   *  inside Orca only when its client placed it at an Orca terminal (orcaTmux): Orca's focus finds no agent in that
+   *  terminal, as none has it for its own pane, and its watch tells the poll when that client is in front
+   *  (docs/plans/2026-11-27-orca-tmux-follow-focus-design.md §3). Any other there is followed by nothing: which Orca tab
+   *  shows it is not known. */
   const tmuxPanes = (source: ObservedSource, app: string): Array<{ agent: HostAgent; full: string; pane: string; tty: string | undefined }> =>
     source.list().flatMap((agent) => {
       const full = source.shownAt(agent.id, tmux.id)
-      if (full === undefined || agent.nest !== 'tmux' || agent.app === 'orca') return []
+      if (full === undefined || agent.nest !== 'tmux' || (agent.app === 'orca' && !orcaTmux.agents.has(agent.id))) return []
       const parts = tmuxPaneParts({ adapter: tmux.id, id: full })
       return parts?.app === app ? [{ agent, full, pane: parts.id, tty: source.tabTty(agent.id) }] : []
     })

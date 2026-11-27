@@ -33,20 +33,20 @@ function checkKeys(check: Check): SessionKey[] {
 }
 
 describe('the catalog', () => {
-  it('the main ids are C1-C12, X1-X12, V1-V16, U1-U14, O1-O23 and I1-I24', () => {
+  it('the main ids are C1-C12, X1-X12, V1-V16, U1-U14, O1-O26 and I1-I24', () => {
     const range = (prefix: string, n: number) => Array.from({ length: n }, (_, i) => `${prefix}${i + 1}`)
     expect(MAIN.map((s) => s.id)).toEqual([...range('C', 12), ...range('X', 12), ...range('V', 16), ...range('U', 14),
-      ...range('O', 23), ...range('I', 24)])
+      ...range('O', 26), ...range('I', 24)])
     expect(MAIN.every((s) => !s.heldOut)).toBe(true)
   })
 
-  it('the held out are CH1-CH3, XH1-XH3, VH1-VH4, UH1-UH3, OH1-OH4 and IH1-IH5: 22 of 123, VS Code 4 of 20, Cursor 3 of 17, Orca 4 of 27, iTerm2 5 of 29', () => {
+  it('the held out are CH1-CH3, XH1-XH3, VH1-VH4, UH1-UH3, OH1-OH4 and IH1-IH5: 22 of 126, VS Code 4 of 20, Cursor 3 of 17, Orca 4 of 30, iTerm2 5 of 29', () => {
     expect(HELD_OUT.map((s) => s.id)).toEqual(['CH1', 'CH2', 'CH3', 'XH1', 'XH2', 'XH3', 'VH1', 'VH2', 'VH3', 'VH4', 'UH1', 'UH2', 'UH3',
       'OH1', 'OH2', 'OH3', 'OH4', 'IH1', 'IH2', 'IH3', 'IH4', 'IH5'])
     expect(HELD_OUT.every((s) => s.heldOut)).toBe(true)
-    expect(ALL).toHaveLength(123)
+    expect(ALL).toHaveLength(126)
     const of = (app: string) => [HELD_OUT.filter((s) => s.app === app).length, ALL.filter((s) => s.app === app).length]
-    expect([of('vscode'), of('cursor'), of('orca'), of('iterm')]).toEqual([[4, 20], [3, 17], [4, 27], [5, 29]])
+    expect([of('vscode'), of('cursor'), of('orca'), of('iterm')]).toEqual([[4, 20], [3, 17], [4, 30], [5, 29]])
   })
 
   it('IH1 is D5 alone; IH3 tier A only', () => {
@@ -192,11 +192,11 @@ describe('the catalog', () => {
     expect(x10.probes).toContainEqual(expect.objectContaining({ id: 'apart', kind: 'ring', expect: ['t1'], apart: ['c1', 'z'] }))
   })
 
-  it('X3, V11, UH1 and every iTerm2 scenario are macOS only, O11 and V16 macOS and Linux', () => {
+  it('X3, V11, UH1 and every iTerm2 scenario are macOS only, O11, O24, O25, O26 and V16 macOS and Linux', () => {
     const mac = ['X3', 'V11', 'UH1']
     for (const s of ALL) {
       const platforms = mac.includes(s.id) || s.app === 'iterm' ? ['darwin']
-        : ['O11', 'V16'].includes(s.id) ? ['darwin', 'linux'] : ['darwin', 'win32', 'linux']
+        : ['O11', 'O24', 'O25', 'O26', 'V16'].includes(s.id) ? ['darwin', 'linux'] : ['darwin', 'win32', 'linux']
       expect(s.platforms, s.id).toEqual(platforms)
     }
   })
@@ -327,8 +327,8 @@ describe('the catalog', () => {
     expect(byId('C8').steps.filter((s) => s.kind === 'tap' || s.kind === 'swipe')).toEqual([])
   })
 
-  it('C3, CH1, CH2, XH1, X12, V2, O11, O16, O18-O23 and IH3 are tier A only, V12 and V16 tier B only, every other scenario (C10, C11, X7, C8, X9, CH3 and XH3 among them) runs in both', () => {
-    const onlyA = ['C3', 'CH1', 'CH2', 'XH1', 'X12', 'V2', 'O11', 'O16', 'O18', 'O19', 'O20', 'O21', 'O22', 'O23', 'IH3']
+  it('C3, CH1, CH2, XH1, X12, V2, O11, O16, O18-O26 and IH3 are tier A only, V12 and V16 tier B only, every other scenario (C10, C11, X7, C8, X9, CH3 and XH3 among them) runs in both', () => {
+    const onlyA = ['C3', 'CH1', 'CH2', 'XH1', 'X12', 'V2', 'O11', 'O16', 'O18', 'O19', 'O20', 'O21', 'O22', 'O23', 'O24', 'O25', 'O26', 'IH3']
     const onlyB = ['V12', 'V16']
     for (const s of ALL) expect(s.tiers, s.id).toEqual(onlyA.includes(s.id) ? ['a'] : onlyB.includes(s.id) ? ['b'] : ['a', 'b'])
   })
@@ -420,7 +420,8 @@ describe('the catalog', () => {
     // gap between quit and relaunch; O4's rests after the focus, the tap and the swipe, O7's after the tap and the
     // swipe, O8's two turns and the pause between them, O10's rest on b, O11's rests after the tap and the swipe, O12's
     // time quit, its time past the devices' next look after the relaunch and its rest after the focus, O16's agents a
-    // second apart, O17's rest and its time unplugged, and O20's after the tap and the swipe; iTerm2's agents a second
+    // second apart, O17's rest and its time unplugged, O20's after the tap and the swipe, O24's rests after the first two focuses and
+    // its return 200 ms after the third, O25's rest after the tab's focus, and O26's rests after each focus; iTerm2's agents a second
     // apart (started), I2's rest after the select, I3's and I15's turns (turned), I3's rests after each pick, I4's pause before and after the split
     // and its rest after the first tap, I6's rests after the pick and the swipe, I7's rest after the first tap, I9's rests on b and on a and its wait
     // after the echo, I10's rest after the move to a's pane, I10's and I11's rests after the select, I13's rests after
@@ -440,6 +441,7 @@ describe('the catalog', () => {
       'O4 2000', 'O4 1000', 'O4 3000', 'O7 4000', 'O7 2000', 'O8 2000', 'O8 2000', 'O8 6000', 'O8 2000', 'O10 1000', 'O11 4000', 'O11 1000',
       'O12 2000', 'O12 35000', 'O12 2000',
       ...starts('O16', 40), 'O17 1000', 'O17 3000', 'O20 4000', 'O20 2000',
+      'O24 2000', 'O24 2000', 'O24 200', 'O25 2000', 'O26 2000', 'O26 3000',
       ...starts('I2', 4), 'I2 2000', ...starts('I3', 4), 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000', 'I3 2000',
       'I4 1000', 'I4 1000', 'I4 4000', ...starts('I5', 2), ...starts('I6', 3), 'I6 2000', 'I6 2000', ...starts('I7', 3), 'I7 4000',
       ...starts('I8', 2), ...starts('I9', 2), 'I9 1000', 'I9 500', 'I9 3000', ...starts('I10', 2), 'I10 1000', 'I10 2000', ...starts('I11', 2), 'I11 2000',
@@ -462,13 +464,14 @@ describe('the catalog', () => {
   it('an input on the dial or the app comes at least 1 s after its listing, and any step at least 1 s after an input', () => {
     // Faster, it lands in the same instant the list arrives, inside the devices' echo window after a push, or inside a
     // swipe's rest, whose open makes the devices drop the next title as its echo: no person does either. X11's switches
-    // 300 ms apart, XH3's voice 200 ms after the follow, OH2's 200 ms after the focus, IH1's 200 ms after the select and
-    // I9's tab report 500 ms after the rest are those scenarios' point: only the input right after one of their own short
+    // 300 ms apart, XH3's voice 200 ms after the follow, OH2's 200 ms after the focus, O24's return 200 ms after the focus away (within
+    // one tmux pane poll read), IH1's 200 ms after the select and I9's tab report 500 ms after the rest are those
+    // scenarios' point: only the input right after one of their own short
     // waits is let through. The person's tab selection and pane moves in iTerm2 are inputs
     // (docs/plans/2026-11-22-dial-eval-iterm2-plan.md, Decision 11).
     const inputs = new Set<Step['kind']>(['tap', 'swipe', 'voice', 'attach', 'thread', 'stroke', 'pick', 'editor.focus',
       'orca.focus', 'iterm.select', 'tmux.selectPane', 'herdr.focus'])
-    const quick = new Set(['X11', 'XH3', 'OH2', 'I9', 'IH1'])
+    const quick = new Set(['X11', 'XH3', 'OH2', 'O24', 'I9', 'IH1'])
     for (const s of ALL) {
       // Since the last listing, or the last input once there is one. A condition wait may end at once: it counts 0.
       let since: number | null = null

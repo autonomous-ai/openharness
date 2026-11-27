@@ -1,10 +1,12 @@
 /**
  * Tier A's tmux (docs/plans/2026-11-22-dial-eval-iterm2-plan.md, Decisions 5 and 6), the one model Orca's and iTerm2's
- * sessions run on. One server a world, launchd's child on no tty, at a made-up path. A tmux session a client tab
- * (`eval-<window>-<tab>`) or an Orca pane (`eval-<key>`), each one window with a pane a session in `split` order: the
- * pane's shell is the server's child on a tty of its own, the agent runs under it, and its id is the session's index in
- * the scenario (`%2`), the TMUX_PANE its hook sends. A client is a tmux process under its tab's (or Orca pane's) shell on
- * that tty, with the time it was used last. tmux ends a session with its last pane, its clients with it, and the server
+ * sessions run on. One server a world, launchd's child on no tty, at a made-up path. A tmux session an iTerm2 client tab
+ * (`eval-<window>-<tab>`) or an Orca worktree's tab (`eval-orca-<worktree>-<tab>`, as one tmux client runs in one Orca
+ * terminal: docs/plans/2026-11-27-orca-tmux-follow-focus-design.md, "Tier A's model change"), each one window with a
+ * pane a session in `split` order, the first started its active one: the pane's shell is the server's child on a tty of
+ * its own, the agent runs under it, and its id is the session's index in the scenario (`%2`), the TMUX_PANE its hook
+ * sends. A client is a tmux process under its tab's (or Orca terminal's) shell on that tty, with the time it was used
+ * last. tmux ends a session with its last pane, its clients with it, and the server
  * with its last session.
  *
  * The world answers the devices' tmux runs (cable/hosts/tmux.ts) from this model, each `#{…}` of their formats filled
@@ -62,12 +64,12 @@ function attach(world: TierAWorld, model: Model, session: Session, shell: number
 
 /**
  * The session's tmux pane, made now: its shell on a terminal of its own, which the agent runs under (the pid given).
- * Its tmux session's first pane starts that session with a client, under [client] when given (an Orca pane's shell),
+ * Its tmux session's first pane starts that session with a client, under [client] when given (its Orca terminal's shell),
  * else under the session's iTerm2 tab's.
  */
 export function tmuxPane(world: TierAWorld, s: SessionDef, client?: number): number {
   const model = modelOf(world)
-  const name = s.app === 'iterm' ? `eval-${s.window!}-${s.tab!}` : `eval-${s.key}`
+  const name = s.app === 'iterm' ? `eval-${s.window!}-${s.tab!}` : `eval-orca-${s.worktree ?? 'w1'}-${s.tab ?? 0}`
   const tty = nextTty(world)
   const pane: Pane = { id: tmuxPaneId(world, s), key: s.key, shell: startProcess(world, model.server, SHELLS[world.platform], tty),
     ...(tty === undefined ? {} : { tty }) }
@@ -96,6 +98,13 @@ function needPane(world: TierAWorld, key: SessionKey): { session: Session; pane:
   const found = paneOf(world, (pane) => pane.key === key)
   if (!found) throw new Error(`scenario ${world.scenario.id}: ${key} runs in no tmux pane`)
   return found
+}
+
+/** The session at the selected pane of the tmux session [key]'s pane is in: what that session's clients show. None when
+ *  [key] runs in no tmux pane. */
+export function tmuxShown(world: TierAWorld, key: SessionKey): SessionKey | undefined {
+  const session = paneOf(world, (pane) => pane.key === key)?.session
+  return session?.panes.find((pane) => pane.id === session.active)?.key
 }
 
 /** The session's pane closes with its shell: its tmux session ends with its last pane, and the server with its last. */

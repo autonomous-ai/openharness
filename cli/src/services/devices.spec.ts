@@ -29,6 +29,7 @@ import type { RexPane, RexReads } from '../cable/hosts/rex.js'
 import { FRESH_WITHIN_MS } from '../cable/hosts/outer.js'
 import { AppRings } from '../cable/hosts/select.js'
 import type { TabTty } from '../cable/hosts/tabs.js'
+import { OUTER_EVERY_MS } from '../cable/hosts/tmux.js'
 import type { TabProcess } from '../cable/hosts/tabsType.js'
 import { settleMs } from '../cable/hosts/twoStep.js'
 import { env } from '../config/env.js'
@@ -354,6 +355,60 @@ const tmuxInItermRun = async (file: string, args: string[], timeoutMs: number) =
   orcaRuns.push([file, args, timeoutMs])
   const stdout = args[0] === 'display-message' ? '4000|work|\n' : args[0] === 'list-clients' ? '1794700050|4300|/dev/ttys002\n' : ''
   return { code: 0, stdout }
+}
+const { listClients } = RECORDED_WEZTERM
+const { focusedMatch } = RECORDED_KITTY
+/** What the poll's read of tmux prints and its exit code; while `held`, each such read waits until the spec lands it,
+ *  then answers as a run that reached its timeout, or, held as `listing`, as tmuxSays has it then. While `slowSelect`,
+ *  a rest's or a tap's select-window waits until the spec lands it too. With `second`, pane %4's session is shown by a
+ *  client of its own (4310) on that tty. The pane WezTerm's GUI focused: none, no GUI
+ *  (RECORDED_WEZTERM.listClients.noGui). The window kitty focused. */
+const tmuxSays = { clients: '/dev/ttys002|%3\n', code: 0, held: false as boolean | 'listing', land: [] as Array<() => void>,
+  second: undefined as string | undefined, slowSelect: false }
+const weztermSays = { pane: 0 as number | undefined }
+const kittySays = { window: 0 }
+beforeEach(() => {
+  Object.assign(tmuxSays, { clients: '/dev/ttys002|%3\n', code: 0, held: false, land: [], second: undefined, slowSelect: false })
+  weztermSays.pane = 0
+  kittySays.window = 0
+})
+/** On macOS, TMUX_IN_ITERM and a second agent (4243) in pane %4's shell (4001), under the same server. */
+const IN_ITERM: ProcessRow[] = [...TMUX_IN_ITERM,
+  { pid: 4243, ppid: 4001, tty: 'ttys031', executable: 'claude' }, { pid: 4001, ppid: 3900, tty: 'ttys031', executable: 'zsh' }]
+/** The same, the client's shell (4299) in an Orca terminal. */
+const IN_ORCA: ProcessRow[] = [...IN_ITERM.map((p) => (p.pid === 4299 ? { ...p, ppid: 4295 } : p)),
+  { pid: 4295, ppid: 1, executable: '/Applications/Orca.app/Contents/MacOS/Orca' }]
+/** The devices' runs, recorded: tmux's facts of panes %3 and %4 (their shells 4000 and 4001, in session `work`, on
+ *  ttys030 and ttys031), their session's one client (4300) on [clientTty], and its clients' listing as tmuxSays has it,
+ *  whose pane on [clientTty] a rest's or a tap's select makes the one selected; WezTerm's clients as recorded, focused
+ *  on weztermSays.pane; kitty's `get-colors` as recorded, its window kittySays.window focused. */
+const runOn = (clientTty: string) => async (file: string, args: string[], timeoutMs: number) => {
+  orcaRuns.push([file, args, timeoutMs])
+  if (file === 'tmux' && args[0] === 'display-message') return { code: 0, stdout: args.includes('%4') ? '4001|work|\n' : '4000|work|\n' }
+  if (file === 'tmux' && args[0] === 'list-panes') return { code: 0, stdout: '%3|/dev/ttys030|4000|work|\n%4|/dev/ttys031|4001|work|\n' }
+  if (file === 'tmux' && args[0] === 'select-window') {
+    if (tmuxSays.slowSelect) await new Promise<void>((resolve) => { tmuxSays.land.push(resolve) })
+    tmuxSays.clients = `${clientTty}|${args.at(-1)}\n`
+    return { code: 0, stdout: '' }
+  }
+  if (file === 'tmux' && args[1] === '-t') {
+    return { code: 0, stdout: tmuxSays.second !== undefined && args.includes('%4') ? `1794700050|4310|${tmuxSays.second}\n` : `1794700050|4300|${clientTty}\n` }
+  }
+  if (file === 'tmux' && args[0] === 'list-clients') {
+    if (!tmuxSays.held) return { code: tmuxSays.code, stdout: tmuxSays.clients }
+    const listing = tmuxSays.held === 'listing'
+    await new Promise<void>((resolve) => { tmuxSays.land.push(resolve) })
+    return listing ? { code: tmuxSays.code, stdout: tmuxSays.clients } : { code: null, stdout: '' }
+  }
+  if (args[3] === 'get-colors') {
+    return args[5] === `id:${kittySays.window} and state:focused`
+      ? { code: focusedMatch.focused.code, stdout: `${focusedMatch.focused.stdoutFirstLine}\n`, stderr: '' }
+      : { code: focusedMatch.notFocused.code, stdout: '', stderr: `Error: No matching windows for expression: ${args[5]}\n` }
+  }
+  if (!args.includes('list-clients')) return { code: 0, stdout: '' }
+  if (weztermSays.pane === undefined) return { code: listClients.noGui.exitCode, stdout: '', stderr: listClients.noGui.stderr }
+  const clients = (JSON.parse(listClients.gui.stdout) as object[]).map((client) => ({ ...client, focused_pane_id: weztermSays.pane }))
+  return { code: listClients.gui.exitCode, stdout: JSON.stringify(clients), stderr: '' }
 }
 /** Lets the read of a hook's caller's terminal's maker land, on real timers. */
 const landed = () => new Promise((done) => setImmediate(done))
@@ -17307,8 +17362,6 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
 
 describe('the dial follows the pane focused in WezTerm and kitty (docs/plans/2026-11-23-dial-wezterm-kitty-focus-follow-design.md)', () => {
   type Run = [string, string[], number]
-  const { listClients } = RECORDED_WEZTERM
-  const { focusedMatch } = RECORDED_KITTY
   /** The callers of the hooks below (4240 + n), each on a terminal of its own made by the n-th of [makers], the last for
    *  the rest: whose pane is the agent's own (scannedApp.ts ptyMaker). */
   const callers = (...makers: string[]): ProcessRow[] => Array.from({ length: 16 }, (_, at) => [
@@ -17895,36 +17948,14 @@ describe('the dial follows the pane focused in WezTerm and kitty (docs/plans/202
 
 describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-11-24-dial-tmux-pane-focus-follow-design.md)', () => {
   type Run = [string, string[], number]
-  const { listClients } = RECORDED_WEZTERM
-  const { focusedMatch } = RECORDED_KITTY
   /** The poll's read of tmux: each client's tty and the pane its session shows, with the focus read's timeout. */
   const READ: Run = ['tmux', ['list-clients', '-F', '#{client_tty}|#{pane_id}'], 2_000]
   /** WezTerm's one read, with the binary the verbs use (the spec's `onPath`). */
   const LIST_CLIENTS: Run = ['/opt/orca/bin/orca', ['cli', '--no-auto-start', 'list-clients', '--format', 'json'], 2_000]
   /** The iTerm2 tab holding the client of the agents' session. */
   const TMUX_TAB = '/dev/ttys002'
-  /** What the poll's read of tmux prints and its exit code; while `held`, each such read waits until the spec lands it,
-   *  then answers as a run that reached its timeout, or, held as `listing`, as tmuxSays has it then. While `slowSelect`,
-   *  a rest's or a tap's select-window waits until the spec lands it too. With `second`, pane %4's session is shown by a
-   *  client of its own (4310) on that tty. The pane WezTerm's GUI focused: none, no GUI
-   *  (RECORDED_WEZTERM.listClients.noGui). The window kitty focused. */
-  const tmuxSays = { clients: '/dev/ttys002|%3\n', code: 0, held: false as boolean | 'listing', land: [] as Array<() => void>,
-    second: undefined as string | undefined, slowSelect: false }
-  const weztermSays = { pane: 0 as number | undefined }
-  const kittySays = { window: 0 }
-  beforeEach(() => {
-    Object.assign(tmuxSays, { clients: '/dev/ttys002|%3\n', code: 0, held: false, land: [], second: undefined, slowSelect: false })
-    weztermSays.pane = 0
-    kittySays.window = 0
-  })
-  /** On macOS, TMUX_IN_ITERM and a second agent (4243) in pane %4's shell (4001), under the same server. */
-  const IN_ITERM: ProcessRow[] = [...TMUX_IN_ITERM,
-    { pid: 4243, ppid: 4001, tty: 'ttys031', executable: 'claude' }, { pid: 4001, ppid: 3900, tty: 'ttys031', executable: 'zsh' }]
-  /** The same, the client (4300) in a terminal of no listed app. */
+  /** IN_ITERM, the client (4300) in a terminal of no listed app. */
   const IN_NO_APP: ProcessRow[] = IN_ITERM.map((p) => (p.pid === 4300 ? { ...p, ppid: 1 } : p))
-  /** The same, the client's shell (4299) in an Orca terminal. */
-  const IN_ORCA: ProcessRow[] = [...IN_ITERM.map((p) => (p.pid === 4299 ? { ...p, ppid: 4295 } : p)),
-    { pid: 4295, ppid: 1, executable: '/Applications/Orca.app/Contents/MacOS/Orca' }]
   /** On Linux: sess-1's caller (4242) in WezTerm's pane 1, on a terminal WezTerm's GUI (3800) made, and sess-2's (4243)
    *  in pane %4's shell (4001) of the person's tmux, whose server made its terminal and whose client (4300) is in another
    *  WezTerm pane. */
@@ -17948,38 +17979,6 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
     { pid: 4300, ppid: 4299, executable: 'tmux' }, { pid: 4299, ppid: 3800, executable: 'zsh' },
     { pid: 4310, ppid: 4309, executable: 'tmux' }, { pid: 4309, ppid: 3800, executable: 'zsh' },
   ]
-  /** The devices' runs, recorded: tmux's facts of panes %3 and %4 (their shells 4000 and 4001, in session `work`, on
-   *  ttys030 and ttys031), their session's one client (4300) on [clientTty], and its clients' listing as tmuxSays has it,
-   *  whose pane on [clientTty] a rest's or a tap's select makes the one selected; WezTerm's clients as recorded, focused
-   *  on weztermSays.pane; kitty's `get-colors` as recorded, its window kittySays.window focused. */
-  const runOn = (clientTty: string) => async (file: string, args: string[], timeoutMs: number) => {
-    orcaRuns.push([file, args, timeoutMs])
-    if (file === 'tmux' && args[0] === 'display-message') return { code: 0, stdout: args.includes('%4') ? '4001|work|\n' : '4000|work|\n' }
-    if (file === 'tmux' && args[0] === 'list-panes') return { code: 0, stdout: '%3|/dev/ttys030|4000|work|\n%4|/dev/ttys031|4001|work|\n' }
-    if (file === 'tmux' && args[0] === 'select-window') {
-      if (tmuxSays.slowSelect) await new Promise<void>((resolve) => { tmuxSays.land.push(resolve) })
-      tmuxSays.clients = `${clientTty}|${args.at(-1)}\n`
-      return { code: 0, stdout: '' }
-    }
-    if (file === 'tmux' && args[1] === '-t') {
-      return { code: 0, stdout: tmuxSays.second !== undefined && args.includes('%4') ? `1794700050|4310|${tmuxSays.second}\n` : `1794700050|4300|${clientTty}\n` }
-    }
-    if (file === 'tmux' && args[0] === 'list-clients') {
-      if (!tmuxSays.held) return { code: tmuxSays.code, stdout: tmuxSays.clients }
-      const listing = tmuxSays.held === 'listing'
-      await new Promise<void>((resolve) => { tmuxSays.land.push(resolve) })
-      return listing ? { code: tmuxSays.code, stdout: tmuxSays.clients } : { code: null, stdout: '' }
-    }
-    if (args[3] === 'get-colors') {
-      return args[5] === `id:${kittySays.window} and state:focused`
-        ? { code: focusedMatch.focused.code, stdout: `${focusedMatch.focused.stdoutFirstLine}\n`, stderr: '' }
-        : { code: focusedMatch.notFocused.code, stdout: '', stderr: `Error: No matching windows for expression: ${args[5]}\n` }
-    }
-    if (!args.includes('list-clients')) return { code: 0, stdout: '' }
-    if (weztermSays.pane === undefined) return { code: listClients.noGui.exitCode, stdout: '', stderr: listClients.noGui.stderr }
-    const clients = (JSON.parse(listClients.gui.stdout) as object[]).map((client) => ({ ...client, focused_pane_id: weztermSays.pane }))
-    return { code: listClients.gui.exitCode, stdout: JSON.stringify(clients), stderr: '' }
-  }
   /** Claude Code in session n, its caller 4241 + n, as its hook says with [hints]. */
   const hook = (n: number, hints: Record<string, string>, over: Partial<ObservedHookEvent> = {}): ObservedHookEvent => ({
     engine: 'claude', sessionId: `sess-${n}`, event: 'session-start', cwd: '/work/api', callerPid: 4241 + n,
@@ -18076,7 +18075,8 @@ describe('the dial follows the pane focused in tmux and herdr (docs/plans/2026-1
       ['no dial attached', { attached: false }, 'iterm'],
       ['another app settled', {}, 'ghostty'],
       ['a pane whose client is in no listed app', { rows: IN_NO_APP }, 'iterm'],
-      // Its pages are Orca's and tmux's, skipped as Orca's own focus follows its panes.
+      // Its pages are Orca's and tmux's: no Orca order read placed its client at an Orca terminal, so the poll takes none
+      // of it (docs/plans/2026-11-27-orca-tmux-follow-focus-design.md §3).
       ['an agent in tmux inside an Orca terminal with Orca settled', { rows: IN_ORCA }, 'orca'],
       ['the observed agents off', { observed: false }, 'iterm'],
     ])('nothing runs with %s', async (_, over, app) => {
@@ -19347,6 +19347,516 @@ describe('Rex\'s ring goes as Rex\'s sidebar, and the dial follows the block foc
       await next()
       expect(asked()).toEqual([[agent(1), 'pane']])
       expect(logs).toContain('[device] pane · skipped · echo')
+    })
+  })
+})
+
+describe('tmux inside an Orca tab (docs/plans/2026-11-27-orca-tmux-follow-focus-design.md)', () => {
+  const H = (n: number) => `term_00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
+  /** Claude Code in session n, its caller 4241 + n, in an Orca terminal, as its hook says with [hints]. */
+  const hook = (n: number, hints: Record<string, string>, over: Partial<ObservedHookEvent> = {}): ObservedHookEvent => ({
+    engine: 'claude', sessionId: `sess-${n}`, event: 'session-start', cwd: '/work/api', callerPid: 4241 + n,
+    transcriptPath: `/t/sess-${n}.jsonl`,
+    hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1', __CFBundleIdentifier: 'com.stablyai.orca', ...hints }, ...over,
+  })
+  /** In pane %(n + 2) of the person's tmux, whose client runs in Orca terminal 2: the handle it inherited. */
+  const inTmux = (n: number, over: Partial<ObservedHookEvent> = {}) =>
+    hook(n, { TMUX_PANE: `%${n + 2}`, TERM_PROGRAM: 'tmux', ORCA_TERMINAL_HANDLE: H(2) }, over)
+  const c = observedAgentId('claude', 'sess-1')
+  const a = observedAgentId('claude', 'sess-3')
+  /** The tty of the client of pane %4's session of its own, as tmuxSays.second names it. */
+  const SECOND = '/dev/ttys003'
+  /** IN_ORCA, and a's caller (4244) on a terminal Orca's terminal host (4280) made; with `second`, the client of pane %4's
+   *  session (4310) under a shell (4309) of Orca's too. */
+  const rows = (second: boolean): ProcessRow[] => [...IN_ORCA,
+    { pid: 4244, ppid: 4280, tty: 'ttys010', executable: 'claude' }, { pid: 4280, ppid: 1, executable: 'Orca Agents' },
+    ...second ? [{ pid: 4310, ppid: 4309, executable: 'tmux' }, { pid: 4309, ppid: 4295, executable: '-zsh' }] : []]
+  const host = () => seen.dial as unknown as DaemonCableHost
+  /** Lets what a landing sets off run. */
+  const settled = () => new Promise((resolve) => setImmediate(resolve))
+  const clientLines = () => logs.filter((line) => line.startsWith('[device] tmux client ·'))
+  let clock = 0
+  /** The scene, on macOS: agents c (sess-1) and d (sess-2) in panes %3 and %4 of the person's tmux session `work`, its one
+   *  client on /dev/ttys002 under a shell in Orca terminal 2, Orca's process above it (IN_ORCA), and a plain agent a
+   *  (sess-3) in its own Orca terminal 1; tmux answering as runOn does; each tmux agent's client lookup landed, unless
+   *  `held`, when its `list-clients -t` waits until the spec runs `lookups`; Orca's reads the spec lands (`land`), its CLI
+   *  watching focus when `watches`; no window; a dial attached; the devices' monotonic clock at 0. With `second`, pane
+   *  %4's session has a client of its own on SECOND; [d] changes d's hook. `settle` keeps an app in front for the settle.
+   *  The timers are held; `setImmediate` is left to let a landing run. */
+  const orcaTmux = async (over: { second?: boolean; d?: Partial<ObservedHookEvent>; held?: boolean; watches?: boolean } = {}) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    clock = 0
+    readers.processes.mockResolvedValue(rows(over.second === true))
+    readers.bundleId.mockImplementation(async (bundle) => (bundle === '/Applications/Orca.app' ? 'com.stablyai.orca' : undefined))
+    if (over.second) tmuxSays.second = SECOND
+    const lookups: Array<() => void> = []
+    const tmux = runOn('/dev/ttys002')
+    const run = async (file: string, args: string[], timeoutMs: number) => {
+      if (over.held && file === 'tmux' && args[1] === '-t') await new Promise<void>((resolve) => { lookups.push(resolve) })
+      return tmux(file, args, timeoutMs)
+    }
+    const listener = fakeListener()
+    const fake = fakeOrcaReads({ watches: over.watches })
+    const started = start({ faults: ['fleet'], listen: listener.listen, now: () => clock, tty: async () => undefined, orcaReads: fake.reads,
+      orca: { ...orca, platform: 'darwin', run } })
+    const d = inTmux(2, over.d)
+    for (const event of [inTmux(1), d, hook(3, { ORCA_TERMINAL_HANDLE: H(1) })]) started.port.observed(event)
+    if (over.held) await vi.waitFor(() => expect(lookups).toHaveLength(2))
+    else await vi.waitFor(() => expect(clientLines()).toHaveLength(2))
+    // The reads of their terminals' maker land.
+    await settled()
+    seen.host.watching!(true)
+    started.port.swarms(null)
+    /** The latest order read lands with these tabs and these terminals an agent runs in: a handle alone is one in a tab
+     *  with no title. */
+    const land = async (tabs: Array<string | { handle: string; title?: string; renamed?: true }>, terminals: OrcaTerminal[]) => {
+      await settled()
+      const read = fake.orders.at(-1)
+      expect(read, 'a read asked').toBeTypeOf('function')
+      read!({ tabs: tabs.map((tab) => typeof tab === 'string' ? { handle: tab } : tab), terminals, worktrees: new Map() })
+      await settled()
+    }
+    const settle = async (app: string) => {
+      expect(listener.front(app)).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+      await settled()
+    }
+    return { ...started, listener, fake, land, settle, lookups, d: observedAgentId(d.engine, d.sessionId) }
+  }
+  /** Orca's terminal `n`, Claude Code in it, in that folder. */
+  const claudeIn = (n: number, worktreePath = '/work/api', agentIdentity = 'claude'): OrcaTerminal => ({ handle: H(n), worktreePath, agentIdentity })
+  const ring = async () => (await host().listAgentSnapshot({ apps: true })).agents.map((agent) => agent.id)
+  /** The names Orca's ring lists. */
+  const names = async () => (await host().listAgentSnapshot({ apps: true })).agents.map((agent) => agent.name)
+  /** Orca's ring for the worktree on screen, its terminals [handles]: the plugin's dial stream open and Orca settled. */
+  const onScreen = async ({ listener, settle }: Awaited<ReturnType<typeof orcaTmux>>, handles: string[]) => {
+    listener.dial()
+    await settle('orca')
+    expect(listener.orcaFront(handles)).toBeUndefined()
+    return ring()
+  }
+  const switchTo = (n: number): [string, string[], number] => ['/opt/orca/bin/orca', ['terminal', 'switch', '--terminal', H(n), '--json'], 10_000]
+
+  describe('placement by the tmux client', () => {
+    it('two agents under one tmux client in the one free terminal of their folder and engine are both placed there: they share its rank and its scope', async () => {
+      const scene = await orcaTmux()
+      await scene.land([H(2), H(1)], [claudeIn(1), claudeIn(2)])
+      expect(await ring()).toEqual([c, scene.d, a])
+      expect(await onScreen(scene, [H(2)])).toEqual([c, scene.d])
+    })
+
+    it.each([['renamed', { renamed: true as const }], ['as Orca titled it', {}]])('a terminal two placed agents share names neither by its tab, %s; one placed alone takes its tab\'s name', async (_, renamed) => {
+      const { port, land, d } = await orcaTmux()
+      const tabs = [{ handle: H(2), title: 'Tmux', ...renamed }, { handle: H(1), title: 'One' }]
+      await land(tabs, [claudeIn(1), claudeIn(2)])
+      expect(await ring()).toEqual([c, d, a])
+      expect(await names()).toEqual(['api', 'api', 'One'])
+      // d's session and process end: its row goes at the look within 2 s, which asks one more read.
+      readers.ended.add(4243)
+      port.observed(inTmux(2, { event: 'session-end' }))
+      await vi.advanceTimersByTimeAsync(2_000)
+      await land(tabs, [claudeIn(1), claudeIn(2)])
+      expect(await ring()).toEqual([c, a])
+      expect(await names()).toEqual(['Tmux', 'One'])
+    })
+
+    it('a Codex under that client in that folder is placed there too, whatever engine Orca names', async () => {
+      const scene = await orcaTmux({ d: { engine: 'codex' } })
+      await scene.land([H(2), H(1)], [claudeIn(1), claudeIn(2)])
+      expect(await ring()).toEqual([c, scene.d, a])
+      expect(await onScreen(scene, [H(2)])).toEqual([c, scene.d])
+    })
+
+    it('an agent of that client in another folder is not placed', async () => {
+      const scene = await orcaTmux({ d: { cwd: '/work/web' } })
+      await scene.land([H(2), H(1)], [claudeIn(1), claudeIn(2)])
+      expect(await ring()).toEqual([c, a, scene.d])
+      expect(await onScreen(scene, [H(2)])).toEqual([c])
+    })
+
+    it('candidates on two clients place neither', async () => {
+      const scene = await orcaTmux({ second: true })
+      await scene.land([H(2), H(1)], [claudeIn(1), claudeIn(2)])
+      expect(await ring()).toEqual([a, c, scene.d])
+      expect(await onScreen(scene, [H(2)])).toEqual([])
+    })
+
+    it('a Claude Code with no pane and no client in that folder blocks it: nobody is placed', async () => {
+      // Running in another Orca tab before the dial came, as its parent processes say, idle since: no hook, so no pane and
+      // no client.
+      readers.known.set('sess-4', 'terminal')
+      readers.owners.set('sess-4', { engine: 'claude', pid: 4245 })
+      readers.rows.set('sess-4', { cwd: '/work/api', transcriptPath: null })
+      readers.working.set('sess-4', false)
+      readers.apps.mockResolvedValueOnce(new Map([[4245, 'orca']]))
+      const scene = await orcaTmux()
+      const found = observedAgentId('claude', 'sess-4')
+      const terminals = [claudeIn(1), claudeIn(2), claudeIn(4)]
+      // The scan's agent came during the attach's read: one more read after it.
+      await scene.land([H(2), H(1), H(4)], terminals)
+      await scene.land([H(2), H(1), H(4)], terminals)
+      expect(scene.fake.orders).toHaveLength(2)
+      expect(await ring()).toEqual([a, c, scene.d, found])
+      expect(await onScreen(scene, [H(2)])).toEqual([])
+    })
+
+    it('a client two free terminals would take places nobody', async () => {
+      const scene = await orcaTmux({ d: { cwd: '/work/web' } })
+      await scene.land([H(2), H(1), H(4)], [claudeIn(1), claudeIn(2), claudeIn(4, '/work/web')])
+      expect(await ring()).toEqual([a, c, scene.d])
+      expect(await onScreen(scene, [H(2), H(4)])).toEqual([])
+    })
+
+    it('two free terminals of that folder and engine place nobody', async () => {
+      const scene = await orcaTmux()
+      await scene.land([H(2), H(1), H(4)], [claudeIn(1), claudeIn(2), claudeIn(4)])
+      expect(await ring()).toEqual([a, c, scene.d])
+      expect(await onScreen(scene, [H(2), H(4)])).toEqual([])
+    })
+
+    it('a tab whose selected pane runs a shell is listed with no engine: its client is placed nowhere until a read names one', async () => {
+      const { land, d } = await orcaTmux()
+      await land([H(2), H(1)], [claudeIn(1)])
+      expect(await ring()).toEqual([a, c, d])
+      // The read the dial's next attach asks for, with Claude Code at the pane tmux shows there again.
+      seen.host.watching!(false)
+      seen.host.watching!(true)
+      await land([H(2), H(1)], [claudeIn(1), claudeIn(2)])
+      expect(await ring()).toEqual([c, d, a])
+    })
+
+    it('a client that lands after the order read asks one more read, which places by it', async () => {
+      const { land, fake, lookups, d } = await orcaTmux({ held: true })
+      await land([H(2), H(1)], [claudeIn(1), claudeIn(2)])
+      expect(await ring()).toEqual([a, c, d])
+      for (const lookup of lookups.splice(0)) lookup()
+      await vi.waitFor(() => expect(clientLines()).toHaveLength(2))
+      await settled()
+      expect(fake.orders).toHaveLength(2)
+      await land([H(2), H(1)], [claudeIn(1), claudeIn(2)])
+      expect(await ring()).toEqual([c, d, a])
+    })
+
+    it('a tap on d switches Orca to that terminal before tmux shows its pane, and its words are typed into no Orca terminal and no tmux', async () => {
+      const { port, land, d } = await orcaTmux()
+      await land([H(2), H(1)], [claudeIn(1), claudeIn(2)])
+      orcaRuns.length = 0
+      expect(await host().openAgent(d)).toBeUndefined()
+      // Its pane checked, then selected on its own session, then Orca brought forward by its bundle.
+      expect(orcaRuns).toEqual([switchTo(2), ['tmux', expect.arrayContaining(['display-message', '%4']), 10_000],
+        ['tmux', ['select-window', '-t', '%4', ';', 'select-pane', '-t', '%4'], 10_000], ['/usr/bin/open', ['-b', 'com.stablyai.orca'], 10_000]])
+      // The words go by its mod's held poll: nothing runs.
+      const poll = port.inboxPoll({ pollId: 'p1', sessionId: 'sess-2' })
+      orcaRuns.length = 0
+      expect(await host().sendTurn(d, 'run the tests')).toEqual({ ok: true })
+      expect(await poll).toEqual({ text: 'run the tests' })
+      await settled()
+      expect(orcaRuns).toEqual([])
+    })
+
+    it('its lines hold no tty, handle or agent', async () => {
+      const { port, land, d } = await orcaTmux()
+      const tabs = [{ handle: H(2), title: 'Tmux' }, { handle: H(1), title: 'One' }]
+      await land(tabs, [claudeIn(1), claudeIn(2)])
+      await host().openAgent(d)
+      port.observed(inTmux(2, { event: 'session-end' }))
+      await land(tabs, [claudeIn(1), claudeIn(2)])
+      const secrets = [H(1), H(2), c, d, a, 'sess-', 'ttys', '%3', '%4']
+      expect(logs.filter((line) => secrets.some((secret) => line.includes(secret)))).toEqual([])
+    })
+  })
+
+  // Orca's focus watch tells the terminal in front; the tmux pane poll reads the client placed there (the spec's §2 and
+  // §3).
+  describe('following', () => {
+    /** The poll's read of tmux: each client's tty and the pane its session shows, with the focus read's timeout. */
+    const READ: [string, string[], number] = ['tmux', ['list-clients', '-F', '#{client_tty}|#{pane_id}'], 2_000]
+    /** The poll's reads of tmux: not a client lookup's `list-clients -t`. */
+    const reads = () => orcaRuns.filter(([file, args]) => file === 'tmux' && args[0] === 'list-clients' && !args.includes('-t'))
+    const asked = () => calls('followLocal')
+    const paneAsked = () => asked().filter(([, cause]) => cause === 'pane')
+    const paneLines = () => logs.filter((line) => line.startsWith('[device] pane'))
+    const ECHO = '[device] pane · skipped · echo'
+    const NOT_IN_FRONT = '[device] pane · skipped · not in front'
+    /** The client on /dev/ttys002 shows pane %n. */
+    const onPane = (n: number) => { tmuxSays.clients = `/dev/ttys002|%${n}\n` }
+    /** Lands the tmux reads held, and what their answers set off. */
+    const landReads = async () => {
+      for (const landing of tmuxSays.land.splice(0)) landing()
+      await settled()
+    }
+    type Following = Awaited<ReturnType<typeof following>>
+    /** The scene with Orca's CLI watching focus, its order read landed (c and d placed at terminal 2 by their client,
+     *  unless [over] says otherwise), and Orca settled: the watch runs and told no line yet, and the poll's first read
+     *  ran. `line` is a line of the latest watch; `next` lets FOCUS_POLL_MS pass, [times] over, each read landing. */
+    const following = async (over: Parameters<typeof orcaTmux>[0] = {}) => {
+      const scene = await orcaTmux({ ...over, watches: true })
+      await scene.land([H(2), H(1)], [claudeIn(1), claudeIn(2)])
+      await scene.settle('orca')
+      const line = (handle: string | null) => {
+        const watch = scene.fake.watches.at(-1)
+        expect(watch, 'a watch runs').toBeDefined()
+        watch!.line(handle)
+      }
+      const next = async (times = 1) => {
+        for (let i = 0; i < times; i++) {
+          await vi.advanceTimersByTimeAsync(FOCUS_POLL_MS)
+          await settled()
+        }
+      }
+      return { ...scene, line, next }
+    }
+
+    it('Orca\'s watch on the tmux tab: one read, and the dial turns to the agent at the pane tmux shows there', async () => {
+      const { line, next } = await following()
+      expect(reads()).toEqual([])
+      line(H(2))
+      await next()
+      expect(reads()).toEqual([READ])
+      expect(asked()).toEqual([[c, 'pane']])
+    })
+
+    it.each<[string, Parameters<typeof orcaTmux>[0], (scene: Following) => unknown]>([
+      ['no focus line yet', {}, () => {}],
+      ['the watch on a\'s own terminal', {}, ({ line }) => line(H(1))],
+      ['the watch on a terminal whose client is not placed, its candidates on two clients', { second: true }, ({ line }) => line(H(2))],
+      ['Orca not settled', {}, async ({ settle, line }) => { await settle('ghostty'); line(H(2)) }],
+      ['no dial', {}, ({ line }) => { seen.host.watching!(false); line(H(2)) }],
+    ])('no tmux read with %s', async (_, over, act) => {
+      const scene = await following(over)
+      await act(scene)
+      await scene.next(3)
+      expect(reads()).toEqual([])
+    })
+
+    it('a\'s tab, then the tmux tab again before the next read: the dial turns to that agent again', async () => {
+      const { line, next } = await following()
+      line(H(2))
+      await next()
+      line(H(1))
+      line(H(2))
+      await next()
+      expect(asked()).toEqual([[c, 'pane'], [a, 'focus'], [c, 'pane']])
+    })
+
+    it('a tmux pane switch in that tab turns the dial to that pane\'s agent', async () => {
+      const { line, next, d } = await following()
+      line(H(2))
+      await next()
+      onPane(4)
+      await next()
+      expect(paneAsked()).toEqual([[c, 'pane'], [d, 'pane']])
+    })
+
+    // tmux's client in that tab switched to another session, or its session to another pane.
+    it.each<[string, Parameters<typeof orcaTmux>[0], number, boolean]>([
+      ['d\'s, placed there, turns the dial to d', {}, 4, true],
+      ['one whose agent is in another folder, so not placed, moves nothing', { d: { cwd: '/work/web' } }, 4, false],
+      ['one with no agent moves nothing', {}, 5, false],
+    ])('the client shows another pane: %s', async (_, over, shown, moves) => {
+      const { line, next, d } = await following(over)
+      line(H(2))
+      await next()
+      onPane(shown)
+      await next()
+      expect(paneAsked()).toEqual([[c, 'pane'], ...moves ? [[d, 'pane']] : []])
+    })
+
+    it('a listing that names the pane on another tty moves nothing', async () => {
+      const { line, next } = await following()
+      line(H(2))
+      await next()
+      // Orca's told client shows a pane no agent runs in; d's pane is shown by another client.
+      tmuxSays.clients = '/dev/ttys002|%5\n/dev/ttys003|%4\n'
+      await next()
+      expect(paneAsked()).toEqual([[c, 'pane']])
+      expect(paneLines()).toEqual([])
+    })
+
+    it.each(['rest', 'tap'] as const)('the dial\'s own %s on a placed agent: the read that sees its pane is its echo within TAB_ECHO_MS, and the person moving there later turns the dial', async (move) => {
+      const { line, next, d } = await following()
+      line(H(2))
+      await next()
+      // Its select makes pane %4 the session's selected one.
+      if (move === 'rest') host().swipeEnded(d, 'rest')
+      else expect(await host().openAgent(d)).toBeUndefined()
+      await settled()
+      expect(tmuxSays.clients).toBe('/dev/ttys002|%4\n')
+      clock = 1_999
+      await next()
+      expect(paneLines()).toEqual([ECHO])
+      onPane(3)
+      await next()
+      onPane(4)
+      await next()
+      expect(paneAsked()).toEqual([[c, 'pane'], [c, 'pane'], [d, 'pane']])
+      expect(paneLines()).toEqual([ECHO])
+    })
+
+    it('a hand turn while a read runs leaves the dial where it was turned', async () => {
+      const { line, next } = await following()
+      line(H(2))
+      await next()
+      tmuxSays.held = 'listing'
+      onPane(4)
+      await next()
+      turnTo(a)
+      await landReads()
+      expect(paneLines()).toEqual([ECHO])
+      expect(paneAsked()).toEqual([[c, 'pane']])
+    })
+
+    it('the person focusing a\'s tab while tmux is read: the pane the read names moves nothing', async () => {
+      const { line, next } = await following()
+      line(H(2))
+      await next()
+      tmuxSays.held = 'listing'
+      onPane(4)
+      await next()
+      line(H(1))
+      await landReads()
+      expect(paneLines()).toEqual([NOT_IN_FRONT])
+      expect(asked()).toEqual([[c, 'pane'], [a, 'focus']])
+    })
+
+    it('an agent whose client changed while tmux is read moves nothing', async () => {
+      const { port, line, next } = await following()
+      line(H(2))
+      await next()
+      tmuxSays.held = 'listing'
+      onPane(4)
+      await next()
+      // d's session is shown by a client of its own now, in another Orca terminal: its session-start past the lookup's
+      // hold finds it.
+      readers.processes.mockResolvedValue(rows(true))
+      tmuxSays.second = SECOND
+      clock = OUTER_EVERY_MS
+      port.observed(inTmux(2))
+      await vi.waitFor(() => expect(clientLines()).toHaveLength(3))
+      await settled()
+      await landReads()
+      expect(paneLines()).toEqual([NOT_IN_FRONT])
+      expect(paneAsked()).toEqual([[c, 'pane']])
+    })
+
+    it('an agent placed there no more by the time tmux\'s read lands moves nothing', async () => {
+      const { port, land, line, next } = await following()
+      line(H(2))
+      await next()
+      tmuxSays.held = 'listing'
+      onPane(4)
+      await next()
+      // d works in another folder now, and a's session ends: the order read a's leaving asks lands with d out of the
+      // tab's folder, so placed nowhere, while c keeps its client there.
+      port.observed(inTmux(2, { event: 'turn-stop', cwd: '/work/web' }))
+      readers.ended.add(4244)
+      port.observed(hook(3, { ORCA_TERMINAL_HANDLE: H(1) }, { event: 'session-end' }))
+      await vi.advanceTimersByTimeAsync(2_000)
+      await land([H(2)], [claudeIn(2)])
+      await landReads()
+      expect(paneLines()).toEqual([NOT_IN_FRONT])
+      expect(paneAsked()).toEqual([[c, 'pane']])
+    })
+
+    // The person turns the dial as Orca comes forward on the tmux tab (#4311): Orca's settle, or the watch's first line,
+    // which is the focus as Orca settled when the watch starts with it settled.
+    it.each<[string, (scene: Following) => unknown, (scene: Following, again: boolean) => Promise<void>]>([
+      ['Orca settling back from another app with the watch on it',
+        async ({ settle, line }) => { await settle('ghostty'); line(H(2)) },
+        async ({ settle }) => { await settle('ghostty'); await settle('orca') }],
+      ['the watch\'s first line after a dial attached', () => {}, async ({ line }, again) => {
+        if (again) {
+          seen.host.watching!(false)
+          seen.host.watching!(true)
+          await settled()
+        }
+        line(H(2))
+      }],
+    ])('%s on the tmux tab: the dial turned within ATTACH_ECHO_MS stays; past it, the dial turns', async (_, before, comes) => {
+      const scene = await following()
+      await before(scene)
+      turnTo(a)
+      clock = 1_999
+      await comes(scene, false)
+      await scene.next()
+      expect(paneLines()).toEqual([ECHO])
+      expect(paneAsked()).toEqual([])
+      clock = 2_000
+      await comes(scene, true)
+      await scene.next()
+      expect(paneAsked()).toEqual([[c, 'pane']])
+      expect(paneLines()).toEqual([ECHO])
+    })
+
+    it('a placement landing after the focus line tells its client then: the next read turns the dial', async () => {
+      const { fake, land, settle } = await orcaTmux({ watches: true })
+      await settle('orca')
+      fake.watches[0].line(H(2))
+      expect(reads()).toEqual([])
+      await land([H(2), H(1)], [claudeIn(1), claudeIn(2)])
+      expect(reads()).toEqual([READ])
+      expect(asked()).toEqual([[c, 'pane']])
+    })
+
+    it('a client landing that leaves its agent placed where it was, by that client now, starts the reads', async () => {
+      // c alone in its folder and engine, d in another folder: before its client's lookup lands, c is placed by
+      // elimination with no client, and the read the landing asks places it at the same terminal, by its client.
+      const { land, lookups, settle, fake, d } = await orcaTmux({ held: true, watches: true, d: { cwd: '/work/web' } })
+      await land([H(2), H(1)], [claudeIn(1), claudeIn(2)])
+      expect(await ring()).toEqual([c, a, d])
+      await settle('orca')
+      fake.watches[0].line(H(2))
+      for (const lookup of lookups.splice(0)) lookup()
+      await vi.waitFor(() => expect(clientLines()).toHaveLength(2))
+      await settled()
+      expect(fake.orders).toHaveLength(2)
+      await land([H(2), H(1)], [claudeIn(1), claudeIn(2)])
+      expect(await ring()).toEqual([c, a, d])
+      expect(reads()).toEqual([READ])
+      expect(asked()).toEqual([[c, 'pane']])
+    })
+
+    it.each<[string, (scene: Following) => unknown]>([
+      ['the watch ending', ({ fake }) => fake.watches[0].end()],
+      ['the dial going', () => seen.host.watching!(false)],
+      ['another app settling', ({ settle }) => settle('ghostty')],
+    ])('%s stops the reads', async (_, stop) => {
+      const scene = await following()
+      scene.line(H(2))
+      await scene.next()
+      expect(reads()).toEqual([READ])
+      await stop(scene)
+      await settled()
+      const ran = reads().length
+      await scene.next(3)
+      expect(reads()).toHaveLength(ran)
+    })
+
+    it('its lines name no tty, pane, handle or agent', async () => {
+      const { line, next, d } = await following()
+      // A follow, a pane switch, the dial's own rest, a hand turn while a read runs, and a's tab while one runs.
+      line(H(2))
+      await next()
+      onPane(4)
+      await next()
+      host().swipeEnded(c, 'rest')
+      await settled()
+      await next()
+      tmuxSays.held = 'listing'
+      onPane(4)
+      await next()
+      turnTo(a)
+      await landReads()
+      onPane(3)
+      await next()
+      line(H(1))
+      await landReads()
+      seen.host.watching!(false)
+      const lines = paneLines()
+      expect(lines).toHaveLength(3)
+      for (const said of lines) expect(said).toMatch(/^\[device\] pane · skipped · (echo|unknown agent|not in front)$/)
+      const secrets = [H(1), H(2), c, d, a, 'sess-', 'ttys', '%3', '%4']
+      expect(logs.filter((said) => secrets.some((secret) => said.includes(secret)))).toEqual([])
     })
   })
 })

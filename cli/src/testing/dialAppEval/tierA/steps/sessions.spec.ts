@@ -606,6 +606,35 @@ describe("tier A's Orca agents", () => {
     expect(keyOfOrcaHandle(w.world, orcaTerminalHandle('a'))).toBeUndefined()
   })
 
+  /** a in w1's tab 0; c and d under one tmux in tab 1, its splits 0 and 1, d a Codex; e under a tmux of its own in tab 2. */
+  const sharedTab = (): Scenario => ({ ...orcaAgents(), sessions: [orcaSession('a'), orcaSession('c', { tmux: true, tab: 1 }),
+    orcaSession('d', { tmux: true, tab: 1, split: 1, engine: 'codex' }), orcaSession('e', { tmux: true, tab: 2 })] })
+
+  it('two Orca sessions under tmux in one tab share its Orca shell, tty and handle, which ends with the last of them', async () => {
+    for (const platform of ['darwin', 'linux'] as const) {
+      const w = fakeWorld(platform, sharedTab())
+      // d starts first: the tab's handle is still c's, its lowest split's.
+      await w.hook('d', 'start')
+      await w.hook('c', 'start')
+      const [, c, d] = sharedTab().sessions
+      const lead = orcaTerminalHandle('c')
+      expect([c, d].map((s) => toldOf(w.told, s!.id).hostHints.ORCA_TERMINAL_HANDLE), platform).toEqual([lead, lead])
+      expect([orcaHandleOf(w.world, 'c'), orcaHandleOf(w.world, 'd')], platform).toEqual([lead, lead])
+      // One Orca shell under Orca's host, running the one tmux client, on its own tty; both agents are tmux's.
+      const clients = () => [...machine.processes.values()].filter((p) => basename(p.executable) === 'tmux' && p.tty !== undefined)
+      expect(clients(), platform).toHaveLength(1)
+      const shell = machine.processes.get(clients()[0]!.ppid)!
+      expect([shell.tty, shellOf(w.world, 'c'), shellOf(w.world, 'd')], platform).toEqual([clients()[0]!.tty, shell.pid, shell.pid])
+      expect([...machine.processes.values()].filter((p) => p.ppid === shell.ppid).map((p) => p.pid), platform).toEqual([shell.pid])
+      for (const key of ['c', 'd']) expect(chainOf(w.world, key).maker.executable, platform).toMatch(/tmux$/)
+      // The lead's pane closing leaves the tab's shell and handle to d; d's ends them, and tmux's client with them.
+      await dropSession(w.world, 'c')
+      expect([machine.processes.has(shell.pid), orcaHandleOf(w.world, 'c'), orcaHandleOf(w.world, 'd')], platform).toEqual([true, undefined, lead])
+      await dropSession(w.world, 'd')
+      expect([machine.processes.has(shell.pid), orcaHandleOf(w.world, 'd'), clients()], platform).toEqual([false, undefined, []])
+    }
+  })
+
   it("a drop ends the agent's and its shell's processes and sends no hook", async () => {
     const w = fakeWorld('darwin', orcaAgents())
     await w.hook('a', 'start')

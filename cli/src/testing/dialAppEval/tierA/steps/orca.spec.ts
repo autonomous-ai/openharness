@@ -18,6 +18,7 @@ import { machine } from '../machine.js'
 import { World } from '../world.js'
 import { closeOrca, orcaModelSteps, reopenOrca } from './orca.js'
 import { sessionsSteps } from './sessions.js'
+import { tmuxSteps } from './tmux.js'
 
 // No process starts: the real reads of Orca run here, and one past the model would run this machine's `orca`.
 const { reached, refused } = await vi.hoisted(async () => await import('../refuseProcesses.js'))
@@ -352,6 +353,32 @@ describe("tier A's Orca", () => {
     await plugin(world, false)
     await expect(front(world, 'w1')).rejects.toThrow(/orcaFront/)
     expect(door.fronts).toEqual([])
+  })
+
+  it('terminal list lays out a tab two tmux sessions share as one terminal, with the engine of the pane tmux shows there; '
+    + 'orca.focus of either tells that handle, and the front lists it once', async () => {
+    // a in w1's tab 0; c and d under one tmux in tab 1, its splits 0 and 1, d a Codex; e under a tmux of its own in tab 2.
+    const { world, deps } = worldOn('darwin', layout({ sessions: [orcaSession('a'), orcaSession('c', { tmux: true, tab: 1 }),
+      orcaSession('d', { tmux: true, tab: 1, split: 1, engine: 'codex' }), orcaSession('e', { tmux: true, tab: 2 }), orcaGhost] }))
+    const reads = createOrcaReads(deps.orca!)
+    const door = await pluginDoor(deps)
+    // c starts first, so its pane is the one tmux shows.
+    await started(world, ['c', 'd', 'a', 'e'])
+    await orcaModelSteps['orca.layout'](world, { kind: 'orca.layout', worktrees: ['w1'] })
+    const [a, c, e] = ['a', 'c', 'e'].map(orcaTerminalHandle)
+    const listed = await reads.orcaTabs()
+    expect(listed!.tabs.map((t) => t.handle)).toEqual([a, c, e])
+    expect(listed!.terminals.map((t) => [t.handle, t.agentIdentity])).toEqual([[a, 'claude'], [c, 'claude'], [e, 'claude']])
+    await tmuxSteps['tmux.selectPane'](world, { kind: 'tmux.selectPane', session: 'd' })
+    expect((await reads.orcaTabs())!.terminals.map((t) => [t.handle, t.agentIdentity])).toEqual([[a, 'claude'], [c, 'codex'], [e, 'claude']])
+    const heard: Array<string | null> = []
+    reads.watchOrcaFocus((handle) => { heard.push(handle) })
+    for (const session of ['d', 'a', 'c']) await orcaModelSteps['orca.focus'](world, { kind: 'orca.focus', session })
+    await landed()
+    expect(heard).toEqual([c, a, c])
+    await plugin(world, true)
+    await front(world, 'w1')
+    expect(door.fronts).toEqual([[a, c, e]])
   })
 
   it('orca.close takes the pane out of the list', async () => {

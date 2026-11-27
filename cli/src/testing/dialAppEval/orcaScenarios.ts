@@ -6,7 +6,8 @@
  * Each agent is in an Orca pane, laid out by `orca.layout`: every ring here lists its agents in Orca's tab order, each
  * worktree in its order, then its tabs, then each tab's splits. O18 to O23 add Orca's chats
  * (docs/plans/2026-11-23-dial-orca-chats-plan.md, Task 8), which no pane holds: a ring lists them after the panes'
- * agents, in the order of Orca's list of them, which is the order they are declared in.
+ * agents, in the order of Orca's list of them, which is the order they are declared in. O24 to O26 follow focus into
+ * tmux inside an Orca tab (docs/plans/2026-11-27-orca-tmux-follow-focus-plan.md, Task 3).
  */
 import { keys, listed, orcaChat, orcaGhost, orcaOpening, orcaSession, orcaStarted, S, scenario, started, withGhost } from './catalog.js'
 import type { Check, Scenario, SessionDef, SessionKey } from './types.js'
@@ -453,6 +454,64 @@ export function orcaScenarios(): Scenario[] {
       ],
       checks: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 'a', text: 'Eval words for alpha.', path: 'mod', after: 'voice' }],
       probes: [{ id: 'voice', kind: 'voice', dim: 'D5', session: 'z', text: 'Eval words for alpha.', after: 'voice' }],
+    }),
+    /*
+     * O24 to O26: following focus into tmux inside an Orca tab (docs/plans/2026-11-27-orca-tmux-follow-focus-design.md,
+     * "The eval"). Tier A alone and not on Windows, as O11: tier B's Orca stand-in runs no tmux client, and tmux runs only
+     * inside WSL on Windows, whose agents never reach the Windows devices.
+     */
+    scenario({
+      id: 'O24', app: 'orca', title: 'Focusing the Orca tab where Claude Code runs under tmux turns the dial to it, again within one read of another tab',
+      dims: ['D2'], platforms: ['darwin', 'linux'], tiers: ['a'],
+      sessions: [pane('a', 'w1', 0), pane('c', 'w1', 1, 0, { tmux: true }), orcaGhost],
+      steps: [
+        ...orcaOpening(['w1']), ...orcaStarted(['c', 'a']), ...listed('orca', ['a', 'c']),
+        { kind: 'orca.focus', session: 'a' },
+        { kind: 'wait', ms: 2 * S },
+        { label: 'focus', kind: 'orca.focus', session: 'c' },
+        { kind: 'wait', ms: 2 * S },
+        { label: 'away', kind: 'orca.focus', session: 'a' },
+        // Within one tmux pane poll read (FOCUS_POLL_MS): the poll's last answer may still be c's pane, and must not keep
+        // the dial from turning back to c.
+        { kind: 'wait', ms: 200 },
+        { label: 'again', kind: 'orca.focus', session: 'c' },
+      ],
+      checks: [
+        { id: 'focus', kind: 'focus', dim: 'D2', session: 'c', after: 'focus', at: 'away' },
+        { id: 'again', kind: 'focus', dim: 'D2', session: 'c', after: 'again' },
+      ],
+      probes: [{ id: 'focus', kind: 'focus', dim: 'D2', session: 'z', after: 'focus' }],
+    }),
+    scenario({
+      id: 'O25', app: 'orca', title: 'Two Claude Codes under one tmux in one Orca tab are listed by their names, and a tmux pane switch there turns the dial',
+      dims: ['D1', 'D2'], platforms: ['darwin', 'linux'], tiers: ['a'],
+      // c starts first, so its pane is the one tmux selects until the switch.
+      sessions: [pane('a', 'w1', 0), pane('c', 'w1', 1, 0, { tmux: true }), pane('d', 'w1', 1, 1, { tmux: true }), orcaGhost],
+      steps: [
+        ...orcaOpening(['w1']), ...orcaStarted(['c', 'd', 'a']), ...listed('orca', ['a', 'c', 'd']),
+        { label: 'tab', kind: 'orca.focus', session: 'c' },
+        { kind: 'wait', ms: 2 * S },
+        { label: 'pane', kind: 'tmux.selectPane', session: 'd' },
+      ],
+      // apart none: the grader counts c and d on tmux's page too (Diego's 2026-11-26 rule, as O11).
+      checks: [ring(['a', 'c', 'd'], { apart: [] }), { id: 'focus', kind: 'focus', dim: 'D2', session: 'd', after: 'pane' }],
+      probes: [ring(['a', 'c', 'd', 'z']), { id: 'focus', kind: 'focus', dim: 'D2', session: 'z', after: 'pane' }],
+    }),
+    scenario({
+      id: 'O26', app: 'orca', title: 'Two Orca tabs each with Claude Code under its own tmux in one worktree: focusing one moves nothing, as the dial cannot tell them apart',
+      // A guard: nothing follows before the fix either, and after it two tabs of one engine and folder are never placed
+      // (the spec's decision 2), so no focus there may move the dial to the wrong one.
+      dims: ['D2'], platforms: ['darwin', 'linux'], tiers: ['a'],
+      sessions: [pane('a', 'w1', 0), pane('c', 'w1', 1, 0, { tmux: true }), pane('d', 'w1', 2, 0, { tmux: true }), orcaGhost],
+      steps: [
+        ...orcaOpening(['w1']), ...orcaStarted(['c', 'd', 'a']), ...listed('orca', ['a', 'c', 'd']),
+        { kind: 'orca.focus', session: 'a' },
+        { kind: 'wait', ms: 2 * S },
+        { label: 'other', kind: 'orca.focus', session: 'd' },
+        { kind: 'wait', ms: 3 * S },
+      ],
+      checks: [{ id: 'still', kind: 'still', dim: 'D2', ms: 3 * S, after: 'other' }],
+      probes: [{ id: 'focus', kind: 'focus', dim: 'D2', session: 'z', after: 'other' }],
     }),
   ]
 }
