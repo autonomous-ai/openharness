@@ -68,6 +68,9 @@ Missed on purpose:
   only the first ask of a session for the same tool and line, until the session ends. After a plain "Yes", the very
   same command asked again in that session is not rung again. After the Harness devices process restarts, a command
   approved for the session can ring once more.
+- An ask answered before the hook tells the daemon (likelier on Windows, where the hook takes about 1.5 s): it can ring
+  once, then the line goes once Codex writes to the session's rollout again. Once the rollout shows the turn ended, the
+  hook tells nothing.
 
 ## What it never does
 
