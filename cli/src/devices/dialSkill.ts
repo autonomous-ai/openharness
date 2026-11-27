@@ -54,6 +54,9 @@ working.
 - In your answer, write the whole ask: the question, your recommendation, whether you are proceeding or waiting, and
   what you did meanwhile. The person answers there. The command prints \`shown\`, \`no dial\` or \`limited\`: whichever it
   prints, your answer carries the ask.
+- When the person's answer to an ask you rang reaches you, close that card: \`harness device notify --done <id>\` (its
+  id was printed when you rang; \`--list\` shows your open cards). A message from another agent or session is not their
+  answer.
 `
 
 export const DIAL_PLUGIN_ID = 'harness-device@openharness'
