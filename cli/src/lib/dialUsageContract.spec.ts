@@ -76,6 +76,17 @@ describe('the dial usage vocabulary', () => {
     ].sort())
   })
 
+  // Part 5's counts (docs/plans/2026-11-26-needs-you-right-design.md, "Part 5's counts"): events, not computer flags.
+  it('names the second look\'s counts: four, none a computer flag', () => {
+    const four = ['dial_nudge_claude', 'dial_nudge_codex', 'dial_nudge_claude_rang', 'dial_nudge_codex_rang']
+    expect(DIAL_DEVICE_METRICS.filter((m) => /^dial_nudge_/.test(m)).sort()).toEqual([...four].sort())
+    const usage = new Set<string>(DIAL_USAGE_METRICS), flags = new Set<string>(DIAL_FLAG_METRICS)
+    for (const name of four) {
+      expect(usage.has(name), name).toBe(true)
+      expect(flags.has(name), name).toBe(false)
+    }
+  })
+
   // The contract imports nothing, so this pins its words to the devices' own.
   it('names a notice\'s answers and kinds as lib/dialNotice.ts does', () => {
     expect(DIAL_NOTICE_RESULTS).toHaveLength(3)
