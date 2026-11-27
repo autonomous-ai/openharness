@@ -292,7 +292,9 @@ describe('stage', () => {
     for (const session of ['', '..', '../projects', 'a/b', '0b5c1d2e-3f40-4a5b-8c6d-7e8f90a1b2c3/..']) {
       expect(() => stage(fixture(), 'claude', { skill: true, base, session }), session).toThrow(/session/)
     }
-    expect(readdirSync(join(base, 'dial-skill-eval'))).toEqual([])
+    // Refused before anything is staged: no run root, which a run alone leaves no folder for at all.
+    const runs = join(base, 'dial-skill-eval')
+    expect(existsSync(runs) ? readdirSync(runs) : []).toEqual([])
   })
 
   it('puts the fake harness and the scenario fakes first, and neither the real harness nor gh on PATH', () => {

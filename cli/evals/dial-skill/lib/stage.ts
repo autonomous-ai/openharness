@@ -113,10 +113,15 @@ function checkSandbox(root: string): string {
 (allow network-bind network-inbound (local ip "localhost:*"))`
 }
 
+/** A Claude session id as `--session-id` takes it. */
+const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
 export function stage(s: Scenario, agent: AgentKind, opts: StageOptions): Staged {
   const profile = process.env.CLAUDE_CONFIG_DIR
   // Unset, Claude would run in the default ~/.claude profile.
   if (agent === 'claude' && !profile) throw new Error('CLAUDE_CONFIG_DIR is not set: the eval runs Claude only in the session profile')
+  // endSession removes what the person's profile keeps under this id: a slash or dots would name a folder beyond it.
+  if (opts.session !== undefined && !SESSION_ID.test(opts.session)) throw new Error('the run\'s session must be a uuid')
   const answers = opts.answers ?? []
   // A notify answered by the variant would no longer be the dial the rings are read from.
   if (answers.some((answer) => answer.argv[0] === 'device' && answer.argv[1] === 'notify')) {
