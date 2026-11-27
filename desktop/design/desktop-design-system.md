@@ -811,10 +811,10 @@ theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
   desktop's dialogs. The spinner stands still under Reduce Motion.
 - Focus: Return takes the primary button, as a dialog's default. A screen with
   only `Cancel` focuses nothing.
-- The menu-bar icon is the Pixel H drawn 8x8 pixels, a template image 18 points
-  square (`device-app/src-tauri/icons/tray.png`): black on a light bar, white on
-  a dark one. The app icon is the Pixel H, a black H of 7x7 square pixels on the
-  Harness green tile.
+- The menu-bar icon is the Harness mark, a template image 18 points tall
+  (`device-app/src-tauri/icons/tray.png`, 44x36 px): black on a light bar, white
+  on a dark one. The app icon is the design team's Harness app icon, dark: the
+  white mark on a near-black rounded tile.
 - An on/off setting in the menu is one native check item: one row, its state in
   the check, a label that never changes. Sound is the first.
 - A choice among named options in the menu is one native submenu of check items,
@@ -834,10 +834,11 @@ theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
 On Windows and Linux it is the same menu, rows and copy, with these
 differences, each an OS limit:
 
-- The icon sits in the tray. Windows shows the dark glyph on a light taskbar
-  and the light one (`tray-light.png`) on a dark taskbar, and follows a change
-  at once (where Windows does not let it follow, it keeps the dark taskbar's);
-  Linux always shows the light glyph, as no common way reads a panel's colour.
+- The icon sits in the tray, the mark at 16 px (32 at 200 %). Windows shows it
+  near-black (`tray-dark.png`) on a light taskbar and white (`tray-light.png`)
+  on a dark one, and follows a change at once (where Windows does not let it
+  follow, it keeps the dark taskbar's); Linux always shows the white one, as no
+  common way reads a panel's colour.
   A GNOME desktop without the AppIndicator extension has no tray, so the icon
   shows nowhere (Ubuntu ships the extension).
 - **About** opens Tauri's About dialog, in front, with `Harness Device`, the
