@@ -781,7 +781,7 @@ mod tests {
     #[test]
     fn the_system_shell_runs_through_sh() {
         let shell = system_shell(std::env::temp_dir());
-        let output = shell.run(&behind_the_screen("printf hi; exit 3"), Duration::from_secs(5), &mut |_| {}).unwrap();
+        let output = shell.run(&behind_the_screen("printf hi; exit 3"), crate::testing::WAIT, &mut |_| {}).unwrap();
         assert_eq!((output.code, output.stdout.as_str()), (Some(3), "hi"));
     }
 
@@ -790,9 +790,7 @@ mod tests {
     fn the_system_shell_hands_its_lines() {
         let mut lines = Vec::new();
         system_shell(std::env::temp_dir())
-            .run(&behind_the_screen(r"printf 'a\nb\n'"), Duration::from_secs(5), &mut |line| {
-                lines.push(line.to_string())
-            })
+            .run(&behind_the_screen(r"printf 'a\nb\n'"), crate::testing::WAIT, &mut |line| lines.push(line.to_string()))
             .unwrap();
         assert_eq!(lines, ["a", "b"]);
     }
@@ -845,8 +843,7 @@ mod tests {
     fn from_a_terminal() {
         let app = std::fs::File::open("/dev/tty").is_ok();
         let opens = "(: </dev/tty) 2>/dev/null && echo 'a terminal' || echo none";
-        let line =
-            system_shell(std::env::temp_dir()).run(&behind_the_screen(opens), Duration::from_secs(5), &mut |_| {});
+        let line = system_shell(std::env::temp_dir()).run(&behind_the_screen(opens), crate::testing::WAIT, &mut |_| {});
         println!("app: {}", if app { "a terminal" } else { "none" });
         println!("line: {}", line.unwrap().stdout.trim());
     }
