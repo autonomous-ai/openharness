@@ -366,6 +366,9 @@ interface Entry {
    *  daemon, true for one), and the latest hook of that caller, placed by its hints should the lookup say no daemon (none
    *  for the scan's). While `is` is not false, no hint, tty or process of that caller places it. */
   served?: { pid: number; is?: boolean | null; hook?: ObservedHookEvent }
+  /** When several TUIs all in one app placed a Codex server's session at that app with no tab (Served.clients), their
+   *  processes: the tick takes it off that app once one of them exits, as that one may have been its client. */
+  servedClients?: readonly number[]
   /** What the permission prompt it waits on asks, from its hook (deviceClaude/asked.ts): '' when it names nothing. */
   asked?: string
   /** Each permission ask Codex hooked in this session, by its tool and line, oldest first (CODEX_ASKS_KEPT). */
@@ -1272,6 +1275,7 @@ export class ObservedSource implements HostSource {
     a.host = detectHost(entry.hints)
     if (entry.served!.is) return true
     entry.outer = undefined
+    entry.servedClients = undefined
     entry.tty = undefined
     entry.bundle = undefined
     a.app = UNKNOWN_APP
@@ -1295,9 +1299,11 @@ export class ObservedSource implements HostSource {
     this.emit()
   }
 
-  /** A Codex server's session at its client: that TUI's app, tab and process, or no app's page when none is known. */
-  private placeServed(entry: Entry, { client }: Served): void {
+  /** A Codex server's session at its client: that TUI's app, tab and process, or that app alone for several TUIs there,
+   *  or no app's page when none is known. */
+  private placeServed(entry: Entry, { client, clients }: Served): void {
     entry.outer = client
+    entry.servedClients = clients
     entry.tty = client?.tty
     entry.agent.app = client?.app ?? UNKNOWN_APP
     delete entry.agent.appPending
@@ -2172,19 +2178,22 @@ export class ObservedSource implements HostSource {
 
   /** Removals: ended sessions, dead or reused pids, and sessions with no generation silent for 12 h; and a Codex daemon's
    *  session whose client exited leaves that client's tab, which holds a shell or another program now, for no page until
-   *  it is asked again (askServed), as the daemon runs on. Called every 30 s by the owner. */
+   *  it is asked again (askServed), as the daemon runs on. One placed at an app by several TUIs there leaves that app
+   *  once one of them exited, as that one may have been its client (Entry.servedClients). Called every 30 s by the
+   *  owner. */
   async tick(): Promise<void> {
     if (!this.entries.size) return
     // Only the sessions known as the read begins, each in the process it ran in then, and at the client it had then: one
     // first heard of, brought back in a new process (ingest) or at a client found while `ps` runs may have a process it
     // did not see.
-    const judged = [...this.entries].map(([id, e]) => [id, e, e.pid, e.outer] as const)
+    const judged = [...this.entries].map(([id, e]) =>
+      [id, e, e.pid, e.outer, e.outer?.pid !== undefined ? [e.outer.pid] : e.servedClients ?? []] as const)
     // One read of the machine's processes for every session: a `ps` each blocked the loop for seconds with 50 of them.
     // A table that cannot be read is empty: it always holds the process reading it.
     const table = new Map((await this.deps.processes()).map((p) => [p.pid, p.generation]))
     const now = this.deps.now()
     let changed = false
-    for (const [id, e, pid, outer] of judged) {
+    for (const [id, e, pid, outer, clients] of judged) {
       if (this.entries.get(id) !== e || e.pid !== pid) continue
       // Its process's generation, noted at the first look that sees it.
       const gen = table.get(e.pid)
@@ -2196,7 +2205,7 @@ export class ObservedSource implements HostSource {
       // No generation to tell a reused pid by: running, and heard from in the last 12 h.
       else gone = !this.deps.alive(e.pid) || now - e.agent.lastActivityAt >= NO_GENERATION_TTL_MS
       if (gone) { this.remove(e); changed = true }
-      else if (outer?.pid !== undefined && e.outer === outer && this.servedBy(e) && table.size && !table.has(outer.pid)) {
+      else if (outer && e.outer === outer && this.servedBy(e) && table.size && clients.some((client) => !table.has(client))) {
         this.placeServed(e, {})
         changed = true
       }
