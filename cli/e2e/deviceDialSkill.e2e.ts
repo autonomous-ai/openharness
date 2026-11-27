@@ -26,6 +26,7 @@ import { harnessPath, thisComputer } from '../src/config/harnessHome.js'
 import { DIAL_PLUGIN_ID, DIAL_SKILL } from '../src/devices/dialSkill.js'
 import { readSetup, writeSetup } from '../src/devices/dialSkillFiles.js'
 import { copyNode } from '../src/testing/placeNode.js'
+import { startTimes } from '../src/testing/spawnedRuns.js'
 import { VERSION } from '../src/version.js'
 import { LocalClient } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
@@ -356,6 +357,8 @@ trust_level = "trusted"
     // Read before its server goes, and printed when the case fails.
     let screen = ''
     onTestFailed(() => { console.log(`---- the Codex pane\n${screen}`) })
+    /** The app server Codex's pid file names, and its start read before the close. */
+    let server: { pid: number; started: string | undefined } | undefined
     try {
       tmux('new-session', '-d', '-s', 'codex', '-x', '200', '-y', '50', '-c', work, codex)
       // Its composer, `›` at a line's start, is drawn once Codex takes input; the banner comes before it.
@@ -388,7 +391,16 @@ trust_level = "trusted"
       try { screen = tmux('capture-pane', '-p', '-t', 'codex') } catch { /* gone */ }
       try { tmux('kill-server') } catch { /* already gone */ }
       // Codex's app server outlives the pane: IsolatedDaemon.close() ends it through <home>/app-server-daemon/daemon.pid
-      // (rootProcesses.ts), so the sweep is the one cleanup and this case proves it.
+      // (rootProcesses.ts), so the sweep is the one cleanup and this case proves it. Its start, read before, tells it
+      // from a process given its pid since; the close in afterEach is then a second one, which ends nothing more.
+      const pidFile = join(home, 'app-server-daemon', 'daemon.pid')
+      if (existsSync(pidFile)) {
+        const { pid } = JSON.parse(readFileSync(pidFile, 'utf8')) as { pid: number }
+        server = { pid, started: startTimes([pid]).get(pid) }
+      }
+      await d.close()
     }
+    expect(server?.started, 'the Codex app server its pid file names, running before the close').toBeDefined()
+    expect(startTimes([server!.pid]).get(server!.pid), 'the Codex app server after the close').not.toBe(server!.started)
   })
 })
