@@ -44,6 +44,7 @@ import { AppError } from '../errors/index.js'
 import type { Machine } from '@prisma/client'
 import { isBackendOnlyDownType } from './backendOnlyFrames.js'
 import { markCpuKind } from './selfProfile.js'
+import { HARNESS_CLI_CHIP, sanitizeClientVersion } from './clientVersion.js'
 import {
   VoiceQuotaExceededError,
   voiceQuotaService,
@@ -577,7 +578,6 @@ function relay(device: WebSocket, opts: RelayOpts): void {
   const releaseVoiceBudget = (): void => { releaseVoice(voiceBudgeted); voiceBudgeted = 0; voiceOverBudget = false }
   let voiceIdleTimer: NodeJS.Timeout | null = null
   let voiceMaxTimer: NodeJS.Timeout | null = null
-  let deviceFirmwareVersion: string | null = null
   // Capability: firmware that can run device↔adapter E2EE for DATA RPCs (decrypts encrypted
   // agents_list_result / agent_recent_result / … under the pairwise/group key). Advertised in
   // device_hello (`caps: ['e2ee_data']`). For REMOTE adapter machines this cap is mandatory: without it,
@@ -1077,7 +1077,13 @@ function relay(device: WebSocket, opts: RelayOpts): void {
 
   const handleHello = (msg: CommanderMsg): void => {
     const payload = payloadOf(msg)
-    deviceFirmwareVersion = typeof payload.firmwareVersion === 'string' && payload.firmwareVersion ? payload.firmwareVersion : null
+    const chip = typeof payload.chip === 'string' ? payload.chip : null
+    // A CLI's version is never firmware (spec, 2026-11-27): an older CLI still sends its version as
+    // firmwareVersion, so on a CLI's hello that value is its cliVersion. `??`, not `||`: a cliVersion that is
+    // sent but fails the check is dropped rather than replaced by a firmwareVersion.
+    const isCli = chip === HARNESS_CLI_CHIP
+    const cliVersion = isCli ? sanitizeClientVersion(payload.cliVersion ?? payload.firmwareVersion) ?? null : null
+    const firmwareVersion = isCli ? null : sanitizeClientVersion(payload.firmwareVersion) ?? null
     // E2EE-for-data capability (firmware that decrypts encrypted *_result frames). When present we
     // relay agent RPCs to the machine instead of reading them at the backend (see deviceE2eeData decl).
     deviceE2eeData = Array.isArray(payload.caps) && payload.caps.includes('e2ee_data')
@@ -1103,13 +1109,14 @@ function relay(device: WebSocket, opts: RelayOpts): void {
           : null
       void deviceService.recordHello({
         deviceId,
-        firmwareVersion: deviceFirmwareVersion,
-        chip: typeof payload.chip === 'string' ? payload.chip : null,
+        cliVersion,
+        firmwareVersion,
+        chip,
         ssid: typeof payload.ssid === 'string' ? payload.ssid : null,
         rssi: rssiRaw !== null && Number.isFinite(rssiRaw) ? rssiRaw : null,
       })
     }
-    logger.info('commander device_hello', { userId, firmwareVersion: deviceFirmwareVersion, deviceId, multiMachine: deviceMultiMachine })
+    logger.info('commander device_hello', { userId, cliVersion, firmwareVersion, deviceId, multiMachine: deviceMultiMachine })
     if (deviceMultiMachine && !wasMultiMachine) void watchMachines().catch((err) => logger.warn('device watchMachines failed', { userId, error: errMsg(err) }))
   }
 
