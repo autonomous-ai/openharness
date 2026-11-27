@@ -716,7 +716,8 @@ describe.runIf(windows)('install.ps1, installing for real from a local manifest'
     const manifest = build(key, { inbox: inboxMjs })
     // A file opened with no sharing, as an antivirus scan holds one: it cannot be removed, nor its folder renamed.
     const held = await ps(`$s = Get-HarnessManifests -Manifest '${manifest}' -Platform '${key}'; $h = [IO.File]::Open('${join(folder, 'package.json')}', 'Open', 'Read', 'None'); try { Install-HarnessCli -Root '${root}' -Entry $s.cli.entry -Source $s.cli.source | Out-Null; 'installed' } catch { 'refused' } finally { $h.Dispose() }`)
-    expect(held.stdout, held.stderr).toBe('refused')
+    // Install-HarnessCli writes its progress to the host, which `| Out-Null` does not take: the answer is the last line.
+    expect(held.stdout.split(/\r?\n/).at(-1), `${held.stdout}\n${held.stderr}`).toBe('refused')
     expect(readdirSync(folder).sort()).toEqual(before)
     expect(readFileSync(join(folder, 'cli.js')).equals(cli)).toBe(true)
     expect(readdirSync(join(root, 'cli')).filter((name) => name.startsWith('.'))).toEqual([])
