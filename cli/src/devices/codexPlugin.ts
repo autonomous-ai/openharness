@@ -142,11 +142,22 @@ export function codexRunIn(home: string): CodexRun | null {
 
 const codexRunner = (bin: string, env: NodeJS.ProcessEnv): CodexRun => Object.assign(claudeRunner(bin, env), { bin })
 
-/** `--version`'s answer by the binary's real path, for its modification time then. Asked for each home, one pass over
- *  64 homes on a hanging Codex took 16 minutes, 15 s each. A failed or hung answer is kept too, and the promise is kept,
- *  so two asks at once share one. A few binaries at most, the oldest out first. */
-const versions = new Map<string, { mtimeMs: number; answer: Promise<ClaudeAnswer> }>()
+/** `--version`'s answer by the binary's real path, for its modification time then. Asked for each home, a hanging Codex
+ *  could hold one pass up to 16 minutes (64 homes × 15 s). The promise is kept, so two asks at once share one; once it
+ *  answers, it is kept for keptFor. A few binaries at most, the oldest out first. */
+const versions = new Map<string, { mtimeMs: number; answer: Promise<ClaudeAnswer>; until: number }>()
 const MAX_VERSIONS = 8
+/** The hour the plugin setup waits on a Codex too old (dialCodexPluginSetup.ts). */
+const TOO_OLD_MS = 3_600_000
+
+/** How long [answer] is kept: a supported version until the binary changes; one too old for the setup's hour, as a
+ *  version manager's shim keeps its path and time across an upgrade; a failure, hang or refusal one bound, long enough
+ *  for the rest of its pass, whose homes ask at once, and not for the next, as a first launch or a loaded machine can
+ *  hang once. */
+function keptFor(answer: ClaudeAnswer): number {
+  if (answer.code !== 0 || !parseVersion(answer.stdout)) return LOCAL_MS
+  return versionAtLeast(answer.stdout, MIN) ? Infinity : TOO_OLD_MS
+}
 
 /** [bin]'s real path and modification time; null for none, or one that cannot be read. */
 function binaryNow(bin: string | undefined): { path: string; mtimeMs: number } | null {
@@ -159,19 +170,21 @@ function binaryNow(bin: string | undefined): { path: string; mtimeMs: number } |
   }
 }
 
-/** [run]'s `--version`, asked once for its binary as it is now; a run with no binary, or one that cannot be read, asks
- *  each time. */
+/** [run]'s `--version`, asked once for its binary as it is now while its answer is kept; a run with no binary, or one
+ *  that cannot be read, asks each time. */
 function askVersion(run: CodexRun): Promise<ClaudeAnswer> {
   const binary = binaryNow(run.bin)
   if (!binary) return run(['--version'], LOCAL_MS)
   const { path, mtimeMs } = binary
   const kept = versions.get(path)
-  if (kept?.mtimeMs === mtimeMs) return kept.answer
-  const answer = run(['--version'], LOCAL_MS)
+  if (kept?.mtimeMs === mtimeMs && Date.now() < kept.until) return kept.answer
+  const entry = { mtimeMs, answer: run(['--version'], LOCAL_MS), until: Infinity }
+  // Set before the caller reads the answer, as this reaction is the promise's first.
+  void entry.answer.then((answer) => { entry.until = Date.now() + keptFor(answer) })
   versions.delete(path)
-  versions.set(path, { mtimeMs, answer })
+  versions.set(path, entry)
   if (versions.size > MAX_VERSIONS) versions.delete(versions.keys().next().value!)
-  return answer
+  return entry.answer
 }
 
 /** [run] when its Codex is at least MIN_CODEX, asked with one `--version`: an older one is asked nothing more. A
