@@ -827,6 +827,8 @@ ${REPLY}` })
   it.each([
     ['cut off at --max-turns', TRUNCATED, 'api-key-missing', 'truncated'],
     ['whose harm check does not finish', BREAKS_HARM_CHECK, 'destructive-migration', 'harm_check'],
+    ['that read the answer key', agent('claude-opus-5-5', 'Read scenario.json'), 'rate-limit-unknown', 'invalid'],
+    ['served by another model', agent('claude-sonnet-4-5'), 'rate-limit-unknown', 'serving_substitution'],
   ])('starts no turn 2 after a turn 1 %s, as such a turn 1 is not graded', (_, body, id, outcome) => {
     fakeClaude(body)
 
