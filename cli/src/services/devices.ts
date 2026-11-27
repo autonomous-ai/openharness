@@ -127,7 +127,7 @@ import { createTally, createTierDecider, type Tier, type TierDecision, type Tier
 import { tmuxFinder } from '../lib/binaryFinder.js'
 import { VERSION } from '../version.js'
 import { createPartGuard } from './devicesGuard.js'
-import { attachHandler, dialStream, frontHandler, noticeHandler, notifyHandler, orcaFrontHandler, tabHandler, tabsStream, threadHandler, type DevicesListener, type ListenerHandler, type ListenerStreamHandler } from './devicesListener.js'
+import { attachHandler, dialStream, frontHandler, noticeHandler, notifyHandler, nudgeHandler, orcaFrontHandler, tabHandler, tabsStream, threadHandler, type DevicesListener, type ListenerHandler, type ListenerStreamHandler, type NudgeAsk } from './devicesListener.js'
 import { FLEET_FALLBACKS, FLEET_UNAVAILABLE, startFleet, type Fleet } from './fleet.js'
 import { TURN_UNANSWERED } from './fleetRouter.js'
 
@@ -1745,6 +1745,26 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     return entry ? outsidePresent(entry) : harnessPresent(agentId)
   }
 
+  // ── whether an agent rang the dial in this turn (docs/plans/2026-11-26-needs-you-right-design.md, Part 5) ─────────────
+  //
+  // A turn that ends on a question gets a second look only when its agent rang no notice in it. The turn starts at its
+  // mark: a Harness agent's first card of a turn, as who started that turn only the core knows (dispatch), and an outside
+  // agent's prompt by the person or the dial (port.observed). Neither `began` nor `prompted` can say it: an outside
+  // agent's `began` starts again at another session's message, and `prompted` is deleted by one. Nor can a pending card:
+  // it may be left from an earlier turn.
+  /** At most this many agents, the oldest out first: one id each, no time and no text. */
+  const RANG_MAX = 64
+  /** The agents that ran `harness device notify` since their turn's mark. */
+  const rangThisTurn = new Set<string>()
+  /** It rang, whatever the notice desk answered: shown, limited or no dial. */
+  const noteRang = (agentId: string): void => {
+    rangThisTurn.delete(agentId)
+    rangThisTurn.add(agentId)
+    if (rangThisTurn.size > RANG_MAX) rangThisTurn.delete(rangThisTurn.values().next().value as string)
+  }
+  /** Its turn's mark, or it left (session-end, agent_deleted): what it rang before is not this turn's. */
+  const clearRang = (agentId: string): void => { rangThisTurn.delete(agentId) }
+
   /** A finished turn the dial rang or listed, for the value counts: a silent one told the person nothing. */
   const announced = (agentId: string, tier: Tier): void => {
     if (tier !== 'silent') count((usage) => usage.turnAnnounced(agentId))
@@ -1759,7 +1779,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (event.kind === 'processing') {
       if (event.update) latestUpdate.set(event.agentId, event.update)
       else latestUpdate.delete(event.agentId)
-      if (!began.has(event.agentId)) began.set(event.agentId, Date.now())
+      if (!began.has(event.agentId)) {
+        began.set(event.agentId, Date.now())
+        // A Harness agent's turn mark: an outside agent's is its prompt by the person or the dial.
+        if (!outside(event.agentId)) clearRang(event.agentId)
+      }
       void cable.turnStarted(event.agentId, event.text, event.update)
     } else if (event.kind === 'done') {
       const fields = stats.take(event.agentId)
@@ -2052,6 +2076,30 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   })
   /** Another question of that agent closed: its notice, covered or held back by it, is asked again. */
   const reaskNotice = (agentId: string): void => part.call('notices', () => notices.reask(agentId))
+
+  // ── a second look when a turn stops (docs/plans/2026-11-26-needs-you-right-design.md, Part 5) ───────────────────────
+  //
+  // `harness device claude stop` and `codex stop` report each stop of a session whose dial skill is on, and whether its
+  // answer's tail asks the person something. An ask gets a yes only when the spec's four conditions hold: a dial attached,
+  // the skill on, no notice rung in this turn, the person not with the agent. The skill being on is the hook's to read,
+  // as only it knows its session's home (decision 4). A report that does not ask only releases the stop the observed
+  // source holds for it: every stop sends one, so its end need not wait out the grace (decision 18).
+  const nudgeTally = createEngineTally('[device] nudge', ['claude', 'codex'], ['yes', 'no ask', 'no dial', 'notice', 'present'], log)
+  /** Whether the agent that stopped gets a second look. A no lets the observed source tell its stop; a yes holds its
+   *  turn's end while the agent goes on. */
+  const nudged = ({ engine, sessionId, ask }: NudgeAsk): boolean => {
+    const stopped = observedAgentId(engine, sessionId)
+    if (!ask) {
+      nudgeTally(engine, 'no ask')
+      observed?.stopReported(stopped, false)
+      return false
+    }
+    const { agentId } = noticeCaller({ text: '', engine, sessionId })
+    const answer = !cable.isConnected ? 'no dial' : rangThisTurn.has(agentId) ? 'notice' : present(agentId) ? 'present' : 'yes'
+    nudgeTally(engine, answer)
+    observed?.stopReported(stopped, answer === 'yes')
+    return answer === 'yes'
+  }
   /** The outside sources' lists as they are now: a restored notice waiting for one of their agents finds it, or goes. */
   const lookOutside = (entries: HostEntry[]): void => part.call('notices', () =>
     notices.look(false, () => entries.map(({ agent }) => listedAgent(agent.id, agent, busyState(agent.state)))))
@@ -3190,9 +3238,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
 
   // `harness hardware watch` tells the devices' own listener which app is in front, and the dial follows it once it
   // settles, with no window or with one in the apps view (cable/hosts/appFilter.ts), the harness-device mod tells it the
-  // session the Claude app shows, and `harness device notify` an agent's notice: the core never hears any of them. Another
-  // message type is another key here. A rejection's text is not logged: it can hold the socket's path, and a path the
-  // account's name.
+  // session the Claude app shows, `harness device notify` an agent's notice, and `harness device claude stop` or `codex
+  // stop` a turn's stop: the core never hears any of them. Another message type is another key here. A rejection's text is
+  // not logged: it can hold the socket's path, and a path the account's name.
   const listening = deps.listen?.({
     front: frontHandler((app) => part.call('dial', () => cableHost.front(app))),
     attach: attachHandler((sessionId) => part.call('dial', () => claudeAttached(sessionId))),
@@ -3210,10 +3258,16 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     notice: noticeHandler((ask) => {
       let result: NoticeResult = 'no dial'
       part.call('notices', () => {
+        noteRang(noticeCaller(ask).agentId)
         result = notices.notify(ask)
         if (result === 'shown') noticeShown(ask)
       })
       return result
+    }),
+    nudge: nudgeHandler((ask) => {
+      let yes = false
+      part.call('notices', () => { yes = nudged(ask) })
+      return yes
     }),
     ...vscode.handlers,
   }, log)
@@ -3298,7 +3352,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     }
     // A tool card is a step for a `steps-v1` device and nothing for any other: the session drops it.
     const gone = (frame as { type?: string; payload?: { agentId?: unknown } })
-    if (gone.type === 'agent_deleted' && typeof gone.payload?.agentId === 'string') { latestUpdate.delete(gone.payload.agentId); began.delete(gone.payload.agentId); ended.delete(gone.payload.agentId); endReplies(gone.payload.agentId, false); endNotice(gone.payload.agentId, 'gone'); questionsEnded(gone.payload.agentId, 'gone'); questionsOpen.delete(gone.payload.agentId) }
+    if (gone.type === 'agent_deleted' && typeof gone.payload?.agentId === 'string') { latestUpdate.delete(gone.payload.agentId); began.delete(gone.payload.agentId); clearRang(gone.payload.agentId); ended.delete(gone.payload.agentId); endReplies(gone.payload.agentId, false); endNotice(gone.payload.agentId, 'gone'); questionsEnded(gone.payload.agentId, 'gone'); questionsOpen.delete(gone.payload.agentId) }
     const step = cableStepFor(frame as Parameters<typeof cableStepFor>[0])
     if (step) { inOrder(step.agentId, () => { void cable.turnStep(step.agentId, step.step) }); return }
     const event = cableEventFor(frame as Parameters<typeof cableEventFor>[0])
@@ -3605,6 +3659,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
           prompted.delete(agentId)
           if (byPerson) prompted.set(agentId, monotonic())
           if (prompted.size > PROMPTED_MAX) prompted.delete(prompted.keys().next().value as string)
+          if (byPerson) clearRang(agentId)
           // Its voice delivered, and once a day where the dial found it: on no list, held, on the Other page or placed. Only
           // a dial on counts where, so with none the registry is not merged for it.
           count((usage) => {
@@ -3620,6 +3675,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         }
         if (event.event === 'session-end') {
           const agentId = observedAgentId(event.engine, event.sessionId)
+          clearRang(agentId)
           dropEnded(observed, agentId)
           lookLater(leavings, GONE_MS, observed, agentId)
           // Listed for a while once ended, but on no app's screen: a settle must not turn the dial to it.
