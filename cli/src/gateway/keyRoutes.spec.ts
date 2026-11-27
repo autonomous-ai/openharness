@@ -51,29 +51,43 @@ describe('the keys\' routes, answered by the gateway', () => {
     expect(await routes('POST', '/api/remote-password/set', '{}')).toEqual({ status: 400, body: { error: 'MISSING_PASSWORD' } })
   })
 
-  it('says a pairing\'s or a password\'s own failure in its message, and any other as an internal one, logged', async () => {
+  it('says a pairing\'s or a password\'s own failure in a word and its errno code, never its message, and logs it by its kind', async () => {
     const ops = commands()
     const log = vi.fn()
     const routes = keyRoutes(asOps(ops), log)
-    ops.pair.mockRejectedValueOnce(new Error('the round timed out'))
-    expect(await routes('POST', '/api/pair', '{"code":"1"}')).toEqual({ status: 500, body: { error: 'the round timed out' } })
+    const answers: unknown[] = []
+    ops.pair.mockRejectedValueOnce(new Error('round failed /home/someone/.harness/e2e/x'))
+    answers.push(await routes('POST', '/api/pair', '{"code":"1"}'))
+    expect(answers.at(-1)).toEqual({ status: 500, body: { error: 'PAIR_FAILED (UNKNOWN)' } })
+    ops.setRemotePassword.mockRejectedValueOnce(Object.assign(new Error('EACCES: open /home/someone/x'), { code: 'EACCES' }))
+    answers.push(await routes('POST', '/api/remote-password/set', '{"password":"pw"}'))
+    expect(answers.at(-1)).toEqual({ status: 500, body: { error: 'REMOTE_PASSWORD_NOT_SET (EACCES)' } })
     ops.setRemotePassword.mockRejectedValueOnce('not an error')
-    expect(await routes('POST', '/api/remote-password/set', '{"password":"pw"}')).toEqual({ status: 500, body: { error: 'INTERNAL' } })
+    answers.push(await routes('POST', '/api/remote-password/set', '{"password":"pw"}'))
+    expect(answers.at(-1)).toEqual({ status: 500, body: { error: 'REMOTE_PASSWORD_NOT_SET (UNKNOWN)' } })
+    // A `code` that is no errno code (a path, words) is not said either.
+    ops.setRemotePassword.mockRejectedValueOnce(Object.assign(new Error('no'), { code: '/home/someone/x' }))
+    answers.push(await routes('POST', '/api/remote-password/set', '{"password":"pw"}'))
+    expect(answers.at(-1)).toEqual({ status: 500, body: { error: 'REMOTE_PASSWORD_NOT_SET (UNKNOWN)' } })
     // `harness remote-password clear` reads this word, and does not clear the file behind the daemon's back.
     ops.clearRemotePassword.mockRejectedValueOnce(new SecretNotDeleted('REMOTE_PASSWORD_NOT_DELETED', 'EBUSY'))
     expect(await routes('POST', '/api/remote-password/clear', undefined)).toEqual({ status: 500, body: { error: 'REMOTE_PASSWORD_NOT_DELETED (EBUSY)' } })
     // Any other failure of a clear keeps its message (it may name the file) out of the answer.
     ops.clearRemotePassword.mockRejectedValueOnce(new Error('unreadable /home/someone/.harness/e2e/remotePassword.json'))
-    expect(await routes('POST', '/api/remote-password/clear', undefined)).toEqual({ status: 500, body: { error: 'INTERNAL' } })
+    answers.push(await routes('POST', '/api/remote-password/clear', undefined))
+    expect(answers.at(-1)).toEqual({ status: 500, body: { error: 'INTERNAL' } })
     ops.groupSync.mockRejectedValueOnce(new Error('roster unreadable'))
     expect(await routes('POST', '/api/group/sync', undefined)).toEqual({ status: 500, body: { error: 'INTERNAL' } })
     ops.listPairs.mockRejectedValueOnce('gone')
     expect(await routes('GET', '/api/pairs', undefined)).toEqual({ status: 500, body: { error: 'INTERNAL' } })
     // A body of JSON that holds no record, reached for a field, as the door's catch-all answered it.
     expect(await routes('POST', '/api/pair', 'null')).toEqual({ status: 500, body: { error: 'INTERNAL' } })
-    expect(log.mock.calls).toEqual([['[gateway] POST KEY_ROUTE_FAILED · SecretNotDeleted EBUSY'],
+    expect(log.mock.calls).toEqual([['[gateway] POST KEY_ROUTE_FAILED · Error'], ['[gateway] POST KEY_ROUTE_FAILED · EACCES'],
+      ['[gateway] POST KEY_ROUTE_FAILED · string'], ['[gateway] POST KEY_ROUTE_FAILED · Error'],
+      ['[gateway] POST KEY_ROUTE_FAILED · SecretNotDeleted EBUSY'],
       ['[gateway] POST KEY_ROUTE_FAILED · Error'], ['[gateway] POST KEY_ROUTE_FAILED · Error'], ['[gateway] GET KEY_ROUTE_FAILED · string'],
       ['[gateway] POST KEY_ROUTE_FAILED · TypeError']])
+    expect(JSON.stringify([answers, log.mock.calls])).not.toContain('/home/someone')
   })
 
   it('trusts a linked peer only with a real key and machine id, and trims its label', async () => {
