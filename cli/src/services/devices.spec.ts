@@ -9265,7 +9265,7 @@ describe('the Notifications setting (docs/plans/2026-11-16-dial-agent-notify-des
 
 describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)', () => {
   const LINE = 'Connect the VPN so I can run the staging tests'
-  /** A waiting card's line: only such a card keeps its agent's turn ends silent (rule 8). */
+  /** A waiting card's line: only its agent closes it, so it outlives its agent's turns (rule 5). */
   const ASK = `Waiting · ${LINE}`
   const ID = observedAgentId('claude', 'sess-1')
   const hook = (event: ObservedHookEvent['event'], over: Partial<ObservedHookEvent> = {}): ObservedHookEvent => ({
@@ -9449,23 +9449,21 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       expect(logs).toContain('[cable] notify · silent · rule:notice · notice · 0ms')
     })
 
-    // Rule 8 (the PM, after the final review): a proceeding or plain card rarely gets an answer, so it would silence its
-    // agent for a day. Its turn ends ring or list as any; the recap's row takes the card's, so the card's goes back over it.
+    // Rule 8 (the PM, 2026-11-27): any open card keeps its agent's turn ends silent, a proceeding or plain one too, so a
+    // recap never takes the card's drawer row. A failed turn rings whatever card it holds, and the card's row goes back
+    // over the error's.
     it.each([['proceeding', 'Proceeding · Ship it · Doing: the tests'], ['plain', LINE]])(
-      'an agent whose only open card is %s gets its ordinary turn end, then its card\'s row back', async (_, text) => {
+      'an agent whose only open card is %s gets a silent ordinary turn end; a failed turn rings, then its card\'s row comes back', async (_, text) => {
         const { port, listener } = devices({ core: bound(), decideTier: null })
-        listener.notice({ text, engine: 'claude', sessionId: 's-h1' })
         port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'turn_started' } })
+        listener.notice({ text, engine: 'claude', sessionId: 's-h1' })
         port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'summary', text: 'done', recap: 'Built.', tier: 'alert' } })
-        await vi.waitFor(() => expect(seen.cable.calls.map(([name]) => name).filter((name) => name === 'summary' || name === 'replaceNotifications'))
-          .toEqual(['summary', 'replaceNotifications']))
-        expect(calls('summary').map(([agentId, , , tier]) => [agentId, tier])).toEqual([['h1', 'alert']])
-        expect(calls('replaceNotifications')).toEqual([[[{ agentId: 'h1', machineId: 'machine-1', question: true, text }]]])
-        expect(logs.filter((line) => line.includes('rule:notice'))).toEqual([])
-        // A failed turn rings, and the card's row goes back over its row too.
+        await vi.waitFor(() => expect(calls('summary').map(([agentId, , , tier]) => [agentId, tier])).toEqual([['h1', 'silent']]))
+        expect(logs).toContain('[cable] notify · silent · rule:notice · notice · 0ms')
+        expect(calls('replaceNotifications')).toEqual([])
         port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'error', text: 'The build broke.' } })
-        await vi.waitFor(() => expect(calls('replaceNotifications')).toHaveLength(2))
-        expect(seen.cable.calls.map(([name]) => name).filter((name) => name === 'turnError' || name === 'replaceNotifications').slice(-2))
+        await vi.waitFor(() => expect(calls('replaceNotifications')).toEqual([[[{ agentId: 'h1', machineId: 'machine-1', question: true, text }]]]))
+        expect(seen.cable.calls.map(([name]) => name).filter((name) => name === 'turnError' || name === 'replaceNotifications'))
           .toEqual(['turnError', 'replaceNotifications'])
       })
 
@@ -10229,9 +10227,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       // Past the 6 s a stop waits for its report: held by the yes, not by the wait.
       await vi.advanceTimersByTimeAsync(5_000)
       expect(calls('turnDone')).toEqual([[ID]])
-      // A waiting card: only it keeps its agent's turn ends silent
-      // (docs/plans/2026-11-27-dial-notice-cards-agent-closes-design.md, rule 8).
-      expect(listener.notice({ text: `Waiting · ${LINE}`, engine: 'claude', sessionId: 'sess-1' })).toEqual(SHOWN)
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual(SHOWN)
       expect(shownAsks().map(([agentId]) => agentId)).toEqual([ID])
       port.observed(hook('turn-stop'))
       await vi.advanceTimersByTimeAsync(300)

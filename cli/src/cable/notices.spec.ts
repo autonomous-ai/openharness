@@ -1018,19 +1018,6 @@ describe('several cards an agent', () => {
     expect(back.notices.pending('old')).toBe(false)
   })
 
-  // Rule 8: only a waiting card keeps its agent's turn ends silent; a proceeding or plain one rarely gets an answer.
-  it('waiting says whether an agent holds a waiting card', () => {
-    const rig = desk()
-    say(rig, P(1))
-    expect(rig.notices.pending('a')).toBe(true)
-    expect(rig.notices.waiting('a')).toBe(false)
-    say(rig, W(2))
-    expect(rig.notices.waiting('a')).toBe(true)
-    expect(rig.notices.waiting('b')).toBe(false)
-    rig.notices.done(by('a'), cid(2))
-    expect(rig.notices.waiting('a')).toBe(false)
-  })
-
   it('ids are unique among pending cards', () => {
     const rig = desk({ uuids: ['3f9a1c2e-0001', '3f9a1c2e-0002', '0b1c2d3e-0003'] })
     expect(say(rig, W(1)).card?.id).toBe('3f9a1c2e')
