@@ -1441,12 +1441,12 @@ async function logout(): Promise<void> {
   // Same reason as the name: the cached machine list describes the account that just left, and the local
   // `/api/machines` fallback would otherwise hand it to whoever signs in next on this computer. A held file is said in
   // a word and its errno code, as `reset` says it: the raw error names the path. Not started again: a daemon would
-  // come back under the name of the account that left.
-  try {
-    deleteHeld(MACHINE_NAME_FILE, false)
-    deleteHeld(machineListCachePath(), false)
-  } catch (error) {
-    console.error(`\n  ✗ Local machine CLI state is still on this computer (STATE_NOT_DELETED (${errnoOf(error)})). Run \`harness logout\` again.\n`)
+  // come back under the name of the account that left. Each is tried: a name held must not keep the list.
+  const stateKept = [MACHINE_NAME_FILE, machineListCachePath()].map((file) => {
+    try { deleteHeld(file, false); return null } catch (error) { return errnoOf(error) }
+  }).find((code) => code !== null)
+  if (stateKept) {
+    console.error(`\n  ✗ Local machine CLI state is still on this computer (STATE_NOT_DELETED (${stateKept})). Run \`harness logout\` again.\n`)
     process.exit(1)
   }
   // Only when there was no `grid` to run at all. A child that ran has already said what it did, and
