@@ -1844,6 +1844,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     return entry ? outsidePresent(entry) : harnessPresent(agentId, began.get(agentId) ?? lastBegan.get(agentId))
   }
 
+  /** The agents whose done decided a rouse that waits for the turn's tokens: one whose next turn starts meanwhile, the
+   *  person's answer most likely, is not roused, and its card stays quiet for that turn's end. Each goes as its done
+   *  finishes or its next turn starts, so it holds at most the agents whose done waits. */
+  const rousing = new Set<string>()
   /** A finished turn the dial rang or listed, for the value counts: a silent one told the person nothing. */
   const announced = (agentId: string, tier: Tier): void => {
     if (tier !== 'silent') count((usage) => usage.turnAnnounced(agentId))
@@ -1873,6 +1877,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       // Read while the turn's start is kept, which a Harness agent's presence reads. A sub-agent's or a given-up turn's
       // end is not its agent's, and a failed turn rang as one.
       const rouse = !event.subagent && !failedLast.has(event.agentId) && notices.quiet(event.agentId) && !present(event.agentId)
+      if (rouse) rousing.add(event.agentId)
       if (!event.subagent) nudgeOver(event.agentId)
       // Its Stop hook's report comes after this done (presentAtStop).
       if (at !== undefined && !outside(event.agentId)) noteEnded(event.agentId, at)
@@ -1885,8 +1890,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         const all = { ...fields, ...tokens }
         if (Object.keys(all).length) void cable.turnStats(event.agentId, all)
         void cable.turnDone(event.agentId)
-        // After the done, which may wait for its tokens: a card closed meanwhile is not asked.
-        if (rouse) rouseNotice(event.agentId)
+        // After the done, which may wait for its tokens: a card closed meanwhile is not asked, nor one whose agent's next
+        // turn started meanwhile.
+        if (rouse && rousing.delete(event.agentId)) rouseNotice(event.agentId)
       }
       if (!start || !cable.wantsStats()) return finish({})
       return turnTokens(event.agentId, start).then(finish)
@@ -1990,6 +1996,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     void tail.then(() => { if (queued.get(agentId) === tail) queued.delete(agentId) })
   }
   const toDial = (event: DialEvent): void => {
+    // As it comes, not in its agent's order, which holds it behind a done waiting for its tokens.
+    if (event.kind === 'processing') rousing.delete(event.agentId)
     // The last streamed text goes out before the turn's end, in the same per-agent order.
     if (event.kind !== 'processing') endReplies(event.agentId, true)
     // Read as the card comes, not as its turn in the queue does: a summary can wait up to 2 s behind its turn's done
@@ -3471,6 +3479,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     }
     if (ran.payload?.kind === 'turn_started' && ran.agentId) {
       const agentId = ran.agentId
+      rousing.delete(agentId)
       count((usage) => usage.turnStarted(agentId))
       // A question its last turn left open is stale: it must not hold a notice of this turn back.
       questionsEnded(agentId, 'answered')
