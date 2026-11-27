@@ -1,9 +1,9 @@
 # Closing cards, round 1: the spec's starting bullet
 
-v7 measures v4 against v4 plus one bullet that tells the agent to close the card the person answered. Its hooks and
-harness answers are v4's; if Part 5 ships, they become Part 5's shipped variant's at the eval's Base step, and v7 is
-measured against that variant. Run with `--follow-ups`: each need scenario takes a second turn (see the README's
-Follow-ups section). The gates are read on val and test pooled, in `crowd`.
+v7 is v5, Part 5's shipped variant (v4's text, its session-start line and the Stop hook), plus one bullet that tells
+the agent to close the card the person answered. Its hooks and harness answers are v5's, and it is measured against
+v5 (round 5). Run with `--follow-ups`: each need scenario takes a second turn (see the README's Follow-ups section).
+The gates are read on val and test pooled, in `crowd`.
 
 ## Change
 

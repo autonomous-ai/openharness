@@ -87,10 +87,11 @@ approves the harness: one changed or planted after approval stops the pass.
 
 An answer with `"stop": true` answers a Stop hook, as `harness device claude stop` would in the eval's world: a dial is
 always attached, the person is always away, the skill is on, the run counts as a person's session, not a headless one
-(the product never looks under `claude -p`), and "rang in this turn" means a ring already recorded in the run. The
-fake reads the hook's input on stdin and writes the answer's `stdout` (the block) only when the input has no
-`stop_hook_active: true`, the last 400 code points of `last_assistant_message` hold `?` or `？`, and the run has not
-rung; otherwise it prints nothing. It always exits 0 and records whether it blocked. A block costs one more model round:
+(the product never looks under `claude -p`), and "rang in this turn" means a ring already recorded in the turn: turn
+2's mark clears turn 1's, as the product does at the person's own prompt, except after a `relay`, which is no prompt of
+theirs. The fake reads the hook's input on stdin and writes the answer's `stdout` (the block) only when the input has
+no `stop_hook_active: true`, the last 400 code points of `last_assistant_message` hold `?` or `？`, and the turn has
+not rung; otherwise it prints nothing. It always exits 0 and records whether it blocked. A block costs one more model round:
 `nudged` is 1 on a run where it happened, outside `score`.
 
 ## Run
@@ -188,16 +189,14 @@ gates, read in `crowd`:
 - **right:** `close_right` in at least 90% of the `answer` and `answer-one` runs it is given on;
 - **wrong:** at most 1 card closed wrong;
 - **ring:** no worse than the base round (`CLOSE_BASE_ROUND`, `lib/summarize.ts`): held-out recall paired with it not
-  down beyond noise, and needless rings at most its held-out count + 1 (v4: 1 of 27).
+  down beyond noise, and needless rings at most its held-out count + 1 (v5: 0 of 27).
 
 `unrung` is reported (closes, `close_errors`), not gated.
 
-v7 is v4's skill with the closing bullet last in its body (`flow/v7/change.md`); its hooks and harness answers are
-v4's. The base is set at the eval's Base step: if Part 5 ships, the branch is first rebased onto `main` with Part 5,
-then, in one commit with their tests, v7's `hooks.json` and `harness-answers.json` become Part 5's shipped variant's
-and `CLOSE_BASE_ROUND` that variant's round, so v7 is v4's text, the bullet and Part 5's Stop hook, measured against
-v4 and that hook. Before the first pass, read S (the last `spend` of the status table in `flow/narrative.md`, after
-`summarize.ts`) and report it (see Cost). From `cli/`, one pass at a time:
+v7 is v5, Part 5's shipped variant, with the closing bullet last in its body (`flow/v7/change.md`): v4's text, the
+bullet and Part 5's Stop hook, its hooks and harness answers v5's, measured against v5 (`CLOSE_BASE_ROUND` 5). Before
+the first pass, read S (the last `spend` of the status table in `flow/narrative.md`, after `summarize.ts`) and report
+it (see Cost). From `cli/`, one pass at a time:
 
 ```sh
 npx tsx evals/dial-skill/run-eval.mjs --flow evals/dial-skill/flow --variant v7 --follow-ups --condition crowd --split val,test --reps 2 --concurrency 3 --timeout-s 1500 --spend-cap-usd 320
