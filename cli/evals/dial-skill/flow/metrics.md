@@ -67,9 +67,9 @@ the three close gates, read in `crowd`:
 
 - **right:** `right` at least 90% of the runs it is over;
 - **wrong:** `wrong` at most 1;
-- **ring:** the variant rings no worse than round 4, whose text the closing bullet is added to: held-out recall paired
-  with round 4's over case means, its 95% interval not wholly below 0, and needless rings at most round 4's held-out
-  count + 1.
+- **ring:** the variant rings no worse than round 5 (v4 + Part 5's Stop hook), which the closing bullet is added to:
+  held-out recall paired with round 5's over case means, its 95% interval not wholly below 0, and needless rings at
+  most round 5's held-out count + 1.
 
 A gate with nothing measured fails.
 

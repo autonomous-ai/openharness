@@ -104,8 +104,9 @@ answer: unit tests hold it. What the eval measures is the agent's judgment, whic
   4. two asks rung, the person answers one: close that one alone, by its id;
   5. the person's answer to an ask that was never rung: no error, nothing wrongly closed.
 - **Gates, held out (val and test pooled):** right close on (1) and (4) at least 90%; a wrong close (2, 3, the other
-  card of 4, or a close in turn 1 before any answer) at most 1; the ring itself no worse than v4 in `crowd`: recall not
-  down beyond noise and at most one more needless ring (the body changed, the description did not).
+  card of 4, or a close in turn 1 before any answer) at most 1; the ring itself no worse than v5 (v4 + Part 5's Stop hook) in
+  `crowd`: recall not down beyond noise and needless rings at most v5's + 1 (the body changed, the description did
+  not).
 - **Hill-climb:** the body bullet only (the description stays v4's), at most 2 rounds in `crowd` on train and val,
   designed from train and val traces only; test is read once, as counts. If no text passes, the starting text ships
   only if it meets the wrong-close gate; otherwise the PM brings the numbers back before anything ships.
