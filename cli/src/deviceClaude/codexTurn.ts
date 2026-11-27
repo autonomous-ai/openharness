@@ -17,13 +17,12 @@ import { isAbsolute, relative } from 'node:path'
 export const CODEX_REVIEWER_READ_BYTES = 16 * 1024 * 1024
 const CHUNK_BYTES = 64 * 1024
 const NEWLINE = 0x0a
+/** The `event_msg` payloads Codex 0.172.0 writes at a turn's end, persisted by rollout/src/policy.rs: TurnComplete and
+ *  TurnAborted. TurnComplete's `turn_complete` is a name Codex only reads, never writes. */
+const END_TYPES: ReadonlySet<unknown> = new Set(['task_complete', 'turn_aborted'])
 /** Only a line holding one of these is parsed. Inside a JSON string their quotes are escaped, so a tool's output never
  *  holds one. */
-const MARKER = '"type":"turn_context"'
-/** The `event_msg` payloads Codex 0.172.0 writes at a turn's end: TurnComplete (`task_complete`, alias `turn_complete`)
- *  and TurnAborted, persisted by rollout/src/policy.rs. */
-const END_TYPES: ReadonlySet<unknown> = new Set(['task_complete', 'turn_complete', 'turn_aborted'])
-const END_MARKERS = [...END_TYPES].map((type) => `"type":"${type}"`)
+const MARKERS = ['"type":"turn_context"', ...[...END_TYPES].map((type) => `"type":"${type}"`)]
 const ENDED = 'ended'
 
 export interface TurnSetting {
@@ -40,7 +39,7 @@ const textOf = (value: unknown): string | null => typeof value === 'string' ? va
 /** The line's two fields when it is [turnId]'s `turn_context` record, ENDED when it is the event of [turnId]'s end,
  *  else null. */
 function settingOf(line: Buffer, turnId: string): TurnSetting | typeof ENDED | null {
-  if (!line.includes(MARKER) && !END_MARKERS.some((marker) => line.includes(marker))) return null
+  if (!MARKERS.some((marker) => line.includes(marker))) return null
   let record: unknown
   try {
     record = JSON.parse(line.toString('utf8'))

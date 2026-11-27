@@ -171,7 +171,6 @@ describe('readTurnSetting', () => {
   describe('the turn\'s end', () => {
     it.each([
       ['task_complete', taskComplete(USER_TURN)],
-      ['turn_complete (its alias)', edited(taskComplete(USER_TURN), (payload) => { payload.type = 'turn_complete' })],
       ['turn_aborted', turnAborted(USER_TURN)],
     ])('the turn\'s own %s after its turn_context: nothing', (_, end) => {
       expect(settingIn(HEAD + lines(USER_LINE) + filler(4096) + lines(end) + filler(1024))).toBeNull()
