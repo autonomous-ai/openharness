@@ -38,7 +38,6 @@ the session.
 The same folder is a Codex plugin too (`.codex-plugin/plugin.json`, Codex 0.172.0 or later). Its hooks are in
 `hooks/codex.json`: `PermissionRequest`, on every tool, and `PreToolUse`, on `request_user_input`. Both run
 `harness device codex asked` (off Windows through `hooks/codex-asked`), which tells the daemon and decides nothing.
-Codex runs them in the background (`async`), so its prompt shows at once while the hook still tells the daemon.
 Claude Code's `hooks/hooks.json` and its mod stay Claude Code's.
 
 Codex runs these hooks before its own automatic review, and their input does not say whether the person is asked. So
@@ -68,9 +67,10 @@ Missed on purpose:
   only the first ask of a session for the same tool and line, until the session ends. After a plain "Yes", the very
   same command asked again in that session is not rung again. After the Harness devices process restarts, a command
   approved for the session can ring once more.
-- An ask answered before the hook tells the daemon (likelier on Windows, where the hook takes about 1.5 s): it can ring
-  once, then the line goes once Codex writes to the session's rollout again. Once the rollout shows the turn ended, the
-  hook tells nothing.
+- Codex waits for the hook before it shows its prompt: about 0.25 s on macOS and 0.5-1.5 s on Windows, where Codex runs
+  it through Windows PowerShell. Codex can run a hook in the background (`"async": true`), but then its word can reach
+  the dial after the person has answered, and the dial rings for an ask already answered: on Windows, in 4 of 5 turns
+  that ended right after the command (#4668). So the hooks stay in the foreground.
 
 ## What it never does
 
