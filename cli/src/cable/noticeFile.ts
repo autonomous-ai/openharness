@@ -3,11 +3,13 @@
 // It is this computer's, so it lives in the daemon's data folder beside dial-notify.json. One writer: the devices'
 // process.
 import { closeSync, openSync, readSync } from 'node:fs'
-import { NOTICE_LINE_MAX_BYTES } from '../lib/dialNotice.js'
+import { NOTICE_LINE_MAX_BYTES, noticeKind } from '../lib/dialNotice.js'
 import { errorKind } from '../lib/log.js'
 import { atomicWriteFile, jsonObject, readState } from '../lib/secureState.js'
 import { SHOWN_ONLY_PREFIX } from './cableSession.js'
-import { NOTICE_KEY_MAX_CHARS, NOTICE_KEYS_MAX, NOTICES_PENDING_MAX, type StoredNotice } from './notices.js'
+import {
+  NOTICE_KEY_MAX_CHARS, NOTICE_KEYS_MAX, NOTICE_WAITING_MAX, NOTICES_PENDING_MAX, type StoredNotice,
+} from './notices.js'
 
 export const NOTICES_FILE = 'dial-notices.json'
 /** Twenty cards are about 10 KB; anything much larger is not ours, and reading it whole would cost the start. */
@@ -49,6 +51,20 @@ const isStoredNotice = (card: unknown): card is StoredNotice => {
     && typeof at === 'number' && Number.isSafeInteger(at) && at >= 0
 }
 
+/** The id an agent closes its card by: the first 8 characters of the uuid in its question id, as the desk reads it. */
+const cardId = (id: string): string => id.slice(SHOWN_ONLY_PREFIX.length, SHOWN_ONLY_PREFIX.length + 8)
+
+/** The cards as the desk keeps them: an agent's NOTICE_WAITING_MAX waiting cards at most and one other, no two of one
+ *  id. At most NOTICES_PENDING_MAX cards, so each count's scan is bounded. */
+const fitsDesk = (cards: readonly StoredNotice[]): boolean => {
+  const held = (agentId: string, waiting: boolean) =>
+    cards.filter((card) => card.agentId === agentId && (noticeKind(card.line) === 'waiting') === waiting).length
+  return cards.every(({ agentId, line }) => noticeKind(line) === 'waiting'
+    ? held(agentId, true) <= NOTICE_WAITING_MAX
+    : held(agentId, false) <= 1)
+    && new Set(cards.map(({ id }) => cardId(id))).size === cards.length
+}
+
 /** A card of its known fields only: what another build added is not carried. */
 const known = ({ agentId, keys, id, line, host, who, at }: StoredNotice): StoredNotice => ({
   agentId, keys: [...keys], id, line, host,
@@ -82,8 +98,9 @@ const read = (file: string): StoredNotice[] | Dropped => {
   if (parsed.v !== 1) return 'version'
   const { cards } = parsed
   if (!Array.isArray(cards) || cards.length > NOTICES_PENDING_MAX || !cards.every(isStoredNotice)) return 'shape'
-  // One card an agent, as the desk keeps them.
-  if (new Set(cards.map((card) => card.agentId)).size < cards.length) return 'shape'
+  // An older CLI (a rollback), which keeps one card an agent, drops a file with several once, as `shape`: cards lost,
+  // never wrong.
+  if (!fitsDesk(cards)) return 'shape'
   return cards.map(known)
 }
 
