@@ -36,6 +36,7 @@ import { currentUserShell } from './userShell.js'
 import { harnessPaneOwner } from './harnessSessionLabel.js'
 import { errorKind } from './log.js'
 import { atomicWriteFile } from './secureState.js'
+import { removeQuietly } from './removePath.js'
 
 export { shellSingleQuote }
 
@@ -627,7 +628,7 @@ export function launchAttempts(first: string[], build: () => string[]): (attempt
   return (attempt) => {
     const file = attempt === 1 ? null : launchFileOf(last)
     if (!file) return last
-    try { rmSync(file, { force: true }) } catch { /* the sweep takes it */ }
+    removeQuietly(file) // the sweep takes it
     last = build()
     return last
   }

@@ -3,6 +3,7 @@ import { join } from 'path'
 import { randomBytes } from 'node:crypto'
 import { homePath } from '../config/envFields.js'
 import { harnessPath } from '../config/harnessHome.js'
+import { removeQuietly } from './removePath.js'
 import { atomicWriteFile, jsonObject, probeState, readState, requireState, type TrustFile } from './secureState.js'
 
 export interface AuthSession {
@@ -328,7 +329,7 @@ let releaseOnExitArmed = false
 export function releaseHeldAuthLock(): void {
   if (!holdingLock) return
   holdingLock = false
-  try { rmSync(LOCK_FILE, { force: true }) } catch { /* ignore */ }
+  removeQuietly(LOCK_FILE)
 }
 
 /** The refresh lock: one process at a time renews or marks the sign-in, so a rotated refresh token is never written
@@ -371,7 +372,7 @@ export async function withLock<T>(action: () => Promise<T>): Promise<T> {
     } finally {
       holdingLock = false
       closeSync(fd)
-      try { rmSync(LOCK_FILE, { force: true }) } catch { /* ignore */ }
+      removeQuietly(LOCK_FILE)
     }
   }
 }

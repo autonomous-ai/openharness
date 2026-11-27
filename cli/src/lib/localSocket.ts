@@ -27,6 +27,7 @@ import { configuredPortOf, readDaemonRecord } from './daemonRecord.js'
 import { daemonPipe, type LocalDaemonOptions } from './windows/daemonPipe.js'
 import { checkPipeAuth, newPipePath, NonceWindow, PIPE_AUTH_HEADER, PIPE_PROOF_HEADER, pipeIdOf, pipeProofValue } from './windows/pipeAuth.js'
 import { pipeAbsent, pipeRequest, PipeUnproven } from './windows/pipeClient.js'
+import { removeQuietly } from './removePath.js'
 
 /**
  * One socket per configured port in this OS user's data directory: `daemon-<port>.sock`. Its name
@@ -208,12 +209,12 @@ export async function listenLocalSocket(handler: http.RequestListener, path: str
         } catch (error) {
           server.closeAllConnections()
           server.close()
-          try { unlinkSync(staging) } catch { /* never created, or already moved */ }
+          removeQuietly(staging) // never created, or already moved
           reject(error)
           return
         }
         // The socket is at `path` now; the staged name goes (a rename already took it).
-        try { unlinkSync(staging) } catch { /* renamed into place */ }
+        removeQuietly(staging) // renamed into place
         resolve({ server, path, close: async () => closeNow(), closeSync: closeNow })
       })()
     })

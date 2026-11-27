@@ -15,10 +15,11 @@
  */
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import {
-  closeSync, constants, fchmodSync, fsyncSync, linkSync, lstatSync, openSync, rmSync, unlinkSync, writeFileSync,
+  closeSync, constants, fchmodSync, fsyncSync, linkSync, lstatSync, openSync, rmSync, writeFileSync,
 } from 'node:fs'
 import type { IncomingHttpHeaders } from 'node:http'
 import { join } from 'node:path'
+import { removeQuietly } from '../removePath.js'
 import { readPrivateStateFile, requireWindowsStateFile, secureStateDirectory, syncStateDirectory } from '../secureState.js'
 
 export const PIPE_AUTH_HEADER = 'x-harness-auth'
@@ -208,7 +209,7 @@ function publish(dataDir: string, name: string, token: Buffer): boolean {
   } finally {
     // Best effort: on Windows an antivirus or indexer may still hold the temp file. A token already published must
     // not fail the start, and an earlier error must not be hidden by this one; a leftover temp file is harmless.
-    try { unlinkSync(temp) } catch { /* left behind */ }
+    removeQuietly(temp)
   }
 }
 
