@@ -10138,11 +10138,14 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       expect(calls('turnDone')).toEqual([[ID], [ID]])
     })
 
-    it('no for a Harness agent whose turn began 30 s ago, its tile on screen', async () => {
+    // Claude Code's reader ends the turn at end_turn, before its Stop hook runs: the report comes after the done.
+    it('no for a Harness agent whose turn began 30 s ago, its tile on screen, its done just before the report', async () => {
       const { port, listener } = devices({ core: bound(), now: () => Date.now() })
       processing(port)
       port.desk(['h1'], true)
       await vi.advanceTimersByTimeAsync(30_000)
+      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'done', text: 'done' } })
+      await vi.advanceTimersByTimeAsync(1_400)
       expect(nudge(listener, 's-h1', true)).toEqual({ nudge: false })
       expect(logs).toContain('[device] nudge · claude · present')
     })
