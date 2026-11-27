@@ -123,6 +123,23 @@ class Png(unittest.TestCase):
             with self.subTest(name), self.assertRaises(ValueError):
                 icons.decode_png(data)
 
+    def test_the_decoder_refuses_a_colour_space_the_icons_it_writes_would_drop(self):
+        # The icons it writes carry no colour space, so they are read as sRGB: a source in another one would change
+        # colour. sRGB wins over gAMA and cHRM, as in the PNG spec, so an sRGB source tagged all three ways is read.
+        row = [bytes(6)]
+        srgb, gama, chrm = (b"sRGB", b"\0"), (b"gAMA", struct.pack(">I", 45455)), (b"cHRM", bytes(32))
+        for name, extra in (("ICC profile", ((b"iCCP", b"p\0\0" + zlib.compress(b"profile")),)),
+                            ("coding points", ((b"cICP", bytes((9, 16, 0, 1))),)), ("gamma", (gama,)),
+                            ("chromaticities", (chrm,)), ("ICC profile over sRGB", (srgb, (b"iCCP", b"p\0\0"))),
+                            # A critical chunk the decoder does not know may change what every pixel means.
+                            ("unknown critical chunk", ((b"QQQQ", b""),))):
+            with self.subTest(name), self.assertRaises(ValueError):
+                icons.decode_png(png(2, 1, 2, row, [0], extra=extra))
+        for name, extra in (("sRGB", (srgb,)), ("sRGB with gAMA and cHRM", (srgb, gama, chrm)),
+                            ("suggested palette and a text", ((b"PLTE", bytes(3)), (b"tEXt", b"k\0v")))):
+            with self.subTest(name):
+                self.assertEqual(decode(png(2, 1, 2, row, [0], extra=extra)), ((2, 1), b"\0\0\0\xff" * 2))
+
 
 class App(unittest.TestCase):
     def test_a_downscale_is_the_area_weighted_mean_in_premultiplied_alpha(self):
