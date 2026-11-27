@@ -8,8 +8,9 @@
  * later choice, through the delete that already exists.
  */
 import { randomUUID } from 'node:crypto'
-import { closeSync, fsyncSync, linkSync, mkdirSync, openSync, readdirSync, unlinkSync, writeSync } from 'node:fs'
+import { closeSync, fsyncSync, linkSync, mkdirSync, openSync, readdirSync, writeSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { removeQuietly } from '../../lib/removePath.js'
 import { readClaudeTranscript, writeClaudeTranscript } from './claudeCode.js'
 import { readCodexRollout, writeCodexRollout } from './codex.js'
 import type { Meta, Transcript } from './canonical.js'
@@ -101,5 +102,5 @@ export function writeNewSessionFile(path: string, text: string): void {
       fsyncSync(fd)
     } finally { closeSync(fd) }
     linkSync(temporary, path)
-  } finally { unlinkSync(temporary) }
+  } finally { removeQuietly(temporary) }
 }
