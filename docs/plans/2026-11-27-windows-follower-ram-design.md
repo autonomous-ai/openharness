@@ -70,7 +70,8 @@ On macOS and Linux the plugin's mod reaches the daemon's socket itself (`plugins
    - The Windows install, `cli/scripts/install.ps1`: when the manifest has `inbox`, it downloads `inbox.mjs` into the
      version folder and checks its sha256 and size (`Save-HarnessVerified`). A version folder already there counts as
      installed only when it also holds an `inbox.mjs` with the manifest's sha256, and that rule applies only when the
-     manifest has `inbox`, so a reinstall fills it in. There is no stable copy (unlike `cli\notify.mjs`): harness.exe
+     manifest has `inbox`, so a reinstall fills it in. An `inbox` of the wrong shape is ignored as if absent, as the
+     updaters do (section 5), and never fails the install. There is no stable copy (unlike `cli\notify.mjs`): harness.exe
      runs it from the version folder.
    - The pty payload that carries the new `harness.exe` is released and promoted as today (section 3).
    - macOS and Linux (`install.sh`, `install-cli.sh`, the Unix updater's stage) do not fetch it: nothing runs it there.
@@ -104,7 +105,9 @@ On macOS and Linux the plugin's mod reaches the daemon's socket itself (`plugins
   the choice lives there.
 - The manifest and the installers: `windowsInstallManifest.spec.ts`, `installPs1.spec.ts` (with and without `inbox`,
   and a version folder missing it or holding another sha256), `publishCliStaging.spec.ts`, and a new spec for
-  `merge-manifest.mjs` (with and without the inbox arguments).
+  `merge-manifest.mjs` (with and without the inbox arguments). On Windows CI, `windows.yml`'s install job
+  (`check-install.ps1`) checks `cli\<version>\inbox.mjs` is installed and that `harness device claude inbox
+  not-a-session-id` prints `{"off":true}` and exits 0 through the installed `harness.exe`.
 - The updaters: `selfUpdate.spec.ts`, `updateCommand.spec.ts` and `cliVersions.spec.ts`: a manifest with `inbox`
   stages it on Windows and not elsewhere, one without it (or with a bad one) still updates, a folder staged without
   it is written again, one with the same files is reused, a release that changes only `inbox.mjs` is staged, and an

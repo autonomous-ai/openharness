@@ -38,6 +38,12 @@ inbox without loading the whole CLI". Build on it; do not redo it.
 5. The choice is a helper in `pty/src/command.rs`; `launcher.rs`'s `Resolved` and `harness-launch.exe` do not change.
 6. Spec section 4 (the release process) is under review by Ken's side: Tasks 8 to 13 hold it, each apart, so their
    feedback changes those tasks only.
+7. `install.ps1` reads `inbox` by the updaters' rule: only a string `url` and a string `sha256` make it present; any
+   other shape is ignored as absent and never fails the install (Task 13).
+8. `windows.yml`'s install job runs the real follower: `check-install.ps1` checks `cli\<version>\inbox.mjs` exists and
+   that `harness device claude inbox not-a-session-id` prints `{"off":true}` and exits 0, the only CI run of the real
+   `inbox.mjs` through the real `harness.exe`. It is [Ken] Task 14, and the PR body says it is there for Ken's side to
+   see.
 
 ## What this plan decides from the code (read for this plan, not run)
 
@@ -76,9 +82,11 @@ inbox without loading the whole CLI". Build on it; do not redo it.
 | 11 | [Ken] Local install manifest | `S/windows-install-manifest.mjs`, `X/windowsInstallManifest.spec.ts` | 2 | medium | `windowsInstallManifest.spec.ts` |
 | 12 | [Ken] Windows end-to-end fixtures | `S/windows-cli-e2e/fake-cdn.mjs`, `X/fakeCdn.spec.ts`, `S/windows-cli-e2e/fake-cdn.sh`, `S/windows-cli-e2e/serve-updates.sh`, `S/windows-dial-e2e/bundle.mjs` | 8 | high | `fakeCdn.spec.ts` layout cases |
 | 13 | [Ken] `install.ps1` | `S/install.ps1`, `X/installPs1.spec.ts`, `docs/testing/windows-cli-e2e.md` | 3 | high | `installPs1.spec.ts` real-install cases (Windows; seen in windows-e2e) |
+| 14 | [Ken] The install job runs the real follower | `S/windows-ci/check-install.ps1`, `X/windowsCiChecks.spec.ts` | 3, 11, 13 | medium | `windowsCiChecks.spec.ts` text case (Mac); the real run only in the PR's windows-e2e `install` job |
 
-**Longest chain:** 4 → 5 → 6 (three tasks; 4 → 5 → 7, 2 → 8 → 10 and 2 → 8 → 12 are as long). Tasks 2, 3 and 4 start at
-once; 7 runs beside 6; 9 and 11 start once 2 lands; 13 once 3 lands.
+**Longest chain:** 4 → 5 → 6 (three tasks; 4 → 5 → 7, 2 → 8 → 10, 2 → 8 → 12, 3 → 13 → 14 and 2 → 11 → 14 are as
+long). Tasks 2, 3 and 4 start at once; 7 runs beside 6; 9 and 11 start once 2 lands; 13 once 3 lands; 14 once 3, 11
+and 13 have.
 
 ## Global Constraints
 
@@ -100,7 +108,7 @@ once; 7 runs beside 6; 9 and 11 start once 2 lands; 13 once 3 lands.
   `switchTo`, `cli.ts`, the pty payload release and promote.
 - Every behavior task: a red commit (the failing tests), then a green commit. `npm run typecheck` when a TypeScript
   signature changes. Comments say why and name the spec. Names follow `docs/naming-system.md`. Copy stays short.
-- **Section 4 tasks (8-13)** land in their own commits so Ken's review can change them alone.
+- **Section 4 tasks (8-14)** land in their own commits so Ken's review can change them alone.
 - **No production:** never run `upload-cli.sh`, `release.yml`, `promote-pty-payload.sh` or `publish-cli-staging.sh`
   without `DRY_RUN=1`; no `gcloud`, no bucket, no CDN. Release scripts are tested by their specs and fakes only.
 - **This Mac is shared:** a task runs only its own specs, `npm run typecheck` and `cargo test --locked` in `pty/`;
@@ -489,15 +497,18 @@ build); on the Mac only the "as written" cases run.
 - Modify: `cli/scripts/install.ps1` (`Install-HarnessCli`: its comment; the "already installed" rule; one more
   `Save-HarnessVerified` into staging), `docs/testing/windows-cli-e2e.md` (the layout:
   `cli\<version>\{cli.js,notify.mjs,inbox.mjs,package.json}`, no stable `inbox.mjs`)
-- Test: `cli/src/scripts/installPs1.spec.ts` (`build()` takes an inbox option: none, these bytes, or a wrong sha256; the
-  fake `inbox.mjs` prints `inbox.mjs ` and its arguments as JSON)
+- Test: `cli/src/scripts/installPs1.spec.ts` (`build()` takes an inbox option: none, these bytes, a wrong sha256, or a
+  raw `inbox` value written into the manifest as is; the fake `inbox.mjs` prints `inbox.mjs ` and its arguments as JSON)
 
 **Interfaces:**
 - Consumes: Task 3 (`harness.exe device claude inbox <id>` runs `cli\<version>\inbox.mjs` when it is there).
 - The rule: `$inbox = Get-HarnessProperty $Entry 'inbox'`; the folder counts as installed when today's rule holds and,
   only when the manifest has `inbox`, `inbox.mjs` is a file whose sha256 `-ieq` the manifest's; a download saves
   `inbox.mjs` into staging through `Save-HarnessVerified` (sha256 and size) when the manifest has it. What "has inbox"
-  means for a malformed field waits on open question 1.
+  means is the updaters' rule (decision 7): `$inbox` is present only when `Get-HarnessProperty $inbox 'url'` and
+  `Get-HarnessProperty $inbox 'sha256'` are both `[string]`; any other shape is treated as no `inbox` at all, for the
+  "already installed" rule and the download alike, and never throws. A string `sha256` that is not 64 hex digits is
+  present and is refused by `Save-HarnessVerified`, as the updaters refuse its mismatch.
 
 - [ ] **Step 1: Write the failing tests** (`describe.runIf(windows)('install.ps1, installing for real …')`):
   - "installs the follower's inbox.mjs, and harness runs it for the follower and cli.js for the rest": the file's bytes in
@@ -508,10 +519,45 @@ build); on the Mac only the "as written" cases run.
     (`Downloading` printed, the file there), then with other bytes (replaced).
   - "downloads nothing again over an install that holds the same inbox.mjs".
   - "refuses an inbox.mjs that is not the manifest's": exit 1, `failed its checksum`, no `cli\9.8.7`.
+  - `it.each` "installs as if absent an inbox of the wrong shape, and does not fail the install": raw `inbox` values
+    `'inbox.mjs'`, `null`, `[]`, `{ url: 1, sha256 }`, `{ url }`, `{ sha256 }` → exit 0; `cli\9.8.7` holds `cli.js`
+    and `notify.mjs` and no `inbox.mjs`; `harness.exe device claude inbox 0a1b2c3d-…` runs `cli.js`.
 - [ ] **Step 2: Run** (Windows only) `npx vitest run src/scripts/installPs1.spec.ts`. Expected: FAIL. On the Mac:
   `npx vitest run src/scripts/installPs1.spec.ts` passes its "as written" cases and skips the rest.
 - [ ] **Step 3: Implement** `Install-HarnessCli` and the doc line. Keep the file pure ASCII (its first case checks).
 - [ ] **Step 4: Run** the same. Expected: PASS (on windows-e2e).
+- [ ] **Step 5: Commit** red, then green.
+
+### Task 14: [Ken] `windows.yml`'s install job runs the real follower
+
+**Depends on:** 3 (`harness.exe` runs `inbox.mjs`), 11 (the job's manifest lists it), 13 (`install.ps1` installs it).
+**Effort:** medium (one check in one script, one text case).
+**Test that must fail first:** a text case in `windowsCiChecks.spec.ts` (Mac and Linux CI). The check itself runs only
+on Windows, in the PR's windows-e2e `install` job ("Check the install", x64 and arm64): its red and green are seen
+there and nowhere else, so the PR body says this task is for Ken's side to see. No workflow change: the job already runs
+`check-install.ps1 -Version $env:CLI_VERSION`.
+
+**Files:**
+- Modify: `cli/scripts/windows-ci/check-install.ps1` (its header's list of what it checks; one check after the version)
+- Test: `cli/src/scripts/windowsCiChecks.spec.ts` (`describe('check-install.ps1')`)
+
+**Interfaces:**
+- Consumes: Task 3 (`harness.exe device claude inbox <id>` runs `cli\<version>\inbox.mjs`), Task 11 (the install
+  manifest names `inbox`), Task 13 (`install.ps1` puts it in `cli\<version>\`).
+- The check, after `ok   version`: `Fail` unless `$root\cli\$Version\inbox.mjs` is a file
+  (`Test-Path -PathType Leaf`); then `$out = & $harness device claude inbox not-a-session-id`; `Fail` unless
+  `$LASTEXITCODE` is 0 and the output, joined and trimmed, is exactly `{"off":true}`; on success
+  `ok   the follower answers {"off":true} from cli\<version>\inbox.mjs`. A `Fail` line names the exit code and
+  whether the answer differed, never the output. (`cli.js` answers the same; which file ran is Task 13's to show.)
+
+- [ ] **Step 1: Write the failing test** "checks the installed follower: inbox.mjs in the version folder, and
+  {"off":true} with exit 0 through harness.exe": `checkInstall` contains `inbox.mjs`, contains
+  `device claude inbox not-a-session-id`, contains `{"off":true}` and `$LASTEXITCODE`, and that check's lines come after
+  the line holding `ok   version`.
+- [ ] **Step 2: Run** `npx vitest run src/scripts/windowsCiChecks.spec.ts`. Expected: FAIL (no such check).
+- [ ] **Step 3: Implement** the check and the header line. Keep the file ASCII (the spec's case checks).
+- [ ] **Step 4: Run** the spec. Expected: PASS on the Mac; on GitHub, the PR's windows-e2e `install` job prints the new
+  `ok` line on x64 and arm64.
 - [ ] **Step 5: Commit** red, then green.
 
 ---
@@ -539,8 +585,9 @@ Each check names its machine and its isolation. No check touches production: no 
    change; it runs once the PR is ready). Read, do not start: never dispatch `windows.yml` by hand beside the automatic
    run (`docs/validation-and-release.md`). What it shows: `windows-pty`'s "Rust tests" (Task 3 on Windows), "Contract
    suite … Windows CLI specs" (`src/lib/windows/`, so Task 4), "Two real builds" (Task 13's installs with this run's
-   `harness.exe`), and the `install` job (Task 11's manifest of this build, `install.ps1`, `check-install.ps1`). The
-   Windows update path has no workflow: it is held by Tasks 5-7's specs.
+   `harness.exe`), and the `install` job (Task 11's manifest of this build, `install.ps1`, and `check-install.ps1` with
+   Task 14's line `ok   the follower answers {"off":true} from cli\<version>\inbox.mjs`: the real `inbox.mjs` through
+   the real `harness.exe`, on x64 and arm64). The Windows update path has no workflow: it is held by Tasks 5-7's specs.
 4. **Local gates, this Mac, at the final commit, after the PM's go:** `python3 scripts/local-checks.py --run` from a
    clean tree (it selects `cli-pty`, `npm run test:terminal-contract`, for `pty/`); its receipts go into the PR body.
    `npm run test:core` is not required (no `cli/src/core/` or `cli/src/services/` file changes; check with
@@ -559,7 +606,7 @@ Each check names its machine and its isolation. No check touches production: no 
       `node cli/scripts/windows-install-manifest.mjs --out <dir>/manifest --cli-dir <dir>/dist --pty-dir <artifact>
       --node-zip <zip> --version <release X.Y.Z>-dev.inbox1`; copy `<dir>/manifest` and `cli/scripts/install.ps1` to the
       VM.
-   5. On the VM: `$env:HARNESS_ALLOW_UNSIGNED = '1'` (a PR payload is unsigned; see open question 3), then
+   5. On the VM: `$env:HARNESS_ALLOW_UNSIGNED = '1'` (a PR payload is unsigned; see open question 1), then
       `powershell.exe -NoProfile -ExecutionPolicy Bypass -File install.ps1 -Manifest <manifest>\install-manifest.json`.
       Check `harness version` says the dev version and `cli\<version>\inbox.mjs` exists. A `-dev` build never updates
       itself, so it stays.
@@ -575,13 +622,7 @@ Each check names its machine and its isolation. No check touches production: no 
 
 ## Open questions
 
-1. **`install.ps1` and a malformed `inbox`** (no `url`, a non-string `sha256`): ignore it as the updaters do (my pick:
-   one rule for every reader), or fail the install as a malformed `cli` or `notify` does?
-2. **Should `windows.yml`'s install job run the real follower?** `check-install.ps1` would also check that
-   `cli\<version>\inbox.mjs` exists and that `harness device claude inbox not-a-session-id` prints `{"off":true}` and exits
-   0. It is the only CI run of the real `inbox.mjs` through the real `harness.exe`; the spec names none. My pick: yes, as
-   one more small [Ken] task (`cli/scripts/windows-ci/check-install.ps1`), depending on 3, 11 and 13.
-3. **Can Ken's VM run an unsigned `harness.exe`?** The PR's payload is unsigned. If Smart App Control blocks it, the
-   "after" reading through the real chain needs a signed build (a staging release), which this plan does not run; the
-   fallback is to measure `node.exe cli\<version>\inbox.mjs device claude inbox <uuid>` started by hand on the signed
+1. **Can Ken's VM run an unsigned `harness.exe`?** (With the PM: asked of Ken, 2026-11-27.) The PR's payload is
+   unsigned. If Smart App Control blocks it, the "after" reading through the real chain needs a signed build (a staging
+   release), which this plan does not run; the fallback is to measure `node.exe cli\<version>\inbox.mjs device claude inbox <uuid>` started by hand on the signed
    `node.exe`, which measures the file but not the chain.
