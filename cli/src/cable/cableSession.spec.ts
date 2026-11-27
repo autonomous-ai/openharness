@@ -5557,6 +5557,28 @@ describe("a notice card after its agent's turn start", () => {
     } finally { await session.stop() }
   })
 
+  // The firmware drops it at any state but asking (pod_model.c set_state): a turn's end and a live summary as well.
+  it.each<[string, string, (session: Awaited<ReturnType<typeof rung>>['session']) => Promise<void>]>([
+    ['its turn ends', 'turn.done', (session) => session.turnDone('a1')],
+    ['its turn fails', 'turn.error', (session) => session.turnError('a1', 'Build failed')],
+    ['its recap comes', 'summary', (session) => session.summary('a1', 'Shipped it.', 'Shipped it.', 'silent')],
+  ])('a Pro gets the card back as a drawer row after %s; the round dial gets nothing', async (_, t, end) => {
+    const pro = await rung(PRO, CARD)
+    try {
+      await end(pro.session)
+      expect(after(pro.port, t).filter((m) => m.t === 'notif.replace')).toEqual([{ t: 'notif.replace',
+        items: [expect.objectContaining({ agentId: 'a1', summary: LINE, question: true })] }])
+      expect(ofType(pro.port, 'question')).toEqual([])
+    } finally { await pro.session.stop() }
+    const round = await rung(ROUND, CARD)
+    try {
+      await end(round.session)
+      expect(ofType(round.port, t)).toHaveLength(1)
+      expect(ofType(round.port, 'question')).toEqual([])
+      expect(ofType(round.port, 'notif.replace')).toEqual([])
+    } finally { await round.session.stop() }
+  })
+
   it("a Pro is not given back an agent's real question", async () => {
     const { session, port } = await rung(PRO, 'q1', [{ key: 'k', q: LINE, options: ['yes', 'no'] }])
     try {
