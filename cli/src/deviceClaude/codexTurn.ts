@@ -2,7 +2,9 @@
  * A Codex turn's own setting, read from the session's rollout: who reviews its permission asks and its collaboration
  * mode. No field of a hook's input says whether a dialog follows, and Codex runs the hook before its automatic review, so
  * `harness device codex asked` reads these to post only when the person is asked. Codex 0.172.0 writes the turn's
- * `turn_context` line at the turn's first step, before its hooks run, and again after a compaction.
+ * `turn_context` line at the turn's first step, before its hooks run, and again after a compaction. The hook runs in the
+ * background, so it can read the rollout after the turn ended: an end event of the turn's after its last `turn_context`
+ * line reads as not found, as nothing waits on the person then.
  *
  * The path comes from the hook's input, so only a regular file inside the session's Codex home is read, at most
  * CODEX_REVIEWER_READ_BYTES back from its end, and of it two fields alone leave this file. Every failure reads as not
@@ -15,8 +17,14 @@ import { isAbsolute, relative } from 'node:path'
 export const CODEX_REVIEWER_READ_BYTES = 16 * 1024 * 1024
 const CHUNK_BYTES = 64 * 1024
 const NEWLINE = 0x0a
-/** Only a line holding this is parsed. Inside a JSON string its quotes are escaped, so a tool's output never holds it. */
+/** Only a line holding one of these is parsed. Inside a JSON string their quotes are escaped, so a tool's output never
+ *  holds one. */
 const MARKER = '"type":"turn_context"'
+/** The `event_msg` payloads Codex 0.172.0 writes at a turn's end: TurnComplete (`task_complete`, alias `turn_complete`)
+ *  and TurnAborted, persisted by rollout/src/policy.rs. */
+const END_TYPES: ReadonlySet<unknown> = new Set(['task_complete', 'turn_complete', 'turn_aborted'])
+const END_MARKERS = [...END_TYPES].map((type) => `"type":"${type}"`)
+const ENDED = 'ended'
 
 export interface TurnSetting {
   /** `approvals_reviewer`: `user` or `auto_review` in Codex 0.172.0. */
@@ -29,9 +37,10 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value)
 const textOf = (value: unknown): string | null => typeof value === 'string' ? value : null
 
-/** The line's two fields when it is [turnId]'s `turn_context` record, else null. */
-function settingOf(line: Buffer, turnId: string): TurnSetting | null {
-  if (!line.includes(MARKER)) return null
+/** The line's two fields when it is [turnId]'s `turn_context` record, ENDED when it is the event of [turnId]'s end,
+ *  else null. */
+function settingOf(line: Buffer, turnId: string): TurnSetting | typeof ENDED | null {
+  if (!line.includes(MARKER) && !END_MARKERS.some((marker) => line.includes(marker))) return null
   let record: unknown
   try {
     record = JSON.parse(line.toString('utf8'))
@@ -39,9 +48,12 @@ function settingOf(line: Buffer, turnId: string): TurnSetting | null {
     // A line Codex is still writing, or not a record.
     return null
   }
-  if (!isRecord(record) || record.type !== 'turn_context') return null
+  if (!isRecord(record)) return null
   const { payload } = record
+  // An abort Codex writes with no turn_id is no turn's in particular.
   if (!isRecord(payload) || payload.turn_id !== turnId) return null
+  if (record.type === 'event_msg') return END_TYPES.has(payload.type) ? ENDED : null
+  if (record.type !== 'turn_context') return null
   const mode = isRecord(payload.collaboration_mode) ? payload.collaboration_mode.mode : undefined
   return { reviewer: textOf(payload.approvals_reviewer), mode: textOf(mode) }
 }
@@ -90,8 +102,9 @@ function readFully(fd: number, buffer: Buffer, position: number): boolean {
   return true
 }
 
-/** The setting of the last `turn_context` line for [turnId] that starts within the bound, read backwards from the end. */
-function lastSetting(fd: number, size: number, turnId: string): TurnSetting | null {
+/** The setting of the last `turn_context` line for [turnId] that starts within the bound, read backwards from the end,
+ *  or ENDED when the turn's end comes after it. */
+function lastSetting(fd: number, size: number, turnId: string): TurnSetting | typeof ENDED | null {
   // One byte before the bound is read too: its newline tells a line that starts exactly at the bound from part of one.
   const floor = Math.max(0, size - CODEX_REVIEWER_READ_BYTES - 1)
   // The pieces of the line that runs on past the chunk in hand, in the file's order.
@@ -116,12 +129,13 @@ function lastSetting(fd: number, size: number, turnId: string): TurnSetting | nu
 }
 
 /** [turnId]'s setting in the rollout at [transcriptPath], a file of [codexHome]'s; null when it is not found within the
- *  bound or the file may not be read. Never throws. */
+ *  bound, the turn has ended or the file may not be read. Never throws. */
 export function readTurnSetting(transcriptPath: string, turnId: string, codexHome: string): TurnSetting | null {
   const rollout = openRollout(transcriptPath, codexHome)
   if (!rollout) return null
   try {
-    return lastSetting(rollout.fd, rollout.size, turnId)
+    const setting = lastSetting(rollout.fd, rollout.size, turnId)
+    return setting === ENDED ? null : setting
   } catch {
     return null
   } finally {
