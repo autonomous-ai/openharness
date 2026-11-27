@@ -345,7 +345,23 @@ describe('daemonPost on Windows', () => {
     expect(send).toHaveBeenCalledTimes(1)
   })
 
-  it('a daemon that never answers is done within a second, and the request is cancelled', async () => {
+  // The pipe's answer waits on the daemon's proof (`harness-pty ps --json`), which a busy or cold machine takes over 1 s to give.
+  it('a daemon that answers after 2.5 s still hears the prompt', async () => {
+    vi.useFakeTimers()
+    let signal: AbortSignal | undefined
+    const send = vi.fn<typeof fetch>((_input, init) => {
+      signal = init?.signal ?? undefined
+      return new Promise<Response>((resolve) => { setTimeout(() => resolve(new Response('{"ok":true}')), 2_500) })
+    })
+    let done = false
+    const posted = daemonPost(folder('as-'), PORT, 'win32', send)(BODY).then(() => { done = true })
+    await vi.advanceTimersByTimeAsync(2_500)
+    await posted
+    expect(done).toBe(true)
+    expect(signal?.aborted).toBe(false)
+  })
+
+  it('a daemon that never answers is done within four seconds, and the request is cancelled', async () => {
     vi.useFakeTimers()
     let signal: AbortSignal | undefined
     const send = vi.fn<typeof fetch>((_input, init) => {
@@ -354,7 +370,7 @@ describe('daemonPost on Windows', () => {
     })
     let done = false
     const posted = daemonPost(folder('as-'), PORT, 'win32', send)(BODY).then(() => { done = true })
-    await vi.advanceTimersByTimeAsync(999)
+    await vi.advanceTimersByTimeAsync(3_999)
     expect(done).toBe(false)
     await vi.advanceTimersByTimeAsync(1)
     await posted
