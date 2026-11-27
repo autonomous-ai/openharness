@@ -115,13 +115,16 @@ export interface SessionDef {
   /** Cursor's agent's workspace folders, under /work/eval-. */
   folders?: string[]
   /** Claude Code run in the person's tmux, whose client runs in its terminal (V12, O11). Not iTerm2's: there tmux is a
-   *  place. */
+   *  place. Orca's sessions under tmux in one worktree and tab are panes of one tmux session, whose one client runs in
+   *  that tab's one Orca terminal (docs/plans/2026-11-27-orca-tmux-follow-focus-design.md, "Tier A's model change"). */
   tmux?: true
   /** Orca only: the key of its Orca worktree. */
   worktree?: string
   /**
-   * Orca: where its pane sits in the layout, its worktree's tab and that tab's split. iTerm2: its tab and split; for a
-   * tmux or herdr session, the tab its multiplexer's first client runs in and its pane's order in that multiplexer's window.
+   * Orca: where its pane sits in the layout, its worktree's tab and that tab's split; under tmux, the tab whose terminal
+   * runs its tmux, the lowest split's handle that terminal's, and its pane's order in that tmux's window. iTerm2: its tab
+   * and split; for a tmux or herdr session, the tab its multiplexer's first client runs in and its pane's order in that
+   * multiplexer's window.
    */
   tab?: number
   split?: number

@@ -61,8 +61,8 @@ const ORCA_PROVIDER = 'orca-provider-exec'
 
 interface Live {
   pid: number
-  /** Its terminal's shell: an editor terminal's, the agent's parent, its Orca pane's, its iTerm2 tab's or its iTerm2 tmux
-   *  or herdr pane's. */
+  /** Its terminal's shell: an editor terminal's, the agent's parent, its Orca pane's (under tmux its tab's, which that
+   *  tab's other sessions under tmux run in too), its iTerm2 tab's or its iTerm2 tmux or herdr pane's. */
   shell?: number
   /** The other processes of its Orca pane or iTerm2 tab, which end with it: a held one's maker and an iTerm2 tab's login.
    *  Its tmux pane closes with it too (tmux.ts closePane). */
@@ -144,7 +144,7 @@ function hintsOf(world: TierAWorld, s: SessionDef): Record<string, string> {
       __CFBundleIdentifier: APP_BUNDLES.iterm }
   }
   if (s.app === 'orca') {
-    const handle = hookHandle(s, stateOf(world).orcaLaunch)
+    const handle = hookHandle(orcaTerminalOf(world, s), stateOf(world).orcaLaunch)
     return {
       ...(s.chat === undefined ? { TERM_PROGRAM: s.tmux ? 'tmux' : 'Orca' } : {}),
       ORCA_AGENT_SESSION_ID: orcaAgentSessionId(s.key),
@@ -224,17 +224,34 @@ export function nextTty(world: TierAWorld): string | undefined {
  * The session's Orca pane (the plan's Decision 5): a shell on a terminal of its own, made by Orca's terminal host (on
  * no terminal: a child of launchd or init, or on Linux of Orca's main process; orcaHostOf), or a held pane's by a maker
  * of its own that is not Orca's. Under tmux the pane's shell runs tmux's client, and the agent runs in a tmux pane
- * (tmux.ts tmuxPane), on another terminal. The devices' maker check reads each chain as the machine's `ps` would show
- * it (scannedApp.ts ptyMaker). Gives the pane's shell, the shell the agent runs under, and the pane's other processes,
- * which end with it: Orca's host runs on for its other panes.
+ * (tmux.ts tmuxPane), on another terminal; as one tmux client runs in one Orca terminal, a session joining a tab whose
+ * tmux runs already runs in that tab's terminal (orcaTerminalOf). The devices' maker check reads each chain as the
+ * machine's `ps` would show it (scannedApp.ts ptyMaker). Gives the pane's shell, the shell the agent runs under, and the
+ * pane's other processes, which end with it: Orca's host runs on for its other panes.
  */
 function orcaPane(world: TierAWorld, s: SessionDef): { shell: number; parent: number; others: number[] } {
   const state = stateOf(world)
+  const joined = s.tmux ? [...state.live].find(([key]) => key !== s.key && sameOrcaTab(world.session(key), s))?.[1].shell : undefined
+  if (joined !== undefined) return { shell: joined, parent: tmuxPane(world, s, joined), others: [] }
   const others: number[] = []
   const maker = s.held ? startProcess(world, 1, HELD_MAKER) : orcaHostOf(world)
   if (s.held) others.push(maker)
   const shell = startProcess(world, maker, SHELLS[world.platform], nextTty(world))
   return { shell, parent: s.tmux ? tmuxPane(world, s, shell) : shell, others }
+}
+
+/** Whether [o] is an Orca session under tmux in [s]'s worktree and tab. */
+const sameOrcaTab = (o: SessionDef, s: SessionDef): boolean =>
+  o.app === 'orca' && o.tmux === true && (o.worktree ?? 'w1') === (s.worktree ?? 'w1') && (o.tab ?? 0) === (s.tab ?? 0)
+
+/**
+ * The session whose terminal Orca lays the session out in: its own, or under tmux its tab's lead, the first of that tab's
+ * sessions under tmux by split, then as declared. One tmux client runs in one Orca terminal, so those sessions share it
+ * and its handle (docs/plans/2026-11-27-orca-tmux-follow-focus-design.md, "Tier A's model change").
+ */
+function orcaTerminalOf(world: TierAWorld, s: SessionDef): SessionDef {
+  if (!s.tmux) return s
+  return world.scenario.sessions.filter((o) => sameOrcaTab(o, s)).reduce((lead, o) => ((o.split ?? 0) < (lead.split ?? 0) ? o : lead))
 }
 
 /**
@@ -382,10 +399,13 @@ export function keyOfShell(world: TierAWorld, pid: number): SessionKey | undefin
   return undefined
 }
 
-/** The handle of the session's Orca pane while it is open: from its start to its end, at Orca's launch. A chat has none. */
+/** The handle of the session's Orca pane while it is open: from its start to its end, at Orca's launch; under tmux its
+ *  tab's lead's (orcaTerminalOf). A chat has none. */
 export function orcaHandleOf(world: TierAWorld, key: SessionKey): string | undefined {
   const s = world.session(key)
-  return s.app === 'orca' && s.chat === undefined && running(world, key) ? orcaPaneHandle(s, stateOf(world).orcaLaunch) : undefined
+  return s.app === 'orca' && s.chat === undefined && running(world, key)
+    ? orcaPaneHandle(orcaTerminalOf(world, s), stateOf(world).orcaLaunch)
+    : undefined
 }
 
 /** The live session whose open Orca pane has this handle and is its own terminal: a held one's is the terminal another
@@ -467,10 +487,12 @@ export async function dropSession(world: TierAWorld, key: SessionKey): Promise<v
   await closeSession(world, key, live)
 }
 
-/** The agent's process, its terminal's shell and its pane's other processes end, and its tmux pane closes. */
+/** The agent's process, its terminal's shell and its pane's other processes end, and its tmux pane closes. A shell
+ *  another live session runs in, an Orca tab's under tmux, runs on until the last of them ends. */
 function endProcesses(world: TierAWorld, key: SessionKey, live: Live): void {
   world.machine.end(live.pid)
-  if (live.shell !== undefined) world.machine.end(live.shell)
+  const shared = [...stateOf(world).live].some(([other, o]) => other !== key && o.shell === live.shell)
+  if (live.shell !== undefined && !shared) world.machine.end(live.shell)
   for (const pid of live.others) world.machine.end(pid)
   closePane(world, key)
 }

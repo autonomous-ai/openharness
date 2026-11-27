@@ -5,10 +5,16 @@ import { engineOf, type Engine, orcaWorktreeId, type Scenario, type SessionKey, 
 export interface OrcaPane { key: SessionKey; handle: string; title: string; tab: number; split: number; identity?: Engine }
 export interface OrcaWorktree { key: string; path: string; panes: OrcaPane[] }
 
-/** Orca's layout now: `layout`'s worktrees in its order, each with the panes `open` names a handle for, by tab, then split.
- *  `folder` writes a catalog path as the tier's own (tier B's world.folder); the identity is the session's engine. */
+/**
+ * Orca's layout now: `layout`'s worktrees in its order, each with the panes `open` names a handle for, by tab, then split.
+ * A handle two open sessions share is one terminal, the first of them by split: one tmux client in an Orca tab runs
+ * them all (docs/plans/2026-11-27-orca-tmux-follow-focus-design.md, "Tier A's model change"). `folder` writes a catalog
+ * path as the tier's own (tier B's world.folder). The identity is `identity`'s for the pane's session, as tier A names
+ * the engine tmux shows in that terminal, as Orca does; else the session's engine, as tier B's sessions share no handle.
+ */
 export function orcaLayout(scenario: Scenario, layout: StepOf<'orca.layout'> | undefined,
-  open: (key: SessionKey) => string | undefined, folder: (path: string) => string = (path) => path): OrcaWorktree[] {
+  open: (key: SessionKey) => string | undefined, folder: (path: string) => string = (path) => path,
+  identity?: (key: SessionKey) => Engine): OrcaWorktree[] {
   if (layout === undefined) return []
   return layout.worktrees.map((key) => {
     const panes: OrcaPane[] = []
@@ -17,10 +23,10 @@ export function orcaLayout(scenario: Scenario, layout: StepOf<'orca.layout'> | u
       const handle = open(s.key)
       if (handle === undefined) continue
       // A tmux session's pane is Orca's too, and Orca saw Claude Code start in it (the PM, 2026-11-22).
-      panes.push({ key: s.key, handle, title: s.title, tab: s.tab ?? 0, split: s.split ?? 0, identity: engineOf(s) })
+      panes.push({ key: s.key, handle, title: s.title, tab: s.tab ?? 0, split: s.split ?? 0, identity: identity?.(s.key) ?? engineOf(s) })
     }
     panes.sort((x, y) => x.tab - y.tab || x.split - y.split)
-    return { key, path: folder(`/work/eval-${key}`), panes }
+    return { key, path: folder(`/work/eval-${key}`), panes: panes.filter((p, i) => panes.findIndex((q) => q.handle === p.handle) === i) }
   })
 }
 

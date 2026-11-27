@@ -22,6 +22,7 @@ import { orcaLayout, orcaListing } from '../../orcaListing.js'
 import { engineOf, ORCA_ECHO_MS, orcaAgentSessionId, orcaWorktreeId, type StepOf } from '../../types.js'
 import type { StepHandler, TierAWorld } from '../world.js'
 import { codexHomeOf, dropSession, orcaHandleOf } from './sessions.js'
+import { tmuxShown } from './tmux.js'
 import { handlerOf, tell } from './window.js'
 
 /** `orca terminal --help`'s Commands list, the part the devices read (cable/hosts/orca.ts listsWatchFocus). */
@@ -133,8 +134,7 @@ export function answerOrca(world: TierAWorld): void {
       case 'terminal watch-focus': return { code: watches ? 0 : 1 }
       case 'terminal list': {
         const { layout } = modelOf(world)
-        const worktrees = orcaLayout(world.scenario, layout, (key) => orcaHandleOf(world, key))
-        return { code: 0, stdout: JSON.stringify(orcaListing(worktrees, layout?.renamed ?? {})) }
+        return { code: 0, stdout: JSON.stringify(orcaListing(laidOut(world), layout?.renamed ?? {})) }
       }
       case 'terminal switch': {
         const handle = flagOf(argv, '--terminal')
@@ -211,10 +211,14 @@ function endPlugin(world: TierAWorld): void {
   model.front = undefined
 }
 
+/** Orca's layout of the panes open now. A terminal running tmux names the engine of the pane tmux shows in it, as Orca's
+ *  own tmux status does (stablyai/orca server-tmux-status.ts). */
+const laidOut = (world: TierAWorld) => orcaLayout(world.scenario, modelOf(world).layout, (key) => orcaHandleOf(world, key), undefined,
+  (key) => engineOf(world.session(tmuxShown(world, key) ?? key)))
+
 /** The handles of a worktree's open panes, in Orca's order; none when Orca does not lay it out. */
 function terminalsOf(world: TierAWorld, worktree: string): string[] | undefined {
-  const shown = orcaLayout(world.scenario, modelOf(world).layout, (key) => orcaHandleOf(world, key)).find((w) => w.key === worktree)
-  return shown?.panes.map((pane) => pane.handle)
+  return laidOut(world).find((w) => w.key === worktree)?.panes.map((pane) => pane.handle)
 }
 
 /** The plugin tells the devices the worktree on Orca's screen: its open panes' handles, and the worktree as Orca's
