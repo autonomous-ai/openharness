@@ -129,8 +129,9 @@ function take(lock: string, pid: number, me: string): boolean {
     if (code(error) === 'EEXIST' || code(error) === 'ENOENT') return false
     throw error
   } finally {
-    // Quietly: once linked in, a throw here would say the lock was not taken while this process holds it.
-    removeQuietly(draft)
+    // Quietly: once linked in, a throw here would say the lock was not taken while this process holds it. Not
+    // recursive: the draft's name is fixed by the pid, and a folder there, which failed the write, is not this take's.
+    try { rmSync(draft, { force: true }) } catch { /* left: the next take by this pid writes over a file */ }
   }
 }
 
