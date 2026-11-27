@@ -138,6 +138,13 @@ export function dailyDialReview(rows: Row[], breakdowns: Row[], now: Date) {
         ...line('Quiet: the person was with that agent', noticed, sum('dial_notice_present')),
         ...line("Quiet, answered: the person's prompt within 10 min", noticed, sum('dial_notice_present_answered_10m')),
         ...line("Quiet, rung: the person had gone by its turn's end", noticed, sum('dial_notice_present_roused')),
+        // The second look asks only where Harness's skill is on, so its computers are the skill's.
+        ...DIAL_SKILL_ENGINES.flatMap(e => [
+          ...line(`${e}: second looks, yes (skill computer-days; yeses)`, computerDays(`dial_skill_${e}_installation_days`),
+            sum(`dial_nudge_${e}`)),
+          ...line(`${e}: second looks, rang after (skill computer-days; rings)`, computerDays(`dial_skill_${e}_installation_days`),
+            sum(`dial_nudge_${e}_rang`)),
+        ]),
       ] },
       { name: 'First agent on the dial, from a dial connected with an agent running', rows: [
         ...DIAL_FIRST_AGENT_BUCKETS.flatMap(b => line(`First connection ever: ${b}`, distinct(sum(`dial_first_agent_first_${b}_installations`)))),
@@ -250,6 +257,7 @@ export function dailyDialReview(rows: Row[], breakdowns: Row[], now: Date) {
       'day is the last complete UTC day; d7 and d28 the 7 and 28 complete days before today.',
       "Dial skill notices count only what reached the devices: with them not running the command prints no dial and nothing is counted, nor what the listener's own rate refuses.",
       "Answered is the person's prompt to that agent within 10 min of a shown notice where its source can be told (a prompt hook, or the dial's voice): a prompt typed in the Harness app, a tap, Codex words steered into a running turn, a caller with no session and a card restored after a restart are not counted.",
+      "Second looks count only yeses the devices gave a stop that ended on a question, and a notice rung while that stop was held, once a yes: a yes on a session's first stop, told done before its report came, can never count as rang.",
     ],
     coverage: outsideCells(of('health_cli_collector_days')),
     // Too large or misshapen, once a computer a day: while it is, that computer's dial counts are not sent.
