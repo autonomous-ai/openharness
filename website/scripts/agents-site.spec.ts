@@ -55,9 +55,9 @@ describe("the pages and skill agents read", () => {
   const AGENT_VERBS = ["whoami", "ps", "new", "wait", "show", "send", "close"];
   const usageSources: Record<string, [string, string]> = {
     whoami: ["cli/src/agentClient/commands.ts", "WHOAMI_USAGE"],
-    ps: ["cli/src/agentClient/commands.ts", "PS_USAGE"],
-    show: ["cli/src/agentClient/commands.ts", "SHOW_USAGE"],
-    wait: ["cli/src/agentClient/commands.ts", "WAIT_USAGE"],
+    ps: ["cli/src/agentClient/readUsage.ts", "PS_USAGE"],
+    show: ["cli/src/agentClient/readUsage.ts", "SHOW_USAGE"],
+    wait: ["cli/src/agentClient/readUsage.ts", "WAIT_USAGE"],
     close: ["cli/src/agentClient/commands.ts", "CLOSE_USAGE"],
     new: ["cli/src/lib/newCommand.ts", "NEW_USAGE"],
     send: ["cli/src/messages/command.ts", "SEND_USAGE"],

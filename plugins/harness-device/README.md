@@ -31,7 +31,8 @@ on as it would without the plugin. On Windows Claude Code still starts the hook,
 there is none, and the prompt shows once it ends: about 0.5-1 s later in Git Bash, 2-3.5 s in PowerShell (measured on a Windows 11 ARM64 VM). The dial shows
 the prompt as soon as the mod has told it. Where an organization manages Claude Code, its hooks pass over the mod: the
 hook tells, and a PowerShell slower than the hook's 5 s rings nothing at the dial for that prompt, which still waits in
-the session.
+the session. There, on a busy machine, the prompt can show up to about 4 s later: on Windows `asked` waits up to 4 s
+for the daemon (its process check up to 3 s, then 1 s for the post).
 
 ## Codex
 
@@ -50,6 +51,9 @@ within the bound tells nothing. Nothing of the rollout is kept or sent.
 The dial's line: for `Bash`, the command's first line; for `apply_patch`, the first file it adds, updates or deletes;
 for `request_user_input`, its first question; for any other tool, the tool's name. In a Harness pane, Harness hears the
 wait itself, and this one is dropped.
+
+On Windows Codex runs these hooks before its dialog shows, so on a busy machine the dialog can open up to about 4 s
+later while `asked` waits for the daemon (see above).
 
 Missed on purpose:
 

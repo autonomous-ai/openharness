@@ -4,6 +4,7 @@
  */
 import { PTY_HOST_PANE } from '../lib/ptyHost/instance.js'
 import type { AgentLaunch } from '../lib/registry.js'
+import type { EngineLiveness } from '../lib/paneEngineProcess.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
 import { MISSING_HELPER, REPLACED_PROGRAM } from '../engines/kit/identityScan.js'
 import { isOpenclawLocalStopped, OPENCLAW_STATES } from '../engines/openclaw/contract.js'
@@ -26,6 +27,8 @@ export interface Frame {
   /** It has not taken its first task yet (lib/agentFrame.ts). Absent from an older daemon. */
   starting?: boolean
   tmuxPane?: string | null
+  /** A fresh observation on the owning daemon, present only when the CLI asked it to check the engine. */
+  engineLiveness?: EngineLiveness
   /** Where it runs: a PTY host's pane is named by its instance and pane (Windows). */
   terminal?: { runtimes?: Array<{ backend?: string; instance?: string; paneId?: string }> } | null
   project?: { cwd?: string; root?: string; branch?: string | null; worktree?: boolean } | null
@@ -159,7 +162,12 @@ export function listedStateOf(frame: Frame): State {
   if (state === 'stopped' || frame.location === 'cloud') return state
   if (failureOf(frame)) return 'failed'
   if (namedStateOf(frame)?.held) return 'held'
-  return frame.starting === true ? 'starting' : state
+  if (frame.starting === true) return 'starting'
+  if (state !== 'offline') {
+    if (frame.engineLiveness === 'gone') return 'stopped'
+    if (frame.engineLiveness === 'unknown') return 'unknown'
+  }
+  return state
 }
 
 /**
@@ -226,7 +234,7 @@ export function rowsOf(frames: Frame[], ctx: RowContext): Row[] {
     if (!isAgent(frame)) continue
     const state = listedStateOf(frame)
     const last = frame.updatedAt ? Date.parse(frame.updatedAt) : NaN
-    if (state === 'stopped' && (!ctx.all || !(ctx.now - last < STOPPED_WITHIN_MS))) continue
+    if (state === 'stopped' && stateOf(frame) === 'stopped' && (!ctx.all || !(ctx.now - last < STOPPED_WITHIN_MS))) continue
     const cloud = cloudMeta(frame)
     const failure = failureOf(frame)
     const member = { machineId: ctx.machineId, agentId: frame.id }

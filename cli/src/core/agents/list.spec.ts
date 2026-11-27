@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { AgentFrame } from '../../lib/agentFrame.js'
 import type { RegisteredSession } from '../../lib/registry.js'
+import * as paneEngineProcess from '../../lib/paneEngineProcess.js'
 import { createAgentList, deviceAgentListItem, deviceAgentRow, type AgentListDeps } from './list.js'
 
 /**
@@ -17,7 +18,8 @@ const frame = (s: RegisteredSession, createdAt: string, status = 'active') =>
 function setup(live: RegisteredSession[], saved: RegisteredSession[] = [], over: Partial<AgentListDeps> = {}) {
   const created = new Map<string, string>()
   const deps: AgentListDeps = {
-    registry: { advertised: vi.fn(() => live) },
+    registry: { advertised: vi.fn(() => live), byAgent: vi.fn(id => live.find(s => s.agentId === id)) },
+    runtimeChanging: () => false,
     stoppedAgents: { available: vi.fn(() => saved) },
     toProject: vi.fn(async (s) => frame(s, created.get(s.agentId) ?? '2026-10-05T10:00:00.000Z')),
     toStoppedProject: vi.fn(async (s) => frame(s, created.get(s.agentId) ?? '2026-10-05T10:00:00.000Z', 'stopped')),
@@ -79,6 +81,44 @@ describe('the agents a window asks for', () => {
     expect(deps.stoppedAgents.available).toHaveBeenCalledWith(live)
     expect(replies[0].agents.map((agent: AgentFrame) => [agent.id, agent.status])).toEqual([['saved', 'stopped'], ['live', 'active']])
   })
+})
+
+it.runIf(['darwin', 'linux'].includes(process.platform))('attaches fresh tmux engine observations only to the CLI list', async () => {
+  const processIdentity = { pid: 42, executable: 'claude', startMarker: 'test' }
+  const tmux = { active: true, processIdentity, runtimes: [{ backend: 'tmux' as const, paneId: '%42' }] }
+  const live = session('live', tmux)
+  const restarted = session('restarted', tmux)
+  const restoring = session('restoring', tmux)
+  const starting = session('starting', { ...tmux, launch: { state: 'starting' } })
+  const shell = session('shell', { ...tmux, engine: 'terminal' })
+  const offline = session('offline', { ...tmux, active: false })
+  const unbound = session('unbound', { active: true })
+  const { ask, replies } = setup([live, restarted, restoring, starting, shell, offline, unbound], [],
+    { runtimeChanging: id => id === 'restoring' })
+  const read = vi.spyOn(paneEngineProcess, 'readEngineLiveness').mockImplementation(async () => {
+    restarted.runtimes = [{ backend: 'tmux', paneId: '%43' }]
+    return new Map([[processIdentity, 'gone']])
+  })
+  try {
+    await ask({})
+    expect(read).not.toHaveBeenCalled()
+    await ask({ engineLiveness: true })
+    await vi.waitFor(() => expect(replies).toHaveLength(2))
+    expect(read).toHaveBeenCalledExactlyOnceWith([processIdentity, processIdentity])
+    expect(replies[1].agents.map((a: AgentFrame & { engineLiveness?: string }) => [a.id, a.engineLiveness])).toEqual([
+      ['live', 'gone'],
+      ['offline', undefined],
+      ['restarted', 'unknown'],
+      ['restoring', 'unknown'],
+      ['shell', undefined],
+      ['starting', 'unknown'],
+      ['unbound', undefined],
+    ])
+    read.mockRejectedValue(new Error('process status unavailable'))
+    await ask({ engineLiveness: true })
+    await vi.waitFor(() => expect(replies).toHaveLength(3))
+    expect(replies[2].agents[0]).toMatchObject({ id: 'live', engineLiveness: 'unknown' })
+  } finally { read.mockRestore() }
 })
 
 describe('the cloud harnesses', () => {

@@ -1129,7 +1129,7 @@ test("on Windows a permission prompt is told by the install's harness.exe asked,
   await prompt($)
   await w.clock.settle()
   expect(w.beneath).toHaveLength(1)
-  expect(w.runs).toEqual([{ argv: [EXE, ...ASKED], init: { stdin: JSON.stringify(w.beneath[0]!.e), timeoutMs: 5_000, cwd: PROFILE } }])
+  expect(w.runs).toEqual([{ argv: [EXE, ...ASKED], init: { stdin: JSON.stringify(w.beneath[0]!.e), timeoutMs: 10_000, cwd: PROFILE } }])
 })
 
 test("the variable is set before the hooks beneath run, so the plugin's hook runs nothing", async ($, on) => {

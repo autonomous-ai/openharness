@@ -329,7 +329,7 @@ DEPENDS = {
     "tui": ("THIRD_PARTY_NOTICES.md", "cli/package.json", "os/network.py", "os/onboarding.py", "os/root/usr/bin/hn",
             "tests/fixtures/shared-pane-layouts.json"),
     # device-install.spec.ts holds the one-line installer's app-list entry to the vectors.
-    "website": ("backend/src/", "cli/packages/harness-mcp/", "cli/src/agentClient/commands.ts", "cli/src/lib/newCommand.ts",
+    "website": ("backend/src/", "cli/packages/harness-mcp/", "cli/src/agentClient/commands.ts", "cli/src/agentClient/readUsage.ts", "cli/src/lib/newCommand.ts",
                 "cli/src/messages/command.ts", "desktop/lib/core/phone_app_links.dart",
                 "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png",
                 "tests/fixtures/app-list-entry-vectors.json"),
@@ -448,7 +448,7 @@ PR_READS = {
             "tests/fixtures/shared-pane-layouts.json"),
     # device-install.spec.ts holds the one-line installer's app-list entry to the vectors.
     # backend/src/lib/: its Hub contract specs import the backend's contract modules, named without an extension.
-    "website": ("backend/src/lib/", "cli/packages/harness-mcp/", "cli/src/agentClient/commands.ts", "cli/src/lib/newCommand.ts",
+    "website": ("backend/src/lib/", "cli/packages/harness-mcp/", "cli/src/agentClient/commands.ts", "cli/src/agentClient/readUsage.ts", "cli/src/lib/newCommand.ts",
                 "cli/src/messages/command.ts", "desktop/lib/core/phone_app_links.dart",
                 "desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png",
                 "tests/fixtures/app-list-entry-vectors.json"),

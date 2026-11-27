@@ -27,6 +27,7 @@ import { machineListCachePath } from '../device/machineList.js'
 import { readAuthSession } from '../lib/authSession.js'
 import { buildContext, formatContext, type Context, type SpawnCount, type SpawnReason } from './context.js'
 import { formatNext, type NextStep } from './next.js'
+import { ON_MACHINE, PS_USAGE, SHOW_USAGE, WAIT_USAGE } from './readUsage.js'
 import { AgentClientError, openDaemon, whereFor, type Daemon, type Where } from './daemon.js'
 import { Ledger, ledgerPath, type Pending, type Started, type Told } from './ledger.js'
 import { messagesRpc, type Rpc } from '../messages/rpc.js'
@@ -35,6 +36,8 @@ import { TELL_OFF_TEXT } from '../messages/tell.js'
 import { sendPane } from '../messages/command.js'
 import { PROGRAM_TOKEN_FLAG, ProgramRecords, programMay, readProgramToken, sameHash, type ProgramHarness, type ProgramInput } from './program.js'
 import { asSaid, callerOf, clip, cloudMeta, cloudTurn, failureOf, forAgent, isAgent, lastTurn, listedStateOf, matching, namedStateOf, outsideCaller, rowsOf, stateOf, STOPPED_WITHIN_MS, type Caller, type CloudMeta, type Failure, type Frame, type HistoryEvent, type Row, type State } from './model.js'
+
+export { PS_USAGE, SHOW_USAGE, WAIT_USAGE } from './readUsage.js'
 
 export interface ClientDeps {
   pane?: string | undefined
@@ -58,22 +61,6 @@ export interface ClientDeps {
   answerMs?: number
 }
 
-const ON_MACHINE = '--machine <name> is another of your machines, by its name or id as harness new takes it; this one when left out.'
-
-export const PS_USAGE = `Usage: harness ps [--machine <name> | --machines] [--all] [--json]
-
-The harnesses on a machine: name, agent, state, who started it, when it was last active, and what it is about.
---all adds the ones stopped in the last week.
---machines lists every machine of yours at once: each is asked for 5 s, and one that does not answer is listed as
-unreachable.
-${ON_MACHINE}`
-export const SHOW_USAGE = `Usage: harness show [--machine <name>] <name> [--chars N] [--work] [--json]
-
-A harness's state and its last turn: what it was asked and what it answered (the first N characters, 4000 by default),
-and how many background commands it still runs when idle.
---work says its work instead, as facts read on its machine: its branch, its pull request, the files and lines it
-changed, and its checks.
-${ON_MACHINE}`
 export const REPLY_USAGE = `Usage: harness reply [--machine <name>] <name> [--json] -- <words…>
 
 Says <words> to a cloud harness (Devin Cloud, Cursor Cloud, Fo): its answer to the question it asked, or what to do next.
@@ -108,14 +95,6 @@ export const TELL_USAGE = `Usage: harness tell [--machine <name>] <name> [--json
 Gives more work to a harness you started: typed into it once it is free, or given at its next tool call while it
 works. Then wait for it (harness wait <name>) and read its answer (harness show <name>). Only a harness you started,
 and only while the person allows it (harness settings agents-tell-agents).
-${ON_MACHINE}`
-export const WAIT_USAGE = `Usage: harness wait [--machine <name>] <name>[,<name>…] [--any] [--timeout 30m] [--json]
-
-Waits until each harness has stopped working and the background commands it started have ended, then prints its state.
---any returns when the first one does.
-Exit status: 0 idle or closed by you, 1 one's launch failed (harness show says why), 3 one needs the person (a question, a permission, or a problem only they can fix), 4 one stopped, is gone, or its machine refused it,
-124 timed out.
---timeout takes 90s, 30m, 2h; 0 waits as long as it takes.
 ${ON_MACHINE}`
 export const WATCH_USAGE = `Usage: harness watch [--machine <name>] <name> | --mine [--chars N] [--timeout 30m] [--json]
 
@@ -230,6 +209,8 @@ export interface Opened {
   orphan: boolean
   /** `frames` holds the stopped harnesses too. */
   stopped: boolean
+  /** Ask the owning daemon for a fresh engine observation when it lists frames. */
+  engineLiveness?: boolean
 }
 
 function setup(deps: ClientDeps) {
@@ -293,8 +274,8 @@ export function machineNameOf(dataDir: string): string {
   return hostname().replace(/\.local$/, '')
 }
 
-export async function list(daemon: Daemon, includeStopped: boolean): Promise<Frame[]> {
-  const reply = await daemon.request('agents_list', { includeStopped })
+export async function list(daemon: Daemon, includeStopped: boolean, engineLiveness = false): Promise<Frame[]> {
+  const reply = await daemon.request('agents_list', { includeStopped, ...(engineLiveness ? { engineLiveness: true } : {}) })
   if (reply.error) throw new AgentClientError(String(reply.error), 'Harness could not list its harnesses. Try again.')
   return Array.isArray(reply.agents) ? reply.agents as Frame[] : []
 }
@@ -304,11 +285,11 @@ export async function list(daemon: Daemon, includeStopped: boolean): Promise<Fra
  * unless asked: the list with every stopped harness took 128 ms against 10 ms on the owner's Mac (391 harnesses, 21
  * live), and a stopped harness keeps no pane, so the caller is never one.
  */
-export async function opened(s: Setup, includeStopped = false): Promise<Opened> {
+export async function opened(s: Setup, includeStopped = false, engineLiveness = false): Promise<Opened> {
   const where = s.where()
   const daemon = await s.open(where)
   try {
-    const frames = await list(daemon, includeStopped)
+    const frames = await list(daemon, includeStopped, engineLiveness)
     const inPane = callerOf(frames, s.pane, where.machineId)
     // Any status: the core marks every session inactive as it starts (core/main.ts), and a person's terminal is theirs
     // through it. A stopped harness keeps no pane (`toStoppedProject`), so an old pane number never matches one.
@@ -318,7 +299,7 @@ export async function opened(s: Setup, includeStopped = false): Promise<Opened> 
     const caller = inPane ?? (orphan ? null : outsideCaller(s.env, where.machineId))
     const ledger = s.ledger(where.dataDir)
     const asked = await askAfter(s, where, daemon, ledger, caller)
-    return { where, daemon, frames, caller, orphan, stopped: includeStopped, ledger, machine: machineNameOf(where.dataDir), asked }
+    return { where, daemon, frames, caller, orphan, stopped: includeStopped, engineLiveness, ledger, machine: machineNameOf(where.dataDir), asked }
   } catch (error) { daemon.close(); throw error }
 }
 
@@ -437,7 +418,7 @@ async function target(s: Setup, o: Opened, name: string, away: Away | null = nul
   let found = matching(name, named(o.frames))
   // No live one by that name: the stopped ones too, read once.
   if (!found.length && !o.stopped) {
-    o.frames = await list(o.daemon, true)
+    o.frames = await list(o.daemon, true, o.engineLiveness)
     o.stopped = true
     found = matching(name, named(o.frames))
   }
@@ -453,7 +434,7 @@ async function target(s: Setup, o: Opened, name: string, away: Away | null = nul
   if (elsewhere.length === 1 && elsewhere[0].row.child.machineId !== o.where.machineId) {
     const { row } = elsewhere[0]
     const daemon = await s.open(o.where, row.child.machineId)
-    const frame = named(await list(daemon, true)).find((f) => f.id === row.child.agentId)
+    const frame = named(await list(daemon, true, o.engineLiveness)).find((f) => f.id === row.child.agentId)
     if (!frame) { daemon.close(); throw new AgentClientError('GONE', `${elsewhere[0].name} is no longer on its machine.`) }
     return { daemon, frame, machineId: row.child.machineId, machine: row.child.machineId.slice(0, 8), yours: true, remote: true }
   }
@@ -473,11 +454,11 @@ async function targetAway(s: Setup, o: Opened, name: string, away: Away): Promis
   const pending = askedNamed(o, name, away.machineId)
   const daemon = await s.open(o.where, away.machineId)
   try {
-    const live = named(await list(daemon, false))
+    const live = named(await list(daemon, false, o.engineLiveness))
     if (pending && !live.some(exactly(name))) throw notStarted(s.env, pending, away)
     // Asked with the stopped ones too (`opened(s, true)`): an exact stopped name before a live one it merely starts.
-    let found = matching(name, o.stopped ? named(await list(daemon, true)) : live)
-    if (!found.length && !o.stopped) found = matching(name, named(await list(daemon, true)))
+    let found = matching(name, o.stopped ? named(await list(daemon, true, o.engineLiveness)) : live)
+    if (!found.length && !o.stopped) found = matching(name, named(await list(daemon, true, o.engineLiveness)))
     const frame = oneOf(name, found)
     if (frame) return { daemon, frame, machineId: away.machineId, machine: away.label, yours: yoursOn(o, away.machineId, frame.id), remote: true }
     throw new AgentClientError('UNKNOWN_HARNESS', `No harness named "${name}" on ${away.label}. \`${step(s.env, 'ps', machineOption(away.word))}\` lists them.`)
@@ -561,7 +542,7 @@ type ProgramTarget = Target & { record: ProgramHarness }
  *  titles its session), or by its id; a live one before a stopped one, the newest first. One held without the token is
  *  NOT_YOURS. */
 async function programTarget(o: Opened, p: Program, name: string): Promise<ProgramTarget> {
-  if (!o.stopped) { o.frames = await list(o.daemon, true); o.stopped = true }
+  if (!o.stopped) { o.frames = await list(o.daemon, true, o.engineLiveness); o.stopped = true }
   const frames = named(o.frames)
   const byId = new Map(frames.map((f) => [f.id, f]))
   const byIdRecord = p.records.get(name.trim())
@@ -788,14 +769,14 @@ export function psCommand(argv: readonly string[], deps: ClientDeps = {}): Promi
     const away = await machineOf(s, s.where(), machine)
     if (names.length) throw new UsageError(`harness ps takes no names. To read one: harness show ${onAway(names[0], away)}`)
     const all = flags.has('--all')
-    const o = await opened(s, all)
+    const o = await opened(s, all, !away)
     let line: Daemon | null = null
     try {
       // With `--machine`, that machine's harnesses, through it; who started each is still this machine's ledger's to say.
       const on = away
         ? { daemon: line = await s.open(o.where, away.machineId), machineId: away.machineId, machine: away.label }
         : { daemon: o.daemon, machineId: o.where.machineId, machine: o.machine }
-      const frames = line ? await list(line, all) : o.frames
+      const frames = line ? await list(line, all, true) : o.frames
       const rows = rowsOf(frames, { machineId: on.machineId, machine: on.machine, caller: o.caller, ledger: o.ledger, now: s.now(), all })
       await describeRows(on.daemon, rows)
       // Asked for and not started yet: listed by the name it was given, and what it waits for.
@@ -836,7 +817,7 @@ interface MachineRows {
  */
 async function psMachines(s: Setup, all: boolean, json: boolean): Promise<number> {
   const mine = (await s.machines()).filter((m) => !m.sharedBy && !m.toAdd)
-  const o = await opened(s, all)
+  const o = await opened(s, all, true)
   try {
     const rowsOn = async (daemon: Daemon, machineId: string, machine: string, frames: Frame[]): Promise<Row[]> => {
       const rows = rowsOf(frames, { machineId, machine, caller: o.caller, ledger: o.ledger, now: s.now(), all })
@@ -850,7 +831,7 @@ async function psMachines(s: Setup, all: boolean, json: boolean): Promise<number
       const answered = (async () => {
         const daemon = line = await s.open(o.where, m.machineId)
         if (late) { daemon.close(); return null }
-        try { return await rowsOn(daemon, m.machineId, m.label, await list(daemon, all)) } finally { daemon.close() }
+        try { return await rowsOn(daemon, m.machineId, m.label, await list(daemon, all, true)) } finally { daemon.close() }
       })()
       const due = new Promise<null>((done) => { timer = setTimeout(done, s.answerMs, null) })
       try {
@@ -981,7 +962,7 @@ export function showCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
     if (!Number.isInteger(chars) || chars < 1) throw new UsageError('--chars takes a whole number.')
     if (flags.has(PROGRAM_TOKEN_FLAG) && machine !== null) throw new UsageError(`${PROGRAM_TOKEN_FLAG} is for a harness on this computer: leave out --machine.`)
     const away = await machineOf(s, s.where(), machine)
-    const o = await opened(s)
+    const o = await opened(s, false, true)
     let t: Target | null = null
     try {
       const p = flags.has(PROGRAM_TOKEN_FLAG) ? (refuseAgentWithToken(o), programOf(flags, o.where.dataDir)) : null
@@ -994,7 +975,8 @@ export function showCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
       const listed = listedStateOf(t.frame)
       // A cloud harness has no screen: its state is the cloud service's. A held, starting or failed one is that whatever
       // its screen shows.
-      const { screen, background } = ['held', 'starting', 'failed', 'stopped', 'offline'].includes(listed) || t.frame.location === 'cloud'
+      const { screen, background } = ['held', 'starting', 'failed', 'stopped', 'offline'].includes(listed)
+        || t.frame.location === 'cloud' || t.frame.engineLiveness === 'unknown'
         ? { screen: null, background: null } : await inspect(t)
       const state: State = screen === 'draft' ? 'idle' : screen ?? listed
       const parent = o.ledger.parentOf({ machineId: t.machineId, agentId: t.frame.id })
@@ -1015,7 +997,7 @@ export function showCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
       const next = t.frame.location === 'cloud' && state === 'needs-input' && !o.caller && !o.orphan
         // Answered by the person, or a program speaking for them (the lamp): no agent tool says it.
         ? [{ run: `harness reply ${at} -- <the person's answer>`, when: 'it waits for the person: tell them what it asks' }]
-        : pendingTell && state !== 'needs-input' && state !== 'held' ? [{ run: step(s.env, 'wait', at), when: 'until it has taken the work you told it' }]
+        : pendingTell && state !== 'needs-input' && state !== 'held' && state !== 'stopped' ? [{ run: step(s.env, 'wait', at), when: 'until it has taken the work you told it' }]
         // `close` and `tell` take no cloud harness.
         : showNext(s.env, state, t.yours && t.frame.location !== 'cloud', at, tellsHere(o, s.pane), background, named?.sentence)
       const cloud = cloudMeta(t.frame)
@@ -1567,8 +1549,11 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
         // A cloud harness says where it is itself, with no screen to read: done once it is no longer starting or working.
         if (frame.location === 'cloud') return listed === 'idle' || listed === 'needs-input' || listed === 'failed' ? listed : null
         if (listed === 'failed') return 'failed'
+        if (listed === 'stopped') return ended(t, 'stopped')
         // Its first task not taken yet: an idle screen is not its end. Looked at again each interval.
-        if (listed === 'starting') { pushedNext.delete(t); idle.delete(t); return null }
+        if (listed === 'starting' || (listed === 'unknown' && frame.engineLiveness === 'unknown')) {
+          pushedNext.delete(t); idle.delete(t); return null
+        }
         // The daemon says it is working: no need to read its screen.
         const { screen, background: running } = frame.activity?.state === 'working' ? { screen: 'working' as const, background: null } : await inspect(t)
         // Working, and what comes next is pushed, whatever it is (its turn's end, its activity, a question, which the
@@ -1619,7 +1604,7 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
         for (const t of targets) {
           if (settled.has(t)) continue
           const result = await (async () => {
-            if (!lists.has(t.daemon)) lists.set(t.daemon, list(t.daemon, false))
+            if (!lists.has(t.daemon)) lists.set(t.daemon, list(t.daemon, false, true))
             return look(t, await lists.get(t.daemon)!)
           })().catch((error) => {
             if (error instanceof AgentClientError && error.code === 'TIMEOUT') return null
