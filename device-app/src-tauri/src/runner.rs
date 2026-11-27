@@ -46,6 +46,8 @@ pub struct Runner(Arc<Shared>);
 struct Shared {
     doors: Doors,
     send: Arc<dyn Fn(Event) + Send + Sync>,
+    /// What a stopped watch has to end by itself before it is killed.
+    stop_grace: Duration,
     /// What the last look found: every run uses it.
     cli: Mutex<Option<Arc<HarnessCli>>>,
     watch: Mutex<Option<Watch>>,
@@ -151,13 +153,19 @@ impl Runner {
     /// `send` hands the event to the app's loop and returns. It never runs an effect itself: a watch or a sign-in
     /// calls it holding a lock that stopping or cancelling it takes.
     pub fn new(doors: Doors, send: Arc<dyn Fn(Event) + Send + Sync>) -> Runner {
-        Runner::polling_every(doors, send, POLL_EVERY)
+        Runner::polling_every(doors, send, POLL_EVERY, watch::STOP_GRACE)
     }
 
-    fn polling_every(doors: Doors, send: Arc<dyn Fn(Event) + Send + Sync>, every: Duration) -> Runner {
+    fn polling_every(
+        doors: Doors,
+        send: Arc<dyn Fn(Event) + Send + Sync>,
+        every: Duration,
+        stop_grace: Duration,
+    ) -> Runner {
         let shared = Arc::new(Shared {
             doors,
             send,
+            stop_grace,
             cli: Mutex::new(None),
             watch: Mutex::new(None),
             watching: Arc::default(),
@@ -392,6 +400,7 @@ impl Shared {
                     shared.typed(number, typing);
                 }
             },
+            self.stop_grace,
         );
         match spawned {
             Ok(started) => {
@@ -567,7 +576,7 @@ mod tests {
     use crate::open::Opener;
     use crate::state::StateFile;
     use crate::tabs::{LATE_WRITE, NoTabs, Selected, TYPING_QUEUED, TabApp, TabError, TabScripts, Written};
-    use crate::testing::{Fake, alive, fake_harness, wait_gone};
+    use crate::testing::{Fake, WAIT, alive, fake_harness, wait_gone};
     use crate::types::{
         DialStatus, Effect, Event, ExportFailure, Exported, LoginEvent, MemoryLog, MenuItem, NotifyMode, Output, Saved,
         UpdateFailure, VoiceLang,
@@ -582,7 +591,6 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
-    const WAIT: Duration = Duration::from_secs(5);
     /// Second 0 of a minute.
     const B: u64 = 1794556800;
     const URL: &str = r#"{"type":"authorize_url","url":"https://id.example/a?state=S"}"#;
@@ -991,7 +999,8 @@ mod tests {
         let send = Arc::new(move |event| {
             let _ = sender.send(event);
         });
-        let runner = Runner::polling_every(doors, send, EVERY);
+        // A watch these tests stop ends by itself: on a loaded machine the fake can take past STOP_GRACE to.
+        let runner = Runner::polling_every(doors, send, EVERY, WAIT);
         World { fake, home, doubles, events, runner }
     }
 

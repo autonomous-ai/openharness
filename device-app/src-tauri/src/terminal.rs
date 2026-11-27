@@ -151,6 +151,7 @@ mod tests {
     use super::{CANDIDATES, DID_NOT_OPEN, command, run, script, start, wait_result};
     use crate::cli::spawn_lock;
     use crate::install::HOST;
+    use crate::testing::WAIT;
     use crate::types::Output;
     use std::cell::{Cell, RefCell};
     use std::fs;
@@ -162,8 +163,6 @@ mod tests {
     use std::sync::mpsc;
     use std::thread;
     use std::time::{Duration, Instant};
-
-    const WAIT: Duration = Duration::from_secs(5);
 
     fn mode(path: &Path) -> u32 {
         fs::metadata(path).unwrap().permissions().mode() & 0o777

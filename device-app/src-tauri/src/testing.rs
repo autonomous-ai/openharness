@@ -9,6 +9,12 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+/// How long a test waits on a child process or a thread before it calls it stuck, not slow. A wait that passes returns
+/// as soon as its event comes, so only a broken test waits it out; on a loaded machine the fake (a shell script that
+/// starts processes and appends to files) lags for seconds. Above the product's longest deadline on these paths (a
+/// watch's first line, 20 s), so a test is never stricter than the app.
+pub const WAIT: Duration = Duration::from_secs(30);
+
 /// The fake `harness` script.
 pub fn fake_harness() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("fake-harness")
@@ -94,9 +100,9 @@ pub fn alive(pid: i32) -> bool {
     unsafe { libc::kill(pid, 0) == 0 }
 }
 
-/// Asks until the process is gone, 5 s at most: how a test sees a kill without a fixed sleep.
+/// Asks until the process is gone, WAIT at most: how a test sees a kill without a fixed sleep.
 pub fn wait_gone(pid: i32) -> bool {
-    let end = Instant::now() + Duration::from_secs(5);
+    let end = Instant::now() + WAIT;
     while alive(pid) {
         if Instant::now() >= end {
             return false;
@@ -148,7 +154,7 @@ mod tests {
                 .spawn()
                 .unwrap()
         };
-        let end = Instant::now() + Duration::from_secs(5);
+        let end = Instant::now() + WAIT;
         let pid = loop {
             if let Some(&pid) = fake.pids().first() {
                 break pid;
@@ -190,10 +196,10 @@ mod tests {
         let program = fake.program();
         let invocation = find_cli(program.parent().unwrap(), Some(&path), Some(&program)).unwrap();
         let watch = HarnessCli::new(invocation, fake.log()).spawn(&["hardware", "watch", "--json"]).unwrap();
-        // The turns once there are more than `least`, and when that was asked, every 10 ms for 30 s at most: through
+        // The turns once there are more than `least`, and when that was asked, every 10 ms for WAIT at most: through
         // the shim a short turn takes ~65 ms on a busy Mac, so the first 50 take seconds.
         let turns_past = |least: usize| {
-            let end = Instant::now() + Duration::from_secs(30);
+            let end = Instant::now() + WAIT;
             loop {
                 let asked = Instant::now();
                 let turns = fs::read_to_string(shims.path().join("sleeps.log")).unwrap_or_default().lines().count();
@@ -221,7 +227,7 @@ mod tests {
         let fake = Fake::new();
         fake.script("hardware watch --json", &[r#"{"attached":false}"#, "@wait never"]);
         let mut watch = fake.cli().spawn(&["hardware", "watch", "--json"]).unwrap();
-        assert_eq!(watch.line(Duration::from_secs(5)), Ok(Some(r#"{"attached":false}"#.to_string())));
+        assert_eq!(watch.line(WAIT), Ok(Some(r#"{"attached":false}"#.to_string())));
         let pid = fake.pids()[0];
         drop(fake);
         let gone = wait_gone(pid);
