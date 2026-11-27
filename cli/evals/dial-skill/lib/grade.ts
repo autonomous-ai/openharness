@@ -76,9 +76,12 @@ export async function gradeRun(s: Scenario, run: RunResult, rings: Ring[], judge
   const rang = shown.length > 0
   // Kept beside score, never in it: whether the skill's description alone carried the command, and, on every run,
   // whether the body was read at all, so a miss tells a description never acted on from a body read but not followed;
-  // and whether a Stop hook's block cost the run one more model round.
-  const step: Record<string, number> = { ...(rang ? { one_step: Number(oneStep(run.transcript)) } : {}),
-    loaded: Number(loaded(run.transcript)), nudged: Number(rings.some((r) => r.blocked)) }
+  // and whether a Stop hook's block cost the run one more model round. Read over turn 1 alone, which rang: a load in
+  // turn 2 came after the ring it would explain.
+  const turn2 = run.transcript.findIndex((turn) => turn.role === 'system' && turn.content === 'turn 2')
+  const turn1 = turn2 === -1 ? run.transcript : run.transcript.slice(0, turn2)
+  const step: Record<string, number> = { ...(rang ? { one_step: Number(oneStep(turn1)) } : {}),
+    loaded: Number(loaded(turn1)), nudged: Number(rings.some((r) => r.blocked)) }
   const closes = close ? gradeClose(close.kind, close.calls, close.seed) : {}
   if (s.need === 'no-need') return { grade: { score: scoreOf(false, rang, false, false), rang: Number(rang), quiet: Number(!rang), ...step, ...closes }, explanation: {}, status: 'ok' }
   // Whether the agent did the part it could do meanwhile: held as a guardrail beside score, so it never moves the
