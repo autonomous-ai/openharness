@@ -20,7 +20,7 @@ const PLUGINS = {
 }
 /** Claude Code and Codex run the device plugin's hooks by their paths, so the folder must write them executable. */
 const EXECUTABLE = ['plugins/harness-device/hooks/asked', 'plugins/harness-device/hooks/codex-asked', 'plugins/harness-device/hooks/start',
-  'plugins/harness-device/hooks/codex-start']
+  'plugins/harness-device/hooks/codex-start', 'plugins/harness-device/hooks/stop']
 /** Fatal, so a file that is not UTF-8 fails the build rather than ship mangled; the BOM kept, as `readFileSync`'s
  *  `utf8` keeps it. */
 const UTF8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
