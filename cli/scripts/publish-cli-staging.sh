@@ -77,6 +77,7 @@ said="$(node "$CLI" version)"
 [ "$said" = "$VERSION" ] || { echo "error: $CLI reports '$said', not $VERSION (ADAPTER_VERSION not injected)" >&2; exit 1; }
 node "$ROOT/scripts/test-core-harness-upgrade.mjs" "$CLI"
 node "$ROOT/scripts/check-lean-bundle.mjs" "$CLI"
+node "$ROOT/scripts/check-inbox-bundle.mjs" "$INBOX"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT

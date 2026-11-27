@@ -1,8 +1,8 @@
 /**
- * Before a release is uploaded (scripts/upload-cli.sh): inbox.mjs, the dial's inbox follower that harness.exe runs on
- * its own on Windows, must load and refuse an id that is not a session's with `{"off":true}` and exit 0, the answer
- * harness.exe, the updaters' canary and install.ps1 rely on (src/inboxEntry.ts). The shebang and lean-bundle checks
- * cover cli.js only (Ken's review of #4681).
+ * Before a release is uploaded (scripts/upload-cli.sh, and staging's scripts/publish-cli-staging.sh): inbox.mjs, the
+ * dial's inbox follower that harness.exe runs on its own on Windows, must load and refuse an id that is not a
+ * session's with `{"off":true}` and exit 0, the answer harness.exe, the updaters' canary and install.ps1 rely on
+ * (src/inboxEntry.ts). The shebang and lean-bundle checks cover cli.js only (Ken's review of #4681).
  *
  * Its config import moves legacy state in HOME (migrateLegacyAdapterState), so it runs in a throwaway home and data
  * folder, removed after, and for at most 15 s, the canary's bound (src/lib/selfUpdate.ts).

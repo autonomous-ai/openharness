@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
-// The happy path needs a real bundle (the script runs upload-cli.sh's bundle checks on it), so it is the staging
-// dry run's to show; these cover every refusal, which all come before the bundle is looked at.
+// The happy path needs a real bundle (the script runs upload-cli.sh's cli.js checks on it), so it is the staging
+// dry run's to show; these cover every refusal, and the inbox.mjs check with those cli.js checks passed by a stand-in.
 const script = join(process.cwd(), 'scripts', 'publish-cli-staging.sh')
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
