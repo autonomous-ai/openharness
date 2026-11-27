@@ -247,9 +247,10 @@ describe('dailyDialReview', () => {
     expect(DIAL_REVIEW_METRICS).toContain('dial_notice_present_roused')
   })
 
-  it('shows the second look per engine against the computers with the skill', () => {
+  it('shows the second look per engine against the computers with the skill, hidden with no yes', () => {
     const review = dailyDialReview([row(1, 'dial_notice_installation_days', 6), row(1, 'dial_notice_present_roused', 3),
-      row(1, 'dial_skill_claude_installation_days', 6), row(1, 'dial_nudge_claude', 9), row(1, 'dial_nudge_claude_rang', 4)], [], now)
+      row(1, 'dial_skill_claude_installation_days', 6), row(1, 'dial_nudge_claude', 9), row(1, 'dial_nudge_claude_rang', 4),
+      row(1, 'dial_skill_codex_installation_days', 8)], [], now)
     const roused = "Quiet, rung: the person had gone by its turn's end"
     const yes = 'claude: second looks, yes (skill computer-days; yeses)'
     const rang = 'claude: second looks, rang after (skill computer-days; rings)'
@@ -258,6 +259,9 @@ describe('dailyDialReview', () => {
     const names = review.outsideTeam.find(s => s.name === 'Dial skill')!.rows.map(r => r.name)
     expect(names.slice(names.indexOf(roused), names.indexOf(roused) + 3)).toEqual([roused, yes, rang])
     expect(names.filter(n => n.startsWith('codex: second looks'))).toEqual([])
+    // No ring after some yeses is the signal, so the rang row shows beside its yes row.
+    const noRing = dailyDialReview([row(1, 'dial_skill_claude_installation_days', 6), row(1, 'dial_nudge_claude', 9)], [], now)
+    expect(rowOf(noRing.outsideTeam, 'Dial skill', rang)).toMatchObject({ computers: { day: 6 }, events: { day: 0 } })
     expect(DIAL_REVIEW_METRICS).toEqual(expect.arrayContaining(
       ['dial_nudge_claude', 'dial_nudge_codex', 'dial_nudge_claude_rang', 'dial_nudge_codex_rang']))
   })
