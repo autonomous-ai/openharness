@@ -346,6 +346,19 @@ describe('writePluginTrust', () => {
     expect(readdirSync(home)).toEqual(['config.toml'])
   })
 
+  it("throws the error that stopped the write, not the one of the removal of its file beside config.toml", () => {
+    const home = codexHome('model = "gpt-5"\n'), file = join(home, 'config.toml')
+    const denied = Object.assign(new Error('EACCES: fixture'), { code: 'EACCES' })
+    // Every time: Windows tries a rename that answers EACCES again, up to its bound.
+    vi.spyOn(fs, 'renameSync').mockImplementation(() => { throw denied })
+    // What Windows answers to the removal of a file another program still holds.
+    const busy = () => { throw Object.assign(new Error('EBUSY: fixture'), { code: 'EBUSY' }) }
+    vi.spyOn(fs, 'rmSync').mockImplementation(busy)
+    vi.spyOn(fs, 'unlinkSync').mockImplementation(busy)
+    expect(() => replaceConfigText(file, 'model = "other"\n', 'model = "gpt-5"\n')).toThrow(denied)
+    expect(configOf(home)).toBe('model = "gpt-5"\n')
+  })
+
   it('flushes the new text before the rename, and its folder after it where a folder can be flushed', () => {
     const home = codexHome('model = "gpt-5"\n')
     const calls: string[] = []

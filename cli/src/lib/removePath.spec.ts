@@ -1,12 +1,19 @@
-import { afterEach, beforeEach, expect, it } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import * as fs from 'node:fs'
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { removeLink, removePath } from './removePath.js'
+import { removeLink, removePath, removeQuietly } from './removePath.js'
+
+// A copy of the module, so a test can make a removal fail.
+vi.mock('node:fs', async (original) => ({ ...await original<object>() }))
 
 let root = ''
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'remove-path-')) })
-afterEach(() => rmSync(root, { recursive: true, force: true }))
+afterEach(() => {
+  vi.restoreAllMocks()
+  rmSync(root, { recursive: true, force: true })
+})
 const there = (path: string) => { try { lstatSync(path); return true } catch { return false } }
 
 it('removes a link whose target is gone, so a link can be made in its place', () => {
@@ -55,5 +62,25 @@ it('takes a path under a file as nothing there', () => {
   writeFileSync(file, 'f')
   removePath(join(file, 'under'))
   removeLink(join(file, 'under'))
+  expect(there(file)).toBe(true)
+})
+
+it('removes quietly a file, a link whose target is gone, a folder with what is in it, and nothing when nothing is there', () => {
+  const file = join(root, 'file'), link = join(root, 'tool'), folder = join(root, 'folder')
+  writeFileSync(file, 'f')
+  symlinkSync(join(root, 'gone'), link)
+  mkdirSync(join(folder, 'inner'), { recursive: true })
+  writeFileSync(join(folder, 'inner', 'a'), 'a')
+  for (const path of [file, link, folder, join(root, 'never')]) removeQuietly(path)
+  expect([there(file), there(link), there(folder)]).toEqual([false, false, false])
+})
+
+it('returns when the removal throws, as Windows does for a file another program holds', () => {
+  const file = join(root, 'held')
+  writeFileSync(file, 'f')
+  const busy = () => { throw Object.assign(new Error('EBUSY: fixture'), { code: 'EBUSY' }) }
+  vi.spyOn(fs, 'unlinkSync').mockImplementation(busy)
+  vi.spyOn(fs, 'rmSync').mockImplementation(busy)
+  expect(() => removeQuietly(file)).not.toThrow()
   expect(there(file)).toBe(true)
 })
