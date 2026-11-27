@@ -47,12 +47,16 @@ Anti-goals: a card that vanishes before the person saw it; a ring for a card the
 6. **Across agents:** the pending total stays at 20 (`NOTICES_PENDING_MAX`), the oldest dropped first.
 7. **The place** is `(1/m)`: the card shown is always the agent's first open card, `m` all its open cards, waiting and
    other; no place when `m` is 1 (the PM, 2026-11-27).
-8. **Turn ends while a card is open** stay silent, as a pending card's do today (`rule:notice`), so a recap never takes
-   the card's drawer row; a failed turn still rings. With cards outliving turns, that can last until the agent closes
-   its card or 24 hours (the PM, 2026-11-27).
-9. **Harness Pro** drops an agent's question at that agent's turn start in its firmware (`pod_model.c` `set_state`).
-   The devices give the card shown back to a Pro after each turn start of its agent, held, never asked: no ring. The
-   round dial, which keeps the card, gets nothing again: a question frame there rings (the PM, 2026-11-27).
+8. **Turn ends while a waiting card is open** stay silent, as a pending card's do today (`rule:notice`), so a recap
+   never takes the card's drawer row; a failed turn still rings. With cards outliving turns, that can last until the
+   agent closes its card or 24 hours (the PM, 2026-11-27). A `--proceeding` or plain card does not silence turn ends:
+   it stays on the dial until a newer card replaces it, `--done`, or 24 hours (the PM, 2026-11-27, after the final
+   review: such a card rarely gets an answer, so it would otherwise silence its agent for a day).
+9. **Harness Pro** drops an agent's question whenever that agent leaves the asking state, in its firmware
+   (`pod_model.c` `set_state`): at a turn start, a turn end (`turn.done`, `turn.error`) and a live `summary`. The
+   devices give the card shown back to a Pro after each of those frames of its agent, held, never asked: no ring. The
+   round dial, which keeps the card, gets nothing again: a question frame there rings (the PM, 2026-11-27; the turn
+   end and summary added after the final review, the same cause).
 
 ## The agent's commands
 
