@@ -220,6 +220,11 @@ describe('codexExecRun', () => {
     expect(codexExecRun(copied('codex-rollout-head-exec.jsonl'))).toBe(true)
   })
 
+  // Codex run as another agent's MCP tool: nobody is there to ring.
+  it('an mcp head is headless', () => {
+    expect(codexExecRun(rollout(EXEC_HEAD.replace('"source":"exec"', '"source":"mcp"')))).toBe(true)
+  })
+
   it('exec\'s head with more rollout lines after it is exec', () => {
     const more = '{"type":"event_msg","payload":{"type":"task_started"}}\n'.repeat(4_000)
     expect(codexExecRun(rollout(`${EXEC_HEAD}${more}`))).toBe(true)
