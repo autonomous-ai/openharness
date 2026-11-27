@@ -1853,7 +1853,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (tier !== 'silent') count((usage) => usage.turnAnnounced(agentId))
   }
   /** One card for the dial, in its four calls. A remote machine's and this computer's are the same calls,
-   *  so a new kind of card lands on both the day it lands on either. [notice]: its agent's notice was pending as the
+   *  so a new kind of card lands on both the day it lands on either. [notice]: its agent held a waiting card as the
    *  card came (toDial). */
   const dispatch = (event: DialEvent, notice: boolean): void | Promise<void> => {
     if (event.kind !== 'processing') latestUpdate.delete(event.agentId)
@@ -1909,8 +1909,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       if (!cable.isConnected) { ended.delete(agentId); void cable.summary(agentId, recap, event.text, 'silent', event.fullText, false); return }
       const turn = ended.get(agentId) // a sub-agent's summary leaves the main turn's numbers alone
       ended.delete(agentId)
-      // Its notice rang for this turn: the dial keeps one drawer row an agent, so a summary that rang or listed would
-      // replace the notice's line. A failed turn still rings (docs/plans/2026-11-17-dial-one-ring-per-turn-design.md).
+      // Its agent waits on the person by a card it rang: the dial keeps one drawer row an agent, so a summary that rang or
+      // listed would replace the card's line. A failed turn still rings (docs/plans/2026-11-17-dial-one-ring-per-turn-design.md).
       if (event.failed !== true && notice) { noted('silent', 'notice'); void cable.summary(agentId, recap, event.text, 'silent', event.fullText, false); return }
       // The person watched an outside agent end: its tile alone, in Needs you too. A Harness agent's keeps `onScreen`.
       const row = outside(agentId)
@@ -1928,7 +1928,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         else tally(event.tier, 'recaps', 'decided upstream', 0)
         const tier = lowered ? 'silent' : event.tier
         announced(agentId, tier)
-        void cable.summary(agentId, recap, event.text, tier, event.fullText, false)
+        void cable.summary(agentId, recap, event.text, tier, event.fullText, false).then(() => cardBack(agentId, tier))
         return
       }
       // Returned, so the agent's next card waits behind this one (inOrder): a late recap must not follow turn.started.
@@ -1937,7 +1937,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         .then((d) => d.tier, (): Tier => (tileOnly ? 'silent' : 'list'))
         .then((tier) => {
           announced(agentId, tier)
-          void cable.summary(agentId, recap, event.text, tier, event.fullText, false)
+          void cable.summary(agentId, recap, event.text, tier, event.fullText, false).then(() => cardBack(agentId, tier))
         })
     }
     else {
@@ -1946,9 +1946,15 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       starts.delete(event.agentId)
       tally('alert', 'rule:failed', 'turn.error', 0)
       count((usage) => usage.turnAnnounced(event.agentId))
-      void cable.turnError(event.agentId, event.text)
+      void cable.turnError(event.agentId, event.text).then(() => cardBack(event.agentId, 'alert'))
     }
   }
+  /** A recap that rang or listed, or a failed turn, took its agent's drawer row: the dial keeps one an agent. The card
+   *  that agent still holds stays on the dial (rule 8: a proceeding or plain one leaves its turn ends to ring, and a failed
+   *  turn rings whatever it holds), so its row goes back over it, after the frame that took it. */
+  const cardBack = (agentId: string, tier: Tier): void => part.call('notices', () => {
+    if (tier !== 'silent' && notices.pending(agentId)) redrawNotices([agentId])
+  })
   /**
    * The reply as it streams: a `steps-v1` device shows the agent's latest paragraph, but a text delta arrives every
    * few tokens and the link is lossy. So at most one send per 750 ms per agent, a trailing send of the last text
@@ -2002,9 +2008,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (event.kind !== 'processing') endReplies(event.agentId, true)
     // Read as the card comes, not as its turn in the queue does: a summary can wait up to 2 s behind its turn's done
     // (TOKENS_WAIT_MS), and the agent may close its card meanwhile. The card may be from an earlier turn: a turn start no
-    // longer closes it, so each turn end stays silent until its agent closes it or it goes at 24 hours
-    // (docs/plans/2026-11-27-dial-notice-cards-agent-closes-design.md, rule 8).
-    const notice = event.kind === 'summary' && notices.pending(event.agentId)
+    // longer closes a waiting card, so each turn end stays silent until its agent closes it or it goes at 24 hours
+    // (docs/plans/2026-11-27-dial-notice-cards-agent-closes-design.md, rule 8). Only a waiting card's.
+    const notice = event.kind === 'summary' && notices.waiting(event.agentId)
     // So is the end it may announce: a turn started while the card waits is the agent's next, and spends it.
     if (event.kind === 'summary' || event.kind === 'error') count((usage) => usage.turnEnded(event.agentId))
     inOrder(event.agentId, () => dispatch(event, notice))
@@ -2120,6 +2126,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     card.kind === 'waiting' ? `notice:${agentId}:${card.id}` : `notice:${agentId}`
   const noticeTally = createEngineTally('[device] notify', ['claude', 'codex', 'agent'], ['shown', 'no dial', 'limited'], log)
   const noticeFile = new NoticeFile({ file: join(core.dataDir, NOTICES_FILE), cards: () => notices.stored(), after: timerIn('notices'), log })
+  /** Those agents' notice rows changed with no question frame to carry them: the dial's drawer is replaced. Behind every
+   *  send those agents' order holds, their holds among them: a close that came after would drop the row. */
+  const redrawNotices = (agentIds: readonly string[]): void => {
+    const replace = (): void => { void cable.replaceNotifications(cableHost.listUnread()) }
+    const behind = agentIds.flatMap((agentId) => queued.get(agentId) ?? [])
+    if (behind.length === 0) replace()
+    else void Promise.all(behind).then(() => part.call('notices', replace))
+  }
   // Typed, or its type would be read from itself: the cable host's wiring reads it, and it reads the cable built on that host.
   const notices: Notices = new Notices({
     connected: () => cable.isConnected,
@@ -2141,13 +2155,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     },
     restored: noticeFile.load(),
     log,
-    // Behind every send those agents' order holds, their holds among them: a close that came after would drop the row.
-    redraw: (agentIds) => {
-      const replace = (): void => { void cable.replaceNotifications(cableHost.listUnread()) }
-      const behind = agentIds.flatMap((agentId) => queued.get(agentId) ?? [])
-      if (behind.length === 0) replace()
-      else void Promise.all(behind).then(() => part.call('notices', replace))
-    },
+    redraw: redrawNotices,
     // In its agent's order, as an ask is.
     hold: (agentId, id, questions) => inOrder(agentId, () => { void cable.hold(agentId, id, questions) }),
     after: timerIn('notices'),
