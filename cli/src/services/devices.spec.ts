@@ -19800,6 +19800,24 @@ describe('tmux inside an Orca tab (docs/plans/2026-11-27-orca-tmux-follow-focus-
       expect(asked()).toEqual([[c, 'pane']])
     })
 
+    it('a client landing that leaves its agent placed where it was, by that client now, starts the reads', async () => {
+      // c alone in its folder and engine, d in another folder: before its client's lookup lands, c is placed by
+      // elimination with no client, and the read the landing asks places it at the same terminal, by its client.
+      const { land, lookups, settle, fake, d } = await orcaTmux({ held: true, watches: true, d: { cwd: '/work/web' } })
+      await land([H(2), H(1)], [claudeIn(1), claudeIn(2)])
+      expect(await ring()).toEqual([c, a, d])
+      await settle('orca')
+      fake.watches[0].line(H(2))
+      for (const lookup of lookups.splice(0)) lookup()
+      await vi.waitFor(() => expect(clientLines()).toHaveLength(2))
+      await settled()
+      expect(fake.orders).toHaveLength(2)
+      await land([H(2), H(1)], [claudeIn(1), claudeIn(2)])
+      expect(await ring()).toEqual([c, a, d])
+      expect(reads()).toEqual([READ])
+      expect(asked()).toEqual([[c, 'pane']])
+    })
+
     it.each<[string, (scene: Following) => unknown]>([
       ['the watch ending', ({ fake }) => fake.watches[0].end()],
       ['the dial going', () => seen.host.watching!(false)],
