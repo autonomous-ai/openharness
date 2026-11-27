@@ -6,6 +6,7 @@ import { env } from '../config/env.js'
 import { builtinSqlite, closeSqliteHandles } from './sqliteBuiltin.js'
 import type { WindowsFilesRead } from './windows/openFiles.js'
 import { nativeOpenFiles } from './nativeConversation.js'
+import { selectEngineProcess, type ProcessRow } from './processTable.js'
 import { openclawStateDir, openclawUserRowSince, stateDirOfOpenFiles } from './openclawStore.js'
 
 afterEach(() => { vi.restoreAllMocks() })
@@ -20,15 +21,49 @@ it('says once that a TUI\'s open files cannot be read, by the kind of failure, n
 
 describe('a Windows TUI\'s state folder, from the files harness-pty reads it holds', () => {
   const database = 'C:\\Users\\u\\.openclaw-dev\\state\\openclaw.sqlite'
+  const at = (pid: number, parentPid: number, started: number, args = 'node.exe'): ProcessRow =>
+    ({ pid, parentPid, executable: 'node.exe', startMarker: `w:${133_700_000_000_000_000n + BigInt(started)}`, args })
+  const tableOf = (...rows: ProcessRow[]) => async () => rows
+  const held = (row: ProcessRow, files: string[]) => [row.pid, { startMarker: row.startMarker, files }] as const
 
   it('is the folder above its state database', async () => {
     const asked: (readonly number[])[] = []
+    const tui = at(4242, 1, 0)
     const read: WindowsFilesRead = async (pids) => {
       asked.push(pids)
-      return new Map([[4242, { startMarker: 'w:133700000000000000', files: ['C:\\Windows\\System32\\en-US\\kernel32.dll.mui', database] }]])
+      return new Map([held(tui, ['C:\\Windows\\System32\\en-US\\kernel32.dll.mui', database])])
     }
-    expect(stateDirOfOpenFiles(await nativeOpenFiles(4242, 'win32', read), 'win32')).toBe('C:\\Users\\u\\.openclaw-dev')
+    expect(stateDirOfOpenFiles(await nativeOpenFiles(4242, 'win32', read, tableOf(tui)), 'win32')).toBe('C:\\Users\\u\\.openclaw-dev')
     expect(asked).toEqual([[4242]])
+  })
+
+  // engines/openclaw/__fixtures__/ps-win32.txt, a TUI Harness launched: the launcher respawns itself with
+  // --stack-size=8192 and its child is the TUI, which holds the database; discovery names the launcher, the shallowest.
+  const NODE = 'C:\\work\\node\\node.exe'
+  const SCRIPT = 'C:\\work\\npm\\node_modules\\openclaw\\openclaw.mjs'
+  const host = { ...at(9900, 7968, 0, 'harness-pty.exe serve'), executable: 'harness-pty.exe' }
+  const launcher = at(10104, 9900, 10, `${NODE} ${SCRIPT} tui --session harness-a1`)
+  const child = at(5340, 10104, 20, `${NODE} --stack-size=8192 ${SCRIPT} tui --session harness-a1`)
+
+  it('is the one the TUI holds, the child of the launcher discovery names', async () => {
+    expect(selectEngineProcess([host, launcher, child], 9900, 'openclaw')?.pid).toBe(10104)
+    const asked: (readonly number[])[] = []
+    const read: WindowsFilesRead = async (pids) => { asked.push(pids); return new Map([held(launcher, []), held(child, [database])]) }
+    expect(stateDirOfOpenFiles(await nativeOpenFiles(10104, 'win32', read, tableOf(host, launcher, child)), 'win32'))
+      .toBe('C:\\Users\\u\\.openclaw-dev')
+    expect(asked).toEqual([[10104, 5340]])
+  })
+
+  it('never reads a process that only reuses a pid: an earlier process\'s orphan, or one started between the reads', async () => {
+    // Windows never re-parents a process and reuses pids: a row naming the launcher's pid as its parent, started before
+    // it, is the orphan of an earlier process of that pid.
+    const orphan = at(6000, 10104, 5)
+    const asked: (readonly number[])[] = []
+    const read: WindowsFilesRead = async (pids) => { asked.push(pids); return new Map([held(launcher, []), held(orphan, [database])]) }
+    expect(await nativeOpenFiles(10104, 'win32', read, tableOf(launcher, orphan))).toEqual([])
+    expect(asked).toEqual([[10104]])
+    const reused: WindowsFilesRead = async () => new Map([held(launcher, []), held({ ...child, startMarker: 'w:133700000000000030' }, [database])])
+    await expect(nativeOpenFiles(10104, 'win32', reused, tableOf(launcher, child))).rejects.toThrow()
   })
 
   it('is unknown, never "holds nothing", when the files could not be read or the pid was left out', async () => {
@@ -36,9 +71,16 @@ describe('a Windows TUI\'s state folder, from the files harness-pty reads it hol
     const asked: (readonly number[])[] = []
     const failed: WindowsFilesRead = async (pids) => { asked.push(pids); return null }
     const leftOut: WindowsFilesRead = async (pids) => { asked.push(pids); return new Map() }
-    await expect(nativeOpenFiles(4243, 'win32', failed)).rejects.toThrow()
-    await expect(nativeOpenFiles(4244, 'win32', leftOut)).rejects.toThrow()
-    expect(await openclawStateDir(4245, (pid) => nativeOpenFiles(pid, 'win32', failed))).toBeNull()
+    const table = tableOf(at(4243, 1, 0), at(4244, 1, 0), at(4245, 1, 0), launcher, child)
+    await expect(nativeOpenFiles(4243, 'win32', failed, table)).rejects.toThrow()
+    await expect(nativeOpenFiles(4244, 'win32', leftOut, table)).rejects.toThrow()
+    expect(await openclawStateDir(4245, (pid) => nativeOpenFiles(pid, 'win32', failed, table))).toBeNull()
+    // The TUI's child left out is unknown too: it is the one that would hold the database.
+    await expect(nativeOpenFiles(10104, 'win32', async () => new Map([held(launcher, [])]), table)).rejects.toThrow()
+    expect(asked).toEqual([[4243], [4244], [4245]])
+    // A process gone from the table, or a table that could not be read: unknown, and no files are asked for.
+    await expect(nativeOpenFiles(4246, 'win32', failed, table)).rejects.toThrow()
+    await expect(nativeOpenFiles(4243, 'win32', failed, async () => null)).rejects.toThrow()
     expect(asked).toEqual([[4243], [4244], [4245]])
   })
 })
