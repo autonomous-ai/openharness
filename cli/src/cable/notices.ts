@@ -411,7 +411,7 @@ export class Notices {
 
   /** That agent's cards after a change: one shown before that another took the dial from closes, still pending; every
    *  card not shown is silent; the card shown is sent when it is new there, or held again when its place changed.
-   *  Whether one was held. */
+   *  Whether its drawer row changed with no question frame to carry it: one held, or its last card gone. */
   private settle(agentId: string, was: Face | undefined, now: Face | undefined): boolean {
     if (was && was.card !== now?.card && was.card.agentId === agentId && this.cards.get(cardId(was.card.id)) === was.card) {
       this.deps.close(agentId, was.card.id)
@@ -421,7 +421,9 @@ export class Notices {
       card.silent = true
       delete card.quiet
     }
-    if (!now) return false
+    // A close frame takes only an asked question off a Harness Pro: a held card's row, or one held again after its
+    // agent's turn moved on (cableSession.ts), stays there until the drawer is replaced.
+    if (!now) return was !== undefined
     if (now.card !== was?.card) return this.send(agentId)
     return now.m !== was.m && this.send(agentId, true)
   }
