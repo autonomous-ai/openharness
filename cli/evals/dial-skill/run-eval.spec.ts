@@ -797,6 +797,67 @@ ${REPLY}` })
   })
 })
 
+describe("the run's session goes when the run ends", () => {
+  /** The fake's run folder in the profile, named from where it runs as Claude Code names it. */
+  const FOLDER = String.raw`const folder = path.join(process.env.CLAUDE_CONFIG_DIR, 'projects', process.cwd().replace(/[^a-zA-Z0-9]/g, '-'))`
+
+  const projects = () => readdirSync(join(tmp, 'profile', 'projects'))
+
+  it("removes a one-turn run's folder as its turn ends, before the checks run the agent's code", () => {
+    // Claude Code makes a one-turn run's folder too (its memory/). The run leaves an `ls` first on the staged PATH that
+    // reports harm while the folder is there: destructive-migration's harm check runs it.
+    fakeClaude(String.raw`${FOLDER}
+fs.mkdirSync(path.join(folder, 'memory'), { recursive: true })
+fs.writeFileSync('../bin/ls', '#!/bin/sh\n[ -e ' + JSON.stringify(folder) + ' ] && echo "harm: the session outlived its run" >&2\nexec /bin/ls "$@"\n', { mode: 0o755 })
+` + agent('claude-opus-5-5'))
+
+    const out = runEval(['--variant', 'baseline', '--agents', 'claude', '--cases', 'destructive-migration', '--approve-harness'])
+
+    expect(out.status, out.stderr).toBe(0)
+    expect(jsonl('baseline', 'results.jsonl')).toMatchObject([{ harm: false }])
+    expect(projects()).toEqual([])
+  })
+
+  it("keeps a two-turn run's session for turn 2, which resumes it, and leaves none once the run ends", () => {
+    const found = join(tmp, 'found')
+    fakeClaude(String.raw`${FOLDER}
+fs.mkdirSync(folder, { recursive: true })
+fs.writeFileSync(path.join(folder, argv[argv.indexOf('--session-id') + 1] + '.jsonl'), '{}\n')
+` + agent('claude-opus-5-5'), JUDGE, { resume: String.raw`${FOLDER}
+fs.writeFileSync(${JSON.stringify(found)}, String(fs.existsSync(path.join(folder, argv[argv.indexOf('--resume') + 1] + '.jsonl'))))
+${REPLY}` })
+
+    const out = runEval(['--variant', 'baseline', '--agents', 'claude', '--follow-ups', '--cases', 'rate-limit-unknown', '--approve-harness'])
+
+    expect(out.status, out.stderr).toBe(0)
+    expect(readFileSync(found, 'utf8')).toBe('true')
+    expect(projects()).toEqual([])
+  })
+
+  it('leaves no session once turn 2 is killed at its timeout, though it wrote the session when told to stop', () => {
+    const termed = join(tmp, 'termed')
+    // Turn 2 writes its session at SIGTERM, as Claude Code may, then waits for the SIGKILL 10 s later.
+    fakeClaude(String.raw`${FOLDER}
+fs.mkdirSync(folder, { recursive: true })
+` + agent('claude-opus-5-5'), JUDGE, { resume: String.raw`${FOLDER}
+process.on('SIGTERM', () => {
+  fs.mkdirSync(folder, { recursive: true })
+  fs.appendFileSync(path.join(folder, argv[argv.indexOf('--resume') + 1] + '.jsonl'), '{}\n')
+  fs.writeFileSync(${JSON.stringify(termed)}, '')
+})
+setTimeout(() => {}, 60_000)` })
+
+    // The agent's share of a 26 s case ends 13 s in: turn 2's SIGKILL lands about 23 s in, before the case's ceiling.
+    const out = runEval(['--variant', 'baseline', '--agents', 'claude', '--follow-ups', '--cases', 'rate-limit-unknown', '--timeout-s', '26',
+      '--approve-harness'])
+
+    expect(out.status).toBe(1)
+    expect(existsSync(termed)).toBe(true)
+    expect(jsonl('baseline', 'errors.jsonl')).toMatchObject([{ prompt_id: 'rate-limit-unknown.claude.clean', failure_class: 'timeout' }])
+    expect(projects()).toEqual([])
+  }, 60_000)
+})
+
 describe("run-eval.mjs a variant's hooks", () => {
   const hook = (command: string) => ({ SessionStart: [{ hooks: [{ type: 'command', command }] }] })
   const HOOKS = hook('harness device claude start')
