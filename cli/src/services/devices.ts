@@ -63,7 +63,7 @@ import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer, type An
 import { deriveAnswerCard } from '../lib/deviceRecap.js'
 import { systemLinuxRaise, type LinuxRaise } from '../cable/hosts/linuxRaise.js'
 import { createWindowsRaise, harnessDesktopLauncher, type WindowsRaise } from '../cable/hosts/windowsRaise.js'
-import { askedLine, countWord, hostDisplayName, observedAgentId, ObservedSource, type ObservedActions, type ObservedDeps, type PromptSource } from '../cable/hosts/observed.js'
+import { askedLine, CONTINUE_MAX_MS, CONTINUE_QUIET_MS, countWord, hostDisplayName, observedAgentId, ObservedSource, type ObservedActions, type ObservedDeps, type PromptSource } from '../cable/hosts/observed.js'
 import { observedPlaces } from '../cable/hosts/observedPlaces.js'
 import { createOpenActions } from '../cable/hosts/open.js'
 import { createOpencodeClient, opencodeClientDeps, opencodeMessageId, type OpencodeClient } from '../cable/hosts/opencodeClient.js'
@@ -1775,24 +1775,32 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // `stop_hook_active` on the continuation is still stopped once. A Harness agent reads as away from the yes until its
   // continuation ends: `began` alone cannot tell, as the continuation's first card starts a new one, and who started a
   // Harness agent's turn only the core knows. Its continuation's cards are told by phase: `asked` at the yes, `continuing`
-  // from its next card, `over` at that one's end, when the once rule alone still holds. Whether the person is with a
-  // Harness agent at its stop is read from its turn under way, or from the one just ended: Claude Code's reader ends the
+  // from its next card, `over` at that one's end, when the once rule alone still holds. The phase is bounded as the
+  // outside hold is (observed.ts holdOn): a block the engine never took (its hook killed at its timeout) starts no
+  // continuation, so `asked` is over with no card CONTINUE_QUIET_MS after the yes, or after a done heard since (Codex ends
+  // its turn after its Stop hook), and no continuation lasts past CONTINUE_MAX_MS from the yes. Whether the person is with
+  // a Harness agent at its stop is read from its turn under way, or from the one just ended: Claude Code's reader ends the
   // turn at end_turn, before its Stop hook runs, and the report comes after that done (lastBegan).
   /** At most this many agents, the oldest out first. */
   const NUDGED_MAX = 64
   /** How long a yes holds the next one back with no prompt of the person's. */
   const NUDGE_ONCE_MS = 600_000
-  /** The agents said yes to: when (monotonic), how far a Harness agent's continuation has come, the engine said yes to,
-   *  and whether that yes may still count a notice rung as its ring (rangInContinuation). */
-  const nudgedAgents = new Map<string, { at: number; phase: 'asked' | 'continuing' | 'over'; engine: NudgeAsk['engine']; counts: boolean }>()
-  /** Its yes while the once rule holds. */
+  /** The agents said yes to: when (monotonic), how far a Harness agent's continuation has come, when it was last heard of
+   *  while asked (its yes, or a done since), the engine said yes to, and whether that yes may still count a notice rung as
+   *  its ring (rangInContinuation). */
+  const nudgedAgents = new Map<string, { at: number; phase: 'asked' | 'continuing' | 'over'; heard: number; engine: NudgeAsk['engine']; counts: boolean }>()
+  /** Its yes while the once rule holds, its phase as far as its bounds let it come. */
   const nudgeOf = (agentId: string) => {
     const entry = nudgedAgents.get(agentId)
-    return entry && monotonic() - entry.at < NUDGE_ONCE_MS ? entry : undefined
+    const now = monotonic()
+    if (!entry || now - entry.at >= NUDGE_ONCE_MS) return undefined
+    if (now - entry.at >= CONTINUE_MAX_MS || (entry.phase === 'asked' && now - entry.heard >= CONTINUE_QUIET_MS)) entry.phase = 'over'
+    return entry
   }
   const noteNudged = (agentId: string, engine: NudgeAsk['engine']): void => {
     nudgedAgents.delete(agentId)
-    nudgedAgents.set(agentId, { at: monotonic(), phase: 'asked', engine, counts: true })
+    const at = monotonic()
+    nudgedAgents.set(agentId, { at, phase: 'asked', heard: at, engine, counts: true })
     if (nudgedAgents.size > NUDGED_MAX) nudgedAgents.delete(nudgedAgents.keys().next().value as string)
   }
   /** The person's next prompt to it, or it left: its next ask may get a yes. */
@@ -1804,13 +1812,15 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }
   /** A Harness agent's card after its yes: its continuation is under way. An outside agent's is held by its source. */
   const nudgeContinues = (agentId: string): void => {
-    const entry = nudgedAgents.get(agentId)
+    const entry = nudgeOf(agentId)
     if (entry?.phase === 'asked' && !outside(agentId)) entry.phase = 'continuing'
   }
-  /** Its continuation's end: the person reads as before from here. */
+  /** Its continuation's end: the person reads as before from here. Still asked, it is the stop's own done: the
+   *  continuation's first card may still come. */
   const nudgeOver = (agentId: string): void => {
-    const entry = nudgedAgents.get(agentId)
+    const entry = nudgeOf(agentId)
     if (entry?.phase === 'continuing') entry.phase = 'over'
+    else if (entry?.phase === 'asked') entry.heard = monotonic()
   }
   /** A Harness agent's notice rang: the engine of its yes, the first time only, while that yes's continuation lasts. */
   const rangInContinuation = (agentId: string): NudgeAsk['engine'] | undefined => {
