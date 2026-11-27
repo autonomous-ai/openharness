@@ -13,8 +13,8 @@ const CLAUDE = { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'sess-1' }
 async function notify(words: string[], answer: Record<string, unknown> | number | null = { result: 'shown' }, deps: Partial<NoticeDeps> = {}, why?: string) {
   const out: string[] = []
   const err: string[] = []
-  const ask = vi.fn(async (_message: unknown, said: (reason: string) => void) => {
-    if (why) said(why)
+  const ask = vi.fn(async (_message: unknown, options?: { why?: (reason: string) => void }) => {
+    if (why) options?.why?.(why)
     return answer
   })
   const code = await runNotice(words, {

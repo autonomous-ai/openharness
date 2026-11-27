@@ -92,7 +92,8 @@ export const ASK_ANSWER_MAX = 1024
 
 /** One message the listener answers with a JSON object: that object. The status of any answer but a 200, its body
  *  unread: a caller tells the listener's own rate (429) from a refusal. Null, never a throw, for no listener, one not
- *  this account's own, a 200 whose body is not a JSON object of at most ASK_ANSWER_MAX bytes, or no answer in time.
+ *  this account's own, a 200 whose body is not a JSON object of at most [options.maxBytes] (ASK_ANSWER_MAX) bytes, or
+ *  no answer in time.
  *
  *  With a null, [why] hears which, once, in fixed words that carry nothing of an error's message, the answer or a path:
  *  `no listener`, `unproven`, `timeout before headers (<n> ms)`, `timeout in the body (<n> ms)` (n: from the send to the
@@ -101,8 +102,9 @@ export const ASK_ANSWER_MAX = 1024
  *  it was. */
 export async function askDevices(
   dataDir: string, message: { type: string } & Record<string, unknown>,
-  options: SendOptions & { timeoutMs?: number; why?: (reason: string) => void } = {},
+  options: SendOptions & { timeoutMs?: number; maxBytes?: number; why?: (reason: string) => void } = {},
 ): Promise<Record<string, unknown> | number | null> {
+  const maxBytes = options.maxBytes ?? ASK_ANSWER_MAX
   const nothing = (reason: string) => {
     options.why?.(reason)
     return null
@@ -129,7 +131,7 @@ export async function askDevices(
     for await (const data of answer.body ?? []) {
       size += data.byteLength
       // Leaving the loop cancels the rest of the body.
-      if (size > ASK_ANSWER_MAX) return nothing('too big')
+      if (size > maxBytes) return nothing('too big')
       chunks.push(Buffer.from(data))
     }
     const value: unknown = JSON.parse(Buffer.concat(chunks).toString())
