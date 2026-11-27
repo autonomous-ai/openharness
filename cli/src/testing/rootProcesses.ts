@@ -13,10 +13,17 @@
  * folder in a test's root. So a process of this account whose working folder is the root or in it is that test's too.
  * Since that reaches past command lines, the root is first checked to be one a test made, before anything is signalled.
  *
+ * And Codex's managed app server detaches itself: a real `codex app-server --managed-daemon` from the tester of #4660 and
+ * #4668 outlived `close()`, launchd's, named by no command line or working folder the sweep reads. Codex records it in
+ * `<CODEX_HOME>/app-server-daemon/daemon.pid` (engines/codex/launch.ts sharedServer.pidFile). So a process such a file
+ * inside the root names is ended too, only while it is this account's, a Codex app server, and started after the root was
+ * made: never every app server on the machine (the person's own), nor the worker e2e/harness/sharedCodex.ts names in one.
+ *
  * Only the test's own processes are judged, never the person's beside them on the same computer (PM, 2026-11-23): the
  * tree of the worker and the daemon's tmux server (spawnedRuns.ts processTree), seen by start time before the daemon is
  * stopped (seenNow), since once its master and its tmux server are gone what they started is launchd's. Of the
- * machine's other processes nothing is read but each one's pid, parent and group. And what the harness itself starts that
+ * machine's other processes nothing is read but each one's pid, parent and group, and the account, start and command line
+ * of a pid a Codex pid file inside the root names. And what the harness itself starts that
  * can leave that tree before anything sees it (the fake iTerm2's server, launchd's from its start or once the fake
  * iTerm2 ends; herdr's server its client started; a fake app's tab) is noted as it starts, by its pid and start time
  * (IsolatedDaemon.own): it and what descends from it are the test's, whatever they name, while it runs as itself.
@@ -27,11 +34,11 @@
  * group, and signalling that group would end the test run.
  */
 import { spawnSync } from 'node:child_process'
-import { lstatSync, readlinkSync, realpathSync, statSync } from 'node:fs'
+import { lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync, type Dirent } from 'node:fs'
 import { tmpdir, userInfo } from 'node:os'
-import { basename, dirname, isAbsolute } from 'node:path'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { alive, namedTree, processTable, processTree, startTimes, type NamedRow } from './spawnedRuns.js'
+import { alive, commandLines, namedTree, processTable, processTree, startTimes, uids, type NamedRow } from './spawnedRuns.js'
 
 export interface RootProcesses {
   /** Process groups to signal whole, each led by a match. */
@@ -164,10 +171,97 @@ export function stillRunning(seen: ReadonlyMap<number, string>): number[] {
   return [...seen].filter(([pid, started]) => now.get(pid) === started).map(([pid]) => pid)
 }
 
+/** How far below a root a Codex home's `app-server-daemon` folder is looked for, and how much of the root is read for it. */
+const APP_SERVER_DEPTH = 4, FOLDERS_READ = 2_000, PID_FILES_READ = 16
+
+/** Whether [path] is a file, not a link to one. */
+const isFile = (path: string): boolean => { try { return lstatSync(path).isFile() } catch { return false } }
+
+/** The `pid` the JSON in [file] holds, while a safe integer over 1; null for anything else. */
+function recordedPid(file: string): number | null {
+  try {
+    const pid: unknown = (JSON.parse(readFileSync(file, 'utf8')) as { pid?: unknown } | null)?.pid
+    return Number.isSafeInteger(pid) && (pid as number) > 1 ? pid as number : null
+  } catch { return null }
+}
+
 /**
- * SIGKILL every process of the test's tree that names [root] or works in it, and what descends from what the harness
- * [owned] (IsolatedDaemon.own) whatever it names, once [root] is known to be a test's, and wait, at most [ms], until none
- * of them is alive: the tree of this worker and of what was [seen] (seenNow) or [owned] that still runs as itself.
+ * The pids the Codex homes inside [root] record their app servers by: each `app-server-daemon/daemon.pid`, that folder at
+ * most 4 below the root, read breadth first and through no link (one could lead out of the root). At most 2,000 folders
+ * and 16 pid files are read; a bound reached is said once.
+ */
+export function codexPidFiles(root: string): number[] {
+  const pids = new Set<number>()
+  const folders: Array<[string, number]> = [[root, 0]]
+  let files = 0
+  for (let at = 0; at < folders.length; at++) {
+    if (at === FOLDERS_READ) {
+      console.error(`[e2e sweep] read ${FOLDERS_READ} folders of ${root} for Codex app server pid files: looked no further`)
+      break
+    }
+    const [folder, depth] = folders[at]!
+    let entries: Dirent[]
+    try { entries = readdirSync(folder, { withFileTypes: true }) } catch { continue /* gone, or not this account's to read */ }
+    for (const entry of entries) {
+      // readdir's own type: a link is never a folder here.
+      if (!entry.isDirectory()) continue
+      const path = join(folder, entry.name), file = join(path, 'daemon.pid')
+      if (entry.name === 'app-server-daemon' && isFile(file)) {
+        if (files++ === PID_FILES_READ) {
+          console.error(`[e2e sweep] read ${PID_FILES_READ} Codex app server pid files under ${root}: looked no further`)
+          return [...pids]
+        }
+        const pid = recordedPid(file)
+        if (pid !== null) pids.add(pid)
+      }
+      if (depth + 1 < APP_SERVER_DEPTH) folders.push([path, depth + 1])
+    }
+  }
+  return [...pids]
+}
+
+/** A Codex app server's command line: `codex`, `codex.js` or `codex.exe` run with `app-server` among its arguments. */
+const CODEX_APP_SERVER = /(^|[/\\\s])codex(\.js|\.exe)?\s(.*\s)?app-server(\s|$)/
+
+/** A process a Codex pid file names, as `ps -p` gives it: its account, its start to the second, its command line. */
+export interface PidRow { pid: number; uid: number; started: string; command: string }
+
+/**
+ * Of [rows], the processes Codex pid files inside a root made at [made] (ms) name, what is the test's: the account [uid]'s,
+ * a Codex app server, and started no sooner than the second before [made]. `ps` gives a start to the second, and Linux's
+ * can name the second before the one the clock was in (spawnedRuns.ts daemonOf).
+ */
+export function codexDaemons(rows: readonly PidRow[], made: number, uid: number): number[] {
+  const since = Math.floor(made / 1_000) * 1_000 - 1_000
+  return rows.filter((row) => row.uid === uid && CODEX_APP_SERVER.test(row.command) && Date.parse(row.started) >= since)
+    .map((row) => row.pid)
+}
+
+/** The Codex app servers pid files inside [root] name that are the test's (codexDaemons): never this process, its parent
+ *  or pid 1. None, and one line said, when the root's birth time is unknown. */
+function rootCodexDaemons(root: string): PidRow[] {
+  const spared = new Set([process.pid, process.ppid, 1])
+  const pids = codexPidFiles(root).filter((pid) => !spared.has(pid))
+  if (pids.length === 0) return []
+  const made = statSync(root, { throwIfNoEntry: false })?.birthtimeMs ?? 0
+  if (!(made > 0)) {
+    console.error(`[e2e sweep] no birth time for ${root}: no Codex app server its pid files name is ended`)
+    return []
+  }
+  const accounts = uids(pids), started = startTimes(pids), commands = commandLines(pids)
+  const rows = pids.flatMap((pid) => {
+    const uid = accounts.get(pid), start = started.get(pid), command = commands.get(pid)
+    return uid === undefined || start === undefined || command === undefined ? [] : [{ pid, uid: Number(uid), started: start, command }]
+  })
+  const theirs = new Set(codexDaemons(rows, made, process.getuid!()))
+  return rows.filter((row) => theirs.has(row.pid))
+}
+
+/**
+ * SIGKILL every process of the test's tree that names [root] or works in it, what descends from what the harness [owned]
+ * (IsolatedDaemon.own) whatever it names, and each Codex app server a pid file inside [root] names that is the test's
+ * (codexDaemons), once [root] is known to be a test's, and wait, at most [ms], until none of them is alive: the tree of
+ * this worker and of what was [seen] (seenNow) or [owned] that still runs as itself.
  * Returns those still alive, as `pid <n> <command>`; empty when none is.
  */
 export async function endRootProcesses(root: string, seen: ReadonlyMap<number, string>, owned: ReadonlyMap<number, string> = new Map(),
@@ -175,10 +269,12 @@ export async function endRootProcesses(root: string, seen: ReadonlyMap<number, s
   assertTestRoot(root)
   const mine = stillRunning(owned)
   const { rows, groups, pids, all } = matched(root, [process.pid, ...stillRunning(seen), ...mine], mine)
+  const codex = rootCodexDaemons(root).filter((row) => !all.includes(row.pid))
   for (const pgid of groups) { try { process.kill(-pgid, 'SIGKILL') } catch { /* the group is gone */ } }
-  for (const pid of pids) { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } }
+  for (const pid of [...pids, ...codex.map((row) => row.pid)]) { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } }
+  const ended = [...rows.filter((row) => all.includes(row.pid)), ...codex]
   // Waited for asynchronously: a child of this process stays a zombie, alive to a signal, until Node's event loop reaps it.
   const deadline = Date.now() + ms
-  while (Date.now() < deadline && all.some((pid) => alive(pid))) await new Promise((resolve) => setTimeout(resolve, 50))
-  return rows.filter((row) => all.includes(row.pid) && alive(row.pid)).map((row) => `pid ${row.pid} ${row.command}`)
+  while (Date.now() < deadline && ended.some((row) => alive(row.pid))) await new Promise((resolve) => setTimeout(resolve, 50))
+  return ended.filter((row) => alive(row.pid)).map((row) => `pid ${row.pid} ${row.command}`)
 }

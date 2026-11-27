@@ -69,7 +69,7 @@ export function processTree(table: readonly ProcessRow[], roots: Iterable<number
 }
 
 /** [field] of each of [pids] still running, by pid, as `ps -p` prints it: never of a process not asked of. */
-function psOf(pids: readonly number[], field: 'command' | 'comm' | 'lstart'): Map<number, string> {
+function psOf(pids: readonly number[], field: 'command' | 'comm' | 'lstart' | 'uid'): Map<number, string> {
   if (pids.length === 0) return new Map()
   // It exits 1 once none of them runs: what it printed is read whatever its status. C's dates, so every read prints a
   // start alike and Date reads it.
@@ -87,6 +87,9 @@ export const commandLines = (pids: readonly number[]): Map<number, string> => ps
 export const comms = (pids: readonly number[]): Map<number, string> => psOf(pids, 'comm')
 /** When each of [pids] started, to the second: what tells a process the test saw from one given its pid later. */
 export const startTimes = (pids: readonly number[]): Map<number, string> => psOf(pids, 'lstart')
+/** The account each of [pids] runs as, by its number: a Codex app server a pid file names is ended only while it is this
+ *  account's (rootProcesses.ts codexDaemons). */
+export const uids = (pids: readonly number[]): Map<number, string> => psOf(pids, 'uid')
 
 /** [roots]'s tree now (processTree), each process with its command line; one gone meanwhile is left out. */
 export function namedTree(roots: Iterable<number>, table: readonly ProcessRow[] = processTable()): NamedRow[] {
