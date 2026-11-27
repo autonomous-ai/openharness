@@ -194,6 +194,28 @@ describe.skipIf(process.platform === 'win32')('a secret file the command cannot 
     expect(existsSync(file)).toBe(true)
   })
 
+  it('logout: a machine name it cannot delete is said in a word, and the sign-in is still removed and ended', async () => {
+    const root = tempRoot()
+    const signIn = seedSignIn(root)
+    // A folder in the name's place: every start sets the data folder back to 0700, so a lock there cannot hold. Its
+    // delete fails for real all the same, as root too, and its raw error names the path.
+    const name = join(root, 'data', 'machine-name')
+    mkdirSync(join(name, 'held'), { recursive: true })
+    const backend = await fakeBackend()
+
+    const out = await run(root, ['logout', '--from-sign-out-button'], backend.base)
+
+    expect(out.status).toBe(1)
+    expect(out.stderr).toContain('✗')
+    expect(out.stderr).toContain('STATE_NOT_DELETED (ERR_FS_EISDIR)')
+    expect(out.stderr).toContain('harness logout')
+    expect(out.stderr).not.toContain(root)
+    expect(out.stdout).not.toContain('Signed out')
+    expect(backend.paths).toContain('/api/auth/revoke')
+    expect(existsSync(signIn)).toBe(false)
+    expect(existsSync(name)).toBe(true)
+  })
+
   it.skipIf(!modesHold)('reset: the sign-in still here is said, and the server still ends it', async () => {
     const root = tempRoot()
     const file = seedSignIn(root)
