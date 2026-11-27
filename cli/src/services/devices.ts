@@ -1736,8 +1736,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const outsidePresent = ({ agent }: HostEntry): boolean => recent(prompted.get(agent.id), monotonic())
     && !agent.appPending && agent.app !== UNKNOWN_APP && cableHost.latestFront() === agent.app
     && cableHost.shownAgentId() === agent.id
-  /** Its turn began lately and its tile is on the window in front: who started that turn only the core knows. */
-  const harnessPresent = (agentId: string): boolean => recent(began.get(agentId), Date.now()) && alreadyOnScreen(agentId)
+  /** Its turn began lately and its tile is on the window in front: who started that turn only the core knows. Not from a
+   *  yes to its stop until its continuation ends (Part 5, nudgeHolds). */
+  const harnessPresent = (agentId: string): boolean =>
+    !nudgeHolds(agentId) && recent(began.get(agentId), Date.now()) && alreadyOnScreen(agentId)
   /** Whether the person is with that agent now. An id no outside row holds takes the Harness rule, so a caller no list
    *  holds, with no turn and no tile, never is. */
   const present = (agentId: string): boolean => {
@@ -1765,6 +1767,48 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** Its turn's mark, or it left (session-end, agent_deleted): what it rang before is not this turn's. */
   const clearRang = (agentId: string): void => { rangThisTurn.delete(agentId) }
 
+  // ── once an agent (docs/plans/2026-11-26-needs-you-right-design.md, Part 5) ─────────────────────────────────────────────
+  //
+  // A yes holds that agent's next one back until the person's next prompt to it (an outside agent's prompt by the person
+  // or the dial, never a relayed one), it leaves, or NUDGE_ONCE_MS: an engine or version that does not set
+  // `stop_hook_active` on the continuation is still stopped once. A Harness agent reads as away from the yes until its
+  // continuation ends: `began` alone cannot tell, as the continuation's first card starts a new one, and who started a
+  // Harness agent's turn only the core knows. Its continuation's cards are told by phase: `asked` at the yes, `continuing`
+  // from its next card, `over` at that one's end, when the once rule alone still holds.
+  /** At most this many agents, the oldest out first. */
+  const NUDGED_MAX = 64
+  /** How long a yes holds the next one back with no prompt of the person's. */
+  const NUDGE_ONCE_MS = 600_000
+  /** The agents said yes to: when (monotonic), and how far a Harness agent's continuation has come. */
+  const nudgedAgents = new Map<string, { at: number; phase: 'asked' | 'continuing' | 'over' }>()
+  /** Its yes while the once rule holds. */
+  const nudgeOf = (agentId: string) => {
+    const entry = nudgedAgents.get(agentId)
+    return entry && monotonic() - entry.at < NUDGE_ONCE_MS ? entry : undefined
+  }
+  const noteNudged = (agentId: string): void => {
+    nudgedAgents.delete(agentId)
+    nudgedAgents.set(agentId, { at: monotonic(), phase: 'asked' })
+    if (nudgedAgents.size > NUDGED_MAX) nudgedAgents.delete(nudgedAgents.keys().next().value as string)
+  }
+  /** The person's next prompt to it, or it left: its next ask may get a yes. */
+  const clearNudged = (agentId: string): void => { nudgedAgents.delete(agentId) }
+  /** From a yes until its Harness continuation ends: the person reads as away. */
+  const nudgeHolds = (agentId: string): boolean => {
+    const phase = nudgeOf(agentId)?.phase
+    return phase === 'asked' || phase === 'continuing'
+  }
+  /** A Harness agent's card after its yes: its continuation is under way. An outside agent's is held by its source. */
+  const nudgeContinues = (agentId: string): void => {
+    const entry = nudgedAgents.get(agentId)
+    if (entry?.phase === 'asked' && !outside(agentId)) entry.phase = 'continuing'
+  }
+  /** Its continuation's end: the person reads as before from here. */
+  const nudgeOver = (agentId: string): void => {
+    const entry = nudgedAgents.get(agentId)
+    if (entry?.phase === 'continuing') entry.phase = 'over'
+  }
+
   /** A finished turn the dial rang or listed, for the value counts: a silent one told the person nothing. */
   const announced = (agentId: string, tier: Tier): void => {
     if (tier !== 'silent') count((usage) => usage.turnAnnounced(agentId))
@@ -1784,6 +1828,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         // A Harness agent's turn mark: an outside agent's is its prompt by the person or the dial.
         if (!outside(event.agentId)) clearRang(event.agentId)
       }
+      // Any card, not only a turn's first: a Codex continuation goes on in the turn its blocked stop left open.
+      nudgeContinues(event.agentId)
       void cable.turnStarted(event.agentId, event.text, event.update)
     } else if (event.kind === 'done') {
       const fields = stats.take(event.agentId)
@@ -1791,6 +1837,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       // Read while the turn's start is kept, which a Harness agent's presence reads. A sub-agent's or a given-up turn's
       // end is not its agent's, and a failed turn rang as one.
       const rouse = !event.subagent && !failedLast.has(event.agentId) && notices.quiet(event.agentId) && !present(event.agentId)
+      if (!event.subagent) nudgeOver(event.agentId)
       began.delete(event.agentId)
       ended.set(event.agentId, { durationS: at === undefined ? null : Math.round((Date.now() - at) / 1000),
         stats: { testsPassed: fields.testsPassed, testsFailed: fields.testsFailed, commits: fields.commits } })
@@ -2015,6 +2062,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (entry) return { agentId: entry.agent.id, keys: noticeKeys(entry.agent), host: entry.agent.host }
     return { agentId: observedAgentId(engine, sessionId), keys: [], host: '', who: { ...who, engine } }
   }
+  /** The agent a session's notice and nudge are kept under, so its marks are cleared under the same id: a Harness agent or
+   *  another source's row may hold the session under an id of its own. */
+  const callerOf = (engine: NudgeAsk['engine'], sessionId: string): string => noticeCaller({ text: '', engine, sessionId }).agentId
   const noticeTally = createEngineTally('[device] notify', ['claude', 'codex', 'agent'], ['shown', 'no dial', 'limited'], log)
   const noticeFile = new NoticeFile({ file: join(core.dataDir, NOTICES_FILE), cards: () => notices.stored(), after: timerIn('notices'), log })
   // Typed, or its type would be read from itself: the cable host's wiring reads it, and it reads the cable built on that host.
@@ -2083,8 +2133,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // answer's tail asks the person something. An ask gets a yes only when the spec's four conditions hold: a dial attached,
   // the skill on, no notice rung in this turn, the person not with the agent. The skill being on is the hook's to read,
   // as only it knows its session's home (decision 4). A report that does not ask only releases the stop the observed
-  // source holds for it: every stop sends one, so its end need not wait out the grace (decision 18).
-  const nudgeTally = createEngineTally('[device] nudge', ['claude', 'codex'], ['yes', 'no ask', 'no dial', 'notice', 'present'], log)
+  // source holds for it: every stop sends one, so its end need not wait out the grace (decision 18). An agent said yes to
+  // is not stopped again until the once rule ends (nudgedAgents).
+  const nudgeTally = createEngineTally('[device] nudge', ['claude', 'codex'], ['yes', 'no ask', 'no dial', 'notice', 'present', 'nudged'], log)
   /** Whether the agent that stopped gets a second look. A no lets the observed source tell its stop; a yes holds its
    *  turn's end while the agent goes on. */
   const nudged = ({ engine, sessionId, ask }: NudgeAsk): boolean => {
@@ -2094,9 +2145,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       observed?.stopReported(stopped, false)
       return false
     }
-    const { agentId } = noticeCaller({ text: '', engine, sessionId })
-    const answer = !cable.isConnected ? 'no dial' : rangThisTurn.has(agentId) ? 'notice' : present(agentId) ? 'present' : 'yes'
+    const agentId = callerOf(engine, sessionId)
+    const answer = !cable.isConnected ? 'no dial' : rangThisTurn.has(agentId) ? 'notice' : present(agentId) ? 'present'
+      : nudgeOf(agentId) ? 'nudged' : 'yes'
     nudgeTally(engine, answer)
+    if (answer === 'yes') noteNudged(agentId)
     observed?.stopReported(stopped, answer === 'yes')
     return answer === 'yes'
   }
@@ -3352,7 +3405,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     }
     // A tool card is a step for a `steps-v1` device and nothing for any other: the session drops it.
     const gone = (frame as { type?: string; payload?: { agentId?: unknown } })
-    if (gone.type === 'agent_deleted' && typeof gone.payload?.agentId === 'string') { latestUpdate.delete(gone.payload.agentId); began.delete(gone.payload.agentId); clearRang(gone.payload.agentId); ended.delete(gone.payload.agentId); endReplies(gone.payload.agentId, false); endNotice(gone.payload.agentId, 'gone'); questionsEnded(gone.payload.agentId, 'gone'); questionsOpen.delete(gone.payload.agentId) }
+    if (gone.type === 'agent_deleted' && typeof gone.payload?.agentId === 'string') { latestUpdate.delete(gone.payload.agentId); began.delete(gone.payload.agentId); clearRang(gone.payload.agentId); clearNudged(gone.payload.agentId); ended.delete(gone.payload.agentId); endReplies(gone.payload.agentId, false); endNotice(gone.payload.agentId, 'gone'); questionsEnded(gone.payload.agentId, 'gone'); questionsOpen.delete(gone.payload.agentId) }
     const step = cableStepFor(frame as Parameters<typeof cableStepFor>[0])
     if (step) { inOrder(step.agentId, () => { void cable.turnStep(step.agentId, step.step) }); return }
     const event = cableEventFor(frame as Parameters<typeof cableEventFor>[0])
@@ -3646,7 +3699,17 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         // With the source switched off too: a notice no list held is under its session's id.
         if (event.event === 'turn-start') endNotice(observedAgentId(event.engine, event.sessionId), 'answered')
         if (!observed) return
+        // The id the agent's notices and nudges were kept under (callerOf), read before the source takes the event: an
+        // ended session hands its row to another source's live copy of it. Only Claude Code and Codex ring or are nudged.
+        const caller = (event.event === 'turn-start' || event.event === 'session-end') && (event.engine === 'claude' || event.engine === 'codex')
+          ? callerOf(event.engine, event.sessionId) : undefined
         const source = observed.ingest(event)
+        // The person's prompt to it, by the dial too but never another session's message, or its end: what it rang and the
+        // yes it had were before this turn.
+        if (caller && (source === 'person' || source === 'dial' || event.event === 'session-end')) {
+          clearRang(caller)
+          clearNudged(caller)
+        }
         // The interrupt is a hooked agent's alone (Decision 2): a Harness agent's aborted turn ends as a finished one does.
         if (event.event === 'turn-aborted') count((usage) => usage.turnAborted(observedAgentId(event.engine, event.sessionId)))
         if (event.event === 'turn-start') {
@@ -3659,7 +3722,6 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
           prompted.delete(agentId)
           if (byPerson) prompted.set(agentId, monotonic())
           if (prompted.size > PROMPTED_MAX) prompted.delete(prompted.keys().next().value as string)
-          if (byPerson) clearRang(agentId)
           // Its voice delivered, and once a day where the dial found it: on no list, held, on the Other page or placed. Only
           // a dial on counts where, so with none the registry is not merged for it.
           count((usage) => {
@@ -3675,7 +3737,6 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         }
         if (event.event === 'session-end') {
           const agentId = observedAgentId(event.engine, event.sessionId)
-          clearRang(agentId)
           dropEnded(observed, agentId)
           lookLater(leavings, GONE_MS, observed, agentId)
           // Listed for a while once ended, but on no app's screen: a settle must not turn the dial to it.
