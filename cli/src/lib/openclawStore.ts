@@ -3,7 +3,8 @@
  *
  * The state folder is not in the TUI's arguments (it renames its process to a bare `openclaw`) and not in the
  * transcript. What the TUI does show is the file it holds open: `<stateDir>/state/openclaw.sqlite` (`ps-*.txt`,
- * Linux `/proc/<pid>/fd`, macOS `lsof`, Windows `harness-pty files`). That is the one exact answer, and it also covers
+ * Linux `/proc/<pid>/fd`, macOS `lsof`, Windows `harness-pty files`, of the child its launcher respawned there). That is
+ * the one exact answer, and it also covers
  * a `--profile` or `--dev` TUI, whose state folder is `~/.openclaw-<name>`. Once bound, the session is read from the
  * folder its TUI held then (`RegisteredSession.openclawStateDir`): a TUI keeps its folder for life, and its pid, once
  * it exits, can name another TUI with another store. Where neither is known, OpenClaw's own default is used:

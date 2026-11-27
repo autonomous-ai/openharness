@@ -211,7 +211,11 @@ Claude Code's plugins on Windows (Claude Code 2.1.328 and 2.1.329, VM, 2026-11-2
   empty map without spawning, so the open scan never found a running Codex after a restart (Ken's VM, 2026-11-26).
   A process it left out that still runs (elevated, past a bound) is unknown too; one that exited holds nothing.
   Name a handle only when `GetFileType` says disk: `NtQueryObject` hangs on a synchronous pipe with a read pending.
-  Tests: the "on Windows" cases of `cli/src/lib/sessionSearch/externals/support.spec.ts`, `pty/src/open_files.rs`.
+  Read the process's children too: Windows has no exec, so a launcher's work runs in a child. OpenClaw's launcher
+  respawns itself with `--stack-size=8192` and the child holds the state database, while discovery names the launcher
+  (`nativeOpenFiles`, `cli/src/lib/nativeConversation.ts`).
+  Tests: the "on Windows" cases of `cli/src/lib/sessionSearch/externals/support.spec.ts`, `pty/src/open_files.rs`,
+  `cli/src/lib/openclawStore.spec.ts`.
 - **What Git Bash runs has a parent that has gone.** Walking Windows' parent links does not reach it (`lib/windows/gitBashTree.ts`).
 - **A file Windows writes is read in Git Bash as Windows wrote it.** `current-node` holds `C:\…\node.exe` and a CRLF,
   and `${x%/*}` cuts nothing from it: every store package's `harness_node` failed under `set -e` on a computer whose
