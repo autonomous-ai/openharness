@@ -25,11 +25,16 @@ export class Desk {
     dial.keepGreeting()
     return dial
   }
-  async unplug(serial: string): Promise<void> {
+  /** Takes the dial off the file and leaves it open, so a test can choose whether the daemon's scan or the dial's
+   *  close comes first. */
+  forget(serial: string): FakeDial | undefined {
     const dial = this.plugged.get(serial)
     this.plugged.delete(serial)
     this.write()
-    await dial?.close()
+    return dial
+  }
+  async unplug(serial: string): Promise<void> {
+    await this.forget(serial)?.close()
   }
   async close(): Promise<void> {
     for (const serial of [...this.plugged.keys()]) await this.unplug(serial)
