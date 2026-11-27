@@ -995,6 +995,29 @@ describe('several cards an agent', () => {
     expect(rig.calls).toEqual([['close', 'a', qid(1, 3)], ['hold', 'a', qid(2), card(W(2))]])
   })
 
+  // Rule 5 (the PM, after the final review): an other card closes, as before, at the person's own next prompt to its
+  // agent; a waiting card stays until its agent closes it.
+  it('the person\'s prompt closes the other card alone', () => {
+    const rig = desk()
+    say(rig, P(1))
+    say(rig, W(2))
+    clear(rig)
+    rig.notices.prompted(by('a'))
+    expect(lines(rig)).toEqual([W(2)])
+    expect(rig.calls).toEqual([['close', 'a', qid(1)], ['hold', 'a', qid(2), card(W(2))]])
+    expect(rig.ends).toEqual([['a', cid(1), 'proceeding', 'prompted']])
+    clear(rig)
+    rig.notices.prompted(by('a'))
+    rig.notices.prompted(by('b'))
+    expect(rig.calls).toEqual([])
+    expect(lines(rig)).toEqual([W(2)])
+    // A restored card not yet re-found is its caller's by its keys.
+    const NOW = 1_800_000_000_000
+    const back = desk({ clock: NOW, restored: [{ agentId: 'old', keys: ['claude:s1'], id: 'shown:k1', line: VPN, host: 'orca', at: NOW - 60_000 }] })
+    back.notices.prompted({ agentId: 'new', keys: ['claude:s1'] })
+    expect(back.notices.pending('old')).toBe(false)
+  })
+
   // Rule 8: only a waiting card keeps its agent's turn ends silent; a proceeding or plain one rarely gets an answer.
   it('waiting says whether an agent holds a waiting card', () => {
     const rig = desk()
@@ -1283,6 +1306,7 @@ describe('closed is told once for each card that goes, with why', () => {
       for (let n = 3; n <= 21; n++) say(rig, VPN, `o${n}`)
     }],
     replaced: [P(1), 'proceeding', {}, (rig) => say(rig, P(2))],
+    prompted: [P(1), 'proceeding', {}, (rig) => rig.notices.prompted(by('a'))],
     tapped: [W(1), 'waiting', { who: { name: 'api', engine: 'claude', machine: 'Mac mini' } }, (rig) => rig.notices.tapped('a')],
     gone: [W(1), 'waiting', {}, (rig) => rig.notices.ended('a')],
     detached: [W(1), 'waiting', { host: 'harness' }, (rig) => rig.notices.detached()],
