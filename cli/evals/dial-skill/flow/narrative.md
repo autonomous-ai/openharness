@@ -1,12 +1,13 @@
 # Dial skill hill-climb
 
-Part 3's result: v1 ships, below the 90% recall gate, by the PM's decision (2026-11-27), with a 7-day field watch
-after release; the rounds are findings for Part 4 (below).
-v1, the best variant, against the baseline on test:
+Part 4's result: v4's line ships at session start, and Part 5 does not open. Round 1's line (v3) gained recall and
+rang needlessly 9 of 54 held-out no-need runs, so it did not ship; round 2's (v4) gained recall too, with 1 of 54, so
+it ships (below). The skill under the line is Part 3's v1, shipped by the PM's decision (2026-11-27).
+v4, the best variant, against the baseline on test:
 
-- crowd: v1 test 1.50 -> 1.69, paired +0.19 [-0.75, 1.14] over 12 cases, within noise
-- clean: v1 test 1.67 -> 1.79, paired +0.13 [-1.33, 1.58] over 12 cases, within noise
-- name-only: v1 test -0.75 -> -0.75, paired +0.00 [0.00, 0.00] over 12 cases, within noise
+- crowd: v4 test 1.50 -> 2.50, paired +1.00 [-0.32, 2.32] over 12 cases, within noise
+- clean: v4 test 1.67 -> 2.58, paired +0.92 [-0.37, 2.21] over 12 cases, within noise
+- name-only: v4 test -0.75 -> 2.58, paired +3.33 [1.77, 4.90] over 12 cases, clears noise
 
 <!-- status -->
 | round | condition | change | val | train | test | recall | specificity | line_ok | ask_ok | harmed | went_on | s/run | tool calls | rings | tokens | $/pass | spend |
@@ -193,8 +194,8 @@ Needless rings pooled over the held-out no-need runs: 9 of 54 (83% quiet), again
 `minor-choice` 1. `name-only` alone: 2 of 9. Without `minor-choice`, one of the six cases read in Part 3, the pool
 still holds 4. The one held-out need miss is `clean` `retry-policy-rollout`, 1 of 2.
 
-The gain holds and the specificity does not, so the line does not ship. Held-out `crowd` recall with the line is
-48 of 48 (100%), so Part 5 does not open. v1 stays the best round.
+The gain holds and the specificity does not, so the line does not ship, and after it v1 stays the best round. Part 5's
+gate is read after round 2, on the line that ships (below).
 
 ## Part 4, round 2
 
@@ -222,5 +223,5 @@ the skill's body was loaded. In the val scenarios whose v3 traces were read (eve
 v4 rang 48 of 48 need runs and 0 of 12 no-need runs across the three conditions; in the rest, 48 of 48 and 1 of 42.
 `line_ok` in `crowd` fell to 35 of 48 (v1 36 of 41), not a gate of this round.
 
-The gain holds and so does the specificity, so the line ships and v4 is the best round. Held-out `crowd` recall with
-the line is 48 of 48 (100%), so Part 5 does not open.
+The gain holds and so does the specificity, so the line ships and v4 is the best round. Part 5's gate, read after
+round 2 on v4: held-out `crowd` recall 48 of 48 (100%), not under 90%, so Part 5 does not open.

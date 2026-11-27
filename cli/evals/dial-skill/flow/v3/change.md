@@ -48,8 +48,9 @@ needless rings.
 The one held-out need miss is `clean` `retry-policy-rollout`, 1 of 2 (`loaded` 1). `crowd` has none.
 
 Verdict: the gain holds (`name-only` rises beyond noise, no condition falls), the specificity does not (9 of 54
-against at most 2). The line does not ship. Held-out `crowd` recall with the line is 48 of 48 (100%), not under 90%,
-so Part 5 does not open. v1 stays the best round.
+against at most 2). The line does not ship. After it v1 stays the best round. Part 5's gate is read after round 2
+(v4): v4 ships, and its held-out `crowd` recall is 48 of 48 (100%), not under 90%, so Part 5 does not open
+(`v4/change.md`).
 
 Spend: `crowd` $22.21, `clean` $11.63, `name-only` $7.42, $41.26 with the three probes; $156.23 in the flow, under the
 cap of $175.

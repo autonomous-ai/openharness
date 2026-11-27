@@ -467,6 +467,19 @@ decides and gives the command. Its starting text (at most 300 characters):
 - Shipped, v4's text replaces the line above; the command, the hooks and their trust are round 1's, unchanged. The
   agreement test then holds the line to the description's moment, as it carries no command.
 
+**Measured (2026-11-27).** Held out, val and test pooled, v1 then v1 with v4's line, the starting text unchanged:
+
+| condition | recall | needless rings |
+| --- | --- | --- |
+| `crowd` | 41 of 48 → 48 of 48, paired +0.15 [-0.01, 0.30], within noise | 0 of 27 → 1 of 27 |
+| `clean` | 28 of 32 → 32 of 32, paired +0.13 [-0.03, 0.28], within noise | 2 of 18 → 0 of 18 |
+| `name-only` | 0 of 16 → 16 of 16, paired +1.00 [1.00, 1.00], beyond noise | 0 of 9 → 0 of 9 |
+
+1 needless ring of 54 (`crowd` `minor-choice`, after loading the skill), against at most 2; `name-only` alone 0 of 9.
+Every ring came after the skill's body was loaded. v4 ships: its text is the line above, and the product carries it.
+`line_ok` in `crowd` was 35 of 48, against v1's 36 of 41, not a gate. Part 5's gate, read on v4: held-out `crowd`
+recall 48 of 48 (100%), not under 90%, so Part 5 does not open. The flow spent $197.01 of the $220 cap.
+
 ## Part 5. A second look when a turn stops
 
 Built only if, after Part 3 and Part 4's two rounds, Claude Code's recall in `crowd` is still under 90%. It is the one step that
