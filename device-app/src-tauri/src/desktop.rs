@@ -33,22 +33,35 @@ impl DesktopApp for SystemDesktopApp {
     }
 
     fn running(&self) -> bool {
-        use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
-        let Ok(mut system) = System::new() else {
+        let Some(system) = process_table() else {
             return false;
         };
-        system.refresh_processes_specifics(
-            ProcessesToUpdate::All,
-            true,
-            ProcessRefreshKind::nothing().with_exe(UpdateKind::Always),
-        );
-        let executables = system
+        let processes = system
             .processes()
             .values()
-            .filter_map(|process| process.exe())
-            .map(|exe| exe.to_string_lossy().into_owned());
-        running_among(std::env::consts::OS, executables)
+            .filter_map(|process| Some((process.exe()?.to_string_lossy().into_owned(), process.user_id())));
+        running_among(std::env::consts::OS, own_user(&system), processes)
     }
+}
+
+/// Every user's processes, each with its file and user. Processes, never their threads: a thread has its process's
+/// file and user, and on Linux reading a user costs one more file for each thread, every tick.
+#[cfg(not(target_os = "macos"))]
+fn process_table() -> Option<sysinfo::System> {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+    let mut system = System::new().ok()?;
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::nothing().with_exe(UpdateKind::Always).with_user(UpdateKind::Always).without_tasks(),
+    );
+    Some(system)
+}
+
+/// Our own process's user in that table: its uid on Linux, its SID on Windows.
+#[cfg(not(target_os = "macos"))]
+fn own_user(system: &sysinfo::System) -> Option<&sysinfo::Uid> {
+    system.process(sysinfo::get_current_pid().ok()?)?.user_id()
 }
 
 /// The program an entry's `Exec=` line starts: a quoted first word unescaped, else the text up to the first space.
@@ -152,12 +165,24 @@ pub fn process_names(os: &str) -> &'static [&'static str] {
     }
 }
 
-/// Whether one of these executables is the desktop app: its file name, whole.
-pub fn running_among(os: &str, mut executables: impl Iterator<Item = String>) -> bool {
+/// Whether one of these executables, each with its user, is the desktop app of our own user: its file name, whole.
+/// Another person's desktop app on the same machine is not ours. A user that cannot be read (Windows hides another
+/// person's) is never taken for ours, and when ours cannot be read nothing counts, so the daemon starts.
+pub fn running_among<T: PartialEq>(
+    os: &str,
+    own: Option<T>,
+    mut processes: impl Iterator<Item = (String, Option<T>)>,
+) -> bool {
+    let Some(own) = own else {
+        return false;
+    };
     let names = process_names(os);
     // Windows paths may use either separator, and its file names ignore case.
     let windows = os == "windows";
-    executables.any(|exe| {
+    processes.any(|(exe, user)| {
+        if user.as_ref() != Some(&own) {
+            return false;
+        }
         let file = if windows { exe.rsplit(['/', '\\']).next() } else { exe.rsplit('/').next() }.unwrap_or_default();
         names.iter().any(|name| if windows { name.eq_ignore_ascii_case(file) } else { *name == file })
     })
@@ -175,7 +200,22 @@ mod tests {
     }
 
     fn among(os: &str, exe: &str) -> bool {
-        running_among(os, std::iter::once(exe.to_string()))
+        running_among(os, Some(1), std::iter::once((exe.to_string(), Some(1))))
+    }
+
+    #[test]
+    fn only_our_own_users_desktop_app_counts() {
+        // On a machine several people use, another person's desktop app must not keep this person's daemon from
+        // starting; a user that cannot be read, theirs or ours, is never taken for ours.
+        let with = |own: Option<u32>, user: Option<u32>| {
+            [("windows", r"C:\x\harness-desktop.exe"), ("linux", "/opt/harness/harness")]
+                .map(|(os, exe)| running_among(os, own, std::iter::once((exe.to_string(), user))))
+        };
+        assert_eq!(with(Some(1), Some(1)), [true; 2]);
+        assert_eq!(with(Some(1), Some(2)), [false; 2]);
+        assert_eq!(with(Some(1), None), [false; 2]);
+        assert_eq!(with(None, Some(1)), [false; 2]);
+        assert_eq!(with(None, None), [false; 2]);
     }
 
     #[test]
@@ -194,6 +234,17 @@ mod tests {
         // Read-only lookups: either answer is right; the calls must return.
         let _ = SystemDesktopApp.installed();
         let _ = SystemDesktopApp.running();
+    }
+
+    // Unread, our own user or a process's file would let no desktop app count, and the daemon would start beside the
+    // desktop app's own.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn our_own_process_is_read() {
+        let system = process_table().expect("the process table");
+        assert!(own_user(&system).is_some());
+        let own = system.process(sysinfo::get_current_pid().expect("our own pid")).expect("our own process");
+        assert!(own.exe().is_some());
     }
 
     fn entry(exec: &str) -> String {
