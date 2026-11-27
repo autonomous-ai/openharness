@@ -10080,9 +10080,9 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       askedAgain('h1', held, 'Harness')
     })
 
-    // A message sent while the agent worked starts its next turn while the done still waits for the turn's tokens: that
-    // start is no answer, so the done still asks the card once.
-    it('its next turn starting while its done waits for the turn\'s tokens still leaves it to be asked once', async () => {
+    // Its next turn starts while the done still waits for the turn's tokens, the person's answer most likely: the rouse
+    // decided at the done is not asked. The card stays quiet, asked at that turn's end if still open and the person gone.
+    it('its next turn starting while its done waits for the turn\'s tokens leaves it quiet until that turn\'s end', async () => {
       let finish!: (reading: { input: number; cached: number; output: number }) => void
       let n = 0
       const readUsage = vi.fn((_id: string) => (++n === 2
@@ -10095,10 +10095,14 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       done(port)
       turnStarted()
       finish({ input: 2, cached: 0, output: 2 })
+      await vi.waitFor(() => expect(calls('turnDone')).toEqual([['h1']]))
+      await vi.advanceTimersByTimeAsync(0)
+      stillHeld()
+      processing(port)
+      await vi.advanceTimersByTimeAsync(PRESENT_MS + 1)
+      done(port)
       await vi.waitFor(() => expect(shownAsks()).toHaveLength(1))
       askedAgain('h1', held, 'Harness')
-      expect(seen.cable.calls.map(([name]) => name).filter((name) => ['turnDone', 'questionClose', 'question'].includes(name)))
-        .toEqual(['turnDone', 'questionClose', 'question'])
     })
 
     it('with no dial at its end it stays held', async () => {
