@@ -16,11 +16,18 @@ afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: 
 const id = 'creation-intent-0001'
 const fingerprint = creationFingerprint({ engine: 'claude', cwd: '/work', bypassPermission: false })
 
+// A temporary Windows still holds (an antivirus, an indexer) throws EBUSY at its removal, by whichever call removes it.
+const holding = vi.hoisted(() => ({ temporaries: false }))
 vi.mock('node:fs', async (original) => {
   const actual = await original<typeof import('node:fs')>()
-  return { ...actual, fsyncSync: vi.fn(actual.fsyncSync), linkSync: vi.fn(actual.linkSync) }
+  const held = (path: Parameters<typeof actual.rmSync>[0]) => {
+    if (holding.temporaries && String(path).endsWith('.tmp') && actual.existsSync(path)) throw Object.assign(new Error('held'), { code: 'EBUSY' })
+  }
+  return { ...actual, fsyncSync: vi.fn(actual.fsyncSync), linkSync: vi.fn(actual.linkSync), renameSync: vi.fn(actual.renameSync),
+    rmSync: (...args: Parameters<typeof actual.rmSync>) => { held(args[0]); actual.rmSync(...args) },
+    unlinkSync: (...args: Parameters<typeof actual.unlinkSync>) => { held(args[0]); actual.unlinkSync(...args) } }
 })
-afterEach(() => vi.restoreAllMocks())
+afterEach(() => { holding.temporaries = false; vi.restoreAllMocks() })
 
 describe('agent creation receipts', () => {
   // Task #3861 (stone7890's Mac, 11-06): the folder was owned by root, every status read threw CREATION_STORAGE_FAILED with nothing
@@ -743,5 +750,63 @@ describe('the first task of the receipt that made a launch', () => {
     expect(readFileSync(join(directory, `${id}.json`), 'utf8')).not.toContain('fix it')
     expect(receipts.status(id)).toEqual(createdFor('agent-a'))
     expect(await receipts.scrubCreated('agent-a')).toBe(0)
+  })
+})
+
+// Windows throws EBUSY or EPERM removing a temporary it still holds: thrown from a write's `finally`, that replaced the
+// error that failed the write, or failed a write that had succeeded (removeQuietly, lib/removePath.ts). The temporary is
+// left behind instead, and no reader takes it for a receipt.
+describe('a receipt whose temporary Windows still holds', () => {
+  const request = { kind: 'model-create', local: false, choices: { engine: 'claude', cwd: '/fixture/work' } }
+  const held = { service: 'models', detail: 'Waiting for the selected model.' }
+  const created = { state: 'created' as const, agentId: 'fixture-agent' }
+  const refused = () => Object.assign(new Error('refused'), { code: 'EACCES' })
+  const temporaries = (directory: string) => fs.readdirSync(directory).filter(name => name.endsWith('.tmp'))
+
+  it('a receipt whose write is refused fails as refused, the folder named', () => {
+    const { directory, receipts } = fixture()
+    holding.temporaries = true
+    vi.mocked(fs.linkSync).mockImplementationOnce(() => { throw refused() })
+    let thrown: unknown
+    try { receipts.cancelIntent(id) } catch (error) { thrown = error }
+    expect(thrown).toBeInstanceOf(AgentCreationReceiptError)
+    expect((thrown as AgentCreationReceiptError).detail).toContain(directory)
+    expect(temporaries(directory)).toHaveLength(1)
+  })
+
+  it('a receipt is saved, and the temporaries left are no receipt to a scan or a scrub', async () => {
+    const { directory, receipts } = fixture()
+    holding.temporaries = true
+    expect(await receipts.runIntent(id, fingerprint, request, held, async () => null)).toEqual({ state: 'pending', held })
+    const other = `${id}-created`
+    expect(await receipts.runIntent(other, fingerprint, request, held, async () => async () => created)).toEqual(created)
+    // Each intent's own, then the other's claim and result.
+    expect(temporaries(directory)).toHaveLength(4)
+    const found = []
+    for await (const item of receipts.pendingIntents()) if (item) found.push(item)
+    expect(found).toEqual([{ id, fingerprint, request, held }])
+    expect(await receipts.scrubCreated('fixture-agent')).toBe(1)
+  })
+
+  it('a hold whose write is refused throws the refusal', async () => {
+    const { directory, receipts } = fixture()
+    let thrown: unknown
+    await receipts.runIntent(id, fingerprint, request, held, async (_request, authority) => {
+      holding.temporaries = true
+      vi.mocked(fs.renameSync).mockImplementationOnce(() => { throw refused() })
+      try { authority.hold({ service: 'native', detail: 'Waiting for the engine installation.' }) } catch (error) { thrown = error }
+      return null
+    })
+    expect(thrown).toMatchObject({ code: 'EACCES' })
+    expect(temporaries(directory)).toHaveLength(1)
+  })
+
+  it('a scrub whose rewrite is refused fails as refused, the folder named', async () => {
+    const { directory, receipts } = fixture()
+    await receipts.runIntent(id, fingerprint, request, held, async () => async () => created)
+    holding.temporaries = true
+    vi.mocked(fs.renameSync).mockImplementationOnce(() => { throw refused() })
+    await expect(receipts.scrubCreated('fixture-agent')).rejects.toMatchObject({ code: 'CREATION_STORAGE_FAILED', detail: expect.stringContaining(directory) })
+    expect(temporaries(directory)).toHaveLength(1)
   })
 })
