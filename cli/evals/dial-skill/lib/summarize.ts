@@ -27,10 +27,11 @@ export interface VariantStats {
 }
 /** The close gates (the spec's "Eval and hill-climb"), read in `crowd` over the held-out runs: the agent closes the
  *  answered card on at least 90% of follow-ups 1 and 4, closes a wrong one at most once, and rings no worse than
- *  round 4, whose text the closing bullet is added to: recall not down beyond noise, at most one more needless ring. */
+ *  round 5, Part 5's shipped variant (v4's text and its Stop hook), which the closing bullet is added to: recall not
+ *  down beyond noise, at most one more needless ring. */
 export const CLOSE_RIGHT_MIN = 0.9
 export const CLOSE_WRONG_MAX = 1
-export const CLOSE_BASE_ROUND = 4
+export const CLOSE_BASE_ROUND = 5
 export const NEEDLESS_OVER_BASE_MAX = 1
 /** Counts over a variant's scored val and test rows that ran a follow-up. `right` of `right_n` is over the `answer`
  *  and `answer-one` runs whose turn 1 rang a card; `rang_none` counts those whose turn 1 rang none, so had none to close.
