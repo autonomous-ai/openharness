@@ -651,7 +651,7 @@ mod tests {
     use crate::appimage_env::tests::{PERSON_PATH, assert_outside, from_an_appimage};
     use crate::harness_home::Look;
     #[cfg(unix)]
-    use crate::testing::{Fake, wait_gone};
+    use crate::testing::{Fake, WAIT, wait_gone};
     #[cfg(unix)]
     use crate::types::MemoryLog;
     use std::cell::Cell;
@@ -661,6 +661,8 @@ mod tests {
     #[cfg(unix)]
     use std::time::Instant;
 
+    /// testing.rs, with the WAIT the unix tests share, is unix only: off it, only a thread is waited on here.
+    #[cfg(not(unix))]
     const WAIT: Duration = Duration::from_secs(5);
     #[cfg(unix)]
     const WATCH: [&str; 3] = ["hardware", "watch", "--json"];

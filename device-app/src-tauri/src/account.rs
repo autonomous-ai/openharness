@@ -190,12 +190,11 @@ fn shown(message: &str) -> String {
 mod tests {
     use super::*;
     use crate::cli::LINE_MAX;
-    use crate::testing::{Fake, alive, wait_gone};
+    use crate::testing::{Fake, WAIT, alive, wait_gone};
     use crate::types::{Event, LoginEvent, LoginEvent::*};
     use std::sync::mpsc;
     use std::time::Duration;
 
-    const WAIT: Duration = Duration::from_secs(5);
     const SHORT: Duration = Duration::from_millis(300);
     const URL: &str = r#"{"type":"authorize_url","url":"https://id.example/a?state=S"}"#;
     const WAITING: &str = r#"{"type":"waiting","message":"Harness is finishing an update"}"#;
@@ -212,7 +211,7 @@ mod tests {
         (send, events)
     }
 
-    /// Every event until the sign-in's thread has ended and let go of `send`, 5 s at most for each.
+    /// Every event until the sign-in's thread has ended and let go of `send`, WAIT at most for each.
     fn all(events: &mpsc::Receiver<LoginEvent>) -> Vec<LoginEvent> {
         let mut all = Vec::new();
         loop {
@@ -385,7 +384,8 @@ mod tests {
         let fake = Fake::new();
         fake.script("login --json", &["@driver", URL, "@wait never"]);
         let (send, events) = channel();
-        let sign_in = login(&fake.cli(), fake.log(), send).unwrap();
+        // A grace of WAIT, not END_GRACE: on a loaded machine the fake can take past END_GRACE to end by itself.
+        let sign_in = login_within(&fake.cli(), fake.log(), send, LOGIN_DEADLINE, LOGIN_EXIT_DEADLINE, WAIT).unwrap();
         assert_eq!(events.recv_timeout(WAIT), Ok(AuthorizeUrl("https://id.example/a?state=S".into())));
         sign_in.cancel();
         assert_eq!(all(&events), Vec::new());

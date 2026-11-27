@@ -46,6 +46,8 @@ pub struct Runner(Arc<Shared>);
 struct Shared {
     doors: Doors,
     send: Arc<dyn Fn(Event) + Send + Sync>,
+    /// What a stopped watch has to end by itself before it is killed.
+    stop_grace: Duration,
     /// What the last look found: every run uses it.
     cli: Mutex<Option<Arc<HarnessCli>>>,
     watch: Mutex<Option<Watch>>,
@@ -59,12 +61,17 @@ struct Shared {
     tabs: Arc<Tabs>,
 }
 
+/// What dates a typing or a select, and tells how long it has waited.
+type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
+
 /// The tab rules, and the word that they changed. Their lock is taken last, and never held across a script call, a
 /// write or `send`.
-#[derive(Default)]
 struct Tabs {
     state: Mutex<TabState>,
     changed: Condvar,
+    /// A typing's and a select's ages (LATE_WRITE, CALL_TIMEOUT) are read on it. The poll's ticks and waits stay on
+    /// the real clock, which a clock that stands still would stop, and so do the failed polls' seconds (FAILED_EVERY).
+    clock: Clock,
 }
 
 #[derive(Default)]
@@ -87,6 +94,14 @@ enum Call {
 }
 
 impl Tabs {
+    fn new(clock: Clock) -> Tabs {
+        Tabs { state: Mutex::default(), changed: Condvar::new(), clock }
+    }
+
+    fn now(&self) -> Instant {
+        (self.clock)()
+    }
+
     /// A change to the rules, and a word to the tab thread: it may have something to do now.
     fn tell(&self, change: impl FnOnce(&mut TabFollow)) {
         change(&mut self.state.lock().unwrap().follow);
@@ -98,7 +113,7 @@ impl Tabs {
     fn typed(&self, number: u64, typing: Typing) -> Out {
         let mut state = self.state.lock().unwrap();
         state.typings_of = number;
-        let out = state.follow.typed(typing, Instant::now());
+        let out = state.follow.typed(typing, self.now());
         drop(state);
         self.changed.notify_one();
         out
@@ -122,10 +137,10 @@ impl Tabs {
             if state.ended {
                 return None;
             }
-            if let Some(next) = state.follow.next_typing(Instant::now()) {
+            if let Some(next) = state.follow.next_typing(self.now()) {
                 return Some(Call::Typing(next, state.typings_of));
             }
-            if let Some(select) = state.follow.next_select(Instant::now()) {
+            if let Some(select) = state.follow.next_select(self.now()) {
                 return Some(Call::Select(select));
             }
             let Some(app) = state.follow.polls() else {
@@ -151,19 +166,28 @@ impl Runner {
     /// `send` hands the event to the app's loop and returns. It never runs an effect itself: a watch or a sign-in
     /// calls it holding a lock that stopping or cancelling it takes.
     pub fn new(doors: Doors, send: Arc<dyn Fn(Event) + Send + Sync>) -> Runner {
-        Runner::polling_every(doors, send, POLL_EVERY)
+        Runner::within(doors, send, POLL_EVERY, watch::STOP_GRACE, Arc::new(Instant::now))
     }
 
-    fn polling_every(doors: Doors, send: Arc<dyn Fn(Event) + Send + Sync>, every: Duration) -> Runner {
+    /// `new`'s runner on the timings given: the poll's interval, a stopped watch's grace, and the clock that dates a
+    /// typing or a select. Only tests give others.
+    fn within(
+        doors: Doors,
+        send: Arc<dyn Fn(Event) + Send + Sync>,
+        every: Duration,
+        stop_grace: Duration,
+        clock: Clock,
+    ) -> Runner {
         let shared = Arc::new(Shared {
             doors,
             send,
+            stop_grace,
             cli: Mutex::new(None),
             watch: Mutex::new(None),
             watching: Arc::default(),
             login: Mutex::new(None),
             front: Mutex::default(),
-            tabs: Arc::default(),
+            tabs: Arc::new(Tabs::new(clock)),
         });
         shared.refresh_login_item();
         // Weakly: the source keeps its callback for as long as it runs, and the runner must still go.
@@ -384,7 +408,8 @@ impl Shared {
                 // one's select run after it.
                 let current = selecting.lock().unwrap();
                 if *current == number {
-                    selects.tell(|follow| follow.select(app, tty, raise, Instant::now()));
+                    let at = selects.now();
+                    selects.tell(|follow| follow.select(app, tty, raise, at));
                 }
             },
             move |typing| {
@@ -392,6 +417,7 @@ impl Shared {
                     shared.typed(number, typing);
                 }
             },
+            self.stop_grace,
         );
         match spawned {
             Ok(started) => {
@@ -567,7 +593,7 @@ mod tests {
     use crate::open::Opener;
     use crate::state::StateFile;
     use crate::tabs::{LATE_WRITE, NoTabs, Selected, TYPING_QUEUED, TabApp, TabError, TabScripts, Written};
-    use crate::testing::{Fake, alive, fake_harness, wait_gone};
+    use crate::testing::{Fake, WAIT, alive, fake_harness, wait_gone};
     use crate::types::{
         DialStatus, Effect, Event, ExportFailure, Exported, LoginEvent, MemoryLog, MenuItem, NotifyMode, Output, Saved,
         UpdateFailure, VoiceLang,
@@ -577,12 +603,11 @@ mod tests {
     use std::fs;
     use std::io;
     use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, Condvar, Mutex, mpsc};
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
-    const WAIT: Duration = Duration::from_secs(5);
     /// Second 0 of a minute.
     const B: u64 = 1794556800;
     const URL: &str = r#"{"type":"authorize_url","url":"https://id.example/a?state=S"}"#;
@@ -786,13 +811,8 @@ mod tests {
 
         /// No call starts for ten ticks: there are still `n`.
         fn still(&self, n: usize) {
-            self.still_for(n, EVERY * 10);
-        }
-
-        /// No call starts for `wait`: there are still `n`.
-        fn still_for(&self, n: usize, wait: Duration) {
             let calls = self.calls.lock().unwrap();
-            let (calls, _) = self.called.wait_timeout_while(calls, wait, |calls| calls.len() == n).unwrap();
+            let (calls, _) = self.called.wait_timeout_while(calls, EVERY * 10, |calls| calls.len() == n).unwrap();
             assert_eq!(calls.len(), n, "{calls:?}");
         }
 
@@ -904,11 +924,30 @@ mod tests {
         std::os::unix::fs::symlink(fake_harness(), bin.join("harness")).unwrap();
     }
 
+    /// The runner's clock in a test: it stands still until the test moves it, so no load on the machine ages a
+    /// typing or a select, and a test that needs one aged moves it past the bound at once.
+    struct Hands {
+        start: Instant,
+        /// In nanoseconds, with no lock: the runner reads it under the tab rules' lock, which is taken last.
+        moved: AtomicU64,
+    }
+
+    impl Hands {
+        fn now(&self) -> Instant {
+            self.start + Duration::from_nanos(self.moved.load(Ordering::SeqCst))
+        }
+
+        fn advance(&self, by: Duration) {
+            self.moved.fetch_add(by.as_nanos() as u64, Ordering::SeqCst);
+        }
+    }
+
     struct World {
         fake: Fake,
         home: tempfile::TempDir,
         doubles: Arc<Doubles>,
         events: mpsc::Receiver<Event>,
+        hands: Arc<Hands>,
         runner: Runner,
     }
 
@@ -991,8 +1030,11 @@ mod tests {
         let send = Arc::new(move |event| {
             let _ = sender.send(event);
         });
-        let runner = Runner::polling_every(doors, send, EVERY);
-        World { fake, home, doubles, events, runner }
+        let hands = Arc::new(Hands { start: Instant::now(), moved: AtomicU64::default() });
+        let clock = hands.clone();
+        // A watch these tests stop ends by itself: on a loaded machine the fake can take past STOP_GRACE to.
+        let runner = Runner::within(doors, send, EVERY, WAIT, Arc::new(move || clock.now()));
+        World { fake, home, doubles, events, hands, runner }
     }
 
     fn doors(fake: &Fake, home: &Path, doubles: &Arc<Doubles>) -> Doors {
@@ -1804,7 +1846,7 @@ mod tests {
         assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
         assert_eq!(scripts.calls(2), ["running Ghostty", "focus_tty Ghostty /dev/ttys023"]);
         let log = w.fake.log();
-        log.until(|lines| lines.iter().any(|line| line == "tabs: Ghostty select ok"));
+        log.until(WAIT, |lines| lines.iter().any(|line| line == "tabs: Ghostty select ok"));
         scripts.still(2);
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
         assert_eq!(w.fake.stdin(), [WRITES.to_string(), VSCODE_LINE.to_string(), wrote(ID, false)]);
@@ -1833,10 +1875,10 @@ mod tests {
         let log = w.fake.log();
         assert_eq!(tabs_said(&log), ["tabs: Ghostty write refused · queue full"]);
         // The queued ones wait past the bound, and are dropped late once the call answers.
-        scripts.still_for(2, LATE_WRITE + EVERY);
+        w.hands.advance(LATE_WRITE + Duration::from_millis(1));
         scripts.gate(false);
         let late = |lines: &[String]| lines.iter().filter(|line| *line == "tabs: Ghostty write dropped late").count();
-        log.until(|lines| late(lines) == TYPING_QUEUED);
+        log.until(WAIT, |lines| late(lines) == TYPING_QUEUED);
         scripts.still(2);
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
         // The one past the queue was answered first.
@@ -1862,11 +1904,11 @@ mod tests {
         assert_eq!(scripts.calls(2), ["running Ghostty", "focus_tty Ghostty /dev/ttys023"]);
         w.fake.touch("go");
         assert_eq!(w.next(), a_dial());
-        // Nothing runs around the held call while the write waits past the bound.
-        scripts.still_for(2, LATE_WRITE + EVERY);
+        // The write waits past the bound behind the held call.
+        w.hands.advance(LATE_WRITE + Duration::from_millis(1));
         scripts.gate(false);
         let log = w.fake.log();
-        log.until(|lines| lines.iter().any(|line| line == "tabs: Ghostty write dropped late"));
+        log.until(WAIT, |lines| lines.iter().any(|line| line == "tabs: Ghostty write dropped late"));
         scripts.still(2);
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
         assert_eq!(w.fake.stdin(), [WRITES.to_string(), VSCODE_LINE.to_string(), wrote(ID, false)]);
@@ -1922,7 +1964,7 @@ mod tests {
         assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
         let log = w.fake.log();
         // Answered, so Ghostty may be scripted, and the select's call has passed the gate.
-        log.until(|lines| lines.iter().any(|line| line == "tabs: Ghostty select ok"));
+        log.until(WAIT, |lines| lines.iter().any(|line| line == "tabs: Ghostty select ok"));
         // The first write's call is held, and the second waits behind it.
         scripts.gate(true);
         w.fake.touch("go");
@@ -1953,7 +1995,7 @@ mod tests {
         );
         assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
         // Answered, so Ghostty may be scripted.
-        w.fake.log().until(|lines| lines.iter().any(|line| line == "tabs: Ghostty select ok"));
+        w.fake.log().until(WAIT, |lines| lines.iter().any(|line| line == "tabs: Ghostty select ok"));
         assert_eq!(w.runner.run(Effect::StopWatch), None);
         assert_eq!(w.next(), a_dial());
         scripts.still(2);
@@ -1968,14 +2010,15 @@ mod tests {
         let scripts = Arc::new(Scripts::default());
         let (w, _fronts) = world_with_tabs(VSCODE, &scripts);
         let (one, two) = (write(ID, "one"), write(NEXT_ID, "two"));
-        // It ends by itself after the words.
-        w.fake.script("hardware watch --json", &[r#"{"attached":true}"#, TAP, "@wait go", &one, &two]);
+        // It ends by itself after the words, once told: ended at once, the end could drop both before the first's call.
+        w.fake.script("hardware watch --json", &[r#"{"attached":true}"#, TAP, "@wait go", &one, &two, "@wait end"]);
         assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
-        w.fake.log().until(|lines| lines.iter().any(|line| line == "tabs: Ghostty select ok"));
+        w.fake.log().until(WAIT, |lines| lines.iter().any(|line| line == "tabs: Ghostty select ok"));
         // The first write's call is held, and the second waits behind it as the watch ends.
         scripts.gate(true);
         w.fake.touch("go");
         assert_eq!(scripts.calls(4)[2..], ["running Ghostty", "write_text Ghostty /dev/ttys023 one"]);
+        w.fake.touch("end");
         assert_eq!(w.next(), Event::WatchExit(Some(0)));
         scripts.gate(false);
         // The devices took the stream's end for the second write's answer: run now, it could meet another send's words.
@@ -1995,10 +2038,10 @@ mod tests {
         );
         assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
         let log = w.fake.log();
-        log.until(|lines| lines.iter().any(|line| line == "tabs: Ghostty select ok"));
+        log.until(WAIT, |lines| lines.iter().any(|line| line == "tabs: Ghostty select ok"));
         // The person said no to Automation for Ghostty as the first words came.
         w.fake.touch("one");
-        log.until(|lines| lines.iter().any(|line| line == "tabs: Ghostty not allowed"));
+        log.until(WAIT, |lines| lines.iter().any(|line| line == "tabs: Ghostty not allowed"));
         w.fake.touch("two");
         assert_eq!(w.next(), a_dial());
         scripts.still(4);

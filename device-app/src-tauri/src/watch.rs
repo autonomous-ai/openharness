@@ -13,7 +13,7 @@ use std::time::Duration;
 /// words, and never count as the daemon being down.
 const FIRST_LINE: Duration = Duration::from_secs(20);
 /// How long a stopped watch has to end by itself before its group is killed.
-const STOP_GRACE: Duration = Duration::from_secs(3);
+pub(crate) const STOP_GRACE: Duration = Duration::from_secs(3);
 /// A watch's first stdin line: this app answers each write and Enter line. Harness Device 0.1.x drops them without a
 /// word, so a watch that never reads it prints none, and the devices send it no words. A line, not an argument: an
 /// older CLI ignores a line it does not know, where an argument it does not know ends the whole watch.
@@ -90,15 +90,16 @@ impl Drop for Watch {
 /// Runs `hardware watch --json`, told first that this app answers writes: an `Event::WatchLine` for each status line it
 /// prints, then one `Event::WatchExit`.
 /// Each select line it prints goes to `select` with its app, tty and raise, and each write or Enter line to `typing`;
-/// neither is an Event: a tty and a spoken text never are.
+/// neither is an Event: a tty and a spoken text never are. A stop gives it `grace` (STOP_GRACE) to end by itself.
 pub fn spawn_watch(
     cli: &dyn Cli,
     log: Arc<dyn Log>,
     send: impl Fn(Event) + Send + 'static,
     select: impl Fn(TabApp, String, bool) + Send + 'static,
     typing: impl Fn(Typing) + Send + 'static,
+    grace: Duration,
 ) -> io::Result<Watch> {
-    spawn_watch_within(cli, log, send, select, typing, FIRST_LINE, STOP_GRACE)
+    spawn_watch_within(cli, log, send, select, typing, FIRST_LINE, grace)
 }
 
 fn spawn_watch_within(
@@ -152,13 +153,12 @@ mod tests {
     use super::*;
     use crate::cli::{HarnessCli, LINE_MAX, find_cli};
     use crate::tabs::{MAX_TEXT, TabApp, Typing};
-    use crate::testing::{Fake, wait_gone};
+    use crate::testing::{Fake, WAIT, wait_gone};
     use crate::types::{DialStatus, Event, MemoryLog, NotifyMode, VoiceLang};
     use std::io;
     use std::sync::{Arc, mpsc};
     use std::time::Duration;
 
-    const WAIT: Duration = Duration::from_secs(5);
     const SHORT: Duration = Duration::from_millis(300);
     const ID: &str = "0123456789abcdef";
     const TTY: &str = "/dev/ttys023";
@@ -191,6 +191,8 @@ mod tests {
             move |typed| {
                 let _ = typing.send(typed);
             },
+            // A watch these tests stop ends by itself: on a loaded machine the fake can take past STOP_GRACE to.
+            WAIT,
         )
         .unwrap();
         (watch, events, selects, typings)
@@ -591,7 +593,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let missing = home.path().join("harness");
         let cli = HarnessCli::new(find_cli(home.path(), None, Some(&missing)).unwrap(), Arc::new(MemoryLog::default()));
-        let error = spawn_watch(&cli, Arc::new(MemoryLog::default()), |_| {}, |_, _, _| {}, |_| {})
+        let error = spawn_watch(&cli, Arc::new(MemoryLog::default()), |_| {}, |_, _, _| {}, |_| {}, STOP_GRACE)
             .err()
             .expect("no CLI there");
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
