@@ -114,7 +114,11 @@ PM, 2026-11-22:
   terminal host; on macOS the bundle id names Orca (`hostDetect.ts`). So the nest is `tmux`, the app is Orca and the
   agent is on Orca's page (`select.ts` `pageOf`). Orca's adapter gives it no pane (`orca.ts`, `MULTIPLEXERS`);
   `placeInOrca` places it by elimination at the Orca terminal where Orca saw its engine start. O11 carries exactly
-  these hints per platform.
+  these hints per platform. Since `docs/plans/2026-11-27-orca-tmux-follow-focus-design.md`, it places by the tmux
+  client: when that terminal is the only free one of its folder and engine and every agent there with no Orca pane runs
+  on one client, the client is placed at it, and with it every agent of that client in that folder, whatever its
+  engine. Two or more at one terminal share its rank and keep their sessions' names. Two such terminals, or two
+  clients, place none.
 - **Names:** a tab the person renamed wins; then the session's own title; then the tab's title; then the folder's name.
 - **Cap:** 16 (`select.ts`): needs-you first, then most recent activity; with a full ring an agent enters only if it
   needs the person, replacing the idle agent that rested longest.
@@ -130,6 +134,11 @@ PM, 2026-11-22:
 - **Prompt:** a person's prompt (`UserPromptSubmit`) moves the dial while Orca is the settled front app. While a watch
   runs, a prompt in an agent with its own Orca pane is skipped (the focus already followed); an agent in a held pane
   (#4534) still moves it.
+- **tmux inside Orca:** a focus line on a terminal with a placed tmux client tells that client to the tmux pane poll
+  (`orcaClient`, `toldClients`), which reads `tmux list-clients` while Orca is settled in front and turns the dial to
+  the agent at the pane that client shows: so focusing that tab, and a tmux pane switch in it, each move the dial. The
+  move is kept only while the agent's client is still the one told and the agent still placed at the terminal in focus
+  (`onTabInFront`). With no client told, the poll runs no tmux.
 
 ### Open
 
@@ -160,7 +169,7 @@ scenario says otherwise: the plugin is set up and its stream open, Orca is in fr
 agent's terminal was made by Orca's host, and a Codex agent's `CODEX_HOME` is a folder of its own (an Orca account's,
 not the daemon's), so its words are typed.
 
-### Main set (17)
+### Main set (20)
 
 - **O1.** Two worktrees, five agents: Claude Code and Codex, one in a split pane, one in a tab the person renamed. The
   plugin's front is unknown (no `workspace.changed` yet). → The ring has exactly those five in Orca's tab order, each by
@@ -193,6 +202,16 @@ not the daemon's), so its words are typed.
   never to the Windows devices; tier B's agent runs in no tmux pane and has no client, and Orca's rig records no tmux
   run, so tier B would grade a world without the lookup. On macOS tmux's move may be `switch-client` or
   `select-window ; select-pane`: both show `c`'s pane.
+- **O24.** `a` in its own pane (tab 0), `c` under tmux (tab 1). Focus `a`, then `c`'s tab → the dial turns to `c`.
+  Focus `a`, then within one poll read `c`'s tab again → it turns to `c` again. (D2)
+- **O25.** `c` and `d` under one tmux in one Orca tab (tab 1), `a` in its own pane (tab 0); `c` starts first, so tmux
+  selects its pane. The ring is `[a, c, d]`, each by its session's name. Focus that tab, then tmux selects `d`'s pane
+  → the dial turns to `d`. (D1, D2)
+- **O26.** `a` in its own pane (tab 0), `c` (tab 1) and `d` (tab 2) each under its own tmux, same engine and folder.
+  Focus `a`, then `d`'s tab → the dial stays: it cannot tell the two tabs apart and never guesses. A guard, passing
+  before the fix too; the gate holds no wrong-session send. (D2)
+  O24 to O26 run on macOS and Linux, tier A alone, as O11: tmux runs only inside WSL on Windows, and tier B's Orca
+  stand-in runs no tmux client.
 - **O12.** Orca quits (its agents end, the watch ends, the plugin stream closes) and relaunches: Orca comes back in
   front, its agents come back with the same session ids in new terminals (new handles), and the plugin re-sends its
   front → the ring comes back right with no duplicate rows, and stays right past the devices' next 30 s observed tick
@@ -211,7 +230,7 @@ not the daemon's), so its words are typed.
 - **O17.** The dial is unplugged and plugged back in → the ring and the focused row come back, and a tap then switches
   that agent's pane. (D7, D3)
 
-### Held-out set (4 of 21, 19%)
+### Held-out set (4 of 24, 17%)
 
 In `heldOut.ts` beside the other apps' held-out scenarios, scored and reported apart; whoever fixes a group never reads
 them.
@@ -297,6 +316,11 @@ graded.
   `TMUX`/`TMUX_PANE` too.
 - A scenario with a `tmux` session gets the tmux model (`tierA/steps/tmux.ts`) on its Orca world, answering as a real
   tmux would for a client in an Orca terminal, so tmux's lookup runs. Not on Windows, where tmux runs only inside WSL.
+- Orca sessions under tmux in one worktree and tab share one Orca terminal, as one tmux client runs in it: one handle,
+  listed once in the layout and the plugin's front, and one pane shell and tty that ends with its last session. They
+  share one tmux session, `eval-orca-<worktree>-<tab>`, its panes in `split` order and the first started selected.
+  Orca lists that terminal with the engine of the tmux pane selected in it, as Orca does; tier B keeps each session's
+  own engine.
 - On Linux Orca's terminal host runs under Orca's main process (`orca-ide`), as Orca's .deb has it, so tmux's lookup
   finds Orca there. On macOS the host stays under launchd, as recorded.
 - **OS branches:** darwin, linux and win32, with the platform given to the `orca` deps, the open and raise deps and the
