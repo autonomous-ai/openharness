@@ -1,4 +1,4 @@
-import { spawnSync } from 'child_process'
+import { spawnSync, type SpawnSyncOptionsWithStringEncoding } from 'child_process'
 import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -533,13 +533,13 @@ describe.runIf(process.platform === 'win32')('the harness-device hook on Windows
     {
       name: 'PowerShell',
       root: pluginRoot,
-      run: (command: string, options: object) => spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+      run: (command: string, options: SpawnSyncOptionsWithStringEncoding) => spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
         '-Command', command.replaceAll('${CLAUDE_PLUGIN_ROOT}', '${env:CLAUDE_PLUGIN_ROOT}') + SUFFIX], options),
     },
     ...(gitBash ? [{
       name: 'Git Bash',
       root: pluginRoot.replaceAll('\\', '/'),
-      run: (command: string, options: object) => spawnSync(gitBash, ['-c', command], options),
+      run: (command: string, options: SpawnSyncOptionsWithStringEncoding) => spawnSync(gitBash, ['-c', command], options),
     }] : []),
   ]
 
@@ -623,7 +623,7 @@ describe.runIf(process.platform === 'win32')('the harness-device hook on Windows
   // Codex runs the command as `<PowerShell> -NoProfile -Command <command>`, with PLUGIN_ROOT in its environment: pwsh when
   // installed, else Windows PowerShell 5.1. These run 5.1, the one every Windows has; pwsh is not run here.
   const codexInput = JSON.stringify({ ...JSON.parse(CODEX_INPUT), tool_input: { command: 'echo "héllo" & dir %TEMP% | more' } })
-  const runCodex = (options: object, command = codexHook().command) => spawnSync(powershell, ['-NoProfile', '-Command', command], options)
+  const runCodex = (options: SpawnSyncOptionsWithStringEncoding, command = codexHook().command) => spawnSync(powershell, ['-NoProfile', '-Command', command], options)
 
   it("Codex: runs the profile's launcher with device codex asked and its stdin, prints nothing and exits 0", () => {
     for (const code of [0, 2]) {
