@@ -734,9 +734,11 @@ export class DeviceLink {
         // back before. Two guards make that harmless: the local machine's own cards are dropped on
         // arrival (see onMessage), and nothing local is ever ASKED for over this lane — cableHost reads
         // this computer's agents in-process, exactly as it did.
+        // The CLI's version is not firmware; the backend stores it as `cliVersion`
+        // (docs/plans/2026-11-27-cli-version-field-design.md).
         this.send({
           type: 'device_hello',
-          payload: { chip: 'harness-cli', firmwareVersion: VERSION, caps: ['e2ee_data', 'multi_machine'] },
+          payload: { chip: 'harness-cli', cliVersion: VERSION, caps: ['e2ee_data', 'multi_machine'] },
         })
 
         this.armPing()
