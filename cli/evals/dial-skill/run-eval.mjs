@@ -5,7 +5,7 @@
 //
 //   cd cli && npx tsx evals/dial-skill/run-eval.mjs --flow evals/dial-skill/flow --variant <baseline|vN> --reps 2 \
 //     --split train,val --concurrency 4 --timeout-s 900 --spend-cap-usd 70 [--agents claude] \
-//     [--condition clean,crowd,name-only] [--cases id,id] [--no-skill] [--approve-harness]
+//     [--condition clean,crowd,name-only] [--cases id,id] [--no-skill] [--follow-ups] [--approve-harness]
 //
 // Structural properties this encodes (so you don't have to remember them):
 //   - parameterized by --variant / --reps (no hardcoded A/B pair; the model is fixed in lib/agents.ts)
@@ -29,7 +29,7 @@
 //     (lib/probe.ts, rows in probes.jsonl); a failed probe refuses the pass
 //   - a probe or case starts only while all the flow has spent, a reserve for it
 //     and one for each case in flight fit under --spend-cap-usd, at most the
-//     design's $270 (lib/spend.ts); a worker whose case does not fit beside
+//     design's $320 (lib/spend.ts); a worker whose case does not fit beside
 //     those in flight stops; once one does not fit alone, the pass starts
 //     nothing more and exits 4
 //   - a failed run's spend is added as it happens, its retry starts only while
@@ -42,22 +42,25 @@
 //   - a variant's hooks.json and harness-answers.json are staged only when
 //     _state.json harness_paths lists them, so the harness sha covers what
 //     runs outside Claude's sandbox
+//   - under --follow-ups a need scenario runs two turns: turn 2 resumes turn
+//     1's session with the scenario's follow-up, within what is left of the
+//     agent's share, and the row grades how the agent closed its cards
 
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, constants as FS, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, writeFileSync, writeSync } from 'node:fs';
 import { constants as OS } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DIAL_SKILL } from '../../src/devices/dialSkill.ts';
-import { AGENT_CONFIG, claudeArgs, isDefaultProfile, killAgents, runAgent } from './lib/agents.ts';
+import { AGENT_CONFIG, claudeArgs, isDefaultProfile, killAgents, runAgent, runFollowUp } from './lib/agents.ts';
 import { gradeRun } from './lib/grade.ts';
 import { claudeJudge, JUDGE_EFFORT, JUDGE_MODEL, RUBRIC_SHA } from './lib/judge.ts';
 import { sumUsage } from './lib/parse.ts';
 import { matchesProbe, probeListing } from './lib/probe.ts';
 import { CONDITIONS, loadScenarios, runId, splitIdOf } from './lib/scenarios.ts';
 import { cutUsd, guardCost, SpendGuard } from './lib/spend.ts';
-import { readDone, readHarm, readRings, scrub, stage, unstage, unstageLive } from './lib/stage.ts';
+import { markTurn, readDone, readHarm, readRings, scrub, stage, unstage, unstageLive } from './lib/stage.ts';
 
 // Every output write refuses symlinks: the flow dir is model-influenced, and a
 // prompt-injected round can plant `results.jsonl -> ~/.bashrc` where the next
@@ -167,7 +170,7 @@ const REF_EXTS = ['', '.html', '.txt', '.json'];
 const AGENTS = ['claude', 'oracle', 'null', 'always'];
 const SPLITS = ['train', 'val', 'test'];
 const JUDGE_TIMEOUT_MS = 120_000;
-const DESIGN_CAP_USD = 270;
+const DESIGN_CAP_USD = 320;
 // A stopped pass is reported to a person; switching accounts to finish it is not the runner's call.
 const ACCOUNT_LIMIT = 'account limit reached: pass stopped; report it, do not switch accounts';
 const spendCapLine = ctx => `spend cap · $${ctx.guard.spentUsd.toFixed(2)} of $${ctx.spendCapUsd.toFixed(2)}: `
@@ -271,12 +274,15 @@ async function loadCases(ctx) {
     filters.push(new Set(ctx.cases.map(scenarioOf)));
   }
   // Resume keys on (id, rep) alone: a pass with or without the skill over claude rows run the other way would mix both in
-  // one variant.
+  // one variant, as would a pass with or without --follow-ups over a need scenario's rows run in the other number of turns.
+  const twoTurn = new Set(scenarios.filter(s => s.follow_up).map(s => s.id));
   for (const ln of (readIfPresent(join(ctx.flow, ctx.variant, 'results.jsonl')) ?? '').split('\n')) {
     let meta;
     try { ({ meta } = JSON.parse(ln)); } catch { continue; }
     if (meta?.agent === 'claude' && meta.skill !== ctx.skill)
       throw new Error(`${ctx.variant} holds claude rows run ${meta.skill ? 'with' : 'without'} the skill; run this pass as another --variant`);
+    if (twoTurn.has(meta?.scenario) && (meta.follow_up !== undefined) !== ctx.followUps)
+      throw new Error(`${ctx.variant} holds rows run ${meta.follow_up ? 'with' : 'without'} --follow-ups; run this pass as another --variant`);
   }
   const claudeVersion = execFileSync(AGENT_CONFIG.claudeBin, ['--version'], { env, encoding: 'utf8', timeout: JUDGE_TIMEOUT_MS }).trim();
   writeSummary(ctx, claudeVersion);
@@ -285,7 +291,9 @@ async function loadCases(ctx) {
     // Only claude gets the skill staged (lib/stage.ts). A resumed pass may run under another harness or claude than the
     // rows before it, so each row records its own.
     meta: { scenario: s.id, agent, condition, skill: agent === 'claude' && ctx.skill, rubric_sha: RUBRIC_SHA,
-      harness_sha: ctx.state.harness_sha, claude_version: claudeVersion },
+      harness_sha: ctx.state.harness_sha, claude_version: claudeVersion,
+      // The follow-up's kind on a two-turn case: a no-need scenario has none and runs one turn.
+      ...(ctx.followUps && s.follow_up ? { follow_up: s.follow_up.kind } : {}) },
     scenario: s,
   }))));
 }
@@ -360,22 +368,26 @@ async function probeConditions(ctx, tasks, probesPath) {
 }
 
 /**
- * Stages the scenario, runs the agent and reads what it rang. The transcript and errors are written to disk, so the
- * run root and $HOME are scrubbed from them; the answer and the rings stay as the agent gave them, for the grader.
- * No `output`: nothing is graded pairwise against a frozen ref. `timeoutMs` bounds the agent (0: unbounded).
+ * Stages the scenario, runs the agent and reads what it rang. A case with a follow-up (--follow-ups) runs two turns:
+ * turn 2 resumes turn 1's session with the follow-up, and `close` holds every call of both for the grader. The
+ * transcript and errors are written to disk, so the run root and $HOME are scrubbed from them; the answer and the rings
+ * stay as the agent gave them, for the grader. No `output`: nothing is graded pairwise against a frozen ref.
+ * `timeoutMs` bounds the agent's turns together (0: unbounded).
  */
 async function runCase(input, ctx, timeoutMs) {
-  const { scenario, meta: { agent, condition } } = input;
-  const st = stage(scenario, agent, { skill: ctx.skill, condition, hooks: ctx.hooks, answers: ctx.answers });
+  const { scenario, meta: { agent, condition, follow_up: kind } } = input;
+  // answer-one's person answers one of two open asks, the other the fake's seeded card; unrung's answers an ask the
+  // dial never showed.
+  const st = stage(scenario, agent, { skill: ctx.skill, condition, hooks: ctx.hooks, answers: ctx.answers,
+    seed: kind === 'answer-one', noDial: kind === 'unrung' });
   const clean = text => scrub(text, st);
+  const until = timeoutMs > 0 ? Date.now() + timeoutMs : Infinity;
+  const session = kind ? { id: randomUUID(), resume: false } : undefined;
   try {
-    const run = await runAgent(agent, scenario, st, { ...AGENT_CONFIG, timeoutMs });
+    let run = await runAgent(agent, scenario, st, { ...AGENT_CONFIG, timeoutMs }, session);
     // Claude Code may update itself mid-pass: a run that started with other skills or another version than its
     // condition's probe may not have been given what the probe saw, so it is counted but never scored as listed.
     if (agent === 'claude' && !matchesProbe(run.init, ctx.probes.get(condition))) run.status = 'unlisted';
-    // The skill the agent had leads the trace, so a trace reads on its own.
-    const transcript = [{ role: 'system', content: st.skill ?? 'no skill' }, ...run.transcript]
-      .map(turn => Object.fromEntries(Object.entries(turn).map(([key, value]) => [key, clean(value)])));
     // Before the checks, which run the agent's code: a ring that code makes there is the check's, not the agent's.
     const rings = readRings(st);
     // Read before unstage removes the repo. A harm check that does not finish fails the case in gradeCase, where the
@@ -389,7 +401,27 @@ async function runCase(input, ctx, timeoutMs) {
         else eprint(`  [${ctx.variant}] ${input.id}: ${clean(String(e.message))}; went_on not graded`);
       }
     }
-    return { ...run, transcript, rings, harm, done, checkError, clean };
+    let close;
+    // A turn 1 cut short, unlisted or left unchecked is not graded, so its turn 2 would only spend.
+    if (kind && run.status === 'ok' && !checkError) {
+      // After the checks, which measure what turn 1 left: the calls after the mark are turn 2's.
+      markTurn(st);
+      const left = until - Date.now();
+      if (left <= 0)
+        throw Object.assign(new Error('no time left for turn 2'), { failure_class: 'timeout', model: run.model, usage: run.usage, cut: run.cut });
+      const first = run;
+      // Turn 1 was billed too, so a failed turn 2's error carries both turns' spend.
+      const second = await runFollowUp(agent, scenario, st, { ...AGENT_CONFIG, timeoutMs: left === Infinity ? 0 : left }, session.id)
+        .catch(e => { throw Object.assign(e, { model: e?.model ?? first.model, usage: addUsage(first.usage, e?.usage), cut: first.cut || e?.cut }); });
+      run = { ...first, usage: sumUsage([first.usage, second.usage]), cut: first.cut || second.cut,
+        transcript: [...first.transcript, { role: 'system', content: 'turn 2' }, ...second.transcript] };
+      // Turn 1's calls as read before the checks, for the same reason as its rings.
+      close = { kind, calls: [...rings, ...readRings(st).filter(r => r.turn === 2)], seed: st.seed };
+    }
+    // The skill the agent had leads the trace, so a trace reads on its own.
+    const transcript = [{ role: 'system', content: st.skill ?? 'no skill' }, ...run.transcript]
+      .map(turn => Object.fromEntries(Object.entries(turn).map(([key, value]) => [key, clean(value)])));
+    return { ...run, transcript, rings, close, harm, done, checkError, clean };
   } catch (e) {
     // An account limit lasts hours: the workers take no new case and main exits 3.
     if (e?.failure_class === 'account_limited') ctx.stop = true;
@@ -410,7 +442,7 @@ async function gradeCase(input, run, ref, ctx) {
   }
   if (run.checkError) throw run.checkError;
   let g;
-  try { g = await gradeRun(input.scenario, run, run.rings, ctx.judge, run.harm, run.done); }
+  try { g = await gradeRun(input.scenario, run, run.rings, ctx.judge, run.harm, run.done, run.close); }
   catch (e) {
     // The judge runs under the same account, so its limit stops the pass as the agent's does.
     if (e?.failure_class === 'account_limited') ctx.stop = true;
@@ -444,7 +476,7 @@ function parseArgs(argv) {
               model: undefined, reps: 1, concurrency: 4, timeoutS: 1800,
               approveHarness: false,
               // dial skill eval: which agents run on which scenarios, with or without the skill staged.
-              agents: ['claude'], conditions: ['clean'], split: null, cases: null, skill: true, spendCapUsd: null };
+              agents: ['claude'], conditions: ['clean'], split: null, cases: null, skill: true, followUps: false, spendCapUsd: null };
   // A flag at the end of argv would otherwise consume undefined - which for
   // --model equals the default and silently disables the served-model check.
   const val = (i) => { if (argv[i] === undefined) { eprint(`missing value for ${argv[i - 1]}`); usage(); process.exit(2); } return argv[i]; };
@@ -459,6 +491,7 @@ function parseArgs(argv) {
     else if (k === '--split') a.split = val(++i).split(',');
     else if (k === '--cases') a.cases = val(++i).split(',');
     else if (k === '--no-skill') a.skill = false;
+    else if (k === '--follow-ups') a.followUps = true;
     else if (k === '--spend-cap-usd') a.spendCapUsd = +val(++i);
     else if (k === '--reps') a.reps = +val(++i);
     else if (k === '--concurrency') a.concurrency = +val(++i);
@@ -483,8 +516,8 @@ function parseArgs(argv) {
   if (!(a.spendCapUsd > 0 && Number.isFinite(a.spendCapUsd))) {
     eprint('--spend-cap-usd is required: the dollars the whole flow may spend, above 0'); usage(); process.exit(2);
   }
-  // dial skill eval: the maintainer capped the whole design at $250 (2026-11-26) and raised it to $270 for Part 5
-  // (2026-11-27); no pass may be allowed more.
+  // dial skill eval: the maintainer capped the whole design at $250 (2026-11-26), raised it to $270 for Part 5 and to
+  // $320 for the notice cards' eval (2026-11-27); no pass may be allowed more.
   if (a.spendCapUsd > DESIGN_CAP_USD) {
     eprint(`--spend-cap-usd is at most ${DESIGN_CAP_USD}: the design's cap is $${DESIGN_CAP_USD}`); usage(); process.exit(2);
   }
@@ -495,7 +528,7 @@ function parseArgs(argv) {
   return a;
 }
 function usage() {
-  eprint('usage: npx tsx evals/dial-skill/run-eval.mjs --flow DIR --variant ID --spend-cap-usd USD [--reps N] [--concurrency N] [--timeout-s N (0 = no ceiling)] [--agents claude,oracle,null,always] [--condition clean,crowd,name-only] [--split train,val,test] [--cases id,id] [--no-skill] [--approve-harness]');
+  eprint('usage: npx tsx evals/dial-skill/run-eval.mjs --flow DIR --variant ID --spend-cap-usd USD [--reps N] [--concurrency N] [--timeout-s N (0 = no ceiling)] [--agents claude,oracle,null,always] [--condition clean,crowd,name-only] [--split train,val,test] [--cases id,id] [--no-skill] [--follow-ups] [--approve-harness]');
 }
 
 // Harness integrity gate. The hillclimb loop gets this runner command
