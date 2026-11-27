@@ -417,8 +417,8 @@ class SelectionTests(unittest.TestCase):
         self.assertNotIn("windows-e2e", planner.select(["cli/scripts/windows-dial-e2e/README.md"])[0])
 
     def test_the_inbox_follower_runs_windows_end_to_end_on_x64_alone(self):
-        # check-install.ps1 runs inbox.mjs through harness.exe, the follower's one real run: its entry and the modules
-        # it bundles from select windows-e2e, though no spec windows.yml runs tests the entry or the command.
+        # check-install.ps1 runs inbox.mjs through harness.exe, the follower's one real run: its entry, its command and
+        # inbox.ts select windows-e2e, though no spec windows.yml runs tests the entry or the command.
         for path in ("cli/src/inboxEntry.ts", "cli/src/deviceClaude/inboxCommand.ts", "cli/src/deviceClaude/inbox.ts"):
             with self.subTest(path=path):
                 self.assertIn("windows-e2e", planner.select([path])[0])
