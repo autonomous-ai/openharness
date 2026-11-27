@@ -1170,6 +1170,34 @@ describe('a card goes at 24 hours', () => {
     expect(live(rig)).toEqual([])
   })
 
+  // Node's timers do not run on in a sleep, so the timer can fire a day late: what the wall clock says is a day old goes
+  // first.
+  it('a card a day old by the wall clock goes before a notify, a list or an attach, its timer held back by a sleep', () => {
+    const listed = desk()
+    listed.notices.notify(notice(W(1), 'a'))
+    listed.state.clock += DAY
+    clear(listed)
+    expect(lines(listed)).toEqual([])
+    expect(listed.calls).toEqual([['close', 'a', qid(1)]])
+    expect(listed.logs).toEqual(['[device] notice · expired'])
+    expect(live(listed)).toEqual([])
+    // The next card reaches the dial, rung: the one it would have waited behind is gone.
+    const told = desk()
+    told.notices.notify(notice(W(1), 'a'))
+    told.state.clock += DAY
+    told.state.at += 61_000
+    clear(told)
+    expect(told.notices.notify(notice(W(2), 'a')).card?.rang).toBe(true)
+    expect(told.calls).toEqual([['close', 'a', qid(1)], ['ask', 'a', qid(2), card(W(2))]])
+    expect(live(told).map(({ ms }) => ms)).toEqual([DAY])
+    const attached = desk()
+    attached.notices.notify(notice(W(1), 'a'))
+    attached.state.clock += DAY
+    clear(attached)
+    attached.notices.attached()
+    expect(attached.calls).toEqual([['close', 'a', qid(1)]])
+  })
+
   it('no card, no timer', () => {
     expect(live(desk())).toEqual([])
     const rig = desk()
