@@ -2191,7 +2191,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     part.call('notices', () => {
       // By the wall clock a card was shown by: one ahead of a clock set back is new, never an age the command drops.
       const now = Date.now()
-      cards = notices.list(noticeCaller({ text: '', ...who }).agentId)
+      cards = notices.list(noticeCaller({ text: '', ...who }))
         .map(({ id, at, kind, line }) => ({ id, ageS: Math.max(0, Math.floor((now - at) / 1000)), kind, line }))
     })
     return cards
@@ -2200,7 +2200,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  agent's id, or one no card has, closes nothing. */
   const noticeDone = (who: NoticeWho, id: string): number => {
     let closed = 0
-    part.call('notices', () => { closed = notices.done(noticeCaller({ text: '', ...who }).agentId, id) })
+    part.call('notices', () => { closed = notices.done(noticeCaller({ text: '', ...who }), id) })
     return closed
   }
   /** Another question of that agent closed: its notice, covered or held back by it, is asked again. */

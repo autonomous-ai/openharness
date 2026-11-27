@@ -140,6 +140,9 @@ interface Pending {
 /** What an agent shows on the dial: its oldest waiting card, else its other card, and how many cards it holds. */
 interface Face { card: Pending; m: number }
 
+/** Who names its own cards: its agent, and the keys that find its restored ones. */
+type Mine = Pick<NoticeCaller, 'agentId' | 'keys'>
+
 /** The dial still shows one card an agent: the protocol and the firmware hold one question an agent (`held`), so its
  *  other cards wait behind the one shown, and that one's line says how many there are. */
 export class Notices {
@@ -174,10 +177,8 @@ export class Notices {
     if (!this.deps.connected()) return answer('no dial')
     this.expire()
     const caller = this.deps.resolve(ask)
-    // Its cards, and its restored ones still waiting under the id a listing source gave it before the restart, which are
-    // its own from now.
-    const mine = [...this.cards.values()].filter((card) => card.agentId === caller.agentId
-      || (card.unfound && card.keys.some((key) => caller.keys.includes(key))))
+    // Its restored cards still waiting under another id are its own from now.
+    const mine = this.mine(caller)
     // Behind a waiting card of its agent it waits, unrung: the person was rung for that agent already.
     const reaches = !mine.some((card) => card.kind === 'waiting')
     // Read before the limits: a quiet card takes no part of the hour's twenty, nor does one that rings nothing, so a later
@@ -210,16 +211,16 @@ export class Notices {
 
   /** The agent closed that card of its own, by its id, or every one by `all`: how many went. Another agent's id, or one
    *  no card has, closes nothing. */
-  done(agentId: string, id: string): number {
-    const going = this.of(agentId).filter((card) => id === 'all' || cardId(card.id) === id)
+  done(caller: Mine, id: string): number {
+    const going = this.mine(caller).filter((card) => id === 'all' || cardId(card.id) === id)
     this.drop(going, 'done')
     return going.length
   }
 
   /** That agent's cards, oldest first, each with its own line. */
-  list(agentId: string): Array<{ id: string; at: number; kind: NoticeKind; line: string }> {
+  list(caller: Mine): Array<{ id: string; at: number; kind: NoticeKind; line: string }> {
     this.expire()
-    return this.of(agentId).map(({ id, at, kind, line }) => ({ id: cardId(id), at, kind, line }))
+    return this.mine(caller).map(({ id, at, kind, line }) => ({ id: cardId(id), at, kind, line }))
   }
 
   /** The card the dial shows for that agent. */
@@ -334,6 +335,13 @@ export class Notices {
   /** Who the caller of the card shown is, when no list holds it. */
   from(agentId: string): { name: string; engine: string; machine: string } | undefined {
     return this.faces().get(agentId)?.card.who
+  }
+
+  /** A caller's cards, oldest first: its own, and its restored ones still waiting under the id a listing source gave it
+   *  before the restart, found by its keys as a look would find them (a list, a done or a notify may come first). */
+  private mine({ agentId, keys }: Mine): Pending[] {
+    return [...this.cards.values()].filter((card) => card.agentId === agentId
+      || (card.unfound && card.keys.some((key) => keys.includes(key))))
   }
 
   /** That agent's cards, oldest first. */

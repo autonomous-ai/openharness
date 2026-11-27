@@ -10,6 +10,8 @@ const uuid = (n: number): string => `${String(n).padStart(8, '0')}-${n}`
 const cid = (n: number): string => uuid(n).slice(0, 8)
 /** The question id of the card drawn n-th, under draw [again] once a rouse asked it anew. */
 const qid = (n: number, again = n): string => `shown:${cid(n)}${uuid(again).slice(8)}`
+/** A caller that names its cards by its agent alone, with no keys that find a restored one. */
+const by = (agentId: string) => ({ agentId, keys: [] })
 
 function desk(opts: {
   connected?: boolean; host?: string; hosts?: Record<string, string>; who?: NoticeCaller['who']
@@ -837,7 +839,7 @@ describe('several cards an agent', () => {
   }
   const card = (q: string) => [{ key: 'notice', q, options: ['In Orca'] }]
   const row = (text: string, agentId = 'a') => ({ agentId, machineId: 'm', question: true, text })
-  const lines = ({ notices }: Rig, agentId = 'a') => notices.list(agentId).map(({ line }) => line)
+  const lines = ({ notices }: Rig, agentId = 'a') => notices.list(by(agentId)).map(({ line }) => line)
   const clear = ({ calls, state }: Rig) => {
     calls.length = 0
     state.redraws.length = 0
@@ -863,7 +865,7 @@ describe('several cards an agent', () => {
     clear(rig)
     say(rig, VPN)
     expect(lines(rig)).toEqual([W(1), W(2), VPN])
-    expect(rig.notices.list('a').map(({ kind }) => kind)).toEqual(['waiting', 'waiting', 'plain'])
+    expect(rig.notices.list(by('a')).map(({ kind }) => kind)).toEqual(['waiting', 'waiting', 'plain'])
     expect(rig.calls).toEqual([['close', 'a', qid(2)]])
   })
 
@@ -909,7 +911,7 @@ describe('several cards an agent', () => {
     held.state.present.add('a')
     say(held, W(1))
     clear(held)
-    expect(held.notices.done('a', cid(1))).toBe(1)
+    expect(held.notices.done(by('a'), cid(1))).toBe(1)
     expect(held.calls).toEqual([['close', 'a', qid(1)]])
     expect(held.state.redraws).toEqual([['a']])
     expect(held.notices.rows('m')).toEqual([])
@@ -927,7 +929,7 @@ describe('several cards an agent', () => {
     say(rig, W(1))
     say(rig, W(2))
     clear(rig)
-    expect(rig.notices.done('a', cid(1))).toBe(1)
+    expect(rig.notices.done(by('a'), cid(1))).toBe(1)
     expect(rig.calls).toEqual([['close', 'a', qid(1)], ['hold', 'a', qid(2), card(W(2))]])
     expect(rig.state.redraws).toEqual([['a']])
     expect(rig.notices.rows('m')).toEqual([row(W(2))])
@@ -941,7 +943,7 @@ describe('several cards an agent', () => {
     say(other, P(1))
     say(other, W(2))
     clear(other)
-    expect(other.notices.done('a', cid(2))).toBe(1)
+    expect(other.notices.done(by('a'), cid(2))).toBe(1)
     expect(other.calls).toEqual([['close', 'a', qid(2)], ['hold', 'a', qid(1), card(P(1))]])
     expect(other.state.redraws).toEqual([['a']])
   })
@@ -966,11 +968,11 @@ describe('several cards an agent', () => {
     say(rig, W(3))
     clear(rig)
     const changes = rig.state.changes
-    expect(rig.notices.done('a', cid(2))).toBe(0)
-    expect(rig.notices.done('a', 'ffffffff')).toBe(0)
+    expect(rig.notices.done(by('a'), cid(2))).toBe(0)
+    expect(rig.notices.done(by('a'), 'ffffffff')).toBe(0)
     expect(rig.calls).toEqual([])
     expect(rig.state.changes).toBe(changes)
-    expect(rig.notices.done('a', 'all')).toBe(2)
+    expect(rig.notices.done(by('a'), 'all')).toBe(2)
     expect(rig.notices.pending('a')).toBe(false)
     expect(rig.calls.map((c) => [c[0], c[1]])).toEqual([['close', 'a'], ['close', 'a']])
     expect(lines(rig, 'b')).toEqual([W(2)])
@@ -987,9 +989,9 @@ describe('several cards an agent', () => {
     expect(rig.notices.rouse('a')).toEqual({ id: cid(1), kind: 'waiting' })
     expect(rig.calls).toEqual([['close', 'a', qid(1)], ['ask', 'a', qid(1, 3), card(`${W(1)} (1/2)`)]])
     expect(rig.notices.shown('a')).toEqual({ id: cid(1), kind: 'waiting' })
-    expect(rig.notices.list('a').map(({ id }) => id)).toEqual([cid(1), cid(2)])
+    expect(rig.notices.list(by('a')).map(({ id }) => id)).toEqual([cid(1), cid(2)])
     clear(rig)
-    expect(rig.notices.done('a', cid(1))).toBe(1)
+    expect(rig.notices.done(by('a'), cid(1))).toBe(1)
     expect(rig.calls).toEqual([['close', 'a', qid(1, 3)], ['hold', 'a', qid(2), card(W(2))]])
   })
 
@@ -1024,7 +1026,7 @@ describe('several cards an agent', () => {
     rig.notices.attached()
     expect(rig.calls).toEqual([['hold', 'a', qid(1), card(`${W(1)} (1/3)`)]])
     clear(rig)
-    rig.notices.done('a', cid(1))
+    rig.notices.done(by('a'), cid(1))
     expect(rig.calls).toEqual([['close', 'a', qid(1)], ['hold', 'a', qid(2), card(`${W(2)} (1/2)`)]])
   })
 
@@ -1055,7 +1057,7 @@ describe('several cards an agent', () => {
     expect(say(rig, W(2)).card?.quiet).toBe(false)
     clear(rig)
     expect(rig.notices.rouse('a')).toBeUndefined()
-    rig.notices.done('a', cid(1))
+    rig.notices.done(by('a'), cid(1))
     clear(rig)
     expect(rig.notices.rouse('a')).toBeUndefined()
     expect(rig.calls).toEqual([])
@@ -1065,7 +1067,7 @@ describe('several cards an agent', () => {
     expect(say(other, P(1)).card?.quiet).toBe(true)
     other.state.present.clear()
     say(other, W(2))
-    other.notices.done('a', cid(2))
+    other.notices.done(by('a'), cid(2))
     clear(other)
     expect(other.notices.quiet('a')).toBe(false)
     expect(other.notices.rouse('a')).toBeUndefined()
@@ -1104,7 +1106,7 @@ describe('a card goes at 24 hours', () => {
   const DAY = 24 * 3_600_000
   const HOUR = 3_600_000
   const card = (q: string) => [{ key: 'notice', q, options: ['In Orca'] }]
-  const lines = ({ notices }: Rig, agentId = 'a') => notices.list(agentId).map(({ line }) => line)
+  const lines = ({ notices }: Rig, agentId = 'a') => notices.list(by(agentId)).map(({ line }) => line)
   const live = ({ state }: Rig) => state.timers.filter((timer) => timer.live)
   /** Time passes by [ms], the wall clock and the timers alike; each timer due by then fires, the soonest first. */
   const pass = (rig: Rig, ms: number) => {
@@ -1160,7 +1162,7 @@ describe('a card goes at 24 hours', () => {
     pass(rig, HOUR)
     rig.notices.notify(notice(W(2), 'b'))
     expect(live(rig).map(({ due }) => due)).toEqual([DAY])
-    rig.notices.done('a', cid(1))
+    rig.notices.done(by('a'), cid(1))
     // One timer at a time, now at b's card's due time.
     expect(live(rig).map(({ due }) => due)).toEqual([DAY + HOUR])
     pass(rig, DAY - 1)
@@ -1217,7 +1219,7 @@ describe('a card goes at 24 hours', () => {
     const rig = desk()
     rig.notices.notify(notice(W(1), 'a'))
     expect(live(rig)).toHaveLength(1)
-    rig.notices.done('a', 'all')
+    rig.notices.done(by('a'), 'all')
     expect(live(rig)).toEqual([])
     const away = desk({ connected: false })
     away.notices.notify(notice(W(1), 'a'))
@@ -1260,7 +1262,7 @@ describe('closed is told once for each card that goes, with why', () => {
   }
   // a's first card, the desk it is on, and what ends it, for every end there is.
   const ENDS = {
-    done: [W(1), 'waiting', {}, (rig) => { rig.notices.done('a', cid(1)) }],
+    done: [W(1), 'waiting', {}, (rig) => { rig.notices.done(by('a'), cid(1)) }],
     sixth: [W(1), 'waiting', {}, (rig) => { for (let n = 2; n <= 6; n++) say(rig, W(n)) }],
     // Its second card is queued, so the hour's twenty still holds the others'.
     full: [W(1), 'waiting', {}, (rig) => {
@@ -1295,10 +1297,10 @@ describe('closed is told once for each card that goes, with why', () => {
     const NOW = 1_800_000_000_000
     const rig = desk({ clock: NOW, restored: [{ agentId: 'old', keys: ['claude:s1'], id: qid(1), line: W(1), host: 'orca', at: NOW - 60_000 }] })
     rig.notices.look(false, () => [{ agentId: 'new', session: 'claude:s1', panes: [] }])
-    rig.notices.done('new', 'ffffffff')
-    rig.notices.done('old', cid(1))
+    rig.notices.done(by('new'), 'ffffffff')
+    rig.notices.done(by('old'), cid(1))
     expect(rig.ends).toEqual([])
-    rig.notices.done('new', cid(1))
+    rig.notices.done(by('new'), cid(1))
     expect(rig.ends).toEqual([['new', cid(1), 'waiting', 'done']])
   })
 })
