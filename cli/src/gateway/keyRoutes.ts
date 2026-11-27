@@ -9,7 +9,7 @@
  */
 import type { HttpAnswer } from '../core/api.js'
 import { errorKind } from '../lib/log.js'
-import { SecretNotDeleted } from '../lib/deleteSecretFile.js'
+import { SecretNotDeleted, errnoOf } from '../lib/deleteSecretFile.js'
 
 /** What the routes do, as the gateway does it (gateway/start.ts). */
 export interface KeyOps {
@@ -47,20 +47,25 @@ const MACHINE_ID = /^[a-f0-9]{32}$/
 /** What a route does with its body, read as JSON. */
 type WithBody = (body: Record<string, unknown>) => Promise<HttpAnswer> | HttpAnswer
 
-/** The command's own failure, said as `harness pair` and `remote-password set` read it: its message. */
-const said = async (run: () => Promise<HttpAnswer>): Promise<HttpAnswer> => {
-  try { return await run() } catch (error) { return answer(500, { error: error instanceof Error ? error.message : 'INTERNAL' }) }
-}
-
 /** The routes, by method and path (the query left out). A body that is not JSON is `bad json`; a body of JSON that holds
  *  no record (`null`) is read as the door read it, which threw where it reached for a field. */
-function routes(ops: KeyOps): Record<string, { body?: WithBody; run?: () => Promise<HttpAnswer> }> {
+function routes(ops: KeyOps, log: (line: string) => void): Record<string, { body?: WithBody; run?: () => Promise<HttpAnswer> }> {
+  /** `harness pair`'s or `remote-password set`'s own failure, answered in [word] and its errno code: its message may name
+   *  a path (#4675 kept it out of `clear` only). Caught here, the door's catch-all never saw it, so it is logged here. */
+  const said = async (word: string, run: () => Promise<HttpAnswer>): Promise<HttpAnswer> => {
+    try {
+      return await run()
+    } catch (error) {
+      log(`[gateway] POST KEY_ROUTE_FAILED · ${errorKind(error)}`)
+      return answer(500, { error: `${word} (${errnoOf(error)})` })
+    }
+  }
   return {
-    'POST /api/pair': { body: (body) => (body.code ? said(() => ops.pair(body.code as string)) : answer(400, { error: 'MISSING_CODE' })) },
+    'POST /api/pair': { body: (body) => (body.code ? said('PAIR_FAILED', () => ops.pair(body.code as string)) : answer(400, { error: 'MISSING_CODE' })) },
     'GET /api/pairs': { run: () => ops.listPairs() },
     'POST /api/revoke': { body: (body) => (body.id ? ops.revoke(body.id as string) : answer(400, { error: 'MISSING_ID' })) },
     'POST /api/revoke-all': { run: () => ops.revokeAll() },
-    'POST /api/remote-password/set': { body: (body) => (body.password ? said(() => ops.setRemotePassword(body.password as string)) : answer(400, { error: 'MISSING_PASSWORD' })) },
+    'POST /api/remote-password/set': { body: (body) => (body.password ? said('REMOTE_PASSWORD_NOT_SET', () => ops.setRemotePassword(body.password as string)) : answer(400, { error: 'MISSING_PASSWORD' })) },
     'POST /api/remote-password/clear': { run: () => ops.clearRemotePassword() },
     'GET /api/remote-password/status': { run: () => ops.remotePasswordStatus() },
     'POST /api/link/trust-peer': { body: (body) => {
@@ -110,7 +115,7 @@ function routes(ops: KeyOps): Record<string, { body?: WithBody; run?: () => Prom
  * for a field, a command that failed) is the 500 its catch-all gave, said in this process's log.
  */
 export function keyRoutes(ops: KeyOps, log: (line: string) => void = (line) => console.error(line)) {
-  const table = routes(ops)
+  const table = routes(ops, log)
   return (method: string, path: string, text: string | undefined): Promise<HttpAnswer> | null => {
     const route = Object.hasOwn(table, `${method} ${path}`) ? table[`${method} ${path}`] : undefined
     if (!route) return null
