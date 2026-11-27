@@ -36,7 +36,7 @@ export function deleteSecretFile(file: string, word: string, wait: Wait = pauseS
 }
 
 /** The errno code of a failed delete; anything that is not one is UNKNOWN, so no other text reaches the message. */
-function errnoOf(error: unknown): string {
+export function errnoOf(error: unknown): string {
   const code = (error as { code?: unknown } | null)?.code
   return typeof code === 'string' && /^[A-Z][A-Z0-9_]*$/.test(code) ? code : 'UNKNOWN'
 }

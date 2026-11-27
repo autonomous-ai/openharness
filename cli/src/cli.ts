@@ -102,7 +102,7 @@ import { runUpdateSteps } from './lib/updateCommand.js'
 import { PTY_PROTOCOL } from './lib/ptyHost/protocol.js'
 import { runAutonomousDeviceCommand } from './lib/autonomous-device/command.js'
 import { E2eeStore, identitySpent, peekIdentityPub, REMOTE_PASSWORD_NOT_DELETED } from './lib/e2ee/store.js'
-import { SecretNotDeleted } from './lib/deleteSecretFile.js'
+import { errnoOf, SecretNotDeleted } from './lib/deleteSecretFile.js'
 import { confirmsRemoval, deviceRegistration, deviceStatusValue, formatDeviceDetail, formatDeviceHistory, formatDeviceList, logOrder, removeConfirmation } from './lib/e2ee/deviceDisplay.js'
 import { b64e } from './lib/e2ee/core.js'
 import { MachinePeerStore } from './lib/e2ee/machinePeers.js'
@@ -1904,12 +1904,17 @@ async function resetCommand(): Promise<void> {
   // Before anything is cleared: a pid file removed under a Harness still running leaves nothing able to stop it.
   const r = await stopDaemonOrExit()
   const refreshToken = readAuthSession()?.refreshToken
-  clearAdapterState()
-  console.log(`\n  ✓ Cleared local machine CLI state at ${tildify(env.ADAPTER_DATA_DIR)}.`)
+  // A file held open stops the delete part way (the e2e folder holds the remote password and keys). It is said in a
+  // word and its errno code, as the raw error names the path, and the sign-in below is still removed and ended.
+  let stateKept: string | null = null
+  try { clearAdapterState() } catch (error) { stateKept = `STATE_NOT_DELETED (${errnoOf(error)})` }
+  if (stateKept) console.error(`\n  ✗ Local machine CLI state is still on this computer (${stateKept}). Run \`harness reset\` again.\n`)
+  else console.log(`\n  ✓ Cleared local machine CLI state at ${tildify(env.ADAPTER_DATA_DIR)}.`)
   if (r.pid) console.log(`    Stopped adapter process ${r.pid}.`)
   const kept = keptSecret(() => removeSignIn('reset', asked, chain))
   await endSignInOnServer(refreshToken)
   if (kept) signInStillHere(kept, 'reset')
+  if (stateKept) process.exit(1)
   console.log('\n  Start again with: harness login, then harness start\n')
   // The SECOND door onto the sign-out `logout` performs, and it clears MORE, so somebody running it
   // is if anything likelier to believe nothing is left. Same call, so the two cannot drift.
