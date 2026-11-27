@@ -10150,6 +10150,24 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       expect(logs).toContain('[device] nudge · claude · present')
     })
 
+    // lastBegan holds at most 64: past them, the oldest ended turn is not read, and its agent reads as away.
+    it('the 65th Harness agent\'s ended turn pushes out the first\'s', async () => {
+      const { port, listener } = devices({ core: bound(), now: () => Date.now() })
+      const turn = (agentId: string) => {
+        port.card({ type: 'commander_event', agentId, payload: { kind: 'processing', text: 'Working' } })
+        port.card({ type: 'commander_event', agentId, payload: { kind: 'done', text: 'done' } })
+      }
+      turn('h1')
+      port.desk(['h1'], true)
+      for (let i = 0; i < 63; i++) turn(`x${i}`)
+      await vi.advanceTimersByTimeAsync(1_400)
+      expect(nudge(listener, 's-h1', true)).toEqual({ nudge: false })
+      expect(logs).toContain('[device] nudge · claude · present')
+      turn('x63')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(nudge(listener, 's-h1', true)).toEqual({ nudge: true })
+    })
+
     it('a notice rung earlier in this turn and since answered is still no', async () => {
       const { port, listener } = devices({ core: bound(), now: () => Date.now() })
       // A caller no list holds: the person's tap on its card ends it, with no turn started.
