@@ -1,6 +1,7 @@
 /**
  * Release build: bundle the whole CLI into ONE self-contained `dist/cli.js`
- * that runs on every OS under the user's Node, plus the standalone hook script.
+ * that runs on every OS under the user's Node, plus the standalone hook script and the Windows inbox follower's
+ * own `inbox.mjs`.
  * The optional macOS image probe and /dev watch helper are embedded as pinned bytes in that same JS.
  *
  * Version is baked in via esbuild `define(__ADAPTER_VERSION__)`, sourced from `ADAPTER_VERSION`
@@ -105,8 +106,8 @@ const options = {
     __DARWIN_DEV_WATCH__: devWatch ? JSON.stringify(devWatch) : 'undefined',
   },
   // The copyright line is MIT's one condition — it has to travel with the copy the user actually
-  // receives, and the published bundle IS that copy (upload-cli.sh ships `cli.js` and `notify.mjs`,
-  // nothing else). `legalComments: 'eof'` below appends the dependencies' own notices; this is ours.
+  // receives, and the published bundle IS that copy (upload-cli.sh ships `cli.js`, `notify.mjs` and
+  // `inbox.mjs`, nothing else). `legalComments: 'eof'` below appends the dependencies' own notices; this is ours.
   banner: {
     js: `/*! harness v${version} - Copyright (c) 2026 Autonomous, Inc. - MIT (https://github.com/autonomous-ai/openharness) */\n`
       + 'import{createRequire as ___cr}from"module";const require=___cr(import.meta.url);',
@@ -180,10 +181,15 @@ await esbuild.build({
 writeFileSync(`${outDir}/cli.js`, asciiOnly(readFileSync(`${outDir}/cli.js`, 'utf8')))
 appendFileSync(`${outDir}/cli.js`, leanBlock(leanFiles))
 
+// The Windows follower of a session's inbox, on its own (src/inboxEntry.ts): one runs per Claude Code session, and
+// Node compiles all of the file it starts on, so harness.exe starts it on this one instead of cli.js.
+await esbuild.build({ ...options, entryPoints: ['src/inboxEntry.ts'], outfile: `${outDir}/inbox.mjs` })
+writeFileSync(`${outDir}/inbox.mjs`, asciiOnly(readFileSync(`${outDir}/inbox.mjs`, 'utf8')))
+
 copyFileSync('hook/notify.mjs', `${outDir}/notify.mjs`)
 
 // Windows: the pty host and its ConPTY payload in dist/pty/, when they were built (scripts/lib/ptyPayload.mjs).
 const ptyFiles = copyPtyPayload({ ptyDir: fileURLToPath(new URL('../pty', import.meta.url)), outDir })
 if (ptyFiles.length) console.log(`✓ Copied ${ptyFiles.join(', ')} into ${outDir}/pty`)
 
-console.log(`✓ Bundled ${outDir}/cli.js (v${version}) + ${outDir}/notify.mjs`)
+console.log(`✓ Bundled ${outDir}/cli.js (v${version}) + ${outDir}/notify.mjs + ${outDir}/inbox.mjs`)

@@ -10,7 +10,8 @@
  * each dynamic import below into a module initialised the first time it is imported, so the code a
  * process never imports is parsed but never run. The core (`__run`) starts as it does from the lean bundle
  * (coreProcess.ts), the Windows follower of a session's inbox from its own module (deviceClaude/inboxCommand.ts), and
- * everything else is the CLI as it always was.
+ * everything else is the CLI as it always was. A release's harness.exe starts the follower from inbox.mjs, its own file
+ * (inboxEntry.ts); the follower's branch here serves an install without that file, and a harness.exe from before it.
  *
  * Nothing heavy may be imported statically here: it would be evaluated by every process.
  */

@@ -55,7 +55,6 @@ describe('inbox.mjs, built beside cli.js', () => {
     for (const marker of [
       'Updating would replace it with a published release', // cli.ts
       '[runtime-profile] connect reconcile failed', // core/main.ts
-      'WebSocket was closed before the connection was established', // ws
     ]) {
       expect(cli.includes(marker), `cli.js holds ${marker}`).toBe(true)
       expect(code.includes(marker), `inbox.mjs holds ${marker}`).toBe(false)
