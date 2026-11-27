@@ -103,7 +103,7 @@ import { runUpdateSteps } from './lib/updateCommand.js'
 import { PTY_PROTOCOL } from './lib/ptyHost/protocol.js'
 import { runAutonomousDeviceCommand } from './lib/autonomous-device/command.js'
 import { E2eeStore, identitySpent, peekIdentityPub, REMOTE_PASSWORD_NOT_DELETED } from './lib/e2ee/store.js'
-import { errnoOf, SecretNotDeleted } from './lib/deleteSecretFile.js'
+import { deleteHeld, errnoOf, SecretNotDeleted } from './lib/deleteSecretFile.js'
 import { confirmsRemoval, deviceRegistration, deviceStatusValue, formatDeviceDetail, formatDeviceHistory, formatDeviceList, logOrder, removeConfirmation } from './lib/e2ee/deviceDisplay.js'
 import { b64e } from './lib/e2ee/core.js'
 import { MachinePeerStore } from './lib/e2ee/machinePeers.js'
@@ -1845,19 +1845,20 @@ function clearAdapterState(): void {
       `${SESSION_SEARCH_FILE}-wal`,
       `${SESSION_SEARCH_FILE}-shm`,
     ]) {
-      rmSync(join(dir, name), { recursive: true, force: true })
+      deleteHeld(join(dir, name), true)
     }
-    // Private sockets and actual TCP port records — whichever configured ports have run here.
-    try {
-      for (const name of readdirSync(dir)) {
-        if (isLocalSocketName(name) || /^daemon-\d+\.json$/.test(name)) rmSync(join(dir, name), { force: true })
-      }
-    } catch { /* no such directory */ }
+    // Private sockets and actual TCP port records — whichever configured ports have run here. Only a missing folder
+    // is skipped: a record left behind is a failed reset, said by `resetCommand`.
+    let names: string[] = []
+    try { names = readdirSync(dir) } catch (error) { if (errnoOf(error) !== 'ENOENT') throw error }
+    for (const name of names) {
+      if (isLocalSocketName(name) || /^daemon-\d+\.json$/.test(name)) deleteHeld(join(dir, name), false)
+    }
     // A folder too long for a socket keeps its sockets here.
-    rmSync(shortSocketFolder(dir), { recursive: true, force: true })
+    deleteHeld(shortSocketFolder(dir), true)
   }
   if (dataDir === cliDir) rmStateFiles(dataDir)
-  else rmSync(dataDir, { recursive: true, force: true })
+  else deleteHeld(dataDir, true)
   rmStateFiles(cliDir)
 }
 
