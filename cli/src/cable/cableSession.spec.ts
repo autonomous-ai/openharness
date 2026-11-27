@@ -5579,6 +5579,18 @@ describe("a notice card after its agent's turn start", () => {
     } finally { await round.session.stop() }
   })
 
+  // A prompt an outside agent waits on is shown only too, under the same prefix, and goes with its wait: held, its row
+  // would stay on the Pro after the agent moved on.
+  it("a Pro is not given back an outside agent's waiting prompt", async () => {
+    const { session, port } = await rung(PRO, CARD, [{ key: 'prompt', q: LINE, options: ['In Orca'] }])
+    try {
+      await session.turnStarted('a1')
+      await session.turnDone('a1')
+      expect(ofType(port, 'notif.replace')).toEqual([])
+      expect(ofType(port, 'question')).toEqual([])
+    } finally { await session.stop() }
+  })
+
   it("a Pro is not given back an agent's real question", async () => {
     const { session, port } = await rung(PRO, 'q1', [{ key: 'k', q: LINE, options: ['yes', 'no'] }])
     try {
