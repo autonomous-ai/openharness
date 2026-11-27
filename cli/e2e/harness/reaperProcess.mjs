@@ -8,12 +8,14 @@
  * a pipe from the worker, and the kernel closes it when the worker exits, by any path. Then every process group the worker
  * still has registered gets SIGTERM, and SIGKILL for whatever is left after the grace; every tmux server it registered is
  * stopped (tmux daemonizes into a session of its own); then, once its throwaway root is known to be a test's, every process
- * of the worker's tree that still names that root or works in it is ended, and the root is removed, read-only folders and
- * all. The worker's tree is what its groups, its tmux servers and the processes the harness noted it started held when it
- * went, seen by start time before anything is ended: once they are gone, what they started is launchd's. Each process
- * the harness noted (IsolatedDaemon.own), launchd's from the moment the worker went if not before, is ended with what
- * descends from it while it runs as itself, by its start time. Of the machine's other processes nothing is read but each
- * one's pid, parent and group: the person's own run on the same computer (PM, 2026-11-23).
+ * of the worker's tree that still names that root or works in it is ended, and each Codex app server a pid file inside the
+ * root names that is the test's, and the root is removed, read-only folders and all. The worker's tree is what its
+ * groups, its tmux servers and the processes the harness noted it started held when it went, seen by start time before
+ * anything is ended: once they are gone, what they started is launchd's. Each process the harness noted
+ * (IsolatedDaemon.own), launchd's from the moment the worker went if not before, is ended with what descends from it
+ * while it runs as itself, by its start time. Of the machine's other processes nothing is read but each one's pid, parent
+ * and group, and the account, start and command line of a pid a Codex pid file inside the root names: the person's own
+ * run on the same computer (PM, 2026-11-23).
  *
  * The worker's lines on stdin, one JSON object each: {"group":N} a process group to end, {"leaderGone":N} its leader exited,
  * {"forget":N} it was closed; {"tmux":socket,"root":folder} a tmux server to stop, then what still names its root or works
@@ -21,7 +23,7 @@
  * started at that time, {"forgetOwn":N} it was closed.
  */
 import { execFileSync, spawnSync } from 'node:child_process'
-import { chmodSync, lstatSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync } from 'node:fs'
+import { chmodSync, lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync } from 'node:fs'
 import { tmpdir, userInfo } from 'node:os'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -210,26 +212,27 @@ function workingFolders(pids) {
 }
 
 /**
- * SIGKILL every process of the worker's tree that still names [root] or works in it, [root] being a test's (isTestRoot),
- * and wait, at most 5 s, until none is left: the rule of src/testing/rootProcesses.ts, which plain Node cannot import. The
- * tree is what was [seen] (seenNow) that still runs as the same process, and what descends from it. A Codex rate-limit
- * read runs in a process group of its own (lib/codexRateLimits.ts), out of reach of the worker's groups: the census of
- * 2026-11-14 found 14 such pairs outliving their runs. And a process started by name in a pane names no root, and a real
- * engine survives its pane's end: the audit of 2026-11-15 found many real `claude`, and some `opencode` and
- * `cursor-agent`, parented to pid 1 with their working folder in a test's root. So one of this account's processes whose
- * working folder is the root or in it is the test's too. This process, its parent and pid 1 are never matched. A match
- * that leads a group is ended with it, as the fake Codex's child names nothing of the root; any other alone. This process
- * leads its own group (reaper.ts), so no match's group is this one's.
+ * What of the worker's tree still names [root] or works in it, [root] being a test's (isTestRoot): the rule of
+ * src/testing/rootProcesses.ts, which plain Node cannot import. The tree is what was [seen] (seenNow) that still runs as
+ * the same process, and what descends from it. A Codex rate-limit read runs in a process group of its own
+ * (lib/codexRateLimits.ts), out of reach of the worker's groups: the census of 2026-11-14 found 14 such pairs outliving
+ * their runs. And a process started by name in a pane names no root, and a real engine survives its pane's end: the audit
+ * of 2026-11-15 found many real `claude`, and some `opencode` and `cursor-agent`, parented to pid 1 with their working
+ * folder in a test's root. So one of this account's processes whose working folder is the root or in it is the test's
+ * too. This process, its parent and pid 1 are never matched. A match that leads a group is ended with it, as the fake
+ * Codex's child names nothing of the root; any other alone. This process leads its own group (reaper.ts), so no match's
+ * group is this one's. None when nothing seen still runs, or ps cannot run.
  */
-async function endRootProcesses(root, seen) {
+function treeMatches(root, seen) {
+  const none = { groups: [], pids: [], all: [] }
   const still = stillRunning(seen)
-  if (!still.length) return
+  if (!still.length) return none
   let tree
   try {
     tree = processTree(processTable(), still)
   } catch (error) {
     console.error(`[e2e reaper] could not list the processes of ${root}: ${error.code ?? error.message}`)
-    return
+    return none
   }
   const commands = psOf(tree.map((row) => row.pid), 'command')
   const table = tree.flatMap((row) => commands.has(row.pid) ? [{ ...row, command: commands.get(row.pid) }] : [])
@@ -242,14 +245,101 @@ async function endRootProcesses(root, seen) {
   const matches = table.filter((row) => named(row) && !spared.includes(row.pid))
   const groups = matches.filter((row) => row.pid === row.pgid).map((row) => row.pgid)
   const pids = matches.filter((row) => row.pid !== row.pgid).map((row) => row.pid)
-  const all = table.filter((row) => pids.includes(row.pid) || groups.includes(row.pgid)).map((row) => row.pid)
-  if (!all.length) return
-  console.error(`[e2e reaper] ended ${all.length} processes that still named ${root} or ran in it`)
+  return { groups, pids, all: table.filter((row) => pids.includes(row.pid) || groups.includes(row.pgid)).map((row) => row.pid) }
+}
+
+/** How far below a root a Codex home's `app-server-daemon` folder is looked for, and how much of the root is read for it. */
+const APP_SERVER_DEPTH = 4, FOLDERS_READ = 2_000, PID_FILES_READ = 16
+
+/** Whether [path] is a file, not a link to one. */
+const isFile = (path) => { try { return lstatSync(path).isFile() } catch { return false } }
+
+/** The `pid` the JSON in [file] holds, while a safe integer over 1; null for anything else. */
+function recordedPid(file) {
+  try {
+    const pid = JSON.parse(readFileSync(file, 'utf8'))?.pid
+    return Number.isSafeInteger(pid) && pid > 1 ? pid : null
+  } catch { return null }
+}
+
+/**
+ * The pids the Codex homes inside [root] record their app servers by: each `app-server-daemon/daemon.pid`, that folder at
+ * most 4 below the root, read breadth first and through no link (one could lead out of the root). At most 2,000 folders
+ * and 16 pid files are read; a bound reached is said once (src/testing/rootProcesses.ts codexPidFiles).
+ */
+function codexPidFiles(root) {
+  const pids = new Set()
+  const folders = [[root, 0]]
+  let files = 0
+  for (let at = 0; at < folders.length; at++) {
+    if (at === FOLDERS_READ) {
+      console.error(`[e2e reaper] read ${FOLDERS_READ} folders of ${root} for Codex app server pid files: looked no further`)
+      break
+    }
+    const [folder, depth] = folders[at]
+    let entries
+    try { entries = readdirSync(folder, { withFileTypes: true }) } catch { continue /* gone, or not this account's to read */ }
+    for (const entry of entries) {
+      // readdir's own type: a link is never a folder here.
+      if (!entry.isDirectory()) continue
+      const path = join(folder, entry.name), file = join(path, 'daemon.pid')
+      if (entry.name === 'app-server-daemon' && isFile(file)) {
+        if (files++ === PID_FILES_READ) {
+          console.error(`[e2e reaper] read ${PID_FILES_READ} Codex app server pid files under ${root}: looked no further`)
+          return [...pids]
+        }
+        const pid = recordedPid(file)
+        if (pid !== null) pids.add(pid)
+      }
+      if (depth + 1 < APP_SERVER_DEPTH) folders.push([path, depth + 1])
+    }
+  }
+  return [...pids]
+}
+
+/** A Codex app server's command line: `codex`, `codex.js` or `codex.exe` run with `app-server` among its arguments. */
+const CODEX_APP_SERVER = /(^|[/\\\s])codex(\.js|\.exe)?\s(.*\s)?app-server(\s|$)/
+
+/**
+ * The Codex app servers pid files inside [root] name that are the test's: this account's, a Codex app server, and started
+ * no sooner than the second before [root] was made (src/testing/rootProcesses.ts codexDaemons); never this process, its
+ * parent or pid 1. None, and one line said, when the root's birth time is unknown.
+ */
+function rootCodexDaemons(root) {
+  const pids = codexPidFiles(root).filter((pid) => ![process.pid, process.ppid, 1].includes(pid))
+  if (!pids.length) return []
+  let made = 0
+  try { made = statSync(root).birthtimeMs } catch { /* gone: no birth time */ }
+  if (!(made > 0)) {
+    console.error(`[e2e reaper] no birth time for ${root}: no Codex app server its pid files name is ended`)
+    return []
+  }
+  // `ps` gives a start to the second, and Linux's can name the second before the one the clock was in
+  // (src/testing/spawnedRuns.ts daemonOf).
+  const since = Math.floor(made / 1_000) * 1_000 - 1_000
+  const uids = psOf(pids, 'uid'), started = psOf(pids, 'lstart'), commands = psOf(pids, 'command')
+  return pids.filter((pid) => Number(uids.get(pid)) === process.getuid() && CODEX_APP_SERVER.test(commands.get(pid) ?? '')
+    && Date.parse(started.get(pid) ?? '') >= since)
+}
+
+/**
+ * SIGKILL what of the worker's tree still names [root] or works in it (treeMatches), and each Codex app server a pid file
+ * inside [root] names that is the test's (rootCodexDaemons), [root] being a test's (isTestRoot), and wait, at most 5 s,
+ * until none is left. Codex's managed app server detaches itself, names no root and need not work in it, so no tree leads
+ * to it: a real one from the tester of #4660 and #4668 outlived its test, launchd's. Codex records it in
+ * `<CODEX_HOME>/app-server-daemon/daemon.pid`, so those are read even when nothing the worker saw still runs.
+ */
+async function endRootProcesses(root, seen) {
+  const { groups, pids, all } = treeMatches(root, seen)
+  const codex = rootCodexDaemons(root).filter((pid) => !all.includes(pid))
+  if (all.length) console.error(`[e2e reaper] ended ${all.length} processes that still named ${root} or ran in it`)
+  if (codex.length) console.error(`[e2e reaper] ended ${codex.length} Codex app servers that pid files in ${root} named`)
   for (const pgid of groups) signal(pgid, 'SIGKILL')
-  for (const pid of pids) { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } }
+  for (const pid of [...pids, ...codex]) { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } }
+  const ended = [...all, ...codex]
   const deadline = Date.now() + 5_000
-  while (all.some(exists) && Date.now() < deadline) await sleep(100)
-  const left = all.filter(exists)
+  while (ended.some(exists) && Date.now() < deadline) await sleep(100)
+  const left = ended.filter(exists)
   if (left.length) console.error(`[e2e reaper] pids ${left.join(', ')} of ${root} outlived SIGKILL by 5000 ms`)
 }
 
