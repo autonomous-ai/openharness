@@ -1,11 +1,16 @@
+import * as fs from 'node:fs'
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PLATFORM_ENV, systemdUnit } from '../harnessd/platform.js'
 import type { Done } from './journal.js'
 import { planMove, type MovePlan } from './plan.js'
 import { restoreOutside, rewriteOutside } from './rewriteOutside.js'
+
+vi.mock('node:fs', async (real) => ({ ...await real<object>() }))
+
+afterEach(() => { vi.restoreAllMocks() })
 
 const NODE = 'runtime/node-v24.11.1/bin/node'
 const CLI = 'cli/cli.js'
@@ -59,6 +64,29 @@ function runner(unitFile: string, status: number | null = 0): { run(command: str
 }
 
 const base64 = (text: string): string => Buffer.from(text).toString('base64')
+
+/**
+ * A draft's (a path ending .next) rename that fails with [error], after which the draft's removal fails too, as one of a
+ * file another program holds does (EBUSY).
+ */
+function heldAfterFailedRename(error: Error): void {
+  const rename = fs.renameSync, rm = fs.rmSync, unlink = fs.unlinkSync
+  let held = false
+  const busy = (path: fs.PathLike): void => { if (held && String(path).endsWith('.next')) throw Object.assign(new Error('EBUSY: fixture'), { code: 'EBUSY' }) }
+  vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+    if (!String(from).endsWith('.next')) return rename(from, to)
+    held = true
+    throw error
+  })
+  vi.spyOn(fs, 'rmSync').mockImplementation((path, options) => { busy(path); rm(path, options) })
+  vi.spyOn(fs, 'unlinkSync').mockImplementation((path) => { busy(path); unlink(path) })
+}
+
+/** What [run] threw. */
+const thrown = (run: () => unknown): unknown => {
+  try { run() } catch (error) { return error }
+  throw new Error('nothing thrown')
+}
 const RELOAD = ['systemctl', '--user', 'daemon-reload']
 
 describe('the move rewrites what names the old tree outside it', () => {
@@ -238,6 +266,13 @@ describe('the move rewrites what names the old tree outside it', () => {
     expect(calls).toEqual([RELOAD, RELOAD])
     expect(units[1]).toBe(unitOf(home, old))
     expect(readdirSync(binDir).sort()).toEqual(['harness', 'hn'])
+  })
+
+  it('a file whose draft cannot be removed after a failed rename throws the rename\'s error', () => {
+    const { unitFile } = legacyHome(), denied = Object.assign(new Error('EACCES: fixture'), { code: 'EACCES' })
+    writeFileSync(unitFile, 'written by the move')
+    heldAfterFailedRename(denied)
+    expect(thrown(() => restoreOutside({ did: 'file', path: unitFile, before: base64('as it was') }, runner(unitFile).run))).toBe(denied)
   })
 
   it('a file that was not there is removed again', () => {

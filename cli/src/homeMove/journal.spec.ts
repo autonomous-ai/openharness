@@ -1,10 +1,14 @@
 import * as fs from 'node:fs'
-import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import { describe, expect, it } from 'vitest'
-import { forgetJournal, openJournal, readJournal, type Done, type Journal, type OpenIo } from './journal.js'
-import { planMove } from './plan.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { forgetJournal, openJournal, readJournal, writeWhole, type Done, type Journal, type OpenIo } from './journal.js'
+import { draftOf, planMove } from './plan.js'
+
+vi.mock('node:fs', async (real) => ({ ...await real<object>() }))
+
+afterEach(() => { vi.restoreAllMocks() })
 
 const NODE_FS: OpenIo = {
   openSync: fs.openSync, writeFileSync: fs.writeFileSync, fsyncSync: fs.fsyncSync, closeSync: fs.closeSync, renameSync: fs.renameSync, rmSync: fs.rmSync,
@@ -15,6 +19,20 @@ function legacyHome(): { home: string; legacy: string } {
   const home = mkdtempSync(join(tmpdir(), 'move-journal-'))
   mkdirSync(join(home, '.harness'))
   return { home, legacy: join(home, '.harness') }
+}
+
+/** A removal of a draft (a path ending .next) that fails, as one of a file another program holds does (EBUSY). */
+const heldDrafts = () => {
+  const rm = fs.rmSync, unlink = fs.unlinkSync
+  const busy = () => Object.assign(new Error('EBUSY: fixture'), { code: 'EBUSY' })
+  vi.spyOn(fs, 'rmSync').mockImplementation((path, options) => { if (String(path).endsWith('.next')) throw busy(); rm(path, options) })
+  vi.spyOn(fs, 'unlinkSync').mockImplementation((path) => { if (String(path).endsWith('.next')) throw busy(); unlink(path) })
+}
+
+/** What [run] threw. */
+const thrown = (run: () => unknown): unknown => {
+  try { run() } catch (error) { return error }
+  throw new Error('nothing thrown')
 }
 
 const journalOf = (home: string): Journal => ({
@@ -146,6 +164,22 @@ describe('the move\'s journal', () => {
     openJournal(journalOf(home)).add(STEPS[1])
     const mode = (...path: string[]): number => statSync(join(legacy, ...path)).mode & 0o777
     expect([mode('.move.json'), mode('.move-before'), mode('.move-before', '0')]).toEqual([0o600, 0o700, 0o600])
+  })
+
+  it('a write whose draft cannot be removed after a failed rename throws the rename\'s error', () => {
+    const { legacy } = legacyHome(), denied = Object.assign(new Error('EACCES: fixture'), { code: 'EACCES' })
+    heldDrafts()
+    // fs.rmSync is read once held.
+    const io: OpenIo = { ...NODE_FS, rmSync: fs.rmSync, renameSync: () => { throw denied } }
+    expect(thrown(() => writeWhole(join(legacy, '.move.json'), '{}', io))).toBe(denied)
+  })
+
+  it('a folder at a draft\'s name is not the write\'s: it stays, and the write\'s error is thrown', () => {
+    const { legacy } = legacyHome(), draft = draftOf(join(legacy, '.move.json'))
+    mkdirSync(draft)
+    writeFileSync(join(draft, 'notes.txt'), 'mine')
+    expect(thrown(() => writeWhole(join(legacy, '.move.json'), '{}'))).toMatchObject({ code: 'EISDIR' })
+    expect(readFileSync(join(draft, 'notes.txt'), 'utf8')).toBe('mine')
   })
 
   it('a draft a crash left in ~/.harness is not one of its entries', () => {
