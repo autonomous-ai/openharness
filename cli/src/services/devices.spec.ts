@@ -9559,6 +9559,18 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     expect(calls('questionClose')).toEqual([])
   })
 
+  // Its agent is gone (rule 5): with the source off no list holds it, so nothing else would end its card.
+  it('a card for a session the observed source is switched off for goes at its session\'s end', () => {
+    const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
+    switched.HARNESS_DEVICE_OBSERVED = false
+    onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
+    const { port, listener } = devices()
+    expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual(SHOWN)
+    port.observed(hook('session-end'))
+    expect(calls('questionClose')).toEqual([[ID, ids()[0]]])
+    expect(listener.noticeList({ engine: 'claude', sessionId: 'sess-1' })).toEqual({ cards: [] })
+  })
+
   it('a dial that attaches is held the pending notices again', () => {
     const { port, listener } = devices()
     port.observed(hook('turn-start'))
