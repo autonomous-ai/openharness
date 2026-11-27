@@ -26,7 +26,10 @@ export interface InboxCommandDeps {
 }
 
 /** The session [argv], the words after `device`, follows: '' for a missing id, which is answered as a refused one, off;
- *  null when the words are another command's. Words that start with `-` are dropped, as runDeviceCommand drops them. */
+ *  null when the words are another command's. Words that start with `-` are dropped, as runDeviceCommand drops them.
+ *  harness.exe applies this same match to choose inbox.mjs over cli.js (pty/src/command.rs `follows_inbox`): a line it
+ *  sends to inbox.mjs that this does not match would be answered off, so both are held to one list of lines
+ *  (pty/tests/fixtures/follower_lines.json). */
 export function inboxSessionOf(argv: string[]): string | null {
   const words = argv.filter((arg) => !arg.startsWith('-'))
   return words.length <= 3 && words[0] === 'claude' && words[1] === 'inbox' ? words[2] ?? '' : null

@@ -28,9 +28,11 @@ use crate::launcher::{Resolved, contained, resolve};
 /// The inbox follower's own file, beside `cli.js` in a version folder.
 const INBOX: &str = "inbox.mjs";
 
-/// Whether [args] are the follower's line, by the match `entry.ts` and `inboxSessionOf` apply: the first is exactly
-/// `device`; of the rest, words starting with `-` are dropped, at most three are left, and the first two are `claude`
-/// and `inbox`. A word that is not UTF-8 never matches, so such a line runs `cli.js` as before.
+/// Whether [args] are the follower's line, by the match `entry.ts`, `inboxEntry.ts` and `inboxSessionOf`
+/// (`cli/src/deviceClaude/inboxCommand.ts`) apply: the first is exactly `device`; of the rest, words starting with `-`
+/// are dropped, at most three are left, and the first two are `claude` and `inbox`. A word that is not UTF-8 never
+/// matches, so such a line runs `cli.js` as before. `inbox.mjs` answers any line those do not match `{"off":true}`, so
+/// both sides are held to one list of lines (`tests/fixtures/follower_lines.json`).
 fn follows_inbox(args: &[OsString]) -> bool {
     let Some(words) = args.iter().map(|arg| arg.to_str()).collect::<Option<Vec<&str>>>() else {
         return false;
@@ -137,32 +139,28 @@ mod tests {
         words.iter().map(OsString::from).collect()
     }
 
+    /// The lines of `tests/fixtures/follower_lines.json` under [key]. `cli/src/deviceClaude/inboxCommand.spec.ts` holds
+    /// `inboxSessionOf` to the same file, so the two copies of the match cannot drift apart.
+    fn lines_of(key: &str) -> Vec<Vec<String>> {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/follower_lines.json");
+        let fixture: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        serde_json::from_value(fixture[key].clone()).unwrap()
+    }
+
     #[test]
     fn follows_inbox_only_for_the_followers_line() {
-        let followers: [&[&str]; 5] = [
-            &["device", "claude", "inbox", "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"],
-            &["device", "claude", "inbox"],
-            &["device", "claude", "inbox", ""],
-            &["device", "--json", "claude", "inbox", "x"],
-            &["device", "claude", "-q", "inbox", "x"],
-        ];
+        let followers = lines_of("follower");
+        assert!(!followers.is_empty());
         for line in followers {
-            assert!(follows_inbox(&os(line)), "{line:?}");
+            let words: Vec<&str> = line.iter().map(String::as_str).collect();
+            assert!(follows_inbox(&os(&words)), "{line:?}");
         }
-        let others: [&[&str]; 9] = [
-            &["device", "claude", "attach", "x"],
-            &["device", "claude", "inbox", "x", "extra"],
-            &["claude", "inbox", "x"],
-            &["Device", "claude", "inbox", "x"],
-            &["device", "Claude", "inbox", "x"],
-            // What `hn` hands on.
-            &["tui", "device", "claude", "inbox", "x"],
-            &["device"],
-            &["device", "claude"],
-            &[],
-        ];
+        // Among them what `hn` hands on: `tui` first.
+        let others = lines_of("other");
+        assert!(!others.is_empty());
         for line in others {
-            assert!(!follows_inbox(&os(line)), "{line:?}");
+            let words: Vec<&str> = line.iter().map(String::as_str).collect();
+            assert!(!follows_inbox(&os(&words)), "{line:?}");
         }
         #[cfg(unix)]
         let not_utf8 = {
