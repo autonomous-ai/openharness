@@ -41,9 +41,13 @@ Anti-goals: a card that vanishes before the person saw it; a ring for a card the
      `agent_deleted`, `session-end`), the card is 24 hours old (now for a live card too, not only at restore), and the
      person's tap on the card of an agent no list holds (`tappedUnlisted`, as today). A Harness agent's cards when the
      dial detaches, as today (`detached`).
-   - **Removed:** a card ending because its agent's next turn started (`services/devices.ts` the observed
-     `turn-start`, the Harness `turn_started` frame and a listed agent going busy; `notices.working` for a restored
-     card). Nothing else closes a card.
+   - **Removed for waiting cards:** a card ending because its agent's next turn started (`services/devices.ts` the
+     observed `turn-start`, the Harness `turn_started` frame and a listed agent going busy; `notices.working` for a
+     restored card).
+   - **Other cards** (`--proceeding`, plain): closed by the person's own next prompt to that agent (typed, or spoken
+     through the dial), never a relayed one, as before; and by a newer card of the agent that replaces it (the PM,
+     2026-11-27, after the final review: "not need-you cases stay as before, latest notice").
+   - Nothing else closes a card.
 6. **Across agents:** the pending total stays at 20 (`NOTICES_PENDING_MAX`), the oldest dropped first.
 7. **The place** is `(1/m)`: the card shown is always the agent's first open card, `m` all its open cards, waiting and
    other; no place when `m` is 1 (the PM, 2026-11-27).
@@ -112,7 +116,7 @@ answer: unit tests hold it. What the eval measures is the agent's judgment, whic
 
 - `dial-notices.json` keeps several cards an agent (each with its id, kind, line and time); the 24-hour rule applies
   to live and restored cards alike. At most 20 cards, as today.
-- Counts: no new name. `dial_notice_answered_10m`, and its quiet share `dial_notice_present_answered_10m`, count a card the agent closed within 10 minutes of showing it, not a
+- Counts: no new name. `dial_notice_answered_10m`, and its quiet share `dial_notice_present_answered_10m`, count a card the agent closed within 10 minutes of showing it (an other card: also the person's own prompt within 10 minutes, as before), not a
   turn start. A card dropped by rule 1, by 24 hours or by its agent leaving counts as gone.
 - Logs: fixed words only (`[device] notice · done`, `· dropped · sixth`, `· expired`), never a line, id or session.
 
