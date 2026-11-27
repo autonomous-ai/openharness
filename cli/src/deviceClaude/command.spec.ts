@@ -28,6 +28,7 @@ import { ensureDaemonToken } from '../lib/windows/pipeAuth.js'
 import { harnessPath } from '../config/harnessHome.js'
 import { DEVICE_USAGE, runDeviceCommand, takesConnect, type DeviceDeps } from './command.js'
 import { startOutput } from './start.js'
+import { stopOutput } from './stop.js'
 import type { ClaudePluginFiles, ClaudeRun } from '../devices/claudePlugin.js'
 import { carriedCodexHash, installedRoot } from '../devices/codexPlugin.js'
 import { VSCODE_EXTENSION_ID, type VscodeEditor, type VscodeExtensionDeps } from '../devices/vscodeExtension.js'
@@ -620,6 +621,48 @@ describe('harness device claude start', () => {
 
   it('start is not in DEVICE_USAGE', () => {
     expect(DEVICE_USAGE).not.toMatch(/device (claude|codex) start/)
+  })
+})
+
+/** Asked as the devices' listener: [answer] for each nudge, each one kept. */
+const nudges = (answer: Record<string, unknown> = { nudge: true }) => vi.fn<NonNullable<DeviceDeps['ask']>>(async () => answer)
+const ASKING = 'Which database should the export use?'
+
+// No listener anywhere: the devices' answer is injected, and the rest decided from the hook's input and three files.
+describe('harness device claude stop', () => {
+  const STOP_INPUT = {
+    session_id: 's-1', transcript_path: '/transcript.jsonl', cwd: '/repo', hook_event_name: 'Stop', stop_hook_active: false,
+    last_assistant_message: ASKING,
+  }
+  const noClaude = () => { throw new Error('stop never looks for claude') }
+  /** Claude Code's TUI (F1). */
+  const TUI = { CLAUDE_CODE_ENTRYPOINT: 'cli' }
+
+  it('claude stop prints the block with the plugin on and Harness\'s skill in the session\'s home, and exits 0', async () => {
+    skillIn(claudeHome)
+    const ask = nudges()
+    expect(await device(['claude', 'stop'], { stdin: chunks(JSON.stringify(STOP_INPUT)), env: TUI, ask, claude: noClaude }))
+      .toEqual({ code: 0, out: [stopOutput()], err: [] })
+    expect(ask.mock.calls).toStrictEqual([[{ type: 'nudge', engine: 'claude', sessionId: 's-1', ask: true }]])
+  })
+
+  it.each<[string, (dataDir: string) => { env?: NodeJS.ProcessEnv; answer?: Record<string, unknown> } | void, number]>([
+    ['the plugin off', () => { skillIn(claudeHome); pluginOn(false) }, 0],
+    ['Claude Code removed', (dataDir) => { skillIn(claudeHome); writeRemoved(dataDir, 'claude', true) }, 0],
+    ['no skill', () => {}, 0],
+    ['a claude -p run', () => { skillIn(claudeHome); return { env: { CLAUDE_CODE_ENTRYPOINT: 'sdk-cli' } } }, 0],
+    ['a no from the devices', () => { skillIn(claudeHome); return { answer: { nudge: false } } }, 1],
+  ])('claude stop prints nothing and exits 0: %s', async (_name, arrange, asked) => {
+    const dataDir = folder()
+    const { env = TUI, answer } = arrange(dataDir) ?? {}
+    const ask = nudges(answer)
+    expect(await device(['claude', 'stop'], { dataDir, env, ask, stdin: chunks(JSON.stringify(STOP_INPUT)), claude: noClaude }))
+      .toEqual({ code: 0, out: [], err: [] })
+    expect(ask).toHaveBeenCalledTimes(asked)
+  })
+
+  it('stop is not in DEVICE_USAGE', () => {
+    expect(DEVICE_USAGE).not.toMatch(/device (claude|codex) stop/)
   })
 })
 
@@ -1457,6 +1500,39 @@ describe('harness device codex', () => {
     const codexHome = codexHomeOn()
     const stdin = arrange(dataDir, codexHome) ?? chunks(JSON.stringify(CODEX_START_INPUT))
     expect(await device(['codex', 'start'], { dataDir, codexHome, stdin, codex: noCodex })).toEqual({ code: 0, out: [], err: [] })
+  })
+
+  /** Codex's Stop hook input as Codex 0.172.0 gives it, its rollout a copy of the TUI's or exec's recorded head (F8). */
+  function codexStopInput(head: 'tui' | 'exec'): AsyncIterable<string> {
+    const transcript = join(folder(), 'rollout.jsonl')
+    cpSync(fileURLToPath(new URL(`./__fixtures__/codex-rollout-head-${head}.jsonl`, import.meta.url)), transcript)
+    return chunks(JSON.stringify({
+      session_id: '019abc00-0000-7000-8000-000000000001', turn_id: USER_TURN, transcript_path: transcript, cwd: '/repo',
+      hook_event_name: 'Stop', model: 'gpt-5.5', permission_mode: 'default', stop_hook_active: false, last_assistant_message: ASKING,
+    }))
+  }
+
+  it('codex stop prints the block with the plugin on and Harness\'s skill in the Codex home, and exits 0', async () => {
+    const ask = nudges()
+    expect(await device(['codex', 'stop'], { codexHome: codexHomeOn(), stdin: codexStopInput('tui'), ask, codex: noCodex }))
+      .toEqual({ code: 0, out: [stopOutput()], err: [] })
+    expect(ask.mock.calls).toStrictEqual([[{ type: 'nudge', engine: 'codex', sessionId: '019abc00-0000-7000-8000-000000000001', ask: true }]])
+  })
+
+  it.each<[string, (dataDir: string, codexHome: string) => { head?: 'exec'; answer?: Record<string, unknown> } | void, number]>([
+    ['the plugin off', (_dataDir, codexHome) => { writeFileSync(join(codexHome, 'config.toml'), `[plugins."${CODEX_PLUGIN}"]\nenabled = false\n`) }, 0],
+    ['Codex removed', (dataDir) => { writeRemoved(dataDir, 'codex', true) }, 0],
+    ['no skill', (_dataDir, codexHome) => { rmSync(join(codexHome, 'skills'), { recursive: true }) }, 0],
+    ['a codex exec run', () => ({ head: 'exec' }), 0],
+    ['a no from the devices', () => ({ answer: { nudge: false } }), 1],
+  ])('codex stop prints nothing and exits 0: %s', async (_name, arrange, asked) => {
+    const dataDir = folder()
+    const codexHome = codexHomeOn()
+    const { head = 'tui', answer } = arrange(dataDir, codexHome) ?? {}
+    const ask = nudges(answer)
+    expect(await device(['codex', 'stop'], { dataDir, codexHome, stdin: codexStopInput(head), ask, codex: noCodex }))
+      .toEqual({ code: 0, out: [], err: [] })
+    expect(ask).toHaveBeenCalledTimes(asked)
   })
 
   it('codex with no verb, another verb or an extra word prints the usage and exits 1', async () => {
