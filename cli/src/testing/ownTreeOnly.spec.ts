@@ -93,6 +93,17 @@ vi.mock('node:child_process', async (importOriginal) => {
   return { ...real, execFileSync, spawnSync, execFile, default: { ...real, execFileSync, spawnSync, execFile } }
 })
 
+/** A path whose `stat` fails as one the account may not read does (EACCES), not as a missing one: none when empty. */
+const unreadable = vi.hoisted(() => ({ path: '' }))
+vi.mock('node:fs', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:fs')>()
+  const statSync = ((path: string, options?: object) => {
+    if (unreadable.path !== '' && path === unreadable.path) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })
+    return real.statSync(path, options)
+  }) as typeof real.statSync
+  return { ...real, statSync, default: { ...real, statSync } }
+})
+
 /** The made-up machine's pids, past any pid a real machine gives (macOS stops at 99998, Linux at 4194304). */
 const P = (n: number): number => 5_000_000 + n
 const LSTART = 'Mon Nov 23 10:00:00 2026'
@@ -143,6 +154,7 @@ beforeEach(() => {
   machine.runs = []
   machine.signals = []
   machine.tableFails = false
+  unreadable.path = ''
   const kill = process.kill.bind(process)
   // Signal 0 to a made-up pid: gone. Any other signal is noted and sent nowhere; none ever reaches a real process.
   vi.spyOn(process, 'kill').mockImplementation((pid: number, signal?: string | number) => {
@@ -304,6 +316,17 @@ describe("the daemon's close sweep", () => {
     expect(await endRootProcesses(root, new Map(), new Map(), 0)).toEqual([])
     expect(machine.signals).toEqual([[TESTS, 'SIGKILL']])
     expect(beyond([WORKER], [], [PERSONS, OTHERS, TESTS])).toEqual([])
+  })
+
+  it.runIf(FOLDERS)("ends the tree's matches, and no Codex app server, said once, when the root's birth time cannot be read", async () => {
+    const root = testRoot()
+    machine.rows = [made(VITEST, 1, VITEST, 'node vitest'), made(WORKER, VITEST, VITEST, 'node (vitest 1)'),
+      made(OWN_CALL, WORKER, VITEST, `tmux -S ${root}/tmux-501/default list-panes`), ...codexServers(root)]
+    unreadable.path = root
+    const said = vi.spyOn(console, 'error').mockImplementation(() => {})
+    expect(await endRootProcesses(root, new Map(), new Map(), 0)).toEqual([])
+    expect(machine.signals).toEqual([[OWN_CALL, 'SIGKILL']])
+    expect(said.mock.calls).toEqual([[`[e2e sweep] no birth time for ${root}: no Codex app server its pid files name is ended`]])
   })
 })
 
