@@ -4572,15 +4572,51 @@ describe('ObservedSource and a Codex on Windows after a restart', () => {
     expect(t.src.paneOf(agent.id, 'vscode')).toBe('term:421')
   })
 
-  it('two TUIs in its folder: on no app\'s page, never a guess', async () => {
-    const second = [win(410, 401, 6, 'pwsh.exe'), win(440, 410, 7, NODE, `"${NODE}" ${NPM}\\bin\\codex.js`), win(441, 440, 8, NATIVE)]
-    const t = windows([...vscodeTui(), daemon(421, 5), ...second], { 420: DIAL, 421: DIAL, 440: DIAL, 441: DIAL }, 430)
+  // Ken's VM, 2026-11-27 (#4663 step 10): two Codex TUIs in VS Code's terminals in one folder, the daemon restarted. Both
+  // sat on Other's page, and each turn's lookup put them there again.
+  const secondVscodeTui: Row[] = [win(410, 401, 6, 'pwsh.exe'), win(440, 410, 7, NODE, `"${NODE}" ${NPM}\\bin\\codex.js`),
+    win(441, 440, 8, NATIVE)]
+  const twoInVscodeFolders = { 420: DIAL, 421: DIAL, 440: DIAL, 441: DIAL }
+
+  it('two TUIs in its folder, both in VS Code: on VS Code\'s page with no tab, and a daemon\'s turn keeps it there', async () => {
+    const t = windows([...vscodeTui(), daemon(421, 5), ...secondVscodeTui], twoInVscodeFolders, 430)
+    await t.src.scanOpen()
+    const agent = t.src.list()[0]
+    expect(agent).toMatchObject({ sessionId: THREAD, app: 'vscode' })
+    expect(agent.appPending).toBeUndefined()
+    expect(t.src.paneOf(agent.id, 'vscode-tab')).toBeUndefined()
+    expect(t.src.paneOf(agent.id, 'vscode')).toBeUndefined()
+    expect(t.src.windowOf(agent.id)).toBeUndefined()
+    t.src.ingest(t.hook('turn-start'))
+    await t.settled()
+    expect(t.lookups).toHaveLength(2)
+    expect(t.src.list()[0].app).toBe('vscode')
+    expect(t.src.paneOf(agent.id, 'vscode-tab')).toBeUndefined()
+  })
+
+  it('two TUIs in its folder, once one quit: a daemon\'s turn puts it at the one left\'s terminal', async () => {
+    const rows = [...vscodeTui(), daemon(421, 5), ...secondVscodeTui]
+    const t = windows(rows, twoInVscodeFolders, 430)
+    await t.src.scanOpen()
+    const { id } = t.src.list()[0]
+    rows.splice(rows.findIndex((row) => row.pid === 410), secondVscodeTui.length)
+    t.src.ingest(t.hook('turn-start'))
+    await t.settled()
+    expect(t.src.list()[0].app).toBe('vscode')
+    expect(t.src.paneOf(id, 'vscode-tab')).toBe('client:420')
+    expect(t.src.windowOf(id)).toEqual({ pid: 420, app: 'vscode', outer: true })
+  })
+
+  it('two TUIs in its folder, one in VS Code and one in Windows Terminal: on no app\'s page, never a guess', async () => {
+    const t = windows([...vscodeTui(4), daemon(421, 9), ...terminalTui], { 420: DIAL, 421: DIAL, 520: DIAL, 521: DIAL }, 430)
     await t.src.scanOpen()
     const agent = t.src.list()[0]
     expect(agent).toMatchObject({ sessionId: THREAD, app: 'terminal' })
     expect(agent.appPending).toBeUndefined()
+    t.src.ingest(t.hook('turn-start'))
+    await t.settled()
+    expect(t.src.list()[0].app).toBe('terminal')
     expect(t.src.paneOf(agent.id, 'vscode-tab')).toBeUndefined()
-    expect(t.src.paneOf(agent.id, 'vscode')).toBeUndefined()
   })
 
   it('the daemon\'s parent is a TUI in Windows Terminal: VS Code\'s page, never the daemon\'s parents\'', async () => {
@@ -8035,6 +8071,68 @@ describe('ObservedSource and a Codex session its own server runs', () => {
     expect(t.lookup).toHaveBeenCalledTimes(3)
     await t.asks[2].answer([{ client: CLIENT }])
     expect(t.agent().app).toBe('terminal-app')
+  })
+
+  it('at its client\'s app with no tab, a tap brings that app forward, and each turn\'s start asks again until a tab is known', async () => {
+    const t = served()
+    t.src.ingest(t.codex('session-start'))
+    // Two TUIs in its folder, both in Terminal: the app is certain, the tab is not.
+    await t.asks[0].answer([{ client: { app: 'terminal-app' } }])
+    const { id } = t.agent()
+    expect(t.agent().app).toBe('terminal-app')
+    expect(t.src.tabTty(id)).toBeUndefined()
+    expect(t.src.windowOf(id)).toBeUndefined()
+    expect(await t.src.focus(t.agent(), latestTap)).toBe(true)
+    // The app alone: no pane of either TUI is raised.
+    expect(t.actions.open.mock.calls[0][1]).toEqual({ bundle: 'com.apple.Terminal' })
+    expect(t.src.paneOf(id, 'tabs')).toBeUndefined()
+    // Its words go by Codex's queue, never into a tab.
+    expect(await t.src.send(t.agent(), 'next')).toEqual({ ok: true })
+    expect(t.actions.codexQueue.send).toHaveBeenCalledTimes(1)
+    expect(t.actions.tabSelect).not.toHaveBeenCalled()
+    t.src.ingest(t.codex('turn-start'))
+    expect(t.lookup).toHaveBeenCalledTimes(2)
+    expect(t.agent().app).toBe('terminal-app')
+    // One of them quit: the one left is the client.
+    await t.asks[1].answer([{ client: CLIENT }])
+    expect(t.src.tabTty(id)).toBe('/dev/ttys005')
+    expect(t.src.windowOf(id)).toEqual({ pid: 500, app: 'terminal-app', outer: true })
+    t.src.ingest(t.codex('turn-start'))
+    expect(t.lookup).toHaveBeenCalledTimes(2)
+  })
+
+  it('at its client\'s app with no tab, it leaves that app at the next tick once one of its TUIs exited, as either may have been its client', async () => {
+    const t = served()
+    t.src.ingest(t.codex('session-start'))
+    await t.asks[0].answer([{ client: { app: 'terminal-app' }, clients: [{ pid: 500, generation: 'g500' }, { pid: 501, generation: 'g501' }] }])
+    // Both run: the app is still certain.
+    await t.src.tick()
+    expect(t.agent().app).toBe('terminal-app')
+    // One quit, the daemon runs on: had it been the session's, the session is in no app now.
+    t.gens.set(501, null)
+    await t.src.tick()
+    expect(t.src.list()).toHaveLength(1)
+    expect(t.agent().app).toBe('terminal')
+    expect(t.agent().appPending).toBeUndefined()
+    // Its next turn asks again, which finds the one left if it is its own.
+    t.src.ingest(t.codex('turn-start'))
+    expect(t.lookup).toHaveBeenCalledTimes(2)
+  })
+
+  it('at its client\'s app with no tab, it leaves that app once one of its TUIs exited and a later process took its pid', async () => {
+    const t = served()
+    t.src.ingest(t.codex('session-start'))
+    await t.asks[0].answer([{ client: { app: 'terminal-app' }, clients: [{ pid: 500, generation: 'g500' }, { pid: 501, generation: 'g501' }] }])
+    // Windows gives a freed pid to the next process soon: 501 is another program's now, started later.
+    t.gens.set(501, 'reused')
+    await t.src.tick()
+    expect(t.agent().app).toBe('terminal')
+    // A start the table could not read this time tells nothing: the one that runs keeps it there.
+    const kept = served()
+    kept.src.ingest(kept.codex('session-start'))
+    await kept.asks[0].answer([{ client: { app: 'terminal-app' }, clients: [{ pid: 500, generation: 'g500' }, { pid: 501 }] }])
+    await kept.src.tick()
+    expect(kept.agent().app).toBe('terminal-app')
   })
 
   it('a session whose client exited leaves that tab at the next tick, which holds a shell now: on no page until asked again', async () => {

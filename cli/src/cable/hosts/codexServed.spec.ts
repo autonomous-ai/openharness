@@ -90,7 +90,7 @@ describe('codexServed', () => {
       .toEqual([{ client: { app: 'terminal-app', tty: '/dev/ttys005', pid: 500 } }])
   })
 
-  it('never guesses: none in the folder, two there, or one whose parents name no app leaves the client unknown', async () => {
+  it('never guesses: none in the folder, two there in two apps, or one whose parents name no app leaves the client unknown', async () => {
     const tmux = [row(30, 1, '/opt/homebrew/bin/tmux'), row(31, 30, '-zsh'), row(800, 31, BREW, 'codex')]
     const d = deps([...TERMINAL_TUI, ...ITERM_TUI, ...tmux, row(900, 1, DAEMON_BIN, DAEMON_ARGS)], {
       500: { tty: 'ttys005', cwd: '/work/app' }, 600: { tty: 'ttys009', cwd: '/work/app' },
@@ -98,6 +98,26 @@ describe('codexServed', () => {
     })
     expect(await codexServed([{ pid: 900, cwd: '/work/app' }, { pid: 900, cwd: '/work/none' }, { pid: 900, cwd: '/work/tmux' },
       { pid: 900 }], d)).toEqual([{}, {}, {}, {}])
+  })
+
+  it('places a session at the app when every TUI on a terminal in its folder is in that one app, with no tab', async () => {
+    // Two Terminal tabs in one folder (Ken's VM, 2026-11-27, #4663 step 10): whichever is the client, it is in Terminal.
+    const secondTab = [row(13, 10, 'login'), row(14, 13, '-zsh'), { ...row(501, 14, BREW, 'codex'), generation: 'ps:1764230400000' }]
+    const d = deps([...TERMINAL_TUI, ...secondTab, row(900, 1, DAEMON_BIN, DAEMON_ARGS)],
+      { 500: { tty: 'ttys005', cwd: '/work/app' }, 501: { tty: 'ttys006', cwd: '/work/app' } })
+    // With both TUIs and the start the table read for each, so the session leaves Terminal's page once one of them exits,
+    // its pid then another process's or none (observed.ts tick).
+    expect(await codexServed([{ pid: 900, cwd: '/work/app' }], d)).toEqual(
+      [{ client: { app: 'terminal-app' }, clients: [{ pid: 500 }, { pid: 501, generation: 'ps:1764230400000' }] }])
+    // Both TUIs' apps in the one walk.
+    expect(d.apps.mock.calls.at(-1)![0]).toEqual([500, 501])
+  })
+
+  it('never takes the app of two TUIs when one of them names none: Terminal\'s beside one in tmux', async () => {
+    const tmux = [row(30, 1, '/opt/homebrew/bin/tmux'), row(31, 30, '-zsh'), row(800, 31, BREW, 'codex')]
+    const d = deps([...TERMINAL_TUI, ...tmux, row(900, 1, DAEMON_BIN, DAEMON_ARGS)],
+      { 500: { tty: 'ttys005', cwd: '/work/app' }, 800: { tty: 'ttys012', cwd: '/work/app' } })
+    expect(await codexServed([{ pid: 900, cwd: '/work/app' }], d)).toEqual([{}])
   })
 
   it('never guesses past a TUI whose folder could not be read: it may be a second one in the session\'s', async () => {
@@ -220,13 +240,15 @@ describe('codexServed on Windows', () => {
     expect(d.cwds.mock.calls).toEqual([[[420]]])
   })
 
-  it('its folder unread, none; two TUIs there, none, a `codex queue` among them', async () => {
+  it('its folder unread, none; two TUIs there in VS Code, VS Code with no tab; a `codex queue` among them, none', async () => {
     const unread = winDeps([...vscodeTui(), daemon(421, 5)], {})
     expect(await codexServed([{ pid: 430, cwd: 'C:\\work\\dial' }], unread)).toEqual([{}])
+    // Ken's VM, 2026-11-27 (#4663 step 10): two VS Code terminals in one folder. VS Code holds whichever is the client.
     const second = [win(410, 401, 6, 'pwsh.exe'), win(440, 410, 7, NODE, `"${NODE}" ${NPM}\\bin\\codex.js`), win(441, 440, 8, NATIVE)]
     const two = winDeps([...vscodeTui(), daemon(421, 5), ...second], { 420: 'C:\\work\\dial', 440: 'C:\\work\\dial' })
-    expect(await codexServed([{ pid: 430, cwd: 'C:\\work\\dial' }], two)).toEqual([{}])
-    // Harness's own `codex queue` has no terminal to tell it from a TUI on Windows: never a guess between them.
+    expect(await codexServed([{ pid: 430, cwd: 'C:\\work\\dial' }], two)).toEqual([{ client: { app: 'vscode' }, clients: [{ pid: 420 }, { pid: 440 }] }])
+    // Harness's own `codex queue` has no terminal to tell it from a TUI on Windows, and its parents name no app: never a
+    // guess between them.
     const queue = winDeps([...vscodeTui(), daemon(421, 5), win(450, 1, 6, NATIVE, `${NATIVE} queue --thread x`)],
       { 420: 'C:\\work\\dial', 450: 'C:\\work\\dial' })
     expect(await codexServed([{ pid: 430, cwd: 'C:\\work\\dial' }], queue)).toEqual([{}])

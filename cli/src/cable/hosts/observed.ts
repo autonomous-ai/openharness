@@ -13,7 +13,7 @@ import { roundDrawable } from '../roundGlyphs.js'
 import type { HostAdapter, Outer, Pane, Place } from './adapter.js'
 import { homeOf } from './claudeRenderer.js'
 import { CODEX_THREAD, type CodexQueue, type CodexQueueFailure, type CodexRan } from './codexQueue.js'
-import type { Served, ServedAsk } from './codexServed.js'
+import type { Served, ServedAsk, ServedClient } from './codexServed.js'
 import { agentPlaceName, APP_BUNDLES, detectApp, detectHost, EXTENSION_TAB, inOrca, otherProduct, ownHints, UNKNOWN_APP } from './hostDetect.js'
 import type { Delivery } from './inbox.js'
 import { answerEngine, type AnswerEngine } from './lastAnswer.js'
@@ -366,6 +366,9 @@ interface Entry {
    *  daemon, true for one), and the latest hook of that caller, placed by its hints should the lookup say no daemon (none
    *  for the scan's). While `is` is not false, no hint, tty or process of that caller places it. */
   served?: { pid: number; is?: boolean | null; hook?: ObservedHookEvent }
+  /** When several TUIs all in one app placed a Codex server's session at that app with no tab (Served.clients), their
+   *  processes: the tick takes it off that app once one of them exits, as that one may have been its client. */
+  servedClients?: readonly ServedClient[]
   /** What the permission prompt it waits on asks, from its hook (deviceClaude/asked.ts): '' when it names nothing. */
   asked?: string
   /** Each permission ask Codex hooked in this session, by its tool and line, oldest first (CODEX_ASKS_KEPT). */
@@ -396,6 +399,14 @@ interface Entry {
 export interface PaneName {
   title: string
   renamed: boolean
+}
+
+/** A Codex TUI still runs while the table holds its pid with the start it had then: Windows gives a freed pid to a later
+ *  process soon. A start the table could not read this time tells nothing, as the session's own does not (tick). */
+function running({ pid, generation }: ServedClient, table: ReadonlyMap<number, string | undefined>): boolean {
+  if (!table.has(pid)) return false
+  const now = table.get(pid)
+  return generation === undefined || now === undefined || now === generation
 }
 
 export class ObservedSource implements HostSource {
@@ -1232,7 +1243,8 @@ export class ObservedSource implements HostSource {
    * Terminal on no page). Asked once a caller, before any hint is read: until the answer the session is on no app's page,
    * as a guess could be the wrong one. A caller that is no server is placed by its hints then, and from then on at once.
    * A server's session is asked again at its start, as it may have been resumed in another TUI, and at a turn's while no
-   * client is known; it keeps its place until the answer. Only the latest ask's answer lands. An ask that could not read
+   * client is known, or only its app: several TUIs in one app, its tab comes once one is left (Ken's VM, 2026-11-27,
+   * #4663 step 10); it keeps its place until the answer. Only the latest ask's answer lands. An ask that could not read
    * the machine says nothing: a server's session keeps its place, and any other stays on no page until its next hook
    * asks again, as the hints of a daemon's hook are another session's, its tmux pane or Orca terminal among them.
    */
@@ -1242,7 +1254,7 @@ export class ObservedSource implements HostSource {
     const same = last?.pid === e.callerPid
     if (same && last.is === false) return false
     const again = same && (last.is === null
-      || (last.is === true && (e.event === 'session-start' || (e.event === 'turn-start' && !entry.outer))))
+      || (last.is === true && (e.event === 'session-start' || (e.event === 'turn-start' && entry.outer?.pid === undefined))))
     if (same && !again) last.hook = e
     else {
       const ask: ServedState = { pid: e.callerPid, ...(same && last.is ? { is: true } : {}), hook: e }
@@ -1271,6 +1283,7 @@ export class ObservedSource implements HostSource {
     a.host = detectHost(entry.hints)
     if (entry.served!.is) return true
     entry.outer = undefined
+    entry.servedClients = undefined
     entry.tty = undefined
     entry.bundle = undefined
     a.app = UNKNOWN_APP
@@ -1294,9 +1307,11 @@ export class ObservedSource implements HostSource {
     this.emit()
   }
 
-  /** A Codex server's session at its client: that TUI's app, tab and process, or no app's page when none is known. */
-  private placeServed(entry: Entry, { client }: Served): void {
+  /** A Codex server's session at its client: that TUI's app, tab and process, or that app alone for several TUIs there,
+   *  or no app's page when none is known. */
+  private placeServed(entry: Entry, { client, clients }: Served): void {
     entry.outer = client
+    entry.servedClients = clients
     entry.tty = client?.tty
     entry.agent.app = client?.app ?? UNKNOWN_APP
     delete entry.agent.appPending
@@ -2171,19 +2186,22 @@ export class ObservedSource implements HostSource {
 
   /** Removals: ended sessions, dead or reused pids, and sessions with no generation silent for 12 h; and a Codex daemon's
    *  session whose client exited leaves that client's tab, which holds a shell or another program now, for no page until
-   *  it is asked again (askServed), as the daemon runs on. Called every 30 s by the owner. */
+   *  it is asked again (askServed), as the daemon runs on. One placed at an app by several TUIs there leaves that app
+   *  once one of them exited, as that one may have been its client (Entry.servedClients). Called every 30 s by the
+   *  owner. */
   async tick(): Promise<void> {
     if (!this.entries.size) return
     // Only the sessions known as the read begins, each in the process it ran in then, and at the client it had then: one
     // first heard of, brought back in a new process (ingest) or at a client found while `ps` runs may have a process it
     // did not see.
-    const judged = [...this.entries].map(([id, e]) => [id, e, e.pid, e.outer] as const)
+    const judged = [...this.entries].map(([id, e]) =>
+      [id, e, e.pid, e.outer, e.outer?.pid !== undefined ? [{ pid: e.outer.pid }] : e.servedClients ?? []] as const)
     // One read of the machine's processes for every session: a `ps` each blocked the loop for seconds with 50 of them.
     // A table that cannot be read is empty: it always holds the process reading it.
     const table = new Map((await this.deps.processes()).map((p) => [p.pid, p.generation]))
     const now = this.deps.now()
     let changed = false
-    for (const [id, e, pid, outer] of judged) {
+    for (const [id, e, pid, outer, clients] of judged) {
       if (this.entries.get(id) !== e || e.pid !== pid) continue
       // Its process's generation, noted at the first look that sees it.
       const gen = table.get(e.pid)
@@ -2195,7 +2213,7 @@ export class ObservedSource implements HostSource {
       // No generation to tell a reused pid by: running, and heard from in the last 12 h.
       else gone = !this.deps.alive(e.pid) || now - e.agent.lastActivityAt >= NO_GENERATION_TTL_MS
       if (gone) { this.remove(e); changed = true }
-      else if (outer?.pid !== undefined && e.outer === outer && this.servedBy(e) && table.size && !table.has(outer.pid)) {
+      else if (outer && e.outer === outer && this.servedBy(e) && table.size && clients.some((client) => !running(client, table))) {
         this.placeServed(e, {})
         changed = true
       }
