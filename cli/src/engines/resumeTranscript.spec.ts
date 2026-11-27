@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import * as fs from 'node:fs'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import * as zlib from 'node:zlib'
 import { materializeResumeTranscript } from './resumeTranscript.js'
 import { controlTranscriptEvidence } from './transcriptBindings.js'
+
+// Spy-able, for a removal that fails.
+vi.mock('node:fs', async (original) => ({ ...await original<object>() }))
 
 const zstd = zlib as typeof zlib & { zstdCompressSync: (value: Buffer | string) => Buffer }
 const id = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa'
@@ -18,6 +22,14 @@ const archive = (text = history(), at = path) => {
 }
 const restore = (current = () => true, limits?: { timeoutMs: number; maxBytes: number }) =>
   materializeResumeTranscript('codex', id, path, home, current, limits)
+/** What Windows answers to the removal of a file another program still holds, for the restore's temporary. */
+const heldTemporary = () => {
+  const rm = fs.rmSync, unlink = fs.unlinkSync
+  const held = (path: unknown) => String(path).includes('.harness-restore-')
+  const busy = () => Object.assign(new Error('EBUSY: fixture'), { code: 'EBUSY' })
+  vi.spyOn(fs, 'rmSync').mockImplementation((path, options) => { if (held(path)) throw busy(); rm(path, options) })
+  vi.spyOn(fs, 'unlinkSync').mockImplementation((path) => { if (held(path)) throw busy(); unlink(path) })
+}
 const noTemporary = () => expect(readdirSync(dirname(path)).filter(name => name.startsWith('.harness-restore-'))).toEqual([])
 beforeEach(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), 'resume-compressed-')))
@@ -99,6 +111,19 @@ it.each(['invalid', 'truncated'] as const)('never publishes a %s archive or leak
   expect(existsSync(path)).toBe(false)
   expect(readFileSync(path + '.zst')).toEqual(bytes)
   noTemporary()
+})
+
+it('answers a failed publication as unavailable, not with the failed removal of its temporary', async () => {
+  vi.spyOn(fs, 'linkSync').mockImplementation(() => { throw Object.assign(new Error('EACCES: fixture'), { code: 'EACCES' }) })
+  heldTemporary()
+  await expect(restore()).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE', message: expect.stringContaining('retained') })
+  expect(existsSync(path)).toBe(false)
+})
+
+it('restores the history when the removal of its temporary fails', async () => {
+  heldTemporary()
+  expect(await restore()).toBe(path)
+  expect(readFileSync(path, 'utf8')).toBe(history())
 })
 
 it('refuses a destination outside the declared profile', async () => {

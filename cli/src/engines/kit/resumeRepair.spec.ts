@@ -383,6 +383,31 @@ describe('the bounds of a resume preparation', () => {
     expect(readdirSync(folder)).toEqual([file.split('/').at(-1)])
   }
 
+  /** What Windows answers to the removal of a file another program still holds, for the repair's backup and copy. */
+  const heldCopies = () => {
+    const rm = fs.rmSync, unlink = fs.unlinkSync
+    const held = (path: unknown) => String(path).includes('.reasoning-')
+    const busy = () => Object.assign(new Error('EBUSY: fixture'), { code: 'EBUSY' })
+    vi.spyOn(fs, 'rmSync').mockImplementation((path, options) => { if (held(path)) throw busy(); rm(path, options) })
+    vi.spyOn(fs, 'unlinkSync').mockImplementation((path) => { if (held(path)) throw busy(); unlink(path) })
+  }
+
+  it('throws the error that stopped the repair, not the one of its copies\' removal', async () => {
+    const original = rollout()
+    writeFileSync(file, original)
+    const denied = Object.assign(new Error('EACCES: fixture'), { code: 'EACCES' })
+    vi.spyOn(fs, 'fsync').mockImplementation(((_fd: number, done: (error: NodeJS.ErrnoException | null) => void) => { done(denied) }) as typeof fs.fsync)
+    heldCopies()
+    await expect(repair()).rejects.toBe(denied)
+    expect(readFileSync(file, 'utf8')).toBe(original)
+  })
+
+  it('repairs the history when the removal of its copy fails', async () => {
+    writeFileSync(file, rollout())
+    heldCopies()
+    expect(await repair()).toMatchObject({ repairedItems: 1, backupPath: expect.stringContaining('.reasoning-backup-') })
+  })
+
   it('reads none of a history larger than it reads', async () => {
     const original = rollout()
     writeFileSync(file, original)
