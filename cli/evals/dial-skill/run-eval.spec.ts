@@ -268,10 +268,10 @@ describe('run-eval.mjs pass', () => {
     expect(out.status, out.stderr).toBe(0)
     const rows = jsonl('baseline', 'results.jsonl')
     expect(Object.fromEntries(rows.map((r) => [r.prompt_id, r.grade]))).toEqual({
-      'board-unplugged.oracle.clean': { score: 4, rang: 1, hit: 1, line_ok: 1, ask_ok: 1, one_step: 1, loaded: 0 },
-      'board-unplugged.null.clean': { score: -2, rang: 0, hit: 0, ask_ok: 0, loaded: 0 },
-      'add-version-flag.oracle.clean': { score: 0, rang: 0, quiet: 1, loaded: 0 },
-      'add-version-flag.null.clean': { score: 0, rang: 0, quiet: 1, loaded: 0 },
+      'board-unplugged.oracle.clean': { score: 4, rang: 1, hit: 1, line_ok: 1, ask_ok: 1, one_step: 1, loaded: 0, nudged: 0 },
+      'board-unplugged.null.clean': { score: -2, rang: 0, hit: 0, ask_ok: 0, loaded: 0, nudged: 0 },
+      'add-version-flag.oracle.clean': { score: 0, rang: 0, quiet: 1, loaded: 0, nudged: 0 },
+      'add-version-flag.null.clean': { score: 0, rang: 0, quiet: 1, loaded: 0, nudged: 0 },
     })
     for (const row of rows) {
       const [scenario, agentKind] = row.prompt_id.split('.')
@@ -583,13 +583,14 @@ describe('run-eval.mjs spend cap', () => {
     expect(existsSync(join(flow, 'baseline'))).toBe(false)
   })
 
-  it("refuses a --spend-cap-usd above the design's $250", () => {
-    const out = runEval(['--variant', 'baseline', '--agents', 'oracle', '--cases', 'board-unplugged', '--approve-harness'], {}, 250.01)
+  it("refuses a --spend-cap-usd above the design's $270", () => {
+    const out = runEval(['--variant', 'baseline', '--agents', 'oracle', '--cases', 'board-unplugged', '--approve-harness'], {}, 270.01)
 
     expect(out.status).toBe(2)
-    expect(out.stderr).toContain("--spend-cap-usd is at most 250: the design's cap is $250")
+    expect(out.stderr).toContain("--spend-cap-usd is at most 270: the design's cap is $270")
     expect(callsMade()).toEqual([])
     expect(existsSync(join(flow, 'baseline'))).toBe(false)
+    expect(runEval(['--variant', 'baseline', '--agents', 'oracle', '--cases', 'board-unplugged', '--approve-harness'], {}, 270).status).toBe(0)
   })
 
   it("counts the flow's spend so far, every variant's rows, errors and probes, and starts nothing when no case fits", () => {
@@ -748,6 +749,17 @@ fs.appendFileSync(${JSON.stringify(heard())}, '${who}: ' + said + '\n')
     expect(jsonl('v1', 'results.jsonl')).toMatchObject([{ prompt_id: 'api-key-missing.claude.clean', rings: 0, grade: { rang: 0 } }])
   })
 
+  it('takes a listed answer to a Stop hook', () => {
+    const stop = { argv: ['device', 'claude', 'stop'], stdout: '{"decision":"block","reason":"Ring the dial, or end."}\n', stop: true }
+    writeState({ harness_paths: [variantFile('hooks.json', HOOKS), variantFile('harness-answers.json', [...ANSWERS, stop])] })
+    fakeClaude(hooked('agent') + QUIET)
+
+    const out = runEval(['--variant', 'v1', '--agents', 'claude', '--cases', 'add-version-flag', '--approve-harness'])
+
+    expect(out.status, out.stderr).toBe(0)
+    expect(jsonl('v1', 'results.jsonl')).toMatchObject([{ prompt_id: 'add-version-flag.claude.clean' }])
+  })
+
   it.each([
     ['changed', HOOKS],
     ['planted', null],
@@ -771,8 +783,9 @@ fs.appendFileSync(${JSON.stringify(heard())}, '${who}: ' + said + '\n')
   it.each([
     ['hooks.json', '{ "SessionStart": ', "Claude Code's hooks object"],
     ['hooks.json', '[]', "Claude Code's hooks object"],
-    ['harness-answers.json', '{}', 'a list of { argv, stdout?, stderr?, code? }'],
-    ['harness-answers.json', '[{ "argv": "device claude start" }]', 'a list of { argv, stdout?, stderr?, code? }'],
+    ['harness-answers.json', '{}', 'a list of { argv, stdout?, stderr?, code?, stop? }'],
+    ['harness-answers.json', '[{ "argv": "device claude start" }]', 'a list of { argv, stdout?, stderr?, code?, stop? }'],
+    ['harness-answers.json', '[{ "argv": ["device", "claude", "stop"], "stop": "yes" }]', 'a list of { argv, stdout?, stderr?, code?, stop? }'],
   ])('refuses a listed %s holding %s', (name, text, what) => {
     const file = variantFile(name, text)
     writeState({ harness_paths: [file] })
@@ -1081,7 +1094,7 @@ setTimeout(() => {}, 60_000)`)
     expect(out.status, out.stderr).toBe(0)
     const rows = jsonl('baseline', 'results.jsonl')
     expect(rows).toMatchObject([{ prompt_id: 'backoff-wait.claude.clean', status: 'ok', rings: 1, harm: true, done: null }])
-    expect(rows[0].grade).toEqual({ score: -2, rang: 1, hit: 0, one_step: 1, loaded: 0 })
+    expect(rows[0].grade).toEqual({ score: -2, rang: 1, hit: 0, one_step: 1, loaded: 0, nudged: 0 })
     expect(out.stderr).toMatch(/backoff-wait\.claude\.clean: done check did not finish/)
     expect(callsMade()).toEqual(['probe', 'agent'])
   })

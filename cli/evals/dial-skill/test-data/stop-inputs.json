@@ -1,0 +1,133 @@
+[
+  {
+    "name": "stop_hook_active true",
+    "input": {
+      "session_id": "3f9c2a10-7d4e-4b8a-9c61-0e5b2d7f8a43",
+      "cwd": "/work/orders",
+      "hook_event_name": "Stop",
+      "stop_hook_active": true,
+      "last_assistant_message": "Which database should the export use?"
+    },
+    "asks": false
+  },
+  {
+    "name": "no message",
+    "input": {
+      "session_id": "3f9c2a10-7d4e-4b8a-9c61-0e5b2d7f8a43",
+      "cwd": "/work/orders",
+      "hook_event_name": "Stop",
+      "stop_hook_active": false
+    },
+    "asks": false
+  },
+  {
+    "name": "an empty message",
+    "input": {
+      "session_id": "3f9c2a10-7d4e-4b8a-9c61-0e5b2d7f8a43",
+      "cwd": "/work/orders",
+      "hook_event_name": "Stop",
+      "stop_hook_active": false,
+      "last_assistant_message": ""
+    },
+    "asks": false
+  },
+  {
+    "name": "a number",
+    "input": {
+      "session_id": "3f9c2a10-7d4e-4b8a-9c61-0e5b2d7f8a43",
+      "cwd": "/work/orders",
+      "hook_event_name": "Stop",
+      "stop_hook_active": false,
+      "last_assistant_message": 42
+    },
+    "asks": false
+  },
+  {
+    "name": "? last",
+    "input": {
+      "session_id": "3f9c2a10-7d4e-4b8a-9c61-0e5b2d7f8a43",
+      "cwd": "/work/orders",
+      "hook_event_name": "Stop",
+      "stop_hook_active": false,
+      "last_assistant_message": "Which database should the export use?"
+    },
+    "asks": true
+  },
+  {
+    "name": "? exactly 400 code points from the end",
+    "input": {
+      "session_id": "3f9c2a10-7d4e-4b8a-9c61-0e5b2d7f8a43",
+      "cwd": "/work/orders",
+      "hook_event_name": "Stop",
+      "stop_hook_active": false,
+      "last_assistant_message": "Ready?xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    "asks": true
+  },
+  {
+    "name": "? at 401 code points from the end",
+    "input": {
+      "session_id": "3f9c2a10-7d4e-4b8a-9c61-0e5b2d7f8a43",
+      "cwd": "/work/orders",
+      "hook_event_name": "Stop",
+      "stop_hook_active": false,
+      "last_assistant_message": "Ready?xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    "asks": false
+  },
+  {
+    "name": "full-width ？ last",
+    "input": {
+      "session_id": "3f9c2a10-7d4e-4b8a-9c61-0e5b2d7f8a43",
+      "cwd": "/work/orders",
+      "hook_event_name": "Stop",
+      "stop_hook_active": false,
+      "last_assistant_message": "Which database should the export use？"
+    },
+    "asks": true
+  },
+  {
+    "name": "an emoji pair in the tail counted as one code point",
+    "input": {
+      "session_id": "3f9c2a10-7d4e-4b8a-9c61-0e5b2d7f8a43",
+      "cwd": "/work/orders",
+      "hook_event_name": "Stop",
+      "stop_hook_active": false,
+      "last_assistant_message": "Ready?xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx😀"
+    },
+    "asks": true
+  },
+  {
+    "name": "a tail with user?.name",
+    "input": {
+      "session_id": "3f9c2a10-7d4e-4b8a-9c61-0e5b2d7f8a43",
+      "cwd": "/work/orders",
+      "hook_event_name": "Stop",
+      "stop_hook_active": false,
+      "last_assistant_message": "Done: the greeting now reads user?.name, so a missing user shows no name."
+    },
+    "asks": true
+  },
+  {
+    "name": "Vietnamese, no question",
+    "input": {
+      "session_id": "3f9c2a10-7d4e-4b8a-9c61-0e5b2d7f8a43",
+      "cwd": "/work/orders",
+      "hook_event_name": "Stop",
+      "stop_hook_active": false,
+      "last_assistant_message": "Đã xong, không cần gì thêm."
+    },
+    "asks": false
+  },
+  {
+    "name": "Chinese, full-width ？ last",
+    "input": {
+      "session_id": "3f9c2a10-7d4e-4b8a-9c61-0e5b2d7f8a43",
+      "cwd": "/work/orders",
+      "hook_event_name": "Stop",
+      "stop_hook_active": false,
+      "last_assistant_message": "要用哪个数据库？"
+    },
+    "asks": true
+  }
+]

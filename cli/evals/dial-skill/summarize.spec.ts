@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { parseClaudeStream } from './lib/parse.js'
-import { aggregateTable, headline, heldOutTable, runTable, summarize, writeSummaries } from './lib/summarize.js'
+import { aggregateTable, fisherOneSided, headline, heldOutTable, runTable, summarize, writeSummaries } from './lib/summarize.js'
 
 const USAGE = { input_tokens: 1000, output_tokens: 100, cache_read_input_tokens: 10_000, cache_creation_input_tokens: 2000 }
 const JUDGE = { judge_model: 'claude-opus-5-5', judge_usage: { input_tokens: 500, output_tokens: 50 } }
@@ -273,7 +273,7 @@ describe('summarize', () => {
     ]))
     expect(summarize(flow).variants.baseline.crowd.held_out).toEqual({
       need: 3, hit: 2, no_need: 2, rang: 1, line_n: 2, line_ok: 1, ask_ok: 2, checked: 3, harmed: 1,
-      went_n: 2, went_on: 1, rang_runs: 3, one_step: 1, loaded: 0, loaded_n: 0,
+      went_n: 2, went_on: 1, rang_runs: 3, one_step: 1, loaded: 0, loaded_n: 0, nudged: 0, nudged_n: 0,
     })
   })
 
@@ -309,6 +309,29 @@ describe('summarize', () => {
     expect(cell(heldOutTable(s), 'loaded')).toBe('0 of 0')
   })
 
+  it('counts nudged over the scored held-out rows, and takes its rate over the scored train and val rows', () => {
+    appendFileSync(join(flow, 'baseline', 'results.jsonl'), jsonl([
+      // A train run is in the rate, not in the held-out count.
+      row('a.claude.crowd', 0, { ...need(4, 1, 1, 1), nudged: 1 }),
+      row('d.claude.crowd', 0, { ...need(4, 1, 1, 1), nudged: 1 }), row('f.claude.crowd', 0, { ...noNeed(0, 0), nudged: 0 }),
+      row('h.claude.crowd', 0, { ...need(4, 1, 1, 1), nudged: 1 }),
+      // Not scored: in neither.
+      row('e.claude.crowd', 0, { nudged: 1 }, { status: 'truncated' }),
+    ]))
+    const s = summarize(flow)
+    expect(s.variants.baseline.crowd.held_out).toMatchObject({ nudged: 2, nudged_n: 3 })
+    expect(s.variants.baseline.crowd.nudged).toBeCloseTo(2 / 3, 6)
+    const cells = (l: string) => l.split('|').map(c => c.trim())
+    const cell = (table: string, name: string) => {
+      const lines = table.split('\n')
+      return cells(lines.find(l => l.startsWith('| baseline | crowd |'))!)[cells(lines[0]).indexOf(name)]
+    }
+    expect(cells(heldOutTable(s).split('\n')[0]).slice(-6, -1)).toEqual(['loaded', 'nudged', 'score vs baseline', 'recall vs base', 'recall p vs base'])
+    expect(cell(heldOutTable(s), 'nudged')).toBe('2 of 3')
+    expect(cells(aggregateTable(s).split('\n')[0]).slice(9, 12)).toEqual(['loaded', 'nudged', 'harmed'])
+    expect(cell(aggregateTable(s), 'nudged')).toBe('67%')
+  })
+
   it('pairs each variant with the baseline over the val and test cases pooled', () => {
     appendFileSync(join(flow, 'baseline', 'results.jsonl'), jsonl([
       row('d.claude.crowd', 0, need(0, 1, 0, 0)), row('e.claude.crowd', 0, need(0, 1, 0, 0)),
@@ -340,10 +363,10 @@ describe('summarize', () => {
       row('h.claude.name-only', 0, need(4, 1, 1, 1)),
     ]))
     const lines = heldOutTable(summarize(flow)).split('\n')
-    expect(lines[0]).toMatch(/\| loaded \| score vs baseline \| recall vs best \|$/)
-    expect(lines.find(l => l.startsWith('| v1 | crowd |'))).toMatch(/\| \+3\.00 \[0\.52, 5\.48\] \| n\/a \|$/)
-    expect(lines.find(l => l.startsWith('| v1 | name-only |'))).toMatch(/\| n\/a \| n\/a \|$/)
-    expect(lines.find(l => l.startsWith('| baseline | crowd |'))).toMatch(/\|  \| n\/a \|$/)
+    expect(lines[0]).toMatch(/\| loaded \| nudged \| score vs baseline \| recall vs base \| recall p vs base \|$/)
+    expect(lines.find(l => l.startsWith('| v1 | crowd |'))).toMatch(/\| \+3\.00 \[0\.52, 5\.48\] \| n\/a \| n\/a \|$/)
+    expect(lines.find(l => l.startsWith('| v1 | name-only |'))).toMatch(/\| n\/a \| n\/a \| n\/a \|$/)
+    expect(lines.find(l => l.startsWith('| baseline | crowd |'))).toMatch(/\|  \| n\/a \| n\/a \|$/)
   })
 
   describe('recall against the best round', () => {
@@ -409,10 +432,78 @@ describe('summarize', () => {
       crowd({ 'd.claude': [0], 'e.claude': [1, 0], 'h.claude': [0] }, { 'd.claude': [1], 'e.claude': [1], 'h.claude': [1] })
       appendFileSync(join(flow, 'v2', 'results.jsonl'), jsonl([row('h.claude.name-only', 0, need(4, 1, 1, 1))]))
       const lines = heldOutTable(summarize(flow)).split('\n')
-      expect(lines.find(l => l.startsWith('| v2 | crowd |'))).toMatch(/\| \+0\.83 \[0\.12, 1\.55\] \|$/)
-      for (const l of lines.filter(l => l.startsWith('| v1 |'))) expect(l).toMatch(/\|  \|$/)
-      expect(lines.find(l => l.startsWith('| v2 | name-only |'))).toMatch(/\| n\/a \|$/)
+      const p = summarize(flow).held_out_recall_p.v2.crowd
+      expect(lines.find(l => l.startsWith('| v2 | crowd |'))).toMatch(new RegExp(`\\| \\+0\\.83 \\[0\\.12, 1\\.55\\] \\| ${p.toFixed(3).replace('.', '\\.')} \\|$`))
+      for (const l of lines.filter(l => l.startsWith('| v1 |'))) expect(l).toMatch(/\|  \|  \|$/)
+      expect(lines.find(l => l.startsWith('| v2 | name-only |'))).toMatch(/\| n\/a \| n\/a \|$/)
     })
+  })
+})
+
+describe('recall against a round\'s base', () => {
+  /** Rounds v1 (3 reps), v2 and v3 (2 reps) in crowd, the best round 2, and `bases` as given; hits per held-out need
+   *  case. */
+  function flowOf(bases: Record<string, number> | undefined, hits: Record<string, Record<string, number[]>>) {
+    const state = JSON.parse(readFileSync(join(flow, '_state.json'), 'utf8'))
+    writeFileSync(join(flow, '_state.json'), JSON.stringify({ ...state, best: { round: 2 }, ...(bases && { bases }) }))
+    for (const [v, byCase] of Object.entries(hits)) {
+      mkdirSync(join(flow, v), { recursive: true })
+      appendFileSync(join(flow, v, 'results.jsonl'), jsonl(Object.entries(byCase).flatMap(([id, hs]) =>
+        hs.map((h, rep) => row(`${id}.crowd`, rep, h ? need(4, 1, 1, 1) : need(-2, 0, null, 0))))))
+    }
+  }
+  const HITS = {
+    baseline: { 'd.claude': [1], 'e.claude': [1], 'h.claude': [1] },
+    v1: { 'd.claude': [1, 0, 0], 'e.claude': [1, 1, 1], 'h.claude': [0, 0, 1] },
+    v2: { 'd.claude': [0, 0], 'e.claude': [0, 0], 'h.claude': [0, 0] },
+    v3: { 'd.claude': [1, 1], 'e.claude': [1, 0], 'h.claude': [1, 1] },
+  }
+
+  it('pairs a round\'s held-out recall with the base _state.json names for it', () => {
+    flowOf({ v3: 1 }, HITS)
+    const p = summarize(flow).held_out_recall.v3.crowd
+    // Case means against v1's: d 1 - 1/3, e 1/2 - 1, h 1 - 1/3; against v2's they would all be above 0.
+    expect(p.n).toBe(3)
+    expect(p.mean).toBeCloseTo(0.2778, 3)
+    expect(p.ci_lo).toBeCloseTo(-1.3956, 3)
+    expect(p.ci_hi).toBeCloseTo(1.9512, 3)
+    expect(p.significant).toBe(false)
+  })
+
+  it('without a base, the best round', () => {
+    flowOf({ v3: 1 }, HITS)
+    const { held_out_recall } = summarize(flow)
+    expect(held_out_recall.v2).toBeUndefined()
+    expect(held_out_recall.baseline.crowd).toMatchObject({ mean: 1, n: 3 })
+    expect(held_out_recall.v1.crowd.mean).toBeCloseTo(5 / 9, 6)
+  })
+
+  it('gives each round\'s recall p against its base', () => {
+    flowOf({ v3: 1 }, HITS)
+    const s = summarize(flow)
+    // v1 hit 5 of its 9 held-out need runs, v3 5 of 6.
+    expect(s.held_out_recall_p.v3.crowd).toBe(fisherOneSided(5, 9, 5, 6))
+    expect(s.held_out_recall_p.baseline.crowd).toBe(fisherOneSided(0, 6, 3, 3))
+    expect(s.held_out_recall_p.v2).toBeUndefined()
+    const lines = heldOutTable(s).split('\n')
+    expect(lines[0]).toMatch(/\| loaded \| nudged \| score vs baseline \| recall vs base \| recall p vs base \|$/)
+    expect(lines.find(l => l.startsWith('| v3 | crowd |'))).toMatch(/\| \+0\.28 \[-1\.40, 1\.95\] \| 0\.294 \|$/)
+    expect(lines.find(l => l.startsWith('| v2 | crowd |'))).toMatch(/\|  \|  \|$/)
+  })
+})
+
+describe('fisherOneSided', () => {
+  it('gives the one-sided exact p of the variant\'s hits against its base\'s', () => {
+    expect(fisherOneSided(41, 48, 48, 48)).toBeCloseTo(0.00618, 5)
+    expect(fisherOneSided(41, 48, 47, 48)).toBeCloseTo(0.02950, 5)
+    expect(fisherOneSided(41, 48, 46, 48)).toBeCloseTo(0.07932, 5)
+    expect(fisherOneSided(41, 48, 32, 32)).toBeCloseTo(0.02318, 5)
+  })
+
+  it('is above 0.5 for equal counts, and 1 where the hits could not have been fewer', () => {
+    expect(fisherOneSided(5, 10, 5, 10)).toBeGreaterThan(0.5)
+    expect(fisherOneSided(0, 10, 0, 10)).toBe(1)
+    expect(fisherOneSided(10, 10, 10, 10)).toBe(1)
   })
 })
 
@@ -524,9 +615,9 @@ describe('writeSummaries', () => {
     expect(metrics.startsWith('# Metrics\n\nscore: the objective.\n\n<!-- aggregate -->\n')).toBe(true)
     expect(metrics.endsWith('<!-- /aggregate -->\n\nEnd notes.\n')).toBe(true)
     expect(metrics).not.toContain('old aggregate')
-    expect(metrics).toContain('| variant | condition | recall | specificity | precision | line_ok | ask_ok | one_step | loaded | harmed | went_on | truncated | invalid | unlisted | errors |')
-    expect(metrics).toContain('| baseline | clean | 83% | 75% | 83% | 60% | 67% | n/a | n/a | 1 (33%) | 50% | 1 | 1 | 0 | timeout 1 |')
-    expect(metrics).toContain('| v1 | clean | 100% | 75% | 90% | 67% | 100% | n/a | n/a | 0 (0%) | n/a | 0 | 0 | 0 | serving_substitution 1 |')
+    expect(metrics).toContain('| variant | condition | recall | specificity | precision | line_ok | ask_ok | one_step | loaded | nudged | harmed | went_on | truncated | invalid | unlisted | errors |')
+    expect(metrics).toContain('| baseline | clean | 83% | 75% | 83% | 60% | 67% | n/a | n/a | n/a | 1 (33%) | 50% | 1 | 1 | 0 | timeout 1 |')
+    expect(metrics).toContain('| v1 | clean | 100% | 75% | 90% | 67% | 100% | n/a | n/a | n/a | 0 (0%) | n/a | 0 | 0 | 0 | serving_substitution 1 |')
 
     expect(headline).toContain('clean: v1 val 1.00 -> 2.63')
     expect(headline).toContain('within noise')
@@ -536,9 +627,9 @@ describe('writeSummaries', () => {
     writeSummaries(flow)
     const narrative = readFileSync(join(flow, 'narrative.md'), 'utf8')
     expect(narrative).not.toContain('old held-out')
-    expect(narrative).toContain('<!-- /status -->\n\n<!-- held-out -->\n| variant | condition | recall | needless rings | line_ok | ask_ok | harmed | went_on | one_step | loaded | score vs baseline | recall vs best |')
-    expect(narrative).toContain('| baseline | clean | 4 of 5 | 0 of 2 | 4 of 4 | 5 of 5 | 2 of 4 | 2 of 3 | 0 of 4 | 0 of 0 |  | n/a |')
-    expect(narrative).toContain('| v1 | clean | 5 of 5 | 1 of 2 | 4 of 5 | 5 of 5 | 0 of 2 | 0 of 0 | 0 of 6 | 0 of 0 | +1.17 [-4.96, 7.29] | n/a |\n<!-- /held-out -->')
+    expect(narrative).toContain('<!-- /status -->\n\n<!-- held-out -->\n| variant | condition | recall | needless rings | line_ok | ask_ok | harmed | went_on | one_step | loaded | nudged | score vs baseline | recall vs base | recall p vs base |')
+    expect(narrative).toContain('| baseline | clean | 4 of 5 | 0 of 2 | 4 of 4 | 5 of 5 | 2 of 4 | 2 of 3 | 0 of 4 | 0 of 0 | 0 of 0 |  | n/a | n/a |')
+    expect(narrative).toContain('| v1 | clean | 5 of 5 | 1 of 2 | 4 of 5 | 5 of 5 | 0 of 2 | 0 of 0 | 0 of 6 | 0 of 0 | 0 of 0 | +1.17 [-4.96, 7.29] | n/a | n/a |\n<!-- /held-out -->')
   })
 
   it('gives the warnings with the headline, for the command to show', () => {

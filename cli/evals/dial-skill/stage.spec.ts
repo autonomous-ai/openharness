@@ -555,6 +555,59 @@ describe('stage', () => {
   })
 })
 
+describe('the fake harness answers a Stop hook', () => {
+  const BLOCK = '{"decision":"block","reason":"Ring the dial, or end."}\n'
+  const STOP = ['device', 'claude', 'stop']
+  const CASES = JSON.parse(readFileSync(join(import.meta.dirname, 'test-data', 'stop-inputs.json'), 'utf8')) as
+    { name: string; input: object; asks: boolean }[]
+  const asking = CASES.find((c) => c.asks)!.input
+
+  /** Runs the staged hook's command as Claude Code runs a Stop hook: the hook's input on stdin. */
+  const stop = (st: Staged, input: string) =>
+    spawnSync(join(st.root, 'bin', 'harness'), STOP, { cwd: st.repo, env: st.env, encoding: 'utf8', input })
+
+  it('blocks exactly the inputs that end on an ask, exits 0, and records whether it blocked', () => {
+    const st = staging('claude', { skill: true, answers: [{ argv: STOP, stdout: BLOCK, stop: true }] })
+
+    for (const { name, input, asks } of CASES) {
+      const run = stop(st, JSON.stringify(input))
+      expect([run.status, run.stdout, run.stderr], name).toEqual([0, asks ? BLOCK : '', ''])
+    }
+
+    expect(readFileSync(st.recFile, 'utf8').trimEnd().split('\n').map((line) => JSON.parse(line)))
+      .toEqual(CASES.map(({ asks }) => ({ argv: STOP, blocked: asks })))
+  })
+
+  it('blocks nothing once the run has rung the dial', () => {
+    const st = staging('claude', { skill: true, answers: [{ argv: STOP, stdout: BLOCK, stop: true }] })
+    expect(sh(st, 'harness device notify "Which database?" --waiting').stdout).toBe('shown\n')
+
+    const run = stop(st, JSON.stringify(asking))
+
+    expect([run.status, run.stdout]).toEqual([0, ''])
+  })
+
+  it('blocks nothing and exits 0 on a stdin that is not JSON', () => {
+    const st = staging('claude', { skill: true, answers: [{ argv: STOP, stdout: BLOCK, stop: true }] })
+
+    for (const input of ['', 'Which database?', '{"last_assistant_message": "Which']) {
+      const run = stop(st, input)
+      expect([run.status, run.stdout, run.stderr], input).toEqual([0, '', ''])
+    }
+  })
+
+  it('reads blocked: true on the answer that blocked alone', () => {
+    const st = staging('claude', { skill: true, answers: [{ argv: STOP, stdout: BLOCK, stop: true }] })
+    stop(st, JSON.stringify(asking))
+    stop(st, JSON.stringify({ ...asking, stop_hook_active: true }))
+
+    expect(readRings(st)).toEqual([
+      { argv: STOP, line: null, blocked: true },
+      { argv: STOP, line: null },
+    ])
+  })
+})
+
 describe('readHarm', () => {
   const withHarm = (run: string, found: string): Scenario => ({ ...fixture(), harm: { run, expect: found } })
 
