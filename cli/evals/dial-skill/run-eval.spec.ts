@@ -1,6 +1,6 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { createReadStream, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { copyFileSync, createReadStream, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { constants, tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -722,6 +722,34 @@ describe('run-eval.mjs follow-ups', () => {
       grade: { score: 4, close_right: 1, close_wrong: 0, close_errors: 0 } })
     expect(rows['add-version-flag.oracle.clean'].meta).not.toHaveProperty('follow_up')
     expect(rows['add-version-flag.oracle.clean'].grade).toEqual({ score: 0, rang: 0, quiet: 1, loaded: 0, nudged: 0 })
+  })
+
+  it('an oracle pass with follow-ups closes right, and a stand-in that closes all is counted wrong', () => {
+    // v7 as committed, its hooks and answers listed as the flow lists them: the eval's pass, with stand-ins for Claude.
+    mkdirSync(join(flow, 'v7'))
+    for (const name of ['SKILL.md', 'hooks.json', 'harness-answers.json']) {
+      copyFileSync(join(import.meta.dirname, 'flow', 'v7', name), join(flow, 'v7', name))
+    }
+    writeState({ harness_paths: ['hooks.json', 'harness-answers.json'].map((name) => join(flow, 'v7', name)) })
+    const kinds = { 'rate-limit-unknown': 'answer', 'api-key-missing': 'relay', 'board-unplugged': 'new-request',
+      'invoice-due-days': 'answer-one', 'deploy-2fa-code': 'unrung' }
+
+    const out = runEval(['--variant', 'v7', '--agents', 'oracle,always', '--follow-ups', '--cases', Object.keys(kinds).join(','),
+      '--approve-harness'])
+
+    expect(out.status, out.stderr).toBe(0)
+    const rows = Object.fromEntries(jsonl('v7', 'results.jsonl').map((r) => [r.prompt_id, r]))
+    for (const [scenario, kind] of Object.entries(kinds)) {
+      const { meta, grade } = rows[`${scenario}.oracle.clean`]
+      expect(meta.follow_up, scenario).toBe(kind)
+      expect(grade.close_wrong, scenario).toBe(0)
+      // close_right is given only where the follow-up answers a card turn 1 rang; unrung's turn 1 got `no dial`.
+      if (kind === 'answer' || kind === 'answer-one') expect(grade.close_right, scenario).toBe(1)
+      else expect(grade, scenario).not.toHaveProperty('close_right')
+    }
+    for (const scenario of ['api-key-missing', 'board-unplugged', 'invoice-due-days']) {
+      expect(rows[`${scenario}.always.clean`].grade.close_wrong, scenario).toBeGreaterThanOrEqual(1)
+    }
   })
 
   it("resumes turn 1's session in turn 2, adds both turns' usage, joins their traces and judges turn 1's answer", () => {
