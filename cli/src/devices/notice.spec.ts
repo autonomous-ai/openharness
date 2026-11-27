@@ -8,10 +8,14 @@ import { NOTICE_USAGE, noticeCaller, runNotice, type NoticeDeps } from './notice
 
 const CLAUDE = { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'sess-1' }
 
-async function notify(words: string[], answer: Record<string, unknown> | number | null = { result: 'shown' }, deps: Partial<NoticeDeps> = {}) {
+/** [why]: the reason the devices' ask gives for its null. */
+async function notify(words: string[], answer: Record<string, unknown> | number | null = { result: 'shown' }, deps: Partial<NoticeDeps> = {}, why?: string) {
   const out: string[] = []
   const err: string[] = []
-  const ask = vi.fn(async () => answer)
+  const ask = vi.fn(async (_message: unknown, said: (reason: string) => void) => {
+    if (why) said(why)
+    return answer
+  })
   const code = await runNotice(words, {
     dataDir: '/nowhere', env: {}, cwd: '/', ask,
     out: (line) => { out.push(line) }, err: (line) => { err.push(line) },
@@ -25,8 +29,8 @@ describe('harness device notify', () => {
     for (const result of ['shown', 'limited', 'no dial']) {
       expect(await notify(['Connect the VPN'], { result })).toMatchObject({ code: 0, out: [result], err: [] })
     }
-    for (const answer of [null, {}, { result: 'rm -rf' }]) {
-      expect(await notify(['Connect the VPN'], answer), JSON.stringify(answer)).toMatchObject({ code: 0, out: ['no dial'], err: [] })
+    for (const answer of [{}, { result: 'rm -rf' }]) {
+      expect(await notify(['Connect the VPN'], answer), JSON.stringify(answer)).toMatchObject({ code: 0, out: ['no dial'], err: ['harness device notify: unknown result'] })
     }
     expect(await notify(['Connect the VPN', '--json'], { result: 'limited' })).toMatchObject({ code: 0, out: ['{"result":"limited"}'] })
   })
@@ -35,7 +39,18 @@ describe('harness device notify', () => {
     expect(await notify(['Connect the VPN'], 429)).toMatchObject({ code: 0, out: ['limited'], err: [] })
     expect(await notify(['Connect the VPN', '--json'], 429)).toMatchObject({ code: 0, out: ['{"result":"limited"}'] })
     for (const status of [204, 400, 404, 413, 500]) {
-      expect(await notify(['Connect the VPN'], status), String(status)).toMatchObject({ code: 0, out: ['no dial'], err: [] })
+      expect(await notify(['Connect the VPN'], status), String(status)).toMatchObject({ code: 0, out: ['no dial'], err: [`harness device notify: status ${status}`] })
+    }
+  })
+
+  it('a no dial says why on stderr, but for no listener', async () => {
+    const held = 'timeout before headers (2004 ms)'
+    expect(await notify(['Connect the VPN'], null, {}, held)).toMatchObject({ code: 0, out: ['no dial'], err: [`harness device notify: ${held}`] })
+    expect(await notify(['Connect the VPN', '--json'], null, {}, held)).toMatchObject({ code: 0, out: ['{"result":"no dial"}'], err: [`harness device notify: ${held}`] })
+    expect(await notify(['Connect the VPN'], null, {}, 'no listener')).toMatchObject({ code: 0, out: ['no dial'], err: [] })
+    expect(await notify(['Connect the VPN'], { result: 'later' })).toMatchObject({ code: 0, out: ['no dial'], err: ['harness device notify: unknown result'] })
+    for (const result of ['no dial', 'shown']) {
+      expect(await notify(['Connect the VPN'], { result })).toMatchObject({ code: 0, out: [result], err: [] })
     }
   })
 
