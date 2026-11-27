@@ -11,12 +11,14 @@
  * its pid (`<folder>.new.<pid>`, `<folder>.old.<pid>`), never into ones named for all: a process that cleared a shared
  * `<folder>.new` as a leftover, file by file, could do it while another renamed that folder into place, or make it
  * again half full for the other to rename; one that put a shared `<folder>.old` back as a leftover could do it while
- * another swapped, and the other's rename then failed. What a process left is put back or removed only once it is gone.
+ * another swapped, and the other's rename then failed. What a process left is put back or removed only once it is gone,
+ * or by itself at its next write: a write runs whole in one synchronous call, so none of its own is under way then, and
+ * the devices' process, which lives on, would otherwise find its own leftover in the way of every later write.
  */
 import { chmodSync, closeSync, fchmodSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, type Stats, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { pidAlive } from '../lib/processProof.js'
-import { removeQuietly } from '../lib/removePath.js'
+import { removePath, removeQuietly } from '../lib/removePath.js'
 
 /** A folder's entries by name: a folder's own, or a file's bytes and the mode it is written with. */
 type Tree = Map<string, Tree | { bytes: Buffer; mode: number }>
@@ -80,21 +82,23 @@ function treeOf(files: Readonly<Record<string, string>>, executable: readonly st
   return root
 }
 
-/** What processes that are gone left: their staging folders, removed, and the folders their swaps moved aside. */
+/** What processes that are gone, or this one, left: their staging folders, removed, and the folders their swaps moved
+ *  aside. */
 function recover(folder: string): void {
   const parent = dirname(folder)
   const prefix = `${basename(folder)}.`
   for (const name of readdirSync(parent)) {
     const left = name.startsWith(prefix) ? LEFT.exec(name.slice(prefix.length)) : null
-    if (left === null || pidAlive(Number(left[2]))) continue
+    const pid = Number(left?.[2])
+    if (left === null || (pid !== process.pid && pidAlive(pid))) continue
     if (left[1] === 'new') rmSync(join(parent, name), { recursive: true, force: true })
-    else settle(join(parent, name), folder)
+    else settle(join(parent, name), folder, removePath)
   }
 }
 
-/** A folder a swap moved aside to [old]: put back when nothing took its place, removed when something did. */
-function settle(old: string, folder: string): void {
-  if (lstatSync(folder, { throwIfNoEntry: false })) rmSync(old, { recursive: true, force: true })
+/** A folder a swap moved aside to [old]: put back when nothing took its place, removed by [remove] when something did. */
+function settle(old: string, folder: string, remove: (path: string) => void): void {
+  if (lstatSync(folder, { throwIfNoEntry: false })) remove(old)
   else renameSync(old, folder)
 }
 
@@ -127,7 +131,9 @@ function holds(path: string, tree: Tree): boolean {
 
 /** [tree] whole into this process's staging folder, then the swap. A step that fails removes the staging folder and
  *  puts the moved folder back, or removes it when another process put a folder in its place meanwhile. A last rename
- *  that lost to another process writing the same files is no failure: the folder holds them. */
+ *  that lost to another process writing the same files is no failure: the folder holds them. A removal of this call's
+ *  own folders that fails (a file an app still holds on Windows) leaves them for its next write, never replacing the
+ *  answer. */
 function write(folder: string, tree: Tree): void {
   const staging = `${folder}.new.${process.pid}`
   const old = `${folder}.old.${process.pid}`
@@ -143,14 +149,14 @@ function write(folder: string, tree: Tree): void {
     renameSync(staging, folder)
   } catch (error) {
     try {
-      if (moved) settle(old, folder)
+      if (moved) settle(old, folder, removeQuietly)
     } finally {
       removeQuietly(staging)
     }
     if (staged && same(folder, tree)) return
     throw error
   }
-  rmSync(old, { recursive: true, force: true })
+  removeQuietly(old)
 }
 
 /** Folders and files with their modes, each file on disk before the swap. A mode is set after the umask narrowed it,
