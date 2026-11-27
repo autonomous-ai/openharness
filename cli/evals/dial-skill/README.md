@@ -199,9 +199,13 @@ $3.89); the pilot and probes, which left no rows, added roughly $3.50, so that e
 
 ## Results
 
-**Part 3, the skill's words** (2026-11-27; `flow/v1/`, `flow/v2/`): today's text stays, by the PM's decision. The
-best variant, v1, missed two gates, so the rounds are findings for Part 4 (`flow/narrative.md`). Claude Code 2.1.332,
-`claude-opus-5-5`; v1 ran `crowd` at 3 reps, `clean` at 2, `name-only` at 1.
+**Part 3, the skill's words** (2026-11-27; `flow/v1/`, `flow/v2/`): v1 ships, below the gate, by the PM's decision
+(2026-11-27). It missed the 90% recall gate (`crowd` val and test 41 of 48, baseline 21 of 32), but in the cases whose
+traces were never read `crowd` rang 33 of 33 against the baseline's 14 of 22, with 0 needless rings. `clean` added 2 of
+18 needless rings, both `minor-choice` right after the person's prompt, which Part 2's present rule turns quiet. Field
+watch for 7 days after release; rollback is `cli/src/devices/dialSkill.ts` alone. The rounds are findings for Part 4
+(`flow/narrative.md`). Claude Code 2.1.332, `claude-opus-5-5`; v1 ran `crowd` at 3 reps, `clean` at 2, `name-only`
+at 1.
 
 Held out, val and test pooled, as counts; `score vs baseline` is the paired 95% interval of v1 − baseline:
 
