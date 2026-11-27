@@ -16,6 +16,7 @@
 import { chmodSync, closeSync, fchmodSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, type Stats, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { pidAlive } from '../lib/processProof.js'
+import { removeQuietly } from '../lib/removePath.js'
 
 /** A folder's entries by name: a folder's own, or a file's bytes and the mode it is written with. */
 type Tree = Map<string, Tree | { bytes: Buffer; mode: number }>
@@ -144,7 +145,7 @@ function write(folder: string, tree: Tree): void {
     try {
       if (moved) settle(old, folder)
     } finally {
-      rmSync(staging, { recursive: true, force: true })
+      removeQuietly(staging)
     }
     if (staged && same(folder, tree)) return
     throw error

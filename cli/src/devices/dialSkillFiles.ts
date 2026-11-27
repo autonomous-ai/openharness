@@ -10,8 +10,9 @@
 // each Codex home (`codexPlugin`); its one writer is that service. A `disable` finds every folder in both. Each file
 // keeps its own list of Orca homes, so neither has a second writer, and a home in either counts as turned on once.
 import { randomUUID } from 'node:crypto'
-import { closeSync, fsyncSync, mkdirSync, openSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, fsyncSync, mkdirSync, openSync, readSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
+import { removeQuietly } from '../lib/removePath.js'
 import { jsonObject, requireState, StateFileUnreadable } from '../lib/secureState.js'
 
 export type DialEngine = 'claude' | 'codex'
@@ -114,7 +115,7 @@ const writeJson = (file: string, value: unknown, max: number): string | undefine
     renameSync(temporary, file)
     return undefined
   } catch (error) {
-    rmSync(temporary, { force: true })
+    removeQuietly(temporary)
     return codeOf(error)
   }
 }

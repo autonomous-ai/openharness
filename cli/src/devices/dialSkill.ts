@@ -3,12 +3,14 @@
  * `<home>/skills/<name>/SKILL.md`), so a session knows it can ring the dial. Harness writes, refreshes and removes only
  * its own file, known by its marker line: anything else at that path is the person's. The `harness device` command and
  * the devices service both import it, so it loads nothing but Node's own modules (lib/secureState.ts,
- * lib/settingsText.ts and ./dialSkillFiles.ts load only those, and the last nothing of this file's, so no cycle).
+ * lib/settingsText.ts, lib/removePath.ts and ./dialSkillFiles.ts load only those, and the last nothing of this file's, so
+ * no cycle).
  */
 import { randomUUID } from 'node:crypto'
-import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { removeQuietly } from '../lib/removePath.js'
 import { insideWindowsRoots } from '../lib/secureState.js'
 import { settingsText } from '../lib/settingsText.js'
 import { readSetup, readWritten, type DialEngine } from './dialSkillFiles.js'
@@ -186,7 +188,7 @@ function put(folder: string): boolean {
     renameSync(temporary, join(folder, 'SKILL.md'))
     return true
   } catch {
-    rmSync(temporary, { force: true })
+    removeQuietly(temporary)
     return false
   }
 }
