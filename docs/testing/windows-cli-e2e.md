@@ -105,7 +105,10 @@ Process tree (`procs.ps1`): master `node.exe` 7500 whose parent 9744 is gone (`h
 terminal. Defender: no 1116/1117 event in the last 30; no SmartScreen event. Layout
 ([`s1-layout.log`](../../cli/scripts/windows-cli-e2e/evidence/s1-layout.log)): `bin\harness.exe`,
 `bin\harness-launch.exe`, `cli\0.4.18-dev.win1\{cli.js,notify.mjs,package.json}`, `cli\current` = `0.4.18-dev.win1`,
-`cli\notify.mjs`, `cli\data\`, `runtime\node-v22.23.2-win32-arm64`, `runtime\pty\0.4.18`.
+`cli\notify.mjs`, `cli\data\`, `runtime\node-v22.23.2-win32-arm64`, `runtime\pty\0.4.18`. An install of a build
+whose manifest names `inbox` (since [2026-11-27-windows-follower-ram](../plans/2026-11-27-windows-follower-ram-design.md),
+section 4) has `cli\<version>\{cli.js,notify.mjs,inbox.mjs,package.json}` and no stable `cli\inbox.mjs`: `harness.exe`
+runs the dial's inbox follower on the version folder's `inbox.mjs`.
 
 ### Scenario 2: reboot, the 5-minute trigger, the stop marker, nobody signed in
 
