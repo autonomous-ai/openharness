@@ -14,6 +14,7 @@ const state = JSON.parse(readFileSync(join(evalDir, 'flow', '_state.json'), 'utf
   goal: { hold: string[] }
   metrics: { id: string; kind: string }[]
   harness_paths: string[]
+  bases: Record<string, number>
 }
 const splits = { train: state.train_ids, val: state.val_ids, test: state.test_ids }
 
@@ -123,5 +124,53 @@ describe('flow/_state.json', () => {
     ].map((path) => relative(cliDir, path))
     expect(required.filter((path) => !listed.has(path))).toEqual([])
     expect(state.harness_paths).not.toContain('src/devices/dialSkill.ts')
+  })
+})
+
+// What the runner's variantHooks reads from a variant (run-eval.mjs keeps it private): its hooks and the fake's answers.
+type Answer = { argv: string[]; stdout?: string; stop?: true }
+function variant(name: string): { hooks: Record<string, any[]>; answers: Answer[]; skill: string } {
+  const dir = join(evalDir, 'flow', name)
+  const json = (file: string) => JSON.parse(readFileSync(join(dir, file), 'utf8'))
+  return { hooks: json('hooks.json'), answers: json('harness-answers.json'), skill: readFileSync(join(dir, 'SKILL.md'), 'utf8') }
+}
+const stopHook = [{ hooks: [{ type: 'command', command: 'harness device claude stop', timeout: 5 }] }]
+const isStop = (a: Answer) => a.argv.join(' ') === 'device claude stop'
+const blockOf = (answers: Answer[]) => JSON.parse(answers.find(isStop)!.stdout!) as { decision: string; reason: string }
+
+describe('the Stop hook variants', () => {
+  it('flow/v5 is v4 with the Stop hook', () => {
+    const v4 = variant('v4')
+    const v5 = variant('v5')
+    expect(v5.hooks).toEqual({ SessionStart: v4.hooks.SessionStart, Stop: stopHook })
+    expect(v5.answers.filter((a) => !isStop(a))).toEqual(v4.answers)
+    expect(v5.answers.filter(isStop)).toHaveLength(1)
+    expect(v5.answers.find(isStop)!.stop).toBe(true)
+    expect(v5.skill).toBe(v4.skill)
+  })
+
+  it('flow/v6 is v1 with the Stop hook alone', () => {
+    const v6 = variant('v6')
+    expect(v6.hooks).toEqual({ Stop: stopHook })
+    expect(v6.answers).toHaveLength(1)
+    expect(isStop(v6.answers[0]) && v6.answers[0].stop).toBe(true)
+    expect(v6.skill).toBe(readFileSync(join(evalDir, 'flow', 'v1', 'SKILL.md'), 'utf8'))
+  })
+
+  it('answers the Stop hook with the same block in both, one line of the reason', () => {
+    const v5 = variant('v5').answers.find(isStop)!.stdout!
+    expect(variant('v6').answers.find(isStop)!.stdout).toBe(v5)
+    expect(v5.endsWith('\n')).toBe(true)
+    expect(v5.slice(0, -1)).not.toContain('\n')
+    const block = blockOf(variant('v5').answers)
+    expect(Object.keys(block)).toEqual(['decision', 'reason'])
+    expect(block.decision).toBe('block')
+    expect(block.reason).toMatch(/^[\x20-\x7e]+$/)
+    expect(block.reason).not.toMatch(/[<>]/)
+    expect(block.reason).toContain('harness device notify')
+  })
+
+  it('pairs v5 with v4 and v6 with v1', () => {
+    expect(state.bases).toEqual({ v5: 4, v6: 1 })
   })
 })
