@@ -108,14 +108,18 @@ other the implementer finds) is fixed the same way, through one helper, `removeQ
 `harnessd` does (orchestrator's answer). Red test: the cleanup throws, the caller sees the original error (and, for a
 `finally`, the success).
 
-One way to do a thing (orchestrator's answer): every site that already ignores a failed removal inline or through a
-local helper moves to `removeQuietly` too, among them `lib/selfUpdate.ts:457`, `lib/engineLaunch.ts:630`,
-`lib/windows/pipeAuth.ts:211`, `lib/localSocket.ts:211/216`. No behavior change there, so no red test. A site whose
-removal differs (an `rmdirSync` of an empty folder, a retry, a `catch` that does or rethrows something) stays as it is.
+One way to do a thing (orchestrator's answer): every site that already ignores a failed removal of the call's own
+temporary or staging name, inline or through a local helper, moves to `removeQuietly` too, among them
+`lib/engineLaunch.ts:630`, `lib/windows/pipeAuth.ts:211`, `lib/localSocket.ts:211/216`. No behavior change there, so
+no red test. A site whose removal differs (an `rmdirSync` of an empty folder, a retry, a `catch` that does or rethrows
+something) stays as it is.
 
-The master keeps its import rule (`harnessd/` imports only Node, its own folder and `../lib/log.js`; orchestrator's
-answer): its one copy is `harnessd/leanBundle.ts`'s existing `removeQuietly`, which `harnessd/master.ts` and
-`harnessd/reexec.ts` use in place of their inline forms; everything else uses `lib/removePath.ts`'s.
+A fixed name (a pid file, a marker, a `.prev` backup, the master's temporaries, the sign-in's refresh lock, the move
+lock's draft named by its pid) keeps its non-recursive `rmSync(path, { force: true })` with its failure ignored inline
+(final review): `removeQuietly` removes a folder with what is in it, and a folder at a fixed name is not the caller's.
+Red test: a folder at the name, with a file in it, stays. The master keeps its import rule (`harnessd/` imports only
+Node, its own folder and `../lib/log.js`): `harnessd/leanBundle.ts`'s own `removeQuietly` serves its own staging and
+claim names only.
 
 The 13 async removals that end in `.catch(() => {})` (`lib/sessionCheckpoint.ts`, `lib/oneshot.ts`,
 `lib/gitProjectFolder.ts`, `orchestrator/service.ts`, `sharing/viewer.ts`, `lib/gridConfigDir.ts`,
