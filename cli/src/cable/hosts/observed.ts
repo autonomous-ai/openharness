@@ -369,6 +369,9 @@ interface Entry {
   /** When several TUIs all in one app placed a Codex server's session at that app with no tab (Served.clients), their
    *  processes: the tick takes it off that app once one of them exits, as that one may have been its client. */
   servedClients?: readonly ServedClient[]
+  /** The multiplexer's pane a Codex server's answer placed its TUI at (Served.pane): a daemon answered is not asked
+   *  again, while each hook clears the place a rest and a tap show (ingest), so it is put back from here (askServed). */
+  servedPane?: Pane
   /** What the permission prompt it waits on asks, from its hook (deviceClaude/asked.ts): '' when it names nothing. */
   asked?: string
   /** Each permission ask Codex hooked in this session, by its tool and line, oldest first (CODEX_ASKS_KEPT). */
@@ -1279,13 +1282,17 @@ export class ObservedSource implements HostSource {
     entry.hints = {}
     entry.otherApp = undefined
     entry.caller = e.callerPid
-    // A daemon already answered keeps the host and nest its answer placed (placeServed): it is not asked again at a
-    // turn, and a host reset here said `terminal` for a Codex TUI in Ghostty from its second hook on.
-    if (entry.served!.is) return true
+    // A daemon already answered keeps the host, nest and pane its answer placed (placeServed): it is not asked again at
+    // a turn, and a host reset here said `terminal` for a Codex TUI in Ghostty from its second hook on.
+    if (entry.served!.is) {
+      entry.placed = entry.servedPane
+      return true
+    }
     delete a.nest
     a.host = detectHost(entry.hints)
     entry.outer = undefined
     entry.servedClients = undefined
+    entry.servedPane = undefined
     entry.tty = undefined
     entry.bundle = undefined
     a.app = UNKNOWN_APP
@@ -1310,15 +1317,19 @@ export class ObservedSource implements HostSource {
   }
 
   /** A Codex server's session at its client: that TUI's app, tab and process, or that app alone for several TUIs there,
-   *  or no app's page when none is known. */
-  private placeServed(entry: Entry, { client, clients }: Served): void {
+   *  or, for a TUI in tmux or herdr, the app holding the multiplexer's client, nested at its pane, or no app's page when
+   *  none is known. */
+  private placeServed(entry: Entry, { client, clients, nest, pane }: Served): void {
     entry.outer = client
     entry.servedClients = clients
     entry.tty = client?.tty
     entry.agent.app = client?.app ?? UNKNOWN_APP
+    if (nest) entry.agent.nest = nest
+    else delete entry.agent.nest
     // The dial's row, the usage counts and the notice's place ("In Terminal", devices.ts) read the host: a Claude row's
-    // is its app outside a multiplexer, and so is this one's.
-    entry.agent.host = client?.app ?? UNKNOWN_APP
+    // is its multiplexer when nested, else its app, and so is this one's.
+    entry.agent.host = nest ?? client?.app ?? UNKNOWN_APP
+    entry.placed = entry.servedPane = pane
     delete entry.agent.appPending
     entry.bundle = client && APP_BUNDLES[client.app]
     this.locate(entry)
@@ -2192,15 +2203,16 @@ export class ObservedSource implements HostSource {
   /** Removals: ended sessions, dead or reused pids, and sessions with no generation silent for 12 h; and a Codex daemon's
    *  session whose client exited leaves that client's tab, which holds a shell or another program now, for no page until
    *  it is asked again (askServed), as the daemon runs on. One placed at an app by several TUIs there leaves that app
-   *  once one of them exited, as that one may have been its client (Entry.servedClients). Called every 30 s by the
-   *  owner. */
+   *  once one of them exited, as that one may have been its client (Entry.servedClients). One whose TUI runs in tmux or
+   *  herdr leaves its app once either the TUI or the multiplexer's client exited: a detach, or a re-attach in another
+   *  app, is seen, not left on the app's page with a dead tty. Called every 30 s by the owner. */
   async tick(): Promise<void> {
     if (!this.entries.size) return
     // Only the sessions known as the read begins, each in the process it ran in then, and at the client it had then: one
     // first heard of, brought back in a new process (ingest) or at a client found while `ps` runs may have a process it
     // did not see.
     const judged = [...this.entries].map(([id, e]) =>
-      [id, e, e.pid, e.outer, e.outer?.pid !== undefined ? [{ pid: e.outer.pid }] : e.servedClients ?? []] as const)
+      [id, e, e.pid, e.outer, [...(e.outer?.pid !== undefined ? [{ pid: e.outer.pid }] : []), ...(e.servedClients ?? [])]] as const)
     // One read of the machine's processes for every session: a `ps` each blocked the loop for seconds with 50 of them.
     // A table that cannot be read is empty: it always holds the process reading it.
     const table = new Map((await this.deps.processes()).map((p) => [p.pid, p.generation]))
