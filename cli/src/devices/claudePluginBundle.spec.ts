@@ -134,9 +134,9 @@ describe('Claude Code\'s marketplace inside cli.js', () => {
     expect(files['plugins/harness-device/hooks/codex.json']).toBe(readFileSync(join(root, 'plugins/harness-device/hooks/codex.json'), 'utf8'))
   })
 
-  it('hooks/asked and hooks/codex-asked alone are executable, as in the checkout', () => {
+  it("the device plugin's hook scripts alone are executable, as in the checkout", () => {
     const { files, executable } = bundle('1.2.3')
-    expect(executable).toEqual(['plugins/harness-device/hooks/asked', 'plugins/harness-device/hooks/codex-asked'])
+    expect(executable).toEqual(['plugins/harness-device/hooks/asked', 'plugins/harness-device/hooks/codex-asked', 'plugins/harness-device/hooks/start'])
     if (process.platform === 'win32') return
     for (const key of Object.keys(files).filter((key) => key !== '.claude-plugin/marketplace.json')) {
       expect((statSync(join(REPO, key)).mode & 0o100) !== 0, key).toBe(executable.includes(key))
