@@ -101,7 +101,8 @@ import { newerPtyForUpdate } from './lib/windows/ptyUpdateCommand.js'
 import { runUpdateSteps } from './lib/updateCommand.js'
 import { PTY_PROTOCOL } from './lib/ptyHost/protocol.js'
 import { runAutonomousDeviceCommand } from './lib/autonomous-device/command.js'
-import { E2eeStore, identitySpent, peekIdentityPub } from './lib/e2ee/store.js'
+import { E2eeStore, identitySpent, peekIdentityPub, REMOTE_PASSWORD_NOT_DELETED } from './lib/e2ee/store.js'
+import { SecretNotDeleted } from './lib/deleteSecretFile.js'
 import { confirmsRemoval, deviceRegistration, deviceStatusValue, formatDeviceDetail, formatDeviceHistory, formatDeviceList, logOrder, removeConfirmation } from './lib/e2ee/deviceDisplay.js'
 import { b64e } from './lib/e2ee/core.js'
 import { MachinePeerStore } from './lib/e2ee/machinePeers.js'
@@ -1390,7 +1391,8 @@ async function updateCommand(force: boolean): Promise<void> {
 }
 
 /**
- * Stop the local adapter and discard this computer's SSO session — local, and unable to fail.
+ * Stop the local adapter and discard this computer's SSO session — local, and failing only when the session's file cannot
+ * be deleted.
  *
  * **This DOES sign the grid out too, as of the one-sign-in flow.** That reverses the rule this
  * comment used to state, so the reversal is written down rather than left to be rediscovered: one
@@ -1427,12 +1429,14 @@ async function logout(): Promise<void> {
   // SIGTERM the OLD daemon, leave the new one coming up, and then delete the session under it.
   const { pid: stoppedPid } = await stopDaemonOrExit()
   // Before removeSignIn: see the note above on serve children. Its exit code is deliberately
-  // dropped — this command cannot fail — and its own words have already reached the terminal.
+  // dropped — a grid condition does not fail this command — and its own words have already reached the terminal.
   const gridOut = await passThroughToGridLogout([])
   const refreshToken = readAuthSession()?.refreshToken
   const endOnServer = endSignInOnServer(refreshToken)
-  removeSignIn('logout', asked, chain)
+  const kept = keptSecret(() => removeSignIn('logout', asked, chain))
   await endOnServer
+  // Not started again: a daemon would come back on the sign-in that is still here.
+  if (kept) signInStillHere(kept, 'logout')
   rmSync(MACHINE_NAME_FILE, { force: true })
   // Same reason as the name above: the cached machine list describes the account that just left, and the
   // local `/api/machines` fallback would otherwise hand it to whoever signs in next on this computer.
@@ -1876,6 +1880,23 @@ function personAsked(command: string, chain: () => readonly Asker[]): SignOutAsk
   process.exit(1)
 }
 
+/** What [remove] said when it left its secret file on disk (lib/deleteSecretFile.ts), or null once the file is gone. */
+function keptSecret(remove: () => void): string | null {
+  try {
+    remove()
+    return null
+  } catch (error) {
+    if (error instanceof SecretNotDeleted) return error.message
+    throw error
+  }
+}
+
+/** Ends `harness [command]` over a sign-in it could not delete ([kept], its word): the person runs it again. */
+function signInStillHere(kept: string, command: string): never {
+  console.error(`\n  ✗ The sign-in is still on this computer (${kept}). Run \`harness ${command}\` again.\n`)
+  process.exit(1)
+}
+
 /** Stop the daemon and clear local state so the next login starts fresh. */
 async function resetCommand(): Promise<void> {
   const chain = ancestorsOnce()
@@ -1886,8 +1907,9 @@ async function resetCommand(): Promise<void> {
   clearAdapterState()
   console.log(`\n  ✓ Cleared local machine CLI state at ${tildify(env.ADAPTER_DATA_DIR)}.`)
   if (r.pid) console.log(`    Stopped adapter process ${r.pid}.`)
-  removeSignIn('reset', asked, chain)
+  const kept = keptSecret(() => removeSignIn('reset', asked, chain))
   await endSignInOnServer(refreshToken)
+  if (kept) signInStillHere(kept, 'reset')
   console.log('\n  Start again with: harness login, then harness start\n')
   // The SECOND door onto the sign-out `logout` performs, and it clears MORE, so somebody running it
   // is if anything likelier to believe nothing is left. Same call, so the two cannot drift.
@@ -2105,14 +2127,26 @@ async function remotePasswordSetCommand(json: boolean, stdin: boolean): Promise<
  *  `harness link connect` against this machine always fails with NO_REMOTE_PASSWORD. */
 async function remotePasswordClearCommand(json: boolean): Promise<void> {
   let cleared = false
+  let kept: string | null = null
   try {
     const res = await daemonRequest('POST', '/api/remote-password/clear')
     if (res.ok) cleared = true
+    else {
+      const body = (await res.json().catch(() => null)) as { error?: unknown } | null
+      if (typeof body?.error === 'string' && body.error.startsWith(`${REMOTE_PASSWORD_NOT_DELETED} (`)) kept = body.error
+    }
   } catch { /* fall back to the disk-backed store below */ }
-  if (!cleared) {
+  // Not after a daemon that could not delete it: it still holds the password in memory, and a delete here would only
+  // hide it until its next start.
+  if (!cleared && !kept) {
     const store = new E2eeStore()
     store.init()
-    store.clearRemotePassword()
+    kept = keptSecret(() => store.clearRemotePassword())
+  }
+  if (kept) {
+    if (json) console.log(JSON.stringify({ ok: false, error: kept }))
+    else console.error(`\n  ✗ The remote password is still on this computer (${kept}). Run \`harness remote-password clear\` again.\n`)
+    process.exit(1)
   }
   if (json) { console.log(JSON.stringify({ ok: true })); process.exit(0) }
   console.log('\n  ✓ Remote password cleared. This machine can no longer be linked by password until a new one is set.')

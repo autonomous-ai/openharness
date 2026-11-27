@@ -3,6 +3,7 @@ import { join } from 'path'
 import { randomBytes } from 'node:crypto'
 import { homePath } from '../config/envFields.js'
 import { harnessPath } from '../config/harnessHome.js'
+import { deleteSecretFile, type Wait } from './deleteSecretFile.js'
 import { atomicWriteFile, jsonObject, probeState, readState, requireState, type TrustFile } from './secureState.js'
 
 export interface AuthSession {
@@ -312,9 +313,9 @@ export function readSignedOut(): SignedOutMark | null {
 }
 
 /** Removes the sign-in (`harness logout`, `harness reset`), one that cannot be read as well: deleted, never kept aside,
- *  where its refresh token would outlive the sign-out. */
-export function clearAuthSession(): void {
-  try { rmSync(AUTH_SESSION_FILE, { force: true }) } catch { /* ignore */ }
+ *  where its refresh token would outlive the sign-out. One it cannot delete throws SIGN_IN_NOT_DELETED (lib/deleteSecretFile.ts). */
+export function clearAuthSession(wait?: Wait): void {
+  deleteSecretFile(AUTH_SESSION_FILE, 'SIGN_IN_NOT_DELETED', wait)
 }
 
 // Whether THIS process holds the refresh lock right now. `process.exit` skips the `finally` below, and

@@ -46,7 +46,7 @@ const MACHINE_ID = /^[a-f0-9]{32}$/
 /** What a route does with its body, read as JSON. */
 type WithBody = (body: Record<string, unknown>) => Promise<HttpAnswer> | HttpAnswer
 
-/** The command's own failure, said as `harness pair` and `remote-password set` read it: its message. */
+/** The command's own failure, said as `harness pair` and `remote-password set|clear` read it: its message. */
 const said = async (run: () => Promise<HttpAnswer>): Promise<HttpAnswer> => {
   try { return await run() } catch (error) { return answer(500, { error: error instanceof Error ? error.message : 'INTERNAL' }) }
 }
@@ -60,7 +60,7 @@ function routes(ops: KeyOps): Record<string, { body?: WithBody; run?: () => Prom
     'POST /api/revoke': { body: (body) => (body.id ? ops.revoke(body.id as string) : answer(400, { error: 'MISSING_ID' })) },
     'POST /api/revoke-all': { run: () => ops.revokeAll() },
     'POST /api/remote-password/set': { body: (body) => (body.password ? said(() => ops.setRemotePassword(body.password as string)) : answer(400, { error: 'MISSING_PASSWORD' })) },
-    'POST /api/remote-password/clear': { run: () => ops.clearRemotePassword() },
+    'POST /api/remote-password/clear': { run: () => said(() => ops.clearRemotePassword()) },
     'GET /api/remote-password/status': { run: () => ops.remotePasswordStatus() },
     'POST /api/link/trust-peer': { body: (body) => {
       if (typeof body.pub !== 'string' || !KEY.test(body.pub) || typeof body.machineId !== 'string' || !MACHINE_ID.test(body.machineId)) return answer(400, { error: 'BAD_PEER' })

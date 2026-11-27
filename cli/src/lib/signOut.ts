@@ -130,7 +130,7 @@ function stamp(at: Date): string {
 /**
  * Takes this computer's sign-in away, after writing to harness.log why, how a person asked, and which
  * processes ran it. The one way the CLI deletes it: [signOutAsked] said a person asked first. A log that
- * cannot be written does not keep the person signed in.
+ * cannot be written does not keep the person signed in; a sign-in that cannot be deleted throws SIGN_IN_NOT_DELETED.
  */
 export function removeSignIn(reason: string, asked: SignOutAsked, chain: () => readonly Asker[] = ancestorsOnce()): void {
   let line: string | null = null
