@@ -4,7 +4,7 @@
 import { truncateUtf8 } from '../lib/deviceRecentTrim.js'
 import { NOTICE_LINE_MAX_BYTES, NoticeLimits, noticeKind, type NoticeAsk, type NoticeKind, type NoticeResult } from '../lib/dialNotice.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
-import { SHOWN_ONLY_PREFIX } from './cableSession.js'
+import { NOTICE_KEY, SHOWN_ONLY_PREFIX } from './cableSession.js'
 import { hostDisplayName } from './hosts/hostDetect.js'
 import { roundDrawable } from './roundGlyphs.js'
 
@@ -116,7 +116,7 @@ const placed = (line: string, m: number): string => m > 1 ? fitBytes(line, ` (1/
 
 /** A card's question, the same for a live card and one rebuilt from its file, which keeps only the line and host. */
 const noticeQuestions = (line: string, host: string): unknown =>
-  [{ key: 'notice', q: line, options: [`In ${hostDisplayName(host)}`] }]
+  [{ key: NOTICE_KEY, q: line, options: [`In ${hostDisplayName(host)}`] }]
 
 interface Pending {
   agentId: string
