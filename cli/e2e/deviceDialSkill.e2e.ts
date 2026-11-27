@@ -361,6 +361,8 @@ trust_level = "trusted"
     onTestFailed(() => { console.log(`---- the Codex pane\n${screen}`) })
     /** The app server Codex's pid file names, and its start read before the close. */
     let server: { pid: number; started: string | undefined } | undefined
+    /** The updater Codex 0.172 records beside it, read the same way; null: Codex wrote no updater file. */
+    let updater: { pid: number; started: string | undefined } | null | undefined
     try {
       tmux('new-session', '-d', '-s', 'codex', '-x', '200', '-y', '50', '-c', work, codex)
       // Its composer, `›` at a line's start, is drawn once Codex takes input; the banner comes before it.
@@ -400,6 +402,13 @@ trust_level = "trusted"
         const { pid } = JSON.parse(readFileSync(join(home, 'app-server-daemon', 'daemon.pid'), 'utf8')) as { pid: number }
         server = { pid, started: startTimes([pid]).get(pid) }
       } catch { /* no server read: the expect below says so */ }
+      try {
+        const { pid } = JSON.parse(readFileSync(join(home, 'app-server-daemon', 'daemon-updater.pid'), 'utf8')) as { pid: number }
+        updater = { pid, started: startTimes([pid]).get(pid) }
+      } catch (error) {
+        // Missing: Codex wrote none. One cut short stays unread, and the expect below says so.
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') updater = null
+      }
       // The desk first: its close writes dials.json in the root the daemon's close removes. Each is cleared once closed, so
       // afterEach closes neither again.
       await theDesk.close()
@@ -409,5 +418,10 @@ trust_level = "trusted"
     }
     expect(server?.started, 'the Codex app server its pid file names, running before the close').toBeDefined()
     expect(startTimes([server!.pid]).get(server!.pid), 'the Codex app server after the close').not.toBe(server!.started)
+    // A Codex before 0.172 writes no updater file; one it recorded and that ran before the close is gone after it.
+    if (updater !== null) {
+      expect(updater, 'the Codex updater its pid file names').toBeDefined()
+      if (updater!.started !== undefined) expect(startTimes([updater!.pid]).get(updater!.pid), 'the Codex updater after the close').not.toBe(updater!.started)
+    }
   })
 })
