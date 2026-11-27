@@ -102,11 +102,13 @@ describe('codexServed', () => {
 
   it('places a session at the app when every TUI on a terminal in its folder is in that one app, with no tab', async () => {
     // Two Terminal tabs in one folder (Ken's VM, 2026-11-27, #4663 step 10): whichever is the client, it is in Terminal.
-    const secondTab = [row(13, 10, 'login'), row(14, 13, '-zsh'), row(501, 14, BREW, 'codex')]
+    const secondTab = [row(13, 10, 'login'), row(14, 13, '-zsh'), { ...row(501, 14, BREW, 'codex'), generation: 'ps:1764230400000' }]
     const d = deps([...TERMINAL_TUI, ...secondTab, row(900, 1, DAEMON_BIN, DAEMON_ARGS)],
       { 500: { tty: 'ttys005', cwd: '/work/app' }, 501: { tty: 'ttys006', cwd: '/work/app' } })
-    // With both TUIs, so the session leaves Terminal's page once one of them exits (observed.ts tick).
-    expect(await codexServed([{ pid: 900, cwd: '/work/app' }], d)).toEqual([{ client: { app: 'terminal-app' }, clients: [500, 501] }])
+    // With both TUIs and the start the table read for each, so the session leaves Terminal's page once one of them exits,
+    // its pid then another process's or none (observed.ts tick).
+    expect(await codexServed([{ pid: 900, cwd: '/work/app' }], d)).toEqual(
+      [{ client: { app: 'terminal-app' }, clients: [{ pid: 500 }, { pid: 501, generation: 'ps:1764230400000' }] }])
     // Both TUIs' apps in the one walk.
     expect(d.apps.mock.calls.at(-1)![0]).toEqual([500, 501])
   })
@@ -244,7 +246,7 @@ describe('codexServed on Windows', () => {
     // Ken's VM, 2026-11-27 (#4663 step 10): two VS Code terminals in one folder. VS Code holds whichever is the client.
     const second = [win(410, 401, 6, 'pwsh.exe'), win(440, 410, 7, NODE, `"${NODE}" ${NPM}\\bin\\codex.js`), win(441, 440, 8, NATIVE)]
     const two = winDeps([...vscodeTui(), daemon(421, 5), ...second], { 420: 'C:\\work\\dial', 440: 'C:\\work\\dial' })
-    expect(await codexServed([{ pid: 430, cwd: 'C:\\work\\dial' }], two)).toEqual([{ client: { app: 'vscode' }, clients: [420, 440] }])
+    expect(await codexServed([{ pid: 430, cwd: 'C:\\work\\dial' }], two)).toEqual([{ client: { app: 'vscode' }, clients: [{ pid: 420 }, { pid: 440 }] }])
     // Harness's own `codex queue` has no terminal to tell it from a TUI on Windows, and its parents name no app: never a
     // guess between them.
     const queue = winDeps([...vscodeTui(), daemon(421, 5), win(450, 1, 6, NATIVE, `${NATIVE} queue --thread x`)],

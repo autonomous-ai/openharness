@@ -49,7 +49,11 @@ export interface ServedAsk { pid: number; cwd?: string }
 /** A session the TUIs' Codex daemon runs, and where the person sees it when that is known: the app holding its TUI,
  *  that TUI's tab and process. Several TUIs all in one app give that app alone, and their processes beside it: the app
  *  is certain only while every one of them runs (observed.ts tick). */
-export interface Served { client?: Outer; clients?: readonly number[] }
+export interface Served { client?: Outer; clients?: readonly ServedClient[] }
+
+/** A TUI that may be a session's client, with its start as the table read it (RunningProcess.generation), so a later
+ *  process given its pid is never taken for it. */
+export interface ServedClient { pid: number; generation?: string }
 
 export interface CodexServedDeps {
   platform: NodeJS.Platform
@@ -110,7 +114,12 @@ export async function codexServed(asks: readonly ServedAsk[], deps: CodexServedD
     if (!app) return {}
     // Several TUIs in one app: that app holds whichever is the client, but which one it is stays unknown, so neither a
     // tab nor a process is given and a tap only brings the app forward (Ken's VM, 2026-11-27, #4663 step 10).
-    if (found.length > 1) return { client: { app }, clients: found.map(({ pid }) => pid) }
+    if (found.length > 1) {
+      return { client: { app }, clients: found.map(({ pid }): ServedClient => {
+        const generation = byPid.get(pid)?.generation
+        return generation === undefined ? { pid } : { pid, generation }
+      }) }
+    }
     const { pid, tty: name } = found[0]!
     const tty = name === undefined ? undefined : `/dev/${name}`
     return { client: tty && clientTtyForm(deps.platform)?.test(tty) ? { app, tty, pid } : { app, pid } }

@@ -8104,7 +8104,7 @@ describe('ObservedSource and a Codex session its own server runs', () => {
   it('at its client\'s app with no tab, it leaves that app at the next tick once one of its TUIs exited, as either may have been its client', async () => {
     const t = served()
     t.src.ingest(t.codex('session-start'))
-    await t.asks[0].answer([{ client: { app: 'terminal-app' }, clients: [500, 501] }])
+    await t.asks[0].answer([{ client: { app: 'terminal-app' }, clients: [{ pid: 500, generation: 'g500' }, { pid: 501, generation: 'g501' }] }])
     // Both run: the app is still certain.
     await t.src.tick()
     expect(t.agent().app).toBe('terminal-app')

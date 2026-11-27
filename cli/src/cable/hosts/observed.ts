@@ -13,7 +13,7 @@ import { roundDrawable } from '../roundGlyphs.js'
 import type { HostAdapter, Outer, Pane, Place } from './adapter.js'
 import { homeOf } from './claudeRenderer.js'
 import { CODEX_THREAD, type CodexQueue, type CodexQueueFailure, type CodexRan } from './codexQueue.js'
-import type { Served, ServedAsk } from './codexServed.js'
+import type { Served, ServedAsk, ServedClient } from './codexServed.js'
 import { agentPlaceName, APP_BUNDLES, detectApp, detectHost, EXTENSION_TAB, inOrca, otherProduct, ownHints, UNKNOWN_APP } from './hostDetect.js'
 import type { Delivery } from './inbox.js'
 import { answerEngine, type AnswerEngine } from './lastAnswer.js'
@@ -368,7 +368,7 @@ interface Entry {
   served?: { pid: number; is?: boolean | null; hook?: ObservedHookEvent }
   /** When several TUIs all in one app placed a Codex server's session at that app with no tab (Served.clients), their
    *  processes: the tick takes it off that app once one of them exits, as that one may have been its client. */
-  servedClients?: readonly number[]
+  servedClients?: readonly ServedClient[]
   /** What the permission prompt it waits on asks, from its hook (deviceClaude/asked.ts): '' when it names nothing. */
   asked?: string
   /** Each permission ask Codex hooked in this session, by its tool and line, oldest first (CODEX_ASKS_KEPT). */
@@ -2187,7 +2187,7 @@ export class ObservedSource implements HostSource {
     // first heard of, brought back in a new process (ingest) or at a client found while `ps` runs may have a process it
     // did not see.
     const judged = [...this.entries].map(([id, e]) =>
-      [id, e, e.pid, e.outer, e.outer?.pid !== undefined ? [e.outer.pid] : e.servedClients ?? []] as const)
+      [id, e, e.pid, e.outer, e.outer?.pid !== undefined ? [{ pid: e.outer.pid }] : e.servedClients ?? []] as const)
     // One read of the machine's processes for every session: a `ps` each blocked the loop for seconds with 50 of them.
     // A table that cannot be read is empty: it always holds the process reading it.
     const table = new Map((await this.deps.processes()).map((p) => [p.pid, p.generation]))
@@ -2205,7 +2205,7 @@ export class ObservedSource implements HostSource {
       // No generation to tell a reused pid by: running, and heard from in the last 12 h.
       else gone = !this.deps.alive(e.pid) || now - e.agent.lastActivityAt >= NO_GENERATION_TTL_MS
       if (gone) { this.remove(e); changed = true }
-      else if (outer && e.outer === outer && this.servedBy(e) && table.size && clients.some((client) => !table.has(client))) {
+      else if (outer && e.outer === outer && this.servedBy(e) && table.size && clients.some(({ pid: client }) => !table.has(client))) {
         this.placeServed(e, {})
         changed = true
       }
