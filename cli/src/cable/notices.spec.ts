@@ -362,7 +362,7 @@ describe('Notices: a present caller', () => {
     expect(counted.at(-1)).toEqual(['claude', 'shown', kind, 'present'])
   })
 
-  it('it stays pending, a drawer row, until its next turn; working() leaves it', () => {
+  it('it stays pending, a drawer row, until it ends', () => {
     const { notices, state, calls } = desk()
     state.present.add('a1')
     notices.notify(notice(VPN))
@@ -370,8 +370,6 @@ describe('Notices: a present caller', () => {
     expect(notices.pending('a1')).toBe(true)
     expect(notices.rows('m')).toEqual([{ agentId: 'a1', machineId: 'm', question: true, text: VPN }])
     calls.length = 0
-    notices.working('a1')
-    expect(calls).toEqual([])
     notices.ended('a1')
     expect(calls).toEqual([['close', 'a1', id]])
     expect(notices.quiet('a1')).toBe(false)
@@ -565,8 +563,6 @@ describe('Notices: a quiet card at its turn\'s end (Part 2b)', () => {
     notices.attached()
     expect(calls).toEqual([['ask', 'a1', qid(1, 2), asked]])
     calls.length = 0
-    notices.working('a1')
-    expect(calls).toEqual([])
     notices.ended('a1')
     expect(calls).toEqual([['close', 'a1', qid(1, 2)]])
   })
@@ -680,7 +676,7 @@ describe('Notices after a restart', () => {
   })
 
   describe('a restored card finds its agent', () => {
-    const agent = (agentId: string, over: Partial<ListedAgent> = {}): ListedAgent => ({ agentId, panes: [], busy: false, ...over })
+    const agent = (agentId: string, over: Partial<ListedAgent> = {}): ListedAgent => ({ agentId, panes: [], ...over })
     /** The lists a look is given, and how many times it read them. */
     const lists = (...agents: ListedAgent[]) => {
       const read = Object.assign(() => { read.reads += 1; return agents }, { reads: 0 })
@@ -755,13 +751,15 @@ describe('Notices after a restart', () => {
       expect(other.notices.rows('m')).toEqual([row('a1')])
     })
 
-    it('first seen in a turn, it ends and is never shown', () => {
+    // A listed agent in a turn closed its restored card until 2026-11-27: Harness cannot tell from a turn whether the
+    // person answered, so a list that says busy, as an older one did, changes nothing.
+    it('a restored card found busy is kept and shown as a row', () => {
       const { notices, state, calls } = back([kept()])
-      notices.look(false, lists(agent('a1', { busy: true })))
-      expect(calls).toEqual([['close', 'a1', 'shown:k1']])
-      expect(notices.rows('m')).toEqual([])
-      expect(state.redraws).toEqual([])
-      expect(state.changes).toBe(1)
+      notices.look(false, lists({ ...agent('a1'), busy: true } as ListedAgent))
+      expect(calls).toEqual([['hold', 'a1', 'shown:k1', asked('Orca')]])
+      expect(notices.rows('m')).toEqual([row('a1')])
+      expect(state.redraws).toEqual([['a1']])
+      expect(state.changes).toBe(0)
     })
 
     it('not listed, it waits; with none waiting the lists are not read', () => {
@@ -779,13 +777,6 @@ describe('Notices after a restart', () => {
       expect(after.reads).toBe(0)
     })
 
-    it('found once, it is looked for no more', () => {
-      const { notices } = back([kept()])
-      notices.look(false, lists(agent('a1')))
-      notices.look(false, lists(agent('a1', { busy: true })))
-      expect(notices.pending('a1')).toBe(true)
-    })
-
     // The restored card is the older: shown, held, while the new one waits behind it with no ring.
     it('a new notice from an agent whose restored card waits under another id: that card joins its cards', () => {
       const { notices, calls, state } = back([kept({ agentId: 'old', line: W(1) })], { keys: { new: ['claude:s1'] } })
@@ -800,25 +791,12 @@ describe('Notices after a restart', () => {
       expect(plain.notices.stored()).toHaveLength(1)
     })
 
-    it('working ends a restored card, waiting or shown, and leaves a live one', () => {
-      const { notices, calls } = back([kept(), asWho])
-      notices.working('a1')
-      notices.working('w1')
-      expect(calls).toEqual([['close', 'a1', 'shown:k1'], ['close', 'w1', 'shown:k2']])
-      const live = desk()
-      live.notices.notify(notice(VPN))
-      live.notices.working('a1')
-      live.notices.working('a2')
-      expect(live.calls.map((c) => c[0])).toEqual(['ask'])
-      expect(live.notices.pending('a1')).toBe(true)
-    })
-
     it('listedAgent and noticeKeys name a session the same way', () => {
       const named = { engine: 'claude', sessionId: 's1', paneKeys: ['herdr:p'] }
-      const listed = listedAgent('x', named, true)
-      expect(listed).toEqual({ agentId: 'x', session: 'claude:s1', panes: ['herdr:p'], busy: true })
+      const listed = listedAgent('x', named)
+      expect(listed).toStrictEqual({ agentId: 'x', session: 'claude:s1', panes: ['herdr:p'] })
       expect(listed.session).toBe(noticeKeys(named)[0])
-      expect(listedAgent('x', { engine: 'claude' }, false).session).toBeUndefined()
+      expect(listedAgent('x', { engine: 'claude' }).session).toBeUndefined()
     })
   })
 })
@@ -1055,7 +1033,7 @@ describe('several cards an agent', () => {
     const NOW = 1_800_000_000_000
     const restored = (line: string): StoredNotice =>
       ({ agentId: 'old', keys: ['claude:s1'], id: 'shown:k1', line, host: 'orca', at: NOW - 60_000 })
-    const listed = (): ListedAgent[] => [{ agentId: 'new', session: 'claude:s1', panes: [], busy: false }]
+    const listed = (): ListedAgent[] => [{ agentId: 'new', session: 'claude:s1', panes: [] }]
     // Two waiting cards: both kept; the restored one is the older, so it is shown, held, and the live one's question
     // closes.
     const rig = desk({ clock: NOW, restored: [restored(W(1))] })

@@ -9302,7 +9302,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     ])
   })
 
-  it('an agent herdr alone lists is tied by its session, and its card goes as it is busy again', async () => {
+  it('an agent herdr alone lists is tied by its session, and its card stays as it is busy again', async () => {
     vi.useFakeTimers()
     const subs: HerdrSubscriber[] = []
     let list: Promise<HerdrAnswer> | undefined
@@ -9325,12 +9325,11 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     expect(calls('question')).toEqual([[id, expect.stringMatching(/^shown:/), card('herdr')]])
     const status = (agentStatus: string) =>
       subs[0].event('pane.agent_status_changed', { agent: 'claude', agent_status: agentStatus, pane_id: 'w1:p1', workspace_id: 'w1' })
-    // Busy all along, then its turn ending: no next turn yet.
     status('blocked')
     status('idle')
-    expect(calls('questionClose')).toEqual([])
     status('working')
-    expect(calls('questionClose')).toEqual([[id, ids()[0]]])
+    expect(calls('questionClose')).toEqual([])
+    expect(host().listUnread()).toContainEqual({ agentId: id, machineId: 'machine-1', question: true, text: LINE })
   })
 
   it('a caller no list holds still rings, under its folder or An agent', () => {
@@ -9364,33 +9363,70 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     expect(calls('question')).toEqual([[ID, expect.stringMatching(/^shown:/), card('Orca')]])
   })
 
-  it('its card goes when that agent\'s next turn starts, and with nothing before it', async () => {
-    vi.useFakeTimers()
-    const { port, listener } = devices({ core: bound() })
-    port.observed(hook('turn-start'))
-    listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })
-    listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
-    const [outside, own] = ids()
-    const closed = () => calls('questionClose').filter(([, id]) => id === outside || id === own)
-    port.observed(hook('needs-input'))
-    // A prompt it waits on is a question of its own, which comes and goes.
-    port.observed({ engine: 'claude', sessionId: 'sess-1', event: 'asked', tool: 'Bash', summary: 'npm test', cwd: '/work/api' })
-    port.observed(hook('turn-stop'))
-    await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
-    port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'processing', text: 'Working' } })
-    port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'summary', text: 'done', recap: 'Built.' } })
-    await vi.waitFor(() => expect(calls('summary')).toHaveLength(1))
-    // The wait took the notice's place on the dial: it is asked again as the wait goes.
-    expect(calls('question')).toHaveLength(4)
-    expect(calls('questionClose')).toHaveLength(1)
-    expect(closed()).toEqual([])
-    port.observed(hook('turn-start'))
-    port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'turn_started' } })
-    expect(closed()).toEqual([[ID, outside], ['h1', own]])
+  // Harness cannot tell from a turn's start whether the person answered: on 2026-11-27 another agent's message started
+  // the turn, and the card went unseen. The agent closes its own (docs/plans/2026-11-27-dial-notice-cards-agent-closes-design.md, rule 5).
+  describe('a turn start closes no card', () => {
+    const row = (agentId: string) => ({ agentId, machineId: 'machine-1', question: true, text: LINE })
+    const kept = (agentId: string) => {
+      expect(calls('questionClose')).toEqual([])
+      expect(host().listUnread()).toContainEqual(row(agentId))
+    }
+
+    it.each([
+      ['an observed turn-start by the person', async (port: DevicesPort) => { port.observed(hook('turn-start')) }],
+      ['an observed turn-start relayed from another session', async (port: DevicesPort) => { port.observed(hook('turn-start', { relayed: true })) }],
+      ['an observed turn-start by the dial\'s words', async (port: DevicesPort) => {
+        const poll = port.inboxPoll({ pollId: 'p1', sessionId: 'sess-1' })
+        expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
+        expect(await poll).toEqual({ text: 'run the tests' })
+        port.observed(hook('turn-start'))
+      }],
+    ] as const)('%s', async (_, turnStart) => {
+      const { port, listener } = devices()
+      port.observed(hook('session-start'))
+      seen.host.watching!(true)
+      port.swarms(null)
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+      await turnStart(port)
+      kept(ID)
+    })
+
+    it('a Harness agent\'s turn_started frame and the cards of its running turn', () => {
+      const { port, listener } = devices({ core: bound() })
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })).toEqual({ result: 'shown' })
+      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'turn_started' } })
+      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'processing', text: 'Working' } })
+      kept('h1')
+    })
+
+    // Rule 8: with cards outliving turns, a turn's end stays silent until the agent closes its card.
+    it('an agent\'s ordinary turn end stays silent while its card from an earlier turn is open; a failed one rings', async () => {
+      const { port, listener } = devices({ core: bound(), decideTier: null })
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
+      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'turn_started' } })
+      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'summary', text: 'done', recap: 'Built.' } })
+      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'summary', text: 'done', recap: 'Broke.', failed: true } })
+      await vi.waitFor(() => expect(calls('summary').map(([agentId, , , tier]) => [agentId, tier])).toEqual([['h1', 'silent'], ['h1', 'alert']]))
+      expect(logs).toContain('[cable] notify · silent · rule:notice · notice · 0ms')
+    })
+
+    it('an outside agent leaving its list, and agent_deleted, still end its cards', async () => {
+      vi.useFakeTimers()
+      const { port, listener } = devices({ core: bound() })
+      port.observed(hook('turn-start'))
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
+      const [outside, own] = ids()
+      port.card({ type: 'agent_deleted', payload: { agentId: 'h1' } })
+      // Listed for 10 s once its session ended (observed.ts), then dropped.
+      port.observed(hook('session-end'))
+      await vi.advanceTimersByTimeAsync(11_000)
+      expect(calls('questionClose')).toEqual([['h1', own], [ID, outside]])
+    })
   })
 
   // The dial's face of that agent shows its ask while the question is open: a tap that brought it forward leaves it.
-  it('its card stays as the person taps "In <app>" on the dial or the alert opens to be read, and goes at its next turn', async () => {
+  it('its card stays as the person taps "In <app>" on the dial or the alert opens to be read', async () => {
     const { port, listener } = devices()
     port.observed(hook('turn-start'))
     listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })
@@ -9398,8 +9434,6 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     await host().openAgent(ID, 'question')
     await host().openAgent(ID)
     expect(calls('questionClose')).toEqual([])
-    port.observed(hook('turn-start'))
-    expect(calls('questionClose')).toEqual([[ID, ids()[0]]])
   })
 
   // A caller no list holds has no face on the dial to ask on and nothing to open, and with no session its next turn is
@@ -9440,7 +9474,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     expect(calls('questionClose')).toEqual([['h1', own], [ID, outside]])
   })
 
-  it('a card for a session the observed source is switched off for is asked again, and goes at its next turn', () => {
+  it('a card for a session the observed source is switched off for is asked again, and stays through its next turn', () => {
     const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
     switched.HARNESS_DEVICE_OBSERVED = false
     onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
@@ -9449,7 +9483,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     seen.host.watching!(true)
     expect(calls('question')).toEqual([[ID, ids()[0], card('Terminal')], [ID, ids()[0], card('Terminal')]])
     port.observed(hook('turn-start'))
-    expect(calls('questionClose')).toEqual([[ID, ids()[0]]])
+    expect(calls('questionClose')).toEqual([])
   })
 
   it('a dial that attaches is asked the pending notices again', () => {
@@ -9751,7 +9785,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     })
 
     // A message sent while the agent worked starts its next turn the moment this one ends, while the summary still waits
-    // behind the done, whose tokens are being read: the card is gone by the time the summary's turn comes.
+    // behind the done, whose tokens are being read: the card is still there by the time the summary's turn comes.
     it('is silent when its next turn starts while it waits behind its turn\'s done', async () => {
       let finish!: (reading: { input: number; cached: number; output: number }) => void
       let n = 0
@@ -9766,10 +9800,8 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       summary(port, 'h1', { tier: 'alert' })
       card({ kind: 'turn_started' })
       finish({ input: 2, cached: 0, output: 2 })
-      await vi.waitFor(() => expect(calls('questionClose')).toHaveLength(1))
-      expect(tiers()).toEqual([['h1', 'silent']])
-      expect(seen.cable.calls.map(([name]) => name).filter((name) => name === 'summary' || name === 'questionClose'))
-        .toEqual(['summary', 'questionClose'])
+      await vi.waitFor(() => expect(tiers()).toEqual([['h1', 'silent']]))
+      expect(calls('questionClose')).toEqual([])
     })
 
     it('another agent\'s turn end rings as before', async () => {
@@ -9777,20 +9809,6 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
       summary(port, 'a2')
       await vi.waitFor(() => expect(tiers()).toEqual([['a2', 'alert']]))
-    })
-
-    // A tap only brought the agent forward: the card is still pending, so its turn still ends silent.
-    it('rings again once the card went at its next turn, never after a tap alone', async () => {
-      const { port, listener } = devices({ core: bound(), decideTier: null })
-      port.observed(hook('turn-start'))
-      listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
-      listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })
-      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'turn_started' } })
-      await host().openAgent(ID)
-      summary(port, 'h1')
-      summary(port, ID)
-      await vi.waitFor(() => expect(tiers()).toHaveLength(2))
-      expect(tiers()).toEqual(expect.arrayContaining([['h1', 'alert'], [ID, 'silent']]))
     })
   })
 
@@ -9987,8 +10005,8 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     })
 
     // A message sent while the agent worked starts its next turn while the done still waits for the turn's tokens: that
-    // start ends the card, and the done asks nothing after it.
-    it('its next turn starting while its done waits for the turn\'s tokens leaves nothing to ask', async () => {
+    // start is no answer, so the done still asks the card once.
+    it('its next turn starting while its done waits for the turn\'s tokens still leaves it to be asked once', async () => {
       let finish!: (reading: { input: number; cached: number; output: number }) => void
       let n = 0
       const readUsage = vi.fn((_id: string) => (++n === 2
@@ -10001,10 +10019,10 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       done(port)
       turnStarted()
       finish({ input: 2, cached: 0, output: 2 })
-      await vi.waitFor(() => expect(calls('questionClose')).toEqual([['h1', held]]))
-      expect(shownAsks()).toEqual([])
-      expect(seen.cable.calls.map(([name]) => name).filter((name) => name === 'turnDone' || name === 'questionClose'))
-        .toEqual(['turnDone', 'questionClose'])
+      await vi.waitFor(() => expect(shownAsks()).toHaveLength(1))
+      askedAgain('h1', held, 'Harness')
+      expect(seen.cable.calls.map(([name]) => name).filter((name) => ['turnDone', 'questionClose', 'question'].includes(name)))
+        .toEqual(['turnDone', 'questionClose', 'question'])
     })
 
     it('with no dial at its end it stays held', async () => {
@@ -10175,12 +10193,14 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       await host().openAgent(observedAgentId('claude', 'sess-9'))
       expect(calls('questionClose')).toHaveLength(1)
       expect(nudge(listener, 'sess-9', true)).toEqual({ nudge: false })
-      // A Harness agent's, ended by a turn_started with no done since its turn's first card, as its continuation sends.
+      // A Harness agent's, with a turn_started since its turn's first card and no done, as its continuation sends: the
+      // turn_started closes no card (docs/plans/2026-11-27-dial-notice-cards-agent-closes-design.md, rule 5), nor is it
+      // the turn's mark.
       processing(port)
       listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
       port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'turn_started' } })
       await vi.advanceTimersByTimeAsync(0)
-      expect(calls('questionClose')).toHaveLength(2)
+      expect(calls('questionClose')).toHaveLength(1)
       expect(nudge(listener, 's-h1', true)).toEqual({ nudge: false })
       expect(logs.filter((line) => line === '[device] nudge · claude · notice')).toHaveLength(2)
     })
@@ -10534,11 +10554,10 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     })
 
     it('a card that ends leaves the file', () => {
-      const { port, listener } = devices()
-      port.observed(hook('session-start'))
-      listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })
+      const { port, listener } = devices({ core: bound() })
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
       vi.advanceTimersByTime(1_000)
-      port.observed(hook('turn-start'))
+      port.card({ type: 'agent_deleted', payload: { agentId: 'h1' } })
       vi.advanceTimersByTime(1_000)
       expect(saved().cards).toEqual([])
     })
@@ -10684,8 +10703,8 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       expect(ringing()).toEqual([])
     })
 
-    // Most likely a turn after the notice: the card it rang for is over.
-    it('a restored card of an observed agent the scan finds working is not shown', async () => {
+    // A turn is no answer (2026-11-27): the card stays until its agent closes it.
+    it('a restored card of an observed agent the scan finds working is shown as a row, held', async () => {
       const { port, restored } = await restartWithObserved(() => {
         // An open session the scan finds; with no idle record it reads as in a turn.
         readers.known.set('sess-1', 'terminal')
@@ -10695,11 +10714,10 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       seen.host.watching!(true)
       port.swarms(null)
       await vi.waitFor(async () => expect((await host().listAgentSnapshot()).agents.map((agent) => agent.id)).toContain(ID))
-      expect(host().listUnread()).toEqual([])
-      expect(calls('replaceNotifications').filter(([rows]) => (rows as Array<{ agentId: string }>).some((row) => row.agentId === ID))).toEqual([])
-      expect(calls('questionClose')).toEqual([[ID, restored]])
-      vi.advanceTimersByTime(1_000)
-      expect(saved().cards).toEqual([])
+      expect(host().listUnread()).toEqual([{ agentId: ID, machineId: 'machine-1', question: true, text: LINE }])
+      expect(calls('hold')).toEqual([[ID, restored, card('Orca')]])
+      expect(calls('questionClose')).toEqual([])
+      expect(ringing()).toEqual([])
     })
 
     const H1 = [{ agentId: 'h1', registeredAt: 1, engine: 'claude', sessionId: 's-h1' }] as RegisteredSession[]
@@ -10789,10 +10807,12 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       })
     })
 
-    it('a card of a running turn ends a Harness agent\'s restored row', async () => {
-      const { port, restored } = await restartWithHarness()
+    it('a card of a running turn keeps a Harness agent\'s restored row', async () => {
+      const { port } = await restartWithHarness()
+      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'turn_started' } })
       port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'processing', text: 'Working' } })
-      expect(calls('questionClose')).toEqual([['h1', restored]])
+      expect(calls('questionClose')).toEqual([])
+      expect(host().listUnread()).toEqual([{ agentId: 'h1', machineId: 'machine-1', question: true, text: LINE }])
     })
 
     it('an agent herdr lists under a new id is found by its session, and the file takes the new id', async () => {
@@ -17368,7 +17388,7 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
       expect(await waits(port)).toEqual({ dial_wait_elsewhere_under_30s: 2, dial_wait_none: 2 })
     })
 
-    it('a waiting notice ended by its next turn is elsewhere, by a tap is dial, by its agent leaving is none', async () => {
+    it('a waiting notice is not ended by its next turn; by a tap it is dial, by its agent leaving none', async () => {
       vi.useFakeTimers()
       const { port, listener } = withNotices()
       await attach(port)
@@ -17384,7 +17404,7 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
       await vi.advanceTimersByTimeAsync(60_000)
       notice(listener, 'h3', 'Waiting · Sign in to the registry')
       port.card({ type: 'agent_deleted', payload: { agentId: 'h3' } })
-      expect(await waits(port)).toEqual({ dial_wait_elsewhere_under_30s: 1, dial_wait_dial_30s_to_2m: 1, dial_wait_none: 1 })
+      expect(await waits(port)).toEqual({ dial_wait_dial_30s_to_2m: 1, dial_wait_none: 1 })
     })
 
     it('a proceeding notice is no wait, and ends the wait of the notice it takes the place of as answered', async () => {
@@ -17711,6 +17731,7 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
 
     // Not a ring: the waits keep meaning the dial rang (docs/plans/2026-11-26-needs-you-right-design.md, Part 2).
     it('a notice held quiet counts as such, opens no wait, and its answer counts', async () => {
+      vi.useFakeTimers()
       const { port, listener } = withNotices()
       await attach(port)
       // The person with sess-1: their prompt to it in Orca, Orca in front, and the dial on it.
@@ -17722,12 +17743,16 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
       notice(listener, 'h1', 'Waiting · Connect the VPN')
       port.observed(hook('turn-start'))
       port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'turn_started' } })
+      // A turn start ends no wait: both agents leave, and only the rung one's wait is counted.
+      port.card({ type: 'agent_deleted', payload: { agentId: 'h1' } })
+      port.observed(hook('session-end'))
+      await vi.advanceTimersByTimeAsync(11_000)
       const counts = await counted(port)
       expect(counts).toMatchObject({
         dial_notice_shown: 2, dial_notice_present: 1, dial_notice_answered_10m: 1, dial_notice_present_answered_10m: 1,
       })
       expect(Object.fromEntries(Object.entries(counts).filter(([name]) => name.startsWith('dial_wait_'))))
-        .toEqual({ dial_wait_elsewhere_under_30s: 1 })
+        .toEqual({ dial_wait_none: 1 })
       expect(readFileSync(usageFile(), 'utf8')).not.toMatch(/sess-1|s-h1/)
     })
 
@@ -17749,6 +17774,9 @@ describe('the dial\'s usage counts, in dial-usage.json (docs/plans/2026-11-23-di
         port.observed(hook('turn-stop'))
         await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
         port.observed(hook('turn-start'))
+        // A turn start ends no wait: its agent leaving does.
+        port.observed(hook('session-end'))
+        await vi.advanceTimersByTimeAsync(11_000)
         const counts = await counted(port)
         expect(counts).toMatchObject({ dial_notice_present: 1, dial_notice_present_roused: 1, dial_notice_present_answered_10m: 1 })
         expect(Object.entries(counts).filter(([name]) => name.startsWith('dial_wait_')).reduce((sum, [, n]) => sum + n, 0))
