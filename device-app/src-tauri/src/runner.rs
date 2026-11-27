@@ -601,7 +601,7 @@ mod tests {
     use std::fs;
     use std::io;
     use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, Condvar, Mutex, mpsc};
     use std::thread;
     use std::time::{Duration, Instant};
@@ -926,16 +926,17 @@ mod tests {
     /// typing or a select, and a test that needs one aged moves it past the bound at once.
     struct Hands {
         start: Instant,
-        moved: Mutex<Duration>,
+        /// In nanoseconds, with no lock: the runner reads it under the tab rules' lock, which is taken last.
+        moved: AtomicU64,
     }
 
     impl Hands {
         fn now(&self) -> Instant {
-            self.start + *self.moved.lock().unwrap()
+            self.start + Duration::from_nanos(self.moved.load(Ordering::SeqCst))
         }
 
         fn advance(&self, by: Duration) {
-            *self.moved.lock().unwrap() += by;
+            self.moved.fetch_add(by.as_nanos() as u64, Ordering::SeqCst);
         }
     }
 
@@ -1027,7 +1028,7 @@ mod tests {
         let send = Arc::new(move |event| {
             let _ = sender.send(event);
         });
-        let hands = Arc::new(Hands { start: Instant::now(), moved: Mutex::default() });
+        let hands = Arc::new(Hands { start: Instant::now(), moved: AtomicU64::default() });
         let clock = hands.clone();
         // A watch these tests stop ends by itself: on a loaded machine the fake can take past STOP_GRACE to.
         let runner = Runner::polling_every(doors, send, EVERY, WAIT, Arc::new(move || clock.now()));
