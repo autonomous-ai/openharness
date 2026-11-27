@@ -29,8 +29,9 @@ const RELINK_MS = 30_000
 // `link` reads one file and checks one socket, and `attach` sends one message, so each answers as the CLI starts; under
 // RELINK_MS, so two never run at once.
 const RELINK_TIMEOUT_MS = 5_000
-// `asked` bounds its post at 1 s: the hook's own timeout.
-const ASKED_TIMEOUT_MS = 5_000
+// Nothing waits on `asked` (the mod runs it from a timer), and on Windows its post alone can take 4 s, plus the CLI's
+// start on a busy machine.
+const ASKED_TIMEOUT_MS = 10_000
 // Windows: a follower that ran this long was holding polls, so the next starts after RESTART_MS and the count of quick
 // ends starts over. Quick ends in a row start again after 1, 2, 4, 8 and 16 s, and the sixth waits OLD_HARNESS_MS.
 const RAN_MS = 60_000
