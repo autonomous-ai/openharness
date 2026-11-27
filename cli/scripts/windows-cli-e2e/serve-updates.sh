@@ -22,14 +22,14 @@ case "${1:-}" in
     (cd "$cli" && ADAPTER_VERSION="$version" BUNDLE_OUT_DIR="$out" npm run --silent bundle >/dev/null)
     [ "$1" = break-canary ] && prepend "$out/cli.js" 'process.exit(3);'
     [ "$1" = break-core ] && prepend "$out/cli.js" 'if (process.argv[2] === "__run") process.exit(1);'
-    shasum -a 256 "$out/cli.js" "$out/notify.mjs" ;;
+    shasum -a 256 "$out/cli.js" "$out/notify.mjs" "$out/inbox.mjs" ;;
   offer)
     version=$2 out="$site/$2"
     mkdir -p "$site/cli"
     node -e '
       const [dir, version, base] = process.argv.slice(1), fs = require("fs"), crypto = require("crypto")
       const ref = (name) => { const b = fs.readFileSync(`${dir}/${name}`); return { url: `${base}/${name}`, sha256: crypto.createHash("sha256").update(b).digest("hex"), size: b.length } }
-      console.log(JSON.stringify({ cli: { version, cli: ref("cli.js"), notify: ref("notify.mjs") } }, null, 2))
+      console.log(JSON.stringify({ cli: { version, cli: ref("cli.js"), notify: ref("notify.mjs"), inbox: ref("inbox.mjs") } }, null, 2))
     ' "$out" "$version" "http://$bind:$port/$version" > "$site/cli/metadata.json"
     cat "$site/cli/metadata.json" ;;
   serve)

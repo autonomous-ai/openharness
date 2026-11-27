@@ -47,13 +47,21 @@ const pointer = () => readFileSync(join(ptyRoot, 'current-pty'), 'utf8').trim()
 const cliOnDisk = () => readFileSync(join(cliDir, 'cli.js'), 'utf8')
 
 /** The steps on the temp root: the downloads in the test's hands, the rest real (macOS's in-place CLI layout). */
-function steps(o: { cli?: Buffer | null; hostProtocol?: number; hostReads?: (version: string) => number | null; stage?: UpdateStepsDeps['stage'] } = {}) {
+function steps(o: {
+  cli?: Buffer | null; inbox?: Buffer | null; hostProtocol?: number; hostReads?: (version: string) => number | null; stage?: UpdateStepsDeps['stage']
+} = {}) {
   const lines: string[] = []
   const order: string[] = []
+  /** The inbox.mjs each stage was given. */
+  const staged: (Buffer | null)[] = []
   const hostProtocol = o.hostProtocol ?? 2
   const deps: Partial<UpdateStepsDeps> = {
-    downloadCli: async () => ({ cliBuf: o.cli ?? cliNeeding(2), notifyBuf: Buffer.from('export {}\n') }),
-    stage: o.stage ?? ((dir, cliBuf, notifyBuf, version) => { order.push('stage cli'); stage(dir, cliBuf, notifyBuf, version, 'darwin') }),
+    downloadCli: async () => ({ cliBuf: o.cli ?? cliNeeding(2), notifyBuf: Buffer.from('export {}\n'), inboxBuf: o.inbox ?? null }),
+    stage: o.stage ?? ((dir, cliBuf, notifyBuf, version, inboxBuf) => {
+      order.push('stage cli')
+      staged.push(inboxBuf)
+      stage(dir, cliBuf, notifyBuf, version, 'darwin', null, inboxBuf)
+    }),
     confirm: (dir) => { order.push('confirm cli'); confirm(dir) },
     // The installed host's `version`: the new folder speaks [hostProtocol], the old one 2.
     readHostProtocol: (binary) => (o.hostReads ? o.hostReads(binary) : binary.includes('0.11.0') ? hostProtocol : 2),
@@ -71,7 +79,7 @@ function steps(o: { cli?: Buffer | null; hostProtocol?: number; hostReads?: (ver
   }
   const run = (want: { cli: UpdateEntry | null; pty: PtyEntry | null }) =>
     runUpdateSteps({ cliEntry: want.cli, pty: want.pty, cliDir, ptyRoot: root, currentVersion: '1.0.0', deps })
-  return { run, lines, order }
+  return { run, lines, order, staged }
 }
 
 /** cli.ts with its comments blanked, and `updateCommand`'s body. */
@@ -179,11 +187,34 @@ describe('harness update', () => {
     const result = await runUpdateSteps({
       cliEntry, pty: null, cliDir, ptyRoot: null, currentVersion: '1.0.0',
       deps: {
-        downloadCli: async () => ({ cliBuf: cliNeeding(above), notifyBuf: Buffer.from('export {}\n') }),
-        stage: (dir, cliBuf, notifyBuf, version) => stage(dir, cliBuf, notifyBuf, version, 'darwin'),
+        downloadCli: async () => ({ cliBuf: cliNeeding(above), notifyBuf: Buffer.from('export {}\n'), inboxBuf: null }),
+        stage: (dir, cliBuf, notifyBuf, version, inboxBuf) => stage(dir, cliBuf, notifyBuf, version, 'darwin', null, inboxBuf),
         log: (line) => lines.push(line),
       },
     })
     expect(result).toEqual({ cli: 'installed', pty: 'none' })
+  })
+
+  // Windows' inbox.mjs (docs/plans/2026-11-27-windows-follower-ram-design.md, section 5): the build's own follower, run by
+  // the real canary beside its cli.js and staged with it.
+  it('hands the build\'s inbox.mjs to its canary and its stage, and installs it', async () => {
+    const inbox = Buffer.from('console.log(JSON.stringify({ off: true }))\n')
+    const m = steps({ inbox })
+    expect(await m.run({ cli: cliEntry, pty: null })).toEqual({ cli: 'installed', pty: 'none' })
+    expect(m.staged).toEqual([inbox])
+  })
+
+  it('keeps the build in use when its inbox.mjs fails its canary', async () => {
+    const m = steps({ inbox: Buffer.from('process.exit(1)\n') })
+    expect(await m.run({ cli: cliEntry, pty: null })).toEqual({ cli: 'failed', pty: 'none' })
+    expect(m.lines).toContain('  ✗ the new build failed its self-check — keeping v1.0.0')
+    expect(cliOnDisk()).toBe('console.log("1.0.0")\n')
+    expect(m.order).toEqual([])
+  })
+
+  it('installs a build that has no inbox.mjs', async () => {
+    const m = steps({ inbox: null })
+    expect(await m.run({ cli: cliEntry, pty: null })).toEqual({ cli: 'installed', pty: 'none' })
+    expect(m.staged).toEqual([null])
   })
 })

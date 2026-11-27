@@ -302,7 +302,7 @@ report all fields.
 | `ADAPTER_UPDATE_CHECK_MS` | `60000` | how often (ms) to poll for a newer build (no check on start — `harness start` already staged the newest) |
 | `ADAPTER_UPDATE_SLOT_SEC` | `45` | the wall-clock second each poll lands on; keeps clear of the desktop's `harness start` slot at :15. Negative = plain interval |
 | `ADAPTER_UPDATE_DISABLE` | `false` | set `true` to turn self-update off |
-| `ADAPTER_CLI_DIR` | `~/.harness/cli` | install dir holding the `cli.js`/`notify.mjs` the updater swaps |
+| `ADAPTER_CLI_DIR` | `~/.harness/cli` | install dir holding the `cli.js`/`notify.mjs` the updater swaps (on Windows also `inbox.mjs`) |
 | `LOG_FRAMES` | `false` | one log line per backend frame — type, audience and opaque ids, never a payload body. Every content-bearing frame is encrypted before it reaches the socket, so this is the only way to see what the daemon actually sent |
 | `HARNESS_HOOK_DEADLINE_MS` | `4500` | wall-clock budget a hook gives itself before abandoning optional work. Raise it on a slow or heavily loaded machine, where the budget is spent on load rather than on the hook and the offline registry fallback silently does nothing. Clamped, never below the default |
 | `ORI_VOICE_ROUTE_MODEL` | `deepseek/deepseek-v4-flash` | the voice router's classification model for agents routed through an OpenRouter gateway (`ori claude`), which have no vendor credential to spend |

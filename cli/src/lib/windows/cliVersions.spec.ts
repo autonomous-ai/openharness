@@ -95,6 +95,53 @@ describe('the CLI\'s version folders', () => {
     expect(readFileSync(join(cli, '0.5.0', 'cli.js'), 'utf8')).toBe('cli')
   })
 
+  it('hold the build\'s inbox.mjs when it has one, and are version folders without it', () => {
+    const cli = cliDir()
+    writeVersionFolder(cli, '0.5.0', Buffer.from('cli'), Buffer.from('notify'), Buffer.from('inbox'))
+    expect(readdirSync(join(cli, '0.5.0')).sort()).toEqual(['cli.js', 'inbox.mjs', 'notify.mjs', 'package.json'])
+    expect(readFileSync(join(cli, '0.5.0', 'inbox.mjs'), 'utf8')).toBe('inbox')
+    writeVersionFolder(cli, '0.4.0', Buffer.from('cli'), Buffer.from('notify'))
+    expect(readdirSync(join(cli, '0.4.0')).sort()).toEqual(['cli.js', 'notify.mjs', 'package.json'])
+    expect(isVersionFolder(cli, '0.4.0')).toBe(true)
+  })
+
+  it('write a folder again that lacks the build\'s inbox.mjs or holds another, and keep one whose three files match', () => {
+    const cli = cliDir()
+    const old = () => readdirSync(cli).filter((name) => /^\.0\.5\.0\..+\.old$/.test(name))
+    writeVersionFolder(cli, '0.5.0', Buffer.from('cli'), Buffer.from('notify'))
+    writeVersionFolder(cli, '0.5.0', Buffer.from('cli'), Buffer.from('notify'), Buffer.from('inbox'))
+    expect(readFileSync(join(cli, '0.5.0', 'inbox.mjs'), 'utf8')).toBe('inbox')
+    expect(old()).toHaveLength(1)
+    for (const name of old()) rmSync(join(cli, name), { recursive: true })
+    writeVersionFolder(cli, '0.5.0', Buffer.from('cli'), Buffer.from('notify'), Buffer.from('other inbox'))
+    expect(readFileSync(join(cli, '0.5.0', 'inbox.mjs'), 'utf8')).toBe('other inbox')
+    expect(old()).toHaveLength(1)
+    for (const name of old()) rmSync(join(cli, name), { recursive: true })
+    fault.written.length = 0
+    writeVersionFolder(cli, '0.5.0', Buffer.from('cli'), Buffer.from('notify'), Buffer.from('other inbox'))
+    expect(readdirSync(cli)).toEqual(['0.5.0'])
+    expect(fault.written).toEqual([])
+  })
+
+  it('keep a folder with these cli.js and notify.mjs when the build has no inbox.mjs, whatever inbox.mjs it holds', () => {
+    const cli = cliDir()
+    writeVersionFolder(cli, '0.5.0', Buffer.from('cli'), Buffer.from('notify'), Buffer.from('inbox'))
+    fault.written.length = 0
+    writeVersionFolder(cli, '0.5.0', Buffer.from('cli'), Buffer.from('notify'))
+    expect(readdirSync(cli)).toEqual(['0.5.0'])
+    expect(readFileSync(join(cli, '0.5.0', 'inbox.mjs'), 'utf8')).toBe('inbox')
+    expect(fault.written).toEqual([])
+  })
+
+  it('leave nothing behind when the write of inbox.mjs fails', () => {
+    const cli = cliDir()
+    writeVersionFolder(cli, '0.5.0', Buffer.from('cli'), Buffer.from('notify'))
+    fault.at = (file) => file === join(cli, `.0.5.0.${process.pid}.tmp`, 'inbox.mjs')
+    expect(() => writeVersionFolder(cli, '0.5.0', Buffer.from('cli'), Buffer.from('notify'), Buffer.from('inbox'))).toThrow('ENOSPC')
+    expect(readdirSync(cli)).toEqual(['0.5.0'])
+    expect(readdirSync(join(cli, '0.5.0')).sort()).toEqual(['cli.js', 'notify.mjs', 'package.json'])
+  })
+
   it('switch by moving cli\\current and refreshing the stable notify.mjs the hooks name', () => {
     const cli = cliDir()
     writeVersionFolder(cli, '0.5.0', Buffer.from('cli'), Buffer.from('notify 0.5.0'))
@@ -168,6 +215,15 @@ describe('retiring older builds', () => {
     })
     expect(removed.sort()).toEqual(['.0.3.0.1.old', '.0.5.4.998.tmp', '0.5.0'])
     expect(readdirSync(cli).sort()).toEqual(['.0.5.3.999.tmp', '0.4.0', '0.5.1', '0.5.2', 'data'])
+  })
+
+  it('keeps a build a follower runs inbox.mjs from', async () => {
+    const cli = cliDir()
+    for (const version of ['0.5.0', '0.5.1']) writeVersionFolder(cli, version, Buffer.from(version), Buffer.from('n'), Buffer.from('i'))
+    const follower = `"C:\\h\\runtime\\node\\node.exe" ${join(cli, '0.5.0', 'inbox.mjs')} device claude inbox 0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d`
+    const remove = (path: string) => rmSync(path, { recursive: true, force: true })
+    expect(await retireUnused(cli, new Set(['0.5.1']), { rows: rows(follower), remove, log: () => {} })).toEqual([])
+    expect(readdirSync(cli).sort()).toEqual(['0.5.0', '0.5.1'])
   })
 
   it('removes nothing it cannot see is unused, and tries again later what it cannot remove yet', async () => {

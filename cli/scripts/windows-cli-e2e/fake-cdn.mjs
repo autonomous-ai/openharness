@@ -75,7 +75,8 @@ export function stagingLayout({ version, ptyVersion, nodeVersion, prefix = STAGI
     manifestBase: storage(`${prefix}/`),
     installScript: { object: `${prefix}/cli/install.ps1`, url: cdn(`${prefix}/cli/install.ps1`) },
     manifests: { cli: `${prefix}/cli/metadata.json`, pty: `${prefix}/pty/metadata.json`, runtime: `${prefix}/runtime/metadata.json` },
-    cli: Object.fromEntries(['cli.js', 'notify.mjs'].map((name) => [name, { object: cliObject(name), url: cdn(cliObject(name)) }])),
+    // inbox.mjs: the Windows follower beside cli.js (docs/plans/2026-11-27-windows-follower-ram-design.md section 4).
+    cli: Object.fromEntries(['cli.js', 'notify.mjs', 'inbox.mjs'].map((name) => [name, { object: cliObject(name), url: cdn(cliObject(name)) }])),
     pty: Object.fromEntries(['win32-x64', 'win32-arm64'].map((p) => [p, { object: ptyObject(p), url: cdn(ptyObject(p)) }])),
     node: Object.fromEntries(['x64', 'arm64'].map((arch) => [`win32-${arch}`, { object: nodeObject(arch), url: storage(nodeObject(arch)) }])),
   }

@@ -37,7 +37,6 @@
 import { mkdirSync, realpathSync } from 'node:fs'
 import { connect, type Socket } from 'node:net'
 import { dirname, join } from 'node:path'
-import { setTimeout as sleep } from 'node:timers/promises'
 import { harnessPath } from '../config/harnessHome.js'
 import { claudeDisable, claudeEnable, claudeHomeDisable, claudeHomeEnable, claudeStatus, type ClaudePluginFiles, type ClaudeRun } from '../devices/claudePlugin.js'
 import { codexMarketplace, codexPluginState, codexRemove, codexSetUp, type CodexFailure } from '../devices/codexPlugin.js'
@@ -55,8 +54,8 @@ import { daemonPipe } from '../lib/windows/daemonPipe.js'
 import type { PipeTarget } from '../lib/windows/pipeClient.js'
 import { daemonPost, runAsked } from './asked.js'
 import { runCodexAsked } from './codexAsked.js'
-import { CALLER_LIVENESS, createDaemonProof, followInbox } from './inbox.js'
-import { claudePluginOn, claudeSettingsPath } from './plugin.js'
+import { inboxSessionOf, pluginActs, runInbox } from './inboxCommand.js'
+import { claudeSettingsPath } from './plugin.js'
 import { ownSkillIn, runStart } from './start.js'
 import { codexHeadless, NUDGE_ANSWER_MS, runStop, type StopDeps } from './stop.js'
 
@@ -129,16 +128,10 @@ export async function runDeviceCommand(argv: string[], deps: DeviceDeps): Promis
   if (argv[0] === 'notify') return runNotice(argv.slice(1), deps)
   const words = argv.filter((arg) => !arg.startsWith('-'))
   const json = argv.includes('--json')
-  // A missing id is answered as a refused one, off: the mod reads lines, never the usage.
-  if (words.length <= 3 && words[0] === 'claude' && words[1] === 'inbox') {
-    return followInbox(words[2] ?? '', {
-      dataDir: deps.dataDir, port: deps.port, platform: deps.platform, acts: () => pluginActs(deps.dataDir),
-      proof: createDaemonProof(), write: deps.write,
-      // The caller's end cuts the wait short: the abort is the only way it rejects.
-      wait: (ms, signal) => sleep(ms, undefined, { signal }).catch(() => {}),
-      pid: process.pid, ppid: process.ppid, liveness: CALLER_LIVENESS, now: Date.now,
-    })
-  }
+  // The bundle's entry starts the same words without this module (inboxCommand.ts); a missing id is answered off, as the
+  // mod reads lines, never the usage.
+  const inboxSession = inboxSessionOf(argv)
+  if (inboxSession !== null) return runInbox(inboxSession, deps)
   if (words.length <= 3 && words[0] === 'claude' && words[1] === 'attach') return attachSession(words[2] ?? '', deps)
   if (words.length === 2 && (words[0] === 'orca' || words[0] === 'vscode') && words[1] === 'link') return devicesLink(deps)
   if (words.length === 2 && words[0] === 'codex') return codexCommand(words[1], json, deps)
@@ -358,15 +351,6 @@ const ORCA_OFF_FAILED = 'Could not turn off Claude Code in one Orca account.'
 /** The default home's, from an Orca terminal: where Claude Code's sessions outside Orca run. */
 const DEFAULT_ON_FAILED = 'Could not turn on Claude Code outside Orca.'
 const DEFAULT_OFF_FAILED = 'Could not turn off Claude Code outside Orca.'
-
-/**
- * Whether the plugin's hook and mod act: its entry on in this command's Claude Code settings, and `disable` has not
- * removed Claude Code. The devices service installs the plugin into the daemon's Claude Code home, which may not be the
- * one a `disable` ran with: the plugin stays on there, and the removal alone keeps the dial off it.
- */
-function pluginActs(dataDir: string): boolean {
-  return claudePluginOn(claudeSettingsPath()) && readRemoved(dataDir).claude !== true
-}
 
 /** Whether the dial is set up for a Claude Code session of this command's home: the plugin acts and Harness's skill is there. */
 function claudeSkillOn(dataDir: string): boolean {

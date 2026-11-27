@@ -380,9 +380,11 @@ function Install-HarnessNode {
 }
 
 function Install-HarnessCli {
-  # cli\<version>\cli.js, notify.mjs and package.json, written into staging and renamed into place, then
-  # cli\current and the stable cli\notify.mjs. A version folder whose cli.js already has the manifest's digest
-  # is kept: it is that version, and a running daemon may be using it.
+  # cli\<version>\cli.js, notify.mjs, inbox.mjs (when the manifest names it) and package.json, written into staging
+  # and renamed into place, then cli\current and the stable cli\notify.mjs. A version folder whose cli.js already has
+  # the manifest's digest, and whose inbox.mjs has the manifest's when it names one, is kept: it is that version, and
+  # a running daemon may be using it. inbox.mjs has no stable copy: harness.exe runs the dial's inbox follower on it
+  # from the version folder, and on cli.js when it is not there (spec 2026-11-27-windows-follower-ram, section 4).
   param([string]$Root, $Entry, [string]$Source)
   $version = [string]$Entry.version
   if ($version -notmatch $HarnessCliVersionPattern) { throw "The CLI manifest names an unexpected version '$version'." }
@@ -391,17 +393,39 @@ function Install-HarnessCli {
   New-Item -ItemType Directory -Force -Path $cliRoot | Out-Null
   $target = Join-Path $cliRoot $version
   $installed = Join-Path $target 'cli.js'
-  $current = (Test-Path -LiteralPath $installed -PathType Leaf) -and (Test-Path -LiteralPath (Join-Path $target 'notify.mjs') -PathType Leaf) -and ((Get-HarnessSha256 $installed) -ieq [string]$Entry.cli.sha256)
+  # The updaters' rule: only a string url and a string sha256 make an inbox. Any other shape is none, so an odd
+  # manifest installs as one without it and never fails the install.
+  $inbox = Get-HarnessProperty $Entry 'inbox'
+  if (-not ((Get-HarnessProperty $inbox 'url') -is [string] -and (Get-HarnessProperty $inbox 'sha256') -is [string])) { $inbox = $null }
+  $installedInbox = Join-Path $target 'inbox.mjs'
+  $current = (Test-Path -LiteralPath $installed -PathType Leaf) -and (Test-Path -LiteralPath (Join-Path $target 'notify.mjs') -PathType Leaf) -and ((Get-HarnessSha256 $installed) -ieq [string]$Entry.cli.sha256) -and
+    (-not $inbox -or ((Test-Path -LiteralPath $installedInbox -PathType Leaf) -and ((Get-HarnessSha256 $installedInbox) -ieq $inbox.sha256)))
   if (-not $current) {
     Write-Host "  Downloading Harness $version..."
     $staging = New-HarnessStaging $cliRoot 'cli'
     try {
       Save-HarnessVerified -Source (Resolve-HarnessRef ([string]$Entry.cli.url) $Source) -Destination (Join-Path $staging 'cli.js') -Sha256 ([string]$Entry.cli.sha256) -Size $Entry.cli.size
       Save-HarnessVerified -Source (Resolve-HarnessRef ([string]$Entry.notify.url) $Source) -Destination (Join-Path $staging 'notify.mjs') -Sha256 ([string]$Entry.notify.sha256) -Size $Entry.notify.size
+      if ($inbox) { Save-HarnessVerified -Source (Resolve-HarnessRef $inbox.url $Source) -Destination (Join-Path $staging 'inbox.mjs') -Sha256 $inbox.sha256 -Size (Get-HarnessProperty $inbox 'size') }
       # The bundle is an ES module, and Node decides that from the nearest package.json. install.sh writes the same file.
       [IO.File]::WriteAllText((Join-Path $staging 'package.json'), "{""type"":""module""}`n", (New-Object Text.UTF8Encoding $false))
-      if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force }
-      Move-Item -LiteralPath $staging -Destination $target
+      # A folder already here is moved aside whole, never removed in place: a lock partway through a removal (an
+      # antivirus scan) left half a folder that a running daemon uses. A failed move leaves it as it was, and one
+      # the staged folder could not replace is put back. The aside name is one the daemon's retirement removes
+      # (writeVersionFolder's, cliVersions.ts), so a copy this removal leaves goes at its next pass.
+      # Every move here is one rename, [IO.Directory]::Move, which happens whole or throws with nothing moved (all
+      # three folders are in cli\, one volume). Move-Item is not: when the rename fails it moves the folder file by
+      # file, and with package.json held it took cli.js and notify.mjs out of a live folder (CI run 46051972659).
+      $aside = $null
+      if (Test-Path -LiteralPath $target) {
+        $aside = Join-Path $cliRoot ".$version.$PID-$([DateTime]::UtcNow.Ticks).old"
+        [System.IO.Directory]::Move($target, $aside)
+      }
+      try { [System.IO.Directory]::Move($staging, $target) } catch {
+        if ($aside) { [System.IO.Directory]::Move($aside, $target) }
+        throw
+      }
+      if ($aside) { Remove-Item -LiteralPath $aside -Recurse -Force -ErrorAction SilentlyContinue }
     } finally { if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue } }
   }
   Write-HarnessPointer -Path (Join-Path $cliRoot 'current') -Value $version

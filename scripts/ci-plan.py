@@ -149,6 +149,9 @@ WINDOWS_E2E_HARNESS_PATHS = (
     # build-bundle.mjs, fakeDial.ts greets with the firmware's version, reaper.ts starts reaperProcess.mjs.
     "cli/build-bundle.mjs", "devices/harness-device/firmware/version.txt", "cli/e2e/harness/reaperProcess.mjs",
 )
+# windows-e2e: the inbox follower's entry and command, which no spec windows.yml runs tests: check-install.ps1 runs the
+# inbox.mjs they build through harness.exe, the follower's one real run (inbox.ts has its spec in WINDOWS_SPECS).
+WINDOWS_FOLLOWER_PATHS = ("cli/src/inboxEntry.ts", "cli/src/deviceClaude/inboxCommand.ts")
 # A spec tests the module beside it named up to its first dot: secureState.spec.ts tests secureState.ts.
 WINDOWS_SPEC_MODULES = {str(PurePosixPath(spec).with_name(PurePosixPath(spec).name.split(".")[0] + ".ts"))
                         for spec in WINDOWS_SPECS if not spec.endswith("/")}
@@ -553,14 +556,15 @@ def windows_only(path):
 def windows_e2e(path):
     """What windows-e2e tests: Windows-only code, cross-platform code with win32 branches that broke only on Windows
     (#4513: the devices, the cable, the engines' hook scripts, the dial plugins), the TUI and the flasher windows.yml
-    runs, its specs with the modules they test, the Store's pipe test with what it imports, and the dial desk bundle
-    dialWindowsTools.e2e.ts builds and runs, with the harness and the testing helpers it and windows.yml's e2e config
-    run."""
+    runs, its specs with the modules they test, the inbox follower its install check runs, the Store's pipe test with
+    what it imports, and the dial desk bundle dialWindowsTools.e2e.ts builds and runs, with the harness and the testing
+    helpers it and windows.yml's e2e config run."""
     return windows_only(path) or not windows_docs(path) and (
         path.startswith(("cli/src/lib/windows/", "cli/src/devices/", "cli/src/cable/", "cli/hook/", "tui/",
                          "website/src/app/flash-circle.ps1/", "cli/scripts/windows-dial-e2e/"))
         or re.match(r"plugins/harness-device[^/]*/", path) is not None
         or path in WINDOWS_SPEC_MODULES or path in WINDOWS_E2E_HARNESS_PATHS or path in WINDOWS_STORE_PIPE_PATHS
+        or path in WINDOWS_FOLLOWER_PATHS
         or any(covers(spec, path) for spec in WINDOWS_SPECS))
 
 

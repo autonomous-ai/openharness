@@ -4,7 +4,9 @@
  * stable `cli\notify.mjs` the hooks' command lines name. On a Mac an update swaps files in place by rename and keeps
  * `.prev` hard links to roll back to. Windows cannot replace a file a running process holds, and has no symlinks
  * without Developer Mode, so a build is never touched once written: an update writes a new folder and moves the
- * pointer, a rollback moves it back.
+ * pointer, a rollback moves it back. A build whose manifest names one also holds `inbox.mjs`, the dial's inbox follower
+ * that `harness.exe` starts instead of `cli.js` when it is there (docs/plans/2026-11-27-windows-follower-ram-design.md,
+ * section 5); a folder without it is still a build, the follower then runs on `cli.js`.
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -19,6 +21,7 @@ import { windowsProcessRows } from './processTable.js'
 
 const CLI = 'cli.js'
 const NOTIFY = 'notify.mjs'
+const INBOX = 'inbox.mjs'
 const PACKAGE = 'package.json'
 const RUNTIME_PACKAGE = `${JSON.stringify({ type: 'module' })}\n`
 
@@ -39,12 +42,16 @@ function sameBytes(file: string, bytes: Buffer): boolean {
  * Write [version]'s folder whole: into a folder beside it, renamed into place, so nothing ever runs half a build. One
  * already there with these bytes is kept (a build staged again after a rollback, or by `harness update`); one with
  * other bytes is moved aside, never written into, since a process may be running from it (the retirement removes it,
- * lib/selfUpdate.ts `retireCliVersions`).
+ * lib/selfUpdate.ts `retireCliVersions`). [inboxBuf] is the build's `inbox.mjs`, null when its manifest names none: then
+ * an `inbox.mjs` already there is no reason to write the folder again (design section 5).
  */
-export function writeVersionFolder(cliDir: string, version: string, cliBuf: Buffer, notifyBuf: Buffer): string {
+export function writeVersionFolder(
+  cliDir: string, version: string, cliBuf: Buffer, notifyBuf: Buffer, inboxBuf: Buffer | null = null,
+): string {
   if (!VERSION_FOLDER.test(version)) throw new Error(`not a version a folder can be named after: ${JSON.stringify(version)}`)
   const folder = join(cliDir, version)
-  if (sameBytes(join(folder, CLI), cliBuf) && sameBytes(join(folder, NOTIFY), notifyBuf)) return folder
+  if (sameBytes(join(folder, CLI), cliBuf) && sameBytes(join(folder, NOTIFY), notifyBuf)
+    && (!inboxBuf || sameBytes(join(folder, INBOX), inboxBuf))) return folder
   const temporary = join(cliDir, `.${version}.${process.pid}.tmp`)
   try {
     mkdirSync(cliDir, { recursive: true })
@@ -54,6 +61,7 @@ export function writeVersionFolder(cliDir: string, version: string, cliBuf: Buff
     writeFileSync(join(temporary, PACKAGE), RUNTIME_PACKAGE)
     writeFileSync(join(temporary, CLI), cliBuf) // not a state file: the staged version folder
     writeFileSync(join(temporary, NOTIFY), notifyBuf) // not a state file: the staged version folder
+    if (inboxBuf) writeFileSync(join(temporary, INBOX), inboxBuf) // not a state file: the staged version folder
     if (existsSync(folder)) renameSync(folder, join(cliDir, `.${version}.${Date.now()}.old`))
     renameSync(temporary, folder)
   } catch (error) {

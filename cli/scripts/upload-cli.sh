@@ -19,6 +19,7 @@ set -euo pipefail
 ADAPTER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # this package
 CLI="$ADAPTER_DIR/dist/cli.js"
 NOTIFY="$ADAPTER_DIR/dist/notify.mjs"
+INBOX="$ADAPTER_DIR/dist/inbox.mjs"   # the Windows inbox follower; harness.exe runs it on its own
 
 # --- GCS config (all overridable via env) ---
 GCS_BUCKET="${GCS_BUCKET:-s3-autonomous-upgrade-3}"
@@ -27,7 +28,7 @@ GCS_PUBLIC_BASE_URL="${GCS_PUBLIC_BASE_URL:-https://storage.googleapis.com/${GCS
 # every ~60s and this zone's CDN caps ANY cacheable response at ~31 days regardless of origin headers
 # (verified live), which would silently delay self-update fleet-wide. The bundle files it points at are
 # a different story: immutable once published (never re-upload over an existing version — see
-# RELEASE.md), so CDN caching them is pure upside. Only CLI_URL/NOTIFY_URL below use this.
+# RELEASE.md), so CDN caching them is pure upside. Only CLI_URL/NOTIFY_URL/INBOX_URL below use this.
 CDN_ASSET_BASE_URL="${CDN_ASSET_BASE_URL:-https://cdn.autonomous.ai}"
 METADATA_PATH="${METADATA_PATH:-harness/cli/metadata.json}"
 OTA_KEY="${OTA_KEY:-cli}"   # must match ADAPTER_UPDATE_KEY in src/config/env.ts
@@ -130,17 +131,20 @@ if [ "$DO_BUILD" -eq 1 ]; then
   echo ">> bundling…"
   ( cd "$ADAPTER_DIR" && ADAPTER_VERSION="$VER" npm run bundle )
 fi
-[ -f "$CLI" ] && [ -f "$NOTIFY" ] || { echo "error: dist/cli.js or dist/notify.mjs missing — bundle first (drop --no-build)" >&2; exit 1; }
+[ -f "$CLI" ] && [ -f "$NOTIFY" ] && [ -f "$INBOX" ] || { echo "error: dist/cli.js, dist/notify.mjs or dist/inbox.mjs missing — bundle first (drop --no-build)" >&2; exit 1; }
 head -1 "$CLI" | grep -q '^#!' || { echo "error: dist/cli.js lost its shebang on line 1 (esbuild change?)" >&2; exit 1; }
 [ "$(node "$CLI" version)" = "$VER" ] || { echo "error: bundled version != $VER (ADAPTER_VERSION not injected)" >&2; exit 1; }
 node "$ADAPTER_DIR/scripts/test-core-harness-upgrade.mjs" "$CLI"
 node "$ADAPTER_DIR/scripts/check-lean-bundle.mjs" "$CLI"
+node "$ADAPTER_DIR/scripts/check-inbox-bundle.mjs" "$INBOX"
 
-# --- Step 3: upload both artifacts + merge the manifest ---
+# --- Step 3: upload the three artifacts + merge the manifest ---
 CLI_GCS="harness/cli/${VER}/cli.js"
 NOTIFY_GCS="harness/cli/${VER}/notify.mjs"
+INBOX_GCS="harness/cli/${VER}/inbox.mjs"
 CLI_URL="${CDN_ASSET_BASE_URL%/}/${CLI_GCS}"
 NOTIFY_URL="${CDN_ASSET_BASE_URL%/}/${NOTIFY_GCS}"
+INBOX_URL="${CDN_ASSET_BASE_URL%/}/${INBOX_GCS}"
 # `shasum` is a Perl script and is absent from minimal Linux images (only perl-base is installed);
 # `sha256sum` is coreutils and is always there. Prefer it so a release can also be cut from Ubuntu.
 sha256_of() {
@@ -150,14 +154,17 @@ sha256_of() {
 }
 CLI_SHA="$(sha256_of "$CLI")";     CLI_SIZE="$(wc -c < "$CLI" | tr -d ' ')"
 NOTIFY_SHA="$(sha256_of "$NOTIFY")"; NOTIFY_SIZE="$(wc -c < "$NOTIFY" | tr -d ' ')"
+INBOX_SHA="$(sha256_of "$INBOX")";   INBOX_SIZE="$(wc -c < "$INBOX" | tr -d ' ')"
 
-echo ">> uploading cli.js ($CLI_SIZE bytes) + notify.mjs ($NOTIFY_SIZE bytes)"
+echo ">> uploading cli.js ($CLI_SIZE bytes) + notify.mjs ($NOTIFY_SIZE bytes) + inbox.mjs ($INBOX_SIZE bytes)"
 # Immutable per-version path — see the CDN_ASSET_BASE_URL note above. Long max-age here is what
 # actually lets the CDN cache these instead of hitting GCS on every daemon's install/update.
 gcs_refuse_republish "gs://${GCS_BUCKET}/${CLI_GCS}"
 gcs_refuse_republish "gs://${GCS_BUCKET}/${NOTIFY_GCS}"
+gcs_refuse_republish "gs://${GCS_BUCKET}/${INBOX_GCS}"
 gcs_cp "$CLI"    "gs://${GCS_BUCKET}/${CLI_GCS}"    "public, max-age=31536000, immutable"
 gcs_cp "$NOTIFY" "gs://${GCS_BUCKET}/${NOTIFY_GCS}" "public, max-age=31536000, immutable"
+gcs_cp "$INBOX"  "gs://${GCS_BUCKET}/${INBOX_GCS}"  "public, max-age=31536000, immutable"
 
 echo ">> merging manifest: gs://${GCS_BUCKET}/${METADATA_PATH}  (${OTA_KEY})"
 SRC="$(mktemp)"; DST="$(mktemp)"   # removed by cleanup() on EXIT
@@ -169,7 +176,8 @@ fi
 node "$ADAPTER_DIR/scripts/merge-manifest.mjs" \
   "$SRC" "$DST" "$OTA_KEY" "$VER" \
   "$CLI_URL" "$CLI_SHA" "$CLI_SIZE" \
-  "$NOTIFY_URL" "$NOTIFY_SHA" "$NOTIFY_SIZE"
+  "$NOTIFY_URL" "$NOTIFY_SHA" "$NOTIFY_SIZE" \
+  "$INBOX_URL" "$INBOX_SHA" "$INBOX_SIZE"
 gcs_cp "$DST" "gs://${GCS_BUCKET}/${METADATA_PATH}" \
        "no-cache, no-store, must-revalidate" "application/json"
 
@@ -177,5 +185,6 @@ echo ""
 echo ">> published adapter $VER"
 echo "   cli:      $CLI_URL  (sha256 $CLI_SHA)"
 echo "   notify:   $NOTIFY_URL"
+echo "   inbox:    $INBOX_URL"
 echo "   manifest: $META_URL"
 echo "   running daemons self-update to $VER within ~1 min."

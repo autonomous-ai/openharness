@@ -1,0 +1,20 @@
+{
+  "follower": [
+    ["device", "claude", "inbox", "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"],
+    ["device", "claude", "inbox"],
+    ["device", "claude", "inbox", ""],
+    ["device", "--json", "claude", "inbox", "x"],
+    ["device", "claude", "-q", "inbox", "x"]
+  ],
+  "other": [
+    ["device", "claude", "attach", "x"],
+    ["device", "claude", "inbox", "x", "extra"],
+    ["claude", "inbox", "x"],
+    ["Device", "claude", "inbox", "x"],
+    ["device", "Claude", "inbox", "x"],
+    ["tui", "device", "claude", "inbox", "x"],
+    ["device"],
+    ["device", "claude"],
+    []
+  ]
+}

@@ -153,6 +153,17 @@ describe('the Windows release workflows', () => {
     expect(promote).toContain('cmp cli/scripts/install.ps1 "$RUNNER_TEMP/install.ps1"')
   })
 
+  it('checks inbox.mjs as it checks cli.js, after the publish and in staging, and lists it', () => {
+    const release = read('release.yml')
+    expect(stepNamed(release, 'Verify the published release the way a daemon would')).toContain('["inbox", "inbox.mjs"]')
+    const staging = stepNamed(release, 'Read staging back the way install.ps1 will')
+    expect(staging).toContain('cli.inbox')
+    expect(staging).toContain('served inbox bytes differ')
+    // As the post-publish check compares it: a manifest's digest in capitals is the same digest.
+    expect(staging).toContain('digest("hex") !== String(inbox.sha256).toLowerCase()')
+    expect(release).toContain('| \\`inbox.mjs\\` | [download](${base}/inbox.mjs) |')
+  })
+
   it('lets the Node runtime workflow write only a runtime manifest, and fail plainly when the read-back is not served', () => {
     const node = read('release-node-runtime-windows.yml')
     // Final review R3-4: never the fleet's harness/cli/metadata.json, whatever is typed into the dispatch.

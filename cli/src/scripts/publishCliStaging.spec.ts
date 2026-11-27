@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
-// The happy path needs a real bundle (the script runs upload-cli.sh's bundle checks on it), so it is the staging
-// dry run's to show; these cover every refusal, which all come before the bundle is looked at.
+// The happy path needs a real bundle (the script runs upload-cli.sh's cli.js checks on it), so it is the staging
+// dry run's to show; these cover every refusal, and the inbox.mjs check with those cli.js checks passed by a stand-in.
 const script = join(process.cwd(), 'scripts', 'publish-cli-staging.sh')
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -59,6 +59,17 @@ describe.skipIf(process.platform === 'win32')('publish-cli-staging.sh', () => {
     expect(log).not.toMatch(/ cp /)
   })
 
+  it('refuses a version whose inbox.mjs is already there, before the bundle and without uploading', () => {
+    const root = scratch()
+    const path = `${shim(root, 'case "$3" in */inbox.mjs) exit 0;; *) echo "One or more URLs matched no objects" >&2; exit 1;; esac')}:${process.env.PATH}`
+    const result = run(['0.4.18-dev.win1', '--no-build'], { PATH: path, CLI_DIST_DIR: join(root, 'none') })
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('gs://s3-autonomous-upgrade-3/harness/staging/cli/0.4.18-dev.win1/inbox.mjs already exists')
+    const log = readFileSync(join(root, 'gcloud.log'), 'utf8')
+    expect(log).toContain('storage ls gs://s3-autonomous-upgrade-3/harness/staging/cli/0.4.18-dev.win1/inbox.mjs')
+    expect(log).not.toMatch(/ cp /)
+  })
+
   it('aborts, uploading nothing, when gcloud fails for a reason other than not found', () => {
     const root = scratch()
     const path = `${shim(root, 'echo "ERROR: Reauthentication failed" >&2; exit 1')}:${process.env.PATH}`
@@ -75,5 +86,57 @@ describe.skipIf(process.platform === 'win32')('publish-cli-staging.sh', () => {
     expect(result.stderr).toContain('is missing')
     expect(existsSync(join(root, 'dist'))).toBe(false)
     expect(existsSync(join(root, 'out'))).toBe(false)
+  })
+
+  it('stops on a bundle without inbox.mjs', () => {
+    const root = scratch()
+    const dist = join(root, 'dist')
+    mkdirSync(dist)
+    writeFileSync(join(dist, 'cli.js'), '#!/usr/bin/env node\n')
+    writeFileSync(join(dist, 'notify.mjs'), '')
+    const result = run(['0.4.18-dev.win1', '--no-build'], { DRY_RUN: '1', DRY_RUN_OUT: join(root, 'out'), CLI_DIST_DIR: dist })
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('inbox.mjs')
+    expect(result.stderr).toContain('is missing')
+    expect(existsSync(join(root, 'out'))).toBe(false)
+  })
+
+  // upload-cli.sh runs check-inbox-bundle.mjs on inbox.mjs before it uploads (Ken's review of #4681); staging repeats
+  // upload-cli.sh's bundle checks, so it runs that one too. The two cli.js checks need a real bundle: a node on PATH
+  // passes them, and runs everything else, the inbox check among it, on this Node.
+  function bundle(root: string, inbox: string) {
+    const dist = join(root, 'dist')
+    mkdirSync(dist)
+    writeFileSync(join(dist, 'cli.js'), "#!/usr/bin/env node\nconsole.log(process.argv[2] === 'version' ? '0.4.18-dev.win1' : '')\n")
+    writeFileSync(join(dist, 'notify.mjs'), '')
+    writeFileSync(join(dist, 'inbox.mjs'), inbox)
+    const node = join(root, 'node')
+    mkdirSync(node)
+    writeFileSync(join(node, 'node'), [
+      '#!/bin/sh',
+      'case "$1" in */scripts/test-core-harness-upgrade.mjs|*/scripts/check-lean-bundle.mjs) exit 0;; esac',
+      `exec '${process.execPath}' "$@"`,
+      '',
+    ].join('\n'), { mode: 0o755 })
+    return { dist, path: `${node}:${shim(root, 'echo "One or more URLs matched no objects" >&2; exit 1')}:${process.env.PATH}` }
+  }
+
+  it('runs the inbox follower\'s check on inbox.mjs and uploads nothing when it fails', () => {
+    const root = scratch()
+    const { dist, path } = bundle(root, "console.log('private words')\n")
+    const result = run(['0.4.18-dev.win1', '--no-build'], { PATH: path, CLI_DIST_DIR: dist })
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain("the inbox follower's check (device claude inbox not-a-session-id) did not answer {\"off\":true}")
+    expect(result.stderr + result.stdout).not.toContain('private words')
+    expect(readFileSync(join(root, 'gcloud.log'), 'utf8')).not.toMatch(/ cp /)
+  })
+
+  it('passes a bundle whose inbox.mjs answers a refused id {"off":true}, in a dry run', () => {
+    const root = scratch()
+    const { dist, path } = bundle(root, "console.log('{\"off\":true}')\n")
+    const result = run(['0.4.18-dev.win1', '--no-build'], { PATH: path, CLI_DIST_DIR: dist, DRY_RUN: '1', DRY_RUN_OUT: join(root, 'out') })
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout).toContain('>> inbox.mjs: a refused id answers {"off":true} and exits 0')
+    expect(existsSync(join(root, 'out', 'inbox.mjs'))).toBe(true)
   })
 })

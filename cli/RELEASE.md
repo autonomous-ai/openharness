@@ -63,8 +63,10 @@ What the script does, for reading the workflow:
 1. Reads the current version from the live manifest (falling back to `package.json` if the manifest is
    unreadable), then bumps or takes the version it was given.
 2. Bundles with `ADAPTER_VERSION="$VERSION" npm run bundle` and asserts `node dist/cli.js version`
-   reads back that exact string before uploading anything.
-3. Uploads `cli.js` and `notify.mjs` to `harness/cli/<version>/`, then download-merge-reuploads
+   reads back that exact string, and that `node dist/inbox.mjs device claude inbox not-a-session-id` answers
+   `{"off":true}` and exits 0 in a throwaway home within 15 s (`scripts/check-inbox-bundle.mjs`), before uploading
+   anything.
+3. Uploads `cli.js`, `notify.mjs` and `inbox.mjs` to `harness/cli/<version>/`, then download-merge-reuploads
    `metadata.json` in a single write, touching only the `cli` key.
 
 A failed build stops the release; nothing is uploaded and no version is consumed.
@@ -134,6 +136,7 @@ version ships — then the daemon quietly swaps back to it. `--no-updates` pins 
 gs://s3-autonomous-upgrade-3/harness/cli/metadata.json
 gs://s3-autonomous-upgrade-3/harness/cli/<version>/cli.js
 gs://s3-autonomous-upgrade-3/harness/cli/<version>/notify.mjs
+gs://s3-autonomous-upgrade-3/harness/cli/<version>/inbox.mjs
 ```
 
 The manifest is always read straight off the GCS origin (`CDN_ASSET_BASE_URL` in `upload-cli.sh` does
@@ -146,12 +149,21 @@ files it points at are the opposite: immutable once published, so their `url` fi
 {
   "cli": {
     "version": "0.1.72",
-    "url": "https://cdn.autonomous.ai/harness/cli/0.1.72/cli.js",
-    "sha256": "<64 hex>",
-    "size": 2103552
+    "cli": { "url": "https://cdn.autonomous.ai/harness/cli/0.1.72/cli.js", "sha256": "<64 hex>", "size": 2103552 },
+    "notify": { "url": "https://cdn.autonomous.ai/harness/cli/0.1.72/notify.mjs", "sha256": "<64 hex>", "size": 5120 },
+    "inbox": { "url": "https://cdn.autonomous.ai/harness/cli/0.1.72/inbox.mjs", "sha256": "<64 hex>", "size": 99000 }
   }
 }
 ```
+
+`inbox.mjs` is the dial's inbox follower on its own, which `harness.exe` runs on Windows instead of the whole
+`cli.js`. One manifest serves every OS; `inbox` is optional, and a reader ignores it when it is absent or
+malformed.
+
+A known behavior of the first release with `inbox.mjs`: a Windows machine that an older CLI updates to it gets a
+version folder without `inbox.mjs`, since the older updaters stage only `cli.js` and `notify.mjs`, and the new daemon
+does not add it until the next release. So `inbox.mjs` reaches Windows from the second release on; until then the
+follower runs on `cli.js`'s short path.
 
 The bucket must be public-read — that is bucket policy, not something the scripts set.
 
@@ -160,8 +172,8 @@ The bucket must be public-read — that is bucket policy, not something the scri
 1. Polls `ADAPTER_UPDATE_URL` every `ADAPTER_UPDATE_CHECK_MS` (default 60 s) — see `src/config/env.ts`.
 2. Compares the manifest's `cli.version` against its own — strictly newer only (`semverGt`), so
    republishing an old build can never downgrade a fleet.
-3. Downloads `cli.js` + `notify.mjs` and verifies each sha256/size against the manifest **before**
-   anything is swapped in. A mismatch is discarded.
+3. Downloads `cli.js` + `notify.mjs` (on Windows also `inbox.mjs`, when the manifest names it) and verifies
+   each sha256/size against the manifest **before** anything is swapped in. A mismatch is discarded.
 4. Swaps the bundle in when the daemon is idle and restarts, with rollback on a bad build.
 
 **There is no undo.** A bad release is rolled back by publishing a *higher* version containing the

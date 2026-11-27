@@ -18,7 +18,9 @@
  * another process, it ends, in a held poll or a wait, and writes nothing more. A table it cannot read never ends it: at
  * the start it then watches `harness.exe` alone, and later it keeps the caller it found. A newer poll for the session
  * ends an orphan's hold in the core (core/deviceHookCalls.ts).
- * Only the `harness` command's own process runs this; a client of the daemon's existing route, nothing in the core.
+ * Only the `harness` command's own process runs this, a client of the daemon's existing route, nothing in the core:
+ * harness.exe starts it from inbox.mjs, the release's file of its own (inboxEntry.ts), or from cli.js (entry.ts) for an
+ * install without that file and a harness.exe from before it.
  */
 import { statSync } from 'node:fs'
 import { win32 } from 'node:path'
@@ -88,7 +90,7 @@ export interface InboxDeps {
   dataDir: string
   port: number
   platform: NodeJS.Platform
-  /** Whether the plugin's mod acts: on in Claude Code's settings, and not removed (command.ts `pluginActs`). */
+  /** Whether the plugin's mod acts: on in Claude Code's settings, and not removed (inboxCommand.ts `pluginActs`). */
   acts(): boolean
   proof: DaemonProof
   /** Plain fetch, for a daemon reached over its port where it has no socket (lib/localTransport.ts `daemonFetch`). */

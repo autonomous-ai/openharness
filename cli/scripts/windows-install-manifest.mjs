@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * An install manifest for `install.ps1 -Manifest`, made from a local build. Its inputs:
- * - the CLI bundle (dist/cli.js, dist/notify.mjs);
+ * - the CLI bundle (dist/cli.js, dist/notify.mjs, dist/inbox.mjs);
  * - a pty payload folder (harness-pty.exe, harness-launch.exe, harness.exe, conpty.dll, OpenConsole.exe, harness-serial.exe);
  * - nodejs.org's Windows zip, as downloaded.
  * It writes <out>/install-manifest.json and puts every file it names beside it, by relative name, so the folder can
@@ -27,14 +27,14 @@ const PTY_VERSION = /^\d+(\.\d+)*$/
 const fileRef = (name, bytes) => ({ url: name, sha256: createHash('sha256').update(bytes).digest('hex'), size: bytes.length })
 
 /** The document install.ps1 -Manifest reads: the cli, node and pty keys, each shaped as its published manifest's. */
-export function installManifest({ version, cli, notify, nodeZipName, nodeZip, ptyVersion, ptyZipName, ptyZip }) {
+export function installManifest({ version, cli, notify, inbox, nodeZipName, nodeZip, ptyVersion, ptyZipName, ptyZip }) {
   const match = NODE_ZIP.exec(nodeZipName)
   if (!match) throw new Error(`${nodeZipName} is not nodejs.org's Windows zip (node-vX.Y.Z-win-<x64|arm64>.zip)`)
   if (!PTY_VERSION.test(ptyVersion)) throw new Error(`pty version ${ptyVersion} is not a version folder name (digits and dots)`)
   const [, nodeVersion, arch] = match
   const platform = `win32-${arch}`
   return {
-    cli: { version, cli: fileRef('cli.js', cli), notify: fileRef('notify.mjs', notify) },
+    cli: { version, cli: fileRef('cli.js', cli), notify: fileRef('notify.mjs', notify), inbox: fileRef('inbox.mjs', inbox) },
     node: { [platform]: { version: nodeVersion, ...fileRef(nodeZipName, nodeZip), archiveRoot: nodeZipName.slice(0, -'.zip'.length) } },
     pty: { [platform]: { version: ptyVersion, ...fileRef(ptyZipName, ptyZip) } },
   }
@@ -69,12 +69,13 @@ function main() {
   mkdirSync(out, { recursive: true })
   copyFileSync(join(values['cli-dir'], 'cli.js'), join(out, 'cli.js'))
   copyFileSync(join(values['cli-dir'], 'notify.mjs'), join(out, 'notify.mjs'))
+  copyFileSync(join(values['cli-dir'], 'inbox.mjs'), join(out, 'inbox.mjs'))
   copyFileSync(values['node-zip'], join(out, nodeZipName))
   const zip = zipCommand(join(out, ptyZipName), values['pty-dir'])
   execFileSync(zip.file, zip.args, { cwd: zip.cwd, stdio: 'inherit' })
   const doc = installManifest({
     version,
-    cli: readFileSync(join(out, 'cli.js')), notify: readFileSync(join(out, 'notify.mjs')),
+    cli: readFileSync(join(out, 'cli.js')), notify: readFileSync(join(out, 'notify.mjs')), inbox: readFileSync(join(out, 'inbox.mjs')),
     nodeZipName, nodeZip: readFileSync(join(out, nodeZipName)),
     ptyVersion, ptyZipName, ptyZip: readFileSync(join(out, ptyZipName)),
   })

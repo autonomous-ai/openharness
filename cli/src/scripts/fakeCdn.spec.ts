@@ -76,6 +76,10 @@ describe('the staging layout the stage writes', () => {
     expect(layout.installScript.url).toBe('https://cdn.autonomous.ai/harness/staging/cli/install.ps1')
   })
 
+  it('puts the follower\'s inbox.mjs beside cli.js', () => {
+    expect(layout.cli['inbox.mjs']).toEqual({ object: 'harness/staging/cli/0.4.18-staging.1/inbox.mjs', url: 'https://cdn.autonomous.ai/harness/staging/cli/0.4.18-staging.1/inbox.mjs' })
+  })
+
   it('has install.ps1 read the manifests where upload-install-ps1.sh points the staging copy', () => {
     const printed = spawnSync('bash', [join(process.cwd(), 'scripts', 'upload-install-ps1.sh'), '--print'], { encoding: 'utf8', env: { ...process.env, STAGING_PREFIX: 'harness/staging' } })
     expect(printed.status).toBe(0)
@@ -85,6 +89,7 @@ describe('the staging layout the stage writes', () => {
   it('hands the shell one name=value line per path', () => {
     const lines = cdn.layoutLines(layout)
     expect(lines).toContain('cli_cli_js_object=harness/staging/cli/0.4.18-staging.1/cli.js')
+    expect(lines).toContain('cli_inbox_mjs_object=harness/staging/cli/0.4.18-staging.1/inbox.mjs')
     expect(lines).toContain('pty_win32_arm64_object=harness/staging/pty/0.1.0/harness-pty-0.1.0-win32-arm64.zip')
     expect(lines).toContain('node_win32_x64_object=harness/runtime/node/v22.23.2/node-v22.23.2-win-x64.zip')
     expect(lines).toContain('installScript_object=harness/staging/cli/install.ps1')

@@ -1,6 +1,6 @@
 # Run as the user who installed Harness with install.ps1 (the Windows workflow's install job; the VM end to end,
-# docs/testing/windows-cli-e2e.md scenario 1). Checks what the install promises: the version, the scheduled task, the
-# user PATH entry, a running daemon, and a PowerShell harness on the terminal host. Prints each check; exits 1 on the first that fails.
+# docs/testing/windows-cli-e2e.md scenario 1). Checks what the install promises: the version, the inbox follower, the
+# scheduled task, the user PATH entry, a running daemon, and a PowerShell harness on the terminal host. Prints each check; exits 1 on the first that fails.
 param([Parameter(Mandatory)][string]$Version, [string]$Project = (Join-Path $env:TEMP 'harness-check-proj'))
 $ErrorActionPreference = 'Stop'
 $root = Join-Path $env:USERPROFILE '.harness'
@@ -60,6 +60,15 @@ function Fail([string]$message) { Write-Host "FAIL $message"; Show-Diagnosis; ex
 $v = ((& $harness version) | Select-Object -First 1).Trim()
 if ($v -ne $Version) { Fail "harness version says '$v', expected '$Version'" }
 Write-Host "ok   version $v"
+# The inbox follower (docs/plans/2026-11-27-windows-follower-ram-design.md): install.ps1 puts inbox.mjs in the version
+# folder and harness.exe runs it for `device claude inbox`. An id that names no session answers {"off":true} with exit 0
+# at once, with no daemon. A Fail names the exit code, never the output: it is the follower's, not this script's.
+if (-not (Test-Path -PathType Leaf -LiteralPath (Join-Path $root "cli\$Version\inbox.mjs"))) { Fail "no cli\$Version\inbox.mjs in $root" }
+$out = ((& $harness device claude inbox not-a-session-id) -join "`n").Trim()
+$code = $LASTEXITCODE
+$differs = $out -ne '{"off":true}'
+if ($code -ne 0 -or $differs) { Fail "the follower exited $code$(if ($differs) { ' and did not answer {"off":true}' })" }
+Write-Host "ok   the follower answers {`"off`":true} from cli\$Version\inbox.mjs"
 
 # This user's own task, in the root folder (harnessd/platform.ts taskName: the account name without its domain).
 $task = "Harness harnessd ($env:USERNAME)"

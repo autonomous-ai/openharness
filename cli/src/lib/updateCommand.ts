@@ -15,7 +15,7 @@
 import { join } from 'node:path'
 import { binaryVersion } from './ptyHost/launch.js'
 import { PTY_PROTOCOL } from './ptyHost/protocol.js'
-import { confirm, downloadVerified, runCanary, stage, type CanaryResult, type UpdateEntry } from './selfUpdate.js'
+import { confirm, downloadBuild, runCanary, stage, type CanaryResult, type CliBuild, type UpdateEntry } from './selfUpdate.js'
 import type { PreparedPty, PtyEntry } from './windows/ptyPayload.js'
 import { installedPtyProtocol } from './windows/ptyUpdate.js'
 import {
@@ -23,9 +23,10 @@ import {
 } from './windows/ptyUpdateCommand.js'
 
 export interface UpdateStepsDeps {
-  downloadCli: (entry: UpdateEntry) => Promise<{ cliBuf: Buffer; notifyBuf: Buffer }>
-  canary: (cliBuf: Buffer, dir: string, version: string) => Promise<CanaryResult>
-  stage: (dir: string, cliBuf: Buffer, notifyBuf: Buffer, version: string) => void
+  downloadCli: (entry: UpdateEntry) => Promise<CliBuild>
+  /** [inboxBuf]: the build's inbox.mjs (Windows), run beside its cli.js, or null. */
+  canary: (cliBuf: Buffer, dir: string, version: string, inboxBuf: Buffer | null) => Promise<CanaryResult>
+  stage: (dir: string, cliBuf: Buffer, notifyBuf: Buffer, version: string, inboxBuf: Buffer | null) => void
   /** Keep the build at once (drop its backups): for a build not paired with a host. */
   confirm: (dir: string) => void
   /** `harness-pty.exe version`'s protocol, or null when it cannot be read. */
@@ -35,9 +36,9 @@ export interface UpdateStepsDeps {
 }
 
 const DEFAULT_DEPS: UpdateStepsDeps = {
-  downloadCli: async (entry) => ({ cliBuf: await downloadVerified(entry.cli), notifyBuf: await downloadVerified(entry.notify) }),
-  canary: (cliBuf, dir, version) => runCanary(cliBuf, dir, version),
-  stage: (dir, cliBuf, notifyBuf, version) => stage(dir, cliBuf, notifyBuf, version),
+  downloadCli: (entry) => downloadBuild(entry, process.platform),
+  canary: (cliBuf, dir, version, inboxBuf) => runCanary(cliBuf, dir, version, undefined, undefined, inboxBuf),
+  stage: (dir, cliBuf, notifyBuf, version, inboxBuf) => stage(dir, cliBuf, notifyBuf, version, process.platform, null, inboxBuf),
   confirm: (dir) => confirm(dir),
   readHostProtocol: (binary) => binaryVersion(binary)?.protocol ?? null,
   pty: {},
@@ -75,14 +76,15 @@ export async function runUpdateSteps(o: {
     if (!prepared) result.pty = 'failed'
   }
 
-  // 2. The CLI build, downloaded and canaried: its canary says the host protocol it needs.
-  let build: { entry: UpdateEntry; cliBuf: Buffer; notifyBuf: Buffer; ptyProtocol: number } | null = null
+  // 2. The CLI build, downloaded and canaried: its canary says the host protocol it needs, and runs its inbox.mjs, which
+  // goes in with it (docs/plans/2026-11-27-windows-follower-ram-design.md, section 5).
+  let build: ({ entry: UpdateEntry; ptyProtocol: number } & CliBuild) | null = null
   if (o.cliEntry) {
     d.log(`▸ Updating v${o.currentVersion} → v${o.cliEntry.version}…`)
     try {
-      const { cliBuf, notifyBuf } = await d.downloadCli(o.cliEntry)
-      const canaried = await d.canary(cliBuf, o.cliDir, o.cliEntry.version)
-      if (canaried.ok) build = { entry: o.cliEntry, cliBuf, notifyBuf, ptyProtocol: canaried.ptyProtocol }
+      const downloaded = await d.downloadCli(o.cliEntry)
+      const canaried = await d.canary(downloaded.cliBuf, o.cliDir, o.cliEntry.version, downloaded.inboxBuf)
+      if (canaried.ok) build = { entry: o.cliEntry, ...downloaded, ptyProtocol: canaried.ptyProtocol }
       else d.log(`  ✗ the new build failed its self-check — keeping v${o.currentVersion}`)
     } catch (error) {
       d.log(`  ✗ Update failed: ${message(error)}`)
@@ -110,7 +112,7 @@ export async function runUpdateSteps(o: {
   // 5. The build. Asked for by name, so a version this machine once rolled back is installed and no longer rejected.
   if (build) {
     try {
-      d.stage(o.cliDir, build.cliBuf, build.notifyBuf, build.entry.version)
+      d.stage(o.cliDir, build.cliBuf, build.notifyBuf, build.entry.version, build.inboxBuf)
       // Canary passed and bytes verified: drop the backups, unless it came with a host the next master must judge
       // with it, whose rollback needs them.
       if (!pairedIn) d.confirm(o.cliDir)

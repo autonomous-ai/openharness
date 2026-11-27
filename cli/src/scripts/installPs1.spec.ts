@@ -86,6 +86,22 @@ describe('install.ps1, as written', () => {
     expect(source).toContain(`Write-Host "  Harness did not start again on terminal host \${PtyAfter}. Run 'harness start'."`)
   })
 
+  // Ken's review of #4681: a reinstall over a version folder removed it, then moved the staged one in. A lock partway
+  // (an antivirus scan) left a half-removed folder that a running daemon uses. It is moved aside whole first, as
+  // writeVersionFolder does (lib/windows/cliVersions.ts), and put back when the staged one does not go in.
+  it('moves a version folder it replaces aside before the staged one goes in, and never removes it in place', () => {
+    const cli = (source.match(/^function Install-HarnessCli[\s\S]*?^}\r?$/m)?.[0] ?? '')
+      .split(/\r?\n/).filter((line) => !line.trimStart().startsWith('#')).join('\n')
+    const at = (text: string) => { expect(cli).toContain(text); return cli.indexOf(text) }
+    expect(cli).not.toContain('Remove-Item -LiteralPath $target')
+    // Move-Item falls back to moving file by file when the rename fails (CI run 46051972659): every move is a rename.
+    expect(cli).not.toContain('Move-Item')
+    expect(at('[System.IO.Directory]::Move($target, $aside)')).toBeLessThan(at('[System.IO.Directory]::Move($staging, $target)'))
+    const putBack = at('[System.IO.Directory]::Move($aside, $target)')
+    expect(putBack).toBeGreaterThan(cli.indexOf('[System.IO.Directory]::Move($staging, $target)'))
+    expect(putBack).toBeLessThan(at('Remove-Item -LiteralPath $aside -Recurse -Force -ErrorAction SilentlyContinue'))
+  })
+
   // #4018: a terminal host is put in use only once its signatures are checked. Every case below that installs one
   // allows its unsigned build (HARNESS_ALLOW_UNSIGNED=1), and PR CI runs none of them, so only this holds
   // Install-HarnessPty to the check: on the unpacked download, and on a version folder already there.
@@ -338,6 +354,9 @@ describe.runIf(windows)('install.ps1, installing for real from a local manifest'
     return readFileSync(found)
   }
 
+  /** The follower's fake inbox.mjs: it says its own name, then its arguments, as cli.js says only its arguments. */
+  const inboxMjs = "console.log('inbox.mjs ' + JSON.stringify(process.argv.slice(2)))\n"
+
   /**
    * A build of everything install.ps1 downloads:
    * - a Node zip of nodejs.org's shape, holding the Node running this test;
@@ -345,9 +364,11 @@ describe.runIf(windows)('install.ps1, installing for real from a local manifest'
    * - a CLI that answers `version`, waits on `wait <file>` until that file exists, and echoes any other arguments
    *   as JSON.
    * Each manifest entry names its file relative to the manifest. [exeSuffix] makes a harness.exe with other bytes
-   * that still runs (bytes after a program's end are ignored).
+   * that still runs (bytes after a program's end are ignored). [inbox] is the follower's inbox.mjs, named in the
+   * manifest (with [inboxSha] in place of its digest); [rawInbox] is written as the manifest's `inbox` as it is, with
+   * the fake inbox.mjs beside it, so a rule that took it would find a file to install.
    */
-  function build(platform: string, overrides: { cliSha?: string; exeSuffix?: string; ptyVersion?: string } = {}) {
+  function build(platform: string, overrides: { cliSha?: string; exeSuffix?: string; ptyVersion?: string; inbox?: string; inboxSha?: string; rawInbox?: unknown } = {}) {
     const dir = mkdtempSync(join(tmpdir(), 'harness-ps1-build-'))
     scratch.push(dir)
     const tar = join(process.env.SystemRoot!, 'System32', 'tar.exe')
@@ -373,8 +394,12 @@ describe.runIf(windows)('install.ps1, installing for real from a local manifest'
       return { url: name, sha256: createHash('sha256').update(bytes).digest('hex'), size: bytes.length }
     }
     const cli = ref('cli.js')
+    writeFileSync(join(dir, 'inbox.mjs'), overrides.inbox ?? inboxMjs)
+    const inbox = 'rawInbox' in overrides ? { inbox: overrides.rawInbox }
+      : overrides.inbox === undefined ? {}
+      : { inbox: { ...ref('inbox.mjs'), sha256: overrides.inboxSha ?? ref('inbox.mjs').sha256 } }
     const manifest = {
-      cli: { version: '9.8.7', cli: { ...cli, sha256: overrides.cliSha ?? cli.sha256 }, notify: ref('notify.mjs') },
+      cli: { version: '9.8.7', cli: { ...cli, sha256: overrides.cliSha ?? cli.sha256 }, notify: ref('notify.mjs'), ...inbox },
       node: { [platform]: { version: 'v22.0.0', ...ref('node.zip'), archiveRoot } },
       pty: { [platform]: { version: overrides.ptyVersion ?? '9.8.7', ...ref('pty.zip') } },
     }
@@ -615,6 +640,119 @@ describe.runIf(windows)('install.ps1, installing for real from a local manifest'
     const version = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Restricted', '-Command', `& '${command}' version; exit $LASTEXITCODE`], { encoding: 'utf8' })
     expect(version.status, version.stderr).toBe(0)
     expect(version.stdout.trim()).toBe('9.8.7')
+  })
+
+  // The dial's inbox follower runs on the version folder's own inbox.mjs (spec 2026-11-27-windows-follower-ram, section 4).
+  const sessionId = '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
+  const follower = ['device', 'claude', 'inbox', sessionId]
+  /** What the installed harness.exe prints for [args]. */
+  const says = (home: string, args: string[]) => spawnSync(join(home, '.harness', 'bin', 'harness.exe'), args, { encoding: 'utf8' }).stdout.trim()
+
+  /**
+   * install.ps1's CLI step alone, as its install runs it, into [root]: the step that holds the inbox rule, in this
+   * file's one PowerShell. A whole install is a powershell.exe of its own, which pays module autoload's first command
+   * again (22 to 29 s on windows-11-arm, whose job has 60 minutes), so only the cases that run harness.exe make one.
+   */
+  async function installCli(root: string, manifest: string) {
+    return ps(`$s = Get-HarnessManifests -Manifest '${manifest}' -Platform '${await platform()}'; Install-HarnessCli -Root '${root}' -Entry $s.cli.entry -Source $s.cli.source`)
+  }
+  const scratchRoot = () => {
+    const root = mkdtempSync(join(tmpdir(), 'harness-ps1-inbox-'))
+    scratch.push(root)
+    return root
+  }
+
+  it('installs the follower\'s inbox.mjs, and harness runs it for the follower and cli.js for the rest', async () => {
+    const home = profile()
+    const run = install(home, build(await platform(), { inbox: inboxMjs }), freshKey())
+    expect(run.status, `${run.stdout}\n${run.stderr}`).toBe(0)
+    expect(readFileSync(join(home, '.harness', 'cli', '9.8.7', 'inbox.mjs'), 'utf8')).toBe(inboxMjs)
+    // No stable copy, unlike notify.mjs: harness.exe runs it from the version folder.
+    expect(existsSync(join(home, '.harness', 'cli', 'inbox.mjs'))).toBe(false)
+    expect(says(home, follower)).toBe(`inbox.mjs ${JSON.stringify(follower)}`)
+    expect(says(home, ['echo', 'x'])).toBe('["echo","x"]')
+  })
+
+  it('installs no inbox.mjs from a manifest without one, and the follower runs on cli.js', async () => {
+    const home = profile()
+    const run = install(home, build(await platform()), freshKey())
+    expect(run.status, `${run.stdout}\n${run.stderr}`).toBe(0)
+    expect(existsSync(join(home, '.harness', 'cli', '9.8.7', 'inbox.mjs'))).toBe(false)
+    expect(says(home, follower)).toBe(JSON.stringify(follower))
+  })
+
+  it('refuses an inbox.mjs that is not the manifest\'s, and points nothing at that version', async () => {
+    const home = profile()
+    const run = install(home, build(await platform(), { inbox: inboxMjs, inboxSha: '0'.repeat(64) }), freshKey())
+    expect(run.status).toBe(1)
+    expect(run.stdout).toContain('The step that failed: Installing the Harness CLI.')
+    expect(run.stdout).toContain('failed its checksum')
+    expect(existsSync(join(home, '.harness', 'cli', '9.8.7'))).toBe(false)
+  })
+
+  it('fills in a version folder that lacks inbox.mjs, or holds another', async () => {
+    const root = scratchRoot()
+    const key = await platform()
+    const file = join(root, 'cli', '9.8.7', 'inbox.mjs')
+    const without = await installCli(root, build(key))
+    expect(without.status, without.stderr).toBe(0)
+    expect(existsSync(file)).toBe(false)
+    const filled = await installCli(root, build(key, { inbox: inboxMjs }))
+    expect(filled.status, filled.stderr).toBe(0)
+    expect(filled.stdout).toContain('Downloading Harness 9.8.7')
+    expect(readFileSync(file, 'utf8')).toBe(inboxMjs)
+    const another = `${inboxMjs}// another build\n`
+    const replaced = await installCli(root, build(key, { inbox: another }))
+    expect(replaced.status, replaced.stderr).toBe(0)
+    expect(replaced.stdout).toContain('Downloading Harness 9.8.7')
+    expect(readFileSync(file, 'utf8')).toBe(another)
+  })
+
+  it('keeps a version folder whole when a file in it is held, and installs over it once it is not', async () => {
+    const root = scratchRoot()
+    const key = await platform()
+    const folder = join(root, 'cli', '9.8.7')
+    expect((await installCli(root, build(key))).status).toBe(0)
+    const before = readdirSync(folder).sort()
+    const cli = readFileSync(join(folder, 'cli.js'))
+    const manifest = build(key, { inbox: inboxMjs })
+    // A file opened with no sharing, as an antivirus scan holds one: it cannot be removed, nor its folder renamed.
+    const held = await ps(`$s = Get-HarnessManifests -Manifest '${manifest}' -Platform '${key}'; $h = [IO.File]::Open('${join(folder, 'package.json')}', 'Open', 'Read', 'None'); try { Install-HarnessCli -Root '${root}' -Entry $s.cli.entry -Source $s.cli.source | Out-Null; 'installed' } catch { 'refused' } finally { $h.Dispose() }`)
+    // Install-HarnessCli writes its progress to the host, which `| Out-Null` does not take: the answer is the last line.
+    expect(held.stdout.split(/\r?\n/).at(-1), `${held.stdout}\n${held.stderr}`).toBe('refused')
+    expect(readdirSync(folder).sort()).toEqual(before)
+    expect(readFileSync(join(folder, 'cli.js')).equals(cli)).toBe(true)
+    expect(readdirSync(join(root, 'cli')).filter((name) => name.startsWith('.'))).toEqual([])
+    const again = await installCli(root, manifest)
+    expect(again.status, again.stderr).toBe(0)
+    expect(readFileSync(join(folder, 'inbox.mjs'), 'utf8')).toBe(inboxMjs)
+    expect(readdirSync(join(root, 'cli')).filter((name) => name.startsWith('.'))).toEqual([])
+  })
+
+  it('downloads nothing again over an install that holds the same inbox.mjs', async () => {
+    const root = scratchRoot()
+    const manifest = build(await platform(), { inbox: inboxMjs })
+    expect((await installCli(root, manifest)).status).toBe(0)
+    const again = await installCli(root, manifest)
+    expect(again.status, again.stderr).toBe(0)
+    expect(again.stdout).not.toContain('Downloading')
+    expect(readFileSync(join(root, 'cli', '9.8.7', 'inbox.mjs'), 'utf8')).toBe(inboxMjs)
+  })
+
+  // The updaters' rule (PM, 2026-11-27): only a string url and a string sha256 make an inbox; any other shape is none.
+  const inboxSha = createHash('sha256').update(inboxMjs).digest('hex')
+  it.each<[string, unknown]>([
+    ['a string', 'inbox.mjs'],
+    ['null', null],
+    ['an array', []],
+    ['a url that is a number', { url: 1, sha256: inboxSha }],
+    ['no sha256', { url: 'inbox.mjs' }],
+    ['no url', { sha256: inboxSha }],
+  ])('installs as if absent an inbox of the wrong shape (%s), and does not fail the install', async (_, rawInbox) => {
+    const root = scratchRoot()
+    const run = await installCli(root, build(await platform(), { rawInbox }))
+    expect(run.status, run.stderr).toBe(0)
+    expect(readdirSync(join(root, 'cli', '9.8.7')).sort()).toEqual(['cli.js', 'notify.mjs', 'package.json'])
   })
 })
 

@@ -122,6 +122,20 @@ Write-Output ([pscustomobject]@{ Count = $watch.Count; IsArray = ($watch -is [ar
     expect(checkInstall).not.toMatch(/schtasks\.exe [^\n]*\/XML \| Out-String/)
   })
 
+  // The follower's RAM (docs/plans/2026-11-27-windows-follower-ram-design.md): the install job runs the real inbox.mjs
+  // through the real harness.exe, the one place a Windows build shows it.
+  it('checks the installed follower: inbox.mjs in the version folder, and {"off":true} with exit 0 through harness.exe', () => {
+    const at = checkInstall.indexOf('device claude inbox not-a-session-id')
+    expect(at).toBeGreaterThan(checkInstall.indexOf('ok   version'))
+    expect(checkInstall).toMatch(/Test-Path -PathType Leaf -LiteralPath \(Join-Path \$root "cli\\\$Version\\inbox\.mjs"\)/)
+    const check = checkInstall.slice(at, checkInstall.indexOf('\n# This user\'s own task'))
+    expect(check).toContain('$LASTEXITCODE')
+    expect(check).toContain("-ne '{\"off\":true}'")
+    expect(check).toContain('Write-Host "ok   the follower answers {`"off`":true} from cli\\$Version\\inbox.mjs"')
+    // A Fail names the exit code, never the follower's output.
+    expect(check).not.toMatch(/Fail "[^"\n]*\$out/)
+  })
+
   it('stays ASCII, which Windows PowerShell reads a .ps1 without a BOM in', () => {
     expect(checkInstall).toMatch(/^[\x00-\x7f]*$/)
   })

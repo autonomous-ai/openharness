@@ -3,11 +3,12 @@ import { failedNode, nodeMigration } from './nodeMigration.js'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { createHash } from 'crypto'
+import { createServer, type AddressInfo } from 'net'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  DOWNLOAD_LIMITS, MANIFEST_LIMITS, REFUSED_RETRY_MAX_MS, RUNTIME_DOWNLOAD_LIMITS, TransferStalledError, canary, confirm, downloadVerified, fetchManifest, isLocalDevBuild,
-  msUntilSlot, putNodeBack, rejectedVersions, restore as restoreOn, retireCliVersions, runCanary, semverGt, settleRolledBack as settleRolledBackOn, shouldAutoUpdate,
-  stage as stageOn, startSelfUpdater as startSelfUpdaterOn, unjudgedUpdate,
+  DOWNLOAD_LIMITS, DigestMismatchError, MANIFEST_LIMITS, REFUSED_RETRY_MAX_MS, RUNTIME_DOWNLOAD_LIMITS, TransferStalledError, canary, confirm, downloadBuild, downloadVerified,
+  fetchManifest, isLocalDevBuild, msUntilSlot, putNodeBack, rejectedVersions, restore as restoreOn, retireCliVersions, runCanary, semverGt,
+  settleRolledBack as settleRolledBackOn, shouldAutoUpdate, stage as stageOn, startSelfUpdater as startSelfUpdaterOn, unjudgedUpdate, type UpdateEntry,
 } from './selfUpdate.js'
 import { env } from '../config/env.js'
 import { managedNodePath } from './nodeRuntime.js'
@@ -53,8 +54,10 @@ vi.mock('./windows/installLayout.js', async (real) => {
 // The cases below that pass no platform are about the macOS and Linux layout (files swapped in place, `.prev`
 // backups). Left to the default, `process.platform`, they took the Windows version-folder path when the suite
 // ran on Windows; pinned here, they test the same layout on every host. The Windows cases pass 'win32'.
-const stage = (dir: string, cliBuf: Buffer, notifyBuf: Buffer, version?: string, platform: NodeJS.Platform = 'darwin', previousNode: string | null = null): void =>
-  stageOn(dir, cliBuf, notifyBuf, version, platform, previousNode)
+const stage = (
+  dir: string, cliBuf: Buffer, notifyBuf: Buffer, version?: string, platform: NodeJS.Platform = 'darwin', previousNode: string | null = null,
+  inboxBuf: Buffer | null = null,
+): void => stageOn(dir, cliBuf, notifyBuf, version, platform, previousNode, inboxBuf)
 const restore = (dir: string, platform: NodeJS.Platform = 'darwin'): string | null => restoreOn(dir, platform)
 const settleRolledBack = (dir: string, platform: NodeJS.Platform = 'darwin'): string | null => settleRolledBackOn(dir, platform)
 const startSelfUpdater = (opts: Parameters<typeof startSelfUpdaterOn>[0]): ReturnType<typeof startSelfUpdaterOn> =>
@@ -287,29 +290,39 @@ describe('startSelfUpdater', () => {
     // `done = true` and `stop()` happen BEFORE `onStaged`, so a handler that returns without handing
     // the machine over leaves no timer and no way back. This is why the updater's process, once it has
     // staged, exits to be started again as the new build (services/updaterProcess.ts).
-    serveUpdate()
-    const dir = tempDir()
-    let staged = 0
-    let checks = 0
-    const counted = globalThis.fetch as typeof fetch
-    vi.stubGlobal('fetch', async (...args: Parameters<typeof fetch>) => {
-      if (String(args[0]).endsWith('metadata.json')) checks++
-      return counted(...args)
-    })
-    const poller = startSelfUpdater({
-      currentVersion: '1.0.0',
-      url: 'https://updates.test/metadata.json',
-      key: 'adapter',
-      dir,
-      intervalMs: 20,
-      onStaged: () => { staged++ },   // deliberately does NOT exit or restart
-    })
-    await vi.waitFor(() => expect(staged).toBe(1))
-    const after = checks
-    await new Promise((r) => setTimeout(r, 120)) // six intervals' worth
-    poller.stop()
-    expect(staged).toBe(1)
-    expect(checks, 'the poller never ticks again once a staged build has been handed over').toBe(after)
+    // The updater's clock is a fake one: the test waits for the stage as long as the real canary takes (vi.waitFor's 1 s
+    // gave up first on a loaded Mac), and six intervals then pass for certain, not as many as 120 ms of a busy loop allow.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      serveUpdate()
+      const dir = tempDir()
+      let staged = 0
+      let handedOver: () => void = () => {}
+      const stagedOnce = new Promise<void>((resolve) => { handedOver = resolve })
+      let checks = 0
+      const counted = globalThis.fetch as typeof fetch
+      vi.stubGlobal('fetch', async (...args: Parameters<typeof fetch>) => {
+        if (String(args[0]).endsWith('metadata.json')) checks++
+        return counted(...args)
+      })
+      const poller = startSelfUpdater({
+        currentVersion: '1.0.0',
+        url: 'https://updates.test/metadata.json',
+        key: 'adapter',
+        dir,
+        intervalMs: 20,
+        onStaged: () => { staged++; handedOver() },   // deliberately does NOT exit or restart
+      })
+      await vi.advanceTimersByTimeAsync(20) // the first check
+      await stagedOnce
+      const after = checks
+      await vi.advanceTimersByTimeAsync(6 * 20)
+      poller.stop()
+      expect(staged).toBe(1)
+      expect(checks, 'the poller never ticks again once a staged build has been handed over').toBe(after)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('does not check on start; the first check lands on the slot, the next on the following one', async () => {
@@ -1902,5 +1915,275 @@ console.log(process.execPath.includes('node-v24.') ? (named.includes('node-v24.'
     expect(restore(cli, 'win32')).toBe(v22)
     expect(readFileSync(currentNode, 'utf8')).toBe(`${v22}\r\n`)
     expect(readFileSync(join(cli, 'current'), 'utf8').trim()).toBe('1.0.0')
+  })
+})
+
+describe('the inbox follower\'s file (Windows)', () => {
+  // inbox.mjs: the dial's inbox follower, which harness.exe starts instead of cli.js when its version folder holds it
+  // (docs/plans/2026-11-27-windows-follower-ram-design.md, section 5).
+  const sha = (b: Buffer): string => createHash('sha256').update(b).digest('hex')
+  const cliSource = Buffer.from('console.log("9.9.9")\n')
+  const notifySource = Buffer.from('export {}\n')
+  const inboxSource = Buffer.from('console.log(\'{"off":true}\')\n')
+  const cliRef = { url: 'https://updates.test/cli.js', sha256: sha(cliSource) }
+  const notifyRef = { url: 'https://updates.test/notify.mjs', sha256: sha(notifySource) }
+  const inboxRef = { url: 'https://updates.test/inbox.mjs', sha256: sha(inboxSource), size: inboxSource.length }
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true })
+    dirs = []
+  })
+
+  it('reads inbox as optional: kept with a url and a sha256, ignored in any other shape', async () => {
+    let inbox: unknown
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ adapter: { version: '9.9.9', cli: cliRef, notify: notifyRef, inbox } })))
+    const read = (value: unknown): Promise<UpdateEntry | null> => { inbox = value; return fetchManifest('https://updates.test/metadata.json', 'adapter') }
+    expect(await read(inboxRef)).toEqual({ version: '9.9.9', cli: cliRef, notify: notifyRef, inbox: inboxRef })
+    for (const value of ['inbox.mjs', null, [], { url: 1, sha256: inboxRef.sha256 }, { url: inboxRef.url }]) {
+      expect(await read(value), JSON.stringify(value)).toEqual({ version: '9.9.9', cli: cliRef, notify: notifyRef })
+    }
+  })
+
+  it('downloads inbox.mjs on Windows only, and only when the manifest names it', async () => {
+    const fetched: string[] = []
+    let served = inboxSource
+    vi.stubGlobal('fetch', async (url: string) => {
+      fetched.push(url)
+      return new Response(url === cliRef.url ? cliSource : url === notifyRef.url ? notifySource : served)
+    })
+    const named: UpdateEntry = { version: '9.9.9', cli: cliRef, notify: notifyRef, inbox: inboxRef }
+    const unnamed: UpdateEntry = { version: '9.9.9', cli: cliRef, notify: notifyRef }
+    const download = async (entry: UpdateEntry, platform: NodeJS.Platform) => {
+      fetched.length = 0
+      const build = await downloadBuild(entry, platform)
+      return { build, fetched: [...fetched] }
+    }
+    expect(await download(named, 'win32')).toEqual({
+      build: { cliBuf: cliSource, notifyBuf: notifySource, inboxBuf: inboxSource }, fetched: [cliRef.url, notifyRef.url, inboxRef.url],
+    })
+    for (const platform of ['darwin', 'linux'] as const) {
+      expect(await download(named, platform), platform).toEqual({
+        build: { cliBuf: cliSource, notifyBuf: notifySource, inboxBuf: null }, fetched: [cliRef.url, notifyRef.url],
+      })
+    }
+    expect(await download(unnamed, 'win32')).toEqual({
+      build: { cliBuf: cliSource, notifyBuf: notifySource, inboxBuf: null }, fetched: [cliRef.url, notifyRef.url],
+    })
+    served = Buffer.from('other bytes')
+    await expect(downloadBuild(named, 'win32')).rejects.toBeInstanceOf(DigestMismatchError)
+  })
+
+  it('canaries inbox.mjs after cli.js: a refused id answers {"off":true} and exits 0', async () => {
+    const dir = tempDir()
+    const canaryOf = (inbox: string, cli = 'console.log("9.9.9")\n', timeoutMs?: number) =>
+      runCanary(Buffer.from(cli), dir, '9.9.9', timeoutMs, undefined, Buffer.from(inbox))
+    // The follower's line, with `canary` for a session id: the only one this fake answers off to.
+    const follower = 'if (process.argv.slice(2).join(" ") !== "device claude inbox canary") process.exit(2)\nconsole.log(\'{"off":true}\')\n'
+    expect(await canaryOf(follower)).toEqual({ ok: true, ptyProtocol: 2 })
+    expect(await canaryOf('process.exit(1)\n')).toEqual({ ok: false, problem: 'failed', ended: 'inbox.mjs: exit 1' })
+    expect(await canaryOf('console.log("{}")\n')).toEqual({ ok: false, problem: 'failed', ended: 'inbox.mjs: another answer' })
+    // A canary folder that will not take inbox.mjs: here cli.js leaves a folder in its place.
+    const squatter = 'import { mkdirSync } from "node:fs"\nmkdirSync(new URL("inbox.mjs", import.meta.url))\nconsole.log("9.9.9")\n'
+    expect(await canaryOf(follower, squatter)).toMatchObject({ ok: false, problem: 'unwritable' })
+    // inbox.mjs runs only once cli.js passed: this fake leaves a mark where the test looks.
+    const marker = join(tempDir(), 'inbox ran')
+    const marking = `import { writeFileSync } from "node:fs"\nwriteFileSync(${JSON.stringify(marker)}, "")\nconsole.log('{"off":true}')\n`
+    expect(await canaryOf(marking)).toEqual({ ok: true, ptyProtocol: 2 })
+    expect(existsSync(marker), 'the marking fake runs after a cli.js that passed').toBe(true)
+    rmSync(marker)
+    expect(await canaryOf(marking, 'process.exit(3)\n')).toEqual({ ok: false, problem: 'failed', ended: 'exit 3' })
+    expect(await canaryOf(marking, 'console.log("9.9.8")\n')).toEqual({ ok: false, problem: 'wrong-version', ended: 'it says it is 9.9.8' })
+    expect(existsSync(marker)).toBe(false)
+    expect(readdirSync(dir), 'the canary cleans up after itself').toEqual([])
+  })
+
+  it('fails an inbox.mjs that never answers, on its own deadline once cli.js answered', async () => {
+    // The canary's clock is a fake one, moved only once the silent fake has dialed the test back: cli.js gets as long as
+    // it takes on a busy machine (a shared real second failed there), and inbox.mjs exactly its limit.
+    let dialed: () => void = () => {}
+    const started = new Promise<void>((resolve) => { dialed = resolve })
+    const server = createServer((socket) => { socket.destroy(); dialed() })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const { port } = server.address() as AddressInfo
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    try {
+      const silent = `import { connect } from "node:net"\nconnect(${port}, "127.0.0.1")\nsetInterval(() => {}, 1000)\n`
+      const result = runCanary(Buffer.from('console.log("9.9.9")\n'), tempDir(), '9.9.9', 1_000, undefined, Buffer.from(silent))
+      // A canary that ended before the fake dialed (cli.js failed, or the fake did) shows how it ended below, rather
+      // than holding the test to its own timeout.
+      await Promise.race([started, result])
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(await result).toEqual({ ok: false, problem: 'failed', ended: 'inbox.mjs: no answer within 1 s' })
+    } finally {
+      vi.useRealTimers()
+      server.close()
+    }
+  })
+
+  it('stages inbox.mjs into the version folder on Windows, and never off it', () => {
+    const cli = join(tempDir(), 'cli')
+    stage(cli, cliSource, notifySource, '9.9.9', 'win32', null, inboxSource)
+    expect(readFileSync(join(cli, '9.9.9', 'inbox.mjs'))).toEqual(inboxSource)
+    const dir = tempDir()
+    stage(dir, cliSource, notifySource, '9.9.9', 'darwin', null, inboxSource)
+    expect(readFileSync(join(dir, 'cli.js'))).toEqual(cliSource)
+    expect(readdirSync(dir)).not.toContain('inbox.mjs')
+  })
+})
+
+describe('the automatic updater and inbox.mjs (Windows)', () => {
+  // The background updater on every Windows install: the manifest's inbox.mjs is downloaded, checked and canaried as
+  // cli.js is, and goes into the version folder with it (docs/plans/2026-11-27-windows-follower-ram-design.md, section 5).
+  const sha = (b: Buffer): string => createHash('sha256').update(b).digest('hex')
+  const cliSource = Buffer.from('console.log("9.9.9")\n')
+  const notifySource = Buffer.from('export {}\n')
+  const inboxSource = Buffer.from('console.log(\'{"off":true}\')\n')
+  const inboxUrl = 'https://updates.test/inbox.mjs'
+  const named = (bytes: Buffer) => ({ url: inboxUrl, sha256: sha(bytes), size: bytes.length })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true })
+    dirs = []
+  })
+
+  /** The update server: the manifest's `inbox` (undefined: none), the inbox.mjs bytes it serves, how many fetches of
+   *  them answer 404 first, and every URL fetched. */
+  interface Server { inbox: unknown; bytes: Buffer; failures: number; fetched: string[] }
+  function serveUpdate(inbox: unknown, bytes = inboxSource): Server {
+    const server: Server = { inbox, bytes, failures: 0, fetched: [] }
+    vi.stubGlobal('fetch', async (url: string) => {
+      server.fetched.push(url)
+      if (url.endsWith('/metadata.json')) {
+        return new Response(JSON.stringify({ adapter: {
+          version: '9.9.9',
+          cli: { url: 'https://updates.test/cli.js', sha256: sha(cliSource) },
+          notify: { url: 'https://updates.test/notify.mjs', sha256: sha(notifySource) },
+          inbox: server.inbox,
+        } }))
+      }
+      if (url === inboxUrl && server.failures > 0) { server.failures--; return new Response('', { status: 404 }) }
+      return new Response(url === inboxUrl ? server.bytes : url.endsWith('cli.js') ? cliSource : notifySource)
+    })
+    return server
+  }
+  const inboxFetches = (server: Server): number => server.fetched.filter((url) => url === inboxUrl).length
+
+  const installed = (version: string): string => {
+    const cli = join(tempDir(), 'cli')
+    mkdirSync(join(cli, version), { recursive: true })
+    writeFileSync(join(cli, version, 'cli.js'), `cli ${version}`)
+    writeFileSync(join(cli, version, 'notify.mjs'), `notify ${version}`)
+    writeFileSync(join(cli, 'current'), `${version}\r\n`)
+    return cli
+  }
+
+  /** Runs the updater over [dir] until it stages, or logs an error [stopsAt] matches, then stops it. No deadline of its
+   *  own: a real canary takes what a loaded machine needs, within the test's. */
+  function update(
+    dir: string, extra: Partial<Parameters<typeof startSelfUpdater>[0]> = {}, stopsAt: (line: string) => boolean = () => false,
+  ): Promise<{ staged: string[]; errors: string[] }> {
+    const staged: string[] = []
+    const errors: string[] = []
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    return new Promise((resolve) => {
+      let poller: { stop(): void } | undefined
+      const end = (): void => { poller?.stop(); resolve({ staged, errors }) }
+      vi.spyOn(console, 'error').mockImplementation((...parts: unknown[]) => {
+        const line = parts.map(String).join(' ')
+        errors.push(line)
+        if (stopsAt(line)) end()
+      })
+      poller = startSelfUpdater({
+        currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir, intervalMs: 10, platform: 'win32',
+        ...extra,
+        onStaged: (version) => { staged.push(version); end() },
+      })
+    })
+  }
+
+  it('on Windows, stages the manifest\'s inbox.mjs beside cli.js after its canary', async () => {
+    serveUpdate(named(inboxSource))
+    const cli = installed('9.9.8')
+    const { staged } = await update(cli)
+    expect(staged).toEqual(['9.9.9'])
+    expect(readFileSync(join(cli, '9.9.9', 'inbox.mjs'))).toEqual(inboxSource)
+    expect(readFileSync(join(cli, '9.9.9', 'cli.js'))).toEqual(cliSource)
+    expect(readFileSync(join(cli, 'current'), 'utf8')).toBe('9.9.9\r\n')
+  })
+
+  it('off Windows, never fetches inbox.mjs', async () => {
+    const server = serveUpdate(named(inboxSource))
+    const dir = tempDir()
+    const { staged } = await update(dir, { platform: 'darwin' })
+    expect(staged).toEqual(['9.9.9'])
+    expect(inboxFetches(server)).toBe(0)
+    expect(readdirSync(dir)).not.toContain('inbox.mjs')
+  })
+
+  it('still updates from a manifest with no inbox, or one of the wrong shape', async () => {
+    for (const inbox of [undefined, 'inbox.mjs', { url: inboxUrl }, { url: inboxUrl, sha256: 7 }]) {
+      const shape = String(JSON.stringify(inbox))
+      const server = serveUpdate(inbox)
+      const cli = installed('9.9.8')
+      const { staged } = await update(cli)
+      expect(staged, shape).toEqual(['9.9.9'])
+      expect(inboxFetches(server), shape).toBe(0)
+      expect(readdirSync(join(cli, '9.9.9')).sort(), shape).toEqual(['cli.js', 'notify.mjs', 'package.json'])
+    }
+  })
+
+  it('refuses a build whose inbox.mjs fails its canary, and stages nothing', async () => {
+    const failing = Buffer.from('process.exit(1)\n')
+    serveUpdate(named(failing), failing)
+    const cli = installed('9.9.8')
+    const { staged, errors } = await update(cli, {}, (line) => line.includes('failed its canary'))
+    expect(staged).toEqual([])
+    expect(errors).toEqual([expect.stringContaining('[update] 9.9.9 failed its canary (inbox.mjs: exit 1) —')])
+    expect(readFileSync(join(cli, 'current'), 'utf8')).toBe('9.9.8\r\n')
+    expect(existsSync(join(cli, '9.9.9'))).toBe(false)
+  })
+
+  it('refuses an inbox.mjs that does not match its manifest', async () => {
+    serveUpdate(named(inboxSource), Buffer.from('other bytes'))
+    const cli = installed('9.9.8')
+    const { staged, errors } = await update(cli, {}, (line) => line.includes('does not match its manifest'))
+    expect(staged).toEqual([])
+    expect(errors).toEqual([expect.stringContaining('[update] 9.9.9 does not match its manifest (DigestMismatchError) —')])
+    expect(readFileSync(join(cli, 'current'), 'utf8')).toBe('9.9.8\r\n')
+    expect(existsSync(join(cli, '9.9.9'))).toBe(false)
+  })
+
+  it('an inbox.mjs download that fails is a failed check, tried again', async () => {
+    const server = serveUpdate(named(inboxSource))
+    server.failures = 1
+    const cli = installed('9.9.8')
+    const { staged, errors } = await update(cli)
+    expect(errors).toEqual(['[update] check failed (will retry): Error'])
+    expect(staged).toEqual(['9.9.9'])
+    expect(inboxFetches(server)).toBe(2)
+    expect(readFileSync(join(cli, '9.9.9', 'inbox.mjs'))).toEqual(inboxSource)
+  })
+
+  it('downloads again a build whose inbox.mjs changed, whatever else stayed', async () => {
+    const server = serveUpdate(named(inboxSource))
+    const republished = Buffer.from('console.log(\'{"off":true}\') // published again\n')
+    const cli = installed('9.9.8')
+    let handovers = 0
+    const { staged } = await update(cli, {
+      withLock: async (fn) => {
+        // The first handover finds the lock busy; meanwhile the release changes inbox.mjs alone.
+        if (++handovers === 1) {
+          server.inbox = named(republished)
+          server.bytes = republished
+          throw new SpawnLockBusyError(null)
+        }
+        return fn()
+      },
+    })
+    expect(staged).toEqual(['9.9.9'])
+    expect(inboxFetches(server)).toBe(2)
+    expect(readFileSync(join(cli, '9.9.9', 'inbox.mjs'))).toEqual(republished)
   })
 })

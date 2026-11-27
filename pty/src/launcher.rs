@@ -88,7 +88,7 @@ pub(crate) fn read_pointer(file: &Path) -> Result<String, String> {
 
 /// Whether `file` resolves inside `dir`. Both sides are compared resolved, so a `..`, a junction or a symlink that
 /// leads out is caught. The case is the disk's own, on both sides.
-fn contained(dir: &Path, file: &Path) -> bool {
+pub(crate) fn contained(dir: &Path, file: &Path) -> bool {
     match (fs::canonicalize(dir), fs::canonicalize(file)) {
         (Ok(dir), Ok(file)) => file != dir && file.starts_with(&dir),
         _ => false,
