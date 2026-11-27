@@ -47,6 +47,8 @@ export interface NoticesDeps {
   redraw(agentIds: readonly string[]): void
   /** The card's question to every dial, held for its row to open, never asked. */
   hold(agentId: string, id: string, questions: unknown): void
+  /** A timer: [run] in [ms], and its cancel. */
+  after(ms: number, run: () => void): () => void
 }
 
 export const NOTICES_PENDING_MAX = 20
@@ -56,8 +58,8 @@ export const NOTICE_WAITING_MAX = 5
  *  stays small. */
 export const NOTICE_KEYS_MAX = 4
 export const NOTICE_KEY_MAX_CHARS = 160
-/** A card of the file older than this is not restored: what it asked for is a day old. */
-export const NOTICE_RESTORE_MAX_MS = 24 * 3_600_000
+/** A card goes at this age, live or from the file: what it asked for is a day old. */
+export const NOTICE_MAX_AGE_MS = 24 * 3_600_000
 
 /** A pending card as `dial-notices.json` keeps it; `at` is the wall-clock ms it was shown. */
 export interface StoredNotice {
@@ -89,13 +91,13 @@ export function listedAgent(agentId: string, agent: KeyedAgent, busy: boolean): 
 }
 
 /** Why a card went. */
-export type NoticeEnd = 'done' | 'sixth' | 'full' | 'replaced' | 'tapped' | 'gone' | 'detached'
+export type NoticeEnd = 'done' | 'sixth' | 'full' | 'replaced' | 'tapped' | 'gone' | 'detached' | 'expired'
 
 /** A notice's answer and, when shown, its card: `id` the agent closes it by, `rang` when it was asked now. */
 export interface NoticeOutcome { result: NoticeResult; card?: { id: string; kind: NoticeKind; quiet: boolean; rang: boolean } }
 
 /** The ends logged, in fixed words: never a line, an id or a session. */
-const LOGGED: Partial<Record<NoticeEnd, string>> = { done: 'done', sixth: 'dropped · sixth' }
+const LOGGED: Partial<Record<NoticeEnd, string>> = { done: 'done', sixth: 'dropped · sixth', expired: 'expired' }
 
 const CARD_ID_CHARS = 8
 /** A card's id: the first characters of the uuid in its question id (`shown:<uuid>`), which a rouse keeps. */
@@ -139,18 +141,21 @@ export class Notices {
   // scan of it is bounded.
   private readonly cards = new Map<string, Pending>()
   private readonly limits: NoticeLimits
+  /** The one timer, due at the oldest card's 24 hours by the wall clock; none with no card. */
+  private timer?: { due: number; cancel: () => void }
 
   constructor(private readonly deps: NoticesDeps) {
     this.limits = new NoticeLimits(deps.now)
     const now = deps.clock()
     let aged = 0
     for (const { agentId, keys, id, line, host, who, at } of deps.restored) {
-      if (now - at > NOTICE_RESTORE_MAX_MS) { aged += 1; continue }
+      if (now - at >= NOTICE_MAX_AGE_MS) { aged += 1; continue }
       this.cards.set(cardId(id),
         { agentId, id, line, kind: noticeKind(line), host, who, keys, at, restored: true, ...(!who && { unfound: true as const }) })
     }
     if (deps.restored.length > 0) deps.log(`[device] notices · restored ${deps.restored.length - aged} · aged out ${aged}`)
     if (aged > 0) deps.changed()
+    this.schedule()
   }
 
   notify(ask: NoticeAsk): NoticeOutcome {
@@ -381,6 +386,30 @@ export class Notices {
     const held = [...new Set([...before.keys(), ...after.keys()])]
       .filter((agentId) => this.settle(agentId, before.get(agentId), after.get(agentId)))
     if (held.length > 0) this.deps.redraw(held)
+    this.schedule()
+  }
+
+  /** The timer set again for the oldest card. A turn start no longer ends a card (2026-11-27), so a live card ages as a
+   *  restored one does: one nobody closes goes at 24 hours. Pushed, one timer for every card, never a poll. */
+  private schedule(): void {
+    const due = this.cards.size > 0 ? Math.min(...[...this.cards.values()].map(({ at }) => at)) + NOTICE_MAX_AGE_MS : undefined
+    if (this.timer?.due === due) return
+    this.timer?.cancel()
+    this.timer = undefined
+    if (due === undefined) return
+    // A card ahead of a clock set back waits a day at most for the next look: a delay past what a timer holds fires at
+    // once, and again.
+    const ms = Math.min(Math.max(0, due - this.deps.clock()), NOTICE_MAX_AGE_MS)
+    this.timer = { due, cancel: this.deps.after(ms, () => this.expire()) }
+  }
+
+  /** The timer fired: every card 24 hours old goes, by the wall clock, so a sleep that held the timer back ends each
+   *  aged card at once; the next comes up as after any close. */
+  private expire(): void {
+    this.timer = undefined
+    const now = this.deps.clock()
+    this.drop([...this.cards.values()].filter(({ at }) => now - at >= NOTICE_MAX_AGE_MS), 'expired')
+    this.schedule()
   }
 
   /** That agent's cards after a change: one shown before that another took the dial from closes, still pending; every

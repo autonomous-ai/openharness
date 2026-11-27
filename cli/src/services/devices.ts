@@ -2133,6 +2133,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     },
     // In its agent's order, as an ask is.
     hold: (agentId, id, questions) => inOrder(agentId, () => { void cable.hold(agentId, id, questions) }),
+    after: timerIn('notices'),
   })
   /** That agent's next turn started (`answered`) or it left (`gone`): its card goes, and its wait on the person ends so. */
   const endNotice = (agentId: string, end: 'answered' | 'gone'): void => {
