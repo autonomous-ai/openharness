@@ -180,4 +180,24 @@ describe('the eval', () => {
     expect(hooks.SessionStart[0].matcher).toBe('startup|resume|clear|compact')
     expect(hooks.SessionStart[0].hooks.map((hook) => hook.command)).toEqual(['harness device claude start'])
   })
+
+  it('the eval\'s round 2 variant answers the SessionStart JSON of a line that sends the agent to the skill', () => {
+    const V4 = join(V3, '..', 'v4')
+    const answers = JSON.parse(readFileSync(join(V4, 'harness-answers.json'), 'utf8')) as { argv: string[], stdout?: string, stderr?: string, code?: number }[]
+    const starts = answers.filter((answer) => answer.argv.join(' ') === 'device claude start')
+    expect(starts).toHaveLength(1)
+    expect(starts[0].stderr).toBeUndefined()
+    expect(starts[0].code).toBeUndefined()
+    const line: unknown = (JSON.parse(starts[0].stdout ?? '') as { hookSpecificOutput: { additionalContext: unknown } }).hookSpecificOutput.additionalContext
+    if (typeof line !== 'string') throw new Error('additionalContext is not a string')
+    expect(starts[0].stdout).toBe(`${JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: line } })}\n`)
+    expect(line.length).toBeLessThanOrEqual(300)
+    expect(line).toMatch(/^[\x20-\x7e]+$/)
+    expect(line).not.toMatch(/[<>]/)
+    expect(line).toContain('decide, answer or do')
+    expect(line).toContain('dial skill')
+    for (const word of ['harness device notify', '--suggest', '--waiting', '--proceeding']) expect(line).not.toContain(word)
+    expect(DIAL_SKILL_DESCRIPTION).toContain('decide, answer or do')
+    expect(JSON.parse(readFileSync(join(V4, 'hooks.json'), 'utf8'))).toStrictEqual(JSON.parse(readFileSync(join(V3, 'hooks.json'), 'utf8')))
+  })
 })
