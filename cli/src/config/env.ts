@@ -164,7 +164,9 @@ const fields = {
   // Where Claude Code writes its per-session JSONL transcripts.
   CLAUDE_PROJECTS_DIR: text(join(homedir(), '.claude', 'projects')),
   // Codex state root. Only hook-registered rollout files beneath <CODEX_HOME>/sessions are exposed.
-  CODEX_HOME: text(join(homedir(), '.codex')),
+  // Unset or empty is ~/.codex: Codex takes an empty CODEX_HOME as none (utils/home-dir find_codex_home; codex-cli
+  // 0.172.0 signs in with CODEX_HOME= but not with an empty folder), and '' made every reader take a relative folder.
+  CODEX_HOME: (raw) => raw || join(homedir(), '.codex'),
   // Grok state root. Conversation records live below <GROK_HOME>/sessions/<encoded-cwd>/<uuid>/updates.jsonl.
   GROK_HOME: text(join(homedir(), '.grok')),
   // Antigravity CLI state root. Conversation transcripts live below
