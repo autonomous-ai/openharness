@@ -7,6 +7,7 @@ import { gridAvailable, gridChildEnv, gridCommand, gridVersion, managedGridPath,
 import { installGrid } from './gridInstall.js'
 import { followWindowsGridPin } from './gridWindowsPin.js'
 import { MINIMUM_NODE_MAJOR, managedNodePath, nodeMajorOf } from './nodeRuntime.js'
+import { removeQuietly } from './removePath.js'
 import { atomicWriteFile } from './secureState.js'
 import { RUNTIME_DOWNLOAD_LIMITS, downloadVerified } from './selfUpdate.js'
 import { systemProgram } from './windows/powershell.js'
@@ -188,7 +189,8 @@ function sweepStaging(name: string): void {
     if (!entry.startsWith(prefix)) continue
     const pid = Number(entry.slice(prefix.length).split('-')[0])
     if (Number.isSafeInteger(pid) && pid > 0 && processAlive(pid)) continue
-    try { rmSync(join(env.ADAPTER_RUNTIME_DIR, entry), { recursive: true, force: true }) } catch { /* the next start tries again */ }
+    // The next start tries again.
+    removeQuietly(join(env.ADAPTER_RUNTIME_DIR, entry))
   }
 }
 
@@ -250,7 +252,7 @@ async function ensureManagedArchive(spec: ManagedArchive): Promise<ArchiveResult
         // Another start may have won the race; theirs is as good as ours.
         if (!existsSync(target)) renameSync(unpacked, target)
       } finally {
-        rmSync(staging, { recursive: true, force: true })
+        removeQuietly(staging)
       }
     }
     // After the rename, never in staging: a read-only directory cannot be emptied, and staging must

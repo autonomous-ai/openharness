@@ -6,8 +6,9 @@
  * the person changed is theirs now, and stays, as does every other line of the file.
  */
 import { randomBytes } from 'node:crypto'
-import { chmodSync, lstatSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, lstatSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { removeQuietly } from '../removePath.js'
 
 /** install.sh `marker`. */
 export const RC_MARKER = '# added by harness installer'
@@ -106,7 +107,7 @@ export function removeHarnessPathLines(home: string): RcOutcome[] {
       renameSync(temporary, target)
       outcomes.push({ file, removed: edit.removed, changedByPerson })
     } catch (error) {
-      if (temporary) rmSync(temporary, { force: true })
+      if (temporary) removeQuietly(temporary)
       outcomes.push({ file, removed: 0, changedByPerson, failed: error instanceof Error ? error.message : String(error) })
     }
   }

@@ -5,12 +5,13 @@
  */
 
 import { randomUUID } from 'crypto'
-import { closeSync, constants, fchmodSync, fsyncSync, openSync, renameSync, rmSync, writeFileSync } from 'fs'
+import { closeSync, constants, fchmodSync, fsyncSync, openSync, renameSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
 import { env } from '../config/env.js'
 import { LINKED_FILE, linkedPathsToChange, listClaudeProfiles, MAX_LINKED, profileFor, profileId, resolveFolder, type ClaudeProfile,
   type ClaudeProfileError } from './claudeHomes.js'
 import { defaultCodexHome, listCodexProfiles } from './codexProfiles.js'
+import { removeQuietly } from './removePath.js'
 import { hardenPrivateStateFileIfPresent, secureStateDirectory } from './secureState.js'
 
 function writeLinkedPaths(paths: Set<string>): void {
@@ -30,7 +31,7 @@ function writeLinkedPaths(paths: Set<string>): void {
     renameSync(temporary, LINKED_FILE)
     renamed = true
   } finally {
-    if (!renamed) rmSync(temporary, { force: true })
+    if (!renamed) removeQuietly(temporary)
   }
 }
 

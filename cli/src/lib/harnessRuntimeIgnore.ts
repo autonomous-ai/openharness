@@ -1,7 +1,8 @@
 /** Used by Store launches so session files never become project source. */
 import { randomUUID } from 'node:crypto'
-import { closeSync, fsyncSync, lstatSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, fsyncSync, lstatSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { removeQuietly } from './removePath.js'
 
 /** Call after validating the workspace's runtime directories as plain directories. */
 export function ignoreHarnessRuntime(workspace: string): void {
@@ -35,5 +36,5 @@ function publish(file: string, text: string, mode: number): void {
     try { writeFileSync(fd, text); fsyncSync(fd) }
     finally { closeSync(fd) }
     renameSync(temporary, file)
-  } finally { rmSync(temporary, { force: true }) }
+  } finally { removeQuietly(temporary) }
 }
