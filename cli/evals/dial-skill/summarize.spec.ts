@@ -558,13 +558,13 @@ describe('the close gates', () => {
     ...Array.from({ length: needless }, (_, rep) => row('f.claude.crowd', rep, noNeed(-1, 1))),
     row('f.claude.crowd', needless, noNeed(0, 0)),
   ])
-  /** n answer and answer-one runs, the first k closed right, on a case round 4 never ran, so recall pairs skip it. */
+  /** n answer and answer-one runs, the first k closed right, on a case round 5 never ran, so recall pairs skip it. */
   const rights = (k: number, n: number) => append('v7', Array.from({ length: n }, (_, rep) =>
     followUp('g.oracle.crowd', rep, rep % 2 ? 'answer-one' : 'answer', { close_right: rep < k ? 1 : 0, close_wrong: 0, close_errors: 0 })))
   const wrongs = (from: number, n: number) => append('v7', Array.from({ length: n }, (_, k) =>
     followUp('e.claude.crowd', from + k, 'relay', { close_wrong: 1, close_errors: 0 })))
 
-  beforeEach(() => crowd('v4', { needless: 1 }))
+  beforeEach(() => crowd('v5', { needless: 1 }))
 
   it('counts each kind over the scored held-out runs, train and unscored runs left out', () => {
     crowd('v7')
@@ -589,7 +589,7 @@ describe('the close gates', () => {
         relay: { runs: 1, wrong: 1 }, 'new-request': { runs: 1, wrong: 0 }, unrung: { runs: 1, wrong: 0 },
       },
     })
-    expect(s.close.v4).toBeUndefined()
+    expect(s.close.v5).toBeUndefined()
   })
 
   it('counts a run whose turn 2 was cut apart, in no right, wrong or rang-no-card count', () => {
@@ -629,7 +629,7 @@ describe('the close gates', () => {
     expect(closeGate(summarize(flow), 'v7')).toEqual({ right: true, wrong: false, ring: true, pass: false })
   })
 
-  it('fails the ring gate when held-out recall falls below round 4\'s beyond noise', () => {
+  it('fails the ring gate when held-out recall falls below round 5\'s beyond noise', () => {
     crowd('v7', { hit: 0 })
     rights(14, 14)
     const s = summarize(flow)
@@ -637,7 +637,7 @@ describe('the close gates', () => {
     expect(closeGate(s, 'v7')).toEqual({ right: true, wrong: true, ring: false, pass: false })
   })
 
-  it('passes one needless ring over round 4\'s and fails two', () => {
+  it('passes one needless ring over round 5\'s and fails two', () => {
     crowd('v7', { needless: 2 })
     rights(14, 14)
     expect(closeGate(summarize(flow), 'v7').ring).toBe(true)
@@ -647,8 +647,17 @@ describe('the close gates', () => {
     expect(closeGate(summarize(flow), 'v7')).toEqual({ right: true, wrong: true, ring: false, pass: false })
   })
 
+  // Round 5 is v4 with Part 5's shipped Stop hook, which v7 carries too: round 4 has no hook, so it is no base.
+  it('reads the ring gate against round 5, never round 4', () => {
+    // 2 needless rings: one over round 5's 1, two over round 4's none.
+    crowd('v4')
+    crowd('v7', { needless: 2 })
+    rights(14, 14)
+    expect(closeGate(summarize(flow), 'v7').ring).toBe(true)
+  })
+
   it('passes nothing for a variant with no follow-up runs', () => {
-    expect(closeGate(summarize(flow), 'v4')).toEqual({ right: false, wrong: false, ring: false, pass: false })
+    expect(closeGate(summarize(flow), 'v5')).toEqual({ right: false, wrong: false, ring: false, pass: false })
   })
 
   describe('in narrative.md', () => {
