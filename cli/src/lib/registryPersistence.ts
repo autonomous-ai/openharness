@@ -11,6 +11,7 @@ import { lockStartMarker, processExists, processStartMarker } from './processLiv
 import { psEnv } from './childLocale.js'
 import { ownProcessGroup } from './windows/noWindow.js'
 import { errorKind } from './log.js'
+import { removeQuietly } from './removePath.js'
 
 // Every registry write's bound: the queue's and confirmLaunch's (registry.ts). Specs read it too (testing/registryDeadline.ts).
 export const REGISTRY_WRITE_DEADLINE_MS = 5_000
@@ -212,7 +213,7 @@ export async function prepareRegistryImage(file: string, contents: string, deadl
       deadline.check()
     } finally { await handle.close() }
     deadline.check()
-  } catch (error) { await fs.rm(temporary, { force: true }); throw error }
+  } catch (error) { removeQuietly(temporary); throw error }
   finally { measure('prepare', started) }
   return {
     publish(): void {
@@ -222,7 +223,7 @@ export async function prepareRegistryImage(file: string, contents: string, deadl
       catch (error) { if (renamed) throw new AtomicWriteUnconfirmed(error); throw error }
       finally { measure('publish', started) }
     },
-    async discard(): Promise<void> { if (!renamed) await fs.rm(temporary, { force: true }) },
+    async discard(): Promise<void> { if (!renamed) removeQuietly(temporary) },
   }
 }
 
