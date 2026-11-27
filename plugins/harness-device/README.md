@@ -67,6 +67,10 @@ Missed on purpose:
   only the first ask of a session for the same tool and line, until the session ends. After a plain "Yes", the very
   same command asked again in that session is not rung again. After the Harness devices process restarts, a command
   approved for the session can ring once more.
+- Codex waits for the hook before it shows its prompt: about 0.25 s on macOS and 0.5-1.5 s on Windows, where Codex runs
+  it through Windows PowerShell. Codex can run a hook in the background (`"async": true`), but then its word can reach
+  the dial after the person has answered, and the dial rings for an ask already answered: on Windows, in 4 of 5 turns
+  that ended right after the command (#4668). So the hooks stay in the foreground.
 
 ## What it never does
 

@@ -555,6 +555,16 @@ The change:
    - Not `notify.mjs`. It is not one of the core process's files, but every session of every engine runs it, the core
      installs it, and its rule is "the event and the tool's name only, never a tool's input or what is asked". The
      spike found the plugin can carry trusted hooks, so no fallback there is needed.
+   - **Not in the background** (the PM, 2026-11-27, after release, from #4668's measurements). Codex 0.172 takes
+     `"async": true` for `PermissionRequest` and `PreToolUse`: it starts the hook and does not wait for it. Both hooks
+     stay without it, so Codex waits for the hook before it shows its dialog. In the background, the post reached the
+     devices after the person had answered, and the dial rang an ask already answered. On Windows that happened in
+     4 of 5 turns that ended right after the command: the ring came 0.43 to 0.55 s after the answer and the card
+     closed 1.8 to 2.0 s later. Codex runs its Stop hook, about 0.4 s there, before it writes the turn's end, so a check
+     of the record for that end could not stop the post. A ring after the answer breaks the rule that the dial never
+     rings wrong; the wait it saved was about 0.45 s on Windows (928 to 454 ms) and 0.19 s on macOS (259 to 71 ms),
+     with the model answering 2 s after Enter. Run in the foreground, the hook's post always lands before the dialog
+     shows, so the answer always comes after it.
 2. **Who reviews it, read where the ask is heard** (the PM, 2026-11-26, from Codex 0.172.0's source). A
    `PermissionRequest`'s input says nothing of whether a dialog follows; the hook runs before Codex's automatic review,
    which is a model session of its own with hooks off; and the next event of a command it approves is `PostToolUse`,
@@ -618,8 +628,10 @@ Answered by the spike (2026-11-26), and used by Part 4 too:
   that session drops, in another session rings; a question form asked twice rings twice; the 65th line pushes out
   the first; a session's lines go with its agent); an end-to-end case with the fake Codex engine, its record holding
   each reviewer and mode.
-- **Its time** (the PM, 2026-11-27). The hook runs before every Codex permission ask, so the pull request gives its
-  time from start to exit, in a short turn and with the record's line at the 16 MiB bound.
+- **Its time** (the PM, 2026-11-27). The hook runs at every Codex permission ask, so the pull request gives its
+  time from start to exit, in a short turn and with the record's line at the 16 MiB bound. Measured at release
+  (median of 5): macOS 238 to 269 ms, a Windows 11 ARM64 VM 1.49 to 1.54 s, all of it added to the wait for Codex's
+  dialog, which stays (item 1, "Not in the background").
 - **Docs:** `plugins/harness-device/README.md`, the devices row of `cli/AGENTS.md`, and the hook-driven status plan's
   limit 4, which this narrows.
 
