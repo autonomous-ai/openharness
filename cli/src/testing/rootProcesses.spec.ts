@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { assertTestRoot, codexDaemons, codexPidFiles, endRootProcesses, lsofFolders, ownFolders, rootProcesses, workingFolders, type PidRow } from './rootProcesses.js'
-import { alive, commandLines, processTable, type NamedRow } from './spawnedRuns.js'
+import { alive, commandLines, processTable, startTimes, type NamedRow } from './spawnedRuns.js'
 
 const row = (pid: number, ppid: number, pgid: number, command: string): NamedRow => ({ pid, ppid, pgid, command })
 const ROOT = '/tmp/htmux-abc'
@@ -277,10 +277,11 @@ describe('a Codex app server a pid file in the root names', () => {
   })
 
   describe.skipIf(process.platform === 'win32')('in a real root', () => {
-    let server: number | undefined
-    // Only the stand-in this spec started, by its own pid: the person's own Codex app servers run on this machine.
+    let server: { pid: number; started: string } | undefined
+    // Only the stand-in this spec started, while its pid is still that process by the start recorded as it started: the
+    // person's own Codex app servers run on this machine, and one could have its pid since.
     afterEach(() => {
-      if (server !== undefined && alive(server)) process.kill(server, 'SIGKILL')
+      if (server !== undefined && startTimes([server.pid]).get(server.pid) === server.started) process.kill(server.pid, 'SIGKILL')
       server = undefined
     })
 
@@ -295,7 +296,8 @@ writeFileSync(${JSON.stringify(file)}, JSON.stringify({ pid: server.pid, process
 server.unref()`
       const launcher = spawn(process.execPath, ['-e', launch], { stdio: 'ignore' })
       expect((await once(launcher, 'exit'))[0]).toBe(0)
-      const pid = server = (JSON.parse(readFileSync(file, 'utf8')) as { pid: number }).pid
+      const { pid, processStartTime } = JSON.parse(readFileSync(file, 'utf8')) as { pid: number; processStartTime: string }
+      server = { pid, started: processStartTime }
       // Until it runs its own command line: a process not yet past its exec still shows its launcher's.
       await until(() => commandLines([pid]).get(pid)?.includes('app-server --managed-daemon') || null)
       return pid

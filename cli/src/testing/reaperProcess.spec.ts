@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { afterEach, describe, expect, it } from 'vitest'
-import { alive, commandLines } from './spawnedRuns.js'
+import { alive, commandLines, startTimes } from './spawnedRuns.js'
 import { writeExecutable } from './executableFixture.js'
 
 const REAPER = resolve(import.meta.dirname, '..', '..', 'e2e', 'harness', 'reaperProcess.mjs')
@@ -35,12 +35,15 @@ it('the worker\'s reaper sweeps and removes nothing but a test root', () => {
 describe.skipIf(process.platform === 'win32')('the worker\'s reaper and a process left in a root\'s folder', () => {
   const folders: string[] = []
   const started: ChildProcess[] = []
-  /** What this spec's own children left running (the groups' sleeps, a Codex app server stand-in): ended by their pids,
-   *  never any other process (the person's own Codex app servers run on this machine). */
-  const detached: number[] = []
+  /** What this spec's own children left running (the groups' sleeps, a Codex app server stand-in), by pid, with the start
+   *  each had as it started: ended while each pid is still that process, never any other (the person's own Codex app
+   *  servers run on this machine, and one could have such a pid since). */
+  const detached = new Map<number, string>()
   afterEach(() => {
     for (const child of started.splice(0)) child.kill('SIGKILL')
-    for (const pid of detached.splice(0)) if (alive(pid)) { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } }
+    const now = startTimes([...detached.keys()])
+    for (const [pid, start] of detached) if (now.get(pid) === start) { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } }
+    detached.clear()
     for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true })
   })
   /**
@@ -57,7 +60,7 @@ setInterval(() => {}, 1 << 30)`
     started.push(leader)
     const [said] = await once(createInterface({ input: leader.stdout! }), 'line') as [string]
     const pids = JSON.parse(said) as number[]
-    detached.push(...pids)
+    for (const [pid, start] of startTimes(pids)) detached.set(pid, start)
     return { line: { group: leader.pid }, pids }
   }
   /** The reaper, told [lines], its worker then gone: what it wrote, once it has exited. Not spawnSync: this worker
@@ -96,8 +99,8 @@ writeFileSync(${JSON.stringify(file)}, JSON.stringify({ pid: server.pid, process
 server.unref()`
     const launcher = spawn(process.execPath, ['-e', launch], { stdio: 'ignore' })
     expect((await once(launcher, 'exit'))[0]).toBe(0)
-    const pid = (JSON.parse(readFileSync(file, 'utf8')) as { pid: number }).pid
-    detached.push(pid)
+    const { pid, processStartTime } = JSON.parse(readFileSync(file, 'utf8')) as { pid: number; processStartTime: string }
+    detached.set(pid, processStartTime)
     // Until it runs its own command line: a process not yet past its exec still shows its launcher's.
     await expect.poll(() => commandLines([pid]).get(pid) ?? '', { timeout: 10_000 }).toContain('app-server --managed-daemon')
     return pid
