@@ -275,21 +275,23 @@ const ownPidFile = (path) => {
   } catch { return false }
 }
 
-/** The `pid` the JSON in [file] holds, while a safe integer over 1; null for anything else. */
-function recordedPid(file) {
+/** What the JSON in [file] records, `{ pid, started }`, while its `pid` is a safe integer over 1 and its `processStartTime`
+ *  a string, as the product reads one (src/core/engines/nativeControls.ts); null for anything else. */
+function recorded(file) {
   try {
-    const pid = JSON.parse(readFileSync(file, 'utf8'))?.pid
-    return Number.isSafeInteger(pid) && pid > 1 ? pid : null
+    const value = JSON.parse(readFileSync(file, 'utf8'))
+    const pid = value?.pid, started = value?.processStartTime
+    return Number.isSafeInteger(pid) && pid > 1 && typeof started === 'string' ? { pid, started } : null
   } catch { return null }
 }
 
 /**
- * The pids the Codex homes inside [root] record their app servers by: each `app-server-daemon/daemon.pid`, that folder at
+ * What the Codex homes inside [root] record of their app servers: each `app-server-daemon/daemon.pid`, that folder at
  * most 4 below the root, read breadth first and through no link, soft or hard (one could lead out of the root). At most
  * 2,000 folders and 16 pid files are read; a bound reached is said once (src/testing/rootProcesses.ts codexPidFiles).
  */
 function codexPidFiles(root) {
-  const pids = new Set()
+  const pids = []
   const folders = [[root, 0]]
   let files = 0
   for (let at = 0; at < folders.length; at++) {
@@ -307,30 +309,35 @@ function codexPidFiles(root) {
       if (entry.name === 'app-server-daemon' && ownPidFile(file)) {
         if (files++ === PID_FILES_READ) {
           console.error(`[e2e reaper] read ${PID_FILES_READ} Codex app server pid files under ${root}: looked no further`)
-          return [...pids]
+          return pids
         }
-        const pid = recordedPid(file)
-        if (pid !== null) pids.add(pid)
+        const pid = recorded(file)
+        if (pid !== null) pids.push(pid)
       }
       if (depth + 1 < APP_SERVER_DEPTH) folders.push([path, depth + 1])
     }
   }
-  return [...pids]
+  return pids
 }
 
 /** A Codex app server's command line: `codex`, `codex.js` or `codex.exe` run with `app-server` among its arguments. */
 const CODEX_APP_SERVER = /(^|[/\\\s])codex(\.js|\.exe)?\s(.*\s)?app-server(\s|$)/
 
+/** Whether two starts `ps -o lstart=` printed are one, however spaced (src/core/engines/nativeControls.ts reads them so). */
+const sameStart = (a, b) => a.trim().replace(/\s+/g, ' ') === b.trim().replace(/\s+/g, ' ')
+
 /**
- * The Codex app servers pid files inside [root] name that are the test's: this account's, a Codex app server, and started
- * no sooner than the second before [root] was made (src/testing/rootProcesses.ts codexDaemons); never this process, its
- * parent or pid 1. None, and one line said, when the root's birth time is unknown.
+ * The Codex app servers pid files inside [root] name that are the test's: this account's, a Codex app server, started no
+ * sooner than the second before [root] was made, and the very process its pid file recorded, by its start
+ * (src/testing/rootProcesses.ts codexDaemons): a pid given since to another, the dead worker's among them once this
+ * process's parent is pid 1, is not it. Never this process, its parent or pid 1. None, and one line said, when the root's
+ * birth time is unknown.
  */
 function rootCodexDaemons(root) {
   // Only a pid that runs is asked of: macOS's `ps -p` given one no machine has (100000 or over) prints nothing of any pid
   // asked with it.
-  const pids = codexPidFiles(root).filter((pid) => ![process.pid, process.ppid, 1].includes(pid) && exists(pid))
-  if (!pids.length) return []
+  const files = codexPidFiles(root).filter((file) => ![process.pid, process.ppid, 1].includes(file.pid) && exists(file.pid))
+  if (!files.length) return []
   let made = 0
   try { made = statSync(root).birthtimeMs } catch { /* gone: no birth time */ }
   if (!(made > 0)) {
@@ -340,8 +347,9 @@ function rootCodexDaemons(root) {
   // `ps` gives a start to the second, and Linux's can name the second before the one the clock was in
   // (src/testing/spawnedRuns.ts daemonOf).
   const since = Math.floor(made / 1_000) * 1_000 - 1_000
-  return identities(pids).filter((row) => row.uid === process.getuid() && CODEX_APP_SERVER.test(row.command)
-    && Date.parse(row.started) >= since).map((row) => row.pid)
+  return identities([...new Set(files.map((file) => file.pid))]).filter((row) => row.uid === process.getuid()
+    && CODEX_APP_SERVER.test(row.command) && Date.parse(row.started) >= since
+    && files.some((file) => file.pid === row.pid && sameStart(file.started, row.started))).map((row) => row.pid)
 }
 
 /**

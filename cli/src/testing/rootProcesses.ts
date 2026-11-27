@@ -16,8 +16,9 @@
  * And Codex's managed app server detaches itself: a real `codex app-server --managed-daemon` from the tester of #4660 and
  * #4668 outlived `close()`, launchd's, named by no command line or working folder the sweep reads. Codex records it in
  * `<CODEX_HOME>/app-server-daemon/daemon.pid` (engines/codex/launch.ts sharedServer.pidFile). So a process such a file
- * inside the root names is ended too, only while it is this account's, a Codex app server, and started after the root was
- * made: never every app server on the machine (the person's own), nor the worker e2e/harness/sharedCodex.ts names in one.
+ * inside the root names is ended too, only while it is this account's, a Codex app server, started after the root was
+ * made, and started when the file says (its `processStartTime`): never every app server on the machine (the person's own),
+ * nor the worker e2e/harness/sharedCodex.ts names in one, nor a process given a recorded pid since.
  *
  * Only the test's own processes are judged, never the person's beside them on the same computer (PM, 2026-11-23): the
  * tree of the worker and the daemon's tmux server (spawnedRuns.ts processTree), seen by start time before the daemon is
@@ -183,21 +184,26 @@ const ownPidFile = (path: string): boolean => {
   } catch { return false }
 }
 
-/** The `pid` the JSON in [file] holds, while a safe integer over 1; null for anything else. */
-function recordedPid(file: string): number | null {
+/** What a Codex pid file records of its app server: its pid, and its start as `ps -o lstart=` printed it. */
+export interface PidFile { pid: number; started: string }
+
+/** What the JSON in [file] records, while its `pid` is a safe integer over 1 and its `processStartTime` a string, as the
+ *  product reads one (core/engines/nativeControls.ts); null for anything else. */
+function recorded(file: string): PidFile | null {
   try {
-    const pid: unknown = (JSON.parse(readFileSync(file, 'utf8')) as { pid?: unknown } | null)?.pid
-    return Number.isSafeInteger(pid) && (pid as number) > 1 ? pid as number : null
+    const value = JSON.parse(readFileSync(file, 'utf8')) as { pid?: unknown; processStartTime?: unknown } | null
+    const pid = value?.pid, started = value?.processStartTime
+    return Number.isSafeInteger(pid) && (pid as number) > 1 && typeof started === 'string' ? { pid: pid as number, started } : null
   } catch { return null }
 }
 
 /**
- * The pids the Codex homes inside [root] record their app servers by: each `app-server-daemon/daemon.pid`, that folder at
+ * What the Codex homes inside [root] record of their app servers: each `app-server-daemon/daemon.pid`, that folder at
  * most 4 below the root, read breadth first and through no link, soft or hard (one could lead out of the root). At most
  * 2,000 folders and 16 pid files are read; a bound reached is said once.
  */
-export function codexPidFiles(root: string): number[] {
-  const pids = new Set<number>()
+export function codexPidFiles(root: string): PidFile[] {
+  const pids: PidFile[] = []
   const folders: Array<[string, number]> = [[root, 0]]
   let files = 0
   for (let at = 0; at < folders.length; at++) {
@@ -215,42 +221,47 @@ export function codexPidFiles(root: string): number[] {
       if (entry.name === 'app-server-daemon' && ownPidFile(file)) {
         if (files++ === PID_FILES_READ) {
           console.error(`[e2e sweep] read ${PID_FILES_READ} Codex app server pid files under ${root}: looked no further`)
-          return [...pids]
+          return pids
         }
-        const pid = recordedPid(file)
-        if (pid !== null) pids.add(pid)
+        const pid = recorded(file)
+        if (pid !== null) pids.push(pid)
       }
       if (depth + 1 < APP_SERVER_DEPTH) folders.push([path, depth + 1])
     }
   }
-  return [...pids]
+  return pids
 }
 
 /** A Codex app server's command line: `codex`, `codex.js` or `codex.exe` run with `app-server` among its arguments. */
 const CODEX_APP_SERVER = /(^|[/\\\s])codex(\.js|\.exe)?\s(.*\s)?app-server(\s|$)/
 
-/** A process a Codex pid file names, as one `ps -p` read gives it (spawnedRuns.ts identities). */
-export type PidRow = Identity
+/** A process a Codex pid file names, as one `ps -p` read gives it (spawnedRuns.ts identities), and the start the file
+ *  [recorded] for it. */
+export interface PidRow extends Identity { recorded: string }
+
+/** Whether two starts `ps -o lstart=` printed are one, however spaced (core/engines/nativeControls.ts reads them so). */
+const sameStart = (a: string, b: string): boolean => a.trim().replace(/\s+/g, ' ') === b.trim().replace(/\s+/g, ' ')
 
 /**
  * Of [rows], the processes Codex pid files inside a root made at [made] (ms) name, what is the test's: the account [uid]'s,
- * a Codex app server, and started no sooner than the second before [made]. `ps` gives a start to the second, and Linux's
- * can name the second before the one the clock was in (spawnedRuns.ts daemonOf).
+ * a Codex app server, started no sooner than the second before [made], and the very process its pid file recorded, by its
+ * start: a pid given since to another is not it. `ps` gives a start to the second, and Linux's can name the second before
+ * the one the clock was in (spawnedRuns.ts daemonOf).
  */
 export function codexDaemons(rows: readonly PidRow[], made: number, uid: number): number[] {
   const since = Math.floor(made / 1_000) * 1_000 - 1_000
-  return rows.filter((row) => row.uid === uid && CODEX_APP_SERVER.test(row.command) && Date.parse(row.started) >= since)
-    .map((row) => row.pid)
+  return rows.filter((row) => row.uid === uid && CODEX_APP_SERVER.test(row.command) && Date.parse(row.started) >= since
+    && sameStart(row.started, row.recorded)).map((row) => row.pid)
 }
 
 /** The Codex app servers pid files inside [root] name that are the test's (codexDaemons): never this process, its parent
  *  or pid 1. None, and one line said, when the root's birth time is unknown. */
-function rootCodexDaemons(root: string): PidRow[] {
+function rootCodexDaemons(root: string): Identity[] {
   const spared = new Set([process.pid, process.ppid, 1])
   // Only a pid that runs is asked of: macOS's `ps -p` given one no machine has (100000 or over) prints nothing of any pid
   // asked with it.
-  const pids = codexPidFiles(root).filter((pid) => !spared.has(pid) && alive(pid))
-  if (pids.length === 0) return []
+  const files = codexPidFiles(root).filter((file) => !spared.has(file.pid) && alive(file.pid))
+  if (files.length === 0) return []
   // Any failure to read it (gone, not this account's to read) is no birth time: the rest of the sweep still runs.
   let made = 0
   try { made = statSync(root).birthtimeMs } catch { /* no birth time */ }
@@ -258,9 +269,13 @@ function rootCodexDaemons(root: string): PidRow[] {
     console.error(`[e2e sweep] no birth time for ${root}: no Codex app server its pid files name is ended`)
     return []
   }
-  const rows = identities(pids)
+  const running = new Map(identities([...new Set(files.map((file) => file.pid))]).map((row) => [row.pid, row]))
+  const rows = files.flatMap((file) => {
+    const row = running.get(file.pid)
+    return row === undefined ? [] : [{ ...row, recorded: file.started }]
+  })
   const theirs = new Set(codexDaemons(rows, made, process.getuid!()))
-  return rows.filter((row) => theirs.has(row.pid))
+  return [...running.values()].filter((row) => theirs.has(row.pid))
 }
 
 /**
