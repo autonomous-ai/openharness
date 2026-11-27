@@ -9825,6 +9825,16 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       expect(asks()).toEqual([['h1', 'r1'], ['h1', expect.stringMatching(/^shown:/)]])
     })
 
+    // As at that question's close: it no longer covers the card, which nothing else would send.
+    it('a notice held back by a question its turn left open is asked as the next turn starts', () => {
+      const { port, listener } = devices({ core: bound() })
+      port.card({ type: 'commander_question', agentId: 'h1', payload: { requestId: 'r1', questions: QUESTIONS } })
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })).toEqual(SHOWN)
+      expect(asks()).toEqual([['h1', 'r1']])
+      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'turn_started' } })
+      expect(asks()).toEqual([['h1', 'r1'], ['h1', expect.stringMatching(/^shown:/)]])
+    })
+
     it('or one left by a deleted agent', () => {
       const { port, listener } = devices({ core: bound() })
       port.card({ type: 'commander_question', agentId: 'h1', payload: { requestId: 'r1', questions: QUESTIONS } })
