@@ -416,6 +416,14 @@ class SelectionTests(unittest.TestCase):
                 self.assertFalse(planner.e2e_plan([path], {"windows-e2e"})["windows_arm64"])
         self.assertNotIn("windows-e2e", planner.select(["cli/scripts/windows-dial-e2e/README.md"])[0])
 
+    def test_the_inbox_follower_runs_windows_end_to_end_on_x64_alone(self):
+        # check-install.ps1 runs inbox.mjs through harness.exe, the follower's one real run: its entry and the modules
+        # it bundles from select windows-e2e, though no spec windows.yml runs tests the entry or the command.
+        for path in ("cli/src/inboxEntry.ts", "cli/src/deviceClaude/inboxCommand.ts", "cli/src/deviceClaude/inbox.ts"):
+            with self.subTest(path=path):
+                self.assertIn("windows-e2e", planner.select([path])[0])
+                self.assertFalse(planner.e2e_plan([path], {"windows-e2e"})["windows_arm64"])
+
     def test_what_the_windows_e2e_harness_runs_runs_windows_end_to_end_on_x64_alone(self):
         # windows.yml runs vitest.e2e.windows.config.ts: its setup files and global setup, the testing helpers its files
         # import (the apps' fixtures), the desk bundle's desk, dial and daemon, and what they read or start by path. A PR
