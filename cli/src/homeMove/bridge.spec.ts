@@ -286,6 +286,14 @@ describe('the bridge\'s layout', () => {
     expect(readFileSync(join(folder, 'notes.txt'), 'utf8')).toBe('mine')
   })
 
+  it('a file left at a link\'s temporary name (a failed removal, an earlier process with this pid) goes: the next serve makes the link', async () => {
+    const home = await movedHome()
+    makeRealFolders(home.oldHome)
+    writeFileSync(`${join(home.oldHome, 'connections', 'bridge.sock')}.${process.pid}.tmp`, '')
+    expect(serveOldPaths(home.bridge, home.served, publishHookRoute)).toEqual(['bridge.sock'])
+    expect(serveOldPaths(home.bridge, home.served, publishHookRoute)).toEqual([])
+  })
+
   it.each(['beside', 'old short', 'new short'] as const)('removing the bridge removes links without following them (%s)', async (layout) => {
     const home = await movedHome(layout)
     makeRealFolders(home.oldHome)
