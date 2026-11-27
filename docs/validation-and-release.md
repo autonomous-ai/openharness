@@ -253,6 +253,7 @@ A second failure is a real failure. A recorded flaky test is still a bug: its ow
 | --- | --- | --- | --- |
 | `hosts_started_together_serve_once` (`pty/tests/control.rs`): one of eight hosts started together exited with status 1 (`tests/control.rs:383`), on a PR that changed nothing under `pty/`; not seen in the 25 failed CI runs before it | `pty-checks` | 2026-11-24 | [45326642430](https://github.com/autonomous-ai/openharness/actions/runs/45326642430) |
 | `pause_holds_output_until_resume` (`pty/tests/stream.rs`): after Resume the output read missed `out-50` (`tests\stream.rs:581`, the ConPTY's last line), on a PR that changed nothing under `pty/` (#4599, the dial's observed source) | `windows-e2e / windows-pty` (x64) | 2026-11-25 | [45523372202](https://github.com/autonomous-ai/openharness/actions/runs/45523372202) |
+| `is cancelled by a stop, and what it downloaded goes: the row is one to get again, not a failure` (`cli/src/lib/localModels.spec.ts`, `a download that stops, or is cancelled`): timed out at 40 s, on a PR that changed nothing in local models (#4681, the Windows inbox follower); the same branch's previous head passed it | `cli-tests (2)` | 2026-11-27 | [46059282260](https://github.com/autonomous-ai/openharness/actions/runs/46059282260) |
 
 ### Suite details
 
