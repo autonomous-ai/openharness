@@ -424,7 +424,9 @@ async function runCase(input, ctx, timeoutMs) {
       // As turn 1's: Claude Code may update between the turns too.
       if (agent === 'claude' && !matchesProbe(second.init, ctx.probes.get(condition))) second.status = 'unlisted';
       // turn2_model: gradeCase checks the model that served turn 2 as it does turn 1's.
+      // Spend and tool calls are summed, as both turns ran.
       run = { ...first, usage: sumUsage([first.usage, second.usage]), cut: first.cut || second.cut, turn2_model: second.model,
+        tool_calls: first.tool_calls + second.tool_calls,
         transcript: [...first.transcript, { role: 'system', content: 'turn 2' }, ...second.transcript] };
       // A turn 2 cut at --max-turns or unlisted may have stopped before its close, or run with what its probe never saw:
       // counted apart, never graded. Turn 1's calls as read before the checks, for the same reason as its rings.
