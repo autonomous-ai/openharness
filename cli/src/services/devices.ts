@@ -2353,6 +2353,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       // lists the ring already in tab order.
       source.setPaneNames('orca', new Map(listed.tabs.flatMap(({ handle, title, renamed }) =>
         title === undefined || shared.has(handle) ? [] : [[handle, { title, renamed: renamed === true }]])), placed)
+      // The names change nothing when a client lands for an agent elimination had placed at that terminal before its
+      // lookup landed, so no change starts the poll: it is checked here too (the spec's §3).
+      part.call('pane', checkPaneFocus)
     }).finally(() => {
       ordering = false
       if (!orcaRing.again) return
