@@ -1,9 +1,10 @@
 /** Private, bounded replies to a shell helper. Never type protocol data into stdin. */
-import { constants, closeSync, fstatSync, lstatSync, openSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs'
+import { constants, closeSync, fstatSync, lstatSync, openSync, renameSync, writeFileSync, writeSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { harnessPath } from '../config/harnessHome.js'
+import { removeQuietly } from './removePath.js'
 
 export function shellContextReply(payload: Record<string, unknown>, home = homedir()): boolean {
   const { context, id, code, text } = payload
@@ -35,7 +36,7 @@ export function shellContextReply(payload: Record<string, unknown>, home = homed
       try {
         writeFileSync(staged, data, { flag: 'wx', mode: 0o600 })
         renameSync(staged, target)
-      } finally { rmSync(staged, { force: true }) }
+      } finally { removeQuietly(staged) }
     }
     const line = `HN:${id}:${code}:${Buffer.from(text).toString('base64')}\n`
     return writeSync(fd, line) === Buffer.byteLength(line)
