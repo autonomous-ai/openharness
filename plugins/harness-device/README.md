@@ -120,8 +120,9 @@ On a yes, the hook stops the turn's end and gives the agent this reason:
 
 The agent decides. It is stopped once: no second yes for that agent until the person's next prompt to it (another
 session's message does not count), it leaves, or 10 minutes pass. The devices hold the turn's end while it goes on:
-until its next stop, or 10 s with no activity, at most 120 s. The hook waits at most 300 ms for the devices; no answer
-is a no.
+until its next stop, or 10 s with no activity, at most 120 s. The hook waits at most 300 ms for the devices' answer; no
+answer is a no. On Windows those 300 ms start once the hook has found the devices' process in the process table, which
+can take up to 3 s.
 
 What the person sees: one more round of the agent, and in Claude Code a "Stop hook feedback" line with the reason.
 `harness device claude disable` and `harness device codex disable` take it away.

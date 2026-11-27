@@ -47,7 +47,10 @@ export function asksOf(input: Record<string, unknown>): boolean {
   return input.stop_hook_active !== true && typeof message === 'string' && endsOnAsk(message)
 }
 
-/** The devices' answer is waited for this long, its request included: past it the stop goes on. */
+/**
+ * The devices' answer is waited for this long, its request included: past it the stop goes on. On Windows it starts
+ * after the pipe's proof, which reads the process table first (bounded at WINDOWS_PS_TIMEOUT_MS).
+ */
 export const NUDGE_ANSWER_MS = 300
 
 /**
