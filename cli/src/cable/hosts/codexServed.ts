@@ -12,6 +12,12 @@
  * every Codex TUI there counts as on one, and its folder is read through harness-pty (externals/support.ts
  * processCwds; docs/plans/2026-11-27-windows-codex-rescan-design.md).
  *
+ * A TUI in the person's tmux or herdr walks up to the multiplexer's server, which no app holds. A served hook's hints
+ * are the first TUI's, so the path the hints take never placed it: a Codex in tmux inside an app was on no app's page
+ * and never nested, and its notices rang loudly with the person there (a tester's 20/20 `alert · rule:turn`,
+ * 2026-11-28). The one TUI is asked of the lookup by process the open scan asks for a session it found nested
+ * (ObservedDeps.madeBy, nested). Zellij has no lookup by process (its session's name comes from the hints): its own item.
+ *
  * Of a process only its parents, its terminal and its folder are compared, and its arguments are read only to tell a
  * server (externals/codex.ts codexServer) and the daemon; none is kept.
  *
@@ -28,9 +34,11 @@ import { commandOf, engineProcessMatch } from '../../lib/processTable.js'
 import { codexServer } from '../../lib/sessionSearch/externals/codex.js'
 import { folderKey, listProcesses, processCwds } from '../../lib/sessionSearch/externals/support.js'
 import type { RunningProcess } from '../../lib/sessionSearch/externals/types.js'
-import type { Outer } from './adapter.js'
-import { learnApps, parentChain, readTtyName, type WindowsProcess } from './scannedApp.js'
+import type { Outer, Pane } from './adapter.js'
+import type { Nested, NestedLookup, NestedPlace } from './outer.js'
+import { learnApps, parentChain, type ProcessName, readTtyName, type WindowsProcess } from './scannedApp.js'
 import { clientTtyForm } from './tabs.js'
+import type { Nest } from './types.js'
 
 /** The Codex TUIs whose folders a lookup reads, at most: past this many, none is told apart, as a bound unread could
  *  hold a second one in the session's folder. */
@@ -48,8 +56,10 @@ export interface ServedAsk { pid: number; cwd?: string }
 
 /** A session the TUIs' Codex daemon runs, and where the person sees it when that is known: the app holding its TUI,
  *  that TUI's tab and process. Several TUIs all in one app give that app alone, and their processes beside it: the app
- *  is certain only while every one of them runs (observed.ts tick). */
-export interface Served { client?: Outer; clients?: readonly ServedClient[] }
+ *  is certain only while every one of them runs (observed.ts tick). A TUI in tmux or herdr gives the app holding the
+ *  multiplexer's client, that multiplexer and the TUI's pane in it, and the TUI beside them; `nest` and `pane` come only
+ *  with a client. */
+export interface Served { client?: Outer; clients?: readonly ServedClient[]; nest?: Nest; pane?: Pane }
 
 /** A TUI that may be a session's client, with its start as the table read it (RunningProcess.generation), so a later
  *  process given its pid is never taken for it. */
@@ -70,6 +80,11 @@ export interface CodexServedDeps {
   apps(pids: readonly number[], rows: readonly WindowsProcess[]): Promise<ReadonlyMap<number, string>>
   /** A folder as the kernel resolves it (externals/support.ts folderKey). */
   folder(path: string): Promise<string>
+  /** The multiplexer that made each of these processes' terminals, over [rows] (ObservedDeps.madeBy). Absent, as where
+   *  the scan learns no app, no TUI is looked up by process. */
+  madeBy?(pids: readonly number[], rows: readonly ProcessName[]): Promise<ReadonlyMap<number, Omit<Nested, 'pid' | 'rows'>>>
+  /** Where the person sees a process nested in that multiplexer (ObservedDeps.nested). */
+  nested?: NestedLookup
 }
 
 /**
@@ -77,7 +92,9 @@ export interface CodexServedDeps {
  * among it and its parents serves no other client), one whose arguments name no daemon, or an app's own, one no Codex
  * started whose parents name an app (the ChatGPT app's, an editor's), which runs with that app's environment. Else where the person sees the session:
  * the client is the one Codex TUI on a terminal in the session's folder, npm's node launcher and its native Codex being
- * one; several there all in one app give that app alone. Fails when the table could not be read: nothing is told then.
+ * one; several there all in one app give that app alone; the one whose parents name no app, the app holding its
+ * multiplexer's client, when the lookup by process names one. Fails when the table could not be read: nothing is told
+ * then.
  */
 export async function codexServed(asks: readonly ServedAsk[], deps: CodexServedDeps): Promise<(Served | undefined)[]> {
   const rows = await deps.processes()
@@ -106,24 +123,53 @@ export async function codexServed(asks: readonly ServedAsk[], deps: CodexServedD
   const clientApps = clients.size
     ? await deps.apps([...new Set([...clients.values()].flatMap((found) => found.map(({ pid }) => pid)))], names)
     : new Map<number, string>()
+  // Only a lone TUI: of several, one in a multiplexer and its app would still be a guess at which is the client.
+  const lone = [...new Set([...clients.values()].flatMap((found) =>
+    found.length === 1 && !clientApps.has(found[0]!.pid) ? [found[0]!.pid] : []))]
+  const nestedAt = await nestedPlaces(lone, names, deps)
+  const servedClient = (pid: number): ServedClient => {
+    const generation = byPid.get(pid)?.generation
+    return generation === undefined ? { pid } : { pid, generation }
+  }
   return asks.map((ask, i) => {
     if (!daemon(servers[i])) return undefined
     const found = clients.get(ask) ?? []
     const apps = new Set(found.map(({ pid }) => clientApps.get(pid)))
     const app = apps.size === 1 ? [...apps][0] : undefined
-    if (!app) return {}
+    if (!app) {
+      const tui = found.length === 1 ? found[0]!.pid : undefined
+      const place = tui === undefined ? undefined : nestedAt.get(tui)
+      // The multiplexer's client is the tab, and the TUI is beside it: either gone, so is the place (observed.ts tick).
+      return place ? { ...place, clients: [servedClient(tui!)] } : {}
+    }
     // Several TUIs in one app: that app holds whichever is the client, but which one it is stays unknown, so neither a
     // tab nor a process is given and a tap only brings the app forward (Ken's VM, 2026-11-27, #4663 step 10).
-    if (found.length > 1) {
-      return { client: { app }, clients: found.map(({ pid }): ServedClient => {
-        const generation = byPid.get(pid)?.generation
-        return generation === undefined ? { pid } : { pid, generation }
-      }) }
-    }
+    if (found.length > 1) return { client: { app }, clients: found.map(({ pid }) => servedClient(pid)) }
     const { pid, tty: name } = found[0]!
     const tty = name === undefined ? undefined : `/dev/${name}`
     return { client: tty && clientTtyForm(deps.platform)?.test(tty) ? { app, tty, pid } : { app, pid } }
   })
+}
+
+/** Where the person sees each of these TUIs that runs in the person's tmux or herdr, as the open scan places a session
+ *  it found nested: only one whose place names an app. A maker read that fails tells none. */
+async function nestedPlaces(
+  pids: readonly number[], rows: readonly ProcessName[], deps: CodexServedDeps,
+): Promise<Map<number, Served>> {
+  const placed = new Map<number, Served>()
+  const nested = deps.nested
+  if (!pids.length || !deps.madeBy || !nested) return placed
+  const made = await deps.madeBy(pids, rows).catch(() => new Map<number, Omit<Nested, 'pid' | 'rows'>>())
+  // No `fresh`: a daemon's session is asked once a start, as the scan's is.
+  await Promise.all([...made].map(async ([pid, maker]) => {
+    const { host } = maker
+    if (host !== 'tmux' && host !== 'herdr') return
+    const { app, tty, pid: at, pane }: NestedPlace = await nested({ ...maker, pid, rows }) ?? {}
+    if (!app) return
+    placed.set(pid, { client: { app, ...(tty !== undefined ? { tty } : {}), ...(at !== undefined ? { pid: at } : {}) },
+      nest: host, ...(pane ? { pane } : {}) })
+  }))
+  return placed
 }
 
 function daemonArgs(args: string): boolean {
@@ -171,10 +217,13 @@ async function clientsIn(
 }
 
 /** The lookup over this machine (ObservedDeps.served), on every platform: Windows reads each TUI's folder through
- *  harness-pty and counts every TUI as on a terminal. */
-export function servedLookup(platform: NodeJS.Platform): (asks: readonly ServedAsk[]) => Promise<(Served | undefined)[]> {
+ *  harness-pty and counts every TUI as on a terminal. [nesting] is the scan's lookup by process (devices.ts), none where
+ *  the scan learns no app. */
+export function servedLookup(
+  platform: NodeJS.Platform, nesting: Pick<CodexServedDeps, 'madeBy' | 'nested'> = {},
+): (asks: readonly ServedAsk[]) => Promise<(Served | undefined)[]> {
   const deps: CodexServedDeps = {
-    platform, processes: listProcesses, cwds: processCwds, tty: readTtyName, apps: learnApps, folder: folderKey,
+    platform, processes: listProcesses, cwds: processCwds, tty: readTtyName, apps: learnApps, folder: folderKey, ...nesting,
   }
   return (asks) => codexServed(asks, deps)
 }

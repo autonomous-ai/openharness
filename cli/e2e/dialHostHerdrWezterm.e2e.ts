@@ -23,6 +23,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { APP_BUNDLES } from '../src/cable/hosts/hostDetect.js'
+import { ringOn } from '../src/testing/dialRing.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
@@ -214,17 +215,12 @@ describe.skipIf(!herdrBinary || !weztermBinary)("herdr's client in WezTerm", () 
     await pages(dial, 'herdr 1', 'wezterm 1')
     // The agent once, and nothing else.
     expect(ring(dial)).toEqual([agent.id])
-    // herdr's ring, as the dial was last sent it after a frame showing that page, picked again every 2 s until shown:
+    // herdr's ring, as the dial holds it on that page (src/testing/dialRing.ts), picked again every 2 s until shown:
     // the agent's row names herdr (docs/plans/2026-11-26-dial-mux-host-pages-design.md §2).
     let picked = 0
     const rows = await until("herdr's ring", () => {
-      const kinds = dial.messages.map((m) => m.t)
-      const shown = kinds.lastIndexOf('apps')
-      const begin = kinds.lastIndexOf('agents.begin')
-      const end = kinds.lastIndexOf('agents.end')
-      if (dial.messages[shown]?.shown === 'herdr' && begin > shown && end > begin) {
-        return dial.messages.slice(begin, end).filter((m) => m.t === 'agent')
-      }
+      const found = ringOn(dial.messages, 'herdr')
+      if (found) return found
       if (Date.now() - picked >= 2_000) {
         dial.pick('herdr')
         picked = Date.now()

@@ -21,17 +21,30 @@ const HELD = new Set(['EBUSY', 'EPERM'])
 const TRIES = 3
 const RETRY_WAIT_MS = 400
 
-/** Deletes [file]; one already gone is no failure. Anything else that keeps it throws [SecretNotDeleted] with [word]. */
-export function deleteSecretFile(file: string, word: string, wait: Wait = pauseSync): void {
+/** Deletes [path], and all it holds when [recursive]; one already gone is no failure. A held one is tried again, and a
+ *  recursive one on ENOTEMPTY too: on Windows a folder whose held file is pending deletion fails with it. Any other
+ *  failure, or the last, is thrown as it came. The one loop for every held delete: Node's own `maxRetries` is
+ *  recursive-only, and its retries run inside Node, past the `node:fs` seam the specs fail a delete through. */
+export function deleteHeld(path: string, recursive: boolean, wait: Wait = pauseSync): void {
   for (let tries = 1; ; tries++) {
     try {
-      rmSync(file, { force: true })
+      rmSync(path, { recursive, force: true })
       return
     } catch (error) {
       const code = errnoOf(error)
-      if (!HELD.has(code) || tries === TRIES) throw new SecretNotDeleted(word, code)
+      const held = HELD.has(code) || (recursive && code === 'ENOTEMPTY')
+      if (!held || tries === TRIES) throw error
       wait(RETRY_WAIT_MS)
     }
+  }
+}
+
+/** Deletes [file]; one already gone is no failure. Anything else that keeps it throws [SecretNotDeleted] with [word]. */
+export function deleteSecretFile(file: string, word: string, wait: Wait = pauseSync): void {
+  try {
+    deleteHeld(file, false, wait)
+  } catch (error) {
+    throw new SecretNotDeleted(word, errnoOf(error))
   }
 }
 

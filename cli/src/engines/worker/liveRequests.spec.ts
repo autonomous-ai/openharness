@@ -119,6 +119,18 @@ describe('engine live checkpoints', () => {
     expect(frames.map(frame => 'at' in frame || 'over' in frame)).toEqual([true, false, true, true])
   })
 
+  // Claude Code announces its transcript at SessionStart and writes it at the first prompt; the core admits that path.
+  it('claude: a transcript announced before its file is an empty stream, and the file written later is read from its first record', async () => {
+    const t = await setup('claude')
+    await rm(t.file)
+    const attached = await t.page()
+    expect(attached.frames).toEqual([])
+    await writeFile(t.file, prompt('claude', 'first') + done('claude'))
+    const events = (await t.page()).frames.flatMap(frame => frame.events).map(event => event.type)
+    expect(events.filter(type => type === 'turn_started' || type === 'turn_ended')).toEqual(['turn_started', 'turn_ended'])
+    expect(events[0]).toBe('turn_started')
+  })
+
   it('returns the exact unacknowledged page on a retry, even after new file content arrives', async () => {
     const t = await setup('claude', prompt('claude', 'first'))
     t.payload.fromStart = true; t.payload.replay = true

@@ -140,6 +140,83 @@ it('does not treat an existing unreadable derived transcript as an unwritten loc
   }) as typeof fs.openSync)
   expect(() => bindings.transcriptEvidence('commandcode', path, undefined, 'derived')).toThrow('could not be read')
 })
+
+// Claude reports `<projects>/<folder>/<id>.jsonl` at SessionStart and writes it at the first prompt.
+const projects = () => join(root, 'claude', 'projects')
+const announced = (folder = '-work') => join(projects(), folder, `${A}.jsonl`)
+const unwritten = (path: string) => bindings.transcriptEvidence('claude', path, undefined, 'derived')
+const opening = (id: string) => JSON.stringify({ type: 'user', sessionId: id, cwd: root, isSidechain: false }) + '\n'
+it.each(['present', 'absent'])('admits an unwritten Claude transcript one folder under its root, the folder %s', folder => {
+  fs.mkdirSync(folder === 'present' ? dirname(announced()) : projects(), { recursive: true })
+  const result = unwritten(announced())
+  expect(result.valid).toBe(true); expect(result.matchingRoots.map(({ path }) => path)).toEqual([projects()]); result.verify()
+  if (folder === 'present') write(announced(), '')
+  else fs.mkdirSync(dirname(announced()))
+  expect(() => result.verify()).toThrow('changed')
+})
+it.each(['the root', 'the transcript'])('finds the Claude root by its identity when %s is spelled through an alias', async spelled => {
+  const alias = join(root, 'alias'); fs.mkdirSync(projects(), { recursive: true }); fs.symlinkSync(projects(), alias)
+  if (spelled === 'the root') { vi.stubEnv('CLAUDE_PROJECTS_DIR', alias); vi.resetModules(); bindings = await import('./transcriptBindings.js') }
+  const result = unwritten(join(spelled === 'the root' ? projects() : alias, '-work', `${A}.jsonl`))
+  expect(result.valid).toBe(true); result.verify()
+})
+it('does not admit an unwritten Claude transcript before its root exists, two folders deep, or outside the roots', () => {
+  const missingRoot = unwritten(announced())
+  expect(missingRoot.valid).toBe(false); missingRoot.verify()
+  fs.mkdirSync(join(projects(), '-work', 'sub'), { recursive: true }); fs.mkdirSync(join(root, 'elsewhere', '-work'), { recursive: true })
+  for (const path of [join(projects(), '-work', 'sub', `${A}.jsonl`), join(root, 'elsewhere', '-work', `${A}.jsonl`)]) {
+    const result = unwritten(path)
+    expect(result.valid).toBe(false); expect(result.matchingRoots).toEqual([]); result.verify()
+  }
+})
+it.each(['a sibling', 'an outside', 'a missing'])('refuses an unwritten Claude transcript whose folder links to %s folder', kind => {
+  fs.mkdirSync(join(projects(), '-other'), { recursive: true }); fs.mkdirSync(join(root, 'outside'))
+  const target = { 'a sibling': join(projects(), '-other'), 'an outside': join(root, 'outside'), 'a missing': join(root, 'absent') }[kind]!
+  fs.symlinkSync(target, dirname(announced()))
+  expect(() => unwritten(announced())).toThrow('link')
+})
+it('refuses an unwritten Claude transcript whose folder is a file', () => {
+  write(dirname(announced()), '')
+  expect(() => unwritten(announced())).toThrow('not a directory')
+})
+it('refuses an unwritten Claude transcript whose folder is another account\'s', () => {
+  fs.mkdirSync(dirname(announced()), { recursive: true })
+  vi.mocked(fs.lstatSync).mockImplementation(((at: fs.PathLike, ...args: unknown[]) => {
+    const info = Reflect.apply(actual.lstatSync, actual, [at, ...args])
+    return String(at) === dirname(announced()) ? Object.assign(info, { uid: info.uid + 1n }) : info
+  }) as typeof fs.lstatSync)
+  expect(() => unwritten(announced())).toThrow('owner')
+})
+it.each(['-other/../-work', '.'])('refuses an unwritten Claude transcript reached through a %s step', steps => {
+  fs.mkdirSync(join(projects(), '-other'), { recursive: true })
+  expect(() => unwritten(`${projects()}/${steps}/${A}.jsonl`)).toThrow('step')
+})
+it('refuses an unwritten Claude transcript that is a dangling link', () => {
+  fs.mkdirSync(dirname(announced()), { recursive: true }); fs.symlinkSync(join(root, 'outside-absent.jsonl'), announced())
+  expect(() => unwritten(announced())).toThrow('absent leaf')
+})
+it('keeps another store engine\'s unwritten transcript without a deterministic root', () => {
+  expect(() => bindings.transcriptEvidence('codex', join(home, 'sessions', 'day', 'absent.jsonl'), undefined, 'derived'))
+    .toThrow('no deterministic root')
+})
+it('names a transcript for its session only by a UUID session id and its exact name', () => {
+  const folder = dirname(announced())
+  expect(bindings.namedForSession(announced(), A)).toBe(true)
+  for (const name of [`${B}.jsonl`, 'x.jsonl', `${A}.json`, `${A.toUpperCase()}.jsonl`, `${A}.JSONL`]) {
+    expect(bindings.namedForSession(join(folder, name), A)).toBe(false)
+  }
+  for (const id of ['../x', 'a/b', '', `${A}/..`, '..', 'session']) expect(bindings.namedForSession(`${folder}/${id}.jsonl`, id)).toBe(false)
+})
+it('reads an admitted Claude transcript, once written, through the saved-binding checks', () => {
+  fs.mkdirSync(dirname(announced()), { recursive: true })
+  expect(unwritten(announced()).valid).toBe(true)
+  write(announced(), opening(A))
+  expect(bindings.controlTranscriptEvidence('claude', A, announced()).path).toBe(announced())
+  fs.writeFileSync(announced(), opening(B))
+  expect(() => bindings.controlTranscriptEvidence('claude', A, announced())).toThrow('different or delegated')
+  write(join(root, 'outside.jsonl'), opening(A)); fs.rmSync(announced()); fs.symlinkSync(join(root, 'outside.jsonl'), announced())
+  expect(() => bindings.controlTranscriptEvidence('claude', A, announced())).toThrow('unavailable')
+})
 it.each(['', '{', record().slice(0, -4), ' '.repeat(128 * 1024) + record(), record(A, { future: 'unknown' })])('holds an incomplete or unknown native header', text => {
   fs.writeFileSync(file, text)
   expect(proof).toThrow()

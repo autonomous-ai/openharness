@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { codexServed, type CodexServedDeps, MAX_CLIENTS, servedLookup } from './codexServed.js'
+import type { Nested, NestedPlace } from './outer.js'
 import { appRoots, type ProcessName, scannedApps, type WindowsProcess } from './scannedApp.js'
 
 const HOME = '/Users/someone'
@@ -202,6 +203,79 @@ describe('codexServed', () => {
   })
 })
 
+// The tester's rig (Needs-you-right Part 5): the daemon's parent is the TUI, whose parent is the tmux server under
+// launchd, so the TUI's own walk names no app; the scan's lookup by process names the app holding tmux's client.
+describe('codexServed in tmux or herdr inside an app', () => {
+  /** A tmux pane as tmux's nested lookup gives one (tmux.ts createTmuxNested). */
+  const PANE = { adapter: 'tmux', id: '%3:700:ghostty' }
+  /** A multiplexer's server under launchd, its shell, and the TUI typed there. */
+  const inMux = (server: string, tui = 700, at = 30) =>
+    [row(at, 1, server), row(at + 1, at, '-zsh'), row(tui, at + 1, BREW, 'codex')]
+  const TMUX_TUI = inMux('/opt/homebrew/bin/tmux')
+  const GHOSTTY: NestedPlace = { app: 'ghostty', tty: '/dev/ttys003', pid: 650, pane: PANE }
+  const IN_APP = { 700: { tty: 'ttys010', cwd: '/work/app' } }
+
+  /** deps() with the scan's maker read naming [host] for 700, and its lookup by process answering [place]. */
+  function nestingDeps(rows: readonly RunningProcess[], host: string, place: NestedPlace = GHOSTTY,
+    places: Record<number, { tty?: string; cwd?: string }> = IN_APP) {
+    const madeBy = vi.fn(async (pids: readonly number[], _rows: readonly ProcessName[]) =>
+      new Map<number, Omit<Nested, 'pid' | 'rows'>>(pids.includes(700) ? [[700, { host, tty: 'ttys010', maker: 30 }]] : []))
+    const nested = vi.fn((_found: Nested) => Promise.resolve(place))
+    return { ...deps(rows, places), madeBy, nested }
+  }
+
+  it('places a session whose one TUI runs in tmux inside Ghostty at Ghostty, nested in tmux, at its pane', async () => {
+    const d = nestingDeps([...TMUX_TUI, row(900, 1, DAEMON_BIN, DAEMON_ARGS)], 'tmux')
+    expect(await codexServed([{ pid: 900, cwd: '/work/app' }], d)).toEqual([{
+      client: { app: 'ghostty', tty: '/dev/ttys003', pid: 650 }, nest: 'tmux', pane: PANE, clients: [{ pid: 700 }],
+    }])
+    // The walk's own rows, as the scan hands its table to both.
+    const rows = d.madeBy.mock.calls[0]![1]
+    expect(rows.map(({ pid }) => pid)).toEqual([30, 31, 700, 900])
+    expect(d.madeBy.mock.calls).toEqual([[[700], rows]])
+    expect(d.nested.mock.calls).toEqual([[{ host: 'tmux', tty: 'ttys010', maker: 30, pid: 700, rows }]])
+  })
+
+  it('places one in herdr inside Ghostty nested in herdr, with the start the table read for its TUI', async () => {
+    const [server, shell, tui] = inMux('/opt/homebrew/bin/herdr')
+    const d = nestingDeps([server!, shell!, { ...tui!, generation: 'ps:1764230400000' }, row(900, 1, DAEMON_BIN, DAEMON_ARGS)], 'herdr')
+    expect(await codexServed([{ pid: 900, cwd: '/work/app' }], d)).toEqual([{
+      client: { app: 'ghostty', tty: '/dev/ttys003', pid: 650 }, nest: 'herdr', pane: PANE,
+      clients: [{ pid: 700, generation: 'ps:1764230400000' }],
+    }])
+  })
+
+  it('leaves it on no app\'s page when the lookup names no app, the maker read names none or fails, or no lookup is given', async () => {
+    const rows = [...TMUX_TUI, row(900, 1, DAEMON_BIN, DAEMON_ARGS)]
+    const ask = [{ pid: 900, cwd: '/work/app' }]
+    expect(await codexServed(ask, nestingDeps(rows, 'tmux', {}))).toEqual([{}])
+    const none = nestingDeps(rows, 'tmux')
+    none.madeBy.mockResolvedValue(new Map())
+    expect(await codexServed(ask, none)).toEqual([{}])
+    expect(none.nested).not.toHaveBeenCalled()
+    const failed = nestingDeps(rows, 'tmux')
+    failed.madeBy.mockRejectedValue(new Error('ps failed'))
+    expect(await codexServed(ask, failed)).toEqual([{}])
+    expect(failed.nested).not.toHaveBeenCalled()
+    // A maker no lookup by process is for: Zellij's needs its session's name from the hints (its own item).
+    const zellij = nestingDeps(rows, 'zellij')
+    expect(await codexServed(ask, zellij)).toEqual([{}])
+    expect(zellij.nested).not.toHaveBeenCalled()
+    expect(await codexServed(ask, deps(rows, IN_APP))).toEqual([{}])
+  })
+
+  it('asks no lookup by process for two TUIs in the folder: one in tmux and one in Terminal, or both in tmux', async () => {
+    const mixed = nestingDeps([...TERMINAL_TUI, ...TMUX_TUI, row(900, 1, DAEMON_BIN, DAEMON_ARGS)], 'tmux', GHOSTTY,
+      { 500: { tty: 'ttys005', cwd: '/work/app' }, ...IN_APP })
+    expect(await codexServed([{ pid: 900, cwd: '/work/app' }], mixed)).toEqual([{}])
+    expect(mixed.madeBy).not.toHaveBeenCalled()
+    const both = nestingDeps([...TMUX_TUI, ...inMux('/opt/homebrew/bin/tmux', 800, 40), row(900, 1, DAEMON_BIN, DAEMON_ARGS)],
+      'tmux', GHOSTTY, { ...IN_APP, 800: { tty: 'ttys011', cwd: '/work/app' } })
+    expect(await codexServed([{ pid: 900, cwd: '/work/app' }], both)).toEqual([{}])
+    expect(both.madeBy).not.toHaveBeenCalled()
+  })
+})
+
 // Windows names no terminal: a Codex TUI there has a console and no tty, and harness-pty reads its folder
 // (docs/plans/2026-11-27-windows-codex-rescan-design.md).
 describe('codexServed on Windows', () => {
@@ -279,5 +353,6 @@ describe('servedLookup', () => {
     expect(servedLookup('darwin')).toBeTypeOf('function')
     expect(servedLookup('linux')).toBeTypeOf('function')
     expect(servedLookup('win32')).toBeTypeOf('function')
+    expect(servedLookup('darwin', { madeBy: async () => new Map(), nested: () => undefined })).toBeTypeOf('function')
   })
 })

@@ -1,10 +1,10 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 
-// Pass-through, but for the failures a case queues: each delete of a file takes the next one, as an antivirus holding
-// the file open on Windows makes it fail (EBUSY) until it lets go.
+// Pass-through, but for the failures a case queues: each delete takes the next one, as an antivirus holding a file
+// open on Windows makes it fail (EBUSY) until it lets go.
 const disk = vi.hoisted(() => ({ failures: [] as string[], deletes: 0 }))
 vi.mock('node:fs', async original => {
   const actual = await original<typeof import('node:fs')>()
@@ -18,7 +18,7 @@ vi.mock('node:fs', async original => {
   }
 })
 
-const { deleteSecretFile, SecretNotDeleted } = await import('./deleteSecretFile.js')
+const { deleteHeld, deleteSecretFile, SecretNotDeleted } = await import('./deleteSecretFile.js')
 
 const dir = mkdtempSync(join(tmpdir(), 'harness-secret-file-'))
 const file = join(dir, 'secret.json')
@@ -32,6 +32,11 @@ afterAll(() => { rmSync(dir, { recursive: true, force: true }) })
 function thrown(run: () => void): Error {
   try { run() } catch (error) { return error as Error }
   throw new Error('it did not throw')
+}
+
+/** The errno code [run] threw with. */
+function codeThrown(run: () => void): unknown {
+  return (thrown(run) as NodeJS.ErrnoException).code
 }
 
 describe('deleting a file that holds a secret', () => {
@@ -95,5 +100,64 @@ describe('deleting a file that holds a secret', () => {
     deleteSecretFile(file, 'SECRET_NOT_DELETED', wait)
 
     expect(disk.deletes).toBe(1)
+  })
+})
+
+describe('deleting a path Windows may hold for a moment', () => {
+  const folder = join(dir, 'state')
+  /** A folder with a file in it, as a CLI state folder is. */
+  function seedFolder(): void {
+    mkdirSync(folder, { recursive: true })
+    writeFileSync(join(folder, 'daemon-1.json'), '{}')
+  }
+
+  it('a folder held for a moment is deleted on the next try', () => {
+    seedFolder()
+    disk.failures = ['EBUSY']
+
+    deleteHeld(folder, true, wait)
+
+    expect(existsSync(folder)).toBe(false)
+    expect(disk.deletes).toBe(2)
+    expect(waits).toEqual([400])
+  })
+
+  it('ENOTEMPTY, which Windows gives for a folder whose held file is pending deletion, is tried again', () => {
+    seedFolder()
+    disk.failures = ['ENOTEMPTY']
+
+    deleteHeld(folder, true, wait)
+
+    expect(existsSync(folder)).toBe(false)
+    expect(waits).toHaveLength(1)
+  })
+
+  it('a folder held every time throws its own failure after three tries', () => {
+    seedFolder()
+    disk.failures = ['EBUSY', 'EBUSY', 'EBUSY']
+
+    expect(codeThrown(() => deleteHeld(folder, true, wait))).toBe('EBUSY')
+    expect(disk.deletes).toBe(3)
+    expect(waits).toHaveLength(2)
+    expect(existsSync(folder)).toBe(true)
+  })
+
+  it('any other failure is thrown at once, with no wait', () => {
+    seedFolder()
+    disk.failures = ['EACCES']
+
+    expect(codeThrown(() => deleteHeld(folder, true, wait))).toBe('EACCES')
+    expect(disk.deletes).toBe(1)
+    expect(waits).toEqual([])
+    expect(existsSync(folder)).toBe(true)
+  })
+
+  it('ENOTEMPTY on a delete that is not recursive is thrown at once', () => {
+    writeFileSync(file, 'secret')
+    disk.failures = ['ENOTEMPTY']
+
+    expect(codeThrown(() => deleteHeld(file, false, wait))).toBe('ENOTEMPTY')
+    expect(disk.deletes).toBe(1)
+    expect(waits).toEqual([])
   })
 })

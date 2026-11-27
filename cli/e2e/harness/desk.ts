@@ -4,7 +4,8 @@
  * test can plug several in and unplug them. And the devices' processes a daemon's master started.
  */
 import { writeFileSync } from 'node:fs'
-import type { IsolatedDaemon } from './daemon.js'
+import type { LocalClient } from './client.js'
+import { until, type IsolatedDaemon } from './daemon.js'
 import { FakeDial } from './fakeDial.js'
 
 /** What a dial says its settings are when it greets. */
@@ -13,6 +14,16 @@ export const SETTINGS = { brightness: 60, character: 0, face: 466, muted: false,
 /** This daemon's devices processes: started by its own master, by the pid it logged, and still its child. */
 export function devicesPids(d: IsolatedDaemon): number[] {
   return d.servicePids('devices')
+}
+/** Until the daemon reads that dial as unplugged: an answer with a status and no attached row of it. The fleet shows
+ *  `attached: false` only from the port's close to its next 2 s scan, which drops a dial no longer in `dials.json`, so
+ *  absent is unplugged too (`cable.isConnected` is false either way). */
+export async function untilUnplugged(window: LocalClient, serial: string): Promise<void> {
+  await until('the dial to read as unplugged', async () => {
+    const answer = await window.request('harness_devices_list', {})
+    const devices = answer.status?.devices as Array<{ id: string; attached: boolean }> | undefined
+    return (devices && !devices.some((device) => device.id === serial && device.attached)) || null
+  }, 30_000, 500)
 }
 /** The dials this daemon finds, written where its discovery reads them at every scan. */
 export class Desk {
@@ -25,11 +36,16 @@ export class Desk {
     dial.keepGreeting()
     return dial
   }
-  async unplug(serial: string): Promise<void> {
+  /** Takes the dial off the file and leaves it open, so a test can choose whether the daemon's scan or the dial's
+   *  close comes first. */
+  forget(serial: string): FakeDial | undefined {
     const dial = this.plugged.get(serial)
     this.plugged.delete(serial)
     this.write()
-    await dial?.close()
+    return dial
+  }
+  async unplug(serial: string): Promise<void> {
+    await this.forget(serial)?.close()
   }
   async close(): Promise<void> {
     for (const serial of [...this.plugged.keys()]) await this.unplug(serial)

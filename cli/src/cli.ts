@@ -19,7 +19,7 @@ import { fingerprint as e2eeCoreFingerprint, b64d as e2eeCoreDecode } from './li
  * and the backend socket (events up / chat + RPCs down).
  */
 
-import { readFileSync, readdirSync, writeSync, mkdirSync, openSync, existsSync, rmSync, statSync } from 'fs'
+import { readFileSync, readdirSync, writeSync, mkdirSync, openSync, existsSync, statSync } from 'fs'
 import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { spawn } from 'child_process'
@@ -103,7 +103,7 @@ import { runUpdateSteps } from './lib/updateCommand.js'
 import { PTY_PROTOCOL } from './lib/ptyHost/protocol.js'
 import { runAutonomousDeviceCommand } from './lib/autonomous-device/command.js'
 import { E2eeStore, identitySpent, peekIdentityPub, REMOTE_PASSWORD_NOT_DELETED } from './lib/e2ee/store.js'
-import { errnoOf, SecretNotDeleted } from './lib/deleteSecretFile.js'
+import { deleteHeld, errnoOf, SecretNotDeleted } from './lib/deleteSecretFile.js'
 import { confirmsRemoval, deviceRegistration, deviceStatusValue, formatDeviceDetail, formatDeviceHistory, formatDeviceList, logOrder, removeConfirmation } from './lib/e2ee/deviceDisplay.js'
 import { b64e } from './lib/e2ee/core.js'
 import { MachinePeerStore } from './lib/e2ee/machinePeers.js'
@@ -1438,10 +1438,17 @@ async function logout(): Promise<void> {
   await endOnServer
   // Not started again: a daemon would come back on the sign-in that is still here.
   if (kept) signInStillHere(kept, 'logout')
-  rmSync(MACHINE_NAME_FILE, { force: true })
-  // Same reason as the name above: the cached machine list describes the account that just left, and the
-  // local `/api/machines` fallback would otherwise hand it to whoever signs in next on this computer.
-  rmSync(machineListCachePath(), { force: true })
+  // Same reason as the name: the cached machine list describes the account that just left, and the local
+  // `/api/machines` fallback would otherwise hand it to whoever signs in next on this computer. A held file is said in
+  // a word and its errno code, as `reset` says it: the raw error names the path. Not started again: a daemon would
+  // come back under the name of the account that left. Each is tried: a name held must not keep the list.
+  const stateKept = [MACHINE_NAME_FILE, machineListCachePath()].map((file) => {
+    try { deleteHeld(file, false); return null } catch (error) { return errnoOf(error) }
+  }).find((code) => code !== null)
+  if (stateKept) {
+    console.error(`\n  ✗ Local machine CLI state is still on this computer (STATE_NOT_DELETED (${stateKept})). Run \`harness logout\` again.\n`)
+    process.exit(1)
+  }
   // Only when there was no `grid` to run at all. A child that ran has already said what it did, and
   // repeating "your grid sign-in is still here" after a successful sign-out would be false.
   if (!gridOut.ran) warnIfGridSignInRemains()
@@ -1845,19 +1852,20 @@ function clearAdapterState(): void {
       `${SESSION_SEARCH_FILE}-wal`,
       `${SESSION_SEARCH_FILE}-shm`,
     ]) {
-      rmSync(join(dir, name), { recursive: true, force: true })
+      deleteHeld(join(dir, name), true)
     }
-    // Private sockets and actual TCP port records — whichever configured ports have run here.
-    try {
-      for (const name of readdirSync(dir)) {
-        if (isLocalSocketName(name) || /^daemon-\d+\.json$/.test(name)) rmSync(join(dir, name), { force: true })
-      }
-    } catch { /* no such directory */ }
+    // Private sockets and actual TCP port records — whichever configured ports have run here. Only a missing folder
+    // is skipped: a record left behind is a failed reset, said by `resetCommand`.
+    let names: string[] = []
+    try { names = readdirSync(dir) } catch (error) { if (errnoOf(error) !== 'ENOENT') throw error }
+    for (const name of names) {
+      if (isLocalSocketName(name) || /^daemon-\d+\.json$/.test(name)) deleteHeld(join(dir, name), false)
+    }
     // A folder too long for a socket keeps its sockets here.
-    rmSync(shortSocketFolder(dir), { recursive: true, force: true })
+    deleteHeld(shortSocketFolder(dir), true)
   }
   if (dataDir === cliDir) rmStateFiles(dataDir)
-  else rmSync(dataDir, { recursive: true, force: true })
+  else deleteHeld(dataDir, true)
   rmStateFiles(cliDir)
 }
 

@@ -401,7 +401,8 @@ function observedSource(
     tty,
     scanned,
     herdrTerminal,
-    served: servedLookup(platform),
+    // The scan's lookup by process, for a daemon's TUI in tmux or herdr, whose walk ends at the multiplexer's server.
+    served: servedLookup(platform, nesting),
     outer,
     ...nesting,
   })
