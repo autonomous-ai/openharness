@@ -4,9 +4,10 @@
  * stopped (spec § Setup: Harness installs Podman). Prior art: ai-assitant-sanbox
  * `electron/sandbox-runtime/installer.ts`.
  */
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
+import { removeQuietly } from '../../lib/removePath.js'
 import { PodmanError, type Podman } from './podman.js'
 import { PODMAN_RELEASE } from './podmanRelease.js'
 
@@ -157,7 +158,7 @@ export class Setup {
       }
       await use(file)
     } finally {
-      await rm(dir, { recursive: true, force: true })
+      removeQuietly(dir)
     }
   }
 

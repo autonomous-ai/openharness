@@ -1,5 +1,6 @@
 import { chmodSync, lstatSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync, type Stats } from 'node:fs'
 import { join, posix } from 'node:path'
+import { removeQuietly } from '../lib/removePath.js'
 import type { Done } from './journal.js'
 import { draftOf, movedPath, type MovePlan } from './plan.js'
 
@@ -51,7 +52,8 @@ function replace(path: string, make: (draft: string) => void): void {
     make(draft)
     renameSync(draft, path)
   } catch (error) {
-    rmSync(draft, { force: true })
+    // Only what [make] put there: the removal above refused a folder at the name.
+    removeQuietly(draft)
     throw error
   }
 }

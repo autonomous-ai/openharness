@@ -236,6 +236,7 @@ export function taskStoppedThisBoot(dataDir: string = env.ADAPTER_DATA_DIR): boo
 /** Any start but the task's own forgets a stop. */
 export function clearTaskStopped(dataDir: string = env.ADAPTER_DATA_DIR): void {
   // A start never fails over this: a file held open for a moment (an antivirus scan) is forgotten at the next start.
+  // Not recursive: a folder at the stop marker's name is not ours to delete.
   try { rmSync(join(dataDir, TASK_STOPPED_FILE), { force: true }) } catch { /* nothing to forget */ }
 }
 

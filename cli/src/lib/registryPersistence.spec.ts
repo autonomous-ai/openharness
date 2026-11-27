@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
@@ -10,6 +10,8 @@ const interleave = vi.hoisted(() => ({
   phase: undefined as undefined | ((path: string, phase: string) => Promise<void>),
   // The lock is published by a synchronous rename, straight after the look that finds no lock.
   rename: undefined as undefined | ((from: string, to: string) => void),
+  // A file Windows still holds (an antivirus, an indexer) throws EBUSY at its removal, by whichever call removes it.
+  remove: undefined as undefined | ((path: string) => void),
 }))
 vi.mock('node:fs', async original => {
   const actual = await original<typeof import('node:fs')>()
@@ -18,11 +20,23 @@ vi.mock('node:fs', async original => {
       interleave.rename?.(String(args[0]), String(args[1]))
       return actual.renameSync(...args)
     },
+    rmSync: (...args: Parameters<typeof actual.rmSync>) => {
+      interleave.remove?.(String(args[0]))
+      return actual.rmSync(...args)
+    },
+    unlinkSync: (...args: Parameters<typeof actual.unlinkSync>) => {
+      interleave.remove?.(String(args[0]))
+      return actual.unlinkSync(...args)
+    },
   }
 })
 vi.mock('node:fs/promises', async original => {
   const actual = await original<typeof import('node:fs/promises')>()
   return { ...actual,
+    rm: async (...args: Parameters<typeof actual.rm>) => {
+      interleave.remove?.(String(args[0]))
+      return actual.rm(...args)
+    },
     mkdir: async (...args: Parameters<typeof actual.mkdir>) => {
       const value = await actual.mkdir(...args)
       await interleave.phase?.(String(args[0]), 'mkdir')
@@ -57,7 +71,7 @@ vi.mock('node:fs/promises', async original => {
   }
 })
 
-import { RegistryWriteQueue, registryFileLock } from './registryPersistence.js'
+import { RegistryWriteQueue, prepareRegistryImage, registryFileLock } from './registryPersistence.js'
 let directory: string, lock: string, owner: string
 const deferred = () => {
   let resolve!: () => void
@@ -93,6 +107,7 @@ afterEach(() => {
   interleave.stat = undefined
   interleave.phase = undefined
   interleave.rename = undefined
+  interleave.remove = undefined
   vi.useRealTimers()
   vi.restoreAllMocks()
   rmSync(directory, { recursive: true, force: true })
@@ -380,4 +395,32 @@ it.skipIf(process.platform === 'win32')('an older build\'s folder made between t
     expect(refused).toBe('EEXIST')
   })
   expect(raced).toBe(true)
+})
+
+// Windows throws EBUSY or EPERM removing a temporary it still holds: thrown from the write's error path, that replaced
+// the error that failed the write (removeQuietly, lib/removePath.ts). The temporary is left behind instead.
+describe('an image whose temporary Windows still holds', () => {
+  const file = () => join(directory, 'registry.json')
+  const imageTemporary = (path: string) => dirname(path) === directory && basename(path).startsWith(`registry.json.${process.pid}.`)
+    && path.endsWith('.tmp')
+  const temporaries = () => readdirSync(directory).filter(name => imageTemporary(join(directory, name)))
+  const refused = () => Object.assign(new Error('refused'), { code: 'EACCES' })
+  beforeEach(() => {
+    interleave.remove = path => { if (imageTemporary(path)) throw Object.assign(new Error('held'), { code: 'EBUSY' }) }
+  })
+
+  it('a preparation that fails rejects with its own error', async () => {
+    interleave.phase = async (path, at) => { if (at === 'write' && imageTemporary(path)) throw refused() }
+    await expect(prepareRegistryImage(file(), '[]', deadline())).rejects.toMatchObject({ code: 'EACCES' })
+    expect(temporaries()).toHaveLength(1)
+  })
+
+  it('a discard after a refused publish leaves the publish\'s error the one thrown', async () => {
+    const prepared = await prepareRegistryImage(file(), '[]', deadline())
+    interleave.rename = from => { if (imageTemporary(from)) throw refused() }
+    // As registry.ts saves: a failed publish discards the image, then throws what failed it.
+    const save = async () => { try { prepared.publish() } catch (error) { await prepared.discard(); throw error } }
+    await expect(save()).rejects.toMatchObject({ code: 'EACCES' })
+    expect(temporaries()).toHaveLength(1)
+  })
 })

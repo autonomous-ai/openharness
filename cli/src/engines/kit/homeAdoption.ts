@@ -1,12 +1,13 @@
 /** A monotone catalog: exclusive numbered publication serializes writers without a reapable lock. */
 import { createHash, randomUUID } from 'node:crypto'
 import { closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync,
-  opendirSync, readSync, unlinkSync, writeFileSync, type BigIntStats } from 'node:fs'
+  opendirSync, readSync, writeFileSync, type BigIntStats } from 'node:fs'
 import { dirname, join, win32 as winPath } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { MAX_CATALOG_HOMES, readHomeCatalog, type HomeCatalog, type HomeCatalogRead } from './homeCatalog.js'
 import { IdentityReadUnavailable } from './identityScan.js'
 import { NATIVE_EVIDENCE_MS } from './nativeEvidence.js'
+import { removeQuietly } from '../../lib/removePath.js'
 import { directorySyncSupported } from '../../lib/secureState.js'
 import { hostPlatform, journalFlushFlags } from './windowsFiles.js'
 
@@ -266,7 +267,7 @@ function publish(path: string, text: string, staging: string, check: () => void)
     try { linkSync(temporary, path) }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false; throw error }
     return true
-  } finally { unlinkSync(temporary) }
+  } finally { removeQuietly(temporary) }
 }
 function seal(entry: Entry, index: number, found: State, staging: string, check: () => void): void {
   // Another writer may finish a crashed writer's complete immutable record. No lock or partial slot is reaped.

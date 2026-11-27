@@ -86,8 +86,9 @@ export interface WindowsDaemon<Dial extends FakeDial | null = FakeDial> {
   port: number
   env: NodeJS.ProcessEnv
   dial: Dial
-  /** `harness <args>` from the run's bundle, as a shell of this daemon's runs it. */
-  harness(args: string[]): Promise<{ code: number | null; stdout: string }>
+  /** `harness <args>` from the run's bundle, as a shell of this daemon's runs it. Its stderr also goes to the
+   *  `harness-<port>.log` artifact. */
+  harness(args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }>
   /** Everything the daemon has printed so far: its output, and what this start wrote to its data folder's harness.log,
    *  where a Windows master not run in a terminal sends its lines and its children's (masterProcess.ts `windowsMaster`). */
   log(): string
@@ -299,14 +300,19 @@ export async function startWindowsDaemon(options: WindowsDaemonOptions | RealDia
   const following = setInterval(follow, 100)
   const exited = new Promise<void>((done) => child.once('exit', () => done()))
 
-  const harness = (args: string[]): Promise<{ code: number | null; stdout: string }> => new Promise((resolve, reject) => {
+  const harness = (args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> => new Promise((resolve, reject) => {
     const run = spawn(process.execPath, [bundle, ...args], { cwd: dirs.work, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
     let stdout = ''
+    let stderr = ''
     run.stdout!.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8') })
-    run.stderr!.on('data', (chunk: Buffer) => artifactLog(`harness-${port}.log`, chunk.toString('utf8')))
+    run.stderr!.on('data', (chunk: Buffer) => {
+      const text = chunk.toString('utf8')
+      stderr += text
+      artifactLog(`harness-${port}.log`, text)
+    })
     const timer = setTimeout(() => run.kill(), 60_000)
     run.once('error', (error) => { clearTimeout(timer); reject(error) })
-    run.once('close', (code) => { clearTimeout(timer); resolve({ code, stdout }) })
+    run.once('close', (code) => { clearTimeout(timer); resolve({ code, stdout, stderr }) })
   })
 
   const close = async (): Promise<void> => {

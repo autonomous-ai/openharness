@@ -162,6 +162,7 @@ export async function stopDaemonProcess(deps: StopDeps = defaultStopDeps()): Pro
         return { pid: null, stopped: false }
       }
       // A pid file naming nothing is debris from a crash; nobody else can be relying on it.
+      // Not recursive: a folder at the pid file's name is not ours to delete.
       try { rmSync(PID_FILE, { force: true }) } catch { /* ignore */ }
       return { pid: null, stopped: false }
     }
@@ -186,6 +187,7 @@ export async function stopDaemonProcess(deps: StopDeps = defaultStopDeps()): Pro
 /** Only if it is still OUR daemon's file: a stopped daemon removes its own pid on the way out, and a daemon that
  *  came up meanwhile — impossible under the lock, but cheap to respect — must not lose its record to us. */
 function forgetPid(deps: StopDeps, pid: number): void {
+  // Not recursive: a folder at the pid file's name is not ours to delete.
   if (deps.readPid() === pid) { try { rmSync(PID_FILE, { force: true }) } catch { /* ignore */ } }
   if (!deps.isAlive(pid)) clearReexecMarker(pid)
 }
@@ -213,6 +215,7 @@ async function stopOnWindows(deps: StopDeps, windows: WindowsStopDeps, pid: numb
     // Windows hands a freed pid to the next process quickly: a pid file whose pid is proven another process's now is
     // debris, as a dead pid's is (`stopDaemonProcess`), and Harness is not running under it.
     if (master.verdict === 'not') {
+      // Not recursive: a folder at the pid file's name is not ours to delete.
       if (deps.readPid() === pid) { try { rmSync(PID_FILE, { force: true }) } catch { /* ignore */ } }
       return { pid: null, stopped: false }
     }
@@ -254,6 +257,7 @@ async function stopThroughPlatform(deps: StopDeps): Promise<number | null> {
     await deps.sleep(150)
   }
   const pid = deps.readPid()
+  // Not recursive: a folder at the pid file's name is not ours to delete.
   if (pid === master) { try { rmSync(PID_FILE, { force: true }) } catch { /* ignore */ } }
   // A daemon `harness start` spawned beside the platform's (two supervisors, which `harness service`
   // exists to prevent) is the signals' to stop.

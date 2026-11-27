@@ -148,6 +148,7 @@ function defaultIfDownIo(): IfDownIo {
     readPid,
     isAlive,
     pidFileWrittenMs: () => pidFileWrittenMs(),
+    // Not recursive: a folder at the pid file's name is not ours to delete.
     forgetPid: (pid) => { if (readPid() === pid) { try { rmSync(PID_FILE, { force: true }) } catch { /* the next tick looks again */ } } },
     rows: () => windowsProcessRows(null),
     readLockOwner: () => readSpawnLockOwner(),

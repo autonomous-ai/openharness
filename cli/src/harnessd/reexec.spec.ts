@@ -132,15 +132,17 @@ describe('the marker', () => {
     mkdirSync(join(file, 'in-the-way'), { recursive: true })
     expect(() => writeMarker(file, { pid: 42, from: 'a', to: 'b', at: 1 })).toThrow()
     expect(readdirSync(dir)).toEqual(['harnessd-reexec.json'])
-    // Nor does it fail over a temporary file it cannot clear.
+    // Nor does it fail over a temporary file it cannot clear, and a folder at its name is left, with what is in it.
     mkdirSync(join(dir, 'harnessd-reexec.json.43.tmp', 'in-the-way'), { recursive: true })
     expect(() => writeMarker(file, { pid: 43, from: 'a', to: 'b', at: 1 })).toThrow()
+    expect(readdirSync(join(dir, 'harnessd-reexec.json.43.tmp'))).toEqual(['in-the-way'])
   })
 
-  it('is removed even when something odd sits where it was, without throwing', () => {
+  it('leaves a folder where the marker was, with what is in it, without throwing', () => {
     const odd = join(dir, 'harnessd-reexec.json')
-    mkdirSync(odd)
+    mkdirSync(join(odd, 'in-the-way'), { recursive: true })
     expect(() => removeMarker(odd)).not.toThrow()
+    expect(readdirSync(odd)).toEqual(['in-the-way'])
   })
 })
 

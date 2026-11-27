@@ -5,8 +5,9 @@
  * It imports nothing that resolves a path: its caller hands it what to serve, and the route record's writer.
  */
 import { createHash } from 'node:crypto'
-import { chmodSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmdirSync, rmSync, unlinkSync, writeFileSync, type Stats } from 'node:fs'
+import { chmodSync, closeSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, renameSync, rmdirSync, rmSync, unlinkSync, writeFileSync, type Stats } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
+import { removeQuietly } from '../lib/removePath.js'
 
 export const BRIDGE_FILE = 'bridge.json'
 /** The entries the bridge keeps as real folders, because an old reader refuses a link there. */
@@ -62,11 +63,15 @@ export function writeBridge(stateRoot: string, record: Omit<BridgeRecord, 'boot'
   const id = bootId(read)
   const boot = id === null ? null : { id, uptime: Math.round((movedAt - bootedAt(read)) * 100) / 100 }
   const file = join(stateRoot, BRIDGE_FILE), temporary = `${file}.${process.pid}.tmp`
+  // Removed only once opened here: what else is at its name, a folder, is not this write's.
+  let opened = false
   try {
-    writeFileSync(temporary, `${JSON.stringify(boot ? { ...record, boot } : record)}\n`, { mode: 0o600 })
+    const fd = openSync(temporary, 'w', 0o600)
+    opened = true
+    try { writeFileSync(fd, `${JSON.stringify(boot ? { ...record, boot } : record)}\n`) } finally { closeSync(fd) }
     renameSync(temporary, file)
   } finally {
-    rmSync(temporary, { force: true })
+    if (opened) removeQuietly(temporary)
   }
 }
 
@@ -195,14 +200,18 @@ function hardLink(source: string, place: string): boolean {
   const there = lstatOrNull(place)
   if (there && there.dev === wanted.dev && there.ino === wanted.ino) return true
   const temporary = `${place}.${process.pid}.tmp`
+  // Removed once linked here, or when a file is at its name (a failed removal, an earlier process with this pid), which
+  // would fail every link after; a folder at its name is not this link's.
+  let linked = false
   try {
     mkdirSync(dirname(place), { recursive: true, mode: 0o700 })
     linkSync(source, temporary)
+    linked = true
     // In one step: an old client finds the old socket or the new one, never none.
     renameSync(temporary, place)
     return true
   } catch {
-    rmSync(temporary, { force: true })
+    if (linked || lstatOrNull(temporary)?.isDirectory() === false) removeQuietly(temporary)
     return false
   }
 }

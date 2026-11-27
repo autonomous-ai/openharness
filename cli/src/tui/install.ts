@@ -1,10 +1,11 @@
 /** The managed hn binary. Replace its pathname atomically; running clients keep their old inode. */
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import { withSpawnLock } from '../lib/daemonSpawnLock.js'
+import { removeQuietly } from '../lib/removePath.js'
 import { semverGt } from '../lib/selfUpdate.js'
 import { installedTuiPath } from './paths.js'
 import { isManagedHnLauncher } from './launcher.js'
@@ -120,7 +121,7 @@ async function replaceTui(force: boolean, log: Log, signal?: AbortSignal): Promi
       return true
     }, force ? {} : { waitMs: 0 })
   } finally {
-    rmSync(staging, { recursive: true, force: true })
+    removeQuietly(staging)
   }
 }
 

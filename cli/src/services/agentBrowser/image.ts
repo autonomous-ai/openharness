@@ -3,10 +3,11 @@
  * tag names those files' hash and the ISO week, so a new CLI or a new week builds a fresh image (and so a current
  * Chrome), in the background while the older image keeps serving.
  */
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { errorKind } from '../../lib/log.js'
+import { removeQuietly } from '../../lib/removePath.js'
 import { browserAssetsHash, browserContextFiles } from './assets.js'
 import { PodmanError, type Podman } from './podman.js'
 
@@ -47,7 +48,7 @@ async function build(podman: Podman, tag: string): Promise<void> {
     const output = (error instanceof PodmanError && error.output) || (error as Error).message
     throw new PodmanError('image_failed', output.split('\n').slice(-FAILURE_LINES).join('\n'))
   } finally {
-    await rm(dir, { recursive: true, force: true })
+    removeQuietly(dir)
   }
 }
 

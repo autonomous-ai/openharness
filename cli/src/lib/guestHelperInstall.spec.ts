@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process'
+import * as fs from 'node:fs'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -12,9 +13,12 @@ import {
   GUEST_SUDOERS_PATH, guestHelperStatus, installGuestHelper, sudoersFor,
 } from './guestHelperInstall.js'
 
+// Spy-able, for a removal that fails.
+vi.mock('node:fs', async (original) => ({ ...await original<object>() }))
+
 const temps: string[] = []
 const temp = () => { const dir = mkdtempSync(join(tmpdir(), 'guest-install-')); temps.push(dir); return dir }
-afterEach(() => { for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true }) })
+afterEach(() => { vi.restoreAllMocks(); for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 
 describe('the sudoers drop-in', () => {
   it('lets the owner, and only the owner, run the helper without a password', () => {
@@ -118,6 +122,25 @@ describe('installing the helper', () => {
     expect(result).toEqual({ ok: true })
     expect(runner).toHaveBeenCalledTimes(1)
     expect(existsSync(staged)).toBe(false)
+  })
+
+  it('answers with the install\'s outcome when its staging folder cannot be removed', async () => {
+    // A file root left in the staging folder: this account cannot remove it.
+    const rm = fs.rmSync
+    vi.spyOn(fs, 'rmSync').mockImplementation((path, options) => {
+      if (String(path).includes('harness-guest-')) throw Object.assign(new Error('EACCES: fixture'), { code: 'EACCES' })
+      rm(path, options)
+    })
+    const staging = (args: readonly string[]) => { temps.push(join(/quoted form of "([^"]+)"/.exec(args[1])![1], '..')) }
+    const done = vi.fn<GuestRunner>(async (_command, args) => { staging(args); return ok })
+    expect(await installGuestHelper({ owner: 'ann', runner: done, platform: 'darwin', nodeRuntimeDir: null, hookScript: null }))
+      .toEqual({ ok: true })
+    const failed = vi.fn<GuestRunner>(async (_command, args) => {
+      staging(args)
+      return { code: 1, stdout: '', stderr: 'harness: /usr/local is not owned by root (6)' }
+    })
+    expect(await installGuestHelper({ owner: 'ann', runner: failed, platform: 'darwin', nodeRuntimeDir: null, hookScript: null }))
+      .toEqual({ ok: false, code: 'FAILED', message: '/usr/local is not owned by root (6)' })
   })
 
   it('tells a cancelled prompt from a failure, and says what failed', async () => {

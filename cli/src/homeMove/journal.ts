@@ -1,5 +1,6 @@
 import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { removeQuietly } from '../lib/removePath.js'
 import { draftOf, OWN_FILES, type MovePlan } from './plan.js'
 
 /**
@@ -45,7 +46,7 @@ export function openJournal(journal: Journal, io: OpenIo = NODE_FS): { add(done:
   return {
     add: (done) => {
       if (done.did === 'file' && done.before !== null) {
-        writeSynced(join(before, String(steps)), Buffer.from(done.before, 'base64'), io)
+        writeSynced(io.openSync(join(before, String(steps)), 'w', 0o600), Buffer.from(done.before, 'base64'), io)
         syncFolder(before, io)
       }
       const line: Line = done.did === 'file' ? { did: 'file', path: done.path, kept: done.before === null ? null : steps } : done
@@ -100,11 +101,13 @@ export function forgetJournal(legacy: string, io: JournalIo = NODE_FS): void {
  */
 export function writeWhole(path: string, data: string | Buffer, io: JournalIo = NODE_FS): void {
   const draft = draftOf(path)
+  // Opened before the try: a failed open made nothing, and what is at the draft's name then, a folder, is not this write's.
+  const file = io.openSync(draft, 'w', 0o600)
   try {
-    writeSynced(draft, data, io)
+    writeSynced(file, data, io)
     io.renameSync(draft, path)
   } catch (error) {
-    io.rmSync(draft, { force: true })
+    removeQuietly(draft)
     throw error
   }
   syncFolder(dirname(path), io)
@@ -128,8 +131,7 @@ function stepOf(line: Line, legacy: string): Done {
   }
 }
 
-function writeSynced(path: string, data: string | Buffer, io: JournalIo): void {
-  const file = io.openSync(path, 'w', 0o600)
+function writeSynced(file: number, data: string | Buffer, io: JournalIo): void {
   try {
     io.writeFileSync(file, data)
     io.fsyncSync(file)

@@ -19,13 +19,15 @@
  */
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { harnessPath, thisComputer } from '../src/config/harnessHome.js'
+import { MIN_CODEX } from '../src/devices/codexPlugin.js'
 import { DIAL_PLUGIN_ID, DIAL_SKILL } from '../src/devices/dialSkill.js'
 import { readSetup, writeSetup } from '../src/devices/dialSkillFiles.js'
 import { copyNode } from '../src/testing/placeNode.js'
+import { startTimes } from '../src/testing/spawnedRuns.js'
 import { VERSION } from '../src/version.js'
 import { LocalClient } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
@@ -81,19 +83,6 @@ const daemonLsofLines = (d: IsolatedDaemon, ...args: string[]): string[] =>
 /** The open files `lsof` shows the daemon. */
 const daemonLsof = (d: IsolatedDaemon, ...args: string[]): string[] =>
   daemonLsofLines(d, ...args).filter((line) => line.startsWith('n')).map((line) => line.slice(1))
-
-/** Each process whose executable is under [folder]: `comm` is that path on macOS, /proc says it on Linux. */
-function executablesUnder(folder: string): number[] {
-  const under = (path: string): boolean => path.startsWith(`${folder}/`)
-  if (process.platform === 'linux') {
-    return readdirSync('/proc').filter((name) => /^\d+$/.test(name)).filter((pid) => {
-      try { return under(readlinkSync(`/proc/${pid}/exe`)) } catch { return false }
-    }).map(Number)
-  }
-  return execFileSync('ps', ['-axww', '-o', 'pid=,comm=']).toString().split('\n')
-    .map((line) => line.trim().match(/^(\d+)\s+(.*)$/)).filter((match): match is RegExpMatchArray => !!match && under(match[2]))
-    .map((match) => Number(match[1]))
-}
 
 describe('the dial set up from its first attach', () => {
   let daemon: IsolatedDaemon | undefined
@@ -262,8 +251,9 @@ describe('the dial set up from its first attach', () => {
     expect(existsSync(skillOf(codexHome))).toBe(false)
     expect(existsSync(skillOf(other))).toBe(false)
 
-    // Enabled, and an attach runs a scan: the same daemon, never restarted.
-    expect(await device(d, ['codex', 'enable'])).toMatchObject({ code: 0, err: '' })
+    // Enabled, and an attach runs a scan: the same daemon, never restarted. The daemon's fake Codex is 0.160.0
+    // (harness/fakeEngine.mjs), older than the plugin `enable` also sets up: the skill comes back, and the person is told.
+    expect(await device(d, ['codex', 'enable'])).toMatchObject({ code: 1, err: `Codex ${MIN_CODEX} or later is needed.\n` })
     expect(read(skillOf(codexHome))).toBe(DIAL_SKILL)
     await desk.unplug('E2E-A')
     await plugged(desk)
@@ -348,7 +338,7 @@ describe('the dial set up from its first attach', () => {
 
   it.runIf(!!process.env.E2E_REAL_CODEX)('a real Codex app-server\'s rollout gives its home', async () => {
     const codex = process.env.E2E_REAL_CODEX!
-    const { d, desk } = await fresh()
+    const { d, desk: theDesk } = await fresh()
     const home = join(d.env.HOME!, 'codex-real'), work = join(d.root, 'work'), sessions = join(home, 'sessions')
     mkdirSync(home, { recursive: true })
     mkdirSync(work, { recursive: true })
@@ -369,6 +359,10 @@ trust_level = "trusted"
     // Read before its server goes, and printed when the case fails.
     let screen = ''
     onTestFailed(() => { console.log(`---- the Codex pane\n${screen}`) })
+    /** The app server Codex's pid file names, and its start read before the close. */
+    let server: { pid: number; started: string | undefined } | undefined
+    /** The updater Codex 0.172 records beside it, read the same way; null: Codex wrote no updater file. */
+    let updater: { pid: number; started: string | undefined } | null | undefined
     try {
       tmux('new-session', '-d', '-s', 'codex', '-x', '200', '-y', '50', '-c', work, codex)
       // Its composer, `›` at a line's start, is drawn once Codex takes input; the banner comes before it.
@@ -394,20 +388,40 @@ trust_level = "trusted"
       const args = execFileSync('ps', ['-ww', '-o', 'args=', '-p', String(held)]).toString()
       console.log(`the rollout's holder is an app-server: ${args.includes('app-server') ? 'yes' : 'no'}`)
 
-      await plugged(desk)
+      await plugged(theDesk)
       await until('the skill in the real Codex\'s home', () => read(skillOf(home)) === DIAL_SKILL, 45_000, 100)
       noPathLogged(d)
     } finally {
       try { screen = tmux('capture-pane', '-p', '-t', 'codex') } catch { /* gone */ }
       try { tmux('kill-server') } catch { /* already gone */ }
-      // Codex's managed app-server runs from its home's packages/ and outlives the pane.
-      for (const pid of executablesUnder(home)) { try { process.kill(pid, 'SIGTERM') } catch { /* gone */ } }
+      // Codex's app server outlives the pane: IsolatedDaemon.close() ends it through <home>/app-server-daemon/daemon.pid
+      // (rootProcesses.ts), so the sweep is the one cleanup and this case proves it. Its start, read before, tells it
+      // from a process given its pid since.
+      // A pid file missing or cut short fails the case below, never this cleanup, which would hide the case's own error.
       try {
-        await until('Codex\'s processes to end', () => executablesUnder(home).length === 0, 5_000, 100)
-      } catch {
-        for (const pid of executablesUnder(home)) { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } }
+        const { pid } = JSON.parse(readFileSync(join(home, 'app-server-daemon', 'daemon.pid'), 'utf8')) as { pid: number }
+        server = { pid, started: startTimes([pid]).get(pid) }
+      } catch { /* no server read: the expect below says so */ }
+      try {
+        const { pid } = JSON.parse(readFileSync(join(home, 'app-server-daemon', 'daemon-updater.pid'), 'utf8')) as { pid: number }
+        updater = { pid, started: startTimes([pid]).get(pid) }
+      } catch (error) {
+        // Missing: Codex wrote none. One cut short stays unread, and the expect below says so.
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') updater = null
       }
-      await until('no process left under the Codex home', () => executablesUnder(home).length === 0, 5_000, 100)
+      // The desk first: its close writes dials.json in the root the daemon's close removes. Each is cleared once closed, so
+      // afterEach closes neither again.
+      await theDesk.close()
+      desk = undefined
+      await d.close()
+      daemon = undefined
+    }
+    expect(server?.started, 'the Codex app server its pid file names, running before the close').toBeDefined()
+    expect(startTimes([server!.pid]).get(server!.pid), 'the Codex app server after the close').not.toBe(server!.started)
+    // A Codex before 0.172 writes no updater file; one it recorded and that ran before the close is gone after it.
+    if (updater !== null) {
+      expect(updater, 'the Codex updater its pid file names').toBeDefined()
+      if (updater!.started !== undefined) expect(startTimes([updater!.pid]).get(updater!.pid), 'the Codex updater after the close').not.toBe(updater!.started)
     }
   })
 })

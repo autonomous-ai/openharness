@@ -346,6 +346,27 @@ describe('the devices\' record of a dial\'s setup', () => {
     expect(readdirSync(dataDir).sort()).toEqual([DIAL_SETUP_FILE, DIAL_SKILL_FILE].sort())
   })
 
+  it('a record whose rename fails says its code; its temporary goes, or is left when its removal fails too', () => {
+    const dataDir = aDataDir()
+    writeSetup(dataDir, { dial: true, homes: { claude: [], codex: [] }, pluginHomes: [] })
+    const record = readFileSync(join(dataDir, DIAL_SETUP_FILE), 'utf8')
+    vi.spyOn(fs, 'renameSync').mockImplementation(() => { throw Object.assign(new Error('EACCES: fixture'), { code: 'EACCES' }) })
+    expect(writeSetup(dataDir, { dial: true, plugin: '0.6.59', homes: { claude: [], codex: [] }, pluginHomes: [] })).toBe('EACCES')
+    expect(readdirSync(dataDir)).toEqual([DIAL_SETUP_FILE])
+
+    // A file Windows still holds: the removal's EBUSY must not replace the code that failed the write.
+    const busy = () => { throw Object.assign(new Error('EBUSY: fixture'), { code: 'EBUSY' }) }
+    vi.spyOn(fs, 'rmSync').mockImplementation(busy)
+    vi.spyOn(fs, 'unlinkSync').mockImplementation(busy)
+    expect(writeSetup(dataDir, { dial: true, plugin: '0.6.59', homes: { claude: [], codex: [] }, pluginHomes: [] })).toBe('EACCES')
+    vi.restoreAllMocks()
+
+    // The temporary left beside it is no record.
+    expect(readdirSync(dataDir).filter((name) => name !== DIAL_SETUP_FILE)).toHaveLength(1)
+    expect(readFileSync(join(dataDir, DIAL_SETUP_FILE), 'utf8')).toBe(record)
+    expect(readSetup(dataDir).plugin).toBeUndefined()
+  })
+
   it('on a computer where the daemon never ran, every write makes the data folder first, 0700', () => {
     // Each write, then what a read of its folder finds.
     const writes: Array<[string, (dataDir: string) => string | undefined, (dataDir: string) => unknown, unknown]> = [

@@ -6,7 +6,7 @@
  * core owns final publication and Watcher ordering. The dated inline compatibility entry alone publishes here.
  */
 import { createHash, randomUUID } from 'node:crypto'
-import { closeSync, constants, fstatSync, fsync, lstatSync, openSync, read, realpathSync, renameSync, rmSync, write, type Stats } from 'node:fs'
+import { closeSync, constants, fstatSync, fsync, lstatSync, openSync, read, realpathSync, renameSync, write, type Stats } from 'node:fs'
 import { join, relative } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import type { ResumeRepairContract } from '../facets/launch.js'
@@ -14,6 +14,7 @@ import { REPAIR_LIMITS, ResumePreparationError, type HistoryRepair, type RepairL
 import { repairFile, sameRepairFile, type RepairFile, type RepairPrepared } from '../worker/resumeRepairProtocol.js'
 export { REPAIR_LIMITS, ResumePreparationError, type HistoryRepair, type RepairLimits, type Unrepaired } from '../facets/resumeRepair.js'
 import { staysInside } from '../../lib/pathContainment.js'
+import { removeQuietly } from '../../lib/removePath.js'
 import { findSessionFile } from './sessionRecords.js'
 
 type JsonObject = Record<string, unknown>
@@ -313,10 +314,10 @@ export async function repairHistory(contract: ResumeRepairContract, sessionId: s
       return { repairedItems: copied.repairedItems, repairedBytes: copied.repairedBytes, backupPath }
     } finally {
       if (output !== undefined) closeSync(output)
-      if (createdOutput && !staged) rmSync(temporary, { force: true })
+      if (createdOutput && !staged) removeQuietly(temporary)
       if (backup !== undefined) {
         closeSync(backup)
-        if (!verifiedBackup) rmSync(backupPath, { force: true })
+        if (!verifiedBackup) removeQuietly(backupPath)
       }
     }
   } catch (error) {

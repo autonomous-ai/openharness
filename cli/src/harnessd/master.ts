@@ -199,6 +199,7 @@ export function writeStatusFile(file: string, status: MasterStatusFile): void {
     renameSync(temp, file)
   } catch {
     // Best effort: a full disk must not stop the master from supervising.
+    // Not recursive: a folder at the temporary's name, which failed the write, is not ours to delete.
     try { rmSync(temp, { force: true }) } catch { /* nothing more to do */ }
   }
 }

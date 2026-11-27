@@ -9,11 +9,12 @@
  * process; elsewhere never the core's.
  */
 import { spawn } from 'node:child_process'
-import { accessSync, closeSync, constants, existsSync, fstatSync, mkdtempSync, openSync, readSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { accessSync, closeSync, constants, existsSync, fstatSync, mkdtempSync, openSync, readSync, realpathSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join, win32 } from 'node:path'
 import { ownProcessGroup } from '../lib/windows/noWindow.js'
 import { windowsProgram, type Program } from '../lib/windows/program.js'
+import { removeQuietly } from '../lib/removePath.js'
 import { writeZip } from '../lib/zipWriter.js'
 
 declare const __VSCODE_EXTENSION__: string | undefined
@@ -338,8 +339,7 @@ export function vscodeExtensionDeps(editor: VscodeEditor, bin?: string): VscodeE
     // mkdtemp makes the folder 0700.
     tempDir: () => mkdtempSync(join(tmpdir(), 'harness-vscode-')),
     write: (path, data) => writeFileSync(path, data, { mode: 0o600 }),
-    remove: (path) => {
-      try { rmSync(path, { recursive: true, force: true }) } catch { /* left for the system's cleaning of its temporary folder */ }
-    },
+    // Left for the system's cleaning of its temporary folder when it will not go.
+    remove: removeQuietly,
   }
 }

@@ -4,8 +4,9 @@
  * that owns one (its terminal's or its editor's), else its app's by class. Which desktop answers is found once at
  * start, and again after a raise fails: the person may have logged out and into another desktop since.
  */
-import { rmSync, writeFileSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { privateFolder, runtimeShortRoot } from '../../lib/localSocket.js'
+import { removeQuietly } from '../../lib/removePath.js'
 import { windowClasses } from './frontApp.js'
 import { desktopLine, findLinuxDesktop, isAgentPid, linuxDesktopDeps, type LinuxDesktop } from './linuxDesktop.js'
 import { createGnomeRaise } from './linuxRaiseGnome.js'
@@ -122,13 +123,9 @@ export function systemLinuxRaise(apps: OrcaDeps, log: (line: string) => void): L
               // not a state file: a script KWin reads once, removed when its raise ends
               writeFileSync(path, text, { mode: 0o600 })
             },
-            remove: (path) => {
-              try {
-                rmSync(path, { force: true })
-              } catch {
-                // Left in this login's own folder: the raise answers all the same, and the next one takes another name.
-              }
-            },
+            // Left in this login's own folder when it cannot go: the raise answers all the same, and the next one takes
+            // another name.
+            remove: removeQuietly,
             name: () => `${process.pid}-${++scripts}`,
           }, found.bus)
           return {

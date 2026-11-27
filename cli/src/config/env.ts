@@ -7,6 +7,7 @@ import { harnessPath } from './harnessHome.js'
 import { EnvIssue, flag, homePath, homeRelative, matching, maybe, maybeNumber, number, oneOf, parseEnv, text, unlessFalse, url, type EnvField, type EnvOf } from './envFields.js'
 import { parseTerminalBackends } from './terminalConfig.js'
 import { adoptComputerId } from '../lib/computerIdentity.js'
+import { removeQuietly } from '../lib/removePath.js'
 import { openclawDefaultStateDir } from '../engines/openclaw/contract.js'
 
 // Packaged files (cli.js/notify.mjs) live in ~/.harness/cli; mutable state in ~/.harness/cli/data.
@@ -108,9 +109,7 @@ function migrateLegacyAdapterState(): void {
     }
     // Whole stray tree goes: its cli.js/notify.mjs are only a bundle copy the launcher never runs
     // (it execs ~/.harness/cli/cli.js) and the next self-update rewrites them.
-    try {
-      rmSync(join(homedir(), '.machine'), { recursive: true, force: true })
-    } catch { /* ignore */ }
+    removeQuietly(join(homedir(), '.machine'))
     console.warn('[machine] moved adapter state from ~/.machine/cli/data into the data folder')
   } else if (moved) {
     console.warn(`[machine] renamed ${moved} pre-rename file(s) in the data folder`)
@@ -164,7 +163,9 @@ const fields = {
   // Where Claude Code writes its per-session JSONL transcripts.
   CLAUDE_PROJECTS_DIR: text(join(homedir(), '.claude', 'projects')),
   // Codex state root. Only hook-registered rollout files beneath <CODEX_HOME>/sessions are exposed.
-  CODEX_HOME: text(join(homedir(), '.codex')),
+  // Unset or empty is ~/.codex: Codex takes an empty CODEX_HOME as none (utils/home-dir find_codex_home; codex-cli
+  // 0.172.0 signs in with CODEX_HOME= but not with an empty folder), and '' made every reader take a relative folder.
+  CODEX_HOME: (raw) => raw || join(homedir(), '.codex'),
   // Grok state root. Conversation records live below <GROK_HOME>/sessions/<encoded-cwd>/<uuid>/updates.jsonl.
   GROK_HOME: text(join(homedir(), '.grok')),
   // Antigravity CLI state root. Conversation transcripts live below

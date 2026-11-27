@@ -91,6 +91,16 @@ outside Harness's data folder, where Harness's own one-shots run. It reads no da
 nothing. Anything else the launcher prints is dropped. `harness device claude disable` and `harness device codex disable`
 take the line away.
 
+## Measured hook times
+
+- Codex 0.172.0, hook start to exit, Harness CLI start-up included, median of 5 (#4660): macOS 238-269 ms; a Windows
+  11 ARM64 VM 1.49-1.54 s, about 860 ms of it Windows PowerShell 5.1 starting. In the real macOS TUI, Codex's own hook
+  log: 243-250 ms; the first ask after a fresh build 1.16 s (cold start). The hook's bound is 5 s.
+- Codex on Windows x64, from the model's answer to the approval dialog (#4668): 928-966 ms, about 0.41 s of it
+  Harness's own `PermissionRequest` hook in `CODEX_HOME/hooks.json`.
+- Claude Code on Windows: the prompt shows about 0.5-1 s later in Git Bash, 2-3.5 s in PowerShell (a Windows 11 ARM64
+  VM).
+
 ## What it never does
 
 - It never answers a prompt: the dial approves nothing, and each prompt is answered in its own app.

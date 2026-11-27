@@ -1,8 +1,11 @@
+import * as fs from 'node:fs'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, watch, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { LOCK_LOOK_MS, moveLockPath, withMoveLock, type LockDeps, type LockWait } from './lock.js'
+
+vi.mock('node:fs', async (real) => ({ ...await real<object>() }))
 
 const folder = (): string => mkdtempSync(join(tmpdir(), 'move-lock-'))
 
@@ -25,7 +28,18 @@ function heldBy(legacy: string, pid: number, start: number): void {
 const ownerOf = (legacy: string): unknown => JSON.parse(readFileSync(join(moveLockPath(legacy), 'owner'), 'utf8'))
 const mode = (path: string): number => statSync(path).mode & 0o777
 
-afterEach(() => { vi.useRealTimers() })
+/** A removal of the lock's [name] that fails, as one of a file another program holds does (EBUSY). */
+function heldInLock(legacy: string, name: string): void {
+  const rm = fs.rmSync, unlink = fs.unlinkSync, held = join(moveLockPath(legacy), name)
+  const busy = (path: fs.PathLike): void => { if (String(path) === held) throw Object.assign(new Error('EBUSY: fixture'), { code: 'EBUSY' }) }
+  vi.spyOn(fs, 'rmSync').mockImplementation((path, options) => { busy(path); rm(path, options) })
+  vi.spyOn(fs, 'unlinkSync').mockImplementation((path) => { busy(path); unlink(path) })
+}
+
+afterEach(() => {
+  vi.useRealTimers()
+  vi.restoreAllMocks()
+})
 
 describe('the move lock', () => {
   it('the first start holds it', async () => {
@@ -74,6 +88,27 @@ describe('the move lock', () => {
   it('a lock whose owner is gone is taken over', async () => {
     const legacy = legacyHome()
     heldBy(legacy, 4242, 1)
+    expect(await withMoveLock(legacy, async () => ownerOf(legacy), UNCOMMITTED, as(1001))).toEqual({ held: true, value: { pid: 1001, start: 7 } })
+  })
+
+  it('a draft that cannot be removed once its owner is linked in leaves the lock held', async () => {
+    const legacy = legacyHome()
+    heldInLock(legacy, 'owner.1001')
+    expect(await withMoveLock(legacy, async () => ownerOf(legacy), UNCOMMITTED, as(1001))).toEqual({ held: true, value: { pid: 1001, start: 7 } })
+  })
+
+  it('a folder at a draft\'s name is not the take\'s: it stays, with what is in it, and the take\'s error is thrown', async () => {
+    const legacy = legacyHome()
+    mkdirSync(join(moveLockPath(legacy), 'owner.1001'), { recursive: true, mode: 0o700 })
+    writeFileSync(join(moveLockPath(legacy), 'owner.1001', 'notes.txt'), 'mine')
+    await expect(withMoveLock(legacy, async () => ownerOf(legacy), UNCOMMITTED, as(1001))).rejects.toMatchObject({ code: 'EISDIR' })
+    expect(readFileSync(join(moveLockPath(legacy), 'owner.1001', 'notes.txt'), 'utf8')).toBe('mine')
+  })
+
+  it('a gone owner set aside that cannot be removed is still taken over', async () => {
+    const legacy = legacyHome()
+    heldBy(legacy, 4242, 1)
+    heldInLock(legacy, 'owner.gone.1001')
     expect(await withMoveLock(legacy, async () => ownerOf(legacy), UNCOMMITTED, as(1001))).toEqual({ held: true, value: { pid: 1001, start: 7 } })
   })
 

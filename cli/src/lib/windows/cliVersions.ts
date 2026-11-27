@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, s
 import { join } from 'node:path'
 import { errorKind } from '../log.js'
 import type { ProcessRow } from '../processTable.js'
+import { removeQuietly } from '../removePath.js'
 import { atomicWriteFile } from '../secureState.js'
 import { CLI_POINTER, writePointer } from './installLayout.js'
 import { STABLE_NOTIFY, VERSION_FOLDER } from './installNames.js'
@@ -56,7 +57,7 @@ export function writeVersionFolder(cliDir: string, version: string, cliBuf: Buff
     if (existsSync(folder)) renameSync(folder, join(cliDir, `.${version}.${Date.now()}.old`))
     renameSync(temporary, folder)
   } catch (error) {
-    try { rmSync(temporary, { recursive: true, force: true }) } catch { /* not this call's to clear */ }
+    removeQuietly(temporary) // left if it will not go: the write's error is thrown
     throw error
   }
   return folder

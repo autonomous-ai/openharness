@@ -121,6 +121,7 @@ export function writeMarker(file: string, marker: ReexecMarker): void {
   } catch (error) {
     // A write cut short (a full disk) is the caller's to handle (`createReexec` keeps its master); what
     // it left in the data folder is this function's to clear.
+    // Not recursive: a folder at the temporary's name, which failed the write, is not ours to delete.
     try { rmSync(temp, { force: true }) } catch { /* not a file this call wrote */ }
     throw error
   }
@@ -140,6 +141,7 @@ export function readMarker(file: string): ReexecMarker | null {
 }
 
 export function removeMarker(file: string): void {
+  // Not recursive: a folder at the marker's or a handover's name is not ours to delete.
   try { rmSync(file, { force: true }) } catch { /* nothing more to do */ }
 }
 

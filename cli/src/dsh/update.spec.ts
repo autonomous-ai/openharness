@@ -13,7 +13,7 @@ import { dshUpdateInfo, samePackageSource } from './updates.js'
 import { type DshRegistryEntry } from './registry.js'
 import { dshListRows } from './wire.js'
 
-const faults = vi.hoisted(() => ({ cleanup: false, place: false }))
+const faults = vi.hoisted(() => ({ cleanup: false, place: false, fetched: false }))
 vi.mock('node:fs', async original => {
   const fs = await original<typeof import('node:fs')>()
   return { ...fs,
@@ -23,6 +23,8 @@ vi.mock('node:fs', async original => {
     },
     rmSync: (...args: Parameters<typeof fs.rmSync>) => {
       if (faults.cleanup && String(args[0]).includes('/.previous-')) throw new Error('backup is busy')
+      // What Windows answers to the removal of a folder another program still holds a file in.
+      if (faults.fetched && String(args[0]).includes('/.tmp-') && fs.existsSync(args[0])) throw Object.assign(new Error('EBUSY: fixture'), { code: 'EBUSY' })
       return fs.rmSync(...args)
     },
   }
@@ -86,6 +88,7 @@ describe('package updates', { timeout: 60_000 }, () => {
   afterEach(() => {
     faults.cleanup = false
     faults.place = false
+    faults.fetched = false
     vi.unstubAllEnvs()
     env.DSH_DIR = savedRoot
     invalidateInstalledDsh()
@@ -213,6 +216,13 @@ describe('package updates', { timeout: 60_000 }, () => {
     expect((await updateDsh({ id, registry: () => entry, onLine: line => lines.push(line) })).ok).toBe(true)
     expect(lines.some(line => line.startsWith('Previous package retained at'))).toBe(true)
     expect(installedDsh(id)?.commit).toBe(entry.ref)
+  })
+
+  it('an up-to-date package stays a success when its fetched copy cannot be removed', async () => {
+    const repo = create()
+    await installDsh({ source: repo })
+    faults.fetched = true
+    expect(await update(catalog(repo, 'main'))).toMatchObject({ ok: true })
   })
 
   it('reports non-Error failures and releases its lock', async () => {

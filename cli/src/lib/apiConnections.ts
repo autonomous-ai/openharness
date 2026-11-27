@@ -1,6 +1,6 @@
 /** Machine-local API connections. Only child tools receive credentials; model/subscription
  * selection and the daemon's own environment are never changed by saving a key. */
-import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
@@ -9,6 +9,7 @@ import { API_CONNECTIONS_DIR, API_LIST_FILE, API_LIST_MAX_BYTES, UNREADABLE, bas
   type ApiConnection } from './apiConnectionMetadata.js'
 import { readPrivateStateFile, secureStateDirectory } from './secureState.js'
 import { errorKind } from './log.js'
+import { removeQuietly } from './removePath.js'
 export { ApiConnectionError, type ApiConnection } from './apiConnectionMetadata.js'
 
 const stored = metadata.extend({ apiKey: z.string().trim().min(1).max(8192).regex(/^[^\s\x00-\x1f\x7f]+$/) })
@@ -108,7 +109,7 @@ export class ApiConnections {
       created = false
     } finally {
       if (fd !== undefined) closeSync(fd)
-      if (created) rmSync(temporary, { force: true })
+      if (created) removeQuietly(temporary)
     }
   }
 

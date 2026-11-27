@@ -15,6 +15,7 @@ import { probeVersionLine, readInstanceDiscovery } from '../ptyHost/launch.js'
 import { PTY_PROTOCOL, SHUTDOWN_PROTOCOL, SUPPORTED_PTY_PROTOCOLS } from '../ptyHost/protocol.js'
 import { windowsProcessRows } from './processTable.js'
 import { readSignatureProblems, unsignedAllowed } from './ptySignatures.js'
+import { removeQuietly } from '../removePath.js'
 import { systemProgram } from './powershell.js'
 import { scrubTerminalContext } from '../terminalEnvironment.js'
 import {
@@ -189,9 +190,13 @@ async function unzipWithTool(zip: Buffer, dest: string): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       execFile(cmd, [...args], { cwd: dest, windowsHide: true, timeout: 60_000 }, (err) => (err ? reject(err) : resolve()))
     })
-  } finally {
-    rmSync(join(dest, name), { force: true })
+  } catch (error) {
+    // A zip a scan still holds is left with the staging folder: the tool's error is what failed the unpack.
+    removeQuietly(join(dest, name))
+    throw error
   }
+  // Unpacked, the folder must hold the payload's files only: a zip that cannot go fails the unpack, retried next check.
+  rmSync(join(dest, name), { force: true })
 }
 
 export { probeVersionLine } from '../ptyHost/launch.js'

@@ -6,6 +6,7 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
+import * as fs from 'node:fs'
 import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -30,6 +31,7 @@ const LONG = 'x'.repeat(60)
 const homes: string[] = []
 const closers: Array<() => Promise<void>> = []
 afterEach(async () => {
+  vi.restoreAllMocks()
   await Promise.all(closers.splice(0).map((close) => close()))
   for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true })
 })
@@ -39,6 +41,26 @@ function shortFolder(): string {
   const folder = realpathSync(mkdtempSync('/tmp/hb-'))
   homes.push(folder)
   return folder
+}
+
+/** What Windows answers to the removal of a file another program still holds, for each temporary (a path ending .tmp). */
+const heldTemporaries = () => {
+  const rm = fs.rmSync, unlink = fs.unlinkSync
+  const busy = () => Object.assign(new Error('EBUSY: fixture'), { code: 'EBUSY' })
+  vi.spyOn(fs, 'rmSync').mockImplementation((path, options) => { if (String(path).endsWith('.tmp')) throw busy(); rm(path, options) })
+  vi.spyOn(fs, 'unlinkSync').mockImplementation((path) => { if (String(path).endsWith('.tmp')) throw busy(); unlink(path) })
+}
+
+/** A rename of a temporary that fails with [error]. */
+const failedRename = (error: Error) => {
+  const rename = fs.renameSync
+  vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => { if (String(from).endsWith('.tmp')) throw error; rename(from, to) })
+}
+
+/** What [run] threw. */
+const thrown = (run: () => unknown): unknown => {
+  try { run() } catch (error) { return error }
+  throw new Error('nothing thrown')
 }
 
 const hashed = (folder: string): string => createHash('sha256').update(folder).digest('hex').slice(0, 16)
@@ -246,6 +268,32 @@ describe('the bridge\'s layout', () => {
     expect(readdirSync(join(home.oldHome, 'connections'))).toEqual(['mcp-shim.mjs'])
   })
 
+  it('a link whose temporary cannot be removed after a failed rename is named in what comes back', async () => {
+    const home = await movedHome()
+    makeRealFolders(home.oldHome)
+    failedRename(Object.assign(new Error('EACCES: fixture'), { code: 'EACCES' }))
+    heldTemporaries()
+    expect(serveOldPaths(home.bridge, home.served, publishHookRoute)).toEqual(['bridge.sock', 'mcp-shim.mjs'])
+  })
+
+  it('a folder at a link\'s temporary name is not the bridge\'s: it stays, and the link is named in what comes back', async () => {
+    const home = await movedHome()
+    makeRealFolders(home.oldHome)
+    const folder = `${join(home.oldHome, 'connections', 'bridge.sock')}.${process.pid}.tmp`
+    mkdirSync(folder)
+    writeFileSync(join(folder, 'notes.txt'), 'mine')
+    expect(serveOldPaths(home.bridge, home.served, publishHookRoute)).toEqual(['bridge.sock'])
+    expect(readFileSync(join(folder, 'notes.txt'), 'utf8')).toBe('mine')
+  })
+
+  it('a file left at a link\'s temporary name (a failed removal, an earlier process with this pid) goes: the next serve makes the link', async () => {
+    const home = await movedHome()
+    makeRealFolders(home.oldHome)
+    writeFileSync(`${join(home.oldHome, 'connections', 'bridge.sock')}.${process.pid}.tmp`, '')
+    expect(serveOldPaths(home.bridge, home.served, publishHookRoute)).toEqual(['bridge.sock'])
+    expect(serveOldPaths(home.bridge, home.served, publishHookRoute)).toEqual([])
+  })
+
   it.each(['beside', 'old short', 'new short'] as const)('removing the bridge removes links without following them (%s)', async (layout) => {
     const home = await movedHome(layout)
     makeRealFolders(home.oldHome)
@@ -321,6 +369,22 @@ describe('the bridge\'s record', () => {
     const state = shortFolder()
     writeBridge(state, record, MOVED_AT, missing)
     expect(readBridge(state)).toEqual(record)
+  })
+
+  it('throws the error that stopped the write, not the one of its temporary\'s removal', () => {
+    const state = shortFolder(), denied = Object.assign(new Error('EACCES: fixture'), { code: 'EACCES' })
+    failedRename(denied)
+    heldTemporaries()
+    expect(thrown(() => writeBridge(state, record, MOVED_AT, proc))).toBe(denied)
+  })
+
+  it('a folder at its temporary\'s name is not its own: it stays, and the write\'s error is thrown', () => {
+    const state = shortFolder(), folder = `${join(state, BRIDGE_FILE)}.${process.pid}.tmp`
+    mkdirSync(folder)
+    writeFileSync(join(folder, 'notes.txt'), 'mine')
+    expect(thrown(() => writeBridge(state, record, MOVED_AT, proc))).toMatchObject({ code: 'EISDIR' })
+    expect(readFileSync(join(folder, 'notes.txt'), 'utf8')).toBe('mine')
+    expect(readBridge(state)).toBeNull()
   })
 
   it('a record from before, with fields nothing reads, reads with every field its readers use', () => {

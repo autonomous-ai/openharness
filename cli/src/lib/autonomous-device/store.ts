@@ -1,9 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { closeSync, constants, fsyncSync, openSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, fsyncSync, openSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { AgentCreationReceipts, creationFingerprint, type AgentCreationOutcome } from '../agentCreationReceipt.js'
 import { readPrivateStateFile, secureStateDirectory, syncStateDirectory } from '../secureState.js'
+import { removeQuietly } from '../removePath.js'
 import { DeviceOperationSchema, DeviceStoreError, DeviceStoreRequestSchema, type DeviceOperation, type PrepareRequest } from './storeContract.js'
 
 export interface StoreAgent {
@@ -107,7 +108,7 @@ export class AutonomousDeviceStore {
       try { writeFileSync(fd, JSON.stringify(row)); fsyncSync(fd) } finally { closeSync(fd) }
       if (!exclusive) renameSync(target, file)
       syncStateDirectory(this.deps.directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
-    } finally { if (!exclusive && opened) rmSync(target, { force: true }) }
+    } finally { if (!exclusive && opened) removeQuietly(target) }
   }
   private read(id: string): Journal | null {
     if (this.live.has(id)) return this.live.get(id)!

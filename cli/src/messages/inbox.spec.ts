@@ -1,15 +1,19 @@
 import { spawnSync } from 'node:child_process'
+import * as fs from 'node:fs'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { messagesCommand, writeMessagesHook } from '../engines/kit/messagesHook.js'
 import { PaneInbox } from './inbox.js'
+
+// Spy-able, for a removal that fails.
+vi.mock('node:fs', async (original) => ({ ...await original<object>() }))
 
 let root: string
 let inbox: PaneInbox
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'inbox-')); inbox = new PaneInbox(join(root, 'agent-messages')) })
-afterEach(() => rmSync(root, { recursive: true, force: true }))
+afterEach(() => { vi.restoreAllMocks(); rmSync(root, { recursive: true, force: true }) })
 
 const paneDir = (n: string) => join(root, 'agent-messages', 'inbox', n)
 
@@ -104,6 +108,20 @@ describe('a pane inbox', () => {
     mkdirSync(join(root, 'agent-messages', 'typing'), { recursive: true })
     writeFileSync(join(root, 'agent-messages', 'typing', 'stray.txt'), '')
     expect(inbox.reclaimed()).toEqual([])
+  })
+
+  it('throws the error that stopped a put, not the one of its temporary\'s removal, and the temporary left is no item', () => {
+    const denied = Object.assign(new Error('EACCES: fixture'), { code: 'EACCES' })
+    vi.spyOn(fs, 'renameSync').mockImplementation(() => { throw denied })
+    // What Windows answers to the removal of a file another program still holds.
+    const busy = () => { throw Object.assign(new Error('EBUSY: fixture'), { code: 'EBUSY' }) }
+    vi.spyOn(fs, 'rmSync').mockImplementation(busy)
+    vi.spyOn(fs, 'unlinkSync').mockImplementation(busy)
+    expect(() => inbox.put('%5', 'a', { session: '', text: 'x' })).toThrow(denied)
+    vi.restoreAllMocks()
+    expect(readdirSync(join(root, 'agent-messages', 'typing'))).toEqual([`.5-a.${process.pid}.tmp`])
+    expect(inbox.reclaimed()).toEqual([])
+    expect(inbox.entries()).toEqual([])
   })
 
   it('puts again when the hook removed the emptied folder in between', () => {

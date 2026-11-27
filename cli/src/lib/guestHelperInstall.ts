@@ -8,7 +8,7 @@
  * `osascript … with administrator privileges` (the system's own password or Touch ID sheet), on Linux
  * through `pkexec`, else `sudo` in the terminal. It is idempotent: running it again replaces each piece.
  */
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir, userInfo } from 'node:os'
 import { dirname, join, sep } from 'node:path'
 
@@ -18,6 +18,7 @@ import { GUEST_HELPER_PATH } from './guestAccounts.js'
 import { runGuestCommand, type GuestRunner } from './guestRunner.js'
 import { guestHelperScript, guestSudoersTemplate, helperScriptVersion } from './guestHelperAssets.js'
 import { managedNodePath } from './nodeRuntime.js'
+import { removeQuietly } from './removePath.js'
 import type { RunAdmin } from './windows/elevated.js'
 
 export const GUEST_SUDOERS_PATH = '/etc/sudoers.d/harness-guests'
@@ -188,7 +189,7 @@ export async function installGuestHelper(options: GuestHelperInstallOptions = {}
     }
     return { ok: true }
   } finally {
-    rmSync(stageDir, { recursive: true, force: true })
+    removeQuietly(stageDir)
   }
 }
 

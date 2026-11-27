@@ -1,9 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { opendir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
+import { removeQuietly } from './removePath.js'
 import type { LaunchModel } from './launchModel.js'
 
 export type AgentCreationOutcome =
@@ -479,7 +480,7 @@ export class AgentCreationReceipts {
       this.syncDirectory()
       return true
     } catch (error) { throw error instanceof AgentCreationReceiptError ? error : storageFailure(this.directory, error) }
-    finally { if (opened) rmSync(temporary, { force: true }) }
+    finally { if (opened) removeQuietly(temporary) }
   }
 
   private readHold(id: string, receipt: Extract<IntentReceipt, { checksum: string }>): CreationHold {
@@ -500,7 +501,7 @@ export class AgentCreationReceipts {
       writeFileSync(fd, JSON.stringify(value)); fsyncSync(fd)
       renameSync(temporary, target); this.syncDirectory()
     } finally {
-      if (fd !== undefined) { closeSync(fd); rmSync(temporary, { force: true }) }
+      if (fd !== undefined) { closeSync(fd); removeQuietly(temporary) }
     }
   }
 
@@ -608,7 +609,7 @@ export class AgentCreationReceipts {
     } finally {
       // Failed reservations stay on disk so a partial write cannot permit a
       // duplicate. Only this write's private replacement file is disposable.
-      if (!exclusive && opened) rmSync(writing, { force: true })
+      if (!exclusive && opened) removeQuietly(writing)
     }
   }
 }

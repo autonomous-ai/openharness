@@ -3,10 +3,11 @@
  * The folder is in the agent's own `$TMPDIR`, or in the folder Harness keeps for its agents' files (../lib/agentTmp.ts)
  * where nothing sets a TMPDIR.
  */
-import { lstatSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { lstatSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { homePath } from '../config/envFields.js'
 import { agentTmpFolder, prepareAgentTmp } from '../lib/agentTmp.js'
+import { removeQuietly } from '../lib/removePath.js'
 
 /** 80% of the smaller of what the engines keep of a command's output: Claude Code 30,000 characters (measured), Codex 10,000
  *  tokens (read from its model catalog), so at least 10,000 characters
@@ -80,6 +81,6 @@ function keepNewest(folder: string, written: string): void {
   entries.sort((a, b) => a.at - b.at || a.path.localeCompare(b.path))
   // A file that will not go stays one more, and the next save tries again: the new file is saved either way.
   for (const entry of entries.slice(0, Math.max(0, entries.length + 1 - KEPT_FILES))) {
-    try { rmSync(entry.path, { recursive: true, force: true }) } catch { /* said above */ }
+    removeQuietly(entry.path)
   }
 }

@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { errorKind } from '../lib/log.js'
+import { removeQuietly } from '../lib/removePath.js'
 import { DEVICES_BUILTIN_SOURCE, DEVICES_HARNESS_ID, HACHI_BUILTIN_SOURCE, HACHI_ID, HARNESS_MONITOR_BUILTIN_SOURCE, HARNESS_MONITOR_ID, MEMORIES_BUILTIN_SOURCE, MEMORIES_ID, MODEL_MANAGER_BUILTIN_SOURCE, MODEL_MANAGER_ID } from './builtinIds.js'
 import { dshRootDir, isBrokenDsh, readInstalledIndex, resolveInstalled, upsertInstalledRecord } from './installed.js'
 import { lockDsh } from './lock.js'
@@ -109,7 +110,7 @@ function installBuiltin(opts: { id: string; source: string; folder: string; file
       commit: null, revision, linked: false, installedAt: current?.installedAt ?? Date.now(), updatedAt: Date.now() })
     return true
   } finally {
-    rmSync(staging, { recursive: true, force: true })
+    removeQuietly(staging)
     unlock()
   }
 }

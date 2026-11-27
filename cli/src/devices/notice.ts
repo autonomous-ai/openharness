@@ -17,8 +17,8 @@ export interface NoticeDeps {
   cwd: string
   out(line: string): void
   err(line: string): void
-  /** `askDevices` by default. */
-  ask?: (message: { type: 'notice' } & NoticeAsk) => Promise<Record<string, unknown> | number | null>
+  /** `askDevices` by default; [why] hears the reason for a null. */
+  ask?: (message: { type: 'notice' } & NoticeAsk, why: (reason: string) => void) => Promise<Record<string, unknown> | number | null>
 }
 
 const session = (id: string | undefined): id is string => id !== undefined && NOTICE_SESSION.test(id)
@@ -48,11 +48,17 @@ export async function runNotice(words: string[], deps: NoticeDeps): Promise<numb
     deps.err(NOTICE_USAGE)
     return 1
   }
-  const ask = deps.ask ?? ((message) => askDevices(deps.dataDir, { ...message }))
-  const answer = await ask({ type: 'notice', text, ...noticeCaller(deps.env, deps.cwd) })
+  const ask = deps.ask ?? ((message, why) => askDevices(deps.dataDir, { ...message }, { why }))
+  let reason: string | undefined
+  const answer = await ask({ type: 'notice', text, ...noticeCaller(deps.env, deps.cwd) }, (said) => { reason = said })
   const said = typeof answer === 'object' ? answer?.result : undefined
   // The listener's own rate (429) refuses a loop of notices before the devices hear them: over a limit all the same.
   const result = answer === 429 ? 'limited' : isNoticeResult(said) ? said : 'no dial'
   deps.out(json ? JSON.stringify({ result }) : result)
+  if (typeof answer === 'number' && answer !== 429) reason = `status ${answer}`
+  else if (answer !== null && typeof answer === 'object' && !isNoticeResult(said)) reason = 'unknown result'
+  // A no dial says why, so a failed run shows which one it was. Not for `no listener`: an agent's shell would see it
+  // each time no devices run. Only `notify` writes it: dial-watch's stderr is the Device app's log, attach promises none.
+  if (reason && reason !== 'no listener') deps.err(`harness device notify: ${reason}`)
   return 0
 }

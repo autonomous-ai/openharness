@@ -1,13 +1,16 @@
+import * as fs from 'node:fs'
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { dirname, join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readClaudeHead } from '../../lib/sessionSearch/externals/claude.js'
-import { readCodexHead } from '../../lib/sessionSearch/externals/codex.js'
+import { readCodexHead, rollouts } from '../../lib/sessionSearch/externals/codex.js'
 import { readSessionTurns } from '../../lib/sessionSearch/sessionTurns.js'
 import { readClaudeTranscript, writeClaudeTranscript } from './claudeCode.js'
 import { readCodexRollout } from './codex.js'
 import { claudeProjectFolder, claudeSessionPath, codexRolloutPath, convertSession, ConvertError, writeNewSessionFile } from './session.js'
+
+vi.mock('node:fs', async (original) => ({ ...await original<object>() }))
 
 /**
  * A conversation moved between Claude Code and Codex must read back, through Harness's own readers of the target
@@ -88,7 +91,7 @@ function codexFixture(id = '019a0000-1111-7222-8333-444455556666'): string {
 
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'migrate-')) })
-afterEach(() => rmSync(dir, { recursive: true, force: true }))
+afterEach(() => { vi.restoreAllMocks(); rmSync(dir, { recursive: true, force: true }) })
 
 const turnsOf = async (engine: string, sessionId: string, text: string) => {
   const path = join(dir, `${engine}-${sessionId}.jsonl`)
@@ -261,5 +264,26 @@ describe('where a converted session is written', () => {
     expect(() => writeNewSessionFile(path, 'two\n')).toThrow(/EEXIST/)
     expect(readFileSync(path, 'utf8')).toBe('one\n')
     expect(readdirSync(join(dir, 'a', 'b'))).toEqual(['session.jsonl'])
+  })
+
+  // What Windows answers to the removal of a file another program still holds.
+  const holdTemporary = () => vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {
+    throw Object.assign(new Error('EBUSY: fixture'), { code: 'EBUSY' })
+  })
+
+  it('throws the error that stopped the write, not the removal of its temporary\'s', () => {
+    const denied = Object.assign(new Error('EACCES: fixture'), { code: 'EACCES' })
+    vi.spyOn(fs, 'linkSync').mockImplementation(() => { throw denied })
+    holdTemporary()
+    expect(() => writeNewSessionFile(join(dir, 'session.jsonl'), 'one\n')).toThrow(denied)
+  })
+
+  it('writes the session when its temporary cannot be removed, and Codex\'s reader lists no temporary', async () => {
+    holdTemporary()
+    const path = codexRolloutPath(join(dir, 'codex'), NOW, NEW_ID)
+    writeNewSessionFile(path, 'one\n')
+    expect(readFileSync(path, 'utf8')).toBe('one\n')
+    expect(readdirSync(dirname(path))).toHaveLength(2)
+    expect(await rollouts(join(dir, 'codex', 'sessions'))).toEqual([path])
   })
 })

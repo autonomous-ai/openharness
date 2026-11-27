@@ -1,8 +1,12 @@
+import * as fs from 'node:fs'
 import { mkdtempSync, mkdirSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { dshPreparations } from './preparation.js'
+
+// Spy-able, for a removal that fails.
+vi.mock('node:fs', async (original) => ({ ...await original<object>() }))
 
 const roots: string[] = []
 const setup = () => {
@@ -12,7 +16,7 @@ const setup = () => {
   mkdirSync(workspace)
   return { root, workspace, directory, prepare: dshPreparations(directory) }
 }
-afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
+afterEach(() => { vi.restoreAllMocks(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 
 describe('durable Store workspace preparation', () => {
   it('reuses confirmed initialization after a lost reply, but revalidates runtime inputs each time', async () => {
@@ -52,6 +56,16 @@ describe('durable Store workspace preparation', () => {
     await expect(prepare(workspace, {}, later)).rejects.toThrow('unconfirmed')
     expect(later).not.toHaveBeenCalled()
     expect(readdirSync(workspace)).toEqual(['user-content'])
+  })
+  it('confirms an outcome whose written receipt\'s temporary cannot be removed', async () => {
+    const { workspace, directory, prepare } = setup()
+    const rm = fs.rmSync, unlink = fs.unlinkSync
+    // What Windows answers to the removal of a file another program still holds.
+    const busy = () => Object.assign(new Error('EBUSY: fixture'), { code: 'EBUSY' })
+    vi.spyOn(fs, 'rmSync').mockImplementation((path, options) => { if (String(path).endsWith('.tmp')) throw busy(); rm(path, options) })
+    vi.spyOn(fs, 'unlinkSync').mockImplementation((path) => { if (String(path).endsWith('.tmp')) throw busy(); unlink(path) })
+    expect(await prepare(workspace, { key: 'one' }, async () => 'done', true)).toBe('done')
+    expect(readdirSync(directory).filter(file => file.endsWith('.pending'))).toEqual([])
   })
   it('does not replay old initialization into a newly recreated folder at the same path', async () => {
     const { workspace, prepare } = setup()

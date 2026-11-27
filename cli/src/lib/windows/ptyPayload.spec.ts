@@ -1,4 +1,5 @@
 import { execFileSync } from 'child_process'
+import * as fs from 'fs'
 import { existsSync, realpathSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -11,9 +12,12 @@ import {
 } from './ptyPayload.js'
 import { writeExecutable } from '../../testing/executableFixture.js'
 
+// Spy-able, for a removal that fails.
+vi.mock('fs', async (original) => ({ ...await original<object>() }))
+
 let tmp: string
 beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'pty-payload-')) })
-afterEach(() => { vi.useRealTimers(); rmSync(tmp, { recursive: true, force: true }) })
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); rmSync(tmp, { recursive: true, force: true }) })
 
 function zipOf(names: readonly string[]): Buffer {
   const src = join(tmp, 'src'); rmSync(src, { recursive: true, force: true }); mkdirSync(src)
@@ -160,6 +164,17 @@ describe('preparePtyPayload failure kinds', () => {
     expect(err).toBe(boom)
     expect(err).not.toBeInstanceOf(PtyPayloadRefused)
     expect(leftovers()).toEqual([])
+  })
+  it('an unzip tool that fails keeps its own error when Windows still holds the zip it was handed', async () => {
+    // What Windows answers to the removal of a file a scan still holds.
+    const held = (path: unknown) => String(path).endsWith('payload.zip') && existsSync(String(path))
+    const busy = () => Object.assign(new Error('EBUSY: fixture'), { code: 'EBUSY' })
+    const rm = fs.rmSync, unlink = fs.unlinkSync
+    vi.spyOn(fs, 'rmSync').mockImplementation((path, options) => { if (held(path)) throw busy(); rm(path, options) })
+    vi.spyOn(fs, 'unlinkSync').mockImplementation((path) => { if (held(path)) throw busy(); unlink(path) })
+    const err = await run({ download: async () => Buffer.from('not a zip') }).catch((e) => e)
+    expect(err).toBeInstanceOf(PtyPayloadUnpackFailed)
+    expect((err as PtyPayloadUnpackFailed).reason).toMatch(/^Command failed/)
   })
   it('an unzip that fails is no refusal: it carries the verified bytes, which a later prepare unpacks without a download', async () => {
     const zip = zipOf(PTY_PAYLOAD_FILES)

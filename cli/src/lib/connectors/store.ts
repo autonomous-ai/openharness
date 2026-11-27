@@ -12,6 +12,7 @@ import { join, type PlatformPath } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { homePath } from '../../config/envFields.js'
 import { harnessPath } from '../../config/harnessHome.js'
+import { removeQuietly } from '../removePath.js'
 import { cleanRestEntry, transport, type RestEntry, type Transport } from './rest.js'
 
 export const MAX_BYTES = 1024 * 1024
@@ -121,7 +122,7 @@ export function writePrivate(path: string, data: unknown): void {
     renameSync(temporary, path)
   } finally {
     if (fd !== undefined) closeSync(fd)
-    rmSync(temporary, { force: true })
+    removeQuietly(temporary)
   }
 }
 
