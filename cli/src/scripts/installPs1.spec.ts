@@ -94,9 +94,11 @@ describe('install.ps1, as written', () => {
       .split(/\r?\n/).filter((line) => !line.trimStart().startsWith('#')).join('\n')
     const at = (text: string) => { expect(cli).toContain(text); return cli.indexOf(text) }
     expect(cli).not.toContain('Remove-Item -LiteralPath $target')
-    expect(at('Move-Item -LiteralPath $target -Destination $aside')).toBeLessThan(at('Move-Item -LiteralPath $staging -Destination $target'))
-    const putBack = at('Move-Item -LiteralPath $aside -Destination $target')
-    expect(putBack).toBeGreaterThan(cli.indexOf('Move-Item -LiteralPath $staging -Destination $target'))
+    // Move-Item falls back to moving file by file when the rename fails (CI run 46051972659): every move is a rename.
+    expect(cli).not.toContain('Move-Item')
+    expect(at('[System.IO.Directory]::Move($target, $aside)')).toBeLessThan(at('[System.IO.Directory]::Move($staging, $target)'))
+    const putBack = at('[System.IO.Directory]::Move($aside, $target)')
+    expect(putBack).toBeGreaterThan(cli.indexOf('[System.IO.Directory]::Move($staging, $target)'))
     expect(putBack).toBeLessThan(at('Remove-Item -LiteralPath $aside -Recurse -Force -ErrorAction SilentlyContinue'))
   })
 

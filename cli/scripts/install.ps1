@@ -413,13 +413,16 @@ function Install-HarnessCli {
       # antivirus scan) left half a folder that a running daemon uses. A failed move leaves it as it was, and one
       # the staged folder could not replace is put back. The aside name is one the daemon's retirement removes
       # (writeVersionFolder's, cliVersions.ts), so a copy this removal leaves goes at its next pass.
+      # Every move here is one rename, [IO.Directory]::Move, which happens whole or throws with nothing moved (all
+      # three folders are in cli\, one volume). Move-Item is not: when the rename fails it moves the folder file by
+      # file, and with package.json held it took cli.js and notify.mjs out of a live folder (CI run 46051972659).
       $aside = $null
       if (Test-Path -LiteralPath $target) {
         $aside = Join-Path $cliRoot ".$version.$PID-$([DateTime]::UtcNow.Ticks).old"
-        Move-Item -LiteralPath $target -Destination $aside
+        [System.IO.Directory]::Move($target, $aside)
       }
-      try { Move-Item -LiteralPath $staging -Destination $target } catch {
-        if ($aside) { Move-Item -LiteralPath $aside -Destination $target }
+      try { [System.IO.Directory]::Move($staging, $target) } catch {
+        if ($aside) { [System.IO.Directory]::Move($aside, $target) }
         throw
       }
       if ($aside) { Remove-Item -LiteralPath $aside -Recurse -Force -ErrorAction SilentlyContinue }
