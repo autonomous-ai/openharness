@@ -102,7 +102,10 @@ function toMobileDevice(d: DeviceDetail, machinesById: Map<string, MobileMachine
     lastSeenAt: d.lastSeenAt,
     createdAt: d.createdAt,
     macAddress: d.macAddress,
-    firmwareVersion: d.firmwareVersion,
+    // The Autonomous app reads firmwareVersion today, so a CLI device keeps showing its CLI version there. This is
+    // the only place a CLI version still reaches firmwareVersion; it goes once the app reads cliVersion (spec Follow-up).
+    firmwareVersion: d.firmwareVersion ?? d.cliVersion,
+    cliVersion: d.cliVersion,
     chip: d.chip,
     ssid: d.ssid,
     rssi: d.rssi,
