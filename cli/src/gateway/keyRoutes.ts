@@ -9,6 +9,7 @@
  */
 import type { HttpAnswer } from '../core/api.js'
 import { errorKind } from '../lib/log.js'
+import { SecretNotDeleted } from '../lib/deleteSecretFile.js'
 
 /** What the routes do, as the gateway does it (gateway/start.ts). */
 export interface KeyOps {
@@ -120,8 +121,11 @@ export function keyRoutes(ops: KeyOps, log: (line: string) => void = (line) => c
         try { body = JSON.parse(text ?? '') as Record<string, unknown> } catch { return BAD_JSON }
         return await route.body!(body)
       } catch (error) {
+        // Logged by its kind and errno code (SecretNotDeleted EBUSY), as every failure here is.
         log(`[gateway] ${method} KEY_ROUTE_FAILED · ${errorKind(error)}`)
-        return answer(500, { error: 'INTERNAL' })
+        // A secret file left on disk is answered in its word and errno code alone; `harness remote-password clear` reads
+        // it, and does not delete the file behind the daemon's back.
+        return answer(500, { error: error instanceof SecretNotDeleted ? error.message : 'INTERNAL' })
       }
     })()
   }

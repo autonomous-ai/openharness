@@ -15,8 +15,9 @@ vi.mock('child_process', async original => {
   return { ...actual, execFileSync: vi.fn(actual.execFileSync) }
 })
 
-// Pass-through, recording each path written to by name and each rename's target.
-const disk = vi.hoisted(() => ({ events: [] as string[] }))
+// Pass-through, recording each path written to by name and each rename's target. `keep` names a file whose delete fails
+// as a folder the person may not change makes it fail (EACCES).
+const disk = vi.hoisted(() => ({ events: [] as string[], keep: null as string | null }))
 vi.mock('node:fs', async original => {
   const actual = await original<typeof import('node:fs')>()
   return { ...actual,
@@ -25,9 +26,13 @@ vi.mock('node:fs', async original => {
       return actual.writeFileSync(...args)
     },
     renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.events.push(`rename ${String(args[1])}`); return actual.renameSync(...args) },
+    rmSync: (...args: Parameters<typeof actual.rmSync>) => {
+      if (String(args[0]) === disk.keep) throw Object.assign(new Error(`EACCES: fixture, ${String(args[0])}`), { code: 'EACCES' })
+      return actual.rmSync(...args)
+    },
   }
 })
-afterEach(() => { disk.events = [] })
+afterEach(() => { disk.events = []; disk.keep = null })
 
 // 10-27: a desktop test ran the real `harness logout` and signed the whole Mac out. Only a person asks.
 describe('who asked for the sign-in to go', () => {
@@ -188,6 +193,27 @@ describe('the removals kept apart from harness.log', () => {
       expect(readFileSync(old, 'utf8')).toBe('not this writer\'s')
       expect(readFileSync(kept, 'utf8')).toContain('reason=logout')
     } finally { rmSync(old, { force: true }) }
+  })
+
+  // 11-27: a sign-in that could not be deleted was written down as removed, in harness.log and in this file.
+  it('a sign-in it cannot delete is written down as still here, and said', () => {
+    const kept = join(env.ADAPTER_DATA_DIR, REMOVALS_FILE)
+    rmSync(kept, { force: true })
+    mkdirSync(join(AUTH_SESSION_FILE, '..'), { recursive: true })
+    writeFileSync(AUTH_SESSION_FILE, '{}')
+    disk.keep = AUTH_SESSION_FILE
+    try {
+      expect(() => removeSignIn('logout', 'terminal', () => [{ pid: 2, command: '-zsh' }])).toThrow('SIGN_IN_NOT_DELETED (EACCES)')
+
+      const lines = readFileSync(kept, 'utf8').trimEnd().split('\n')
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toMatch(/\[auth\] sign-in not removed \(SIGN_IN_NOT_DELETED \(EACCES\)\) · reason=logout · asked=terminal · pid=\d+ \(.*\) · parent=2 \(-zsh\)$/)
+      expect(readFileSync(join(env.ADAPTER_DATA_DIR, 'harness.log'), 'utf8')).toContain(`${lines[0]}\n`)
+      expect(existsSync(AUTH_SESSION_FILE)).toBe(true)
+    } finally {
+      disk.keep = null
+      rmSync(AUTH_SESSION_FILE, { force: true })
+    }
   })
 
   it('still removes the sign-in when the kept file cannot be written', () => {

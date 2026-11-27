@@ -328,6 +328,7 @@ lib/daemonRecord.ts
 lib/daemonSafeMode.ts
 lib/daemonState.ts
 lib/deleteAgentFallback.ts
+lib/deleteSecretFile.ts
 lib/deletedSessions.ts
 lib/dialogEnd.ts
 lib/engineBin.ts

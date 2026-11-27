@@ -4,9 +4,10 @@
  * mode 0600 (pairs are rare — no debounce needed). The identity key is the root of trust; losing it
  * forces every browser to re-pair.
  */
-import { mkdirSync, readdirSync, rmSync } from 'fs'
+import { mkdirSync, readdirSync } from 'fs'
 import { basename, join } from 'path'
 import { env } from '../../config/env.js'
+import { deleteSecretFile, type Wait } from '../deleteSecretFile.js'
 import { atomicWriteJson, jsonArray, jsonObject, probeState, readState, requireState, StateFileUnreadable, type AtomicWriteOptions, type TrustFile } from '../secureState.js'
 import { newIdentity, newPairId, b64e, b64d, fingerprint, type Identity, type PairRole } from './core.js'
 import { stretchPassword } from './passwordPake.js'
@@ -15,6 +16,8 @@ const DIR = join(env.ADAPTER_DATA_DIR, 'e2e')
 const IDENTITY_FILE = join(DIR, 'identity.json')
 const PAIRED_FILE = join(DIR, 'paired.json')
 const REMOTE_PASSWORD_FILE = join(DIR, 'remotePassword.json')
+/** What a remote password that could not be deleted is said as, by the daemon's answer and by `harness remote-password clear`. */
+export const REMOTE_PASSWORD_NOT_DELETED = 'REMOTE_PASSWORD_NOT_DELETED'
 /** Mints of a new identity before giving up: one lost race needs one more read. */
 const IDENTITY_TRIES = 3
 
@@ -257,11 +260,12 @@ export class E2eeStore {
   }
 
   /** Remove the remote password. Until a new one is set, `harness link connect` against this machine
-   *  always fails with NO_REMOTE_PASSWORD (checked before any crypto runs). */
-  clearRemotePassword(): void {
+   *  always fails with NO_REMOTE_PASSWORD (checked before any crypto runs). One it cannot delete throws
+   *  REMOTE_PASSWORD_NOT_DELETED and stays in memory too: dropped there alone, it would be back at the next start. */
+  clearRemotePassword(wait?: Wait): void {
     this.requireRemotePassword()
+    deleteSecretFile(REMOTE_PASSWORD_FILE, REMOTE_PASSWORD_NOT_DELETED, wait)
     this.remotePassword = null
-    try { rmSync(REMOTE_PASSWORD_FILE, { force: true }) } catch { /* already gone */ }
   }
 
   hasRemotePassword(): boolean {
