@@ -15,6 +15,7 @@ import { env } from '../config/env.js'
 import { redactArgv } from './agentCreateDiagnosis.js'
 import { redactSecretsInText } from './redactSecrets.js'
 import { clearAuthSession } from './authSession.js'
+import { SecretNotDeleted } from './deleteSecretFile.js'
 import { atomicWriteFile } from './secureState.js'
 import { encodedCommandArgs, modulesByPath, powershellPath, withPrelude } from './windows/powershell.js'
 
@@ -100,18 +101,20 @@ function readProcess(pid: number): { parent: number; command: string } | null {
   }
 }
 
-/** The line harness.log gets for one removal of the sign-in: why, how a person asked, and who ran it. */
+/** The line harness.log gets for one removal of the sign-in: why, how a person asked, and who ran it. [notDeleted] is the
+ *  word a sign-in that could not be deleted was said with: then the line says it is still here. */
 export function removalLine(opts: {
   reason: string
   asked: string
   self: Asker
   ancestors: readonly Asker[]
   now?: Date
+  notDeleted?: string
 }): string {
   const [parent, ...above] = opts.ancestors
   const named = (asker: Asker): string => `${asker.pid} (${asker.command || 'unknown'})`
   return [
-    `${stamp(opts.now ?? new Date())} [auth] sign-in removed`,
+    `${stamp(opts.now ?? new Date())} [auth] ${opts.notDeleted ? `sign-in not removed (${opts.notDeleted})` : 'sign-in removed'}`,
     `reason=${opts.reason}`,
     `asked=${opts.asked}`,
     `pid=${named(opts.self)}`,
@@ -128,15 +131,22 @@ function stamp(at: Date): string {
 }
 
 /**
- * Takes this computer's sign-in away, after writing to harness.log why, how a person asked, and which
- * processes ran it. The one way the CLI deletes it: [signOutAsked] said a person asked first. A log that
- * cannot be written does not keep the person signed in; a sign-in that cannot be deleted throws SIGN_IN_NOT_DELETED.
+ * Takes this computer's sign-in away, and writes to harness.log why, how a person asked, and which processes ran
+ * it. The one way the CLI deletes it: [signOutAsked] said a person asked first. A log that cannot be written does
+ * not keep the person signed in. A sign-in that cannot be deleted is written down as still here, and throws
+ * SIGN_IN_NOT_DELETED.
  */
 export function removeSignIn(reason: string, asked: SignOutAsked, chain: () => readonly Asker[] = ancestorsOnce()): void {
+  // Deleted before the line is written, so the line says what happened (11-27: a delete that failed was logged as a removal).
+  let notDeleted: SecretNotDeleted | null = null
+  try { clearAuthSession() } catch (error) {
+    if (!(error instanceof SecretNotDeleted)) throw error
+    notDeleted = error
+  }
   let line: string | null = null
   try {
     const self = { pid: process.pid, command: process.argv.join(' ') }
-    line = removalLine({ reason, asked, self, ancestors: chain() })
+    line = removalLine({ reason, asked, self, ancestors: chain(), ...(notDeleted ? { notDeleted: notDeleted.message } : {}) })
     // `harness reset` has just emptied the folder the log lives in.
     mkdirSync(env.ADAPTER_DATA_DIR, { recursive: true })
     // Redacted and cut as the kept file has it (AGENTS.md standard 7: no secret reaches a log).
@@ -144,7 +154,7 @@ export function removeSignIn(reason: string, asked: SignOutAsked, chain: () => r
     appendFileSync(join(env.ADAPTER_DATA_DIR, 'harness.log'), keptLine(line) + '\n')
   } catch { /* the log is a record, not a gate */ }
   if (line) keepRemoval(line)
-  clearAuthSession()
+  if (notDeleted) throw notDeleted
 }
 
 /** The file in the data folder that keeps the last [REMOVALS_KEPT] removals' lines apart from harness.log, which trims its oldest
