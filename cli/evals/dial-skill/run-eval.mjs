@@ -54,7 +54,7 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DIAL_SKILL } from '../../src/devices/dialSkill.ts';
 import { AGENT_CONFIG, claudeArgs, isDefaultProfile, killAgents, runAgent, runFollowUp } from './lib/agents.ts';
-import { gradeRun } from './lib/grade.ts';
+import { gradeRun, rungOf } from './lib/grade.ts';
 import { claudeJudge, JUDGE_EFFORT, JUDGE_MODEL, RUBRIC_SHA } from './lib/judge.ts';
 import { sumUsage } from './lib/parse.ts';
 import { matchesProbe, probeListing } from './lib/probe.ts';
@@ -414,7 +414,7 @@ async function runCase(input, ctx, timeoutMs) {
         throw Object.assign(new Error('no time left for turn 2'), { failure_class: 'timeout', model: run.model, usage: run.usage, cut: run.cut });
       const first = run;
       // Turn 1 was billed too, so a failed turn 2's error carries both turns' spend.
-      const second = await runFollowUp(agent, scenario, st, { ...AGENT_CONFIG, timeoutMs: left === Infinity ? 0 : left }, session.id)
+      const second = await runFollowUp(agent, scenario, st, { ...AGENT_CONFIG, timeoutMs: left === Infinity ? 0 : left }, session.id, rungOf(rings))
         .finally(() => endSession(st))
         .catch(e => { throw Object.assign(e, { model: e?.model ?? first.model, usage: addUsage(first.usage, e?.usage), cut: first.cut || e?.cut }); });
       run = { ...first, usage: sumUsage([first.usage, second.usage]), cut: first.cut || second.cut,

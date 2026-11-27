@@ -5,7 +5,7 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AGENT_CONFIG, CLAUDE_SANDBOX, claudeArgs, killAgents, runAgent, runFollowUp, spawnGroup, type AgentConfig } from './lib/agents.js'
-import { gradeRun } from './lib/grade.js'
+import { gradeRun, rungOf } from './lib/grade.js'
 import type { Judge } from './lib/judge.js'
 import { parseClaudeStream } from './lib/parse.js'
 import { loadScenarios, type Condition, type Scenario } from './lib/scenarios.js'
@@ -334,7 +334,7 @@ else process.stdout.write(fs.readFileSync(${JSON.stringify(SAMPLE)}))`)
     const id = randomUUID()
 
     await runAgent('claude', answered, st, config(bin), { id, resume: false })
-    const run = await runFollowUp('claude', answered, st, config(bin), id)
+    const run = await runFollowUp('claude', answered, st, config(bin), id, [])
 
     expect(argvs()).toEqual([
       claudeArgs(config(bin), st, answered.prompt, { id, resume: false }),
@@ -353,7 +353,7 @@ else process.stdout.write(fs.readFileSync(${JSON.stringify(SAMPLE)}))`)
     const id = randomUUID()
     await runAgent('claude', answered, st, config(bin), { id, resume: false })
 
-    const error = await runFollowUp('claude', answered, st, config(bin, 200), id).catch((e: unknown) => e)
+    const error = await runFollowUp('claude', answered, st, config(bin, 200), id, []).catch((e: unknown) => e)
 
     expect(error).toMatchObject({ failure_class: 'timeout' })
     const folder = runProfileFolder(st)!
@@ -379,7 +379,7 @@ describe('runFollowUp stand-ins', () => {
     await runAgent(agent, s, st, config(''))
     markTurn(st)
 
-    const run = await runFollowUp(agent, s, st, config(''), randomUUID())
+    const run = await runFollowUp(agent, s, st, config(''), randomUUID(), rungOf(readRings(st)))
 
     const calls = readRings(st)
     const ids = closes === 'its ring' ? calls.filter((c) => c.turn === 1).map((c) => c.id!) : closes === 'all' ? ['all'] : []

@@ -9,7 +9,7 @@ import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { parseClaudeStream, type RunResult } from './parse.js'
 import type { AgentKind, Condition, Scenario } from './scenarios.js'
-import { readRings, type Staged } from './stage.js'
+import type { Staged } from './stage.js'
 
 /** A two-turn run's Claude session: turn 1 starts it under `id`, turn 2 resumes it. */
 export interface Session { id: string; resume: boolean }
@@ -99,15 +99,14 @@ export async function runAgent(agent: AgentKind, s: Scenario, st: Staged, cfg: A
   return standIn(agent === 'oracle' && s.ask !== null ? `${s.ask} I recommend the first option. ${went}` : '')
 }
 
-/** Turn 2 of a two-turn run: the scenario's follow-up, in the session turn 1 saved. The oracle closes the card its ring
- *  got when the follow-up answers it, and nothing else; always closes every card; null does nothing. */
-export async function runFollowUp(agent: AgentKind, s: Scenario, st: Staged, cfg: AgentConfig, sessionId: string): Promise<RunResult> {
+/** Turn 2 of a two-turn run: the scenario's follow-up, in the session turn 1 saved. `rung` holds the cards turn 1 rang
+ *  and left open (lib/grade.ts rungOf). The oracle closes those when the follow-up answers them, and nothing else;
+ *  always closes every card; null does nothing. */
+export async function runFollowUp(agent: AgentKind, s: Scenario, st: Staged, cfg: AgentConfig, sessionId: string, rung: string[]): Promise<RunResult> {
   if (!s.follow_up) throw new Error(`${s.id} has no follow-up`)
   if (agent === 'claude') return runClaude(s.follow_up.text, st, cfg, { id: sessionId, resume: true })
   const answers = s.follow_up.kind === 'answer' || s.follow_up.kind === 'answer-one'
-  const ids = agent === 'always' ? ['all']
-    : agent === 'oracle' && answers ? readRings(st).filter((r) => r.turn === 1 && r.id !== undefined).map((r) => r.id!)
-    : []
+  const ids = agent === 'always' ? ['all'] : agent === 'oracle' && answers ? rung : []
   for (const id of ids) await harness(st, ['device', 'notify', '--done', id])
   return standIn('')
 }
