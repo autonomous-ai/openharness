@@ -142,13 +142,14 @@ def encode_png(width, height, rgba):
 
 
 def decode_png(data):
-    """(width, height, RGBA bytes) of an 8-bit RGB or RGBA PNG, not interlaced, with no transparent colour (tRNS);
-    anything else raises."""
+    """(width, height, RGBA bytes) of an 8-bit RGB or RGBA PNG, not interlaced, with no transparent colour (tRNS), in
+    sRGB or untagged; anything else raises. The PNGs it feeds carry no colour space, so they are read as sRGB."""
     if data[:8] != PNG:
         raise ValueError("not a PNG")
-    at, header, idat = 8, None, bytearray()
+    at, header, idat, kinds = 8, None, bytearray(), set()
     while at + 8 <= len(data):
         length, kind = struct.unpack(">I4s", data[at:at + 8])
+        kinds.add(kind)
         if kind == b"IHDR":
             header = struct.unpack(">IIBBBBB", data[at + 8:at + 21])
         elif kind == b"tRNS":
@@ -157,9 +158,14 @@ def decode_png(data):
             idat += data[at + 8:at + 8 + length]
         elif kind == b"IEND":
             break
+        elif kind[0] < 0x61 and kind != b"PLTE":  # a critical chunk (upper-case first letter) it does not know
+            raise ValueError(f"PNG: a critical chunk it cannot read ({kind.decode('latin-1')})")
         at += 12 + length
     if header is None:
         raise ValueError("PNG: no IHDR")
+    # cICP and iCCP win over sRGB, and sRGB over gAMA and cHRM.
+    if kinds & {b"cICP", b"iCCP"} or (kinds & {b"gAMA", b"cHRM"} and b"sRGB" not in kinds):
+        raise ValueError("PNG: a colour space other than sRGB (cICP, iCCP, gAMA or cHRM): export it as sRGB")
     width, height, depth, colour, compression, method, interlace = header
     if depth != 8 or colour not in (2, 6) or compression or method or interlace:
         raise ValueError(f"PNG: depth {depth}, colour type {colour}, interlace {interlace}: "
