@@ -2,14 +2,15 @@
  * `harness device claude …` and `harness device codex …`: status, enable and disable, the way to take away or bring back
  * what the devices service sets up by itself once a dial has attached here, and the words the harness-device plugin
  * runs that a person never types: `asked` (its PermissionRequest hook), `start` (its SessionStart hook, start.ts: the
- * line a session starts with), `link` (its mod, for the daemon's socket and the devices' listener's), and
+ * line a session starts with), `stop` (its Stop hook, stop.ts: a second look at a turn that ends on a question),
+ * `link` (its mod, for the daemon's socket and the devices' listener's), and
  * `inbox <session id>` and `attach <session id>` (its mod on Windows, whose runtime can
  * neither reach the daemon's pipe nor the devices' nor sign for either: this process holds the session's poll and
  * proves the daemon's token, inbox.ts, and tells the devices the Claude app shows a session). `codex asked` is the
- * plugin's Codex hooks' (hooks/codex.json, codexAsked.ts), and `codex start` its SessionStart hook's, never typed
- * either. `disable` marks the engine removed in dial-skill.json, which the devices service then leaves alone, and
- * removes Harness's skill from the engine's default home, from each folder an enable wrote and from each the service
- * recorded in dial-setup.json.
+ * plugin's Codex hooks' (hooks/codex.json, codexAsked.ts), and `codex start` and `codex stop` its SessionStart and Stop
+ * hooks', never typed either. `disable` marks the engine removed in dial-skill.json, which the devices service then
+ * leaves alone, and removes Harness's skill from the engine's default home, from each folder an enable wrote and from
+ * each the service recorded in dial-setup.json.
  * `enable` clears the mark and writes the skill into the engine's default home and back into each folder the service
  * recorded; a folder an earlier enable wrote with another home is not written again.
  * Codex's two also hold its harness-device plugin (devices/codexPlugin.ts) in the engine's default home and in each home
@@ -42,7 +43,7 @@ import { claudeDisable, claudeEnable, claudeHomeDisable, claudeHomeEnable, claud
 import { codexMarketplace, codexPluginState, codexRemove, codexSetUp, type CodexFailure } from '../devices/codexPlugin.js'
 import { claudePluginState, claudePluginTurnedOff, ownDirectory, removeSkill, skillsFolderOf, writeSkill } from '../devices/dialSkill.js'
 import { listable, MAX_HOMES, readRemoved, readSetup, readWritten, writeOrcaConnected, writePluginHomes, writeRemoved, type DialEngine } from '../devices/dialSkillFiles.js'
-import { tellDevices } from '../devices/listenerClient.js'
+import { askDevices, tellDevices } from '../devices/listenerClient.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
 import { CLAUDE_SESSION_ID, devicesPipe, devicesRecordPath } from '../devices/listenerPipe.js'
 import { NOTICE_USAGE, runNotice } from '../devices/notice.js'
@@ -57,8 +58,9 @@ import { runCodexAsked } from './codexAsked.js'
 import { CALLER_LIVENESS, createDaemonProof, followInbox } from './inbox.js'
 import { claudePluginOn, claudeSettingsPath } from './plugin.js'
 import { ownSkillIn, runStart } from './start.js'
+import { codexExecRun, NUDGE_ANSWER_MS, runStop, type StopDeps } from './stop.js'
 
-/** `asked`, `start`, `link`, `inbox`, `attach`, `orca link` and `vscode link` are left out: they are the plugins', and
+/** `asked`, `start`, `stop`, `link`, `inbox`, `attach`, `orca link` and `vscode link` are left out: they are the plugins', and
  *  typed by hand they only wait on stdin or the dial, print a path or a line, or turn the dial. `vscode status`, `cursor status` and
  *  `orca status` are too: each app shows whether Harness's extension or plugin is on. */
 export const DEVICE_USAGE = `Harness device (with a dial plugged in, Claude Code and Codex are set up to ring it, and VS Code, Cursor and Orca to follow it; disable takes that away, enable brings it back):
@@ -105,7 +107,7 @@ export interface DeviceDeps {
   vscode(editor: VscodeEditor): VscodeExtensionDeps
   /** Orca's CLI and the plugin's files cli.js carries: asked for only by `orca status`, `enable` and `disable`. */
   orca(): OrcaPluginRun
-  /** The command's own environment and folder: `notify` reads its caller from them. */
+  /** The command's own environment and folder: `notify` reads its caller from them, and `claude stop` a headless run. */
   env: NodeJS.ProcessEnv
   cwd: string
   /** How `orca link` and `vscode link` find the daemon's pipe and the devices' on Windows; by default each record's
@@ -115,6 +117,9 @@ export interface DeviceDeps {
   write(line: string): Promise<boolean>
   /** How `attach` reaches the devices' listener: `tellDevices` by default. */
   tell?: (dataDir: string, message: { type: string } & Record<string, unknown>) => Promise<boolean>
+  /** How `notify`, `claude stop` and `codex stop` ask the devices' listener: `askDevices` by default, a stop's within
+   *  NUDGE_ANSWER_MS. */
+  ask?: (message: { type: string }) => Promise<Record<string, unknown> | number | null>
   out(line: string): void
   err(line: string): void
 }
@@ -188,7 +193,14 @@ export async function runDeviceCommand(argv: string[], deps: DeviceDeps): Promis
       return runAsked({ stdin: deps.stdin, post })
     }
     case 'start':
-      return runStart({ stdin: deps.stdin, dataDir: deps.dataDir, acts: () => pluginActs(deps.dataDir) && ownSkillIn(claudeHome()), out: deps.out })
+      return runStart({ stdin: deps.stdin, dataDir: deps.dataDir, acts: () => claudeSkillOn(deps.dataDir), out: deps.out })
+    case 'stop':
+      return runStop({
+        stdin: deps.stdin, dataDir: deps.dataDir, engine: 'claude', out: deps.out, ask: nudge(deps),
+        // `sdk-cli` under `claude -p`, `cli` in the TUI (Part 5's spike, F1).
+        headless: () => /^sdk-/.test(deps.env.CLAUDE_CODE_ENTRYPOINT ?? ''),
+        acts: () => claudeSkillOn(deps.dataDir),
+      })
     case 'link': {
       // The socket alone: a request over it is trusted by the filesystem, so the mod is handed no credential. Where
       // there is none (Windows), or the plugin is off or removed, no answer, and the mod tries again later.
@@ -234,10 +246,11 @@ async function codexCommand(verb: string, json: boolean, deps: DeviceDeps): Prom
       return runCodexAsked({ stdin: deps.stdin, post, codexHome: deps.codexHome })
     }
     case 'start':
-      // A config.toml that does not parse is not on: Codex cannot start a session on it.
-      return runStart({
-        stdin: deps.stdin, dataDir: deps.dataDir, out: deps.out,
-        acts: () => readRemoved(deps.dataDir).codex !== true && codexPluginState(deps.codexHome) === 'on' && ownSkillIn(deps.codexHome),
+      return runStart({ stdin: deps.stdin, dataDir: deps.dataDir, out: deps.out, acts: () => codexSkillOn(deps) })
+    case 'stop':
+      return runStop({
+        stdin: deps.stdin, dataDir: deps.dataDir, engine: 'codex', out: deps.out, ask: nudge(deps),
+        headless: (input) => codexExecRun(input.transcript_path), acts: () => codexSkillOn(deps),
       })
     default:
       deps.err(DEVICE_USAGE)
@@ -353,6 +366,21 @@ const DEFAULT_OFF_FAILED = 'Could not turn off Claude Code outside Orca.'
  */
 function pluginActs(dataDir: string): boolean {
   return claudePluginOn(claudeSettingsPath()) && readRemoved(dataDir).claude !== true
+}
+
+/** Whether the dial is set up for a Claude Code session of this command's home: the plugin acts and Harness's skill is there. */
+function claudeSkillOn(dataDir: string): boolean {
+  return pluginActs(dataDir) && ownSkillIn(claudeHome())
+}
+
+/** The same for Codex. A config.toml that does not parse is not on: Codex cannot start a session on it. */
+function codexSkillOn(deps: DeviceDeps): boolean {
+  return readRemoved(deps.dataDir).codex !== true && codexPluginState(deps.codexHome) === 'on' && ownSkillIn(deps.codexHome)
+}
+
+/** The Stop hook's report to the devices' listener, with no answer in NUDGE_ANSWER_MS read as none. */
+function nudge(deps: DeviceDeps): StopDeps['ask'] {
+  return deps.ask ?? ((message) => askDevices(deps.dataDir, message, { timeoutMs: NUDGE_ANSWER_MS }))
 }
 
 /** The mod's `session.attach` (plugins/harness-device/hooks/device.js): the dial turns to the session the Claude app
