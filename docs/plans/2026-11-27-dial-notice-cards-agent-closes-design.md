@@ -46,9 +46,10 @@ Anti-goals: a card that vanishes before the person saw it; a ring for a card the
      restored card).
    - **Other cards** (`--proceeding`, plain): closed by the person's own next prompt to that agent (typed, or spoken
      through the dial), never a relayed one, as before; and by a newer card of the agent that replaces it (the PM,
-     2026-11-27, after the final review: "not need-you cases stay as before, latest notice"). Known limit: a Harness
-     agent's `turn_started` cannot tell the person's prompt from a relayed one, so its other card goes only when
-     replaced, at `--done`, or at 24 hours.
+     2026-11-27, after the final review: "not need-you cases stay as before, latest notice"). A Harness agent's other
+     card closes at its `turn_started`, as before, which cannot tell the person's prompt from a relayed one: a Harness
+     agent's other card may close at a turn another session started. A Harness agent's waiting card never closes at
+     `turn_started`.
    - Nothing else closes a card.
 6. **Across agents:** the pending total stays at 20 (`NOTICES_PENDING_MAX`), the oldest dropped first.
 7. **The place** is `(1/m)`: the card shown is always the agent's first open card, `m` all its open cards, waiting and
@@ -56,8 +57,7 @@ Anti-goals: a card that vanishes before the person saw it; a ring for a card the
 8. **Turn ends while any card is open** stay silent, as a pending card's do today (`rule:notice`), so a recap never
    takes the card's drawer row and the turn that rang does not ring again at its end; a failed turn still rings. With
    waiting cards outliving turns, that can last until the agent closes its card or 24 hours (the PM, 2026-11-27).
-   Other cards close at the person's own prompt (rule 5), so for them it is as before; a Harness agent's other card
-   can keep its turn ends silent until it is replaced, closed or 24 hours old (the known limit in rule 5).
+   Other cards close at the next prompt as before (rule 5), so for them it is as before.
 9. **Harness Pro** drops an agent's question whenever that agent leaves the asking state, in its firmware
    (`pod_model.c` `set_state`): at a turn start, a turn end (`turn.done`, `turn.error`) and a live `summary`. The
    devices give the card shown back to a Pro after each of those frames of its agent, held, never asked: no ring. The
