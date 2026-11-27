@@ -1,6 +1,7 @@
 # Dial skill hill-climb
 
-Part 3's result: today's text stays, by the PM's decision (2026-11-27); the rounds are findings for Part 4 (below).
+Part 3's result: v1 ships, below the 90% recall gate, by the PM's decision (2026-11-27), with a 7-day field watch
+after release; the rounds are findings for Part 4 (below).
 v1, the best variant, against the baseline on test:
 
 - crowd: v1 test 1.50 -> 1.69, paired +0.19 [-0.75, 1.14] over 12 cases, within noise

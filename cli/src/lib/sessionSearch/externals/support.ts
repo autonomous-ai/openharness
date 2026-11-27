@@ -10,6 +10,7 @@ import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve, win32 } from 'node:path'
 
 import { isHarnessSession, paneOwnerFormat } from '../../harnessSessionLabel.js'
+import { lstartMs } from '../../lstart.js'
 import { startMarkerMs } from '../../processProof.js'
 import { processRows } from '../../processTable.js'
 import { tmuxFeatures } from '../../tmuxVersion.js'
@@ -231,13 +232,15 @@ export async function listProcesses(
   const rows = await read()
   if (!rows) externalReadFailed(new Error('process table unavailable'), 'process table')
   return (rows ?? []).map((row) => {
-    const started = startMarkerMs(row.startMarker) ?? NaN
+    // A Windows start is a FILETIME (processProof.ts); any other is ps's lstart, read in its C form alone, as a tab's
+    // proof reads it (lstart.ts).
+    const started = windowsStartTime(row.startMarker) !== null ? startMarkerMs(row.startMarker) ?? undefined : lstartMs(row.startMarker)
+    const generation = row.startTicks !== undefined ? `linux:${row.startTicks}` : started !== undefined ? `ps:${started}` : undefined
     return { pid: row.pid, ppid: row.parentPid, executable: row.executable, args: row.args,
       ...(row.commandPath !== undefined ? { commandPath: row.commandPath } : {}),
-      ...(Number.isFinite(started) ? { started } : {}),
+      ...(started !== undefined ? { started } : {}),
       ...(windowsStartTime(row.startMarker) !== null ? { startMarker: row.startMarker } : {}),
-      ...(row.startTicks !== undefined ? { generation: `linux:${row.startTicks}` }
-        : Number.isFinite(started) ? { generation: `ps:${started}` } : {}) }
+      ...(generation !== undefined ? { generation } : {}) }
   })
 }
 

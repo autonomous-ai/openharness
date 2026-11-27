@@ -2055,7 +2055,7 @@ export class CableSession {
         if (agentId && terminal && (sentence || this.lacks(agentId, 'v'))) {
           this.voice = null
           this.voiceRefusal = { generation: this.voiceGeneration, agentId,
-            message: sentence ?? `This agent is in ${this.hostName(agentId)}. Talking to it from the device comes in an update.` }
+            message: sentence ?? `This agent is in ${this.hostName(agentId)}. Type your reply in ${this.hostName(agentId)}.` }
           return
         }
         this.voice = {

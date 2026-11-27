@@ -29,6 +29,8 @@ const THREAD = '01a1de76-a3b7-7270-b39e-1245893274c1'
 const OTHER = '9b2f4c1e-7d3a-4e5b-8c6d-0e1f2a3b4c5d'
 const FAKE_CODEX = '/fake/bin/codex'
 const APP_CODEX = '/fake/ChatGPT.app/codex'
+/** The Codex home a send names. */
+const HOME = '/home/u/.codex'
 const REFUSED = { outcome: 'failed', reason: 'refused' }
 
 let dir: string
@@ -90,7 +92,6 @@ function recorder(over: Partial<CodexQueueDeps> = {}, ends: CodexRunEnd[] = []) 
     parentEnv: () => ({ PATH: '/usr/bin' }),
     readLoginShell: vi.fn(),
     platform: 'darwin',
-    home: '/home/u/.codex',
     cwd: '/home/u',
     ...over,
   })
@@ -111,15 +112,14 @@ function held() {
     parentEnv: () => ({ PATH: '/usr/bin' }),
     readLoginShell: vi.fn(),
     platform: 'linux',
-    home: '/home/u/.codex',
     cwd: '/home/u',
   })
   return { calls, waiting, queue }
 }
 
-/** The real deps, running [file] in the test's folder under a Codex home of its own. */
+/** The real deps, running [file] in the test's folder. */
 function realQueue(file: string, over: Partial<CodexQueueDeps> = {}) {
-  return createCodexQueue({ ...codexQueueDeps(), binary: () => file, home: join(dir, 'codex-home'), cwd: dir, ...over })
+  return createCodexQueue({ ...codexQueueDeps(), binary: () => file, cwd: dir, ...over })
 }
 
 /** What a real run is asked for, in the test's folder. */
@@ -128,12 +128,26 @@ const options = () => ({ cwd: dir, env: process.env, timeoutMs: 10_000 })
 describe('codex queue', () => {
   it('send runs codex queue with the thread and the text joined to its flag, in the home directory, under the Codex home, for 10 s', async () => {
     const { calls, queue } = recorder()
-    expect(await queue.send(THREAD, 'fix the login bug', false)).toEqual({ outcome: 'queued' })
+    expect(await queue.send(THREAD, 'fix the login bug', false, HOME)).toEqual({ outcome: 'queued' })
     expect(calls).toEqual([[
       FAKE_CODEX,
       ['queue', '--thread', THREAD, '--message=fix the login bug'],
       { cwd: '/home/u', env: { PATH: '/usr/bin', CODEX_HOME: '/home/u/.codex' }, timeoutMs: 10_000 },
     ]])
+  })
+
+  it('each send runs under the Codex home it names', async () => {
+    const { calls, queue } = recorder()
+    expect(await queue.send(THREAD, 'one', false, '/h/a')).toEqual({ outcome: 'queued' })
+    expect(await queue.send(THREAD, 'two', true, '/h/b')).toEqual({ outcome: 'queued' })
+    expect(calls.map(([, , { env }]) => env.CODEX_HOME)).toEqual(['/h/a', '/h/b'])
+  })
+
+  // `codex queue` loads the home's config.toml: a relative home would be read from the folder codex runs in.
+  it('a home that is not absolute, or holds a NUL, runs nothing and answers failed, refused', async () => {
+    const { calls, queue } = recorder()
+    for (const home of ['', 'h/a', '.codex', '/h/a\0b']) expect(await queue.send(THREAD, 'hi', false, home)).toEqual(REFUSED)
+    expect(calls).toEqual([])
   })
 
   it('a text that starts with --, with quotes, $( ) and two lines reaches codex whole, as one argument', async () => {
@@ -143,8 +157,8 @@ describe('codex queue', () => {
     const cwd = join(dir, 'home')
     mkdirSync(cwd)
     const home = join(dir, 'codex-home')
-    const queue = realQueue(fake.file, { home, cwd })
-    expect(await queue.send(THREAD, text, false)).toEqual({ outcome: 'queued' })
+    const queue = realQueue(fake.file, { cwd })
+    expect(await queue.send(THREAD, text, false, home)).toEqual({ outcome: 'queued' })
     expect(fake.argv()).toEqual(['queue', '--thread', THREAD, `--message=${text}`])
     expect(existsSync(marker)).toBe(false)
     expect(fake.home()).toBe(home)
@@ -155,30 +169,30 @@ describe('codex queue', () => {
     expect(CODEX_THREAD.test(THREAD)).toBe(true)
     const { calls, queue } = recorder()
     for (const id of ['', THREAD.toUpperCase(), `${THREAD}; rm -rf /`, '--help', 'my session']) {
-      expect(await queue.send(id, 'hi', false)).toEqual(REFUSED)
+      expect(await queue.send(id, 'hi', false, HOME)).toEqual(REFUSED)
     }
     for (const text of ['', 'a'.repeat(MAX_TEXT + 1), 'one\0two']) {
-      expect(await queue.send(THREAD, text, false)).toEqual(REFUSED)
+      expect(await queue.send(THREAD, text, false, HOME)).toEqual(REFUSED)
     }
     expect(calls).toEqual([])
   })
 
   it('a text of 20,000 characters is queued whole, in one run', async () => {
     const { calls, queue } = recorder()
-    expect(await queue.send(THREAD, 'a'.repeat(20_000), false)).toEqual({ outcome: 'queued' })
+    expect(await queue.send(THREAD, 'a'.repeat(20_000), false, HOME)).toEqual({ outcome: 'queued' })
     expect(calls).toHaveLength(1)
     expect(calls[0][1]).toContain(`--message=${'a'.repeat(20_000)}`)
   })
 
   it('exit 0 is queued; a non-zero exit is failed with its exit code; a binary that cannot start, and no binary, are failed with no binary', async () => {
     const { queue } = recorder({}, [0, 1, 127, 'not-started'])
-    expect(await queue.send(THREAD, 'hi', false)).toEqual({ outcome: 'queued' })
-    expect(await queue.send(THREAD, 'hi', false)).toEqual({ outcome: 'failed', reason: 'exit 1', ran: 'path' })
-    expect(await queue.send(THREAD, 'hi', false)).toEqual({ outcome: 'failed', reason: 'exit 127', ran: 'path' })
-    expect(await queue.send(THREAD, 'hi', false)).toEqual({ outcome: 'failed', reason: 'no binary', ran: 'path' })
+    expect(await queue.send(THREAD, 'hi', false, HOME)).toEqual({ outcome: 'queued' })
+    expect(await queue.send(THREAD, 'hi', false, HOME)).toEqual({ outcome: 'failed', reason: 'exit 1', ran: 'path' })
+    expect(await queue.send(THREAD, 'hi', false, HOME)).toEqual({ outcome: 'failed', reason: 'exit 127', ran: 'path' })
+    expect(await queue.send(THREAD, 'hi', false, HOME)).toEqual({ outcome: 'failed', reason: 'no binary', ran: 'path' })
 
     const none = recorder({ binary: () => null })
-    expect(await none.queue.send(THREAD, 'hi', false)).toEqual({ outcome: 'failed', reason: 'no binary', ran: 'path' })
+    expect(await none.queue.send(THREAD, 'hi', false, HOME)).toEqual({ outcome: 'failed', reason: 'no binary', ran: 'path' })
     expect(none.calls).toEqual([])
   })
 
@@ -207,7 +221,7 @@ describe('codex queue', () => {
         return real.run(file, args, { ...given, timeoutMs: 200 })
       },
     })
-    expect(await queue.send(THREAD, 'hi', false)).toEqual({ outcome: 'timeout' })
+    expect(await queue.send(THREAD, 'hi', false, HOME)).toEqual({ outcome: 'timeout' })
     expect(asked).toEqual([10_000])
     const child = vi.mocked(execFile).mock.results.at(-1)!.value as ChildProcess
     // A run that is never killed fails the test on its timeout, and its sleep, deaf to SIGTERM, would outlive the suite.
@@ -221,7 +235,7 @@ describe('codex queue', () => {
   it('a codex killed by a signal answers timeout, never failed', async () => {
     const fake = fakeCodex('kill -KILL $$')
     expect(await codexQueueDeps().run(fake.file, [], options())).toBe('unknown')
-    expect(await realQueue(fake.file).send(THREAD, 'hi', false)).toEqual({ outcome: 'timeout' })
+    expect(await realQueue(fake.file).send(THREAD, 'hi', false, HOME)).toEqual({ outcome: 'timeout' })
   })
 
   it('run ends its codex\'s stdin at once', async () => {
@@ -231,9 +245,9 @@ describe('codex queue', () => {
 
   it('a second send for the same thread while one runs is busy and runs nothing; another thread\'s runs; the thread is free again after queued, failed and timeout', async () => {
     const { calls, waiting, queue } = held()
-    const first = queue.send(THREAD, 'one', false)
-    expect(await queue.send(THREAD, 'two', false)).toEqual({ outcome: 'busy' })
-    const other = queue.send(OTHER, 'three', false)
+    const first = queue.send(THREAD, 'one', false, HOME)
+    expect(await queue.send(THREAD, 'two', false, HOME)).toEqual({ outcome: 'busy' })
+    const other = queue.send(OTHER, 'three', false, HOME)
     expect(calls.map(([, args]) => args[2])).toEqual([THREAD, OTHER])
     waiting[0](0)
     waiting[1](0)
@@ -241,13 +255,13 @@ describe('codex queue', () => {
     expect(await other).toEqual({ outcome: 'queued' })
 
     // After queued, after failed, after timeout: each next send runs.
-    const failed = queue.send(THREAD, 'four', false)
+    const failed = queue.send(THREAD, 'four', false, HOME)
     waiting[2](1)
     expect(await failed).toEqual({ outcome: 'failed', reason: 'exit 1', ran: 'path' })
-    const timedOut = queue.send(THREAD, 'five', false)
+    const timedOut = queue.send(THREAD, 'five', false, HOME)
     waiting[3]('unknown')
     expect(await timedOut).toEqual({ outcome: 'timeout' })
-    const next = queue.send(THREAD, 'six', false)
+    const next = queue.send(THREAD, 'six', false, HOME)
     waiting[4](0)
     expect(await next).toEqual({ outcome: 'queued' })
     expect(calls).toHaveLength(5)
@@ -373,7 +387,7 @@ describe('codex queue', () => {
     expect(deps.parentEnv().PATH).toBe(dir)
   })
 
-  it('the run\'s environment is the login shell\'s with the daemon\'s on top, PATH the login shell\'s then the daemon\'s, CODEX_HOME the daemon\'s', async () => {
+  it('the run\'s environment is the login shell\'s with the daemon\'s on top, PATH the login shell\'s then the daemon\'s, CODEX_HOME the send\'s', async () => {
     shell.env = { PATH: '/login/bin', CODEX_HOME: '/login/codex', ONLY_LOGIN: '1', BOTH: 'login' }
     vi.stubEnv('PATH', '/daemon/bin')
     vi.stubEnv('BOTH', 'daemon')
@@ -382,10 +396,9 @@ describe('codex queue', () => {
       ...codexQueueDeps(),
       run: async (...call) => { calls.push(call); return 0 },
       binary: () => FAKE_CODEX,
-      home: '/daemon/codex',
       cwd: dir,
     })
-    expect(await queue.send(THREAD, 'hi', false)).toEqual({ outcome: 'queued' })
+    expect(await queue.send(THREAD, 'hi', false, '/daemon/codex')).toEqual({ outcome: 'queued' })
     expect(calls).toHaveLength(1)
     expect(calls[0][2].env).toMatchObject({ PATH: `/login/bin${delimiter}/daemon/bin`, CODEX_HOME: '/daemon/codex', ONLY_LOGIN: '1', BOTH: 'daemon' })
   })
@@ -414,28 +427,28 @@ describe('codex queue', () => {
     expect(readLoginShell).not.toHaveBeenCalled()
     queue.can(false)
     queue.can(false)
-    await queue.send(THREAD, 'hi', false)
+    await queue.send(THREAD, 'hi', false, HOME)
     expect(readLoginShell).toHaveBeenCalledTimes(1)
 
     const sentFirst = vi.fn()
-    await recorder({ readLoginShell: sentFirst }).queue.send(THREAD, 'hi', false)
+    await recorder({ readLoginShell: sentFirst }).queue.send(THREAD, 'hi', false, HOME)
     expect(sentFirst).toHaveBeenCalledTimes(1)
 
     const refused = vi.fn()
-    expect(await recorder({ readLoginShell: refused }).queue.send('my session', 'hi', false)).toEqual(REFUSED)
+    expect(await recorder({ readLoginShell: refused }).queue.send('my session', 'hi', false, HOME)).toEqual(REFUSED)
     expect(refused).not.toHaveBeenCalled()
   })
 
   it('an app session on macOS runs the app\'s own codex; with none there it runs the other', async () => {
     const { calls, queue } = recorder({ appBinary: () => APP_CODEX })
-    expect(await queue.send(THREAD, 'hi', true)).toEqual({ outcome: 'queued' })
-    expect(await queue.send(THREAD, 'hi', false)).toEqual({ outcome: 'queued' })
+    expect(await queue.send(THREAD, 'hi', true, HOME)).toEqual({ outcome: 'queued' })
+    expect(await queue.send(THREAD, 'hi', false, HOME)).toEqual({ outcome: 'queued' })
     const args = ['queue', '--thread', THREAD, '--message=hi']
     const how = { cwd: '/home/u', env: { PATH: '/usr/bin', CODEX_HOME: '/home/u/.codex' }, timeoutMs: 10_000 }
     expect(calls).toEqual([[APP_CODEX, args, how], [FAKE_CODEX, args, how]])
 
     const none = recorder()
-    expect(await none.queue.send(THREAD, 'hi', true)).toEqual({ outcome: 'queued' })
+    expect(await none.queue.send(THREAD, 'hi', true, HOME)).toEqual({ outcome: 'queued' })
     expect(none.calls.map(([file]) => file)).toEqual([FAKE_CODEX])
   })
 
@@ -443,7 +456,7 @@ describe('codex queue', () => {
     const { calls, queue } = recorder({ appBinary: () => APP_CODEX, binary: () => null })
     expect(queue.can(true)).toBe(true)
     expect(queue.can(false)).toBe(false)
-    expect(await queue.send(THREAD, 'hi', false)).toEqual({ outcome: 'failed', reason: 'no binary', ran: 'path' })
+    expect(await queue.send(THREAD, 'hi', false, HOME)).toEqual({ outcome: 'failed', reason: 'no binary', ran: 'path' })
     expect(calls).toEqual([])
   })
 
@@ -452,7 +465,7 @@ describe('codex queue', () => {
     const appBinary = vi.fn(() => APP_CODEX)
     const { calls, queue } = recorder({ platform: 'linux', appBinary })
     expect(queue.can(true)).toBe(true)
-    expect(await queue.send(THREAD, 'hi', true)).toEqual({ outcome: 'queued' })
+    expect(await queue.send(THREAD, 'hi', true, HOME)).toEqual({ outcome: 'queued' })
     expect(calls.map(([file]) => file)).toEqual([FAKE_CODEX])
     expect(appBinary).not.toHaveBeenCalled()
   })
@@ -460,15 +473,15 @@ describe('codex queue', () => {
   // An older app with no `queue` exits 2: run again through the other codex, the words could run twice.
   it('a failure names the codex that ran, and a failed app codex is not run again through the other', async () => {
     const app = recorder({ appBinary: () => APP_CODEX }, [2, 'not-started'])
-    expect(await app.queue.send(THREAD, 'hi', true)).toEqual({ outcome: 'failed', reason: 'exit 2', ran: 'app' })
+    expect(await app.queue.send(THREAD, 'hi', true, HOME)).toEqual({ outcome: 'failed', reason: 'exit 2', ran: 'app' })
     expect(app.calls.map(([file]) => file)).toEqual([APP_CODEX])
-    expect(await app.queue.send(THREAD, 'hi', true)).toEqual({ outcome: 'failed', reason: 'no binary', ran: 'app' })
+    expect(await app.queue.send(THREAD, 'hi', true, HOME)).toEqual({ outcome: 'failed', reason: 'no binary', ran: 'app' })
     expect(app.calls.map(([file]) => file)).toEqual([APP_CODEX, APP_CODEX])
 
     const other = recorder({ appBinary: () => APP_CODEX }, [127])
-    expect(await other.queue.send(THREAD, 'hi', false)).toEqual({ outcome: 'failed', reason: 'exit 127', ran: 'path' })
+    expect(await other.queue.send(THREAD, 'hi', false, HOME)).toEqual({ outcome: 'failed', reason: 'exit 127', ran: 'path' })
     expect(other.calls.map(([file]) => file)).toEqual([FAKE_CODEX])
-    expect(await other.queue.send('my session', 'hi', true)).toEqual(REFUSED)
+    expect(await other.queue.send('my session', 'hi', true, HOME)).toEqual(REFUSED)
   })
 
   it('the app\'s codex is the absolute path HARNESS_CODEX_APP_BIN names, alone; else the app in /Applications, then in ~/Applications', () => {
@@ -507,14 +520,14 @@ describe('codex queue on Windows', () => {
     const { calls, queue } = recorder({ platform: 'win32', readLoginShell, appBinary: () => APP_CODEX })
     expect(queue.can(false)).toBe(true)
     expect(queue.can(true)).toBe(true)
-    expect(await queue.send(THREAD, 'hi', true)).toEqual({ outcome: 'queued' })
-    expect(await queue.send(THREAD, 'hi', false)).toEqual({ outcome: 'queued' })
+    expect(await queue.send(THREAD, 'hi', true, HOME)).toEqual({ outcome: 'queued' })
+    expect(await queue.send(THREAD, 'hi', false, HOME)).toEqual({ outcome: 'queued' })
     expect(calls.map(([file]) => file)).toEqual([APP_CODEX, FAKE_CODEX])
     expect(readLoginShell).not.toHaveBeenCalled()
 
     // A package with none: the codex on PATH.
     const none = recorder({ platform: 'win32' })
-    expect(await none.queue.send(THREAD, 'hi', true)).toEqual({ outcome: 'queued' })
+    expect(await none.queue.send(THREAD, 'hi', true, HOME)).toEqual({ outcome: 'queued' })
     expect(none.calls.map(([file]) => file)).toEqual([FAKE_CODEX])
   })
 
@@ -527,13 +540,13 @@ describe('codex queue on Windows', () => {
   it('send runs codex queue with a text cmd.exe would split or expand as one argument', async () => {
     const { calls, queue } = recorder({ platform: 'win32' })
     const text = 'fix&calc | more 100%PATH% say "hi\r\nsecond line'
-    expect(await queue.send(THREAD, text, false)).toEqual({ outcome: 'queued' })
+    expect(await queue.send(THREAD, text, false, HOME)).toEqual({ outcome: 'queued' })
     expect(calls.map(([, args]) => args)).toEqual([['queue', '--thread', THREAD, `--message=${text}`]])
   })
 
   it('a run that could not start is failed, no binary', async () => {
     const { queue } = recorder({ platform: 'win32' }, ['not-started'])
-    expect(await queue.send(THREAD, 'hi', false)).toEqual({ outcome: 'failed', reason: 'no binary', ran: 'path' })
+    expect(await queue.send(THREAD, 'hi', false, HOME)).toEqual({ outcome: 'failed', reason: 'no binary', ran: 'path' })
   })
 
   describe('the real run', () => {

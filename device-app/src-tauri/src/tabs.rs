@@ -1,8 +1,10 @@
 //! The tabs of Terminal, iTerm2 and Ghostty, for the dial to follow: the lines the watch reads and writes, the tty
-//! check, and when to ask an app for its selected tab. A tty is private like the app in front: it goes on the watch's
-//! stdin and into a fixed script's parameter, never into the log, an Event or the state file.
+//! check, when to ask an app for its selected tab, and the spoken words waiting to be typed. A tty is private like the
+//! app in front: it goes on the watch's stdin and into a fixed script's parameter, never into the log, an Event or the
+//! state file. A spoken text is as private as a tty; it goes to a fixed handler's parameter and nowhere else.
 
 use serde_json::Value;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -11,6 +13,13 @@ pub const POLL_EVERY: Duration = Duration::from_millis(500);
 /// Each Apple Event's timeout. Only macOS's consent prompt holds a call longer, so a select that waited longer is for
 /// where the dial rested back then.
 pub const CALL_TIMEOUT: Duration = Duration::from_secs(2);
+/// How long a typing may wait for the tab thread. The devices checked the agent at its prompt just before sending it:
+/// one held longer, behind macOS's consent prompt, would type on checks that may no longer hold.
+pub const LATE_WRITE: Duration = Duration::from_millis(500);
+/// The longest spoken text, in UTF-16 units as the CLI counts it: a count of chars would refuse texts it sent.
+pub const MAX_TEXT: usize = 20_000;
+/// The typings that may wait for the tab thread; the devices wait on each one's answer, so one more is answered no.
+pub const TYPING_QUEUED: usize = 8;
 
 /// The apps whose tabs the dial follows, from Harness Device's own table: nothing of the daemon names a bundle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,6 +93,84 @@ pub fn select_of(line: &str) -> Option<(TabApp, String, bool)> {
     tty_ok(tty).then(|| (app, tty.to_string(), raise))
 }
 
+/// A watch's `{"write":{…}}` or `{"enter":{…}}` line: spoken words for the one session of a tty, or the Enter after
+/// them, each answered by its id.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Typing {
+    Write { id: String, app: TabApp, tty: String, text: String },
+    Enter { id: String, app: TabApp, tty: String },
+}
+
+impl Typing {
+    pub fn id(&self) -> &str {
+        match self {
+            Typing::Write { id, .. } | Typing::Enter { id, .. } => id,
+        }
+    }
+
+    pub fn app(&self) -> TabApp {
+        match self {
+            Typing::Write { app, .. } | Typing::Enter { app, .. } => *app,
+        }
+    }
+
+    pub fn tty(&self) -> &str {
+        match self {
+            Typing::Write { tty, .. } | Typing::Enter { tty, .. } => tty,
+        }
+    }
+
+    /// The log's line of what became of it: its app and whether it is a write or an Enter, never its tty or text.
+    fn said(&self, outcome: &str) -> String {
+        let kind = match self {
+            Typing::Write { .. } => "write",
+            Typing::Enter { .. } => "enter",
+        };
+        format!("tabs: {} {kind} {outcome}", self.app().name())
+    }
+}
+
+/// The typing of a watch's line, checked again as the devices and the watch checked it, since its text goes into a
+/// terminal: exactly the keys of a write or an Enter, an app with a write handler, a tty that passes `tty_ok`, an id
+/// of 16 lowercase hex, and a text of 1 to MAX_TEXT UTF-16 units with no control character.
+pub fn typing_of(line: &str) -> Option<Typing> {
+    let line: serde_json::Map<String, Value> = serde_json::from_str(line).ok()?;
+    let mut line = line.into_iter();
+    let Some((kind, Value::Object(fields))) = line.next() else {
+        return None;
+    };
+    if line.next().is_some() {
+        return None;
+    }
+    let string = |key: &str| fields.get(key).and_then(Value::as_str);
+    let id = string("id")
+        .filter(|id| id.len() == 16 && id.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')))?
+        .to_string();
+    // Ghostty alone has write handlers. Terminal's `do script`, its only way to put text in a tab, runs the text as a
+    // command; iTerm2's `write` reaches every session its Broadcast Input joins, which its dictionary does not show.
+    let app = string("app").and_then(TabApp::from_id).filter(|app| *app == TabApp::Ghostty)?;
+    let tty = string("tty").filter(|tty| tty_ok(tty))?.to_string();
+    match (kind.as_str(), fields.len()) {
+        ("write", 4) => {
+            let text = string("text").filter(|text| text_ok(text))?.to_string();
+            Some(Typing::Write { id, app, tty, text })
+        }
+        ("enter", 3) => Some(Typing::Enter { id, app, tty }),
+        _ => None,
+    }
+}
+
+/// The devices turned every control character into a space, so one here was never theirs, and a newline would submit
+/// the words before the Enter's checks ran.
+fn text_ok(text: &str) -> bool {
+    !text.is_empty() && text.encode_utf16().count() <= MAX_TEXT && !text.chars().any(char::is_control)
+}
+
+/// `{"wrote":{"id":"…","ok":…}}` for the watch's stdin: the answer to the typing of that id.
+pub fn wrote_line(id: &str, ok: bool) -> String {
+    serde_json::json!({ "wrote": { "id": id, "ok": ok } }).to_string()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TabError {
     /// The person said no to Automation for this app.
@@ -118,7 +205,14 @@ pub enum Selected {
     NoTab,
 }
 
-/// The fixed scripts. A tty passed in has passed `tty_ok`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Written {
+    Done,
+    /// No session of the app holds the tty, or more than one does: it is not the agent's pane.
+    NoSession,
+}
+
+/// The fixed scripts. A tty passed in has passed `tty_ok`, and a text `typing_of`'s check.
 pub trait TabScripts: Send + Sync {
     /// Whether the app runs: an Apple Event to one that does not would launch it.
     fn running(&self, app: TabApp) -> bool;
@@ -128,6 +222,15 @@ pub trait TabScripts: Send + Sync {
     fn select_tty(&self, app: TabApp, tty: &str, frontmost: bool) -> Result<Selected, TabError>;
     /// A tap's select: `open -b` is bringing the app forward, so the window is always raised.
     fn focus_tty(&self, app: TabApp, tty: &str) -> Result<Selected, TabError>;
+    /// Spoken words, typed into the one session of the tty with no newline. An app with no write handler (Terminal,
+    /// iTerm2, every app off macOS) writes nothing.
+    fn write_text(&self, _app: TabApp, _tty: &str, _text: &str) -> Result<Written, TabError> {
+        Ok(Written::NoSession)
+    }
+    /// The Enter after the words, to the one session of the tty.
+    fn send_enter(&self, _app: TabApp, _tty: &str) -> Result<Written, TabError> {
+        Ok(Written::NoSession)
+    }
 }
 
 /// Runs nothing: `running` is false, so no other call is made.
@@ -171,7 +274,19 @@ pub struct Select {
     pub raise: bool,
 }
 
-/// What a call's answer gives: a line for the watch, and lines for the log, none of which holds a tty.
+/// The oldest typing, as the tab thread takes it.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Next {
+    Run(Typing),
+    /// Answered no unrun: the line for the watch and a line for the log, but for an app off, which said why once.
+    Refused {
+        line: String,
+        log: Option<String>,
+    },
+}
+
+/// What a call's answer, or a typing's answered at once, gives: a line for the watch, and lines for the log, none of
+/// which holds a tty.
 #[derive(Debug, Default)]
 pub struct Out {
     pub line: Option<String>,
@@ -190,6 +305,11 @@ pub struct TabFollow {
     attached: bool,
     /// Denied, with no tty or with no scripting, until Harness Device starts again: asking again would only fail again.
     off: Vec<TabApp>,
+    /// The apps whose poll or select answered without an error since Harness Device started. macOS has let them be
+    /// scripted, so a write to one never brings its consent prompt, which would hold the tab thread for minutes.
+    allowed: Vec<TabApp>,
+    /// The typings in the order they came, each with when it came: unlike a select, every one is answered.
+    typings: VecDeque<(Typing, Instant)>,
     /// The tty the watch was told last, for the app polled now.
     last: Option<(TabApp, String)>,
     /// The select to run next, and when it came.
@@ -212,6 +332,8 @@ impl TabFollow {
     pub fn watching(&mut self, on: bool) {
         self.watching = on;
         self.attached = false;
+        // Their answers would go to a watch that is gone.
+        self.typings.clear();
         self.restart();
     }
 
@@ -229,6 +351,9 @@ impl TabFollow {
     /// A `selected_tty` answer, `now` in seconds.
     pub fn polled(&mut self, app: TabApp, answer: Result<Option<String>, TabError>, now: u64) -> Out {
         let mut out = Out::default();
+        if answer.is_ok() {
+            self.allow(app);
+        }
         match answer {
             Ok(Some(tty)) if self.polls() == Some(app) && tty_ok(&tty) => {
                 if self.last.as_ref().is_none_or(|(_, last)| *last != tty) {
@@ -280,6 +405,9 @@ impl TabFollow {
     /// A `select_tty` or `focus_tty` answer.
     pub fn selected(&mut self, app: TabApp, done: Result<Selected, TabError>) -> Out {
         let mut out = Out::default();
+        if done.is_ok() {
+            self.allow(app);
+        }
         let outcome = match done {
             Ok(Selected::Done) => "ok",
             Ok(Selected::NoTab) => "none",
@@ -290,6 +418,55 @@ impl TabFollow {
             }
         };
         out.log.push(format!("tabs: {} select {outcome}", app.name()));
+        out
+    }
+
+    fn allow(&mut self, app: TabApp) {
+        if !self.allowed.contains(&app) {
+            self.allowed.push(app);
+        }
+    }
+
+    /// A typing from the watch, which came `at`. With no watch running, its app off or TYPING_QUEUED already waiting, it
+    /// is answered no at once: the line for the watch and, for a full queue, a line for the log. A stopped watch's child
+    /// may still print words before it ends.
+    pub fn typed(&mut self, typing: Typing, at: Instant) -> Out {
+        let refused = |log: Vec<String>| Out { line: Some(wrote_line(typing.id(), false)), log };
+        if !self.watching || self.off.contains(&typing.app()) {
+            return refused(Vec::new());
+        }
+        if self.typings.len() >= TYPING_QUEUED {
+            return refused(vec![typing.said("refused · queue full")]);
+        }
+        self.typings.push_back((typing, at));
+        Out::default()
+    }
+
+    /// The oldest typing, taken `now`. It is answered no unrun when it waited past LATE_WRITE, or when its app is off or
+    /// has not been allowed yet.
+    pub fn next_typing(&mut self, now: Instant) -> Option<Next> {
+        let (typing, at) = self.typings.pop_front()?;
+        let app = typing.app();
+        let log = if now.saturating_duration_since(at) > LATE_WRITE {
+            Some(typing.said("dropped late"))
+        } else if self.off.contains(&app) {
+            None
+        } else if !self.allowed.contains(&app) {
+            Some(typing.said("refused · no answer yet"))
+        } else {
+            return Some(Next::Run(typing));
+        };
+        Some(Next::Refused { line: wrote_line(typing.id(), false), log })
+    }
+
+    /// A `write_text` or `send_enter` answer: ok only when it wrote.
+    pub fn written(&mut self, typing: &Typing, done: Result<Written, TabError>) -> Out {
+        let mut out = Out { line: Some(wrote_line(typing.id(), done == Ok(Written::Done))), log: Vec::new() };
+        match done {
+            Err(TabError::Failed) => out.log.push(typing.said("failed")),
+            Err(error) => self.turn_off(typing.app(), error, &mut out.log),
+            Ok(_) => {}
+        }
         out
     }
 
@@ -350,6 +527,44 @@ mod tests {
 
     fn select(app: TabApp, tty: &str, frontmost: bool, raise: bool) -> Option<Select> {
         Some(Select { app, tty: tty.into(), frontmost, raise })
+    }
+
+    const I: TabApp = TabApp::Iterm;
+    const G: TabApp = TabApp::Ghostty;
+    const ID: &str = "0123456789abcdef";
+    const ENTER_ID: &str = "fedcba9876543210";
+
+    fn write(app: TabApp, id: &str, text: &str) -> Typing {
+        Typing::Write { id: id.into(), app, tty: TTY.into(), text: text.into() }
+    }
+
+    fn enter(app: TabApp, id: &str) -> Typing {
+        Typing::Enter { id: id.into(), app, tty: TTY.into() }
+    }
+
+    fn write_line(app: &str, tty: &str, id: &str, text: &str) -> String {
+        serde_json::json!({ "write": { "id": id, "app": app, "tty": tty, "text": text } }).to_string()
+    }
+
+    fn enter_line(app: &str, tty: &str, id: &str) -> String {
+        serde_json::json!({ "enter": { "id": id, "app": app, "tty": tty } }).to_string()
+    }
+
+    fn refused(id: &str) -> Option<Next> {
+        Some(Next::Refused { line: wrote_line(id, false), log: None })
+    }
+
+    /// Answered no unrun with the line that says why.
+    fn refused_saying(id: &str, said: &str) -> Option<Next> {
+        Some(Next::Refused { line: wrote_line(id, false), log: Some(said.into()) })
+    }
+
+    /// Ghostty, the one app that takes a typing, in front, its poll answered once without an error.
+    fn writing() -> TabFollow {
+        let mut follow = polling();
+        follow.front(G.bundle());
+        follow.polled(G, Ok(None), 0);
+        follow
     }
 
     #[test]
@@ -458,6 +673,140 @@ mod tests {
         for raise in [r#""true""#, "1", "null", "{}", "[]"] {
             let line = format!(r#"{{"select":{{"app":"terminal-app","tty":"/dev/ttys023","raise":{raise}}}}}"#);
             assert_eq!(select_of(&line), None, "{line}");
+        }
+    }
+
+    #[test]
+    fn a_write_line_is_read_only_when_its_app_tty_id_and_text_pass() {
+        assert_eq!(
+            typing_of(r#"{"write":{"id":"0123456789abcdef","app":"ghostty","tty":"/dev/ttys023","text":"hi"}}"#),
+            Some(write(G, ID, "hi"))
+        );
+        let typing = typing_of(&write_line("ghostty", "/dev/ttys0", ENTER_ID, "hi there")).unwrap();
+        assert_eq!(
+            typing,
+            Typing::Write { id: ENTER_ID.into(), app: G, tty: "/dev/ttys0".into(), text: "hi there".into() }
+        );
+        assert_eq!((typing.id(), typing.app(), typing.tty()), (ENTER_ID, G, "/dev/ttys0"));
+        let write_with = |key: &str, value: Value| {
+            let mut line = serde_json::json!({ "write": { "id": ID, "app": "ghostty", "tty": TTY, "text": "hi" } });
+            line["write"][key] = value;
+            line.to_string()
+        };
+        for dropped in [
+            write_line("orca", TTY, ID, "hi"),
+            write_line("vscode", TTY, ID, "hi"),
+            write_line("com.mitchellh.ghostty", TTY, ID, "hi"),
+            write_line("Ghostty", TTY, ID, "hi"),
+            write_line("ghostty", "/dev/ttys12345", ID, "hi"),
+            write_line("ghostty", "/dev/pts/1", ID, "hi"),
+            write_line("ghostty", "/dev/ttys023; rm", ID, "hi"),
+            // Ids of 15 and 17 hex, upper case, and a letter past f.
+            write_line("ghostty", TTY, "0123456789abcde", "hi"),
+            write_line("ghostty", TTY, "0123456789abcdef0", "hi"),
+            write_line("ghostty", TTY, "0123456789ABCDEF", "hi"),
+            write_line("ghostty", TTY, "0123456789abcdeg", "hi"),
+            write_line("ghostty", TTY, ID, ""),
+            write_with("text", Value::from(7)),
+            write_with("text", Value::Null),
+            write_with("id", Value::from(7)),
+            write_with("raise", Value::from(true)),
+            r#"{"write":{"id":"0123456789abcdef","app":"ghostty","tty":"/dev/ttys023"}}"#.into(),
+            r#"{"write":{"id":"0123456789abcdef","app":"ghostty","tty":"/dev/ttys023","text":"hi"},"x":1}"#.into(),
+            r#"{"write":"hi"}"#.into(),
+            "not json".into(),
+            "".into(),
+        ] {
+            assert_eq!(typing_of(&dropped), None, "{dropped}");
+        }
+    }
+
+    #[test]
+    fn only_ghostty_takes_a_write() {
+        // Terminal's only way to put words in a tab would run them as a command, and iTerm2's write reaches every
+        // session its Broadcast Input joins, which its dictionary does not show.
+        for app in ["terminal-app", "iterm"] {
+            assert_eq!(typing_of(&write_line(app, TTY, ID, "hi")), None, "{app}");
+            assert_eq!(typing_of(&enter_line(app, TTY, ID)), None, "{app}");
+        }
+        assert_eq!(typing_of(&write_line("ghostty", TTY, ID, "hi")), Some(write(G, ID, "hi")));
+        assert_eq!(typing_of(&enter_line("ghostty", TTY, ID)), Some(enter(G, ID)));
+    }
+
+    #[test]
+    fn an_enter_line_has_no_text() {
+        let typing = typing_of(r#"{"enter":{"id":"fedcba9876543210","app":"ghostty","tty":"/dev/ttys023"}}"#);
+        assert_eq!(typing, Some(enter(G, ENTER_ID)));
+        let typing = typing.unwrap();
+        assert_eq!((typing.id(), typing.app(), typing.tty()), (ENTER_ID, G, TTY));
+        for dropped in [
+            r#"{"enter":{"id":"fedcba9876543210","app":"ghostty","tty":"/dev/ttys023","text":"hi"}}"#,
+            r#"{"enter":{"id":"fedcba9876543210","app":"ghostty","tty":"/dev/ttys023","text":""}}"#,
+            r#"{"enter":{"app":"ghostty","tty":"/dev/ttys023"}}"#,
+            r#"{"enter":{"id":"fedcba9876543210","tty":"/dev/ttys023"}}"#,
+            r#"{"enter":{"id":"fedcba9876543210","app":"ghostty"}}"#,
+            r#"{"enter":{"id":"FEDCBA9876543210","app":"ghostty","tty":"/dev/ttys023"}}"#,
+            r#"{"enter":{"id":"fedcba9876543210","app":"ghostty","tty":"/dev/pts/1"}}"#,
+            r#"{"enter":true}"#,
+        ] {
+            assert_eq!(typing_of(dropped), None, "{dropped}");
+        }
+    }
+
+    #[test]
+    fn a_line_with_another_key_is_dropped() {
+        let write = r#"{"id":"0123456789abcdef","app":"ghostty","tty":"/dev/ttys023","text":"hi"}"#;
+        let enter = r#"{"id":"fedcba9876543210","app":"ghostty","tty":"/dev/ttys023"}"#;
+        for dropped in [
+            format!(r#"{{"write":{write},"enter":{enter}}}"#),
+            format!(r#"{{"Write":{write}}}"#),
+            format!(r#"{{"select":{enter}}}"#),
+            format!(r#"{{"tab":{enter}}}"#),
+            r#"{"select":{"app":"ghostty","tty":"/dev/ttys023"}}"#.into(),
+            r#"{"wrote":{"id":"0123456789abcdef","ok":true}}"#.into(),
+            r#"{"attached":true,"fw":"0.1.0","hw":"round"}"#.into(),
+            "{}".into(),
+            "[]".into(),
+        ] {
+            assert_eq!(typing_of(&dropped), None, "{dropped}");
+        }
+    }
+
+    #[test]
+    fn the_longest_text_is_counted_in_utf16_units_as_the_cli_counts_it() {
+        assert_eq!(MAX_TEXT, 20_000);
+        for text in ["é".repeat(20_000), "😀".repeat(10_000), "中".repeat(20_000), "a".repeat(20_000)] {
+            let line = write_line("ghostty", TTY, ID, &text);
+            // The longest line, with its newline, is one the watch's reader hands on.
+            assert!(line.len() < crate::cli::LINE_MAX, "{}", line.len());
+            assert_eq!(typing_of(&line), Some(write(G, ID, &text)));
+        }
+        // 20,001 units, and 10,001 emoji: 10,001 chars but 20,002 units.
+        for text in ["é".repeat(20_001), format!("{}a", "😀".repeat(10_000)), "😀".repeat(10_001), "中".repeat(20_001)]
+        {
+            assert_eq!(typing_of(&write_line("ghostty", TTY, ID, &text)), None);
+        }
+    }
+
+    #[test]
+    fn a_text_the_devices_cleaned_passes_and_a_control_character_does_not() {
+        for text in ["a\u{2028}b", "a\u{a0}b", "a\u{fffd}b", "emoji 😀 and 中文"] {
+            assert_eq!(typing_of(&write_line("ghostty", TTY, ID, text)), Some(write(G, ID, text)), "{text:?}");
+        }
+        for text in ["a\nb", "a\rb", "a\tb", "a\u{7f}b", "a\u{85}b", "\u{1b}[0m", "a\u{0}b", "\n"] {
+            assert_eq!(typing_of(&write_line("ghostty", TTY, ID, text)), None, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn the_wrote_line_is_one_short_line() {
+        assert_eq!(wrote_line(ID, true), r#"{"wrote":{"id":"0123456789abcdef","ok":true}}"#);
+        assert_eq!(wrote_line(ENTER_ID, false), r#"{"wrote":{"id":"fedcba9876543210","ok":false}}"#);
+        for ok in [true, false] {
+            // Under the 64 bytes the watch takes for a wrote tell.
+            let line = wrote_line(ID, ok);
+            assert!(line.len() < 64, "{line}");
+            assert!(!line.contains(['\n', '\r']), "{line}");
         }
     }
 
@@ -796,6 +1145,202 @@ mod tests {
     }
 
     #[test]
+    fn a_typing_runs_only_for_an_app_whose_poll_or_select_answered() {
+        let now = Instant::now();
+        // Nothing of Ghostty has answered yet: a write could wait on macOS's consent prompt.
+        let mut follow = polling();
+        follow.front(G.bundle());
+        assert_eq!(follow.typed(write(G, ID, "hi"), now).line, None);
+        assert_eq!(follow.next_typing(now), refused_saying(ID, "tabs: Ghostty write refused · no answer yet"));
+        // A failed poll is no answer.
+        follow.polled(G, Err(TabError::Failed), 0);
+        follow.typed(write(G, ID, "hi"), now);
+        assert_eq!(follow.next_typing(now), refused_saying(ID, "tabs: Ghostty write refused · no answer yet"));
+        // One app's answer is not another's.
+        follow.polled(I, Ok(None), 0);
+        follow.selected(T, Ok(Selected::NoTab));
+        follow.typed(enter(G, ENTER_ID), now);
+        assert_eq!(follow.next_typing(now), refused_saying(ENTER_ID, "tabs: Ghostty enter refused · no answer yet"));
+        // A poll that answered, even with no window, is.
+        follow.polled(G, Ok(None), 0);
+        follow.typed(write(G, ID, "hi"), now);
+        assert_eq!(follow.next_typing(now), Some(Next::Run(write(G, ID, "hi"))));
+        // A select answers for its app too, unless it failed.
+        let mut follow = polling();
+        follow.selected(G, Err(TabError::Failed));
+        follow.typed(enter(G, ENTER_ID), now);
+        assert_eq!(follow.next_typing(now), refused_saying(ENTER_ID, "tabs: Ghostty enter refused · no answer yet"));
+        follow.selected(G, Ok(Selected::NoTab));
+        follow.typed(enter(G, ENTER_ID), now);
+        assert_eq!(follow.next_typing(now), Some(Next::Run(enter(G, ENTER_ID))));
+        // The consent is the app's, not the watch's: a new watch's typing runs.
+        follow.watching(true);
+        follow.typed(write(G, ID, "hi"), now);
+        assert_eq!(follow.next_typing(now), Some(Next::Run(write(G, ID, "hi"))));
+    }
+
+    #[test]
+    fn an_app_turned_off_answers_no() {
+        let now = Instant::now();
+        // Turned off while a typing waits: that one is answered no as its turn comes.
+        let mut follow = writing();
+        assert_eq!(follow.typed(write(G, ID, "hi"), now).line, None);
+        follow.polled(G, Err(TabError::Denied), 1);
+        assert_eq!(follow.next_typing(now), refused(ID));
+        // Off, a new one is answered no at once, and none waits. The app said why once.
+        let out = follow.typed(enter(G, ENTER_ID), now);
+        assert_eq!((out.line, out.log), (Some(wrote_line(ENTER_ID, false)), vec![]));
+        assert_eq!(follow.next_typing(now), None);
+        // Another app turned off leaves it on.
+        let mut follow = writing();
+        follow.selected(I, Err(TabError::Denied));
+        assert_eq!(follow.typed(write(G, ID, "hi"), now).line, None);
+        assert_eq!(follow.next_typing(now), Some(Next::Run(write(G, ID, "hi"))));
+
+        // A write's answer turns its app off as a poll's or a select's does, and says so once.
+        for (error, said) in [
+            (TabError::Denied, "tabs: Ghostty not allowed"),
+            (TabError::NoTty, "tabs: Ghostty has no tty"),
+            (TabError::NoScripting, "tabs: Ghostty has no scripting"),
+        ] {
+            let mut follow = writing();
+            let out = follow.written(&write(G, ID, "hi"), Err(error));
+            assert_eq!((out.line, out.log), (Some(wrote_line(ID, false)), vec![said.to_string()]));
+            assert_eq!(follow.polls(), None);
+            assert_eq!(follow.typed(enter(G, ENTER_ID), now).line, Some(wrote_line(ENTER_ID, false)));
+            assert!(follow.written(&enter(G, ENTER_ID), Err(error)).log.is_empty());
+        }
+        // A failed write leaves it on, and says so.
+        let mut follow = writing();
+        let out = follow.written(&write(G, ID, "hi"), Err(TabError::Failed));
+        assert_eq!((out.line, out.log), (Some(wrote_line(ID, false)), vec!["tabs: Ghostty write failed".to_string()]));
+        let out = follow.written(&enter(G, ENTER_ID), Err(TabError::Failed));
+        assert_eq!(out.log, ["tabs: Ghostty enter failed"]);
+        assert_eq!(follow.typed(enter(G, ENTER_ID), now).line, None);
+        assert_eq!(follow.next_typing(now), Some(Next::Run(enter(G, ENTER_ID))));
+    }
+
+    #[test]
+    fn a_typing_that_waited_past_500_ms_is_dropped_unrun_with_one_fixed_line() {
+        assert_eq!(LATE_WRITE, Duration::from_millis(500));
+        let came = Instant::now();
+        let mut follow = writing();
+        follow.typed(write(G, ID, "hi"), came);
+        assert_eq!(follow.next_typing(came + LATE_WRITE), Some(Next::Run(write(G, ID, "hi"))));
+        // Each one that waited longer, behind macOS's consent prompt for another app, is dropped with its own line.
+        follow.typed(write(G, ID, "hi"), came);
+        follow.typed(enter(G, ENTER_ID), came);
+        let late = |line: &str, log: &str| Some(Next::Refused { line: line.into(), log: Some(log.into()) });
+        assert_eq!(
+            follow.next_typing(came + LATE_WRITE + Duration::from_millis(1)),
+            late(&wrote_line(ID, false), "tabs: Ghostty write dropped late")
+        );
+        assert_eq!(
+            follow.next_typing(came + Duration::from_secs(60)),
+            late(&wrote_line(ENTER_ID, false), "tabs: Ghostty enter dropped late")
+        );
+        assert_eq!(follow.next_typing(came + Duration::from_secs(60)), None);
+        // One that came after them runs: only the prompt held the thread.
+        let later = came + Duration::from_secs(60);
+        follow.typed(enter(G, ENTER_ID), later);
+        assert_eq!(follow.next_typing(later), Some(Next::Run(enter(G, ENTER_ID))));
+    }
+
+    #[test]
+    fn typings_run_in_order_and_a_select_keeps_its_own_slot() {
+        let now = Instant::now();
+        let mut follow = writing();
+        follow.typed(write(G, ID, "one"), now);
+        follow.select(G, OTHER.into(), false, now);
+        follow.typed(enter(G, ENTER_ID), now);
+        // The newest select replaces the one waiting, and no typing.
+        follow.select(G, TTY.into(), true, now);
+        follow.typed(write(G, ENTER_ID, "two"), now);
+        assert_eq!(follow.next_typing(now), Some(Next::Run(write(G, ID, "one"))));
+        assert_eq!(follow.next_select(now), select(G, TTY, true, true));
+        assert_eq!(follow.next_select(now), None);
+        // Taking the select left the typings as they were.
+        assert_eq!(follow.next_typing(now), Some(Next::Run(enter(G, ENTER_ID))));
+        assert_eq!(follow.next_typing(now), Some(Next::Run(write(G, ENTER_ID, "two"))));
+        assert_eq!(follow.next_typing(now), None);
+    }
+
+    #[test]
+    fn a_full_queue_answers_no_at_once() {
+        assert_eq!(TYPING_QUEUED, 8);
+        let now = Instant::now();
+        let mut follow = writing();
+        let ids: Vec<String> = (0..10).map(|n| format!("{n:016x}")).collect();
+        for id in &ids[..8] {
+            let out = follow.typed(write(G, id, "hi"), now);
+            assert_eq!((out.line, out.log), (None, vec![]));
+        }
+        // It says so in one fixed line.
+        let out = follow.typed(write(G, &ids[8], "hi"), now);
+        assert_eq!(
+            (out.line, out.log),
+            (Some(wrote_line(&ids[8], false)), vec!["tabs: Ghostty write refused · queue full".to_string()])
+        );
+        // One taken leaves room for one.
+        assert_eq!(follow.next_typing(now), Some(Next::Run(write(G, &ids[0], "hi"))));
+        assert_eq!(follow.typed(enter(G, &ids[9]), now).line, None);
+        // The refused one never runs.
+        for id in &ids[1..8] {
+            assert_eq!(follow.next_typing(now), Some(Next::Run(write(G, id, "hi"))));
+        }
+        assert_eq!(follow.next_typing(now), Some(Next::Run(enter(G, &ids[9]))));
+        assert_eq!(follow.next_typing(now), None);
+    }
+
+    #[test]
+    fn a_new_watch_drops_the_typings_waiting() {
+        let now = Instant::now();
+        // Their answer would go to a watch that is gone.
+        let mut follow = writing();
+        follow.typed(write(G, ID, "hi"), now);
+        follow.typed(enter(G, ENTER_ID), now);
+        follow.watching(true);
+        assert_eq!(follow.next_typing(now), None);
+        follow.typed(write(G, ID, "hi"), now);
+        follow.watching(false);
+        assert_eq!(follow.next_typing(now), None);
+        // The next watch's typings are queued afresh.
+        follow.watching(true);
+        follow.attached(true);
+        follow.typed(write(G, ID, "hi"), now);
+        assert_eq!(follow.next_typing(now), Some(Next::Run(write(G, ID, "hi"))));
+    }
+
+    #[test]
+    fn a_stopped_watchs_typing_is_answered_no_and_never_runs() {
+        let now = Instant::now();
+        // A stopped watch's child may still print a line before it ends.
+        let mut follow = writing();
+        follow.watching(false);
+        assert_eq!(follow.typed(write(G, ID, "hi"), now).line, Some(wrote_line(ID, false)));
+        assert_eq!(follow.typed(enter(G, ENTER_ID), now).line, Some(wrote_line(ENTER_ID, false)));
+        assert_eq!(follow.next_typing(now), None);
+        // The next watch's typings run.
+        follow.watching(true);
+        assert_eq!(follow.typed(write(G, ID, "hi"), now).line, None);
+        assert_eq!(follow.next_typing(now), Some(Next::Run(write(G, ID, "hi"))));
+    }
+
+    #[test]
+    fn done_answers_ok_and_no_session_answers_no() {
+        let mut follow = writing();
+        for typing in [write(G, ID, "hi"), enter(G, ENTER_ID)] {
+            let out = follow.written(&typing, Ok(Written::Done));
+            assert_eq!((out.line, out.log), (Some(wrote_line(typing.id(), true)), vec![]));
+            let out = follow.written(&typing, Ok(Written::NoSession));
+            assert_eq!((out.line, out.log), (Some(wrote_line(typing.id(), false)), vec![]));
+        }
+        // No session of the tty leaves its app on.
+        assert_eq!(follow.polls(), Some(G));
+        assert_eq!(follow.typed(write(G, ID, "hi"), Instant::now()).line, None);
+    }
+
+    #[test]
     fn no_log_line_holds_a_tty() {
         let now = Instant::now();
         let mut follow = polling();
@@ -816,9 +1361,33 @@ mod tests {
             follow.next_select(now);
             said.extend(follow.selected(TabApp::Ghostty, done).log);
         }
-        assert_eq!(said.len(), 6, "{said:?}");
+        // Nor the spoken words: each typing dropped late, and a write that turned its app off.
+        let words = "the words spoken";
+        let mut follow = writing();
+        follow.typed(write(G, ID, words), now);
+        follow.typed(enter(G, ENTER_ID), now);
+        for _ in 0..2 {
+            match follow.next_typing(now + Duration::from_secs(1)) {
+                Some(Next::Refused { log: Some(log), .. }) => said.push(log),
+                other => panic!("{other:?}"),
+            }
+        }
+        for done in [Ok(Written::Done), Ok(Written::NoSession), Err(TabError::Failed), Err(TabError::Denied)] {
+            said.extend(follow.written(&write(G, ID, words), done).log);
+        }
+        // A typing for an app that has not answered yet, and one past a full queue.
+        let mut follow = polling();
+        follow.typed(write(G, ID, words), now);
+        match follow.next_typing(now) {
+            Some(Next::Refused { log: Some(log), .. }) => said.push(log),
+            other => panic!("{other:?}"),
+        }
+        for _ in 0..=TYPING_QUEUED {
+            said.extend(follow.typed(write(G, ID, words), now).log);
+        }
+        assert_eq!(said.len(), 12, "{said:?}");
         for line in said {
-            assert!(!line.contains("ttys") && !line.contains("/dev"), "{line}");
+            assert!(!line.contains("ttys") && !line.contains("/dev") && !line.contains("words"), "{line}");
         }
     }
 
@@ -829,6 +1398,9 @@ mod tests {
             assert_eq!(NoTabs.selected_tty(app), Ok(None));
             assert_eq!(NoTabs.select_tty(app, TTY, true), Ok(Selected::NoTab));
             assert_eq!(NoTabs.focus_tty(app, TTY), Ok(Selected::NoTab));
+            // Scripts with no write handler write nothing.
+            assert_eq!(NoTabs.write_text(app, TTY, "hi"), Ok(Written::NoSession));
+            assert_eq!(NoTabs.send_enter(app, TTY), Ok(Written::NoSession));
         }
     }
 

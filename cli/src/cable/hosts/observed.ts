@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { basename, dirname, join, resolve } from 'node:path'
 // Types only: the devices process must not load core code.
 import type { ObservedAsked, ObservedEvent, ObservedHookEvent } from '../../core/observedHook.js'
+import type { TrustedCodexHome } from '../../lib/codexProfiles.js'
 import { truncateUtf8 } from '../../lib/deviceRecentTrim.js'
 import type { DialOtherApp } from '../../lib/dialUsageContract.js'
 import type { OpenSessions, SessionOwner, SessionRows } from '../../lib/sessionSearch/external.js'
@@ -21,8 +22,9 @@ import { MAX_TEXT } from './orca.js'
 import { FRESH_WITHIN_MS, type Nested, type NestedLookup, type NestedPlace, type OuterLookup } from './outer.js'
 import type { SessionRecord } from './record.js'
 import { parentChain, type ProcessName, scanLearnsApps } from './scannedApp.js'
-import { isTabApp } from './tabs.js'
-import type { Caps, HostAgent, HostAgentState, HostSource, Nest, PaneSwitch, SendResult } from './types.js'
+import { isTabApp, type TabTty } from './tabs.js'
+import { type Caps, type HostAgent, type HostAgentState, type HostSource, isTabsReason, type Nest, type PaneSwitch, type SendResult,
+  type TabsReason } from './types.js'
 
 export { detectHost, hostDisplayName } from './hostDetect.js'
 
@@ -145,9 +147,9 @@ export interface ObservedDeps {
    *  voice start alone: a hook's transcript path names a session's home only when its projects folder is one. Absent,
    *  none does. */
   claudeRoots?(): readonly string[]
-  /** The tty of a process in a tab app (tabs.ts readTty), rejecting when `ps` could not be read; absent (off macOS), no
-   *  agent has a tab. */
-  tty?(pid: number): Promise<string | undefined>
+  /** The tty of a process in a tab app and that process's start (tabs.ts readTabTty), rejecting when `ps` could not be
+   *  read; absent (off macOS), no agent has a tab. */
+  tty?(pid: number): Promise<TabTty | undefined>
   /** The host that made the pseudo-terminal a process runs on (scannedApp.ts readPtyOwner, on Windows
    *  readWindowsPtyOwner), rejecting when the process table could not be read. Absent, no terminal's or multiplexer's
    *  pane is any agent's own. */
@@ -213,23 +215,28 @@ export interface ObservedActions {
   open(agentId: string, target: OpenTarget): Promise<boolean>
   /** Codex's own queue (codexQueue.ts): a thread runs its words as its next turn, and no terminal is typed into. */
   codexQueue: Pick<CodexQueue, 'can' | 'send'>
-  /** The Codex home Harness reads (env.CODEX_HOME): `codex queue` loads its config, so a hook's path never chooses it. */
-  codexHome: string
+  /** The Codex homes Harness trusts, asked at each look, deepest first (lib/codexProfiles.ts trustedCodexHomes): its own
+   *  (env.CODEX_HOME), the ones it adopted and the profiles the person linked. `codex queue` loads a home's config, so a
+   *  hook's path never names one: it only picks among these. */
+  codexHomes(): readonly TrustedCodexHome[]
   /** dirname(CLAUDE_PROJECTS_DIR): the home of a session whose transcript path names none in Claude Code's own folders. */
   claudeHome: string
   /** devices/dialSkill.ts claudePluginState: read only at a voice start, never for caps. */
   claudePluginState(settingsPath: string): 'on' | 'off' | 'unknown'
   /** The route (`codex`, `mod`, or the adapter that typed, said by its fixed id) or the refusal, the adapter that
-   *  refused in its own sentence, and a failed queue's reason and which `codex` ran. Fixed words or an adapter only: a
-   *  string from a hook, a pane's id, a binary's path, cannot reach the log line. */
+   *  refused in its own sentence or did not send for a reason of the list, and a failed queue's reason and which
+   *  `codex` ran. Fixed words or an adapter only: a string from a hook, a pane's id, a binary's path, cannot reach the
+   *  log line. */
   count(what: 'mod' | 'waiting' | 'busy' | 'pending' | 'too-long' | 'no-answer' | 'codex' | 'codex-timeout'
     | 'codex-failed (refused)' | `codex-failed (${Exclude<CodexQueueFailure, 'refused'>} · ${CodexRan})`
-    | HostAdapter | { refused: HostAdapter }): void
+    | HostAdapter | { refused: HostAdapter } | { notSent: HostAdapter; reason: TabsReason }): void
 }
 
-/** What a count says in the log: a fixed word, the adapter that typed by its id, or `refused (<its id>)`. */
+/** What a count says in the log: a fixed word, the adapter that typed by its id, `refused (<its id>)`, or
+ *  `refused (<its id> · <reason>)`. */
 export function countWord(what: Parameters<ObservedActions['count']>[0]): string {
   if (typeof what === 'string') return what
+  if ('notSent' in what) return `refused (${what.notSent.id} · ${what.reason})`
   return 'refused' in what ? `refused (${what.refused.id})` : what.id
 }
 
@@ -275,9 +282,14 @@ interface Entry {
   hostSession?: string
   /** Every pane an adapter knows it by, from its latest event and its tty, in the adapters' order. */
   panes: readonly Located[]
-  /** The process its tty was read for, its latest in a tab app, and that tty once read. */
+  /** The process its tty was read for, its latest in a tab app, and that tty once read, with that process's start from
+   *  the same read: a tty another way gave (its multiplexer client's) has none. */
   ttyPid?: number
   tty?: string
+  ttyStart?: string
+  /** The read of ttyPid answered, a tty or none: until then, and once it failed, the agent may be on any tty of its
+   *  app's tabs (othersOnTty). */
+  ttyRead?: true
   /** When the read of ttyPid began, once that read failed. */
   ttyFailedAt?: number
   /** The caller the host that made its terminal was read for, that host once read (null: none the dial types into), and
@@ -451,7 +463,7 @@ export class ObservedSource implements HostSource {
 
   /** Whether a route takes the agent's words: a pane whose app types, its mod, or Codex's queue. */
   private routed(e: Entry, actions: ObservedActions): boolean {
-    return !!this.first(e, words) || this.modReady(e, actions) || this.queueable(e, actions)
+    return !!this.first(e, words) || this.modReady(e, actions) || this.queueHome(e, actions) !== undefined
   }
 
   /** Only Claude Code runs the mod; another engine's session id is no poll. */
@@ -465,12 +477,17 @@ export class ObservedSource implements HostSource {
   }
 
   /**
-   * Whether Codex's queue takes a live session's words: a Codex session whose rollout is in Harness's own Codex home, its
-   * session id the thread id. Whether codex is there is asked last: it looks for the binary.
+   * The Codex home a live session's words are queued under, when Codex's queue takes them: a Codex session whose rollout
+   * is in a home Harness trusts, its session id the thread id. The home comes only from Harness's lists, and the hook's
+   * path only picks among them: the first listed whose sessions folder holds the rollout, the deepest (a home may lie
+   * inside another's sessions folder), and the spelling that matched the one codex runs under. Whether codex is there is
+   * asked last: it looks for the binary.
    */
-  private queueable(e: Entry, actions: ObservedActions): boolean {
-    return e.agent.engine === 'codex' && !!e.transcriptPath && within(join(actions.codexHome, 'sessions'), e.transcriptPath)
-      && CODEX_THREAD.test(e.agent.sessionId!) && actions.codexQueue.can(this.inCodexApp(e))
+  private queueHome(e: Entry, actions: ObservedActions): string | undefined {
+    const rollout = e.transcriptPath
+    if (e.agent.engine !== 'codex' || !rollout || !CODEX_THREAD.test(e.agent.sessionId!)) return undefined
+    const home = actions.codexHomes().find(({ sessions }) => within(sessions, rollout))?.home
+    return home !== undefined && actions.codexQueue.can(this.inCodexApp(e)) ? home : undefined
   }
 
   /**
@@ -482,7 +499,7 @@ export class ObservedSource implements HostSource {
   }
 
   /**
-   * The dial's words for the agent, and nothing is held here. A Codex session's in Harness's own Codex home go to Codex's
+   * The dial's words for the agent, and nothing is held here. A Codex session's in a Codex home Harness trusts go to Codex's
    * own queue first, in every state: a queued message types nothing and answers no approval, and runs once the turn is over
    * (docs/specs/2026-11-15-device-codex.md, the spike). Claude Code's go to its mod in every state, as a Harness agent's
    * are (lib/sessionInput.ts), whose `$.prompt.submit` types nothing and starts them once the turn is over. Else, and
@@ -508,10 +525,11 @@ export class ObservedSource implements HostSource {
     const waiting = (): SendResult => refuse('waiting', `${name} is waiting for your answer in ${agentPlaceName(e.agent)}.`)
     const busy = (): SendResult => refuse('busy', `${name} is busy. Say it when it is done.`)
     const typer = this.first(e, words)
-    if (this.queueable(e, actions)) {
+    const home = this.queueHome(e, actions)
+    if (home !== undefined) {
       // Recorded first: an idle Codex starts the queued turn, and its hook can be heard, before `codex queue` has exited.
       const record = this.dialPrompt(e)
-      const queued = await actions.codexQueue.send(e.agent.sessionId!, text, this.inCodexApp(e))
+      const queued = await actions.codexQueue.send(e.agent.sessionId!, text, this.inCodexApp(e), home)
       if (queued.outcome === 'queued') {
         actions.count('codex')
         return { ok: true }
@@ -543,11 +561,13 @@ export class ObservedSource implements HostSource {
       if (!typer) return refuse('no-answer', `${name} is not listening yet. Try again in a moment.`)
     }
     // In that wait the session may also have ended, moved to another terminal or gone: the old one holds something else.
-    // Each event names its panes afresh, so the same pane is known by its adapter and id.
+    // Each event names its panes afresh, so the same pane is known by its adapter and id, and a tab's by its proof too:
+    // another process on the same tty has the same id.
     if (!typer) return noAnswer()
     const there = (): boolean => {
       const still = this.first(e, words)
       return this.live(e) && still?.pane.adapter === typer.pane.adapter && still.pane.id === typer.pane.id
+        && still.pane.proof?.pid === typer.pane.proof?.pid && still.pane.proof?.start === typer.pane.proof?.start
     }
     if (!there()) return noAnswer()
     // A prompt open in the terminal takes what is typed as its answer: Enter there would allow what the dial only shows,
@@ -567,8 +587,15 @@ export class ObservedSource implements HostSource {
       this.forgetDialPrompt(e, record)
       if (typed === 'busy') return busy()
       if (typed === 'waiting') return waiting()
-      // `false`, or an answer outside the type, says nothing: a refusal is read only off an object that holds one.
-      if (!typed || typeof typed !== 'object' || typeof typed.refused !== 'string') return noAnswer()
+      // `false`, or an answer outside the type, says nothing: a refusal, or a reason not to send, is read only off an
+      // object that holds one, and a reason only when it is a word of the list, so fixed words alone reach the log.
+      if (!typed || typeof typed !== 'object') return noAnswer()
+      if ('notSent' in typed) {
+        if (!isTabsReason(typed.notSent)) return noAnswer()
+        actions.count({ notSent: typer.adapter, reason: typed.notSent })
+        return { ok: false, reason: `${name} did not answer.` }
+      }
+      if (typeof typed.refused !== 'string') return noAnswer()
       actions.count({ refused: typer.adapter })
       return { ok: false, reason: typed.refused }
     }
@@ -819,13 +846,16 @@ export class ObservedSource implements HostSource {
     })
   }
 
-  /** Where it runs, as its adapters read it. A Codex server's session names no process: the server is under whichever
-   *  TUI started it, and its client was found by its folder, a place to show, never one whose words a process proves
-   *  (askServed). */
+  /** Where it runs, as its adapters read it: a proof only where its own tty and its process's start were read. A Codex
+   *  server's session names no process, by pid or proof: the server is under whichever TUI started it, and its client
+   *  was found by its folder, a place to show, never one whose words a process proves (askServed). A start read for the
+   *  TUI that ran it before its daemon did is that TUI's. */
   private placeOf(entry: Entry): Place {
     const hints = entry.paired ? { HC_TERMINAL_ID: entry.paired.address } : entry.hints
-    return { host: entry.agent.host, app: entry.agent.app, hints, tty: entry.tty, hostSession: entry.hostSession,
-      pid: this.servedBy(entry) ? undefined : entry.caller ?? entry.pid, sessionId: entry.agent.sessionId,
+    const served = this.servedBy(entry)
+    const proof = entry.ttyStart === undefined || served ? undefined : { pid: entry.ttyPid!, start: entry.ttyStart }
+    return { host: entry.agent.host, app: entry.agent.app, hints, tty: entry.tty, proof, hostSession: entry.hostSession,
+      pid: served ? undefined : entry.caller ?? entry.pid, sessionId: entry.agent.sessionId,
       engine: entry.agent.engine, cwd: entry.agent.cwd, outer: entry.outer, ptyOwner: entry.ptyOwner }
   }
 
@@ -837,6 +867,19 @@ export class ObservedSource implements HostSource {
       if (!found || e.agent.lastActivityAt > found.agent.lastActivityAt) found = e
     }
     return found && { ...found.agent }
+  }
+
+  /** Whether another live agent reads that tty of [app] than the one in process [pid]: one whose tty was read for
+   *  another process, a nested one, whose tty is its client's tab, or one in that app whose tty read has not answered or
+   *  failed: it may be on any of the app's tabs. Words typed there could reach either. A codex exec takes its app from
+   *  the environment of the agent that ran it, so an unread one in another app is on none of these tabs, and one failed
+   *  read there does not refuse every tab here. */
+  othersOnTty(app: string, tty: string, pid: number): boolean {
+    for (const e of this.entries.values()) {
+      if (e.ttyPid === pid || !this.live(e)) continue
+      if (e.tty === tty || (e.ttyPid !== undefined && !e.ttyRead && e.agent.app === app)) return true
+    }
+    return false
   }
 
   /** The live agent with that adapter's pane of that id: of two, the one heard from last. A held pane is not its own, as
@@ -919,13 +962,17 @@ export class ObservedSource implements HostSource {
     if (entry.ttyPid === pid && (entry.ttyFailedAt === undefined || now - entry.ttyFailedAt < TTY_RETRY_MS)) return
     entry.ttyPid = undefined
     entry.tty = undefined
+    entry.ttyStart = undefined
+    entry.ttyRead = undefined
     entry.ttyFailedAt = undefined
     this.locate(entry)
     if (!this.deps.tty || !isTabApp(entry.agent.app)) return
     entry.ttyPid = pid
-    this.deps.tty(pid).then((tty) => {
+    this.deps.tty(pid).then((read) => {
       if (entry.ttyPid !== pid) return
-      entry.tty = tty
+      entry.tty = read?.tty
+      entry.ttyStart = read?.start
+      entry.ttyRead = true
       this.locate(entry)
     }, (error) => {
       if (entry.ttyPid === pid) entry.ttyFailedAt = now
@@ -1059,6 +1106,7 @@ export class ObservedSource implements HostSource {
     entry.ttyPid = undefined
     entry.ttyFailedAt = undefined
     entry.tty = entry.outer?.tty
+    entry.ttyStart = undefined
     void answer.then((place) => this.landOuter(entry, ask, place.nest, place))
     return true
   }
@@ -1074,6 +1122,7 @@ export class ObservedSource implements HostSource {
       entry.outer = place.app ? { app: place.app, tty: place.tty, pid: place.pid } : undefined
       entry.outerPid = !place.app && clientPid(place.pid) ? place.pid : undefined
       entry.tty = entry.outer?.tty
+      entry.ttyStart = undefined
     } else if (entry.agent.nest === nest && !entry.agent.appPending) return
     if (nest) entry.agent.nest = nest
     else delete entry.agent.nest
@@ -1748,6 +1797,7 @@ export class ObservedSource implements HostSource {
     entry.scanPlaced = true
     entry.placed = place.pane
     entry.tty = place.tty
+    entry.ttyStart = undefined
     entry.agent.app = place.app
     delete entry.agent.appPending
     entry.bundle = APP_BUNDLES[place.app]

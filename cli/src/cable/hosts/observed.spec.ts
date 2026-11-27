@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ObservedAsked, ObservedHookEvent } from '../../core/observedHook.js'
 import type { RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { STOP_HOOK_GRACE_MS } from '../../core/turns/turnHooks.js'
+import type { TrustedCodexHome } from '../../lib/codexProfiles.js'
 import type { ProcessRow } from '../../lib/processTable.js'
 import { OpenSessions, SessionRows } from '../../lib/sessionSearch/external.js'
 import { claudeProvider } from '../../lib/sessionSearch/externals/claude.js'
@@ -29,7 +30,9 @@ import { createOrcaChatAdapter } from './orcaChat.js'
 import { type Fresh, FRESH_WITHIN_MS, type Nested, type NestedPlace, type OuterLookup } from './outer.js'
 import { appRoots, learnApps, type ProcessName, scannedApps } from './scannedApp.js'
 import { pagesOf } from './select.js'
-import { createTabsAdapter, type TabApp } from './tabs.js'
+import { createTabsAdapter, type TabApp, type TabTty } from './tabs.js'
+import type { TabsLine } from './tabsLines.js'
+import { tabsTyping } from './tabsType.js'
 import { createTmuxAdapter } from './tmux.js'
 import type { HostAgent, Nest, PaneSwitch, TypeResult } from './types.js'
 import { createVscodeAdapter, createVscodeClientAdapter } from './vscode.js'
@@ -1539,6 +1542,9 @@ interface Fakes extends Omit<ObservedActions, 'adapters'> {
 const counted = (count: { mock: { calls: Array<Parameters<ObservedActions['count']>> } }): string[] =>
   count.mock.calls.map(([what]) => countWord(what))
 
+/** Trusted Codex homes in the order given, each with its sessions folder, as trustedCodexHomes lists them. */
+const trusted = (...homes: string[]): TrustedCodexHome[] => homes.map((home) => ({ home, sessions: `${home}/sessions` }))
+
 /** Routes that answer as told, recording what each was handed. The adapters are the real ones for that platform, their
  *  verbs the fakes, and any command of their own goes to an inert runner. */
 function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'darwin') {
@@ -1573,9 +1579,10 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
     // Codex is there, and queues every message.
     codexQueue: {
       can: vi.fn((_isApp: boolean) => true),
-      send: vi.fn(async (_threadId: string, _text: string, _isApp: boolean): Promise<CodexQueueResult> => ({ outcome: 'queued' })),
+      send: vi.fn(async (_threadId: string, _text: string, _isApp: boolean, _home: string): Promise<CodexQueueResult> => ({ outcome: 'queued' })),
     },
-    codexHome: '/home/u/.codex',
+    // Harness trusts its own Codex home alone.
+    codexHomes: (): readonly TrustedCodexHome[] => trusted('/home/u/.codex'),
     claudeHome: '/home/u/.claude',
     claudePluginState: vi.fn((settingsPath: string) => plugin.get(settingsPath) ?? 'unknown'),
     count: vi.fn((_what: Parameters<ObservedActions['count']>[0]) => {}),
@@ -2101,6 +2108,117 @@ describe('ObservedSource actions', () => {
     expect(countWord('codex-failed (exit 1 · path)')).toBe('codex-failed (exit 1 · path)')
     expect(countWord(orca)).toBe('orca')
     expect(countWord({ refused: orca })).toBe('refused (orca)')
+  })
+
+  describe('a terminal tab\'s words not sent, by reason', () => {
+    /** An adapter by the tab typer's id, whose pane is its hint's, and whose `type` answers [typed]. */
+    const tabsTyper = (typed: unknown) => {
+      const type = vi.fn(async () => typed as TypeResult)
+      const adapter: HostAdapter = { id: 'tabs', tap: 'after', canFocus: () => false, focus: async () => false, type,
+        paneOf: (place) => (place.hints.TAB_PANE ? { adapter: 'tabs', id: place.hints.TAB_PANE } : undefined) }
+      const { actions } = fakeActions()
+      const t = setup({ actions: { ...actions, adapters: [adapter] } })
+      return { ...t, actions, type }
+    }
+    const inTab = { hostHints: { TAB_PANE: 'iterm:/dev/ttys003' } }
+
+    it('a reason of the list says did not answer, counted once as refused (tabs · <reason>), and its prompt record is forgotten', async () => {
+      const t = tabsTyper({ notSent: 'shared' })
+      t.src.ingest(t.ev('turn-stop', inTab))
+      expect(await t.src.send(t.src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+      expect(counted(t.actions.count)).toEqual(['refused (tabs · shared)'])
+      expect(t.src.ingest(t.ev('turn-start', inTab))).toBe('person')
+    })
+
+    it('a reason outside the list counts no-answer only: no word of an adapter\'s reaches the log', async () => {
+      const t = tabsTyper({ notSent: 'oops' })
+      t.src.ingest(t.ev('turn-stop', inTab))
+      expect(await t.src.send(t.src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+      expect(counted(t.actions.count)).toEqual(['no-answer'])
+    })
+
+    // Decision 4: an engine whose turn's end no hook tells is at its prompt only once a hook said so.
+    it('an engine other than Claude Code, Codex or cursor-agent heard at its turn-start, and nothing after, is busy: no typer is asked', async () => {
+      const t = tabsTyper(true)
+      t.src.ingest(t.ev('turn-start', { ...inTab, engine: 'opencode' }))
+      expect(await t.src.send(t.src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj is busy. Say it when it is done.' })
+      expect(t.type).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('othersOnTty', () => {
+    const TTY = '/dev/ttys003'
+    const inIterm = { hostHints: { TERM_PROGRAM: 'iTerm.app' } }
+    const inGhostty = { hostHints: { TERM_PROGRAM: 'ghostty' } }
+    /** A source whose every tty read answers [TTY], and whose tmux events sit in an iTerm2 tab of [TTY]. */
+    const onTty = () => setup({
+      tty: vi.fn(async (_pid: number): Promise<TabTty> => ({ tty: TTY })),
+      outer: vi.fn((hints: Readonly<Record<string, string>>) =>
+        (hints.TMUX_PANE ? Promise.resolve<OuterAnswer>({ app: 'iterm', tty: TTY, pid: 4300 }) : undefined)),
+    })
+
+    it('another live agent on that tty is there; the agent alone is not', async () => {
+      const t = onTty()
+      t.src.ingest(t.ev('session-start', { ...inIterm, sessionId: 'a', callerPid: 4101 }))
+      await flushed()
+      expect(t.src.othersOnTty('iterm', TTY, 4101)).toBe(false)
+      t.src.ingest(t.ev('session-start', { ...inIterm, sessionId: 'b', callerPid: 4102 }))
+      await flushed()
+      expect(t.src.othersOnTty('iterm', TTY, 4101)).toBe(true)
+      expect(t.src.othersOnTty('iterm', '/dev/ttys004', 4101)).toBe(false)
+    })
+
+    it('an ended one does not count', async () => {
+      const t = onTty()
+      t.src.ingest(t.ev('session-start', { ...inIterm, sessionId: 'a', callerPid: 4101 }))
+      t.src.ingest(t.ev('session-start', { ...inIterm, sessionId: 'b', callerPid: 4102 }))
+      await flushed()
+      t.src.ingest(t.ev('session-end', { ...inIterm, sessionId: 'b', callerPid: 4102 }))
+      expect(t.src.othersOnTty('iterm', TTY, 4101)).toBe(false)
+    })
+
+    it('a nested one whose client\'s tab is that tty counts', async () => {
+      const t = onTty()
+      t.src.ingest(t.ev('session-start', { ...inIterm, sessionId: 'a', callerPid: 4101 }))
+      t.src.ingest(t.ev('session-start', { sessionId: 'b', callerPid: 4102, hostHints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux' } }))
+      await flushed()
+      expect(t.src.tabTty(t.src.list().find((a) => a.sessionId === 'b')!.id)).toBe(TTY)
+      expect(t.src.othersOnTty('iterm', TTY, 4101)).toBe(true)
+    })
+
+    // A codex exec Claude Code runs reads Claude's tty: until Claude's own read answers, Claude may be on it.
+    it('one in the same tab app whose tty read failed, or has not answered, may be on that tty', async () => {
+      const reads = [(): Promise<TabTty> => Promise.reject(new Error('ps')), (): Promise<TabTty> => new Promise(() => {})]
+      for (const claudeRead of reads) {
+        const t = setup({ tty: vi.fn((pid: number) => (pid === 4101 ? claudeRead() : Promise.resolve({ tty: TTY }))) })
+        t.src.ingest(t.ev('session-start', { ...inGhostty, sessionId: 'a', callerPid: 4101 }))
+        t.src.ingest(t.ev('session-start', { ...inGhostty, engine: 'codex', sessionId: 'b', callerPid: 4102 }))
+        await flushed()
+        expect(t.src.othersOnTty('ghostty', TTY, 4102)).toBe(true)
+      }
+    })
+
+    // One read failed in another tab app is no reason to refuse every Ghostty tab: a codex exec gets its app from
+    // Claude's own environment, so the two are always in one app.
+    it('one in another tab app whose tty read failed, or has not answered, is on no tab of this app', async () => {
+      const reads = [(): Promise<TabTty> => Promise.reject(new Error('ps')), (): Promise<TabTty> => new Promise(() => {})]
+      for (const itermRead of reads) {
+        const t = setup({ tty: vi.fn((pid: number) => (pid === 4101 ? itermRead() : Promise.resolve({ tty: TTY }))) })
+        t.src.ingest(t.ev('session-start', { ...inIterm, sessionId: 'a', callerPid: 4101 }))
+        t.src.ingest(t.ev('session-start', { ...inGhostty, engine: 'codex', sessionId: 'b', callerPid: 4102 }))
+        await flushed()
+        expect(t.src.othersOnTty('ghostty', TTY, 4102)).toBe(false)
+        expect(t.src.othersOnTty('iterm', TTY, 4102)).toBe(true)
+      }
+    })
+
+    it('one whose tty read answered none is on no tty', async () => {
+      const t = setup({ tty: vi.fn(async (pid: number) => (pid === 4101 ? undefined : { tty: TTY })) })
+      t.src.ingest(t.ev('session-start', { ...inIterm, sessionId: 'a', callerPid: 4101 }))
+      t.src.ingest(t.ev('session-start', { ...inIterm, engine: 'codex', sessionId: 'b', callerPid: 4102 }))
+      await flushed()
+      expect(t.src.othersOnTty('iterm', TTY, 4102)).toBe(false)
+    })
   })
 
   it('a text over MAX_TEXT characters is refused before any route', async () => {
@@ -2851,7 +2969,7 @@ describe('ObservedSource and codex queue', () => {
         const { src, actions } = given(session, state)
         expect(src.list()[0].state).toBe(state)
         expect(await src.send(src.list()[0], 'next')).toEqual({ ok: true })
-        expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', false]])
+        expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', false, '/home/u/.codex']])
         expect(actions.orcaSend).not.toHaveBeenCalled()
         expect(actions.toMod).not.toHaveBeenCalled()
         expect(actions.count.mock.calls).toEqual([['codex']])
@@ -2995,7 +3113,69 @@ describe('ObservedSource and codex queue', () => {
     await src.scanOpen()
     expect(src.capabilities(src.list()[0])).toMatchObject({ voice: true })
     expect(await src.send(src.list()[0], 'next')).toEqual({ ok: true })
-    expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', false]])
+    expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', false, '/home/u/.codex']])
+  })
+
+  // `codex queue` loads the home's config.toml: the home is one of Harness's own lists (devices.ts), and a hook's path
+  // only picks among them.
+  describe('the home the queue runs under', () => {
+    const rolloutIn = (home: string) => `${home}/sessions/2026/11/15/rollout-2026-11-15T16-07-59-${THREAD}.jsonl`
+    /** A Codex session in Ghostty whose rollout is [transcriptPath], with Harness trusting [homes]. */
+    const under = (homes: readonly string[], transcriptPath: string) => {
+      const { actions } = fakeActions({ codexHomes: () => trusted(...homes) })
+      const t = setup({ actions })
+      t.src.ingest(t.ev('session-start', { ...cx, transcriptPath }))
+      return { ...t, actions }
+    }
+    // The daemon's, an adopted one, a linked profile as listed and its real path.
+    const HOMES = ['/h/own', '/h/adopted', '/h/linked', '/real/linked']
+
+    it.each(['/h/own', '/h/adopted', '/h/linked', '/real/linked'])('a rollout under %s/sessions queues under that home', async (home) => {
+      const { src, actions } = under(HOMES, rolloutIn(home))
+      expect(src.capabilities(src.list()[0]).voice).toBe(true)
+      expect(await src.send(src.list()[0], 'next')).toEqual({ ok: true })
+      expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', false, home]])
+    })
+
+    it('a rollout in a home only its hook names is not queue-able: no queue run, and no voice with no pane that types', async () => {
+      const { src, actions } = under(HOMES, rolloutIn('/h/hooked'))
+      expect(src.capabilities(src.list()[0]).voice).toBe(false)
+      expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+      expect(actions.codexQueue.send).not.toHaveBeenCalled()
+      expect(actions.codexQueue.can).not.toHaveBeenCalled()
+    })
+
+    // A home holds a rollout by whole parts of its resolved path.
+    it.each([['climbs out of a trusted home by ..', '/h/own/sessions/../../hooked'], ['sits in a look-alike of a trusted home', '/h/own2']])(
+      'a rollout that %s is not queue-able', async (_, home) => {
+        const { src, actions } = under(HOMES, rolloutIn(home))
+        expect(src.capabilities(src.list()[0]).voice).toBe(false)
+        expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+        expect(actions.codexQueue.send).not.toHaveBeenCalled()
+      })
+
+    // trustedCodexHomes lists the deepest first (lib/codexProfiles.ts): a home inside another's sessions folder is the session's.
+    it('of two trusted homes holding the rollout, the first listed is the one it runs under', async () => {
+      for (const homes of [['/h/a', '/h/a/sessions/b'], ['/h/a/sessions/b', '/h/a']]) {
+        const { src, actions } = under(homes, rolloutIn('/h/a/sessions/b'))
+        expect(await src.send(src.list()[0], 'next')).toEqual({ ok: true })
+        expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', false, homes[0]]])
+      }
+    })
+
+    // What codexHomes says counts at once, a home added or dropped: its holds are trustedCodexHomes' (lib/codexProfiles.ts).
+    it('the trusted homes are asked again at each look', async () => {
+      let homes: readonly string[] = []
+      const { actions } = fakeActions({ codexHomes: () => trusted(...homes) })
+      const { src, ev } = setup({ actions })
+      src.ingest(ev('session-start', { ...cx, transcriptPath: rolloutIn('/h/adopted') }))
+      expect(src.capabilities(src.list()[0]).voice).toBe(false)
+      homes = ['/h/adopted']
+      expect(src.capabilities(src.list()[0]).voice).toBe(true)
+      homes = []
+      expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+      expect(actions.codexQueue.send).not.toHaveBeenCalled()
+    })
   })
 
   it('a text over MAX_TEXT characters is refused before the queue', async () => {
@@ -3022,7 +3202,7 @@ describe('ObservedSource and codex queue', () => {
 
       const { src, actions } = given(cx)
       expect(await src.send(src.list()[0], text)).toEqual({ ok: true })
-      expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, text, false]])
+      expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, text, false, '/home/u/.codex']])
     }
   })
 })
@@ -3090,7 +3270,7 @@ describe('ObservedSource and the Codex app', () => {
       const agent = src.list()[0]
       expect(src.capabilities(agent)).toMatchObject({ voice: true })
       expect(await src.send(agent, 'next')).toEqual({ ok: true })
-      expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', true]])
+      expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', true, '/home/u/.codex']])
       expect(counted(actions.count).at(-1)).toBe('codex')
       expect(ran).not.toHaveBeenCalled()
     }
@@ -3106,7 +3286,7 @@ describe('ObservedSource and the Codex app', () => {
       expect(await src.send(agent, 'next')).toEqual({ ok: true })
       expect(actions.codexQueue.can.mock.calls.length).toBeGreaterThan(0)
       expect(new Set(actions.codexQueue.can.mock.calls.map(([asked]) => asked))).toEqual(new Set([isApp]))
-      expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', isApp]])
+      expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', isApp, '/home/u/.codex']])
     }
   })
 
@@ -3127,7 +3307,7 @@ describe('ObservedSource and the Codex app', () => {
     expect(await src.send(agent, 'next')).toEqual({ ok: true })
     expect(actions.codexQueue.can.mock.calls.length).toBeGreaterThan(0)
     expect(new Set(actions.codexQueue.can.mock.calls.map(([asked]) => asked))).toEqual(new Set([false]))
-    expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', false]])
+    expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', false, '/home/u/.codex']])
   })
 
   it('a Codex session in Ghostty has no Codex pane', async () => {
@@ -3403,7 +3583,7 @@ describe('ObservedSource and the app a hook\'s caller runs in', () => {
   })
 
   it('a caller whose parents name a tab app has its tty read then, and its tab is its pane', async () => {
-    const tty = vi.fn(async (_pid: number): Promise<string | undefined> => '/dev/ttys023')
+    const tty = vi.fn(async (_pid: number): Promise<TabTty | undefined> => ({ tty: '/dev/ttys023' }))
     let answer!: (apps: ReadonlyMap<number, string>) => void
     const apps = vi.fn((_pids: readonly number[]) => new Promise<ReadonlyMap<number, string>>((resolve) => { answer = resolve }))
     const { actions } = fakeActions()
@@ -4808,12 +4988,16 @@ describe('ObservedSource tabs', () => {
   const TTY = '/dev/ttys023'
   const inTerminal = { hostHints: { __CFBundleIdentifier: 'com.apple.Terminal' } }
 
-  /** A source whose tty reads the test answers by hand, in the order they began, with a watch's stream open. */
+  /** A source whose tty reads the test answers by hand, in the order they began, with a watch's stream open: a tty, with
+   *  its process's start when one is given. */
   function tabs(over: Partial<Fakes> = {}, deps: Partial<ObservedDeps> = {}) {
-    const reads: Array<{ answer(tty: string | undefined): Promise<void>; fail(): Promise<void> }> = []
-    const tty = vi.fn((_pid: number) => new Promise<string | undefined>((resolve, reject) => {
+    const reads: Array<{ answer(tty: string | undefined, start?: string): Promise<void>; fail(): Promise<void> }> = []
+    const tty = vi.fn((_pid: number) => new Promise<TabTty | undefined>((resolve, reject) => {
       reads.push({
-        answer: (answered) => { resolve(answered); return flushed() },
+        answer: (answered, start) => {
+          resolve(answered === undefined ? undefined : { tty: answered, ...(start === undefined ? {} : { start }) })
+          return flushed()
+        },
         fail: () => { reject(new Error('ps failed')); return flushed() },
       })
     }))
@@ -4978,7 +5162,7 @@ describe('ObservedSource tabs', () => {
     expect(t.tty).toHaveBeenCalledTimes(1)
 
     // No routes for the dial's voice and tap: status only.
-    const bare = setup({ tty: vi.fn(async () => TTY) })
+    const bare = setup({ tty: vi.fn(async (): Promise<TabTty> => ({ tty: TTY })) })
     bare.src.ingest(bare.ev('session-start', inTerminal))
     await flushed()
     expect(bare.src.hasPane(bare.src.list()[0])).toBe(false)
@@ -5107,6 +5291,80 @@ describe('ObservedSource tabs', () => {
     expect(t.actions.orcaSwitch).not.toHaveBeenCalled()
   })
 
+  describe('the proof of its process', () => {
+    const TTY3 = '/dev/ttys003'
+    const inIterm = { hostHints: { TERM_PROGRAM: 'iTerm.app' } }
+    /** The tabs adapter with a typer that writes its words, waits to be told, then writes their Enter only while the
+     *  prompt check holds: each step keeps the pane it was given. */
+    const typed = (deps: Partial<ObservedDeps> = {}) => {
+      const steps: Array<{ step: 'words' | 'enter'; pane: Pane }> = []
+      let atPrompt: (() => boolean) | undefined
+      let enter!: () => void
+      const type = vi.fn(async (pane: Pane, _text: string, _engine: string, check?: () => boolean): Promise<TypeResult> => {
+        atPrompt = check
+        steps.push({ step: 'words', pane })
+        await new Promise<void>((resolve) => { enter = resolve })
+        if (!check?.()) return false
+        steps.push({ step: 'enter', pane })
+        return true
+      })
+      const adapter: HostAdapter = { ...createTabsAdapter({ isOpen: () => true, select: () => true }), type }
+      const t = tabs({}, { actions: { ...fakeActions().actions, adapters: [adapter] }, ...deps })
+      return { ...t, steps, atPrompt: () => atPrompt!(), enter: async () => { enter(); await flushed() } }
+    }
+
+    it('an agent in iTerm2 has its tab pane carry the pid its tty was read for, and that process\'s start', async () => {
+      const t = typed()
+      t.src.ingest(t.ev('session-start', { ...inIterm, callerPid: 4101 }))
+      expect(t.tty.mock.calls).toEqual([[4101]])
+      await t.reads[0].answer(TTY3, 'ps:1')
+      const sent = t.src.send(t.agent(), 'next')
+      await flushed()
+      expect(t.steps).toEqual([{ step: 'words', pane: { adapter: 'tabs', id: `iterm:${TTY3}`, proof: { pid: 4101, start: 'ps:1' } } }])
+      await t.enter()
+      expect(await sent).toEqual({ ok: true })
+    })
+
+    it('a tty read with no start gives its pane no proof', async () => {
+      const t = typed()
+      t.src.ingest(t.ev('session-start', { ...inIterm, callerPid: 4101 }))
+      await t.reads[0].answer(TTY3)
+      void t.src.send(t.agent(), 'next')
+      await flushed()
+      expect(t.steps).toEqual([{ step: 'words', pane: { adapter: 'tabs', id: `iterm:${TTY3}` } }])
+    })
+
+    it('a nested agent\'s tab pane has none: the tab holds its multiplexer\'s client', async () => {
+      const outer = vi.fn((hints: Readonly<Record<string, string>>) =>
+        (hints.TMUX_PANE ? Promise.resolve<OuterAnswer>({ app: 'iterm', tty: TTY3, pid: 4300 }) : undefined))
+      const t = typed({ outer })
+      t.src.ingest(t.ev('session-start', { callerPid: 4101, hostHints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux' } }))
+      await flushed()
+      expect(t.tty).not.toHaveBeenCalled()
+      void t.src.send(t.agent(), 'next')
+      await flushed()
+      expect(t.steps).toEqual([{ step: 'words', pane: { adapter: 'tabs', id: `iterm:${TTY3}` } }])
+    })
+
+    // The same tab, another process: the person quit the agent and started another there between the words and the Enter.
+    it('a hook from another process on the same tty makes the prompt check false: the Enter is not sent', async () => {
+      const t = typed()
+      t.src.ingest(t.ev('session-start', { ...inIterm, callerPid: 4101 }))
+      await t.reads[0].answer(TTY3, 'ps:1')
+      const sent = t.src.send(t.agent(), 'next')
+      await flushed()
+      expect(t.atPrompt()).toBe(true)
+      t.src.ingest(t.ev('session-start', { ...inIterm, callerPid: 4102 }))
+      await t.reads[1].answer(TTY3, 'ps:2')
+      // Its pane has the same id again: only the proof tells the two processes apart.
+      expect(t.src.paneOf(t.agent().id, 'tabs')).toBe(`iterm:${TTY3}`)
+      expect(t.atPrompt()).toBe(false)
+      await t.enter()
+      expect(await sent).toEqual({ ok: false, reason: 'proj did not answer.' })
+      expect(t.steps.map(({ step }) => step)).toEqual(['words'])
+    })
+  })
+
   it('byTab: the live agent of that app and tty, the most recently active of two, none for another app, an ended session or an unknown tty', async () => {
     const t = tabs()
     t.src.ingest(t.ev('session-start', { sessionId: 'a', callerPid: 100, ...inTerminal }))
@@ -5157,7 +5415,7 @@ describe('ObservedSource outer place', () => {
         else asks.push({ answer, made: (nest) => { made?.(nest); return vi.advanceTimersByTimeAsync(0) } })
       })
     })
-    const tty = vi.fn(async (_pid: number): Promise<string | undefined> => '/dev/ttys031')
+    const tty = vi.fn(async (_pid: number): Promise<TabTty | undefined> => ({ tty: '/dev/ttys031' }))
     const { actions, ran } = fakeActions(over)
     const s = setup({ actions: { ...actions, adapters: adapt(actions.adapters) }, tty, outer, ...deps })
     const agent = () => s.src.list()[0]
@@ -6188,7 +6446,7 @@ describe('ObservedSource and a nested session the scan found', () => {
     const nested = vi.fn((_found: Nested, opts?: Fresh) => (opts?.fresh && !freshByHand
       ? Promise.resolve<NestedPlace>({})
       : new Promise<NestedPlace>((resolve) => { (opts?.fresh ? freshAsks : asks).push(resolve) })))
-    const tty = vi.fn(async (_pid: number): Promise<string | undefined> => '/dev/ttys031')
+    const tty = vi.fn(async (_pid: number): Promise<TabTty | undefined> => ({ tty: '/dev/ttys031' }))
     const { actions, ran } = fakeActions(fakes)
     const s = setup({ actions: { ...actions, adapters: adapt(actions.adapters) }, table, apps, madeBy, nested, tty, ...deps })
     /** A session found open in a terminal, idle, its owner [pid]. */
@@ -6938,7 +7196,7 @@ describe('ObservedSource and a Codex session its own server runs', () => {
     const lookup = vi.fn((_asks: readonly ServedAsk[]) => new Promise<readonly (Served | undefined)[]>((resolve, reject) => {
       asks.push({ answer: (answers) => { resolve(answers); return flushed() }, fail: () => { reject(new Error('ps failed')); return flushed() } })
     }))
-    const tty = vi.fn(async (_pid: number): Promise<string | undefined> => '/dev/ttys031')
+    const tty = vi.fn(async (_pid: number): Promise<TabTty | undefined> => ({ tty: '/dev/ttys031' }))
     const { actions } = fakeActions(over)
     const s = setup({ actions, tty, served: lookup, ...deps })
     const agent = () => s.src.list()[0]
@@ -6981,6 +7239,40 @@ describe('ObservedSource and a Codex session its own server runs', () => {
     expect(t.agent().app).toBe('vscode')
     for (const adapter of ['tmux', 'vscode', 'tabs']) expect(t.src.paneOf(id, adapter)).toBeUndefined()
     expect(t.src.capabilities(t.agent()).voice).toBe(false)
+  })
+
+  // A tab takes words only at a pane whose proof names the process whose tty it is (tabsType.ts). A daemon's session is
+  // placed by its folder, never by a process of its own: a tty and start read for the TUI that ran it before the daemon
+  // did prove nothing of the tab it is shown at now.
+  it('a session its daemon runs, shown at a Ghostty TUI\'s tab, gives no adapter a process or a proof, and no tab takes its words', async () => {
+    const TAB = '/dev/ttys005'
+    const places: Place[] = []
+    const send = vi.fn<TabsLine['send']>()
+    const line: TabsLine = { writable: () => true, ready: async () => true, send, ended: new AbortController().signal }
+    const tabs = createTabsAdapter({ isOpen: () => true, select: () => true })
+    const adapter: HostAdapter = {
+      ...tabs,
+      ...tabsTyping({ line: () => line, shared: () => false, process: async () => undefined, readers: async () => undefined,
+        processes: async () => [], after: (ms, run) => { const timer = setTimeout(run, ms); return () => { clearTimeout(timer) } } }),
+      paneOf: (place) => { places.push(place); return tabs.paneOf(place) },
+    }
+    const { actions } = fakeActions({ codexQueue: { can: vi.fn(() => false), send: vi.fn() } })
+    const t = served({}, { actions: { ...actions, adapters: [adapter] },
+      tty: vi.fn(async (_pid: number): Promise<TabTty> => ({ tty: TAB, start: 'ps:1' })) })
+    // Its own TUI in Ghostty ran it first, as no daemon's client: that process's tty and start were read.
+    t.src.ingest(t.codex('session-start', { callerPid: 600, hostHints: { TERM_PROGRAM: 'ghostty' } }))
+    await t.asks[0].answer([undefined])
+    expect(places.at(-1)).toMatchObject({ pid: 600, proof: { pid: 600, start: 'ps:1' } })
+    expect(t.src.capabilities(t.agent()).voice).toBe(true)
+    // Resumed under the daemon, and shown at the Ghostty TUI working in its folder, on that same tab.
+    t.src.ingest(t.codex('session-start'))
+    await t.asks[1].answer([{ client: { app: 'ghostty', tty: TAB, pid: 500 } }])
+    expect(t.src.paneOf(t.agent().id, 'tabs')).toBe(`ghostty:${TAB}`)
+    expect(places.at(-1)?.pid).toBeUndefined()
+    expect(places.at(-1)?.proof).toBeUndefined()
+    expect(t.src.capabilities(t.agent()).voice).toBe(false)
+    expect(await t.src.send(t.agent(), 'next')).toMatchObject({ ok: false })
+    expect(send).not.toHaveBeenCalled()
   })
 
   it('a caller that is no server is placed by its hints once the lookup says so, and is not asked again', async () => {
@@ -7250,7 +7542,7 @@ describe('ObservedSource and a Codex session its own server runs', () => {
       tty: async (pid) => places[pid]?.tty, apps: walk, folder: async (path) => path,
     }
     const { actions } = fakeActions({ codexQueue: { can: vi.fn(() => false), send: vi.fn() } })
-    const tty = vi.fn(async (_pid: number): Promise<string | undefined> => undefined)
+    const tty = vi.fn(async (_pid: number): Promise<TabTty | undefined> => undefined)
     const s = setup({ actions, tty, apps: (pids) => walk(pids), served: (asks) => codexServed(asks, lookup) })
     const apps: string[] = []
     s.src.onChange(() => { apps.push(s.src.list()[0].app) })

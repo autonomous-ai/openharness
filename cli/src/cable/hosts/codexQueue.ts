@@ -52,7 +52,7 @@ export const APP_PACKAGE = 'OpenAI.Codex'
 const PACKAGE_CODEX = join('app', 'resources', 'codex.exe')
 
 /** Why a send failed, as the log line names it: codex's exit code; 'no binary' when it is not there or could not
- *  start; 'refused' for a thread id or a text the queue will not run. */
+ *  start; 'refused' for a thread id, a text or a home the queue will not run. */
 export type CodexQueueFailure = `exit ${number}` | 'no binary' | 'refused'
 /** Which codex a send chose, as the log names it: the ChatGPT app's own, or the one a launch would run. */
 export type CodexRan = 'app' | 'path'
@@ -76,14 +76,14 @@ export interface CodexQueueDeps {
   /** Starts the read of the login shell's environment. Never throws. */
   readLoginShell(): void
   platform: NodeJS.Platform
-  home: string
   cwd: string
 }
 
-/** [isApp]: the session is the ChatGPT app's. */
+/** [isApp]: the session is the ChatGPT app's. [home] is the CODEX_HOME the run has: one of Harness's own, whose
+ *  config.toml codex loads. */
 export interface CodexQueue {
   can(isApp: boolean): boolean
-  send(threadId: string, text: string, isApp: boolean): Promise<CodexQueueResult>
+  send(threadId: string, text: string, isApp: boolean, home: string): Promise<CodexQueueResult>
 }
 
 /**
@@ -98,7 +98,7 @@ export function appCodexCandidates(named: string | undefined, home: string): str
 }
 
 /** [look]: where the ChatGPT app's Store package is installed for this user, on Windows. */
-export function codexQueueDeps(look: StorePackageLook = storePackageLook(APP_PACKAGE)): Omit<CodexQueueDeps, 'home' | 'cwd'> {
+export function codexQueueDeps(look: StorePackageLook = storePackageLook(APP_PACKAGE)): Omit<CodexQueueDeps, 'cwd'> {
   // The last look of each, on the monotonic clock: a wall clock set back would keep an old answer for as long.
   const looks = new Map<CodexRan, { at: number; path: string | null }>()
   const held = (which: CodexRan, look: () => string | null): string | null => {
@@ -190,8 +190,10 @@ export function createCodexQueue(deps: CodexQueueDeps): CodexQueue {
 
   return {
     can: (isApp) => choose(isApp) !== null,
-    async send(threadId, text, isApp) {
-      if (!CODEX_THREAD.test(threadId) || text === '' || text.length > MAX_TEXT || text.includes('\0')) {
+    async send(threadId, text, isApp, home) {
+      // A relative home would be read from the folder codex runs in.
+      if (!CODEX_THREAD.test(threadId) || text === '' || text.length > MAX_TEXT || text.includes('\0')
+        || !isAbsolute(home) || home.includes('\0')) {
         return { outcome: 'failed', reason: 'refused' }
       }
       // Busy queues nothing: the dial asks again, never stacked behind.
@@ -205,7 +207,7 @@ export function createCodexQueue(deps: CodexQueueDeps): CodexQueue {
         // never read as a flag. One run a send: an app codex that fails is never followed by the other, so the words
         // never run twice.
         const end = await deps.run(codex.file, ['queue', '--thread', threadId, `--message=${text}`],
-          { cwd: deps.cwd, env: { ...deps.parentEnv(), CODEX_HOME: deps.home }, timeoutMs: QUEUE_TIMEOUT_MS })
+          { cwd: deps.cwd, env: { ...deps.parentEnv(), CODEX_HOME: home }, timeoutMs: QUEUE_TIMEOUT_MS })
         if (end === 0) return { outcome: 'queued' }
         if (typeof end === 'number') return { outcome: 'failed', reason: `exit ${end}`, ran: codex.ran }
         if (end === 'not-started') return { outcome: 'failed', reason: 'no binary', ran: codex.ran }

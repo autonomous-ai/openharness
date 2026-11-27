@@ -543,11 +543,16 @@ export class World implements TierAWorld {
         this.listener = handlers
         return { close: async () => {} }
       },
-      // As `ps -o tty=` reads it for a tab (cable/hosts/tabs.ts readTty): the model's bare name under /dev/.
+      // As `ps -o tty=,lstart=` reads it for a tab (cable/hosts/tabs.ts readTabTty): the model's bare name under /dev/,
+      // with no start: the model has no start to read, so no pane carries a proof and none is typed into here.
       tty: async (pid) => {
         const tty = machine.processes.get(pid)?.tty
-        return tty === undefined ? undefined : `/dev/${tty}`
+        return tty === undefined ? undefined : { tty: `/dev/${tty}` }
       },
+      // Nor are a tab's process (`ps`) and its tty's readers (`lsof`) readable: the eval types into no tab
+      // (docs/plans/2026-11-25-dial-voice-codex-terminals-design.md, PM decision 1).
+      tabProcess: async () => undefined,
+      ttyReaders: async () => undefined,
       claude: async () => null,
       orcaHomes,
       vscodeExtension: noEditor('vscode', platform, root),

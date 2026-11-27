@@ -91,10 +91,20 @@ export interface Caps {
 /** What a source's send answers: `reason` is the sentence the dial shows when it refused. */
 export type SendResult = { ok: true } | { ok: false; reason: string }
 
+/** Why a terminal tab's words were not sent (docs/plans/2026-11-25-dial-voice-codex-terminals-design.md): the log's
+ *  word for each, while the dial says only "did not answer". `busy`: the agent left its prompt during the checks. */
+export const TABS_REASONS = ['no-stream', 'nested', 'terminal-app', 'shared', 'process', 'background', 'foreground-child',
+  'busy', 'no-session', 'no-answer'] as const
+export type TabsReason = typeof TABS_REASONS[number]
+
+export function isTabsReason(word: unknown): word is TabsReason {
+  return (TABS_REASONS as readonly unknown[]).includes(word)
+}
+
 /** What an adapter's `type` answers: sent (`true`), not sent (`false`), the agent is in a turn (`'busy'`) or waits on
- *  the person (`'waiting'`) as its app says now, or a fixed sentence of the adapter's own for the dial (`refused`):
- *  never a value from a hook or an app. */
-export type TypeResult = boolean | 'busy' | 'waiting' | { refused: string }
+ *  the person (`'waiting'`) as its app says now, a fixed sentence of the adapter's own for the dial (`refused`), or
+ *  not sent for a reason of the list (`notSent`): never a value from a hook or an app. */
+export type TypeResult = boolean | 'busy' | 'waiting' | { refused: string } | { notSent: TabsReason }
 
 /** What showing an agent's pane did: `busy` when words are still being typed into its terminal, or a Claude app link is
  *  still running for that agent, and then nothing ran. */
