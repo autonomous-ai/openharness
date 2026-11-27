@@ -198,6 +198,8 @@ describe('harness device notify', () => {
 
     await until('the notice in the daemon\'s log', () => d.log().includes('[device] notify · claude · shown'), 30_000, 50)
     expect(d.log().split('\n').filter((line) => line.includes(LINE))).toEqual([])
+    // A card's id names one notice: it stays with its agent, after it was shown, listed and closed.
+    expect(d.log()).not.toContain(idOf(shown.out))
   })
 
   it('a message from another session keeps the card', async () => {

@@ -83,7 +83,7 @@ describe.runIf(process.platform === 'win32')('the dial on Windows', () => {
       const question = await d.dial.next((m) => m.t === 'question' && JSON.stringify(m).includes(LINE), 45_000, 'the notice', since)
 
       const listed = await d.harness(['device', 'notify', '--list'])
-      expect({ code: listed.code, out: listed.stdout.trim() }).toEqual({ code: 0, out: expect.stringMatching(new RegExp(`^${id} \\d+s plain ${LINE}$`)) })
+      expect({ code: listed.code, out: listed.stdout.trim() }).toEqual({ code: 0, out: expect.stringMatching(new RegExp(`^${id} \\d+[smh] plain ${LINE}$`)) })
 
       const done = await d.harness(['device', 'notify', '--done', id])
       expect({ code: done.code, out: done.stdout.trim() }).toEqual({ code: 0, out: '' })

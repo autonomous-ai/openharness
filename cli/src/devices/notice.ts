@@ -53,7 +53,7 @@ export function noticeCaller(env: NodeJS.ProcessEnv, cwd: string): Pick<NoticeAs
 
 /** [words]: what follows `notify`. `--done` first, then `--list`, then the question, so closing or listing never rings.
  *  0 with `shown <id>`, `shown`, `no dial` or `limited` on stdout; 1 with the usage when there is no question: none,
- *  flags alone, or only `--help` or `-h`. */
+ *  flags alone other than `--list` or `--done` (which exit 0), or only `--help` or `-h`. */
 export async function runNotice(words: string[], deps: NoticeDeps): Promise<number> {
   const { question, suggest, state, json, list, done } = parseNotice(words)
   const ask = deps.ask ?? ((message, options) => askDevices(deps.dataDir, message, options))
