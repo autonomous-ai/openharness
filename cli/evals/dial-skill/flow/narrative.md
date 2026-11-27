@@ -57,6 +57,12 @@ Held out: val and test pooled, as counts.
 | v6 | crowd | 44 of 48 | 0 of 27 | 37 of 44 | 45 of 48 | 0 of 12 | 12 of 12 | 1 of 44 | 45 of 75 | 0 of 75 | +0.80 [0.15, 1.45] | +0.06 [-0.03, 0.16] | 0.262 |
 <!-- /held-out -->
 
+Closes: held-out follow-up runs, as counts, with the close gates in crowd (metrics.md).
+
+<!-- close -->
+
+<!-- /close -->
+
 ## Round 1
 
 v1 is the spec's starting text, with the description's two placeholders in square brackets (`"[the ask, one

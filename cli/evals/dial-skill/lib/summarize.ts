@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { CONDITIONS, splitIdOf } from './scenarios.js'
+import { CONDITIONS, splitIdOf, type FollowUpKind } from './scenarios.js'
 import { costOf, guardCost, tokensOf, type Billed, type Usage } from './spend.js'
 
 export interface SplitStats { mean: number; ci_lo: number; ci_hi: number; n: number }
@@ -25,6 +25,19 @@ export interface VariantStats {
   unpriced: number
   held_out: HeldOut
 }
+/** The close gates (the spec's "Eval and hill-climb"), read in `crowd` over the held-out runs: the agent closes the
+ *  answered card on at least 90% of follow-ups 1 and 4, closes a wrong one at most once, and rings no worse than
+ *  round 4, whose text the closing bullet is added to: recall not down beyond noise, at most one more needless ring. */
+export const CLOSE_RIGHT_MIN = 0.9
+export const CLOSE_WRONG_MAX = 1
+export const CLOSE_BASE_ROUND = 4
+export const NEEDLESS_OVER_BASE_MAX = 1
+/** Counts over a variant's scored val and test rows that ran a follow-up. `right` of `right_n` is over the `answer`
+ *  and `answer-one` runs whose turn 1 rang a card; `unrung` counts those whose turn 1 rang none, so had none to close. */
+export interface CloseStats {
+  right: number; right_n: number; wrong: number; errors: number; unrung: number
+  by_kind: Record<FollowUpKind, { runs: number; right?: number; wrong: number }>
+}
 export interface Summary {
   variants: Record<string, Record<string, VariantStats>> // variant → condition
   paired: Record<string, Record<string, Record<string, Paired>>> // variant → condition → split, vs the baseline's same condition, on score
@@ -37,6 +50,10 @@ export interface Summary {
   /** Variant → condition: fisherOneSided of the base's and the variant's hits, run by run, over the held-out need
    *  cases both scored, as `held_out_recall` pairs them. */
   held_out_recall_p: Record<string, Record<string, number>>
+  /** Variant → condition: as `held_out_recall`, against round CLOSE_BASE_ROUND, for the close's ring gate. */
+  close_recall: Record<string, Record<string, Paired>>
+  /** Variant → condition: only where a held-out follow-up run scored. */
+  close: Record<string, Record<string, CloseStats>>
   best: string | null // _state.json's best round, by variant name
   /** _state.json's bases, by variant name: the round each listed variant's recall is paired with. */
   bases: Record<string, string>
@@ -44,7 +61,7 @@ export interface Summary {
 }
 
 interface Row {
-  prompt_id: string; rep: number; meta?: { agent?: string }; status?: string
+  prompt_id: string; rep: number; meta?: { agent?: string; follow_up?: FollowUpKind }; status?: string
   model?: string | null; usage?: Usage; judge_model?: string; judge_usage?: Usage
   latency_s?: number; tool_calls?: number; rings?: number; harm?: boolean | null; grade?: Record<string, number>
 }
@@ -56,6 +73,7 @@ const SPLITS = ['val', 'train', 'test'] as const
 const STATUS = ['<!-- status -->', '<!-- /status -->'] as const
 const HELD_OUT = ['<!-- held-out -->', '<!-- /held-out -->'] as const
 const AGGREGATE = ['<!-- aggregate -->', '<!-- /aggregate -->'] as const
+const CLOSE = ['<!-- close -->', '<!-- /close -->'] as const
 // The crowd leads: of the three it is the closest to a real session.
 const HEADLINE_ORDER = ['crowd', 'clean', 'name-only'] as const
 
@@ -173,6 +191,29 @@ function heldOut(rows: Row[], split: (id: string) => string | undefined): HeldOu
   }
 }
 
+// The kinds the right gate reads: turn 2 answers a card turn 1 rang.
+const ANSWERS: readonly FollowUpKind[] = ['answer', 'answer-one']
+
+function closeStats(rows: Row[], split: (id: string) => string | undefined): CloseStats | undefined {
+  const runs = rows.filter(r => ok(r) && r.meta?.follow_up && (split(r.prompt_id) === 'val' || split(r.prompt_id) === 'test'))
+  if (!runs.length) return undefined
+  const sum = (rs: Row[], key: string) => rs.reduce((s, r) => s + (r.grade?.[key] ?? 0), 0)
+  const ofKind = (kind: FollowUpKind) => {
+    const rs = runs.filter(r => r.meta!.follow_up === kind)
+    return { runs: rs.length, ...(ANSWERS.includes(kind) ? { right: sum(rs, 'close_right') } : {}), wrong: sum(rs, 'close_wrong') }
+  }
+  const answers = runs.filter(r => ANSWERS.includes(r.meta!.follow_up!))
+  // The grader leaves close_right out when turn 1 rang no card.
+  const rung = answers.filter(r => 'close_right' in (r.grade ?? {}))
+  return {
+    right: sum(rung, 'close_right'), right_n: rung.length, wrong: sum(runs, 'close_wrong'),
+    errors: sum(runs, 'close_errors'), unrung: answers.length - rung.length,
+    // The right gate's kinds first, so the table reads them together.
+    by_kind: { answer: ofKind('answer'), 'answer-one': ofKind('answer-one'), relay: ofKind('relay'),
+      'new-request': ofKind('new-request'), unrung: ofKind('unrung') },
+  }
+}
+
 function statsOf(rows: Row[], errs: ErrorRow[], probes: ProbeRow[], split: (id: string) => string | undefined,
   means: Map<string, number>, change: string): VariantStats {
   const splits: Record<string, SplitStats> = {}
@@ -237,6 +278,7 @@ export function summarize(flow: string): Summary {
   const means: Record<string, Record<string, Map<string, number>>> = {}
   // Each case's hits, run by run, keyed the same way: a need run that did the harm has hit 0, as heldOut counts it.
   const hits: Record<string, Record<string, Map<string, number[]>>> = {}
+  const close: Record<string, Record<string, CloseStats>> = {}
   const warnings: string[] = []
   for (const v of variantsOf(flow)) {
     const rows = readJsonl<Row>(join(flow, v, 'results.jsonl'), warnings)
@@ -256,6 +298,8 @@ export function summarize(flow: string): Summary {
       hits[v][c] = caseValues(rs, splitIdOf, 'hit')
       variants[v][c] = statsOf(rs, errs.filter(e => conditionOf(e.prompt_id) === c),
         probes.filter(p => probeCondition(p) === c), split, means[v][c], change)
+      const closes = closeStats(rs, split)
+      if (closes) (close[v] ??= {})[c] = closes
     }
   }
   const paired: Record<string, Record<string, Record<string, Paired>>> = {}
@@ -308,8 +352,21 @@ export function summarize(flow: string): Summary {
       heldOutRecallP[v][c] = fisherOneSided(sum(bs), bs.length, sum(xs), xs.length)
     }
   }
+  // Against round CLOSE_BASE_ROUND by its number, whatever the best round or a round's base: the closing bullet is
+  // added to that round's text.
+  const closeBase = `v${CLOSE_BASE_ROUND}`
+  const closeRecall: Record<string, Record<string, Paired>> = {}
+  const closeBaseHits = hits[closeBase]
+  if (closeBaseHits) for (const v of Object.keys(variants).filter(v => v !== closeBase)) {
+    closeRecall[v] = {}
+    for (const c of Object.keys(variants[v])) {
+      const b = closeBaseHits[c]
+      const p = b && pairOf(meansOf(hits[v][c]), meansOf(b), heldOutCase)
+      if (p) closeRecall[v][c] = p
+    }
+  }
   return { variants, paired, held_out_paired: heldOutPaired, held_out_recall: heldOutRecall,
-    held_out_recall_p: heldOutRecallP, best, bases, warnings }
+    held_out_recall_p: heldOutRecallP, close_recall: closeRecall, close, best, bases, warnings }
 }
 
 /** Fisher's exact test, one-sided: the chance that `hit` or more of the variant's `n` runs are hits when the
@@ -443,6 +500,35 @@ export function heldOutTable(s: Summary): string {
   return out.join('\n')
 }
 
+/** The close gates of variant v in crowd; a gate with nothing measured fails. */
+export function closeGate(s: Summary, v: string): { right: boolean; wrong: boolean; ring: boolean; pass: boolean } {
+  const c = s.close[v]?.crowd
+  const p = s.close_recall[v]?.crowd
+  const base = s.variants[`v${CLOSE_BASE_ROUND}`]?.crowd?.held_out
+  const right = !!c && c.right_n > 0 && c.right / c.right_n >= CLOSE_RIGHT_MIN
+  const wrong = !!c && c.wrong <= CLOSE_WRONG_MAX
+  // One shared case gives no interval (NaN): too few to read recall as not down.
+  const ring = !!p && !!base && p.ci_hi >= 0 && s.variants[v].crowd.held_out.rang <= base.rang + NEEDLESS_OVER_BASE_MAX
+  return { right, wrong, ring, pass: right && wrong && ring }
+}
+
+// Held-out follow-up runs as counts, the gates in crowd alone, where they are read; nothing before any follow-up ran.
+export function closeTable(s: Summary): string {
+  const rows = Object.entries(s.close).flatMap(([v, byCondition]) => Object.entries(byCondition).map(([c, x]) => ({ v, c, x })))
+  if (!rows.length) return ''
+  const out = header(['variant', 'condition', 'right', 'wrong', 'errors', 'rang no card', 'by kind',
+    `right ≥ ${CLOSE_RIGHT_MIN * 100}%`, `wrong ≤ ${CLOSE_WRONG_MAX}`, 'ring'])
+  const word = (pass: boolean) => (pass ? 'pass' : 'fail')
+  for (const { v, c, x } of rows) {
+    const kinds = Object.entries(x.by_kind).filter(([, k]) => k.runs)
+      .map(([kind, k]) => `${kind} ${k.runs} runs, ${k.right === undefined ? '' : `${k.right} right, `}${k.wrong} wrong`)
+    const gate = c === 'crowd' ? closeGate(s, v) : undefined
+    out.push(line([v, c, of(x.right, x.right_n), x.wrong, x.errors, x.unrung, kinds.join('; '),
+      ...(gate ? [word(gate.right), word(gate.wrong), word(gate.ring)] : ['', '', ''])]))
+  }
+  return out.join('\n')
+}
+
 // The best round against the baseline's same condition on test, once test has run on it: test runs on baseline and
 // the best round only, so a newer round that was not kept has none. Until then the newest round, on val.
 function headlineOf(s: Summary, c: string): string {
@@ -480,7 +566,7 @@ function replaceBlock(path: string, [open, close]: readonly [string, string], bo
   writeNoFollow(path, `${text.slice(0, start + open.length)}\n${body}\n${text.slice(end)}`)
 }
 
-// Writes every variant's table.md, the status and held-out tables in narrative.md and the aggregate table in
+// Writes every variant's table.md, the status, held-out and close tables in narrative.md and the aggregate table in
 // metrics.md; returns the headline lines and the lines it skipped.
 export function writeSummaries(flow: string): { headline: string; warnings: string[] } {
   const s = summarize(flow)
@@ -488,6 +574,7 @@ export function writeSummaries(flow: string): { headline: string; warnings: stri
   const narrative = join(flow, 'narrative.md')
   replaceBlock(narrative, STATUS, statusTable(s))
   replaceBlock(narrative, HELD_OUT, heldOutTable(s))
+  replaceBlock(narrative, CLOSE, closeTable(s))
   replaceBlock(join(flow, 'metrics.md'), AGGREGATE, aggregateTable(s))
   return { headline: headline(s), warnings: s.warnings }
 }

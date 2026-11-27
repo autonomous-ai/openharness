@@ -657,7 +657,7 @@ describe('the close gates', () => {
         + '| v7 | crowd | 13 of 14 | 1 | 0 | 0 | answer 7 runs, 7 right, 0 wrong; answer-one 7 runs, 6 right, 0 wrong; '
         + 'relay 1 runs, 1 wrong | pass | pass | pass |\n'
         + '<!-- /close -->\n\nThe story so far.\n')
-      expect(closeTable(summarize(flow))).toBe(narrative.slice(narrative.indexOf('| variant'), narrative.indexOf('\n<!-- /close -->')))
+      expect(closeTable(summarize(flow))).toBe(narrative.slice(narrative.indexOf('<!-- close -->\n') + 15, narrative.indexOf('\n<!-- /close -->')))
     })
 
     it('writes nothing between them before any follow-up run', () => {
