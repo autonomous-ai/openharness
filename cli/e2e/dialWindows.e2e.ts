@@ -3,7 +3,8 @@
  * bundle, sealed in a throwaway profile whose name has spaces, Vietnamese letters, `'`, `&` and `%`, with a stand-in dial
  * behind its serial stand-in (harness/windowsDaemon.ts). The devices listen on a pipe of their own, and every client
  * reaches them there with the devices' token:
- * - `harness device notify` says `no dial` before the dial greets and `shown` after, and the dial gets the line;
+ * - `harness device notify` says `no dial` before the dial greets and `shown <id>` after, and the dial gets the line;
+ *   its agent's `--list` shows the card and `--done <id>` takes it off the dial;
  * - the Notifications setting, asked over the pipe, is answered and kept in the data folder;
  * - the real `harness device vscode link` names the pipe, its token and its record, and a window's stream signed with
  *   that token is answered with the proof and stays open;
@@ -52,7 +53,7 @@ describe.runIf(process.platform === 'win32')('the dial on Windows', () => {
   afterAll(async () => { await d?.close() })
   const showLog = (): void => onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-200).join('\n')}`) })
 
-  it('harness device notify says no dial before the dial greets, and shown after; the dial gets the line', async () => {
+  it('harness device notify says no dial before the dial greets, and shown after; the dial gets the line, --list shows it and --done closes it', async () => {
     showLog()
     expect(d.dataDir).toContain(PROFILE_NAME)
     // Sealed: the daemon's one PATH names Windows' own folders or the root's, never the account's, whose engines it
@@ -70,10 +71,26 @@ describe.runIf(process.platform === 'win32')('the dial on Windows', () => {
 
     await d.dial.greet(90_000)
     await d.dial.next((m) => m.t === 'agents.end', 45_000, 'the first list')
-    const after = await d.harness(['device', 'notify', LINE])
-    stderrs.push(after.stderr)
-    expect({ code: after.code, out: after.stdout.trim() }).toEqual({ code: 0, out: 'shown' })
-    await d.dial.next((m) => JSON.stringify(m).includes(LINE), 45_000, 'the notice')
+    // The rest runs as a Codex session's commands: `--list` and `--done` name the caller's own cards. harness() spawns with
+    // this very env, so the variable is set on it and taken off after.
+    d.env.CODEX_THREAD_ID = 'e2e-dial-windows-codex'
+    try {
+      const since = d.dial.messages.length
+      const after = await d.harness(['device', 'notify', LINE])
+      stderrs.push(after.stderr)
+      expect({ code: after.code, out: after.stdout.trim() }).toEqual({ code: 0, out: expect.stringMatching(/^shown [0-9a-f]{8}$/) })
+      const id = after.stdout.trim().slice('shown '.length)
+      const question = await d.dial.next((m) => m.t === 'question' && JSON.stringify(m).includes(LINE), 45_000, 'the notice', since)
+
+      const listed = await d.harness(['device', 'notify', '--list'])
+      expect({ code: listed.code, out: listed.stdout.trim() }).toEqual({ code: 0, out: expect.stringMatching(new RegExp(`^${id} \\d+s plain ${LINE}$`)) })
+
+      const done = await d.harness(['device', 'notify', '--done', id])
+      expect({ code: done.code, out: done.stdout.trim() }).toEqual({ code: 0, out: '' })
+      await d.dial.next((m) => m.t === 'question.close' && m.agentId === question.agentId && m.id === question.id, 45_000, 'the card closed', since)
+    } finally {
+      delete d.env.CODEX_THREAD_ID
+    }
   })
 
   it('the Notifications setting is answered over the pipe and kept in the data folder', async () => {
