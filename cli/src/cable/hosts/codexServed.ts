@@ -5,7 +5,9 @@
  * that TUI exits. The daemon holds the rollout and runs every hook, with its own environment, the first TUI's: neither a
  * hook's hints, nor its caller's terminal, nor the daemon's parents say where the person sees the session (Diego, CLI
  * 0.6.90, 2026-11-26: a Codex in Terminal on no page). Its TUI does, and Codex tells a hook nothing of it: the client is
- * the one Codex on a terminal working in the session's folder. None, or two, is never guessed between. Windows names no
+ * the one Codex on a terminal working in the session's folder. None is never guessed at, nor one of two: several there,
+ * all in one app, place it at that app with no tab, as that app holds whichever is the client (Ken's VM, 2026-11-27,
+ * #4663 step 10: two in VS Code's terminals on Other's page), and in two apps, or one naming none, at none. Windows names no
  * terminal (a TUI there has a console, never a tty), so every Codex TUI there counts as on one, and its folder is read
  * through harness-pty (externals/support.ts processCwds; docs/plans/2026-11-27-windows-codex-rescan-design.md).
  *
@@ -16,9 +18,9 @@
  * 63 ms, lib/processTable.ts), 8 ms on the event loop to tell Codex's processes in a table of 900 (6.5 of them the
  * engines' ownership snapshot, which each open scan reads too), one `lsof -a -d cwd` for every Codex TUI (39 ms for 1 and
  * for 16), one `ps -o tty=` for each in a session's folder, once a lookup (3.5 ms for one; one for 16 took 57 ms, so
- * each is asked alone) and the walk of the one found (scannedApp.ts). Windows' numbers come from the VM (design, Cost).
- * Asked only for a Codex hook from a caller not yet told, a daemon's session's start, a turn's while it has no client,
- * and a Codex session the scan finds on no terminal (observed.ts).
+ * each is asked alone) and one walk of those found (scannedApp.ts). Windows' numbers come from the VM (design, Cost).
+ * Asked only for a Codex hook from a caller not yet told, a daemon's session's start, a turn's while it has no client or
+ * no tab, and a Codex session the scan finds on no terminal (observed.ts).
  */
 import { agentCommandOwnershipSnapshot } from '../../lib/engineBin.js'
 import { commandOf, engineProcessMatch } from '../../lib/processTable.js'
@@ -69,7 +71,7 @@ export interface CodexServedDeps {
  * among it and its parents serves no other client), one whose arguments name no daemon, or an app's own, one no Codex
  * started whose parents name an app (the ChatGPT app's, an editor's), which runs with that app's environment. Else where the person sees the session:
  * the client is the one Codex TUI on a terminal in the session's folder, npm's node launcher and its native Codex being
- * one. Fails when the table could not be read: nothing is told then.
+ * one; several there all in one app give that app alone. Fails when the table could not be read: nothing is told then.
  */
 export async function codexServed(asks: readonly ServedAsk[], deps: CodexServedDeps): Promise<(Served | undefined)[]> {
   const rows = await deps.processes()
@@ -93,15 +95,23 @@ export async function codexServed(asks: readonly ServedAsk[], deps: CodexServedD
     server !== undefined && !parentChain(server.pid, byPid).slice(1).some((row) => codex.has(row.pid)))
   const ownApps = owned.length ? await deps.apps(owned.map((server) => server.pid), names) : new Map<number, string>()
   const daemon = (server: RunningProcess | undefined): boolean => server !== undefined && !ownApps.has(server.pid)
-  const clients = servers.some(daemon) ? await clientsIn(asks.filter((_, i) => daemon(servers[i])), rows, codex, deps) : new Map()
-  const clientApps = clients.size ? await deps.apps([...new Set([...clients.values()].map(({ pid }) => pid))], names) : new Map()
+  const clients = servers.some(daemon) ? await clientsIn(asks.filter((_, i) => daemon(servers[i])), rows, codex, deps)
+    : new Map<ServedAsk, Client[]>()
+  const clientApps = clients.size
+    ? await deps.apps([...new Set([...clients.values()].flatMap((found) => found.map(({ pid }) => pid)))], names)
+    : new Map<number, string>()
   return asks.map((ask, i) => {
     if (!daemon(servers[i])) return undefined
-    const found = clients.get(ask)
-    const app = found && clientApps.get(found.pid)
-    if (!found || !app) return {}
-    const tty = found.tty === undefined ? undefined : `/dev/${found.tty}`
-    return { client: tty && clientTtyForm(deps.platform)?.test(tty) ? { app, tty, pid: found.pid } : { app, pid: found.pid } }
+    const found = clients.get(ask) ?? []
+    const apps = new Set(found.map(({ pid }) => clientApps.get(pid)))
+    const app = apps.size === 1 ? [...apps][0] : undefined
+    if (!app) return {}
+    // Several TUIs in one app: that app holds whichever is the client, but which one it is stays unknown, so neither a
+    // tab nor a process is given and a tap only brings the app forward (Ken's VM, 2026-11-27, #4663 step 10).
+    if (found.length > 1) return { client: { app } }
+    const { pid, tty: name } = found[0]!
+    const tty = name === undefined ? undefined : `/dev/${name}`
+    return { client: tty && clientTtyForm(deps.platform)?.test(tty) ? { app, tty, pid } : { app, pid } }
   })
 }
 
@@ -109,13 +119,15 @@ function daemonArgs(args: string): boolean {
   return MANAGED_DAEMON.test(args) || (APP_SERVER.test(args) && UNIX_LISTEN.test(args))
 }
 
-/** Each ask's one Codex TUI on a terminal in its folder, with that terminal as ps names it (none on Windows); an ask
- *  with none, two, or one whose terminal could not be read is left out, and every ask when a TUI's folder could not
- *  be read. */
+/** A Codex TUI and its terminal as ps names it (none on Windows). */
+type Client = { pid: number; tty?: string }
+
+/** Each ask's Codex TUIs on a terminal in its folder, with that terminal as ps names it (none on Windows); an ask with
+ *  none, or one whose terminal could not be read, is left out, and every ask when a TUI's folder could not be read. */
 async function clientsIn(
   asks: readonly ServedAsk[], rows: readonly RunningProcess[], codex: ReadonlySet<number>, deps: CodexServedDeps,
-): Promise<Map<ServedAsk, { pid: number; tty?: string }>> {
-  const found = new Map<ServedAsk, { pid: number; tty?: string }>()
+): Promise<Map<ServedAsk, Client[]>> {
+  const found = new Map<ServedAsk, Client[]>()
   const tuis = new Set(rows.filter((row) => codex.has(row.pid) && !codexServer(row)).map((row) => row.pid))
   const candidates = rows.filter((row) => tuis.has(row.pid) && !tuis.has(row.ppid)).map((row) => row.pid)
   if (!candidates.length || candidates.length > MAX_CLIENTS) return found
@@ -131,17 +143,17 @@ async function clientsIn(
     if (ask.cwd === undefined) continue
     const folder = await deps.folder(ask.cwd)
     const inFolder = candidates.filter((pid) => cwds.get(pid) === folder)
-    // Windows names no terminal, so nothing tells a TUI from a `codex exec` or Harness's `codex queue` there: any second
-    // Codex in the folder leaves the client unknown.
+    // Windows names no terminal, so nothing tells a TUI from a `codex exec` or Harness's `codex queue` there: every Codex
+    // in the folder counts, and one whose parents name no app (the queue's are harnessd's) leaves the client unknown.
     if (deps.platform === 'win32') {
-      if (inFolder.length === 1) found.set(ask, { pid: inFolder[0]! })
+      if (inFolder.length) found.set(ask, inFolder.map((pid) => ({ pid })))
       continue
     }
     const terminals = await Promise.all(inFolder.map(ttyOf))
     // A terminal that could not be read may be a second client's: nothing is told then.
     if (terminals.some(({ tty }) => tty === null)) continue
     const onTerminal = terminals.filter((t): t is { pid: number; tty: string } => typeof t.tty === 'string')
-    if (onTerminal.length === 1) found.set(ask, onTerminal[0])
+    if (onTerminal.length) found.set(ask, onTerminal)
   }
   return found
 }

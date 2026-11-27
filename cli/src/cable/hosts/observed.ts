@@ -1232,7 +1232,8 @@ export class ObservedSource implements HostSource {
    * Terminal on no page). Asked once a caller, before any hint is read: until the answer the session is on no app's page,
    * as a guess could be the wrong one. A caller that is no server is placed by its hints then, and from then on at once.
    * A server's session is asked again at its start, as it may have been resumed in another TUI, and at a turn's while no
-   * client is known; it keeps its place until the answer. Only the latest ask's answer lands. An ask that could not read
+   * client is known, or only its app: several TUIs in one app, its tab comes once one is left (Ken's VM, 2026-11-27,
+   * #4663 step 10); it keeps its place until the answer. Only the latest ask's answer lands. An ask that could not read
    * the machine says nothing: a server's session keeps its place, and any other stays on no page until its next hook
    * asks again, as the hints of a daemon's hook are another session's, its tmux pane or Orca terminal among them.
    */
@@ -1242,7 +1243,7 @@ export class ObservedSource implements HostSource {
     const same = last?.pid === e.callerPid
     if (same && last.is === false) return false
     const again = same && (last.is === null
-      || (last.is === true && (e.event === 'session-start' || (e.event === 'turn-start' && !entry.outer))))
+      || (last.is === true && (e.event === 'session-start' || (e.event === 'turn-start' && entry.outer?.pid === undefined))))
     if (same && !again) last.hook = e
     else {
       const ask: ServedState = { pid: e.callerPid, ...(same && last.is ? { is: true } : {}), hook: e }
