@@ -15,7 +15,8 @@ import { namedTree, processTable, processTree, SpawnedRuns, type Run } from './s
  * under test runs is answered from a made-up machine and noted, and every signal is noted and sent nowhere: no process of
  * this computer is read or signalled, the person's own among them.
  */
-interface Made { pid: number; ppid: number; pgid: number; command: string; cwd: string; uid: number; started: string }
+/** A made-up process; [tpgid] is the group in the foreground of its terminal, 0 for none (macOS's word for no terminal). */
+interface Made { pid: number; ppid: number; pgid: number; command: string; cwd: string; uid: number; started: string; tpgid: number }
 /**
  * The made-up machine: its processes, the runs asked of it and the signals sent. [ANSWER] is what `ps` or `lsof` prints
  * there and its exit status, and [ALIVE] what signal 0 finds, as source, so the fake binaries and the signals of a process
@@ -115,7 +116,7 @@ const P = (n: number): number => 5_000_000 + n
 const LSTART = 'Mon Nov 23 10:00:00 2026'
 const UID = process.getuid?.() ?? 501
 const made = (pid: number, ppid: number, pgid: number, command: string, cwd = '/repo', started = LSTART, uid = UID): Made =>
-  ({ pid, ppid, pgid, command, cwd, uid, started })
+  ({ pid, ppid, pgid, command, cwd, uid, started, tpgid: 0 })
 /** [date] as `ps` prints a start. */
 const lstart = (date: Date): string => {
   const [day, month, , year] = date.toDateString().split(' ')
@@ -134,8 +135,8 @@ const askedOf = (args: readonly string[]): number[] | undefined => {
 /**
  * The reads that went past what the harness may read: anything more than a pid, a parent, a group of every process;
  * more than a start time of a process not in [tree] nor in [seen] (a pid the test once saw, read to tell whether it is
- * still that process); anything of a process not in [tree] beyond that, but the account, start and command line of
- * [named], the pids a Codex pid file inside the test's root names, by a `ps -p` of them alone (what the sweep checks
+ * still that process); anything of a process not in [tree] beyond that, but the group, account, start and command line
+ * of [named], the pids a Codex pid file inside the test's root names, by a `ps -p` of them alone (what the sweep checks
  * before it ends one); and every pgrep and pkill, which read each process's command line.
  */
 function beyond(tree: Iterable<number>, seen: Iterable<number> = [], named: Iterable<number> = []): string[] {
@@ -148,7 +149,7 @@ function beyond(tree: Iterable<number>, seen: Iterable<number> = [], named: Iter
     const asked = askedOf(args)
     const fields = name === 'lsof' ? ['cwd'] : fieldsOf(args)
     if (asked === undefined) return !fields.every((field) => IDENTITY.includes(field))
-    if (name === 'ps' && asked.every((pid) => pidFiles.has(pid)) && fields.every((field) => ['pid', 'uid', 'lstart', 'command'].includes(field))) return false
+    if (name === 'ps' && asked.every((pid) => pidFiles.has(pid)) && fields.every((field) => ['pid', 'pgid', 'uid', 'lstart', 'command'].includes(field))) return false
     if (fields.every((field) => [...IDENTITY, 'lstart'].includes(field))) return asked.some((pid) => !once.has(pid))
     return asked.some((pid) => !ours.has(pid))
   }).map(({ file, args }) => `${file} ${args.join(' ')}`)
@@ -281,6 +282,13 @@ function codexServers(root: string): Made[] {
 }
 /** The pids codexServers' pid files in the root name, which the sweep reads. */
 const NAMED = [PERSONS, OTHERS, TESTS, REUSED, EXEC]
+/** The worker and its parent where the group the test's Codex app server leads is one of the test run's own: the worker's,
+ *  its parent's, or its terminal's foreground job's (the shell running the tests). */
+const RUN_IN_ITS_GROUP: Array<[string, Made[]]> = [
+  ["the worker's", [made(VITEST, 1, VITEST, 'node vitest'), made(WORKER, VITEST, TESTS, 'node (vitest 1)')]],
+  ["its parent's", [made(VITEST, 1, TESTS, 'node vitest'), made(WORKER, VITEST, WORKER, 'node (vitest 1)')]],
+  ["its terminal's foreground job's", [made(VITEST, 1, VITEST, 'node vitest'), { ...made(WORKER, VITEST, VITEST, 'node (vitest 1)'), tpgid: TESTS }]],
+]
 
 describe("the process table the harness reads of every process", () => {
   it('is each one\'s pid, parent and group, and nothing else', () => {
@@ -341,12 +349,35 @@ describe("the daemon's close sweep", () => {
     expect(beyond([WORKER, MASTER, CORE, CODEX, CODEX_CHILD, OWN_CALL, ...NOTED_TREE], NOTED.keys())).toEqual([])
   })
 
-  it.runIf(FOLDERS)("ends the Codex app server a pid file in the root names when it is the test's, and none of the others (codexServers)", async () => {
+  it.runIf(FOLDERS)("ends the Codex app server a pid file in the root names when it is the test's, with the group it leads, and none of the others (codexServers)", async () => {
     const root = testRoot()
     machine.rows = [made(VITEST, 1, VITEST, 'node vitest'), made(WORKER, VITEST, VITEST, 'node (vitest 1)'), ...codexServers(root)]
     expect(await endRootProcesses(root, new Map(), new Map(), 0)).toEqual([])
-    expect(machine.signals).toEqual([[TESTS, 'SIGKILL']])
+    expect(machine.signals).toEqual([[-TESTS, 'SIGKILL']])
     expect(beyond([WORKER], [], NAMED)).toEqual([])
+  })
+
+  it.runIf(FOLDERS)("ends the test's Codex app server alone when the group it leads is the test run's own", async () => {
+    for (const [whose, run] of RUN_IN_ITS_GROUP) {
+      const root = testRoot()
+      machine.rows = [...run, ...codexServers(root)]
+      machine.signals = []
+      machine.runs = []
+      expect(await endRootProcesses(root, new Map(), new Map(), 0), whose).toEqual([])
+      expect(machine.signals, whose).toEqual([[TESTS, 'SIGKILL']])
+      expect(beyond([WORKER], [], NAMED), whose).toEqual([])
+    }
+  })
+
+  it.runIf(FOLDERS)("ends the test's Codex app server alone on Windows, whose processes have no groups to signal", async () => {
+    const root = testRoot()
+    machine.rows = [made(VITEST, 1, VITEST, 'node vitest'), made(WORKER, VITEST, VITEST, 'node (vitest 1)'), ...codexServers(root)]
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+    try {
+      expect(await endRootProcesses(root, new Map(), new Map(), 0)).toEqual([])
+    } finally { Object.defineProperty(process, 'platform', platform) }
+    expect(machine.signals).toEqual([[TESTS, 'SIGKILL']])
   })
 
   it.runIf(FOLDERS)("ends the tree's matches, and no Codex app server, said once, when the root's birth time cannot be read", async () => {
@@ -561,21 +592,45 @@ process.exit(status)
     expect(beyond([LEFT, ...NOTED_TREE], [TMUX, PANE, LEFT, ...NOTED.keys()])).toEqual([])
   })
 
-  it.runIf(FOLDERS)("ends the Codex app server a pid file in the root names when it is the test's, and none of the others (codexServers)", async () => {
-    const root = testRoot()
-    // The worker is gone, and nothing it saw still runs.
-    machine.rows = [made(VITEST, 1, VITEST, 'node vitest'), ...codexServers(root)]
+  /**
+   * The reaper on the made-up machine, its signals noted and sent nowhere, told [root], then its worker gone: the signals
+   * it sent, once it has exited, and what it read in machine.runs. [first] is a module it imports before it starts.
+   */
+  async function reapedCodex(root: string, first: string[] = []): Promise<unknown[]> {
     const { bin, runs, preload, signals } = fakeBin([])
-    const reaper = spawn(process.execPath, ['--import', pathToFileURL(preload).href, REAPER],
+    const reaper = spawn(process.execPath, [...[pathToFileURL(preload).href, ...first].flatMap((module) => ['--import', module]), REAPER],
       { stdio: ['pipe', 'ignore', 'pipe'], env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } })
     let said = ''
     reaper.stderr!.on('data', (chunk: Buffer) => { said += chunk.toString() })
     reaper.stdin!.end(`${JSON.stringify({ tmux: join(root, 'tmux-501', 'default'), root })}\n`)
     const [code] = await once(reaper, 'exit')
     expect(code, said).toBe(0)
-    expect(readFileSync(signals, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line) as unknown)).toEqual([[TESTS, 'SIGKILL']])
     machine.runs = readFileSync(runs, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line) as { file: string; args: string[] })
-    expect(beyond([], [], NAMED)).toEqual([])
+    return readFileSync(signals, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line) as unknown)
+  }
+
+  // The worker, the reaper's parent, as the reaper reads it when it starts; nothing it saw still runs once it is gone.
+  it.runIf(FOLDERS)("ends the Codex app server a pid file in the root names when it is the test's, with the group it leads, and none of the others (codexServers)", async () => {
+    const root = testRoot()
+    machine.rows = [made(VITEST, 1, VITEST, 'node vitest'), made(WORKER, VITEST, VITEST, 'node (vitest 1)'), ...codexServers(root)]
+    expect(await reapedCodex(root)).toEqual([[-TESTS, 'SIGKILL']])
+    expect(beyond([WORKER], [], NAMED)).toEqual([])
+  })
+
+  it.runIf(FOLDERS)("ends the test's Codex app server alone when the group it leads is the test run's own", async () => {
+    for (const [whose, run] of RUN_IN_ITS_GROUP) {
+      const root = testRoot()
+      machine.rows = [...run, ...codexServers(root)]
+      expect(await reapedCodex(root), whose).toEqual([[TESTS, 'SIGKILL']])
+      expect(beyond([WORKER], [], NAMED), whose).toEqual([])
+    }
+  })
+
+  it.runIf(FOLDERS)("ends the test's Codex app server alone on Windows, whose processes have no groups to signal", async () => {
+    const root = testRoot()
+    machine.rows = [made(VITEST, 1, VITEST, 'node vitest'), made(WORKER, VITEST, VITEST, 'node (vitest 1)'), ...codexServers(root)]
+    const windows = `data:text/javascript,${encodeURIComponent("Object.defineProperty(process, 'platform', { value: 'win32' })")}`
+    expect(await reapedCodex(root, [windows])).toEqual([[TESTS, 'SIGKILL']])
   })
 })
 
