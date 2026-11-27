@@ -1606,9 +1606,10 @@ export class ObservedSource implements HostSource {
 
   /** The hold's timer: held again when the turn showed activity since, else over, and the blocked stop told done. */
   private async holdDue(entry: Entry, hold: Continuing): Promise<void> {
-    if (this.deps.now() < hold.since + CONTINUE_MAX_MS) {
+    const cap = hold.since + CONTINUE_MAX_MS
+    if (this.deps.now() < cap) {
       // heldStop stays set while the stamp is read, so checkWorking and the turn events still see the turn held.
-      const stamp = entry.transcriptPath ? await this.deps.fileStamp(entry.transcriptPath) : null
+      const stamp = entry.transcriptPath ? await this.stampBefore(entry.transcriptPath, cap) : null
       // A stop, a turn event or a removal ended it meanwhile.
       if (entry.secondLook.continuing !== hold) return
       hold.lastActive = Math.max(hold.lastActive, entry.agent.lastActivityAt, stamp?.mtime ?? 0)
@@ -1624,6 +1625,19 @@ export class ObservedSource implements HostSource {
     // The stop it waited for never came: nothing to tell, and the turn is its hooks' and checkWorking's again.
     entry.heldStop = undefined
     entry.secondLook.continuing = undefined
+  }
+
+  /** A transcript's stamp, or none once `by` passed first: a stat can hang on a stalled network share, and a hold ends
+   *  by its cap whatever the read does. */
+  private stampBefore(path: string, by: number): Promise<{ mtime: number } | null> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    return Promise.race([
+      this.deps.fileStamp(path),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), by - this.deps.now())
+        timer.unref()
+      }),
+    ]).finally(() => { clearTimeout(timer) })
   }
 
   private holdStop(entry: Entry, ms: number, then: () => void): void {
