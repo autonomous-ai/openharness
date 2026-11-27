@@ -490,6 +490,15 @@ describe('recall against a round\'s base', () => {
     expect(lines.find(l => l.startsWith('| v3 | crowd |'))).toMatch(/\| \+0\.28 \[-1\.40, 1\.95\] \| 0\.294 \|$/)
     expect(lines.find(l => l.startsWith('| v2 | crowd |'))).toMatch(/\|  \|  \|$/)
   })
+
+  it('gives the recall p over the held-out cases both scored, as the recall pair', () => {
+    // v4 ran val only (d, e), against v1, which ran val and test: v1's test runs of h must not reach the p.
+    flowOf({ v4: 1 }, { ...HITS, v4: { 'd.claude': [1, 1], 'e.claude': [1, 1] } })
+    const s = summarize(flow)
+    expect(s.held_out_recall.v4.crowd.n).toBe(2)
+    // v1 hit 4 of its 6 val need runs, v4 4 of 4.
+    expect(s.held_out_recall_p.v4.crowd).toBe(fisherOneSided(4, 6, 4, 4))
+  })
 })
 
 describe('fisherOneSided', () => {
