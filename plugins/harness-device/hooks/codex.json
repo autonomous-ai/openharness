@@ -25,6 +25,19 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo `# <#` >/dev/null; exec \"$PLUGIN_ROOT/hooks/codex-start\"\n#> > $null; $PSModuleAutoLoadingPreference = 'None'; $h = \"$env:USERPROFILE\\.harness\\bin\\harness.exe\"; if (-not [IO.File]::Exists($h)) { $h = $null; foreach ($d in $env:PATH -split ';') { if ($d -match '^([a-z]:\\\\|\\\\\\\\)' -and [IO.File]::Exists(\"$d\\harness.exe\")) { $h = \"$d\\harness.exe\"; break } } }; if ($h) { $o = & $h device codex start 2> $null; if (\"$o\".StartsWith('{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":')) { [Console]::Out.Write(\"$o\") } }; exit 0",
+            "onFailure": "continue",
+            "timeout": 5
+          }
+        ]
+      }
     ]
   }
 }
