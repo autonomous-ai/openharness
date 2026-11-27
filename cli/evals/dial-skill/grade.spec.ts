@@ -211,6 +211,14 @@ describe('gradeRun', () => {
     expect(g.grade).toEqual({})
   })
 
+  it("reads one_step and loaded from turn 1's transcript alone, as turn 1 is what rang", async () => {
+    const turn2 = { role: 'system', content: 'turn 2' } as Turn
+    const later = await gradeRun(need, run('Set WEATHER_API_KEY.', [notify, turn2, skill('dial')]), [ring('Set WEATHER_API_KEY')], fakeJudge())
+    expect(later.grade).toMatchObject({ one_step: 1, loaded: 0 })
+    const ringsLater = await gradeRun(need, run('Set WEATHER_API_KEY.', [turn2, skill('dial'), notify]), [ring('Set WEATHER_API_KEY')], fakeJudge())
+    expect(ringsLater.grade).toMatchObject({ one_step: 1, loaded: 0 })
+  })
+
   it('gives loaded on every scored run, rang or not', async () => {
     const silent = await gradeRun(need, run('Set WEATHER_API_KEY.', [skill('dial')]), [], fakeJudge())
     expect(silent.grade.loaded).toBe(1)
