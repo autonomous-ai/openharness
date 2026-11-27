@@ -8,11 +8,12 @@
  * [parseGuestSetupAnswer] checks the id, the guest's SID-derived name and the exact profile Windows was asked for.
  */
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { canonicalGuestEmail, guestAnswerFile, guestRequestFile, newGuestRequestId, parseGuestSetupAnswer, parseGuestSetupRequest, type GuestSetupRequest } from './guestRequests.js'
 import { WINDOWS_GUEST_ANSWERS, WINDOWS_GUEST_REQUESTS } from './guestTree.js'
 import type { GuestSharedFolder } from './guestShare.js'
 import { systemProgram } from './powershell.js'
+import { removeQuietly } from '../removePath.js'
 
 export const WINDOWS_GUEST_TASK_PATH = '\\Harness\\'
 export const WINDOWS_GUEST_TASK_NAME = 'Harness Guests Setup'
@@ -57,7 +58,7 @@ const realFs: GuestSetupFs = {
   rename: (from, to) => { renameSync(from, to) },
   read: (path) => readFileSync(path, 'utf8'),
   exists: (path) => existsSync(path),
-  unlink: (path) => { try { unlinkSync(path) } catch { /* already gone */ } },
+  unlink: removeQuietly,
 }
 
 /** Starts the task through `schtasks.exe`; the caller's task security descriptor allows it unelevated. */

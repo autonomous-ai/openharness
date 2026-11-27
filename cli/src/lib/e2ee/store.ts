@@ -4,12 +4,13 @@
  * mode 0600 (pairs are rare — no debounce needed). The identity key is the root of trust; losing it
  * forces every browser to re-pair.
  */
-import { mkdirSync, readdirSync, rmSync } from 'fs'
+import { mkdirSync, readdirSync } from 'fs'
 import { basename, join } from 'path'
 import { env } from '../../config/env.js'
 import { atomicWriteJson, jsonArray, jsonObject, probeState, readState, requireState, StateFileUnreadable, type AtomicWriteOptions, type TrustFile } from '../secureState.js'
 import { newIdentity, newPairId, b64e, b64d, fingerprint, type Identity, type PairRole } from './core.js'
 import { stretchPassword } from './passwordPake.js'
+import { removeQuietly } from '../removePath.js'
 
 const DIR = join(env.ADAPTER_DATA_DIR, 'e2e')
 const IDENTITY_FILE = join(DIR, 'identity.json')
@@ -261,7 +262,7 @@ export class E2eeStore {
   clearRemotePassword(): void {
     this.requireRemotePassword()
     this.remotePassword = null
-    try { rmSync(REMOTE_PASSWORD_FILE, { force: true }) } catch { /* already gone */ }
+    removeQuietly(REMOTE_PASSWORD_FILE)
   }
 
   hasRemotePassword(): boolean {

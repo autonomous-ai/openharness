@@ -16,7 +16,7 @@
  * Harness OS is the one computer where nobody opts in: its package ships the unit (OS_UNIT_FILE), so
  * there every start and stop of its daemon goes through that unit (osDaemonUnit).
  */
-import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { env } from '../config/env.js'
@@ -28,6 +28,7 @@ import {
 import { DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, isAlive, readPid } from './daemonState.js'
 import { withoutHarnessdEnv } from './harnessdEnv.js'
 import { managedNodePath } from './nodeRuntime.js'
+import { removeQuietly } from './removePath.js'
 import { currentCli, harnessLaunchPath } from './windows/installLayout.js'
 import { launchDetached, type LaunchOutcome } from './windows/launcher.js'
 
@@ -236,7 +237,7 @@ export function taskStoppedThisBoot(dataDir: string = env.ADAPTER_DATA_DIR): boo
 /** Any start but the task's own forgets a stop. */
 export function clearTaskStopped(dataDir: string = env.ADAPTER_DATA_DIR): void {
   // A start never fails over this: a file held open for a moment (an antivirus scan) is forgotten at the next start.
-  try { rmSync(join(dataDir, TASK_STOPPED_FILE), { force: true }) } catch { /* nothing to forget */ }
+  removeQuietly(join(dataDir, TASK_STOPPED_FILE))
 }
 
 /** The master's pid once it has claimed the pid file, which it does when its core has bound; null if

@@ -25,6 +25,7 @@ import { atomicWriteFile, jsonArray, readState, requireState } from './secureSta
 import { failedNode, recordNodeMigration, type NodeMigration } from './nodeMigration.js'
 import type { NodeMigrationReason } from './runtimeInstall.js'
 import { patientDeadline } from './patientExec.js'
+import { removeQuietly } from './removePath.js'
 import { PTY_PROTOCOL } from './ptyHost/protocol.js'
 import { currentCli } from './windows/installLayout.js'
 import { isVersionFolder, retireUnused, switchTo, versionsOnDisk, writeVersionFolder, type RetireDeps } from './windows/cliVersions.js'
@@ -377,7 +378,7 @@ export async function runCanary(
     }
     return { ok: true, ptyProtocol: said.ptyProtocol }
   } finally {
-    try { rmSync(tmpDir, { recursive: true, force: true }) } catch { /* ignore */ }
+    removeQuietly(tmpDir)
   }
 }
 
@@ -454,7 +455,7 @@ export function stage(
     // all, so a marker it would replace is never lost to a failed write.
     if (version) writeJson(path(PENDING), { version, sha256: sha256(cliBuf), at: Date.now(), ...(node ? { previousNode: node } : {}) })
   } catch (error) {
-    for (const file of written) { try { rmSync(file, { force: true }) } catch { /* not this call's to clear */ } }
+    for (const file of written) removeQuietly(file) // not this call's to clear
     throw error
   }
   for (const [from, to] of renames) renameSync(from, to) // atomic within the same filesystem
@@ -593,7 +594,7 @@ export function settleRolledBack(dir: string, platform: NodeJS.Platform = proces
 /** Drop the `.prev` backups once the new build is confirmed healthy; a version kept is not rejected. */
 export function confirm(dir: string): void {
   for (const name of [CLI, NOTIFY]) {
-    try { rmSync(join(dir, `${name}.prev`), { force: true }) } catch { /* ignore */ }
+    removeQuietly(join(dir, `${name}.prev`))
   }
   const kept = pendingVersion(dir)
   try {
